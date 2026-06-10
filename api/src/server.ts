@@ -23,6 +23,8 @@ import { createInvitesRouter } from "./routes/invites.js";
 import { createMomentsRouter } from "./routes/moments.js";
 import { createNotificationsRouter } from "./routes/notifications.js";
 import { createReferralsRouter } from "./routes/referrals.js";
+import { sendblueRouter } from "./routes/sendblue.js";
+import { stripeRouter } from "./routes/stripe.js";
 import { createUsersRouter } from "./routes/users.js";
 
 const app = express();
@@ -417,6 +419,8 @@ app.use("/notifications", createNotificationsRouter(authenticateToken));
 app.use("/ai", createAiRouter(io, authenticateToken));
 app.use("/referrals", createReferralsRouter(authenticateToken));
 app.use("/co", coRouter);
+app.use("/payments", stripeRouter(io, authenticateToken));
+app.use("/sendblue", sendblueRouter(io));
 
 //Node-cron is a lightweight task scheduler for Node.js applications
 cron.schedule("*/15 * * * *", async () => {
@@ -552,6 +556,11 @@ cron.schedule("0 10 * * *", async () => {
   } catch (error) {
     console.error("Invite reminder cron error:", error);
   }
+});
+
+app.use((err: Error, req: Request, res: Response, next: NextFunction) => {
+  console.error(err);
+  res.status(500).json({ error: "Internal server error" });
 });
 
 httpServer.listen(port, () => {

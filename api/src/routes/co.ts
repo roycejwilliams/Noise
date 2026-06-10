@@ -4,9 +4,11 @@ import express, { NextFunction, Request, Response } from "express";
 import twilio from "twilio";
 import pool from "../db/db.js";
 import { sendEmail, sendSMS } from "../otpActions.js";
+import { authenticateToken } from "../server.js";
 import { generateGoalEmbedding } from "../services/embeddings.js";
 import { findBestCircle } from "../services/matching.js";
 import { findBestVenue } from "../services/places.js";
+import sendblue from "../services/sendblue.js";
 
 const router = express.Router();
 
@@ -223,7 +225,7 @@ router.put(
 // This is the core of CoPatible — Co decides who belongs together
 router.post(
   "/place/:user_id",
-  // authenticateToken,
+  authenticateToken,
   async (req: Request, res: Response, next: NextFunction) => {
     try {
       const user_id = req.params.user_id as string;
@@ -543,6 +545,137 @@ Make it feel intimate, specific, and intentional. Not generic.`,
           member_count: members.length,
           co_reason: selectedVenue?.co_reason ?? null,
         },
+      });
+    } catch (error) {
+      next(error);
+    }
+  },
+);
+
+//POST /co/message/:user_id - Co sends a message to a user
+router.post(
+  "/message/:user_id",
+  async (req: Request, res: Response, next: NextFunction) => {
+    try {
+      const { user_id } = req.params;
+      const { message_type, context } = req.body;
+
+      // 2. Fetch the user from the database
+      const userInfo = await pool.query(`SELECT * FROM users WHERE id = $1`, [
+        user_id,
+      ]);
+      const user: UserProp = userInfo.rows[0];
+
+      if (!user) {
+        return res.status(404).send("User not found.");
+      }
+
+      const prompts: Record<string, string> = {
+        circle_placement: `You are Co, an exclusive life concierge. Write a short iMessage to ${user.first_name}. Co has selected their circle. Tone: quiet confidence, like a private members club reaching out. No excitement, no exclamation points. Just certainty. 2 sentences max. No em dashes. Example tone: "Your circle is ready. Five people, same chapter, same city."`,
+
+        moment_invite: `You are Co. Write a short iMessage to ${user.first_name}. Co has arranged an experience: ${context?.moments_name} at ${context?.venue}, ${context?.suggested_time}. Tone: like a personal concierge confirming a reservation. Brief, confident, specific. 2 sentences max. No em dashes.`,
+
+        payment_link: `You are Co. Write a short iMessage to ${user.first_name} to secure their spot for ${context?.moments_name}. Include the payment link: ${context?.payment_url}. Tone: matter of fact, not salesy. Like confirming a dinner reservation deposit. 2 sentences max. No em dashes.`,
+
+        check_in: `You are Co. Write a short iMessage to ${user.first_name} following up after their circle experience. Tone: like a thoughtful friend checking in, not a survey. One question only. 1 sentence max. No em dashes.`,
+
+        life_concierge: `You are Co. ${user.first_name} said: "${context?.user_message}". Respond as Co — specific, warm, actionable. Co knows ${user.first_name} well. No filler phrases. 2 sentences max. No em dashes.`,
+      };
+
+      const prompt = prompts[message_type] ?? prompts.circle_placement;
+
+      const { text: coMessage } = await generateText({
+        model: anthropic("claude-sonnet-4-6"),
+        prompt,
+      });
+
+      await pool.query(
+        `INSERT INTO co_memories (user_id, memory_type, content)
+   VALUES ($1, 'text_exchange', $2)`,
+        [user_id, coMessage],
+      );
+
+      const text = await sendblue.messages.send({
+        number: user.phone_number,
+        content: coMessage,
+        from_number: process.env.SENDBLUE_PHONE_NUMBER!,
+      });
+
+      return res.status(200).send({
+        success: true,
+        text_dateCreated: text.date_created,
+      });
+    } catch (error) {
+      next(error);
+    }
+  },
+);
+
+//POST /message/group/:circle_id - Co sends a message to the whole circle
+router.post(
+  "/message/group/:circle_id",
+  async (req: Request, res: Response, next: NextFunction) => {
+    try {
+      const { circle_id } = req.params;
+      const { message_type, context } = req.body;
+
+      // Fetch all members with phone numbers
+      const groupMembers = await pool.query(
+        `SELECT u.id, u.first_name, u.phone_number 
+         FROM circle_members cm
+         JOIN users u ON cm.member_id = u.id
+         WHERE cm.circle_id = $1`,
+        [circle_id],
+      );
+
+      const members = groupMembers.rows;
+
+      if (members.length < 4) {
+        return res.status(400).send("Not enough members in the group.");
+      }
+
+      const prompts: Record<string, string> = {
+        circle_placement: `You are Co, an exclusive life concierge. Write a short group iMessage welcoming this circle of ${members.length} people. They were selected for each other. Tone: quiet confidence. No exclamation points. 2 sentences max. No em dashes.`,
+
+        moment_invite: `You are Co. Write a short group iMessage to this circle about their upcoming experience: ${context?.moments_name} at ${context?.venue}, ${context?.suggested_time}. Tone: like a personal concierge confirming a reservation. 2 sentences max. No em dashes.`,
+
+        payment_link: `You are Co. Write a short group iMessage to this circle to secure their spots for ${context?.moments_name}. Payment link: ${context?.payment_url}. Split ${members.length} ways. Matter of fact, not salesy. 2 sentences max. No em dashes.`,
+
+        check_in: `You are Co. Write a short group iMessage following up with this circle after their experience together. One question only. Warm but brief. 1 sentence max. No em dashes.`,
+      };
+
+      const prompt = prompts[message_type] ?? prompts.circle_placement;
+
+      // Generate Co's group message
+      const { text: coMessage } = await generateText({
+        model: anthropic("claude-sonnet-4-6"),
+        prompt: prompt,
+      });
+
+      // Send as group message via Sendblue
+      const numbers = members.map((m: any) => m.phone_number);
+
+      const groupMessage = await sendblue.groups.sendMessage({
+        numbers,
+        content: coMessage,
+        from_number: process.env.SENDBLUE_PHONE_NUMBER!,
+      });
+
+      // Store in co_memories for each member
+      for (const member of members) {
+        await pool.query(
+          `INSERT INTO co_memories (user_id, memory_type, content)
+           VALUES ($1, 'text_exchange', $2)`,
+          [member.id, coMessage],
+        );
+      }
+
+      return res.status(200).send({
+        success: true,
+        message_handle: groupMessage.message_handle,
+        status: groupMessage.status,
+        member_count: members.length,
+        message: coMessage,
       });
     } catch (error) {
       next(error);
