@@ -12,7 +12,7 @@ export async function searchVenues(
   city: string,
   groupSize: number,
 ): Promise<any[]> {
-  const query = `${venueType} in ${neighborhood} ${city}`;
+  const query = `${venueType} for ${groupSize} people in ${neighborhood} ${city}`;
 
   const response = await client.textSearch({
     params: {
@@ -108,19 +108,34 @@ export async function findBestVenue(
     group_size: number;
   },
 ): Promise<any | null> {
-  // Check partner venues first
-  // (imported and queried in co.ts)
-
-  // Fall back to Google Places
-  const raw = await searchVenues(
-    venueType,
-    neighborhood,
-    city,
-    circleProfile.group_size,
-  );
+  const raw = await searchVenues(venueType, neighborhood, city, circleProfile.group_size);
   const filtered = hardFilterVenues(raw);
 
   if (!filtered.length) return null;
 
-  return await scoreVenuesWithCo(filtered, circleProfile);
+  const winner = await scoreVenuesWithCo(filtered, circleProfile);
+  if (!winner) return null;
+
+  // Fetch website from Place Details — textSearch doesn't include it
+  let website: string | null = null;
+  if (winner.place_id) {
+    try {
+      const details = await client.placeDetails({
+        params: {
+          place_id: winner.place_id,
+          fields: ["website"],
+          key: process.env.GOOGLE_PLACES_API_KEY!,
+        },
+      });
+      website = details.data.result?.website ?? null;
+    } catch {
+      // non-fatal — fall through to Resy fallback
+    }
+  }
+
+  const resyUrl = `https://resy.com/cities/sf?query=${encodeURIComponent(winner.name)}`;
+  const opentableUrl = `https://www.opentable.com/s/?term=${encodeURIComponent(winner.name)}&metroId=4`;
+  const venue_booking_url = website ?? resyUrl;
+
+  return { ...winner, venue_booking_url, resyUrl, opentableUrl };
 }

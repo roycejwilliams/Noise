@@ -1,3 +1,9 @@
+declare namespace Express {
+  interface Request {
+    user?: UserProp;
+  }
+}
+
 interface ApplicationProp {
   id?: string;
   first_name: string;

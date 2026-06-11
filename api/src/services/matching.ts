@@ -13,7 +13,9 @@ const trust_floor = 0.4;
 const trust_ceiling = 0.8;
 
 // PostgreSQL returns vector columns as strings — parse them back to number arrays
-function parseEmbedding(embedding: string | number[]): number[] {
+// Returns [] for null/undefined — callers treat empty vector as zero-score (no goals)
+function parseEmbedding(embedding: string | number[] | null | undefined): number[] {
+  if (!embedding) return [];
   if (typeof embedding === "string") {
     // pgvector returns format: [0.1,0.2,...] — valid JSON array
     // but sometimes returns without brackets
@@ -190,7 +192,7 @@ function groupCompatibilityScore(group: {
   life_chapters: string[][];
   social_energy: number[];
   activity_preferences: string[][];
-  goal_embeddings: (string | number[])[];
+  goal_embeddings: (string | number[] | null | undefined)[];
   emotional_states: string[];
 }): number {
   const size = group.life_chapters.length;

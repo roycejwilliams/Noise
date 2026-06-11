@@ -4,7 +4,7 @@ import express, { NextFunction, Request, Response } from "express";
 import twilio from "twilio";
 import pool from "../db/db.js";
 import { sendEmail, sendSMS } from "../otpActions.js";
-import { authenticateToken } from "../server.js";
+import { authenticateToken } from "../middleware/auth.js";
 import { generateGoalEmbedding } from "../services/embeddings.js";
 import { findBestCircle } from "../services/matching.js";
 import { findBestVenue } from "../services/places.js";
@@ -82,21 +82,22 @@ router.post(
         model: anthropic("claude-sonnet-4-6"),
         prompt: `You are extracting psychographic profile data from a conversation transcript.
         
-Based on this transcript, extract the following fields and return ONLY valid JSON with no preamble or markdown:
+        Based on this transcript, extract the following fields and return ONLY valid JSON with no preamble or markdown:
 
-{
-  "life_chapters": [], // array of applicable values from: new_to_city, building_solo, career_pivot, starting_over
-  "social_energy": 0, // number 0-100 (0 = very introverted/quiet preference, 100 = very extroverted/high energy)
-  "connection_style": "", // one of: small_group, medium_group, large_social
-  "activity_preferences": [], // array of activities they mentioned or implied enjoying
-  "goals": [], // array of things they are working toward
-  "blockers": [], // array of challenges or struggles they mentioned
-  "availability_pattern": "", // how often and when they want to connect (e.g. "weekday evenings", "weekends")
-  "city": "" // city they are in or moving to
-}
+        {
+          "life_chapters": [], // array of applicable values from: new_to_city, building_solo, career_pivot, starting_over
+          "social_energy": 0, // number 0-100 (0 = very introverted/quiet preference, 100 = very extroverted/high energy)
+          "connection_style": "", // one of: small_group, medium_group, large_social
+          "activity_preferences": [], // array of activities they mentioned or implied enjoying
+          "goals": [], // array of things they are working toward
+          "blockers": [], // array of challenges or struggles they mentioned
+          "availability_pattern": "", // how often and when they want to connect (e.g. "weekday evenings", "weekends")
+          "city": "", // city they are in or moving to
+          "emotional_state": "" // one word describing their current emotional state (e.g. anxious, energized, overwhelmed, motivated, isolated, confident, focused, excited, lost, burnout)
+        }
 
-Transcript:
-"${transcript}"`,
+        Transcript:
+        "${transcript}"`,
       });
 
       // Step 3 — Parse extracted data
@@ -110,6 +111,12 @@ Transcript:
           rawExtraction,
         );
       }
+
+      // Sanitize against DB CHECK constraints before upsert
+      const ALLOWED_CHAPTERS = ["new_to_city", "building_solo", "career_pivot", "starting_over"];
+      const ALLOWED_STYLES = ["small_group", "medium_group", "large_social"];
+      const safeChapters = (extracted.life_chapters ?? []).filter((c: string) => ALLOWED_CHAPTERS.includes(c));
+      const safeStyle = ALLOWED_STYLES.includes(extracted.connection_style) ? extracted.connection_style : "small_group";
 
       // Step 4 — Generate goal embeddings via OpenAI
       let goalEmbedding: number[] | null = null;
@@ -139,16 +146,16 @@ Transcript:
           updated_at = NOW()`,
         [
           user_id,
-          extracted.life_chapters ?? [],
+          safeChapters,
           extracted.social_energy ?? 50,
-          extracted.connection_style ?? "small_group",
+          safeStyle,
           extracted.activity_preferences ?? [],
-          emotions?.[0]?.name ?? null,
+          extracted.emotional_state ?? emotions?.[0]?.name ?? null,
           extracted.goals ?? [],
           extracted.blockers ?? [],
           extracted.availability_pattern ?? null,
           extracted.city ?? null,
-          goalEmbedding,
+          goalEmbedding ? `[${goalEmbedding.join(",")}]` : null,
         ],
       );
 
@@ -230,6 +237,18 @@ router.post(
     try {
       const user_id = req.params.user_id as string;
 
+      // Pre-flight — skip placement if user is already in an active circle
+      const existingMembership = await pool.query(
+        `SELECT circle_id FROM circle_members WHERE member_id = $1 LIMIT 1`,
+        [user_id],
+      );
+      if (existingMembership.rows[0]) {
+        return res.status(200).send({
+          success: false,
+          message: "User is already in an active circle.",
+        });
+      }
+
       // Step 1 — Run matching algorithm
       // Returns array of user IDs or null if no valid group found
       const groupUserIds = await findBestCircle(user_id);
@@ -266,6 +285,40 @@ router.post(
           `INSERT INTO circle_members (circle_id, member_id) VALUES ($1, $2) ON CONFLICT DO NOTHING`,
           [circle.id, memberId],
         );
+      }
+
+      // Step 4.5 — Assign Circle Connector before notifications fire
+      const existingConnector = await pool.query(
+        `SELECT user_id FROM co_profiles
+         WHERE user_id = ANY($1::uuid[]) AND is_circle_connector = TRUE
+         LIMIT 1`,
+        [groupUserIds],
+      );
+
+      if (!existingConnector.rows[0]) {
+        const topTrust = await pool.query(
+          `SELECT user_id FROM co_profiles
+           WHERE user_id = ANY($1::uuid[])
+           ORDER BY trust_score DESC
+           LIMIT 1`,
+          [groupUserIds],
+        );
+
+        if (topTrust.rows[0]) {
+          const connectorId = topTrust.rows[0].user_id;
+          await pool.query(
+            `UPDATE co_profiles SET is_circle_connector = TRUE WHERE user_id = $1`,
+            [connectorId],
+          );
+          await pool.query(
+            `INSERT INTO co_memories (user_id, memory_type, content)
+             VALUES ($1, 'check_in', $2)`,
+            [
+              connectorId,
+              `Co selected you as Circle Connector for circle ${circle.id}`,
+            ],
+          );
+        }
       }
 
       // Step 5 — Notify all members via existing notification system
@@ -443,6 +496,11 @@ Make it feel intimate, specific, and intentional. Not generic.`,
 
       if (partnerVenue.rows[0]) {
         // Use CoPatible partner venue
+        const contact: string = partnerVenue.rows[0].contact ?? "";
+        const partnerBookingUrl = contact.startsWith("http")
+          ? contact
+          : `https://resy.com/cities/sf?query=${encodeURIComponent(partnerVenue.rows[0].name)}`;
+
         selectedVenue = {
           name: partnerVenue.rows[0].name,
           formatted_address: partnerVenue.rows[0].neighborhood,
@@ -450,6 +508,7 @@ Make it feel intimate, specific, and intentional. Not generic.`,
           booking_method: partnerVenue.rows[0].booking_method,
           contact: partnerVenue.rows[0].contact,
           payment_tier: partnerVenue.rows[0].payment_tier,
+          venue_booking_url: partnerBookingUrl,
         };
       } else {
         // Fall back to Google Places + Co scoring
@@ -472,9 +531,9 @@ Make it feel intimate, specific, and intentional. Not generic.`,
       ).toISOString();
 
       const momentResult = await pool.query(
-        `INSERT INTO moments 
-         (creator_id, moments_name, location, location_name, moment_start, visibility_type, description, circle_id, vibes, venue)
-         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
+        `INSERT INTO moments
+         (creator_id, moments_name, location, location_name, moment_start, visibility_type, description, circle_id, vibes, venue, suggested_time, status, venue_booking_url)
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13)
          RETURNING *`,
         [
           circle.owner_id,
@@ -488,12 +547,24 @@ Make it feel intimate, specific, and intentional. Not generic.`,
           circle_id,
           momentData.vibes ?? [],
           selectedVenue?.name ?? null,
+          momentData.suggested_time ?? null,
+          "polling",
+          selectedVenue?.venue_booking_url ?? null,
         ],
       );
 
       const moment = momentResult.rows[0];
 
-      // Step 9 — Notify all circle members
+      // Step 8.5 — Seed moment_responses for each circle member (null = awaiting reply)
+      for (const member of members) {
+        await pool.query(
+          `INSERT INTO moment_responses (moment_id, user_id) VALUES ($1, $2)`,
+          [moment.id, member.member_id],
+        );
+      }
+
+      // Step 9 — Notify all circle members, collect phones for consensus poll
+      const memberPhones: string[] = [];
       for (const member of members) {
         const userResult = await pool.query(
           `SELECT email, phone_number FROM users WHERE id = $1`,
@@ -501,6 +572,8 @@ Make it feel intimate, specific, and intentional. Not generic.`,
         );
         const user = userResult.rows[0];
         if (!user) continue;
+
+        memberPhones.push(user.phone_number);
 
         await sendEmail({
           email: user.email,
@@ -515,6 +588,20 @@ Make it feel intimate, specific, and intentional. Not generic.`,
           invite_target: "moment",
           action_url: `https://copatible.app/moments/${moment.id}`,
         });
+      }
+
+      // Step 9.5 — Send consensus poll to the group via Sendblue iMessage
+      if (memberPhones.length >= 4) {
+        const pollMessage = `${momentData.suggested_time ?? "This week"} — does that work for everyone? Reply YES or suggest another time.`;
+        try {
+          await sendblue.groups.sendMessage({
+            numbers: memberPhones,
+            content: pollMessage,
+            from_number: process.env.SENDBLUE_PHONE_NUMBER!,
+          });
+        } catch (smsErr: any) {
+          console.error("Sendblue group message failed (non-fatal):", smsErr?.message ?? smsErr);
+        }
       }
 
       // Step 10 — Store co_memory for each member
@@ -595,15 +682,26 @@ router.post(
         [user_id, coMessage],
       );
 
-      const text = await sendblue.messages.send({
-        number: user.phone_number,
-        content: coMessage,
-        from_number: process.env.SENDBLUE_PHONE_NUMBER!,
-      });
+      let sendResult: any = null;
+      try {
+        sendResult = await sendblue.messages.send({
+          number: user.phone_number,
+          content: coMessage,
+          from_number: process.env.SENDBLUE_PHONE_NUMBER!,
+        });
+      } catch (smsErr: any) {
+        const errMsg = smsErr?.message ?? String(smsErr);
+        console.error(`Sendblue failed to send to ${user_id}:`, errMsg);
+        await pool.query(
+          `INSERT INTO co_memories (user_id, memory_type, content)
+           VALUES ($1, 'text_exchange', $2)`,
+          [user_id, `Co failed to send message to ${user_id}: ${errMsg}`],
+        );
+      }
 
       return res.status(200).send({
         success: true,
-        text_dateCreated: text.date_created,
+        text_dateCreated: sendResult?.date_created ?? null,
       });
     } catch (error) {
       next(error);
@@ -655,11 +753,24 @@ router.post(
       // Send as group message via Sendblue
       const numbers = members.map((m: any) => m.phone_number);
 
-      const groupMessage = await sendblue.groups.sendMessage({
-        numbers,
-        content: coMessage,
-        from_number: process.env.SENDBLUE_PHONE_NUMBER!,
-      });
+      let groupMessage: any = null;
+      try {
+        groupMessage = await sendblue.groups.sendMessage({
+          numbers,
+          content: coMessage,
+          from_number: process.env.SENDBLUE_PHONE_NUMBER!,
+        });
+      } catch (smsErr: any) {
+        const errMsg = smsErr?.message ?? String(smsErr);
+        console.error(`Sendblue group message failed for circle ${circle_id}:`, errMsg);
+        for (const member of members) {
+          await pool.query(
+            `INSERT INTO co_memories (user_id, memory_type, content)
+             VALUES ($1, 'text_exchange', $2)`,
+            [member.id, `Co failed to send message to ${member.id}: ${errMsg}`],
+          );
+        }
+      }
 
       // Store in co_memories for each member
       for (const member of members) {
@@ -672,8 +783,8 @@ router.post(
 
       return res.status(200).send({
         success: true,
-        message_handle: groupMessage.message_handle,
-        status: groupMessage.status,
+        message_handle: groupMessage?.message_handle ?? null,
+        status: groupMessage?.status ?? "send_failed",
         member_count: members.length,
         message: coMessage,
       });
