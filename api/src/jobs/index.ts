@@ -1,0 +1,302 @@
+import cron from "node-cron";
+import pool from "../db/db.js";
+import { sendEmail, sendSMS } from "../otpActions.js";
+import sendblue from "../services/sendblue.js";
+
+export function registerJobs() {
+  // Every 15 min — moment reminders (1-hour pre-event window)
+  cron.schedule("*/15 * * * *", async () => {
+    try {
+      const windowStart = new Date(Date.now() + 55 * 60 * 1000).toISOString();
+      const windowEnd = new Date(Date.now() + 69 * 60 * 1000).toISOString();
+
+      const upcoming = await pool.query(
+        `SELECT m.id AS moment_id, m.moments_name, m.location_name, m.moment_start, ia.attendee_id
+         FROM moments m
+         JOIN invite_attendees ia ON m.id = ia.moment_id
+         WHERE m.moment_start >= $1
+         AND m.moment_start < $2
+         AND ia.status = 'accepted'
+         AND m.close_moment IS NOT TRUE`,
+        [windowStart, windowEnd],
+      );
+
+      for (const row of upcoming.rows) {
+        const attendee = await pool.query(
+          `SELECT email, phone_number FROM users WHERE id = $1`,
+          [row.attendee_id],
+        );
+        if (!attendee.rows[0]) continue;
+
+        const time = new Date(row.moment_start).toLocaleTimeString("en-US", {
+          hour: "numeric",
+          minute: "2-digit",
+          hour12: true,
+        });
+
+        const momentUrl = `https://copatible.app/moments/${row.moment_id}`;
+
+        await sendEmail({
+          email: attendee.rows[0].email,
+          moment_reminder: {
+            moments_name: row.moments_name,
+            location_name: row.location_name,
+            time,
+          },
+          action_url: momentUrl,
+        });
+        await sendSMS({
+          phone_number: attendee.rows[0].phone_number,
+          moment_reminder: {
+            moments_name: row.moments_name,
+            location_name: row.location_name,
+            time,
+          },
+          action_url: momentUrl,
+        });
+      }
+    } catch (error) {
+      console.error("Reminder cron error:", error);
+    }
+  });
+
+  // Daily at 10 AM — pending invite nudges
+  cron.schedule("0 10 * * *", async () => {
+    try {
+      const yesterday = new Date(
+        Date.now() - 24 * 60 * 60 * 1000,
+      ).toISOString();
+
+      const pendingMoments = await pool.query(
+        `SELECT ia.attendee_id, ia.moment_id, m.moments_name, m.moment_start
+         FROM invite_attendees ia
+         JOIN moments m ON ia.moment_id = m.id
+         WHERE ia.status = 'pending'
+         AND ia.created_at <= $1
+         AND m.moment_start > NOW()`,
+        [yesterday],
+      );
+
+      for (const row of pendingMoments.rows) {
+        const attendee = await pool.query(
+          `SELECT email, phone_number FROM users WHERE id = $1`,
+          [row.attendee_id],
+        );
+        if (!attendee.rows[0]) continue;
+
+        const time = new Date(row.moment_start).toLocaleTimeString("en-US", {
+          hour: "numeric",
+          minute: "2-digit",
+          hour12: true,
+        });
+
+        const momentUrl = `https://copatible.app/moments/${row.moment_id}`;
+
+        await sendEmail({
+          email: attendee.rows[0].email,
+          moment_invite_reminder: { moments_name: row.moments_name, time },
+          action_url: momentUrl,
+        });
+        await sendSMS({
+          phone_number: attendee.rows[0].phone_number,
+          moment_invite_reminder: { moments_name: row.moments_name, time },
+          action_url: momentUrl,
+        });
+      }
+
+      const pendingCircles = await pool.query(
+        `SELECT im.member_id, im.circle_id, c.circle_name
+         FROM invite_members im
+         JOIN circles c ON im.circle_id = c.id
+         WHERE im.status = 'pending'
+         AND im.created_at <= $1`,
+        [yesterday],
+      );
+
+      for (const row of pendingCircles.rows) {
+        const member = await pool.query(
+          `SELECT email, phone_number FROM users WHERE id = $1`,
+          [row.member_id],
+        );
+        if (!member.rows[0]) continue;
+
+        const circleUrl = `https://copatible.app/join?circle=${row.circle_id}`;
+
+        await sendEmail({
+          email: member.rows[0].email,
+          circle_invite_reminder: { circle_name: row.circle_name },
+          action_url: circleUrl,
+        });
+        await sendSMS({
+          phone_number: member.rows[0].phone_number,
+          circle_invite_reminder: { circle_name: row.circle_name },
+          action_url: circleUrl,
+        });
+      }
+    } catch (error) {
+      console.error("Invite reminder cron error:", error);
+    }
+  });
+
+  // Every 15 min — consensus threshold + 48hr cutoff
+  cron.schedule("*/15 * * * *", async () => {
+    try {
+      const pollingMoments = await pool.query(
+        `SELECT m.id, m.circle_id, m.suggested_time, m.created_at, m.consensus_nudge_sent_at
+         FROM moments m
+         WHERE m.status = 'polling'
+         AND EXISTS (SELECT 1 FROM moment_responses mr WHERE mr.moment_id = m.id)`,
+      );
+
+      for (const moment of pollingMoments.rows) {
+        const responsesResult = await pool.query(
+          `SELECT mr.user_id, mr.response, u.phone_number, u.first_name
+           FROM moment_responses mr
+           JOIN users u ON u.id = mr.user_id
+           WHERE mr.moment_id = $1`,
+          [moment.id],
+        );
+        const responses = responsesResult.rows;
+        const total = responses.length;
+        if (total === 0) continue;
+
+        const yesCount = responses.filter(
+          (r: any) => r.response === "yes",
+        ).length;
+        const thresholdMet = yesCount * 2 > total;
+
+        const hoursSinceCreated =
+          (Date.now() - new Date(moment.created_at).getTime()) /
+          (1000 * 60 * 60);
+        const past48hrs = hoursSinceCreated >= 48;
+
+        if (!thresholdMet && !past48hrs) continue;
+
+        if (past48hrs && !moment.consensus_nudge_sent_at) {
+          const nonResponders = responses.filter(
+            (r: any) => r.response === null,
+          );
+          for (const nr of nonResponders) {
+            await sendblue.messages.send({
+              number: nr.phone_number,
+              content: `${nr.first_name}, your circle's moment has been locked. Reply YES or suggest a time for future moments.`,
+              from_number: process.env.SENDBLUE_PHONE_NUMBER!,
+            });
+            await pool.query(
+              `UPDATE co_profiles SET trust_score = GREATEST(0, trust_score - 5) WHERE user_id = $1`,
+              [nr.user_id],
+            );
+          }
+          await pool.query(
+            `UPDATE moments SET consensus_nudge_sent_at = NOW() WHERE id = $1`,
+            [moment.id],
+          );
+        }
+
+        const connectorResult = await pool.query(
+          `SELECT u.id, u.phone_number, u.first_name
+           FROM circle_members cm
+           JOIN users u ON u.id = cm.member_id
+           JOIN co_profiles cp ON cp.user_id = cm.member_id
+           WHERE cm.circle_id = $1 AND cp.is_circle_connector = TRUE
+           LIMIT 1`,
+          [moment.circle_id],
+        );
+
+        const circlePageUrl = `https://copatible.app/circles/${moment.circle_id}`;
+
+        if (connectorResult.rows[0]) {
+          const connector = connectorResult.rows[0];
+          await sendblue.messages.send({
+            number: connector.phone_number,
+            content: `${connector.first_name}, your circle is confirmed. Tap to book: ${circlePageUrl}`,
+            from_number: process.env.SENDBLUE_PHONE_NUMBER!,
+          });
+          await pool.query(
+            `UPDATE moments SET status = 'consensus_locked', booking_link_sent_at = NOW() WHERE id = $1`,
+            [moment.id],
+          );
+        } else {
+          const responsesSummary = responses
+            .map((r: any) => `${r.first_name}: ${r.response ?? "no reply"}`)
+            .join(", ");
+          await sendblue.messages.send({
+            number: process.env.KEANA_PHONE_NUMBER!,
+            content: `Circle consensus needed for moment ${moment.id}. Suggested: ${moment.suggested_time ?? "TBD"}. Responses: ${responsesSummary}. Circle: ${circlePageUrl}`,
+            from_number: process.env.SENDBLUE_PHONE_NUMBER!,
+          });
+          await pool.query(
+            `UPDATE moments SET status = 'manual_review' WHERE id = $1`,
+            [moment.id],
+          );
+        }
+      }
+    } catch (error) {
+      console.error("Consensus cron error:", error);
+    }
+  });
+
+  // Every hour — connector timeout: 4hr nudge → 8hr escalate to Keana
+  cron.schedule("0 * * * *", async () => {
+    try {
+      const fourHoursAgo = new Date(
+        Date.now() - 4 * 60 * 60 * 1000,
+      ).toISOString();
+      const eightHoursAgo = new Date(
+        Date.now() - 8 * 60 * 60 * 1000,
+      ).toISOString();
+
+      const overdueResult = await pool.query(
+        `SELECT m.id, m.circle_id, m.booking_link_sent_at, m.connector_nudge_sent_at
+         FROM moments m
+         WHERE m.status = 'consensus_locked'
+         AND m.booking_link_sent_at < $1`,
+        [fourHoursAgo],
+      );
+
+      for (const moment of overdueResult.rows) {
+        const connectorResult = await pool.query(
+          `SELECT u.id, u.phone_number, u.first_name
+           FROM circle_members cm
+           JOIN users u ON u.id = cm.member_id
+           JOIN co_profiles cp ON cp.user_id = cm.member_id
+           WHERE cm.circle_id = $1 AND cp.is_circle_connector = TRUE
+           LIMIT 1`,
+          [moment.circle_id],
+        );
+        const connector = connectorResult.rows[0];
+        const circlePageUrl = `https://copatible.app/circles/${moment.circle_id}`;
+        const past8hrs =
+          new Date(moment.booking_link_sent_at) < new Date(eightHoursAgo);
+
+        if (past8hrs) {
+          await sendblue.messages.send({
+            number: process.env.KEANA_PHONE_NUMBER!,
+            content: `Connector unresponsive for 8hrs on moment ${moment.id}. Needs manual booking. Circle: ${circlePageUrl}`,
+            from_number: process.env.SENDBLUE_PHONE_NUMBER!,
+          });
+          if (connector) {
+            await pool.query(
+              `UPDATE co_profiles SET trust_score = GREATEST(0, trust_score - 10), is_circle_connector = FALSE WHERE user_id = $1`,
+              [connector.id],
+            );
+          }
+        } else if (!moment.connector_nudge_sent_at) {
+          if (connector) {
+            await sendblue.messages.send({
+              number: connector.phone_number,
+              content: `${connector.first_name}, your circle is still waiting. Tap to book: ${circlePageUrl}`,
+              from_number: process.env.SENDBLUE_PHONE_NUMBER!,
+            });
+            await pool.query(
+              `UPDATE moments SET connector_nudge_sent_at = NOW() WHERE id = $1`,
+              [moment.id],
+            );
+          }
+        }
+      }
+    } catch (error) {
+      console.error("Connector timeout cron error:", error);
+    }
+  });
+}

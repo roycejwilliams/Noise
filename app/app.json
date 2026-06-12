@@ -8,7 +8,11 @@
     "scheme": "copatible",
     "userInterfaceStyle": "automatic",
     "ios": {
-      "icon": "./assets/expo.icon"
+      "icon": "./assets/expo.icon",
+      "bundleIdentifier": "com.copatible.app",
+      "infoPlist": {
+        "ITSAppUsesNonExemptEncryption": false
+      }
     },
     "android": {
       "adaptiveIcon": {
@@ -34,12 +38,17 @@
             "imageWidth": 76
           }
         }
-      ],
-      "@stripe/stripe-react-native"
+      ]
     ],
     "experiments": {
       "typedRoutes": true,
       "reactCompiler": true
+    },
+    "extra": {
+      "router": {},
+      "eas": {
+        "projectId": "31a8fa35-e1a3-4d6f-9e26-d091c953bbfa"
+      }
     }
   }
 }
