@@ -3,6 +3,7 @@ import { generateText } from "ai";
 import { NextFunction, Request, Response, Router } from "express";
 import type { Server } from "socket.io";
 import pool from "../db/db.js";
+import { generateEmbedding } from "../services/embeddings.js";
 
 export function sendblueRouter(io: Server): Router {
   const router = Router();
@@ -51,14 +52,20 @@ export function sendblueRouter(io: Server): Router {
             const user = userResult.rows[0];
 
             if (user) {
-              await pool.query(
+              const delivErrContent = `Co message failed to deliver: ${error_code} — ${error_message}`;
+              const delivErrMemory = await pool.query(
                 `INSERT INTO co_memories (user_id, memory_type, content)
-                 VALUES ($1, 'text_exchange', $2)`,
-                [
-                  user.id,
-                  `Co message failed to deliver: ${error_code} — ${error_message}`,
-                ],
+                 VALUES ($1, 'text_exchange', $2) RETURNING id`,
+                [user.id, delivErrContent],
               );
+              generateEmbedding(delivErrContent)
+                .then((emb) =>
+                  pool.query(
+                    `UPDATE co_memories SET content_embedding = $1::vector WHERE id = $2`,
+                    [`[${emb.join(",")}]`, delivErrMemory.rows[0].id],
+                  ),
+                )
+                .catch((err) => console.error("Memory embedding failed (non-fatal):", err));
             }
           }
 
@@ -83,11 +90,20 @@ export function sendblueRouter(io: Server): Router {
         }
 
         // Step 2 — Store inbound message as co_memory
-        await pool.query(
+        const inboundContent = `User said: ${content}`;
+        const inboundMemory = await pool.query(
           `INSERT INTO co_memories (user_id, memory_type, content)
-           VALUES ($1, 'text_exchange', $2)`,
-          [user.id, `User said: ${content}`],
+           VALUES ($1, 'text_exchange', $2) RETURNING id`,
+          [user.id, inboundContent],
         );
+        generateEmbedding(inboundContent)
+          .then((emb) =>
+            pool.query(
+              `UPDATE co_memories SET content_embedding = $1::vector WHERE id = $2`,
+              [`[${emb.join(",")}]`, inboundMemory.rows[0].id],
+            ),
+          )
+          .catch((err) => console.error("Memory embedding failed (non-fatal):", err));
 
         // Step 2.5 — Check if this is a Moment response
         // User may be replying to a consensus poll or confirming a booking
@@ -133,14 +149,20 @@ export function sendblueRouter(io: Server): Router {
             );
 
             // Store in co_memories
-            await pool.query(
+            const bookingContent = `Connector confirmed booking for moment: ${moments_name}`;
+            const bookingMemory = await pool.query(
               `INSERT INTO co_memories (user_id, memory_type, content)
-               VALUES ($1, 'intent', $2)`,
-              [
-                user.id,
-                `Connector confirmed booking for moment: ${moments_name}`,
-              ],
+               VALUES ($1, 'intent', $2) RETURNING id`,
+              [user.id, bookingContent],
             );
+            generateEmbedding(bookingContent)
+              .then((emb) =>
+                pool.query(
+                  `UPDATE co_memories SET content_embedding = $1::vector WHERE id = $2`,
+                  [`[${emb.join(",")}]`, bookingMemory.rows[0].id],
+                ),
+              )
+              .catch((err) => console.error("Memory embedding failed (non-fatal):", err));
 
             // Emit socket event so app updates
             io.to(`moment:${moment_id}`).emit("moment:confirmed", {
@@ -171,14 +193,24 @@ export function sendblueRouter(io: Server): Router {
             .send({ received: true, action: "moment_response_captured" });
         }
 
-        // Step 3 — No pending moment — fetch recent memories for Co's context
-        const memoriesResult = await pool.query(
-          `SELECT content FROM co_memories 
-           WHERE user_id = $1 
-           ORDER BY created_at DESC 
-           LIMIT 5`,
-          [user.id],
-        );
+        // Step 3 — No pending moment — fetch semantically relevant memories for Co's context
+        let memoriesResult;
+        try {
+          const queryEmbedding = await generateEmbedding(content);
+          memoriesResult = await pool.query(
+            `SELECT content FROM co_memories
+             WHERE user_id = $1 AND content_embedding IS NOT NULL
+             ORDER BY content_embedding <=> $2::vector
+             LIMIT 5`,
+            [user.id, `[${queryEmbedding.join(",")}]`],
+          );
+        } catch (embedErr) {
+          console.error("Semantic memory fetch failed, falling back to recency:", embedErr);
+          memoriesResult = await pool.query(
+            `SELECT content FROM co_memories WHERE user_id = $1 ORDER BY created_at DESC LIMIT 5`,
+            [user.id],
+          );
+        }
         const recentMemories = memoriesResult.rows
           .map((m: any) => m.content)
           .join("\n");
@@ -199,11 +231,20 @@ export function sendblueRouter(io: Server): Router {
         });
 
         // Step 5 — Store Co's reply as co_memory
-        await pool.query(
+        const replyContent = `Co replied: ${coReply}`;
+        const replyMemory = await pool.query(
           `INSERT INTO co_memories (user_id, memory_type, content)
-           VALUES ($1, 'text_exchange', $2)`,
-          [user.id, `Co replied: ${coReply}`],
+           VALUES ($1, 'text_exchange', $2) RETURNING id`,
+          [user.id, replyContent],
         );
+        generateEmbedding(replyContent)
+          .then((emb) =>
+            pool.query(
+              `UPDATE co_memories SET content_embedding = $1::vector WHERE id = $2`,
+              [`[${emb.join(",")}]`, replyMemory.rows[0].id],
+            ),
+          )
+          .catch((err) => console.error("Memory embedding failed (non-fatal):", err));
 
         // Step 6 — Emit to socket so app shows reply in real time
         io.to(`user:${user.id}`).emit("co:message", { message: coReply });

@@ -5,6 +5,7 @@ import express from "express";
 import helmut from "helmet";
 import { createServer } from "http";
 import { Server } from "socket.io";
+import pool from "./db/db.js";
 import { runMigrations } from "./db/migrations.js";
 import { registerJobs } from "./jobs/index.js";
 import { authenticateToken } from "./middleware/auth.js";
@@ -34,6 +35,14 @@ const io = new Server(httpServer, { cors: corsOptions });
 
 configureSocket(io);
 runMigrations();
+pool
+  .query(`ALTER TABLE co_memories ADD COLUMN IF NOT EXISTS content_embedding vector(1536)`)
+  .then(() =>
+    pool.query(`CREATE INDEX IF NOT EXISTS co_memories_embedding_hnsw_idx
+      ON co_memories USING hnsw (content_embedding vector_cosine_ops)
+      WITH (m = 16, ef_construction = 64)`),
+  )
+  .catch((err) => console.error("Failed to set up co_memories embedding index:", err));
 
 // Stripe webhook needs raw body for signature verification — must run before express.json()
 app.use("/payments/webhook", express.raw({ type: "application/json" }));

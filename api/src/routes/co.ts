@@ -5,7 +5,7 @@ import twilio from "twilio";
 import pool from "../db/db.js";
 import { sendEmail, sendSMS } from "../otpActions.js";
 import { authenticateToken } from "../middleware/auth.js";
-import { generateGoalEmbedding } from "../services/embeddings.js";
+import { generateEmbedding, generateGoalEmbedding } from "../services/embeddings.js";
 import { findBestCircle } from "../services/matching.js";
 import { findBestVenue } from "../services/places.js";
 import sendblue from "../services/sendblue.js";
@@ -70,11 +70,19 @@ router.post(
       }
 
       // Step 1 — Store raw transcript in co_memories immediately
-      await pool.query(
+      const callMemory = await pool.query(
         `INSERT INTO co_memories (user_id, memory_type, content, emotional_context, audio_url)
-         VALUES ($1, 'call_transcript', $2, $3, $4)`,
+         VALUES ($1, 'call_transcript', $2, $3, $4) RETURNING id`,
         [user_id, transcript, JSON.stringify(emotions), recording_url ?? null],
       );
+      generateEmbedding(transcript)
+        .then((emb) =>
+          pool.query(
+            `UPDATE co_memories SET content_embedding = $1::vector WHERE id = $2`,
+            [`[${emb.join(",")}]`, callMemory.rows[0].id],
+          ),
+        )
+        .catch((err) => console.error("Memory embedding failed (non-fatal):", err));
 
       // Step 2 — Extract psychographic data from transcript using Anthropic
       // This is what populates co_profiles so the matching algorithm has data to work with
@@ -310,14 +318,20 @@ router.post(
             `UPDATE co_profiles SET is_circle_connector = TRUE WHERE user_id = $1`,
             [connectorId],
           );
-          await pool.query(
+          const connectorContent = `Co selected you as Circle Connector for circle ${circle.id}`;
+          const connectorMemory = await pool.query(
             `INSERT INTO co_memories (user_id, memory_type, content)
-             VALUES ($1, 'check_in', $2)`,
-            [
-              connectorId,
-              `Co selected you as Circle Connector for circle ${circle.id}`,
-            ],
+             VALUES ($1, 'check_in', $2) RETURNING id`,
+            [connectorId, connectorContent],
           );
+          generateEmbedding(connectorContent)
+            .then((emb) =>
+              pool.query(
+                `UPDATE co_memories SET content_embedding = $1::vector WHERE id = $2`,
+                [`[${emb.join(",")}]`, connectorMemory.rows[0].id],
+              ),
+            )
+            .catch((err) => console.error("Memory embedding failed (non-fatal):", err));
         }
       }
 
@@ -347,14 +361,20 @@ router.post(
 
       // Step 6 — Store placement as a co_memory for each member
       for (const memberId of groupUserIds) {
-        await pool.query(
+        const placementContent = `Co placed you in a circle: ${circleName}. Members: ${groupUserIds.length} people.`;
+        const placementMemory = await pool.query(
           `INSERT INTO co_memories (user_id, memory_type, content)
-           VALUES ($1, 'check_in', $2)`,
-          [
-            memberId,
-            `Co placed you in a circle: ${circleName}. Members: ${groupUserIds.length} people.`,
-          ],
+           VALUES ($1, 'check_in', $2) RETURNING id`,
+          [memberId, placementContent],
         );
+        generateEmbedding(placementContent)
+          .then((emb) =>
+            pool.query(
+              `UPDATE co_memories SET content_embedding = $1::vector WHERE id = $2`,
+              [`[${emb.join(",")}]`, placementMemory.rows[0].id],
+            ),
+          )
+          .catch((err) => console.error("Memory embedding failed (non-fatal):", err));
       }
 
       return res.status(201).send({
@@ -606,14 +626,20 @@ Make it feel intimate, specific, and intentional. Not generic.`,
 
       // Step 10 — Store co_memory for each member
       for (const member of members) {
-        await pool.query(
+        const momentContent = `Co created a Moment for your circle: ${momentData.moments_name} at ${selectedVenue?.name ?? momentData.neighborhood}. ${momentData.suggested_time}.`;
+        const momentMemory = await pool.query(
           `INSERT INTO co_memories (user_id, memory_type, content)
-           VALUES ($1, 'intent', $2)`,
-          [
-            member.member_id,
-            `Co created a Moment for your circle: ${momentData.moments_name} at ${selectedVenue?.name ?? momentData.neighborhood}. ${momentData.suggested_time}.`,
-          ],
+           VALUES ($1, 'intent', $2) RETURNING id`,
+          [member.member_id, momentContent],
         );
+        generateEmbedding(momentContent)
+          .then((emb) =>
+            pool.query(
+              `UPDATE co_memories SET content_embedding = $1::vector WHERE id = $2`,
+              [`[${emb.join(",")}]`, momentMemory.rows[0].id],
+            ),
+          )
+          .catch((err) => console.error("Memory embedding failed (non-fatal):", err));
       }
 
       return res.status(201).send({
@@ -657,6 +683,23 @@ router.post(
         return res.status(404).send("User not found.");
       }
 
+      let lifeConcieregeContext = "";
+      if (message_type === "life_concierge" && context?.user_message) {
+        try {
+          const lcEmbedding = await generateEmbedding(context.user_message);
+          const lcMemories = await pool.query(
+            `SELECT content FROM co_memories
+             WHERE user_id = $1 AND content_embedding IS NOT NULL
+             ORDER BY content_embedding <=> $2::vector
+             LIMIT 5`,
+            [user_id, `[${lcEmbedding.join(",")}]`],
+          );
+          lifeConcieregeContext = lcMemories.rows.map((m: any) => m.content).join("\n");
+        } catch (lcErr) {
+          console.error("Semantic memory fetch failed for life_concierge (non-fatal):", lcErr);
+        }
+      }
+
       const prompts: Record<string, string> = {
         circle_placement: `You are Co, an exclusive life concierge. Write a short iMessage to ${user.first_name}. Co has selected their circle. Tone: quiet confidence, like a private members club reaching out. No excitement, no exclamation points. Just certainty. 2 sentences max. No em dashes. Example tone: "Your circle is ready. Five people, same chapter, same city."`,
 
@@ -666,7 +709,7 @@ router.post(
 
         check_in: `You are Co. Write a short iMessage to ${user.first_name} following up after their circle experience. Tone: like a thoughtful friend checking in, not a survey. One question only. 1 sentence max. No em dashes.`,
 
-        life_concierge: `You are Co. ${user.first_name} said: "${context?.user_message}". Respond as Co — specific, warm, actionable. Co knows ${user.first_name} well. No filler phrases. 2 sentences max. No em dashes.`,
+        life_concierge: `You are Co. ${user.first_name} said: "${context?.user_message}".${lifeConcieregeContext ? `\n\nContext from past conversations:\n${lifeConcieregeContext}` : ""} Respond as Co — specific, warm, actionable. Co knows ${user.first_name} well. No filler phrases. 2 sentences max. No em dashes.`,
       };
 
       const prompt = prompts[message_type] ?? prompts.circle_placement;
@@ -676,11 +719,19 @@ router.post(
         prompt,
       });
 
-      await pool.query(
+      const coMsgMemory = await pool.query(
         `INSERT INTO co_memories (user_id, memory_type, content)
-   VALUES ($1, 'text_exchange', $2)`,
+   VALUES ($1, 'text_exchange', $2) RETURNING id`,
         [user_id, coMessage],
       );
+      generateEmbedding(coMessage)
+        .then((emb) =>
+          pool.query(
+            `UPDATE co_memories SET content_embedding = $1::vector WHERE id = $2`,
+            [`[${emb.join(",")}]`, coMsgMemory.rows[0].id],
+          ),
+        )
+        .catch((err) => console.error("Memory embedding failed (non-fatal):", err));
 
       let sendResult: any = null;
       try {
@@ -692,11 +743,20 @@ router.post(
       } catch (smsErr: any) {
         const errMsg = smsErr?.message ?? String(smsErr);
         console.error(`Sendblue failed to send to ${user_id}:`, errMsg);
-        await pool.query(
+        const failContent = `Co failed to send message to ${user_id}: ${errMsg}`;
+        const failMemory = await pool.query(
           `INSERT INTO co_memories (user_id, memory_type, content)
-           VALUES ($1, 'text_exchange', $2)`,
-          [user_id, `Co failed to send message to ${user_id}: ${errMsg}`],
+           VALUES ($1, 'text_exchange', $2) RETURNING id`,
+          [user_id, failContent],
         );
+        generateEmbedding(failContent)
+          .then((emb) =>
+            pool.query(
+              `UPDATE co_memories SET content_embedding = $1::vector WHERE id = $2`,
+              [`[${emb.join(",")}]`, failMemory.rows[0].id],
+            ),
+          )
+          .catch((err) => console.error("Memory embedding failed (non-fatal):", err));
       }
 
       return res.status(200).send({
@@ -764,21 +824,38 @@ router.post(
         const errMsg = smsErr?.message ?? String(smsErr);
         console.error(`Sendblue group message failed for circle ${circle_id}:`, errMsg);
         for (const member of members) {
-          await pool.query(
+          const grpFailContent = `Co failed to send message to ${member.id}: ${errMsg}`;
+          const grpFailMemory = await pool.query(
             `INSERT INTO co_memories (user_id, memory_type, content)
-             VALUES ($1, 'text_exchange', $2)`,
-            [member.id, `Co failed to send message to ${member.id}: ${errMsg}`],
+             VALUES ($1, 'text_exchange', $2) RETURNING id`,
+            [member.id, grpFailContent],
           );
+          generateEmbedding(grpFailContent)
+            .then((emb) =>
+              pool.query(
+                `UPDATE co_memories SET content_embedding = $1::vector WHERE id = $2`,
+                [`[${emb.join(",")}]`, grpFailMemory.rows[0].id],
+              ),
+            )
+            .catch((err) => console.error("Memory embedding failed (non-fatal):", err));
         }
       }
 
       // Store in co_memories for each member
       for (const member of members) {
-        await pool.query(
+        const grpMemory = await pool.query(
           `INSERT INTO co_memories (user_id, memory_type, content)
-           VALUES ($1, 'text_exchange', $2)`,
+           VALUES ($1, 'text_exchange', $2) RETURNING id`,
           [member.id, coMessage],
         );
+        generateEmbedding(coMessage)
+          .then((emb) =>
+            pool.query(
+              `UPDATE co_memories SET content_embedding = $1::vector WHERE id = $2`,
+              [`[${emb.join(",")}]`, grpMemory.rows[0].id],
+            ),
+          )
+          .catch((err) => console.error("Memory embedding failed (non-fatal):", err));
       }
 
       return res.status(200).send({
