@@ -89,44 +89,29 @@ Say: "I have what I need. Your circle is next."`;
 
 async function main() {
   const client = new HumeClient({ apiKey: process.env.HUME_API_KEY! });
-  const configId = process.env.HUME_CONFIG_ID!;
   const voiceId = process.env.HUME_VOICE_ID!;
 
-  if (!configId || !voiceId) {
-    console.error("HUME_CONFIG_ID and HUME_VOICE_ID must be set in .env");
+  if (!voiceId) {
+    console.error("HUME_VOICE_ID must be set in .env");
     process.exit(1);
   }
 
-  // Find the latest existing version so we can copy its eviVersion
-  let latestVersion: any = null;
-  let latestVersionNum = -1;
-
-  const versionsPage = await client.empathicVoice.configs.listConfigVersions(configId);
-  for await (const version of versionsPage) {
-    const vNum = version.version ?? 0;
-    if (vNum > latestVersionNum) {
-      latestVersionNum = vNum;
-      latestVersion = version;
-    }
-  }
-
-  if (!latestVersion) {
-    console.error(`No config versions found for ${configId}`);
-    process.exit(1);
-  }
-
-  console.log(`Current config: version ${latestVersion.version}, eviVersion ${latestVersion.eviVersion}`);
-
-  const result = await client.empathicVoice.configs.createConfigVersion(configId, {
-    eviVersion: latestVersion.eviVersion ?? "2",
-    versionDescription: "Co intake prompt + voice",
-    voice: { id: voiceId, provider: "HUME_AI" },
+  const result = await client.empathicVoice.configs.createConfig({
+    name: "Co — Intake",
+    eviVersion: "3",
+    voice: { id: voiceId, provider: "CUSTOM_VOICE" },
     prompt: { text: CO_SYSTEM_PROMPT },
+    languageModel: {
+      modelProvider: "ANTHROPIC",
+      modelResource: "claude-sonnet-4-5-20250929",
+      temperature: 1,
+    },
   });
 
-  console.log(`Config updated — new version: ${result.version}`);
-  console.log(`Voice ID set to: ${voiceId}`);
-  console.log(`System prompt: ${CO_SYSTEM_PROMPT.slice(0, 80)}...`);
+  console.log(`\nConfig created.`);
+  console.log(`\nUpdate your .env:`);
+  console.log(`HUME_CONFIG_ID=${result.id}`);
+  console.log(`\nDone. Restart your server after updating .env.`);
 }
 
 main().catch((err) => {
