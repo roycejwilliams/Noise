@@ -1,5 +1,6 @@
 import { anthropic } from "@ai-sdk/anthropic";
 import { generateText } from "ai";
+import crypto from "crypto";
 import express, { NextFunction, Request, Response } from "express";
 import twilio from "twilio";
 import pool from "../db/db.js";
@@ -19,9 +20,60 @@ const twilioClient = twilio(
   { accountSid: process.env.TWILIO_LIVE_SID! },
 );
 
+// Reject status callbacks that didn't come from Twilio
+function validateTwilioSignature(req: Request): boolean {
+  if (process.env.NODE_ENV !== "production") return true;
+  const sig = req.headers["x-twilio-signature"] as string | undefined;
+  if (!sig) return false;
+  const url = `${process.env.API_URL}/co/call-status`;
+  return twilio.validateRequest(process.env.TWILIO_CLIENT_SECRET!, sig, url, req.body);
+}
+
+// Reject webhook calls that didn't come from Hume (bearer token set in EVI config)
+function validateHumeWebhook(req: Request): boolean {
+  const secret = process.env.HUME_WEBHOOK_SECRET;
+  if (!secret) return true; // skip when not configured (dev)
+  const header = req.headers["x-hume-signature"] ?? req.headers["authorization"]?.toString().replace("Bearer ", "");
+  if (!header) return false;
+  try {
+    return crypto.timingSafeEqual(Buffer.from(header as string), Buffer.from(secret));
+  } catch {
+    return false;
+  }
+}
+
+// Normalize Hume EVI webhook payload — handles snake_case vs camelCase and
+// assembles a flat transcript string from message-array payloads
+function normalizeHumePayload(body: any) {
+  const customSessionId = body.customSessionId ?? body.custom_session_id ?? body.user_id;
+  const chatGroupId = body.chatGroupId ?? body.chat_group_id;
+
+  let transcript = "";
+  if (typeof body.transcript === "string") {
+    transcript = body.transcript;
+  } else {
+    const messages: any[] = body.messages ?? (Array.isArray(body.transcript) ? body.transcript : []);
+    if (messages.length > 0) {
+      transcript = messages
+        .map((m) => {
+          const role = m.role ?? m.type ?? "unknown";
+          const content = m.content ?? m.message?.content ?? m.text ?? "";
+          return `${role}: ${content}`;
+        })
+        .join("\n");
+    }
+  }
+
+  const emotions = body.emotions ?? body.inferences ?? body.prosody?.scores ?? null;
+  const recording_url = body.recording_url ?? body.recordingUrl ?? null;
+
+  return { customSessionId, chatGroupId, transcript, emotions, recording_url };
+}
+
 // POST /co/call/:user_id — initiate outbound call to user
 router.post(
   "/call/:user_id",
+  authenticateToken,
   async (req: Request, res: Response, next: NextFunction) => {
     try {
       const { user_id } = req.params;
@@ -97,6 +149,10 @@ router.post(
   "/call-status",
   async (req: Request, res: Response, next: NextFunction) => {
     try {
+      if (!validateTwilioSignature(req)) {
+        return res.status(401).send("Invalid Twilio signature.");
+      }
+
       const { CallStatus, To, CallSid } = req.body;
 
       // Validate Twilio sent the required fields
@@ -145,9 +201,8 @@ router.post(
       }
 
       // Send as voice note if generated, otherwise send as text
-      let sendResult: any = null;
       try {
-        sendResult = await sendblue.messages.send({
+        await sendblue.messages.send({
           number: user.phone_number,
           content: audioUrl ? "" : coMessage,
           ...(audioUrl ? { media_url: audioUrl } : {}),
@@ -184,17 +239,15 @@ router.post(
   "/webhook",
   async (req: Request, res: Response, next: NextFunction) => {
     try {
-      // customSessionId is user_id — we inject it via the Hume webhook URL as custom_session_id
-      // Fall back to user_id for any legacy payloads
-      const {
-        customSessionId,
-        user_id: legacyUserId,
-        chatGroupId,
-        transcript,
-        emotions,
-        recording_url,
-      } = req.body;
-      const user_id = customSessionId ?? legacyUserId;
+      if (!validateHumeWebhook(req)) {
+        return res.status(401).send("Unauthorized.");
+      }
+
+      // Normalize field names — Hume EVI may send snake_case or camelCase,
+      // and transcript may be a string or an array of message objects
+      const { customSessionId, chatGroupId, transcript, emotions, recording_url } =
+        normalizeHumePayload(req.body);
+      const user_id = customSessionId;
 
       if (!user_id || !transcript) {
         return res.status(400).send("Missing required fields.");

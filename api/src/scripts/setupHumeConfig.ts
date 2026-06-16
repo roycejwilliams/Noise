@@ -111,6 +111,10 @@ async function main() {
   console.log(`\nConfig created.`);
   console.log(`\nUpdate your .env:`);
   console.log(`HUME_CONFIG_ID=${result.id}`);
+  console.log(`\nThen in the Hume dashboard, set the webhook URL for this config to:`);
+  console.log(`  ${process.env.API_URL}/co/webhook`);
+  console.log(`And set the Authorization header to: Bearer <HUME_WEBHOOK_SECRET>`);
+  console.log(`(HUME_WEBHOOK_SECRET must also be set in Railway env vars)`);
   console.log(`\nDone. Restart your server after updating .env.`);
 }
 
