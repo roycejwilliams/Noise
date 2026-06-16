@@ -1,8 +1,9 @@
 [build]
-buildCommand = "cd api && npm install && npm run build"
+builder = "DOCKERFILE"
+dockerfilePath = "Dockerfile"
 
 [deploy]
-startCommand = "node api/dist/server.js"
+startCommand = "node dist/server.js"
 healthcheckPath = "/"
 healthcheckTimeout = 30
 restartPolicyType = "on_failure"
