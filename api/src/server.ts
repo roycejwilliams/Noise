@@ -25,6 +25,7 @@ import { sendblueRouter } from "./routes/sendblue.js";
 import { stripeRouter } from "./routes/stripe.js";
 import { createUsersRouter } from "./routes/users.js";
 import { configureSocket } from "./socket/index.js";
+import { getAudioEntry } from "./services/voiceNote.js";
 
 const app = express();
 app.set("trust proxy", 1);
@@ -48,6 +49,7 @@ pool
 app.use("/payments/webhook", express.raw({ type: "application/json" }));
 
 app.use(express.json());
+app.use(express.urlencoded({ extended: false })); // Twilio status callbacks send form-encoded bodies
 app.use(helmut());
 app.use(cors(corsOptions));
 app.use(limiter);
@@ -68,6 +70,16 @@ app.use("/referrals", createReferralsRouter(authenticateToken));
 app.use("/co", coRouter);
 app.use("/payments", stripeRouter(io, authenticateToken));
 app.use("/sendblue", sendblueRouter(io));
+
+// Serve ElevenLabs-generated voice note audio files for Sendblue media messages
+// Files are stored in memory with a 10-minute TTL — long enough for Sendblue to fetch
+app.get("/audio/:id", (req, res) => {
+  const entry = getAudioEntry(req.params.id);
+  if (!entry) return res.status(404).send("Not found.");
+  res.setHeader("Content-Type", "audio/mpeg");
+  res.setHeader("Cache-Control", "no-store");
+  return res.send(entry.buffer);
+});
 
 app.use(errorHandler);
 

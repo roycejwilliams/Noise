@@ -1,7 +1,14 @@
 import cron from "node-cron";
+import twilio from "twilio";
 import pool from "../db/db.js";
 import { sendEmail, sendSMS } from "../otpActions.js";
 import sendblue from "../services/sendblue.js";
+
+const twilioClient = twilio(
+  process.env.TWILIO_ACCOUNT_SID!,
+  process.env.TWILIO_CLIENT_SECRET!,
+  { accountSid: process.env.TWILIO_LIVE_SID! },
+);
 
 export function registerJobs() {
   // Every 15 min — moment reminders (1-hour pre-event window)
@@ -233,6 +240,65 @@ export function registerJobs() {
       }
     } catch (error) {
       console.error("Consensus cron error:", error);
+    }
+  });
+
+  // Hourly 10am–8pm UTC — call newly subscribed users who haven't completed intake yet.
+  // Limits to 5 calls per run to avoid Twilio rate limits.
+  // Won't retry a user who had a call attempt in the last 24 hours.
+  cron.schedule("0 10-20 * * *", async () => {
+    try {
+      const uncalled = await pool.query(
+        `SELECT u.id, u.first_name, u.phone_number, cp.hume_chat_group_id
+         FROM users u
+         LEFT JOIN co_profiles cp ON cp.user_id = u.id
+         WHERE u.subscription_status = 'active'
+           AND NOT EXISTS (
+             SELECT 1 FROM co_memories cm
+             WHERE cm.user_id = u.id
+               AND cm.memory_type = 'call_transcript'
+               AND cm.created_at > NOW() - INTERVAL '24 hours'
+           )
+           AND (
+             cp.user_id IS NULL
+             OR cp.life_chapters IS NULL
+             OR array_length(cp.life_chapters, 1) IS NULL
+           )
+         LIMIT 5`,
+      );
+
+      for (const user of uncalled.rows) {
+        try {
+          const webhookParams = new URLSearchParams({
+            config_id: process.env.HUME_CONFIG_ID!,
+            api_key: process.env.HUME_API_KEY!,
+            custom_session_id: user.id,
+            first_name: user.first_name ?? "",
+          });
+          if (user.hume_chat_group_id) {
+            webhookParams.set("resumed_chat_group_id", user.hume_chat_group_id);
+          }
+
+          const call = await twilioClient.calls.create({
+            to: user.phone_number,
+            from: process.env.TWILIO_PHONE_NUMBER!,
+            url: `https://api.hume.ai/v0/evi/twilio?${webhookParams.toString()}`,
+            statusCallback: `${process.env.API_URL}/co/call-status`,
+            statusCallbackEvent: ["completed"],
+            statusCallbackMethod: "POST",
+          });
+
+          const attemptContent = `Co initiated call to ${user.first_name} — call_sid: ${call.sid}`;
+          await pool.query(
+            `INSERT INTO co_memories (user_id, memory_type, content) VALUES ($1, 'call_transcript', $2)`,
+            [user.id, attemptContent],
+          );
+        } catch (callErr: any) {
+          console.error(`Auto-call failed for user ${user.id}:`, callErr?.message ?? callErr);
+        }
+      }
+    } catch (err) {
+      console.error("Auto-call cron error:", err);
     }
   });
 

@@ -1,5 +1,6 @@
 import { anthropic } from "@ai-sdk/anthropic";
 import { generateText } from "ai";
+import crypto from "crypto";
 import express, { NextFunction, Request, Response } from "express";
 import twilio from "twilio";
 import pool from "../db/db.js";
@@ -9,23 +10,79 @@ import { generateEmbedding, generateGoalEmbedding } from "../services/embeddings
 import { findBestCircle } from "../services/matching.js";
 import { findBestVenue } from "../services/places.js";
 import sendblue from "../services/sendblue.js";
+import { generateVoiceNote } from "../services/voiceNote.js";
 
 const router = express.Router();
 
 const twilioClient = twilio(
-  process.env.TWILIO_TEST_SID!,
-  process.env.TWILIO_TEST_AUTH_TOKEN!,
+  process.env.TWILIO_ACCOUNT_SID!,
+  process.env.TWILIO_CLIENT_SECRET!,
+  { accountSid: process.env.TWILIO_LIVE_SID! },
 );
+
+// Reject status callbacks that didn't come from Twilio
+function validateTwilioSignature(req: Request): boolean {
+  if (process.env.NODE_ENV !== "production") return true;
+  const sig = req.headers["x-twilio-signature"] as string | undefined;
+  if (!sig) return false;
+  const url = `${process.env.API_URL}/co/call-status`;
+  return twilio.validateRequest(process.env.TWILIO_CLIENT_SECRET!, sig, url, req.body);
+}
+
+// Reject webhook calls that didn't come from Hume (bearer token set in EVI config)
+function validateHumeWebhook(req: Request): boolean {
+  const secret = process.env.HUME_WEBHOOK_SECRET;
+  if (!secret) return true; // skip when not configured (dev)
+  const header = req.headers["x-hume-signature"] ?? req.headers["authorization"]?.toString().replace("Bearer ", "");
+  if (!header) return false;
+  try {
+    return crypto.timingSafeEqual(Buffer.from(header as string), Buffer.from(secret));
+  } catch {
+    return false;
+  }
+}
+
+// Normalize Hume EVI webhook payload — handles snake_case vs camelCase and
+// assembles a flat transcript string from message-array payloads
+function normalizeHumePayload(body: any) {
+  const customSessionId = body.customSessionId ?? body.custom_session_id ?? body.user_id;
+  const chatGroupId = body.chatGroupId ?? body.chat_group_id;
+
+  let transcript = "";
+  if (typeof body.transcript === "string") {
+    transcript = body.transcript;
+  } else {
+    const messages: any[] = body.messages ?? (Array.isArray(body.transcript) ? body.transcript : []);
+    if (messages.length > 0) {
+      transcript = messages
+        .map((m) => {
+          const role = m.role ?? m.type ?? "unknown";
+          const content = m.content ?? m.message?.content ?? m.text ?? "";
+          return `${role}: ${content}`;
+        })
+        .join("\n");
+    }
+  }
+
+  const emotions = body.emotions ?? body.inferences ?? body.prosody?.scores ?? null;
+  const recording_url = body.recording_url ?? body.recordingUrl ?? null;
+
+  return { customSessionId, chatGroupId, transcript, emotions, recording_url };
+}
 
 // POST /co/call/:user_id — initiate outbound call to user
 router.post(
   "/call/:user_id",
+  authenticateToken,
   async (req: Request, res: Response, next: NextFunction) => {
     try {
       const { user_id } = req.params;
 
       const userResult = await pool.query(
-        `SELECT phone_number, subscription_status FROM users WHERE id = $1`,
+        `SELECT u.first_name, u.phone_number, u.subscription_status, cp.hume_chat_group_id
+         FROM users u
+         LEFT JOIN co_profiles cp ON cp.user_id = u.id
+         WHERE u.id = $1`,
         [user_id],
       );
 
@@ -33,20 +90,48 @@ router.post(
 
       if (!user) return res.status(404).send("User not found.");
 
-      if (user.subscription_status !== "active") {
-        return res
-          .status(403)
-          .send("User does not have an active subscription.");
+      if (process.env.NODE_ENV === "production" && user.subscription_status !== "active") {
+        return res.status(403).send("User does not have an active subscription.");
       }
 
-      //api call for hume and twilio connector
-      const webhookUrl = `https://api.hume.ai/v0/evi/twilio?config_id=${process.env.HUME_CONFIG_ID}&api_key=${process.env.HUME_API_KEY}`;
+      // Inject user identity so Hume sends it back in the webhook (customSessionId → user_id)
+      // first_name is available as {{first_name}} in the Hume EVI system prompt
+      // Resume prior chat group if one exists so Co picks up the conversation where it left off
+      const webhookParams = new URLSearchParams({
+        config_id: process.env.HUME_CONFIG_ID!,
+        api_key: process.env.HUME_API_KEY!,
+        custom_session_id: user_id as string,
+        first_name: user.first_name ?? "",
+      });
+      if (user.hume_chat_group_id) {
+        webhookParams.set("resumed_chat_group_id", user.hume_chat_group_id);
+      }
+      const webhookUrl = `https://api.hume.ai/v0/evi/twilio?${webhookParams.toString()}`;
+      const statusCallbackUrl = `${process.env.API_URL}/co/call-status`;
 
       const call = await twilioClient.calls.create({
         to: user.phone_number,
         from: process.env.TWILIO_PHONE_NUMBER!,
         url: webhookUrl,
+        statusCallback: statusCallbackUrl,
+        statusCallbackEvent: ["completed"],
+        statusCallbackMethod: "POST",
       });
+
+      // Store call attempt in co_memories so status callback has context
+      const attemptContent = `Co initiated call to ${user.first_name} — call_sid: ${call.sid}`;
+      const attemptMem = await pool.query(
+        `INSERT INTO co_memories (user_id, memory_type, content) VALUES ($1, 'call_transcript', $2) RETURNING id`,
+        [user_id, attemptContent],
+      );
+      generateEmbedding(attemptContent)
+        .then((emb) =>
+          pool.query(
+            `UPDATE co_memories SET content_embedding = $1::vector WHERE id = $2`,
+            [`[${emb.join(",")}]`, attemptMem.rows[0].id],
+          ),
+        )
+        .catch((err) => console.error("Memory embedding failed (non-fatal):", err));
 
       return res.status(200).send({
         success: true,
@@ -58,12 +143,111 @@ router.post(
   },
 );
 
+// POST /co/call-status — Twilio status callback, fires when call reaches terminal state
+// Handles missed calls (no-answer, busy, failed) by sending a Co iMessage follow-up
+router.post(
+  "/call-status",
+  async (req: Request, res: Response, next: NextFunction) => {
+    try {
+      if (!validateTwilioSignature(req)) {
+        return res.status(401).send("Invalid Twilio signature.");
+      }
+
+      const { CallStatus, To, CallSid } = req.body;
+
+      // Validate Twilio sent the required fields
+      if (!CallStatus || !To) {
+        console.error("call-status webhook missing CallStatus or To:", req.body);
+        return res.sendStatus(204);
+      }
+
+      // Only act on missed calls — completed = spoke to Co, canceled = dropped before dial
+      if (!["no-answer", "busy", "failed"].includes(CallStatus)) {
+        return res.sendStatus(204);
+      }
+
+      const userResult = await pool.query(
+        `SELECT id, first_name, phone_number FROM users WHERE phone_number = $1`,
+        [To],
+      );
+      const user = userResult.rows[0];
+
+      // Unknown number — nothing to do, ack so Twilio doesn't retry
+      if (!user) {
+        console.warn(`call-status: no user found for number ${To} (${CallStatus})`);
+        return res.sendStatus(204);
+      }
+
+      // Generate Co's follow-up message — Haiku for speed; fall back to hardcoded if AI is down
+      let coMessage: string;
+      try {
+        const result = await generateText({
+          model: anthropic("claude-haiku-4-5-20251001"),
+          prompt: `You are Co, an exclusive life concierge. You just tried to call ${user.first_name} but they didn't pick up. Send a short iMessage letting them know you called and that you'll try again — or they can reply here whenever they're ready. Tone: calm, unhurried, like a private members club. No exclamation points. No em dashes. 2 sentences max.`,
+        });
+        coMessage = result.text;
+      } catch (aiErr) {
+        console.error("Co message generation failed, using fallback:", aiErr);
+        coMessage = `Hey ${user.first_name}, Co tried to reach you. Reply here whenever you're ready, or expect another call soon.`;
+      }
+
+      // Generate voice note — Co sends audio instead of text for a premium feel
+      // Falls back to text if ElevenLabs fails so the missed-call flow never breaks
+      let audioUrl: string | null = null;
+      try {
+        audioUrl = await generateVoiceNote(coMessage);
+      } catch (voiceErr: any) {
+        console.error("Voice note generation failed, falling back to text:", voiceErr?.message ?? voiceErr);
+      }
+
+      // Send as voice note if generated, otherwise send as text
+      try {
+        await sendblue.messages.send({
+          number: user.phone_number,
+          content: audioUrl ? "" : coMessage,
+          ...(audioUrl ? { media_url: audioUrl } : {}),
+          from_number: process.env.SENDBLUE_PHONE_NUMBER!,
+        });
+      } catch (smsErr: any) {
+        console.error(`call-status: Sendblue failed for ${user.id}:`, smsErr?.message ?? smsErr);
+      }
+
+      // Store in co_memories regardless of whether Sendblue succeeded
+      const memContent = `Co called ${user.first_name} — ${CallStatus} (${CallSid}). Followed up via iMessage: "${coMessage}"`;
+      const mem = await pool.query(
+        `INSERT INTO co_memories (user_id, memory_type, content) VALUES ($1, 'text_exchange', $2) RETURNING id`,
+        [user.id, memContent],
+      );
+      generateEmbedding(memContent)
+        .then((emb) =>
+          pool.query(
+            `UPDATE co_memories SET content_embedding = $1::vector WHERE id = $2`,
+            [`[${emb.join(",")}]`, mem.rows[0].id],
+          ),
+        )
+        .catch((err) => console.error("Memory embedding failed (non-fatal):", err));
+
+      return res.sendStatus(204);
+    } catch (error) {
+      next(error);
+    }
+  },
+);
+
 // POST /co/webhook — Hume sends call transcript + emotions after call ends
 router.post(
   "/webhook",
   async (req: Request, res: Response, next: NextFunction) => {
     try {
-      const { user_id, transcript, emotions, recording_url } = req.body;
+      if (!validateHumeWebhook(req)) {
+        return res.status(401).send("Unauthorized.");
+      }
+
+      // Normalize field names — Hume EVI may send snake_case or camelCase,
+      // and transcript may be a string or an array of message objects
+      const { customSessionId, chatGroupId, transcript, emotions, recording_url } =
+        normalizeHumePayload(req.body);
+      const user_id = customSessionId;
 
       if (!user_id || !transcript) {
         return res.status(400).send("Missing required fields.");
@@ -166,6 +350,14 @@ router.post(
           goalEmbedding ? `[${goalEmbedding.join(",")}]` : null,
         ],
       );
+
+      // Step 6 — Persist Hume chat group ID so the next call resumes this conversation
+      if (chatGroupId) {
+        await pool.query(
+          `UPDATE co_profiles SET hume_chat_group_id = $1 WHERE user_id = $2`,
+          [chatGroupId, user_id],
+        );
+      }
 
       return res.status(200).send({ success: true });
     } catch (error) {
@@ -733,11 +925,23 @@ router.post(
         )
         .catch((err) => console.error("Memory embedding failed (non-fatal):", err));
 
+      // Voice notes for premium touchpoints — payment_link stays text since it carries a URL
+      const useVoiceNote = ["circle_placement", "moment_invite", "check_in", "life_concierge"].includes(message_type);
+      let audioUrl: string | null = null;
+      if (useVoiceNote) {
+        try {
+          audioUrl = await generateVoiceNote(coMessage);
+        } catch (voiceErr: any) {
+          console.error("Voice note generation failed, falling back to text:", voiceErr?.message ?? voiceErr);
+        }
+      }
+
       let sendResult: any = null;
       try {
         sendResult = await sendblue.messages.send({
           number: user.phone_number,
-          content: coMessage,
+          content: audioUrl ? "" : coMessage,
+          ...(audioUrl ? { media_url: audioUrl } : {}),
           from_number: process.env.SENDBLUE_PHONE_NUMBER!,
         });
       } catch (smsErr: any) {
@@ -810,6 +1014,17 @@ router.post(
         prompt: prompt,
       });
 
+      // Voice notes for emotional touchpoints — payment_link stays text (carries a URL)
+      const useGroupVoice = ["circle_placement", "moment_invite", "check_in"].includes(message_type);
+      let groupAudioUrl: string | null = null;
+      if (useGroupVoice) {
+        try {
+          groupAudioUrl = await generateVoiceNote(coMessage);
+        } catch (voiceErr: any) {
+          console.error("Group voice note generation failed, falling back to text:", voiceErr?.message ?? voiceErr);
+        }
+      }
+
       // Send as group message via Sendblue
       const numbers = members.map((m: any) => m.phone_number);
 
@@ -817,7 +1032,8 @@ router.post(
       try {
         groupMessage = await sendblue.groups.sendMessage({
           numbers,
-          content: coMessage,
+          content: groupAudioUrl ? "" : coMessage,
+          ...(groupAudioUrl ? { media_url: groupAudioUrl } : {}),
           from_number: process.env.SENDBLUE_PHONE_NUMBER!,
         });
       } catch (smsErr: any) {

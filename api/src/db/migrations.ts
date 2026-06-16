@@ -70,4 +70,12 @@ export function runMigrations() {
     .catch((err: Error) =>
       console.error("moment_responses.responded_at migration failed:", err),
     );
+
+  pool
+    .query(
+      `ALTER TABLE co_profiles ADD COLUMN IF NOT EXISTS hume_chat_group_id TEXT`,
+    )
+    .catch((err: Error) =>
+      console.error("co_profiles.hume_chat_group_id migration failed:", err),
+    );
 }
