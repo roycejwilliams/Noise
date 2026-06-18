@@ -29,7 +29,7 @@ import { getAudioEntry } from "./services/voiceNote.js";
 
 const app = express();
 app.set("trust proxy", 1);
-const port = "8080";
+const port = process.env.PORT ?? "8080";
 
 const httpServer = createServer(app);
 const io = new Server(httpServer, { cors: corsOptions });
