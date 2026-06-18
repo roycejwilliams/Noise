@@ -57,6 +57,8 @@ app.use("/auth", authLimiter);
 app.post("/applications", applicationLimiter);
 app.use(cookieParser());
 
+app.get("/health", (_req, res) => res.sendStatus(200));
+
 // Routes
 app.use("/applications", applicationsRouter);
 app.use("/auth", createAuthRouter());
