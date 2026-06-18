@@ -7,7 +7,9 @@ export const corsOptions: CorsOptions = {
       process.env.NODE_ENV === "production"
         ? origin === "https://br3w.app" ||
           /^https:\/\/brew-.*\.vercel\.app$/.test(origin)
-        : origin === "http://localhost:3000";
+        : origin === "http://localhost:3000" ||
+          /^https:\/\/.*\.ngrok-free\.dev$/.test(origin) ||
+          /^https:\/\/.*\.ngrok\.io$/.test(origin);
     allowed
       ? callback(null, true)
       : callback(new Error("Not allowed by CORS"));

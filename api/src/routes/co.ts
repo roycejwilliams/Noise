@@ -3,6 +3,7 @@ import { generateText } from "ai";
 import crypto from "crypto";
 import express, { NextFunction, Request, Response } from "express";
 import twilio from "twilio";
+import type { Server as IOServer } from "socket.io";
 import pool from "../db/db.js";
 import { sendEmail, sendSMS } from "../otpActions.js";
 import { authenticateToken } from "../middleware/auth.js";
@@ -11,6 +12,14 @@ import { findBestCircle } from "../services/matching.js";
 import { findBestVenue } from "../services/places.js";
 import sendblue from "../services/sendblue.js";
 import { generateVoiceNote } from "../services/voiceNote.js";
+
+// io is injected by the server so call-status and webhook handlers can push
+// real-time state transitions to the connected mobile client.
+let _io: IOServer | null = null;
+export function createCoRouter(io: IOServer) {
+  _io = io;
+  return router;
+}
 
 const router = express.Router();
 
@@ -114,7 +123,8 @@ router.post(
         from: process.env.TWILIO_PHONE_NUMBER!,
         url: webhookUrl,
         statusCallback: statusCallbackUrl,
-        statusCallbackEvent: ["completed"],
+        // ringing = phone is dialing, in-progress = answered, completed = ended
+        statusCallbackEvent: ["ringing", "in-progress", "completed"],
         statusCallbackMethod: "POST",
       });
 
@@ -132,6 +142,9 @@ router.post(
           ),
         )
         .catch((err) => console.error("Memory embedding failed (non-fatal):", err));
+
+      // Tell the app Co's call is on its way — transitions voice screen to Waiting state
+      _io?.to(`user:${user_id}`).emit("co:call_initiated", { call_sid: call.sid });
 
       return res.status(200).send({
         success: true,
@@ -161,16 +174,28 @@ router.post(
         return res.sendStatus(204);
       }
 
-      // Only act on missed calls — completed = spoke to Co, canceled = dropped before dial
-      if (!["no-answer", "busy", "failed"].includes(CallStatus)) {
-        return res.sendStatus(204);
-      }
-
       const userResult = await pool.query(
         `SELECT id, first_name, phone_number FROM users WHERE phone_number = $1`,
         [To],
       );
       const user = userResult.rows[0];
+
+      // Push real-time call state to the app regardless of whether it's a missed call.
+      // The voice screen listens for these to drive its state machine.
+      if (user) {
+        if (CallStatus === "ringing") {
+          _io?.to(`user:${user.id}`).emit("co:call_ringing", { call_sid: CallSid });
+        } else if (CallStatus === "in-progress") {
+          _io?.to(`user:${user.id}`).emit("co:call_answered", { call_sid: CallSid });
+        } else if (["completed", "no-answer", "busy", "failed", "canceled"].includes(CallStatus)) {
+          _io?.to(`user:${user.id}`).emit("co:call_completed", { call_sid: CallSid, status: CallStatus });
+        }
+      }
+
+      // Only send missed-call follow-up iMessage for calls that were never answered
+      if (!["no-answer", "busy", "failed"].includes(CallStatus)) {
+        return res.sendStatus(204);
+      }
 
       // Unknown number — nothing to do, ack so Twilio doesn't retry
       if (!user) {
@@ -252,6 +277,9 @@ router.post(
       if (!user_id || !transcript) {
         return res.status(400).send("Missing required fields.");
       }
+
+      // Let the app know the call ended and Co is now extracting the profile
+      _io?.to(`user:${user_id}`).emit("co:processing");
 
       // Step 1 — Store raw transcript in co_memories immediately
       const callMemory = await pool.query(
@@ -358,6 +386,9 @@ router.post(
           [chatGroupId, user_id],
         );
       }
+
+      // Profile is fully extracted and stored — tell the app to show the Ready state
+      _io?.to(`user:${user_id}`).emit("co:profile_ready");
 
       return res.status(200).send({ success: true });
     } catch (error) {
@@ -1081,6 +1112,121 @@ router.post(
         member_count: members.length,
         message: coMessage,
       });
+    } catch (error) {
+      next(error);
+    }
+  },
+);
+
+// POST /co/typed-intake/:user_id — mobile "I'd rather type" path.
+// Accepts a free-text transcript from the pre-call screen, runs the same
+// psychographic extraction as the Hume webhook, and emits co:profile_ready.
+// Requires JWT auth (unlike the public Hume webhook endpoint).
+router.post(
+  "/typed-intake/:user_id",
+  authenticateToken,
+  async (req: Request, res: Response, next: NextFunction) => {
+    try {
+      const { user_id } = req.params;
+      const { transcript } = req.body as { transcript?: string };
+
+      if (!user_id || !transcript?.trim()) {
+        return res.status(400).send("Missing required fields.");
+      }
+
+      _io?.to(`user:${user_id}`).emit("co:processing");
+
+      // Store raw text as a call_transcript memory so it feeds into future sessions
+      const memRow = await pool.query(
+        `INSERT INTO co_memories (user_id, memory_type, content)
+         VALUES ($1, 'call_transcript', $2) RETURNING id`,
+        [user_id, transcript],
+      );
+      generateEmbedding(transcript)
+        .then((emb) =>
+          pool.query(
+            `UPDATE co_memories SET content_embedding = $1::vector WHERE id = $2`,
+            [`[${emb.join(",")}]`, memRow.rows[0].id],
+          ),
+        )
+        .catch((err) => console.error("Memory embedding failed (non-fatal):", err));
+
+      const { text: rawExtraction } = await generateText({
+        model: anthropic("claude-sonnet-4-6"),
+        prompt: `You are extracting psychographic profile data from a conversation transcript.
+
+        Based on this transcript, extract the following fields and return ONLY valid JSON with no preamble or markdown:
+
+        {
+          "life_chapters": [], // array of applicable values from: new_to_city, building_solo, career_pivot, starting_over
+          "social_energy": 0, // number 0-100 (0 = very introverted/quiet preference, 100 = very extroverted/high energy)
+          "connection_style": "", // one of: small_group, medium_group, large_social
+          "activity_preferences": [], // array of activities they mentioned or implied enjoying
+          "goals": [], // array of things they are working toward
+          "blockers": [], // array of challenges or struggles they mentioned
+          "availability_pattern": "", // how often and when they want to connect (e.g. "weekday evenings", "weekends")
+          "city": "", // city they are in or moving to
+          "emotional_state": "" // one word describing their current emotional state
+        }
+
+        Transcript:
+        "${transcript}"`,
+      });
+
+      let extracted: any = {};
+      try {
+        const clean = rawExtraction.replace(/```json|```/g, "").trim();
+        extracted = JSON.parse(clean);
+      } catch {
+        console.error("Failed to parse psychographic extraction:", rawExtraction);
+      }
+
+      const ALLOWED_CHAPTERS = ["new_to_city", "building_solo", "career_pivot", "starting_over"];
+      const ALLOWED_STYLES = ["small_group", "medium_group", "large_social"];
+      const safeChapters = (extracted.life_chapters ?? []).filter((c: string) => ALLOWED_CHAPTERS.includes(c));
+      const safeStyle = ALLOWED_STYLES.includes(extracted.connection_style) ? extracted.connection_style : "small_group";
+
+      let goalEmbedding: number[] | null = null;
+      if (extracted.goals && extracted.goals.length > 0) {
+        goalEmbedding = await generateGoalEmbedding(extracted.goals);
+      }
+
+      await pool.query(
+        `INSERT INTO co_profiles (
+          user_id, life_chapters, social_energy, connection_style,
+          activity_preferences, emotional_state, goals, blockers,
+          availability_pattern, city, goal_embeddings, updated_at
+        ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, NOW())
+        ON CONFLICT (user_id) DO UPDATE SET
+          life_chapters = EXCLUDED.life_chapters,
+          social_energy = EXCLUDED.social_energy,
+          connection_style = EXCLUDED.connection_style,
+          activity_preferences = EXCLUDED.activity_preferences,
+          emotional_state = EXCLUDED.emotional_state,
+          goals = EXCLUDED.goals,
+          blockers = EXCLUDED.blockers,
+          availability_pattern = EXCLUDED.availability_pattern,
+          city = EXCLUDED.city,
+          goal_embeddings = EXCLUDED.goal_embeddings,
+          updated_at = NOW()`,
+        [
+          user_id,
+          safeChapters,
+          extracted.social_energy ?? 50,
+          safeStyle,
+          extracted.activity_preferences ?? [],
+          extracted.emotional_state ?? null,
+          extracted.goals ?? [],
+          extracted.blockers ?? [],
+          extracted.availability_pattern ?? null,
+          extracted.city ?? null,
+          goalEmbedding ? `[${goalEmbedding.join(",")}]` : null,
+        ],
+      );
+
+      _io?.to(`user:${user_id}`).emit("co:profile_ready");
+
+      return res.status(200).send({ success: true });
     } catch (error) {
       next(error);
     }

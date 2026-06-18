@@ -122,6 +122,11 @@ export const sendSMS = async ({
   welcome,
   action_url,
 }: MessageProp) => {
+  if (process.env.NODE_ENV !== "production") {
+    console.log(`[DEV SMS → ${phone_number}] OTP: ${otp_code ?? "(no code)"}`);
+    return;
+  }
+
   if (!process.env.TWILIO_ACCOUNT_SID || !process.env.TWILIO_AUTH_TOKEN) return;
 
   const client = twilio(
@@ -317,6 +322,11 @@ export const sendEmail = async ({
   welcome,
   action_url,
 }: EmailProp) => {
+  if (process.env.NODE_ENV !== "production") {
+    console.log(`[DEV EMAIL → ${email}] OTP: ${otp_code ?? "(no code)"}`);
+    return;
+  }
+
   const resend = new Resend(process.env.RESEND_API_KEY);
   const cta = (label: string, fallback: string) =>
     ctaButton(label, action_url ?? fallback);

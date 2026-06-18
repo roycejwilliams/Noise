@@ -22,7 +22,10 @@ export const authenticateToken = (
   res: Response,
   next: NextFunction,
 ) => {
-  const token = req.cookies.token;
+  const bearer = req.headers.authorization?.startsWith("Bearer ")
+    ? req.headers.authorization.slice(7)
+    : null;
+  const token = bearer ?? req.cookies.token;
 
   if (!token) return res.status(401).send("Unauthorized");
 
