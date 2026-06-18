@@ -11,13 +11,15 @@ function generateOTP() {
 export function createAuthRouter(): Router {
   const router = Router();
 
-  router.post("/verify/:id", async (req, res, next) => {
-    const { otp_code } = req.body;
+  // POST /auth/verify-otp — validates the 6-digit code and returns a JWT in the body
+  // for mobile clients (SecureStore). Also sets a cookie for web clients.
+  router.post("/verify-otp", async (req, res, next) => {
+    const { user_id, otp_code } = req.body;
 
     try {
       const isUserLocked = await pool.query(
         `SELECT locked FROM users WHERE id = $1`,
-        [req.params.id],
+        [user_id],
       );
 
       const lockedUser: UserProp = isUserLocked.rows[0];
@@ -28,7 +30,7 @@ export function createAuthRouter(): Router {
 
       const authUser = await pool.query(
         `SELECT email, phone_number, otp_code, otp_expiry, username, id, created_at, role FROM users WHERE id = $1 AND otp_code = $2 AND otp_expiry > NOW()`,
-        [req.params.id, otp_code],
+        [user_id, otp_code],
       );
 
       const UserAuthorize: UserProp = authUser.rows[0];
@@ -49,7 +51,7 @@ export function createAuthRouter(): Router {
 
         await pool.query(
           `UPDATE users SET otp_code = null, otp_expiry = null, otp_attempts = 0 WHERE id = $1 RETURNING *`,
-          [req.params.id],
+          [user_id],
         );
 
         const accountAge =
@@ -71,6 +73,7 @@ export function createAuthRouter(): Router {
 
         return res.status(200).send({
           success: true,
+          token: authorize,
         });
       }
 
@@ -81,7 +84,7 @@ export function createAuthRouter(): Router {
              WHEN otp_attempts + 1 >= 5 THEN true ELSE false END
            WHERE id = $1
            RETURNING otp_attempts, locked`,
-        [req.params.id],
+        [user_id],
       );
 
       const lockAttempts: UserProp = attempts.rows[0];
@@ -103,7 +106,8 @@ export function createAuthRouter(): Router {
     }
   });
 
-  router.post("/lookup", async (req, res, next) => {
+  // POST /auth/login — looks up existing user by email, sends OTP
+  router.post("/login", async (req, res, next) => {
     const updatedGeneratedOTP = generateOTP();
     const updatedExpiryAt = Date.now() + 300000;
     const updatedExpiryTimeStamp = new Date(updatedExpiryAt).toISOString();
@@ -146,15 +150,17 @@ export function createAuthRouter(): Router {
     }
   });
 
-  router.put("/resend/:id", async (req, res, next) => {
+  // POST /auth/send-otp — resends the OTP code for an existing user
+  router.post("/send-otp", async (req, res, next) => {
     const updatedGeneratedOTP = generateOTP();
     const updatedExpiryAt = Date.now() + 300000;
     const updatedExpiryTimeStamp = new Date(updatedExpiryAt).toISOString();
+    const { user_id } = req.body;
 
     try {
       const isUserLocked = await pool.query(
         `SELECT locked FROM users WHERE id = $1`,
-        [req.params.id],
+        [user_id],
       );
 
       const lockedUser: UserProp = isUserLocked.rows[0];
@@ -165,7 +171,7 @@ export function createAuthRouter(): Router {
 
       const updateOTP = await pool.query(
         "UPDATE users SET otp_code = $2, otp_expiry = $3 WHERE id = $1 RETURNING *",
-        [req.params.id, updatedGeneratedOTP, updatedExpiryTimeStamp],
+        [user_id, updatedGeneratedOTP, updatedExpiryTimeStamp],
       );
 
       const updatedOTP: UserProp = updateOTP.rows[0];
@@ -189,7 +195,7 @@ export function createAuthRouter(): Router {
 
       return res
         .status(404)
-        .send(`User with id: ${req.params.id} doesn't exist.`);
+        .send(`User with id: ${user_id} doesn't exist.`);
     } catch (error) {
       next(error);
     }

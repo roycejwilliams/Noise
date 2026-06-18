@@ -16,7 +16,7 @@ import applicationsRouter from "./routes/applications.js";
 import { createAiRouter } from "./routes/ai.js";
 import { createAuthRouter } from "./routes/auth.js";
 import { createCirclesRouter } from "./routes/circles.js";
-import coRouter from "./routes/co.js";
+import { createCoRouter } from "./routes/co.js";
 import { createInvitesRouter } from "./routes/invites.js";
 import { createMomentsRouter } from "./routes/moments.js";
 import { createNotificationsRouter } from "./routes/notifications.js";
@@ -67,7 +67,7 @@ app.use("/invites", createInvitesRouter(io, authenticateToken));
 app.use("/notifications", createNotificationsRouter(authenticateToken));
 app.use("/ai", createAiRouter(io, authenticateToken));
 app.use("/referrals", createReferralsRouter(authenticateToken));
-app.use("/co", coRouter);
+app.use("/co", createCoRouter(io));
 app.use("/payments", stripeRouter(io, authenticateToken));
 app.use("/sendblue", sendblueRouter(io));
 
