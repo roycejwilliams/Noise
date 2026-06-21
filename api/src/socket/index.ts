@@ -9,6 +9,8 @@ export function configureSocket(io: Server) {
 
     if (!token) {
       const cookieHeader = socket.handshake.headers.cookie ?? "";
+      //turns the token into a json object
+      //this basically assigns the value to Token
       token = Object.fromEntries(
         cookieHeader
           .split(";")

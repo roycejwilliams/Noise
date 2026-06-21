@@ -151,7 +151,9 @@ export function registerJobs() {
       const pollingMoments = await pool.query(
         `SELECT m.id, m.circle_id, m.suggested_time, m.created_at, m.consensus_nudge_sent_at
          FROM moments m
+         JOIN circles c ON c.id = m.circle_id
          WHERE m.status = 'polling'
+         AND c.status = 'active'
          AND EXISTS (SELECT 1 FROM moment_responses mr WHERE mr.moment_id = m.id)`,
       );
 

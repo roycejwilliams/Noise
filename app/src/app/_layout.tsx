@@ -39,7 +39,9 @@ export default function RootLayout() {
 
   return (
     <QueryClientProvider client={queryClient}>
-      <Stack screenOptions={{ headerShown: false }} />
+      <Stack screenOptions={{ headerShown: false }}>
+        <Stack.Screen name="voice" />
+      </Stack>
       {/* SplashOverlay sits above the Stack and unmounts after its fade-out */}
       {!splashDone && (
         <SplashOverlay

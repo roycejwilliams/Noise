@@ -18,13 +18,25 @@ interface Props {
 
 export default function SignIn({ onSuccess }: Props) {
   const [email, setEmail] = useState("");
+  const [error, setError] = useState("");
   const { mutate: login, isPending } = useLogin();
 
   const handleContinue = () => {
     if (!email.trim() || isPending) return;
+    setError("");
     login(
       { email: email.trim() },
-      { onSuccess: (res) => onSuccess(res.data?.data?.id) },
+      {
+        onSuccess: (res) => onSuccess(res.data?.data?.id),
+        onError: (err: unknown) => {
+          const status = (err as { response?: { status?: number } })?.response?.status;
+          setError(
+            status === 404
+              ? "No account found with that email."
+              : "Something went wrong. Please try again."
+          );
+        },
+      }
     );
   };
 
@@ -42,9 +54,8 @@ export default function SignIn({ onSuccess }: Props) {
         autoCapitalize="none"
         autoCorrect={false}
       />
+      {!!error && <Text style={styles.errorText}>{error}</Text>}
       <TouchableOpacity
-        //React Native's style prop accepts either a single object or an array of objects and merges them together.
-        //In React Native there's no className, so they built array merging into the style prop instead:
         style={[styles.cta, (!email.trim() || isPending) && styles.ctaDisabled]}
         onPress={handleContinue}
         disabled={!email.trim() || isPending}
@@ -93,5 +104,10 @@ const styles = StyleSheet.create({
     fontWeight: "300",
     color: "#ffffff",
     letterSpacing: 0.3,
+  },
+  errorText: {
+    fontSize: 12,
+    color: "rgba(255,100,100,0.9)",
+    marginTop: -4,
   },
 });

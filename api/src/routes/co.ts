@@ -504,7 +504,7 @@ router.post(
       const circleName = `Co Circle — ${primaryChapter.replace(/_/g, " ")}`;
 
       const circleResult = await pool.query(
-        `INSERT INTO circles (owner_id, circle_name) VALUES ($1, $2) RETURNING *`,
+        `INSERT INTO circles (owner_id, circle_name, status) VALUES ($1, $2, 'pending_approval') RETURNING *`,
         [user_id, circleName],
       );
       const circle = circleResult.rows[0];
@@ -558,33 +558,28 @@ router.post(
         }
       }
 
-      // Step 5 — Notify all members via existing notification system
-      for (const memberId of groupUserIds) {
-        const memberResult = await pool.query(
-          `SELECT email, phone_number FROM users WHERE id = $1`,
-          [memberId],
-        );
-        const member = memberResult.rows[0];
-        if (!member) continue;
+      // Step 5 — Notify Keana via iMessage for approval before any member is contacted
+      const memberNamesResult = await pool.query(
+        `SELECT first_name FROM users WHERE id = ANY($1::uuid[])`,
+        [groupUserIds],
+      );
+      const memberNames = memberNamesResult.rows.map((r: any) => r.first_name).join(", ");
+      const city = profile.city ?? "unknown city";
+      const chapter = primaryChapter.replace(/_/g, " ");
 
-        await sendEmail({
-          email: member.email,
-          invite_type: "received",
-          invite_target: "circle",
-          action_url: `https://copatible.app/circles/${circle.id}`,
+      try {
+        await sendblue.messages.send({
+          number: process.env.KEANA_PHONE_NUMBER!,
+          content: `New circle ready for review.\n\nChapter: ${chapter}\nCity: ${city}\nMembers: ${memberNames}\n\nReply APPROVE or REJECT.`,
+          from_number: process.env.SENDBLUE_PHONE_NUMBER!,
         });
-
-        await sendSMS({
-          phone_number: member.phone_number,
-          invite_type: "received",
-          invite_target: "circle",
-          action_url: `https://copatible.app/circles/${circle.id}`,
-        });
+      } catch (keanaErr: any) {
+        console.error("Failed to notify Keana of pending circle:", keanaErr?.message ?? keanaErr);
       }
 
-      // Step 6 — Store placement as a co_memory for each member
+      // Step 6 — Store pending-approval memory for each member
       for (const memberId of groupUserIds) {
-        const placementContent = `Co placed you in a circle: ${circleName}. Members: ${groupUserIds.length} people.`;
+        const placementContent = `Circle placement pending Keana approval`;
         const placementMemory = await pool.query(
           `INSERT INTO co_memories (user_id, memory_type, content)
            VALUES ($1, 'check_in', $2) RETURNING id`,

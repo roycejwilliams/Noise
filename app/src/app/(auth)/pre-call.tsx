@@ -5,7 +5,7 @@
 import api from "@/lib/api";
 import { useRouter } from "expo-router";
 import * as SecureStore from "expo-secure-store";
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import {
   ActivityIndicator,
   StyleSheet,
@@ -24,6 +24,16 @@ export default function PreCall() {
   const [text, setText] = useState("");
   const [loading, setLoading] = useState(false);
 
+  useEffect(() => {
+    SecureStore.getItemAsync("user_id").then(async (userId) => {
+      if (!userId) return;
+      try {
+        await api.get(`/co/profile/${userId}`);
+        router.replace("/(main)");
+      } catch {}
+    });
+  }, []);
+
   const handleReady = async () => {
     if (loading) return;
     setLoading(true);
@@ -31,7 +41,7 @@ export default function PreCall() {
       const userId = await SecureStore.getItemAsync("user_id");
       if (userId) await api.post(`/co/call/${userId}`);
     } catch {}
-    router.replace("/(main)/voice");
+    router.replace("/voice");
   };
 
   const handleSend = async () => {
@@ -43,7 +53,7 @@ export default function PreCall() {
         await api.post(`/co/typed-intake/${userId}`, { transcript: text.trim() });
       }
     } catch {}
-    router.replace("/(main)/voice");
+    router.replace("/voice");
   };
 
   return (

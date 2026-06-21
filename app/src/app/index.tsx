@@ -8,13 +8,13 @@ import { View } from "react-native";
 
 export default function Index() {
   const [destination, setDestination] = useState<
-    "/(auth)/sign-in" | "/(main)/voice" | null
+    "/(auth)/sign-in" | "/(main)" | null
   >(null);
 
   useEffect(() => {
     // jwt_token is written to SecureStore by useVerifyOtp on successful OTP verification
     SecureStore.getItemAsync("jwt_token").then((token) => {
-      setDestination(token ? "/(main)/voice" : "/(auth)/sign-in");
+      setDestination(token ? "/(main)" : "/(auth)/sign-in");
     });
   }, []);
 
