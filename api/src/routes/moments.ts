@@ -381,6 +381,22 @@ export function createMomentsRouter(
     },
   );
 
+  router.get(
+    "/moments/circle/:circle_id",
+    authenticateToken,
+    async (req, res, next) => {
+      try {
+        const result = await pool.query(
+          `SELECT * FROM moments WHERE circle_id = $1 ORDER BY moment_start ASC`,
+          [req.params.circle_id],
+        );
+        return res.status(200).send({ success: true, data: result.rows });
+      } catch (error) {
+        next(error);
+      }
+    },
+  );
+
   router.get("/moments/:id", authenticateToken, async (req, res, next) => {
     try {
       if (req.user?.id !== req.params.id) {

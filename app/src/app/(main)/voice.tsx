@@ -14,10 +14,11 @@
 import { useLogout } from "@/hooks/useAuth";
 import api from "@/lib/api";
 import { connectSocket, socket } from "@/lib/socket";
+import TypingBubble from "@/components/voice/TypingBubble";
 import * as SecureStore from "expo-secure-store";
+import { useRouter } from "expo-router";
 import { useEffect, useState } from "react";
 import {
-  ActivityIndicator,
   StyleSheet,
   Text,
   TouchableOpacity,
@@ -31,7 +32,7 @@ function formatPhone(raw: string): string {
   const d = raw.replace(/\D/g, "");
   const digits = d.length === 11 && d[0] === "1" ? d.slice(1) : d;
   if (digits.length === 10) {
-    return `(${digits.slice(0, 3)}) ${digits.slice(3, 6)} - ${digits.slice(6)}`;
+    return `+1 (${digits.slice(0, 3)}) ${digits.slice(3, 6)}-${digits.slice(6)}`;
   }
   return raw;
 }
@@ -40,6 +41,7 @@ export default function VoiceScreen() {
   const [coState, setCoState] = useState<CoState>("loading");
   const [phone, setPhone] = useState("");
   const logout = useLogout();
+  const router = useRouter();
 
   useEffect(() => {
     let mounted = true;
@@ -85,9 +87,7 @@ export default function VoiceScreen() {
 
   if (coState === "loading") {
     return (
-      <View style={styles.root}>
-        <ActivityIndicator color="rgba(255,255,255,0.4)" />
-      </View>
+      <View style={styles.root} />
     );
   }
 
@@ -101,12 +101,8 @@ export default function VoiceScreen() {
           <>
             <Text style={styles.callLabel}>Co will call you shortly at</Text>
             <Text style={styles.headline}>Co is ready to meet you.</Text>
-            <Text style={styles.phoneNumber}>{formatPhone(phone) || "(___) ___ - ____"}</Text>
-            <View style={styles.dots}>
-              <View style={styles.dot} />
-              <View style={styles.dot} />
-              <View style={styles.dot} />
-            </View>
+            <Text style={styles.phoneNumber}>{phone ? formatPhone(phone) : "your registered number"}</Text>
+            <TypingBubble />
           </>
         )}
 
@@ -137,7 +133,7 @@ export default function VoiceScreen() {
             </View>
             <Text style={styles.headline}>Co is getting to know you.</Text>
             <Text style={styles.subtitle}>Building your profile. This takes a moment.</Text>
-            <ActivityIndicator color="#ffffff" style={{ marginTop: 80 }} />
+            <TypingBubble />
           </>
         )}
 
@@ -155,7 +151,11 @@ export default function VoiceScreen() {
 
       <View style={styles.bottomActions}>
         {coState === "ready" && (
-          <TouchableOpacity style={styles.viewProfileCta} activeOpacity={0.7}>
+          <TouchableOpacity
+            style={styles.viewProfileCta}
+            activeOpacity={0.7}
+            onPress={() => router.navigate("/(main)/profile")}
+          >
             <Text style={styles.viewProfileText}>View Profile</Text>
           </TouchableOpacity>
         )}
@@ -203,18 +203,6 @@ const styles = StyleSheet.create({
     color: "#ffffff",
     marginTop: 20,
     marginBottom: 60,
-  },
-  dots: {
-    flexDirection: "row",
-    gap: 8,
-    marginTop: 20,
-  },
-  dot: {
-    width: 10,
-    height: 10,
-    borderRadius: 5,
-    backgroundColor: "#ffffff",
-    opacity: 0.7,
   },
   // Icon circle states (ringing / active / processing / ready)
   iconCircle: {

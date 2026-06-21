@@ -1,0 +1,322 @@
+import api from "@/lib/api";
+import type { CoProfile } from "@/types";
+import * as SecureStore from "expo-secure-store";
+import { useRouter } from "expo-router";
+import { useEffect, useRef, useState } from "react";
+import {
+  ActivityIndicator,
+  Animated,
+  Image,
+  LayoutAnimation,
+  Platform,
+  StyleSheet,
+  Text,
+  TextInput,
+  TouchableOpacity,
+  UIManager,
+  View,
+} from "react-native";
+import { SafeAreaView } from "react-native-safe-area-context";
+
+if (Platform.OS === "android" && UIManager.setLayoutAnimationEnabledExperimental) {
+  UIManager.setLayoutAnimationEnabledExperimental(true);
+}
+
+const WAVE_URI = "https://www.figma.com/api/mcp/asset/40602fdd-98ba-44fc-9fdf-269bfeda0570";
+
+const GREETINGS = [
+  "{name}. Your people are out there.",
+  "{name}. Co has been thinking about you.",
+  "{name}. You belong somewhere.",
+  "{name}. The right circle changes everything.",
+  "{name}. Connection is closer than you think.",
+  "{name}. Co is ready when you are.",
+  "{name}. You don't have to figure it out alone.",
+  "{name}. Good things take the right people.",
+  "{name}. Co is paying attention.",
+  "{name}. Your chapter is just getting started.",
+];
+
+const SUBHEADINGS: Record<string, string[]> = {
+  new_to_city: [
+    "A new city is easier with the right people.",
+    "Co is finding your people in this city.",
+    "You just got here. Co is already working.",
+  ],
+  building_solo: [
+    "Building alone is hard. Co is changing that.",
+    "You don't have to do this by yourself.",
+    "The right circle makes the work lighter.",
+  ],
+  career_pivot: [
+    "Big transitions call for real community.",
+    "Co finds people who get what you're going through.",
+    "A pivot is easier with people in your corner.",
+  ],
+  starting_over: [
+    "Starting over takes courage. Co sees that.",
+    "New chapters need new people. Co is on it.",
+    "You're not starting from scratch. You're starting with Co.",
+  ],
+};
+
+const DEFAULT_SUBHEADING = "Co is here when you're ready.";
+
+function pick<T>(arr: T[]): T {
+  return arr[Math.floor(Math.random() * arr.length)];
+}
+
+export default function HomeScreen() {
+  const router = useRouter();
+  const [greeting, setGreeting] = useState("");
+  const [subheading, setSubheading] = useState(DEFAULT_SUBHEADING);
+  const [textMode, setTextMode] = useState(false);
+  const [text, setText] = useState("");
+  const [calling, setCalling] = useState(false);
+  const [submitting, setSubmitting] = useState(false);
+  const userIdRef = useRef<string | null>(null);
+  const waveOpacity = useRef(new Animated.Value(0.6)).current;
+
+  // Breathing wave animation
+  useEffect(() => {
+    const loop = Animated.loop(
+      Animated.sequence([
+        Animated.timing(waveOpacity, { toValue: 1.0, duration: 3000, useNativeDriver: true }),
+        Animated.timing(waveOpacity, { toValue: 0.6, duration: 3000, useNativeDriver: true }),
+      ])
+    );
+    loop.start();
+    return () => loop.stop();
+  }, []);
+
+  // Load greeting + subheading
+  useEffect(() => {
+    let mounted = true;
+
+    async function load() {
+      const userId = await SecureStore.getItemAsync("user_id");
+      if (!userId || !mounted) return;
+      userIdRef.current = userId;
+
+      let firstName = "";
+      let lifeChapter = "";
+
+      try {
+        const userRes = await api.get(`/users/${userId}`);
+        firstName = userRes.data?.data?.first_name ?? userRes.data?.first_name ?? "";
+      } catch {}
+
+      try {
+        const profileRes = await api.get(`/co/profile/${userId}`);
+        const profile: CoProfile = profileRes.data?.data ?? profileRes.data;
+        lifeChapter = (profile.life_chapters ?? [])[0] ?? "";
+      } catch {}
+
+      if (!mounted) return;
+
+      const template = pick(GREETINGS);
+      const pool = SUBHEADINGS[lifeChapter] ?? null;
+
+      setGreeting(template.replace("{name}", firstName || "Hey"));
+      setSubheading(pool ? pick(pool) : DEFAULT_SUBHEADING);
+    }
+
+    load();
+    return () => { mounted = false; };
+  }, []);
+
+  const toggleTextMode = () => {
+    LayoutAnimation.configureNext(LayoutAnimation.Presets.easeInEaseOut);
+    setTextMode((v) => !v);
+  };
+
+  const handleCallCo = async () => {
+    if (calling) return;
+    setCalling(true);
+    try {
+      const userId = userIdRef.current ?? await SecureStore.getItemAsync("user_id");
+      if (userId) await api.post(`/co/call/${userId}`);
+    } catch {}
+    router.push("/voice");
+  };
+
+  const handleTextSubmit = async () => {
+    if (!text.trim() || submitting) return;
+    setSubmitting(true);
+    try {
+      const userId = userIdRef.current ?? await SecureStore.getItemAsync("user_id");
+      if (userId) {
+        await api.post(`/co/typed-intake/${userId}`, { transcript: text.trim() });
+      }
+    } catch {}
+    router.push({ pathname: "/voice", params: { initialState: "processing" } });
+  };
+
+  return (
+    <View style={s.root}>
+      {/* VUI wave — ambient background in lower 60% */}
+      <Animated.View style={[s.waveWrap, { opacity: waveOpacity }]}>
+        <Image
+          source={{ uri: WAVE_URI }}
+          style={s.waveImage}
+          resizeMode="cover"
+        />
+      </Animated.View>
+
+      <SafeAreaView style={s.safe}>
+        {/* Greeting */}
+        <View style={s.header}>
+          <Text style={s.greeting}>{greeting || " "}</Text>
+          <Text style={s.subheading}>{subheading}</Text>
+        </View>
+
+        {/* Spacer pushes actions to bottom */}
+        <View style={s.spacer} />
+
+        {/* Text input (expanded via LayoutAnimation) */}
+        {textMode && (
+          <View style={s.textWrap}>
+            <TextInput
+              style={s.textInput}
+              value={text}
+              onChangeText={setText}
+              placeholder="Tell Co what's on your mind."
+              placeholderTextColor="rgba(255,255,255,0.25)"
+              multiline
+              textAlignVertical="top"
+              autoFocus
+            />
+            <TouchableOpacity
+              style={[s.sendBtn, (!text.trim() || submitting) && s.sendDim]}
+              onPress={handleTextSubmit}
+              disabled={!text.trim() || submitting}
+              activeOpacity={0.8}
+            >
+              {submitting ? (
+                <ActivityIndicator color="#fff" size="small" />
+              ) : (
+                <Text style={s.sendText}>Send to Co</Text>
+              )}
+            </TouchableOpacity>
+          </View>
+        )}
+
+        {/* Primary: Call Co */}
+        <TouchableOpacity
+          style={[s.callBtn, calling && s.callBtnDim]}
+          onPress={handleCallCo}
+          disabled={calling || textMode}
+          activeOpacity={0.8}
+        >
+          {calling ? (
+            <ActivityIndicator color="#fff" size="small" />
+          ) : (
+            <Text style={s.callText}>Call Co</Text>
+          )}
+        </TouchableOpacity>
+
+        {/* Secondary: I'd rather type */}
+        {!textMode ? (
+          <TouchableOpacity onPress={toggleTextMode} activeOpacity={0.7} style={s.typeLink}>
+            <Text style={s.typeLinkText}>I'd rather type</Text>
+          </TouchableOpacity>
+        ) : (
+          <TouchableOpacity onPress={toggleTextMode} activeOpacity={0.7} style={s.typeLink}>
+            <Text style={s.typeLinkText}>Never mind</Text>
+          </TouchableOpacity>
+        )}
+      </SafeAreaView>
+    </View>
+  );
+}
+
+const s = StyleSheet.create({
+  root: { flex: 1, backgroundColor: "#000000" },
+  safe: { flex: 1, paddingHorizontal: 32, paddingBottom: 8 },
+
+  // Ambient wave
+  waveWrap: {
+    position: "absolute",
+    left: 0,
+    right: 0,
+    bottom: 0,
+    height: "60%",
+  },
+  waveImage: {
+    width: "100%",
+    height: "100%",
+  },
+
+  // Header
+  header: { marginTop: 48 },
+  greeting: {
+    fontSize: 28,
+    fontWeight: "200",
+    color: "#ffffff",
+    lineHeight: 36,
+    marginBottom: 10,
+  },
+  subheading: {
+    fontSize: 16,
+    fontWeight: "300",
+    color: "rgba(255,255,255,0.5)",
+    lineHeight: 24,
+  },
+
+  spacer: { flex: 1 },
+
+  // Text input section
+  textWrap: { gap: 12, marginBottom: 16 },
+  textInput: {
+    borderWidth: 0.5,
+    borderColor: "rgba(255,255,255,0.3)",
+    borderRadius: 12,
+    backgroundColor: "rgba(255,255,255,0.05)",
+    padding: 16,
+    minHeight: 120,
+    color: "#ffffff",
+    fontSize: 15,
+    fontWeight: "300",
+  },
+  sendBtn: {
+    borderWidth: 1,
+    borderColor: "#ffffff",
+    borderRadius: 100,
+    height: 57,
+    alignItems: "center",
+    justifyContent: "center",
+  },
+  sendDim: { opacity: 0.35 },
+  sendText: {
+    fontSize: 16,
+    fontWeight: "300",
+    color: "#ffffff",
+    letterSpacing: 0.2,
+  },
+
+  // Call Co button
+  callBtn: {
+    borderWidth: 1,
+    borderColor: "#ffffff",
+    borderRadius: 100,
+    height: 57,
+    alignItems: "center",
+    justifyContent: "center",
+    marginBottom: 16,
+  },
+  callBtnDim: { opacity: 0.5 },
+  callText: {
+    fontSize: 16,
+    fontWeight: "300",
+    color: "#ffffff",
+    letterSpacing: 0.2,
+  },
+
+  // Type link
+  typeLink: { alignItems: "center", paddingBottom: 8 },
+  typeLinkText: {
+    fontSize: 14,
+    fontWeight: "300",
+    color: "rgba(255,255,255,0.4)",
+  },
+});

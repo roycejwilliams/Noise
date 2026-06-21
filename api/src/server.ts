@@ -5,15 +5,18 @@ import express from "express";
 import helmut from "helmet";
 import { createServer } from "http";
 import { Server } from "socket.io";
-import pool from "./db/db.js";
 import { runMigrations } from "./db/migrations.js";
 import { registerJobs } from "./jobs/index.js";
 import { authenticateToken } from "./middleware/auth.js";
 import { corsOptions } from "./middleware/cors.js";
 import { errorHandler } from "./middleware/errorHandler.js";
-import { applicationLimiter, authLimiter, limiter } from "./middleware/rateLimiter.js";
-import applicationsRouter from "./routes/applications.js";
+import {
+  applicationLimiter,
+  authLimiter,
+  limiter,
+} from "./middleware/rateLimiter.js";
 import { createAiRouter } from "./routes/ai.js";
+import applicationsRouter from "./routes/applications.js";
 import { createAuthRouter } from "./routes/auth.js";
 import { createCirclesRouter } from "./routes/circles.js";
 import { createCoRouter } from "./routes/co.js";
@@ -24,8 +27,8 @@ import { createReferralsRouter } from "./routes/referrals.js";
 import { sendblueRouter } from "./routes/sendblue.js";
 import { stripeRouter } from "./routes/stripe.js";
 import { createUsersRouter } from "./routes/users.js";
-import { configureSocket } from "./socket/index.js";
 import { getAudioEntry } from "./services/voiceNote.js";
+import { configureSocket } from "./socket/index.js";
 
 const app = express();
 app.set("trust proxy", 1);
@@ -34,17 +37,11 @@ const port = process.env.PORT ?? "8080";
 const httpServer = createServer(app);
 const io = new Server(httpServer, { cors: corsOptions });
 
+//Web socket config
 configureSocket(io);
+//Security check to make sure the right tables/columns
+// are there when the server starts
 runMigrations();
-pool
-  .query(`ALTER TABLE co_memories ADD COLUMN IF NOT EXISTS content_embedding vector(1536)`)
-  .then(() =>
-    pool.query(`CREATE INDEX IF NOT EXISTS co_memories_embedding_hnsw_idx
-      ON co_memories USING hnsw (content_embedding vector_cosine_ops)
-      WITH (m = 16, ef_construction = 64)`),
-  )
-  .catch((err) => console.error("Failed to set up co_memories embedding index:", err));
-
 // Stripe webhook needs raw body for signature verification — must run before express.json()
 app.use("/payments/webhook", express.raw({ type: "application/json" }));
 
