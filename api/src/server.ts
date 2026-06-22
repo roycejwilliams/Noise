@@ -82,7 +82,7 @@ app.get("/co.vcf", (_req, res) => {
     "FN:Co",
     "ORG:CoPatible",
     `TEL:${phone}`,
-    "URL:https://copatible.app",
+    "URL:https://copatible.com",
     "NOTE:Your life concierge.",
     "END:VCARD",
   ].join("\r\n");
@@ -168,7 +168,7 @@ cron.schedule("*/30 * * * *", async () => {
         }
 
         const placementMsg = momentId
-          ? `I placed you in a circle. ${memberCount} people, same chapter, same city.\n\nhttps://copatible.app/moments/${momentId}`
+          ? `I placed you in a circle. ${memberCount} people, same chapter, same city.\n\nhttps://copatible.com/moments/${momentId}`
           : `I placed you in a circle. ${memberCount} people, same chapter, same city.`;
 
         try {
