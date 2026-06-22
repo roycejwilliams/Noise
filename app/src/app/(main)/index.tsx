@@ -1,5 +1,6 @@
 import api from "@/lib/api";
-import type { CoProfile } from "@/types";
+import { socket } from "@/lib/socket";
+import type { CoNotification, CoProfile } from "@/types";
 import * as SecureStore from "expo-secure-store";
 import { useRouter } from "expo-router";
 import { useEffect, useRef, useState } from "react";
@@ -74,6 +75,7 @@ export default function HomeScreen() {
   const [text, setText] = useState("");
   const [calling, setCalling] = useState(false);
   const [submitting, setSubmitting] = useState(false);
+  const [placementNotification, setPlacementNotification] = useState<CoNotification | null>(null);
   const userIdRef = useRef<string | null>(null);
   const waveOpacity = useRef(new Animated.Value(0.6)).current;
 
@@ -89,7 +91,7 @@ export default function HomeScreen() {
     return () => loop.stop();
   }, []);
 
-  // Load greeting + subheading
+  // Load greeting + subheading + placement notification
   useEffect(() => {
     let mounted = true;
 
@@ -112,6 +114,16 @@ export default function HomeScreen() {
         lifeChapter = (profile.life_chapters ?? [])[0] ?? "";
       } catch {}
 
+      try {
+        const notifRes = await api.get(`/co/notifications/${userId}`);
+        const notifications: CoNotification[] = notifRes.data?.data ?? [];
+        const cutoff = Date.now() - 24 * 60 * 60 * 1000;
+        const recent = notifications.find(
+          (n) => n.memory_type === "placement" && new Date(n.created_at).getTime() > cutoff,
+        );
+        if (mounted) setPlacementNotification(recent ?? null);
+      } catch {}
+
       if (!mounted) return;
 
       const template = pick(GREETINGS);
@@ -122,7 +134,28 @@ export default function HomeScreen() {
     }
 
     load();
-    return () => { mounted = false; };
+
+    socket.on("circle:placed", () => {
+      if (mounted) {
+        const userId = userIdRef.current;
+        if (!userId) return;
+        api.get(`/co/notifications/${userId}`)
+          .then((res) => {
+            const notifs: CoNotification[] = res.data?.data ?? [];
+            const cutoff = Date.now() - 24 * 60 * 60 * 1000;
+            const recent = notifs.find(
+              (n) => n.memory_type === "placement" && new Date(n.created_at).getTime() > cutoff,
+            );
+            if (mounted) setPlacementNotification(recent ?? null);
+          })
+          .catch(() => {});
+      }
+    });
+
+    return () => {
+      mounted = false;
+      socket.off("circle:placed");
+    };
   }, []);
 
   const toggleTextMode = () => {
@@ -172,6 +205,28 @@ export default function HomeScreen() {
 
         {/* Spacer pushes actions to bottom */}
         <View style={s.spacer} />
+
+        {/* Circle placement notification */}
+        {placementNotification && !textMode && (
+          <View style={s.placementCard}>
+            <TouchableOpacity
+              style={s.dismissBtn}
+              onPress={() => setPlacementNotification(null)}
+              hitSlop={{ top: 12, right: 12, bottom: 12, left: 12 }}
+            >
+              <Text style={s.dismissX}>×</Text>
+            </TouchableOpacity>
+            <Text style={s.placementHeadline}>Co placed you in a circle.</Text>
+            <Text style={s.placementSubtitle}>Your people are waiting.</Text>
+            <TouchableOpacity
+              style={s.viewCircleBtn}
+              onPress={() => router.push("/(main)/circle")}
+              activeOpacity={0.8}
+            >
+              <Text style={s.viewCircleText}>View Circle</Text>
+            </TouchableOpacity>
+          </View>
+        )}
 
         {/* Text input (expanded via LayoutAnimation) */}
         {textMode && (
@@ -319,4 +374,28 @@ const s = StyleSheet.create({
     fontWeight: "300",
     color: "rgba(255,255,255,0.4)",
   },
+
+  // Placement notification card
+  placementCard: {
+    borderWidth: 0.5,
+    borderColor: "rgba(255,255,255,0.3)",
+    borderRadius: 12,
+    padding: 16,
+    marginBottom: 16,
+    gap: 6,
+  },
+  dismissBtn: { position: "absolute", top: 12, right: 14 },
+  dismissX: { fontSize: 20, color: "rgba(255,255,255,0.4)", lineHeight: 24 },
+  placementHeadline: { fontSize: 16, fontWeight: "400", color: "#fff" },
+  placementSubtitle: { fontSize: 13, fontWeight: "300", color: "rgba(255,255,255,0.5)" },
+  viewCircleBtn: {
+    borderWidth: 1,
+    borderColor: "#fff",
+    borderRadius: 100,
+    height: 44,
+    alignItems: "center",
+    justifyContent: "center",
+    marginTop: 8,
+  },
+  viewCircleText: { color: "#fff", fontSize: 14, fontWeight: "400" },
 });

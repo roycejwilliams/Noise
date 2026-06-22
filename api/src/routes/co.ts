@@ -403,7 +403,11 @@ router.get(
   async (req: Request, res: Response, next: NextFunction) => {
     try {
       const result = await pool.query(
-        `SELECT * FROM co_profiles WHERE user_id = $1`,
+        `SELECT cp.*, COUNT(cm.id)::int AS check_in_count
+         FROM co_profiles cp
+         LEFT JOIN co_memories cm ON cm.user_id = cp.user_id AND cm.memory_type = 'check_in'
+         WHERE cp.user_id = $1
+         GROUP BY cp.id`,
         [req.params.user_id],
       );
 
@@ -509,9 +513,9 @@ router.post(
       );
       const circle = circleResult.rows[0];
 
-      // Step 4 — Add all matched members to the circle
+      // Step 4 — Add all matched members to the circle immediately — no gating
       for (const memberId of groupUserIds) {
-        if (memberId === user_id) continue; // skip the owner
+        if (memberId === user_id) continue; // owner is implicit via owner_id
         await pool.query(
           `INSERT INTO circle_members (circle_id, member_id) VALUES ($1, $2) ON CONFLICT DO NOTHING`,
           [circle.id, memberId],
@@ -570,9 +574,13 @@ router.post(
       try {
         await sendblue.messages.send({
           number: process.env.KEANA_PHONE_NUMBER!,
-          content: `New circle ready for review.\n\nChapter: ${chapter}\nCity: ${city}\nMembers: ${memberNames}\n\nReply APPROVE or REJECT.`,
+          content: `New circle ready for review. ${groupUserIds.length} people, ${city}, ${chapter}. Members: ${memberNames}. Reply APPROVE or REJECT within 4 hours — Co will auto-approve if no response.`,
           from_number: process.env.SENDBLUE_PHONE_NUMBER!,
         });
+        await pool.query(
+          `UPDATE circles SET keana_notified_at = NOW() WHERE id = $1`,
+          [circle.id],
+        );
       } catch (keanaErr: any) {
         console.error("Failed to notify Keana of pending circle:", keanaErr?.message ?? keanaErr);
       }
@@ -793,6 +801,9 @@ Make it feel intimate, specific, and intentional. Not generic.`,
 
       const moment = momentResult.rows[0];
 
+      // Pre-warm OG image before any iMessage links go out — avoids preview timeout
+      fetch(`https://copatible.app/api/og/moments/${moment.id}`).catch(() => {});
+
       // Step 8.5 — Seed moment_responses for each circle member (null = awaiting reply)
       for (const member of members) {
         await pool.query(
@@ -918,6 +929,24 @@ router.post(
         }
       }
 
+      // For circle_placement: look up momentId for the user's circle to build a preview URL
+      let momentId: string | null = null;
+      if (message_type === "circle_placement") {
+        try {
+          const momentResult = await pool.query(
+            `SELECT id FROM moments WHERE circle_id = (
+               SELECT circle_id FROM circle_members WHERE member_id = $1
+               ORDER BY created_at DESC LIMIT 1
+             ) AND status != 'rejected' ORDER BY created_at DESC LIMIT 1`,
+            [user_id],
+          );
+          momentId = momentResult.rows[0]?.id ?? null;
+        } catch {
+          // non-fatal — send without URL
+        }
+      }
+      const circlePageUrl = momentId ? `https://copatible.app/moments/${momentId}` : null;
+
       const prompts: Record<string, string> = {
         circle_placement: `You are Co, an exclusive life concierge. Write a short iMessage to ${user.first_name}. Co has selected their circle. Tone: quiet confidence, like a private members club reaching out. No excitement, no exclamation points. Just certainty. 2 sentences max. No em dashes. Example tone: "Your circle is ready. Five people, same chapter, same city."`,
 
@@ -962,11 +991,45 @@ router.post(
         }
       }
 
+      // vCard — circle_placement only, sent as a separate preceding message on first contact.
+      // Wait 3 seconds after sending so iMessage has time to register Co as a saved contact
+      // before the placement message (with link preview) arrives. Skip delay if already sent.
+      if (message_type === "circle_placement" && process.env.CO_VCARD_URL) {
+        const vcardCheck = await pool.query(
+          `SELECT id FROM co_memories WHERE user_id = $1 AND content = 'Co vCard sent to user — contact saved' LIMIT 1`,
+          [user_id],
+        );
+        if (!vcardCheck.rows[0]) {
+          try {
+            await sendblue.messages.send({
+              number: user.phone_number,
+              content: "Co is your life concierge. Save this contact.",
+              media_url: process.env.CO_VCARD_URL,
+              from_number: process.env.SENDBLUE_PHONE_NUMBER!,
+            });
+            await pool.query(
+              `INSERT INTO co_memories (user_id, memory_type, content)
+               VALUES ($1, 'system', 'Co vCard sent to user — contact saved')`,
+              [user_id],
+            );
+            await new Promise((resolve) => setTimeout(resolve, 3000));
+          } catch (vcardErr: any) {
+            console.error("vCard send failed (non-fatal):", vcardErr?.message ?? vcardErr);
+          }
+        }
+      }
+
+      // For text messages, URL goes inline at the end (no text after it — iMessage preview rule).
+      // For voice notes, URL can't be embedded in audio; send as a separate text follow-up.
+      const finalMessage = !audioUrl && circlePageUrl
+        ? `${coMessage}\n\n${circlePageUrl}`
+        : coMessage;
+
       let sendResult: any = null;
       try {
         sendResult = await sendblue.messages.send({
           number: user.phone_number,
-          content: audioUrl ? "" : coMessage,
+          content: audioUrl ? "" : finalMessage,
           ...(audioUrl ? { media_url: audioUrl } : {}),
           from_number: process.env.SENDBLUE_PHONE_NUMBER!,
         });
@@ -987,6 +1050,19 @@ router.post(
             ),
           )
           .catch((err) => console.error("Memory embedding failed (non-fatal):", err));
+      }
+
+      // Voice note was sent — now send URL as a clean standalone message for iMessage preview
+      if (audioUrl && circlePageUrl && sendResult) {
+        try {
+          await sendblue.messages.send({
+            number: user.phone_number,
+            content: circlePageUrl,
+            from_number: process.env.SENDBLUE_PHONE_NUMBER!,
+          });
+        } catch (urlErr: any) {
+          console.error("Circle page URL follow-up failed (non-fatal):", urlErr?.message ?? urlErr);
+        }
       }
 
       return res.status(200).send({
@@ -1220,6 +1296,97 @@ router.post(
       );
 
       _io?.to(`user:${user_id}`).emit("co:profile_ready");
+
+      return res.status(200).send({ success: true });
+    } catch (error) {
+      next(error);
+    }
+  },
+);
+
+// GET /co/notifications/:user_id — recent Co activity for the app notification surface
+router.get(
+  "/notifications/:user_id",
+  async (req: Request, res: Response, next: NextFunction) => {
+    try {
+      const { user_id } = req.params;
+      const result = await pool.query(
+        `SELECT id, memory_type, content, created_at
+         FROM co_memories
+         WHERE user_id = $1
+           AND memory_type IN ('placement', 'moment_invite', 'booking_confirmed')
+         ORDER BY created_at DESC
+         LIMIT 10`,
+        [user_id],
+      );
+      return res.status(200).send({ success: true, data: result.rows });
+    } catch (error) {
+      next(error);
+    }
+  },
+);
+
+// POST /co/circles/:circle_id/leave — user leaves a circle; remaining members stay
+router.post(
+  "/circles/:circle_id/leave",
+  authenticateToken,
+  async (req: Request, res: Response, next: NextFunction) => {
+    try {
+      const { circle_id } = req.params;
+      const user_id = req.user?.id;
+      if (!user_id) return res.status(401).send("Unauthorized.");
+
+      const userResult = await pool.query(
+        `SELECT first_name, phone_number FROM users WHERE id = $1`,
+        [user_id],
+      );
+      const user = userResult.rows[0];
+      if (!user) return res.status(404).send("User not found.");
+
+      await pool.query(
+        `DELETE FROM circle_members WHERE circle_id = $1 AND member_id = $2`,
+        [circle_id, user_id],
+      );
+
+      await pool.query(
+        `INSERT INTO co_memories (user_id, memory_type, content) VALUES ($1, 'check_in', $2)`,
+        [user_id, `User left circle ${circle_id}`],
+      );
+
+      // Notify remaining members via socket and iMessage
+      const remainingResult = await pool.query(
+        `SELECT u.id, u.phone_number FROM circle_members cm JOIN users u ON u.id = cm.member_id WHERE cm.circle_id = $1`,
+        [circle_id],
+      );
+      const remaining = remainingResult.rows;
+
+      for (const m of remaining) {
+        _io?.to(`user:${m.id}`).emit("circle:member_left", { circle_id, user_id });
+      }
+
+      const remainingPhones = remaining.map((m: any) => m.phone_number);
+      if (remainingPhones.length > 0) {
+        try {
+          await sendblue.groups.sendMessage({
+            numbers: remainingPhones,
+            content: "Your circle is adjusting. Co is on it.",
+            from_number: process.env.SENDBLUE_PHONE_NUMBER!,
+          });
+        } catch (smsErr: any) {
+          console.error("Leave-circle group message failed (non-fatal):", smsErr?.message ?? smsErr);
+        }
+      }
+
+      // Notify Keana
+      try {
+        await sendblue.messages.send({
+          number: process.env.KEANA_PHONE_NUMBER!,
+          content: `${user.first_name} left circle ${circle_id}. ${remaining.length} members remaining.`,
+          from_number: process.env.SENDBLUE_PHONE_NUMBER!,
+        });
+      } catch (smsErr: any) {
+        console.error("Keana leave notify failed (non-fatal):", smsErr?.message ?? smsErr);
+      }
 
       return res.status(200).send({ success: true });
     } catch (error) {

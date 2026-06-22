@@ -12,8 +12,16 @@ function fmt(s: string) {
   return s.replace(/_/g, " ").replace(/\b\w/g, (c) => c.toUpperCase());
 }
 
+function trustMessage(score: number, checkInCount: number): string {
+  const t = Math.max(0, Math.min(100, score));
+  if (t <= 20) return "Co is just getting to know you.";
+  if (t <= 40) return "You showed up once. Co noticed.";
+  if (t <= 60) return `Co has seen you show up ${checkInCount} times.`;
+  if (t <= 80) return "You show up. Co remembers that.";
+  return "Co knows you show up every time.";
+}
+
 export default function ProfileMain({ profile, user, circle }: Props) {
-  const trust = Math.max(0, Math.min(100, profile.trust_score ?? 0));
   const vibes = [
     ...(profile.emotional_state ? [profile.emotional_state] : []),
     ...(profile.activity_preferences ?? []),
@@ -68,13 +76,8 @@ export default function ProfileMain({ profile, user, circle }: Props) {
           </>
         )}
 
-        <View style={s.trustHeader}>
-          <Text style={s.sectionLabel}>Trust Score</Text>
-          <Text style={s.trustScore}>{trust} / 100</Text>
-        </View>
-        <View style={s.trustBg}>
-          <View style={[s.trustFill, { width: `${trust}%` }]} />
-        </View>
+        <Text style={s.sectionLabel}>Trust</Text>
+        <Text style={s.trustMessage}>{trustMessage(profile.trust_score ?? 0, profile.check_in_count ?? 0)}</Text>
 
         <Text style={s.sectionLabel}>Circle Status</Text>
         {circle ? (
@@ -141,25 +144,11 @@ const s = StyleSheet.create({
     fontWeight: "300",
     marginBottom: 6,
   },
-  trustHeader: {
-    flexDirection: "row",
-    alignItems: "flex-end",
-    justifyContent: "space-between",
-  },
-  trustScore: {
-    fontSize: 12,
+  trustMessage: {
+    fontSize: 13,
+    fontWeight: "300",
     color: "rgba(255,255,255,0.5)",
-    marginBottom: 12,
-  },
-  trustBg: {
-    height: 4,
-    borderRadius: 2,
-    backgroundColor: "rgba(255,255,255,0.08)",
-  },
-  trustFill: {
-    height: 4,
-    borderRadius: 2,
-    backgroundColor: "rgba(255,255,255,0.4)",
+    lineHeight: 20,
   },
   card: {
     borderWidth: 0.5,
