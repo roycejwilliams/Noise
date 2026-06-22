@@ -168,7 +168,7 @@ cron.schedule("*/30 * * * *", async () => {
         }
 
         const placementMsg = momentId
-          ? `I placed you in a circle. ${memberCount} people, same chapter, same city.\n\ncopatible.app/moments/${momentId}`
+          ? `I placed you in a circle. ${memberCount} people, same chapter, same city.\n\nhttps://copatible.app/moments/${momentId}`
           : `I placed you in a circle. ${memberCount} people, same chapter, same city.`;
 
         try {
