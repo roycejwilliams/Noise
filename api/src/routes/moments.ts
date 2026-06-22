@@ -107,7 +107,7 @@ export function createMomentsRouter(
     }
   });
 
-  // Public endpoint — no auth, used by copatible.app/moments/:id and OG image generation
+  // Public endpoint — no auth, used by copatible.com/moments/:id and OG image generation
   router.get("/moments/public/:id", async (req, res, next) => {
     try {
       const result = await pool.query(

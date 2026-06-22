@@ -216,7 +216,7 @@ export function sendblueRouter(io: Server): Router {
 
               // Placement iMessage — individual, not group
               const placementMsg = momentId
-                ? `I placed you in a circle. ${memberCount} people, same chapter, same city.\n\ncopatible.app/moments/${momentId}`
+                ? `I placed you in a circle. ${memberCount} people, same chapter, same city.\n\nhttps://copatible.com/moments/${momentId}`
                 : `I placed you in a circle. ${memberCount} people, same chapter, same city.`;
 
               try {
