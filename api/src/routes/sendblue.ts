@@ -163,55 +163,93 @@ export function sendblueRouter(io: Server): Router {
               [pendingCircle.id],
             );
 
+            await pool.query(
+              `INSERT INTO co_memories (user_id, memory_type, content) VALUES ($1, 'system', $2)`,
+              [pendingCircle.owner_id, `Keana manually approved circle ${pendingCircle.id}`],
+            );
+
             const circleMembers = await pool.query(
-              `SELECT u.id, u.first_name, u.phone_number
+              `SELECT u.id, u.phone_number, cp.city, cp.life_chapters
                FROM circle_members cm
                JOIN users u ON cm.member_id = u.id
+               LEFT JOIN co_profiles cp ON cp.user_id = cm.member_id
                WHERE cm.circle_id = $1`,
               [pendingCircle.id],
             );
             const members = circleMembers.rows;
-            const memberPhones = members.map((m: any) => m.phone_number);
+            const memberCount = members.length;
+            const city = members.find((m: any) => m.city)?.city ?? "your city";
+            const chapter = (members.find((m: any) => m.life_chapters?.length)?.life_chapters?.[0] ?? "").replace(/_/g, " ");
 
-            const { text: coMessage } = await generateText({
-              model: anthropic("claude-sonnet-4-6"),
-              prompt: `You are Co, an exclusive life concierge. Write a short group iMessage welcoming this circle of ${members.length} people. They were selected for each other. Tone: quiet confidence. No exclamation points. 2 sentences max. No em dashes.`,
-            });
-
-            let groupAudioUrl: string | null = null;
-            try {
-              groupAudioUrl = await generateVoiceNote(coMessage);
-            } catch (voiceErr: any) {
-              console.error("Group voice note failed, falling back to text:", voiceErr?.message ?? voiceErr);
-            }
-
-            try {
-              await sendblue.groups.sendMessage({
-                numbers: memberPhones,
-                content: groupAudioUrl ? "" : coMessage,
-                ...(groupAudioUrl ? { media_url: groupAudioUrl } : {}),
-                from_number: process.env.SENDBLUE_PHONE_NUMBER!,
-              });
-            } catch (grpErr: any) {
-              console.error("Group iMessage failed after approval:", grpErr?.message ?? grpErr);
-            }
+            // Check if a moment already exists for this circle (for the link)
+            const momentResult = await pool.query(
+              `SELECT id FROM moments WHERE circle_id = $1 ORDER BY created_at DESC LIMIT 1`,
+              [pendingCircle.id],
+            );
+            const momentId = momentResult.rows[0]?.id ?? null;
 
             for (const member of members) {
-              const approvalContent = "Circle approved and activated by Co";
-              const approvalMem = await pool.query(
-                `INSERT INTO co_memories (user_id, memory_type, content) VALUES ($1, 'check_in', $2) RETURNING id`,
-                [member.id, approvalContent],
+              // vCard — send on first contact if CO_VCARD_URL is set
+              if (process.env.CO_VCARD_URL) {
+                const vcardCheck = await pool.query(
+                  `SELECT id FROM co_memories WHERE user_id = $1 AND content = 'Co vCard sent to user — contact saved' LIMIT 1`,
+                  [member.id],
+                );
+                if (!vcardCheck.rows[0]) {
+                  try {
+                    await sendblue.messages.send({
+                      number: member.phone_number,
+                      content: "Co is your life concierge. Save this contact.",
+                      media_url: process.env.CO_VCARD_URL,
+                      from_number: process.env.SENDBLUE_PHONE_NUMBER!,
+                    });
+                    await pool.query(
+                      `INSERT INTO co_memories (user_id, memory_type, content) VALUES ($1, 'system', 'Co vCard sent to user — contact saved')`,
+                      [member.id],
+                    );
+                    await new Promise((resolve) => setTimeout(resolve, 3000));
+                  } catch (vcardErr: any) {
+                    console.error("vCard send failed (non-fatal):", vcardErr?.message ?? vcardErr);
+                  }
+                }
+              }
+
+              // Placement iMessage — individual, not group
+              const placementMsg = momentId
+                ? `I placed you in a circle. ${memberCount} people, same chapter, same city.\n\ncopatible.app/moments/${momentId}`
+                : `I placed you in a circle. ${memberCount} people, same chapter, same city.`;
+
+              try {
+                await sendblue.messages.send({
+                  number: member.phone_number,
+                  content: placementMsg,
+                  from_number: process.env.SENDBLUE_PHONE_NUMBER!,
+                });
+              } catch (smsErr: any) {
+                console.error(`Placement message failed for ${member.id}:`, smsErr?.message ?? smsErr);
+              }
+
+              const placementContent = `Co placed user in circle ${pendingCircle.id}`;
+              const placementMem = await pool.query(
+                `INSERT INTO co_memories (user_id, memory_type, content) VALUES ($1, 'placement', $2) RETURNING id`,
+                [member.id, placementContent],
               );
-              generateEmbedding(approvalContent)
+              generateEmbedding(placementContent)
                 .then((emb) =>
                   pool.query(
                     `UPDATE co_memories SET content_embedding = $1::vector WHERE id = $2`,
-                    [`[${emb.join(",")}]`, approvalMem.rows[0].id],
+                    [`[${emb.join(",")}]`, placementMem.rows[0].id],
                   ),
                 )
                 .catch((err) => console.error("Memory embedding failed (non-fatal):", err));
 
-              io.to(`user:${member.id}`).emit("circle:approved", { circle_id: pendingCircle.id });
+              io.to(`user:${member.id}`).emit("circle:placed", {
+                circle_id: pendingCircle.id,
+                circle_name: pendingCircle.circle_name,
+                member_count: memberCount,
+                city,
+                chapter,
+              });
             }
           } else if (action === "reject") {
             await pool.query(
@@ -341,9 +379,13 @@ export function sendblueRouter(io: Server): Router {
               try {
                 await sendblue.messages.send({
                   number: keanaPhone,
-                  content: `New circle ready for review.\n\nChapter: ${primaryChapter.replace(/_/g, " ")}\nCity: ${city}\nMembers: ${newMemberNames}\n\nReply APPROVE or REJECT.`,
+                  content: `New circle ready for review. ${newGroupIds.length} people, ${city}, ${primaryChapter.replace(/_/g, " ")}. Members: ${newMemberNames}. Reply APPROVE or REJECT within 4 hours — Co will auto-approve if no response.`,
                   from_number: process.env.SENDBLUE_PHONE_NUMBER!,
                 });
+                await pool.query(
+                  `UPDATE circles SET keana_notified_at = NOW() WHERE id = $1`,
+                  [newCircle.id],
+                );
               } catch (err: any) {
                 console.error("Failed to notify Keana of new proposal:", err?.message ?? err);
               }

@@ -105,6 +105,14 @@ export function runMigrations() {
 
   pool
     .query(
+      `ALTER TABLE circles ADD COLUMN IF NOT EXISTS keana_notified_at TIMESTAMPTZ`,
+    )
+    .catch((err: Error) =>
+      console.error("circles.keana_notified_at migration failed:", err),
+    );
+
+  pool
+    .query(
       `ALTER TABLE co_memories ADD COLUMN IF NOT EXISTS content_embedding vector(1536)`,
     )
     .then(() =>

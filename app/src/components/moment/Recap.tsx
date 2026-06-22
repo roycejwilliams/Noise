@@ -1,18 +1,35 @@
+import api from "@/lib/api";
 import type { Moment } from "@/types";
-import { ScrollView, Share, StyleSheet, Text, TouchableOpacity, View } from "react-native";
+import { useEffect, useState } from "react";
+import { Image, ScrollView, Share, StyleSheet, Text, TouchableOpacity, View } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
 
 interface Props {
   moment: Moment;
 }
 
-const PHOTO_SLOTS = [0, 1, 2, 3];
+interface MomentPhoto {
+  id: string;
+  image_url: string;
+}
 
 export default function Recap({ moment }: Props) {
+  const [photos, setPhotos] = useState<MomentPhoto[]>([]);
+
+  useEffect(() => {
+    let mounted = true;
+    api.get(`/moments/${moment.id}/photos`)
+      .then((res) => {
+        if (mounted) setPhotos(res.data?.data ?? []);
+      })
+      .catch(() => {});
+    return () => { mounted = false; };
+  }, [moment.id]);
+
   const handleShare = async () => {
     try {
       await Share.share({
-        message: `Just had an amazing time at ${moment.moments_name} with my Co circle.`,
+        message: `Just had an amazing time at ${moment.moments_name} with my Co circle.\n\nhttps://copatible.app/moments/${moment.id}`,
       });
     } catch {}
   };
@@ -30,18 +47,19 @@ export default function Recap({ moment }: Props) {
           <Text style={s.recapText}>{moment.description}</Text>
         )}
 
-        <View style={s.heroPlaceholder}>
-          <View style={s.heroIcon} />
-        </View>
-
         <Text style={s.sectionLabel}>Relive the Night</Text>
-        <View style={s.photoGrid}>
-          {PHOTO_SLOTS.map((i) => (
-            <View key={i} style={s.photoCell}>
-              <View style={s.photoInner} />
-            </View>
-          ))}
-        </View>
+
+        {photos.length > 0 ? (
+          <View style={s.photoGrid}>
+            {photos.map((photo) => (
+              <View key={photo.id} style={s.photoCell}>
+                <Image source={{ uri: photo.image_url }} style={s.photo} resizeMode="cover" />
+              </View>
+            ))}
+          </View>
+        ) : (
+          <Text style={s.emptyPhotos}>Photos will appear here.</Text>
+        )}
       </ScrollView>
 
       <View style={s.bottom}>
@@ -85,23 +103,6 @@ const s = StyleSheet.create({
     lineHeight: 22,
     marginBottom: 24,
   },
-  heroPlaceholder: {
-    width: "100%",
-    height: 362,
-    backgroundColor: "rgba(255,255,255,0.04)",
-    borderWidth: 1,
-    borderColor: "rgba(255,255,255,0.1)",
-    alignItems: "center",
-    justifyContent: "center",
-    borderRadius: 4,
-  },
-  heroIcon: {
-    width: 48,
-    height: 48,
-    borderWidth: 1,
-    borderColor: "rgba(255,255,255,0.2)",
-    borderRadius: 4,
-  },
   sectionLabel: {
     fontSize: 11,
     fontWeight: "700",
@@ -122,11 +123,12 @@ const s = StyleSheet.create({
     borderRadius: 4,
     overflow: "hidden",
   },
-  photoInner: {
-    flex: 1,
-    backgroundColor: "rgba(255,255,255,0.06)",
-    borderWidth: 1,
-    borderColor: "rgba(255,255,255,0.1)",
+  photo: { flex: 1 },
+  emptyPhotos: {
+    fontSize: 13,
+    fontWeight: "300",
+    color: "rgba(255,255,255,0.3)",
+    marginTop: 4,
   },
   bottom: { paddingHorizontal: 32, paddingBottom: 16 },
   cta: {

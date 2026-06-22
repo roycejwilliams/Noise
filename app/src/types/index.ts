@@ -19,6 +19,7 @@ export interface CoProfile {
   city: string | null;
   trust_score: number;
   is_circle_connector: boolean;
+  check_in_count?: number;
 }
 
 export interface CircleMember {
@@ -55,4 +56,11 @@ export interface MomentResponse {
   user_id: string;
   first_name: string;
   response: string | null;
+}
+
+export interface CoNotification {
+  id: string;
+  memory_type: "placement" | "moment_invite" | "booking_confirmed";
+  content: string;
+  created_at: string;
 }
