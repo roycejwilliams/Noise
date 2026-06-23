@@ -116,7 +116,7 @@ export function registerJobs() {
          FROM invite_members im
          JOIN circles c ON im.circle_id = c.id
          WHERE im.status = 'pending'
-         AND im.created_at <= $1`,
+         AND im.create_at <= $1`,
         [yesterday],
       );
 

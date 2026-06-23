@@ -1,14 +1,14 @@
 {
   "expo": {
     "name": "CoPatible",
-    "slug": "CoPatible",
+    "slug": "copatible",
     "version": "1.0.0",
     "orientation": "portrait",
     "icon": "./assets/images/icon.png",
     "scheme": "copatible",
     "userInterfaceStyle": "automatic",
     "ios": {
-      "icon": "./assets/expo.icon",
+      "icon": "./assets/images/icon.png",
       "bundleIdentifier": "com.copatible.v1",
       "infoPlist": {
         "ITSAppUsesNonExemptEncryption": false
