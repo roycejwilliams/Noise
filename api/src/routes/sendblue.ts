@@ -5,6 +5,7 @@ import type { Server } from "socket.io";
 import pool from "../db/db.js";
 import elevenlabs from "../services/elevenlabs.js";
 import { generateEmbedding } from "../services/embeddings.js";
+import { findBestCircle } from "../services/matching.js";
 import sendblue from "../services/sendblue.js";
 import { generateVoiceNote } from "../services/voiceNote.js";
 
@@ -129,6 +130,269 @@ export function sendblueRouter(io: Server): Router {
 
         if (!number || (!hasText && !hasMedia)) {
           return res.status(400).send("Missing required fields.");
+        }
+
+        // Keana approval intercept — must run before user lookup since Keana may not be in users table
+        const keanaPhone = process.env.KEANA_PHONE_NUMBER;
+        if (keanaPhone && number === keanaPhone && hasText) {
+          const pendingResult = await pool.query(
+            `SELECT c.id, c.circle_name, c.owner_id
+             FROM circles c
+             WHERE c.status = 'pending_approval'
+             ORDER BY c.created_at ASC
+             LIMIT 1`,
+          );
+
+          if (!pendingResult.rows[0]) {
+            // No pending circles — nothing to approve
+            return res.status(200).send({ received: true });
+          }
+
+          const pendingCircle = pendingResult.rows[0];
+
+          const { text: classification } = await generateText({
+            model: anthropic("claude-haiku-4-5-20251001"),
+            prompt: `Classify this message as either 'approve' or 'reject'. Return ONLY the word approve or reject.\n\nMessage: "${content}"`,
+          });
+
+          const action = classification.trim().toLowerCase();
+
+          if (action === "approve") {
+            await pool.query(
+              `UPDATE circles SET status = 'active' WHERE id = $1`,
+              [pendingCircle.id],
+            );
+
+            await pool.query(
+              `INSERT INTO co_memories (user_id, memory_type, content) VALUES ($1, 'system', $2)`,
+              [pendingCircle.owner_id, `Keana manually approved circle ${pendingCircle.id}`],
+            );
+
+            const circleMembers = await pool.query(
+              `SELECT u.id, u.phone_number, cp.city, cp.life_chapters
+               FROM circle_members cm
+               JOIN users u ON cm.member_id = u.id
+               LEFT JOIN co_profiles cp ON cp.user_id = cm.member_id
+               WHERE cm.circle_id = $1`,
+              [pendingCircle.id],
+            );
+            const members = circleMembers.rows;
+            const memberCount = members.length;
+            const city = members.find((m: any) => m.city)?.city ?? "your city";
+            const chapter = (members.find((m: any) => m.life_chapters?.length)?.life_chapters?.[0] ?? "").replace(/_/g, " ");
+
+            // Check if a moment already exists for this circle (for the link)
+            const momentResult = await pool.query(
+              `SELECT id FROM moments WHERE circle_id = $1 ORDER BY created_at DESC LIMIT 1`,
+              [pendingCircle.id],
+            );
+            const momentId = momentResult.rows[0]?.id ?? null;
+
+            for (const member of members) {
+              // vCard — send on first contact if CO_VCARD_URL is set
+              if (process.env.CO_VCARD_URL) {
+                const vcardCheck = await pool.query(
+                  `SELECT id FROM co_memories WHERE user_id = $1 AND content = 'Co vCard sent to user — contact saved' LIMIT 1`,
+                  [member.id],
+                );
+                if (!vcardCheck.rows[0]) {
+                  try {
+                    await sendblue.messages.send({
+                      number: member.phone_number,
+                      content: "Co is your life concierge. Save this contact.",
+                      media_url: process.env.CO_VCARD_URL,
+                      from_number: process.env.SENDBLUE_PHONE_NUMBER!,
+                    });
+                    await pool.query(
+                      `INSERT INTO co_memories (user_id, memory_type, content) VALUES ($1, 'system', 'Co vCard sent to user — contact saved')`,
+                      [member.id],
+                    );
+                    await new Promise((resolve) => setTimeout(resolve, 3000));
+                  } catch (vcardErr: any) {
+                    console.error("vCard send failed (non-fatal):", vcardErr?.message ?? vcardErr);
+                  }
+                }
+              }
+
+              // Placement iMessage — individual, not group
+              const placementMsg = momentId
+                ? `I placed you in a circle. ${memberCount} people, same chapter, same city.\n\nhttps://copatible.com/moments/${momentId}`
+                : `I placed you in a circle. ${memberCount} people, same chapter, same city.`;
+
+              try {
+                await sendblue.messages.send({
+                  number: member.phone_number,
+                  content: placementMsg,
+                  from_number: process.env.SENDBLUE_PHONE_NUMBER!,
+                });
+              } catch (smsErr: any) {
+                console.error(`Placement message failed for ${member.id}:`, smsErr?.message ?? smsErr);
+              }
+
+              const placementContent = `Co placed user in circle ${pendingCircle.id}`;
+              const placementMem = await pool.query(
+                `INSERT INTO co_memories (user_id, memory_type, content) VALUES ($1, 'placement', $2) RETURNING id`,
+                [member.id, placementContent],
+              );
+              generateEmbedding(placementContent)
+                .then((emb) =>
+                  pool.query(
+                    `UPDATE co_memories SET content_embedding = $1::vector WHERE id = $2`,
+                    [`[${emb.join(",")}]`, placementMem.rows[0].id],
+                  ),
+                )
+                .catch((err) => console.error("Memory embedding failed (non-fatal):", err));
+
+              io.to(`user:${member.id}`).emit("circle:placed", {
+                circle_id: pendingCircle.id,
+                circle_name: pendingCircle.circle_name,
+                member_count: memberCount,
+                city,
+                chapter,
+              });
+            }
+          } else if (action === "reject") {
+            await pool.query(
+              `UPDATE circles SET status = 'rejected' WHERE id = $1`,
+              [pendingCircle.id],
+            );
+
+            const rejectedMembersResult = await pool.query(
+              `SELECT member_id FROM circle_members WHERE circle_id = $1`,
+              [pendingCircle.id],
+            );
+            const rejectedMemberIds: string[] = rejectedMembersResult.rows.map((r: any) => r.member_id);
+            const allRejectedIds = [pendingCircle.owner_id, ...rejectedMemberIds];
+
+            for (const memberId of allRejectedIds) {
+              const rejectContent = "Circle rejected — Co will attempt new matching";
+              const rejectMem = await pool.query(
+                `INSERT INTO co_memories (user_id, memory_type, content) VALUES ($1, 'check_in', $2) RETURNING id`,
+                [memberId, rejectContent],
+              );
+              generateEmbedding(rejectContent)
+                .then((emb) =>
+                  pool.query(
+                    `UPDATE co_memories SET content_embedding = $1::vector WHERE id = $2`,
+                    [`[${emb.join(",")}]`, rejectMem.rows[0].id],
+                  ),
+                )
+                .catch((err) => console.error("Memory embedding failed (non-fatal):", err));
+            }
+
+            const newGroupIds = await findBestCircle(pendingCircle.owner_id, rejectedMemberIds);
+
+            if (!newGroupIds || newGroupIds.length < 4) {
+              const ownerRes = await pool.query(
+                `SELECT first_name FROM users WHERE id = $1`,
+                [pendingCircle.owner_id],
+              );
+              const ownerName = ownerRes.rows[0]?.first_name ?? pendingCircle.owner_id;
+              try {
+                await sendblue.messages.send({
+                  number: keanaPhone,
+                  content: `No alternative match found for ${ownerName}. Manual review needed.`,
+                  from_number: process.env.SENDBLUE_PHONE_NUMBER!,
+                });
+              } catch (err: any) {
+                console.error("Failed to notify Keana of no-match:", err?.message ?? err);
+              }
+            } else {
+              const ownerProfile = await pool.query(
+                `SELECT life_chapters, city FROM co_profiles WHERE user_id = $1`,
+                [pendingCircle.owner_id],
+              );
+              const ownerProf = ownerProfile.rows[0];
+              const primaryChapter = ownerProf?.life_chapters?.[0] ?? "new_to_city";
+              const city = ownerProf?.city ?? "";
+              const circleName = `Co Circle — ${primaryChapter.replace(/_/g, " ")}`;
+
+              const newCircleResult = await pool.query(
+                `INSERT INTO circles (owner_id, circle_name, status) VALUES ($1, $2, 'pending_approval') RETURNING *`,
+                [pendingCircle.owner_id, circleName],
+              );
+              const newCircle = newCircleResult.rows[0];
+
+              for (const memberId of newGroupIds) {
+                if (memberId === pendingCircle.owner_id) continue;
+                await pool.query(
+                  `INSERT INTO circle_members (circle_id, member_id) VALUES ($1, $2) ON CONFLICT DO NOTHING`,
+                  [newCircle.id, memberId],
+                );
+              }
+
+              const existingConnector = await pool.query(
+                `SELECT user_id FROM co_profiles
+                 WHERE user_id = ANY($1::uuid[]) AND is_circle_connector = TRUE LIMIT 1`,
+                [newGroupIds],
+              );
+              if (!existingConnector.rows[0]) {
+                const topTrust = await pool.query(
+                  `SELECT user_id FROM co_profiles
+                   WHERE user_id = ANY($1::uuid[]) ORDER BY trust_score DESC LIMIT 1`,
+                  [newGroupIds],
+                );
+                if (topTrust.rows[0]) {
+                  const connectorId = topTrust.rows[0].user_id;
+                  await pool.query(
+                    `UPDATE co_profiles SET is_circle_connector = TRUE WHERE user_id = $1`,
+                    [connectorId],
+                  );
+                  const connContent = `Co selected you as Circle Connector for circle ${newCircle.id}`;
+                  const connMem = await pool.query(
+                    `INSERT INTO co_memories (user_id, memory_type, content) VALUES ($1, 'check_in', $2) RETURNING id`,
+                    [connectorId, connContent],
+                  );
+                  generateEmbedding(connContent)
+                    .then((emb) =>
+                      pool.query(
+                        `UPDATE co_memories SET content_embedding = $1::vector WHERE id = $2`,
+                        [`[${emb.join(",")}]`, connMem.rows[0].id],
+                      ),
+                    )
+                    .catch((err) => console.error("Memory embedding failed (non-fatal):", err));
+                }
+              }
+
+              for (const memberId of newGroupIds) {
+                const pendingContent = "Circle placement pending Keana approval";
+                const pendingMem = await pool.query(
+                  `INSERT INTO co_memories (user_id, memory_type, content) VALUES ($1, 'check_in', $2) RETURNING id`,
+                  [memberId, pendingContent],
+                );
+                generateEmbedding(pendingContent)
+                  .then((emb) =>
+                    pool.query(
+                      `UPDATE co_memories SET content_embedding = $1::vector WHERE id = $2`,
+                      [`[${emb.join(",")}]`, pendingMem.rows[0].id],
+                    ),
+                  )
+                  .catch((err) => console.error("Memory embedding failed (non-fatal):", err));
+              }
+
+              const newMemberNamesResult = await pool.query(
+                `SELECT first_name FROM users WHERE id = ANY($1::uuid[])`,
+                [newGroupIds],
+              );
+              const newMemberNames = newMemberNamesResult.rows.map((r: any) => r.first_name).join(", ");
+
+              try {
+                await sendblue.messages.send({
+                  number: keanaPhone,
+                  content: `New circle ready for review. ${newGroupIds.length} people, ${city}, ${primaryChapter.replace(/_/g, " ")}. Members: ${newMemberNames}. Reply APPROVE or REJECT within 4 hours — Co will auto-approve if no response.`,
+                  from_number: process.env.SENDBLUE_PHONE_NUMBER!,
+                });
+                await pool.query(
+                  `UPDATE circles SET keana_notified_at = NOW() WHERE id = $1`,
+                  [newCircle.id],
+                );
+              } catch (err: any) {
+                console.error("Failed to notify Keana of new proposal:", err?.message ?? err);
+              }
+            }
+          }
+
+          return res.status(200).send({ received: true });
         }
 
         // Step 1 — Find user by phone number

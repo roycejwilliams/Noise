@@ -222,7 +222,7 @@ export function createAiRouter(
         }
 
         //url to be sent
-        const momentUrl = `https://copatible.app/moments/${moment_id}`;
+        const momentUrl = `https://copatible.com/moments/${moment_id}`;
 
         const getCreator = await pool.query(
           `SELECT email, phone_number FROM users WHERE id = $1`,

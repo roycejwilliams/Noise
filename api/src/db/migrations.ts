@@ -78,4 +78,49 @@ export function runMigrations() {
     .catch((err: Error) =>
       console.error("co_profiles.hume_chat_group_id migration failed:", err),
     );
+
+  pool
+    .query(
+      `ALTER TABLE moments ADD COLUMN IF NOT EXISTS status TEXT DEFAULT 'polling'`,
+    )
+    .catch((err: Error) =>
+      console.error("moments.status migration failed:", err),
+    );
+
+  pool
+    .query(
+      `ALTER TABLE users ADD COLUMN IF NOT EXISTS subscription_status TEXT`,
+    )
+    .catch((err: Error) =>
+      console.error("users.subscription_status migration failed:", err),
+    );
+
+  pool
+    .query(
+      `ALTER TABLE circles ADD COLUMN IF NOT EXISTS status TEXT DEFAULT 'pending_approval'`,
+    )
+    .catch((err: Error) =>
+      console.error("circles.status migration failed:", err),
+    );
+
+  pool
+    .query(
+      `ALTER TABLE circles ADD COLUMN IF NOT EXISTS keana_notified_at TIMESTAMPTZ`,
+    )
+    .catch((err: Error) =>
+      console.error("circles.keana_notified_at migration failed:", err),
+    );
+
+  pool
+    .query(
+      `ALTER TABLE co_memories ADD COLUMN IF NOT EXISTS content_embedding vector(1536)`,
+    )
+    .then(() =>
+      pool.query(`CREATE INDEX IF NOT EXISTS co_memories_embedding_hnsw_idx
+        ON co_memories USING hnsw (content_embedding vector_cosine_ops)
+        WITH (m = 16, ef_construction = 64)`),
+    )
+    .catch((err: Error) =>
+      console.error("Failed to set up co_memories embedding index:", err),
+    );
 }

@@ -247,7 +247,7 @@ function passesTrustCheck(trustScores: number[]): boolean {
 // Main matching function — assembles the best circle for a given user
 // Called by POST /co/place
 // Returns an array of user IDs that form the best group, or null if no match found
-async function findBestCircle(userId: string): Promise<string[] | null> {
+async function findBestCircle(userId: string, excludeUserIds: string[] = []): Promise<string[] | null> {
   // Step 1 — Fetch the user being placed
   const userResult = await pool.query(
     `SELECT * FROM co_profiles WHERE user_id = $1`,
@@ -260,16 +260,18 @@ async function findBestCircle(userId: string): Promise<string[] | null> {
   console.log("User goal_embeddings value:", user.goal_embeddings);
 
   // Step 2 — Fetch all other users in the same city with complete profiles
-  // Exclude the user themselves and anyone already in an active circle
+  // Exclude the user themselves, anyone already in an active circle,
+  // and any explicitly excluded user IDs (e.g. members of a rejected circle)
   const candidatesResult = await pool.query(
-    `SELECT cp.*, u.id as user_id 
+    `SELECT cp.*, u.id as user_id
      FROM co_profiles cp
      JOIN users u ON cp.user_id = u.id
      WHERE cp.city = $1
      AND cp.user_id != $2
+     AND cp.user_id != ALL($3::uuid[])
      AND cp.life_chapters != '{}'
      AND cp.goal_embeddings IS NOT NULL`,
-    [user.city, userId],
+    [user.city, userId, excludeUserIds],
   );
 
   const candidates = candidatesResult.rows;

@@ -107,6 +107,25 @@ export function createMomentsRouter(
     }
   });
 
+  // Public endpoint — no auth, used by copatible.com/moments/:id and OG image generation
+  router.get("/moments/public/:id", async (req, res, next) => {
+    try {
+      const result = await pool.query(
+        `SELECT m.*, COUNT(cm.member_id)::int AS member_count
+         FROM moments m
+         LEFT JOIN circle_members cm ON cm.circle_id = m.circle_id
+         WHERE m.id = $1
+         GROUP BY m.id`,
+        [req.params.id],
+      );
+      const moment = result.rows[0];
+      if (!moment) return res.status(404).send("Moment not found.");
+      return res.status(200).send({ success: true, data: moment });
+    } catch (error) {
+      next(error);
+    }
+  });
+
   router.get(
     "/moments/moment/:moment_id",
     authenticateToken,
@@ -374,6 +393,22 @@ export function createMomentsRouter(
           [req.params.owner_id],
         );
 
+        return res.status(200).send({ success: true, data: result.rows });
+      } catch (error) {
+        next(error);
+      }
+    },
+  );
+
+  router.get(
+    "/moments/circle/:circle_id",
+    authenticateToken,
+    async (req, res, next) => {
+      try {
+        const result = await pool.query(
+          `SELECT * FROM moments WHERE circle_id = $1 ORDER BY moment_start ASC`,
+          [req.params.circle_id],
+        );
         return res.status(200).send({ success: true, data: result.rows });
       } catch (error) {
         next(error);

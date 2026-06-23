@@ -41,7 +41,7 @@ export function registerJobs() {
           hour12: true,
         });
 
-        const momentUrl = `https://copatible.app/moments/${row.moment_id}`;
+        const momentUrl = `https://copatible.com/moments/${row.moment_id}`;
 
         await sendEmail({
           email: attendee.rows[0].email,
@@ -97,7 +97,7 @@ export function registerJobs() {
           hour12: true,
         });
 
-        const momentUrl = `https://copatible.app/moments/${row.moment_id}`;
+        const momentUrl = `https://copatible.com/moments/${row.moment_id}`;
 
         await sendEmail({
           email: attendee.rows[0].email,
@@ -116,7 +116,7 @@ export function registerJobs() {
          FROM invite_members im
          JOIN circles c ON im.circle_id = c.id
          WHERE im.status = 'pending'
-         AND im.created_at <= $1`,
+         AND im.create_at <= $1`,
         [yesterday],
       );
 
@@ -127,7 +127,7 @@ export function registerJobs() {
         );
         if (!member.rows[0]) continue;
 
-        const circleUrl = `https://copatible.app/join?circle=${row.circle_id}`;
+        const circleUrl = `https://copatible.com/join?circle=${row.circle_id}`;
 
         await sendEmail({
           email: member.rows[0].email,
@@ -151,7 +151,9 @@ export function registerJobs() {
       const pollingMoments = await pool.query(
         `SELECT m.id, m.circle_id, m.suggested_time, m.created_at, m.consensus_nudge_sent_at
          FROM moments m
+         JOIN circles c ON c.id = m.circle_id
          WHERE m.status = 'polling'
+         AND c.status = 'active'
          AND EXISTS (SELECT 1 FROM moment_responses mr WHERE mr.moment_id = m.id)`,
       );
 
@@ -210,7 +212,7 @@ export function registerJobs() {
           [moment.circle_id],
         );
 
-        const circlePageUrl = `https://copatible.app/circles/${moment.circle_id}`;
+        const circlePageUrl = `https://copatible.com/circles/${moment.circle_id}`;
 
         if (connectorResult.rows[0]) {
           const connector = connectorResult.rows[0];
@@ -331,7 +333,7 @@ export function registerJobs() {
           [moment.circle_id],
         );
         const connector = connectorResult.rows[0];
-        const circlePageUrl = `https://copatible.app/circles/${moment.circle_id}`;
+        const circlePageUrl = `https://copatible.com/circles/${moment.circle_id}`;
         const past8hrs =
           new Date(moment.booking_link_sent_at) < new Date(eightHoursAgo);
 

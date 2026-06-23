@@ -1,0 +1,8 @@
+[build]
+buildCommand = "npm run build"
+
+[deploy]
+startCommand = "HOSTNAME=0.0.0.0 node .next/standalone/server.js"
+healthcheckPath = "/moments/test"
+healthcheckTimeout = 30
+restartPolicyType = "on_failure"
