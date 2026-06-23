@@ -9,7 +9,7 @@
     "userInterfaceStyle": "automatic",
     "ios": {
       "icon": "./assets/expo.icon",
-      "bundleIdentifier": "com.CoPatible.app",
+      "bundleIdentifier": "com.copatible.v1",
       "infoPlist": {
         "ITSAppUsesNonExemptEncryption": false
       }
