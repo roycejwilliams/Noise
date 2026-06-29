@@ -12,7 +12,10 @@
       "bundleIdentifier": "com.copatible.v1",
       "infoPlist": {
         "ITSAppUsesNonExemptEncryption": false
-      }
+      },
+      "associatedDomains": [
+        "applinks:copatible.com"
+      ]
     },
     "android": {
       "adaptiveIcon": {
