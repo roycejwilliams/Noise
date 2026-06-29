@@ -15,7 +15,7 @@
       }
     },
     "production": {
-      "autoIncrement": true,
+      "autoIncrement": false,
       "env": {
         "EXPO_PUBLIC_API_URL": "https://copatible-production.up.railway.app"
       }
