@@ -393,7 +393,7 @@ async function step9_bookingConfirmation(connectorId: string | null, connectorPh
 
   const { status, data } = await api("POST", "/sendblue/webhook", {
     number: connectorPhone,
-    content: "Booked! I secured the venue for Thursday evening.",
+    content: "booked",
     is_outbound: false,
   });
   assert(status === 200, `sendblue webhook returned ${status}: ${JSON.stringify(data)}`);

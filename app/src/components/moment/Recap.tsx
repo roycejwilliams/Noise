@@ -29,7 +29,7 @@ export default function Recap({ moment }: Props) {
   const handleShare = async () => {
     try {
       await Share.share({
-        message: `Just had an amazing time at ${moment.moments_name} with my Co circle.\n\nhttps://copatible.com/moments/${moment.id}`,
+        message: `Just had an amazing time at ${moment.moments_name} with my Co circle.\n\nhttps://app.copatible.com/moments/${moment.id}`,
       });
     } catch {}
   };

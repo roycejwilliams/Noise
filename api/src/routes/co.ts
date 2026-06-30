@@ -862,7 +862,7 @@ Make it feel intimate, specific, and intentional. Not generic.`,
       const moment = momentResult.rows[0];
 
       // Pre-warm OG image before any iMessage links go out — avoids preview timeout
-      fetch(`https://copatible.com/api/og/moments/${moment.id}`).catch(() => {});
+      fetch(`https://app.copatible.com/api/og/moments/${moment.id}`).catch(() => {});
 
       // Step 8.5 — Seed moment_responses for each circle member + the owner (null = awaiting reply)
       // The owner is excluded from circle_members (implicit via owner_id), so seed them separately.
@@ -890,14 +890,14 @@ Make it feel intimate, specific, and intentional. Not generic.`,
           email: user.email,
           invite_type: "received",
           invite_target: "moment",
-          action_url: `https://copatible.com/moments/${moment.id}`,
+          action_url: `https://app.copatible.com/moments/${moment.id}`,
         });
 
         await sendSMS({
           phone_number: user.phone_number,
           invite_type: "received",
           invite_target: "moment",
-          action_url: `https://copatible.com/moments/${moment.id}`,
+          action_url: `https://app.copatible.com/moments/${moment.id}`,
         });
       }
 
@@ -1007,7 +1007,7 @@ router.post(
           // non-fatal — send without URL
         }
       }
-      const circlePageUrl = momentId ? `https://copatible.com/moments/${momentId}` : null;
+      const circlePageUrl = momentId ? `https://app.copatible.com/moments/${momentId}` : null;
 
       const prompts: Record<string, string> = {
         circle_placement: `You are Co, an exclusive life concierge. Write a short iMessage to ${user.first_name}. Co has selected their circle. Tone: quiet confidence, like a private members club reaching out. No excitement, no exclamation points. Just certainty. 2 sentences max. No em dashes. Example tone: "Your circle is ready. Five people, same chapter, same city."`,

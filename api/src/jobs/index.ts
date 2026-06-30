@@ -41,7 +41,7 @@ export function registerJobs() {
           hour12: true,
         });
 
-        const momentUrl = `https://copatible.com/moments/${row.moment_id}`;
+        const momentUrl = `https://app.copatible.com/moments/${row.moment_id}`;
 
         await sendEmail({
           email: attendee.rows[0].email,
@@ -97,7 +97,7 @@ export function registerJobs() {
           hour12: true,
         });
 
-        const momentUrl = `https://copatible.com/moments/${row.moment_id}`;
+        const momentUrl = `https://app.copatible.com/moments/${row.moment_id}`;
 
         await sendEmail({
           email: attendee.rows[0].email,
@@ -127,7 +127,7 @@ export function registerJobs() {
         );
         if (!member.rows[0]) continue;
 
-        const circleUrl = `https://copatible.com/join?circle=${row.circle_id}`;
+        const circleUrl = `https://app.copatible.com/join?circle=${row.circle_id}`;
 
         await sendEmail({
           email: member.rows[0].email,
@@ -212,7 +212,7 @@ export function registerJobs() {
           [moment.circle_id],
         );
 
-        const circlePageUrl = `https://copatible.com/circles/${moment.circle_id}`;
+        const circlePageUrl = `https://app.copatible.com/circles/${moment.circle_id}`;
 
         if (connectorResult.rows[0]) {
           const connector = connectorResult.rows[0];
@@ -333,7 +333,7 @@ export function registerJobs() {
           [moment.circle_id],
         );
         const connector = connectorResult.rows[0];
-        const circlePageUrl = `https://copatible.com/circles/${moment.circle_id}`;
+        const circlePageUrl = `https://app.copatible.com/circles/${moment.circle_id}`;
         const past8hrs =
           new Date(moment.booking_link_sent_at) < new Date(eightHoursAgo);
 

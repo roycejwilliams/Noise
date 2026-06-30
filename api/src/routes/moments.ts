@@ -107,7 +107,7 @@ export function createMomentsRouter(
     }
   });
 
-  // Public endpoint — no auth, used by copatible.com/moments/:id and OG image generation
+  // Public endpoint — no auth, used by app.copatible.com/moments/:id and OG image generation
   router.get("/moments/public/:id", async (req, res, next) => {
     try {
       const result = await pool.query(
@@ -840,7 +840,7 @@ LEFT JOIN invite_attendees ia ON ia.attendee_id = u.id AND ia.moment_id = $1`,
     },
   );
 
-  // Public GET — no auth — used by copatible.com/moments/:id photo section
+  // Public GET — no auth — used by app.copatible.com/moments/:id photo section
   router.get("/moments/:moment_id/photos/public", async (req, res, next) => {
     try {
       const result = await pool.query(
