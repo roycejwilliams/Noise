@@ -864,11 +864,13 @@ Make it feel intimate, specific, and intentional. Not generic.`,
       // Pre-warm OG image before any iMessage links go out — avoids preview timeout
       fetch(`https://copatible.com/api/og/moments/${moment.id}`).catch(() => {});
 
-      // Step 8.5 — Seed moment_responses for each circle member (null = awaiting reply)
-      for (const member of members) {
+      // Step 8.5 — Seed moment_responses for each circle member + the owner (null = awaiting reply)
+      // The owner is excluded from circle_members (implicit via owner_id), so seed them separately.
+      const responseUserIds = [circle.owner_id, ...members.map((m: any) => m.member_id)];
+      for (const userId of responseUserIds) {
         await pool.query(
-          `INSERT INTO moment_responses (moment_id, user_id) VALUES ($1, $2)`,
-          [moment.id, member.member_id],
+          `INSERT INTO moment_responses (moment_id, user_id) VALUES ($1, $2) ON CONFLICT DO NOTHING`,
+          [moment.id, userId],
         );
       }
 
