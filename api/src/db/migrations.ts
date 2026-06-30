@@ -138,4 +138,55 @@ export function runMigrations() {
       console.error("co_profiles.intent migration failed:", err),
     );
 
+  pool
+    .query(`ALTER TABLE co_profiles ADD COLUMN IF NOT EXISTS coordinates geometry(Point,4326)`)
+    .then(() =>
+      pool.query(
+        `CREATE INDEX IF NOT EXISTS idx_co_profiles_coordinates ON co_profiles USING GIST (coordinates)`,
+      ),
+    )
+    .then(() =>
+      pool.query(
+        `CREATE INDEX IF NOT EXISTS idx_co_profiles_city ON co_profiles (city)`,
+      ),
+    )
+    .catch((err: Error) =>
+      console.error("co_profiles.coordinates migration failed:", err),
+    );
+
+  pool
+    .query(`ALTER TABLE moments ADD COLUMN IF NOT EXISTS venue TEXT`)
+    .catch((err: Error) =>
+      console.error("moments.venue migration failed:", err),
+    );
+
+  pool
+    .query(`ALTER TABLE moments ADD COLUMN IF NOT EXISTS recap TEXT`)
+    .catch((err: Error) =>
+      console.error("moments.recap migration failed:", err),
+    );
+
+  pool
+    .query(`
+      ALTER TABLE co_memories DROP CONSTRAINT IF EXISTS co_memories_memory_type_check;
+      ALTER TABLE co_memories ADD CONSTRAINT co_memories_memory_type_check
+        CHECK (memory_type = ANY (ARRAY[
+          'call_transcript','text_exchange','check_in','intent','recap','system','placement'
+        ]));
+    `)
+    .catch((err: Error) =>
+      console.error("co_memories.memory_type_check migration failed:", err),
+    );
+
+  pool
+    .query(`
+      ALTER TABLE users ALTER COLUMN subscription_status SET DEFAULT 'inactive';
+      ALTER TABLE users DROP CONSTRAINT IF EXISTS users_subscription_status_check;
+      ALTER TABLE users ADD CONSTRAINT users_subscription_status_check
+        CHECK (subscription_status = ANY (ARRAY['active','inactive','past_due','canceled']));
+    `)
+    .catch((err: Error) =>
+      console.error("users.subscription_status migration failed:", err),
+    );
+
 }
