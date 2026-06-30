@@ -156,7 +156,12 @@ router.post(
 
       if (!user) return res.status(404).send("User not found.");
 
-      if (process.env.NODE_ENV === "production" && user.subscription_status !== "active") {
+      const _internalPhones = (process.env.INTERNAL_TEST_PHONE_NUMBERS ?? "")
+        .split(",").map((p) => p.trim()).filter(Boolean);
+      const _isInternalTestUser = _internalPhones.includes(user.phone_number);
+      if (_isInternalTestUser) {
+        console.log(`[INTERNAL TEST BYPASS] /co/call subscription bypassed — phone: ${user.phone_number} user: ${user_id}`);
+      } else if (process.env.NODE_ENV === "production" && user.subscription_status !== "active") {
         return res.status(403).send("User does not have an active subscription.");
       }
 
