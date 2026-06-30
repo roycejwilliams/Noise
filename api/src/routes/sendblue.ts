@@ -489,6 +489,16 @@ export function sendblueRouter(io: Server): Router {
               [moment_id],
             );
 
+            // Populate moment_attendees from moment_responses so check-in works.
+            // Anyone who replied 'yes' (or has any response) gets an attendee row.
+            await pool.query(
+              `INSERT INTO moment_attendees (moment_id, attendee_id)
+               SELECT moment_id, user_id FROM moment_responses
+               WHERE moment_id = $1
+               ON CONFLICT DO NOTHING`,
+              [moment_id],
+            );
+
             const bookingContent = `Connector confirmed booking for moment: ${moments_name}`;
             const bookingMemory = await pool.query(
               `INSERT INTO co_memories (user_id, memory_type, content)

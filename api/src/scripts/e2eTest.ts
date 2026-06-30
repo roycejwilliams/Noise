@@ -380,14 +380,18 @@ async function step9_bookingConfirmation(connectorId: string | null, connectorPh
 
 async function step10_checkin() {
   console.log("\nStep 10 — Check-in");
-  // The check-in route expects moment_attendees rows to exist
-  // (Co's moment creation populates moment_responses, not moment_attendees)
+  // moment_attendees is now populated automatically by the booking confirmation
+  // webhook (step 9). Verify the rows exist before attempting check-in.
   const attendeeId = candidateIds[0];
-  await pool.query(
-    "INSERT INTO moment_attendees (moment_id, attendee_id) VALUES ($1, $2) ON CONFLICT DO NOTHING",
+  const { rows: attendeeRows } = await pool.query(
+    "SELECT attendee_id FROM moment_attendees WHERE moment_id = $1 AND attendee_id = $2",
     [momentId, attendeeId],
   );
-  pass(`Inserted moment_attendee: ${attendeeId}`);
+  assert(
+    attendeeRows.length > 0,
+    `moment_attendees not populated by booking confirmation — booking confirmation fix may not be deployed yet`,
+  );
+  pass(`moment_attendees row confirmed (populated by booking confirmation, not manually inserted)`);
 
   const { status, data } = await api(
     "POST",

@@ -276,8 +276,6 @@ async function findBestCircle(userId: string, excludeUserIds: string[] = []): Pr
   const user = userResult.rows[0];
   if (!user) return null;
 
-  console.log("User goal_embeddings type:", typeof user.goal_embeddings);
-  console.log("User goal_embeddings value:", user.goal_embeddings);
 
   // Step 2 — Fetch candidates in the same city OR within the configurable radius.
   // PostGIS distance is computed when the seeker has GPS coords stored;
@@ -332,7 +330,6 @@ async function findBestCircle(userId: string, excludeUserIds: string[] = []): Pr
   // Not enough candidates after filtering
   if (filtered.length < min_size - 1) return null;
 
-  console.log("Filtered candidates count:", filtered.length);
 
   // Step 4 — Score all candidates against the user
   // Pairwise scoring — how well does each candidate match the user
@@ -354,15 +351,10 @@ async function findBestCircle(userId: string, excludeUserIds: string[] = []): Pr
     return { ...candidate, score };
   });
 
-  console.log("Scored candidates count:", scored.length);
 
   // Sort by score descending — best matches first
   scored.sort((a, b) => b.score - a.score);
 
-  console.log(
-    "Top 3 scores:",
-    scored.slice(0, 3).map((s) => ({ user_id: s.user_id, score: s.score })),
-  );
 
   // Step 5 — Assemble the group
   // Target size first — try to fill to target_size
@@ -414,9 +406,6 @@ async function findBestCircle(userId: string, excludeUserIds: string[] = []): Pr
     emotional_states: finalGroup.map((m) => m.emotional_state),
     distances_meters: finalGroup.map((m) => m.distance_meters ?? null),
   });
-
-  console.log("Final group score:", finalScore);
-  console.log("Min required:", min_group_score);
 
   // If group doesn't meet minimum score — flag for manual placement
   if (finalScore < min_group_score) return null;
