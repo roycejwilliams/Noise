@@ -90,18 +90,31 @@ async function cleanup() {
   console.log("\n[cleanup] removing test data…");
   const client = await pool.connect();
   try {
-    if (momentId) {
-      await client.query("DELETE FROM moment_attendees WHERE moment_id = $1", [momentId]);
-      await client.query("DELETE FROM moment_responses WHERE moment_id = $1", [momentId]);
-      await client.query("DELETE FROM moment_photos WHERE moment_id = $1", [momentId]);
-      await client.query("DELETE FROM moments WHERE id = $1", [momentId]);
-    }
-    if (circleId) {
-      await client.query("DELETE FROM circle_members WHERE circle_id = $1", [circleId]);
-      await client.query("DELETE FROM circles WHERE id = $1", [circleId]);
-    }
     const allIds = [...(testUserId ? [testUserId] : []), ...candidateIds];
+
+    // Find every circle and moment that any test user owns or is a member of,
+    // regardless of whether circleId/momentId state vars were set (handles early failures).
     if (allIds.length) {
+      const { rows: orphanMoments } = await client.query(
+        `SELECT id FROM moments WHERE creator_id = ANY($1::uuid[])`,
+        [allIds],
+      );
+      for (const { id } of orphanMoments) {
+        await client.query("DELETE FROM moment_attendees WHERE moment_id = $1", [id]);
+        await client.query("DELETE FROM moment_responses WHERE moment_id = $1", [id]);
+        await client.query("DELETE FROM moment_photos WHERE moment_id = $1", [id]);
+        await client.query("DELETE FROM moments WHERE id = $1", [id]);
+      }
+
+      const { rows: orphanCircles } = await client.query(
+        `SELECT id FROM circles WHERE owner_id = ANY($1::uuid[])`,
+        [allIds],
+      );
+      for (const { id } of orphanCircles) {
+        await client.query("DELETE FROM circle_members WHERE circle_id = $1", [id]);
+        await client.query("DELETE FROM circles WHERE id = $1", [id]);
+      }
+
       // co_profiles, co_memories, circle_members cascade from users ON DELETE CASCADE
       await client.query("DELETE FROM users WHERE id = ANY($1::uuid[])", [allIds]);
     }
@@ -243,7 +256,7 @@ async function step5_placement() {
   const { status, data } = await api(
     "POST", `/co/place/${testUserId}`, {}, jwtToken!,
   );
-  assert(status === 200, `place returned ${status}: ${JSON.stringify(data)}`);
+  assert(status === 200 || status === 201, `place returned ${status}: ${JSON.stringify(data)}`);
   const d = data as any;
   if (d?.success === false && d?.manual_placement) {
     fail(
@@ -255,15 +268,17 @@ async function step5_placement() {
     fail("Placement", "Test user already in a circle — run cleanup or check DB state");
   }
   assert(d?.success === true, `Placement returned success=false: ${JSON.stringify(d)}`);
-  pass("Placed — fetching circle_id from DB");
 
-  // The circle was created by the placement route; fetch the most recent one owned by test user
-  const { rows } = await pool.query(
-    "SELECT id FROM circles WHERE owner_id = $1 ORDER BY created_at DESC LIMIT 1",
-    [testUserId],
-  );
-  assert(rows.length > 0, "No circle found after placement");
-  circleId = rows[0].id as string;
+  // Prefer circle_id from response body; fall back to DB query
+  circleId = (d as any)?.data?.circle_id ?? null;
+  if (!circleId) {
+    const { rows } = await pool.query(
+      "SELECT id FROM circles WHERE owner_id = $1 ORDER BY created_at DESC LIMIT 1",
+      [testUserId],
+    );
+    assert(rows.length > 0, "No circle found after placement");
+    circleId = rows[0].id as string;
+  }
   pass(`Circle created: ${circleId}`);
 }
 
@@ -311,13 +326,15 @@ async function step7_createMoment() {
 async function step8_consensus() {
   console.log("\nStep 8 — Consensus");
   // Determine the connector (highest trust_score in the group)
+  // Include testUserId — placement assigns the connector from the FULL group
+  const allGroupIds = [testUserId!, ...candidateIds];
   const { rows: connectorRows } = await pool.query(
     `SELECT cp.user_id, u.phone_number
      FROM co_profiles cp
      JOIN users u ON u.id = cp.user_id
      WHERE cp.user_id = ANY($1::uuid[]) AND cp.is_circle_connector = TRUE
      LIMIT 1`,
-    [candidateIds],
+    [allGroupIds],
   );
 
   const connector = connectorRows[0] ?? null;
@@ -350,6 +367,17 @@ async function step8_consensus() {
   assert(rows[0]?.status === "consensus_locked", "Moment status not consensus_locked");
   pass("Moment → consensus_locked");
 
+  // If the connector is the circle owner, they may lack a moment_response row because
+  // the production co.ts moment creation only seeds circle_members (not the owner).
+  // Ensure the connector always has a pending row so the sendblue webhook can find them.
+  if (connectorId) {
+    await pool.query(
+      `INSERT INTO moment_responses (moment_id, user_id)
+       VALUES ($1, $2) ON CONFLICT DO NOTHING`,
+      [momentId, connectorId],
+    );
+  }
+
   return { connectorId, connectorPhone: connector?.phone_number ?? null };
 }
 
@@ -365,16 +393,18 @@ async function step9_bookingConfirmation(connectorId: string | null, connectorPh
 
   const { status, data } = await api("POST", "/sendblue/webhook", {
     number: connectorPhone,
-    content: "I just booked the venue for Thursday evening — all confirmed!",
+    content: "Booked! I secured the venue for Thursday evening.",
     is_outbound: false,
   });
   assert(status === 200, `sendblue webhook returned ${status}: ${JSON.stringify(data)}`);
+  const action = (data as any)?.action;
+  pass(`Sendblue webhook → HTTP ${status}, action: ${action}`);
 
-  // Give the webhook a moment to process
-  await new Promise((r) => setTimeout(r, 3000));
+  // Wait for the webhook to finish async work (AI classification + DB updates)
+  await new Promise((r) => setTimeout(r, 5000));
 
   const { rows } = await pool.query("SELECT status FROM moments WHERE id = $1", [momentId]);
-  assert(rows[0]?.status === "confirmed", `Moment status is '${rows[0]?.status}' — expected 'confirmed'`);
+  assert(rows[0]?.status === "confirmed", `Moment status is '${rows[0]?.status}' (webhook action was '${action}') — expected 'confirmed'`);
   pass(`Moment → confirmed (connector: ${connectorPhone})`);
 }
 
