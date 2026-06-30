@@ -1,5 +1,8 @@
 import pool from "../db/db.js";
 
+const MATCH_RADIUS_MILES = parseFloat(process.env.MATCH_RADIUS_MILES ?? "25");
+const METERS_PER_MILE = 1609.344;
+
 //never fewer than 4 people
 const min_size = 4;
 ///never more than 8 people
@@ -186,14 +189,25 @@ function emotionalStateScore(emotionalStates: string[]): number {
   return totalScore / pairCount;
 }
 
-// Overall compatibility score — weighted sum of all 5 dimensions
-// Returns a score between 0 and 1
+// Proximity score — linear decay from 1.0 (same location) to 0.0 (at/beyond radius)
+// Returns null when either user has no GPS coordinates (score excluded from weights)
+function proximityScore(distanceMeters: number | null): number | null {
+  if (distanceMeters === null) return null;
+  const radiusMeters = MATCH_RADIUS_MILES * METERS_PER_MILE;
+  return Math.max(0, 1 - distanceMeters / radiusMeters);
+}
+
+// Overall compatibility score — weighted sum of 5 core dimensions,
+// with a 6th proximity dimension added when GPS data is available for both users.
+// When proximity is available the weights shift slightly to accommodate it while
+// keeping the total at 1.0.
 function groupCompatibilityScore(group: {
   life_chapters: string[][];
   social_energy: number[];
   activity_preferences: string[][];
   goal_embeddings: (string | number[] | null | undefined)[];
   emotional_states: string[];
+  distances_meters?: (number | null)[];
 }): number {
   const size = group.life_chapters.length;
   if (size < 2) return 0;
@@ -201,36 +215,39 @@ function groupCompatibilityScore(group: {
   let totalScore = 0;
   let pairCount = 0;
 
-  // Compare every pair in the group
   for (let i = 0; i < size; i++) {
     for (let j = i + 1; j < size; j++) {
+      const distMeters =
+        group.distances_meters
+          ? (group.distances_meters[i] !== null && group.distances_meters[j] !== null
+              ? Math.max(group.distances_meters[i]!, group.distances_meters[j]!)
+              : null)
+          : null;
+
+      const prox = proximityScore(distMeters);
+      const hasProx = prox !== null;
+
+      // Weights with proximity (sum = 1.0)
+      const w = hasProx
+        ? { chapter: 0.27, social: 0.23, activity: 0.18, goal: 0.14, emotional: 0.09, proximity: 0.09 }
+        : { chapter: 0.30, social: 0.25, activity: 0.20, goal: 0.15, emotional: 0.10, proximity: 0 };
+
       const pairScore =
-        chapterDepthScore([group.life_chapters[i], group.life_chapters[j]]) *
-          0.3 +
-        socialEnergyScore([group.social_energy[i], group.social_energy[j]]) *
-          0.25 +
-        activityOverlapScore([
-          group.activity_preferences[i],
-          group.activity_preferences[j],
-        ]) *
-          0.2 +
+        chapterDepthScore([group.life_chapters[i], group.life_chapters[j]]) * w.chapter +
+        socialEnergyScore([group.social_energy[i], group.social_energy[j]]) * w.social +
+        activityOverlapScore([group.activity_preferences[i], group.activity_preferences[j]]) * w.activity +
         goalAlignmentScore([
           parseEmbedding(group.goal_embeddings[i]),
           parseEmbedding(group.goal_embeddings[j]),
-        ]) *
-          0.15 +
-        emotionalStateScore([
-          group.emotional_states[i],
-          group.emotional_states[j],
-        ]) *
-          0.1;
+        ]) * w.goal +
+        emotionalStateScore([group.emotional_states[i], group.emotional_states[j]]) * w.emotional +
+        (hasProx ? prox! * w.proximity : 0);
 
       totalScore += pairScore;
       pairCount++;
     }
   }
 
-  // Average pairwise score across all pairs in the group
   return totalScore / pairCount;
 }
 
@@ -248,9 +265,12 @@ function passesTrustCheck(trustScores: number[]): boolean {
 // Called by POST /co/place
 // Returns an array of user IDs that form the best group, or null if no match found
 async function findBestCircle(userId: string, excludeUserIds: string[] = []): Promise<string[] | null> {
-  // Step 1 — Fetch the user being placed
+  // Step 1 — Fetch the user being placed (lat/lng extracted for PostGIS queries)
   const userResult = await pool.query(
-    `SELECT * FROM co_profiles WHERE user_id = $1`,
+    `SELECT *,
+            ST_Y(coordinates) AS lat,
+            ST_X(coordinates) AS lng
+     FROM co_profiles WHERE user_id = $1`,
     [userId],
   );
   const user = userResult.rows[0];
@@ -259,19 +279,37 @@ async function findBestCircle(userId: string, excludeUserIds: string[] = []): Pr
   console.log("User goal_embeddings type:", typeof user.goal_embeddings);
   console.log("User goal_embeddings value:", user.goal_embeddings);
 
-  // Step 2 — Fetch all other users in the same city with complete profiles
-  // Exclude the user themselves, anyone already in an active circle,
-  // and any explicitly excluded user IDs (e.g. members of a rejected circle)
+  // Step 2 — Fetch candidates in the same city OR within the configurable radius.
+  // PostGIS distance is computed when the seeker has GPS coords stored;
+  // city string match remains the fallback for users without location data.
+  const radiusMeters = MATCH_RADIUS_MILES * METERS_PER_MILE;
+  const userLat: number | null = user.lat ?? null;
+  const userLng: number | null = user.lng ?? null;
+  const hasLocation = userLat !== null && userLng !== null;
+
   const candidatesResult = await pool.query(
-    `SELECT cp.*, u.id as user_id
+    `SELECT cp.*, u.id as user_id,
+            ST_Y(cp.coordinates) AS lat,
+            ST_X(cp.coordinates) AS lng,
+            ${hasLocation
+              ? `CASE WHEN cp.coordinates IS NOT NULL
+                   THEN ST_Distance(cp.coordinates::geography, ST_SetSRID(ST_MakePoint($4, $5), 4326)::geography)
+                   ELSE NULL
+                 END AS distance_meters`
+              : "NULL::float AS distance_meters"}
      FROM co_profiles cp
      JOIN users u ON cp.user_id = u.id
-     WHERE cp.city = $1
-     AND cp.user_id != $2
+     WHERE cp.user_id != $2
      AND cp.user_id != ALL($3::uuid[])
      AND cp.life_chapters != '{}'
-     AND cp.goal_embeddings IS NOT NULL`,
-    [user.city, userId, excludeUserIds],
+     AND cp.goal_embeddings IS NOT NULL
+     AND (
+       cp.city = $1
+       ${hasLocation ? `OR (cp.coordinates IS NOT NULL AND ST_DWithin(cp.coordinates::geography, ST_SetSRID(ST_MakePoint($4, $5), 4326)::geography, $6))` : ""}
+     )`,
+    hasLocation
+      ? [user.city, userId, excludeUserIds, userLng, userLat, radiusMeters]
+      : [user.city, userId, excludeUserIds],
   );
 
   const candidates = candidatesResult.rows;
@@ -283,9 +321,11 @@ async function findBestCircle(userId: string, excludeUserIds: string[] = []): Pr
   // Remove candidates who don't share at least 1 life chapter with the user
   // and aren't in the same city
   const filtered = candidates.filter((candidate) => {
+    const sameCity = inSameCity(user.city, candidate.city);
+    const withinRadius = candidate.distance_meters !== null && candidate.distance_meters <= radiusMeters;
     return (
       hasSharedChapters([user.life_chapters, candidate.life_chapters]) &&
-      inSameCity(user.city, candidate.city)
+      (sameCity || withinRadius)
     );
   });
 
@@ -309,6 +349,7 @@ async function findBestCircle(userId: string, excludeUserIds: string[] = []): Pr
         parseEmbedding(candidate.goal_embeddings),
       ],
       emotional_states: [user.emotional_state, candidate.emotional_state],
+      distances_meters: [null, candidate.distance_meters ?? null],
     });
     return { ...candidate, score };
   });
@@ -371,6 +412,7 @@ async function findBestCircle(userId: string, excludeUserIds: string[] = []): Pr
     activity_preferences: finalGroup.map((m) => m.activity_preferences),
     goal_embeddings: finalGroup.map((m) => parseEmbedding(m.goal_embeddings)),
     emotional_states: finalGroup.map((m) => m.emotional_state),
+    distances_meters: finalGroup.map((m) => m.distance_meters ?? null),
   });
 
   console.log("Final group score:", finalScore);

@@ -1,0 +1,19 @@
+{
+  "applinks": {
+    "apps": [],
+    "details": [
+      {
+        "appIDs": ["31a8fa35-e1a3-4d6f-9e26-d091c953bbfa.com.copatible.v1"],
+        "components": [
+          {
+            "/": "/moments/*",
+            "comment": "Opens moment pages in the CoPatible app"
+          }
+        ]
+      }
+    ]
+  },
+  "appclips": {
+    "apps": ["31a8fa35-e1a3-4d6f-9e26-d091c953bbfa.com.copatible.v1.Clip"]
+  }
+}

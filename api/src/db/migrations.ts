@@ -113,6 +113,14 @@ export function runMigrations() {
 
   pool
     .query(
+      `ALTER TABLE moment_photos ALTER COLUMN uploader_id DROP NOT NULL`,
+    )
+    .catch((err: Error) =>
+      console.error("moment_photos.uploader_id nullable migration failed:", err),
+    );
+
+  pool
+    .query(
       `ALTER TABLE co_memories ADD COLUMN IF NOT EXISTS content_embedding vector(1536)`,
     )
     .then(() =>
@@ -123,4 +131,11 @@ export function runMigrations() {
     .catch((err: Error) =>
       console.error("Failed to set up co_memories embedding index:", err),
     );
+
+  pool
+    .query(`ALTER TABLE co_profiles ADD COLUMN IF NOT EXISTS intent JSONB DEFAULT '[]'::jsonb`)
+    .catch((err: Error) =>
+      console.error("co_profiles.intent migration failed:", err),
+    );
+
 }

@@ -51,6 +51,63 @@ function validateHumeWebhook(req: Request): boolean {
   }
 }
 
+// Extract intent from a transcript and persist it to co_profiles.intent.
+// Called after the psychographic extraction in both webhook and typed-intake paths.
+async function captureIntent(user_id: string, transcript: string): Promise<void> {
+  try {
+    const { text: rawIntent } = await generateText({
+      model: anthropic("claude-haiku-4-5-20251001"),
+      prompt: `Does this person mention something specific they are actively seeking or could offer to others — a connection, an introduction, a resource, expertise? If yes, extract it as a single clear sentence and classify as 'seeking' or 'offering'. If no specific ask is present, return null.
+
+Return ONLY valid JSON or the word null:
+{"text": "Looking for climate tech founders at $1M+ ARR", "type": "seeking"}
+
+Transcript:
+"${transcript}"`,
+    });
+
+    const clean = rawIntent.replace(/```json|```/g, "").trim();
+    if (!clean || clean === "null") return;
+
+    let intentData: { text: string; type: "seeking" | "offering" } | null = null;
+    try { intentData = JSON.parse(clean); } catch { return; }
+    if (!intentData?.text || !intentData?.type) return;
+
+    const intentId = crypto.randomUUID();
+    const embedding = await generateEmbedding(intentData.text).catch(() => null);
+
+    const newIntent = {
+      id: intentId,
+      text: intentData.text,
+      type: intentData.type,
+      status: "active",
+      embedding,
+      created_at: new Date().toISOString(),
+    };
+
+    await pool.query(
+      `UPDATE co_profiles
+       SET intent = COALESCE(intent, '[]'::jsonb) || $1::jsonb
+       WHERE user_id = $2`,
+      [JSON.stringify([newIntent]), user_id],
+    );
+
+    const memContent = `Co captured intent: ${intentData.text}`;
+    const mem = await pool.query(
+      `INSERT INTO co_memories (user_id, memory_type, content) VALUES ($1, 'intent', $2) RETURNING id`,
+      [user_id, memContent],
+    );
+    generateEmbedding(memContent)
+      .then((emb) => pool.query(
+        `UPDATE co_memories SET content_embedding = $1::vector WHERE id = $2`,
+        [`[${emb.join(",")}]`, mem.rows[0].id],
+      ))
+      .catch((err) => console.error("Intent memory embedding failed:", err));
+  } catch (err: any) {
+    console.error("captureIntent failed (non-fatal):", err?.message ?? err);
+  }
+}
+
 // Normalize Hume EVI webhook payload — handles snake_case vs camelCase and
 // assembles a flat transcript string from message-array payloads
 function normalizeHumePayload(body: any) {
@@ -386,6 +443,9 @@ router.post(
           [chatGroupId, user_id],
         );
       }
+
+      // Step 7 — Ambient intent capture (non-blocking — runs in background)
+      captureIntent(user_id, transcript).catch(() => {});
 
       // Profile is fully extracted and stored — tell the app to show the Ready state
       _io?.to(`user:${user_id}`).emit("co:profile_ready");
@@ -918,7 +978,7 @@ router.post(
           const lcEmbedding = await generateEmbedding(context.user_message);
           const lcMemories = await pool.query(
             `SELECT content FROM co_memories
-             WHERE user_id = $1 AND content_embedding IS NOT NULL
+             WHERE user_id = $1 AND content_embedding IS NOT NULL AND memory_type != 'intent'
              ORDER BY content_embedding <=> $2::vector
              LIMIT 5`,
             [user_id, `[${lcEmbedding.join(",")}]`],
@@ -1295,6 +1355,9 @@ router.post(
         ],
       );
 
+      // Ambient intent capture (non-blocking)
+      captureIntent(String(user_id), String(transcript)).catch(() => {});
+
       _io?.to(`user:${user_id}`).emit("co:profile_ready");
 
       return res.status(200).send({ success: true });
@@ -1320,6 +1383,33 @@ router.get(
         [user_id],
       );
       return res.status(200).send({ success: true, data: result.rows });
+    } catch (error) {
+      next(error);
+    }
+  },
+);
+
+// POST /co/location/:user_id — store GPS coordinates from the app
+router.post(
+  "/location/:user_id",
+  authenticateToken,
+  async (req: Request, res: Response, next: NextFunction) => {
+    try {
+      const { user_id } = req.params;
+      const { latitude, longitude } = req.body as { latitude?: number; longitude?: number };
+
+      if (typeof latitude !== "number" || typeof longitude !== "number") {
+        return res.status(400).send("Missing required fields: latitude and longitude (numbers).");
+      }
+
+      await pool.query(
+        `UPDATE co_profiles
+         SET coordinates = ST_SetSRID(ST_MakePoint($1, $2), 4326)
+         WHERE user_id = $3`,
+        [longitude, latitude, user_id],
+      );
+
+      return res.status(200).send({ success: true });
     } catch (error) {
       next(error);
     }
