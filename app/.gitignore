@@ -38,6 +38,12 @@ yarn-error.*
 
 example
 
-# generated native folders
-/ios
+# generated native folders (android stays ignored; ios is committed for App Clip support)
 /android
+
+# ios — commit the project but exclude heavy generated artifacts
+/ios/Pods
+/ios/build
+/ios/.xcode.env.local
+/ios/**/*.xcuserstate
+/ios/copatible.xcworkspace/xcuserdata

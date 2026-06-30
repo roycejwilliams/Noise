@@ -840,6 +840,45 @@ LEFT JOIN invite_attendees ia ON ia.attendee_id = u.id AND ia.moment_id = $1`,
     },
   );
 
+  // Public GET — no auth — used by copatible.com/moments/:id photo section
+  router.get("/moments/:moment_id/photos/public", async (req, res, next) => {
+    try {
+      const result = await pool.query(
+        `SELECT id, image_url, created_at FROM moment_photos
+         WHERE moment_id = $1
+         ORDER BY created_at ASC`,
+        [req.params.moment_id],
+      );
+      return res.status(200).send({ success: true, data: result.rows });
+    } catch (error) {
+      next(error);
+    }
+  });
+
+  // Public POST — no auth — accepts a Cloudinary URL already uploaded by the web client
+  router.post("/moments/:moment_id/photos/public", async (req, res, next) => {
+    const { image_url } = req.body;
+    if (!image_url || !image_url.startsWith("https://")) {
+      return res.status(400).send("image_url is required and must be https.");
+    }
+    try {
+      const momentCheck = await pool.query(
+        `SELECT id FROM moments WHERE id = $1`,
+        [req.params.moment_id],
+      );
+      if (!momentCheck.rows[0]) return res.status(404).send("Moment not found.");
+
+      const result = await pool.query(
+        `INSERT INTO moment_photos (moment_id, image_url)
+         VALUES ($1, $2) RETURNING id, image_url, created_at`,
+        [req.params.moment_id, image_url],
+      );
+      return res.status(201).send({ success: true, data: result.rows[0] });
+    } catch (error) {
+      next(error);
+    }
+  });
+
   router.get(
     "/moments/:moment_id/photos",
     authenticateToken,

@@ -527,7 +527,7 @@ export function sendblueRouter(io: Server): Router {
           try {
             memoriesResult = await pool.query(
               `SELECT content FROM co_memories
-               WHERE user_id = $1 AND content_embedding IS NOT NULL
+               WHERE user_id = $1 AND content_embedding IS NOT NULL AND memory_type != 'intent'
                ORDER BY content_embedding <=> $2::vector
                LIMIT 5`,
               [user.id, `[${queryEmbedding.join(",")}]`],
@@ -535,13 +535,13 @@ export function sendblueRouter(io: Server): Router {
           } catch (vecErr) {
             console.error("Vector search failed, falling back to recency:", vecErr);
             memoriesResult = await pool.query(
-              `SELECT content FROM co_memories WHERE user_id = $1 ORDER BY created_at DESC LIMIT 5`,
+              `SELECT content FROM co_memories WHERE user_id = $1 AND memory_type != 'intent' ORDER BY created_at DESC LIMIT 5`,
               [user.id],
             );
           }
         } else {
           memoriesResult = await pool.query(
-            `SELECT content FROM co_memories WHERE user_id = $1 ORDER BY created_at DESC LIMIT 5`,
+            `SELECT content FROM co_memories WHERE user_id = $1 AND memory_type != 'intent' ORDER BY created_at DESC LIMIT 5`,
             [user.id],
           );
         }
