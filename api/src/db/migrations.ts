@@ -138,4 +138,20 @@ export function runMigrations() {
       console.error("co_profiles.intent migration failed:", err),
     );
 
+  pool
+    .query(`ALTER TABLE co_profiles ADD COLUMN IF NOT EXISTS coordinates geometry(Point,4326)`)
+    .then(() =>
+      pool.query(
+        `CREATE INDEX IF NOT EXISTS idx_co_profiles_coordinates ON co_profiles USING GIST (coordinates)`,
+      ),
+    )
+    .then(() =>
+      pool.query(
+        `CREATE INDEX IF NOT EXISTS idx_co_profiles_city ON co_profiles (city)`,
+      ),
+    )
+    .catch((err: Error) =>
+      console.error("co_profiles.coordinates migration failed:", err),
+    );
+
 }

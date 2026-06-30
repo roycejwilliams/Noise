@@ -463,7 +463,7 @@ async function main() {
     console.log("=".repeat(60));
   } catch (err) {
     console.error("\n" + "=".repeat(60));
-    console.error("TEST FAILED");
+    console.error("TEST FAILED:", err instanceof Error ? err.message : String(err));
     console.error("=".repeat(60));
     process.exitCode = 1;
   } finally {
