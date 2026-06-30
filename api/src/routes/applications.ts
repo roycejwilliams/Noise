@@ -113,10 +113,10 @@ router.post(
       return res.status(400).send("Request body cannot be empty.");
     }
 
-    const { first_name, last_name, email, work_link } = req.body;
+    const { first_name, last_name, email, phone_number, work_link, reason, referred_by } = req.body;
 
-    if (!first_name || !last_name || !email) {
-      const missing = ["first_name", "last_name", "email"].find(
+    if (!first_name || !last_name || !email || !phone_number) {
+      const missing = ["first_name", "last_name", "email", "phone_number"].find(
         (field) => !req.body[field],
       );
       return res.status(400).send(`${missing} is required.`);
@@ -124,8 +124,8 @@ router.post(
 
     try {
       const insertApp = await pool.query(
-        "INSERT INTO applications (first_name, last_name, email, work_link) VALUES ($1, $2, $3, $4) RETURNING *",
-        [first_name, last_name, email, work_link ?? null],
+        "INSERT INTO applications (first_name, last_name, email, phone_number, work_link, reason, referred_by) VALUES ($1, $2, $3, $4, $5, $6, $7) RETURNING *",
+        [first_name, last_name, email, phone_number, work_link ?? null, reason ?? null, referred_by ?? null],
       );
 
       const createApp = insertApp.rows[0];

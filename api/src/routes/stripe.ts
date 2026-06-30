@@ -172,13 +172,6 @@ export function stripeRouter(
           return res.status(404).send("User not found.");
         }
 
-        const _internalPhones = (process.env.INTERNAL_TEST_PHONE_NUMBERS ?? "")
-          .split(",").map((p: string) => p.trim()).filter(Boolean);
-        if (_internalPhones.includes(user.phone_number)) {
-          console.log(`[INTERNAL TEST BYPASS] /payments/status bypassed — phone: ${user.phone_number} user: ${user_id}`);
-          return res.status(200).json({ message: "Internal test bypass active.", status: "active" });
-        }
-
         // Validation check: ensure the user actually has a Stripe Customer ID
         if (!user.stripe_customer_id) {
           return res
