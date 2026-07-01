@@ -63,6 +63,8 @@
 	<string>Allow $(PRODUCT_NAME) to access your camera</string>
 	<key>NSLocalNetworkUsageDescription</key>
 	<string>Expo Dev Launcher uses the local network to discover and connect to development servers running on your computer.</string>
+	<key>NSLocationWhenInUseUsageDescription</key>
+	<string>CoPatible uses your location to help Co match you with people nearby.</string>
 	<key>NSMicrophoneUsageDescription</key>
 	<string>Allow $(PRODUCT_NAME) to access your microphone</string>
 	<key>NSMotionUsageDescription</key>

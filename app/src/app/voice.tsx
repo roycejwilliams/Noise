@@ -1,12 +1,14 @@
 import { useLogout } from "@/hooks/useAuth";
 import api from "@/lib/api";
 import { connectSocket, socket } from "@/lib/socket";
+import TypingBubble from "@/components/voice/TypingBubble";
+import VuiWave from "@/components/VuiWave";
 import * as SecureStore from "expo-secure-store";
+import { SymbolView } from "expo-symbols";
 import { useLocalSearchParams, useRouter } from "expo-router";
 import { useEffect, useRef, useState } from "react";
 import {
   Animated,
-  Image,
   StyleSheet,
   Text,
   TouchableOpacity,
@@ -16,20 +18,11 @@ import { SafeAreaView } from "react-native-safe-area-context";
 
 type VoiceState = "waiting" | "ringing" | "active" | "processing" | "ready";
 
-const A = {
-  loadingDots: "https://www.figma.com/api/mcp/asset/218fdd6c-80cb-452d-8ff2-b620e4a6b3aa",
-  phone:       "https://www.figma.com/api/mcp/asset/9b655edb-0517-45a7-9239-012e8dcc3c67",
-  mic:         "https://www.figma.com/api/mcp/asset/efaa7969-0409-4a5c-a6f3-47e02969f8a1",
-  brain:       "https://www.figma.com/api/mcp/asset/0368586f-a7c6-4fef-93f5-418c26e18f1b",
-  check:       "https://www.figma.com/api/mcp/asset/cbc0f2c5-7d55-476c-9ef6-0786997db4c0",
-  wave:        "https://www.figma.com/api/mcp/asset/40602fdd-98ba-44fc-9fdf-269bfeda0570",
-};
-
-const ICON_URI: Partial<Record<VoiceState, string>> = {
-  ringing:    A.phone,
-  active:     A.mic,
-  processing: A.brain,
-  ready:      A.check,
+const ICON_NAME: Partial<Record<VoiceState, string>> = {
+  ringing:    "phone.fill",
+  active:     "waveform",
+  processing: "brain.head.profile",
+  ready:      "checkmark",
 };
 
 function formatPhone(raw: string): string {
@@ -41,20 +34,41 @@ function formatPhone(raw: string): string {
   return raw;
 }
 
-const HEADLINE: Partial<Record<VoiceState, string>> = {
-  waiting:    "Co is ready to meet you.",
-  ringing:    "Co is ready to meet you.",
-  active:     "Co is listening",
-  processing: "Co is getting to know you.",
-  ready:      "Your profile is ready.",
-};
+// Context A = first-time caller (no co_profile yet, onboarding).
+// Context B = returning caller (co_profile exists, ongoing relationship).
+function getHeadline(state: VoiceState, isReturning: boolean, firstName: string): string {
+  switch (state) {
+    case "waiting":
+      return isReturning ? `${firstName}. Co is ready.` : "Co is about to call you.";
+    case "ringing":
+      return isReturning ? "Co is calling." : "Co is ready to meet you.";
+    case "active":
+      return isReturning ? "Talk to Co." : "Co is listening.";
+    case "processing":
+      return isReturning ? "Co is taking notes." : "Co is getting to know you.";
+    case "ready":
+      return isReturning ? "Co heard you." : "Your profile is ready.";
+  }
+}
 
-const SUBTITLE: Partial<Record<VoiceState, string>> = {
-  ringing:    "Incoming call from Co",
-  active:     "Just talk. Co will take it from here.",
-  processing: "Building your profile. This takes a moment.",
-  ready:      "Co is already looking for your people.",
-};
+function getSubtitle(state: VoiceState, isReturning: boolean): string | null {
+  switch (state) {
+    case "waiting":
+      return isReturning
+        ? "Pick up when it rings."
+        : "Pick up when your phone rings. Co will take it from there.";
+    case "ringing":
+      return isReturning ? "Pick up when it rings." : "Incoming call from Co";
+    case "active":
+      return isReturning ? "Co is paying attention." : "Just talk. Co will take it from here.";
+    case "processing":
+      return isReturning
+        ? "Co heard you. Updating your memory."
+        : "Building your profile. This takes a moment.";
+    case "ready":
+      return isReturning ? null : "Co is already looking for your people.";
+  }
+}
 
 export default function VoiceScreen() {
   const { initialState } = useLocalSearchParams<{ initialState?: string }>();
@@ -62,6 +76,10 @@ export default function VoiceScreen() {
     (initialState as VoiceState) ?? "waiting"
   );
   const [phone, setPhone] = useState("");
+  const [firstName, setFirstName] = useState("");
+  // Context A (first-time) vs Context B (returning) — defaults to Context A,
+  // the safer default if the profile fetch fails, times out, or never resolves.
+  const [isReturning, setIsReturning] = useState(false);
   const logout = useLogout();
   const router = useRouter();
 
@@ -81,13 +99,21 @@ export default function VoiceScreen() {
       if (!userId || !mounted) return;
       try {
         const res = await api.get(`/users/${userId}`);
-        if (mounted) setPhone(res.data?.data?.phone_number ?? res.data?.phone_number ?? "");
+        if (mounted) {
+          setPhone(res.data?.data?.phone_number ?? res.data?.phone_number ?? "");
+          setFirstName(res.data?.data?.first_name ?? res.data?.first_name ?? "");
+        }
       } catch {}
-      // If a profile already exists, jump straight to ready
+      // Determine context once on mount: a populated co_profile means this is
+      // a returning caller (Context B). A 404 or any failure defaults to
+      // Context A (first-time) — the safer assumption for an unknown state.
       try {
-        await api.get(`/co/profile/${userId}`);
-        if (mounted) setVoiceState("ready");
-      } catch {}
+        const profileRes = await api.get(`/co/profile/${userId}`);
+        const coProfile = profileRes.data?.data ?? profileRes.data;
+        if (mounted) setIsReturning(!!coProfile);
+      } catch {
+        if (mounted) setIsReturning(false);
+      }
     }
 
     connectSocket().then(() => { if (mounted) init(); });
@@ -162,8 +188,17 @@ export default function VoiceScreen() {
     return () => loop.stop();
   }, [voiceState]);
 
-  const iconUri = ICON_URI[voiceState];
-  const hasIcon = !!iconUri;
+  // Context B (returning) ready state has no CTA — quietly return home instead
+  useEffect(() => {
+    if (voiceState !== "ready" || !isReturning) return;
+    const timeout = setTimeout(() => {
+      router.replace("/(main)");
+    }, 3000);
+    return () => clearTimeout(timeout);
+  }, [voiceState, isReturning, router]);
+
+  const iconName = ICON_NAME[voiceState];
+  const hasIcon = !!iconName;
 
   return (
     <View style={s.root}>
@@ -174,17 +209,13 @@ export default function VoiceScreen() {
         {/* ── WAITING ── */}
         {voiceState === "waiting" && (
           <View style={s.waitingSection}>
-            <Text style={s.waitingLabel}>Co will call you shortly at</Text>
-            <Text style={s.headline}>{HEADLINE.waiting}</Text>
+            <Text style={s.headline}>{getHeadline("waiting", isReturning, firstName)}</Text>
+            <Text style={s.waitingLabel}>{getSubtitle("waiting", isReturning)}</Text>
             <Text style={s.phoneNumber}>
               {phone ? formatPhone(phone) : "your registered number"}
             </Text>
             <View style={s.dotsWrap}>
-              <Image
-                source={{ uri: A.loadingDots }}
-                style={s.loadingDots}
-                resizeMode="contain"
-              />
+              <TypingBubble />
             </View>
           </View>
         )}
@@ -219,16 +250,19 @@ export default function VoiceScreen() {
                 </View>
               )}
               <View style={s.iconCircle}>
-                <Image
-                  source={{ uri: iconUri }}
-                  style={s.iconImage}
-                  resizeMode="contain"
+                <SymbolView
+                  name={iconName as any}
+                  size={34}
+                  tintColor="#ffffff"
+                  type="monochrome"
                 />
               </View>
             </View>
 
-            <Text style={s.headline}>{HEADLINE[voiceState]}</Text>
-            <Text style={s.subtitle}>{SUBTITLE[voiceState]}</Text>
+            <Text style={s.headline}>{getHeadline(voiceState, isReturning, firstName)}</Text>
+            {getSubtitle(voiceState, isReturning) && (
+              <Text style={s.subtitle}>{getSubtitle(voiceState, isReturning)}</Text>
+            )}
 
             {/* Bouncing ball (processing) */}
             {voiceState === "processing" && (
@@ -241,8 +275,9 @@ export default function VoiceScreen() {
           </View>
         )}
 
-        {/* View Profile CTA (ready) */}
-        {voiceState === "ready" && (
+        {/* View Profile CTA — Context A (first-time) only. Context B quietly
+            returns home on its own via the auto-return effect above. */}
+        {voiceState === "ready" && !isReturning && (
           <View style={s.ctaWrap}>
             <TouchableOpacity
               style={s.cta}
@@ -263,13 +298,9 @@ export default function VoiceScreen() {
       </SafeAreaView>
 
       {/* VUI wave — absolute at screen bottom, behind safe area */}
-      {voiceState === "active" && (
-        <Image
-          source={{ uri: A.wave }}
-          style={s.wave}
-          resizeMode="cover"
-        />
-      )}
+      <View style={s.wave}>
+        <VuiWave />
+      </View>
     </View>
   );
 }
@@ -306,8 +337,6 @@ const s = StyleSheet.create({
     marginTop: 24,
   },
   dotsWrap: { alignItems: "center", marginTop: 104 },
-  loadingDots: { width: 72, height: 20 },
-
   // Icon states
   iconSection: { marginTop: 60 },
   iconWrap: {
@@ -339,13 +368,8 @@ const s = StyleSheet.create({
     height: 84,
     borderRadius: 42,
     backgroundColor: "rgba(255,255,255,0.5)",
-  },
-  iconImage: {
-    width: 50,
-    height: 50,
-    position: "absolute",
-    left: 17,
-    top: 17,
+    alignItems: "center",
+    justifyContent: "center",
   },
   subtitle: {
     fontSize: 15,
@@ -362,7 +386,7 @@ const s = StyleSheet.create({
   },
 
   // CTA + sign out pushed to bottom
-  ctaWrap: { position: "absolute", left: 0, right: 0, bottom: 80 },
+  ctaWrap: { position: "absolute", left: 32, right: 32, bottom: 80 },
   cta: {
     borderWidth: 1,
     borderColor: "#ffffff",
@@ -372,10 +396,10 @@ const s = StyleSheet.create({
     justifyContent: "center",
   },
   ctaText: {
-    fontSize: 15,
+    fontSize: 16,
     fontWeight: "300",
     color: "#ffffff",
-    letterSpacing: 0.3,
+    letterSpacing: 0.2,
   },
   signOutRow: {
     position: "absolute",

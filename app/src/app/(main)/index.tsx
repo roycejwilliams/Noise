@@ -6,8 +6,6 @@ import { useRouter } from "expo-router";
 import { useEffect, useRef, useState } from "react";
 import {
   ActivityIndicator,
-  Animated,
-  Image,
   LayoutAnimation,
   Platform,
   StyleSheet,
@@ -22,8 +20,6 @@ import { SafeAreaView } from "react-native-safe-area-context";
 if (Platform.OS === "android" && UIManager.setLayoutAnimationEnabledExperimental) {
   UIManager.setLayoutAnimationEnabledExperimental(true);
 }
-
-const WAVE_URI = "https://www.figma.com/api/mcp/asset/40602fdd-98ba-44fc-9fdf-269bfeda0570";
 
 const GREETINGS = [
   "{name}. Your people are out there.",
@@ -77,19 +73,6 @@ export default function HomeScreen() {
   const [submitting, setSubmitting] = useState(false);
   const [placementNotification, setPlacementNotification] = useState<CoNotification | null>(null);
   const userIdRef = useRef<string | null>(null);
-  const waveOpacity = useRef(new Animated.Value(0.6)).current;
-
-  // Breathing wave animation
-  useEffect(() => {
-    const loop = Animated.loop(
-      Animated.sequence([
-        Animated.timing(waveOpacity, { toValue: 1.0, duration: 3000, useNativeDriver: true }),
-        Animated.timing(waveOpacity, { toValue: 0.6, duration: 3000, useNativeDriver: true }),
-      ])
-    );
-    loop.start();
-    return () => loop.stop();
-  }, []);
 
   // Load greeting + subheading + placement notification
   useEffect(() => {
@@ -187,15 +170,6 @@ export default function HomeScreen() {
 
   return (
     <View style={s.root}>
-      {/* VUI wave — ambient background in lower 60% */}
-      <Animated.View style={[s.waveWrap, { opacity: waveOpacity }]}>
-        <Image
-          source={{ uri: WAVE_URI }}
-          style={s.waveImage}
-          resizeMode="cover"
-        />
-      </Animated.View>
-
       <SafeAreaView style={s.safe}>
         {/* Greeting */}
         <View style={s.header}>
@@ -288,19 +262,6 @@ export default function HomeScreen() {
 const s = StyleSheet.create({
   root: { flex: 1, backgroundColor: "#000000" },
   safe: { flex: 1, paddingHorizontal: 32, paddingBottom: 8 },
-
-  // Ambient wave
-  waveWrap: {
-    position: "absolute",
-    left: 0,
-    right: 0,
-    bottom: 0,
-    height: "60%",
-  },
-  waveImage: {
-    width: "100%",
-    height: "100%",
-  },
 
   // Header
   header: { marginTop: 48 },
