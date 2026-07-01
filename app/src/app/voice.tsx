@@ -39,7 +39,9 @@ function formatPhone(raw: string): string {
 function getHeadline(state: VoiceState, isReturning: boolean, firstName: string): string {
   switch (state) {
     case "waiting":
-      return isReturning ? `${firstName}. Co is ready.` : "Co is about to call you.";
+      return isReturning
+        ? `${firstName.trim() || "You're back"}. Co is ready.`
+        : "Co is about to call you.";
     case "ringing":
       return isReturning ? "Co is calling." : "Co is ready to meet you.";
     case "active":
