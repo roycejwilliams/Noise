@@ -169,7 +169,7 @@ export const sendSMS = async ({
 
     if (register) {
       await client.messages.create({
-        body: `Your BR3W verification code is below. It expires in 5 minutes.\n${otp_code}`,
+        body: `Your CoPatible verification code is below. It expires in 5 minutes.\n${otp_code}`,
         to: phone_number,
         from: process.env.TWILIO_PHONE_NUMBER!,
       });
