@@ -1,6 +1,6 @@
 import { Resend } from "resend";
-import twilio from "twilio";
 import "dotenv/config";
+import sendblue from "./services/sendblue.js";
 
 interface EmailProp {
   status?: "accepted" | "rejected";
@@ -129,179 +129,97 @@ export const sendSMS = async ({
     return;
   }
 
-  if (!process.env.TWILIO_ACCOUNT_SID || !process.env.TWILIO_AUTH_TOKEN) return;
-
-  const client = twilio(
-    process.env.TWILIO_ACCOUNT_SID,
-    process.env.TWILIO_AUTH_TOKEN,
-  );
+  const send = (content: string) =>
+    sendblue.messages.send({
+      number: phone_number,
+      content,
+      from_number: process.env.SENDBLUE_PHONE_NUMBER!,
+    });
 
   try {
     if (status === "accepted") {
-      await client.messages.create({
-        body: `You're in. You were chosen to join BR3W. Use the code below to get started.\n${otp_code}`,
-        to: phone_number,
-        from: process.env.TWILIO_PHONE_NUMBER!,
-      });
+      await send(`You're in. You were chosen to join BR3W. Use the code below to get started.\n${otp_code}`);
     } else if (status === "rejected") {
-      await client.messages.create({
-        body: `Your BR3W application wasn't accepted. You're welcome to update and resubmit.`,
-        to: phone_number,
-        from: process.env.TWILIO_PHONE_NUMBER!,
-      });
+      await send(`Your BR3W application wasn't accepted. You're welcome to update and resubmit.`);
     }
 
     if (resent) {
-      await client.messages.create({
-        body: `Here's your new BR3W verification code.\n${otp_code}`,
-        to: phone_number,
-        from: process.env.TWILIO_PHONE_NUMBER!,
-      });
+      await send(`Here's your new BR3W verification code.\n${otp_code}`);
     }
 
     if (login) {
-      await client.messages.create({
-        body: `Your BR3W login code is below. It expires in 5 minutes.\n${otp_code}`,
-        to: phone_number,
-        from: process.env.TWILIO_PHONE_NUMBER!,
-      });
+      await send(`Your BR3W login code is below. It expires in 5 minutes.\n${otp_code}`);
     }
 
     if (register) {
-      await client.messages.create({
-        body: `Your CoPatible verification code is below. It expires in 5 minutes.\n${otp_code}`,
-        to: phone_number,
-        from: process.env.TWILIO_PHONE_NUMBER!,
-      });
+      await send(`Your CoPatible verification code is below. It expires in 5 minutes.\n${otp_code}`);
     }
 
     const link = (url?: string) => (url ? `\n${url}` : "");
 
     if (invite_type === "received" && invite_target === "circle") {
-      await client.messages.create({
-        body: `You've been invited to join a circle on BR3W. Open the app to accept or decline.${link(action_url)}`,
-        to: phone_number,
-        from: process.env.TWILIO_PHONE_NUMBER!,
-      });
+      await send(`You've been invited to join a circle on BR3W. Open the app to accept or decline.${link(action_url)}`);
     } else if (invite_type === "received" && invite_target === "moment") {
-      await client.messages.create({
-        body: `You've been invited to a moment on BR3W. Open the app to see the details.${link(action_url)}`,
-        to: phone_number,
-        from: process.env.TWILIO_PHONE_NUMBER!,
-      });
+      await send(`You've been invited to a moment on BR3W. Open the app to see the details.${link(action_url)}`);
     } else if (invite_type === "accepted") {
-      await client.messages.create({
-        body: `Your invite was accepted. They're in.`,
-        to: phone_number,
-        from: process.env.TWILIO_PHONE_NUMBER!,
-      });
+      await send(`Your invite was accepted. They're in.`);
     } else if (invite_type === "rejected") {
-      await client.messages.create({
-        body: `Your invite was declined.`,
-        to: phone_number,
-        from: process.env.TWILIO_PHONE_NUMBER!,
-      });
+      await send(`Your invite was declined.`);
     }
 
     if (transfer_ticket) {
-      await client.messages.create({
-        body: `A BR3W ticket was transferred to you. Open the app to view the moment details and your entry code.${link(action_url)}`,
-        to: phone_number,
-        from: process.env.TWILIO_PHONE_NUMBER!,
-      });
+      await send(`A BR3W ticket was transferred to you. Open the app to view the moment details and your entry code.${link(action_url)}`);
     }
 
     if (moment_recap) {
-      await client.messages.create({
-        body: `${moment_recap.moments_name} is over. Your recap is ready — open BR3W to relive the night.${link(action_url)}`,
-        to: phone_number,
-        from: process.env.TWILIO_PHONE_NUMBER!,
-      });
+      await send(`${moment_recap.moments_name} is over. Your recap is ready — open BR3W to relive the night.${link(action_url)}`);
     }
 
     if (photo_uploaded) {
-      await client.messages.create({
-        body: `${photo_uploaded.uploader_username} added a photo to ${photo_uploaded.moments_name}. Open BR3W to see the recap.${link(action_url)}`,
-        to: phone_number,
-        from: process.env.TWILIO_PHONE_NUMBER!,
-      });
+      await send(`${photo_uploaded.uploader_username} added a photo to ${photo_uploaded.moments_name}. Open BR3W to see the recap.${link(action_url)}`);
     }
 
     if (check_in) {
-      await client.messages.create({
-        body: `${check_in.attendee_username} just checked in to ${check_in.moments_name}.${link(action_url)}`,
-        to: phone_number,
-        from: process.env.TWILIO_PHONE_NUMBER!,
-      });
+      await send(`${check_in.attendee_username} just checked in to ${check_in.moments_name}.${link(action_url)}`);
     }
 
     if (checked_in_self) {
-      await client.messages.create({
-        body: `You're officially checked in to ${checked_in_self.moments_name}. Enjoy the night.${link(action_url)}`,
-        to: phone_number,
-        from: process.env.TWILIO_PHONE_NUMBER!,
-      });
+      await send(`You're officially checked in to ${checked_in_self.moments_name}. Enjoy the night.${link(action_url)}`);
     }
 
     if (moment_reminder) {
-      await client.messages.create({
-        body: `Reminder: ${moment_reminder.moments_name} starts at ${moment_reminder.time}. ${moment_reminder.location_name}. Don't miss it.${link(action_url)}`,
-        to: phone_number,
-        from: process.env.TWILIO_PHONE_NUMBER!,
-      });
+      await send(`Reminder: ${moment_reminder.moments_name} starts at ${moment_reminder.time}. ${moment_reminder.location_name}. Don't miss it.${link(action_url)}`);
     }
 
     if (circle_invite_reminder) {
-      await client.messages.create({
-        body: `You still have a pending circle invite on BR3W — ${circle_invite_reminder.circle_name}. Open the app to respond.${link(action_url)}`,
-        to: phone_number,
-        from: process.env.TWILIO_PHONE_NUMBER!,
-      });
+      await send(`You still have a pending circle invite on BR3W — ${circle_invite_reminder.circle_name}. Open the app to respond.${link(action_url)}`);
     }
 
     if (moment_invite_reminder) {
-      await client.messages.create({
-        body: `You still haven't responded to your invite for ${moment_invite_reminder.moments_name} — it starts at ${moment_invite_reminder.time}. Open BR3W to respond.${link(action_url)}`,
-        to: phone_number,
-        from: process.env.TWILIO_PHONE_NUMBER!,
-      });
+      await send(`You still haven't responded to your invite for ${moment_invite_reminder.moments_name} — it starts at ${moment_invite_reminder.time}. Open BR3W to respond.${link(action_url)}`);
     }
 
     if (external_invite) {
       const context = external_invite.target_name
         ? ` to ${external_invite.invite_type === "moment" ? `a moment called "${external_invite.target_name}"` : `a circle called "${external_invite.target_name}"`}`
         : "";
-      await client.messages.create({
-        body: `${external_invite.inviter_name} invited you${context} on BR3W. Visit br3w.app to request access.`,
-        to: phone_number,
-        from: process.env.TWILIO_PHONE_NUMBER!,
-      });
+      await send(`${external_invite.inviter_name} invited you${context} on BR3W. Visit br3w.app to request access.`);
     }
 
     if (knock_received) {
-      await client.messages.create({
-        body: `${knock_received.requester_name} is knocking to get into ${knock_received.moments_name}. Open BR3W to let them in or pass.${link(action_url)}`,
-        to: phone_number,
-        from: process.env.TWILIO_PHONE_NUMBER!,
-      });
+      await send(`${knock_received.requester_name} is knocking to get into ${knock_received.moments_name}. Open BR3W to let them in or pass.${link(action_url)}`);
     }
 
     if (knock_decided) {
-      await client.messages.create({
-        body: knock_decided.approved
+      await send(
+        knock_decided.approved
           ? `You're in. Your knock was approved for ${knock_decided.moments_name}. Open BR3W for details.${link(action_url)}`
           : `Not this time. Your knock for ${knock_decided.moments_name} wasn't approved.`,
-        to: phone_number,
-        from: process.env.TWILIO_PHONE_NUMBER!,
-      });
+      );
     }
 
     if (welcome) {
-      await client.messages.create({
-        body: `Welcome to BR3W. This is invite-only for a reason — set intentions, build circles, and make moments that matter. Open the app to begin. br3w.app`,
-        to: phone_number,
-        from: process.env.TWILIO_PHONE_NUMBER!,
-      });
+      await send(`Welcome to BR3W. This is invite-only for a reason — set intentions, build circles, and make moments that matter. Open the app to begin. br3w.app`);
     }
   } catch (error) {
     console.error("Cannot process SMS at this time", error);
