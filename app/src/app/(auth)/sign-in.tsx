@@ -1,5 +1,5 @@
 // Auth container — one screen that toggles between sign-up ("New") and sign-in ("Login").
-// This mirrors the BR3W pattern: mode is component state, not a router param.
+// This mirrors the CoPatible pattern: mode is component state, not a router param.
 // The animated pill slides between the two options without any navigation event.
 // Sub-forms (SignIn, SignUp) call onSuccess(userId) when the backend responds,
 // and this container is the only thing that knows about the OTP route.

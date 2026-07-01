@@ -343,7 +343,7 @@ export function createMomentsRouter(
         if (host && requester) {
           const requesterName =
             `${requester.first_name} ${requester.last_name}`.trim();
-          const momentUrl = `https://br3w.app/moments/${req.params.moment_id}`;
+          const momentUrl = `https://app.copatible.com/moments/${req.params.moment_id}`;
           await sendEmail({
             email: host.email,
             knock_received: {
@@ -572,7 +572,7 @@ LEFT JOIN invite_attendees ia ON ia.attendee_id = u.id AND ia.moment_id = $1`,
           ],
         );
 
-        const momentUrl = `https://br3w.app/moments/${knock.moment_id}`;
+        const momentUrl = `https://app.copatible.com/moments/${knock.moment_id}`;
 
         if (status === "accepted") {
           const capacityResult = await pool.query(
@@ -934,7 +934,7 @@ LEFT JOIN invite_attendees ia ON ia.attendee_id = u.id AND ia.moment_id = $1`,
               moments_name: creator.moments_name,
               uploader_username: uploader.username,
             },
-            action_url: `https://br3w.app/moments/${req.params.moment_id}`,
+            action_url: `https://app.copatible.com/moments/${req.params.moment_id}`,
           });
           await sendSMS({
             phone_number: creator.phone_number,
@@ -942,7 +942,7 @@ LEFT JOIN invite_attendees ia ON ia.attendee_id = u.id AND ia.moment_id = $1`,
               moments_name: creator.moments_name,
               uploader_username: uploader.username,
             },
-            action_url: `https://br3w.app/moments/${req.params.moment_id}`,
+            action_url: `https://app.copatible.com/moments/${req.params.moment_id}`,
           });
         }
 
@@ -1042,7 +1042,7 @@ LEFT JOIN invite_attendees ia ON ia.attendee_id = u.id AND ia.moment_id = $1`,
         );
         const creator = getCreator.rows[0];
 
-        const checkInUrl = `https://br3w.app/moments/${moment_id}`;
+        const checkInUrl = `https://app.copatible.com/moments/${moment_id}`;
         const checkInPayload = {
           moments_name: momentResult.rows[0].moments_name,
           attendee_username: attendee.username,
@@ -1221,13 +1221,13 @@ LEFT JOIN invite_attendees ia ON ia.attendee_id = u.id AND ia.moment_id = $1`,
             email: recipientUser.email,
             invite_type: "received",
             invite_target: "moment",
-            action_url: `https://br3w.app/moments/${req.params.id}`,
+            action_url: `https://app.copatible.com/moments/${req.params.id}`,
           });
           await sendSMS({
             phone_number: recipientUser.phone_number,
             invite_type: "received",
             invite_target: "moment",
-            action_url: `https://br3w.app/moments/${req.params.id}`,
+            action_url: `https://app.copatible.com/moments/${req.params.id}`,
           });
           return res.status(201).send({
             success: true,
@@ -1284,12 +1284,12 @@ LEFT JOIN invite_attendees ia ON ia.attendee_id = u.id AND ia.moment_id = $1`,
           await sendEmail({
             email: getRecipient.email,
             transfer_ticket: true,
-            action_url: `https://br3w.app/moments/${req.params.moment_id}`,
+            action_url: `https://app.copatible.com/moments/${req.params.moment_id}`,
           });
           await sendSMS({
             phone_number: getRecipient.phone_number,
             transfer_ticket: true,
-            action_url: `https://br3w.app/moments/${req.params.moment_id}`,
+            action_url: `https://app.copatible.com/moments/${req.params.moment_id}`,
           });
           return res.status(200).send({
             success: true,
