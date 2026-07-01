@@ -6,7 +6,7 @@ import twilio from "twilio";
 import type { Server as IOServer } from "socket.io";
 import pool from "../db/db.js";
 import { sendEmail, sendSMS } from "../otpActions.js";
-import { authenticateToken } from "../middleware/auth.js";
+import { authenticateToken, userRole } from "../middleware/auth.js";
 import { generateEmbedding, generateGoalEmbedding } from "../services/embeddings.js";
 import { findBestCircle } from "../services/matching.js";
 import { findBestVenue } from "../services/places.js";
@@ -143,6 +143,12 @@ router.post(
   async (req: Request, res: Response, next: NextFunction) => {
     try {
       const { user_id } = req.params;
+
+      if (req.user?.id !== user_id) {
+        return res
+          .status(403)
+          .send("Unauthorized: You can only access your own account");
+      }
 
       const userResult = await pool.query(
         `SELECT u.first_name, u.phone_number, u.subscription_status, cp.hume_chat_group_id
@@ -460,8 +466,15 @@ router.post(
 // GET /co/profile/:user_id
 router.get(
   "/profile/:user_id",
+  authenticateToken,
   async (req: Request, res: Response, next: NextFunction) => {
     try {
+      if (req.user?.id !== req.params.user_id) {
+        return res
+          .status(403)
+          .send("Unauthorized: You can only access your own account");
+      }
+
       const result = await pool.query(
         `SELECT cp.*, COUNT(cm.id)::int AS check_in_count
          FROM co_profiles cp
@@ -480,11 +493,19 @@ router.get(
   },
 );
 
-// PUT /co/profile/:user_id
+// PUT /co/profile/:user_id — self-service edit of a user's own psychographic
+// profile. trust_score/trust_components are computed by Co, not user-editable.
 router.put(
   "/profile/:user_id",
+  authenticateToken,
   async (req: Request, res: Response, next: NextFunction) => {
     try {
+      if (req.user?.id !== req.params.user_id) {
+        return res
+          .status(403)
+          .send("Unauthorized: You can only access your own account");
+      }
+
       const allowed = [
         "life_chapters",
         "social_energy",
@@ -495,8 +516,6 @@ router.put(
         "blockers",
         "availability_pattern",
         "city",
-        "trust_score",
-        "trust_components",
       ];
 
       const filteredKeys = Object.keys(req.body).filter((key) =>
@@ -531,6 +550,12 @@ router.post(
   async (req: Request, res: Response, next: NextFunction) => {
     try {
       const user_id = req.params.user_id as string;
+
+      if (req.user?.id !== user_id) {
+        return res
+          .status(403)
+          .send("Unauthorized: You can only access your own account");
+      }
 
       // Pre-flight — skip placement if user is already in an active circle
       const existingMembership = await pool.query(
@@ -682,6 +707,8 @@ router.post(
 // Uses member activity preferences to suggest the best experience
 router.post(
   "/moment/:circle_id",
+  authenticateToken,
+  userRole("admin"),
   async (req: Request, res: Response, next: NextFunction) => {
     try {
       const { circle_id } = req.params;
@@ -959,6 +986,8 @@ Make it feel intimate, specific, and intentional. Not generic.`,
 //POST /co/message/:user_id - Co sends a message to a user
 router.post(
   "/message/:user_id",
+  authenticateToken,
+  userRole("admin"),
   async (req: Request, res: Response, next: NextFunction) => {
     try {
       const { user_id } = req.params;
@@ -1140,6 +1169,8 @@ router.post(
 //POST /message/group/:circle_id - Co sends a message to the whole circle
 router.post(
   "/message/group/:circle_id",
+  authenticateToken,
+  userRole("admin"),
   async (req: Request, res: Response, next: NextFunction) => {
     try {
       const { circle_id } = req.params;
@@ -1263,6 +1294,12 @@ router.post(
       const { user_id } = req.params;
       const { transcript } = req.body as { transcript?: string };
 
+      if (req.user?.id !== user_id) {
+        return res
+          .status(403)
+          .send("Unauthorized: You can only access your own account");
+      }
+
       if (!user_id || !transcript?.trim()) {
         return res.status(400).send("Missing required fields.");
       }
@@ -1372,9 +1409,17 @@ router.post(
 // GET /co/notifications/:user_id — recent Co activity for the app notification surface
 router.get(
   "/notifications/:user_id",
+  authenticateToken,
   async (req: Request, res: Response, next: NextFunction) => {
     try {
       const { user_id } = req.params;
+
+      if (req.user?.id !== user_id) {
+        return res
+          .status(403)
+          .send("Unauthorized: You can only access your own account");
+      }
+
       const result = await pool.query(
         `SELECT id, memory_type, content, created_at
          FROM co_memories
@@ -1399,6 +1444,12 @@ router.post(
     try {
       const { user_id } = req.params;
       const { latitude, longitude } = req.body as { latitude?: number; longitude?: number };
+
+      if (req.user?.id !== user_id) {
+        return res
+          .status(403)
+          .send("Unauthorized: You can only access your own account");
+      }
 
       if (typeof latitude !== "number" || typeof longitude !== "number") {
         return res.status(400).send("Missing required fields: latitude and longitude (numbers).");

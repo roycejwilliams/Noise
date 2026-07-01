@@ -120,6 +120,12 @@ export function createCirclesRouter(
     authenticateToken,
     async (req, res, next) => {
       try {
+        if (req.user?.id !== req.params.user_id) {
+          return res
+            .status(400)
+            .send("Unauthorized: You can only access your own account");
+        }
+
         const getCirclesWithMembers = await pool.query(
           `SELECT
   c.id,

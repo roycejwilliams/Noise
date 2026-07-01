@@ -89,11 +89,6 @@ export default function MainLayout() {
           ),
         }}
       />
-      {/* voice.tsx stays in this folder but is not a tab — pushed from root stack */}
-      <Tabs.Screen
-        name="voice"
-        options={{ href: null }}
-      />
     </Tabs>
   );
 }

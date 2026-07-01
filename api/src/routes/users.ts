@@ -155,6 +155,12 @@ export function createUsersRouter(authenticateToken: RequestHandler): Router {
     authenticateToken,
     async (req, res, next) => {
       try {
+        if (req.user?.id !== req.params.id) {
+          return res
+            .status(403)
+            .send("Unauthorized: You can only access your own account");
+        }
+
         const getActiveConnections = await pool.query(
           `SELECT DISTINCT
         u.id,

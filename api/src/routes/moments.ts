@@ -858,8 +858,14 @@ LEFT JOIN invite_attendees ia ON ia.attendee_id = u.id AND ia.moment_id = $1`,
   // Public POST — no auth — accepts a Cloudinary URL already uploaded by the web client
   router.post("/moments/:moment_id/photos/public", async (req, res, next) => {
     const { image_url } = req.body;
-    if (!image_url || !image_url.startsWith("https://")) {
-      return res.status(400).send("image_url is required and must be https.");
+    if (
+      !image_url ||
+      !image_url.startsWith("https://") ||
+      !image_url.includes("/storage/v1/object/public/moment-photos/")
+    ) {
+      return res
+        .status(400)
+        .send("image_url is required and must be an uploaded moment photo.");
     }
     try {
       const momentCheck = await pool.query(

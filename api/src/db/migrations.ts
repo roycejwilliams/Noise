@@ -189,4 +189,10 @@ export function runMigrations() {
       console.error("users.subscription_status migration failed:", err),
     );
 
+  pool
+    .query(`ALTER TABLE users ADD COLUMN IF NOT EXISTS stripe_customer_id TEXT`)
+    .catch((err: Error) =>
+      console.error("users.stripe_customer_id migration failed:", err),
+    );
+
 }

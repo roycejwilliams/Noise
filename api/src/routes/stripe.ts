@@ -1,4 +1,4 @@
-import express, {
+import {
   NextFunction,
   Request,
   RequestHandler,
@@ -66,28 +66,32 @@ export function stripeRouter(
   );
 
   //POST /payments/webhook — handles Stripe events (payment success, cancellation)
-  // The express.raw middleware keeps the request body unparsed;
-  // this is necessary for the signature verification process
+  // Body is kept raw (unparsed) by server.ts's app-level express.raw() applied
+  // to this exact path before the global express.json() — required for Stripe
+  // signature verification. Do NOT add another express.raw() here: body-parsers
+  // consume the request stream once, so a second raw() on an already-consumed
+  // stream hangs the request instead of parsing it.
   router.post(
     "/webhook",
-    express.raw({ type: "application/json" }),
     async (req: Request, res: Response, next: NextFunction) => {
-      let event;
+      if (!process.env.STRIPE_WEBHOOK) {
+        console.error("STRIPE_WEBHOOK is not configured — rejecting webhook.");
+        return res.status(500).send("Webhook not configured.");
+      }
 
-      if (process.env.STRIPE_WEBHOOK!) {
-        const signature = req.headers["stripe-signature"];
+      let event: Stripe.Event;
+      try {
+        event = stripeClient.webhooks.constructEvent(
+          req.body,
+          req.headers["stripe-signature"]!,
+          process.env.STRIPE_WEBHOOK,
+        );
+      } catch (error) {
+        console.error("Stripe webhook signature verification failed:", error);
+        return res.status(400).send("Webhook signature verification failed.");
+      }
 
-        try {
-          event = stripeClient.webhooks.constructEvent(
-            req.body,
-            signature!,
-            process.env.STRIPE_WEBHOOK,
-          );
-        } catch (error) {
-          next(error);
-          return res.status(400).send("Webhook signature verification failed.");
-        }
-
+      try {
         const subscription = event.data.object as Stripe.Subscription;
         const stripeCustomerId = subscription.customer;
 
@@ -148,7 +152,9 @@ export function stripeRouter(
           default:
             console.log(`Unhandled event type ${event.type}`);
         }
-        res.json({ received: true });
+        return res.status(200).json({ received: true });
+      } catch (error) {
+        next(error);
       }
     },
   );
@@ -161,6 +167,12 @@ export function stripeRouter(
       try {
         // 1. Extract the user_id from the URL path parameters
         const { user_id } = req.params;
+
+        if (req.user?.id !== user_id) {
+          return res
+            .status(403)
+            .send("Unauthorized: You can only access your own account");
+        }
 
         // 2. Fetch the user from the database
         const userInfo = await pool.query(`SELECT * FROM users WHERE id = $1`, [

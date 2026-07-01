@@ -136,8 +136,8 @@ async function step1_createUserAndAuth() {
     const expiry = new Date(Date.now() + 10 * 60 * 1000).toISOString(); // +10 min
 
     const { rows } = await client.query(
-      `INSERT INTO users (first_name, last_name, email, phone_number, username, otp_code, otp_expiry)
-       VALUES ('Test', 'E2E', 'e2e-test@copatible.internal', $1, 'e2e_test_user', $2, $3)
+      `INSERT INTO users (first_name, last_name, email, phone_number, username, otp_code, otp_expiry, role)
+       VALUES ('Test', 'E2E', 'e2e-test@copatible.internal', $1, 'e2e_test_user', $2, $3, 'admin')
        RETURNING id`,
       [TEST_USER_PHONE, TEST_OTP, expiry],
     );
@@ -315,7 +315,7 @@ async function step6_approveCircle() {
 
 async function step7_createMoment() {
   console.log("\nStep 7 — Create Moment (POST /co/moment/:circle_id)");
-  const { status, data } = await api("POST", `/co/moment/${circleId}`);
+  const { status, data } = await api("POST", `/co/moment/${circleId}`, undefined, jwtToken!);
   assert(status === 201, `co/moment returned ${status}: ${JSON.stringify(data)}`);
   const d = data as any;
   momentId = d?.data?.moment_id as string;

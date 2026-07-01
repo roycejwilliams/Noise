@@ -9,41 +9,49 @@ export function createReferralsRouter(authenticateToken: RequestHandler): Router
     "/",
     authenticateToken,
     async (req, res, next) => {
+      const { recipient, reason } = req.body;
+      const referrer_id = req.user?.id;
+
+      if (!recipient || !reason) {
+        return res.status(400).send("recipient and reason are required.");
+      }
+
+      // All statements share one client so BEGIN/COMMIT/ROLLBACK apply to the
+      // same transaction — pool.query() alone can hand each call a different
+      // pooled connection. FOR UPDATE locks the row so two concurrent
+      // requests can't both pass the availability check and double-spend.
+      const client = await pool.connect();
       try {
-        const { recipient, reason } = req.body;
-        const referrer_id = req.user?.id;
+        await client.query("BEGIN");
 
-        if (!recipient || !reason) {
-          return res.status(400).send("recipient and reason are required.");
-        }
-
-        const userResult = await pool.query(
-          "SELECT referrals_available FROM users WHERE id = $1",
+        const userResult = await client.query(
+          "SELECT referrals_available FROM users WHERE id = $1 FOR UPDATE",
           [referrer_id],
         );
 
-        if (userResult.rows[0].referrals_available <= 0) {
+        if (!userResult.rows[0] || userResult.rows[0].referrals_available <= 0) {
+          await client.query("ROLLBACK");
           return res.status(400).send("No referrals available.");
         }
 
-        await pool.query("BEGIN");
-
-        await pool.query(
+        await client.query(
           "INSERT INTO referrals (referrer_id, recipient, reason) VALUES ($1, $2, $3)",
           [referrer_id, recipient, reason],
         );
 
-        await pool.query(
+        await client.query(
           "UPDATE users SET referrals_available = referrals_available - 1 WHERE id = $1",
           [referrer_id],
         );
 
-        await pool.query("COMMIT");
+        await client.query("COMMIT");
 
         return res.status(201).send({ success: true });
       } catch (error) {
-        await pool.query("ROLLBACK");
+        await client.query("ROLLBACK").catch(() => {});
         next(error);
+      } finally {
+        client.release();
       }
     },
   );
