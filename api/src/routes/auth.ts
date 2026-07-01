@@ -62,6 +62,11 @@ export function createAuthRouter(): Router {
             phone_number: UserAuthorize.phone_number,
             welcome: true,
           });
+        } else {
+          await sendSMS({
+            phone_number: UserAuthorize.phone_number,
+            welcome_back: true,
+          });
         }
 
         res.cookie("token", authorize, {

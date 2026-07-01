@@ -57,6 +57,7 @@ interface MessageProp {
   knock_received?: { moments_name: string; requester_name: string };
   knock_decided?: { moments_name: string; approved: boolean };
   welcome?: boolean;
+  welcome_back?: boolean;
   action_url?: string;
 }
 
@@ -122,6 +123,7 @@ export const sendSMS = async ({
   knock_received,
   knock_decided,
   welcome,
+  welcome_back,
   action_url,
 }: MessageProp) => {
   if (process.env.NODE_ENV !== "production") {
@@ -219,7 +221,11 @@ export const sendSMS = async ({
     }
 
     if (welcome) {
-      await send(`Welcome to CoPatible. This is invite-only for a reason — set intentions, build circles, and make moments that matter. Open the app to begin. app.copatible.com`);
+      await send(`Welcome to CoPatible. Curated by chapter, built for connection. Co will be in touch soon.`);
+    }
+
+    if (welcome_back) {
+      await send(`Welcome back to CoPatible.`);
     }
   } catch (error) {
     console.error("Cannot process SMS at this time", error);
