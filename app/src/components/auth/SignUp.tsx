@@ -16,23 +16,32 @@ interface Props {
   onSuccess: (userId: string) => void;
 }
 
+// Splits a single "Full Name" input into first/last name — the backend
+// requires both, but the form only collects one field.
+function splitName(fullName: string) {
+  const parts = fullName.trim().split(/\s+/);
+  return { firstName: parts[0] ?? "", lastName: parts.slice(1).join(" ") };
+}
+
 export default function SignUp({ onSuccess }: Props) {
-  const [firstName, setFirstName] = useState("");
+  const [fullName, setFullName] = useState("");
   const [email, setEmail] = useState("");
   const [phone, setPhone] = useState("");
   const { mutate: register, isPending } = useRegister();
 
-  const isValid = firstName.trim() && email.trim() && phone.trim();
+  const isValid = fullName.trim() && email.trim() && phone.trim();
 
   const handleContinue = () => {
     if (!isValid || isPending) return;
+    const { firstName, lastName } = splitName(fullName);
     register(
       {
-        first_name: firstName.trim(),
+        first_name: firstName,
+        last_name: lastName,
         email: email.trim(),
         phone_number: phone.trim(),
       },
-      { onSuccess: (res) => onSuccess(res.data?.data?.id) }
+      { onSuccess: (res) => onSuccess(res.data?.user_id) }
     );
   };
 
@@ -41,8 +50,8 @@ export default function SignUp({ onSuccess }: Props) {
       <Text style={styles.label}>Full Name</Text>
       <TextInput
         style={styles.input}
-        value={firstName}
-        onChangeText={setFirstName}
+        value={fullName}
+        onChangeText={setFullName}
         placeholder="Full Name"
         placeholderTextColor="rgba(255,255,255,0.25)"
         autoCapitalize="words"

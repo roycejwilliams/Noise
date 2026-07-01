@@ -37,6 +37,7 @@ interface MessageProp {
   otp_code?: string;
   resent?: boolean;
   login?: boolean;
+  register?: boolean;
   invite_type?: "received" | "accepted" | "rejected";
   invite_target?: "circle" | "moment";
   transfer_ticket?: boolean;
@@ -108,6 +109,7 @@ export const sendSMS = async ({
   invite_type,
   invite_target,
   login,
+  register,
   transfer_ticket,
   moment_recap,
   photo_uploaded,
@@ -160,6 +162,14 @@ export const sendSMS = async ({
     if (login) {
       await client.messages.create({
         body: `Your BR3W login code is below. It expires in 5 minutes.\n${otp_code}`,
+        to: phone_number,
+        from: process.env.TWILIO_PHONE_NUMBER!,
+      });
+    }
+
+    if (register) {
+      await client.messages.create({
+        body: `Your CoPatible verification code is below. It expires in 5 minutes.\n${otp_code}`,
         to: phone_number,
         from: process.env.TWILIO_PHONE_NUMBER!,
       });

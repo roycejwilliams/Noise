@@ -8,11 +8,12 @@ import { useRouter } from "expo-router";
 import * as SecureStore from "expo-secure-store";
 import { useCallback } from "react";
 
-// POST /auth/register — creates a new user, triggers OTP to their email/phone
+// POST /auth/register — creates a new user, triggers OTP to their phone
 export const useRegister = () =>
   useMutation({
     mutationFn: (data: {
       first_name: string;
+      last_name: string;
       email: string;
       phone_number: string;
     }) => api.post("/auth/register", data),
