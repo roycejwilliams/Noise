@@ -106,6 +106,58 @@ export function createAuthRouter(): Router {
     }
   });
 
+  // POST /auth/register — self-serve signup, independent of the /applications
+  // admin-approval pipeline. Creates a user row directly and sends an OTP.
+  router.post("/register", async (req, res, next) => {
+    if (!req.body) return res.status(400).send("Request body cannot be empty.");
+
+    const { first_name, last_name, email, phone_number } = req.body;
+
+    if (!first_name || !last_name || !email || !phone_number) {
+      const missing = ["first_name", "last_name", "email", "phone_number"].find(
+        (field) => !req.body[field],
+      );
+      return res.status(400).send(`${missing} is required.`);
+    }
+
+    const otp = generateOTP();
+    const expiryAt = Date.now() + 300000;
+    const expiryTimeStamp = new Date(expiryAt).toISOString();
+
+    try {
+      const existing = await pool.query(
+        `SELECT id FROM users WHERE email = $1 OR phone_number = $2`,
+        [email, phone_number],
+      );
+
+      if (existing.rows[0]) {
+        return res.status(409).send("A user with that email or phone number already exists.");
+      }
+
+      const created = await pool.query(
+        `INSERT INTO users (first_name, last_name, email, phone_number, username, subscription_status, role, otp_code, otp_expiry)
+         VALUES ($1, $2, $3, $4, $5, 'inactive', 'user', $6, $7)
+         RETURNING *`,
+        [first_name, last_name, email, phone_number, email.split("@")[0], otp, expiryTimeStamp],
+      );
+
+      const newUser: UserProp = created.rows[0];
+
+      await sendSMS({
+        phone_number: newUser.phone_number,
+        otp_code: otp.toString(),
+        register: true,
+      });
+
+      return res.status(200).send({
+        message: "OTP sent",
+        user_id: newUser.id,
+      });
+    } catch (error) {
+      next(error);
+    }
+  });
+
   // POST /auth/login — looks up existing user by email, sends OTP
   router.post("/login", async (req, res, next) => {
     const updatedGeneratedOTP = generateOTP();
