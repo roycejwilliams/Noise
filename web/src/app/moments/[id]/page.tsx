@@ -68,11 +68,11 @@ export async function generateMetadata({
     openGraph: {
       title: moment.moments_name,
       description: desc,
-      url: `https://copatible.com/moments/${id}`,
+      url: `https://app.copatible.com/moments/${id}`,
       siteName: "CoPatible",
       images: [
         {
-          url: `https://copatible.com/api/og/moments/${id}`,
+          url: `https://app.copatible.com/api/og/moments/${id}`,
           width: 1200,
           height: 630,
         },
@@ -83,7 +83,7 @@ export async function generateMetadata({
       card: "summary_large_image",
       title: moment.moments_name,
       description: desc,
-      images: [`https://copatible.com/api/og/moments/${id}`],
+      images: [`https://app.copatible.com/api/og/moments/${id}`],
     },
   };
 }

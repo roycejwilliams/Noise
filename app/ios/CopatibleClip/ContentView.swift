@@ -2,7 +2,7 @@ import SwiftUI
 import WebKit
 
 struct ContentView: View {
-    @State private var url: URL = URL(string: "https://copatible.com")!
+    @State private var url: URL = URL(string: "https://app.copatible.com")!
 
     var body: some View {
         WebView(url: $url)
