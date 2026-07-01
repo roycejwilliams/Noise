@@ -1,13 +1,12 @@
 import { useLogout } from "@/hooks/useAuth";
 import api from "@/lib/api";
 import { connectSocket, socket } from "@/lib/socket";
-import TypingBubble from "@/components/voice/TypingBubble";
 import * as SecureStore from "expo-secure-store";
-import { SymbolView } from "expo-symbols";
 import { useLocalSearchParams, useRouter } from "expo-router";
 import { useEffect, useRef, useState } from "react";
 import {
   Animated,
+  Image,
   StyleSheet,
   Text,
   TouchableOpacity,
@@ -17,11 +16,20 @@ import { SafeAreaView } from "react-native-safe-area-context";
 
 type VoiceState = "waiting" | "ringing" | "active" | "processing" | "ready";
 
-const ICON_NAME: Partial<Record<VoiceState, string>> = {
-  ringing:    "phone.fill",
-  active:     "waveform",
-  processing: "brain.head.profile",
-  ready:      "checkmark",
+const A = {
+  loadingDots: "https://www.figma.com/api/mcp/asset/218fdd6c-80cb-452d-8ff2-b620e4a6b3aa",
+  phone:       "https://www.figma.com/api/mcp/asset/9b655edb-0517-45a7-9239-012e8dcc3c67",
+  mic:         "https://www.figma.com/api/mcp/asset/efaa7969-0409-4a5c-a6f3-47e02969f8a1",
+  brain:       "https://www.figma.com/api/mcp/asset/0368586f-a7c6-4fef-93f5-418c26e18f1b",
+  check:       "https://www.figma.com/api/mcp/asset/cbc0f2c5-7d55-476c-9ef6-0786997db4c0",
+  wave:        "https://www.figma.com/api/mcp/asset/40602fdd-98ba-44fc-9fdf-269bfeda0570",
+};
+
+const ICON_URI: Partial<Record<VoiceState, string>> = {
+  ringing:    A.phone,
+  active:     A.mic,
+  processing: A.brain,
+  ready:      A.check,
 };
 
 function formatPhone(raw: string): string {
@@ -154,8 +162,8 @@ export default function VoiceScreen() {
     return () => loop.stop();
   }, [voiceState]);
 
-  const iconName = ICON_NAME[voiceState];
-  const hasIcon = !!iconName;
+  const iconUri = ICON_URI[voiceState];
+  const hasIcon = !!iconUri;
 
   return (
     <View style={s.root}>
@@ -172,7 +180,11 @@ export default function VoiceScreen() {
               {phone ? formatPhone(phone) : "your registered number"}
             </Text>
             <View style={s.dotsWrap}>
-              <TypingBubble />
+              <Image
+                source={{ uri: A.loadingDots }}
+                style={s.loadingDots}
+                resizeMode="contain"
+              />
             </View>
           </View>
         )}
@@ -207,11 +219,10 @@ export default function VoiceScreen() {
                 </View>
               )}
               <View style={s.iconCircle}>
-                <SymbolView
-                  name={iconName as any}
-                  size={34}
-                  tintColor="#ffffff"
-                  type="monochrome"
+                <Image
+                  source={{ uri: iconUri }}
+                  style={s.iconImage}
+                  resizeMode="contain"
                 />
               </View>
             </View>
@@ -250,6 +261,15 @@ export default function VoiceScreen() {
           </TouchableOpacity>
         </View>
       </SafeAreaView>
+
+      {/* VUI wave — absolute at screen bottom, behind safe area */}
+      {voiceState === "active" && (
+        <Image
+          source={{ uri: A.wave }}
+          style={s.wave}
+          resizeMode="cover"
+        />
+      )}
     </View>
   );
 }
@@ -286,6 +306,7 @@ const s = StyleSheet.create({
     marginTop: 24,
   },
   dotsWrap: { alignItems: "center", marginTop: 104 },
+  loadingDots: { width: 72, height: 20 },
 
   // Icon states
   iconSection: { marginTop: 60 },
@@ -318,8 +339,13 @@ const s = StyleSheet.create({
     height: 84,
     borderRadius: 42,
     backgroundColor: "rgba(255,255,255,0.5)",
-    alignItems: "center",
-    justifyContent: "center",
+  },
+  iconImage: {
+    width: 50,
+    height: 50,
+    position: "absolute",
+    left: 17,
+    top: 17,
   },
   subtitle: {
     fontSize: 15,
@@ -359,5 +385,15 @@ const s = StyleSheet.create({
   signOutText: {
     fontSize: 11,
     color: "rgba(255,255,255,0.25)",
+  },
+
+  // VUI wave (active state, root-level absolute)
+  wave: {
+    position: "absolute",
+    left: 0,
+    right: 0,
+    bottom: 0,
+    width: "100%",
+    height: 227,
   },
 });

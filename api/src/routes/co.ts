@@ -480,7 +480,7 @@ router.get(
          FROM co_profiles cp
          LEFT JOIN co_memories cm ON cm.user_id = cp.user_id AND cm.memory_type = 'check_in'
          WHERE cp.user_id = $1
-         GROUP BY cp.id`,
+         GROUP BY cp.user_id`,
         [req.params.user_id],
       );
 
