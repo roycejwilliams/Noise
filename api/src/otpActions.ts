@@ -155,14 +155,6 @@ export const sendSMS = async ({
       await send(`Your CoPatible verification code is below. It expires in 5 minutes.\n${otp_code}`);
     }
 
-    if (register) {
-      await client.messages.create({
-        body: `Your CoPatible verification code is below. It expires in 5 minutes.\n${otp_code}`,
-        to: phone_number,
-        from: process.env.TWILIO_PHONE_NUMBER!,
-      });
-    }
-
     const link = (url?: string) => (url ? `\n${url}` : "");
 
     if (invite_type === "received" && invite_target === "circle") {
