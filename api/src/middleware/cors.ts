@@ -5,8 +5,9 @@ export const corsOptions: CorsOptions = {
     if (!origin) return callback(null, true);
     const allowed =
       process.env.NODE_ENV === "production"
-        ? origin === "https://br3w.app" ||
-          /^https:\/\/brew-.*\.vercel\.app$/.test(origin)
+        ? origin === "https://app.copatible.com" ||
+          origin === "https://copatible.com" ||
+          /^https:\/\/copatible.*\.vercel\.app$/.test(origin)
         : origin === "http://localhost:3000" ||
           /^https:\/\/.*\.ngrok-free\.dev$/.test(origin) ||
           /^https:\/\/.*\.ngrok\.io$/.test(origin);

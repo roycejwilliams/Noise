@@ -317,13 +317,13 @@ GROUP BY c.id`,
             email: invitedUser.email,
             invite_type: "received",
             invite_target: "circle",
-            action_url: `https://br3w.app/join?circle=${invitedMember.circle_id}`,
+            action_url: `https://app.copatible.com/join?circle=${invitedMember.circle_id}`,
           });
           await sendSMS({
             phone_number: invitedUser.phone_number,
             invite_type: "received",
             invite_target: "circle",
-            action_url: `https://br3w.app/join?circle=${invitedMember.circle_id}`,
+            action_url: `https://app.copatible.com/join?circle=${invitedMember.circle_id}`,
           });
           return res.status(201).send({
             success: true,
@@ -360,7 +360,7 @@ GROUP BY c.id`,
         if (existingUser.rows.length > 0) {
           return res
             .status(400)
-            .send("User is already on BR3W. Use the standard invite.");
+            .send("User is already on CoPatible. Use the standard invite.");
         }
 
         const ownerCheck = await pool.query(
