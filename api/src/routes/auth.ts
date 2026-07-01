@@ -158,7 +158,9 @@ export function createAuthRouter(): Router {
     }
   });
 
-  // POST /auth/login — looks up existing user by email, sends OTP
+  // POST /auth/login — looks up existing user by email, sends OTP.
+  // Queries users.email directly so this works for both applications-accepted
+  // accounts and self-serve /auth/register accounts (which have no application_id).
   router.post("/login", async (req, res, next) => {
     const updatedGeneratedOTP = generateOTP();
     const updatedExpiryAt = Date.now() + 300000;
@@ -167,7 +169,7 @@ export function createAuthRouter(): Router {
     const { email } = req.body;
     try {
       const verifyEmail = await pool.query(
-        `SELECT users.id FROM users INNER JOIN applications ON users.application_id = applications.id WHERE applications.email = $1`,
+        `SELECT id FROM users WHERE email = $1`,
         [email],
       );
 
