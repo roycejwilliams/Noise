@@ -134,7 +134,11 @@ export function sendblueRouter(io: Server): Router {
           return res.status(400).send("Missing required fields.");
         }
 
-        // Keana approval intercept — must run before user lookup since Keana may not be in users table
+        // Keana approval intercept — must run before user lookup since Keana may not be in users table.
+        // Only intercepts when there's an actual circle to approve/reject — Keana is
+        // also a normal registered user/contact (e.g. completing her own text-in-first
+        // verification, or chatting with Co), and those texts must fall through to the
+        // standard user flow below instead of being silently swallowed here.
         const keanaPhone = process.env.KEANA_PHONE_NUMBER;
         if (keanaPhone && number === keanaPhone && hasText) {
           const pendingResult = await pool.query(
@@ -145,12 +149,8 @@ export function sendblueRouter(io: Server): Router {
              LIMIT 1`,
           );
 
-          if (!pendingResult.rows[0]) {
-            // No pending circles — nothing to approve
-            return res.status(200).send({ received: true });
-          }
-
           const pendingCircle = pendingResult.rows[0];
+          if (pendingCircle) {
 
           const { text: classification } = await generateText({
             model: anthropic("claude-haiku-4-5-20251001"),
@@ -394,7 +394,8 @@ export function sendblueRouter(io: Server): Router {
             }
           }
 
-          return res.status(200).send({ received: true });
+            return res.status(200).send({ received: true });
+          }
         }
 
         // Step 1 — Find user by phone number
