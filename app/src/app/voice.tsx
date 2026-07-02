@@ -16,13 +16,14 @@ import {
 } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
 
-type VoiceState = "waiting" | "ringing" | "active" | "processing" | "ready";
+type VoiceState = "waiting" | "ringing" | "active" | "processing" | "ready" | "missed";
 
 const ICON_NAME: Partial<Record<VoiceState, string>> = {
   ringing:    "phone.fill",
   active:     "waveform",
   processing: "brain.head.profile",
   ready:      "checkmark",
+  missed:     "phone.down.fill",
 };
 
 function formatPhone(raw: string): string {
@@ -50,6 +51,8 @@ function getHeadline(state: VoiceState, isReturning: boolean, firstName: string)
       return isReturning ? "Co is taking notes." : "Co is getting to know you.";
     case "ready":
       return isReturning ? "Co heard you." : "Your profile is ready.";
+    case "missed":
+      return isReturning ? "Co will try again." : "Co couldn't reach you.";
   }
 }
 
@@ -69,6 +72,8 @@ function getSubtitle(state: VoiceState, isReturning: boolean): string | null {
         : "Building your profile. This takes a moment.";
     case "ready":
       return isReturning ? null : "Co is already looking for your people.";
+    case "missed":
+      return "Reply here whenever you're ready, or expect another call soon.";
   }
 }
 
@@ -122,28 +127,34 @@ export default function VoiceScreen() {
 
     const advance = (state: VoiceState) => () => { if (mounted) setVoiceState(state); };
 
+    // Terminal call states that never connected — Co follows up via iMessage
+    // in these cases instead of proceeding to the live-call/processing flow.
+    const MISSED_STATUSES = ["no-answer", "busy", "failed", "canceled", "voicemail"];
+    const onCallCompleted = ({ status }: { status?: string }) => {
+      if (!mounted) return;
+      setVoiceState(MISSED_STATUSES.includes(status ?? "") ? "missed" : "processing");
+    };
+
     // Typed-intake (initialState=processing) never places a real call, so it
     // must not react to call-progress events — a stray/delayed status update
     // from an earlier, abandoned "Call Co" attempt could otherwise hijack
     // this screen and flip it into the ringing/active call stage.
     const isTypedIntake = initialState === "processing";
     if (!isTypedIntake) {
-      socket.on("co:call_started",  advance("ringing"));
-      socket.on("co:call_ringing",  advance("ringing"));
-      socket.on("co:call_active",   advance("active"));
-      socket.on("co:call_answered", advance("active"));
-      socket.on("co:call_ended",    advance("processing"));
+      socket.on("co:call_initiated", advance("ringing"));
+      socket.on("co:call_ringing",   advance("ringing"));
+      socket.on("co:call_answered",  advance("active"));
+      socket.on("co:call_completed", onCallCompleted);
     }
     socket.on("co:processing",    advance("processing"));
     socket.on("co:profile_ready", advance("ready"));
 
     return () => {
       mounted = false;
-      socket.off("co:call_started");
+      socket.off("co:call_initiated");
       socket.off("co:call_ringing");
-      socket.off("co:call_active");
       socket.off("co:call_answered");
-      socket.off("co:call_ended");
+      socket.off("co:call_completed", onCallCompleted);
       socket.off("co:processing");
       socket.off("co:profile_ready");
     };
@@ -197,9 +208,11 @@ export default function VoiceScreen() {
     return () => loop.stop();
   }, [voiceState]);
 
-  // Context B (returning) ready state has no CTA — quietly return home instead
+  // Context B (returning) ready state, and any missed-call outcome regardless
+  // of context, have no CTA — quietly return home instead of dead-ending.
   useEffect(() => {
-    if (voiceState !== "ready" || !isReturning) return;
+    const shouldAutoReturn = (voiceState === "ready" && isReturning) || voiceState === "missed";
+    if (!shouldAutoReturn) return;
     const timeout = setTimeout(() => {
       router.replace("/(main)");
     }, 3000);

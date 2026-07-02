@@ -136,6 +136,62 @@ function normalizeHumePayload(body: any) {
   return { customSessionId, chatGroupId, transcript, emotions, recording_url };
 }
 
+// Shared by both the standard missed-call path (no-answer/busy/failed/
+// canceled) and the voicemail-detected path — Claude drafts the copy,
+// ElevenLabs is the "heavy worker" that turns it into a voice note (Hume is
+// only ever used for the live call itself), falling back to plain text if
+// voice generation fails so this never blocks the follow-up from sending.
+async function sendMissedCallFollowUp(
+  user: { id: string; first_name: string; phone_number: string },
+  CallSid: string,
+  CallStatus: string,
+  situationPrompt: string,
+): Promise<void> {
+  let coMessage: string;
+  try {
+    const result = await generateText({
+      model: anthropic("claude-haiku-4-5-20251001"),
+      prompt: `You are Co, an exclusive life concierge. ${situationPrompt} Send a short iMessage letting ${user.first_name} know, and that they can reply here whenever they're ready or expect another call soon. Tone: calm, unhurried, like a private members club. No exclamation points. No em dashes. 2 sentences max.`,
+    });
+    coMessage = result.text;
+  } catch (aiErr) {
+    console.error("Co follow-up message generation failed, using fallback:", aiErr);
+    coMessage = `Hey ${user.first_name}, Co tried to reach you. Reply here whenever you're ready, or expect another call soon.`;
+  }
+
+  let audioUrl: string | null = null;
+  try {
+    audioUrl = await generateVoiceNote(coMessage);
+  } catch (voiceErr: any) {
+    console.error("Voice note generation failed, falling back to text:", voiceErr?.message ?? voiceErr);
+  }
+
+  try {
+    await sendblue.messages.send({
+      number: user.phone_number,
+      content: audioUrl ? "" : coMessage,
+      ...(audioUrl ? { media_url: audioUrl } : {}),
+      from_number: process.env.SENDBLUE_PHONE_NUMBER!,
+    });
+  } catch (smsErr: any) {
+    console.error(`call-status: Sendblue failed for ${user.id}:`, smsErr?.message ?? smsErr);
+  }
+
+  const memContent = `Co called ${user.first_name} — ${CallStatus} (${CallSid}). Followed up via iMessage: "${coMessage}"`;
+  const mem = await pool.query(
+    `INSERT INTO co_memories (user_id, memory_type, content) VALUES ($1, 'text_exchange', $2) RETURNING id`,
+    [user.id, memContent],
+  );
+  generateEmbedding(memContent)
+    .then((emb) =>
+      pool.query(
+        `UPDATE co_memories SET content_embedding = $1::vector WHERE id = $2`,
+        [`[${emb.join(",")}]`, mem.rows[0].id],
+      ),
+    )
+    .catch((err) => console.error("Memory embedding failed (non-fatal):", err));
+}
+
 // POST /co/call/:user_id — initiate outbound call to user
 router.post(
   "/call/:user_id",
@@ -195,6 +251,12 @@ router.post(
         // Ring for 20s before declaring no-answer, so a missed call gets an
         // immediate follow-up instead of Twilio's 60s default.
         timeout: 20,
+        // Without this, a voicemail pickup looks identical to a human
+        // answering (CallStatus just becomes "in-progress" either way) — Co
+        // would start talking into an answering machine. AnsweredBy arrives
+        // on a follow-up status callback; see /co/call-status.
+        machineDetection: "DetectMessageEnd",
+        machineDetectionTimeout: 10,
       });
 
       // Store call attempt in co_memories so status callback has context
@@ -226,7 +288,8 @@ router.post(
 );
 
 // POST /co/call-status — Twilio status callback, fires when call reaches terminal state
-// Handles missed calls (no-answer, busy, failed) by sending a Co iMessage follow-up
+// Handles missed calls (no-answer, busy, failed, canceled) and voicemail
+// pickups (via AnsweredBy from AMD) by sending a Co iMessage follow-up.
 router.post(
   "/call-status",
   async (req: Request, res: Response, next: NextFunction) => {
@@ -235,7 +298,7 @@ router.post(
         return res.status(401).send("Invalid Twilio signature.");
       }
 
-      const { CallStatus, To, CallSid } = req.body;
+      const { CallStatus, To, CallSid, AnsweredBy } = req.body;
 
       // Validate Twilio sent the required fields
       if (!CallStatus || !To) {
@@ -249,6 +312,31 @@ router.post(
       );
       const user = userResult.rows[0];
 
+      // AMD detected an answering machine/voicemail — this arrives as its own
+      // callback, typically alongside CallStatus=in-progress. Without this
+      // check the call looks identical to a human answering, and Co would
+      // start talking into a voicemail box. Hang up immediately and treat it
+      // like a missed call rather than letting Hume proceed.
+      if (typeof AnsweredBy === "string" && AnsweredBy.startsWith("machine")) {
+        if (user) {
+          _io?.to(`user:${user.id}`).emit("co:call_completed", { call_sid: CallSid, status: "voicemail" });
+        }
+        try {
+          await twilioClient.calls(CallSid).update({ status: "completed" });
+        } catch (hangupErr: any) {
+          console.error("Failed to hang up after voicemail detection (non-fatal):", hangupErr?.message ?? hangupErr);
+        }
+        if (user) {
+          await sendMissedCallFollowUp(
+            user,
+            CallSid,
+            "voicemail",
+            `You just tried to call ${user.first_name} and reached voicemail.`,
+          );
+        }
+        return res.sendStatus(204);
+      }
+
       // Push real-time call state to the app regardless of whether it's a missed call.
       // The voice screen listens for these to drive its state machine.
       if (user) {
@@ -261,8 +349,8 @@ router.post(
         }
       }
 
-      // Only send missed-call follow-up iMessage for calls that were never answered
-      if (!["no-answer", "busy", "failed"].includes(CallStatus)) {
+      // Only send missed-call follow-up iMessage for calls that never connected
+      if (!["no-answer", "busy", "failed", "canceled"].includes(CallStatus)) {
         return res.sendStatus(204);
       }
 
@@ -272,54 +360,12 @@ router.post(
         return res.sendStatus(204);
       }
 
-      // Generate Co's follow-up message — Haiku for speed; fall back to hardcoded if AI is down
-      let coMessage: string;
-      try {
-        const result = await generateText({
-          model: anthropic("claude-haiku-4-5-20251001"),
-          prompt: `You are Co, an exclusive life concierge. You just tried to call ${user.first_name} but they didn't pick up. Send a short iMessage letting them know you called and that you'll try again — or they can reply here whenever they're ready. Tone: calm, unhurried, like a private members club. No exclamation points. No em dashes. 2 sentences max.`,
-        });
-        coMessage = result.text;
-      } catch (aiErr) {
-        console.error("Co message generation failed, using fallback:", aiErr);
-        coMessage = `Hey ${user.first_name}, Co tried to reach you. Reply here whenever you're ready, or expect another call soon.`;
-      }
-
-      // Generate voice note — Co sends audio instead of text for a premium feel
-      // Falls back to text if ElevenLabs fails so the missed-call flow never breaks
-      let audioUrl: string | null = null;
-      try {
-        audioUrl = await generateVoiceNote(coMessage);
-      } catch (voiceErr: any) {
-        console.error("Voice note generation failed, falling back to text:", voiceErr?.message ?? voiceErr);
-      }
-
-      // Send as voice note if generated, otherwise send as text
-      try {
-        await sendblue.messages.send({
-          number: user.phone_number,
-          content: audioUrl ? "" : coMessage,
-          ...(audioUrl ? { media_url: audioUrl } : {}),
-          from_number: process.env.SENDBLUE_PHONE_NUMBER!,
-        });
-      } catch (smsErr: any) {
-        console.error(`call-status: Sendblue failed for ${user.id}:`, smsErr?.message ?? smsErr);
-      }
-
-      // Store in co_memories regardless of whether Sendblue succeeded
-      const memContent = `Co called ${user.first_name} — ${CallStatus} (${CallSid}). Followed up via iMessage: "${coMessage}"`;
-      const mem = await pool.query(
-        `INSERT INTO co_memories (user_id, memory_type, content) VALUES ($1, 'text_exchange', $2) RETURNING id`,
-        [user.id, memContent],
+      await sendMissedCallFollowUp(
+        user,
+        CallSid,
+        CallStatus,
+        `You just tried to call ${user.first_name} but they didn't pick up.`,
       );
-      generateEmbedding(memContent)
-        .then((emb) =>
-          pool.query(
-            `UPDATE co_memories SET content_embedding = $1::vector WHERE id = $2`,
-            [`[${emb.join(",")}]`, mem.rows[0].id],
-          ),
-        )
-        .catch((err) => console.error("Memory embedding failed (non-fatal):", err));
 
       return res.sendStatus(204);
     } catch (error) {
