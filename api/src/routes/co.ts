@@ -253,10 +253,17 @@ router.post(
         timeout: 20,
         // Without this, a voicemail pickup looks identical to a human
         // answering (CallStatus just becomes "in-progress" either way) — Co
-        // would start talking into an answering machine. AnsweredBy arrives
-        // on a follow-up status callback; see /co/call-status.
+        // would start talking into an answering machine. Must be ASYNC:
+        // synchronous AMD (the default) holds the call in silence — no TwiML,
+        // no Hume stream — until detection finishes, so a real human who
+        // picks up hears nothing for up to machineDetectionTimeout seconds.
+        // Async AMD lets Twilio call `url` (Hume) immediately, and delivers
+        // AnsweredBy afterward to asyncAmdStatusCallback; see /co/call-status.
         machineDetection: "DetectMessageEnd",
         machineDetectionTimeout: 10,
+        asyncAmd: "true",
+        asyncAmdStatusCallback: statusCallbackUrl,
+        asyncAmdStatusCallbackMethod: "POST",
       });
 
       // Store call attempt in co_memories so status callback has context
