@@ -774,7 +774,8 @@ router.post(
 
       // Step 1 — Fetch all members of the associated circle
       const membersResult = await pool.query(
-        `SELECT cm.member_id, cp.activity_preferences, cp.connection_style, cp.life_chapters, cp.city
+        `SELECT cm.member_id, cp.activity_preferences, cp.connection_style, cp.life_chapters, cp.city,
+                ST_Y(cp.coordinates) AS lat, ST_X(cp.coordinates) AS lng
          FROM circle_members cm
          JOIN co_profiles cp ON cp.user_id = cm.member_id
          WHERE cm.circle_id = $1`,
@@ -831,6 +832,19 @@ router.post(
       // Step 6 — Use Anthropic to generate Moment context
       const city = members[0].city ?? "San Francisco";
       const groupSize = members.length + 1;
+
+      // Center point for venue search — averages member coordinates so the
+      // Google Places lookup is geographically biased and hard-filtered near
+      // where the circle actually lives, instead of trusting a free-text city
+      // string alone (e.g. "San Francisco Bay Area" isn't a precise Places
+      // location and previously let wildly out-of-area results slip through).
+      const memberCoords = members.filter((m: any) => m.lat != null && m.lng != null);
+      const geoCenter = memberCoords.length
+        ? {
+            lat: memberCoords.reduce((sum: number, m: any) => sum + m.lat, 0) / memberCoords.length,
+            lng: memberCoords.reduce((sum: number, m: any) => sum + m.lng, 0) / memberCoords.length,
+          }
+        : null;
 
       const { text: rawMoment } = await generateText({
         model: anthropic("claude-sonnet-4-6"),
@@ -914,6 +928,7 @@ Make it feel intimate, specific, and intentional. Not generic.`,
             connection_style: dominantStyle,
             group_size: groupSize,
           },
+          geoCenter,
         );
       }
 
