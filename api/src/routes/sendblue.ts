@@ -558,6 +558,19 @@ export function sendblueRouter(io: Server): Router {
           return res.status(200).send({ received: true, action: "moment_response_captured" });
         }
 
+        // Step 4.5 — Show the animated "..." on the user's device while Co
+        // "thinks" — the Claude call below can take a few seconds, and a bare
+        // gap before the reply lands reads as broken rather than considered.
+        // Non-fatal: a failed typing indicator should never block the reply.
+        try {
+          await sendblue.typingIndicators.send({
+            number: user.phone_number,
+            from_number: process.env.SENDBLUE_PHONE_NUMBER!,
+          });
+        } catch (typingErr: any) {
+          console.error("Typing indicator failed (non-fatal):", typingErr?.message ?? typingErr);
+        }
+
         // Step 5 — No pending moment — fetch semantically relevant memories
         let memoriesResult;
         if (queryEmbedding) {
