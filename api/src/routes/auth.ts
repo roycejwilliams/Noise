@@ -3,6 +3,7 @@ import { Router } from "express"; // isolated, modular instance of routes and mi
 import jwt from "jsonwebtoken";
 import pool from "../db/db.js";
 import { sendEmail, sendSMS } from "../otpActions.js";
+import { normalizePhone } from "../utils/phone.js";
 
 function generateOTP() {
   return randomInt(100000, 1000000);
@@ -128,10 +129,12 @@ export function createAuthRouter(): Router {
       return res.status(400).send(`${missing} is required.`);
     }
 
+    const normalizedPhone = normalizePhone(phone_number);
+
     try {
       const existing = await pool.query(
         `SELECT id FROM users WHERE email = $1 OR phone_number = $2`,
-        [email, phone_number],
+        [email, normalizedPhone],
       );
 
       if (existing.rows[0]) {
@@ -142,7 +145,7 @@ export function createAuthRouter(): Router {
         `INSERT INTO users (first_name, last_name, email, phone_number, username, subscription_status, role)
          VALUES ($1, $2, $3, $4, $5, 'inactive', 'user')
          RETURNING *`,
-        [first_name, last_name, email, phone_number, email.split("@")[0]],
+        [first_name, last_name, email, normalizedPhone, email.split("@")[0]],
       );
 
       const newUser: UserProp = created.rows[0];

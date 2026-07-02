@@ -1,6 +1,7 @@
 import { Router } from "express";
 import type { RequestHandler } from "express";
 import pool from "../db/db.js";
+import { normalizePhone } from "../utils/phone.js";
 
 export function createUsersRouter(authenticateToken: RequestHandler): Router {
   const router = Router();
@@ -77,7 +78,9 @@ export function createUsersRouter(authenticateToken: RequestHandler): Router {
         return allowed.includes(key);
       });
 
-      const values = filterKeys.map((key) => req.body[key]);
+      const values = filterKeys.map((key) =>
+        key === "phone_number" ? normalizePhone(req.body[key]) : req.body[key],
+      );
 
       const userKeys = filterKeys
         .map((key, index) => {

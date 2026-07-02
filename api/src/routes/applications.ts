@@ -3,6 +3,7 @@ import express, { type NextFunction, type Request, type Response } from "express
 import pool from "../db/db.js";
 import { authenticateToken, userRole } from "../middleware/auth.js";
 import { sendEmail, sendSMS } from "../otpActions.js";
+import { normalizePhone } from "../utils/phone.js";
 
 const router = express.Router();
 
@@ -125,7 +126,7 @@ router.post(
     try {
       const insertApp = await pool.query(
         "INSERT INTO applications (first_name, last_name, email, phone_number, work_link, reason, referred_by) VALUES ($1, $2, $3, $4, $5, $6, $7) RETURNING *",
-        [first_name, last_name, email, phone_number, work_link ?? null, reason ?? null, referred_by ?? null],
+        [first_name, last_name, email, normalizePhone(phone_number), work_link ?? null, reason ?? null, referred_by ?? null],
       );
 
       const createApp = insertApp.rows[0];
