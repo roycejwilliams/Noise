@@ -78,6 +78,10 @@ export default function CircleScreen() {
           setState("moment_pending");
         } else if (polling) {
           setMoment(polling);
+          // Join the moment's socket room so server-side emits (moment:confirmed,
+          // moment:time_proposed) actually reach this client — without this the
+          // server was broadcasting to a room nobody had joined.
+          socket.emit("join:moment", polling.id);
           try {
             const respRes = await api.get(`/moments/${polling.id}/responses`);
             setResponses(respRes.data?.data ?? respRes.data ?? []);
@@ -94,6 +98,7 @@ export default function CircleScreen() {
     load();
 
     socket.on("moment:confirmed", () => { if (mounted) load(); });
+    socket.on("moment:time_proposed", () => { if (mounted) load(); });
     socket.on("circle:approved", () => { if (mounted) load(); });
     socket.on("circle:placed", () => { if (mounted) load(); });
     socket.on("circle:member_left", ({ user_id }: { circle_id: string; user_id: string }) => {
@@ -109,11 +114,22 @@ export default function CircleScreen() {
     return () => {
       mounted = false;
       socket.off("moment:confirmed");
+      socket.off("moment:time_proposed");
       socket.off("circle:approved");
       socket.off("circle:placed");
       socket.off("circle:member_left");
     };
   }, []);
+
+  async function handleProposeTime(momentStartIso: string) {
+    if (!moment) return;
+    try {
+      await api.post(`/co/moment/${moment.id}/propose-time`, { moment_start: momentStartIso });
+    } catch (e) {
+      console.error("Propose time failed:", e);
+      Alert.alert("Couldn't request that time", "Please try again.");
+    }
+  }
 
   async function handleLeaveCircle() {
     if (!circle || leaving) return;
@@ -167,6 +183,7 @@ export default function CircleScreen() {
           moment={moment}
           responses={responses}
           isConnector={isConnector}
+          onProposeTime={isConnector ? handleProposeTime : undefined}
         />
       )}
 

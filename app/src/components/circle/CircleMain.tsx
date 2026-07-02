@@ -1,5 +1,11 @@
 import type { Circle, Moment } from "@/types";
-import { ScrollView, StyleSheet, Text, TouchableOpacity, View } from "react-native";
+import {
+  ScrollView,
+  StyleSheet,
+  Text,
+  TouchableOpacity,
+  View,
+} from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
 
 interface Props {
@@ -19,13 +25,21 @@ function extractChapters(circleName: string): string[] {
   return [];
 }
 
-export default function CircleMain({ circle, moment, isConnector, onViewMoment }: Props) {
+export default function CircleMain({
+  circle,
+  moment,
+  isConnector,
+  onViewMoment,
+}: Props) {
   const chapters = extractChapters(circle.circle_name ?? "");
 
   return (
     <SafeAreaView style={s.root}>
-      <Text style={s.wordmark}>CoPatible</Text>
-      <ScrollView style={s.scroll} contentContainerStyle={s.content} showsVerticalScrollIndicator={false}>
+      <ScrollView
+        style={s.scroll}
+        contentContainerStyle={s.content}
+        showsVerticalScrollIndicator={false}
+      >
         <View style={s.circleHeader}>
           <View>
             <Text style={s.sectionLabel}>Circle</Text>
@@ -76,10 +90,14 @@ export default function CircleMain({ circle, moment, isConnector, onViewMoment }
               <View style={s.momentInfo}>
                 <Text style={s.momentName}>{moment.moments_name}</Text>
                 <Text style={s.momentVenue}>
-                  {[moment.venue, moment.location_name].filter(Boolean).join(" · ")}
+                  {[moment.venue, moment.location_name]
+                    .filter(Boolean)
+                    .join(" · ")}
                 </Text>
                 <View style={s.momentStatusPill}>
-                  <Text style={s.momentStatusText}>{fmt(moment.status ?? "polling")}</Text>
+                  <Text style={s.momentStatusText}>
+                    {fmt(moment.status ?? "polling")}
+                  </Text>
                 </View>
               </View>
             </TouchableOpacity>
@@ -127,7 +145,11 @@ const s = StyleSheet.create({
     backgroundColor: "rgba(255,255,255,0.06)",
     marginBottom: 4,
   },
-  connectorText: { fontSize: 10, color: "rgba(255,255,255,0.6)", fontWeight: "400" },
+  connectorText: {
+    fontSize: 10,
+    color: "rgba(255,255,255,0.6)",
+    fontWeight: "400",
+  },
   memberRow: {
     flexDirection: "row",
     alignItems: "center",
@@ -167,10 +189,18 @@ const s = StyleSheet.create({
     overflow: "hidden",
     backgroundColor: "rgba(255,255,255,0.03)",
   },
-  momentThumb: { width: 55, height: 62, backgroundColor: "rgba(255,255,255,0.08)" },
+  momentThumb: {
+    width: 55,
+    height: 62,
+    backgroundColor: "rgba(255,255,255,0.08)",
+  },
   momentInfo: { flex: 1, padding: 12, gap: 4 },
   momentName: { fontSize: 13, fontWeight: "400", color: "#fff" },
-  momentVenue: { fontSize: 12, color: "rgba(255,255,255,0.4)", fontWeight: "300" },
+  momentVenue: {
+    fontSize: 12,
+    color: "rgba(255,255,255,0.4)",
+    fontWeight: "300",
+  },
   momentStatusPill: {
     alignSelf: "flex-start",
     borderWidth: 1,

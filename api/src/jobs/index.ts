@@ -368,4 +368,54 @@ export function registerJobs() {
     }
   });
 
+  // Every 15 min — "day of" reminder for confirmed moments starting within
+  // the next 12 hours. Sent individually to each attendee — no group chat.
+  cron.schedule("*/15 * * * *", async () => {
+    try {
+      const dayOfMoments = await pool.query(
+        `SELECT id, venue, location_name, moment_start
+         FROM moments
+         WHERE status = 'confirmed'
+         AND moment_start BETWEEN NOW() AND NOW() + INTERVAL '12 hours'
+         AND day_of_reminder_sent_at IS NULL`,
+      );
+
+      for (const moment of dayOfMoments.rows) {
+        const attendees = await pool.query(
+          `SELECT u.id, u.phone_number FROM moment_attendees ma
+           JOIN users u ON u.id = ma.attendee_id
+           WHERE ma.moment_id = $1`,
+          [moment.id],
+        );
+        if (!attendees.rows.length) continue;
+
+        const timeStr = new Date(moment.moment_start).toLocaleTimeString("en-US", {
+          hour: "numeric",
+          minute: "2-digit",
+          hour12: true,
+        });
+        const dayOfMsg = `Tonight's the night. ${moment.venue ?? moment.location_name} at ${timeStr}. Show the QR code at the door.`;
+
+        for (const attendee of attendees.rows) {
+          try {
+            await sendblue.messages.send({
+              number: attendee.phone_number,
+              content: dayOfMsg,
+              from_number: process.env.SENDBLUE_PHONE_NUMBER!,
+            });
+          } catch (smsErr: any) {
+            console.error(`Day-of reminder failed for ${attendee.id}:`, smsErr?.message ?? smsErr);
+          }
+        }
+
+        await pool.query(
+          `UPDATE moments SET day_of_reminder_sent_at = NOW() WHERE id = $1`,
+          [moment.id],
+        );
+      }
+    } catch (error) {
+      console.error("Day-of reminder cron error:", error);
+    }
+  });
+
 }

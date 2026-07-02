@@ -5,7 +5,7 @@ import express, { NextFunction, Request, Response } from "express";
 import twilio from "twilio";
 import type { Server as IOServer } from "socket.io";
 import pool from "../db/db.js";
-import { sendEmail, sendSMS } from "../otpActions.js";
+import { sendEmail } from "../otpActions.js";
 import { authenticateToken, userRole } from "../middleware/auth.js";
 import { generateEmbedding, generateGoalEmbedding } from "../services/embeddings.js";
 import { findBestCircle } from "../services/matching.js";
@@ -975,7 +975,13 @@ Make it feel intimate, specific, and intentional. Not generic.`,
         );
       }
 
-      // Step 9 — Notify all circle members, collect phones for consensus poll
+      // Step 9 — Notify all circle members individually. CoPatible has no
+      // group chat — every member gets their own thread with Co, not a
+      // shared one, so this is always a 1:1 send per person.
+      const momentDateStr = new Date(moment.moment_start).toLocaleDateString("en-US", { weekday: "long", month: "short", day: "numeric" });
+      const momentTimeStr = new Date(moment.moment_start).toLocaleTimeString("en-US", { hour: "numeric", minute: "2-digit", hour12: true });
+      const momentInviteMsg = `Co arranged something for your circle. ${moment.moments_name} at ${selectedVenue?.name ?? momentData.neighborhood}, ${momentData.suggested_time ?? `${momentDateStr} at ${momentTimeStr}`}.\n\nhttps://app.copatible.com/moments/${moment.id}`;
+
       const memberPhones: string[] = [];
       for (const member of members) {
         const userResult = await pool.query(
@@ -994,25 +1000,30 @@ Make it feel intimate, specific, and intentional. Not generic.`,
           action_url: `https://app.copatible.com/moments/${moment.id}`,
         });
 
-        await sendSMS({
-          phone_number: user.phone_number,
-          invite_type: "received",
-          invite_target: "moment",
-          action_url: `https://app.copatible.com/moments/${moment.id}`,
-        });
-      }
-
-      // Step 9.5 — Send consensus poll to the group via Sendblue iMessage
-      if (memberPhones.length >= 4) {
-        const pollMessage = `${momentData.suggested_time ?? "This week"} — does that work for everyone? Reply YES or suggest another time.`;
         try {
-          await sendblue.groups.sendMessage({
-            numbers: memberPhones,
-            content: pollMessage,
+          await sendblue.messages.send({
+            number: user.phone_number,
+            content: momentInviteMsg,
             from_number: process.env.SENDBLUE_PHONE_NUMBER!,
           });
         } catch (smsErr: any) {
-          console.error("Sendblue group message failed (non-fatal):", smsErr?.message ?? smsErr);
+          console.error(`Moment invite message failed for ${member.member_id}:`, smsErr?.message ?? smsErr);
+        }
+      }
+
+      // Step 9.5 — Consensus poll, sent individually to each member
+      if (memberPhones.length >= 4) {
+        const pollMessage = `Does ${momentData.suggested_time ?? "this time"} work for you? Reply YES or NO.`;
+        for (const phone of memberPhones) {
+          try {
+            await sendblue.messages.send({
+              number: phone,
+              content: pollMessage,
+              from_number: process.env.SENDBLUE_PHONE_NUMBER!,
+            });
+          } catch (smsErr: any) {
+            console.error(`Consensus poll message failed for ${phone}:`, smsErr?.message ?? smsErr);
+          }
         }
       }
 
@@ -1050,6 +1061,98 @@ Make it feel intimate, specific, and intentional. Not generic.`,
           member_count: members.length,
           co_reason: selectedVenue?.co_reason ?? null,
         },
+      });
+    } catch (error) {
+      next(error);
+    }
+  },
+);
+
+// POST /co/moment/:moment_id/propose-time — the Circle Connector picks a
+// specific date/time from the app (mirrors what a "time: X" iMessage reply
+// does over text). Sets it as the new candidate time, clears prior yes/no
+// responses since they were for the old time, and re-asks every member
+// individually — no group chat.
+router.post(
+  "/moment/:moment_id/propose-time",
+  authenticateToken,
+  async (req: Request, res: Response, next: NextFunction) => {
+    try {
+      const { moment_id } = req.params;
+      const { moment_start } = req.body as { moment_start?: string };
+      const user_id = req.user?.id;
+
+      if (!user_id) return res.status(401).send("Unauthorized.");
+      if (!moment_start) return res.status(400).send("moment_start is required.");
+
+      const momentResult = await pool.query(
+        `SELECT circle_id FROM moments WHERE id = $1`,
+        [moment_id],
+      );
+      const momentRow = momentResult.rows[0];
+      if (!momentRow) return res.status(404).send("Moment not found.");
+      const { circle_id } = momentRow;
+
+      // Only the Circle Connector may propose a time — everyone else responds via iMessage
+      const connectorCheck = await pool.query(
+        `SELECT 1 FROM co_profiles cp
+         WHERE cp.user_id = $1 AND cp.is_circle_connector = TRUE
+         AND (
+           EXISTS (SELECT 1 FROM circles c WHERE c.id = $2 AND c.owner_id = $1)
+           OR EXISTS (SELECT 1 FROM circle_members cm WHERE cm.circle_id = $2 AND cm.member_id = $1)
+         )`,
+        [user_id, circle_id],
+      );
+      if (!connectorCheck.rows[0]) {
+        return res.status(403).send("Only the Circle Connector can propose a time.");
+      }
+
+      const dateObj = new Date(moment_start);
+      if (Number.isNaN(dateObj.getTime())) {
+        return res.status(400).send("moment_start must be a valid date.");
+      }
+      const suggestedTime = `${dateObj.toLocaleDateString("en-US", { weekday: "long" })} ${dateObj.toLocaleTimeString("en-US", { hour: "numeric", minute: "2-digit", hour12: true })}`;
+
+      await pool.query(
+        `UPDATE moments SET moment_start = $1, suggested_time = $2 WHERE id = $3`,
+        [dateObj.toISOString(), suggestedTime, moment_id],
+      );
+
+      // New proposal supersedes old responses — everyone re-confirms against the new time
+      await pool.query(
+        `UPDATE moment_responses SET response = NULL, responded_at = NULL WHERE moment_id = $1`,
+        [moment_id],
+      );
+
+      const membersResult = await pool.query(
+        `SELECT u.id, u.phone_number FROM moment_responses mr
+         JOIN users u ON u.id = mr.user_id
+         WHERE mr.moment_id = $1`,
+        [moment_id],
+      );
+      const pollMessage = `Does ${suggestedTime} work for you? Reply YES or NO.`;
+      for (const member of membersResult.rows) {
+        try {
+          await sendblue.messages.send({
+            number: member.phone_number,
+            content: pollMessage,
+            from_number: process.env.SENDBLUE_PHONE_NUMBER!,
+          });
+        } catch (smsErr: any) {
+          console.error(`Propose-time message failed for ${member.id}:`, smsErr?.message ?? smsErr);
+        }
+      }
+
+      _io?.to(`moment:${moment_id}`).emit("moment:time_proposed", {
+        moment_id,
+        moment_start: dateObj.toISOString(),
+        suggested_time: suggestedTime,
+      });
+
+      return res.status(200).send({
+        success: true,
+        moment_start: dateObj.toISOString(),
+        suggested_time: suggestedTime,
       });
     } catch (error) {
       next(error);
@@ -1112,11 +1215,15 @@ router.post(
       }
       const circlePageUrl = momentId ? `https://app.copatible.com/moments/${momentId}` : null;
 
+      // circle_placement and moment_invite use fixed copy for consistency —
+      // no headcount or group framing, since each person gets their own
+      // individual thread with Co, not a shared one.
+      const fixedCopy: Record<string, string> = {
+        circle_placement: "I placed you in a circle. Co found people navigating the same chapter as you. Your first moment is coming.",
+        moment_invite: `Co arranged something for your circle. ${context?.moments_name} at ${context?.venue}, ${context?.suggested_time}.`,
+      };
+
       const prompts: Record<string, string> = {
-        circle_placement: `You are Co, an exclusive life concierge. Write a short iMessage to ${user.first_name}. Co has selected their circle. Tone: quiet confidence, like a private members club reaching out. No excitement, no exclamation points. Just certainty. 2 sentences max. No em dashes. Example tone: "Your circle is ready. Five people, same chapter, same city."`,
-
-        moment_invite: `You are Co. Write a short iMessage to ${user.first_name}. Co has arranged an experience: ${context?.moments_name} at ${context?.venue}, ${context?.suggested_time}. Tone: like a personal concierge confirming a reservation. Brief, confident, specific. 2 sentences max. No em dashes.`,
-
         payment_link: `You are Co. Write a short iMessage to ${user.first_name} to secure their spot for ${context?.moments_name}. Include the payment link: ${context?.payment_url}. Tone: matter of fact, not salesy. Like confirming a dinner reservation deposit. 2 sentences max. No em dashes.`,
 
         check_in: `You are Co. Write a short iMessage to ${user.first_name} following up after their circle experience. Tone: like a thoughtful friend checking in, not a survey. One question only. 1 sentence max. No em dashes.`,
@@ -1124,12 +1231,18 @@ router.post(
         life_concierge: `You are Co. ${user.first_name} said: "${context?.user_message}".${lifeConcieregeContext ? `\n\nContext from past conversations:\n${lifeConcieregeContext}` : ""} Respond as Co — specific, warm, actionable. Co knows ${user.first_name} well. No filler phrases. 2 sentences max. No em dashes.`,
       };
 
-      const prompt = prompts[message_type] ?? prompts.circle_placement;
-
-      const { text: coMessage } = await generateText({
-        model: anthropic("claude-sonnet-4-6"),
-        prompt,
-      });
+      // Unrecognized message_type defaults to the fixed circle_placement copy
+      // (not a Claude prompt) — matches the previous fallback behavior.
+      let coMessage: string;
+      if (prompts[message_type]) {
+        const result = await generateText({
+          model: anthropic("claude-sonnet-4-6"),
+          prompt: prompts[message_type],
+        });
+        coMessage = result.text;
+      } else {
+        coMessage = fixedCopy[message_type] ?? fixedCopy.circle_placement;
+      }
 
       const coMsgMemory = await pool.query(
         `INSERT INTO co_memories (user_id, memory_type, content)
@@ -1240,9 +1353,12 @@ router.post(
   },
 );
 
-//POST /message/group/:circle_id - Co sends a message to the whole circle
+// POST /message/circle/:circle_id — Co sends the same announcement to every
+// circle member, individually. CoPatible launches with individual iMessage
+// threads only — there is no group chat, so this always fans out to each
+// member's own thread with Co rather than creating any shared conversation.
 router.post(
-  "/message/group/:circle_id",
+  "/message/circle/:circle_id",
   authenticateToken,
   userRole("admin"),
   async (req: Request, res: Response, next: NextFunction) => {
@@ -1250,85 +1366,89 @@ router.post(
       const { circle_id } = req.params;
       const { message_type, context } = req.body;
 
-      // Fetch all members with phone numbers
-      const groupMembers = await pool.query(
-        `SELECT u.id, u.first_name, u.phone_number 
+      const circleMembers = await pool.query(
+        `SELECT u.id, u.first_name, u.phone_number
          FROM circle_members cm
          JOIN users u ON cm.member_id = u.id
          WHERE cm.circle_id = $1`,
         [circle_id],
       );
 
-      const members = groupMembers.rows;
+      const members = circleMembers.rows;
 
       if (members.length < 4) {
-        return res.status(400).send("Not enough members in the group.");
+        return res.status(400).send("Not enough members in the circle.");
       }
 
-      const prompts: Record<string, string> = {
-        circle_placement: `You are Co, an exclusive life concierge. Write a short group iMessage welcoming this circle of ${members.length} people. They were selected for each other. Tone: quiet confidence. No exclamation points. 2 sentences max. No em dashes.`,
-
-        moment_invite: `You are Co. Write a short group iMessage to this circle about their upcoming experience: ${context?.moments_name} at ${context?.venue}, ${context?.suggested_time}. Tone: like a personal concierge confirming a reservation. 2 sentences max. No em dashes.`,
-
-        payment_link: `You are Co. Write a short group iMessage to this circle to secure their spots for ${context?.moments_name}. Payment link: ${context?.payment_url}. Split ${members.length} ways. Matter of fact, not salesy. 2 sentences max. No em dashes.`,
-
-        check_in: `You are Co. Write a short group iMessage following up with this circle after their experience together. One question only. Warm but brief. 1 sentence max. No em dashes.`,
+      // circle_placement and moment_invite use fixed copy for consistency —
+      // everything else is still drafted by Co per the situation.
+      const fixedCopy: Record<string, string> = {
+        circle_placement: "I placed you in a circle. Co found people navigating the same chapter as you. Your first moment is coming.",
+        moment_invite: `Co arranged something for your circle. ${context?.moments_name} at ${context?.venue}, ${context?.suggested_time}.`,
       };
 
-      const prompt = prompts[message_type] ?? prompts.circle_placement;
+      const prompts: Record<string, string> = {
+        payment_link: `You are Co. Write a short iMessage to secure a spot for ${context?.moments_name}. Payment link: ${context?.payment_url}. Matter of fact, not salesy. 2 sentences max. No em dashes.`,
 
-      // Generate Co's group message
-      const { text: coMessage } = await generateText({
-        model: anthropic("claude-sonnet-4-6"),
-        prompt: prompt,
-      });
+        check_in: `You are Co. Write a short iMessage following up after a circle experience. One question only. Warm but brief. 1 sentence max. No em dashes.`,
+      };
+
+      // Unrecognized message_type defaults to the fixed circle_placement copy
+      // (not a Claude prompt) — matches the previous fallback behavior.
+      let coMessage: string;
+      if (prompts[message_type]) {
+        const result = await generateText({
+          model: anthropic("claude-sonnet-4-6"),
+          prompt: prompts[message_type],
+        });
+        coMessage = result.text;
+      } else {
+        coMessage = fixedCopy[message_type] ?? fixedCopy.circle_placement;
+      }
 
       // Voice notes for emotional touchpoints — payment_link stays text (carries a URL)
-      const useGroupVoice = ["circle_placement", "moment_invite", "check_in"].includes(message_type);
-      let groupAudioUrl: string | null = null;
-      if (useGroupVoice) {
+      const useVoice = ["circle_placement", "moment_invite", "check_in"].includes(message_type);
+      let audioUrl: string | null = null;
+      if (useVoice) {
         try {
-          groupAudioUrl = await generateVoiceNote(coMessage);
+          audioUrl = await generateVoiceNote(coMessage);
         } catch (voiceErr: any) {
-          console.error("Group voice note generation failed, falling back to text:", voiceErr?.message ?? voiceErr);
+          console.error("Voice note generation failed, falling back to text:", voiceErr?.message ?? voiceErr);
         }
       }
 
-      // Send as group message via Sendblue
-      const numbers = members.map((m: any) => m.phone_number);
-
-      let groupMessage: any = null;
-      try {
-        groupMessage = await sendblue.groups.sendMessage({
-          numbers,
-          content: groupAudioUrl ? "" : coMessage,
-          ...(groupAudioUrl ? { media_url: groupAudioUrl } : {}),
-          from_number: process.env.SENDBLUE_PHONE_NUMBER!,
-        });
-      } catch (smsErr: any) {
-        const errMsg = smsErr?.message ?? String(smsErr);
-        console.error(`Sendblue group message failed for circle ${circle_id}:`, errMsg);
-        for (const member of members) {
-          const grpFailContent = `Co failed to send message to ${member.id}: ${errMsg}`;
-          const grpFailMemory = await pool.query(
+      // Send to each member individually, then log per-member outcome
+      let deliveredCount = 0;
+      for (const member of members) {
+        try {
+          await sendblue.messages.send({
+            number: member.phone_number,
+            content: audioUrl ? "" : coMessage,
+            ...(audioUrl ? { media_url: audioUrl } : {}),
+            from_number: process.env.SENDBLUE_PHONE_NUMBER!,
+          });
+          deliveredCount++;
+        } catch (smsErr: any) {
+          const errMsg = smsErr?.message ?? String(smsErr);
+          console.error(`Message failed for ${member.id}:`, errMsg);
+          const failContent = `Co failed to send message to ${member.id}: ${errMsg}`;
+          const failMemory = await pool.query(
             `INSERT INTO co_memories (user_id, memory_type, content)
              VALUES ($1, 'text_exchange', $2) RETURNING id`,
-            [member.id, grpFailContent],
+            [member.id, failContent],
           );
-          generateEmbedding(grpFailContent)
+          generateEmbedding(failContent)
             .then((emb) =>
               pool.query(
                 `UPDATE co_memories SET content_embedding = $1::vector WHERE id = $2`,
-                [`[${emb.join(",")}]`, grpFailMemory.rows[0].id],
+                [`[${emb.join(",")}]`, failMemory.rows[0].id],
               ),
             )
             .catch((err) => console.error("Memory embedding failed (non-fatal):", err));
+          continue;
         }
-      }
 
-      // Store in co_memories for each member
-      for (const member of members) {
-        const grpMemory = await pool.query(
+        const memMemory = await pool.query(
           `INSERT INTO co_memories (user_id, memory_type, content)
            VALUES ($1, 'text_exchange', $2) RETURNING id`,
           [member.id, coMessage],
@@ -1337,7 +1457,7 @@ router.post(
           .then((emb) =>
             pool.query(
               `UPDATE co_memories SET content_embedding = $1::vector WHERE id = $2`,
-              [`[${emb.join(",")}]`, grpMemory.rows[0].id],
+              [`[${emb.join(",")}]`, memMemory.rows[0].id],
             ),
           )
           .catch((err) => console.error("Memory embedding failed (non-fatal):", err));
@@ -1345,9 +1465,9 @@ router.post(
 
       return res.status(200).send({
         success: true,
-        message_handle: groupMessage?.message_handle ?? null,
-        status: groupMessage?.status ?? "send_failed",
+        status: deliveredCount > 0 ? "sent" : "failed",
         member_count: members.length,
+        delivered_count: deliveredCount,
         message: coMessage,
       });
     } catch (error) {
@@ -1581,16 +1701,16 @@ router.post(
         _io?.to(`user:${m.id}`).emit("circle:member_left", { circle_id, user_id });
       }
 
-      const remainingPhones = remaining.map((m: any) => m.phone_number);
-      if (remainingPhones.length > 0) {
+      // No group chat — each remaining member gets their own text.
+      for (const m of remaining) {
         try {
-          await sendblue.groups.sendMessage({
-            numbers: remainingPhones,
+          await sendblue.messages.send({
+            number: m.phone_number,
             content: "Your circle is adjusting. Co is on it.",
             from_number: process.env.SENDBLUE_PHONE_NUMBER!,
           });
         } catch (smsErr: any) {
-          console.error("Leave-circle group message failed (non-fatal):", smsErr?.message ?? smsErr);
+          console.error(`Leave-circle message failed for ${m.id}:`, smsErr?.message ?? smsErr);
         }
       }
 

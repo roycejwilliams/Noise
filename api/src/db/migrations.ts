@@ -206,4 +206,12 @@ export function runMigrations() {
       console.error("users.contact_verified migration failed:", err),
     );
 
+  // Tracks whether the "day of" reminder has gone out for a confirmed moment,
+  // so the reminder cron (every 15 min) doesn't re-send it on every tick.
+  pool
+    .query(`ALTER TABLE moments ADD COLUMN IF NOT EXISTS day_of_reminder_sent_at TIMESTAMPTZ`)
+    .catch((err: Error) =>
+      console.error("moments.day_of_reminder_sent_at migration failed:", err),
+    );
+
 }

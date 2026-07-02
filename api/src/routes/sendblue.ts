@@ -183,13 +183,6 @@ export function sendblueRouter(io: Server): Router {
             const city = members.find((m: any) => m.city)?.city ?? "your city";
             const chapter = (members.find((m: any) => m.life_chapters?.length)?.life_chapters?.[0] ?? "").replace(/_/g, " ");
 
-            // Check if a moment already exists for this circle (for the link)
-            const momentResult = await pool.query(
-              `SELECT id FROM moments WHERE circle_id = $1 ORDER BY created_at DESC LIMIT 1`,
-              [pendingCircle.id],
-            );
-            const momentId = momentResult.rows[0]?.id ?? null;
-
             for (const member of members) {
               // vCard — send on first contact if CO_VCARD_URL is set
               if (process.env.CO_VCARD_URL) {
@@ -216,10 +209,11 @@ export function sendblueRouter(io: Server): Router {
                 }
               }
 
-              // Placement iMessage — individual, not group
-              const placementMsg = momentId
-                ? `I placed you in a circle. ${memberCount} people, same chapter, same city.\n\nhttps://app.copatible.com/moments/${momentId}`
-                : `I placed you in a circle. ${memberCount} people, same chapter, same city.`;
+              // Placement iMessage — always individual, one thread per person.
+              // CoPatible launches with individual iMessage coordination only —
+              // no group chat — so this never references headcount or a shared
+              // thread, only the person's own circle and their own moment.
+              const placementMsg = "I placed you in a circle. Co found people navigating the same chapter as you. Your first moment is coming.";
 
               try {
                 await sendblue.messages.send({
@@ -468,7 +462,7 @@ export function sendblueRouter(io: Server): Router {
             return null;
           }),
           pool.query(
-            `SELECT mr.moment_id, m.moments_name, m.suggested_time
+            `SELECT mr.moment_id, m.moments_name, m.suggested_time, m.venue, m.moment_start
              FROM moment_responses mr
              JOIN moments m ON m.id = mr.moment_id
              WHERE mr.user_id = $1 AND mr.response IS NULL
@@ -489,7 +483,7 @@ export function sendblueRouter(io: Server): Router {
 
         // Step 4 — Pending moment response handling (runs for both voice and text)
         if (pendingMoment.rows[0]) {
-          const { moment_id, moments_name, suggested_time } = pendingMoment.rows[0];
+          const { moment_id, moments_name, suggested_time, venue, moment_start } = pendingMoment.rows[0];
 
           const { text: interpretation } = await generateText({
             model: anthropic("claude-sonnet-4-6"),
@@ -540,6 +534,30 @@ export function sendblueRouter(io: Server): Router {
                 ),
               )
               .catch((err) => console.error("Memory embedding failed (non-fatal):", err));
+
+            // Tell every member individually — CoPatible has no group chat, so
+            // each person gets their own confirmation text, not a shared thread.
+            const dateStr = new Date(moment_start).toLocaleDateString("en-US", { weekday: "long", month: "short", day: "numeric" });
+            const timeStr = new Date(moment_start).toLocaleTimeString("en-US", { hour: "numeric", minute: "2-digit", hour12: true });
+            const confirmedMsg = `You're confirmed. ${venue ?? moments_name} on ${dateStr} at ${timeStr}. Co will send details closer to the day.`;
+
+            const confirmedMembers = await pool.query(
+              `SELECT u.id, u.phone_number FROM moment_responses mr
+               JOIN users u ON u.id = mr.user_id
+               WHERE mr.moment_id = $1`,
+              [moment_id],
+            );
+            for (const member of confirmedMembers.rows) {
+              try {
+                await sendblue.messages.send({
+                  number: member.phone_number,
+                  content: confirmedMsg,
+                  from_number: process.env.SENDBLUE_PHONE_NUMBER!,
+                });
+              } catch (confirmErr: any) {
+                console.error(`Booking-confirmed message failed for ${member.id}:`, confirmErr?.message ?? confirmErr);
+              }
+            }
 
             io.to(`moment:${moment_id}`).emit("moment:confirmed", { moment_id });
             return res.status(200).send({ received: true, action: "booking_confirmed" });
