@@ -1,8 +1,10 @@
 import { anthropic } from "@ai-sdk/anthropic";
 import { generateText } from "ai";
+import { randomInt } from "crypto";
 import { NextFunction, Request, Response, Router } from "express";
 import type { Server } from "socket.io";
 import pool from "../db/db.js";
+import { sendSMS } from "../otpActions.js";
 import elevenlabs from "../services/elevenlabs.js";
 import { generateEmbedding } from "../services/embeddings.js";
 import { findBestCircle } from "../services/matching.js";
@@ -404,6 +406,30 @@ export function sendblueRouter(io: Server): Router {
         if (!user) {
           console.log(`Inbound message from unknown number: ${number}`);
           return res.status(200).send({ received: true });
+        }
+
+        // Step 1.5 — First contact from an unverified self-serve registration.
+        // Our Sendblue plan only allows replying to contacts who've texted in
+        // first, so the OTP couldn't be sent at registration time. This is
+        // that first inbound text — mark verified and send the OTP now as a
+        // reply, which the plan permits. Nothing else in this handler applies
+        // to a user who hasn't completed signup yet, so return early.
+        if (!user.contact_verified) {
+          const otp = randomInt(100000, 1000000);
+          const expiryTimeStamp = new Date(Date.now() + 300000).toISOString();
+
+          await pool.query(
+            `UPDATE users SET contact_verified = true, otp_code = $2, otp_expiry = $3 WHERE id = $1`,
+            [user.id, otp, expiryTimeStamp],
+          );
+
+          await sendSMS({
+            phone_number: user.phone_number,
+            otp_code: otp.toString(),
+            register: true,
+          });
+
+          return res.status(200).send({ received: true, action: "contact_verified" });
         }
 
         // Step 2 — Detect if inbound is a voice memo; if so, transcribe it

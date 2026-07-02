@@ -1,6 +1,8 @@
 // Sign-up sub-form — rendered by the AuthScreen container when mode is "New".
 // Collects name, email, and phone. Phone is used for OTP delivery and later
-// for Co voice calls. Calls onSuccess(userId) on a successful POST /auth/register.
+// for Co voice calls. Registration never sends the OTP directly — our
+// Sendblue plan can only reply to contacts who've texted in first — so
+// onSuccess always routes through the text-to-verify step.
 import { useRegister } from "@/hooks/useAuth";
 import { useState } from "react";
 import {
@@ -12,8 +14,14 @@ import {
   View,
 } from "react-native";
 
+interface AuthSuccess {
+  userId: string;
+  needsVerification?: boolean;
+  verifyNumber?: string;
+}
+
 interface Props {
-  onSuccess: (userId: string) => void;
+  onSuccess: (result: AuthSuccess) => void;
 }
 
 // Splits a single "Full Name" input into first/last name — the backend
@@ -41,7 +49,14 @@ export default function SignUp({ onSuccess }: Props) {
         email: email.trim(),
         phone_number: phone.trim(),
       },
-      { onSuccess: (res) => onSuccess(res.data?.user_id) }
+      {
+        onSuccess: (res) =>
+          onSuccess({
+            userId: res.data?.user_id,
+            needsVerification: true,
+            verifyNumber: res.data?.verify_number,
+          }),
+      }
     );
   };
 

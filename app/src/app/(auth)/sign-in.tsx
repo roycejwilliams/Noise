@@ -48,9 +48,23 @@ export default function AuthScreen() {
     outputRange: [3, toggleWidth / 2 - 3],
   });
 
-  // Both sub-forms call this on success — the container owns the next route
-  const handleSuccess = (userId: string) => {
-    router.push({ pathname: "/(auth)/otp", params: { userId } });
+  // Both sub-forms call this on success — the container owns the next route.
+  // needsVerification means no OTP was actually sent yet (either a fresh
+  // registration, or a login for an account that never texted in) — route
+  // through the text-to-verify step first instead of straight to OTP entry.
+  const handleSuccess = (result: {
+    userId: string;
+    needsVerification?: boolean;
+    verifyNumber?: string;
+  }) => {
+    if (result.needsVerification) {
+      router.push({
+        pathname: "/(auth)/verify-contact",
+        params: { userId: result.userId, verifyNumber: result.verifyNumber ?? "" },
+      });
+    } else {
+      router.push({ pathname: "/(auth)/otp", params: { userId: result.userId } });
+    }
   };
 
   return (

@@ -1,6 +1,6 @@
 // Sign-in sub-form — rendered by the AuthScreen container when mode is "Login".
 // Only asks for email; the backend sends an OTP to that address.
-// Calls onSuccess(userId) on a successful POST — the container handles routing.
+// Calls onSuccess on a successful POST — the container handles routing.
 import { useLogin } from "@/hooks/useAuth";
 import { useState } from "react";
 import {
@@ -12,8 +12,14 @@ import {
   View,
 } from "react-native";
 
+interface AuthSuccess {
+  userId: string;
+  needsVerification?: boolean;
+  verifyNumber?: string;
+}
+
 interface Props {
-  onSuccess: (userId: string) => void;
+  onSuccess: (result: AuthSuccess) => void;
 }
 
 export default function SignIn({ onSuccess }: Props) {
@@ -27,11 +33,22 @@ export default function SignIn({ onSuccess }: Props) {
     login(
       { email: email.trim() },
       {
-        onSuccess: (res) => onSuccess(res.data?.data?.id),
+        onSuccess: (res) => onSuccess({ userId: res.data?.data?.id }),
         onError: (err: unknown) => {
-          const status = (err as { response?: { status?: number } })?.response?.status;
+          const response = (err as { response?: { status?: number; data?: any } })?.response;
+          // 403 "Text to verify" — this account registered but never
+          // completed the text-in step. Treat it like success and route
+          // through verification instead of showing an error.
+          if (response?.status === 403 && response.data?.user_id) {
+            onSuccess({
+              userId: response.data.user_id,
+              needsVerification: true,
+              verifyNumber: response.data.verify_number,
+            });
+            return;
+          }
           setError(
-            status === 404
+            response?.status === 404
               ? "No account found with that email."
               : "Something went wrong. Please try again."
           );

@@ -195,4 +195,15 @@ export function runMigrations() {
       console.error("users.stripe_customer_id migration failed:", err),
     );
 
+  // Gates whether Co can message a number yet — our Sendblue plan only allows
+  // replying to contacts who have texted in first, so new self-serve
+  // registrations must text in before their OTP is sent. Existing rows are
+  // backfilled to true separately (one-time, not part of this migration) so
+  // pre-existing accounts aren't newly blocked.
+  pool
+    .query(`ALTER TABLE users ADD COLUMN IF NOT EXISTS contact_verified BOOLEAN NOT NULL DEFAULT false`)
+    .catch((err: Error) =>
+      console.error("users.contact_verified migration failed:", err),
+    );
+
 }

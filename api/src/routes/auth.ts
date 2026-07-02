@@ -112,7 +112,10 @@ export function createAuthRouter(): Router {
   });
 
   // POST /auth/register — self-serve signup, independent of the /applications
-  // admin-approval pipeline. Creates a user row directly and sends an OTP.
+  // admin-approval pipeline. Creates a user row, but does NOT send an OTP yet —
+  // our Sendblue plan can only reply to contacts who've texted in first, so the
+  // user must text the Sendblue number before Co can message them at all. The
+  // OTP is sent from the inbound webhook once that text arrives (see sendblue.ts).
   router.post("/register", async (req, res, next) => {
     if (!req.body) return res.status(400).send("Request body cannot be empty.");
 
@@ -125,10 +128,6 @@ export function createAuthRouter(): Router {
       return res.status(400).send(`${missing} is required.`);
     }
 
-    const otp = generateOTP();
-    const expiryAt = Date.now() + 300000;
-    const expiryTimeStamp = new Date(expiryAt).toISOString();
-
     try {
       const existing = await pool.query(
         `SELECT id FROM users WHERE email = $1 OR phone_number = $2`,
@@ -140,24 +139,35 @@ export function createAuthRouter(): Router {
       }
 
       const created = await pool.query(
-        `INSERT INTO users (first_name, last_name, email, phone_number, username, subscription_status, role, otp_code, otp_expiry)
-         VALUES ($1, $2, $3, $4, $5, 'inactive', 'user', $6, $7)
+        `INSERT INTO users (first_name, last_name, email, phone_number, username, subscription_status, role)
+         VALUES ($1, $2, $3, $4, $5, 'inactive', 'user')
          RETURNING *`,
-        [first_name, last_name, email, phone_number, email.split("@")[0], otp, expiryTimeStamp],
+        [first_name, last_name, email, phone_number, email.split("@")[0]],
       );
 
       const newUser: UserProp = created.rows[0];
 
-      await sendSMS({
-        phone_number: newUser.phone_number,
-        otp_code: otp.toString(),
-        register: true,
-      });
-
       return res.status(200).send({
-        message: "OTP sent",
+        message: "Text to verify",
         user_id: newUser.id,
+        verify_number: process.env.SENDBLUE_PHONE_NUMBER,
       });
+    } catch (error) {
+      next(error);
+    }
+  });
+
+  // GET /auth/verify-status/:user_id — polled by the app while showing the
+  // "text us to continue" screen. No auth — there's no JWT yet at this point
+  // in the flow, and user_id (a UUID) already acts as the capability token.
+  router.get("/verify-status/:user_id", async (req, res, next) => {
+    try {
+      const result = await pool.query(
+        `SELECT contact_verified FROM users WHERE id = $1`,
+        [req.params.user_id],
+      );
+      if (!result.rows[0]) return res.status(404).send("User not found.");
+      return res.status(200).send({ contact_verified: !!result.rows[0].contact_verified });
     } catch (error) {
       next(error);
     }
@@ -174,13 +184,24 @@ export function createAuthRouter(): Router {
     const { email } = req.body;
     try {
       const verifyEmail = await pool.query(
-        `SELECT id FROM users WHERE email = $1`,
+        `SELECT id, contact_verified FROM users WHERE email = $1`,
         [email],
       );
 
       const userEmail: UserProp = verifyEmail.rows[0];
 
       if (userEmail) {
+        // Edge case: registered but never texted in to complete verification.
+        // Sending an OTP now would silently fail (Sendblue can't reach an
+        // unverified contact) — send them back to the text-in step instead.
+        if (!userEmail.contact_verified) {
+          return res.status(403).send({
+            message: "Text to verify",
+            user_id: userEmail.id,
+            verify_number: process.env.SENDBLUE_PHONE_NUMBER,
+          });
+        }
+
         const updateOTP = await pool.query(
           "UPDATE users SET otp_code = $2, otp_expiry = $3 WHERE id = $1 RETURNING *",
           [userEmail.id, updatedGeneratedOTP, updatedExpiryTimeStamp],

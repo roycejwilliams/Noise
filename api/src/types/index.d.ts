@@ -37,6 +37,7 @@ interface UserProp {
   linkedin: string;
   subscription_status: "active" | "inactive" | "past_due" | "canceled";
   stripe_customer_id: string;
+  contact_verified: boolean;
 }
 
 interface CircleProp {
