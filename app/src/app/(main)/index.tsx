@@ -70,6 +70,7 @@ export default function HomeScreen() {
   const [textMode, setTextMode] = useState(false);
   const [text, setText] = useState("");
   const [calling, setCalling] = useState(false);
+  const [callError, setCallError] = useState<string | null>(null);
   const [submitting, setSubmitting] = useState(false);
   const [placementNotification, setPlacementNotification] = useState<CoNotification | null>(null);
   const userIdRef = useRef<string | null>(null);
@@ -149,11 +150,20 @@ export default function HomeScreen() {
   const handleCallCo = async () => {
     if (calling) return;
     setCalling(true);
+    setCallError(null);
     try {
       const userId = userIdRef.current ?? await SecureStore.getItemAsync("user_id");
-      if (userId) await api.post(`/co/call/${userId}`);
-    } catch {}
-    router.push("/voice");
+      if (!userId) throw new Error("Not signed in.");
+      await api.post(`/co/call/${userId}`);
+      router.push("/voice");
+    } catch (err: any) {
+      const message =
+        typeof err?.response?.data === "string" && err.response.data
+          ? err.response.data
+          : "Co couldn't reach you. Try again in a moment.";
+      setCallError(message);
+      setCalling(false);
+    }
   };
 
   const handleTextSubmit = async () => {
@@ -228,6 +238,10 @@ export default function HomeScreen() {
               )}
             </TouchableOpacity>
           </View>
+        )}
+
+        {callError && !textMode && (
+          <Text style={s.callErrorText}>{callError}</Text>
         )}
 
         {/* Primary: Call Co */}
@@ -308,6 +322,14 @@ const s = StyleSheet.create({
     fontWeight: "300",
     color: "#ffffff",
     letterSpacing: 0.2,
+  },
+
+  callErrorText: {
+    fontSize: 13,
+    fontWeight: "300",
+    color: "rgba(255,120,120,0.9)",
+    textAlign: "center",
+    marginBottom: 12,
   },
 
   // Call Co button
