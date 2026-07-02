@@ -15,7 +15,6 @@ import { corsOptions } from "./middleware/cors.js";
 import { errorHandler } from "./middleware/errorHandler.js";
 import {
   applicationLimiter,
-  authLimiter,
   limiter,
 } from "./middleware/rateLimiter.js";
 import { createAiRouter } from "./routes/ai.js";
@@ -53,7 +52,6 @@ app.use(express.urlencoded({ extended: false })); // Twilio status callbacks sen
 app.use(helmut());
 app.use(cors(corsOptions));
 app.use(limiter);
-app.use("/auth", authLimiter);
 app.post("/applications", applicationLimiter);
 app.use(cookieParser());
 

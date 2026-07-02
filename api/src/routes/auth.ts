@@ -2,6 +2,7 @@ import { randomInt } from "crypto";
 import { Router } from "express"; // isolated, modular instance of routes and middleware
 import jwt from "jsonwebtoken";
 import pool from "../db/db.js";
+import { authLimiter } from "../middleware/rateLimiter.js";
 import { sendEmail, sendSMS } from "../otpActions.js";
 import { normalizePhone } from "../utils/phone.js";
 
@@ -14,7 +15,10 @@ export function createAuthRouter(): Router {
 
   // POST /auth/verify-otp — validates the 6-digit code and returns a JWT in the body
   // for mobile clients (SecureStore). Also sets a cookie for web clients.
-  router.post("/verify-otp", async (req, res, next) => {
+  // Rate limited (brute-force protection on a 6-digit code) — verify-status
+  // below is deliberately NOT under this limiter since the app polls it
+  // every few seconds while waiting for text-in verification.
+  router.post("/verify-otp", authLimiter, async (req, res, next) => {
     const { user_id, otp_code } = req.body;
 
     try {
@@ -117,7 +121,7 @@ export function createAuthRouter(): Router {
   // our Sendblue plan can only reply to contacts who've texted in first, so the
   // user must text the Sendblue number before Co can message them at all. The
   // OTP is sent from the inbound webhook once that text arrives (see sendblue.ts).
-  router.post("/register", async (req, res, next) => {
+  router.post("/register", authLimiter, async (req, res, next) => {
     if (!req.body) return res.status(400).send("Request body cannot be empty.");
 
     const { first_name, last_name, email, phone_number } = req.body;
@@ -179,7 +183,7 @@ export function createAuthRouter(): Router {
   // POST /auth/login — looks up existing user by email, sends OTP.
   // Queries users.email directly so this works for both applications-accepted
   // accounts and self-serve /auth/register accounts (which have no application_id).
-  router.post("/login", async (req, res, next) => {
+  router.post("/login", authLimiter, async (req, res, next) => {
     const updatedGeneratedOTP = generateOTP();
     const updatedExpiryAt = Date.now() + 300000;
     const updatedExpiryTimeStamp = new Date(updatedExpiryAt).toISOString();
@@ -234,7 +238,7 @@ export function createAuthRouter(): Router {
   });
 
   // POST /auth/send-otp — resends the OTP code for an existing user
-  router.post("/send-otp", async (req, res, next) => {
+  router.post("/send-otp", authLimiter, async (req, res, next) => {
     const updatedGeneratedOTP = generateOTP();
     const updatedExpiryAt = Date.now() + 300000;
     const updatedExpiryTimeStamp = new Date(updatedExpiryAt).toISOString();
