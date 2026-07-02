@@ -122,11 +122,18 @@ export default function VoiceScreen() {
 
     const advance = (state: VoiceState) => () => { if (mounted) setVoiceState(state); };
 
-    socket.on("co:call_started",  advance("ringing"));
-    socket.on("co:call_ringing",  advance("ringing"));
-    socket.on("co:call_active",   advance("active"));
-    socket.on("co:call_answered", advance("active"));
-    socket.on("co:call_ended",    advance("processing"));
+    // Typed-intake (initialState=processing) never places a real call, so it
+    // must not react to call-progress events — a stray/delayed status update
+    // from an earlier, abandoned "Call Co" attempt could otherwise hijack
+    // this screen and flip it into the ringing/active call stage.
+    const isTypedIntake = initialState === "processing";
+    if (!isTypedIntake) {
+      socket.on("co:call_started",  advance("ringing"));
+      socket.on("co:call_ringing",  advance("ringing"));
+      socket.on("co:call_active",   advance("active"));
+      socket.on("co:call_answered", advance("active"));
+      socket.on("co:call_ended",    advance("processing"));
+    }
     socket.on("co:processing",    advance("processing"));
     socket.on("co:profile_ready", advance("ready"));
 
