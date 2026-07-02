@@ -1,6 +1,13 @@
 import type { Circle, Moment, MomentResponse } from "@/types";
 import { useState } from "react";
-import { ActivityIndicator, ScrollView, StyleSheet, Text, TouchableOpacity, View } from "react-native";
+import {
+  ActivityIndicator,
+  ScrollView,
+  StyleSheet,
+  Text,
+  TouchableOpacity,
+  View,
+} from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
 
 interface Props {
@@ -15,8 +22,15 @@ function fmt(s: string) {
   return s.replace(/_/g, " ").replace(/\b\w/g, (c) => c.toUpperCase());
 }
 
-interface DateOption { label: string; dayOffset: number }
-interface TimeOption { label: string; hour: number; minute: number }
+interface DateOption {
+  label: string;
+  dayOffset: number;
+}
+interface TimeOption {
+  label: string;
+  hour: number;
+  minute: number;
+}
 
 // Centered on moment_start (a real ISO timestamp) — the actual time Co is
 // proposing over iMessage — with two nearby-day alternates. Not based on
@@ -28,7 +42,11 @@ function getDateOptions(momentStart: string): DateOption[] {
     const d = new Date(base);
     d.setDate(d.getDate() + dayOffset);
     return {
-      label: d.toLocaleDateString("en-US", { weekday: "short", month: "short", day: "numeric" }),
+      label: d.toLocaleDateString("en-US", {
+        weekday: "short",
+        month: "short",
+        day: "numeric",
+      }),
       dayOffset,
     };
   });
@@ -43,11 +61,21 @@ function getTimeOptions(momentStart: string): TimeOption[] {
     const m = totalMins % 60;
     const period = h >= 12 ? "PM" : "AM";
     const displayH = h > 12 ? h - 12 : h === 0 ? 12 : h;
-    return { label: `${displayH}:${m.toString().padStart(2, "0")} ${period}`, hour: h, minute: m };
+    return {
+      label: `${displayH}:${m.toString().padStart(2, "0")} ${period}`,
+      hour: h,
+      minute: m,
+    };
   });
 }
 
-export default function ConsensusPolling({ circle, moment, responses, isConnector, onProposeTime }: Props) {
+export default function ConsensusPolling({
+  circle,
+  moment,
+  responses,
+  isConnector,
+  onProposeTime,
+}: Props) {
   const yesCount = responses.filter((r) => r.response === "yes").length;
   const dateOptions = getDateOptions(moment.moment_start);
   const timeOptions = getTimeOptions(moment.moment_start);
@@ -76,18 +104,21 @@ export default function ConsensusPolling({ circle, moment, responses, isConnecto
 
   return (
     <SafeAreaView style={s.root}>
-      <Text style={s.wordmark}>CoPatible</Text>
-      <ScrollView style={s.scroll} contentContainerStyle={s.content} showsVerticalScrollIndicator={false}>
-        <View style={s.circleHeader}>
-          <View>
-            <Text style={s.sectionLabel}>Circle</Text>
+      <ScrollView
+        style={s.scroll}
+        contentContainerStyle={s.content}
+        showsVerticalScrollIndicator={false}
+      >
+        <View>
+          <Text style={s.sectionLabel}>Circle</Text>
+          <View style={s.circleHeader}>
             <Text style={s.circleName}>{circle.circle_name}</Text>
+            {isConnector && (
+              <View style={s.connectorBadge}>
+                <Text style={s.connectorText}>Circle Connector</Text>
+              </View>
+            )}
           </View>
-          {isConnector && (
-            <View style={s.connectorBadge}>
-              <Text style={s.connectorText}>Circle Connector</Text>
-            </View>
-          )}
         </View>
 
         <View style={s.momentCard}>
@@ -107,11 +138,21 @@ export default function ConsensusPolling({ circle, moment, responses, isConnecto
               {dateOptions.map((d) => (
                 <TouchableOpacity
                   key={d.label}
-                  style={[s.pill, d.dayOffset === selectedDayOffset && s.pillSelected]}
+                  style={[
+                    s.pill,
+                    d.dayOffset === selectedDayOffset && s.pillSelected,
+                  ]}
                   onPress={() => setSelectedDayOffset(d.dayOffset)}
                   activeOpacity={0.7}
                 >
-                  <Text style={[s.pillText, d.dayOffset === selectedDayOffset && s.pillTextSelected]}>{d.label}</Text>
+                  <Text
+                    style={[
+                      s.pillText,
+                      d.dayOffset === selectedDayOffset && s.pillTextSelected,
+                    ]}
+                  >
+                    {d.label}
+                  </Text>
                 </TouchableOpacity>
               ))}
             </View>
@@ -125,7 +166,14 @@ export default function ConsensusPolling({ circle, moment, responses, isConnecto
                   onPress={() => setSelectedTimeIndex(i)}
                   activeOpacity={0.7}
                 >
-                  <Text style={[s.pillText, i === selectedTimeIndex && s.pillTextSelected]}>{t.label}</Text>
+                  <Text
+                    style={[
+                      s.pillText,
+                      i === selectedTimeIndex && s.pillTextSelected,
+                    ]}
+                  >
+                    {t.label}
+                  </Text>
                 </TouchableOpacity>
               ))}
             </View>
@@ -135,20 +183,26 @@ export default function ConsensusPolling({ circle, moment, responses, isConnecto
             <Text style={s.sectionLabel}>Proposed Time</Text>
             <View style={s.card}>
               <Text style={s.cardText}>{moment.suggested_time ?? "TBD"}</Text>
-              <Text style={s.cardMuted}>Reply YES or suggest another time via iMessage.</Text>
+              <Text style={s.cardMuted}>
+                Reply YES or suggest another time via iMessage.
+              </Text>
             </View>
           </>
         )}
 
         <View style={s.responsesHeader}>
           <Text style={s.sectionLabel}>Responses</Text>
-          <Text style={s.responseCount}>{yesCount} of {responses.length} confirmed</Text>
+          <Text style={s.responseCount}>
+            {yesCount} of {responses.length} confirmed
+          </Text>
         </View>
         {responses.map((r) => (
           <View key={r.user_id} style={s.responseRow}>
             <View style={s.memberAvatar} />
             <Text style={s.memberName}>{r.first_name}</Text>
-            <Text style={[s.responseText, r.response === "yes" && s.responseYes]}>
+            <Text
+              style={[s.responseText, r.response === "yes" && s.responseYes]}
+            >
               {r.response ? fmt(r.response) : "No reply"}
             </Text>
           </View>
@@ -189,9 +243,9 @@ const s = StyleSheet.create({
   content: { paddingHorizontal: 32, paddingBottom: 16 },
   circleHeader: {
     flexDirection: "row",
-    alignItems: "flex-end",
+    alignItems: "center",
     justifyContent: "space-between",
-    marginTop: 24,
+    marginTop: 4,
   },
   sectionLabel: {
     fontSize: 11,
@@ -202,7 +256,7 @@ const s = StyleSheet.create({
     marginTop: 28,
     marginBottom: 12,
   },
-  circleName: { fontSize: 24, fontWeight: "300", color: "#fff", marginTop: 4 },
+  circleName: { fontSize: 16, fontWeight: "300", color: "#fff" },
   connectorBadge: {
     borderWidth: 1,
     borderColor: "rgba(255,255,255,0.3)",
@@ -212,7 +266,11 @@ const s = StyleSheet.create({
     backgroundColor: "rgba(255,255,255,0.06)",
     marginBottom: 4,
   },
-  connectorText: { fontSize: 10, color: "rgba(255,255,255,0.6)", fontWeight: "400" },
+  connectorText: {
+    fontSize: 10,
+    color: "rgba(255,255,255,0.6)",
+    fontWeight: "400",
+  },
   momentCard: {
     borderWidth: 1,
     borderColor: "rgba(255,255,255,0.15)",
@@ -223,8 +281,16 @@ const s = StyleSheet.create({
     marginTop: 4,
   },
   momentName: { fontSize: 14, fontWeight: "400", color: "#fff" },
-  momentVenue: { fontSize: 12, color: "rgba(255,255,255,0.4)", fontWeight: "300" },
-  momentTime: { fontSize: 12, color: "rgba(255,255,255,0.5)", fontWeight: "300" },
+  momentVenue: {
+    fontSize: 12,
+    color: "rgba(255,255,255,0.4)",
+    fontWeight: "300",
+  },
+  momentTime: {
+    fontSize: 12,
+    color: "rgba(255,255,255,0.5)",
+    fontWeight: "300",
+  },
   pillRow: { flexDirection: "row", flexWrap: "wrap", gap: 8 },
   pill: {
     borderWidth: 1,
@@ -248,7 +314,11 @@ const s = StyleSheet.create({
     gap: 6,
   },
   cardText: { fontSize: 14, color: "#fff", fontWeight: "300" },
-  cardMuted: { fontSize: 12, color: "rgba(255,255,255,0.4)", fontWeight: "300" },
+  cardMuted: {
+    fontSize: 12,
+    color: "rgba(255,255,255,0.4)",
+    fontWeight: "300",
+  },
   responsesHeader: {
     flexDirection: "row",
     alignItems: "flex-end",
@@ -274,7 +344,11 @@ const s = StyleSheet.create({
     backgroundColor: "rgba(255,255,255,0.1)",
   },
   memberName: { flex: 1, fontSize: 14, color: "#fff", fontWeight: "300" },
-  responseText: { fontSize: 12, color: "rgba(255,255,255,0.3)", fontWeight: "300" },
+  responseText: {
+    fontSize: 12,
+    color: "rgba(255,255,255,0.3)",
+    fontWeight: "300",
+  },
   responseYes: { color: "rgba(255,255,255,0.7)" },
   bottom: { paddingHorizontal: 32, paddingBottom: 16 },
   cta: {
@@ -286,5 +360,10 @@ const s = StyleSheet.create({
     justifyContent: "center",
   },
   ctaDisabled: { opacity: 0.5 },
-  ctaText: { fontSize: 14, fontWeight: "300", color: "#fff", letterSpacing: 0.3 },
+  ctaText: {
+    fontSize: 14,
+    fontWeight: "300",
+    color: "#fff",
+    letterSpacing: 0.3,
+  },
 });

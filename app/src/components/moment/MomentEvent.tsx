@@ -98,8 +98,8 @@ const s = StyleSheet.create({
   },
   scroll: { flex: 1 },
   heroPlaceholder: {
-    width: "100%",
-    height: 395,
+    aspectRatio: 1,
+    marginHorizontal: 32,
     backgroundColor: "rgba(255,255,255,0.04)",
     borderWidth: 1,
     borderColor: "rgba(255,255,255,0.1)",

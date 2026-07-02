@@ -6,6 +6,7 @@ import { useRouter } from "expo-router";
 import { useEffect, useRef, useState } from "react";
 import {
   ActivityIndicator,
+  KeyboardAvoidingView,
   LayoutAnimation,
   Platform,
   StyleSheet,
@@ -180,6 +181,10 @@ export default function HomeScreen() {
 
   return (
     <View style={s.root}>
+      <KeyboardAvoidingView
+        style={s.flex}
+        behavior={Platform.OS === "ios" ? "padding" : undefined}
+      >
       <SafeAreaView style={s.safe}>
         {/* Greeting */}
         <View style={s.header}>
@@ -269,12 +274,14 @@ export default function HomeScreen() {
           </TouchableOpacity>
         )}
       </SafeAreaView>
+      </KeyboardAvoidingView>
     </View>
   );
 }
 
 const s = StyleSheet.create({
   root: { flex: 1, backgroundColor: "#000000" },
+  flex: { flex: 1 },
   safe: { flex: 1, paddingHorizontal: 32, paddingBottom: 8 },
 
   // Header
