@@ -131,6 +131,7 @@ export function createCirclesRouter(
   c.id,
   c.circle_name,
   c.circle_image,
+  c.status,
   COALESCE(
     json_agg(
       json_build_object(
