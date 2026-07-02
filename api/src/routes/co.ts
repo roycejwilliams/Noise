@@ -186,9 +186,15 @@ router.post(
         from: process.env.TWILIO_PHONE_NUMBER!,
         url: webhookUrl,
         statusCallback: statusCallbackUrl,
-        // ringing = phone is dialing, in-progress = answered, completed = ended
-        statusCallbackEvent: ["ringing", "in-progress", "completed"],
+        // Twilio's valid event names: initiated, ringing, answered, completed.
+        // "completed" fires once for every terminal CallStatus (completed,
+        // no-answer, busy, failed, canceled) — that's what drives the
+        // immediate missed-call follow-up below.
+        statusCallbackEvent: ["ringing", "answered", "completed"],
         statusCallbackMethod: "POST",
+        // Ring for 20s before declaring no-answer, so a missed call gets an
+        // immediate follow-up instead of Twilio's 60s default.
+        timeout: 20,
       });
 
       // Store call attempt in co_memories so status callback has context
