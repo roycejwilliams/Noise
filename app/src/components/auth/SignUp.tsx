@@ -35,12 +35,14 @@ export default function SignUp({ onSuccess }: Props) {
   const [fullName, setFullName] = useState("");
   const [email, setEmail] = useState("");
   const [phone, setPhone] = useState("");
+  const [error, setError] = useState("");
   const { mutate: register, isPending } = useRegister();
 
   const isValid = fullName.trim() && email.trim() && phone.trim();
 
   const handleContinue = () => {
     if (!isValid || isPending) return;
+    setError("");
     const { firstName, lastName } = splitName(fullName);
     register(
       {
@@ -56,6 +58,14 @@ export default function SignUp({ onSuccess }: Props) {
             needsVerification: true,
             verifyNumber: res.data?.verify_number,
           }),
+        onError: (err: unknown) => {
+          const status = (err as { response?: { status?: number } })?.response?.status;
+          setError(
+            status === 409
+              ? "An account with that email or phone number already exists. Try logging in instead."
+              : "Something went wrong. Please try again."
+          );
+        },
       }
     );
   };
@@ -92,6 +102,7 @@ export default function SignUp({ onSuccess }: Props) {
         placeholderTextColor="rgba(255,255,255,0.25)"
         keyboardType="phone-pad"
       />
+      {!!error && <Text style={styles.errorText}>{error}</Text>}
       {/* CTA is disabled until all three fields have content */}
       <TouchableOpacity
         style={[styles.cta, (!isValid || isPending) && styles.ctaDisabled]}
@@ -138,4 +149,9 @@ const styles = StyleSheet.create({
   },
   ctaDisabled: { opacity: 0.3 },
   ctaText: { fontSize: 14, fontWeight: "300", color: "#ffffff", letterSpacing: 0.3 },
+  errorText: {
+    fontSize: 12,
+    color: "rgba(255,100,100,0.9)",
+    marginTop: -4,
+  },
 });
