@@ -563,17 +563,29 @@ export function sendblueRouter(io: Server): Router {
             return res.status(200).send({ received: true, action: "booking_confirmed" });
           }
 
-          await pool.query(
-            `UPDATE moment_responses
-             SET response = $1, responded_at = NOW()
-             WHERE user_id = $2 AND moment_id = $3`,
-            [parsedResponse, user.id, moment_id],
-          );
-          io.to(`moment:${moment_id}`).emit("moment:response", {
-            user_id: user.id,
-            response: parsedResponse,
-          });
-          return res.status(200).send({ received: true, action: "moment_response_captured" });
+          // Only intercept for classifications that are actually actionable —
+          // "unclear" means this wasn't really a moment response at all (e.g.
+          // small talk like "hey, how are you?"), and previously got silently
+          // recorded with no reply ever sent. Falling through lets Co have a
+          // normal conversation instead of going silent on anything ambiguous.
+          const isActionableResponse =
+            parsedResponse === "yes" ||
+            parsedResponse === "no" ||
+            parsedResponse.startsWith("time:");
+
+          if (isActionableResponse) {
+            await pool.query(
+              `UPDATE moment_responses
+               SET response = $1, responded_at = NOW()
+               WHERE user_id = $2 AND moment_id = $3`,
+              [parsedResponse, user.id, moment_id],
+            );
+            io.to(`moment:${moment_id}`).emit("moment:response", {
+              user_id: user.id,
+              response: parsedResponse,
+            });
+            return res.status(200).send({ received: true, action: "moment_response_captured" });
+          }
         }
 
         // Step 4.5 — Show the animated "..." on the user's device while Co
