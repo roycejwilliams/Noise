@@ -440,6 +440,7 @@ router.post(
       }
 
       const { event_name, custom_session_id, chat_id, chat_group_id } = req.body;
+      console.log(`co/webhook received: ${JSON.stringify(req.body)}`);
 
       if (event_name !== "chat_ended") {
         return res.status(200).send({ success: true, ignored: event_name });
