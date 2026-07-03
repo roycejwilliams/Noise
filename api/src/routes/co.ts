@@ -35,7 +35,10 @@ function validateTwilioSignature(req: Request): boolean {
   const sig = req.headers["x-twilio-signature"] as string | undefined;
   if (!sig) return false;
   const url = `${process.env.API_URL}/co/call-status`;
-  return twilio.validateRequest(process.env.TWILIO_AUTH_TOKEN!, sig, url, req.body);
+  const viaAuthToken = twilio.validateRequest(process.env.TWILIO_AUTH_TOKEN!, sig, url, req.body);
+  const viaClientSecret = twilio.validateRequest(process.env.TWILIO_CLIENT_SECRET!, sig, url, req.body);
+  console.log(`call-status sig check — url=${url} sig=${sig} viaAuthToken=${viaAuthToken} viaClientSecret=${viaClientSecret} body=${JSON.stringify(req.body)}`);
+  return viaAuthToken;
 }
 
 // Reject webhook calls that didn't come from Hume (bearer token set in EVI config)
