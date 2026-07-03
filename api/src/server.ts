@@ -1,3 +1,5 @@
+import { anthropic } from "@ai-sdk/anthropic";
+import { generateText } from "ai";
 import cookieParser from "cookie-parser";
 import cors from "cors";
 import "dotenv/config";
@@ -124,7 +126,7 @@ cron.schedule("*/30 * * * *", async () => {
       );
 
       const membersResult = await pool.query(
-        `SELECT u.id, u.phone_number, cp.city, cp.life_chapters
+        `SELECT u.id, u.first_name, u.phone_number, cp.city, cp.life_chapters
          FROM circle_members cm
          JOIN users u ON cm.member_id = u.id
          LEFT JOIN co_profiles cp ON cp.user_id = cm.member_id
@@ -150,9 +152,13 @@ cron.schedule("*/30 * * * *", async () => {
           );
           if (!vcardCheck.rows[0]) {
             try {
+              const { text: vcardMsg } = await generateText({
+                model: anthropic("claude-haiku-4-5-20251001"),
+                prompt: `You are Co, texting ${member.first_name} for the first time. Ask them to save your contact, briefly, in your own words. No exclamation points, no em dashes. 1 sentence.`,
+              });
               await sendblue.messages.send({
                 number: member.phone_number,
-                content: "Co is your life concierge. Save this contact.",
+                content: vcardMsg,
                 media_url: process.env.CO_VCARD_URL,
                 from_number: process.env.SENDBLUE_PHONE_NUMBER!,
               });
@@ -167,9 +173,18 @@ cron.schedule("*/30 * * * *", async () => {
           }
         }
 
-        const placementMsg = momentId
-          ? `I placed you in a circle. ${memberCount} people, same chapter, same city.\n\nhttps://app.copatible.com/moments/${momentId}`
-          : `I placed you in a circle. ${memberCount} people, same chapter, same city.`;
+        // Individual thread, same as the manual-approval path in
+        // sendblue.ts — never mention headcount, this isn't a group blast.
+        let placementMsg = `I placed you in a circle. Same chapter, same city.${momentId ? `\n\nhttps://app.copatible.com/moments/${momentId}` : ""}`;
+        try {
+          const { text } = await generateText({
+            model: anthropic("claude-sonnet-4-6"),
+            prompt: `You are Co. You just placed ${member.first_name} in a circle with people in the same ${chapter || "chapter of life"}, based in ${city}. Text them the news like it means something, not like a system notification. Never mention how many people are in it — this is their own thread, not a group announcement. No exclamation points, no em dashes. 1-2 sentences.`,
+          });
+          placementMsg = momentId ? `${text}\n\nhttps://app.copatible.com/moments/${momentId}` : text;
+        } catch (genErr: any) {
+          console.error("Auto-approval placement message generation failed, using fallback (non-fatal):", genErr?.message ?? genErr);
+        }
 
         try {
           await sendblue.messages.send({

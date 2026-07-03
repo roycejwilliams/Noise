@@ -171,7 +171,7 @@ export function sendblueRouter(io: Server): Router {
             );
 
             const circleMembers = await pool.query(
-              `SELECT u.id, u.phone_number, cp.city, cp.life_chapters
+              `SELECT u.id, u.first_name, u.phone_number, cp.city, cp.life_chapters
                FROM circle_members cm
                JOIN users u ON cm.member_id = u.id
                LEFT JOIN co_profiles cp ON cp.user_id = cm.member_id
@@ -192,9 +192,13 @@ export function sendblueRouter(io: Server): Router {
                 );
                 if (!vcardCheck.rows[0]) {
                   try {
+                    const { text: vcardMsg } = await generateText({
+                      model: anthropic("claude-haiku-4-5-20251001"),
+                      prompt: `You are Co, texting ${member.first_name} for the first time. Ask them to save your contact, briefly, in your own words. No exclamation points, no em dashes. 1 sentence.`,
+                    });
                     await sendblue.messages.send({
                       number: member.phone_number,
-                      content: "Co is your life concierge. Save this contact.",
+                      content: vcardMsg,
                       media_url: process.env.CO_VCARD_URL,
                       from_number: process.env.SENDBLUE_PHONE_NUMBER!,
                     });
@@ -213,7 +217,16 @@ export function sendblueRouter(io: Server): Router {
               // CoPatible launches with individual iMessage coordination only —
               // no group chat — so this never references headcount or a shared
               // thread, only the person's own circle and their own moment.
-              const placementMsg = "I placed you in a circle. Co found people navigating the same chapter as you. Your first moment is coming.";
+              let placementMsg = "I placed you in a circle. Co found people navigating the same chapter as you. Your first moment is coming.";
+              try {
+                const { text } = await generateText({
+                  model: anthropic("claude-sonnet-4-6"),
+                  prompt: `You are Co. You just placed ${member.first_name} in a circle with people in the same ${chapter || "chapter of life"}, based in ${city}. Text them the news like it means something, not like a system notification. Never mention how many people are in it — this is their own thread, not a group announcement. No exclamation points, no em dashes. 1-2 sentences.`,
+                });
+                placementMsg = text;
+              } catch (genErr: any) {
+                console.error("Placement message generation failed, using fallback (non-fatal):", genErr?.message ?? genErr);
+              }
 
               try {
                 await sendblue.messages.send({
@@ -539,7 +552,16 @@ export function sendblueRouter(io: Server): Router {
             // each person gets their own confirmation text, not a shared thread.
             const dateStr = new Date(moment_start).toLocaleDateString("en-US", { weekday: "long", month: "short", day: "numeric" });
             const timeStr = new Date(moment_start).toLocaleTimeString("en-US", { hour: "numeric", minute: "2-digit", hour12: true });
-            const confirmedMsg = `You're confirmed. ${venue ?? moments_name} on ${dateStr} at ${timeStr}. Co will send details closer to the day.`;
+            let confirmedMsg = `You're confirmed. ${venue ?? moments_name} on ${dateStr} at ${timeStr}. Co will send details closer to the day.`;
+            try {
+              const { text } = await generateText({
+                model: anthropic("claude-haiku-4-5-20251001"),
+                prompt: `You are Co. A moment just got booked: ${venue ?? moments_name} on ${dateStr} at ${timeStr}. Text confirming it's locked in, in your own words — not a template. Mention you'll follow up with details closer to the day. No exclamation points, no em dashes. 1-2 sentences.`,
+              });
+              confirmedMsg = text;
+            } catch (genErr: any) {
+              console.error("Booking-confirmed message generation failed, using fallback (non-fatal):", genErr?.message ?? genErr);
+            }
 
             const confirmedMembers = await pool.query(
               `SELECT u.id, u.phone_number FROM moment_responses mr
