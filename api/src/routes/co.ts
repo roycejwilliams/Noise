@@ -466,7 +466,7 @@ router.post(
       }
 
       if (!callUser) {
-        const byId = await pool.query(`SELECT first_name, phone_number FROM users WHERE id = $1`, [user_id]);
+        const byId = await pool.query(`SELECT id, first_name, phone_number FROM users WHERE id = $1`, [user_id]);
         callUser = byId.rows[0] ?? null;
       }
 
@@ -600,6 +600,7 @@ router.post(
       // only confirmation they actually get that the call did something.
       // Grounded in the actual transcript, not the extracted fields — the
       // point is to show Co was genuinely listening, not to close a ticket.
+      console.log(`co/webhook: follow-up gate — custom_session_id=${custom_session_id} user_id=${user_id} callUser=${JSON.stringify(callUser)}`);
       if (callUser) {
         try {
           const { text: followUpMessage } = await generateText({
