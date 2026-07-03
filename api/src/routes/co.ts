@@ -35,7 +35,7 @@ function validateTwilioSignature(req: Request): boolean {
   const sig = req.headers["x-twilio-signature"] as string | undefined;
   if (!sig) return false;
   const url = `${process.env.API_URL}/co/call-status`;
-  return twilio.validateRequest(process.env.TWILIO_CLIENT_SECRET!, sig, url, req.body);
+  return twilio.validateRequest(process.env.TWILIO_AUTH_TOKEN!, sig, url, req.body);
 }
 
 // Reject webhook calls that didn't come from Hume (bearer token set in EVI config)
@@ -108,32 +108,78 @@ Transcript:
   }
 }
 
-// Normalize Hume EVI webhook payload — handles snake_case vs camelCase and
-// assembles a flat transcript string from message-array payloads
-function normalizeHumePayload(body: any) {
-  const customSessionId = body.customSessionId ?? body.custom_session_id ?? body.user_id;
-  const chatGroupId = body.chatGroupId ?? body.chat_group_id;
+// Hume's chat_ended webhook only carries IDs (chat_id, chat_group_id,
+// custom_session_id, end_reason, duration_seconds) — no transcript, no
+// emotions, no recording. The actual conversation has to be pulled separately
+// from the Chat Events API before anything can be extracted.
+type HumeChatEvent = {
+  role: string;
+  type: string;
+  message_text: string | null;
+  emotion_features: string | null;
+};
 
-  let transcript = "";
-  if (typeof body.transcript === "string") {
-    transcript = body.transcript;
-  } else {
-    const messages: any[] = body.messages ?? (Array.isArray(body.transcript) ? body.transcript : []);
-    if (messages.length > 0) {
-      transcript = messages
-        .map((m) => {
-          const role = m.role ?? m.type ?? "unknown";
-          const content = m.content ?? m.message?.content ?? m.text ?? "";
-          return `${role}: ${content}`;
-        })
-        .join("\n");
+async function fetchHumeChatEvents(chatId: string): Promise<HumeChatEvent[]> {
+  const events: HumeChatEvent[] = [];
+  let page = 0;
+  for (;;) {
+    const res = await fetch(
+      `https://api.hume.ai/v0/evi/chats/${chatId}?page_size=100&page_number=${page}`,
+      { headers: { "X-Hume-Api-Key": process.env.HUME_API_KEY! } },
+    );
+    if (!res.ok) throw new Error(`Hume chat-events fetch failed: ${res.status}`);
+    const data: any = await res.json();
+    events.push(...(data.events_page ?? []));
+    if (page + 1 >= (data.total_pages ?? 1)) break;
+    page += 1;
+  }
+  return events;
+}
+
+async function fetchHumeCallData(
+  chatId: string,
+): Promise<{ transcript: string; emotions: { name: string; score: number }[] | null }> {
+  const events = await fetchHumeChatEvents(chatId);
+
+  const transcript = events
+    .filter((e) => e.type === "USER_MESSAGE" || e.type === "AGENT_MESSAGE")
+    .map((e) => `${e.role === "USER" ? "user" : "assistant"}: ${e.message_text ?? ""}`)
+    .join("\n");
+
+  const userEmotionSets = events
+    .filter((e) => e.type === "USER_MESSAGE" && e.emotion_features)
+    .map((e) => JSON.parse(e.emotion_features!) as Record<string, number>);
+
+  let emotions: { name: string; score: number }[] | null = null;
+  if (userEmotionSets.length > 0) {
+    const totals = new Map<string, number>();
+    for (const set of userEmotionSets) {
+      for (const [name, score] of Object.entries(set)) {
+        totals.set(name, (totals.get(name) ?? 0) + score);
+      }
     }
+    emotions = [...totals.entries()]
+      .map(([name, sum]) => ({ name, score: sum / userEmotionSets.length }))
+      .sort((a, b) => b.score - a.score);
   }
 
-  const emotions = body.emotions ?? body.inferences ?? body.prosody?.scores ?? null;
-  const recording_url = body.recording_url ?? body.recordingUrl ?? null;
+  return { transcript, emotions };
+}
 
-  return { customSessionId, chatGroupId, transcript, emotions, recording_url };
+// Best-effort — Hume's audio reconstruction is an async job that may not be
+// COMPLETE yet by the time chat_ended fires. A miss here just means no
+// recording_url gets stored, same as today.
+async function fetchHumeRecordingUrl(chatId: string): Promise<string | null> {
+  try {
+    const res = await fetch(`https://api.hume.ai/v0/evi/chats/${chatId}/audio`, {
+      headers: { "X-Hume-Api-Key": process.env.HUME_API_KEY! },
+    });
+    if (!res.ok) return null;
+    const data: any = await res.json();
+    return data.status === "COMPLETE" ? (data.signed_audio_url ?? null) : null;
+  } catch {
+    return null;
+  }
 }
 
 // Shared by both the standard missed-call path (no-answer/busy/failed/
@@ -381,7 +427,10 @@ router.post(
   },
 );
 
-// POST /co/webhook — Hume sends call transcript + emotions after call ends
+// POST /co/webhook — Hume calls this for chat_started, chat_ended, and
+// tool_call (all three are registered on the config). Only chat_ended has
+// anything worth extracting — the payload itself carries no transcript, so
+// it's fetched separately from Hume's Chat Events API using chat_id.
 router.post(
   "/webhook",
   async (req: Request, res: Response, next: NextFunction) => {
@@ -390,18 +439,29 @@ router.post(
         return res.status(401).send("Unauthorized.");
       }
 
-      // Normalize field names — Hume EVI may send snake_case or camelCase,
-      // and transcript may be a string or an array of message objects
-      const { customSessionId, chatGroupId, transcript, emotions, recording_url } =
-        normalizeHumePayload(req.body);
-      const user_id = customSessionId;
+      const { event_name, custom_session_id, chat_id, chat_group_id } = req.body;
 
-      if (!user_id || !transcript) {
+      if (event_name !== "chat_ended") {
+        return res.status(200).send({ success: true, ignored: event_name });
+      }
+
+      const user_id = custom_session_id;
+      if (!user_id || !chat_id) {
         return res.status(400).send("Missing required fields.");
       }
 
       // Let the app know the call ended and Co is now extracting the profile
       _io?.to(`user:${user_id}`).emit("co:processing");
+
+      const [{ transcript, emotions }, recording_url] = await Promise.all([
+        fetchHumeCallData(chat_id),
+        fetchHumeRecordingUrl(chat_id),
+      ]);
+
+      if (!transcript) {
+        console.error(`co/webhook: empty transcript for chat ${chat_id} (user ${user_id})`);
+        return res.status(200).send({ success: true, empty: true });
+      }
 
       // Step 1 — Store raw transcript in co_memories immediately
       const callMemory = await pool.query(
@@ -502,10 +562,10 @@ router.post(
       );
 
       // Step 6 — Persist Hume chat group ID so the next call resumes this conversation
-      if (chatGroupId) {
+      if (chat_group_id) {
         await pool.query(
           `UPDATE co_profiles SET hume_chat_group_id = $1 WHERE user_id = $2`,
-          [chatGroupId, user_id],
+          [chat_group_id, user_id],
         );
       }
 
