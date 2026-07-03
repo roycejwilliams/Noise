@@ -442,15 +442,27 @@ router.post(
         return res.status(401).send("Unauthorized.");
       }
 
-      const { event_name, custom_session_id, chat_id, chat_group_id } = req.body;
-      console.log(`co/webhook received: ${JSON.stringify(req.body)}`);
+      const { event_name, custom_session_id, chat_id, chat_group_id, twilio_metadata } = req.body;
 
       if (event_name !== "chat_ended") {
         return res.status(200).send({ success: true, ignored: event_name });
       }
 
-      const user_id = custom_session_id;
+      // Hume's Twilio integration does not reliably return custom_session_id
+      // (confirmed empty on real calls) even though it's passed on the
+      // handshake URL — fall back to resolving the user by the phone number
+      // Twilio actually dialed, which Hume does include on the Twilio leg.
+      let user_id = custom_session_id;
+      if (!user_id && twilio_metadata?.to_number) {
+        const byPhone = await pool.query(
+          `SELECT id FROM users WHERE phone_number = $1`,
+          [twilio_metadata.to_number],
+        );
+        user_id = byPhone.rows[0]?.id ?? null;
+      }
+
       if (!user_id || !chat_id) {
+        console.error(`co/webhook: could not resolve user for chat ${chat_id} — body: ${JSON.stringify(req.body)}`);
         return res.status(400).send("Missing required fields.");
       }
 
