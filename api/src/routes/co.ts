@@ -35,10 +35,7 @@ function validateTwilioSignature(req: Request): boolean {
   const sig = req.headers["x-twilio-signature"] as string | undefined;
   if (!sig) return false;
   const url = `${process.env.API_URL}/co/call-status`;
-  const viaAuthToken = twilio.validateRequest(process.env.TWILIO_AUTH_TOKEN!, sig, url, req.body);
-  const viaClientSecret = twilio.validateRequest(process.env.TWILIO_CLIENT_SECRET!, sig, url, req.body);
-  console.log(`call-status sig check — url=${url} sig=${sig} viaAuthToken=${viaAuthToken} viaClientSecret=${viaClientSecret} body=${JSON.stringify(req.body)}`);
-  return viaAuthToken;
+  return twilio.validateRequest(process.env.TWILIO_AUTH_TOKEN!, sig, url, req.body);
 }
 
 // Reject webhook calls that didn't come from Hume (bearer token set in EVI config)
@@ -453,17 +450,24 @@ router.post(
       // handshake URL — fall back to resolving the user by the phone number
       // Twilio actually dialed, which Hume does include on the Twilio leg.
       let user_id = custom_session_id;
+      let callUser: { id: string; first_name: string; phone_number: string } | null = null;
       if (!user_id && twilio_metadata?.to_number) {
         const byPhone = await pool.query(
-          `SELECT id FROM users WHERE phone_number = $1`,
+          `SELECT id, first_name, phone_number FROM users WHERE phone_number = $1`,
           [twilio_metadata.to_number],
         );
-        user_id = byPhone.rows[0]?.id ?? null;
+        callUser = byPhone.rows[0] ?? null;
+        user_id = callUser?.id ?? null;
       }
 
       if (!user_id || !chat_id) {
         console.error(`co/webhook: could not resolve user for chat ${chat_id} — body: ${JSON.stringify(req.body)}`);
         return res.status(400).send("Missing required fields.");
+      }
+
+      if (!callUser) {
+        const byId = await pool.query(`SELECT first_name, phone_number FROM users WHERE id = $1`, [user_id]);
+        callUser = byId.rows[0] ?? null;
       }
 
       // Let the app know the call ended and Co is now extracting the profile
@@ -590,6 +594,40 @@ router.post(
 
       // Profile is fully extracted and stored — tell the app to show the Ready state
       _io?.to(`user:${user_id}`).emit("co:profile_ready");
+
+      // Step 8 — Follow-up iMessage. The app only shows "Ready" if it happens
+      // to be open — most people have hung up and moved on, so this is the
+      // only confirmation they actually get that the call did something.
+      if (callUser) {
+        try {
+          const { text: followUpMessage } = await generateText({
+            model: anthropic("claude-haiku-4-5-20251001"),
+            prompt: `You are Co, an exclusive life concierge. You just finished a call with ${callUser.first_name} and learned about their goal to ${extracted.goals?.[0] ?? "connect with the right people"}. Send a short iMessage confirming you have what you need and you're already looking for their circle. Tone: calm, unhurried, like a private members club. No exclamation points. No em dashes. 2 sentences max.`,
+          });
+
+          await sendblue.messages.send({
+            number: callUser.phone_number,
+            content: followUpMessage,
+            from_number: process.env.SENDBLUE_PHONE_NUMBER!,
+          });
+
+          const followUpContent = `Co replied: ${followUpMessage}`;
+          const followUpMem = await pool.query(
+            `INSERT INTO co_memories (user_id, memory_type, content) VALUES ($1, 'text_exchange', $2) RETURNING id`,
+            [user_id, followUpContent],
+          );
+          generateEmbedding(followUpContent)
+            .then((emb) =>
+              pool.query(
+                `UPDATE co_memories SET content_embedding = $1::vector WHERE id = $2`,
+                [`[${emb.join(",")}]`, followUpMem.rows[0].id],
+              ),
+            )
+            .catch((err) => console.error("Memory embedding failed (non-fatal):", err));
+        } catch (followUpErr: any) {
+          console.error("Post-call follow-up text failed (non-fatal):", followUpErr?.message ?? followUpErr);
+        }
+      }
 
       return res.status(200).send({ success: true });
     } catch (error) {
