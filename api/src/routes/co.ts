@@ -598,11 +598,19 @@ router.post(
       // Step 8 — Follow-up iMessage. The app only shows "Ready" if it happens
       // to be open — most people have hung up and moved on, so this is the
       // only confirmation they actually get that the call did something.
+      // Grounded in the actual transcript, not the extracted fields — the
+      // point is to show Co was genuinely listening, not to close a ticket.
       if (callUser) {
         try {
           const { text: followUpMessage } = await generateText({
-            model: anthropic("claude-haiku-4-5-20251001"),
-            prompt: `You are Co, an exclusive life concierge. You just finished a call with ${callUser.first_name} and learned about their goal to ${extracted.goals?.[0] ?? "connect with the right people"}. Send a short iMessage confirming you have what you need and you're already looking for their circle. Tone: calm, unhurried, like a private members club. No exclamation points. No em dashes. 2 sentences max.`,
+            model: anthropic("claude-sonnet-4-6"),
+            prompt: `You are Co. You just got off a call with ${callUser.first_name}. Here's what they told you:
+
+"${transcript}"
+
+Text them something short that proves you were actually listening — pick one real, specific thing they said (a feeling, a struggle, a detail) and respond to that, not a summary of the whole call. This should read like it came from someone who resonated with what they heard, not someone closing out a form.
+
+Do not say "I have what I need," "I'll be in touch," "your circle is ready/next," or anything that sounds like a status update. No exclamation points. No em dashes. 1-2 sentences, text-message length.`,
           });
 
           await sendblue.messages.send({
