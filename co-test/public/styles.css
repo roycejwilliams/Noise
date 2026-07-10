@@ -54,6 +54,11 @@ a {
 
 button {
   font-family: inherit;
+  /* iOS Safari paints buttons with native chrome by default, which can
+     mask author background-color/transform changes (e.g. the call
+     button's active-state color and icon rotation never appearing). */
+  -webkit-appearance: none;
+  appearance: none;
 }
 
 :focus-visible {
@@ -531,6 +536,8 @@ button {
 
 .call-button .call-icon {
   transition: transform 0.15s var(--ease);
+  transform-box: fill-box;
+  transform-origin: center;
 }
 
 /* Active (in-call) state rotates the handset glyph into the conventional
