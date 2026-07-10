@@ -168,7 +168,11 @@ async function startCall() {
         addSystemEntry("Started conversation", "start");
       } catch (err) {
         console.error("Failed to start audio capture:", err);
-        statusEl.textContent = "Mic error";
+        // Surfaced directly in the UI (not just the console) since this is
+        // an internal test tool and the console is hard to reach on phones.
+        const detail =
+          err instanceof Error ? `${err.name || "Error"}: ${err.message}` : String(err);
+        statusEl.textContent = `Mic error — ${detail}`;
         callButton.disabled = false;
       }
     });
