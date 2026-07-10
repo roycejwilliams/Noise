@@ -107,13 +107,12 @@ function resetWaveform() {
   for (let i = 0; i < bars.length; i++) (bars[i] as HTMLElement).style.height = "8%";
 }
 
-async function startAudioCapture(sock: any, timeSliceMs = 80): Promise<MediaRecorder> {
-  const mimeTypeResult = getBrowserSupportedMimeType();
-  const mimeType = mimeTypeResult.success ? mimeTypeResult.mimeType : MimeType.WEBM;
-
-  const micStream = await getAudioStream();
-  ensureSingleValidAudioTrack(micStream);
-
+function startAudioCapture(
+  micStream: MediaStream,
+  mimeType: MimeType,
+  sock: any,
+  timeSliceMs = 80,
+): MediaRecorder {
   const rec = new MediaRecorder(micStream, { mimeType });
   rec.ondataavailable = async (e: BlobEvent) => {
     if (e.data.size > 0 && sock.readyState === WebSocket.OPEN && !micMuted) {
@@ -126,22 +125,57 @@ async function startAudioCapture(sock: any, timeSliceMs = 80): Promise<MediaReco
   return rec;
 }
 
+function resetCallButtonToIdle() {
+  callButton.title = "Start call";
+  callButton.setAttribute("aria-label", "Start call");
+  callButton.disabled = false;
+}
+
 async function startCall() {
   callButton.disabled = true;
   callButton.title = "Connecting…";
   callButton.setAttribute("aria-label", "Connecting…");
   statusEl.textContent = "Connecting…";
 
+  // iOS Safari only allows AudioContext.resume() (inside player.init()) while
+  // the tap's user-activation is still live — that window closes once we've
+  // awaited a couple of network round trips, so this has to run before
+  // anything else, not after them inside the "open" handler like it used to.
   try {
-    // iOS Safari only allows AudioContext.resume() (inside player.init())
-    // while the tap's user-activation is still live — that window closes
-    // once we've awaited a couple of network round trips, so this has to
-    // run before ensureSession()/the token fetch/the WS handshake, not
-    // after them inside the "open" handler like it used to.
     player = new EVIWebAudioPlayer({ fft: { enabled: true } });
     player.on("fft", (e: any) => updateWaveform(e.detail.fft));
     await player.init();
+  } catch (err) {
+    console.error("Failed to init audio player:", err);
+    statusEl.textContent = "Failed to connect";
+    resetCallButtonToIdle();
+    player?.dispose();
+    player = null;
+    return;
+  }
 
+  // Confirm we can actually capture the mic *before* opening the Hume
+  // socket. Hume greets proactively the instant the connection opens, so
+  // requesting the mic only after that point means Co starts talking into
+  // a call the user was never actually connected to.
+  let micStream: MediaStream;
+  let mimeType: MimeType;
+  try {
+    const mimeTypeResult = getBrowserSupportedMimeType();
+    mimeType = mimeTypeResult.success ? mimeTypeResult.mimeType : MimeType.WEBM;
+    micStream = await getAudioStream();
+    ensureSingleValidAudioTrack(micStream);
+  } catch (err) {
+    console.error("Failed to acquire microphone:", err);
+    const detail = err instanceof Error ? `${err.name || "Error"}: ${err.message}` : String(err);
+    statusEl.textContent = `Mic error — ${detail}`;
+    resetCallButtonToIdle();
+    player?.dispose();
+    player = null;
+    return;
+  }
+
+  try {
     await ensureSession();
 
     const tokenRes = await fetch("/api/hume-token", { method: "POST" });
@@ -155,26 +189,16 @@ async function startCall() {
       ...(promptOverride ? { sessionSettings: { systemPrompt: promptOverride } } : {}),
     });
 
-    socket.on("open", async () => {
-      try {
-        recorder = await startAudioCapture(socket);
-        startTimer();
-        statusEl.textContent = "In call";
-        callButton.classList.add("active");
-        callButton.title = "End call";
-        callButton.setAttribute("aria-label", "End call");
-        callButton.setAttribute("aria-pressed", "true");
-        callButton.disabled = false;
-        addSystemEntry("Started conversation", "start");
-      } catch (err) {
-        console.error("Failed to start audio capture:", err);
-        // Surfaced directly in the UI (not just the console) since this is
-        // an internal test tool and the console is hard to reach on phones.
-        const detail =
-          err instanceof Error ? `${err.name || "Error"}: ${err.message}` : String(err);
-        statusEl.textContent = `Mic error — ${detail}`;
-        callButton.disabled = false;
-      }
+    socket.on("open", () => {
+      recorder = startAudioCapture(micStream, mimeType, socket);
+      startTimer();
+      statusEl.textContent = "In call";
+      callButton.classList.add("active");
+      callButton.title = "End call";
+      callButton.setAttribute("aria-label", "End call");
+      callButton.setAttribute("aria-pressed", "true");
+      callButton.disabled = false;
+      addSystemEntry("Started conversation", "start");
     });
 
     socket.on("message", (msg: any) => {
@@ -213,11 +237,10 @@ async function startCall() {
   } catch (err) {
     console.error("Failed to start call:", err);
     statusEl.textContent = "Failed to connect";
-    callButton.title = "Start call";
-    callButton.setAttribute("aria-label", "Start call");
-    callButton.disabled = false;
+    resetCallButtonToIdle();
     player?.dispose();
     player = null;
+    micStream.getTracks().forEach((t) => t.stop());
   }
 }
 
