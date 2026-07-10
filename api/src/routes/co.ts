@@ -7,9 +7,15 @@ import type { Server as IOServer } from "socket.io";
 import pool from "../db/db.js";
 import { sendEmail } from "../otpActions.js";
 import { authenticateToken, userRole } from "../middleware/auth.js";
-import { generateEmbedding, generateGoalEmbedding } from "../services/embeddings.js";
+import { generateEmbedding } from "../services/embeddings.js";
 import { findBestCircle } from "../services/matching.js";
 import { findBestVenue } from "../services/places.js";
+import {
+  captureIntent,
+  extractPsychographicProfile,
+  storeProfile,
+  storeTranscriptMemory,
+} from "../services/profileExtraction.js";
 import sendblue from "../services/sendblue.js";
 import { generateVoiceNote } from "../services/voiceNote.js";
 
@@ -48,63 +54,6 @@ function validateHumeWebhook(req: Request): boolean {
     return crypto.timingSafeEqual(Buffer.from(header as string), Buffer.from(secret));
   } catch {
     return false;
-  }
-}
-
-// Extract intent from a transcript and persist it to co_profiles.intent.
-// Called after the psychographic extraction in both webhook and typed-intake paths.
-async function captureIntent(user_id: string, transcript: string): Promise<void> {
-  try {
-    const { text: rawIntent } = await generateText({
-      model: anthropic("claude-haiku-4-5-20251001"),
-      prompt: `Does this person mention something specific they are actively seeking or could offer to others — a connection, an introduction, a resource, expertise? If yes, extract it as a single clear sentence and classify as 'seeking' or 'offering'. If no specific ask is present, return null.
-
-Return ONLY valid JSON or the word null:
-{"text": "Looking for climate tech founders at $1M+ ARR", "type": "seeking"}
-
-Transcript:
-"${transcript}"`,
-    });
-
-    const clean = rawIntent.replace(/```json|```/g, "").trim();
-    if (!clean || clean === "null") return;
-
-    let intentData: { text: string; type: "seeking" | "offering" } | null = null;
-    try { intentData = JSON.parse(clean); } catch { return; }
-    if (!intentData?.text || !intentData?.type) return;
-
-    const intentId = crypto.randomUUID();
-    const embedding = await generateEmbedding(intentData.text).catch(() => null);
-
-    const newIntent = {
-      id: intentId,
-      text: intentData.text,
-      type: intentData.type,
-      status: "active",
-      embedding,
-      created_at: new Date().toISOString(),
-    };
-
-    await pool.query(
-      `UPDATE co_profiles
-       SET intent = COALESCE(intent, '[]'::jsonb) || $1::jsonb
-       WHERE user_id = $2`,
-      [JSON.stringify([newIntent]), user_id],
-    );
-
-    const memContent = `Co captured intent: ${intentData.text}`;
-    const mem = await pool.query(
-      `INSERT INTO co_memories (user_id, memory_type, content) VALUES ($1, 'intent', $2) RETURNING id`,
-      [user_id, memContent],
-    );
-    generateEmbedding(memContent)
-      .then((emb) => pool.query(
-        `UPDATE co_memories SET content_embedding = $1::vector WHERE id = $2`,
-        [`[${emb.join(",")}]`, mem.rows[0].id],
-      ))
-      .catch((err) => console.error("Intent memory embedding failed:", err));
-  } catch (err: any) {
-    console.error("captureIntent failed (non-fatal):", err?.message ?? err);
   }
 }
 
@@ -353,6 +302,83 @@ router.post(
 
       const { CallStatus, To, CallSid, AnsweredBy } = req.body;
 
+      // Async AMD result arrives as its own, differently-shaped callback —
+      // only MachineDetectionDuration/CallSid/AnsweredBy/AccountSid, no
+      // CallStatus or To at all. It MUST be handled before the CallStatus/To
+      // guard below, which would otherwise silently discard it (confirmed
+      // live: this previously left Hume talking into a real voicemail box
+      // for the entire call, since neither the redirect nor the follow-up
+      // ever ran).
+      if (typeof AnsweredBy === "string") {
+        if (!AnsweredBy.startsWith("machine")) {
+          // human/fax/unknown — the live Hume conversation is already
+          // proceeding correctly, nothing to do here.
+          return res.sendStatus(204);
+        }
+
+        // This callback has no `To` — resolve the destination number from
+        // Twilio's own call record instead.
+        let toNumber: string | null = To ?? null;
+        if (!toNumber) {
+          try {
+            const call = await twilioClient.calls(CallSid).fetch();
+            toNumber = call.to;
+          } catch (fetchErr: any) {
+            console.error(`Failed to fetch call ${CallSid} for AMD user lookup:`, fetchErr?.message ?? fetchErr);
+          }
+        }
+
+        const user = toNumber
+          ? (
+              await pool.query(
+                `SELECT id, first_name, phone_number FROM users WHERE phone_number = $1`,
+                [toNumber],
+              )
+            ).rows[0]
+          : null;
+
+        // AMD detected an answering machine/voicemail — Hume has already been
+        // talking on the line for a few seconds (async AMD connects Hume
+        // immediately so real humans face no delay; the tradeoff is Hume
+        // doesn't yet know it's a machine). An abrupt hangup here just cuts
+        // Hume off mid-sentence into the person's real voicemail box.
+        // Instead, redirect the still-live call to our own TwiML so Co
+        // leaves one deliberate, complete voicemail line before hanging up
+        // cleanly.
+        if (user) {
+          _io?.to(`user:${user.id}`).emit("co:call_completed", { call_sid: CallSid, status: "voicemail" });
+        }
+        const voiceResponse = new twilio.twiml.VoiceResponse();
+        voiceResponse.say(
+          { voice: "Polly.Matthew-Neural" },
+          user
+            ? `Hey ${user.first_name}, it's Co. Sorry I missed you — I'll try you again soon.`
+            : `Hey, it's Co. Sorry I missed you — I'll try you again soon.`,
+        );
+        voiceResponse.hangup();
+        try {
+          await twilioClient.calls(CallSid).update({ twiml: voiceResponse.toString() });
+        } catch (redirectErr: any) {
+          console.error("Failed to redirect call to voicemail TwiML (non-fatal):", redirectErr?.message ?? redirectErr);
+        }
+        // Flag this call so the Hume chat_ended webhook (which still fires
+        // normally since we hang up cleanly, not abruptly) skips the
+        // full extraction/follow-up pipeline below.
+        await pool.query(
+          `INSERT INTO voicemail_calls (call_sid) VALUES ($1) ON CONFLICT DO NOTHING`,
+          [CallSid],
+        );
+        if (user) {
+          await sendMissedCallFollowUp(
+            user,
+            CallSid,
+            "voicemail",
+            `You just tried to call ${user.first_name} and reached voicemail.`,
+          );
+        }
+        return res.sendStatus(204);
+      }
+
       // Validate Twilio sent the required fields
       if (!CallStatus || !To) {
         console.error("call-status webhook missing CallStatus or To:", req.body);
@@ -364,31 +390,6 @@ router.post(
         [To],
       );
       const user = userResult.rows[0];
-
-      // AMD detected an answering machine/voicemail — this arrives as its own
-      // callback, typically alongside CallStatus=in-progress. Without this
-      // check the call looks identical to a human answering, and Co would
-      // start talking into a voicemail box. Hang up immediately and treat it
-      // like a missed call rather than letting Hume proceed.
-      if (typeof AnsweredBy === "string" && AnsweredBy.startsWith("machine")) {
-        if (user) {
-          _io?.to(`user:${user.id}`).emit("co:call_completed", { call_sid: CallSid, status: "voicemail" });
-        }
-        try {
-          await twilioClient.calls(CallSid).update({ status: "completed" });
-        } catch (hangupErr: any) {
-          console.error("Failed to hang up after voicemail detection (non-fatal):", hangupErr?.message ?? hangupErr);
-        }
-        if (user) {
-          await sendMissedCallFollowUp(
-            user,
-            CallSid,
-            "voicemail",
-            `You just tried to call ${user.first_name} and reached voicemail.`,
-          );
-        }
-        return res.sendStatus(204);
-      }
 
       // Push real-time call state to the app regardless of whether it's a missed call.
       // The voice screen listens for these to drive its state machine.
@@ -402,7 +403,9 @@ router.post(
         }
       }
 
-      // Only send missed-call follow-up iMessage for calls that never connected
+      // Calls that never connected to anything (no human, no machine) don't
+      // get an instant follow-up — that reads as robotic. Queue it for the
+      // delayed-follow-up cron (2hrs later, see jobs/index.ts) instead.
       if (!["no-answer", "busy", "failed", "canceled"].includes(CallStatus)) {
         return res.sendStatus(204);
       }
@@ -413,11 +416,10 @@ router.post(
         return res.sendStatus(204);
       }
 
-      await sendMissedCallFollowUp(
-        user,
-        CallSid,
-        CallStatus,
-        `You just tried to call ${user.first_name} but they didn't pick up.`,
+      await pool.query(
+        `INSERT INTO pending_call_followups (user_id, call_sid, call_status, due_at)
+         VALUES ($1, $2, $3, NOW() + INTERVAL '2 hours')`,
+        [user.id, CallSid, CallStatus],
       );
 
       return res.sendStatus(204);
@@ -470,6 +472,21 @@ router.post(
         callUser = byId.rows[0] ?? null;
       }
 
+      // The AMD callback already flagged this call as an answering
+      // machine/voicemail and sent its own instant follow-up — skip the
+      // extraction/follow-up pipeline below so we don't hallucinate a
+      // "reflection" on lines Co said to a voicemail box.
+      if (twilio_metadata?.call_sid) {
+        const flagged = await pool.query(
+          `SELECT 1 FROM voicemail_calls WHERE call_sid = $1`,
+          [twilio_metadata.call_sid],
+        );
+        if (flagged.rows.length > 0) {
+          console.log(`co/webhook: skipping extraction/follow-up for voicemail call ${twilio_metadata.call_sid}`);
+          return res.status(200).send({ success: true, skipped: "voicemail" });
+        }
+      }
+
       // Let the app know the call ended and Co is now extracting the profile
       _io?.to(`user:${user_id}`).emit("co:processing");
 
@@ -484,102 +501,16 @@ router.post(
       }
 
       // Step 1 — Store raw transcript in co_memories immediately
-      const callMemory = await pool.query(
-        `INSERT INTO co_memories (user_id, memory_type, content, emotional_context, audio_url)
-         VALUES ($1, 'call_transcript', $2, $3, $4) RETURNING id`,
-        [user_id, transcript, JSON.stringify(emotions), recording_url ?? null],
-      );
-      generateEmbedding(transcript)
-        .then((emb) =>
-          pool.query(
-            `UPDATE co_memories SET content_embedding = $1::vector WHERE id = $2`,
-            [`[${emb.join(",")}]`, callMemory.rows[0].id],
-          ),
-        )
-        .catch((err) => console.error("Memory embedding failed (non-fatal):", err));
-
-      // Step 2 — Extract psychographic data from transcript using Anthropic
-      // This is what populates co_profiles so the matching algorithm has data to work with
-      const { text: rawExtraction } = await generateText({
-        model: anthropic("claude-sonnet-4-6"),
-        prompt: `You are extracting psychographic profile data from a conversation transcript.
-        
-        Based on this transcript, extract the following fields and return ONLY valid JSON with no preamble or markdown:
-
-        {
-          "life_chapters": [], // array of applicable values from: new_to_city, building_solo, career_pivot, starting_over
-          "social_energy": 0, // number 0-100 (0 = very introverted/quiet preference, 100 = very extroverted/high energy)
-          "connection_style": "", // one of: small_group, medium_group, large_social
-          "activity_preferences": [], // array of activities they mentioned or implied enjoying
-          "goals": [], // array of things they are working toward
-          "blockers": [], // array of challenges or struggles they mentioned
-          "availability_pattern": "", // how often and when they want to connect (e.g. "weekday evenings", "weekends")
-          "city": "", // city they are in or moving to
-          "emotional_state": "" // one word describing their current emotional state (e.g. anxious, energized, overwhelmed, motivated, isolated, confident, focused, excited, lost, burnout)
-        }
-
-        Transcript:
-        "${transcript}"`,
+      await storeTranscriptMemory(user_id, transcript, {
+        emotionalContext: emotions,
+        audioUrl: recording_url,
       });
 
-      // Step 3 — Parse extracted data
-      let extracted: any = {};
-      try {
-        const clean = rawExtraction.replace(/```json|```/g, "").trim();
-        extracted = JSON.parse(clean);
-      } catch {
-        console.error(
-          "Failed to parse psychographic extraction:",
-          rawExtraction,
-        );
-      }
-
-      // Sanitize against DB CHECK constraints before upsert
-      const ALLOWED_CHAPTERS = ["new_to_city", "building_solo", "career_pivot", "starting_over"];
-      const ALLOWED_STYLES = ["small_group", "medium_group", "large_social"];
-      const safeChapters = (extracted.life_chapters ?? []).filter((c: string) => ALLOWED_CHAPTERS.includes(c));
-      const safeStyle = ALLOWED_STYLES.includes(extracted.connection_style) ? extracted.connection_style : "small_group";
-
-      // Step 4 — Generate goal embeddings via OpenAI
-      let goalEmbedding: number[] | null = null;
-      if (extracted.goals && extracted.goals.length > 0) {
-        goalEmbedding = await generateGoalEmbedding(extracted.goals);
-      }
-
-      // Step 5 — Update co_profiles with extracted psychographic data
-      // Use UPSERT — create profile if it doesn't exist, update if it does
-      await pool.query(
-        `INSERT INTO co_profiles (
-          user_id, life_chapters, social_energy, connection_style,
-          activity_preferences, emotional_state, goals, blockers,
-          availability_pattern, city, goal_embeddings, updated_at
-        ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, NOW())
-        ON CONFLICT (user_id) DO UPDATE SET
-          life_chapters = EXCLUDED.life_chapters,
-          social_energy = EXCLUDED.social_energy,
-          connection_style = EXCLUDED.connection_style,
-          activity_preferences = EXCLUDED.activity_preferences,
-          emotional_state = EXCLUDED.emotional_state,
-          goals = EXCLUDED.goals,
-          blockers = EXCLUDED.blockers,
-          availability_pattern = EXCLUDED.availability_pattern,
-          city = EXCLUDED.city,
-          goal_embeddings = EXCLUDED.goal_embeddings,
-          updated_at = NOW()`,
-        [
-          user_id,
-          safeChapters,
-          extracted.social_energy ?? 50,
-          safeStyle,
-          extracted.activity_preferences ?? [],
-          extracted.emotional_state ?? emotions?.[0]?.name ?? null,
-          extracted.goals ?? [],
-          extracted.blockers ?? [],
-          extracted.availability_pattern ?? null,
-          extracted.city ?? null,
-          goalEmbedding ? `[${goalEmbedding.join(",")}]` : null,
-        ],
-      );
+      // Steps 2-5 — Extract psychographic data via Anthropic, sanitize against
+      // DB CHECK constraints, generate goal embeddings, and upsert co_profiles.
+      // Shared with the typed-intake fallback and co-test — see profileExtraction.ts.
+      const { extracted } = await extractPsychographicProfile(transcript);
+      await storeProfile(user_id, extracted, { emotions });
 
       // Step 6 — Persist Hume chat group ID so the next call resumes this conversation
       if (chat_group_id) {
@@ -780,9 +711,12 @@ router.post(
       );
       const circle = circleResult.rows[0];
 
-      // Step 4 — Add all matched members to the circle immediately — no gating
+      // Step 4 — Add all matched members to the circle immediately — no
+      // gating. owner_id (set above) stays purely for attribution — the
+      // requester is also inserted here as a normal row so every feature
+      // that queries circle_members (notifications, invites, polls) treats
+      // them the same as anyone else in the circle.
       for (const memberId of groupUserIds) {
-        if (memberId === user_id) continue; // owner is implicit via owner_id
         await pool.query(
           `INSERT INTO circle_members (circle_id, member_id) VALUES ($1, $2) ON CONFLICT DO NOTHING`,
           [circle.id, memberId],
@@ -885,36 +819,33 @@ router.post(
   },
 );
 
-// POST /co/moment/:circle_id — Co creates a Moment for a placed circleß
-// Uses member activity preferences to suggest the best experience
-router.post(
-  "/moment/:circle_id",
-  authenticateToken,
-  userRole("admin"),
-  async (req: Request, res: Response, next: NextFunction) => {
-    try {
-      const { circle_id } = req.params;
+// Creates a Moment for a circle without texting anyone — used both by the
+// admin-triggered route below (which notifies everyone immediately after)
+// and by the circle-accept flow in sendblue.ts (which only reveals the
+// moment to members as they individually accept their circle invite).
+export async function createMomentForCircle(circle_id: string) {
+  // Step 1 — Fetch only members who've actually accepted their circle invite.
+  // Anyone still 'pending' hasn't opted in yet and was never notified of
+  // this moment — including them here would inflate the consensus
+  // denominator with people who don't even know the moment exists.
+  const membersResult = await pool.query(
+    `SELECT cm.member_id, cp.activity_preferences, cp.connection_style, cp.life_chapters, cp.city
+     FROM circle_members cm
+     JOIN co_profiles cp ON cp.user_id = cm.member_id
+     WHERE cm.circle_id = $1 AND cm.status = 'accepted'`,
+    [circle_id],
+  );
 
-      // Step 1 — Fetch all members of the associated circle
-      const membersResult = await pool.query(
-        `SELECT cm.member_id, cp.activity_preferences, cp.connection_style, cp.life_chapters, cp.city,
-                ST_Y(cp.coordinates) AS lat, ST_X(cp.coordinates) AS lng
-         FROM circle_members cm
-         JOIN co_profiles cp ON cp.user_id = cm.member_id
-         WHERE cm.circle_id = $1`,
-        [circle_id],
-      );
+  const members = membersResult.rows;
+  if (!members.length) return null;
 
-      const members = membersResult.rows;
-      if (!members.length) return res.status(404).send("Circle not found.");
-
-      // Step 2 — Get the circle owner
-      const circleResult = await pool.query(
-        `SELECT owner_id FROM circles WHERE id = $1`,
-        [circle_id],
-      );
-      const circle = circleResult.rows[0];
-      if (!circle) return res.status(404).send("Circle not found.");
+  // Step 2 — Get the circle owner
+  const circleResult = await pool.query(
+    `SELECT owner_id FROM circles WHERE id = $1`,
+    [circle_id],
+  );
+  const circle = circleResult.rows[0];
+  if (!circle) return null;
 
       // Step 3 — Find most common activity preferences across the group
       //combines the array of all members activity preferences
@@ -954,20 +885,15 @@ router.post(
 
       // Step 6 — Use Anthropic to generate Moment context
       const city = members[0].city ?? "San Francisco";
-      const groupSize = members.length + 1;
+      const groupSize = members.length;
 
-      // Center point for venue search — averages member coordinates so the
-      // Google Places lookup is geographically biased and hard-filtered near
-      // where the circle actually lives, instead of trusting a free-text city
-      // string alone (e.g. "San Francisco Bay Area" isn't a precise Places
-      // location and previously let wildly out-of-area results slip through).
-      const memberCoords = members.filter((m: any) => m.lat != null && m.lng != null);
-      const geoCenter = memberCoords.length
-        ? {
-            lat: memberCoords.reduce((sum: number, m: any) => sum + m.lat, 0) / memberCoords.length,
-            lng: memberCoords.reduce((sum: number, m: any) => sum + m.lng, 0) / memberCoords.length,
-          }
-        : null;
+      // City (the text string, not GPS coordinates) is the sole geographic
+      // authority for venue search — a member's coordinates are never used
+      // to bias or hard-filter this. Confirmed for real: a single stale
+      // coordinate (leftover test data pointing at NYC for an SF user) sent
+      // an entire circle's venue search across the country, and the "hard"
+      // distance filter didn't catch it because it enforced proximity to
+      // that same bad point, not the circle's actual city.
 
       const { text: rawMoment } = await generateText({
         model: anthropic("claude-sonnet-4-6"),
@@ -1002,7 +928,7 @@ Make it feel intimate, specific, and intentional. Not generic.`,
         momentData = JSON.parse(clean);
       } catch {
         console.error("Failed to parse moment data:", rawMoment);
-        return res.status(500).send("Failed to generate moment.");
+        return null;
       }
 
       // Truncate description as safety measure
@@ -1040,7 +966,8 @@ Make it feel intimate, specific, and intentional. Not generic.`,
           venue_booking_url: partnerBookingUrl,
         };
       } else {
-        // Fall back to Google Places + Co scoring
+        // Fall back to Google Places + Co scoring — city string only, no
+        // GPS-based geo bias/filter (see note above findBestVenue call site).
         selectedVenue = await findBestVenue(
           momentData.venue_type,
           momentData.neighborhood,
@@ -1051,7 +978,6 @@ Make it feel intimate, specific, and intentional. Not generic.`,
             connection_style: dominantStyle,
             group_size: groupSize,
           },
-          geoCenter,
         );
       }
 
@@ -1062,8 +988,8 @@ Make it feel intimate, specific, and intentional. Not generic.`,
 
       const momentResult = await pool.query(
         `INSERT INTO moments
-         (creator_id, moments_name, location, location_name, moment_start, visibility_type, description, circle_id, vibes, venue, suggested_time, status, venue_booking_url)
-         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13)
+         (creator_id, moments_name, location, location_name, moment_start, visibility_type, description, circle_id, vibes, venue, suggested_time, status, venue_booking_url, venue_place_id)
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14)
          RETURNING *`,
         [
           circle.owner_id,
@@ -1080,6 +1006,7 @@ Make it feel intimate, specific, and intentional. Not generic.`,
           momentData.suggested_time ?? null,
           "polling",
           selectedVenue?.venue_booking_url ?? null,
+          selectedVenue?.place_id ?? null,
         ],
       );
 
@@ -1088,9 +1015,9 @@ Make it feel intimate, specific, and intentional. Not generic.`,
       // Pre-warm OG image before any iMessage links go out — avoids preview timeout
       fetch(`https://app.copatible.com/api/og/moments/${moment.id}`).catch(() => {});
 
-      // Step 8.5 — Seed moment_responses for each circle member + the owner (null = awaiting reply)
-      // The owner is excluded from circle_members (implicit via owner_id), so seed them separately.
-      const responseUserIds = [circle.owner_id, ...members.map((m: any) => m.member_id)];
+      // Step 8.5 — Seed moment_responses for each circle member, including the
+      // owner (now a normal circle_members row too) — null = awaiting reply.
+      const responseUserIds = members.map((m: any) => m.member_id);
       for (const userId of responseUserIds) {
         await pool.query(
           `INSERT INTO moment_responses (moment_id, user_id) VALUES ($1, $2) ON CONFLICT DO NOTHING`,
@@ -1098,74 +1025,96 @@ Make it feel intimate, specific, and intentional. Not generic.`,
         );
       }
 
-      // Step 9 — Notify all circle members individually. CoPatible has no
-      // group chat — every member gets their own thread with Co, not a
-      // shared one, so this is always a 1:1 send per person.
-      const momentDateStr = new Date(moment.moment_start).toLocaleDateString("en-US", { weekday: "long", month: "short", day: "numeric" });
-      const momentTimeStr = new Date(moment.moment_start).toLocaleTimeString("en-US", { hour: "numeric", minute: "2-digit", hour12: true });
-      const momentInviteMsg = `Co arranged something for your circle. ${moment.moments_name} at ${selectedVenue?.name ?? momentData.neighborhood}, ${momentData.suggested_time ?? `${momentDateStr} at ${momentTimeStr}`}.\n\nhttps://app.copatible.com/moments/${moment.id}`;
+  return { moment, selectedVenue, momentData, members, circle };
+}
 
-      const memberPhones: string[] = [];
+// Reveals a moment to exactly one member — used per-member as each person
+// accepts their circle invite, and by the admin route below (looped over
+// every member) for the direct manual-trigger path. CoPatible has no group
+// chat, so this is always a 1:1 send, never broadcast to the whole circle
+// at once.
+export async function notifyMemberOfMoment(
+  moment: any,
+  selectedVenue: any,
+  momentData: any,
+  member: { member_id: string },
+  groupSize: number,
+) {
+  const momentDateStr = new Date(moment.moment_start).toLocaleDateString("en-US", { weekday: "long", month: "short", day: "numeric" });
+  const momentTimeStr = new Date(moment.moment_start).toLocaleTimeString("en-US", { hour: "numeric", minute: "2-digit", hour12: true });
+  const momentInviteMsg = `Co arranged something for your circle. ${moment.moments_name} at ${selectedVenue?.name ?? momentData.neighborhood}, ${momentData.suggested_time ?? `${momentDateStr} at ${momentTimeStr}`}.\nhttps://app.copatible.com/moments/${moment.id}`;
+
+  const userResult = await pool.query(
+    `SELECT email, phone_number FROM users WHERE id = $1`,
+    [member.member_id],
+  );
+  const user = userResult.rows[0];
+  if (!user) return;
+
+  await sendEmail({
+    email: user.email,
+    invite_type: "received",
+    invite_target: "moment",
+    action_url: `https://app.copatible.com/moments/${moment.id}`,
+  });
+
+  try {
+    await sendblue.messages.send({
+      number: user.phone_number,
+      content: momentInviteMsg,
+      from_number: process.env.SENDBLUE_PHONE_NUMBER!,
+    });
+  } catch (smsErr: any) {
+    console.error(`Moment invite message failed for ${member.member_id}:`, smsErr?.message ?? smsErr);
+  }
+
+  // Consensus poll — only meaningful once the group's actually large enough
+  if (groupSize >= 4) {
+    const pollMessage = `Does ${momentData.suggested_time ?? "this time"} work for you? Reply YES or NO.`;
+    try {
+      await sendblue.messages.send({
+        number: user.phone_number,
+        content: pollMessage,
+        from_number: process.env.SENDBLUE_PHONE_NUMBER!,
+      });
+    } catch (smsErr: any) {
+      console.error(`Consensus poll message failed for ${member.member_id}:`, smsErr?.message ?? smsErr);
+    }
+  }
+
+  const momentContent = `Co created a Moment for your circle: ${momentData.moments_name} at ${selectedVenue?.name ?? momentData.neighborhood}. ${momentData.suggested_time}.`;
+  const momentMemory = await pool.query(
+    `INSERT INTO co_memories (user_id, memory_type, content)
+     VALUES ($1, 'intent', $2) RETURNING id`,
+    [member.member_id, momentContent],
+  );
+  generateEmbedding(momentContent)
+    .then((emb) =>
+      pool.query(
+        `UPDATE co_memories SET content_embedding = $1::vector WHERE id = $2`,
+        [`[${emb.join(",")}]`, momentMemory.rows[0].id],
+      ),
+    )
+    .catch((err) => console.error("Memory embedding failed (non-fatal):", err));
+}
+
+// POST /co/moment/:circle_id — Co creates a Moment for a placed circle and
+// notifies every member immediately (manual admin trigger — the organic
+// path is per-member reveal on circle acceptance, in sendblue.ts).
+router.post(
+  "/moment/:circle_id",
+  authenticateToken,
+  userRole("admin"),
+  async (req: Request, res: Response, next: NextFunction) => {
+    try {
+      const circle_id = req.params.circle_id as string;
+      const created = await createMomentForCircle(circle_id);
+      if (!created) return res.status(404).send("Circle not found.");
+
+      const { moment, selectedVenue, momentData, members } = created;
+
       for (const member of members) {
-        const userResult = await pool.query(
-          `SELECT email, phone_number FROM users WHERE id = $1`,
-          [member.member_id],
-        );
-        const user = userResult.rows[0];
-        if (!user) continue;
-
-        memberPhones.push(user.phone_number);
-
-        await sendEmail({
-          email: user.email,
-          invite_type: "received",
-          invite_target: "moment",
-          action_url: `https://app.copatible.com/moments/${moment.id}`,
-        });
-
-        try {
-          await sendblue.messages.send({
-            number: user.phone_number,
-            content: momentInviteMsg,
-            from_number: process.env.SENDBLUE_PHONE_NUMBER!,
-          });
-        } catch (smsErr: any) {
-          console.error(`Moment invite message failed for ${member.member_id}:`, smsErr?.message ?? smsErr);
-        }
-      }
-
-      // Step 9.5 — Consensus poll, sent individually to each member
-      if (memberPhones.length >= 4) {
-        const pollMessage = `Does ${momentData.suggested_time ?? "this time"} work for you? Reply YES or NO.`;
-        for (const phone of memberPhones) {
-          try {
-            await sendblue.messages.send({
-              number: phone,
-              content: pollMessage,
-              from_number: process.env.SENDBLUE_PHONE_NUMBER!,
-            });
-          } catch (smsErr: any) {
-            console.error(`Consensus poll message failed for ${phone}:`, smsErr?.message ?? smsErr);
-          }
-        }
-      }
-
-      // Step 10 — Store co_memory for each member
-      for (const member of members) {
-        const momentContent = `Co created a Moment for your circle: ${momentData.moments_name} at ${selectedVenue?.name ?? momentData.neighborhood}. ${momentData.suggested_time}.`;
-        const momentMemory = await pool.query(
-          `INSERT INTO co_memories (user_id, memory_type, content)
-           VALUES ($1, 'intent', $2) RETURNING id`,
-          [member.member_id, momentContent],
-        );
-        generateEmbedding(momentContent)
-          .then((emb) =>
-            pool.query(
-              `UPDATE co_memories SET content_embedding = $1::vector WHERE id = $2`,
-              [`[${emb.join(",")}]`, momentMemory.rows[0].id],
-            ),
-          )
-          .catch((err) => console.error("Memory embedding failed (non-fatal):", err));
+        await notifyMemberOfMoment(moment, selectedVenue, momentData, member, members.length);
       }
 
       return res.status(201).send({
@@ -1191,17 +1140,77 @@ Make it feel intimate, specific, and intentional. Not generic.`,
   },
 );
 
-// POST /co/moment/:moment_id/propose-time — the Circle Connector picks a
-// specific date/time from the app (mirrors what a "time: X" iMessage reply
-// does over text). Sets it as the new candidate time, clears prior yes/no
+// Shared by the app-driven propose-time route below and the "time: X"
+// iMessage reply path in sendblue.ts — both are gated to the Circle
+// Connector only. Sets the new candidate time, clears prior yes/no
 // responses since they were for the old time, and re-asks every member
 // individually — no group chat.
+export async function proposeNewTimeForMoment(moment_id: string, dateObj: Date) {
+  const suggestedTime = `${dateObj.toLocaleDateString("en-US", { weekday: "long" })} ${dateObj.toLocaleTimeString("en-US", { hour: "numeric", minute: "2-digit", hour12: true })}`;
+
+  await pool.query(
+    `UPDATE moments SET moment_start = $1, suggested_time = $2 WHERE id = $3`,
+    [dateObj.toISOString(), suggestedTime, moment_id],
+  );
+
+  // New proposal supersedes old responses — everyone re-confirms against the new time
+  await pool.query(
+    `UPDATE moment_responses SET response = NULL, responded_at = NULL WHERE moment_id = $1`,
+    [moment_id],
+  );
+
+  const membersResult = await pool.query(
+    `SELECT u.id, u.phone_number FROM moment_responses mr
+     JOIN users u ON u.id = mr.user_id
+     WHERE mr.moment_id = $1`,
+    [moment_id],
+  );
+  const pollMessage = `Does ${suggestedTime} work for you? Reply YES or NO.`;
+  for (const member of membersResult.rows) {
+    try {
+      await sendblue.messages.send({
+        number: member.phone_number,
+        content: pollMessage,
+        from_number: process.env.SENDBLUE_PHONE_NUMBER!,
+      });
+    } catch (smsErr: any) {
+      console.error(`Propose-time message failed for ${member.id}:`, smsErr?.message ?? smsErr);
+    }
+  }
+
+  _io?.to(`moment:${moment_id}`).emit("moment:time_proposed", {
+    moment_id,
+    moment_start: dateObj.toISOString(),
+    suggested_time: suggestedTime,
+  });
+
+  return { moment_start: dateObj.toISOString(), suggested_time: suggestedTime };
+}
+
+// Checks whether user_id is the Circle Connector for circle_id — shared by
+// the propose-time route and the "time: X" text-reply path.
+export async function isCircleConnector(user_id: string, circle_id: string): Promise<boolean> {
+  const connectorCheck = await pool.query(
+    `SELECT 1 FROM co_profiles cp
+     WHERE cp.user_id = $1 AND cp.is_circle_connector = TRUE
+     AND (
+       EXISTS (SELECT 1 FROM circles c WHERE c.id = $2 AND c.owner_id = $1)
+       OR EXISTS (SELECT 1 FROM circle_members cm WHERE cm.circle_id = $2 AND cm.member_id = $1)
+     )`,
+    [user_id, circle_id],
+  );
+  return !!connectorCheck.rows[0];
+}
+
+// POST /co/moment/:moment_id/propose-time — the Circle Connector picks a
+// specific date/time from the app (mirrors what a "time: X" iMessage reply
+// does over text, in sendblue.ts).
 router.post(
   "/moment/:moment_id/propose-time",
   authenticateToken,
   async (req: Request, res: Response, next: NextFunction) => {
     try {
-      const { moment_id } = req.params;
+      const moment_id = req.params.moment_id as string;
       const { moment_start } = req.body as { moment_start?: string };
       const user_id = req.user?.id;
 
@@ -1217,16 +1226,7 @@ router.post(
       const { circle_id } = momentRow;
 
       // Only the Circle Connector may propose a time — everyone else responds via iMessage
-      const connectorCheck = await pool.query(
-        `SELECT 1 FROM co_profiles cp
-         WHERE cp.user_id = $1 AND cp.is_circle_connector = TRUE
-         AND (
-           EXISTS (SELECT 1 FROM circles c WHERE c.id = $2 AND c.owner_id = $1)
-           OR EXISTS (SELECT 1 FROM circle_members cm WHERE cm.circle_id = $2 AND cm.member_id = $1)
-         )`,
-        [user_id, circle_id],
-      );
-      if (!connectorCheck.rows[0]) {
+      if (!(await isCircleConnector(user_id, circle_id))) {
         return res.status(403).send("Only the Circle Connector can propose a time.");
       }
 
@@ -1234,49 +1234,9 @@ router.post(
       if (Number.isNaN(dateObj.getTime())) {
         return res.status(400).send("moment_start must be a valid date.");
       }
-      const suggestedTime = `${dateObj.toLocaleDateString("en-US", { weekday: "long" })} ${dateObj.toLocaleTimeString("en-US", { hour: "numeric", minute: "2-digit", hour12: true })}`;
 
-      await pool.query(
-        `UPDATE moments SET moment_start = $1, suggested_time = $2 WHERE id = $3`,
-        [dateObj.toISOString(), suggestedTime, moment_id],
-      );
-
-      // New proposal supersedes old responses — everyone re-confirms against the new time
-      await pool.query(
-        `UPDATE moment_responses SET response = NULL, responded_at = NULL WHERE moment_id = $1`,
-        [moment_id],
-      );
-
-      const membersResult = await pool.query(
-        `SELECT u.id, u.phone_number FROM moment_responses mr
-         JOIN users u ON u.id = mr.user_id
-         WHERE mr.moment_id = $1`,
-        [moment_id],
-      );
-      const pollMessage = `Does ${suggestedTime} work for you? Reply YES or NO.`;
-      for (const member of membersResult.rows) {
-        try {
-          await sendblue.messages.send({
-            number: member.phone_number,
-            content: pollMessage,
-            from_number: process.env.SENDBLUE_PHONE_NUMBER!,
-          });
-        } catch (smsErr: any) {
-          console.error(`Propose-time message failed for ${member.id}:`, smsErr?.message ?? smsErr);
-        }
-      }
-
-      _io?.to(`moment:${moment_id}`).emit("moment:time_proposed", {
-        moment_id,
-        moment_start: dateObj.toISOString(),
-        suggested_time: suggestedTime,
-      });
-
-      return res.status(200).send({
-        success: true,
-        moment_start: dateObj.toISOString(),
-        suggested_time: suggestedTime,
-      });
+      const result = await proposeNewTimeForMoment(moment_id, dateObj);
+      return res.status(200).send({ success: true, ...result });
     } catch (error) {
       next(error);
     }
@@ -1423,7 +1383,7 @@ router.post(
       // For text messages, URL goes inline at the end (no text after it — iMessage preview rule).
       // For voice notes, URL can't be embedded in audio; send as a separate text follow-up.
       const finalMessage = !audioUrl && circlePageUrl
-        ? `${coMessage}\n\n${circlePageUrl}`
+        ? `${coMessage}\n${circlePageUrl}`
         : coMessage;
 
       let sendResult: any = null;
@@ -1624,92 +1584,11 @@ router.post(
       _io?.to(`user:${user_id}`).emit("co:processing");
 
       // Store raw text as a call_transcript memory so it feeds into future sessions
-      const memRow = await pool.query(
-        `INSERT INTO co_memories (user_id, memory_type, content)
-         VALUES ($1, 'call_transcript', $2) RETURNING id`,
-        [user_id, transcript],
-      );
-      generateEmbedding(transcript)
-        .then((emb) =>
-          pool.query(
-            `UPDATE co_memories SET content_embedding = $1::vector WHERE id = $2`,
-            [`[${emb.join(",")}]`, memRow.rows[0].id],
-          ),
-        )
-        .catch((err) => console.error("Memory embedding failed (non-fatal):", err));
+      await storeTranscriptMemory(user_id, transcript);
 
-      const { text: rawExtraction } = await generateText({
-        model: anthropic("claude-sonnet-4-6"),
-        prompt: `You are extracting psychographic profile data from a conversation transcript.
-
-        Based on this transcript, extract the following fields and return ONLY valid JSON with no preamble or markdown:
-
-        {
-          "life_chapters": [], // array of applicable values from: new_to_city, building_solo, career_pivot, starting_over
-          "social_energy": 0, // number 0-100 (0 = very introverted/quiet preference, 100 = very extroverted/high energy)
-          "connection_style": "", // one of: small_group, medium_group, large_social
-          "activity_preferences": [], // array of activities they mentioned or implied enjoying
-          "goals": [], // array of things they are working toward
-          "blockers": [], // array of challenges or struggles they mentioned
-          "availability_pattern": "", // how often and when they want to connect (e.g. "weekday evenings", "weekends")
-          "city": "", // city they are in or moving to
-          "emotional_state": "" // one word describing their current emotional state
-        }
-
-        Transcript:
-        "${transcript}"`,
-      });
-
-      let extracted: any = {};
-      try {
-        const clean = rawExtraction.replace(/```json|```/g, "").trim();
-        extracted = JSON.parse(clean);
-      } catch {
-        console.error("Failed to parse psychographic extraction:", rawExtraction);
-      }
-
-      const ALLOWED_CHAPTERS = ["new_to_city", "building_solo", "career_pivot", "starting_over"];
-      const ALLOWED_STYLES = ["small_group", "medium_group", "large_social"];
-      const safeChapters = (extracted.life_chapters ?? []).filter((c: string) => ALLOWED_CHAPTERS.includes(c));
-      const safeStyle = ALLOWED_STYLES.includes(extracted.connection_style) ? extracted.connection_style : "small_group";
-
-      let goalEmbedding: number[] | null = null;
-      if (extracted.goals && extracted.goals.length > 0) {
-        goalEmbedding = await generateGoalEmbedding(extracted.goals);
-      }
-
-      await pool.query(
-        `INSERT INTO co_profiles (
-          user_id, life_chapters, social_energy, connection_style,
-          activity_preferences, emotional_state, goals, blockers,
-          availability_pattern, city, goal_embeddings, updated_at
-        ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, NOW())
-        ON CONFLICT (user_id) DO UPDATE SET
-          life_chapters = EXCLUDED.life_chapters,
-          social_energy = EXCLUDED.social_energy,
-          connection_style = EXCLUDED.connection_style,
-          activity_preferences = EXCLUDED.activity_preferences,
-          emotional_state = EXCLUDED.emotional_state,
-          goals = EXCLUDED.goals,
-          blockers = EXCLUDED.blockers,
-          availability_pattern = EXCLUDED.availability_pattern,
-          city = EXCLUDED.city,
-          goal_embeddings = EXCLUDED.goal_embeddings,
-          updated_at = NOW()`,
-        [
-          user_id,
-          safeChapters,
-          extracted.social_energy ?? 50,
-          safeStyle,
-          extracted.activity_preferences ?? [],
-          extracted.emotional_state ?? null,
-          extracted.goals ?? [],
-          extracted.blockers ?? [],
-          extracted.availability_pattern ?? null,
-          extracted.city ?? null,
-          goalEmbedding ? `[${goalEmbedding.join(",")}]` : null,
-        ],
-      );
+      // Same extraction + sanitize + upsert used by the Hume webhook — see profileExtraction.ts
+      const { extracted } = await extractPsychographicProfile(transcript);
+      await storeProfile(user_id, extracted);
 
       // Ambient intent capture (non-blocking)
       captureIntent(String(user_id), String(transcript)).catch(() => {});

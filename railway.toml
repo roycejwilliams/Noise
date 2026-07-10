@@ -1,0 +1,17 @@
+# Config for the co-test service only. api/ and web/ each have their own
+# railway.toml inside their subdirectory and are unaffected by this file —
+# Railway resolves config relative to each service's own Root Directory
+# setting, and theirs are set to api/ and web/ respectively.
+#
+# co-test's Root Directory is intentionally left at the repo root (not
+# co-test/) so its Docker build context can reach api/src — see
+# co-test/Dockerfile for why.
+[build]
+builder = "DOCKERFILE"
+dockerfilePath = "co-test/Dockerfile"
+
+[deploy]
+startCommand = "node dist/co-test/src/server.js"
+healthcheckPath = "/health"
+healthcheckTimeout = 30
+restartPolicyType = "on_failure"
