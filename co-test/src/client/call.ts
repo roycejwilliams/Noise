@@ -133,6 +133,15 @@ async function startCall() {
   statusEl.textContent = "Connecting…";
 
   try {
+    // iOS Safari only allows AudioContext.resume() (inside player.init())
+    // while the tap's user-activation is still live — that window closes
+    // once we've awaited a couple of network round trips, so this has to
+    // run before ensureSession()/the token fetch/the WS handshake, not
+    // after them inside the "open" handler like it used to.
+    player = new EVIWebAudioPlayer({ fft: { enabled: true } });
+    player.on("fft", (e: any) => updateWaveform(e.detail.fft));
+    await player.init();
+
     await ensureSession();
 
     const tokenRes = await fetch("/api/hume-token", { method: "POST" });
@@ -146,20 +155,22 @@ async function startCall() {
       ...(promptOverride ? { sessionSettings: { systemPrompt: promptOverride } } : {}),
     });
 
-    player = new EVIWebAudioPlayer({ fft: { enabled: true } });
-    player.on("fft", (e: any) => updateWaveform(e.detail.fft));
-
     socket.on("open", async () => {
-      await player!.init();
-      recorder = await startAudioCapture(socket);
-      startTimer();
-      statusEl.textContent = "In call";
-      callButton.classList.add("active");
-      callButton.title = "End call";
-      callButton.setAttribute("aria-label", "End call");
-      callButton.setAttribute("aria-pressed", "true");
-      callButton.disabled = false;
-      addSystemEntry("Started conversation", "start");
+      try {
+        recorder = await startAudioCapture(socket);
+        startTimer();
+        statusEl.textContent = "In call";
+        callButton.classList.add("active");
+        callButton.title = "End call";
+        callButton.setAttribute("aria-label", "End call");
+        callButton.setAttribute("aria-pressed", "true");
+        callButton.disabled = false;
+        addSystemEntry("Started conversation", "start");
+      } catch (err) {
+        console.error("Failed to start audio capture:", err);
+        statusEl.textContent = "Mic error";
+        callButton.disabled = false;
+      }
     });
 
     socket.on("message", (msg: any) => {
@@ -201,6 +212,8 @@ async function startCall() {
     callButton.title = "Start call";
     callButton.setAttribute("aria-label", "Start call");
     callButton.disabled = false;
+    player?.dispose();
+    player = null;
   }
 }
 
