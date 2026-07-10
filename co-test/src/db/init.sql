@@ -17,19 +17,13 @@ SET xmloption = content;
 SET client_min_messages = warning;
 SET row_security = off;
 
---
--- Name: postgis; Type: EXTENSION; Schema: -; Owner: -
---
-
-CREATE EXTENSION IF NOT EXISTS postgis WITH SCHEMA public;
-
-
---
--- Name: EXTENSION postgis; Type: COMMENT; Schema: -; Owner: -
---
-
-COMMENT ON EXTENSION postgis IS 'PostGIS geometry and geography spatial types and functions';
-
+-- PostGIS is intentionally NOT installed here — Railway's Postgres image
+-- (ghcr.io/railwayapp-templates/postgres-ssl) doesn't ship it (confirmed:
+-- `CREATE EXTENSION postgis` fails there with "extension is not available",
+-- and since this whole file runs as one batch, that one failure was rolling
+-- back every table before it too). co_profiles.coordinates (a geometry
+-- column, matching/places-only) is dropped from this schema below since
+-- co-test never reads or writes it — onboarding/extraction only.
 
 --
 -- Name: vector; Type: EXTENSION; Schema: -; Owner: -
@@ -141,7 +135,6 @@ CREATE TABLE public.co_profiles (
     blockers text[] DEFAULT '{}'::text[],
     availability_pattern text,
     city text,
-    coordinates public.geometry(Point,4326),
     trust_score integer DEFAULT 50,
     trust_components jsonb DEFAULT '{}'::jsonb,
     created_at timestamp with time zone DEFAULT now(),
@@ -605,13 +598,6 @@ CREATE INDEX idx_co_memories_user_id ON public.co_memories USING btree (user_id)
 --
 
 CREATE INDEX idx_co_profiles_city ON public.co_profiles USING btree (city);
-
-
---
--- Name: idx_co_profiles_coordinates; Type: INDEX; Schema: public; Owner: -
---
-
-CREATE INDEX idx_co_profiles_coordinates ON public.co_profiles USING gist (coordinates);
 
 
 --
