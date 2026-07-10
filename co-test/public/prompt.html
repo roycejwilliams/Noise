@@ -1,0 +1,42 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Co — Prompt</title>
+  <link rel="stylesheet" href="/styles.css" />
+</head>
+<body>
+  <header class="app-header">
+    <div class="header-title">
+      <div class="app-name">Co (test) — Prompt</div>
+      <div id="status" class="status-line">Loading…</div>
+    </div>
+    <a href="/call" class="transcript-toggle">Call</a>
+  </header>
+
+  <main class="scroll-area">
+    <div class="prompt-page">
+      <p class="prompt-explainer">
+        This is Co's actual current system prompt, fetched live from the real Hume config
+        (<span id="config-meta">—</span>). Editing it below only affects the next call you start
+        from this browser tab — it never writes back to the real config.
+      </p>
+
+      <textarea
+        id="prompt-textarea"
+        class="prompt-textarea"
+        spellcheck="false"
+        placeholder="Loading live prompt…"
+      ></textarea>
+
+      <div class="prompt-actions">
+        <button id="reset-button" class="download-button">Reset to current</button>
+        <span id="prompt-mode-label" class="prompt-mode-label">Checking…</span>
+      </div>
+    </div>
+  </main>
+
+  <script src="/prompt.js"></script>
+</body>
+</html>

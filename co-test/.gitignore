@@ -2,4 +2,5 @@ node_modules/
 dist/
 public/call.js
 public/results.js
+public/prompt.js
 .env

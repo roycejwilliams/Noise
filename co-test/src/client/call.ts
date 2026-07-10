@@ -7,7 +7,7 @@ import {
   convertBlobToBase64,
   MimeType,
 } from "hume";
-import { appendTranscriptEntry, TranscriptMessage } from "./shared.js";
+import { appendTranscriptEntry, getPromptOverride, TranscriptMessage } from "./shared.js";
 
 const callButton = document.getElementById("call-button") as HTMLButtonElement;
 const muteButton = document.getElementById("mute-button") as HTMLButtonElement;
@@ -18,6 +18,7 @@ const transcriptList = document.getElementById("transcript-list") as HTMLElement
 const transcriptToggle = document.getElementById("transcript-toggle") as HTMLButtonElement;
 const transcriptPanel = document.getElementById("transcript-panel") as HTMLElement;
 const waveformEl = document.getElementById("waveform") as HTMLElement;
+const promptModeLabel = document.getElementById("prompt-mode-label") as HTMLElement;
 
 let socket: any = null;
 let recorder: MediaRecorder | null = null;
@@ -137,7 +138,11 @@ async function startCall() {
     if (!tokenData.success) throw new Error("Failed to fetch Hume access token");
 
     const client = new HumeClient({ accessToken: tokenData.accessToken });
-    socket = client.empathicVoice.chat.connect({ configId: tokenData.configId });
+    const promptOverride = getPromptOverride();
+    socket = client.empathicVoice.chat.connect({
+      configId: tokenData.configId,
+      ...(promptOverride ? { sessionSettings: { systemPrompt: promptOverride } } : {}),
+    });
 
     player = new EVIWebAudioPlayer({ fft: { enabled: true } });
     player.on("fft", (e: any) => updateWaveform(e.detail.fft));
@@ -271,4 +276,18 @@ async function runExtractionAndRedirect() {
   window.location.href = `/call/${sessionId}/results`;
 }
 
+// Checked once per page load, not live-updated — the override only ever
+// changes on the Prompt page, and sessionStorage is scoped to this tab, so
+// there's no scenario where it changes out from under an already-loaded
+// call page.
+function renderPromptModeLabel() {
+  const override = getPromptOverride();
+  const isModified = !!override;
+  promptModeLabel.textContent = isModified
+    ? "Next call: modified test prompt"
+    : "Next call: default (production) prompt";
+  promptModeLabel.classList.toggle("modified", isModified);
+}
+
+renderPromptModeLabel();
 initWaveformBars();

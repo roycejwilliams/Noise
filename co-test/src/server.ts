@@ -37,6 +37,7 @@ async function main() {
   app.get("/call/:sessionId/results", (_req, res) =>
     res.sendFile(path.join(publicDir, "results.html")),
   );
+  app.get("/prompt", (_req, res) => res.sendFile(path.join(publicDir, "prompt.html")));
 
   app.use(express.static(publicDir));
 

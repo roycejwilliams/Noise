@@ -54,6 +54,39 @@ router.post("/hume-token", async (_req: Request, res: Response, next: NextFuncti
   }
 });
 
+// GET /api/prompt — reads (never writes) the live system prompt straight off
+// the real HUME_CONFIG_ID's most recent config version. This is a read-only
+// GET against Hume's Configs API — nothing in this route, or anywhere else in
+// co-test, ever calls Hume's config create/update/delete endpoints. Editing
+// on the Prompt page only ever produces a session_settings override sent at
+// connect time (see call.ts), which Hume documents as temporary and scoped
+// to that one chat session — it cannot mutate the saved config.
+router.get("/prompt", async (_req: Request, res: Response, next: NextFunction) => {
+  try {
+    const configId = process.env.HUME_CONFIG_ID!;
+    const humeRes = await fetch(
+      `https://api.hume.ai/v0/evi/configs/${configId}?restrict_to_most_recent=true`,
+      { headers: { "X-Hume-Api-Key": process.env.HUME_API_KEY! } },
+    );
+    if (!humeRes.ok) {
+      throw new Error(`Hume config fetch failed: ${humeRes.status}`);
+    }
+    const data: any = await humeRes.json();
+    const config = data.configs_page?.[0];
+    if (!config?.prompt?.text) {
+      return res.status(200).json({ success: false, error: "No prompt found on this config." });
+    }
+    return res.status(200).json({
+      success: true,
+      prompt: config.prompt.text,
+      configName: config.name,
+      version: config.version,
+    });
+  } catch (error) {
+    next(error);
+  }
+});
+
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
 // POST /api/extract — runs the same extraction pipeline the Hume webhook and
