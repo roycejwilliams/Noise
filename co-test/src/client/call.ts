@@ -128,6 +128,8 @@ async function startAudioCapture(sock: any, timeSliceMs = 80): Promise<MediaReco
 
 async function startCall() {
   callButton.disabled = true;
+  callButton.title = "Connecting…";
+  callButton.setAttribute("aria-label", "Connecting…");
   statusEl.textContent = "Connecting…";
 
   try {
@@ -153,6 +155,9 @@ async function startCall() {
       startTimer();
       statusEl.textContent = "In call";
       callButton.classList.add("active");
+      callButton.title = "End call";
+      callButton.setAttribute("aria-label", "End call");
+      callButton.setAttribute("aria-pressed", "true");
       callButton.disabled = false;
       addSystemEntry("Started conversation", "start");
     });
@@ -193,6 +198,8 @@ async function startCall() {
   } catch (err) {
     console.error("Failed to start call:", err);
     statusEl.textContent = "Failed to connect";
+    callButton.title = "Start call";
+    callButton.setAttribute("aria-label", "Start call");
     callButton.disabled = false;
   }
 }
@@ -211,6 +218,9 @@ async function handleCallEnded() {
   socket = null;
 
   callButton.classList.remove("active");
+  callButton.title = "Start call";
+  callButton.setAttribute("aria-label", "Start call");
+  callButton.setAttribute("aria-pressed", "false");
   callButton.disabled = true;
   resetWaveform();
   addSystemEntry("Call ended", "end");
