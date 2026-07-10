@@ -145,6 +145,47 @@ body {
   color: #1a1a1a;
 }
 
+/* Results page — empty/not-ready/not-found state */
+
+.empty-state {
+  padding: 48px 24px;
+  text-align: center;
+  color: #767676;
+}
+
+.empty-state.hidden {
+  display: none;
+}
+
+.empty-state p {
+  font-size: 15px;
+  margin-bottom: 16px;
+}
+
+.empty-state .download-button {
+  display: inline-block;
+  text-decoration: none;
+  color: #1a1a1a;
+}
+
+/* Results page — collapsible transcript */
+
+.transcript-panel-details {
+  margin-top: 20px;
+}
+
+.transcript-panel-details summary {
+  cursor: pointer;
+  font-size: 13px;
+  color: #444;
+  font-weight: 500;
+}
+
+.transcript-panel-details .transcript-list {
+  margin-top: 10px;
+  padding: 0;
+}
+
 /* Extraction section */
 
 .extraction-section {

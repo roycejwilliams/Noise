@@ -7,6 +7,7 @@ import {
   convertBlobToBase64,
   MimeType,
 } from "hume";
+import { appendTranscriptEntry, TranscriptMessage } from "./shared.js";
 
 const callButton = document.getElementById("call-button") as HTMLButtonElement;
 const muteButton = document.getElementById("mute-button") as HTMLButtonElement;
@@ -17,10 +18,6 @@ const transcriptList = document.getElementById("transcript-list") as HTMLElement
 const transcriptToggle = document.getElementById("transcript-toggle") as HTMLButtonElement;
 const transcriptPanel = document.getElementById("transcript-panel") as HTMLElement;
 const waveformEl = document.getElementById("waveform") as HTMLElement;
-const extractionSection = document.getElementById("extraction-section") as HTMLElement;
-const cardsGrid = document.getElementById("cards-grid") as HTMLElement;
-const rawOutputEl = document.getElementById("raw-output") as HTMLElement;
-const downloadButton = document.getElementById("download-json") as HTMLButtonElement;
 
 let socket: any = null;
 let recorder: MediaRecorder | null = null;
@@ -30,8 +27,7 @@ let callStartTime: number | null = null;
 let timerInterval: number | null = null;
 let micMuted = false;
 let speakerMuted = false;
-const transcriptMessages: { role: "user" | "assistant"; content: string }[] = [];
-let extractedData: any = null;
+const transcriptMessages: TranscriptMessage[] = [];
 
 async function ensureSession(): Promise<string> {
   if (userId) return userId;
@@ -40,15 +36,6 @@ async function ensureSession(): Promise<string> {
   if (!data.success) throw new Error("Failed to create session");
   userId = data.user_id;
   return userId!;
-}
-
-function formatClock(date: Date): string {
-  return date.toLocaleTimeString("en-US", {
-    hour: "2-digit",
-    minute: "2-digit",
-    second: "2-digit",
-    hour12: true,
-  });
 }
 
 function formatTimer(ms: number): string {
@@ -63,31 +50,21 @@ function scrollTranscriptToBottom() {
 }
 
 function addSystemEntry(label: string, kind: "start" | "end") {
-  const row = document.createElement("div");
-  row.className = `transcript-entry transcript-system transcript-system-${kind}`;
-  row.innerHTML = `
-    <span class="system-icon">${kind === "start" ? "✓" : "✕"}</span>
-    <span class="system-label">${label}</span>
-    <span class="entry-time">${formatClock(new Date())}</span>
-  `;
-  transcriptList.appendChild(row);
+  const message: TranscriptMessage = {
+    role: "system",
+    content: label,
+    timestamp: new Date().toISOString(),
+    kind,
+  };
+  transcriptMessages.push(message);
+  appendTranscriptEntry(transcriptList, message);
   scrollTranscriptToBottom();
 }
 
 function addMessageEntry(role: "user" | "assistant", content: string, timestamp: Date) {
-  transcriptMessages.push({ role, content });
-
-  const row = document.createElement("div");
-  row.className = "transcript-entry";
-  row.innerHTML = `
-    <div class="entry-meta">
-      <span class="entry-speaker">${role === "assistant" ? "Co" : "You"}</span>
-      <span class="entry-time">${formatClock(timestamp)}</span>
-    </div>
-    <div class="entry-text"></div>
-  `;
-  (row.querySelector(".entry-text") as HTMLElement).textContent = content;
-  transcriptList.appendChild(row);
+  const message: TranscriptMessage = { role, content, timestamp: timestamp.toISOString() };
+  transcriptMessages.push(message);
+  appendTranscriptEntry(transcriptList, message);
   scrollTranscriptToBottom();
 }
 
@@ -220,7 +197,7 @@ function endCall() {
   socket?.close();
 }
 
-function handleCallEnded() {
+async function handleCallEnded() {
   stopTimer();
   recorder?.stream.getTracks().forEach((t) => t.stop());
   recorder = null;
@@ -229,12 +206,14 @@ function handleCallEnded() {
   socket = null;
 
   callButton.classList.remove("active");
-  callButton.disabled = false;
-  statusEl.textContent = `Call ended · ${timerEl.textContent}`;
+  callButton.disabled = true;
   resetWaveform();
   addSystemEntry("Call ended", "end");
 
-  runExtraction();
+  const finalTimer = timerEl.textContent;
+  statusEl.textContent = `Call ended · ${finalTimer} · preparing results…`;
+
+  await runExtractionAndRedirect();
 }
 
 callButton.addEventListener("click", () => {
@@ -264,90 +243,32 @@ transcriptToggle.addEventListener("click", () => {
   transcriptToggle.classList.toggle("collapsed", collapsed);
 });
 
-const CARD_FIELDS: { key: string; label: string }[] = [
-  { key: "life_chapters", label: "Life chapter" },
-  { key: "city", label: "City" },
-  { key: "social_energy", label: "Social energy" },
-  { key: "connection_style", label: "Connection style" },
-  { key: "goals", label: "Goals" },
-  { key: "blockers", label: "Blockers" },
-  { key: "emotional_state", label: "Emotional state" },
-];
-
-function formatValue(v: unknown): string {
-  if (v === null || v === undefined || v === "") return "—";
-  if (Array.isArray(v)) return v.length ? v.join(", ") : "—";
-  return String(v);
-}
-
-function renderExtraction(data: { profile: any; intent: any; raw_model_output: string }) {
-  cardsGrid.innerHTML = "";
-
-  for (const field of CARD_FIELDS) {
-    const card = document.createElement("div");
-    card.className = "card";
-    const labelEl = document.createElement("div");
-    labelEl.className = "card-label";
-    labelEl.textContent = field.label;
-    const valueEl = document.createElement("div");
-    valueEl.className = "card-value";
-    valueEl.textContent = formatValue(data.profile?.[field.key]);
-    card.append(labelEl, valueEl);
-    cardsGrid.appendChild(card);
-  }
-
-  const intentCard = document.createElement("div");
-  intentCard.className = "card card-intent";
-  const intentLabel = document.createElement("div");
-  intentLabel.className = "card-label";
-  intentLabel.textContent = "Seeking / offering";
-  const intentValue = document.createElement("div");
-  intentValue.className = "card-value";
-  intentValue.textContent = data.intent
-    ? `${data.intent.type === "seeking" ? "Seeking" : "Offering"}: ${data.intent.text}`
-    : "Nothing specific detected";
-  intentCard.append(intentLabel, intentValue);
-  cardsGrid.appendChild(intentCard);
-
-  rawOutputEl.textContent = JSON.stringify(data, null, 2);
-}
-
-async function runExtraction() {
+// Runs extraction against everything captured during the call, then always
+// navigates to the results page for this session — even on failure or an
+// empty transcript, since the results page has a defined "not ready" state
+// for exactly that, rather than stranding the user on the ended-call screen.
+async function runExtractionAndRedirect() {
   if (!userId) return;
+  const sessionId = userId;
+
   const transcript = transcriptMessages
+    .filter((m) => m.role === "user" || m.role === "assistant")
     .map((m) => `${m.role}: ${m.content}`)
     .join("\n");
-  if (!transcript.trim()) return;
 
-  extractionSection.classList.remove("hidden");
-  extractionSection.classList.add("loading");
-
-  try {
-    const res = await fetch("/api/extract", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ user_id: userId, transcript }),
-    });
-    const json = await res.json();
-    if (!json.success) throw new Error(json.error ?? "Extraction failed");
-    extractedData = json.data;
-    renderExtraction(extractedData);
-  } catch (err) {
-    console.error("Extraction failed:", err);
-  } finally {
-    extractionSection.classList.remove("loading");
+  if (transcript.trim()) {
+    try {
+      await fetch("/api/extract", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ user_id: sessionId, transcript, messages: transcriptMessages }),
+      });
+    } catch (err) {
+      console.error("Extraction failed:", err);
+    }
   }
-}
 
-downloadButton.addEventListener("click", () => {
-  if (!extractedData) return;
-  const blob = new Blob([JSON.stringify(extractedData, null, 2)], { type: "application/json" });
-  const url = URL.createObjectURL(blob);
-  const a = document.createElement("a");
-  a.href = url;
-  a.download = "co-profile.json";
-  a.click();
-  URL.revokeObjectURL(url);
-});
+  window.location.href = `/call/${sessionId}/results`;
+}
 
 initWaveformBars();

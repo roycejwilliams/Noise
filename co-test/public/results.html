@@ -1,0 +1,46 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Co — Session Results</title>
+  <link rel="stylesheet" href="/styles.css" />
+</head>
+<body>
+  <header class="app-header">
+    <div class="header-title">
+      <div class="app-name">Co (test) — Results</div>
+      <div id="status" class="status-line">Loading…</div>
+    </div>
+    <a href="/call" class="transcript-toggle">New call</a>
+  </header>
+
+  <main class="scroll-area">
+    <div id="empty-state" class="empty-state hidden">
+      <p id="empty-message"></p>
+      <a href="/call" class="download-button">Start a call</a>
+    </div>
+
+    <section id="extraction-section" class="extraction-section hidden">
+      <div class="extraction-header">
+        <h2>Extracted profile</h2>
+        <button id="download-json" class="download-button">⬇ Download JSON</button>
+      </div>
+
+      <div id="cards-grid" class="cards-grid"></div>
+
+      <details class="raw-output-panel">
+        <summary>Raw extraction output</summary>
+        <pre id="raw-output" class="raw-output"></pre>
+      </details>
+
+      <details class="transcript-panel-details">
+        <summary>Full transcript</summary>
+        <div id="transcript-list" class="transcript-list"></div>
+      </details>
+    </section>
+  </main>
+
+  <script src="/results.js"></script>
+</body>
+</html>

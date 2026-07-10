@@ -28,9 +28,17 @@ async function main() {
   const app = express();
   app.use(express.json({ limit: "2mb" }));
 
+  const publicDir = path.join(process.cwd(), "public");
+
   app.get("/health", (_req, res) => res.status(200).send("ok"));
   app.use("/api", apiRouter);
-  app.use(express.static(path.join(process.cwd(), "public")));
+
+  app.get(["/", "/call"], (_req, res) => res.sendFile(path.join(publicDir, "call.html")));
+  app.get("/call/:sessionId/results", (_req, res) =>
+    res.sendFile(path.join(publicDir, "results.html")),
+  );
+
+  app.use(express.static(publicDir));
 
   const port = process.env.PORT ? Number(process.env.PORT) : 3000;
   app.listen(port, () => console.log(`co-test listening on ${port}`));
