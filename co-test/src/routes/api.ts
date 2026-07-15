@@ -126,10 +126,11 @@ const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/
 // it later by session ID instead of relying on in-memory state.
 router.post("/extract", async (req: Request, res: Response, next: NextFunction) => {
   try {
-    const { user_id, transcript, messages } = req.body as {
+    const { user_id, transcript, messages, coverage_history } = req.body as {
       user_id?: string;
       transcript?: string;
       messages?: unknown;
+      coverage_history?: unknown;
     };
     if (!user_id || !transcript?.trim()) {
       return res.status(400).json({ success: false, error: "Missing user_id or transcript." });
@@ -146,6 +147,10 @@ router.post("/extract", async (req: Request, res: Response, next: NextFunction) 
       raw_model_output: raw,
       transcript,
       messages: messages ?? [],
+      // Sandbox-only tool-call observability captured live in call.ts — never
+      // fed into extraction, just carried through so the results page can
+      // show it after the call ends instead of only during the live panel.
+      coverage_history: coverage_history ?? [],
     };
 
     await pool.query(

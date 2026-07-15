@@ -503,6 +503,116 @@ button {
   color: #2c3a8f;
 }
 
+/* Coverage checks — chart + table on the results page */
+
+.coverage-section {
+  margin-top: 24px;
+  padding-top: 20px;
+  border-top: 1px solid var(--border);
+}
+
+.coverage-section.hidden {
+  display: none;
+}
+
+.coverage-section-title {
+  font-size: 15px;
+  font-weight: 600;
+  letter-spacing: -0.01em;
+  margin: 0 0 14px;
+}
+
+.coverage-chart {
+  position: relative;
+  overflow-x: auto;
+  margin-bottom: 16px;
+}
+
+.coverage-chart-svg {
+  display: block;
+}
+
+.coverage-chart-gridline {
+  stroke: var(--border);
+  stroke-width: 1;
+}
+
+.coverage-chart-axis-label {
+  font-size: 10px;
+  fill: var(--text-tertiary);
+  font-variant-numeric: tabular-nums;
+}
+
+.coverage-chart-value-label {
+  font-size: 11px;
+  font-weight: 600;
+  fill: var(--text-secondary);
+  font-variant-numeric: tabular-nums;
+}
+
+.coverage-chart-bar {
+  fill: var(--accent);
+  cursor: pointer;
+  transition: fill 0.1s var(--ease);
+  outline: none;
+}
+
+.coverage-chart-bar.hovered,
+.coverage-chart-bar:focus-visible {
+  fill: #2c3fc4;
+}
+
+.coverage-chart-tooltip {
+  position: absolute;
+  transform: translate(-50%, -100%);
+  background: var(--text);
+  color: var(--bg);
+  border-radius: var(--radius-sm);
+  padding: 6px 10px;
+  font-size: 12px;
+  pointer-events: none;
+  white-space: nowrap;
+  box-shadow: var(--shadow-sm);
+  z-index: 1;
+}
+
+.coverage-chart-tooltip-value {
+  font-weight: 600;
+}
+
+.coverage-chart-tooltip-label {
+  color: var(--text-tertiary);
+  font-size: 11px;
+}
+
+.coverage-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 13px;
+}
+
+.coverage-table th {
+  text-align: left;
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.03em;
+  text-transform: uppercase;
+  color: var(--text-tertiary);
+  padding: 0 10px 8px 0;
+  border-bottom: 1px solid var(--border);
+}
+
+.coverage-table td {
+  padding: 7px 10px 7px 0;
+  border-bottom: 1px solid var(--border);
+  color: var(--text);
+  font-variant-numeric: tabular-nums;
+}
+
+.coverage-table tr:last-child td {
+  border-bottom: none;
+}
+
 .raw-output-panel {
   margin-top: 20px;
 }

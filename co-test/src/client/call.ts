@@ -32,6 +32,17 @@ let speakerMuted = false;
 let toolCallCount = 0;
 const transcriptMessages: TranscriptMessage[] = [];
 
+export type CoverageCheck = {
+  call_number: number;
+  timestamp: string;
+  missing_topics: string[];
+  covered_topics: string[];
+  ready_to_summarize: boolean;
+  latency_ms: number;
+};
+
+const coverageHistory: CoverageCheck[] = [];
+
 async function ensureSession(): Promise<string> {
   if (userId) return userId;
   const res = await fetch("/api/session", { method: "POST" });
@@ -131,6 +142,7 @@ function renderCoveragePanel(data: {
 
 function resetCoveragePanel() {
   toolCallCount = 0;
+  coverageHistory.length = 0;
   coveragePanelBody.innerHTML = '<div class="coverage-empty">No tool calls yet</div>';
 }
 
@@ -155,10 +167,19 @@ async function handleToolCall(msg: any) {
     if (!data.success) throw new Error(data.error ?? "assess-coverage failed");
 
     // Only missing_topics/ready_to_summarize ever go back to Hume — covered_topics
-    // and latency_ms are sandbox-only and stop at the side panel.
+    // and latency_ms are sandbox-only and stop at the side panel + history sent
+    // to /api/extract for the results page.
     socket.sendToolResponseMessage({
       toolCallId: msg.toolCallId,
       content: JSON.stringify(data.assessment),
+    });
+    coverageHistory.push({
+      call_number: toolCallCount,
+      timestamp: new Date().toISOString(),
+      missing_topics: data.assessment.missing_topics,
+      covered_topics: data.covered_topics,
+      ready_to_summarize: data.assessment.ready_to_summarize,
+      latency_ms: data.latency_ms,
     });
     renderCoveragePanel({
       ...data.assessment,
@@ -437,7 +458,12 @@ async function runExtractionAndRedirect() {
       await fetch("/api/extract", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ user_id: sessionId, transcript, messages: transcriptMessages }),
+        body: JSON.stringify({
+          user_id: sessionId,
+          transcript,
+          messages: transcriptMessages,
+          coverage_history: coverageHistory,
+        }),
       });
     } catch (err) {
       console.error("Extraction failed:", err);
