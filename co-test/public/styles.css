@@ -585,8 +585,14 @@ button {
   font-size: 11px;
 }
 
+.coverage-table-wrap {
+  overflow-x: auto;
+  -webkit-overflow-scrolling: touch;
+}
+
 .coverage-table {
   width: 100%;
+  min-width: 420px;
   border-collapse: collapse;
   font-size: 13px;
 }
@@ -818,13 +824,23 @@ button {
 
   .transcript-list,
   .extraction-section,
-  .empty-state {
+  .empty-state,
+  .prompt-page {
     padding-left: 16px;
     padding-right: 16px;
   }
 
   .prompt-mode-label {
     margin-left: 16px;
+  }
+
+  .prompt-actions {
+    flex-wrap: wrap;
+    gap: 10px;
+  }
+
+  .prompt-textarea {
+    min-height: 280px;
   }
 
   .control-bar {
@@ -835,6 +851,14 @@ button {
   .extraction-header {
     flex-wrap: wrap;
     gap: 10px;
+  }
+
+  .coverage-panel {
+    padding: 12px 14px;
+  }
+
+  .coverage-section-title {
+    font-size: 14px;
   }
 }
 
