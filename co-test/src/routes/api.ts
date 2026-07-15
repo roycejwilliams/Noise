@@ -3,8 +3,10 @@ import { fetchAccessToken } from "hume";
 import express, { Request, Response, NextFunction } from "express";
 import pool from "../../../api/src/db/db.js";
 import {
+  assessConversationCoverage,
   captureIntent,
   extractPsychographicProfile,
+  RAPPORT_TOPICS,
   storeProfile,
   storeTranscriptMemory,
 } from "../../../api/src/services/profileExtraction.js";
@@ -82,6 +84,34 @@ router.get("/prompt", async (_req: Request, res: Response, next: NextFunction) =
       configName: config.name,
       version: config.version,
     });
+  } catch (error) {
+    next(error);
+  }
+});
+
+// POST /api/assess-coverage — sandbox-only counterpart to the tool_call
+// branch in api/src/routes/co.ts's Hume webhook. That branch exists for the
+// Twilio-bridged phone path, where nobody holds the live EVI socket so Hume
+// falls back to a webhook + Control Plane round trip. co-test's browser DOES
+// hold the socket directly (see call.ts), so Hume delivers tool_call there
+// instead — this route is just the server-side half (Anthropic call) that
+// the browser can't make itself, called from call.ts's tool_call handler.
+// Same assessConversationCoverage() function either way — this is proving
+// out that function and the tool schema, not the Twilio-specific plumbing.
+//
+// `assessment` is the only part of this response that ever reaches Hume —
+// call.ts sends exactly {missing_topics, ready_to_summarize} back as the
+// tool result, unchanged. covered_topics and latency_ms are sandbox-only
+// observability, for the side panel, never spoken by Co and never part of
+// what EVI's model sees.
+router.post("/assess-coverage", async (req: Request, res: Response, next: NextFunction) => {
+  try {
+    const { transcript } = req.body as { transcript?: string };
+    const start = Date.now();
+    const assessment = await assessConversationCoverage(transcript ?? "");
+    const latency_ms = Date.now() - start;
+    const covered_topics = RAPPORT_TOPICS.filter((t) => !assessment.missing_topics.includes(t));
+    return res.status(200).json({ success: true, assessment, covered_topics, latency_ms });
   } catch (error) {
     next(error);
   }

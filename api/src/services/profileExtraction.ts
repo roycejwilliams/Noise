@@ -35,6 +35,32 @@ export type ExtractedIntent = {
   created_at: string;
 };
 
+// Keys must match the tool schema description registered on the Hume config
+// and the nine Rapport-phase topics in Jacqueline's spec.
+export const RAPPORT_TOPICS = [
+  "current_situation",
+  "major_transition",
+  "goals_challenges",
+  "looking_for",
+  "people_to_meet",
+  "ways_to_help",
+  "personality",
+  "location_availability",
+  "boundaries_preferences",
+] as const;
+
+export type RapportTopic = (typeof RAPPORT_TOPICS)[number];
+
+export type CoverageAssessment = {
+  missing_topics: RapportTopic[];
+  ready_to_summarize: boolean;
+};
+
+const COVERAGE_FALLBACK: CoverageAssessment = {
+  missing_topics: [...RAPPORT_TOPICS],
+  ready_to_summarize: false,
+};
+
 // Step 1 of the pipeline — turns a transcript into raw psychographic JSON via
 // Claude. Returns both the raw model output and the parsed/attempted-parse
 // result so callers that need to show "exactly what the pipeline produced"
@@ -73,6 +99,54 @@ export async function extractPsychographicProfile(
   }
 
   return { raw: rawExtraction, extracted };
+}
+
+// Mid-call coverage check — invoked from the Hume tool_call webhook while a
+// call is live, not post-call like the extraction pipeline above. Deliberately
+// separate from extractPsychographicProfile: Haiku (not Sonnet), no DB writes,
+// no embeddings, terse output-only prompt — every millisecond here is dead air
+// on a live phone call, since EVI blocks the conversation on a pending tool
+// response. Does NOT decide what Co says next; EVI's own model phrases the
+// next question from missing_topics, this only reports coverage.
+export async function assessConversationCoverage(transcriptSoFar: string): Promise<CoverageAssessment> {
+  if (!transcriptSoFar.trim()) return COVERAGE_FALLBACK;
+
+  try {
+    const { text: raw } = await generateText({
+      model: anthropic("claude-haiku-4-5-20251001"),
+      prompt: `Transcript of an in-progress phone call so far, between Co (an assistant) and a caller:
+"${transcriptSoFar}"
+
+Which of these topics has the caller substantively addressed? Judge by what the caller actually said, not by whether Co asked about it.
+- current_situation: what's going on in their life right now
+- major_transition: the bigger context or change they're in the middle of
+- goals_challenges: what they're working toward or struggling with
+- looking_for: what kind of connection or outcome they want from this
+- people_to_meet: the kind of people they'd want to be introduced to
+- ways_to_help: what they could offer or help others with
+- personality: some sense of their personality or how they come across
+- location_availability: where they are and when they're free
+- boundaries_preferences: any stated boundaries or preferences
+
+Return ONLY valid JSON, no preamble or markdown:
+{"missing_topics": [...topic keys not yet covered...], "ready_to_summarize": true|false}
+
+ready_to_summarize is true only if at most one or two minor topics remain missing.`,
+    });
+
+    const clean = raw.replace(/```json|```/g, "").trim();
+    const parsed = JSON.parse(clean);
+    const missing = Array.isArray(parsed.missing_topics)
+      ? parsed.missing_topics.filter((t: unknown): t is RapportTopic =>
+          RAPPORT_TOPICS.includes(t as RapportTopic),
+        )
+      : [...RAPPORT_TOPICS];
+
+    return { missing_topics: missing, ready_to_summarize: Boolean(parsed.ready_to_summarize) };
+  } catch (err) {
+    console.error("assessConversationCoverage failed, falling back to nothing-covered:", err);
+    return COVERAGE_FALLBACK;
+  }
 }
 
 // Step 2 — sanitizes against co_profiles' CHECK constraints and upserts.

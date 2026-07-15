@@ -11,8 +11,10 @@ import { generateEmbedding } from "../services/embeddings.js";
 import { findBestCircle } from "../services/matching.js";
 import { findBestVenue } from "../services/places.js";
 import {
+  assessConversationCoverage,
   captureIntent,
   extractPsychographicProfile,
+  RAPPORT_TOPICS,
   storeProfile,
   storeTranscriptMemory,
 } from "../services/profileExtraction.js";
@@ -429,10 +431,57 @@ router.post(
   },
 );
 
+type HumeToolCallMessage = {
+  tool_call_id: string;
+  name: string;
+};
+
+// Answers a pending tool_call via Hume's Control Plane — separate from the
+// webhook's own HTTP response, since EVI is waiting on this over the live
+// chat, not over the webhook connection. No parallel tool calls on EVI's
+// side, so the live call is silent from the moment the tool_call event fires
+// until this resolves — see assessConversationCoverage for why Haiku, not
+// Sonnet.
+async function sendHumeToolResponse(chatId: string, toolCallId: string, content: string): Promise<void> {
+  const res = await fetch(`https://api.hume.ai/v0/evi/chat/${chatId}/send`, {
+    method: "POST",
+    headers: {
+      "X-Hume-Api-Key": process.env.HUME_API_KEY!,
+      "Content-Type": "application/json",
+    },
+    body: JSON.stringify({ type: "tool_response", tool_call_id: toolCallId, content }),
+  });
+  if (!res.ok) {
+    console.error(`co/webhook: tool response POST failed (${res.status}) for chat ${chatId}, tool_call ${toolCallId}`);
+  }
+}
+
+// Only assess_conversation_coverage exists today — if more tools land here,
+// switch on tool_call_message.name rather than growing this function.
+async function handleToolCall(chatId: string, toolCallMessage: HumeToolCallMessage | undefined): Promise<void> {
+  if (!toolCallMessage || toolCallMessage.name !== "assess_conversation_coverage") return;
+
+  try {
+    const { transcript } = await fetchHumeCallData(chatId);
+    const assessment = await assessConversationCoverage(transcript);
+    await sendHumeToolResponse(chatId, toolCallMessage.tool_call_id, JSON.stringify(assessment));
+  } catch (err: any) {
+    console.error("co/webhook: assess_conversation_coverage failed, falling back to nothing-covered:", err?.message ?? err);
+    await sendHumeToolResponse(
+      chatId,
+      toolCallMessage.tool_call_id,
+      JSON.stringify({ missing_topics: [...RAPPORT_TOPICS], ready_to_summarize: false }),
+    ).catch(() => {});
+  }
+}
+
 // POST /co/webhook — Hume calls this for chat_started, chat_ended, and
-// tool_call (all three are registered on the config). Only chat_ended has
-// anything worth extracting — the payload itself carries no transcript, so
-// it's fetched separately from Hume's Chat Events API using chat_id.
+// tool_call (all three are registered on the config). chat_ended drives the
+// full post-call extraction pipeline below — the payload itself carries no
+// transcript, so it's fetched separately from Hume's Chat Events API using
+// chat_id. tool_call is answered asynchronously via the Control Plane (see
+// handleToolCall) — this route just acks Hume's webhook and kicks it off.
+// chat_started stays acknowledged-and-ignored; nothing to do at call start.
 router.post(
   "/webhook",
   async (req: Request, res: Response, next: NextFunction) => {
@@ -441,7 +490,15 @@ router.post(
         return res.status(401).send("Unauthorized.");
       }
 
-      const { event_name, custom_session_id, chat_id, chat_group_id, twilio_metadata } = req.body;
+      const { event_name, custom_session_id, chat_id, chat_group_id, twilio_metadata, tool_call_message } = req.body;
+
+      if (event_name === "tool_call") {
+        res.status(200).send({ success: true });
+        handleToolCall(chat_id, tool_call_message).catch((err) =>
+          console.error("co/webhook: unhandled tool_call error:", err?.message ?? err),
+        );
+        return;
+      }
 
       if (event_name !== "chat_ended") {
         return res.status(200).send({ success: true, ignored: event_name });

@@ -2,7 +2,7 @@ export type TranscriptMessage = {
   role: "user" | "assistant" | "system";
   content: string;
   timestamp: string;
-  kind?: "start" | "end";
+  kind?: "start" | "end" | "tool";
 };
 
 // sessionStorage (not localStorage) is deliberate — scoped to this one
@@ -50,11 +50,12 @@ export function formatValue(v: unknown): string {
   return String(v);
 }
 
-function buildSystemEntry(content: string, kind: "start" | "end", timestamp: Date): HTMLElement {
+function buildSystemEntry(content: string, kind: "start" | "end" | "tool", timestamp: Date): HTMLElement {
+  const icon = kind === "start" ? "✓" : kind === "end" ? "✕" : "⚙";
   const row = document.createElement("div");
   row.className = `transcript-entry transcript-system transcript-system-${kind}`;
   row.innerHTML = `
-    <span class="system-icon">${kind === "start" ? "✓" : "✕"}</span>
+    <span class="system-icon">${icon}</span>
     <span class="system-label">${content}</span>
     <span class="entry-time">${formatClock(timestamp)}</span>
   `;

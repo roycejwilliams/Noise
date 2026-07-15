@@ -19,6 +19,7 @@ const transcriptToggle = document.getElementById("transcript-toggle") as HTMLBut
 const transcriptPanel = document.getElementById("transcript-panel") as HTMLElement;
 const waveformEl = document.getElementById("waveform") as HTMLElement;
 const promptModeLabel = document.getElementById("prompt-mode-label") as HTMLElement;
+const coveragePanelBody = document.getElementById("coverage-panel-body") as HTMLElement;
 
 let socket: any = null;
 let recorder: MediaRecorder | null = null;
@@ -28,6 +29,7 @@ let callStartTime: number | null = null;
 let timerInterval: number | null = null;
 let micMuted = false;
 let speakerMuted = false;
+let toolCallCount = 0;
 const transcriptMessages: TranscriptMessage[] = [];
 
 async function ensureSession(): Promise<string> {
@@ -50,7 +52,7 @@ function scrollTranscriptToBottom() {
   transcriptList.scrollTop = transcriptList.scrollHeight;
 }
 
-function addSystemEntry(label: string, kind: "start" | "end") {
+function addSystemEntry(label: string, kind: "start" | "end" | "tool") {
   const message: TranscriptMessage = {
     role: "system",
     content: label,
@@ -60,6 +62,121 @@ function addSystemEntry(label: string, kind: "start" | "end") {
   transcriptMessages.push(message);
   appendTranscriptEntry(transcriptList, message);
   scrollTranscriptToBottom();
+}
+
+// transcriptMessages only ever holds finalized (non-interim) user/assistant
+// turns, so this is always what Co has actually heard up to this point in
+// the live call — same shape runExtractionAndRedirect sends post-call.
+function transcriptSoFar(): string {
+  return transcriptMessages
+    .filter((m) => m.role === "user" || m.role === "assistant")
+    .map((m) => `${m.role}: ${m.content}`)
+    .join("\n");
+}
+
+const ALL_TOPICS = [
+  "current_situation",
+  "major_transition",
+  "goals_challenges",
+  "looking_for",
+  "people_to_meet",
+  "ways_to_help",
+  "personality",
+  "location_availability",
+  "boundaries_preferences",
+];
+
+function topicLabel(topic: string): string {
+  return topic.replace(/_/g, " ");
+}
+
+// Sandbox-only observability panel — covered_topics/call_count/latency_ms
+// never leave the browser and are never part of what's sent back to Hume as
+// the tool_response content (that stays exactly {missing_topics,
+// ready_to_summarize}, unchanged, below).
+function renderCoveragePanel(data: {
+  missing_topics: string[];
+  ready_to_summarize: boolean;
+  covered_topics: string[];
+  call_count: number;
+  latency_ms: number;
+}) {
+  const chip = (topic: string, covered: boolean) =>
+    `<span class="coverage-topic-chip ${covered ? "covered" : "missing"}">${topicLabel(topic)}</span>`;
+
+  coveragePanelBody.innerHTML = `
+    <div class="coverage-stats">
+      <div class="coverage-stat-row">
+        <span class="coverage-stat-label">Calls this session</span>
+        <span class="coverage-stat-value">${data.call_count}</span>
+      </div>
+      <div class="coverage-stat-row">
+        <span class="coverage-stat-label">Last call latency</span>
+        <span class="coverage-stat-value">${data.latency_ms}ms</span>
+      </div>
+    </div>
+    <div class="coverage-section-label">Covered (${data.covered_topics.length}/${ALL_TOPICS.length})</div>
+    <div class="coverage-topic-list">
+      ${data.covered_topics.map((t) => chip(t, true)).join("") || '<span class="coverage-empty">None yet</span>'}
+    </div>
+    <div class="coverage-section-label">Missing</div>
+    <div class="coverage-topic-list">
+      ${data.missing_topics.map((t) => chip(t, false)).join("") || '<span class="coverage-empty">None</span>'}
+    </div>
+    <div class="coverage-ready ${data.ready_to_summarize ? "yes" : ""}">
+      ${data.ready_to_summarize ? "Ready to summarize" : "Not ready yet"}
+    </div>
+  `;
+}
+
+function resetCoveragePanel() {
+  toolCallCount = 0;
+  coveragePanelBody.innerHTML = '<div class="coverage-empty">No tool calls yet</div>';
+}
+
+// Sandbox-only handler: co-test's browser holds the live EVI socket, so
+// Hume delivers tool_call here directly rather than through the Hume
+// webhook (that path — api/src/routes/co.ts — only exists for the
+// Twilio-bridged phone call, where no client holds the socket). The
+// assessment itself (assessConversationCoverage) is the same server-side
+// function either way; this just proves it out before wiring the
+// Twilio-specific plumbing.
+async function handleToolCall(msg: any) {
+  if (msg.name !== "assess_conversation_coverage") return;
+  toolCallCount += 1;
+
+  try {
+    const res = await fetch("/api/assess-coverage", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ transcript: transcriptSoFar() }),
+    });
+    const data = await res.json();
+    if (!data.success) throw new Error(data.error ?? "assess-coverage failed");
+
+    // Only missing_topics/ready_to_summarize ever go back to Hume — covered_topics
+    // and latency_ms are sandbox-only and stop at the side panel.
+    socket.sendToolResponseMessage({
+      toolCallId: msg.toolCallId,
+      content: JSON.stringify(data.assessment),
+    });
+    renderCoveragePanel({
+      ...data.assessment,
+      covered_topics: data.covered_topics,
+      call_count: toolCallCount,
+      latency_ms: data.latency_ms,
+    });
+    addSystemEntry("Coverage check", "tool");
+  } catch (err) {
+    console.error("assess_conversation_coverage tool call failed:", err);
+    const fallback = { missing_topics: ALL_TOPICS, ready_to_summarize: false };
+    socket.sendToolErrorMessage({
+      toolCallId: msg.toolCallId,
+      error: err instanceof Error ? err.message : String(err),
+      content: JSON.stringify(fallback),
+    });
+    addSystemEntry("Coverage check — failed, sent fallback", "tool");
+  }
 }
 
 function addMessageEntry(role: "user" | "assistant", content: string, timestamp: Date) {
@@ -192,6 +309,7 @@ async function startCall() {
     socket.on("open", () => {
       recorder = startAudioCapture(micStream, mimeType, socket);
       startTimer();
+      resetCoveragePanel();
       statusEl.textContent = "In call";
       callButton.classList.add("active");
       callButton.title = "End call";
@@ -219,6 +337,9 @@ async function startCall() {
           break;
         case "user_interruption":
           player?.stop();
+          break;
+        case "tool_call":
+          handleToolCall(msg).catch((err) => console.error("Unhandled tool_call error:", err));
           break;
         case "error":
           console.error("Hume reported an error:", msg);
