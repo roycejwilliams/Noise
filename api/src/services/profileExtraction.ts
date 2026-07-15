@@ -164,9 +164,18 @@ export async function storeProfile(
     ? (extracted.connection_style as string)
     : "small_group";
 
+  // Non-fatal like every other embedding call in this file (storeTranscriptMemory,
+  // captureIntent) — an embedding-provider hiccup (rate limit, quota, network)
+  // must never block the profile write itself, which is what the caller
+  // actually needs. A null embedding here just means this profile doesn't
+  // participate in goal-similarity matching until the next successful call.
   let goalEmbedding: number[] | null = null;
   if (extracted.goals && extracted.goals.length > 0) {
-    goalEmbedding = await generateGoalEmbedding(extracted.goals);
+    try {
+      goalEmbedding = await generateGoalEmbedding(extracted.goals);
+    } catch (err) {
+      console.error("Goal embedding failed (non-fatal):", err);
+    }
   }
 
   await pool.query(
