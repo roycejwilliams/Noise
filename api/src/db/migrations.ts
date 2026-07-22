@@ -214,4 +214,131 @@ export function runMigrations() {
       console.error("moments.day_of_reminder_sent_at migration failed:", err),
     );
 
+  // Gates whether a member has consented to their circle placement. The
+  // curated moment isn't revealed to a member until they accept — declining
+  // marks them 'declined' (kept, not deleted, so it also serves as the
+  // replacement-attempt counter) and triggers a rematch attempt for the group.
+  pool
+    .query(
+      `ALTER TABLE circle_members ADD COLUMN IF NOT EXISTS status TEXT NOT NULL DEFAULT 'pending'
+       CHECK (status IN ('pending', 'accepted', 'declined'))`,
+    )
+    .catch((err: Error) =>
+      console.error("circle_members.status migration failed:", err),
+    );
+
+  // Every ON CONFLICT DO NOTHING against moment_responses throughout the
+  // codebase silently assumed this constraint already existed — without it,
+  // duplicate (moment_id, user_id) rows could be (and were) inserted.
+  pool
+    .query(
+      `DO $$ BEGIN
+         IF NOT EXISTS (
+           SELECT 1 FROM pg_constraint WHERE conname = 'moment_responses_moment_user_unique'
+         ) THEN
+           ALTER TABLE moment_responses
+             ADD CONSTRAINT moment_responses_moment_user_unique UNIQUE (moment_id, user_id);
+         END IF;
+       END $$;`,
+    )
+    .catch((err: Error) =>
+      console.error("moment_responses unique constraint migration failed:", err),
+    );
+
+  // Lets us look up the venue's real phone number and a Maps link at
+  // booking-confirmation time, without a fresh (less precise) name search —
+  // Google Places was already queried once at moment creation; this just
+  // keeps the same result identifiable later.
+  pool
+    .query(`ALTER TABLE moments ADD COLUMN IF NOT EXISTS venue_place_id TEXT`)
+    .catch((err: Error) =>
+      console.error("moments.venue_place_id migration failed:", err),
+    );
+
+  // True no-answer/busy/failed/canceled calls (nobody and nothing picked up)
+  // get a delayed follow-up text instead of an instant one — see
+  // sendMissedCallFollowUp's call sites in co.ts and the follow-up cron.
+  pool
+    .query(
+      `CREATE TABLE IF NOT EXISTS pending_call_followups (
+        id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+        user_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+        call_sid TEXT NOT NULL,
+        call_status TEXT NOT NULL,
+        due_at TIMESTAMPTZ NOT NULL,
+        sent_at TIMESTAMPTZ,
+        created_at TIMESTAMPTZ DEFAULT NOW()
+      )`,
+    )
+    .catch((err: Error) =>
+      console.error("pending_call_followups table init failed:", err),
+    );
+
+  // Backing the moderator venue-approval gate — mirrors circles.keana_notified_at.
+  // Consensus is reached, but nothing texts the Connector until Keana approves
+  // the selected venue via the same approve/reject reply pattern circle
+  // placement already uses.
+  pool
+    .query(`ALTER TABLE moments ADD COLUMN IF NOT EXISTS keana_venue_notified_at TIMESTAMPTZ`)
+    .catch((err: Error) =>
+      console.error("moments.keana_venue_notified_at migration failed:", err),
+    );
+
+  // Venue names Keana has rejected for this moment, so re-selection after a
+  // reject excludes them instead of re-rolling the same pick.
+  pool
+    .query(`ALTER TABLE moments ADD COLUMN IF NOT EXISTS rejected_venues TEXT[] DEFAULT '{}'`)
+    .catch((err: Error) =>
+      console.error("moments.rejected_venues migration failed:", err),
+    );
+
+  // venue_type/vibe — persisted from the moment-generation LLM call so the
+  // Keana venue-rejection path can re-run venue selection later (a fresh
+  // request, not the original one) with the same search criteria instead of
+  // guessing at what kind of venue was wanted.
+  pool
+    .query(`ALTER TABLE moments ADD COLUMN IF NOT EXISTS venue_type TEXT`)
+    .catch((err: Error) => console.error("moments.venue_type migration failed:", err));
+
+  pool
+    .query(`ALTER TABLE moments ADD COLUMN IF NOT EXISTS vibe TEXT`)
+    .catch((err: Error) => console.error("moments.vibe migration failed:", err));
+
+  // The original neighborhood search term used for venue selection —
+  // location_name gets overwritten with the selected venue's actual street
+  // address once one's found, so it can't be reused to re-search on a
+  // Keana rejection (confirmed: would search Places for an address string
+  // instead of a neighborhood).
+  pool
+    .query(`ALTER TABLE moments ADD COLUMN IF NOT EXISTS neighborhood TEXT`)
+    .catch((err: Error) => console.error("moments.neighborhood migration failed:", err));
+
+  // Every circle member who's already been assigned the booking task for
+  // this moment (whether they never responded or the venue got reassigned
+  // around them) — lets the connector-timeout cron rotate is_circle_connector
+  // to the next untried member instead of reassigning the same person or
+  // dead-ending at a single non-responder.
+  pool
+    .query(`ALTER TABLE moments ADD COLUMN IF NOT EXISTS tried_connector_ids UUID[] DEFAULT '{}'`)
+    .catch((err: Error) =>
+      console.error("moments.tried_connector_ids migration failed:", err),
+    );
+
+  // Marks calls the AMD callback flagged as an answering machine/voicemail.
+  // The Hume chat_ended webhook still fires normally for these (we hang up
+  // cleanly now instead of killing the call abruptly) — without this flag it
+  // runs the full psychographic-extraction + follow-up-text pipeline against
+  // a one-sided transcript of Co talking to a voicemail box, hallucinating a
+  // "reflection" on lines Co itself said.
+  pool
+    .query(
+      `CREATE TABLE IF NOT EXISTS voicemail_calls (
+        call_sid TEXT PRIMARY KEY,
+        detected_at TIMESTAMPTZ DEFAULT NOW()
+      )`,
+    )
+    .catch((err: Error) =>
+      console.error("voicemail_calls table init failed:", err),
+    );
+
 }

@@ -10,6 +10,49 @@ export function createCirclesRouter(
 ): Router {
   const router = Router();
 
+  // Public endpoint — no auth, used by app.copatible.com/circles/:id (the
+  // link texted when a circle is found — also the App Clip entry point).
+  // Must be registered before GET "/:id" below, which would otherwise
+  // shadow this route (Express matches "/public/xyz" against "/:id" first
+  // if that's registered earlier, treating "public" as the :id param).
+  router.get("/public/:id", async (req, res, next) => {
+    try {
+      const circleResult = await pool.query(
+        `SELECT id, circle_name, status FROM circles WHERE id = $1`,
+        [req.params.id],
+      );
+      const circle = circleResult.rows[0];
+      if (!circle) return res.status(404).send("Circle not found.");
+
+      const membersResult = await pool.query(
+        `SELECT u.first_name, cp.city, cp.life_chapters
+         FROM circle_members cm
+         JOIN users u ON u.id = cm.member_id
+         LEFT JOIN co_profiles cp ON cp.user_id = cm.member_id
+         WHERE cm.circle_id = $1 AND cm.status != 'declined'`,
+        [circle.id],
+      );
+      const members = membersResult.rows;
+      const city = members.find((m: any) => m.city)?.city ?? null;
+      const chapter = members.find((m: any) => m.life_chapters?.length)?.life_chapters?.[0] ?? null;
+
+      return res.status(200).send({
+        success: true,
+        data: {
+          id: circle.id,
+          circle_name: circle.circle_name,
+          status: circle.status,
+          city,
+          chapter,
+          member_count: members.length,
+          member_first_names: members.map((m: any) => m.first_name),
+        },
+      });
+    } catch (error) {
+      next(error);
+    }
+  });
+
   router.post(
     "/:id",
     authenticateToken,

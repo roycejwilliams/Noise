@@ -62,11 +62,9 @@ export function createAuthRouter(): Router {
         const accountAge =
           Date.now() - new Date(UserAuthorize.created_at).getTime();
         if (accountAge < 24 * 60 * 60 * 1000) {
+          // Welcome SMS already sent at first-contact (see sendblue.ts webhook)
+          // — only the email repeats here.
           await sendEmail({ email: UserAuthorize.email, welcome: true });
-          await sendSMS({
-            phone_number: UserAuthorize.phone_number,
-            welcome: true,
-          });
         } else {
           await sendSMS({
             phone_number: UserAuthorize.phone_number,

@@ -150,9 +150,10 @@ export async function findBestVenue(
     group_size: number;
   },
   geoCenter?: GeoPoint | null,
+  excludeNames: string[] = [],
 ): Promise<any | null> {
   const raw = await searchVenues(venueType, neighborhood, city, circleProfile.group_size, geoCenter);
-  const filtered = hardFilterVenues(raw, geoCenter);
+  const filtered = hardFilterVenues(raw, geoCenter).filter((v) => !excludeNames.includes(v.name));
 
   if (!filtered.length) return null;
 
@@ -172,13 +173,33 @@ export async function findBestVenue(
       });
       website = details.data.result?.website ?? null;
     } catch {
-      // non-fatal — fall through to Resy fallback
+      // non-fatal — venue_booking_url just stays null
     }
   }
 
-  const resyUrl = `https://resy.com/cities/sf?query=${encodeURIComponent(winner.name)}`;
-  const opentableUrl = `https://www.opentable.com/s/?term=${encodeURIComponent(winner.name)}&metroId=4`;
-  const venue_booking_url = website ?? resyUrl;
+  return { ...winner, venue_booking_url: website };
+}
 
-  return { ...winner, venue_booking_url, resyUrl, opentableUrl };
+// Looked up again at booking-confirmation time (using the place_id saved at
+// moment creation) rather than trying to carry it forward in memory across
+// what can be a much later, separate request.
+export async function getVenueContactInfo(
+  place_id: string,
+): Promise<{ phone: string | null; mapsUrl: string | null }> {
+  try {
+    const details = await client.placeDetails({
+      params: {
+        place_id,
+        fields: ["formatted_phone_number", "url"],
+        key: process.env.GOOGLE_PLACES_API_KEY!,
+      },
+    });
+    return {
+      phone: details.data.result?.formatted_phone_number ?? null,
+      mapsUrl: details.data.result?.url ?? null,
+    };
+  } catch (err: any) {
+    console.error("getVenueContactInfo failed (non-fatal):", err?.message ?? err);
+    return { phone: null, mapsUrl: null };
+  }
 }

@@ -2,6 +2,10 @@ import cron from "node-cron";
 import twilio from "twilio";
 import pool from "../db/db.js";
 import { sendEmail, sendSMS } from "../otpActions.js";
+import {
+  proceedToConnectorBooking,
+  requestVenueApprovalFromKeana,
+} from "../services/booking.js";
 import sendblue from "../services/sendblue.js";
 
 const twilioClient = twilio(
@@ -149,7 +153,8 @@ export function registerJobs() {
   cron.schedule("*/15 * * * *", async () => {
     try {
       const pollingMoments = await pool.query(
-        `SELECT m.id, m.circle_id, m.suggested_time, m.created_at, m.consensus_nudge_sent_at
+        `SELECT m.id, m.circle_id, m.moments_name, m.suggested_time, m.created_at, m.consensus_nudge_sent_at,
+                m.venue, m.venue_booking_url, m.venue_place_id
          FROM moments m
          JOIN circles c ON c.id = m.circle_id
          WHERE m.status = 'polling'
@@ -186,11 +191,15 @@ export function registerJobs() {
             (r: any) => r.response === null,
           );
           for (const nr of nonResponders) {
-            await sendblue.messages.send({
-              number: nr.phone_number,
-              content: `${nr.first_name}, your circle's moment has been locked. Reply YES or suggest a time for future moments.`,
-              from_number: process.env.SENDBLUE_PHONE_NUMBER!,
-            });
+            try {
+              await sendblue.messages.send({
+                number: nr.phone_number,
+                content: `${nr.first_name}, your circle's moment has been locked. Reply YES or suggest a time for future moments.`,
+                from_number: process.env.SENDBLUE_PHONE_NUMBER!,
+              });
+            } catch (smsErr: any) {
+              console.error(`Consensus nudge failed for ${nr.user_id}:`, smsErr?.message ?? smsErr);
+            }
             await pool.query(
               `UPDATE co_profiles SET trust_score = GREATEST(0, trust_score - 5) WHERE user_id = $1`,
               [nr.user_id],
@@ -202,46 +211,35 @@ export function registerJobs() {
           );
         }
 
-        const connectorResult = await pool.query(
-          `SELECT u.id, u.phone_number, u.first_name
-           FROM circle_members cm
-           JOIN users u ON u.id = cm.member_id
-           JOIN co_profiles cp ON cp.user_id = cm.member_id
-           WHERE cm.circle_id = $1 AND cp.is_circle_connector = TRUE
-           LIMIT 1`,
-          [moment.circle_id],
-        );
-
-        const circlePageUrl = `https://app.copatible.com/circles/${moment.circle_id}`;
-
-        if (connectorResult.rows[0]) {
-          const connector = connectorResult.rows[0];
-          await sendblue.messages.send({
-            number: connector.phone_number,
-            content: `${connector.first_name}, your circle is confirmed. Tap to book: ${circlePageUrl}`,
-            from_number: process.env.SENDBLUE_PHONE_NUMBER!,
-          });
-          await pool.query(
-            `UPDATE moments SET status = 'consensus_locked', booking_link_sent_at = NOW() WHERE id = $1`,
-            [moment.id],
-          );
-        } else {
-          const responsesSummary = responses
-            .map((r: any) => `${r.first_name}: ${r.response ?? "no reply"}`)
-            .join(", ");
-          await sendblue.messages.send({
-            number: process.env.KEANA_PHONE_NUMBER!,
-            content: `Circle consensus needed for moment ${moment.id}. Suggested: ${moment.suggested_time ?? "TBD"}. Responses: ${responsesSummary}. Circle: ${circlePageUrl}`,
-            from_number: process.env.SENDBLUE_PHONE_NUMBER!,
-          });
-          await pool.query(
-            `UPDATE moments SET status = 'manual_review' WHERE id = $1`,
-            [moment.id],
-          );
-        }
+        // Consensus reached — gate on Keana approving the venue before
+        // anyone's texted a booking task. This send is best-effort, same as
+        // every other cron notification here: a delivery failure must never
+        // block the moment's actual state from updating.
+        await requestVenueApprovalFromKeana(moment);
       }
     } catch (error) {
       console.error("Consensus cron error:", error);
+    }
+  });
+
+  // Every 30 min — auto-approve a venue Keana hasn't responded to within 4
+  // hours, mirroring the circle-placement auto-approve cron in server.ts.
+  // Without this, pending_venue_approval would just be a differently-named
+  // version of the manual_review dead end it replaced.
+  cron.schedule("*/30 * * * *", async () => {
+    try {
+      const staleVenues = await pool.query(
+        `SELECT id, circle_id, moments_name, venue, venue_booking_url, venue_place_id, tried_connector_ids
+         FROM moments
+         WHERE status = 'pending_venue_approval'
+         AND keana_venue_notified_at < NOW() - INTERVAL '4 hours'`,
+      );
+
+      for (const moment of staleVenues.rows) {
+        await proceedToConnectorBooking(moment);
+      }
+    } catch (error) {
+      console.error("Venue auto-approve cron error:", error);
     }
   });
 
@@ -315,7 +313,8 @@ export function registerJobs() {
       ).toISOString();
 
       const overdueResult = await pool.query(
-        `SELECT m.id, m.circle_id, m.booking_link_sent_at, m.connector_nudge_sent_at
+        `SELECT m.id, m.circle_id, m.booking_link_sent_at, m.connector_nudge_sent_at,
+                m.venue, m.venue_booking_url, m.venue_place_id, m.tried_connector_ids
          FROM moments m
          WHERE m.status = 'consensus_locked'
          AND m.booking_link_sent_at < $1`,
@@ -338,24 +337,30 @@ export function registerJobs() {
           new Date(moment.booking_link_sent_at) < new Date(eightHoursAgo);
 
         if (past8hrs) {
-          await sendblue.messages.send({
-            number: process.env.KEANA_PHONE_NUMBER!,
-            content: `Connector unresponsive for 8hrs on moment ${moment.id}. Needs manual booking. Circle: ${circlePageUrl}`,
-            from_number: process.env.SENDBLUE_PHONE_NUMBER!,
-          });
+          // Demote the unresponsive Connector exactly as before, then hand
+          // the booking task to the next untried circle member instead of
+          // stopping at a Keana notification. proceedToConnectorBooking
+          // retries across the whole circle (tried_connector_ids) — only
+          // once every member's been tried does it actually escalate to
+          // Keana for manual booking.
           if (connector) {
             await pool.query(
               `UPDATE co_profiles SET trust_score = GREATEST(0, trust_score - 10), is_circle_connector = FALSE WHERE user_id = $1`,
               [connector.id],
             );
           }
+          await proceedToConnectorBooking(moment);
         } else if (!moment.connector_nudge_sent_at) {
           if (connector) {
-            await sendblue.messages.send({
-              number: connector.phone_number,
-              content: `${connector.first_name}, your circle is still waiting. Tap to book: ${circlePageUrl}`,
-              from_number: process.env.SENDBLUE_PHONE_NUMBER!,
-            });
+            try {
+              await sendblue.messages.send({
+                number: connector.phone_number,
+                content: `${connector.first_name}, your circle is still waiting. Tap to book: ${circlePageUrl}`,
+                from_number: process.env.SENDBLUE_PHONE_NUMBER!,
+              });
+            } catch (smsErr: any) {
+              console.error(`4hr connector nudge failed for ${connector.id}:`, smsErr?.message ?? smsErr);
+            }
             await pool.query(
               `UPDATE moments SET connector_nudge_sent_at = NOW() WHERE id = $1`,
               [moment.id],
@@ -365,6 +370,39 @@ export function registerJobs() {
       }
     } catch (error) {
       console.error("Connector timeout cron error:", error);
+    }
+  });
+
+  // Every 15 min — delayed missed-call follow-up (2hr after a true
+  // no-answer/busy/failed/canceled — nobody and nothing picked up). Plain
+  // text, no AI drafting or voice note — voicemail-detected calls are
+  // handled instantly elsewhere (co.ts call-status handler).
+  cron.schedule("*/15 * * * *", async () => {
+    try {
+      const due = await pool.query(
+        `SELECT pcf.id, pcf.call_status, u.id AS user_id, u.first_name, u.phone_number
+         FROM pending_call_followups pcf
+         JOIN users u ON u.id = pcf.user_id
+         WHERE pcf.due_at <= NOW() AND pcf.sent_at IS NULL`,
+      );
+
+      for (const row of due.rows) {
+        try {
+          await sendblue.messages.send({
+            number: row.phone_number,
+            content: `${row.first_name}, I tried calling but must have missed you. I'll try again soon, or reply here whenever works.`,
+            from_number: process.env.SENDBLUE_PHONE_NUMBER!,
+          });
+        } catch (smsErr: any) {
+          console.error(`Delayed missed-call follow-up failed for ${row.user_id}:`, smsErr?.message ?? smsErr);
+        }
+        await pool.query(
+          `UPDATE pending_call_followups SET sent_at = NOW() WHERE id = $1`,
+          [row.id],
+        );
+      }
+    } catch (error) {
+      console.error("Delayed missed-call follow-up cron error:", error);
     }
   });
 

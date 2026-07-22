@@ -12,15 +12,15 @@ const results: Array<{ name: string; status: Status; detail: string }> = [];
 
 function pass(name: string, detail = "") {
   results.push({ name, status: "PASSED", detail });
-  console.log(`  ✅ PASSED${detail ? " — " + detail : ""}`);
+  console.log(`  PASSED${detail ? " — " + detail : ""}`);
 }
 function fail(name: string, detail: string) {
   results.push({ name, status: "FAILED", detail });
-  console.log(`  ❌ FAILED — ${detail}`);
+  console.log(`   FAILED — ${detail}`);
 }
 function skip(name: string, detail: string) {
   results.push({ name, status: "SKIPPED", detail });
-  console.log(`  ⏭  SKIPPED — ${detail}`);
+  console.log(`   SKIPPED — ${detail}`);
 }
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
@@ -54,8 +54,13 @@ async function req(
   const text = await res.text();
 
   // Detect ngrok tunnel offline
-  if (text.includes("ERR_NGROK_3200") || text.includes("ngrok-free.dev is offline")) {
-    throw new Error("NGROK_OFFLINE: tunnel is down — start the API server and ngrok");
+  if (
+    text.includes("ERR_NGROK_3200") ||
+    text.includes("ngrok-free.dev is offline")
+  ) {
+    throw new Error(
+      "NGROK_OFFLINE: tunnel is down — start the API server and ngrok",
+    );
   }
 
   let parsed: any;
@@ -87,13 +92,18 @@ async function main() {
       headers: { "ngrok-skip-browser-warning": "true" },
     });
     const pfText = await pf.text();
-    if (pfText.includes("ERR_NGROK_3200") || pfText.includes("ngrok-free.dev is offline")) {
-      console.error("\n🔴 Tunnel offline. Start the API server then run:\n   npx ngrok http 8080\n");
+    if (
+      pfText.includes("ERR_NGROK_3200") ||
+      pfText.includes("ngrok-free.dev is offline")
+    ) {
+      console.error(
+        "\n Tunnel offline. Start the API server then run:\n   npx ngrok http 8080\n",
+      );
       process.exit(1);
     }
-    console.log("  Tunnel reachable ✓");
+    console.log("Tunnel reachable ✓");
   } catch (e: any) {
-    console.error("\n🔴 Could not reach tunnel:", e.message);
+    console.error("\n Could not reach tunnel:", e.message);
     process.exit(1);
   }
 
@@ -126,9 +136,14 @@ async function main() {
         "POST /co/call/:user_id",
         "Twilio compliance pending — error is expected",
       );
-    } else if (r.body?.message?.toLowerCase?.().includes("twilio") ||
-               r.body?.error?.toLowerCase?.().includes("twilio")) {
-      skip("POST /co/call/:user_id", `Twilio error: ${r.body.message ?? r.body.error}`);
+    } else if (
+      r.body?.message?.toLowerCase?.().includes("twilio") ||
+      r.body?.error?.toLowerCase?.().includes("twilio")
+    ) {
+      skip(
+        "POST /co/call/:user_id",
+        `Twilio error: ${r.body.message ?? r.body.error}`,
+      );
     } else {
       fail("POST /co/call/:user_id", `${r.status} — ${JSON.stringify(r.body)}`);
     }
@@ -166,16 +181,22 @@ async function main() {
       if (profile.status === 200 && profile.body?.data) {
         const d = profile.body.data;
         const checks: Record<string, boolean> = {
-          life_chapters: Array.isArray(d.life_chapters) && d.life_chapters.length > 0,
+          life_chapters:
+            Array.isArray(d.life_chapters) && d.life_chapters.length > 0,
           social_energy: typeof d.social_energy === "number",
           goals: Array.isArray(d.goals) && d.goals.length > 0,
-          emotional_state: typeof d.emotional_state === "string" && d.emotional_state.length > 0,
+          emotional_state:
+            typeof d.emotional_state === "string" &&
+            d.emotional_state.length > 0,
           city: typeof d.city === "string" && d.city.length > 0,
-          goal_embeddings: d.goal_embeddings !== null && d.goal_embeddings !== undefined,
+          goal_embeddings:
+            d.goal_embeddings !== null && d.goal_embeddings !== undefined,
         };
         dump("field checks", checks);
 
-        const missing = Object.entries(checks).filter(([, v]) => !v).map(([k]) => k);
+        const missing = Object.entries(checks)
+          .filter(([, v]) => !v)
+          .map(([k]) => k);
         if (missing.length === 0) {
           pass(
             "POST /co/webhook",
@@ -236,7 +257,10 @@ async function main() {
         `Auth failed (${r.status}) — JWT may not match server secret`,
       );
     } else {
-      fail("POST /co/place/:user_id", `${r.status} — ${JSON.stringify(r.body)}`);
+      fail(
+        "POST /co/place/:user_id",
+        `${r.status} — ${JSON.stringify(r.body)}`,
+      );
     }
   } catch (e: any) {
     fail("POST /co/place/:user_id", e.message);
@@ -262,7 +286,9 @@ async function main() {
         const d = r.body.data;
         const notes = [
           `moment_id=${momentId}`,
-          d.venue ? `venue="${d.venue}"` : "venue=null (no partner venue / Places unavailable)",
+          d.venue
+            ? `venue="${d.venue}"`
+            : "venue=null (no partner venue / Places unavailable)",
           d.venue_booking_url ? `booking_url=✓` : "booking_url=null",
           d.suggested_time ? `time="${d.suggested_time}"` : "time=null",
         ].join(" ");
@@ -289,7 +315,9 @@ async function main() {
         `\n  [info] Resolved phone: ${userPhone!.slice(0, 5)}${"*".repeat(userPhone!.length - 5)}`,
       );
     } else {
-      console.log(`\n  [warn] Could not resolve phone from GET /users/${TEST_USER_ID}: ${r.status}`);
+      console.log(
+        `\n  [warn] Could not resolve phone from GET /users/${TEST_USER_ID}: ${r.status}`,
+      );
     }
   } catch {
     console.log("\n  [warn] Could not fetch user phone");
@@ -329,7 +357,10 @@ async function main() {
             `Anthropic classified as yes/no/time — moment_responses updated (action=${action})`,
           );
         } else if (action === "booking_confirmed") {
-          pass("POST /sendblue/webhook", `Booking confirmed (action=${action})`);
+          pass(
+            "POST /sendblue/webhook",
+            `Booking confirmed (action=${action})`,
+          );
         } else {
           // general reply path — no pending moment or already responded
           pass(
@@ -353,7 +384,12 @@ async function main() {
   // ───────────────────────────────────────────────────────────────────────────
   console.log("\n[6/7] POST /payments/create-subscription");
   try {
-    const r = await req("POST", "/payments/create-subscription", {}, { auth: true });
+    const r = await req(
+      "POST",
+      "/payments/create-subscription",
+      {},
+      { auth: true },
+    );
     dump("status", r.status);
     dump("body", r.body);
 
@@ -391,12 +427,9 @@ async function main() {
   // ───────────────────────────────────────────────────────────────────────────
   console.log("\n[7/7] GET /payments/status/:user_id");
   try {
-    const r = await req(
-      "GET",
-      `/payments/status/${TEST_USER_ID}`,
-      undefined,
-      { auth: true },
-    );
+    const r = await req("GET", `/payments/status/${TEST_USER_ID}`, undefined, {
+      auth: true,
+    });
     dump("status", r.status);
     dump("body", r.body);
 
@@ -415,10 +448,7 @@ async function main() {
         "No stripe_customer_id on user yet — run test 6 first",
       );
     } else if (r.status === 404) {
-      skip(
-        "GET /payments/status/:user_id",
-        "User not found in DB",
-      );
+      skip("GET /payments/status/:user_id", "User not found in DB");
     } else {
       fail(
         "GET /payments/status/:user_id",

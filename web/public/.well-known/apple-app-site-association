@@ -8,6 +8,10 @@
           {
             "/": "/moments/*",
             "comment": "Opens moment pages in the CoPatible app"
+          },
+          {
+            "/": "/circles/*",
+            "comment": "Opens circle pages in the CoPatible app"
           }
         ]
       }

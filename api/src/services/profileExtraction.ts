@@ -149,30 +149,119 @@ ready_to_summarize is true only if at most one or two minor topics remain missin
   }
 }
 
+// Cheap Haiku pass (same shape as assessConversationCoverage) that checks
+// whether this call's transcript signals that an already-on-file goal or
+// blocker is done/resolved/no longer relevant — otherwise the union in
+// storeProfile only ever grows and stale items pile up forever. Only fires
+// when there's something on file to check against. Matches are filtered back
+// against the original arrays so a hallucinated or reworded item can't
+// accidentally drop something real — worst case a resolved item just lingers
+// until the next call catches it.
+async function assessResolvedItems(
+  transcript: string,
+  existingGoals: string[],
+  existingBlockers: string[],
+): Promise<{ resolvedGoals: string[]; resolvedBlockers: string[] }> {
+  if (existingGoals.length === 0 && existingBlockers.length === 0) {
+    return { resolvedGoals: [], resolvedBlockers: [] };
+  }
+
+  try {
+    const { text: raw } = await generateText({
+      model: anthropic("claude-haiku-4-5-20251001"),
+      prompt: `Here is what we already have on file for this person:
+Goals: ${JSON.stringify(existingGoals)}
+Blockers: ${JSON.stringify(existingBlockers)}
+
+Based on this new call transcript, which of the EXACT items above (if any) has the caller indicated is now achieved, resolved, or no longer relevant? Only include an item if the transcript gives a clear signal — do not guess, and leave it out if unclear.
+
+Transcript:
+"${transcript}"
+
+Return ONLY valid JSON, reusing the exact original text for each item:
+{"resolved_goals": [], "resolved_blockers": []}`,
+    });
+
+    const clean = raw.replace(/```json|```/g, "").trim();
+    const parsed = JSON.parse(clean);
+    const resolvedGoals = Array.isArray(parsed.resolved_goals)
+      ? parsed.resolved_goals.filter((g: unknown) => existingGoals.includes(g as string))
+      : [];
+    const resolvedBlockers = Array.isArray(parsed.resolved_blockers)
+      ? parsed.resolved_blockers.filter((b: unknown) => existingBlockers.includes(b as string))
+      : [];
+
+    return { resolvedGoals, resolvedBlockers };
+  } catch (err) {
+    console.error("assessResolvedItems failed (non-fatal):", err);
+    return { resolvedGoals: [], resolvedBlockers: [] };
+  }
+}
+
 // Step 2 — sanitizes against co_profiles' CHECK constraints and upserts.
+// Each call's transcript only covers what that call happened to touch on, so
+// list fields (life_chapters, activity_preferences, goals, blockers) are
+// unioned with what's already on file rather than replaced — otherwise a
+// goal mentioned on call 1 but not call 2 would silently vanish. Goals and
+// blockers are then trimmed by assessResolvedItems so items the caller has
+// since resolved don't accumulate forever. Scalar fields (social_energy,
+// connection_style, availability_pattern, city) are the model's holistic
+// read of the latest call and take precedence, but fall back to the existing
+// value when this call's extraction came back empty. emotional_state is
+// deliberately NOT carried forward — it describes the caller's state as of
+// *this* call, so a call with no signal just clears it.
 // hume_chat_group_id is intentionally not handled here — it's a call-resume
 // concern specific to the Twilio/Hume webhook path, not part of extraction.
 export async function storeProfile(
   user_id: string,
   extracted: ExtractedProfile,
+  transcript: string,
   opts: { emotions?: { name: string; score: number }[] | null } = {},
 ): Promise<{ safeChapters: string[]; safeStyle: string }> {
-  const safeChapters = (extracted.life_chapters ?? []).filter((c: string) =>
-    ALLOWED_LIFE_CHAPTERS.includes(c),
+  const { rows: existingRows } = await pool.query(
+    `SELECT life_chapters, social_energy, connection_style, activity_preferences,
+            goals, blockers, availability_pattern, city
+     FROM co_profiles WHERE user_id = $1`,
+    [user_id],
+  );
+  const existing = existingRows[0] ?? null;
+
+  const union = (oldArr: string[] | null | undefined, newArr: string[] | null | undefined) => [
+    ...new Set([...(oldArr ?? []), ...(newArr ?? [])]),
+  ];
+
+  const { resolvedGoals, resolvedBlockers } = await assessResolvedItems(
+    transcript,
+    existing?.goals ?? [],
+    existing?.blockers ?? [],
+  );
+
+  const safeChapters = union(
+    existing?.life_chapters,
+    (extracted.life_chapters ?? []).filter((c: string) => ALLOWED_LIFE_CHAPTERS.includes(c)),
   );
   const safeStyle = ALLOWED_CONNECTION_STYLES.includes(extracted.connection_style as string)
     ? (extracted.connection_style as string)
-    : "small_group";
+    : (existing?.connection_style ?? "small_group");
+  const activityPreferences = union(existing?.activity_preferences, extracted.activity_preferences);
+  const goals = union(existing?.goals, extracted.goals).filter((g) => !resolvedGoals.includes(g));
+  const blockers = union(existing?.blockers, extracted.blockers).filter(
+    (b) => !resolvedBlockers.includes(b),
+  );
+  const socialEnergy = extracted.social_energy ?? existing?.social_energy ?? 50;
+  const availabilityPattern = extracted.availability_pattern || existing?.availability_pattern || null;
+  const city = extracted.city || existing?.city || null;
 
   // Non-fatal like every other embedding call in this file (storeTranscriptMemory,
   // captureIntent) — an embedding-provider hiccup (rate limit, quota, network)
   // must never block the profile write itself, which is what the caller
   // actually needs. A null embedding here just means this profile doesn't
   // participate in goal-similarity matching until the next successful call.
+  // Recomputed from the merged goal list so it stays in sync with `goals`.
   let goalEmbedding: number[] | null = null;
-  if (extracted.goals && extracted.goals.length > 0) {
+  if (goals.length > 0) {
     try {
-      goalEmbedding = await generateGoalEmbedding(extracted.goals);
+      goalEmbedding = await generateGoalEmbedding(goals);
     } catch (err) {
       console.error("Goal embedding failed (non-fatal):", err);
     }
@@ -199,14 +288,14 @@ export async function storeProfile(
     [
       user_id,
       safeChapters,
-      extracted.social_energy ?? 50,
+      socialEnergy,
       safeStyle,
-      extracted.activity_preferences ?? [],
+      activityPreferences,
       extracted.emotional_state ?? opts.emotions?.[0]?.name ?? null,
-      extracted.goals ?? [],
-      extracted.blockers ?? [],
-      extracted.availability_pattern ?? null,
-      extracted.city ?? null,
+      goals,
+      blockers,
+      availabilityPattern,
+      city,
       goalEmbedding ? `[${goalEmbedding.join(",")}]` : null,
     ],
   );

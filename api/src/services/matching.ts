@@ -277,37 +277,22 @@ async function findBestCircle(userId: string, excludeUserIds: string[] = []): Pr
   if (!user) return null;
 
 
-  // Step 2 — Fetch candidates in the same city OR within the configurable radius.
-  // PostGIS distance is computed when the seeker has GPS coords stored;
-  // city string match remains the fallback for users without location data.
-  const radiusMeters = MATCH_RADIUS_MILES * METERS_PER_MILE;
-  const userLat: number | null = user.lat ?? null;
-  const userLng: number | null = user.lng ?? null;
-  const hasLocation = userLat !== null && userLng !== null;
-
+  // Step 2 — Fetch candidates in the same city. City is the sole geographic
+  // authority for matching — GPS coordinates are not used to expand or
+  // redirect this beyond what the user's stated city says (a bad/stale
+  // coordinate value must never silently pull in candidates, or bias a
+  // venue search, toward the wrong city — confirmed: this happened for
+  // real with a leftover test coordinate pointing at NYC for an SF user).
   const candidatesResult = await pool.query(
-    `SELECT cp.*, u.id as user_id,
-            ST_Y(cp.coordinates) AS lat,
-            ST_X(cp.coordinates) AS lng,
-            ${hasLocation
-              ? `CASE WHEN cp.coordinates IS NOT NULL
-                   THEN ST_Distance(cp.coordinates::geography, ST_SetSRID(ST_MakePoint($4, $5), 4326)::geography)
-                   ELSE NULL
-                 END AS distance_meters`
-              : "NULL::float AS distance_meters"}
+    `SELECT cp.*, u.id as user_id
      FROM co_profiles cp
      JOIN users u ON cp.user_id = u.id
      WHERE cp.user_id != $2
      AND cp.user_id != ALL($3::uuid[])
      AND cp.life_chapters != '{}'
      AND cp.goal_embeddings IS NOT NULL
-     AND (
-       cp.city = $1
-       ${hasLocation ? `OR (cp.coordinates IS NOT NULL AND ST_DWithin(cp.coordinates::geography, ST_SetSRID(ST_MakePoint($4, $5), 4326)::geography, $6))` : ""}
-     )`,
-    hasLocation
-      ? [user.city, userId, excludeUserIds, userLng, userLat, radiusMeters]
-      : [user.city, userId, excludeUserIds],
+     AND cp.city = $1`,
+    [user.city, userId, excludeUserIds],
   );
 
   const candidates = candidatesResult.rows;
@@ -317,15 +302,9 @@ async function findBestCircle(userId: string, excludeUserIds: string[] = []): Pr
 
   // Step 3 — Apply hard filters
   // Remove candidates who don't share at least 1 life chapter with the user
-  // and aren't in the same city
-  const filtered = candidates.filter((candidate) => {
-    const sameCity = inSameCity(user.city, candidate.city);
-    const withinRadius = candidate.distance_meters !== null && candidate.distance_meters <= radiusMeters;
-    return (
-      hasSharedChapters([user.life_chapters, candidate.life_chapters]) &&
-      (sameCity || withinRadius)
-    );
-  });
+  const filtered = candidates.filter((candidate) =>
+    hasSharedChapters([user.life_chapters, candidate.life_chapters]),
+  );
 
   // Not enough candidates after filtering
   if (filtered.length < min_size - 1) return null;

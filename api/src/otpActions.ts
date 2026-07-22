@@ -38,6 +38,7 @@ interface MessageProp {
   resent?: boolean;
   login?: boolean;
   register?: boolean;
+  intro?: boolean;
   invite_type?: "received" | "accepted" | "rejected";
   invite_target?: "circle" | "moment";
   transfer_ticket?: boolean;
@@ -111,6 +112,7 @@ export const sendSMS = async ({
   invite_target,
   login,
   register,
+  intro,
   transfer_ticket,
   moment_recap,
   photo_uploaded,
@@ -126,15 +128,11 @@ export const sendSMS = async ({
   welcome_back,
   action_url,
 }: MessageProp) => {
-  if (process.env.NODE_ENV !== "production") {
-    console.log(`[DEV SMS → ${phone_number}] OTP: ${otp_code ?? "(no code)"}`);
-    return;
-  }
-
-  const send = (content: string) =>
+  const send = (content: string, mediaUrl?: string) =>
     sendblue.messages.send({
       number: phone_number,
       content,
+      ...(mediaUrl ? { media_url: mediaUrl } : {}),
       from_number: process.env.SENDBLUE_PHONE_NUMBER!,
     });
 
@@ -151,6 +149,13 @@ export const sendSMS = async ({
 
     if (login) {
       await send(`Your CoPatible login code is below. It expires in 5 minutes.\n${otp_code}`);
+    }
+
+    if (intro) {
+      await send(
+        `CoPatible is invite-only. Co matches you with people navigating the same chapter of life, then brings you together in person. Save my contact so we can keep talking.`,
+        process.env.CO_VCARD_URL,
+      );
     }
 
     if (register) {
@@ -256,11 +261,6 @@ export const sendEmail = async ({
   welcome,
   action_url,
 }: EmailProp) => {
-  if (process.env.NODE_ENV !== "production") {
-    console.log(`[DEV EMAIL → ${email}] OTP: ${otp_code ?? "(no code)"}`);
-    return;
-  }
-
   const resend = new Resend(process.env.RESEND_API_KEY);
   const cta = (label: string, fallback: string) =>
     ctaButton(label, action_url ?? fallback);
