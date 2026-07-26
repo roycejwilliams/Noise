@@ -11,6 +11,11 @@ const downloadButton = document.getElementById("download-json") as HTMLButtonEle
 const coverageSection = document.getElementById("coverage-section") as HTMLElement;
 const coverageChart = document.getElementById("coverage-chart") as HTMLElement;
 const coverageTableBody = document.getElementById("coverage-table-body") as HTMLTableSectionElement;
+const channelBadge = document.getElementById("channel-badge") as HTMLElement;
+const testCaseSelect = document.getElementById("test-case-select") as HTMLSelectElement;
+const testCaseSaved = document.getElementById("test-case-saved") as HTMLElement;
+const latencySection = document.getElementById("latency-section") as HTMLElement;
+const latencyTableBody = document.getElementById("latency-table-body") as HTMLTableSectionElement;
 
 type CoverageCheck = {
   call_number: number;
@@ -28,6 +33,9 @@ type StoredResult = {
   transcript: string;
   messages: TranscriptMessage[];
   coverage_history?: CoverageCheck[];
+  turn_latency_ms?: { turn: number; latency_ms: number }[];
+  channel?: "browser" | "phone";
+  test_case?: "intent_layer" | "circles" | null;
 };
 
 const SVG_NS = "http://www.w3.org/2000/svg";
@@ -191,6 +199,51 @@ function renderCoverageSection(checks: CoverageCheck[]) {
   renderCoverageTable(coverageTableBody, checks);
 }
 
+function renderLatencySection(turns: { turn: number; latency_ms: number }[]) {
+  if (!turns.length) {
+    latencySection.classList.add("hidden");
+    return;
+  }
+  latencySection.classList.remove("hidden");
+  latencyTableBody.innerHTML = "";
+  for (const t of turns) {
+    const row = document.createElement("tr");
+    const turnCell = document.createElement("td");
+    turnCell.textContent = `#${t.turn}`;
+    const latencyCell = document.createElement("td");
+    latencyCell.textContent = `${t.latency_ms}ms`;
+    row.append(turnCell, latencyCell);
+    latencyTableBody.appendChild(row);
+  }
+}
+
+function renderChannelBadge(channel: string | undefined) {
+  const label = channel === "phone" ? "Real phone call" : "Browser (direct EVI)";
+  channelBadge.textContent = label;
+  channelBadge.classList.toggle("phone", channel === "phone");
+}
+
+function wireTestCaseSelect(sessionId: string, currentValue: string | null | undefined) {
+  testCaseSelect.value = currentValue ?? "";
+  testCaseSelect.addEventListener("change", async () => {
+    if (!testCaseSelect.value) return;
+    try {
+      const res = await fetch(`/api/session/${sessionId}/tag`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ test_case: testCaseSelect.value }),
+      });
+      const json = await res.json();
+      if (json.success) {
+        testCaseSaved.classList.remove("hidden");
+        window.setTimeout(() => testCaseSaved.classList.add("hidden"), 1500);
+      }
+    } catch (err) {
+      console.error("Failed to save test case tag:", err);
+    }
+  });
+}
+
 function getSessionId(): string | null {
   const match = window.location.pathname.match(/^\/call\/([^/]+)\/results\/?$/);
   return match ? match[1] : null;
@@ -238,6 +291,9 @@ async function load() {
     extractionSection.classList.remove("hidden");
 
     renderCards(cardsGrid, data.profile, data.intent);
+    renderChannelBadge(data.channel);
+    wireTestCaseSelect(sessionId, data.test_case);
+    renderLatencySection(data.turn_latency_ms ?? []);
     renderCoverageSection(data.coverage_history ?? []);
     rawOutputEl.textContent = JSON.stringify(data, null, 2);
     renderTranscriptList(transcriptList, data.messages ?? []);

@@ -1,0 +1,210 @@
+import { randomInt } from "crypto";
+import express, { Request, Response, NextFunction } from "express";
+import twilio from "twilio";
+import pool from "../../../api/src/db/db.js";
+import { normalizePhone } from "../../../api/src/utils/phone.js";
+import sendblue from "../../../api/src/services/sendblue.js";
+
+const router = express.Router();
+
+const twilioClient = twilio(
+  process.env.TWILIO_ACCOUNT_SID!,
+  process.env.TWILIO_CLIENT_SECRET!,
+  { accountSid: process.env.TWILIO_LIVE_SID! },
+);
+
+// POST /api/phone/session — real-phone counterpart to /api/session. Looks up
+// (or creates) a real user row by actual phone number, test_channel='phone',
+// so contact_verified/otp_verified are meaningful and Sendblue/Twilio have a
+// real destination. Re-submitting the same phone number resumes the same
+// row rather than creating a new one each time the tester reloads the page.
+router.post("/session", async (req: Request, res: Response, next: NextFunction) => {
+  try {
+    const { first_name, phone_number } = req.body as { first_name?: string; phone_number?: string };
+    if (!first_name?.trim() || !phone_number?.trim()) {
+      return res.status(400).json({ success: false, error: "first_name and phone_number are required." });
+    }
+
+    const normalized = normalizePhone(phone_number);
+
+    const existing = await pool.query(
+      `SELECT id FROM users WHERE phone_number = $1 AND test_channel = 'phone'`,
+      [normalized],
+    );
+    if (existing.rows[0]) {
+      return res.status(200).json({ success: true, user_id: existing.rows[0].id, resumed: true });
+    }
+
+    const suffix = Math.random().toString(36).slice(2, 8);
+    const created = await pool.query(
+      `INSERT INTO users (first_name, last_name, email, phone_number, username, test_channel)
+       VALUES ($1, $2, $3, $4, $5, 'phone') RETURNING id`,
+      [
+        first_name.trim(),
+        "Tester",
+        `co-test-phone-${suffix}@copatible.test`,
+        normalized,
+        `co_test_phone_${suffix}`,
+      ],
+    );
+
+    return res.status(200).json({
+      success: true,
+      user_id: created.rows[0].id,
+      resumed: false,
+      text_in_number: process.env.SENDBLUE_PHONE_NUMBER,
+    });
+  } catch (error) {
+    next(error);
+  }
+});
+
+// GET /api/phone/:user_id/status — polled by the phone-test page through
+// every step: text-in-first, OTP verification, call state, and the smoke
+// test's own round-trip timestamps.
+router.get("/:user_id/status", async (req: Request, res: Response, next: NextFunction) => {
+  try {
+    const result = await pool.query(
+      `SELECT contact_verified, otp_verified, call_sid, call_status, test_case,
+              smoke_test_tool_call_at, smoke_test_tool_response_at
+       FROM users WHERE id = $1`,
+      [req.params.user_id],
+    );
+    if (!result.rows[0]) return res.status(404).json({ success: false, error: "Session not found." });
+    return res.status(200).json({ success: true, data: result.rows[0] });
+  } catch (error) {
+    next(error);
+  }
+});
+
+// POST /api/phone/:user_id/verify-otp — validates the code Sendblue sent as
+// a reply once the tester texted in first (see webhooks.ts's /sendblue/webhook).
+// No JWT/session issued — co-test has no auth system — this just flips
+// otp_verified so the call-trigger route below can gate on it.
+router.post("/:user_id/verify-otp", async (req: Request, res: Response, next: NextFunction) => {
+  try {
+    const { otp_code } = req.body as { otp_code?: string };
+    if (!otp_code) return res.status(400).json({ success: false, error: "otp_code is required." });
+
+    const result = await pool.query(
+      `SELECT id FROM users WHERE id = $1 AND otp_code = $2 AND otp_expiry > NOW()`,
+      [req.params.user_id, otp_code],
+    );
+
+    if (!result.rows[0]) {
+      await pool.query(`UPDATE users SET otp_attempts = otp_attempts + 1 WHERE id = $1`, [req.params.user_id]);
+      return res.status(400).json({ success: false, error: "Incorrect or expired code." });
+    }
+
+    await pool.query(
+      `UPDATE users SET otp_verified = true, otp_code = NULL, otp_expiry = NULL, otp_attempts = 0 WHERE id = $1`,
+      [req.params.user_id],
+    );
+    return res.status(200).json({ success: true });
+  } catch (error) {
+    next(error);
+  }
+});
+
+// POST /api/phone/:user_id/resend-otp — same code path the webhook uses on
+// first contact, callable again if the original code expired (5 min).
+router.post("/:user_id/resend-otp", async (req: Request, res: Response, next: NextFunction) => {
+  try {
+    const userResult = await pool.query(
+      `SELECT phone_number, contact_verified FROM users WHERE id = $1`,
+      [req.params.user_id],
+    );
+    const user = userResult.rows[0];
+    if (!user) return res.status(404).json({ success: false, error: "Session not found." });
+    if (!user.contact_verified) {
+      return res.status(409).json({ success: false, error: "Text the number in first — see instructions." });
+    }
+
+    const otp = randomInt(100000, 1000000);
+    await pool.query(
+      `UPDATE users SET otp_code = $2, otp_expiry = NOW() + INTERVAL '5 minutes' WHERE id = $1`,
+      [req.params.user_id, otp],
+    );
+    try {
+      await sendblue.messages.send({
+        number: user.phone_number,
+        content: `[co-test] Your new verification code: ${otp}`,
+        from_number: process.env.SENDBLUE_PHONE_NUMBER!,
+      });
+    } catch (smsErr: any) {
+      console.error(`Resend-OTP send failed for ${user.phone_number}:`, smsErr?.message ?? smsErr);
+      return res.status(502).json({ success: false, error: "Sendblue couldn't deliver the code — see server logs." });
+    }
+    return res.status(200).json({ success: true });
+  } catch (error) {
+    next(error);
+  }
+});
+
+// POST /api/phone/:user_id/tag — tags this session with which test case it
+// belongs to. Works for both real-phone sessions and the original browser-EVI
+// sessions (same users table either way) — see also the /api/session route's
+// generic tag handling for the browser flow.
+router.post("/:user_id/tag", async (req: Request, res: Response, next: NextFunction) => {
+  try {
+    const { test_case } = req.body as { test_case?: string };
+    if (test_case !== "intent_layer" && test_case !== "circles") {
+      return res.status(400).json({ success: false, error: "test_case must be 'intent_layer' or 'circles'." });
+    }
+    await pool.query(`UPDATE users SET test_case = $2 WHERE id = $1`, [req.params.user_id, test_case]);
+    return res.status(200).json({ success: true });
+  } catch (error) {
+    next(error);
+  }
+});
+
+// POST /api/phone/:user_id/call — real-call trigger (Part 1, item 3). Same
+// pattern as production's POST /co/call/:user_id (api/src/routes/co.ts):
+// Twilio dials out, `url` hands the leg to Hume's own Twilio bridge using
+// this service's dev HUME_CONFIG_ID, and the dev config's own webhook (see
+// the repoint noted in webhooks.ts) delivers chat_started/tool_call/
+// chat_ended back to THIS service, writing to co-test's own DB. Gated on
+// otp_verified — text-in-first, then OTP, only then a real call unlocks.
+router.post("/:user_id/call", async (req: Request, res: Response, next: NextFunction) => {
+  try {
+    const userResult = await pool.query(
+      `SELECT first_name, phone_number, otp_verified FROM users WHERE id = $1`,
+      [req.params.user_id],
+    );
+    const user = userResult.rows[0];
+    if (!user) return res.status(404).json({ success: false, error: "Session not found." });
+    if (!user.otp_verified) {
+      return res.status(403).json({ success: false, error: "Verify OTP before requesting a call." });
+    }
+
+    const webhookParams = new URLSearchParams({
+      config_id: process.env.HUME_CONFIG_ID!,
+      api_key: process.env.HUME_API_KEY!,
+      custom_session_id: String(req.params.user_id),
+      first_name: user.first_name ?? "",
+    });
+    const webhookUrl = `https://api.hume.ai/v0/evi/twilio?${webhookParams.toString()}`;
+    const statusCallbackUrl = `${process.env.API_URL}/co/call-status`;
+
+    const call = await twilioClient.calls.create({
+      to: user.phone_number,
+      from: process.env.TWILIO_PHONE_NUMBER!,
+      url: webhookUrl,
+      statusCallback: statusCallbackUrl,
+      statusCallbackEvent: ["ringing", "answered", "completed"],
+      statusCallbackMethod: "POST",
+      timeout: 20,
+    });
+
+    await pool.query(
+      `UPDATE users SET call_sid = $2, call_status = 'initiated' WHERE id = $1`,
+      [req.params.user_id, call.sid],
+    );
+
+    return res.status(200).json({ success: true, call_sid: call.sid });
+  } catch (error) {
+    next(error);
+  }
+});
+
+export default router;

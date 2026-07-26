@@ -4,7 +4,11 @@ import fs from "fs";
 import path from "path";
 import pool from "../../api/src/db/db.js";
 import { runMigrations } from "../../api/src/db/migrations.js";
+import { runTestMigrations } from "./db/testMigrations.js";
 import apiRouter from "./routes/api.js";
+import checklistRouter from "./routes/checklist.js";
+import phoneRouter from "./routes/phone.js";
+import webhooksRouter from "./routes/webhooks.js";
 
 // A fresh Railway Postgres has none of brew_dev's tables yet — runMigrations()
 // (imported unchanged from api/) only ever does ALTER TABLE / CREATE TABLE IF
@@ -24,20 +28,29 @@ async function ensureBaseSchema(): Promise<void> {
 async function main() {
   await ensureBaseSchema();
   runMigrations();
+  runTestMigrations();
 
   const app = express();
   app.use(express.json({ limit: "2mb" }));
+  app.use(express.urlencoded({ extended: false })); // Twilio status callbacks are form-encoded
 
   const publicDir = path.join(process.cwd(), "public");
 
   app.get("/health", (_req, res) => res.status(200).send("ok"));
   app.use("/api", apiRouter);
+  app.use("/api/phone", phoneRouter);
+  app.use("/api/checklist", checklistRouter);
+  // Mounted at root — these paths (/sendblue/webhook, /co/call-status,
+  // /co/webhook) intentionally mirror production's exactly. See webhooks.ts.
+  app.use(webhooksRouter);
 
   app.get(["/", "/call"], (_req, res) => res.sendFile(path.join(publicDir, "call.html")));
   app.get("/call/:sessionId/results", (_req, res) =>
     res.sendFile(path.join(publicDir, "results.html")),
   );
   app.get("/prompt", (_req, res) => res.sendFile(path.join(publicDir, "prompt.html")));
+  app.get("/phone", (_req, res) => res.sendFile(path.join(publicDir, "phone.html")));
+  app.get("/checklist", (_req, res) => res.sendFile(path.join(publicDir, "checklist.html")));
 
   app.use(express.static(publicDir));
 

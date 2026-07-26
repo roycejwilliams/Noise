@@ -1,0 +1,42 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Co — Testing Checklist</title>
+  <link rel="stylesheet" href="/styles.css" />
+</head>
+<body>
+  <header class="app-header">
+    <div class="header-title">
+      <div class="app-name">Co (test) — Checklist</div>
+      <div id="status" class="status-line">Loading…</div>
+    </div>
+    <div class="header-actions">
+      <a href="/call" class="transcript-toggle">Browser call</a>
+      <a href="/phone" class="transcript-toggle">Phone test</a>
+    </div>
+  </header>
+
+  <main class="scroll-area">
+    <div class="checklist-page">
+      <p class="checklist-explainer">
+        A status tracker, not a gatekeeper — nothing here blocks or requires completion. It just
+        makes clear what's actually done versus still open.
+      </p>
+
+      <section class="checklist-section">
+        <h2 class="checklist-section-title">Auto-verified — checked off from real data, no human input</h2>
+        <div id="auto-list" class="checklist-list"></div>
+      </section>
+
+      <section class="checklist-section">
+        <h2 class="checklist-section-title">Human input — never inferred or guessed by the system</h2>
+        <div id="manual-list" class="checklist-list"></div>
+      </section>
+    </div>
+  </main>
+
+  <script src="/checklist.js"></script>
+</body>
+</html>

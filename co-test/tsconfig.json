@@ -12,7 +12,9 @@
   "include": [
     "src/**/*.ts",
     "../api/src/services/profileExtraction.ts",
-    "../api/src/db/migrations.ts"
+    "../api/src/db/migrations.ts",
+    "../api/src/services/sendblue.ts",
+    "../api/src/utils/phone.ts"
   ],
   "exclude": ["node_modules", "dist", "src/client/**/*"]
 }

@@ -1,0 +1,92 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Co — Real Phone Test</title>
+  <link rel="stylesheet" href="/styles.css" />
+</head>
+<body>
+  <header class="app-header">
+    <div class="header-title">
+      <div class="app-name">Co (test) — Real phone</div>
+      <div id="status" class="status-line">Enter your number to start</div>
+    </div>
+    <div class="header-actions">
+      <a href="/call" class="transcript-toggle">Browser call</a>
+      <a href="/checklist" class="transcript-toggle">Checklist</a>
+    </div>
+  </header>
+
+  <main class="scroll-area">
+    <div class="phone-page">
+      <div class="phone-warning">
+        This uses the same shared Twilio number and Sendblue account production uses — there is
+        no separate dev number. Before texting in, confirm Sendblue's webhook is currently
+        pointed at <code>test.copatible.com/sendblue/webhook</code>, not production. Point it back
+        to production when you're done testing.
+      </div>
+
+      <section id="step-entry" class="phone-step">
+        <h2>1. Enter your number</h2>
+        <div class="phone-form-row">
+          <input id="first-name-input" type="text" placeholder="First name" autocomplete="given-name" />
+          <input id="phone-input" type="tel" placeholder="+1 555 555 5555" autocomplete="tel" />
+          <button id="start-session-button" class="download-button">Start</button>
+        </div>
+        <p id="entry-error" class="phone-error hidden"></p>
+      </section>
+
+      <section id="step-text-in" class="phone-step hidden">
+        <h2>2. Text in first</h2>
+        <p>Sendblue only replies to numbers that have texted in first. Send any message to:</p>
+        <p class="phone-number-display" id="text-in-number"></p>
+        <p class="phone-waiting">Waiting for your text… <span id="text-in-spinner">●</span></p>
+      </section>
+
+      <section id="step-otp" class="phone-step hidden">
+        <h2>3. Enter your verification code</h2>
+        <p>Co texted you a 6-digit code.</p>
+        <div class="phone-form-row">
+          <input id="otp-input" type="text" inputmode="numeric" placeholder="123456" maxlength="6" />
+          <button id="verify-otp-button" class="download-button">Verify</button>
+          <button id="resend-otp-button" class="transcript-toggle">Resend code</button>
+        </div>
+        <p id="otp-error" class="phone-error hidden"></p>
+      </section>
+
+      <section id="step-call" class="phone-step hidden">
+        <h2>4. Request a real call</h2>
+        <div class="session-tag-row">
+          <label for="test-case-select" class="session-tag-label">Test case</label>
+          <select id="test-case-select">
+            <option value="">— untagged —</option>
+            <option value="intent_layer">Intent Layer</option>
+            <option value="circles">Circles</option>
+          </select>
+        </div>
+        <button id="request-call-button" class="download-button">Call my phone</button>
+        <p id="call-status-line" class="phone-waiting"></p>
+
+        <div id="smoke-test-panel" class="smoke-test-panel hidden">
+          <div class="coverage-panel-header">Smoke test — tool_call round trip</div>
+          <div class="smoke-test-row">
+            <span>tool_call received</span>
+            <span id="smoke-tool-call-state">—</span>
+          </div>
+          <div class="smoke-test-row">
+            <span>Control Plane response sent</span>
+            <span id="smoke-tool-response-state">—</span>
+          </div>
+        </div>
+
+        <p id="results-link-wrap" class="phone-waiting hidden">
+          <a id="results-link" href="#">View extraction results →</a>
+        </p>
+      </section>
+    </div>
+  </main>
+
+  <script src="/phone.js"></script>
+</body>
+</html>

@@ -3,4 +3,6 @@ dist/
 public/call.js
 public/results.js
 public/prompt.js
+public/phone.js
+public/checklist.js
 .env

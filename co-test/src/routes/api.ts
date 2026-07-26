@@ -56,6 +56,24 @@ router.post("/hume-token", async (_req: Request, res: Response, next: NextFuncti
   }
 });
 
+// POST /api/session/:sessionId/tag — tags a session with which of the two
+// agreed test cases it belongs to (Part 2, item 5). Shared shape with
+// phone.ts's /api/phone/:user_id/tag — same users.test_case column, works
+// for both browser-EVI and real-phone sessions since both are just rows in
+// the same users table.
+router.post("/session/:sessionId/tag", async (req: Request, res: Response, next: NextFunction) => {
+  try {
+    const { test_case } = req.body as { test_case?: string };
+    if (test_case !== "intent_layer" && test_case !== "circles") {
+      return res.status(400).json({ success: false, error: "test_case must be 'intent_layer' or 'circles'." });
+    }
+    await pool.query(`UPDATE users SET test_case = $2 WHERE id = $1`, [req.params.sessionId, test_case]);
+    return res.status(200).json({ success: true });
+  } catch (error) {
+    next(error);
+  }
+});
+
 // GET /api/prompt — reads (never writes) the live system prompt straight off
 // the real HUME_CONFIG_ID's most recent config version. This is a read-only
 // GET against Hume's Configs API — nothing in this route, or anywhere else in
@@ -138,7 +156,7 @@ router.post("/extract", async (req: Request, res: Response, next: NextFunction) 
 
     await storeTranscriptMemory(user_id, transcript);
     const { raw, extracted } = await extractPsychographicProfile(transcript);
-    await storeProfile(user_id, extracted);
+    await storeProfile(user_id, extracted, transcript);
     const intent = await captureIntent(user_id, transcript);
 
     const data = {
@@ -151,6 +169,7 @@ router.post("/extract", async (req: Request, res: Response, next: NextFunction) 
       // fed into extraction, just carried through so the results page can
       // show it after the call ends instead of only during the live panel.
       coverage_history: coverage_history ?? [],
+      channel: "browser",
     };
 
     await pool.query(
@@ -174,7 +193,10 @@ router.get("/session/:sessionId/results", async (req: Request, res: Response, ne
       return res.status(200).json({ success: true, status: "not_found" });
     }
 
-    const userResult = await pool.query(`SELECT id FROM users WHERE id = $1`, [sessionId]);
+    const userResult = await pool.query(
+      `SELECT id, test_case FROM users WHERE id = $1`,
+      [sessionId],
+    );
     if (!userResult.rows[0]) {
       return res.status(200).json({ success: true, status: "not_found" });
     }
@@ -192,7 +214,7 @@ router.get("/session/:sessionId/results", async (req: Request, res: Response, ne
     return res.status(200).json({
       success: true,
       status: "ready",
-      data: JSON.parse(recapResult.rows[0].content),
+      data: { ...JSON.parse(recapResult.rows[0].content), test_case: userResult.rows[0].test_case },
     });
   } catch (error) {
     next(error);

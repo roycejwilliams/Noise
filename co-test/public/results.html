@@ -13,6 +13,7 @@
       <div id="status" class="status-line">Loading…</div>
     </div>
     <div class="header-actions">
+      <a href="/checklist" class="transcript-toggle">Checklist</a>
       <a href="/prompt" class="transcript-toggle">Prompt</a>
       <a href="/call" class="transcript-toggle">New call</a>
     </div>
@@ -30,7 +31,33 @@
         <button id="download-json" class="download-button">⬇ Download JSON</button>
       </div>
 
+      <div class="session-tag-row">
+        <span id="channel-badge" class="channel-badge"></span>
+        <label for="test-case-select" class="session-tag-label">Test case</label>
+        <select id="test-case-select">
+          <option value="">— untagged —</option>
+          <option value="intent_layer">Intent Layer</option>
+          <option value="circles">Circles</option>
+        </select>
+        <span id="test-case-saved" class="test-case-saved hidden">Saved</span>
+      </div>
+
       <div id="cards-grid" class="cards-grid"></div>
+
+      <section id="latency-section" class="coverage-section hidden">
+        <h3 class="coverage-section-title">Turn-taking latency (Hume Chat Events)</h3>
+        <div class="coverage-table-wrap">
+          <table class="coverage-table">
+            <thead>
+              <tr>
+                <th>Turn</th>
+                <th>Response latency</th>
+              </tr>
+            </thead>
+            <tbody id="latency-table-body"></tbody>
+          </table>
+        </div>
+      </section>
 
       <section id="coverage-section" class="coverage-section hidden">
         <h3 class="coverage-section-title">Coverage checks</h3>
