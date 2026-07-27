@@ -14,7 +14,9 @@
     "../api/src/services/profileExtraction.ts",
     "../api/src/db/migrations.ts",
     "../api/src/services/sendblue.ts",
-    "../api/src/utils/phone.ts"
+    "../api/src/utils/phone.ts",
+    "../api/src/otpActions.ts",
+    "../api/src/types/index.d.ts"
   ],
   "exclude": ["node_modules", "dist", "src/client/**/*"]
 }

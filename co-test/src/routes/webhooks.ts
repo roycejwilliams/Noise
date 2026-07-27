@@ -4,6 +4,7 @@ import { anthropic } from "@ai-sdk/anthropic";
 import express, { Request, Response, NextFunction } from "express";
 import type { Server } from "socket.io";
 import pool from "../../../api/src/db/db.js";
+import { sendSMS } from "../../../api/src/otpActions.js";
 import sendblue from "../../../api/src/services/sendblue.js";
 import {
   assessConversationCoverage,
@@ -345,11 +346,11 @@ export function createWebhooksRouter(io: Server): express.Router {
         try {
           const { text: followUpMessage } = await generateText({
             model: anthropic("claude-haiku-4-5-20251001"),
-            prompt: `You are Co. You just got off a test call with ${callUser.first_name}. Here's what they said:\n\n"${transcript}"\n\nText them one short line proving you were listening — reference one specific real thing they said. Prefix nothing, this is a dev/test environment so keep it brief. 1 sentence, no exclamation points, no em dashes.`,
+            prompt: `You are Co. You just got off a call with ${callUser.first_name}. Here's what they told you:\n\n"${transcript}"\n\nText them something short that proves you were actually listening — pick one real, specific thing they said (a feeling, a struggle, a detail) and respond to that, not a summary of the whole call. This should read like it came from someone who resonated with what they heard, not someone closing out a form.\n\nDo not say "I have what I need," "I'll be in touch," "your circle is ready/next," or anything that sounds like a status update. No exclamation points. No em dashes. 1-2 sentences, text-message length.`,
           });
           await sendblue.messages.send({
             number: callUser.phone_number,
-            content: `[co-test] ${followUpMessage}`,
+            content: followUpMessage,
             from_number: process.env.SENDBLUE_PHONE_NUMBER!,
           });
         } catch (followUpErr: any) {
@@ -408,27 +409,25 @@ export function createWebhooksRouter(io: Server): express.Router {
         return res.status(200).send({ received: true });
       }
 
-      // First inbound text — satisfies text-in-first, send the OTP as a reply.
+      // First inbound text — satisfies text-in-first. Same three-message
+      // onboarding production's self-serve registration sends (see
+      // api/src/routes/sendblue.ts's contact_verified branch) — welcome,
+      // then what CoPatible is (with the vCard, if CO_VCARD_URL is set),
+      // then the code — reusing sendSMS directly rather than a flat custom
+      // string, so this is genuinely Co's voice/copy, not a placeholder.
+      // sendSMS catches its own errors internally (never throws), matching
+      // every other Sendblue send in this codebase: a delivery failure must
+      // never surface as a 4xx/5xx to Sendblue's own webhook or crash this
+      // request.
       if (!user.contact_verified) {
         const otp = randomInt(100000, 1000000);
         await pool.query(
           `UPDATE users SET contact_verified = true, otp_code = $2, otp_expiry = NOW() + INTERVAL '5 minutes' WHERE id = $1`,
           [user.id, otp],
         );
-        try {
-          await sendblue.messages.send({
-            number,
-            content: `[co-test] Thanks for texting in. This is CoPatible's dev/test environment, not production. Your verification code: ${otp}`,
-            from_number: process.env.SENDBLUE_PHONE_NUMBER!,
-          });
-        } catch (smsErr: any) {
-          // Non-fatal, matching every other Sendblue send in this codebase — a
-          // delivery failure must never surface as a 4xx/5xx to Sendblue's own
-          // webhook (which would trigger a retry) or crash this request.
-          // contact_verified/otp_code are already committed above; the tester
-          // can use "Resend code" if this particular send didn't land.
-          console.error(`Sendblue OTP send failed for ${number} (non-fatal):`, smsErr?.message ?? smsErr);
-        }
+        await sendSMS({ phone_number: number, welcome: true });
+        await sendSMS({ phone_number: number, intro: true });
+        await sendSMS({ phone_number: number, otp_code: otp.toString(), register: true });
         return res.status(200).send({ received: true, action: "contact_verified" });
       }
 
@@ -447,7 +446,7 @@ export function createWebhooksRouter(io: Server): express.Router {
 
       const { text: reply } = await generateText({
         model: anthropic("claude-haiku-4-5-20251001"),
-        prompt: `You are Co, in CoPatible's dev/test environment (not production). Recent context:\n${recent || "(start of conversation)"}\n\n${user.first_name} just said: "${content}"\n\nReply briefly and warmly, like Co would. 1-2 sentences, no exclamation points, no em dashes.`,
+        prompt: `You are Co, an exclusive life concierge. Recent context:\n${recent || "(start of conversation)"}\n\n${user.first_name} just said: "${content}"\n\nReply briefly and warmly, like Co would. 1-2 sentences, no exclamation points, no em dashes.`,
       });
 
       await pool.query(
@@ -458,7 +457,7 @@ export function createWebhooksRouter(io: Server): express.Router {
       try {
         await sendblue.messages.send({
           number,
-          content: `[co-test] ${reply}`,
+          content: reply,
           from_number: process.env.SENDBLUE_PHONE_NUMBER!,
         });
       } catch (smsErr: any) {

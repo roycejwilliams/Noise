@@ -47,6 +47,30 @@ async function main() {
   configureCoTestSocket(io);
 
   app.get("/health", (_req, res) => res.status(200).send("ok"));
+
+  // Serves Co's vCard so Sendblue can attach it to the real onboarding
+  // "intro" text (see webhooks.ts's contact_verified branch, which calls
+  // otpActions.ts's sendSMS — that function conditionally attaches media_url
+  // only when CO_VCARD_URL is set, which needs to point here). Mirrors
+  // production's identical route in api/src/server.ts.
+  app.get("/co.vcf", (_req, res) => {
+    const phone = process.env.SENDBLUE_PHONE_NUMBER ?? "";
+    const vcard = [
+      "BEGIN:VCARD",
+      "VERSION:3.0",
+      "FN:Co",
+      "ORG:CoPatible",
+      `TEL:${phone}`,
+      "URL:https://app.copatible.com",
+      "NOTE:Your life concierge.",
+      "END:VCARD",
+    ].join("\r\n");
+    res.setHeader("Content-Type", "text/vcard");
+    res.setHeader("Content-Disposition", "attachment; filename=Co.vcf");
+    res.setHeader("Cache-Control", "public, max-age=86400");
+    return res.send(vcard);
+  });
+
   app.use("/api", apiRouter);
   app.use("/api/phone", phoneRouter);
   app.use("/api/checklist", checklistRouter);

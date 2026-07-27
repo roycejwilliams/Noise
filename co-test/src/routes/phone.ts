@@ -2,7 +2,7 @@ import { randomInt } from "crypto";
 import express, { Request, Response, NextFunction } from "express";
 import twilio from "twilio";
 import pool from "../../../api/src/db/db.js";
-import sendblue from "../../../api/src/services/sendblue.js";
+import { sendSMS } from "../../../api/src/otpActions.js";
 import { getLiveSnapshot } from "../services/liveCallState.js";
 
 const router = express.Router();
@@ -121,16 +121,10 @@ router.post("/:user_id/resend-otp", async (req: Request, res: Response, next: Ne
       `UPDATE users SET otp_code = $2, otp_expiry = NOW() + INTERVAL '5 minutes' WHERE id = $1`,
       [req.params.user_id, otp],
     );
-    try {
-      await sendblue.messages.send({
-        number: user.phone_number,
-        content: `[co-test] Your new verification code: ${otp}`,
-        from_number: process.env.SENDBLUE_PHONE_NUMBER!,
-      });
-    } catch (smsErr: any) {
-      console.error(`Resend-OTP send failed for ${user.phone_number}:`, smsErr?.message ?? smsErr);
-      return res.status(502).json({ success: false, error: "Sendblue couldn't deliver the code — see server logs." });
-    }
+    // Same copy production's resend uses (see api/src/routes/auth.ts's
+    // /send-otp) — sendSMS catches its own errors internally and never
+    // throws, matching every other Sendblue send in this codebase.
+    await sendSMS({ phone_number: user.phone_number, otp_code: otp.toString(), resent: true });
     return res.status(200).json({ success: true });
   } catch (error) {
     next(error);
