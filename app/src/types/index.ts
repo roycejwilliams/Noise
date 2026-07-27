@@ -18,7 +18,6 @@ export interface CoProfile {
   availability_pattern: string | null;
   city: string | null;
   trust_score: number;
-  is_circle_connector: boolean;
   check_in_count?: number;
 }
 
@@ -38,6 +37,12 @@ export interface Circle {
   members: CircleMember[];
 }
 
+export interface CandidateWindow {
+  label: string;
+  start: string;
+  end: string;
+}
+
 export interface Moment {
   id: string;
   moments_name: string;
@@ -50,12 +55,14 @@ export interface Moment {
   circle_id: string | null;
   venue_booking_url: string | null;
   vibes?: string[];
+  candidate_windows?: CandidateWindow[] | null;
 }
 
 export interface MomentResponse {
   user_id: string;
   first_name: string;
   response: string | null;
+  selected_windows?: number[] | null;
 }
 
 export interface CoNotification {

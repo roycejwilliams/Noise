@@ -11,7 +11,6 @@ import { SafeAreaView } from "react-native-safe-area-context";
 interface Props {
   circle: Circle;
   moment?: Moment;
-  isConnector: boolean;
   onViewMoment: (momentId: string) => void;
 }
 
@@ -28,7 +27,6 @@ function extractChapters(circleName: string): string[] {
 export default function CircleMain({
   circle,
   moment,
-  isConnector,
   onViewMoment,
 }: Props) {
   const chapters = extractChapters(circle.circle_name ?? "");
@@ -45,11 +43,6 @@ export default function CircleMain({
             <Text style={s.sectionLabel}>Circle</Text>
             <Text style={s.circleName}>{circle.circle_name}</Text>
           </View>
-          {isConnector && (
-            <View style={s.connectorBadge}>
-              <Text style={s.connectorText}>Circle Connector</Text>
-            </View>
-          )}
         </View>
 
         <Text style={s.sectionLabel}>Members</Text>
@@ -136,20 +129,6 @@ const s = StyleSheet.create({
     marginBottom: 12,
   },
   circleName: { fontSize: 24, fontWeight: "300", color: "#fff", marginTop: 4 },
-  connectorBadge: {
-    borderWidth: 1,
-    borderColor: "rgba(255,255,255,0.3)",
-    borderRadius: 14,
-    paddingHorizontal: 10,
-    paddingVertical: 5,
-    backgroundColor: "rgba(255,255,255,0.06)",
-    marginBottom: 4,
-  },
-  connectorText: {
-    fontSize: 10,
-    color: "rgba(255,255,255,0.6)",
-    fontWeight: "400",
-  },
   memberRow: {
     flexDirection: "row",
     alignItems: "center",

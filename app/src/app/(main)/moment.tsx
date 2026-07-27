@@ -1,4 +1,3 @@
-import BookingPending from "@/components/moment/BookingPending";
 import Confirmed from "@/components/moment/Confirmed";
 import DayOf from "@/components/moment/DayOf";
 import MomentEvent from "@/components/moment/MomentEvent";
@@ -11,7 +10,7 @@ import { useEffect, useState } from "react";
 import { StyleSheet, Text, View } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
 
-type MomentState = "loading" | "empty" | "event" | "booking_pending" | "confirmed" | "day_of" | "recap";
+type MomentState = "loading" | "empty" | "event" | "confirmed" | "day_of" | "recap";
 
 function deriveMomentState(moment: Moment): MomentState {
   if (moment.status === "recap") return "recap";
@@ -23,8 +22,7 @@ function deriveMomentState(moment: Moment): MomentState {
     if (hoursDiff <= 24) return "day_of";
     return "confirmed";
   }
-  if (moment.status === "booking_pending") return "booking_pending";
-  // polling and consensus_locked both show the event page
+  // polling and pending_venue_approval both show the event page
   return "event";
 }
 
@@ -98,7 +96,6 @@ export default function MomentScreen() {
 
   if (!moment) return <View style={{ flex: 1, backgroundColor: "#1a1a1a" }} />;
 
-  if (state === "booking_pending") return <BookingPending />;
   if (state === "confirmed") return <Confirmed moment={moment} />;
   if (state === "day_of") return <DayOf moment={moment} members={members} />;
   if (state === "recap") return <Recap moment={moment} />;

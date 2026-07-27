@@ -12,12 +12,12 @@ import {
   getCircleBookingContext,
   notifyMemberOfMoment,
   proposeNewTimeForMoment,
-  isCircleConnector,
+  isCircleMember,
   selectVenueForCircle,
 } from "./co.js";
 import { findBestCircle } from "../services/matching.js";
-import { getVenueContactInfo } from "../services/places.js";
-import { proceedToConnectorBooking, requestVenueApprovalFromKeana } from "../services/booking.js";
+import type { CandidateWindow } from "../services/scheduling.js";
+import { confirmMoment, requestVenueApprovalFromKeana } from "../services/booking.js";
 import sendblue from "../services/sendblue.js";
 import { generateVoiceNote } from "../services/voiceNote.js";
 
@@ -487,39 +487,6 @@ export function sendblueRouter(io: Server): Router {
                 );
               }
 
-              const existingConnector = await pool.query(
-                `SELECT user_id FROM co_profiles
-                 WHERE user_id = ANY($1::uuid[]) AND is_circle_connector = TRUE LIMIT 1`,
-                [newGroupIds],
-              );
-              if (!existingConnector.rows[0]) {
-                const topTrust = await pool.query(
-                  `SELECT user_id FROM co_profiles
-                   WHERE user_id = ANY($1::uuid[]) ORDER BY trust_score DESC LIMIT 1`,
-                  [newGroupIds],
-                );
-                if (topTrust.rows[0]) {
-                  const connectorId = topTrust.rows[0].user_id;
-                  await pool.query(
-                    `UPDATE co_profiles SET is_circle_connector = TRUE WHERE user_id = $1`,
-                    [connectorId],
-                  );
-                  const connContent = `Co selected you as Circle Connector for circle ${newCircle.id}`;
-                  const connMem = await pool.query(
-                    `INSERT INTO co_memories (user_id, memory_type, content) VALUES ($1, 'check_in', $2) RETURNING id`,
-                    [connectorId, connContent],
-                  );
-                  generateEmbedding(connContent)
-                    .then((emb) =>
-                      pool.query(
-                        `UPDATE co_memories SET content_embedding = $1::vector WHERE id = $2`,
-                        [`[${emb.join(",")}]`, connMem.rows[0].id],
-                      ),
-                    )
-                    .catch((err) => console.error("Memory embedding failed (non-fatal):", err));
-                }
-              }
-
               for (const memberId of newGroupIds) {
                 const pendingContent = "Circle placement pending Keana approval";
                 const pendingMem = await pool.query(
@@ -566,7 +533,7 @@ export function sendblueRouter(io: Server): Router {
             // venue choice rather than circle membership.
             const pendingMomentResult = await pool.query(
               `SELECT id, circle_id, moments_name, venue, venue_booking_url, venue_place_id,
-                      venue_type, neighborhood, vibe, suggested_time, rejected_venues, tried_connector_ids
+                      venue_type, neighborhood, vibe, suggested_time, moment_start, rejected_venues
                FROM moments
                WHERE status = 'pending_venue_approval'
                ORDER BY created_at ASC
@@ -585,7 +552,7 @@ export function sendblueRouter(io: Server): Router {
                 .replace(/^[`"']+|[`"']+$/g, "");
 
               if (venueAction === "approve") {
-                await proceedToConnectorBooking(pendingMomentApproval);
+                await confirmMoment(pendingMomentApproval, io);
               } else if (venueAction === "reject") {
                 const rejectedVenues: string[] = [
                   ...(pendingMomentApproval.rejected_venues ?? []),
@@ -620,7 +587,7 @@ export function sendblueRouter(io: Server): Router {
                     console.error("Failed to notify Keana of no-alternative-venue:", err?.message ?? err);
                   }
                   await pool.query(
-                    `UPDATE moments SET status = 'manual_booking_required', rejected_venues = $1 WHERE id = $2`,
+                    `UPDATE moments SET status = 'manual_venue_required', rejected_venues = $1 WHERE id = $2`,
                     [rejectedVenues, pendingMomentApproval.id],
                   );
                 } else {
@@ -739,22 +706,12 @@ export function sendblueRouter(io: Server): Router {
             return null;
           }),
           pool.query(
-            // Two situations land here: a genuinely unanswered yes/no/time
-            // poll (response IS NULL), OR the Circle Connector following up
-            // with "Booked!" after consensus already locked in their 'yes' —
-            // by then their response is no longer NULL, so without this
-            // second clause a "Booked!" text could never match anything and
-            // would silently fall through to the generic reply instead of
-            // ever confirming the booking (confirmed: this was happening).
-            `SELECT mr.moment_id, m.moments_name, m.suggested_time, m.venue, m.moment_start, m.circle_id, m.venue_place_id
+            // A genuinely unanswered availability poll — response IS NULL.
+            `SELECT mr.moment_id, m.moments_name, m.suggested_time, m.venue, m.moment_start, m.circle_id, m.venue_place_id, m.candidate_windows
              FROM moment_responses mr
              JOIN moments m ON m.id = mr.moment_id
-             LEFT JOIN co_profiles cp ON cp.user_id = mr.user_id
              WHERE mr.user_id = $1
-             AND (
-               mr.response IS NULL
-               OR (m.status = 'consensus_locked' AND cp.is_circle_connector = TRUE)
-             )
+             AND mr.response IS NULL
              ORDER BY mr.created_at DESC
              LIMIT 1`,
             [user.id],
@@ -930,11 +887,35 @@ Return ONLY the classification, nothing else.`,
 
         // Step 4 — Pending moment response handling (runs for both voice and text)
         if (pendingMoment.rows[0]) {
-          const { moment_id, moments_name, suggested_time, venue, moment_start, circle_id, venue_place_id } = pendingMoment.rows[0];
+          const { moment_id, moments_name, suggested_time, moment_start, circle_id, candidate_windows } = pendingMoment.rows[0];
+          const candidateWindows: CandidateWindow[] = candidate_windows ?? [];
+          const windowsListText = candidateWindows.length
+            ? candidateWindows.map((w, i) => `${i + 1}. ${w.label}`).join("\n")
+            : null;
 
+          // Two prompt shapes depending on whether this moment got a
+          // simultaneous availability poll (candidate_windows present) or the
+          // original single-time poll (older in-flight moments, or window
+          // generation failed at creation time) — same classifier, just
+          // asked to recognize numbered-window replies when there are any.
           const { text: interpretation } = await generateText({
             model: anthropic("claude-sonnet-4-6"),
-            prompt: `A user replied to a circle event invitation. Interpret their response.
+            prompt: windowsListText
+              ? `A user replied to a circle event's availability poll. Interpret their response.
+
+              User's message: "${resolvedContent}"
+
+              Candidate time windows offered:
+              ${windowsListText}
+
+              Classify their response as ONE of:
+              - "windows: [comma-separated numbers]" — the window number(s) they said work, e.g. "windows: 1,3"
+              - "no" — none of the windows work for them
+              - "time: [their suggestion]" — they proposed a completely different specific time
+              - "unclear" — can't determine intent
+
+              Return ONLY the classification, nothing else.`
+              : `A user replied to a circle event invitation. Interpret their response.
 
               User's message: "${resolvedContent}"
               Proposed time: ${suggested_time ?? "TBD"}
@@ -943,123 +924,48 @@ Return ONLY the classification, nothing else.`,
               - "yes" — they confirmed the proposed time
               - "no" — they can't make it
               - "time: [their suggestion]" — they suggested a specific alternative time
-              - "booked" — they confirmed they booked the venue
               - "unclear" — can't determine intent
 
               Return ONLY the classification, nothing else.`,
           });
 
           // Strip wrapping backticks/quotes — the model sometimes formats
-          // its one-word answer as `booked` or "booked" instead of plain
-          // text, which fails a strict equality check (confirmed: this
-          // silently dropped a real "Booked!" confirmation into the
-          // generic reply path instead of ever confirming the booking).
+          // its classification as `yes` or "yes" instead of plain text,
+          // which fails a strict equality check against parsedResponse below.
           const parsedResponse = interpretation
             .trim()
             .toLowerCase()
             .replace(/^[`"']+|[`"']+$/g, "");
-
-          if (parsedResponse === "booked") {
-            await pool.query(
-              `UPDATE moments SET status = 'confirmed' WHERE id = $1`,
-              [moment_id],
-            );
-
-            // Populate moment_attendees from moment_responses so check-in works.
-            // Anyone who replied 'yes' (or has any response) gets an attendee row.
-            await pool.query(
-              `INSERT INTO moment_attendees (moment_id, attendee_id)
-               SELECT moment_id, user_id FROM moment_responses
-               WHERE moment_id = $1
-               ON CONFLICT DO NOTHING`,
-              [moment_id],
-            );
-
-            const bookingContent = `Connector confirmed booking for moment: ${moments_name}`;
-            const bookingMemory = await pool.query(
-              `INSERT INTO co_memories (user_id, memory_type, content)
-               VALUES ($1, 'intent', $2) RETURNING id`,
-              [user.id, bookingContent],
-            );
-            generateEmbedding(bookingContent)
-              .then((emb) =>
-                pool.query(
-                  `UPDATE co_memories SET content_embedding = $1::vector WHERE id = $2`,
-                  [`[${emb.join(",")}]`, bookingMemory.rows[0].id],
-                ),
-              )
-              .catch((err) => console.error("Memory embedding failed (non-fatal):", err));
-
-            // Tell every member individually — CoPatible has no group chat, so
-            // each person gets their own confirmation text, not a shared thread.
-            const dateStr = new Date(moment_start).toLocaleDateString("en-US", { weekday: "long", month: "short", day: "numeric" });
-            const timeStr = new Date(moment_start).toLocaleTimeString("en-US", { hour: "numeric", minute: "2-digit", hour12: true });
-            let confirmedMsg = `You're confirmed. ${venue ?? moments_name} on ${dateStr} at ${timeStr}. Co will send details closer to the day.`;
-            try {
-              const { text } = await generateText({
-                model: anthropic("claude-haiku-4-5-20251001"),
-                prompt: `You are Co. A moment just got booked: ${venue ?? moments_name} on ${dateStr} at ${timeStr}. Text confirming it's locked in, in your own words — not a template. Mention you'll follow up with details closer to the day. No exclamation points, no em dashes. 1-2 sentences.`,
-              });
-              confirmedMsg = text;
-            } catch (genErr: any) {
-              console.error("Booking-confirmed message generation failed, using fallback (non-fatal):", genErr?.message ?? genErr);
-            }
-
-            // Real Maps link/phone for attendees heading there — appended as
-            // a plain line rather than left to the generated text, so it's
-            // never invented or dropped.
-            if (venue_place_id) {
-              const { phone, mapsUrl } = await getVenueContactInfo(venue_place_id);
-              const extra = [mapsUrl ? `Directions: ${mapsUrl}` : "", phone ? `Venue: ${phone}` : ""]
-                .filter(Boolean)
-                .join(" · ");
-              if (extra) confirmedMsg = `${confirmedMsg}\n${extra}`;
-            }
-
-            const confirmedMembers = await pool.query(
-              `SELECT u.id, u.phone_number FROM moment_responses mr
-               JOIN users u ON u.id = mr.user_id
-               WHERE mr.moment_id = $1`,
-              [moment_id],
-            );
-            for (const member of confirmedMembers.rows) {
-              try {
-                await sendblue.messages.send({
-                  number: member.phone_number,
-                  content: confirmedMsg,
-                  from_number: process.env.SENDBLUE_PHONE_NUMBER!,
-                });
-              } catch (confirmErr: any) {
-                console.error(`Booking-confirmed message failed for ${member.id}:`, confirmErr?.message ?? confirmErr);
-              }
-            }
-
-            io.to(`moment:${moment_id}`).emit("moment:confirmed", { moment_id });
-            return res.status(200).send({ received: true, action: "booking_confirmed" });
-          }
 
           // Only intercept for classifications that are actually actionable —
           // "unclear" means this wasn't really a moment response at all (e.g.
           // small talk like "hey, how are you?"), and previously got silently
           // recorded with no reply ever sent. Falling through lets Co have a
           // normal conversation instead of going silent on anything ambiguous.
+          const isWindowsResponse = parsedResponse.startsWith("windows:");
+          const selectedWindows = isWindowsResponse
+            ? (parsedResponse.replace(/^windows:\s*/i, "").match(/\d+/g) ?? []).map(Number)
+            : [];
+
           const isActionableResponse =
             parsedResponse === "yes" ||
             parsedResponse === "no" ||
-            parsedResponse.startsWith("time:");
+            parsedResponse.startsWith("time:") ||
+            (isWindowsResponse && selectedWindows.length > 0);
 
           if (isActionableResponse) {
-            // A time proposal only actually reschedules the moment (and
-            // re-polls everyone) if it comes from the Circle Connector —
-            // matches the same rule as the app's propose-time endpoint.
-            // Anyone else's time proposal is just noted, not acted on.
+            // Any circle member's time proposal reschedules the moment and
+            // re-polls everyone — first one to suggest a workable time moves
+            // it, no single gatekeeper. Still gated on actually being part of
+            // this circle, and on Co being able to parse a real date/time out
+            // of what they said.
             let rescheduled = false;
-            if (parsedResponse.startsWith("time:") && circle_id && (await isCircleConnector(user.id, circle_id))) {
+            if (parsedResponse.startsWith("time:") && circle_id && (await isCircleMember(user.id, circle_id))) {
               const rawSuggestion = parsedResponse.replace(/^time:\s*/i, "");
               try {
                 const { text: isoGuess } = await generateText({
                   model: anthropic("claude-haiku-4-5-20251001"),
-                  prompt: `The moment is currently scheduled for ${moment_start} (ISO 8601). The Circle Connector just proposed a new time: "${rawSuggestion}". Return ONLY the new date/time as a single ISO 8601 datetime string, keeping the same timezone offset as the current schedule. No explanation.`,
+                  prompt: `The moment is currently scheduled for ${moment_start} (ISO 8601). A circle member just proposed a new time: "${rawSuggestion}". Return ONLY the new date/time as a single ISO 8601 datetime string, keeping the same timezone offset as the current schedule. No explanation.`,
                 });
                 const newDate = new Date(isoGuess.trim());
                 if (!Number.isNaN(newDate.getTime())) {
@@ -1067,20 +973,30 @@ Return ONLY the classification, nothing else.`,
                   rescheduled = true;
                 }
               } catch (genErr: any) {
-                console.error("Connector time-reschedule failed (non-fatal):", genErr?.message ?? genErr);
+                console.error("Time-reschedule failed (non-fatal):", genErr?.message ?? genErr);
               }
             }
 
             if (!rescheduled) {
-              await pool.query(
-                `UPDATE moment_responses
-                 SET response = $1, responded_at = NOW()
-                 WHERE user_id = $2 AND moment_id = $3`,
-                [parsedResponse, user.id, moment_id],
-              );
+              if (isWindowsResponse) {
+                await pool.query(
+                  `UPDATE moment_responses
+                   SET response = 'windows', selected_windows = $1, responded_at = NOW()
+                   WHERE user_id = $2 AND moment_id = $3`,
+                  [selectedWindows, user.id, moment_id],
+                );
+              } else {
+                await pool.query(
+                  `UPDATE moment_responses
+                   SET response = $1, responded_at = NOW()
+                   WHERE user_id = $2 AND moment_id = $3`,
+                  [parsedResponse, user.id, moment_id],
+                );
+              }
               io.to(`moment:${moment_id}`).emit("moment:response", {
                 user_id: user.id,
-                response: parsedResponse,
+                response: isWindowsResponse ? "windows" : parsedResponse,
+                selected_windows: isWindowsResponse ? selectedWindows : undefined,
               });
             }
 
@@ -1088,13 +1004,21 @@ Return ONLY the classification, nothing else.`,
             // ignoring the message entirely.
             let ackMsg = "Got it.";
             try {
+              const chosenLabels = isWindowsResponse
+                ? selectedWindows
+                    .map((i) => candidateWindows[i - 1]?.label)
+                    .filter(Boolean)
+                    .join(" and ")
+                : "";
               const ackContext = rescheduled
                 ? `You just rescheduled ${moments_name} to "${parsedResponse.replace(/^time:\s*/i, "")}" and re-asked the rest of the circle to confirm.`
-                : parsedResponse === "yes"
-                  ? `They confirmed they can make it to ${moments_name} at ${suggested_time ?? "the proposed time"}.`
-                  : parsedResponse === "no"
-                    ? `They said they can't make it to ${moments_name}.`
-                    : `They proposed a different time for ${moments_name}: "${parsedResponse.replace(/^time:\s*/i, "")}", but they're not the Circle Connector so it doesn't change the schedule. Let them know you've noted their preference and the Connector has the final say on timing.`;
+                : isWindowsResponse
+                  ? `They said ${chosenLabels || "one of the offered windows"} works for them for ${moments_name}.`
+                  : parsedResponse === "yes"
+                    ? `They confirmed they can make it to ${moments_name} at ${suggested_time ?? "the proposed time"}.`
+                    : parsedResponse === "no"
+                      ? `They said they can't make it to ${moments_name}.`
+                      : `They proposed a different time for ${moments_name}: "${parsedResponse.replace(/^time:\s*/i, "")}", but Co couldn't pin down a specific date/time from that. Let them know you'll need something more specific, like a day and time.`;
               const { text } = await generateText({
                 model: anthropic("claude-haiku-4-5-20251001"),
                 prompt: `You are Co, an exclusive life concierge. ${ackContext} Reply to them briefly, warm and specific. 1 sentence. No exclamation points, no em dashes.`,
@@ -1188,7 +1112,7 @@ Return ONLY the classification, nothing else.`,
           `SELECT m.moments_name, m.description, m.venue, m.location_name, m.vibes, m.suggested_time, m.status
            FROM moment_responses mr
            JOIN moments m ON m.id = mr.moment_id
-           WHERE mr.user_id = $1 AND m.status IN ('polling', 'consensus_locked', 'confirmed')
+           WHERE mr.user_id = $1 AND m.status IN ('polling', 'pending_venue_approval', 'confirmed')
            ORDER BY mr.created_at DESC
            LIMIT 1`,
           [user.id],

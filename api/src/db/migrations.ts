@@ -39,6 +39,8 @@ export function runMigrations() {
       console.error("moments.venue_booking_url migration failed:", err),
     );
 
+  // Unused — was set when the Connector was texted a booking task, removed
+  // along with that flow. Left in place rather than dropped.
   pool
     .query(
       `ALTER TABLE moments ADD COLUMN IF NOT EXISTS booking_link_sent_at TIMESTAMPTZ`,
@@ -55,6 +57,8 @@ export function runMigrations() {
       console.error("moments.consensus_nudge_sent_at migration failed:", err),
     );
 
+  // Unused — was the 4hr-nudge clock for an unresponsive Connector, removed
+  // along with that flow. Left in place rather than dropped.
   pool
     .query(
       `ALTER TABLE moments ADD COLUMN IF NOT EXISTS connector_nudge_sent_at TIMESTAMPTZ`,
@@ -313,11 +317,10 @@ export function runMigrations() {
     .query(`ALTER TABLE moments ADD COLUMN IF NOT EXISTS neighborhood TEXT`)
     .catch((err: Error) => console.error("moments.neighborhood migration failed:", err));
 
-  // Every circle member who's already been assigned the booking task for
-  // this moment (whether they never responded or the venue got reassigned
-  // around them) — lets the connector-timeout cron rotate is_circle_connector
-  // to the next untried member instead of reassigning the same person or
-  // dead-ending at a single non-responder.
+  // Unused — was part of the Connector booking-task reassignment loop,
+  // removed once Co stopped asking anyone to book a table. Left in place
+  // rather than dropped, per a deliberate choice not to run destructive
+  // schema migrations for a few dead columns.
   pool
     .query(`ALTER TABLE moments ADD COLUMN IF NOT EXISTS tried_connector_ids UUID[] DEFAULT '{}'`)
     .catch((err: Error) =>
@@ -339,6 +342,24 @@ export function runMigrations() {
     )
     .catch((err: Error) =>
       console.error("voicemail_calls table init failed:", err),
+    );
+
+  // Candidate time windows offered by the simultaneous availability poll —
+  // computed once from the venue's real opening hours + the circle's stated
+  // schedule preferences, and stored here so every member's poll text and
+  // the consensus cron's tally are reading the exact same option set.
+  pool
+    .query(`ALTER TABLE moments ADD COLUMN IF NOT EXISTS candidate_windows JSONB`)
+    .catch((err: Error) => console.error("moments.candidate_windows migration failed:", err));
+
+  // Which candidate_windows indices (1-based) a member said work for them —
+  // separate from `response`, which keeps its existing yes/no/time/booked/
+  // unclear meaning; a windows-poll reply sets response = 'windows' as a
+  // sentinel and the actual picks land here.
+  pool
+    .query(`ALTER TABLE moment_responses ADD COLUMN IF NOT EXISTS selected_windows INT[]`)
+    .catch((err: Error) =>
+      console.error("moment_responses.selected_windows migration failed:", err),
     );
 
 }

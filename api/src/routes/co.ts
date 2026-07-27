@@ -10,6 +10,7 @@ import { authenticateToken, userRole } from "../middleware/auth.js";
 import { generateEmbedding } from "../services/embeddings.js";
 import { findBestCircle } from "../services/matching.js";
 import { findBestVenue } from "../services/places.js";
+import { generateCandidateWindows, type CandidateWindow } from "../services/scheduling.js";
 import {
   assessConversationCoverage,
   captureIntent,
@@ -780,46 +781,6 @@ router.post(
         );
       }
 
-      // Step 4.5 — Assign Circle Connector before notifications fire
-      const existingConnector = await pool.query(
-        `SELECT user_id FROM co_profiles
-         WHERE user_id = ANY($1::uuid[]) AND is_circle_connector = TRUE
-         LIMIT 1`,
-        [groupUserIds],
-      );
-
-      if (!existingConnector.rows[0]) {
-        const topTrust = await pool.query(
-          `SELECT user_id FROM co_profiles
-           WHERE user_id = ANY($1::uuid[])
-           ORDER BY trust_score DESC
-           LIMIT 1`,
-          [groupUserIds],
-        );
-
-        if (topTrust.rows[0]) {
-          const connectorId = topTrust.rows[0].user_id;
-          await pool.query(
-            `UPDATE co_profiles SET is_circle_connector = TRUE WHERE user_id = $1`,
-            [connectorId],
-          );
-          const connectorContent = `Co selected you as Circle Connector for circle ${circle.id}`;
-          const connectorMemory = await pool.query(
-            `INSERT INTO co_memories (user_id, memory_type, content)
-             VALUES ($1, 'check_in', $2) RETURNING id`,
-            [connectorId, connectorContent],
-          );
-          generateEmbedding(connectorContent)
-            .then((emb) =>
-              pool.query(
-                `UPDATE co_memories SET content_embedding = $1::vector WHERE id = $2`,
-                [`[${emb.join(",")}]`, connectorMemory.rows[0].id],
-              ),
-            )
-            .catch((err) => console.error("Memory embedding failed (non-fatal):", err));
-        }
-      }
-
       // Step 5 — Notify Keana via iMessage for approval before any member is contacted
       const memberNamesResult = await pool.query(
         `SELECT first_name FROM users WHERE id = ANY($1::uuid[])`,
@@ -935,7 +896,7 @@ export async function getCircleBookingContext(circle_id: string) {
   // moment — including them here would inflate the consensus denominator
   // with people who don't even know the moment exists.
   const membersResult = await pool.query(
-    `SELECT cm.member_id, cp.activity_preferences, cp.connection_style, cp.life_chapters, cp.city
+    `SELECT cm.member_id, cp.activity_preferences, cp.connection_style, cp.life_chapters, cp.city, cp.availability_pattern
      FROM circle_members cm
      JOIN co_profiles cp ON cp.user_id = cm.member_id
      WHERE cm.circle_id = $1 AND cm.status = 'accepted'`,
@@ -1069,10 +1030,27 @@ Make it feel intimate, specific, and intentional. Not generic.`,
         Date.now() + 7 * 24 * 60 * 60 * 1000,
       ).toISOString();
 
+      // Simultaneous availability poll's candidate windows — computed here
+      // (once, shared by every member) from the venue's real opening hours
+      // plus the circle's stated schedule preferences, so it's grounded
+      // instead of the single free-text suggested_time guess above. Only
+      // worth the extra LLM call for groups large enough to actually get a
+      // poll (see the groupSize >= 4 gate downstream in notifyMemberOfMoment).
+      // Falls back to an empty array (and the old single-time poll) if this
+      // fails or the venue's hours were never resolved.
+      const candidateWindows: CandidateWindow[] =
+        groupSize >= 4
+          ? await generateCandidateWindows(
+              selectedVenue?.opening_hours_periods,
+              members.map((m: any) => m.availability_pattern),
+              momentData.venue_type,
+            )
+          : [];
+
       const momentResult = await pool.query(
         `INSERT INTO moments
-         (creator_id, moments_name, location, location_name, moment_start, visibility_type, description, circle_id, vibes, venue, suggested_time, status, venue_booking_url, venue_place_id, venue_type, vibe, neighborhood)
-         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17)
+         (creator_id, moments_name, location, location_name, moment_start, visibility_type, description, circle_id, vibes, venue, suggested_time, status, venue_booking_url, venue_place_id, venue_type, vibe, neighborhood, candidate_windows)
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18)
          RETURNING *`,
         [
           circle.owner_id,
@@ -1093,6 +1071,7 @@ Make it feel intimate, specific, and intentional. Not generic.`,
           momentData.venue_type ?? null,
           momentData.vibe ?? null,
           momentData.neighborhood ?? null,
+          candidateWindows.length ? JSON.stringify(candidateWindows) : null,
         ],
       );
 
@@ -1154,9 +1133,17 @@ export async function notifyMemberOfMoment(
     console.error(`Moment invite message failed for ${member.member_id}:`, smsErr?.message ?? smsErr);
   }
 
-  // Consensus poll — only meaningful once the group's actually large enough
+  // Consensus poll — only meaningful once the group's actually large enough.
+  // Simultaneous availability poll when candidate_windows exist (the normal
+  // case); falls back to the original single-time yes/no poll for older
+  // in-flight moments, or if window generation failed at creation time.
   if (groupSize >= 4) {
-    const pollMessage = `Does ${momentData.suggested_time ?? "this time"} work for you? Reply YES or NO.`;
+    const candidateWindows: CandidateWindow[] = moment.candidate_windows ?? [];
+    const pollMessage = candidateWindows.length
+      ? `Which of these work for your circle's ${moment.moments_name} at ${selectedVenue?.name ?? momentData.neighborhood}?\n${candidateWindows
+          .map((w, i) => `${i + 1}. ${w.label}`)
+          .join("\n")}\nReply with the number(s), or NO if none work.`
+      : `Does ${momentData.suggested_time ?? "this time"} work for you? Reply YES or NO.`;
     try {
       await sendblue.messages.send({
         number: user.phone_number,
@@ -1273,22 +1260,20 @@ export async function proposeNewTimeForMoment(moment_id: string, dateObj: Date) 
   return { moment_start: dateObj.toISOString(), suggested_time: suggestedTime };
 }
 
-// Checks whether user_id is the Circle Connector for circle_id — shared by
-// the propose-time route and the "time: X" text-reply path.
-export async function isCircleConnector(user_id: string, circle_id: string): Promise<boolean> {
-  const connectorCheck = await pool.query(
-    `SELECT 1 FROM co_profiles cp
-     WHERE cp.user_id = $1 AND cp.is_circle_connector = TRUE
-     AND (
+// Checks whether user_id is actually part of circle_id (owner or accepted
+// member) — shared by the propose-time route and the "time: X" text-reply
+// path, both of which are open to any circle member.
+export async function isCircleMember(user_id: string, circle_id: string): Promise<boolean> {
+  const memberCheck = await pool.query(
+    `SELECT 1 WHERE
        EXISTS (SELECT 1 FROM circles c WHERE c.id = $2 AND c.owner_id = $1)
-       OR EXISTS (SELECT 1 FROM circle_members cm WHERE cm.circle_id = $2 AND cm.member_id = $1)
-     )`,
+       OR EXISTS (SELECT 1 FROM circle_members cm WHERE cm.circle_id = $2 AND cm.member_id = $1)`,
     [user_id, circle_id],
   );
-  return !!connectorCheck.rows[0];
+  return !!memberCheck.rows[0];
 }
 
-// POST /co/moment/:moment_id/propose-time — the Circle Connector picks a
+// POST /co/moment/:moment_id/propose-time — any circle member can pick a
 // specific date/time from the app (mirrors what a "time: X" iMessage reply
 // does over text, in sendblue.ts).
 router.post(
@@ -1311,9 +1296,8 @@ router.post(
       if (!momentRow) return res.status(404).send("Moment not found.");
       const { circle_id } = momentRow;
 
-      // Only the Circle Connector may propose a time — everyone else responds via iMessage
-      if (!(await isCircleConnector(user_id, circle_id))) {
-        return res.status(403).send("Only the Circle Connector can propose a time.");
+      if (!(await isCircleMember(user_id, circle_id))) {
+        return res.status(403).send("You're not a member of this circle.");
       }
 
       const dateObj = new Date(moment_start);

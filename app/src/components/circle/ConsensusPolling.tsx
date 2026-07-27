@@ -1,4 +1,4 @@
-import type { Circle, Moment, MomentResponse } from "@/types";
+import type { CandidateWindow, Circle, Moment, MomentResponse } from "@/types";
 import { useState } from "react";
 import {
   ActivityIndicator,
@@ -14,7 +14,6 @@ interface Props {
   circle: Circle;
   moment: Moment;
   responses: MomentResponse[];
-  isConnector: boolean;
   onProposeTime?: (momentStartIso: string) => Promise<void> | void;
 }
 
@@ -69,19 +68,37 @@ function getTimeOptions(momentStart: string): TimeOption[] {
   });
 }
 
+// Given a response's selected_windows (1-based indices into
+// moment.candidate_windows), returns the picked windows' labels joined for
+// display — e.g. "Thu 7/24 7:00 PM, Sat 7/26 12:00 PM".
+function windowLabelsFor(
+  selectedWindows: number[] | null | undefined,
+  candidateWindows: CandidateWindow[],
+): string {
+  return (selectedWindows ?? [])
+    .map((i) => candidateWindows[i - 1]?.label)
+    .filter(Boolean)
+    .join(", ");
+}
+
 export default function ConsensusPolling({
   circle,
   moment,
   responses,
-  isConnector,
   onProposeTime,
 }: Props) {
-  const yesCount = responses.filter((r) => r.response === "yes").length;
+  const candidateWindows = moment.candidate_windows ?? [];
+  // "Confirmed" means "yes" on the original single-time poll, or having
+  // picked at least one window on the newer availability poll — both are
+  // read as having engaged, as opposed to "no" or not having replied yet.
+  const confirmedCount = candidateWindows.length
+    ? responses.filter((r) => r.response === "windows").length
+    : responses.filter((r) => r.response === "yes").length;
   const dateOptions = getDateOptions(moment.moment_start);
   const timeOptions = getTimeOptions(moment.moment_start);
 
   // Default selection is index 0 for both — the option matching Co's
-  // actual current proposal, so the connector sees what's already been
+  // actual current proposal, so whoever opens this sees what's already been
   // asked over text and can pick a different slot from there.
   const [selectedDayOffset, setSelectedDayOffset] = useState(0);
   const [selectedTimeIndex, setSelectedTimeIndex] = useState(0);
@@ -113,11 +130,6 @@ export default function ConsensusPolling({
           <Text style={s.sectionLabel}>Circle</Text>
           <View style={s.circleHeader}>
             <Text style={s.circleName}>{circle.circle_name}</Text>
-            {isConnector && (
-              <View style={s.connectorBadge}>
-                <Text style={s.connectorText}>Circle Connector</Text>
-              </View>
-            )}
           </View>
         </View>
 
@@ -131,9 +143,36 @@ export default function ConsensusPolling({
           )}
         </View>
 
-        {isConnector ? (
+        {candidateWindows.length ? (
           <>
-            <Text style={s.sectionLabel}>Request Date</Text>
+            <Text style={s.sectionLabel}>Which Times Work</Text>
+            <View style={s.card}>
+              {candidateWindows.map((w, i) => (
+                <Text key={w.start} style={s.cardText}>
+                  {i + 1}. {w.label}
+                </Text>
+              ))}
+              <Text style={s.cardMuted}>
+                Reply with the number(s) that work, or NO if none do, via
+                iMessage.
+              </Text>
+            </View>
+          </>
+        ) : (
+          <>
+            <Text style={s.sectionLabel}>Proposed Time</Text>
+            <View style={s.card}>
+              <Text style={s.cardText}>{moment.suggested_time ?? "TBD"}</Text>
+              <Text style={s.cardMuted}>
+                Reply YES or suggest another time via iMessage.
+              </Text>
+            </View>
+          </>
+        )}
+
+        {onProposeTime && (
+          <>
+            <Text style={s.sectionLabel}>Or Request a Different Date</Text>
             <View style={s.pillRow}>
               {dateOptions.map((d) => (
                 <TouchableOpacity
@@ -157,7 +196,7 @@ export default function ConsensusPolling({
               ))}
             </View>
 
-            <Text style={s.sectionLabel}>Request Time</Text>
+            <Text style={s.sectionLabel}>Time</Text>
             <View style={s.pillRow}>
               {timeOptions.map((t, i) => (
                 <TouchableOpacity
@@ -178,38 +217,43 @@ export default function ConsensusPolling({
               ))}
             </View>
           </>
-        ) : (
-          <>
-            <Text style={s.sectionLabel}>Proposed Time</Text>
-            <View style={s.card}>
-              <Text style={s.cardText}>{moment.suggested_time ?? "TBD"}</Text>
-              <Text style={s.cardMuted}>
-                Reply YES or suggest another time via iMessage.
-              </Text>
-            </View>
-          </>
         )}
 
         <View style={s.responsesHeader}>
           <Text style={s.sectionLabel}>Responses</Text>
           <Text style={s.responseCount}>
-            {yesCount} of {responses.length} confirmed
+            {confirmedCount} of {responses.length} confirmed
           </Text>
         </View>
-        {responses.map((r) => (
-          <View key={r.user_id} style={s.responseRow}>
-            <View style={s.memberAvatar} />
-            <Text style={s.memberName}>{r.first_name}</Text>
-            <Text
-              style={[s.responseText, r.response === "yes" && s.responseYes]}
-            >
-              {r.response ? fmt(r.response) : "No reply"}
-            </Text>
-          </View>
-        ))}
+        {responses.map((r) => {
+          const isWindowsPick = r.response === "windows";
+          const windowLabels = isWindowsPick
+            ? windowLabelsFor(r.selected_windows, candidateWindows)
+            : "";
+          const displayText = isWindowsPick
+            ? windowLabels || "Picked, no windows matched"
+            : r.response
+              ? fmt(r.response)
+              : "No reply";
+
+          return (
+            <View key={r.user_id} style={s.responseRow}>
+              <View style={s.memberAvatar} />
+              <Text style={s.memberName}>{r.first_name}</Text>
+              <Text
+                style={[
+                  s.responseText,
+                  (r.response === "yes" || isWindowsPick) && s.responseYes,
+                ]}
+              >
+                {displayText}
+              </Text>
+            </View>
+          );
+        })}
       </ScrollView>
 
-      {isConnector && onProposeTime && (
+      {onProposeTime && (
         <View style={s.bottom}>
           <TouchableOpacity
             style={[s.cta, submitting && s.ctaDisabled]}
@@ -257,20 +301,6 @@ const s = StyleSheet.create({
     marginBottom: 12,
   },
   circleName: { fontSize: 16, fontWeight: "300", color: "#fff" },
-  connectorBadge: {
-    borderWidth: 1,
-    borderColor: "rgba(255,255,255,0.3)",
-    borderRadius: 14,
-    paddingHorizontal: 10,
-    paddingVertical: 5,
-    backgroundColor: "rgba(255,255,255,0.06)",
-    marginBottom: 4,
-  },
-  connectorText: {
-    fontSize: 10,
-    color: "rgba(255,255,255,0.6)",
-    fontWeight: "400",
-  },
   momentCard: {
     borderWidth: 1,
     borderColor: "rgba(255,255,255,0.15)",

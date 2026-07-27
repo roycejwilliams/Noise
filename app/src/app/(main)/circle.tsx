@@ -3,7 +3,7 @@ import ConsensusPolling from "@/components/circle/ConsensusPolling";
 import MomentPending from "@/components/circle/MomentPending";
 import api from "@/lib/api";
 import { socket } from "@/lib/socket";
-import type { Circle, CoProfile, Moment, MomentResponse } from "@/types";
+import type { Circle, Moment, MomentResponse } from "@/types";
 import * as SecureStore from "expo-secure-store";
 import { useRouter } from "expo-router";
 import { useEffect, useRef, useState } from "react";
@@ -22,7 +22,6 @@ type CircleState = "loading" | "empty" | "main" | "polling" | "moment_pending";
 export default function CircleScreen() {
   const [state, setState] = useState<CircleState>("loading");
   const [circle, setCircle] = useState<Circle | null>(null);
-  const [profile, setProfile] = useState<CoProfile | null>(null);
   const [moment, setMoment] = useState<Moment | null>(null);
   const [responses, setResponses] = useState<MomentResponse[]>([]);
   const [confirmedMoment, setConfirmedMoment] = useState<Moment | null>(null);
@@ -39,23 +38,17 @@ export default function CircleScreen() {
       if (!userId || !mounted) return;
       userIdRef.current = userId;
 
-      const [circleRes, profileRes] = await Promise.allSettled([
-        api.get(`/circles/${userId}/with-members`),
-        api.get(`/co/profile/${userId}`),
-      ]);
-
-      if (!mounted) return;
-
-      if (profileRes.status === "fulfilled") {
-        setProfile(profileRes.value.data?.data ?? profileRes.value.data);
-      }
-
-      if (circleRes.status === "rejected") {
-        setState("empty");
+      let circleRes;
+      try {
+        circleRes = await api.get(`/circles/${userId}/with-members`);
+      } catch {
+        if (mounted) setState("empty");
         return;
       }
 
-      const circles: Circle[] = circleRes.value.data?.data ?? circleRes.value.data ?? [];
+      if (!mounted) return;
+
+      const circles: Circle[] = circleRes.data?.data ?? circleRes.data ?? [];
       const active = circles.find((c) => c.status === "active") ?? null;
 
       if (!active) {
@@ -162,8 +155,6 @@ export default function CircleScreen() {
     return <View style={{ flex: 1, backgroundColor: "#1a1a1a" }} />;
   }
 
-  const isConnector = profile?.is_circle_connector ?? false;
-
   return (
     <SafeAreaView style={cs.root}>
       <Text style={cs.wordmark}>CoPatible</Text>
@@ -182,8 +173,7 @@ export default function CircleScreen() {
           circle={circle}
           moment={moment}
           responses={responses}
-          isConnector={isConnector}
-          onProposeTime={isConnector ? handleProposeTime : undefined}
+          onProposeTime={handleProposeTime}
         />
       )}
 
@@ -192,7 +182,6 @@ export default function CircleScreen() {
           circle={circle}
           confirmedMoment={confirmedMoment}
           pendingMoment={pendingMoment}
-          isConnector={isConnector}
         />
       )}
 
@@ -201,7 +190,6 @@ export default function CircleScreen() {
           <CircleMain
             circle={circle}
             moment={moment ?? undefined}
-            isConnector={isConnector}
             onViewMoment={(_: string) => router.navigate("/(main)/moment")}
           />
           <TouchableOpacity

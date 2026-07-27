@@ -106,7 +106,7 @@ app.get("/audio/:id", (req, res) => {
 
 app.use(errorHandler);
 
-registerJobs();
+registerJobs(io);
 
 // Every 30 minutes — auto-approve circles Keana hasn't responded to within 4 hours
 cron.schedule("*/30 * * * *", async () => {

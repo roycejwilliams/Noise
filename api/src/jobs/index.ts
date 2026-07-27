@@ -1,12 +1,14 @@
 import cron from "node-cron";
 import twilio from "twilio";
+import type { Server } from "socket.io";
 import pool from "../db/db.js";
 import { sendEmail, sendSMS } from "../otpActions.js";
 import {
-  proceedToConnectorBooking,
+  confirmMoment,
   requestVenueApprovalFromKeana,
 } from "../services/booking.js";
 import sendblue from "../services/sendblue.js";
+import type { CandidateWindow } from "../services/scheduling.js";
 
 const twilioClient = twilio(
   process.env.TWILIO_ACCOUNT_SID!,
@@ -14,7 +16,7 @@ const twilioClient = twilio(
   { accountSid: process.env.TWILIO_LIVE_SID! },
 );
 
-export function registerJobs() {
+export function registerJobs(io: Server) {
   // Every 15 min — moment reminders (1-hour pre-event window)
   cron.schedule("*/15 * * * *", async () => {
     try {
@@ -154,7 +156,7 @@ export function registerJobs() {
     try {
       const pollingMoments = await pool.query(
         `SELECT m.id, m.circle_id, m.moments_name, m.suggested_time, m.created_at, m.consensus_nudge_sent_at,
-                m.venue, m.venue_booking_url, m.venue_place_id
+                m.venue, m.venue_booking_url, m.venue_place_id, m.candidate_windows
          FROM moments m
          JOIN circles c ON c.id = m.circle_id
          WHERE m.status = 'polling'
@@ -164,7 +166,7 @@ export function registerJobs() {
 
       for (const moment of pollingMoments.rows) {
         const responsesResult = await pool.query(
-          `SELECT mr.user_id, mr.response, u.phone_number, u.first_name
+          `SELECT mr.user_id, mr.response, mr.selected_windows, u.phone_number, u.first_name
            FROM moment_responses mr
            JOIN users u ON u.id = mr.user_id
            WHERE mr.moment_id = $1`,
@@ -174,10 +176,38 @@ export function registerJobs() {
         const total = responses.length;
         if (total === 0) continue;
 
-        const yesCount = responses.filter(
-          (r: any) => r.response === "yes",
-        ).length;
-        const thresholdMet = yesCount * 2 > total;
+        // Simultaneous availability poll (candidate_windows present) tallies
+        // per-window reply overlap instead of a single yes count — a member
+        // can pick more than one window, so "consensus" here means whichever
+        // window the most people can actually make, not a single yes/no
+        // majority. Older in-flight moments with no candidate_windows (or a
+        // failed window-generation at creation time) fall back to the
+        // original yes-count check, unchanged.
+        const candidateWindows: CandidateWindow[] = moment.candidate_windows ?? [];
+        let thresholdMet: boolean;
+        let winningWindowIndex: number | null = null; // 1-based, into candidateWindows
+
+        if (candidateWindows.length) {
+          const counts = new Array(candidateWindows.length).fill(0);
+          for (const r of responses) {
+            for (const idx of r.selected_windows ?? []) {
+              if (idx >= 1 && idx <= counts.length) counts[idx - 1]++;
+            }
+          }
+          let winningCount = 0;
+          counts.forEach((c, i) => {
+            if (c > winningCount) {
+              winningCount = c;
+              winningWindowIndex = i + 1;
+            }
+          });
+          thresholdMet = winningCount * 2 > total;
+        } else {
+          const yesCount = responses.filter(
+            (r: any) => r.response === "yes",
+          ).length;
+          thresholdMet = yesCount * 2 > total;
+        }
 
         const hoursSinceCreated =
           (Date.now() - new Date(moment.created_at).getTime()) /
@@ -194,7 +224,7 @@ export function registerJobs() {
             try {
               await sendblue.messages.send({
                 number: nr.phone_number,
-                content: `${nr.first_name}, your circle's moment has been locked. Reply YES or suggest a time for future moments.`,
+                content: `${nr.first_name}, your circle's moment has been locked. Reply with your availability or suggest a time for future moments.`,
                 from_number: process.env.SENDBLUE_PHONE_NUMBER!,
               });
             } catch (smsErr: any) {
@@ -211,10 +241,24 @@ export function registerJobs() {
           );
         }
 
-        // Consensus reached — gate on Keana approving the venue before
-        // anyone's texted a booking task. This send is best-effort, same as
-        // every other cron notification here: a delivery failure must never
-        // block the moment's actual state from updating.
+        // Lock in the winning window (best-fit overlap, met early via the
+        // threshold above or picked as the current plurality at the 48hr
+        // cutoff) — same "must eventually resolve" behavior the original
+        // yes/no cutoff already had, just writing a real window's time
+        // instead of leaving the original suggested_time guess in place.
+        if (candidateWindows.length && winningWindowIndex !== null) {
+          const winner = candidateWindows[winningWindowIndex - 1];
+          await pool.query(
+            `UPDATE moments SET moment_start = $1, suggested_time = $2 WHERE id = $3`,
+            [winner.start, winner.label, moment.id],
+          );
+          moment.suggested_time = winner.label;
+        }
+
+        // Consensus reached — gate on Keana approving the venue/time before
+        // confirming the moment to the group. This send is best-effort, same
+        // as every other cron notification here: a delivery failure must
+        // never block the moment's actual state from updating.
         await requestVenueApprovalFromKeana(moment);
       }
     } catch (error) {
@@ -225,18 +269,19 @@ export function registerJobs() {
   // Every 30 min — auto-approve a venue Keana hasn't responded to within 4
   // hours, mirroring the circle-placement auto-approve cron in server.ts.
   // Without this, pending_venue_approval would just be a differently-named
-  // version of the manual_review dead end it replaced.
+  // version of the manual_review dead end it replaced. Approval is the last
+  // gate — this goes straight to confirming the moment, no booking step.
   cron.schedule("*/30 * * * *", async () => {
     try {
       const staleVenues = await pool.query(
-        `SELECT id, circle_id, moments_name, venue, venue_booking_url, venue_place_id, tried_connector_ids
+        `SELECT id, circle_id, moments_name, venue, venue_booking_url, venue_place_id, moment_start
          FROM moments
          WHERE status = 'pending_venue_approval'
          AND keana_venue_notified_at < NOW() - INTERVAL '4 hours'`,
       );
 
       for (const moment of staleVenues.rows) {
-        await proceedToConnectorBooking(moment);
+        await confirmMoment(moment, io);
       }
     } catch (error) {
       console.error("Venue auto-approve cron error:", error);
@@ -299,77 +344,6 @@ export function registerJobs() {
       }
     } catch (err) {
       console.error("Auto-call cron error:", err);
-    }
-  });
-
-  // Every hour — connector timeout: 4hr nudge → 8hr escalate to Keana
-  cron.schedule("0 * * * *", async () => {
-    try {
-      const fourHoursAgo = new Date(
-        Date.now() - 4 * 60 * 60 * 1000,
-      ).toISOString();
-      const eightHoursAgo = new Date(
-        Date.now() - 8 * 60 * 60 * 1000,
-      ).toISOString();
-
-      const overdueResult = await pool.query(
-        `SELECT m.id, m.circle_id, m.booking_link_sent_at, m.connector_nudge_sent_at,
-                m.venue, m.venue_booking_url, m.venue_place_id, m.tried_connector_ids
-         FROM moments m
-         WHERE m.status = 'consensus_locked'
-         AND m.booking_link_sent_at < $1`,
-        [fourHoursAgo],
-      );
-
-      for (const moment of overdueResult.rows) {
-        const connectorResult = await pool.query(
-          `SELECT u.id, u.phone_number, u.first_name
-           FROM circle_members cm
-           JOIN users u ON u.id = cm.member_id
-           JOIN co_profiles cp ON cp.user_id = cm.member_id
-           WHERE cm.circle_id = $1 AND cp.is_circle_connector = TRUE
-           LIMIT 1`,
-          [moment.circle_id],
-        );
-        const connector = connectorResult.rows[0];
-        const circlePageUrl = `https://app.copatible.com/circles/${moment.circle_id}`;
-        const past8hrs =
-          new Date(moment.booking_link_sent_at) < new Date(eightHoursAgo);
-
-        if (past8hrs) {
-          // Demote the unresponsive Connector exactly as before, then hand
-          // the booking task to the next untried circle member instead of
-          // stopping at a Keana notification. proceedToConnectorBooking
-          // retries across the whole circle (tried_connector_ids) — only
-          // once every member's been tried does it actually escalate to
-          // Keana for manual booking.
-          if (connector) {
-            await pool.query(
-              `UPDATE co_profiles SET trust_score = GREATEST(0, trust_score - 10), is_circle_connector = FALSE WHERE user_id = $1`,
-              [connector.id],
-            );
-          }
-          await proceedToConnectorBooking(moment);
-        } else if (!moment.connector_nudge_sent_at) {
-          if (connector) {
-            try {
-              await sendblue.messages.send({
-                number: connector.phone_number,
-                content: `${connector.first_name}, your circle is still waiting. Tap to book: ${circlePageUrl}`,
-                from_number: process.env.SENDBLUE_PHONE_NUMBER!,
-              });
-            } catch (smsErr: any) {
-              console.error(`4hr connector nudge failed for ${connector.id}:`, smsErr?.message ?? smsErr);
-            }
-            await pool.query(
-              `UPDATE moments SET connector_nudge_sent_at = NOW() WHERE id = $1`,
-              [moment.id],
-            );
-          }
-        }
-      }
-    } catch (error) {
-      console.error("Connector timeout cron error:", error);
     }
   });
 

@@ -416,6 +416,29 @@ export function createMomentsRouter(
     },
   );
 
+  // Backs ConsensusPolling's live response list — first_name for display,
+  // response + selected_windows so the client can render either the
+  // original yes/no/time-proposal poll or the newer multi-window pick.
+  router.get(
+    "/moments/:id/responses",
+    authenticateToken,
+    async (req, res, next) => {
+      try {
+        const result = await pool.query(
+          `SELECT mr.user_id, mr.response, mr.selected_windows, u.first_name
+           FROM moment_responses mr
+           JOIN users u ON u.id = mr.user_id
+           WHERE mr.moment_id = $1
+           ORDER BY mr.created_at ASC`,
+          [req.params.id],
+        );
+        return res.status(200).send({ success: true, data: result.rows });
+      } catch (error) {
+        next(error);
+      }
+    },
+  );
+
   router.get("/moments/:id", authenticateToken, async (req, res, next) => {
     try {
       if (req.user?.id !== req.params.id) {
