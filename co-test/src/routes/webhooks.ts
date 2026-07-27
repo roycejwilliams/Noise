@@ -870,7 +870,36 @@ Return ONLY valid JSON, no preamble: {"wants_venue": true or false, "venue_type"
           const cleanVenue = rawVenueClassification.replace(/```json|```/g, "").trim();
           const parsedVenue = JSON.parse(cleanVenue);
           if (parsedVenue?.wants_venue && typeof parsedVenue.venue_type === "string" && parsedVenue.venue_type) {
-            const venue = await findRealVenue(parsedVenue.venue_type, profile.city);
+            const venueType: string = parsedVenue.venue_type;
+
+            // The real Places search below has genuine network latency on
+            // top of the classification calls already run this turn — a
+            // real conversation showed Co claiming "sending that now" with
+            // no link actually in the message, because the search hadn't
+            // even happened yet when that reply was written. Send a real,
+            // personalized acknowledgment now, before the search, then
+            // deliver the actual result as the reply below — never claim
+            // delivery before there's something real to deliver.
+            try {
+              const { text: rawHold } = await generateText({
+                model: anthropic("claude-haiku-4-5-20251001"),
+                prompt: `You are Co, texting someone. They just asked about finding a ${venueType}. You're about to go actually look one up for them — send a brief, warm, personalized "give me a sec" acknowledgment, referencing what they're actually looking for, not generic. Don't claim you've found anything yet. One short sentence. No exclamation points, no em dashes. Under 100 characters.`,
+              });
+              const holdMessage = capMessageLength(rawHold, 100);
+              await pool.query(
+                `INSERT INTO co_memories (user_id, memory_type, content) VALUES ($1, 'text_exchange', $2)`,
+                [user.id, `Co replied: ${holdMessage}`],
+              );
+              try {
+                await sendblue.messages.send({ number, content: holdMessage, from_number: process.env.SENDBLUE_PHONE_NUMBER! });
+              } catch (smsErr: any) {
+                console.error(`Sendblue venue-lookup hold message failed for ${number} (non-fatal):`, smsErr?.message ?? smsErr);
+              }
+            } catch (err: any) {
+              console.error("webhooks: venue hold-message generation failed (non-fatal, proceeding to search anyway):", err?.message ?? err);
+            }
+
+            const venue = await findRealVenue(venueType, profile.city);
             if (venue) {
               venueContext = `\nYou just found a real place for them: ${venue.name}, ${venue.address}. Include this Google Maps link exactly as-is somewhere in your reply: ${venue.mapsUrl}`;
               await pool
@@ -879,6 +908,11 @@ Return ONLY valid JSON, no preamble: {"wants_venue": true or false, "venue_type"
                   `Co surfaced a real venue — ${venue.name} (${venue.address}): ${venue.mapsUrl}`,
                 ])
                 .catch((err: any) => console.error("webhooks: venue memory write failed (non-fatal):", err?.message ?? err));
+            } else {
+              // Must not repeat the "claimed to deliver, delivered nothing"
+              // failure — if the search genuinely came up empty, the reply
+              // has to say so honestly, not go quiet or invent a name.
+              venueContext = `\nYou looked for a real ${venueType} but didn't find a solid match nearby. Say so honestly in your reply — don't invent a name or pretend you found one.`;
             }
           }
         } catch (err: any) {
