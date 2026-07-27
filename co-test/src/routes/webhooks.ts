@@ -27,6 +27,7 @@ import {
 import { generateRecommendation } from "../services/recommendation.js";
 import { triggerCall } from "../services/callTrigger.js";
 import { simulateModeratorApproval } from "../services/circlesSimulation.js";
+import { getCoPersonaPrompt } from "../services/coPersona.js";
 
 // Mounted at the SAME paths production uses (/sendblue/webhook, /co/call-status,
 // /co/webhook) — see api/src/server.ts and api/src/routes/co.ts for the
@@ -815,9 +816,19 @@ Return ONLY the classification, nothing else.`,
         console.error("webhooks: recommendation classification failed (non-fatal):", err?.message ?? err);
       }
 
+      // Same persona the real call uses, not a separate thinner one — Co
+      // should be the same entity whether someone's talking by voice or
+      // text, capable of picking up a genuine back-and-forth either way.
+      // The anti-fabrication grounding rule and the text-length cap below
+      // are additions specific to this channel, layered on top, not a
+      // replacement for anything in the real prompt.
+      const personaPrompt = await getCoPersonaPrompt();
+
       const { text: reply } = await generateText({
         model: anthropic("claude-haiku-4-5-20251001"),
-        prompt: `You are Co, an exclusive life concierge.
+        prompt: `${personaPrompt ?? "You are Co, an exclusive life concierge."}
+
+You are having this specific exchange over text message, not a phone call — the phase structure and pacing above describe a live call; over text, just be genuinely Co: the same listening style, the same voice, the same principles, picking up wherever this conversation actually is.
 
 What you already know about ${user.first_name} from a prior call:
 ${profileContext || "(nothing on file yet from a call — this is effectively a first conversation)"}
@@ -827,9 +838,9 @@ ${recentConversation || "(start of the text conversation)"}
 
 ${user.first_name} just said: "${content}"
 ${recommendationContext}
-Reply briefly and warmly, like Co would, addressing only what they just said — one thought, not several. Ground everything ONLY in the information above and what has actually been said in this conversation — never state or imply a specific personal detail, preference, or fact about them that isn't listed above or wasn't actually said in this thread. If you don't have something, ask rather than assume.
+Ground everything ONLY in the information above and what has actually been said in this conversation — never state or imply a specific personal detail, preference, or fact about them that isn't listed above or wasn't actually said in this thread. If you don't have something, ask rather than assume.
 
-One short sentence. No exclamation points, no em dashes. Under 160 characters — this is a text message, not a paragraph.`,
+Keep THIS reply short — one text-message-length turn, not a call-length response. One short sentence. No exclamation points, no em dashes. Under 160 characters — this is a text message, not a paragraph.`,
       });
       const cappedReply = capMessageLength(reply, 160);
 
