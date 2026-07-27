@@ -715,8 +715,31 @@ Return ONLY the classification, nothing else.`,
         ).catch((err: any) => console.error("webhooks: call_offer_resolved memory write failed (non-fatal):", err?.message ?? err));
       }
 
+      // Cooldown — nothing previously throttled how often a call could be
+      // offered, and a real conversation showed it firing repeatedly within
+      // minutes, including once directly in response to "Why is it always
+      // a phone call?" (a complaint about the pattern itself, misread as
+      // more evidence a call would help). Not a permanent "never ask again"
+      // — that's not what was asked for either — just a minimum real gap
+      // between offers regardless of how many messages qualify in between.
+      const recentOfferCountResult = await pool.query(
+        `SELECT count(*) FROM co_memories WHERE user_id = $1 AND memory_type = 'call_offer_pending' AND created_at > NOW() - INTERVAL '10 minutes'`,
+        [user.id],
+      );
+      const recentOfferCooldownActive = parseInt(recentOfferCountResult.rows[0].count, 10) > 0;
+
       const shouldTriggerCall = callAction === "explicit_request" || (hasPendingOffer && callAction === "accepts_offer");
-      const shouldOfferCall = !hasPendingOffer && callAction === "would_benefit";
+      // Folded into the main reply below now, not a separate message that
+      // replaces one — a real conversation showed this short-circuiting the
+      // reply entirely, so "want to hop on a call?" was the ENTIRE response
+      // to something significant, with no acknowledgment of what was
+      // actually said. The offer is secondary now; genuinely responding
+      // (reflecting, surfacing a real recommendation/venue if one exists)
+      // is the priority, per explicit product decision.
+      const shouldOfferCall = !hasPendingOffer && !recentOfferCooldownActive && callAction === "would_benefit";
+      const callOfferContext = shouldOfferCall
+        ? `\nWhat they just shared could genuinely benefit from a real conversation by voice — but that is not the priority. First, actually respond to what they said: reflect it, and if you have something concrete to offer below (a real recommendation or a real place you found), lead with that instead of a call. Only if it still feels right after that, weave in offering a call as a brief, secondary option — not the main point of your reply, and never in place of a real response. Do not place any call, just ask if you offer one.`
+        : "";
 
       if (shouldTriggerCall) {
         const callResult = await triggerCall(user.id);
@@ -740,35 +763,6 @@ Return ONLY the classification, nothing else.`,
         console.error(`webhooks: call trigger failed for user ${user.id} (non-fatal, falling through to normal reply):`, callResult.error);
         // Falls through to the normal reply flow below on failure — a
         // failed dial attempt should never leave the conversation silent.
-      }
-
-      if (shouldOfferCall) {
-        const offerPersona = await getCoPersonaPrompt();
-        const { text: rawOffer } = await generateText({
-          model: anthropic("claude-haiku-4-5-20251001"),
-          prompt: `${offerPersona ?? "You are Co, a life concierge."} You're texting with someone right now, not on a call with them. They just said: "${content}"\n\nWhat they're describing sounds like it would genuinely be easier to talk through by voice than text. Offer them a call, warmly, in your own words and voice — something like asking if they want to hop on a call about this. Don't place any call, just ask.\n\nThis is a text message, not the call itself — keep it short, one text-message-length turn. One short sentence. No exclamation points, no em dashes. Under 160 characters.`,
-        });
-        const offer = capMessageLength(rawOffer, 160);
-        // Same non-fatal guard as call_offer_resolved above — bookkeeping,
-        // never allowed to block the actual reply below.
-        await pool.query(
-          `INSERT INTO co_memories (user_id, memory_type, content) VALUES ($1, 'call_offer_pending', $2)`,
-          [user.id, offer],
-        ).catch((err: any) => console.error("webhooks: call_offer_pending memory write failed (non-fatal):", err?.message ?? err));
-        await pool.query(
-          `INSERT INTO co_memories (user_id, memory_type, content) VALUES ($1, 'text_exchange', $2)`,
-          [user.id, `Co replied: ${offer}`],
-        );
-        try {
-          await sendblue.messages.send({
-            number,
-            content: offer,
-            from_number: process.env.SENDBLUE_PHONE_NUMBER!,
-          });
-        } catch (smsErr: any) {
-          console.error(`Sendblue call-offer send failed for ${number} (non-fatal):`, smsErr?.message ?? smsErr);
-        }
-        return res.status(200).send({ received: true, action: "call_offered" });
       }
 
       // First real exchange, nothing on file yet (no call ever happened, no
@@ -893,7 +887,7 @@ Recent text conversation, in order:
 ${recentConversation || "(start of the text conversation)"}
 
 ${user.first_name} just said: "${content}"
-${recommendationContext}${venueContext}
+${recommendationContext}${venueContext}${callOfferContext}
 Ground everything ONLY in the information above and what has actually been said in this conversation — never state or imply a specific personal detail, preference, or fact about them that isn't listed above or wasn't actually said in this thread. This includes real venues and businesses: never name a specific one unless it's given to you above as something you actually found — if you don't have a real one, describe what you'd look for, don't guess a plausible-sounding name. If you don't have something, ask rather than assume.
 
 Keep THIS reply short — one text-message-length turn, not a call-length response. One short sentence. No exclamation points, no em dashes. Under 160 characters — this is a text message, not a paragraph.`,
@@ -904,6 +898,18 @@ Keep THIS reply short — one text-message-length turn, not a call-length respon
         `INSERT INTO co_memories (user_id, memory_type, content) VALUES ($1, 'text_exchange', $2)`,
         [user.id, `Co replied: ${cappedReply}`],
       );
+
+      // Records that an offer went out (folded into the reply above, not a
+      // separate message) so a later "yes"/"no" is still correctly read as
+      // answering it, and so the cooldown above has something to count.
+      if (shouldOfferCall) {
+        await pool
+          .query(`INSERT INTO co_memories (user_id, memory_type, content) VALUES ($1, 'call_offer_pending', $2)`, [
+            user.id,
+            cappedReply,
+          ])
+          .catch((err: any) => console.error("webhooks: call_offer_pending memory write failed (non-fatal):", err?.message ?? err));
+      }
 
       try {
         await sendblue.messages.send({
