@@ -132,21 +132,41 @@ async function sendHumeToolResponse(chatId: string, toolCallId: string, content:
 
 const pause = (ms: number): Promise<void> => new Promise((resolve) => setTimeout(resolve, ms));
 
-const TEXT_MESSAGE_CHAR_CAP = 200;
+// 160 (and even the old 200 default) turned out too tight once replies
+// started carrying real content (a venue name, a reason, a link) instead of
+// pure small talk — real conversations showed it chopping mid-sentence and
+// mid-word constantly. iMessage has no technical length limit like SMS
+// segments do; this was always a style choice, not a real constraint, so
+// it's loosened to something that fits an actual thought instead of
+// fighting the model to cram everything into one SMS-segment-sized window.
+const TEXT_MESSAGE_CHAR_CAP = 320;
 
 // A prompt instruction like "1-2 sentences" was found to not actually be a
 // length constraint — the model reliably satisfied it by sentence count
 // while still packing 2-3 clauses/observations into those sentences,
 // producing dense paragraph-length texts. This enforces real brevity
-// regardless of what the model returns. Trims at the last sentence boundary
+// regardless of what the model returns. Trims at the last natural boundary
 // at or before the cap so a shortened reply still reads as a complete
-// thought rather than being cut mid-word; falls back to a word boundary +
-// ellipsis if no sentence boundary is found early enough to be useful.
+// thought rather than being cut mid-word — sentence endings first, but also
+// colons and dashes, since real replies (a venue name followed by a link)
+// often break there rather than at a period; falls back to a word boundary
+// + ellipsis only if none of those are found early enough to be useful.
+function findNaturalBoundary(window: string): number {
+  return Math.max(
+    window.lastIndexOf(". "),
+    window.lastIndexOf("? "),
+    window.lastIndexOf("! "),
+    window.lastIndexOf(": "),
+    window.lastIndexOf(" — "),
+    window.lastIndexOf(" - "),
+  );
+}
+
 function capMessageLength(text: string, maxChars = TEXT_MESSAGE_CHAR_CAP): string {
   const trimmed = text.trim();
   if (trimmed.length <= maxChars) return trimmed;
   const window = trimmed.slice(0, maxChars);
-  const lastBoundary = Math.max(window.lastIndexOf(". "), window.lastIndexOf("? "), window.lastIndexOf("! "));
+  const lastBoundary = findNaturalBoundary(window);
   if (lastBoundary > maxChars * 0.4) return window.slice(0, lastBoundary + 1).trim();
   const lastSpace = window.lastIndexOf(" ");
   return `${window.slice(0, lastSpace > 0 ? lastSpace : maxChars).trim()}…`;
@@ -163,7 +183,7 @@ function splitIntoMessages(text: string, maxChars = TEXT_MESSAGE_CHAR_CAP): stri
   if (trimmed.length <= maxChars) return [trimmed];
 
   const window = trimmed.slice(0, maxChars);
-  const lastBoundary = Math.max(window.lastIndexOf(". "), window.lastIndexOf("? "), window.lastIndexOf("! "));
+  const lastBoundary = findNaturalBoundary(window);
   const splitAt = lastBoundary > maxChars * 0.4 ? lastBoundary + 1 : (window.lastIndexOf(" ") > 0 ? window.lastIndexOf(" ") : maxChars);
 
   const first = trimmed.slice(0, splitAt).trim();
@@ -863,6 +883,7 @@ Return ONLY the classification, nothing else.`,
       // knowledge rather than a lookup. Needs a known city to search against;
       // silently skipped if none is on file yet rather than guessing one.
       let venueContext = "";
+      let venueDeliveryMessage: string | null = null;
       if (profile?.city) {
         try {
           // Must see the conversation, not just this one message — found a
@@ -920,8 +941,25 @@ Return ONLY valid JSON, no preamble: {"wants_venue": true or false, "venue_type"
 
             const venues = await findRealVenues(venueType, profile.city, requestedCount);
             if (venues.length) {
-              const listing = venues.map((v) => `${v.name}, ${v.address} — ${v.mapsUrl}`).join("\n");
-              venueContext = `\nYou just found ${venues.length} real place${venues.length > 1 ? "s" : ""} for them:\n${listing}\nInclude ${venues.length > 1 ? "these Google Maps links" : "this Google Maps link"} exactly as-is in your reply${venues.length < requestedCount ? ` — they asked for ${requestedCount}, but this is genuinely all that came back as a solid match, say so honestly rather than padding with anything invented` : ""}.`;
+              // Sent as its own dedicated, complete message instead of
+              // folded into the general reply — a real conversation showed
+              // a multi-venue list getting mangled by the generic char-cap
+              // split (a name separated from its own link, later venues
+              // silently dropped past the cutoff). A list of real, named
+              // things needs the room to actually say all of them, not a
+              // fight against an SMS-length budget meant for small talk.
+              try {
+                const { text: rawIntro } = await generateText({
+                  model: anthropic("claude-haiku-4-5-20251001"),
+                  prompt: `You are Co, texting someone. You just found ${venues.length} real ${venueType}${venues.length > 1 ? "s" : ""} for them${venues.length < requestedCount ? ` — they asked for ${requestedCount}, this is genuinely all that came back as a solid match, say so honestly` : ""}. Write ONE short, warm intro sentence to go right before a list (the list itself follows separately after your sentence — do not write the list yourself, do not include any links). No exclamation points, no em dashes. Under 150 characters.`,
+                });
+                const introLine = capMessageLength(rawIntro, 150);
+                const listBlock = venues.map((v) => `${v.name} — ${v.mapsUrl}`).join("\n\n");
+                venueDeliveryMessage = `${introLine}\n\n${listBlock}`;
+              } catch (err: any) {
+                console.error("webhooks: venue delivery intro generation failed (non-fatal, sending list plainly):", err?.message ?? err);
+                venueDeliveryMessage = venues.map((v) => `${v.name} — ${v.mapsUrl}`).join("\n\n");
+              }
               await pool
                 .query(`INSERT INTO co_memories (user_id, memory_type, content) VALUES ($1, 'recommendation', $2)`, [
                   user.id,
@@ -940,17 +978,36 @@ Return ONLY valid JSON, no preamble: {"wants_venue": true or false, "venue_type"
         }
       }
 
-      // Same persona the real call uses, not a separate thinner one — Co
-      // should be the same entity whether someone's talking by voice or
-      // text, capable of picking up a genuine back-and-forth either way.
-      // The anti-fabrication grounding rule and the text-length cap below
-      // are additions specific to this channel, layered on top, not a
-      // replacement for anything in the real prompt.
-      const personaPrompt = await getCoPersonaPrompt();
+      // If a venue list already went out as its own dedicated message above,
+      // that IS the response to what they asked for — running the general
+      // persona reply on top of it would mean a 3rd message every time
+      // (hold + list + generic reply), which is exactly the "too many
+      // messages" problem this was built to avoid. Only generate a normal
+      // reply when nothing was already delivered.
+      let cappedReply: string;
+      if (venueDeliveryMessage) {
+        cappedReply = venueDeliveryMessage;
+        await pool.query(
+          `INSERT INTO co_memories (user_id, memory_type, content) VALUES ($1, 'text_exchange', $2)`,
+          [user.id, `Co replied: ${venueDeliveryMessage}`],
+        );
+        try {
+          await sendblue.messages.send({ number, content: venueDeliveryMessage, from_number: process.env.SENDBLUE_PHONE_NUMBER! });
+        } catch (smsErr: any) {
+          console.error(`Sendblue venue delivery send failed for ${number} (non-fatal):`, smsErr?.message ?? smsErr);
+        }
+      } else {
+        // Same persona the real call uses, not a separate thinner one — Co
+        // should be the same entity whether someone's talking by voice or
+        // text, capable of picking up a genuine back-and-forth either way.
+        // The anti-fabrication grounding rule and the text-length cap below
+        // are additions specific to this channel, layered on top, not a
+        // replacement for anything in the real prompt.
+        const personaPrompt = await getCoPersonaPrompt();
 
-      const { text: reply } = await generateText({
-        model: anthropic("claude-haiku-4-5-20251001"),
-        prompt: `${personaPrompt ?? "You are Co, an exclusive life concierge."}
+        const { text: reply } = await generateText({
+          model: anthropic("claude-haiku-4-5-20251001"),
+          prompt: `${personaPrompt ?? "You are Co, an exclusive life concierge."}
 
 You are having this specific exchange over text message, not a phone call — the phase structure and pacing above describe a live call; over text, just be genuinely Co: the same listening style, the same voice, the same principles, picking up wherever this conversation actually is.
 
@@ -964,30 +1021,31 @@ ${user.first_name} just said: "${content}"
 ${recommendationContext}${venueContext}${callOfferContext}
 Ground everything ONLY in the information above and what has actually been said in this conversation — never state or imply a specific personal detail, preference, or fact about them that isn't listed above or wasn't actually said in this thread. This includes real venues and businesses: never name a specific one unless it's given to you above as something you actually found — if you don't have a real one, describe what you'd look for, don't guess a plausible-sounding name. If you don't have something, ask rather than assume.
 
-Keep THIS reply short — one text-message-length turn, not a call-length response. One short sentence. No exclamation points, no em dashes. Under 160 characters — this is a text message, not a paragraph.`,
-      });
-      // A genuinely long reply gets sent as two natural texts (a real pause
-      // between them) instead of being hard-truncated and silently losing
-      // whatever didn't fit — see splitIntoMessages.
-      const replyParts = splitIntoMessages(reply, 160);
-      const cappedReply = replyParts.join(" ");
+Keep THIS reply short — one text-message-length turn, not a call-length response. A sentence or two. No exclamation points, no em dashes. This is a text message, not a paragraph — but if you're relaying a real find (a name, a reason, a link), give it the room it actually needs rather than cutting it short.`,
+        });
+        // A genuinely long reply gets sent as two natural texts (a real
+        // pause between them) instead of being hard-truncated and silently
+        // losing whatever didn't fit — see splitIntoMessages.
+        const replyParts = splitIntoMessages(reply);
+        cappedReply = replyParts.join(" ");
 
-      for (let i = 0; i < replyParts.length; i++) {
-        const part = replyParts[i];
-        await pool.query(
-          `INSERT INTO co_memories (user_id, memory_type, content) VALUES ($1, 'text_exchange', $2)`,
-          [user.id, `Co replied: ${part}`],
-        );
-        try {
-          await sendblue.messages.send({
-            number,
-            content: part,
-            from_number: process.env.SENDBLUE_PHONE_NUMBER!,
-          });
-        } catch (smsErr: any) {
-          console.error(`Sendblue reply send failed for ${number} (non-fatal):`, smsErr?.message ?? smsErr);
+        for (let i = 0; i < replyParts.length; i++) {
+          const part = replyParts[i];
+          await pool.query(
+            `INSERT INTO co_memories (user_id, memory_type, content) VALUES ($1, 'text_exchange', $2)`,
+            [user.id, `Co replied: ${part}`],
+          );
+          try {
+            await sendblue.messages.send({
+              number,
+              content: part,
+              from_number: process.env.SENDBLUE_PHONE_NUMBER!,
+            });
+          } catch (smsErr: any) {
+            console.error(`Sendblue reply send failed for ${number} (non-fatal):`, smsErr?.message ?? smsErr);
+          }
+          if (i < replyParts.length - 1) await pause(2000);
         }
-        if (i < replyParts.length - 1) await pause(2000);
       }
 
       // Records that an offer went out (folded into the reply above, not a
