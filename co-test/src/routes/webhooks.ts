@@ -132,6 +132,26 @@ async function sendHumeToolResponse(chatId: string, toolCallId: string, content:
 
 const pause = (ms: number): Promise<void> => new Promise((resolve) => setTimeout(resolve, ms));
 
+// Serializes /sendblue/webhook processing per phone number — same pattern
+// production's sendblue.ts already uses (withPhoneLock), for the same
+// reason: without it, a person re-sending the same message because the
+// first reply feels slow gets each message processed fully independently
+// and concurrently, since nothing makes the second one wait for the first
+// to actually finish. Confirmed in a real conversation: the same message
+// sent 3 times ~10s apart produced 3 full independent pipeline runs (3
+// searches, 3 deliveries) instead of one.
+const phoneLocks = new Map<string, Promise<unknown>>();
+
+function withPhoneLock<T>(phone: string, fn: () => Promise<T>): Promise<T> {
+  const prior = phoneLocks.get(phone) ?? Promise.resolve();
+  const result = prior.then(fn, fn);
+  phoneLocks.set(
+    phone,
+    result.catch(() => {}),
+  );
+  return result;
+}
+
 // 160 (and even the old 200 default) turned out too tight once replies
 // started carrying real content (a venue name, a reason, a link) instead of
 // pure small talk — real conversations showed it chopping mid-sentence and
@@ -485,23 +505,24 @@ export function createWebhooksRouter(io: Server): express.Router {
   // and the ongoing-chat channel out, not re-implementing every media type),
   // and no moment/circle response handling (co-test has neither).
   router.post("/sendblue/webhook", async (req: Request, res: Response, next: NextFunction) => {
+    const { number, content, is_outbound, type } = req.body;
+    if (type === "typing" || is_outbound) return res.status(200).send({ received: true });
+
+    const hasText = typeof content === "string" && content.trim().length > 0;
+    if (!number || !hasText) return res.status(200).send({ received: true });
+
+    // A malformed inbound `number` (confirmed: Sendblue can deliver one,
+    // e.g. a bare 5-digit value) was flowing straight through to a real,
+    // billed sendSMS call via the session-claim branch below — nothing on
+    // this path validated shape before either claiming a session or
+    // sending. Reject before either happens.
+    if (!parsePhoneNumberFromString(number, "US")?.isValid()) {
+      console.error(`co-test sendblue webhook: malformed inbound number "${number}" — ignoring`);
+      return res.status(200).send({ received: true });
+    }
+
+    const run = async () => {
     try {
-      const { number, content, is_outbound, type } = req.body;
-      if (type === "typing" || is_outbound) return res.status(200).send({ received: true });
-
-      const hasText = typeof content === "string" && content.trim().length > 0;
-      if (!number || !hasText) return res.status(200).send({ received: true });
-
-      // A malformed inbound `number` (confirmed: Sendblue can deliver one,
-      // e.g. a bare 5-digit value) was flowing straight through to a real,
-      // billed sendSMS call via the session-claim branch below — nothing on
-      // this path validated shape before either claiming a session or
-      // sending. Reject before either happens.
-      if (!parsePhoneNumberFromString(number, "US")?.isValid()) {
-        console.error(`co-test sendblue webhook: malformed inbound number "${number}" — ignoring`);
-        return res.status(200).send({ received: true });
-      }
-
       const userResult = await pool.query(
         `SELECT id, first_name, contact_verified FROM users WHERE phone_number = $1 AND test_channel = 'phone'`,
         [number],
@@ -531,6 +552,24 @@ export function createWebhooksRouter(io: Server): express.Router {
       if (!user) {
         console.log(`co-test sendblue webhook: no phone-test session for ${number} — ignoring`);
         return res.status(200).send({ received: true });
+      }
+
+      // Duplicate-message guard — reliable now that processing is
+      // serialized above (withPhoneLock), so by the time this runs, a truly
+      // prior identical message has either already fully completed or isn't
+      // running concurrently with this one anymore. Confirmed in a real
+      // conversation: the same exact message sent 3 times within ~20s
+      // (impatient re-sends while the first was still processing) produced
+      // 3 full independent searches and deliveries. If this exact content
+      // was already recorded as sent by this user in the last minute,
+      // treat it as a re-send of something already answered, not a new ask.
+      const recentDuplicateResult = await pool.query(
+        `SELECT 1 FROM co_memories WHERE user_id = $1 AND memory_type = 'text_exchange' AND content = $2 AND created_at > NOW() - INTERVAL '60 seconds' LIMIT 1`,
+        [user.id, `User said: ${content}`],
+      );
+      if (recentDuplicateResult.rows[0]) {
+        console.log(`co-test sendblue webhook: duplicate message from user ${user.id} within 60s, skipping reprocessing`);
+        return res.status(200).send({ received: true, duplicate: true });
       }
 
       // First inbound text — satisfies text-in-first. Same three-message
@@ -859,7 +898,7 @@ Return ONLY the classification, nothing else.`,
           .includes("wants_something_concrete");
 
         if (wantsSomethingConcrete) {
-          const recommendation = await generateRecommendation(user.id);
+          const recommendation = await generateRecommendation(user.id, content);
           if (recommendation.available) {
             // This is a category/type suggestion, never a specific real
             // venue with a link — that's the venue lookup below, a
@@ -1101,6 +1140,8 @@ Return ONLY "yes" or "no".`,
     } catch (error) {
       next(error);
     }
+    };
+    await withPhoneLock(number, run);
   });
 
   return router;

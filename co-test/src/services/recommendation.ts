@@ -19,7 +19,15 @@ const NOT_ENOUGH_DATA: RecommendationResult = {
   reason: "not enough concrete preference data on file yet",
 };
 
-export async function generateRecommendation(userId: string): Promise<RecommendationResult> {
+// currentMessage is optional so the voice tool_call path (an ambient "check
+// if you should recommend something" during a live call, not tied to one
+// specific just-said line) is unaffected — it's the text path that needs
+// it. Found the hard way: without it, this kept mining whatever preference
+// dominated the accumulated intent history (climbing gyms, after many turns
+// about them) even when the person had explicitly moved on to a different
+// topic (dinner spots) — Co kept redirecting back to the stale topic
+// instead of just answering what was actually asked.
+export async function generateRecommendation(userId: string, currentMessage?: string): Promise<RecommendationResult> {
   try {
     const { rows } = await pool.query(
       `SELECT life_chapters, goals, blockers, activity_preferences, availability_pattern, city, emotional_state, intent
@@ -64,6 +72,7 @@ export async function generateRecommendation(userId: string): Promise<Recommenda
       model: anthropic("claude-haiku-4-5-20251001"),
       prompt: `Here is everything actually known about this person, captured from real conversations:
 ${knownData}
+${currentMessage ? `\nWhat they just said, right now: "${currentMessage}"\n\nOnly recommend something if it's actually relevant to what they JUST said — not just relevant to their history in general. If they've moved on to a different topic than what the data above centers on, say there isn't enough to go on for THIS message rather than redirecting back to an old topic.` : ""}
 
 Based ONLY on this, name ONE concrete recommendation — a type of activity, group, or community, not a specific real business or venue (we have no real venue data, never invent one). Ground it in something they actually said. If nothing here is specific enough to recommend anything real, say so.
 
