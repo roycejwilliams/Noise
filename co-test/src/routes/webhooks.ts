@@ -973,13 +973,34 @@ Keep THIS reply short — one text-message-length turn, not a call-length respon
       // Records that an offer went out (folded into the reply above, not a
       // separate message) so a later "yes"/"no" is still correctly read as
       // answering it, and so the cooldown above has something to count.
+      // Must confirm the reply actually contains an offer before recording
+      // one — asking the model to include it isn't a guarantee it did.
+      // Found the hard way: a reply that was just a clarifying question,
+      // with no mention of a call anywhere, still got recorded as a pending
+      // offer because shouldOfferCall had been true going in — the system
+      // then thought it had offered something the user was never shown.
       if (shouldOfferCall) {
-        await pool
-          .query(`INSERT INTO co_memories (user_id, memory_type, content) VALUES ($1, 'call_offer_pending', $2)`, [
-            user.id,
-            cappedReply,
-          ])
-          .catch((err: any) => console.error("webhooks: call_offer_pending memory write failed (non-fatal):", err?.message ?? err));
+        try {
+          const { text: rawOfferCheck } = await generateText({
+            model: anthropic("claude-haiku-4-5-20251001"),
+            prompt: `Does this text message actually offer, invite, or gesture toward a phone call — in any wording, even indirectly (e.g. "I'm here if you want to talk this through")? Not just related to talking or listening in general — specifically about a phone call.
+
+Message: "${cappedReply}"
+
+Return ONLY "yes" or "no".`,
+          });
+          const actuallyOffered = rawOfferCheck.trim().toLowerCase().startsWith("yes");
+          if (actuallyOffered) {
+            await pool
+              .query(`INSERT INTO co_memories (user_id, memory_type, content) VALUES ($1, 'call_offer_pending', $2)`, [
+                user.id,
+                cappedReply,
+              ])
+              .catch((err: any) => console.error("webhooks: call_offer_pending memory write failed (non-fatal):", err?.message ?? err));
+          }
+        } catch (err: any) {
+          console.error("webhooks: call-offer verification failed (non-fatal, not recording a pending offer):", err?.message ?? err);
+        }
       }
 
       // Text-only conversations used to never build a co_profile at all —
