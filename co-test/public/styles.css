@@ -1161,6 +1161,10 @@ button {
 
 .phone-step {
   margin-bottom: var(--space-2);
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  text-align: center;
 }
 
 .phone-step.hidden {
@@ -1176,8 +1180,10 @@ button {
 .phone-form-row {
   display: flex;
   align-items: center;
+  justify-content: center;
   gap: var(--space-3);
   flex-wrap: wrap;
+  width: 100%;
 }
 
 .phone-form-row input {

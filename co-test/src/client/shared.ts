@@ -139,6 +139,66 @@ export function renderCards(cardsGrid: HTMLElement, profile: any, intent: any) {
   addIntentCard("Availability", intent?.availability || "Not mentioned");
 }
 
+export const RAPPORT_TOPICS = [
+  "current_situation",
+  "major_transition",
+  "goals_challenges",
+  "looking_for",
+  "people_to_meet",
+  "ways_to_help",
+  "personality",
+  "location_availability",
+  "boundaries_preferences",
+];
+
+export function topicLabel(topic: string): string {
+  return topic.replace(/_/g, " ");
+}
+
+// Shared by call.ts (browser-simulated calls, which already held this live)
+// and phone.ts (real Twilio-bridged calls, now relayed live via Socket.IO —
+// see webhooks.ts's pushLiveEvent) so both render an in-progress coverage
+// check identically. covered_topics/call_count/latency_ms are sandbox-only
+// observability — never part of what's sent back to Hume as the tool
+// response (that stays exactly {missing_topics, ready_to_summarize}).
+export function renderCoveragePanel(
+  container: HTMLElement,
+  data: {
+    missing_topics: string[];
+    ready_to_summarize: boolean;
+    covered_topics: string[];
+    call_count: number;
+    latency_ms: number;
+  },
+) {
+  const chip = (topic: string, covered: boolean) =>
+    `<span class="coverage-topic-chip ${covered ? "covered" : "missing"}">${topicLabel(topic)}</span>`;
+
+  container.innerHTML = `
+    <div class="coverage-stats">
+      <div class="coverage-stat-row">
+        <span class="coverage-stat-label">Calls this session</span>
+        <span class="coverage-stat-value">${data.call_count}</span>
+      </div>
+      <div class="coverage-stat-row">
+        <span class="coverage-stat-label">Last call latency</span>
+        <span class="coverage-stat-value">${data.latency_ms}ms</span>
+      </div>
+    </div>
+    <div class="coverage-section-label">Covered (${data.covered_topics.length}/${RAPPORT_TOPICS.length})</div>
+    <div class="coverage-topic-list">
+      ${data.covered_topics.map((t) => chip(t, true)).join("") || '<span class="coverage-empty">None yet</span>'}
+    </div>
+    <div class="coverage-section-label">Missing</div>
+    <div class="coverage-topic-list">
+      ${data.missing_topics.map((t) => chip(t, false)).join("") || '<span class="coverage-empty">None</span>'}
+    </div>
+    <div class="coverage-ready ${data.ready_to_summarize ? "yes" : ""}">
+      ${data.ready_to_summarize ? "Ready to summarize" : "Not ready yet"}
+    </div>
+  `;
+}
+
 export function downloadJson(data: unknown, filename: string) {
   const blob = new Blob([JSON.stringify(data, null, 2)], { type: "application/json" });
   const url = URL.createObjectURL(blob);

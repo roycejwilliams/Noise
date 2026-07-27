@@ -3,6 +3,7 @@ import express, { Request, Response, NextFunction } from "express";
 import twilio from "twilio";
 import pool from "../../../api/src/db/db.js";
 import sendblue from "../../../api/src/services/sendblue.js";
+import { getLiveSnapshot } from "../services/liveCallState.js";
 
 const router = express.Router();
 
@@ -59,6 +60,17 @@ router.get("/:user_id/status", async (req: Request, res: Response, next: NextFun
   } catch (error) {
     next(error);
   }
+});
+
+// GET /api/phone/:user_id/live-state — snapshot for a (re)connecting
+// browser to catch up on (requirement 5: reconnects must not silently skip
+// the gap). The client applies every event here with seq greater than
+// whatever it's already rendered, so calling this redundantly (e.g. right
+// after a socket reconnect even if nothing was actually missed) is always
+// safe — events are idempotent by seq, never re-applied.
+router.get("/:user_id/live-state", (req: Request, res: Response) => {
+  const snapshot = getLiveSnapshot(String(req.params.user_id));
+  return res.status(200).json({ success: true, ...snapshot });
 });
 
 // POST /api/phone/:user_id/verify-otp — validates the code Sendblue sent as

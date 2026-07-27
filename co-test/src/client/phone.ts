@@ -1,3 +1,6 @@
+import { io as ioClient, Socket } from "socket.io-client";
+import { appendTranscriptEntry, renderCoveragePanel } from "./shared.js";
+
 const statusEl = document.getElementById("status") as HTMLElement;
 
 const stepTextIn = document.getElementById("step-text-in") as HTMLElement;
@@ -21,8 +24,103 @@ const smokeToolResponseState = document.getElementById("smoke-tool-response-stat
 const resultsLinkWrap = document.getElementById("results-link-wrap") as HTMLElement;
 const resultsLink = document.getElementById("results-link") as HTMLAnchorElement;
 
+const liveCallPanel = document.getElementById("live-call-panel") as HTMLElement;
+const liveTranscriptList = document.getElementById("live-transcript-list") as HTMLElement;
+const liveCoveragePanelBody = document.getElementById("live-coverage-panel-body") as HTMLElement;
+
 let userId: string | null = null;
 let statusPollInterval: number | null = null;
+
+// Live view for a real Twilio-bridged call — the browser never holds the
+// Hume socket directly here (the backend does, via webhook events), so this
+// relays over the same Socket.IO room pattern production already uses for
+// other real-time push, joined per user_id. Same data/rendering call.ts
+// already shows live for browser-simulated calls (see shared.ts).
+type LiveEvent =
+  | { seq: number; type: "transcript"; message: { role: "user" | "assistant"; content: string; timestamp: string } }
+  | {
+      seq: number;
+      type: "coverage";
+      check: {
+        call_number: number;
+        timestamp: string;
+        missing_topics: string[];
+        covered_topics: string[];
+        ready_to_summarize: boolean;
+        latency_ms: number;
+      };
+    }
+  | { seq: number; type: "call_ended" };
+
+let liveSocket: Socket | null = null;
+let lastAppliedSeq = 0;
+let liveCoverageCount = 0;
+
+// Applied identically whether the event arrived live over the socket or as
+// part of a reconnect catch-up snapshot (see hydrateLiveState) — the seq
+// guard makes both paths idempotent, so a coverage result can never render
+// before the transcript line that triggered it, and a reconnect never
+// double-applies or silently skips events.
+function applyLiveEvent(event: LiveEvent) {
+  if (event.seq <= lastAppliedSeq) return;
+  lastAppliedSeq = event.seq;
+
+  if (event.type === "transcript") {
+    liveCallPanel.classList.remove("hidden");
+    appendTranscriptEntry(liveTranscriptList, {
+      role: event.message.role,
+      content: event.message.content,
+      timestamp: event.message.timestamp,
+    });
+    liveTranscriptList.scrollTop = liveTranscriptList.scrollHeight;
+  } else if (event.type === "coverage") {
+    liveCallPanel.classList.remove("hidden");
+    liveCoverageCount += 1;
+    renderCoveragePanel(liveCoveragePanelBody, {
+      missing_topics: event.check.missing_topics,
+      covered_topics: event.check.covered_topics,
+      ready_to_summarize: event.check.ready_to_summarize,
+      call_count: liveCoverageCount,
+      latency_ms: event.check.latency_ms,
+    });
+  } else if (event.type === "call_ended") {
+    // Requirement 7 — hand off cleanly rather than freezing the live view.
+    // The existing call_status poll below (already running) picks up
+    // call_status='completed' moments later and reveals the same "View
+    // extraction results" link it already does today; this just retires
+    // the live panel immediately instead of leaving it sitting stale.
+    liveCallPanel.classList.add("hidden");
+    callStatusLine.textContent = "Call ended — preparing results…";
+  }
+}
+
+// Snapshot fetch for a fresh connect or a reconnect after a dropped
+// connection — applies every event with seq greater than what's already
+// rendered (requirement 5). Safe to call redundantly.
+async function hydrateLiveState() {
+  if (!userId) return;
+  try {
+    const res = await fetch(`/api/phone/${userId}/live-state`);
+    const json = await res.json();
+    if (!json.success) return;
+    const events: LiveEvent[] = [...json.events].sort((a, b) => a.seq - b.seq);
+    for (const event of events) applyLiveEvent(event);
+  } catch (err) {
+    console.error("Live-state hydrate failed:", err);
+  }
+}
+
+function ensureLiveSocket() {
+  if (liveSocket || !userId) return;
+  liveSocket = ioClient({ auth: { user_id: userId } });
+  // Fires on the initial connect AND every reconnect — hydrating from the
+  // snapshot both times means a dropped/restored connection catches up on
+  // whatever it missed instead of silently resuming from whatever's next.
+  liveSocket.on("connect", () => {
+    hydrateLiveState();
+  });
+  liveSocket.on("co:live_event", (event: LiveEvent) => applyLiveEvent(event));
+}
 
 function showStep(step: HTMLElement) {
   for (const el of [stepTextIn, stepOtp, stepCall]) el.classList.add("hidden");
@@ -172,6 +270,10 @@ async function pollStatus() {
       renderCallStatus(d.call_status);
       renderSmokeTest(d.smoke_test_tool_call_at, d.smoke_test_tool_response_at);
       if (d.test_case) testCaseSelect.value = d.test_case;
+      // Connects once a call exists and hasn't ended — covers both "just
+      // requested" and "page reloaded mid-call" the same way, since this is
+      // a no-op once already connected.
+      if (d.call_sid && d.call_status !== "completed") ensureLiveSocket();
     }
   } catch (err) {
     console.error("Status poll failed:", err);

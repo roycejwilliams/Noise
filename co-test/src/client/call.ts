@@ -7,7 +7,7 @@ import {
   convertBlobToBase64,
   MimeType,
 } from "hume";
-import { appendTranscriptEntry, getPromptOverride, TranscriptMessage } from "./shared.js";
+import { appendTranscriptEntry, getPromptOverride, renderCoveragePanel, TranscriptMessage } from "./shared.js";
 
 const callButton = document.getElementById("call-button") as HTMLButtonElement;
 const muteButton = document.getElementById("mute-button") as HTMLButtonElement;
@@ -85,61 +85,6 @@ function transcriptSoFar(): string {
     .join("\n");
 }
 
-const ALL_TOPICS = [
-  "current_situation",
-  "major_transition",
-  "goals_challenges",
-  "looking_for",
-  "people_to_meet",
-  "ways_to_help",
-  "personality",
-  "location_availability",
-  "boundaries_preferences",
-];
-
-function topicLabel(topic: string): string {
-  return topic.replace(/_/g, " ");
-}
-
-// Sandbox-only observability panel — covered_topics/call_count/latency_ms
-// never leave the browser and are never part of what's sent back to Hume as
-// the tool_response content (that stays exactly {missing_topics,
-// ready_to_summarize}, unchanged, below).
-function renderCoveragePanel(data: {
-  missing_topics: string[];
-  ready_to_summarize: boolean;
-  covered_topics: string[];
-  call_count: number;
-  latency_ms: number;
-}) {
-  const chip = (topic: string, covered: boolean) =>
-    `<span class="coverage-topic-chip ${covered ? "covered" : "missing"}">${topicLabel(topic)}</span>`;
-
-  coveragePanelBody.innerHTML = `
-    <div class="coverage-stats">
-      <div class="coverage-stat-row">
-        <span class="coverage-stat-label">Calls this session</span>
-        <span class="coverage-stat-value">${data.call_count}</span>
-      </div>
-      <div class="coverage-stat-row">
-        <span class="coverage-stat-label">Last call latency</span>
-        <span class="coverage-stat-value">${data.latency_ms}ms</span>
-      </div>
-    </div>
-    <div class="coverage-section-label">Covered (${data.covered_topics.length}/${ALL_TOPICS.length})</div>
-    <div class="coverage-topic-list">
-      ${data.covered_topics.map((t) => chip(t, true)).join("") || '<span class="coverage-empty">None yet</span>'}
-    </div>
-    <div class="coverage-section-label">Missing</div>
-    <div class="coverage-topic-list">
-      ${data.missing_topics.map((t) => chip(t, false)).join("") || '<span class="coverage-empty">None</span>'}
-    </div>
-    <div class="coverage-ready ${data.ready_to_summarize ? "yes" : ""}">
-      ${data.ready_to_summarize ? "Ready to summarize" : "Not ready yet"}
-    </div>
-  `;
-}
-
 function resetCoveragePanel() {
   toolCallCount = 0;
   coverageHistory.length = 0;
@@ -181,7 +126,7 @@ async function handleToolCall(msg: any) {
       ready_to_summarize: data.assessment.ready_to_summarize,
       latency_ms: data.latency_ms,
     });
-    renderCoveragePanel({
+    renderCoveragePanel(coveragePanelBody, {
       ...data.assessment,
       covered_topics: data.covered_topics,
       call_count: toolCallCount,

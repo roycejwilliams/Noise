@@ -1,14 +1,17 @@
 import "dotenv/config";
 import express from "express";
 import fs from "fs";
+import { createServer } from "http";
 import path from "path";
+import { Server } from "socket.io";
 import pool from "../../api/src/db/db.js";
 import { runMigrations } from "../../api/src/db/migrations.js";
 import { runTestMigrations } from "./db/testMigrations.js";
+import { configureCoTestSocket } from "./socket/index.js";
 import apiRouter from "./routes/api.js";
 import checklistRouter from "./routes/checklist.js";
 import phoneRouter from "./routes/phone.js";
-import webhooksRouter from "./routes/webhooks.js";
+import { createWebhooksRouter } from "./routes/webhooks.js";
 
 // A fresh Railway Postgres has none of brew_dev's tables yet — runMigrations()
 // (imported unchanged from api/) only ever does ALTER TABLE / CREATE TABLE IF
@@ -36,13 +39,20 @@ async function main() {
 
   const publicDir = path.join(process.cwd(), "public");
 
+  // Real-time push (live transcript/coverage-check events during a real
+  // Twilio-bridged call) — same Socket.IO room pattern production uses
+  // (api/src/socket/index.ts), minus the JWT auth co-test has never had.
+  const httpServer = createServer(app);
+  const io = new Server(httpServer);
+  configureCoTestSocket(io);
+
   app.get("/health", (_req, res) => res.status(200).send("ok"));
   app.use("/api", apiRouter);
   app.use("/api/phone", phoneRouter);
   app.use("/api/checklist", checklistRouter);
   // Mounted at root — these paths (/sendblue/webhook, /co/call-status,
   // /co/webhook) intentionally mirror production's exactly. See webhooks.ts.
-  app.use(webhooksRouter);
+  app.use(createWebhooksRouter(io));
 
   app.get(["/", "/call"], (_req, res) => res.sendFile(path.join(publicDir, "call.html")));
   app.get("/call/:sessionId/results", (_req, res) =>
@@ -55,7 +65,7 @@ async function main() {
   app.use(express.static(publicDir));
 
   const port = process.env.PORT ? Number(process.env.PORT) : 3000;
-  app.listen(port, () => console.log(`co-test listening on ${port}`));
+  httpServer.listen(port, () => console.log(`co-test listening on ${port}`));
 }
 
 main().catch((err) => {

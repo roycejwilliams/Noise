@@ -70,6 +70,23 @@
           </div>
         </div>
 
+        <!-- Live view — populated in real time over Socket.IO while the real
+             call is in progress (see phone.ts). Same data/rendering call.ts
+             already shows live for browser-simulated calls; here it's
+             relayed from the backend, which holds the actual Hume webhook
+             events for a Twilio-bridged call (the browser never does). -->
+        <div id="live-call-panel" class="content-row live-call-panel hidden">
+          <div class="transcript-panel">
+            <div id="live-transcript-list" class="transcript-list"></div>
+          </div>
+          <aside class="coverage-panel">
+            <div class="coverage-panel-header">Coverage check (live)</div>
+            <div id="live-coverage-panel-body">
+              <div class="coverage-empty">No tool calls yet</div>
+            </div>
+          </aside>
+        </div>
+
         <p id="results-link-wrap" class="phone-waiting hidden">
           <a id="results-link" href="#">View extraction results →</a>
         </p>
