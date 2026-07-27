@@ -16,6 +16,8 @@ const testCaseSelect = document.getElementById("test-case-select") as HTMLSelect
 const testCaseSaved = document.getElementById("test-case-saved") as HTMLElement;
 const latencySection = document.getElementById("latency-section") as HTMLElement;
 const latencyTableBody = document.getElementById("latency-table-body") as HTMLTableSectionElement;
+const imessageThreadDetails = document.getElementById("imessage-thread-details") as HTMLElement;
+const imessageThreadList = document.getElementById("imessage-thread-list") as HTMLElement;
 
 type CoverageCheck = {
   call_number: number;
@@ -36,6 +38,7 @@ type StoredResult = {
   turn_latency_ms?: { turn: number; latency_ms: number }[];
   channel?: "browser" | "phone";
   test_case?: "intent_layer" | "circles" | null;
+  imessage_thread?: TranscriptMessage[];
 };
 
 const SVG_NS = "http://www.w3.org/2000/svg";
@@ -217,6 +220,15 @@ function renderLatencySection(turns: { turn: number; latency_ms: number }[]) {
   }
 }
 
+function renderImessageThread(thread: TranscriptMessage[]) {
+  if (!thread.length) {
+    imessageThreadDetails.classList.add("hidden");
+    return;
+  }
+  imessageThreadDetails.classList.remove("hidden");
+  renderTranscriptList(imessageThreadList, thread);
+}
+
 function renderChannelBadge(channel: string | undefined) {
   const label = channel === "phone" ? "Real phone call" : "Browser (direct EVI)";
   channelBadge.textContent = label;
@@ -295,6 +307,7 @@ async function load() {
     wireTestCaseSelect(sessionId, data.test_case);
     renderLatencySection(data.turn_latency_ms ?? []);
     renderCoverageSection(data.coverage_history ?? []);
+    renderImessageThread(data.imessage_thread ?? []);
     rawOutputEl.textContent = JSON.stringify(data, null, 2);
     renderTranscriptList(transcriptList, data.messages ?? []);
 

@@ -13,8 +13,8 @@
       <div id="status" class="status-line">Enter your number to start</div>
     </div>
     <div class="header-actions">
-      <a href="/call" class="transcript-toggle">Browser call</a>
-      <a href="/checklist" class="transcript-toggle">Checklist</a>
+      <a href="/call" class="nav-link">Browser call</a>
+      <a href="/checklist" class="nav-link">Checklist</a>
     </div>
   </header>
 
@@ -39,8 +39,9 @@
 
       <section id="step-text-in" class="phone-step hidden">
         <h2>2. Text in first</h2>
-        <p>Sendblue only replies to numbers that have texted in first. Send any message to:</p>
-        <p class="phone-number-display" id="text-in-number"></p>
+        <p>Sendblue only replies to numbers that have texted in first.</p>
+        <a id="message-co-button" href="#" class="download-button message-co-button">Message Co to start</a>
+        <p class="phone-number-fallback">Or text this number directly: <span id="text-in-number"></span></p>
         <p class="phone-waiting">Waiting for your text… <span id="text-in-spinner">●</span></p>
       </section>
 
@@ -50,7 +51,7 @@
         <div class="phone-form-row">
           <input id="otp-input" type="text" inputmode="numeric" placeholder="123456" maxlength="6" />
           <button id="verify-otp-button" class="download-button">Verify</button>
-          <button id="resend-otp-button" class="transcript-toggle">Resend code</button>
+          <button id="resend-otp-button" class="download-button">Resend code</button>
         </div>
         <p id="otp-error" class="phone-error hidden"></p>
       </section>

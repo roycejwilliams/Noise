@@ -13,9 +13,9 @@
       <div id="status" class="status-line">Loading…</div>
     </div>
     <div class="header-actions">
-      <a href="/checklist" class="transcript-toggle">Checklist</a>
-      <a href="/prompt" class="transcript-toggle">Prompt</a>
-      <a href="/call" class="transcript-toggle">New call</a>
+      <a href="/checklist" class="nav-link">Checklist</a>
+      <a href="/prompt" class="nav-link">Prompt</a>
+      <a href="/call" class="nav-link">New call</a>
     </div>
   </header>
 
@@ -83,9 +83,14 @@
         <pre id="raw-output" class="raw-output"></pre>
       </details>
 
-      <details class="transcript-panel-details">
-        <summary>Full transcript</summary>
+      <details class="transcript-panel-details" open>
+        <summary>Full call transcript</summary>
         <div id="transcript-list" class="transcript-list"></div>
+      </details>
+
+      <details id="imessage-thread-details" class="transcript-panel-details hidden">
+        <summary>iMessage thread</summary>
+        <div id="imessage-thread-list" class="transcript-list"></div>
       </details>
     </section>
   </main>

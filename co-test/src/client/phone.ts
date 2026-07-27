@@ -11,6 +11,7 @@ const startSessionButton = document.getElementById("start-session-button") as HT
 const entryError = document.getElementById("entry-error") as HTMLElement;
 
 const textInNumberEl = document.getElementById("text-in-number") as HTMLElement;
+const messageCoButton = document.getElementById("message-co-button") as HTMLAnchorElement;
 
 const otpInput = document.getElementById("otp-input") as HTMLInputElement;
 const verifyOtpButton = document.getElementById("verify-otp-button") as HTMLButtonElement;
@@ -55,7 +56,19 @@ async function startSession() {
     if (!data.success) throw new Error(data.error ?? "Failed to start session");
 
     userId = data.user_id;
-    textInNumberEl.textContent = data.text_in_number ?? "(number unavailable — check server config)";
+    const textInNumber = data.text_in_number ?? null;
+    textInNumberEl.textContent = textInNumber ?? "(number unavailable — check server config)";
+    if (textInNumber) {
+      // sms: link pre-addresses the device's native Messages/iMessage compose
+      // sheet — this only removes the manual step of finding/typing the
+      // number; the tester still has to send the message themselves. Desktop
+      // browsers largely no-op on sms: links, but scope here is mobile-only
+      // in practice, so no separate desktop fallback UI is built — the raw
+      // number text right below it is fallback enough.
+      messageCoButton.href = `sms:${textInNumber}`;
+    } else {
+      messageCoButton.classList.add("hidden");
+    }
     statusEl.textContent = "Waiting on verification";
     beginPolling();
   } catch (err) {

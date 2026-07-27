@@ -211,10 +211,33 @@ router.get("/session/:sessionId/results", async (req: Request, res: Response, ne
       return res.status(200).json({ success: true, status: "not_ready" });
     }
 
+    // Full real iMessage thread (Part 3, item 7) — every text_exchange row
+    // this session has, not just what happened to be in-memory when the
+    // recap was written. Covers ongoing texting that continues after a call
+    // ends, or happens with no call at all. Rows are stored as plain
+    // "User said: X" / "Co replied: Y" strings (see webhooks.ts's
+    // /sendblue/webhook) — parsed back into a clean role/content list here
+    // rather than changing the storage format everywhere else that reads it.
+    const threadResult = await pool.query(
+      `SELECT content, created_at FROM co_memories
+       WHERE user_id = $1 AND memory_type = 'text_exchange'
+       ORDER BY created_at ASC`,
+      [sessionId],
+    );
+    const imessage_thread = threadResult.rows.map((r: any) => {
+      const isCo = r.content.startsWith("Co replied: ");
+      const content = isCo ? r.content.slice("Co replied: ".length) : r.content.replace(/^User said: /, "");
+      return { role: isCo ? "assistant" : "user", content, timestamp: r.created_at };
+    });
+
     return res.status(200).json({
       success: true,
       status: "ready",
-      data: { ...JSON.parse(recapResult.rows[0].content), test_case: userResult.rows[0].test_case },
+      data: {
+        ...JSON.parse(recapResult.rows[0].content),
+        test_case: userResult.rows[0].test_case,
+        imessage_thread,
+      },
     });
   } catch (error) {
     next(error);

@@ -106,18 +106,37 @@ export function renderCards(cardsGrid: HTMLElement, profile: any, intent: any) {
     cardsGrid.appendChild(card);
   }
 
-  const intentCard = document.createElement("div");
-  intentCard.className = "card card-intent";
-  const intentLabel = document.createElement("div");
-  intentLabel.className = "card-label";
-  intentLabel.textContent = "Seeking / offering";
-  const intentValue = document.createElement("div");
-  intentValue.className = "card-value";
-  intentValue.textContent = intent
-    ? `${intent.type === "seeking" ? "Seeking" : "Offering"}: ${intent.text}`
-    : "Nothing specific detected";
-  intentCard.append(intentLabel, intentValue);
-  cardsGrid.appendChild(intentCard);
+  const addIntentCard = (label: string, value: string) => {
+    const card = document.createElement("div");
+    card.className = "card card-intent";
+    const labelEl = document.createElement("div");
+    labelEl.className = "card-label";
+    labelEl.textContent = label;
+    const valueEl = document.createElement("div");
+    valueEl.className = "card-value";
+    valueEl.textContent = value;
+    card.append(labelEl, valueEl);
+    cardsGrid.appendChild(card);
+  };
+
+  // Part 5's expanded capture — shown alongside the original seeking/
+  // offering ask so it's visible whether Co is picking up specific, usable
+  // signal (named preferences, real wants, stated availability) or nothing
+  // at all. Each renders independently since a transcript can carry one
+  // without the others.
+  addIntentCard(
+    "Seeking / offering",
+    intent?.text ? `${intent.type === "seeking" ? "Seeking" : "Offering"}: ${intent.text}` : "Nothing specific detected",
+  );
+  addIntentCard(
+    "Concrete preferences",
+    intent?.concrete_preferences?.length ? intent.concrete_preferences.join(", ") : "None detected",
+  );
+  addIntentCard(
+    "Wants / misses",
+    intent?.wants?.length ? intent.wants.join(", ") : "None detected",
+  );
+  addIntentCard("Availability", intent?.availability || "Not mentioned");
 }
 
 export function downloadJson(data: unknown, filename: string) {

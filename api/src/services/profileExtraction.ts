@@ -28,8 +28,22 @@ export type ExtractedProfile = {
 
 export type ExtractedIntent = {
   id: string;
-  text: string;
-  type: "seeking" | "offering";
+  // The original seeking/offering ask — both optional now, since a
+  // transcript can carry real concrete_preferences/wants/availability
+  // signal without ever stating one clear ask (previously this whole
+  // record simply didn't exist in that case).
+  text?: string;
+  type?: "seeking" | "offering";
+  // Named, concrete things mentioned — a specific gym, a coffee style, a
+  // venue type — not a vague vibe. Recommendation/Event both need this
+  // level of specificity to produce anything worth sending.
+  concrete_preferences: string[];
+  // Things they said they miss or want to find (a running group, a book
+  // club, a version of a place from a previous city).
+  wants: string[];
+  // General availability pattern, in their own words — not parsed into a
+  // schedule, just captured as stated ("weekday evenings", "flexible except Sundays").
+  availability: string | null;
   status: "active";
   embedding: number[] | null;
   created_at: string;
@@ -335,10 +349,22 @@ export async function storeTranscriptMemory(
   return memoryId;
 }
 
-// The seeking/offering Haiku pass — ambient intent capture. Returns the
-// extracted intent (or null) so callers that want it synchronously (co-test's
-// post-call view) can display it; the production call sites (co.ts) still
-// call this fire-and-forget and ignore the resolved value, unchanged.
+type CapturedIntentData = {
+  ask: { text: string; type: "seeking" | "offering" } | null;
+  concrete_preferences: string[];
+  wants: string[];
+  availability: string | null;
+};
+
+// Ambient intent capture — one Haiku pass, extended (not duplicated) to
+// also pull named concrete preferences, things mentioned as missed/wanted,
+// and stated availability, alongside the original seeking/offering ask.
+// Recommendation and Event both depend on this data existing with real
+// specificity — a vague vibe isn't enough to act on. Returns the extracted
+// record (or null if literally nothing was found) so callers that want it
+// synchronously (co-test's post-call view) can display it; the production
+// call sites (co.ts) still call this fire-and-forget and ignore the
+// resolved value, unchanged.
 export async function captureIntent(
   user_id: string,
   transcript: string,
@@ -346,33 +372,52 @@ export async function captureIntent(
   try {
     const { text: rawIntent } = await generateText({
       model: anthropic("claude-haiku-4-5-20251001"),
-      prompt: `Does this person mention something specific they are actively seeking or could offer to others — a connection, an introduction, a resource, expertise? If yes, extract it as a single clear sentence and classify as 'seeking' or 'offering'. If no specific ask is present, return null.
+      prompt: `Read this transcript and extract four things. Only include what's actually stated — never guess or infer beyond what's said.
 
-Return ONLY valid JSON or the word null:
-{"text": "Looking for climate tech founders at $1M+ ARR", "type": "seeking"}
+1. ask — something specific they are actively seeking or could offer to others (a connection, an introduction, a resource, expertise). One clear sentence, classified as 'seeking' or 'offering'. null if no specific ask is present.
+2. concrete_preferences — named, specific things they mentioned liking or wanting, not vague vibes. A specific gym or workout style, a coffee/drink preference, a type of venue or neighborhood, a specific activity. "SoulCycle", "oat milk lattes", "speakeasy-style bars" — not "fitness" or "good coffee".
+3. wants — things they said they miss or want to find (a running group, a book club, a version of something from a previous city).
+4. availability — their stated general availability pattern, in their own words. null if not mentioned. Do not infer a schedule from anything other than what they directly said.
+
+Return ONLY valid JSON, no preamble:
+{"ask": {"text": "Looking for climate tech founders at $1M+ ARR", "type": "seeking"} or null, "concrete_preferences": ["..."], "wants": ["..."], "availability": "..." or null}
 
 Transcript:
 "${transcript}"`,
     });
 
     const clean = rawIntent.replace(/```json|```/g, "").trim();
-    if (!clean || clean === "null") return null;
+    if (!clean) return null;
 
-    let intentData: { text: string; type: "seeking" | "offering" } | null = null;
+    let parsed: CapturedIntentData | null = null;
     try {
-      intentData = JSON.parse(clean);
+      parsed = JSON.parse(clean);
     } catch {
       return null;
     }
-    if (!intentData?.text || !intentData?.type) return null;
+
+    const ask = parsed?.ask?.text && parsed?.ask?.type ? parsed.ask : null;
+    const concrete_preferences = Array.isArray(parsed?.concrete_preferences) ? parsed!.concrete_preferences : [];
+    const wants = Array.isArray(parsed?.wants) ? parsed!.wants : [];
+    const availability = typeof parsed?.availability === "string" ? parsed!.availability : null;
+
+    // Nothing real came out of this pass at all — don't write an empty
+    // record just to have one.
+    if (!ask && !concrete_preferences.length && !wants.length && !availability) return null;
 
     const intentId = crypto.randomUUID();
-    const embedding = await generateEmbedding(intentData.text).catch(() => null);
+    // Embedding covers the ask sentence when present (what goal-similarity
+    // matching would compare against); falls back to the richest available
+    // text so a record with no ask still gets a usable embedding.
+    const embeddingSource = ask?.text || [...concrete_preferences, ...wants].join("; ") || availability || "";
+    const embedding = embeddingSource ? await generateEmbedding(embeddingSource).catch(() => null) : null;
 
     const newIntent: ExtractedIntent = {
       id: intentId,
-      text: intentData.text,
-      type: intentData.type,
+      ...(ask ? { text: ask.text, type: ask.type } : {}),
+      concrete_preferences,
+      wants,
+      availability,
       status: "active",
       embedding,
       created_at: new Date().toISOString(),
@@ -385,7 +430,13 @@ Transcript:
       [JSON.stringify([newIntent]), user_id],
     );
 
-    const memContent = `Co captured intent: ${intentData.text}`;
+    const memParts = [
+      ask ? `${ask.type}: ${ask.text}` : null,
+      concrete_preferences.length ? `preferences: ${concrete_preferences.join(", ")}` : null,
+      wants.length ? `wants: ${wants.join(", ")}` : null,
+      availability ? `availability: ${availability}` : null,
+    ].filter(Boolean);
+    const memContent = `Co captured intent — ${memParts.join(" | ")}`;
     const mem = await pool.query(
       `INSERT INTO co_memories (user_id, memory_type, content) VALUES ($1, 'intent', $2) RETURNING id`,
       [user_id, memContent],
