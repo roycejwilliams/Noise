@@ -152,6 +152,26 @@ function capMessageLength(text: string, maxChars = TEXT_MESSAGE_CHAR_CAP): strin
   return `${window.slice(0, lastSpace > 0 ? lastSpace : maxChars).trim()}…`;
 }
 
+// When a genuinely long reply doesn't fit in one text, capMessageLength
+// used to just cut it off with an ellipsis — silently losing whatever
+// didn't fit. Real texting behavior is to send it as two messages instead
+// of truncating, so this splits at the same kind of natural boundary and
+// returns both parts (capped again if the remainder is itself still long,
+// so this is at most one follow-up, not an open-ended chain).
+function splitIntoMessages(text: string, maxChars = TEXT_MESSAGE_CHAR_CAP): string[] {
+  const trimmed = text.trim();
+  if (trimmed.length <= maxChars) return [trimmed];
+
+  const window = trimmed.slice(0, maxChars);
+  const lastBoundary = Math.max(window.lastIndexOf(". "), window.lastIndexOf("? "), window.lastIndexOf("! "));
+  const splitAt = lastBoundary > maxChars * 0.4 ? lastBoundary + 1 : (window.lastIndexOf(" ") > 0 ? window.lastIndexOf(" ") : maxChars);
+
+  const first = trimmed.slice(0, splitAt).trim();
+  const rest = trimmed.slice(splitAt).trim();
+  if (!rest) return [first];
+  return [first, capMessageLength(rest, maxChars)];
+}
+
 // Pushes any transcript lines not yet live-pushed for this user, given an
 // already-fetched events array — pure, no network call, so both the
 // periodic poller and handleToolCall/chat_ended (which already have events
@@ -892,12 +912,29 @@ Ground everything ONLY in the information above and what has actually been said 
 
 Keep THIS reply short — one text-message-length turn, not a call-length response. One short sentence. No exclamation points, no em dashes. Under 160 characters — this is a text message, not a paragraph.`,
       });
-      const cappedReply = capMessageLength(reply, 160);
+      // A genuinely long reply gets sent as two natural texts (a real pause
+      // between them) instead of being hard-truncated and silently losing
+      // whatever didn't fit — see splitIntoMessages.
+      const replyParts = splitIntoMessages(reply, 160);
+      const cappedReply = replyParts.join(" ");
 
-      await pool.query(
-        `INSERT INTO co_memories (user_id, memory_type, content) VALUES ($1, 'text_exchange', $2)`,
-        [user.id, `Co replied: ${cappedReply}`],
-      );
+      for (let i = 0; i < replyParts.length; i++) {
+        const part = replyParts[i];
+        await pool.query(
+          `INSERT INTO co_memories (user_id, memory_type, content) VALUES ($1, 'text_exchange', $2)`,
+          [user.id, `Co replied: ${part}`],
+        );
+        try {
+          await sendblue.messages.send({
+            number,
+            content: part,
+            from_number: process.env.SENDBLUE_PHONE_NUMBER!,
+          });
+        } catch (smsErr: any) {
+          console.error(`Sendblue reply send failed for ${number} (non-fatal):`, smsErr?.message ?? smsErr);
+        }
+        if (i < replyParts.length - 1) await pause(2000);
+      }
 
       // Records that an offer went out (folded into the reply above, not a
       // separate message) so a later "yes"/"no" is still correctly read as
@@ -909,16 +946,6 @@ Keep THIS reply short — one text-message-length turn, not a call-length respon
             cappedReply,
           ])
           .catch((err: any) => console.error("webhooks: call_offer_pending memory write failed (non-fatal):", err?.message ?? err));
-      }
-
-      try {
-        await sendblue.messages.send({
-          number,
-          content: cappedReply,
-          from_number: process.env.SENDBLUE_PHONE_NUMBER!,
-        });
-      } catch (smsErr: any) {
-        console.error(`Sendblue reply send failed for ${number} (non-fatal):`, smsErr?.message ?? smsErr);
       }
 
       // Text-only conversations used to never build a co_profile at all —
