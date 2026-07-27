@@ -291,6 +291,28 @@ export function createWebhooksRouter(io: Server): express.Router {
         return res.status(400).send("Missing required fields.");
       }
 
+      // Idempotency guard — Hume (or something in the Twilio-bridged path
+      // specifically) has been observed delivering chat_ended more than once
+      // for the same real call, moments apart. Without this, the full
+      // extraction pipeline re-ran from scratch each time (non-deterministic
+      // re-extraction, since it's an LLM call on the same transcript) and
+      // sent a fresh, differently-worded follow-up text every time —
+      // confirmed directly: three near-identical call_transcript/intent/recap
+      // triples 15-20 seconds apart for one real call. Atomic claim: only the
+      // delivery that actually flips call_status away from 'completed' gets
+      // rows back and proceeds; every later delivery for the same call sees
+      // it already 'completed' and is a no-op ack.
+      const claimResult = await pool.query(
+        `UPDATE users SET call_status = 'completed'
+         WHERE id = $1 AND call_status IS DISTINCT FROM 'completed'
+         RETURNING id`,
+        [user_id],
+      );
+      if (!claimResult.rows[0]) {
+        console.log(`webhooks: chat_ended already processed for user ${user_id} (chat ${chat_id}) — ignoring duplicate delivery`);
+        return res.status(200).send({ success: true, duplicate: true });
+      }
+
       const callUserResult = await pool.query(`SELECT first_name, phone_number FROM users WHERE id = $1`, [user_id]);
       const callUser = callUserResult.rows[0] ?? null;
 
@@ -312,8 +334,6 @@ export function createWebhooksRouter(io: Server): express.Router {
         .map((e) => (e as Extract<typeof e, { type: "coverage" }>).check);
       pushLiveEvent(io, user_id, { type: "call_ended" });
       endLiveCall(user_id);
-
-      await pool.query(`UPDATE users SET call_status = 'completed' WHERE id = $1`, [user_id]);
 
       if (!transcript.trim()) {
         console.error(`webhooks: empty transcript for chat ${chat_id} (user ${user_id})`);
