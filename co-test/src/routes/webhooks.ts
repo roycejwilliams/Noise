@@ -636,6 +636,22 @@ export function createWebhooksRouter(io: Server): express.Router {
         [user.id, `User said: ${content}`],
       );
 
+      // Show the animated "..." on the sender's device while Co "thinks" —
+      // this branch runs a call-detection classification, possibly a
+      // recommendation classification, and a reply generation before
+      // anything gets sent back, which is real, visible latency without
+      // this. Never sent at all in co-test before now (production has this,
+      // co-test's port of the ongoing-chat handler never picked it up).
+      // Best-effort, matching every other Sendblue send in this file.
+      try {
+        await sendblue.typingIndicators.send({
+          number,
+          from_number: process.env.SENDBLUE_PHONE_NUMBER!,
+        });
+      } catch (typingErr: any) {
+        console.error(`Typing indicator failed for ${number} (non-fatal):`, typingErr?.message ?? typingErr);
+      }
+
       // Call-trigger detection — reuses the same Twilio-dial-and-bridge
       // mechanism phone.ts's dashboard call button uses (services/callTrigger.ts),
       // just reached from a different trigger. Two cases, per explicit
@@ -668,10 +684,17 @@ Return ONLY the classification, nothing else.`,
       const callAction = rawCallClassification.trim().toLowerCase().replace(/^[`"']+|[`"']+$/g, "");
 
       if (hasPendingOffer && (callAction === "accepts_offer" || callAction === "declines_offer")) {
+        // Bookkeeping write — must never be able to take down the whole
+        // reply. Confirmed the hard way: this and the call_offer_pending
+        // insert below were unguarded, the memory_type CHECK constraint
+        // hadn't been widened for these new values yet, and the resulting
+        // exception aborted the request before any reply was generated —
+        // Sendblue kept retrying into the same crash, so the user got no
+        // reply at all rather than a slow one.
         await pool.query(
           `INSERT INTO co_memories (user_id, memory_type, content) VALUES ($1, 'call_offer_resolved', $2)`,
           [user.id, callAction],
-        );
+        ).catch((err: any) => console.error("webhooks: call_offer_resolved memory write failed (non-fatal):", err?.message ?? err));
       }
 
       const shouldTriggerCall = callAction === "explicit_request" || (hasPendingOffer && callAction === "accepts_offer");
@@ -707,10 +730,12 @@ Return ONLY the classification, nothing else.`,
           prompt: `You are Co, a life concierge, texting with someone. They just said: "${content}"\n\nWhat they're describing sounds like it would genuinely be easier to talk through by voice than text. Offer them a call, warmly, in your own words — something like asking if they want to hop on a call about this. Don't place any call, just ask. One short sentence. No exclamation points, no em dashes. Under 160 characters — this is a text message, not a paragraph.`,
         });
         const offer = capMessageLength(rawOffer, 160);
+        // Same non-fatal guard as call_offer_resolved above — bookkeeping,
+        // never allowed to block the actual reply below.
         await pool.query(
           `INSERT INTO co_memories (user_id, memory_type, content) VALUES ($1, 'call_offer_pending', $2)`,
           [user.id, offer],
-        );
+        ).catch((err: any) => console.error("webhooks: call_offer_pending memory write failed (non-fatal):", err?.message ?? err));
         await pool.query(
           `INSERT INTO co_memories (user_id, memory_type, content) VALUES ($1, 'text_exchange', $2)`,
           [user.id, `Co replied: ${offer}`],
