@@ -415,9 +415,10 @@ export function createWebhooksRouter(io: Server): express.Router {
       // budget in the prompt, and capMessageLength as a hard backstop.
       if (callUser) {
         try {
+          const followUpPersona = await getCoPersonaPrompt();
           const { text: followUpMessage } = await generateText({
             model: anthropic("claude-haiku-4-5-20251001"),
-            prompt: `You are Co. You just got off a call with ${callUser.first_name}. Here's what they told you:\n\n"${transcript}"\n\nText them something short that proves you were actually listening. Pick exactly ONE real, specific thing they said (a feeling, a struggle, a detail) and respond to only that — nothing else. No second observation, no forward-looking plan, no summary of the call.\n\nDo not say "I have what I need," "I'll be in touch," "your circle is ready/next," or anything that sounds like a status update. No exclamation points. No em dashes.\n\nOne short sentence. Under 160 characters — this is a text message, not a paragraph.`,
+            prompt: `${followUpPersona ?? "You are Co."} You just got off a call with ${callUser.first_name}. Here's what they told you:\n\n"${transcript}"\n\nText them something short that proves you were actually listening. Pick exactly ONE real, specific thing they said (a feeling, a struggle, a detail) and respond to only that — nothing else. No second observation, no forward-looking plan, no summary of the call.\n\nDo not say "I have what I need," "I'll be in touch," "your circle is ready/next," or anything that sounds like a status update. No exclamation points. No em dashes.\n\nThis is a text message, not the call — keep it short, one text-message-length turn. Under 160 characters.`,
           });
           const cappedFollowUp = capMessageLength(followUpMessage, 160);
           await sendblue.messages.send({
@@ -726,9 +727,10 @@ Return ONLY the classification, nothing else.`,
       }
 
       if (shouldOfferCall) {
+        const offerPersona = await getCoPersonaPrompt();
         const { text: rawOffer } = await generateText({
           model: anthropic("claude-haiku-4-5-20251001"),
-          prompt: `You are Co, a life concierge, texting with someone. They just said: "${content}"\n\nWhat they're describing sounds like it would genuinely be easier to talk through by voice than text. Offer them a call, warmly, in your own words — something like asking if they want to hop on a call about this. Don't place any call, just ask. One short sentence. No exclamation points, no em dashes. Under 160 characters — this is a text message, not a paragraph.`,
+          prompt: `${offerPersona ?? "You are Co, a life concierge."} You're texting with someone right now, not on a call with them. They just said: "${content}"\n\nWhat they're describing sounds like it would genuinely be easier to talk through by voice than text. Offer them a call, warmly, in your own words and voice — something like asking if they want to hop on a call about this. Don't place any call, just ask.\n\nThis is a text message, not the call itself — keep it short, one text-message-length turn. One short sentence. No exclamation points, no em dashes. Under 160 characters.`,
         });
         const offer = capMessageLength(rawOffer, 160);
         // Same non-fatal guard as call_offer_resolved above — bookkeeping,
