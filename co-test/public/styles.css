@@ -1143,22 +1143,6 @@ button {
   padding: var(--space-7) var(--space-6) var(--space-8);
 }
 
-.phone-warning {
-  font-size: 13px;
-  line-height: 1.6;
-  color: var(--amber);
-  background: var(--amber-bg);
-  border: 1px solid #ecd6a8;
-  border-radius: var(--radius-md);
-  padding: var(--space-4);
-  margin-bottom: var(--space-6);
-}
-
-.phone-warning code {
-  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
-  font-size: 12px;
-}
-
 .phone-step {
   margin-bottom: var(--space-2);
   display: flex;
