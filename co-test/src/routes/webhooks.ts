@@ -28,7 +28,7 @@ import { generateRecommendation } from "../services/recommendation.js";
 import { triggerCall } from "../services/callTrigger.js";
 import { simulateModeratorApproval } from "../services/circlesSimulation.js";
 import { getCoPersonaPrompt } from "../services/coPersona.js";
-import { findRealVenue } from "../services/venueLookup.js";
+import { findRealVenues } from "../services/venueLookup.js";
 
 // Mounted at the SAME paths production uses (/sendblue/webhook, /co/call-status,
 // /co/webhook) — see api/src/server.ts and api/src/routes/co.ts for the
@@ -841,7 +841,13 @@ Return ONLY the classification, nothing else.`,
         if (wantsSomethingConcrete) {
           const recommendation = await generateRecommendation(user.id);
           if (recommendation.available) {
-            recommendationContext = `\nYou just pulled up a real recommendation for them: "${recommendation.match}" — ${recommendation.reason}. Work this into your reply naturally, as your own suggestion, not a status update.`;
+            // This is a category/type suggestion, never a specific real
+            // venue with a link — that's the venue lookup below, a
+            // different mechanism. Found a real case where Co said
+            // "sending that over now" for exactly this kind of abstract
+            // suggestion, with no link anywhere, because there was never
+            // anything concrete to send in the first place.
+            recommendationContext = `\nYou just thought of a real recommendation for them: "${recommendation.match}" — ${recommendation.reason}. Work this into your reply naturally, as your own suggestion. This is an idea, not a specific place with a link — never say you're "sending" or "sharing" anything for this, you have nothing to send.`;
           }
         }
       } catch (err: any) {
@@ -859,18 +865,31 @@ Return ONLY the classification, nothing else.`,
       let venueContext = "";
       if (profile?.city) {
         try {
+          // Must see the conversation, not just this one message — found a
+          // real case where "send some my way, maybe 2-5" (a pure follow-up
+          // to "climbing gyms" mentioned earlier) didn't mention any place
+          // category on its own, so an isolated-message classifier missed
+          // it entirely and it fell through to the abstract recommendation
+          // path instead, which then claimed to be "sending" something it
+          // structurally can never send.
           const { text: rawVenueClassification } = await generateText({
             model: anthropic("claude-haiku-4-5-20251001"),
-            prompt: `Does this message mention wanting, looking for, or asking about a specific CATEGORY of physical place — a gym, a cafe, a climbing spot, a coworking space, a restaurant, a bar, etc.? Not a person, not an abstract idea, an actual type of place someone could visit.
+            prompt: `Recent text conversation, in order:
+${recentConversation || "(start of the conversation)"}
 
-Message: "${content}"
+Their latest message: "${content}"
 
-Return ONLY valid JSON, no preamble: {"wants_venue": true or false, "venue_type": "the category, in a few words" or null}`,
+In light of the conversation above, is their latest message wanting, looking for, or asking about a specific CATEGORY of physical place — a gym, a cafe, a climbing spot, a coworking space, a restaurant, a bar, etc.? This includes a plain follow-up like "send me some" or "yes please" if the category was already established earlier in the conversation. Not a person, not an abstract idea, an actual type of place someone could visit.
+
+If yes, how many did they ask for? Default to 1 if they didn't say a number or range; if they gave a range (e.g. "2-5"), use the upper end, capped at 5.
+
+Return ONLY valid JSON, no preamble: {"wants_venue": true or false, "venue_type": "the category, in a few words" or null, "count": a number from 1 to 5}`,
           });
           const cleanVenue = rawVenueClassification.replace(/```json|```/g, "").trim();
           const parsedVenue = JSON.parse(cleanVenue);
           if (parsedVenue?.wants_venue && typeof parsedVenue.venue_type === "string" && parsedVenue.venue_type) {
             const venueType: string = parsedVenue.venue_type;
+            const requestedCount = Math.max(1, Math.min(Number(parsedVenue.count) || 1, 5));
 
             // The real Places search below has genuine network latency on
             // top of the classification calls already run this turn — a
@@ -883,7 +902,7 @@ Return ONLY valid JSON, no preamble: {"wants_venue": true or false, "venue_type"
             try {
               const { text: rawHold } = await generateText({
                 model: anthropic("claude-haiku-4-5-20251001"),
-                prompt: `You are Co, texting someone. They just asked about finding a ${venueType}. You're about to go actually look one up for them — send a brief, warm, personalized "give me a sec" acknowledgment, referencing what they're actually looking for, not generic. Don't claim you've found anything yet. One short sentence. No exclamation points, no em dashes. Under 100 characters.`,
+                prompt: `You are Co, texting someone. They just asked about finding ${requestedCount > 1 ? `${requestedCount} ${venueType}s` : `a ${venueType}`}. You're about to go actually look them up for them — send a brief, warm, personalized "give me a sec" acknowledgment, referencing what they're actually looking for, not generic. Don't claim you've found anything yet. One short sentence. No exclamation points, no em dashes. Under 100 characters.`,
               });
               const holdMessage = capMessageLength(rawHold, 100);
               await pool.query(
@@ -899,13 +918,14 @@ Return ONLY valid JSON, no preamble: {"wants_venue": true or false, "venue_type"
               console.error("webhooks: venue hold-message generation failed (non-fatal, proceeding to search anyway):", err?.message ?? err);
             }
 
-            const venue = await findRealVenue(venueType, profile.city);
-            if (venue) {
-              venueContext = `\nYou just found a real place for them: ${venue.name}, ${venue.address}. Include this Google Maps link exactly as-is somewhere in your reply: ${venue.mapsUrl}`;
+            const venues = await findRealVenues(venueType, profile.city, requestedCount);
+            if (venues.length) {
+              const listing = venues.map((v) => `${v.name}, ${v.address} — ${v.mapsUrl}`).join("\n");
+              venueContext = `\nYou just found ${venues.length} real place${venues.length > 1 ? "s" : ""} for them:\n${listing}\nInclude ${venues.length > 1 ? "these Google Maps links" : "this Google Maps link"} exactly as-is in your reply${venues.length < requestedCount ? ` — they asked for ${requestedCount}, but this is genuinely all that came back as a solid match, say so honestly rather than padding with anything invented` : ""}.`;
               await pool
                 .query(`INSERT INTO co_memories (user_id, memory_type, content) VALUES ($1, 'recommendation', $2)`, [
                   user.id,
-                  `Co surfaced a real venue — ${venue.name} (${venue.address}): ${venue.mapsUrl}`,
+                  `Co surfaced ${venues.length} real venue(s) — ${venues.map((v) => `${v.name} (${v.address}): ${v.mapsUrl}`).join("; ")}`,
                 ])
                 .catch((err: any) => console.error("webhooks: venue memory write failed (non-fatal):", err?.message ?? err));
             } else {
