@@ -738,7 +738,7 @@ Return ONLY the classification, nothing else.`,
       // is the priority, per explicit product decision.
       const shouldOfferCall = !hasPendingOffer && !recentOfferCooldownActive && callAction === "would_benefit";
       const callOfferContext = shouldOfferCall
-        ? `\nWhat they just shared could genuinely benefit from a real conversation by voice — but that is not the priority. First, actually respond to what they said: reflect it, and if you have something concrete to offer below (a real recommendation or a real place you found), lead with that instead of a call. Only if it still feels right after that, weave in offering a call as a brief, secondary option — not the main point of your reply, and never in place of a real response. Do not place any call, just ask if you offer one.`
+        ? `\nWhat they just shared could genuinely benefit from a real conversation by voice — but that is not the priority. First, actually respond to what they said: reflect it, and if you have something concrete to offer below (a real recommendation or a real place you found), lead with that instead of a call. Only if it still feels right after that, offer a call as a warm gesture, not a logistics question — the way someone says "I'm here if you ever want to actually talk this through," not "are you free for a call today or tomorrow." Keep it brief and secondary, never in place of a real response. Do not place any call, just make the gesture.`
         : "";
 
       if (shouldTriggerCall) {
