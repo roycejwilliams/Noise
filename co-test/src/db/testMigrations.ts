@@ -34,6 +34,19 @@ export function runTestMigrations() {
     .query(`ALTER TABLE users ADD COLUMN IF NOT EXISTS otp_verified BOOLEAN NOT NULL DEFAULT false`)
     .catch((err: Error) => console.error("users.otp_verified migration failed:", err));
 
+  // Marks a phone-test session created with no known phone number yet — the
+  // entry screen is a single "Message Co to start" button (no name/phone
+  // form, matching the Ditto pattern), so the row exists before we know who
+  // it belongs to. Cleared (along with attaching the real number) the moment
+  // an inbound text arrives from a number we don't already recognize — see
+  // the claim logic in webhooks.ts's /sendblue/webhook. This assumes one
+  // tester at a time, which matches how this internal tool is actually used;
+  // it is not safe for concurrent testers (a second person's text could
+  // claim the first person's pending session).
+  pool
+    .query(`ALTER TABLE users ADD COLUMN IF NOT EXISTS phone_pending BOOLEAN NOT NULL DEFAULT false`)
+    .catch((err: Error) => console.error("users.phone_pending migration failed:", err));
+
   // Real-call state, mirroring the fields production's /co/call-status
   // webhook keeps in co_memories — kept directly on the row here since a
   // co-test session has exactly one active call at a time, and the phone

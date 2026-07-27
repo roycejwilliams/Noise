@@ -1,17 +1,11 @@
 const statusEl = document.getElementById("status") as HTMLElement;
 
-const stepEntry = document.getElementById("step-entry") as HTMLElement;
 const stepTextIn = document.getElementById("step-text-in") as HTMLElement;
 const stepOtp = document.getElementById("step-otp") as HTMLElement;
 const stepCall = document.getElementById("step-call") as HTMLElement;
 
-const firstNameInput = document.getElementById("first-name-input") as HTMLInputElement;
-const phoneInput = document.getElementById("phone-input") as HTMLInputElement;
-const startSessionButton = document.getElementById("start-session-button") as HTMLButtonElement;
-const entryError = document.getElementById("entry-error") as HTMLElement;
-
-const textInNumberEl = document.getElementById("text-in-number") as HTMLElement;
 const messageCoButton = document.getElementById("message-co-button") as HTMLAnchorElement;
+const entryError = document.getElementById("entry-error") as HTMLElement;
 
 const otpInput = document.getElementById("otp-input") as HTMLInputElement;
 const verifyOtpButton = document.getElementById("verify-otp-button") as HTMLButtonElement;
@@ -31,51 +25,40 @@ let userId: string | null = null;
 let statusPollInterval: number | null = null;
 
 function showStep(step: HTMLElement) {
-  for (const el of [stepEntry, stepTextIn, stepOtp, stepCall]) el.classList.add("hidden");
+  for (const el of [stepTextIn, stepOtp, stepCall]) el.classList.add("hidden");
   step.classList.remove("hidden");
 }
 
-async function startSession() {
-  entryError.classList.add("hidden");
-  const first_name = firstNameInput.value.trim();
-  const phone_number = phoneInput.value.trim();
-  if (!first_name || !phone_number) {
-    entryError.textContent = "Enter a name and phone number.";
-    entryError.classList.remove("hidden");
-    return;
-  }
-
-  startSessionButton.disabled = true;
+// Entry screen is a single "Message Co to start" button — no name/phone
+// form (Ditto pattern). The session itself is created anonymously the
+// moment this page loads, before the tester has done anything; the real
+// phone number gets attached server-side once the inbound text actually
+// arrives (see webhooks.ts's /sendblue/webhook claim logic).
+async function initSession() {
   try {
-    const res = await fetch("/api/phone/session", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ first_name, phone_number }),
-    });
+    const res = await fetch("/api/phone/session", { method: "POST" });
     const data = await res.json();
     if (!data.success) throw new Error(data.error ?? "Failed to start session");
 
     userId = data.user_id;
     const textInNumber = data.text_in_number ?? null;
-    textInNumberEl.textContent = textInNumber ?? "(number unavailable — check server config)";
     if (textInNumber) {
       // sms: link pre-addresses the device's native Messages/iMessage compose
       // sheet — this only removes the manual step of finding/typing the
-      // number; the tester still has to send the message themselves. Desktop
-      // browsers largely no-op on sms: links, but scope here is mobile-only
-      // in practice, so no separate desktop fallback UI is built — the raw
-      // number text right below it is fallback enough.
+      // number; the tester still has to send the message themselves.
       messageCoButton.href = `sms:${textInNumber}`;
     } else {
       messageCoButton.classList.add("hidden");
+      entryError.textContent = "No text-in number configured — check server config.";
+      entryError.classList.remove("hidden");
     }
-    statusEl.textContent = "Waiting on verification";
+    statusEl.textContent = "Waiting for your text";
     beginPolling();
   } catch (err) {
     console.error(err);
+    statusEl.textContent = "Failed to start";
     entryError.textContent = err instanceof Error ? err.message : String(err);
     entryError.classList.remove("hidden");
-    startSessionButton.disabled = false;
   }
 }
 
@@ -201,8 +184,9 @@ function beginPolling() {
   statusPollInterval = window.setInterval(pollStatus, 2500);
 }
 
-startSessionButton.addEventListener("click", startSession);
 verifyOtpButton.addEventListener("click", verifyOtp);
 resendOtpButton.addEventListener("click", resendOtp);
 testCaseSelect.addEventListener("change", saveTag);
 requestCallButton.addEventListener("click", requestCall);
+
+initSession();

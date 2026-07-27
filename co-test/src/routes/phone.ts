@@ -2,7 +2,6 @@ import { randomInt } from "crypto";
 import express, { Request, Response, NextFunction } from "express";
 import twilio from "twilio";
 import pool from "../../../api/src/db/db.js";
-import { normalizePhone } from "../../../api/src/utils/phone.js";
 import sendblue from "../../../api/src/services/sendblue.js";
 
 const router = express.Router();
@@ -13,37 +12,23 @@ const twilioClient = twilio(
   { accountSid: process.env.TWILIO_LIVE_SID! },
 );
 
-// POST /api/phone/session — real-phone counterpart to /api/session. Looks up
-// (or creates) a real user row by actual phone number, test_channel='phone',
-// so contact_verified/otp_verified are meaningful and Sendblue/Twilio have a
-// real destination. Re-submitting the same phone number resumes the same
-// row rather than creating a new one each time the tester reloads the page.
-router.post("/session", async (req: Request, res: Response, next: NextFunction) => {
+// POST /api/phone/session — entry screen is a single "Message Co to start"
+// button (Ditto pattern, no name/phone form), so there's no phone number to
+// key a row on yet. Creates an anonymous placeholder row (phone_pending=true,
+// a synthetic unique placeholder in the NOT NULL phone_number column) that
+// /sendblue/webhook's contact_verified bootstrap claims — attaching the real
+// number — the moment an inbound text arrives from a number it doesn't
+// already recognize. See phone_pending's migration comment for the
+// one-tester-at-a-time tradeoff this implies.
+router.post("/session", async (_req: Request, res: Response, next: NextFunction) => {
   try {
-    const { first_name, phone_number } = req.body as { first_name?: string; phone_number?: string };
-    if (!first_name?.trim() || !phone_number?.trim()) {
-      return res.status(400).json({ success: false, error: "first_name and phone_number are required." });
-    }
-
-    const normalized = normalizePhone(phone_number);
-
-    const existing = await pool.query(
-      `SELECT id FROM users WHERE phone_number = $1 AND test_channel = 'phone'`,
-      [normalized],
-    );
-    if (existing.rows[0]) {
-      return res.status(200).json({ success: true, user_id: existing.rows[0].id, resumed: true });
-    }
-
     const suffix = Math.random().toString(36).slice(2, 8);
     const created = await pool.query(
-      `INSERT INTO users (first_name, last_name, email, phone_number, username, test_channel)
-       VALUES ($1, $2, $3, $4, $5, 'phone') RETURNING id`,
+      `INSERT INTO users (first_name, last_name, email, phone_number, username, test_channel, phone_pending)
+       VALUES ('Tester', 'Tester', $1, $2, $3, 'phone', true) RETURNING id`,
       [
-        first_name.trim(),
-        "Tester",
         `co-test-phone-${suffix}@copatible.test`,
-        normalized,
+        `+1000${suffix}`,
         `co_test_phone_${suffix}`,
       ],
     );
@@ -51,7 +36,6 @@ router.post("/session", async (req: Request, res: Response, next: NextFunction) 
     return res.status(200).json({
       success: true,
       user_id: created.rows[0].id,
-      resumed: false,
       text_in_number: process.env.SENDBLUE_PHONE_NUMBER,
     });
   } catch (error) {
