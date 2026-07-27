@@ -186,11 +186,26 @@ export function registerJobs() {
             (r: any) => r.response === null,
           );
           for (const nr of nonResponders) {
-            await sendblue.messages.send({
-              number: nr.phone_number,
-              content: `${nr.first_name}, your circle's moment has been locked. Reply YES or suggest a time for future moments.`,
-              from_number: process.env.SENDBLUE_PHONE_NUMBER!,
-            });
+            // Unlike every other Sendblue send in this codebase, this one
+            // had no try/catch — an undeliverable number (confirmed: a
+            // fictional seed number, but any real delivery failure works
+            // the same way) threw here, aborted this iteration of the outer
+            // loop, and skipped the consensus_nudge_sent_at UPDATE below.
+            // With that guard column never set, the next run 15 minutes
+            // later saw the exact same unmet condition and repeated the
+            // same throw — confirmed via Sendblue's own log: the same
+            // message re-sent every 15 minutes for over 3 weeks against one
+            // moment. A delivery failure must never block this loop or the
+            // guard-column write that stops it from re-running.
+            try {
+              await sendblue.messages.send({
+                number: nr.phone_number,
+                content: `${nr.first_name}, your circle's moment has been locked. Reply YES or suggest a time for future moments.`,
+                from_number: process.env.SENDBLUE_PHONE_NUMBER!,
+              });
+            } catch (smsErr: any) {
+              console.error(`Consensus nudge failed for ${nr.user_id} (non-fatal):`, smsErr?.message ?? smsErr);
+            }
             await pool.query(
               `UPDATE co_profiles SET trust_score = GREATEST(0, trust_score - 5) WHERE user_id = $1`,
               [nr.user_id],
@@ -214,13 +229,22 @@ export function registerJobs() {
 
         const circlePageUrl = `https://app.copatible.com/circles/${moment.circle_id}`;
 
+        // Same fix as the nudge loop above, same reason: these sends used to
+        // be unguarded and directly gated the status UPDATE that stops this
+        // moment from being picked up by this cron again — a delivery
+        // failure here left a moment stuck in 'polling' forever instead of
+        // ever reaching 'consensus_locked' or 'manual_review'.
         if (connectorResult.rows[0]) {
           const connector = connectorResult.rows[0];
-          await sendblue.messages.send({
-            number: connector.phone_number,
-            content: `${connector.first_name}, your circle is confirmed. Tap to book: ${circlePageUrl}`,
-            from_number: process.env.SENDBLUE_PHONE_NUMBER!,
-          });
+          try {
+            await sendblue.messages.send({
+              number: connector.phone_number,
+              content: `${connector.first_name}, your circle is confirmed. Tap to book: ${circlePageUrl}`,
+              from_number: process.env.SENDBLUE_PHONE_NUMBER!,
+            });
+          } catch (smsErr: any) {
+            console.error(`Connector confirmation send failed for moment ${moment.id} (non-fatal):`, smsErr?.message ?? smsErr);
+          }
           await pool.query(
             `UPDATE moments SET status = 'consensus_locked', booking_link_sent_at = NOW() WHERE id = $1`,
             [moment.id],
@@ -229,11 +253,15 @@ export function registerJobs() {
           const responsesSummary = responses
             .map((r: any) => `${r.first_name}: ${r.response ?? "no reply"}`)
             .join(", ");
-          await sendblue.messages.send({
-            number: process.env.KEANA_PHONE_NUMBER!,
-            content: `Circle consensus needed for moment ${moment.id}. Suggested: ${moment.suggested_time ?? "TBD"}. Responses: ${responsesSummary}. Circle: ${circlePageUrl}`,
-            from_number: process.env.SENDBLUE_PHONE_NUMBER!,
-          });
+          try {
+            await sendblue.messages.send({
+              number: process.env.KEANA_PHONE_NUMBER!,
+              content: `Circle consensus needed for moment ${moment.id}. Suggested: ${moment.suggested_time ?? "TBD"}. Responses: ${responsesSummary}. Circle: ${circlePageUrl}`,
+              from_number: process.env.SENDBLUE_PHONE_NUMBER!,
+            });
+          } catch (smsErr: any) {
+            console.error(`Keana manual-review notification failed for moment ${moment.id} (non-fatal):`, smsErr?.message ?? smsErr);
+          }
           await pool.query(
             `UPDATE moments SET status = 'manual_review' WHERE id = $1`,
             [moment.id],
@@ -337,12 +365,20 @@ export function registerJobs() {
         const past8hrs =
           new Date(moment.booking_link_sent_at) < new Date(eightHoursAgo);
 
+        // Same fix, same reason as the consensus cron above — these two
+        // sends used to be unguarded and directly gated the writes
+        // (trust_score/is_circle_connector demotion, connector_nudge_sent_at)
+        // that stop this moment from being re-escalated on every future run.
         if (past8hrs) {
-          await sendblue.messages.send({
-            number: process.env.KEANA_PHONE_NUMBER!,
-            content: `Connector unresponsive for 8hrs on moment ${moment.id}. Needs manual booking. Circle: ${circlePageUrl}`,
-            from_number: process.env.SENDBLUE_PHONE_NUMBER!,
-          });
+          try {
+            await sendblue.messages.send({
+              number: process.env.KEANA_PHONE_NUMBER!,
+              content: `Connector unresponsive for 8hrs on moment ${moment.id}. Needs manual booking. Circle: ${circlePageUrl}`,
+              from_number: process.env.SENDBLUE_PHONE_NUMBER!,
+            });
+          } catch (smsErr: any) {
+            console.error(`Keana 8hr-escalation notification failed for moment ${moment.id} (non-fatal):`, smsErr?.message ?? smsErr);
+          }
           if (connector) {
             await pool.query(
               `UPDATE co_profiles SET trust_score = GREATEST(0, trust_score - 10), is_circle_connector = FALSE WHERE user_id = $1`,
@@ -351,11 +387,15 @@ export function registerJobs() {
           }
         } else if (!moment.connector_nudge_sent_at) {
           if (connector) {
-            await sendblue.messages.send({
-              number: connector.phone_number,
-              content: `${connector.first_name}, your circle is still waiting. Tap to book: ${circlePageUrl}`,
-              from_number: process.env.SENDBLUE_PHONE_NUMBER!,
-            });
+            try {
+              await sendblue.messages.send({
+                number: connector.phone_number,
+                content: `${connector.first_name}, your circle is still waiting. Tap to book: ${circlePageUrl}`,
+                from_number: process.env.SENDBLUE_PHONE_NUMBER!,
+              });
+            } catch (smsErr: any) {
+              console.error(`Connector 4hr nudge failed for ${connector.id} (non-fatal):`, smsErr?.message ?? smsErr);
+            }
             await pool.query(
               `UPDATE moments SET connector_nudge_sent_at = NOW() WHERE id = $1`,
               [moment.id],
