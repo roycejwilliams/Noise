@@ -1,5 +1,6 @@
 import twilio from "twilio";
 import pool from "../../../api/src/db/db.js";
+import { buildContextSummary } from "./callContext.js";
 
 // The only real Twilio-dial-and-bridge-to-Hume logic in co-test, extracted
 // out of phone.ts's POST /:user_id/call so a second call site (Co
@@ -29,11 +30,20 @@ export async function triggerCall(userId: string): Promise<TriggerCallResult> {
   const user = userResult.rows[0];
   if (!user) return { success: false, error: "Session not found." };
 
+  // Greeting used to be the same cold generic opener every time, regardless
+  // of what was already known from a prior call or text thread — this gives
+  // the EVI prompt something real to pick up from instead, same proven
+  // mechanism {first_name} already uses (a matching query param on this
+  // same Twilio bridge URL, not the documented WebSocket session_settings
+  // path — that one isn't reachable from this HTTP-only Twilio connect flow).
+  const contextSummary = await buildContextSummary(userId);
+
   const webhookParams = new URLSearchParams({
     config_id: process.env.HUME_CONFIG_ID!,
     api_key: process.env.HUME_API_KEY!,
     custom_session_id: String(userId),
     first_name: user.first_name ?? "",
+    context_summary: contextSummary,
   });
   const webhookUrl = `https://api.hume.ai/v0/evi/twilio?${webhookParams.toString()}`;
   const statusCallbackUrl = `${process.env.API_URL}/co/call-status`;

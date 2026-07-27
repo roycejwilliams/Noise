@@ -28,6 +28,7 @@ import { generateRecommendation } from "../services/recommendation.js";
 import { triggerCall } from "../services/callTrigger.js";
 import { simulateModeratorApproval } from "../services/circlesSimulation.js";
 import { getCoPersonaPrompt } from "../services/coPersona.js";
+import { findRealVenue } from "../services/venueLookup.js";
 
 // Mounted at the SAME paths production uses (/sendblue/webhook, /co/call-status,
 // /co/webhook) — see api/src/server.ts and api/src/routes/co.ts for the
@@ -664,8 +665,23 @@ export function createWebhooksRouter(io: Server): express.Router {
       // — otp_verified stays a dashboard-flow-only gate, unrelated to
       // identity over this channel. The "User said" row above is already
       // written regardless of outcome, so nothing below re-inserts it.
+      // Bug found the hard way: this used to just check whether an offer was
+      // EVER made, not whether it was still unresolved — so once someone
+      // answered (accept or decline), the classifier prompt below kept
+      // telling the model "Co is waiting on a yes/no" forever afterward, and
+      // an unrelated later "yeah"/"true" would get misread as consenting to
+      // a call that was already resolved. Confirmed against a real
+      // conversation: this placed 4 real Twilio calls after the user had
+      // explicitly said "don't call me" multiple times. Must compare
+      // timestamps, not just existence.
       const pendingOfferResult = await pool.query(
-        `SELECT id FROM co_memories WHERE user_id = $1 AND memory_type = 'call_offer_pending' ORDER BY created_at DESC LIMIT 1`,
+        `SELECT p.id FROM co_memories p
+         WHERE p.user_id = $1 AND p.memory_type = 'call_offer_pending'
+         AND NOT EXISTS (
+           SELECT 1 FROM co_memories r
+           WHERE r.user_id = $1 AND r.memory_type = 'call_offer_resolved' AND r.created_at > p.created_at
+         )
+         ORDER BY p.created_at DESC LIMIT 1`,
         [user.id],
       );
       const hasPendingOffer = !!pendingOfferResult.rows[0];
@@ -818,6 +834,44 @@ Return ONLY the classification, nothing else.`,
         console.error("webhooks: recommendation classification failed (non-fatal):", err?.message ?? err);
       }
 
+      // Real venue lookup — distinct from the abstract recommendation above.
+      // When someone mentions wanting a specific CATEGORY of place (a gym, a
+      // cafe, a climbing spot), search Google Places for real, and send an
+      // actual Google Maps link — not a description of what Co would send.
+      // Built after a real conversation showed Co naming a specific gym
+      // ("Dogpatch Boulders") with zero real data behind it, from general
+      // knowledge rather than a lookup. Needs a known city to search against;
+      // silently skipped if none is on file yet rather than guessing one.
+      let venueContext = "";
+      if (profile?.city) {
+        try {
+          const { text: rawVenueClassification } = await generateText({
+            model: anthropic("claude-haiku-4-5-20251001"),
+            prompt: `Does this message mention wanting, looking for, or asking about a specific CATEGORY of physical place — a gym, a cafe, a climbing spot, a coworking space, a restaurant, a bar, etc.? Not a person, not an abstract idea, an actual type of place someone could visit.
+
+Message: "${content}"
+
+Return ONLY valid JSON, no preamble: {"wants_venue": true or false, "venue_type": "the category, in a few words" or null}`,
+          });
+          const cleanVenue = rawVenueClassification.replace(/```json|```/g, "").trim();
+          const parsedVenue = JSON.parse(cleanVenue);
+          if (parsedVenue?.wants_venue && typeof parsedVenue.venue_type === "string" && parsedVenue.venue_type) {
+            const venue = await findRealVenue(parsedVenue.venue_type, profile.city);
+            if (venue) {
+              venueContext = `\nYou just found a real place for them: ${venue.name}, ${venue.address}. Include this Google Maps link exactly as-is somewhere in your reply: ${venue.mapsUrl}`;
+              await pool
+                .query(`INSERT INTO co_memories (user_id, memory_type, content) VALUES ($1, 'recommendation', $2)`, [
+                  user.id,
+                  `Co surfaced a real venue — ${venue.name} (${venue.address}): ${venue.mapsUrl}`,
+                ])
+                .catch((err: any) => console.error("webhooks: venue memory write failed (non-fatal):", err?.message ?? err));
+            }
+          }
+        } catch (err: any) {
+          console.error("webhooks: venue lookup classification failed (non-fatal):", err?.message ?? err);
+        }
+      }
+
       // Same persona the real call uses, not a separate thinner one — Co
       // should be the same entity whether someone's talking by voice or
       // text, capable of picking up a genuine back-and-forth either way.
@@ -839,8 +893,8 @@ Recent text conversation, in order:
 ${recentConversation || "(start of the text conversation)"}
 
 ${user.first_name} just said: "${content}"
-${recommendationContext}
-Ground everything ONLY in the information above and what has actually been said in this conversation — never state or imply a specific personal detail, preference, or fact about them that isn't listed above or wasn't actually said in this thread. If you don't have something, ask rather than assume.
+${recommendationContext}${venueContext}
+Ground everything ONLY in the information above and what has actually been said in this conversation — never state or imply a specific personal detail, preference, or fact about them that isn't listed above or wasn't actually said in this thread. This includes real venues and businesses: never name a specific one unless it's given to you above as something you actually found — if you don't have a real one, describe what you'd look for, don't guess a plausible-sounding name. If you don't have something, ask rather than assume.
 
 Keep THIS reply short — one text-message-length turn, not a call-length response. One short sentence. No exclamation points, no em dashes. Under 160 characters — this is a text message, not a paragraph.`,
       });
