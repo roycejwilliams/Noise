@@ -85,4 +85,59 @@ export function runTestMigrations() {
       )`,
     )
     .catch((err: Error) => console.error("checklist_responses table init failed:", err));
+
+  // Circles pipeline test (matching/Moderator/venue/poll) needs a third
+  // channel alongside browser/phone for internally-seeded simulated members
+  // — widen the existing CHECK rather than adding a new column, so
+  // test_channel stays the single source of truth for "what kind of row is
+  // this." Postgres has no ALTER-CHECK-in-place, so drop and recreate.
+  pool
+    .query(`ALTER TABLE users DROP CONSTRAINT IF EXISTS users_test_channel_check`)
+    .then(() =>
+      pool.query(
+        `ALTER TABLE users ADD CONSTRAINT users_test_channel_check
+         CHECK (test_channel IN ('browser', 'phone', 'circles_sim'))`,
+      ),
+    )
+    .catch((err: Error) => console.error("users.test_channel widen migration failed:", err));
+
+  // is_simulated marks every row created by the Circles pipeline test
+  // (seeded members, and any circle/moment formed from them) as internally
+  // manufactured — not a naming convention (reserved 555-01XX numbers alone
+  // were confirmed NOT sufficient to keep simulated data from being mistaken
+  // for something real once a live process started acting on it in
+  // production), a hard, queryable flag the dashboard/checklist can render
+  // an unmissable banner from. Propagated onto circles/moments explicitly
+  // wherever they're created from simulated members — never inferred.
+  pool
+    .query(`ALTER TABLE users ADD COLUMN IF NOT EXISTS is_simulated BOOLEAN NOT NULL DEFAULT false`)
+    .catch((err: Error) => console.error("users.is_simulated migration failed:", err));
+
+  pool
+    .query(`ALTER TABLE circles ADD COLUMN IF NOT EXISTS is_simulated BOOLEAN NOT NULL DEFAULT false`)
+    .catch((err: Error) => console.error("circles.is_simulated migration failed:", err));
+
+  pool
+    .query(`ALTER TABLE moments ADD COLUMN IF NOT EXISTS is_simulated BOOLEAN NOT NULL DEFAULT false`)
+    .catch((err: Error) => console.error("moments.is_simulated migration failed:", err));
+
+  // createMomentForCircle (ported from production's co.ts, see
+  // src/services/venues.ts) writes these — present in production's schema,
+  // never added to co-test's schema-only init.sql dump because nothing
+  // exercised that code path here until the Circles port.
+  pool
+    .query(`ALTER TABLE moments ADD COLUMN IF NOT EXISTS venue_type TEXT`)
+    .catch((err: Error) => console.error("moments.venue_type migration failed:", err));
+
+  pool
+    .query(`ALTER TABLE moments ADD COLUMN IF NOT EXISTS vibe TEXT[]`)
+    .catch((err: Error) => console.error("moments.vibe migration failed:", err));
+
+  pool
+    .query(`ALTER TABLE moments ADD COLUMN IF NOT EXISTS neighborhood TEXT`)
+    .catch((err: Error) => console.error("moments.neighborhood migration failed:", err));
+
+  pool
+    .query(`ALTER TABLE moments ADD COLUMN IF NOT EXISTS candidate_windows JSONB`)
+    .catch((err: Error) => console.error("moments.candidate_windows migration failed:", err));
 }

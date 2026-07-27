@@ -2,6 +2,7 @@ import { randomInt } from "crypto";
 import { generateText } from "ai";
 import { anthropic } from "@ai-sdk/anthropic";
 import express, { Request, Response, NextFunction } from "express";
+import { parsePhoneNumberFromString } from "libphonenumber-js";
 import type { Server } from "socket.io";
 import pool from "../../../api/src/db/db.js";
 import { sendSMS } from "../../../api/src/otpActions.js";
@@ -23,6 +24,9 @@ import {
   startLiveCall,
   startPolling,
 } from "../services/liveCallState.js";
+import { generateRecommendation } from "../services/recommendation.js";
+import { triggerCall } from "../services/callTrigger.js";
+import { simulateModeratorApproval } from "../services/circlesSimulation.js";
 
 // Mounted at the SAME paths production uses (/sendblue/webhook, /co/call-status,
 // /co/webhook) — see api/src/server.ts and api/src/routes/co.ts for the
@@ -124,6 +128,28 @@ async function sendHumeToolResponse(chatId: string, toolCallId: string, content:
   }
 }
 
+const pause = (ms: number): Promise<void> => new Promise((resolve) => setTimeout(resolve, ms));
+
+const TEXT_MESSAGE_CHAR_CAP = 200;
+
+// A prompt instruction like "1-2 sentences" was found to not actually be a
+// length constraint — the model reliably satisfied it by sentence count
+// while still packing 2-3 clauses/observations into those sentences,
+// producing dense paragraph-length texts. This enforces real brevity
+// regardless of what the model returns. Trims at the last sentence boundary
+// at or before the cap so a shortened reply still reads as a complete
+// thought rather than being cut mid-word; falls back to a word boundary +
+// ellipsis if no sentence boundary is found early enough to be useful.
+function capMessageLength(text: string, maxChars = TEXT_MESSAGE_CHAR_CAP): string {
+  const trimmed = text.trim();
+  if (trimmed.length <= maxChars) return trimmed;
+  const window = trimmed.slice(0, maxChars);
+  const lastBoundary = Math.max(window.lastIndexOf(". "), window.lastIndexOf("? "), window.lastIndexOf("! "));
+  if (lastBoundary > maxChars * 0.4) return window.slice(0, lastBoundary + 1).trim();
+  const lastSpace = window.lastIndexOf(" ");
+  return `${window.slice(0, lastSpace > 0 ? lastSpace : maxChars).trim()}…`;
+}
+
 // Pushes any transcript lines not yet live-pushed for this user, given an
 // already-fetched events array — pure, no network call, so both the
 // periodic poller and handleToolCall/chat_ended (which already have events
@@ -162,7 +188,26 @@ async function handleToolCall(
   userId: string | null,
   toolCallMessage: { tool_call_id: string; name: string } | undefined,
 ): Promise<void> {
-  if (!toolCallMessage || toolCallMessage.name !== "assess_conversation_coverage") return;
+  if (!toolCallMessage) return;
+
+  if (toolCallMessage.name === "surface_recommendation") {
+    try {
+      const result = userId
+        ? await generateRecommendation(userId)
+        : { available: false as const, reason: "no user resolved for this call" };
+      await sendHumeToolResponse(chatId, toolCallMessage.tool_call_id, JSON.stringify(result));
+    } catch (err: any) {
+      console.error("webhooks: surface_recommendation failed:", err?.message ?? err);
+      await sendHumeToolResponse(
+        chatId,
+        toolCallMessage.tool_call_id,
+        JSON.stringify({ available: false, reason: "lookup failed" }),
+      ).catch(() => {});
+    }
+    return;
+  }
+
+  if (toolCallMessage.name !== "assess_conversation_coverage") return;
 
   if (userId) {
     pool
@@ -362,15 +407,21 @@ export function createWebhooksRouter(io: Server): express.Router {
 
       // Best-effort follow-up text, same intent as production's — proves the
       // real iMessage round trip works post-call, not just the phone call.
+      // "1-2 sentences" alone wasn't a real length constraint — the model
+      // packed multiple observations into those 1-2 sentences, and a
+      // duplicate chat_ended delivery (fixed above) used to fire this three
+      // times in a row on top of that. Now: one detail, an explicit char
+      // budget in the prompt, and capMessageLength as a hard backstop.
       if (callUser) {
         try {
           const { text: followUpMessage } = await generateText({
             model: anthropic("claude-haiku-4-5-20251001"),
-            prompt: `You are Co. You just got off a call with ${callUser.first_name}. Here's what they told you:\n\n"${transcript}"\n\nText them something short that proves you were actually listening — pick one real, specific thing they said (a feeling, a struggle, a detail) and respond to that, not a summary of the whole call. This should read like it came from someone who resonated with what they heard, not someone closing out a form.\n\nDo not say "I have what I need," "I'll be in touch," "your circle is ready/next," or anything that sounds like a status update. No exclamation points. No em dashes. 1-2 sentences, text-message length.`,
+            prompt: `You are Co. You just got off a call with ${callUser.first_name}. Here's what they told you:\n\n"${transcript}"\n\nText them something short that proves you were actually listening. Pick exactly ONE real, specific thing they said (a feeling, a struggle, a detail) and respond to only that — nothing else. No second observation, no forward-looking plan, no summary of the call.\n\nDo not say "I have what I need," "I'll be in touch," "your circle is ready/next," or anything that sounds like a status update. No exclamation points. No em dashes.\n\nOne short sentence. Under 160 characters — this is a text message, not a paragraph.`,
           });
+          const cappedFollowUp = capMessageLength(followUpMessage, 160);
           await sendblue.messages.send({
             number: callUser.phone_number,
-            content: followUpMessage,
+            content: cappedFollowUp,
             from_number: process.env.SENDBLUE_PHONE_NUMBER!,
           });
         } catch (followUpErr: any) {
@@ -397,6 +448,16 @@ export function createWebhooksRouter(io: Server): express.Router {
 
       const hasText = typeof content === "string" && content.trim().length > 0;
       if (!number || !hasText) return res.status(200).send({ received: true });
+
+      // A malformed inbound `number` (confirmed: Sendblue can deliver one,
+      // e.g. a bare 5-digit value) was flowing straight through to a real,
+      // billed sendSMS call via the session-claim branch below — nothing on
+      // this path validated shape before either claiming a session or
+      // sending. Reject before either happens.
+      if (!parsePhoneNumberFromString(number, "US")?.isValid()) {
+        console.error(`co-test sendblue webhook: malformed inbound number "${number}" — ignoring`);
+        return res.status(200).send({ received: true });
+      }
 
       const userResult = await pool.query(
         `SELECT id, first_name, contact_verified FROM users WHERE phone_number = $1 AND test_channel = 'phone'`,
@@ -445,46 +506,340 @@ export function createWebhooksRouter(io: Server): express.Router {
           `UPDATE users SET contact_verified = true, otp_code = $2, otp_expiry = NOW() + INTERVAL '5 minutes' WHERE id = $1`,
           [user.id, otp],
         );
+        // Paced, not fired all at once — three back-to-back sends with no
+        // gap arrive as a stacked wall of texts on the recipient's end even
+        // though each individual message is legitimate content.
         await sendSMS({ phone_number: number, welcome: true });
+        await pause(2500);
         await sendSMS({ phone_number: number, intro: true });
+        await pause(2500);
         await sendSMS({ phone_number: number, otp_code: otp.toString(), register: true });
         return res.status(200).send({ received: true, action: "contact_verified" });
       }
 
+      // Moderator-by-text — the Circles pipeline test's confirmed decision
+      // is "the tester acts as their own dev Moderator," not a second real
+      // phone number or reuse of production's KEANA_PHONE_NUMBER. Any
+      // verified real texter can approve/reject the most recent pending
+      // simulated circle/venue this way; real Intent-Layer sessions never
+      // have one pending, so this only ever actually fires during a Circles
+      // pipeline test. Same classify-by-text pattern as production's Keana
+      // intercept, factored into moderatorActions.ts so this and the
+      // internal simulate buttons run identical logic.
+      const pendingCircleApproval = await pool.query(
+        `SELECT id FROM circles WHERE status = 'pending_approval' AND is_simulated = true ORDER BY created_at DESC LIMIT 1`,
+      );
+      const pendingVenueApproval = !pendingCircleApproval.rows[0]
+        ? await pool.query(
+            `SELECT id FROM moments WHERE status = 'pending_venue_approval' AND is_simulated = true ORDER BY created_at DESC LIMIT 1`,
+          )
+        : { rows: [] as any[] };
+
+      if (pendingCircleApproval.rows[0] || pendingVenueApproval.rows[0]) {
+        const { text: modClassification } = await generateText({
+          model: anthropic("claude-haiku-4-5-20251001"),
+          prompt: `Classify this message as either 'approve' or 'reject'. Return ONLY the word approve or reject.\n\nMessage: "${content}"`,
+        });
+        const modAction = modClassification.trim().toLowerCase().replace(/^[`"']+|[`"']+$/g, "");
+
+        if (modAction === "approve" || modAction === "reject") {
+          const result = pendingCircleApproval.rows[0]
+            ? await simulateModeratorApproval(
+                { type: "circle", circleId: pendingCircleApproval.rows[0].id },
+                modAction,
+              )
+            : await simulateModeratorApproval(
+                { type: "venue", momentId: pendingVenueApproval.rows[0].id },
+                modAction,
+              );
+
+          const ack = result.success
+            ? `Got it — ${modAction}d.`
+            : `Couldn't ${modAction}: ${result.error ?? "unknown error"}`;
+          try {
+            await sendblue.messages.send({
+              number,
+              content: capMessageLength(ack, 160),
+              from_number: process.env.SENDBLUE_PHONE_NUMBER!,
+            });
+          } catch (smsErr: any) {
+            console.error(`Moderator ack send failed for ${number} (non-fatal):`, smsErr?.message ?? smsErr);
+          }
+          return res.status(200).send({ received: true, action: `moderator_${modAction}` });
+        }
+        // "unclear" classification — fall through to normal conversation below.
+      }
+
       // Already verified — ongoing conversational texting, proving the
       // "does texting with Co keep working after verification" half of item 2.
-      const recentResult = await pool.query(
-        `SELECT content FROM co_memories WHERE user_id = $1 ORDER BY created_at DESC LIMIT 6`,
-        [user.id],
-      );
-      const recent = recentResult.rows.map((r: any) => r.content).reverse().join("\n");
+      //
+      // Two separate sources, not one pooled recency query: a plain "last 6
+      // co_memories rows of any type" query was found to silently evict the
+      // call's own call_transcript/intent/recap rows once ~2 text exchanges
+      // piled up (each exchange writes 2 more rows), so Co would confidently
+      // use real captured data in early replies, then flatly deny having any
+      // context a few messages later — confirmed directly against a real
+      // test user's row timestamps. co_profiles is the durable, structured
+      // record the call already wrote (goals/blockers/city/intent) and isn't
+      // subject to that eviction, so it's queried directly instead of being
+      // re-derived from a shrinking memory window.
+      const [profileResult, recentTextResult, priorActivityResult] = await Promise.all([
+        pool.query(
+          `SELECT life_chapters, goals, blockers, availability_pattern, city, emotional_state, intent
+           FROM co_profiles WHERE user_id = $1`,
+          [user.id],
+        ),
+        pool.query(
+          `SELECT content FROM co_memories
+           WHERE user_id = $1 AND memory_type = 'text_exchange'
+           ORDER BY created_at DESC LIMIT 8`,
+          [user.id],
+        ),
+        // Determines whether to ask the call-or-text question below — must
+        // be read before this message's own "User said" row is inserted,
+        // so it reflects state as of BEFORE this message, not including it.
+        pool.query(
+          `SELECT 1 FROM co_memories WHERE user_id = $1 AND memory_type IN ('text_exchange', 'call_transcript') LIMIT 1`,
+          [user.id],
+        ),
+      ]);
+
+      const profile = profileResult.rows[0] ?? null;
+      const hasProfile = !!profile?.life_chapters?.length;
+      const isFirstContact = !priorActivityResult.rows[0];
+      const latestIntent = Array.isArray(profile?.intent) && profile.intent.length
+        ? profile.intent[profile.intent.length - 1]
+        : null;
+
+      const profileContext = profile
+        ? [
+            profile.life_chapters?.length ? `Life chapter: ${profile.life_chapters.join(", ")}` : null,
+            profile.city ? `City: ${profile.city}` : null,
+            profile.goals?.length ? `Goals: ${profile.goals.join("; ")}` : null,
+            profile.blockers?.length ? `Blockers: ${profile.blockers.join("; ")}` : null,
+            profile.availability_pattern ? `Availability: ${profile.availability_pattern}` : null,
+            profile.emotional_state ? `Emotional state as of the last call: ${profile.emotional_state}` : null,
+            latestIntent?.text ? `Stated ask (${latestIntent.type}): ${latestIntent.text}` : null,
+            latestIntent?.concrete_preferences?.length
+              ? `Concrete preferences: ${latestIntent.concrete_preferences.join(", ")}`
+              : null,
+            latestIntent?.wants?.length ? `Things they want or miss: ${latestIntent.wants.join(", ")}` : null,
+          ]
+            .filter(Boolean)
+            .join("\n")
+        : null;
+
+      const recentConversation = recentTextResult.rows.map((r: any) => r.content).reverse().join("\n");
 
       await pool.query(
         `INSERT INTO co_memories (user_id, memory_type, content) VALUES ($1, 'text_exchange', $2)`,
         [user.id, `User said: ${content}`],
       );
 
+      // Call-trigger detection — reuses the same Twilio-dial-and-bridge
+      // mechanism phone.ts's dashboard call button uses (services/callTrigger.ts),
+      // just reached from a different trigger. Two cases, per explicit
+      // product decision: an explicit ask ("call me") triggers immediately;
+      // anything that only SIGNALS voice would help gets OFFERED, and
+      // actually placing that call requires a following "yes" — never
+      // silently placed. Gated on contact_verified only (already true here)
+      // — otp_verified stays a dashboard-flow-only gate, unrelated to
+      // identity over this channel. The "User said" row above is already
+      // written regardless of outcome, so nothing below re-inserts it.
+      const pendingOfferResult = await pool.query(
+        `SELECT id FROM co_memories WHERE user_id = $1 AND memory_type = 'call_offer_pending' ORDER BY created_at DESC LIMIT 1`,
+        [user.id],
+      );
+      const hasPendingOffer = !!pendingOfferResult.rows[0];
+
+      const { text: rawCallClassification } = await generateText({
+        model: anthropic("claude-haiku-4-5-20251001"),
+        prompt: `A user is texting Co, a life concierge.${hasPendingOffer ? " Co just offered them a phone call and is waiting for a yes or no." : ""}
+
+Their message: "${content}"
+
+Classify as ONE of:
+- "explicit_request" — they are directly asking Co to call them, or asking to talk by phone
+${hasPendingOffer ? '- "accepts_offer" — they are saying yes to the call Co just offered\n- "declines_offer" — they are saying no to the call Co just offered\n' : ""}- "would_benefit" — none of the above, but what they're describing is complex, emotional, or hard to unpack over short texts, and voice would genuinely help
+- "none" — normal conversation, no call is relevant
+
+Return ONLY the classification, nothing else.`,
+      });
+      const callAction = rawCallClassification.trim().toLowerCase().replace(/^[`"']+|[`"']+$/g, "");
+
+      if (hasPendingOffer && (callAction === "accepts_offer" || callAction === "declines_offer")) {
+        await pool.query(
+          `INSERT INTO co_memories (user_id, memory_type, content) VALUES ($1, 'call_offer_resolved', $2)`,
+          [user.id, callAction],
+        );
+      }
+
+      const shouldTriggerCall = callAction === "explicit_request" || (hasPendingOffer && callAction === "accepts_offer");
+      const shouldOfferCall = !hasPendingOffer && callAction === "would_benefit";
+
+      if (shouldTriggerCall) {
+        const callResult = await triggerCall(user.id);
+        if (callResult.success) {
+          const confirmation = "Calling you now.";
+          await pool.query(
+            `INSERT INTO co_memories (user_id, memory_type, content) VALUES ($1, 'text_exchange', $2)`,
+            [user.id, `Co replied: ${confirmation}`],
+          );
+          try {
+            await sendblue.messages.send({
+              number,
+              content: confirmation,
+              from_number: process.env.SENDBLUE_PHONE_NUMBER!,
+            });
+          } catch (smsErr: any) {
+            console.error(`Sendblue call-confirmation send failed for ${number} (non-fatal):`, smsErr?.message ?? smsErr);
+          }
+          return res.status(200).send({ received: true, action: "call_triggered", call_sid: callResult.call_sid });
+        }
+        console.error(`webhooks: call trigger failed for user ${user.id} (non-fatal, falling through to normal reply):`, callResult.error);
+        // Falls through to the normal reply flow below on failure — a
+        // failed dial attempt should never leave the conversation silent.
+      }
+
+      if (shouldOfferCall) {
+        const { text: rawOffer } = await generateText({
+          model: anthropic("claude-haiku-4-5-20251001"),
+          prompt: `You are Co, a life concierge, texting with someone. They just said: "${content}"\n\nWhat they're describing sounds like it would genuinely be easier to talk through by voice than text. Offer them a call, warmly, in your own words — something like asking if they want to hop on a call about this. Don't place any call, just ask. One short sentence. No exclamation points, no em dashes. Under 160 characters — this is a text message, not a paragraph.`,
+        });
+        const offer = capMessageLength(rawOffer, 160);
+        await pool.query(
+          `INSERT INTO co_memories (user_id, memory_type, content) VALUES ($1, 'call_offer_pending', $2)`,
+          [user.id, offer],
+        );
+        await pool.query(
+          `INSERT INTO co_memories (user_id, memory_type, content) VALUES ($1, 'text_exchange', $2)`,
+          [user.id, `Co replied: ${offer}`],
+        );
+        try {
+          await sendblue.messages.send({
+            number,
+            content: offer,
+            from_number: process.env.SENDBLUE_PHONE_NUMBER!,
+          });
+        } catch (smsErr: any) {
+          console.error(`Sendblue call-offer send failed for ${number} (non-fatal):`, smsErr?.message ?? smsErr);
+        }
+        return res.status(200).send({ received: true, action: "call_offered" });
+      }
+
+      // First real exchange, nothing on file yet (no call ever happened, no
+      // profile built from text yet either) — ask up front rather than
+      // silently defaulting to one channel. Skipped if this message already
+      // triggered/offered a call above (callAction !== "none"), since that
+      // already resolves the question. Text isn't a lesser fallback here:
+      // choosing it actually builds the profile too, see the fire-and-forget
+      // extraction at the end of this handler below.
+      if (!hasProfile && isFirstContact && callAction === "none") {
+        const askMessage =
+          "Want to hop on a quick call, or keep going by text? Either way works, just want to actually get to know you.";
+        const capped = capMessageLength(askMessage, 160);
+        await pool.query(
+          `INSERT INTO co_memories (user_id, memory_type, content) VALUES ($1, 'text_exchange', $2)`,
+          [user.id, `Co replied: ${capped}`],
+        );
+        try {
+          await sendblue.messages.send({
+            number,
+            content: capped,
+            from_number: process.env.SENDBLUE_PHONE_NUMBER!,
+          });
+        } catch (smsErr: any) {
+          console.error(`Sendblue channel-preference-ask send failed for ${number} (non-fatal):`, smsErr?.message ?? smsErr);
+        }
+        return res.status(200).send({ received: true, action: "channel_preference_asked" });
+      }
+
+      // Real action-triggering, iMessage side (Intent Layer only) — mirrors
+      // the surface_recommendation Hume tool on the voice path, but iMessage
+      // has no tool_call plane to invoke it through, so this is a direct
+      // call to the same shared generateRecommendation() gated by a cheap
+      // classification step instead. Folded into the one reply below (never
+      // sent as a second message) to stay consistent with the pacing fix
+      // above.
+      let recommendationContext = "";
+      try {
+        const { text: wantsClassification } = await generateText({
+          model: anthropic("claude-haiku-4-5-20251001"),
+          prompt: `Classify this message as either "wants_something_concrete" or "normal_conversation".
+
+"wants_something_concrete" means they're asking Co to actually suggest, recommend, help find, or surface something specific right now (e.g. "what can you surface for me", "find me something", "what should I do about this").
+"normal_conversation" means anything else — small talk, questions about Co, answering a question, general chat.
+
+Message: "${content}"
+
+Return ONLY the classification, nothing else.`,
+        });
+        const wantsSomethingConcrete = wantsClassification
+          .trim()
+          .toLowerCase()
+          .replace(/^[`"']+|[`"']+$/g, "")
+          .includes("wants_something_concrete");
+
+        if (wantsSomethingConcrete) {
+          const recommendation = await generateRecommendation(user.id);
+          if (recommendation.available) {
+            recommendationContext = `\nYou just pulled up a real recommendation for them: "${recommendation.match}" — ${recommendation.reason}. Work this into your reply naturally, as your own suggestion, not a status update.`;
+          }
+        }
+      } catch (err: any) {
+        console.error("webhooks: recommendation classification failed (non-fatal):", err?.message ?? err);
+      }
+
       const { text: reply } = await generateText({
         model: anthropic("claude-haiku-4-5-20251001"),
-        prompt: `You are Co, an exclusive life concierge. Recent context:\n${recent || "(start of conversation)"}\n\n${user.first_name} just said: "${content}"\n\nReply briefly and warmly, like Co would. 1-2 sentences, no exclamation points, no em dashes.`,
+        prompt: `You are Co, an exclusive life concierge.
+
+What you already know about ${user.first_name} from a prior call:
+${profileContext || "(nothing on file yet from a call — this is effectively a first conversation)"}
+
+Recent text conversation, in order:
+${recentConversation || "(start of the text conversation)"}
+
+${user.first_name} just said: "${content}"
+${recommendationContext}
+Reply briefly and warmly, like Co would, addressing only what they just said — one thought, not several. Ground everything ONLY in the information above and what has actually been said in this conversation — never state or imply a specific personal detail, preference, or fact about them that isn't listed above or wasn't actually said in this thread. If you don't have something, ask rather than assume.
+
+One short sentence. No exclamation points, no em dashes. Under 160 characters — this is a text message, not a paragraph.`,
       });
+      const cappedReply = capMessageLength(reply, 160);
 
       await pool.query(
         `INSERT INTO co_memories (user_id, memory_type, content) VALUES ($1, 'text_exchange', $2)`,
-        [user.id, `Co replied: ${reply}`],
+        [user.id, `Co replied: ${cappedReply}`],
       );
 
       try {
         await sendblue.messages.send({
           number,
-          content: reply,
+          content: cappedReply,
           from_number: process.env.SENDBLUE_PHONE_NUMBER!,
         });
       } catch (smsErr: any) {
         console.error(`Sendblue reply send failed for ${number} (non-fatal):`, smsErr?.message ?? smsErr);
       }
 
-      return res.status(200).send({ received: true, reply });
+      // Text-only conversations used to never build a co_profile at all —
+      // only a call transcript ran through extraction, so choosing "text"
+      // over the call offer above would otherwise be a dead end. Fire-and-
+      // forget, the same real pipeline a call uses (extractPsychographicProfile
+      // + storeProfile + captureIntent), fed the accumulated text thread
+      // instead of a call transcript. Never blocks the reply already sent
+      // above; a failure here just means this message didn't add anything
+      // new to the profile.
+      const textTranscript = `${recentConversation}\nuser: ${content}\nassistant: ${cappedReply}`.trim();
+      extractPsychographicProfile(textTranscript)
+        .then(({ extracted }) => storeProfile(user.id, extracted, textTranscript))
+        .catch((err: any) => console.error("webhooks: text-based profile extraction failed (non-fatal):", err?.message ?? err));
+      captureIntent(user.id, textTranscript).catch((err: any) =>
+        console.error("webhooks: text-based intent capture failed (non-fatal):", err?.message ?? err),
+      );
+
+      return res.status(200).send({ received: true, reply: cappedReply });
     } catch (error) {
       next(error);
     }

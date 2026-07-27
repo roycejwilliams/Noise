@@ -10,6 +10,7 @@ import { runTestMigrations } from "./db/testMigrations.js";
 import { configureCoTestSocket } from "./socket/index.js";
 import apiRouter from "./routes/api.js";
 import checklistRouter from "./routes/checklist.js";
+import circlesTestRouter from "./routes/circlesTest.js";
 import phoneRouter from "./routes/phone.js";
 import { createWebhooksRouter } from "./routes/webhooks.js";
 
@@ -74,6 +75,7 @@ async function main() {
   app.use("/api", apiRouter);
   app.use("/api/phone", phoneRouter);
   app.use("/api/checklist", checklistRouter);
+  app.use("/api/circles-test", circlesTestRouter);
   // Mounted at root — these paths (/sendblue/webhook, /co/call-status,
   // /co/webhook) intentionally mirror production's exactly. See webhooks.ts.
   app.use(createWebhooksRouter(io));

@@ -1,17 +1,11 @@
 import { randomInt } from "crypto";
 import express, { Request, Response, NextFunction } from "express";
-import twilio from "twilio";
 import pool from "../../../api/src/db/db.js";
 import { sendSMS } from "../../../api/src/otpActions.js";
 import { getLiveSnapshot } from "../services/liveCallState.js";
+import { triggerCall } from "../services/callTrigger.js";
 
 const router = express.Router();
-
-const twilioClient = twilio(
-  process.env.TWILIO_ACCOUNT_SID!,
-  process.env.TWILIO_CLIENT_SECRET!,
-  { accountSid: process.env.TWILIO_LIVE_SID! },
-);
 
 // POST /api/phone/session — entry screen is a single "Message Co to start"
 // button (Ditto pattern, no name/phone form), so there's no phone number to
@@ -158,7 +152,7 @@ router.post("/:user_id/tag", async (req: Request, res: Response, next: NextFunct
 router.post("/:user_id/call", async (req: Request, res: Response, next: NextFunction) => {
   try {
     const userResult = await pool.query(
-      `SELECT first_name, phone_number, otp_verified FROM users WHERE id = $1`,
+      `SELECT otp_verified FROM users WHERE id = $1`,
       [req.params.user_id],
     );
     const user = userResult.rows[0];
@@ -167,31 +161,9 @@ router.post("/:user_id/call", async (req: Request, res: Response, next: NextFunc
       return res.status(403).json({ success: false, error: "Verify OTP before requesting a call." });
     }
 
-    const webhookParams = new URLSearchParams({
-      config_id: process.env.HUME_CONFIG_ID!,
-      api_key: process.env.HUME_API_KEY!,
-      custom_session_id: String(req.params.user_id),
-      first_name: user.first_name ?? "",
-    });
-    const webhookUrl = `https://api.hume.ai/v0/evi/twilio?${webhookParams.toString()}`;
-    const statusCallbackUrl = `${process.env.API_URL}/co/call-status`;
-
-    const call = await twilioClient.calls.create({
-      to: user.phone_number,
-      from: process.env.TWILIO_PHONE_NUMBER!,
-      url: webhookUrl,
-      statusCallback: statusCallbackUrl,
-      statusCallbackEvent: ["ringing", "answered", "completed"],
-      statusCallbackMethod: "POST",
-      timeout: 20,
-    });
-
-    await pool.query(
-      `UPDATE users SET call_sid = $2, call_status = 'initiated' WHERE id = $1`,
-      [req.params.user_id, call.sid],
-    );
-
-    return res.status(200).json({ success: true, call_sid: call.sid });
+    const result = await triggerCall(String(req.params.user_id));
+    if (!result.success) return res.status(404).json({ success: false, error: result.error });
+    return res.status(200).json({ success: true, call_sid: result.call_sid });
   } catch (error) {
     next(error);
   }

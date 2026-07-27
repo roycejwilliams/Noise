@@ -115,3 +115,237 @@ async function load() {
 }
 
 load();
+
+// Circles pipeline test panel — every render/action here is explicitly
+// simulated: true, and the buttons only ever call co-test's own internal
+// /api/circles-test/* routes, never anything that touches a real Sendblue
+// send.
+const simStateEl = document.getElementById("sim-state") as HTMLElement;
+const simSeedBtn = document.getElementById("sim-seed") as HTMLButtonElement;
+const simMatchBtn = document.getElementById("sim-match") as HTMLButtonElement;
+const simResetBtn = document.getElementById("sim-reset") as HTMLButtonElement;
+
+type SimMember = { id: string; first_name: string };
+type SimCircleMember = { member_id: string; status: string; first_name: string };
+type SimMoment = {
+  id: string;
+  moments_name: string;
+  status: string;
+  venue: string | null;
+  candidate_windows: { label: string }[] | null;
+  suggested_time: string | null;
+};
+type SimMomentResponse = { user_id: string; response: string | null; selected_windows: number[] | null; first_name: string };
+
+async function simPost(path: string, body?: unknown): Promise<any> {
+  const res = await fetch(`/api/circles-test/${path}`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: body ? JSON.stringify(body) : undefined,
+  });
+  return res.json();
+}
+
+function renderSimState(data: {
+  members: SimMember[];
+  circle: { id: string; circle_name: string; status: string } | null;
+  circle_members: SimCircleMember[];
+  moment: SimMoment | null;
+  moment_responses: SimMomentResponse[];
+}) {
+  simStateEl.innerHTML = "";
+
+  if (!data.members.length) {
+    const empty = document.createElement("p");
+    empty.className = "sim-empty";
+    empty.textContent = "No simulated members seeded yet.";
+    simStateEl.appendChild(empty);
+    return;
+  }
+
+  const membersBlock = document.createElement("div");
+  membersBlock.className = "sim-block";
+  membersBlock.innerHTML = `<div class="sim-block-title">Seeded members (${data.members.length})</div>`;
+  for (const m of data.members) {
+    const row = document.createElement("div");
+    row.className = "sim-member-row";
+    const circleStatus = data.circle_members.find((cm) => cm.member_id === m.id)?.status;
+    row.innerHTML = `<span class="sim-member-name">${m.first_name}</span><span class="sim-member-status">${circleStatus ?? "not in a circle"}</span>`;
+    membersBlock.appendChild(row);
+  }
+  simStateEl.appendChild(membersBlock);
+
+  if (!data.circle) return;
+
+  const circleBlock = document.createElement("div");
+  circleBlock.className = "sim-block";
+  circleBlock.innerHTML = `<div class="sim-block-title">${data.circle.circle_name} — ${data.circle.status}</div>`;
+
+  if (data.circle.status === "pending_approval") {
+    const row = document.createElement("div");
+    row.className = "sim-member-row";
+    row.innerHTML = `<span>Moderator decision</span>`;
+    const actions = document.createElement("div");
+    actions.className = "sim-actions";
+    const approve = document.createElement("button");
+    approve.className = "sim-btn";
+    approve.textContent = "Approve circle";
+    approve.onclick = async () => {
+      await simPost("moderator-approval", { target: { type: "circle", circleId: data.circle!.id }, action: "approve" });
+      loadSimState();
+    };
+    const reject = document.createElement("button");
+    reject.className = "sim-btn sim-btn-reject";
+    reject.textContent = "Reject circle";
+    reject.onclick = async () => {
+      await simPost("moderator-approval", { target: { type: "circle", circleId: data.circle!.id }, action: "reject" });
+      loadSimState();
+    };
+    actions.append(approve, reject);
+    row.appendChild(actions);
+    circleBlock.appendChild(row);
+  } else if (data.circle.status === "active") {
+    for (const cm of data.circle_members) {
+      const row = document.createElement("div");
+      row.className = "sim-member-row";
+      row.innerHTML = `<span class="sim-member-name">${cm.first_name}</span><span class="sim-member-status">${cm.status}</span>`;
+      if (cm.status === "pending") {
+        const actions = document.createElement("div");
+        actions.className = "sim-actions";
+        const accept = document.createElement("button");
+        accept.className = "sim-btn";
+        accept.textContent = "Accept";
+        accept.onclick = async () => {
+          await simPost("circle-response", { circle_id: data.circle!.id, member_id: cm.member_id, action: "accept" });
+          loadSimState();
+        };
+        const decline = document.createElement("button");
+        decline.className = "sim-btn sim-btn-reject";
+        decline.textContent = "Decline";
+        decline.onclick = async () => {
+          await simPost("circle-response", { circle_id: data.circle!.id, member_id: cm.member_id, action: "decline" });
+          loadSimState();
+        };
+        actions.append(accept, decline);
+        row.appendChild(actions);
+      }
+      circleBlock.appendChild(row);
+    }
+  }
+  simStateEl.appendChild(circleBlock);
+
+  if (!data.moment) return;
+
+  const momentBlock = document.createElement("div");
+  momentBlock.className = "sim-block";
+  momentBlock.innerHTML = `<div class="sim-block-title">${data.moment.moments_name} — ${data.moment.status}</div>`;
+
+  if (data.moment.status === "polling" && data.moment.candidate_windows?.length) {
+    for (const resp of data.moment_responses) {
+      const row = document.createElement("div");
+      row.className = "sim-member-row";
+      const respondedLabel = resp.selected_windows?.length
+        ? resp.selected_windows.map((i) => data.moment!.candidate_windows![i - 1]?.label).join(", ")
+        : "no reply yet";
+      row.innerHTML = `<span class="sim-member-name">${resp.first_name}</span><span class="sim-member-status">${respondedLabel}</span>`;
+      const actions = document.createElement("div");
+      actions.className = "sim-actions";
+      data.moment.candidate_windows.forEach((w, i) => {
+        const btn = document.createElement("button");
+        btn.className = "sim-btn";
+        btn.textContent = w.label;
+        btn.onclick = async () => {
+          await simPost("availability-response", {
+            moment_id: data.moment!.id,
+            member_id: resp.user_id,
+            selected_windows: [i + 1],
+          });
+          loadSimState();
+        };
+        actions.appendChild(btn);
+      });
+      row.appendChild(actions);
+      momentBlock.appendChild(row);
+    }
+    const resolveBtn = document.createElement("button");
+    resolveBtn.className = "sim-btn";
+    resolveBtn.textContent = "Resolve consensus now";
+    resolveBtn.style.marginTop = "8px";
+    resolveBtn.onclick = async () => {
+      await simPost("resolve-consensus", { moment_id: data.moment!.id });
+      loadSimState();
+    };
+    momentBlock.appendChild(resolveBtn);
+  } else if (data.moment.status === "pending_venue_approval") {
+    const row = document.createElement("div");
+    row.className = "sim-member-row";
+    row.innerHTML = `<span>Venue: ${data.moment.venue ?? "TBD"} — ${data.moment.suggested_time ?? ""}</span>`;
+    const actions = document.createElement("div");
+    actions.className = "sim-actions";
+    const approve = document.createElement("button");
+    approve.className = "sim-btn";
+    approve.textContent = "Approve venue";
+    approve.onclick = async () => {
+      await simPost("moderator-approval", { target: { type: "venue", momentId: data.moment!.id }, action: "approve" });
+      loadSimState();
+    };
+    const reject = document.createElement("button");
+    reject.className = "sim-btn sim-btn-reject";
+    reject.textContent = "Reject venue";
+    reject.onclick = async () => {
+      await simPost("moderator-approval", { target: { type: "venue", momentId: data.moment!.id }, action: "reject" });
+      loadSimState();
+    };
+    actions.append(approve, reject);
+    row.appendChild(actions);
+    momentBlock.appendChild(row);
+  } else if (data.moment.status === "confirmed") {
+    const row = document.createElement("div");
+    row.className = "sim-member-row";
+    row.innerHTML = `<span>Confirmed — pipeline resolved end to end.</span>`;
+    momentBlock.appendChild(row);
+  }
+  simStateEl.appendChild(momentBlock);
+}
+
+async function loadSimState() {
+  try {
+    const json = await (await fetch("/api/circles-test/state")).json();
+    if (json.success) renderSimState(json);
+  } catch (err) {
+    console.error("Failed to load Circles sim state:", err);
+  }
+}
+
+simSeedBtn.addEventListener("click", async () => {
+  simSeedBtn.disabled = true;
+  try {
+    await simPost("seed");
+    await loadSimState();
+  } finally {
+    simSeedBtn.disabled = false;
+  }
+});
+
+simMatchBtn.addEventListener("click", async () => {
+  simMatchBtn.disabled = true;
+  try {
+    const result = await simPost("match");
+    if (!result.success) alert(result.error ?? "Matching failed.");
+    await loadSimState();
+  } finally {
+    simMatchBtn.disabled = false;
+  }
+});
+
+simResetBtn.addEventListener("click", async () => {
+  simResetBtn.disabled = true;
+  try {
+    await simPost("reset");
+    await loadSimState();
+  } finally {
+    simResetBtn.disabled = false;
+  }
+});
+
+loadSimState();

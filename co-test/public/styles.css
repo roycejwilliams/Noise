@@ -1325,3 +1325,123 @@ button {
 .prompt-actions .prompt-mode-label {
   margin: 0;
 }
+
+/* Circles pipeline test (simulated) — deliberately loud and visually
+   unlike every other panel on this page. A real production incident this
+   session came from realistic-looking seed data being mistaken for
+   something real once a live process started acting on it — reserved
+   phone numbers and plausible names were confirmed NOT enough on their
+   own. This banner is the hard, impossible-to-miss signal instead. */
+.sim-panel {
+  border: 2px solid var(--amber);
+  border-radius: var(--radius-md);
+  background: var(--amber-bg);
+  padding: var(--space-5);
+  margin-top: var(--space-3);
+}
+
+.sim-banner {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  font-size: 13px;
+  font-weight: 700;
+  color: var(--amber);
+  text-transform: uppercase;
+  letter-spacing: 0.03em;
+  margin-bottom: var(--space-4);
+}
+
+.sim-banner::before {
+  content: "⚠";
+  font-size: 15px;
+}
+
+.sim-subtext {
+  font-size: 13px;
+  color: var(--text-secondary);
+  margin: 0 0 var(--space-4);
+  max-width: 60ch;
+}
+
+.sim-controls {
+  display: flex;
+  gap: var(--space-3);
+  flex-wrap: wrap;
+  margin-bottom: var(--space-4);
+}
+
+.sim-controls .download-button {
+  border-color: var(--amber);
+  color: var(--amber);
+}
+
+.sim-empty {
+  font-size: 13px;
+  color: var(--text-secondary);
+}
+
+.sim-block {
+  background: var(--bg-raised);
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius-sm);
+  padding: var(--space-4);
+  margin-bottom: var(--space-3);
+}
+
+.sim-block-title {
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--text-secondary);
+  text-transform: uppercase;
+  letter-spacing: 0.02em;
+  margin-bottom: var(--space-3);
+}
+
+.sim-member-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-3);
+  padding: var(--space-2) 0;
+  font-size: 13px;
+  border-bottom: 1px solid var(--border);
+}
+
+.sim-member-row:last-child {
+  border-bottom: none;
+}
+
+.sim-member-name {
+  font-weight: 500;
+}
+
+.sim-member-status {
+  color: var(--text-tertiary);
+  font-size: 12px;
+}
+
+.sim-actions {
+  display: flex;
+  gap: var(--space-2);
+}
+
+.sim-btn {
+  font-size: 12px;
+  padding: 4px 10px;
+  border-radius: var(--radius-sm);
+  border: 1px solid var(--border-strong);
+  background: var(--bg-raised);
+  color: var(--text);
+  cursor: pointer;
+}
+
+.sim-btn:hover {
+  border-color: var(--accent);
+  color: var(--accent);
+}
+
+.sim-btn.sim-btn-reject {
+  border-color: var(--red);
+  color: var(--red);
+}

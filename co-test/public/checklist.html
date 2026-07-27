@@ -34,6 +34,24 @@
         <h2 class="checklist-section-title">Human input — never inferred or guessed by the system</h2>
         <div id="manual-list" class="checklist-list"></div>
       </section>
+
+      <section class="checklist-section">
+        <h2 class="checklist-section-title">Circles pipeline test</h2>
+        <div class="sim-panel">
+          <div class="sim-banner">Simulated pipeline test — validates matching / approval / booking logic only, not the real texting experience</div>
+          <p class="sim-subtext">
+            Seeded members and venues live entirely in co-test's own DB, flagged <code>is_simulated</code>.
+            Every stage below runs the same logic a real reply would — accept/decline, Moderator approve/reject,
+            availability poll — just triggered by these buttons instead of a real Sendblue round trip.
+          </p>
+          <div class="sim-controls">
+            <button id="sim-seed" class="download-button">Seed simulated members + venues</button>
+            <button id="sim-match" class="download-button">Run matching</button>
+            <button id="sim-reset" class="download-button">Reset simulated data</button>
+          </div>
+          <div id="sim-state"></div>
+        </div>
+      </section>
     </div>
   </main>
 
