@@ -124,6 +124,9 @@ const simStateEl = document.getElementById("sim-state") as HTMLElement;
 const simSeedBtn = document.getElementById("sim-seed") as HTMLButtonElement;
 const simMatchBtn = document.getElementById("sim-match") as HTMLButtonElement;
 const simResetBtn = document.getElementById("sim-reset") as HTMLButtonElement;
+const simScenarioSelect = document.getElementById("sim-scenario-select") as HTMLSelectElement;
+const simScenarioDescEl = document.getElementById("sim-scenario-desc") as HTMLElement;
+const simScenarioResultEl = document.getElementById("sim-scenario-result") as HTMLElement;
 
 type SimMember = { id: string; first_name: string };
 type SimCircleMember = { member_id: string; status: string; first_name: string };
@@ -136,6 +139,75 @@ type SimMoment = {
   suggested_time: string | null;
 };
 type SimMomentResponse = { user_id: string; response: string | null; selected_windows: number[] | null; first_name: string };
+
+type ScenarioCatalogEntry = { id: string; label: string; description: string; expectedNote: string };
+type ScenarioRun = {
+  scenarioId: string;
+  scenarioLabel: string;
+  finalScore: number | null;
+  consideredCandidates: number;
+  memberNames: string[];
+  excludedNames: string[];
+  rejectionReason: string | null;
+  passed: boolean | null;
+  expectedNote: string;
+  ranAt: string;
+};
+
+let scenarioCatalog: ScenarioCatalogEntry[] = [];
+
+async function loadScenarioCatalog() {
+  try {
+    const json = await (await fetch("/api/circles-test/scenarios")).json();
+    if (!json.success) return;
+    scenarioCatalog = json.scenarios;
+    for (const s of scenarioCatalog) {
+      const opt = document.createElement("option");
+      opt.value = s.id;
+      opt.textContent = `${s.id} — ${s.label}`;
+      simScenarioSelect.appendChild(opt);
+    }
+    updateScenarioDesc();
+  } catch (err) {
+    console.error("Failed to load scenario catalog:", err);
+  }
+}
+
+function updateScenarioDesc() {
+  const selected = scenarioCatalog.find((s) => s.id === simScenarioSelect.value);
+  simScenarioDescEl.textContent = selected
+    ? `${selected.description} Expected: ${selected.expectedNote}`
+    : "Randomized, varied-but-compatible profiles — good for general stress-testing, not a known-answer check.";
+}
+
+simScenarioSelect.addEventListener("change", updateScenarioDesc);
+
+function renderScenarioResult(run: ScenarioRun | null) {
+  simScenarioResultEl.innerHTML = "";
+  if (!run) return;
+
+  const block = document.createElement("div");
+  block.className = "sim-block sim-scenario-block";
+
+  const badgeClass = run.passed === true ? "sim-badge-pass" : run.passed === false ? "sim-badge-fail" : "sim-badge-exploratory";
+  const badgeText = run.passed === true ? "PASS" : run.passed === false ? "FAIL" : "EXPLORATORY";
+
+  const scoreText = run.finalScore === null ? "n/a (rejected before scoring)" : run.finalScore.toFixed(3);
+
+  block.innerHTML = `
+    <div class="sim-block-title">
+      Scenario ${run.scenarioId} — ${run.scenarioLabel}
+      <span class="sim-badge ${badgeClass}">${badgeText}</span>
+    </div>
+    <div class="sim-scenario-row"><span class="sim-scenario-key">Compatibility score</span><span>${scoreText}</span></div>
+    <div class="sim-scenario-row"><span class="sim-scenario-key">Candidates considered</span><span>${run.consideredCandidates}</span></div>
+    <div class="sim-scenario-row"><span class="sim-scenario-key">Grouped</span><span>${run.memberNames.length ? run.memberNames.join(", ") : "(no circle formed)"}</span></div>
+    <div class="sim-scenario-row"><span class="sim-scenario-key">Excluded</span><span>${run.excludedNames.length ? run.excludedNames.join(", ") : "—"}</span></div>
+    ${run.rejectionReason ? `<div class="sim-scenario-row"><span class="sim-scenario-key">Rejection reason</span><span>${run.rejectionReason}</span></div>` : ""}
+    <div class="sim-scenario-note">Expected: ${run.expectedNote}</div>
+  `;
+  simScenarioResultEl.appendChild(block);
+}
 
 async function simPost(path: string, body?: unknown): Promise<any> {
   const res = await fetch(`/api/circles-test/${path}`, {
@@ -311,7 +383,10 @@ function renderSimState(data: {
 async function loadSimState() {
   try {
     const json = await (await fetch("/api/circles-test/state")).json();
-    if (json.success) renderSimState(json);
+    if (json.success) {
+      renderSimState(json);
+      renderScenarioResult(json.scenario_run ?? null);
+    }
   } catch (err) {
     console.error("Failed to load Circles sim state:", err);
   }
@@ -320,7 +395,8 @@ async function loadSimState() {
 simSeedBtn.addEventListener("click", async () => {
   simSeedBtn.disabled = true;
   try {
-    await simPost("seed");
+    const scenario = simScenarioSelect.value || undefined;
+    await simPost("seed", scenario ? { scenario } : undefined);
     await loadSimState();
   } finally {
     simSeedBtn.disabled = false;
@@ -331,7 +407,10 @@ simMatchBtn.addEventListener("click", async () => {
   simMatchBtn.disabled = true;
   try {
     const result = await simPost("match");
-    if (!result.success) alert(result.error ?? "Matching failed.");
+    // "No circle formed" can be the scenario's own designed-correct answer
+    // (Scenario B) — only alert when there's no scenario result to explain
+    // it, so an expected rejection doesn't read as a broken test.
+    if (!result.success && !result.scenario) alert(result.error ?? "Matching failed.");
     await loadSimState();
   } finally {
     simMatchBtn.disabled = false;
@@ -348,4 +427,5 @@ simResetBtn.addEventListener("click", async () => {
   }
 });
 
+loadScenarioCatalog();
 loadSimState();

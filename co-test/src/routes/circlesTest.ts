@@ -1,14 +1,18 @@
 import express, { Request, Response, NextFunction } from "express";
 import pool from "../../../api/src/db/db.js";
 import {
+  getLastScenarioRun,
   resetSimulatedData,
   resolveConsensusNow,
   runMatchingForSimulatedGroup,
+  SCENARIOS,
   seedFakeVenues,
+  seedScenario,
   seedSimulatedMembers,
   simulateAvailabilityResponse,
   simulateCircleResponse,
   simulateModeratorApproval,
+  type ScenarioId,
 } from "../services/circlesSimulation.js";
 
 // Internal-only test-harness endpoints for the Circles pipeline simulation
@@ -19,11 +23,28 @@ import {
 // distinction being visible.
 const router = express.Router();
 
-router.post("/seed", async (_req: Request, res: Response, next: NextFunction) => {
+// GET /scenarios — static catalog for the panel's scenario picker.
+router.get("/scenarios", async (_req: Request, res: Response, next: NextFunction) => {
   try {
+    const list = Object.values(SCENARIOS).map((s) => ({
+      id: s.id,
+      label: s.label,
+      description: s.description,
+      expectedNote: s.expected.note,
+    }));
+    return res.status(200).json({ success: true, scenarios: list });
+  } catch (error) {
+    next(error);
+  }
+});
+
+router.post("/seed", async (req: Request, res: Response, next: NextFunction) => {
+  try {
+    const { scenario } = req.body as { scenario?: ScenarioId };
     const venues = await seedFakeVenues();
-    const members = await seedSimulatedMembers(6);
-    return res.status(200).json({ success: true, simulated: true, member_ids: members.userIds, venues });
+    const members =
+      scenario && SCENARIOS[scenario] ? await seedScenario(scenario) : await seedSimulatedMembers(6);
+    return res.status(200).json({ success: true, simulated: true, member_ids: members.userIds, venues, scenario: scenario ?? null });
   } catch (error) {
     next(error);
   }
@@ -76,6 +97,8 @@ router.get("/state", async (_req: Request, res: Response, next: NextFunction) =>
         )
       : { rows: [] as any[] };
 
+    const lastScenarioRun = await getLastScenarioRun();
+
     return res.status(200).json({
       success: true,
       simulated: true,
@@ -84,6 +107,7 @@ router.get("/state", async (_req: Request, res: Response, next: NextFunction) =>
       circle_members: circleMembers.rows,
       moment: moment.rows[0] ?? null,
       moment_responses: momentResponses.rows,
+      scenario_run: lastScenarioRun,
     });
   } catch (error) {
     next(error);

@@ -386,10 +386,49 @@ function passesTrustCheck(trustScores: number[]): boolean {
   return !(hasHighTrust && hasLowTrust);
 }
 
+// Diagnostics for the Circles simulation harness (circlesSimulation.ts) —
+// findBestCircle only ever returns the final id array or null, which is
+// fine for production's real placement path but hides *why* a group failed
+// and what score it actually landed at. This is co-test-simulation-only
+// scaffolding, not part of the documented api/matching.ts fork — free to
+// diverge from production without needing to stay hand-synced.
+type CircleAssemblyDiagnostics = {
+  result: string[] | null;
+  finalScore: number | null;
+  consideredCandidates: number;
+  statedAskApplied: boolean;
+  candidatesAfterStatedAsk: number | null;
+  rejectionReason:
+    | null
+    | "no_profile"
+    | "too_few_candidates_in_city"
+    | "too_few_after_chapter_filter"
+    | "too_few_after_stated_ask"
+    | "too_few_after_group_assembly"
+    | "too_few_after_trust_check"
+    | "below_score_floor";
+};
+
+// Core assembly logic — findBestCircle (unchanged signature/behavior, the
+// production contract) and findBestCircleDiagnostic (simulation-only) both
+// delegate here so there is exactly one implementation to keep correct.
 // Main matching function — assembles the best circle for a given user
 // Called by POST /co/place
-// Returns an array of user IDs that form the best group, or null if no match found
-async function findBestCircle(userId: string, excludeUserIds: string[] = []): Promise<string[] | null> {
+async function findBestCircleCore(userId: string, excludeUserIds: string[] = []): Promise<CircleAssemblyDiagnostics> {
+  const empty = (
+    rejectionReason: CircleAssemblyDiagnostics["rejectionReason"],
+    consideredCandidates = 0,
+    extra: Partial<CircleAssemblyDiagnostics> = {},
+  ): CircleAssemblyDiagnostics => ({
+    result: null,
+    finalScore: null,
+    consideredCandidates,
+    statedAskApplied: false,
+    candidatesAfterStatedAsk: null,
+    rejectionReason,
+    ...extra,
+  });
+
   // Step 1 — Fetch the user being placed. No lat/lng extraction here (see
   // file header) — co-test has no coordinates column/PostGIS.
   const userResult = await pool.query(
@@ -397,7 +436,7 @@ async function findBestCircle(userId: string, excludeUserIds: string[] = []): Pr
     [userId],
   );
   const user = userResult.rows[0];
-  if (!user) return null;
+  if (!user) return empty("no_profile");
 
 
   // Step 2 — Fetch candidates in the same city. City is the sole geographic
@@ -421,7 +460,7 @@ async function findBestCircle(userId: string, excludeUserIds: string[] = []): Pr
   const candidates = candidatesResult.rows;
 
   // Need at least MIN_CIRCLE_SIZE - 1 candidates to even attempt a group
-  if (candidates.length < min_size - 1) return null;
+  if (candidates.length < min_size - 1) return empty("too_few_candidates_in_city", candidates.length);
 
   // Step 3 — Apply hard filters
   // Remove candidates who don't share at least 1 life chapter with the user
@@ -430,15 +469,21 @@ async function findBestCircle(userId: string, excludeUserIds: string[] = []): Pr
   );
 
   // Not enough candidates after filtering
-  if (filtered.length < min_size - 1) return null;
+  if (filtered.length < min_size - 1) return empty("too_few_after_chapter_filter", candidates.length);
 
   // Step 3.5 — If the user has an active stated ask (e.g. "find founders
   // with experience at Google"), narrow the pool to candidates who actually
   // satisfy it before scoring — see filterByStatedAsk.
+  let statedAskApplied = false;
+  let candidatesAfterStatedAsk: number | null = null;
   const activeAsk = getActiveSeekingAsk(user.intent);
   if (activeAsk) {
+    statedAskApplied = true;
     filtered = await filterByStatedAsk(activeAsk, filtered);
-    if (filtered.length < min_size - 1) return null;
+    candidatesAfterStatedAsk = filtered.length;
+    if (filtered.length < min_size - 1) {
+      return empty("too_few_after_stated_ask", candidates.length, { statedAskApplied, candidatesAfterStatedAsk });
+    }
   }
 
 
@@ -479,7 +524,9 @@ async function findBestCircle(userId: string, excludeUserIds: string[] = []): Pr
   }
 
   // Still below minimum — no valid circle, flag for manual placement
-  if (group.length < min_size - 1) return null;
+  if (group.length < min_size - 1) {
+    return empty("too_few_after_group_assembly", candidates.length, { statedAskApplied, candidatesAfterStatedAsk });
+  }
 
   // Step 6 — Trust check
   // Don't mix chronic ghosts (low trust) with high-trust users
@@ -500,7 +547,9 @@ async function findBestCircle(userId: string, excludeUserIds: string[] = []): Pr
         ...remaining.slice(0, max_size - 1 - cleanGroup.length),
       ];
 
-      if (backfilled.length < min_size - 1) return null;
+      if (backfilled.length < min_size - 1) {
+        return empty("too_few_after_trust_check", candidates.length, { statedAskApplied, candidatesAfterStatedAsk });
+      }
       group = backfilled;
     } else {
       group = cleanGroup;
@@ -519,11 +568,39 @@ async function findBestCircle(userId: string, excludeUserIds: string[] = []): Pr
   });
 
   // If group doesn't meet minimum score — flag for manual placement
-  if (finalScore < min_group_score) return null;
+  if (finalScore < min_group_score) {
+    return {
+      result: null,
+      finalScore,
+      consideredCandidates: candidates.length,
+      statedAskApplied,
+      candidatesAfterStatedAsk,
+      rejectionReason: "below_score_floor",
+    };
+  }
 
   // Step 8 — Enforce max size and return user IDs
   const finalUserIds = [userId, ...group.map((m) => m.user_id as string)];
-  return finalUserIds.slice(0, max_size);
+  return {
+    result: finalUserIds.slice(0, max_size),
+    finalScore,
+    consideredCandidates: candidates.length,
+    statedAskApplied,
+    candidatesAfterStatedAsk,
+    rejectionReason: null,
+  };
+}
+
+// Production contract — unchanged signature and behavior.
+// Returns an array of user IDs that form the best group, or null if no match found
+async function findBestCircle(userId: string, excludeUserIds: string[] = []): Promise<string[] | null> {
+  return (await findBestCircleCore(userId, excludeUserIds)).result;
+}
+
+// Simulation-only — same assembly, full diagnostics (score, rejection
+// reason, candidate counts) surfaced even when no circle forms.
+async function findBestCircleDiagnostic(userId: string, excludeUserIds: string[] = []): Promise<CircleAssemblyDiagnostics> {
+  return findBestCircleCore(userId, excludeUserIds);
 }
 
 export {
@@ -532,6 +609,7 @@ export {
   emotionalStateScore,
   filterByStatedAsk,
   findBestCircle,
+  findBestCircleDiagnostic,
   getActiveSeekingAsk,
   goalAlignmentScore,
   groupCompatibilityScore,
@@ -540,3 +618,4 @@ export {
   passesTrustCheck,
   socialEnergyScore,
 };
+export type { CircleAssemblyDiagnostics };

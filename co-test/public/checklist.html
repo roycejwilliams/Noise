@@ -45,10 +45,15 @@
             availability poll — just triggered by these buttons instead of a real Sendblue round trip.
           </p>
           <div class="sim-controls">
-            <button id="sim-seed" class="download-button">Seed simulated members + venues</button>
+            <select id="sim-scenario-select" class="sim-scenario-select">
+              <option value="">Random pool (stress test)</option>
+            </select>
+            <button id="sim-seed" class="download-button">Seed</button>
             <button id="sim-match" class="download-button">Run matching</button>
             <button id="sim-reset" class="download-button">Reset simulated data</button>
           </div>
+          <p id="sim-scenario-desc" class="sim-subtext"></p>
+          <div id="sim-scenario-result"></div>
           <div id="sim-state"></div>
         </div>
       </section>

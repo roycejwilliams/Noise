@@ -140,4 +140,35 @@ export function runTestMigrations() {
   pool
     .query(`ALTER TABLE moments ADD COLUMN IF NOT EXISTS candidate_windows JSONB`)
     .catch((err: Error) => console.error("moments.candidate_windows migration failed:", err));
+
+  // Which fixed hand-designed scenario (A/B/C, see circlesSimulation.ts) a
+  // simulated user belongs to, if any — orthogonal to test_channel
+  // ('circles_sim' covers both the legacy randomized pool and fixed
+  // scenarios). Null means the legacy randomized pool, used for general
+  // stress-testing rather than a known-answer check.
+  pool
+    .query(`ALTER TABLE users ADD COLUMN IF NOT EXISTS simulation_scenario TEXT`)
+    .catch((err: Error) => console.error("users.simulation_scenario migration failed:", err));
+
+  // One row per "Run matching" click against a fixed scenario — lets the
+  // checklist dashboard show the last result (score, who got grouped, pass/
+  // fail against the scenario's designed answer) without re-running after a
+  // page reload. Not written to for the legacy randomized pool (scenario_id
+  // null there would just be noise with nothing to check pass/fail against).
+  pool
+    .query(
+      `CREATE TABLE IF NOT EXISTS co_test_scenario_runs (
+        id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+        scenario_id TEXT NOT NULL,
+        final_score REAL,
+        considered_candidates INTEGER NOT NULL DEFAULT 0,
+        member_names TEXT[] NOT NULL DEFAULT '{}',
+        excluded_names TEXT[] NOT NULL DEFAULT '{}',
+        rejection_reason TEXT,
+        passed BOOLEAN,
+        expected_note TEXT,
+        ran_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+      )`,
+    )
+    .catch((err: Error) => console.error("co_test_scenario_runs table init failed:", err));
 }
