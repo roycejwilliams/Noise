@@ -6,6 +6,7 @@ import { ALLOWED_CONNECTION_STYLES, ALLOWED_LIFE_CHAPTERS } from "../../../api/s
 import sendblue from "../../../api/src/services/sendblue.js";
 import { findBestCircleDiagnostic } from "./matching.js";
 import { insertSimulatedProfile, SIM_CITY, type SeededProfile } from "./circlesSimulation.js";
+import { generateCircleTitle, generateWarmCircleInviteMessage } from "../../../api/src/services/circleInvite.js";
 
 // Real-test-user-vs-filler-pool feature — a real test user goes through
 // actual onboarding (real call/text, real captureIntent), and gets matched
@@ -427,7 +428,7 @@ export async function approveRealPlacementAndNotify(
   await pool.query(`UPDATE circles SET status = 'active' WHERE id = $1`, [circleId]);
 
   const memberResult = await pool.query(
-    `SELECT u.id, u.first_name, u.phone_number, u.is_simulated, cp.city, cp.life_chapters
+    `SELECT u.id, u.first_name, u.phone_number, u.is_simulated, cp.city, cp.life_chapters, cp.goals
      FROM circle_members cm JOIN users u ON u.id = cm.member_id LEFT JOIN co_profiles cp ON cp.user_id = u.id
      WHERE cm.circle_id = $1`,
     [circleId],
@@ -438,27 +439,14 @@ export async function approveRealPlacementAndNotify(
   const city = realMember.city ?? "your city";
   const chapter = (realMember.life_chapters?.[0] ?? "").replace(/_/g, " ");
 
-  let circleTitle = chapter ? `Your ${chapter} circle` : "Your circle";
-  try {
-    const { text: titleText } = await generateText({
-      model: anthropic("claude-haiku-4-5-20251001"),
-      prompt: `Give a short, warm, specific name (3-5 words, no quotes) for a small circle of people in ${city} all navigating "${chapter || "a new chapter"}". Not generic. Return only the name.`,
-    });
-    circleTitle = titleText.trim();
-  } catch (err) {
-    console.error("Dynamic real-placement circle title generation failed, using fallback (non-fatal):", err);
-  }
-
-  let inviteMsg = `Co found your circle: ${circleTitle}. There's already a moment curated and waiting if you're in. Reply YES to join or NO to pass.`;
-  try {
-    const { text } = await generateText({
-      model: anthropic("claude-sonnet-4-6"),
-      prompt: `You are Co. You just found ${realMember.first_name} a circle called "${circleTitle}" — people in the same ${chapter || "chapter of life"}, based in ${city}. Tell them, and mention there's already a moment curated and waiting for them if they're in. Ask them to reply YES to join or NO to pass. Never mention how many people are in it — this is their own thread, not a group announcement. No exclamation points, no em dashes. 2-3 sentences.`,
-    });
-    inviteMsg = text;
-  } catch (err) {
-    console.error("Dynamic real-placement invite generation failed, using fallback (non-fatal):", err);
-  }
+  const circleTitle = await generateCircleTitle(city, chapter);
+  const inviteMsg = await generateWarmCircleInviteMessage({
+    firstName: realMember.first_name,
+    circleTitle,
+    chapter,
+    city,
+    goals: realMember.goals ?? [],
+  });
 
   try {
     await sendblue.messages.send({
