@@ -20,18 +20,51 @@ export type BookingMoment = {
   venue_place_id: string | null;
   suggested_time?: string | null;
   moment_start: string;
+  // Co's own self-rated fit for the selected venue (0-1, see
+  // scoreVenuesWithCo in places.ts) and whether the consensus cron had to
+  // force-lock a time window at the 48hr cutoff without a real majority.
+  // Both feed requestVenueApprovalFromKeana's low-confidence gate below.
+  venue_fit_score?: number | null;
+  consensus_low_confidence?: boolean;
 };
+
+// A venue Co isn't confident fits is a low-confidence placement just like a
+// borderline circle score — see LOW_CONFIDENCE_GROUP_SCORE in matching.ts.
+export const LOW_CONFIDENCE_VENUE_FIT_SCORE = 0.6;
 
 // Sends Keana the selected venue for approval and gates the moment on her
 // reply — same approve/reject-by-text pattern already used for circle
 // placement (co.ts's /place route + sendblue.ts's Keana intercept), just for
 // venue+time choice instead of circle membership. Her approval is the last
 // gate before the group is told it's happening — see confirmMoment below.
+//
+// Low confidence (weak venue fit and/or a time window forced at the 48hr
+// consensus cutoff without a real majority) must never silently auto-approve
+// — the venue auto-approve cron in jobs/index.ts checks requires_moderator_reply
+// before sweeping a stale item, and re-pings instead of approving it.
 export async function requestVenueApprovalFromKeana(moment: BookingMoment): Promise<void> {
+  const lowFit = moment.venue_fit_score != null && moment.venue_fit_score < LOW_CONFIDENCE_VENUE_FIT_SCORE;
+  const forcedWithoutMajority = !!moment.consensus_low_confidence;
+  const lowConfidence = lowFit || forcedWithoutMajority;
+
+  let confidenceNote: string | null = null;
+  if (lowFit && forcedWithoutMajority) {
+    confidenceNote = `Low venue fit (${moment.venue_fit_score!.toFixed(2)}) and no clear majority on timing.`;
+  } else if (lowFit) {
+    confidenceNote = `Low venue fit (${moment.venue_fit_score!.toFixed(2)}).`;
+  } else if (forcedWithoutMajority) {
+    confidenceNote = `Locked in at the 48hr cutoff without a clear majority.`;
+  }
+
+  const base = `Venue selected for moment "${moment.moments_name ?? moment.id}": ${moment.venue ?? "TBD"}, suggested ${moment.suggested_time ?? "TBD"}.`;
+  const message = lowConfidence
+    ? `${base} ${confidenceNote} This one needs your call — reply APPROVE or REJECT, no auto-approval.`
+    : `${base} Reply APPROVE or REJECT within 4 hours — Co will auto-approve if no response.`;
+
   try {
     await sendblue.messages.send({
       number: process.env.KEANA_PHONE_NUMBER!,
-      content: `Venue selected for moment "${moment.moments_name ?? moment.id}": ${moment.venue ?? "TBD"}, suggested ${moment.suggested_time ?? "TBD"}. Reply APPROVE or REJECT within 4 hours — Co will auto-approve if no response.`,
+      content: message,
       from_number: process.env.SENDBLUE_PHONE_NUMBER!,
     });
   } catch (err: any) {
@@ -39,8 +72,11 @@ export async function requestVenueApprovalFromKeana(moment: BookingMoment): Prom
   }
 
   await pool.query(
-    `UPDATE moments SET status = 'pending_venue_approval', keana_venue_notified_at = NOW() WHERE id = $1`,
-    [moment.id],
+    `UPDATE moments
+     SET status = 'pending_venue_approval', keana_venue_notified_at = NOW(),
+         requires_moderator_reply = $2, confidence_note = $3
+     WHERE id = $1`,
+    [moment.id, lowConfidence, confidenceNote],
   );
 }
 

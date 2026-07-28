@@ -226,11 +226,12 @@ Circle context:
 Venues to evaluate:
 ${venueList}
 
-Pick the single best venue number that fits CoPatible's standards for this circle.
+Pick the single best venue number that fits CoPatible's standards for this circle. Also rate your own confidence in this pick as fit_score, a number from 0 to 1 — not the venue's Google rating, but how well THIS venue actually fits THIS circle's vibe, connection style, and standards. 1.0 means it's clearly right; something closer to 0.5-0.6 means it's the best of a mediocre set, not a strong fit.
 Return ONLY valid JSON:
 {
   "pick": 1,
-  "reason": "one sentence why this fits"
+  "reason": "one sentence why this fits",
+  "fit_score": 0.85
 }`,
   });
 
@@ -238,7 +239,8 @@ Return ONLY valid JSON:
     const clean = rawPick.replace(/```json|```/g, "").trim();
     const parsed = JSON.parse(clean);
     const picked = venues[parsed.pick - 1];
-    return { ...picked, co_reason: parsed.reason };
+    const fitScore = typeof parsed.fit_score === "number" ? Math.max(0, Math.min(1, parsed.fit_score)) : null;
+    return { ...picked, co_reason: parsed.reason, co_fit_score: fitScore };
   } catch {
     return venues[0]; // fallback to highest rated
   }

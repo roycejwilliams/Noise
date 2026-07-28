@@ -13,6 +13,10 @@ const max_size = 8;
 const target_size = 6;
 //minimum score to qualify
 const min_group_score = 0.55;
+// A group that barely clears min_group_score is a low-confidence placement —
+// technically valid, but close enough to the floor that a human should weigh
+// in rather than let it silently auto-approve. See circleApproval.ts.
+const LOW_CONFIDENCE_GROUP_SCORE = 0.6;
 //trust score - separates high trusted users
 const trust_floor = 0.4;
 const trust_ceiling = 0.8;
@@ -369,9 +373,14 @@ function passesTrustCheck(trustScores: number[]): boolean {
 }
 
 // Main matching function — assembles the best circle for a given user
-// Called by POST /co/place
-// Returns an array of user IDs that form the best group, or null if no match found
-async function findBestCircle(userId: string, excludeUserIds: string[] = []): Promise<string[] | null> {
+// Called by POST /co/place. Returns both the user IDs and the final group
+// score — callers that create a pending_approval circle need the score to
+// flag low-confidence placements (see circleApproval.ts); findBestCircle
+// below is a thin wrapper for callers that only need the IDs.
+async function findBestCircleWithScore(
+  userId: string,
+  excludeUserIds: string[] = [],
+): Promise<{ userIds: string[]; finalScore: number } | null> {
   // Step 1 — Fetch the user being placed (lat/lng extracted for PostGIS queries)
   const userResult = await pool.query(
     `SELECT *,
@@ -507,7 +516,15 @@ async function findBestCircle(userId: string, excludeUserIds: string[] = []): Pr
 
   // Step 8 — Enforce max size and return user IDs
   const finalUserIds = [userId, ...group.map((m) => m.user_id as string)];
-  return finalUserIds.slice(0, max_size);
+  return { userIds: finalUserIds.slice(0, max_size), finalScore };
+}
+
+// Thin wrapper for callers that only need the group's user IDs (e.g. the
+// declined-member replacement flow, which never creates a new
+// pending_approval circle and so has no use for the confidence score).
+async function findBestCircle(userId: string, excludeUserIds: string[] = []): Promise<string[] | null> {
+  const result = await findBestCircleWithScore(userId, excludeUserIds);
+  return result?.userIds ?? null;
 }
 
 export {
@@ -516,11 +533,14 @@ export {
   emotionalStateScore,
   filterByStatedAsk,
   findBestCircle,
+  findBestCircleWithScore,
   getActiveSeekingAsk,
   goalAlignmentScore,
   groupCompatibilityScore,
   hasSharedChapters,
   inSameCity,
+  LOW_CONFIDENCE_GROUP_SCORE,
+  min_group_score,
   passesTrustCheck,
   socialEnergyScore,
 };

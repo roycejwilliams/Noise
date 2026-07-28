@@ -8,7 +8,8 @@ import pool from "../db/db.js";
 import { sendEmail } from "../otpActions.js";
 import { authenticateToken, userRole } from "../middleware/auth.js";
 import { generateEmbedding } from "../services/embeddings.js";
-import { findBestCircle } from "../services/matching.js";
+import { notifyModeratorOfPendingCircle } from "../services/circleApproval.js";
+import { findBestCircleWithScore } from "../services/matching.js";
 import { findBestVenue } from "../services/places.js";
 import { generateCandidateWindows, type CandidateWindow } from "../services/scheduling.js";
 import {
@@ -741,8 +742,9 @@ router.post(
       }
 
       // Step 1 — Run matching algorithm
-      // Returns array of user IDs or null if no valid group found
-      const groupUserIds = await findBestCircle(user_id);
+      // Returns user IDs + final group score, or null if no valid group found
+      const matchResult = await findBestCircleWithScore(user_id);
+      const groupUserIds = matchResult?.userIds ?? null;
 
       // Step 2 — No match found — flag for manual placement by Keana
       if (!groupUserIds || groupUserIds.length < 4) {
@@ -790,19 +792,14 @@ router.post(
       const city = profile.city ?? "unknown city";
       const chapter = primaryChapter.replace(/_/g, " ");
 
-      try {
-        await sendblue.messages.send({
-          number: process.env.KEANA_PHONE_NUMBER!,
-          content: `New circle ready for review. ${groupUserIds.length} people, ${city}, ${chapter}. Members: ${memberNames}. Reply APPROVE or REJECT within 4 hours — Co will auto-approve if no response.`,
-          from_number: process.env.SENDBLUE_PHONE_NUMBER!,
-        });
-        await pool.query(
-          `UPDATE circles SET keana_notified_at = NOW() WHERE id = $1`,
-          [circle.id],
-        );
-      } catch (keanaErr: any) {
-        console.error("Failed to notify Keana of pending circle:", keanaErr?.message ?? keanaErr);
-      }
+      await notifyModeratorOfPendingCircle({
+        circleId: circle.id,
+        memberIds: groupUserIds,
+        memberNames,
+        city,
+        chapter,
+        finalScore: matchResult!.finalScore,
+      });
 
       // Step 6 — Store pending-approval memory for each member
       for (const memberId of groupUserIds) {
@@ -1049,8 +1046,8 @@ Make it feel intimate, specific, and intentional. Not generic.`,
 
       const momentResult = await pool.query(
         `INSERT INTO moments
-         (creator_id, moments_name, location, location_name, moment_start, visibility_type, description, circle_id, vibes, venue, suggested_time, status, venue_booking_url, venue_place_id, venue_type, vibe, neighborhood, candidate_windows)
-         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18)
+         (creator_id, moments_name, location, location_name, moment_start, visibility_type, description, circle_id, vibes, venue, suggested_time, status, venue_booking_url, venue_place_id, venue_type, vibe, neighborhood, candidate_windows, venue_fit_score)
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19)
          RETURNING *`,
         [
           circle.owner_id,
@@ -1072,6 +1069,7 @@ Make it feel intimate, specific, and intentional. Not generic.`,
           momentData.vibe ?? null,
           momentData.neighborhood ?? null,
           candidateWindows.length ? JSON.stringify(candidateWindows) : null,
+          selectedVenue?.co_fit_score ?? null,
         ],
       );
 

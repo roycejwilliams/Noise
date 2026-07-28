@@ -16,7 +16,8 @@ import {
   isCircleMember,
   selectVenueForCircle,
 } from "./co.js";
-import { findBestCircle } from "../services/matching.js";
+import { notifyModeratorOfPendingCircle } from "../services/circleApproval.js";
+import { findBestCircle, findBestCircleWithScore } from "../services/matching.js";
 import type { CandidateWindow } from "../services/scheduling.js";
 import { confirmMoment, requestVenueApprovalFromKeana } from "../services/booking.js";
 import sendblue from "../services/sendblue.js";
@@ -437,7 +438,8 @@ export function sendblueRouter(io: Server): Router {
                 .catch((err) => console.error("Memory embedding failed (non-fatal):", err));
             }
 
-            const newGroupIds = await findBestCircle(pendingCircle.owner_id, rejectedMemberIds);
+            const newMatchResult = await findBestCircleWithScore(pendingCircle.owner_id, rejectedMemberIds);
+            const newGroupIds = newMatchResult?.userIds ?? null;
 
             if (!newGroupIds || newGroupIds.length < 4) {
               const ownerRes = await pool.query(
@@ -499,19 +501,14 @@ export function sendblueRouter(io: Server): Router {
               );
               const newMemberNames = newMemberNamesResult.rows.map((r: any) => r.first_name).join(", ");
 
-              try {
-                await sendblue.messages.send({
-                  number: keanaPhone,
-                  content: `New circle ready for review. ${newGroupIds.length} people, ${city}, ${primaryChapter.replace(/_/g, " ")}. Members: ${newMemberNames}. Reply APPROVE or REJECT within 4 hours — Co will auto-approve if no response.`,
-                  from_number: process.env.SENDBLUE_PHONE_NUMBER!,
-                });
-                await pool.query(
-                  `UPDATE circles SET keana_notified_at = NOW() WHERE id = $1`,
-                  [newCircle.id],
-                );
-              } catch (err: any) {
-                console.error("Failed to notify Keana of new proposal:", err?.message ?? err);
-              }
+              await notifyModeratorOfPendingCircle({
+                circleId: newCircle.id,
+                memberIds: newGroupIds,
+                memberNames: newMemberNames,
+                city,
+                chapter: primaryChapter.replace(/_/g, " "),
+                finalScore: newMatchResult!.finalScore,
+              });
             }
           }
 
@@ -523,7 +520,8 @@ export function sendblueRouter(io: Server): Router {
             // venue choice rather than circle membership.
             const pendingMomentResult = await pool.query(
               `SELECT id, circle_id, moments_name, venue, venue_booking_url, venue_place_id,
-                      venue_type, neighborhood, vibe, suggested_time, moment_start, rejected_venues
+                      venue_type, neighborhood, vibe, suggested_time, moment_start, rejected_venues,
+                      consensus_low_confidence
                FROM moments
                WHERE status = 'pending_venue_approval'
                ORDER BY created_at ASC
@@ -584,20 +582,22 @@ export function sendblueRouter(io: Server): Router {
                   await pool.query(
                     `UPDATE moments
                      SET venue = $1, venue_booking_url = $2, venue_place_id = $3,
-                         location_name = $4, rejected_venues = $5
-                     WHERE id = $6`,
+                         location_name = $4, rejected_venues = $5, venue_fit_score = $6
+                     WHERE id = $7`,
                     [
                       nextVenue.name ?? null,
                       nextVenue.venue_booking_url ?? null,
                       nextVenue.place_id ?? null,
                       nextVenue.formatted_address ?? pendingMomentApproval.neighborhood ?? null,
                       rejectedVenues,
+                      nextVenue.co_fit_score ?? null,
                       pendingMomentApproval.id,
                     ],
                   );
                   await requestVenueApprovalFromKeana({
                     ...pendingMomentApproval,
                     venue: nextVenue.name ?? null,
+                    venue_fit_score: nextVenue.co_fit_score ?? null,
                   });
                 }
               }

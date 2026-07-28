@@ -108,13 +108,17 @@ app.use(errorHandler);
 
 registerJobs(io);
 
-// Every 30 minutes — auto-approve circles Keana hasn't responded to within 4 hours
+// Every 30 minutes — auto-approve circles Keana hasn't responded to within 4
+// hours. requires_moderator_reply = true (a borderline group score — see
+// LOW_CONFIDENCE_GROUP_SCORE in matching.ts / notifyModeratorOfPendingCircle
+// in circleApproval.ts) is excluded on purpose: those never auto-approve.
 cron.schedule("*/30 * * * *", async () => {
   try {
     const staleCircles = await pool.query(
       `SELECT c.id, c.circle_name, c.owner_id
        FROM circles c
        WHERE c.status = 'pending_approval'
+         AND c.requires_moderator_reply = false
          AND c.keana_notified_at IS NOT NULL
          AND c.keana_notified_at < NOW() - INTERVAL '4 hours'`,
     );
@@ -219,6 +223,31 @@ cron.schedule("*/30 * * * *", async () => {
       } catch (keanaErr: any) {
         console.error("Auto-approval Keana notify failed (non-fatal):", keanaErr?.message ?? keanaErr);
       }
+    }
+
+    // Low-confidence circles never auto-approve — instead, re-ping Keana on
+    // the same 4hr cadence (bumping keana_notified_at resets the clock for
+    // the next check) so a borderline placement doesn't just rot unresolved.
+    const staleLowConfidenceCircles = await pool.query(
+      `SELECT id, circle_name, confidence_note
+       FROM circles
+       WHERE status = 'pending_approval'
+         AND requires_moderator_reply = true
+         AND keana_notified_at IS NOT NULL
+         AND keana_notified_at < NOW() - INTERVAL '4 hours'`,
+    );
+
+    for (const circle of staleLowConfidenceCircles.rows) {
+      try {
+        await sendblue.messages.send({
+          number: process.env.KEANA_PHONE_NUMBER!,
+          content: `Still waiting on your call for circle ${circle.id} (${circle.circle_name}) — ${circle.confidence_note ?? "borderline match"}. Reply APPROVE or REJECT whenever you get a chance, this one won't auto-approve.`,
+          from_number: process.env.SENDBLUE_PHONE_NUMBER!,
+        });
+      } catch (err: any) {
+        console.error(`Circle low-confidence re-ping failed for circle ${circle.id}:`, err?.message ?? err);
+      }
+      await pool.query(`UPDATE circles SET keana_notified_at = NOW() WHERE id = $1`, [circle.id]);
     }
   } catch (err) {
     console.error("Auto-approval cron error:", err);

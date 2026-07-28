@@ -156,7 +156,7 @@ export function registerJobs(io: Server) {
     try {
       const pollingMoments = await pool.query(
         `SELECT m.id, m.circle_id, m.moments_name, m.suggested_time, m.created_at, m.consensus_nudge_sent_at,
-                m.venue, m.venue_booking_url, m.venue_place_id, m.candidate_windows
+                m.venue, m.venue_booking_url, m.venue_place_id, m.candidate_windows, m.venue_fit_score
          FROM moments m
          JOIN circles c ON c.id = m.circle_id
          WHERE m.status = 'polling'
@@ -259,7 +259,16 @@ export function registerJobs(io: Server) {
         // confirming the moment to the group. This send is best-effort, same
         // as every other cron notification here: a delivery failure must
         // never block the moment's actual state from updating.
-        await requestVenueApprovalFromKeana(moment);
+        //
+        // A resolution forced at the 48hr cutoff without ever reaching a real
+        // majority (thresholdMet false) is a low-confidence pick, same idea
+        // as a circle score barely clearing its floor — see
+        // LOW_CONFIDENCE_VENUE_FIT_SCORE / requires_moderator_reply in
+        // booking.ts.
+        await requestVenueApprovalFromKeana({
+          ...moment,
+          consensus_low_confidence: !thresholdMet && past48hrs,
+        });
       }
     } catch (error) {
       console.error("Consensus cron error:", error);
@@ -271,17 +280,47 @@ export function registerJobs(io: Server) {
   // Without this, pending_venue_approval would just be a differently-named
   // version of the manual_review dead end it replaced. Approval is the last
   // gate — this goes straight to confirming the moment, no booking step.
+  //
+  // requires_moderator_reply = true (low venue fit and/or a forced,
+  // non-majority consensus pick — see requestVenueApprovalFromKeana in
+  // booking.ts) is excluded here on purpose: those never auto-approve.
   cron.schedule("*/30 * * * *", async () => {
     try {
       const staleVenues = await pool.query(
         `SELECT id, circle_id, moments_name, venue, venue_booking_url, venue_place_id, moment_start
          FROM moments
          WHERE status = 'pending_venue_approval'
+         AND requires_moderator_reply = false
          AND keana_venue_notified_at < NOW() - INTERVAL '4 hours'`,
       );
 
       for (const moment of staleVenues.rows) {
         await confirmMoment(moment, io);
+      }
+
+      // Low-confidence venues never auto-approve — instead, re-ping Keana on
+      // the same 4hr cadence (bumping keana_venue_notified_at resets the
+      // clock for the next check, same as a fresh notification) so a
+      // borderline pick doesn't just rot unresolved forever.
+      const staleLowConfidenceVenues = await pool.query(
+        `SELECT id, moments_name, venue, suggested_time, confidence_note
+         FROM moments
+         WHERE status = 'pending_venue_approval'
+         AND requires_moderator_reply = true
+         AND keana_venue_notified_at < NOW() - INTERVAL '4 hours'`,
+      );
+
+      for (const moment of staleLowConfidenceVenues.rows) {
+        try {
+          await sendblue.messages.send({
+            number: process.env.KEANA_PHONE_NUMBER!,
+            content: `Still waiting on your call for moment "${moment.moments_name ?? moment.id}" (${moment.venue ?? "TBD"}, suggested ${moment.suggested_time ?? "TBD"}) — ${moment.confidence_note ?? "borderline pick"}. Reply APPROVE or REJECT whenever you can, this one won't auto-approve.`,
+            from_number: process.env.SENDBLUE_PHONE_NUMBER!,
+          });
+        } catch (err: any) {
+          console.error(`Venue low-confidence re-ping failed for moment ${moment.id}:`, err?.message ?? err);
+        }
+        await pool.query(`UPDATE moments SET keana_venue_notified_at = NOW() WHERE id = $1`, [moment.id]);
       }
     } catch (error) {
       console.error("Venue auto-approve cron error:", error);

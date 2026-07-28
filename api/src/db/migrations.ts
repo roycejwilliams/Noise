@@ -363,4 +363,36 @@ export function runMigrations() {
       console.error("moment_responses.selected_windows migration failed:", err),
     );
 
+  // Confidence-gated Moderator escalation — a circle score barely clearing
+  // its floor (LOW_CONFIDENCE_GROUP_SCORE, matching.ts) sets this true so
+  // the auto-approve cron in server.ts skips it instead of silently
+  // approving; confidence_note is the human-readable reason surfaced in the
+  // Moderator notification.
+  pool
+    .query(`ALTER TABLE circles ADD COLUMN IF NOT EXISTS requires_moderator_reply BOOLEAN NOT NULL DEFAULT false`)
+    .catch((err: Error) => console.error("circles.requires_moderator_reply migration failed:", err));
+  pool
+    .query(`ALTER TABLE circles ADD COLUMN IF NOT EXISTS confidence_note TEXT`)
+    .catch((err: Error) => console.error("circles.confidence_note migration failed:", err));
+
+  // Same idea for moments — venue_fit_score is Co's own self-rated fit for
+  // the selected venue (0-1, see scoreVenuesWithCo in places.ts), persisted
+  // at moment creation so it's still available when the consensus cron
+  // requests Moderator approval later. consensus_low_confidence is set when
+  // the consensus cron had to force-lock a time window at the 48hr cutoff
+  // without ever reaching a real majority. Either one sets
+  // requires_moderator_reply — see requestVenueApprovalFromKeana in
+  // booking.ts.
+  pool
+    .query(`ALTER TABLE moments ADD COLUMN IF NOT EXISTS requires_moderator_reply BOOLEAN NOT NULL DEFAULT false`)
+    .catch((err: Error) => console.error("moments.requires_moderator_reply migration failed:", err));
+  pool
+    .query(`ALTER TABLE moments ADD COLUMN IF NOT EXISTS confidence_note TEXT`)
+    .catch((err: Error) => console.error("moments.confidence_note migration failed:", err));
+  pool
+    .query(`ALTER TABLE moments ADD COLUMN IF NOT EXISTS venue_fit_score REAL`)
+    .catch((err: Error) => console.error("moments.venue_fit_score migration failed:", err));
+  pool
+    .query(`ALTER TABLE moments ADD COLUMN IF NOT EXISTS consensus_low_confidence BOOLEAN NOT NULL DEFAULT false`)
+    .catch((err: Error) => console.error("moments.consensus_low_confidence migration failed:", err));
 }
