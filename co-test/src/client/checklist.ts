@@ -429,3 +429,223 @@ simResetBtn.addEventListener("click", async () => {
 
 loadScenarioCatalog();
 loadSimState();
+
+// Real user vs. filler pool — every render/action here is scoped to
+// /api/dynamic-test/*, which only ever touches this feature's own generated
+// filler data plus (read-only, or via the one explicit Approve action) the
+// current real, OTP-verified phone-test user.
+const dynRealUserEl = document.getElementById("dyn-real-user") as HTMLElement;
+const dynSeedBtn = document.getElementById("dyn-seed") as HTMLButtonElement;
+const dynRunAllBtn = document.getElementById("dyn-run-all") as HTMLButtonElement;
+const dynResetBtn = document.getElementById("dyn-reset") as HTMLButtonElement;
+const dynResultsEl = document.getElementById("dyn-results") as HTMLElement;
+const dynPlacementVariantSelect = document.getElementById("dyn-placement-variant") as HTMLSelectElement;
+const dynAttemptPlacementBtn = document.getElementById("dyn-attempt-placement") as HTMLButtonElement;
+const dynPlacementStateEl = document.getElementById("dyn-placement-state") as HTMLElement;
+
+type DynamicRealUser = {
+  userId: string;
+  first_name: string;
+  city: string | null;
+  life_chapters: string[];
+  goals: string[];
+  activity_preferences: string[];
+  activeAskText: string | null;
+  hasSignal: boolean;
+};
+
+type DynamicGeneratedProfile = { first_name: string; goals: string[]; activity_preferences: string[]; life_chapters: string[] };
+
+type DynamicRun = {
+  variant: "A" | "B" | "C";
+  variantLabel: string;
+  finalScore: number | null;
+  consideredCandidates: number;
+  memberNames: string[];
+  excludedNames: string[];
+  rejectionReason: string | null;
+  passed: boolean | null;
+  generatedProfiles: DynamicGeneratedProfile[];
+  ranAt: string;
+};
+
+async function dynFetch(path: string, opts?: RequestInit): Promise<any> {
+  const res = await fetch(`/api/dynamic-test/${path}`, opts);
+  return res.json();
+}
+
+async function dynPost(path: string, body?: unknown): Promise<any> {
+  return dynFetch(path, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: body ? JSON.stringify(body) : undefined,
+  });
+}
+
+async function loadDynRealUser(): Promise<DynamicRealUser | null> {
+  const json = await dynFetch("real-user");
+  const user: DynamicRealUser | null = json.success ? json.user : null;
+  if (!user) {
+    dynRealUserEl.textContent = "No verified real test user yet — text or call in and complete OTP verification first.";
+  } else if (!user.hasSignal) {
+    dynRealUserEl.textContent = `Testing against: ${user.first_name} — no captured profile signal yet (no goals/chapters/activities). Have them say more before seeding.`;
+  } else {
+    const askNote = user.activeAskText ? ` · active ask: "${user.activeAskText}"` : "";
+    dynRealUserEl.textContent = `Testing against: ${user.first_name} — ${user.life_chapters.join(", ") || "no chapters"} · ${user.goals.join("; ") || "no goals"}${askNote}`;
+  }
+  return user;
+}
+
+function renderDynamicProfileList(profiles: DynamicGeneratedProfile[], includedNames: string[]): string {
+  return profiles
+    .map((p) => {
+      const included = includedNames.includes(p.first_name);
+      return `<div class="dyn-profile-row ${included ? "dyn-profile-included" : "dyn-profile-excluded"}">
+        <span class="dyn-profile-name">${p.first_name}${included ? " ✓" : ""}</span>
+        <span class="dyn-profile-detail">${p.life_chapters.join(", ")} — ${p.goals.join("; ")}</span>
+      </div>`;
+    })
+    .join("");
+}
+
+function renderDynamicRuns(runs: DynamicRun[]) {
+  dynResultsEl.innerHTML = "";
+  if (!runs.length) {
+    const empty = document.createElement("p");
+    empty.className = "sim-empty";
+    empty.textContent = "No diagnostic runs yet.";
+    dynResultsEl.appendChild(empty);
+    return;
+  }
+  for (const run of runs) {
+    const badgeClass = run.passed === true ? "sim-badge-pass" : run.passed === false ? "sim-badge-fail" : "sim-badge-exploratory";
+    const badgeText = run.passed === true ? "PASS" : run.passed === false ? "FAIL" : "OBSERVE";
+    const scoreText = run.finalScore === null ? "n/a (rejected before scoring)" : run.finalScore.toFixed(3);
+
+    const block = document.createElement("div");
+    block.className = "sim-block sim-scenario-block";
+    block.innerHTML = `
+      <div class="sim-block-title">
+        Dynamic-${run.variant} — ${run.variantLabel}
+        <span class="sim-badge ${badgeClass}">${badgeText}</span>
+      </div>
+      <div class="sim-scenario-row"><span class="sim-scenario-key">Compatibility score</span><span>${scoreText}</span></div>
+      <div class="sim-scenario-row"><span class="sim-scenario-key">Candidates considered</span><span>${run.consideredCandidates}</span></div>
+      ${run.rejectionReason ? `<div class="sim-scenario-row"><span class="sim-scenario-key">Rejection reason</span><span>${run.rejectionReason}</span></div>` : ""}
+      <div class="dyn-profile-list">${renderDynamicProfileList(run.generatedProfiles, run.memberNames)}</div>
+    `;
+    dynResultsEl.appendChild(block);
+  }
+}
+
+async function loadDynRuns() {
+  const json = await dynFetch("runs");
+  if (json.success) renderDynamicRuns(json.runs ?? []);
+}
+
+type DynPlacementCircle = { id: string; circle_name: string; status: string } | null;
+type DynPlacementMember = { member_id: string; status: string; first_name: string; is_simulated: boolean };
+
+function renderDynPlacementState(circle: DynPlacementCircle, members: DynPlacementMember[]) {
+  dynPlacementStateEl.innerHTML = "";
+  if (!circle) return;
+
+  const block = document.createElement("div");
+  block.className = "sim-block";
+  block.innerHTML = `<div class="sim-block-title">${circle.circle_name} — ${circle.status}</div>`;
+
+  if (circle.status === "pending_approval") {
+    const row = document.createElement("div");
+    row.className = "sim-member-row";
+    row.innerHTML = `<span>Real circle formed — approving sends a real iMessage to the real member.</span>`;
+    const actions = document.createElement("div");
+    actions.className = "sim-actions";
+    const approve = document.createElement("button");
+    approve.className = "sim-btn";
+    approve.textContent = "Approve (sends real text)";
+    approve.onclick = async () => {
+      if (!confirm("This sends a real iMessage to the real test user's real phone number. Continue?")) return;
+      approve.disabled = true;
+      try {
+        const result = await dynPost("approve", { circle_id: circle.id });
+        if (!result.success) alert(result.error ?? "Approve failed.");
+        await loadDynPlacementState();
+      } finally {
+        approve.disabled = false;
+      }
+    };
+    const reject = document.createElement("button");
+    reject.className = "sim-btn sim-btn-reject";
+    reject.textContent = "Reject";
+    reject.onclick = async () => {
+      await dynPost("reject", { circle_id: circle.id });
+      await loadDynPlacementState();
+    };
+    actions.append(approve, reject);
+    row.appendChild(actions);
+    block.appendChild(row);
+  } else if (circle.status === "active") {
+    for (const m of members) {
+      const row = document.createElement("div");
+      row.className = "sim-member-row";
+      row.innerHTML = `<span class="sim-member-name">${m.is_simulated ? m.first_name : `${m.first_name} (real)`}</span><span class="sim-member-status">${m.status}</span>`;
+      block.appendChild(row);
+    }
+  }
+  dynPlacementStateEl.appendChild(block);
+}
+
+async function loadDynPlacementState() {
+  const json = await dynFetch("circle-state");
+  if (json.success) renderDynPlacementState(json.circle ?? null, json.circle_members ?? []);
+}
+
+dynSeedBtn.addEventListener("click", async () => {
+  dynSeedBtn.disabled = true;
+  try {
+    const result = await dynPost("seed");
+    if (!result.success) alert(result.error ?? "Seeding failed.");
+    await loadDynRealUser();
+  } finally {
+    dynSeedBtn.disabled = false;
+  }
+});
+
+dynRunAllBtn.addEventListener("click", async () => {
+  dynRunAllBtn.disabled = true;
+  try {
+    const result = await dynPost("run-all");
+    if (!result.success) alert(result.error ?? "Diagnostic run failed.");
+    await loadDynRuns();
+  } finally {
+    dynRunAllBtn.disabled = false;
+  }
+});
+
+dynResetBtn.addEventListener("click", async () => {
+  dynResetBtn.disabled = true;
+  try {
+    await dynPost("reset");
+    await loadDynRealUser();
+    await loadDynRuns();
+    await loadDynPlacementState();
+  } finally {
+    dynResetBtn.disabled = false;
+  }
+});
+
+dynAttemptPlacementBtn.addEventListener("click", async () => {
+  dynAttemptPlacementBtn.disabled = true;
+  try {
+    const variant = dynPlacementVariantSelect.value;
+    const result = await dynPost("attempt-placement", { variant });
+    if (!result.success) alert(result.error ?? "No qualifying circle formed.");
+    await loadDynPlacementState();
+  } finally {
+    dynAttemptPlacementBtn.disabled = false;
+  }
+});
+
+loadDynRealUser();
+loadDynRuns();
+loadDynPlacementState();

@@ -57,6 +57,36 @@
           <div id="sim-state"></div>
         </div>
       </section>
+
+      <section class="checklist-section">
+        <h2 class="checklist-section-title">Real user vs. filler pool</h2>
+        <div class="sim-panel">
+          <div class="sim-banner">Real onboarding, real matching algorithm — the "Approve" action below sends a real iMessage to the real test user's real phone</div>
+          <p class="sim-subtext">
+            Runs the real <code>findBestCircle</code>/stated-ask filter/scoring for whichever real, OTP-verified
+            phone-test user last texted or called in, against three filler pools an LLM generates fresh from their
+            own real captured profile — Dynamic-A (generated to clearly overlap), Dynamic-B (generated with no real
+            overlap), Dynamic-C (generated borderline). All three are read-only diagnostics. Only "Attempt real
+            placement" can create a real circle, and only "Approve" can send a real notification.
+          </p>
+          <div id="dyn-real-user" class="sim-subtext"></div>
+          <div class="sim-controls">
+            <button id="dyn-seed" class="download-button">Generate filler pools (A/B/C)</button>
+            <button id="dyn-run-all" class="download-button">Run all 3 diagnostics</button>
+            <button id="dyn-reset" class="download-button">Reset filler pools</button>
+          </div>
+          <div id="dyn-results"></div>
+          <div class="sim-controls">
+            <select id="dyn-placement-variant" class="sim-scenario-select">
+              <option value="A">Use Dynamic-A pool</option>
+              <option value="B">Use Dynamic-B pool</option>
+              <option value="C">Use Dynamic-C pool</option>
+            </select>
+            <button id="dyn-attempt-placement" class="download-button">Attempt real placement</button>
+          </div>
+          <div id="dyn-placement-state"></div>
+        </div>
+      </section>
     </div>
   </main>
 

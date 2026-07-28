@@ -19,11 +19,11 @@ import type { CandidateWindow } from "../../../api/src/services/scheduling.js";
 // SIM_CITY is fixed rather than configurable — matching.ts's Step 2 filters
 // candidates by exact city string equality, so every seeded profile must
 // share one literal value for findBestCircle to ever group them.
-const SIM_CITY = "San Francisco";
+export const SIM_CITY = "San Francisco";
 const SIM_NAME_PREFIX = "SimTest";
 const SIM_VENUE_PREFIX = "SimVenue";
 
-type SeededProfile = {
+export type SeededProfile = {
   first_name: string;
   life_chapters: string[];
   social_energy: number;
@@ -371,10 +371,16 @@ export const SCENARIOS: Record<ScenarioId, ScenarioDefinition> = {
   },
 };
 
-// Shared insert used by both the legacy randomized pool and fixed
-// scenarios — writes the profile row, then (scenario-only) the stated-ask
-// intent entry and/or seed memory when present.
-async function insertSimulatedProfile(profile: SeededProfile, scenarioId: ScenarioId | null): Promise<string> {
+// Shared insert used by the legacy randomized pool, fixed scenarios, and
+// (city param) the dynamic real-user-vs-filler-pool feature — writes the
+// profile row, then (when present) the stated-ask intent entry and/or seed
+// memory. scenarioId is plain TEXT in the DB — any tag string is valid, not
+// just "A"/"B"/"C" (dynamicPlacementTest.ts uses "DYNAMIC_A" etc).
+export async function insertSimulatedProfile(
+  profile: SeededProfile,
+  scenarioId: string | null,
+  city: string = SIM_CITY,
+): Promise<string> {
   const suffix = Math.random().toString(36).slice(2, 8);
   const userResult = await pool.query(
     `INSERT INTO users (first_name, last_name, email, phone_number, username, test_channel, is_simulated, contact_verified, simulation_scenario)
@@ -402,7 +408,7 @@ async function insertSimulatedProfile(profile: SeededProfile, scenarioId: Scenar
       profile.emotional_state,
       profile.goals,
       profile.availability_pattern,
-      SIM_CITY,
+      city,
       `[${goalEmbedding.join(",")}]`,
     ],
   );

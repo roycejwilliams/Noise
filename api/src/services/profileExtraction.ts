@@ -10,8 +10,8 @@ import { generateEmbedding, generateGoalEmbedding } from "./embeddings.js";
 // upsert so the fields Co reports and the fields matching actually scores
 // against never drift apart between entry points.
 
-const ALLOWED_LIFE_CHAPTERS = ["new_to_city", "building_solo", "career_pivot", "starting_over"];
-const ALLOWED_CONNECTION_STYLES = ["small_group", "medium_group", "large_social"];
+export const ALLOWED_LIFE_CHAPTERS = ["new_to_city", "building_solo", "career_pivot", "starting_over"];
+export const ALLOWED_CONNECTION_STYLES = ["small_group", "medium_group", "large_social"];
 
 export type ExtractedProfile = {
   life_chapters?: string[];

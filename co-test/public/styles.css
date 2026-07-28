@@ -1515,3 +1515,31 @@ button {
   font-size: 12px;
   color: var(--text-secondary);
 }
+
+.dyn-profile-list {
+  margin-top: var(--space-2);
+  border-top: 1px solid var(--border);
+  padding-top: var(--space-2);
+}
+
+.dyn-profile-row {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  padding: var(--space-1) 0;
+  font-size: 12px;
+}
+
+.dyn-profile-included .dyn-profile-name {
+  color: var(--green);
+  font-weight: 600;
+}
+
+.dyn-profile-excluded .dyn-profile-name {
+  color: var(--text-tertiary);
+  font-weight: 500;
+}
+
+.dyn-profile-detail {
+  color: var(--text-secondary);
+}

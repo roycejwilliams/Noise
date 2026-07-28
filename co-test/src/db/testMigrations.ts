@@ -171,4 +171,40 @@ export function runTestMigrations() {
       )`,
     )
     .catch((err: Error) => console.error("co_test_scenario_runs table init failed:", err));
+
+  // Flags a circle as created by the real-test-user-vs-filler-pool feature
+  // (dynamicPlacementTest.ts) — owner is a real, non-simulated user, some/
+  // all other members are seeded filler users. Distinct from is_simulated
+  // (false here, deliberately — this circle triggers a real Sendblue send)
+  // so the Moderator-by-text intercept (scoped to is_simulated=true) never
+  // mistakes it for the fully-fake sim harness, and so "reset filler pool"
+  // can find and clean up exactly these circles without touching anything
+  // else real.
+  pool
+    .query(`ALTER TABLE circles ADD COLUMN IF NOT EXISTS real_test_placement BOOLEAN NOT NULL DEFAULT false`)
+    .catch((err: Error) => console.error("circles.real_test_placement migration failed:", err));
+
+  // One row per dynamic-variant diagnostic run (see dynamicPlacementTest.ts)
+  // — same purpose as co_test_scenario_runs, but for filler pools generated
+  // fresh from a real test user's actual captured intent instead of fixed
+  // hand-designed content. generated_profiles snapshots what was actually
+  // generated (name/goals/activities/chapters) since the pool itself gets
+  // reset between rounds and otherwise wouldn't be inspectable later.
+  pool
+    .query(
+      `CREATE TABLE IF NOT EXISTS co_test_dynamic_runs (
+        id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+        real_user_id UUID NOT NULL,
+        variant TEXT NOT NULL CHECK (variant IN ('A', 'B', 'C')),
+        final_score REAL,
+        considered_candidates INTEGER NOT NULL DEFAULT 0,
+        member_names TEXT[] NOT NULL DEFAULT '{}',
+        excluded_names TEXT[] NOT NULL DEFAULT '{}',
+        rejection_reason TEXT,
+        passed BOOLEAN,
+        generated_profiles JSONB NOT NULL DEFAULT '[]'::jsonb,
+        ran_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+      )`,
+    )
+    .catch((err: Error) => console.error("co_test_dynamic_runs table init failed:", err));
 }
