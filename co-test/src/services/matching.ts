@@ -1,3 +1,5 @@
+import { anthropic } from "@ai-sdk/anthropic";
+import { generateText } from "ai";
 import pool from "../../../api/src/db/db.js";
 
 // Ported from api/src/services/matching.ts (production) per
@@ -267,6 +269,113 @@ function groupCompatibilityScore(group: {
   return totalScore / pairCount;
 }
 
+// One entry from co_profiles.intent, as written by captureIntent
+// (api/src/services/profileExtraction.ts) — embedding is whatever was
+// computed from the ask text at capture time, reused here rather than
+// re-embedding. Ported alongside findBestCircle per the file-header note —
+// keep in sync with api/src/services/matching.ts by hand.
+type StatedIntent = {
+  text?: string;
+  type?: "seeking" | "offering";
+  status?: string;
+  embedding?: number[] | null;
+};
+
+// captureIntent appends asks over time as calls happen — take the most
+// recent active "seeking" one as the operative filter for this placement.
+// "offering" asks describe what the person can give others, not who they
+// want to be grouped with, so those are left alone.
+function getActiveSeekingAsk(intent: unknown): StatedIntent | null {
+  if (!Array.isArray(intent)) return null;
+  const seeking = (intent as StatedIntent[]).filter(
+    (i) => i?.status === "active" && i?.type === "seeking" && i?.text,
+  );
+  return seeking.length ? seeking[seeking.length - 1] : null;
+}
+
+// Pulls each candidate's single most semantically relevant stored memory
+// (call transcripts, text exchanges, etc.) against the ask's embedding — this
+// is what lets a fact like "worked at Google" surface even though nothing in
+// the structured profile schema tags job history; it's just whatever the
+// person actually said, found generically rather than via a fixed taxonomy.
+async function fetchTopMemoryPerCandidate(
+  candidateIds: string[],
+  askEmbedding: number[],
+): Promise<Map<string, string>> {
+  if (!candidateIds.length) return new Map();
+  const { rows } = await pool.query(
+    `SELECT DISTINCT ON (user_id) user_id, content
+     FROM co_memories
+     WHERE user_id = ANY($1::uuid[]) AND content_embedding IS NOT NULL
+     ORDER BY user_id, content_embedding <=> $2::vector`,
+    [candidateIds, `[${askEmbedding.join(",")}]`],
+  );
+  return new Map(rows.map((r: any) => [r.user_id as string, r.content as string]));
+}
+
+// A stated ask ("find founders with experience at Google") is the strongest,
+// most explicit signal a user can give about who belongs in their circle —
+// applied here as a hard filter alongside city/life-chapter, not folded into
+// the scored dimensions below. Deliberately generic: it judges whatever's
+// actually on file (existing profile fields plus each candidate's own
+// top-matching stored memory) rather than any fixed set of attributes, so it
+// works the same whether the ask is about a career background, a hobby, or a
+// life circumstance.
+async function filterByStatedAsk<
+  T extends {
+    user_id: string;
+    goals?: string[];
+    blockers?: string[];
+    activity_preferences?: string[];
+  },
+>(ask: StatedIntent, candidates: T[]): Promise<T[]> {
+  if (!candidates.length || !ask.text) return candidates;
+
+  const memoryByUser =
+    ask.embedding && ask.embedding.length
+      ? await fetchTopMemoryPerCandidate(candidates.map((c) => c.user_id), ask.embedding)
+      : new Map<string, string>();
+
+  const digest = candidates
+    .map((c, i) => {
+      const facts = [...(c.goals ?? []), ...(c.blockers ?? []), ...(c.activity_preferences ?? [])];
+      const memory = memoryByUser.get(c.user_id);
+      const parts = [
+        facts.length ? facts.join("; ") : null,
+        memory ? `mentioned: "${memory}"` : null,
+      ].filter(Boolean);
+      return `${i}. ${parts.length ? parts.join(" | ") : "(nothing on file)"}`;
+    })
+    .join("\n");
+
+  try {
+    const { text: raw } = await generateText({
+      model: anthropic("claude-haiku-4-5-20251001"),
+      prompt: `Someone wants to be grouped with people who match this: "${ask.text}"
+
+Here is what's known about each candidate, one per line:
+${digest}
+
+Which candidate numbers actually satisfy that criteria, based only on what's listed? Do not assume or infer facts that aren't present — if nothing on file supports it, that candidate does not satisfy it.
+
+Return ONLY valid JSON, no preamble: {"matching_indices": [0, 2]}`,
+    });
+
+    const clean = raw.replace(/```json|```/g, "").trim();
+    const parsed = JSON.parse(clean);
+    const indices: number[] = Array.isArray(parsed.matching_indices) ? parsed.matching_indices : [];
+    return indices
+      .filter((i) => Number.isInteger(i) && i >= 0 && i < candidates.length)
+      .map((i) => candidates[i]);
+  } catch (err) {
+    // Fail closed — an explicit stated requirement that we can't verify is
+    // treated as unmet, same as any other hard filter falling short, rather
+    // than silently ignoring what the person asked for.
+    console.error("filterByStatedAsk failed, treating as no matches (non-fatal):", err);
+    return [];
+  }
+}
+
 // Trust score check — don't mix chronic ghosts with high-trust users
 // New users start at 0.5 (neutral)
 function passesTrustCheck(trustScores: number[]): boolean {
@@ -316,12 +425,21 @@ async function findBestCircle(userId: string, excludeUserIds: string[] = []): Pr
 
   // Step 3 — Apply hard filters
   // Remove candidates who don't share at least 1 life chapter with the user
-  const filtered = candidates.filter((candidate) =>
+  let filtered = candidates.filter((candidate) =>
     hasSharedChapters([user.life_chapters, candidate.life_chapters]),
   );
 
   // Not enough candidates after filtering
   if (filtered.length < min_size - 1) return null;
+
+  // Step 3.5 — If the user has an active stated ask (e.g. "find founders
+  // with experience at Google"), narrow the pool to candidates who actually
+  // satisfy it before scoring — see filterByStatedAsk.
+  const activeAsk = getActiveSeekingAsk(user.intent);
+  if (activeAsk) {
+    filtered = await filterByStatedAsk(activeAsk, filtered);
+    if (filtered.length < min_size - 1) return null;
+  }
 
 
   // Step 4 — Score all candidates against the user
@@ -412,7 +530,9 @@ export {
   activityOverlapScore,
   chapterDepthScore,
   emotionalStateScore,
+  filterByStatedAsk,
   findBestCircle,
+  getActiveSeekingAsk,
   goalAlignmentScore,
   groupCompatibilityScore,
   hasSharedChapters,
