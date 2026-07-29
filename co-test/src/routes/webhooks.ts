@@ -11,6 +11,7 @@ import {
   assessConversationCoverage,
   captureIntent,
   extractPsychographicProfile,
+  RAPPORT_TOPIC_DESCRIPTIONS,
   RAPPORT_TOPICS,
   storeProfile,
   storeTranscriptMemory,
@@ -1168,6 +1169,24 @@ Return ONLY valid JSON, no preamble: {"wants_venue": true or false, "venue_type"
         // replacement for anything in the real prompt.
         const personaPrompt = await getCoPersonaPrompt();
 
+        // A call actively works toward covering RAPPORT_TOPICS (via the
+        // live assess_conversation_coverage tool — see handleToolCall
+        // above); text had no equivalent at all, so it just answered
+        // reactively and never actually worked toward filling in a real
+        // profile (confirmed for real: city stayed null through an entire
+        // text-only conversation that built out life_chapters, goals, and
+        // activity_preferences just fine, because nothing ever prompted for
+        // it). Reuses the exact same assessConversationCoverage function
+        // and RAPPORT_TOPICS the call uses — same coverage goal, same
+        // topic set, just fed into this single reply-generation call
+        // directly instead of a live tool_call loop.
+        const coverageSoFar = `${recentConversation}\nUser said: ${content}`.trim();
+        const coverage = await assessConversationCoverage(coverageSoFar);
+        const missingTopicsContext =
+          coverage.missing_topics.length && !coverage.ready_to_summarize
+            ? `\nStill missing from what you know about them: ${coverage.missing_topics.map((t) => RAPPORT_TOPIC_DESCRIPTIONS[t]).join("; ")}. If it fits naturally off what they just said, work ONE of these in as a genuine follow-up question — not a survey, and don't force it if the conversation is clearly headed somewhere else right now.\n`
+            : "";
+
         const { text: reply } = await generateText({
           model: anthropic("claude-haiku-4-5-20251001"),
           prompt: `${personaPrompt ?? "You are Co, an exclusive life concierge."}
@@ -1176,7 +1195,7 @@ You are having this specific exchange over text message, not a phone call — th
 
 What you already know about ${user.first_name} from a prior call:
 ${profileContext || "(nothing on file yet from a call — this is effectively a first conversation)"}
-
+${missingTopicsContext}
 Recent text conversation, in order:
 ${recentConversation || "(start of the text conversation)"}
 
