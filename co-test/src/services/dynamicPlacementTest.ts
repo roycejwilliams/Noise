@@ -439,7 +439,7 @@ export async function approveRealPlacementAndNotify(
   const city = realMember.city ?? "your city";
   const chapter = (realMember.life_chapters?.[0] ?? "").replace(/_/g, " ");
 
-  const circleTitle = await generateCircleTitle(city, chapter);
+  const circleTitle = await generateCircleTitle(city, chapter, realMember.goals ?? []);
   const inviteMsg = await generateWarmCircleInviteMessage({
     firstName: realMember.first_name,
     circleTitle,
@@ -447,6 +447,16 @@ export async function approveRealPlacementAndNotify(
     city,
     goals: realMember.goals ?? [],
   });
+
+  // This feature only ever notifies one real member per circle (the rest
+  // are simulated filler), so persisting their personalized title here is
+  // safe — unlike production's multi-member circles, there's no other real
+  // recipient whose own title this would overwrite. Without this, the
+  // accept/decline ack in webhooks.ts (which reads circles.circle_name)
+  // would show the generic placeholder name instead of the actual
+  // personalized title just sent — confirmed for real: the invite said
+  // "The Bay Bridge Newcomers" and the ack said "Co Circle — new to city."
+  await pool.query(`UPDATE circles SET circle_name = $1 WHERE id = $2`, [circleTitle, circleId]);
 
   try {
     await sendblue.messages.send({

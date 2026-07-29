@@ -8,16 +8,34 @@ import { generateText } from "ai";
 // identical instead of drifting — this IS how Co talks to real users, not
 // a test-only variant of it.
 
-export async function generateCircleTitle(city: string, chapter: string): Promise<string> {
+// Returns "{title} {description}" — a short punchy name followed by a
+// one-line description of the circle's shared vibe, grounded in the
+// recipient's own real goals where available (private context the model is
+// told to allude to, not quote directly — same rule as
+// generateWarmCircleInviteMessage below). A bare name alone read as generic
+// and interchangeable across circles; the description is what actually
+// makes it feel written for this person.
+export async function generateCircleTitle(city: string, chapter: string, goals: string[] = []): Promise<string> {
+  const privateContext = goals.length ? goals.slice(0, 2).join(" ") : `navigating ${chapter || "a new chapter"} in ${city}`;
+  const fallback = `${chapter ? `Your ${chapter} circle` : "Your circle"} — a small group in ${city} who get it.`;
+
   try {
     const { text } = await generateText({
       model: anthropic("claude-haiku-4-5-20251001"),
-      prompt: `Give a short, warm, specific name (3-5 words, no quotes) for a small circle of people in ${city} all navigating "${chapter || "a new chapter"}". Not generic. Return only the name.`,
+      prompt: `Give a short, warm, specific name (3-5 words, no quotes) for a small circle of people in ${city} all navigating "${chapter || "a new chapter"}", plus a one-sentence description of the circle's shared vibe (under 12 words, no quotes, no period at the end). Ground the description in this real context about who it's for, without quoting it directly: "${privateContext}". Not generic — this should feel written for this specific person, not a template.
+
+Return ONLY valid JSON, nothing else:
+{"title": "...", "description": "..."}`,
     });
-    return text.trim();
+    const clean = text.replace(/```json|```/g, "").trim();
+    const parsed = JSON.parse(clean);
+    const title = String(parsed.title ?? "").trim();
+    const description = String(parsed.description ?? "").trim();
+    if (!title) return fallback;
+    return description ? `${title} ${description}` : title;
   } catch (err) {
     console.error("Circle title generation failed, using fallback (non-fatal):", err);
-    return chapter ? `Your ${chapter} circle` : "Your circle";
+    return fallback;
   }
 }
 

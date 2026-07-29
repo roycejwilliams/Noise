@@ -368,7 +368,7 @@ export function sendblueRouter(io: Server): Router {
               // announcement. See services/circleInvite.ts for the actual
               // tone/generation — shared with the replacement-invite path
               // below and co-test's real-test-placement feature.
-              const circleTitle = await generateCircleTitle(city, chapter);
+              const circleTitle = await generateCircleTitle(city, chapter, member.goals ?? []);
               const inviteMsg = await generateWarmCircleInviteMessage({
                 firstName: member.first_name,
                 circleTitle,
@@ -849,7 +849,7 @@ Return ONLY the classification, nothing else.`,
 
                   const candidateCity = candidate.city ?? "your city";
                   const candidateChapter = (candidate.life_chapters?.[0] ?? "").replace(/_/g, " ");
-                  const candidateCircleTitle = await generateCircleTitle(candidateCity, candidateChapter);
+                  const candidateCircleTitle = await generateCircleTitle(candidateCity, candidateChapter, candidate.goals ?? []);
                   const candidateInviteMsg = await generateWarmCircleInviteMessage({
                     firstName: candidate.first_name,
                     circleTitle: candidateCircleTitle,
