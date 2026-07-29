@@ -698,6 +698,61 @@ export function createWebhooksRouter(io: Server): express.Router {
         // "unclear" classification — fall through to normal conversation below.
       }
 
+      // Real-test-placement circle invite response — the counterpart to
+      // dynamicPlacementTest.ts's approveRealPlacementAndNotify, which sends
+      // the real member their real invite text but never had anything
+      // listening for what they replied. Confirmed for real: a member's
+      // "Yes!" fell straight through to the generic conversation handler
+      // below and Co responded as if it were answering an unrelated
+      // question, never recognizing the invite was being accepted. Mirrors
+      // production's pendingCircleInvite handling in api/src/routes/
+      // sendblue.ts (same classify-by-text pattern, same circle_members
+      // status transitions) — scoped to real_test_placement circles so it
+      // never collides with the simulated Moderator-approval check above,
+      // which only ever matches is_simulated circles.
+      const pendingRealInvite = await pool.query(
+        `SELECT cm.circle_id, c.circle_name
+         FROM circle_members cm
+         JOIN circles c ON c.id = cm.circle_id
+         WHERE cm.member_id = $1 AND cm.status = 'pending' AND c.real_test_placement = true
+         ORDER BY cm.joined_at DESC
+         LIMIT 1`,
+        [user.id],
+      );
+
+      if (pendingRealInvite.rows[0]) {
+        const { circle_id, circle_name } = pendingRealInvite.rows[0];
+
+        const { text: inviteClassification } = await generateText({
+          model: anthropic("claude-haiku-4-5-20251001"),
+          prompt: `A user replied to a circle invite. Classify their response as ONE of: "yes" — they want to join, "no" — they want to pass, "unclear" — can't tell.\n\nMessage: "${content}"\n\nReturn ONLY the classification, nothing else.`,
+        });
+        const inviteAction = inviteClassification.trim().toLowerCase().replace(/^[`"']+|[`"']+$/g, "");
+
+        if (inviteAction === "yes" || inviteAction === "no") {
+          await pool.query(
+            `UPDATE circle_members SET status = $1 WHERE circle_id = $2 AND member_id = $3`,
+            [inviteAction === "yes" ? "accepted" : "declined", circle_id, user.id],
+          );
+
+          const ack =
+            inviteAction === "yes"
+              ? `You're in — welcome to ${circle_name}.`
+              : "No worries — thanks for letting me know.";
+          try {
+            await sendblue.messages.send({
+              number,
+              content: capMessageLength(ack, 160),
+              from_number: process.env.SENDBLUE_PHONE_NUMBER!,
+            });
+          } catch (smsErr: any) {
+            console.error(`Real-placement invite ack send failed for ${number} (non-fatal):`, smsErr?.message ?? smsErr);
+          }
+          return res.status(200).send({ received: true, action: `real_invite_${inviteAction}` });
+        }
+        // "unclear" classification — fall through to normal conversation below.
+      }
+
       // Already verified — ongoing conversational texting, proving the
       // "does texting with Co keep working after verification" half of item 2.
       //
