@@ -16,8 +16,8 @@ import {
   isCircleMember,
   selectVenueForCircle,
 } from "./co.js";
-import { notifyModeratorOfPendingCircle } from "../services/circleApproval.js";
-import { findBestCircle, findBestCircleWithScore } from "../services/matching.js";
+import { notifyModeratorOfPendingCircle, activateCircle } from "../services/circleApproval.js";
+import { findBestCircle, findBestCircleWithScore, LOW_CONFIDENCE_GROUP_SCORE } from "../services/matching.js";
 import type { CandidateWindow } from "../services/scheduling.js";
 import { confirmMoment, requestVenueApprovalFromKeana } from "../services/booking.js";
 import sendblue from "../services/sendblue.js";
@@ -308,107 +308,15 @@ export function sendblueRouter(io: Server): Router {
 
           if (action === "approve") {
             await pool.query(
-              `UPDATE circles SET status = 'active' WHERE id = $1`,
-              [pendingCircle.id],
-            );
-
-            await pool.query(
               `INSERT INTO co_memories (user_id, memory_type, content) VALUES ($1, 'system', $2)`,
               [pendingCircle.owner_id, `Keana manually approved circle ${pendingCircle.id}`],
             );
 
-            const circleMembers = await pool.query(
-              `SELECT u.id, u.first_name, u.phone_number, cp.city, cp.life_chapters, cp.goals
-               FROM circle_members cm
-               JOIN users u ON cm.member_id = u.id
-               LEFT JOIN co_profiles cp ON cp.user_id = cm.member_id
-               WHERE cm.circle_id = $1`,
-              [pendingCircle.id],
-            );
-            const members = circleMembers.rows;
-            const memberCount = members.length;
-            const city = members.find((m: any) => m.city)?.city ?? "your city";
-            const chapter = (members.find((m: any) => m.life_chapters?.length)?.life_chapters?.[0] ?? "").replace(/_/g, " ");
-
-            for (const member of members) {
-              // vCard — send on first contact if CO_VCARD_URL is set
-              if (process.env.CO_VCARD_URL) {
-                const vcardCheck = await pool.query(
-                  `SELECT id FROM co_memories WHERE user_id = $1 AND content = 'Co vCard sent to user — contact saved' LIMIT 1`,
-                  [member.id],
-                );
-                if (!vcardCheck.rows[0]) {
-                  try {
-                    const { text: vcardMsg } = await generateText({
-                      model: anthropic("claude-haiku-4-5-20251001"),
-                      prompt: `You are Co, texting ${member.first_name} for the first time. Ask them to save your contact, briefly, in your own words. No exclamation points, no em dashes. 1 sentence.`,
-                    });
-                    await sendblue.messages.send({
-                      number: member.phone_number,
-                      content: vcardMsg,
-                      media_url: process.env.CO_VCARD_URL,
-                      from_number: process.env.SENDBLUE_PHONE_NUMBER!,
-                    });
-                    await pool.query(
-                      `INSERT INTO co_memories (user_id, memory_type, content) VALUES ($1, 'system', 'Co vCard sent to user — contact saved')`,
-                      [member.id],
-                    );
-                    await new Promise((resolve) => setTimeout(resolve, 3000));
-                  } catch (vcardErr: any) {
-                    console.error("vCard send failed (non-fatal):", vcardErr?.message ?? vcardErr);
-                  }
-                }
-              }
-
-              // Circle-invite iMessage — always individual, one thread per
-              // person. Placement is no longer announced as a fait accompli:
-              // the member has to accept before their moment is revealed
-              // (see the pending-circle-invite handling below). Never
-              // mentions headcount — this is their own thread, not a group
-              // announcement. See services/circleInvite.ts for the actual
-              // tone/generation — shared with the replacement-invite path
-              // below and co-test's real-test-placement feature.
-              const circleTitle = await generateCircleTitle(city, chapter, member.goals ?? []);
-              const inviteMsg = await generateWarmCircleInviteMessage({
-                firstName: member.first_name,
-                circleTitle,
-                chapter,
-                city,
-                goals: member.goals ?? [],
-              });
-
-              try {
-                await sendblue.messages.send({
-                  number: member.phone_number,
-                  content: inviteMsg,
-                  from_number: process.env.SENDBLUE_PHONE_NUMBER!,
-                });
-              } catch (smsErr: any) {
-                console.error(`Circle invite message failed for ${member.id}:`, smsErr?.message ?? smsErr);
-              }
-
-              const placementContent = `Co invited user to circle ${pendingCircle.id} ("${circleTitle}") — awaiting accept/decline`;
-              const placementMem = await pool.query(
-                `INSERT INTO co_memories (user_id, memory_type, content) VALUES ($1, 'placement', $2) RETURNING id`,
-                [member.id, placementContent],
-              );
-              generateEmbedding(placementContent)
-                .then((emb) =>
-                  pool.query(
-                    `UPDATE co_memories SET content_embedding = $1::vector WHERE id = $2`,
-                    [`[${emb.join(",")}]`, placementMem.rows[0].id],
-                  ),
-                )
-                .catch((err) => console.error("Memory embedding failed (non-fatal):", err));
-
-              io.to(`user:${member.id}`).emit("circle:placed", {
-                circle_id: pendingCircle.id,
-                circle_name: pendingCircle.circle_name,
-                member_count: memberCount,
-                city,
-                chapter,
-              });
-            }
+            await activateCircle({
+              circleId: pendingCircle.id,
+              circleName: pendingCircle.circle_name,
+              io,
+            });
           } else if (action === "reject") {
             await pool.query(
               `UPDATE circles SET status = 'rejected' WHERE id = $1`,
@@ -479,36 +387,43 @@ export function sendblueRouter(io: Server): Router {
                 );
               }
 
-              for (const memberId of newGroupIds) {
-                const pendingContent = "Circle placement pending Keana approval";
-                const pendingMem = await pool.query(
-                  `INSERT INTO co_memories (user_id, memory_type, content) VALUES ($1, 'check_in', $2) RETURNING id`,
-                  [memberId, pendingContent],
+              // Co decides on its own above the confidence floor, same as
+              // initial placement — only a genuinely borderline rematch
+              // goes to Keana.
+              if (newMatchResult!.finalScore >= LOW_CONFIDENCE_GROUP_SCORE) {
+                await activateCircle({ circleId: newCircle.id, circleName, io });
+              } else {
+                for (const memberId of newGroupIds) {
+                  const pendingContent = "Circle placement pending Keana approval";
+                  const pendingMem = await pool.query(
+                    `INSERT INTO co_memories (user_id, memory_type, content) VALUES ($1, 'check_in', $2) RETURNING id`,
+                    [memberId, pendingContent],
+                  );
+                  generateEmbedding(pendingContent)
+                    .then((emb) =>
+                      pool.query(
+                        `UPDATE co_memories SET content_embedding = $1::vector WHERE id = $2`,
+                        [`[${emb.join(",")}]`, pendingMem.rows[0].id],
+                      ),
+                    )
+                    .catch((err) => console.error("Memory embedding failed (non-fatal):", err));
+                }
+
+                const newMemberNamesResult = await pool.query(
+                  `SELECT first_name FROM users WHERE id = ANY($1::uuid[])`,
+                  [newGroupIds],
                 );
-                generateEmbedding(pendingContent)
-                  .then((emb) =>
-                    pool.query(
-                      `UPDATE co_memories SET content_embedding = $1::vector WHERE id = $2`,
-                      [`[${emb.join(",")}]`, pendingMem.rows[0].id],
-                    ),
-                  )
-                  .catch((err) => console.error("Memory embedding failed (non-fatal):", err));
+                const newMemberNames = newMemberNamesResult.rows.map((r: any) => r.first_name).join(", ");
+
+                await notifyModeratorOfPendingCircle({
+                  circleId: newCircle.id,
+                  memberIds: newGroupIds,
+                  memberNames: newMemberNames,
+                  city,
+                  chapter: primaryChapter.replace(/_/g, " "),
+                  finalScore: newMatchResult!.finalScore,
+                });
               }
-
-              const newMemberNamesResult = await pool.query(
-                `SELECT first_name FROM users WHERE id = ANY($1::uuid[])`,
-                [newGroupIds],
-              );
-              const newMemberNames = newMemberNamesResult.rows.map((r: any) => r.first_name).join(", ");
-
-              await notifyModeratorOfPendingCircle({
-                circleId: newCircle.id,
-                memberIds: newGroupIds,
-                memberNames: newMemberNames,
-                city,
-                chapter: primaryChapter.replace(/_/g, " "),
-                finalScore: newMatchResult!.finalScore,
-              });
             }
           }
 

@@ -24,6 +24,15 @@ export function createCirclesRouter(
       const circle = circleResult.rows[0];
       if (!circle) return res.status(404).send("Circle not found.");
 
+      // Member identities stay hidden on this unauthenticated page until
+      // scheduling is confirmed — matches the privacy rule the individual
+      // placement text already follows (see circleApproval.ts's prompt).
+      const confirmedMomentResult = await pool.query(
+        `SELECT 1 FROM moments WHERE circle_id = $1 AND status = 'confirmed'`,
+        [circle.id],
+      );
+      const schedulingConfirmed = confirmedMomentResult.rows.length > 0;
+
       const membersResult = await pool.query(
         `SELECT u.first_name, cp.city, cp.life_chapters
          FROM circle_members cm
@@ -45,7 +54,7 @@ export function createCirclesRouter(
           city,
           chapter,
           member_count: members.length,
-          member_first_names: members.map((m: any) => m.first_name),
+          member_first_names: schedulingConfirmed ? members.map((m: any) => m.first_name) : [],
         },
       });
     } catch (error) {

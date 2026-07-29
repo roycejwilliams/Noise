@@ -8,8 +8,8 @@ import pool from "../db/db.js";
 import { sendEmail } from "../otpActions.js";
 import { authenticateToken, userRole } from "../middleware/auth.js";
 import { generateEmbedding } from "../services/embeddings.js";
-import { notifyModeratorOfPendingCircle } from "../services/circleApproval.js";
-import { findBestCircleWithScore } from "../services/matching.js";
+import { notifyModeratorOfPendingCircle, activateCircle } from "../services/circleApproval.js";
+import { findBestCircleWithScore, LOW_CONFIDENCE_GROUP_SCORE } from "../services/matching.js";
 import { findBestVenue } from "../services/places.js";
 import { generateCandidateWindows, type CandidateWindow } from "../services/scheduling.js";
 import {
@@ -783,40 +783,49 @@ router.post(
         );
       }
 
-      // Step 5 — Notify Keana via iMessage for approval before any member is contacted
-      const memberNamesResult = await pool.query(
-        `SELECT first_name FROM users WHERE id = ANY($1::uuid[])`,
-        [groupUserIds],
-      );
-      const memberNames = memberNamesResult.rows.map((r: any) => r.first_name).join(", ");
+      // Step 5 — Co decides on its own above the confidence floor: activate
+      // and invite immediately, no Moderator step. Only a genuinely
+      // borderline group (Co can't confidently decide) goes to Keana.
       const city = profile.city ?? "unknown city";
       const chapter = primaryChapter.replace(/_/g, " ");
 
-      await notifyModeratorOfPendingCircle({
-        circleId: circle.id,
-        memberIds: groupUserIds,
-        memberNames,
-        city,
-        chapter,
-        finalScore: matchResult!.finalScore,
-      });
-
-      // Step 6 — Store pending-approval memory for each member
-      for (const memberId of groupUserIds) {
-        const placementContent = `Circle placement pending Keana approval`;
-        const placementMemory = await pool.query(
-          `INSERT INTO co_memories (user_id, memory_type, content)
-           VALUES ($1, 'check_in', $2) RETURNING id`,
-          [memberId, placementContent],
+      if (matchResult!.finalScore >= LOW_CONFIDENCE_GROUP_SCORE) {
+        await activateCircle({ circleId: circle.id, circleName, io: _io ?? undefined });
+      } else {
+        const memberNamesResult = await pool.query(
+          `SELECT first_name FROM users WHERE id = ANY($1::uuid[])`,
+          [groupUserIds],
         );
-        generateEmbedding(placementContent)
-          .then((emb) =>
-            pool.query(
-              `UPDATE co_memories SET content_embedding = $1::vector WHERE id = $2`,
-              [`[${emb.join(",")}]`, placementMemory.rows[0].id],
-            ),
-          )
-          .catch((err) => console.error("Memory embedding failed (non-fatal):", err));
+        const memberNames = memberNamesResult.rows.map((r: any) => r.first_name).join(", ");
+
+        await notifyModeratorOfPendingCircle({
+          circleId: circle.id,
+          memberIds: groupUserIds,
+          memberNames,
+          city,
+          chapter,
+          finalScore: matchResult!.finalScore,
+        });
+
+        // Step 6 — Store pending-approval memory for each member (only the
+        // Moderator-review path needs this — activateCircle already writes
+        // its own per-member memory for the immediate-invite path).
+        for (const memberId of groupUserIds) {
+          const placementContent = `Circle placement pending Keana approval`;
+          const placementMemory = await pool.query(
+            `INSERT INTO co_memories (user_id, memory_type, content)
+             VALUES ($1, 'check_in', $2) RETURNING id`,
+            [memberId, placementContent],
+          );
+          generateEmbedding(placementContent)
+            .then((emb) =>
+              pool.query(
+                `UPDATE co_memories SET content_embedding = $1::vector WHERE id = $2`,
+                [`[${emb.join(",")}]`, placementMemory.rows[0].id],
+              ),
+            )
+            .catch((err) => console.error("Memory embedding failed (non-fatal):", err));
+        }
       }
 
       return res.status(201).send({
