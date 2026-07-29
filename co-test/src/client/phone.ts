@@ -233,6 +233,7 @@ function renderCallStatus(callStatus: string | null) {
     ringing: "Ringing your phone…",
     answered: "In call",
     completed: "Call ended — preparing results…",
+    failed: "Something went wrong preparing results — try calling again",
   };
   callStatusLine.textContent = labels[callStatus] ?? callStatus;
 

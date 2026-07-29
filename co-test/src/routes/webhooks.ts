@@ -192,6 +192,38 @@ function capMessageLength(text: string, maxChars = TEXT_MESSAGE_CHAR_CAP): strin
   return `${window.slice(0, lastSpace > 0 ? lastSpace : maxChars).trim()}…`;
 }
 
+// Best-effort follow-up text, same intent as production's — proves the real
+// iMessage round trip works post-call, not just the phone call. "1-2
+// sentences" alone wasn't a real length constraint — the model packed
+// multiple observations into those 1-2 sentences, and a duplicate chat_ended
+// delivery (fixed by the call_status claim in the webhook handler) used to
+// fire this three times in a row on top of that. Now: one detail, an
+// explicit char budget in the prompt, and capMessageLength as a hard
+// backstop. Failure here is deliberately swallowed — it must never affect
+// call_status/retryability, since the recap (the actual result) is already
+// persisted by the time this runs.
+async function sendFollowUpText(
+  callUser: { first_name: string; phone_number: string } | null,
+  transcript: string,
+): Promise<void> {
+  if (!callUser) return;
+  try {
+    const followUpPersona = await getCoPersonaPrompt();
+    const { text: followUpMessage } = await generateText({
+      model: anthropic("claude-haiku-4-5-20251001"),
+      prompt: `${followUpPersona ?? "You are Co."} You just got off a call with ${callUser.first_name}. Here's what they told you:\n\n"${transcript}"\n\nText them something short that proves you were actually listening. Pick exactly ONE real, specific thing they said (a feeling, a struggle, a detail) and respond to only that — nothing else. No second observation, no forward-looking plan, no summary of the call.\n\nDo not say "I have what I need," "I'll be in touch," "your circle is ready/next," or anything that sounds like a status update. No exclamation points. No em dashes.\n\nThis is a text message, not the call — keep it short, one text-message-length turn. Under 160 characters.`,
+    });
+    const cappedFollowUp = capMessageLength(followUpMessage, 160);
+    await sendblue.messages.send({
+      number: callUser.phone_number,
+      content: cappedFollowUp,
+      from_number: process.env.SENDBLUE_PHONE_NUMBER!,
+    });
+  } catch (followUpErr: any) {
+    console.error("Post-call follow-up text failed (non-fatal):", followUpErr?.message ?? followUpErr);
+  }
+}
+
 // When a genuinely long reply doesn't fit in one text, capMessageLength
 // used to just cut it off with an ellipsis — silently losing whatever
 // didn't fit. Real texting behavior is to send it as two messages instead
@@ -406,12 +438,23 @@ export function createWebhooksRouter(io: Server): express.Router {
       // sent a fresh, differently-worded follow-up text every time —
       // confirmed directly: three near-identical call_transcript/intent/recap
       // triples 15-20 seconds apart for one real call. Atomic claim: only the
-      // delivery that actually flips call_status away from 'completed' gets
-      // rows back and proceeds; every later delivery for the same call sees
-      // it already 'completed' and is a no-op ack.
+      // delivery that actually flips call_status to 'processing' gets rows
+      // back and proceeds; every later delivery for the same call sees it
+      // already 'processing'/'completed' and is a no-op ack.
+      //
+      // Claiming 'processing' here — not 'completed' directly — matters: the
+      // extraction pipeline below (Hume fetch, transcript build, two LLM
+      // calls, recap insert) can fail partway through, and 'completed' must
+      // only ever mean "the recap actually exists." Confirmed for real: a
+      // pipeline failure previously left call_status='completed' with no
+      // recap ever written, permanently wedging the call — every later
+      // delivery (including a legitimate retry) saw 'completed' and no-op'd
+      // forever, with no way to recover except manually resetting the row.
+      // On failure below, call_status resets to 'failed' so the next
+      // delivery (or a manual replay) can claim and retry it.
       const claimResult = await pool.query(
-        `UPDATE users SET call_status = 'completed'
-         WHERE id = $1 AND call_status IS DISTINCT FROM 'completed'
+        `UPDATE users SET call_status = 'processing'
+         WHERE id = $1 AND call_status NOT IN ('processing', 'completed')
          RETURNING id`,
         [user_id],
       );
@@ -420,79 +463,69 @@ export function createWebhooksRouter(io: Server): express.Router {
         return res.status(200).send({ success: true, duplicate: true });
       }
 
-      const callUserResult = await pool.query(`SELECT first_name, phone_number FROM users WHERE id = $1`, [user_id]);
-      const callUser = callUserResult.rows[0] ?? null;
+      try {
+        const callUserResult = await pool.query(`SELECT first_name, phone_number FROM users WHERE id = $1`, [user_id]);
+        const callUser = callUserResult.rows[0] ?? null;
 
-      const [events, recording_url] = await Promise.all([
-        fetchHumeChatEvents(chat_id),
-        fetchHumeRecordingUrl(chat_id),
-      ]);
-      const transcript = buildTranscript(events);
-      const messages = buildMessages(events);
-      const turn_latency_ms = buildTurnLatencies(events);
+        const [events, recording_url] = await Promise.all([
+          fetchHumeChatEvents(chat_id),
+          fetchHumeRecordingUrl(chat_id),
+        ]);
+        const transcript = buildTranscript(events);
+        const messages = buildMessages(events);
+        const turn_latency_ms = buildTurnLatencies(events);
 
-      // Flush any last transcript lines live, then hand off — the coverage
-      // history for the recap below comes from the same live event log
-      // (not re-derived), so what a connected browser saw live and what the
-      // static results page shows afterward are exactly the same data.
-      emitNewTranscriptLines(io, user_id, events);
-      const coverage_history = getLiveSnapshot(user_id)
-        .events.filter((e) => e.type === "coverage")
-        .map((e) => (e as Extract<typeof e, { type: "coverage" }>).check);
-      pushLiveEvent(io, user_id, { type: "call_ended" });
-      endLiveCall(user_id);
+        // Flush any last transcript lines live, then hand off — the coverage
+        // history for the recap below comes from the same live event log
+        // (not re-derived), so what a connected browser saw live and what the
+        // static results page shows afterward are exactly the same data.
+        emitNewTranscriptLines(io, user_id, events);
+        const coverage_history = getLiveSnapshot(user_id)
+          .events.filter((e) => e.type === "coverage")
+          .map((e) => (e as Extract<typeof e, { type: "coverage" }>).check);
+        pushLiveEvent(io, user_id, { type: "call_ended" });
+        endLiveCall(user_id);
 
-      if (!transcript.trim()) {
-        console.error(`webhooks: empty transcript for chat ${chat_id} (user ${user_id})`);
-        return res.status(200).send({ success: true, empty: true });
-      }
-
-      await storeTranscriptMemory(user_id, transcript, { audioUrl: recording_url });
-      const { raw, extracted } = await extractPsychographicProfile(transcript);
-      await storeProfile(user_id, extracted, transcript);
-      const intent = await captureIntent(user_id, transcript);
-
-      const data = {
-        profile: extracted,
-        intent,
-        raw_model_output: raw,
-        transcript,
-        messages,
-        coverage_history,
-        turn_latency_ms,
-        channel: "phone",
-      };
-      await pool.query(
-        `INSERT INTO co_memories (user_id, memory_type, content) VALUES ($1, 'recap', $2)`,
-        [user_id, JSON.stringify(data)],
-      );
-
-      // Best-effort follow-up text, same intent as production's — proves the
-      // real iMessage round trip works post-call, not just the phone call.
-      // "1-2 sentences" alone wasn't a real length constraint — the model
-      // packed multiple observations into those 1-2 sentences, and a
-      // duplicate chat_ended delivery (fixed above) used to fire this three
-      // times in a row on top of that. Now: one detail, an explicit char
-      // budget in the prompt, and capMessageLength as a hard backstop.
-      if (callUser) {
-        try {
-          const followUpPersona = await getCoPersonaPrompt();
-          const { text: followUpMessage } = await generateText({
-            model: anthropic("claude-haiku-4-5-20251001"),
-            prompt: `${followUpPersona ?? "You are Co."} You just got off a call with ${callUser.first_name}. Here's what they told you:\n\n"${transcript}"\n\nText them something short that proves you were actually listening. Pick exactly ONE real, specific thing they said (a feeling, a struggle, a detail) and respond to only that — nothing else. No second observation, no forward-looking plan, no summary of the call.\n\nDo not say "I have what I need," "I'll be in touch," "your circle is ready/next," or anything that sounds like a status update. No exclamation points. No em dashes.\n\nThis is a text message, not the call — keep it short, one text-message-length turn. Under 160 characters.`,
-          });
-          const cappedFollowUp = capMessageLength(followUpMessage, 160);
-          await sendblue.messages.send({
-            number: callUser.phone_number,
-            content: cappedFollowUp,
-            from_number: process.env.SENDBLUE_PHONE_NUMBER!,
-          });
-        } catch (followUpErr: any) {
-          console.error("Post-call follow-up text failed (non-fatal):", followUpErr?.message ?? followUpErr);
+        if (!transcript.trim()) {
+          console.error(`webhooks: empty transcript for chat ${chat_id} (user ${user_id})`);
+          // Not a hard failure, but there's no recap to show either — reset
+          // so a later delivery with a fully-synced transcript can retry,
+          // same as the catch block below.
+          await pool.query(`UPDATE users SET call_status = 'failed' WHERE id = $1`, [user_id]);
+          return res.status(200).send({ success: true, empty: true });
         }
-      }
 
-      return res.status(200).send({ success: true });
+        await storeTranscriptMemory(user_id, transcript, { audioUrl: recording_url });
+        const { raw, extracted } = await extractPsychographicProfile(transcript);
+        await storeProfile(user_id, extracted, transcript);
+        const intent = await captureIntent(user_id, transcript);
+
+        const data = {
+          profile: extracted,
+          intent,
+          raw_model_output: raw,
+          transcript,
+          messages,
+          coverage_history,
+          turn_latency_ms,
+          channel: "phone",
+        };
+        await pool.query(
+          `INSERT INTO co_memories (user_id, memory_type, content) VALUES ($1, 'recap', $2)`,
+          [user_id, JSON.stringify(data)],
+        );
+
+        // The recap exists now — safe to mark completed. Everything after
+        // this point (the follow-up text) is best-effort and must not affect
+        // retryability; it already has its own non-fatal try/catch below.
+        await pool.query(`UPDATE users SET call_status = 'completed' WHERE id = $1`, [user_id]);
+
+        await sendFollowUpText(callUser, transcript);
+        return res.status(200).send({ success: true });
+      } catch (pipelineErr) {
+        await pool.query(`UPDATE users SET call_status = 'failed' WHERE id = $1`, [user_id]);
+        throw pipelineErr;
+      }
     } catch (error) {
       next(error);
     }
