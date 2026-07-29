@@ -1355,6 +1355,9 @@ button {
   justify-content: space-between;
   gap: var(--space-5);
   margin-bottom: var(--space-6);
+  background: var(--accent-bg);
+  border-color: var(--accent-border);
+  border-left: 4px solid var(--accent);
 }
 
 .reset-session-text strong {
@@ -1370,6 +1373,15 @@ button {
 
 .reset-session-card .download-button {
   flex-shrink: 0;
+  background: var(--accent);
+  border-color: var(--accent);
+  color: #ffffff;
+  font-weight: 600;
+}
+
+.reset-session-card .download-button:hover {
+  background: var(--text);
+  border-color: var(--text);
 }
 
 .checklist-list {
