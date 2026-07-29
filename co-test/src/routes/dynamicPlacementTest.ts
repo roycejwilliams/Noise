@@ -4,6 +4,7 @@ import {
   approveRealPlacementAndNotify,
   attemptRealPlacement,
   getActiveRealTestUser,
+  getDynamicPoolsSeeded,
   getLatestDynamicRuns,
   getRealPlacementCircleState,
   rejectRealPlacement,
@@ -24,6 +25,19 @@ router.get("/real-user", async (_req: Request, res: Response, next: NextFunction
   try {
     const user = await getActiveRealTestUser();
     return res.status(200).json({ success: true, user });
+  } catch (error) {
+    next(error);
+  }
+});
+
+// Gates the checklist UI's step 2/3 buttons — read on load and after every
+// seed/reset so the disabled state always reflects whether filler pools
+// actually exist right now, not just whatever happened during this page
+// session.
+router.get("/pools-state", async (_req: Request, res: Response, next: NextFunction) => {
+  try {
+    const seeded = await getDynamicPoolsSeeded();
+    return res.status(200).json({ success: true, seeded });
   } catch (error) {
     next(error);
   }

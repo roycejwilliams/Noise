@@ -1371,6 +1371,72 @@ button {
   margin-bottom: var(--space-4);
 }
 
+.sim-steps {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-4);
+  margin-bottom: var(--space-4);
+}
+
+.sim-step {
+  display: flex;
+  gap: var(--space-3);
+  align-items: flex-start;
+}
+
+.sim-step-number {
+  flex-shrink: 0;
+  width: 22px;
+  height: 22px;
+  border-radius: 50%;
+  background: var(--amber);
+  color: var(--bg-raised);
+  font-size: 12px;
+  font-weight: 700;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.sim-step-body {
+  flex: 1;
+  min-width: 0;
+}
+
+.sim-step-body .sim-controls,
+.sim-step-body .sim-subtext {
+  margin-bottom: 0;
+}
+
+.sim-step-label {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--text);
+  margin-bottom: var(--space-2);
+}
+
+.sim-controls .download-button:disabled,
+.sim-controls select:disabled {
+  opacity: 0.4;
+  cursor: not-allowed;
+}
+
+.sim-reset-row {
+  border-top: 1px solid var(--border-strong);
+  padding-top: var(--space-4);
+  margin-top: var(--space-2);
+  margin-bottom: 0;
+}
+
+.sim-reset-button {
+  border-color: var(--text-tertiary);
+  color: var(--text-secondary);
+}
+
+.sim-note {
+  font-style: italic;
+}
+
 .sim-controls .download-button {
   border-color: var(--amber);
   color: var(--amber);

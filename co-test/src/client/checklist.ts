@@ -225,6 +225,12 @@ function renderSimState(data: {
   moment: SimMoment | null;
   moment_responses: SimMomentResponse[];
 }) {
+  // Step 2 (Run matching) only makes sense once step 1 (Seed) has actually
+  // put members in the DB — reflects real state on every load, not just
+  // right after clicking Seed, so a page reload doesn't leave it wrongly
+  // enabled or disabled.
+  simMatchBtn.disabled = data.members.length === 0;
+
   simStateEl.innerHTML = "";
 
   if (!data.members.length) {
@@ -600,12 +606,24 @@ async function loadDynPlacementState() {
   if (json.success) renderDynPlacementState(json.circle ?? null, json.circle_members ?? []);
 }
 
+// Steps 2/3 only make sense once step 1 (generate filler pools) has
+// actually happened — reflects real state on every load, same reasoning as
+// the Circles pipeline test's simMatchBtn above.
+async function loadDynPoolsState() {
+  const json = await dynFetch("pools-state");
+  const seeded = json.success && json.seeded;
+  dynRunAllBtn.disabled = !seeded;
+  dynPlacementVariantSelect.disabled = !seeded;
+  dynAttemptPlacementBtn.disabled = !seeded;
+}
+
 dynSeedBtn.addEventListener("click", async () => {
   dynSeedBtn.disabled = true;
   try {
     const result = await dynPost("seed");
     if (!result.success) alert(result.error ?? "Seeding failed.");
     await loadDynRealUser();
+    await loadDynPoolsState();
   } finally {
     dynSeedBtn.disabled = false;
   }
@@ -618,7 +636,7 @@ dynRunAllBtn.addEventListener("click", async () => {
     if (!result.success) alert(result.error ?? "Diagnostic run failed.");
     await loadDynRuns();
   } finally {
-    dynRunAllBtn.disabled = false;
+    await loadDynPoolsState();
   }
 });
 
@@ -629,6 +647,7 @@ dynResetBtn.addEventListener("click", async () => {
     await loadDynRealUser();
     await loadDynRuns();
     await loadDynPlacementState();
+    await loadDynPoolsState();
   } finally {
     dynResetBtn.disabled = false;
   }

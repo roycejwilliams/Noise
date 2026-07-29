@@ -491,6 +491,18 @@ export async function rejectRealPlacement(circleId: string): Promise<{ success: 
   return { success: true };
 }
 
+// Whether filler pools currently exist — used only to gate the checklist
+// UI's "run diagnostics" / "attempt real placement" steps until step 1
+// (generate filler pools) has actually happened, instead of letting them be
+// clicked out of order with no real feedback about why nothing useful comes
+// back.
+export async function getDynamicPoolsSeeded(): Promise<boolean> {
+  const result = await pool.query(
+    `SELECT 1 FROM users WHERE is_simulated = true AND simulation_scenario IN ('DYNAMIC_A', 'DYNAMIC_B', 'DYNAMIC_C') LIMIT 1`,
+  );
+  return !!result.rows[0];
+}
+
 // Clears only this feature's own data — the filler pools it generated and
 // the real circle(s) it created. Never touches the real test user's own
 // account, profile, memories, or captured intent.
