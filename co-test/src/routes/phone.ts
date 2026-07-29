@@ -4,8 +4,26 @@ import pool from "../../../api/src/db/db.js";
 import { sendSMS } from "../../../api/src/otpActions.js";
 import { getLiveSnapshot } from "../services/liveCallState.js";
 import { triggerCall } from "../services/callTrigger.js";
+import { resetRealTestUser } from "../services/dynamicPlacementTest.js";
 
 const router = express.Router();
+
+// POST /api/phone/reset — clears every real (non-simulated) phone-test
+// user's own account (profile, memories, captured intent, any circle they
+// own) plus any abandoned, never-claimed phone_pending row. co-test is
+// explicitly single-tester-at-a-time (see phone_pending's migration
+// comment) — this is what makes that safe across multiple different real
+// testers over time: whoever finishes a session runs this before handing
+// the tool to the next person, instead of them building on a stranger's
+// leftover data.
+router.post("/reset", async (_req: Request, res: Response, next: NextFunction) => {
+  try {
+    const result = await resetRealTestUser();
+    return res.status(200).json(result);
+  } catch (error) {
+    next(error);
+  }
+});
 
 // POST /api/phone/session — entry screen is a single "Message Co to start"
 // button (Ditto pattern, no name/phone form), so there's no phone number to

@@ -6,6 +6,43 @@ const statusEl = document.getElementById("status") as HTMLElement;
 const autoList = document.getElementById("auto-list") as HTMLElement;
 const manualList = document.getElementById("manual-list") as HTMLElement;
 const statCardsEl = document.getElementById("stat-cards") as HTMLElement;
+const resetSessionBtn = document.getElementById("reset-session-btn") as HTMLButtonElement;
+const resetSessionStatusEl = document.getElementById("reset-session-status") as HTMLElement;
+
+// Every "<h2 class="checklist-section-title">" on this page is immediately
+// followed by the section's collapsible content (a .checklist-list or
+// .sim-panel, both tagged .section-collapsible) — click the title to
+// toggle it, same max-height-transition idiom as .transcript-panel.collapsed
+// elsewhere in this codebase.
+for (const title of document.querySelectorAll<HTMLElement>(".checklist-section-title")) {
+  title.addEventListener("click", () => {
+    const content = title.nextElementSibling as HTMLElement | null;
+    if (!content) return;
+    title.classList.toggle("collapsed");
+    content.classList.toggle("collapsed");
+  });
+}
+
+// co-test is single-tester-at-a-time (see phone_pending's migration
+// comment) — this is the manual "hand it to the next person" reset, so
+// whoever's using it doesn't need DB access to get a clean slate.
+resetSessionBtn.addEventListener("click", async () => {
+  resetSessionBtn.disabled = true;
+  resetSessionStatusEl.textContent = "Resetting…";
+  try {
+    const res = await fetch("/api/phone/reset", { method: "POST" });
+    const json = await res.json();
+    resetSessionStatusEl.textContent = json.success
+      ? `Reset — ${json.resetCount} real test user${json.resetCount === 1 ? "" : "s"} cleared. Ready for the next session.`
+      : "Reset failed — check logs.";
+    await renderStatCards();
+  } catch (err) {
+    console.error("Failed to reset test session:", err);
+    resetSessionStatusEl.textContent = "Reset failed — check logs.";
+  } finally {
+    resetSessionBtn.disabled = false;
+  }
+});
 
 type ChecklistItem = {
   key: string;

@@ -514,3 +514,42 @@ export async function resetDynamicPools(): Promise<void> {
   );
   await pool.query(`DELETE FROM co_test_dynamic_runs`);
 }
+
+// co-test is explicitly documented as single-tester-at-a-time (see
+// phone_pending's migration comment in testMigrations.ts: "not safe for
+// concurrent testers"), which only works cleanly if whoever finishes a
+// session actually clears it before the next person starts — otherwise the
+// next real tester's captured profile/intent gets built on top of, or
+// confused with, a stranger's leftover data. This wipes every real
+// (non-simulated) phone-test user's own account — profile, memories,
+// captured intent, any circle they own (including a real_test_placement
+// one) — plus any orphaned, never-claimed phone_pending rows from an
+// abandoned "Message Co to start" attempt, so the next tester's session
+// starts from a genuinely empty state instead of stale prior-tester data.
+// Deliberately resets ALL matching rows, not just the most recent one —
+// this tool's own single-tester-at-a-time design means anything else found
+// here is already stale by definition.
+export async function resetRealTestUser(): Promise<{ success: boolean; resetCount: number }> {
+  const staleUsers = await pool.query(
+    `SELECT id FROM users WHERE test_channel = 'phone' AND is_simulated = false AND phone_pending = false`,
+  );
+  const ids: string[] = staleUsers.rows.map((r) => r.id);
+
+  if (ids.length) {
+    // Same FK order every reset in this feature needs: circles.owner_id /
+    // moments.creator_id reference users with no ON DELETE rule, so they
+    // must go first — deleting the users then cascades co_profiles/
+    // co_memories/circle_members/moment_responses.
+    await pool.query(`DELETE FROM moments WHERE creator_id = ANY($1::uuid[])`, [ids]);
+    await pool.query(`DELETE FROM circles WHERE owner_id = ANY($1::uuid[])`, [ids]);
+    await pool.query(`DELETE FROM users WHERE id = ANY($1::uuid[])`, [ids]);
+  }
+
+  // Abandoned entry-point rows — created the moment someone taps "Message Co
+  // to start," before any real phone number claims them. An unclaimed one
+  // left behind risks the exact "second person's text claims the first
+  // person's pending session" collision the migration comment warns about.
+  await pool.query(`DELETE FROM users WHERE test_channel = 'phone' AND phone_pending = true`);
+
+  return { success: true, resetCount: ids.length };
+}

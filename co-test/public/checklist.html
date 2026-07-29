@@ -26,19 +26,32 @@
 
       <div id="stat-cards" class="stat-card-row"></div>
 
+      <div class="dashboard-card reset-session-card">
+        <div class="reset-session-text">
+          <strong>Real test session</strong>
+          <p class="sim-subtext">
+            This tool is shared — it only tracks one real tester at a time. Before handing it to
+            the next person (or starting your own next run), reset so their captured profile and
+            intent doesn't build on top of the last session's data.
+          </p>
+        </div>
+        <button id="reset-session-btn" class="download-button sim-reset-button">Start over — reset test session</button>
+      </div>
+      <div id="reset-session-status" class="sim-subtext"></div>
+
       <section class="checklist-section dashboard-card">
-        <h2 class="checklist-section-title">Auto-verified — checked off from real data, no human input</h2>
-        <div id="auto-list" class="checklist-list"></div>
+        <h2 class="checklist-section-title">Auto-verified — checked off from real data, no human input<span class="section-chevron">⌄</span></h2>
+        <div id="auto-list" class="checklist-list section-collapsible"></div>
       </section>
 
       <section class="checklist-section dashboard-card">
-        <h2 class="checklist-section-title">Human input — never inferred or guessed by the system</h2>
-        <div id="manual-list" class="checklist-list"></div>
+        <h2 class="checklist-section-title">Human input — never inferred or guessed by the system<span class="section-chevron">⌄</span></h2>
+        <div id="manual-list" class="checklist-list section-collapsible"></div>
       </section>
 
       <section class="checklist-section">
-        <h2 class="checklist-section-title">Circles pipeline test</h2>
-        <div class="sim-panel">
+        <h2 class="checklist-section-title">Circles pipeline test<span class="section-chevron">⌄</span></h2>
+        <div class="sim-panel section-collapsible">
           <div class="sim-banner">Simulated pipeline test — validates matching / approval / booking logic only, not the real texting experience</div>
           <p class="sim-subtext">
             Seeded members and venues live entirely in co-test's own DB, flagged <code>is_simulated</code>.
@@ -81,8 +94,8 @@
       </section>
 
       <section class="checklist-section">
-        <h2 class="checklist-section-title">Real user vs. filler pool</h2>
-        <div class="sim-panel">
+        <h2 class="checklist-section-title">Real user vs. filler pool<span class="section-chevron">⌄</span></h2>
+        <div class="sim-panel section-collapsible">
           <div class="sim-banner">Real onboarding, real matching algorithm — the "Approve" action below sends a real iMessage to the real test user's real phone</div>
           <p class="sim-subtext">
             Runs the real <code>findBestCircle</code>/stated-ask filter/scoring for whichever real, OTP-verified
