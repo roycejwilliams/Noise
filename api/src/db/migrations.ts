@@ -395,4 +395,14 @@ export function runMigrations() {
   pool
     .query(`ALTER TABLE moments ADD COLUMN IF NOT EXISTS consensus_low_confidence BOOLEAN NOT NULL DEFAULT false`)
     .catch((err: Error) => console.error("moments.consensus_low_confidence migration failed:", err));
+
+  // circle_name was varchar(50) — fine for the old bare-name generation
+  // ("Co Circle — new to city"), but generateCircleTitle now returns
+  // "{title} {description}" (circleInvite.ts), which routinely exceeds 50
+  // characters. Confirmed for real: co-test's real-test-placement approval
+  // flow (dynamicPlacementTest.ts) started throwing a hard varchar-length
+  // error on every approval, before the real invite text ever got sent.
+  pool
+    .query(`ALTER TABLE circles ALTER COLUMN circle_name TYPE TEXT`)
+    .catch((err: Error) => console.error("circles.circle_name widen migration failed:", err));
 }
