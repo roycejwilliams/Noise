@@ -710,18 +710,30 @@ export function createWebhooksRouter(io: Server): express.Router {
       // status transitions) — scoped to real_test_placement circles so it
       // never collides with the simulated Moderator-approval check above,
       // which only ever matches is_simulated circles.
+      //
+      // Also matches a row already resolved in the last 30 minutes (not
+      // just 'pending') — double-texting ("Yes" sent twice, or resent
+      // because the first reply felt slow) means the second delivery lands
+      // after circle_members.status already flipped, so a plain
+      // status='pending' match alone would miss it and let the same
+      // fall-through-to-confused-conversation bug happen again on the
+      // resend. withPhoneLock serializes same-number deliveries, so there's
+      // no race between the two — this only handles them arriving in
+      // sequence. The 30-minute bound keeps this from misclassifying an
+      // unrelated yes/no reply days later, once the row is old.
       const pendingRealInvite = await pool.query(
-        `SELECT cm.circle_id, c.circle_name
+        `SELECT cm.circle_id, cm.status, c.circle_name
          FROM circle_members cm
          JOIN circles c ON c.id = cm.circle_id
-         WHERE cm.member_id = $1 AND cm.status = 'pending' AND c.real_test_placement = true
+         WHERE cm.member_id = $1 AND c.real_test_placement = true
+           AND (cm.status = 'pending' OR cm.joined_at > NOW() - INTERVAL '30 minutes')
          ORDER BY cm.joined_at DESC
          LIMIT 1`,
         [user.id],
       );
 
       if (pendingRealInvite.rows[0]) {
-        const { circle_id, circle_name } = pendingRealInvite.rows[0];
+        const { circle_id, circle_name, status: currentStatus } = pendingRealInvite.rows[0];
 
         const { text: inviteClassification } = await generateText({
           model: anthropic("claude-haiku-4-5-20251001"),
@@ -730,15 +742,26 @@ export function createWebhooksRouter(io: Server): express.Router {
         const inviteAction = inviteClassification.trim().toLowerCase().replace(/^[`"']+|[`"']+$/g, "");
 
         if (inviteAction === "yes" || inviteAction === "no") {
-          await pool.query(
-            `UPDATE circle_members SET status = $1 WHERE circle_id = $2 AND member_id = $3`,
-            [inviteAction === "yes" ? "accepted" : "declined", circle_id, user.id],
-          );
+          let ack: string;
+          if (currentStatus === "pending") {
+            await pool.query(
+              `UPDATE circle_members SET status = $1 WHERE circle_id = $2 AND member_id = $3`,
+              [inviteAction === "yes" ? "accepted" : "declined", circle_id, user.id],
+            );
+            ack =
+              inviteAction === "yes"
+                ? `You're in — welcome to ${circle_name}.`
+                : "No worries — thanks for letting me know.";
+          } else {
+            // Already resolved — an idempotent ack for the resend, not a
+            // re-process. Whatever the new reply says, the earlier decision
+            // stands; nothing to update.
+            ack =
+              currentStatus === "accepted"
+                ? `Already got you down for ${circle_name} — you're all set.`
+                : "Already noted — no further action needed.";
+          }
 
-          const ack =
-            inviteAction === "yes"
-              ? `You're in — welcome to ${circle_name}.`
-              : "No worries — thanks for letting me know.";
           try {
             await sendblue.messages.send({
               number,
@@ -748,7 +771,7 @@ export function createWebhooksRouter(io: Server): express.Router {
           } catch (smsErr: any) {
             console.error(`Real-placement invite ack send failed for ${number} (non-fatal):`, smsErr?.message ?? smsErr);
           }
-          return res.status(200).send({ received: true, action: `real_invite_${inviteAction}` });
+          return res.status(200).send({ received: true, action: `real_invite_${inviteAction}`, already_resolved: currentStatus !== "pending" });
         }
         // "unclear" classification — fall through to normal conversation below.
       }
