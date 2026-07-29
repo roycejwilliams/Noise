@@ -4,6 +4,7 @@ import { randomInt } from "crypto";
 import { NextFunction, Request, Response, Router } from "express";
 import type { Server } from "socket.io";
 import pool from "../db/db.js";
+import { withAdvisoryLock } from "../db/advisoryLock.js";
 import { sendSMS } from "../otpActions.js";
 import elevenlabs from "../services/elevenlabs.js";
 import { generateCircleTitle, generateWarmCircleInviteMessage } from "../services/circleInvite.js";
@@ -16,10 +17,10 @@ import {
   isCircleMember,
   selectVenueForCircle,
 } from "./co.js";
-import { notifyModeratorOfPendingCircle, activateCircle } from "../services/circleApproval.js";
-import { findBestCircle, findBestCircleWithScore, LOW_CONFIDENCE_GROUP_SCORE } from "../services/matching.js";
+import { activateCircle, attemptCircleRematch } from "../services/circleApproval.js";
+import { findBestCircle } from "../services/matching.js";
 import type { CandidateWindow } from "../services/scheduling.js";
-import { confirmMoment, requestVenueApprovalFromKeana } from "../services/booking.js";
+import { confirmMoment, requestVenueApprovalFromModerator } from "../services/booking.js";
 import sendblue from "../services/sendblue.js";
 import { generateVoiceNote } from "../services/voiceNote.js";
 
@@ -30,16 +31,12 @@ import { generateVoiceNote } from "../services/voiceNote.js";
 // to the wrong branch entirely (confirmed: a rapid double "Yes" caused the
 // second reply to skip the actionable-response handler and hit the general
 // fallback instead, producing a hallucinated, unrelated reply).
-const phoneLocks = new Map<string, Promise<unknown>>();
-
+//
+// Backed by a Postgres advisory lock (db/advisoryLock.ts), not an in-memory
+// map — a same-process-only lock silently stops protecting anything the
+// moment this service runs as more than one replica.
 function withPhoneLock<T>(phone: string, fn: () => Promise<T>): Promise<T> {
-  const prior = phoneLocks.get(phone) ?? Promise.resolve();
-  const result = prior.then(fn, fn);
-  phoneLocks.set(
-    phone,
-    result.catch(() => {}),
-  );
-  return result;
+  return withAdvisoryLock(`phone:${phone}`, fn);
 }
 
 const ALLOWED_LIFE_CHAPTERS = ["new_to_city", "building_solo", "career_pivot", "starting_over"];
@@ -279,13 +276,13 @@ export function sendblueRouter(io: Server): Router {
           return res.status(400).send("Missing required fields.");
         }
 
-        // Keana approval intercept — must run before user lookup since Keana may not be in users table.
-        // Only intercepts when there's an actual circle to approve/reject — Keana is
+        // Moderator approval intercept — must run before user lookup since the Moderator may not be in users table.
+        // Only intercepts when there's an actual circle to approve/reject — the Moderator is
         // also a normal registered user/contact (e.g. completing her own text-in-first
         // verification, or chatting with Co), and those texts must fall through to the
         // standard user flow below instead of being silently swallowed here.
-        const keanaPhone = process.env.KEANA_PHONE_NUMBER;
-        if (keanaPhone && number === keanaPhone && hasText) {
+        const moderatorPhone = process.env.MODERATOR_PHONE_NUMBER;
+        if (moderatorPhone && number === moderatorPhone && hasText) {
           const pendingResult = await pool.query(
             `SELECT c.id, c.circle_name, c.owner_id
              FROM circles c
@@ -309,7 +306,7 @@ export function sendblueRouter(io: Server): Router {
           if (action === "approve") {
             await pool.query(
               `INSERT INTO co_memories (user_id, memory_type, content) VALUES ($1, 'system', $2)`,
-              [pendingCircle.owner_id, `Keana manually approved circle ${pendingCircle.id}`],
+              [pendingCircle.owner_id, `Moderator manually approved circle ${pendingCircle.id}`],
             );
 
             await activateCircle({
@@ -318,119 +315,26 @@ export function sendblueRouter(io: Server): Router {
               io,
             });
           } else if (action === "reject") {
-            await pool.query(
-              `UPDATE circles SET status = 'rejected' WHERE id = $1`,
-              [pendingCircle.id],
-            );
-
             const rejectedMembersResult = await pool.query(
               `SELECT member_id FROM circle_members WHERE circle_id = $1`,
               [pendingCircle.id],
             );
             const rejectedMemberIds: string[] = rejectedMembersResult.rows.map((r: any) => r.member_id);
-            const allRejectedIds = [pendingCircle.owner_id, ...rejectedMemberIds];
 
-            for (const memberId of allRejectedIds) {
-              const rejectContent = "Circle rejected — Co will attempt new matching";
-              const rejectMem = await pool.query(
-                `INSERT INTO co_memories (user_id, memory_type, content) VALUES ($1, 'check_in', $2) RETURNING id`,
-                [memberId, rejectContent],
-              );
-              generateEmbedding(rejectContent)
-                .then((emb) =>
-                  pool.query(
-                    `UPDATE co_memories SET content_embedding = $1::vector WHERE id = $2`,
-                    [`[${emb.join(",")}]`, rejectMem.rows[0].id],
-                  ),
-                )
-                .catch((err) => console.error("Memory embedding failed (non-fatal):", err));
-            }
-
-            const newMatchResult = await findBestCircleWithScore(pendingCircle.owner_id, rejectedMemberIds);
-            const newGroupIds = newMatchResult?.userIds ?? null;
-
-            if (!newGroupIds || newGroupIds.length < 4) {
-              const ownerRes = await pool.query(
-                `SELECT first_name FROM users WHERE id = $1`,
-                [pendingCircle.owner_id],
-              );
-              const ownerName = ownerRes.rows[0]?.first_name ?? pendingCircle.owner_id;
-              try {
-                await sendblue.messages.send({
-                  number: keanaPhone,
-                  content: `No alternative match found for ${ownerName}. Manual review needed.`,
-                  from_number: process.env.SENDBLUE_PHONE_NUMBER!,
-                });
-              } catch (err: any) {
-                console.error("Failed to notify Keana of no-match:", err?.message ?? err);
-              }
-            } else {
-              const ownerProfile = await pool.query(
-                `SELECT life_chapters, city FROM co_profiles WHERE user_id = $1`,
-                [pendingCircle.owner_id],
-              );
-              const ownerProf = ownerProfile.rows[0];
-              const primaryChapter = ownerProf?.life_chapters?.[0] ?? "new_to_city";
-              const city = ownerProf?.city ?? "";
-              const circleName = `Co Circle — ${primaryChapter.replace(/_/g, " ")}`;
-
-              const newCircleResult = await pool.query(
-                `INSERT INTO circles (owner_id, circle_name, status) VALUES ($1, $2, 'pending_approval') RETURNING *`,
-                [pendingCircle.owner_id, circleName],
-              );
-              const newCircle = newCircleResult.rows[0];
-
-              for (const memberId of newGroupIds) {
-                await pool.query(
-                  `INSERT INTO circle_members (circle_id, member_id) VALUES ($1, $2) ON CONFLICT DO NOTHING`,
-                  [newCircle.id, memberId],
-                );
-              }
-
-              // Co decides on its own above the confidence floor, same as
-              // initial placement — only a genuinely borderline rematch
-              // goes to Keana.
-              if (newMatchResult!.finalScore >= LOW_CONFIDENCE_GROUP_SCORE) {
-                await activateCircle({ circleId: newCircle.id, circleName, io });
-              } else {
-                for (const memberId of newGroupIds) {
-                  const pendingContent = "Circle placement pending Keana approval";
-                  const pendingMem = await pool.query(
-                    `INSERT INTO co_memories (user_id, memory_type, content) VALUES ($1, 'check_in', $2) RETURNING id`,
-                    [memberId, pendingContent],
-                  );
-                  generateEmbedding(pendingContent)
-                    .then((emb) =>
-                      pool.query(
-                        `UPDATE co_memories SET content_embedding = $1::vector WHERE id = $2`,
-                        [`[${emb.join(",")}]`, pendingMem.rows[0].id],
-                      ),
-                    )
-                    .catch((err) => console.error("Memory embedding failed (non-fatal):", err));
-                }
-
-                const newMemberNamesResult = await pool.query(
-                  `SELECT first_name FROM users WHERE id = ANY($1::uuid[])`,
-                  [newGroupIds],
-                );
-                const newMemberNames = newMemberNamesResult.rows.map((r: any) => r.first_name).join(", ");
-
-                await notifyModeratorOfPendingCircle({
-                  circleId: newCircle.id,
-                  memberIds: newGroupIds,
-                  memberNames: newMemberNames,
-                  city,
-                  chapter: primaryChapter.replace(/_/g, " "),
-                  finalScore: newMatchResult!.finalScore,
-                });
-              }
-            }
+            await attemptCircleRematch({
+              staleCircleId: pendingCircle.id,
+              ownerId: pendingCircle.owner_id,
+              excludeMemberIds: rejectedMemberIds,
+              newStatus: "rejected",
+              memberNoticeContent: "Circle rejected — Co will attempt new matching",
+              io,
+            });
           }
 
             return res.status(200).send({ received: true });
           } else {
             // No pending circle to approve — check for a moment awaiting
-            // Keana's venue approval instead. Same approve/reject-by-text
+            // the Moderator's venue approval instead. Same approve/reject-by-text
             // pattern as the circle-placement approval above, just gating
             // venue choice rather than circle membership.
             const pendingMomentResult = await pool.query(
@@ -482,12 +386,12 @@ export function sendblueRouter(io: Server): Router {
                 if (!nextVenue) {
                   try {
                     await sendblue.messages.send({
-                      number: keanaPhone,
+                      number: moderatorPhone,
                       content: `No alternative venue found for moment ${pendingMomentApproval.id}. Needs manual venue selection.`,
                       from_number: process.env.SENDBLUE_PHONE_NUMBER!,
                     });
                   } catch (err: any) {
-                    console.error("Failed to notify Keana of no-alternative-venue:", err?.message ?? err);
+                    console.error("Failed to notify Moderator of no-alternative-venue:", err?.message ?? err);
                   }
                   await pool.query(
                     `UPDATE moments SET status = 'manual_venue_required', rejected_venues = $1 WHERE id = $2`,
@@ -509,7 +413,7 @@ export function sendblueRouter(io: Server): Router {
                       pendingMomentApproval.id,
                     ],
                   );
-                  await requestVenueApprovalFromKeana({
+                  await requestVenueApprovalFromModerator({
                     ...pendingMomentApproval,
                     venue: nextVenue.name ?? null,
                     venue_fit_score: nextVenue.co_fit_score ?? null,
@@ -663,25 +567,35 @@ Return ONLY the classification, nothing else.`,
               [circle_id, user.id],
             );
 
-            const existingMoment = await pool.query(
-              `SELECT * FROM moments WHERE circle_id = $1 ORDER BY created_at DESC LIMIT 1`,
-              [circle_id],
-            );
-            let moment = existingMoment.rows[0];
+            // withPhoneLock only serializes messages from this one member's
+            // own number — two different members accepting within
+            // milliseconds of each other run on separate phone locks and
+            // can both see "no moment yet" here. Locking by circle_id (not
+            // phone) closes that gap: only one accepter at a time can be in
+            // this check-then-create section for a given circle, regardless
+            // of whose phone triggered it.
+            let moment: any;
             let selectedVenue: any = null;
             let momentData: any = null;
+            await withAdvisoryLock(`circle-moment:${circle_id}`, async () => {
+              const existingMoment = await pool.query(
+                `SELECT * FROM moments WHERE circle_id = $1 ORDER BY created_at DESC LIMIT 1`,
+                [circle_id],
+              );
+              moment = existingMoment.rows[0];
 
-            if (!moment) {
-              const created = await createMomentForCircle(circle_id);
-              if (created) {
-                ({ moment, selectedVenue, momentData } = created);
+              if (!moment) {
+                const created = await createMomentForCircle(circle_id);
+                if (created) {
+                  ({ moment, selectedVenue, momentData } = created);
+                }
+              } else {
+                // Moment already exists (an earlier accepter triggered it) —
+                // reconstruct the minimal fields notifyMemberOfMoment needs.
+                momentData = { neighborhood: moment.location_name, suggested_time: moment.suggested_time };
+                selectedVenue = moment.venue ? { name: moment.venue } : null;
               }
-            } else {
-              // Moment already exists (an earlier accepter triggered it) —
-              // reconstruct the minimal fields notifyMemberOfMoment needs.
-              momentData = { neighborhood: moment.location_name, suggested_time: moment.suggested_time };
-              selectedVenue = moment.venue ? { name: moment.venue } : null;
-            }
+            });
 
             if (moment) {
               const memberCountResult = await pool.query(
@@ -734,18 +648,25 @@ Return ONLY the classification, nothing else.`,
               if (declinedCount > MAX_REPLACEMENT_ATTEMPTS) {
                 try {
                   await sendblue.messages.send({
-                    number: keanaPhone!,
+                    number: moderatorPhone!,
                     content: `Circle ${circle_id} dropped below minimum size after ${declinedCount} declines — hit the replacement attempt limit. Manual review needed.`,
                     from_number: process.env.SENDBLUE_PHONE_NUMBER!,
                   });
                 } catch (err: any) {
-                  console.error("Failed to notify Keana of exhausted attempts:", err?.message ?? err);
+                  console.error("Failed to notify Moderator of exhausted attempts:", err?.message ?? err);
                 }
               } else {
+                // findBestCircle assembles a whole fresh group (up to
+                // target_size), but this is a top-up, not a full rematch —
+                // existing active members stay put. Its returned order is
+                // already score-sorted (best match first), so capping to 2
+                // keeps only the best new candidates rather than everyone
+                // the matcher would otherwise fill a brand-new circle with.
+                const MAX_NEW_CANDIDATES_PER_DECLINE = 2;
                 const replacementIds = await findBestCircle(owner_id, everyKnownId);
-                const newCandidates = (replacementIds ?? []).filter(
-                  (id: string) => !everyKnownId.includes(id),
-                );
+                const newCandidates = (replacementIds ?? [])
+                  .filter((id: string) => !everyKnownId.includes(id))
+                  .slice(0, MAX_NEW_CANDIDATES_PER_DECLINE);
 
                 for (const candidateId of newCandidates) {
                   await pool.query(
@@ -787,12 +708,12 @@ Return ONLY the classification, nothing else.`,
                 if (!newCandidates.length) {
                   try {
                     await sendblue.messages.send({
-                      number: keanaPhone!,
+                      number: moderatorPhone!,
                       content: `Circle ${circle_id} dropped below minimum size after a decline and no replacement was found. Manual review needed.`,
                       from_number: process.env.SENDBLUE_PHONE_NUMBER!,
                     });
                   } catch (err: any) {
-                    console.error("Failed to notify Keana of no-replacement:", err?.message ?? err);
+                    console.error("Failed to notify Moderator of no-replacement:", err?.message ?? err);
                   }
                 }
               }

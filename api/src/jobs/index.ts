@@ -5,9 +5,11 @@ import pool from "../db/db.js";
 import { sendEmail, sendSMS } from "../otpActions.js";
 import {
   confirmMoment,
-  requestVenueApprovalFromKeana,
+  requestVenueApprovalFromModerator,
+  retryVenueApprovalNotification,
 } from "../services/booking.js";
 import sendblue from "../services/sendblue.js";
+import { findBestCircle } from "../services/matching.js";
 import type { CandidateWindow } from "../services/scheduling.js";
 
 const twilioClient = twilio(
@@ -156,6 +158,7 @@ export function registerJobs(io: Server) {
     try {
       const pollingMoments = await pool.query(
         `SELECT m.id, m.circle_id, m.moments_name, m.suggested_time, m.created_at, m.consensus_nudge_sent_at,
+                m.consensus_4hr_nudge_sent_at, m.consensus_8hr_notice_sent_at,
                 m.venue, m.venue_booking_url, m.venue_place_id, m.candidate_windows, m.venue_fit_score
          FROM moments m
          JOIN circles c ON c.id = m.circle_id
@@ -212,7 +215,50 @@ export function registerJobs(io: Server) {
         const hoursSinceCreated =
           (Date.now() - new Date(moment.created_at).getTime()) /
           (1000 * 60 * 60);
+        const past4hrs = hoursSinceCreated >= 4;
+        const past8hrs = hoursSinceCreated >= 8;
         const past48hrs = hoursSinceCreated >= 48;
+
+        // "Responded" means selected at least one window for the
+        // simultaneous-poll style, or gave a yes/no for the legacy style —
+        // matches the same distinction used for thresholdMet above.
+        const hasResponded = (r: any) =>
+          candidateWindows.length ? !!(r.selected_windows && r.selected_windows.length) : r.response !== null;
+
+        // 4hr checkpoint — nudge whoever hasn't responded yet, once, well
+        // ahead of the harder 48hr force-lock.
+        if (!thresholdMet && past4hrs && !moment.consensus_4hr_nudge_sent_at) {
+          const nonResponders = responses.filter((r: any) => !hasResponded(r));
+          for (const nr of nonResponders) {
+            try {
+              await sendblue.messages.send({
+                number: nr.phone_number,
+                content: `${nr.first_name}, still waiting on your availability for this circle's moment — reply when you get a chance.`,
+                from_number: process.env.SENDBLUE_PHONE_NUMBER!,
+              });
+            } catch (smsErr: any) {
+              console.error(`4hr consensus nudge failed for ${nr.user_id}:`, smsErr?.message ?? smsErr);
+            }
+          }
+          await pool.query(`UPDATE moments SET consensus_4hr_nudge_sent_at = NOW() WHERE id = $1`, [moment.id]);
+        }
+
+        // 8hr checkpoint — an informational heads-up to the Moderator that
+        // consensus is stalling. Not a decision request (no approve/reject
+        // language, nothing gates on her reply) — the 48hr force-lock below
+        // is still what actually resolves this.
+        if (!thresholdMet && past8hrs && !moment.consensus_8hr_notice_sent_at) {
+          try {
+            await sendblue.messages.send({
+              number: process.env.MODERATOR_PHONE_NUMBER!,
+              content: `Heads up — consensus hasn't been reached yet for moment "${moment.moments_name ?? moment.id}" (8hrs in). No action needed, this force-locks at 48hrs if it's still unresolved.`,
+              from_number: process.env.SENDBLUE_PHONE_NUMBER!,
+            });
+          } catch (err: any) {
+            console.error(`8hr consensus Moderator notice failed for moment ${moment.id}:`, err?.message ?? err);
+          }
+          await pool.query(`UPDATE moments SET consensus_8hr_notice_sent_at = NOW() WHERE id = $1`, [moment.id]);
+        }
 
         if (!thresholdMet && !past48hrs) continue;
 
@@ -253,19 +299,118 @@ export function registerJobs(io: Server) {
             [winner.start, winner.label, moment.id],
           );
           moment.suggested_time = winner.label;
+
+          // Anyone who didn't select the locked window (including a true
+          // non-responder — they never confirmed they could make it either)
+          // has a real schedule conflict with the actual time — remove them
+          // from the circle rather than silently booking a moment they
+          // can't attend, and try to backfill.
+          const conflicted = responses.filter(
+            (r: any) => !(r.selected_windows ?? []).includes(winningWindowIndex),
+          );
+
+          for (const person of conflicted) {
+            await pool.query(
+              `DELETE FROM circle_members WHERE circle_id = $1 AND member_id = $2`,
+              [moment.circle_id, person.user_id],
+            );
+            try {
+              await sendblue.messages.send({
+                number: person.phone_number,
+                content: `${person.first_name}, the group landed on a time that doesn't work for you, so Co's pulling you from this circle and will keep an eye out for a better fit.`,
+                from_number: process.env.SENDBLUE_PHONE_NUMBER!,
+              });
+            } catch (smsErr: any) {
+              console.error(`Schedule-conflict removal notice failed for ${person.user_id}:`, smsErr?.message ?? smsErr);
+            }
+          }
+
+          if (conflicted.length) {
+            // Backend search only, not shown to the group — attempted
+            // immediately rather than as a literal delayed/background job.
+            const remainingResult = await pool.query(
+              `SELECT member_id FROM circle_members WHERE circle_id = $1`,
+              [moment.circle_id],
+            );
+            const remainingIds: string[] = remainingResult.rows.map((r: any) => r.member_id);
+            const knownIds = [...remainingIds, ...conflicted.map((c: any) => c.user_id)];
+
+            const ownerResult = await pool.query(`SELECT owner_id FROM circles WHERE id = $1`, [moment.circle_id]);
+            const ownerId = ownerResult.rows[0]?.owner_id;
+            let replaced = false;
+
+            if (ownerId) {
+              const replacementIds = await findBestCircle(ownerId, knownIds);
+              const candidateId = (replacementIds ?? []).find((id: string) => !knownIds.includes(id));
+
+              if (candidateId) {
+                await pool.query(
+                  `INSERT INTO circle_members (circle_id, member_id, status) VALUES ($1, $2, 'accepted') ON CONFLICT DO NOTHING`,
+                  [moment.circle_id, candidateId],
+                );
+                await pool.query(
+                  `INSERT INTO moment_responses (moment_id, user_id, selected_windows) VALUES ($1, $2, $3)
+                   ON CONFLICT (moment_id, user_id) DO UPDATE SET selected_windows = $3`,
+                  [moment.id, candidateId, [winningWindowIndex]],
+                );
+
+                const candidateResult = await pool.query(
+                  `SELECT first_name, phone_number FROM users WHERE id = $1`,
+                  [candidateId],
+                );
+                const candidate = candidateResult.rows[0];
+                if (candidate) {
+                  try {
+                    await sendblue.messages.send({
+                      number: candidate.phone_number,
+                      content: `Co found you a spot in a circle — the group's already locked in ${winner.label}. You're in.`,
+                      from_number: process.env.SENDBLUE_PHONE_NUMBER!,
+                    });
+                  } catch (smsErr: any) {
+                    console.error(`Replacement invite failed for ${candidateId}:`, smsErr?.message ?? smsErr);
+                  }
+                }
+                replaced = true;
+              }
+            }
+
+            if (!replaced) {
+              const finalCountResult = await pool.query(
+                `SELECT COUNT(*) FROM circle_members WHERE circle_id = $1 AND status != 'declined'`,
+                [moment.circle_id],
+              );
+              const finalCount = parseInt(finalCountResult.rows[0].count, 10);
+
+              if (finalCount < 4) {
+                try {
+                  await sendblue.messages.send({
+                    number: process.env.MODERATOR_PHONE_NUMBER!,
+                    content: `Circle for moment "${moment.moments_name ?? moment.id}" dropped below minimum size after a schedule conflict and no replacement was found. Manual review needed.`,
+                    from_number: process.env.SENDBLUE_PHONE_NUMBER!,
+                  });
+                } catch (err: any) {
+                  console.error(`Schedule-conflict Moderator notice failed for moment ${moment.id}:`, err?.message ?? err);
+                }
+              }
+            }
+          }
         }
 
-        // Consensus reached — gate on Keana approving the venue/time before
-        // confirming the moment to the group. This send is best-effort, same
-        // as every other cron notification here: a delivery failure must
-        // never block the moment's actual state from updating.
+        // Consensus reached — gate on the Moderator approving the venue/time
+        // before confirming the moment to the group. The moment's status
+        // still updates to pending_venue_approval regardless of whether the
+        // notification send itself succeeds — but unlike a true "best
+        // effort" send, a failed notification is tracked (see
+        // requestVenueApprovalFromModerator in booking.ts) and retried until
+        // it actually reaches the Moderator, rather than silently starting
+        // an auto-approve clock she never saw.
         //
         // A resolution forced at the 48hr cutoff without ever reaching a real
         // majority (thresholdMet false) is a low-confidence pick, same idea
         // as a circle score barely clearing its floor — see
         // LOW_CONFIDENCE_VENUE_FIT_SCORE / requires_moderator_reply in
         // booking.ts.
-        await requestVenueApprovalFromKeana({
+        await requestVenueApprovalFromModerator({
           ...moment,
           consensus_low_confidence: !thresholdMet && past48hrs,
         });
@@ -275,31 +420,46 @@ export function registerJobs(io: Server) {
     }
   });
 
-  // Every 30 min — auto-approve a venue Keana hasn't responded to within 4
+  // Every 30 min — auto-approve a venue the Moderator hasn't responded to within 4
   // hours, mirroring the circle-placement auto-approve cron in server.ts.
   // Without this, pending_venue_approval would just be a differently-named
   // version of the manual_review dead end it replaced. Approval is the last
   // gate — this goes straight to confirming the moment, no booking step.
   //
   // requires_moderator_reply = true (low venue fit and/or a forced,
-  // non-majority consensus pick — see requestVenueApprovalFromKeana in
+  // non-majority consensus pick — see requestVenueApprovalFromModerator in
   // booking.ts) is excluded here on purpose: those never auto-approve.
   cron.schedule("*/30 * * * *", async () => {
     try {
+      // A moment whose initial notification never actually reached the Moderator
+      // (Sendblue send failed) sits here with moderator_venue_notified_at still
+      // NULL — status/confidence fields are already set, only the send
+      // itself needs retrying. Runs first so a send that succeeds this tick
+      // isn't immediately swept as stale below (it won't be, since NOW() -
+      // 4 hours can't already be past, but this keeps the intent obvious).
+      const unsentVenueApprovals = await pool.query(
+        `SELECT id, moments_name, venue, suggested_time, requires_moderator_reply, confidence_note
+         FROM moments
+         WHERE status = 'pending_venue_approval' AND moderator_venue_notified_at IS NULL`,
+      );
+      for (const moment of unsentVenueApprovals.rows) {
+        await retryVenueApprovalNotification(moment);
+      }
+
       const staleVenues = await pool.query(
         `SELECT id, circle_id, moments_name, venue, venue_booking_url, venue_place_id, moment_start
          FROM moments
          WHERE status = 'pending_venue_approval'
          AND requires_moderator_reply = false
-         AND keana_venue_notified_at < NOW() - INTERVAL '4 hours'`,
+         AND moderator_venue_notified_at < NOW() - INTERVAL '4 hours'`,
       );
 
       for (const moment of staleVenues.rows) {
         await confirmMoment(moment, io);
       }
 
-      // Low-confidence venues never auto-approve — instead, re-ping Keana on
-      // the same 4hr cadence (bumping keana_venue_notified_at resets the
+      // Low-confidence venues never auto-approve — instead, re-ping the Moderator on
+      // the same 4hr cadence (bumping moderator_venue_notified_at resets the
       // clock for the next check, same as a fresh notification) so a
       // borderline pick doesn't just rot unresolved forever.
       const staleLowConfidenceVenues = await pool.query(
@@ -307,20 +467,20 @@ export function registerJobs(io: Server) {
          FROM moments
          WHERE status = 'pending_venue_approval'
          AND requires_moderator_reply = true
-         AND keana_venue_notified_at < NOW() - INTERVAL '4 hours'`,
+         AND moderator_venue_notified_at < NOW() - INTERVAL '4 hours'`,
       );
 
       for (const moment of staleLowConfidenceVenues.rows) {
         try {
           await sendblue.messages.send({
-            number: process.env.KEANA_PHONE_NUMBER!,
+            number: process.env.MODERATOR_PHONE_NUMBER!,
             content: `Still waiting on your call for moment "${moment.moments_name ?? moment.id}" (${moment.venue ?? "TBD"}, suggested ${moment.suggested_time ?? "TBD"}) — ${moment.confidence_note ?? "borderline pick"}. Reply APPROVE or REJECT whenever you can, this one won't auto-approve.`,
             from_number: process.env.SENDBLUE_PHONE_NUMBER!,
           });
         } catch (err: any) {
           console.error(`Venue low-confidence re-ping failed for moment ${moment.id}:`, err?.message ?? err);
         }
-        await pool.query(`UPDATE moments SET keana_venue_notified_at = NOW() WHERE id = $1`, [moment.id]);
+        await pool.query(`UPDATE moments SET moderator_venue_notified_at = NOW() WHERE id = $1`, [moment.id]);
       }
     } catch (error) {
       console.error("Venue auto-approve cron error:", error);

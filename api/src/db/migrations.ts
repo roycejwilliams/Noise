@@ -57,6 +57,26 @@ export function runMigrations() {
       console.error("moments.consensus_nudge_sent_at migration failed:", err),
     );
 
+  // Two earlier checkpoints ahead of the 48hr force-lock above — a 4hr
+  // participant nudge and an 8hr informational Moderator heads-up. Each
+  // gated on its own timestamp so the 15-min cron doesn't re-send on every
+  // tick once past that mark.
+  pool
+    .query(
+      `ALTER TABLE moments ADD COLUMN IF NOT EXISTS consensus_4hr_nudge_sent_at TIMESTAMPTZ`,
+    )
+    .catch((err: Error) =>
+      console.error("moments.consensus_4hr_nudge_sent_at migration failed:", err),
+    );
+
+  pool
+    .query(
+      `ALTER TABLE moments ADD COLUMN IF NOT EXISTS consensus_8hr_notice_sent_at TIMESTAMPTZ`,
+    )
+    .catch((err: Error) =>
+      console.error("moments.consensus_8hr_notice_sent_at migration failed:", err),
+    );
+
   // Unused — was the 4hr-nudge clock for an unresponsive Connector, removed
   // along with that flow. Left in place rather than dropped.
   pool
@@ -107,12 +127,27 @@ export function runMigrations() {
       console.error("circles.status migration failed:", err),
     );
 
+  // Single atomic block, not a separate rename + ADD COLUMN IF NOT EXISTS —
+  // those are two unawaited pool.query calls with no ordering guarantee
+  // between them, so a plain ADD COLUMN could win the race and create the
+  // new column first, permanently orphaning any existing keana_notified_at
+  // data (the rename's own NOT EXISTS guard would then never fire again).
   pool
     .query(
-      `ALTER TABLE circles ADD COLUMN IF NOT EXISTS keana_notified_at TIMESTAMPTZ`,
+      `DO $$
+       BEGIN
+         IF EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name = 'circles' AND column_name = 'keana_notified_at')
+            AND NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name = 'circles' AND column_name = 'moderator_notified_at')
+         THEN
+           ALTER TABLE circles RENAME COLUMN keana_notified_at TO moderator_notified_at;
+         ELSIF NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name = 'circles' AND column_name = 'moderator_notified_at')
+         THEN
+           ALTER TABLE circles ADD COLUMN moderator_notified_at TIMESTAMPTZ;
+         END IF;
+       END $$;`,
     )
     .catch((err: Error) =>
-      console.error("circles.keana_notified_at migration failed:", err),
+      console.error("circles.moderator_notified_at migration failed:", err),
     );
 
   pool
@@ -279,18 +314,33 @@ export function runMigrations() {
       console.error("pending_call_followups table init failed:", err),
     );
 
-  // Backing the moderator venue-approval gate — mirrors circles.keana_notified_at.
-  // Consensus is reached, but nothing texts the Connector until Keana approves
-  // the selected venue via the same approve/reject reply pattern circle
-  // placement already uses.
+  // Backing the moderator venue-approval gate — mirrors circles.moderator_notified_at.
+  // Consensus is reached, but nothing texts the Connector until the
+  // Moderator approves the selected venue via the same approve/reject reply
+  // pattern circle placement already uses.
+  //
+  // Single atomic block, same reasoning as circles.moderator_notified_at
+  // above — avoids a race between a rename and a plain ADD COLUMN.
   pool
-    .query(`ALTER TABLE moments ADD COLUMN IF NOT EXISTS keana_venue_notified_at TIMESTAMPTZ`)
+    .query(
+      `DO $$
+       BEGIN
+         IF EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name = 'moments' AND column_name = 'keana_venue_notified_at')
+            AND NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name = 'moments' AND column_name = 'moderator_venue_notified_at')
+         THEN
+           ALTER TABLE moments RENAME COLUMN keana_venue_notified_at TO moderator_venue_notified_at;
+         ELSIF NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name = 'moments' AND column_name = 'moderator_venue_notified_at')
+         THEN
+           ALTER TABLE moments ADD COLUMN moderator_venue_notified_at TIMESTAMPTZ;
+         END IF;
+       END $$;`,
+    )
     .catch((err: Error) =>
-      console.error("moments.keana_venue_notified_at migration failed:", err),
+      console.error("moments.moderator_venue_notified_at migration failed:", err),
     );
 
-  // Venue names Keana has rejected for this moment, so re-selection after a
-  // reject excludes them instead of re-rolling the same pick.
+  // Venue names the Moderator has rejected for this moment, so re-selection
+  // after a reject excludes them instead of re-rolling the same pick.
   pool
     .query(`ALTER TABLE moments ADD COLUMN IF NOT EXISTS rejected_venues TEXT[] DEFAULT '{}'`)
     .catch((err: Error) =>
@@ -298,7 +348,7 @@ export function runMigrations() {
     );
 
   // venue_type/vibe — persisted from the moment-generation LLM call so the
-  // Keana venue-rejection path can re-run venue selection later (a fresh
+  // Moderator venue-rejection path can re-run venue selection later (a fresh
   // request, not the original one) with the same search criteria instead of
   // guessing at what kind of venue was wanted.
   pool
@@ -312,7 +362,7 @@ export function runMigrations() {
   // The original neighborhood search term used for venue selection —
   // location_name gets overwritten with the selected venue's actual street
   // address once one's found, so it can't be reused to re-search on a
-  // Keana rejection (confirmed: would search Places for an address string
+  // Moderator rejection (confirmed: would search Places for an address string
   // instead of a neighborhood).
   pool
     .query(`ALTER TABLE moments ADD COLUMN IF NOT EXISTS neighborhood TEXT`)
@@ -381,7 +431,7 @@ export function runMigrations() {
   // requests Moderator approval later. consensus_low_confidence is set when
   // the consensus cron had to force-lock a time window at the 48hr cutoff
   // without ever reaching a real majority. Either one sets
-  // requires_moderator_reply — see requestVenueApprovalFromKeana in
+  // requires_moderator_reply — see requestVenueApprovalFromModerator in
   // booking.ts.
   pool
     .query(`ALTER TABLE moments ADD COLUMN IF NOT EXISTS requires_moderator_reply BOOLEAN NOT NULL DEFAULT false`)

@@ -11,12 +11,11 @@ const min_size = 4;
 const max_size = 8;
 //ideal target size
 const target_size = 6;
-//minimum score to qualify
+// Single confidence line: a group scoring at or above this places
+// autonomously (Co decided on its own); below it, the group still gets
+// formed and returned (never silently dropped) but goes to the Moderator
+// for review — see circleApproval.ts.
 const min_group_score = 0.55;
-// A group that barely clears min_group_score is a low-confidence placement —
-// technically valid, but close enough to the floor that a human should weigh
-// in rather than let it silently auto-approve. See circleApproval.ts.
-const LOW_CONFIDENCE_GROUP_SCORE = 0.6;
 //trust score - separates high trusted users
 const trust_floor = 0.4;
 const trust_ceiling = 0.8;
@@ -500,7 +499,13 @@ async function findBestCircleWithScore(
     }
   }
 
-  // Step 7 — Validate final group score as a whole
+  // Step 7 — Score the final group as a whole. No score-based rejection
+  // here — a group that passed the hard filters (shared chapter, trust,
+  // minimum size) above is always returned with its score; the caller
+  // decides whether it clears min_group_score for autonomous placement or
+  // needs Moderator review (see circleApproval.ts). Nothing gets silently
+  // dropped for scoring low — only for not having enough qualifying
+  // candidates at all (the min_size checks above).
   const finalGroup = [user, ...group];
   const finalScore = groupCompatibilityScore({
     life_chapters: finalGroup.map((m) => m.life_chapters),
@@ -510,9 +515,6 @@ async function findBestCircleWithScore(
     emotional_states: finalGroup.map((m) => m.emotional_state),
     distances_meters: finalGroup.map((m) => m.distance_meters ?? null),
   });
-
-  // If group doesn't meet minimum score — flag for manual placement
-  if (finalScore < min_group_score) return null;
 
   // Step 8 — Enforce max size and return user IDs
   const finalUserIds = [userId, ...group.map((m) => m.user_id as string)];
@@ -539,7 +541,6 @@ export {
   groupCompatibilityScore,
   hasSharedChapters,
   inSameCity,
-  LOW_CONFIDENCE_GROUP_SCORE,
   min_group_score,
   passesTrustCheck,
   socialEnergyScore,

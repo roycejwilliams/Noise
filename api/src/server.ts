@@ -10,6 +10,7 @@ import cron from "node-cron";
 import { Server } from "socket.io";
 import pool from "./db/db.js";
 import { runMigrations } from "./db/migrations.js";
+import { attemptCircleRematch, retryCircleModeratorNotification } from "./services/circleApproval.js";
 import { registerJobs } from "./jobs/index.js";
 import sendblue from "./services/sendblue.js";
 import { authenticateToken } from "./middleware/auth.js";
@@ -108,19 +109,30 @@ app.use(errorHandler);
 
 registerJobs(io);
 
-// Every 30 minutes — auto-approve circles Keana hasn't responded to within 4
+// Every 30 minutes — auto-approve circles the Moderator hasn't responded to within 4
 // hours. requires_moderator_reply = true (a borderline group score — see
 // LOW_CONFIDENCE_GROUP_SCORE in matching.ts / notifyModeratorOfPendingCircle
 // in circleApproval.ts) is excluded on purpose: those never auto-approve.
 cron.schedule("*/30 * * * *", async () => {
   try {
+    // A circle whose initial (or a prior retry) notification never actually
+    // reached the Moderator sits here with moderator_notified_at still NULL —
+    // requires_moderator_reply/confidence_note are already set, only the
+    // send itself needs retrying.
+    const unsentCircleNotifications = await pool.query(
+      `SELECT id FROM circles WHERE status = 'pending_approval' AND moderator_notified_at IS NULL`,
+    );
+    for (const circle of unsentCircleNotifications.rows) {
+      await retryCircleModeratorNotification(circle.id);
+    }
+
     const staleCircles = await pool.query(
       `SELECT c.id, c.circle_name, c.owner_id
        FROM circles c
        WHERE c.status = 'pending_approval'
          AND c.requires_moderator_reply = false
-         AND c.keana_notified_at IS NOT NULL
-         AND c.keana_notified_at < NOW() - INTERVAL '4 hours'`,
+         AND c.moderator_notified_at IS NOT NULL
+         AND c.moderator_notified_at < NOW() - INTERVAL '4 hours'`,
     );
 
     for (const circle of staleCircles.rows) {
@@ -216,38 +228,44 @@ cron.schedule("*/30 * * * *", async () => {
 
       try {
         await sendblue.messages.send({
-          number: process.env.KEANA_PHONE_NUMBER!,
+          number: process.env.MODERATOR_PHONE_NUMBER!,
           content: `Circle ${circle.id} auto-approved after 4 hours. ${memberCount} members placed. No action needed.`,
           from_number: process.env.SENDBLUE_PHONE_NUMBER!,
         });
-      } catch (keanaErr: any) {
-        console.error("Auto-approval Keana notify failed (non-fatal):", keanaErr?.message ?? keanaErr);
+      } catch (moderatorErr: any) {
+        console.error("Auto-approval Moderator notify failed (non-fatal):", moderatorErr?.message ?? moderatorErr);
       }
     }
 
-    // Low-confidence circles never auto-approve — instead, re-ping Keana on
-    // the same 4hr cadence (bumping keana_notified_at resets the clock for
-    // the next check) so a borderline placement doesn't just rot unresolved.
+    // Low-confidence circles never auto-approve. Rather than re-pinging the
+    // Moderator with the same group forever, Co only waits one 4hr window —
+    // if she hasn't responded by then, it tries a different composition
+    // instead (attemptCircleRematch below marks this one 'superseded' and
+    // excludes its current members from the new attempt).
     const staleLowConfidenceCircles = await pool.query(
-      `SELECT id, circle_name, confidence_note
+      `SELECT id, owner_id
        FROM circles
        WHERE status = 'pending_approval'
          AND requires_moderator_reply = true
-         AND keana_notified_at IS NOT NULL
-         AND keana_notified_at < NOW() - INTERVAL '4 hours'`,
+         AND moderator_notified_at IS NOT NULL
+         AND moderator_notified_at < NOW() - INTERVAL '4 hours'`,
     );
 
     for (const circle of staleLowConfidenceCircles.rows) {
-      try {
-        await sendblue.messages.send({
-          number: process.env.KEANA_PHONE_NUMBER!,
-          content: `Still waiting on your call for circle ${circle.id} (${circle.circle_name}) — ${circle.confidence_note ?? "borderline match"}. Reply APPROVE or REJECT whenever you get a chance, this one won't auto-approve.`,
-          from_number: process.env.SENDBLUE_PHONE_NUMBER!,
-        });
-      } catch (err: any) {
-        console.error(`Circle low-confidence re-ping failed for circle ${circle.id}:`, err?.message ?? err);
-      }
-      await pool.query(`UPDATE circles SET keana_notified_at = NOW() WHERE id = $1`, [circle.id]);
+      const memberIdsResult = await pool.query(
+        `SELECT member_id FROM circle_members WHERE circle_id = $1`,
+        [circle.id],
+      );
+      const memberIds: string[] = memberIdsResult.rows.map((r: any) => r.member_id);
+
+      await attemptCircleRematch({
+        staleCircleId: circle.id,
+        ownerId: circle.owner_id,
+        excludeMemberIds: memberIds,
+        newStatus: "superseded",
+        memberNoticeContent: "Still finding the right fit — Co is trying a different group.",
+        io,
+      });
     }
   } catch (err) {
     console.error("Auto-approval cron error:", err);

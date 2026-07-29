@@ -9,7 +9,7 @@ import { sendEmail } from "../otpActions.js";
 import { authenticateToken, userRole } from "../middleware/auth.js";
 import { generateEmbedding } from "../services/embeddings.js";
 import { notifyModeratorOfPendingCircle, activateCircle } from "../services/circleApproval.js";
-import { findBestCircleWithScore, LOW_CONFIDENCE_GROUP_SCORE } from "../services/matching.js";
+import { findBestCircleWithScore, min_group_score } from "../services/matching.js";
 import { findBestVenue } from "../services/places.js";
 import { generateCandidateWindows, type CandidateWindow } from "../services/scheduling.js";
 import {
@@ -746,7 +746,7 @@ router.post(
       const matchResult = await findBestCircleWithScore(user_id);
       const groupUserIds = matchResult?.userIds ?? null;
 
-      // Step 2 — No match found — flag for manual placement by Keana
+      // Step 2 — No match found — flag for manual placement by the Moderator
       if (!groupUserIds || groupUserIds.length < 4) {
         return res.status(200).send({
           success: false,
@@ -785,25 +785,12 @@ router.post(
 
       // Step 5 — Co decides on its own above the confidence floor: activate
       // and invite immediately, no Moderator step. Only a genuinely
-      // borderline group (Co can't confidently decide) goes to Keana.
-      const city = profile.city ?? "unknown city";
-      const chapter = primaryChapter.replace(/_/g, " ");
-
-      if (matchResult!.finalScore >= LOW_CONFIDENCE_GROUP_SCORE) {
+      // below-threshold group (Co can't confidently decide) goes to the Moderator.
+      if (matchResult!.finalScore >= min_group_score) {
         await activateCircle({ circleId: circle.id, circleName, io: _io ?? undefined });
       } else {
-        const memberNamesResult = await pool.query(
-          `SELECT first_name FROM users WHERE id = ANY($1::uuid[])`,
-          [groupUserIds],
-        );
-        const memberNames = memberNamesResult.rows.map((r: any) => r.first_name).join(", ");
-
         await notifyModeratorOfPendingCircle({
           circleId: circle.id,
-          memberIds: groupUserIds,
-          memberNames,
-          city,
-          chapter,
           finalScore: matchResult!.finalScore,
         });
 
@@ -811,7 +798,7 @@ router.post(
         // Moderator-review path needs this — activateCircle already writes
         // its own per-member memory for the immediate-invite path).
         for (const memberId of groupUserIds) {
-          const placementContent = `Circle placement pending Keana approval`;
+          const placementContent = `Circle placement pending Moderator approval`;
           const placementMemory = await pool.query(
             `INSERT INTO co_memories (user_id, memory_type, content)
              VALUES ($1, 'check_in', $2) RETURNING id`,
@@ -844,7 +831,7 @@ router.post(
 );
 
 // Venue selection — partner venues first, then Google Places. Pulled out of
-// createMomentForCircle so the Keana venue-approval reject path (sendblue.ts)
+// createMomentForCircle so the Moderator venue-approval reject path (sendblue.ts)
 // can re-run it after a rejection, excluding whatever's already been turned
 // down for this moment instead of just re-rolling the exact same pick.
 export async function selectVenueForCircle(
@@ -892,7 +879,7 @@ export async function selectVenueForCircle(
   return findBestVenue(venueType, neighborhood, city, circleProfile, undefined, excludeNames);
 }
 
-// Steps 1-6 of createMomentForCircle's setup — pulled out so the Keana
+// Steps 1-6 of createMomentForCircle's setup — pulled out so the Moderator
 // venue-rejection path (sendblue.ts) can rebuild the same circle context
 // (city, group size, dominant style, shared chapters) without duplicating
 // this aggregation when it needs to re-run venue selection.
@@ -1793,15 +1780,15 @@ router.post(
         }
       }
 
-      // Notify Keana
+      // Notify the Moderator
       try {
         await sendblue.messages.send({
-          number: process.env.KEANA_PHONE_NUMBER!,
+          number: process.env.MODERATOR_PHONE_NUMBER!,
           content: `${user.first_name} left circle ${circle_id}. ${remaining.length} members remaining.`,
           from_number: process.env.SENDBLUE_PHONE_NUMBER!,
         });
       } catch (smsErr: any) {
-        console.error("Keana leave notify failed (non-fatal):", smsErr?.message ?? smsErr);
+        console.error("Moderator leave notify failed (non-fatal):", smsErr?.message ?? smsErr);
       }
 
       return res.status(200).send({ success: true });

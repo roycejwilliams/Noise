@@ -2,7 +2,7 @@ import { anthropic } from "@ai-sdk/anthropic";
 import { generateText } from "ai";
 
 // Shared by every real path that sends a member their circle-invite text —
-// the initial Keana-approval invite and the decline-triggered replacement
+// the initial Moderator-approval invite and the decline-triggered replacement
 // invite in routes/sendblue.ts, and co-test's real-test-user-vs-filler-pool
 // feature (dynamicPlacementTest.ts). One implementation so all three stay
 // identical instead of drifting — this IS how Co talks to real users, not
