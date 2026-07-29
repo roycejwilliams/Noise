@@ -1,4 +1,7 @@
 import { downloadJson, renderCards, renderTranscriptList, TranscriptMessage } from "./shared.js";
+import { renderSidebar } from "./sidebar.js";
+
+renderSidebar("results");
 
 const statusEl = document.getElementById("status") as HTMLElement;
 const emptyState = document.getElementById("empty-state") as HTMLElement;

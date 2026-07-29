@@ -7,18 +7,17 @@
   <link rel="stylesheet" href="/styles.css" />
 </head>
 <body>
-  <header class="app-header">
-    <div class="header-title">
-      <div class="app-name">Co (test) — Real phone</div>
-      <div id="status" class="status-line">Loading…</div>
-    </div>
-    <div class="header-actions">
-      <a href="/call" class="nav-link">Browser call</a>
-      <a href="/checklist" class="nav-link">Checklist</a>
-    </div>
-  </header>
+  <div class="app-shell">
+    <nav id="sidebar" class="sidebar"></nav>
+    <div class="app-main">
+      <header class="app-header">
+        <div class="header-title">
+          <div class="app-name">Co (test) — Real phone</div>
+          <div id="status" class="status-line">Loading…</div>
+        </div>
+      </header>
 
-  <main class="scroll-area">
+      <main class="scroll-area">
     <div class="phone-page">
       <section id="step-text-in" class="phone-step">
         <h2>1. Message Co to start</h2>
@@ -69,8 +68,10 @@
              relayed from the backend, which holds the actual Hume webhook
              events for a Twilio-bridged call (the browser never does). -->
         <div id="live-call-panel" class="content-row live-call-panel hidden">
-          <div class="transcript-panel">
-            <div id="live-transcript-list" class="transcript-list"></div>
+          <div class="dashboard-card">
+            <div class="transcript-panel">
+              <div id="live-transcript-list" class="transcript-list"></div>
+            </div>
           </div>
           <aside class="coverage-panel">
             <div class="coverage-panel-header">Coverage check (live)</div>
@@ -85,7 +86,9 @@
         </p>
       </section>
     </div>
-  </main>
+      </main>
+    </div>
+  </div>
 
   <script src="/phone.js"></script>
 </body>

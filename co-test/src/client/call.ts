@@ -8,6 +8,9 @@ import {
   MimeType,
 } from "hume";
 import { appendTranscriptEntry, getPromptOverride, renderCoveragePanel, TranscriptMessage } from "./shared.js";
+import { renderSidebar } from "./sidebar.js";
+
+renderSidebar("call");
 
 const callButton = document.getElementById("call-button") as HTMLButtonElement;
 const muteButton = document.getElementById("mute-button") as HTMLButtonElement;

@@ -7,25 +7,23 @@
   <link rel="stylesheet" href="/styles.css" />
 </head>
 <body>
-  <header class="app-header">
-    <div class="header-title">
-      <div class="app-name">Co (test) — Results</div>
-      <div id="status" class="status-line">Loading…</div>
-    </div>
-    <div class="header-actions">
-      <a href="/checklist" class="nav-link">Checklist</a>
-      <a href="/prompt" class="nav-link">Prompt</a>
-      <a href="/call" class="nav-link">New call</a>
-    </div>
-  </header>
+  <div class="app-shell">
+    <nav id="sidebar" class="sidebar"></nav>
+    <div class="app-main">
+      <header class="app-header">
+        <div class="header-title">
+          <div class="app-name">Co (test) — Results</div>
+          <div id="status" class="status-line">Loading…</div>
+        </div>
+      </header>
 
-  <main class="scroll-area">
+      <main class="scroll-area">
     <div id="empty-state" class="empty-state hidden">
       <p id="empty-message"></p>
       <a href="/call" class="download-button">Start a call</a>
     </div>
 
-    <section id="extraction-section" class="extraction-section hidden">
+    <section id="extraction-section" class="extraction-section dashboard-card hidden">
       <div class="extraction-header">
         <h2>Extracted profile</h2>
         <button id="download-json" class="download-button">⬇ Download JSON</button>
@@ -93,7 +91,9 @@
         <div id="imessage-thread-list" class="transcript-list"></div>
       </details>
     </section>
-  </main>
+      </main>
+    </div>
+  </div>
 
   <script src="/results.js"></script>
 </body>

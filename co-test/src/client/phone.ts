@@ -1,5 +1,8 @@
 import { io as ioClient, Socket } from "socket.io-client";
 import { appendTranscriptEntry, renderCoveragePanel } from "./shared.js";
+import { renderSidebar } from "./sidebar.js";
+
+renderSidebar("phone");
 
 const statusEl = document.getElementById("status") as HTMLElement;
 

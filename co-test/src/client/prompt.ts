@@ -1,4 +1,7 @@
 import { clearPromptOverride, getPromptOverride, setPromptOverride } from "./shared.js";
+import { renderSidebar } from "./sidebar.js";
+
+renderSidebar("prompt");
 
 const statusEl = document.getElementById("status") as HTMLElement;
 const configMetaEl = document.getElementById("config-meta") as HTMLElement;

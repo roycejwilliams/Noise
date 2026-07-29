@@ -395,6 +395,17 @@ button {
   min-width: 0;
 }
 
+/* .transcript-panel (the collapse/expand element itself, unchanged above)
+   is now nested one level inside this wrapper rather than being
+   .content-row's direct flex child — this rule carries the flex sizing
+   that used to apply directly, so the layout math still works the same. */
+.content-row > .dashboard-card {
+  flex: 1;
+  min-width: 0;
+  padding: 0;
+  overflow: hidden;
+}
+
 .content-row .transcript-list {
   margin: 0;
 }
@@ -409,6 +420,7 @@ button {
   border: 1px solid var(--border);
   border-radius: var(--radius-lg);
   background: var(--bg-subtle);
+  box-shadow: var(--card-shadow);
 }
 
 .coverage-panel-header {
@@ -1514,8 +1526,9 @@ button {
   margin-top: var(--space-5);
   padding: var(--space-4) var(--space-5);
   border: 1px solid var(--border);
-  border-radius: var(--radius-md);
+  border-radius: var(--radius-lg);
   background: var(--bg-subtle);
+  box-shadow: var(--card-shadow);
 }
 
 .smoke-test-panel.hidden {
@@ -1565,7 +1578,8 @@ button {
   color: var(--text);
   background: var(--bg-subtle);
   border: 1px solid var(--border-strong);
-  border-radius: var(--radius-md);
+  border-radius: var(--radius-lg);
+  box-shadow: var(--card-shadow);
   resize: vertical;
   transition: border-color 0.15s var(--ease), background-color 0.15s var(--ease);
 }
