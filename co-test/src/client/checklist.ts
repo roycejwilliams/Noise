@@ -1,6 +1,11 @@
+import { renderSidebar } from "./sidebar.js";
+
+renderSidebar("dashboard");
+
 const statusEl = document.getElementById("status") as HTMLElement;
 const autoList = document.getElementById("auto-list") as HTMLElement;
 const manualList = document.getElementById("manual-list") as HTMLElement;
+const statCardsEl = document.getElementById("stat-cards") as HTMLElement;
 
 type ChecklistItem = {
   key: string;
@@ -114,7 +119,121 @@ async function load() {
   }
 }
 
+// Dashboard summary row — every number here comes from a fetch this page
+// already makes elsewhere (checklist items, sim state, dynamic-test pools/
+// runs); this does its own independent round trip to each rather than
+// threading numbers through the existing per-feature load functions, and
+// gets re-invoked after any action that could change one of them (seed/
+// reset/run buttons below) so the cards never go stale mid-session.
+function statCard(opts: { label: string; value: string; sub?: string; hero?: boolean; iconClass?: string }): string {
+  const icon = opts.iconClass ? `<span class="stat-card-icon ${opts.iconClass}"></span>` : "";
+  return `
+    <div class="stat-card${opts.hero ? " stat-card-hero" : ""}">
+      <div class="stat-card-label">${icon}${opts.label}</div>
+      <div class="stat-card-value">${opts.value}</div>
+      ${opts.sub ? `<div class="stat-card-sub">${opts.sub}</div>` : ""}
+    </div>
+  `;
+}
+
+async function renderStatCards() {
+  if (!statCardsEl) return;
+  try {
+    const [checklistJson, simStateJson, poolsJson, realUserJson, runsJson] = await Promise.all([
+      fetch("/api/checklist").then((r) => r.json()),
+      fetch("/api/circles-test/state").then((r) => r.json()),
+      fetch("/api/dynamic-test/pools-state").then((r) => r.json()),
+      fetch("/api/dynamic-test/real-user").then((r) => r.json()),
+      fetch("/api/dynamic-test/runs").then((r) => r.json()),
+    ]);
+
+    const cards: string[] = [];
+
+    // 1 — hero: overall checklist completion.
+    if (checklistJson.success) {
+      const items: ChecklistItem[] = checklistJson.items;
+      const auto = items.filter((i) => i.category === "auto");
+      const manual = items.filter((i) => i.category === "manual");
+      const autoDone = auto.filter((i) => i.computed).length;
+      const manualDone = manual.filter((i) => i.filled_in).length;
+      cards.push(
+        statCard({
+          label: "Checklist complete",
+          value: `${autoDone + manualDone}/${auto.length + manual.length}`,
+          sub: `${autoDone}/${auto.length} auto-verified · ${manualDone}/${manual.length} human input`,
+          hero: true,
+        }),
+      );
+    }
+
+    // 2 — Circles pipeline (Scenario A/B/C) seeded state.
+    if (simStateJson.success) {
+      const memberCount = simStateJson.members?.length ?? 0;
+      const circleStatus = simStateJson.circle?.status as string | undefined;
+      const value = memberCount === 0 ? "Not seeded" : `Seeded — ${memberCount}`;
+      const iconClass = !memberCount ? "stat-card-icon-tertiary" : circleStatus === "confirmed" ? "stat-card-icon-green" : "stat-card-icon-amber";
+      cards.push(
+        statCard({
+          label: "Circles pipeline",
+          value,
+          sub: circleStatus ? `circle: ${circleStatus}` : memberCount ? "no circle yet" : undefined,
+          iconClass,
+        }),
+      );
+    }
+
+    // 3 — Real user vs. filler pool state.
+    const realUser = realUserJson.success ? realUserJson.user : null;
+    const poolsSeeded = poolsJson.success && poolsJson.seeded;
+    let poolValue = "No real test user";
+    let poolIcon = "stat-card-icon-tertiary";
+    if (realUser) {
+      if (poolsSeeded) {
+        poolValue = "Pools seeded";
+        poolIcon = "stat-card-icon-green";
+      } else if (realUser.hasSignal) {
+        poolValue = "User ready, not seeded";
+        poolIcon = "stat-card-icon-amber";
+      } else {
+        poolValue = "No profile signal yet";
+        poolIcon = "stat-card-icon-tertiary";
+      }
+    }
+    cards.push(
+      statCard({
+        label: "Real user pool",
+        value: poolValue,
+        sub: realUser ? realUser.first_name : undefined,
+        iconClass: poolIcon,
+      }),
+    );
+
+    // 4 — Most recent Dynamic-A/B/C diagnostic run.
+    const runs = runsJson.success ? runsJson.runs ?? [] : [];
+    const latestRun = runs[runs.length - 1];
+    let runValue = "Not run yet";
+    let runIcon = "stat-card-icon-tertiary";
+    if (latestRun) {
+      runValue = latestRun.passed === true ? "Pass" : latestRun.passed === false ? "Fail" : "Observe";
+      runIcon = latestRun.passed === true ? "stat-card-icon-green" : latestRun.passed === false ? "stat-card-icon-red" : "stat-card-icon-amber";
+    }
+    cards.push(
+      statCard({
+        label: "Last diagnostic run",
+        value: runValue,
+        sub: latestRun ? `Dynamic-${latestRun.variant}` : undefined,
+        iconClass: runIcon,
+      }),
+    );
+
+    statCardsEl.innerHTML = cards.join("");
+  } catch (err) {
+    console.error("Failed to load dashboard stat cards:", err);
+  }
+}
+
 load();
+renderStatCards();
 
 // Circles pipeline test panel — every render/action here is explicitly
 // simulated: true, and the buttons only ever call co-test's own internal
@@ -404,6 +523,7 @@ simSeedBtn.addEventListener("click", async () => {
     const scenario = simScenarioSelect.value || undefined;
     await simPost("seed", scenario ? { scenario } : undefined);
     await loadSimState();
+    await renderStatCards();
   } finally {
     simSeedBtn.disabled = false;
   }
@@ -418,6 +538,7 @@ simMatchBtn.addEventListener("click", async () => {
     // it, so an expected rejection doesn't read as a broken test.
     if (!result.success && !result.scenario) alert(result.error ?? "Matching failed.");
     await loadSimState();
+    await renderStatCards();
   } finally {
     simMatchBtn.disabled = false;
   }
@@ -428,6 +549,7 @@ simResetBtn.addEventListener("click", async () => {
   try {
     await simPost("reset");
     await loadSimState();
+    await renderStatCards();
   } finally {
     simResetBtn.disabled = false;
   }
@@ -624,6 +746,7 @@ dynSeedBtn.addEventListener("click", async () => {
     if (!result.success) alert(result.error ?? "Seeding failed.");
     await loadDynRealUser();
     await loadDynPoolsState();
+    await renderStatCards();
   } finally {
     dynSeedBtn.disabled = false;
   }
@@ -635,6 +758,7 @@ dynRunAllBtn.addEventListener("click", async () => {
     const result = await dynPost("run-all");
     if (!result.success) alert(result.error ?? "Diagnostic run failed.");
     await loadDynRuns();
+    await renderStatCards();
   } finally {
     await loadDynPoolsState();
   }
@@ -648,6 +772,7 @@ dynResetBtn.addEventListener("click", async () => {
     await loadDynRuns();
     await loadDynPlacementState();
     await loadDynPoolsState();
+    await renderStatCards();
   } finally {
     dynResetBtn.disabled = false;
   }
@@ -660,6 +785,7 @@ dynAttemptPlacementBtn.addEventListener("click", async () => {
     const result = await dynPost("attempt-placement", { variant });
     if (!result.success) alert(result.error ?? "No qualifying circle formed.");
     await loadDynPlacementState();
+    await renderStatCards();
   } finally {
     dynAttemptPlacementBtn.disabled = false;
   }

@@ -34,6 +34,22 @@
   --space-6: 32px;
   --space-7: 48px;
   --space-8: 64px;
+
+  /* Dashboard shell — sidebar nav + card components. Derived from the
+     existing palette above rather than a new hue: the sidebar surface
+     reuses --text's value, hero cards and the sidebar's active-item
+     highlight both reuse --accent, so the two visually rhyme. */
+  --sidebar-width: 236px;
+  --sidebar-width-collapsed: 64px;
+  --sidebar-bg: #16160f;
+  --sidebar-text: #f5f4f1;
+  --sidebar-text-muted: rgba(245, 244, 241, 0.55);
+  --sidebar-active-bg: var(--accent);
+  --sidebar-active-text: #ffffff;
+  --sidebar-border: rgba(255, 255, 255, 0.08);
+  --hero-card-bg: var(--accent);
+  --hero-card-text: #ffffff;
+  --card-shadow: 0 1px 2px rgba(22, 22, 15, 0.06);
 }
 
 * {
@@ -65,6 +81,196 @@ h1, h2, h3 {
 
 ::selection {
   background: var(--accent-border);
+}
+
+/* Dashboard shell — every page's body is now:
+   <div class="app-shell"><nav class="sidebar">...</nav><div class="app-main">
+     <header class="app-header">...</header><main class="scroll-area">...</main>
+   </div></div>
+   .app-header/.scroll-area/.control-bar-wrap rules below are unchanged —
+   they just moved one level deeper, from being body's direct flex children
+   to being .app-main's. */
+
+.app-shell {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+}
+
+.app-main {
+  flex: 1;
+  min-width: 0;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+}
+
+.sidebar {
+  width: var(--sidebar-width);
+  flex-shrink: 0;
+  display: flex;
+  flex-direction: column;
+  background: var(--sidebar-bg);
+  overflow-y: auto;
+}
+
+.sidebar-brand {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  padding: var(--space-5) var(--space-5) var(--space-4);
+  color: var(--sidebar-text);
+  font-size: 14px;
+  font-weight: 700;
+  letter-spacing: -0.01em;
+  border-bottom: 1px solid var(--sidebar-border);
+  margin-bottom: var(--space-4);
+}
+
+.sidebar-nav {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  padding: 0 var(--space-3);
+}
+
+.sidebar-item {
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+  padding: 9px var(--space-3);
+  border-radius: var(--radius-sm);
+  color: var(--sidebar-text-muted);
+  text-decoration: none;
+  font-size: 13px;
+  font-weight: 500;
+  transition: background-color 0.15s var(--ease), color 0.15s var(--ease);
+}
+
+.sidebar-item:hover {
+  background: var(--sidebar-border);
+  color: var(--sidebar-text);
+}
+
+.sidebar-item.active {
+  background: var(--sidebar-active-bg);
+  color: var(--sidebar-active-text);
+}
+
+.sidebar-item-inert {
+  cursor: default;
+  opacity: 0.45;
+}
+
+.sidebar-item-inert:hover {
+  background: none;
+  color: var(--sidebar-text-muted);
+}
+
+.sidebar-item-icon {
+  flex-shrink: 0;
+  display: flex;
+}
+
+.sidebar-item-icon svg {
+  width: 16px;
+  height: 16px;
+}
+
+.sidebar-toggle {
+  display: none;
+  align-items: center;
+  justify-content: center;
+  width: 32px;
+  height: 32px;
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius-sm);
+  background: none;
+  color: var(--text);
+  cursor: pointer;
+}
+
+/* Stat cards — checklist.html's dashboard summary row only. Real numbers
+   from data the page already fetches, never fabricated metrics. */
+
+.stat-card-row {
+  display: grid;
+  grid-template-columns: repeat(4, 1fr);
+  gap: var(--space-4);
+  margin-bottom: var(--space-6);
+}
+
+.stat-card {
+  background: var(--bg-raised);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-lg);
+  padding: var(--space-5);
+  box-shadow: var(--card-shadow);
+}
+
+.stat-card-label {
+  font-size: 12px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.02em;
+  color: var(--text-secondary);
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  margin-bottom: var(--space-3);
+}
+
+.stat-card-value {
+  font-size: 28px;
+  font-weight: 600;
+  letter-spacing: -0.015em;
+  line-height: 1.2;
+}
+
+.stat-card-sub {
+  font-size: 13px;
+  color: var(--text-secondary);
+  margin-top: var(--space-2);
+}
+
+.stat-card-hero {
+  background: var(--hero-card-bg);
+  border-color: var(--hero-card-bg);
+  color: var(--hero-card-text);
+}
+
+.stat-card-hero .stat-card-label {
+  color: rgba(255, 255, 255, 0.75);
+}
+
+.stat-card-hero .stat-card-sub {
+  color: rgba(255, 255, 255, 0.75);
+}
+
+.stat-card-icon {
+  width: 18px;
+  height: 18px;
+  border-radius: 50%;
+  flex-shrink: 0;
+}
+
+.stat-card-icon-green { background: var(--green); }
+.stat-card-icon-amber { background: var(--amber); }
+.stat-card-icon-red { background: var(--red); }
+.stat-card-icon-tertiary { background: var(--text-tertiary); }
+
+/* Dashboard card — layered as a second class onto existing structural
+   containers (.checklist-section, .coverage-panel, etc.), never a
+   replacement. .sim-panel keeps its own deliberate amber
+   border/background (see comment above .sim-panel below) — only its
+   corner radius and shadow are unified with this shape. */
+
+.dashboard-card {
+  border: 1px solid var(--border);
+  border-radius: var(--radius-lg);
+  background: var(--bg-raised);
+  box-shadow: var(--card-shadow);
+  padding: var(--space-5) var(--space-6);
 }
 
 a {
@@ -308,6 +514,23 @@ button {
   .coverage-panel {
     width: 100%;
     position: static;
+  }
+
+  .sidebar {
+    width: var(--sidebar-width-collapsed);
+  }
+
+  .sidebar-brand span,
+  .sidebar-item-label {
+    display: none;
+  }
+
+  .sidebar-item {
+    justify-content: center;
+  }
+
+  .stat-card-row {
+    grid-template-columns: repeat(2, 1fr);
   }
 }
 
@@ -945,6 +1168,45 @@ button {
     gap: var(--space-3);
   }
 
+  /* Even an icon-only rail eats real width on a phone mid-test — this is
+     the one page (phone.html) actually used on a real device during a
+     real test, so below 900px it became a fixed rail; below this it
+     becomes a full off-canvas drawer instead, toggled by
+     .sidebar-toggle (shown here, hidden above this breakpoint) flipping
+     .sidebar.open, same class-toggle-driven transition idiom as
+     .transcript-panel.collapsed above. */
+  .sidebar {
+    position: fixed;
+    top: 0;
+    bottom: 0;
+    left: 0;
+    width: var(--sidebar-width);
+    transform: translateX(-100%);
+    transition: transform 0.2s var(--ease);
+    z-index: 50;
+  }
+
+  .sidebar.open {
+    transform: translateX(0);
+  }
+
+  .sidebar-brand span,
+  .sidebar-item-label {
+    display: inline;
+  }
+
+  .sidebar-item {
+    justify-content: flex-start;
+  }
+
+  .sidebar-toggle {
+    display: flex;
+  }
+
+  .stat-card-row {
+    grid-template-columns: 1fr;
+  }
+
   .transcript-toggle {
     padding: 6px 10px;
     font-size: 12px;
@@ -1334,10 +1596,11 @@ button {
    own. This banner is the hard, impossible-to-miss signal instead. */
 .sim-panel {
   border: 2px solid var(--amber);
-  border-radius: var(--radius-md);
+  border-radius: var(--radius-lg);
   background: var(--amber-bg);
   padding: var(--space-5);
   margin-top: var(--space-3);
+  box-shadow: var(--card-shadow);
 }
 
 .sim-banner {
