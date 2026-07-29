@@ -1326,11 +1326,27 @@ button {
 .section-collapsible {
   max-height: 100000px;
   overflow: hidden;
-  transition: max-height 0.25s var(--ease);
+  transition: max-height 0.25s var(--ease), padding 0.25s var(--ease), border-width 0.25s var(--ease), margin 0.25s var(--ease);
 }
 
+/* max-height:0 alone isn't enough here — unlike .transcript-panel (whose
+   padding lives on an inner .transcript-list child), .sim-panel has its own
+   padding/border/margin directly, and a border-box element can never
+   shrink below its own explicit padding+border no matter how small
+   max-height is. Confirmed for real: collapsing a .sim-panel floored out at
+   ~52px (its 24px top+bottom padding plus 2px top+bottom border) instead
+   of actually disappearing, leaving a truncated sliver of the amber banner
+   visible. Zeroing all of these on collapse, not just max-height, closes
+   that gap for any current or future .section-collapsible content,
+   regardless of what padding/border/margin it happens to carry. */
 .section-collapsible.collapsed {
   max-height: 0;
+  padding-top: 0;
+  padding-bottom: 0;
+  border-top-width: 0;
+  border-bottom-width: 0;
+  margin-top: 0;
+  margin-bottom: 0;
 }
 
 .reset-session-card {
@@ -1664,16 +1680,19 @@ button {
   margin: 0;
 }
 
-/* Circles pipeline test (simulated) — deliberately loud and visually
-   unlike every other panel on this page. A real production incident this
-   session came from realistic-looking seed data being mistaken for
-   something real once a live process started acting on it — reserved
-   phone numbers and plausible names were confirmed NOT enough on their
-   own. This banner is the hard, impossible-to-miss signal instead. */
+/* Circles pipeline test (simulated) — visually set apart from every other
+   panel on this page (distinct border/background, the ⚠ banner) so it's
+   never confused with a real-data section, without relying on an alarming
+   color to do that work. Kept neutral gray per explicit direction — an
+   amber/warning treatment was here first as a hard, impossible-to-miss
+   signal (a real production incident this session came from
+   realistic-looking seed data being mistaken for something real once a
+   live process started acting on it), but the border/banner/shape alone
+   already carry that distinction. */
 .sim-panel {
-  border: 2px solid var(--amber);
+  border: 2px solid var(--border-strong);
   border-radius: var(--radius-lg);
-  background: var(--amber-bg);
+  background: var(--bg-subtle);
   padding: var(--space-5);
   margin-top: var(--space-3);
   box-shadow: var(--card-shadow);
@@ -1685,7 +1704,7 @@ button {
   gap: var(--space-2);
   font-size: 13px;
   font-weight: 700;
-  color: var(--amber);
+  color: var(--text-secondary);
   text-transform: uppercase;
   letter-spacing: 0.03em;
   margin-bottom: var(--space-4);
@@ -1728,7 +1747,7 @@ button {
   width: 22px;
   height: 22px;
   border-radius: 50%;
-  background: var(--amber);
+  background: var(--text-secondary);
   color: var(--bg-raised);
   font-size: 12px;
   font-weight: 700;
@@ -1777,8 +1796,8 @@ button {
 }
 
 .sim-controls .download-button {
-  border-color: var(--amber);
-  color: var(--amber);
+  border-color: var(--border-strong);
+  color: var(--text);
 }
 
 .sim-empty {
