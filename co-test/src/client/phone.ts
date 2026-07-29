@@ -226,18 +226,22 @@ async function requestCall() {
   }
 }
 
-function renderCallStatus(callStatus: string | null) {
+// recap_ready gates the results link directly — checked independently of
+// call_status so the link can never appear before there's actually
+// something to show, regardless of what call_status happens to mean.
+function renderCallStatus(callStatus: string | null, recapReady: boolean) {
   if (!callStatus) return;
   const labels: Record<string, string> = {
     initiated: "Dialing…",
     ringing: "Ringing your phone…",
     answered: "In call",
-    completed: "Call ended — preparing results…",
+    processing: "Call ended — preparing results…",
+    completed: recapReady ? "Results ready" : "Call ended — preparing results…",
     failed: "Something went wrong preparing results — try calling again",
   };
   callStatusLine.textContent = labels[callStatus] ?? callStatus;
 
-  if (callStatus === "completed" && userId) {
+  if (recapReady && userId) {
     resultsLinkWrap.classList.remove("hidden");
     resultsLink.href = `/call/${userId}/results`;
   }
@@ -268,7 +272,7 @@ async function pollStatus() {
     } else {
       showStep(stepCall);
       statusEl.textContent = "Verified — ready to call";
-      renderCallStatus(d.call_status);
+      renderCallStatus(d.call_status, Boolean(d.recap_ready));
       renderSmokeTest(d.smoke_test_tool_call_at, d.smoke_test_tool_response_at);
       if (d.test_case) testCaseSelect.value = d.test_case;
       // Connects once a call exists and hasn't ended — covers both "just

@@ -452,9 +452,22 @@ export function createWebhooksRouter(io: Server): express.Router {
       // forever, with no way to recover except manually resetting the row.
       // On failure below, call_status resets to 'failed' so the next
       // delivery (or a manual replay) can claim and retry it.
+      //
+      // Second clause covers the one failure mode a try/catch can't:
+      // the server process dying mid-pipeline (crash/restart), which never
+      // reaches the catch block to reset to 'failed' at all — the row would
+      // otherwise sit in 'processing' forever, unreclaimable, same dead end
+      // as the original bug. A row stuck in 'processing' for longer than any
+      // real extraction takes (normally well under a minute) is reclaimable.
+      // updated_at is set explicitly here rather than relied on from a
+      // trigger, since none exists on this table.
       const claimResult = await pool.query(
-        `UPDATE users SET call_status = 'processing'
-         WHERE id = $1 AND call_status NOT IN ('processing', 'completed')
+        `UPDATE users SET call_status = 'processing', updated_at = NOW()
+         WHERE id = $1
+           AND (
+             call_status NOT IN ('processing', 'completed')
+             OR (call_status = 'processing' AND updated_at < NOW() - INTERVAL '10 minutes')
+           )
          RETURNING id`,
         [user_id],
       );

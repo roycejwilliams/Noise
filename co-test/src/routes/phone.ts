@@ -41,12 +41,22 @@ router.post("/session", async (_req: Request, res: Response, next: NextFunction)
 // GET /api/phone/:user_id/status — polled by the phone-test page through
 // every step: text-in-first, OTP verification, call state, and the smoke
 // test's own round-trip timestamps.
+//
+// recap_ready is its own explicit check (not inferred from call_status)
+// so the "View Results" link's visibility can never drift out of sync with
+// whether a recap actually exists, regardless of what call_status happens
+// to mean at any point — call_status='completed' already implies this today
+// (see webhooks.ts's chat_ended handler), but the client checks this field
+// directly rather than trusting that invariant to hold forever.
 router.get("/:user_id/status", async (req: Request, res: Response, next: NextFunction) => {
   try {
     const result = await pool.query(
-      `SELECT contact_verified, otp_verified, call_sid, call_status, test_case,
-              smoke_test_tool_call_at, smoke_test_tool_response_at
-       FROM users WHERE id = $1`,
+      `SELECT u.contact_verified, u.otp_verified, u.call_sid, u.call_status, u.test_case,
+              u.smoke_test_tool_call_at, u.smoke_test_tool_response_at,
+              EXISTS (
+                SELECT 1 FROM co_memories cm WHERE cm.user_id = u.id AND cm.memory_type = 'recap'
+              ) AS recap_ready
+       FROM users u WHERE u.id = $1`,
       [req.params.user_id],
     );
     if (!result.rows[0]) return res.status(404).json({ success: false, error: "Session not found." });
