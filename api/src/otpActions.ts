@@ -2,6 +2,13 @@ import { Resend } from "resend";
 import "dotenv/config";
 import sendblue from "./services/sendblue.js";
 
+// Real sends are on by default in production, and everywhere else only
+// with an explicit opt-in — co-test sets ALLOW_REAL_SMS=true because its
+// whole point is testing against real phones/inboxes. Any other
+// non-production deployment stubs to a console log instead of silently
+// sending real messages to whatever's in its data.
+const ALLOW_REAL_SENDS = process.env.NODE_ENV === "production" || process.env.ALLOW_REAL_SMS === "true";
+
 interface EmailProp {
   status?: "accepted" | "rejected";
   email: string;
@@ -128,13 +135,18 @@ export const sendSMS = async ({
   welcome_back,
   action_url,
 }: MessageProp) => {
-  const send = (content: string, mediaUrl?: string) =>
-    sendblue.messages.send({
+  const send = (content: string, mediaUrl?: string) => {
+    if (!ALLOW_REAL_SENDS) {
+      console.log(`[sendSMS stub, ${process.env.NODE_ENV ?? "no NODE_ENV"}] to ${phone_number}: ${content}`);
+      return Promise.resolve();
+    }
+    return sendblue.messages.send({
       number: phone_number,
       content,
       ...(mediaUrl ? { media_url: mediaUrl } : {}),
       from_number: process.env.SENDBLUE_PHONE_NUMBER!,
     });
+  };
 
   try {
     if (status === "accepted") {
@@ -261,7 +273,18 @@ export const sendEmail = async ({
   welcome,
   action_url,
 }: EmailProp) => {
-  const resend = new Resend(process.env.RESEND_API_KEY);
+  const resendClient = new Resend(process.env.RESEND_API_KEY);
+  const resend = {
+    emails: {
+      send: (params: { from: string; to: string; subject: string; html: string }) => {
+        if (!ALLOW_REAL_SENDS) {
+          console.log(`[sendEmail stub, ${process.env.NODE_ENV ?? "no NODE_ENV"}] to ${params.to}: ${params.subject}`);
+          return Promise.resolve();
+        }
+        return resendClient.emails.send(params);
+      },
+    },
+  };
   const cta = (label: string, fallback: string) =>
     ctaButton(label, action_url ?? fallback);
   try {

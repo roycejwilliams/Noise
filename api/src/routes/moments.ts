@@ -424,6 +424,19 @@ export function createMomentsRouter(
     authenticateToken,
     async (req, res, next) => {
       try {
+        // Only the moment's creator or someone actually polled for it (has
+        // their own moment_responses row) can see the full response roster
+        // — this returns everyone's availability, not just the caller's own.
+        const authCheck = await pool.query(
+          `SELECT 1 FROM moments m
+           WHERE m.id = $1
+           AND (m.creator_id = $2 OR EXISTS (
+             SELECT 1 FROM moment_responses mr WHERE mr.moment_id = m.id AND mr.user_id = $2
+           ))`,
+          [req.params.id, req.user?.id],
+        );
+        if (!authCheck.rows.length) return res.status(403).send("Unauthorized.");
+
         const result = await pool.query(
           `SELECT mr.user_id, mr.response, mr.selected_windows, u.first_name
            FROM moment_responses mr
