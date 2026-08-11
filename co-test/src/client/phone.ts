@@ -32,6 +32,7 @@ const liveTranscriptList = document.getElementById("live-transcript-list") as HT
 const liveCoveragePanelBody = document.getElementById("live-coverage-panel-body") as HTMLElement;
 
 let userId: string | null = null;
+let socketToken: string | null = null;
 let statusPollInterval: number | null = null;
 
 // Live view for a real Twilio-bridged call — the browser never holds the
@@ -114,8 +115,8 @@ async function hydrateLiveState() {
 }
 
 function ensureLiveSocket() {
-  if (liveSocket || !userId) return;
-  liveSocket = ioClient({ auth: { user_id: userId } });
+  if (liveSocket || !userId || !socketToken) return;
+  liveSocket = ioClient({ auth: { user_id: userId, token: socketToken } });
   // Fires on the initial connect AND every reconnect — hydrating from the
   // snapshot both times means a dropped/restored connection catches up on
   // whatever it missed instead of silently resuming from whatever's next.
@@ -142,6 +143,7 @@ async function initSession() {
     if (!data.success) throw new Error(data.error ?? "Failed to start session");
 
     userId = data.user_id;
+    socketToken = data.socket_token ?? null;
     const textInNumber = data.text_in_number ?? null;
     if (textInNumber) {
       // sms: link pre-addresses the device's native Messages/iMessage compose

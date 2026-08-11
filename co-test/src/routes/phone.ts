@@ -2,7 +2,7 @@ import { randomInt } from "crypto";
 import express, { Request, Response, NextFunction } from "express";
 import pool from "../../../api/src/db/db.js";
 import { sendSMS } from "../../../api/src/otpActions.js";
-import { getLiveSnapshot } from "../services/liveCallState.js";
+import { getLiveSnapshot, issueSocketToken } from "../services/liveCallState.js";
 import { triggerCall } from "../services/callTrigger.js";
 import { resetRealTestUser } from "../services/dynamicPlacementTest.js";
 
@@ -49,6 +49,9 @@ router.post("/session", async (_req: Request, res: Response, next: NextFunction)
     return res.status(200).json({
       success: true,
       user_id: created.rows[0].id,
+      // Credential for this session's live-call socket room — see
+      // liveCallState.ts's issueSocketToken/verifySocketToken.
+      socket_token: issueSocketToken(created.rows[0].id),
       text_in_number: process.env.SENDBLUE_PHONE_NUMBER,
     });
   } catch (error) {
@@ -104,6 +107,16 @@ router.post("/:user_id/verify-otp", async (req: Request, res: Response, next: Ne
     const { otp_code } = req.body as { otp_code?: string };
     if (!otp_code) return res.status(400).json({ success: false, error: "otp_code is required." });
 
+    // Lockout mirrors production's (api/src/routes/auth.ts) — without it,
+    // the 6-digit code has no attempt ceiling and someone who knows/guesses
+    // a user_id could brute-force in and trigger a real call to that
+    // tester's real phone via the otp_verified-gated /call route below.
+    const attemptsCheck = await pool.query(`SELECT otp_attempts FROM users WHERE id = $1`, [req.params.user_id]);
+    if (!attemptsCheck.rows[0]) return res.status(404).json({ success: false, error: "Session not found." });
+    if (attemptsCheck.rows[0].otp_attempts >= 5) {
+      return res.status(423).json({ success: false, error: "Too many incorrect attempts — request a new code." });
+    }
+
     const result = await pool.query(
       `SELECT id FROM users WHERE id = $1 AND otp_code = $2 AND otp_expiry > NOW()`,
       [req.params.user_id, otp_code],
@@ -140,7 +153,7 @@ router.post("/:user_id/resend-otp", async (req: Request, res: Response, next: Ne
 
     const otp = randomInt(100000, 1000000);
     await pool.query(
-      `UPDATE users SET otp_code = $2, otp_expiry = NOW() + INTERVAL '5 minutes' WHERE id = $1`,
+      `UPDATE users SET otp_code = $2, otp_expiry = NOW() + INTERVAL '5 minutes', otp_attempts = 0 WHERE id = $1`,
       [req.params.user_id, otp],
     );
     // Same copy production's resend uses (see api/src/routes/auth.ts's

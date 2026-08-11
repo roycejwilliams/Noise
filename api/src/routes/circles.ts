@@ -41,9 +41,14 @@ export function createCirclesRouter(
          WHERE cm.circle_id = $1 AND cm.status != 'declined'`,
         [circle.id],
       );
+      // city/chapter/member_count are candidate-identifying signal the same
+      // way names are (general life-stage + location + group size, before
+      // anyone has consented to placement) — withhold them pre-consent too.
       const members = membersResult.rows;
-      const city = members.find((m: any) => m.city)?.city ?? null;
-      const chapter = members.find((m: any) => m.life_chapters?.length)?.life_chapters?.[0] ?? null;
+      const city = schedulingConfirmed ? members.find((m: any) => m.city)?.city ?? null : null;
+      const chapter = schedulingConfirmed
+        ? members.find((m: any) => m.life_chapters?.length)?.life_chapters?.[0] ?? null
+        : null;
 
       return res.status(200).send({
         success: true,
@@ -53,7 +58,7 @@ export function createCirclesRouter(
           status: circle.status,
           city,
           chapter,
-          member_count: members.length,
+          member_count: schedulingConfirmed ? members.length : null,
           member_first_names: schedulingConfirmed ? members.map((m: any) => m.first_name) : [],
         },
       });

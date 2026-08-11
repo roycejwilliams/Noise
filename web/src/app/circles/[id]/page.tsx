@@ -6,7 +6,7 @@ interface Circle {
   status: string;
   city: string | null;
   chapter: string | null;
-  member_count: number;
+  member_count: number | null;
   member_first_names: string[];
 }
 

@@ -1,3 +1,4 @@
+import { randomBytes, timingSafeEqual } from "crypto";
 import type { Server } from "socket.io";
 
 // Live-push layer for a real Twilio-bridged call — a convenience relay of
@@ -108,4 +109,30 @@ export function stopPolling(userId: string): void {
 export function endLiveCall(userId: string): void {
   stopPolling(userId);
   liveStates.delete(userId);
+}
+
+// Per-session socket-room credential. user_id alone isn't a secret — it's a
+// visible route param (/call/:sessionId/results) and is returned unauthed by
+// the internal dashboard's own /api/dynamic-test/real-user — so joining a
+// live-call room on a bare client-supplied user_id let anyone who obtained
+// that id (leak, screenshot, shared link, guess) listen to a real tester's
+// live call transcript in real time. Issued once, when /api/phone/session
+// creates the row, and known only to that session's own browser.
+const socketTokens = new Map<string, string>();
+
+export function issueSocketToken(userId: string): string {
+  const token = randomBytes(24).toString("hex");
+  socketTokens.set(userId, token);
+  return token;
+}
+
+export function verifySocketToken(userId: string, token: unknown): boolean {
+  if (typeof token !== "string" || !token) return false;
+  const expected = socketTokens.get(userId);
+  if (!expected || token.length !== expected.length) return false;
+  try {
+    return timingSafeEqual(Buffer.from(token), Buffer.from(expected));
+  } catch {
+    return false;
+  }
 }

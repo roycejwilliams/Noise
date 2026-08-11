@@ -23,6 +23,27 @@ import {
 // distinction being visible.
 const router = express.Router();
 
+// circles/circle_members/moments/moment_responses are shared tables between
+// this simulation harness and the real dynamic-placement-test flow (see
+// dynamicPlacementTest.ts) — moderatorActions.ts's mutation functions accept
+// a bare id with no filter, so without this check a circle_id/moment_id
+// belonging to a real (non-simulated) test placement could be force-mutated
+// through these simulation-only routes. This is on top of, not instead of,
+// requireInternalAuth gating the whole router in server.ts.
+async function assertSimulatedCircle(res: Response, circleId: string): Promise<boolean> {
+  const result = await pool.query(`SELECT 1 FROM circles WHERE id = $1 AND is_simulated = true`, [circleId]);
+  if (result.rows.length > 0) return true;
+  res.status(403).json({ success: false, error: "Not a simulated circle." });
+  return false;
+}
+
+async function assertSimulatedMoment(res: Response, momentId: string): Promise<boolean> {
+  const result = await pool.query(`SELECT 1 FROM moments WHERE id = $1 AND is_simulated = true`, [momentId]);
+  if (result.rows.length > 0) return true;
+  res.status(403).json({ success: false, error: "Not a simulated moment." });
+  return false;
+}
+
 // GET /scenarios — static catalog for the panel's scenario picker.
 router.get("/scenarios", async (_req: Request, res: Response, next: NextFunction) => {
   try {
@@ -117,6 +138,7 @@ router.get("/state", async (_req: Request, res: Response, next: NextFunction) =>
 router.post("/circle-response", async (req: Request, res: Response, next: NextFunction) => {
   try {
     const { circle_id, member_id, action } = req.body as { circle_id: string; member_id: string; action: "accept" | "decline" };
+    if (!(await assertSimulatedCircle(res, circle_id))) return;
     const result = await simulateCircleResponse(circle_id, member_id, action);
     return res.status(result.success ? 200 : 400).json({ ...result, simulated: true });
   } catch (error) {
@@ -130,6 +152,9 @@ router.post("/moderator-approval", async (req: Request, res: Response, next: Nex
       target: { type: "circle"; circleId: string } | { type: "venue"; momentId: string };
       action: "approve" | "reject";
     };
+    const isSimulated =
+      target.type === "circle" ? await assertSimulatedCircle(res, target.circleId) : await assertSimulatedMoment(res, target.momentId);
+    if (!isSimulated) return;
     const result = await simulateModeratorApproval(target, action);
     return res.status(result.success ? 200 : 400).json({ ...result, simulated: true });
   } catch (error) {
@@ -140,6 +165,7 @@ router.post("/moderator-approval", async (req: Request, res: Response, next: Nex
 router.post("/resolve-consensus", async (req: Request, res: Response, next: NextFunction) => {
   try {
     const { moment_id } = req.body as { moment_id: string };
+    if (!(await assertSimulatedMoment(res, moment_id))) return;
     const result = await resolveConsensusNow(moment_id);
     return res.status(result.success ? 200 : 400).json({ ...result, simulated: true });
   } catch (error) {
@@ -154,6 +180,7 @@ router.post("/availability-response", async (req: Request, res: Response, next: 
       member_id: string;
       selected_windows: number[];
     };
+    if (!(await assertSimulatedMoment(res, moment_id))) return;
     const result = await simulateAvailabilityResponse(moment_id, member_id, selected_windows);
     return res.status(200).json({ ...result, simulated: true });
   } catch (error) {

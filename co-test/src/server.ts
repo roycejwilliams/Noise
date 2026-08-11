@@ -14,6 +14,7 @@ import circlesTestRouter from "./routes/circlesTest.js";
 import dynamicPlacementTestRouter from "./routes/dynamicPlacementTest.js";
 import phoneRouter from "./routes/phone.js";
 import { createWebhooksRouter } from "./routes/webhooks.js";
+import { requireInternalAuth } from "./middleware/internalAuth.js";
 
 // A fresh Railway Postgres has none of brew_dev's tables yet — runMigrations()
 // (imported unchanged from api/) only ever does ALTER TABLE / CREATE TABLE IF
@@ -75,9 +76,11 @@ async function main() {
 
   app.use("/api", apiRouter);
   app.use("/api/phone", phoneRouter);
-  app.use("/api/checklist", checklistRouter);
-  app.use("/api/circles-test", circlesTestRouter);
-  app.use("/api/dynamic-test", dynamicPlacementTestRouter);
+  // Internal team dashboard only (see internalAuth.ts) — never used by the
+  // public tester-facing phone/call flow above.
+  app.use("/api/checklist", requireInternalAuth, checklistRouter);
+  app.use("/api/circles-test", requireInternalAuth, circlesTestRouter);
+  app.use("/api/dynamic-test", requireInternalAuth, dynamicPlacementTestRouter);
   // Mounted at root — these paths (/sendblue/webhook, /co/call-status,
   // /co/webhook) intentionally mirror production's exactly. See webhooks.ts.
   app.use(createWebhooksRouter(io));
@@ -88,7 +91,7 @@ async function main() {
   );
   app.get("/prompt", (_req, res) => res.sendFile(path.join(publicDir, "prompt.html")));
   app.get("/phone", (_req, res) => res.sendFile(path.join(publicDir, "phone.html")));
-  app.get("/checklist", (_req, res) => res.sendFile(path.join(publicDir, "checklist.html")));
+  app.get("/checklist", requireInternalAuth, (_req, res) => res.sendFile(path.join(publicDir, "checklist.html")));
 
   app.use(express.static(publicDir));
 

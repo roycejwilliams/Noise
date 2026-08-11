@@ -1,9 +1,10 @@
-import { randomInt } from "crypto";
+import { randomInt, timingSafeEqual } from "crypto";
 import { generateText } from "ai";
 import { anthropic } from "@ai-sdk/anthropic";
 import express, { Request, Response, NextFunction } from "express";
 import { parsePhoneNumberFromString } from "libphonenumber-js";
 import type { Server } from "socket.io";
+import twilio from "twilio";
 import pool from "../../../api/src/db/db.js";
 import { sendSMS } from "../../../api/src/otpActions.js";
 import sendblue from "../../../api/src/services/sendblue.js";
@@ -353,6 +354,37 @@ async function handleToolCall(
   }
 }
 
+// Reject status callbacks that didn't come from Twilio — same check
+// production's validateTwilioSignature (api/src/routes/co.ts) performs.
+// Without it, anyone could POST arbitrary CallStatus/To/CallSid values and
+// corrupt call_status for a guessed/observed call_sid.
+function validateTwilioSignature(req: Request): boolean {
+  const sig = req.headers["x-twilio-signature"] as string | undefined;
+  if (!sig) return false;
+  const url = `${process.env.API_URL}/co/call-status`;
+  return twilio.validateRequest(process.env.TWILIO_AUTH_TOKEN!, sig, url, req.body);
+}
+
+// Reject webhook calls that didn't come from Hume — same check production's
+// validateHumeWebhook (api/src/routes/co.ts) performs, reusing the same
+// bearer secret. Without it, this route resolved the acting user from a
+// client-suppliable custom_session_id with no cross-check against who
+// actually holds the chat_id, so anyone who started their own real call
+// through co-test's public /call page could forge a chat_ended event
+// pointing at a different tester's user_id and overwrite that tester's
+// profile/recap with the attacker's own transcript.
+function validateHumeWebhook(req: Request): boolean {
+  const secret = process.env.HUME_WEBHOOK_SECRET;
+  if (!secret) return true; // skip when not configured (dev) — matches production's fallback
+  const header = req.headers["x-hume-signature"] ?? req.headers["authorization"]?.toString().replace("Bearer ", "");
+  if (!header) return false;
+  try {
+    return timingSafeEqual(Buffer.from(header as string), Buffer.from(secret));
+  } catch {
+    return false;
+  }
+}
+
 export function createWebhooksRouter(io: Server): express.Router {
   const router = express.Router();
 
@@ -364,6 +396,8 @@ export function createWebhooksRouter(io: Server): express.Router {
   // proving the call/webhook mechanism out.
   router.post("/co/call-status", async (req: Request, res: Response, next: NextFunction) => {
     try {
+      if (!validateTwilioSignature(req)) return res.status(401).send("Invalid signature.");
+
       const { CallStatus, To, CallSid } = req.body;
       if (!CallStatus || !To) return res.sendStatus(204);
 
@@ -384,6 +418,8 @@ export function createWebhooksRouter(io: Server): express.Router {
   // production's separate Hume config and its webhook are never touched.
   router.post("/co/webhook", async (req: Request, res: Response, next: NextFunction) => {
     try {
+      if (!validateHumeWebhook(req)) return res.status(401).send("Invalid signature.");
+
       const { event_name, custom_session_id, chat_id, twilio_metadata, tool_call_message } = req.body;
 
       const resolveUserId = async (): Promise<string | null> => {
