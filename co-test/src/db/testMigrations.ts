@@ -207,4 +207,23 @@ export function runTestMigrations() {
       )`,
     )
     .catch((err: Error) => console.error("co_test_dynamic_runs table init failed:", err));
+
+  // Tool-access login (distinct from otp_verified above, which gates the
+  // in-app "request a real call" step). A tester now has to prove they
+  // control a real phone number, via a real OTP, before test.copatible.com
+  // shows anything but the login form — see services/testerAuth.ts. The
+  // token is opaque and long-lived (see testerAuth's TTL), stored on the row
+  // it authenticates rather than a separate sessions table since this is a
+  // handful of real testers at a time, not a real user base.
+  pool
+    .query(`ALTER TABLE users ADD COLUMN IF NOT EXISTS login_session_token TEXT`)
+    .catch((err: Error) => console.error("users.login_session_token migration failed:", err));
+
+  pool
+    .query(`ALTER TABLE users ADD COLUMN IF NOT EXISTS login_session_expiry TIMESTAMPTZ`)
+    .catch((err: Error) => console.error("users.login_session_expiry migration failed:", err));
+
+  pool
+    .query(`CREATE INDEX IF NOT EXISTS idx_users_login_session_token ON users (login_session_token)`)
+    .catch((err: Error) => console.error("idx_users_login_session_token migration failed:", err));
 }

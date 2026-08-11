@@ -1,8 +1,12 @@
+import "dotenv/config";
+import { initTelemetry } from "./telemetry.js";
+initTelemetry();
+
 import { anthropic } from "@ai-sdk/anthropic";
 import { generateText } from "ai";
+import { propagateAttributes } from "@langfuse/tracing";
 import cookieParser from "cookie-parser";
 import cors from "cors";
-import "dotenv/config";
 import express from "express";
 import helmut from "helmet";
 import { createServer } from "http";
@@ -168,10 +172,15 @@ cron.schedule("*/30 * * * *", async () => {
           );
           if (!vcardCheck.rows[0]) {
             try {
-              const { text: vcardMsg } = await generateText({
-                model: anthropic("claude-haiku-4-5-20251001"),
-                prompt: `You are Co, texting ${member.first_name} for the first time. Ask them to save your contact, briefly, in your own words. No exclamation points, no em dashes. 1 sentence.`,
-              });
+              const { text: vcardMsg } = await propagateAttributes(
+                { userId: member.id, traceName: "server.autoApproveCircle.vcardMessage" },
+                () =>
+                  generateText({
+                    model: anthropic("claude-haiku-4-5-20251001"),
+                    experimental_telemetry: { isEnabled: true, functionId: "server.autoApproveCircle.vcardMessage" },
+                    prompt: `You are Co, texting ${member.first_name} for the first time. Ask them to save your contact, briefly, in your own words. No exclamation points, no em dashes. 1 sentence.`,
+                  }),
+              );
               await sendblue.messages.send({
                 number: member.phone_number,
                 content: vcardMsg,
@@ -193,10 +202,15 @@ cron.schedule("*/30 * * * *", async () => {
         // sendblue.ts — never mention headcount, this isn't a group blast.
         let placementMsg = `I placed you in a circle. Same chapter, same city.${momentId ? `\n\nhttps://app.copatible.com/moments/${momentId}` : ""}`;
         try {
-          const { text } = await generateText({
-            model: anthropic("claude-sonnet-4-6"),
-            prompt: `You are Co. You just placed ${member.first_name} in a circle with people in the same ${chapter || "chapter of life"}, based in ${city}. Text them the news like it means something, not like a system notification. Never mention how many people are in it — this is their own thread, not a group announcement. No exclamation points, no em dashes. 1-2 sentences.`,
-          });
+          const { text } = await propagateAttributes(
+            { userId: member.id, traceName: "server.autoApproveCircle.placementMessage" },
+            () =>
+              generateText({
+                model: anthropic("claude-sonnet-4-6"),
+                experimental_telemetry: { isEnabled: true, functionId: "server.autoApproveCircle.placementMessage" },
+                prompt: `You are Co. You just placed ${member.first_name} in a circle with people in the same ${chapter || "chapter of life"}, based in ${city}. Text them the news like it means something, not like a system notification. Never mention how many people are in it — this is their own thread, not a group announcement. No exclamation points, no em dashes. 1-2 sentences.`,
+              }),
+          );
           placementMsg = momentId ? `${text}\n\nhttps://app.copatible.com/moments/${momentId}` : text;
         } catch (genErr: any) {
           console.error("Auto-approval placement message generation failed, using fallback (non-fatal):", genErr?.message ?? genErr);

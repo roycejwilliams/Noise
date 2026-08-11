@@ -148,6 +148,7 @@ export async function confirmMoment(moment: BookingMoment, io?: Server): Promise
   try {
     const { text } = await generateText({
       model: anthropic("claude-haiku-4-5-20251001"),
+      experimental_telemetry: { isEnabled: true, functionId: "booking.confirmMoment" },
       prompt: `You are Co. A moment just got confirmed: ${moment.venue ?? moment.moments_name} on ${dateStr} at ${timeStr}. Text confirming it's locked in, in your own words — not a template. No exclamation points, no em dashes. 1-2 sentences.`,
     });
     confirmedMsg = text;

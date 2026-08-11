@@ -1,5 +1,6 @@
 import { anthropic } from "@ai-sdk/anthropic";
 import { generateText } from "ai";
+import { propagateAttributes } from "@langfuse/tracing";
 import crypto from "crypto";
 import express, { NextFunction, Request, Response } from "express";
 import twilio from "twilio";
@@ -148,10 +149,15 @@ async function sendMissedCallFollowUp(
 ): Promise<void> {
   let coMessage: string;
   try {
-    const result = await generateText({
-      model: anthropic("claude-haiku-4-5-20251001"),
-      prompt: `You are Co, an exclusive life concierge. ${situationPrompt} Send a short iMessage letting ${user.first_name} know, and that they can reply here whenever they're ready or expect another call soon. Tone: calm, unhurried, like a private members club. No exclamation points. No em dashes. 2 sentences max.`,
-    });
+    const result = await propagateAttributes(
+      { userId: user.id, traceName: "co.sendMissedCallFollowUp" },
+      () =>
+        generateText({
+          model: anthropic("claude-haiku-4-5-20251001"),
+          experimental_telemetry: { isEnabled: true, functionId: "co.sendMissedCallFollowUp" },
+          prompt: `You are Co, an exclusive life concierge. ${situationPrompt} Send a short iMessage letting ${user.first_name} know, and that they can reply here whenever they're ready or expect another call soon. Tone: calm, unhurried, like a private members club. No exclamation points. No em dashes. 2 sentences max.`,
+        }),
+    );
     coMessage = result.text;
   } catch (aiErr) {
     console.error("Co follow-up message generation failed, using fallback:", aiErr);
@@ -593,16 +599,21 @@ router.post(
       console.log(`co/webhook: follow-up gate — custom_session_id=${custom_session_id} user_id=${user_id} callUser=${JSON.stringify(callUser)}`);
       if (callUser) {
         try {
-          const { text: followUpMessage } = await generateText({
-            model: anthropic("claude-sonnet-4-6"),
-            prompt: `You are Co. You just got off a call with ${callUser.first_name}. Here's what they told you:
+          const { text: followUpMessage } = await propagateAttributes(
+            { userId: user_id, traceName: "co.postCallFollowUp" },
+            () =>
+              generateText({
+                model: anthropic("claude-sonnet-4-6"),
+                experimental_telemetry: { isEnabled: true, functionId: "co.postCallFollowUp" },
+                prompt: `You are Co. You just got off a call with ${callUser.first_name}. Here's what they told you:
 
 "${transcript}"
 
 Text them something short that proves you were actually listening — pick one real, specific thing they said (a feeling, a struggle, a detail) and respond to that, not a summary of the whole call. This should read like it came from someone who resonated with what they heard, not someone closing out a form.
 
 Do not say "I have what I need," "I'll be in touch," "your circle is ready/next," or anything that sounds like a status update. No exclamation points. No em dashes. 1-2 sentences, text-message length.`,
-          });
+              }),
+          );
 
           await sendblue.messages.send({
             number: callUser.phone_number,
@@ -967,6 +978,7 @@ export async function createMomentForCircle(circle_id: string) {
 
       const { text: rawMoment } = await generateText({
         model: anthropic("claude-sonnet-4-6"),
+        experimental_telemetry: { isEnabled: true, functionId: "co.createMomentForCircle" },
         prompt: `You are Co, a life concierge creating a curated real-world experience for a small circle of people.
 
 Circle details:
@@ -1382,10 +1394,15 @@ router.post(
       // (not a Claude prompt) — matches the previous fallback behavior.
       let coMessage: string;
       if (prompts[message_type]) {
-        const result = await generateText({
-          model: anthropic("claude-sonnet-4-6"),
-          prompt: prompts[message_type],
-        });
+        const result = await propagateAttributes(
+          { userId: String(user_id), traceName: `co.message.${message_type}` },
+          () =>
+            generateText({
+              model: anthropic("claude-sonnet-4-6"),
+              experimental_telemetry: { isEnabled: true, functionId: `co.message.${message_type}` },
+              prompt: prompts[message_type],
+            }),
+        );
         coMessage = result.text;
       } else {
         coMessage = fixedCopy[message_type] ?? fixedCopy.circle_placement;
@@ -1541,11 +1558,14 @@ router.post(
       };
 
       // Unrecognized message_type defaults to the fixed circle_placement copy
-      // (not a Claude prompt) — matches the previous fallback behavior.
+      // (not a Claude prompt) — matches the previous fallback behavior. No
+      // single userId here — this message is drafted once and sent to every
+      // member of the circle below, not to one person.
       let coMessage: string;
       if (prompts[message_type]) {
         const result = await generateText({
           model: anthropic("claude-sonnet-4-6"),
+          experimental_telemetry: { isEnabled: true, functionId: `co.circleMessage.${message_type}` },
           prompt: prompts[message_type],
         });
         coMessage = result.text;

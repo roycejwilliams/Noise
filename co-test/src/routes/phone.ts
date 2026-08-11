@@ -5,18 +5,22 @@ import { sendSMS } from "../../../api/src/otpActions.js";
 import { getLiveSnapshot, issueSocketToken } from "../services/liveCallState.js";
 import { triggerCall } from "../services/callTrigger.js";
 import { resetRealTestUser } from "../services/dynamicPlacementTest.js";
+import { requireInternalAuth } from "../middleware/internalAuth.js";
+import { requireTesterLoginApi } from "../middleware/requireTesterLogin.js";
 
 const router = express.Router();
 
-// POST /api/phone/reset — clears every real (non-simulated) phone-test
-// user's own account (profile, memories, captured intent, any circle they
-// own) plus any abandoned, never-claimed phone_pending row. co-test is
-// explicitly single-tester-at-a-time (see phone_pending's migration
-// comment) — this is what makes that safe across multiple different real
-// testers over time: whoever finishes a session runs this before handing
-// the tool to the next person, instead of them building on a stranger's
-// leftover data.
-router.post("/reset", async (_req: Request, res: Response, next: NextFunction) => {
+// POST /api/phone/reset — the DASHBOARD's global reset (checklist.html's
+// "hand it to the next person" button), not a tester's own self-service
+// reset (see routes/login.ts's /api/login/reset for that). Clears every real
+// (non-simulated) phone-test user's own account (profile, memories,
+// captured intent, any circle they own) plus any abandoned, never-claimed
+// phone_pending row. co-test is explicitly single-tester-at-a-time (see
+// phone_pending's migration comment) — this is what makes that safe across
+// multiple different real testers over time. Gated on the internal dashboard
+// password, same as everything else checklist.html calls — NOT on tester
+// login, since whoever's clicking this is the team, not a tester.
+router.post("/reset", requireInternalAuth, async (_req: Request, res: Response, next: NextFunction) => {
   try {
     const result = await resetRealTestUser();
     return res.status(200).json(result);
@@ -24,6 +28,12 @@ router.post("/reset", async (_req: Request, res: Response, next: NextFunction) =
     next(error);
   }
 });
+
+// Every route below is the actual tester-facing tool — requires the
+// phone-verified tool-access login from routes/login.ts. This does not
+// change or replace phone.ts's own text-in-first/OTP flow below, which
+// tests production's real onboarding UX; it just gates who can reach it.
+router.use(requireTesterLoginApi);
 
 // POST /api/phone/session — entry screen is a single "Message Co to start"
 // button (Ditto pattern, no name/phone form), so there's no phone number to

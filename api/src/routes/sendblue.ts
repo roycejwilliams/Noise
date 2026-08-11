@@ -1,5 +1,6 @@
 import { anthropic } from "@ai-sdk/anthropic";
 import { generateText } from "ai";
+import { propagateAttributes } from "@langfuse/tracing";
 import { randomInt } from "crypto";
 import { NextFunction, Request, Response, Router } from "express";
 import type { Server } from "socket.io";
@@ -57,9 +58,13 @@ async function updateProfileFromMessage(user_id: string, message: string): Promi
     const current = existing.rows[0];
     if (!current) return;
 
-    const { text: rawUpdate } = await generateText({
-      model: anthropic("claude-haiku-4-5-20251001"),
-      prompt: `You are Co, tracking what you know about a user across conversations.
+    const { text: rawUpdate } = await propagateAttributes(
+      { userId: user_id, traceName: "sendblue.updateProfileFromMessage" },
+      () =>
+        generateText({
+          model: anthropic("claude-haiku-4-5-20251001"),
+          experimental_telemetry: { isEnabled: true, functionId: "sendblue.updateProfileFromMessage" },
+          prompt: `You are Co, tracking what you know about a user across conversations.
 
 Current known profile:
 - life_chapters: ${current.life_chapters?.join(", ") || "none"} (allowed values: new_to_city, building_solo, career_pivot, starting_over)
@@ -80,7 +85,8 @@ Return ONLY valid JSON. Omit any field that hasn't changed:
 }
 
 If nothing has changed, return {}.`,
-    });
+        }),
+    );
 
     // Haiku occasionally adds a trailing sentence after the JSON object —
     // extract just the {...} block instead of assuming the whole response
@@ -294,10 +300,15 @@ export function sendblueRouter(io: Server): Router {
           const pendingCircle = pendingResult.rows[0];
           if (pendingCircle) {
 
-          const { text: classification } = await generateText({
-            model: anthropic("claude-haiku-4-5-20251001"),
-            prompt: `Classify this message as either 'approve' or 'reject'. Return ONLY the word approve or reject.\n\nMessage: "${content}"`,
-          });
+          const { text: classification } = await propagateAttributes(
+            { userId: pendingCircle.owner_id, traceName: "sendblue.moderatorApproval.classify" },
+            () =>
+              generateText({
+                model: anthropic("claude-haiku-4-5-20251001"),
+                experimental_telemetry: { isEnabled: true, functionId: "sendblue.moderatorApproval.classify" },
+                prompt: `Classify this message as either 'approve' or 'reject'. Return ONLY the word approve or reject.\n\nMessage: "${content}"`,
+              }),
+          );
 
           // Same backtick/quote-stripping as the other classification
           // parses in this file — the model doesn't always return bare text.
@@ -351,6 +362,7 @@ export function sendblueRouter(io: Server): Router {
             if (pendingMomentApproval) {
               const { text: venueClassification } = await generateText({
                 model: anthropic("claude-haiku-4-5-20251001"),
+                experimental_telemetry: { isEnabled: true, functionId: "sendblue.moderatorVenueApproval.classify" },
                 prompt: `Classify this message as either 'approve' or 'reject'. Return ONLY the word approve or reject.\n\nMessage: "${content}"`,
               });
               const venueAction = venueClassification
@@ -551,14 +563,19 @@ export function sendblueRouter(io: Server): Router {
         if (pendingCircleInvite.rows[0]) {
           const { circle_id, owner_id } = pendingCircleInvite.rows[0];
 
-          const { text: circleInterpretation } = await generateText({
-            model: anthropic("claude-haiku-4-5-20251001"),
-            prompt: `A user replied to a circle invite. Classify their response as ONE of: "yes" — they want to join, "no" — they want to pass, "unclear" — can't tell.
+          const { text: circleInterpretation } = await propagateAttributes(
+            { userId: user.id, traceName: "sendblue.circleInviteResponse.classify" },
+            () =>
+              generateText({
+                model: anthropic("claude-haiku-4-5-20251001"),
+                experimental_telemetry: { isEnabled: true, functionId: "sendblue.circleInviteResponse.classify" },
+                prompt: `A user replied to a circle invite. Classify their response as ONE of: "yes" — they want to join, "no" — they want to pass, "unclear" — can't tell.
 
 Message: "${resolvedContent}"
 
 Return ONLY the classification, nothing else.`,
-          });
+              }),
+          );
           const circleAction = circleInterpretation.trim().toLowerCase().replace(/^[`"']+|[`"']+$/g, "");
 
           if (circleAction === "yes") {
@@ -737,9 +754,13 @@ Return ONLY the classification, nothing else.`,
           // original single-time poll (older in-flight moments, or window
           // generation failed at creation time) — same classifier, just
           // asked to recognize numbered-window replies when there are any.
-          const { text: interpretation } = await generateText({
-            model: anthropic("claude-sonnet-4-6"),
-            prompt: windowsListText
+          const { text: interpretation } = await propagateAttributes(
+            { userId: user.id, traceName: "sendblue.momentAvailabilityResponse.classify" },
+            () =>
+              generateText({
+                model: anthropic("claude-sonnet-4-6"),
+                experimental_telemetry: { isEnabled: true, functionId: "sendblue.momentAvailabilityResponse.classify" },
+                prompt: windowsListText
               ? `A user replied to a circle event's availability poll. Interpret their response.
 
               User's message: "${resolvedContent}"
@@ -766,7 +787,8 @@ Return ONLY the classification, nothing else.`,
               - "unclear" — can't determine intent
 
               Return ONLY the classification, nothing else.`,
-          });
+              }),
+          );
 
           // Strip wrapping backticks/quotes — the model sometimes formats
           // its classification as `yes` or "yes" instead of plain text,
@@ -802,10 +824,15 @@ Return ONLY the classification, nothing else.`,
             if (parsedResponse.startsWith("time:") && circle_id && (await isCircleMember(user.id, circle_id))) {
               const rawSuggestion = parsedResponse.replace(/^time:\s*/i, "");
               try {
-                const { text: isoGuess } = await generateText({
-                  model: anthropic("claude-haiku-4-5-20251001"),
-                  prompt: `The moment is currently scheduled for ${moment_start} (ISO 8601). A circle member just proposed a new time: "${rawSuggestion}". Return ONLY the new date/time as a single ISO 8601 datetime string, keeping the same timezone offset as the current schedule. No explanation.`,
-                });
+                const { text: isoGuess } = await propagateAttributes(
+                  { userId: user.id, traceName: "sendblue.momentReschedule.parseTime" },
+                  () =>
+                    generateText({
+                      model: anthropic("claude-haiku-4-5-20251001"),
+                      experimental_telemetry: { isEnabled: true, functionId: "sendblue.momentReschedule.parseTime" },
+                      prompt: `The moment is currently scheduled for ${moment_start} (ISO 8601). A circle member just proposed a new time: "${rawSuggestion}". Return ONLY the new date/time as a single ISO 8601 datetime string, keeping the same timezone offset as the current schedule. No explanation.`,
+                    }),
+                );
                 const newDate = new Date(isoGuess.trim());
                 if (!Number.isNaN(newDate.getTime())) {
                   await proposeNewTimeForMoment(moment_id, newDate);
@@ -858,10 +885,15 @@ Return ONLY the classification, nothing else.`,
                     : parsedResponse === "no"
                       ? `They said they can't make it to ${moments_name}.`
                       : `They proposed a different time for ${moments_name}: "${parsedResponse.replace(/^time:\s*/i, "")}", but Co couldn't pin down a specific date/time from that. Let them know you'll need something more specific, like a day and time.`;
-              const { text } = await generateText({
-                model: anthropic("claude-haiku-4-5-20251001"),
-                prompt: `You are Co, an exclusive life concierge. ${ackContext} Reply to them briefly, warm and specific. 1 sentence. No exclamation points, no em dashes.`,
-              });
+              const { text } = await propagateAttributes(
+                { userId: user.id, traceName: "sendblue.momentResponseAck" },
+                () =>
+                  generateText({
+                    model: anthropic("claude-haiku-4-5-20251001"),
+                    experimental_telemetry: { isEnabled: true, functionId: "sendblue.momentResponseAck" },
+                    prompt: `You are Co, an exclusive life concierge. ${ackContext} Reply to them briefly, warm and specific. 1 sentence. No exclamation points, no em dashes.`,
+                  }),
+              );
               ackMsg = text;
             } catch (genErr: any) {
               console.error("Moment response ack generation failed, using fallback (non-fatal):", genErr?.message ?? genErr);
@@ -986,24 +1018,30 @@ Return ONLY the classification, nothing else.`,
           Respond as Co. Warm, specific, brief.${imageForVision ? " React to what's actually in the photo." : " Use their context to make it personal."}
           2 sentences max. No em dashes. No exclamation points.`;
 
-        const { text: coReply } = await generateText(
-          imageForVision
-            ? {
-                model: anthropic("claude-haiku-4-5-20251001"),
-                messages: [
-                  {
-                    role: "user",
-                    content: [
-                      { type: "image", image: imageForVision.data, mediaType: imageForVision.mediaType },
-                      { type: "text", text: promptText },
+        const { text: coReply } = await propagateAttributes(
+          { userId: user.id, traceName: "sendblue.generateReply" },
+          () =>
+            generateText(
+              imageForVision
+                ? {
+                    model: anthropic("claude-haiku-4-5-20251001"),
+                    experimental_telemetry: { isEnabled: true, functionId: "sendblue.generateReply" },
+                    messages: [
+                      {
+                        role: "user",
+                        content: [
+                          { type: "image", image: imageForVision.data, mediaType: imageForVision.mediaType },
+                          { type: "text", text: promptText },
+                        ],
+                      },
                     ],
+                  }
+                : {
+                    model: anthropic("claude-haiku-4-5-20251001"),
+                    experimental_telemetry: { isEnabled: true, functionId: "sendblue.generateReply" },
+                    prompt: promptText,
                   },
-                ],
-              }
-            : {
-                model: anthropic("claude-haiku-4-5-20251001"),
-                prompt: promptText,
-              },
+            ),
         );
 
         // Step 7 — Store Co's reply in co_memories

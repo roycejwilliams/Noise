@@ -1,0 +1,37 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Co (test) — Sign in</title>
+  <link rel="stylesheet" href="/styles.css" />
+</head>
+<body>
+  <div class="login-wrap">
+    <div class="login-card">
+      <div class="app-name">Co (test)</div>
+      <p id="login-status" class="status-line">Enter your phone number to continue.</p>
+
+      <section id="step-phone" class="phone-step">
+        <div class="phone-form-row">
+          <input id="phone-input" type="tel" inputmode="tel" placeholder="+1 555 555 5555" autocomplete="tel" />
+          <button id="send-code-button" class="download-button">Send code</button>
+        </div>
+        <p id="phone-error" class="phone-error hidden"></p>
+      </section>
+
+      <section id="step-otp" class="phone-step hidden">
+        <p>Enter the 6-digit code we texted you.</p>
+        <div class="phone-form-row">
+          <input id="otp-input" type="text" inputmode="numeric" placeholder="123456" maxlength="6" />
+          <button id="verify-button" class="download-button">Verify</button>
+        </div>
+        <p id="otp-error" class="phone-error hidden"></p>
+        <button id="back-button" class="login-link-button">Use a different number</button>
+      </section>
+    </div>
+  </div>
+
+  <script src="/login.js"></script>
+</body>
+</html>

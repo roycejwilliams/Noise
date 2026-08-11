@@ -22,6 +22,7 @@ export async function generateCircleTitle(city: string, chapter: string, goals: 
   try {
     const { text } = await generateText({
       model: anthropic("claude-haiku-4-5-20251001"),
+      experimental_telemetry: { isEnabled: true, functionId: "circleInvite.generateCircleTitle" },
       prompt: `Give a short, warm, specific name (3-5 words, no quotes) for a small circle of people in ${city} all navigating "${chapter || "a new chapter"}", plus a one-sentence description of the circle's shared vibe (under 12 words, no quotes, no period at the end). Ground the description in this real context about who it's for, without quoting it directly: "${privateContext}". Not generic — this should feel written for this specific person, not a template.
 
 Return ONLY valid JSON, nothing else:
@@ -63,6 +64,7 @@ export async function generateWarmCircleInviteMessage(params: {
   try {
     const { text } = await generateText({
       model: anthropic("claude-sonnet-4-6"),
+      experimental_telemetry: { isEnabled: true, functionId: "circleInvite.generateWarmCircleInviteMessage" },
       prompt: `You are Co, texting ${firstName} on their own private thread — never a group announcement.
 
 You found them a circle called "${circleTitle}" and there's already a moment curated and waiting if they're in.

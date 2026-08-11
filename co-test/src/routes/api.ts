@@ -10,8 +10,13 @@ import {
   storeProfile,
   storeTranscriptMemory,
 } from "../../../api/src/services/profileExtraction.js";
+import { requireTesterLoginApi } from "../middleware/requireTesterLogin.js";
 
 const router = express.Router();
+
+// Entirely the tester-facing tool — gated on the phone-verified tool-access
+// login from routes/login.ts (see requireTesterLogin.ts).
+router.use(requireTesterLoginApi);
 
 // POST /api/session — creates a throwaway users row so co_profiles/co_memories
 // (both FK'd to users.id) have somewhere to attach. This tool has no login;

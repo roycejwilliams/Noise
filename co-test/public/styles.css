@@ -1979,3 +1979,46 @@ button {
 .dyn-profile-detail {
   color: var(--text-secondary);
 }
+
+/* Login page */
+
+.login-wrap {
+  min-height: 100vh;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: var(--space-6);
+  background: var(--bg);
+}
+
+.login-card {
+  width: 100%;
+  max-width: 360px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-lg);
+  background: var(--bg-raised);
+  box-shadow: var(--card-shadow);
+  padding: var(--space-7) var(--space-6);
+  text-align: center;
+}
+
+.login-card .app-name {
+  font-weight: 600;
+  font-size: 18px;
+  margin-bottom: var(--space-2);
+}
+
+.login-card .status-line {
+  margin-bottom: var(--space-5);
+}
+
+.login-link-button {
+  margin-top: var(--space-3);
+  background: none;
+  border: none;
+  color: var(--text-secondary);
+  font-size: 13px;
+  text-decoration: underline;
+  cursor: pointer;
+  padding: 0;
+}

@@ -5,14 +5,18 @@
   "type": "module",
   "scripts": {
     "build": "tsc && npm run build:client",
-    "build:client": "esbuild src/client/call.ts src/client/results.ts src/client/prompt.ts src/client/phone.ts src/client/checklist.ts --bundle --outdir=public --platform=browser --format=iife --target=es2020",
+    "build:client": "esbuild src/client/call.ts src/client/results.ts src/client/prompt.ts src/client/phone.ts src/client/checklist.ts src/client/login.ts --bundle --outdir=public --platform=browser --format=iife --target=es2020",
     "dev": "tsx watch src/server.ts",
     "start": "node dist/co-test/src/server.js"
   },
   "dependencies": {
     "@ai-sdk/anthropic": "^3.0.79",
     "@googlemaps/google-maps-services-js": "^3.4.2",
+    "@langfuse/otel": "^5.10.0",
+    "@langfuse/tracing": "^5.10.0",
+    "@opentelemetry/sdk-node": "^0.221.0",
     "ai": "^6.0.191",
+    "cookie-parser": "^1.4.7",
     "dotenv": "^17.3.1",
     "express": "^5.2.1",
     "hume": "^0.15.17",
@@ -26,6 +30,7 @@
     "twilio": "^5.13.1"
   },
   "devDependencies": {
+    "@types/cookie-parser": "^1.4.10",
     "@types/express": "^5.0.6",
     "@types/node": "^25.5.0",
     "@types/pg": "^8.18.0",

@@ -6,6 +6,7 @@
 import type { Server as IOServer } from "socket.io";
 import { anthropic } from "@ai-sdk/anthropic";
 import { generateText } from "ai";
+import { propagateAttributes } from "@langfuse/tracing";
 import pool from "../db/db.js";
 import { findBestCircleWithScore, min_group_score } from "./matching.js";
 import { generateCircleTitle, generateWarmCircleInviteMessage } from "./circleInvite.js";
@@ -222,10 +223,15 @@ export async function activateCircle(params: {
       );
       if (!vcardCheck.rows[0]) {
         try {
-          const { text: vcardMsg } = await generateText({
-            model: anthropic("claude-haiku-4-5-20251001"),
-            prompt: `You are Co, texting ${member.first_name} for the first time. Ask them to save your contact, briefly, in your own words. No exclamation points, no em dashes. 1 sentence.`,
-          });
+          const { text: vcardMsg } = await propagateAttributes(
+            { userId: member.id, traceName: "circleApproval.activateCircle.vcardMessage" },
+            () =>
+              generateText({
+                model: anthropic("claude-haiku-4-5-20251001"),
+                experimental_telemetry: { isEnabled: true, functionId: "circleApproval.activateCircle.vcardMessage" },
+                prompt: `You are Co, texting ${member.first_name} for the first time. Ask them to save your contact, briefly, in your own words. No exclamation points, no em dashes. 1 sentence.`,
+              }),
+          );
           await sendblue.messages.send({
             number: member.phone_number,
             content: vcardMsg,

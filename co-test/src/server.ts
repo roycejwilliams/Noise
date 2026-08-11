@@ -1,4 +1,8 @@
 import "dotenv/config";
+import { initTelemetry } from "./telemetry.js";
+initTelemetry();
+
+import cookieParser from "cookie-parser";
 import express from "express";
 import fs from "fs";
 import { createServer } from "http";
@@ -12,9 +16,11 @@ import apiRouter from "./routes/api.js";
 import checklistRouter from "./routes/checklist.js";
 import circlesTestRouter from "./routes/circlesTest.js";
 import dynamicPlacementTestRouter from "./routes/dynamicPlacementTest.js";
+import loginRouter from "./routes/login.js";
 import phoneRouter from "./routes/phone.js";
 import { createWebhooksRouter } from "./routes/webhooks.js";
 import { requireInternalAuth } from "./middleware/internalAuth.js";
+import { requireTesterLoginPage } from "./middleware/requireTesterLogin.js";
 
 // A fresh Railway Postgres has none of brew_dev's tables yet — runMigrations()
 // (imported unchanged from api/) only ever does ALTER TABLE / CREATE TABLE IF
@@ -39,6 +45,7 @@ async function main() {
   const app = express();
   app.use(express.json({ limit: "2mb" }));
   app.use(express.urlencoded({ extended: false })); // Twilio status callbacks are form-encoded
+  app.use(cookieParser());
 
   const publicDir = path.join(process.cwd(), "public");
 
@@ -74,6 +81,10 @@ async function main() {
     return res.send(vcard);
   });
 
+  // Tool-access login (phone + OTP) — see services/testerAuth.ts. Public by
+  // definition, it's the thing that grants access to everything below.
+  app.use("/api/login", loginRouter);
+
   app.use("/api", apiRouter);
   app.use("/api/phone", phoneRouter);
   // Internal team dashboard only (see internalAuth.ts) — never used by the
@@ -85,14 +96,25 @@ async function main() {
   // /co/webhook) intentionally mirror production's exactly. See webhooks.ts.
   app.use(createWebhooksRouter(io));
 
-  app.get(["/", "/call"], (_req, res) => res.sendFile(path.join(publicDir, "call.html")));
-  app.get("/call/:sessionId/results", (_req, res) =>
+  // Root is the login form itself now — not the call page. A tester who's
+  // already logged in gets redirected client-side (see login.ts checking
+  // /api/login/status on load), so this never becomes an extra click for a
+  // returning tester.
+  app.get("/", (_req, res) => res.sendFile(path.join(publicDir, "login.html")));
+
+  app.get("/call", requireTesterLoginPage, (_req, res) => res.sendFile(path.join(publicDir, "call.html")));
+  app.get("/call/:sessionId/results", requireTesterLoginPage, (_req, res) =>
     res.sendFile(path.join(publicDir, "results.html")),
   );
-  app.get("/prompt", (_req, res) => res.sendFile(path.join(publicDir, "prompt.html")));
-  app.get("/phone", (_req, res) => res.sendFile(path.join(publicDir, "phone.html")));
+  app.get("/prompt", requireTesterLoginPage, (_req, res) => res.sendFile(path.join(publicDir, "prompt.html")));
+  app.get("/phone", requireTesterLoginPage, (_req, res) => res.sendFile(path.join(publicDir, "phone.html")));
   app.get("/checklist", requireInternalAuth, (_req, res) => res.sendFile(path.join(publicDir, "checklist.html")));
 
+  // Static assets (JS/CSS) still need to serve out of public/, but the HTML
+  // pages above must only ever be reachable through the gated routes — a
+  // bare static mount would also serve e.g. /call.html directly by literal
+  // filename, walking straight around requireTesterLoginPage.
+  app.use((req, res, next) => (req.path.endsWith(".html") ? res.status(404).end() : next()));
   app.use(express.static(publicDir));
 
   const port = process.env.PORT ? Number(process.env.PORT) : 3000;

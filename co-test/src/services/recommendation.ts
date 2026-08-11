@@ -1,5 +1,6 @@
 import { generateText } from "ai";
 import { anthropic } from "@ai-sdk/anthropic";
+import { propagateAttributes } from "@langfuse/tracing";
 import pool from "../../../api/src/db/db.js";
 
 // Intent-Layer-only real action: Co can actually invoke this (voice via
@@ -68,9 +69,13 @@ export async function generateRecommendation(userId: string, currentMessage?: st
       .filter(Boolean)
       .join("\n");
 
-    const { text: raw } = await generateText({
-      model: anthropic("claude-haiku-4-5-20251001"),
-      prompt: `Here is everything actually known about this person, captured from real conversations:
+    const { text: raw } = await propagateAttributes(
+      { userId, traceName: "co-test.recommendation.generate" },
+      () =>
+        generateText({
+          model: anthropic("claude-haiku-4-5-20251001"),
+          experimental_telemetry: { isEnabled: true, functionId: "co-test.recommendation.generate" },
+          prompt: `Here is everything actually known about this person, captured from real conversations:
 ${knownData}
 ${currentMessage ? `\nWhat they just said, right now: "${currentMessage}"\n\nOnly recommend something if it's actually relevant to what they JUST said — not just relevant to their history in general. If they've moved on to a different topic than what the data above centers on, say there isn't enough to go on for THIS message rather than redirecting back to an old topic.` : ""}
 
@@ -80,7 +85,8 @@ Return ONLY valid JSON, no preamble or markdown:
 {"available": true, "match": "a consistent hiking or running group", "reason": "one sentence, grounded only in the data above"}
 or
 {"available": false, "reason": "why there isn't enough to go on"}`,
-    });
+        }),
+    );
 
     const clean = raw.replace(/```json|```/g, "").trim();
     let parsed: RecommendationResult | null = null;

@@ -210,6 +210,7 @@ export async function scoreVenuesWithCo(
 
   const { text: rawPick } = await generateText({
     model: anthropic("claude-sonnet-4-6"),
+    experimental_telemetry: { isEnabled: true, functionId: "places.pickVenue" },
     prompt: `You are Co, selecting a "${venueType}" venue for a CoPatible circle experience.
 
 CoPatible venue standards for "${venueType}":

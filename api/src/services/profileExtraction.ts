@@ -1,5 +1,6 @@
 import { anthropic } from "@ai-sdk/anthropic";
 import { generateText } from "ai";
+import { propagateAttributes } from "@langfuse/tracing";
 import crypto from "crypto";
 import pool from "../db/db.js";
 import { generateEmbedding, generateGoalEmbedding } from "./embeddings.js";
@@ -118,6 +119,7 @@ export async function extractPsychographicProfile(
 
         Transcript:
         "${transcript}"`,
+    experimental_telemetry: { isEnabled: true, functionId: "profileExtraction.extractPsychographicProfile" },
   });
 
   let extracted: ExtractedProfile = {};
@@ -162,6 +164,7 @@ Return ONLY valid JSON, no preamble or markdown:
 {"missing_topics": [...topic keys not yet covered...], "ready_to_summarize": true|false}
 
 ready_to_summarize is true only if at most one or two minor topics remain missing.`,
+      experimental_telemetry: { isEnabled: true, functionId: "profileExtraction.assessConversationCoverage" },
     });
 
     const clean = raw.replace(/```json|```/g, "").trim();
@@ -210,6 +213,7 @@ Transcript:
 
 Return ONLY valid JSON, reusing the exact original text for each item:
 {"resolved_goals": [], "resolved_blockers": []}`,
+      experimental_telemetry: { isEnabled: true, functionId: "profileExtraction.assessResolvedItems" },
     });
 
     const clean = raw.replace(/```json|```/g, "").trim();
@@ -386,9 +390,13 @@ export async function captureIntent(
   transcript: string,
 ): Promise<ExtractedIntent | null> {
   try {
-    const { text: rawIntent } = await generateText({
-      model: anthropic("claude-haiku-4-5-20251001"),
-      prompt: `Read this transcript and extract four things. Only include what's actually stated — never guess or infer beyond what's said.
+    const { text: rawIntent } = await propagateAttributes(
+      { userId: user_id, traceName: "profileExtraction.captureIntent" },
+      () =>
+        generateText({
+          model: anthropic("claude-haiku-4-5-20251001"),
+          experimental_telemetry: { isEnabled: true, functionId: "profileExtraction.captureIntent" },
+          prompt: `Read this transcript and extract four things. Only include what's actually stated — never guess or infer beyond what's said.
 
 1. ask — something specific they are actively seeking or could offer to others (a connection, an introduction, a resource, expertise). One clear sentence, classified as 'seeking' or 'offering'. null if no specific ask is present.
 2. concrete_preferences — named, specific things they mentioned liking or wanting, not vague vibes. A specific gym or workout style, a coffee/drink preference, a type of venue or neighborhood, a specific activity. "SoulCycle", "oat milk lattes", "speakeasy-style bars" — not "fitness" or "good coffee".
@@ -400,7 +408,8 @@ Return ONLY valid JSON, no preamble:
 
 Transcript:
 "${transcript}"`,
-    });
+        }),
+    );
 
     const clean = rawIntent.replace(/```json|```/g, "").trim();
     if (!clean) return null;

@@ -1,6 +1,7 @@
 import { randomInt, timingSafeEqual } from "crypto";
 import { generateText } from "ai";
 import { anthropic } from "@ai-sdk/anthropic";
+import { propagateAttributes } from "@langfuse/tracing";
 import express, { Request, Response, NextFunction } from "express";
 import { parsePhoneNumberFromString } from "libphonenumber-js";
 import type { Server } from "socket.io";
@@ -213,6 +214,7 @@ async function sendFollowUpText(
     const followUpPersona = await getCoPersonaPrompt();
     const { text: followUpMessage } = await generateText({
       model: anthropic("claude-haiku-4-5-20251001"),
+      experimental_telemetry: { isEnabled: true, functionId: "co-test.webhooks.postCallFollowUp" },
       prompt: `${followUpPersona ?? "You are Co."} You just got off a call with ${callUser.first_name}. Here's what they told you:\n\n"${transcript}"\n\nText them something short that proves you were actually listening. Pick exactly ONE real, specific thing they said (a feeling, a struggle, a detail) and respond to only that — nothing else. No second observation, no forward-looking plan, no summary of the call.\n\nDo not say "I have what I need," "I'll be in touch," "your circle is ready/next," or anything that sounds like a status update. No exclamation points. No em dashes.\n\nThis is a text message, not the call — keep it short, one text-message-length turn. Under 160 characters.`,
     });
     const cappedFollowUp = capMessageLength(followUpMessage, 160);
@@ -703,6 +705,7 @@ export function createWebhooksRouter(io: Server): express.Router {
       if (pendingCircleApproval.rows[0] || pendingVenueApproval.rows[0]) {
         const { text: modClassification } = await generateText({
           model: anthropic("claude-haiku-4-5-20251001"),
+          experimental_telemetry: { isEnabled: true, functionId: "co-test.webhooks.moderatorApproval.classify" },
           prompt: `Classify this message as either 'approve' or 'reject'. Return ONLY the word approve or reject.\n\nMessage: "${content}"`,
         });
         const modAction = modClassification.trim().toLowerCase().replace(/^[`"']+|[`"']+$/g, "");
@@ -772,10 +775,15 @@ export function createWebhooksRouter(io: Server): express.Router {
       if (pendingRealInvite.rows[0]) {
         const { circle_id, circle_name, status: currentStatus } = pendingRealInvite.rows[0];
 
-        const { text: inviteClassification } = await generateText({
-          model: anthropic("claude-haiku-4-5-20251001"),
-          prompt: `A user replied to a circle invite. Classify their response as ONE of: "yes" — they want to join, "no" — they want to pass, "unclear" — can't tell.\n\nMessage: "${content}"\n\nReturn ONLY the classification, nothing else.`,
-        });
+        const { text: inviteClassification } = await propagateAttributes(
+          { userId: user.id, traceName: "co-test.webhooks.circleInviteResponse.classify" },
+          () =>
+            generateText({
+              model: anthropic("claude-haiku-4-5-20251001"),
+              experimental_telemetry: { isEnabled: true, functionId: "co-test.webhooks.circleInviteResponse.classify" },
+              prompt: `A user replied to a circle invite. Classify their response as ONE of: "yes" — they want to join, "no" — they want to pass, "unclear" — can't tell.\n\nMessage: "${content}"\n\nReturn ONLY the classification, nothing else.`,
+            }),
+        );
         const inviteAction = inviteClassification.trim().toLowerCase().replace(/^[`"']+|[`"']+$/g, "");
 
         if (inviteAction === "yes" || inviteAction === "no") {
@@ -926,9 +934,13 @@ export function createWebhooksRouter(io: Server): express.Router {
       );
       const hasPendingOffer = !!pendingOfferResult.rows[0];
 
-      const { text: rawCallClassification } = await generateText({
-        model: anthropic("claude-haiku-4-5-20251001"),
-        prompt: `A user is texting Co, a life concierge.${hasPendingOffer ? " Co just offered them a phone call and is waiting for a yes or no." : ""}
+      const { text: rawCallClassification } = await propagateAttributes(
+        { userId: user.id, traceName: "co-test.webhooks.callOffer.classify" },
+        () =>
+          generateText({
+            model: anthropic("claude-haiku-4-5-20251001"),
+            experimental_telemetry: { isEnabled: true, functionId: "co-test.webhooks.callOffer.classify" },
+            prompt: `A user is texting Co, a life concierge.${hasPendingOffer ? " Co just offered them a phone call and is waiting for a yes or no." : ""}
 
 Their message: "${content}"
 
@@ -938,7 +950,8 @@ ${hasPendingOffer ? '- "accepts_offer" — they are saying yes to the call Co ju
 - "none" — normal conversation, no call is relevant
 
 Return ONLY the classification, nothing else.`,
-      });
+          }),
+      );
       const callAction = rawCallClassification.trim().toLowerCase().replace(/^[`"']+|[`"']+$/g, "");
 
       if (hasPendingOffer && (callAction === "accepts_offer" || callAction === "declines_offer")) {
@@ -1041,9 +1054,13 @@ Return ONLY the classification, nothing else.`,
       // above.
       let recommendationContext = "";
       try {
-        const { text: wantsClassification } = await generateText({
-          model: anthropic("claude-haiku-4-5-20251001"),
-          prompt: `Classify this message as either "wants_something_concrete" or "normal_conversation".
+        const { text: wantsClassification } = await propagateAttributes(
+          { userId: user.id, traceName: "co-test.webhooks.wantsRecommendation.classify" },
+          () =>
+            generateText({
+              model: anthropic("claude-haiku-4-5-20251001"),
+              experimental_telemetry: { isEnabled: true, functionId: "co-test.webhooks.wantsRecommendation.classify" },
+              prompt: `Classify this message as either "wants_something_concrete" or "normal_conversation".
 
 "wants_something_concrete" means they're asking Co to actually suggest, recommend, help find, or surface something specific right now (e.g. "what can you surface for me", "find me something", "what should I do about this").
 "normal_conversation" means anything else — small talk, questions about Co, answering a question, general chat.
@@ -1051,7 +1068,8 @@ Return ONLY the classification, nothing else.`,
 Message: "${content}"
 
 Return ONLY the classification, nothing else.`,
-        });
+            }),
+        );
         const wantsSomethingConcrete = wantsClassification
           .trim()
           .toLowerCase()
@@ -1093,9 +1111,13 @@ Return ONLY the classification, nothing else.`,
           // it entirely and it fell through to the abstract recommendation
           // path instead, which then claimed to be "sending" something it
           // structurally can never send.
-          const { text: rawVenueClassification } = await generateText({
-            model: anthropic("claude-haiku-4-5-20251001"),
-            prompt: `Recent text conversation, in order:
+          const { text: rawVenueClassification } = await propagateAttributes(
+            { userId: user.id, traceName: "co-test.webhooks.venueRequest.classify" },
+            () =>
+              generateText({
+                model: anthropic("claude-haiku-4-5-20251001"),
+                experimental_telemetry: { isEnabled: true, functionId: "co-test.webhooks.venueRequest.classify" },
+                prompt: `Recent text conversation, in order:
 ${recentConversation || "(start of the conversation)"}
 
 Their latest message: "${content}"
@@ -1105,7 +1127,8 @@ In light of the conversation above, is their latest message wanting, looking for
 If yes, how many did they ask for? Default to 1 if they didn't say a number or range; if they gave a range (e.g. "2-5"), use the upper end, capped at 5.
 
 Return ONLY valid JSON, no preamble: {"wants_venue": true or false, "venue_type": "the category, in a few words" or null, "count": a number from 1 to 5}`,
-          });
+              }),
+          );
           const cleanVenue = rawVenueClassification.replace(/```json|```/g, "").trim();
           const parsedVenue = JSON.parse(cleanVenue);
           if (parsedVenue?.wants_venue && typeof parsedVenue.venue_type === "string" && parsedVenue.venue_type) {
@@ -1121,10 +1144,15 @@ Return ONLY valid JSON, no preamble: {"wants_venue": true or false, "venue_type"
             // deliver the actual result as the reply below — never claim
             // delivery before there's something real to deliver.
             try {
-              const { text: rawHold } = await generateText({
-                model: anthropic("claude-haiku-4-5-20251001"),
-                prompt: `You are Co, texting someone. They just asked about finding ${requestedCount > 1 ? `${requestedCount} ${venueType}s` : `a ${venueType}`}. You're about to go actually look them up for them — send a brief, warm, personalized "give me a sec" acknowledgment, referencing what they're actually looking for, not generic. Don't claim you've found anything yet. One short sentence. No exclamation points, no em dashes. Under 100 characters.`,
-              });
+              const { text: rawHold } = await propagateAttributes(
+                { userId: user.id, traceName: "co-test.webhooks.venueRequest.holdMessage" },
+                () =>
+                  generateText({
+                    model: anthropic("claude-haiku-4-5-20251001"),
+                    experimental_telemetry: { isEnabled: true, functionId: "co-test.webhooks.venueRequest.holdMessage" },
+                    prompt: `You are Co, texting someone. They just asked about finding ${requestedCount > 1 ? `${requestedCount} ${venueType}s` : `a ${venueType}`}. You're about to go actually look them up for them — send a brief, warm, personalized "give me a sec" acknowledgment, referencing what they're actually looking for, not generic. Don't claim you've found anything yet. One short sentence. No exclamation points, no em dashes. Under 100 characters.`,
+                  }),
+              );
               const holdMessage = capMessageLength(rawHold, 100);
               await pool.query(
                 `INSERT INTO co_memories (user_id, memory_type, content) VALUES ($1, 'text_exchange', $2)`,
@@ -1149,10 +1177,15 @@ Return ONLY valid JSON, no preamble: {"wants_venue": true or false, "venue_type"
               // things needs the room to actually say all of them, not a
               // fight against an SMS-length budget meant for small talk.
               try {
-                const { text: rawIntro } = await generateText({
-                  model: anthropic("claude-haiku-4-5-20251001"),
-                  prompt: `You are Co, texting someone. You just found ${venues.length} real ${venueType}${venues.length > 1 ? "s" : ""} for them${venues.length < requestedCount ? ` — they asked for ${requestedCount}, this is genuinely all that came back as a solid match, say so honestly` : ""}. Write ONE short, warm intro sentence to go right before a list (the list itself follows separately after your sentence — do not write the list yourself, do not include any links). No exclamation points, no em dashes. Under 150 characters.`,
-                });
+                const { text: rawIntro } = await propagateAttributes(
+                  { userId: user.id, traceName: "co-test.webhooks.venueRequest.introMessage" },
+                  () =>
+                    generateText({
+                      model: anthropic("claude-haiku-4-5-20251001"),
+                      experimental_telemetry: { isEnabled: true, functionId: "co-test.webhooks.venueRequest.introMessage" },
+                      prompt: `You are Co, texting someone. You just found ${venues.length} real ${venueType}${venues.length > 1 ? "s" : ""} for them${venues.length < requestedCount ? ` — they asked for ${requestedCount}, this is genuinely all that came back as a solid match, say so honestly` : ""}. Write ONE short, warm intro sentence to go right before a list (the list itself follows separately after your sentence — do not write the list yourself, do not include any links). No exclamation points, no em dashes. Under 150 characters.`,
+                    }),
+                );
                 const introLine = capMessageLength(rawIntro, 150);
                 const listBlock = venues.map((v) => `${v.name} — ${v.mapsUrl}`).join("\n\n");
                 venueDeliveryMessage = `${introLine}\n\n${listBlock}`;
@@ -1223,9 +1256,13 @@ Return ONLY valid JSON, no preamble: {"wants_venue": true or false, "venue_type"
             ? `\nStill missing from what you know about them: ${coverage.missing_topics.map((t) => RAPPORT_TOPIC_DESCRIPTIONS[t]).join("; ")}. If it fits naturally off what they just said, work ONE of these in as a genuine follow-up question — not a survey, and don't force it if the conversation is clearly headed somewhere else right now.\n`
             : "";
 
-        const { text: reply } = await generateText({
-          model: anthropic("claude-haiku-4-5-20251001"),
-          prompt: `${personaPrompt ?? "You are Co, an exclusive life concierge."}
+        const { text: reply } = await propagateAttributes(
+          { userId: user.id, traceName: "co-test.webhooks.generateReply" },
+          () =>
+            generateText({
+              model: anthropic("claude-haiku-4-5-20251001"),
+              experimental_telemetry: { isEnabled: true, functionId: "co-test.webhooks.generateReply" },
+              prompt: `${personaPrompt ?? "You are Co, an exclusive life concierge."}
 
 You are having this specific exchange over text message, not a phone call — the phase structure and pacing above describe a live call; over text, just be genuinely Co: the same listening style, the same voice, the same principles, picking up wherever this conversation actually is.
 
@@ -1240,7 +1277,8 @@ ${recommendationContext}${venueContext}${callOfferContext}
 Ground everything ONLY in the information above and what has actually been said in this conversation — never state or imply a specific personal detail, preference, or fact about them that isn't listed above or wasn't actually said in this thread. This includes real venues and businesses: never name a specific one unless it's given to you above as something you actually found — if you don't have a real one, describe what you'd look for, don't guess a plausible-sounding name. If you don't have something, ask rather than assume.
 
 Keep THIS reply short — one text-message-length turn, not a call-length response. A sentence or two. No exclamation points, no em dashes. This is a text message, not a paragraph — but if you're relaying a real find (a name, a reason, a link), give it the room it actually needs rather than cutting it short.`,
-        });
+            }),
+        );
         // A genuinely long reply gets sent as two natural texts (a real
         // pause between them) instead of being hard-truncated and silently
         // losing whatever didn't fit — see splitIntoMessages.
@@ -1277,14 +1315,19 @@ Keep THIS reply short — one text-message-length turn, not a call-length respon
       // then thought it had offered something the user was never shown.
       if (shouldOfferCall) {
         try {
-          const { text: rawOfferCheck } = await generateText({
-            model: anthropic("claude-haiku-4-5-20251001"),
-            prompt: `Does this text message actually offer, invite, or gesture toward a phone call — in any wording, even indirectly (e.g. "I'm here if you want to talk this through")? Not just related to talking or listening in general — specifically about a phone call.
+          const { text: rawOfferCheck } = await propagateAttributes(
+            { userId: user.id, traceName: "co-test.webhooks.callOfferCheck" },
+            () =>
+              generateText({
+                model: anthropic("claude-haiku-4-5-20251001"),
+                experimental_telemetry: { isEnabled: true, functionId: "co-test.webhooks.callOfferCheck" },
+                prompt: `Does this text message actually offer, invite, or gesture toward a phone call — in any wording, even indirectly (e.g. "I'm here if you want to talk this through")? Not just related to talking or listening in general — specifically about a phone call.
 
 Message: "${cappedReply}"
 
 Return ONLY "yes" or "no".`,
-          });
+              }),
+          );
           const actuallyOffered = rawOfferCheck.trim().toLowerCase().startsWith("yes");
           if (actuallyOffered) {
             await pool

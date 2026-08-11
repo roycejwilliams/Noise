@@ -336,6 +336,7 @@ async function filterByStatedAsk<
   try {
     const { text: raw } = await generateText({
       model: anthropic("claude-haiku-4-5-20251001"),
+      experimental_telemetry: { isEnabled: true, functionId: "matching.filterByStatedAsk" },
       prompt: `Someone wants to be grouped with people who match this: "${ask.text}"
 
 Here is what's known about each candidate, one per line:

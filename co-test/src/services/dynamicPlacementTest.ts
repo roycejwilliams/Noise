@@ -187,7 +187,11 @@ Return ONLY valid JSON, no preamble: {"profiles": [{"life_chapters": ["new_to_ci
 
   for (let attempt = 0; attempt < 2; attempt++) {
     try {
-      const { text: raw } = await generateText({ model: anthropic("claude-haiku-4-5-20251001"), prompt });
+      const { text: raw } = await generateText({
+        model: anthropic("claude-haiku-4-5-20251001"),
+        experimental_telemetry: { isEnabled: true, functionId: "co-test.dynamicPlacementTest.generateFillerProfiles" },
+        prompt,
+      });
       const clean = raw.replace(/```json|```/g, "").trim();
       const parsed = JSON.parse(clean);
       const rawProfiles: RawGeneratedProfile[] = Array.isArray(parsed?.profiles) ? parsed.profiles : [];

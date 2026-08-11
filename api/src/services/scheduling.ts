@@ -39,6 +39,7 @@ export async function generateCandidateWindows(
   try {
     const { text: raw } = await generateText({
       model: anthropic("claude-sonnet-4-6"),
+      experimental_telemetry: { isEnabled: true, functionId: "scheduling.generateCandidateWindows" },
       prompt: `You are Co, scheduling a "${venueType}" circle moment.
 
 Today's date is ${today.toDateString()}.

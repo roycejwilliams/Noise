@@ -163,6 +163,7 @@ export async function createMomentForCircle(circle_id: string) {
 
   const { text: rawMoment } = await generateText({
     model: anthropic("claude-sonnet-4-6"),
+    experimental_telemetry: { isEnabled: true, functionId: "co-test.venues.createMomentForCircle" },
     prompt: `You are Co, a life concierge creating a curated real-world experience for a small circle of people.
 
 Circle details:

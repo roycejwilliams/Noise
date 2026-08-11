@@ -1,5 +1,6 @@
 import { anthropic } from "@ai-sdk/anthropic";
 import { generateText, Output } from "ai";
+import { propagateAttributes } from "@langfuse/tracing";
 import type { RequestHandler } from "express";
 import { Router } from "express";
 import rateLimit from "express-rate-limit";
@@ -31,10 +32,14 @@ export function createAiRouter(
       try {
         const { description } = req.body;
 
-        const { output } = await generateText({
-          model: anthropic("claude-sonnet-4-6"),
-          maxOutputTokens: 1024,
-          output: Output.object({
+        const { output } = await propagateAttributes(
+          { userId: req.user?.id, traceName: "ai.generate" },
+          () =>
+            generateText({
+              model: anthropic("claude-sonnet-4-6"),
+              maxOutputTokens: 1024,
+              experimental_telemetry: { isEnabled: true, functionId: "ai.generate" },
+              output: Output.object({
             schema: z.object({
               generate: z.object({
                 principles: z.array(z.string()),
@@ -58,7 +63,8 @@ export function createAiRouter(
 
         Generate between 3 and 6 items for each array. Vibes between 5 and 10 with 1 word describing the event.
         Keep each item to 1-2 sentences. Match the tone of the description.`,
-        });
+            }),
+        );
 
         const data = await output;
         const text = data.generate;
@@ -128,9 +134,13 @@ export function createAiRouter(
             : null;
 
         //Co writes the memory
-        const { text: recap } = await generateText({
-          model: anthropic("claude-sonnet-4-6"),
-          prompt: `Write a short, evocative 2-3 sentence recap of this event. Make it feel like a memory — cinematic, sensory, present tense. Do not use clichés.
+        const { text: recap } = await propagateAttributes(
+          { userId: req.user?.id, traceName: "ai.recap.writeRecap" },
+          () =>
+            generateText({
+              model: anthropic("claude-sonnet-4-6"),
+              experimental_telemetry: { isEnabled: true, functionId: "ai.recap.writeRecap" },
+              prompt: `Write a short, evocative 2-3 sentence recap of this event. Make it feel like a memory — cinematic, sensory, present tense. Do not use clichés.
               Event: ${moments_name}
               Location: ${location_name}
               Description: ${description}
@@ -141,7 +151,8 @@ export function createAiRouter(
               ${photoCount > 0 ? `Photos captured: ${photoCount}` : ""}
 
               Return ONLY the recap text, no preamble, no quotes.`,
-        });
+            }),
+        );
 
         //Co saves it
         await pool.query("UPDATE moments SET recap = $1 WHERE id = $2", [
@@ -160,9 +171,13 @@ export function createAiRouter(
 
         for (const profile of attendeeProfiles.rows) {
           // Extract psychographic updates from the recap
-          const { text: rawUpdates } = await generateText({
-            model: anthropic("claude-sonnet-4-6"),
-            prompt: `You are Co analyzing what was learned about a user from their recent circle experience.
+          const { text: rawUpdates } = await propagateAttributes(
+            { userId: profile.attendee_id, traceName: "ai.recap.updateAttendeeProfile" },
+            () =>
+              generateText({
+                model: anthropic("claude-sonnet-4-6"),
+                experimental_telemetry: { isEnabled: true, functionId: "ai.recap.updateAttendeeProfile" },
+                prompt: `You are Co analyzing what was learned about a user from their recent circle experience.
 
           Experience recap: "${recap}"
           Experience vibes: ${vibes?.join(", ")}
@@ -178,7 +193,8 @@ export function createAiRouter(
             "goals_reinforced": ["any goals this experience helped with"],
             "blockers_reduced": ["any blockers this experience addressed"]
           }`,
-          });
+              }),
+          );
 
           try {
             const clean = rawUpdates.replace(/```json|```/g, "").trim();
