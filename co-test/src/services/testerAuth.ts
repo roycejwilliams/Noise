@@ -46,7 +46,15 @@ export async function startLogin(rawPhone: string): Promise<{ success: boolean; 
   // sendSMS catches its own errors internally and never throws (matches
   // every other Sendblue send in this codebase) — a delivery failure here
   // just means the tester never gets a code and retries "Send code".
-  await sendSMS({ phone_number, otp_code: otp.toString() });
+  //
+  // login: true is required, not decorative — sendSMS is one big if-chain
+  // keyed entirely on boolean flags (login/register/resent/etc.); with none
+  // set, it matches no branch, never calls Sendblue, and still resolves
+  // successfully. Confirmed the hard way: this call used to omit it, so
+  // /api/login/start always reported success with zero messages ever
+  // reaching Sendblue's own API — not a delivery failure, a send that never
+  // happened.
+  await sendSMS({ phone_number, otp_code: otp.toString(), login: true });
 
   return { success: true };
 }
