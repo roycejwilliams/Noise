@@ -947,6 +947,23 @@ Return ONLY the classification, nothing else.`,
         const pendingOffer = pendingOfferResult.rows[0] ?? null;
         const hasPendingOffer = !!pendingOffer;
 
+        // Feeds the thin-profile first-message call offer below. Count-based
+        // rather than existence-based on purpose — unlike co-test's version
+        // of this same check, this message's own text_exchange row was
+        // already written above (Step 3), before this point, so "any prior
+        // activity exists" would always be true even for a genuine first
+        // message. count <= 1 means the only row on file is this message's
+        // own.
+        const [profileResult, activityCountResult] = await Promise.all([
+          pool.query(`SELECT life_chapters FROM co_profiles WHERE user_id = $1`, [user.id]),
+          pool.query(
+            `SELECT count(*) FROM co_memories WHERE user_id = $1 AND memory_type IN ('text_exchange', 'call_transcript')`,
+            [user.id],
+          ),
+        ]);
+        const hasProfile = !!profileResult.rows[0]?.life_chapters?.length;
+        const isFirstRealMessage = parseInt(activityCountResult.rows[0].count, 10) <= 1;
+
         // Topic-aware, not a permanent opt-out and not a blanket timer either
         // — per explicit product decision, Co should stay free to offer a
         // call about a genuinely new situation at any time, but never
@@ -1038,15 +1055,32 @@ Return ONLY the classification, nothing else.`,
           // failed dial attempt should never leave the conversation silent.
         }
 
+        // Two independent reasons to make the same secondary, folded-in
+        // gesture — never a standalone question, per the note below. One is
+        // content-driven (would_benefit) and can fire on any message from
+        // anyone. The other is channel-driven, not content-driven: someone
+        // with no profile yet, on their first real message, gets the
+        // gesture regardless of what that message actually is — a real
+        // voice call just produces a far richer initial profile than short
+        // texts ever will, and this is the one moment to offer that before
+        // the conversation settles into text. Fires at most once per person
+        // (isFirstRealMessage is only ever true for message #1), so it
+        // can't collide with the topic-aware/burst-limiter rules above that
+        // govern everyone's ongoing conversations.
+        const isThinProfileFirstMessage = !hasProfile && isFirstRealMessage && callAction === "none";
+        const shouldOfferCall =
+          !hasPendingOffer && !recentOfferBurstActive && (callAction === "would_benefit" || isThinProfileFirstMessage);
+
         // Folded into the main reply below, not a separate message that
         // replaces one — "want to hop on a call?" should never be the ENTIRE
         // response to something significant, with no acknowledgment of what
         // was actually said. The offer is secondary; genuinely responding is
         // the priority, per explicit product decision.
-        const shouldOfferCall = !hasPendingOffer && !recentOfferBurstActive && callAction === "would_benefit";
-        const callOfferContext = shouldOfferCall
-          ? `\nWhat they just shared could genuinely benefit from a real conversation by voice — but that is not the priority. First, actually respond to what they said: reflect it. Only if it still feels right after that, offer a call as a warm gesture, not a logistics question — the way someone says "I'm here if you ever want to actually talk this through," not "are you free for a call today or tomorrow." Keep it brief and secondary, never in place of a real response.`
-          : "";
+        const callOfferContext = !shouldOfferCall
+          ? ""
+          : isThinProfileFirstMessage
+            ? `\nThis is the first real thing they've shared and nothing is known about them yet — first, actually respond to what they said. Then offer a quick call as a warm, low-pressure way to actually get to know them — a real conversation just gets Co so much further than texting back and forth. Keep it brief and secondary, never in place of a real response.`
+            : `\nWhat they just shared could genuinely benefit from a real conversation by voice — but that is not the priority. First, actually respond to what they said: reflect it. Only if it still feels right after that, offer a call as a warm gesture, not a logistics question — the way someone says "I'm here if you ever want to actually talk this through," not "are you free for a call today or tomorrow." Keep it brief and secondary, never in place of a real response.`;
 
         // Step 5 — Two separate context sources, since they answer different
         // questions. Topical similarity search answers "what's relevant to

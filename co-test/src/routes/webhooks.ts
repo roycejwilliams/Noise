@@ -834,7 +834,7 @@ export function createWebhooksRouter(io: Server): express.Router {
       // record the call already wrote (goals/blockers/city/intent) and isn't
       // subject to that eviction, so it's queried directly instead of being
       // re-derived from a shrinking memory window.
-      const [profileResult, recentTextResult] = await Promise.all([
+      const [profileResult, recentTextResult, priorActivityResult] = await Promise.all([
         pool.query(
           `SELECT life_chapters, goals, blockers, availability_pattern, city, emotional_state, intent
            FROM co_profiles WHERE user_id = $1`,
@@ -846,9 +846,18 @@ export function createWebhooksRouter(io: Server): express.Router {
            ORDER BY created_at DESC LIMIT 8`,
           [user.id],
         ),
+        // Feeds the thin-profile first-topic call offer below — must be read
+        // before this message's own "User said" row is inserted, so it
+        // reflects state as of BEFORE this message, not including it.
+        pool.query(
+          `SELECT 1 FROM co_memories WHERE user_id = $1 AND memory_type IN ('text_exchange', 'call_transcript') LIMIT 1`,
+          [user.id],
+        ),
       ]);
 
       const profile = profileResult.rows[0] ?? null;
+      const hasProfile = !!profile?.life_chapters?.length;
+      const isFirstRealMessage = !priorActivityResult.rows[0];
       const latestIntent = Array.isArray(profile?.intent) && profile.intent.length
         ? profile.intent[profile.intent.length - 1]
         : null;
@@ -1002,6 +1011,22 @@ Return ONLY the classification, nothing else.`,
       );
       const recentOfferBurstActive = parseInt(recentOfferCountResult.rows[0].count, 10) > 0;
 
+      // Two independent reasons to make the same secondary, folded-in
+      // gesture — never a standalone question, per the note below. One is
+      // content-driven (would_benefit) and can fire on any message from
+      // anyone. The other is channel-driven, not content-driven: someone
+      // with no profile yet, on their first real message, gets the gesture
+      // regardless of what that message actually is — a real voice call
+      // just produces a far richer initial profile than short texts ever
+      // will, and this is the one moment to offer that before the
+      // conversation settles into text. Fires at most once per person
+      // (isFirstRealMessage is only ever true for message #1), so it can't
+      // collide with the topic-aware/burst-limiter rules above that govern
+      // everyone's ongoing conversations.
+      const isThinProfileFirstMessage = !hasProfile && isFirstRealMessage && callAction === "none";
+      const shouldOfferCall =
+        !hasPendingOffer && !recentOfferBurstActive && (callAction === "would_benefit" || isThinProfileFirstMessage);
+
       // Folded into the main reply below now, not a separate message that
       // replaces one — a real conversation showed this short-circuiting the
       // reply entirely, so "want to hop on a call?" was the ENTIRE response
@@ -1009,10 +1034,11 @@ Return ONLY the classification, nothing else.`,
       // actually said. The offer is secondary now; genuinely responding
       // (reflecting, surfacing a real recommendation/venue if one exists)
       // is the priority, per explicit product decision.
-      const shouldOfferCall = !hasPendingOffer && !recentOfferBurstActive && callAction === "would_benefit";
-      const callOfferContext = shouldOfferCall
-        ? `\nWhat they just shared could genuinely benefit from a real conversation by voice — but that is not the priority. First, actually respond to what they said: reflect it, and if you have something concrete to offer below (a real recommendation or a real place you found), lead with that instead of a call. Only if it still feels right after that, offer a call as a warm gesture, not a logistics question — the way someone says "I'm here if you ever want to actually talk this through," not "are you free for a call today or tomorrow." Keep it brief and secondary, never in place of a real response. Do not place any call, just make the gesture.`
-        : "";
+      const callOfferContext = !shouldOfferCall
+        ? ""
+        : isThinProfileFirstMessage
+          ? `\nThis is the first real thing they've shared and nothing is known about them yet — first, actually respond to what they said. Then offer a quick call as a warm, low-pressure way to actually get to know them — a real conversation just gets Co so much further than texting back and forth. Keep it brief and secondary, never in place of a real response. Do not place any call, just make the gesture.`
+          : `\nWhat they just shared could genuinely benefit from a real conversation by voice — but that is not the priority. First, actually respond to what they said: reflect it, and if you have something concrete to offer below (a real recommendation or a real place you found), lead with that instead of a call. Only if it still feels right after that, offer a call as a warm gesture, not a logistics question — the way someone says "I'm here if you ever want to actually talk this through," not "are you free for a call today or tomorrow." Keep it brief and secondary, never in place of a real response. Do not place any call, just make the gesture.`;
 
       if (shouldTriggerCall) {
         const callResult = await triggerCall(user.id);
