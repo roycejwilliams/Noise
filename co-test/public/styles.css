@@ -1,4 +1,5 @@
 :root {
+  --page-bg: #f2f1f6;
   --bg: #fbfbf9;
   --bg-raised: #ffffff;
   --bg-subtle: #f5f4f1;
@@ -8,9 +9,11 @@
   --text-tertiary: #a4a297;
   --border: #e7e5de;
   --border-strong: #d6d3c9;
-  --accent: #3d3dc7;
-  --accent-bg: #eeeefb;
-  --accent-border: #d6d6f5;
+  /* Primary accent is violet (same hue as --purple below) rather than the
+     old blue-indigo — matches the reference product's sidebar/CTA color. */
+  --accent: #7c3aed;
+  --accent-bg: #f3edfe;
+  --accent-border: #ddccfa;
   --green: #1f8a4c;
   --green-bg: #e9f6ee;
   --red: #c23a2e;
@@ -35,21 +38,24 @@
   --space-7: 48px;
   --space-8: 64px;
 
-  /* Dashboard shell — sidebar nav + card components. Derived from the
-     existing palette above rather than a new hue: the sidebar surface
-     reuses --text's value, hero cards and the sidebar's active-item
-     highlight both reuse --accent, so the two visually rhyme. */
+  /* Dashboard shell — sidebar nav + card components. Sidebar is now a light
+     surface (matching --bg-raised) rather than a dark panel, so the active
+     nav item reads as a tinted highlight (--accent-bg + --accent text)
+     instead of a solid fill — both derived from --accent so they rhyme
+     with the hero stat card below. */
   --sidebar-width: 236px;
   --sidebar-width-collapsed: 64px;
-  --sidebar-bg: #16160f;
-  --sidebar-text: #f5f4f1;
-  --sidebar-text-muted: rgba(245, 244, 241, 0.55);
-  --sidebar-active-bg: var(--accent);
-  --sidebar-active-text: #ffffff;
-  --sidebar-border: rgba(255, 255, 255, 0.08);
+  --sidebar-bg: var(--bg-raised);
+  --sidebar-text: var(--text);
+  --sidebar-text-muted: var(--text-secondary);
+  --sidebar-active-bg: var(--accent-bg);
+  --sidebar-active-text: var(--accent);
+  --sidebar-border: var(--border);
   --hero-card-bg: var(--accent);
   --hero-card-text: #ffffff;
   --card-shadow: 0 1px 2px rgba(22, 22, 15, 0.06);
+  /* The outer app-shell's own shadow, floating it above --page-bg. */
+  --shell-shadow: 0 1px 2px rgba(22, 22, 15, 0.04), 0 20px 40px -24px rgba(22, 22, 15, 0.22);
 }
 
 * {
@@ -68,7 +74,10 @@ body {
   -webkit-font-smoothing: antialiased;
   text-rendering: optimizeLegibility;
   color: var(--text);
-  background: var(--bg);
+  /* Gray canvas behind the app-shell card below. login.html paints its own
+     full-viewport background over this (see .login-wrap), so this is only
+     ever visible as the frame around the sidebar-nav pages. */
+  background: var(--page-bg);
   font-size: 15px;
   line-height: 1.5;
 }
@@ -95,6 +104,16 @@ h1, h2, h3 {
   flex: 1;
   min-height: 0;
   display: flex;
+  margin: var(--space-4);
+  background: var(--bg-raised);
+  border-radius: var(--radius-lg);
+  box-shadow: var(--shell-shadow);
+  /* No overflow:hidden here on purpose — phone.html's off-canvas sidebar
+     drawer below 430px is position:fixed, and an overflow:hidden ancestor
+     would clip it to this box instead of the viewport. Corner rounding
+     still reads correctly without it because .sidebar/.app-header/
+     .scroll-area all share this same white background — see the
+     border-radius carried on .sidebar and .app-header below. */
 }
 
 .app-main {
@@ -111,13 +130,16 @@ h1, h2, h3 {
   display: flex;
   flex-direction: column;
   background: var(--sidebar-bg);
+  border-right: 1px solid var(--sidebar-border);
+  border-top-left-radius: var(--radius-lg);
+  border-bottom-left-radius: var(--radius-lg);
   overflow-y: auto;
 }
 
 .sidebar-brand {
   display: flex;
   align-items: center;
-  gap: var(--space-2);
+  gap: var(--space-3);
   padding: var(--space-5) var(--space-5) var(--space-4);
   color: var(--sidebar-text);
   font-size: 14px;
@@ -125,6 +147,23 @@ h1, h2, h3 {
   letter-spacing: -0.01em;
   border-bottom: 1px solid var(--sidebar-border);
   margin-bottom: var(--space-4);
+}
+
+.sidebar-brand-mark {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 26px;
+  height: 26px;
+  flex-shrink: 0;
+  border-radius: 8px;
+  background: var(--accent);
+  color: #ffffff;
+}
+
+.sidebar-brand-mark svg {
+  width: 15px;
+  height: 15px;
 }
 
 .sidebar-nav {
@@ -148,13 +187,14 @@ h1, h2, h3 {
 }
 
 .sidebar-item:hover {
-  background: var(--sidebar-border);
+  background: var(--bg-subtle);
   color: var(--sidebar-text);
 }
 
 .sidebar-item.active {
   background: var(--sidebar-active-bg);
   color: var(--sidebar-active-text);
+  font-weight: 600;
 }
 
 .sidebar-item-inert {
@@ -739,8 +779,8 @@ button {
 .download-button {
   background: var(--bg-raised);
   border: 1px solid var(--border-strong);
-  border-radius: var(--radius-sm);
-  padding: 8px 16px;
+  border-radius: var(--radius-pill);
+  padding: 8px 18px;
   font-size: 13px;
   font-weight: 500;
   color: var(--text);
@@ -756,6 +796,22 @@ button {
 .download-button:disabled {
   opacity: 0.5;
   cursor: default;
+}
+
+/* Primary CTA — reserved for the single most emphasized action on a given
+   screen (e.g. login's Send code/Verify, phone.html's Message Co to start).
+   Layered on top of .download-button, same pill shape, filled with --accent
+   instead of a neutral border so it reads as the one thing to click. */
+.button-primary {
+  background: var(--accent);
+  border-color: var(--accent);
+  color: #ffffff;
+  font-weight: 600;
+}
+
+.button-primary:hover {
+  background: #6b2fd6;
+  border-color: #6b2fd6;
 }
 
 .session-tag-row {
@@ -1172,6 +1228,20 @@ button {
 /* Small phones — tighten spacing so the header and control bar don't
    crowd the call button off the edge of the screen. */
 @media (max-width: 430px) {
+  /* Real phones get the shell edge-to-edge, not floating with margin — every
+     pixel matters on phone.html, the one page actually used on a real
+     device during a real test (see its own comment further below). */
+  .app-shell {
+    margin: 0;
+    border-radius: 0;
+    box-shadow: none;
+  }
+
+  .sidebar {
+    border-top-left-radius: 0;
+    border-bottom-left-radius: 0;
+  }
+
   .app-header {
     padding: var(--space-4);
   }
@@ -1576,13 +1646,14 @@ button {
   padding: 13px 22px;
   font-size: 15px;
   font-weight: 600;
-  background: var(--text);
-  color: var(--bg);
-  border: 1px solid var(--text);
+  background: var(--accent);
+  color: #ffffff;
+  border: 1px solid var(--accent);
 }
 
 .message-co-button:hover {
-  background: #000;
+  background: #6b2fd6;
+  border-color: #6b2fd6;
 }
 
 .message-co-button.hidden {
@@ -1988,7 +2059,7 @@ button {
   align-items: center;
   justify-content: center;
   padding: var(--space-6);
-  background: var(--bg);
+  background: var(--page-bg);
 }
 
 .login-card {

@@ -61,8 +61,13 @@ export function renderSidebar(active: SidebarPage): void {
     `;
   }).join("");
 
+  const brandMark = `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><polyline points="4 12.5 9.5 18 20 6"/></svg>`;
+
   container.innerHTML = `
-    <div class="sidebar-brand"><span>Co (test)</span></div>
+    <div class="sidebar-brand">
+      <span class="sidebar-brand-mark">${brandMark}</span>
+      <span>Co (test)</span>
+    </div>
     <nav class="sidebar-nav">${navHtml}</nav>
   `;
 
