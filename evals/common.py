@@ -46,6 +46,61 @@ def matches_function_id(obs_name: str, function_id: str) -> bool:
     return obs_name == function_id or obs_name.startswith(function_id + ":")
 
 
+# functionIds considered "a reply Co sends to a user" — edit this list as new
+# message-generation call sites are added. Shared by every eval that scores
+# reply quality (faithfulness, answer relevancy, ...) so a new call site only
+# needs to be added once. Classification/parsing generations (*.classify,
+# *.parseTime, *.assess*) are deliberately excluded: they don't produce
+# user-facing text, so these metrics don't apply the same way.
+REPLY_FUNCTION_IDS = [
+    "sendblue.generateReply",
+    "sendblue.momentResponseAck",
+    "co.postCallFollowUp",
+    "co.sendMissedCallFollowUp",
+    "co.createMomentForCircle",
+    "server.autoApproveCircle.placementMessage",
+    "server.autoApproveCircle.vcardMessage",
+    "circleApproval.activateCircle.vcardMessage",
+    "circleInvite.generateWarmCircleInviteMessage",
+    "booking.confirmMoment",
+    "co-test.webhooks.generateReply",
+    "co-test.webhooks.postCallFollowUp",
+    "co-test.webhooks.venueRequest.holdMessage",
+    "co-test.webhooks.venueRequest.introMessage",
+    "co-test.recommendation.generate",
+]
+# co.message.* and co.circleMessage.* are dynamic (functionId includes the
+# message_type), so they're matched by prefix instead of exact name below.
+REPLY_FUNCTION_ID_PREFIXES = [
+    "co.message.",
+    "co.circleMessage.",
+]
+
+
+def fetch_reply_candidates(langfuse, limit: int, name_filter: str | None = None):
+    """Fetch recent GENERATION observations that are a reply Co sent to a user.
+
+    name_filter, if given, scores only that one functionId instead of the
+    full REPLY_FUNCTION_IDS list — same override every reply-quality eval
+    script exposes via --name.
+    """
+    # fields defaults to "core,basic" if unspecified — input/output are their
+    # own field group ("io") and come back None without it, silently (no
+    # error), which looks identical to "this trace really has no prompt or
+    # response" downstream.
+    resp = langfuse.api.observations.get_many(type="GENERATION", limit=max(limit * 4, 100), fields="core,basic,io")
+    return [
+        obs for obs in resp.data
+        if obs.name and (
+            (name_filter and matches_function_id(obs.name, name_filter))
+            or (not name_filter and (
+                any(matches_function_id(obs.name, fid) for fid in REPLY_FUNCTION_IDS)
+                or any(obs.name.startswith(p) for p in REPLY_FUNCTION_ID_PREFIXES)
+            ))
+        )
+    ][:limit]
+
+
 def extract_text(io_value) -> str:
     if io_value is None:
         return ""

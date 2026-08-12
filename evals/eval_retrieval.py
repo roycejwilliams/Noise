@@ -93,7 +93,10 @@ async def main(limit: int):
     llm = get_judge_llm()
     metric = ContextPrecisionWithoutReference(llm=llm)
 
-    resp = langfuse.api.observations.get_many(type="GENERATION", limit=max(limit * 4, 100))
+    # fields defaults to "core,basic" if unspecified — input/output need the
+    # "io" field group explicitly or come back None (see common.py's
+    # fetch_reply_candidates for the same fix).
+    resp = langfuse.api.observations.get_many(type="GENERATION", limit=max(limit * 4, 100), fields="core,basic,io")
     candidates = [
         obs for obs in resp.data
         if obs.name and any(matches_function_id(obs.name, fid) for fid in FUNCTION_IDS)

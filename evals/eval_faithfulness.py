@@ -23,36 +23,8 @@ import sys
 from dotenv import load_dotenv
 
 sys.path.insert(0, os.path.dirname(__file__))
-from common import get_langfuse, get_judge_llm, extract_text, matches_function_id
+from common import get_langfuse, get_judge_llm, extract_text, fetch_reply_candidates
 from ragas.metrics.collections import Faithfulness
-
-# functionIds considered "a reply Co sends to a user" — edit this list as new
-# message-generation call sites are added. Classification/parsing generations
-# (*.classify, *.parseTime, *.assess*) are deliberately excluded: they don't
-# produce user-facing text, so faithfulness doesn't apply the same way.
-REPLY_FUNCTION_IDS = [
-    "sendblue.generateReply",
-    "sendblue.momentResponseAck",
-    "co.postCallFollowUp",
-    "co.sendMissedCallFollowUp",
-    "co.createMomentForCircle",
-    "server.autoApproveCircle.placementMessage",
-    "server.autoApproveCircle.vcardMessage",
-    "circleApproval.activateCircle.vcardMessage",
-    "circleInvite.generateWarmCircleInviteMessage",
-    "booking.confirmMoment",
-    "co-test.webhooks.generateReply",
-    "co-test.webhooks.postCallFollowUp",
-    "co-test.webhooks.venueRequest.holdMessage",
-    "co-test.webhooks.venueRequest.introMessage",
-    "co-test.recommendation.generate",
-]
-# co.message.* and co.circleMessage.* are dynamic (functionId includes the
-# message_type), so they're matched by prefix instead of exact name below.
-REPLY_FUNCTION_ID_PREFIXES = [
-    "co.message.",
-    "co.circleMessage.",
-]
 
 
 async def score_one(metric, langfuse, obs):
@@ -84,17 +56,7 @@ async def main(limit: int, name_filter):
     llm = get_judge_llm()
     metric = Faithfulness(llm=llm)
 
-    resp = langfuse.api.observations.get_many(type="GENERATION", limit=max(limit * 4, 100))
-    candidates = [
-        obs for obs in resp.data
-        if obs.name and (
-            (name_filter and matches_function_id(obs.name, name_filter))
-            or (not name_filter and (
-                any(matches_function_id(obs.name, fid) for fid in REPLY_FUNCTION_IDS)
-                or any(obs.name.startswith(p) for p in REPLY_FUNCTION_ID_PREFIXES)
-            ))
-        )
-    ][:limit]
+    candidates = fetch_reply_candidates(langfuse, limit, name_filter)
 
     if not candidates:
         print("No matching generation traces found — check LANGFUSE_* env vars, that the "
