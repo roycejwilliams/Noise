@@ -23,6 +23,7 @@ import {
 } from "../services/profileExtraction.js";
 import sendblue from "../services/sendblue.js";
 import { generateVoiceNote } from "../services/voiceNote.js";
+import { triggerCallForUser } from "../services/callTrigger.js";
 
 // io is injected by the server so call-status and webhook handlers can push
 // real-time state transitions to the connected mobile client.
@@ -198,6 +199,9 @@ async function sendMissedCallFollowUp(
 }
 
 // POST /co/call/:user_id — initiate outbound call to user
+// Dial/AMD/logging logic lives in services/callTrigger.ts, shared with
+// sendblue.ts's texting-triggered call path — this route is now just the
+// HTTP/auth wrapper around it.
 router.post(
   "/call/:user_id",
   authenticateToken,
@@ -211,87 +215,15 @@ router.post(
           .send("Unauthorized: You can only access your own account");
       }
 
-      const userResult = await pool.query(
-        `SELECT u.first_name, u.phone_number, u.subscription_status, cp.hume_chat_group_id
-         FROM users u
-         LEFT JOIN co_profiles cp ON cp.user_id = u.id
-         WHERE u.id = $1`,
-        [user_id],
-      );
-
-      const user = userResult.rows[0];
-
-      if (!user) return res.status(404).send("User not found.");
-
-      if (process.env.NODE_ENV === "production" && user.subscription_status !== "active") {
-        return res.status(403).send("User does not have an active subscription.");
+      const result = await triggerCallForUser(user_id, _io);
+      if (!result.success) {
+        const status = result.error === "User not found." ? 404 : 403;
+        return res.status(status).send(result.error);
       }
-
-      // Inject user identity so Hume sends it back in the webhook (customSessionId → user_id)
-      // first_name is available as {{first_name}} in the Hume EVI system prompt
-      // Resume prior chat group if one exists so Co picks up the conversation where it left off
-      const webhookParams = new URLSearchParams({
-        config_id: process.env.HUME_CONFIG_ID!,
-        api_key: process.env.HUME_API_KEY!,
-        custom_session_id: user_id as string,
-        first_name: user.first_name ?? "",
-      });
-      if (user.hume_chat_group_id) {
-        webhookParams.set("resumed_chat_group_id", user.hume_chat_group_id);
-      }
-      const webhookUrl = `https://api.hume.ai/v0/evi/twilio?${webhookParams.toString()}`;
-      const statusCallbackUrl = `${process.env.API_URL}/co/call-status`;
-
-      const call = await twilioClient.calls.create({
-        to: user.phone_number,
-        from: process.env.TWILIO_PHONE_NUMBER!,
-        url: webhookUrl,
-        statusCallback: statusCallbackUrl,
-        // Twilio's valid event names: initiated, ringing, answered, completed.
-        // "completed" fires once for every terminal CallStatus (completed,
-        // no-answer, busy, failed, canceled) — that's what drives the
-        // immediate missed-call follow-up below.
-        statusCallbackEvent: ["ringing", "answered", "completed"],
-        statusCallbackMethod: "POST",
-        // Ring for 20s before declaring no-answer, so a missed call gets an
-        // immediate follow-up instead of Twilio's 60s default.
-        timeout: 20,
-        // Without this, a voicemail pickup looks identical to a human
-        // answering (CallStatus just becomes "in-progress" either way) — Co
-        // would start talking into an answering machine. Must be ASYNC:
-        // synchronous AMD (the default) holds the call in silence — no TwiML,
-        // no Hume stream — until detection finishes, so a real human who
-        // picks up hears nothing for up to machineDetectionTimeout seconds.
-        // Async AMD lets Twilio call `url` (Hume) immediately, and delivers
-        // AnsweredBy afterward to asyncAmdStatusCallback; see /co/call-status.
-        machineDetection: "DetectMessageEnd",
-        machineDetectionTimeout: 10,
-        asyncAmd: "true",
-        asyncAmdStatusCallback: statusCallbackUrl,
-        asyncAmdStatusCallbackMethod: "POST",
-      });
-
-      // Store call attempt in co_memories so status callback has context
-      const attemptContent = `Co initiated call to ${user.first_name} — call_sid: ${call.sid}`;
-      const attemptMem = await pool.query(
-        `INSERT INTO co_memories (user_id, memory_type, content) VALUES ($1, 'call_transcript', $2) RETURNING id`,
-        [user_id, attemptContent],
-      );
-      generateEmbedding(attemptContent)
-        .then((emb) =>
-          pool.query(
-            `UPDATE co_memories SET content_embedding = $1::vector WHERE id = $2`,
-            [`[${emb.join(",")}]`, attemptMem.rows[0].id],
-          ),
-        )
-        .catch((err) => console.error("Memory embedding failed (non-fatal):", err));
-
-      // Tell the app Co's call is on its way — transitions voice screen to Waiting state
-      _io?.to(`user:${user_id}`).emit("co:call_initiated", { call_sid: call.sid });
 
       return res.status(200).send({
         success: true,
-        call_sid: call.sid,
+        call_sid: result.call_sid,
       });
     } catch (error) {
       next(error);

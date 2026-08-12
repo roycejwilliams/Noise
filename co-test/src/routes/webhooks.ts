@@ -834,7 +834,7 @@ export function createWebhooksRouter(io: Server): express.Router {
       // record the call already wrote (goals/blockers/city/intent) and isn't
       // subject to that eviction, so it's queried directly instead of being
       // re-derived from a shrinking memory window.
-      const [profileResult, recentTextResult, priorActivityResult] = await Promise.all([
+      const [profileResult, recentTextResult] = await Promise.all([
         pool.query(
           `SELECT life_chapters, goals, blockers, availability_pattern, city, emotional_state, intent
            FROM co_profiles WHERE user_id = $1`,
@@ -846,18 +846,9 @@ export function createWebhooksRouter(io: Server): express.Router {
            ORDER BY created_at DESC LIMIT 8`,
           [user.id],
         ),
-        // Determines whether to ask the call-or-text question below — must
-        // be read before this message's own "User said" row is inserted,
-        // so it reflects state as of BEFORE this message, not including it.
-        pool.query(
-          `SELECT 1 FROM co_memories WHERE user_id = $1 AND memory_type IN ('text_exchange', 'call_transcript') LIMIT 1`,
-          [user.id],
-        ),
       ]);
 
       const profile = profileResult.rows[0] ?? null;
-      const hasProfile = !!profile?.life_chapters?.length;
-      const isFirstContact = !priorActivityResult.rows[0];
       const latestIntent = Array.isArray(profile?.intent) && profile.intent.length
         ? profile.intent[profile.intent.length - 1]
         : null;
@@ -923,7 +914,7 @@ export function createWebhooksRouter(io: Server): express.Router {
       // explicitly said "don't call me" multiple times. Must compare
       // timestamps, not just existence.
       const pendingOfferResult = await pool.query(
-        `SELECT p.id FROM co_memories p
+        `SELECT p.id, p.content FROM co_memories p
          WHERE p.user_id = $1 AND p.memory_type = 'call_offer_pending'
          AND NOT EXISTS (
            SELECT 1 FROM co_memories r
@@ -932,7 +923,25 @@ export function createWebhooksRouter(io: Server): express.Router {
          ORDER BY p.created_at DESC LIMIT 1`,
         [user.id],
       );
-      const hasPendingOffer = !!pendingOfferResult.rows[0];
+      const pendingOffer = pendingOfferResult.rows[0] ?? null;
+      const hasPendingOffer = !!pendingOffer;
+
+      // Topic-aware, not a permanent opt-out and not a blanket timer either —
+      // per explicit product decision, Co should stay free to offer a call
+      // about a genuinely new situation at any time, but never re-offer about
+      // something already declined. Each declined offer's own text (it
+      // already reflects what was being discussed, see callOfferContext
+      // below) is stored, and the classifier is given that list directly so
+      // the SAME call decides both "would voice help" and "haven't we
+      // already asked about this" in one pass, instead of a second
+      // similarity check.
+      const declinedTopicsResult = await pool.query(
+        `SELECT content FROM co_memories WHERE user_id = $1 AND memory_type = 'call_offer_declined_topic' ORDER BY created_at DESC LIMIT 20`,
+        [user.id],
+      );
+      const declinedTopicsContext = declinedTopicsResult.rows.length
+        ? `\n\nCo has previously offered a call about the following, and the user said no each time:\n${declinedTopicsResult.rows.map((r: any) => `- ${r.content}`).join("\n")}\nIf what they're describing now is essentially the same situation as any of these, classify as "none" instead of "would_benefit" — don't re-offer about something already declined. A genuinely different, new situation is free to classify as "would_benefit" regardless of these.`
+        : "";
 
       const { text: rawCallClassification } = await propagateAttributes(
         { userId: user.id, traceName: "co-test.webhooks.callOffer.classify" },
@@ -947,7 +956,7 @@ Their message: "${content}"
 Classify as ONE of:
 - "explicit_request" — they are directly asking Co to call them, or asking to talk by phone
 ${hasPendingOffer ? '- "accepts_offer" — they are saying yes to the call Co just offered\n- "declines_offer" — they are saying no to the call Co just offered\n' : ""}- "would_benefit" — none of the above, but what they're describing is complex, emotional, or hard to unpack over short texts, and voice would genuinely help
-- "none" — normal conversation, no call is relevant
+- "none" — normal conversation, no call is relevant${declinedTopicsContext}
 
 Return ONLY the classification, nothing else.`,
           }),
@@ -966,22 +975,33 @@ Return ONLY the classification, nothing else.`,
           `INSERT INTO co_memories (user_id, memory_type, content) VALUES ($1, 'call_offer_resolved', $2)`,
           [user.id, callAction],
         ).catch((err: any) => console.error("webhooks: call_offer_resolved memory write failed (non-fatal):", err?.message ?? err));
+
+        if (callAction === "declines_offer" && pendingOffer.content) {
+          await pool.query(
+            `INSERT INTO co_memories (user_id, memory_type, content) VALUES ($1, 'call_offer_declined_topic', $2)`,
+            [user.id, pendingOffer.content],
+          ).catch((err: any) => console.error("webhooks: call_offer_declined_topic memory write failed (non-fatal):", err?.message ?? err));
+        }
       }
 
-      // Cooldown — nothing previously throttled how often a call could be
-      // offered, and a real conversation showed it firing repeatedly within
-      // minutes, including once directly in response to "Why is it always
-      // a phone call?" (a complaint about the pattern itself, misread as
-      // more evidence a call would help). Not a permanent "never ask again"
-      // — that's not what was asked for either — just a minimum real gap
-      // between offers regardless of how many messages qualify in between.
+      const shouldTriggerCall = callAction === "explicit_request" || (hasPendingOffer && callAction === "accepts_offer");
+
+      // Burst limiter — separate from, and in addition to, the topic-aware
+      // suppression above. Topic-matching only stops Co re-offering about the
+      // SAME thing; on its own it does nothing to stop several DIFFERENT
+      // heavy topics in a row each triggering their own offer. This is what
+      // originally caused a real problem here: Co offered a call 4 times in
+      // one real conversation, once directly in response to "why is it
+      // always a phone call?" — a complaint about the pattern itself,
+      // misread as more evidence a call would help. Short and topic-blind on
+      // purpose: it only need cover a burst, not stand in for the topic
+      // check above.
       const recentOfferCountResult = await pool.query(
         `SELECT count(*) FROM co_memories WHERE user_id = $1 AND memory_type = 'call_offer_pending' AND created_at > NOW() - INTERVAL '10 minutes'`,
         [user.id],
       );
-      const recentOfferCooldownActive = parseInt(recentOfferCountResult.rows[0].count, 10) > 0;
+      const recentOfferBurstActive = parseInt(recentOfferCountResult.rows[0].count, 10) > 0;
 
-      const shouldTriggerCall = callAction === "explicit_request" || (hasPendingOffer && callAction === "accepts_offer");
       // Folded into the main reply below now, not a separate message that
       // replaces one — a real conversation showed this short-circuiting the
       // reply entirely, so "want to hop on a call?" was the ENTIRE response
@@ -989,7 +1009,7 @@ Return ONLY the classification, nothing else.`,
       // actually said. The offer is secondary now; genuinely responding
       // (reflecting, surfacing a real recommendation/venue if one exists)
       // is the priority, per explicit product decision.
-      const shouldOfferCall = !hasPendingOffer && !recentOfferCooldownActive && callAction === "would_benefit";
+      const shouldOfferCall = !hasPendingOffer && !recentOfferBurstActive && callAction === "would_benefit";
       const callOfferContext = shouldOfferCall
         ? `\nWhat they just shared could genuinely benefit from a real conversation by voice — but that is not the priority. First, actually respond to what they said: reflect it, and if you have something concrete to offer below (a real recommendation or a real place you found), lead with that instead of a call. Only if it still feels right after that, offer a call as a warm gesture, not a logistics question — the way someone says "I'm here if you ever want to actually talk this through," not "are you free for a call today or tomorrow." Keep it brief and secondary, never in place of a real response. Do not place any call, just make the gesture.`
         : "";
@@ -1016,33 +1036,6 @@ Return ONLY the classification, nothing else.`,
         console.error(`webhooks: call trigger failed for user ${user.id} (non-fatal, falling through to normal reply):`, callResult.error);
         // Falls through to the normal reply flow below on failure — a
         // failed dial attempt should never leave the conversation silent.
-      }
-
-      // First real exchange, nothing on file yet (no call ever happened, no
-      // profile built from text yet either) — ask up front rather than
-      // silently defaulting to one channel. Skipped if this message already
-      // triggered/offered a call above (callAction !== "none"), since that
-      // already resolves the question. Text isn't a lesser fallback here:
-      // choosing it actually builds the profile too, see the fire-and-forget
-      // extraction at the end of this handler below.
-      if (!hasProfile && isFirstContact && callAction === "none") {
-        const askMessage =
-          "Want to hop on a quick call, or keep going by text? Either way works, just want to actually get to know you.";
-        const capped = capMessageLength(askMessage, 160);
-        await pool.query(
-          `INSERT INTO co_memories (user_id, memory_type, content) VALUES ($1, 'text_exchange', $2)`,
-          [user.id, `Co replied: ${capped}`],
-        );
-        try {
-          await sendblue.messages.send({
-            number,
-            content: capped,
-            from_number: process.env.SENDBLUE_PHONE_NUMBER!,
-          });
-        } catch (smsErr: any) {
-          console.error(`Sendblue channel-preference-ask send failed for ${number} (non-fatal):`, smsErr?.message ?? smsErr);
-        }
-        return res.status(200).send({ received: true, action: "channel_preference_asked" });
       }
 
       // Real action-triggering, iMessage side (Intent Layer only) — mirrors
@@ -1330,10 +1323,19 @@ Return ONLY "yes" or "no".`,
           );
           const actuallyOffered = rawOfferCheck.trim().toLowerCase().startsWith("yes");
           if (actuallyOffered) {
+            // Stores what the USER actually described, not just Co's own
+            // offer text — Co's gesture is often deliberately generic ("I'm
+            // here if you want to talk this through"), which makes a weak
+            // fingerprint for later topic-matching (two unrelated heavy
+            // topics could look identical if Co phrased both offers the same
+            // vague way). The user's own words are the real topic signal,
+            // and this same row's content is what gets copied into
+            // call_offer_declined_topic on a decline, so the fix has to live
+            // here, not just at decline-time.
             await pool
               .query(`INSERT INTO co_memories (user_id, memory_type, content) VALUES ($1, 'call_offer_pending', $2)`, [
                 user.id,
-                cappedReply,
+                `User described: ${content} | Co offered: ${cappedReply}`,
               ])
               .catch((err: any) => console.error("webhooks: call_offer_pending memory write failed (non-fatal):", err?.message ?? err));
           }

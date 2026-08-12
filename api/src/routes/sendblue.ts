@@ -22,6 +22,7 @@ import { activateCircle, attemptCircleRematch } from "../services/circleApproval
 import { findBestCircle } from "../services/matching.js";
 import type { CandidateWindow } from "../services/scheduling.js";
 import { confirmMoment, requestVenueApprovalFromModerator } from "../services/booking.js";
+import { triggerCallForUser } from "../services/callTrigger.js";
 import sendblue from "../services/sendblue.js";
 import { generateVoiceNote } from "../services/voiceNote.js";
 
@@ -926,6 +927,127 @@ Return ONLY the classification, nothing else.`,
           console.error("Typing indicator failed (non-fatal):", typingErr?.message ?? typingErr);
         }
 
+        // Step 4.6 — Call-trigger detection. Two cases, per explicit product
+        // decision: an explicit ask ("call me") triggers immediately;
+        // anything that only SIGNALS voice would help gets OFFERED, and
+        // actually placing that call requires a following "yes" — never
+        // silently placed. Must compare timestamps, not just existence of a
+        // pending offer, or a later unrelated "yeah" could get misread as
+        // consenting to a call that was already resolved.
+        const pendingOfferResult = await pool.query(
+          `SELECT p.id, p.content FROM co_memories p
+           WHERE p.user_id = $1 AND p.memory_type = 'call_offer_pending'
+           AND NOT EXISTS (
+             SELECT 1 FROM co_memories r
+             WHERE r.user_id = $1 AND r.memory_type = 'call_offer_resolved' AND r.created_at > p.created_at
+           )
+           ORDER BY p.created_at DESC LIMIT 1`,
+          [user.id],
+        );
+        const pendingOffer = pendingOfferResult.rows[0] ?? null;
+        const hasPendingOffer = !!pendingOffer;
+
+        // Topic-aware, not a permanent opt-out and not a blanket timer either
+        // — per explicit product decision, Co should stay free to offer a
+        // call about a genuinely new situation at any time, but never
+        // re-offer about something already declined. Each declined offer's
+        // own text is stored (see the call_offer_pending write near the end
+        // of this handler — it captures what the USER described, not just
+        // Co's own offer text, since Co's gesture is often deliberately
+        // generic and makes a weak fingerprint on its own), and the
+        // classifier is given that list directly so the SAME call decides
+        // both "would voice help" and "haven't we already asked about this"
+        // in one pass.
+        const declinedTopicsResult = await pool.query(
+          `SELECT content FROM co_memories WHERE user_id = $1 AND memory_type = 'call_offer_declined_topic' ORDER BY created_at DESC LIMIT 20`,
+          [user.id],
+        );
+        const declinedTopicsContext = declinedTopicsResult.rows.length
+          ? `\n\nCo has previously offered a call about the following, and the user said no each time:\n${declinedTopicsResult.rows.map((r: any) => `- ${r.content}`).join("\n")}\nIf what they're describing now is essentially the same situation as any of these, classify as "none" instead of "would_benefit" — don't re-offer about something already declined. A genuinely different, new situation is free to classify as "would_benefit" regardless of these.`
+          : "";
+
+        const { text: rawCallClassification } = await propagateAttributes(
+          { userId: user.id, traceName: "sendblue.callOffer.classify" },
+          () =>
+            generateText({
+              model: anthropic("claude-haiku-4-5-20251001"),
+              experimental_telemetry: { isEnabled: true, functionId: "sendblue.callOffer.classify" },
+              prompt: `A user is texting Co, a life concierge.${hasPendingOffer ? " Co just offered them a phone call and is waiting for a yes or no." : ""}
+
+Their message: "${resolvedContent}"
+
+Classify as ONE of:
+- "explicit_request" — they are directly asking Co to call them, or asking to talk by phone
+${hasPendingOffer ? '- "accepts_offer" — they are saying yes to the call Co just offered\n- "declines_offer" — they are saying no to the call Co just offered\n' : ""}- "would_benefit" — none of the above, but what they're describing is complex, emotional, or hard to unpack over short texts, and voice would genuinely help
+- "none" — normal conversation, no call is relevant${declinedTopicsContext}
+
+Return ONLY the classification, nothing else.`,
+            }),
+        );
+        const callAction = rawCallClassification.trim().toLowerCase().replace(/^[`"']+|[`"']+$/g, "");
+
+        if (hasPendingOffer && (callAction === "accepts_offer" || callAction === "declines_offer")) {
+          await pool.query(
+            `INSERT INTO co_memories (user_id, memory_type, content) VALUES ($1, 'call_offer_resolved', $2)`,
+            [user.id, callAction],
+          ).catch((err: any) => console.error("sendblue: call_offer_resolved memory write failed (non-fatal):", err?.message ?? err));
+
+          if (callAction === "declines_offer" && pendingOffer.content) {
+            await pool.query(
+              `INSERT INTO co_memories (user_id, memory_type, content) VALUES ($1, 'call_offer_declined_topic', $2)`,
+              [user.id, pendingOffer.content],
+            ).catch((err: any) => console.error("sendblue: call_offer_declined_topic memory write failed (non-fatal):", err?.message ?? err));
+          }
+        }
+
+        const shouldTriggerCall = callAction === "explicit_request" || (hasPendingOffer && callAction === "accepts_offer");
+
+        // Burst limiter — separate from, and in addition to, the topic-aware
+        // suppression above. Topic-matching only stops Co re-offering about
+        // the SAME thing; on its own it does nothing to stop several
+        // DIFFERENT heavy topics in a row each triggering their own offer.
+        // Short and topic-blind on purpose: it only needs to cover a burst,
+        // not stand in for the topic check above.
+        const recentOfferCountResult = await pool.query(
+          `SELECT count(*) FROM co_memories WHERE user_id = $1 AND memory_type = 'call_offer_pending' AND created_at > NOW() - INTERVAL '10 minutes'`,
+          [user.id],
+        );
+        const recentOfferBurstActive = parseInt(recentOfferCountResult.rows[0].count, 10) > 0;
+
+        if (shouldTriggerCall) {
+          const callResult = await triggerCallForUser(user.id, io);
+          if (callResult.success) {
+            const confirmation = "Calling you now.";
+            await pool.query(
+              `INSERT INTO co_memories (user_id, memory_type, content) VALUES ($1, 'text_exchange', $2)`,
+              [user.id, `Co replied: ${confirmation}`],
+            );
+            try {
+              await sendblue.messages.send({
+                number,
+                content: confirmation,
+                from_number: process.env.SENDBLUE_PHONE_NUMBER!,
+              });
+            } catch (smsErr: any) {
+              console.error(`Sendblue call-confirmation send failed for ${number} (non-fatal):`, smsErr?.message ?? smsErr);
+            }
+            return res.status(200).send({ received: true, action: "call_triggered", call_sid: callResult.call_sid });
+          }
+          console.error(`sendblue: call trigger failed for user ${user.id} (non-fatal, falling through to normal reply):`, callResult.error);
+          // Falls through to the normal reply flow below on failure — a
+          // failed dial attempt should never leave the conversation silent.
+        }
+
+        // Folded into the main reply below, not a separate message that
+        // replaces one — "want to hop on a call?" should never be the ENTIRE
+        // response to something significant, with no acknowledgment of what
+        // was actually said. The offer is secondary; genuinely responding is
+        // the priority, per explicit product decision.
+        const shouldOfferCall = !hasPendingOffer && !recentOfferBurstActive && callAction === "would_benefit";
+        const callOfferContext = shouldOfferCall
+          ? `\nWhat they just shared could genuinely benefit from a real conversation by voice — but that is not the priority. First, actually respond to what they said: reflect it. Only if it still feels right after that, offer a call as a warm gesture, not a logistics question — the way someone says "I'm here if you ever want to actually talk this through," not "are you free for a call today or tomorrow." Keep it brief and secondary, never in place of a real response.`
+          : "";
+
         // Step 5 — Two separate context sources, since they answer different
         // questions. Topical similarity search answers "what's relevant to
         // what they just said" but has no sense of recency or conversation
@@ -1014,6 +1136,7 @@ Return ONLY the classification, nothing else.`,
           ${momentContext}
 
           ${imageForVision ? "They just sent the attached photo." : `They just said: "${resolvedContent}"`}
+          ${callOfferContext}
 
           Respond as Co. Warm, specific, brief.${imageForVision ? " React to what's actually in the photo." : " Use their context to make it personal."}
           2 sentences max. No em dashes. No exclamation points.`;
@@ -1068,6 +1191,44 @@ Return ONLY the classification, nothing else.`,
         // Step 8 — Send reply matching the user's medium, emit to socket
         await sendCoReply({ phone: user.phone_number, message: coReply, asVoice: isVoice });
         io.to(`user:${user.id}`).emit("co:message", { message: coReply });
+
+        // Step 9 — Records that an offer went out, so a later "yes"/"no" is
+        // correctly read as answering it, and the burst limiter/topic list
+        // above have something to count. Must confirm the reply actually
+        // contains an offer before recording one — shouldOfferCall being
+        // true going in isn't a guarantee the model actually included it.
+        if (shouldOfferCall) {
+          try {
+            const { text: rawOfferCheck } = await propagateAttributes(
+              { userId: user.id, traceName: "sendblue.callOfferCheck" },
+              () =>
+                generateText({
+                  model: anthropic("claude-haiku-4-5-20251001"),
+                  experimental_telemetry: { isEnabled: true, functionId: "sendblue.callOfferCheck" },
+                  prompt: `Does this text message actually offer, invite, or gesture toward a phone call — in any wording, even indirectly (e.g. "I'm here if you want to talk this through")? Not just related to talking or listening in general — specifically about a phone call.
+
+Message: "${coReply}"
+
+Return ONLY "yes" or "no".`,
+                }),
+            );
+            const actuallyOffered = rawOfferCheck.trim().toLowerCase().startsWith("yes");
+            if (actuallyOffered) {
+              // Stores what the USER actually described, not just Co's own
+              // offer text — see the comment near declinedTopicsContext
+              // above for why. This same row's content is what gets copied
+              // into call_offer_declined_topic on a decline.
+              await pool
+                .query(`INSERT INTO co_memories (user_id, memory_type, content) VALUES ($1, 'call_offer_pending', $2)`, [
+                  user.id,
+                  `User described: ${resolvedContent} | Co offered: ${coReply}`,
+                ])
+                .catch((err: any) => console.error("sendblue: call_offer_pending memory write failed (non-fatal):", err?.message ?? err));
+            }
+          } catch (err: any) {
+            console.error("sendblue: call-offer verification failed (non-fatal, not recording a pending offer):", err?.message ?? err);
+          }
+        }
 
         return res.status(200).send({ received: true, reply: coReply });
       } catch (error) {
