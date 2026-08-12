@@ -71,12 +71,30 @@ export function renderSidebar(active: SidebarPage): void {
     <nav class="sidebar-nav">${navHtml}</nav>
   `;
 
+  // Backdrop — sits behind the drawer, in front of everything else.
+  // Appended to body (not the sidebar/header) so its fixed positioning
+  // isn't affected by either's own stacking context. Clicking it closes
+  // the drawer, same as re-tapping the toggle button below.
+  let backdrop = document.getElementById("sidebar-backdrop");
+  if (!backdrop) {
+    backdrop = document.createElement("div");
+    backdrop.id = "sidebar-backdrop";
+    backdrop.className = "sidebar-backdrop";
+    backdrop.addEventListener("click", () => {
+      container.classList.remove("open");
+      backdrop!.classList.remove("open");
+    });
+    document.body.appendChild(backdrop);
+  }
+
   // Off-canvas drawer toggle — only visible/relevant at the <=430px
   // breakpoint (styles.css), where .sidebar becomes position:fixed and
   // off-screen by default. Injected into .app-header rather than the
   // sidebar itself, since it needs to stay reachable while the drawer is
   // closed. Same class-toggle-driven transition idiom as
-  // .transcript-panel.collapsed elsewhere in this codebase.
+  // .transcript-panel.collapsed elsewhere in this codebase. Fixed-position
+  // and stacked above the drawer itself (see styles.css) so it stays
+  // reachable to close the drawer too, not just open it.
   const header = document.querySelector(".app-header");
   if (header && !document.getElementById("sidebar-toggle")) {
     const toggle = document.createElement("button");
@@ -84,7 +102,10 @@ export function renderSidebar(active: SidebarPage): void {
     toggle.className = "sidebar-toggle";
     toggle.setAttribute("aria-label", "Toggle navigation");
     toggle.innerHTML = `<svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2"><line x1="3" y1="6" x2="21" y2="6"/><line x1="3" y1="12" x2="21" y2="12"/><line x1="3" y1="18" x2="21" y2="18"/></svg>`;
-    toggle.addEventListener("click", () => container.classList.toggle("open"));
+    toggle.addEventListener("click", () => {
+      container.classList.toggle("open");
+      backdrop!.classList.toggle("open");
+    });
     header.insertBefore(toggle, header.firstChild);
   }
 }

@@ -1281,8 +1281,42 @@ button {
     justify-content: flex-start;
   }
 
+  /* z-index above .sidebar's — without this, an open drawer (fixed, full
+     height, starting at the same top-left corner) visually covers this
+     button, since it's otherwise just normal in-flow content in
+     .app-header with no stacking priority. Confirmed the hard way: once
+     open, there was nothing left on screen to tap to close it. Also
+     fixed-positioned so it stays in the same reachable spot rather than
+     scrolling away with the header content. */
   .sidebar-toggle {
     display: flex;
+    position: fixed;
+    top: var(--space-4);
+    left: var(--space-4);
+    z-index: 60;
+    background: var(--bg-raised);
+    box-shadow: var(--card-shadow);
+  }
+
+  /* Backdrop — standard off-canvas-drawer affordance: tapping anywhere
+     outside the open drawer closes it, same as the drawer itself, rather
+     than requiring a precise re-tap on the toggle button. z-index sits
+     between the drawer (50) and normal content, and pointer-events is
+     off while hidden so it never intercepts taps on the rest of the page
+     when the drawer is closed. */
+  .sidebar-backdrop {
+    position: fixed;
+    inset: 0;
+    background: rgba(22, 22, 15, 0.4);
+    z-index: 40;
+    opacity: 0;
+    pointer-events: none;
+    transition: opacity 0.2s var(--ease);
+  }
+
+  .sidebar-backdrop.open {
+    opacity: 1;
+    pointer-events: auto;
   }
 
   .stat-card-row {
