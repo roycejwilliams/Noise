@@ -29,7 +29,7 @@ const router = express.Router();
 // a bare id with no filter, so without this check a circle_id/moment_id
 // belonging to a real (non-simulated) test placement could be force-mutated
 // through these simulation-only routes. This is on top of, not instead of,
-// requireInternalAuth gating the whole router in server.ts.
+// requireTesterLoginApi gating the whole router in server.ts.
 async function assertSimulatedCircle(res: Response, circleId: string): Promise<boolean> {
   const result = await pool.query(`SELECT 1 FROM circles WHERE id = $1 AND is_simulated = true`, [circleId]);
   if (result.rows.length > 0) return true;

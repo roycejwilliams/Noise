@@ -5,7 +5,6 @@ import { sendSMS } from "../../../api/src/otpActions.js";
 import { getLiveSnapshot, issueSocketToken } from "../services/liveCallState.js";
 import { triggerCall } from "../services/callTrigger.js";
 import { resetRealTestUser } from "../services/dynamicPlacementTest.js";
-import { requireInternalAuth } from "../middleware/internalAuth.js";
 import { requireTesterLoginApi } from "../middleware/requireTesterLogin.js";
 
 const router = express.Router();
@@ -13,14 +12,14 @@ const router = express.Router();
 // POST /api/phone/reset — the DASHBOARD's global reset (checklist.html's
 // "hand it to the next person" button), not a tester's own self-service
 // reset (see routes/login.ts's /api/login/reset for that). Clears every real
-// (non-simulated) phone-test user's own account (profile, memories,
-// captured intent, any circle they own) plus any abandoned, never-claimed
-// phone_pending row. co-test is explicitly single-tester-at-a-time (see
-// phone_pending's migration comment) — this is what makes that safe across
-// multiple different real testers over time. Gated on the internal dashboard
-// password, same as everything else checklist.html calls — NOT on tester
-// login, since whoever's clicking this is the team, not a tester.
-router.post("/reset", requireInternalAuth, async (_req: Request, res: Response, next: NextFunction) => {
+// (non-simulated) phone-test user's own account (login row, profile,
+// memories, captured intent, any circle they own). co-test is explicitly
+// single-tester-at-a-time (see testMigrations.ts) — this is what makes that
+// safe across multiple different real testers over time. Gated on the same
+// tool-access login as everything else now (single sign-in for the whole
+// sandbox) — note this means whoever clicks it also clears their own login,
+// same as any other tester's row.
+router.post("/reset", requireTesterLoginApi, async (_req: Request, res: Response, next: NextFunction) => {
   try {
     const result = await resetRealTestUser();
     return res.status(200).json(result);
@@ -35,33 +34,29 @@ router.post("/reset", requireInternalAuth, async (_req: Request, res: Response, 
 // tests production's real onboarding UX; it just gates who can reach it.
 router.use(requireTesterLoginApi);
 
-// POST /api/phone/session — entry screen is a single "Message Co to start"
-// button (Ditto pattern, no name/phone form), so there's no phone number to
-// key a row on yet. Creates an anonymous placeholder row (phone_pending=true,
-// a synthetic unique placeholder in the NOT NULL phone_number column) that
-// /sendblue/webhook's contact_verified bootstrap claims — attaching the real
-// number — the moment an inbound text arrives from a number it doesn't
-// already recognize. See phone_pending's migration comment for the
-// one-tester-at-a-time tradeoff this implies.
-router.post("/session", async (_req: Request, res: Response, next: NextFunction) => {
+// POST /api/phone/session — the tester is already logged in by the time this
+// is reachable (router-wide requireTesterLoginApi below), and that login is
+// keyed on their real phone number (see testerAuth.ts) — so their identity
+// is already known here, not anonymous. This used to mint a second,
+// disconnected placeholder row (phone_pending=true, a synthetic number) for
+// /sendblue/webhook's contact_verified bootstrap to "claim" once the real
+// text arrived. That claim could never actually fire in practice: the
+// webhook looks a user up by (phone_number, test_channel='phone') first, and
+// the login row already occupies that exact key — so every real inbound
+// text updated the login row's contact_verified/otp_verified, while this
+// route hands the browser a *different* row's id to poll, which never
+// changed. The status step-through on /phone would sit on "Waiting for
+// text-in" forever no matter how many texts actually arrived. Just reuse the
+// login row directly — it's the same identity.
+router.post("/session", async (req: Request, res: Response, next: NextFunction) => {
   try {
-    const suffix = Math.random().toString(36).slice(2, 8);
-    const created = await pool.query(
-      `INSERT INTO users (first_name, last_name, email, phone_number, username, test_channel, phone_pending)
-       VALUES ('Tester', 'Tester', $1, $2, $3, 'phone', true) RETURNING id`,
-      [
-        `co-test-phone-${suffix}@copatible.test`,
-        `+1000${suffix}`,
-        `co_test_phone_${suffix}`,
-      ],
-    );
-
+    const userId = (req as any).testerId as string;
     return res.status(200).json({
       success: true,
-      user_id: created.rows[0].id,
+      user_id: userId,
       // Credential for this session's live-call socket room — see
       // liveCallState.ts's issueSocketToken/verifySocketToken.
-      socket_token: issueSocketToken(created.rows[0].id),
+      socket_token: issueSocketToken(userId),
       text_in_number: process.env.SENDBLUE_PHONE_NUMBER,
     });
   } catch (error) {

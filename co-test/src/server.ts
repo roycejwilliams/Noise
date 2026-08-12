@@ -19,8 +19,7 @@ import dynamicPlacementTestRouter from "./routes/dynamicPlacementTest.js";
 import loginRouter from "./routes/login.js";
 import phoneRouter from "./routes/phone.js";
 import { createWebhooksRouter } from "./routes/webhooks.js";
-import { requireInternalAuth } from "./middleware/internalAuth.js";
-import { requireTesterLoginPage } from "./middleware/requireTesterLogin.js";
+import { requireTesterLoginApi, requireTesterLoginPage } from "./middleware/requireTesterLogin.js";
 
 // A fresh Railway Postgres has none of brew_dev's tables yet — runMigrations()
 // (imported unchanged from api/) only ever does ALTER TABLE / CREATE TABLE IF
@@ -87,11 +86,12 @@ async function main() {
 
   app.use("/api", apiRouter);
   app.use("/api/phone", phoneRouter);
-  // Internal team dashboard only (see internalAuth.ts) — never used by the
-  // public tester-facing phone/call flow above.
-  app.use("/api/checklist", requireInternalAuth, checklistRouter);
-  app.use("/api/circles-test", requireInternalAuth, circlesTestRouter);
-  app.use("/api/dynamic-test", requireInternalAuth, dynamicPlacementTestRouter);
+  // Dashboard APIs — gated on the same tool-access login as the rest of the
+  // sandbox (see requireTesterLogin.ts) now that there's a single sign-in
+  // for the whole tool, not a separate team-only password.
+  app.use("/api/checklist", requireTesterLoginApi, checklistRouter);
+  app.use("/api/circles-test", requireTesterLoginApi, circlesTestRouter);
+  app.use("/api/dynamic-test", requireTesterLoginApi, dynamicPlacementTestRouter);
   // Mounted at root — these paths (/sendblue/webhook, /co/call-status,
   // /co/webhook) intentionally mirror production's exactly. See webhooks.ts.
   app.use(createWebhooksRouter(io));
@@ -108,7 +108,7 @@ async function main() {
   );
   app.get("/prompt", requireTesterLoginPage, (_req, res) => res.sendFile(path.join(publicDir, "prompt.html")));
   app.get("/phone", requireTesterLoginPage, (_req, res) => res.sendFile(path.join(publicDir, "phone.html")));
-  app.get("/checklist", requireInternalAuth, (_req, res) => res.sendFile(path.join(publicDir, "checklist.html")));
+  app.get("/checklist", requireTesterLoginPage, (_req, res) => res.sendFile(path.join(publicDir, "checklist.html")));
 
   // Static assets (JS/CSS) still need to serve out of public/, but the HTML
   // pages above must only ever be reachable through the gated routes — a

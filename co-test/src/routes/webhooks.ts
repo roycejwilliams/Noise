@@ -608,31 +608,16 @@ export function createWebhooksRouter(io: Server): express.Router {
 
     const run = async () => {
     try {
+      // The tester's row already exists by the time they can text in — login
+      // (testerAuth.ts) creates it, keyed on this same real phone number,
+      // before /phone is even reachable (see phone.ts's /session route,
+      // which reuses that same login row rather than creating a separate
+      // one).
       const userResult = await pool.query(
         `SELECT id, first_name, contact_verified FROM users WHERE phone_number = $1 AND test_channel = 'phone'`,
         [number],
       );
-      let user = userResult.rows[0];
-
-      // Not a number we already know — claim the most recent still-anonymous
-      // session (see phone.ts's /session route: the entry screen is a single
-      // "Message Co to start" button, so no phone number was collected up
-      // front). Attaches the real number here, on first contact. Assumes one
-      // tester at a time; see phone_pending's migration comment.
-      if (!user) {
-        const pending = await pool.query(
-          `SELECT id, first_name FROM users
-           WHERE test_channel = 'phone' AND phone_pending = true
-           ORDER BY created_at DESC LIMIT 1`,
-        );
-        if (pending.rows[0]) {
-          await pool.query(
-            `UPDATE users SET phone_number = $2, phone_pending = false WHERE id = $1`,
-            [pending.rows[0].id, number],
-          );
-          user = { ...pending.rows[0], contact_verified: false };
-        }
-      }
+      const user = userResult.rows[0];
 
       if (!user) {
         console.log(`co-test sendblue webhook: no phone-test session for ${number} — ignoring`);
