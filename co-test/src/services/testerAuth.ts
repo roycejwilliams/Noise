@@ -28,10 +28,23 @@ export async function startLogin(rawPhone: string): Promise<{ success: boolean; 
   if (existing.rows[0]) {
     userId = existing.rows[0].id;
   } else {
+    // contact_verified stays false here (the column's own schema default) —
+    // this row is created the moment someone proves phone ownership to the
+    // WEB TOOL, not by texting the Sendblue number. Those are different
+    // facts: webhooks.ts's /phone flow keys its one-time welcome/intro
+    // sequence off this same column for a row matched by the same
+    // (phone_number, test_channel='phone') pair, and phone.ts's own
+    // /resend-otp route gates on it too ("Text the number in first"). This
+    // used to hardcode true, which silently satisfied both checks for
+    // anyone who'd only ever logged into the tool — the welcome/intro
+    // messages never fired on a real first text-in, no matter how many
+    // times the test data was reset, since logging back in (required to
+    // reach /phone at all) immediately recreated the row already
+    // "verified."
     const suffix = Math.random().toString(36).slice(2, 8);
     const created = await pool.query(
       `INSERT INTO users (first_name, last_name, email, phone_number, username, test_channel, contact_verified)
-       VALUES ('Tester', 'Tester', $1, $2, $3, 'phone', true) RETURNING id`,
+       VALUES ('Tester', 'Tester', $1, $2, $3, 'phone', false) RETURNING id`,
       [`co-test-login-${suffix}@copatible.test`, phone_number, `co_test_login_${suffix}`],
     );
     userId = created.rows[0].id;
