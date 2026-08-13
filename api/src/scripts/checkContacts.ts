@@ -5,7 +5,7 @@ config({ path: resolve(process.cwd(), "api/.env") });
 async function main() {
   const { default: sendblue } = await import("../services/sendblue.js");
 
-  for (const number of [process.env.KEANA_PHONE_NUMBER!, "+12817432976"]) {
+  for (const number of [process.env.MODERATOR_PHONE_NUMBER!, "+12817432976"]) {
     try {
       const contact = await sendblue.contacts.retrieve(number);
       console.log(number, "->", JSON.stringify(contact));
