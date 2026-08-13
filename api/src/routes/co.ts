@@ -7,9 +7,18 @@ import type { Server as IOServer } from "socket.io";
 import pool from "../db/db.js";
 import { sendEmail } from "../otpActions.js";
 import { authenticateToken, userRole } from "../middleware/auth.js";
+import { buildContextSummary } from "../services/callContext.js";
 import { generateEmbedding, generateGoalEmbedding } from "../services/embeddings.js";
 import { findBestCircle } from "../services/matching.js";
 import { findBestVenue } from "../services/places.js";
+import {
+  assessConversationCoverage,
+  captureIntent,
+  extractPsychographicProfile,
+  RAPPORT_TOPICS,
+  storeProfile,
+} from "../services/profileExtraction.js";
+import { generateRecommendation } from "../services/recommendation.js";
 import sendblue from "../services/sendblue.js";
 import { generateVoiceNote } from "../services/voiceNote.js";
 
@@ -74,63 +83,6 @@ function validateHumeWebhook(req: Request): boolean {
     return crypto.timingSafeEqual(Buffer.from(signature), Buffer.from(expected));
   } catch {
     return false;
-  }
-}
-
-// Extract intent from a transcript and persist it to co_profiles.intent.
-// Called after the psychographic extraction in both webhook and typed-intake paths.
-async function captureIntent(user_id: string, transcript: string): Promise<void> {
-  try {
-    const { text: rawIntent } = await generateText({
-      model: anthropic("claude-haiku-4-5-20251001"),
-      prompt: `Does this person mention something specific they are actively seeking or could offer to others — a connection, an introduction, a resource, expertise? If yes, extract it as a single clear sentence and classify as 'seeking' or 'offering'. If no specific ask is present, return null.
-
-Return ONLY valid JSON or the word null:
-{"text": "Looking for climate tech founders at $1M+ ARR", "type": "seeking"}
-
-Transcript:
-"${transcript}"`,
-    });
-
-    const clean = rawIntent.replace(/```json|```/g, "").trim();
-    if (!clean || clean === "null") return;
-
-    let intentData: { text: string; type: "seeking" | "offering" } | null = null;
-    try { intentData = JSON.parse(clean); } catch { return; }
-    if (!intentData?.text || !intentData?.type) return;
-
-    const intentId = crypto.randomUUID();
-    const embedding = await generateEmbedding(intentData.text).catch(() => null);
-
-    const newIntent = {
-      id: intentId,
-      text: intentData.text,
-      type: intentData.type,
-      status: "active",
-      embedding,
-      created_at: new Date().toISOString(),
-    };
-
-    await pool.query(
-      `UPDATE co_profiles
-       SET intent = COALESCE(intent, '[]'::jsonb) || $1::jsonb
-       WHERE user_id = $2`,
-      [JSON.stringify([newIntent]), user_id],
-    );
-
-    const memContent = `Co captured intent: ${intentData.text}`;
-    const mem = await pool.query(
-      `INSERT INTO co_memories (user_id, memory_type, content) VALUES ($1, 'intent', $2) RETURNING id`,
-      [user_id, memContent],
-    );
-    generateEmbedding(memContent)
-      .then((emb) => pool.query(
-        `UPDATE co_memories SET content_embedding = $1::vector WHERE id = $2`,
-        [`[${emb.join(",")}]`, mem.rows[0].id],
-      ))
-      .catch((err) => console.error("Intent memory embedding failed:", err));
-  } catch (err: any) {
-    console.error("captureIntent failed (non-fatal):", err?.message ?? err);
   }
 }
 
@@ -351,6 +303,11 @@ router.post(
         asyncAmdStatusCallbackMethod: "POST",
       });
 
+      // Source of truth for /co/webhook's voicemail-skip check now that Hume
+      // no longer reliably tells us the call_sid via twilio_metadata (see
+      // migrations.ts's users.call_sid column).
+      await pool.query(`UPDATE users SET call_sid = $2 WHERE id = $1`, [user_id, call.sid]);
+
       // Store call attempt in co_memories so status callback has context
       const attemptContent = `Co initiated call to ${user.first_name} — call_sid: ${call.sid}`;
       const attemptMem = await pool.query(
@@ -407,17 +364,34 @@ router.post(
       // AMD detected an answering machine/voicemail — this arrives as its own
       // callback, typically alongside CallStatus=in-progress. Without this
       // check the call looks identical to a human answering, and Co would
-      // start talking into a voicemail box. Hang up immediately and treat it
-      // like a missed call rather than letting Hume proceed.
+      // start talking into a voicemail box. Rather than an abrupt silent
+      // hangup, redirect the still-live call to a deliberate spoken line
+      // before ending it — an abrupt hangup here leaves nothing on the
+      // person's actual voicemail, which reads as a dropped/failed call
+      // rather than an intentional one.
       if (typeof AnsweredBy === "string" && AnsweredBy.startsWith("machine")) {
         if (user) {
           _io?.to(`user:${user.id}`).emit("co:call_completed", { call_sid: CallSid, status: "voicemail" });
         }
+        const voiceResponse = new twilio.twiml.VoiceResponse();
+        voiceResponse.say(
+          { voice: "Polly.Matthew-Neural" },
+          user
+            ? `Hey ${user.first_name}, it's Co. Sorry I missed you — I'll try you again soon.`
+            : `Hey, it's Co. Sorry I missed you — I'll try you again soon.`,
+        );
+        voiceResponse.hangup();
         try {
-          await twilioClient.calls(CallSid).update({ status: "completed" });
-        } catch (hangupErr: any) {
-          console.error("Failed to hang up after voicemail detection (non-fatal):", hangupErr?.message ?? hangupErr);
+          await twilioClient.calls(CallSid).update({ twiml: voiceResponse.toString() });
+        } catch (redirectErr: any) {
+          console.error("Failed to redirect call to voicemail TwiML (non-fatal):", redirectErr?.message ?? redirectErr);
         }
+        // Flag so /co/webhook's chat_ended handler skips the full extraction
+        // pipeline below — a few seconds of Hume talking into a machine
+        // isn't a real conversation worth building a profile from.
+        await pool
+          .query(`INSERT INTO voicemail_calls (call_sid) VALUES ($1) ON CONFLICT DO NOTHING`, [CallSid])
+          .catch((err: any) => console.error("voicemail_calls flag write failed (non-fatal):", err?.message ?? err));
         if (user) {
           await sendMissedCallFollowUp(
             user,
@@ -466,10 +440,77 @@ router.post(
   },
 );
 
+// Answers a pending tool_call via Hume's Control Plane — separate from the
+// webhook's own HTTP response, since EVI is waiting on this over the live
+// chat, not over the webhook connection. EVI blocks the live conversation on
+// a pending tool response, so every millisecond here is dead air — Haiku,
+// not Sonnet, no DB writes beyond the coverage check itself.
+async function sendHumeToolResponse(chatId: string, toolCallId: string, content: string): Promise<void> {
+  const res = await fetch(`https://api.hume.ai/v0/evi/chat/${chatId}/send`, {
+    method: "POST",
+    headers: { "X-Hume-Api-Key": process.env.HUME_API_KEY!, "Content-Type": "application/json" },
+    body: JSON.stringify({ type: "tool_response", tool_call_id: toolCallId, content }),
+  });
+  if (!res.ok) {
+    console.error(`co/webhook: tool response POST failed (${res.status}) for chat ${chatId}, tool_call ${toolCallId}`);
+  }
+}
+
+// assess_conversation_coverage and surface_recommendation — see
+// api/src/scripts/registerCoverageTool.ts for registering both on the live
+// Hume config (not run automatically — needs explicit review first).
+async function handleToolCall(
+  chatId: string,
+  userId: string | null,
+  toolCallMessage: { tool_call_id: string; name: string } | undefined,
+): Promise<void> {
+  if (!toolCallMessage) return;
+
+  if (toolCallMessage.name === "surface_recommendation") {
+    try {
+      const result = userId
+        ? await generateRecommendation(userId)
+        : { available: false as const, reason: "no user resolved for this call" };
+      await sendHumeToolResponse(chatId, toolCallMessage.tool_call_id, JSON.stringify(result));
+    } catch (err: any) {
+      console.error("co/webhook: surface_recommendation failed:", err?.message ?? err);
+      await sendHumeToolResponse(
+        chatId,
+        toolCallMessage.tool_call_id,
+        JSON.stringify({ available: false, reason: "lookup failed" }),
+      ).catch(() => {});
+    }
+    return;
+  }
+
+  if (toolCallMessage.name !== "assess_conversation_coverage") return;
+
+  try {
+    const events = await fetchHumeChatEvents(chatId);
+    const transcript = events
+      .filter((e) => e.type === "USER_MESSAGE" || e.type === "AGENT_MESSAGE")
+      .map((e) => `${e.role === "USER" ? "user" : "assistant"}: ${e.message_text ?? ""}`)
+      .join("\n");
+    const priorContext = userId ? await buildContextSummary(userId).catch(() => "") : "";
+    const assessment = await assessConversationCoverage(transcript, priorContext);
+    await sendHumeToolResponse(chatId, toolCallMessage.tool_call_id, JSON.stringify(assessment));
+  } catch (err: any) {
+    console.error("co/webhook: assess_conversation_coverage failed, falling back to nothing-covered:", err?.message ?? err);
+    await sendHumeToolResponse(
+      chatId,
+      toolCallMessage.tool_call_id,
+      JSON.stringify({ missing_topics: [...RAPPORT_TOPICS], ready_to_summarize: false }),
+    ).catch(() => {});
+  }
+}
+
 // POST /co/webhook — Hume calls this for chat_started, chat_ended, and
-// tool_call (all three are registered on the config). Only chat_ended has
-// anything worth extracting — the payload itself carries no transcript, so
+// tool_call (all three are registered on the config). chat_ended has the
+// full extraction pipeline — the payload itself carries no transcript, so
 // it's fetched separately from Hume's Chat Events API using chat_id.
+// tool_call is answered asynchronously via the Control Plane (see
+// handleToolCall above) — this route just acks Hume's webhook and kicks it
+// off, since EVI is blocked on the live chat socket, not this HTTP request.
 router.post(
   "/webhook",
   async (req: Request, res: Response, next: NextFunction) => {
@@ -484,7 +525,25 @@ router.post(
       // onto req.body) so the "missing required fields" log below still
       // shows something readable rather than JSON.stringify-ing a Buffer.
       const parsedBody = JSON.parse((req.body as Buffer).toString("utf-8"));
-      const { event_name, custom_session_id, chat_id, chat_group_id, twilio_metadata } = parsedBody;
+      const { event_name, custom_session_id, chat_id, chat_group_id, twilio_metadata, tool_call_message } = parsedBody;
+
+      if (event_name === "tool_call") {
+        res.status(200).send({ success: true });
+        // custom_session_id is reliably present now that calls are bridged
+        // through our own WebSocket (see mediaStreamBridge.ts, which sets it
+        // itself at connect time) rather than Hume's own Twilio integration,
+        // which was documented unreliable about relaying it. twilio_metadata
+        // fallback kept for defense in depth.
+        (async () => {
+          let toolCallUserId: string | null = custom_session_id ?? null;
+          if (!toolCallUserId && twilio_metadata?.to_number) {
+            const byPhone = await pool.query(`SELECT id FROM users WHERE phone_number = $1`, [twilio_metadata.to_number]);
+            toolCallUserId = byPhone.rows[0]?.id ?? null;
+          }
+          await handleToolCall(chat_id, toolCallUserId, tool_call_message);
+        })().catch((err) => console.error("co/webhook: unhandled tool_call error:", err?.message ?? err));
+        return;
+      }
 
       if (event_name !== "chat_ended") {
         return res.status(200).send({ success: true, ignored: event_name });
@@ -515,6 +574,28 @@ router.post(
         callUser = byId.rows[0] ?? null;
       }
 
+      // AMD already flagged this call as an answering machine/voicemail (see
+      // /co/call-status's AnsweredBy branch) and hung up immediately — skip
+      // the full extraction pipeline below so a few seconds of Hume talking
+      // into a machine doesn't get treated as a real conversation worth
+      // building a profile from. Sourced from users.call_sid, not
+      // twilio_metadata.call_sid — Hume no longer populates twilio_metadata
+      // reliably now that calls are bridged through our own WebSocket rather
+      // than Hume's native Twilio integration (same regression confirmed and
+      // fixed in co-test first).
+      let voicemailCallSid: string | null = twilio_metadata?.call_sid ?? null;
+      if (!voicemailCallSid) {
+        const callSidResult = await pool.query(`SELECT call_sid FROM users WHERE id = $1`, [user_id]);
+        voicemailCallSid = callSidResult.rows[0]?.call_sid ?? null;
+      }
+      if (voicemailCallSid) {
+        const flagged = await pool.query(`SELECT 1 FROM voicemail_calls WHERE call_sid = $1`, [voicemailCallSid]);
+        if (flagged.rows.length > 0) {
+          console.log(`co/webhook: skipping extraction for voicemail call ${voicemailCallSid}`);
+          return res.status(200).send({ success: true, skipped: "voicemail" });
+        }
+      }
+
       // Let the app know the call ended and Co is now extracting the profile
       _io?.to(`user:${user_id}`).emit("co:processing");
 
@@ -543,90 +624,15 @@ router.post(
         )
         .catch((err) => console.error("Memory embedding failed (non-fatal):", err));
 
-      // Step 2 — Extract psychographic data from transcript using Anthropic
-      // This is what populates co_profiles so the matching algorithm has data to work with
-      const { text: rawExtraction } = await generateText({
-        model: anthropic("claude-sonnet-4-6"),
-        prompt: `You are extracting psychographic profile data from a conversation transcript.
-        
-        Based on this transcript, extract the following fields and return ONLY valid JSON with no preamble or markdown:
+      // Step 2 — Extract + store psychographic data. Now unions list fields
+      // (goals/blockers/activity_preferences/life_chapters) with what's
+      // already on file instead of overwriting on every call — a goal
+      // mentioned on call 1 but not call 2 no longer silently vanishes (see
+      // profileExtraction.ts's storeProfile for the full merge behavior).
+      const { extracted } = await extractPsychographicProfile(transcript);
+      await storeProfile(user_id, extracted, transcript, { emotions });
 
-        {
-          "life_chapters": [], // array of applicable values from: new_to_city, building_solo, career_pivot, starting_over
-          "social_energy": 0, // number 0-100 (0 = very introverted/quiet preference, 100 = very extroverted/high energy)
-          "connection_style": "", // one of: small_group, medium_group, large_social
-          "activity_preferences": [], // array of activities they mentioned or implied enjoying
-          "goals": [], // array of things they are working toward
-          "blockers": [], // array of challenges or struggles they mentioned
-          "availability_pattern": "", // how often and when they want to connect (e.g. "weekday evenings", "weekends")
-          "city": "", // city they are in or moving to
-          "emotional_state": "" // one word describing their current emotional state (e.g. anxious, energized, overwhelmed, motivated, isolated, confident, focused, excited, lost, burnout)
-        }
-
-        Transcript:
-        "${transcript}"`,
-      });
-
-      // Step 3 — Parse extracted data
-      let extracted: any = {};
-      try {
-        const clean = rawExtraction.replace(/```json|```/g, "").trim();
-        extracted = JSON.parse(clean);
-      } catch {
-        console.error(
-          "Failed to parse psychographic extraction:",
-          rawExtraction,
-        );
-      }
-
-      // Sanitize against DB CHECK constraints before upsert
-      const ALLOWED_CHAPTERS = ["new_to_city", "building_solo", "career_pivot", "starting_over"];
-      const ALLOWED_STYLES = ["small_group", "medium_group", "large_social"];
-      const safeChapters = (extracted.life_chapters ?? []).filter((c: string) => ALLOWED_CHAPTERS.includes(c));
-      const safeStyle = ALLOWED_STYLES.includes(extracted.connection_style) ? extracted.connection_style : "small_group";
-
-      // Step 4 — Generate goal embeddings via OpenAI
-      let goalEmbedding: number[] | null = null;
-      if (extracted.goals && extracted.goals.length > 0) {
-        goalEmbedding = await generateGoalEmbedding(extracted.goals);
-      }
-
-      // Step 5 — Update co_profiles with extracted psychographic data
-      // Use UPSERT — create profile if it doesn't exist, update if it does
-      await pool.query(
-        `INSERT INTO co_profiles (
-          user_id, life_chapters, social_energy, connection_style,
-          activity_preferences, emotional_state, goals, blockers,
-          availability_pattern, city, goal_embeddings, updated_at
-        ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, NOW())
-        ON CONFLICT (user_id) DO UPDATE SET
-          life_chapters = EXCLUDED.life_chapters,
-          social_energy = EXCLUDED.social_energy,
-          connection_style = EXCLUDED.connection_style,
-          activity_preferences = EXCLUDED.activity_preferences,
-          emotional_state = EXCLUDED.emotional_state,
-          goals = EXCLUDED.goals,
-          blockers = EXCLUDED.blockers,
-          availability_pattern = EXCLUDED.availability_pattern,
-          city = EXCLUDED.city,
-          goal_embeddings = EXCLUDED.goal_embeddings,
-          updated_at = NOW()`,
-        [
-          user_id,
-          safeChapters,
-          extracted.social_energy ?? 50,
-          safeStyle,
-          extracted.activity_preferences ?? [],
-          extracted.emotional_state ?? emotions?.[0]?.name ?? null,
-          extracted.goals ?? [],
-          extracted.blockers ?? [],
-          extracted.availability_pattern ?? null,
-          extracted.city ?? null,
-          goalEmbedding ? `[${goalEmbedding.join(",")}]` : null,
-        ],
-      );
-
-      // Step 6 — Persist Hume chat group ID so the next call resumes this conversation
+      // Step 3 — Persist Hume chat group ID so the next call resumes this conversation
       if (chat_group_id) {
         await pool.query(
           `UPDATE co_profiles SET hume_chat_group_id = $1 WHERE user_id = $2`,
@@ -634,13 +640,13 @@ router.post(
         );
       }
 
-      // Step 7 — Ambient intent capture (non-blocking — runs in background)
+      // Step 4 — Ambient intent capture (non-blocking — runs in background)
       captureIntent(user_id, transcript).catch(() => {});
 
       // Profile is fully extracted and stored — tell the app to show the Ready state
       _io?.to(`user:${user_id}`).emit("co:profile_ready");
 
-      // Step 8 — Follow-up iMessage. The app only shows "Ready" if it happens
+      // Step 5 — Follow-up iMessage. The app only shows "Ready" if it happens
       // to be open — most people have hung up and moved on, so this is the
       // only confirmation they actually get that the call did something.
       // Grounded in the actual transcript, not the extracted fields — the
