@@ -41,13 +41,19 @@ const twilioClient = twilio(
   { accountSid: process.env.TWILIO_LIVE_SID! },
 );
 
-// Reject status callbacks that didn't come from Twilio
+// Reject status callbacks that didn't come from Twilio. Calls are placed
+// under the TWILIO_LIVE_SID subaccount (see twilioClient above), and Twilio
+// signs status callbacks with the OWNING account's Auth Token — a
+// subaccount's callbacks are never valid against the parent account's
+// TWILIO_AUTH_TOKEN, so this needs the subaccount's own token, not the
+// parent's (confirmed the hard way: every real call's status callback 401'd
+// once signature validation was added, despite a perfectly valid account).
 function validateTwilioSignature(req: Request): boolean {
   if (process.env.NODE_ENV !== "production") return true;
   const sig = req.headers["x-twilio-signature"] as string | undefined;
   if (!sig) return false;
   const url = `${process.env.API_URL}/co/call-status`;
-  return twilio.validateRequest(process.env.TWILIO_AUTH_TOKEN!, sig, url, req.body);
+  return twilio.validateRequest(process.env.TWILIO_LIVE_AUTH_TOKEN!, sig, url, req.body);
 }
 
 // Reject webhook calls that didn't come from Hume (bearer token set in EVI config)

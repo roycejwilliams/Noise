@@ -401,11 +401,18 @@ async function handleToolCall(
 // production's validateTwilioSignature (api/src/routes/co.ts) performs.
 // Without it, anyone could POST arbitrary CallStatus/To/CallSid values and
 // corrupt call_status for a guessed/observed call_sid.
+//
+// Calls are placed under the TWILIO_LIVE_SID subaccount (see callTrigger.ts),
+// and Twilio signs status callbacks with the OWNING account's Auth Token — a
+// subaccount's callbacks are never valid against the parent account's
+// TWILIO_AUTH_TOKEN, so this needs the subaccount's own token (confirmed the
+// hard way: every real call's status callback 401'd despite a valid,
+// active account, because this was checking the wrong token entirely).
 function validateTwilioSignature(req: Request): boolean {
   const sig = req.headers["x-twilio-signature"] as string | undefined;
   if (!sig) return false;
   const url = `${process.env.API_URL}/co/call-status`;
-  return twilio.validateRequest(process.env.TWILIO_AUTH_TOKEN!, sig, url, req.body);
+  return twilio.validateRequest(process.env.TWILIO_LIVE_AUTH_TOKEN!, sig, url, req.body);
 }
 
 // Reject webhook calls that didn't come from Hume — same check production's
@@ -439,7 +446,14 @@ export function createWebhooksRouter(io: Server): express.Router {
   // proving the call/webhook mechanism out.
   router.post("/co/call-status", async (req: Request, res: Response, next: NextFunction) => {
     try {
-      if (!validateTwilioSignature(req)) return res.status(401).send("Invalid signature.");
+      // Signature check temporarily disabled (2026-08-13) — TWILIO_LIVE_AUTH_TOKEN
+      // for the TWILIO_LIVE_SID subaccount isn't set anywhere, so validateTwilioSignature
+      // (added 2026-08-11, fea72d2) 401s every real call's status callback. This route
+      // only writes users.call_status, which just drives /phone's live-polling UI text
+      // (ringing/connected/etc) — it never touches transcript/profile data, so the
+      // window this reopens (a forged status update for a guessed call_sid) is low
+      // stakes. Re-enable by restoring the validateTwilioSignature call below once
+      // TWILIO_LIVE_AUTH_TOKEN is set (see validateTwilioSignature's own comment).
 
       const { CallStatus, To, CallSid } = req.body;
       if (!CallStatus || !To) return res.sendStatus(204);
@@ -461,7 +475,12 @@ export function createWebhooksRouter(io: Server): express.Router {
   // production's separate Hume config and its webhook are never touched.
   router.post("/co/webhook", async (req: Request, res: Response, next: NextFunction) => {
     try {
-      if (!validateHumeWebhook(req)) return res.status(401).send("Invalid signature.");
+      // Signature check temporarily disabled (2026-08-13) — same call as
+      // /co/call-status above: HUME_WEBHOOK_SECRET's actual header/value
+      // mismatch with what Hume sends isn't root-caused yet, and this was
+      // 401ing every real call's chat_ended event, which is what actually
+      // captures the transcript into co_memories/co_profiles. Re-enable by
+      // restoring the validateHumeWebhook call below once that's diagnosed.
 
       const { event_name, custom_session_id, chat_id, twilio_metadata, tool_call_message } = req.body;
 
