@@ -4,6 +4,7 @@ import { randomInt } from "crypto";
 import { NextFunction, Request, Response, Router } from "express";
 import type { Server } from "socket.io";
 import pool from "../db/db.js";
+import { withAdvisoryLock } from "../db/advisoryLock.js";
 import { sendSMS } from "../otpActions.js";
 import elevenlabs from "../services/elevenlabs.js";
 import { generateEmbedding } from "../services/embeddings.js";
@@ -11,6 +12,21 @@ import { findBestCircle } from "../services/matching.js";
 import { triggerCallForUser } from "../services/callTrigger.js";
 import sendblue from "../services/sendblue.js";
 import { generateVoiceNote } from "../services/voiceNote.js";
+
+// Serializes webhook processing per phone number. Without this, two
+// messages sent seconds apart from the same person can be handled
+// concurrently — the second one's queries can run before the first one's
+// writes (e.g. a moment being created) have committed, so it falls through
+// to the wrong branch entirely (confirmed in co-test: a rapid double "Yes"
+// caused the second reply to skip the actionable-response handler and hit
+// the general fallback instead, producing a hallucinated, unrelated reply).
+//
+// Backed by a Postgres advisory lock (db/advisoryLock.ts), not an in-memory
+// map — a same-process-only lock silently stops protecting anything the
+// moment this service runs as more than one replica.
+function withPhoneLock<T>(phone: string, fn: () => Promise<T>): Promise<T> {
+  return withAdvisoryLock(`phone:${phone}`, fn);
+}
 
 // Detect whether a media_url is a voice memo by checking its Content-Type
 async function isAudioUrl(url: string): Promise<boolean> {
@@ -71,6 +87,8 @@ export function sendblueRouter(io: Server): Router {
   router.post(
     "/webhook",
     async (req: Request, res: Response, next: NextFunction) => {
+      const lockKey: string | undefined = req.body?.number;
+      const run = async () => {
       try {
         const {
           number,
@@ -859,6 +877,13 @@ Return ONLY "yes" or "no".`,
         return res.status(200).send({ received: true, reply: coReply });
       } catch (error) {
         next(error);
+      }
+      };
+
+      if (lockKey) {
+        await withPhoneLock(lockKey, run);
+      } else {
+        await run();
       }
     },
   );
