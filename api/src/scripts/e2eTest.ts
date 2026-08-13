@@ -6,7 +6,7 @@
  * Requires in env (can be from api/.env):
  *   DATABASE_URL   — production Postgres connection string
  *   API_URL        — Railway production API base URL (e.g. https://copatible-api.railway.app)
- *   KEANA_PHONE_NUMBER — the phone number used for circle approval
+ *   MODERATOR_PHONE_NUMBER — the phone number used for circle approval
  *
  * What it does vs. HTTP (real API calls) vs. direct DB (test scaffolding):
  *   HTTP: auth, typed-intake, placement, moment creation, booking confirmation, check-in, recap
@@ -17,14 +17,14 @@ import { config } from "dotenv";
 import { resolve } from "path";
 import pg from "pg";
 
-// Load api/.env so we pick up DATABASE_URL, API_URL, KEANA_PHONE_NUMBER
+// Load api/.env so we pick up DATABASE_URL, API_URL, MODERATOR_PHONE_NUMBER
 config({ path: resolve(process.cwd(), "api/.env") });
 
 const API_URL = (process.env.API_URL ?? "").replace(/\/$/, "");
-const KEANA_PHONE = process.env.KEANA_PHONE_NUMBER ?? "";
+const MODERATOR_PHONE = process.env.MODERATOR_PHONE_NUMBER ?? "";
 
 if (!API_URL) throw new Error("API_URL env var is required");
-if (!KEANA_PHONE) throw new Error("KEANA_PHONE_NUMBER env var is required");
+if (!MODERATOR_PHONE) throw new Error("MODERATOR_PHONE_NUMBER env var is required");
 
 // ---------------------------------------------------------------------------
 // Database
@@ -302,7 +302,7 @@ async function step6_approveCircle() {
   ).rows[0].count;
   if (pendingCount === "0") {
     const { status } = await api("POST", "/sendblue/webhook", {
-      number: KEANA_PHONE,
+      number: MODERATOR_PHONE,
       content: "APPROVE",
       is_outbound: false,
     });

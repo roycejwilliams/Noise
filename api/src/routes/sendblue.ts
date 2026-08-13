@@ -9,6 +9,8 @@ import { sendSMS } from "../otpActions.js";
 import elevenlabs from "../services/elevenlabs.js";
 import { generateEmbedding } from "../services/embeddings.js";
 import { findBestCircle } from "../services/matching.js";
+import { activateCircle, attemptCircleRematch } from "../services/circleApproval.js";
+import { confirmMoment } from "../services/booking.js";
 import { triggerCallForUser } from "../services/callTrigger.js";
 import sendblue from "../services/sendblue.js";
 import { generateVoiceNote } from "../services/voiceNote.js";
@@ -153,13 +155,13 @@ export function sendblueRouter(io: Server): Router {
           return res.status(400).send("Missing required fields.");
         }
 
-        // Keana approval intercept — must run before user lookup since Keana may not be in users table.
-        // Only intercepts when there's an actual circle to approve/reject — Keana is
+        // Moderator approval intercept — must run before user lookup since the Moderator may not be in users table.
+        // Only intercepts when there's an actual circle to approve/reject — the Moderator is
         // also a normal registered user/contact (e.g. completing her own text-in-first
         // verification, or chatting with Co), and those texts must fall through to the
         // standard user flow below instead of being silently swallowed here.
-        const keanaPhone = process.env.KEANA_PHONE_NUMBER;
-        if (keanaPhone && number === keanaPhone && hasText) {
+        const moderatorPhone = process.env.MODERATOR_PHONE_NUMBER;
+        if (moderatorPhone && number === moderatorPhone && hasText) {
           const pendingResult = await pool.query(
             `SELECT c.id, c.circle_name, c.owner_id
              FROM circles c
@@ -176,251 +178,96 @@ export function sendblueRouter(io: Server): Router {
             prompt: `Classify this message as either 'approve' or 'reject'. Return ONLY the word approve or reject.\n\nMessage: "${content}"`,
           });
 
-          const action = classification.trim().toLowerCase();
+          const action = classification.trim().toLowerCase().replace(/^[`"']+|[`"']+$/g, "");
 
           if (action === "approve") {
             await pool.query(
-              `UPDATE circles SET status = 'active' WHERE id = $1`,
-              [pendingCircle.id],
-            );
-
-            await pool.query(
               `INSERT INTO co_memories (user_id, memory_type, content) VALUES ($1, 'system', $2)`,
-              [pendingCircle.owner_id, `Keana manually approved circle ${pendingCircle.id}`],
+              [pendingCircle.owner_id, `Moderator manually approved circle ${pendingCircle.id}`],
             );
 
-            const circleMembers = await pool.query(
-              `SELECT u.id, u.first_name, u.phone_number, cp.city, cp.life_chapters
-               FROM circle_members cm
-               JOIN users u ON cm.member_id = u.id
-               LEFT JOIN co_profiles cp ON cp.user_id = cm.member_id
-               WHERE cm.circle_id = $1`,
-              [pendingCircle.id],
-            );
-            const members = circleMembers.rows;
-            const memberCount = members.length;
-            const city = members.find((m: any) => m.city)?.city ?? "your city";
-            const chapter = (members.find((m: any) => m.life_chapters?.length)?.life_chapters?.[0] ?? "").replace(/_/g, " ");
-
-            for (const member of members) {
-              // vCard — send on first contact if CO_VCARD_URL is set
-              if (process.env.CO_VCARD_URL) {
-                const vcardCheck = await pool.query(
-                  `SELECT id FROM co_memories WHERE user_id = $1 AND content = 'Co vCard sent to user — contact saved' LIMIT 1`,
-                  [member.id],
-                );
-                if (!vcardCheck.rows[0]) {
-                  try {
-                    const { text: vcardMsg } = await generateText({
-                      model: anthropic("claude-haiku-4-5-20251001"),
-                      prompt: `You are Co, texting ${member.first_name} for the first time. Ask them to save your contact, briefly, in your own words. No exclamation points, no em dashes. 1 sentence.`,
-                    });
-                    await sendblue.messages.send({
-                      number: member.phone_number,
-                      content: vcardMsg,
-                      media_url: process.env.CO_VCARD_URL,
-                      from_number: process.env.SENDBLUE_PHONE_NUMBER!,
-                    });
-                    await pool.query(
-                      `INSERT INTO co_memories (user_id, memory_type, content) VALUES ($1, 'system', 'Co vCard sent to user — contact saved')`,
-                      [member.id],
-                    );
-                    await new Promise((resolve) => setTimeout(resolve, 3000));
-                  } catch (vcardErr: any) {
-                    console.error("vCard send failed (non-fatal):", vcardErr?.message ?? vcardErr);
-                  }
-                }
-              }
-
-              // Placement iMessage — always individual, one thread per person.
-              // CoPatible launches with individual iMessage coordination only —
-              // no group chat — so this never references headcount or a shared
-              // thread, only the person's own circle and their own moment.
-              let placementMsg = "I placed you in a circle. Co found people navigating the same chapter as you. Your first moment is coming.";
-              try {
-                const { text } = await generateText({
-                  model: anthropic("claude-sonnet-4-6"),
-                  prompt: `You are Co. You just placed ${member.first_name} in a circle with people in the same ${chapter || "chapter of life"}, based in ${city}. Text them the news like it means something, not like a system notification. Never mention how many people are in it — this is their own thread, not a group announcement. No exclamation points, no em dashes. 1-2 sentences.`,
-                });
-                placementMsg = text;
-              } catch (genErr: any) {
-                console.error("Placement message generation failed, using fallback (non-fatal):", genErr?.message ?? genErr);
-              }
-
-              try {
-                await sendblue.messages.send({
-                  number: member.phone_number,
-                  content: placementMsg,
-                  from_number: process.env.SENDBLUE_PHONE_NUMBER!,
-                });
-              } catch (smsErr: any) {
-                console.error(`Placement message failed for ${member.id}:`, smsErr?.message ?? smsErr);
-              }
-
-              const placementContent = `Co placed user in circle ${pendingCircle.id}`;
-              const placementMem = await pool.query(
-                `INSERT INTO co_memories (user_id, memory_type, content) VALUES ($1, 'placement', $2) RETURNING id`,
-                [member.id, placementContent],
-              );
-              generateEmbedding(placementContent)
-                .then((emb) =>
-                  pool.query(
-                    `UPDATE co_memories SET content_embedding = $1::vector WHERE id = $2`,
-                    [`[${emb.join(",")}]`, placementMem.rows[0].id],
-                  ),
-                )
-                .catch((err) => console.error("Memory embedding failed (non-fatal):", err));
-
-              io.to(`user:${member.id}`).emit("circle:placed", {
-                circle_id: pendingCircle.id,
-                circle_name: pendingCircle.circle_name,
-                member_count: memberCount,
-                city,
-                chapter,
-              });
-            }
+            await activateCircle({
+              circleId: pendingCircle.id,
+              circleName: pendingCircle.circle_name,
+              io,
+            });
           } else if (action === "reject") {
-            await pool.query(
-              `UPDATE circles SET status = 'rejected' WHERE id = $1`,
-              [pendingCircle.id],
-            );
-
             const rejectedMembersResult = await pool.query(
               `SELECT member_id FROM circle_members WHERE circle_id = $1`,
               [pendingCircle.id],
             );
             const rejectedMemberIds: string[] = rejectedMembersResult.rows.map((r: any) => r.member_id);
-            const allRejectedIds = [pendingCircle.owner_id, ...rejectedMemberIds];
 
-            for (const memberId of allRejectedIds) {
-              const rejectContent = "Circle rejected — Co will attempt new matching";
-              const rejectMem = await pool.query(
-                `INSERT INTO co_memories (user_id, memory_type, content) VALUES ($1, 'check_in', $2) RETURNING id`,
-                [memberId, rejectContent],
-              );
-              generateEmbedding(rejectContent)
-                .then((emb) =>
-                  pool.query(
-                    `UPDATE co_memories SET content_embedding = $1::vector WHERE id = $2`,
-                    [`[${emb.join(",")}]`, rejectMem.rows[0].id],
-                  ),
-                )
-                .catch((err) => console.error("Memory embedding failed (non-fatal):", err));
-            }
-
-            const newGroupIds = await findBestCircle(pendingCircle.owner_id, rejectedMemberIds);
-
-            if (!newGroupIds || newGroupIds.length < 4) {
-              const ownerRes = await pool.query(
-                `SELECT first_name FROM users WHERE id = $1`,
-                [pendingCircle.owner_id],
-              );
-              const ownerName = ownerRes.rows[0]?.first_name ?? pendingCircle.owner_id;
-              try {
-                await sendblue.messages.send({
-                  number: keanaPhone,
-                  content: `No alternative match found for ${ownerName}. Manual review needed.`,
-                  from_number: process.env.SENDBLUE_PHONE_NUMBER!,
-                });
-              } catch (err: any) {
-                console.error("Failed to notify Keana of no-match:", err?.message ?? err);
-              }
-            } else {
-              const ownerProfile = await pool.query(
-                `SELECT life_chapters, city FROM co_profiles WHERE user_id = $1`,
-                [pendingCircle.owner_id],
-              );
-              const ownerProf = ownerProfile.rows[0];
-              const primaryChapter = ownerProf?.life_chapters?.[0] ?? "new_to_city";
-              const city = ownerProf?.city ?? "";
-              const circleName = `Co Circle — ${primaryChapter.replace(/_/g, " ")}`;
-
-              const newCircleResult = await pool.query(
-                `INSERT INTO circles (owner_id, circle_name, status) VALUES ($1, $2, 'pending_approval') RETURNING *`,
-                [pendingCircle.owner_id, circleName],
-              );
-              const newCircle = newCircleResult.rows[0];
-
-              for (const memberId of newGroupIds) {
-                if (memberId === pendingCircle.owner_id) continue;
-                await pool.query(
-                  `INSERT INTO circle_members (circle_id, member_id) VALUES ($1, $2) ON CONFLICT DO NOTHING`,
-                  [newCircle.id, memberId],
-                );
-              }
-
-              const existingConnector = await pool.query(
-                `SELECT user_id FROM co_profiles
-                 WHERE user_id = ANY($1::uuid[]) AND is_circle_connector = TRUE LIMIT 1`,
-                [newGroupIds],
-              );
-              if (!existingConnector.rows[0]) {
-                const topTrust = await pool.query(
-                  `SELECT user_id FROM co_profiles
-                   WHERE user_id = ANY($1::uuid[]) ORDER BY trust_score DESC LIMIT 1`,
-                  [newGroupIds],
-                );
-                if (topTrust.rows[0]) {
-                  const connectorId = topTrust.rows[0].user_id;
-                  await pool.query(
-                    `UPDATE co_profiles SET is_circle_connector = TRUE WHERE user_id = $1`,
-                    [connectorId],
-                  );
-                  const connContent = `Co selected you as Circle Connector for circle ${newCircle.id}`;
-                  const connMem = await pool.query(
-                    `INSERT INTO co_memories (user_id, memory_type, content) VALUES ($1, 'check_in', $2) RETURNING id`,
-                    [connectorId, connContent],
-                  );
-                  generateEmbedding(connContent)
-                    .then((emb) =>
-                      pool.query(
-                        `UPDATE co_memories SET content_embedding = $1::vector WHERE id = $2`,
-                        [`[${emb.join(",")}]`, connMem.rows[0].id],
-                      ),
-                    )
-                    .catch((err) => console.error("Memory embedding failed (non-fatal):", err));
-                }
-              }
-
-              for (const memberId of newGroupIds) {
-                const pendingContent = "Circle placement pending Keana approval";
-                const pendingMem = await pool.query(
-                  `INSERT INTO co_memories (user_id, memory_type, content) VALUES ($1, 'check_in', $2) RETURNING id`,
-                  [memberId, pendingContent],
-                );
-                generateEmbedding(pendingContent)
-                  .then((emb) =>
-                    pool.query(
-                      `UPDATE co_memories SET content_embedding = $1::vector WHERE id = $2`,
-                      [`[${emb.join(",")}]`, pendingMem.rows[0].id],
-                    ),
-                  )
-                  .catch((err) => console.error("Memory embedding failed (non-fatal):", err));
-              }
-
-              const newMemberNamesResult = await pool.query(
-                `SELECT first_name FROM users WHERE id = ANY($1::uuid[])`,
-                [newGroupIds],
-              );
-              const newMemberNames = newMemberNamesResult.rows.map((r: any) => r.first_name).join(", ");
-
-              try {
-                await sendblue.messages.send({
-                  number: keanaPhone,
-                  content: `New circle ready for review. ${newGroupIds.length} people, ${city}, ${primaryChapter.replace(/_/g, " ")}. Members: ${newMemberNames}. Reply APPROVE or REJECT within 4 hours — Co will auto-approve if no response.`,
-                  from_number: process.env.SENDBLUE_PHONE_NUMBER!,
-                });
-                await pool.query(
-                  `UPDATE circles SET keana_notified_at = NOW() WHERE id = $1`,
-                  [newCircle.id],
-                );
-              } catch (err: any) {
-                console.error("Failed to notify Keana of new proposal:", err?.message ?? err);
-              }
-            }
+            await attemptCircleRematch({
+              staleCircleId: pendingCircle.id,
+              ownerId: pendingCircle.owner_id,
+              excludeMemberIds: rejectedMemberIds,
+              newStatus: "rejected",
+              memberNoticeContent: "Circle rejected — Co will attempt new matching",
+              io,
+            });
           }
 
             return res.status(200).send({ received: true });
+          } else {
+            // No pending circle to approve — check for a moment awaiting
+            // the Moderator's venue approval instead. Same approve/reject-by-text
+            // pattern as the circle-placement approval above, just gating
+            // venue choice rather than circle membership.
+            //
+            // Scoping note: unlike co-test's version, a reject here does NOT
+            // automatically re-select and re-propose a different venue — that
+            // requires reusable venue-search context (getCircleBookingContext/
+            // selectVenueForCircle) this port deliberately didn't extract from
+            // the existing /moment route to keep this change contained. A
+            // reject just flags the moment for manual venue selection and
+            // notifies the Moderator, same as the "no qualifying match" path
+            // already does elsewhere in this pipeline.
+            const pendingMomentResult = await pool.query(
+              `SELECT id, circle_id, moments_name, venue, venue_booking_url, venue_place_id,
+                      venue_type, neighborhood, vibe, suggested_time, moment_start, rejected_venues,
+                      consensus_low_confidence
+               FROM moments
+               WHERE status = 'pending_venue_approval'
+               ORDER BY created_at ASC
+               LIMIT 1`,
+            );
+            const pendingMomentApproval = pendingMomentResult.rows[0];
+
+            if (pendingMomentApproval) {
+              const { text: venueClassification } = await generateText({
+                model: anthropic("claude-haiku-4-5-20251001"),
+                prompt: `Classify this message as either 'approve' or 'reject'. Return ONLY the word approve or reject.\n\nMessage: "${content}"`,
+              });
+              const venueAction = venueClassification
+                .trim()
+                .toLowerCase()
+                .replace(/^[`"']+|[`"']+$/g, "");
+
+              if (venueAction === "approve") {
+                await confirmMoment(pendingMomentApproval, io);
+              } else if (venueAction === "reject") {
+                const rejectedVenues: string[] = [
+                  ...(pendingMomentApproval.rejected_venues ?? []),
+                  ...(pendingMomentApproval.venue ? [pendingMomentApproval.venue] : []),
+                ];
+                await pool.query(
+                  `UPDATE moments SET status = 'manual_venue_required', rejected_venues = $1 WHERE id = $2`,
+                  [rejectedVenues, pendingMomentApproval.id],
+                );
+                try {
+                  await sendblue.messages.send({
+                    number: moderatorPhone,
+                    content: `Venue rejected for moment ${pendingMomentApproval.id}. Needs manual venue selection.`,
+                    from_number: process.env.SENDBLUE_PHONE_NUMBER!,
+                  });
+                } catch (err: any) {
+                  console.error("Failed to notify Moderator of venue rejection:", err?.message ?? err);
+                }
+              }
+
+              return res.status(200).send({ received: true });
+            }
           }
         }
 

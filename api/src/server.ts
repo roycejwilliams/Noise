@@ -1,12 +1,9 @@
-import { anthropic } from "@ai-sdk/anthropic";
-import { generateText } from "ai";
 import cookieParser from "cookie-parser";
 import cors from "cors";
 import "dotenv/config";
 import express from "express";
 import helmut from "helmet";
 import { createServer } from "http";
-import cron from "node-cron";
 import { Server } from "socket.io";
 import { WebSocketServer } from "ws";
 import pool from "./db/db.js";
@@ -135,124 +132,13 @@ app.get("/audio/:id", (req, res) => {
 
 app.use(errorHandler);
 
-registerJobs();
+registerJobs(io);
 
-// Every 30 minutes — auto-approve circles Keana hasn't responded to within 4 hours
-cron.schedule("*/30 * * * *", async () => {
-  try {
-    const staleCircles = await pool.query(
-      `SELECT c.id, c.circle_name, c.owner_id
-       FROM circles c
-       WHERE c.status = 'pending_approval'
-         AND c.keana_notified_at IS NOT NULL
-         AND c.keana_notified_at < NOW() - INTERVAL '4 hours'`,
-    );
-
-    for (const circle of staleCircles.rows) {
-      await pool.query(
-        `UPDATE circles SET status = 'active' WHERE id = $1`,
-        [circle.id],
-      );
-
-      const membersResult = await pool.query(
-        `SELECT u.id, u.first_name, u.phone_number, cp.city, cp.life_chapters
-         FROM circle_members cm
-         JOIN users u ON cm.member_id = u.id
-         LEFT JOIN co_profiles cp ON cp.user_id = cm.member_id
-         WHERE cm.circle_id = $1`,
-        [circle.id],
-      );
-      const members = membersResult.rows;
-      const memberCount = members.length;
-      const city = members.find((m: any) => m.city)?.city ?? "your city";
-      const chapter = (members.find((m: any) => m.life_chapters?.length)?.life_chapters?.[0] ?? "").replace(/_/g, " ");
-
-      const momentResult = await pool.query(
-        `SELECT id FROM moments WHERE circle_id = $1 ORDER BY created_at DESC LIMIT 1`,
-        [circle.id],
-      );
-      const momentId = momentResult.rows[0]?.id ?? null;
-
-      for (const member of members) {
-        if (process.env.CO_VCARD_URL) {
-          const vcardCheck = await pool.query(
-            `SELECT id FROM co_memories WHERE user_id = $1 AND content = 'Co vCard sent to user — contact saved' LIMIT 1`,
-            [member.id],
-          );
-          if (!vcardCheck.rows[0]) {
-            try {
-              const { text: vcardMsg } = await generateText({
-                model: anthropic("claude-haiku-4-5-20251001"),
-                prompt: `You are Co, texting ${member.first_name} for the first time. Ask them to save your contact, briefly, in your own words. No exclamation points, no em dashes. 1 sentence.`,
-              });
-              await sendblue.messages.send({
-                number: member.phone_number,
-                content: vcardMsg,
-                media_url: process.env.CO_VCARD_URL,
-                from_number: process.env.SENDBLUE_PHONE_NUMBER!,
-              });
-              await pool.query(
-                `INSERT INTO co_memories (user_id, memory_type, content) VALUES ($1, 'system', 'Co vCard sent to user — contact saved')`,
-                [member.id],
-              );
-              await new Promise((resolve) => setTimeout(resolve, 3000));
-            } catch (vcardErr: any) {
-              console.error("Auto-approval vCard send failed (non-fatal):", vcardErr?.message ?? vcardErr);
-            }
-          }
-        }
-
-        // Individual thread, same as the manual-approval path in
-        // sendblue.ts — never mention headcount, this isn't a group blast.
-        let placementMsg = `I placed you in a circle. Same chapter, same city.${momentId ? `\n\nhttps://app.copatible.com/moments/${momentId}` : ""}`;
-        try {
-          const { text } = await generateText({
-            model: anthropic("claude-sonnet-4-6"),
-            prompt: `You are Co. You just placed ${member.first_name} in a circle with people in the same ${chapter || "chapter of life"}, based in ${city}. Text them the news like it means something, not like a system notification. Never mention how many people are in it — this is their own thread, not a group announcement. No exclamation points, no em dashes. 1-2 sentences.`,
-          });
-          placementMsg = momentId ? `${text}\n\nhttps://app.copatible.com/moments/${momentId}` : text;
-        } catch (genErr: any) {
-          console.error("Auto-approval placement message generation failed, using fallback (non-fatal):", genErr?.message ?? genErr);
-        }
-
-        try {
-          await sendblue.messages.send({
-            number: member.phone_number,
-            content: placementMsg,
-            from_number: process.env.SENDBLUE_PHONE_NUMBER!,
-          });
-        } catch (smsErr: any) {
-          console.error(`Auto-approval placement message failed for ${member.id}:`, smsErr?.message ?? smsErr);
-        }
-
-        await pool.query(
-          `INSERT INTO co_memories (user_id, memory_type, content) VALUES ($1, 'placement', $2)`,
-          [member.id, `Co placed user in circle ${circle.id} — auto-approved after 4 hours`],
-        );
-
-        io.to(`user:${member.id}`).emit("circle:placed", {
-          circle_id: circle.id,
-          circle_name: circle.circle_name,
-          member_count: memberCount,
-          city,
-          chapter,
-        });
-      }
-
-      try {
-        await sendblue.messages.send({
-          number: process.env.KEANA_PHONE_NUMBER!,
-          content: `Circle ${circle.id} auto-approved after 4 hours. ${memberCount} members placed. No action needed.`,
-          from_number: process.env.SENDBLUE_PHONE_NUMBER!,
-        });
-      } catch (keanaErr: any) {
-        console.error("Auto-approval Keana notify failed (non-fatal):", keanaErr?.message ?? keanaErr);
-      }
-    }
-  } catch (err) {
-    console.error("Auto-approval cron error:", err);
-  }
-});
+// Circle auto-approve (and the newer venue auto-approve) now live in
+// jobs/index.ts, alongside the confidence-gated approval pipeline
+// (services/circleApproval.ts, services/booking.ts) — this used to be a
+// standalone cron here using the old keana_notified_at column name, which
+// the migration to moderator_notified_at would have silently broken.
 
 httpServer.listen(port, () => {
   console.log(`Listening on port: ${port}`);

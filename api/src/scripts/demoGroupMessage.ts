@@ -1,5 +1,5 @@
 // One-off demo: exercises the real Sendblue group-messaging integration
-// (the same client used in co.ts's consensus-poll and Keana-approval flows)
+// (the same client used in co.ts's consensus-poll and Moderator-approval flows)
 // against real phone numbers, since fake circle members can't receive iMessages.
 import { config } from "dotenv";
 import { resolve } from "path";
@@ -9,7 +9,7 @@ async function main() {
   const { default: sendblue } = await import("../services/sendblue.js");
 
   const targets = [
-    { label: "Keana", number: process.env.KEANA_PHONE_NUMBER! },
+    { label: "Moderator", number: process.env.MODERATOR_PHONE_NUMBER! },
     { label: "Royce", number: "+12817432976" },
   ];
 

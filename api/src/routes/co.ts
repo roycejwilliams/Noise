@@ -9,8 +9,11 @@ import { sendEmail } from "../otpActions.js";
 import { authenticateToken, userRole } from "../middleware/auth.js";
 import { buildContextSummary } from "../services/callContext.js";
 import { generateEmbedding, generateGoalEmbedding } from "../services/embeddings.js";
-import { findBestCircle } from "../services/matching.js";
+import { findBestCircle, findBestCircleWithScore, min_group_score } from "../services/matching.js";
 import { findBestVenue } from "../services/places.js";
+import { activateCircle, notifyModeratorOfPendingCircle } from "../services/circleApproval.js";
+import { LOW_CONFIDENCE_VENUE_FIT_SCORE, requestVenueApprovalFromModerator } from "../services/booking.js";
+import { generateCandidateWindows, type CandidateWindow } from "../services/scheduling.js";
 import {
   assessConversationCoverage,
   captureIntent,
@@ -719,10 +722,11 @@ router.post(
       }
 
       // Step 1 — Run matching algorithm
-      // Returns array of user IDs or null if no valid group found
-      const groupUserIds = await findBestCircle(user_id);
+      // Returns user IDs + final group score, or null if no valid group found
+      const matchResult = await findBestCircleWithScore(user_id);
+      const groupUserIds = matchResult?.userIds ?? null;
 
-      // Step 2 — No match found — flag for manual placement by Keana
+      // Step 2 — No match found — flag for manual placement by the Moderator
       if (!groupUserIds || groupUserIds.length < 4) {
         return res.status(200).send({
           success: false,
@@ -747,94 +751,50 @@ router.post(
       );
       const circle = circleResult.rows[0];
 
-      // Step 4 — Add all matched members to the circle immediately — no gating
+      // Step 4 — Add all matched members to the circle immediately — no
+      // gating. owner_id (set above) stays purely for attribution — the
+      // requester is also inserted here as a normal row so every feature
+      // that queries circle_members (notifications, invites, polls) treats
+      // them the same as anyone else in the circle.
       for (const memberId of groupUserIds) {
-        if (memberId === user_id) continue; // owner is implicit via owner_id
         await pool.query(
           `INSERT INTO circle_members (circle_id, member_id) VALUES ($1, $2) ON CONFLICT DO NOTHING`,
           [circle.id, memberId],
         );
       }
 
-      // Step 4.5 — Assign Circle Connector before notifications fire
-      const existingConnector = await pool.query(
-        `SELECT user_id FROM co_profiles
-         WHERE user_id = ANY($1::uuid[]) AND is_circle_connector = TRUE
-         LIMIT 1`,
-        [groupUserIds],
-      );
+      // Step 5 — Co decides on its own above the confidence floor: activate
+      // and invite immediately, no Moderator step (no Circle Connector
+      // either — Co now handles venue booking itself, see /moment below).
+      // Only a genuinely below-threshold group (Co can't confidently decide)
+      // goes to the Moderator.
+      if (matchResult!.finalScore >= min_group_score) {
+        await activateCircle({ circleId: circle.id, circleName, io: _io ?? undefined });
+      } else {
+        await notifyModeratorOfPendingCircle({
+          circleId: circle.id,
+          finalScore: matchResult!.finalScore,
+        });
 
-      if (!existingConnector.rows[0]) {
-        const topTrust = await pool.query(
-          `SELECT user_id FROM co_profiles
-           WHERE user_id = ANY($1::uuid[])
-           ORDER BY trust_score DESC
-           LIMIT 1`,
-          [groupUserIds],
-        );
-
-        if (topTrust.rows[0]) {
-          const connectorId = topTrust.rows[0].user_id;
-          await pool.query(
-            `UPDATE co_profiles SET is_circle_connector = TRUE WHERE user_id = $1`,
-            [connectorId],
-          );
-          const connectorContent = `Co selected you as Circle Connector for circle ${circle.id}`;
-          const connectorMemory = await pool.query(
+        // Step 6 — Store pending-approval memory for each member (only the
+        // Moderator-review path needs this — activateCircle already writes
+        // its own per-member memory for the immediate-invite path).
+        for (const memberId of groupUserIds) {
+          const placementContent = `Circle placement pending Moderator approval`;
+          const placementMemory = await pool.query(
             `INSERT INTO co_memories (user_id, memory_type, content)
              VALUES ($1, 'check_in', $2) RETURNING id`,
-            [connectorId, connectorContent],
+            [memberId, placementContent],
           );
-          generateEmbedding(connectorContent)
+          generateEmbedding(placementContent)
             .then((emb) =>
               pool.query(
                 `UPDATE co_memories SET content_embedding = $1::vector WHERE id = $2`,
-                [`[${emb.join(",")}]`, connectorMemory.rows[0].id],
+                [`[${emb.join(",")}]`, placementMemory.rows[0].id],
               ),
             )
             .catch((err) => console.error("Memory embedding failed (non-fatal):", err));
         }
-      }
-
-      // Step 5 — Notify Keana via iMessage for approval before any member is contacted
-      const memberNamesResult = await pool.query(
-        `SELECT first_name FROM users WHERE id = ANY($1::uuid[])`,
-        [groupUserIds],
-      );
-      const memberNames = memberNamesResult.rows.map((r: any) => r.first_name).join(", ");
-      const city = profile.city ?? "unknown city";
-      const chapter = primaryChapter.replace(/_/g, " ");
-
-      try {
-        await sendblue.messages.send({
-          number: process.env.KEANA_PHONE_NUMBER!,
-          content: `New circle ready for review. ${groupUserIds.length} people, ${city}, ${chapter}. Members: ${memberNames}. Reply APPROVE or REJECT within 4 hours — Co will auto-approve if no response.`,
-          from_number: process.env.SENDBLUE_PHONE_NUMBER!,
-        });
-        await pool.query(
-          `UPDATE circles SET keana_notified_at = NOW() WHERE id = $1`,
-          [circle.id],
-        );
-      } catch (keanaErr: any) {
-        console.error("Failed to notify Keana of pending circle:", keanaErr?.message ?? keanaErr);
-      }
-
-      // Step 6 — Store pending-approval memory for each member
-      for (const memberId of groupUserIds) {
-        const placementContent = `Circle placement pending Keana approval`;
-        const placementMemory = await pool.query(
-          `INSERT INTO co_memories (user_id, memory_type, content)
-           VALUES ($1, 'check_in', $2) RETURNING id`,
-          [memberId, placementContent],
-        );
-        generateEmbedding(placementContent)
-          .then((emb) =>
-            pool.query(
-              `UPDATE co_memories SET content_embedding = $1::vector WHERE id = $2`,
-              [`[${emb.join(",")}]`, placementMemory.rows[0].id],
-            ),
-          )
-          .catch((err) => console.error("Memory embedding failed (non-fatal):", err));
       }
 
       return res.status(201).send({
@@ -1007,7 +967,11 @@ Make it feel intimate, specific, and intentional. Not generic.`,
           venue_booking_url: partnerBookingUrl,
         };
       } else {
-        // Fall back to Google Places + Co scoring
+        // Fall back to Google Places + Co scoring — co_fit_score (0-1, Co's
+        // own self-rated confidence in this specific pick) feeds the
+        // Moderator-approval gate below; a partner venue has no equivalent
+        // score and is treated as trusted by default (null never counts as
+        // "low fit").
         selectedVenue = await findBestVenue(
           momentData.venue_type,
           momentData.neighborhood,
@@ -1022,15 +986,34 @@ Make it feel intimate, specific, and intentional. Not generic.`,
         );
       }
 
+      // Step 7.6 — Real candidate time windows grounded in the venue's
+      // actual opening hours + each member's stated availability, instead of
+      // a single AI-guessed suggested_time. Only worth the extra LLM call
+      // for groups large enough to actually run the poll below. Falls back
+      // to an empty array (and the single-time poll) if this fails or the
+      // venue's hours were never resolved (e.g. a partner venue, which has
+      // no opening_hours_periods).
+      const candidateWindows: CandidateWindow[] =
+        groupSize >= 4
+          ? await generateCandidateWindows(
+              selectedVenue?.opening_hours_periods,
+              members.map((m: any) => m.availability_pattern),
+              momentData.venue_type,
+            )
+          : [];
+
       // Step 8 — Create the Moment
       const momentStart = new Date(
         Date.now() + 7 * 24 * 60 * 60 * 1000,
       ).toISOString();
 
+      const venueFitScore: number | null = selectedVenue?.co_fit_score ?? null;
+      const lowVenueFit = venueFitScore != null && venueFitScore < LOW_CONFIDENCE_VENUE_FIT_SCORE;
+
       const momentResult = await pool.query(
         `INSERT INTO moments
-         (creator_id, moments_name, location, location_name, moment_start, visibility_type, description, circle_id, vibes, venue, suggested_time, status, venue_booking_url)
-         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13)
+         (creator_id, moments_name, location, location_name, moment_start, visibility_type, description, circle_id, vibes, venue, suggested_time, status, venue_booking_url, venue_place_id, venue_type, vibe, neighborhood, candidate_windows, venue_fit_score)
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19)
          RETURNING *`,
         [
           circle.owner_id,
@@ -1045,8 +1028,14 @@ Make it feel intimate, specific, and intentional. Not generic.`,
           momentData.vibes ?? [],
           selectedVenue?.name ?? null,
           momentData.suggested_time ?? null,
-          "polling",
+          lowVenueFit ? "pending_venue_approval" : "polling",
           selectedVenue?.venue_booking_url ?? null,
+          selectedVenue?.place_id ?? null,
+          momentData.venue_type ?? null,
+          momentData.vibe ?? null,
+          momentData.neighborhood ?? null,
+          candidateWindows.length ? JSON.stringify(candidateWindows) : null,
+          venueFitScore,
         ],
       );
 
@@ -1063,6 +1052,36 @@ Make it feel intimate, specific, and intentional. Not generic.`,
           `INSERT INTO moment_responses (moment_id, user_id) VALUES ($1, $2) ON CONFLICT DO NOTHING`,
           [moment.id, userId],
         );
+      }
+
+      // Step 8.6 — A venue Co isn't confident about goes to the Moderator
+      // for approve/reject before any member is told anything, same
+      // "Moderator sees it before members do" principle as circle placement.
+      // Nobody gets notified below in this case; sendblue.ts's Moderator
+      // reply handler picks this up from here.
+      if (lowVenueFit) {
+        await requestVenueApprovalFromModerator({
+          id: moment.id,
+          circle_id: circle_id as string,
+          moments_name: moment.moments_name,
+          venue: moment.venue,
+          venue_booking_url: moment.venue_booking_url,
+          venue_place_id: moment.venue_place_id,
+          suggested_time: moment.suggested_time,
+          moment_start: moment.moment_start,
+          venue_fit_score: venueFitScore,
+          consensus_low_confidence: false,
+        });
+
+        return res.status(201).send({
+          success: true,
+          data: {
+            moment_id: moment.id,
+            moments_name: moment.moments_name,
+            status: "pending_venue_approval",
+            circle_id,
+          },
+        });
       }
 
       // Step 9 — Notify all circle members individually. CoPatible has no
@@ -1183,18 +1202,19 @@ router.post(
       if (!momentRow) return res.status(404).send("Moment not found.");
       const { circle_id } = momentRow;
 
-      // Only the Circle Connector may propose a time — everyone else responds via iMessage
-      const connectorCheck = await pool.query(
-        `SELECT 1 FROM co_profiles cp
-         WHERE cp.user_id = $1 AND cp.is_circle_connector = TRUE
-         AND (
+      // Any circle member may propose a time — no single gatekeeper (the
+      // Circle Connector role this used to require no longer exists; Co
+      // books directly now, see services/booking.ts). First one to suggest
+      // a workable time moves it, same as the equivalent text-reply path in
+      // sendblue.ts.
+      const membershipCheck = await pool.query(
+        `SELECT 1 WHERE
            EXISTS (SELECT 1 FROM circles c WHERE c.id = $2 AND c.owner_id = $1)
-           OR EXISTS (SELECT 1 FROM circle_members cm WHERE cm.circle_id = $2 AND cm.member_id = $1)
-         )`,
+           OR EXISTS (SELECT 1 FROM circle_members cm WHERE cm.circle_id = $2 AND cm.member_id = $1)`,
         [user_id, circle_id],
       );
-      if (!connectorCheck.rows[0]) {
-        return res.status(403).send("Only the Circle Connector can propose a time.");
+      if (!membershipCheck.rows[0]) {
+        return res.status(403).send("Only a member of this circle can propose a time.");
       }
 
       const dateObj = new Date(moment_start);
@@ -1804,15 +1824,15 @@ router.post(
         }
       }
 
-      // Notify Keana
+      // Notify the Moderator
       try {
         await sendblue.messages.send({
-          number: process.env.KEANA_PHONE_NUMBER!,
+          number: process.env.MODERATOR_PHONE_NUMBER!,
           content: `${user.first_name} left circle ${circle_id}. ${remaining.length} members remaining.`,
           from_number: process.env.SENDBLUE_PHONE_NUMBER!,
         });
       } catch (smsErr: any) {
-        console.error("Keana leave notify failed (non-fatal):", smsErr?.message ?? smsErr);
+        console.error("Moderator leave notify failed (non-fatal):", smsErr?.message ?? smsErr);
       }
 
       return res.status(200).send({ success: true });
