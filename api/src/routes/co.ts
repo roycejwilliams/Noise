@@ -18,6 +18,7 @@ import {
   RAPPORT_TOPICS,
   storeProfile,
 } from "../services/profileExtraction.js";
+import { generateRecommendation } from "../services/recommendation.js";
 import sendblue from "../services/sendblue.js";
 import { generateVoiceNote } from "../services/voiceNote.js";
 
@@ -363,16 +364,27 @@ router.post(
       // AMD detected an answering machine/voicemail — this arrives as its own
       // callback, typically alongside CallStatus=in-progress. Without this
       // check the call looks identical to a human answering, and Co would
-      // start talking into a voicemail box. Hang up immediately and treat it
-      // like a missed call rather than letting Hume proceed.
+      // start talking into a voicemail box. Rather than an abrupt silent
+      // hangup, redirect the still-live call to a deliberate spoken line
+      // before ending it — an abrupt hangup here leaves nothing on the
+      // person's actual voicemail, which reads as a dropped/failed call
+      // rather than an intentional one.
       if (typeof AnsweredBy === "string" && AnsweredBy.startsWith("machine")) {
         if (user) {
           _io?.to(`user:${user.id}`).emit("co:call_completed", { call_sid: CallSid, status: "voicemail" });
         }
+        const voiceResponse = new twilio.twiml.VoiceResponse();
+        voiceResponse.say(
+          { voice: "Polly.Matthew-Neural" },
+          user
+            ? `Hey ${user.first_name}, it's Co. Sorry I missed you — I'll try you again soon.`
+            : `Hey, it's Co. Sorry I missed you — I'll try you again soon.`,
+        );
+        voiceResponse.hangup();
         try {
-          await twilioClient.calls(CallSid).update({ status: "completed" });
-        } catch (hangupErr: any) {
-          console.error("Failed to hang up after voicemail detection (non-fatal):", hangupErr?.message ?? hangupErr);
+          await twilioClient.calls(CallSid).update({ twiml: voiceResponse.toString() });
+        } catch (redirectErr: any) {
+          console.error("Failed to redirect call to voicemail TwiML (non-fatal):", redirectErr?.message ?? redirectErr);
         }
         // Flag so /co/webhook's chat_ended handler skips the full extraction
         // pipeline below — a few seconds of Hume talking into a machine
@@ -444,15 +456,34 @@ async function sendHumeToolResponse(chatId: string, toolCallId: string, content:
   }
 }
 
-// Only assess_conversation_coverage exists today — see
-// api/src/scripts/registerCoverageTool.ts for registering it on the live
+// assess_conversation_coverage and surface_recommendation — see
+// api/src/scripts/registerCoverageTool.ts for registering both on the live
 // Hume config (not run automatically — needs explicit review first).
 async function handleToolCall(
   chatId: string,
   userId: string | null,
   toolCallMessage: { tool_call_id: string; name: string } | undefined,
 ): Promise<void> {
-  if (!toolCallMessage || toolCallMessage.name !== "assess_conversation_coverage") return;
+  if (!toolCallMessage) return;
+
+  if (toolCallMessage.name === "surface_recommendation") {
+    try {
+      const result = userId
+        ? await generateRecommendation(userId)
+        : { available: false as const, reason: "no user resolved for this call" };
+      await sendHumeToolResponse(chatId, toolCallMessage.tool_call_id, JSON.stringify(result));
+    } catch (err: any) {
+      console.error("co/webhook: surface_recommendation failed:", err?.message ?? err);
+      await sendHumeToolResponse(
+        chatId,
+        toolCallMessage.tool_call_id,
+        JSON.stringify({ available: false, reason: "lookup failed" }),
+      ).catch(() => {});
+    }
+    return;
+  }
+
+  if (toolCallMessage.name !== "assess_conversation_coverage") return;
 
   try {
     const events = await fetchHumeChatEvents(chatId);
