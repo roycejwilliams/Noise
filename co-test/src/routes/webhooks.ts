@@ -537,10 +537,22 @@ export function createWebhooksRouter(io: Server): express.Router {
 
       if (!CallStatus || !To) return res.sendStatus(204);
 
-      await pool.query(
-        `UPDATE users SET call_status = $2 WHERE phone_number = $1 AND call_sid = $3`,
-        [To, CallStatus, CallSid],
-      );
+      // 'processing'/'completed'/'failed' are the chat_ended handler's own
+      // terminal states below (its idempotency claim reads call_status to
+      // decide whether extraction already ran) — Twilio's "completed" is a
+      // DIFFERENT event (the call itself hung up) that fires independently
+      // of and usually right around the same time as Hume's chat_ended.
+      // Forwarding it here let it land first and get misread as "extraction
+      // already finished," silently skipping the real pipeline (confirmed
+      // live: call_status='completed' with zero co_memories/co_profiles
+      // rows for the call). Only forward the early, Twilio-owned states;
+      // chat_ended is the sole writer of the terminal ones.
+      if (CallStatus !== "completed") {
+        await pool.query(
+          `UPDATE users SET call_status = $2 WHERE phone_number = $1 AND call_sid = $3`,
+          [To, CallStatus, CallSid],
+        );
+      }
       return res.sendStatus(204);
     } catch (error) {
       next(error);
