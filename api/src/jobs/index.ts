@@ -299,20 +299,22 @@ export function registerJobs() {
 
       for (const user of uncalled.rows) {
         try {
-          const webhookParams = new URLSearchParams({
-            config_id: process.env.HUME_CONFIG_ID!,
-            api_key: process.env.HUME_API_KEY!,
-            custom_session_id: user.id,
-            first_name: user.first_name ?? "",
-          });
-          if (user.hume_chat_group_id) {
-            webhookParams.set("resumed_chat_group_id", user.hume_chat_group_id);
-          }
+          // Same media-stream bridge as co.ts's POST /co/call/:user_id
+          // instead of Hume's direct /v0/evi/twilio bridge — that endpoint
+          // only accepts config_id/api_key as query params, so
+          // first_name/context_summary never actually reached Hume through
+          // it. user_id travels as a <Parameter>, not a query string —
+          // Twilio strips query params from Stream URLs entirely (confirmed
+          // live against co-test, and via Twilio's own docs).
+          const mediaStreamUrl = `${process.env.API_URL!.replace(/^http/, "ws")}/media-stream`;
+          const twiml = new twilio.twiml.VoiceResponse();
+          const stream = twiml.connect().stream({ url: mediaStreamUrl });
+          stream.parameter({ name: "user_id", value: user.id });
 
           const call = await twilioClient.calls.create({
             to: user.phone_number,
             from: process.env.TWILIO_PHONE_NUMBER!,
-            url: `https://api.hume.ai/v0/evi/twilio?${webhookParams.toString()}`,
+            twiml: twiml.toString(),
             statusCallback: `${process.env.API_URL}/co/call-status`,
             statusCallbackEvent: ["completed"],
             statusCallbackMethod: "POST",
