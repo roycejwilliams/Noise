@@ -311,14 +311,29 @@ export function registerJobs() {
           const stream = twiml.connect().stream({ url: mediaStreamUrl });
           stream.parameter({ name: "user_id", value: user.id });
 
+          const statusCallbackUrl = `${process.env.API_URL}/co/call-status`;
           const call = await twilioClient.calls.create({
             to: user.phone_number,
             from: process.env.TWILIO_PHONE_NUMBER!,
             twiml: twiml.toString(),
-            statusCallback: `${process.env.API_URL}/co/call-status`,
+            statusCallback: statusCallbackUrl,
             statusCallbackEvent: ["completed"],
             statusCallbackMethod: "POST",
+            // Without this, a voicemail pickup looks identical to a human
+            // answering and Co starts talking into a machine — same AMD
+            // setup as co.ts's POST /co/call/:user_id, missing here before
+            // (this cron had its own independent call-placing copy that
+            // never got it). Must be async — sync AMD holds the call in
+            // silence until detection finishes.
+            machineDetection: "DetectMessageEnd",
+            machineDetectionTimeout: 10,
+            asyncAmd: "true",
+            asyncAmdStatusCallback: statusCallbackUrl,
+            asyncAmdStatusCallbackMethod: "POST",
           });
+
+          // Source of truth for /co/webhook's voicemail-skip check.
+          await pool.query(`UPDATE users SET call_sid = $2 WHERE id = $1`, [user.id, call.sid]);
 
           const attemptContent = `Co initiated call to ${user.first_name} — call_sid: ${call.sid}`;
           await pool.query(

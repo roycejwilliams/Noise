@@ -178,6 +178,25 @@ export function runMigrations() {
       console.error("co_memories.memory_type_check migration failed:", err),
     );
 
+  // Source of truth for /co/webhook's voicemail-skip check now that Hume no
+  // longer reliably populates twilio_metadata.call_sid on the chat_ended
+  // webhook (calls are bridged through our own WebSocket, not Hume's native
+  // Twilio integration, which is the only path that ever set it).
+  pool
+    .query(`ALTER TABLE users ADD COLUMN IF NOT EXISTS call_sid TEXT`)
+    .catch((err: Error) => console.error("users.call_sid migration failed:", err));
+
+  // Flags a call_sid as an answering-machine pickup (see /co/call-status's
+  // AnsweredBy branch) so /co/webhook's chat_ended handler can skip full
+  // extraction for it — a few seconds of Hume talking into a machine isn't a
+  // real conversation worth building a profile from.
+  pool
+    .query(`CREATE TABLE IF NOT EXISTS voicemail_calls (
+      call_sid TEXT PRIMARY KEY,
+      created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    )`)
+    .catch((err: Error) => console.error("voicemail_calls table migration failed:", err));
+
   pool
     .query(`
       ALTER TABLE users ALTER COLUMN subscription_status SET DEFAULT 'inactive';
