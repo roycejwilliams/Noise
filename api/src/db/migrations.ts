@@ -171,7 +171,8 @@ export function runMigrations() {
       ALTER TABLE co_memories DROP CONSTRAINT IF EXISTS co_memories_memory_type_check;
       ALTER TABLE co_memories ADD CONSTRAINT co_memories_memory_type_check
         CHECK (memory_type = ANY (ARRAY[
-          'call_transcript','text_exchange','check_in','intent','recap','system','placement'
+          'call_transcript','text_exchange','check_in','intent','recap','system','placement',
+          'call_offer_pending','call_offer_resolved','call_offer_declined_topic'
         ]));
     `)
     .catch((err: Error) =>
