@@ -56,6 +56,18 @@ export async function triggerCall(userId: string): Promise<TriggerCallResult> {
     statusCallbackEvent: ["ringing", "answered", "completed"],
     statusCallbackMethod: "POST",
     timeout: 20,
+    // Without this, a voicemail pickup was indistinguishable from a human
+    // answering — Hume just kept having its normal live conversation into
+    // the answering machine instead of leaving a deliberate line and hanging
+    // up (confirmed live: same failure mode production's callTrigger.ts
+    // documents fixing). asyncAmd connects Hume immediately so a real human
+    // faces no delay; the async result arrives as its own callback to
+    // /co/call-status, handled there.
+    machineDetection: "DetectMessageEnd",
+    machineDetectionTimeout: 10,
+    asyncAmd: "true",
+    asyncAmdStatusCallback: statusCallbackUrl,
+    asyncAmdStatusCallbackMethod: "POST",
   });
 
   await pool.query(

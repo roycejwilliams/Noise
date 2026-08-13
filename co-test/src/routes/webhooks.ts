@@ -33,6 +33,15 @@ import { simulateModeratorApproval } from "../services/circlesSimulation.js";
 import { getCoPersonaPrompt } from "../services/coPersona.js";
 import { findRealVenues } from "../services/venueLookup.js";
 
+// Needed here (not just in callTrigger.ts) to redirect a still-live call to
+// a voicemail TwiML line once AMD detects an answering machine — see the
+// AnsweredBy branch in /co/call-status below.
+const twilioClient = twilio(
+  process.env.TWILIO_ACCOUNT_SID!,
+  process.env.TWILIO_CLIENT_SECRET!,
+  { accountSid: process.env.TWILIO_LIVE_SID! },
+);
+
 // Mounted at the SAME paths production uses (/sendblue/webhook, /co/call-status,
 // /co/webhook) — see api/src/server.ts and api/src/routes/co.ts for the
 // production originals. Because the paths match, "point the shared Sendblue
@@ -439,11 +448,12 @@ export function createWebhooksRouter(io: Server): express.Router {
   const router = express.Router();
 
   // POST /co/call-status — Twilio status callback for the real-call trigger in
-  // phone.ts. Simplified relative to production's version (api/src/routes/co.ts):
-  // tracks ringing/answered/completed state on the user row for the phone-test
-  // page to poll; does not implement the AMD/voicemail-redirect handling
-  // production has, since that's a delivery-quality concern, not part of
-  // proving the call/webhook mechanism out.
+  // phone.ts. Also receives the async AMD (answering-machine-detection)
+  // result — see the AnsweredBy branch below — ported from production's
+  // version (api/src/routes/co.ts) after confirming live that without it, a
+  // voicemail pickup went straight into Hume's normal live conversation
+  // instead of a deliberate voicemail line, since nothing ever told Hume it
+  // was talking to a machine.
   router.post("/co/call-status", async (req: Request, res: Response, next: NextFunction) => {
     try {
       // Signature check temporarily disabled (2026-08-13) — TWILIO_LIVE_AUTH_TOKEN
@@ -455,7 +465,76 @@ export function createWebhooksRouter(io: Server): express.Router {
       // stakes. Re-enable by restoring the validateTwilioSignature call below once
       // TWILIO_LIVE_AUTH_TOKEN is set (see validateTwilioSignature's own comment).
 
-      const { CallStatus, To, CallSid } = req.body;
+      const { CallStatus, To, CallSid, AnsweredBy } = req.body;
+
+      // Async AMD result arrives as its own, differently-shaped callback —
+      // only MachineDetectionDuration/CallSid/AnsweredBy/AccountSid, no
+      // CallStatus or To at all. Must be handled before the CallStatus/To
+      // guard below, which would otherwise silently discard it — same
+      // failure mode production's version documents hitting for real.
+      if (typeof AnsweredBy === "string") {
+        if (!AnsweredBy.startsWith("machine")) {
+          // human/fax/unknown — the live Hume conversation is already
+          // proceeding correctly, nothing to do here.
+          return res.sendStatus(204);
+        }
+
+        // This callback has no `To` — resolve the destination number from
+        // Twilio's own call record instead.
+        let toNumber: string | null = To ?? null;
+        if (!toNumber) {
+          try {
+            const call = await twilioClient.calls(CallSid).fetch();
+            toNumber = call.to;
+          } catch (fetchErr: any) {
+            console.error(`Failed to fetch call ${CallSid} for AMD user lookup:`, fetchErr?.message ?? fetchErr);
+          }
+        }
+
+        const user = toNumber
+          ? (
+              await pool.query(
+                `SELECT id, first_name, phone_number FROM users WHERE phone_number = $1`,
+                [toNumber],
+              )
+            ).rows[0]
+          : null;
+
+        // AMD detected an answering machine/voicemail — Hume has already been
+        // talking on the line for a few seconds (async AMD connects Hume
+        // immediately so real humans face no delay; the tradeoff is Hume
+        // doesn't yet know it's a machine). An abrupt hangup here just cuts
+        // Hume off mid-sentence into the person's real voicemail box.
+        // Instead, redirect the still-live call to our own TwiML so Co
+        // leaves one deliberate, complete voicemail line before hanging up
+        // cleanly.
+        if (user) {
+          io.to(`user:${user.id}`).emit("co:call_completed", { call_sid: CallSid, status: "voicemail" });
+        }
+        const voiceResponse = new twilio.twiml.VoiceResponse();
+        voiceResponse.say(
+          { voice: "Polly.Matthew-Neural" },
+          user
+            ? `Hey ${user.first_name}, it's Co. Sorry I missed you — I'll try you again soon.`
+            : `Hey, it's Co. Sorry I missed you — I'll try you again soon.`,
+        );
+        voiceResponse.hangup();
+        try {
+          await twilioClient.calls(CallSid).update({ twiml: voiceResponse.toString() });
+        } catch (redirectErr: any) {
+          console.error("Failed to redirect call to voicemail TwiML (non-fatal):", redirectErr?.message ?? redirectErr);
+        }
+        // Flag this call so the Hume chat_ended webhook (which still fires
+        // normally since we hang up cleanly, not abruptly) skips the full
+        // extraction pipeline below — a one-line Hume monologue to a machine
+        // isn't a real conversation worth extracting a profile from.
+        await pool.query(
+          `INSERT INTO voicemail_calls (call_sid) VALUES ($1) ON CONFLICT DO NOTHING`,
+          [CallSid],
+        );
+        return res.sendStatus(204);
+      }
+
       if (!CallStatus || !To) return res.sendStatus(204);
 
       await pool.query(
@@ -527,6 +606,21 @@ export function createWebhooksRouter(io: Server): express.Router {
       if (!user_id || !chat_id) {
         console.error(`webhooks: could not resolve user for chat ${chat_id} — body: ${JSON.stringify(req.body)}`);
         return res.status(400).send("Missing required fields.");
+      }
+
+      // The AMD callback above already flagged this call as an answering
+      // machine/voicemail and left its own deliberate line — skip the full
+      // extraction pipeline below so a one-line Hume monologue to a machine
+      // doesn't get treated as a real conversation worth building a profile from.
+      if (twilio_metadata?.call_sid) {
+        const flagged = await pool.query(
+          `SELECT 1 FROM voicemail_calls WHERE call_sid = $1`,
+          [twilio_metadata.call_sid],
+        );
+        if (flagged.rows.length > 0) {
+          console.log(`webhooks: skipping extraction for voicemail call ${twilio_metadata.call_sid}`);
+          return res.status(200).send({ success: true, skipped: "voicemail" });
+        }
       }
 
       // Idempotency guard — Hume (or something in the Twilio-bridged path
