@@ -8,9 +8,11 @@ import helmut from "helmet";
 import { createServer } from "http";
 import cron from "node-cron";
 import { Server } from "socket.io";
+import { WebSocketServer } from "ws";
 import pool from "./db/db.js";
 import { runMigrations } from "./db/migrations.js";
 import { registerJobs } from "./jobs/index.js";
+import { bridgeTwilioMediaStream } from "./services/mediaStreamBridge.js";
 import sendblue from "./services/sendblue.js";
 import { authenticateToken } from "./middleware/auth.js";
 import { corsOptions } from "./middleware/cors.js";
@@ -43,11 +45,38 @@ const io = new Server(httpServer, { cors: corsOptions });
 
 //Web socket config
 configureSocket(io);
+
+// Twilio's <Connect><Stream> (see co.ts/jobs/index.ts) connects here
+// directly — a raw `ws` server, not socket.io, since Twilio Media Streams
+// speaks its own plain WebSocket JSON protocol. noServer mode + a manual
+// "upgrade" listener so this coexists with socket.io's own upgrade handling
+// on the same httpServer without either intercepting the other's path.
+// user_id is NOT available yet at upgrade time — Twilio strips query
+// parameters from Stream URLs entirely (confirmed live against co-test, and
+// via Twilio's own docs), so it travels as a <Parameter> instead and only
+// arrives once the socket sends its own "start" event.
+// bridgeTwilioMediaStream resolves it from there itself.
+const mediaStreamWss = new WebSocketServer({ noServer: true });
+httpServer.on("upgrade", (req, socket, head) => {
+  const { pathname } = new URL(req.url ?? "", `http://${req.headers.host}`);
+  if (pathname !== "/media-stream") return; // socket.io's own listener handles /socket.io/
+  mediaStreamWss.handleUpgrade(req, socket, head, (ws) => {
+    mediaStreamWss.emit("connection", ws, req);
+  });
+});
+mediaStreamWss.on("connection", (ws) => {
+  bridgeTwilioMediaStream(ws);
+});
+
 //Security check to make sure the right tables/columns
 // are there when the server starts
 runMigrations();
 // Stripe webhook needs raw body for signature verification — must run before express.json()
 app.use("/payments/webhook", express.raw({ type: "application/json" }));
+// Hume's webhook signature is an HMAC over the exact raw body string, same
+// reasoning as Stripe above — a re-serialized/parsed-then-stringified body
+// isn't guaranteed byte-identical to what Hume actually signed.
+app.use("/co/webhook", express.raw({ type: "application/json" }));
 
 app.use(express.json());
 app.use(express.urlencoded({ extended: false })); // Twilio status callbacks send form-encoded bodies

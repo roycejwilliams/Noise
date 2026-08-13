@@ -29,23 +29,49 @@ const twilioClient = twilio(
   { accountSid: process.env.TWILIO_LIVE_SID! },
 );
 
-// Reject status callbacks that didn't come from Twilio
+// Reject status callbacks that didn't come from Twilio. TWILIO_AUTH is this
+// account's real Auth Token (one Twilio account — TWILIO_ACCOUNT_SID is
+// actually an API Key SID used for authenticating outbound requests to
+// Twilio's API, a separate credential from this; TWILIO_LIVE_SID is the real
+// Account SID). Renamed from TWILIO_AUTH_TOKEN to match what's actually set
+// in Railway — confirmed live against Twilio's own API (200 on a direct
+// Basic Auth test) before this rename.
 function validateTwilioSignature(req: Request): boolean {
   if (process.env.NODE_ENV !== "production") return true;
   const sig = req.headers["x-twilio-signature"] as string | undefined;
   if (!sig) return false;
   const url = `${process.env.API_URL}/co/call-status`;
-  return twilio.validateRequest(process.env.TWILIO_AUTH_TOKEN!, sig, url, req.body);
+  return twilio.validateRequest(process.env.TWILIO_AUTH!, sig, url, req.body);
 }
 
-// Reject webhook calls that didn't come from Hume (bearer token set in EVI config)
+// Reject webhook calls that didn't come from Hume. Hume signs each webhook
+// with a dedicated webhook signing key (separate from the API key, generated
+// on Hume's Developers page, set here as HUME_SIGNIN_KEY) — the signature is
+// HMAC-SHA256 over the exact string "${rawBody}.${timestamp}", hex-encoded,
+// sent as X-Hume-AI-Webhook-Signature, with the timestamp itself sent as
+// X-Hume-AI-Webhook-Timestamp (rejected if older than 180s, to block
+// replay). Confirmed against Hume's own docs and their official verification
+// example — the previous version of this function checked a different
+// header entirely and compared it directly against the secret, which could
+// never match anything Hume actually sends. Requires req.body to be the raw
+// Buffer for this route (see server.ts's express.raw() on /co/webhook,
+// mirroring the Stripe webhook's same need).
 function validateHumeWebhook(req: Request): boolean {
-  const secret = process.env.HUME_WEBHOOK_SECRET;
+  const secret = process.env.HUME_SIGNIN_KEY;
   if (!secret) return true; // skip when not configured (dev)
-  const header = req.headers["x-hume-signature"] ?? req.headers["authorization"]?.toString().replace("Bearer ", "");
-  if (!header) return false;
+
+  const signature = req.headers["x-hume-ai-webhook-signature"] as string | undefined;
+  const timestamp = req.headers["x-hume-ai-webhook-timestamp"] as string | undefined;
+  if (!signature || !timestamp) return false;
+
+  const timestampMs = Number(timestamp) * 1000;
+  if (!Number.isFinite(timestampMs) || Math.abs(Date.now() - timestampMs) > 180_000) return false;
+
+  const rawBody = (req.body as Buffer).toString("utf-8");
+  const expected = crypto.createHmac("sha256", secret).update(`${rawBody}.${timestamp}`).digest("hex");
+
   try {
-    return crypto.timingSafeEqual(Buffer.from(header as string), Buffer.from(secret));
+    return crypto.timingSafeEqual(Buffer.from(signature), Buffer.from(expected));
   } catch {
     return false;
   }
@@ -268,25 +294,38 @@ router.post(
         return res.status(403).send("User does not have an active subscription.");
       }
 
-      // Inject user identity so Hume sends it back in the webhook (customSessionId → user_id)
-      // first_name is available as {{first_name}} in the Hume EVI system prompt
-      // Resume prior chat group if one exists so Co picks up the conversation where it left off
-      const webhookParams = new URLSearchParams({
-        config_id: process.env.HUME_CONFIG_ID!,
-        api_key: process.env.HUME_API_KEY!,
-        custom_session_id: user_id as string,
-        first_name: user.first_name ?? "",
-      });
-      if (user.hume_chat_group_id) {
-        webhookParams.set("resumed_chat_group_id", user.hume_chat_group_id);
-      }
-      const webhookUrl = `https://api.hume.ai/v0/evi/twilio?${webhookParams.toString()}`;
+      // Routes the call's audio through our own media-stream WebSocket (see
+      // server.ts + services/mediaStreamBridge.ts) instead of Hume's
+      // built-in /v0/evi/twilio server-to-server bridge. That endpoint only
+      // accepts config_id/api_key as query params — confirmed against
+      // Hume's docs — so first_name/context_summary passed alongside it
+      // were always silently dropped. Dynamic variables only work via a
+      // session_settings message on a live WebSocket connection, which
+      // requires something to actually hold that connection;
+      // mediaStreamBridge.ts is that something, on our side.
+      //
+      // user_id travels as a <Parameter>, NOT a query string on the Stream
+      // url — confirmed live (and via Twilio's own docs) that Twilio strips
+      // query parameters from Media Stream URLs entirely. <Parameter>
+      // values arrive in the WebSocket's own "start" event as
+      // start.customParameters instead (see mediaStreamBridge.ts).
+      //
+      // resumed_chat_group_id (hume_chat_group_id) is not carried forward
+      // here — chat.connect()'s ConnectSessionSettings has no equivalent
+      // field; a call resuming a prior chat group loses that specific
+      // continuity mechanism, though buildContextSummary's context_summary
+      // variable now covers the same underlying need (picking up from prior
+      // context) through a different path.
+      const mediaStreamUrl = `${process.env.API_URL!.replace(/^http/, "ws")}/media-stream`;
+      const twiml = new twilio.twiml.VoiceResponse();
+      const stream = twiml.connect().stream({ url: mediaStreamUrl });
+      stream.parameter({ name: "user_id", value: user_id as string });
       const statusCallbackUrl = `${process.env.API_URL}/co/call-status`;
 
       const call = await twilioClient.calls.create({
         to: user.phone_number,
         from: process.env.TWILIO_PHONE_NUMBER!,
-        url: webhookUrl,
+        twiml: twiml.toString(),
         statusCallback: statusCallbackUrl,
         // Twilio's valid event names: initiated, ringing, answered, completed.
         // "completed" fires once for every terminal CallStatus (completed,
@@ -439,7 +478,13 @@ router.post(
         return res.status(401).send("Unauthorized.");
       }
 
-      const { event_name, custom_session_id, chat_id, chat_group_id, twilio_metadata } = req.body;
+      // req.body is the raw Buffer here (see server.ts's express.raw() on
+      // this path, needed for signature verification above) — parse it now
+      // that verification is done. Kept as its own variable (not reassigned
+      // onto req.body) so the "missing required fields" log below still
+      // shows something readable rather than JSON.stringify-ing a Buffer.
+      const parsedBody = JSON.parse((req.body as Buffer).toString("utf-8"));
+      const { event_name, custom_session_id, chat_id, chat_group_id, twilio_metadata } = parsedBody;
 
       if (event_name !== "chat_ended") {
         return res.status(200).send({ success: true, ignored: event_name });
@@ -461,7 +506,7 @@ router.post(
       }
 
       if (!user_id || !chat_id) {
-        console.error(`co/webhook: could not resolve user for chat ${chat_id} — body: ${JSON.stringify(req.body)}`);
+        console.error(`co/webhook: could not resolve user for chat ${chat_id} — body: ${JSON.stringify(parsedBody)}`);
         return res.status(400).send("Missing required fields.");
       }
 
