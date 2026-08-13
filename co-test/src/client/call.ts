@@ -109,7 +109,7 @@ async function handleToolCall(msg: any) {
     const res = await fetch("/api/assess-coverage", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ transcript: transcriptSoFar() }),
+      body: JSON.stringify({ transcript: transcriptSoFar(), user_id: userId }),
     });
     const data = await res.json();
     if (!data.success) throw new Error(data.error ?? "assess-coverage failed");

@@ -18,6 +18,7 @@ import {
   storeProfile,
   storeTranscriptMemory,
 } from "../../../api/src/services/profileExtraction.js";
+import { buildContextSummary } from "../services/callContext.js";
 import {
   endLiveCall,
   getLiveSnapshot,
@@ -370,8 +371,12 @@ async function handleToolCall(
     if (userId) emitNewTranscriptLines(io, userId, events);
 
     const transcript = buildTranscript(events);
+    // Lets an already-known fact (from a prior call or text) count as
+    // covered so Co doesn't re-ask something it genuinely already knows —
+    // see assessConversationCoverage's priorContext param.
+    const priorContext = userId ? await buildContextSummary(userId).catch(() => "") : "";
     const start = Date.now();
-    const assessment = await assessConversationCoverage(transcript);
+    const assessment = await assessConversationCoverage(transcript, priorContext);
     const latency_ms = Date.now() - start;
     await sendHumeToolResponse(chatId, toolCallMessage.tool_call_id, JSON.stringify(assessment));
 
@@ -624,13 +629,28 @@ export function createWebhooksRouter(io: Server): express.Router {
       // machine/voicemail and left its own deliberate line — skip the full
       // extraction pipeline below so a one-line Hume monologue to a machine
       // doesn't get treated as a real conversation worth building a profile from.
-      if (twilio_metadata?.call_sid) {
+      //
+      // twilio_metadata only ever gets populated by Hume when the chat came
+      // in through Hume's OWN /v0/evi/twilio integration — since we now hold
+      // the Twilio leg ourselves and open Hume via a plain chat.connect()
+      // (see mediaStreamBridge.ts), Hume has no idea Twilio is involved at
+      // all, so this field is never present anymore and the check below was
+      // silently dead (confirmed: no other code path sets it either). users.call_sid
+      // (stamped by callTrigger.ts when the call is placed) is the real
+      // source of truth for this call's SID now; twilio_metadata is kept as
+      // a fallback in case that ever changes back.
+      let voicemailCallSid: string | null = twilio_metadata?.call_sid ?? null;
+      if (!voicemailCallSid) {
+        const callSidResult = await pool.query(`SELECT call_sid FROM users WHERE id = $1`, [user_id]);
+        voicemailCallSid = callSidResult.rows[0]?.call_sid ?? null;
+      }
+      if (voicemailCallSid) {
         const flagged = await pool.query(
           `SELECT 1 FROM voicemail_calls WHERE call_sid = $1`,
-          [twilio_metadata.call_sid],
+          [voicemailCallSid],
         );
         if (flagged.rows.length > 0) {
-          console.log(`webhooks: skipping extraction for voicemail call ${twilio_metadata.call_sid}`);
+          console.log(`webhooks: skipping extraction for voicemail call ${voicemailCallSid}`);
           return res.status(200).send({ success: true, skipped: "voicemail" });
         }
       }
@@ -1421,7 +1441,7 @@ Return ONLY valid JSON, no preamble: {"wants_venue": true or false, "venue_type"
         // topic set, just fed into this single reply-generation call
         // directly instead of a live tool_call loop.
         const coverageSoFar = `${recentConversation}\nUser said: ${content}`.trim();
-        const coverage = await assessConversationCoverage(coverageSoFar);
+        const coverage = await assessConversationCoverage(coverageSoFar, profileContext ?? undefined);
         const missingTopicsContext =
           coverage.missing_topics.length && !coverage.ready_to_summarize
             ? `\nStill missing from what you know about them: ${coverage.missing_topics.map((t) => RAPPORT_TOPIC_DESCRIPTIONS[t]).join("; ")}. If it fits naturally off what they just said, work ONE of these in as a genuine follow-up question — not a survey, and don't force it if the conversation is clearly headed somewhere else right now.\n`

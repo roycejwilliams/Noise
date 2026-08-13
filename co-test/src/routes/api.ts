@@ -10,6 +10,7 @@ import {
   storeProfile,
   storeTranscriptMemory,
 } from "../../../api/src/services/profileExtraction.js";
+import { buildContextSummary } from "../services/callContext.js";
 import { requireTesterLoginApi } from "../middleware/requireTesterLogin.js";
 
 const router = express.Router();
@@ -129,9 +130,10 @@ router.get("/prompt", async (_req: Request, res: Response, next: NextFunction) =
 // what EVI's model sees.
 router.post("/assess-coverage", async (req: Request, res: Response, next: NextFunction) => {
   try {
-    const { transcript } = req.body as { transcript?: string };
+    const { transcript, user_id } = req.body as { transcript?: string; user_id?: string };
+    const priorContext = user_id ? await buildContextSummary(user_id).catch(() => "") : "";
     const start = Date.now();
-    const assessment = await assessConversationCoverage(transcript ?? "");
+    const assessment = await assessConversationCoverage(transcript ?? "", priorContext);
     const latency_ms = Date.now() - start;
     const covered_topics = RAPPORT_TOPICS.filter((t) => !assessment.missing_topics.includes(t));
     return res.status(200).json({ success: true, assessment, covered_topics, latency_ms });

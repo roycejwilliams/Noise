@@ -146,24 +146,38 @@ export async function extractPsychographicProfile(
 // says next — EVI's own model phrases the next question from
 // missing_topics, this only reports coverage; the text channel instead
 // feeds missing_topics into its own reply-generation prompt directly.
-export async function assessConversationCoverage(transcriptSoFar: string): Promise<CoverageAssessment> {
-  if (!transcriptSoFar.trim()) return COVERAGE_FALLBACK;
+// priorContext (optional) — a compact summary of what's already known about
+// this person from BEFORE this conversation (prior calls/texts, e.g.
+// callContext.ts's buildContextSummary or webhooks.ts's own profileContext
+// string). Without this, coverage was judged purely off the live transcript,
+// so a topic already answered by text last week still came back "missing"
+// on a call today and Co would re-ask something it already knew — this lets
+// already-known, concrete facts count as covered without requiring the
+// person to repeat themselves.
+export async function assessConversationCoverage(
+  transcriptSoFar: string,
+  priorContext?: string,
+): Promise<CoverageAssessment> {
+  if (!transcriptSoFar.trim() && !priorContext?.trim()) return COVERAGE_FALLBACK;
 
   const topicList = RAPPORT_TOPICS.map((t) => `- ${t}: ${RAPPORT_TOPIC_DESCRIPTIONS[t]}`).join("\n");
+  const priorContextBlock = priorContext?.trim()
+    ? `What's already known about this person from before this conversation (prior calls/texts):\n"${priorContext.trim()}"\n\n`
+    : "";
 
   try {
     const { text: raw } = await generateText({
       model: anthropic("claude-haiku-4-5-20251001"),
-      prompt: `Transcript of an in-progress conversation so far between Co (an assistant) and a person, by phone or text:
-"${transcriptSoFar}"
+      prompt: `${priorContextBlock}Transcript of an in-progress conversation so far between Co (an assistant) and a person, by phone or text:
+"${transcriptSoFar.trim() || "(nothing said yet in this conversation)"}"
 
-Which of these topics has the person substantively addressed? Judge by what they actually said, not by whether Co asked about it.
+Which of these topics has the person substantively addressed — either in what's already known from before, or in this conversation so far? Judge by real, concrete information. A topic only counts as covered by prior context if it states something specific and substantive, not a vague hint.
 ${topicList}
 
 Return ONLY valid JSON, no preamble or markdown:
 {"missing_topics": [...topic keys not yet covered...], "ready_to_summarize": true|false}
 
-ready_to_summarize is true only if at most one or two minor topics remain missing.`,
+ready_to_summarize is true only if at most one or two minor topics remain missing, AND this conversation itself (not just prior context) has substantively happened — never mark it true based on prior context alone with nothing yet said in this conversation.`,
       experimental_telemetry: { isEnabled: true, functionId: "profileExtraction.assessConversationCoverage" },
     });
 
