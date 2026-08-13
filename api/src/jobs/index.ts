@@ -1,8 +1,11 @@
 import cron from "node-cron";
 import twilio from "twilio";
+import type { Server } from "socket.io";
 import pool from "../db/db.js";
 import { sendEmail, sendSMS } from "../otpActions.js";
 import sendblue from "../services/sendblue.js";
+import { activateCircle, retryCircleModeratorNotification } from "../services/circleApproval.js";
+import { confirmMoment, retryVenueApprovalNotification } from "../services/booking.js";
 
 const twilioClient = twilio(
   process.env.TWILIO_ACCOUNT_SID!,
@@ -10,7 +13,7 @@ const twilioClient = twilio(
   { accountSid: process.env.TWILIO_LIVE_SID! },
 );
 
-export function registerJobs() {
+export function registerJobs(io: Server) {
   // Every 15 min — moment reminders (1-hour pre-event window)
   cron.schedule("*/15 * * * *", async () => {
     try {
@@ -149,7 +152,8 @@ export function registerJobs() {
   cron.schedule("*/15 * * * *", async () => {
     try {
       const pollingMoments = await pool.query(
-        `SELECT m.id, m.circle_id, m.suggested_time, m.created_at, m.consensus_nudge_sent_at
+        `SELECT m.id, m.circle_id, m.moments_name, m.venue, m.venue_booking_url, m.venue_place_id,
+                m.suggested_time, m.moment_start, m.created_at, m.consensus_nudge_sent_at
          FROM moments m
          JOIN circles c ON c.id = m.circle_id
          WHERE m.status = 'polling'
@@ -217,56 +221,22 @@ export function registerJobs() {
           );
         }
 
-        const connectorResult = await pool.query(
-          `SELECT u.id, u.phone_number, u.first_name
-           FROM circle_members cm
-           JOIN users u ON u.id = cm.member_id
-           JOIN co_profiles cp ON cp.user_id = cm.member_id
-           WHERE cm.circle_id = $1 AND cp.is_circle_connector = TRUE
-           LIMIT 1`,
-          [moment.circle_id],
+        // No Circle Connector step anymore — once consensus is reached (or
+        // forced at the 48hr cutoff), Co confirms and locks in the moment
+        // directly (booking.ts's confirmMoment), no human booking task.
+        await confirmMoment(
+          {
+            id: moment.id,
+            circle_id: moment.circle_id,
+            moments_name: moment.moments_name,
+            venue: moment.venue,
+            venue_booking_url: moment.venue_booking_url,
+            venue_place_id: moment.venue_place_id,
+            suggested_time: moment.suggested_time,
+            moment_start: moment.moment_start,
+          },
+          io,
         );
-
-        const circlePageUrl = `https://app.copatible.com/circles/${moment.circle_id}`;
-
-        // Same fix as the nudge loop above, same reason: these sends used to
-        // be unguarded and directly gated the status UPDATE that stops this
-        // moment from being picked up by this cron again — a delivery
-        // failure here left a moment stuck in 'polling' forever instead of
-        // ever reaching 'consensus_locked' or 'manual_review'.
-        if (connectorResult.rows[0]) {
-          const connector = connectorResult.rows[0];
-          try {
-            await sendblue.messages.send({
-              number: connector.phone_number,
-              content: `${connector.first_name}, your circle is confirmed. Tap to book: ${circlePageUrl}`,
-              from_number: process.env.SENDBLUE_PHONE_NUMBER!,
-            });
-          } catch (smsErr: any) {
-            console.error(`Connector confirmation send failed for moment ${moment.id} (non-fatal):`, smsErr?.message ?? smsErr);
-          }
-          await pool.query(
-            `UPDATE moments SET status = 'consensus_locked', booking_link_sent_at = NOW() WHERE id = $1`,
-            [moment.id],
-          );
-        } else {
-          const responsesSummary = responses
-            .map((r: any) => `${r.first_name}: ${r.response ?? "no reply"}`)
-            .join(", ");
-          try {
-            await sendblue.messages.send({
-              number: process.env.KEANA_PHONE_NUMBER!,
-              content: `Circle consensus needed for moment ${moment.id}. Suggested: ${moment.suggested_time ?? "TBD"}. Responses: ${responsesSummary}. Circle: ${circlePageUrl}`,
-              from_number: process.env.SENDBLUE_PHONE_NUMBER!,
-            });
-          } catch (smsErr: any) {
-            console.error(`Keana manual-review notification failed for moment ${moment.id} (non-fatal):`, smsErr?.message ?? smsErr);
-          }
-          await pool.query(
-            `UPDATE moments SET status = 'manual_review' WHERE id = $1`,
-            [moment.id],
-          );
-        }
       }
     } catch (error) {
       console.error("Consensus cron error:", error);
@@ -349,79 +319,69 @@ export function registerJobs() {
     }
   });
 
-  // Every hour — connector timeout: 4hr nudge → 8hr escalate to Keana
-  cron.schedule("0 * * * *", async () => {
+  // Circle Connector concept removed — Co now confirms/locks in moments
+  // directly (see the consensus cron above, confirmMoment). The connector-
+  // timeout escalation cron that used to live here (4hr nudge → 8hr escalate
+  // to the Moderator + demote trust_score) is gone along with it; no moment
+  // reaches 'consensus_locked' anymore for it to have acted on.
+
+  // Every 30 min — auto-approve any circle placement or venue selection the
+  // Moderator hasn't responded to within 4 hours (low-confidence items that
+  // require her explicit reply are excluded — see requires_moderator_reply).
+  cron.schedule("*/30 * * * *", async () => {
     try {
-      const fourHoursAgo = new Date(
-        Date.now() - 4 * 60 * 60 * 1000,
-      ).toISOString();
-      const eightHoursAgo = new Date(
-        Date.now() - 8 * 60 * 60 * 1000,
-      ).toISOString();
-
-      const overdueResult = await pool.query(
-        `SELECT m.id, m.circle_id, m.booking_link_sent_at, m.connector_nudge_sent_at
-         FROM moments m
-         WHERE m.status = 'consensus_locked'
-         AND m.booking_link_sent_at < $1`,
-        [fourHoursAgo],
+      const staleCircles = await pool.query(
+        `SELECT id, circle_name FROM circles
+         WHERE status = 'pending_approval'
+           AND requires_moderator_reply = false
+           AND moderator_notified_at IS NOT NULL
+           AND moderator_notified_at < NOW() - INTERVAL '4 hours'`,
       );
+      for (const circle of staleCircles.rows) {
+        await activateCircle({ circleId: circle.id, circleName: circle.circle_name, io });
+      }
 
-      for (const moment of overdueResult.rows) {
-        const connectorResult = await pool.query(
-          `SELECT u.id, u.phone_number, u.first_name
-           FROM circle_members cm
-           JOIN users u ON u.id = cm.member_id
-           JOIN co_profiles cp ON cp.user_id = cm.member_id
-           WHERE cm.circle_id = $1 AND cp.is_circle_connector = TRUE
-           LIMIT 1`,
-          [moment.circle_id],
-        );
-        const connector = connectorResult.rows[0];
-        const circlePageUrl = `https://app.copatible.com/circles/${moment.circle_id}`;
-        const past8hrs =
-          new Date(moment.booking_link_sent_at) < new Date(eightHoursAgo);
-
-        // Same fix, same reason as the consensus cron above — these two
-        // sends used to be unguarded and directly gated the writes
-        // (trust_score/is_circle_connector demotion, connector_nudge_sent_at)
-        // that stop this moment from being re-escalated on every future run.
-        if (past8hrs) {
-          try {
-            await sendblue.messages.send({
-              number: process.env.KEANA_PHONE_NUMBER!,
-              content: `Connector unresponsive for 8hrs on moment ${moment.id}. Needs manual booking. Circle: ${circlePageUrl}`,
-              from_number: process.env.SENDBLUE_PHONE_NUMBER!,
-            });
-          } catch (smsErr: any) {
-            console.error(`Keana 8hr-escalation notification failed for moment ${moment.id} (non-fatal):`, smsErr?.message ?? smsErr);
-          }
-          if (connector) {
-            await pool.query(
-              `UPDATE co_profiles SET trust_score = GREATEST(0, trust_score - 10), is_circle_connector = FALSE WHERE user_id = $1`,
-              [connector.id],
-            );
-          }
-        } else if (!moment.connector_nudge_sent_at) {
-          if (connector) {
-            try {
-              await sendblue.messages.send({
-                number: connector.phone_number,
-                content: `${connector.first_name}, your circle is still waiting. Tap to book: ${circlePageUrl}`,
-                from_number: process.env.SENDBLUE_PHONE_NUMBER!,
-              });
-            } catch (smsErr: any) {
-              console.error(`Connector 4hr nudge failed for ${connector.id} (non-fatal):`, smsErr?.message ?? smsErr);
-            }
-            await pool.query(
-              `UPDATE moments SET connector_nudge_sent_at = NOW() WHERE id = $1`,
-              [moment.id],
-            );
-          }
-        }
+      const staleVenues = await pool.query(
+        `SELECT id, circle_id, moments_name, venue, venue_booking_url, venue_place_id, suggested_time, moment_start
+         FROM moments
+         WHERE status = 'pending_venue_approval'
+           AND requires_moderator_reply = false
+           AND moderator_venue_notified_at IS NOT NULL
+           AND moderator_venue_notified_at < NOW() - INTERVAL '4 hours'`,
+      );
+      for (const moment of staleVenues.rows) {
+        await confirmMoment(moment, io);
       }
     } catch (error) {
-      console.error("Connector timeout cron error:", error);
+      console.error("Moderator auto-approve sweep error:", error);
+    }
+  });
+
+  // Every 15 min — retry the Moderator notification for any circle or venue
+  // approval whose initial send never actually landed (moderator_notified_at
+  // / moderator_venue_notified_at only ever get stamped on a genuine
+  // success — see circleApproval.ts/booking.ts) — without this, a Sendblue
+  // outage at notify-time would leave the item stuck, invisible to both the
+  // Moderator and the auto-approve sweep above (which requires the
+  // notified_at timestamp to even consider something stale).
+  cron.schedule("*/15 * * * *", async () => {
+    try {
+      const unsentCircles = await pool.query(
+        `SELECT id FROM circles WHERE status = 'pending_approval' AND moderator_notified_at IS NULL`,
+      );
+      for (const circle of unsentCircles.rows) {
+        await retryCircleModeratorNotification(circle.id);
+      }
+
+      const unsentVenues = await pool.query(
+        `SELECT id, moments_name, venue, suggested_time, requires_moderator_reply, confidence_note
+         FROM moments WHERE status = 'pending_venue_approval' AND moderator_venue_notified_at IS NULL`,
+      );
+      for (const moment of unsentVenues.rows) {
+        await retryVenueApprovalNotification(moment);
+      }
+    } catch (error) {
+      console.error("Moderator notification retry sweep error:", error);
     }
   });
 

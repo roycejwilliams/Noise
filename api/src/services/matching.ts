@@ -1,3 +1,5 @@
+import { anthropic } from "@ai-sdk/anthropic";
+import { generateText } from "ai";
 import pool from "../db/db.js";
 
 const MATCH_RADIUS_MILES = parseFloat(process.env.MATCH_RADIUS_MILES ?? "25");
@@ -9,7 +11,10 @@ const min_size = 4;
 const max_size = 8;
 //ideal target size
 const target_size = 6;
-//minimum score to qualify
+// Single confidence line: a group scoring at or above this places
+// autonomously (Co decided on its own); below it, the group still gets
+// formed and returned (never silently dropped) but goes to the Moderator
+// for review — see circleApproval.ts.
 const min_group_score = 0.55;
 //trust score - separates high trusted users
 const trust_floor = 0.4;
@@ -251,6 +256,112 @@ function groupCompatibilityScore(group: {
   return totalScore / pairCount;
 }
 
+// One entry from co_profiles.intent, as written by captureIntent
+// (profileExtraction.ts) — embedding is whatever was computed from the ask
+// text at capture time, reused here rather than re-embedding.
+type StatedIntent = {
+  text?: string;
+  type?: "seeking" | "offering";
+  status?: string;
+  embedding?: number[] | null;
+};
+
+// captureIntent appends asks over time as calls happen — take the most
+// recent active "seeking" one as the operative filter for this placement.
+// "offering" asks describe what the person can give others, not who they
+// want to be grouped with, so those are left alone.
+function getActiveSeekingAsk(intent: unknown): StatedIntent | null {
+  if (!Array.isArray(intent)) return null;
+  const seeking = (intent as StatedIntent[]).filter(
+    (i) => i?.status === "active" && i?.type === "seeking" && i?.text,
+  );
+  return seeking.length ? seeking[seeking.length - 1] : null;
+}
+
+// Pulls each candidate's single most semantically relevant stored memory
+// (call transcripts, text exchanges, etc.) against the ask's embedding — this
+// is what lets a fact like "worked at Google" surface even though nothing in
+// the structured profile schema tags job history; it's just whatever the
+// person actually said, found generically rather than via a fixed taxonomy.
+async function fetchTopMemoryPerCandidate(
+  candidateIds: string[],
+  askEmbedding: number[],
+): Promise<Map<string, string>> {
+  if (!candidateIds.length) return new Map();
+  const { rows } = await pool.query(
+    `SELECT DISTINCT ON (user_id) user_id, content
+     FROM co_memories
+     WHERE user_id = ANY($1::uuid[]) AND content_embedding IS NOT NULL
+     ORDER BY user_id, content_embedding <=> $2::vector`,
+    [candidateIds, `[${askEmbedding.join(",")}]`],
+  );
+  return new Map(rows.map((r: any) => [r.user_id as string, r.content as string]));
+}
+
+// A stated ask ("find founders with experience at Google") is the strongest,
+// most explicit signal a user can give about who belongs in their circle —
+// applied here as a hard filter alongside city/life-chapter, not folded into
+// the scored dimensions below. Deliberately generic: it judges whatever's
+// actually on file (existing profile fields plus each candidate's own
+// top-matching stored memory) rather than any fixed set of attributes, so it
+// works the same whether the ask is about a career background, a hobby, or a
+// life circumstance.
+async function filterByStatedAsk<
+  T extends {
+    user_id: string;
+    goals?: string[];
+    blockers?: string[];
+    activity_preferences?: string[];
+  },
+>(ask: StatedIntent, candidates: T[]): Promise<T[]> {
+  if (!candidates.length || !ask.text) return candidates;
+
+  const memoryByUser =
+    ask.embedding && ask.embedding.length
+      ? await fetchTopMemoryPerCandidate(candidates.map((c) => c.user_id), ask.embedding)
+      : new Map<string, string>();
+
+  const digest = candidates
+    .map((c, i) => {
+      const facts = [...(c.goals ?? []), ...(c.blockers ?? []), ...(c.activity_preferences ?? [])];
+      const memory = memoryByUser.get(c.user_id);
+      const parts = [
+        facts.length ? facts.join("; ") : null,
+        memory ? `mentioned: "${memory}"` : null,
+      ].filter(Boolean);
+      return `${i}. ${parts.length ? parts.join(" | ") : "(nothing on file)"}`;
+    })
+    .join("\n");
+
+  try {
+    const { text: raw } = await generateText({
+      model: anthropic("claude-haiku-4-5-20251001"),
+      experimental_telemetry: { isEnabled: true, functionId: "matching.filterByStatedAsk" },
+      prompt: `Someone wants to be grouped with people who match this: "${ask.text}"
+
+Here is what's known about each candidate, one per line:
+${digest}
+
+Which candidate numbers actually satisfy that criteria, based only on what's listed? Do not assume or infer facts that aren't present — if nothing on file supports it, that candidate does not satisfy it.
+
+Return ONLY valid JSON, no preamble: {"matching_indices": [0, 2]}`,
+    });
+
+    const clean = raw.replace(/```json|```/g, "").trim();
+    const parsed = JSON.parse(clean);
+    const indices: number[] = Array.isArray(parsed.matching_indices) ? parsed.matching_indices : [];
+    return indices
+      .filter((i) => Number.isInteger(i) && i >= 0 && i < candidates.length)
+      .map((i) => candidates[i]);
+  } catch (err) {
+    // Fail closed — an explicit stated requirement that we can't verify is
+    // treated as unmet, same as any other hard filter falling short, rather
+    // than silently ignoring what the person asked for.
+    console.error("filterByStatedAsk failed, treating as no matches (non-fatal):", err);
+    return [];
+  }
+}
+
 // Trust score check — don't mix chronic ghosts with high-trust users
 // New users start at 0.5 (neutral)
 function passesTrustCheck(trustScores: number[]): boolean {
@@ -262,9 +373,14 @@ function passesTrustCheck(trustScores: number[]): boolean {
 }
 
 // Main matching function — assembles the best circle for a given user
-// Called by POST /co/place
-// Returns an array of user IDs that form the best group, or null if no match found
-async function findBestCircle(userId: string, excludeUserIds: string[] = []): Promise<string[] | null> {
+// Called by POST /co/place. Returns both the user IDs and the final group
+// score — callers that create a pending_approval circle need the score to
+// flag low-confidence placements (see circleApproval.ts); findBestCircle
+// below is a thin wrapper for callers that only need the IDs.
+async function findBestCircleWithScore(
+  userId: string,
+  excludeUserIds: string[] = [],
+): Promise<{ userIds: string[]; finalScore: number } | null> {
   // Step 1 — Fetch the user being placed (lat/lng extracted for PostGIS queries)
   const userResult = await pool.query(
     `SELECT *,
@@ -277,37 +393,22 @@ async function findBestCircle(userId: string, excludeUserIds: string[] = []): Pr
   if (!user) return null;
 
 
-  // Step 2 — Fetch candidates in the same city OR within the configurable radius.
-  // PostGIS distance is computed when the seeker has GPS coords stored;
-  // city string match remains the fallback for users without location data.
-  const radiusMeters = MATCH_RADIUS_MILES * METERS_PER_MILE;
-  const userLat: number | null = user.lat ?? null;
-  const userLng: number | null = user.lng ?? null;
-  const hasLocation = userLat !== null && userLng !== null;
-
+  // Step 2 — Fetch candidates in the same city. City is the sole geographic
+  // authority for matching — GPS coordinates are not used to expand or
+  // redirect this beyond what the user's stated city says (a bad/stale
+  // coordinate value must never silently pull in candidates, or bias a
+  // venue search, toward the wrong city — confirmed: this happened for
+  // real with a leftover test coordinate pointing at NYC for an SF user).
   const candidatesResult = await pool.query(
-    `SELECT cp.*, u.id as user_id,
-            ST_Y(cp.coordinates) AS lat,
-            ST_X(cp.coordinates) AS lng,
-            ${hasLocation
-              ? `CASE WHEN cp.coordinates IS NOT NULL
-                   THEN ST_Distance(cp.coordinates::geography, ST_SetSRID(ST_MakePoint($4, $5), 4326)::geography)
-                   ELSE NULL
-                 END AS distance_meters`
-              : "NULL::float AS distance_meters"}
+    `SELECT cp.*, u.id as user_id
      FROM co_profiles cp
      JOIN users u ON cp.user_id = u.id
      WHERE cp.user_id != $2
      AND cp.user_id != ALL($3::uuid[])
      AND cp.life_chapters != '{}'
      AND cp.goal_embeddings IS NOT NULL
-     AND (
-       cp.city = $1
-       ${hasLocation ? `OR (cp.coordinates IS NOT NULL AND ST_DWithin(cp.coordinates::geography, ST_SetSRID(ST_MakePoint($4, $5), 4326)::geography, $6))` : ""}
-     )`,
-    hasLocation
-      ? [user.city, userId, excludeUserIds, userLng, userLat, radiusMeters]
-      : [user.city, userId, excludeUserIds],
+     AND cp.city = $1`,
+    [user.city, userId, excludeUserIds],
   );
 
   const candidates = candidatesResult.rows;
@@ -317,18 +418,21 @@ async function findBestCircle(userId: string, excludeUserIds: string[] = []): Pr
 
   // Step 3 — Apply hard filters
   // Remove candidates who don't share at least 1 life chapter with the user
-  // and aren't in the same city
-  const filtered = candidates.filter((candidate) => {
-    const sameCity = inSameCity(user.city, candidate.city);
-    const withinRadius = candidate.distance_meters !== null && candidate.distance_meters <= radiusMeters;
-    return (
-      hasSharedChapters([user.life_chapters, candidate.life_chapters]) &&
-      (sameCity || withinRadius)
-    );
-  });
+  let filtered = candidates.filter((candidate) =>
+    hasSharedChapters([user.life_chapters, candidate.life_chapters]),
+  );
 
   // Not enough candidates after filtering
   if (filtered.length < min_size - 1) return null;
+
+  // Step 3.5 — If the user has an active stated ask (e.g. "find founders
+  // with experience at Google"), narrow the pool to candidates who actually
+  // satisfy it before scoring — see filterByStatedAsk.
+  const activeAsk = getActiveSeekingAsk(user.intent);
+  if (activeAsk) {
+    filtered = await filterByStatedAsk(activeAsk, filtered);
+    if (filtered.length < min_size - 1) return null;
+  }
 
 
   // Step 4 — Score all candidates against the user
@@ -396,7 +500,13 @@ async function findBestCircle(userId: string, excludeUserIds: string[] = []): Pr
     }
   }
 
-  // Step 7 — Validate final group score as a whole
+  // Step 7 — Score the final group as a whole. No score-based rejection
+  // here — a group that passed the hard filters (shared chapter, trust,
+  // minimum size) above is always returned with its score; the caller
+  // decides whether it clears min_group_score for autonomous placement or
+  // needs Moderator review (see circleApproval.ts). Nothing gets silently
+  // dropped for scoring low — only for not having enough qualifying
+  // candidates at all (the min_size checks above).
   const finalGroup = [user, ...group];
   const finalScore = groupCompatibilityScore({
     life_chapters: finalGroup.map((m) => m.life_chapters),
@@ -407,23 +517,32 @@ async function findBestCircle(userId: string, excludeUserIds: string[] = []): Pr
     distances_meters: finalGroup.map((m) => m.distance_meters ?? null),
   });
 
-  // If group doesn't meet minimum score — flag for manual placement
-  if (finalScore < min_group_score) return null;
-
   // Step 8 — Enforce max size and return user IDs
   const finalUserIds = [userId, ...group.map((m) => m.user_id as string)];
-  return finalUserIds.slice(0, max_size);
+  return { userIds: finalUserIds.slice(0, max_size), finalScore };
+}
+
+// Thin wrapper for callers that only need the group's user IDs (e.g. the
+// declined-member replacement flow, which never creates a new
+// pending_approval circle and so has no use for the confidence score).
+async function findBestCircle(userId: string, excludeUserIds: string[] = []): Promise<string[] | null> {
+  const result = await findBestCircleWithScore(userId, excludeUserIds);
+  return result?.userIds ?? null;
 }
 
 export {
   activityOverlapScore,
   chapterDepthScore,
   emotionalStateScore,
+  filterByStatedAsk,
   findBestCircle,
+  findBestCircleWithScore,
+  getActiveSeekingAsk,
   goalAlignmentScore,
   groupCompatibilityScore,
   hasSharedChapters,
   inSameCity,
+  min_group_score,
   passesTrustCheck,
   socialEnergyScore,
 };
