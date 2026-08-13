@@ -450,21 +450,45 @@ function validateHumeWebhook(req: Request): boolean {
   const secret = process.env.HUME_WEBHOOK_SECRET;
   if (!secret) return true; // skip when not configured (dev) — matches production's fallback
 
+  // Diagnostic logging (2026-08-13) — real deliveries started 401ing after
+  // this was re-enabled; never logs the secret or the actual signature
+  // values, just enough to tell which specific check is failing.
   const signature = req.headers["x-hume-ai-webhook-signature"] as string | undefined;
   const timestamp = req.headers["x-hume-ai-webhook-timestamp"] as string | undefined;
-  if (!signature || !timestamp) return false;
+  if (!signature || !timestamp) {
+    console.error(
+      `validateHumeWebhook: missing header(s) — signature present: ${!!signature}, timestamp present: ${!!timestamp}, all headers: ${JSON.stringify(Object.keys(req.headers))}`,
+    );
+    return false;
+  }
 
   const timestampMs = Number(timestamp) * 1000;
-  if (!Number.isFinite(timestampMs) || Math.abs(Date.now() - timestampMs) > 180_000) return false;
+  const deltaMs = Date.now() - timestampMs;
+  if (!Number.isFinite(timestampMs) || Math.abs(deltaMs) > 180_000) {
+    console.error(
+      `validateHumeWebhook: timestamp check failed — raw timestamp: "${timestamp}", parsed ms: ${timestampMs}, delta from now: ${deltaMs}ms`,
+    );
+    return false;
+  }
 
   const rawBody = (req.body as Buffer).toString("utf-8");
   const expected = createHmac("sha256", secret).update(`${rawBody}.${timestamp}`).digest("hex");
 
+  let matched = false;
   try {
-    return timingSafeEqual(Buffer.from(signature), Buffer.from(expected));
-  } catch {
+    matched = timingSafeEqual(Buffer.from(signature), Buffer.from(expected));
+  } catch (err: any) {
+    console.error(
+      `validateHumeWebhook: signature comparison threw (likely length mismatch) — received length: ${signature.length}, expected length: ${expected.length}, error: ${err?.message ?? err}`,
+    );
     return false;
   }
+  if (!matched) {
+    console.error(
+      `validateHumeWebhook: signature mismatch — content-type: ${req.headers["content-type"]}, body is Buffer: ${Buffer.isBuffer(req.body)}, body length: ${rawBody.length}, body starts with: ${JSON.stringify(rawBody.slice(0, 40))}`,
+    );
+  }
+  return matched;
 }
 
 export function createWebhooksRouter(io: Server): express.Router {
