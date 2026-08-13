@@ -447,7 +447,11 @@ function validateTwilioSignature(req: Request): boolean {
 // was disabled instead of just left broken. Requires req.body to be the raw
 // Buffer for this route (see server.ts's express.raw() on /co/webhook).
 function validateHumeWebhook(req: Request): boolean {
-  const secret = process.env.HUME_WEBHOOK_SECRET;
+  // Real webhook signing key generated on Hume's Developers page — set in
+  // Railway as HUME_SIGNIN_KEY (not HUME_WEBHOOK_SECRET, an older placeholder
+  // value that was never actually a real Hume-issued key, which is why this
+  // 401'd every real delivery even after the algorithm itself was fixed).
+  const secret = process.env.HUME_SIGNIN_KEY;
   if (!secret) return true; // skip when not configured (dev) — matches production's fallback
 
   // Diagnostic logging (2026-08-13) — real deliveries started 401ing after
