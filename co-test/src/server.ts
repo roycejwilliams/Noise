@@ -8,6 +8,7 @@ import fs from "fs";
 import { createServer } from "http";
 import path from "path";
 import { Server } from "socket.io";
+import { WebSocketServer } from "ws";
 import pool from "../../api/src/db/db.js";
 import { runMigrations } from "../../api/src/db/migrations.js";
 import { runTestMigrations } from "./db/testMigrations.js";
@@ -20,6 +21,7 @@ import loginRouter from "./routes/login.js";
 import phoneRouter from "./routes/phone.js";
 import { createWebhooksRouter } from "./routes/webhooks.js";
 import { requireTesterLoginApi, requireTesterLoginPage } from "./middleware/requireTesterLogin.js";
+import { bridgeTwilioMediaStream } from "./services/mediaStreamBridge.js";
 
 // A fresh Railway Postgres has none of brew_dev's tables yet — runMigrations()
 // (imported unchanged from api/) only ever does ALTER TABLE / CREATE TABLE IF
@@ -54,6 +56,30 @@ async function main() {
   const httpServer = createServer(app);
   const io = new Server(httpServer);
   configureCoTestSocket(io);
+
+  // Twilio's <Connect><Stream> (see callTrigger.ts) connects here directly —
+  // a raw `ws` server, not socket.io, since Twilio Media Streams speaks its
+  // own plain WebSocket JSON protocol. noServer mode + a manual "upgrade"
+  // listener so this coexists with socket.io's own upgrade handling on the
+  // same httpServer without either intercepting the other's path.
+  const mediaStreamWss = new WebSocketServer({ noServer: true });
+  httpServer.on("upgrade", (req, socket, head) => {
+    const { pathname } = new URL(req.url ?? "", `http://${req.headers.host}`);
+    if (pathname !== "/media-stream") return; // socket.io's own listener handles /socket.io/
+    mediaStreamWss.handleUpgrade(req, socket, head, (ws) => {
+      mediaStreamWss.emit("connection", ws, req);
+    });
+  });
+  mediaStreamWss.on("connection", (ws, req) => {
+    const { searchParams } = new URL(req.url ?? "", `http://${req.headers.host}`);
+    const userId = searchParams.get("user_id");
+    if (!userId) {
+      console.error("media-stream: connection with no user_id, closing");
+      ws.close();
+      return;
+    }
+    bridgeTwilioMediaStream(ws, { userId });
+  });
 
   app.get("/health", (_req, res) => res.status(200).send("ok"));
 
