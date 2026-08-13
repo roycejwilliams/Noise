@@ -18,11 +18,7 @@ import { decodeMulawBuffer, encodeMulawBuffer, parseWav, resampleLinear, toMono 
 // returns 48kHz WAV — audioCodec.ts handles both directions.
 const TWILIO_SAMPLE_RATE = 8000;
 
-type BridgeContext = {
-  userId: string;
-};
-
-export function bridgeTwilioMediaStream(twilioWs: WebSocket, ctx: BridgeContext): void {
+export function bridgeTwilioMediaStream(twilioWs: WebSocket): void {
   const hume = new HumeClient({ apiKey: process.env.HUME_API_KEY! });
   let streamSid: string | null = null;
   let humeSocket: ReturnType<typeof hume.empathicVoice.chat.connect> | null = null;
@@ -43,17 +39,17 @@ export function bridgeTwilioMediaStream(twilioWs: WebSocket, ctx: BridgeContext)
     }
   }
 
-  async function startHumeConnection() {
+  async function startHumeConnection(userId: string) {
     const [userResult, contextSummary] = await Promise.all([
-      pool.query(`SELECT first_name FROM users WHERE id = $1`, [ctx.userId]),
-      buildContextSummary(ctx.userId),
+      pool.query(`SELECT first_name FROM users WHERE id = $1`, [userId]),
+      buildContextSummary(userId),
     ]);
     const firstName = userResult.rows[0]?.first_name ?? "";
 
     humeSocket = hume.empathicVoice.chat.connect({
       configId: process.env.HUME_CONFIG_ID!,
       sessionSettings: {
-        customSessionId: ctx.userId,
+        customSessionId: userId,
         audio: { encoding: "linear16", sampleRate: TWILIO_SAMPLE_RATE, channels: 1 },
         // The actual, documented mechanism for {{first_name}}/{{context_summary}}
         // in the prompt (see api/prompts/co-system-prompt.md) — unlike the old
@@ -106,13 +102,23 @@ export function bridgeTwilioMediaStream(twilioWs: WebSocket, ctx: BridgeContext)
     }
 
     switch (msg.event) {
-      case "start":
+      case "start": {
         streamSid = msg.start?.streamSid ?? msg.streamSid ?? null;
-        startHumeConnection().catch((err: any) => {
+        // user_id arrives as a <Parameter> (see callTrigger.ts) — Twilio
+        // strips query strings from Stream URLs entirely, so this is the
+        // only place it's actually reachable, confirmed live.
+        const userId: string | undefined = msg.start?.customParameters?.user_id;
+        if (!userId) {
+          console.error("mediaStreamBridge: start event with no user_id in customParameters, closing");
+          safeCloseAll();
+          break;
+        }
+        startHumeConnection(userId).catch((err: any) => {
           console.error("mediaStreamBridge: failed to start Hume connection:", err?.message ?? err);
           safeCloseAll();
         });
         break;
+      }
 
       case "media": {
         // Frames arriving in the brief window before Hume's socket opens are

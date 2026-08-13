@@ -39,9 +39,16 @@ export async function triggerCall(userId: string): Promise<TriggerCallResult> {
   // dropped. Dynamic variables only work via a session_settings message on a
   // live WebSocket connection, which requires something to actually hold
   // that connection; mediaStreamBridge.ts is that something, on our side.
-  const mediaStreamUrl = `${process.env.API_URL!.replace(/^http/, "ws")}/media-stream?user_id=${userId}`;
+  //
+  // user_id travels as a <Parameter>, NOT a query string on the Stream url —
+  // confirmed live and via Twilio's own docs that Twilio strips query
+  // parameters from Media Stream URLs entirely. <Parameter> values arrive in
+  // the WebSocket's own "start" event as start.customParameters instead (see
+  // mediaStreamBridge.ts), which is the only place this is actually reachable.
+  const mediaStreamUrl = `${process.env.API_URL!.replace(/^http/, "ws")}/media-stream`;
   const twiml = new twilio.twiml.VoiceResponse();
-  twiml.connect().stream({ url: mediaStreamUrl });
+  const stream = twiml.connect().stream({ url: mediaStreamUrl });
+  stream.parameter({ name: "user_id", value: userId });
 
   const call = await twilioClient.calls.create({
     to: user.phone_number,

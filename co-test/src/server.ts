@@ -44,6 +44,12 @@ async function main() {
   runTestMigrations();
 
   const app = express();
+  // Hume's webhook signature is an HMAC over the exact raw body string, so
+  // this needs to run before the global express.json() below — a
+  // re-serialized/parsed-then-stringified body isn't guaranteed
+  // byte-identical to what Hume actually signed (same reasoning as
+  // production's Stripe webhook, api/src/server.ts).
+  app.use("/co/webhook", express.raw({ type: "application/json" }));
   app.use(express.json({ limit: "2mb" }));
   app.use(express.urlencoded({ extended: false })); // Twilio status callbacks are form-encoded
   app.use(cookieParser());
@@ -70,15 +76,13 @@ async function main() {
       mediaStreamWss.emit("connection", ws, req);
     });
   });
-  mediaStreamWss.on("connection", (ws, req) => {
-    const { searchParams } = new URL(req.url ?? "", `http://${req.headers.host}`);
-    const userId = searchParams.get("user_id");
-    if (!userId) {
-      console.error("media-stream: connection with no user_id, closing");
-      ws.close();
-      return;
-    }
-    bridgeTwilioMediaStream(ws, { userId });
+  // user_id is NOT available yet at upgrade time — Twilio strips query
+  // parameters from Stream URLs entirely (confirmed live and via Twilio's
+  // docs), so it travels as a <Parameter> instead (see callTrigger.ts) and
+  // only arrives once the socket sends its own "start" event. bridgeTwilioMediaStream
+  // resolves it from there itself.
+  mediaStreamWss.on("connection", (ws) => {
+    bridgeTwilioMediaStream(ws);
   });
 
   app.get("/health", (_req, res) => res.status(200).send("ok"));

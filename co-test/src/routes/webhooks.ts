@@ -1,4 +1,4 @@
-import { randomInt, timingSafeEqual } from "crypto";
+import { createHmac, randomInt, timingSafeEqual } from "crypto";
 import { generateText } from "ai";
 import { anthropic } from "@ai-sdk/anthropic";
 import { propagateAttributes } from "@langfuse/tracing";
@@ -416,17 +416,16 @@ async function handleToolCall(
 // Without it, anyone could POST arbitrary CallStatus/To/CallSid values and
 // corrupt call_status for a guessed/observed call_sid.
 //
-// Calls are placed under the TWILIO_LIVE_SID subaccount (see callTrigger.ts),
-// and Twilio signs status callbacks with the OWNING account's Auth Token — a
-// subaccount's callbacks are never valid against the parent account's
-// TWILIO_AUTH_TOKEN, so this needs the subaccount's own token (confirmed the
-// hard way: every real call's status callback 401'd despite a valid,
-// active account, because this was checking the wrong token entirely).
+// One Twilio account (TWILIO_LIVE_SID is its real Account SID;
+// TWILIO_ACCOUNT_SID is a same-account API Key SID, not a second account) —
+// TWILIO_AUTH just needs to hold that account's current Auth Token. Confirmed
+// live: it previously held a stale value (401'd against Twilio's own API),
+// now holds the verified-current one (200'd the same check).
 function validateTwilioSignature(req: Request): boolean {
   const sig = req.headers["x-twilio-signature"] as string | undefined;
   if (!sig) return false;
   const url = `${process.env.API_URL}/co/call-status`;
-  return twilio.validateRequest(process.env.TWILIO_LIVE_AUTH_TOKEN!, sig, url, req.body);
+  return twilio.validateRequest(process.env.TWILIO_AUTH!, sig, url, req.body);
 }
 
 // Reject webhook calls that didn't come from Hume — same check production's
@@ -437,13 +436,32 @@ function validateTwilioSignature(req: Request): boolean {
 // through co-test's public /call page could forge a chat_ended event
 // pointing at a different tester's user_id and overwrite that tester's
 // profile/recap with the attacker's own transcript.
+// Hume signs each webhook with a dedicated webhook signing key (separate
+// from the API key, generated on Hume's Developers page) — HMAC-SHA256 over
+// the exact string "${rawBody}.${timestamp}", hex-encoded, sent as
+// X-Hume-AI-Webhook-Signature, with the timestamp itself sent as
+// X-Hume-AI-Webhook-Timestamp (rejected if older than 180s, to block
+// replay). Confirmed against Hume's own docs — the previous version checked
+// a different header entirely and compared it directly against the secret,
+// which could never match anything Hume actually sends, which is why this
+// was disabled instead of just left broken. Requires req.body to be the raw
+// Buffer for this route (see server.ts's express.raw() on /co/webhook).
 function validateHumeWebhook(req: Request): boolean {
   const secret = process.env.HUME_WEBHOOK_SECRET;
   if (!secret) return true; // skip when not configured (dev) — matches production's fallback
-  const header = req.headers["x-hume-signature"] ?? req.headers["authorization"]?.toString().replace("Bearer ", "");
-  if (!header) return false;
+
+  const signature = req.headers["x-hume-ai-webhook-signature"] as string | undefined;
+  const timestamp = req.headers["x-hume-ai-webhook-timestamp"] as string | undefined;
+  if (!signature || !timestamp) return false;
+
+  const timestampMs = Number(timestamp) * 1000;
+  if (!Number.isFinite(timestampMs) || Math.abs(Date.now() - timestampMs) > 180_000) return false;
+
+  const rawBody = (req.body as Buffer).toString("utf-8");
+  const expected = createHmac("sha256", secret).update(`${rawBody}.${timestamp}`).digest("hex");
+
   try {
-    return timingSafeEqual(Buffer.from(header as string), Buffer.from(secret));
+    return timingSafeEqual(Buffer.from(signature), Buffer.from(expected));
   } catch {
     return false;
   }
@@ -461,14 +479,13 @@ export function createWebhooksRouter(io: Server): express.Router {
   // was talking to a machine.
   router.post("/co/call-status", async (req: Request, res: Response, next: NextFunction) => {
     try {
-      // Signature check temporarily disabled (2026-08-13) — TWILIO_LIVE_AUTH_TOKEN
-      // for the TWILIO_LIVE_SID subaccount isn't set anywhere, so validateTwilioSignature
-      // (added 2026-08-11, fea72d2) 401s every real call's status callback. This route
-      // only writes users.call_status, which just drives /phone's live-polling UI text
-      // (ringing/connected/etc) — it never touches transcript/profile data, so the
-      // window this reopens (a forged status update for a guessed call_sid) is low
-      // stakes. Re-enable by restoring the validateTwilioSignature call below once
-      // TWILIO_LIVE_AUTH_TOKEN is set (see validateTwilioSignature's own comment).
+      // Re-enabled 2026-08-13 — TWILIO_AUTH previously held a stale/wrong Auth
+      // Token, confirmed directly against Twilio's API (Basic Auth against
+      // /Accounts/{TWILIO_LIVE_SID}.json returned 401). Now holds the current,
+      // verified-correct token (confirmed 200 against the same check).
+      if (!validateTwilioSignature(req)) {
+        return res.status(401).send("Invalid Twilio signature.");
+      }
 
       const { CallStatus, To, CallSid, AnsweredBy } = req.body;
 
@@ -571,14 +588,20 @@ export function createWebhooksRouter(io: Server): express.Router {
   // production's separate Hume config and its webhook are never touched.
   router.post("/co/webhook", async (req: Request, res: Response, next: NextFunction) => {
     try {
-      // Signature check temporarily disabled (2026-08-13) — same call as
-      // /co/call-status above: HUME_WEBHOOK_SECRET's actual header/value
-      // mismatch with what Hume sends isn't root-caused yet, and this was
-      // 401ing every real call's chat_ended event, which is what actually
-      // captures the transcript into co_memories/co_profiles. Re-enable by
-      // restoring the validateHumeWebhook call below once that's diagnosed.
+      // Re-enabled 2026-08-13 — validateHumeWebhook previously checked the
+      // wrong header entirely (see its own comment); now implements Hume's
+      // actual HMAC scheme, confirmed against their docs.
+      if (!validateHumeWebhook(req)) {
+        return res.status(401).send("Unauthorized.");
+      }
 
-      const { event_name, custom_session_id, chat_id, twilio_metadata, tool_call_message } = req.body;
+      // req.body is the raw Buffer here (see server.ts's express.raw() on
+      // this path, needed for signature verification above) — parse it now
+      // that verification is done. Kept as its own variable (not reassigned
+      // onto req.body) so the "could not resolve user" log below still shows
+      // something readable rather than JSON.stringify-ing a Buffer.
+      const parsedBody = JSON.parse((req.body as Buffer).toString("utf-8"));
+      const { event_name, custom_session_id, chat_id, twilio_metadata, tool_call_message } = parsedBody;
 
       const resolveUserId = async (): Promise<string | null> => {
         if (custom_session_id) return custom_session_id;
@@ -621,7 +644,7 @@ export function createWebhooksRouter(io: Server): express.Router {
 
       const user_id = await resolveUserId();
       if (!user_id || !chat_id) {
-        console.error(`webhooks: could not resolve user for chat ${chat_id} — body: ${JSON.stringify(req.body)}`);
+        console.error(`webhooks: could not resolve user for chat ${chat_id} — body: ${JSON.stringify(parsedBody)}`);
         return res.status(400).send("Missing required fields.");
       }
 
