@@ -48,6 +48,47 @@ import { findRealVenues } from "../services/venueLookup.js";
 // rather than trying to automate it (no evidence Sendblue exposes webhook
 // config via API).
 
+// Heuristic-only (no LLM call — this is directly observable, not something
+// to infer) read of how the user themselves texts, from their own lines in
+// the chronological window already fetched for the reply prompt. Nudges
+// phrasing only (length/formality/emoji) — deliberately leaves Co's core
+// brand-voice rules (no em dashes, no exclamation points) alone, since those
+// aren't a per-user mirroring target. Needs at least 2 of the user's own
+// messages before saying anything, so a first-ever text doesn't get a hint
+// built off n=1. Mirrors api/src/routes/sendblue.ts's version exactly, kept
+// in sync manually since the two webhook handlers are separate
+// implementations by design (see the header comment on this file).
+function deriveStyleHint(chronological: { content: string }[]): string {
+  const userLines = chronological
+    .map((m) => m.content)
+    .filter((c) => c.startsWith("User said: ") || c.startsWith("User sent a voice memo: "))
+    .map((c) => c.replace(/^User (said|sent a voice memo): /, ""));
+
+  if (userLines.length < 2) return "";
+
+  const avgWords =
+    userLines.reduce((sum, l) => sum + l.trim().split(/\s+/).length, 0) / userLines.length;
+  const emojiRate =
+    userLines.filter((l) => /\p{Emoji_Presentation}/u.test(l)).length / userLines.length;
+  const lowercaseRate =
+    userLines.filter((l) => l === l.toLowerCase() && /[a-z]/.test(l)).length / userLines.length;
+
+  const notes: string[] = [];
+  if (avgWords <= 6) {
+    notes.push("they text short and to the point — keep your replies just as brief, don't pad them out");
+  } else if (avgWords >= 20) {
+    notes.push("they text in longer, fuller messages — a slightly fuller reply than usual is fine here");
+  }
+  if (emojiRate >= 0.3) {
+    notes.push("they use emoji — an occasional one back is fine, don't force it every message");
+  }
+  if (lowercaseRate >= 0.6) {
+    notes.push("they text casually, lowercase, minimal punctuation — match that relaxed tone");
+  }
+
+  return notes.length ? `\nHow they text (match this energy, not their exact words): ${notes.join("; ")}.` : "";
+}
+
 type HumeChatEvent = {
   role: string;
   type: string;
@@ -866,6 +907,7 @@ export function createWebhooksRouter(io: Server): express.Router {
         : null;
 
       const recentConversation = recentTextResult.rows.map((r: any) => r.content).reverse().join("\n");
+      const styleHint = deriveStyleHint(recentTextResult.rows);
 
       await pool.query(
         `INSERT INTO co_memories (user_id, memory_type, content) VALUES ($1, 'text_exchange', $2)`,
@@ -1278,6 +1320,7 @@ ${recentConversation || "(start of the text conversation)"}
 
 ${user.first_name} just said: "${content}"
 ${recommendationContext}${venueContext}${callOfferContext}
+${styleHint}
 Ground everything ONLY in the information above and what has actually been said in this conversation — never state or imply a specific personal detail, preference, or fact about them that isn't listed above or wasn't actually said in this thread. This includes real venues and businesses: never name a specific one unless it's given to you above as something you actually found — if you don't have a real one, describe what you'd look for, don't guess a plausible-sounding name. If you don't have something, ask rather than assume.
 
 Keep THIS reply short — one text-message-length turn, not a call-length response. A sentence or two. No exclamation points, no em dashes. This is a text message, not a paragraph — but if you're relaying a real find (a name, a reason, a link), give it the room it actually needs rather than cutting it short.`,

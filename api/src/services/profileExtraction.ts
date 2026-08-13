@@ -448,11 +448,17 @@ Transcript:
       created_at: new Date().toISOString(),
     };
 
+    // Upsert, not a plain UPDATE — the call/typed-intake path is the only
+    // other place a co_profiles row gets created (storeProfile), so a
+    // text-only user who has never called would otherwise have no row for
+    // this to update against and the ask would silently vanish.
     await pool.query(
-      `UPDATE co_profiles
-       SET intent = COALESCE(intent, '[]'::jsonb) || $1::jsonb
-       WHERE user_id = $2`,
-      [JSON.stringify([newIntent]), user_id],
+      `INSERT INTO co_profiles (user_id, intent, updated_at)
+       VALUES ($1, $2::jsonb, NOW())
+       ON CONFLICT (user_id) DO UPDATE SET
+         intent = COALESCE(co_profiles.intent, '[]'::jsonb) || EXCLUDED.intent,
+         updated_at = NOW()`,
+      [user_id, JSON.stringify([newIntent])],
     );
 
     const memParts = [

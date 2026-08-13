@@ -10,6 +10,7 @@ import { sendSMS } from "../otpActions.js";
 import elevenlabs from "../services/elevenlabs.js";
 import { generateCircleTitle, generateWarmCircleInviteMessage } from "../services/circleInvite.js";
 import { generateEmbedding } from "../services/embeddings.js";
+import { captureIntent, extractPsychographicProfile, storeProfile } from "../services/profileExtraction.js";
 import {
   createMomentForCircle,
   getCircleBookingContext,
@@ -41,94 +42,43 @@ function withPhoneLock<T>(phone: string, fn: () => Promise<T>): Promise<T> {
   return withAdvisoryLock(`phone:${phone}`, fn);
 }
 
-const ALLOWED_LIFE_CHAPTERS = ["new_to_city", "building_solo", "career_pivot", "starting_over"];
+// Heuristic-only (no LLM call — this is directly observable, not something
+// to infer) read of how the user themselves texts, from their own lines in
+// the chronological window already fetched for the reply prompt. Nudges
+// phrasing only (length/formality/emoji) — deliberately leaves Co's core
+// brand-voice rules (no em dashes, no exclamation points) alone, since
+// those aren't a per-user mirroring target. Needs at least 2 of the user's
+// own messages before saying anything, so a first-ever text doesn't get a
+// hint built off n=1.
+function deriveStyleHint(chronological: { content: string }[]): string {
+  const userLines = chronological
+    .map((m) => m.content)
+    .filter((c) => c.startsWith("User said: ") || c.startsWith("User sent a voice memo: "))
+    .map((c) => c.replace(/^User (said|sent a voice memo): /, ""));
 
-// Unlike typed-intake/chat_ended (which extract a full profile from a
-// complete transcript and overwrite every field), this only changes fields
-// the model finds explicitly communicated in this one message — everything
-// else in co_profiles is left untouched, so a casual reply can't wipe out
-// previously-known life_chapters/goals with empty arrays. Only runs if a
-// profile already exists; the conversational path still doesn't create one
-// from nothing (that stays a call/typed-intake job).
-async function updateProfileFromMessage(user_id: string, message: string): Promise<void> {
-  try {
-    const existing = await pool.query(
-      `SELECT life_chapters, emotional_state, goals, blockers FROM co_profiles WHERE user_id = $1`,
-      [user_id],
-    );
-    const current = existing.rows[0];
-    if (!current) return;
+  if (userLines.length < 2) return "";
 
-    const { text: rawUpdate } = await propagateAttributes(
-      { userId: user_id, traceName: "sendblue.updateProfileFromMessage" },
-      () =>
-        generateText({
-          model: anthropic("claude-haiku-4-5-20251001"),
-          experimental_telemetry: { isEnabled: true, functionId: "sendblue.updateProfileFromMessage" },
-          prompt: `You are Co, tracking what you know about a user across conversations.
+  const avgWords =
+    userLines.reduce((sum, l) => sum + l.trim().split(/\s+/).length, 0) / userLines.length;
+  const emojiRate =
+    userLines.filter((l) => /\p{Emoji_Presentation}/u.test(l)).length / userLines.length;
+  const lowercaseRate =
+    userLines.filter((l) => l === l.toLowerCase() && /[a-z]/.test(l)).length / userLines.length;
 
-Current known profile:
-- life_chapters: ${current.life_chapters?.join(", ") || "none"} (allowed values: new_to_city, building_solo, career_pivot, starting_over)
-- emotional_state: ${current.emotional_state ?? "unknown"}
-- goals: ${current.goals?.join(", ") || "none"}
-- blockers: ${current.blockers?.join(", ") || "none"}
-
-The user just said: "${message}"
-
-Does this message indicate a REAL, EXPLICIT change to any of the above? Only include a field if the message clearly communicates a change to it — do not guess or infer beyond what's stated.
-
-Return ONLY valid JSON. Omit any field that hasn't changed:
-{
-  "life_chapters": ["..."],
-  "emotional_state": "...",
-  "goals": ["..."],
-  "blockers": ["..."]
-}
-
-If nothing has changed, return {}.`,
-        }),
-    );
-
-    // Haiku occasionally adds a trailing sentence after the JSON object —
-    // extract just the {...} block instead of assuming the whole response
-    // is strictly valid JSON.
-    const jsonMatch = rawUpdate.match(/\{[\s\S]*\}/);
-    if (!jsonMatch) return;
-    const updates = JSON.parse(jsonMatch[0]);
-    if (!updates || typeof updates !== "object" || Object.keys(updates).length === 0) return;
-
-    const values: any[] = [user_id];
-    const sets: string[] = [];
-
-    if (Array.isArray(updates.life_chapters)) {
-      const safe = updates.life_chapters.filter((c: string) => ALLOWED_LIFE_CHAPTERS.includes(c));
-      if (safe.length) {
-        values.push(safe);
-        sets.push(`life_chapters = $${values.length}`);
-      }
-    }
-    if (typeof updates.emotional_state === "string" && updates.emotional_state) {
-      values.push(updates.emotional_state);
-      sets.push(`emotional_state = $${values.length}`);
-    }
-    if (Array.isArray(updates.goals) && updates.goals.length) {
-      values.push(updates.goals);
-      sets.push(`goals = $${values.length}`);
-    }
-    if (Array.isArray(updates.blockers) && updates.blockers.length) {
-      values.push(updates.blockers);
-      sets.push(`blockers = $${values.length}`);
-    }
-
-    if (!sets.length) return;
-
-    await pool.query(
-      `UPDATE co_profiles SET ${sets.join(", ")}, updated_at = NOW() WHERE user_id = $1`,
-      values,
-    );
-  } catch (err: any) {
-    console.error("updateProfileFromMessage failed (non-fatal):", err?.message ?? err);
+  const notes: string[] = [];
+  if (avgWords <= 6) {
+    notes.push("they text short and to the point — keep your replies just as brief, don't pad them out");
+  } else if (avgWords >= 20) {
+    notes.push("they text in longer, fuller messages — a slightly fuller reply than usual is fine here");
   }
+  if (emojiRate >= 0.3) {
+    notes.push("they use emoji — an occasional one back is fine, don't force it every message");
+  }
+  if (lowercaseRate >= 0.6) {
+    notes.push("they text casually, lowercase, minimal punctuation — match that relaxed tone");
+  }
+
+  return notes.length ? `\nHow they text (match this energy, not their exact words): ${notes.join("; ")}.` : "";
 }
 
 // Detect whether a media_url is a voice memo by checking its Content-Type
@@ -1129,6 +1079,7 @@ Return ONLY the classification, nothing else.`,
           .reverse()
           .map((m: any) => m.content)
           .join("\n");
+        const styleHint = deriveStyleHint(chronologicalResult.rows);
 
         // Ground replies in the user's actual upcoming moment (real venue,
         // description, vibes) instead of only loose free-text memory
@@ -1171,6 +1122,7 @@ Return ONLY the classification, nothing else.`,
 
           ${imageForVision ? "They just sent the attached photo." : `They just said: "${resolvedContent}"`}
           ${callOfferContext}
+          ${styleHint}
 
           Respond as Co. Warm, specific, brief.${imageForVision ? " React to what's actually in the photo." : " Use their context to make it personal."}
           2 sentences max. No em dashes. No exclamation points.`;
@@ -1217,10 +1169,20 @@ Return ONLY the classification, nothing else.`,
           )
           .catch((err) => console.error("Memory embedding failed (non-fatal):", err));
 
-        // Non-blocking — updates co_profiles only if this message explicitly
-        // communicates a change (see updateProfileFromMessage for why this
-        // doesn't just reuse the typed-intake extraction).
-        updateProfileFromMessage(user.id, resolvedContent).catch(() => {});
+        // Fire-and-forget, same real pipeline a call uses (extractPsychographicProfile
+        // + storeProfile + captureIntent), fed the accumulated text thread instead of
+        // a call transcript — matches co-test/src/routes/webhooks.ts's already-proven
+        // approach, ported here since prod previously had only a thin 4-field patch
+        // (life_chapters/emotional_state/goals/blockers) that couldn't create a
+        // profile row at all and never touched intent, so a text-only user's stated
+        // ask never reached co_profiles.intent for matching.filterByStatedAsk to use.
+        const textTranscript = `${recentConversation}\nuser: ${resolvedContent}\nassistant: ${coReply}`.trim();
+        extractPsychographicProfile(textTranscript)
+          .then(({ extracted }) => storeProfile(user.id, extracted, textTranscript))
+          .catch((err: any) => console.error("sendblue: text-based profile extraction failed (non-fatal):", err?.message ?? err));
+        captureIntent(user.id, textTranscript).catch((err: any) =>
+          console.error("sendblue: text-based intent capture failed (non-fatal):", err?.message ?? err),
+        );
 
         // Step 8 — Send reply matching the user's medium, emit to socket
         await sendCoReply({ phone: user.phone_number, message: coReply, asVoice: isVoice });
