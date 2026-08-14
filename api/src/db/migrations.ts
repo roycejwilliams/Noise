@@ -478,11 +478,11 @@ export function runMigrations() {
         created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
       )`,
     )
-    .catch((err: Error) => console.error("post_call_follow_ups table init failed:", err));
-  pool
-    .query(
-      `CREATE INDEX IF NOT EXISTS idx_post_call_follow_ups_due
-       ON post_call_follow_ups (send_at) WHERE sent_at IS NULL`,
+    .then(() =>
+      pool.query(
+        `CREATE INDEX IF NOT EXISTS idx_post_call_follow_ups_due
+         ON post_call_follow_ups (send_at) WHERE sent_at IS NULL`,
+      ),
     )
-    .catch((err: Error) => console.error("idx_post_call_follow_ups_due migration failed:", err));
+    .catch((err: Error) => console.error("post_call_follow_ups table/index init failed:", err));
 }
