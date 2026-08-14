@@ -21,6 +21,7 @@
     "express": "^5.2.1",
     "hume": "^0.15.17",
     "libphonenumber-js": "^1.13.7",
+    "node-cron": "^4.6.0",
     "openai": "^6.42.0",
     "pg": "^8.20.0",
     "resend": "^6.10.0",

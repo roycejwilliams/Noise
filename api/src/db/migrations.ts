@@ -455,4 +455,34 @@ export function runMigrations() {
   pool
     .query(`ALTER TABLE circles ALTER COLUMN circle_name TYPE TEXT`)
     .catch((err: Error) => console.error("circles.circle_name widen migration failed:", err));
+
+  // Post-call reflection text used to fire immediately at chat_ended — reads
+  // as a scripted status update landing the second the call ends, not
+  // something a person who was actually listening would do. One row per
+  // call, send_at randomized 2h-2d out at chat_ended time (see
+  // sendFollowUpText's caller), a cron polls for due rows and generates the
+  // actual message text at send time (not schedule time) so it's a fresh
+  // LLM call each send, not a stored/reused string. sent_at is the
+  // once-only guard — the poller's WHERE clause excludes anything already
+  // sent, and it's set in the same statement that sends, not after, so a
+  // crash between send and mark-sent fails closed (skipped, not resent)
+  // rather than risking a duplicate.
+  pool
+    .query(
+      `CREATE TABLE IF NOT EXISTS post_call_follow_ups (
+        id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+        user_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+        transcript TEXT NOT NULL,
+        send_at TIMESTAMPTZ NOT NULL,
+        sent_at TIMESTAMPTZ,
+        created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+      )`,
+    )
+    .catch((err: Error) => console.error("post_call_follow_ups table init failed:", err));
+  pool
+    .query(
+      `CREATE INDEX IF NOT EXISTS idx_post_call_follow_ups_due
+       ON post_call_follow_ups (send_at) WHERE sent_at IS NULL`,
+    )
+    .catch((err: Error) => console.error("idx_post_call_follow_ups_due migration failed:", err));
 }

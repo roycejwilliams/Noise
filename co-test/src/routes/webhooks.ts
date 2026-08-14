@@ -246,36 +246,26 @@ function capMessageLength(text: string, maxChars = TEXT_MESSAGE_CHAR_CAP): strin
   return `${window.slice(0, lastSpace > 0 ? lastSpace : maxChars).trim()}…`;
 }
 
-// Best-effort follow-up text, same intent as production's — proves the real
-// iMessage round trip works post-call, not just the phone call. "1-2
-// sentences" alone wasn't a real length constraint — the model packed
-// multiple observations into those 1-2 sentences, and a duplicate chat_ended
-// delivery (fixed by the call_status claim in the webhook handler) used to
-// fire this three times in a row on top of that. Now: one detail, an
-// explicit char budget in the prompt, and capMessageLength as a hard
-// backstop. Failure here is deliberately swallowed — it must never affect
-// call_status/retryability, since the recap (the actual result) is already
-// persisted by the time this runs.
-async function sendFollowUpText(
-  callUser: { first_name: string; phone_number: string } | null,
-  transcript: string,
-): Promise<void> {
-  if (!callUser) return;
+// Schedules the post-call reflection text instead of sending it immediately
+// — landing the second the call ends read as a scripted status update, not
+// something a person who was actually listening would send. send_at is
+// randomized 2h-2d out; postCallFollowUpJob.ts polls for due rows and
+// generates + sends the actual message at send time (not now), so it's a
+// fresh LLM call per send and can never be the same script twice. Failure
+// here is deliberately swallowed — it must never affect call_status/
+// retryability, since the recap (the actual result) is already persisted by
+// the time this runs.
+async function scheduleFollowUpText(userId: string, transcript: string): Promise<void> {
   try {
-    const followUpPersona = await getCoPersonaPrompt();
-    const { text: followUpMessage } = await generateText({
-      model: anthropic("claude-haiku-4-5-20251001"),
-      experimental_telemetry: { isEnabled: true, functionId: "co-test.webhooks.postCallFollowUp" },
-      prompt: `${followUpPersona ?? "You are Co."} You just got off a call with ${callUser.first_name}. Here's what they told you:\n\n"${transcript}"\n\nText them something short that proves you were actually listening. Pick exactly ONE real, specific thing they said (a feeling, a struggle, a detail) and respond to only that — nothing else. No second observation, no forward-looking plan, no summary of the call.\n\nDo not say "I have what I need," "I'll be in touch," "your circle is ready/next," or anything that sounds like a status update. No exclamation points. No em dashes.\n\nThis is a text message, not the call — keep it short, one text-message-length turn. Under 160 characters.`,
-    });
-    const cappedFollowUp = capMessageLength(followUpMessage, 160);
-    await sendblue.messages.send({
-      number: callUser.phone_number,
-      content: cappedFollowUp,
-      from_number: process.env.SENDBLUE_PHONE_NUMBER!,
-    });
-  } catch (followUpErr: any) {
-    console.error("Post-call follow-up text failed (non-fatal):", followUpErr?.message ?? followUpErr);
+    const TWO_HOURS_MS = 2 * 60 * 60 * 1000;
+    const TWO_DAYS_MS = 2 * 24 * 60 * 60 * 1000;
+    const delayMs = TWO_HOURS_MS + Math.random() * (TWO_DAYS_MS - TWO_HOURS_MS);
+    await pool.query(
+      `INSERT INTO post_call_follow_ups (user_id, transcript, send_at) VALUES ($1, $2, NOW() + $3 * INTERVAL '1 millisecond')`,
+      [userId, transcript, delayMs],
+    );
+  } catch (scheduleErr: any) {
+    console.error("Post-call follow-up scheduling failed (non-fatal):", scheduleErr?.message ?? scheduleErr);
   }
 }
 
@@ -753,9 +743,6 @@ export function createWebhooksRouter(io: Server): express.Router {
       }
 
       try {
-        const callUserResult = await pool.query(`SELECT first_name, phone_number FROM users WHERE id = $1`, [user_id]);
-        const callUser = callUserResult.rows[0] ?? null;
-
         const [events, recording_url] = await Promise.all([
           fetchHumeChatEvents(chat_id),
           fetchHumeRecordingUrl(chat_id),
@@ -809,7 +796,7 @@ export function createWebhooksRouter(io: Server): express.Router {
         // retryability; it already has its own non-fatal try/catch below.
         await pool.query(`UPDATE users SET call_status = 'completed' WHERE id = $1`, [user_id]);
 
-        await sendFollowUpText(callUser, transcript);
+        await scheduleFollowUpText(user_id, transcript);
         return res.status(200).send({ success: true });
       } catch (pipelineErr) {
         await pool.query(`UPDATE users SET call_status = 'failed' WHERE id = $1`, [user_id]);
@@ -1497,6 +1484,18 @@ Return ONLY valid JSON, no preamble: {"wants_venue": true or false, "venue_type"
           coverage.missing_topics.length && !coverage.ready_to_summarize
             ? `\nStill missing from what you know about them: ${coverage.missing_topics.map((t) => RAPPORT_TOPIC_DESCRIPTIONS[t]).join("; ")}. If it fits naturally off what they just said, work ONE of these in as a genuine follow-up question — not a survey, and don't force it if the conversation is clearly headed somewhere else right now.\n`
             : "";
+        // Text has no hang_up tool call to mark "this is the closing turn"
+        // the way a live call does, so nothing ever told Co this reply might
+        // BE the close — it would just keep asking another question forever,
+        // or trail off with nothing when there was genuinely nothing left to
+        // ask. ready_to_summarize (same signal Phase 2 uses on a call) is
+        // the actual "we have enough" moment; only surface the option to
+        // close when there's also nothing left missing, so this never fires
+        // while a real gap is still open.
+        const closingContext =
+          coverage.ready_to_summarize && !coverage.missing_topics.length
+            ? `\nYou likely have what you need from them now. If what they just said makes this feel like a natural close — not if it doesn't, don't force it — deliver a real closing turn: reference something specific and real from this conversation (not a generic "got it, thanks"), and be precise about what happens next, the same spirit as the end of a call: circle placement isn't instant, it happens in waves as the right people are ready; other things can move faster; never promise a specific date. Do not close on a question you haven't answered — if their last message asked you something directly, answer it first, even briefly, before any close.\n`
+            : "";
 
         const { text: reply } = await propagateAttributes(
           { userId: user.id, traceName: "co-test.webhooks.generateReply" },
@@ -1515,7 +1514,7 @@ Recent text conversation, in order:
 ${recentConversation || "(start of the text conversation)"}
 
 ${user.first_name} just said: "${content}"
-${recommendationContext}${venueContext}${callOfferContext}
+${recommendationContext}${venueContext}${callOfferContext}${closingContext}
 ${styleHint}
 Ground everything ONLY in the information above and what has actually been said in this conversation — never state or imply a specific personal detail, preference, or fact about them that isn't listed above or wasn't actually said in this thread. This includes real venues and businesses: never name a specific one unless it's given to you above as something you actually found — if you don't have a real one, describe what you'd look for, don't guess a plausible-sounding name. If you don't have something, ask rather than assume.
 
