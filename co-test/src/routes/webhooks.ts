@@ -1253,7 +1253,23 @@ Return ONLY the classification, nothing else.`,
       if (shouldTriggerCall) {
         const callResult = await triggerCall(user.id);
         if (callResult.success) {
-          const confirmation = "Calling you now.";
+          // A fixed "Calling you now." every time reads as a canned system
+          // message, not someone actually reacting to what was just asked
+          // for. Kept fast (Haiku, one short line, hard fallback) since the
+          // real call is already dialing — this must never add meaningful
+          // delay or block on a slow/failed generation.
+          let confirmation = "Calling you now.";
+          try {
+            const { text: variedConfirmation } = await generateText({
+              model: anthropic("claude-haiku-4-5-20251001"),
+              experimental_telemetry: { isEnabled: true, functionId: "co-test.webhooks.callConfirmation" },
+              prompt: `You are Co. ${user.first_name} just texted: "${content}" — asking you to call them. You're calling them right now. Send a short, natural one-line text confirming that — vary how you say it, don't just say "Calling you now." No exclamation points, no em dashes. Under 40 characters.`,
+            });
+            const trimmed = variedConfirmation.trim();
+            if (trimmed) confirmation = trimmed.length > 60 ? trimmed.slice(0, 59) + "…" : trimmed;
+          } catch (genErr: any) {
+            console.error("Call-confirmation generation failed (non-fatal, using default):", genErr?.message ?? genErr);
+          }
           await pool.query(
             `INSERT INTO co_memories (user_id, memory_type, content) VALUES ($1, 'text_exchange', $2)`,
             [user.id, `Co replied: ${confirmation}`],
