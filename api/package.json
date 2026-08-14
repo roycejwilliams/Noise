@@ -16,6 +16,8 @@
     "@ai-sdk/anthropic": "^3.0.79",
     "@elevenlabs/elevenlabs-js": "^2.51.0",
     "@googlemaps/google-maps-services-js": "^3.4.2",
+    "@langfuse/otel": "^5.10.0",
+    "@opentelemetry/sdk-node": "^0.221.0",
     "ai": "^6.0.191",
     "cookie-parser": "^1.4.7",
     "cors": "^2.8.6",

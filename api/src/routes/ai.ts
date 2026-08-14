@@ -34,6 +34,7 @@ export function createAiRouter(
         const { output } = await generateText({
           model: anthropic("claude-sonnet-4-6"),
           maxOutputTokens: 1024,
+          experimental_telemetry: { isEnabled: true, functionId: "ai.generateEventDetails" },
           output: Output.object({
             schema: z.object({
               generate: z.object({
@@ -130,6 +131,7 @@ export function createAiRouter(
         //Co writes the memory
         const { text: recap } = await generateText({
           model: anthropic("claude-sonnet-4-6"),
+          experimental_telemetry: { isEnabled: true, functionId: "ai.generateRecap" },
           prompt: `Write a short, evocative 2-3 sentence recap of this event. Make it feel like a memory — cinematic, sensory, present tense. Do not use clichés.
               Event: ${moments_name}
               Location: ${location_name}
@@ -162,6 +164,7 @@ export function createAiRouter(
           // Extract psychographic updates from the recap
           const { text: rawUpdates } = await generateText({
             model: anthropic("claude-sonnet-4-6"),
+            experimental_telemetry: { isEnabled: true, functionId: "ai.updatePsychographicProfile" },
             prompt: `You are Co analyzing what was learned about a user from their recent circle experience.
 
           Experience recap: "${recap}"
