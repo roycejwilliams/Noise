@@ -5,6 +5,7 @@ response with a Claude judge is more prone to self-favoring bias than an
 independent model family. OPENAI_API_KEY already exists in this stack for
 embeddings.ts, so no new credential is introduced.
 """
+import json
 import os
 from openai import AsyncOpenAI
 from ragas.llms.base import llm_factory
@@ -102,13 +103,37 @@ def fetch_reply_candidates(langfuse, limit: int, name_filter: str | None = None)
 
 
 def extract_text(io_value) -> str:
+    """Pull plain text out of a Langfuse observation's input/output.
+
+    The AI SDK's own telemetry stores these as JSON — sometimes already
+    parsed into a list/dict by the SDK, sometimes still a raw JSON string
+    (observed directly: obs.input came back as a Python str containing
+    '[{"role":"user","content":[{"type":"text","text":"..."}]}]', not a
+    parsed object) — so a naive `isinstance(..., str): return as-is` silently
+    returns the whole JSON envelope, escaped newlines and all, instead of the
+    actual prompt text. Always try to parse and recurse into the real
+    message-array shape before treating a string as plain text.
+    """
     if io_value is None:
         return ""
     if isinstance(io_value, str):
-        return io_value
+        stripped = io_value.strip()
+        if stripped[:1] in "[{":
+            try:
+                io_value = json.loads(io_value)
+            except json.JSONDecodeError:
+                return io_value
+        else:
+            return io_value
+    if isinstance(io_value, list):
+        return "\n".join(t for t in (extract_text(item) for item in io_value) if t)
     if isinstance(io_value, dict):
-        for key in ("text", "prompt", "content"):
-            if key in io_value and isinstance(io_value[key], str):
-                return io_value[key]
-        return str(io_value)
+        if isinstance(io_value.get("text"), str):
+            return io_value["text"]
+        for key in ("prompt", "content"):
+            if key in io_value:
+                extracted = extract_text(io_value[key])
+                if extracted:
+                    return extracted
+        return ""
     return str(io_value)

@@ -86,6 +86,10 @@ async def main(limit: int, name_filter):
     else:
         print("Matching traces were found but none had both a prompt and a response to score.")
 
+    # create_score queues client-side and sends async — without flushing before
+    # exit, scores are silently dropped and never reach the Langfuse backend.
+    langfuse.flush()
+
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
