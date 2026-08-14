@@ -65,7 +65,7 @@ REPLY_FUNCTION_IDS = [
     "circleInvite.generateWarmCircleInviteMessage",
     "booking.confirmMoment",
     "co-test.webhooks.generateReply",
-    "co-test.webhooks.postCallFollowUp",
+    "co-test.jobs.postCallFollowUp",
     "co-test.webhooks.venueRequest.holdMessage",
     "co-test.webhooks.venueRequest.introMessage",
     "co-test.recommendation.generate",
