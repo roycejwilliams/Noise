@@ -175,6 +175,7 @@ export function sendblueRouter(io: Server): Router {
 
           const { text: classification } = await generateText({
             model: anthropic("claude-haiku-4-5-20251001"),
+            experimental_telemetry: { isEnabled: true, functionId: "sendblue.moderatorApproval.classify" },
             prompt: `Classify this message as either 'approve' or 'reject'. Return ONLY the word approve or reject.\n\nMessage: "${content}"`,
           });
 
@@ -237,6 +238,7 @@ export function sendblueRouter(io: Server): Router {
             if (pendingMomentApproval) {
               const { text: venueClassification } = await generateText({
                 model: anthropic("claude-haiku-4-5-20251001"),
+                experimental_telemetry: { isEnabled: true, functionId: "sendblue.venueApproval.classify" },
                 prompt: `Classify this message as either 'approve' or 'reject'. Return ONLY the word approve or reject.\n\nMessage: "${content}"`,
               });
               const venueAction = venueClassification
@@ -379,6 +381,7 @@ export function sendblueRouter(io: Server): Router {
 
           const { text: interpretation } = await generateText({
             model: anthropic("claude-sonnet-4-6"),
+            experimental_telemetry: { isEnabled: true, functionId: "sendblue.momentResponse.classify" },
             prompt: `A user replied to a circle event invitation. Interpret their response.
 
               User's message: "${resolvedContent}"
@@ -435,6 +438,7 @@ export function sendblueRouter(io: Server): Router {
             try {
               const { text } = await generateText({
                 model: anthropic("claude-haiku-4-5-20251001"),
+                experimental_telemetry: { isEnabled: true, functionId: "sendblue.momentResponseAck" },
                 prompt: `You are Co. A moment just got booked: ${venue ?? moments_name} on ${dateStr} at ${timeStr}. Text confirming it's locked in, in your own words — not a template. Mention you'll follow up with details closer to the day. No exclamation points, no em dashes. 1-2 sentences.`,
               });
               confirmedMsg = text;
@@ -539,6 +543,7 @@ export function sendblueRouter(io: Server): Router {
 
         const { text: rawCallClassification } = await generateText({
           model: anthropic("claude-haiku-4-5-20251001"),
+          experimental_telemetry: { isEnabled: true, functionId: "sendblue.callOffer.classify" },
           prompt: `A user is texting Co, a life concierge.${hasPendingOffer ? " Co just offered them a phone call and is waiting for a yes or no." : ""}
 
 Their message: "${resolvedContent}"
@@ -654,6 +659,7 @@ Return ONLY the classification, nothing else.`,
         // Step 6 — Generate Co's reply — Haiku for speed
         const { text: coReply } = await generateText({
           model: anthropic("claude-haiku-4-5-20251001"),
+          experimental_telemetry: { isEnabled: true, functionId: "sendblue.generateReply" },
           prompt: `You are Co, an exclusive life concierge.
 
           User: ${user.first_name}
@@ -692,6 +698,7 @@ Return ONLY the classification, nothing else.`,
           try {
             const { text: rawOfferCheck } = await generateText({
               model: anthropic("claude-haiku-4-5-20251001"),
+              experimental_telemetry: { isEnabled: true, functionId: "sendblue.callOfferCheck" },
               prompt: `Does this text message actually offer, invite, or gesture toward a phone call — in any wording, even indirectly (e.g. "I'm here if you want to talk this through")? Not just related to talking or listening in general — specifically about a phone call.
 
 Message: "${coReply}"

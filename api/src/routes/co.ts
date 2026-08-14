@@ -179,6 +179,7 @@ async function sendMissedCallFollowUp(
   try {
     const result = await generateText({
       model: anthropic("claude-haiku-4-5-20251001"),
+      experimental_telemetry: { isEnabled: true, functionId: "co.sendMissedCallFollowUp" },
       prompt: `You are Co, an exclusive life concierge. ${situationPrompt} Send a short iMessage letting ${user.first_name} know, and that they can reply here whenever they're ready or expect another call soon. Tone: calm, unhurried, like a private members club. No exclamation points. No em dashes. 2 sentences max.`,
     });
     coMessage = result.text;
@@ -575,6 +576,7 @@ router.post(
         try {
           const { text: followUpMessage } = await generateText({
             model: anthropic("claude-sonnet-4-6"),
+            experimental_telemetry: { isEnabled: true, functionId: "co.postCallFollowUp" },
             prompt: `You are Co. You just got off a call with ${callUser.first_name}. Here's what they told you:
 
 "${transcript}"
@@ -898,6 +900,7 @@ router.post(
 
       const { text: rawMoment } = await generateText({
         model: anthropic("claude-sonnet-4-6"),
+        experimental_telemetry: { isEnabled: true, functionId: "co.createMomentForCircle" },
         prompt: `You are Co, a life concierge creating a curated real-world experience for a small circle of people.
 
 Circle details:
@@ -1347,6 +1350,7 @@ router.post(
       if (prompts[message_type]) {
         const result = await generateText({
           model: anthropic("claude-sonnet-4-6"),
+          experimental_telemetry: { isEnabled: true, functionId: `co.message.${message_type}` },
           prompt: prompts[message_type],
         });
         coMessage = result.text;
@@ -1509,6 +1513,7 @@ router.post(
       if (prompts[message_type]) {
         const result = await generateText({
           model: anthropic("claude-sonnet-4-6"),
+          experimental_telemetry: { isEnabled: true, functionId: `co.circleMessage.${message_type}` },
           prompt: prompts[message_type],
         });
         coMessage = result.text;
@@ -1627,6 +1632,7 @@ router.post(
 
       const { text: rawExtraction } = await generateText({
         model: anthropic("claude-sonnet-4-6"),
+        experimental_telemetry: { isEnabled: true, functionId: "co.extractPsychographicProfile" },
         prompt: `You are extracting psychographic profile data from a conversation transcript.
 
         Based on this transcript, extract the following fields and return ONLY valid JSON with no preamble or markdown:
