@@ -24,7 +24,6 @@ import {
   applicationLimiter,
   limiter,
 } from "./middleware/rateLimiter.js";
-import { createAiRouter } from "./routes/ai.js";
 import applicationsRouter from "./routes/applications.js";
 import { createAuthRouter } from "./routes/auth.js";
 import { createCirclesRouter } from "./routes/circles.js";
@@ -72,7 +71,6 @@ app.use("/circles", createCirclesRouter(io, authenticateToken));
 app.use(createMomentsRouter(io, authenticateToken));
 app.use("/invites", createInvitesRouter(io, authenticateToken));
 app.use("/notifications", createNotificationsRouter(authenticateToken));
-app.use("/ai", createAiRouter(io, authenticateToken));
 app.use("/referrals", createReferralsRouter(authenticateToken));
 app.use("/co", createCoRouter(io));
 app.use("/payments", stripeRouter(io, authenticateToken));
