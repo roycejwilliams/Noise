@@ -8,7 +8,7 @@ import { anthropic } from "@ai-sdk/anthropic";
 import { generateText } from "ai";
 import { propagateAttributes } from "@langfuse/tracing";
 import pool from "../db/db.js";
-import { findBestCircleWithScore, min_group_score } from "./matching.js";
+import { CIRCLE_FACILITATION_ENABLED, findBestCircleWithScore, min_group_score } from "./circleFacilitation.js";
 import { generateCircleTitle, generateWarmCircleInviteMessage } from "./circleInvite.js";
 import { generateEmbedding } from "./embeddings.js";
 import sendblue from "./sendblue.js";
@@ -143,7 +143,12 @@ export async function attemptCircleRematch(params: {
       .catch((err) => console.error("Memory embedding failed (non-fatal):", err));
   }
 
-  const newMatchResult = await findBestCircleWithScore(ownerId, excludeMemberIds);
+  // Co Loop Stage 4 — off for now (see circleFacilitation.ts). Falls through
+  // to the existing "no alternative match found" Moderator notice below,
+  // same as a genuine no-match result always has.
+  const newMatchResult = CIRCLE_FACILITATION_ENABLED
+    ? await findBestCircleWithScore(ownerId, excludeMemberIds)
+    : null;
   const newGroupIds = newMatchResult?.userIds ?? null;
 
   if (!newGroupIds || newGroupIds.length < 4) {

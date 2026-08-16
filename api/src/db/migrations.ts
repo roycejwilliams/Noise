@@ -485,4 +485,151 @@ export function runMigrations() {
       ),
     )
     .catch((err: Error) => console.error("post_call_follow_ups table/index init failed:", err));
+
+  // Co Loop Stage 1 — long-term personal + career direction, captured
+  // separately from goals_challenges (which is "what they're working toward
+  // or struggling with" right now). Without this split there is no data that
+  // distinguishes an immediate ask from a longer-horizon trajectory, which is
+  // exactly the gap between "beyond a resume" matching and matching on
+  // whatever's currently top of mind. trajectory_embedding is recomputed from
+  // it the same way goal_embeddings is recomputed from goals — see
+  // profileExtraction.ts storeProfile.
+  pool
+    .query(`ALTER TABLE co_profiles ADD COLUMN IF NOT EXISTS long_term_direction TEXT`)
+    .catch((err: Error) => console.error("co_profiles.long_term_direction migration failed:", err));
+  pool
+    .query(`ALTER TABLE co_profiles ADD COLUMN IF NOT EXISTS trajectory_embedding vector(1536)`)
+    .catch((err: Error) => console.error("co_profiles.trajectory_embedding migration failed:", err));
+
+  // Co Loop Stage 3 — an HNSW index on goal_embeddings. Every existing caller
+  // of goal_embeddings (findBestCircleWithScore) only ever compares it in JS
+  // across a handful of already-city/chapter-filtered candidates, so no index
+  // was needed. relevance.ts's network-wide pre-filter is the first caller
+  // that orders by <=> across the whole co_profiles table with no narrowing
+  // WHERE clause first — same reasoning as the co_memories embedding index
+  // above.
+  pool
+    .query(`CREATE INDEX IF NOT EXISTS co_profiles_goal_embeddings_hnsw_idx
+      ON co_profiles USING hnsw (goal_embeddings vector_cosine_ops)
+      WITH (m = 16, ef_construction = 64)`)
+    .catch((err: Error) => console.error("co_profiles goal_embeddings index failed:", err));
+
+  // Co Loop Stage 3 — every relevance call filterByStatedAsk confirms gets
+  // logged here, even when nothing is ever acted on. This is the "prove it
+  // before you build it" data: Stage 6 later validates these against what
+  // actually happened before facilitation (Stage 4) is ever switched on.
+  // ask_id correlates back to the id on the co_profiles.intent[] entry
+  // (JSONB, not a normalized table, so this is a plain TEXT correlation key
+  // rather than a real foreign key) — same id ask_checkins below uses, so
+  // Stage 6 can resolve both in one pass. UNIQUE (person_id, candidate_id,
+  // ask_id) makes re-sweeping the same ask idempotent — see
+  // relevance.ts's sweepAllOpenAsks, which re-runs every open ask daily.
+  pool
+    .query(
+      `CREATE TABLE IF NOT EXISTS relevance_edges (
+        id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+        person_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+        candidate_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+        ask_id TEXT NOT NULL,
+        ask_text TEXT NOT NULL,
+        status TEXT NOT NULL DEFAULT 'open' CHECK (status IN ('open', 'retired', 'acted_on')),
+        retired_at TIMESTAMPTZ,
+        retired_reason TEXT,
+        created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+        UNIQUE (person_id, candidate_id, ask_id)
+      )`,
+    )
+    .then(() =>
+      pool.query(
+        `CREATE INDEX IF NOT EXISTS idx_relevance_edges_person_status ON relevance_edges (person_id, status)`,
+      ),
+    )
+    .catch((err: Error) => console.error("relevance_edges table/index init failed:", err));
+
+  // matching.ts extensions — scoreAgainstStatedAsk (replacing the old binary
+  // filterByStatedAsk internals) grades every candidate 0-100 instead of a
+  // hard pass/fail, so a "no strong match" ask is now distinguishable from
+  // "three people were close." match_reason is the one-line grounding the
+  // model gave for the score, so relevance_edges is actually readable, not
+  // just a count. mutual flags whether the candidate's own stated ask/
+  // offering plausibly points back at the asker — a two-way signal, not just
+  // "do they satisfy what I asked for."
+  pool
+    .query(`ALTER TABLE relevance_edges ADD COLUMN IF NOT EXISTS match_score INT`)
+    .catch((err: Error) => console.error("relevance_edges.match_score migration failed:", err));
+  pool
+    .query(`ALTER TABLE relevance_edges ADD COLUMN IF NOT EXISTS match_reason TEXT`)
+    .catch((err: Error) => console.error("relevance_edges.match_reason migration failed:", err));
+  pool
+    .query(`ALTER TABLE relevance_edges ADD COLUMN IF NOT EXISTS mutual BOOLEAN NOT NULL DEFAULT false`)
+    .catch((err: Error) => console.error("relevance_edges.mutual migration failed:", err));
+
+  // Co Loop Stage 5 — tracks the check-in cadence for a stated ask so it
+  // never just goes stale after being captured once. One row per ask
+  // (ask_id, same correlation key as relevance_edges above), inserted by
+  // captureIntent. The check-in cron (jobs/index.ts) polls for rows where
+  // last_checked_at (or created_at, for a never-checked row) is more than 21
+  // days old and resolved_at is still null; resolved_at is set by Stage 6
+  // once assessResolvedItems confirms the underlying ask is done, which also
+  // stops any further check-ins.
+  pool
+    .query(
+      `CREATE TABLE IF NOT EXISTS ask_checkins (
+        id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+        user_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+        ask_id TEXT NOT NULL,
+        ask_text TEXT NOT NULL,
+        last_checked_at TIMESTAMPTZ,
+        resolved_at TIMESTAMPTZ,
+        created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+        UNIQUE (user_id, ask_id)
+      )`,
+    )
+    .then(() =>
+      pool.query(
+        `CREATE INDEX IF NOT EXISTS idx_ask_checkins_pending ON ask_checkins (last_checked_at) WHERE resolved_at IS NULL`,
+      ),
+    )
+    .catch((err: Error) => console.error("ask_checkins table/index init failed:", err));
+
+  // Co Loop Stage 5 extensions — all four are context/cadence refinements on
+  // the existing check-in loop, not new user-facing actions, so (per product
+  // decision) they don't need the same "prove it first" bar Stage 4 does.
+  // checkin_count drives both adaptive cadence (relevance.ts has no cadence
+  // logic of its own — the cron in jobs/index.ts reads relevance_edges
+  // directly) and escalating tone after repeated unresolved check-ins.
+  pool
+    .query(`ALTER TABLE ask_checkins ADD COLUMN IF NOT EXISTS checkin_count INT NOT NULL DEFAULT 0`)
+    .catch((err: Error) => console.error("ask_checkins.checkin_count migration failed:", err));
+
+  // Response-rate tracking — awaiting_response_since is set when a check-in
+  // sends and cleared by the next inbound message from that person (see
+  // sendblue.ts webhook), regardless of what that message says; the content
+  // judgment (resolved or not) is Stage 6's job, this only measures whether
+  // they engaged at all. responded_count/last_response_at are the resulting
+  // signal, e.g. for spotting asks nobody bothers replying about.
+  pool
+    .query(`ALTER TABLE ask_checkins ADD COLUMN IF NOT EXISTS awaiting_response_since TIMESTAMPTZ`)
+    .catch((err: Error) => console.error("ask_checkins.awaiting_response_since migration failed:", err));
+  pool
+    .query(`ALTER TABLE ask_checkins ADD COLUMN IF NOT EXISTS responded_count INT NOT NULL DEFAULT 0`)
+    .catch((err: Error) => console.error("ask_checkins.responded_count migration failed:", err));
+  pool
+    .query(`ALTER TABLE ask_checkins ADD COLUMN IF NOT EXISTS last_response_at TIMESTAMPTZ`)
+    .catch((err: Error) => console.error("ask_checkins.last_response_at migration failed:", err));
+
+  // Coverage-awareness extensions (profileExtraction.ts's getCoverageNudge) —
+  // topics_covered persists which RAPPORT_TOPICS have been confirmed (topic
+  // -> ISO timestamp), shared across call/text/check-in so a topic answered
+  // on a call isn't re-judged by every subsequent text touchpoint, and so a
+  // fully-covered profile can skip the coverage LLM call entirely.
+  // topics_asked persists when Co last actually asked about a topic (whether
+  // or not it got a real answer), so a dodged topic doesn't get re-surfaced
+  // every single touchpoint.
+  pool
+    .query(`ALTER TABLE co_profiles ADD COLUMN IF NOT EXISTS topics_covered JSONB NOT NULL DEFAULT '{}'::jsonb`)
+    .catch((err: Error) => console.error("co_profiles.topics_covered migration failed:", err));
+  pool
+    .query(`ALTER TABLE co_profiles ADD COLUMN IF NOT EXISTS topics_asked JSONB NOT NULL DEFAULT '{}'::jsonb`)
+    .catch((err: Error) => console.error("co_profiles.topics_asked migration failed:", err));
 }

@@ -4,6 +4,7 @@ import { propagateAttributes } from "@langfuse/tracing";
 import crypto from "crypto";
 import pool from "../db/db.js";
 import { generateEmbedding, generateGoalEmbedding } from "./embeddings.js";
+import { sweepAskAgainstNetwork } from "./relevance.js";
 
 // Shared by the Hume call webhook (co.ts /webhook), the typed-intake fallback
 // (co.ts /typed-intake/:user_id), and co-test's browser-EVI intake — all three
@@ -24,6 +25,11 @@ export type ExtractedProfile = {
   availability_pattern?: string;
   city?: string;
   emotional_state?: string;
+  // Co Loop Stage 1 addition — longer-horizon personal + career direction,
+  // deliberately separate from goals_challenges (immediate/current). See
+  // RAPPORT_TOPICS' long_term_direction description for why this split
+  // exists.
+  long_term_direction?: string;
   [key: string]: unknown;
 };
 
@@ -51,7 +57,16 @@ export type ExtractedIntent = {
 };
 
 // Keys must match the tool schema description registered on the Hume config
-// and the nine Rapport-phase topics in Jacqueline's spec.
+// and the Rapport-phase topics in Jacqueline's spec.
+//
+// long_term_direction (added for Co Loop Stage 1) is NOT yet confirmed
+// registered on Hume's own tool schema for assess_conversation_coverage —
+// that config lives on Hume's dashboard, outside this repo, and per the
+// comment above this array must independently list any topic key for it to
+// reliably show up in missing_topics on a live voice call. The text channel
+// (assessConversationCoverage's own prompt, built from RAPPORT_TOPICS
+// directly) picks this up correctly regardless. Confirm/update the Hume-side
+// schema before relying on this topic surfacing on calls.
 export const RAPPORT_TOPICS = [
   "current_situation",
   "major_transition",
@@ -62,6 +77,7 @@ export const RAPPORT_TOPICS = [
   "personality",
   "location_availability",
   "boundaries_preferences",
+  "long_term_direction",
 ] as const;
 
 export type RapportTopic = (typeof RAPPORT_TOPICS)[number];
@@ -80,6 +96,8 @@ export const RAPPORT_TOPIC_DESCRIPTIONS: Record<RapportTopic, string> = {
   personality: "some sense of their personality or how they come across",
   location_availability: "where they are and when they're free",
   boundaries_preferences: "any stated boundaries or preferences",
+  long_term_direction:
+    "their longer-horizon personal and career direction — where they want to be in a few years, distinct from what's urgent right now",
 };
 
 export type CoverageAssessment = {
@@ -114,7 +132,8 @@ export async function extractPsychographicProfile(
           "blockers": [], // array of challenges or struggles they mentioned
           "availability_pattern": "", // how often and when they want to connect (e.g. "weekday evenings", "weekends")
           "city": "", // city they are in or moving to
-          "emotional_state": "" // one word describing their current emotional state (e.g. anxious, energized, overwhelmed, motivated, isolated, confident, focused, excited, lost, burnout)
+          "emotional_state": "", // one word describing their current emotional state (e.g. anxious, energized, overwhelmed, motivated, isolated, confident, focused, excited, lost, burnout)
+          "long_term_direction": "" // a sentence capturing their longer-term personal + career direction/trajectory — where they're headed, distinct from immediate goals/blockers. Empty string if not discussed.
         }
 
         Transcript:
@@ -135,9 +154,11 @@ export async function extractPsychographicProfile(
 
 // Coverage check — originally mid-call only (invoked from the Hume
 // tool_call webhook while a call is live), now also reused by the text
-// channel (webhooks.ts's ongoing-conversation reply) so a text-only
-// relationship works toward the same set of topics a call does instead of
-// just reactively answering whatever comes up. Deliberately separate from
+// channel — co-test/src/routes/webhooks.ts had this pattern already proven,
+// and prod's routes/sendblue.ts now ports the same approach into its own
+// reply-generation prompt (Co Loop Stage 1) — so a text-only relationship
+// works toward the same set of topics a call does instead of just reactively
+// answering whatever comes up. Deliberately separate from
 // extractPsychographicProfile: Haiku (not Sonnet), no DB writes, no
 // embeddings, terse output-only prompt — on a live call every millisecond
 // here is dead air, since EVI blocks the conversation on a pending tool
@@ -148,9 +169,10 @@ export async function extractPsychographicProfile(
 // feeds missing_topics into its own reply-generation prompt directly.
 // priorContext (optional) — a compact summary of what's already known about
 // this person from BEFORE this conversation (prior calls/texts, e.g.
-// callContext.ts's buildContextSummary or webhooks.ts's own profileContext
-// string). Without this, coverage was judged purely off the live transcript,
-// so a topic already answered by text last week still came back "missing"
+// callContext.ts's buildContextSummary or sendblue.ts's own profile
+// summary). Without this, coverage was judged purely off the live
+// transcript, so a topic already answered by text last week still came back
+// "missing"
 // on a call today and Co would re-ask something it already knew — this lets
 // already-known, concrete facts count as covered without requiring the
 // person to repeat themselves.
@@ -196,6 +218,130 @@ ready_to_summarize is true only if at most one or two minor topics remain missin
   }
 }
 
+// Priority order for WHICH missing topic to actually ask about — deliberately
+// not RAPPORT_TOPICS' own declaration order. A gap in goals_challenges or
+// long_term_direction feeds Stage 3's matching directly (goal_embeddings /
+// trajectory_embedding); a gap in personality or boundaries_preferences is
+// lower-value rapport color. Only ever consulted when picking ONE topic for
+// a single-question nudge (text replies, check-ins) — the live call's own
+// tool response still returns the full missing_topics list, since EVI (not
+// this file) decides what to ask next during a live conversation.
+const RAPPORT_TOPIC_PRIORITY: RapportTopic[] = [
+  "goals_challenges",
+  "long_term_direction",
+  "looking_for",
+  "people_to_meet",
+  "ways_to_help",
+  "current_situation",
+  "major_transition",
+  "location_availability",
+  "personality",
+  "boundaries_preferences",
+];
+
+// Merges newly-confirmed topics into co_profiles.topics_covered — called
+// both by getCoverageNudge below (text/check-in) and directly by the Hume
+// tool_call handler (co.ts) after a live call's own coverage check, so a
+// topic confirmed on a call is remembered for text too, not just the other
+// way around. jsonb `||` merge (not a full read-modify-write) so concurrent
+// callers can't clobber each other. Fire-and-forget/non-fatal, same as every
+// other best-effort profile write in this file.
+export function persistCoveredTopics(userId: string, coverage: CoverageAssessment): void {
+  const missing = new Set(coverage.missing_topics);
+  const covered = RAPPORT_TOPICS.filter((t) => !missing.has(t));
+  if (!covered.length) return;
+  const patch: Partial<Record<RapportTopic, string>> = {};
+  const now = new Date().toISOString();
+  for (const t of covered) patch[t] = now;
+  pool
+    .query(
+      `UPDATE co_profiles SET topics_covered = COALESCE(topics_covered, '{}'::jsonb) || $2::jsonb WHERE user_id = $1`,
+      [userId, JSON.stringify(patch)],
+    )
+    .catch((err) => console.error("topics_covered update failed (non-fatal):", err));
+}
+
+// Records that Co actually asked about a topic (regardless of whether it
+// gets answered) — callers invoke this only when a nudge is actually used in
+// an outbound message, not just considered. Read by getCoverageNudge's
+// anti-nag filter below.
+export function markTopicAsked(userId: string, topic: RapportTopic): void {
+  pool
+    .query(
+      `UPDATE co_profiles SET topics_asked = COALESCE(topics_asked, '{}'::jsonb) || jsonb_build_object($2::text, $3::text) WHERE user_id = $1`,
+      [userId, topic, new Date().toISOString()],
+    )
+    .catch((err) => console.error("topics_asked update failed (non-fatal):", err));
+}
+
+// Simple 0-100 read of how much of RAPPORT_TOPICS is on file for someone —
+// not stored anywhere itself (topics_covered is the source of truth; this is
+// just a derived read of it), useful for a future network-wide density
+// report (Stage 2) without needing a separate synced column that could go
+// stale.
+export function getProfileCompletenessPercent(topicsCovered: Record<string, string> | null | undefined): number {
+  if (!topicsCovered) return 0;
+  const covered = RAPPORT_TOPICS.filter((t) => topicsCovered[t]).length;
+  return Math.round((covered / RAPPORT_TOPICS.length) * 100);
+}
+
+export type CoverageNudgeProfile = {
+  life_chapters?: string[] | null;
+  goals?: string[] | null;
+  blockers?: string[] | null;
+  long_term_direction?: string | null;
+  city?: string | null;
+  topics_covered?: Record<string, string> | null;
+  topics_asked?: Record<string, string> | null;
+};
+
+// Shared by sendblue.ts's reply-generation prompt and the Stage 5 check-in
+// cron (jobs/index.ts) — one place owning "which single topic, if any,
+// should Co work toward asking about right now." Skips the LLM call
+// entirely once every RAPPORT_TOPICS entry is already persisted as covered
+// (cheap, and keeps a complete profile from re-triggering this check
+// forever). Otherwise runs assessConversationCoverage, persists whatever it
+// newly confirms, filters out anything asked-but-dodged in the last
+// ANTI_NAG_DAYS, and returns the single highest-priority topic left, if any.
+// transcriptSoFar is "" for a check-in (no live transcript, judged purely
+// off priorContext) and the recent conversation thread for a text reply.
+const ANTI_NAG_DAYS = 14;
+export async function getCoverageNudge(
+  userId: string,
+  transcriptSoFar: string,
+  profile: CoverageNudgeProfile | null,
+): Promise<{ missingTopic: RapportTopic | null }> {
+  const topicsCovered = profile?.topics_covered ?? {};
+  const topicsAsked = profile?.topics_asked ?? {};
+
+  if (RAPPORT_TOPICS.every((t) => topicsCovered[t])) return { missingTopic: null };
+
+  const priorContextParts = [
+    profile?.life_chapters?.length ? `life chapter: ${profile.life_chapters.join(", ")}` : null,
+    profile?.goals?.length ? `goals: ${profile.goals.join(", ")}` : null,
+    profile?.blockers?.length ? `blockers: ${profile.blockers.join(", ")}` : null,
+    profile?.long_term_direction ? `long-term direction: ${profile.long_term_direction}` : null,
+    profile?.city ? `city: ${profile.city}` : null,
+  ].filter((p): p is string => Boolean(p));
+
+  const coverage = await assessConversationCoverage(
+    transcriptSoFar,
+    priorContextParts.length ? priorContextParts.join("; ") : undefined,
+  ).catch(() => null);
+  if (!coverage) return { missingTopic: null };
+
+  persistCoveredTopics(userId, coverage);
+
+  const cutoff = Date.now() - ANTI_NAG_DAYS * 24 * 60 * 60 * 1000;
+  const candidates = coverage.missing_topics.filter((t) => {
+    const askedAt = topicsAsked[t];
+    return !askedAt || new Date(askedAt).getTime() < cutoff;
+  });
+
+  const missingTopic = RAPPORT_TOPIC_PRIORITY.find((t) => candidates.includes(t)) ?? null;
+  return { missingTopic };
+}
+
 // Cheap Haiku pass (same shape as assessConversationCoverage) that checks
 // whether this call's transcript signals that an already-on-file goal or
 // blocker is done/resolved/no longer relevant — otherwise the union in
@@ -204,29 +350,41 @@ ready_to_summarize is true only if at most one or two minor topics remain missin
 // against the original arrays so a hallucinated or reworded item can't
 // accidentally drop something real — worst case a resolved item just lingers
 // until the next call catches it.
+// openAsks (added for Co Loop Stage 6) — the person's currently-open
+// ask_checkins rows, {id, text}. Folded into this same Haiku pass rather than
+// a separate call: the judgment ("has the transcript signaled this is done")
+// is identical in kind to resolving a goal/blocker, so one call handles all
+// three. A resolved ask closes the loop back to Stage 3 — storeProfile
+// retires the matching relevance_edges rows and stops further Stage 5
+// check-ins for it.
 async function assessResolvedItems(
   transcript: string,
   existingGoals: string[],
   existingBlockers: string[],
-): Promise<{ resolvedGoals: string[]; resolvedBlockers: string[] }> {
-  if (existingGoals.length === 0 && existingBlockers.length === 0) {
-    return { resolvedGoals: [], resolvedBlockers: [] };
+  openAsks: { id: string; text: string }[] = [],
+): Promise<{ resolvedGoals: string[]; resolvedBlockers: string[]; resolvedAskIds: string[] }> {
+  if (existingGoals.length === 0 && existingBlockers.length === 0 && openAsks.length === 0) {
+    return { resolvedGoals: [], resolvedBlockers: [], resolvedAskIds: [] };
   }
 
   try {
+    const askListBlock = openAsks.length
+      ? `\nOpen asks (numbered):\n${openAsks.map((a, i) => `${i}. ${a.text}`).join("\n")}\n`
+      : "";
+
     const { text: raw } = await generateText({
       model: anthropic("claude-haiku-4-5-20251001"),
       prompt: `Here is what we already have on file for this person:
 Goals: ${JSON.stringify(existingGoals)}
 Blockers: ${JSON.stringify(existingBlockers)}
-
-Based on this new call transcript, which of the EXACT items above (if any) has the caller indicated is now achieved, resolved, or no longer relevant? Only include an item if the transcript gives a clear signal — do not guess, and leave it out if unclear.
+${askListBlock}
+Based on this new call transcript, which of the EXACT goals/blockers above (if any) has the caller indicated is now achieved, resolved, or no longer relevant? Separately, which numbered open asks (if any) has the transcript signaled are now resolved, no longer needed, or no longer true? Only include something if the transcript gives a clear signal — do not guess, and leave it out if unclear.
 
 Transcript:
 "${transcript}"
 
-Return ONLY valid JSON, reusing the exact original text for each item:
-{"resolved_goals": [], "resolved_blockers": []}`,
+Return ONLY valid JSON, reusing the exact original text for goals/blockers and the number for asks:
+{"resolved_goals": [], "resolved_blockers": [], "resolved_ask_indices": []}`,
       experimental_telemetry: { isEnabled: true, functionId: "profileExtraction.assessResolvedItems" },
     });
 
@@ -238,11 +396,16 @@ Return ONLY valid JSON, reusing the exact original text for each item:
     const resolvedBlockers = Array.isArray(parsed.resolved_blockers)
       ? parsed.resolved_blockers.filter((b: unknown) => existingBlockers.includes(b as string))
       : [];
+    const resolvedAskIds = Array.isArray(parsed.resolved_ask_indices)
+      ? parsed.resolved_ask_indices
+          .filter((i: unknown): i is number => Number.isInteger(i) && (i as number) >= 0 && (i as number) < openAsks.length)
+          .map((i: number) => openAsks[i].id)
+      : [];
 
-    return { resolvedGoals, resolvedBlockers };
+    return { resolvedGoals, resolvedBlockers, resolvedAskIds };
   } catch (err) {
     console.error("assessResolvedItems failed (non-fatal):", err);
-    return { resolvedGoals: [], resolvedBlockers: [] };
+    return { resolvedGoals: [], resolvedBlockers: [], resolvedAskIds: [] };
   }
 }
 
@@ -268,7 +431,7 @@ export async function storeProfile(
 ): Promise<{ safeChapters: string[]; safeStyle: string }> {
   const { rows: existingRows } = await pool.query(
     `SELECT life_chapters, social_energy, connection_style, activity_preferences,
-            goals, blockers, availability_pattern, city
+            goals, blockers, availability_pattern, city, long_term_direction
      FROM co_profiles WHERE user_id = $1`,
     [user_id],
   );
@@ -278,10 +441,21 @@ export async function storeProfile(
     ...new Set([...(oldArr ?? []), ...(newArr ?? [])]),
   ];
 
-  const { resolvedGoals, resolvedBlockers } = await assessResolvedItems(
+  // Co Loop Stage 6 — fold in whatever open asks (Stage 5) this person has,
+  // so the same resolution pass that clears a stale goal/blocker can also
+  // retire a relevance_edges row and stop further check-ins on an ask that's
+  // already resolved.
+  const { rows: openAskRows } = await pool.query(
+    `SELECT ask_id, ask_text FROM ask_checkins WHERE user_id = $1 AND resolved_at IS NULL`,
+    [user_id],
+  );
+  const openAsks = openAskRows.map((r: any) => ({ id: r.ask_id as string, text: r.ask_text as string }));
+
+  const { resolvedGoals, resolvedBlockers, resolvedAskIds } = await assessResolvedItems(
     transcript,
     existing?.goals ?? [],
     existing?.blockers ?? [],
+    openAsks,
   );
 
   const safeChapters = union(
@@ -299,6 +473,7 @@ export async function storeProfile(
   const socialEnergy = extracted.social_energy ?? existing?.social_energy ?? 50;
   const availabilityPattern = extracted.availability_pattern || existing?.availability_pattern || null;
   const city = extracted.city || existing?.city || null;
+  const longTermDirection = extracted.long_term_direction || existing?.long_term_direction || null;
 
   // Non-fatal like every other embedding call in this file (storeTranscriptMemory,
   // captureIntent) — an embedding-provider hiccup (rate limit, quota, network)
@@ -315,12 +490,24 @@ export async function storeProfile(
     }
   }
 
+  // Same non-fatal reasoning as goalEmbedding above, recomputed from
+  // longTermDirection so it stays in sync — see Co Loop Stage 1.
+  let trajectoryEmbedding: number[] | null = null;
+  if (longTermDirection) {
+    try {
+      trajectoryEmbedding = await generateEmbedding(longTermDirection);
+    } catch (err) {
+      console.error("Trajectory embedding failed (non-fatal):", err);
+    }
+  }
+
   await pool.query(
     `INSERT INTO co_profiles (
       user_id, life_chapters, social_energy, connection_style,
       activity_preferences, emotional_state, goals, blockers,
-      availability_pattern, city, goal_embeddings, updated_at
-    ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, NOW())
+      availability_pattern, city, goal_embeddings, long_term_direction,
+      trajectory_embedding, updated_at
+    ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, NOW())
     ON CONFLICT (user_id) DO UPDATE SET
       life_chapters = EXCLUDED.life_chapters,
       social_energy = EXCLUDED.social_energy,
@@ -332,6 +519,8 @@ export async function storeProfile(
       availability_pattern = EXCLUDED.availability_pattern,
       city = EXCLUDED.city,
       goal_embeddings = EXCLUDED.goal_embeddings,
+      long_term_direction = EXCLUDED.long_term_direction,
+      trajectory_embedding = EXCLUDED.trajectory_embedding,
       updated_at = NOW()`,
     [
       user_id,
@@ -345,8 +534,26 @@ export async function storeProfile(
       availabilityPattern,
       city,
       goalEmbedding ? `[${goalEmbedding.join(",")}]` : null,
+      longTermDirection,
+      trajectoryEmbedding ? `[${trajectoryEmbedding.join(",")}]` : null,
     ],
   );
+
+  // Co Loop Stage 6 — close the loop back to Stages 3 and 5. A resolved ask
+  // retires its relevance_edges rows (proof that Stage 3's call didn't need
+  // to be acted on to be right) and stops further Stage 5 check-ins on it.
+  if (resolvedAskIds.length) {
+    await pool.query(
+      `UPDATE ask_checkins SET resolved_at = NOW() WHERE user_id = $1 AND ask_id = ANY($2::text[])`,
+      [user_id, resolvedAskIds],
+    );
+    await pool.query(
+      `UPDATE relevance_edges SET status = 'retired', retired_at = NOW(),
+        retired_reason = 'ask resolved independently, no intro made'
+       WHERE person_id = $1 AND ask_id = ANY($2::text[]) AND status = 'open'`,
+      [user_id, resolvedAskIds],
+    );
+  }
 
   return { safeChapters, safeStyle };
 }
@@ -494,6 +701,30 @@ Transcript:
         ]),
       )
       .catch((err) => console.error("Intent memory embedding failed:", err));
+
+    // Co Loop Stage 5 — start the check-in cadence for this ask so it never
+    // just goes stale after being captured once (see ask_checkins in
+    // migrations.ts and the check-in cron in jobs/index.ts).
+    if (ask) {
+      pool
+        .query(
+          `INSERT INTO ask_checkins (user_id, ask_id, ask_text)
+           VALUES ($1, $2, $3)
+           ON CONFLICT (user_id, ask_id) DO NOTHING`,
+          [user_id, intentId, ask.text],
+        )
+        .catch((err) => console.error("ask_checkins insert failed (non-fatal):", err));
+    }
+
+    // Co Loop Stage 3 — a fresh "seeking" ask is exactly what filterByStatedAsk
+    // reasons over, so sweep it against the whole network immediately rather
+    // than waiting for the next daily sweepAllOpenAsks run. Fire-and-forget,
+    // same as this function's own call sites treat captureIntent itself.
+    if (ask?.type === "seeking") {
+      sweepAskAgainstNetwork(user_id).catch((err) =>
+        console.error("sweepAskAgainstNetwork failed (non-fatal):", err),
+      );
+    }
 
     return newIntent;
   } catch (err: any) {

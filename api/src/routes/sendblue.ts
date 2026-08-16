@@ -10,7 +10,14 @@ import { sendSMS } from "../otpActions.js";
 import elevenlabs from "../services/elevenlabs.js";
 import { generateCircleTitle, generateWarmCircleInviteMessage } from "../services/circleInvite.js";
 import { generateEmbedding } from "../services/embeddings.js";
-import { captureIntent, extractPsychographicProfile, storeProfile } from "../services/profileExtraction.js";
+import {
+  captureIntent,
+  extractPsychographicProfile,
+  getCoverageNudge,
+  markTopicAsked,
+  RAPPORT_TOPIC_DESCRIPTIONS,
+  storeProfile,
+} from "../services/profileExtraction.js";
 import {
   createMomentForCircle,
   getCircleBookingContext,
@@ -20,7 +27,7 @@ import {
   selectVenueForCircle,
 } from "./co.js";
 import { activateCircle, attemptCircleRematch } from "../services/circleApproval.js";
-import { findBestCircle } from "../services/matching.js";
+import { CIRCLE_FACILITATION_ENABLED, findBestCircle } from "../services/circleFacilitation.js";
 import type { CandidateWindow } from "../services/scheduling.js";
 import { confirmMoment, requestVenueApprovalFromModerator } from "../services/booking.js";
 import { triggerCallForUser } from "../services/callTrigger.js";
@@ -400,6 +407,20 @@ export function sendblueRouter(io: Server): Router {
           return res.status(200).send({ received: true });
         }
 
+        // Co Loop Stage 5 extension — response-rate tracking. Any inbound
+        // message counts as a response to a pending check-in, regardless of
+        // content or which branch below ends up handling it — this only
+        // measures engagement, not resolution (that's Stage 6's job via
+        // assessResolvedItems). Fire-and-forget, non-blocking.
+        pool
+          .query(
+            `UPDATE ask_checkins
+             SET responded_count = responded_count + 1, awaiting_response_since = NULL, last_response_at = NOW()
+             WHERE user_id = $1 AND awaiting_response_since IS NOT NULL`,
+            [user.id],
+          )
+          .catch((err: any) => console.error("ask_checkins response tracking failed (non-fatal):", err?.message ?? err));
+
         // Step 1.5 — First contact from an unverified self-serve registration.
         // Our Sendblue plan only allows replying to contacts who've texted in
         // first, so the OTP couldn't be sent at registration time. This is
@@ -613,11 +634,16 @@ Return ONLY the classification, nothing else.`,
             const declinedCount = allRows.rows.filter((r: any) => r.status === "declined").length;
 
             if (activeIds.length < 4) {
-              if (declinedCount > MAX_REPLACEMENT_ATTEMPTS) {
+              // Co Loop Stage 4 — off for now (see circleFacilitation.ts).
+              // Same Moderator-notify fallback as hitting the replacement
+              // attempt limit, just with a message that says why.
+              if (declinedCount > MAX_REPLACEMENT_ATTEMPTS || !CIRCLE_FACILITATION_ENABLED) {
                 try {
                   await sendblue.messages.send({
                     number: moderatorPhone!,
-                    content: `Circle ${circle_id} dropped below minimum size after ${declinedCount} declines — hit the replacement attempt limit. Manual review needed.`,
+                    content: CIRCLE_FACILITATION_ENABLED
+                      ? `Circle ${circle_id} dropped below minimum size after ${declinedCount} declines — hit the replacement attempt limit. Manual review needed.`
+                      : `Circle ${circle_id} dropped below minimum size after a decline — circle placement is paused right now, no automatic replacement was attempted. Manual review needed.`,
                     from_number: process.env.SENDBLUE_PHONE_NUMBER!,
                   });
                 } catch (err: any) {
@@ -905,13 +931,18 @@ Return ONLY the classification, nothing else.`,
         // message. count <= 1 means the only row on file is this message's
         // own.
         const [profileResult, activityCountResult] = await Promise.all([
-          pool.query(`SELECT life_chapters FROM co_profiles WHERE user_id = $1`, [user.id]),
+          pool.query(
+            `SELECT life_chapters, goals, blockers, long_term_direction, city, topics_covered, topics_asked
+             FROM co_profiles WHERE user_id = $1`,
+            [user.id],
+          ),
           pool.query(
             `SELECT count(*) FROM co_memories WHERE user_id = $1 AND memory_type IN ('text_exchange', 'call_transcript')`,
             [user.id],
           ),
         ]);
-        const hasProfile = !!profileResult.rows[0]?.life_chapters?.length;
+        const profile = profileResult.rows[0];
+        const hasProfile = !!profile?.life_chapters?.length;
         const isFirstRealMessage = parseInt(activityCountResult.rows[0].count, 10) <= 1;
 
         // Topic-aware, not a permanent opt-out and not a blanket timer either
@@ -1081,6 +1112,16 @@ Return ONLY the classification, nothing else.`,
           .join("\n");
         const styleHint = deriveStyleHint(chronologicalResult.rows);
 
+        // Co Loop Stage 1 — same coverage-nudge logic the Stage 5 check-in
+        // cron uses (jobs/index.ts), shared via profileExtraction.ts's
+        // getCoverageNudge so a text-only relationship also works toward
+        // RAPPORT_TOPICS instead of only ever reactively answering whatever
+        // comes up — matches co-test/src/routes/webhooks.ts's already-proven
+        // approach for this. Persisted topics_covered/topics_asked (read as
+        // part of `profile` above) mean a topic answered on a prior call or
+        // text doesn't get re-judged or re-asked here.
+        const { missingTopic } = await getCoverageNudge(user.id, recentConversation, profile);
+
         // Ground replies in the user's actual upcoming moment (real venue,
         // description, vibes) instead of only loose free-text memory
         // snippets — without this, a question like "what should I expect"
@@ -1105,6 +1146,16 @@ Return ONLY the classification, nothing else.`,
           - Time: ${moment.suggested_time ?? "TBD"}`
           : "They have no upcoming moment scheduled right now.";
 
+        // Gated the same way callOfferContext is — never stack two secondary
+        // asks in one short text. Skipped entirely while a call offer is
+        // pending or about to go out; that already has the reply's one
+        // "extra" slot for this message.
+        const usingTopicNudge = !shouldOfferCall && !hasPendingOffer && !!missingTopic;
+        const topicContext = usingTopicNudge
+          ? `\nCo doesn't yet have a good sense of ${RAPPORT_TOPIC_DESCRIPTIONS[missingTopic!]}. First, actually respond to what they just said. Then, only if it fits naturally, work in one brief, genuine question toward that — never force it or make it feel like an interview; skip it entirely this reply if nothing natural comes up.`
+            : "";
+        if (usingTopicNudge) markTopicAsked(user.id, missingTopic!);
+
         // Step 6 — Generate Co's reply — Haiku for speed. Vision-enabled:
         // if they sent a photo, it's attached as an actual image input, not
         // just a placeholder string — Co can genuinely see and react to it.
@@ -1122,6 +1173,7 @@ Return ONLY the classification, nothing else.`,
 
           ${imageForVision ? "They just sent the attached photo." : `They just said: "${resolvedContent}"`}
           ${callOfferContext}
+          ${topicContext}
           ${styleHint}
 
           Respond as Co. Warm, specific, brief.${imageForVision ? " React to what's actually in the photo." : " Use their context to make it personal."}

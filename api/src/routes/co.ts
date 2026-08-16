@@ -10,13 +10,14 @@ import { sendEmail } from "../otpActions.js";
 import { authenticateToken, userRole } from "../middleware/auth.js";
 import { generateEmbedding } from "../services/embeddings.js";
 import { notifyModeratorOfPendingCircle, activateCircle } from "../services/circleApproval.js";
-import { findBestCircleWithScore, min_group_score } from "../services/matching.js";
+import { CIRCLE_FACILITATION_ENABLED, findBestCircleWithScore, min_group_score } from "../services/circleFacilitation.js";
 import { findBestVenue } from "../services/places.js";
 import { generateCandidateWindows, type CandidateWindow } from "../services/scheduling.js";
 import {
   assessConversationCoverage,
   captureIntent,
   extractPsychographicProfile,
+  persistCoveredTopics,
   RAPPORT_TOPICS,
   storeProfile,
   storeTranscriptMemory,
@@ -83,7 +84,7 @@ type HumeChatEvent = {
 async function fetchHumeChatEvents(chatId: string): Promise<HumeChatEvent[]> {
   const events: HumeChatEvent[] = [];
   let page = 0;
-  for (;;) {
+  while (true) {
     const res = await fetch(
       `https://api.hume.ai/v0/evi/chats/${chatId}?page_size=100&page_number=${page}`,
       { headers: { "X-Hume-Api-Key": process.env.HUME_API_KEY! } },
@@ -404,12 +405,23 @@ async function sendHumeToolResponse(chatId: string, toolCallId: string, content:
 
 // Only assess_conversation_coverage exists today — if more tools land here,
 // switch on tool_call_message.name rather than growing this function.
-async function handleToolCall(chatId: string, toolCallMessage: HumeToolCallMessage | undefined): Promise<void> {
+// userId (optional — custom_session_id, which Hume's Twilio integration
+// doesn't always reliably return, see the chat_ended handler below) lets a
+// topic confirmed mid-call get persisted to co_profiles.topics_covered, the
+// same store the text-channel coverage nudge reads — best-effort only, EVI's
+// own live behavior (which topic to ask next) doesn't depend on this at all,
+// it still gets the full missing_topics list either way.
+async function handleToolCall(
+  chatId: string,
+  toolCallMessage: HumeToolCallMessage | undefined,
+  userId?: string,
+): Promise<void> {
   if (!toolCallMessage || toolCallMessage.name !== "assess_conversation_coverage") return;
 
   try {
     const { transcript } = await fetchHumeCallData(chatId);
     const assessment = await assessConversationCoverage(transcript);
+    if (userId) persistCoveredTopics(userId, assessment);
     await sendHumeToolResponse(chatId, toolCallMessage.tool_call_id, JSON.stringify(assessment));
   } catch (err: any) {
     console.error("co/webhook: assess_conversation_coverage failed, falling back to nothing-covered:", err?.message ?? err);
@@ -440,7 +452,7 @@ router.post(
 
       if (event_name === "tool_call") {
         res.status(200).send({ success: true });
-        handleToolCall(chat_id, tool_call_message).catch((err) =>
+        handleToolCall(chat_id, tool_call_message, custom_session_id).catch((err) =>
           console.error("co/webhook: unhandled tool_call error:", err?.message ?? err),
         );
         return;
@@ -676,6 +688,18 @@ router.post(
         return res
           .status(403)
           .send("Unauthorized: You can only access your own account");
+      }
+
+      // Co Loop Stage 4 — off for now. See circleFacilitation.ts's
+      // CIRCLE_FACILITATION_ENABLED; the algorithm below is untouched and
+      // ready to re-enable, just not run while density (Stages 1/2/3/5/6)
+      // is being proven.
+      if (!CIRCLE_FACILITATION_ENABLED) {
+        return res.status(200).send({
+          success: false,
+          circle_placement_paused: true,
+          message: "Circle placement is paused right now — Co is still building context.",
+        });
       }
 
       // Pre-flight — skip placement if user is already in an active circle

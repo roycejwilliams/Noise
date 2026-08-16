@@ -1,5 +1,7 @@
 import cron from "node-cron";
 import twilio from "twilio";
+import { anthropic } from "@ai-sdk/anthropic";
+import { generateText } from "ai";
 import type { Server } from "socket.io";
 import pool from "../db/db.js";
 import { sendEmail, sendSMS } from "../otpActions.js";
@@ -9,7 +11,10 @@ import {
   retryVenueApprovalNotification,
 } from "../services/booking.js";
 import sendblue from "../services/sendblue.js";
-import { findBestCircle } from "../services/matching.js";
+import { CIRCLE_FACILITATION_ENABLED, findBestCircle } from "../services/circleFacilitation.js";
+import { sweepAllOpenAsks } from "../services/relevance.js";
+import { getCoverageNudge, markTopicAsked, RAPPORT_TOPIC_DESCRIPTIONS } from "../services/profileExtraction.js";
+import type { RapportTopic } from "../services/profileExtraction.js";
 import type { CandidateWindow } from "../services/scheduling.js";
 
 const twilioClient = twilio(
@@ -339,7 +344,10 @@ export function registerJobs(io: Server) {
             const ownerId = ownerResult.rows[0]?.owner_id;
             let replaced = false;
 
-            if (ownerId) {
+            // Co Loop Stage 4 — off for now (see circleFacilitation.ts).
+            // `replaced` stays false, falling through to the existing
+            // !replaced Moderator-notify branch below unchanged.
+            if (ownerId && CIRCLE_FACILITATION_ENABLED) {
               const replacementIds = await findBestCircle(ownerId, knownIds);
               const candidateId = (replacementIds ?? []).find((id: string) => !knownIds.includes(id));
 
@@ -626,6 +634,134 @@ export function registerJobs(io: Server) {
       }
     } catch (error) {
       console.error("Day-of reminder cron error:", error);
+    }
+  });
+
+  // Co Loop Stage 3 — daily at 3 AM, re-sweep every open stated ask against
+  // the current network. This (not a per-event trigger on every profile
+  // update) is what surfaces a new joiner to everyone with a standing ask —
+  // sweepAllOpenAsks re-runs each ask and logRelevanceEdges de-dupes, so
+  // running it daily is cheap and safe. Density-phase only: nothing
+  // downstream acts on relevance_edges yet, this just builds and logs the
+  // graph for Stage 6 to validate later.
+  cron.schedule("0 3 * * *", async () => {
+    try {
+      await sweepAllOpenAsks();
+    } catch (error) {
+      console.error("Relevance sweep cron error:", error);
+    }
+  });
+
+  // Co Loop Stage 5 — daily at 11 AM, check back in on a stated ask that's
+  // gone quiet so it's never just a one-time snapshot. Cadence is adaptive,
+  // not a flat 21 days: an ask with open relevance_edges (Stage 3 found
+  // something) is checked every 14 days since it's more "live"; an ask with
+  // no matches yet is checked every 30 days since there's nothing new to
+  // report. Repeats until Stage 6 (assessResolvedItems, profileExtraction.ts)
+  // marks it resolved. Message is generated fresh at send time, same
+  // reasoning as the post-call follow-up cron above — not stored/reused.
+  cron.schedule("0 11 * * *", async () => {
+    try {
+      const due = await pool.query(
+        `SELECT ac.id, ac.ask_text, ac.checkin_count, u.id AS user_id, u.first_name, u.phone_number,
+                COALESCE(re.match_count, 0) > 0 AS has_matches,
+                cp.life_chapters, cp.goals, cp.blockers, cp.long_term_direction, cp.city,
+                cp.topics_covered, cp.topics_asked
+         FROM ask_checkins ac
+         JOIN users u ON u.id = ac.user_id
+         LEFT JOIN co_profiles cp ON cp.user_id = ac.user_id
+         LEFT JOIN (
+           SELECT person_id, ask_id, COUNT(*) AS match_count
+           FROM relevance_edges
+           WHERE status = 'open'
+           GROUP BY person_id, ask_id
+         ) re ON re.person_id = ac.user_id AND re.ask_id = ac.ask_id
+         WHERE ac.resolved_at IS NULL
+         AND COALESCE(ac.last_checked_at, ac.created_at) <=
+           NOW() - (CASE WHEN COALESCE(re.match_count, 0) > 0 THEN INTERVAL '14 days' ELSE INTERVAL '30 days' END)`,
+      );
+
+      for (const row of due.rows) {
+        try {
+          // Escalates after 2 prior check-ins with no resolution — an
+          // explicit off-ramp instead of repeating the same question
+          // indefinitely. Deliberately silent about matches existing (even
+          // when has_matches is true) since Stage 4 is off — naming a match
+          // without acting on it reads as an intro that's coming, which
+          // isn't true right now. Absence of a match is safe to name, since
+          // it sets no expectation.
+          const isEscalating = row.checkin_count >= 2;
+          const matchContext = !row.has_matches
+            ? `\nCo hasn't found a strong match for this yet, so it's fine to let them know that honestly (e.g. "still keeping an eye out") — don't imply anything is imminent.`
+            : "";
+          const escalationContext = isEscalating
+            ? `\nCo has already checked in on this ${row.checkin_count} times with no clear resolution. Instead of just re-asking, ask whether this is still actually a priority for them, and give them an easy way to say "stop asking about this" if it's not.`
+            : "";
+
+          // Co Loop Stage 1 via Stage 5 — same shared coverage-nudge helper
+          // sendblue.ts's reply prompt uses (profileExtraction.ts's
+          // getCoverageNudge), reused here since a check-in is itself a
+          // real, already-scheduled touchpoint that can also work toward a
+          // RAPPORT_TOPICS gap, not just re-ask about the same stated ask
+          // forever. Skipped while escalating — that message already has a
+          // delicate job (asking whether this is still a priority) and
+          // shouldn't be diluted with an unrelated question.
+          let topicContext = "";
+          let nudgeTopic: RapportTopic | null = null;
+          if (!isEscalating) {
+            const { missingTopic } = await getCoverageNudge(row.user_id, "", {
+              life_chapters: row.life_chapters,
+              goals: row.goals,
+              blockers: row.blockers,
+              long_term_direction: row.long_term_direction,
+              city: row.city,
+              topics_covered: row.topics_covered,
+              topics_asked: row.topics_asked,
+            });
+            nudgeTopic = missingTopic;
+            topicContext = missingTopic
+              ? `\nSeparately, Co doesn't yet have a good sense of ${RAPPORT_TOPIC_DESCRIPTIONS[missingTopic]}. If it fits naturally after the check-in question, you can gently work in one brief, genuine question toward that too — but never force it, and the check-in question always comes first and matters more.`
+              : "";
+          }
+
+          const { text: message } = await generateText({
+            model: anthropic("claude-haiku-4-5-20251001"),
+            prompt: `You are Co, texting ${row.first_name} to check in on something they told you about a while back: "${row.ask_text}"
+
+Write a short iMessage checking in on whether this is still true or still a priority. Tone: a thoughtful friend following up, not a survey. The check-in question about their ask is the priority and always comes first; only add a second question if the note below explicitly invites one. 1-3 sentences max. No em dashes.${matchContext}${escalationContext}${topicContext}`,
+            experimental_telemetry: { isEnabled: true, functionId: "jobs.askCheckin" },
+          });
+
+          await sendblue.messages.send({
+            number: row.phone_number,
+            content: message.trim(),
+            from_number: process.env.SENDBLUE_PHONE_NUMBER!,
+          });
+
+          if (nudgeTopic) markTopicAsked(row.user_id, nudgeTopic);
+
+          await pool.query(
+            `INSERT INTO co_memories (user_id, memory_type, content) VALUES ($1, 'check_in', $2)`,
+            [row.user_id, `Co checked in on stated ask: "${row.ask_text}"`],
+          );
+        } catch (err: any) {
+          console.error(`Ask check-in failed for ${row.user_id}:`, err?.message ?? err);
+        }
+        // Bumped regardless of send success — same reasoning as every other
+        // *_sent_at guard in this file: a permanently-failing send should
+        // not retry forever on every tick, it should wait for the next
+        // cadence window like a successful send would. awaiting_response_since
+        // starts the response-rate clock (cleared by the next inbound message
+        // from this person — see sendblue.ts webhook).
+        await pool.query(
+          `UPDATE ask_checkins
+           SET last_checked_at = NOW(), checkin_count = checkin_count + 1, awaiting_response_since = NOW()
+           WHERE id = $1`,
+          [row.id],
+        );
+      }
+    } catch (error) {
+      console.error("Ask check-in cron error:", error);
     }
   });
 
