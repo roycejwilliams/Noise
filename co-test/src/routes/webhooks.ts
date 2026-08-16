@@ -1,14 +1,13 @@
-import { createHmac, randomInt, timingSafeEqual } from "crypto";
-import { generateText } from "ai";
 import { anthropic } from "@ai-sdk/anthropic";
 import { propagateAttributes } from "@langfuse/tracing";
-import express, { Request, Response, NextFunction } from "express";
+import { generateText } from "ai";
+import { createHmac, randomInt, timingSafeEqual } from "crypto";
+import express, { NextFunction, Request, Response } from "express";
 import { parsePhoneNumberFromString } from "libphonenumber-js";
 import type { Server } from "socket.io";
 import twilio from "twilio";
 import pool from "../../../api/src/db/db.js";
 import { sendSMS } from "../../../api/src/otpActions.js";
-import sendblue from "../../../api/src/services/sendblue.js";
 import {
   assessConversationCoverage,
   captureIntent,
@@ -18,7 +17,11 @@ import {
   storeProfile,
   storeTranscriptMemory,
 } from "../../../api/src/services/profileExtraction.js";
+import sendblue from "../../../api/src/services/sendblue.js";
 import { buildContextSummary } from "../services/callContext.js";
+import { triggerCall } from "../services/callTrigger.js";
+import { simulateModeratorApproval } from "../services/circlesSimulation.js";
+import { getCoPersonaPrompt } from "../services/coPersona.js";
 import {
   endLiveCall,
   getLiveSnapshot,
@@ -29,9 +32,6 @@ import {
   startPolling,
 } from "../services/liveCallState.js";
 import { generateRecommendation } from "../services/recommendation.js";
-import { triggerCall } from "../services/callTrigger.js";
-import { simulateModeratorApproval } from "../services/circlesSimulation.js";
-import { getCoPersonaPrompt } from "../services/coPersona.js";
 import { findRealVenues } from "../services/venueLookup.js";
 
 // Needed here (not just in callTrigger.ts) to redirect a still-live call to
@@ -71,32 +71,48 @@ const twilioClient = twilio(
 function deriveStyleHint(chronological: { content: string }[]): string {
   const userLines = chronological
     .map((m) => m.content)
-    .filter((c) => c.startsWith("User said: ") || c.startsWith("User sent a voice memo: "))
+    .filter(
+      (c) =>
+        c.startsWith("User said: ") || c.startsWith("User sent a voice memo: "),
+    )
     .map((c) => c.replace(/^User (said|sent a voice memo): /, ""));
 
   if (userLines.length < 2) return "";
 
   const avgWords =
-    userLines.reduce((sum, l) => sum + l.trim().split(/\s+/).length, 0) / userLines.length;
+    userLines.reduce((sum, l) => sum + l.trim().split(/\s+/).length, 0) /
+    userLines.length;
   const emojiRate =
-    userLines.filter((l) => /\p{Emoji_Presentation}/u.test(l)).length / userLines.length;
+    userLines.filter((l) => /\p{Emoji_Presentation}/u.test(l)).length /
+    userLines.length;
   const lowercaseRate =
-    userLines.filter((l) => l === l.toLowerCase() && /[a-z]/.test(l)).length / userLines.length;
+    userLines.filter((l) => l === l.toLowerCase() && /[a-z]/.test(l)).length /
+    userLines.length;
 
   const notes: string[] = [];
   if (avgWords <= 6) {
-    notes.push("they text short and to the point — keep your replies just as brief, don't pad them out");
+    notes.push(
+      "they text short and to the point — keep your replies just as brief, don't pad them out",
+    );
   } else if (avgWords >= 20) {
-    notes.push("they text in longer, fuller messages — a slightly fuller reply than usual is fine here");
+    notes.push(
+      "they text in longer, fuller messages — a slightly fuller reply than usual is fine here",
+    );
   }
   if (emojiRate >= 0.3) {
-    notes.push("they use emoji — an occasional one back is fine, don't force it every message");
+    notes.push(
+      "they use emoji — an occasional one back is fine, don't force it every message",
+    );
   }
   if (lowercaseRate >= 0.6) {
-    notes.push("they text casually, lowercase, minimal punctuation — match that relaxed tone");
+    notes.push(
+      "they text casually, lowercase, minimal punctuation — match that relaxed tone",
+    );
   }
 
-  return notes.length ? `\nHow they text (match this energy, not their exact words): ${notes.join("; ")}.` : "";
+  return notes.length
+    ? `\nHow they text (match this energy, not their exact words): ${notes.join("; ")}.`
+    : "";
 }
 
 type HumeChatEvent = {
@@ -115,7 +131,8 @@ async function fetchHumeChatEvents(chatId: string): Promise<HumeChatEvent[]> {
       `https://api.hume.ai/v0/evi/chats/${chatId}?page_size=100&page_number=${page}`,
       { headers: { "X-Hume-Api-Key": process.env.HUME_API_KEY! } },
     );
-    if (!res.ok) throw new Error(`Hume chat-events fetch failed: ${res.status}`);
+    if (!res.ok)
+      throw new Error(`Hume chat-events fetch failed: ${res.status}`);
     const data: any = await res.json();
     events.push(...(data.events_page ?? []));
     if (page + 1 >= (data.total_pages ?? 1)) break;
@@ -127,17 +144,28 @@ async function fetchHumeChatEvents(chatId: string): Promise<HumeChatEvent[]> {
 function buildTranscript(events: HumeChatEvent[]): string {
   return events
     .filter((e) => e.type === "USER_MESSAGE" || e.type === "AGENT_MESSAGE")
-    .map((e) => `${e.role === "USER" ? "user" : "assistant"}: ${e.message_text ?? ""}`)
+    .map(
+      (e) =>
+        `${e.role === "USER" ? "user" : "assistant"}: ${e.message_text ?? ""}`,
+    )
     .join("\n");
 }
 
-function buildMessages(events: HumeChatEvent[]): { role: "user" | "assistant"; content: string; timestamp: string }[] {
+function buildMessages(
+  events: HumeChatEvent[],
+): { role: "user" | "assistant"; content: string; timestamp: string }[] {
   return events
-    .filter((e) => (e.type === "USER_MESSAGE" || e.type === "AGENT_MESSAGE") && e.message_text)
+    .filter(
+      (e) =>
+        (e.type === "USER_MESSAGE" || e.type === "AGENT_MESSAGE") &&
+        e.message_text,
+    )
     .map((e) => ({
       role: e.role === "USER" ? "user" : ("assistant" as const),
       content: e.message_text!,
-      timestamp: e.timestamp ? new Date(e.timestamp).toISOString() : new Date().toISOString(),
+      timestamp: e.timestamp
+        ? new Date(e.timestamp).toISOString()
+        : new Date().toISOString(),
     }));
 }
 
@@ -147,14 +175,21 @@ function buildMessages(events: HumeChatEvent[]): { role: "user" | "assistant"; c
 // handleToolCall below. Best-effort: if events are missing timestamps this
 // just comes back empty rather than throwing — this is dashboard
 // observability, never on the path that answers Hume.
-function buildTurnLatencies(events: HumeChatEvent[]): { turn: number; latency_ms: number }[] {
+function buildTurnLatencies(
+  events: HumeChatEvent[],
+): { turn: number; latency_ms: number }[] {
   const turns = events.filter(
-    (e) => (e.type === "USER_MESSAGE" || e.type === "AGENT_MESSAGE") && typeof e.timestamp === "number",
+    (e) =>
+      (e.type === "USER_MESSAGE" || e.type === "AGENT_MESSAGE") &&
+      typeof e.timestamp === "number",
   );
   const out: { turn: number; latency_ms: number }[] = [];
   for (let i = 0; i < turns.length - 1; i++) {
     if (turns[i].role === "USER" && turns[i + 1].role !== "USER") {
-      out.push({ turn: out.length + 1, latency_ms: turns[i + 1].timestamp! - turns[i].timestamp! });
+      out.push({
+        turn: out.length + 1,
+        latency_ms: turns[i + 1].timestamp! - turns[i].timestamp!,
+      });
     }
   }
   return out;
@@ -162,9 +197,12 @@ function buildTurnLatencies(events: HumeChatEvent[]): { turn: number; latency_ms
 
 async function fetchHumeRecordingUrl(chatId: string): Promise<string | null> {
   try {
-    const res = await fetch(`https://api.hume.ai/v0/evi/chats/${chatId}/audio`, {
-      headers: { "X-Hume-Api-Key": process.env.HUME_API_KEY! },
-    });
+    const res = await fetch(
+      `https://api.hume.ai/v0/evi/chats/${chatId}/audio`,
+      {
+        headers: { "X-Hume-Api-Key": process.env.HUME_API_KEY! },
+      },
+    );
     if (!res.ok) return null;
     const data: any = await res.json();
     return data.status === "COMPLETE" ? (data.signed_audio_url ?? null) : null;
@@ -173,18 +211,32 @@ async function fetchHumeRecordingUrl(chatId: string): Promise<string | null> {
   }
 }
 
-async function sendHumeToolResponse(chatId: string, toolCallId: string, content: string): Promise<void> {
+async function sendHumeToolResponse(
+  chatId: string,
+  toolCallId: string,
+  content: string,
+): Promise<void> {
   const res = await fetch(`https://api.hume.ai/v0/evi/chat/${chatId}/send`, {
     method: "POST",
-    headers: { "X-Hume-Api-Key": process.env.HUME_API_KEY!, "Content-Type": "application/json" },
-    body: JSON.stringify({ type: "tool_response", tool_call_id: toolCallId, content }),
+    headers: {
+      "X-Hume-Api-Key": process.env.HUME_API_KEY!,
+      "Content-Type": "application/json",
+    },
+    body: JSON.stringify({
+      type: "tool_response",
+      tool_call_id: toolCallId,
+      content,
+    }),
   });
   if (!res.ok) {
-    console.error(`webhooks: tool response POST failed (${res.status}) for chat ${chatId}, tool ${toolCallId}`);
+    console.error(
+      `webhooks: tool response POST failed (${res.status}) for chat ${chatId}, tool ${toolCallId}`,
+    );
   }
 }
 
-const pause = (ms: number): Promise<void> => new Promise((resolve) => setTimeout(resolve, ms));
+const pause = (ms: number): Promise<void> =>
+  new Promise((resolve) => setTimeout(resolve, ms));
 
 // Serializes /sendblue/webhook processing per phone number — same pattern
 // production's sendblue.ts already uses (withPhoneLock), for the same
@@ -236,12 +288,16 @@ function findNaturalBoundary(window: string): number {
   );
 }
 
-function capMessageLength(text: string, maxChars = TEXT_MESSAGE_CHAR_CAP): string {
+function capMessageLength(
+  text: string,
+  maxChars = TEXT_MESSAGE_CHAR_CAP,
+): string {
   const trimmed = text.trim();
   if (trimmed.length <= maxChars) return trimmed;
   const window = trimmed.slice(0, maxChars);
   const lastBoundary = findNaturalBoundary(window);
-  if (lastBoundary > maxChars * 0.4) return window.slice(0, lastBoundary + 1).trim();
+  if (lastBoundary > maxChars * 0.4)
+    return window.slice(0, lastBoundary + 1).trim();
   const lastSpace = window.lastIndexOf(" ");
   return `${window.slice(0, lastSpace > 0 ? lastSpace : maxChars).trim()}…`;
 }
@@ -255,7 +311,10 @@ function capMessageLength(text: string, maxChars = TEXT_MESSAGE_CHAR_CAP): strin
 // here is deliberately swallowed — it must never affect call_status/
 // retryability, since the recap (the actual result) is already persisted by
 // the time this runs.
-async function scheduleFollowUpText(userId: string, transcript: string): Promise<void> {
+async function scheduleFollowUpText(
+  userId: string,
+  transcript: string,
+): Promise<void> {
   try {
     const TWO_HOURS_MS = 2 * 60 * 60 * 1000;
     const TWO_DAYS_MS = 2 * 24 * 60 * 60 * 1000;
@@ -265,7 +324,10 @@ async function scheduleFollowUpText(userId: string, transcript: string): Promise
       [userId, transcript, delayMs],
     );
   } catch (scheduleErr: any) {
-    console.error("Post-call follow-up scheduling failed (non-fatal):", scheduleErr?.message ?? scheduleErr);
+    console.error(
+      "Post-call follow-up scheduling failed (non-fatal):",
+      scheduleErr?.message ?? scheduleErr,
+    );
   }
 }
 
@@ -275,13 +337,21 @@ async function scheduleFollowUpText(userId: string, transcript: string): Promise
 // of truncating, so this splits at the same kind of natural boundary and
 // returns both parts (capped again if the remainder is itself still long,
 // so this is at most one follow-up, not an open-ended chain).
-function splitIntoMessages(text: string, maxChars = TEXT_MESSAGE_CHAR_CAP): string[] {
+function splitIntoMessages(
+  text: string,
+  maxChars = TEXT_MESSAGE_CHAR_CAP,
+): string[] {
   const trimmed = text.trim();
   if (trimmed.length <= maxChars) return [trimmed];
 
   const window = trimmed.slice(0, maxChars);
   const lastBoundary = findNaturalBoundary(window);
-  const splitAt = lastBoundary > maxChars * 0.4 ? lastBoundary + 1 : (window.lastIndexOf(" ") > 0 ? window.lastIndexOf(" ") : maxChars);
+  const splitAt =
+    lastBoundary > maxChars * 0.4
+      ? lastBoundary + 1
+      : window.lastIndexOf(" ") > 0
+        ? window.lastIndexOf(" ")
+        : maxChars;
 
   const first = trimmed.slice(0, splitAt).trim();
   const rest = trimmed.slice(splitAt).trim();
@@ -295,7 +365,11 @@ function splitIntoMessages(text: string, maxChars = TEXT_MESSAGE_CHAR_CAP): stri
 // in hand) can call it without double-fetching Hume. Always called before
 // any coverage-check event for the same tool_call, so a coverage result can
 // never render ahead of the transcript line that triggered it (requirement 6).
-function emitNewTranscriptLines(io: Server, userId: string, events: HumeChatEvent[]): void {
+function emitNewTranscriptLines(
+  io: Server,
+  userId: string,
+  events: HumeChatEvent[],
+): void {
   const messages = buildMessages(events);
   const alreadySeen = getTranscriptLinesSeen(userId);
   if (messages.length <= alreadySeen) return;
@@ -305,12 +379,19 @@ function emitNewTranscriptLines(io: Server, userId: string, events: HumeChatEven
   setTranscriptLinesSeen(userId, messages.length);
 }
 
-async function pollAndEmitTranscript(io: Server, userId: string, chatId: string): Promise<void> {
+async function pollAndEmitTranscript(
+  io: Server,
+  userId: string,
+  chatId: string,
+): Promise<void> {
   try {
     const events = await fetchHumeChatEvents(chatId);
     emitNewTranscriptLines(io, userId, events);
   } catch (err: any) {
-    console.error(`webhooks: live transcript poll failed for chat ${chatId} (non-fatal):`, err?.message ?? err);
+    console.error(
+      `webhooks: live transcript poll failed for chat ${chatId} (non-fatal):`,
+      err?.message ?? err,
+    );
   }
 }
 
@@ -333,10 +414,20 @@ async function handleToolCall(
     try {
       const result = userId
         ? await generateRecommendation(userId)
-        : { available: false as const, reason: "no user resolved for this call" };
-      await sendHumeToolResponse(chatId, toolCallMessage.tool_call_id, JSON.stringify(result));
+        : {
+            available: false as const,
+            reason: "no user resolved for this call",
+          };
+      await sendHumeToolResponse(
+        chatId,
+        toolCallMessage.tool_call_id,
+        JSON.stringify(result),
+      );
     } catch (err: any) {
-      console.error("webhooks: surface_recommendation failed:", err?.message ?? err);
+      console.error(
+        "webhooks: surface_recommendation failed:",
+        err?.message ?? err,
+      );
       await sendHumeToolResponse(
         chatId,
         toolCallMessage.tool_call_id,
@@ -350,8 +441,15 @@ async function handleToolCall(
 
   if (userId) {
     pool
-      .query(`UPDATE users SET smoke_test_tool_call_at = NOW() WHERE id = $1`, [userId])
-      .catch((err) => console.error("smoke_test_tool_call_at update failed (non-fatal):", err));
+      .query(`UPDATE users SET smoke_test_tool_call_at = NOW() WHERE id = $1`, [
+        userId,
+      ])
+      .catch((err) =>
+        console.error(
+          "smoke_test_tool_call_at update failed (non-fatal):",
+          err,
+        ),
+      );
   }
 
   try {
@@ -364,21 +462,42 @@ async function handleToolCall(
     // Lets an already-known fact (from a prior call or text) count as
     // covered so Co doesn't re-ask something it genuinely already knows —
     // see assessConversationCoverage's priorContext param.
-    const priorContext = userId ? await buildContextSummary(userId).catch(() => "") : "";
+    const priorContext = userId
+      ? await buildContextSummary(userId).catch(() => "")
+      : "";
     const start = Date.now();
-    const assessment = await assessConversationCoverage(transcript, priorContext);
+    const assessment = await assessConversationCoverage(
+      transcript,
+      priorContext,
+    );
     const latency_ms = Date.now() - start;
-    await sendHumeToolResponse(chatId, toolCallMessage.tool_call_id, JSON.stringify(assessment));
+    await sendHumeToolResponse(
+      chatId,
+      toolCallMessage.tool_call_id,
+      JSON.stringify(assessment),
+    );
 
     if (userId) {
       pool
-        .query(`UPDATE users SET smoke_test_tool_response_at = NOW() WHERE id = $1`, [userId])
-        .catch((err) => console.error("smoke_test_tool_response_at update failed (non-fatal):", err));
+        .query(
+          `UPDATE users SET smoke_test_tool_response_at = NOW() WHERE id = $1`,
+          [userId],
+        )
+        .catch((err) =>
+          console.error(
+            "smoke_test_tool_response_at update failed (non-fatal):",
+            err,
+          ),
+        );
     }
 
-    const covered_topics = RAPPORT_TOPICS.filter((t) => !assessment.missing_topics.includes(t));
+    const covered_topics = RAPPORT_TOPICS.filter(
+      (t) => !assessment.missing_topics.includes(t),
+    );
     if (userId) {
-      const priorChecks = getLiveSnapshot(userId).events.filter((e) => e.type === "coverage").length;
+      const priorChecks = getLiveSnapshot(userId).events.filter(
+        (e) => e.type === "coverage",
+      ).length;
       pushLiveEvent(io, userId, {
         type: "coverage",
         check: {
@@ -392,11 +511,17 @@ async function handleToolCall(
       });
     }
   } catch (err: any) {
-    console.error("webhooks: assess_conversation_coverage failed, falling back to nothing-covered:", err?.message ?? err);
+    console.error(
+      "webhooks: assess_conversation_coverage failed, falling back to nothing-covered:",
+      err?.message ?? err,
+    );
     await sendHumeToolResponse(
       chatId,
       toolCallMessage.tool_call_id,
-      JSON.stringify({ missing_topics: [...RAPPORT_TOPICS], ready_to_summarize: false }),
+      JSON.stringify({
+        missing_topics: [...RAPPORT_TOPICS],
+        ready_to_summarize: false,
+      }),
     ).catch(() => {});
   }
 }
@@ -447,8 +572,12 @@ function validateHumeWebhook(req: Request): boolean {
   // Diagnostic logging (2026-08-13) — real deliveries started 401ing after
   // this was re-enabled; never logs the secret or the actual signature
   // values, just enough to tell which specific check is failing.
-  const signature = req.headers["x-hume-ai-webhook-signature"] as string | undefined;
-  const timestamp = req.headers["x-hume-ai-webhook-timestamp"] as string | undefined;
+  const signature = req.headers["x-hume-ai-webhook-signature"] as
+    | string
+    | undefined;
+  const timestamp = req.headers["x-hume-ai-webhook-timestamp"] as
+    | string
+    | undefined;
   if (!signature || !timestamp) {
     console.error(
       `validateHumeWebhook: missing header(s) — signature present: ${!!signature}, timestamp present: ${!!timestamp}, all headers: ${JSON.stringify(Object.keys(req.headers))}`,
@@ -466,7 +595,9 @@ function validateHumeWebhook(req: Request): boolean {
   }
 
   const rawBody = (req.body as Buffer).toString("utf-8");
-  const expected = createHmac("sha256", secret).update(`${rawBody}.${timestamp}`).digest("hex");
+  const expected = createHmac("sha256", secret)
+    .update(`${rawBody}.${timestamp}`)
+    .digest("hex");
 
   let matched = false;
   try {
@@ -495,317 +626,388 @@ export function createWebhooksRouter(io: Server): express.Router {
   // voicemail pickup went straight into Hume's normal live conversation
   // instead of a deliberate voicemail line, since nothing ever told Hume it
   // was talking to a machine.
-  router.post("/co/call-status", async (req: Request, res: Response, next: NextFunction) => {
-    try {
-      // Re-enabled 2026-08-13 — TWILIO_AUTH previously held a stale/wrong Auth
-      // Token, confirmed directly against Twilio's API (Basic Auth against
-      // /Accounts/{TWILIO_LIVE_SID}.json returned 401). Now holds the current,
-      // verified-correct token (confirmed 200 against the same check).
-      if (!validateTwilioSignature(req)) {
-        return res.status(401).send("Invalid Twilio signature.");
-      }
+  router.post(
+    "/co/call-status",
+    async (req: Request, res: Response, next: NextFunction) => {
+      try {
+        // Re-enabled 2026-08-13 — TWILIO_AUTH previously held a stale/wrong Auth
+        // Token, confirmed directly against Twilio's API (Basic Auth against
+        // /Accounts/{TWILIO_LIVE_SID}.json returned 401). Now holds the current,
+        // verified-correct token (confirmed 200 against the same check).
+        if (!validateTwilioSignature(req)) {
+          return res.status(401).send("Invalid Twilio signature.");
+        }
 
-      const { CallStatus, To, CallSid, AnsweredBy } = req.body;
+        const { CallStatus, To, CallSid, AnsweredBy } = req.body;
 
-      // Async AMD result arrives as its own, differently-shaped callback —
-      // only MachineDetectionDuration/CallSid/AnsweredBy/AccountSid, no
-      // CallStatus or To at all. Must be handled before the CallStatus/To
-      // guard below, which would otherwise silently discard it — same
-      // failure mode production's version documents hitting for real.
-      if (typeof AnsweredBy === "string") {
-        if (!AnsweredBy.startsWith("machine")) {
-          // human/fax/unknown — the live Hume conversation is already
-          // proceeding correctly, nothing to do here.
+        // Async AMD result arrives as its own, differently-shaped callback —
+        // only MachineDetectionDuration/CallSid/AnsweredBy/AccountSid, no
+        // CallStatus or To at all. Must be handled before the CallStatus/To
+        // guard below, which would otherwise silently discard it — same
+        // failure mode production's version documents hitting for real.
+        if (typeof AnsweredBy === "string") {
+          if (!AnsweredBy.startsWith("machine")) {
+            // human/fax/unknown — the live Hume conversation is already
+            // proceeding correctly, nothing to do here.
+            return res.sendStatus(204);
+          }
+
+          // This callback has no `To` — resolve the destination number from
+          // Twilio's own call record instead.
+          let toNumber: string | null = To ?? null;
+          if (!toNumber) {
+            try {
+              const call = await twilioClient.calls(CallSid).fetch();
+              toNumber = call.to;
+            } catch (fetchErr: any) {
+              console.error(
+                `Failed to fetch call ${CallSid} for AMD user lookup:`,
+                fetchErr?.message ?? fetchErr,
+              );
+            }
+          }
+
+          const user = toNumber
+            ? (
+                await pool.query(
+                  `SELECT id, first_name, phone_number FROM users WHERE phone_number = $1`,
+                  [toNumber],
+                )
+              ).rows[0]
+            : null;
+
+          // AMD detected an answering machine/voicemail — Hume has already been
+          // talking on the line for a few seconds (async AMD connects Hume
+          // immediately so real humans face no delay; the tradeoff is Hume
+          // doesn't yet know it's a machine). An abrupt hangup here just cuts
+          // Hume off mid-sentence into the person's real voicemail box.
+          // Instead, redirect the still-live call to our own TwiML so Co
+          // leaves one deliberate, complete voicemail line before hanging up
+          // cleanly.
+          if (user) {
+            io.to(`user:${user.id}`).emit("co:call_completed", {
+              call_sid: CallSid,
+              status: "voicemail",
+            });
+          }
+          // A fixed voicemail line every time reads as a canned system
+          // message. Vary it (Haiku, one short line, hard fallback) — this
+          // is said directly into the call's TwiML while it's still live,
+          // so generation must never meaningfully delay the redirect.
+          let voicemailLine = user
+            ? `Hey ${user.first_name}, it's Co. Sorry I missed you — I'll try you again soon.`
+            : `Hey, it's Co. Sorry I missed you — I'll try you again soon.`;
+          try {
+            const { text: variedLine } = await generateText({
+              model: anthropic("claude-haiku-4-5-20251001"),
+              experimental_telemetry: { isEnabled: true, functionId: "co-test.webhooks.voicemailLine" },
+              prompt: `You are Co, an exclusive life concierge. You just called ${user ? user.first_name : "someone"} and reached their voicemail. Leave a short, natural one-line voicemail greeting letting them know you'll try again soon — vary how you say it, don't just repeat "Sorry I missed you." Tone: calm, unhurried, like a private members club. No exclamation points, no em dashes. Under 140 characters.`,
+            });
+            const trimmed = variedLine.trim();
+            if (trimmed) voicemailLine = trimmed.length > 160 ? trimmed.slice(0, 159) + "…" : trimmed;
+          } catch (genErr: any) {
+            console.error("Voicemail-line generation failed (non-fatal, using default):", genErr?.message ?? genErr);
+          }
+
+          const voiceResponse = new twilio.twiml.VoiceResponse();
+          voiceResponse.say({ voice: "Polly.Matthew-Neural" }, voicemailLine);
+          voiceResponse.hangup();
+          try {
+            await twilioClient
+              .calls(CallSid)
+              .update({ twiml: voiceResponse.toString() });
+          } catch (redirectErr: any) {
+            console.error(
+              "Failed to redirect call to voicemail TwiML (non-fatal):",
+              redirectErr?.message ?? redirectErr,
+            );
+          }
+          // Flag this call so the Hume chat_ended webhook (which still fires
+          // normally since we hang up cleanly, not abruptly) skips the full
+          // extraction pipeline below — a one-line Hume monologue to a machine
+          // isn't a real conversation worth extracting a profile from.
+          await pool.query(
+            `INSERT INTO voicemail_calls (call_sid) VALUES ($1) ON CONFLICT DO NOTHING`,
+            [CallSid],
+          );
           return res.sendStatus(204);
         }
 
-        // This callback has no `To` — resolve the destination number from
-        // Twilio's own call record instead.
-        let toNumber: string | null = To ?? null;
-        if (!toNumber) {
-          try {
-            const call = await twilioClient.calls(CallSid).fetch();
-            toNumber = call.to;
-          } catch (fetchErr: any) {
-            console.error(`Failed to fetch call ${CallSid} for AMD user lookup:`, fetchErr?.message ?? fetchErr);
-          }
-        }
+        if (!CallStatus || !To) return res.sendStatus(204);
 
-        const user = toNumber
-          ? (
-              await pool.query(
-                `SELECT id, first_name, phone_number FROM users WHERE phone_number = $1`,
-                [toNumber],
-              )
-            ).rows[0]
-          : null;
-
-        // AMD detected an answering machine/voicemail — Hume has already been
-        // talking on the line for a few seconds (async AMD connects Hume
-        // immediately so real humans face no delay; the tradeoff is Hume
-        // doesn't yet know it's a machine). An abrupt hangup here just cuts
-        // Hume off mid-sentence into the person's real voicemail box.
-        // Instead, redirect the still-live call to our own TwiML so Co
-        // leaves one deliberate, complete voicemail line before hanging up
-        // cleanly.
-        if (user) {
-          io.to(`user:${user.id}`).emit("co:call_completed", { call_sid: CallSid, status: "voicemail" });
+        // 'processing'/'completed'/'failed' are the chat_ended handler's own
+        // terminal states below (its idempotency claim reads call_status to
+        // decide whether extraction already ran) — Twilio's "completed" is a
+        // DIFFERENT event (the call itself hung up) that fires independently
+        // of and usually right around the same time as Hume's chat_ended.
+        // Forwarding it here let it land first and get misread as "extraction
+        // already finished," silently skipping the real pipeline (confirmed
+        // live: call_status='completed' with zero co_memories/co_profiles
+        // rows for the call). Only forward the early, Twilio-owned states;
+        // chat_ended is the sole writer of the terminal ones.
+        if (CallStatus !== "completed") {
+          await pool.query(
+            `UPDATE users SET call_status = $2 WHERE phone_number = $1 AND call_sid = $3`,
+            [To, CallStatus, CallSid],
+          );
         }
-        const voiceResponse = new twilio.twiml.VoiceResponse();
-        voiceResponse.say(
-          { voice: "Polly.Matthew-Neural" },
-          user
-            ? `Hey ${user.first_name}, it's Co. Sorry I missed you — I'll try you again soon.`
-            : `Hey, it's Co. Sorry I missed you — I'll try you again soon.`,
-        );
-        voiceResponse.hangup();
-        try {
-          await twilioClient.calls(CallSid).update({ twiml: voiceResponse.toString() });
-        } catch (redirectErr: any) {
-          console.error("Failed to redirect call to voicemail TwiML (non-fatal):", redirectErr?.message ?? redirectErr);
-        }
-        // Flag this call so the Hume chat_ended webhook (which still fires
-        // normally since we hang up cleanly, not abruptly) skips the full
-        // extraction pipeline below — a one-line Hume monologue to a machine
-        // isn't a real conversation worth extracting a profile from.
-        await pool.query(
-          `INSERT INTO voicemail_calls (call_sid) VALUES ($1) ON CONFLICT DO NOTHING`,
-          [CallSid],
-        );
         return res.sendStatus(204);
+      } catch (error) {
+        next(error);
       }
-
-      if (!CallStatus || !To) return res.sendStatus(204);
-
-      // 'processing'/'completed'/'failed' are the chat_ended handler's own
-      // terminal states below (its idempotency claim reads call_status to
-      // decide whether extraction already ran) — Twilio's "completed" is a
-      // DIFFERENT event (the call itself hung up) that fires independently
-      // of and usually right around the same time as Hume's chat_ended.
-      // Forwarding it here let it land first and get misread as "extraction
-      // already finished," silently skipping the real pipeline (confirmed
-      // live: call_status='completed' with zero co_memories/co_profiles
-      // rows for the call). Only forward the early, Twilio-owned states;
-      // chat_ended is the sole writer of the terminal ones.
-      if (CallStatus !== "completed") {
-        await pool.query(
-          `UPDATE users SET call_status = $2 WHERE phone_number = $1 AND call_sid = $3`,
-          [To, CallStatus, CallSid],
-        );
-      }
-      return res.sendStatus(204);
-    } catch (error) {
-      next(error);
-    }
-  });
+    },
+  );
 
   // POST /co/webhook — Hume calls this for chat_started/chat_ended/tool_call,
   // same three events production's config registers. Only reachable for
   // co-test's OWN chats once the dev Hume config's webhook is repointed here
   // (see server.ts / the one-time repoint noted in phone.ts task notes) —
   // production's separate Hume config and its webhook are never touched.
-  router.post("/co/webhook", async (req: Request, res: Response, next: NextFunction) => {
-    try {
-      // Re-enabled 2026-08-13 — validateHumeWebhook previously checked the
-      // wrong header entirely (see its own comment); now implements Hume's
-      // actual HMAC scheme, confirmed against their docs.
-      if (!validateHumeWebhook(req)) {
-        return res.status(401).send("Unauthorized.");
-      }
-
-      // req.body is the raw Buffer here (see server.ts's express.raw() on
-      // this path, needed for signature verification above) — parse it now
-      // that verification is done. Kept as its own variable (not reassigned
-      // onto req.body) so the "could not resolve user" log below still shows
-      // something readable rather than JSON.stringify-ing a Buffer.
-      const parsedBody = JSON.parse((req.body as Buffer).toString("utf-8"));
-      const { event_name, custom_session_id, chat_id, twilio_metadata, tool_call_message } = parsedBody;
-
-      const resolveUserId = async (): Promise<string | null> => {
-        if (custom_session_id) return custom_session_id;
-        if (twilio_metadata?.to_number) {
-          const byPhone = await pool.query(`SELECT id FROM users WHERE phone_number = $1`, [twilio_metadata.to_number]);
-          return byPhone.rows[0]?.id ?? null;
+  router.post(
+    "/co/webhook",
+    async (req: Request, res: Response, next: NextFunction) => {
+      try {
+        // Re-enabled 2026-08-13 — validateHumeWebhook previously checked the
+        // wrong header entirely (see its own comment); now implements Hume's
+        // actual HMAC scheme, confirmed against their docs.
+        if (!validateHumeWebhook(req)) {
+          return res.status(401).send("Unauthorized.");
         }
-        return null;
-      };
 
-      if (event_name === "chat_started") {
-        res.status(200).send({ success: true });
-        const userId = await resolveUserId();
-        if (userId) {
-          // Live-push layer only — persistence of the final transcript/
-          // extraction at chat_ended (below) is unconditional and does not
-          // depend on this, or on any browser being connected (requirement 4).
-          startLiveCall(userId);
-          startPolling(userId, () => {
-            pollAndEmitTranscript(io, userId, chat_id).catch((err) =>
-              console.error("webhooks: transcript poll error (non-fatal):", err?.message ?? err),
+        // req.body is the raw Buffer here (see server.ts's express.raw() on
+        // this path, needed for signature verification above) — parse it now
+        // that verification is done. Kept as its own variable (not reassigned
+        // onto req.body) so the "could not resolve user" log below still shows
+        // something readable rather than JSON.stringify-ing a Buffer.
+        const parsedBody = JSON.parse((req.body as Buffer).toString("utf-8"));
+        const {
+          event_name,
+          custom_session_id,
+          chat_id,
+          twilio_metadata,
+          tool_call_message,
+        } = parsedBody;
+
+        const resolveUserId = async (): Promise<string | null> => {
+          if (custom_session_id) return custom_session_id;
+          if (twilio_metadata?.to_number) {
+            const byPhone = await pool.query(
+              `SELECT id FROM users WHERE phone_number = $1`,
+              [twilio_metadata.to_number],
             );
-          });
+            return byPhone.rows[0]?.id ?? null;
+          }
+          return null;
+        };
+
+        if (event_name === "chat_started") {
+          res.status(200).send({ success: true });
+          const userId = await resolveUserId();
+          if (userId) {
+            // Live-push layer only — persistence of the final transcript/
+            // extraction at chat_ended (below) is unconditional and does not
+            // depend on this, or on any browser being connected (requirement 4).
+            startLiveCall(userId);
+            startPolling(userId, () => {
+              pollAndEmitTranscript(io, userId, chat_id).catch((err) =>
+                console.error(
+                  "webhooks: transcript poll error (non-fatal):",
+                  err?.message ?? err,
+                ),
+              );
+            });
+          }
+          return;
         }
-        return;
-      }
 
-      if (event_name === "tool_call") {
-        res.status(200).send({ success: true });
-        const userId = await resolveUserId();
-        handleToolCall(io, chat_id, userId, tool_call_message).catch((err) =>
-          console.error("webhooks: unhandled tool_call error:", err?.message ?? err),
-        );
-        return;
-      }
-
-      if (event_name !== "chat_ended") {
-        return res.status(200).send({ success: true, ignored: event_name });
-      }
-
-      const user_id = await resolveUserId();
-      if (!user_id || !chat_id) {
-        console.error(`webhooks: could not resolve user for chat ${chat_id} — body: ${JSON.stringify(parsedBody)}`);
-        return res.status(400).send("Missing required fields.");
-      }
-
-      // The AMD callback above already flagged this call as an answering
-      // machine/voicemail and left its own deliberate line — skip the full
-      // extraction pipeline below so a one-line Hume monologue to a machine
-      // doesn't get treated as a real conversation worth building a profile from.
-      //
-      // twilio_metadata only ever gets populated by Hume when the chat came
-      // in through Hume's OWN /v0/evi/twilio integration — since we now hold
-      // the Twilio leg ourselves and open Hume via a plain chat.connect()
-      // (see mediaStreamBridge.ts), Hume has no idea Twilio is involved at
-      // all, so this field is never present anymore and the check below was
-      // silently dead (confirmed: no other code path sets it either). users.call_sid
-      // (stamped by callTrigger.ts when the call is placed) is the real
-      // source of truth for this call's SID now; twilio_metadata is kept as
-      // a fallback in case that ever changes back.
-      let voicemailCallSid: string | null = twilio_metadata?.call_sid ?? null;
-      if (!voicemailCallSid) {
-        const callSidResult = await pool.query(`SELECT call_sid FROM users WHERE id = $1`, [user_id]);
-        voicemailCallSid = callSidResult.rows[0]?.call_sid ?? null;
-      }
-      if (voicemailCallSid) {
-        const flagged = await pool.query(
-          `SELECT 1 FROM voicemail_calls WHERE call_sid = $1`,
-          [voicemailCallSid],
-        );
-        if (flagged.rows.length > 0) {
-          console.log(`webhooks: skipping extraction for voicemail call ${voicemailCallSid}`);
-          return res.status(200).send({ success: true, skipped: "voicemail" });
+        if (event_name === "tool_call") {
+          res.status(200).send({ success: true });
+          const userId = await resolveUserId();
+          handleToolCall(io, chat_id, userId, tool_call_message).catch((err) =>
+            console.error(
+              "webhooks: unhandled tool_call error:",
+              err?.message ?? err,
+            ),
+          );
+          return;
         }
-      }
 
-      // Idempotency guard — Hume (or something in the Twilio-bridged path
-      // specifically) has been observed delivering chat_ended more than once
-      // for the same real call, moments apart. Without this, the full
-      // extraction pipeline re-ran from scratch each time (non-deterministic
-      // re-extraction, since it's an LLM call on the same transcript) and
-      // sent a fresh, differently-worded follow-up text every time —
-      // confirmed directly: three near-identical call_transcript/intent/recap
-      // triples 15-20 seconds apart for one real call. Atomic claim: only the
-      // delivery that actually flips call_status to 'processing' gets rows
-      // back and proceeds; every later delivery for the same call sees it
-      // already 'processing'/'completed' and is a no-op ack.
-      //
-      // Claiming 'processing' here — not 'completed' directly — matters: the
-      // extraction pipeline below (Hume fetch, transcript build, two LLM
-      // calls, recap insert) can fail partway through, and 'completed' must
-      // only ever mean "the recap actually exists." Confirmed for real: a
-      // pipeline failure previously left call_status='completed' with no
-      // recap ever written, permanently wedging the call — every later
-      // delivery (including a legitimate retry) saw 'completed' and no-op'd
-      // forever, with no way to recover except manually resetting the row.
-      // On failure below, call_status resets to 'failed' so the next
-      // delivery (or a manual replay) can claim and retry it.
-      //
-      // Second clause covers the one failure mode a try/catch can't:
-      // the server process dying mid-pipeline (crash/restart), which never
-      // reaches the catch block to reset to 'failed' at all — the row would
-      // otherwise sit in 'processing' forever, unreclaimable, same dead end
-      // as the original bug. A row stuck in 'processing' for longer than any
-      // real extraction takes (normally well under a minute) is reclaimable.
-      // updated_at is set explicitly here rather than relied on from a
-      // trigger, since none exists on this table.
-      const claimResult = await pool.query(
-        `UPDATE users SET call_status = 'processing', updated_at = NOW()
+        if (event_name !== "chat_ended") {
+          return res.status(200).send({ success: true, ignored: event_name });
+        }
+
+        const user_id = await resolveUserId();
+        if (!user_id || !chat_id) {
+          console.error(
+            `webhooks: could not resolve user for chat ${chat_id} — body: ${JSON.stringify(parsedBody)}`,
+          );
+          return res.status(400).send("Missing required fields.");
+        }
+
+        // The AMD callback above already flagged this call as an answering
+        // machine/voicemail and left its own deliberate line — skip the full
+        // extraction pipeline below so a one-line Hume monologue to a machine
+        // doesn't get treated as a real conversation worth building a profile from.
+        //
+        // twilio_metadata only ever gets populated by Hume when the chat came
+        // in through Hume's OWN /v0/evi/twilio integration — since we now hold
+        // the Twilio leg ourselves and open Hume via a plain chat.connect()
+        // (see mediaStreamBridge.ts), Hume has no idea Twilio is involved at
+        // all, so this field is never present anymore and the check below was
+        // silently dead (confirmed: no other code path sets it either). users.call_sid
+        // (stamped by callTrigger.ts when the call is placed) is the real
+        // source of truth for this call's SID now; twilio_metadata is kept as
+        // a fallback in case that ever changes back.
+        let voicemailCallSid: string | null = twilio_metadata?.call_sid ?? null;
+        if (!voicemailCallSid) {
+          const callSidResult = await pool.query(
+            `SELECT call_sid FROM users WHERE id = $1`,
+            [user_id],
+          );
+          voicemailCallSid = callSidResult.rows[0]?.call_sid ?? null;
+        }
+        if (voicemailCallSid) {
+          const flagged = await pool.query(
+            `SELECT 1 FROM voicemail_calls WHERE call_sid = $1`,
+            [voicemailCallSid],
+          );
+          if (flagged.rows.length > 0) {
+            console.log(
+              `webhooks: skipping extraction for voicemail call ${voicemailCallSid}`,
+            );
+            return res
+              .status(200)
+              .send({ success: true, skipped: "voicemail" });
+          }
+        }
+
+        // Idempotency guard — Hume (or something in the Twilio-bridged path
+        // specifically) has been observed delivering chat_ended more than once
+        // for the same real call, moments apart. Without this, the full
+        // extraction pipeline re-ran from scratch each time (non-deterministic
+        // re-extraction, since it's an LLM call on the same transcript) and
+        // sent a fresh, differently-worded follow-up text every time —
+        // confirmed directly: three near-identical call_transcript/intent/recap
+        // triples 15-20 seconds apart for one real call. Atomic claim: only the
+        // delivery that actually flips call_status to 'processing' gets rows
+        // back and proceeds; every later delivery for the same call sees it
+        // already 'processing'/'completed' and is a no-op ack.
+        //
+        // Claiming 'processing' here — not 'completed' directly — matters: the
+        // extraction pipeline below (Hume fetch, transcript build, two LLM
+        // calls, recap insert) can fail partway through, and 'completed' must
+        // only ever mean "the recap actually exists." Confirmed for real: a
+        // pipeline failure previously left call_status='completed' with no
+        // recap ever written, permanently wedging the call — every later
+        // delivery (including a legitimate retry) saw 'completed' and no-op'd
+        // forever, with no way to recover except manually resetting the row.
+        // On failure below, call_status resets to 'failed' so the next
+        // delivery (or a manual replay) can claim and retry it.
+        //
+        // Second clause covers the one failure mode a try/catch can't:
+        // the server process dying mid-pipeline (crash/restart), which never
+        // reaches the catch block to reset to 'failed' at all — the row would
+        // otherwise sit in 'processing' forever, unreclaimable, same dead end
+        // as the original bug. A row stuck in 'processing' for longer than any
+        // real extraction takes (normally well under a minute) is reclaimable.
+        // updated_at is set explicitly here rather than relied on from a
+        // trigger, since none exists on this table.
+        const claimResult = await pool.query(
+          `UPDATE users SET call_status = 'processing', updated_at = NOW()
          WHERE id = $1
            AND (
              call_status NOT IN ('processing', 'completed')
              OR (call_status = 'processing' AND updated_at < NOW() - INTERVAL '10 minutes')
            )
          RETURNING id`,
-        [user_id],
-      );
-      if (!claimResult.rows[0]) {
-        console.log(`webhooks: chat_ended already processed for user ${user_id} (chat ${chat_id}) — ignoring duplicate delivery`);
-        return res.status(200).send({ success: true, duplicate: true });
-      }
-
-      try {
-        const [events, recording_url] = await Promise.all([
-          fetchHumeChatEvents(chat_id),
-          fetchHumeRecordingUrl(chat_id),
-        ]);
-        const transcript = buildTranscript(events);
-        const messages = buildMessages(events);
-        const turn_latency_ms = buildTurnLatencies(events);
-
-        // Flush any last transcript lines live, then hand off — the coverage
-        // history for the recap below comes from the same live event log
-        // (not re-derived), so what a connected browser saw live and what the
-        // static results page shows afterward are exactly the same data.
-        emitNewTranscriptLines(io, user_id, events);
-        const coverage_history = getLiveSnapshot(user_id)
-          .events.filter((e) => e.type === "coverage")
-          .map((e) => (e as Extract<typeof e, { type: "coverage" }>).check);
-        pushLiveEvent(io, user_id, { type: "call_ended" });
-        endLiveCall(user_id);
-
-        if (!transcript.trim()) {
-          console.error(`webhooks: empty transcript for chat ${chat_id} (user ${user_id})`);
-          // Not a hard failure, but there's no recap to show either — reset
-          // so a later delivery with a fully-synced transcript can retry,
-          // same as the catch block below.
-          await pool.query(`UPDATE users SET call_status = 'failed' WHERE id = $1`, [user_id]);
-          return res.status(200).send({ success: true, empty: true });
+          [user_id],
+        );
+        if (!claimResult.rows[0]) {
+          console.log(
+            `webhooks: chat_ended already processed for user ${user_id} (chat ${chat_id}) — ignoring duplicate delivery`,
+          );
+          return res.status(200).send({ success: true, duplicate: true });
         }
 
-        await storeTranscriptMemory(user_id, transcript, { audioUrl: recording_url });
-        const { raw, extracted } = await extractPsychographicProfile(transcript);
-        await storeProfile(user_id, extracted, transcript);
-        const intent = await captureIntent(user_id, transcript);
+        try {
+          const [events, recording_url] = await Promise.all([
+            fetchHumeChatEvents(chat_id),
+            fetchHumeRecordingUrl(chat_id),
+          ]);
+          const transcript = buildTranscript(events);
+          const messages = buildMessages(events);
+          const turn_latency_ms = buildTurnLatencies(events);
 
-        const data = {
-          profile: extracted,
-          intent,
-          raw_model_output: raw,
-          transcript,
-          messages,
-          coverage_history,
-          turn_latency_ms,
-          channel: "phone",
-        };
-        await pool.query(
-          `INSERT INTO co_memories (user_id, memory_type, content) VALUES ($1, 'recap', $2)`,
-          [user_id, JSON.stringify(data)],
-        );
+          // Flush any last transcript lines live, then hand off — the coverage
+          // history for the recap below comes from the same live event log
+          // (not re-derived), so what a connected browser saw live and what the
+          // static results page shows afterward are exactly the same data.
+          emitNewTranscriptLines(io, user_id, events);
+          const coverage_history = getLiveSnapshot(user_id)
+            .events.filter((e) => e.type === "coverage")
+            .map((e) => (e as Extract<typeof e, { type: "coverage" }>).check);
+          pushLiveEvent(io, user_id, { type: "call_ended" });
+          endLiveCall(user_id);
 
-        // The recap exists now — safe to mark completed. Everything after
-        // this point (the follow-up text) is best-effort and must not affect
-        // retryability; it already has its own non-fatal try/catch below.
-        await pool.query(`UPDATE users SET call_status = 'completed' WHERE id = $1`, [user_id]);
+          if (!transcript.trim()) {
+            console.error(
+              `webhooks: empty transcript for chat ${chat_id} (user ${user_id})`,
+            );
+            // Not a hard failure, but there's no recap to show either — reset
+            // so a later delivery with a fully-synced transcript can retry,
+            // same as the catch block below.
+            await pool.query(
+              `UPDATE users SET call_status = 'failed' WHERE id = $1`,
+              [user_id],
+            );
+            return res.status(200).send({ success: true, empty: true });
+          }
 
-        await scheduleFollowUpText(user_id, transcript);
-        return res.status(200).send({ success: true });
-      } catch (pipelineErr) {
-        await pool.query(`UPDATE users SET call_status = 'failed' WHERE id = $1`, [user_id]);
-        throw pipelineErr;
+          await storeTranscriptMemory(user_id, transcript, {
+            audioUrl: recording_url,
+          });
+          const { raw, extracted } =
+            await extractPsychographicProfile(transcript);
+          await storeProfile(user_id, extracted, transcript);
+          const intent = await captureIntent(user_id, transcript);
+
+          const data = {
+            profile: extracted,
+            intent,
+            raw_model_output: raw,
+            transcript,
+            messages,
+            coverage_history,
+            turn_latency_ms,
+            channel: "phone",
+          };
+          await pool.query(
+            `INSERT INTO co_memories (user_id, memory_type, content) VALUES ($1, 'recap', $2)`,
+            [user_id, JSON.stringify(data)],
+          );
+
+          // The recap exists now — safe to mark completed. Everything after
+          // this point (the follow-up text) is best-effort and must not affect
+          // retryability; it already has its own non-fatal try/catch below.
+          await pool.query(
+            `UPDATE users SET call_status = 'completed' WHERE id = $1`,
+            [user_id],
+          );
+
+          await scheduleFollowUpText(user_id, transcript);
+          return res.status(200).send({ success: true });
+        } catch (pipelineErr) {
+          await pool.query(
+            `UPDATE users SET call_status = 'failed' WHERE id = $1`,
+            [user_id],
+          );
+          throw pipelineErr;
+        }
+      } catch (error) {
+        next(error);
       }
-    } catch (error) {
-      next(error);
-    }
-  });
+    },
+  );
 
   // POST /sendblue/webhook — real text-in-first + OTP flow (Part 1, item 2),
   // mirroring the contact_verified gate in api/src/routes/sendblue.ts. Kept
@@ -813,362 +1015,447 @@ export function createWebhooksRouter(io: Server): express.Router {
   // transcription or image vision — this is proving the verification sequence
   // and the ongoing-chat channel out, not re-implementing every media type),
   // and no moment/circle response handling (co-test has neither).
-  router.post("/sendblue/webhook", async (req: Request, res: Response, next: NextFunction) => {
-    const { number, content, is_outbound, type } = req.body;
-    if (type === "typing" || is_outbound) return res.status(200).send({ received: true });
+  router.post(
+    "/sendblue/webhook",
+    async (req: Request, res: Response, next: NextFunction) => {
+      const { number, content, is_outbound, type } = req.body;
+      if (type === "typing" || is_outbound)
+        return res.status(200).send({ received: true });
 
-    const hasText = typeof content === "string" && content.trim().length > 0;
-    if (!number || !hasText) return res.status(200).send({ received: true });
+      const hasText = typeof content === "string" && content.trim().length > 0;
+      if (!number || !hasText) return res.status(200).send({ received: true });
 
-    // A malformed inbound `number` (confirmed: Sendblue can deliver one,
-    // e.g. a bare 5-digit value) was flowing straight through to a real,
-    // billed sendSMS call via the session-claim branch below — nothing on
-    // this path validated shape before either claiming a session or
-    // sending. Reject before either happens.
-    if (!parsePhoneNumberFromString(number, "US")?.isValid()) {
-      console.error(`co-test sendblue webhook: malformed inbound number "${number}" — ignoring`);
-      return res.status(200).send({ received: true });
-    }
-
-    const run = async () => {
-    try {
-      // The tester's row already exists by the time they can text in — login
-      // (testerAuth.ts) creates it, keyed on this same real phone number,
-      // before /phone is even reachable (see phone.ts's /session route,
-      // which reuses that same login row rather than creating a separate
-      // one).
-      const userResult = await pool.query(
-        `SELECT id, first_name, contact_verified FROM users WHERE phone_number = $1 AND test_channel = 'phone'`,
-        [number],
-      );
-      const user = userResult.rows[0];
-
-      if (!user) {
-        console.log(`co-test sendblue webhook: no phone-test session for ${number} — ignoring`);
+      // A malformed inbound `number` (confirmed: Sendblue can deliver one,
+      // e.g. a bare 5-digit value) was flowing straight through to a real,
+      // billed sendSMS call via the session-claim branch below — nothing on
+      // this path validated shape before either claiming a session or
+      // sending. Reject before either happens.
+      if (!parsePhoneNumberFromString(number, "US")?.isValid()) {
+        console.error(
+          `co-test sendblue webhook: malformed inbound number "${number}" — ignoring`,
+        );
         return res.status(200).send({ received: true });
       }
 
-      // Duplicate-message guard — reliable now that processing is
-      // serialized above (withPhoneLock), so by the time this runs, a truly
-      // prior identical message has either already fully completed or isn't
-      // running concurrently with this one anymore. Confirmed in a real
-      // conversation: the same exact message sent 3 times within ~20s
-      // (impatient re-sends while the first was still processing) produced
-      // 3 full independent searches and deliveries. If this exact content
-      // was already recorded as sent by this user in the last minute,
-      // treat it as a re-send of something already answered, not a new ask.
-      const recentDuplicateResult = await pool.query(
-        `SELECT 1 FROM co_memories WHERE user_id = $1 AND memory_type = 'text_exchange' AND content = $2 AND created_at > NOW() - INTERVAL '60 seconds' LIMIT 1`,
-        [user.id, `User said: ${content}`],
-      );
-      if (recentDuplicateResult.rows[0]) {
-        console.log(`co-test sendblue webhook: duplicate message from user ${user.id} within 60s, skipping reprocessing`);
-        return res.status(200).send({ received: true, duplicate: true });
-      }
+      const run = async () => {
+        try {
+          // The tester's row already exists by the time they can text in — login
+          // (testerAuth.ts) creates it, keyed on this same real phone number,
+          // before /phone is even reachable (see phone.ts's /session route,
+          // which reuses that same login row rather than creating a separate
+          // one).
+          const userResult = await pool.query(
+            `SELECT id, first_name, contact_verified FROM users WHERE phone_number = $1 AND test_channel = 'phone'`,
+            [number],
+          );
+          const user = userResult.rows[0];
 
-      // First inbound text — satisfies text-in-first. Same three-message
-      // onboarding production's self-serve registration sends (see
-      // api/src/routes/sendblue.ts's contact_verified branch) — welcome,
-      // then what CoPatible is (with the vCard, if CO_VCARD_URL is set),
-      // then the code — reusing sendSMS directly rather than a flat custom
-      // string, so this is genuinely Co's voice/copy, not a placeholder.
-      // sendSMS catches its own errors internally (never throws), matching
-      // every other Sendblue send in this codebase: a delivery failure must
-      // never surface as a 4xx/5xx to Sendblue's own webhook or crash this
-      // request.
-      if (!user.contact_verified) {
-        const otp = randomInt(100000, 1000000);
-        await pool.query(
-          `UPDATE users SET contact_verified = true, otp_code = $2, otp_expiry = NOW() + INTERVAL '5 minutes' WHERE id = $1`,
-          [user.id, otp],
-        );
-        // Paced, not fired all at once — three back-to-back sends with no
-        // gap arrive as a stacked wall of texts on the recipient's end even
-        // though each individual message is legitimate content.
-        await sendSMS({ phone_number: number, welcome: true });
-        await pause(2500);
-        await sendSMS({ phone_number: number, intro: true });
-        await pause(2500);
-        await sendSMS({ phone_number: number, otp_code: otp.toString(), register: true });
-        return res.status(200).send({ received: true, action: "contact_verified" });
-      }
-
-      // Moderator-by-text — the Circles pipeline test's confirmed decision
-      // is "the tester acts as their own dev Moderator," not a second real
-      // phone number or reuse of production's KEANA_PHONE_NUMBER. Any
-      // verified real texter can approve/reject the most recent pending
-      // simulated circle/venue this way; real Intent-Layer sessions never
-      // have one pending, so this only ever actually fires during a Circles
-      // pipeline test. Same classify-by-text pattern as production's Keana
-      // intercept, factored into moderatorActions.ts so this and the
-      // internal simulate buttons run identical logic.
-      const pendingCircleApproval = await pool.query(
-        `SELECT id FROM circles WHERE status = 'pending_approval' AND is_simulated = true ORDER BY created_at DESC LIMIT 1`,
-      );
-      const pendingVenueApproval = !pendingCircleApproval.rows[0]
-        ? await pool.query(
-            `SELECT id FROM moments WHERE status = 'pending_venue_approval' AND is_simulated = true ORDER BY created_at DESC LIMIT 1`,
-          )
-        : { rows: [] as any[] };
-
-      if (pendingCircleApproval.rows[0] || pendingVenueApproval.rows[0]) {
-        const { text: modClassification } = await generateText({
-          model: anthropic("claude-haiku-4-5-20251001"),
-          experimental_telemetry: { isEnabled: true, functionId: "co-test.webhooks.moderatorApproval.classify" },
-          prompt: `Classify this message as either 'approve' or 'reject'. Return ONLY the word approve or reject.\n\nMessage: "${content}"`,
-        });
-        const modAction = modClassification.trim().toLowerCase().replace(/^[`"']+|[`"']+$/g, "");
-
-        if (modAction === "approve" || modAction === "reject") {
-          const result = pendingCircleApproval.rows[0]
-            ? await simulateModeratorApproval(
-                { type: "circle", circleId: pendingCircleApproval.rows[0].id },
-                modAction,
-              )
-            : await simulateModeratorApproval(
-                { type: "venue", momentId: pendingVenueApproval.rows[0].id },
-                modAction,
-              );
-
-          const ack = result.success
-            ? `Got it — ${modAction}d.`
-            : `Couldn't ${modAction}: ${result.error ?? "unknown error"}`;
-          try {
-            await sendblue.messages.send({
-              number,
-              content: capMessageLength(ack, 160),
-              from_number: process.env.SENDBLUE_PHONE_NUMBER!,
-            });
-          } catch (smsErr: any) {
-            console.error(`Moderator ack send failed for ${number} (non-fatal):`, smsErr?.message ?? smsErr);
+          if (!user) {
+            console.log(
+              `co-test sendblue webhook: no phone-test session for ${number} — ignoring`,
+            );
+            return res.status(200).send({ received: true });
           }
-          return res.status(200).send({ received: true, action: `moderator_${modAction}` });
-        }
-        // "unclear" classification — fall through to normal conversation below.
-      }
 
-      // Real-test-placement circle invite response — the counterpart to
-      // dynamicPlacementTest.ts's approveRealPlacementAndNotify, which sends
-      // the real member their real invite text but never had anything
-      // listening for what they replied. Confirmed for real: a member's
-      // "Yes!" fell straight through to the generic conversation handler
-      // below and Co responded as if it were answering an unrelated
-      // question, never recognizing the invite was being accepted. Mirrors
-      // production's pendingCircleInvite handling in api/src/routes/
-      // sendblue.ts (same classify-by-text pattern, same circle_members
-      // status transitions) — scoped to real_test_placement circles so it
-      // never collides with the simulated Moderator-approval check above,
-      // which only ever matches is_simulated circles.
-      //
-      // Also matches a row already resolved in the last 30 minutes (not
-      // just 'pending') — double-texting ("Yes" sent twice, or resent
-      // because the first reply felt slow) means the second delivery lands
-      // after circle_members.status already flipped, so a plain
-      // status='pending' match alone would miss it and let the same
-      // fall-through-to-confused-conversation bug happen again on the
-      // resend. withPhoneLock serializes same-number deliveries, so there's
-      // no race between the two — this only handles them arriving in
-      // sequence. The 30-minute bound keeps this from misclassifying an
-      // unrelated yes/no reply days later, once the row is old.
-      const pendingRealInvite = await pool.query(
-        `SELECT cm.circle_id, cm.status, c.circle_name
+          // Duplicate-message guard — reliable now that processing is
+          // serialized above (withPhoneLock), so by the time this runs, a truly
+          // prior identical message has either already fully completed or isn't
+          // running concurrently with this one anymore. Confirmed in a real
+          // conversation: the same exact message sent 3 times within ~20s
+          // (impatient re-sends while the first was still processing) produced
+          // 3 full independent searches and deliveries. If this exact content
+          // was already recorded as sent by this user in the last minute,
+          // treat it as a re-send of something already answered, not a new ask.
+          const recentDuplicateResult = await pool.query(
+            `SELECT 1 FROM co_memories WHERE user_id = $1 AND memory_type = 'text_exchange' AND content = $2 AND created_at > NOW() - INTERVAL '60 seconds' LIMIT 1`,
+            [user.id, `User said: ${content}`],
+          );
+          if (recentDuplicateResult.rows[0]) {
+            console.log(
+              `co-test sendblue webhook: duplicate message from user ${user.id} within 60s, skipping reprocessing`,
+            );
+            return res.status(200).send({ received: true, duplicate: true });
+          }
+
+          // First inbound text — satisfies text-in-first. Same three-message
+          // onboarding production's self-serve registration sends (see
+          // api/src/routes/sendblue.ts's contact_verified branch) — welcome,
+          // then what CoPatible is (with the vCard, if CO_VCARD_URL is set),
+          // then the code — reusing sendSMS directly rather than a flat custom
+          // string, so this is genuinely Co's voice/copy, not a placeholder.
+          // sendSMS catches its own errors internally (never throws), matching
+          // every other Sendblue send in this codebase: a delivery failure must
+          // never surface as a 4xx/5xx to Sendblue's own webhook or crash this
+          // request.
+          if (!user.contact_verified) {
+            const otp = randomInt(100000, 1000000);
+            await pool.query(
+              `UPDATE users SET contact_verified = true, otp_code = $2, otp_expiry = NOW() + INTERVAL '5 minutes' WHERE id = $1`,
+              [user.id, otp],
+            );
+            // Paced, not fired all at once — three back-to-back sends with no
+            // gap arrive as a stacked wall of texts on the recipient's end even
+            // though each individual message is legitimate content.
+            await sendSMS({ phone_number: number, welcome: true });
+            await pause(2500);
+            await sendSMS({ phone_number: number, intro: true });
+            await pause(2500);
+            await sendSMS({
+              phone_number: number,
+              otp_code: otp.toString(),
+              register: true,
+            });
+            return res
+              .status(200)
+              .send({ received: true, action: "contact_verified" });
+          }
+
+          // Moderator-by-text — the Circles pipeline test's confirmed decision
+          // is "the tester acts as their own dev Moderator," not a second real
+          // phone number or reuse of production's KEANA_PHONE_NUMBER. Any
+          // verified real texter can approve/reject the most recent pending
+          // simulated circle/venue this way; real Intent-Layer sessions never
+          // have one pending, so this only ever actually fires during a Circles
+          // pipeline test. Same classify-by-text pattern as production's Keana
+          // intercept, factored into moderatorActions.ts so this and the
+          // internal simulate buttons run identical logic.
+          const pendingCircleApproval = await pool.query(
+            `SELECT id FROM circles WHERE status = 'pending_approval' AND is_simulated = true ORDER BY created_at DESC LIMIT 1`,
+          );
+          const pendingVenueApproval = !pendingCircleApproval.rows[0]
+            ? await pool.query(
+                `SELECT id FROM moments WHERE status = 'pending_venue_approval' AND is_simulated = true ORDER BY created_at DESC LIMIT 1`,
+              )
+            : { rows: [] as any[] };
+
+          if (pendingCircleApproval.rows[0] || pendingVenueApproval.rows[0]) {
+            const { text: modClassification } = await generateText({
+              model: anthropic("claude-haiku-4-5-20251001"),
+              experimental_telemetry: {
+                isEnabled: true,
+                functionId: "co-test.webhooks.moderatorApproval.classify",
+              },
+              prompt: `Classify this message as either 'approve' or 'reject'. Return ONLY the word approve or reject.\n\nMessage: "${content}"`,
+            });
+            const modAction = modClassification
+              .trim()
+              .toLowerCase()
+              .replace(/^[`"']+|[`"']+$/g, "");
+
+            if (modAction === "approve" || modAction === "reject") {
+              const result = pendingCircleApproval.rows[0]
+                ? await simulateModeratorApproval(
+                    {
+                      type: "circle",
+                      circleId: pendingCircleApproval.rows[0].id,
+                    },
+                    modAction,
+                  )
+                : await simulateModeratorApproval(
+                    {
+                      type: "venue",
+                      momentId: pendingVenueApproval.rows[0].id,
+                    },
+                    modAction,
+                  );
+
+              const ack = result.success
+                ? `Got it — ${modAction}d.`
+                : `Couldn't ${modAction}: ${result.error ?? "unknown error"}`;
+              try {
+                await sendblue.messages.send({
+                  number,
+                  content: capMessageLength(ack, 160),
+                  from_number: process.env.SENDBLUE_PHONE_NUMBER!,
+                });
+              } catch (smsErr: any) {
+                console.error(
+                  `Moderator ack send failed for ${number} (non-fatal):`,
+                  smsErr?.message ?? smsErr,
+                );
+              }
+              return res
+                .status(200)
+                .send({ received: true, action: `moderator_${modAction}` });
+            }
+            // "unclear" classification — fall through to normal conversation below.
+          }
+
+          // Real-test-placement circle invite response — the counterpart to
+          // dynamicPlacementTest.ts's approveRealPlacementAndNotify, which sends
+          // the real member their real invite text but never had anything
+          // listening for what they replied. Confirmed for real: a member's
+          // "Yes!" fell straight through to the generic conversation handler
+          // below and Co responded as if it were answering an unrelated
+          // question, never recognizing the invite was being accepted. Mirrors
+          // production's pendingCircleInvite handling in api/src/routes/
+          // sendblue.ts (same classify-by-text pattern, same circle_members
+          // status transitions) — scoped to real_test_placement circles so it
+          // never collides with the simulated Moderator-approval check above,
+          // which only ever matches is_simulated circles.
+          //
+          // Also matches a row already resolved in the last 30 minutes (not
+          // just 'pending') — double-texting ("Yes" sent twice, or resent
+          // because the first reply felt slow) means the second delivery lands
+          // after circle_members.status already flipped, so a plain
+          // status='pending' match alone would miss it and let the same
+          // fall-through-to-confused-conversation bug happen again on the
+          // resend. withPhoneLock serializes same-number deliveries, so there's
+          // no race between the two — this only handles them arriving in
+          // sequence. The 30-minute bound keeps this from misclassifying an
+          // unrelated yes/no reply days later, once the row is old.
+          const pendingRealInvite = await pool.query(
+            `SELECT cm.circle_id, cm.status, c.circle_name
          FROM circle_members cm
          JOIN circles c ON c.id = cm.circle_id
          WHERE cm.member_id = $1 AND c.real_test_placement = true
            AND (cm.status = 'pending' OR cm.joined_at > NOW() - INTERVAL '30 minutes')
          ORDER BY cm.joined_at DESC
          LIMIT 1`,
-        [user.id],
-      );
+            [user.id],
+          );
 
-      if (pendingRealInvite.rows[0]) {
-        const { circle_id, circle_name, status: currentStatus } = pendingRealInvite.rows[0];
+          if (pendingRealInvite.rows[0]) {
+            const {
+              circle_id,
+              circle_name,
+              status: currentStatus,
+            } = pendingRealInvite.rows[0];
 
-        const { text: inviteClassification } = await propagateAttributes(
-          { userId: user.id, traceName: "co-test.webhooks.circleInviteResponse.classify" },
-          () =>
-            generateText({
-              model: anthropic("claude-haiku-4-5-20251001"),
-              experimental_telemetry: { isEnabled: true, functionId: "co-test.webhooks.circleInviteResponse.classify" },
-              prompt: `A user replied to a circle invite. Classify their response as ONE of: "yes" — they want to join, "no" — they want to pass, "unclear" — can't tell.\n\nMessage: "${content}"\n\nReturn ONLY the classification, nothing else.`,
-            }),
-        );
-        const inviteAction = inviteClassification.trim().toLowerCase().replace(/^[`"']+|[`"']+$/g, "");
-
-        if (inviteAction === "yes" || inviteAction === "no") {
-          let ack: string;
-          if (currentStatus === "pending") {
-            await pool.query(
-              `UPDATE circle_members SET status = $1 WHERE circle_id = $2 AND member_id = $3`,
-              [inviteAction === "yes" ? "accepted" : "declined", circle_id, user.id],
+            const { text: inviteClassification } = await propagateAttributes(
+              {
+                userId: user.id,
+                traceName: "co-test.webhooks.circleInviteResponse.classify",
+              },
+              () =>
+                generateText({
+                  model: anthropic("claude-haiku-4-5-20251001"),
+                  experimental_telemetry: {
+                    isEnabled: true,
+                    functionId:
+                      "co-test.webhooks.circleInviteResponse.classify",
+                  },
+                  prompt: `A user replied to a circle invite. Classify their response as ONE of: "yes" — they want to join, "no" — they want to pass, "unclear" — can't tell.\n\nMessage: "${content}"\n\nReturn ONLY the classification, nothing else.`,
+                }),
             );
-            ack =
-              inviteAction === "yes"
-                ? `You're in — welcome to ${circle_name}.`
-                : "No worries — thanks for letting me know.";
-          } else {
-            // Already resolved — an idempotent ack for the resend, not a
-            // re-process. Whatever the new reply says, the earlier decision
-            // stands; nothing to update.
-            ack =
-              currentStatus === "accepted"
-                ? `Already got you down for ${circle_name} — you're all set.`
-                : "Already noted — no further action needed.";
+            const inviteAction = inviteClassification
+              .trim()
+              .toLowerCase()
+              .replace(/^[`"']+|[`"']+$/g, "");
+
+            if (inviteAction === "yes" || inviteAction === "no") {
+              let ack: string;
+              if (currentStatus === "pending") {
+                await pool.query(
+                  `UPDATE circle_members SET status = $1 WHERE circle_id = $2 AND member_id = $3`,
+                  [
+                    inviteAction === "yes" ? "accepted" : "declined",
+                    circle_id,
+                    user.id,
+                  ],
+                );
+                ack =
+                  inviteAction === "yes"
+                    ? `You're in — welcome to ${circle_name}.`
+                    : "No worries — thanks for letting me know.";
+              } else {
+                // Already resolved — an idempotent ack for the resend, not a
+                // re-process. Whatever the new reply says, the earlier decision
+                // stands; nothing to update.
+                ack =
+                  currentStatus === "accepted"
+                    ? `Already got you down for ${circle_name} — you're all set.`
+                    : "Already noted — no further action needed.";
+              }
+
+              try {
+                await sendblue.messages.send({
+                  number,
+                  content: capMessageLength(ack, 160),
+                  from_number: process.env.SENDBLUE_PHONE_NUMBER!,
+                });
+              } catch (smsErr: any) {
+                console.error(
+                  `Real-placement invite ack send failed for ${number} (non-fatal):`,
+                  smsErr?.message ?? smsErr,
+                );
+              }
+              return res.status(200).send({
+                received: true,
+                action: `real_invite_${inviteAction}`,
+                already_resolved: currentStatus !== "pending",
+              });
+            }
+            // "unclear" classification — fall through to normal conversation below.
           }
 
-          try {
-            await sendblue.messages.send({
-              number,
-              content: capMessageLength(ack, 160),
-              from_number: process.env.SENDBLUE_PHONE_NUMBER!,
-            });
-          } catch (smsErr: any) {
-            console.error(`Real-placement invite ack send failed for ${number} (non-fatal):`, smsErr?.message ?? smsErr);
-          }
-          return res.status(200).send({ received: true, action: `real_invite_${inviteAction}`, already_resolved: currentStatus !== "pending" });
-        }
-        // "unclear" classification — fall through to normal conversation below.
-      }
-
-      // Already verified — ongoing conversational texting, proving the
-      // "does texting with Co keep working after verification" half of item 2.
-      //
-      // Two separate sources, not one pooled recency query: a plain "last 6
-      // co_memories rows of any type" query was found to silently evict the
-      // call's own call_transcript/intent/recap rows once ~2 text exchanges
-      // piled up (each exchange writes 2 more rows), so Co would confidently
-      // use real captured data in early replies, then flatly deny having any
-      // context a few messages later — confirmed directly against a real
-      // test user's row timestamps. co_profiles is the durable, structured
-      // record the call already wrote (goals/blockers/city/intent) and isn't
-      // subject to that eviction, so it's queried directly instead of being
-      // re-derived from a shrinking memory window.
-      const [profileResult, recentTextResult, priorActivityResult] = await Promise.all([
-        pool.query(
-          `SELECT life_chapters, goals, blockers, availability_pattern, city, emotional_state, intent
+          // Already verified — ongoing conversational texting, proving the
+          // "does texting with Co keep working after verification" half of item 2.
+          //
+          // Two separate sources, not one pooled recency query: a plain "last 6
+          // co_memories rows of any type" query was found to silently evict the
+          // call's own call_transcript/intent/recap rows once ~2 text exchanges
+          // piled up (each exchange writes 2 more rows), so Co would confidently
+          // use real captured data in early replies, then flatly deny having any
+          // context a few messages later — confirmed directly against a real
+          // test user's row timestamps. co_profiles is the durable, structured
+          // record the call already wrote (goals/blockers/city/intent) and isn't
+          // subject to that eviction, so it's queried directly instead of being
+          // re-derived from a shrinking memory window.
+          const [profileResult, recentTextResult, priorActivityResult] =
+            await Promise.all([
+              pool.query(
+                `SELECT life_chapters, goals, blockers, availability_pattern, city, emotional_state, intent
            FROM co_profiles WHERE user_id = $1`,
-          [user.id],
-        ),
-        pool.query(
-          `SELECT content FROM co_memories
+                [user.id],
+              ),
+              pool.query(
+                `SELECT content FROM co_memories
            WHERE user_id = $1 AND memory_type = 'text_exchange'
            ORDER BY created_at DESC LIMIT 8`,
-          [user.id],
-        ),
-        // Feeds the thin-profile first-topic call offer below — must be read
-        // before this message's own "User said" row is inserted, so it
-        // reflects state as of BEFORE this message, not including it.
-        pool.query(
-          `SELECT 1 FROM co_memories WHERE user_id = $1 AND memory_type IN ('text_exchange', 'call_transcript') LIMIT 1`,
-          [user.id],
-        ),
-      ]);
+                [user.id],
+              ),
+              // Feeds the thin-profile first-topic call offer below — must be read
+              // before this message's own "User said" row is inserted, so it
+              // reflects state as of BEFORE this message, not including it.
+              pool.query(
+                `SELECT 1 FROM co_memories WHERE user_id = $1 AND memory_type IN ('text_exchange', 'call_transcript') LIMIT 1`,
+                [user.id],
+              ),
+            ]);
 
-      const profile = profileResult.rows[0] ?? null;
-      const hasProfile = !!profile?.life_chapters?.length;
-      const isFirstRealMessage = !priorActivityResult.rows[0];
-      const latestIntent = Array.isArray(profile?.intent) && profile.intent.length
-        ? profile.intent[profile.intent.length - 1]
-        : null;
+          const profile = profileResult.rows[0] ?? null;
+          const hasProfile = !!profile?.life_chapters?.length;
+          const isFirstRealMessage = !priorActivityResult.rows[0];
+          const latestIntent =
+            Array.isArray(profile?.intent) && profile.intent.length
+              ? profile.intent[profile.intent.length - 1]
+              : null;
 
-      const profileContext = profile
-        ? [
-            profile.life_chapters?.length ? `Life chapter: ${profile.life_chapters.join(", ")}` : null,
-            profile.city ? `City: ${profile.city}` : null,
-            profile.goals?.length ? `Goals: ${profile.goals.join("; ")}` : null,
-            profile.blockers?.length ? `Blockers: ${profile.blockers.join("; ")}` : null,
-            profile.availability_pattern ? `Availability: ${profile.availability_pattern}` : null,
-            profile.emotional_state ? `Emotional state as of the last call: ${profile.emotional_state}` : null,
-            latestIntent?.text ? `Stated ask (${latestIntent.type}): ${latestIntent.text}` : null,
-            latestIntent?.concrete_preferences?.length
-              ? `Concrete preferences: ${latestIntent.concrete_preferences.join(", ")}`
-              : null,
-            latestIntent?.wants?.length ? `Things they want or miss: ${latestIntent.wants.join(", ")}` : null,
-          ]
-            .filter(Boolean)
-            .join("\n")
-        : null;
+          const profileContext = profile
+            ? [
+                profile.life_chapters?.length
+                  ? `Life chapter: ${profile.life_chapters.join(", ")}`
+                  : null,
+                profile.city ? `City: ${profile.city}` : null,
+                profile.goals?.length
+                  ? `Goals: ${profile.goals.join("; ")}`
+                  : null,
+                profile.blockers?.length
+                  ? `Blockers: ${profile.blockers.join("; ")}`
+                  : null,
+                profile.availability_pattern
+                  ? `Availability: ${profile.availability_pattern}`
+                  : null,
+                profile.emotional_state
+                  ? `Emotional state as of the last call: ${profile.emotional_state}`
+                  : null,
+                latestIntent?.text
+                  ? `Stated ask (${latestIntent.type}): ${latestIntent.text}`
+                  : null,
+                latestIntent?.concrete_preferences?.length
+                  ? `Concrete preferences: ${latestIntent.concrete_preferences.join(", ")}`
+                  : null,
+                latestIntent?.wants?.length
+                  ? `Things they want or miss: ${latestIntent.wants.join(", ")}`
+                  : null,
+              ]
+                .filter(Boolean)
+                .join("\n")
+            : null;
 
-      const recentConversation = recentTextResult.rows.map((r: any) => r.content).reverse().join("\n");
-      const styleHint = deriveStyleHint(recentTextResult.rows);
+          const recentConversation = recentTextResult.rows
+            .map((r: any) => r.content)
+            .reverse()
+            .join("\n");
+          const styleHint = deriveStyleHint(recentTextResult.rows);
 
-      await pool.query(
-        `INSERT INTO co_memories (user_id, memory_type, content) VALUES ($1, 'text_exchange', $2)`,
-        [user.id, `User said: ${content}`],
-      );
+          await pool.query(
+            `INSERT INTO co_memories (user_id, memory_type, content) VALUES ($1, 'text_exchange', $2)`,
+            [user.id, `User said: ${content}`],
+          );
 
-      // Show the animated "..." on the sender's device while Co "thinks" —
-      // this branch runs a call-detection classification, possibly a
-      // recommendation classification, and a reply generation before
-      // anything gets sent back, which is real, visible latency without
-      // this. Never sent at all in co-test before now (production has this,
-      // co-test's port of the ongoing-chat handler never picked it up).
-      // Best-effort, matching every other Sendblue send in this file.
-      try {
-        await sendblue.typingIndicators.send({
-          number,
-          from_number: process.env.SENDBLUE_PHONE_NUMBER!,
-        });
-      } catch (typingErr: any) {
-        console.error(`Typing indicator failed for ${number} (non-fatal):`, typingErr?.message ?? typingErr);
-      }
+          // Show the animated "..." on the sender's device while Co "thinks" —
+          // this branch runs a call-detection classification, possibly a
+          // recommendation classification, and a reply generation before
+          // anything gets sent back, which is real, visible latency without
+          // this. Never sent at all in co-test before now (production has this,
+          // co-test's port of the ongoing-chat handler never picked it up).
+          // Best-effort, matching every other Sendblue send in this file.
+          try {
+            await sendblue.typingIndicators.send({
+              number,
+              from_number: process.env.SENDBLUE_PHONE_NUMBER!,
+            });
+          } catch (typingErr: any) {
+            console.error(
+              `Typing indicator failed for ${number} (non-fatal):`,
+              typingErr?.message ?? typingErr,
+            );
+          }
 
-      // Call-trigger detection — reuses the same Twilio-dial-and-bridge
-      // mechanism phone.ts's dashboard call button uses (services/callTrigger.ts),
-      // just reached from a different trigger. Two cases, per explicit
-      // product decision: an explicit ask ("call me") triggers immediately;
-      // anything that only SIGNALS voice would help gets OFFERED, and
-      // actually placing that call requires a following "yes" — never
-      // silently placed. Gated on contact_verified only (already true here)
-      // — otp_verified stays a dashboard-flow-only gate, unrelated to
-      // identity over this channel. The "User said" row above is already
-      // written regardless of outcome, so nothing below re-inserts it.
-      // Bug found the hard way: this used to just check whether an offer was
-      // EVER made, not whether it was still unresolved — so once someone
-      // answered (accept or decline), the classifier prompt below kept
-      // telling the model "Co is waiting on a yes/no" forever afterward, and
-      // an unrelated later "yeah"/"true" would get misread as consenting to
-      // a call that was already resolved. Confirmed against a real
-      // conversation: this placed 4 real Twilio calls after the user had
-      // explicitly said "don't call me" multiple times. Must compare
-      // timestamps, not just existence.
-      const pendingOfferResult = await pool.query(
-        `SELECT p.id, p.content FROM co_memories p
+          // Call-trigger detection — reuses the same Twilio-dial-and-bridge
+          // mechanism phone.ts's dashboard call button uses (services/callTrigger.ts),
+          // just reached from a different trigger. Two cases, per explicit
+          // product decision: an explicit ask ("call me") triggers immediately;
+          // anything that only SIGNALS voice would help gets OFFERED, and
+          // actually placing that call requires a following "yes" — never
+          // silently placed. Gated on contact_verified only (already true here)
+          // — otp_verified stays a dashboard-flow-only gate, unrelated to
+          // identity over this channel. The "User said" row above is already
+          // written regardless of outcome, so nothing below re-inserts it.
+          // Bug found the hard way: this used to just check whether an offer was
+          // EVER made, not whether it was still unresolved — so once someone
+          // answered (accept or decline), the classifier prompt below kept
+          // telling the model "Co is waiting on a yes/no" forever afterward, and
+          // an unrelated later "yeah"/"true" would get misread as consenting to
+          // a call that was already resolved. Confirmed against a real
+          // conversation: this placed 4 real Twilio calls after the user had
+          // explicitly said "don't call me" multiple times. Must compare
+          // timestamps, not just existence.
+          const pendingOfferResult = await pool.query(
+            `SELECT p.id, p.content FROM co_memories p
          WHERE p.user_id = $1 AND p.memory_type = 'call_offer_pending'
          AND NOT EXISTS (
            SELECT 1 FROM co_memories r
            WHERE r.user_id = $1 AND r.memory_type = 'call_offer_resolved' AND r.created_at > p.created_at
          )
          ORDER BY p.created_at DESC LIMIT 1`,
-        [user.id],
-      );
-      const pendingOffer = pendingOfferResult.rows[0] ?? null;
-      const hasPendingOffer = !!pendingOffer;
+            [user.id],
+          );
+          const pendingOffer = pendingOfferResult.rows[0] ?? null;
+          const hasPendingOffer = !!pendingOffer;
 
-      // Topic-aware, not a permanent opt-out and not a blanket timer either —
-      // per explicit product decision, Co should stay free to offer a call
-      // about a genuinely new situation at any time, but never re-offer about
-      // something already declined. Each declined offer's own text (it
-      // already reflects what was being discussed, see callOfferContext
-      // below) is stored, and the classifier is given that list directly so
-      // the SAME call decides both "would voice help" and "haven't we
-      // already asked about this" in one pass, instead of a second
-      // similarity check.
-      const declinedTopicsResult = await pool.query(
-        `SELECT content FROM co_memories WHERE user_id = $1 AND memory_type = 'call_offer_declined_topic' ORDER BY created_at DESC LIMIT 20`,
-        [user.id],
-      );
-      const declinedTopicsContext = declinedTopicsResult.rows.length
-        ? `\n\nCo has previously offered a call about the following, and the user said no each time:\n${declinedTopicsResult.rows.map((r: any) => `- ${r.content}`).join("\n")}\nIf what they're describing now is essentially the same situation as any of these, classify as "none" instead of "would_benefit" — don't re-offer about something already declined. A genuinely different, new situation is free to classify as "would_benefit" regardless of these.`
-        : "";
+          // Topic-aware, not a permanent opt-out and not a blanket timer either —
+          // per explicit product decision, Co should stay free to offer a call
+          // about a genuinely new situation at any time, but never re-offer about
+          // something already declined. Each declined offer's own text (it
+          // already reflects what was being discussed, see callOfferContext
+          // below) is stored, and the classifier is given that list directly so
+          // the SAME call decides both "would voice help" and "haven't we
+          // already asked about this" in one pass, instead of a second
+          // similarity check.
+          const declinedTopicsResult = await pool.query(
+            `SELECT content FROM co_memories WHERE user_id = $1 AND memory_type = 'call_offer_declined_topic' ORDER BY created_at DESC LIMIT 20`,
+            [user.id],
+          );
+          const declinedTopicsContext = declinedTopicsResult.rows.length
+            ? `\n\nCo has previously offered a call about the following, and the user said no each time:\n${declinedTopicsResult.rows.map((r: any) => `- ${r.content}`).join("\n")}\nIf what they're describing now is essentially the same situation as any of these, classify as "none" instead of "would_benefit" — don't re-offer about something already declined. A genuinely different, new situation is free to classify as "would_benefit" regardless of these.`
+            : "";
 
-      const { text: rawCallClassification } = await propagateAttributes(
-        { userId: user.id, traceName: "co-test.webhooks.callOffer.classify" },
-        () =>
-          generateText({
-            model: anthropic("claude-haiku-4-5-20251001"),
-            experimental_telemetry: { isEnabled: true, functionId: "co-test.webhooks.callOffer.classify" },
-            prompt: `A user is texting Co, a life concierge.${hasPendingOffer ? " Co just offered them a phone call and is waiting for a yes or no." : ""}
+          const { text: rawCallClassification } = await propagateAttributes(
+            {
+              userId: user.id,
+              traceName: "co-test.webhooks.callOffer.classify",
+            },
+            () =>
+              generateText({
+                model: anthropic("claude-haiku-4-5-20251001"),
+                experimental_telemetry: {
+                  isEnabled: true,
+                  functionId: "co-test.webhooks.callOffer.classify",
+                },
+                prompt: `A user is texting Co, a life concierge.${hasPendingOffer ? " Co just offered them a phone call and is waiting for a yes or no." : ""}
 
 Their message: "${content}"
 
@@ -1178,134 +1465,184 @@ ${hasPendingOffer ? '- "accepts_offer" — they are saying yes to the call Co ju
 - "none" — normal conversation, no call is relevant${declinedTopicsContext}
 
 Return ONLY the classification, nothing else.`,
-          }),
-      );
-      const callAction = rawCallClassification.trim().toLowerCase().replace(/^[`"']+|[`"']+$/g, "");
-
-      if (hasPendingOffer && (callAction === "accepts_offer" || callAction === "declines_offer")) {
-        // Bookkeeping write — must never be able to take down the whole
-        // reply. Confirmed the hard way: this and the call_offer_pending
-        // insert below were unguarded, the memory_type CHECK constraint
-        // hadn't been widened for these new values yet, and the resulting
-        // exception aborted the request before any reply was generated —
-        // Sendblue kept retrying into the same crash, so the user got no
-        // reply at all rather than a slow one.
-        await pool.query(
-          `INSERT INTO co_memories (user_id, memory_type, content) VALUES ($1, 'call_offer_resolved', $2)`,
-          [user.id, callAction],
-        ).catch((err: any) => console.error("webhooks: call_offer_resolved memory write failed (non-fatal):", err?.message ?? err));
-
-        if (callAction === "declines_offer" && pendingOffer.content) {
-          await pool.query(
-            `INSERT INTO co_memories (user_id, memory_type, content) VALUES ($1, 'call_offer_declined_topic', $2)`,
-            [user.id, pendingOffer.content],
-          ).catch((err: any) => console.error("webhooks: call_offer_declined_topic memory write failed (non-fatal):", err?.message ?? err));
-        }
-      }
-
-      const shouldTriggerCall = callAction === "explicit_request" || (hasPendingOffer && callAction === "accepts_offer");
-
-      // Burst limiter — separate from, and in addition to, the topic-aware
-      // suppression above. Topic-matching only stops Co re-offering about the
-      // SAME thing; on its own it does nothing to stop several DIFFERENT
-      // heavy topics in a row each triggering their own offer. This is what
-      // originally caused a real problem here: Co offered a call 4 times in
-      // one real conversation, once directly in response to "why is it
-      // always a phone call?" — a complaint about the pattern itself,
-      // misread as more evidence a call would help. Short and topic-blind on
-      // purpose: it only need cover a burst, not stand in for the topic
-      // check above.
-      const recentOfferCountResult = await pool.query(
-        `SELECT count(*) FROM co_memories WHERE user_id = $1 AND memory_type = 'call_offer_pending' AND created_at > NOW() - INTERVAL '10 minutes'`,
-        [user.id],
-      );
-      const recentOfferBurstActive = parseInt(recentOfferCountResult.rows[0].count, 10) > 0;
-
-      // Two independent reasons to make the same secondary, folded-in
-      // gesture — never a standalone question, per the note below. One is
-      // content-driven (would_benefit) and can fire on any message from
-      // anyone. The other is channel-driven, not content-driven: someone
-      // with no profile yet, on their first real message, gets the gesture
-      // regardless of what that message actually is — a real voice call
-      // just produces a far richer initial profile than short texts ever
-      // will, and this is the one moment to offer that before the
-      // conversation settles into text. Fires at most once per person
-      // (isFirstRealMessage is only ever true for message #1), so it can't
-      // collide with the topic-aware/burst-limiter rules above that govern
-      // everyone's ongoing conversations.
-      const isThinProfileFirstMessage = !hasProfile && isFirstRealMessage && callAction === "none";
-      const shouldOfferCall =
-        !hasPendingOffer && !recentOfferBurstActive && (callAction === "would_benefit" || isThinProfileFirstMessage);
-
-      // Folded into the main reply below now, not a separate message that
-      // replaces one — a real conversation showed this short-circuiting the
-      // reply entirely, so "want to hop on a call?" was the ENTIRE response
-      // to something significant, with no acknowledgment of what was
-      // actually said. The offer is secondary now; genuinely responding
-      // (reflecting, surfacing a real recommendation/venue if one exists)
-      // is the priority, per explicit product decision.
-      const callOfferContext = !shouldOfferCall
-        ? ""
-        : isThinProfileFirstMessage
-          ? `\nThis is the first real thing they've shared and nothing is known about them yet — first, actually respond to what they said. Then offer a quick call as a warm, low-pressure way to actually get to know them — a real conversation just gets Co so much further than texting back and forth. Keep it brief and secondary, never in place of a real response. Do not place any call, just make the gesture.`
-          : `\nWhat they just shared could genuinely benefit from a real conversation by voice — but that is not the priority. First, actually respond to what they said: reflect it, and if you have something concrete to offer below (a real recommendation or a real place you found), lead with that instead of a call. Only if it still feels right after that, offer a call as a warm gesture, not a logistics question — the way someone says "I'm here if you ever want to actually talk this through," not "are you free for a call today or tomorrow." Keep it brief and secondary, never in place of a real response. Do not place any call, just make the gesture.`;
-
-      if (shouldTriggerCall) {
-        const callResult = await triggerCall(user.id);
-        if (callResult.success) {
-          // A fixed "Calling you now." every time reads as a canned system
-          // message, not someone actually reacting to what was just asked
-          // for. Kept fast (Haiku, one short line, hard fallback) since the
-          // real call is already dialing — this must never add meaningful
-          // delay or block on a slow/failed generation.
-          let confirmation = "Calling you now.";
-          try {
-            const { text: variedConfirmation } = await generateText({
-              model: anthropic("claude-haiku-4-5-20251001"),
-              experimental_telemetry: { isEnabled: true, functionId: "co-test.webhooks.callConfirmation" },
-              prompt: `You are Co. ${user.first_name} just texted: "${content}" — asking you to call them. You're calling them right now. Send a short, natural one-line text confirming that — vary how you say it, don't just say "Calling you now." No exclamation points, no em dashes. Under 40 characters.`,
-            });
-            const trimmed = variedConfirmation.trim();
-            if (trimmed) confirmation = trimmed.length > 60 ? trimmed.slice(0, 59) + "…" : trimmed;
-          } catch (genErr: any) {
-            console.error("Call-confirmation generation failed (non-fatal, using default):", genErr?.message ?? genErr);
-          }
-          await pool.query(
-            `INSERT INTO co_memories (user_id, memory_type, content) VALUES ($1, 'text_exchange', $2)`,
-            [user.id, `Co replied: ${confirmation}`],
+              }),
           );
-          try {
-            await sendblue.messages.send({
-              number,
-              content: confirmation,
-              from_number: process.env.SENDBLUE_PHONE_NUMBER!,
-            });
-          } catch (smsErr: any) {
-            console.error(`Sendblue call-confirmation send failed for ${number} (non-fatal):`, smsErr?.message ?? smsErr);
-          }
-          return res.status(200).send({ received: true, action: "call_triggered", call_sid: callResult.call_sid });
-        }
-        console.error(`webhooks: call trigger failed for user ${user.id} (non-fatal, falling through to normal reply):`, callResult.error);
-        // Falls through to the normal reply flow below on failure — a
-        // failed dial attempt should never leave the conversation silent.
-      }
+          const callAction = rawCallClassification
+            .trim()
+            .toLowerCase()
+            .replace(/^[`"']+|[`"']+$/g, "");
 
-      // Real action-triggering, iMessage side (Intent Layer only) — mirrors
-      // the surface_recommendation Hume tool on the voice path, but iMessage
-      // has no tool_call plane to invoke it through, so this is a direct
-      // call to the same shared generateRecommendation() gated by a cheap
-      // classification step instead. Folded into the one reply below (never
-      // sent as a second message) to stay consistent with the pacing fix
-      // above.
-      let recommendationContext = "";
-      try {
-        const { text: wantsClassification } = await propagateAttributes(
-          { userId: user.id, traceName: "co-test.webhooks.wantsRecommendation.classify" },
-          () =>
-            generateText({
-              model: anthropic("claude-haiku-4-5-20251001"),
-              experimental_telemetry: { isEnabled: true, functionId: "co-test.webhooks.wantsRecommendation.classify" },
-              prompt: `Classify this message as either "wants_something_concrete" or "normal_conversation".
+          if (
+            hasPendingOffer &&
+            (callAction === "accepts_offer" || callAction === "declines_offer")
+          ) {
+            // Bookkeeping write — must never be able to take down the whole
+            // reply. Confirmed the hard way: this and the call_offer_pending
+            // insert below were unguarded, the memory_type CHECK constraint
+            // hadn't been widened for these new values yet, and the resulting
+            // exception aborted the request before any reply was generated —
+            // Sendblue kept retrying into the same crash, so the user got no
+            // reply at all rather than a slow one.
+            await pool
+              .query(
+                `INSERT INTO co_memories (user_id, memory_type, content) VALUES ($1, 'call_offer_resolved', $2)`,
+                [user.id, callAction],
+              )
+              .catch((err: any) =>
+                console.error(
+                  "webhooks: call_offer_resolved memory write failed (non-fatal):",
+                  err?.message ?? err,
+                ),
+              );
+
+            if (callAction === "declines_offer" && pendingOffer.content) {
+              await pool
+                .query(
+                  `INSERT INTO co_memories (user_id, memory_type, content) VALUES ($1, 'call_offer_declined_topic', $2)`,
+                  [user.id, pendingOffer.content],
+                )
+                .catch((err: any) =>
+                  console.error(
+                    "webhooks: call_offer_declined_topic memory write failed (non-fatal):",
+                    err?.message ?? err,
+                  ),
+                );
+            }
+          }
+
+          const shouldTriggerCall =
+            callAction === "explicit_request" ||
+            (hasPendingOffer && callAction === "accepts_offer");
+
+          // Burst limiter — separate from, and in addition to, the topic-aware
+          // suppression above. Topic-matching only stops Co re-offering about the
+          // SAME thing; on its own it does nothing to stop several DIFFERENT
+          // heavy topics in a row each triggering their own offer. This is what
+          // originally caused a real problem here: Co offered a call 4 times in
+          // one real conversation, once directly in response to "why is it
+          // always a phone call?" — a complaint about the pattern itself,
+          // misread as more evidence a call would help. Short and topic-blind on
+          // purpose: it only need cover a burst, not stand in for the topic
+          // check above.
+          const recentOfferCountResult = await pool.query(
+            `SELECT count(*) FROM co_memories WHERE user_id = $1 AND memory_type = 'call_offer_pending' AND created_at > NOW() - INTERVAL '10 minutes'`,
+            [user.id],
+          );
+          const recentOfferBurstActive =
+            parseInt(recentOfferCountResult.rows[0].count, 10) > 0;
+
+          // Two independent reasons to make the same secondary, folded-in
+          // gesture — never a standalone question, per the note below. One is
+          // content-driven (would_benefit) and can fire on any message from
+          // anyone. The other is channel-driven, not content-driven: someone
+          // with no profile yet, on their first real message, gets the gesture
+          // regardless of what that message actually is — a real voice call
+          // just produces a far richer initial profile than short texts ever
+          // will, and this is the one moment to offer that before the
+          // conversation settles into text. Fires at most once per person
+          // (isFirstRealMessage is only ever true for message #1), so it can't
+          // collide with the topic-aware/burst-limiter rules above that govern
+          // everyone's ongoing conversations.
+          const isThinProfileFirstMessage =
+            !hasProfile && isFirstRealMessage && callAction === "none";
+          const shouldOfferCall =
+            !hasPendingOffer &&
+            !recentOfferBurstActive &&
+            (callAction === "would_benefit" || isThinProfileFirstMessage);
+
+          // Folded into the main reply below now, not a separate message that
+          // replaces one — a real conversation showed this short-circuiting the
+          // reply entirely, so "want to hop on a call?" was the ENTIRE response
+          // to something significant, with no acknowledgment of what was
+          // actually said. The offer is secondary now; genuinely responding
+          // (reflecting, surfacing a real recommendation/venue if one exists)
+          // is the priority, per explicit product decision.
+          const callOfferContext = !shouldOfferCall
+            ? ""
+            : isThinProfileFirstMessage
+              ? `\nThis is the first real thing they've shared and nothing is known about them yet — first, actually respond to what they said. Then offer a quick call as a warm, low-pressure way to actually get to know them — a real conversation just gets Co so much further than texting back and forth. Keep it brief and secondary, never in place of a real response. Do not place any call, just make the gesture.`
+              : `\nWhat they just shared could genuinely benefit from a real conversation by voice — but that is not the priority. First, actually respond to what they said: reflect it, and if you have something concrete to offer below (a real recommendation or a real place you found), lead with that instead of a call. Only if it still feels right after that, offer a call as a warm gesture, not a logistics question — the way someone says "I'm here if you ever want to actually talk this through," not "are you free for a call today or tomorrow." Keep it brief and secondary, never in place of a real response. Do not place any call, just make the gesture.`;
+
+          if (shouldTriggerCall) {
+            const callResult = await triggerCall(user.id);
+            if (callResult.success) {
+              // A fixed "Calling you now." every time reads as a canned system
+              // message, not someone actually reacting to what was just asked
+              // for. Kept fast (Haiku, one short line, hard fallback) since the
+              // real call is already dialing — this must never add meaningful
+              // delay or block on a slow/failed generation.
+              let confirmation = "Calling you now.";
+              try {
+                const { text: variedConfirmation } = await generateText({
+                  model: anthropic("claude-haiku-4-5-20251001"),
+                  experimental_telemetry: {
+                    isEnabled: true,
+                    functionId: "co-test.webhooks.callConfirmation",
+                  },
+                  prompt: `You are Co. ${user.first_name} just texted: "${content}" — asking you to call them. You're calling them right now. Send a short, natural one-line text confirming that — vary how you say it, don't just say "Calling you now." No exclamation points, no em dashes. Under 40 characters.`,
+                });
+                const trimmed = variedConfirmation.trim();
+                if (trimmed)
+                  confirmation =
+                    trimmed.length > 60 ? trimmed.slice(0, 59) + "…" : trimmed;
+              } catch (genErr: any) {
+                console.error(
+                  "Call-confirmation generation failed (non-fatal, using default):",
+                  genErr?.message ?? genErr,
+                );
+              }
+              await pool.query(
+                `INSERT INTO co_memories (user_id, memory_type, content) VALUES ($1, 'text_exchange', $2)`,
+                [user.id, `Co replied: ${confirmation}`],
+              );
+              try {
+                await sendblue.messages.send({
+                  number,
+                  content: confirmation,
+                  from_number: process.env.SENDBLUE_PHONE_NUMBER!,
+                });
+              } catch (smsErr: any) {
+                console.error(
+                  `Sendblue call-confirmation send failed for ${number} (non-fatal):`,
+                  smsErr?.message ?? smsErr,
+                );
+              }
+              return res.status(200).send({
+                received: true,
+                action: "call_triggered",
+                call_sid: callResult.call_sid,
+              });
+            }
+            console.error(
+              `webhooks: call trigger failed for user ${user.id} (non-fatal, falling through to normal reply):`,
+              callResult.error,
+            );
+            // Falls through to the normal reply flow below on failure — a
+            // failed dial attempt should never leave the conversation silent.
+          }
+
+          // Real action-triggering, iMessage side (Intent Layer only) — mirrors
+          // the surface_recommendation Hume tool on the voice path, but iMessage
+          // has no tool_call plane to invoke it through, so this is a direct
+          // call to the same shared generateRecommendation() gated by a cheap
+          // classification step instead. Folded into the one reply below (never
+          // sent as a second message) to stay consistent with the pacing fix
+          // above.
+          let recommendationContext = "";
+          try {
+            const { text: wantsClassification } = await propagateAttributes(
+              {
+                userId: user.id,
+                traceName: "co-test.webhooks.wantsRecommendation.classify",
+              },
+              () =>
+                generateText({
+                  model: anthropic("claude-haiku-4-5-20251001"),
+                  experimental_telemetry: {
+                    isEnabled: true,
+                    functionId: "co-test.webhooks.wantsRecommendation.classify",
+                  },
+                  prompt: `Classify this message as either "wants_something_concrete" or "normal_conversation".
 
 "wants_something_concrete" means they're asking Co to actually suggest, recommend, help find, or surface something specific right now (e.g. "what can you surface for me", "find me something", "what should I do about this").
 "normal_conversation" means anything else — small talk, questions about Co, answering a question, general chat.
@@ -1313,56 +1650,69 @@ Return ONLY the classification, nothing else.`,
 Message: "${content}"
 
 Return ONLY the classification, nothing else.`,
-            }),
-        );
-        const wantsSomethingConcrete = wantsClassification
-          .trim()
-          .toLowerCase()
-          .replace(/^[`"']+|[`"']+$/g, "")
-          .includes("wants_something_concrete");
+                }),
+            );
+            const wantsSomethingConcrete = wantsClassification
+              .trim()
+              .toLowerCase()
+              .replace(/^[`"']+|[`"']+$/g, "")
+              .includes("wants_something_concrete");
 
-        if (wantsSomethingConcrete) {
-          const recommendation = await generateRecommendation(user.id, content);
-          if (recommendation.available) {
-            // This is a category/type suggestion, never a specific real
-            // venue with a link — that's the venue lookup below, a
-            // different mechanism. Found a real case where Co said
-            // "sending that over now" for exactly this kind of abstract
-            // suggestion, with no link anywhere, because there was never
-            // anything concrete to send in the first place.
-            recommendationContext = `\nYou just thought of a real recommendation for them: "${recommendation.match}" — ${recommendation.reason}. Work this into your reply naturally, as your own suggestion. This is an idea, not a specific place with a link — never say you're "sending" or "sharing" anything for this, you have nothing to send.`;
+            if (wantsSomethingConcrete) {
+              const recommendation = await generateRecommendation(
+                user.id,
+                content,
+              );
+              if (recommendation.available) {
+                // This is a category/type suggestion, never a specific real
+                // venue with a link — that's the venue lookup below, a
+                // different mechanism. Found a real case where Co said
+                // "sending that over now" for exactly this kind of abstract
+                // suggestion, with no link anywhere, because there was never
+                // anything concrete to send in the first place.
+                recommendationContext = `\nYou just thought of a real recommendation for them: "${recommendation.match}" — ${recommendation.reason}. Work this into your reply naturally, as your own suggestion. This is an idea, not a specific place with a link — never say you're "sending" or "sharing" anything for this, you have nothing to send.`;
+              }
+            }
+          } catch (err: any) {
+            console.error(
+              "webhooks: recommendation classification failed (non-fatal):",
+              err?.message ?? err,
+            );
           }
-        }
-      } catch (err: any) {
-        console.error("webhooks: recommendation classification failed (non-fatal):", err?.message ?? err);
-      }
 
-      // Real venue lookup — distinct from the abstract recommendation above.
-      // When someone mentions wanting a specific CATEGORY of place (a gym, a
-      // cafe, a climbing spot), search Google Places for real, and send an
-      // actual Google Maps link — not a description of what Co would send.
-      // Built after a real conversation showed Co naming a specific gym
-      // ("Dogpatch Boulders") with zero real data behind it, from general
-      // knowledge rather than a lookup. Needs a known city to search against;
-      // silently skipped if none is on file yet rather than guessing one.
-      let venueContext = "";
-      let venueDeliveryMessage: string | null = null;
-      if (profile?.city) {
-        try {
-          // Must see the conversation, not just this one message — found a
-          // real case where "send some my way, maybe 2-5" (a pure follow-up
-          // to "climbing gyms" mentioned earlier) didn't mention any place
-          // category on its own, so an isolated-message classifier missed
-          // it entirely and it fell through to the abstract recommendation
-          // path instead, which then claimed to be "sending" something it
-          // structurally can never send.
-          const { text: rawVenueClassification } = await propagateAttributes(
-            { userId: user.id, traceName: "co-test.webhooks.venueRequest.classify" },
-            () =>
-              generateText({
-                model: anthropic("claude-haiku-4-5-20251001"),
-                experimental_telemetry: { isEnabled: true, functionId: "co-test.webhooks.venueRequest.classify" },
-                prompt: `Recent text conversation, in order:
+          // Real venue lookup — distinct from the abstract recommendation above.
+          // When someone mentions wanting a specific CATEGORY of place (a gym, a
+          // cafe, a climbing spot), search Google Places for real, and send an
+          // actual Google Maps link — not a description of what Co would send.
+          // Built after a real conversation showed Co naming a specific gym
+          // ("Dogpatch Boulders") with zero real data behind it, from general
+          // knowledge rather than a lookup. Needs a known city to search against;
+          // silently skipped if none is on file yet rather than guessing one.
+          let venueContext = "";
+          let venueDeliveryMessage: string | null = null;
+          if (profile?.city) {
+            try {
+              // Must see the conversation, not just this one message — found a
+              // real case where "send some my way, maybe 2-5" (a pure follow-up
+              // to "climbing gyms" mentioned earlier) didn't mention any place
+              // category on its own, so an isolated-message classifier missed
+              // it entirely and it fell through to the abstract recommendation
+              // path instead, which then claimed to be "sending" something it
+              // structurally can never send.
+              const { text: rawVenueClassification } =
+                await propagateAttributes(
+                  {
+                    userId: user.id,
+                    traceName: "co-test.webhooks.venueRequest.classify",
+                  },
+                  () =>
+                    generateText({
+                      model: anthropic("claude-haiku-4-5-20251001"),
+                      experimental_telemetry: {
+                        isEnabled: true,
+                        functionId: "co-test.webhooks.venueRequest.classify",
+                      },
+                      prompt: `Recent text conversation, in order:
 ${recentConversation || "(start of the conversation)"}
 
 Their latest message: "${content}"
@@ -1372,154 +1722,223 @@ In light of the conversation above, is their latest message wanting, looking for
 If yes, how many did they ask for? Default to 1 if they didn't say a number or range; if they gave a range (e.g. "2-5"), use the upper end, capped at 5.
 
 Return ONLY valid JSON, no preamble: {"wants_venue": true or false, "venue_type": "the category, in a few words" or null, "count": a number from 1 to 5}`,
-              }),
-          );
-          const cleanVenue = rawVenueClassification.replace(/```json|```/g, "").trim();
-          const parsedVenue = JSON.parse(cleanVenue);
-          if (parsedVenue?.wants_venue && typeof parsedVenue.venue_type === "string" && parsedVenue.venue_type) {
-            const venueType: string = parsedVenue.venue_type;
-            const requestedCount = Math.max(1, Math.min(Number(parsedVenue.count) || 1, 5));
-
-            // The real Places search below has genuine network latency on
-            // top of the classification calls already run this turn — a
-            // real conversation showed Co claiming "sending that now" with
-            // no link actually in the message, because the search hadn't
-            // even happened yet when that reply was written. Send a real,
-            // personalized acknowledgment now, before the search, then
-            // deliver the actual result as the reply below — never claim
-            // delivery before there's something real to deliver.
-            try {
-              const { text: rawHold } = await propagateAttributes(
-                { userId: user.id, traceName: "co-test.webhooks.venueRequest.holdMessage" },
-                () =>
-                  generateText({
-                    model: anthropic("claude-haiku-4-5-20251001"),
-                    experimental_telemetry: { isEnabled: true, functionId: "co-test.webhooks.venueRequest.holdMessage" },
-                    prompt: `You are Co, texting someone. They just asked about finding ${requestedCount > 1 ? `${requestedCount} ${venueType}s` : `a ${venueType}`}. You're about to go actually look them up for them — send a brief, warm, personalized "give me a sec" acknowledgment, referencing what they're actually looking for, not generic. Don't claim you've found anything yet. One short sentence. No exclamation points, no em dashes. Under 100 characters.`,
-                  }),
-              );
-              const holdMessage = capMessageLength(rawHold, 100);
-              await pool.query(
-                `INSERT INTO co_memories (user_id, memory_type, content) VALUES ($1, 'text_exchange', $2)`,
-                [user.id, `Co replied: ${holdMessage}`],
-              );
-              try {
-                await sendblue.messages.send({ number, content: holdMessage, from_number: process.env.SENDBLUE_PHONE_NUMBER! });
-              } catch (smsErr: any) {
-                console.error(`Sendblue venue-lookup hold message failed for ${number} (non-fatal):`, smsErr?.message ?? smsErr);
-              }
-            } catch (err: any) {
-              console.error("webhooks: venue hold-message generation failed (non-fatal, proceeding to search anyway):", err?.message ?? err);
-            }
-
-            const venues = await findRealVenues(venueType, profile.city, requestedCount);
-            if (venues.length) {
-              // Sent as its own dedicated, complete message instead of
-              // folded into the general reply — a real conversation showed
-              // a multi-venue list getting mangled by the generic char-cap
-              // split (a name separated from its own link, later venues
-              // silently dropped past the cutoff). A list of real, named
-              // things needs the room to actually say all of them, not a
-              // fight against an SMS-length budget meant for small talk.
-              try {
-                const { text: rawIntro } = await propagateAttributes(
-                  { userId: user.id, traceName: "co-test.webhooks.venueRequest.introMessage" },
-                  () =>
-                    generateText({
-                      model: anthropic("claude-haiku-4-5-20251001"),
-                      experimental_telemetry: { isEnabled: true, functionId: "co-test.webhooks.venueRequest.introMessage" },
-                      prompt: `You are Co, texting someone. You just found ${venues.length} real ${venueType}${venues.length > 1 ? "s" : ""} for them${venues.length < requestedCount ? ` — they asked for ${requestedCount}, this is genuinely all that came back as a solid match, say so honestly` : ""}. Write ONE short, warm intro sentence to go right before a list (the list itself follows separately after your sentence — do not write the list yourself, do not include any links). No exclamation points, no em dashes. Under 150 characters.`,
                     }),
                 );
-                const introLine = capMessageLength(rawIntro, 150);
-                const listBlock = venues.map((v) => `${v.name} — ${v.mapsUrl}`).join("\n\n");
-                venueDeliveryMessage = `${introLine}\n\n${listBlock}`;
-              } catch (err: any) {
-                console.error("webhooks: venue delivery intro generation failed (non-fatal, sending list plainly):", err?.message ?? err);
-                venueDeliveryMessage = venues.map((v) => `${v.name} — ${v.mapsUrl}`).join("\n\n");
+              const cleanVenue = rawVenueClassification
+                .replace(/```json|```/g, "")
+                .trim();
+              const parsedVenue = JSON.parse(cleanVenue);
+              if (
+                parsedVenue?.wants_venue &&
+                typeof parsedVenue.venue_type === "string" &&
+                parsedVenue.venue_type
+              ) {
+                const venueType: string = parsedVenue.venue_type;
+                const requestedCount = Math.max(
+                  1,
+                  Math.min(Number(parsedVenue.count) || 1, 5),
+                );
+
+                // The real Places search below has genuine network latency on
+                // top of the classification calls already run this turn — a
+                // real conversation showed Co claiming "sending that now" with
+                // no link actually in the message, because the search hadn't
+                // even happened yet when that reply was written. Send a real,
+                // personalized acknowledgment now, before the search, then
+                // deliver the actual result as the reply below — never claim
+                // delivery before there's something real to deliver.
+                try {
+                  const { text: rawHold } = await propagateAttributes(
+                    {
+                      userId: user.id,
+                      traceName: "co-test.webhooks.venueRequest.holdMessage",
+                    },
+                    () =>
+                      generateText({
+                        model: anthropic("claude-haiku-4-5-20251001"),
+                        experimental_telemetry: {
+                          isEnabled: true,
+                          functionId:
+                            "co-test.webhooks.venueRequest.holdMessage",
+                        },
+                        prompt: `You are Co, texting someone. They just asked about finding ${requestedCount > 1 ? `${requestedCount} ${venueType}s` : `a ${venueType}`}. You're about to go actually look them up for them — send a brief, warm, personalized "give me a sec" acknowledgment, referencing what they're actually looking for, not generic. Don't claim you've found anything yet. One short sentence. No exclamation points, no em dashes. Under 100 characters.`,
+                      }),
+                  );
+                  const holdMessage = capMessageLength(rawHold, 100);
+                  await pool.query(
+                    `INSERT INTO co_memories (user_id, memory_type, content) VALUES ($1, 'text_exchange', $2)`,
+                    [user.id, `Co replied: ${holdMessage}`],
+                  );
+                  try {
+                    await sendblue.messages.send({
+                      number,
+                      content: holdMessage,
+                      from_number: process.env.SENDBLUE_PHONE_NUMBER!,
+                    });
+                  } catch (smsErr: any) {
+                    console.error(
+                      `Sendblue venue-lookup hold message failed for ${number} (non-fatal):`,
+                      smsErr?.message ?? smsErr,
+                    );
+                  }
+                } catch (err: any) {
+                  console.error(
+                    "webhooks: venue hold-message generation failed (non-fatal, proceeding to search anyway):",
+                    err?.message ?? err,
+                  );
+                }
+
+                const venues = await findRealVenues(
+                  venueType,
+                  profile.city,
+                  requestedCount,
+                );
+                if (venues.length) {
+                  // Sent as its own dedicated, complete message instead of
+                  // folded into the general reply — a real conversation showed
+                  // a multi-venue list getting mangled by the generic char-cap
+                  // split (a name separated from its own link, later venues
+                  // silently dropped past the cutoff). A list of real, named
+                  // things needs the room to actually say all of them, not a
+                  // fight against an SMS-length budget meant for small talk.
+                  try {
+                    const { text: rawIntro } = await propagateAttributes(
+                      {
+                        userId: user.id,
+                        traceName: "co-test.webhooks.venueRequest.introMessage",
+                      },
+                      () =>
+                        generateText({
+                          model: anthropic("claude-haiku-4-5-20251001"),
+                          experimental_telemetry: {
+                            isEnabled: true,
+                            functionId:
+                              "co-test.webhooks.venueRequest.introMessage",
+                          },
+                          prompt: `You are Co, texting someone. You just found ${venues.length} real ${venueType}${venues.length > 1 ? "s" : ""} for them${venues.length < requestedCount ? ` — they asked for ${requestedCount}, this is genuinely all that came back as a solid match, say so honestly` : ""}. Write ONE short, warm intro sentence to go right before a list (the list itself follows separately after your sentence — do not write the list yourself, do not include any links). No exclamation points, no em dashes. Under 150 characters.`,
+                        }),
+                    );
+                    const introLine = capMessageLength(rawIntro, 150);
+                    const listBlock = venues
+                      .map((v) => `${v.name} — ${v.mapsUrl}`)
+                      .join("\n\n");
+                    venueDeliveryMessage = `${introLine}\n\n${listBlock}`;
+                  } catch (err: any) {
+                    console.error(
+                      "webhooks: venue delivery intro generation failed (non-fatal, sending list plainly):",
+                      err?.message ?? err,
+                    );
+                    venueDeliveryMessage = venues
+                      .map((v) => `${v.name} — ${v.mapsUrl}`)
+                      .join("\n\n");
+                  }
+                  await pool
+                    .query(
+                      `INSERT INTO co_memories (user_id, memory_type, content) VALUES ($1, 'recommendation', $2)`,
+                      [
+                        user.id,
+                        `Co surfaced ${venues.length} real venue(s) — ${venues.map((v) => `${v.name} (${v.address}): ${v.mapsUrl}`).join("; ")}`,
+                      ],
+                    )
+                    .catch((err: any) =>
+                      console.error(
+                        "webhooks: venue memory write failed (non-fatal):",
+                        err?.message ?? err,
+                      ),
+                    );
+                } else {
+                  // Must not repeat the "claimed to deliver, delivered nothing"
+                  // failure — if the search genuinely came up empty, the reply
+                  // has to say so honestly, not go quiet or invent a name.
+                  venueContext = `\nYou looked for a real ${venueType} but didn't find a solid match nearby. Say so honestly in your reply — don't invent a name or pretend you found one.`;
+                }
               }
-              await pool
-                .query(`INSERT INTO co_memories (user_id, memory_type, content) VALUES ($1, 'recommendation', $2)`, [
-                  user.id,
-                  `Co surfaced ${venues.length} real venue(s) — ${venues.map((v) => `${v.name} (${v.address}): ${v.mapsUrl}`).join("; ")}`,
-                ])
-                .catch((err: any) => console.error("webhooks: venue memory write failed (non-fatal):", err?.message ?? err));
-            } else {
-              // Must not repeat the "claimed to deliver, delivered nothing"
-              // failure — if the search genuinely came up empty, the reply
-              // has to say so honestly, not go quiet or invent a name.
-              venueContext = `\nYou looked for a real ${venueType} but didn't find a solid match nearby. Say so honestly in your reply — don't invent a name or pretend you found one.`;
+            } catch (err: any) {
+              console.error(
+                "webhooks: venue lookup classification failed (non-fatal):",
+                err?.message ?? err,
+              );
             }
           }
-        } catch (err: any) {
-          console.error("webhooks: venue lookup classification failed (non-fatal):", err?.message ?? err);
-        }
-      }
 
-      // If a venue list already went out as its own dedicated message above,
-      // that IS the response to what they asked for — running the general
-      // persona reply on top of it would mean a 3rd message every time
-      // (hold + list + generic reply), which is exactly the "too many
-      // messages" problem this was built to avoid. Only generate a normal
-      // reply when nothing was already delivered.
-      let cappedReply: string;
-      if (venueDeliveryMessage) {
-        cappedReply = venueDeliveryMessage;
-        await pool.query(
-          `INSERT INTO co_memories (user_id, memory_type, content) VALUES ($1, 'text_exchange', $2)`,
-          [user.id, `Co replied: ${venueDeliveryMessage}`],
-        );
-        try {
-          await sendblue.messages.send({ number, content: venueDeliveryMessage, from_number: process.env.SENDBLUE_PHONE_NUMBER! });
-        } catch (smsErr: any) {
-          console.error(`Sendblue venue delivery send failed for ${number} (non-fatal):`, smsErr?.message ?? smsErr);
-        }
-      } else {
-        // Same persona the real call uses, not a separate thinner one — Co
-        // should be the same entity whether someone's talking by voice or
-        // text, capable of picking up a genuine back-and-forth either way.
-        // The anti-fabrication grounding rule and the text-length cap below
-        // are additions specific to this channel, layered on top, not a
-        // replacement for anything in the real prompt.
-        const personaPrompt = await getCoPersonaPrompt();
+          // If a venue list already went out as its own dedicated message above,
+          // that IS the response to what they asked for — running the general
+          // persona reply on top of it would mean a 3rd message every time
+          // (hold + list + generic reply), which is exactly the "too many
+          // messages" problem this was built to avoid. Only generate a normal
+          // reply when nothing was already delivered.
+          let cappedReply: string;
+          if (venueDeliveryMessage) {
+            cappedReply = venueDeliveryMessage;
+            await pool.query(
+              `INSERT INTO co_memories (user_id, memory_type, content) VALUES ($1, 'text_exchange', $2)`,
+              [user.id, `Co replied: ${venueDeliveryMessage}`],
+            );
+            try {
+              await sendblue.messages.send({
+                number,
+                content: venueDeliveryMessage,
+                from_number: process.env.SENDBLUE_PHONE_NUMBER!,
+              });
+            } catch (smsErr: any) {
+              console.error(
+                `Sendblue venue delivery send failed for ${number} (non-fatal):`,
+                smsErr?.message ?? smsErr,
+              );
+            }
+          } else {
+            // Same persona the real call uses, not a separate thinner one — Co
+            // should be the same entity whether someone's talking by voice or
+            // text, capable of picking up a genuine back-and-forth either way.
+            // The anti-fabrication grounding rule and the text-length cap below
+            // are additions specific to this channel, layered on top, not a
+            // replacement for anything in the real prompt.
+            const personaPrompt = await getCoPersonaPrompt();
 
-        // A call actively works toward covering RAPPORT_TOPICS (via the
-        // live assess_conversation_coverage tool — see handleToolCall
-        // above); text had no equivalent at all, so it just answered
-        // reactively and never actually worked toward filling in a real
-        // profile (confirmed for real: city stayed null through an entire
-        // text-only conversation that built out life_chapters, goals, and
-        // activity_preferences just fine, because nothing ever prompted for
-        // it). Reuses the exact same assessConversationCoverage function
-        // and RAPPORT_TOPICS the call uses — same coverage goal, same
-        // topic set, just fed into this single reply-generation call
-        // directly instead of a live tool_call loop.
-        const coverageSoFar = `${recentConversation}\nUser said: ${content}`.trim();
-        const coverage = await assessConversationCoverage(coverageSoFar, profileContext ?? undefined);
-        const missingTopicsContext =
-          coverage.missing_topics.length && !coverage.ready_to_summarize
-            ? `\nStill missing from what you know about them: ${coverage.missing_topics.map((t) => RAPPORT_TOPIC_DESCRIPTIONS[t]).join("; ")}. If it fits naturally off what they just said, work ONE of these in as a genuine follow-up question — not a survey, and don't force it if the conversation is clearly headed somewhere else right now.\n`
-            : "";
-        // Text has no hang_up tool call to mark "this is the closing turn"
-        // the way a live call does, so nothing ever told Co this reply might
-        // BE the close — it would just keep asking another question forever,
-        // or trail off with nothing when there was genuinely nothing left to
-        // ask. ready_to_summarize (same signal Phase 2 uses on a call) is
-        // the actual "we have enough" moment; only surface the option to
-        // close when there's also nothing left missing, so this never fires
-        // while a real gap is still open.
-        const closingContext =
-          coverage.ready_to_summarize && !coverage.missing_topics.length
-            ? `\nYou likely have what you need from them now. If what they just said makes this feel like a natural close — not if it doesn't, don't force it — deliver a real closing turn: reference something specific and real from this conversation (not a generic "got it, thanks"), and be precise about what happens next, the same spirit as the end of a call: circle placement isn't instant, it happens in waves as the right people are ready; other things can move faster; never promise a specific date. Do not close on a question you haven't answered — if their last message asked you something directly, answer it first, even briefly, before any close.\n`
-            : "";
+            // A call actively works toward covering RAPPORT_TOPICS (via the
+            // live assess_conversation_coverage tool — see handleToolCall
+            // above); text had no equivalent at all, so it just answered
+            // reactively and never actually worked toward filling in a real
+            // profile (confirmed for real: city stayed null through an entire
+            // text-only conversation that built out life_chapters, goals, and
+            // activity_preferences just fine, because nothing ever prompted for
+            // it). Reuses the exact same assessConversationCoverage function
+            // and RAPPORT_TOPICS the call uses — same coverage goal, same
+            // topic set, just fed into this single reply-generation call
+            // directly instead of a live tool_call loop.
+            const coverageSoFar =
+              `${recentConversation}\nUser said: ${content}`.trim();
+            const coverage = await assessConversationCoverage(
+              coverageSoFar,
+              profileContext ?? undefined,
+            );
+            const missingTopicsContext =
+              coverage.missing_topics.length && !coverage.ready_to_summarize
+                ? `\nStill missing from what you know about them: ${coverage.missing_topics.map((t) => RAPPORT_TOPIC_DESCRIPTIONS[t]).join("; ")}. If it fits naturally off what they just said, work ONE of these in as a genuine follow-up question — not a survey, and don't force it if the conversation is clearly headed somewhere else right now.\n`
+                : "";
+            // Text has no hang_up tool call to mark "this is the closing turn"
+            // the way a live call does, so nothing ever told Co this reply might
+            // BE the close — it would just keep asking another question forever,
+            // or trail off with nothing when there was genuinely nothing left to
+            // ask. ready_to_summarize (same signal Phase 2 uses on a call) is
+            // the actual "we have enough" moment; only surface the option to
+            // close when there's also nothing left missing, so this never fires
+            // while a real gap is still open.
+            const closingContext =
+              coverage.ready_to_summarize && !coverage.missing_topics.length
+                ? `\nYou likely have what you need from them now. If what they just said makes this feel like a natural close — not if it doesn't, don't force it — deliver a real closing turn: reference something specific and real from this conversation (not a generic "got it, thanks"), and be precise about what happens next, the same spirit as the end of a call: circle placement isn't instant, it happens in waves as the right people are ready; other things can move faster; never promise a specific date. Do not close on a question you haven't answered — if their last message asked you something directly, answer it first, even briefly, before any close.\n`
+                : "";
 
-        const { text: reply } = await propagateAttributes(
-          { userId: user.id, traceName: "co-test.webhooks.generateReply" },
-          () =>
-            generateText({
-              model: anthropic("claude-haiku-4-5-20251001"),
-              experimental_telemetry: { isEnabled: true, functionId: "co-test.webhooks.generateReply" },
-              prompt: `${personaPrompt ?? "You are Co, an exclusive life concierge."}
+            const { text: reply } = await propagateAttributes(
+              { userId: user.id, traceName: "co-test.webhooks.generateReply" },
+              () =>
+                generateText({
+                  model: anthropic("claude-haiku-4-5-20251001"),
+                  experimental_telemetry: {
+                    isEnabled: true,
+                    functionId: "co-test.webhooks.generateReply",
+                  },
+                  prompt: `${personaPrompt ?? "You are Co, an exclusive life concierge."}
 
 You are having this specific exchange over text message, not a phone call — the phase structure and pacing above describe a live call; over text, just be genuinely Co: the same listening style, the same voice, the same principles, picking up wherever this conversation actually is.
 
@@ -1535,103 +1954,138 @@ ${styleHint}
 Ground everything ONLY in the information above and what has actually been said in this conversation — never state or imply a specific personal detail, preference, or fact about them that isn't listed above or wasn't actually said in this thread. This includes real venues and businesses: never name a specific one unless it's given to you above as something you actually found — if you don't have a real one, describe what you'd look for, don't guess a plausible-sounding name. If you don't have something, ask rather than assume.
 
 Keep THIS reply short — one text-message-length turn, not a call-length response. A sentence or two. No exclamation points, no em dashes. This is a text message, not a paragraph — but if you're relaying a real find (a name, a reason, a link), give it the room it actually needs rather than cutting it short.`,
-            }),
-        );
-        // A genuinely long reply gets sent as two natural texts (a real
-        // pause between them) instead of being hard-truncated and silently
-        // losing whatever didn't fit — see splitIntoMessages.
-        const replyParts = splitIntoMessages(reply);
-        cappedReply = replyParts.join(" ");
+                }),
+            );
+            // A genuinely long reply gets sent as two natural texts (a real
+            // pause between them) instead of being hard-truncated and silently
+            // losing whatever didn't fit — see splitIntoMessages.
+            const replyParts = splitIntoMessages(reply);
+            cappedReply = replyParts.join(" ");
 
-        for (let i = 0; i < replyParts.length; i++) {
-          const part = replyParts[i];
-          await pool.query(
-            `INSERT INTO co_memories (user_id, memory_type, content) VALUES ($1, 'text_exchange', $2)`,
-            [user.id, `Co replied: ${part}`],
-          );
-          try {
-            await sendblue.messages.send({
-              number,
-              content: part,
-              from_number: process.env.SENDBLUE_PHONE_NUMBER!,
-            });
-          } catch (smsErr: any) {
-            console.error(`Sendblue reply send failed for ${number} (non-fatal):`, smsErr?.message ?? smsErr);
+            for (let i = 0; i < replyParts.length; i++) {
+              const part = replyParts[i];
+              await pool.query(
+                `INSERT INTO co_memories (user_id, memory_type, content) VALUES ($1, 'text_exchange', $2)`,
+                [user.id, `Co replied: ${part}`],
+              );
+              try {
+                await sendblue.messages.send({
+                  number,
+                  content: part,
+                  from_number: process.env.SENDBLUE_PHONE_NUMBER!,
+                });
+              } catch (smsErr: any) {
+                console.error(
+                  `Sendblue reply send failed for ${number} (non-fatal):`,
+                  smsErr?.message ?? smsErr,
+                );
+              }
+              if (i < replyParts.length - 1) await pause(2000);
+            }
           }
-          if (i < replyParts.length - 1) await pause(2000);
-        }
-      }
 
-      // Records that an offer went out (folded into the reply above, not a
-      // separate message) so a later "yes"/"no" is still correctly read as
-      // answering it, and so the cooldown above has something to count.
-      // Must confirm the reply actually contains an offer before recording
-      // one — asking the model to include it isn't a guarantee it did.
-      // Found the hard way: a reply that was just a clarifying question,
-      // with no mention of a call anywhere, still got recorded as a pending
-      // offer because shouldOfferCall had been true going in — the system
-      // then thought it had offered something the user was never shown.
-      if (shouldOfferCall) {
-        try {
-          const { text: rawOfferCheck } = await propagateAttributes(
-            { userId: user.id, traceName: "co-test.webhooks.callOfferCheck" },
-            () =>
-              generateText({
-                model: anthropic("claude-haiku-4-5-20251001"),
-                experimental_telemetry: { isEnabled: true, functionId: "co-test.webhooks.callOfferCheck" },
-                prompt: `Does this text message actually offer, invite, or gesture toward a phone call — in any wording, even indirectly (e.g. "I'm here if you want to talk this through")? Not just related to talking or listening in general — specifically about a phone call.
+          // Records that an offer went out (folded into the reply above, not a
+          // separate message) so a later "yes"/"no" is still correctly read as
+          // answering it, and so the cooldown above has something to count.
+          // Must confirm the reply actually contains an offer before recording
+          // one — asking the model to include it isn't a guarantee it did.
+          // Found the hard way: a reply that was just a clarifying question,
+          // with no mention of a call anywhere, still got recorded as a pending
+          // offer because shouldOfferCall had been true going in — the system
+          // then thought it had offered something the user was never shown.
+          if (shouldOfferCall) {
+            try {
+              const { text: rawOfferCheck } = await propagateAttributes(
+                {
+                  userId: user.id,
+                  traceName: "co-test.webhooks.callOfferCheck",
+                },
+                () =>
+                  generateText({
+                    model: anthropic("claude-haiku-4-5-20251001"),
+                    experimental_telemetry: {
+                      isEnabled: true,
+                      functionId: "co-test.webhooks.callOfferCheck",
+                    },
+                    prompt: `Does this text message actually offer, invite, or gesture toward a phone call — in any wording, even indirectly (e.g. "I'm here if you want to talk this through")? Not just related to talking or listening in general — specifically about a phone call.
 
 Message: "${cappedReply}"
 
 Return ONLY "yes" or "no".`,
-              }),
-          );
-          const actuallyOffered = rawOfferCheck.trim().toLowerCase().startsWith("yes");
-          if (actuallyOffered) {
-            // Stores what the USER actually described, not just Co's own
-            // offer text — Co's gesture is often deliberately generic ("I'm
-            // here if you want to talk this through"), which makes a weak
-            // fingerprint for later topic-matching (two unrelated heavy
-            // topics could look identical if Co phrased both offers the same
-            // vague way). The user's own words are the real topic signal,
-            // and this same row's content is what gets copied into
-            // call_offer_declined_topic on a decline, so the fix has to live
-            // here, not just at decline-time.
-            await pool
-              .query(`INSERT INTO co_memories (user_id, memory_type, content) VALUES ($1, 'call_offer_pending', $2)`, [
-                user.id,
-                `User described: ${content} | Co offered: ${cappedReply}`,
-              ])
-              .catch((err: any) => console.error("webhooks: call_offer_pending memory write failed (non-fatal):", err?.message ?? err));
+                  }),
+              );
+              const actuallyOffered = rawOfferCheck
+                .trim()
+                .toLowerCase()
+                .startsWith("yes");
+              if (actuallyOffered) {
+                // Stores what the USER actually described, not just Co's own
+                // offer text — Co's gesture is often deliberately generic ("I'm
+                // here if you want to talk this through"), which makes a weak
+                // fingerprint for later topic-matching (two unrelated heavy
+                // topics could look identical if Co phrased both offers the same
+                // vague way). The user's own words are the real topic signal,
+                // and this same row's content is what gets copied into
+                // call_offer_declined_topic on a decline, so the fix has to live
+                // here, not just at decline-time.
+                await pool
+                  .query(
+                    `INSERT INTO co_memories (user_id, memory_type, content) VALUES ($1, 'call_offer_pending', $2)`,
+                    [
+                      user.id,
+                      `User described: ${content} | Co offered: ${cappedReply}`,
+                    ],
+                  )
+                  .catch((err: any) =>
+                    console.error(
+                      "webhooks: call_offer_pending memory write failed (non-fatal):",
+                      err?.message ?? err,
+                    ),
+                  );
+              }
+            } catch (err: any) {
+              console.error(
+                "webhooks: call-offer verification failed (non-fatal, not recording a pending offer):",
+                err?.message ?? err,
+              );
+            }
           }
-        } catch (err: any) {
-          console.error("webhooks: call-offer verification failed (non-fatal, not recording a pending offer):", err?.message ?? err);
+
+          // Text-only conversations used to never build a co_profile at all —
+          // only a call transcript ran through extraction, so choosing "text"
+          // over the call offer above would otherwise be a dead end. Fire-and-
+          // forget, the same real pipeline a call uses (extractPsychographicProfile
+          // + storeProfile + captureIntent), fed the accumulated text thread
+          // instead of a call transcript. Never blocks the reply already sent
+          // above; a failure here just means this message didn't add anything
+          // new to the profile.
+          const textTranscript =
+            `${recentConversation}\nuser: ${content}\nassistant: ${cappedReply}`.trim();
+          extractPsychographicProfile(textTranscript)
+            .then(({ extracted }) =>
+              storeProfile(user.id, extracted, textTranscript),
+            )
+            .catch((err: any) =>
+              console.error(
+                "webhooks: text-based profile extraction failed (non-fatal):",
+                err?.message ?? err,
+              ),
+            );
+          captureIntent(user.id, textTranscript).catch((err: any) =>
+            console.error(
+              "webhooks: text-based intent capture failed (non-fatal):",
+              err?.message ?? err,
+            ),
+          );
+
+          return res.status(200).send({ received: true, reply: cappedReply });
+        } catch (error) {
+          next(error);
         }
-      }
-
-      // Text-only conversations used to never build a co_profile at all —
-      // only a call transcript ran through extraction, so choosing "text"
-      // over the call offer above would otherwise be a dead end. Fire-and-
-      // forget, the same real pipeline a call uses (extractPsychographicProfile
-      // + storeProfile + captureIntent), fed the accumulated text thread
-      // instead of a call transcript. Never blocks the reply already sent
-      // above; a failure here just means this message didn't add anything
-      // new to the profile.
-      const textTranscript = `${recentConversation}\nuser: ${content}\nassistant: ${cappedReply}`.trim();
-      extractPsychographicProfile(textTranscript)
-        .then(({ extracted }) => storeProfile(user.id, extracted, textTranscript))
-        .catch((err: any) => console.error("webhooks: text-based profile extraction failed (non-fatal):", err?.message ?? err));
-      captureIntent(user.id, textTranscript).catch((err: any) =>
-        console.error("webhooks: text-based intent capture failed (non-fatal):", err?.message ?? err),
-      );
-
-      return res.status(200).send({ received: true, reply: cappedReply });
-    } catch (error) {
-      next(error);
-    }
-    };
-    await withPhoneLock(number, run);
-  });
+      };
+      await withPhoneLock(number, run);
+    },
+  );
 
   return router;
 }
