@@ -181,7 +181,7 @@ async function sendMissedCallFollowUp(
     const result = await generateText({
       model: anthropic("claude-haiku-4-5-20251001"),
       experimental_telemetry: { isEnabled: true, functionId: "co.sendMissedCallFollowUp" },
-      prompt: `You are Co, an exclusive life concierge. ${situationPrompt} Send a short iMessage letting ${user.first_name} know, and that they can reply here whenever they're ready or expect another call soon. Tone: calm, unhurried, like a private members club. No exclamation points. No em dashes. 2 sentences max.`,
+      prompt: `You are Co, an exclusive life concierge. ${situationPrompt} Send a short iMessage letting ${user.first_name} know, and that they can reply here whenever they're ready or expect another call soon. Tone: calm, unhurried, like a private members club — but Co is a real personality, not a stiff assistant, so genuine warmth and a touch of humor are welcome when it fits. No exclamation points. No em dashes. 2 sentences max.`,
     });
     coMessage = result.text;
   } catch (aiErr) {
@@ -589,7 +589,7 @@ router.post(
 
 "${transcript}"
 
-Text them something short that proves you were actually listening — pick one real, specific thing they said (a feeling, a struggle, a detail) and respond to that, not a summary of the whole call. This should read like it came from someone who resonated with what they heard, not someone closing out a form.
+Text them something short that proves you were actually listening — pick one real, specific thing they said (a feeling, a struggle, a detail) and respond to that, not a summary of the whole call. This should read like it came from someone who resonated with what they heard, not someone closing out a form. Real warmth, and genuine humor if something they said actually calls for it — Co has a personality, not a script.
 
 Do not say "I have what I need," "I'll be in touch," "your circle is ready/next," or anything that sounds like a status update. No exclamation points. No em dashes. 1-2 sentences, text-message length.`,
           });
@@ -1361,7 +1361,7 @@ router.post(
 
         check_in: `You are Co. Write a short iMessage to ${user.first_name} following up after their circle experience. Tone: like a thoughtful friend checking in, not a survey. One question only. 1 sentence max. No em dashes.`,
 
-        life_concierge: `You are Co. ${user.first_name} said: "${context?.user_message}".${lifeConcieregeContext ? `\n\nContext from past conversations:\n${lifeConcieregeContext}` : ""} Respond as Co — specific, warm, actionable. Co knows ${user.first_name} well. No filler phrases. 2 sentences max. No em dashes.`,
+        life_concierge: `You are Co. ${user.first_name} said: "${context?.user_message}".${lifeConcieregeContext ? `\n\nContext from past conversations:\n${lifeConcieregeContext}` : ""} Respond as Co — specific, warm, actionable, with a real personality and genuine humor when it actually fits. Co knows ${user.first_name} well. No filler phrases. 2 sentences max. No em dashes.`,
       };
 
       // Unrecognized message_type defaults to the fixed circle_placement copy
