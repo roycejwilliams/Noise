@@ -153,101 +153,6 @@ export function registerJobs(io: Server) {
     }
   });
 
-  // Every 15 min — consensus threshold + 48hr cutoff
-  cron.schedule("*/15 * * * *", async () => {
-    try {
-      const pollingMoments = await pool.query(
-        `SELECT m.id, m.circle_id, m.moments_name, m.venue, m.venue_booking_url, m.venue_place_id,
-                m.suggested_time, m.moment_start, m.created_at, m.consensus_nudge_sent_at
-         FROM moments m
-         JOIN circles c ON c.id = m.circle_id
-         WHERE m.status = 'polling'
-         AND c.status = 'active'
-         AND EXISTS (SELECT 1 FROM moment_responses mr WHERE mr.moment_id = m.id)`,
-      );
-
-      for (const moment of pollingMoments.rows) {
-        const responsesResult = await pool.query(
-          `SELECT mr.user_id, mr.response, u.phone_number, u.first_name
-           FROM moment_responses mr
-           JOIN users u ON u.id = mr.user_id
-           WHERE mr.moment_id = $1`,
-          [moment.id],
-        );
-        const responses = responsesResult.rows;
-        const total = responses.length;
-        if (total === 0) continue;
-
-        const yesCount = responses.filter(
-          (r: any) => r.response === "yes",
-        ).length;
-        const thresholdMet = yesCount * 2 > total;
-
-        const hoursSinceCreated =
-          (Date.now() - new Date(moment.created_at).getTime()) /
-          (1000 * 60 * 60);
-        const past48hrs = hoursSinceCreated >= 48;
-
-        if (!thresholdMet && !past48hrs) continue;
-
-        if (past48hrs && !moment.consensus_nudge_sent_at) {
-          const nonResponders = responses.filter(
-            (r: any) => r.response === null,
-          );
-          for (const nr of nonResponders) {
-            // Unlike every other Sendblue send in this codebase, this one
-            // had no try/catch — an undeliverable number (confirmed: a
-            // fictional seed number, but any real delivery failure works
-            // the same way) threw here, aborted this iteration of the outer
-            // loop, and skipped the consensus_nudge_sent_at UPDATE below.
-            // With that guard column never set, the next run 15 minutes
-            // later saw the exact same unmet condition and repeated the
-            // same throw — confirmed via Sendblue's own log: the same
-            // message re-sent every 15 minutes for over 3 weeks against one
-            // moment. A delivery failure must never block this loop or the
-            // guard-column write that stops it from re-running.
-            try {
-              await sendblue.messages.send({
-                number: nr.phone_number,
-                content: `${nr.first_name}, your circle's moment has been locked. Reply YES or suggest a time for future moments.`,
-                from_number: process.env.SENDBLUE_PHONE_NUMBER!,
-              });
-            } catch (smsErr: any) {
-              console.error(`Consensus nudge failed for ${nr.user_id} (non-fatal):`, smsErr?.message ?? smsErr);
-            }
-            await pool.query(
-              `UPDATE co_profiles SET trust_score = GREATEST(0, trust_score - 5) WHERE user_id = $1`,
-              [nr.user_id],
-            );
-          }
-          await pool.query(
-            `UPDATE moments SET consensus_nudge_sent_at = NOW() WHERE id = $1`,
-            [moment.id],
-          );
-        }
-
-        // No Circle Connector step anymore — once consensus is reached (or
-        // forced at the 48hr cutoff), Co confirms and locks in the moment
-        // directly (booking.ts's confirmMoment), no human booking task.
-        await confirmMoment(
-          {
-            id: moment.id,
-            circle_id: moment.circle_id,
-            moments_name: moment.moments_name,
-            venue: moment.venue,
-            venue_booking_url: moment.venue_booking_url,
-            venue_place_id: moment.venue_place_id,
-            suggested_time: moment.suggested_time,
-            moment_start: moment.moment_start,
-          },
-          io,
-        );
-      }
-    } catch (error) {
-      console.error("Consensus cron error:", error);
-    }
-  });
-
   // Hourly 10am–8pm UTC — call newly subscribed users who haven't completed intake yet.
   // Limits to 5 calls per run to avoid Twilio rate limits.
   // Won't retry a user who had a call attempt in the last 24 hours.
@@ -323,12 +228,6 @@ export function registerJobs(io: Server) {
       console.error("Auto-call cron error:", err);
     }
   });
-
-  // Circle Connector concept removed — Co now confirms/locks in moments
-  // directly (see the consensus cron above, confirmMoment). The connector-
-  // timeout escalation cron that used to live here (4hr nudge → 8hr escalate
-  // to the Moderator + demote trust_score) is gone along with it; no moment
-  // reaches 'consensus_locked' anymore for it to have acted on.
 
   // Every 30 min — auto-approve any circle placement or venue selection the
   // Moderator hasn't responded to within 4 hours (low-confidence items that
