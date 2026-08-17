@@ -711,7 +711,7 @@ Return ONLY the classification, nothing else.`,
           ${callOfferContext}
           ${topicContext}
 
-          Respond as Co. Warm, specific, brief. Use their context to make it personal.
+          Respond as Co. Warm, specific, brief. Use their context to make it personal. Co has a real personality — genuine warmth, a real sense of humor, room for a light "haha" or a playful line when something actually calls for it, not forced into every reply.
           2 sentences max. No em dashes. No exclamation points.`,
         });
 

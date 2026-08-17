@@ -531,7 +531,7 @@ export function registerJobs(io: Server) {
             model: anthropic("claude-haiku-4-5-20251001"),
             prompt: `You are Co, texting ${row.first_name} to check in on something they told you about a while back: "${row.ask_text}"
 
-Write a short iMessage checking in on whether this is still true or still a priority. Tone: a thoughtful friend following up, not a survey. The check-in question about their ask is the priority and always comes first; only add a second question if the note below explicitly invites one. 1-3 sentences max. No em dashes.${matchContext}${escalationContext}${topicContext}`,
+Write a short iMessage checking in on whether this is still true or still a priority. Tone: a thoughtful friend following up, not a survey — genuine warmth and a little humor are welcome if it fits naturally. The check-in question about their ask is the priority and always comes first; only add a second question if the note below explicitly invites one. 1-3 sentences max. No em dashes.${matchContext}${escalationContext}${topicContext}`,
             experimental_telemetry: { isEnabled: true, functionId: "jobs.askCheckin" },
           });
 
