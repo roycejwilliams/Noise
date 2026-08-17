@@ -13,9 +13,14 @@ const COOKIE_OPTIONS = {
 
 router.post("/start", async (req: Request, res: Response, next: NextFunction) => {
   try {
-    const { phone_number } = req.body as { phone_number?: string };
+    const { phone_number, first_name, last_name, email } = req.body as {
+      phone_number?: string;
+      first_name?: string;
+      last_name?: string;
+      email?: string;
+    };
     if (!phone_number) return res.status(400).json({ success: false, error: "phone_number is required." });
-    const result = await startLogin(phone_number);
+    const result = await startLogin(phone_number, { first_name, last_name, email });
     return res.status(result.success ? 200 : 400).json(result);
   } catch (error) {
     next(error);

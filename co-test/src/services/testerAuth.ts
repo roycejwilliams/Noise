@@ -12,7 +12,10 @@ import { sendSMS } from "../../../api/src/otpActions.js";
 const SESSION_TTL_MS = 30 * 24 * 60 * 60 * 1000; // 30 days
 const OTP_LOCKOUT_ATTEMPTS = 5;
 
-export async function startLogin(rawPhone: string): Promise<{ success: boolean; error?: string }> {
+export async function startLogin(
+  rawPhone: string,
+  contact?: { first_name?: string; last_name?: string; email?: string },
+): Promise<{ success: boolean; error?: string }> {
   const phone_number = normalizePhone(rawPhone);
   if (!phone_number || phone_number === rawPhone.trim()) {
     // normalizePhone falls back to the raw input on a parse failure — that's
@@ -41,11 +44,18 @@ export async function startLogin(rawPhone: string): Promise<{ success: boolean; 
     // times the test data was reset, since logging back in (required to
     // reach /phone at all) immediately recreated the row already
     // "verified."
+    // Real name/email from the intake form now, matching the same 3-field
+    // (Full Name, Email, Phone) flow the Framer site uses — falls back to
+    // the old placeholder only if this is ever called without them (e.g.
+    // direct API use), so this never regresses into a hard failure.
     const suffix = Math.random().toString(36).slice(2, 8);
+    const firstName = contact?.first_name || "Tester";
+    const lastName = contact?.last_name || "Tester";
+    const email = contact?.email || `co-test-login-${suffix}@copatible.test`;
     const created = await pool.query(
       `INSERT INTO users (first_name, last_name, email, phone_number, username, test_channel, contact_verified)
-       VALUES ('Tester', 'Tester', $1, $2, $3, 'phone', false) RETURNING id`,
-      [`co-test-login-${suffix}@copatible.test`, phone_number, `co_test_login_${suffix}`],
+       VALUES ($1, $2, $3, $4, $5, 'phone', false) RETURNING id`,
+      [firstName, lastName, email, phone_number, `co_test_login_${suffix}`],
     );
     userId = created.rows[0].id;
   }

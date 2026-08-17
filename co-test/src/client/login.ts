@@ -3,6 +3,8 @@ const statusEl = document.getElementById("login-status") as HTMLElement;
 const stepPhone = document.getElementById("step-phone") as HTMLElement;
 const stepOtp = document.getElementById("step-otp") as HTMLElement;
 
+const nameInput = document.getElementById("name-input") as HTMLInputElement;
+const emailInput = document.getElementById("email-input") as HTMLInputElement;
 const phoneInput = document.getElementById("phone-input") as HTMLInputElement;
 const sendCodeButton = document.getElementById("send-code-button") as HTMLButtonElement;
 const phoneError = document.getElementById("phone-error") as HTMLElement;
@@ -34,17 +36,33 @@ async function redirectIfAlreadyLoggedIn() {
   }
 }
 
+// Same split as the Framer intake form — one Full Name field, split on the
+// first space into first/last. A single-word name falls back to itself for
+// last_name so it still satisfies the backend's required field rather than
+// blocking signup over it.
+function splitName(fullName: string): { first_name: string; last_name: string } {
+  const [first_name, ...rest] = fullName.trim().split(/\s+/);
+  return { first_name, last_name: rest.join(" ") || first_name };
+}
+
 async function sendCode() {
   phoneError.classList.add("hidden");
+  const fullName = nameInput.value.trim();
+  const email = emailInput.value.trim();
   const value = phoneInput.value.trim();
-  if (!value) return;
+  if (!fullName || !email || !value) {
+    phoneError.textContent = "Name, email, and phone are all required.";
+    phoneError.classList.remove("hidden");
+    return;
+  }
 
   sendCodeButton.disabled = true;
   try {
+    const { first_name, last_name } = splitName(fullName);
     const res = await fetch("/api/login/start", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ phone_number: value }),
+      body: JSON.stringify({ phone_number: value, first_name, last_name, email }),
     });
     const data = await res.json();
     if (!data.success) throw new Error(data.error ?? "Failed to send code.");
