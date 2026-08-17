@@ -165,13 +165,13 @@ export const sendSMS = async ({
 
     if (intro) {
       await send(
-        `CoPatible is invite-only. Co matches you with people navigating the same chapter of life, then brings you together in person. Save my contact so we can keep talking.`,
+        `CoPatible is invite-only. Right now Co is getting to know people like you, the connecting part comes later. Save my contact so we can keep talking.`,
         process.env.CO_VCARD_URL,
       );
     }
 
     if (register) {
-      await send(`Your CoPatible verification code is below. It expires in 5 minutes.\n${otp_code}`);
+      await send(`Hi, this is Co. Your verification code is ${otp_code}, it expires in 5 minutes. Go ahead and tell me what's going on, I'm listening.`);
     }
 
     const link = (url?: string) => (url ? `\n${url}` : "");
@@ -238,7 +238,7 @@ export const sendSMS = async ({
     }
 
     if (welcome) {
-      await send(`Welcome to CoPatible. Curated by chapter, built for connection. Co will be in touch soon.`);
+      await send(`Welcome to CoPatible. Co's in early access right now, learning and listening. The connecting part comes next.`);
     }
 
     if (welcome_back) {
@@ -595,8 +595,8 @@ export const sendEmail = async ({
         subject: `Welcome to CoPatible.`,
         html: emailTemplate(
           h1("You're in.") +
-            p("This is invite-only for a reason. CoPatible is built for people who are intentional about who they let in and what they spend their time on.") +
-            p("Set intentions. Build circles. Make moments that actually mean something.") +
+            p("CoPatible is in early access right now. Co is learning and listening, getting to know you before anything else.") +
+            p("The connecting part comes next.") +
             ctaButton("Open CoPatible", "https://app.copatible.com"),
         ),
       });

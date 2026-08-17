@@ -1086,13 +1086,19 @@ export function createWebhooksRouter(io: Server): express.Router {
           // sendSMS catches its own errors internally (never throws), matching
           // every other Sendblue send in this codebase: a delivery failure must
           // never surface as a 4xx/5xx to Sendblue's own webhook or crash this
-          // request.
+          // request. Deliberately does NOT return after these three — without
+          // that, someone's first-ever message to Co dead-ended on a
+          // verification code, and they had to text again before getting
+          // anything that felt like actually meeting Co. Falls through into
+          // the rest of this handler instead, so Co's real reply goes out
+          // right after, on this same first message.
           if (!user.contact_verified) {
             const otp = randomInt(100000, 1000000);
             await pool.query(
               `UPDATE users SET contact_verified = true, otp_code = $2, otp_expiry = NOW() + INTERVAL '5 minutes' WHERE id = $1`,
               [user.id, otp],
             );
+            user.contact_verified = true;
             // Paced, not fired all at once — three back-to-back sends with no
             // gap arrive as a stacked wall of texts on the recipient's end even
             // though each individual message is legitimate content.
@@ -1105,9 +1111,7 @@ export function createWebhooksRouter(io: Server): express.Router {
               otp_code: otp.toString(),
               register: true,
             });
-            return res
-              .status(200)
-              .send({ received: true, action: "contact_verified" });
+            await pause(2500);
           }
 
           // Moderator-by-text — the Circles pipeline test's confirmed decision
