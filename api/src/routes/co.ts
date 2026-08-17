@@ -18,6 +18,7 @@ import {
   assessConversationCoverage,
   captureIntent,
   extractPsychographicProfile,
+  persistCoveredTopics,
   RAPPORT_TOPICS,
   storeProfile,
 } from "../services/profileExtraction.js";
@@ -413,6 +414,13 @@ async function handleToolCall(
       .join("\n");
     const priorContext = userId ? await buildContextSummary(userId).catch(() => "") : "";
     const assessment = await assessConversationCoverage(transcript, priorContext);
+    // Co Loop Stage 1 — persists confirmed topics to co_profiles.topics_covered,
+    // the same store the text-channel coverage nudge (sendblue.ts) and the
+    // Stage 5 check-in cron (jobs/index.ts) read, so a topic confirmed on a
+    // call isn't re-asked by either of those. Best-effort only — EVI's own
+    // live behavior doesn't depend on this, it still gets the full
+    // missing_topics list in the response below either way.
+    if (userId) persistCoveredTopics(userId, assessment);
     await sendHumeToolResponse(chatId, toolCallMessage.tool_call_id, JSON.stringify(assessment));
   } catch (err: any) {
     console.error("co/webhook: assess_conversation_coverage failed, falling back to nothing-covered:", err?.message ?? err);
