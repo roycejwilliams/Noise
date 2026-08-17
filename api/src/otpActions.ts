@@ -46,6 +46,8 @@ interface MessageProp {
   login?: boolean;
   register?: boolean;
   intro?: boolean;
+  save_contact?: boolean;
+  first_name?: string;
   invite_type?: "received" | "accepted" | "rejected";
   invite_target?: "circle" | "moment";
   transfer_ticket?: boolean;
@@ -120,6 +122,8 @@ export const sendSMS = async ({
   login,
   register,
   intro,
+  save_contact,
+  first_name,
   transfer_ticket,
   moment_recap,
   photo_uploaded,
@@ -165,13 +169,16 @@ export const sendSMS = async ({
 
     if (intro) {
       await send(
-        `CoPatible is invite-only. Right now Co is getting to know people like you, the connecting part comes later. Save my contact so we can keep talking.`,
-        process.env.CO_VCARD_URL,
+        `CoPatible is invite-only. Co's in early access right now, learning and listening. The connecting part comes later.`,
       );
     }
 
+    if (save_contact) {
+      await send(`Save my contact so we can keep talking.`, process.env.CO_VCARD_URL);
+    }
+
     if (register) {
-      await send(`Hi, this is Co. Your verification code is ${otp_code}, it expires in 5 minutes. Go ahead and tell me what's going on, I'm listening.`);
+      await send(`Your verification code is ${otp_code}. It expires in 5 minutes.`);
     }
 
     const link = (url?: string) => (url ? `\n${url}` : "");
@@ -238,7 +245,7 @@ export const sendSMS = async ({
     }
 
     if (welcome) {
-      await send(`Welcome to CoPatible. Co's in early access right now, learning and listening. The connecting part comes next.`);
+      await send(first_name ? `Hey ${first_name}, welcome to Co.` : `Hey, welcome to Co.`);
     }
 
     if (welcome_back) {

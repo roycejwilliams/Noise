@@ -1077,21 +1077,26 @@ export function createWebhooksRouter(io: Server): express.Router {
             return res.status(200).send({ received: true, duplicate: true });
           }
 
-          // First inbound text — satisfies text-in-first. Same three-message
-          // onboarding production's self-serve registration sends (see
-          // api/src/routes/sendblue.ts's contact_verified branch) — welcome,
-          // then what CoPatible is (with the vCard, if CO_VCARD_URL is set),
-          // then the code — reusing sendSMS directly rather than a flat custom
-          // string, so this is genuinely Co's voice/copy, not a placeholder.
-          // sendSMS catches its own errors internally (never throws), matching
-          // every other Sendblue send in this codebase: a delivery failure must
-          // never surface as a 4xx/5xx to Sendblue's own webhook or crash this
-          // request. Deliberately does NOT return after these three — without
-          // that, someone's first-ever message to Co dead-ended on a
-          // verification code, and they had to text again before getting
-          // anything that felt like actually meeting Co. Falls through into
-          // the rest of this handler instead, so Co's real reply goes out
+          // First inbound text — satisfies text-in-first. Greet (by name),
+          // then the announcement, then the contact-save ask (with the
+          // vCard, if CO_VCARD_URL is set), then the verification code —
+          // reusing sendSMS directly rather than a flat custom string, so
+          // this is genuinely Co's voice/copy, not a placeholder. sendSMS
+          // catches its own errors internally (never throws), matching
+          // every other Sendblue send in this codebase: a delivery failure
+          // must never surface as a 4xx/5xx to Sendblue's own webhook or
+          // crash this request. Deliberately does NOT return after these —
+          // without that, someone's first-ever message to Co dead-ended on
+          // the onboarding sequence, and they had to text again before
+          // getting anything that felt like actually meeting Co. Falls
+          // through into the rest of this handler instead, so Co's real
+          // reply — reacting to whatever they actually said — goes out
           // right after, on this same first message.
+          // Captured before the block below flips it — used later to tell
+          // the reply-generation prompt this is the very first exchange, not
+          // just another turn in an ongoing one.
+          const isFirstContact = !user.contact_verified;
+
           if (!user.contact_verified) {
             const otp = randomInt(100000, 1000000);
             await pool.query(
@@ -1099,19 +1104,27 @@ export function createWebhooksRouter(io: Server): express.Router {
               [user.id, otp],
             );
             user.contact_verified = true;
-            // Paced, not fired all at once — three back-to-back sends with no
-            // gap arrive as a stacked wall of texts on the recipient's end even
+            // Paced, not fired all at once — back-to-back sends with no gap
+            // arrive as a stacked wall of texts on the recipient's end even
             // though each individual message is legitimate content.
-            await sendSMS({ phone_number: number, welcome: true });
+            await sendSMS({ phone_number: number, welcome: true, first_name: user.first_name });
             await pause(2500);
             await sendSMS({ phone_number: number, intro: true });
+            await pause(2500);
+            await sendSMS({ phone_number: number, save_contact: true });
             await pause(2500);
             await sendSMS({
               phone_number: number,
               otp_code: otp.toString(),
               register: true,
             });
-            await pause(2500);
+            // Longer than the 2.5s between the four onboarding messages —
+            // those are quick informational bursts, but this is the hinge
+            // into Co's own first real message. Someone needs a beat to
+            // actually process what just landed (four texts, possibly
+            // tapping to save the contact card) before the real
+            // conversation opener shows up too.
+            await pause(5000);
           }
 
           // Moderator-by-text — the Circles pipeline test's confirmed decision
@@ -1953,7 +1966,7 @@ Recent text conversation, in order:
 ${recentConversation || "(start of the text conversation)"}
 
 ${user.first_name} just said: "${content}"
-${recommendationContext}${venueContext}${callOfferContext}${closingContext}
+${isFirstContact ? `\nThis is the very start of your first real conversation with ${user.first_name} — they just finished the intro sequence above (greeting, what CoPatible is, saving your contact, verification). What they just said may be nothing more than a greeting from tapping "message Co to start," not real content to react to. If it IS something real, pick up from it genuinely. If it's just a greeting or blank, don't react to it as if it were substantive — instead open the real conversation yourself, the same way you would at the start of a call: warm, unhurried, inviting the real version of their life, not a status update.\n` : ""}${recommendationContext}${venueContext}${callOfferContext}${closingContext}
 ${styleHint}
 Ground everything ONLY in the information above and what has actually been said in this conversation — never state or imply a specific personal detail, preference, or fact about them that isn't listed above or wasn't actually said in this thread. This includes real venues and businesses: never name a specific one unless it's given to you above as something you actually found — if you don't have a real one, describe what you'd look for, don't guess a plausible-sounding name. If you don't have something, ask rather than assume.
 
