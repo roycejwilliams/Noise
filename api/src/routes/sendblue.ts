@@ -303,8 +303,15 @@ export function sendblueRouter(io: Server): Router {
         // Our Sendblue plan only allows replying to contacts who've texted in
         // first, so the OTP couldn't be sent at registration time. This is
         // that first inbound text — mark verified and send the OTP now as a
-        // reply, which the plan permits. Nothing else in this handler applies
-        // to a user who hasn't completed signup yet, so return early.
+        // reply, which the plan permits. Deliberately does NOT return early:
+        // without this, someone's very first text back from Co was just a
+        // bare verification code, and they had to send a second message
+        // before getting anything that felt like actually meeting Co. Falls
+        // through into the rest of this handler instead, so the OTP and
+        // Co's real reply go out as two texts back to back on this same
+        // first message. Nothing later in this file re-checks
+        // contact_verified, so it's safe to keep going — updated in-memory
+        // too in case that ever changes.
         if (!user.contact_verified) {
           const otp = randomInt(100000, 1000000);
           const expiryTimeStamp = new Date(Date.now() + 300000).toISOString();
@@ -313,14 +320,13 @@ export function sendblueRouter(io: Server): Router {
             `UPDATE users SET contact_verified = true, otp_code = $2, otp_expiry = $3 WHERE id = $1`,
             [user.id, otp, expiryTimeStamp],
           );
+          user.contact_verified = true;
 
           await sendSMS({
             phone_number: user.phone_number,
             otp_code: otp.toString(),
             register: true,
           });
-
-          return res.status(200).send({ received: true, action: "contact_verified" });
         }
 
         // Step 2 — Detect if inbound is a voice memo; if so, transcribe it
