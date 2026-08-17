@@ -11,7 +11,7 @@ import { buildContextSummary } from "../services/callContext.js";
 import { generateEmbedding, generateGoalEmbedding } from "../services/embeddings.js";
 import { findBestCircle, findBestCircleWithScore, min_group_score } from "../services/matching.js";
 import { findBestVenue } from "../services/places.js";
-import { activateCircle, notifyModeratorOfPendingCircle } from "../services/circleApproval.js";
+import { activateCircle, CIRCLE_FACILITATION_ENABLED, notifyModeratorOfPendingCircle } from "../services/circleApproval.js";
 import { LOW_CONFIDENCE_VENUE_FIT_SCORE, requestVenueApprovalFromModerator } from "../services/booking.js";
 import { generateCandidateWindows, type CandidateWindow } from "../services/scheduling.js";
 import {
@@ -728,6 +728,18 @@ router.post(
         return res.status(200).send({
           success: false,
           message: "User is already in an active circle.",
+        });
+      }
+
+      // Circle formation/facilitation — off for now. See
+      // circleApproval.ts's CIRCLE_FACILITATION_ENABLED; the algorithm below
+      // is untouched and ready to re-enable, just not run while the density
+      // build (Stages 1/2/3/5/6) is what's being proven right now.
+      if (!CIRCLE_FACILITATION_ENABLED) {
+        return res.status(200).send({
+          success: false,
+          circle_placement_paused: true,
+          message: "Circle placement is paused right now — Co is still building context.",
         });
       }
 

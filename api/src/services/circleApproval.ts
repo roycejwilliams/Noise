@@ -12,6 +12,17 @@ import { generateCircleTitle, generateWarmCircleInviteMessage } from "./circleIn
 import { generateEmbedding } from "./embeddings.js";
 import sendblue from "./sendblue.js";
 
+// Circle formation/facilitation — off for now. The Co Loop density-phase
+// build (context capture, network-wide relevance scoring, follow-up,
+// resolution tracking — see relevance.ts, matching.ts's scoreAgainstStatedAsk)
+// is proven and live; actually forming circles from that data is not, so
+// this stays paused until the direction is validated. Checked at every live
+// call site that starts a NEW circle match (this file's attemptCircleRematch,
+// and co.ts's POST /co/place) — algorithm itself is untouched and ready to
+// re-enable, just not run right now. Same flag/reasoning as co-test's
+// circleFacilitation.ts.
+export const CIRCLE_FACILITATION_ENABLED = false;
+
 // Deterministic, not LLM-generated — this feeds a real approve/reject
 // decision, so it should say only what's actually true of the group, never
 // a plausible-sounding guess.
@@ -142,7 +153,12 @@ export async function attemptCircleRematch(params: {
       .catch((err) => console.error("Memory embedding failed (non-fatal):", err));
   }
 
-  const newMatchResult = await findBestCircleWithScore(ownerId, excludeMemberIds);
+  // Circle facilitation is off for now — falls through to the existing
+  // "no alternative match found" Moderator notice below, same as a genuine
+  // no-match result always has.
+  const newMatchResult = CIRCLE_FACILITATION_ENABLED
+    ? await findBestCircleWithScore(ownerId, excludeMemberIds)
+    : null;
   const newGroupIds = newMatchResult?.userIds ?? null;
 
   if (!newGroupIds || newGroupIds.length < 4) {
