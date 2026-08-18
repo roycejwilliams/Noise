@@ -9,10 +9,11 @@ import { RAPPORT_TOPICS, RAPPORT_TOPIC_DESCRIPTIONS, getProfileCompletenessPerce
 // service already owns, so there's no separate credential or cross-
 // environment connection to manage.
 //
-// Answers four questions the Co Loop density build (Stages 1/3/5/6) was
+// Answers five questions the Co Loop density build (Stages 1/2/3/5/6) was
 // built to eventually answer, per the density-first strategy: is the
 // network worth anything yet, is the relevance scoring finding anything
-// real, is anyone engaging with follow-up, and where is context still thin.
+// real, is anyone engaging with follow-up, where is context still thin, and
+// is the network actually growing anywhere in particular.
 export function createDensityReportRouter(): Router {
   const router = Router();
 
@@ -22,13 +23,36 @@ export function createDensityReportRouter(): Router {
       return res.status(401).send("Unauthorized");
     }
 
-    const [profilesResult, edgesResult, checkinsResult] = await Promise.all([
-      pool.query(`SELECT topics_covered FROM co_profiles`),
-      pool.query(
-        `SELECT match_score, mutual, ask_text FROM relevance_edges WHERE status = 'open' ORDER BY match_score DESC NULLS LAST`,
-      ),
-      pool.query(`SELECT checkin_count, responded_count, resolved_at FROM ask_checkins`),
-    ]);
+    const [profilesResult, edgesResult, checkinsResult, weeklyProfilesResult, weeklyEdgesResult, cityResult] =
+      await Promise.all([
+        pool.query(`SELECT topics_covered FROM co_profiles`),
+        pool.query(
+          `SELECT match_score, mutual, ask_text FROM relevance_edges WHERE status = 'open' ORDER BY match_score DESC NULLS LAST`,
+        ),
+        pool.query(`SELECT checkin_count, responded_count, resolved_at FROM ask_checkins`),
+        // Last 8 weeks — cheap enough to compute from raw timestamps directly
+        // (no snapshot table needed) since co_profiles is small at this stage;
+        // revisit if this table grows large enough to make the scan costly.
+        pool.query(
+          `SELECT date_trunc('week', created_at) AS week, count(*)::int AS count
+           FROM co_profiles WHERE created_at > NOW() - INTERVAL '8 weeks'
+           GROUP BY week ORDER BY week`,
+        ),
+        pool.query(
+          `SELECT date_trunc('week', created_at) AS week, count(*)::int AS count
+           FROM relevance_edges WHERE created_at > NOW() - INTERVAL '8 weeks'
+           GROUP BY week ORDER BY week`,
+        ),
+        // Closest thing to a real "cluster" signal available without a
+        // separate embedding-clustering pass — city is already a hard
+        // eligibility filter elsewhere (matching.ts's findBestCircleWithScore),
+        // so a concentration here is also a concentration of who could
+        // eventually be placed together, not just a vanity breakdown.
+        pool.query(
+          `SELECT city, count(*)::int AS count FROM co_profiles
+           WHERE city IS NOT NULL AND city != '' GROUP BY city ORDER BY count DESC LIMIT 15`,
+        ),
+      ]);
 
     // Section 1 — network health
     const totalProfiles = profilesResult.rows.length;
@@ -75,7 +99,18 @@ export function createDensityReportRouter(): Router {
       coveredPct: totalProfiles ? Math.round((topicCounts[t] / totalProfiles) * 100) : 0,
     })).sort((a, b) => a.coveredPct - b.coveredPct);
 
+    // Section 5 — growth & city clusters
+    const fmtWeek = (d: Date) => new Date(d).toLocaleDateString("en-US", { month: "short", day: "numeric" });
+    const weeklyProfiles = weeklyProfilesResult.rows.map((r: any) => ({ week: fmtWeek(r.week), count: r.count }));
+    const weeklyEdges = weeklyEdgesResult.rows.map((r: any) => ({ week: fmtWeek(r.week), count: r.count }));
+    const maxWeeklyProfiles = Math.max(1, ...weeklyProfiles.map((r) => r.count));
+    const maxWeeklyEdges = Math.max(1, ...weeklyEdges.map((r) => r.count));
+    const cityRows = cityResult.rows as { city: string; count: number }[];
+    const maxCityCount = Math.max(1, ...cityRows.map((r) => r.count));
+
     const row2 = (cells: (string | number)[]) => `<tr>${cells.map((c) => `<td>${c}</td>`).join("")}</tr>`;
+    const barRow = (label: string, count: number, max: number) =>
+      `<div class="bar-row"><div class="bar-label">${label}</div><div class="bar-track"><div class="bar-fill" style="width:${Math.round((count / max) * 100)}%"></div></div><div class="bar-count">${count}</div></div>`;
 
     const html = `<!doctype html>
 <html>
@@ -92,6 +127,11 @@ export function createDensityReportRouter(): Router {
   .stat-label { color: #666; font-size: 0.85rem; }
   .stat-row { display: flex; gap: 2rem; margin-top: 0.75rem; }
   .muted { color: #888; font-size: 0.85rem; }
+  .bar-row { display: flex; align-items: center; gap: 8px; margin-top: 6px; font-size: 0.85rem; }
+  .bar-label { width: 110px; flex-shrink: 0; color: #444; }
+  .bar-track { flex: 1; background: #f0f0f0; border-radius: 3px; height: 14px; overflow: hidden; }
+  .bar-fill { background: #4a7dfc; height: 100%; }
+  .bar-count { width: 32px; text-align: right; color: #666; flex-shrink: 0; }
 </style>
 </head>
 <body>
@@ -131,6 +171,12 @@ ${topAsks.length ? `<p class="muted" style="margin-top:1rem;">Asks behind the st
 <tr><th>Topic</th><th>Covered</th><th>%</th></tr>
 ${topicRows.map((r) => row2([`${r.topic} — ${r.description}`, `${r.coveredCount} / ${totalProfiles}`, `${r.coveredPct}%`])).join("")}
 </table>
+
+<h2>5. Growth &amp; city clusters</h2>
+<p class="muted">New profiles and relevance edges by week, last 8 weeks.</p>
+${weeklyProfiles.length ? `<p class="muted" style="margin-top:1rem;">New profiles</p>${weeklyProfiles.map((r) => barRow(r.week, r.count, maxWeeklyProfiles)).join("")}` : `<p class="muted">No profiles created in the last 8 weeks.</p>`}
+${weeklyEdges.length ? `<p class="muted" style="margin-top:1rem;">New relevance edges</p>${weeklyEdges.map((r) => barRow(r.week, r.count, maxWeeklyEdges)).join("")}` : `<p class="muted">No relevance edges logged in the last 8 weeks.</p>`}
+${cityRows.length ? `<p class="muted" style="margin-top:1rem;">Profiles by city — the closest thing to a real cluster signal without a separate embedding pass; a concentration here is also a concentration of who could eventually be placed together.</p>${cityRows.map((r) => barRow(r.city, r.count, maxCityCount)).join("")}` : `<p class="muted">No city on file for any profile yet.</p>`}
 
 </body>
 </html>`;
