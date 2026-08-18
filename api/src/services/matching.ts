@@ -297,6 +297,20 @@ function getActiveAsk(intent: unknown): StatedIntent | null {
   return active.length ? active[active.length - 1] : null;
 }
 
+// Mirror of getActiveSeekingAsk for the reverse direction — "I have
+// something to offer, who in the network wants it?" (relevance.ts's
+// sweepOfferingAgainstNetwork). Without this, an "offering" ask only ever
+// gets surfaced as a side-effect of someone ELSE's seeking sweep finding the
+// offerer as a candidate — it never proactively searches for the people who
+// might actually want it.
+function getActiveOfferingAsk(intent: unknown): StatedIntent | null {
+  if (!Array.isArray(intent)) return null;
+  const offering = (intent as StatedIntent[]).filter(
+    (i) => i?.status === "active" && i?.type === "offering" && i?.text,
+  );
+  return offering.length ? offering[offering.length - 1] : null;
+}
+
 // Pulls each candidate's top 3 semantically relevant stored memories (call
 // transcripts, text exchanges, etc.) against the ask's embedding — this is
 // what lets a fact like "worked at Google" surface even though nothing in
@@ -360,19 +374,16 @@ type ScorableCandidate = {
 // Deliberately generic: judges whatever's actually on file rather than any
 // fixed set of attributes, so it works the same whether the ask is about a
 // career background, a hobby, or a life circumstance.
-export async function scoreAgainstStatedAsk<T extends ScorableCandidate>(
-  ask: StatedIntent,
+async function buildCandidateDigest<T extends ScorableCandidate>(
   candidates: T[],
-  askerContext?: string,
-): Promise<AskScore<T>[]> {
-  if (!candidates.length || !ask.text) return [];
-
+  askEmbedding?: number[] | null,
+): Promise<string> {
   const memoryByUser =
-    ask.embedding && ask.embedding.length
-      ? await fetchTopMemoriesPerCandidate(candidates.map((c) => c.user_id), ask.embedding)
+    askEmbedding && askEmbedding.length
+      ? await fetchTopMemoriesPerCandidate(candidates.map((c) => c.user_id), askEmbedding)
       : new Map<string, string[]>();
 
-  const digest = candidates
+  return candidates
     .map((c, i) => {
       const facts = [...(c.goals ?? []), ...(c.blockers ?? []), ...(c.activity_preferences ?? [])];
       const memories = memoryByUser.get(c.user_id) ?? [];
@@ -385,24 +396,21 @@ export async function scoreAgainstStatedAsk<T extends ScorableCandidate>(
       return `${i}. ${parts.length ? parts.join(" | ") : "(nothing on file)"}`;
     })
     .join("\n");
+}
 
+// Shared prompt-call/parse logic for both scoring directions below — only
+// the prompt text itself actually differs between "who satisfies my ask"
+// and "who wants my offering".
+async function runAskScoring<T extends ScorableCandidate>(
+  functionId: string,
+  prompt: string,
+  candidates: T[],
+): Promise<AskScore<T>[]> {
   try {
     const { text: raw } = await generateText({
       model: anthropic("claude-haiku-4-5-20251001"),
-      experimental_telemetry: { isEnabled: true, functionId: "matching.scoreAgainstStatedAsk" },
-      prompt: `Someone wants to be connected with people who match this: "${ask.text}"
-${askerContext ? `\nWhat's known about the person asking (use ONLY to judge "mutual" below, never to inflate the score itself): ${askerContext}\n` : ""}
-Here is what's known about each candidate, one per line:
-${digest}
-
-For each candidate, judge how well they satisfy the ask, based only on what's listed — never assume or infer facts that aren't present.
-
-Return ONLY valid JSON, no preamble:
-{"results": [{"index": 0, "score": 0, "reason": "one short grounded sentence", "mutual": false}, ...]}
-
-score: 0-100. 0 means nothing on file supports it, 100 means they clearly satisfy it. Score every candidate, even a 0.
-reason: one short sentence explaining the score, referencing only what's actually listed for that candidate.
-mutual: true only if the candidate's own stated ask/offering (if listed) also plausibly points back at what's known about the asker above. false if the candidate has no stated ask/offering listed, or it doesn't plausibly connect.`,
+      experimental_telemetry: { isEnabled: true, functionId },
+      prompt,
     });
 
     const clean = raw.replace(/```json|```/g, "").trim();
@@ -420,9 +428,67 @@ mutual: true only if the candidate's own stated ask/offering (if listed) also pl
     // Fail closed — an explicit stated requirement that we can't verify is
     // treated as unmet, same as any other hard filter falling short, rather
     // than silently ignoring what the person asked for.
-    console.error("scoreAgainstStatedAsk failed, treating as no matches (non-fatal):", err);
+    console.error(`${functionId} failed, treating as no matches (non-fatal):`, err);
     return [];
   }
+}
+
+export async function scoreAgainstStatedAsk<T extends ScorableCandidate>(
+  ask: StatedIntent,
+  candidates: T[],
+  askerContext?: string,
+): Promise<AskScore<T>[]> {
+  if (!candidates.length || !ask.text) return [];
+
+  const digest = await buildCandidateDigest(candidates, ask.embedding);
+
+  const prompt = `Someone wants to be connected with people who match this: "${ask.text}"
+${askerContext ? `\nWhat's known about the person asking (use ONLY to judge "mutual" below, never to inflate the score itself): ${askerContext}\n` : ""}
+Here is what's known about each candidate, one per line:
+${digest}
+
+For each candidate, judge how well they satisfy the ask, based only on what's listed — never assume or infer facts that aren't present.
+
+Return ONLY valid JSON, no preamble:
+{"results": [{"index": 0, "score": 0, "reason": "one short grounded sentence", "mutual": false}, ...]}
+
+score: 0-100. 0 means nothing on file supports it, 100 means they clearly satisfy it. Score every candidate, even a 0.
+reason: one short sentence explaining the score, referencing only what's actually listed for that candidate.
+mutual: true only if the candidate's own stated ask/offering (if listed) also plausibly points back at what's known about the asker above. false if the candidate has no stated ask/offering listed, or it doesn't plausibly connect.`;
+
+  return runAskScoring("matching.scoreAgainstStatedAsk", prompt, candidates);
+}
+
+// Reverse direction of scoreAgainstStatedAsk — "I have something to offer,
+// who in the network would actually want it?" Without this, an "offering"
+// ask never gets proactively matched to anyone; it only ever surfaces as a
+// side-effect of someone ELSE's seeking ask happening to find the offerer as
+// a candidate. mutual here means the reverse of scoreAgainstStatedAsk's:
+// true only when the candidate's own stated ask is a "seeking" that
+// plausibly wants this specific offering.
+export async function scoreOfferingAgainstCandidates<T extends ScorableCandidate>(
+  offering: StatedIntent,
+  candidates: T[],
+): Promise<AskScore<T>[]> {
+  if (!candidates.length || !offering.text) return [];
+
+  const digest = await buildCandidateDigest(candidates, offering.embedding);
+
+  const prompt = `Someone has this to offer others: "${offering.text}"
+
+Here is what's known about each candidate, one per line:
+${digest}
+
+For each candidate, judge how much they would likely want or benefit from this offering, based only on what's listed — never assume or infer facts that aren't present.
+
+Return ONLY valid JSON, no preamble:
+{"results": [{"index": 0, "score": 0, "reason": "one short grounded sentence", "mutual": false}, ...]}
+
+score: 0-100. 0 means nothing on file suggests they'd want this, 100 means it clearly matches something they're after. Score every candidate, even a 0.
+reason: one short sentence explaining the score, referencing only what's actually listed for that candidate.
+mutual: true only if the candidate's own stated ask (if listed) is a "seeking" ask that plausibly wants this specific offering. false if the candidate has no stated ask listed, or it doesn't plausibly connect.`;
+
+  return runAskScoring("matching.scoreOfferingAgainstCandidates", prompt, candidates);
 }
 
 // Co Loop Stage 4 — circle formation. Pulls each candidate's single most
@@ -685,6 +751,7 @@ export {
   filterByStatedAsk,
   findBestCircle,
   findBestCircleWithScore,
+  getActiveOfferingAsk,
   getActiveSeekingAsk,
   goalAlignmentScore,
   groupCompatibilityScore,

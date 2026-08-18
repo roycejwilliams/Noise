@@ -1,5 +1,5 @@
 import pool from "../db/db.js";
-import { getActiveSeekingAsk, scoreAgainstStatedAsk } from "./matching.js";
+import { getActiveOfferingAsk, getActiveSeekingAsk, scoreAgainstStatedAsk, scoreOfferingAgainstCandidates } from "./matching.js";
 
 // Co Loop Stage 3 — "identify relevance." Runs scoreAgainstStatedAsk
 // standalone against the whole network — no eligibility gating of any kind,
@@ -125,18 +125,56 @@ export async function sweepAskAgainstNetwork(userId: string): Promise<void> {
   }
 }
 
+// Reverse direction of sweepAskAgainstNetwork: "I have something to offer —
+// who in the network would actually want it?" Without this, an "offering"
+// ask never gets proactively matched to anyone; it only ever shows up as a
+// side-effect of someone ELSE's seeking sweep finding the offerer as a
+// candidate. Structurally a mirror of sweepAskAgainstNetwork: same prefilter,
+// same relevance_edges log, just person_id/candidate_id reversed — the edge
+// is logged from the OFFERER's side (person_id = offerer, candidate_id =
+// the person who'd likely want it), same as every other relevance_edges row
+// is logged from the ask-holder's side.
+export async function sweepOfferingAgainstNetwork(userId: string): Promise<void> {
+  const { rows } = await pool.query(
+    `SELECT intent, goals, blockers, long_term_direction FROM co_profiles WHERE user_id = $1`,
+    [userId],
+  );
+  const profile = rows[0];
+  const offering = getActiveOfferingAsk(profile?.intent);
+  if (!offering?.id || !offering.text || !offering.embedding?.length) return;
+
+  try {
+    const candidates = await prefilterCandidates(userId, offering.embedding);
+    if (!candidates.length) return;
+
+    const scored = await scoreOfferingAgainstCandidates(offering, candidates);
+    await logRelevanceEdges(
+      userId,
+      offering.id,
+      offering.text,
+      scored.map((s) => ({ user_id: s.candidate.user_id, score: s.score, reason: s.reason, mutual: s.mutual })),
+    );
+  } catch (err) {
+    console.error(`sweepOfferingAgainstNetwork failed for user ${userId} (non-fatal):`, err);
+  }
+}
+
 // Direction: "the network just changed — re-check every open ask against
 // it." Re-running an existing ask is cheap and safe (logRelevanceEdges
 // de-dupes/refreshes open rows), so this is what actually surfaces a new
 // joiner to everyone who already has a standing ask, without needing a
 // separate reverse-search path keyed off the joiner instead of the asker.
-// Run daily, not per-event — see jobs/index.ts — since looping every open
-// ask through an LLM call on every single profile update would scale badly.
+// Covers both directions — a standing "seeking" ask re-checked against new
+// candidates, and a standing "offering" re-checked for new people who might
+// want it. Run daily, not per-event — see jobs/index.ts — since looping
+// every open ask through an LLM call on every single profile update would
+// scale badly.
 export async function sweepAllOpenAsks(): Promise<void> {
   const { rows } = await pool.query(
     `SELECT DISTINCT user_id FROM co_profiles WHERE intent IS NOT NULL AND jsonb_array_length(intent) > 0`,
   );
   for (const row of rows) {
     await sweepAskAgainstNetwork(row.user_id);
+    await sweepOfferingAgainstNetwork(row.user_id);
   }
 }
