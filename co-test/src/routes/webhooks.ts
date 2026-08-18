@@ -1937,6 +1937,12 @@ Return ONLY valid JSON, no preamble: {"wants_venue": true or false, "venue_type"
               coverageSoFar,
               profileContext ?? undefined,
             );
+            // Same gap as handleToolCall's call-channel version had — this
+            // assessment was only ever used to shape the reply below, never
+            // persisted to co_profiles.topics_covered. Confirmed missing the
+            // same way: a real text exchange correctly worked new ground,
+            // but topics_covered stayed empty in the DB afterward.
+            persistCoveredTopics(user.id, coverage);
             const missingTopicsContext =
               coverage.missing_topics.length && !coverage.ready_to_summarize
                 ? `\nStill missing from what you know about them: ${coverage.missing_topics.map((t) => RAPPORT_TOPIC_DESCRIPTIONS[t]).join("; ")}. If it fits naturally off what they just said, work ONE of these in as a genuine follow-up question — not a survey, and don't force it if the conversation is clearly headed somewhere else right now.\n`
@@ -1981,10 +1987,18 @@ Ground everything ONLY in the information above and what has actually been said 
 Keep THIS reply short — one text-message-length turn, not a call-length response. A sentence or two. No exclamation points, no em dashes. This is a text message, not a paragraph — but if you're relaying a real find (a name, a reason, a link), give it the room it actually needs rather than cutting it short.`,
                 }),
             );
+            // Every prompt in this codebase says "no em dashes," but the
+            // model still produces one occasionally (confirmed in a real
+            // reply: "I actually talked to you — I know what you need").
+            // Prompt-following alone isn't reliable enough for a rule this
+            // consistently stated, so this is a hard guarantee instead of
+            // hoping the instruction sticks every time.
+            const sanitizedReply = reply.replace(/\s*—\s*/g, ", ");
+
             // A genuinely long reply gets sent as two natural texts (a real
             // pause between them) instead of being hard-truncated and silently
             // losing whatever didn't fit — see splitIntoMessages.
-            const replyParts = splitIntoMessages(reply);
+            const replyParts = splitIntoMessages(sanitizedReply);
             cappedReply = replyParts.join(" ");
 
             for (let i = 0; i < replyParts.length; i++) {
