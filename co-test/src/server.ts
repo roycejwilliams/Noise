@@ -21,6 +21,7 @@ import loginRouter from "./routes/login.js";
 import phoneRouter from "./routes/phone.js";
 import { createWebhooksRouter } from "./routes/webhooks.js";
 import { registerPostCallFollowUpJob } from "./jobs/postCallFollowUpJob.js";
+import { registerScheduledCallJob } from "./jobs/scheduledCallJob.js";
 import { requireTesterLoginApi, requireTesterLoginPage } from "./middleware/requireTesterLogin.js";
 import { bridgeTwilioMediaStream } from "./services/mediaStreamBridge.js";
 
@@ -44,6 +45,7 @@ async function main() {
   runMigrations();
   runTestMigrations();
   registerPostCallFollowUpJob();
+  registerScheduledCallJob();
 
   const app = express();
   // Hume's webhook signature is an HMAC over the exact raw body string, so

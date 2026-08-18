@@ -226,4 +226,32 @@ export function runTestMigrations() {
   pool
     .query(`CREATE INDEX IF NOT EXISTS idx_users_login_session_token ON users (login_session_token)`)
     .catch((err: Error) => console.error("idx_users_login_session_token migration failed:", err));
+
+  // Someone asking for a call at a specific future time, not right now —
+  // distinct from the existing explicit_request/would_benefit call-offer
+  // flow, which only ever places a call immediately. scheduled_for is the
+  // resolved absolute UTC instant to actually place the call (converted at
+  // capture time via the stated local date/time + IANA timezone, not
+  // resolved again later — DST doesn't shift an already-resolved UTC
+  // instant). timezone/requested_text are kept for confirmation copy and
+  // debugging a bad resolution, not re-parsed at call time.
+  pool
+    .query(
+      `CREATE TABLE IF NOT EXISTS scheduled_calls (
+        id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+        user_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+        requested_text TEXT NOT NULL,
+        timezone TEXT NOT NULL,
+        scheduled_for TIMESTAMPTZ NOT NULL,
+        status TEXT NOT NULL DEFAULT 'pending' CHECK (status IN ('pending', 'processing', 'completed', 'failed', 'cancelled')),
+        call_sid TEXT,
+        created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+      )`,
+    )
+    .then(() =>
+      pool.query(
+        `CREATE INDEX IF NOT EXISTS idx_scheduled_calls_due ON scheduled_calls (scheduled_for) WHERE status = 'pending'`,
+      ),
+    )
+    .catch((err: Error) => console.error("scheduled_calls table/index init failed:", err));
 }

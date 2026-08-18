@@ -4,6 +4,7 @@ import { generateText } from "ai";
 import { createHmac, randomInt, timingSafeEqual } from "crypto";
 import express, { NextFunction, Request, Response } from "express";
 import { parsePhoneNumberFromString } from "libphonenumber-js";
+import { DateTime } from "luxon";
 import type { Server } from "socket.io";
 import twilio from "twilio";
 import pool from "../../../api/src/db/db.js";
@@ -1485,7 +1486,8 @@ export function createWebhooksRouter(io: Server): express.Router {
 Their message: "${content}"
 
 Classify as ONE of:
-- "explicit_request" — they are directly asking Co to call them, or asking to talk by phone
+- "explicit_request" — they are directly asking Co to call them RIGHT NOW, or asking to talk by phone with no specific future time attached
+- "schedule_request" — they want a call, but at a specific future date/time ("call me tomorrow at 3", "can we talk Thursday morning", "call me next week") — not right now
 ${hasPendingOffer ? '- "accepts_offer" — they are saying yes to the call Co just offered\n- "declines_offer" — they are saying no to the call Co just offered\n' : ""}- "would_benefit" — none of the above, but what they're describing is complex, emotional, or hard to unpack over short texts, and voice would genuinely help
 - "none" — normal conversation, no call is relevant${declinedTopicsContext}
 
@@ -1538,6 +1540,87 @@ Return ONLY the classification, nothing else.`,
           const shouldTriggerCall =
             callAction === "explicit_request" ||
             (hasPendingOffer && callAction === "accepts_offer");
+
+          // Schedule-a-call — a specific future time, not "call me now"
+          // (shouldTriggerCall above). Extracted as structured date/time/
+          // timezone rather than asking the model to do timezone math
+          // itself (unreliable) — luxon does the actual UTC conversion once
+          // all three pieces are present. Nothing gets scheduled on a
+          // partial extraction; the reply below asks for whatever's
+          // missing instead of guessing a timezone, which would silently
+          // call someone at the wrong time.
+          let scheduleCallContext = "";
+          if (callAction === "schedule_request") {
+            try {
+              const nowUtc = DateTime.now().toUTC();
+              const { text: rawSchedule } = await generateText({
+                model: anthropic("claude-haiku-4-5-20251001"),
+                experimental_telemetry: {
+                  isEnabled: true,
+                  functionId: "co-test.webhooks.scheduleCallExtract",
+                },
+                prompt: `A user just texted Co asking to schedule a call for later: "${content}"
+
+For resolving anything relative ("tomorrow", "next Tuesday"), the current UTC date/time is ${nowUtc.toFormat("cccc, LLLL d, yyyy 'at' HH:mm 'UTC'")}.
+
+Extract:
+- date: the requested date, as YYYY-MM-DD. null if not stated or genuinely ambiguous.
+- time: the requested time of day, as 24-hour HH:MM. null if not stated.
+- timezone: the IANA timezone name they stated or unambiguously implied (e.g. "America/New_York", "America/Los_Angeles", "America/Chicago", "America/Denver"). null if not stated and not clearly implied — never guess one.
+
+Return ONLY valid JSON, no preamble: {"date": "YYYY-MM-DD or null", "time": "HH:MM or null", "timezone": "IANA name or null"}`,
+              });
+
+              const clean = rawSchedule.replace(/```json|```/g, "").trim();
+              const parsed = JSON.parse(clean) as {
+                date: string | null;
+                time: string | null;
+                timezone: string | null;
+              };
+
+              if (parsed.date && parsed.time && parsed.timezone) {
+                const local = DateTime.fromISO(`${parsed.date}T${parsed.time}`, {
+                  zone: parsed.timezone,
+                });
+                if (local.isValid && local.toUTC() > DateTime.utc()) {
+                  // A new successfully-scheduled call supersedes any earlier
+                  // one still pending, rather than both eventually firing —
+                  // asking again means instead of, not also. Only cancels
+                  // 'pending' rows; one already claimed/'processing' by the
+                  // cron is left alone rather than raced.
+                  const superseded = await pool.query(
+                    `UPDATE scheduled_calls SET status = 'cancelled' WHERE user_id = $1 AND status = 'pending' RETURNING id`,
+                    [user.id],
+                  );
+                  await pool.query(
+                    `INSERT INTO scheduled_calls (user_id, requested_text, timezone, scheduled_for) VALUES ($1, $2, $3, $4)`,
+                    [user.id, content, parsed.timezone, local.toUTC().toISO()],
+                  );
+                  const formattedTime = local.toFormat("cccc, LLLL d 'at' h:mm a");
+                  scheduleCallContext = superseded.rows.length
+                    ? `\nThey just rescheduled — this replaces a call they'd already booked, now moved to ${formattedTime} (${parsed.timezone}). Confirm the NEW time back to them naturally, making clear this is a change from before, not a new addition. Do not place a call now, it's scheduled for later.`
+                    : `\nThey just successfully scheduled a call for ${formattedTime} (${parsed.timezone}) — confirm that back to them naturally, referencing the actual day and time so they know it landed correctly. Do not place a call now, it's scheduled for later.`;
+                } else {
+                  scheduleCallContext = `\nThey tried to schedule a call, but the time they gave (${parsed.date} ${parsed.time}, ${parsed.timezone}) is invalid or already in the past — let them know naturally and ask for a time that hasn't passed yet. Do not place a call now.`;
+                }
+              } else {
+                const missing = [
+                  !parsed.date && "the date",
+                  !parsed.time && "the time",
+                  !parsed.timezone && "their timezone",
+                ]
+                  .filter(Boolean)
+                  .join(" and ");
+                scheduleCallContext = `\nThey want to schedule a call for later but haven't given ${missing} yet — ask for exactly that, specifically. Never guess or assume a timezone. Do not place a call now.`;
+              }
+            } catch (err: any) {
+              console.error(
+                "webhooks: schedule_request extraction failed (non-fatal):",
+                err?.message ?? err,
+              );
+              scheduleCallContext = `\nThey want to schedule a call for a specific time but something went wrong figuring out when — ask them to state the day, time, and their timezone clearly. Do not place a call now.`;
+            }
+          }
 
           // Burst limiter — separate from, and in addition to, the topic-aware
           // suppression above. Topic-matching only stops Co re-offering about the
@@ -1980,7 +2063,7 @@ Recent text conversation, in order:
 ${recentConversation || "(start of the text conversation)"}
 
 ${user.first_name} just said: "${content}"
-${isFirstContact ? `\nThis is the very start of your first real conversation with ${user.first_name} — they just finished the intro sequence above (greeting, what CoPatible is, saving your contact, verification). What they just said may be nothing more than a greeting from tapping "message Co to start," not real content to react to. If it IS something real, pick up from it genuinely. If it's just a greeting or blank, don't react to it as if it were substantive — instead open the real conversation yourself, the same way you would at the start of a call: warm, unhurried, inviting the real version of their life, not a status update.\n` : ""}${recommendationContext}${venueContext}${callOfferContext}${closingContext}
+${isFirstContact ? `\nThis is the very start of your first real conversation with ${user.first_name} — they just finished the intro sequence above (greeting, what CoPatible is, saving your contact, verification). What they just said may be nothing more than a greeting from tapping "message Co to start," not real content to react to. If it IS something real, pick up from it genuinely. If it's just a greeting or blank, don't react to it as if it were substantive — instead open the real conversation yourself, the same way you would at the start of a call: warm, unhurried, inviting the real version of their life, not a status update.\n` : ""}${recommendationContext}${venueContext}${callOfferContext}${scheduleCallContext}${closingContext}
 ${styleHint}
 Ground everything ONLY in the information above and what has actually been said in this conversation — never state or imply a specific personal detail, preference, or fact about them that isn't listed above or wasn't actually said in this thread. This includes real venues and businesses: never name a specific one unless it's given to you above as something you actually found — if you don't have a real one, describe what you'd look for, don't guess a plausible-sounding name. If you don't have something, ask rather than assume.
 
