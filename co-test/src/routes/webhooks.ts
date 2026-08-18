@@ -12,6 +12,7 @@ import {
   assessConversationCoverage,
   captureIntent,
   extractPsychographicProfile,
+  persistCoveredTopics,
   RAPPORT_TOPIC_DESCRIPTIONS,
   RAPPORT_TOPICS,
   storeProfile,
@@ -470,6 +471,13 @@ async function handleToolCall(
       transcript,
       priorContext,
     );
+    // Persists to co_profiles.topics_covered — the same store the text
+    // channel's coverage nudge and the Stage 5 check-in cron read, so a
+    // topic confirmed on a call is remembered there too. This was computed
+    // and sent back to Hume already (right below) without ever being
+    // persisted — confirmed missing after a real call correctly asked
+    // through Rapport-phase topics but left topics_covered empty in the DB.
+    if (userId) persistCoveredTopics(userId, assessment);
     const latency_ms = Date.now() - start;
     await sendHumeToolResponse(
       chatId,
