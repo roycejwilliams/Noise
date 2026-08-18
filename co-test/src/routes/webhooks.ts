@@ -1488,6 +1488,7 @@ Their message: "${content}"
 Classify as ONE of:
 - "explicit_request" — they are directly asking Co to call them RIGHT NOW, or asking to talk by phone with no specific future time attached
 - "schedule_request" — they want a call, but at a specific future date/time ("call me tomorrow at 3", "can we talk Thursday morning", "call me next week") — not right now
+- "cancel_scheduled_call" — they want to cancel a call they'd previously scheduled, with no new time given ("actually never mind about that call", "can we skip the call Thursday")
 ${hasPendingOffer ? '- "accepts_offer" — they are saying yes to the call Co just offered\n- "declines_offer" — they are saying no to the call Co just offered\n' : ""}- "would_benefit" — none of the above, but what they're describing is complex, emotional, or hard to unpack over short texts, and voice would genuinely help
 - "none" — normal conversation, no call is relevant${declinedTopicsContext}
 
@@ -1619,6 +1620,26 @@ Return ONLY valid JSON, no preamble: {"date": "YYYY-MM-DD or null", "time": "HH:
                 err?.message ?? err,
               );
               scheduleCallContext = `\nThey want to schedule a call for a specific time but something went wrong figuring out when — ask them to state the day, time, and their timezone clearly. Do not place a call now.`;
+            }
+          } else if (callAction === "cancel_scheduled_call") {
+            // No new time to extract here — just clear whatever's pending.
+            // Only touches 'pending' rows, same reasoning as the supersede
+            // logic above: one already claimed/'processing' by the cron is
+            // left alone rather than raced with a cancel.
+            try {
+              const cancelled = await pool.query(
+                `UPDATE scheduled_calls SET status = 'cancelled' WHERE user_id = $1 AND status = 'pending' RETURNING id`,
+                [user.id],
+              );
+              scheduleCallContext = cancelled.rows.length
+                ? `\nThey just cancelled their scheduled call — confirm that naturally. Do not place a call now.`
+                : `\nThey're trying to cancel a scheduled call, but nothing is actually scheduled right now — let them know that naturally, there's nothing to cancel. Do not place a call now.`;
+            } catch (err: any) {
+              console.error(
+                "webhooks: cancel_scheduled_call failed (non-fatal):",
+                err?.message ?? err,
+              );
+              scheduleCallContext = `\nThey want to cancel a scheduled call but something went wrong doing that — let them know you'll sort it out. Do not place a call now.`;
             }
           }
 

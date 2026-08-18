@@ -254,4 +254,13 @@ export function runTestMigrations() {
       ),
     )
     .catch((err: Error) => console.error("scheduled_calls table/index init failed:", err));
+
+  // Heads-up text sent shortly before a scheduled call actually fires —
+  // separate timestamp from scheduled_calls.created_at so the reminder job
+  // can tell "already reminded" from "not due yet" without touching status
+  // (status still only ever means pending/processing/completed/failed/
+  // cancelled — a reminder having gone out doesn't change any of that).
+  pool
+    .query(`ALTER TABLE scheduled_calls ADD COLUMN IF NOT EXISTS reminder_sent_at TIMESTAMPTZ`)
+    .catch((err: Error) => console.error("scheduled_calls.reminder_sent_at migration failed:", err));
 }
