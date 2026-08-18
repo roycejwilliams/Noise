@@ -4,7 +4,7 @@ import { propagateAttributes } from "@langfuse/tracing";
 import crypto from "crypto";
 import pool from "../db/db.js";
 import { generateEmbedding, generateGoalEmbedding } from "./embeddings.js";
-import { sweepAskAgainstNetwork } from "./relevance.js";
+import { sweepAskAgainstNetwork, sweepOfferingAgainstNetwork } from "./relevance.js";
 
 // Shared by the Hume call webhook (co.ts /webhook), the typed-intake fallback
 // (co.ts /typed-intake/:user_id), and co-test's browser-EVI intake — all three
@@ -719,10 +719,16 @@ Transcript:
     // Co Loop Stage 3 — a fresh "seeking" ask is exactly what filterByStatedAsk
     // reasons over, so sweep it against the whole network immediately rather
     // than waiting for the next daily sweepAllOpenAsks run. Fire-and-forget,
-    // same as this function's own call sites treat captureIntent itself.
+    // same as this function's own call sites treat captureIntent itself. A
+    // fresh "offering" gets the mirrored reverse sweep — otherwise it would
+    // only ever surface as a side-effect of someone else's seeking sweep.
     if (ask?.type === "seeking") {
       sweepAskAgainstNetwork(user_id).catch((err) =>
         console.error("sweepAskAgainstNetwork failed (non-fatal):", err),
+      );
+    } else if (ask?.type === "offering") {
+      sweepOfferingAgainstNetwork(user_id).catch((err) =>
+        console.error("sweepOfferingAgainstNetwork failed (non-fatal):", err),
       );
     }
 
