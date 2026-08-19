@@ -1,0 +1,59 @@
+name: RAGAS production eval
+
+# Scheduled workflows only ever run the copy of this file that's on the
+# default branch (main) — see CLAUDE.md's git workflow. The eval code
+# itself intentionally stays off main and lives on the `evals` branch;
+# this job checks that branch out at run time rather than porting the
+# Python scripts onto main.
+on:
+  schedule:
+    - cron: "0 */6 * * *"
+  workflow_dispatch:
+    inputs:
+      limit:
+        description: "Max traces to score per script"
+        required: false
+        default: "20"
+
+jobs:
+  score:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: evals
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install dependencies
+        working-directory: evals
+        run: pip install -r requirements.txt
+
+      - name: Score faithfulness
+        working-directory: evals
+        env:
+          LANGFUSE_SECRET_KEY: ${{ secrets.LANGFUSE_SECRET_KEY }}
+          LANGFUSE_PUBLIC_KEY: ${{ secrets.LANGFUSE_PUBLIC_KEY }}
+          LANGFUSE_BASE_URL: ${{ secrets.LANGFUSE_BASE_URL }}
+          OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+        run: python eval_faithfulness.py --limit "${{ github.event.inputs.limit || '20' }}"
+
+      - name: Score answer relevancy
+        working-directory: evals
+        env:
+          LANGFUSE_SECRET_KEY: ${{ secrets.LANGFUSE_SECRET_KEY }}
+          LANGFUSE_PUBLIC_KEY: ${{ secrets.LANGFUSE_PUBLIC_KEY }}
+          LANGFUSE_BASE_URL: ${{ secrets.LANGFUSE_BASE_URL }}
+          OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+        run: python eval_answer_relevancy.py --limit "${{ github.event.inputs.limit || '20' }}"
+
+      - name: Score retrieval
+        working-directory: evals
+        env:
+          LANGFUSE_SECRET_KEY: ${{ secrets.LANGFUSE_SECRET_KEY }}
+          LANGFUSE_PUBLIC_KEY: ${{ secrets.LANGFUSE_PUBLIC_KEY }}
+          LANGFUSE_BASE_URL: ${{ secrets.LANGFUSE_BASE_URL }}
+          OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+        run: python eval_retrieval.py --limit "${{ github.event.inputs.limit || '10' }}"
