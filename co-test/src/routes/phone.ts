@@ -1,7 +1,5 @@
-import { randomInt } from "crypto";
 import express, { Request, Response, NextFunction } from "express";
 import pool from "../../../api/src/db/db.js";
-import { sendSMS } from "../../../api/src/otpActions.js";
 import { getLiveSnapshot, issueSocketToken } from "../services/liveCallState.js";
 import { triggerCall } from "../services/callTrigger.js";
 import { resetRealTestUser } from "../services/dynamicPlacementTest.js";
@@ -30,8 +28,9 @@ router.post("/reset", requireTesterLoginApi, async (_req: Request, res: Response
 
 // Every route below is the actual tester-facing tool — requires the
 // phone-verified tool-access login from routes/login.ts. This does not
-// change or replace phone.ts's own text-in-first/OTP flow below, which
-// tests production's real onboarding UX; it just gates who can reach it.
+// change or replace phone.ts's own text-in-first name/email intake flow
+// below, which tests production's real onboarding UX; it just gates who can
+// reach it.
 router.use(requireTesterLoginApi);
 
 // POST /api/phone/session — the tester is already logged in by the time this
@@ -43,11 +42,11 @@ router.use(requireTesterLoginApi);
 // text arrived. That claim could never actually fire in practice: the
 // webhook looks a user up by (phone_number, test_channel='phone') first, and
 // the login row already occupies that exact key — so every real inbound
-// text updated the login row's contact_verified/otp_verified, while this
-// route hands the browser a *different* row's id to poll, which never
-// changed. The status step-through on /phone would sit on "Waiting for
-// text-in" forever no matter how many texts actually arrived. Just reuse the
-// login row directly — it's the same identity.
+// text updated the login row's identity_captured, while this route hands
+// the browser a *different* row's id to poll, which never changed. The
+// status step-through on /phone would sit on "Waiting for text-in" forever
+// no matter how many texts actually arrived. Just reuse the login row
+// directly — it's the same identity.
 router.post("/session", async (req: Request, res: Response, next: NextFunction) => {
   try {
     const userId = (req as any).testerId as string;
@@ -65,7 +64,7 @@ router.post("/session", async (req: Request, res: Response, next: NextFunction) 
 });
 
 // GET /api/phone/:user_id/status — polled by the phone-test page through
-// every step: text-in-first, OTP verification, call state, and the smoke
+// every step: text-in-first (name/email intake), call state, and the smoke
 // test's own round-trip timestamps.
 //
 // recap_ready is its own explicit check (not inferred from call_status)
@@ -77,7 +76,7 @@ router.post("/session", async (req: Request, res: Response, next: NextFunction) 
 router.get("/:user_id/status", async (req: Request, res: Response, next: NextFunction) => {
   try {
     const result = await pool.query(
-      `SELECT u.contact_verified, u.otp_verified, u.call_sid, u.call_status, u.test_case,
+      `SELECT u.identity_captured, u.call_sid, u.call_status, u.test_case,
               u.smoke_test_tool_call_at, u.smoke_test_tool_response_at,
               EXISTS (
                 SELECT 1 FROM co_memories cm WHERE cm.user_id = u.id AND cm.memory_type = 'recap'
@@ -103,74 +102,6 @@ router.get("/:user_id/live-state", (req: Request, res: Response) => {
   return res.status(200).json({ success: true, ...snapshot });
 });
 
-// POST /api/phone/:user_id/verify-otp — validates the code Sendblue sent as
-// a reply once the tester texted in first (see webhooks.ts's /sendblue/webhook).
-// No JWT/session issued — co-test has no auth system — this just flips
-// otp_verified so the call-trigger route below can gate on it.
-router.post("/:user_id/verify-otp", async (req: Request, res: Response, next: NextFunction) => {
-  try {
-    const { otp_code } = req.body as { otp_code?: string };
-    if (!otp_code) return res.status(400).json({ success: false, error: "otp_code is required." });
-
-    // Lockout mirrors production's (api/src/routes/auth.ts) — without it,
-    // the 6-digit code has no attempt ceiling and someone who knows/guesses
-    // a user_id could brute-force in and trigger a real call to that
-    // tester's real phone via the otp_verified-gated /call route below.
-    const attemptsCheck = await pool.query(`SELECT otp_attempts FROM users WHERE id = $1`, [req.params.user_id]);
-    if (!attemptsCheck.rows[0]) return res.status(404).json({ success: false, error: "Session not found." });
-    if (attemptsCheck.rows[0].otp_attempts >= 5) {
-      return res.status(423).json({ success: false, error: "Too many incorrect attempts — request a new code." });
-    }
-
-    const result = await pool.query(
-      `SELECT id FROM users WHERE id = $1 AND otp_code = $2 AND otp_expiry > NOW()`,
-      [req.params.user_id, otp_code],
-    );
-
-    if (!result.rows[0]) {
-      await pool.query(`UPDATE users SET otp_attempts = otp_attempts + 1 WHERE id = $1`, [req.params.user_id]);
-      return res.status(400).json({ success: false, error: "Incorrect or expired code." });
-    }
-
-    await pool.query(
-      `UPDATE users SET otp_verified = true, otp_code = NULL, otp_expiry = NULL, otp_attempts = 0 WHERE id = $1`,
-      [req.params.user_id],
-    );
-    return res.status(200).json({ success: true });
-  } catch (error) {
-    next(error);
-  }
-});
-
-// POST /api/phone/:user_id/resend-otp — same code path the webhook uses on
-// first contact, callable again if the original code expired (5 min).
-router.post("/:user_id/resend-otp", async (req: Request, res: Response, next: NextFunction) => {
-  try {
-    const userResult = await pool.query(
-      `SELECT phone_number, contact_verified FROM users WHERE id = $1`,
-      [req.params.user_id],
-    );
-    const user = userResult.rows[0];
-    if (!user) return res.status(404).json({ success: false, error: "Session not found." });
-    if (!user.contact_verified) {
-      return res.status(409).json({ success: false, error: "Text the number in first — see instructions." });
-    }
-
-    const otp = randomInt(100000, 1000000);
-    await pool.query(
-      `UPDATE users SET otp_code = $2, otp_expiry = NOW() + INTERVAL '5 minutes', otp_attempts = 0 WHERE id = $1`,
-      [req.params.user_id, otp],
-    );
-    // Same copy production's resend uses (see api/src/routes/auth.ts's
-    // /send-otp) — sendSMS catches its own errors internally and never
-    // throws, matching every other Sendblue send in this codebase.
-    await sendSMS({ phone_number: user.phone_number, otp_code: otp.toString(), resent: true });
-    return res.status(200).json({ success: true });
-  } catch (error) {
-    next(error);
-  }
-});
-
 // POST /api/phone/:user_id/tag — tags this session with which test case it
 // belongs to. Works for both real-phone sessions and the original browser-EVI
 // sessions (same users table either way) — see also the /api/session route's
@@ -194,17 +125,18 @@ router.post("/:user_id/tag", async (req: Request, res: Response, next: NextFunct
 // this service's dev HUME_CONFIG_ID, and the dev config's own webhook (see
 // the repoint noted in webhooks.ts) delivers chat_started/tool_call/
 // chat_ended back to THIS service, writing to co-test's own DB. Gated on
-// otp_verified — text-in-first, then OTP, only then a real call unlocks.
+// identity_captured — text-in-first, then name/email, only then a real call
+// unlocks (no separate OTP step anymore, matching production).
 router.post("/:user_id/call", async (req: Request, res: Response, next: NextFunction) => {
   try {
     const userResult = await pool.query(
-      `SELECT otp_verified FROM users WHERE id = $1`,
+      `SELECT identity_captured FROM users WHERE id = $1`,
       [req.params.user_id],
     );
     const user = userResult.rows[0];
     if (!user) return res.status(404).json({ success: false, error: "Session not found." });
-    if (!user.otp_verified) {
-      return res.status(403).json({ success: false, error: "Verify OTP before requesting a call." });
+    if (!user.identity_captured) {
+      return res.status(403).json({ success: false, error: "Complete name/email intake before requesting a call." });
     }
 
     const result = await triggerCall(String(req.params.user_id));

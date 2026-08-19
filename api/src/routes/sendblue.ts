@@ -10,6 +10,7 @@ import { sendSMS } from "../otpActions.js";
 import elevenlabs from "../services/elevenlabs.js";
 import { generateCircleTitle, generateWarmCircleInviteMessage } from "../services/circleInvite.js";
 import { generateEmbedding } from "../services/embeddings.js";
+import { findOrCreateUserByPhone, hasPendingEmail, splitFullName } from "../services/identity.js";
 import {
   captureIntent,
   extractPsychographicProfile,
@@ -396,16 +397,12 @@ export function sendblueRouter(io: Server): Router {
           }
         }
 
-        // Step 1 — Find user by phone number
-        const userResult = await pool.query(
-          `SELECT * FROM users WHERE phone_number = $1`,
-          [number],
-        );
-        const user = userResult.rows[0];
-        if (!user) {
-          console.log(`Inbound message from unknown number: ${number}`);
-          return res.status(200).send({ received: true });
-        }
+        // Step 1 — Find user by phone number, creating a bare placeholder row
+        // if this number has never texted in before. CoPatible no longer
+        // collects name/email through a separate form (Framer or otherwise)
+        // ahead of time — the conversation with Co itself is the intake now,
+        // so an unknown number can't just be dropped the way it used to be.
+        let user = await findOrCreateUserByPhone(number);
 
         // Co Loop Stage 5 extension — response-rate tracking. Any inbound
         // message counts as a response to a pending check-in, regardless of
@@ -420,6 +417,99 @@ export function sendblueRouter(io: Server): Router {
             [user.id],
           )
           .catch((err: any) => console.error("ask_checkins response tracking failed (non-fatal):", err?.message ?? err));
+
+        // Step 1.2 — Name/email intake for a brand-new contact. Gated on
+        // identity_captured, not on user existence — the placeholder row
+        // from findOrCreateUserByPhone above already exists by this point.
+        // Texting in from their own number is itself proof of phone
+        // ownership, so unlike Step 1.5 below there's no separate OTP here.
+        if (!user.identity_captured) {
+          if (!user.intake_asked) {
+            // First contact ever from this number — greet, then ask. Nothing
+            // in this inbound message is treated as an answer, since Co
+            // hasn't asked the question yet.
+            await pool.query(`UPDATE users SET intake_asked = true WHERE id = $1`, [user.id]);
+            await sendSMS({ phone_number: number, welcome: true });
+            await sendSMS({ phone_number: number, intro: true });
+            await sendSMS({ phone_number: number, intake_ask: true });
+            return res.status(200).send({ received: true, action: "intake_started" });
+          }
+
+          const { text: rawExtraction } = await generateText({
+            model: anthropic("claude-haiku-4-5-20251001"),
+            experimental_telemetry: { isEnabled: true, functionId: "sendblue.intake.extractIdentity" },
+            prompt: `Co asked a new contact for their full name and email. Extract both from their reply, combining with anything already known.
+
+Already known — name: ${user.first_name || "not yet given"}, email: ${hasPendingEmail(user.email) ? "not yet given" : user.email}
+
+Their reply: "${hasText ? content : "[no text — sent a photo or voice memo instead]"}"
+
+Return ONLY strict JSON: {"full_name": string or null, "email": string or null}. Only set a field you're actually confident about — carry forward an already-known value if this reply doesn't repeat it, and don't guess at one that's still missing.`,
+          });
+
+          let extracted: { full_name: string | null; email: string | null };
+          try {
+            extracted = JSON.parse(rawExtraction.trim().replace(/^```(?:json)?\n?|\n?```$/g, ""));
+          } catch {
+            extracted = { full_name: null, email: null };
+          }
+
+          const emailValid = !!extracted.email && /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(extracted.email);
+          const finalName = extracted.full_name?.trim() || user.first_name || null;
+          const finalEmail = emailValid ? extracted.email!.trim() : hasPendingEmail(user.email) ? null : user.email;
+
+          if (finalName && finalEmail) {
+            const { first_name, last_name } = splitFullName(finalName);
+            try {
+              const updated = await pool.query(
+                `UPDATE users SET first_name = $2, last_name = $3, email = $4, username = $5, identity_captured = true
+                 WHERE id = $1 RETURNING *`,
+                [user.id, first_name, last_name, finalEmail, finalEmail.split("@")[0]],
+              );
+              user = updated.rows[0];
+            } catch (err: any) {
+              if (err?.code === "23505") {
+                await sendCoReply({
+                  phone: number,
+                  message: "Looks like that email's already on file. Mind sending a different one?",
+                  asVoice: false,
+                });
+                return res.status(200).send({ received: true, action: "intake_email_conflict" });
+              }
+              throw err;
+            }
+
+            let kickoffMsg = `Good to meet you, ${first_name}. What's been on your mind lately?`;
+            try {
+              const { text } = await generateText({
+                model: anthropic("claude-haiku-4-5-20251001"),
+                experimental_telemetry: { isEnabled: true, functionId: "sendblue.intake.kickoff" },
+                prompt: `You are Co, an exclusive life concierge. ${first_name} just gave you their name and email to get started. Write a short, warm iMessage welcoming them in and opening the real conversation — invite them to share what's on their mind or going on in their life right now. Tone: like a thoughtful friend, genuine warmth, real personality. No exclamation points. No em dashes. 2 sentences max.`,
+              });
+              kickoffMsg = text;
+            } catch (genErr: any) {
+              console.error("Intake kickoff message generation failed, using fallback (non-fatal):", genErr?.message ?? genErr);
+            }
+            await sendCoReply({ phone: number, message: kickoffMsg, asVoice: false });
+            return res.status(200).send({ received: true, action: "identity_captured" });
+          }
+
+          if (finalName && finalName !== user.first_name) {
+            const { first_name, last_name } = splitFullName(finalName);
+            await pool.query(`UPDATE users SET first_name = $2, last_name = $3 WHERE id = $1`, [
+              user.id,
+              first_name,
+              last_name,
+            ]);
+          }
+          const missingReply = !finalName
+            ? extracted.email && !emailValid
+              ? "That email didn't look quite right — mind double-checking it?"
+              : "Sorry, didn't catch that. What's your full name and email?"
+            : "Got your name — what's the best email for you?";
+          await sendCoReply({ phone: number, message: missingReply, asVoice: false });
+          return res.status(200).send({ received: true, action: "intake_incomplete" });
+        }
 
         // Step 1.5 — First contact from an unverified self-serve registration.
         // Our Sendblue plan only allows replying to contacts who've texted in

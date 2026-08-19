@@ -78,7 +78,7 @@ async function loadRealContext(realUserId: string): Promise<RealContext> {
 // parity, etc).
 export async function getActiveRealTestUser(): Promise<(RealContext & { hasSignal: boolean }) | null> {
   const { rows } = await pool.query(
-    `SELECT id FROM users WHERE test_channel = 'phone' AND otp_verified = true AND is_simulated = false
+    `SELECT id FROM users WHERE test_channel = 'phone' AND identity_captured = true AND is_simulated = false
      ORDER BY created_at DESC LIMIT 1`,
   );
   const userId = rows[0]?.id;

@@ -1,13 +1,14 @@
 import { anthropic } from "@ai-sdk/anthropic";
 import { propagateAttributes } from "@langfuse/tracing";
 import { generateText } from "ai";
-import { createHmac, randomInt, timingSafeEqual } from "crypto";
+import { createHmac, timingSafeEqual } from "crypto";
 import express, { NextFunction, Request, Response } from "express";
 import { parsePhoneNumberFromString } from "libphonenumber-js";
 import { DateTime } from "luxon";
 import type { Server } from "socket.io";
 import twilio from "twilio";
 import pool from "../../../api/src/db/db.js";
+import { hasPendingEmail, splitFullName } from "../../../api/src/services/identity.js";
 import { sendSMS } from "../../../api/src/otpActions.js";
 import {
   assessConversationCoverage,
@@ -1054,10 +1055,10 @@ export function createWebhooksRouter(io: Server): express.Router {
           // which reuses that same login row rather than creating a separate
           // one).
           const userResult = await pool.query(
-            `SELECT id, first_name, contact_verified FROM users WHERE phone_number = $1 AND test_channel = 'phone'`,
+            `SELECT id, first_name, email, contact_verified, identity_captured, intake_asked FROM users WHERE phone_number = $1 AND test_channel = 'phone'`,
             [number],
           );
-          const user = userResult.rows[0];
+          let user = userResult.rows[0];
 
           if (!user) {
             console.log(
@@ -1086,55 +1087,121 @@ export function createWebhooksRouter(io: Server): express.Router {
             return res.status(200).send({ received: true, duplicate: true });
           }
 
-          // First inbound text — satisfies text-in-first. Greet (by name),
-          // then the announcement, then the contact-save ask (with the
-          // vCard, if CO_VCARD_URL is set), then the verification code —
-          // reusing sendSMS directly rather than a flat custom string, so
-          // this is genuinely Co's voice/copy, not a placeholder. sendSMS
-          // catches its own errors internally (never throws), matching
-          // every other Sendblue send in this codebase: a delivery failure
-          // must never surface as a 4xx/5xx to Sendblue's own webhook or
-          // crash this request. Deliberately does NOT return after these —
-          // without that, someone's first-ever message to Co dead-ended on
-          // the onboarding sequence, and they had to text again before
-          // getting anything that felt like actually meeting Co. Falls
-          // through into the rest of this handler instead, so Co's real
-          // reply — reacting to whatever they actually said — goes out
-          // right after, on this same first message.
-          // Captured before the block below flips it — used later to tell
-          // the reply-generation prompt this is the very first exchange, not
-          // just another turn in an ongoing one.
-          const isFirstContact = !user.contact_verified;
+          // Name/email intake — mirrors the identity_captured gate in
+          // api/src/routes/sendblue.ts. Texting in from a real phone is
+          // proof enough of ownership on its own (matches production), so
+          // there's no separate OTP step here anymore either — dropped along
+          // with production's, not a co-test-only simplification.
+          if (!user.identity_captured) {
+            if (!user.intake_asked) {
+              await pool.query(`UPDATE users SET intake_asked = true WHERE id = $1`, [user.id]);
+              // Paced, not fired all at once — back-to-back sends with no gap
+              // arrive as a stacked wall of texts on the recipient's end even
+              // though each individual message is legitimate content.
+              await sendSMS({ phone_number: number, welcome: true, first_name: user.first_name });
+              await pause(2500);
+              await sendSMS({ phone_number: number, intro: true });
+              await pause(2500);
+              await sendSMS({ phone_number: number, save_contact: true });
+              await pause(2500);
+              await sendSMS({ phone_number: number, intake_ask: true });
+              return res.status(200).send({ received: true, action: "intake_started" });
+            }
 
-          if (!user.contact_verified) {
-            const otp = randomInt(100000, 1000000);
-            await pool.query(
-              `UPDATE users SET contact_verified = true, otp_code = $2, otp_expiry = NOW() + INTERVAL '5 minutes' WHERE id = $1`,
-              [user.id, otp],
-            );
-            user.contact_verified = true;
-            // Paced, not fired all at once — back-to-back sends with no gap
-            // arrive as a stacked wall of texts on the recipient's end even
-            // though each individual message is legitimate content.
-            await sendSMS({ phone_number: number, welcome: true, first_name: user.first_name });
-            await pause(2500);
-            await sendSMS({ phone_number: number, intro: true });
-            await pause(2500);
-            await sendSMS({ phone_number: number, save_contact: true });
-            await pause(2500);
-            await sendSMS({
-              phone_number: number,
-              otp_code: otp.toString(),
-              register: true,
+            const { text: rawExtraction } = await generateText({
+              model: anthropic("claude-haiku-4-5-20251001"),
+              experimental_telemetry: { isEnabled: true, functionId: "co-test.webhooks.intake.extractIdentity" },
+              prompt: `Co asked a new contact for their full name and email. Extract both from their reply, combining with anything already known.
+
+Already known — name: ${user.first_name || "not yet given"}, email: ${hasPendingEmail(user.email) ? "not yet given" : user.email}
+
+Their reply: "${content}"
+
+Return ONLY strict JSON: {"full_name": string or null, "email": string or null}. Only set a field you're actually confident about — carry forward an already-known value if this reply doesn't repeat it, and don't guess at one that's still missing.`,
             });
-            // Longer than the 2.5s between the four onboarding messages —
-            // those are quick informational bursts, but this is the hinge
-            // into Co's own first real message. Someone needs a beat to
-            // actually process what just landed (four texts, possibly
-            // tapping to save the contact card) before the real
-            // conversation opener shows up too.
-            await pause(5000);
+
+            let extracted: { full_name: string | null; email: string | null };
+            try {
+              extracted = JSON.parse(rawExtraction.trim().replace(/^```(?:json)?\n?|\n?```$/g, ""));
+            } catch {
+              extracted = { full_name: null, email: null };
+            }
+
+            const emailValid = !!extracted.email && /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(extracted.email);
+            const finalName = extracted.full_name?.trim() || user.first_name || null;
+            const finalEmail = emailValid ? extracted.email!.trim() : hasPendingEmail(user.email) ? null : user.email;
+
+            if (finalName && finalEmail) {
+              const { first_name, last_name } = splitFullName(finalName);
+              try {
+                const updated = await pool.query(
+                  `UPDATE users SET first_name = $2, last_name = $3, email = $4, username = $5, identity_captured = true
+                   WHERE id = $1 RETURNING id, first_name, email, contact_verified, identity_captured, intake_asked`,
+                  [user.id, first_name, last_name, finalEmail, finalEmail.split("@")[0]],
+                );
+                user = updated.rows[0];
+              } catch (err: any) {
+                if (err?.code === "23505") {
+                  try {
+                    await sendblue.messages.send({
+                      number,
+                      content: "Looks like that email's already on file. Mind sending a different one?",
+                      from_number: process.env.SENDBLUE_PHONE_NUMBER!,
+                    });
+                  } catch (smsErr: any) {
+                    console.error("co-test intake email-conflict send failed (non-fatal):", smsErr?.message ?? smsErr);
+                  }
+                  return res.status(200).send({ received: true, action: "intake_email_conflict" });
+                }
+                throw err;
+              }
+              await pause(2000);
+              try {
+                await sendblue.messages.send({
+                  number,
+                  content: `Good to meet you, ${first_name}. What's been on your mind lately?`,
+                  from_number: process.env.SENDBLUE_PHONE_NUMBER!,
+                });
+              } catch (smsErr: any) {
+                console.error("co-test intake kickoff send failed (non-fatal):", smsErr?.message ?? smsErr);
+              }
+              return res.status(200).send({ received: true, action: "identity_captured" });
+            }
+
+            if (finalName && finalName !== user.first_name) {
+              const { first_name, last_name } = splitFullName(finalName);
+              await pool.query(`UPDATE users SET first_name = $2, last_name = $3 WHERE id = $1`, [
+                user.id,
+                first_name,
+                last_name,
+              ]);
+            }
+            const missingReply = !finalName
+              ? extracted.email && !emailValid
+                ? "That email didn't look quite right — mind double-checking it?"
+                : "Sorry, didn't catch that. What's your full name and email?"
+              : "Got your name — what's the best email for you?";
+            try {
+              await sendblue.messages.send({
+                number,
+                content: missingReply,
+                from_number: process.env.SENDBLUE_PHONE_NUMBER!,
+              });
+            } catch (smsErr: any) {
+              console.error("co-test intake re-ask send failed (non-fatal):", smsErr?.message ?? smsErr);
+            }
+            return res.status(200).send({ received: true, action: "intake_incomplete" });
           }
+
+          // Used later to tell the reply-generation prompt this is the very
+          // first real exchange, not just another turn in an ongoing one —
+          // decoupled from contact_verified/identity_captured, both of which
+          // are now already true by the time any message reaches here.
+          const priorActivity = await pool.query(
+            `SELECT 1 FROM co_memories WHERE user_id = $1 AND memory_type = 'text_exchange' LIMIT 1`,
+            [user.id],
+          );
+          const isFirstContact = !priorActivity.rows[0];
 
           // Moderator-by-text — the Circles pipeline test's confirmed decision
           // is "the tester acts as their own dev Moderator," not a second real
@@ -1426,9 +1493,9 @@ export function createWebhooksRouter(io: Server): express.Router {
           // product decision: an explicit ask ("call me") triggers immediately;
           // anything that only SIGNALS voice would help gets OFFERED, and
           // actually placing that call requires a following "yes" — never
-          // silently placed. Gated on contact_verified only (already true here)
-          // — otp_verified stays a dashboard-flow-only gate, unrelated to
-          // identity over this channel. The "User said" row above is already
+          // silently placed. Gated on identity_captured only (already true
+          // here, or this message would have been consumed by the intake
+          // block above instead). The "User said" row above is already
           // written regardless of outcome, so nothing below re-inserts it.
           // Bug found the hard way: this used to just check whether an offer was
           // EVER made, not whether it was still unresolved — so once someone

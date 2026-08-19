@@ -26,14 +26,6 @@ export function runTestMigrations() {
     )
     .catch((err: Error) => console.error("users.test_channel migration failed:", err));
 
-  // Distinct from the shared users.contact_verified (means only "has texted
-  // in first") — this means the tester has actually entered the correct OTP
-  // in the phone-test page. Real-call requests are gated on this, not on
-  // contact_verified alone, per the required text-in -> OTP -> call order.
-  pool
-    .query(`ALTER TABLE users ADD COLUMN IF NOT EXISTS otp_verified BOOLEAN NOT NULL DEFAULT false`)
-    .catch((err: Error) => console.error("users.otp_verified migration failed:", err));
-
   // Marks a phone-test session created with no known phone number yet — the
   // entry screen is a single "Message Co to start" button (no name/phone
   // form, matching the Ditto pattern), so the row exists before we know who
@@ -208,9 +200,9 @@ export function runTestMigrations() {
     )
     .catch((err: Error) => console.error("co_test_dynamic_runs table init failed:", err));
 
-  // Tool-access login (distinct from otp_verified above, which gates the
-  // in-app "request a real call" step). A tester now has to prove they
-  // control a real phone number, via a real OTP, before test.copatible.com
+  // Tool-access login (distinct from the shared users.identity_captured,
+  // which now gates the in-app "request a real call" step). A tester has to
+  // prove they control a real phone number, via a real OTP, before test.copatible.com
   // shows anything but the login form — see services/testerAuth.ts. The
   // token is opaque and long-lived (see testerAuth's TTL), stored on the row
   // it authenticates rather than a separate sessions table since this is a

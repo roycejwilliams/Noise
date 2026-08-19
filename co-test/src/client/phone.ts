@@ -7,16 +7,10 @@ renderSidebar("phone");
 const statusEl = document.getElementById("status") as HTMLElement;
 
 const stepTextIn = document.getElementById("step-text-in") as HTMLElement;
-const stepOtp = document.getElementById("step-otp") as HTMLElement;
 const stepCall = document.getElementById("step-call") as HTMLElement;
 
 const messageCoButton = document.getElementById("message-co-button") as HTMLAnchorElement;
 const entryError = document.getElementById("entry-error") as HTMLElement;
-
-const otpInput = document.getElementById("otp-input") as HTMLInputElement;
-const verifyOtpButton = document.getElementById("verify-otp-button") as HTMLButtonElement;
-const resendOtpButton = document.getElementById("resend-otp-button") as HTMLButtonElement;
-const otpError = document.getElementById("otp-error") as HTMLElement;
 
 const testCaseSelect = document.getElementById("test-case-select") as HTMLSelectElement;
 const requestCallButton = document.getElementById("request-call-button") as HTMLButtonElement;
@@ -129,7 +123,7 @@ function ensureLiveSocket() {
 }
 
 function showStep(step: HTMLElement) {
-  for (const el of [stepTextIn, stepOtp, stepCall]) el.classList.add("hidden");
+  for (const el of [stepTextIn, stepCall]) el.classList.add("hidden");
   step.classList.remove("hidden");
 }
 
@@ -164,43 +158,6 @@ async function initSession() {
     statusEl.textContent = "Failed to start";
     entryError.textContent = err instanceof Error ? err.message : String(err);
     entryError.classList.remove("hidden");
-  }
-}
-
-async function verifyOtp() {
-  if (!userId) return;
-  otpError.classList.add("hidden");
-  const otp_code = otpInput.value.trim();
-  if (!otp_code) return;
-
-  verifyOtpButton.disabled = true;
-  try {
-    const res = await fetch(`/api/phone/${userId}/verify-otp`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ otp_code }),
-    });
-    const data = await res.json();
-    if (!data.success) throw new Error(data.error ?? "Verification failed");
-    // Polling loop will pick up otp_verified=true and advance the step.
-  } catch (err) {
-    console.error(err);
-    otpError.textContent = err instanceof Error ? err.message : String(err);
-    otpError.classList.remove("hidden");
-  } finally {
-    verifyOtpButton.disabled = false;
-  }
-}
-
-async function resendOtp() {
-  if (!userId) return;
-  resendOtpButton.disabled = true;
-  try {
-    await fetch(`/api/phone/${userId}/resend-otp`, { method: "POST" });
-  } catch (err) {
-    console.error("Resend failed:", err);
-  } finally {
-    window.setTimeout(() => (resendOtpButton.disabled = false), 3000);
   }
 }
 
@@ -270,12 +227,9 @@ async function pollStatus() {
     if (!json.success) return;
     const d = json.data;
 
-    if (!d.contact_verified) {
+    if (!d.identity_captured) {
       showStep(stepTextIn);
       statusEl.textContent = "Waiting for text-in";
-    } else if (!d.otp_verified) {
-      showStep(stepOtp);
-      statusEl.textContent = "Waiting for OTP";
     } else {
       showStep(stepCall);
       statusEl.textContent = "Verified — ready to call";
@@ -298,8 +252,6 @@ function beginPolling() {
   statusPollInterval = window.setInterval(pollStatus, 2500);
 }
 
-verifyOtpButton.addEventListener("click", verifyOtp);
-resendOtpButton.addEventListener("click", resendOtp);
 testCaseSelect.addEventListener("change", saveTag);
 requestCallButton.addEventListener("click", requestCall);
 

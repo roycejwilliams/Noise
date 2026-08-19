@@ -47,6 +47,7 @@ interface MessageProp {
   register?: boolean;
   intro?: boolean;
   save_contact?: boolean;
+  intake_ask?: boolean;
   first_name?: string;
   invite_type?: "received" | "accepted" | "rejected";
   invite_target?: "circle" | "moment";
@@ -123,6 +124,7 @@ export const sendSMS = async ({
   register,
   intro,
   save_contact,
+  intake_ask,
   first_name,
   transfer_ticket,
   moment_recap,
@@ -175,6 +177,10 @@ export const sendSMS = async ({
 
     if (save_contact) {
       await send(`Save my contact so we can keep talking.`, process.env.CO_VCARD_URL);
+    }
+
+    if (intake_ask) {
+      await send(`Let's start with the basics. What's your full name and email?`);
     }
 
     if (register) {

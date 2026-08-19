@@ -30,7 +30,11 @@
   async function sendCode() {
     phoneError.classList.add("hidden");
     const value = phoneInput.value.trim();
-    if (!value) return;
+    if (!value) {
+      phoneError.textContent = "Phone number is required.";
+      phoneError.classList.remove("hidden");
+      return;
+    }
     sendCodeButton.disabled = true;
     try {
       const res = await fetch("/api/login/start", {

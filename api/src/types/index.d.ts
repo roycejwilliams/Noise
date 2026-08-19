@@ -38,6 +38,8 @@ interface UserProp {
   subscription_status: "active" | "inactive" | "past_due" | "canceled";
   stripe_customer_id: string;
   contact_verified: boolean;
+  identity_captured: boolean;
+  intake_asked: boolean;
 }
 
 interface CircleProp {

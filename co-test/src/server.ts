@@ -92,8 +92,8 @@ async function main() {
   app.get("/health", (_req, res) => res.status(200).send("ok"));
 
   // Serves Co's vCard so Sendblue can attach it to the real onboarding
-  // "intro" text (see webhooks.ts's contact_verified branch, which calls
-  // otpActions.ts's sendSMS — that function conditionally attaches media_url
+  // "intro" text (see webhooks.ts's identity_captured/intake_asked branch,
+  // which calls otpActions.ts's sendSMS — that function conditionally attaches media_url
   // only when CO_VCARD_URL is set, which needs to point here). Mirrors
   // production's identical route in api/src/server.ts.
   app.get("/co.vcf", (_req, res) => {

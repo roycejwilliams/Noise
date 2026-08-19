@@ -96,12 +96,12 @@ const CIRCLES_PENDING_NOTE =
   "Pending a data source — this metric describes the Circles matching/booking pipeline (confidence gate, Keana approval, availability poll), which only runs in production today. co-test doesn't run that pipeline yet, and production isn't read from (even read-only) per policy. See the Circles-in-co-test scoping note for what porting it would take.";
 
 // The one auto item computable purely from co-test's own DB today — real
-// (phone-channel, OTP-verified) participants tagged per test case.
+// (phone-channel, identity-captured) participants tagged per test case.
 async function computeSampleSizeParity(): Promise<{ computed: true; value: string; detail: any }> {
   const result = await pool.query(
     `SELECT test_case, COUNT(*)::int AS n
      FROM users
-     WHERE test_channel = 'phone' AND otp_verified = true AND test_case IS NOT NULL
+     WHERE test_channel = 'phone' AND identity_captured = true AND test_case IS NOT NULL
      GROUP BY test_case`,
   );
   const counts: Record<string, number> = { intent_layer: 0, circles: 0 };

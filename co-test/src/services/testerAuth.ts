@@ -1,21 +1,18 @@
 import { randomBytes, randomInt, timingSafeEqual } from "crypto";
 import pool from "../../../api/src/db/db.js";
+import { PENDING_EMAIL_DOMAIN } from "../../../api/src/services/identity.js";
 import { normalizePhone } from "../../../api/src/utils/phone.js";
 import { sendSMS } from "../../../api/src/otpActions.js";
 
 // Tool-access login — proves a tester controls a real phone number before
 // test.copatible.com shows them anything but the login form. Deliberately
-// separate from phone.ts's own OTP step (which gates "request a real call"
-// within the app, once already inside) — that step exists to test
-// production's real text-in-first onboarding UX and is unchanged by this.
-// This one just answers "should this browser be let in at all."
+// separate from phone.ts's own identity-intake step (which now tests
+// production's real text-in-first onboarding UX, name/email included) —
+// this one just answers "should this browser be let in at all."
 const SESSION_TTL_MS = 30 * 24 * 60 * 60 * 1000; // 30 days
 const OTP_LOCKOUT_ATTEMPTS = 5;
 
-export async function startLogin(
-  rawPhone: string,
-  contact?: { first_name?: string; last_name?: string; email?: string },
-): Promise<{ success: boolean; error?: string }> {
+export async function startLogin(rawPhone: string): Promise<{ success: boolean; error?: string }> {
   const phone_number = normalizePhone(rawPhone);
   if (!phone_number || phone_number === rawPhone.trim()) {
     // normalizePhone falls back to the raw input on a parse failure — that's
@@ -31,31 +28,21 @@ export async function startLogin(
   if (existing.rows[0]) {
     userId = existing.rows[0].id;
   } else {
-    // contact_verified stays false here (the column's own schema default) —
-    // this row is created the moment someone proves phone ownership to the
-    // WEB TOOL, not by texting the Sendblue number. Those are different
-    // facts: webhooks.ts's /phone flow keys its one-time welcome/intro
-    // sequence off this same column for a row matched by the same
-    // (phone_number, test_channel='phone') pair, and phone.ts's own
-    // /resend-otp route gates on it too ("Text the number in first"). This
-    // used to hardcode true, which silently satisfied both checks for
-    // anyone who'd only ever logged into the tool — the welcome/intro
-    // messages never fired on a real first text-in, no matter how many
-    // times the test data was reset, since logging back in (required to
-    // reach /phone at all) immediately recreated the row already
-    // "verified."
-    // Real name/email from the intake form now, matching the same 3-field
-    // (Full Name, Email, Phone) flow the Framer site uses — falls back to
-    // the old placeholder only if this is ever called without them (e.g.
-    // direct API use), so this never regresses into a hard failure.
+    // No more name/email at login — that used to mirror the Framer intake
+    // form's 3-field flow, but CoPatible doesn't collect identity through a
+    // form at all anymore. This row starts exactly like a genuinely unknown
+    // number would (identity_captured=false, intake_asked=false, throwaway
+    // placeholder email — see api/src/services/identity.ts), so /phone's
+    // real text-in-first step actually exercises the same name/email ask
+    // production now runs, rather than skipping past it. contact_verified is
+    // true here (not the column's false default) because logging into the
+    // tool already round-trips a real OTP to this number below — that's
+    // proof of ownership on its own, same reasoning as texting in directly.
     const suffix = Math.random().toString(36).slice(2, 8);
-    const firstName = contact?.first_name || "Tester";
-    const lastName = contact?.last_name || "Tester";
-    const email = contact?.email || `co-test-login-${suffix}@copatible.test`;
     const created = await pool.query(
-      `INSERT INTO users (first_name, last_name, email, phone_number, username, test_channel, contact_verified)
-       VALUES ($1, $2, $3, $4, $5, 'phone', false) RETURNING id`,
-      [firstName, lastName, email, phone_number, `co_test_login_${suffix}`],
+      `INSERT INTO users (first_name, last_name, email, phone_number, username, test_channel, contact_verified, identity_captured, intake_asked)
+       VALUES ('', '', $1, $2, $3, 'phone', true, false, false) RETURNING id`,
+      [`pending-${suffix}${PENDING_EMAIL_DOMAIN}`, phone_number, `pending_${suffix}`],
     );
     userId = created.rows[0].id;
   }

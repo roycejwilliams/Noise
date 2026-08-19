@@ -246,6 +246,30 @@ export function runMigrations() {
       console.error("users.contact_verified migration failed:", err),
     );
 
+  // Whether we actually know this person's real name/email yet. CoPatible no
+  // longer runs a separate signup form (Framer or otherwise) — a brand-new
+  // phone number gets a placeholder users row (see services/identity.ts)
+  // instead of being dropped, and this is what gates asking for their name
+  // and email over text before the normal Co conversation starts. Defaults
+  // true so every pre-existing row (which already has real identity) is
+  // unaffected — only identity.ts's placeholder-row insert sets it false.
+  pool
+    .query(`ALTER TABLE users ADD COLUMN IF NOT EXISTS identity_captured BOOLEAN NOT NULL DEFAULT true`)
+    .catch((err: Error) =>
+      console.error("users.identity_captured migration failed:", err),
+    );
+
+  // Separate from identity_captured — tracks whether the welcome/name-email
+  // ask has actually gone out yet, so a placeholder row that already
+  // received the ask gets its reply parsed as an answer, while one that
+  // hasn't yet gets the ask instead of being re-parsed as gibberish. Same
+  // default-true/false-only-on-placeholder-creation reasoning as above.
+  pool
+    .query(`ALTER TABLE users ADD COLUMN IF NOT EXISTS intake_asked BOOLEAN NOT NULL DEFAULT true`)
+    .catch((err: Error) =>
+      console.error("users.intake_asked migration failed:", err),
+    );
+
   // Tracks whether the "day of" reminder has gone out for a confirmed moment,
   // so the reminder cron (every 15 min) doesn't re-send it on every tick.
   pool
