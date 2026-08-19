@@ -1555,11 +1555,14 @@ Return ONLY strict JSON: {"full_name": string or null, "email": string or null}.
                 },
                 prompt: `A user is texting Co, a life concierge.${hasPendingOffer ? " Co just offered them a phone call and is waiting for a yes or no." : ""}
 
-Their message: "${content}"
+Recent conversation, in order (their latest message may only make sense combined with what came before — e.g. a time given in one message and a date/timezone confirmed in a later one is still a single schedule request, not two separate things):
+${recentConversation || "(start of the conversation)"}
 
-Classify as ONE of:
+Their latest message: "${content}"
+
+Classify their LATEST message, read in light of the recent conversation above, as ONE of:
 - "explicit_request" — they are directly asking Co to call them RIGHT NOW, or asking to talk by phone with no specific future time attached
-- "schedule_request" — they want a call, but at a specific future date/time ("call me tomorrow at 3", "can we talk Thursday morning", "call me next week") — not right now
+- "schedule_request" — they want a call at a specific future date/time, whether that time was fully stated just now ("call me tomorrow at 3") or is only complete once combined with what they said earlier in this conversation (e.g. they gave a time a few messages ago and are now confirming the date or timezone Co asked for) — not right now
 - "cancel_scheduled_call" — they want to cancel a call they'd previously scheduled, with no new time given ("actually never mind about that call", "can we skip the call Thursday")
 ${hasPendingOffer ? '- "accepts_offer" — they are saying yes to the call Co just offered\n- "declines_offer" — they are saying no to the call Co just offered\n' : ""}- "would_benefit" — none of the above, but what they're describing is complex, emotional, or hard to unpack over short texts, and voice would genuinely help
 - "none" — normal conversation, no call is relevant${declinedTopicsContext}
@@ -1632,13 +1635,18 @@ Return ONLY the classification, nothing else.`,
                   isEnabled: true,
                   functionId: "co-test.webhooks.scheduleCallExtract",
                 },
-                prompt: `A user just texted Co asking to schedule a call for later: "${content}"
+                prompt: `A user is texting Co to schedule a call for later. The date, time, and timezone can be spread across several messages (e.g. they gave a time earlier and are only now confirming the date/timezone Co asked for) — read the whole conversation, not just the latest message, to piece it together.
+
+Recent conversation, in order:
+${recentConversation || "(start of the conversation)"}
+
+Their latest message: "${content}"
 
 For resolving anything relative ("tomorrow", "next Tuesday"), the current UTC date/time is ${nowUtc.toFormat("cccc, LLLL d, yyyy 'at' HH:mm 'UTC'")}.
 
-Extract:
-- date: the requested date, as YYYY-MM-DD. null if not stated or genuinely ambiguous.
-- time: the requested time of day, as 24-hour HH:MM. null if not stated.
+Extract, combining information from the whole conversation above:
+- date: the requested date, as YYYY-MM-DD. null if not stated anywhere or genuinely ambiguous.
+- time: the requested time of day, as 24-hour HH:MM. null if not stated anywhere.
 - timezone: the IANA timezone name they stated or unambiguously implied (e.g. "America/New_York", "America/Los_Angeles", "America/Chicago", "America/Denver"). null if not stated and not clearly implied — never guess one.
 
 Return ONLY valid JSON, no preamble: {"date": "YYYY-MM-DD or null", "time": "HH:MM or null", "timezone": "IANA name or null"}`,
@@ -2156,6 +2164,8 @@ Return ONLY valid JSON, no preamble: {"wants_venue": true or false, "venue_type"
                   prompt: `${personaPrompt ?? "You are Co, an exclusive life concierge."}
 
 You are having this specific exchange over text message, not a phone call — the phase structure and pacing above describe a live call; over text, just be genuinely Co: the same listening style, the same voice, the same principles, picking up wherever this conversation actually is.
+
+${user.first_name} is texting you from ${number} — that's the number you'd call if a call ever comes up. You already have it; never ask them for their number.
 
 What you already know about ${user.first_name} from a prior call:
 ${profileContext || "(nothing on file yet from a call — this is effectively a first conversation)"}

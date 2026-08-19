@@ -617,12 +617,12 @@ export async function captureIntent(
         generateText({
           model: anthropic("claude-haiku-4-5-20251001"),
           experimental_telemetry: { isEnabled: true, functionId: "profileExtraction.captureIntent" },
-          prompt: `Read this transcript and extract four things. Only include what's actually stated — never guess or infer beyond what's said.
+          prompt: `Read this transcript and extract four things. Only include what's actually stated by the user (the "user:" lines) — never guess or infer beyond what's said, and never treat something Co (the "assistant:" lines) said as if the user said it.
 
 1. ask — something specific they are actively seeking or could offer to others (a connection, an introduction, a resource, expertise). One clear sentence, classified as 'seeking' or 'offering'. null if no specific ask is present.
 2. concrete_preferences — named, specific things they mentioned liking or wanting, not vague vibes. A specific gym or workout style, a coffee/drink preference, a type of venue or neighborhood, a specific activity. "SoulCycle", "oat milk lattes", "speakeasy-style bars" — not "fitness" or "good coffee".
 3. wants — things they said they miss or want to find (a running group, a book club, a version of something from a previous city).
-4. availability — their stated general availability pattern, in their own words. null if not mentioned. Do not infer a schedule from anything other than what they directly said.
+4. availability — their stated GENERAL, RECURRING availability pattern, in their own words (e.g. "weekday evenings", "usually free on weekends"). A one-off request for a specific call or meeting at a specific time ("call me at 2pm today", "can we talk Thursday morning") is NOT a recurring availability pattern — leave this null for those, even if a specific time or day appears in the transcript. Only fill this in when they're describing when they're generally free, not when they want THIS ONE call to happen.
 
 Return ONLY valid JSON, no preamble:
 {"ask": {"text": "Looking for climate tech founders at $1M+ ARR", "type": "seeking"} or null, "concrete_preferences": ["..."], "wants": ["..."], "availability": "..." or null}
