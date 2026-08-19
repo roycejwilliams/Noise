@@ -10,6 +10,7 @@ import { sendSMS } from "../otpActions.js";
 import elevenlabs from "../services/elevenlabs.js";
 import { generateCircleTitle, generateWarmCircleInviteMessage } from "../services/circleInvite.js";
 import { generateEmbedding } from "../services/embeddings.js";
+import { detectTurnTone } from "../services/emotionalTone.js";
 import { findOrCreateUserByPhone, hasPendingEmail, splitFullName } from "../services/identity.js";
 import {
   captureIntent,
@@ -578,7 +579,7 @@ Return ONLY strict JSON: {"full_name": string or null, "email": string or null}.
           ? `User sent a voice memo: ${resolvedContent}`
           : `User said: ${resolvedContent}`;
 
-        const [inboundMemory, queryEmbedding, pendingMoment, pendingCircleInvite] = await Promise.all([
+        const [inboundMemory, queryEmbedding, pendingMoment, pendingCircleInvite, turnTone] = await Promise.all([
           pool.query(
             `INSERT INTO co_memories (user_id, memory_type, content)
              VALUES ($1, 'text_exchange', $2) RETURNING id`,
@@ -608,6 +609,13 @@ Return ONLY strict JSON: {"full_name": string or null, "email": string or null}.
              LIMIT 1`,
             [user.id],
           ),
+          // Run alongside everything else above rather than after it — this
+          // is a pure add-on signal for the reply prompt built in Step 6, not
+          // something anything else here depends on. hasText guards it so a
+          // photo/voice-memo-only message (resolvedContent is a placeholder
+          // like "[sent a photo]") doesn't burn a classification call on
+          // text that was never really there.
+          hasText ? detectTurnTone(resolvedContent, "sendblue.detectTurnTone") : Promise.resolve(null),
         ]);
 
         if (queryEmbedding) {
@@ -1246,6 +1254,16 @@ Return ONLY the classification, nothing else.`,
             : "";
         if (usingTopicNudge) markTopicAsked(user.id, missingTopic!);
 
+        // Not gated like callOfferContext/topicContext above — this isn't a
+        // competing "extra ask" for the reply's one secondary slot, it's an
+        // instruction about HOW to say whatever Co was already going to say.
+        // Advisory only (see detectTurnTone) and never named back to the
+        // user — a good friend responds differently to someone who's upset,
+        // they don't announce "you sound upset."
+        const toneContext = turnTone
+          ? `\nThey sound ${turnTone} right now. Let that genuinely shape your tone and pacing, not just your words — don't be breezy, joke, or rush past it if it doesn't fit. Never name the emotion back at them like a label.`
+          : "";
+
         // Step 6 — Generate Co's reply — Haiku for speed. Vision-enabled:
         // if they sent a photo, it's attached as an actual image input, not
         // just a placeholder string — Co can genuinely see and react to it.
@@ -1264,6 +1282,7 @@ Return ONLY the classification, nothing else.`,
           ${imageForVision ? "They just sent the attached photo." : `They just said: "${resolvedContent}"`}
           ${callOfferContext}
           ${topicContext}
+          ${toneContext}
           ${styleHint}
 
           Respond as Co. Warm, specific, brief.${imageForVision ? " React to what's actually in the photo." : " Use their context to make it personal."}

@@ -8,6 +8,7 @@ import { DateTime } from "luxon";
 import type { Server } from "socket.io";
 import twilio from "twilio";
 import pool from "../../../api/src/db/db.js";
+import { detectTurnTone } from "../../../api/src/services/emotionalTone.js";
 import { hasPendingEmail, splitFullName } from "../../../api/src/services/identity.js";
 import { sendSMS } from "../../../api/src/otpActions.js";
 import {
@@ -1395,7 +1396,7 @@ Return ONLY strict JSON: {"full_name": string or null, "email": string or null}.
           // record the call already wrote (goals/blockers/city/intent) and isn't
           // subject to that eviction, so it's queried directly instead of being
           // re-derived from a shrinking memory window.
-          const [profileResult, recentTextResult, priorActivityResult] =
+          const [profileResult, recentTextResult, priorActivityResult, turnTone] =
             await Promise.all([
               pool.query(
                 `SELECT life_chapters, goals, blockers, availability_pattern, city, emotional_state, intent
@@ -1415,6 +1416,10 @@ Return ONLY strict JSON: {"full_name": string or null, "email": string or null}.
                 `SELECT 1 FROM co_memories WHERE user_id = $1 AND memory_type IN ('text_exchange', 'call_transcript') LIMIT 1`,
                 [user.id],
               ),
+              // Mirrors api/src/routes/sendblue.ts's Step 3 addition — a pure
+              // add-on signal for the reply prompt below, run alongside
+              // everything else here rather than after it.
+              detectTurnTone(content, "co-test.webhooks.detectTurnTone"),
             ]);
 
           const profile = profileResult.rows[0] ?? null;
@@ -2131,6 +2136,14 @@ Return ONLY valid JSON, no preamble: {"wants_venue": true or false, "venue_type"
                 ? `\nYou likely have what you need from them now. If what they just said makes this feel like a natural close — not if it doesn't, don't force it — deliver a real closing turn: reference something specific and real from this conversation (not a generic "got it, thanks"), and be precise about what happens next, the same spirit as the end of a call: circle placement isn't instant, it happens in waves as the right people are ready; other things can move faster; never promise a specific date. Do not close on a question you haven't answered — if their last message asked you something directly, answer it first, even briefly, before any close.\n`
                 : "";
 
+            // Mirrors api/src/routes/sendblue.ts — advisory only, never named
+            // back to the user, and not gated against the other context
+            // strings above since it's an instruction about HOW to say
+            // whatever Co was already going to say, not a competing ask.
+            const toneContext = turnTone
+              ? `\nThey sound ${turnTone} right now. Let that genuinely shape your tone and pacing, not just your words — don't be breezy, joke, or rush past it if it doesn't fit. Never name the emotion back at them like a label.\n`
+              : "";
+
             const { text: reply } = await propagateAttributes(
               { userId: user.id, traceName: "co-test.webhooks.generateReply" },
               () =>
@@ -2151,7 +2164,7 @@ Recent text conversation, in order:
 ${recentConversation || "(start of the text conversation)"}
 
 ${user.first_name} just said: "${content}"
-${isFirstContact ? `\nThis is the very start of your first real conversation with ${user.first_name} — they just finished the intro sequence above (greeting, what CoPatible is, saving your contact, verification). What they just said may be nothing more than a greeting from tapping "message Co to start," not real content to react to. If it IS something real, pick up from it genuinely. If it's just a greeting or blank, don't react to it as if it were substantive — instead open the real conversation yourself, the same way you would at the start of a call: warm, unhurried, inviting the real version of their life, not a status update.\n` : ""}${recommendationContext}${venueContext}${callOfferContext}${scheduleCallContext}${closingContext}
+${isFirstContact ? `\nThis is the very start of your first real conversation with ${user.first_name} — they just finished the intro sequence above (greeting, what CoPatible is, saving your contact, verification). What they just said may be nothing more than a greeting from tapping "message Co to start," not real content to react to. If it IS something real, pick up from it genuinely. If it's just a greeting or blank, don't react to it as if it were substantive — instead open the real conversation yourself, the same way you would at the start of a call: warm, unhurried, inviting the real version of their life, not a status update.\n` : ""}${recommendationContext}${venueContext}${callOfferContext}${scheduleCallContext}${closingContext}${toneContext}
 ${styleHint}
 Ground everything ONLY in the information above and what has actually been said in this conversation — never state or imply a specific personal detail, preference, or fact about them that isn't listed above or wasn't actually said in this thread. This includes real venues and businesses: never name a specific one unless it's given to you above as something you actually found — if you don't have a real one, describe what you'd look for, don't guess a plausible-sounding name. If you don't have something, ask rather than assume.
 
