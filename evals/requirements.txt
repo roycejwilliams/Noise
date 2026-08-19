@@ -1,0 +1,15 @@
+# RAGAS is Python-only — this is the one non-Node component in the repo.
+#
+# ragas 0.4.x unconditionally imports langchain_community's VertexAI chat
+# model even when you never touch Vertex; langchain-community has since
+# split that class out into langchain-classic. langchain-community<0.4 is
+# pinned here (and langchain-google-vertexai installed alongside) purely to
+# satisfy that import chain — neither is actually used at runtime, since the
+# judge model below is OpenAI.
+langfuse
+ragas
+openai
+langchain-openai
+langchain-community<0.4
+langchain-google-vertexai
+python-dotenv
