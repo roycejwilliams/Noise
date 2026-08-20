@@ -786,6 +786,19 @@ export function createWebhooksRouter(io: Server): express.Router {
             `INSERT INTO voicemail_calls (call_sid) VALUES ($1) ON CONFLICT DO NOTHING`,
             [CallSid],
           );
+          // Previously unrecoverable — generated fresh every call but never
+          // written down anywhere, so there was no way to review what Co
+          // actually said on a real person's voicemail after the fact.
+          if (user) {
+            await pool
+              .query(
+                `INSERT INTO co_memories (user_id, memory_type, content) VALUES ($1, 'system', $2)`,
+                [user.id, `Co left this voicemail: "${voicemailLine}"`],
+              )
+              .catch((err: any) =>
+                console.error("Voicemail-line logging failed (non-fatal):", err?.message ?? err),
+              );
+          }
           return res.sendStatus(204);
         }
 
@@ -1600,9 +1613,22 @@ Return ONLY strict JSON: {"full_name": string or null, "email": string or null}.
           // conversation: this placed 4 real Twilio calls after the user had
           // explicitly said "don't call me" multiple times. Must compare
           // timestamps, not just existence.
+          //
+          // Second bug, same shape, found the same way: an offer could sit
+          // unresolved for days (a test session that never restarted, or
+          // just someone who went quiet) and still count as "waiting for a
+          // yes/no" — confirmed live, a 4-day-old offer from a single
+          // "Hello" got treated as still pending, and an unrelated "Hi Co,
+          // it's [name]" re-engaging days later got misread as accepting it,
+          // triggering a real call. A "want to hop on a call about this?"
+          // gesture only makes sense in the conversation it was offered in —
+          // past 24h, it stops counting as pending, and treats it the same
+          // as any other unresolved offer (no decline recorded, no
+          // call_offer_declined_topic entry) rather than resolving it.
           const pendingOfferResult = await pool.query(
             `SELECT p.id, p.content FROM co_memories p
          WHERE p.user_id = $1 AND p.memory_type = 'call_offer_pending'
+         AND p.created_at > NOW() - INTERVAL '24 hours'
          AND NOT EXISTS (
            SELECT 1 FROM co_memories r
            WHERE r.user_id = $1 AND r.memory_type = 'call_offer_resolved' AND r.created_at > p.created_at
