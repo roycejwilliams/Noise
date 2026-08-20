@@ -8,7 +8,7 @@ import { DateTime } from "luxon";
 import type { Server } from "socket.io";
 import twilio from "twilio";
 import pool from "../../../api/src/db/db.js";
-import { detectTurnTone } from "../../../api/src/services/emotionalTone.js";
+import { detectSeekingMode, detectTurnTone } from "../../../api/src/services/emotionalTone.js";
 import { hasPendingEmail, splitFullName } from "../../../api/src/services/identity.js";
 import { sendSMS } from "../../../api/src/otpActions.js";
 import {
@@ -1512,10 +1512,18 @@ Return ONLY strict JSON: {"full_name": string or null, "email": string or null}.
             .join("\n");
           const styleHint = deriveStyleHint(recentTextResult.rows);
 
-          await pool.query(
-            `INSERT INTO co_memories (user_id, memory_type, content) VALUES ($1, 'text_exchange', $2)`,
-            [user.id, `User said: ${content}`],
-          );
+          // Runs alongside the write, not blocking on it — a second advisory
+          // read on this same message, this time on what they need (heard
+          // vs. helped toward an answer) rather than how they feel. See
+          // detectSeekingMode's own comment for why this needs the
+          // conversation, not just the one message, unlike detectTurnTone.
+          const [, seekingMode] = await Promise.all([
+            pool.query(
+              `INSERT INTO co_memories (user_id, memory_type, content) VALUES ($1, 'text_exchange', $2)`,
+              [user.id, `User said: ${content}`],
+            ),
+            detectSeekingMode(content, recentConversation, "co-test.webhooks.detectSeekingMode"),
+          ]);
 
           // Show the animated "..." on the sender's device while Co "thinks" —
           // this branch runs a call-detection classification, possibly a
@@ -2210,6 +2218,13 @@ Return ONLY valid JSON, no preamble: {"wants_venue": true or false, "venue_type"
               ? `\nThey sound ${turnTone} right now. Let that genuinely shape your tone and pacing, not just your words — don't be breezy, joke, or rush past it if it doesn't fit. Never name the emotion back at them like a label.\n`
               : "";
 
+            // Advisory only, same as toneContext above — reading a shift the
+            // person never actually asked you to notice, not a rule.
+            const seekingModeContext =
+              seekingMode === "solving"
+                ? `\nThey've moved from sharing into wanting a real answer or help deciding — meet that directly. Give them your actual read, grounded in what you know about them, instead of another reflective question or a line that waits for them to ask first.\n`
+                : "";
+
             const { text: reply } = await propagateAttributes(
               { userId: user.id, traceName: "co-test.webhooks.generateReply" },
               () =>
@@ -2234,7 +2249,7 @@ Recent text conversation, in order:
 ${recentConversation || "(start of the text conversation)"}
 
 ${user.first_name} just said: "${content}"
-${isFirstContact ? `\nThis is the very start of your first real conversation with ${user.first_name} — they just finished the intro sequence above (greeting, what CoPatible is, saving your contact, verification). What they just said may be nothing more than a greeting from tapping "message Co to start," not real content to react to. If it IS something real, pick up from it genuinely. If it's just a greeting or blank, don't react to it as if it were substantive — instead open the real conversation yourself, the same way you would at the start of a call: warm, unhurried, inviting the real version of their life, not a status update.\n` : ""}${recommendationContext}${venueContext}${callOfferContext}${callFeatureQuestionContext}${scheduleCallContext}${closingContext}${toneContext}
+${isFirstContact ? `\nThis is the very start of your first real conversation with ${user.first_name} — they just finished the intro sequence above (greeting, what CoPatible is, saving your contact, verification). What they just said may be nothing more than a greeting from tapping "message Co to start," not real content to react to. If it IS something real, pick up from it genuinely. If it's just a greeting or blank, don't react to it as if it were substantive — instead open the real conversation yourself, the same way you would at the start of a call: warm, unhurried, inviting the real version of their life, not a status update.\n` : ""}${recommendationContext}${venueContext}${callOfferContext}${callFeatureQuestionContext}${scheduleCallContext}${closingContext}${toneContext}${seekingModeContext}
 ${styleHint}
 Ground everything ONLY in the information above and what has actually been said in this conversation — never state or imply a specific personal detail, preference, or fact about them that isn't listed above or wasn't actually said in this thread. This includes real venues and businesses: never name a specific one unless it's given to you above as something you actually found — if you don't have a real one, describe what you'd look for, don't guess a plausible-sounding name. If you don't have something, ask rather than assume.
 
