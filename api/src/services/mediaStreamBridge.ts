@@ -40,11 +40,16 @@ export function bridgeTwilioMediaStream(twilioWs: WebSocket): void {
     }
   }
 
-  async function startHumeConnection(userId: string) {
-    const [userResult, contextSummary] = await Promise.all([
-      pool.query(`SELECT first_name FROM users WHERE id = $1`, [userId]),
-      buildContextSummary(userId),
-    ]);
+  // userId is undefined for an inbound call from a number that doesn't
+  // match any user (see co.ts's /co/incoming-call) — connects Hume with no
+  // prior context rather than refusing the call outright.
+  async function startHumeConnection(userId: string | undefined) {
+    const [userResult, contextSummary] = userId
+      ? await Promise.all([
+          pool.query(`SELECT first_name FROM users WHERE id = $1`, [userId]),
+          buildContextSummary(userId),
+        ])
+      : [{ rows: [] as { first_name?: string }[] }, ""];
     const firstName = userResult.rows[0]?.first_name ?? "";
 
     humeSocket = hume.empathicVoice.chat.connect({
@@ -108,13 +113,11 @@ export function bridgeTwilioMediaStream(twilioWs: WebSocket): void {
         // user_id arrives as a <Parameter> (see co.ts/jobs/index.ts) — Twilio
         // strips query strings from Stream URLs entirely, so this is the
         // only place it's actually reachable, confirmed live against
-        // co-test before porting this fix here.
+        // co-test before porting this fix here. Absent for an inbound call
+        // from an unrecognized number (see co.ts's /co/incoming-call) —
+        // startHumeConnection still connects the call, just with no prior
+        // context, rather than silently hanging up on a real caller.
         const userId: string | undefined = msg.start?.customParameters?.user_id;
-        if (!userId) {
-          console.error("mediaStreamBridge: start event with no user_id in customParameters, closing");
-          safeCloseAll();
-          break;
-        }
         startHumeConnection(userId).catch((err: any) => {
           console.error("mediaStreamBridge: failed to start Hume connection:", err?.message ?? err);
           safeCloseAll();

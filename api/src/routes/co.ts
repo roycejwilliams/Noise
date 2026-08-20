@@ -50,11 +50,11 @@ const twilioClient = twilio(
 // Account SID). Renamed from TWILIO_AUTH_TOKEN to match what's actually set
 // in Railway — confirmed live against Twilio's own API (200 on a direct
 // Basic Auth test) before this rename.
-function validateTwilioSignature(req: Request): boolean {
+function validateTwilioSignature(req: Request, path: string): boolean {
   if (process.env.NODE_ENV !== "production") return true;
   const sig = req.headers["x-twilio-signature"] as string | undefined;
   if (!sig) return false;
-  const url = `${process.env.API_URL}/co/call-status`;
+  const url = `${process.env.API_URL}${path}`;
   return twilio.validateRequest(process.env.TWILIO_AUTH!, sig, url, req.body);
 }
 
@@ -222,6 +222,48 @@ async function sendMissedCallFollowUp(
     .catch((err) => console.error("Memory embedding failed (non-fatal):", err));
 }
 
+// POST /co/incoming-call — Twilio's inbound Voice webhook for
+// TWILIO_PHONE_NUMBER. Previously this number's inbound webhook pointed
+// straight at Hume's own /v0/evi/twilio server-to-server bridge (set in the
+// Twilio console) — that endpoint only accepts config_id/api_key as query
+// params, so every inbound call ran with no first_name/context_summary and
+// no reliable custom_session_id, unlike an outbound call Co places. This
+// route generates the same <Connect><Stream> TwiML callTrigger.ts uses for
+// outbound calls, into the same mediaStreamBridge.ts, so an inbound call
+// gets identical context injection and audio handling regardless of who
+// dialed whom. user_id is omitted (not looked up as an error) when the
+// caller's number doesn't match a user — mediaStreamBridge.ts still
+// connects the call in that case, just with no prior context.
+router.post(
+  "/incoming-call",
+  async (req: Request, res: Response, next: NextFunction) => {
+    try {
+      if (!validateTwilioSignature(req, "/co/incoming-call")) {
+        return res.status(401).send("Invalid Twilio signature.");
+      }
+
+      const from = req.body.From as string | undefined;
+      let userId: string | null = null;
+      if (from) {
+        const result = await pool.query(`SELECT id FROM users WHERE phone_number = $1`, [from]);
+        userId = result.rows[0]?.id ?? null;
+      }
+
+      // Same construction as callTrigger.ts's outbound TwiML — user_id
+      // travels as a <Parameter>, not a Stream URL query string, since
+      // Twilio strips query strings from Media Stream URLs entirely.
+      const mediaStreamUrl = `${process.env.API_URL!.replace(/^http/, "ws")}/media-stream`;
+      const twiml = new twilio.twiml.VoiceResponse();
+      const stream = twiml.connect().stream({ url: mediaStreamUrl });
+      if (userId) stream.parameter({ name: "user_id", value: userId });
+
+      res.type("text/xml").send(twiml.toString());
+    } catch (err) {
+      next(err);
+    }
+  },
+);
+
 // POST /co/call/:user_id — initiate outbound call to user
 router.post(
   "/call/:user_id",
@@ -264,7 +306,7 @@ router.post(
   "/call-status",
   async (req: Request, res: Response, next: NextFunction) => {
     try {
-      if (!validateTwilioSignature(req)) {
+      if (!validateTwilioSignature(req, "/co/call-status")) {
         return res.status(401).send("Invalid Twilio signature.");
       }
 
