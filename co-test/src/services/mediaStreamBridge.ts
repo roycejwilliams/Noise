@@ -18,11 +18,26 @@ import { decodeMulawBuffer, encodeMulawBuffer, parseWav, resampleLinear, toMono 
 // returns 48kHz WAV — audioCodec.ts handles both directions.
 const TWILIO_SAMPLE_RATE = 8000;
 
+// Twilio sends one media frame per ~20ms of audio, so this caps the
+// pre-connection buffer (see the "media" case below) at roughly 1.5s —
+// comfortably past the DB round-trip + Hume handshake in
+// startHumeConnection, but still bounded so an unusually slow setup falls
+// back to dropping instead of flushing a stale backlog.
+const PENDING_AUDIO_FRAME_CAP = 75;
+
 export function bridgeTwilioMediaStream(twilioWs: WebSocket): void {
   const hume = new HumeClient({ apiKey: process.env.HUME_API_KEY! });
   let streamSid: string | null = null;
   let humeSocket: ReturnType<typeof hume.empathicVoice.chat.connect> | null = null;
   let closed = false;
+  // Frames Twilio sends before humeSocket is open — see PENDING_AUDIO_FRAME_CAP.
+  const pendingAudio: Buffer[] = [];
+
+  function sendMulawFrame(mulawBuf: Buffer) {
+    const pcm = decodeMulawBuffer(mulawBuf);
+    const pcmBuf = Buffer.from(pcm.buffer, pcm.byteOffset, pcm.byteLength);
+    humeSocket!.sendAudioInput({ data: pcmBuf.toString("base64") });
+  }
 
   function safeCloseAll() {
     if (closed) return;
@@ -39,11 +54,16 @@ export function bridgeTwilioMediaStream(twilioWs: WebSocket): void {
     }
   }
 
-  async function startHumeConnection(userId: string) {
-    const [userResult, contextSummary] = await Promise.all([
-      pool.query(`SELECT first_name FROM users WHERE id = $1`, [userId]),
-      buildContextSummary(userId),
-    ]);
+  // userId is undefined for an inbound call from a number that doesn't
+  // match any user (see webhooks.ts's /co/incoming-call) — connects Hume
+  // with no prior context rather than refusing the call outright.
+  async function startHumeConnection(userId: string | undefined) {
+    const [userResult, contextSummary] = userId
+      ? await Promise.all([
+          pool.query(`SELECT first_name FROM users WHERE id = $1`, [userId]),
+          buildContextSummary(userId),
+        ])
+      : [{ rows: [] as { first_name?: string }[] }, ""];
     const firstName = userResult.rows[0]?.first_name ?? "";
 
     humeSocket = hume.empathicVoice.chat.connect({
@@ -87,6 +107,13 @@ export function bridgeTwilioMediaStream(twilioWs: WebSocket): void {
       // existing extraction/tool-call pipeline in webhooks.ts is untouched.
     });
 
+    humeSocket.on("open", () => {
+      // Flush whatever Twilio sent while we were still doing the DB lookup
+      // + Hume handshake above — see the "media" case's buffering comment.
+      while (pendingAudio.length) {
+        sendMulawFrame(pendingAudio.shift()!);
+      }
+    });
     humeSocket.on("error", (err: unknown) => {
       console.error("mediaStreamBridge: Hume socket error:", err);
     });
@@ -106,13 +133,12 @@ export function bridgeTwilioMediaStream(twilioWs: WebSocket): void {
         streamSid = msg.start?.streamSid ?? msg.streamSid ?? null;
         // user_id arrives as a <Parameter> (see callTrigger.ts) — Twilio
         // strips query strings from Stream URLs entirely, so this is the
-        // only place it's actually reachable, confirmed live.
+        // only place it's actually reachable, confirmed live. Absent for an
+        // inbound call from an unrecognized number (see webhooks.ts's
+        // /co/incoming-call) — startHumeConnection still connects the call,
+        // just with no prior context, rather than hanging up on a real
+        // caller.
         const userId: string | undefined = msg.start?.customParameters?.user_id;
-        if (!userId) {
-          console.error("mediaStreamBridge: start event with no user_id in customParameters, closing");
-          safeCloseAll();
-          break;
-        }
         startHumeConnection(userId).catch((err: any) => {
           console.error("mediaStreamBridge: failed to start Hume connection:", err?.message ?? err);
           safeCloseAll();
@@ -121,16 +147,16 @@ export function bridgeTwilioMediaStream(twilioWs: WebSocket): void {
       }
 
       case "media": {
-        // Frames arriving in the brief window before Hume's socket opens are
-        // dropped rather than buffered — at most a few hundred ms of the
-        // very start of the call, an acceptable loss given the alternative
-        // (unbounded buffering) risks a worse problem: a backlog that plays
-        // back out of sync with the live conversation.
-        if (!humeSocket || humeSocket.readyState !== 1 /* WebSocket.OPEN */) return;
         const mulawBuf = Buffer.from(msg.media.payload, "base64");
-        const pcm = decodeMulawBuffer(mulawBuf);
-        const pcmBuf = Buffer.from(pcm.buffer, pcm.byteOffset, pcm.byteLength);
-        humeSocket.sendAudioInput({ data: pcmBuf.toString("base64") });
+        if (!humeSocket || humeSocket.readyState !== 1 /* WebSocket.OPEN */) {
+          // Buffer briefly instead of dropping outright, so the caller's
+          // actual opening words reach Hume once the socket opens — capped
+          // at PENDING_AUDIO_FRAME_CAP so an unusually slow setup still
+          // falls back to dropping rather than flushing a stale backlog.
+          if (pendingAudio.length < PENDING_AUDIO_FRAME_CAP) pendingAudio.push(mulawBuf);
+          return;
+        }
+        sendMulawFrame(mulawBuf);
         break;
       }
 

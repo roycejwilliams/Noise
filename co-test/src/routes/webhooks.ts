@@ -547,10 +547,10 @@ async function handleToolCall(
 // TWILIO_AUTH just needs to hold that account's current Auth Token. Confirmed
 // live: it previously held a stale value (401'd against Twilio's own API),
 // now holds the verified-current one (200'd the same check).
-function validateTwilioSignature(req: Request): boolean {
+function validateTwilioSignature(req: Request, path: string): boolean {
   const sig = req.headers["x-twilio-signature"] as string | undefined;
   if (!sig) return false;
-  const url = `${process.env.API_URL}/co/call-status`;
+  const url = `${process.env.API_URL}${path}`;
   return twilio.validateRequest(process.env.TWILIO_AUTH!, sig, url, req.body);
 }
 
@@ -630,6 +630,43 @@ function validateHumeWebhook(req: Request): boolean {
 export function createWebhooksRouter(io: Server): express.Router {
   const router = express.Router();
 
+  // POST /co/incoming-call — Twilio's inbound Voice webhook for
+  // TWILIO_PHONE_NUMBER. Ported from feature/prod-inbound-calls (PR #45, not
+  // yet merged to main) so this can be tested on co-test first. Same shared
+  // Twilio number as prod — inbound calls previously went straight to
+  // Hume's old native Twilio integration, bypassing our app entirely (no
+  // first_name/context_summary, no reliable custom_session_id). Generates
+  // the same <Connect><Stream> TwiML callTrigger.ts uses for outbound calls,
+  // into the same mediaStreamBridge.ts. user_id omitted (not an error) when
+  // the caller's number doesn't match a user — mediaStreamBridge.ts still
+  // connects the call in that case, just with no prior context.
+  router.post(
+    "/co/incoming-call",
+    async (req: Request, res: Response, next: NextFunction) => {
+      try {
+        if (!validateTwilioSignature(req, "/co/incoming-call")) {
+          return res.status(401).send("Invalid Twilio signature.");
+        }
+
+        const from = req.body.From as string | undefined;
+        let userId: string | null = null;
+        if (from) {
+          const result = await pool.query(`SELECT id FROM users WHERE phone_number = $1`, [from]);
+          userId = result.rows[0]?.id ?? null;
+        }
+
+        const mediaStreamUrl = `${process.env.API_URL!.replace(/^http/, "ws")}/media-stream`;
+        const twiml = new twilio.twiml.VoiceResponse();
+        const stream = twiml.connect().stream({ url: mediaStreamUrl });
+        if (userId) stream.parameter({ name: "user_id", value: userId });
+
+        res.type("text/xml").send(twiml.toString());
+      } catch (err) {
+        next(err);
+      }
+    },
+  );
+
   // POST /co/call-status — Twilio status callback for the real-call trigger in
   // phone.ts. Also receives the async AMD (answering-machine-detection)
   // result — see the AnsweredBy branch below — ported from production's
@@ -645,7 +682,7 @@ export function createWebhooksRouter(io: Server): express.Router {
         // Token, confirmed directly against Twilio's API (Basic Auth against
         // /Accounts/{TWILIO_LIVE_SID}.json returned 401). Now holds the current,
         // verified-correct token (confirmed 200 against the same check).
-        if (!validateTwilioSignature(req)) {
+        if (!validateTwilioSignature(req, "/co/call-status")) {
           return res.status(401).send("Invalid Twilio signature.");
         }
 
