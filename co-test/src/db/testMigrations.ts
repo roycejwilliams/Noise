@@ -255,4 +255,11 @@ export function runTestMigrations() {
   pool
     .query(`ALTER TABLE scheduled_calls ADD COLUMN IF NOT EXISTS reminder_sent_at TIMESTAMPTZ`)
     .catch((err: Error) => console.error("scheduled_calls.reminder_sent_at migration failed:", err));
+
+  // Nothing previously honored STOP — a user who texted it would just get a
+  // normal Co reply and keep receiving texts and calls. Gates every outbound
+  // send in webhooks.ts and both cron jobs; set back to false on START/UNSTOP.
+  pool
+    .query(`ALTER TABLE users ADD COLUMN IF NOT EXISTS sms_opted_out BOOLEAN NOT NULL DEFAULT false`)
+    .catch((err: Error) => console.error("users.sms_opted_out migration failed:", err));
 }

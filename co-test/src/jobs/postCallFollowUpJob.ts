@@ -23,7 +23,7 @@ async function sendDueFollowUps(): Promise<void> {
     `SELECT pcf.id, pcf.user_id, pcf.transcript, u.first_name, u.phone_number
      FROM post_call_follow_ups pcf
      JOIN users u ON u.id = pcf.user_id
-     WHERE pcf.send_at <= NOW() AND pcf.sent_at IS NULL
+     WHERE pcf.send_at <= NOW() AND pcf.sent_at IS NULL AND u.sms_opted_out = false
      LIMIT 20`,
   );
 

@@ -9,6 +9,7 @@ import type { Server } from "socket.io";
 import twilio from "twilio";
 import pool from "../../../api/src/db/db.js";
 import { detectSeekingMode, detectTurnTone } from "../../../api/src/services/emotionalTone.js";
+import { isOptInKeyword, isOptOutKeyword } from "../../../api/src/services/optOut.js";
 import { hasPendingEmail, splitFullName } from "../../../api/src/services/identity.js";
 import { sendSMS } from "../../../api/src/otpActions.js";
 import {
@@ -1100,7 +1101,7 @@ export function createWebhooksRouter(io: Server): express.Router {
           // which reuses that same login row rather than creating a separate
           // one).
           const userResult = await pool.query(
-            `SELECT id, first_name, email, contact_verified, identity_captured, intake_asked FROM users WHERE phone_number = $1 AND test_channel = 'phone'`,
+            `SELECT id, first_name, email, contact_verified, identity_captured, intake_asked, sms_opted_out FROM users WHERE phone_number = $1 AND test_channel = 'phone'`,
             [number],
           );
           let user = userResult.rows[0];
@@ -1110,6 +1111,42 @@ export function createWebhooksRouter(io: Server): express.Router {
               `co-test sendblue webhook: no phone-test session for ${number} — ignoring`,
             );
             return res.status(200).send({ received: true });
+          }
+
+          // STOP/START handling — previously nothing honored this at all, so
+          // a user who texted STOP just got a normal Co reply and kept
+          // receiving texts and calls. Checked before anything else (intake,
+          // duplicate guard, real reply) so it works regardless of account
+          // state, and short-circuits everything below for an opted-out user
+          // except START/UNSTOP itself.
+          if (isOptOutKeyword(content)) {
+            await pool.query(`UPDATE users SET sms_opted_out = true WHERE id = $1`, [user.id]);
+            try {
+              await sendblue.messages.send({
+                number,
+                content: "You've been unsubscribed and won't receive further messages or calls from Co. Text START to resubscribe.",
+                from_number: process.env.SENDBLUE_PHONE_NUMBER!,
+              });
+            } catch (err: any) {
+              console.error("co-test sendblue webhook: opt-out confirmation send failed (non-fatal):", err?.message ?? err);
+            }
+            return res.status(200).send({ received: true, action: "opted_out" });
+          }
+          if (isOptInKeyword(content)) {
+            await pool.query(`UPDATE users SET sms_opted_out = false WHERE id = $1`, [user.id]);
+            try {
+              await sendblue.messages.send({
+                number,
+                content: "You're resubscribed — welcome back.",
+                from_number: process.env.SENDBLUE_PHONE_NUMBER!,
+              });
+            } catch (err: any) {
+              console.error("co-test sendblue webhook: opt-in confirmation send failed (non-fatal):", err?.message ?? err);
+            }
+            return res.status(200).send({ received: true, action: "opted_in" });
+          }
+          if (user.sms_opted_out) {
+            return res.status(200).send({ received: true, action: "opted_out_ignored" });
           }
 
           // Duplicate-message guard — reliable now that processing is

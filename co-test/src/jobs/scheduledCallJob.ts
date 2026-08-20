@@ -11,8 +11,14 @@ import { triggerCall } from "../services/callTrigger.js";
 // instant, computed once at capture time — this job never re-parses a
 // timezone, it just polls for what's due.
 async function placeDueCalls(): Promise<void> {
+  // Excludes opted-out users — a scheduled call from before they opted out
+  // should never fire; left 'pending' rather than force-completed/cancelled
+  // so nothing here silently rewrites a status the user didn't cause.
   const due = await pool.query(
-    `SELECT id, user_id FROM scheduled_calls WHERE scheduled_for <= NOW() AND status = 'pending' LIMIT 20`,
+    `SELECT sc.id, sc.user_id FROM scheduled_calls sc
+     JOIN users u ON u.id = sc.user_id
+     WHERE sc.scheduled_for <= NOW() AND sc.status = 'pending' AND u.sms_opted_out = false
+     LIMIT 20`,
   );
 
   for (const row of due.rows) {
@@ -58,6 +64,7 @@ async function sendDueReminders(): Promise<void> {
        AND sc.reminder_sent_at IS NULL
        AND sc.scheduled_for <= NOW() + INTERVAL '15 minutes'
        AND sc.scheduled_for > NOW()
+       AND u.sms_opted_out = false
      LIMIT 20`,
   );
 
