@@ -589,7 +589,7 @@ router.post(
 
 "${transcript}"
 
-Text them something short that proves you were actually listening — pick one real, specific thing they said (a feeling, a struggle, a detail) and respond to that, not a summary of the whole call. This should read like it came from someone who resonated with what they heard, not someone closing out a form. Real warmth, and genuine humor if something they said actually calls for it — Co has a personality, not a script.
+Text them something short that proves you were actually listening — pick one real, specific thing they said (a feeling, a struggle, a detail) and react to it with a genuine read on them: what it told you about them, not just an echo of what they said back at them. They should come away knowing you actually formed an impression of them, not just that you heard words. This should read like it came from someone who resonated with what they heard and has a real take on them now, not someone closing out a form or reciting a recap. Real warmth, and genuine humor if something they said actually calls for it — Co has a personality, not a script.
 
 Do not say "I have what I need," "I'll be in touch," "your circle is ready/next," or anything that sounds like a status update. No exclamation points. No em dashes. 1-2 sentences, text-message length.`,
           });
