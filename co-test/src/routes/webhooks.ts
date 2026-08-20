@@ -637,9 +637,11 @@ export function createWebhooksRouter(io: Server): express.Router {
   // Hume's old native Twilio integration, bypassing our app entirely (no
   // first_name/context_summary, no reliable custom_session_id). Generates
   // the same <Connect><Stream> TwiML callTrigger.ts uses for outbound calls,
-  // into the same mediaStreamBridge.ts. user_id omitted (not an error) when
-  // the caller's number doesn't match a user — mediaStreamBridge.ts still
-  // connects the call in that case, just with no prior context.
+  // into the same mediaStreamBridge.ts. Only a recognized caller (phone
+  // number matches a user) reaches that bridge at all — an unrecognized
+  // number is turned away here, before any stream connects, rather than
+  // being bridged into Hume with no identity (mediaStreamBridge.ts requires
+  // user_id and closes without it).
   router.post(
     "/co/incoming-call",
     async (req: Request, res: Response, next: NextFunction) => {
@@ -649,16 +651,21 @@ export function createWebhooksRouter(io: Server): express.Router {
         }
 
         const from = req.body.From as string | undefined;
-        let userId: string | null = null;
-        if (from) {
-          const result = await pool.query(`SELECT id FROM users WHERE phone_number = $1`, [from]);
-          userId = result.rows[0]?.id ?? null;
+        const result = from
+          ? await pool.query(`SELECT id FROM users WHERE phone_number = $1`, [from])
+          : null;
+        const userId: string | null = result?.rows[0]?.id ?? null;
+
+        const twiml = new twilio.twiml.VoiceResponse();
+        if (!userId) {
+          twiml.say("Sorry, we don't recognize this number. Text us instead and we'll get you set up.");
+          twiml.hangup();
+          return res.type("text/xml").send(twiml.toString());
         }
 
         const mediaStreamUrl = `${process.env.API_URL!.replace(/^http/, "ws")}/media-stream`;
-        const twiml = new twilio.twiml.VoiceResponse();
         const stream = twiml.connect().stream({ url: mediaStreamUrl });
-        if (userId) stream.parameter({ name: "user_id", value: userId });
+        stream.parameter({ name: "user_id", value: userId });
 
         res.type("text/xml").send(twiml.toString());
       } catch (err) {
