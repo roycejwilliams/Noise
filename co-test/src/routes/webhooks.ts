@@ -1872,7 +1872,7 @@ Return ONLY valid JSON, no preamble: {"date": "YYYY-MM-DD or null", "time": "HH:
           // the feature works, not requesting one.
           const callFeatureQuestionContext =
             callAction === "asks_about_calling"
-              ? `\nThey just asked a plain question about how calling works — answer it directly and honestly, don't place a call, and don't say or imply a call is happening. The true answer: Co can call them — by text right now ("call me") or scheduled for later — and that's real and live. Them calling Co is not available yet; if that's what they're asking, say so plainly rather than deflecting to the reverse direction or pretending it's live.`
+              ? `\nThey just asked a plain question about how calling works — answer it directly and honestly, don't place a call, and don't say or imply a call is happening. The true answer: Co can call them — by text right now ("call me") or scheduled for later — and that's real and live. They can also call Co directly at this same number anytime — that connects to a real, live conversation with Co. Only mention this second part if it's actually what they're asking about; don't volunteer it unprompted.`
               : "";
 
           if (shouldTriggerCall) {
