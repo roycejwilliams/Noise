@@ -1605,7 +1605,8 @@ ${recentConversation || "(start of the conversation)"}
 Their latest message: "${content}"
 
 Classify their LATEST message, read in light of the recent conversation above, as ONE of:
-- "explicit_request" — they are directly asking Co to call them RIGHT NOW, or asking to talk by phone with no specific future time attached
+- "explicit_request" — they are directly asking Co to call them RIGHT NOW, or asking to talk by phone with no specific future time attached. This is a command, not a question — "call me", "let's talk on the phone", "can you call me right now". It is NOT this if they are asking whether or how calling works rather than asking for one — see "asks_about_calling" below for that. When in doubt whether something is a request or a question about the feature, treat it as the question.
+- "asks_about_calling" — they are asking whether, or how, calling works — as a question about the feature, not a command to place one. Examples: "can I just call you?", "is it true I can call you now?", "can I initiate a call?", "can I call you whenever I want?", "do you call people?". This is never triggered by their phrasing containing the word "call" alone — it's specifically a question rather than an instruction.
 - "schedule_request" — they want a call at a specific future date/time, whether that time was fully stated just now ("call me tomorrow at 3") or is only complete once combined with what they said earlier in this conversation (e.g. they gave a time a few messages ago and are now confirming the date or timezone Co asked for) — not right now
 - "cancel_scheduled_call" — they want to cancel a call they'd previously scheduled, with no new time given ("actually never mind about that call", "can we skip the call Thursday")
 ${hasPendingOffer ? '- "accepts_offer" — they are saying yes to the call Co just offered\n- "declines_offer" — they are saying no to the call Co just offered\n' : ""}- "would_benefit" — none of the above, but what they're describing is complex, emotional, or hard to unpack over short texts, and voice would genuinely help
@@ -1815,6 +1816,19 @@ Return ONLY valid JSON, no preamble: {"date": "YYYY-MM-DD or null", "time": "HH:
             : isThinProfileFirstMessage
               ? `\nThis is the first real thing they've shared and nothing is known about them yet — first, actually respond to what they said. Then offer a quick call as a warm, low-pressure way to actually get to know them — a real conversation just gets Co so much further than texting back and forth. Keep it brief and secondary, never in place of a real response. Do not place any call, just make the gesture.`
               : `\nWhat they just shared could genuinely benefit from a real conversation by voice — but that is not the priority. First, actually respond to what they said: reflect it, and if you have something concrete to offer below (a real recommendation or a real place you found), lead with that instead of a call. Only if it still feels right after that, offer a call as a warm gesture, not a logistics question — the way someone says "I'm here if you ever want to actually talk this through," not "are you free for a call today or tomorrow." Keep it brief and secondary, never in place of a real response. Do not place any call, just make the gesture.`;
+
+          // They asked a plain question about the calling feature — answer it
+          // truthfully, don't place a call and don't pretend one is
+          // happening. Confirmed live: without this, the classifier alone
+          // wasn't a strong enough signal on its own to stop the reply from
+          // improvising "calling you now" language, and separately, this
+          // question being misread as explicit_request was actually placing
+          // real outbound Twilio calls to people who were just asking how
+          // the feature works, not requesting one.
+          const callFeatureQuestionContext =
+            callAction === "asks_about_calling"
+              ? `\nThey just asked a plain question about how calling works — answer it directly and honestly, don't place a call, and don't say or imply a call is happening. The true answer: Co can call them — by text right now ("call me") or scheduled for later — and that's real and live. Them calling Co is not available yet; if that's what they're asking, say so plainly rather than deflecting to the reverse direction or pretending it's live.`
+              : "";
 
           if (shouldTriggerCall) {
             const callResult = await triggerCall(user.id);
@@ -2220,7 +2234,7 @@ Recent text conversation, in order:
 ${recentConversation || "(start of the text conversation)"}
 
 ${user.first_name} just said: "${content}"
-${isFirstContact ? `\nThis is the very start of your first real conversation with ${user.first_name} — they just finished the intro sequence above (greeting, what CoPatible is, saving your contact, verification). What they just said may be nothing more than a greeting from tapping "message Co to start," not real content to react to. If it IS something real, pick up from it genuinely. If it's just a greeting or blank, don't react to it as if it were substantive — instead open the real conversation yourself, the same way you would at the start of a call: warm, unhurried, inviting the real version of their life, not a status update.\n` : ""}${recommendationContext}${venueContext}${callOfferContext}${scheduleCallContext}${closingContext}${toneContext}
+${isFirstContact ? `\nThis is the very start of your first real conversation with ${user.first_name} — they just finished the intro sequence above (greeting, what CoPatible is, saving your contact, verification). What they just said may be nothing more than a greeting from tapping "message Co to start," not real content to react to. If it IS something real, pick up from it genuinely. If it's just a greeting or blank, don't react to it as if it were substantive — instead open the real conversation yourself, the same way you would at the start of a call: warm, unhurried, inviting the real version of their life, not a status update.\n` : ""}${recommendationContext}${venueContext}${callOfferContext}${callFeatureQuestionContext}${scheduleCallContext}${closingContext}${toneContext}
 ${styleHint}
 Ground everything ONLY in the information above and what has actually been said in this conversation — never state or imply a specific personal detail, preference, or fact about them that isn't listed above or wasn't actually said in this thread. This includes real venues and businesses: never name a specific one unless it's given to you above as something you actually found — if you don't have a real one, describe what you'd look for, don't guess a plausible-sounding name. If you don't have something, ask rather than assume.
 
