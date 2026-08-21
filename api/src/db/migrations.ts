@@ -656,4 +656,20 @@ export function runMigrations() {
   pool
     .query(`ALTER TABLE co_profiles ADD COLUMN IF NOT EXISTS topics_asked JSONB NOT NULL DEFAULT '{}'::jsonb`)
     .catch((err: Error) => console.error("co_profiles.topics_asked migration failed:", err));
+
+  // Double-text debounce (sendblue.ts webhook) — one row per phone number,
+  // stamped the instant a webhook POST arrives, before withPhoneLock's
+  // advisory lock is acquired. That ordering matters: once a phone's lock is
+  // held, a second inbound message for that same phone can't run ANY code —
+  // including a DB write — until the first one's lock is released, so a
+  // still-queued message's arrival would otherwise be invisible to the
+  // request currently waiting out its debounce window.
+  pool
+    .query(
+      `CREATE TABLE IF NOT EXISTS phone_debounce (
+        phone TEXT PRIMARY KEY,
+        last_inbound_at TIMESTAMPTZ NOT NULL
+      )`,
+    )
+    .catch((err: Error) => console.error("phone_debounce table init failed:", err));
 }

@@ -168,6 +168,28 @@ async function sendCoReply(params: {
   }
 }
 
+// Persists one side of a text exchange — same insert-then-embed pattern
+// Step 3 (inbound) and Step 7 (Co's reply) use below for the main chat flow.
+// Pulled out here because the identity-intake branch (Step 1.2) used to
+// return early on every path without logging anything: a name/email mixup
+// during intake left zero trace in co_memories, unlike every other exchange
+// in the app. Embedding is fire-and-forget, matching Step 3/7's own
+// non-blocking pattern — nothing here should delay Co's reply.
+async function logTextExchange(userId: string, content: string): Promise<void> {
+  const inserted = await pool.query(
+    `INSERT INTO co_memories (user_id, memory_type, content) VALUES ($1, 'text_exchange', $2) RETURNING id`,
+    [userId, content],
+  );
+  generateEmbedding(content)
+    .then((emb) =>
+      pool.query(`UPDATE co_memories SET content_embedding = $1::vector WHERE id = $2`, [
+        `[${emb.join(",")}]`,
+        inserted.rows[0].id,
+      ]),
+    )
+    .catch((err) => console.error("Memory embedding failed (non-fatal):", err));
+}
+
 export function sendblueRouter(io: Server): Router {
   const router = Router();
 
@@ -429,12 +451,18 @@ export function sendblueRouter(io: Server): Router {
             // First contact ever from this number — greet, then ask. Nothing
             // in this inbound message is treated as an answer, since Co
             // hasn't asked the question yet.
+            if (hasText) await logTextExchange(user.id, `User said: ${content}`);
             await pool.query(`UPDATE users SET intake_asked = true WHERE id = $1`, [user.id]);
             await sendSMS({ phone_number: number, welcome: true });
             await sendSMS({ phone_number: number, intro: true });
             await sendSMS({ phone_number: number, intake_ask: true });
             return res.status(200).send({ received: true, action: "intake_started" });
           }
+
+          await logTextExchange(
+            user.id,
+            hasText ? `User said: ${content}` : "User sent a photo or voice memo (name/email intake)",
+          );
 
           const { text: rawExtraction } = await generateText({
             model: anthropic("claude-haiku-4-5-20251001"),
@@ -470,11 +498,9 @@ Return ONLY strict JSON: {"full_name": string or null, "email": string or null}.
               user = updated.rows[0];
             } catch (err: any) {
               if (err?.code === "23505") {
-                await sendCoReply({
-                  phone: number,
-                  message: "Looks like that email's already on file. Mind sending a different one?",
-                  asVoice: false,
-                });
+                const conflictMsg = "Looks like that email's already on file. Mind sending a different one?";
+                await sendCoReply({ phone: number, message: conflictMsg, asVoice: false });
+                await logTextExchange(user.id, `Co replied: ${conflictMsg}`);
                 return res.status(200).send({ received: true, action: "intake_email_conflict" });
               }
               throw err;
@@ -492,6 +518,7 @@ Return ONLY strict JSON: {"full_name": string or null, "email": string or null}.
               console.error("Intake kickoff message generation failed, using fallback (non-fatal):", genErr?.message ?? genErr);
             }
             await sendCoReply({ phone: number, message: kickoffMsg, asVoice: false });
+            await logTextExchange(user.id, `Co replied: ${kickoffMsg}`);
             return res.status(200).send({ received: true, action: "identity_captured" });
           }
 
@@ -509,6 +536,7 @@ Return ONLY strict JSON: {"full_name": string or null, "email": string or null}.
               : "Sorry, didn't catch that. What's your full name and email?"
             : "Got your name — what's the best email for you?";
           await sendCoReply({ phone: number, message: missingReply, asVoice: false });
+          await logTextExchange(user.id, `Co replied: ${missingReply}`);
           return res.status(200).send({ received: true, action: "intake_incomplete" });
         }
 
