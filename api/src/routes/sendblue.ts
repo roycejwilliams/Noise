@@ -517,10 +517,10 @@ Already known — name: ${user.first_name || "not yet given"}, email: ${hasPendi
 
 Their reply: "${hasText ? content : "[no text — sent a photo or voice memo instead]"}"
 
-Return ONLY strict JSON: {"full_name": string or null, "email": string or null}. Only set a field you're actually confident about — carry forward an already-known value if this reply doesn't repeat it, and don't guess at one that's still missing.`,
+Return ONLY strict JSON: {"full_name": string or null, "email": string or null, "is_acknowledgment": boolean}. Only set full_name/email when you're actually confident — carry forward an already-known value if this reply doesn't repeat it, and don't guess at one that's still missing. Set is_acknowledgment true when the reply is just a social acknowledgment of Co's welcome (e.g. "thanks", "ok", "sounds good") with no attempt to give a name or email — false otherwise, including when they did attempt an answer that just didn't parse.`,
           });
 
-          let extracted: { full_name: string | null; email: string | null };
+          let extracted: { full_name: string | null; email: string | null; is_acknowledgment?: boolean };
           try {
             extracted = JSON.parse(rawExtraction.trim().replace(/^```(?:json)?\n?|\n?```$/g, ""));
           } catch {
@@ -574,10 +574,18 @@ Return ONLY strict JSON: {"full_name": string or null, "email": string or null}.
               last_name,
             ]);
           }
+          // A bare "thanks" or "ok" after the welcome sequence isn't a failed
+          // attempt to answer — it's a normal reaction to being welcomed in,
+          // and Co only had the name/email question to compare it against.
+          // "Sorry, didn't catch that" is the right tone for a genuinely
+          // garbled attempt, but wrong here: nothing was missed, they just
+          // hadn't answered yet.
           const missingReply = !finalName
-            ? extracted.email && !emailValid
-              ? "That email didn't look quite right — mind double-checking it?"
-              : "Sorry, didn't catch that. What's your full name and email?"
+            ? extracted.is_acknowledgment
+              ? "Of course. So, what's your full name and email?"
+              : extracted.email && !emailValid
+                ? "That email didn't look quite right — mind double-checking it?"
+                : "Sorry, didn't catch that. What's your full name and email?"
             : "Got your name — what's the best email for you?";
           await sendCoReply({ phone: number, message: missingReply, asVoice: false });
           await logTextExchange(user.id, `Co replied: ${missingReply}`);
