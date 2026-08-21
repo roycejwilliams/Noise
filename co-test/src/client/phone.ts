@@ -143,9 +143,17 @@ async function initSession() {
     const textInNumber = data.text_in_number ?? null;
     if (textInNumber) {
       // sms: link pre-addresses the device's native Messages/iMessage compose
-      // sheet — this only removes the manual step of finding/typing the
-      // number; the tester still has to send the message themselves.
-      messageCoButton.href = `sms:${textInNumber}`;
+      // sheet, and now pre-fills a draft greeting too — per product decision,
+      // testers were landing on a blank compose box with no signal of what
+      // they're actually supposed to do, they still have to send it
+      // themselves. iOS and Android use different separators before `body=`
+      // on an sms: URI (confirmed against both platforms' documented
+      // behavior) — a plain UA sniff is enough here since this is only ever
+      // opened by tapping the link on the device itself.
+      const isIOS = /iPhone|iPad|iPod/i.test(navigator.userAgent);
+      const bodySeparator = isIOS ? "&" : "?";
+      const greeting = encodeURIComponent("Hi Co!");
+      messageCoButton.href = `sms:${textInNumber}${bodySeparator}body=${greeting}`;
     } else {
       messageCoButton.classList.add("hidden");
       entryError.textContent = "No text-in number configured — check server config.";
