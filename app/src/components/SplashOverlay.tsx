@@ -62,7 +62,7 @@ export function SplashOverlay({ onDone, preparing }: Props) {
       <View style={styles.center}>
         {/* Logo mark — placeholder until final brand assets land */}
         <View style={styles.logoMark} />
-        <Text style={styles.wordmark}>CoPatible</Text>
+        <Text style={styles.wordmark}>Co</Text>
         {/* <Text style={styles.tagline}>Your companion. Your circle.</Text> */}
         <Animated.View
           style={[styles.spinnerWrap, { opacity: spinnerOpacity }]}

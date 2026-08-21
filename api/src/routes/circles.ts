@@ -424,7 +424,7 @@ GROUP BY c.id`,
         if (existingUser.rows.length > 0) {
           return res
             .status(400)
-            .send("User is already on CoPatible. Use the standard invite.");
+            .send("User is already on Co. Use the standard invite.");
         }
 
         const ownerCheck = await pool.query(

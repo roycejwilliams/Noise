@@ -37,6 +37,7 @@ import { stripeRouter } from "./routes/stripe.js";
 import { createUsersRouter } from "./routes/users.js";
 import { getAudioEntry } from "./services/voiceNote.js";
 import { configureSocket } from "./socket/index.js";
+import { buildCoVCard } from "./utils/vcard.js";
 
 const app = express();
 app.set("trust proxy", 1);
@@ -81,16 +82,7 @@ app.use("/sendblue", sendblueRouter(io));
 // (via ngrok in dev, or Railway in prod). CO_VCARD_URL points here.
 app.get("/co.vcf", (_req, res) => {
   const phone = process.env.SENDBLUE_PHONE_NUMBER ?? "";
-  const vcard = [
-    "BEGIN:VCARD",
-    "VERSION:3.0",
-    "FN:Co",
-    "ORG:CoPatible",
-    `TEL:${phone}`,
-    "URL:https://app.copatible.com",
-    "NOTE:Your life concierge.",
-    "END:VCARD",
-  ].join("\r\n");
+  const vcard = buildCoVCard(phone);
   res.setHeader("Content-Type", "text/vcard");
   res.setHeader("Content-Disposition", "attachment; filename=Co.vcf");
   res.setHeader("Cache-Control", "public, max-age=86400");

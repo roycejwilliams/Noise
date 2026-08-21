@@ -26,7 +26,7 @@ export default function Home() {
           margin: 0,
         }}
       >
-        CoPatible
+        Co
       </h1>
 
       <p

@@ -11,6 +11,7 @@ import { Server } from "socket.io";
 import { WebSocketServer } from "ws";
 import pool from "../../api/src/db/db.js";
 import { runMigrations } from "../../api/src/db/migrations.js";
+import { buildCoVCard } from "../../api/src/utils/vcard.js";
 import { runTestMigrations } from "./db/testMigrations.js";
 import { configureCoTestSocket } from "./socket/index.js";
 import apiRouter from "./routes/api.js";
@@ -98,16 +99,7 @@ async function main() {
   // production's identical route in api/src/server.ts.
   app.get("/co.vcf", (_req, res) => {
     const phone = process.env.SENDBLUE_PHONE_NUMBER ?? "";
-    const vcard = [
-      "BEGIN:VCARD",
-      "VERSION:3.0",
-      "FN:Co",
-      "ORG:CoPatible",
-      `TEL:${phone}`,
-      "URL:https://app.copatible.com",
-      "NOTE:Your life concierge.",
-      "END:VCARD",
-    ].join("\r\n");
+    const vcard = buildCoVCard(phone);
     res.setHeader("Content-Type", "text/vcard");
     res.setHeader("Content-Disposition", "attachment; filename=Co.vcf");
     res.setHeader("Cache-Control", "public, max-age=86400");

@@ -29,7 +29,7 @@ export default function ProfileMain({ profile, user, circle }: Props) {
 
   return (
     <SafeAreaView style={s.root}>
-      <Text style={s.wordmark}>CoPatible</Text>
+      <Text style={s.wordmark}>Co</Text>
       <ScrollView style={s.scroll} contentContainerStyle={s.content} showsVerticalScrollIndicator={false}>
         <Text style={s.sectionLabel}>Profile</Text>
 

@@ -116,7 +116,7 @@ export default function ProfileScreen() {
   if (state === "no_profile" || !user) {
     return (
       <SafeAreaView style={s.root}>
-        <Text style={s.wordmark}>CoPatible</Text>
+        <Text style={s.wordmark}>Co</Text>
         <View style={s.emptyWrap}>
           <Text style={s.emptyHeadline}>Co hasn't called yet.</Text>
           <Text style={s.emptyMuted}>

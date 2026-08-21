@@ -157,7 +157,7 @@ export default function CircleScreen() {
 
   return (
     <SafeAreaView style={cs.root}>
-      <Text style={cs.wordmark}>CoPatible</Text>
+      <Text style={cs.wordmark}>Co</Text>
 
       {/* Empty state */}
       {state === "empty" && (

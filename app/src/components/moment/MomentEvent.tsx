@@ -38,7 +38,7 @@ export default function MomentEvent({ moment, members }: Props) {
 
   return (
     <SafeAreaView style={s.root}>
-      <Text style={s.wordmark}>CoPatible</Text>
+      <Text style={s.wordmark}>Co</Text>
       <ScrollView style={s.scroll} showsVerticalScrollIndicator={false}>
         <View style={s.heroPlaceholder}>
           <View style={s.heroIcon} />

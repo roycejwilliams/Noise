@@ -96,8 +96,8 @@ const EMAIL_STYLES = `
   }
 `;
 
-const BRAND = `<p class="brand" style="font-size:11px;letter-spacing:4px;text-transform:uppercase;color:#444444;margin:0 0 48px 0;">CoPatible</p>`;
-const FOOTER = `<p class="footer-text" style="font-size:11px;letter-spacing:2px;text-transform:uppercase;color:#333333;margin-top:32px;">CoPatible is intentional. So is this.</p>`;
+const BRAND = `<p class="brand" style="font-size:11px;letter-spacing:4px;text-transform:uppercase;color:#444444;margin:0 0 48px 0;">Co</p>`;
+const FOOTER = `<p class="footer-text" style="font-size:11px;letter-spacing:2px;text-transform:uppercase;color:#333333;margin-top:32px;">Co is intentional. So is this.</p>`;
 const OTP_BOX = (code: string) =>
   `<div class="otp-box" style="border:1px solid #222222;border-radius:4px;padding:28px;text-align:center;letter-spacing:12px;font-size:28px;font-weight:700;color:#ffffff;margin:0 0 24px 0;">${code}</div>`;
 
@@ -156,22 +156,22 @@ export const sendSMS = async ({
 
   try {
     if (status === "accepted") {
-      await send(`You're in. You were chosen to join CoPatible. Use the code below to get started.\n${otp_code}`);
+      await send(`You're in. You were chosen to join Co. Use the code below to get started.\n${otp_code}`);
     } else if (status === "rejected") {
-      await send(`Your CoPatible application wasn't accepted. You're welcome to update and resubmit.`);
+      await send(`Your Co application wasn't accepted. You're welcome to update and resubmit.`);
     }
 
     if (resent) {
-      await send(`Here's your new CoPatible verification code.\n${otp_code}`);
+      await send(`Here's your new Co verification code.\n${otp_code}`);
     }
 
     if (login) {
-      await send(`Your CoPatible login code is below. It expires in 5 minutes.\n${otp_code}`);
+      await send(`Your Co login code is below. It expires in 5 minutes.\n${otp_code}`);
     }
 
     if (intro) {
       await send(
-        `CoPatible is invite-only. Co's in early access right now, learning and listening. The connecting part comes later.`,
+        `Co is invite-only. You're getting early access. She's learning and listening for now. More comes later.`,
       );
     }
 
@@ -190,9 +190,9 @@ export const sendSMS = async ({
     const link = (url?: string) => (url ? `\n${url}` : "");
 
     if (invite_type === "received" && invite_target === "circle") {
-      await send(`You've been invited to join a circle on CoPatible. Open the app to accept or decline.${link(action_url)}`);
+      await send(`You've been invited to join a circle on Co. Open the app to accept or decline.${link(action_url)}`);
     } else if (invite_type === "received" && invite_target === "moment") {
-      await send(`You've been invited to a moment on CoPatible. Open the app to see the details.${link(action_url)}`);
+      await send(`You've been invited to a moment on Co. Open the app to see the details.${link(action_url)}`);
     } else if (invite_type === "accepted") {
       await send(`Your invite was accepted. They're in.`);
     } else if (invite_type === "rejected") {
@@ -200,15 +200,15 @@ export const sendSMS = async ({
     }
 
     if (transfer_ticket) {
-      await send(`A CoPatible ticket was transferred to you. Open the app to view the moment details and your entry code.${link(action_url)}`);
+      await send(`A Co ticket was transferred to you. Open the app to view the moment details and your entry code.${link(action_url)}`);
     }
 
     if (moment_recap) {
-      await send(`${moment_recap.moments_name} is over. Your recap is ready — open CoPatible to relive the night.${link(action_url)}`);
+      await send(`${moment_recap.moments_name} is over. Your recap is ready — open Co to relive the night.${link(action_url)}`);
     }
 
     if (photo_uploaded) {
-      await send(`${photo_uploaded.uploader_username} added a photo to ${photo_uploaded.moments_name}. Open CoPatible to see the recap.${link(action_url)}`);
+      await send(`${photo_uploaded.uploader_username} added a photo to ${photo_uploaded.moments_name}. Open Co to see the recap.${link(action_url)}`);
     }
 
     if (check_in) {
@@ -224,28 +224,28 @@ export const sendSMS = async ({
     }
 
     if (circle_invite_reminder) {
-      await send(`You still have a pending circle invite on CoPatible — ${circle_invite_reminder.circle_name}. Open the app to respond.${link(action_url)}`);
+      await send(`You still have a pending circle invite on Co — ${circle_invite_reminder.circle_name}. Open the app to respond.${link(action_url)}`);
     }
 
     if (moment_invite_reminder) {
-      await send(`You still haven't responded to your invite for ${moment_invite_reminder.moments_name} — it starts at ${moment_invite_reminder.time}. Open CoPatible to respond.${link(action_url)}`);
+      await send(`You still haven't responded to your invite for ${moment_invite_reminder.moments_name} — it starts at ${moment_invite_reminder.time}. Open Co to respond.${link(action_url)}`);
     }
 
     if (external_invite) {
       const context = external_invite.target_name
         ? ` to ${external_invite.invite_type === "moment" ? `a moment called "${external_invite.target_name}"` : `a circle called "${external_invite.target_name}"`}`
         : "";
-      await send(`${external_invite.inviter_name} invited you${context} on CoPatible. Visit app.copatible.com to request access.`);
+      await send(`${external_invite.inviter_name} invited you${context} on Co. Visit app.copatible.com to request access.`);
     }
 
     if (knock_received) {
-      await send(`${knock_received.requester_name} is knocking to get into ${knock_received.moments_name}. Open CoPatible to let them in or pass.${link(action_url)}`);
+      await send(`${knock_received.requester_name} is knocking to get into ${knock_received.moments_name}. Open Co to let them in or pass.${link(action_url)}`);
     }
 
     if (knock_decided) {
       await send(
         knock_decided.approved
-          ? `You're in. Your knock was approved for ${knock_decided.moments_name}. Open CoPatible for details.${link(action_url)}`
+          ? `You're in. Your knock was approved for ${knock_decided.moments_name}. Open Co for details.${link(action_url)}`
           : `Not this time. Your knock for ${knock_decided.moments_name} wasn't approved.`,
       );
     }
@@ -255,7 +255,7 @@ export const sendSMS = async ({
     }
 
     if (welcome_back) {
-      await send(`Welcome back to CoPatible.`);
+      await send(`Welcome back to Co.`);
     }
   } catch (error) {
     console.error("Cannot process SMS at this time", error);
@@ -305,7 +305,7 @@ export const sendEmail = async ({
 
     if (appsubmit) {
       await resend.emails.send({
-        from: "CoPatible <hello@copatible.com>",
+        from: "Co <hello@copatible.com>",
         to: email,
         subject: `New Request — ${applicant?.first_name} ${applicant?.last_name}`,
         html: emailTemplate(
@@ -319,9 +319,9 @@ export const sendEmail = async ({
 
     if (status === "accepted") {
       await resend.emails.send({
-        from: "CoPatible <hello@copatible.com>",
+        from: "Co <hello@copatible.com>",
         to: email,
-        subject: `Welcome to CoPatible.`,
+        subject: `Welcome to Co.`,
         html: emailTemplate(
           h1("You were chosen.") +
             p(
@@ -335,9 +335,9 @@ export const sendEmail = async ({
 
     if (status === "rejected") {
       await resend.emails.send({
-        from: "CoPatible <hello@copatible.com>",
+        from: "Co <hello@copatible.com>",
         to: email,
-        subject: `Your CoPatible application.`,
+        subject: `Your Co application.`,
         html: emailTemplate(
           h1("Not this time.") +
             p(
@@ -349,13 +349,13 @@ export const sendEmail = async ({
 
     if (resent) {
       await resend.emails.send({
-        from: "CoPatible <hello@copatible.com>",
+        from: "Co <hello@copatible.com>",
         to: email,
-        subject: `Your new CoPatible verification code.`,
+        subject: `Your new Co verification code.`,
         html: emailTemplate(
           h1("New code. Same you.") +
             p(
-              "You requested a new verification code. Use it below to get into CoPatible.",
+              "You requested a new verification code. Use it below to get into Co.",
             ) +
             OTP_BOX(otp_code!) +
             `<p class="muted-sm" style="font-size:11px;letter-spacing:2px;text-transform:uppercase;color:#333333;margin-top:32px;">This code expires in 5 minutes.</p>`,
@@ -365,9 +365,9 @@ export const sendEmail = async ({
 
     if (login) {
       await resend.emails.send({
-        from: "CoPatible <hello@copatible.com>",
+        from: "Co <hello@copatible.com>",
         to: email,
-        subject: `Your CoPatible login code.`,
+        subject: `Your Co login code.`,
         html: emailTemplate(
           h1("Welcome back.") +
             p("Use the code below to sign in. It expires in 5 minutes.") +
@@ -379,33 +379,33 @@ export const sendEmail = async ({
 
     if (invite_type === "received" && invite_target === "circle") {
       await resend.emails.send({
-        from: "CoPatible <hello@copatible.com>",
+        from: "Co <hello@copatible.com>",
         to: email,
         subject: `You've been invited.`,
         html: emailTemplate(
           h1("You're wanted in a circle.") +
             p(
-              "Someone added you to their circle on CoPatible. Open the app to accept or decline.",
+              "Someone added you to their circle on Co. Open the app to accept or decline.",
             ) +
             cta("Respond to Invite", "https://app.copatible.com"),
         ),
       });
     } else if (invite_type === "received" && invite_target === "moment") {
       await resend.emails.send({
-        from: "CoPatible <hello@copatible.com>",
+        from: "Co <hello@copatible.com>",
         to: email,
         subject: `You've been invited to a moment.`,
         html: emailTemplate(
           h1("Something's happening.") +
             p(
-              "You've been invited to a moment on CoPatible. Open the app to see the details and respond.",
+              "You've been invited to a moment on Co. Open the app to see the details and respond.",
             ) +
             cta("Respond to Invite", "https://app.copatible.com"),
         ),
       });
     } else if (invite_type === "accepted") {
       await resend.emails.send({
-        from: "CoPatible <hello@copatible.com>",
+        from: "Co <hello@copatible.com>",
         to: email,
         subject: `Your invite was accepted.`,
         html: emailTemplate(
@@ -417,7 +417,7 @@ export const sendEmail = async ({
       });
     } else if (invite_type === "rejected") {
       await resend.emails.send({
-        from: "CoPatible <hello@copatible.com>",
+        from: "Co <hello@copatible.com>",
         to: email,
         subject: `Your invite was declined.`,
         html: emailTemplate(
@@ -431,13 +431,13 @@ export const sendEmail = async ({
 
     if (transfer_ticket) {
       await resend.emails.send({
-        from: "CoPatible <hello@copatible.com>",
+        from: "Co <hello@copatible.com>",
         to: email,
         subject: `Your ticket has been transferred.`,
         html: emailTemplate(
           h1("You're in.") +
             p(
-              "A ticket was transferred to you. Open CoPatible to view the moment details and your entry code.",
+              "A ticket was transferred to you. Open Co to view the moment details and your entry code.",
             ) +
             cta("View My Ticket", "https://app.copatible.com"),
         ),
@@ -446,13 +446,13 @@ export const sendEmail = async ({
 
     if (moment_recap) {
       await resend.emails.send({
-        from: "CoPatible <hello@copatible.com>",
+        from: "Co <hello@copatible.com>",
         to: email,
         subject: `${moment_recap.moments_name} — the recap is ready.`,
         html: emailTemplate(
           h1("Rewind the night.") +
             p(moment_recap.recap) +
-            p("Open CoPatible to see the full recap, photos, and attendees.") +
+            p("Open Co to see the full recap, photos, and attendees.") +
             cta("View Recap", "https://app.copatible.com"),
         ),
       });
@@ -460,13 +460,13 @@ export const sendEmail = async ({
 
     if (photo_uploaded) {
       await resend.emails.send({
-        from: "CoPatible <hello@copatible.com>",
+        from: "Co <hello@copatible.com>",
         to: email,
         subject: `New photo added to ${photo_uploaded.moments_name}.`,
         html: emailTemplate(
           h1("The story grows.") +
             p(
-              `${photo_uploaded.uploader_username} added a photo to ${photo_uploaded.moments_name}. Open CoPatible to see the recap.`,
+              `${photo_uploaded.uploader_username} added a photo to ${photo_uploaded.moments_name}. Open Co to see the recap.`,
             ) +
             cta("View Photo", "https://app.copatible.com"),
         ),
@@ -475,7 +475,7 @@ export const sendEmail = async ({
 
     if (check_in) {
       await resend.emails.send({
-        from: "CoPatible <hello@copatible.com>",
+        from: "Co <hello@copatible.com>",
         to: email,
         subject: `${check_in.attendee_username} checked in.`,
         html: emailTemplate(
@@ -490,7 +490,7 @@ export const sendEmail = async ({
 
     if (checked_in_self) {
       await resend.emails.send({
-        from: "CoPatible <hello@copatible.com>",
+        from: "Co <hello@copatible.com>",
         to: email,
         subject: `You're checked in to ${checked_in_self.moments_name}.`,
         html: emailTemplate(
@@ -503,7 +503,7 @@ export const sendEmail = async ({
 
     if (moment_reminder) {
       await resend.emails.send({
-        from: "CoPatible <hello@copatible.com>",
+        from: "Co <hello@copatible.com>",
         to: email,
         subject: `${moment_reminder.moments_name} is coming up.`,
         html: emailTemplate(
@@ -511,7 +511,7 @@ export const sendEmail = async ({
             p(
               `${moment_reminder.moments_name} starts at ${moment_reminder.time}.`,
             ) +
-            p(`${moment_reminder.location_name}. Open CoPatible for details and directions.`) +
+            p(`${moment_reminder.location_name}. Open Co for details and directions.`) +
             cta("View Moment", "https://app.copatible.com"),
         ),
       });
@@ -519,13 +519,13 @@ export const sendEmail = async ({
 
     if (circle_invite_reminder) {
       await resend.emails.send({
-        from: "CoPatible <hello@copatible.com>",
+        from: "Co <hello@copatible.com>",
         to: email,
         subject: `You have a pending circle invite.`,
         html: emailTemplate(
           h1("Still waiting on you.") +
             p(
-              `You have a pending invite to join ${circle_invite_reminder.circle_name} on CoPatible. Open the app to accept or decline.`,
+              `You have a pending invite to join ${circle_invite_reminder.circle_name} on Co. Open the app to accept or decline.`,
             ) +
             cta("Respond to Invite", "https://app.copatible.com"),
         ),
@@ -534,7 +534,7 @@ export const sendEmail = async ({
 
     if (moment_invite_reminder) {
       await resend.emails.send({
-        from: "CoPatible <hello@copatible.com>",
+        from: "Co <hello@copatible.com>",
         to: email,
         subject: `You haven't responded to your invite.`,
         html: emailTemplate(
@@ -542,7 +542,7 @@ export const sendEmail = async ({
             p(
               `You still haven't responded to your invite for ${moment_invite_reminder.moments_name} — it starts at ${moment_invite_reminder.time}.`,
             ) +
-            p("Open CoPatible to accept or decline before the moment fills up.") +
+            p("Open Co to accept or decline before the moment fills up.") +
             cta("Respond to Invite", "https://app.copatible.com"),
         ),
       });
@@ -551,18 +551,18 @@ export const sendEmail = async ({
     if (external_invite) {
       const contextLine = external_invite.target_name
         ? external_invite.invite_type === "moment"
-          ? `You've been invited to a moment called "${external_invite.target_name}" on CoPatible.`
-          : `You've been invited to join a circle called "${external_invite.target_name}" on CoPatible.`
-        : `You've been invited to join CoPatible by ${external_invite.inviter_name}.`;
+          ? `You've been invited to a moment called "${external_invite.target_name}" on Co.`
+          : `You've been invited to join a circle called "${external_invite.target_name}" on Co.`
+        : `You've been invited to join Co by ${external_invite.inviter_name}.`;
       await resend.emails.send({
-        from: "CoPatible <hello@copatible.com>",
+        from: "Co <hello@copatible.com>",
         to: email,
-        subject: `${external_invite.inviter_name} invited you to CoPatible.`,
+        subject: `${external_invite.inviter_name} invited you to Co.`,
         html: emailTemplate(
           h1("You've been chosen.") +
             p(`${external_invite.inviter_name} thought of you.`) +
             p(contextLine) +
-            p("CoPatible is invite-only. Request access to join the moment.") +
+            p("Co is invite-only. Request access to join the moment.") +
             ctaButton("Request Access", "https://app.copatible.com"),
         ),
       });
@@ -570,12 +570,12 @@ export const sendEmail = async ({
 
     if (knock_received) {
       await resend.emails.send({
-        from: "CoPatible <hello@copatible.com>",
+        from: "Co <hello@copatible.com>",
         to: email,
         subject: `${knock_received.requester_name} wants into ${knock_received.moments_name}.`,
         html: emailTemplate(
           h1("Someone's knocking.") +
-            p(`${knock_received.requester_name} is requesting access to ${knock_received.moments_name}. Open CoPatible to let them in or pass.`) +
+            p(`${knock_received.requester_name} is requesting access to ${knock_received.moments_name}. Open Co to let them in or pass.`) +
             cta("Review Knock", action_url ?? "https://app.copatible.com"),
         ),
       });
@@ -583,7 +583,7 @@ export const sendEmail = async ({
 
     if (knock_decided) {
       await resend.emails.send({
-        from: "CoPatible <hello@copatible.com>",
+        from: "Co <hello@copatible.com>",
         to: email,
         subject: knock_decided.approved
           ? `You're in — ${knock_decided.moments_name}.`
@@ -591,7 +591,7 @@ export const sendEmail = async ({
         html: knock_decided.approved
           ? emailTemplate(
               h1("You're in.") +
-                p(`Your knock was approved for ${knock_decided.moments_name}. Open CoPatible for the details.`) +
+                p(`Your knock was approved for ${knock_decided.moments_name}. Open Co for the details.`) +
                 cta("View Moment", action_url ?? "https://app.copatible.com"),
             )
           : emailTemplate(
@@ -603,14 +603,14 @@ export const sendEmail = async ({
 
     if (welcome) {
       await resend.emails.send({
-        from: "CoPatible <hello@copatible.com>",
+        from: "Co <hello@copatible.com>",
         to: email,
-        subject: `Welcome to CoPatible.`,
+        subject: `Welcome to Co.`,
         html: emailTemplate(
           h1("You're in.") +
-            p("CoPatible is in early access right now. Co is learning and listening, getting to know you before anything else.") +
-            p("The connecting part comes next.") +
-            ctaButton("Open CoPatible", "https://app.copatible.com"),
+            p("Co is invite-only. You're getting early access. She's learning and listening for now.") +
+            p("More comes later.") +
+            ctaButton("Open Co", "https://app.copatible.com"),
         ),
       });
     }

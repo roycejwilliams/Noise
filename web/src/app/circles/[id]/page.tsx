@@ -36,7 +36,7 @@ export async function generateMetadata({
 }): Promise<Metadata> {
   const { id } = await params;
   const circle = await getCircle(id);
-  if (!circle) return { title: "CoPatible" };
+  if (!circle) return { title: "Co" };
 
   const chapter = formatChapter(circle.chapter);
   const desc = [circle.city, chapter, "Curated by Co"].filter(Boolean).join(" · ");
@@ -48,7 +48,7 @@ export async function generateMetadata({
       title: circle.circle_name,
       description: desc,
       url: `https://app.copatible.com/circles/${id}`,
-      siteName: "CoPatible",
+      siteName: "Co",
       type: "website",
     },
     twitter: {
@@ -135,7 +135,7 @@ export default async function CirclePage({
                 letterSpacing: "0.06em",
               }}
             >
-              CoPatible
+              Co
             </span>
           </div>
         </div>
@@ -256,7 +256,7 @@ export default async function CirclePage({
               letterSpacing: "0.04em",
             }}
           >
-            A CoPatible experience.
+            A Co experience.
           </p>
         </div>
       </div>

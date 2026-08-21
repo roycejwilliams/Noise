@@ -51,7 +51,7 @@ export async function generateMetadata({
 }): Promise<Metadata> {
   const { id } = await params;
   const moment = await getMoment(id);
-  if (!moment) return { title: "CoPatible" };
+  if (!moment) return { title: "Co" };
 
   const desc = [
     moment.location_name,
@@ -69,7 +69,7 @@ export async function generateMetadata({
       title: moment.moments_name,
       description: desc,
       url: `https://app.copatible.com/moments/${id}`,
-      siteName: "CoPatible",
+      siteName: "Co",
       images: [
         {
           url: `https://app.copatible.com/api/og/moments/${id}`,
@@ -181,7 +181,7 @@ export default async function MomentPage({
                 letterSpacing: "0.06em",
               }}
             >
-              CoPatible
+              Co
             </span>
           </div>
         </div>
@@ -442,7 +442,7 @@ export default async function MomentPage({
               letterSpacing: "0.04em",
             }}
           >
-            A CoPatible experience.
+            A Co experience.
           </p>
         </div>
       </div>

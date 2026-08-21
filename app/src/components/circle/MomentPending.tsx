@@ -15,7 +15,7 @@ function fmt(s: string) {
 export default function MomentPending({ circle, confirmedMoment, pendingMoment }: Props) {
   return (
     <SafeAreaView style={s.root}>
-      <Text style={s.wordmark}>CoPatible</Text>
+      <Text style={s.wordmark}>Co</Text>
       <ScrollView style={s.scroll} contentContainerStyle={s.content} showsVerticalScrollIndicator={false}>
         <View style={s.circleHeader}>
           <View>

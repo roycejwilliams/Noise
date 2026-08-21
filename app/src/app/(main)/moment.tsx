@@ -85,7 +85,7 @@ export default function MomentScreen() {
   if (state === "empty") {
     return (
       <SafeAreaView style={s.root}>
-        <Text style={s.wordmark}>CoPatible</Text>
+        <Text style={s.wordmark}>Co</Text>
         <View style={s.emptyWrap}>
           <Text style={s.emptyHeadline}>Co is arranging something.</Text>
           <Text style={s.emptyMuted}>Your first moment is coming.</Text>

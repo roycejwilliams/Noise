@@ -21,7 +21,7 @@ export default function PaymentSuccess() {
           marginBottom: 40,
         }}
       >
-        CoPatible
+        Co
       </span>
 
       <p
@@ -66,7 +66,7 @@ export default function PaymentSuccess() {
           letterSpacing: "0.01em",
         }}
       >
-        Return to CoPatible
+        Return to Co
       </a>
     </div>
   );

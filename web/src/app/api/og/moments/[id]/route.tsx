@@ -18,7 +18,7 @@ export async function GET(
   const apiUrl = process.env.NEXT_PUBLIC_API_URL;
 
   let moment: Moment = {
-    moments_name: "A CoPatible Experience",
+    moments_name: "A Co Experience",
     location_name: null,
     suggested_time: null,
     member_count: null,
@@ -63,7 +63,7 @@ export async function GET(
             letterSpacing: "0.04em",
           }}
         >
-          CoPatible
+          Co
         </span>
 
         <div
@@ -135,7 +135,7 @@ export async function GET(
               letterSpacing: "0.04em",
             }}
           >
-            CoPatible
+            Co
           </div>
         </div>
       </div>

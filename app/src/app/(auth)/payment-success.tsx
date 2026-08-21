@@ -6,7 +6,7 @@ export default function PaymentSuccess() {
 
   return (
     <View style={styles.container}>
-      <Text style={styles.wordmark}>CoPatible</Text>
+      <Text style={styles.wordmark}>Co</Text>
 
       <View style={styles.content}>
         <Text style={styles.title}>You are in.</Text>

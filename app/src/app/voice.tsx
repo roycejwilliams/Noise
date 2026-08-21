@@ -226,7 +226,7 @@ export default function VoiceScreen() {
     <View style={s.root}>
       <SafeAreaView style={s.safe}>
         {/* Wordmark */}
-        <Text style={s.wordmark}>CoPatible</Text>
+        <Text style={s.wordmark}>Co</Text>
 
         {/* ── WAITING ── */}
         {voiceState === "waiting" && (

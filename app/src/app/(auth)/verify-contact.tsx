@@ -6,7 +6,7 @@
 import api from "@/lib/api";
 import { useLocalSearchParams, useRouter } from "expo-router";
 import { useEffect, useRef, useState } from "react";
-import { Linking, StyleSheet, Text, TouchableOpacity, View } from "react-native";
+import { Linking, Platform, StyleSheet, Text, TouchableOpacity, View } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
 
 function formatPhone(raw: string): string {
@@ -53,7 +53,15 @@ export default function VerifyContact() {
     if (!verifyNumber || checking) return;
     setChecking(true);
     try {
-      await Linking.openURL(`sms:${verifyNumber}`);
+      // Pre-fills the compose box so the user isn't staring at a blank
+      // Messages screen wondering what they're supposed to send — they
+      // still have to hit send themselves. iOS and Android use different
+      // separators before `body=` on an sms: URI, hence the UA check
+      // (mirrors co-test/src/client/phone.ts's identical fix).
+      const isIOS = Platform.OS === "ios";
+      const bodySeparator = isIOS ? "&" : "?";
+      const greeting = encodeURIComponent("Hi Co!");
+      await Linking.openURL(`sms:${verifyNumber}${bodySeparator}body=${greeting}`);
     } finally {
       setChecking(false);
     }
