@@ -51,6 +51,12 @@ function withPhoneLock<T>(phone: string, fn: () => Promise<T>): Promise<T> {
   return withAdvisoryLock(`phone:${phone}`, fn);
 }
 
+// How long to hold off Co's free-form reply after an inbound message, in
+// case the same person is mid-thought and about to send a follow-up.
+// Confirmed with product (~5s) — long enough to catch a genuine double-text,
+// short enough that a one-off message still feels prompt.
+const DEBOUNCE_MS = 5000;
+
 // Heuristic-only (no LLM call — this is directly observable, not something
 // to infer) read of how the user themselves texts, from their own lines in
 // the chronological window already fetched for the reply prompt. Nudges
@@ -199,6 +205,41 @@ export function sendblueRouter(io: Server): Router {
     "/webhook",
     async (req: Request, res: Response, next: NextFunction) => {
       const lockKey: string | undefined = req.body?.number;
+
+      // Stamped here, before withPhoneLock, not inside run() below. Once a
+      // phone's advisory lock is held, a second inbound message for that
+      // same phone can't run ANY code — including this very stamp — until
+      // the first message's run() has finished and released the lock. If
+      // this write lived inside run(), a message that arrived during the
+      // first request's debounce wait would be queued behind that same
+      // lock and could never become visible during the wait. Stamping out
+      // here, ahead of the lock, decouples "record that a message arrived"
+      // from "wait in line to be processed."
+      let myInboundAt: string | null = null;
+      const bodyForStamp = req.body ?? {};
+      const isGenuineInbound =
+        bodyForStamp.type !== "typing" &&
+        !bodyForStamp.is_outbound &&
+        ((typeof bodyForStamp.content === "string" && bodyForStamp.content.trim().length > 0) ||
+          (typeof bodyForStamp.media_url === "string" && bodyForStamp.media_url.length > 0));
+      if (lockKey && isGenuineInbound) {
+        try {
+          const stampResult = await pool.query(
+            `INSERT INTO phone_debounce (phone, last_inbound_at) VALUES ($1, NOW())
+             ON CONFLICT (phone) DO UPDATE SET last_inbound_at = NOW()
+             RETURNING last_inbound_at`,
+            [lockKey],
+          );
+          myInboundAt = stampResult.rows[0].last_inbound_at;
+        } catch (err: any) {
+          // Fail open — if the stamp can't be written, just skip the
+          // debounce for this request rather than blocking or crashing on
+          // what is a UX nicety, not a correctness requirement.
+          console.error("sendblue: phone_debounce stamp failed (non-fatal, debounce skipped):", err?.message ?? err);
+          myInboundAt = null;
+        }
+      }
+
       const run = async () => {
       try {
         const {
@@ -1188,6 +1229,37 @@ Return ONLY the classification, nothing else.`,
           : isThinProfileFirstMessage
             ? `\nThis is the first real thing they've shared and nothing is known about them yet — first, actually respond to what they said. Then offer a quick call as a warm, low-pressure way to actually get to know them — a real conversation just gets Co so much further than texting back and forth. Keep it brief and secondary, never in place of a real response.`
             : `\nWhat they just shared could genuinely benefit from a real conversation by voice — but that is not the priority. First, actually respond to what they said: reflect it. Only if it still feels right after that, offer a call as a warm gesture, not a logistics question — the way someone says "I'm here if you ever want to actually talk this through," not "are you free for a call today or tomorrow." Keep it brief and secondary, never in place of a real response.`;
+
+        // Step 4.7 — Debounce the free-form reply only. Every deterministic
+        // branch above this point (identity intake, OTP, circle
+        // accept/decline, moment response, call-trigger) has already
+        // returned by now — those are typically single-word confirmations
+        // where added latency has no upside, and some (OTP, call-triggering)
+        // are actively time-sensitive, so they're deliberately never
+        // delayed. Only the conversational reply below is worth waiting on,
+        // since it's the one case where replying to a still-incomplete
+        // thought reads as Co cutting the user off. myInboundAt is set in
+        // the outer handler, before withPhoneLock, precisely so this check
+        // can see a message that arrived and is now queued behind this
+        // request's phone lock (see the comment there for why).
+        if (myInboundAt) {
+          await new Promise((resolve) => setTimeout(resolve, DEBOUNCE_MS));
+          const latestStampResult = await pool.query(
+            `SELECT last_inbound_at FROM phone_debounce WHERE phone = $1`,
+            [number],
+          );
+          const latestInboundAt = latestStampResult.rows[0]?.last_inbound_at ?? null;
+          if (latestInboundAt && new Date(latestInboundAt).getTime() > new Date(myInboundAt).getTime()) {
+            // A newer message arrived while this one waited. This
+            // message's own content is already safely stored in
+            // co_memories (Step 3, above), so the newer message's request
+            // — next in line behind this one's phone lock — will see it as
+            // conversational context and can respond to both at once. This
+            // request bails out without generating or sending anything, so
+            // the user doesn't get two overlapping replies.
+            return res.status(200).send({ received: true, action: "superseded_by_newer_message" });
+          }
+        }
 
         // Step 5 — Two separate context sources, since they answer different
         // questions. Topical similarity search answers "what's relevant to
