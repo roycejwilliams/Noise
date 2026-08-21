@@ -11,6 +11,7 @@
   },
   "dependencies": {
     "@ai-sdk/anthropic": "^3.0.79",
+    "@elevenlabs/elevenlabs-js": "^2.51.0",
     "@googlemaps/google-maps-services-js": "^3.4.2",
     "@langfuse/otel": "^5.10.0",
     "@langfuse/tracing": "^5.10.0",
