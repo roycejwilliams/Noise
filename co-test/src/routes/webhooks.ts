@@ -2332,6 +2332,21 @@ Return ONLY valid JSON, no preamble: {"wants_venue": true or false, "venue_type"
             }
           }
 
+          // ACK Sendblue's webhook now, before the debounce sleep below.
+          // Holding the HTTP response open for the full DEBOUNCE_MS was
+          // confirmed live to cause Sendblue to retry the webhook delivery
+          // (same message, same content, a second call to this route) —
+          // that retry re-stamps phone_debounce with a fresh timestamp,
+          // which then makes the ORIGINAL request think a newer message
+          // arrived and silently bail without ever replying, even though
+          // nothing new was actually said. Everything from here on
+          // (debounce wait, reply generation, actually sending the SMS) is
+          // a separate outbound call to Sendblue's API, not tied to this
+          // webhook's own response — so ack'ing early doesn't skip any of
+          // it, it just stops this response from being the thing that
+          // times out.
+          res.status(200).send({ received: true, action: "processing" });
+
           // Debounce the free-form reply only. Every deterministic branch
           // above this point (opt-out/in, intake, moderator approval, call
           // offer/schedule, recommendation/venue classification) has already
@@ -2353,7 +2368,8 @@ Return ONLY valid JSON, no preamble: {"wants_venue": true or false, "venue_type"
               // message's request — next in line behind this one's phone
               // lock — will see it as context and can respond to both at
               // once. Bail out here without generating or sending anything.
-              return res.status(200).send({ received: true, action: "superseded_by_newer_message" });
+              // Already ack'd above, so just return.
+              return;
             }
           }
 
@@ -2607,9 +2623,20 @@ Return ONLY "yes" or "no".`,
             ),
           );
 
-          return res.status(200).send({ received: true, reply: cappedReply });
+          // Already ack'd above (before the debounce wait) — cappedReply was
+          // delivered via the sendblue.messages.send() calls above, not via
+          // this HTTP response, so there's nothing left to send here.
+          return;
         } catch (error) {
-          next(error);
+          // A path earlier in this function may have already ack'd the
+          // webhook (see the res.status(200).send() before the debounce
+          // wait) before an error occurred further down — calling next(error)
+          // at that point would throw trying to set headers a second time.
+          if (res.headersSent) {
+            console.error("co-test sendblue webhook: error after early ack (non-fatal, response already sent):", error);
+          } else {
+            next(error);
+          }
         }
       };
       await withPhoneLock(number, run);
