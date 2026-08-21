@@ -53,9 +53,12 @@ function withPhoneLock<T>(phone: string, fn: () => Promise<T>): Promise<T> {
 
 // How long to hold off Co's free-form reply after an inbound message, in
 // case the same person is mid-thought and about to send a follow-up.
-// Confirmed with product (~5s) — long enough to catch a genuine double-text,
-// short enough that a one-off message still feels prompt.
-const DEBOUNCE_MS = 5000;
+// Started at 5s; bumped to 8s after checking a real conversation's actual
+// gaps between related messages (16s in one case) — 5s was catching only
+// the fastest bursts. Not pushed further toward 16s itself: that would
+// make every single-message reply feel sluggish for the common case just
+// to fully cover one slower outlier.
+const DEBOUNCE_MS = 8000;
 
 // Heuristic-only (no LLM call — this is directly observable, not something
 // to infer) read of how the user themselves texts, from their own lines in
