@@ -23,6 +23,7 @@ import {
   storeTranscriptMemory,
 } from "../../../api/src/services/profileExtraction.js";
 import sendblue from "../../../api/src/services/sendblue.js";
+import elevenlabs from "../../../api/src/services/elevenlabs.js";
 import { buildContextSummary } from "../services/callContext.js";
 import { triggerCall } from "../services/callTrigger.js";
 import { simulateModeratorApproval } from "../services/circlesSimulation.js";
@@ -242,6 +243,84 @@ async function sendHumeToolResponse(
 
 const pause = (ms: number): Promise<void> =>
   new Promise((resolve) => setTimeout(resolve, ms));
+
+// Voice memo handling — this file previously had NONE at all: the inbound
+// guard below only ever checked for text content, so a voice memo (empty
+// content, a media_url) was silently dropped with a bare 200 before any of
+// this ran. Confirmed for real: a voice memo Sendblue genuinely received
+// and forwarded produced zero trace anywhere — no transcript, no fallback
+// text, no error log — because the request never got past that guard.
+// Mirrors api/src/routes/sendblue.ts's identical isAudioUrl/AUDIO_EXTENSIONS/
+// transcribeVoiceMemo, duplicated rather than imported to match this file's
+// existing "mirrors production" convention for the rest of the pipeline.
+async function isAudioUrl(url: string): Promise<boolean> {
+  try {
+    const res = await fetch(url, { method: "HEAD", signal: AbortSignal.timeout(3000) });
+    const contentType = res.headers.get("content-type") ?? "";
+    return contentType.startsWith("audio/");
+  } catch {
+    return false;
+  }
+}
+
+// iMessage voice memos are real-world always audio/x-caf (Apple's Core
+// Audio Format) — hardcoding a different type/extension makes ElevenLabs
+// try to decode CAF bytes as the wrong format and fail every real memo.
+const AUDIO_EXTENSIONS: Record<string, string> = {
+  "audio/x-caf": "caf",
+  "audio/mp4": "m4a",
+  "audio/m4a": "m4a",
+  "audio/mpeg": "mp3",
+  "audio/mp3": "mp3",
+  "audio/wav": "wav",
+  "audio/x-wav": "wav",
+  "audio/aac": "aac",
+  "audio/ogg": "ogg",
+};
+
+async function transcribeVoiceMemo(audioUrl: string): Promise<string> {
+  const audioRes = await fetch(audioUrl, { signal: AbortSignal.timeout(10000) });
+  if (!audioRes.ok) throw new Error(`Audio fetch failed: ${audioRes.status}`);
+  const contentType = audioRes.headers.get("content-type")?.split(";")[0].trim() ?? "audio/mp4";
+  const extension = AUDIO_EXTENSIONS[contentType] ?? "m4a";
+  const arrayBuffer = await audioRes.arrayBuffer();
+  const file = new File([arrayBuffer], `voice_memo.${extension}`, { type: contentType });
+  const result = await elevenlabs.speechToText.convert({ modelId: "scribe_v2", file });
+  return (result as { text: string }).text ?? "";
+}
+
+// How long to hold off Co's free-form reply after an inbound message, in
+// case the same person is mid-thought and about to send a follow-up.
+// Matches api/src/routes/sendblue.ts's tuned value (started at 5s, bumped
+// to 8s after checking a real conversation's actual gaps between related
+// messages).
+const DEBOUNCE_MS = 8000;
+
+// Arrival-time table for the debounce above — same design as production's
+// phone_debounce (migrations.ts, shared via the api/src/db import below),
+// same reasoning: this must be stamped BEFORE withPhoneLock's queue, not
+// inside run(), since once a phone's lock is held (in-memory here, not
+// Postgres — see withPhoneLock below), a second inbound message for that
+// phone can't run any code, including this stamp, until the first
+// message's run() finishes. Stamping here decouples "record that a message
+// arrived" from "wait in line to be processed," so a message queued behind
+// the lock is still visible to the request currently waiting out its
+// debounce window.
+async function stampPhoneDebounce(phone: string): Promise<string | null> {
+  try {
+    const result = await pool.query(
+      `INSERT INTO phone_debounce (phone, last_inbound_at) VALUES ($1, NOW())
+       ON CONFLICT (phone) DO UPDATE SET last_inbound_at = NOW()
+       RETURNING last_inbound_at`,
+      [phone],
+    );
+    return result.rows[0].last_inbound_at;
+  } catch (err: any) {
+    // Fail open — a UX nicety, not a correctness requirement.
+    console.error("co-test webhooks: phone_debounce stamp failed (non-fatal, debounce skipped):", err?.message ?? err);
+    return null;
+  }
+}
 
 // Serializes /sendblue/webhook processing per phone number — same pattern
 // production's sendblue.ts already uses (withPhoneLock), for the same
@@ -1079,20 +1158,23 @@ export function createWebhooksRouter(io: Server): express.Router {
   );
 
   // POST /sendblue/webhook — real text-in-first + OTP flow (Part 1, item 2),
-  // mirroring the contact_verified gate in api/src/routes/sendblue.ts. Kept
-  // deliberately smaller than production's: text-only (no voice-memo
-  // transcription or image vision — this is proving the verification sequence
-  // and the ongoing-chat channel out, not re-implementing every media type),
-  // and no moment/circle response handling (co-test has neither).
+  // mirroring the contact_verified gate in api/src/routes/sendblue.ts. Voice
+  // memos now transcribe (see isAudioUrl/transcribeVoiceMemo above) — this
+  // used to be text-only by deliberate scope, but a real voice memo was
+  // confirmed silently dropped with zero trace, which is worse than not
+  // supporting it at all. Image vision and moment/circle response handling
+  // are still out of scope (co-test has neither).
   router.post(
     "/sendblue/webhook",
     async (req: Request, res: Response, next: NextFunction) => {
-      const { number, content, is_outbound, type } = req.body;
+      const { number, is_outbound, type, media_url } = req.body;
+      let content = req.body.content;
       if (type === "typing" || is_outbound)
         return res.status(200).send({ received: true });
 
       const hasText = typeof content === "string" && content.trim().length > 0;
-      if (!number || !hasText) return res.status(200).send({ received: true });
+      const hasMedia = typeof media_url === "string" && media_url.length > 0;
+      if (!number || (!hasText && !hasMedia)) return res.status(200).send({ received: true });
 
       // A malformed inbound `number` (confirmed: Sendblue can deliver one,
       // e.g. a bare 5-digit value) was flowing straight through to a real,
@@ -1104,6 +1186,25 @@ export function createWebhooksRouter(io: Server): express.Router {
           `co-test sendblue webhook: malformed inbound number "${number}" — ignoring`,
         );
         return res.status(200).send({ received: true });
+      }
+
+      // Stamped before withPhoneLock — see stampPhoneDebounce's comment for
+      // why. Only for a message that will actually reach the free-form
+      // reply path; genuinely empty/malformed ones already returned above.
+      const myInboundAt = await stampPhoneDebounce(number);
+
+      if (!hasText && hasMedia) {
+        if (await isAudioUrl(media_url)) {
+          try {
+            content = await transcribeVoiceMemo(media_url);
+            console.log(`co-test sendblue webhook: transcribed voice memo from ${number}: "${content}"`);
+          } catch (transcribeErr: any) {
+            console.error("co-test sendblue webhook: voice memo transcription failed:", transcribeErr?.message ?? transcribeErr);
+            content = "[voice memo]";
+          }
+        } else {
+          content = "[sent a photo]";
+        }
       }
 
       const run = async () => {
@@ -1200,8 +1301,19 @@ export function createWebhooksRouter(io: Server): express.Router {
               await sendSMS({ phone_number: number, save_contact: true });
               await pause(2500);
               await sendSMS({ phone_number: number, intake_ask: true });
+              if (hasText) {
+                await pool.query(
+                  `INSERT INTO co_memories (user_id, memory_type, content) VALUES ($1, 'text_exchange', $2)`,
+                  [user.id, `User said: ${content}`],
+                );
+              }
               return res.status(200).send({ received: true, action: "intake_started" });
             }
+
+            await pool.query(
+              `INSERT INTO co_memories (user_id, memory_type, content) VALUES ($1, 'text_exchange', $2)`,
+              [user.id, hasText ? `User said: ${content}` : "User sent a photo or voice memo (name/email intake)"],
+            );
 
             const { text: rawExtraction } = await generateText({
               model: anthropic("claude-haiku-4-5-20251001"),
@@ -1212,10 +1324,10 @@ Already known — name: ${user.first_name || "not yet given"}, email: ${hasPendi
 
 Their reply: "${content}"
 
-Return ONLY strict JSON: {"full_name": string or null, "email": string or null}. Only set a field you're actually confident about — carry forward an already-known value if this reply doesn't repeat it, and don't guess at one that's still missing.`,
+Return ONLY strict JSON: {"full_name": string or null, "email": string or null, "is_acknowledgment": boolean}. Only set full_name/email when you're actually confident — carry forward an already-known value if this reply doesn't repeat it, and don't guess at one that's still missing. Set is_acknowledgment true when the reply is just a social acknowledgment of Co's welcome (e.g. "thanks", "ok", "sounds good") with no attempt to give a name or email — false otherwise, including when they did attempt an answer that just didn't parse.`,
             });
 
-            let extracted: { full_name: string | null; email: string | null };
+            let extracted: { full_name: string | null; email: string | null; is_acknowledgment?: boolean };
             try {
               extracted = JSON.parse(rawExtraction.trim().replace(/^```(?:json)?\n?|\n?```$/g, ""));
             } catch {
@@ -1237,29 +1349,39 @@ Return ONLY strict JSON: {"full_name": string or null, "email": string or null}.
                 user = updated.rows[0];
               } catch (err: any) {
                 if (err?.code === "23505") {
+                  const conflictMsg = "Looks like that email's already on file. Mind sending a different one?";
                   try {
                     await sendblue.messages.send({
                       number,
-                      content: "Looks like that email's already on file. Mind sending a different one?",
+                      content: conflictMsg,
                       from_number: process.env.SENDBLUE_PHONE_NUMBER!,
                     });
                   } catch (smsErr: any) {
                     console.error("co-test intake email-conflict send failed (non-fatal):", smsErr?.message ?? smsErr);
                   }
+                  await pool.query(
+                    `INSERT INTO co_memories (user_id, memory_type, content) VALUES ($1, 'text_exchange', $2)`,
+                    [user.id, `Co replied: ${conflictMsg}`],
+                  );
                   return res.status(200).send({ received: true, action: "intake_email_conflict" });
                 }
                 throw err;
               }
               await pause(2000);
+              const kickoffMsg = `Good to meet you, ${first_name}. What's been on your mind lately?`;
               try {
                 await sendblue.messages.send({
                   number,
-                  content: `Good to meet you, ${first_name}. What's been on your mind lately?`,
+                  content: kickoffMsg,
                   from_number: process.env.SENDBLUE_PHONE_NUMBER!,
                 });
               } catch (smsErr: any) {
                 console.error("co-test intake kickoff send failed (non-fatal):", smsErr?.message ?? smsErr);
               }
+              await pool.query(
+                `INSERT INTO co_memories (user_id, memory_type, content) VALUES ($1, 'text_exchange', $2)`,
+                [user.id, `Co replied: ${kickoffMsg}`],
+              );
               return res.status(200).send({ received: true, action: "identity_captured" });
             }
 
@@ -1271,10 +1393,17 @@ Return ONLY strict JSON: {"full_name": string or null, "email": string or null}.
                 last_name,
               ]);
             }
+            // A bare "thanks" or "ok" after the welcome sequence isn't a
+            // failed attempt to answer — it's a normal reaction to being
+            // welcomed in, and this only had the name/email question to
+            // compare it against. "Sorry, didn't catch that" is right for a
+            // genuinely garbled attempt, but wrong here: nothing was missed.
             const missingReply = !finalName
-              ? extracted.email && !emailValid
-                ? "That email didn't look quite right — mind double-checking it?"
-                : "Sorry, didn't catch that. What's your full name and email?"
+              ? extracted.is_acknowledgment
+                ? "Of course. So, what's your full name and email?"
+                : extracted.email && !emailValid
+                  ? "That email didn't look quite right — mind double-checking it?"
+                  : "Sorry, didn't catch that. What's your full name and email?"
               : "Got your name — what's the best email for you?";
             try {
               await sendblue.messages.send({
@@ -1285,6 +1414,10 @@ Return ONLY strict JSON: {"full_name": string or null, "email": string or null}.
             } catch (smsErr: any) {
               console.error("co-test intake re-ask send failed (non-fatal):", smsErr?.message ?? smsErr);
             }
+            await pool.query(
+              `INSERT INTO co_memories (user_id, memory_type, content) VALUES ($1, 'text_exchange', $2)`,
+              [user.id, `Co replied: ${missingReply}`],
+            );
             return res.status(200).send({ received: true, action: "intake_incomplete" });
           }
 
@@ -2196,6 +2329,31 @@ Return ONLY valid JSON, no preamble: {"wants_venue": true or false, "venue_type"
                 "webhooks: venue lookup classification failed (non-fatal):",
                 err?.message ?? err,
               );
+            }
+          }
+
+          // Debounce the free-form reply only. Every deterministic branch
+          // above this point (opt-out/in, intake, moderator approval, call
+          // offer/schedule, recommendation/venue classification) has already
+          // returned by now — this is the point where a still-forming
+          // thought getting cut off actually matters. myInboundAt is set
+          // before withPhoneLock, precisely so this check can see a message
+          // that arrived and is now queued behind this request's lock (see
+          // stampPhoneDebounce's comment).
+          if (myInboundAt) {
+            await pause(DEBOUNCE_MS);
+            const latest = await pool.query(
+              `SELECT last_inbound_at FROM phone_debounce WHERE phone = $1`,
+              [number],
+            );
+            const latestInboundAt = latest.rows[0]?.last_inbound_at ?? null;
+            if (latestInboundAt && new Date(latestInboundAt).getTime() > new Date(myInboundAt).getTime()) {
+              // A newer message arrived while this one waited. This
+              // message's content is already stored above, so the newer
+              // message's request — next in line behind this one's phone
+              // lock — will see it as context and can respond to both at
+              // once. Bail out here without generating or sending anything.
+              return res.status(200).send({ received: true, action: "superseded_by_newer_message" });
             }
           }
 
