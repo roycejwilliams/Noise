@@ -48,6 +48,7 @@ type LiveState = {
   events: LiveEvent[];
   nextSeq: number;
   transcriptLinesSeen: number; // dedup guard for the polling loop vs. tool_call fetches
+  startedAt: number; // Date.now() at chat_started — see getElapsedMinutes
 };
 
 const liveStates = new Map<string, LiveState>();
@@ -56,7 +57,7 @@ const pollingIntervals = new Map<string, ReturnType<typeof setInterval>>();
 function getOrInit(userId: string): LiveState {
   let state = liveStates.get(userId);
   if (!state) {
-    state = { events: [], nextSeq: 1, transcriptLinesSeen: 0 };
+    state = { events: [], nextSeq: 1, transcriptLinesSeen: 0, startedAt: Date.now() };
     liveStates.set(userId, state);
   }
   return state;
@@ -64,6 +65,19 @@ function getOrInit(userId: string): LiveState {
 
 export function startLiveCall(userId: string): void {
   getOrInit(userId);
+}
+
+// Elapsed time since chat_started — surfaced to Co via the
+// assess_conversation_coverage tool result (see handleToolCall in
+// webhooks.ts) so she has a real signal to start wrapping up around the
+// 15-minute mark, instead of only ever finding out a call ran long when
+// Hume's own max_duration timeout silently cuts her off mid-sentence.
+// Returns null if no live call is tracked for this user (e.g. a stale
+// tool_call after chat_ended already ran endLiveCall).
+export function getElapsedMinutes(userId: string): number | null {
+  const state = liveStates.get(userId);
+  if (!state) return null;
+  return (Date.now() - state.startedAt) / 60000;
 }
 
 export function pushLiveEvent(io: Server, userId: string, event: LiveEventInput): void {

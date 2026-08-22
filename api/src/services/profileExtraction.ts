@@ -116,7 +116,19 @@ const COVERAGE_FALLBACK: CoverageAssessment = {
 // (co-test's raw-output panel) don't have to re-derive it.
 export async function extractPsychographicProfile(
   transcript: string,
+  emotionalHighlights?: string,
 ): Promise<{ raw: string; extracted: ExtractedProfile }> {
+  // Voice calls only — Hume's own prosody analysis on the user's real audio
+  // (not available for text). Without this, "blockers"/emotional_state are
+  // inferred from wording alone, so a topic mentioned calmly and one that
+  // actually made someone anxious read identically to the model. This
+  // grounds the extraction in what Hume's voice analysis flagged as the
+  // most emotionally loaded moments, so those get weighted appropriately
+  // rather than just whatever was mentioned most.
+  const emotionalContext = emotionalHighlights
+    ? `\n\nHume's own voice-emotion analysis flagged these as the most emotionally loaded moments in the call (use this to weight blockers/emotional_state toward what actually carried real feeling, not just what was mentioned most often):\n${emotionalHighlights}`
+    : "";
+
   const { text: rawExtraction } = await generateText({
     model: anthropic("claude-sonnet-4-6"),
     prompt: `You are extracting psychographic profile data from a conversation transcript.
@@ -137,7 +149,7 @@ export async function extractPsychographicProfile(
         }
 
         Transcript:
-        "${transcript}"`,
+        "${transcript}"${emotionalContext}`,
     experimental_telemetry: { isEnabled: true, functionId: "profileExtraction.extractPsychographicProfile" },
   });
 

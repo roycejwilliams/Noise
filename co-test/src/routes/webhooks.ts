@@ -30,6 +30,7 @@ import { simulateModeratorApproval } from "../services/circlesSimulation.js";
 import { getCoPersonaPrompt } from "../services/coPersona.js";
 import {
   endLiveCall,
+  getElapsedMinutes,
   getLiveSnapshot,
   getTranscriptLinesSeen,
   pushLiveEvent,
@@ -154,6 +155,62 @@ function buildTranscript(events: HumeChatEvent[]): string {
       (e) =>
         `${e.role === "USER" ? "user" : "assistant"}: ${e.message_text ?? ""}`,
     )
+    .join("\n");
+}
+
+// Hume's prosody model scores every USER_MESSAGE across ~48 emotions
+// (confirmed against a real call's raw events) — this was being fetched
+// into `events` already but thrown away entirely by buildTranscript above,
+// which only ever kept message_text. That's the actual unused signal:
+// extractPsychographicProfile currently infers "blockers"/emotional_state
+// from the TEXT alone, so a topic mentioned calmly and a topic that made
+// someone genuinely anxious read identically to it. This surfaces the
+// moments Hume's own voice analysis flagged as most emotionally loaded, so
+// the profile can weight toward what actually carried real feeling, not
+// just what came up most.
+const PAIN_SIGNAL_EMOTIONS = [
+  "Anxiety",
+  "Distress",
+  "Sadness",
+  "Fear",
+  "Disappointment",
+  "Shame",
+  "Guilt",
+  "Embarrassment",
+  "Pain",
+  "Doubt",
+  "Empathic Pain",
+  "Tiredness",
+] as const;
+
+function extractEmotionalHighlights(events: HumeChatEvent[]): string {
+  const scored = events
+    .filter((e) => e.type === "USER_MESSAGE" && e.message_text && e.emotion_features)
+    .map((e) => {
+      let features: Record<string, number>;
+      try {
+        features = JSON.parse(e.emotion_features!);
+      } catch {
+        return null;
+      }
+      let topEmotion = "";
+      let topScore = 0;
+      for (const emotion of PAIN_SIGNAL_EMOTIONS) {
+        const score = features[emotion] ?? 0;
+        if (score > topScore) {
+          topScore = score;
+          topEmotion = emotion;
+        }
+      }
+      return topScore > 0.3 ? { text: e.message_text!, emotion: topEmotion, score: topScore } : null;
+    })
+    .filter((x): x is { text: string; emotion: string; score: number } => x !== null)
+    .sort((a, b) => b.score - a.score)
+    .slice(0, 3);
+
+  if (!scored.length) return "";
+  return scored
+    .map((s) => `Highest ${s.emotion.toLowerCase()} (${s.score.toFixed(2)}): "${s.text}"`)
     .join("\n");
 }
 
@@ -562,10 +619,20 @@ async function handleToolCall(
     // through Rapport-phase topics but left topics_covered empty in the DB.
     if (userId) persistCoveredTopics(userId, assessment);
     const latency_ms = Date.now() - start;
+    // elapsed_minutes rides along on the same tool result the prompt already
+    // polls periodically, rather than a separate tool — Co has no other way
+    // to know how long a call has actually run (see the prompt's "start
+    // wrapping up around 15 minutes" instruction), and Hume's own
+    // max_duration timeout otherwise cuts her off silently mid-sentence
+    // with no chance to close gracefully.
+    const elapsedMinutes = userId ? getElapsedMinutes(userId) : null;
     await sendHumeToolResponse(
       chatId,
       toolCallMessage.tool_call_id,
-      JSON.stringify(assessment),
+      JSON.stringify({
+        ...assessment,
+        ...(elapsedMinutes !== null ? { elapsed_minutes: Math.round(elapsedMinutes * 10) / 10 } : {}),
+      }),
     );
 
     if (userId) {
@@ -1114,8 +1181,9 @@ export function createWebhooksRouter(io: Server): express.Router {
           await storeTranscriptMemory(user_id, transcript, {
             audioUrl: recording_url,
           });
+          const emotionalHighlights = extractEmotionalHighlights(events);
           const { raw, extracted } =
-            await extractPsychographicProfile(transcript);
+            await extractPsychographicProfile(transcript, emotionalHighlights);
           await storeProfile(user_id, extracted, transcript);
           const intent = await captureIntent(user_id, transcript);
 
