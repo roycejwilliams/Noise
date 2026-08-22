@@ -12,6 +12,7 @@ import { WebSocketServer } from "ws";
 import pool from "../../api/src/db/db.js";
 import { runMigrations } from "../../api/src/db/migrations.js";
 import { buildCoVCard } from "../../api/src/utils/vcard.js";
+import { getAudioEntry } from "../../api/src/services/voiceNote.js";
 import { runTestMigrations } from "./db/testMigrations.js";
 import { configureCoTestSocket } from "./socket/index.js";
 import apiRouter from "./routes/api.js";
@@ -104,6 +105,18 @@ async function main() {
     res.setHeader("Content-Disposition", "attachment; filename=Co.vcf");
     res.setHeader("Cache-Control", "public, max-age=86400");
     return res.send(vcard);
+  });
+
+  // Serves generated voice-line audio (ElevenLabs SMS voice notes, and now
+  // Hume-voiced TwiML lines for the AMD-misfire redirect) — mirrors
+  // production's identical route in api/src/server.ts. Needed here since
+  // Twilio's <Play> requires a fetchable URL, not inline audio data.
+  app.get("/audio/:id", (req, res) => {
+    const entry = getAudioEntry(req.params.id);
+    if (!entry) return res.status(404).send("Not found.");
+    res.setHeader("Content-Type", "audio/mpeg");
+    res.setHeader("Cache-Control", "no-store");
+    return res.send(entry.buffer);
   });
 
   // Tool-access login (phone + OTP) — see services/testerAuth.ts. Public by

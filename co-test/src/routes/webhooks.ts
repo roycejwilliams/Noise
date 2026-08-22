@@ -39,6 +39,7 @@ import {
   startPolling,
 } from "../services/liveCallState.js";
 import { generateRecommendation } from "../services/recommendation.js";
+import { generateHumeVoiceLine } from "../../../api/src/services/voiceNote.js";
 import { findRealVenues } from "../services/venueLookup.js";
 
 // Needed here (not just in callTrigger.ts) to redirect a still-live call to
@@ -911,8 +912,25 @@ export function createWebhooksRouter(io: Server): express.Router {
             console.error("Voicemail-line generation failed (non-fatal, using default):", genErr?.message ?? genErr);
           }
 
+          // Confirmed live: a real person answered and Twilio's AMD misfired
+          // anyway — this redirect still fires regardless, so whoever's on
+          // the line hears whatever voice this TwiML uses. Twilio's built-in
+          // <Say> voices are a different voice engine entirely from Co's
+          // real Hume voice; a real caller hearing Co's actual voice cut off
+          // mid-call and replaced by an unrelated one reads as a hard
+          // glitch, not just a wrong-branch redirect. generateHumeVoiceLine
+          // synthesizes this line with Co's own attached voice (HUME_VOICE_ID)
+          // via Hume's standalone TTS endpoint, so an AMD false positive is
+          // at least not also a jarring voice swap. Falls back to Twilio's
+          // own <Say> only if that synthesis call itself fails.
           const voiceResponse = new twilio.twiml.VoiceResponse();
-          voiceResponse.say({ voice: "Polly.Matthew-Neural" }, voicemailLine);
+          try {
+            const audioUrl = await generateHumeVoiceLine(voicemailLine);
+            voiceResponse.play(audioUrl);
+          } catch (ttsErr: any) {
+            console.error("Hume voicemail-line TTS failed, falling back to Twilio Say (non-fatal):", ttsErr?.message ?? ttsErr);
+            voiceResponse.say({ voice: "Polly.Joanna-Neural" }, voicemailLine);
+          }
           voiceResponse.hangup();
           try {
             await twilioClient
