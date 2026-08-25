@@ -41,6 +41,7 @@ import {
 import { generateRecommendation } from "../services/recommendation.js";
 import { generateHumeVoiceLine } from "../../../api/src/services/voiceNote.js";
 import { findRealVenues } from "../services/venueLookup.js";
+import { runConversationReplyAgent } from "../agent/conversationReply.js";
 
 // Needed here (not just in callTrigger.ts) to redirect a still-live call to
 // a voicemail TwiML line once AMD detects an answering machine — see the
@@ -299,7 +300,7 @@ async function sendHumeToolResponse(
   }
 }
 
-const pause = (ms: number): Promise<void> =>
+export const pause = (ms: number): Promise<void> =>
   new Promise((resolve) => setTimeout(resolve, ms));
 
 // Voice memo handling — this file previously had NONE at all: the inbound
@@ -479,7 +480,7 @@ async function scheduleFollowUpText(
 // of truncating, so this splits at the same kind of natural boundary and
 // returns both parts (capped again if the remainder is itself still long,
 // so this is at most one follow-up, not an open-ended chain).
-function splitIntoMessages(
+export function splitIntoMessages(
   text: string,
   maxChars = TEXT_MESSAGE_CHAR_CAP,
 ): string[] {
@@ -2087,25 +2088,16 @@ Return ONLY valid JSON, no preamble: {"date": "YYYY-MM-DD or null", "time": "HH:
           // (isFirstRealMessage is only ever true for message #1), so it can't
           // collide with the topic-aware/burst-limiter rules above that govern
           // everyone's ongoing conversations.
+          // Two independent reasons Co might fold in a secondary call-offer
+          // gesture: content-driven (would_benefit) or channel-driven —
+          // someone with no profile yet, on their first real message,
+          // regardless of what that message actually is. Fires at most once
+          // per person (isFirstRealMessage is only ever true for message #1).
+          // Eligibility (this signal + hasPendingOffer/recentOfferBurstActive
+          // as hard gates) is now weighed by the reply agent below, not
+          // pre-decided here — see agent/conversationReply.ts.
           const isThinProfileFirstMessage =
             !hasProfile && isFirstRealMessage && callAction === "none";
-          const shouldOfferCall =
-            !hasPendingOffer &&
-            !recentOfferBurstActive &&
-            (callAction === "would_benefit" || isThinProfileFirstMessage);
-
-          // Folded into the main reply below now, not a separate message that
-          // replaces one — a real conversation showed this short-circuiting the
-          // reply entirely, so "want to hop on a call?" was the ENTIRE response
-          // to something significant, with no acknowledgment of what was
-          // actually said. The offer is secondary now; genuinely responding
-          // (reflecting, surfacing a real recommendation/venue if one exists)
-          // is the priority, per explicit product decision.
-          const callOfferContext = !shouldOfferCall
-            ? ""
-            : isThinProfileFirstMessage
-              ? `\nThis is the first real thing they've shared and nothing is known about them yet — first, actually respond to what they said. Then offer a quick call as a warm, low-pressure way to actually get to know them — a real conversation just gets Co so much further than texting back and forth. Keep it brief and secondary, never in place of a real response. Do not place any call, just make the gesture.`
-              : `\nWhat they just shared could genuinely benefit from a real conversation by voice — but that is not the priority. First, actually respond to what they said: reflect it, and if you have something concrete to offer below (a real recommendation or a real place you found), lead with that instead of a call. Only if it still feels right after that, offer a call as a warm gesture, not a logistics question — the way someone says "I'm here if you ever want to actually talk this through," not "are you free for a call today or tomorrow." Keep it brief and secondary, never in place of a real response. Do not place any call, just make the gesture.`;
 
           // They asked a plain question about the calling feature — answer it
           // truthfully, don't place a call and don't pretend one is
@@ -2548,138 +2540,42 @@ Return ONLY valid JSON, no preamble: {"wants_venue": true or false, "venue_type"
                 ? `\nThey've moved from sharing into wanting a real answer or help deciding — meet that directly. Give them your actual read, grounded in what you know about them, instead of another reflective question or a line that waits for them to ask first.\n`
                 : "";
 
-            const { text: reply } = await propagateAttributes(
+            // Step 6 — Decide + send Co's reply via the conversation-reply
+            // agent (agent/conversationReply.ts). Replaces the old fixed
+            // callOfferContext branching and the separate post-hoc
+            // callOfferCheck verification call — the agent now decides
+            // whether to fold in a call-offer gesture and records that
+            // decision itself via a tool call (offerCall), rather than code
+            // pre-deciding and a second LLM call inferring after the fact
+            // whether the drafted text happened to include one.
+            const { replyText } = await propagateAttributes(
               { userId: user.id, traceName: "co-test.webhooks.generateReply" },
               () =>
-                generateText({
-                  model: anthropic("claude-haiku-4-5-20251001"),
-                  experimental_telemetry: {
-                    isEnabled: true,
-                    functionId: "co-test.webhooks.generateReply",
-                  },
-                  prompt: `${personaPrompt ?? "You are Co, an exclusive life concierge."}
-
-You are having this specific exchange over text message, not a phone call — the phase structure and pacing above describe a live call; over text, just be genuinely Co: the same listening style, the same voice, the same principles, picking up wherever this conversation actually is.
-
-${user.first_name} is texting you from ${number} — that's the number you'd call if a call ever comes up. You already have it; never ask them for their number.
-
-You reaching this reply means no call is being placed right now — if a call were actually being triggered this turn, a separate confirmation message handles that instead of this one. Never say or imply "calling now," "calling you", or that you're dialing/have dialed them this turn. If a scheduled call exists, it's covered below (in scheduleCallContext) — talk about it as scheduled for later, not as happening now.
-
-What you already know about ${user.first_name} from a prior call:
-${profileContext || "(nothing on file yet from a call — this is effectively a first conversation)"}
-${missingTopicsContext}
-Recent text conversation, in order:
-${recentConversation || "(start of the text conversation)"}
-
-${user.first_name} just said: "${content}"
-${isFirstContact ? `\nThis is the very start of your first real conversation with ${user.first_name} — they just finished the intro sequence above (greeting, what CoPatible is, saving your contact, verification). What they just said may be nothing more than a greeting from tapping "message Co to start," not real content to react to. If it IS something real, pick up from it genuinely. If it's just a greeting or blank, don't react to it as if it were substantive — instead open the real conversation yourself, the same way you would at the start of a call: warm, unhurried, inviting the real version of their life, not a status update.\n` : ""}${recommendationContext}${venueContext}${callOfferContext}${callFeatureQuestionContext}${scheduleCallContext}${closingContext}${toneContext}${seekingModeContext}
-${styleHint}
-Ground everything ONLY in the information above and what has actually been said in this conversation — never state or imply a specific personal detail, preference, or fact about them that isn't listed above or wasn't actually said in this thread. This includes real venues and businesses: never name a specific one unless it's given to you above as something you actually found — if you don't have a real one, describe what you'd look for, don't guess a plausible-sounding name. If you don't have something, ask rather than assume.
-
-Keep THIS reply short — one text-message-length turn, not a call-length response. A sentence or two. No exclamation points, no em dashes. This is a text message, not a paragraph — but if you're relaying a real find (a name, a reason, a link), give it the room it actually needs rather than cutting it short.`,
+                runConversationReplyAgent({
+                  userId: user.id,
+                  phoneNumber: number,
+                  firstName: user.first_name,
+                  content,
+                  hasPendingOffer,
+                  recentOfferBurstActive,
+                  callAction,
+                  isThinProfileFirstMessage,
+                  personaPrompt,
+                  profileContext,
+                  missingTopicsContext,
+                  recentConversation,
+                  isFirstContact,
+                  recommendationContext,
+                  venueContext,
+                  callFeatureQuestionContext,
+                  scheduleCallContext,
+                  closingContext,
+                  toneContext,
+                  seekingModeContext,
+                  styleHint,
                 }),
             );
-            // Every prompt in this codebase says "no em dashes," but the
-            // model still produces one occasionally (confirmed in a real
-            // reply: "I actually talked to you — I know what you need").
-            // Prompt-following alone isn't reliable enough for a rule this
-            // consistently stated, so this is a hard guarantee instead of
-            // hoping the instruction sticks every time.
-            const sanitizedReply = reply.replace(/\s*—\s*/g, ", ");
-
-            // A genuinely long reply gets sent as two natural texts (a real
-            // pause between them) instead of being hard-truncated and silently
-            // losing whatever didn't fit — see splitIntoMessages.
-            const replyParts = splitIntoMessages(sanitizedReply);
-            cappedReply = replyParts.join(" ");
-
-            for (let i = 0; i < replyParts.length; i++) {
-              const part = replyParts[i];
-              await pool.query(
-                `INSERT INTO co_memories (user_id, memory_type, content) VALUES ($1, 'text_exchange', $2)`,
-                [user.id, `Co replied: ${part}`],
-              );
-              try {
-                await sendblue.messages.send({
-                  number,
-                  content: part,
-                  from_number: process.env.SENDBLUE_PHONE_NUMBER!,
-                });
-              } catch (smsErr: any) {
-                console.error(
-                  `Sendblue reply send failed for ${number} (non-fatal):`,
-                  smsErr?.message ?? smsErr,
-                );
-              }
-              if (i < replyParts.length - 1) await pause(2000);
-            }
-          }
-
-          // Records that an offer went out (folded into the reply above, not a
-          // separate message) so a later "yes"/"no" is still correctly read as
-          // answering it, and so the cooldown above has something to count.
-          // Must confirm the reply actually contains an offer before recording
-          // one — asking the model to include it isn't a guarantee it did.
-          // Found the hard way: a reply that was just a clarifying question,
-          // with no mention of a call anywhere, still got recorded as a pending
-          // offer because shouldOfferCall had been true going in — the system
-          // then thought it had offered something the user was never shown.
-          if (shouldOfferCall) {
-            try {
-              const { text: rawOfferCheck } = await propagateAttributes(
-                {
-                  userId: user.id,
-                  traceName: "co-test.webhooks.callOfferCheck",
-                },
-                () =>
-                  generateText({
-                    model: anthropic("claude-haiku-4-5-20251001"),
-                    experimental_telemetry: {
-                      isEnabled: true,
-                      functionId: "co-test.webhooks.callOfferCheck",
-                    },
-                    prompt: `Does this text message actually offer, invite, or gesture toward a phone call — in any wording, even indirectly (e.g. "I'm here if you want to talk this through")? Not just related to talking or listening in general — specifically about a phone call.
-
-Message: "${cappedReply}"
-
-Return ONLY "yes" or "no".`,
-                  }),
-              );
-              const actuallyOffered = rawOfferCheck
-                .trim()
-                .toLowerCase()
-                .startsWith("yes");
-              if (actuallyOffered) {
-                // Stores what the USER actually described, not just Co's own
-                // offer text — Co's gesture is often deliberately generic ("I'm
-                // here if you want to talk this through"), which makes a weak
-                // fingerprint for later topic-matching (two unrelated heavy
-                // topics could look identical if Co phrased both offers the same
-                // vague way). The user's own words are the real topic signal,
-                // and this same row's content is what gets copied into
-                // call_offer_declined_topic on a decline, so the fix has to live
-                // here, not just at decline-time.
-                await pool
-                  .query(
-                    `INSERT INTO co_memories (user_id, memory_type, content) VALUES ($1, 'call_offer_pending', $2)`,
-                    [
-                      user.id,
-                      `User described: ${content} | Co offered: ${cappedReply}`,
-                    ],
-                  )
-                  .catch((err: any) =>
-                    console.error(
-                      "webhooks: call_offer_pending memory write failed (non-fatal):",
-                      err?.message ?? err,
-                    ),
-                  );
-              }
-            } catch (err: any) {
-              console.error(
-                "webhooks: call-offer verification failed (non-fatal, not recording a pending offer):",
-                err?.message ?? err,
-              );
-            }
+            cappedReply = replyText;
           }
 
           // Text-only conversations used to never build a co_profile at all —

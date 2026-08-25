@@ -1,0 +1,119 @@
+import { anthropic } from "@ai-sdk/anthropic";
+import { generateText, stepCountIs } from "ai";
+import { createConversationTools, deliverReply } from "./conversationTools.js";
+
+export type ConversationReplyInput = {
+  userId: string;
+  phoneNumber: string;
+  firstName: string;
+  content: string;
+  hasPendingOffer: boolean;
+  recentOfferBurstActive: boolean;
+  callAction: string;
+  isThinProfileFirstMessage: boolean;
+  personaPrompt: string | null;
+  profileContext: string | null;
+  missingTopicsContext: string;
+  recentConversation: string;
+  isFirstContact: boolean;
+  recommendationContext: string;
+  venueContext: string;
+  callFeatureQuestionContext: string;
+  scheduleCallContext: string;
+  closingContext: string;
+  seekingModeContext: string;
+  toneContext: string;
+  styleHint: string;
+};
+
+// Co Loop Stage 1, agentized — co-test's version of api/src/agent/conversationReply.ts,
+// same shape (generateText + tools + stopWhen), extended with this file's
+// extra context blocks (recommendation, schedule-call, closing, seeking-mode)
+// that prod's harness doesn't have. Does NOT own whether to place a real
+// call, or the scheduleCallContext commitment itself (both stay deterministic
+// in webhooks.ts) — only the secondary call-offer gesture + reply content.
+export async function runConversationReplyAgent(
+  input: ConversationReplyInput,
+  opts: { dryRun?: boolean } = {},
+): Promise<{ sent: boolean; offered: boolean; replyText: string }> {
+  const { tools, state } = createConversationTools({
+    userId: input.userId,
+    phoneNumber: input.phoneNumber,
+    content: input.content,
+    hasPendingOffer: input.hasPendingOffer,
+    recentOfferBurstActive: input.recentOfferBurstActive,
+    dryRun: opts.dryRun ?? false,
+  });
+
+  const callOfferEligible =
+    !input.hasPendingOffer &&
+    !input.recentOfferBurstActive &&
+    (input.callAction === "would_benefit" || input.isThinProfileFirstMessage);
+
+  const callOfferInstruction = callOfferEligible
+    ? input.isThinProfileFirstMessage
+      ? `This is the first real thing they've shared and nothing is known about them yet. After responding, you may offer a quick, low-pressure call as a warm way to actually get to know them — a real conversation gets Co further than texting back and forth. Keep it brief and secondary. Do not place any call, just make the gesture — if you use it, call offerCall after sendReply.`
+      : `What they just shared could genuinely benefit from a real conversation by voice. If it still feels right after genuinely responding — and after leading with anything concrete you have to offer below (a real recommendation), if any — you may offer a call as a warm gesture, not a logistics question. Do not place any call, just make the gesture — if you use it, call offerCall after sendReply.`
+    : `A call offer is NOT available this turn (one is already pending, or was offered too recently) — do not mention, suggest, or ask about a phone call in your reply at all, in any wording, even indirectly. Just respond genuinely to what they said.`;
+
+  const system = `${input.personaPrompt ?? "You are Co, an exclusive life concierge."}
+
+You are having this specific exchange over text message, not a phone call — the phase structure and pacing above describe a live call; over text, just be genuinely Co: the same listening style, the same voice, the same principles, picking up wherever this conversation actually is.
+
+${input.firstName} is texting you — you already have their number, never ask them for it.
+
+You reaching this point means no call is being placed right now — if a call were actually being triggered this turn, a separate confirmation message handles that instead of this reply. Never say or imply "calling now," "calling you", or that you're dialing/have dialed them this turn. If a scheduled call exists, it's covered below — talk about it as scheduled for later, not as happening now.
+
+What you already know about ${input.firstName} from a prior call:
+${input.profileContext || "(nothing on file yet from a call — this is effectively a first conversation)"}
+${input.missingTopicsContext}
+Recent text conversation, in order:
+${input.recentConversation || "(start of the text conversation)"}
+
+${input.firstName} just said: "${input.content}"
+${input.isFirstContact ? `\nThis is the very start of your first real conversation with ${input.firstName} — they just finished the intro sequence above (greeting, what CoPatible is, saving your contact, verification). What they just said may be nothing more than a greeting from tapping "message Co to start," not real content to react to. If it IS something real, pick up from it genuinely. If it's just a greeting or blank, don't react to it as if it were substantive — instead open the real conversation yourself, the same way you would at the start of a call: warm, unhurried, inviting the real version of their life, not a status update.\n` : ""}${input.recommendationContext}${input.venueContext}${input.callFeatureQuestionContext}${input.scheduleCallContext}${input.closingContext}${input.toneContext}${input.seekingModeContext}
+${input.styleHint}
+Ground everything ONLY in the information above and what has actually been said in this conversation — never state or imply a specific personal detail, preference, or fact about them that isn't listed above or wasn't actually said in this thread. This includes real venues and businesses: never name a specific one unless it's given to you above as something you actually found — if you don't have a real one, describe what you'd look for, don't guess a plausible-sounding name. If you don't have something, ask rather than assume.
+
+Decide what to do, then act using your tools:
+- Always respond genuinely to what they said first. Keep it short — one text-message-length turn, not a call-length response. A sentence or two, no exclamation points, no em dashes — but if you're relaying a real find (a name, a reason, a link), give it the room it actually needs rather than cutting it short.
+- You have room for AT MOST ONE secondary, optional gesture folded into the same reply — never let it replace actually responding. ${callOfferInstruction}
+- Call sendReply exactly once with your final message. Then call offerCall only if you actually used the call-offer gesture in the message you sent.`;
+
+  await generateText({
+    // Sonnet, not Haiku (unlike prod's version) — dry-run testing showed
+    // Haiku missing the offerCall follow-up call ~2/5 times even when the
+    // reply text clearly gestured toward a call, which breaks
+    // call_offer_pending tracking (a later "yes" gets misread as unrelated).
+    // This is a correctness/state-consistency issue, not just phrasing
+    // quality, so it justifies the latency/cost tradeoff.
+    model: anthropic("claude-sonnet-4-6"),
+    system,
+    prompt: "Respond to what they just said.",
+    tools,
+    stopWhen: stepCountIs(5),
+    experimental_telemetry: { isEnabled: true, functionId: "co-test.agent.conversationReply" },
+  });
+
+  if (!state.sent) {
+    console.error(
+      `conversationReply: agent completed without calling sendReply for user ${input.userId} — sending fallback`,
+    );
+    const fallback = "Hey, sorry, got a bit tangled up on my end. What's on your mind?";
+    await deliverReply(
+      {
+        userId: input.userId,
+        phoneNumber: input.phoneNumber,
+        content: input.content,
+        hasPendingOffer: input.hasPendingOffer,
+        recentOfferBurstActive: input.recentOfferBurstActive,
+        dryRun: opts.dryRun ?? false,
+      },
+      fallback,
+    );
+    state.sent = true;
+    state.lastReplyText = fallback;
+  }
+
+  return { sent: state.sent, offered: state.offered, replyText: state.lastReplyText };
+}
