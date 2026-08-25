@@ -1,7 +1,5 @@
 import cron from "node-cron";
 import twilio from "twilio";
-import { anthropic } from "@ai-sdk/anthropic";
-import { generateText } from "ai";
 import type { Server } from "socket.io";
 import pool from "../db/db.js";
 import { sendEmail, sendSMS } from "../otpActions.js";
@@ -13,8 +11,7 @@ import {
 import sendblue from "../services/sendblue.js";
 import { CIRCLE_FACILITATION_ENABLED, findBestCircle } from "../services/circleFacilitation.js";
 import { sweepAllOpenAsks } from "../services/relevance.js";
-import { getCoverageNudge, markTopicAsked, RAPPORT_TOPIC_DESCRIPTIONS } from "../services/profileExtraction.js";
-import type { RapportTopic } from "../services/profileExtraction.js";
+import { runAskCheckinAgent } from "../agent/askCheckin.js";
 import type { CandidateWindow } from "../services/scheduling.js";
 
 const twilioClient = twilio(
@@ -682,81 +679,31 @@ export function registerJobs(io: Server) {
       );
 
       for (const row of due.rows) {
+        // Escalation framing, whether to mention match-absence, and whether
+        // to fold in a topic nudge are no longer decided here — the agent
+        // weighs those itself (agent/askCheckin.ts) using the raw
+        // checkin_count/has_matches signals below instead of a hardcoded
+        // threshold, and owns sending + logging the outcome.
+        let sent = false;
         try {
-          // Escalates after 2 prior check-ins with no resolution — an
-          // explicit off-ramp instead of repeating the same question
-          // indefinitely. Deliberately silent about matches existing (even
-          // when has_matches is true) since Stage 4 is off — naming a match
-          // without acting on it reads as an intro that's coming, which
-          // isn't true right now. Absence of a match is safe to name, since
-          // it sets no expectation.
-          const isEscalating = row.checkin_count >= 2;
-          const matchContext = !row.has_matches
-            ? `\nCo hasn't found a strong match for this yet, so it's fine to let them know that honestly (e.g. "still keeping an eye out") — don't imply anything is imminent.`
-            : "";
-          const escalationContext = isEscalating
-            ? `\nCo has already checked in on this ${row.checkin_count} times with no clear resolution. Instead of just re-asking, ask whether this is still actually a priority for them, and give them an easy way to say "stop asking about this" if it's not.`
-            : "";
-
-          // Co Loop Stage 1 via Stage 5 — same shared coverage-nudge helper
-          // sendblue.ts's reply prompt uses (profileExtraction.ts's
-          // getCoverageNudge), reused here since a check-in is itself a
-          // real, already-scheduled touchpoint that can also work toward a
-          // RAPPORT_TOPICS gap, not just re-ask about the same stated ask
-          // forever. Skipped while escalating — that message already has a
-          // delicate job (asking whether this is still a priority) and
-          // shouldn't be diluted with an unrelated question.
-          let topicContext = "";
-          let nudgeTopic: RapportTopic | null = null;
-          if (!isEscalating) {
-            const { missingTopic } = await getCoverageNudge(row.user_id, "", {
-              life_chapters: row.life_chapters,
-              goals: row.goals,
-              blockers: row.blockers,
-              long_term_direction: row.long_term_direction,
-              city: row.city,
-              topics_covered: row.topics_covered,
-              topics_asked: row.topics_asked,
-            });
-            nudgeTopic = missingTopic;
-            topicContext = missingTopic
-              ? `\nSeparately, Co doesn't yet have a good sense of ${RAPPORT_TOPIC_DESCRIPTIONS[missingTopic]}. If it fits naturally after the check-in question, you can gently work in one brief, genuine question toward that too — but never force it, and the check-in question always comes first and matters more.`
-              : "";
-          }
-
-          const { text: message } = await generateText({
-            model: anthropic("claude-haiku-4-5-20251001"),
-            prompt: `You are Co, texting ${row.first_name} to check in on something they told you about a while back: "${row.ask_text}"
-
-Write a short iMessage checking in on whether this is still true or still a priority. Tone: a thoughtful friend following up, not a survey. The check-in question about their ask is the priority and always comes first; only add a second question if the note below explicitly invites one. 1-3 sentences max. No em dashes.${matchContext}${escalationContext}${topicContext}`,
-            experimental_telemetry: { isEnabled: true, functionId: "jobs.askCheckin" },
-          });
-
-          await sendblue.messages.send({
-            number: row.phone_number,
-            content: message.trim(),
-            from_number: process.env.SENDBLUE_PHONE_NUMBER!,
-          });
-
-          if (nudgeTopic) markTopicAsked(row.user_id, nudgeTopic);
-
-          await pool.query(
-            `INSERT INTO co_memories (user_id, memory_type, content) VALUES ($1, 'check_in', $2)`,
-            [row.user_id, `Co checked in on stated ask: "${row.ask_text}"`],
-          );
+          ({ sent } = await runAskCheckinAgent(row));
         } catch (err: any) {
           console.error(`Ask check-in failed for ${row.user_id}:`, err?.message ?? err);
         }
-        // Bumped regardless of send success — same reasoning as every other
-        // *_sent_at guard in this file: a permanently-failing send should
-        // not retry forever on every tick, it should wait for the next
-        // cadence window like a successful send would. awaiting_response_since
-        // starts the response-rate clock (cleared by the next inbound message
-        // from this person — see sendblue.ts webhook).
+        // last_checked_at always bumps — same reasoning as every other
+        // *_sent_at guard in this file: a permanently-failing (or
+        // intentionally-skipped) cycle should not retry on every tick, it
+        // should wait for the next cadence window like a successful send
+        // would. checkin_count/awaiting_response_since only advance on an
+        // actual send — a deliberate agent skip isn't a check-in attempt and
+        // shouldn't count toward the escalation threshold the same way a
+        // real (or failed) send does.
         await pool.query(
-          `UPDATE ask_checkins
-           SET last_checked_at = NOW(), checkin_count = checkin_count + 1, awaiting_response_since = NOW()
-           WHERE id = $1`,
+          sent
+            ? `UPDATE ask_checkins
+               SET last_checked_at = NOW(), checkin_count = checkin_count + 1, awaiting_response_since = NOW()
+               WHERE id = $1`
+            : `UPDATE ask_checkins SET last_checked_at = NOW() WHERE id = $1`,
           [row.id],
         );
       }

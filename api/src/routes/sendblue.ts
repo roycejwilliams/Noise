@@ -16,10 +16,10 @@ import {
   captureIntent,
   extractPsychographicProfile,
   getCoverageNudge,
-  markTopicAsked,
   RAPPORT_TOPIC_DESCRIPTIONS,
   storeProfile,
 } from "../services/profileExtraction.js";
+import { runConversationReplyAgent } from "../agent/conversationReply.js";
 import {
   createMomentForCircle,
   getCircleBookingContext,
@@ -1214,32 +1214,17 @@ Return ONLY the classification, nothing else.`,
           // failed dial attempt should never leave the conversation silent.
         }
 
-        // Two independent reasons to make the same secondary, folded-in
-        // gesture — never a standalone question, per the note below. One is
-        // content-driven (would_benefit) and can fire on any message from
-        // anyone. The other is channel-driven, not content-driven: someone
-        // with no profile yet, on their first real message, gets the
-        // gesture regardless of what that message actually is — a real
-        // voice call just produces a far richer initial profile than short
-        // texts ever will, and this is the one moment to offer that before
-        // the conversation settles into text. Fires at most once per person
-        // (isFirstRealMessage is only ever true for message #1), so it
-        // can't collide with the topic-aware/burst-limiter rules above that
-        // govern everyone's ongoing conversations.
+        // Two independent reasons Co might fold in a secondary call-offer
+        // gesture: content-driven (would_benefit, from the classifier above)
+        // or channel-driven — someone with no profile yet, on their first
+        // real message, regardless of what that message actually is (a real
+        // voice call produces a far richer initial profile than short texts
+        // ever will). Fires at most once per person (isFirstRealMessage is
+        // only ever true for message #1). Eligibility (this signal +
+        // hasPendingOffer/recentOfferBurstActive as hard gates) is now
+        // weighed by the reply agent below, not pre-decided here — see
+        // agent/conversationReply.ts.
         const isThinProfileFirstMessage = !hasProfile && isFirstRealMessage && callAction === "none";
-        const shouldOfferCall =
-          !hasPendingOffer && !recentOfferBurstActive && (callAction === "would_benefit" || isThinProfileFirstMessage);
-
-        // Folded into the main reply below, not a separate message that
-        // replaces one — "want to hop on a call?" should never be the ENTIRE
-        // response to something significant, with no acknowledgment of what
-        // was actually said. The offer is secondary; genuinely responding is
-        // the priority, per explicit product decision.
-        const callOfferContext = !shouldOfferCall
-          ? ""
-          : isThinProfileFirstMessage
-            ? `\nThis is the first real thing they've shared and nothing is known about them yet — first, actually respond to what they said. Then offer a quick call as a warm, low-pressure way to actually get to know them — a real conversation just gets Co so much further than texting back and forth. Keep it brief and secondary, never in place of a real response.`
-            : `\nWhat they just shared could genuinely benefit from a real conversation by voice — but that is not the priority. First, actually respond to what they said: reflect it. Only if it still feels right after that, offer a call as a warm gesture, not a logistics question — the way someone says "I'm here if you ever want to actually talk this through," not "are you free for a call today or tomorrow." Keep it brief and secondary, never in place of a real response.`;
 
         // Step 4.7 — Debounce the free-form reply only. Every deterministic
         // branch above this point (identity intake, OTP, circle
@@ -1355,91 +1340,48 @@ Return ONLY the classification, nothing else.`,
           - Time: ${moment.suggested_time ?? "TBD"}`
           : "They have no upcoming moment scheduled right now.";
 
-        // Gated the same way callOfferContext is — never stack two secondary
-        // asks in one short text. Skipped entirely while a call offer is
-        // pending or about to go out; that already has the reply's one
-        // "extra" slot for this message.
-        const usingTopicNudge = !shouldOfferCall && !hasPendingOffer && !!missingTopic;
-        const topicContext = usingTopicNudge
-          ? `\nCo doesn't yet have a good sense of ${RAPPORT_TOPIC_DESCRIPTIONS[missingTopic!]}. First, actually respond to what they just said. Then, only if it fits naturally, work in one brief, genuine question toward that — never force it or make it feel like an interview; skip it entirely this reply if nothing natural comes up.`
-            : "";
-        if (usingTopicNudge) markTopicAsked(user.id, missingTopic!);
-
-        // Not gated like callOfferContext/topicContext above — this isn't a
-        // competing "extra ask" for the reply's one secondary slot, it's an
-        // instruction about HOW to say whatever Co was already going to say.
-        // Advisory only (see detectTurnTone) and never named back to the
-        // user — a good friend responds differently to someone who's upset,
-        // they don't announce "you sound upset."
+        // Not gated like the reply-agent's secondary gestures above — this
+        // isn't a competing "extra ask" for the reply's one secondary slot,
+        // it's an instruction about HOW to say whatever Co was already going
+        // to say. Advisory only (see detectTurnTone) and never named back to
+        // the user — a good friend responds differently to someone who's
+        // upset, they don't announce "you sound upset."
         const toneContext = turnTone
-          ? `\nThey sound ${turnTone} right now. Let that genuinely shape your tone and pacing, not just your words — don't be breezy, joke, or rush past it if it doesn't fit. Never name the emotion back at them like a label.`
+          ? `They sound ${turnTone} right now. Let that genuinely shape your tone and pacing, not just your words — don't be breezy, joke, or rush past it if it doesn't fit. Never name the emotion back at them like a label.`
           : "";
 
-        // Step 6 — Generate Co's reply — Haiku for speed. Vision-enabled:
-        // if they sent a photo, it's attached as an actual image input, not
-        // just a placeholder string — Co can genuinely see and react to it.
-        const promptText = `You are Co, an exclusive life concierge.
-
-          User: ${user.first_name}
-
-          Recent conversation, in order (this is the actual thread — follow it; don't jump to older topics from "other context" below unless they bring it up again):
-          ${recentConversation || "(this is the start of the conversation)"}
-
-          Other context that might be relevant, but may be from a different time or topic — use only if it actually applies to what they just said:
-          ${recentMemories}
-
-          ${momentContext}
-
-          ${imageForVision ? "They just sent the attached photo." : `They just said: "${resolvedContent}"`}
-          ${callOfferContext}
-          ${topicContext}
-          ${toneContext}
-          ${styleHint}
-
-          Respond as Co. Warm, specific, brief.${imageForVision ? " React to what's actually in the photo." : " Use their context to make it personal."}
-          2 sentences max. No em dashes. No exclamation points.`;
-
-        const { text: coReply } = await propagateAttributes(
+        // Step 6 — Decide + send Co's reply via the conversation-reply
+        // agent (agent/conversationReply.ts). Replaces the old fixed
+        // callOfferContext/topicContext branching and the separate
+        // post-hoc callOfferCheck verification call — the agent now decides
+        // whether to fold in a call-offer/topic-nudge gesture and records
+        // that decision itself via tool calls (offerCall/markTopicAsked),
+        // rather than code pre-deciding and a second LLM call inferring
+        // after the fact whether the drafted text happened to include one.
+        const { replyText: coReply } = await propagateAttributes(
           { userId: user.id, traceName: "sendblue.generateReply" },
           () =>
-            generateText(
-              imageForVision
-                ? {
-                    model: anthropic("claude-haiku-4-5-20251001"),
-                    experimental_telemetry: { isEnabled: true, functionId: "sendblue.generateReply" },
-                    messages: [
-                      {
-                        role: "user",
-                        content: [
-                          { type: "image", image: imageForVision.data, mediaType: imageForVision.mediaType },
-                          { type: "text", text: promptText },
-                        ],
-                      },
-                    ],
-                  }
-                : {
-                    model: anthropic("claude-haiku-4-5-20251001"),
-                    experimental_telemetry: { isEnabled: true, functionId: "sendblue.generateReply" },
-                    prompt: promptText,
-                  },
-            ),
+            runConversationReplyAgent({
+              userId: user.id,
+              phoneNumber: user.phone_number,
+              firstName: user.first_name,
+              resolvedContent,
+              isVoice,
+              imageForVision,
+              hasPendingOffer,
+              recentOfferBurstActive,
+              callAction,
+              isThinProfileFirstMessage,
+              missingTopic,
+              missingTopicDescription: missingTopic ? RAPPORT_TOPIC_DESCRIPTIONS[missingTopic] : null,
+              momentContext,
+              toneContext,
+              styleHint,
+              recentConversation,
+              recentMemories,
+              sendCoReply,
+            }),
         );
-
-        // Step 7 — Store Co's reply in co_memories
-        const replyContent = `Co replied: ${coReply}`;
-        const replyMemory = await pool.query(
-          `INSERT INTO co_memories (user_id, memory_type, content)
-           VALUES ($1, 'text_exchange', $2) RETURNING id`,
-          [user.id, replyContent],
-        );
-        generateEmbedding(replyContent)
-          .then((emb) =>
-            pool.query(
-              `UPDATE co_memories SET content_embedding = $1::vector WHERE id = $2`,
-              [`[${emb.join(",")}]`, replyMemory.rows[0].id],
-            ),
-          )
-          .catch((err) => console.error("Memory embedding failed (non-fatal):", err));
 
         // Fire-and-forget, same real pipeline a call uses (extractPsychographicProfile
         // + storeProfile + captureIntent), fed the accumulated text thread instead of
@@ -1456,47 +1398,7 @@ Return ONLY the classification, nothing else.`,
           console.error("sendblue: text-based intent capture failed (non-fatal):", err?.message ?? err),
         );
 
-        // Step 8 — Send reply matching the user's medium, emit to socket
-        await sendCoReply({ phone: user.phone_number, message: coReply, asVoice: isVoice });
         io.to(`user:${user.id}`).emit("co:message", { message: coReply });
-
-        // Step 9 — Records that an offer went out, so a later "yes"/"no" is
-        // correctly read as answering it, and the burst limiter/topic list
-        // above have something to count. Must confirm the reply actually
-        // contains an offer before recording one — shouldOfferCall being
-        // true going in isn't a guarantee the model actually included it.
-        if (shouldOfferCall) {
-          try {
-            const { text: rawOfferCheck } = await propagateAttributes(
-              { userId: user.id, traceName: "sendblue.callOfferCheck" },
-              () =>
-                generateText({
-                  model: anthropic("claude-haiku-4-5-20251001"),
-                  experimental_telemetry: { isEnabled: true, functionId: "sendblue.callOfferCheck" },
-                  prompt: `Does this text message actually offer, invite, or gesture toward a phone call — in any wording, even indirectly (e.g. "I'm here if you want to talk this through")? Not just related to talking or listening in general — specifically about a phone call.
-
-Message: "${coReply}"
-
-Return ONLY "yes" or "no".`,
-                }),
-            );
-            const actuallyOffered = rawOfferCheck.trim().toLowerCase().startsWith("yes");
-            if (actuallyOffered) {
-              // Stores what the USER actually described, not just Co's own
-              // offer text — see the comment near declinedTopicsContext
-              // above for why. This same row's content is what gets copied
-              // into call_offer_declined_topic on a decline.
-              await pool
-                .query(`INSERT INTO co_memories (user_id, memory_type, content) VALUES ($1, 'call_offer_pending', $2)`, [
-                  user.id,
-                  `User described: ${resolvedContent} | Co offered: ${coReply}`,
-                ])
-                .catch((err: any) => console.error("sendblue: call_offer_pending memory write failed (non-fatal):", err?.message ?? err));
-            }
-          } catch (err: any) {
-            console.error("sendblue: call-offer verification failed (non-fatal, not recording a pending offer):", err?.message ?? err);
-          }
-        }
 
         return res.status(200).send({ received: true, reply: coReply });
       } catch (error) {

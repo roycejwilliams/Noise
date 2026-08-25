@@ -24,7 +24,11 @@ export function cleanCoMessage(text: string): string {
   const selfCorrection = /wait,?\s+i\s+(?:used|made|wrote)[^.]*\.\s*let\s+me\s+redo\s+that\.?\s*/i;
   const match = text.match(selfCorrection);
   let cleaned = match ? text.slice(match.index! + match[0].length) : text;
-  cleaned = cleaned.replace(/—/g, ",").trim();
+  // Models told "no em dashes" sometimes substitute a literal double-hyphen
+  // ("word -- word") instead, which reads exactly the same to the recipient
+  // — confirmed live from the ask-checkin agent (Claude Sonnet) doing this
+  // repeatedly despite the instruction. Same fix as the em dash itself.
+  cleaned = cleaned.replace(/—/g, ",").replace(/\s+--\s+/g, ", ").trim();
   const quoteMatch = cleaned.match(WRAPPED_QUOTE);
   if (quoteMatch) cleaned = quoteMatch[1].trim();
   return cleaned;
