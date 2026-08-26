@@ -204,9 +204,9 @@ export const sendSMS = async ({
       // said. Explicitly told not to re-greet here.
       await send(
         await varied(
-          "You already greeted them warmly in a separate message just before this one — do not say \"welcome\" or greet them again here. Continuing on, let them know, in your own words: Co is invite-only and they're getting early access, you're still learning and listening for now, and more is coming later.",
-          `Co is invite-only. You're getting early access. She's learning and listening for now. More comes later.`,
-          160,
+          "You already greeted them warmly in a separate message just before this one — do not say \"welcome\" or greet them again here. Continuing on, let them know, in your own words: Co is invite-only and they're getting early access, you're still learning and listening for now, and more is coming later. Also mention, briefly and factually, that they can just call this number any time they'd rather talk than text — not a suggestion to do it now, just letting them know it's always an option.",
+          `Co is invite-only. You're getting early access. She's learning and listening for now. More comes later. You can also just call this number any time you'd rather talk than text.`,
+          220,
         ),
       );
     }

@@ -1860,7 +1860,7 @@ Return ONLY strict JSON: {"full_name": string or null, "email": string or null, 
                   isEnabled: true,
                   functionId: "co-test.webhooks.callOffer.classify",
                 },
-                prompt: `A user is texting Co, a life concierge.${hasPendingOffer ? " Co just offered them a phone call and is waiting for a yes or no." : ""}
+                prompt: `A user is texting Co, a life concierge.${hasPendingOffer ? ` Co already offered them a call about this: "${pendingOffer.content}", and is waiting for a yes or no on THAT specific offer. If their latest message is still about that same underlying problem or theme — even just continuing to describe it, elaborating, or venting further, in different words — that is NOT a new reason to offer again; classify it as accepts_offer/declines_offer/none as usual, never would_benefit. Only classify "would_benefit" here if what they're describing now is a clearly different problem or situation from the one already offered on — a still-open offer on one topic doesn't block a fresh offer on a genuinely unrelated one.` : ""}
 
 Recent conversation, in order (their latest message may only make sense combined with what came before — e.g. a time given in one message and a date/timezone confirmed in a later one is still a single schedule request, not two separate things):
 ${recentConversation || "(start of the conversation)"}

@@ -39,7 +39,12 @@ async function verifyAndRecordCallOffer(
   replyText: string,
   dryRun: boolean,
 ): Promise<boolean> {
-  if (input.hasPendingOffer || input.recentOfferBurstActive || !replyText) return false;
+  // hasPendingOffer not checked here either, same reasoning as
+  // callOfferEligible above — by the time we're recording a NEW offer,
+  // eligibility already confirmed this is a genuinely different topic than
+  // whatever's still pending. The old pending row is left alone; the
+  // most-recent-pending query naturally starts resolving against this one.
+  if (input.recentOfferBurstActive || !replyText) return false;
   try {
     const { text: rawCheck } = await generateText({
       model: anthropic("claude-haiku-4-5-20251001"),
@@ -87,8 +92,13 @@ export async function runConversationReplyAgent(
     dryRun: opts.dryRun ?? false,
   });
 
+  // hasPendingOffer is deliberately NOT a gate here — the classifier
+  // (co-test.webhooks.callOffer.classify) already only returns
+  // "would_benefit" for a topic genuinely different from whatever offer is
+  // still pending, mirroring how call_offer_declined_topic already lets a
+  // new topic through. Gating on hasPendingOffer again here would discard
+  // that per-topic judgment and re-block every topic, same as before.
   const callOfferEligible =
-    !input.hasPendingOffer &&
     !input.recentOfferBurstActive &&
     (input.callAction === "would_benefit" || input.isThinProfileFirstMessage);
 
