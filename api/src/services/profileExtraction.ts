@@ -421,6 +421,50 @@ Return ONLY valid JSON, reusing the exact original text for goals/blockers and t
   }
 }
 
+// Proactive check-in call cadence — Hume's own voice prompt (Phase 4, Next
+// Steps) asks how often they'd like Co to call back on its own; this reads
+// the transcript afterward for a stated answer, the same narrow-classifier
+// shape as assessResolvedItems above. Only ever returns a value when they
+// actually said one — storeProfile below only writes it when non-null, so a
+// call that never touches the subject doesn't silently reset an existing
+// preference back to "unset."
+async function extractCheckinCadencePreference(transcript: string): Promise<number | null> {
+  try {
+    const { text: raw } = await generateText({
+      model: anthropic("claude-haiku-4-5-20251001"),
+      prompt: `Here is a call transcript between Co (a life concierge) and a caller. Near the end of the call, Co may have asked how often the caller would like Co to proactively call them to check in.
+
+Transcript:
+"${transcript}"
+
+Did the caller state a preference for how often Co should proactively call them? If so, classify it as the closest of:
+- "weekly" — roughly every week
+- "biweekly" — roughly every two weeks, or anything looser but still wanting proactive calls (e.g. "every so often", "once in a while")
+- "none" — they said not to call proactively, or said they'd rather just reach out themselves
+- "unstated" — the topic never came up, or they didn't give a clear answer
+
+Return ONLY valid JSON, no preamble: {"preference": "weekly" | "biweekly" | "none" | "unstated"}`,
+      experimental_telemetry: { isEnabled: true, functionId: "profileExtraction.extractCheckinCadencePreference" },
+    });
+
+    const clean = raw.replace(/```json|```/g, "").trim();
+    const parsed = JSON.parse(clean);
+    switch (parsed.preference) {
+      case "weekly":
+        return 7;
+      case "biweekly":
+        return 14;
+      case "none":
+        return 0;
+      default:
+        return null;
+    }
+  } catch (err) {
+    console.error("extractCheckinCadencePreference failed (non-fatal):", err);
+    return null;
+  }
+}
+
 // Step 2 — sanitizes against co_profiles' CHECK constraints and upserts.
 // Each call's transcript only covers what that call happened to touch on, so
 // list fields (life_chapters, activity_preferences, goals, blockers) are
@@ -565,6 +609,19 @@ export async function storeProfile(
        WHERE person_id = $1 AND ask_id = ANY($2::text[]) AND status = 'open'`,
       [user_id, resolvedAskIds],
     );
+  }
+
+  // Separate conditional write, same reasoning as resolvedAskIds above —
+  // most calls never touch this subject, and a null/unstated result here
+  // must never silently reset an already-captured preference back to unset.
+  // 0 (explicitly declined) is a real, distinct value from null (never
+  // asked) — checked with !== null, not a truthy check.
+  const cadenceDays = await extractCheckinCadencePreference(transcript);
+  if (cadenceDays !== null) {
+    await pool.query(`UPDATE co_profiles SET checkin_call_cadence_days = $2 WHERE user_id = $1`, [
+      user_id,
+      cadenceDays,
+    ]);
   }
 
   return { safeChapters, safeStyle };

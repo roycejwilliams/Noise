@@ -672,4 +672,23 @@ export function runMigrations() {
       )`,
     )
     .catch((err: Error) => console.error("phone_debounce table init failed:", err));
+
+  // Proactive check-in call cadence — user-set preference (7 or 14 days,
+  // captured post-call via extractCheckinCadencePreference in
+  // profileExtraction.ts) for Co to call back on its own, not just be
+  // reachable via inbound calling. NULL means never asked or no preference
+  // stated — proactive calling stays off for that person until it's
+  // explicitly set, same opt-in-only posture triggerCallForUser already
+  // enforces elsewhere. last_proactive_outreach_at is the shared cooldown
+  // timestamp — proactiveCheckinCallJob.ts (co-test) writes it on every
+  // successful call; prod's ask-checkin cron is meant to write it too once
+  // this feature is ported there, so the two systems don't both reach out
+  // within days of each other, but that port is deliberately a separate
+  // follow-up, not part of this migration.
+  pool
+    .query(`ALTER TABLE co_profiles ADD COLUMN IF NOT EXISTS checkin_call_cadence_days INT`)
+    .catch((err: Error) => console.error("co_profiles.checkin_call_cadence_days migration failed:", err));
+  pool
+    .query(`ALTER TABLE co_profiles ADD COLUMN IF NOT EXISTS last_proactive_outreach_at TIMESTAMPTZ`)
+    .catch((err: Error) => console.error("co_profiles.last_proactive_outreach_at migration failed:", err));
 }
