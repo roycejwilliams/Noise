@@ -198,9 +198,13 @@ export const sendSMS = async ({
     }
 
     if (intro) {
+      // Always preceded by its own separate "welcome" send (routes/sendblue.ts)
+      // — confirmed live this produced two back-to-back "Welcome to Co"
+      // openers, since each varied() call has no idea what the other one
+      // said. Explicitly told not to re-greet here.
       await send(
         await varied(
-          "Someone just joined for the first time. Let them know, in your own words: Co is invite-only and they're getting early access, you're still learning and listening for now, and more is coming later.",
+          "You already greeted them warmly in a separate message just before this one — do not say \"welcome\" or greet them again here. Continuing on, let them know, in your own words: Co is invite-only and they're getting early access, you're still learning and listening for now, and more is coming later.",
           `Co is invite-only. You're getting early access. She's learning and listening for now. More comes later.`,
           160,
         ),
