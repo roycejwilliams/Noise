@@ -1,6 +1,7 @@
 import { anthropic } from "@ai-sdk/anthropic";
 import { generateText, stepCountIs } from "ai";
 import { createConversationTools, deliverReply } from "./conversationTools.js";
+import pool from "../../../api/src/db/db.js";
 
 export type ConversationReplyInput = {
   userId: string;
@@ -25,6 +26,47 @@ export type ConversationReplyInput = {
   toneContext: string;
   styleHint: string;
 };
+
+// Re-checks the actual sent text for whether it's a call offer, rather than
+// trusting the model to have self-declared it via a tool call. Restored
+// after a real conversation showed the model calling offerCall right after a
+// reply that never mentioned a call at all — a false positive that set
+// call_offer_pending and, combined with a pre-existing classifier gap, led
+// to two unwanted real outbound calls. Same question and gating the deleted
+// offerCall tool / original callOfferCheck used.
+async function verifyAndRecordCallOffer(
+  input: Pick<ConversationReplyInput, "userId" | "content" | "hasPendingOffer" | "recentOfferBurstActive">,
+  replyText: string,
+  dryRun: boolean,
+): Promise<boolean> {
+  if (input.hasPendingOffer || input.recentOfferBurstActive || !replyText) return false;
+  try {
+    const { text: rawCheck } = await generateText({
+      model: anthropic("claude-haiku-4-5-20251001"),
+      experimental_telemetry: { isEnabled: true, functionId: "co-test.agent.conversationReply.callOfferCheck" },
+      prompt: `Does this text message actually offer, invite, or gesture toward a phone call — in any wording, even indirectly (e.g. "I'm here if you want to talk this through")? Not just related to talking or listening in general — specifically about a phone call.
+
+Message: "${replyText}"
+
+Return ONLY "yes" or "no".`,
+    });
+    if (!rawCheck.trim().toLowerCase().startsWith("yes")) return false;
+  } catch (err: any) {
+    console.error("conversationReply: call-offer verification failed (non-fatal, not recording a pending offer):", err?.message ?? err);
+    return false;
+  }
+  if (dryRun) {
+    console.log(`[conversationReply dryRun] would record call_offer_pending for ${input.userId}`);
+    return true;
+  }
+  await pool
+    .query(`INSERT INTO co_memories (user_id, memory_type, content) VALUES ($1, 'call_offer_pending', $2)`, [
+      input.userId,
+      `User described: ${input.content} | Co offered: ${replyText}`,
+    ])
+    .catch((err: any) => console.error("conversationReply: call_offer_pending memory write failed (non-fatal):", err?.message ?? err));
+  return true;
+}
 
 // Co Loop Stage 1, agentized — co-test's version of api/src/agent/conversationReply.ts,
 // same shape (generateText + tools + stopWhen), extended with this file's
@@ -52,8 +94,8 @@ export async function runConversationReplyAgent(
 
   const callOfferInstruction = callOfferEligible
     ? input.isThinProfileFirstMessage
-      ? `This is the first real thing they've shared and nothing is known about them yet. After responding, you may offer a quick, low-pressure call as a warm way to actually get to know them — a real conversation gets Co further than texting back and forth. Keep it brief and secondary. Do not place any call, just make the gesture — if you use it, call offerCall after sendReply.`
-      : `What they just shared could genuinely benefit from a real conversation by voice. If it still feels right after genuinely responding — and after leading with anything concrete you have to offer below (a real recommendation), if any — you may offer a call as a warm gesture, not a logistics question. Do not place any call, just make the gesture — if you use it, call offerCall after sendReply.`
+      ? `This is the first real thing they've shared and nothing is known about them yet. After responding, you may offer a quick, low-pressure call as a warm way to actually get to know them — a real conversation gets Co further than texting back and forth. Keep it brief and secondary. Do not place any call, just make the gesture.`
+      : `What they just shared could genuinely benefit from a real conversation by voice. If it still feels right after genuinely responding — and after leading with anything concrete you have to offer below (a real recommendation), if any — you may offer a call as a warm gesture, not a logistics question. Do not place any call, just make the gesture.`
     : `A call offer is NOT available this turn (one is already pending, or was offered too recently) — do not mention, suggest, or ask about a phone call in your reply at all, in any wording, even indirectly. Just respond genuinely to what they said.`;
 
   const system = `${input.personaPrompt ?? "You are Co, an exclusive life concierge."}
@@ -78,7 +120,7 @@ Ground everything ONLY in the information above and what has actually been said 
 Decide what to do, then act using your tools:
 - Always respond genuinely to what they said first. Keep it short — one text-message-length turn, not a call-length response. A sentence or two, no exclamation points, no em dashes — but if you're relaying a real find (a name, a reason, a link), give it the room it actually needs rather than cutting it short.
 - You have room for AT MOST ONE secondary, optional gesture folded into the same reply — never let it replace actually responding. ${callOfferInstruction}
-- Call sendReply exactly once with your final message. Then call offerCall only if you actually used the call-offer gesture in the message you sent.`;
+- Call sendReply once with your reply. Only call it a second time if you genuinely have a second, separate thought that reads more naturally as its own text sent right after — never to split one continuous thought into shorter pieces.`;
 
   await generateText({
     // Sonnet, not Haiku (unlike prod's version) — dry-run testing showed
@@ -91,7 +133,9 @@ Decide what to do, then act using your tools:
     system,
     prompt: "Respond to what they just said.",
     tools,
-    stopWhen: stepCountIs(5),
+    // 6, not 5 — a genuine second sendReply call now needs an extra
+    // call/result round trip the single-reply design didn't.
+    stopWhen: stepCountIs(6),
     experimental_telemetry: { isEnabled: true, functionId: "co-test.agent.conversationReply" },
   });
 
@@ -115,5 +159,7 @@ Decide what to do, then act using your tools:
     state.lastReplyText = fallback;
   }
 
-  return { sent: state.sent, offered: state.offered, replyText: state.lastReplyText };
+  const offered = await verifyAndRecordCallOffer(input, state.lastReplyText, opts.dryRun ?? false);
+
+  return { sent: state.sent, offered, replyText: state.lastReplyText };
 }

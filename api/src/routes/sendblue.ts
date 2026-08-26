@@ -1153,8 +1153,8 @@ Return ONLY the classification, nothing else.`,
 Their message: "${resolvedContent}"
 
 Classify as ONE of:
-- "explicit_request" — they are directly asking Co to call them, or asking to talk by phone
-${hasPendingOffer ? '- "accepts_offer" — they are saying yes to the call Co just offered\n- "declines_offer" — they are saying no to the call Co just offered\n' : ""}- "would_benefit" — none of the above, but what they're describing is complex, emotional, or hard to unpack over short texts, and voice would genuinely help
+- "explicit_request" — they are directly asking Co to call them, or asking to talk by phone. Not this if their message only mentions "call" while questioning, declining, or complaining about one that already happened or was offered (e.g. "why did you call me", "I didn't ask you to call me", "stop calling me") — those are "none", never a request, however a pending offer context reads.
+${hasPendingOffer ? '- "accepts_offer" — they are clearly and affirmatively saying yes to the call Co just offered (e.g. "yes", "sure", "call me now", "go ahead"). A bare acknowledgment with no clear yes/no of its own — "thanks", "ok", "got it", "sounds good" — is NOT this; classify it as "none" unless it unambiguously affirms the offer.\n- "declines_offer" — they are saying no to the call Co just offered\n' : ""}- "would_benefit" — none of the above, but what they're describing is complex, emotional, or hard to unpack over short texts, and voice would genuinely help
 - "none" — normal conversation, no call is relevant${declinedTopicsContext}
 
 Return ONLY the classification, nothing else.`,

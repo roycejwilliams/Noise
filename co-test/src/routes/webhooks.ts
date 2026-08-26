@@ -431,7 +431,7 @@ function findNaturalBoundary(window: string): number {
   );
 }
 
-function capMessageLength(
+export function capMessageLength(
   text: string,
   maxChars = TEXT_MESSAGE_CHAR_CAP,
 ): string {
@@ -472,34 +472,6 @@ async function scheduleFollowUpText(
       scheduleErr?.message ?? scheduleErr,
     );
   }
-}
-
-// When a genuinely long reply doesn't fit in one text, capMessageLength
-// used to just cut it off with an ellipsis — silently losing whatever
-// didn't fit. Real texting behavior is to send it as two messages instead
-// of truncating, so this splits at the same kind of natural boundary and
-// returns both parts (capped again if the remainder is itself still long,
-// so this is at most one follow-up, not an open-ended chain).
-export function splitIntoMessages(
-  text: string,
-  maxChars = TEXT_MESSAGE_CHAR_CAP,
-): string[] {
-  const trimmed = text.trim();
-  if (trimmed.length <= maxChars) return [trimmed];
-
-  const window = trimmed.slice(0, maxChars);
-  const lastBoundary = findNaturalBoundary(window);
-  const splitAt =
-    lastBoundary > maxChars * 0.4
-      ? lastBoundary + 1
-      : window.lastIndexOf(" ") > 0
-        ? window.lastIndexOf(" ")
-        : maxChars;
-
-  const first = trimmed.slice(0, splitAt).trim();
-  const rest = trimmed.slice(splitAt).trim();
-  if (!rest) return [first];
-  return [first, capMessageLength(rest, maxChars)];
 }
 
 // Pushes any transcript lines not yet live-pushed for this user, given an
@@ -1896,11 +1868,11 @@ ${recentConversation || "(start of the conversation)"}
 Their latest message: "${content}"
 
 Classify their LATEST message, read in light of the recent conversation above, as ONE of:
-- "explicit_request" — they are directly asking Co to call them RIGHT NOW, or asking to talk by phone with no specific future time attached. This is a command, not a question — "call me", "let's talk on the phone", "can you call me right now". It is NOT this if they are asking whether or how calling works rather than asking for one — see "asks_about_calling" below for that. When in doubt whether something is a request or a question about the feature, treat it as the question.
+- "explicit_request" — they are directly asking Co to call them RIGHT NOW, or asking to talk by phone with no specific future time attached. This is a command, not a question — "call me", "let's talk on the phone", "can you call me right now". It is NOT this if they are asking whether or how calling works rather than asking for one — see "asks_about_calling" below for that. It is also NOT this if their message only mentions "call" while questioning, declining, or complaining about one that already happened or was offered (e.g. "why did you call me", "I didn't ask you to call me", "stop calling me") — those are "none", never a request. When in doubt whether something is a request or a question about the feature, treat it as the question.
 - "asks_about_calling" — they are asking whether, or how, calling works — as a question about the feature, not a command to place one. Examples: "can I just call you?", "is it true I can call you now?", "can I initiate a call?", "can I call you whenever I want?", "do you call people?". This is never triggered by their phrasing containing the word "call" alone — it's specifically a question rather than an instruction.
 - "schedule_request" — they want a call at a specific future date/time, whether that time was fully stated just now ("call me tomorrow at 3") or is only complete once combined with what they said earlier in this conversation (e.g. they gave a time a few messages ago and are now confirming the date or timezone Co asked for) — not right now
 - "cancel_scheduled_call" — they want to cancel a call they'd previously scheduled, with no new time given ("actually never mind about that call", "can we skip the call Thursday")
-${hasPendingOffer ? '- "accepts_offer" — they are saying yes to the call Co just offered\n- "declines_offer" — they are saying no to the call Co just offered\n' : ""}- "would_benefit" — none of the above, but what they're describing is complex, emotional, or hard to unpack over short texts, and voice would genuinely help
+${hasPendingOffer ? '- "accepts_offer" — they are clearly and affirmatively saying yes to the call Co just offered (e.g. "yes", "sure", "call me now", "go ahead"). A bare acknowledgment with no clear yes/no of its own — "thanks", "ok", "got it", "sounds good" — is NOT this; classify it as "none" unless it unambiguously affirms the offer.\n- "declines_offer" — they are saying no to the call Co just offered\n' : ""}- "would_benefit" — none of the above, but what they're describing is complex, emotional, or hard to unpack over short texts, and voice would genuinely help
 - "none" — normal conversation, no call is relevant${declinedTopicsContext}
 
 Return ONLY the classification, nothing else.`,

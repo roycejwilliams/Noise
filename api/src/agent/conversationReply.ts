@@ -2,6 +2,7 @@ import { anthropic } from "@ai-sdk/anthropic";
 import { generateText, stepCountIs } from "ai";
 import { createConversationTools, type SendCoReply } from "./conversationTools.js";
 import { writeMemory } from "../services/memory.js";
+import pool from "../db/db.js";
 
 export type ConversationReplyInput = {
   userId: string;
@@ -24,11 +25,52 @@ export type ConversationReplyInput = {
   sendCoReply: SendCoReply;
 };
 
+// Re-checks the actual sent text for whether it's a call offer, rather than
+// trusting the model to have self-declared it via a tool call. Restored
+// after a real conversation showed the model calling offerCall right after a
+// reply that never mentioned a call at all — a false positive that set
+// call_offer_pending and, combined with a pre-existing classifier gap, led
+// to two unwanted real outbound calls. Same question and gating the deleted
+// offerCall tool / original callOfferCheck used.
+async function verifyAndRecordCallOffer(
+  input: Pick<ConversationReplyInput, "userId" | "resolvedContent" | "hasPendingOffer" | "recentOfferBurstActive">,
+  replyText: string,
+  dryRun: boolean,
+): Promise<boolean> {
+  if (input.hasPendingOffer || input.recentOfferBurstActive || !replyText) return false;
+  try {
+    const { text: rawCheck } = await generateText({
+      model: anthropic("claude-haiku-4-5-20251001"),
+      experimental_telemetry: { isEnabled: true, functionId: "agent.conversationReply.callOfferCheck" },
+      prompt: `Does this text message actually offer, invite, or gesture toward a phone call — in any wording, even indirectly (e.g. "I'm here if you want to talk this through")? Not just related to talking or listening in general — specifically about a phone call.
+
+Message: "${replyText}"
+
+Return ONLY "yes" or "no".`,
+    });
+    if (!rawCheck.trim().toLowerCase().startsWith("yes")) return false;
+  } catch (err: any) {
+    console.error("conversationReply: call-offer verification failed (non-fatal, not recording a pending offer):", err?.message ?? err);
+    return false;
+  }
+  if (dryRun) {
+    console.log(`[conversationReply dryRun] would record call_offer_pending for ${input.userId}`);
+    return true;
+  }
+  await pool
+    .query(`INSERT INTO co_memories (user_id, memory_type, content) VALUES ($1, 'call_offer_pending', $2)`, [
+      input.userId,
+      `User described: ${input.resolvedContent} | Co offered: ${replyText}`,
+    ])
+    .catch((err: any) => console.error("conversationReply: call_offer_pending memory write failed (non-fatal):", err?.message ?? err));
+  return true;
+}
+
 // Co Loop Stage 1, agentized: replaces the hardcoded shouldOfferCall/
-// usingTopicNudge branching and the separate post-hoc callOfferCheck
-// verification call (sendblue.ts) with one tool-calling loop that decides
-// AND records what it did — a tool call is the explicit signal now, instead
-// of inferring intent from free text after the fact. Does NOT own whether to
+// usingTopicNudge branching with a tool-calling loop that decides the reply
+// and topic-nudge gesture. Whether a call offer went out is NOT
+// self-declared by the model (see verifyAndRecordCallOffer above) — it's
+// verified against the actual sent text afterward. Does NOT own whether to
 // place a real call (that stays deterministic in sendblue.ts, gated purely
 // on explicit classifier output) — only the secondary gesture + reply.
 export async function runConversationReplyAgent(
@@ -68,9 +110,9 @@ ${input.imageForVision ? "They just sent the attached photo." : `They just said:
 Decide what to do, then act using your tools:
 - Always respond genuinely to what they said first. Warm, specific, brief — 2 sentences max, no em dashes, no exclamation points.${input.imageForVision ? " React to what's actually in the photo." : " Use their context to make it personal."}
 - You have room for AT MOST ONE secondary, optional gesture folded into the same reply — never both, and never let a gesture replace actually responding. Options, in case either fits:
-${callOfferEligible ? (input.isThinProfileFirstMessage ? `  - This is the first real thing they've shared and nothing is known about them yet. After responding, you may offer a quick, low-pressure call as a warm way to actually get to know them — a real conversation gets Co further than texting back and forth. Keep it brief and secondary. Do not place any call, just make the gesture — if you use it, call offerCall after sendReply.` : `  - What they just shared could genuinely benefit from a real conversation by voice. If it still feels right after genuinely responding, you may offer a call as a warm gesture, not a logistics question — like "I'm here if you ever want to actually talk this through," not "are you free today or tomorrow." Do not place any call, just make the gesture — if you use it, call offerCall after sendReply.`) : `  - A call offer is NOT available this turn (one is already pending, or was offered too recently) — do not mention, suggest, or ask about a phone call in your reply at all, in any wording, even indirectly. Just respond genuinely to what they said.`}
+${callOfferEligible ? (input.isThinProfileFirstMessage ? `  - This is the first real thing they've shared and nothing is known about them yet. After responding, you may offer a quick, low-pressure call as a warm way to actually get to know them — a real conversation gets Co further than texting back and forth. Keep it brief and secondary. Do not place any call, just make the gesture.` : `  - What they just shared could genuinely benefit from a real conversation by voice. If it still feels right after genuinely responding, you may offer a call as a warm gesture, not a logistics question — like "I'm here if you ever want to actually talk this through," not "are you free today or tomorrow." Do not place any call, just make the gesture.`) : `  - A call offer is NOT available this turn (one is already pending, or was offered too recently) — do not mention, suggest, or ask about a phone call in your reply at all, in any wording, even indirectly. Just respond genuinely to what they said.`}
 ${input.missingTopic ? `  - Co doesn't yet have a good sense of ${input.missingTopicDescription}. If it fits naturally after responding, you can work in one brief, genuine question toward that — never force it, skip it if nothing natural comes up. If you use it, call markTopicAsked with topic "${input.missingTopic}" after sendReply.` : ""}
-- Call sendReply exactly once with your final message. Then call offerCall and/or markTopicAsked only if you actually used those gestures in the message you sent.`;
+- Call sendReply once with your reply.${input.isVoice ? "" : " Only call it a second time if you genuinely have a second, separate thought that reads more naturally as its own text sent right after — never to split one continuous thought into shorter pieces."} Then call markTopicAsked only if you actually used that gesture in the message you sent.`;
 
   const userText = input.imageForVision ? "Respond to what they just sent." : "Respond to what they just said.";
 
@@ -78,7 +120,9 @@ ${input.missingTopic ? `  - Co doesn't yet have a good sense of ${input.missingT
     model: anthropic("claude-haiku-4-5-20251001"),
     system,
     tools,
-    stopWhen: stepCountIs(5),
+    // 6, not 5 — a genuine second sendReply call now needs an extra
+    // call/result round trip the single-reply design didn't.
+    stopWhen: stepCountIs(6),
     experimental_telemetry: { isEnabled: true, functionId: "agent.conversationReply" },
     ...(input.imageForVision
       ? {
@@ -116,5 +160,7 @@ ${input.missingTopic ? `  - Co doesn't yet have a good sense of ${input.missingT
     state.lastReplyText = fallback;
   }
 
-  return { sent: state.sent, offered: state.offered, replyText: state.lastReplyText };
+  const offered = await verifyAndRecordCallOffer(input, state.lastReplyText, opts.dryRun ?? false);
+
+  return { sent: state.sent, offered, replyText: state.lastReplyText };
 }

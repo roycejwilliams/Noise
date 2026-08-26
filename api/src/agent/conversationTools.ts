@@ -3,7 +3,6 @@ import { tool } from "ai";
 import { cleanCoMessage } from "../services/sendblue.js";
 import { writeMemory } from "../services/memory.js";
 import { markTopicAsked as persistTopicAsked, RAPPORT_TOPICS } from "../services/profileExtraction.js";
-import pool from "../db/db.js";
 
 export type SendCoReply = (params: { phone: string; message: string; asVoice: boolean }) => Promise<void>;
 
@@ -21,21 +20,37 @@ export type ConversationToolContext = {
 // Side-effecting tools are bound to server-known context (userId,
 // phoneNumber, the two hard call-offer gates) rather than letting the model
 // supply them — same principle as agent/tools.ts's ask-checkin tools.
+//
+// No offerCall tool here (removed) — a real conversation confirmed the model
+// self-declaring "I included a call offer" via a second tool call is not
+// reliable: it called offerCall right after a reply that never mentioned a
+// call at all, which set a false call_offer_pending and, combined with a
+// pre-existing classifier gap, led to two unwanted real outbound calls. This
+// is exactly the failure mode the original pre-harness code's post-hoc
+// callOfferCheck verification existed to prevent. That verification is
+// restored in conversationReply.ts (verifyAndRecordCallOffer) — it reads the
+// actual sent text after the fact, rather than trusting a self-report.
 export function createConversationTools(ctx: ConversationToolContext) {
-  // sent/offered are out-of-band signals for the caller (sendblue.ts), same
+  // sent is an out-of-band signal for the caller (sendblue.ts), same
   // reasoning as askCheckin.ts's state.sent — generateText's return value
   // doesn't cleanly expose which tools actually executed.
-  const state = { sent: false, offered: false, lastReplyText: "" };
+  const state = { sent: false, replyCount: 0, lastReplyText: "" };
 
   const tools = {
+    // Genuinely callable more than once for a text reply (never for a voice
+    // note — one clip naturally holds two thoughts spoken in a row, unlike
+    // two separate SMS bubbles). A second call is paced with a real gap, the
+    // same way co-test's version double-texts.
     sendReply: tool({
-      description:
-        "Send your reply to the user (text or voice note, matches how they contacted Co) and log it. Call this exactly once, with your full response — always respond to what they actually said before any secondary gesture.",
+      description: ctx.isVoice
+        ? "Send your voice-note reply to the user and log it. Call this exactly once, with your full response — always respond to what they actually said before any secondary gesture."
+        : "Send one text message to the user, and log it. Call this once for your reply. If you genuinely have two distinct thoughts that would read more naturally as two separate texts sent one after another — the way a person might send a quick reaction, then a follow-up — you may call it a second time. Most replies are a single call; never call it twice just to split one continuous thought into shorter pieces.",
       inputSchema: z.object({
-        message: z.string().describe("Your full reply. 2 sentences max, no em dashes, no exclamation points."),
+        message: z.string().describe("One complete reply. A sentence or two, no em dashes, no exclamation points."),
       }),
       execute: async ({ message }) => {
-        state.lastReplyText = message;
+        if (state.replyCount > 0) await new Promise((resolve) => setTimeout(resolve, 2000));
+        state.lastReplyText = state.lastReplyText ? `${state.lastReplyText} ${message}` : message;
         if (ctx.dryRun) {
           // cleanCoMessage normally only runs inside sendCoReply's send
           // call, which dry-run skips — apply it here too so dry-run output
@@ -46,37 +61,7 @@ export function createConversationTools(ctx: ConversationToolContext) {
           await writeMemory(ctx.userId, "text_exchange", `Co replied: ${message}`);
         }
         state.sent = true;
-        return { ok: true };
-      },
-    }),
-
-    offerCall: tool({
-      description:
-        `Record that your reply included a call offer — call this ONLY after sendReply, and ONLY if the message you actually sent genuinely offered/gestured toward a phone call. ` +
-        (ctx.hasPendingOffer || ctx.recentOfferBurstActive
-          ? "Do NOT call this right now: a call offer is already pending or was just made too recently — you may still respond warmly, just without a new call gesture."
-          : "Not required — only call it if you actually used the gesture."),
-      inputSchema: z.object({}),
-      execute: async () => {
-        if (ctx.hasPendingOffer || ctx.recentOfferBurstActive) {
-          return { ok: false, reason: "blocked: pending offer or recent burst active" };
-        }
-        if (!state.sent) {
-          return { ok: false, reason: "call sendReply first" };
-        }
-        state.offered = true;
-        if (ctx.dryRun) {
-          console.log(`[conversationReply dryRun] would record call_offer_pending for ${ctx.userId}`);
-          return { ok: true, dryRun: true };
-        }
-        await pool
-          .query(`INSERT INTO co_memories (user_id, memory_type, content) VALUES ($1, 'call_offer_pending', $2)`, [
-            ctx.userId,
-            `User described: ${ctx.resolvedContent} | Co offered: ${state.lastReplyText}`,
-          ])
-          .catch((err: any) =>
-            console.error("conversationReply: call_offer_pending memory write failed (non-fatal):", err?.message ?? err),
-          );
+        state.replyCount += 1;
         return { ok: true };
       },
     }),

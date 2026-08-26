@@ -1,6 +1,34 @@
 import { Resend } from "resend";
 import "dotenv/config";
+import { anthropic } from "@ai-sdk/anthropic";
+import { generateText } from "ai";
 import sendblue from "./services/sendblue.js";
+
+// A fixed line every time reads as a canned system message, not someone
+// actually greeting you — same reasoning as webhooks.ts's variedConfirmation/
+// voicemailLine. Generates a short varied version of `fallback` and always
+// falls back to the exact original text on any failure, so the first thing a
+// new user hears from Co is never silently broken by a generation hiccup.
+async function varied(instruction: string, fallback: string, maxChars: number): Promise<string> {
+  try {
+    const { text } = await generateText({
+      model: anthropic("claude-haiku-4-5-20251001"),
+      experimental_telemetry: { isEnabled: true, functionId: "otpActions.introLine" },
+      prompt: `You are Co, an exclusive life concierge, texting someone. ${instruction} Vary how you say it call to call — don't just repeat the same phrasing every time. Tone: calm, unhurried, like a private members club. No exclamation points, no em dashes. Under ${maxChars} characters. Return ONLY the single message you would actually send, nothing else — never multiple options, a numbered or lettered list, headers, or any markdown formatting.`,
+    });
+    const trimmed = text.trim();
+    // Confirmed live: Haiku sometimes ignores "return only one" and returns
+    // a menu of options instead ("# Option 1 ... # Option 2 ..."). Rather
+    // than guess which option was meant, fall all the way back — this is
+    // the first thing a new user ever hears from Co, worth being strict.
+    const looksLikeMultipleOptions = /\n|^#|\*\*|option\s*\d|^\d+[.)]/im.test(trimmed);
+    if (!trimmed || looksLikeMultipleOptions) return fallback;
+    return trimmed.length > maxChars + 20 ? trimmed.slice(0, maxChars + 19) + "…" : trimmed;
+  } catch (err: any) {
+    console.error("otpActions: varied intro-line generation failed (non-fatal, using default):", err?.message ?? err);
+    return fallback;
+  }
+}
 
 // Real sends are on by default in production, and everywhere else only
 // with an explicit opt-in — co-test sets ALLOW_REAL_SMS=true because its
@@ -171,16 +199,33 @@ export const sendSMS = async ({
 
     if (intro) {
       await send(
-        `Co is invite-only. You're getting early access. She's learning and listening for now. More comes later.`,
+        await varied(
+          "Someone just joined for the first time. Let them know, in your own words: Co is invite-only and they're getting early access, you're still learning and listening for now, and more is coming later.",
+          `Co is invite-only. You're getting early access. She's learning and listening for now. More comes later.`,
+          160,
+        ),
       );
     }
 
     if (save_contact) {
-      await send(`Save my contact so we can keep talking.`, process.env.CO_VCARD_URL);
+      await send(
+        await varied(
+          "Ask them, briefly, to save your contact so you two can keep talking.",
+          `Save my contact so we can keep talking.`,
+          80,
+        ),
+        process.env.CO_VCARD_URL,
+      );
     }
 
     if (intake_ask) {
-      await send(`Let's start with the basics. What's your full name and email?`);
+      await send(
+        await varied(
+          "Ask them for both their full name and their email, so you can get started — keep it brief and clearly ask for both.",
+          `Let's start with the basics. What's your full name and email?`,
+          100,
+        ),
+      );
     }
 
     if (register) {
@@ -251,7 +296,13 @@ export const sendSMS = async ({
     }
 
     if (welcome) {
-      await send(first_name ? `Hey ${first_name}, welcome to Co.` : `Hey, welcome to Co.`);
+      await send(
+        await varied(
+          `Greet them warmly, welcoming them to Co for the first time.${first_name ? ` Their name is ${first_name} — use it.` : ""}`,
+          first_name ? `Hey ${first_name}, welcome to Co.` : `Hey, welcome to Co.`,
+          60,
+        ),
+      );
     }
 
     if (welcome_back) {
