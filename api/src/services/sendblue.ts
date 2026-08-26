@@ -28,7 +28,11 @@ export function cleanCoMessage(text: string): string {
   // ("word -- word") instead, which reads exactly the same to the recipient
   // — confirmed live from the ask-checkin agent (Claude Sonnet) doing this
   // repeatedly despite the instruction. Same fix as the em dash itself.
-  cleaned = cleaned.replace(/—/g, ",").replace(/\s+--\s+/g, ", ").trim();
+  // Must strip the surrounding whitespace along with the dash itself —
+  // replacing just the character on "word — word" left "word , word" (a
+  // stray space before the comma), which shipped to real users repeatedly
+  // before this fix (confirmed live, 2026-08-26 conversation).
+  cleaned = cleaned.replace(/\s*—\s*/g, ", ").replace(/\s+--\s+/g, ", ").trim();
   const quoteMatch = cleaned.match(WRAPPED_QUOTE);
   if (quoteMatch) cleaned = quoteMatch[1].trim();
   return cleaned;
