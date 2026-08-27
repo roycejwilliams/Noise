@@ -1,5 +1,6 @@
 import twilio from "twilio";
 import pool from "../../../api/src/db/db.js";
+import { prewarmHumeConnection } from "./mediaStreamBridge.js";
 
 // The only real Twilio-dial-and-bridge-to-Hume logic in co-test, extracted
 // out of phone.ts's POST /:user_id/call so a second call site (Co
@@ -71,6 +72,11 @@ export async function triggerCall(userId: string): Promise<TriggerCallResult> {
     asyncAmdStatusCallback: statusCallbackUrl,
     asyncAmdStatusCallbackMethod: "POST",
   });
+
+  // Start the Hume handshake now, during ring time, instead of waiting for
+  // the Twilio media stream's "start" event after pickup — see
+  // mediaStreamBridge.ts's prewarmHumeConnection for why that pause existed.
+  prewarmHumeConnection(userId);
 
   await pool.query(
     `UPDATE users SET call_sid = $2, call_status = 'initiated' WHERE id = $1`,

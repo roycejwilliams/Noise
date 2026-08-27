@@ -18,101 +18,203 @@ import { decodeMulawBuffer, encodeMulawBuffer, parseWav, resampleLinear, toMono 
 // returns 48kHz WAV — audioCodec.ts handles both directions.
 const TWILIO_SAMPLE_RATE = 8000;
 
-// Twilio sends one media frame per ~20ms of audio, so this caps the
-// pre-connection buffer (see the "media" case below) at roughly 1.5s —
-// comfortably past the DB round-trip + Hume handshake in
-// startHumeConnection, but still bounded so an unusually slow setup falls
-// back to dropping instead of flushing a stale backlog.
+// Twilio sends one media frame per ~20ms of audio, so this caps both
+// pre-connection buffers (caller audio waiting on Hume to open, and Co's own
+// audio waiting on a Twilio stream to forward to — see prewarmHumeConnection)
+// at roughly 1.5s each — comfortably past the DB round-trip + Hume handshake,
+// but still bounded so an unusually slow setup falls back to dropping
+// instead of flushing a stale backlog.
 const PENDING_AUDIO_FRAME_CAP = 75;
 
-export function bridgeTwilioMediaStream(twilioWs: WebSocket): void {
-  const hume = new HumeClient({ apiKey: process.env.HUME_API_KEY! });
-  let streamSid: string | null = null;
-  let humeSocket: ReturnType<typeof hume.empathicVoice.chat.connect> | null = null;
-  let closed = false;
-  // Frames Twilio sends before humeSocket is open — see PENDING_AUDIO_FRAME_CAP.
-  const pendingAudio: Buffer[] = [];
+// How long a pre-warmed Hume connection can sit unclaimed before it's closed
+// — covers a call that never actually connects (busy/no-answer/failed/
+// canceled outbound, or an abandoned inbound attempt). Comfortably past
+// Twilio's own 20s outbound ring timeout (see callTrigger.ts's `timeout: 20`).
+const PREWARM_CLAIM_TIMEOUT_MS = 30_000;
 
-  function sendMulawFrame(mulawBuf: Buffer) {
-    const pcm = decodeMulawBuffer(mulawBuf);
-    const pcmBuf = Buffer.from(pcm.buffer, pcm.byteOffset, pcm.byteLength);
-    humeSocket!.sendAudioInput({ data: pcmBuf.toString("base64") });
+const hume = new HumeClient({ apiKey: process.env.HUME_API_KEY! });
+
+type HumeSocket = ReturnType<typeof hume.empathicVoice.chat.connect>;
+
+type HumeConnectionHandle = {
+  userId: string;
+  humeSocket: HumeSocket | null;
+  closed: boolean;
+  twilioWs: WebSocket | null;
+  streamSid: string | null;
+  // Caller audio (mulaw) arriving before humeSocket is open.
+  pendingInbound: Buffer[];
+  // Co's own audio (mulaw) arriving before a Twilio stream is attached to
+  // forward it to — only a real path once prewarming lets Hume start
+  // talking (its opening line) while the phone is still ringing.
+  pendingOutbound: Buffer[];
+  evictionTimer: ReturnType<typeof setTimeout> | null;
+};
+
+// Pre-warmed connections, keyed by userId — see prewarmHumeConnection.
+// Known limitation: two simultaneous calls to the same user would collide
+// (the second prewarm is a no-op, the first's connection gets adopted by
+// whichever stream starts first) — not worth solving for co-test's scope,
+// same tolerance this file already had for AMD/JWT (see callTrigger.ts).
+const pendingConnections = new Map<string, HumeConnectionHandle>();
+
+function forwardCallerAudio(handle: HumeConnectionHandle, mulawBuf: Buffer) {
+  if (!handle.humeSocket || handle.humeSocket.readyState !== 1 /* WebSocket.OPEN */) {
+    if (handle.pendingInbound.length < PENDING_AUDIO_FRAME_CAP) handle.pendingInbound.push(mulawBuf);
+    return;
   }
+  const pcm = decodeMulawBuffer(mulawBuf);
+  const pcmBuf = Buffer.from(pcm.buffer, pcm.byteOffset, pcm.byteLength);
+  handle.humeSocket.sendAudioInput({ data: pcmBuf.toString("base64") });
+}
 
-  function safeCloseAll() {
-    if (closed) return;
-    closed = true;
-    try {
-      humeSocket?.close();
-    } catch (err: any) {
-      console.error("mediaStreamBridge: error closing Hume socket (non-fatal):", err?.message ?? err);
-    }
-    try {
-      twilioWs.close();
-    } catch (err: any) {
-      console.error("mediaStreamBridge: error closing Twilio socket (non-fatal):", err?.message ?? err);
-    }
+function closeHandle(handle: HumeConnectionHandle) {
+  if (handle.closed) return;
+  handle.closed = true;
+  if (handle.evictionTimer) clearTimeout(handle.evictionTimer);
+  if (pendingConnections.get(handle.userId) === handle) pendingConnections.delete(handle.userId);
+  try {
+    handle.humeSocket?.close();
+  } catch (err: any) {
+    console.error("mediaStreamBridge: error closing Hume socket (non-fatal):", err?.message ?? err);
   }
+  try {
+    handle.twilioWs?.close();
+  } catch (err: any) {
+    console.error("mediaStreamBridge: error closing Twilio socket (non-fatal):", err?.message ?? err);
+  }
+}
 
-  async function startHumeConnection(userId: string) {
-    const [userResult, contextSummary] = await Promise.all([
-      pool.query(`SELECT first_name FROM users WHERE id = $1`, [userId]),
-      buildContextSummary(userId),
-    ]);
-    const firstName = userResult.rows[0]?.first_name ?? "";
+// Opens the Hume EVI connection for a user and wires its audio/error/close
+// handling immediately — independent of whether a Twilio call has actually
+// connected yet. Called either early (prewarmHumeConnection, while the phone
+// is still ringing / the inbound TwiML round-trip is happening) or, as a
+// fallback, on-demand from bridgeTwilioMediaStream's "start" handler if no
+// prewarmed connection was found for that user.
+function createHumeConnection(userId: string): HumeConnectionHandle {
+  const handle: HumeConnectionHandle = {
+    userId,
+    humeSocket: null,
+    closed: false,
+    twilioWs: null,
+    streamSid: null,
+    pendingInbound: [],
+    pendingOutbound: [],
+    evictionTimer: null,
+  };
 
-    humeSocket = hume.empathicVoice.chat.connect({
-      configId: process.env.HUME_CONFIG_ID!,
-      sessionSettings: {
-        customSessionId: userId,
-        audio: { encoding: "linear16", sampleRate: TWILIO_SAMPLE_RATE, channels: 1 },
-        // The actual, documented mechanism for {{first_name}}/{{context_summary}}
-        // in the prompt (see api/prompts/co-system-prompt.md) — unlike the old
-        // /v0/evi/twilio query params, this one really reaches EVI.
-        variables: { first_name: firstName, context_summary: contextSummary },
-      },
-    });
+  (async () => {
+    try {
+      const [userResult, contextSummary] = await Promise.all([
+        pool.query(`SELECT first_name FROM users WHERE id = $1`, [userId]),
+        buildContextSummary(userId),
+      ]);
+      if (handle.closed) return;
+      const firstName = userResult.rows[0]?.first_name ?? "";
 
-    humeSocket.on("message", (m: any) => {
-      if (m.type === "audio_output") {
-        if (!streamSid) return;
-        try {
-          const wavBuf = Buffer.from(m.data, "base64");
-          const { sampleRate, channels, samples } = parseWav(wavBuf);
-          const mono = toMono(samples, channels);
-          const resampled = resampleLinear(mono, sampleRate, TWILIO_SAMPLE_RATE);
-          const mulawBuf = encodeMulawBuffer(resampled);
-          twilioWs.send(
-            JSON.stringify({
-              event: "media",
-              streamSid,
-              media: { payload: mulawBuf.toString("base64") },
-            }),
-          );
-        } catch (err: any) {
-          console.error("mediaStreamBridge: failed to relay audio_output (non-fatal):", err?.message ?? err);
+      const humeSocket = hume.empathicVoice.chat.connect({
+        configId: process.env.HUME_CONFIG_ID!,
+        sessionSettings: {
+          customSessionId: userId,
+          audio: { encoding: "linear16", sampleRate: TWILIO_SAMPLE_RATE, channels: 1 },
+          // The actual, documented mechanism for {{first_name}}/{{context_summary}}
+          // in the prompt (see api/prompts/co-system-prompt.md) — unlike the old
+          // /v0/evi/twilio query params, this one really reaches EVI.
+          variables: { first_name: firstName, context_summary: contextSummary },
+        },
+      });
+      handle.humeSocket = humeSocket;
+
+      humeSocket.on("message", (m: any) => {
+        if (m.type === "audio_output") {
+          try {
+            const wavBuf = Buffer.from(m.data, "base64");
+            const { sampleRate, channels, samples } = parseWav(wavBuf);
+            const mono = toMono(samples, channels);
+            const resampled = resampleLinear(mono, sampleRate, TWILIO_SAMPLE_RATE);
+            const mulawBuf = encodeMulawBuffer(resampled);
+            if (handle.twilioWs && handle.streamSid) {
+              handle.twilioWs.send(
+                JSON.stringify({
+                  event: "media",
+                  streamSid: handle.streamSid,
+                  media: { payload: mulawBuf.toString("base64") },
+                }),
+              );
+            } else if (handle.pendingOutbound.length < PENDING_AUDIO_FRAME_CAP) {
+              // No Twilio stream attached yet — most likely Co's opening
+              // line generating while the phone is still ringing (see
+              // prewarmHumeConnection). Buffer it instead of dropping it so
+              // it still plays once a stream attaches, same reasoning as
+              // pendingInbound but for the reverse direction.
+              handle.pendingOutbound.push(mulawBuf);
+            }
+          } catch (err: any) {
+            console.error("mediaStreamBridge: failed to relay audio_output (non-fatal):", err?.message ?? err);
+          }
+        } else if (m.type === "error") {
+          console.error("mediaStreamBridge: Hume reported an error:", m);
         }
-      } else if (m.type === "error") {
-        console.error("mediaStreamBridge: Hume reported an error:", m);
-      }
-      // chat_started/chat_ended/tool_call/user_message/assistant_message are
-      // deliberately not handled here — those still arrive at /co/webhook the
-      // same way they always have (webhooks are a config-level Hume feature,
-      // independent of which client opened the audio connection), so the
-      // existing extraction/tool-call pipeline in webhooks.ts is untouched.
-    });
+        // chat_started/chat_ended/tool_call/user_message/assistant_message are
+        // deliberately not handled here — those still arrive at /co/webhook the
+        // same way they always have (webhooks are a config-level Hume feature,
+        // independent of which client opened the audio connection), so the
+        // existing extraction/tool-call pipeline in webhooks.ts is untouched.
+      });
 
-    humeSocket.on("open", () => {
-      // Flush whatever Twilio sent while we were still doing the DB lookup
-      // + Hume handshake above — see the "media" case's buffering comment.
-      while (pendingAudio.length) {
-        sendMulawFrame(pendingAudio.shift()!);
-      }
-    });
-    humeSocket.on("error", (err: unknown) => {
-      console.error("mediaStreamBridge: Hume socket error:", err);
-    });
-    humeSocket.on("close", () => safeCloseAll());
+      humeSocket.on("open", () => {
+        while (handle.pendingInbound.length) {
+          forwardCallerAudio(handle, handle.pendingInbound.shift()!);
+        }
+      });
+      humeSocket.on("error", (err: unknown) => {
+        console.error("mediaStreamBridge: Hume socket error:", err);
+      });
+      humeSocket.on("close", () => closeHandle(handle));
+    } catch (err: any) {
+      console.error("mediaStreamBridge: failed to open Hume connection:", err?.message ?? err);
+      closeHandle(handle);
+    }
+  })();
+
+  return handle;
+}
+
+// Called from callTrigger.ts (right after placing an outbound call) and
+// webhooks.ts's /co/incoming-call (right after resolving the caller) — as
+// early as possible, so the DB lookup + Hume handshake happen during ring
+// time instead of only starting after the person has already picked up.
+// No-ops if a connection is already pending for this user.
+export function prewarmHumeConnection(userId: string): void {
+  if (pendingConnections.has(userId)) return;
+  const handle = createHumeConnection(userId);
+  handle.evictionTimer = setTimeout(() => closeHandle(handle), PREWARM_CLAIM_TIMEOUT_MS);
+  pendingConnections.set(userId, handle);
+}
+
+export function bridgeTwilioMediaStream(twilioWs: WebSocket): void {
+  let handle: HumeConnectionHandle | null = null;
+
+  function attach(userId: string, streamSid: string) {
+    const prewarmed = pendingConnections.get(userId);
+    if (prewarmed && !prewarmed.closed) {
+      pendingConnections.delete(userId);
+      if (prewarmed.evictionTimer) clearTimeout(prewarmed.evictionTimer);
+      handle = prewarmed;
+    } else {
+      // Fallback — no usable prewarmed connection found (shouldn't normally
+      // happen since both call sites prewarm, but keeps this working on its
+      // own if that's ever not the case).
+      handle = createHumeConnection(userId);
+    }
+    handle.twilioWs = twilioWs;
+    handle.streamSid = streamSid;
+    while (handle.pendingOutbound.length) {
+      const mulawBuf = handle.pendingOutbound.shift()!;
+      twilioWs.send(
+        JSON.stringify({ event: "media", streamSid, media: { payload: mulawBuf.toString("base64") } }),
+      );
+    }
   }
 
   twilioWs.on("message", (raw: Buffer) => {
@@ -125,7 +227,7 @@ export function bridgeTwilioMediaStream(twilioWs: WebSocket): void {
 
     switch (msg.event) {
       case "start": {
-        streamSid = msg.start?.streamSid ?? msg.streamSid ?? null;
+        const streamSid: string | null = msg.start?.streamSid ?? msg.streamSid ?? null;
         // user_id arrives as a <Parameter> (see callTrigger.ts) — Twilio
         // strips query strings from Stream URLs entirely, so this is the
         // only place it's actually reachable, confirmed live. Only ever
@@ -134,41 +236,33 @@ export function bridgeTwilioMediaStream(twilioWs: WebSocket): void {
         // callTrigger.ts always sets it for outbound calls — so closing here
         // is a real signal something's wrong, not an expected path.
         const userId: string | undefined = msg.start?.customParameters?.user_id;
-        if (!userId) {
-          console.error("mediaStreamBridge: start event with no user_id in customParameters, closing");
-          safeCloseAll();
+        if (!userId || !streamSid) {
+          console.error("mediaStreamBridge: start event missing user_id or streamSid, closing");
+          twilioWs.close();
           break;
         }
-        startHumeConnection(userId).catch((err: any) => {
-          console.error("mediaStreamBridge: failed to start Hume connection:", err?.message ?? err);
-          safeCloseAll();
-        });
+        attach(userId, streamSid);
         break;
       }
 
       case "media": {
         const mulawBuf = Buffer.from(msg.media.payload, "base64");
-        if (!humeSocket || humeSocket.readyState !== 1 /* WebSocket.OPEN */) {
-          // Buffer briefly instead of dropping outright, so the caller's
-          // actual opening words reach Hume once the socket opens — capped
-          // at PENDING_AUDIO_FRAME_CAP so an unusually slow setup still
-          // falls back to dropping rather than flushing a stale backlog.
-          if (pendingAudio.length < PENDING_AUDIO_FRAME_CAP) pendingAudio.push(mulawBuf);
-          return;
-        }
-        sendMulawFrame(mulawBuf);
+        if (!handle) return; // "start" hasn't arrived yet — shouldn't happen, Twilio always sends it first
+        forwardCallerAudio(handle, mulawBuf);
         break;
       }
 
       case "stop":
-        safeCloseAll();
+        if (handle) closeHandle(handle);
         break;
     }
   });
 
-  twilioWs.on("close", () => safeCloseAll());
+  twilioWs.on("close", () => {
+    if (handle) closeHandle(handle);
+  });
   twilioWs.on("error", (err: unknown) => {
     console.error("mediaStreamBridge: Twilio socket error:", err);
-    safeCloseAll();
+    if (handle) closeHandle(handle);
   });
 }

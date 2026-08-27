@@ -26,6 +26,7 @@ import sendblue from "../../../api/src/services/sendblue.js";
 import elevenlabs from "../../../api/src/services/elevenlabs.js";
 import { buildContextSummary } from "../services/callContext.js";
 import { triggerCall } from "../services/callTrigger.js";
+import { prewarmHumeConnection } from "../services/mediaStreamBridge.js";
 import { simulateModeratorApproval } from "../services/circlesSimulation.js";
 import { getCoPersonaPrompt } from "../services/coPersona.js";
 import {
@@ -783,6 +784,12 @@ export function createWebhooksRouter(io: Server): express.Router {
           twiml.hangup();
           return res.type("text/xml").send(twiml.toString());
         }
+
+        // Start the Hume handshake now, while this TwiML response is still
+        // in flight back to Twilio and its media stream is connecting —
+        // instead of waiting for the stream's "start" event after that's
+        // already done. See mediaStreamBridge.ts's prewarmHumeConnection.
+        prewarmHumeConnection(userId);
 
         const mediaStreamUrl = `${process.env.API_URL!.replace(/^http/, "ws")}/media-stream`;
         const stream = twiml.connect().stream({ url: mediaStreamUrl });
