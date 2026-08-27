@@ -28,7 +28,7 @@ import { buildContextSummary } from "../services/callContext.js";
 import { triggerCall } from "../services/callTrigger.js";
 import { prewarmHumeConnection } from "../services/mediaStreamBridge.js";
 import { simulateModeratorApproval } from "../services/circlesSimulation.js";
-import { getCoPersonaPrompt } from "../services/coPersona.js";
+import { renderCoPersonaPrompt } from "../services/coPersona.js";
 import {
   endLiveCall,
   getElapsedMinutes,
@@ -2462,7 +2462,11 @@ Return ONLY valid JSON, no preamble: {"wants_venue": true or false, "venue_type"
             // The anti-fabrication grounding rule and the text-length cap below
             // are additions specific to this channel, layered on top, not a
             // replacement for anything in the real prompt.
-            const personaPrompt = await getCoPersonaPrompt();
+            // profileContext (built above) is already "what Co knows about
+            // this person" — reused here as the {{context_summary}} fill so
+            // this doesn't cost a second DB round trip on the live reply
+            // path just to fetch what's already in hand.
+            const personaPrompt = await renderCoPersonaPrompt(user.first_name, profileContext ?? "");
 
             // A call actively works toward covering RAPPORT_TOPICS (via the
             // live assess_conversation_coverage tool — see handleToolCall

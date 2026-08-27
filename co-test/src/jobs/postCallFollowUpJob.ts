@@ -3,7 +3,8 @@ import { generateText } from "ai";
 import { anthropic } from "@ai-sdk/anthropic";
 import pool from "../../../api/src/db/db.js";
 import sendblue from "../../../api/src/services/sendblue.js";
-import { getCoPersonaPrompt } from "../services/coPersona.js";
+import { renderCoPersonaPrompt } from "../services/coPersona.js";
+import { buildContextSummary } from "../services/callContext.js";
 
 // A person who was actually listening doesn't follow up the same way every
 // time — one fixed "observation + reframe" template, generated over and
@@ -38,14 +39,34 @@ async function sendDueFollowUps(): Promise<void> {
     if (!claim.rows[0]) continue;
 
     try {
-      const persona = await getCoPersonaPrompt();
+      const contextSummary = await buildContextSummary(row.user_id);
+      const persona = await renderCoPersonaPrompt(row.first_name, contextSummary);
       const shape = SHAPES[Math.floor(Math.random() * SHAPES.length)];
       const { text: followUpMessage } = await generateText({
         model: anthropic("claude-haiku-4-5-20251001"),
         experimental_telemetry: { isEnabled: true, functionId: "co-test.jobs.postCallFollowUp" },
         prompt: `${persona ?? "You are Co."} You got off a call with ${row.first_name} a little while ago. Here's what they told you:\n\n"${row.transcript}"\n\n${shape}\n\nThis is a relationship text, not a status update — never mention next steps, circle placement, timing, or anything operational. That's handled elsewhere; this message's only job is proving you were actually listening.\n\nNo exclamation points. No em dashes. This is a text message — keep it short, one text-message-length turn, under 160 characters.`,
       });
-      const capped = followUpMessage.trim().length > 160 ? `${followUpMessage.trim().slice(0, 159)}…` : followUpMessage.trim();
+      const trimmed = followUpMessage.trim();
+
+      // Guards against ever texting a real user raw model meta-commentary
+      // (e.g. "I don't have access to...") instead of an actual follow-up —
+      // the exact failure this job produced live before the persona-prompt
+      // template tokens above were being filled in. An unresolved "{{" or a
+      // literal mention of an internal field name are things a real
+      // follow-up text would never contain, so either is a reliable signal
+      // the model fell back to explaining what it's missing rather than
+      // writing the message. Row is already claimed (sent_at set above), so
+      // skipping here just means no text goes out this round — not a retry.
+      if (trimmed.includes("{{") || /context_summary/i.test(trimmed)) {
+        console.error(
+          `postCallFollowUpJob: generated text for follow-up ${row.id} looked like leaked prompt/meta-commentary, not sending:`,
+          trimmed,
+        );
+        continue;
+      }
+
+      const capped = trimmed.length > 160 ? `${trimmed.slice(0, 159)}…` : trimmed;
       await sendblue.messages.send({
         number: row.phone_number,
         content: capped,

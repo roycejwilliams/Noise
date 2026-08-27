@@ -11,6 +11,26 @@
 let cachedPrompt: string | null = null;
 let fetchPromise: Promise<string | null> | null = null;
 
+// The raw prompt returned by getCoPersonaPrompt() below still contains
+// {{first_name}}/{{context_summary}} template tokens — Hume substitutes
+// those itself at call time (see mediaStreamBridge.ts's `variables`), but
+// nothing does that for this text-channel reuse. Left unfilled, the model is
+// literally told "here's the context_summary: {{context_summary}}" and,
+// correctly, reports it doesn't have one instead of writing real output —
+// confirmed live (a post-call follow-up text leaked exactly that reasoning
+// to a real user). Always render through this before handing the prompt to
+// a model; never pass getCoPersonaPrompt()'s raw text to one directly.
+export async function renderCoPersonaPrompt(
+  firstName: string,
+  contextSummary: string,
+): Promise<string | null> {
+  const raw = await getCoPersonaPrompt();
+  if (!raw) return raw;
+  return raw
+    .replace(/\{\{first_name\}\}/g, firstName)
+    .replace(/\{\{context_summary\}\}/g, contextSummary);
+}
+
 export async function getCoPersonaPrompt(): Promise<string | null> {
   if (cachedPrompt) return cachedPrompt;
   if (!fetchPromise) {
