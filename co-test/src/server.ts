@@ -21,6 +21,8 @@ import loginRouter from "./routes/login.js";
 import phoneRouter from "./routes/phone.js";
 import { requireTesterLoginApi, requireTesterLoginPage } from "./middleware/requireTesterLogin.js";
 import { bridgeTwilioMediaStream } from "../../api/src/services/mediaStreamBridge.js";
+import { createCoRouter } from "../../api/src/routes/co.js";
+import { sendblueRouter } from "../../api/src/routes/sendblue.js";
 
 // A fresh Railway Postgres has none of brew_dev's tables yet — runMigrations()
 // (imported unchanged from api/) only ever does ALTER TABLE / CREATE TABLE IF
@@ -43,6 +45,11 @@ async function main() {
   runTestMigrations();
 
   const app = express();
+  // Hume's webhook signature is an HMAC over the exact raw body string — a
+  // re-serialized/parsed-then-stringified body isn't guaranteed byte-identical
+  // to what Hume actually signed. Must run before express.json() below.
+  // Mirrors api/src/server.ts's identical setup for the same route.
+  app.use("/co/webhook", express.raw({ type: "application/json" }));
   app.use(express.json({ limit: "2mb" }));
   app.use(express.urlencoded({ extended: false })); // Twilio status callbacks are form-encoded
   app.use(cookieParser());
@@ -106,6 +113,16 @@ async function main() {
     res.setHeader("Cache-Control", "no-store");
     return res.send(entry.buffer);
   });
+
+  // The actual product routes (Hume call webhook, Twilio call-status,
+  // inbound-call TwiML, and the Sendblue text-conversation webhook) —
+  // these used to be co-test's own separate implementation
+  // (routes/webhooks.ts, deleted); that logic now lives in api/src and this
+  // is what actually serves it for this deployment, since no separate
+  // process runs api/src/server.ts on this branch/environment. Same
+  // factory functions, same io instance pattern api's own server uses.
+  app.use("/co", createCoRouter(io));
+  app.use("/sendblue", sendblueRouter(io));
 
   // Tool-access login (phone + OTP) — see services/testerAuth.ts. Public by
   // definition, it's the thing that grants access to everything below.
