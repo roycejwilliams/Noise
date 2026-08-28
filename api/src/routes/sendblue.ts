@@ -1014,6 +1014,20 @@ Return ONLY valid JSON, no preamble: {"wants_venue": true or false, "venue_type"
         // the outer handler, before withPhoneLock, precisely so this check
         // can see a message that arrived and is now queued behind this
         // request's phone lock (see the comment there for why).
+        // Ack Sendblue's webhook now, before the debounce wait and reply
+        // generation below — both can legitimately take longer than
+        // Sendblue's own webhook response timeout (~10s observed live).
+        // Letting that timeout happen made Sendblue retry the same
+        // delivery, and each retry re-ran this entire expensive path from
+        // scratch — confirmed live, one inbound text produced ~5 separate
+        // replies. The actual reply still goes out via sendCoReply's real
+        // Sendblue send call further down, completely independent of this
+        // response; this only stops Sendblue from thinking the delivery
+        // itself failed. withPhoneLock below is unaffected — it still wraps
+        // this whole function and still serializes same-phone processing
+        // exactly as before, this just responds to the webhook earlier.
+        res.status(200).send({ received: true, action: "processing" });
+
         if (myInboundAt) {
           await new Promise((resolve) => setTimeout(resolve, DEBOUNCE_MS));
           const latestStampResult = await pool.query(
@@ -1028,8 +1042,9 @@ Return ONLY valid JSON, no preamble: {"wants_venue": true or false, "venue_type"
             // — next in line behind this one's phone lock — will see it as
             // conversational context and can respond to both at once. This
             // request bails out without generating or sending anything, so
-            // the user doesn't get two overlapping replies.
-            return res.status(200).send({ received: true, action: "superseded_by_newer_message" });
+            // the user doesn't get two overlapping replies. (Webhook already
+            // ack'd above, nothing left to send back here.)
+            return;
           }
         }
 
@@ -1191,8 +1206,17 @@ Return ONLY valid JSON, no preamble: {"wants_venue": true or false, "venue_type"
 
         io.to(`user:${user.id}`).emit("co:message", { message: coReply });
 
-        return res.status(200).send({ received: true, reply: coReply });
+        // Webhook already ack'd early, above — nothing left to send back.
+        return;
       } catch (error) {
+        // If the early ack above already went out, the response is done —
+        // next(error) would try to send a second response and throw
+        // ERR_HTTP_HEADERS_SENT. Only fall through to the normal error
+        // path for a failure that happened before that ack.
+        if (res.headersSent) {
+          console.error("sendblue: error after early webhook ack (non-fatal, already ack'd):", (error as any)?.message ?? error);
+          return;
+        }
         next(error);
       }
       };
