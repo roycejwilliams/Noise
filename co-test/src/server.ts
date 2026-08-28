@@ -17,16 +17,10 @@ import { runTestMigrations } from "./db/testMigrations.js";
 import { configureCoTestSocket } from "./socket/index.js";
 import apiRouter from "./routes/api.js";
 import checklistRouter from "./routes/checklist.js";
-import circlesTestRouter from "./routes/circlesTest.js";
-import dynamicPlacementTestRouter from "./routes/dynamicPlacementTest.js";
 import loginRouter from "./routes/login.js";
 import phoneRouter from "./routes/phone.js";
-import { createWebhooksRouter } from "./routes/webhooks.js";
-import { registerPostCallFollowUpJob } from "./jobs/postCallFollowUpJob.js";
-import { registerScheduledCallJob } from "./jobs/scheduledCallJob.js";
-import { registerProactiveCheckinCallJob } from "./jobs/proactiveCheckinCallJob.js";
 import { requireTesterLoginApi, requireTesterLoginPage } from "./middleware/requireTesterLogin.js";
-import { bridgeTwilioMediaStream } from "./services/mediaStreamBridge.js";
+import { bridgeTwilioMediaStream } from "../../api/src/services/mediaStreamBridge.js";
 
 // A fresh Railway Postgres has none of brew_dev's tables yet — runMigrations()
 // (imported unchanged from api/) only ever does ALTER TABLE / CREATE TABLE IF
@@ -47,17 +41,8 @@ async function main() {
   await ensureBaseSchema();
   runMigrations();
   runTestMigrations();
-  registerPostCallFollowUpJob();
-  registerScheduledCallJob();
-  registerProactiveCheckinCallJob();
 
   const app = express();
-  // Hume's webhook signature is an HMAC over the exact raw body string, so
-  // this needs to run before the global express.json() below — a
-  // re-serialized/parsed-then-stringified body isn't guaranteed
-  // byte-identical to what Hume actually signed (same reasoning as
-  // production's Stripe webhook, api/src/server.ts).
-  app.use("/co/webhook", express.raw({ type: "application/json" }));
   app.use(express.json({ limit: "2mb" }));
   app.use(express.urlencoded({ extended: false })); // Twilio status callbacks are form-encoded
   app.use(cookieParser());
@@ -96,10 +81,11 @@ async function main() {
   app.get("/health", (_req, res) => res.status(200).send("ok"));
 
   // Serves Co's vCard so Sendblue can attach it to the real onboarding
-  // "intro" text (see webhooks.ts's identity_captured/intake_asked branch,
-  // which calls otpActions.ts's sendSMS — that function conditionally attaches media_url
-  // only when CO_VCARD_URL is set, which needs to point here). Mirrors
-  // production's identical route in api/src/server.ts.
+  // "intro" text (see api/src/routes/sendblue.ts's identity_captured/
+  // intake_asked branch, which calls otpActions.ts's sendSMS — that function
+  // conditionally attaches media_url only when CO_VCARD_URL is set, which
+  // needs to point here). Mirrors production's identical route in
+  // api/src/server.ts.
   app.get("/co.vcf", (_req, res) => {
     const phone = process.env.SENDBLUE_PHONE_NUMBER ?? "";
     const vcard = buildCoVCard(phone);
@@ -131,11 +117,6 @@ async function main() {
   // sandbox (see requireTesterLogin.ts) now that there's a single sign-in
   // for the whole tool, not a separate team-only password.
   app.use("/api/checklist", requireTesterLoginApi, checklistRouter);
-  app.use("/api/circles-test", requireTesterLoginApi, circlesTestRouter);
-  app.use("/api/dynamic-test", requireTesterLoginApi, dynamicPlacementTestRouter);
-  // Mounted at root — these paths (/sendblue/webhook, /co/call-status,
-  // /co/webhook) intentionally mirror production's exactly. See webhooks.ts.
-  app.use(createWebhooksRouter(io));
 
   // Root is the login form itself now — not the call page. A tester who's
   // already logged in gets redirected client-side (see login.ts checking

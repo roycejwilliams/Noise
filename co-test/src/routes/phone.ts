@@ -1,30 +1,10 @@
 import express, { Request, Response, NextFunction } from "express";
 import pool from "../../../api/src/db/db.js";
 import { getLiveSnapshot, issueSocketToken } from "../services/liveCallState.js";
-import { triggerCall } from "../services/callTrigger.js";
-import { resetRealTestUser } from "../services/dynamicPlacementTest.js";
+import { triggerCallForUser } from "../../../api/src/services/callTrigger.js";
 import { requireTesterLoginApi } from "../middleware/requireTesterLogin.js";
 
 const router = express.Router();
-
-// POST /api/phone/reset — the DASHBOARD's global reset (checklist.html's
-// "hand it to the next person" button), not a tester's own self-service
-// reset (see routes/login.ts's /api/login/reset for that). Clears every real
-// (non-simulated) phone-test user's own account (login row, profile,
-// memories, captured intent, any circle they own). co-test is explicitly
-// single-tester-at-a-time (see testMigrations.ts) — this is what makes that
-// safe across multiple different real testers over time. Gated on the same
-// tool-access login as everything else now (single sign-in for the whole
-// sandbox) — note this means whoever clicks it also clears their own login,
-// same as any other tester's row.
-router.post("/reset", requireTesterLoginApi, async (_req: Request, res: Response, next: NextFunction) => {
-  try {
-    const result = await resetRealTestUser();
-    return res.status(200).json(result);
-  } catch (error) {
-    next(error);
-  }
-});
 
 // Every route below is the actual tester-facing tool — requires the
 // phone-verified tool-access login from routes/login.ts. This does not
@@ -109,8 +89,8 @@ router.get("/:user_id/live-state", (req: Request, res: Response) => {
 router.post("/:user_id/tag", async (req: Request, res: Response, next: NextFunction) => {
   try {
     const { test_case } = req.body as { test_case?: string };
-    if (test_case !== "intent_layer" && test_case !== "circles") {
-      return res.status(400).json({ success: false, error: "test_case must be 'intent_layer' or 'circles'." });
+    if (test_case !== "intent_layer") {
+      return res.status(400).json({ success: false, error: "test_case must be 'intent_layer'." });
     }
     await pool.query(`UPDATE users SET test_case = $2 WHERE id = $1`, [req.params.user_id, test_case]);
     return res.status(200).json({ success: true });
@@ -139,7 +119,10 @@ router.post("/:user_id/call", async (req: Request, res: Response, next: NextFunc
       return res.status(403).json({ success: false, error: "Complete name/email intake before requesting a call." });
     }
 
-    const result = await triggerCall(String(req.params.user_id));
+    // io is null here — this dashboard has its own live-call view
+    // (liveCallState.ts), not api's JWT-authed socket rooms, so there's no
+    // real consumer for triggerCallForUser's optional io?.emit calls.
+    const result = await triggerCallForUser(String(req.params.user_id), null);
     if (!result.success) return res.status(404).json({ success: false, error: result.error });
     return res.status(200).json({ success: true, call_sid: result.call_sid });
   } catch (error) {

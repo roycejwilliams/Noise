@@ -6,8 +6,8 @@
 // real back-and-forth rather than reading like a different, simpler bot.
 //
 // Fetched once and cached for the life of the process rather than on every
-// message — co-test restarts on every deploy anyway, and this avoids adding
-// a Hume round-trip to the latency of every text reply.
+// message — this avoids adding a Hume round-trip to the latency of every
+// text reply.
 let cachedPrompt: string | null = null;
 let fetchPromise: Promise<string | null> | null = null;
 

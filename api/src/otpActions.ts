@@ -43,27 +43,9 @@ interface EmailProp {
   otp_code?: string;
   resent?: boolean;
   login?: boolean;
-  invite_type?: "received" | "accepted" | "rejected";
-  invite_target?: "circle" | "moment";
-  transfer_ticket?: boolean;
-  moment_recap?: { moments_name: string; recap: string };
-  photo_uploaded?: { moments_name: string; uploader_username: string };
-  check_in?: { moments_name: string; attendee_username: string };
-  checked_in_self?: { moments_name: string };
-  moment_reminder?: {
-    moments_name: string;
-    location_name: string;
-    time: string;
-  };
-  circle_invite_reminder?: { circle_name: string };
-  moment_invite_reminder?: { moments_name: string; time: string };
   appsubmit?: boolean;
   applicant?: ApplicationProp;
-  external_invite?: { inviter_name: string; invite_type: "circle" | "moment"; target_name?: string };
-  knock_received?: { moments_name: string; requester_name: string };
-  knock_decided?: { moments_name: string; approved: boolean };
   welcome?: boolean;
-  action_url?: string;
 }
 
 interface MessageProp {
@@ -77,27 +59,9 @@ interface MessageProp {
   save_contact?: boolean;
   intake_ask?: boolean;
   first_name?: string;
-  invite_type?: "received" | "accepted" | "rejected";
-  invite_target?: "circle" | "moment";
-  transfer_ticket?: boolean;
-  moment_recap?: { moments_name: string };
-  photo_uploaded?: { moments_name: string; uploader_username: string };
-  check_in?: { moments_name: string; attendee_username: string };
-  checked_in_self?: { moments_name: string };
-  moment_reminder?: {
-    moments_name: string;
-    location_name: string;
-    time: string;
-  };
-  circle_invite_reminder?: { circle_name: string };
-  moment_invite_reminder?: { moments_name: string; time: string };
   appsubmit?: boolean;
-  external_invite?: { inviter_name: string; invite_type: "circle" | "moment"; target_name?: string };
-  knock_received?: { moments_name: string; requester_name: string };
-  knock_decided?: { moments_name: string; approved: boolean };
   welcome?: boolean;
   welcome_back?: boolean;
-  action_url?: string;
 }
 
 const EMAIL_STYLES = `
@@ -146,28 +110,14 @@ export const sendSMS = async ({
   otp_code,
   status,
   resent,
-  invite_type,
-  invite_target,
   login,
   register,
   intro,
   save_contact,
   intake_ask,
   first_name,
-  transfer_ticket,
-  moment_recap,
-  photo_uploaded,
-  check_in,
-  checked_in_self,
-  moment_reminder,
-  circle_invite_reminder,
-  moment_invite_reminder,
-  external_invite,
-  knock_received,
-  knock_decided,
   welcome,
   welcome_back,
-  action_url,
 }: MessageProp) => {
   const send = (content: string, mediaUrl?: string) => {
     if (!ALLOW_REAL_SENDS) {
@@ -236,69 +186,6 @@ export const sendSMS = async ({
       await send(`Your verification code is ${otp_code}. It expires in 5 minutes.`);
     }
 
-    const link = (url?: string) => (url ? `\n${url}` : "");
-
-    if (invite_type === "received" && invite_target === "circle") {
-      await send(`You've been invited to join a circle on Co. Open the app to accept or decline.${link(action_url)}`);
-    } else if (invite_type === "received" && invite_target === "moment") {
-      await send(`You've been invited to a moment on Co. Open the app to see the details.${link(action_url)}`);
-    } else if (invite_type === "accepted") {
-      await send(`Your invite was accepted. They're in.`);
-    } else if (invite_type === "rejected") {
-      await send(`Your invite was declined.`);
-    }
-
-    if (transfer_ticket) {
-      await send(`A Co ticket was transferred to you. Open the app to view the moment details and your entry code.${link(action_url)}`);
-    }
-
-    if (moment_recap) {
-      await send(`${moment_recap.moments_name} is over. Your recap is ready — open Co to relive the night.${link(action_url)}`);
-    }
-
-    if (photo_uploaded) {
-      await send(`${photo_uploaded.uploader_username} added a photo to ${photo_uploaded.moments_name}. Open Co to see the recap.${link(action_url)}`);
-    }
-
-    if (check_in) {
-      await send(`${check_in.attendee_username} just checked in to ${check_in.moments_name}.${link(action_url)}`);
-    }
-
-    if (checked_in_self) {
-      await send(`You're officially checked in to ${checked_in_self.moments_name}. Enjoy the night.${link(action_url)}`);
-    }
-
-    if (moment_reminder) {
-      await send(`Reminder: ${moment_reminder.moments_name} starts at ${moment_reminder.time}. ${moment_reminder.location_name}. Don't miss it.${link(action_url)}`);
-    }
-
-    if (circle_invite_reminder) {
-      await send(`You still have a pending circle invite on Co — ${circle_invite_reminder.circle_name}. Open the app to respond.${link(action_url)}`);
-    }
-
-    if (moment_invite_reminder) {
-      await send(`You still haven't responded to your invite for ${moment_invite_reminder.moments_name} — it starts at ${moment_invite_reminder.time}. Open Co to respond.${link(action_url)}`);
-    }
-
-    if (external_invite) {
-      const context = external_invite.target_name
-        ? ` to ${external_invite.invite_type === "moment" ? `a moment called "${external_invite.target_name}"` : `a circle called "${external_invite.target_name}"`}`
-        : "";
-      await send(`${external_invite.inviter_name} invited you${context} on Co. Visit app.copatible.com to request access.`);
-    }
-
-    if (knock_received) {
-      await send(`${knock_received.requester_name} is knocking to get into ${knock_received.moments_name}. Open Co to let them in or pass.${link(action_url)}`);
-    }
-
-    if (knock_decided) {
-      await send(
-        knock_decided.approved
-          ? `You're in. Your knock was approved for ${knock_decided.moments_name}. Open Co for details.${link(action_url)}`
-          : `Not this time. Your knock for ${knock_decided.moments_name} wasn't approved.`,
-      );
-    }
-
     if (welcome) {
       await send(
         await varied(
@@ -322,24 +209,10 @@ export const sendEmail = async ({
   otp_code,
   status,
   resent,
-  invite_type,
-  invite_target,
   login,
-  transfer_ticket,
-  moment_recap,
-  photo_uploaded,
-  check_in,
-  checked_in_self,
-  moment_reminder,
-  circle_invite_reminder,
-  moment_invite_reminder,
   applicant,
   appsubmit,
-  external_invite,
-  knock_received,
-  knock_decided,
   welcome,
-  action_url,
 }: EmailProp) => {
   const resendClient = new Resend(process.env.RESEND_API_KEY);
   const resend = {
@@ -353,8 +226,6 @@ export const sendEmail = async ({
       },
     },
   };
-  const cta = (label: string, fallback: string) =>
-    ctaButton(label, action_url ?? fallback);
   try {
     if (!email) return;
 
@@ -429,230 +300,6 @@ export const sendEmail = async ({
             OTP_BOX(otp_code!) +
             `<p class="muted-sm" style="font-size:11px;letter-spacing:2px;text-transform:uppercase;color:#333333;margin-top:32px;">Do not share this code.</p>`,
         ),
-      });
-    }
-
-    if (invite_type === "received" && invite_target === "circle") {
-      await resend.emails.send({
-        from: "Co <hello@copatible.com>",
-        to: email,
-        subject: `You've been invited.`,
-        html: emailTemplate(
-          h1("You're wanted in a circle.") +
-            p(
-              "Someone added you to their circle on Co. Open the app to accept or decline.",
-            ) +
-            cta("Respond to Invite", "https://app.copatible.com"),
-        ),
-      });
-    } else if (invite_type === "received" && invite_target === "moment") {
-      await resend.emails.send({
-        from: "Co <hello@copatible.com>",
-        to: email,
-        subject: `You've been invited to a moment.`,
-        html: emailTemplate(
-          h1("Something's happening.") +
-            p(
-              "You've been invited to a moment on Co. Open the app to see the details and respond.",
-            ) +
-            cta("Respond to Invite", "https://app.copatible.com"),
-        ),
-      });
-    } else if (invite_type === "accepted") {
-      await resend.emails.send({
-        from: "Co <hello@copatible.com>",
-        to: email,
-        subject: `Your invite was accepted.`,
-        html: emailTemplate(
-          h1("They're in.") +
-            p(
-              "Your invite was accepted. Your circle just got a little more intentional.",
-            ),
-        ),
-      });
-    } else if (invite_type === "rejected") {
-      await resend.emails.send({
-        from: "Co <hello@copatible.com>",
-        to: email,
-        subject: `Your invite was declined.`,
-        html: emailTemplate(
-          h1("Not this time.") +
-            p(
-              "Your invite was declined. Circles are built on intention — not everyone is a fit.",
-            ),
-        ),
-      });
-    }
-
-    if (transfer_ticket) {
-      await resend.emails.send({
-        from: "Co <hello@copatible.com>",
-        to: email,
-        subject: `Your ticket has been transferred.`,
-        html: emailTemplate(
-          h1("You're in.") +
-            p(
-              "A ticket was transferred to you. Open Co to view the moment details and your entry code.",
-            ) +
-            cta("View My Ticket", "https://app.copatible.com"),
-        ),
-      });
-    }
-
-    if (moment_recap) {
-      await resend.emails.send({
-        from: "Co <hello@copatible.com>",
-        to: email,
-        subject: `${moment_recap.moments_name} — the recap is ready.`,
-        html: emailTemplate(
-          h1("Rewind the night.") +
-            p(moment_recap.recap) +
-            p("Open Co to see the full recap, photos, and attendees.") +
-            cta("View Recap", "https://app.copatible.com"),
-        ),
-      });
-    }
-
-    if (photo_uploaded) {
-      await resend.emails.send({
-        from: "Co <hello@copatible.com>",
-        to: email,
-        subject: `New photo added to ${photo_uploaded.moments_name}.`,
-        html: emailTemplate(
-          h1("The story grows.") +
-            p(
-              `${photo_uploaded.uploader_username} added a photo to ${photo_uploaded.moments_name}. Open Co to see the recap.`,
-            ) +
-            cta("View Photo", "https://app.copatible.com"),
-        ),
-      });
-    }
-
-    if (check_in) {
-      await resend.emails.send({
-        from: "Co <hello@copatible.com>",
-        to: email,
-        subject: `${check_in.attendee_username} checked in.`,
-        html: emailTemplate(
-          h1("They made it.") +
-            p(
-              `${check_in.attendee_username} just checked in to ${check_in.moments_name}. The night is taking shape.`,
-            ) +
-            cta("View Moment", "https://app.copatible.com"),
-        ),
-      });
-    }
-
-    if (checked_in_self) {
-      await resend.emails.send({
-        from: "Co <hello@copatible.com>",
-        to: email,
-        subject: `You're checked in to ${checked_in_self.moments_name}.`,
-        html: emailTemplate(
-          h1("You're in.") +
-            p(`You've officially checked in to ${checked_in_self.moments_name}. Enjoy the night.`) +
-            cta("View Moment", "https://app.copatible.com"),
-        ),
-      });
-    }
-
-    if (moment_reminder) {
-      await resend.emails.send({
-        from: "Co <hello@copatible.com>",
-        to: email,
-        subject: `${moment_reminder.moments_name} is coming up.`,
-        html: emailTemplate(
-          h1("Don't miss it.") +
-            p(
-              `${moment_reminder.moments_name} starts at ${moment_reminder.time}.`,
-            ) +
-            p(`${moment_reminder.location_name}. Open Co for details and directions.`) +
-            cta("View Moment", "https://app.copatible.com"),
-        ),
-      });
-    }
-
-    if (circle_invite_reminder) {
-      await resend.emails.send({
-        from: "Co <hello@copatible.com>",
-        to: email,
-        subject: `You have a pending circle invite.`,
-        html: emailTemplate(
-          h1("Still waiting on you.") +
-            p(
-              `You have a pending invite to join ${circle_invite_reminder.circle_name} on Co. Open the app to accept or decline.`,
-            ) +
-            cta("Respond to Invite", "https://app.copatible.com"),
-        ),
-      });
-    }
-
-    if (moment_invite_reminder) {
-      await resend.emails.send({
-        from: "Co <hello@copatible.com>",
-        to: email,
-        subject: `You haven't responded to your invite.`,
-        html: emailTemplate(
-          h1("They're waiting on you.") +
-            p(
-              `You still haven't responded to your invite for ${moment_invite_reminder.moments_name} — it starts at ${moment_invite_reminder.time}.`,
-            ) +
-            p("Open Co to accept or decline before the moment fills up.") +
-            cta("Respond to Invite", "https://app.copatible.com"),
-        ),
-      });
-    }
-
-    if (external_invite) {
-      const contextLine = external_invite.target_name
-        ? external_invite.invite_type === "moment"
-          ? `You've been invited to a moment called "${external_invite.target_name}" on Co.`
-          : `You've been invited to join a circle called "${external_invite.target_name}" on Co.`
-        : `You've been invited to join Co by ${external_invite.inviter_name}.`;
-      await resend.emails.send({
-        from: "Co <hello@copatible.com>",
-        to: email,
-        subject: `${external_invite.inviter_name} invited you to Co.`,
-        html: emailTemplate(
-          h1("You've been chosen.") +
-            p(`${external_invite.inviter_name} thought of you.`) +
-            p(contextLine) +
-            p("Co is invite-only. Request access to join the moment.") +
-            ctaButton("Request Access", "https://app.copatible.com"),
-        ),
-      });
-    }
-
-    if (knock_received) {
-      await resend.emails.send({
-        from: "Co <hello@copatible.com>",
-        to: email,
-        subject: `${knock_received.requester_name} wants into ${knock_received.moments_name}.`,
-        html: emailTemplate(
-          h1("Someone's knocking.") +
-            p(`${knock_received.requester_name} is requesting access to ${knock_received.moments_name}. Open Co to let them in or pass.`) +
-            cta("Review Knock", action_url ?? "https://app.copatible.com"),
-        ),
-      });
-    }
-
-    if (knock_decided) {
-      await resend.emails.send({
-        from: "Co <hello@copatible.com>",
-        to: email,
-        subject: knock_decided.approved
-          ? `You're in — ${knock_decided.moments_name}.`
-          : `Your knock wasn't approved.`,
-        html: knock_decided.approved
-          ? emailTemplate(
-              h1("You're in.") +
-                p(`Your knock was approved for ${knock_decided.moments_name}. Open Co for the details.`) +
-                cta("View Moment", action_url ?? "https://app.copatible.com"),
-            )
-          : emailTemplate(
-              h1("Not this time.") +
-                p(`Your knock for ${knock_decided.moments_name} wasn't approved. Circles are built on intention.`),
-            ),
       });
     }
 

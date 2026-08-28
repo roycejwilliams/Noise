@@ -1,7 +1,7 @@
 import { generateText } from "ai";
 import { anthropic } from "@ai-sdk/anthropic";
 import { propagateAttributes } from "@langfuse/tracing";
-import pool from "../../../api/src/db/db.js";
+import pool from "../db/db.js";
 
 // Intent-Layer-only real action: Co can actually invoke this (voice via
 // Hume's tool_call plane, iMessage via a direct call from the ongoing-chat
@@ -9,8 +9,8 @@ import pool from "../../../api/src/db/db.js";
 // stored for that specific person — not a hypothetical description. No
 // venue/moment/circle logic here by design; "match" names a type of
 // activity/community/next-step, never a real business or place, since we
-// have no real venue data to ground that (that's Circles/venue-selection
-// territory, deliberately not touched).
+// have no real venue data to ground that (that's the separate venue-lookup
+// mechanism in venueLookup.ts).
 export type RecommendationResult =
   | { available: true; match: string; reason: string }
   | { available: false; reason: string };
@@ -70,11 +70,11 @@ export async function generateRecommendation(userId: string, currentMessage?: st
       .join("\n");
 
     const { text: raw } = await propagateAttributes(
-      { userId, traceName: "co-test.recommendation.generate" },
+      { userId, traceName: "co.recommendation.generate" },
       () =>
         generateText({
           model: anthropic("claude-haiku-4-5-20251001"),
-          experimental_telemetry: { isEnabled: true, functionId: "co-test.recommendation.generate" },
+          experimental_telemetry: { isEnabled: true, functionId: "co.recommendation.generate" },
           prompt: `Here is everything actually known about this person, captured from real conversations:
 ${knownData}
 ${currentMessage ? `\nWhat they just said, right now: "${currentMessage}"\n\nOnly recommend something if it's actually relevant to what they JUST said — not just relevant to their history in general. If they've moved on to a different topic than what the data above centers on, say there isn't enough to go on for THIS message rather than redirecting back to an old topic.` : ""}

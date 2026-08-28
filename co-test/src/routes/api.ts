@@ -10,7 +10,7 @@ import {
   storeProfile,
   storeTranscriptMemory,
 } from "../../../api/src/services/profileExtraction.js";
-import { buildContextSummary } from "../services/callContext.js";
+import { buildContextSummary } from "../../../api/src/services/callContext.js";
 import { requireTesterLoginApi } from "../middleware/requireTesterLogin.js";
 
 const router = express.Router();
@@ -70,8 +70,8 @@ router.post("/hume-token", async (_req: Request, res: Response, next: NextFuncti
 router.post("/session/:sessionId/tag", async (req: Request, res: Response, next: NextFunction) => {
   try {
     const { test_case } = req.body as { test_case?: string };
-    if (test_case !== "intent_layer" && test_case !== "circles") {
-      return res.status(400).json({ success: false, error: "test_case must be 'intent_layer' or 'circles'." });
+    if (test_case !== "intent_layer") {
+      return res.status(400).json({ success: false, error: "test_case must be 'intent_layer'." });
     }
     await pool.query(`UPDATE users SET test_case = $2 WHERE id = $1`, [req.params.sessionId, test_case]);
     return res.status(200).json({ success: true });

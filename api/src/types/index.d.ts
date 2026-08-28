@@ -42,65 +42,6 @@ interface UserProp {
   intake_asked: boolean;
 }
 
-interface CircleProp {
-  id?: string;
-  owner_id: string;
-  circle_name: string;
-  circle_image: string;
-  created_at: Date;
-  updated_at: Date;
-  members: {
-    id: string;
-    first_name: string;
-    last_name: string;
-    username: string;
-    profile_image: string;
-  }[];
-}
-
-interface MomentProp {
-  id?: string;
-  creator_id: string;
-  circle_id: string;
-  image: string;
-  moments_name: string;
-  created_at: Date;
-  updated_at: Date;
-  moment_start: Date;
-  moment_end: Date;
-  description: string;
-  location: [number, number];
-  location_name: string;
-  cap_attendance: number;
-  close_moment: boolean;
-  visibility_type?: "nearby" | "circle" | "people";
-  principles: string[];
-  expectations: string[];
-  vibes: string[];
-  faqs: { question: string; answer: string }[];
-  recap?: string;
-}
-
-interface InviteMembersProp {
-  id?: string;
-  member_id: string;
-  circle_id: string;
-  created_at: Date;
-  accepted_at: Date;
-  invited_by: string;
-  status?: "pending" | "accepted" | "rejected";
-}
-
-interface InviteAttendeesProp {
-  id?: string;
-  attendee_id: string;
-  moment_id: string;
-  created_at: Date;
-  accepted_at: Date;
-  invited_by: string;
-  status?: "pending" | "accepted" | "rejected";
-}
-
 type LifeChapter =
   | "new_to_city"
   | "building_solo"

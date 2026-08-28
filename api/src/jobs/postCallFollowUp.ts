@@ -1,8 +1,7 @@
-import cron from "node-cron";
 import { generateText } from "ai";
 import { anthropic } from "@ai-sdk/anthropic";
-import pool from "../../../api/src/db/db.js";
-import sendblue from "../../../api/src/services/sendblue.js";
+import pool from "../db/db.js";
+import sendblue from "../services/sendblue.js";
 import { renderCoPersonaPrompt } from "../services/coPersona.js";
 import { buildContextSummary } from "../services/callContext.js";
 
@@ -19,7 +18,7 @@ const SHAPES = [
   `Pick exactly ONE real, specific thing they said. Frame it as something that occurred to you since you talked — like it crossed your mind, not like you're reporting back immediately.`,
 ] as const;
 
-async function sendDueFollowUps(): Promise<void> {
+export async function sendDueFollowUps(): Promise<void> {
   const due = await pool.query(
     `SELECT pcf.id, pcf.user_id, pcf.transcript, u.first_name, u.phone_number
      FROM post_call_follow_ups pcf
@@ -44,8 +43,8 @@ async function sendDueFollowUps(): Promise<void> {
       const shape = SHAPES[Math.floor(Math.random() * SHAPES.length)];
       const { text: followUpMessage } = await generateText({
         model: anthropic("claude-haiku-4-5-20251001"),
-        experimental_telemetry: { isEnabled: true, functionId: "co-test.jobs.postCallFollowUp" },
-        prompt: `${persona ?? "You are Co."} You got off a call with ${row.first_name} a little while ago. Here's what they told you:\n\n"${row.transcript}"\n\n${shape}\n\nThis is a relationship text, not a status update — never mention next steps, circle placement, timing, or anything operational. That's handled elsewhere; this message's only job is proving you were actually listening.\n\nNo exclamation points. No em dashes. This is a text message — keep it short, one text-message-length turn, under 160 characters.`,
+        experimental_telemetry: { isEnabled: true, functionId: "jobs.postCallFollowUp" },
+        prompt: `${persona ?? "You are Co."} You got off a call with ${row.first_name} a little while ago. Here's what they told you:\n\n"${row.transcript}"\n\n${shape}\n\nThis is a relationship text, not a status update — never mention next steps, timing, or anything operational. That's handled elsewhere; this message's only job is proving you were actually listening.\n\nNo exclamation points. No em dashes. This is a text message — keep it short, one text-message-length turn, under 160 characters.`,
       });
       const trimmed = followUpMessage.trim();
 
@@ -60,7 +59,7 @@ async function sendDueFollowUps(): Promise<void> {
       // skipping here just means no text goes out this round — not a retry.
       if (trimmed.includes("{{") || /context_summary/i.test(trimmed)) {
         console.error(
-          `postCallFollowUpJob: generated text for follow-up ${row.id} looked like leaked prompt/meta-commentary, not sending:`,
+          `postCallFollowUp: generated text for follow-up ${row.id} looked like leaked prompt/meta-commentary, not sending:`,
           trimmed,
         );
         continue;
@@ -73,13 +72,7 @@ async function sendDueFollowUps(): Promise<void> {
         from_number: process.env.SENDBLUE_PHONE_NUMBER!,
       });
     } catch (err: any) {
-      console.error(`postCallFollowUpJob: send failed for follow-up ${row.id} (non-fatal, already claimed — will not retry):`, err?.message ?? err);
+      console.error(`postCallFollowUp: send failed for follow-up ${row.id} (non-fatal, already claimed — will not retry):`, err?.message ?? err);
     }
   }
-}
-
-export function registerPostCallFollowUpJob(): void {
-  cron.schedule("*/10 * * * *", () => {
-    sendDueFollowUps().catch((err) => console.error("postCallFollowUpJob: poll failed:", err?.message ?? err));
-  });
 }

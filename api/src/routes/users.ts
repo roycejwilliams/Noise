@@ -153,50 +153,5 @@ export function createUsersRouter(authenticateToken: RequestHandler): Router {
     },
   );
 
-  router.get(
-    "/:id/connections",
-    authenticateToken,
-    async (req, res, next) => {
-      try {
-        if (req.user?.id !== req.params.id) {
-          return res
-            .status(403)
-            .send("Unauthorized: You can only access your own account");
-        }
-
-        const getActiveConnections = await pool.query(
-          `SELECT DISTINCT
-        u.id,
-        u.first_name,
-        u.last_name,
-        u.username,
-        u.profile_image,
-        c.id as circle_id,
-        c.circle_name
-      FROM circle_members cm1
-      JOIN circle_members cm2 ON cm1.circle_id = cm2.circle_id
-      JOIN users u ON cm2.member_id = u.id
-      JOIN circles c ON cm1.circle_id = c.id
-      WHERE cm1.member_id = $1 AND cm2.member_id != $1
-         `,
-          [req.params.id],
-        );
-
-        const activeConnections: UserProp[] = getActiveConnections.rows;
-
-        if (activeConnections) {
-          return res.status(200).send({
-            success: true,
-            data: activeConnections,
-          });
-        }
-
-        return res.status(404).send("User not found.");
-      } catch (error) {
-        next(error);
-      }
-    },
-  );
-
   return router;
 }

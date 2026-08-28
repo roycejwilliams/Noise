@@ -137,8 +137,6 @@ export async function logoutTester(userId: string): Promise<void> {
 // Logs the tester out too — their old row's identity is gone, so the
 // session token pointing at it must go with it.
 export async function resetOwnData(userId: string): Promise<{ success: boolean }> {
-  await pool.query(`DELETE FROM moments WHERE creator_id = $1`, [userId]);
-  await pool.query(`DELETE FROM circles WHERE owner_id = $1`, [userId]);
   await pool.query(`DELETE FROM users WHERE id = $1`, [userId]);
   return { success: true };
 }

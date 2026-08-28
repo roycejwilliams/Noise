@@ -1,4 +1,4 @@
-import pool from "../../../api/src/db/db.js";
+import pool from "../db/db.js";
 
 // Builds a compact summary of everything already known about a person —
 // from a prior call's extracted profile/intent AND recent text exchanges —

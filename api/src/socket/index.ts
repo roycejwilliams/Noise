@@ -33,13 +33,5 @@ export function configureSocket(io: Server) {
   io.on("connection", (socket) => {
     const userId = (socket as any).user?.id as string;
     if (userId) socket.join(`user:${userId}`);
-
-    socket.on("join:moment", (momentId: string) => {
-      socket.join(`moment:${momentId}`);
-    });
-
-    socket.on("leave:moment", (momentId: string) => {
-      socket.leave(`moment:${momentId}`);
-    });
   });
 }

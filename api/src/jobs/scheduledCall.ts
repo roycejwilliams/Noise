@@ -1,16 +1,15 @@
 import { anthropic } from "@ai-sdk/anthropic";
 import { generateText } from "ai";
-import cron from "node-cron";
-import pool from "../../../api/src/db/db.js";
-import sendblue from "../../../api/src/services/sendblue.js";
-import { triggerCall } from "../services/callTrigger.js";
+import pool from "../db/db.js";
+import sendblue from "../services/sendblue.js";
+import { triggerCallForUser } from "../services/callTrigger.js";
 
-// Places calls booked via the schedule-a-call flow in webhooks.ts
-// (scheduled_calls, distinct from the existing "call me now"
-// explicit_request path). scheduled_for is already a resolved absolute UTC
-// instant, computed once at capture time — this job never re-parses a
-// timezone, it just polls for what's due.
-async function placeDueCalls(): Promise<void> {
+// Places calls booked via the schedule-a-call flow in sendblue.ts
+// (scheduled_calls, distinct from the existing "call me now" explicit_request
+// path). scheduled_for is already a resolved absolute UTC instant, computed
+// once at capture time — this job never re-parses a timezone, it just polls
+// for what's due.
+export async function placeDueCalls(io: import("socket.io").Server | null): Promise<void> {
   // Excludes opted-out users — a scheduled call from before they opted out
   // should never fire; left 'pending' rather than force-completed/cancelled
   // so nothing here silently rewrites a status the user didn't cause.
@@ -24,7 +23,7 @@ async function placeDueCalls(): Promise<void> {
   for (const row of due.rows) {
     // Claim first (status flip in the same statement as the eligibility
     // check) so two overlapping cron ticks can't both place the same call —
-    // same pattern as postCallFollowUpJob's sent_at claim.
+    // same pattern as postCallFollowUp's sent_at claim.
     const claim = await pool.query(
       `UPDATE scheduled_calls SET status = 'processing' WHERE id = $1 AND status = 'pending' RETURNING id`,
       [row.id],
@@ -32,18 +31,18 @@ async function placeDueCalls(): Promise<void> {
     if (!claim.rows[0]) continue;
 
     try {
-      const result = await triggerCall(row.user_id);
+      const result = await triggerCallForUser(row.user_id, io);
       if (result.success) {
         await pool.query(
           `UPDATE scheduled_calls SET status = 'completed', call_sid = $2 WHERE id = $1`,
           [row.id, result.call_sid],
         );
       } else {
-        console.error(`scheduledCallJob: triggerCall failed for scheduled call ${row.id}:`, result.error);
+        console.error(`scheduledCall: triggerCallForUser failed for scheduled call ${row.id}:`, result.error);
         await pool.query(`UPDATE scheduled_calls SET status = 'failed' WHERE id = $1`, [row.id]);
       }
     } catch (err: any) {
-      console.error(`scheduledCallJob: unexpected error placing scheduled call ${row.id} (non-fatal):`, err?.message ?? err);
+      console.error(`scheduledCall: unexpected error placing scheduled call ${row.id} (non-fatal):`, err?.message ?? err);
       await pool.query(`UPDATE scheduled_calls SET status = 'failed' WHERE id = $1`, [row.id]).catch(() => {});
     }
   }
@@ -55,7 +54,7 @@ async function placeDueCalls(): Promise<void> {
 // outage can't cause a reminder to be silently skipped; reminder_sent_at
 // being non-null is what actually prevents a duplicate, not the timing
 // window itself.
-async function sendDueReminders(): Promise<void> {
+export async function sendDueReminders(): Promise<void> {
   const due = await pool.query(
     `SELECT sc.id, u.first_name, u.phone_number
      FROM scheduled_calls sc
@@ -86,7 +85,7 @@ async function sendDueReminders(): Promise<void> {
         model: anthropic("claude-haiku-4-5-20251001"),
         experimental_telemetry: {
           isEnabled: true,
-          functionId: "co-test.jobs.scheduledCallReminder",
+          functionId: "jobs.scheduledCallReminder",
         },
         prompt: `You are Co. You're about to call ${row.first_name} in about 15 minutes, as scheduled. Send a short, natural one-line heads-up text. Vary how you say it, don't just say "Calling you soon." No exclamation points, no em dashes. Under 60 characters.`,
       });
@@ -94,7 +93,7 @@ async function sendDueReminders(): Promise<void> {
       if (trimmed) reminderMessage = trimmed;
     } catch (err: any) {
       console.error(
-        `scheduledCallJob: reminder message generation failed for ${row.id} (non-fatal, using fallback):`,
+        `scheduledCall: reminder message generation failed for ${row.id} (non-fatal, using fallback):`,
         err?.message ?? err,
       );
     }
@@ -106,14 +105,7 @@ async function sendDueReminders(): Promise<void> {
         from_number: process.env.SENDBLUE_PHONE_NUMBER!,
       });
     } catch (err: any) {
-      console.error(`scheduledCallJob: reminder send failed for ${row.id} (non-fatal):`, err?.message ?? err);
+      console.error(`scheduledCall: reminder send failed for ${row.id} (non-fatal):`, err?.message ?? err);
     }
   }
-}
-
-export function registerScheduledCallJob(): void {
-  cron.schedule("*/5 * * * *", () => {
-    placeDueCalls().catch((err) => console.error("scheduledCallJob: poll failed:", err?.message ?? err));
-    sendDueReminders().catch((err) => console.error("scheduledCallJob: reminder poll failed:", err?.message ?? err));
-  });
 }

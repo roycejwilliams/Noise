@@ -1,5 +1,5 @@
 import { Client } from "@googlemaps/google-maps-services-js";
-import { hardFilterVenues } from "../../../api/src/services/places.js";
+import { hardFilterVenues } from "./places.js";
 
 const client = new Client({});
 
@@ -12,10 +12,9 @@ export type RealVenueMatch = {
 
 // Real, grounded venue search — triggered when someone mentions wanting a
 // specific category of place (a gym, a cafe, a climbing spot), backed by a
-// live Google Places search, the same API production's Circles venue
-// selection uses. Deliberately distinct from generateRecommendation, which
-// never names a real venue because it has no data source to back one up —
-// this one does, and only ever returns something with a real place_id
+// live Google Places search. Deliberately distinct from generateRecommendation,
+// which never names a real venue because it has no data source to back one up
+// — this one does, and only ever returns something with a real place_id
 // behind it. Built after a real conversation showed Co inventing a
 // plausible-sounding gym name from general knowledge with nothing behind
 // it — this replaces that guess with an actual lookup.

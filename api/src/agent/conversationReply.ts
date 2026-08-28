@@ -15,13 +15,25 @@ export type ConversationReplyInput = {
   recentOfferBurstActive: boolean;
   callAction: string;
   isThinProfileFirstMessage: boolean;
+  isFirstContact: boolean;
   missingTopic: string | null;
   missingTopicDescription: string | null;
   momentContext: string;
+  recommendationContext: string;
+  venueContext: string;
+  callFeatureQuestionContext: string;
+  scheduleCallContext: string;
   toneContext: string;
+  seekingModeContext: string;
   styleHint: string;
   recentConversation: string;
   recentMemories: string;
+  // The actual live Hume EVI system prompt (see coPersona.ts), rendered with
+  // this person's context — same entity whether talking by voice or text.
+  // Null only if the Hume config fetch itself failed; falls back to a
+  // thinner default in the system prompt below rather than blocking the
+  // reply on it.
+  personaPrompt: string | null;
   sendCoReply: SendCoReply;
 };
 
@@ -93,12 +105,18 @@ export async function runConversationReplyAgent(
     !input.recentOfferBurstActive &&
     (input.callAction === "would_benefit" || input.isThinProfileFirstMessage);
 
-  const system = `You are Co, an exclusive life concierge, replying by iMessage to ${input.firstName}.
+  const system = `${input.personaPrompt ?? "You are Co, an exclusive life concierge."}
+
+You are having this specific exchange over text message, not a phone call — the phase structure and pacing above describe a live call; over text, just be genuinely Co: the same listening style, the same voice, the same principles, picking up wherever this conversation actually is, replying by iMessage to ${input.firstName}.
+
+${input.firstName} is texting you — you already have their number, never ask them for it.
 
 ${input.momentContext}
+${input.recommendationContext}${input.venueContext}${input.callFeatureQuestionContext}${input.scheduleCallContext}
 ${input.toneContext}
+${input.seekingModeContext}
 ${input.styleHint}
-
+${input.isFirstContact ? `\nThis is the very start of your first real conversation with ${input.firstName} — they just finished the intro sequence (greeting, what CoPatible is, saving your contact, verification). What they just said may be nothing more than a greeting, not real content to react to. If it IS something real, pick up from it genuinely. If it's just a greeting or blank, don't react to it as if it were substantive — instead open the real conversation yourself, the same way you would at the start of a call: warm, unhurried, inviting the real version of their life, not a status update.\n` : ""}
 Recent conversation, in order (this is the actual thread — follow it; don't jump to older topics from "other context" below unless they bring it up again):
 ${input.recentConversation || "(this is the start of the conversation)"}
 
@@ -106,6 +124,8 @@ Other context that might be relevant, but may be from a different time or topic 
 ${input.recentMemories}
 
 ${input.imageForVision ? "They just sent the attached photo." : `They just said: "${input.resolvedContent}"`}
+
+Ground everything ONLY in the information above and what has actually been said in this conversation — never state or imply a specific personal detail, preference, or fact about them that isn't listed above or wasn't actually said in this thread. This includes real venues and businesses: never name a specific one unless it's given to you above as something you actually found — if you don't have a real one, describe what you'd look for, don't guess a plausible-sounding name.
 
 Decide what to do, then act using your tools:
 - Always respond genuinely to what they said first. Match the weight of your reply to theirs: a short or simple message earns a short, simple reply — often just a sentence. Something long, layered, or emotionally loaded earns real room to actually respond to it, not a one-liner that brushes past what they just shared. Either way this is still a text message, not an essay — a few sentences at most, never a wall of text. Even when matching a short exchange's brevity, don't let it go purely reactive — if the conversation is genuinely stalling, keep giving it somewhere to go: a question, an observation, a related thought. Never rely on a question mark as the only tool for that, and never force it onto an exchange that's naturally winding down or already has real momentum. Separately — when they state something concrete about what they want or who they're looking for, that's worth deepening with a specific follow-up question even if the conversation already has momentum; just validating it back leaves it vague when one more question would actually sharpen it. Vary how each reply opens — don't default to restating what they said as "That [noun phrase], ..." every time; sometimes just respond directly without that framing. No em dashes, no exclamation points.${input.imageForVision ? " React to what's actually in the photo." : " Use their context to make it personal."}
@@ -117,7 +137,13 @@ ${input.missingTopic ? `  - Co doesn't yet have a good sense of ${input.missingT
   const userText = input.imageForVision ? "Respond to what they just sent." : "Respond to what they just said.";
 
   await generateText({
-    model: anthropic("claude-haiku-4-5-20251001"),
+    // Sonnet, not Haiku — dry-run testing showed Haiku missing the
+    // offerCall follow-up call ~2/5 times even when the reply text clearly
+    // gestured toward a call, which breaks call_offer_pending tracking (a
+    // later "yes" gets misread as unrelated). This is a correctness/
+    // state-consistency issue, not just phrasing quality, so it justifies
+    // the latency/cost tradeoff.
+    model: anthropic("claude-sonnet-4-6"),
     system,
     tools,
     // 6, not 5 — a genuine second sendReply call now needs an extra

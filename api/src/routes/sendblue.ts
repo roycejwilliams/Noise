@@ -3,15 +3,19 @@ import { generateText } from "ai";
 import { propagateAttributes } from "@langfuse/tracing";
 import { randomInt } from "crypto";
 import { NextFunction, Request, Response, Router } from "express";
+import { parsePhoneNumberFromString } from "libphonenumber-js";
+import { DateTime } from "luxon";
 import type { Server } from "socket.io";
 import pool from "../db/db.js";
 import { withAdvisoryLock } from "../db/advisoryLock.js";
 import { sendSMS } from "../otpActions.js";
+import { renderCoPersonaPrompt } from "../services/coPersona.js";
 import elevenlabs from "../services/elevenlabs.js";
-import { generateCircleTitle, generateWarmCircleInviteMessage } from "../services/circleInvite.js";
 import { generateEmbedding } from "../services/embeddings.js";
-import { detectTurnTone } from "../services/emotionalTone.js";
+import { detectSeekingMode, detectTurnTone } from "../services/emotionalTone.js";
+import { buildContextSummary } from "../services/callContext.js";
 import { findOrCreateUserByPhone, hasPendingEmail, splitFullName } from "../services/identity.js";
+import { isOptInKeyword, isOptOutKeyword } from "../services/optOut.js";
 import {
   captureIntent,
   extractPsychographicProfile,
@@ -19,19 +23,9 @@ import {
   RAPPORT_TOPIC_DESCRIPTIONS,
   storeProfile,
 } from "../services/profileExtraction.js";
+import { generateRecommendation } from "../services/recommendation.js";
+import { findRealVenues } from "../services/venueLookup.js";
 import { runConversationReplyAgent } from "../agent/conversationReply.js";
-import {
-  createMomentForCircle,
-  getCircleBookingContext,
-  notifyMemberOfMoment,
-  proposeNewTimeForMoment,
-  isCircleMember,
-  selectVenueForCircle,
-} from "./co.js";
-import { activateCircle, attemptCircleRematch } from "../services/circleApproval.js";
-import { CIRCLE_FACILITATION_ENABLED, findBestCircle } from "../services/circleFacilitation.js";
-import type { CandidateWindow } from "../services/scheduling.js";
-import { confirmMoment, requestVenueApprovalFromModerator } from "../services/booking.js";
 import { triggerCallForUser } from "../services/callTrigger.js";
 import sendblue from "../services/sendblue.js";
 import { generateVoiceNote } from "../services/voiceNote.js";
@@ -308,160 +302,14 @@ export function sendblueRouter(io: Server): Router {
           return res.status(400).send("Missing required fields.");
         }
 
-        // Moderator approval intercept — must run before user lookup since the Moderator may not be in users table.
-        // Only intercepts when there's an actual circle to approve/reject — the Moderator is
-        // also a normal registered user/contact (e.g. completing her own text-in-first
-        // verification, or chatting with Co), and those texts must fall through to the
-        // standard user flow below instead of being silently swallowed here.
-        const moderatorPhone = process.env.MODERATOR_PHONE_NUMBER;
-        if (moderatorPhone && number === moderatorPhone && hasText) {
-          const pendingResult = await pool.query(
-            `SELECT c.id, c.circle_name, c.owner_id
-             FROM circles c
-             WHERE c.status = 'pending_approval'
-             ORDER BY c.created_at ASC
-             LIMIT 1`,
-          );
-
-          const pendingCircle = pendingResult.rows[0];
-          if (pendingCircle) {
-
-          const { text: classification } = await propagateAttributes(
-            { userId: pendingCircle.owner_id, traceName: "sendblue.moderatorApproval.classify" },
-            () =>
-              generateText({
-                model: anthropic("claude-haiku-4-5-20251001"),
-                experimental_telemetry: { isEnabled: true, functionId: "sendblue.moderatorApproval.classify" },
-                prompt: `Classify this message as either 'approve' or 'reject'. Return ONLY the word approve or reject.\n\nMessage: "${content}"`,
-              }),
-          );
-
-          // Same backtick/quote-stripping as the other classification
-          // parses in this file — the model doesn't always return bare text.
-          const action = classification.trim().toLowerCase().replace(/^[`"']+|[`"']+$/g, "");
-
-          if (action === "approve") {
-            await pool.query(
-              `INSERT INTO co_memories (user_id, memory_type, content) VALUES ($1, 'system', $2)`,
-              [pendingCircle.owner_id, `Moderator manually approved circle ${pendingCircle.id}`],
-            );
-
-            await activateCircle({
-              circleId: pendingCircle.id,
-              circleName: pendingCircle.circle_name,
-              io,
-            });
-          } else if (action === "reject") {
-            const rejectedMembersResult = await pool.query(
-              `SELECT member_id FROM circle_members WHERE circle_id = $1`,
-              [pendingCircle.id],
-            );
-            const rejectedMemberIds: string[] = rejectedMembersResult.rows.map((r: any) => r.member_id);
-
-            await attemptCircleRematch({
-              staleCircleId: pendingCircle.id,
-              ownerId: pendingCircle.owner_id,
-              excludeMemberIds: rejectedMemberIds,
-              newStatus: "rejected",
-              memberNoticeContent: "Circle rejected — Co will attempt new matching",
-              io,
-            });
-          }
-
-            return res.status(200).send({ received: true });
-          } else {
-            // No pending circle to approve — check for a moment awaiting
-            // the Moderator's venue approval instead. Same approve/reject-by-text
-            // pattern as the circle-placement approval above, just gating
-            // venue choice rather than circle membership.
-            const pendingMomentResult = await pool.query(
-              `SELECT id, circle_id, moments_name, venue, venue_booking_url, venue_place_id,
-                      venue_type, neighborhood, vibe, suggested_time, moment_start, rejected_venues,
-                      consensus_low_confidence
-               FROM moments
-               WHERE status = 'pending_venue_approval'
-               ORDER BY created_at ASC
-               LIMIT 1`,
-            );
-            const pendingMomentApproval = pendingMomentResult.rows[0];
-
-            if (pendingMomentApproval) {
-              const { text: venueClassification } = await generateText({
-                model: anthropic("claude-haiku-4-5-20251001"),
-                experimental_telemetry: { isEnabled: true, functionId: "sendblue.moderatorVenueApproval.classify" },
-                prompt: `Classify this message as either 'approve' or 'reject'. Return ONLY the word approve or reject.\n\nMessage: "${content}"`,
-              });
-              const venueAction = venueClassification
-                .trim()
-                .toLowerCase()
-                .replace(/^[`"']+|[`"']+$/g, "");
-
-              if (venueAction === "approve") {
-                await confirmMoment(pendingMomentApproval, io);
-              } else if (venueAction === "reject") {
-                const rejectedVenues: string[] = [
-                  ...(pendingMomentApproval.rejected_venues ?? []),
-                  ...(pendingMomentApproval.venue ? [pendingMomentApproval.venue] : []),
-                ];
-
-                const context = await getCircleBookingContext(pendingMomentApproval.circle_id);
-                const nextVenue = context
-                  ? await selectVenueForCircle(
-                      context.city,
-                      pendingMomentApproval.venue_type,
-                      pendingMomentApproval.neighborhood,
-                      context.groupSize,
-                      {
-                        vibe: pendingMomentApproval.vibe ?? "",
-                        life_chapters: context.uniqueChapters,
-                        connection_style: context.dominantStyle,
-                        group_size: context.groupSize,
-                      },
-                      rejectedVenues,
-                    )
-                  : null;
-
-                if (!nextVenue) {
-                  try {
-                    await sendblue.messages.send({
-                      number: moderatorPhone,
-                      content: `No alternative venue found for moment ${pendingMomentApproval.id}. Needs manual venue selection.`,
-                      from_number: process.env.SENDBLUE_PHONE_NUMBER!,
-                    });
-                  } catch (err: any) {
-                    console.error("Failed to notify Moderator of no-alternative-venue:", err?.message ?? err);
-                  }
-                  await pool.query(
-                    `UPDATE moments SET status = 'manual_venue_required', rejected_venues = $1 WHERE id = $2`,
-                    [rejectedVenues, pendingMomentApproval.id],
-                  );
-                } else {
-                  await pool.query(
-                    `UPDATE moments
-                     SET venue = $1, venue_booking_url = $2, venue_place_id = $3,
-                         location_name = $4, rejected_venues = $5, venue_fit_score = $6
-                     WHERE id = $7`,
-                    [
-                      nextVenue.name ?? null,
-                      nextVenue.venue_booking_url ?? null,
-                      nextVenue.place_id ?? null,
-                      nextVenue.formatted_address ?? pendingMomentApproval.neighborhood ?? null,
-                      rejectedVenues,
-                      nextVenue.co_fit_score ?? null,
-                      pendingMomentApproval.id,
-                    ],
-                  );
-                  await requestVenueApprovalFromModerator({
-                    ...pendingMomentApproval,
-                    venue: nextVenue.name ?? null,
-                    venue_fit_score: nextVenue.co_fit_score ?? null,
-                  });
-                }
-              }
-
-              return res.status(200).send({ received: true });
-            }
-          }
+        // A malformed inbound `number` (confirmed: Sendblue can deliver one,
+        // e.g. a bare 5-digit value) was flowing straight through to a real,
+        // billed sendSMS call via findOrCreateUserByPhone below — nothing on
+        // this path validated shape before either creating a user row or
+        // sending. Reject before either happens.
+        if (!parsePhoneNumberFromString(number, "US")?.isValid()) {
+          console.error(`sendblue webhook: malformed inbound number "${number}" — ignoring`);
+          return res.status(200).send({ received: true });
         }
 
         // Step 1 — Find user by phone number, creating a bare placeholder row
@@ -470,6 +318,40 @@ export function sendblueRouter(io: Server): Router {
         // ahead of time — the conversation with Co itself is the intake now,
         // so an unknown number can't just be dropped the way it used to be.
         let user = await findOrCreateUserByPhone(number);
+
+        // STOP/START handling — checked before anything else (intake,
+        // duplicate/debounce, the real reply) so it works regardless of
+        // account state, and short-circuits everything below for an
+        // opted-out user except START/UNSTOP itself.
+        if (hasText && isOptOutKeyword(content)) {
+          await pool.query(`UPDATE users SET sms_opted_out = true WHERE id = $1`, [user.id]);
+          try {
+            await sendblue.messages.send({
+              number,
+              content: "You've been unsubscribed and won't receive further messages or calls from Co. Text START to resubscribe.",
+              from_number: process.env.SENDBLUE_PHONE_NUMBER!,
+            });
+          } catch (err: any) {
+            console.error("sendblue webhook: opt-out confirmation send failed (non-fatal):", err?.message ?? err);
+          }
+          return res.status(200).send({ received: true, action: "opted_out" });
+        }
+        if (hasText && isOptInKeyword(content)) {
+          await pool.query(`UPDATE users SET sms_opted_out = false WHERE id = $1`, [user.id]);
+          try {
+            await sendblue.messages.send({
+              number,
+              content: "You're resubscribed — welcome back.",
+              from_number: process.env.SENDBLUE_PHONE_NUMBER!,
+            });
+          } catch (err: any) {
+            console.error("sendblue webhook: opt-in confirmation send failed (non-fatal):", err?.message ?? err);
+          }
+          return res.status(200).send({ received: true, action: "opted_in" });
+        }
+        if (user.sms_opted_out) {
+          return res.status(200).send({ received: true, action: "opted_out_ignored" });
+        }
 
         // Co Loop Stage 5 extension — response-rate tracking. Any inbound
         // message counts as a response to a pending check-in, regardless of
@@ -654,12 +536,12 @@ Return ONLY strict JSON: {"full_name": string or null, "email": string or null, 
           }
         }
 
-        // Step 3 — Store inbound message, generate embedding, check for pending moment (in parallel)
+        // Step 3 — Store inbound message, generate embedding (in parallel)
         const inboundContent = isVoice
           ? `User sent a voice memo: ${resolvedContent}`
           : `User said: ${resolvedContent}`;
 
-        const [inboundMemory, queryEmbedding, pendingMoment, pendingCircleInvite, turnTone] = await Promise.all([
+        const [inboundMemory, queryEmbedding, turnTone] = await Promise.all([
           pool.query(
             `INSERT INTO co_memories (user_id, memory_type, content)
              VALUES ($1, 'text_exchange', $2) RETURNING id`,
@@ -669,26 +551,6 @@ Return ONLY strict JSON: {"full_name": string or null, "email": string or null, 
             console.error("Inbound embedding failed (non-fatal):", err);
             return null;
           }),
-          pool.query(
-            // A genuinely unanswered availability poll — response IS NULL.
-            `SELECT mr.moment_id, m.moments_name, m.suggested_time, m.venue, m.moment_start, m.circle_id, m.venue_place_id, m.candidate_windows
-             FROM moment_responses mr
-             JOIN moments m ON m.id = mr.moment_id
-             WHERE mr.user_id = $1
-             AND mr.response IS NULL
-             ORDER BY mr.created_at DESC
-             LIMIT 1`,
-            [user.id],
-          ),
-          pool.query(
-            `SELECT cm.circle_id, c.circle_name, c.owner_id
-             FROM circle_members cm
-             JOIN circles c ON c.id = cm.circle_id
-             WHERE cm.member_id = $1 AND cm.status = 'pending'
-             ORDER BY cm.joined_at DESC
-             LIMIT 1`,
-            [user.id],
-          ),
           // Run alongside everything else above rather than after it — this
           // is a pure add-on signal for the reply prompt built in Step 6, not
           // something anything else here depends on. hasText guards it so a
@@ -705,367 +567,6 @@ Return ONLY strict JSON: {"full_name": string or null, "email": string or null, 
               [`[${queryEmbedding.join(",")}]`, inboundMemory.rows[0].id],
             )
             .catch((err) => console.error("Memory embedding failed (non-fatal):", err));
-        }
-
-        // Step 3.5 — Pending circle invite response handling. Runs before
-        // moment handling since a member has to accept their circle before
-        // any moment for it exists to respond to.
-        if (pendingCircleInvite.rows[0]) {
-          const { circle_id, owner_id } = pendingCircleInvite.rows[0];
-
-          const { text: circleInterpretation } = await propagateAttributes(
-            { userId: user.id, traceName: "sendblue.circleInviteResponse.classify" },
-            () =>
-              generateText({
-                model: anthropic("claude-haiku-4-5-20251001"),
-                experimental_telemetry: { isEnabled: true, functionId: "sendblue.circleInviteResponse.classify" },
-                prompt: `A user replied to a circle invite. Classify their response as ONE of: "yes" — they want to join, "no" — they want to pass, "unclear" — can't tell.
-
-Message: "${resolvedContent}"
-
-Return ONLY the classification, nothing else.`,
-              }),
-          );
-          const circleAction = circleInterpretation.trim().toLowerCase().replace(/^[`"']+|[`"']+$/g, "");
-
-          if (circleAction === "yes") {
-            await pool.query(
-              `UPDATE circle_members SET status = 'accepted' WHERE circle_id = $1 AND member_id = $2`,
-              [circle_id, user.id],
-            );
-
-            // withPhoneLock only serializes messages from this one member's
-            // own number — two different members accepting within
-            // milliseconds of each other run on separate phone locks and
-            // can both see "no moment yet" here. Locking by circle_id (not
-            // phone) closes that gap: only one accepter at a time can be in
-            // this check-then-create section for a given circle, regardless
-            // of whose phone triggered it.
-            let moment: any;
-            let selectedVenue: any = null;
-            let momentData: any = null;
-            await withAdvisoryLock(`circle-moment:${circle_id}`, async () => {
-              const existingMoment = await pool.query(
-                `SELECT * FROM moments WHERE circle_id = $1 ORDER BY created_at DESC LIMIT 1`,
-                [circle_id],
-              );
-              moment = existingMoment.rows[0];
-
-              if (!moment) {
-                const created = await createMomentForCircle(circle_id);
-                if (created) {
-                  ({ moment, selectedVenue, momentData } = created);
-                }
-              } else {
-                // Moment already exists (an earlier accepter triggered it) —
-                // reconstruct the minimal fields notifyMemberOfMoment needs.
-                momentData = { neighborhood: moment.location_name, suggested_time: moment.suggested_time };
-                selectedVenue = moment.venue ? { name: moment.venue } : null;
-              }
-            });
-
-            if (moment) {
-              const memberCountResult = await pool.query(
-                `SELECT COUNT(*) FROM circle_members WHERE circle_id = $1 AND status = 'accepted'`,
-                [circle_id],
-              );
-              const groupSize = parseInt(memberCountResult.rows[0].count, 10);
-
-              await pool.query(
-                `INSERT INTO moment_responses (moment_id, user_id) VALUES ($1, $2) ON CONFLICT DO NOTHING`,
-                [moment.id, user.id],
-              );
-
-              await notifyMemberOfMoment(moment, selectedVenue, momentData, { member_id: user.id }, groupSize);
-            }
-
-            return res.status(200).send({ received: true, action: "circle_accepted" });
-          } else if (circleAction === "no") {
-            const MAX_REPLACEMENT_ATTEMPTS = 2;
-
-            // Kept as a 'declined' row (not deleted) so it doubles as the
-            // attempt counter below, and so findBestCircle never re-suggests
-            // someone who already passed on this circle.
-            await pool.query(
-              `UPDATE circle_members SET status = 'declined' WHERE circle_id = $1 AND member_id = $2`,
-              [circle_id, user.id],
-            );
-
-            try {
-              await sendblue.messages.send({
-                number: user.phone_number,
-                content: `No worries. Co will keep looking for a better fit.`,
-                from_number: process.env.SENDBLUE_PHONE_NUMBER!,
-              });
-            } catch (smsErr: any) {
-              console.error(`Circle decline ack failed for ${user.id}:`, smsErr?.message ?? smsErr);
-            }
-
-            const allRows = await pool.query(
-              `SELECT member_id, status FROM circle_members WHERE circle_id = $1`,
-              [circle_id],
-            );
-            const activeIds: string[] = allRows.rows
-              .filter((r: any) => r.status !== "declined")
-              .map((r: any) => r.member_id);
-            const everyKnownId: string[] = allRows.rows.map((r: any) => r.member_id);
-            const declinedCount = allRows.rows.filter((r: any) => r.status === "declined").length;
-
-            if (activeIds.length < 4) {
-              // Co Loop Stage 4 — off for now (see circleFacilitation.ts).
-              // Same Moderator-notify fallback as hitting the replacement
-              // attempt limit, just with a message that says why.
-              if (declinedCount > MAX_REPLACEMENT_ATTEMPTS || !CIRCLE_FACILITATION_ENABLED) {
-                try {
-                  await sendblue.messages.send({
-                    number: moderatorPhone!,
-                    content: CIRCLE_FACILITATION_ENABLED
-                      ? `Circle ${circle_id} dropped below minimum size after ${declinedCount} declines — hit the replacement attempt limit. Manual review needed.`
-                      : `Circle ${circle_id} dropped below minimum size after a decline — circle placement is paused right now, no automatic replacement was attempted. Manual review needed.`,
-                    from_number: process.env.SENDBLUE_PHONE_NUMBER!,
-                  });
-                } catch (err: any) {
-                  console.error("Failed to notify Moderator of exhausted attempts:", err?.message ?? err);
-                }
-              } else {
-                // findBestCircle assembles a whole fresh group (up to
-                // target_size), but this is a top-up, not a full rematch —
-                // existing active members stay put. Its returned order is
-                // already score-sorted (best match first), so capping to 2
-                // keeps only the best new candidates rather than everyone
-                // the matcher would otherwise fill a brand-new circle with.
-                const MAX_NEW_CANDIDATES_PER_DECLINE = 2;
-                const replacementIds = await findBestCircle(owner_id, everyKnownId);
-                const newCandidates = (replacementIds ?? [])
-                  .filter((id: string) => !everyKnownId.includes(id))
-                  .slice(0, MAX_NEW_CANDIDATES_PER_DECLINE);
-
-                for (const candidateId of newCandidates) {
-                  await pool.query(
-                    `INSERT INTO circle_members (circle_id, member_id, status) VALUES ($1, $2, 'pending') ON CONFLICT DO NOTHING`,
-                    [circle_id, candidateId],
-                  );
-
-                  const candidateResult = await pool.query(
-                    `SELECT u.first_name, u.phone_number, cp.city, cp.life_chapters, cp.goals
-                     FROM users u LEFT JOIN co_profiles cp ON cp.user_id = u.id
-                     WHERE u.id = $1`,
-                    [candidateId],
-                  );
-                  const candidate = candidateResult.rows[0];
-                  if (!candidate) continue;
-
-                  const candidateCity = candidate.city ?? "your city";
-                  const candidateChapter = (candidate.life_chapters?.[0] ?? "").replace(/_/g, " ");
-                  const candidateCircleTitle = await generateCircleTitle(candidateCity, candidateChapter, candidate.goals ?? []);
-                  const candidateInviteMsg = await generateWarmCircleInviteMessage({
-                    firstName: candidate.first_name,
-                    circleTitle: candidateCircleTitle,
-                    chapter: candidateChapter,
-                    city: candidateCity,
-                    goals: candidate.goals ?? [],
-                  });
-
-                  try {
-                    await sendblue.messages.send({
-                      number: candidate.phone_number,
-                      content: candidateInviteMsg,
-                      from_number: process.env.SENDBLUE_PHONE_NUMBER!,
-                    });
-                  } catch (smsErr: any) {
-                    console.error(`Replacement circle invite failed for ${candidateId}:`, smsErr?.message ?? smsErr);
-                  }
-                }
-
-                if (!newCandidates.length) {
-                  try {
-                    await sendblue.messages.send({
-                      number: moderatorPhone!,
-                      content: `Circle ${circle_id} dropped below minimum size after a decline and no replacement was found. Manual review needed.`,
-                      from_number: process.env.SENDBLUE_PHONE_NUMBER!,
-                    });
-                  } catch (err: any) {
-                    console.error("Failed to notify Moderator of no-replacement:", err?.message ?? err);
-                  }
-                }
-              }
-            }
-
-            return res.status(200).send({ received: true, action: "circle_declined" });
-          }
-          // "unclear" — fall through to the general conversational reply below
-        }
-
-        // Step 4 — Pending moment response handling (runs for both voice and text)
-        if (pendingMoment.rows[0]) {
-          const { moment_id, moments_name, suggested_time, moment_start, circle_id, candidate_windows } = pendingMoment.rows[0];
-          const candidateWindows: CandidateWindow[] = candidate_windows ?? [];
-          const windowsListText = candidateWindows.length
-            ? candidateWindows.map((w, i) => `${i + 1}. ${w.label}`).join("\n")
-            : null;
-
-          // Two prompt shapes depending on whether this moment got a
-          // simultaneous availability poll (candidate_windows present) or the
-          // original single-time poll (older in-flight moments, or window
-          // generation failed at creation time) — same classifier, just
-          // asked to recognize numbered-window replies when there are any.
-          const { text: interpretation } = await propagateAttributes(
-            { userId: user.id, traceName: "sendblue.momentAvailabilityResponse.classify" },
-            () =>
-              generateText({
-                model: anthropic("claude-sonnet-4-6"),
-                experimental_telemetry: { isEnabled: true, functionId: "sendblue.momentAvailabilityResponse.classify" },
-                prompt: windowsListText
-              ? `A user replied to a circle event's availability poll. Interpret their response.
-
-              User's message: "${resolvedContent}"
-
-              Candidate time windows offered:
-              ${windowsListText}
-
-              Classify their response as ONE of:
-              - "windows: [comma-separated numbers]" — the window number(s) they said work, e.g. "windows: 1,3"
-              - "no" — none of the windows work for them
-              - "time: [their suggestion]" — they proposed a completely different specific time
-              - "unclear" — can't determine intent
-
-              Return ONLY the classification, nothing else.`
-              : `A user replied to a circle event invitation. Interpret their response.
-
-              User's message: "${resolvedContent}"
-              Proposed time: ${suggested_time ?? "TBD"}
-
-              Classify their response as ONE of:
-              - "yes" — they confirmed the proposed time
-              - "no" — they can't make it
-              - "time: [their suggestion]" — they suggested a specific alternative time
-              - "unclear" — can't determine intent
-
-              Return ONLY the classification, nothing else.`,
-              }),
-          );
-
-          // Strip wrapping backticks/quotes — the model sometimes formats
-          // its classification as `yes` or "yes" instead of plain text,
-          // which fails a strict equality check against parsedResponse below.
-          const parsedResponse = interpretation
-            .trim()
-            .toLowerCase()
-            .replace(/^[`"']+|[`"']+$/g, "");
-
-          // Only intercept for classifications that are actually actionable —
-          // "unclear" means this wasn't really a moment response at all (e.g.
-          // small talk like "hey, how are you?"), and previously got silently
-          // recorded with no reply ever sent. Falling through lets Co have a
-          // normal conversation instead of going silent on anything ambiguous.
-          const isWindowsResponse = parsedResponse.startsWith("windows:");
-          const selectedWindows = isWindowsResponse
-            ? (parsedResponse.replace(/^windows:\s*/i, "").match(/\d+/g) ?? []).map(Number)
-            : [];
-
-          const isActionableResponse =
-            parsedResponse === "yes" ||
-            parsedResponse === "no" ||
-            parsedResponse.startsWith("time:") ||
-            (isWindowsResponse && selectedWindows.length > 0);
-
-          if (isActionableResponse) {
-            // Any circle member's time proposal reschedules the moment and
-            // re-polls everyone — first one to suggest a workable time moves
-            // it, no single gatekeeper. Still gated on actually being part of
-            // this circle, and on Co being able to parse a real date/time out
-            // of what they said.
-            let rescheduled = false;
-            if (parsedResponse.startsWith("time:") && circle_id && (await isCircleMember(user.id, circle_id))) {
-              const rawSuggestion = parsedResponse.replace(/^time:\s*/i, "");
-              try {
-                const { text: isoGuess } = await propagateAttributes(
-                  { userId: user.id, traceName: "sendblue.momentReschedule.parseTime" },
-                  () =>
-                    generateText({
-                      model: anthropic("claude-haiku-4-5-20251001"),
-                      experimental_telemetry: { isEnabled: true, functionId: "sendblue.momentReschedule.parseTime" },
-                      prompt: `The moment is currently scheduled for ${moment_start} (ISO 8601). A circle member just proposed a new time: "${rawSuggestion}". Return ONLY the new date/time as a single ISO 8601 datetime string, keeping the same timezone offset as the current schedule. No explanation.`,
-                    }),
-                );
-                const newDate = new Date(isoGuess.trim());
-                if (!Number.isNaN(newDate.getTime())) {
-                  await proposeNewTimeForMoment(moment_id, newDate);
-                  rescheduled = true;
-                }
-              } catch (genErr: any) {
-                console.error("Time-reschedule failed (non-fatal):", genErr?.message ?? genErr);
-              }
-            }
-
-            if (!rescheduled) {
-              if (isWindowsResponse) {
-                await pool.query(
-                  `UPDATE moment_responses
-                   SET response = 'windows', selected_windows = $1, responded_at = NOW()
-                   WHERE user_id = $2 AND moment_id = $3`,
-                  [selectedWindows, user.id, moment_id],
-                );
-              } else {
-                await pool.query(
-                  `UPDATE moment_responses
-                   SET response = $1, responded_at = NOW()
-                   WHERE user_id = $2 AND moment_id = $3`,
-                  [parsedResponse, user.id, moment_id],
-                );
-              }
-              io.to(`moment:${moment_id}`).emit("moment:response", {
-                user_id: user.id,
-                response: isWindowsResponse ? "windows" : parsedResponse,
-                selected_windows: isWindowsResponse ? selectedWindows : undefined,
-              });
-            }
-
-            // Acknowledge — recording the response silently reads as Co
-            // ignoring the message entirely.
-            let ackMsg = "Got it.";
-            try {
-              const chosenLabels = isWindowsResponse
-                ? selectedWindows
-                    .map((i) => candidateWindows[i - 1]?.label)
-                    .filter(Boolean)
-                    .join(" and ")
-                : "";
-              const ackContext = rescheduled
-                ? `You just rescheduled ${moments_name} to "${parsedResponse.replace(/^time:\s*/i, "")}" and re-asked the rest of the circle to confirm.`
-                : isWindowsResponse
-                  ? `They said ${chosenLabels || "one of the offered windows"} works for them for ${moments_name}.`
-                  : parsedResponse === "yes"
-                    ? `They confirmed they can make it to ${moments_name} at ${suggested_time ?? "the proposed time"}.`
-                    : parsedResponse === "no"
-                      ? `They said they can't make it to ${moments_name}.`
-                      : `They proposed a different time for ${moments_name}: "${parsedResponse.replace(/^time:\s*/i, "")}", but Co couldn't pin down a specific date/time from that. Let them know you'll need something more specific, like a day and time.`;
-              const { text } = await propagateAttributes(
-                { userId: user.id, traceName: "sendblue.momentResponseAck" },
-                () =>
-                  generateText({
-                    model: anthropic("claude-haiku-4-5-20251001"),
-                    experimental_telemetry: { isEnabled: true, functionId: "sendblue.momentResponseAck" },
-                    prompt: `You are Co, an exclusive life concierge. ${ackContext} Reply to them briefly, warm and specific. 1 sentence. No exclamation points, no em dashes.`,
-                  }),
-              );
-              ackMsg = text;
-            } catch (genErr: any) {
-              console.error("Moment response ack generation failed, using fallback (non-fatal):", genErr?.message ?? genErr);
-            }
-
-            try {
-              await sendblue.messages.send({
-                number: user.phone_number,
-                content: ackMsg,
-                from_number: process.env.SENDBLUE_PHONE_NUMBER!,
-              });
-            } catch (smsErr: any) {
-              console.error(`Moment response ack failed for ${user.id}:`, smsErr?.message ?? smsErr);
-            }
-
-            return res.status(200).send({ received: true, action: rescheduled ? "moment_rescheduled" : "moment_response_captured" });
-          }
         }
 
         // Step 4.5 — Show the animated "..." on the user's device while Co
@@ -1088,6 +589,28 @@ Return ONLY the classification, nothing else.`,
         // silently placed. Must compare timestamps, not just existence of a
         // pending offer, or a later unrelated "yeah" could get misread as
         // consenting to a call that was already resolved.
+        // Moved up from the old "Step 5" position — the call-offer/schedule
+        // classifier below needs the actual conversation thread (a time
+        // given in one message and a timezone confirmed in a later one is
+        // still a single schedule request), not just this message alone.
+        const chronologicalResult = await pool.query(
+          `SELECT content, created_at FROM co_memories
+           WHERE user_id = $1 AND memory_type = 'text_exchange'
+           ORDER BY created_at DESC
+           LIMIT 8`,
+          [user.id],
+        );
+        const recentConversation = chronologicalResult.rows
+          .reverse()
+          .map((m: any) => m.content)
+          .join("\n");
+        const styleHint = deriveStyleHint(chronologicalResult.rows);
+
+        // Advisory-only read on what they need (heard vs. helped toward an
+        // answer) rather than how they feel — needs the conversation, not
+        // just this one message, unlike detectTurnTone.
+        const seekingMode = hasText ? await detectSeekingMode(resolvedContent, recentConversation, "sendblue.detectSeekingMode") : null;
+
         const pendingOfferResult = await pool.query(
           `SELECT p.id, p.content FROM co_memories p
            WHERE p.user_id = $1 AND p.memory_type = 'call_offer_pending'
@@ -1148,12 +671,18 @@ Return ONLY the classification, nothing else.`,
             generateText({
               model: anthropic("claude-haiku-4-5-20251001"),
               experimental_telemetry: { isEnabled: true, functionId: "sendblue.callOffer.classify" },
-              prompt: `A user is texting Co, a life concierge.${hasPendingOffer ? " Co just offered them a phone call and is waiting for a yes or no." : ""}
+              prompt: `A user is texting Co, a life concierge.${hasPendingOffer ? ` Co already offered them a call about this: "${pendingOffer.content}", and is waiting to hear back on it. This does NOT mean every message from them now is a response to that offer — if they're just continuing to talk, that's normal conversation, not an answer to the offer, unless it's actually about being called or talking by phone. A genuinely different topic or problem is always free to get its own fresh read below, regardless of this still-open offer.` : ""}
 
-Their message: "${resolvedContent}"
+Recent conversation, in order (their latest message may only make sense combined with what came before — e.g. a time given in one message and a date/timezone confirmed in a later one is still a single schedule request, not two separate things):
+${recentConversation || "(start of the conversation)"}
 
-Classify as ONE of:
-- "explicit_request" — they are directly asking Co to call them, or asking to talk by phone. Not this if their message only mentions "call" while questioning, declining, or complaining about one that already happened or was offered (e.g. "why did you call me", "I didn't ask you to call me", "stop calling me") — those are "none", never a request, however a pending offer context reads.
+Their latest message: "${resolvedContent}"
+
+Classify their LATEST message, read in light of the recent conversation above, as ONE of:
+- "explicit_request" — they are directly asking Co to call them RIGHT NOW, or asking to talk by phone with no specific future time attached. This is a command, not a question — "call me", "let's talk on the phone". It is NOT this if they are asking whether or how calling works rather than asking for one — see "asks_about_calling" below. It is also NOT this if their message only mentions "call" while questioning, declining, or complaining about one that already happened or was offered (e.g. "why did you call me", "stop calling me") — those are "none". When in doubt whether something is a request or a question about the feature, treat it as the question.
+- "asks_about_calling" — they are asking whether, or how, calling works — as a question about the feature, not a command to place one. Examples: "can I just call you?", "is it true I can call you now?", "do you call people?". Never triggered by their phrasing containing the word "call" alone — it's specifically a question rather than an instruction.
+- "schedule_request" — they want a call at a specific future date/time, whether that time was fully stated just now ("call me tomorrow at 3") or is only complete once combined with what they said earlier in this conversation (e.g. they gave a time a few messages ago and are now confirming the date or timezone Co asked for) — not right now
+- "cancel_scheduled_call" — they want to cancel a call they'd previously scheduled, with no new time given
 ${hasPendingOffer ? '- "accepts_offer" — they are clearly and affirmatively saying yes to the call Co just offered (e.g. "yes", "sure", "call me now", "go ahead"). A bare acknowledgment with no clear yes/no of its own — "thanks", "ok", "got it", "sounds good" — is NOT this; classify it as "none" unless it unambiguously affirms the offer.\n- "declines_offer" — they are saying no to the call Co just offered\n' : ""}- "would_benefit" — none of the above, but what they're describing is complex, emotional, or hard to unpack over short texts, and voice would genuinely help
 - "none" — normal conversation, no call is relevant${declinedTopicsContext}
 
@@ -1177,6 +706,105 @@ Return ONLY the classification, nothing else.`,
         }
 
         const shouldTriggerCall = callAction === "explicit_request" || (hasPendingOffer && callAction === "accepts_offer");
+
+        // Schedule-a-call — a specific future time, not "call me now"
+        // (shouldTriggerCall above). Extracted as structured date/time/
+        // timezone rather than asking the model to do timezone math itself
+        // (unreliable) — luxon does the actual UTC conversion once all three
+        // pieces are present. Nothing gets scheduled on a partial
+        // extraction; the reply below asks for whatever's missing instead
+        // of guessing a timezone, which would silently call someone at the
+        // wrong time.
+        let scheduleCallContext = "";
+        if (callAction === "schedule_request") {
+          try {
+            const nowUtc = DateTime.now().toUTC();
+            const { text: rawSchedule } = await generateText({
+              model: anthropic("claude-haiku-4-5-20251001"),
+              experimental_telemetry: { isEnabled: true, functionId: "sendblue.scheduleCallExtract" },
+              prompt: `A user is texting Co to schedule a call for later. The date, time, and timezone can be spread across several messages (e.g. they gave a time earlier and are only now confirming the date/timezone Co asked for) — read the whole conversation, not just the latest message, to piece it together.
+
+Recent conversation, in order:
+${recentConversation || "(start of the conversation)"}
+
+Their latest message: "${resolvedContent}"
+
+For resolving anything relative ("tomorrow", "next Tuesday"), the current UTC date/time is ${nowUtc.toFormat("cccc, LLLL d, yyyy 'at' HH:mm 'UTC'")}.
+
+Extract, combining information from the whole conversation above:
+- date: the requested date, as YYYY-MM-DD. null if not stated anywhere or genuinely ambiguous.
+- time: the requested time of day, as 24-hour HH:MM. null if not stated anywhere.
+- timezone: the IANA timezone name they stated or unambiguously implied (e.g. "America/New_York", "America/Los_Angeles", "America/Chicago", "America/Denver"). null if not stated and not clearly implied — never guess one.
+
+Return ONLY valid JSON, no preamble: {"date": "YYYY-MM-DD or null", "time": "HH:MM or null", "timezone": "IANA name or null"}`,
+            });
+
+            const clean = rawSchedule.replace(/```json|```/g, "").trim();
+            const parsed = JSON.parse(clean) as { date: string | null; time: string | null; timezone: string | null };
+
+            if (parsed.date && parsed.time && parsed.timezone) {
+              const local = DateTime.fromISO(`${parsed.date}T${parsed.time}`, { zone: parsed.timezone });
+              if (local.isValid && local.toUTC() > DateTime.utc()) {
+                // A new successfully-scheduled call supersedes any earlier
+                // one still pending, rather than both eventually firing —
+                // asking again means instead of, not also. Only cancels
+                // 'pending' rows; one already claimed/'processing' by the
+                // cron is left alone rather than raced.
+                const superseded = await pool.query(
+                  `UPDATE scheduled_calls SET status = 'cancelled' WHERE user_id = $1 AND status = 'pending' RETURNING id`,
+                  [user.id],
+                );
+                await pool.query(
+                  `INSERT INTO scheduled_calls (user_id, requested_text, timezone, scheduled_for) VALUES ($1, $2, $3, $4)`,
+                  [user.id, resolvedContent, parsed.timezone, local.toUTC().toISO()],
+                );
+                const formattedTime = local.toFormat("cccc, LLLL d 'at' h:mm a");
+                scheduleCallContext = superseded.rows.length
+                  ? `\nThey just rescheduled — this replaces a call they'd already booked, now moved to ${formattedTime} (${parsed.timezone}). Confirm the NEW time back to them naturally, making clear this is a change from before, not a new addition. Do not place a call now, it's scheduled for later.`
+                  : `\nThey just successfully scheduled a call for ${formattedTime} (${parsed.timezone}) — confirm that back to them naturally, referencing the actual day and time so they know it landed correctly. Do not place a call now, it's scheduled for later.`;
+              } else {
+                scheduleCallContext = `\nThey tried to schedule a call, but the time they gave (${parsed.date} ${parsed.time}, ${parsed.timezone}) is invalid or already in the past — let them know naturally and ask for a time that hasn't passed yet. Do not place a call now.`;
+              }
+            } else {
+              const missing = [!parsed.date && "the date", !parsed.time && "the time", !parsed.timezone && "their timezone"]
+                .filter(Boolean)
+                .join(" and ");
+              scheduleCallContext = `\nThey want to schedule a call for later but haven't given ${missing} yet — ask for exactly that, specifically. Never guess or assume a timezone. Do not place a call now.`;
+            }
+          } catch (err: any) {
+            console.error("sendblue: schedule_request extraction failed (non-fatal):", err?.message ?? err);
+            scheduleCallContext = `\nThey want to schedule a call for a specific time but something went wrong figuring out when — ask them to state the day, time, and their timezone clearly. Do not place a call now.`;
+          }
+        } else if (callAction === "cancel_scheduled_call") {
+          // No new time to extract here — just clear whatever's pending.
+          // Only touches 'pending' rows, same reasoning as the supersede
+          // logic above: one already claimed/'processing' by the cron is
+          // left alone rather than raced with a cancel.
+          try {
+            const cancelled = await pool.query(
+              `UPDATE scheduled_calls SET status = 'cancelled' WHERE user_id = $1 AND status = 'pending' RETURNING id`,
+              [user.id],
+            );
+            scheduleCallContext = cancelled.rows.length
+              ? `\nThey just cancelled their scheduled call — confirm that naturally. Do not place a call now.`
+              : `\nThey're trying to cancel a scheduled call, but nothing is actually scheduled right now — let them know that naturally, there's nothing to cancel. Do not place a call now.`;
+          } catch (err: any) {
+            console.error("sendblue: cancel_scheduled_call failed (non-fatal):", err?.message ?? err);
+            scheduleCallContext = `\nThey want to cancel a scheduled call but something went wrong doing that — let them know you'll sort it out. Do not place a call now.`;
+          }
+        }
+
+        // They asked a plain question about the calling feature — answer it
+        // truthfully, don't place a call and don't pretend one is
+        // happening. Without this, the classifier alone isn't a strong
+        // enough signal on its own to stop the reply from improvising
+        // "calling you now" language, and separately, this question being
+        // misread as explicit_request would place real outbound Twilio
+        // calls to people who were just asking how the feature works.
+        const callFeatureQuestionContext =
+          callAction === "asks_about_calling"
+            ? `\nThey just asked a plain question about how calling works — answer it directly and honestly, don't place a call, and don't say or imply a call is happening. The true answer: Co can call them — by text right now ("call me") or scheduled for later — and that's real and live. They can also call Co directly at this same number anytime — that connects to a real, live conversation with Co. Only mention this second part if it's actually what they're asking about; don't volunteer it unprompted.`
+            : "";
 
         // Burst limiter — separate from, and in addition to, the topic-aware
         // suppression above. Topic-matching only stops Co re-offering about
@@ -1226,10 +854,158 @@ Return ONLY the classification, nothing else.`,
         // agent/conversationReply.ts.
         const isThinProfileFirstMessage = !hasProfile && isFirstRealMessage && callAction === "none";
 
+        // Real action-triggering — mirrors the surface_recommendation Hume
+        // tool on the voice path, but iMessage has no tool_call plane to
+        // invoke it through, so this is a direct call to the same shared
+        // generateRecommendation() gated by a cheap classification step
+        // instead. Folded into the one reply below (never sent as a second
+        // message).
+        let recommendationContext = "";
+        try {
+          const { text: wantsClassification } = await propagateAttributes(
+            { userId: user.id, traceName: "sendblue.wantsRecommendation.classify" },
+            () =>
+              generateText({
+                model: anthropic("claude-haiku-4-5-20251001"),
+                experimental_telemetry: { isEnabled: true, functionId: "sendblue.wantsRecommendation.classify" },
+                prompt: `Classify this message as either "wants_something_concrete" or "normal_conversation".
+
+"wants_something_concrete" means they're asking Co to actually suggest, recommend, help find, or surface something specific right now (e.g. "what can you surface for me", "find me something", "what should I do about this").
+"normal_conversation" means anything else — small talk, questions about Co, answering a question, general chat.
+
+Message: "${resolvedContent}"
+
+Return ONLY the classification, nothing else.`,
+              }),
+          );
+          const wantsSomethingConcrete = wantsClassification
+            .trim()
+            .toLowerCase()
+            .replace(/^[`"']+|[`"']+$/g, "")
+            .includes("wants_something_concrete");
+
+          if (wantsSomethingConcrete) {
+            const recommendation = await generateRecommendation(user.id, resolvedContent);
+            if (recommendation.available) {
+              // This is a category/type suggestion, never a specific real
+              // venue with a link — that's the venue lookup below, a
+              // different mechanism.
+              recommendationContext = `\nYou just thought of a real recommendation for them: "${recommendation.match}" — ${recommendation.reason}. Work this into your reply naturally, as your own suggestion. This is an idea, not a specific place with a link — never say you're "sending" or "sharing" anything for this, you have nothing to send.`;
+            }
+          }
+        } catch (err: any) {
+          console.error("sendblue: recommendation classification failed (non-fatal):", err?.message ?? err);
+        }
+
+        // Real venue lookup — distinct from the abstract recommendation
+        // above. When someone mentions wanting a specific CATEGORY of place
+        // (a gym, a cafe, a climbing spot), search Google Places for real,
+        // and send an actual Google Maps link — not a description of what
+        // Co would send. Needs a known city to search against; silently
+        // skipped if none is on file yet rather than guessing one.
+        let venueContext = "";
+        let venueDeliveryMessage: string | null = null;
+        if (profile?.city) {
+          try {
+            const { text: rawVenueClassification } = await propagateAttributes(
+              { userId: user.id, traceName: "sendblue.venueRequest.classify" },
+              () =>
+                generateText({
+                  model: anthropic("claude-haiku-4-5-20251001"),
+                  experimental_telemetry: { isEnabled: true, functionId: "sendblue.venueRequest.classify" },
+                  prompt: `Recent text conversation, in order:
+${recentConversation || "(start of the conversation)"}
+
+Their latest message: "${resolvedContent}"
+
+In light of the conversation above, is their latest message wanting, looking for, or asking about a specific CATEGORY of physical place — a gym, a cafe, a climbing spot, a coworking space, a restaurant, a bar, etc.? This includes a plain follow-up like "send me some" or "yes please" if the category was already established earlier in the conversation. Not a person, not an abstract idea, an actual type of place someone could visit.
+
+If yes, how many did they ask for? Default to 1 if they didn't say a number or range; if they gave a range (e.g. "2-5"), use the upper end, capped at 5.
+
+Return ONLY valid JSON, no preamble: {"wants_venue": true or false, "venue_type": "the category, in a few words" or null, "count": a number from 1 to 5}`,
+                }),
+            );
+            const cleanVenue = rawVenueClassification.replace(/```json|```/g, "").trim();
+            const parsedVenue = JSON.parse(cleanVenue);
+            if (parsedVenue?.wants_venue && typeof parsedVenue.venue_type === "string" && parsedVenue.venue_type) {
+              const venueType: string = parsedVenue.venue_type;
+              const requestedCount = Math.max(1, Math.min(Number(parsedVenue.count) || 1, 5));
+
+              // The real Places search below has genuine network latency on
+              // top of the classification calls already run this turn —
+              // send a real, personalized acknowledgment now, before the
+              // search, then deliver the actual result as the reply below —
+              // never claim delivery before there's something real to
+              // deliver.
+              try {
+                const { text: rawHold } = await propagateAttributes(
+                  { userId: user.id, traceName: "sendblue.venueRequest.holdMessage" },
+                  () =>
+                    generateText({
+                      model: anthropic("claude-haiku-4-5-20251001"),
+                      experimental_telemetry: { isEnabled: true, functionId: "sendblue.venueRequest.holdMessage" },
+                      prompt: `You are Co, texting someone. They just asked about finding ${requestedCount > 1 ? `${requestedCount} ${venueType}s` : `a ${venueType}`}. You're about to go actually look them up for them — send a brief, warm, personalized "give me a sec" acknowledgment, referencing what they're actually looking for, not generic. Don't claim you've found anything yet. One short sentence. No exclamation points, no em dashes. Under 100 characters.`,
+                    }),
+                );
+                const holdMessage = rawHold.trim().slice(0, 100);
+                await logTextExchange(user.id, `Co replied: ${holdMessage}`);
+                try {
+                  await sendblue.messages.send({
+                    number,
+                    content: holdMessage,
+                    from_number: process.env.SENDBLUE_PHONE_NUMBER!,
+                  });
+                } catch (smsErr: any) {
+                  console.error(`Sendblue venue-lookup hold message failed for ${number} (non-fatal):`, smsErr?.message ?? smsErr);
+                }
+              } catch (err: any) {
+                console.error("sendblue: venue hold-message generation failed (non-fatal, proceeding to search anyway):", err?.message ?? err);
+              }
+
+              const venues = await findRealVenues(venueType, profile.city, requestedCount);
+              if (venues.length) {
+                // Sent as its own dedicated, complete message instead of
+                // folded into the general reply — a list of real, named
+                // things needs the room to actually say all of them.
+                try {
+                  const { text: rawIntro } = await propagateAttributes(
+                    { userId: user.id, traceName: "sendblue.venueRequest.introMessage" },
+                    () =>
+                      generateText({
+                        model: anthropic("claude-haiku-4-5-20251001"),
+                        experimental_telemetry: { isEnabled: true, functionId: "sendblue.venueRequest.introMessage" },
+                        prompt: `You are Co, texting someone. You just found ${venues.length} real ${venueType}${venues.length > 1 ? "s" : ""} for them${venues.length < requestedCount ? ` — they asked for ${requestedCount}, this is genuinely all that came back as a solid match, say so honestly` : ""}. Write ONE short, warm intro sentence to go right before a list (the list itself follows separately after your sentence — do not write the list yourself, do not include any links). No exclamation points, no em dashes. Under 150 characters.`,
+                      }),
+                  );
+                  const introLine = rawIntro.trim().slice(0, 150);
+                  const listBlock = venues.map((v) => `${v.name} — ${v.mapsUrl}`).join("\n\n");
+                  venueDeliveryMessage = `${introLine}\n\n${listBlock}`;
+                } catch (err: any) {
+                  console.error("sendblue: venue delivery intro generation failed (non-fatal, sending list plainly):", err?.message ?? err);
+                  venueDeliveryMessage = venues.map((v) => `${v.name} — ${v.mapsUrl}`).join("\n\n");
+                }
+                await pool
+                  .query(`INSERT INTO co_memories (user_id, memory_type, content) VALUES ($1, 'recommendation', $2)`, [
+                    user.id,
+                    `Co surfaced ${venues.length} real venue(s) — ${venues.map((v) => `${v.name} (${v.address}): ${v.mapsUrl}`).join("; ")}`,
+                  ])
+                  .catch((err: any) => console.error("sendblue: venue memory write failed (non-fatal):", err?.message ?? err));
+              } else {
+                // Must not repeat the "claimed to deliver, delivered
+                // nothing" failure — if the search genuinely came up empty,
+                // the reply has to say so honestly, not go quiet or invent
+                // a name.
+                venueContext = `\nYou looked for a real ${venueType} but didn't find a solid match nearby. Say so honestly in your reply — don't invent a name or pretend you found one.`;
+              }
+            }
+          } catch (err: any) {
+            console.error("sendblue: venue lookup classification failed (non-fatal):", err?.message ?? err);
+          }
+        }
+
         // Step 4.7 — Debounce the free-form reply only. Every deterministic
-        // branch above this point (identity intake, OTP, circle
-        // accept/decline, moment response, call-trigger) has already
-        // returned by now — those are typically single-word confirmations
+        // branch above this point (identity intake, OTP, call-trigger) has
+        // already returned by now — those are typically single-word confirmations
         // where added latency has no upside, and some (OTP, call-triggering)
         // are actively time-sensitive, so they're deliberately never
         // delayed. Only the conversational reply below is worth waiting on,
@@ -1293,19 +1069,6 @@ Return ONLY the classification, nothing else.`,
           .map((m: any) => m.content)
           .join("\n");
 
-        const chronologicalResult = await pool.query(
-          `SELECT content, created_at FROM co_memories
-           WHERE user_id = $1 AND memory_type = 'text_exchange'
-           ORDER BY created_at DESC
-           LIMIT 8`,
-          [user.id],
-        );
-        const recentConversation = chronologicalResult.rows
-          .reverse()
-          .map((m: any) => m.content)
-          .join("\n");
-        const styleHint = deriveStyleHint(chronologicalResult.rows);
-
         // Co Loop Stage 1 — same coverage-nudge logic the Stage 5 check-in
         // cron uses (jobs/index.ts), shared via profileExtraction.ts's
         // getCoverageNudge so a text-only relationship also works toward
@@ -1316,29 +1079,12 @@ Return ONLY the classification, nothing else.`,
         // text doesn't get re-judged or re-asked here.
         const { missingTopic } = await getCoverageNudge(user.id, recentConversation, profile);
 
-        // Ground replies in the user's actual upcoming moment (real venue,
-        // description, vibes) instead of only loose free-text memory
-        // snippets — without this, a question like "what should I expect"
-        // has nothing but the moment's name to go on, and the model
-        // fabricates a plausible-sounding but false description from it.
-        const upcomingMoment = await pool.query(
-          `SELECT m.moments_name, m.description, m.venue, m.location_name, m.vibes, m.suggested_time, m.status
-           FROM moment_responses mr
-           JOIN moments m ON m.id = mr.moment_id
-           WHERE mr.user_id = $1 AND m.status IN ('polling', 'pending_venue_approval', 'confirmed')
-           ORDER BY mr.created_at DESC
-           LIMIT 1`,
-          [user.id],
-        );
-        const moment = upcomingMoment.rows[0];
-        const momentContext = moment
-          ? `Their actual upcoming moment (use ONLY these real details — never invent activities, themes, or descriptions beyond what's listed here; if they ask something this doesn't cover, say you'll find out rather than guessing):
-          - Name: ${moment.moments_name}
-          - Venue: ${moment.venue ?? moment.location_name ?? "TBD"}
-          - Description: ${moment.description ?? "(none yet)"}
-          - Vibe: ${(moment.vibes ?? []).join(", ") || "(none yet)"}
-          - Time: ${moment.suggested_time ?? "TBD"}`
-          : "They have no upcoming moment scheduled right now.";
+        // Moments are no longer part of the product — conversationReply.ts's
+        // agent input still requires momentContext (see its own prompt),
+        // so this stays a static fallback rather than a live query against
+        // the now-unused moments/moment_responses tables. Cleaning that
+        // required field out of the agent itself is a separate change.
+        const momentContext = "They have no upcoming moment scheduled right now.";
 
         // Not gated like the reply-agent's secondary gestures above — this
         // isn't a competing "extra ask" for the reply's one secondary slot,
@@ -1350,46 +1096,91 @@ Return ONLY the classification, nothing else.`,
           ? `They sound ${turnTone} right now. Let that genuinely shape your tone and pacing, not just your words — don't be breezy, joke, or rush past it if it doesn't fit. Never name the emotion back at them like a label.`
           : "";
 
-        // Step 6 — Decide + send Co's reply via the conversation-reply
-        // agent (agent/conversationReply.ts). Replaces the old fixed
-        // callOfferContext/topicContext branching and the separate
-        // post-hoc callOfferCheck verification call — the agent now decides
-        // whether to fold in a call-offer/topic-nudge gesture and records
-        // that decision itself via tool calls (offerCall/markTopicAsked),
-        // rather than code pre-deciding and a second LLM call inferring
-        // after the fact whether the drafted text happened to include one.
-        const { replyText: coReply } = await propagateAttributes(
-          { userId: user.id, traceName: "sendblue.generateReply" },
-          () =>
-            runConversationReplyAgent({
-              userId: user.id,
-              phoneNumber: user.phone_number,
-              firstName: user.first_name,
-              resolvedContent,
-              isVoice,
-              imageForVision,
-              hasPendingOffer,
-              recentOfferBurstActive,
-              callAction,
-              isThinProfileFirstMessage,
-              missingTopic,
-              missingTopicDescription: missingTopic ? RAPPORT_TOPIC_DESCRIPTIONS[missingTopic] : null,
-              momentContext,
-              toneContext,
-              styleHint,
-              recentConversation,
-              recentMemories,
-              sendCoReply,
-            }),
-        );
+        // Advisory only, same reasoning as toneContext above — reading a
+        // shift the person never actually asked you to notice, not a rule.
+        const seekingModeContext =
+          seekingMode === "solving"
+            ? `They've moved from sharing into wanting a real answer or help deciding — meet that directly. Give them your actual read, grounded in what you know about them, instead of another reflective question or a line that waits for them to ask first.`
+            : "";
+
+        let coReply: string;
+        if (venueDeliveryMessage) {
+          // A venue list already went out as its own dedicated message above
+          // — that IS the response to what they asked for. Running the
+          // general persona reply on top of it would mean a 3rd message
+          // every time (hold + list + generic reply).
+          coReply = venueDeliveryMessage;
+          await logTextExchange(user.id, `Co replied: ${venueDeliveryMessage}`);
+          try {
+            await sendblue.messages.send({
+              number,
+              content: venueDeliveryMessage,
+              from_number: process.env.SENDBLUE_PHONE_NUMBER!,
+            });
+          } catch (smsErr: any) {
+            console.error(`Sendblue venue delivery send failed for ${number} (non-fatal):`, smsErr?.message ?? smsErr);
+          }
+        } else {
+          // Same persona the real call uses, not a separate thinner one —
+          // Co should be the same entity whether someone's talking by voice
+          // or text. contextSummary reuses buildContextSummary (the exact
+          // same "what Co knows about this person" builder the call channel
+          // uses for its own {{context_summary}} fill), so both channels
+          // stay genuinely in sync rather than each maintaining their own
+          // summary of the same underlying profile.
+          const contextSummary = await buildContextSummary(user.id);
+          const personaPrompt = await renderCoPersonaPrompt(user.first_name, contextSummary);
+
+          // Step 6 — Decide + send Co's reply via the conversation-reply
+          // agent (agent/conversationReply.ts). Replaces the old fixed
+          // callOfferContext/topicContext branching and the separate
+          // post-hoc callOfferCheck verification call — the agent now
+          // decides whether to fold in a call-offer/topic-nudge gesture and
+          // records that decision itself via tool calls
+          // (offerCall/markTopicAsked), rather than code pre-deciding and a
+          // second LLM call inferring after the fact whether the drafted
+          // text happened to include one.
+          const { replyText } = await propagateAttributes(
+            { userId: user.id, traceName: "sendblue.generateReply" },
+            () =>
+              runConversationReplyAgent({
+                userId: user.id,
+                phoneNumber: user.phone_number,
+                firstName: user.first_name,
+                resolvedContent,
+                isVoice,
+                imageForVision,
+                hasPendingOffer,
+                recentOfferBurstActive,
+                callAction,
+                isThinProfileFirstMessage,
+                isFirstContact: isFirstRealMessage,
+                missingTopic,
+                missingTopicDescription: missingTopic ? RAPPORT_TOPIC_DESCRIPTIONS[missingTopic] : null,
+                momentContext,
+                recommendationContext,
+                venueContext,
+                callFeatureQuestionContext,
+                scheduleCallContext,
+                toneContext,
+                seekingModeContext,
+                styleHint,
+                recentConversation,
+                recentMemories,
+                personaPrompt,
+                sendCoReply,
+              }),
+          );
+          coReply = replyText;
+        }
 
         // Fire-and-forget, same real pipeline a call uses (extractPsychographicProfile
         // + storeProfile + captureIntent), fed the accumulated text thread instead of
-        // a call transcript — matches co-test/src/routes/webhooks.ts's already-proven
-        // approach, ported here since prod previously had only a thin 4-field patch
-        // (life_chapters/emotional_state/goals/blockers) that couldn't create a
-        // profile row at all and never touched intent, so a text-only user's stated
-        // ask never reached co_profiles.intent for matching.filterByStatedAsk to use.
+        // a call transcript — matches production's post-call pipeline, ported here
+        // since this previously had only a thin 4-field patch (life_chapters/
+        // emotional_state/goals/blockers) that couldn't create a profile row at all
+        // and never touched intent, so a text-only user's stated ask never reached
+        // co_profiles.intent for matching to use.
         const textTranscript = `${recentConversation}\nuser: ${resolvedContent}\nassistant: ${coReply}`.trim();
         extractPsychographicProfile(textTranscript)
           .then(({ extracted }) => storeProfile(user.id, extracted, textTranscript))

@@ -691,4 +691,53 @@ export function runMigrations() {
   pool
     .query(`ALTER TABLE co_profiles ADD COLUMN IF NOT EXISTS last_proactive_outreach_at TIMESTAMPTZ`)
     .catch((err: Error) => console.error("co_profiles.last_proactive_outreach_at migration failed:", err));
+
+  // Real source of truth for a call's SID/status once calls are placed via
+  // the media-stream bridge (services/mediaStreamBridge.ts) rather than
+  // Hume's native /v0/evi/twilio integration — Hume's chat_ended webhook no
+  // longer reliably carries twilio_metadata once we hold the Twilio leg
+  // ourselves, so these columns (stamped by callTrigger.ts when a call is
+  // placed) are what the webhook's idempotency guard and voicemail-flag
+  // lookup key off of instead.
+  pool
+    .query(`ALTER TABLE users ADD COLUMN IF NOT EXISTS call_sid TEXT`)
+    .catch((err: Error) => console.error("users.call_sid migration failed:", err));
+  pool
+    .query(`ALTER TABLE users ADD COLUMN IF NOT EXISTS call_status TEXT`)
+    .catch((err: Error) => console.error("users.call_status migration failed:", err));
+
+  // Someone asking for a call at a specific future time, not right now —
+  // distinct from the existing explicit_request/would_benefit call-offer
+  // flow, which only ever places a call immediately. scheduled_for is the
+  // resolved absolute UTC instant to actually place the call (converted at
+  // capture time via the stated local date/time + IANA timezone, not
+  // resolved again later — DST doesn't shift an already-resolved UTC
+  // instant). timezone/requested_text are kept for confirmation copy and
+  // debugging a bad resolution, not re-parsed at call time.
+  pool
+    .query(
+      `CREATE TABLE IF NOT EXISTS scheduled_calls (
+        id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+        user_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+        requested_text TEXT NOT NULL,
+        timezone TEXT NOT NULL,
+        scheduled_for TIMESTAMPTZ NOT NULL,
+        status TEXT NOT NULL DEFAULT 'pending' CHECK (status IN ('pending', 'processing', 'completed', 'failed', 'cancelled')),
+        call_sid TEXT,
+        created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+      )`,
+    )
+    .then(() =>
+      pool.query(
+        `CREATE INDEX IF NOT EXISTS idx_scheduled_calls_due ON scheduled_calls (scheduled_for) WHERE status = 'pending'`,
+      ),
+    )
+    .catch((err: Error) => console.error("scheduled_calls table/index init failed:", err));
+
+  // Heads-up text sent shortly before a scheduled call actually fires —
+  // separate timestamp from scheduled_calls.created_at so the reminder job
+  // can tell "already reminded" from "not due yet" without touching status.
+  pool
+    .query(`ALTER TABLE scheduled_calls ADD COLUMN IF NOT EXISTS reminder_sent_at TIMESTAMPTZ`)
+    .catch((err: Error) => console.error("scheduled_calls.reminder_sent_at migration failed:", err));
 }

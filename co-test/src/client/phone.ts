@@ -263,12 +263,10 @@ function beginPolling() {
 testCaseSelect.addEventListener("change", saveTag);
 requestCallButton.addEventListener("click", requestCall);
 
-// Deletes the logged-in tester's own row (profile, memories, any circle
-// they own) and signs them out — see routes/login.ts's /api/login/reset.
-// Scoped to just this tester, unlike the dashboard's "hand it to the next
-// person" reset (checklist.html), which wipes every real tester at once.
+// Deletes the logged-in tester's own row (profile, memories) and signs them
+// out — see routes/login.ts's /api/login/reset.
 restartButton.addEventListener("click", async () => {
-  if (!confirm("This deletes your test data (profile, memories, any circle) and signs you out. Continue?")) return;
+  if (!confirm("This deletes your test data (profile, memories) and signs you out. Continue?")) return;
   restartButton.disabled = true;
   try {
     await fetch("/api/login/reset", { method: "POST" });

@@ -1,11 +1,10 @@
-import cron from "node-cron";
-import pool from "../../../api/src/db/db.js";
-import { triggerCall } from "../services/callTrigger.js";
+import pool from "../db/db.js";
+import { triggerCallForUser } from "../services/callTrigger.js";
 
 // The other half of "always lend an ear" — inbound calling (POST
 // /co/incoming-call) means a user can always reach Co; this is Co reaching
 // back out on its own, on a cadence the user set themselves post-call (see
-// extractCheckinCadencePreference, api/src/services/profileExtraction.ts).
+// extractCheckinCadencePreference, services/profileExtraction.ts).
 // Deliberately unconditional once due — no "is there something new to say"
 // gate. A plain check-in call fits the positioning directly; manufacturing a
 // reason each time would be the opposite of "you don't need one."
@@ -15,14 +14,14 @@ import { triggerCall } from "../services/callTrigger.js";
 // triggerCallForUser enforces elsewhere. 0 means they explicitly declined —
 // also off, but recorded as a real answer, distinct from "never asked."
 // Only > 0 values (7 or 14) are ever due.
-async function placeDueProactiveCalls(): Promise<void> {
+export async function placeDueProactiveCalls(io: import("socket.io").Server | null): Promise<void> {
   // The UPDATE's own WHERE clause is both the due-check and the claim —
-  // stamping last_proactive_outreach_at here, before triggerCall runs, means
-  // a concurrent tick can't also claim the same row (the due-condition no
-  // longer matches once stamped), and a failed call still waits out the
+  // stamping last_proactive_outreach_at here, before triggerCallForUser runs,
+  // means a concurrent tick can't also claim the same row (the due-condition
+  // no longer matches once stamped), and a failed call still waits out the
   // full cadence before retrying rather than hammering every tick — same
-  // "bump regardless of send success" reasoning jobs/index.ts's ask-checkin
-  // cron already uses for the same class of problem.
+  // "bump regardless of send success" reasoning the ask-checkin cron already
+  // uses for the same class of problem.
   const claimed = await pool.query(
     `UPDATE co_profiles cp
      SET last_proactive_outreach_at = NOW()
@@ -40,18 +39,12 @@ async function placeDueProactiveCalls(): Promise<void> {
 
   for (const row of claimed.rows) {
     try {
-      const result = await triggerCall(row.user_id);
+      const result = await triggerCallForUser(row.user_id, io);
       if (!result.success) {
-        console.error(`proactiveCheckinCallJob: triggerCall failed for user ${row.user_id}:`, result.error);
+        console.error(`proactiveCheckinCall: triggerCallForUser failed for user ${row.user_id}:`, result.error);
       }
     } catch (err: any) {
-      console.error(`proactiveCheckinCallJob: unexpected error calling user ${row.user_id} (non-fatal):`, err?.message ?? err);
+      console.error(`proactiveCheckinCall: unexpected error calling user ${row.user_id} (non-fatal):`, err?.message ?? err);
     }
   }
-}
-
-export function registerProactiveCheckinCallJob(): void {
-  cron.schedule("*/15 * * * *", () => {
-    placeDueProactiveCalls().catch((err) => console.error("proactiveCheckinCallJob: poll failed:", err?.message ?? err));
-  });
 }

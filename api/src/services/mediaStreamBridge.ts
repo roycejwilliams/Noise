@@ -1,6 +1,6 @@
 import { HumeClient } from "hume";
 import type WebSocket from "ws";
-import pool from "../../../api/src/db/db.js";
+import pool from "../db/db.js";
 import { buildContextSummary } from "./callContext.js";
 import { decodeMulawBuffer, encodeMulawBuffer, parseWav, resampleLinear, toMono } from "./audioCodec.js";
 
@@ -11,8 +11,8 @@ import { decodeMulawBuffer, encodeMulawBuffer, parseWav, resampleLinear, toMono 
 // message sent over a live WebSocket connection to Hume, which requires
 // something to actually hold that connection. This is that something: Twilio
 // streams raw call audio to us (see callTrigger.ts's <Connect><Stream>), we
-// open our own EVI connection via the same SDK method co-test's browser call
-// page already uses (client.ts), and relay audio both directions.
+// open our own EVI connection via the Hume SDK, and relay audio both
+// directions.
 //
 // Twilio Media Streams speaks mulaw/8000; Hume only accepts linear16 PCM and
 // returns 48kHz WAV — audioCodec.ts handles both directions.
@@ -54,8 +54,7 @@ type HumeConnectionHandle = {
 // Pre-warmed connections, keyed by userId — see prewarmHumeConnection.
 // Known limitation: two simultaneous calls to the same user would collide
 // (the second prewarm is a no-op, the first's connection gets adopted by
-// whichever stream starts first) — not worth solving for co-test's scope,
-// same tolerance this file already had for AMD/JWT (see callTrigger.ts).
+// whichever stream starts first) — not worth solving given call volume.
 const pendingConnections = new Map<string, HumeConnectionHandle>();
 
 function forwardCallerAudio(handle: HumeConnectionHandle, mulawBuf: Buffer) {
@@ -105,21 +104,29 @@ function createHumeConnection(userId: string): HumeConnectionHandle {
 
   (async () => {
     try {
-      const [userResult, contextSummary] = await Promise.all([
+      const [userResult, profileResult, contextSummary] = await Promise.all([
         pool.query(`SELECT first_name FROM users WHERE id = $1`, [userId]),
+        pool.query(`SELECT hume_chat_group_id FROM co_profiles WHERE user_id = $1`, [userId]),
         buildContextSummary(userId),
       ]);
       if (handle.closed) return;
       const firstName = userResult.rows[0]?.first_name ?? "";
+      const resumedChatGroupId: string | undefined = profileResult.rows[0]?.hume_chat_group_id ?? undefined;
 
       const humeSocket = hume.empathicVoice.chat.connect({
         configId: process.env.HUME_CONFIG_ID!,
+        // Resumes the same Hume chat group across calls (persisted by
+        // co.ts's chat_ended handler) so a returning caller's conversation
+        // actually continues rather than starting cold every time — the old
+        // native /v0/evi/twilio integration passed this as a query param
+        // (resumed_chat_group_id); the bridge's chat.connect() takes it here.
+        ...(resumedChatGroupId ? { resumedChatGroupId } : {}),
         sessionSettings: {
           customSessionId: userId,
           audio: { encoding: "linear16", sampleRate: TWILIO_SAMPLE_RATE, channels: 1 },
           // The actual, documented mechanism for {{first_name}}/{{context_summary}}
-          // in the prompt (see api/prompts/co-system-prompt.md) — unlike the old
-          // /v0/evi/twilio query params, this one really reaches EVI.
+          // in the prompt — unlike the old /v0/evi/twilio query params, this
+          // one really reaches EVI.
           variables: { first_name: firstName, context_summary: contextSummary },
         },
       });
@@ -156,10 +163,10 @@ function createHumeConnection(userId: string): HumeConnectionHandle {
           console.error("mediaStreamBridge: Hume reported an error:", m);
         }
         // chat_started/chat_ended/tool_call/user_message/assistant_message are
-        // deliberately not handled here — those still arrive at /co/webhook the
+        // deliberately not handled here — those still arrive at /webhook the
         // same way they always have (webhooks are a config-level Hume feature,
         // independent of which client opened the audio connection), so the
-        // existing extraction/tool-call pipeline in webhooks.ts is untouched.
+        // existing extraction/tool-call pipeline in co.ts is untouched.
       });
 
       humeSocket.on("open", () => {
@@ -181,10 +188,10 @@ function createHumeConnection(userId: string): HumeConnectionHandle {
 }
 
 // Called from callTrigger.ts (right after placing an outbound call) and
-// webhooks.ts's /co/incoming-call (right after resolving the caller) — as
-// early as possible, so the DB lookup + Hume handshake happen during ring
-// time instead of only starting after the person has already picked up.
-// No-ops if a connection is already pending for this user.
+// co.ts's /incoming-call (right after resolving the caller) — as early as
+// possible, so the DB lookup + Hume handshake happen during ring time
+// instead of only starting after the person has already picked up. No-ops
+// if a connection is already pending for this user.
 export function prewarmHumeConnection(userId: string): void {
   if (pendingConnections.has(userId)) return;
   const handle = createHumeConnection(userId);
@@ -231,7 +238,7 @@ export function bridgeTwilioMediaStream(twilioWs: WebSocket): void {
         // user_id arrives as a <Parameter> (see callTrigger.ts) — Twilio
         // strips query strings from Stream URLs entirely, so this is the
         // only place it's actually reachable, confirmed live. Only ever
-        // absent if something upstream is broken — /co/incoming-call rejects
+        // absent if something upstream is broken — /incoming-call rejects
         // an unrecognized caller before ever reaching this bridge, and
         // callTrigger.ts always sets it for outbound calls — so closing here
         // is a real signal something's wrong, not an expected path.
