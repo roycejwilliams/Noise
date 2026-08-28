@@ -25,7 +25,7 @@ import {
 } from "../services/profileExtraction.js";
 import { generateRecommendation } from "../services/recommendation.js";
 import { findRealVenues } from "../services/venueLookup.js";
-import { runConversationReplyAgent } from "../agent/conversationReply.js";
+import { runConversationReplyAgent, filterRelevantMemories } from "../agent/conversationReply.js";
 import { triggerCallForUser } from "../services/callTrigger.js";
 import sendblue from "../services/sendblue.js";
 import { generateVoiceNote } from "../services/voiceNote.js";
@@ -1080,9 +1080,15 @@ Return ONLY valid JSON, no preamble: {"wants_venue": true or false, "venue_type"
             [user.id],
           );
         }
-        const recentMemories = memoriesResult.rows
-          .map((m: any) => m.content)
-          .join("\n");
+        // Filtered for genuine relevance to what they just said before the
+        // reply agent ever sees it — see filterRelevantMemories in
+        // conversationReply.ts. Vector similarity alone isn't enough of a
+        // relevance signal to hand this to the model as foreground context;
+        // this is what makes it safe to do so.
+        const rawMemoryCandidates = memoriesResult.rows.map((m: any) => m.content).filter(Boolean);
+        const recentMemories = rawMemoryCandidates.length
+          ? await filterRelevantMemories(resolvedContent, rawMemoryCandidates)
+          : "";
 
         // Co Loop Stage 1 — same coverage-nudge logic the Stage 5 check-in
         // cron uses (jobs/index.ts), shared via profileExtraction.ts's
@@ -1182,6 +1188,7 @@ Return ONLY valid JSON, no preamble: {"wants_venue": true or false, "venue_type"
                 styleHint,
                 recentConversation,
                 recentMemories,
+                contextSummary,
                 personaPrompt,
                 sendCoReply,
               }),

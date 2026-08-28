@@ -28,6 +28,18 @@ export type ConversationReplyInput = {
   styleHint: string;
   recentConversation: string;
   recentMemories: string;
+  // Same buildContextSummary() output baked into personaPrompt's
+  // {{context_summary}} slot (see coPersona.ts) — but that slot only gets
+  // read by the model as an instruction for OPENING a call ("Phase 1 —
+  // Rapport... open by picking up from something specific"). Over text, the
+  // system prompt below tells the model to disregard the call's phase
+  // structure, which left this genuinely unclear to be weighted the same
+  // way on turn 40 of an ongoing thread. Surfaced again here, explicitly and
+  // unconditionally, so what Co already knows about this person carries the
+  // same weight as something they just said in this conversation — not
+  // background trivia contingent on a call-opening instruction that no
+  // longer applies.
+  contextSummary: string;
   // The actual live Hume EVI system prompt (see coPersona.ts), rendered with
   // this person's context — same entity whether talking by voice or text.
   // Null only if the Hume config fetch itself failed; falls back to a
@@ -78,6 +90,45 @@ Return ONLY "yes" or "no".`,
   return true;
 }
 
+// Resolves whether each topically-retrieved memory actually applies to what
+// was just said, before it's handed to the reply agent as foreground
+// context — see the Step 5 comment in sendblue.ts for the bug this guards
+// against: vector similarity search has no sense of recency or real
+// relevance, and unfiltered this produced a reply referencing an unrelated
+// "3pm" proposal from a different conversation entirely. Cheap/fast model,
+// same tradeoff as verifyAndRecordCallOffer below: a yes/no-shaped
+// classification, not a creative task. Fails closed (drops the memories)
+// rather than open, since passing through unverified content is exactly
+// the failure mode this exists to prevent.
+export async function filterRelevantMemories(resolvedContent: string, candidates: string[]): Promise<string> {
+  if (!candidates.length) return "";
+  try {
+    const { text } = await generateText({
+      model: anthropic("claude-haiku-4-5-20251001"),
+      experimental_telemetry: { isEnabled: true, functionId: "agent.conversationReply.filterRelevantMemories" },
+      prompt: `A user just said: "${resolvedContent}"
+
+Here are memories retrieved by topic similarity — they may or may not actually be about what the user just said (similarity search has no sense of recency or real relevance):
+${candidates.map((c, i) => `${i + 1}. ${c}`).join("\n")}
+
+Return ONLY the numbers of the memories that are genuinely relevant to what the user just said, comma-separated (e.g. "1,3"). Return "none" if none of them actually apply.`,
+    });
+    const trimmed = text.trim().toLowerCase();
+    if (trimmed.startsWith("none")) return "";
+    const indices = trimmed
+      .split(",")
+      .map((s) => parseInt(s.trim(), 10) - 1)
+      .filter((i) => Number.isInteger(i) && i >= 0 && i < candidates.length);
+    return indices.map((i) => candidates[i]).join("\n");
+  } catch (err: any) {
+    console.error(
+      "conversationReply: filterRelevantMemories failed (non-fatal, dropping retrieved memories this turn):",
+      err?.message ?? err,
+    );
+    return "";
+  }
+}
+
 // Co Loop Stage 1, agentized: replaces the hardcoded shouldOfferCall/
 // usingTopicNudge branching with a tool-calling loop that decides the reply
 // and topic-nudge gesture. Whether a call offer went out is NOT
@@ -111,17 +162,20 @@ You are having this specific exchange over text message, not a phone call — th
 
 ${input.firstName} is texting you — you already have their number, never ask them for it.
 
+What you already know about ${input.firstName} from before — treat this the same as something they just told you in this conversation, not as optional background to bring up only if convenient:
+${input.contextSummary || "(nothing on file yet — this is effectively a first real conversation with them)"}
+
 ${input.momentContext}
 ${input.recommendationContext}${input.venueContext}${input.callFeatureQuestionContext}${input.scheduleCallContext}
 ${input.toneContext}
 ${input.seekingModeContext}
 ${input.styleHint}
-${input.isFirstContact ? `\nThis is the very start of your first real conversation with ${input.firstName} — they just finished the intro sequence (greeting, what CoPatible is, saving your contact, verification). What they just said may be nothing more than a greeting, not real content to react to. If it IS something real, pick up from it genuinely. If it's just a greeting or blank, don't react to it as if it were substantive — instead open the real conversation yourself, the same way you would at the start of a call: warm, unhurried, inviting the real version of their life, not a status update.\n` : ""}
+${input.isFirstContact ? `\nThis is the very start of your first real conversation with ${input.firstName} — they just finished the intro sequence (greeting, what CoPatible is, saving your contact, verification). What they just said may be nothing more than a greeting, not real content to react to.${input.contextSummary ? ` You already have real context on them (see "What you already know" above, from onboarding or a prior touchpoint) — lead with it. Your first line should pick up from something specific and real in it, the same way you would open a call, not a generic greeting that ignores what you already have.` : ""} If it IS something real, pick up from it genuinely. If it's just a greeting or blank, don't react to it as if it were substantive — instead open the real conversation yourself${input.contextSummary ? ", grounded in what you already know about them" : ""}, warm, unhurried, inviting the real version of their life, not a status update.\n` : ""}
 Recent conversation, in order (this is the actual thread — follow it; don't jump to older topics from "other context" below unless they bring it up again):
 ${input.recentConversation || "(this is the start of the conversation)"}
 
-Other context that might be relevant, but may be from a different time or topic — use only if it actually applies to what they just said:
-${input.recentMemories}
+What Co knows from past conversations that's genuinely relevant to what they just said — already checked for relevance before being handed to you, so treat it with the same weight as this thread, not as optional trivia:
+${input.recentMemories || "(nothing from past conversations applies to what they just said)"}
 
 ${input.imageForVision ? "They just sent the attached photo." : `They just said: "${input.resolvedContent}"`}
 
