@@ -2,6 +2,7 @@ import { generateText } from "ai";
 import { anthropic } from "@ai-sdk/anthropic";
 import { propagateAttributes } from "@langfuse/tracing";
 import pool from "../db/db.js";
+import { getTieredRecommendation } from "./tieredRecommendation.js";
 
 // Intent-Layer-only real action: Co can actually invoke this (voice via
 // Hume's tool_call plane, iMessage via a direct call from the ongoing-chat
@@ -68,6 +69,43 @@ export async function generateRecommendation(userId: string, currentMessage?: st
     ]
       .filter(Boolean)
       .join("\n");
+
+    // Tiered engine first (Tier 1 Co event → Tier 2 public event → Tier 3
+    // real opportunity via X) — real, grounded, never invented. Only falls
+    // through to the old generic LLM-category behavior below if all three
+    // tiers come back empty, same "something is better than silence" logic
+    // this function always had, just no longer the FIRST thing tried.
+    const askText = currentMessage || latestIntent?.text || profile.goals?.[0];
+    if (askText) {
+      const tierMatch = await getTieredRecommendation(
+        { text: askText, embedding: askText === latestIntent?.text ? latestIntent?.embedding : null },
+        profile.city ?? null,
+      ).catch((err: any) => {
+        console.error("generateRecommendation: getTieredRecommendation failed (non-fatal):", err?.message ?? err);
+        return null;
+      });
+      if (tierMatch) {
+        const result: RecommendationResult = { available: true, match: `${tierMatch.name} (${tierMatch.url ?? "Co's own calendar"})`, reason: tierMatch.reason };
+        await pool
+          .query(`INSERT INTO co_memories (user_id, memory_type, content) VALUES ($1, 'recommendation', $2)`, [
+            userId,
+            `Co surfaced a Tier ${tierMatch.kind} recommendation — ${tierMatch.name}: ${tierMatch.reason}`,
+          ])
+          .catch((err) => console.error("Recommendation memory write failed (non-fatal):", err));
+
+        // Royce, 2026-08-30: Tier 1/2 matches carry a real event_api_id —
+        // record it so another person getting surfaced this exact same
+        // event later is caught as a certain match. Tier 3 "opportunities"
+        // have no event_api_id (not a shared event), skipped naturally.
+        if ("event_api_id" in tierMatch) {
+          const { recordSurfacedEventAndMatch } = await import("./eventMatching.js");
+          recordSurfacedEventAndMatch(userId, tierMatch.event_api_id, tierMatch.name, tierMatch.event_date).catch((err: any) =>
+            console.error("recordSurfacedEventAndMatch failed (non-fatal):", err?.message ?? err),
+          );
+        }
+        return result;
+      }
+    }
 
     const { text: raw } = await propagateAttributes(
       { userId, traceName: "co.recommendation.generate" },

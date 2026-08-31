@@ -795,6 +795,10 @@ Transcript:
       sweepAskAgainstNetwork(user_id).catch((err) =>
         console.error("sweepAskAgainstNetwork failed (non-fatal):", err),
       );
+      // Luma/X event surfacing moved off this instant-fire-on-every-ask path
+      // (Royce, 2026-08-30 — "needs to surface periodically") onto
+      // jobs/index.ts's cadence cron instead, same shape as ask_checkins'
+      // existing check-in cadence — see eventSurfacingSweep.ts.
     } else if (ask?.type === "offering") {
       sweepOfferingAgainstNetwork(user_id).catch((err) =>
         console.error("sweepOfferingAgainstNetwork failed (non-fatal):", err),
@@ -807,3 +811,79 @@ Transcript:
     return null;
   }
 }
+
+type CapturedEventMentionData = {
+  event_name: string | null;
+  event_date: string | null; // resolved ISO date (YYYY-MM-DD), or null
+  event_location: string | null;
+};
+
+// "Nudge Co users at events Co doesn't own" — same shape as captureIntent
+// (one Haiku pass, only what's actually stated, embedding on the richest
+// text), extracting a planned event mention instead of an ask. The model
+// resolves relative dates ("Thursday", "next week") against today's date
+// itself rather than a separate date-parsing step — genuinely ambiguous ones
+// come back null rather than a guessed date, since a wrong date would
+// silently break the date-window matching in eventMatching.ts.
+export async function extractPlannedEventMention(user_id: string, transcript: string): Promise<void> {
+  try {
+    const today = new Date().toISOString().slice(0, 10);
+    const { text: raw } = await propagateAttributes(
+      { userId: user_id, traceName: "profileExtraction.extractPlannedEventMention" },
+      () =>
+        generateText({
+          model: anthropic("claude-haiku-4-5-20251001"),
+          experimental_telemetry: { isEnabled: true, functionId: "profileExtraction.extractPlannedEventMention" },
+          prompt: `Read this transcript. Only include what the user (the "user:" lines) actually stated — never guess or infer, never treat something Co said as if the user said it.
+
+Did the user mention a specific real-world event they're planning to attend (a conference, meetup, party, gathering — not a vague "I should get out more")? If so extract:
+1. event_name — however they described it, in their own words.
+2. event_date — resolve this to an ISO date (YYYY-MM-DD) using today's date, ${today}, as the reference point. Only fill this in if you can confidently resolve it (a specific day, or an unambiguous relative reference like "this Thursday"). null if too vague ("sometime next month", no date mentioned at all) — do not guess.
+3. event_location — city or venue if mentioned, else null.
+
+Return ONLY valid JSON, no preamble:
+{"event_name": "..." or null, "event_date": "YYYY-MM-DD" or null, "event_location": "..." or null}
+
+Transcript:
+"${transcript}"`,
+        }),
+    );
+
+    const clean = raw.replace(/```json|```/g, "").trim();
+    if (!clean) return;
+
+    let parsed: CapturedEventMentionData | null = null;
+    try {
+      parsed = JSON.parse(clean);
+    } catch {
+      return;
+    }
+    if (!parsed?.event_name) return;
+
+    const embeddingSource = [parsed.event_name, parsed.event_location].filter(Boolean).join(", ");
+    const embedding = await generateEmbedding(embeddingSource).catch(() => null);
+    if (!embedding) return; // matching depends entirely on the embedding — no point storing without one
+
+    const { rows } = await pool.query(
+      `INSERT INTO planned_event_mentions (user_id, event_name_raw, event_date, event_location, embedding)
+       VALUES ($1, $2, $3, $4, $5::vector)
+       RETURNING id`,
+      [user_id, parsed.event_name, parsed.event_date, parsed.event_location, `[${embedding.join(",")}]`],
+    );
+
+    // Immediately check for other Co users who mentioned roughly the same
+    // event — same "capture, then sweep right away" pattern captureIntent
+    // uses for sweepAskAgainstNetwork above, rather than waiting on a batch job.
+    const { matchAndScoreEventMention } = await import("./eventMatching.js");
+    matchAndScoreEventMention(rows[0].id).catch((err: any) =>
+      console.error("matchAndScoreEventMention failed (non-fatal):", err?.message ?? err),
+    );
+  } catch (err: any) {
+    console.error("extractPlannedEventMention failed (non-fatal):", err?.message ?? err);
+  }
+}
+
+// Luma/X event surfacing used to live here as an instant fire-on-every-ask
+// function (surfaceMatchingLumaEvent). Moved 2026-08-30 to
+// eventSurfacingSweep.ts's attemptEventSurfacing, driven by a periodic cron
+// (jobs/index.ts) instead — see that file for why.

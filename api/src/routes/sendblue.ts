@@ -18,6 +18,7 @@ import { findOrCreateUserByPhone, hasPendingEmail, splitFullName } from "../serv
 import { isOptInKeyword, isOptOutKeyword } from "../services/optOut.js";
 import {
   captureIntent,
+  extractPlannedEventMention,
   extractPsychographicProfile,
   getCoverageNudge,
   RAPPORT_TOPIC_DESCRIPTIONS,
@@ -1209,6 +1210,9 @@ Return ONLY valid JSON, no preamble: {"wants_venue": true or false, "venue_type"
           .catch((err: any) => console.error("sendblue: text-based profile extraction failed (non-fatal):", err?.message ?? err));
         captureIntent(user.id, textTranscript).catch((err: any) =>
           console.error("sendblue: text-based intent capture failed (non-fatal):", err?.message ?? err),
+        );
+        extractPlannedEventMention(user.id, textTranscript).catch((err: any) =>
+          console.error("sendblue: text-based event-mention capture failed (non-fatal):", err?.message ?? err),
         );
 
         io.to(`user:${user.id}`).emit("co:message", { message: coReply });

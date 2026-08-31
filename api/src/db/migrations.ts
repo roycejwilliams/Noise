@@ -642,6 +642,15 @@ export function runMigrations() {
     .query(`ALTER TABLE ask_checkins ADD COLUMN IF NOT EXISTS last_response_at TIMESTAMPTZ`)
     .catch((err: Error) => console.error("ask_checkins.last_response_at migration failed:", err));
 
+  // "Luma & X asks need to surface periodically" (Royce, 2026-08-30) — the
+  // event/opportunity surfacing cadence cron (jobs/index.ts) reuses this
+  // same ask_checkins row (already one per active seeking ask) rather than
+  // a parallel table, tracked separately from last_checked_at since
+  // surfacing and check-in are different actions on different cadences.
+  pool
+    .query(`ALTER TABLE ask_checkins ADD COLUMN IF NOT EXISTS last_surfaced_at TIMESTAMPTZ`)
+    .catch((err: Error) => console.error("ask_checkins.last_surfaced_at migration failed:", err));
+
   // Coverage-awareness extensions (profileExtraction.ts's getCoverageNudge) —
   // topics_covered persists which RAPPORT_TOPICS have been confirmed (topic
   // -> ISO timestamp), shared across call/text/check-in so a topic answered
@@ -740,4 +749,154 @@ export function runMigrations() {
   pool
     .query(`ALTER TABLE scheduled_calls ADD COLUMN IF NOT EXISTS reminder_sent_at TIMESTAMPTZ`)
     .catch((err: Error) => console.error("scheduled_calls.reminder_sent_at migration failed:", err));
+
+  // Event Curation — "Standing profile scored against full Luma guest list."
+  // One row per (event, person) pair: for each matched Co user on an event's
+  // guest list, who else on that SAME guest list is worth meeting, ranked.
+  // event_id is Luma's own api_id (their ID scheme, not ours) — TEXT, not
+  // UUID. A precompute, not live: services/eventScoring.ts writes this once
+  // per event.created/guest.registered/guest.updated webhook, and the
+  // one-time nudge (App Clip card stack, not yet built) reads it rather than
+  // recomputing per request. UNIQUE (event_id, person_id) + the caller's own
+  // ON CONFLICT DO UPDATE make re-scoring the same event idempotent, same
+  // pattern as relevance_edges above — a guest list changes as people
+  // register, so this needs to be safely re-runnable, not one-shot.
+  pool
+    .query(
+      `CREATE TABLE IF NOT EXISTS event_guest_rankings (
+        id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+        event_id TEXT NOT NULL,
+        person_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+        ranked_candidates JSONB NOT NULL,
+        method_summary TEXT NOT NULL,
+        computed_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+        UNIQUE (event_id, person_id)
+      )`,
+    )
+    .then(() =>
+      pool.query(
+        `CREATE INDEX IF NOT EXISTS idx_event_guest_rankings_event ON event_guest_rankings (event_id)`,
+      ),
+    )
+    .catch((err: Error) => console.error("event_guest_rankings table/index init failed:", err));
+
+  // Cooldown guard for eventScoring.ts's ask-solicitation — without this, a
+  // person with no stated ask got re-solicited every time scoreMatchedGroup
+  // re-ran (guest.registered/guest.updated can each retrigger it), which
+  // could mean several solicitation texts in one day for the same event.
+  // One row per (event, person); checked before soliciting, not after.
+  pool
+    .query(
+      `CREATE TABLE IF NOT EXISTS event_ask_solicitations (
+        event_id TEXT NOT NULL,
+        person_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+        solicited_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+        PRIMARY KEY (event_id, person_id)
+      )`,
+    )
+    .catch((err: Error) => console.error("event_ask_solicitations table init failed:", err));
+
+  // "Nudge Co users at events Co doesn't own" — captured from conversation
+  // (extractPlannedEventMention, profileExtraction.ts), the same way
+  // captureIntent captures asks. Needs its own table, not a JSONB array on
+  // co_profiles, because the whole point is querying ACROSS users to find
+  // whoever else mentioned roughly the same event — JSONB can't do that
+  // efficiently. embedding + event_date drive the match (see
+  // services/eventMatching.ts): embedding similarity within a date window,
+  // not string matching, since two people describe the same event
+  // differently ("TC Disrupt" vs "TechCrunch Disrupt SF").
+  pool
+    .query(
+      `CREATE TABLE IF NOT EXISTS planned_event_mentions (
+        id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+        user_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+        event_name_raw TEXT NOT NULL,
+        event_date DATE,
+        event_location TEXT,
+        embedding vector(1536),
+        created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+      )`,
+    )
+    .then(() =>
+      pool.query(`CREATE INDEX IF NOT EXISTS idx_planned_event_mentions_date ON planned_event_mentions (event_date)`),
+    )
+    .then(() =>
+      pool.query(`CREATE INDEX IF NOT EXISTS planned_event_mentions_embedding_hnsw_idx
+        ON planned_event_mentions USING hnsw (embedding vector_cosine_ops)
+        WITH (m = 16, ef_construction = 64)`),
+    )
+    .catch((err: Error) => console.error("planned_event_mentions table/index init failed:", err));
+
+  // "Proactive event-change/cancellation texts" — Event Updated carries the
+  // event's current state, not a diff, so this stores the last-known
+  // snapshot to diff against (eventChangeNotification.ts) rather than only
+  // being able to say "something changed" with no specifics. One row per
+  // event, overwritten on every update.
+  pool
+    .query(
+      `CREATE TABLE IF NOT EXISTS luma_event_snapshots (
+        event_id TEXT PRIMARY KEY,
+        name TEXT NOT NULL,
+        start_at TIMESTAMPTZ NOT NULL,
+        end_at TIMESTAMPTZ,
+        location TEXT,
+        updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+      )`,
+    )
+    .catch((err: Error) => console.error("luma_event_snapshots table init failed:", err));
+
+  // "External event ingestion for Tier 2/3" — capture-only for now (Royce,
+  // 2026-08-30): Tier 2 of the recommendation engine already does live
+  // search against Luma's public discovery feed, so this doesn't need to
+  // feed anything today. Just logs what Calendar Event Added told us, so
+  // nothing is lost once/if a real caching or ingestion decision gets made.
+  pool
+    .query(
+      `CREATE TABLE IF NOT EXISTS external_luma_events_seen (
+        id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+        event_id TEXT NOT NULL,
+        raw_payload JSONB NOT NULL,
+        seen_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+      )`,
+    )
+    .catch((err: Error) => console.error("external_luma_events_seen table init failed:", err));
+
+  // "Surfaced-event matching" (Royce, 2026-08-30): a stronger, exact-match
+  // alternative to planned_event_mentions' fuzzy embedding/date-window
+  // matching — if Co itself surfaces the SAME real event (Tier 1/2 of the
+  // recommendation engine) to two different people, that's a certain match
+  // with zero ambiguity, no similarity threshold needed. See
+  // eventMatching.ts's recordSurfacedEventAndMatch.
+  pool
+    .query(
+      `CREATE TABLE IF NOT EXISTS surfaced_events (
+        id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+        user_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+        event_api_id TEXT NOT NULL,
+        event_name TEXT NOT NULL,
+        surfaced_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+      )`,
+    )
+    .then(() =>
+      pool.query(`CREATE INDEX IF NOT EXISTS idx_surfaced_events_event ON surfaced_events (event_api_id)`),
+    )
+    .catch((err: Error) => console.error("surfaced_events table/index init failed:", err));
+
+  // Unifies surfaced_events with planned_event_mentions' fuzzy matching
+  // (Royce, 2026-08-30) — without an embedding + the event's own date,
+  // surfaced_events could only exact-match against itself, never against a
+  // self-reported mention of the same real event. event_date is the EVENT's
+  // date (from Luma), not surfaced_at (when Co happened to recommend it) —
+  // the date window logic needs the former.
+  pool
+    .query(`ALTER TABLE surfaced_events ADD COLUMN IF NOT EXISTS event_date DATE`)
+    .catch((err: Error) => console.error("surfaced_events.event_date migration failed:", err));
+  pool
+    .query(`ALTER TABLE surfaced_events ADD COLUMN IF NOT EXISTS embedding vector(1536)`)
+    .catch((err: Error) => console.error("surfaced_events.embedding migration failed:", err));
+  pool
+    .query(`CREATE INDEX IF NOT EXISTS surfaced_events_embedding_hnsw_idx
+      ON surfaced_events USING hnsw (embedding vector_cosine_ops)
+      WITH (m = 16, ef_construction = 64)`)
+    .catch((err: Error) => console.error("surfaced_events embedding index failed:", err));
 }

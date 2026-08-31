@@ -1,0 +1,181 @@
+import pool from "../db/db.js";
+import { runEventAskSolicitationAgent } from "../agent/eventAskSolicitation.js";
+import { getEventGuestList, listCalendarEvents, type LumaGuest } from "./luma.js";
+import { getActiveSeekingAsk, scoreAgainstStatedAsk } from "./matching.js";
+
+// Event Curation — "Standing profile scored against full Luma guest list."
+// Scoped strictly to one event's guest list, not the whole network — a Co
+// user with a profile who ISN'T attending this event is already served by
+// the separate tiered-recommendation route and the general Stage 3 network
+// sweep (relevance.ts); this file has nothing to do with them.
+
+export type ScorableGuest = {
+  user_id: string;
+  first_name: string;
+  phone_number: string;
+  goals?: string[];
+  blockers?: string[];
+  activity_preferences?: string[];
+  intent?: unknown;
+};
+
+export type RankedCandidate = {
+  candidate_id: string;
+  score: number;
+  reason: string;
+  mutual: boolean;
+  method: "ask";
+};
+
+// Luma gives us email/phone/name, never a user_id — this is the only place
+// that translates "who's on the guest list" into "which of them are actual
+// Co users we have a profile for." A guest with no phone match isn't a
+// candidate for or against anyone's ranking; there's nothing to score.
+export async function matchGuestsToUsers(guests: LumaGuest[]): Promise<ScorableGuest[]> {
+  const phones = guests.map((g) => g.phone).filter((p): p is string => Boolean(p));
+  if (!phones.length) return [];
+
+  const { rows } = await pool.query(
+    `SELECT cp.user_id, u.first_name, u.phone_number, cp.goals, cp.blockers, cp.activity_preferences, cp.intent
+     FROM co_profiles cp
+     JOIN users u ON u.id = cp.user_id
+     WHERE u.phone_number = ANY($1::text[])`,
+    [phones],
+  );
+  return rows;
+}
+
+// Cooldown guard (Royce, 2026-08-30) — without this, guest.registered/
+// guest.updated retriggering scoreMatchedGroup would re-solicit the same
+// person every time, since "no ask yet" stays true until they actually
+// reply. 3 days, same first-guess cadence as the Luma/X surfacing sweep.
+const SOLICITATION_COOLDOWN_DAYS = 3;
+
+async function wasRecentlySolicited(eventId: string, personId: string): Promise<boolean> {
+  const { rows } = await pool.query(
+    `SELECT 1 FROM event_ask_solicitations
+     WHERE event_id = $1 AND person_id = $2 AND solicited_at > NOW() - ($3 || ' days')::interval`,
+    [eventId, personId, SOLICITATION_COOLDOWN_DAYS],
+  );
+  return rows.length > 0;
+}
+
+async function markSolicited(eventId: string, personId: string): Promise<void> {
+  await pool.query(
+    `INSERT INTO event_ask_solicitations (event_id, person_id, solicited_at)
+     VALUES ($1, $2, NOW())
+     ON CONFLICT (event_id, person_id) DO UPDATE SET solicited_at = NOW()`,
+    [eventId, personId],
+  );
+}
+
+async function storeRanking(eventId: string, personId: string, ranked: RankedCandidate[], methodSummary: string): Promise<void> {
+  await pool.query(
+    `INSERT INTO event_guest_rankings (event_id, person_id, ranked_candidates, method_summary)
+     VALUES ($1, $2, $3::jsonb, $4)
+     ON CONFLICT (event_id, person_id) DO UPDATE SET
+       ranked_candidates = EXCLUDED.ranked_candidates,
+       method_summary = EXCLUDED.method_summary,
+       computed_at = NOW()`,
+    [eventId, personId, JSON.stringify(ranked), methodSummary],
+  );
+}
+
+// Shared core: given a group of already-matched Co users (however that group
+// was assembled — a Luma guest list, or a cluster of people who separately
+// reported the same non-Co event, see eventMatching.ts), score every person
+// against every OTHER person in the SAME group. Ask-based only
+// (scoreAgainstStatedAsk, LLM-graded, reused as-is from matching.ts/
+// relevance.ts) — no embedding-only fallback. A person with no active stated
+// ask does not get ranked this pass; Co asks them for one first
+// (runEventAskSolicitationAgent), and they become scoreable once/if that
+// lands (their reply flows through the existing captureIntent pipeline, same
+// as any other stated ask).
+export async function scoreMatchedGroup(
+  eventId: string,
+  eventName: string,
+  matched: ScorableGuest[],
+  opts: { dryRun?: boolean } = {},
+): Promise<{ scoredCount: number; solicitedCount: number; matchedCount: number }> {
+  if (matched.length < 2) {
+    console.log(`eventScoring: ${eventId} has ${matched.length} matched Co user(s) — nothing to rank yet`);
+    return { scoredCount: 0, solicitedCount: 0, matchedCount: matched.length };
+  }
+
+  let scoredCount = 0;
+  let solicitedCount = 0;
+  for (const person of matched) {
+    const others = matched.filter((m) => m.user_id !== person.user_id);
+    const ask = getActiveSeekingAsk(person.intent);
+
+    if (!ask?.text) {
+      if (await wasRecentlySolicited(eventId, person.user_id)) {
+        continue; // already asked within the cooldown window — wait for a reply or the next window
+      }
+      await runEventAskSolicitationAgent(
+        { userId: person.user_id, firstName: person.first_name, phoneNumber: person.phone_number },
+        eventName,
+        opts,
+      ).catch((err: any) =>
+        console.error(`eventScoring: ask solicitation failed for ${person.user_id} (non-fatal):`, err?.message ?? err),
+      );
+      await markSolicited(eventId, person.user_id);
+      solicitedCount++;
+      continue;
+    }
+
+    const askerContextParts = [
+      person.goals?.length ? `goals: ${person.goals.join(", ")}` : null,
+      person.blockers?.length ? `blockers: ${person.blockers.join(", ")}` : null,
+    ].filter((p): p is string => Boolean(p));
+    const scored = await scoreAgainstStatedAsk(
+      ask,
+      others,
+      askerContextParts.length ? askerContextParts.join("; ") : undefined,
+    );
+    const ranked: RankedCandidate[] = scored
+      .map((s) => ({
+        candidate_id: s.candidate.user_id,
+        score: s.score,
+        reason: s.reason,
+        mutual: s.mutual,
+        method: "ask" as const,
+      }))
+      .sort((a, b) => b.score - a.score);
+
+    await storeRanking(eventId, person.user_id, ranked, `ask: "${ask.text}"`);
+    scoredCount++;
+  }
+
+  return { scoredCount, solicitedCount, matchedCount: matched.length };
+}
+
+// eventName isn't always available to the caller (guest.registered/
+// guest.updated webhook payloads carry guest data, not necessarily the
+// event's own name) — fall back to looking it up rather than fail. Small
+// list (one calendar's worth of events), so a linear find is fine.
+async function resolveEventName(eventId: string, providedName?: string): Promise<string> {
+  if (providedName) return providedName;
+  const events = await listCalendarEvents().catch(() => []);
+  return events.find((e) => e.api_id === eventId)?.name ?? "the event";
+}
+
+// Entry point for the Luma-guest-list-driven path — pulls the live guest
+// list, matches it to Co users, hands off to the shared scoring core.
+//
+// Known gap, now closed: this used to only re-run on the event.created
+// webhook. It's now also called from guest.registered/guest.updated (see
+// routes/luma.ts) so someone solicited for an ask actually gets picked back
+// up once they reply, instead of being solicited once and never re-scored.
+export async function scoreGuestListForEvent(
+  eventId: string,
+  eventName?: string,
+  opts: { dryRun?: boolean } = {},
+): Promise<{ scoredCount: number; solicitedCount: number; matchedCount: number }> {
+  const [guests, resolvedName] = await Promise.all([
+    getEventGuestList(eventId),
+    resolveEventName(eventId, eventName),
+  ]);
+  const matched = await matchGuestsToUsers(guests);
+  return scoreMatchedGroup(eventId, resolvedName, matched, opts);
+}

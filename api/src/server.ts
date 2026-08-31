@@ -21,6 +21,7 @@ import {
 import applicationsRouter from "./routes/applications.js";
 import { createAuthRouter } from "./routes/auth.js";
 import { createCoRouter } from "./routes/co.js";
+import { createLumaRouter } from "./routes/luma.js";
 import { createNotificationsRouter } from "./routes/notifications.js";
 import { createReferralsRouter } from "./routes/referrals.js";
 import { sendblueRouter } from "./routes/sendblue.js";
@@ -71,6 +72,9 @@ app.use("/payments/webhook", express.raw({ type: "application/json" }));
 // reasoning as Stripe's above — a re-serialized/parsed-then-stringified body
 // isn't guaranteed byte-identical to what Hume actually signed.
 app.use("/co/webhook", express.raw({ type: "application/json" }));
+// Luma's webhook signature is the same "HMAC over the raw body" shape as the
+// two above — see validateLumaWebhook in routes/luma.ts for the exact scheme.
+app.use("/luma/webhook", express.raw({ type: "application/json" }));
 
 app.use(express.json());
 app.use(express.urlencoded({ extended: false })); // Twilio status callbacks send form-encoded bodies
@@ -89,6 +93,7 @@ app.use("/users", createUsersRouter(authenticateToken));
 app.use("/notifications", createNotificationsRouter(authenticateToken));
 app.use("/referrals", createReferralsRouter(authenticateToken));
 app.use("/co", createCoRouter(io));
+app.use("/luma", createLumaRouter());
 app.use("/payments", stripeRouter(io, authenticateToken));
 app.use("/sendblue", sendblueRouter(io));
 

@@ -4,6 +4,7 @@ import pool from "../db/db.js";
 import sendblue from "../services/sendblue.js";
 import { sweepAllOpenAsks } from "../services/relevance.js";
 import { runAskCheckinAgent } from "../agent/askCheckin.js";
+import { attemptEventSurfacing } from "../services/eventSurfacingSweep.js";
 import { triggerCallForUser } from "../services/callTrigger.js";
 import { sendDueFollowUps } from "./postCallFollowUp.js";
 import { placeDueCalls, sendDueReminders } from "./scheduledCall.js";
@@ -185,4 +186,45 @@ export function registerJobs(io: Server) {
     }
   });
 
+  // "Luma & X asks need to surface periodically" (Royce, 2026-08-30) —
+  // replaces the old instant-fire-on-every-captured-ask behavior, which had
+  // no cooldown and could text someone multiple times a day. Same shape as
+  // the ask check-in cron above, different cadence (every 3 days, not
+  // 14-30) since "is there a new event right now" is more time-sensitive
+  // than a life-goal check-in — first-guess interval, not tuned. Reuses the
+  // same ask_checkins row every active seeking ask already gets, tracked on
+  // its own last_surfaced_at column so this cadence is independent of the
+  // check-in cadence above.
+  cron.schedule("0 9 * * *", async () => {
+    try {
+      const due = await pool.query(
+        `SELECT ac.id, ac.ask_text, u.id AS user_id, u.first_name, u.phone_number, cp.city
+         FROM ask_checkins ac
+         JOIN users u ON u.id = ac.user_id
+         LEFT JOIN co_profiles cp ON cp.user_id = ac.user_id
+         WHERE ac.resolved_at IS NULL
+           AND (ac.last_surfaced_at IS NULL OR ac.last_surfaced_at <= NOW() - INTERVAL '3 days')`,
+      );
+
+      for (const row of due.rows) {
+        try {
+          await attemptEventSurfacing({
+            userId: row.user_id,
+            firstName: row.first_name,
+            phoneNumber: row.phone_number,
+            askText: row.ask_text,
+            city: row.city ?? null,
+          });
+        } catch (err: any) {
+          console.error(`Event surfacing sweep failed for ${row.user_id}:`, err?.message ?? err);
+        }
+        // Bumps regardless of whether a match was actually found/sent —
+        // same reasoning as last_checked_at above: a miss this cycle should
+        // wait for the next cadence window, not retry every tick.
+        await pool.query(`UPDATE ask_checkins SET last_surfaced_at = NOW() WHERE id = $1`, [row.id]);
+      }
+    } catch (error) {
+      console.error("Event surfacing sweep cron error:", error);
+    }
+  });
 }

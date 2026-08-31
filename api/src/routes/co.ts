@@ -11,6 +11,7 @@ import { generateEmbedding } from "../services/embeddings.js";
 import {
   assessConversationCoverage,
   captureIntent,
+  extractPlannedEventMention,
   extractPsychographicProfile,
   persistCoveredTopics,
   RAPPORT_TOPICS,
@@ -778,6 +779,7 @@ router.post(
 
         // Step 7 — Ambient intent capture (non-blocking — runs in background)
         captureIntent(user_id, transcript).catch(() => {});
+        extractPlannedEventMention(user_id, transcript).catch(() => {});
 
         // The recap exists now (transcript + extraction persisted) — safe to
         // mark completed. Everything after this point (scheduling the
@@ -919,6 +921,7 @@ router.post(
 
       // Ambient intent capture (non-blocking)
       captureIntent(String(user_id), String(transcript)).catch(() => {});
+      extractPlannedEventMention(String(user_id), String(transcript)).catch(() => {});
 
       _io?.to(`user:${user_id}`).emit("co:profile_ready");
 
