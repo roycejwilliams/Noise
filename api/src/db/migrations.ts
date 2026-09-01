@@ -703,6 +703,18 @@ export function runMigrations() {
     .query(`ALTER TABLE co_profiles ADD COLUMN IF NOT EXISTS last_proactive_outreach_at TIMESTAMPTZ`)
     .catch((err: Error) => console.error("co_profiles.last_proactive_outreach_at migration failed:", err));
 
+  // Backs the memory compaction job (Royce, 2026-09-01: "go ahead and have
+  // that built" — Co's own suggestion, made while diagnosing a real
+  // memory-continuity gap live with Royce, of "a compaction layer that
+  // periodically distills and corrects the profile, weighted toward recent
+  // signal"). Tracks the last time this ran per user, same pattern as
+  // last_proactive_outreach_at/last_checked_at — services/memoryCompaction.ts
+  // only recompacts a user once real new activity exists since this
+  // timestamp, not on a blind timer.
+  pool
+    .query(`ALTER TABLE co_profiles ADD COLUMN IF NOT EXISTS last_recap_at TIMESTAMPTZ`)
+    .catch((err: Error) => console.error("co_profiles.last_recap_at migration failed:", err));
+
   // Real source of truth for a call's SID/status once calls are placed via
   // the media-stream bridge (services/mediaStreamBridge.ts) rather than
   // Hume's native /v0/evi/twilio integration — Hume's chat_ended webhook no

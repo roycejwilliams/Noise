@@ -9,6 +9,7 @@ import { triggerCallForUser } from "../services/callTrigger.js";
 import { sendDueFollowUps } from "./postCallFollowUp.js";
 import { placeDueCalls, sendDueReminders } from "./scheduledCall.js";
 import { placeDueProactiveCalls } from "./proactiveCheckinCall.js";
+import { buildRecap, findUsersDueForRecap } from "../services/memoryCompaction.js";
 
 // Bounded-concurrency worker pool (Royce, 2026-08-30) — the event surfacing
 // sweep now runs for every open ask daily (see below), and a plain
@@ -283,6 +284,26 @@ export function registerJobs(io: Server) {
       });
     } catch (error) {
       console.error("Event surfacing sweep cron error:", error);
+    }
+  });
+
+  // Memory compaction (Royce, 2026-09-01: "go ahead and have that built" —
+  // Co's own suggestion while diagnosing a real memory-continuity gap live
+  // with Royce). Daily at 4am, off-peak from the other crons. Bounded
+  // concurrency, same reasoning as the event surfacing sweep above — this
+  // could run for every active user, not just a handful.
+  cron.schedule("0 4 * * *", async () => {
+    try {
+      const userIds = await findUsersDueForRecap();
+      await runWithConcurrency(userIds, 5, async (userId) => {
+        try {
+          await buildRecap(userId);
+        } catch (err: any) {
+          console.error(`Memory compaction failed for ${userId}:`, err?.message ?? err);
+        }
+      });
+    } catch (error) {
+      console.error("Memory compaction cron error:", error);
     }
   });
 }

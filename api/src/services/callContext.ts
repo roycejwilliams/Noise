@@ -21,9 +21,14 @@ import pool from "../db/db.js";
 // generous bound (still a bound, not unlimited — a defensive sanity check
 // against a genuinely pathological profile, not a real constraint anyone
 // should ever hit) and 20 rows (10 turns) of raw history instead of 3.
+// recap (Royce, 2026-09-01: "go ahead and have that built") — the
+// distilled, corrected running narrative services/memoryCompaction.ts
+// maintains. Led with here since it's the durable, weighted-toward-recent
+// picture; the raw recent-text line below still carries this-week's exact
+// specifics the recap's own cadence hasn't folded in yet.
 export async function buildContextSummary(userId: string): Promise<string> {
   try {
-    const [profileResult, recentTextResult] = await Promise.all([
+    const [profileResult, recentTextResult, recapResult] = await Promise.all([
       pool.query(
         `SELECT life_chapters, goals, blockers, availability_pattern, city, emotional_state, intent
          FROM co_profiles WHERE user_id = $1`,
@@ -35,6 +40,12 @@ export async function buildContextSummary(userId: string): Promise<string> {
          ORDER BY created_at DESC LIMIT 20`,
         [userId],
       ),
+      pool.query(
+        `SELECT content FROM co_memories
+         WHERE user_id = $1 AND memory_type = 'recap'
+         ORDER BY created_at DESC LIMIT 1`,
+        [userId],
+      ),
     ]);
 
     const profile = profileResult.rows[0] ?? null;
@@ -43,6 +54,7 @@ export async function buildContextSummary(userId: string): Promise<string> {
       : null;
 
     const lines = [
+      recapResult.rows[0]?.content ? `Ongoing summary: ${recapResult.rows[0].content}` : null,
       profile?.life_chapters?.length ? `Life chapter: ${profile.life_chapters.join(", ")}` : null,
       profile?.city ? `City: ${profile.city}` : null,
       profile?.goals?.length ? `Goals: ${profile.goals.slice(0, 3).join("; ")}` : null,
