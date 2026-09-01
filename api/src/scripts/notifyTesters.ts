@@ -5,11 +5,12 @@
 // an update has been made," narrowed the same day to "only Me and
 // Jacqueline," not every co-test user). Deliberately NOT automatic on
 // every deploy — a human decides when an update is actually worth telling
-// testers about, and writes the summary text, rather than every tiny fix
-// or a deploy that turns out broken minutes later triggering a broadcast
-// on its own.
+// testers about, and writes the update items themselves, rather than every
+// tiny fix or a deploy that turns out broken minutes later triggering a
+// broadcast on its own.
 //
-// Run from api/: npm run notify-testers -- "<update summary>"
+// Run from api/: npm run notify-testers -- "<update 1>" "<update 2>" ...
+// Each argument becomes its own bullet point.
 //
 // Reads whichever .env is loaded (same default-cwd behavior as
 // server.ts's "dotenv/config") — points at co-test when run against
@@ -21,30 +22,32 @@ import { generateText } from "ai";
 import pool from "../db/db.js";
 import sendblue, { cleanCoMessage } from "../services/sendblue.js";
 
-// One shared intro, not regenerated per person — the update summary itself
-// is the part that must never drift or get invented, so it's sent
-// verbatim, never paraphrased by an LLM. Only the warm opening line is
-// drafted, once, and reused for everyone, keeping cost and content both
-// predictable for a broadcast that could go to N testers.
-async function draftIntro(): Promise<string> {
+// Shared intro/closing, not regenerated per person, and neither one ever
+// contains a greeting or the person's name — the code owns "Hey {name},"
+// exactly once (bug fix, 2026-08-31: the drafted intro used to open with
+// its own "Hey" too, on top of the hardcoded one, reading as a stutter).
+// The update bullets themselves are never touched by an LLM — what
+// actually changed must never drift or get invented, so each item is sent
+// verbatim, exactly as written.
+async function draftLine(instruction: string, fallback: string): Promise<string> {
   try {
     const { text } = await generateText({
       model: anthropic("claude-haiku-4-5-20251001"),
-      experimental_telemetry: { isEnabled: true, functionId: "notifyTesters.draftIntro" },
-      prompt: `You are Co, texting someone who's helping test Co before launch. Write ONE short, warm sentence (no em dashes, no exclamation points) welcoming them and saying Co just got a real update worth knowing about. Do not describe what the update actually is — that gets appended separately after your sentence. Return ONLY that one sentence, nothing else.`,
+      experimental_telemetry: { isEnabled: true, functionId: "notifyTesters.draftLine" },
+      prompt: `You are Co, texting someone who's helping test Co before launch. ${instruction} No greeting, no "Hey", no using their name — that's handled separately. No em dashes, no exclamation points. Return ONLY that one short line, nothing else.`,
     });
     const trimmed = text.trim();
-    return trimmed || "Hey, Co just shipped something new worth knowing about.";
+    return trimmed || fallback;
   } catch (err: any) {
-    console.error("notifyTesters: draftIntro failed (non-fatal, using default):", err?.message ?? err);
-    return "Hey, Co just shipped something new worth knowing about.";
+    console.error("notifyTesters: draftLine failed (non-fatal, using default):", err?.message ?? err);
+    return fallback;
   }
 }
 
 async function main() {
-  const summary = process.argv[2];
-  if (!summary) {
-    console.error(`Usage: npm run notify-testers -- "<update summary>"`);
+  const updates = process.argv.slice(2);
+  if (!updates.length) {
+    console.error(`Usage: npm run notify-testers -- "<update 1>" "<update 2>" ...`);
     process.exit(1);
   }
 
@@ -63,13 +66,22 @@ async function main() {
     process.exit(0);
   }
 
-  const intro = await draftIntro();
-  console.log(`notifyTesters: about to send to ${users.length} user(s):\n"${intro}\n\n${summary}"\n`);
+  const intro = await draftLine(
+    "Write a short, warm phrase thanking them for helping test Co and saying here's what's new.",
+    "thanks so much for helping test Co — here's what's new:",
+  );
+  const closing = await draftLine(
+    "Write a short, warm closing line inviting them to share what they think after trying it.",
+    "Let Co know what you think once you've had a chance to try it.",
+  );
+  const bulletList = updates.map((u) => `• ${u}`).join("\n");
+
+  console.log(`notifyTesters: about to send to ${users.length} user(s), e.g.:\nHey {name}, ${intro}\n\n${bulletList}\n\n${closing}\n`);
 
   let sentCount = 0;
   for (const user of users) {
-    const greeting = user.first_name ? `Hey ${user.first_name} — ` : "Hey — ";
-    const content = cleanCoMessage(`${greeting}${intro}\n\n${summary}`);
+    const greeting = user.first_name ? `Hey ${user.first_name}, ` : "Hey, ";
+    const content = cleanCoMessage(`${greeting}${intro}\n\n${bulletList}\n\n${closing}`);
     try {
       await sendblue.messages.send({
         number: user.phone_number,
