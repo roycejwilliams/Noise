@@ -32,7 +32,12 @@ export function cleanCoMessage(text: string): string {
   // replacing just the character on "word — word" left "word , word" (a
   // stray space before the comma), which shipped to real users repeatedly
   // before this fix (confirmed live, 2026-08-26 conversation).
-  cleaned = cleaned.replace(/\s*—\s*/g, ", ").replace(/\s+--\s+/g, ", ").trim();
+  // En dash (–, U+2013) added 2026-09-01 — confirmed live from
+  // notifyTesters.ts's closing-line draft ("think–would"), a different
+  // dash-lookalike than the em dash the regex already covered, with no
+  // surrounding whitespace this time (\s* already permits zero, so this
+  // was purely a missing character, not a whitespace-matching bug).
+  cleaned = cleaned.replace(/\s*[—–]\s*/g, ", ").replace(/\s+--\s+/g, ", ").trim();
   const quoteMatch = cleaned.match(WRAPPED_QUOTE);
   if (quoteMatch) cleaned = quoteMatch[1].trim();
   return cleaned;
