@@ -952,4 +952,21 @@ export function runMigrations() {
         WITH (m = 16, ef_construction = 64)`),
     )
     .catch((err: Error) => console.error("tier3_offered_opportunities table/index init failed:", err));
+
+  // Backs the "any updates?" reactive reply (Royce, 2026-08-31: "once
+  // someone joins the test copatible account, if they ask 'any updates' or
+  // something similar just send them that"). scripts/notifyTesters.ts
+  // writes the bullet content here every time it runs, independent of who
+  // actually got texted — a tester who joins co-test later and asks about
+  // updates should still get the latest one, even if they weren't around
+  // for the original broadcast. sendblue.ts reads the single latest row.
+  pool
+    .query(`
+      CREATE TABLE IF NOT EXISTS product_updates (
+        id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+        content TEXT NOT NULL,
+        created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+      )
+    `)
+    .catch((err: Error) => console.error("product_updates table init failed:", err));
 }

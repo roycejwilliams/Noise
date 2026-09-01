@@ -9,8 +9,20 @@
 // tiny fix or a deploy that turns out broken minutes later triggering a
 // broadcast on its own.
 //
+// Also persists the update to product_updates (Royce, 2026-08-31: "if
+// [a user] asks 'any updates' just send them that") so sendblue.ts can
+// answer that question later for anyone, not just the people on this
+// broadcast list — see migrations.ts's product_updates table.
+//
 // Run from api/: npm run notify-testers -- "<update 1>" "<update 2>" ...
-// Each argument becomes its own bullet point.
+// Each argument becomes its own bullet point. If no arguments are given,
+// reads updates from stdin instead, one per line — use this form when the
+// update text has apostrophes, since shell quoting otherwise tends to
+// strip them (confirmed live, 2026-08-31: "Co's" came out as "Cos"):
+//   npm run notify-testers <<'EOF'
+//   Co's own events now show up alongside public Luma events
+//   Co follows up after you meet someone Co matched you with
+//   EOF
 //
 // Reads whichever .env is loaded (same default-cwd behavior as
 // server.ts's "dotenv/config") — points at co-test when run against
@@ -44,12 +56,43 @@ async function draftLine(instruction: string, fallback: string): Promise<string>
   }
 }
 
+async function readStdin(): Promise<string[]> {
+  const chunks: Buffer[] = [];
+  for await (const chunk of process.stdin) chunks.push(chunk as Buffer);
+  return Buffer.concat(chunks)
+    .toString("utf-8")
+    .split("\n")
+    .map((line) => line.trim())
+    .filter(Boolean);
+}
+
 async function main() {
-  const updates = process.argv.slice(2);
+  const argUpdates = process.argv.slice(2);
+  const updates = argUpdates.length ? argUpdates : await readStdin();
   if (!updates.length) {
-    console.error(`Usage: npm run notify-testers -- "<update 1>" "<update 2>" ...`);
+    console.error(`Usage: npm run notify-testers -- "<update 1>" "<update 2>" ...\n   or: npm run notify-testers <<'EOF' (one update per line, apostrophe-safe)`);
     process.exit(1);
   }
+
+  const intro = await draftLine(
+    "Write a short, warm phrase thanking them for helping test Co and saying here's what's new.",
+    "thanks so much for helping test Co — here's what's new:",
+  );
+  const closing = await draftLine(
+    "Write a short, warm closing line inviting them to share what they think after trying it.",
+    "Let Co know what you think once you've had a chance to try it.",
+  );
+  // Blank line between bullets (Royce, 2026-08-31: "put some spacing
+  // between bullet points") — cramped together read as one dense block on
+  // a phone screen.
+  const bulletList = updates.map((u) => `• ${u}`).join("\n\n");
+
+  // Persisted independent of who's on TESTER_FIRST_NAMES below — someone
+  // who joins co-test later and asks Co "any updates?" should still get
+  // this, even though they weren't a recipient of the original text.
+  await pool
+    .query(`INSERT INTO product_updates (content) VALUES ($1)`, [bulletList])
+    .catch((err: any) => console.error("notifyTesters: product_updates write failed (non-fatal):", err?.message ?? err));
 
   // Scoped to named testers only (Royce, 2026-08-31: "make sure the
   // testers are only Me and Jacqueline") — NOT every co-test user, despite
@@ -62,19 +105,9 @@ async function main() {
     [TESTER_FIRST_NAMES],
   );
   if (!users.length) {
-    console.log(`notifyTesters: no matching testers (${TESTER_FIRST_NAMES.join(", ")}) found with a phone number on file — nothing to send.`);
+    console.log(`notifyTesters: no matching testers (${TESTER_FIRST_NAMES.join(", ")}) found with a phone number on file — update saved, but nothing texted.`);
     process.exit(0);
   }
-
-  const intro = await draftLine(
-    "Write a short, warm phrase thanking them for helping test Co and saying here's what's new.",
-    "thanks so much for helping test Co — here's what's new:",
-  );
-  const closing = await draftLine(
-    "Write a short, warm closing line inviting them to share what they think after trying it.",
-    "Let Co know what you think once you've had a chance to try it.",
-  );
-  const bulletList = updates.map((u) => `• ${u}`).join("\n");
 
   console.log(`notifyTesters: about to send to ${users.length} user(s), e.g.:\nHey {name}, ${intro}\n\n${bulletList}\n\n${closing}\n`);
 

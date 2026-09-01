@@ -802,6 +802,42 @@ Return ONLY the classification, nothing else.`,
           }
         }
 
+        // "Any updates?" reactive reply (Royce, 2026-08-31: "once someone
+        // joins the test copatible account, if they ask 'any updates' or
+        // something similar just send them that" — and, if nothing's been
+        // posted yet, "make sure ... just say that" rather than leaving the
+        // question unanswered). Classification runs on every message with
+        // text, same cost profile as the call-offer classifier above — it
+        // can't be gated on an update already existing, since "nothing new
+        // right now" is itself a valid, honest answer this needs to give.
+        // product_updates is written by scripts/notifyTesters.ts every
+        // time a real update goes out, independent of who was on that
+        // broadcast — this works for ANY co-test user, not just the named
+        // testers the script itself texts.
+        let updatesContext = "";
+        if (hasText) {
+          try {
+            const { text: rawAsksForUpdates } = await generateText({
+              model: anthropic("claude-haiku-4-5-20251001"),
+              experimental_telemetry: { isEnabled: true, functionId: "sendblue.asksForUpdates.classify" },
+              prompt: `Is this message genuinely asking Co whether there's anything new, any recent updates, or what's changed lately — not just casual conversation that happens to mention something similar?
+
+Message: "${resolvedContent}"
+
+Return ONLY "yes" or "no".`,
+            });
+            if (rawAsksForUpdates.trim().toLowerCase().startsWith("yes")) {
+              const latestUpdateResult = await pool.query(`SELECT content FROM product_updates ORDER BY created_at DESC LIMIT 1`);
+              const latestUpdate = latestUpdateResult.rows[0];
+              updatesContext = latestUpdate
+                ? `\nThey're asking what's new. Share the real updates below as part of your reply — your own natural framing around them is fine, but don't alter, summarize away, or invent anything in the list itself; it's fine for this one reply to run longer than usual since they asked directly:\n${latestUpdate.content}`
+                : `\nThey're asking what's new, but there's genuinely nothing posted yet. Let them know honestly, briefly, that there's nothing new to report right now — don't invent something or brush past the question.`;
+            }
+          } catch (err: any) {
+            console.error("sendblue: asks-for-updates classification failed (non-fatal):", err?.message ?? err);
+          }
+        }
+
         const shouldTriggerCall = callAction === "explicit_request" || (hasPendingOffer && callAction === "accepts_offer");
 
         // Schedule-a-call — a specific future time, not "call me now"
@@ -1278,6 +1314,7 @@ Return ONLY valid JSON, no preamble: {"wants_venue": true or false, "venue_type"
                 momentContext,
                 recommendationContext,
                 eventOfferContext,
+                updatesContext,
                 venueContext,
                 callFeatureQuestionContext,
                 scheduleCallContext,
