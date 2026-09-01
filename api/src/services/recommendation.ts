@@ -2,7 +2,7 @@ import { generateText } from "ai";
 import { anthropic } from "@ai-sdk/anthropic";
 import { propagateAttributes } from "@langfuse/tracing";
 import pool from "../db/db.js";
-import { getTieredRecommendation } from "./tieredRecommendation.js";
+import { getTieredRecommendation, type TierMatch } from "./tieredRecommendation.js";
 
 // Intent-Layer-only real action: Co can actually invoke this (voice via
 // Hume's tool_call plane, iMessage via a direct call from the ongoing-chat
@@ -77,19 +77,27 @@ export async function generateRecommendation(userId: string, currentMessage?: st
     // this function always had, just no longer the FIRST thing tried.
     const askText = currentMessage || latestIntent?.text || profile.goals?.[0];
     if (askText) {
-      const tierMatch = await getTieredRecommendation(
+      const tierMatches: TierMatch[] = await getTieredRecommendation(
         { text: askText, embedding: askText === latestIntent?.text ? latestIntent?.embedding : null },
         profile.city ?? null,
       ).catch((err: any) => {
         console.error("generateRecommendation: getTieredRecommendation failed (non-fatal):", err?.message ?? err);
-        return null;
+        return [];
       });
-      if (tierMatch) {
-        const result: RecommendationResult = { available: true, match: `${tierMatch.name} (${tierMatch.url ?? "Co's own calendar"})`, reason: tierMatch.reason };
+      if (tierMatches.length) {
+        // No winner here either (Royce, 2026-08-30 — see tieredRecommendation.ts)
+        // — this is a live, in-conversation reply, not an unprompted text, so
+        // bundling every real match into one description carries none of the
+        // proactive-nudge spam risk the tease/reveal flow has to guard against.
+        const result: RecommendationResult = {
+          available: true,
+          match: tierMatches.map((m) => `${m.name} (${m.url ?? "Co's own calendar"})`).join("; "),
+          reason: tierMatches.map((m) => m.reason).join(" "),
+        };
         await pool
           .query(`INSERT INTO co_memories (user_id, memory_type, content) VALUES ($1, 'recommendation', $2)`, [
             userId,
-            `Co surfaced a Tier ${tierMatch.kind} recommendation — ${tierMatch.name}: ${tierMatch.reason}`,
+            `Co surfaced ${tierMatches.length} tiered recommendation(s) — ${tierMatches.map((m) => `[Tier ${m.kind}] ${m.name}: ${m.reason}`).join(" | ")}`,
           ])
           .catch((err) => console.error("Recommendation memory write failed (non-fatal):", err));
 
@@ -97,10 +105,15 @@ export async function generateRecommendation(userId: string, currentMessage?: st
         // record it so another person getting surfaced this exact same
         // event later is caught as a certain match. Tier 3 "opportunities"
         // have no event_api_id (not a shared event), skipped naturally.
-        if ("event_api_id" in tierMatch) {
+        const eventMatches = tierMatches.filter((m): m is Extract<TierMatch, { event_api_id: string }> => "event_api_id" in m);
+        if (eventMatches.length) {
           const { recordSurfacedEventAndMatch } = await import("./eventMatching.js");
-          recordSurfacedEventAndMatch(userId, tierMatch.event_api_id, tierMatch.name, tierMatch.event_date).catch((err: any) =>
-            console.error("recordSurfacedEventAndMatch failed (non-fatal):", err?.message ?? err),
+          await Promise.all(
+            eventMatches.map((m) =>
+              recordSurfacedEventAndMatch(userId, m.event_api_id, m.name, m.event_date).catch((err: any) =>
+                console.error("recordSurfacedEventAndMatch failed (non-fatal):", err?.message ?? err),
+              ),
+            ),
           );
         }
         return result;

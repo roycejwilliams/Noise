@@ -3,6 +3,7 @@ import { generateText, stepCountIs, tool } from "ai";
 import { z } from "zod";
 import sendblue, { cleanCoMessage } from "../services/sendblue.js";
 import { writeMemory } from "../services/memory.js";
+import { tryClaimProactiveNudge } from "../services/proactiveThrottle.js";
 
 export type EventAskSolicitationPerson = {
   userId: string;
@@ -36,6 +37,10 @@ export async function runEventAskSolicitationAgent(
         if (dryRun) {
           console.log(`[eventAskSolicitation dryRun] would send to ${person.userId}: "${cleaned}"`);
           return { delivered: false, dryRun: true, message: cleaned };
+        }
+        if (!(await tryClaimProactiveNudge(person.userId))) {
+          console.log(`eventAskSolicitation: throttled — ${person.userId} was proactively nudged in the last 24h`);
+          return { delivered: false, throttled: true };
         }
         await sendblue.messages.send({
           number: person.phoneNumber,

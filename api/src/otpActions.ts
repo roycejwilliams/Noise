@@ -46,6 +46,8 @@ interface EmailProp {
   appsubmit?: boolean;
   applicant?: ApplicationProp;
   welcome?: boolean;
+  calendarFollow?: boolean;
+  firstName?: string;
 }
 
 interface MessageProp {
@@ -213,6 +215,8 @@ export const sendEmail = async ({
   applicant,
   appsubmit,
   welcome,
+  calendarFollow,
+  firstName,
 }: EmailProp) => {
   const resendClient = new Resend(process.env.RESEND_API_KEY);
   const resend = {
@@ -313,6 +317,27 @@ export const sendEmail = async ({
             p("Co is invite-only. You're getting early access. She's learning and listening for now.") +
             p("More comes later.") +
             ctaButton("Open Co", "https://app.copatible.com"),
+        ),
+      });
+    }
+
+    // Email fallback for a calendar-follow signal with no phone channel
+    // (Royce, 2026-08-30) — routes/luma.ts's calendar.person_subscribed
+    // handler only reaches runCalendarFollowReachOutAgent (an SMS) when the
+    // follower's email already matches an existing Co user. Someone who
+    // followed the calendar but was never a match at all still gave Luma
+    // their email (that's the join key the webhook provides) — this reaches
+    // them there instead of silently doing nothing, same warm/not-pushy
+    // register as the SMS version.
+    if (calendarFollow) {
+      await resend.emails.send({
+        from: "Co <hello@copatible.com>",
+        to: email,
+        subject: `Co noticed you.`,
+        html: emailTemplate(
+          h1(firstName ? `Hey ${firstName}.` : "Hey there.") +
+            p("Co noticed you followed the Co Presents calendar — Co is an invite-only life concierge, not just an events page.") +
+            p("Reply and tell Co a little about what you're hoping to find, and it'll keep you in mind for what's next."),
         ),
       });
     }

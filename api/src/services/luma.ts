@@ -11,10 +11,19 @@ export type LumaEvent = {
   name: string;
   start_at: string;
   end_at: string | null;
+  city: string | null;
 };
 
 // GET /v1/calendars/events/list — resolves which event_id to pull a guest
 // list for. Paginated; follows next_cursor until Luma reports has_more: false.
+//
+// city added 2026-08-30 (Royce: "city and the proximity to each user
+// matter") — getEventDetails() below already proves the underlying Luma
+// event object carries geo_address_info; this list endpoint just never
+// extracted it, leaving Tier 1 (tieredRecommendation.ts) ranking Co's own
+// events on name alone, with zero location signal, unlike Tier 2 (which
+// does have city from the discover feed). Same field, same fallback shape
+// as getEventDetails uses.
 export async function listCalendarEvents(): Promise<LumaEvent[]> {
   const events: LumaEvent[] = [];
   let cursor: string | undefined;
@@ -30,7 +39,13 @@ export async function listCalendarEvents(): Promise<LumaEvent[]> {
     const data: any = await res.json();
     for (const entry of data.entries ?? []) {
       const event = entry.event ?? entry;
-      events.push({ api_id: event.api_id, name: event.name, start_at: event.start_at, end_at: event.end_at ?? null });
+      events.push({
+        api_id: event.api_id,
+        name: event.name,
+        start_at: event.start_at,
+        end_at: event.end_at ?? null,
+        city: event.geo_address_info?.city ?? null,
+      });
     }
     cursor = data.has_more ? data.next_cursor : undefined;
   } while (cursor);

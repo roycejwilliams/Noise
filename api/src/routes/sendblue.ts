@@ -25,6 +25,7 @@ import {
   storeProfile,
 } from "../services/profileExtraction.js";
 import { generateRecommendation } from "../services/recommendation.js";
+import { EVENT_OFFER_EXPIRY_DAYS } from "../services/eventSurfacingSweep.js";
 import { findRealVenues } from "../services/venueLookup.js";
 import { runConversationReplyAgent, filterRelevantMemories } from "../agent/conversationReply.js";
 import { triggerCallForUser } from "../services/callTrigger.js";
@@ -625,6 +626,30 @@ Return ONLY strict JSON: {"full_name": string or null, "email": string or null, 
         const pendingOffer = pendingOfferResult.rows[0] ?? null;
         const hasPendingOffer = !!pendingOffer;
 
+        // Ask-first event/opportunity surfacing (Royce, 2026-08-30) — same
+        // pending/resolved shape as the call offer above, separate memory
+        // types since these are unrelated gestures. Set by
+        // eventSurfacingSweep.ts right after it texts a tease with no
+        // details; the JSON content carries the actual match so the reply
+        // below can share real details without re-running the tiered engine.
+        // created_at cutoff (Royce, 2026-08-30) — matches
+        // eventSurfacingSweep.ts's EVENT_OFFER_EXPIRY_DAYS: a tease that's
+        // sat unanswered that long is abandoned, not still awaiting a reply.
+        // Without this, a "yes" weeks later would resolve a tease the
+        // person almost certainly wasn't responding to.
+        const pendingEventOfferResult = await pool.query(
+          `SELECT p.id, p.content FROM co_memories p
+           WHERE p.user_id = $1 AND p.memory_type = 'event_offer_pending'
+           AND p.created_at > NOW() - ($2 || ' days')::interval
+           AND NOT EXISTS (
+             SELECT 1 FROM co_memories r
+             WHERE r.user_id = $1 AND r.memory_type = 'event_offer_resolved' AND r.created_at > p.created_at
+           )
+           ORDER BY p.created_at DESC LIMIT 1`,
+          [user.id, EVENT_OFFER_EXPIRY_DAYS],
+        );
+        const pendingEventOffer = pendingEventOfferResult.rows[0] ?? null;
+
         // Feeds the thin-profile first-message call offer below. Count-based
         // rather than existence-based on purpose — unlike co-test's version
         // of this same check, this message's own text_exchange row was
@@ -703,6 +728,77 @@ Return ONLY the classification, nothing else.`,
               `INSERT INTO co_memories (user_id, memory_type, content) VALUES ($1, 'call_offer_declined_topic', $2)`,
               [user.id, pendingOffer.content],
             ).catch((err: any) => console.error("sendblue: call_offer_declined_topic memory write failed (non-fatal):", err?.message ?? err));
+          }
+        }
+
+        // Resolve the ask-first event/opportunity tease, if one's pending.
+        // Only classifies when there's actually something pending — no
+        // reason to spend a call checking on every message otherwise.
+        // Folded into the SAME reply below via eventOfferContext, never a
+        // second message — same reasoning as recommendationContext.
+        let eventOfferContext = "";
+        if (pendingEventOffer && hasText) {
+          try {
+            const { text: rawEventReply } = await generateText({
+              model: anthropic("claude-haiku-4-5-20251001"),
+              experimental_telemetry: { isEnabled: true, functionId: "sendblue.eventOffer.classify" },
+              prompt: `Co recently texted this person hinting that something (an event or opportunity) crossed its mind for them, without naming it, and asked if they'd like to hear more. This does NOT mean every message from them now is a response to that — if they're just continuing to talk about something else, that's normal conversation, not an answer, unless it's actually a yes/no to hearing more.
+
+Their latest message: "${resolvedContent}"
+
+Classify as ONE of:
+- "interested" — they're saying yes, they want to hear more (e.g. "sure", "yeah tell me", "what is it", "go on")
+- "not_interested" — they're saying no or passing
+- "unrelated" — anything else, normal conversation not answering this
+
+Return ONLY the classification, nothing else.`,
+            });
+            const eventReplyAction = rawEventReply.trim().toLowerCase().replace(/^[`"']+|[`"']+$/g, "");
+
+            if (eventReplyAction === "interested" || eventReplyAction === "not_interested") {
+              await pool.query(
+                `INSERT INTO co_memories (user_id, memory_type, content) VALUES ($1, 'event_offer_resolved', $2)`,
+                [user.id, eventReplyAction],
+              ).catch((err: any) => console.error("sendblue: event_offer_resolved memory write failed (non-fatal):", err?.message ?? err));
+
+              const parsed = JSON.parse(pendingEventOffer.content) as { askText: string; match: any };
+              const match = parsed.match;
+              // Staleness check (Royce, 2026-08-30) — Tier 1/2 carry the
+              // event's own date; if they said yes days after the tease and
+              // the event's already passed, revealing it as if it's still
+              // live would be misleading. Tier 3 opportunities have an
+              // optional `deadline` (set only when the source post stated
+              // one explicitly — see tieredRecommendation.ts's TierMatch)
+              // checked the same way; a Tier 3 match with no stated deadline
+              // (rolling admissions, or the post just didn't say) has
+              // nothing to check here. Bug fix, 2026-08-30 (code review):
+              // this used to only ever check event_date, so an expired Tier
+              // 3 opportunity that had been sitting pending for days could
+              // still get revealed as if the application window were open —
+              // exactly what `deadline` was added to prevent, just not
+              // wired into this reply-resolution path yet.
+              // Date-only comparison, not a timestamp one (bug fix,
+              // 2026-08-30) — event_date/deadline are bare YYYY-MM-DD with
+              // no time component, so `new Date(x) < new Date()` treats ANY
+              // time past midnight UTC on that day as already stale,
+              // wrongly flagging a same-day evening event as "already
+              // passed" hours before it happens. Comparing calendar dates
+              // instead means today's date is never stale.
+              const todayStr = new Date().toISOString().slice(0, 10);
+              const relevantDate: string | undefined = match.event_date ?? match.deadline;
+              const isStale = relevantDate && relevantDate < todayStr;
+              if (eventReplyAction === "interested" && isStale) {
+                const passedPhrase = match.event_date ? `it was on ${relevantDate}` : `the application window closed on ${relevantDate}`;
+                eventOfferContext = `\nThey just said yes to hearing more about the thing you teased earlier, but it's already passed (${passedPhrase}) — let them know honestly that it's already happened so there's nothing to share, no pressure or apology needed, and mention you'll keep an eye out for the next one that fits. Never reveal the name "${match.name}" since there's nothing to act on now.`;
+              } else if (eventReplyAction === "interested") {
+                const linkLine = match.url ? ` Link: ${match.url}.` : "";
+                eventOfferContext = `\nThey just said yes to hearing more about the thing you teased earlier. Share the real details now, naturally, as part of your reply: "${match.name}" — ${match.reason}.${linkLine} Be honest it's a suggestion, not a guarantee it's right for them — never say you're "sending" or "sharing" a link as an attachment, just mention it in the text.`;
+              } else {
+                eventOfferContext = `\nThey just passed on hearing more about the thing you teased earlier (internal only, never say this name to them: "${match.name}"). Acknowledge lightly, no pressure, don't explain what it was.`;
+              }
+            }
+          } catch (err: any) {
+            console.error("sendblue: event offer reply classification failed (non-fatal):", err?.message ?? err);
           }
         }
 
@@ -1181,6 +1277,7 @@ Return ONLY valid JSON, no preamble: {"wants_venue": true or false, "venue_type"
                 missingTopicDescription: missingTopic ? RAPPORT_TOPIC_DESCRIPTIONS[missingTopic] : null,
                 momentContext,
                 recommendationContext,
+                eventOfferContext,
                 venueContext,
                 callFeatureQuestionContext,
                 scheduleCallContext,

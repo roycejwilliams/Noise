@@ -112,15 +112,22 @@ export async function scoreMatchedGroup(
       if (await wasRecentlySolicited(eventId, person.user_id)) {
         continue; // already asked within the cooldown window — wait for a reply or the next window
       }
-      await runEventAskSolicitationAgent(
+      const { sent: solicitationSent } = await runEventAskSolicitationAgent(
         { userId: person.user_id, firstName: person.first_name, phoneNumber: person.phone_number },
         eventName,
         opts,
-      ).catch((err: any) =>
-        console.error(`eventScoring: ask solicitation failed for ${person.user_id} (non-fatal):`, err?.message ?? err),
-      );
-      await markSolicited(eventId, person.user_id);
-      solicitedCount++;
+      ).catch((err: any) => {
+        console.error(`eventScoring: ask solicitation failed for ${person.user_id} (non-fatal):`, err?.message ?? err);
+        return { sent: false };
+      });
+      // Only starts the 3-day cooldown on an actual send — a throttled
+      // attempt (see proactiveThrottle.ts's shared daily nudge cap) isn't a
+      // real ask, and shouldn't cost this person 3 days of silence for it.
+      // The next scoring pass (e.g. the next guest.updated) retries normally.
+      if (solicitationSent) {
+        await markSolicited(eventId, person.user_id);
+        solicitedCount++;
+      }
       continue;
     }
 

@@ -10,6 +10,25 @@ import { sendDueFollowUps } from "./postCallFollowUp.js";
 import { placeDueCalls, sendDueReminders } from "./scheduledCall.js";
 import { placeDueProactiveCalls } from "./proactiveCheckinCall.js";
 
+// Bounded-concurrency worker pool (Royce, 2026-08-30) — the event surfacing
+// sweep now runs for every open ask daily (see below), and a plain
+// sequential for-await over potentially hundreds of rows wastes most of the
+// 9am window waiting on one person's Luma/embedding calls before starting
+// the next. This runs up to `limit` rows concurrently instead of one at a
+// time. Not used for the other, smaller crons in this file (they cap total
+// row count via SQL LIMIT instead, a different tool for a different reason
+// — avoiding placing many outbound calls at once, not a throughput problem).
+async function runWithConcurrency<T>(items: T[], limit: number, fn: (item: T) => Promise<void>): Promise<void> {
+  let cursor = 0;
+  async function worker() {
+    while (cursor < items.length) {
+      const item = items[cursor++];
+      await fn(item);
+    }
+  }
+  await Promise.all(Array.from({ length: Math.min(limit, items.length) }, worker));
+}
+
 export function registerJobs(io: Server) {
   // Hourly 10am–8pm UTC — call newly subscribed users who haven't completed intake yet.
   // Limits to 5 calls per run to avoid Twilio rate limits.
@@ -195,34 +214,73 @@ export function registerJobs(io: Server) {
   // same ask_checkins row every active seeking ask already gets, tracked on
   // its own last_surfaced_at column so this cadence is independent of the
   // check-in cadence above.
+  //
+  // Runs for EVERY open ask now, not just cadence-cleared ones (Royce,
+  // 2026-08-30) — the urgency pre-check ("something cheap that scans for
+  // something relevant to their wants/ask/intent") needs a daily look at
+  // everyone so a time-sensitive match doesn't wait out someone else's
+  // 3-day clock. cooldown_cleared tells attemptEventSurfacing whether to run
+  // the full tiered engine or just the cheap urgent check — see
+  // eventSurfacingSweep.ts.
   cron.schedule("0 9 * * *", async () => {
     try {
       const due = await pool.query(
-        `SELECT ac.id, ac.ask_text, u.id AS user_id, u.first_name, u.phone_number, cp.city
+        `SELECT ac.id, ac.ask_text, u.id AS user_id, u.first_name, u.phone_number, cp.city,
+                cp.goals, cp.activity_preferences,
+                (ac.last_surfaced_at IS NULL OR ac.last_surfaced_at <= NOW() - INTERVAL '3 days') AS cooldown_cleared
          FROM ask_checkins ac
          JOIN users u ON u.id = ac.user_id
          LEFT JOIN co_profiles cp ON cp.user_id = ac.user_id
-         WHERE ac.resolved_at IS NULL
-           AND (ac.last_surfaced_at IS NULL OR ac.last_surfaced_at <= NOW() - INTERVAL '3 days')`,
+         WHERE ac.resolved_at IS NULL`,
       );
 
+      // Grouped by user, not run flat (Royce, 2026-08-30) — attemptEventSurfacing's
+      // per-user state (the event backlog's read-modify-write, and the
+      // cross-mechanism daily nudge cap) is keyed per-user, so two rows for
+      // the SAME user running truly concurrently could race on the same
+      // backlog or both pass the nudge-cap check before either claims it,
+      // sending two teases in one run. Rows for the same user still process
+      // one at a time; different users run in parallel.
+      const rowsByUser = new Map<string, typeof due.rows>();
       for (const row of due.rows) {
-        try {
-          await attemptEventSurfacing({
-            userId: row.user_id,
-            firstName: row.first_name,
-            phoneNumber: row.phone_number,
-            askText: row.ask_text,
-            city: row.city ?? null,
-          });
-        } catch (err: any) {
-          console.error(`Event surfacing sweep failed for ${row.user_id}:`, err?.message ?? err);
-        }
-        // Bumps regardless of whether a match was actually found/sent —
-        // same reasoning as last_checked_at above: a miss this cycle should
-        // wait for the next cadence window, not retry every tick.
-        await pool.query(`UPDATE ask_checkins SET last_surfaced_at = NOW() WHERE id = $1`, [row.id]);
+        const list = rowsByUser.get(row.user_id) ?? [];
+        list.push(row);
+        rowsByUser.set(row.user_id, list);
       }
+
+      await runWithConcurrency(Array.from(rowsByUser.values()), 5, async (userRows) => {
+        for (const row of userRows) {
+          let sent = false;
+          let throttled = false;
+          try {
+            ({ sent, throttled } = await attemptEventSurfacing({
+              askId: row.id,
+              userId: row.user_id,
+              firstName: row.first_name,
+              phoneNumber: row.phone_number,
+              askText: row.ask_text,
+              city: row.city ?? null,
+              goals: row.goals ?? null,
+              activityPreferences: row.activity_preferences ?? null,
+              cooldownCleared: row.cooldown_cleared,
+            }));
+          } catch (err: any) {
+            console.error(`Event surfacing sweep failed for ${row.user_id}:`, err?.message ?? err);
+          }
+          // A normal cadence-cleared cycle always bumps regardless of outcome
+          // (same reasoning as last_checked_at above: a miss should wait for
+          // the next window, not retry every tick) — UNLESS the only reason
+          // nothing sent was the unrelated cross-mechanism daily nudge cap
+          // (Royce, 2026-08-30), which isn't a fact about this ask and
+          // shouldn't cost it a 3-day wait. A day where the cooldown hadn't
+          // cleared only bumps if the urgent check actually found and sent
+          // something — a quiet urgent-check miss must NOT touch the clock,
+          // or it would silently reset someone's normal 3-day cadence early.
+          if (!throttled && (row.cooldown_cleared || sent)) {
+            await pool.query(`UPDATE ask_checkins SET last_surfaced_at = NOW() WHERE id = $1`, [row.id]);
+          }
+        }
+      });
     } catch (error) {
       console.error("Event surfacing sweep cron error:", error);
     }

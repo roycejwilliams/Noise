@@ -211,7 +211,9 @@ export function runMigrations() {
       ALTER TABLE co_memories ADD CONSTRAINT co_memories_memory_type_check
         CHECK (memory_type = ANY (ARRAY[
           'call_transcript','text_exchange','check_in','intent','recap','system','placement',
-          'call_offer_pending','call_offer_resolved','recommendation','call_offer_declined_topic'
+          'call_offer_pending','call_offer_resolved','recommendation','call_offer_declined_topic',
+          'event_ask_solicitation','calendar_follow_reach_out','event_discovery_surfacing',
+          'event_change_notification','event_offer_pending','event_offer_resolved'
         ]));
     `)
     .catch((err: Error) =>
@@ -899,4 +901,55 @@ export function runMigrations() {
       ON surfaced_events USING hnsw (embedding vector_cosine_ops)
       WITH (m = 16, ef_construction = 64)`)
     .catch((err: Error) => console.error("surfaced_events embedding index failed:", err));
+
+  // Dedicated table, not another co_memories row (Royce, 2026-08-30 code
+  // review) — eventSurfacingSweep.ts's per-user tease backlog was originally
+  // stored as co_memories rows keyed only by user_id. Two real bugs from
+  // that: (1) a user can have more than one open ask_checkins row
+  // (UNIQUE(user_id, ask_id), not per-user) processed in the same cron
+  // cycle, so a shared per-user backlog let one ask's queued matches get
+  // silently consumed by a completely different ask's turn; (2) every save
+  // — including saving an empty backlog — INSERTed a new co_memories row
+  // forever, since that table is designed as an append-only memory log, not
+  // mutable state, so the backlog grew by one row per open ask per day with
+  // no cleanup path. A real table keyed by (user_id, ask_id) with an upsert
+  // fixes both: scoped correctly per ask, and one row per ask total.
+  pool
+    .query(`
+      CREATE TABLE IF NOT EXISTS event_backlogs (
+        user_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+        ask_id TEXT NOT NULL,
+        items JSONB NOT NULL DEFAULT '[]',
+        updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+        PRIMARY KEY (user_id, ask_id)
+      )
+    `)
+    .catch((err: Error) => console.error("event_backlogs table init failed:", err));
+
+  // Dedicated table + pgvector column, same pattern as surfaced_events above
+  // (Royce, 2026-08-30 code review fix) — alreadyOfferedTier3 in
+  // eventSurfacingSweep.ts used to regenerate an embedding for every past
+  // Tier 3 opportunity name on EVERY dedup check, every day the sweep ran,
+  // for every user with any Tier 3 history: pure recomputation of values
+  // that never change. Storing the embedding once, at offer time, means
+  // dedup only ever computes ONE fresh embedding (the new candidate) and
+  // lets pgvector's <=> do the comparison against everything past in a
+  // single query, the same way eventMatching.ts already does this for
+  // real events instead of comparing in JS.
+  pool
+    .query(`
+      CREATE TABLE IF NOT EXISTS tier3_offered_opportunities (
+        id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+        user_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+        name TEXT NOT NULL,
+        embedding vector(1536) NOT NULL,
+        created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+      )
+    `)
+    .then(() =>
+      pool.query(`CREATE INDEX IF NOT EXISTS tier3_offered_opportunities_embedding_hnsw_idx
+        ON tier3_offered_opportunities USING hnsw (embedding vector_cosine_ops)
+        WITH (m = 16, ef_construction = 64)`),
+    )
+    .catch((err: Error) => console.error("tier3_offered_opportunities table/index init failed:", err));
 }

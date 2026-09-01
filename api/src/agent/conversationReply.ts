@@ -20,6 +20,7 @@ export type ConversationReplyInput = {
   missingTopicDescription: string | null;
   momentContext: string;
   recommendationContext: string;
+  eventOfferContext: string;
   venueContext: string;
   callFeatureQuestionContext: string;
   scheduleCallContext: string;
@@ -166,7 +167,7 @@ What you already know about ${input.firstName} from before — treat this the sa
 ${input.contextSummary || "(nothing on file yet — this is effectively a first real conversation with them)"}
 
 ${input.momentContext}
-${input.recommendationContext}${input.venueContext}${input.callFeatureQuestionContext}${input.scheduleCallContext}
+${input.recommendationContext}${input.eventOfferContext}${input.venueContext}${input.callFeatureQuestionContext}${input.scheduleCallContext}
 ${input.toneContext}
 ${input.seekingModeContext}
 ${input.styleHint}

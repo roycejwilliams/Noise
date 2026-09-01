@@ -2,6 +2,7 @@ import { z } from "zod";
 import { tool } from "ai";
 import sendblue, { cleanCoMessage } from "../services/sendblue.js";
 import { writeMemory } from "../services/memory.js";
+import { tryClaimProactiveNudge } from "../services/proactiveThrottle.js";
 import {
   getCoverageNudge,
   markTopicAsked as persistTopicAsked,
@@ -50,6 +51,10 @@ export function createAskCheckinTools(ctx: AskCheckinToolContext) {
         if (ctx.dryRun) {
           console.log(`[askCheckin dryRun] would send to ${ctx.userId}: "${cleaned}"`);
           return { delivered: false, dryRun: true, message: cleaned };
+        }
+        if (!(await tryClaimProactiveNudge(ctx.userId))) {
+          console.log(`askCheckin: throttled — ${ctx.userId} was proactively nudged in the last 24h`);
+          return { delivered: false, throttled: true };
         }
         await sendblue.messages.send({
           number: ctx.phoneNumber,

@@ -4,17 +4,28 @@ import pool from "../db/db.js";
 import { runCalendarFollowReachOutAgent } from "../agent/calendarFollowReachOut.js";
 import { handleEventCanceled, handleEventUpdated } from "../services/eventChangeDetection.js";
 import { scoreGuestListForEvent } from "../services/eventScoring.js";
+import { sendEmail } from "../otpActions.js";
 
 const router = express.Router();
 
 // Matches by email (not phone — that's all a calendar-follow webhook gives
-// us) against an existing Co user. No match means Co has no way to contact
-// this person at all — logged and skipped, not an error.
-async function reachOutToSubscriber(email: string): Promise<void> {
+// us) against an existing Co user. A match gets the real SMS reach-out
+// (runCalendarFollowReachOutAgent). No match still gets a reach-out, just
+// over email instead (Royce, 2026-08-30: "if the person isn't in our
+// follow calendar we should reach out via email") — Co has no phone number
+// for a non-user, but the webhook itself already gave us their email, so
+// there's no reason to do nothing. `name` is a best-effort guess at the
+// field Luma's payload uses (unconfirmed against a real delivery, same
+// caveat as `email` below) — the email still sends without it, just with a
+// generic greeting.
+async function reachOutToSubscriber(email: string, name?: string): Promise<void> {
   const { rows } = await pool.query(`SELECT id, first_name, phone_number FROM users WHERE email = $1`, [email]);
   const user = rows[0];
   if (!user) {
-    console.log(`luma/webhook: calendar.person_subscribed (${email}) — not a Co user, nothing to do`);
+    console.log(`luma/webhook: calendar.person_subscribed (${email}) — not a Co user, reaching out by email instead`);
+    await sendEmail({ email, calendarFollow: true, firstName: name }).catch((err: any) =>
+      console.error(`luma/webhook: calendar.person_subscribed (${email}) — sendEmail failed:`, err?.message ?? err),
+    );
     return;
   }
   await runCalendarFollowReachOutAgent({ userId: user.id, firstName: user.first_name, phoneNumber: user.phone_number });
@@ -159,15 +170,17 @@ router.post("/webhook", (req: Request, res: Response) => {
       break;
     }
     case "calendar.person_subscribed": {
-      // Only reachable if this email already matches a Co user — Co has no
-      // way to contact a non-user (no phone on file). Field name guessed
-      // (data.email), unconfirmed against a real delivery.
+      // A Co-user match gets texted; anyone else gets emailed instead (see
+      // reachOutToSubscriber) — either way, something reaches them. Field
+      // names guessed (data.email, data.name), unconfirmed against a real
+      // delivery.
       const email = data?.email;
+      const name = data?.name;
       if (!email) {
         console.error("luma/webhook: calendar.person_subscribed payload has no email field:", JSON.stringify(data));
         break;
       }
-      reachOutToSubscriber(email).catch((err: any) =>
+      reachOutToSubscriber(email, name).catch((err: any) =>
         console.error("luma/webhook: calendar.person_subscribed — reachOutToSubscriber failed:", err?.message ?? err),
       );
       break;

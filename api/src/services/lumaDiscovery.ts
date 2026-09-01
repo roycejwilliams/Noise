@@ -26,7 +26,7 @@ export type DiscoveredEvent = {
 // ranks client-side instead of risking a silently-wrong filter param.
 // Genuinely global result set until that's confirmed — a real limitation
 // for a Bay-Area-focused product, flagged rather than silently accepted.
-async function fetchPublicEvents(limit: number): Promise<DiscoveredEvent[]> {
+export async function fetchPublicEvents(limit: number): Promise<DiscoveredEvent[]> {
   const url = new URL(DISCOVER_URL);
   url.searchParams.set("pagination_limit", String(limit));
 
@@ -53,21 +53,38 @@ async function fetchPublicEvents(limit: number): Promise<DiscoveredEvent[]> {
 // 0.85 bar), so this is deliberately lower. Not tuned against real data yet.
 const RELEVANCE_THRESHOLD = 0.72;
 
-export type MatchedEvent = DiscoveredEvent & { similarity: number };
-
 // Shared ranking core — takes any list of {name, city}-shaped candidates
 // (public discovery events here, but also reused by tieredRecommendation.ts
 // for Co's own calendar events, since both are "rank real events against an
 // ask" with the same signal available) and returns the single best match if
 // it clears the bar, null otherwise. No point surfacing a weak match — same
 // reasoning as dropping the embedding-only fallback in eventScoring.ts.
+//
+// Proximity bias, optional `userCity` (Royce, 2026-08-30): "city and the
+// proximity to each user matter." Without this, ranking only ever compares
+// the ask's own text against each candidate's name+city — nothing signals
+// "and is this even near the person" unless they happened to state a
+// location themselves. Appending the user's own city to the ask-side text
+// before embedding lets a same-city candidate score higher than an
+// otherwise-similar one elsewhere, through the same semantic-overlap
+// mechanism already used for the candidate side, rather than needing a
+// separate distance calculation. Forces a fresh embedding instead of
+// reusing a passed-in ask.embedding when userCity is given — that embedding
+// was computed from the ask's original text and wouldn't reflect the
+// appended city.
 export async function rankByRelevance<T extends { name: string; city?: string | null }>(
   candidates: T[],
   ask: StatedIntent,
+  userCity?: string | null,
 ): Promise<(T & { similarity: number }) | null> {
   if (!ask.text || !candidates.length) return null;
 
-  const askEmbedding = ask.embedding?.length ? ask.embedding : await generateEmbedding(ask.text).catch(() => null);
+  const askText = userCity ? `${ask.text} (near ${userCity})` : ask.text;
+  const askEmbedding = userCity
+    ? await generateEmbedding(askText).catch(() => null)
+    : ask.embedding?.length
+      ? ask.embedding
+      : await generateEmbedding(askText).catch(() => null);
   if (!askEmbedding) return null;
 
   const candidateEmbeddings = await Promise.all(
@@ -85,18 +102,6 @@ export async function rankByRelevance<T extends { name: string; city?: string | 
   });
 
   return best;
-}
-
-// Ranks public Luma events (Tier 2 — anyone else's calendar) against a
-// stated ask. event name + city is the only signal available (the discover
-// payload has no per-event description field, only a short blurb on the
-// hosting calendar/community, not the specific event).
-export async function findEventMatchingAsk(ask: StatedIntent): Promise<MatchedEvent | null> {
-  const events = await fetchPublicEvents(50).catch((err: any) => {
-    console.error("lumaDiscovery: fetchPublicEvents failed (non-fatal):", err?.message ?? err);
-    return [] as DiscoveredEvent[];
-  });
-  return rankByRelevance(events, ask);
 }
 
 // The one place in this codebase that computes cosine similarity in JS
