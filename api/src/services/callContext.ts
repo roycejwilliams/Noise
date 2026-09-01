@@ -4,10 +4,23 @@ import pool from "../db/db.js";
 // from a prior call's extracted profile/intent AND recent text exchanges —
 // so a new call's opening can pick up from it instead of a cold generic
 // greeting every time, regardless of which channel the prior context came
-// from. Kept short (a handful of lines) since this gets passed as a URL
-// query param on the Twilio bridge connect URL, the same proven mechanism
-// {first_name} already uses — not a documented Hume feature for arbitrary
-// variables, but the one actually wired up and working in this system.
+// from.
+//
+// Bug fix, 2026-09-01 (Royce, diagnosing a real memory-continuity gap live
+// with Co: "earlier parts of what you told me didn't come through
+// cleanly"): this used to hard-truncate to 600 characters and pull only the
+// last 6 raw text_exchange rows (3 conversational turns), justified by a
+// comment claiming the result "gets passed as a URL query param on the
+// Twilio bridge connect URL." That mechanism doesn't exist anywhere in the
+// current code — every actual caller (mediaStreamBridge.ts's Hume
+// sessionSettings.variables, postCallFollowUp.ts and sendblue.ts's LLM
+// prompt interpolation) treats this as plain in-process text with no URL
+// involved. The cap was real, it just wasn't protecting anything anymore —
+// it was silently discarding real context on every call and every text
+// reply, which is exactly the gap Co and Royce were diagnosing. Raised to a
+// generous bound (still a bound, not unlimited — a defensive sanity check
+// against a genuinely pathological profile, not a real constraint anyone
+// should ever hit) and 20 rows (10 turns) of raw history instead of 3.
 export async function buildContextSummary(userId: string): Promise<string> {
   try {
     const [profileResult, recentTextResult] = await Promise.all([
@@ -19,7 +32,7 @@ export async function buildContextSummary(userId: string): Promise<string> {
       pool.query(
         `SELECT content FROM co_memories
          WHERE user_id = $1 AND memory_type = 'text_exchange'
-         ORDER BY created_at DESC LIMIT 6`,
+         ORDER BY created_at DESC LIMIT 20`,
         [userId],
       ),
     ]);
@@ -44,10 +57,11 @@ export async function buildContextSummary(userId: string): Promise<string> {
     if (recentTextLine) lines.push(recentTextLine);
 
     const summary = lines.join(". ");
-    // Twilio bridge URL is a query string, not a request body — keep this
-    // bounded so it can't push the whole URL past a proxy/server length
-    // limit regardless of how much is on file.
-    return summary.length > 600 ? `${summary.slice(0, 600)}…` : summary;
+    // Generous sanity bound, not a real constraint (see the note above) —
+    // a few thousand characters costs nothing meaningful in an LLM prompt
+    // or a JSON payload; this just guards against a genuinely pathological
+    // profile ballooning without limit.
+    return summary.length > 4000 ? `${summary.slice(0, 4000)}…` : summary;
   } catch (err: any) {
     console.error("callContext: buildContextSummary failed (non-fatal, calling with no prior context):", err?.message ?? err);
     return "";

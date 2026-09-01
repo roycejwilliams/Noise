@@ -595,11 +595,21 @@ Return ONLY strict JSON: {"full_name": string or null, "email": string or null, 
         // classifier below needs the actual conversation thread (a time
         // given in one message and a timezone confirmed in a later one is
         // still a single schedule request), not just this message alone.
+        //
+        // Bug fix, 2026-09-01 (Royce, diagnosing a real memory-continuity
+        // gap live with Co — see callContext.ts's buildContextSummary for
+        // the fuller writeup): 8 rows is only 4 conversational turns. A
+        // longer real exchange (exactly the kind where continuity matters
+        // most) could already be losing its own early turns to this same
+        // window mid-conversation, on top of the separate cross-conversation
+        // gap buildContextSummary had. Raised to 10 turns' worth; safe for
+        // deriveStyleHint below too, which only gets more representative
+        // (not worse) with a bigger sample of someone's normal texting style.
         const chronologicalResult = await pool.query(
           `SELECT content, created_at FROM co_memories
            WHERE user_id = $1 AND memory_type = 'text_exchange'
            ORDER BY created_at DESC
-           LIMIT 8`,
+           LIMIT 20`,
           [user.id],
         );
         const recentConversation = chronologicalResult.rows
