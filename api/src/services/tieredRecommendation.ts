@@ -1,7 +1,7 @@
 import { generateText } from "ai";
 import { anthropic } from "@ai-sdk/anthropic";
 import { listCalendarEvents } from "./luma.js";
-import { fetchPublicEvents, rankByRelevance } from "./lumaDiscovery.js";
+import { fetchPublicEvents, rankByRelevance, fetchEventDescription } from "./lumaDiscovery.js";
 import { searchRecentPosts } from "./xSearch.js";
 import { withinRadius } from "./geocoding.js";
 import type { StatedIntent } from "./matching.js";
@@ -98,6 +98,43 @@ async function filterByRadius<T extends { city?: string | null }>(
   return candidates.filter((_, i) => withinFlags[i]);
 }
 
+// Real judgment gate, take two (Royce, 2026-09-02) — the first attempt at
+// this was reverted for being unreliable when judging from a bare event
+// NAME alone (too strict in one wording, too lenient in another — genuinely
+// not enough signal for any prompt to work with). Royce then pushed back
+// correctly: "Look into what field Luma gives you about an event. It can't
+// just stop at name" — confirmed live, a real description DOES exist on
+// each event's own public page (lumaDiscovery.ts's fetchEventDescription),
+// just not on the discovery LIST endpoint. With real substance to judge
+// from instead of a handful of words, this is a fundamentally different,
+// answerable question. Only called for the one already-top-ranked
+// candidate (one extra page fetch, not per-candidate). No description
+// available (fetch failed, or Tier 1 which has no url field yet) means no
+// gate — fails open, same "don't drop a real candidate to an infra gap"
+// philosophy as the radius/geocoding fallback.
+async function isGenuinelyRelevant(askText: string, candidateName: string, candidateCity: string | null, description: string | null): Promise<boolean> {
+  if (!description) return true;
+  try {
+    const { text: raw } = await generateText({
+      model: anthropic("claude-haiku-4-5-20251001"),
+      experimental_telemetry: { isEnabled: true, functionId: "tieredRecommendation.relevanceGate" },
+      prompt: `Someone said: "${askText}"
+
+Co is considering recommending this real event: "${candidateName}"${candidateCity ? ` in ${candidateCity}` : ""}.
+
+Its actual description: "${description}"
+
+Based on the real description, not just the name, is this genuinely a strong, specific fit for what they're actually asking for? Reject it only if the real description makes clear this is a meaningfully different kind of thing than what they want — a loose, plausible topical connection is fine to accept, but a clear mismatch once you read what it's actually about should be rejected.
+
+Return ONLY "yes" or "no".`,
+    });
+    return raw.trim().toLowerCase().startsWith("yes");
+  } catch (err: any) {
+    console.error("tieredRecommendation: isGenuinelyRelevant failed (non-fatal, allowing match through):", err?.message ?? err);
+    return true;
+  }
+}
+
 // Tier 1 — Co's own calendar. Reuses the same ranking core as Tier 2
 // (lumaDiscovery.rankByRelevance) since both are "rank real events against
 // an ask" with the same signal (name + city) available — Co's own events
@@ -143,6 +180,10 @@ async function tryTier2(ask: StatedIntent, userCity: string | null, filter?: (st
   const nearby = await filterByRadius(inWindow, userCity);
   const match = await rankByRelevance(nearby, ask);
   if (!match) return null;
+  if (ask.text) {
+    const description = await fetchEventDescription(match.url).catch(() => null);
+    if (!(await isGenuinelyRelevant(ask.text, match.name, match.city, description))) return null;
+  }
   return {
     tier: 2,
     kind: "public_event",
