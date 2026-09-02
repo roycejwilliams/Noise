@@ -164,12 +164,23 @@ async function tryTier2(ask: StatedIntent, userCity: string | null, filter?: (st
 async function proposeOpportunityQuery(ask: StatedIntent, city: string | null): Promise<string | null> {
   if (!ask.text) return null;
   try {
+    // Today's date, explicit (Royce, 2026-09-02) — confirmed live: without
+    // this, the model defaulted to a plausible-sounding but wrong year from
+    // its training data ("SF accelerator program applications open 2024"),
+    // and that literal wrong year in the query killed recall entirely (0
+    // results from X's own 7-day recent-search, which will never contain a
+    // stale year string). extractRealOpportunity already gets today's date
+    // for its own deadline check; this step needs it too, for the same
+    // reason.
+    const todayStr = new Date().toISOString().slice(0, 10);
     const { text: raw } = await generateText({
       model: anthropic("claude-haiku-4-5-20251001"),
       experimental_telemetry: { isEnabled: true, functionId: "tieredRecommendation.proposeOpportunityQuery" },
       prompt: `Someone wants: "${ask.text}"${city ? ` (based in ${city})` : ""}
 
-If this maps reasonably to the kind of thing a founder or high-agency builder would search X/Twitter for right now — an accelerator, fellowship, cohort-based program, or similar real opportunity with an open or upcoming application — propose a short X search query (keywords, not a question) likely to surface real, recent posts about it. If it doesn't map to that kind of thing at all (e.g. it's purely social, not opportunity-shaped), return null.
+Today's date: ${todayStr}
+
+If this maps reasonably to the kind of thing a founder or high-agency builder would search X/Twitter for right now — an accelerator, fellowship, cohort-based program, or similar real opportunity with an open or upcoming application — propose a short X search query (keywords, not a question) likely to surface real, recent posts about it. Never include a specific year in the query unless the person's own ask text stated one — a wrong or stale year keyword will filter out real current posts that don't happen to mention that exact year. If it doesn't map to that kind of thing at all (e.g. it's purely social, not opportunity-shaped), return null.
 
 Return ONLY valid JSON: {"query": "..." or null}`,
     });
