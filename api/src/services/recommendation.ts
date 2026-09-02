@@ -12,8 +12,17 @@ import { getTieredRecommendation, type TierMatch } from "./tieredRecommendation.
 // activity/community/next-step, never a real business or place, since we
 // have no real venue data to ground that (that's the separate venue-lookup
 // mechanism in venueLookup.ts).
+// matches is only present when this came from the tiered engine (real
+// events/opportunities, each with its own url) — the generic LLM-guessed
+// fallback below has no matches array since it never has a real link.
+// Royce, 2026-09-02: "the format should just be the link when it just
+// shows the preview then a description... we should be able to identify
+// which tier is what" — the old flattened match/reason strings gave
+// sendblue.ts nothing to format with; the caller needs the real structure
+// to present each one as its own distinct, link-previewable block instead
+// of one clumped paragraph.
 export type RecommendationResult =
-  | { available: true; match: string; reason: string }
+  | { available: true; match: string; reason: string; matches?: TierMatch[] }
   | { available: false; reason: string };
 
 const NOT_ENOUGH_DATA: RecommendationResult = {
@@ -93,6 +102,7 @@ export async function generateRecommendation(userId: string, currentMessage?: st
           available: true,
           match: tierMatches.map((m) => `${m.name} (${m.url ?? "Co's own calendar"})`).join("; "),
           reason: tierMatches.map((m) => m.reason).join(" "),
+          matches: tierMatches,
         };
         await pool
           .query(`INSERT INTO co_memories (user_id, memory_type, content) VALUES ($1, 'recommendation', $2)`, [
