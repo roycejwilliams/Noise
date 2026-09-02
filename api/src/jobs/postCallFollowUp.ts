@@ -57,7 +57,21 @@ export async function sendDueFollowUps(): Promise<void> {
       // the model fell back to explaining what it's missing rather than
       // writing the message. Row is already claimed (sent_at set above), so
       // skipping here just means no text goes out this round — not a retry.
-      if (trimmed.includes("{{") || /context_summary/i.test(trimmed)) {
+      //
+      // Broadened 2026-09-02 (Royce, "check the recent text messages through
+      // sendblue") — the original {{ / context_summary check was written for
+      // one specific failure (unfilled template tokens) and missed a whole
+      // other class that shipped live: a thin/no-content transcript (see
+      // routes/co.ts's hasRealUserTurn, the actual root-cause fix) led the
+      // model to explain what it's missing instead — "I don't have a record
+      // of a completed call with Royce yet", "I can't actually send texts,
+      // that's outside what I can do in this interface. I can only take
+      // calls." Neither contains "{{" or "context_summary", so both went out
+      // as real texts. This is a backstop for the same failure shape
+      // resurfacing some other way, not a replacement for fixing root causes.
+      const LEAKED_METACOMMENTARY =
+        /\{\{|context_summary|\bi don'?t have (a |any )?(record|access|context|information)\b|\bi can'?t (actually )?(send|text)\b|\boutside what i can do\b|\bi can only (take|make) calls?\b/i;
+      if (LEAKED_METACOMMENTARY.test(trimmed)) {
         console.error(
           `postCallFollowUp: generated text for follow-up ${row.id} looked like leaked prompt/meta-commentary, not sending:`,
           trimmed,

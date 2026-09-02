@@ -629,6 +629,31 @@ async function resolveUserId(
   return null;
 }
 
+// Root-cause guard (Royce, 2026-09-02, "check the recent text messages
+// through sendblue" — Co had fired off 4 texts once the postCallFollowUp
+// cron came alive for the first time in co-test): chat_ended fires for
+// EVERY Hume session regardless of whether the other side ever said
+// anything real — a call that went to voicemail, or was answered and hung
+// up immediately, still produces a "transcript" that's just Co's own
+// opening line, or the voicemail system's robotic prompt captured as if it
+// were the user talking. Confirmed live: several queued follow-ups had
+// transcripts with zero real user turns, and the model — told "here's what
+// they told you" with nothing to reference — broke character and explained
+// what it was missing instead of writing a message ("I don't have a record
+// of a completed call..."), which then got sent as the actual text. Voicemail
+// calls already have their own real follow-up path (the delayed missed-call
+// SMS via pending_call_followups) — this only needs to stop scheduling a
+// SECOND, content-less one on top of that.
+const VOICEMAIL_BOILERPLATE = /is not available at the tone|forwarded to voicemail|please record your message|record your message when you (have finished|are finished)/i;
+
+function hasRealUserTurn(transcript: string): boolean {
+  return transcript
+    .split("\n")
+    .filter((line) => /^user:/i.test(line.trim()))
+    .map((line) => line.replace(/^user:\s*/i, "").trim())
+    .some((line) => line.length > 0 && !VOICEMAIL_BOILERPLATE.test(line));
+}
+
 // Schedules the post-call reflection text instead of sending it immediately
 // — landing the second the call ends read as a scripted status update, not
 // something a person who was actually listening would send. send_at is
@@ -794,7 +819,7 @@ router.post(
         // shows "Ready" if it happens to be open — most people have hung up
         // and moved on, so the scheduled text is the only confirmation they
         // actually get that the call did something.
-        if (callUser) {
+        if (callUser && hasRealUserTurn(transcript)) {
           await scheduleFollowUpText(user_id, transcript);
         }
 
