@@ -1080,20 +1080,28 @@ Return ONLY the classification, nothing else.`,
               // multiple matches are clearly separated instead of run
               // together — the label makes which kind of thing each one is
               // obvious without needing to expose raw tier numbers.
-              // Link leads, description follows (Royce, 2026-09-02, after
-              // seeing the description-first version live: "the link...
-              // shows the preview... then a description") — the link needs
-              // to be the first thing on its own line so the preview card
-              // renders before the explanatory sentence beneath it, not
-              // description text first with the link trailing after.
+              // Separate MESSAGES, not just separate lines (Royce,
+              // 2026-09-02): "for the links send them by themselves then
+              // the description. So tier 2 link then next sent would be
+              // the description, same will follow for the other tiers."
+              // One combined message (even with the link on its own line
+              // inside it) still doesn't give iMessage's preview the full
+              // dedicated-message treatment the way a message containing
+              // ONLY the link does. conversationReply.ts's system prompt
+              // explicitly allows this context to override its normal
+              // "call sendReply once" default with its own multi-message
+              // sequence — this is that sequence: per match, one sendReply
+              // call with JUST the bare link, then a separate sendReply
+              // call right after with a short description, repeated in
+              // order for every match found.
               const blocks = recommendation.matches
-                .map((m) => {
-                  const label = m.kind === "co_event" ? "A Co event" : m.kind === "public_event" ? "A public event" : "A real opportunity";
-                  const linkLine = "url" in m && m.url ? `${m.url}\n` : "";
-                  return `${linkLine}${label}: "${m.name}" — ${m.reason}`;
+                .map((m, i) => {
+                  const label = m.kind === "co_event" ? "a Co event" : m.kind === "public_event" ? "a public event" : "a real opportunity";
+                  const linkLine = "url" in m && m.url ? m.url : "(no link — Co's own calendar, no url to share)";
+                  return `Match ${i + 1} (${label}) — send these as TWO separate sendReply calls, in this order:\n  1) sendReply with ONLY this, nothing else: ${linkLine}\n  2) sendReply with a short sentence on why it fits: "${m.name}" — ${m.reason}`;
                 })
                 .join("\n\n");
-              recommendationContext = `\nYou just thought of ${recommendation.matches.length > 1 ? "a couple of real things" : "something real"} for them. Present ${recommendation.matches.length > 1 ? "each one as its own short block" : "it"} naturally in your reply — the plain link on its own line FIRST, by itself (never woven into the middle of a sentence or wrapped in parentheses) so it renders as a real preview, then a brief sentence right after it on why it fits.${recommendation.matches.length > 1 ? " Separate multiple blocks with a blank line — don't run them together into one paragraph." : ""} Never say you're "sending" or "attaching" it, just let the link lead its own line as part of the message. It's fine for this reply to run longer than usual to fit this in properly.\n\n${blocks}`;
+              recommendationContext = `\nYou just thought of ${recommendation.matches.length > 1 ? "a couple of real things" : "something real"} for them. Instead of your normal single reply, call sendReply multiple times in sequence, once per step listed below, in order — a bare-link message on its own gets a real preview card, which is why it needs to be the ENTIRE content of its own message, never combined with any other text. Never say you're "sending" or "attaching" it — just send the plain link alone, then the description as the very next message.\n\n${blocks}\n\nIf you also want to acknowledge what they just said, do that as part of the first description message (step 2 of the first match), not as a separate message of its own.`;
             } else if (recommendation.available) {
               // Generic fallback path (no tiered match found) — a
               // category/type suggestion, never a specific real venue with
