@@ -23,6 +23,7 @@ import { requireTesterLoginApi, requireTesterLoginPage } from "./middleware/requ
 import { bridgeTwilioMediaStream } from "../../api/src/services/mediaStreamBridge.js";
 import { createCoRouter } from "../../api/src/routes/co.js";
 import { sendblueRouter } from "../../api/src/routes/sendblue.js";
+import { registerJobs } from "../../api/src/jobs/index.js";
 
 // A fresh Railway Postgres has none of brew_dev's tables yet — runMigrations()
 // (imported unchanged from api/) only ever does ALTER TABLE / CREATE TABLE IF
@@ -155,6 +156,17 @@ async function main() {
   // filename, walking straight around requireTesterLoginPage.
   app.use((req, res, next) => (req.path.endsWith(".html") ? res.status(404).end() : next()));
   app.use(express.static(publicDir));
+
+  // Every cron (event surfacing sweep, ask check-ins, memory compaction,
+  // proactive calls, etc.) lives in api/src/jobs/index.ts, but co-test never
+  // called it — this service has been running with zero background jobs
+  // since it stopped running its own separate webhook implementation, since
+  // nothing here ever wired the shared jobs module in. Confirmed live,
+  // 2026-09-01: 9 open asks sitting with last_surfaced_at still NULL days
+  // after creation, and manually replaying the sweep's own logic against
+  // the real DB worked instantly with no errors — so the job logic was
+  // fine, it just never ran.
+  registerJobs(io);
 
   const port = process.env.PORT ? Number(process.env.PORT) : 3000;
   httpServer.listen(port, () => console.log(`co-test listening on ${port}`));
