@@ -932,37 +932,11 @@ router.post(
   },
 );
 
-// POST /co/location/:user_id — store GPS coordinates from the app
-router.post(
-  "/location/:user_id",
-  authenticateToken,
-  async (req: Request, res: Response, next: NextFunction) => {
-    try {
-      const { user_id } = req.params;
-      const { latitude, longitude } = req.body as { latitude?: number; longitude?: number };
-
-      if (req.user?.id !== user_id) {
-        return res
-          .status(403)
-          .send("Unauthorized: You can only access your own account");
-      }
-
-      if (typeof latitude !== "number" || typeof longitude !== "number") {
-        return res.status(400).send("Missing required fields: latitude and longitude (numbers).");
-      }
-
-      await pool.query(
-        `UPDATE co_profiles
-         SET coordinates = ST_SetSRID(ST_MakePoint($1, $2), 4326)
-         WHERE user_id = $3`,
-        [longitude, latitude, user_id],
-      );
-
-      return res.status(200).send({ success: true });
-    } catch (error) {
-      next(error);
-    }
-  },
-);
+// POST /co/location/:user_id removed (Royce, 2026-09-02) — its only caller
+// was the app's profile.tsx GPS-permission flow, and the app itself is
+// being sunset. It wrote to co_profiles.coordinates via PostGIS functions
+// (ST_SetSRID/ST_MakePoint), which nothing ever read back downstream even
+// while this was live — see db/migrations.ts's postgis teardown migration,
+// which drops the column and the extension itself.
 
 export default router;

@@ -197,6 +197,20 @@ export function runMigrations() {
       console.error("geocode_cache migration failed:", err),
     );
 
+  // Retire PostGIS from production too (Royce, 2026-09-02: "It's settled" —
+  // the app that was the only thing writing to co_profiles.coordinates is
+  // being sunset). Confirmed before this went in: nothing in the codebase
+  // ever reads coordinates (no SELECT, ST_Distance, ST_DWithin anywhere) —
+  // the app-side write (routes/co.ts's now-removed POST /co/location) had
+  // zero downstream consumer even while it was live. No-op on co-test,
+  // where neither the column nor the extension exist in the first place.
+  pool
+    .query(`ALTER TABLE co_profiles DROP COLUMN IF EXISTS coordinates`)
+    .then(() => pool.query(`DROP EXTENSION IF EXISTS postgis`))
+    .catch((err: Error) =>
+      console.error("postgis teardown migration failed:", err),
+    );
+
   pool
     .query(`CREATE INDEX IF NOT EXISTS idx_co_profiles_city ON co_profiles (city)`)
     .catch((err: Error) =>

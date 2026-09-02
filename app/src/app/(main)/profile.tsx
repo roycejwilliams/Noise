@@ -6,7 +6,6 @@ import { connectSocket, socket } from "@/lib/socket";
 import type { Circle, CoProfile, User } from "@/types";
 import * as SecureStore from "expo-secure-store";
 import { useRouter } from "expo-router";
-import * as Location from "expo-location";
 import { useEffect, useState } from "react";
 import { StyleSheet, Text, View } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
@@ -65,23 +64,6 @@ export default function ProfileScreen() {
     }
 
     connectSocket().then(() => { if (mounted) load(); });
-
-    // Silently capture GPS in background — updates co_profiles.location for proximity matching
-    (async () => {
-      try {
-        const userId = await SecureStore.getItemAsync("user_id");
-        if (!userId || !mounted) return;
-        const { status } = await Location.requestForegroundPermissionsAsync();
-        if (status !== "granted") return;
-        const loc = await Location.getCurrentPositionAsync({ accuracy: Location.Accuracy.Balanced });
-        await api.post(`/co/location/${userId}`, {
-          latitude: loc.coords.latitude,
-          longitude: loc.coords.longitude,
-        });
-      } catch {
-        // Non-fatal — matching falls back to city string if no GPS
-      }
-    })();
 
     socket.on("circle:approved", async ({ circle_id }: { circle_id: string }) => {
       if (!mounted) return;
