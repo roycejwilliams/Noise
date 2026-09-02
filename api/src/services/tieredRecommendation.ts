@@ -173,7 +173,12 @@ If this maps reasonably to the kind of thing a founder or high-agency builder wo
 
 Return ONLY valid JSON: {"query": "..." or null}`,
     });
-    const clean = raw.replace(/```json|```/g, "").trim();
+    // Same robustness fix as extractRealOpportunity below — a preamble/
+    // trailing-commentary wrap around the JSON isn't caught by stripping
+    // code fences alone.
+    const stripped = raw.replace(/```json|```/g, "").trim();
+    const jsonMatch = stripped.match(/\{[\s\S]*\}/);
+    const clean = jsonMatch ? jsonMatch[0] : stripped;
     const parsed = JSON.parse(clean);
     return typeof parsed?.query === "string" ? parsed.query : null;
   } catch (err: any) {
@@ -219,7 +224,15 @@ Pick the ONE post (if any) that names a real, concrete opportunity (a specific a
 
 Return ONLY valid JSON: {"index": 0, "name": "the specific opportunity name", "reason": "one short grounded sentence", "deadline": "YYYY-MM-DD" or null} or {"index": null}`,
     });
-    const clean = raw.replace(/```json|```/g, "").trim();
+    // Robust extraction (Royce, 2026-09-02, confirmed live: "Unexpected
+    // token 'I', "I can see "..." — the model ignored "Return ONLY valid
+    // JSON" and wrapped it in prose. Stripping code fences alone (the old
+    // behavior) doesn't help when there's no fence at all, just a preamble/
+    // trailing commentary around the object. Grabbing the outermost {...}
+    // span handles both that case and the plain-JSON case identically.
+    const stripped = raw.replace(/```json|```/g, "").trim();
+    const jsonMatch = stripped.match(/\{[\s\S]*\}/);
+    const clean = jsonMatch ? jsonMatch[0] : stripped;
     const parsed = JSON.parse(clean);
     if (typeof parsed?.index !== "number" || !posts[parsed.index]) return null;
     return {
