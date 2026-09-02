@@ -1071,37 +1071,40 @@ Return ONLY the classification, nothing else.`,
           if (wantsSomethingConcrete) {
             const recommendation = await generateRecommendation(user.id, resolvedContent);
             if (recommendation.available && recommendation.matches?.length) {
-              // Real tiered matches, each with its own url — formatting
-              // fix (Royce, 2026-09-02, confirmed live: a real two-match
-              // reply came back as one clumped paragraph with the link
-              // buried mid-sentence). Each match gets its own short block
-              // with the bare link on its own line so iMessage renders a
-              // real preview instead of a plain-text URL fragment, and
-              // multiple matches are clearly separated instead of run
-              // together — the label makes which kind of thing each one is
-              // obvious without needing to expose raw tier numbers.
-              // Separate MESSAGES, not just separate lines (Royce,
-              // 2026-09-02): "for the links send them by themselves then
-              // the description. So tier 2 link then next sent would be
-              // the description, same will follow for the other tiers."
-              // One combined message (even with the link on its own line
-              // inside it) still doesn't give iMessage's preview the full
-              // dedicated-message treatment the way a message containing
-              // ONLY the link does. conversationReply.ts's system prompt
-              // explicitly allows this context to override its normal
-              // "call sendReply once" default with its own multi-message
-              // sequence — this is that sequence: per match, one sendReply
-              // call with JUST the bare link, then a separate sendReply
-              // call right after with a short description, repeated in
-              // order for every match found.
-              const blocks = recommendation.matches
-                .map((m, i) => {
-                  const label = m.kind === "co_event" ? "a Co event" : m.kind === "public_event" ? "a public event" : "a real opportunity";
-                  const linkLine = "url" in m && m.url ? m.url : "(no link — Co's own calendar, no url to share)";
-                  return `Match ${i + 1} (${label}) — send these as TWO separate sendReply calls, in this order:\n  1) sendReply with ONLY this, nothing else: ${linkLine}\n  2) sendReply with a short sentence on why it fits: "${m.name}" — ${m.reason}`;
-                })
-                .join("\n\n");
-              recommendationContext = `\nYou just thought of ${recommendation.matches.length > 1 ? "a couple of real things" : "something real"} for them. Instead of your normal single reply, call sendReply multiple times in sequence, once per step listed below, in order — a bare-link message on its own gets a real preview card, which is why it needs to be the ENTIRE content of its own message, never combined with any other text. Never say you're "sending" or "attaching" it — just send the plain link alone, then the description as the very next message.\n\n${blocks}\n\nIf you also want to acknowledge what they just said, do that as part of the first description message (step 2 of the first match), not as a separate message of its own.`;
+              // Sent DETERMINISTICALLY, not via agent tool-calling (Royce,
+              // 2026-09-02, confirmed live) — the previous version asked the
+              // conversational agent to execute a multi-step sendReply
+              // sequence (link, then description, per match) via prose
+              // instructions in its system prompt. Real failure: with two
+              // matches AND another context block (updatesContext) active in
+              // the same turn, the model correctly sent the first match's
+              // link, then gave up on the sequence and crammed the second
+              // match's description, its MISSING link, and the unrelated
+              // updates content into one giant paragraph — "too wordy and
+              // it didn't even send the link for the accelerator." Relying
+              // on an LLM to perfectly execute 4+ sequential tool calls
+              // while also juggling other simultaneous context isn't
+              // reliable enough for something this mechanical. Sending the
+              // link and description directly here removes that failure
+              // mode entirely — same sendCoReply/logTextExchange helpers
+              // and 2s pacing convention conversationTools.ts's sendReply
+              // already uses for a real second message.
+              for (const m of recommendation.matches) {
+                if ("url" in m && m.url) {
+                  await sendCoReply({ phone: user.phone_number, message: m.url, asVoice: false });
+                  await logTextExchange(user.id, `Co replied: ${m.url}`);
+                  await new Promise((resolve) => setTimeout(resolve, 2000));
+                }
+                const description = `${m.name} — ${m.reason}`;
+                await sendCoReply({ phone: user.phone_number, message: description, asVoice: isVoice });
+                await logTextExchange(user.id, `Co replied: ${description}`);
+                await new Promise((resolve) => setTimeout(resolve, 2000));
+              }
+              // The agent still runs after this (see below) to genuinely
+              // respond to what they said — this just tells it the
+              // recommendation itself already went out, so it doesn't
+              // repeat the details or the link.
+              recommendationContext = `\nYou already sent them ${recommendation.matches.length > 1 ? "a couple of real things" : "something real"} you thought of, each as its own link message followed by its own description message — that already happened, separately from this reply. Don't repeat the name, link, or details in this reply. If it's natural, you can briefly acknowledge you just sent those, but keep this reply focused on genuinely responding to what they just said.`;
             } else if (recommendation.available) {
               // Generic fallback path (no tiered match found) — a
               // category/type suggestion, never a specific real venue with

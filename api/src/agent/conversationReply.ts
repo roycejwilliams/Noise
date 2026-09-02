@@ -189,7 +189,7 @@ Decide what to do, then act using your tools:
 - You have room for AT MOST ONE secondary, optional gesture folded into the same reply — never both, and never let a gesture replace actually responding. Options, in case either fits:
 ${callOfferEligible ? (input.isThinProfileFirstMessage ? `  - This is the first real thing they've shared and nothing is known about them yet — this is a good moment for a quick, low-pressure call, a real conversation gets Co further than texting back and forth. After responding, offer one. Keep it brief and secondary. Do not place any call, just make the gesture. Only skip it if it would genuinely feel forced or tone-deaf right after this specific reply — being eligible means you should default to offering, not treat it as merely optional.` : `  - What they just shared could genuinely benefit from a real conversation by voice — this is a good moment to offer one. After genuinely responding, offer a call as a warm gesture, not a logistics question — like "I'm here if you'd ever want to hop on a call and actually talk it through," not "are you free today or tomorrow." The offer has to actually name a call or talking by phone somewhere in it — a vague "I'm here if you want to talk" doesn't clearly read as a call offer to them any more than it would to anyone else, so don't rely on that alone. Do not place any call, just make the gesture. Only skip it if it would genuinely feel forced or tone-deaf right after this specific reply — being eligible means you should default to offering, not treat it as merely optional.`) : `  - A call offer is NOT available this turn (one is already pending, or was offered too recently) — do not mention, suggest, or ask about a phone call in your reply at all, in any wording, even indirectly. Just respond genuinely to what they said.`}
 ${input.missingTopic ? `  - Co doesn't yet have a good sense of ${input.missingTopicDescription}. If it fits naturally after responding, you can work in one brief, genuine question toward that — never force it, skip it if nothing natural comes up. If you use it, call markTopicAsked with topic "${input.missingTopic}" after sendReply.` : ""}
-- Call sendReply once with your reply.${input.isVoice ? "" : " Only call it a second time if you genuinely have a second, separate thought that reads more naturally as its own text sent right after — never to split one continuous thought into shorter pieces — UNLESS the real-recommendation context above gives you its own specific multi-message sequence to follow (link alone, then description, per match) — follow that instead, it overrides this default."} Then call markTopicAsked only if you actually used that gesture in the message you sent.`;
+- Call sendReply once with your reply.${input.isVoice ? "" : " Only call it a second time if you genuinely have a second, separate thought that reads more naturally as its own text sent right after — never to split one continuous thought into shorter pieces."} Then call markTopicAsked only if you actually used that gesture in the message you sent.`;
 
   const userText = input.imageForVision ? "Respond to what they just sent." : "Respond to what they just said.";
 
@@ -203,11 +203,12 @@ ${input.missingTopic ? `  - Co doesn't yet have a good sense of ${input.missingT
     model: anthropic("claude-sonnet-4-6"),
     system,
     tools,
-    // Raised from 6 (Royce, 2026-09-02) — the real-recommendation multi-
-    // message sequence (link, then description, per match) can need several
-    // sendReply round trips on its own for 2+ real matches; unused budget
-    // costs nothing since the model stops once it's actually done.
-    stopWhen: stepCountIs(12),
+    // 6, not 5 — a genuine second sendReply call now needs an extra
+    // call/result round trip the single-reply design didn't. (Briefly
+    // raised to 12 for a multi-message recommendation sequence the agent
+    // used to own — that sending is now deterministic in sendblue.ts
+    // instead, so this reverted back to 6.)
+    stopWhen: stepCountIs(6),
     experimental_telemetry: { isEnabled: true, functionId: "agent.conversationReply" },
     ...(input.imageForVision
       ? {
