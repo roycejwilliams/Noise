@@ -2,6 +2,7 @@ import pool from "../db/db.js";
 import { getTieredRecommendation, checkForUrgentMatch, type TierMatch } from "./tieredRecommendation.js";
 import { runEventDiscoverySurfacingAgent } from "../agent/eventDiscoverySurfacing.js";
 import { generateEmbedding } from "./embeddings.js";
+import { scheduleOutcomeFollowUp, getTierBias } from "./recommendationOutcome.js";
 
 export type SurfacingCandidate = {
   // ask_checkins.id — NOT the same as userId. A user can have more than one
@@ -259,11 +260,19 @@ async function findFreshPending(candidate: SurfacingCandidate): Promise<BacklogI
       return [];
     });
   }
-  // Tier order as the mention priority (Tier 1 first) — same "route people
-  // into Co's own events first" reasoning the old decideBestMatch had, just
-  // spread across separate texts over time instead of one ranked pick.
+  // Tier order as the mention priority (Tier 1 first by default) — same
+  // "route people into Co's own events first" reasoning the old
+  // decideBestMatch had, just spread across separate texts over time
+  // instead of one ranked pick. Bias-adjusted (Royce, 2026-09-02, "wire
+  // signal weighting into the standing profile") by getTierBias — a tier
+  // that's landed well for this person before sorts earlier; a user with no
+  // outcome history yet gets all-zero bias, which is exactly the same
+  // tier-number order as before this existed.
   const fresh = await filterFreshMatches(candidate.userId, matches);
-  return fresh.sort((a, b) => a.tier - b.tier).map((match) => ({ askText: candidate.askText, match, source }));
+  const bias = await getTierBias(candidate.userId);
+  return fresh
+    .sort((a, b) => bias[b.tier] - bias[a.tier] || a.tier - b.tier)
+    .map((match) => ({ askText: candidate.askText, match, source }));
 }
 
 // Drops anything at the front that's gone stale — either already offered
@@ -348,6 +357,14 @@ export async function attemptEventSurfacing(candidate: SurfacingCandidate): Prom
           "revealed_directly",
         ])
         .catch((err: any) => console.error("attemptEventSurfacing: event_offer_resolved write failed (non-fatal):", err?.message ?? err));
+
+      // Outcome-learning loop (Royce, 2026-09-02) — the ask-first path
+      // schedules this in sendblue.ts's "interested" branch; this is the
+      // OTHER real-details-revealed moment (revealNow skips the tease
+      // entirely), so it needs the same trigger here. No-op for Tier 3.
+      scheduleOutcomeFollowUp(candidate.userId, item.askText, item.match).catch((err: any) =>
+        console.error("attemptEventSurfacing: scheduleOutcomeFollowUp failed (non-fatal):", err?.message ?? err),
+      );
     }
 
     // Only Tier 1/2 are real shared events worth cross-matching another

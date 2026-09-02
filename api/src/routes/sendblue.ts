@@ -26,6 +26,12 @@ import {
 } from "../services/profileExtraction.js";
 import { generateRecommendation } from "../services/recommendation.js";
 import { EVENT_OFFER_EXPIRY_DAYS } from "../services/eventSurfacingSweep.js";
+import {
+  scheduleOutcomeFollowUp,
+  findPendingOutcomeFollowUp,
+  classifyNamedOutcome,
+  recordOutcome,
+} from "../services/recommendationOutcome.js";
 import { findRealVenues } from "../services/venueLookup.js";
 import { runConversationReplyAgent, filterRelevantMemories } from "../agent/conversationReply.js";
 import { triggerCallForUser } from "../services/callTrigger.js";
@@ -803,12 +809,47 @@ Return ONLY the classification, nothing else.`,
               } else if (eventReplyAction === "interested") {
                 const linkLine = match.url ? ` Link: ${match.url}.` : "";
                 eventOfferContext = `\nThey just said yes to hearing more about the thing you teased earlier. Share the real details now, naturally, as part of your reply: "${match.name}" — ${match.reason}.${linkLine} Be honest it's a suggestion, not a guarantee it's right for them — never say you're "sending" or "sharing" a link as an attachment, just mention it in the text.`;
+                // Outcome-learning loop (Royce, 2026-09-02) — schedule the
+                // "who did you meet?" follow-up right at the moment real
+                // details are actually revealed, same trigger point the
+                // Figma board shows. No-op for Tier 3 (no event_date) — see
+                // scheduleOutcomeFollowUp.
+                scheduleOutcomeFollowUp(user.id, parsed.askText, match).catch((err: any) =>
+                  console.error("sendblue: scheduleOutcomeFollowUp failed (non-fatal):", err?.message ?? err),
+                );
               } else {
                 eventOfferContext = `\nThey just passed on hearing more about the thing you teased earlier (internal only, never say this name to them: "${match.name}"). Acknowledge lightly, no pressure, don't explain what it was.`;
               }
             }
           } catch (err: any) {
             console.error("sendblue: event offer reply classification failed (non-fatal):", err?.message ?? err);
+          }
+        }
+
+        // Resolve the "who did you meet?" outcome follow-up, if one's
+        // pending (Royce, 2026-09-02 — Notion V1 board rows 7/12/13, "Co
+        // follows up" + shared classifier + signal weighting loop-back).
+        // Same "only classify when something's actually pending, fold into
+        // the SAME reply" reasoning as eventOfferContext above.
+        let outcomeFollowupContext = "";
+        if (hasText) {
+          try {
+            const pendingOutcomeFollowUp = await findPendingOutcomeFollowUp(user.id);
+            if (pendingOutcomeFollowUp) {
+              const outcome = await classifyNamedOutcome(resolvedContent, pendingOutcomeFollowUp.match_name);
+              if (outcome !== "unrelated") {
+                await recordOutcome(user.id, pendingOutcomeFollowUp.id, pendingOutcomeFollowUp.tier, outcome);
+                if (outcome === "named_positive") {
+                  outcomeFollowupContext = `\nThey just told you something good came out of "${pendingOutcomeFollowUp.match_name}" — someone worthwhile they met or a good outcome. Respond warmly to what they specifically shared, genuinely glad for them, no exclamation points.`;
+                } else if (outcome === "named_critical") {
+                  outcomeFollowupContext = `\nThey just told you "${pendingOutcomeFollowUp.match_name}" wasn't worthwhile or didn't go well. Acknowledge that honestly and warmly, no forced positivity, no apologizing on behalf of the thing itself.`;
+                } else {
+                  outcomeFollowupContext = `\nThey answered about "${pendingOutcomeFollowUp.match_name}" but didn't name anyone specific or describe a real outcome. Acknowledge lightly, no pressure to elaborate.`;
+                }
+              }
+            }
+          } catch (err: any) {
+            console.error("sendblue: outcome follow-up reply classification failed (non-fatal):", err?.message ?? err);
           }
         }
 
@@ -1324,6 +1365,7 @@ Return ONLY valid JSON, no preamble: {"wants_venue": true or false, "venue_type"
                 momentContext,
                 recommendationContext,
                 eventOfferContext,
+                outcomeFollowupContext,
                 updatesContext,
                 venueContext,
                 callFeatureQuestionContext,

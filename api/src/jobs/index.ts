@@ -10,6 +10,7 @@ import { sendDueFollowUps } from "./postCallFollowUp.js";
 import { placeDueCalls, sendDueReminders } from "./scheduledCall.js";
 import { placeDueProactiveCalls } from "./proactiveCheckinCall.js";
 import { buildRecap, findUsersDueForRecap } from "../services/memoryCompaction.js";
+import { sendDueOutcomeFollowUps } from "../services/recommendationOutcome.js";
 
 // Bounded-concurrency worker pool (Royce, 2026-08-30) — the event surfacing
 // sweep now runs for every open ask daily (see below), and a plain
@@ -320,5 +321,14 @@ export function registerJobs(io: Server) {
     } catch (error) {
       console.error("Memory compaction cron error:", error);
     }
+  });
+
+  // Outcome-learning loop (Royce, 2026-09-02: "Co follows up" + shared
+  // signal classifier + wiring weighting into future matching — Notion V1
+  // board rows 7/12/13). Every 15 min, same cadence as the other lightweight
+  // polling crons (scheduledCall, proactiveCheckinCall) — this just polls
+  // for due rows and claims atomically, cheap even run often.
+  cron.schedule("*/15 * * * *", () => {
+    sendDueOutcomeFollowUps().catch((err) => console.error("recommendationOutcome: poll failed:", err?.message ?? err));
   });
 }

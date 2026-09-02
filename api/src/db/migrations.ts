@@ -237,7 +237,8 @@ export function runMigrations() {
           'call_transcript','text_exchange','check_in','intent','recap','system','placement',
           'call_offer_pending','call_offer_resolved','recommendation','call_offer_declined_topic',
           'event_ask_solicitation','calendar_follow_reach_out','event_discovery_surfacing',
-          'event_change_notification','event_offer_pending','event_offer_resolved'
+          'event_change_notification','event_offer_pending','event_offer_resolved',
+          'recommendation_outcome'
         ]));
     `)
     .catch((err: Error) =>
@@ -1005,4 +1006,36 @@ export function runMigrations() {
       )
     `)
     .catch((err: Error) => console.error("product_updates table init failed:", err));
+
+  // Outcome-learning loop (Royce, 2026-09-02: "Co follows up" + the shared
+  // "named someone?" classifier + wiring signal weighting into future
+  // matching — Notion V1 board rows 7/12/13, fully unbuilt until now).
+  // Same due-timestamp + nullable claim column + partial index convention
+  // as post_call_follow_ups (jobs/postCallFollowUp.ts) — one row per
+  // scheduled "who did you meet?" follow-up, snapshotting the TierMatch at
+  // schedule time rather than joining back to co_memories later, same
+  // denormalized-snapshot approach post_call_follow_ups.transcript uses.
+  // Tier 1/2 only (see services/recommendationOutcome.ts) — a Tier 3
+  // opportunity isn't something with attendees to "meet."
+  pool
+    .query(`
+      CREATE TABLE IF NOT EXISTS recommendation_outcome_followups (
+        id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+        user_id UUID NOT NULL REFERENCES users(id),
+        ask_text TEXT NOT NULL,
+        tier SMALLINT NOT NULL,
+        match_name TEXT NOT NULL,
+        match JSONB NOT NULL,
+        send_at TIMESTAMPTZ NOT NULL,
+        sent_at TIMESTAMPTZ,
+        created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+      )
+    `)
+    .then(() =>
+      pool.query(`
+        CREATE INDEX IF NOT EXISTS idx_recommendation_outcome_followups_due
+          ON recommendation_outcome_followups (send_at) WHERE sent_at IS NULL
+      `),
+    )
+    .catch((err: Error) => console.error("recommendation_outcome_followups table init failed:", err));
 }
