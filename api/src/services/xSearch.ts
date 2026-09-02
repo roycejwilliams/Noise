@@ -24,9 +24,16 @@ function xHeaders(): Record<string, string> {
 
 // max_results kept small (10) deliberately — cost is per post read, and
 // Tier 3 only needs one good grounded answer, not a broad sample.
+//
+// -is:retweet always appended (Royce, 2026-09-02, "improve the quality of
+// tier 3") — confirmed live: a real search came back with the SAME single
+// post retweeted 4+ times out of 10 results, crowding out genuinely
+// different candidates without adding any real diversity. X's own query
+// operator excludes retweets at the source instead of relying on
+// downstream dedup logic that doesn't exist here.
 export async function searchRecentPosts(query: string, maxResults = 10): Promise<XPost[]> {
   const url = new URL(X_SEARCH_URL);
-  url.searchParams.set("query", query);
+  url.searchParams.set("query", `${query} -is:retweet`);
   url.searchParams.set("max_results", String(maxResults));
   url.searchParams.set("tweet.fields", "author_id,created_at");
 

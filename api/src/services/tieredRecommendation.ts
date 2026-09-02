@@ -231,7 +231,13 @@ Today's date: ${todayStr}
 Here are real recent posts from X, one per line:
 ${digest}
 
-Pick the ONE post (if any) that names a real, concrete opportunity (a specific accelerator, fellowship, or program — not vague hype, not an unrelated post) genuinely relevant to what they want. Name the opportunity using only what's actually in that post — never add details that aren't there. If a post's own text gives a deadline or application window that has clearly already closed relative to today's date, don't pick it — there's nothing left to act on. Rolling admissions, no stated deadline, or a deadline still ahead are all fine to pick. If the post states an explicit application deadline date, include it as "deadline" in YYYY-MM-DD form — only if the post actually states one, never estimate or infer one.
+Pick the ONE post (if any) that names a real, concrete opportunity (a specific accelerator, fellowship, or program — not vague hype, not an unrelated post) genuinely relevant to what they want. Name the opportunity using only what's actually in that post — never add details that aren't there.
+
+Skip anything that reads as hype, clickbait, or an engagement-bait "BREAKING" post without real concrete substance behind it (a specific program name, a real application process) — prefer a plainly-stated, verifiable opportunity over a dramatic-sounding one. A repost/retweet of someone else's claim is not independently more credible just because it's been shared multiple times.
+
+Some posts list SEVERAL distinct opportunities in one message (e.g. "1. Slush 100 — Deadline: Sept 7 ... 2. Techstars Anywhere ..."). If you pick a post like that, attribute every detail — especially the deadline — ONLY to the specific opportunity you're naming, never a detail stated for a different program listed in the same post. If the one you're actually naming has no deadline of its own stated, leave deadline out entirely even if another program mentioned right next to it has one.
+
+If a post's own text gives a deadline or application window that has clearly already closed relative to today's date, don't pick it — there's nothing left to act on. Rolling admissions, no stated deadline, or a deadline still ahead are all fine to pick. If the post states an explicit application deadline date for the SPECIFIC opportunity you're naming, include it as "deadline" in YYYY-MM-DD form — only if that opportunity itself actually states one, never estimate, infer, or borrow one from a different program in the same post.
 
 Return ONLY valid JSON: {"index": 0, "name": "the specific opportunity name", "reason": "one short grounded sentence", "deadline": "YYYY-MM-DD" or null} or {"index": null}`,
     });
