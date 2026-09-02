@@ -45,6 +45,11 @@ export async function geocodeCity(city: string): Promise<GeoPoint | null> {
   }
 
   try {
+    // Geocoding API (Royce enabled it live, 2026-09-02, after it first came
+    // back "This API is not activated on your API project" — Places API
+    // being enabled on the same key/project doesn't imply Geocoding is too,
+    // they're separately toggled). Confirmed working against this key
+    // immediately after enabling.
     const response = await client.geocode({
       params: { address: trimmed, key: process.env.GOOGLE_PLACES_API_KEY! },
     });
