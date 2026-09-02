@@ -1080,14 +1080,20 @@ Return ONLY the classification, nothing else.`,
               // multiple matches are clearly separated instead of run
               // together — the label makes which kind of thing each one is
               // obvious without needing to expose raw tier numbers.
+              // Link leads, description follows (Royce, 2026-09-02, after
+              // seeing the description-first version live: "the link...
+              // shows the preview... then a description") — the link needs
+              // to be the first thing on its own line so the preview card
+              // renders before the explanatory sentence beneath it, not
+              // description text first with the link trailing after.
               const blocks = recommendation.matches
                 .map((m) => {
                   const label = m.kind === "co_event" ? "A Co event" : m.kind === "public_event" ? "A public event" : "A real opportunity";
-                  const linkLine = "url" in m && m.url ? `\n${m.url}` : "";
-                  return `${label}: "${m.name}" — ${m.reason}${linkLine}`;
+                  const linkLine = "url" in m && m.url ? `${m.url}\n` : "";
+                  return `${linkLine}${label}: "${m.name}" — ${m.reason}`;
                 })
                 .join("\n\n");
-              recommendationContext = `\nYou just thought of ${recommendation.matches.length > 1 ? "a couple of real things" : "something real"} for them. Present ${recommendation.matches.length > 1 ? "each one as its own short block" : "it"} naturally in your reply — a brief sentence on why it fits, then the plain link on its own line by itself (never woven into the middle of a sentence or wrapped in parentheses) so it renders as a real preview.${recommendation.matches.length > 1 ? " Separate multiple blocks with a blank line — don't run them together into one paragraph." : ""} Never say you're "sending" or "attaching" it, just let the link sit on its own line as part of the message. It's fine for this reply to run longer than usual to fit this in properly.\n\n${blocks}`;
+              recommendationContext = `\nYou just thought of ${recommendation.matches.length > 1 ? "a couple of real things" : "something real"} for them. Present ${recommendation.matches.length > 1 ? "each one as its own short block" : "it"} naturally in your reply — the plain link on its own line FIRST, by itself (never woven into the middle of a sentence or wrapped in parentheses) so it renders as a real preview, then a brief sentence right after it on why it fits.${recommendation.matches.length > 1 ? " Separate multiple blocks with a blank line — don't run them together into one paragraph." : ""} Never say you're "sending" or "attaching" it, just let the link lead its own line as part of the message. It's fine for this reply to run longer than usual to fit this in properly.\n\n${blocks}`;
             } else if (recommendation.available) {
               // Generic fallback path (no tiered match found) — a
               // category/type suggestion, never a specific real venue with
