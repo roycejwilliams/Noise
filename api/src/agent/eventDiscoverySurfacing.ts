@@ -33,8 +33,24 @@ export async function runEventDiscoverySurfacingAgent(
   match: TierMatch,
   opts: { dryRun?: boolean; revealNow?: boolean } = {},
 ): Promise<{ sent: boolean; throttled: boolean }> {
-  const state = { sent: false, throttled: false };
   const dryRun = opts.dryRun ?? false;
+
+  // revealNow sends deterministically, not via agent tool-calling (Royce,
+  // 2026-09-02, confirmed live) — this is the exact path that produced the
+  // 2am "thinking about you" text with the link embedded mid-sentence
+  // ("...could be a good connection point for the accelerator path you
+  // mentioned: https://lu.ma/jjys158h. It's short notice..."). Same fix
+  // already applied to the conversational recommendation path
+  // (routes/sendblue.ts): the link goes out as its own bare message first
+  // (real iMessage preview), then a separate message with the warm
+  // "short notice, here's why it fits" framing — the model only drafts
+  // that second message's text (no tools, no link to embed), it never
+  // owns the send sequence itself.
+  if (opts.revealNow ?? false) {
+    return runRevealNowDeterministic(person, askText, match, dryRun);
+  }
+
+  const state = { sent: false, throttled: false };
 
   const tools = {
     sendSms: tool({
@@ -79,7 +95,6 @@ export async function runEventDiscoverySurfacingAgent(
   };
 
   const kindLabel = match.kind === "co_event" ? "a Co event" : match.kind === "public_event" ? "a public event" : "a real opportunity";
-  const revealNow = opts.revealNow ?? false;
 
   // Ask-first (Royce, 2026-08-30) — "for each event that surfaces we should
   // ask the user if they'd be interested; if they are, THEN they get the
@@ -87,31 +102,9 @@ export async function runEventDiscoverySurfacingAgent(
   // unprompted text; now it teases and asks, and the real details only go
   // out once they say yes (sendblue.ts's eventOfferContext handles that
   // follow-up, drawing from the event_offer_pending row eventSurfacingSweep.ts
-  // writes right after this sends).
-  //
-  // Short-notice exception (Royce, 2026-08-30) — "will [a lead-time floor]
-  // risk users missing an event?" The tease-then-wait-for-a-reply round trip
-  // is itself what eats the lead time on something happening today or
-  // tomorrow. When eventSurfacingSweep.ts flags revealNow, Co skips the
-  // ask-first step entirely and shares the real details straight away —
-  // still framed as "I was thinking about you," just compressed into one
-  // message instead of two, with the short notice itself named up front so
-  // it doesn't read as a normal recommendation. "Still have a message
-  // attached to that" (Royce, 2026-08-30) — this is never a bare data dump
-  // of name/link, always a real message in Co's voice that happens to
-  // include the details.
-  const linkLine = "url" in match && match.url ? ` Link: ${match.url}.` : "";
-  const system = revealNow
-    ? `You are Co, texting ${person.firstName} by iMessage. They recently told you: "${askText}"
-
-Co found ${kindLabel} that fits, but it's short notice: "${match.name}" — ${match.reason}.${linkLine}
-
-Draft a short, warm message (1-3 sentences, no em dashes, no exclamation points) in the same "I was thinking about you" register Co always uses, but skip the usual "want to hear more?" step — there isn't time for a back-and-forth. Name it and share the real details (including the link if there is one) directly in this one message, while being upfront that it's short notice so there's no pressure if the timing doesn't work. Then send it with sendSms.
-
-If on reflection this doesn't actually fit well enough to even bring up, skip sendSms — don't force it.
-
-Always finish by calling writeMemory once with a short factual note of what you actually shared (this log is internal, never shown to the user).`
-    : `You are Co, texting ${person.firstName} by iMessage. They recently told you: "${askText}"
+  // writes right after this sends). The revealNow (short-notice) case is
+  // handled entirely by runRevealNowDeterministic below, before this point.
+  const system = `You are Co, texting ${person.firstName} by iMessage. They recently told you: "${askText}"
 
 Co found ${kindLabel} that might genuinely fit — internal-only, do not reveal this in the message: "${match.name}" — ${match.reason}
 
@@ -131,4 +124,74 @@ Always finish by calling writeMemory once with a short factual note of what you 
   });
 
   return { sent: state.sent, throttled: state.throttled };
+}
+
+// Deterministic short-notice reveal (Royce, 2026-09-02) — sends the bare
+// link as its own message (real iMessage preview), then a separately
+// drafted warm message with the "short notice, here's why it fits"
+// framing — never the two combined into one paragraph. The model only
+// drafts the second message's text (plain generateText, no tools, no send
+// authority); it never owns the send sequence, matching the same
+// reliability reasoning as routes/sendblue.ts's deterministic
+// recommendation sending (an LLM asked to execute a precise multi-message
+// sequence via tool-calling instructions proved unreliable once other
+// context was competing for its attention in that case).
+async function runRevealNowDeterministic(
+  person: EventDiscoverySurfacingPerson,
+  askText: string,
+  match: TierMatch,
+  dryRun: boolean,
+): Promise<{ sent: boolean; throttled: boolean }> {
+  if (!dryRun && !(await tryClaimProactiveNudge(person.userId))) {
+    console.log(`eventDiscoverySurfacing: throttled — ${person.userId} was proactively nudged in the last 24h`);
+    return { sent: false, throttled: true };
+  }
+
+  const kindLabel = match.kind === "co_event" ? "a Co event" : match.kind === "public_event" ? "a public event" : "a real opportunity";
+  const url: string | undefined = "url" in match ? match.url : undefined;
+
+  const { text: raw } = await generateText({
+    model: anthropic("claude-sonnet-4-6"),
+    experimental_telemetry: { isEnabled: true, functionId: "agent.eventDiscoverySurfacing.revealNowDraft" },
+    prompt: `You are Co, texting ${person.firstName} by iMessage. They recently told you: "${askText}"
+
+Co found ${kindLabel} that fits, but it's short notice: "${match.name}" — ${match.reason}.
+
+${url ? "The real link is being sent as its own separate message right before this one — never mention a link, never say you're \"sharing\" or \"sending\" one, just reference the thing itself." : ""}
+
+Draft a short, warm message (1-3 sentences, no em dashes, no exclamation points) in the same "I was thinking about you" register Co always uses, naming what it is and why it fits, while being upfront that it's short notice so there's no pressure if the timing doesn't work. Skip the usual "want to hear more?" step — there isn't time for a back-and-forth, and the details are already going out.
+
+If on reflection this doesn't actually fit well enough to even bring up, return exactly the single word: SKIP
+
+Return ONLY the message text (or SKIP), nothing else — no preamble, no quotes.`,
+  });
+  const draft = raw.trim();
+  if (draft.toUpperCase() === "SKIP" || !draft) {
+    return { sent: false, throttled: false };
+  }
+  const description = cleanCoMessage(draft);
+
+  if (dryRun) {
+    if (url) console.log(`[eventDiscoverySurfacing dryRun] would send link to ${person.userId}: "${url}"`);
+    console.log(`[eventDiscoverySurfacing dryRun] would send to ${person.userId}: "${description}"`);
+    await writeMemory(person.userId, "event_discovery_surfacing", `Revealed directly (short notice): ${match.name}`);
+    return { sent: true, throttled: false };
+  }
+
+  if (url) {
+    await sendblue.messages.send({
+      number: person.phoneNumber,
+      content: url,
+      from_number: process.env.SENDBLUE_PHONE_NUMBER!,
+    });
+    await new Promise((resolve) => setTimeout(resolve, 2000));
+  }
+  await sendblue.messages.send({
+    number: person.phoneNumber,
+    content: description,
+    from_number: process.env.SENDBLUE_PHONE_NUMBER!,
+  });
+  await writeMemory(person.userId, "event_discovery_surfacing", `Revealed directly (short notice): ${match.name} — ${description}`);
+
+  return { sent: true, throttled: false };
 }

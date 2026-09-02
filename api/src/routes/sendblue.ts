@@ -807,8 +807,18 @@ Return ONLY the classification, nothing else.`,
                 const passedPhrase = match.event_date ? `it was on ${relevantDate}` : `the application window closed on ${relevantDate}`;
                 eventOfferContext = `\nThey just said yes to hearing more about the thing you teased earlier, but it's already passed (${passedPhrase}) — let them know honestly that it's already happened so there's nothing to share, no pressure or apology needed, and mention you'll keep an eye out for the next one that fits. Never reveal the name "${match.name}" since there's nothing to act on now.`;
               } else if (eventReplyAction === "interested") {
-                const linkLine = match.url ? ` Link: ${match.url}.` : "";
-                eventOfferContext = `\nThey just said yes to hearing more about the thing you teased earlier. Share the real details now, naturally, as part of your reply: "${match.name}" — ${match.reason}.${linkLine} Be honest it's a suggestion, not a guarantee it's right for them — never say you're "sending" or "sharing" a link as an attachment, just mention it in the text.`;
+                // Sent deterministically, not via agent tool-calling (Royce,
+                // 2026-09-02, confirmed live on a DIFFERENT reveal path that
+                // clumped a link mid-sentence into one paragraph) — same fix
+                // applied here: the link goes out as its own bare message
+                // (real iMessage preview) BEFORE the agent's reply, which
+                // then only has to explain why it fits, never repeat the link.
+                if (match.url) {
+                  await sendCoReply({ phone: user.phone_number, message: match.url, asVoice: false });
+                  await logTextExchange(user.id, `Co replied: ${match.url}`);
+                  await new Promise((resolve) => setTimeout(resolve, 2000));
+                }
+                eventOfferContext = `\nThey just said yes to hearing more about the thing you teased earlier${match.url ? " — you already sent them the link separately, that already happened" : ""}. Share why it fits now, naturally, as part of your reply: "${match.name}" — ${match.reason}. Be honest it's a suggestion, not a guarantee it's right for them.${match.url ? " Don't repeat the link or say you're \"sending\" or \"sharing\" anything — it already went out." : ""}`;
                 // Outcome-learning loop (Royce, 2026-09-02) — schedule the
                 // "who did you meet?" follow-up right at the moment real
                 // details are actually revealed, same trigger point the
