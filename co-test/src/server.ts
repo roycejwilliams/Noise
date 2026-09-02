@@ -23,6 +23,7 @@ import { requireTesterLoginApi, requireTesterLoginPage } from "./middleware/requ
 import { bridgeTwilioMediaStream } from "../../api/src/services/mediaStreamBridge.js";
 import { createCoRouter } from "../../api/src/routes/co.js";
 import { sendblueRouter } from "../../api/src/routes/sendblue.js";
+import { createLumaRouter } from "../../api/src/routes/luma.js";
 import { registerJobs } from "../../api/src/jobs/index.js";
 
 // A fresh Railway Postgres has none of brew_dev's tables yet — runMigrations()
@@ -51,6 +52,15 @@ async function main() {
   // to what Hume actually signed. Must run before express.json() below.
   // Mirrors api/src/server.ts's identical setup for the same route.
   app.use("/co/webhook", express.raw({ type: "application/json" }));
+  // Luma's webhook signature is the same "HMAC over the raw body" shape as
+  // Hume's above — see validateLumaWebhook in api/src/routes/luma.ts. This
+  // route was never mounted at all in co-test (confirmed live, 2026-09-02:
+  // LUMA_WEBHOOK_SECRET/LUMA_API_KEY/LUMA_WEBHOOKS are all already set here,
+  // so this was meant to be live), meaning every real Luma delivery — guest
+  // scoring, event updates/cancellations, calendar subscriber reach-outs —
+  // has been 404ing silently since co-test became the only running server
+  // for this environment.
+  app.use("/luma/webhook", express.raw({ type: "application/json" }));
   app.use(express.json({ limit: "2mb" }));
   app.use(express.urlencoded({ extended: false })); // Twilio status callbacks are form-encoded
   app.use(cookieParser());
@@ -124,6 +134,7 @@ async function main() {
   // factory functions, same io instance pattern api's own server uses.
   app.use("/co", createCoRouter(io));
   app.use("/sendblue", sendblueRouter(io));
+  app.use("/luma", createLumaRouter());
 
   // Tool-access login (phone + OTP) — see services/testerAuth.ts. Public by
   // definition, it's the thing that grants access to everything below.
