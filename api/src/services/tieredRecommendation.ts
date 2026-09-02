@@ -3,6 +3,7 @@ import { anthropic } from "@ai-sdk/anthropic";
 import { listCalendarEvents } from "./luma.js";
 import { fetchPublicEvents, rankByRelevance } from "./lumaDiscovery.js";
 import { searchRecentPosts } from "./xSearch.js";
+import { withinRadius } from "./geocoding.js";
 import type { StatedIntent } from "./matching.js";
 
 // The actual "Tiered recommendation engine (Tier 1 event → Tier 2 community/
@@ -78,12 +79,31 @@ function isWithinLookaheadWindow(startAt: string, maxDays: number): boolean {
   return days >= 0 && days <= maxDays;
 }
 
+// Hard geo filter (Royce, 2026-09-02: "we can strict them" — then, catching
+// the real failure mode himself, "what if I want to find out what's going
+// on around the Bay Area or just San Francisco in general"). A literal
+// city-string match would have broken exactly that case for a Walnut Creek
+// user; a real ~50mi radius (geocoding.ts's withinRadius) covers the whole
+// metro instead. Applied here, before rankByRelevance, so ranking itself
+// goes back to pure topic relevance — see lumaDiscovery.ts's rankByRelevance
+// comment. No userCity means no filter (nothing to be near); an
+// ungeocodable city on either side also passes through rather than
+// dropping a real candidate to a geocoding gap (see withinRadius).
+async function filterByRadius<T extends { city?: string | null }>(
+  candidates: T[],
+  userCity: string | null,
+): Promise<T[]> {
+  if (!userCity) return candidates;
+  const withinFlags = await Promise.all(candidates.map((c) => withinRadius(userCity, c.city ?? null)));
+  return candidates.filter((_, i) => withinFlags[i]);
+}
+
 // Tier 1 — Co's own calendar. Reuses the same ranking core as Tier 2
 // (lumaDiscovery.rankByRelevance) since both are "rank real events against
 // an ask" with the same signal (name + city) available — Co's own events
 // just come from luma.ts's sanctioned API instead of the unofficial
-// discovery feed. `userCity` biases ranking toward the person's own city
-// (see rankByRelevance's proximity-bias note); optional `filter` (by event
+// discovery feed. `userCity` now drives a hard radius filter (filterByRadius
+// above) before ranking, not a ranking bias; optional `filter` (by event
 // start_at) is reused by checkForUrgentMatch below to further restrict to a
 // near-term window on top of the lookahead baseline, rather than
 // duplicating this construction a second time.
@@ -93,7 +113,8 @@ async function tryTier1(ask: StatedIntent, userCity: string | null, filter?: (st
     return [];
   });
   const inWindow = events.filter((e) => isWithinLookaheadWindow(e.start_at, TIER1_MAX_LOOKAHEAD_DAYS) && (!filter || filter(e.start_at)));
-  const match = await rankByRelevance(inWindow, ask, userCity);
+  const nearby = await filterByRadius(inWindow, userCity);
+  const match = await rankByRelevance(nearby, ask);
   if (!match) return null;
   return {
     tier: 1,
@@ -112,14 +133,15 @@ async function tryTier1(ask: StatedIntent, userCity: string | null, filter?: (st
 // simplification, not hidden. Calls fetchPublicEvents + rankByRelevance
 // directly (rather than lumaDiscovery's findEventMatchingAsk wrapper) so an
 // optional near-term `filter` can be applied before ranking — same reuse
-// reasoning as tryTier1 above. `userCity` biases ranking the same way.
+// reasoning as tryTier1 above. `userCity` drives the same hard radius filter.
 async function tryTier2(ask: StatedIntent, userCity: string | null, filter?: (startAt: string) => boolean): Promise<TierMatch | null> {
   const events = await fetchPublicEvents(50).catch((err: any) => {
     console.error("tieredRecommendation: tryTier2 fetchPublicEvents failed (non-fatal):", err?.message ?? err);
     return [];
   });
   const inWindow = events.filter((e) => isWithinLookaheadWindow(e.start_at, TIER2_MAX_LOOKAHEAD_DAYS) && (!filter || filter(e.start_at)));
-  const match = await rankByRelevance(inWindow, ask, userCity);
+  const nearby = await filterByRadius(inWindow, userCity);
+  const match = await rankByRelevance(nearby, ask);
   if (!match) return null;
   return {
     tier: 2,

@@ -177,20 +177,30 @@ export function runMigrations() {
       console.error("co_profiles.intent migration failed:", err),
     );
 
+  // Replaces a dead migration that added `coordinates geometry(Point,4326)`
+  // assuming PostGIS — confirmed live, 2026-09-02: PostGIS was never
+  // installed and isn't even available to install on this Postgres
+  // (pg_available_extensions has no postgis entry; Railway's managed image
+  // only ships pgvector), so that column migration has been silently
+  // failing every single deploy since it was added. geocoding.ts's plain
+  // lat/lng + haversine radius filter needs no extension at all.
   pool
-    .query(`ALTER TABLE co_profiles ADD COLUMN IF NOT EXISTS coordinates geometry(Point,4326)`)
-    .then(() =>
-      pool.query(
-        `CREATE INDEX IF NOT EXISTS idx_co_profiles_coordinates ON co_profiles USING GIST (coordinates)`,
-      ),
-    )
-    .then(() =>
-      pool.query(
-        `CREATE INDEX IF NOT EXISTS idx_co_profiles_city ON co_profiles (city)`,
-      ),
+    .query(
+      `CREATE TABLE IF NOT EXISTS geocode_cache (
+        query TEXT PRIMARY KEY,
+        lat DOUBLE PRECISION NOT NULL,
+        lng DOUBLE PRECISION NOT NULL,
+        created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+      )`,
     )
     .catch((err: Error) =>
-      console.error("co_profiles.coordinates migration failed:", err),
+      console.error("geocode_cache migration failed:", err),
+    );
+
+  pool
+    .query(`CREATE INDEX IF NOT EXISTS idx_co_profiles_city ON co_profiles (city)`)
+    .catch((err: Error) =>
+      console.error("co_profiles.city index migration failed:", err),
     );
 
   pool

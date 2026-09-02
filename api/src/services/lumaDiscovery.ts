@@ -60,35 +60,28 @@ const RELEVANCE_THRESHOLD = 0.72;
 // it clears the bar, null otherwise. No point surfacing a weak match — same
 // reasoning as dropping the embedding-only fallback in eventScoring.ts.
 //
-// Proximity bias, optional `userCity` (Royce, 2026-08-30): "city and the
-// proximity to each user matter." Without this, ranking only ever compares
-// the ask's own text against each candidate's name+city — nothing signals
-// "and is this even near the person" unless they happened to state a
-// location themselves. Appending the user's own city to the ask-side text
-// before embedding lets a same-city candidate score higher than an
-// otherwise-similar one elsewhere, through the same semantic-overlap
-// mechanism already used for the candidate side, rather than needing a
-// separate distance calculation. Forces a fresh embedding instead of
-// reusing a passed-in ask.embedding when userCity is given — that embedding
-// was computed from the ask's original text and wouldn't reflect the
-// appended city.
+// Proximity used to be a soft bias here (appending the user's city to the
+// ask text before embedding, Royce 2026-08-30: "city and the proximity to
+// each user matter") — replaced 2026-09-02 with a real hard radius filter
+// (geocoding.ts's withinRadius, applied by tieredRecommendation.ts's
+// tryTier1/tryTier2 BEFORE candidates ever reach this function) after Royce
+// pointed out the actual failure mode: a Walnut Creek user asking about
+// "the Bay Area" or "San Francisco" needs a real ~50mi radius, not a
+// literal city-string/embedding match, which would either miss real nearby
+// events (different city string) or let through a same-vibe event states
+// away (embedding similarity has no real distance sense). This function is
+// now purely topic relevance — geography is handled entirely upstream.
 export async function rankByRelevance<T extends { name: string; city?: string | null }>(
   candidates: T[],
   ask: StatedIntent,
-  userCity?: string | null,
 ): Promise<(T & { similarity: number }) | null> {
   if (!ask.text || !candidates.length) return null;
 
-  const askText = userCity ? `${ask.text} (near ${userCity})` : ask.text;
-  const askEmbedding = userCity
-    ? await generateEmbedding(askText).catch(() => null)
-    : ask.embedding?.length
-      ? ask.embedding
-      : await generateEmbedding(askText).catch(() => null);
+  const askEmbedding = ask.embedding?.length ? ask.embedding : await generateEmbedding(ask.text).catch(() => null);
   if (!askEmbedding) return null;
 
   const candidateEmbeddings = await Promise.all(
-    candidates.map((c) => generateEmbedding([c.name, c.city].filter(Boolean).join(", ")).catch(() => null)),
+    candidates.map((c) => generateEmbedding(c.name).catch(() => null)),
   );
 
   let best: (T & { similarity: number }) | null = null;
