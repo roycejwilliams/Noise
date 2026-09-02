@@ -1136,6 +1136,8 @@ Their latest message: "${resolvedContent}"
 
 In light of the conversation above, is their latest message wanting, looking for, or asking about a specific CATEGORY of physical place — a gym, a cafe, a climbing spot, a coworking space, a restaurant, a bar, etc.? This includes a plain follow-up like "send me some" or "yes please" if the category was already established earlier in the conversation. Not a person, not an abstract idea, an actual type of place someone could visit.
 
+Critically, this does NOT include events, meetups, accelerator/fellowship programs, conferences, or similar time-bound things — even though those happen at a real location, what they're asking for is the event/program itself, not "a type of place." A real event or accelerator program is handled by a completely different mechanism (confirmed live, 2026-09-02: this classifier was misfiring on exactly this — "any AI events" and "accelerator programs" were getting treated as if they were a venue category like "coworking space," triggering a physical-place search for a random unrelated business instead of the real event/opportunity engine). If their message is about events, meetups, or programs specifically, always return wants_venue: false regardless of what's in the recent conversation.
+
 If yes, how many did they ask for? Default to 1 if they didn't say a number or range; if they gave a range (e.g. "2-5"), use the upper end, capped at 5.
 
 Return ONLY valid JSON, no preamble: {"wants_venue": true or false, "venue_type": "the category, in a few words" or null, "count": a number from 1 to 5}`,
