@@ -1,4 +1,5 @@
 import { Client } from "@googlemaps/google-maps-services-js";
+import { find as findTimezone } from "geo-tz";
 import pool from "../db/db.js";
 
 const client = new Client({});
@@ -69,6 +70,45 @@ export async function geocodeCity(city: string): Promise<GeoPoint | null> {
     console.error(`geocodeCity: failed for "${trimmed}" (non-fatal):`, err?.message ?? err);
     return null;
   }
+}
+
+// Timezone-aware proactive contact (Royce, 2026-09-02: a real "thinking
+// about you" text arrived at 2am Pacific because jobs/index.ts's crons
+// fired at fixed UTC hours with zero regard for the recipient's actual
+// local time). Reuses geocodeCity's own cache row rather than a second
+// cache table — lazily backfills the `timezone` column on that same row
+// the first time a timezone (not just lat/lng) is needed for that city
+// string. geo-tz resolves lat/lng -> IANA zone entirely offline (bundled
+// timezone-boundary data, no network call, no rate limit) — deliberately
+// NOT another Google API, since Geocoding and Places both already hit
+// "This API is not activated on your API project" the first time each was
+// tried against this same key.
+export async function getTimezoneForCity(city: string): Promise<string | null> {
+  const trimmed = city.trim();
+  if (!trimmed) return null;
+
+  const cached = await pool.query(`SELECT lat, lng, timezone FROM geocode_cache WHERE query = $1`, [trimmed]);
+  if (cached.rows.length) {
+    const row = cached.rows[0];
+    if (row.timezone) return row.timezone;
+    const zone = findTimezone(Number(row.lat), Number(row.lng))[0] ?? null;
+    if (zone) {
+      await pool
+        .query(`UPDATE geocode_cache SET timezone = $1 WHERE query = $2`, [zone, trimmed])
+        .catch((err: any) => console.error("getTimezoneForCity: cache write failed (non-fatal):", err?.message ?? err));
+    }
+    return zone;
+  }
+
+  const point = await geocodeCity(trimmed);
+  if (!point) return null;
+  const zone = findTimezone(point.lat, point.lng)[0] ?? null;
+  if (zone) {
+    await pool
+      .query(`UPDATE geocode_cache SET timezone = $1 WHERE query = $2`, [zone, trimmed])
+      .catch((err: any) => console.error("getTimezoneForCity: cache write failed (non-fatal):", err?.message ?? err));
+  }
+  return zone;
 }
 
 // Hard radius filter for the recommendation engine — same "Bay Area" case

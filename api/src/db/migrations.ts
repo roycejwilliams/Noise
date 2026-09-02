@@ -197,6 +197,31 @@ export function runMigrations() {
       console.error("geocode_cache migration failed:", err),
     );
 
+  // Timezone-aware proactive contact (Royce, 2026-09-02: a real "thinking
+  // about you" text arrived at 2am Pacific — jobs/index.ts's crons fired at
+  // fixed UTC hours with zero regard for the recipient's actual local time).
+  // timezone lazily backfills onto the same geocode_cache row geocodeCity()
+  // already maintains, resolved via the offline geo-tz package (see
+  // services/geocoding.ts's getTimezoneForCity) rather than a second cache
+  // table or another Google API needing manual enablement.
+  pool
+    .query(`ALTER TABLE geocode_cache ADD COLUMN IF NOT EXISTS timezone TEXT`)
+    .catch((err: Error) =>
+      console.error("geocode_cache.timezone migration failed:", err),
+    );
+
+  // Separate from last_surfaced_at (the 3-day cadence clock) — this bumps
+  // on EVERY attemptEventSurfacing invocation regardless of outcome, purely
+  // to stop the event-surfacing cron's new hourly local-hour-gated schedule
+  // from re-running its expensive urgent/full tiered check on every hourly
+  // tick inside a user's reasonable-hours window (~11 ticks/day instead of
+  // 1) — see jobs/index.ts.
+  pool
+    .query(`ALTER TABLE ask_checkins ADD COLUMN IF NOT EXISTS last_attempted_at TIMESTAMPTZ`)
+    .catch((err: Error) =>
+      console.error("ask_checkins.last_attempted_at migration failed:", err),
+    );
+
   // Retire PostGIS from production too (Royce, 2026-09-02: "It's settled" —
   // the app that was the only thing writing to co_profiles.coordinates is
   // being sunset). Confirmed before this went in: nothing in the codebase

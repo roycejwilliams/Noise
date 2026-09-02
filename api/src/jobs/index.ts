@@ -1,6 +1,9 @@
 import cron from "node-cron";
+import { DateTime } from "luxon";
 import type { Server } from "socket.io";
 import pool from "../db/db.js";
+import { getTimezoneForCity } from "../services/geocoding.js";
+import { isReasonableLocalHour } from "../services/localHours.js";
 import sendblue from "../services/sendblue.js";
 import { sweepAllOpenAsks } from "../services/relevance.js";
 import { runAskCheckinAgent } from "../agent/askCheckin.js";
@@ -32,17 +35,23 @@ async function runWithConcurrency<T>(items: T[], limit: number, fn: (item: T) =>
 }
 
 export function registerJobs(io: Server) {
-  // Hourly 10am–8pm UTC — call newly subscribed users who haven't completed intake yet.
-  // Limits to 5 calls per run to avoid Twilio rate limits.
+  // Hourly, every hour (Royce, 2026-09-02: was "10am-8pm UTC" — 3am-1pm
+  // Pacific, wrong for exactly the users this product is built around; a
+  // real "thinking about you" text from a DIFFERENT cron arrived at 2am
+  // Pacific the same day). Now gated per-user on their own local hour
+  // (localHours.ts) instead of a single fixed UTC window — LIMIT widened
+  // 5->25 since the hour gate filters most candidates out on any given
+  // tick, but the actual-dial cap stays at 5 via the `placed` counter, same
+  // Twilio-rate-limit reasoning as before.
   // Won't retry a user who had a call attempt in the last 24 hours. Dials via
   // triggerCallForUser (the media-stream bridge) rather than a third
   // independent copy of the dial logic — this used to hit Hume's native
   // /v0/evi/twilio integration directly, which silently drops
   // first_name/context_summary.
-  cron.schedule("0 10-20 * * *", async () => {
+  cron.schedule("0 * * * *", async () => {
     try {
       const uncalled = await pool.query(
-        `SELECT u.id
+        `SELECT u.id, cp.city
          FROM users u
          LEFT JOIN co_profiles cp ON cp.user_id = u.id
          WHERE u.subscription_status = 'active'
@@ -57,10 +66,15 @@ export function registerJobs(io: Server) {
              OR cp.life_chapters IS NULL
              OR array_length(cp.life_chapters, 1) IS NULL
            )
-         LIMIT 5`,
+         LIMIT 25`,
       );
 
+      let placed = 0;
       for (const user of uncalled.rows) {
+        if (placed >= 5) break;
+        const timezone = user.city ? await getTimezoneForCity(user.city) : null;
+        if (!isReasonableLocalHour(timezone)) continue; // wrong hour for them — no state touched, retried next hourly tick
+        placed++;
         try {
           const result = await triggerCallForUser(user.id, io);
           if (!result.success) {
@@ -144,15 +158,17 @@ export function registerJobs(io: Server) {
     }
   });
 
-  // Co Loop Stage 5 — daily at 11 AM, check back in on a stated ask that's
-  // gone quiet so it's never just a one-time snapshot. Cadence is adaptive,
-  // not a flat 21 days: an ask with open relevance_edges (Stage 3 found
-  // something) is checked every 14 days since it's more "live"; an ask with
-  // no matches yet is checked every 30 days since there's nothing new to
-  // report. Repeats until Stage 6 (assessResolvedItems, profileExtraction.ts)
-  // marks it resolved. Message is generated fresh at send time, same
-  // reasoning as the post-call follow-up cron above — not stored/reused.
-  cron.schedule("0 11 * * *", async () => {
+  // Co Loop Stage 5 — was fixed at 11am UTC (3am Pacific — the same class
+  // of bug as the auto-call and event-surfacing crons, Royce 2026-09-02),
+  // now hourly and gated on the recipient's own local hour (localHours.ts)
+  // instead. Cadence is adaptive, not a flat 21 days: an ask with open
+  // relevance_edges (Stage 3 found something) is checked every 14 days
+  // since it's more "live"; an ask with no matches yet is checked every 30
+  // days since there's nothing new to report. Repeats until Stage 6
+  // (assessResolvedItems, profileExtraction.ts) marks it resolved. Message
+  // is generated fresh at send time, same reasoning as the post-call
+  // follow-up cron above — not stored/reused.
+  cron.schedule("0 * * * *", async () => {
     try {
       const due = await pool.query(
         `SELECT ac.id, ac.ask_text, ac.checkin_count, u.id AS user_id, u.first_name, u.phone_number,
@@ -174,6 +190,9 @@ export function registerJobs(io: Server) {
       );
 
       for (const row of due.rows) {
+        const timezone = row.city ? await getTimezoneForCity(row.city) : null;
+        if (!isReasonableLocalHour(timezone)) continue; // wrong hour for them — last_checked_at untouched, retried next hourly tick
+
         // Escalation framing, whether to mention match-absence, and whether
         // to fold in a topic nudge are no longer decided here — the agent
         // weighs those itself (agent/askCheckin.ts) using the raw
@@ -224,7 +243,20 @@ export function registerJobs(io: Server) {
   // 3-day clock. cooldown_cleared tells attemptEventSurfacing whether to run
   // the full tiered engine or just the cheap urgent check — see
   // eventSurfacingSweep.ts.
-  cron.schedule("0 9 * * *", async () => {
+  // Was fixed at 9am UTC = 2am Pacific — confirmed live, Royce 2026-09-02,
+  // this is the exact cron that sent a "thinking about you" text at 2am to
+  // a Walnut Creek user. Now hourly, gated per-user on their own local hour
+  // (localHours.ts). Real cost gap caught before shipping this: this cron
+  // already runs attemptEventSurfacing for EVERY open ask EVERY day
+  // unconditionally (the urgency pre-check below), which calls real
+  // embedding/Luma/LLM APIs on every invocation — naively adding an hour
+  // gate and going hourly would re-run that expensive check on every one of
+  // the ~11 hourly ticks inside a user's reasonable-hours window, not once.
+  // last_attempted_at (new column, separate from last_surfaced_at's 3-day
+  // cadence) gates "have we already run today's check for this ask",
+  // independent of "is it currently a reasonable hour" — so the expensive
+  // path still only actually runs once per local calendar day.
+  cron.schedule("0 * * * *", async () => {
     try {
       // ORDER BY added (Royce, 2026-09-02: "Co is not prioritizing the
       // unresolved ask from the start") — a user with more than one open ask
@@ -241,7 +273,7 @@ export function registerJobs(io: Server) {
       // without a successful send first crack each day — real rotation
       // instead of an accidental permanent winner.
       const due = await pool.query(
-        `SELECT ac.id, ac.ask_text, u.id AS user_id, u.first_name, u.phone_number, cp.city,
+        `SELECT ac.id, ac.ask_text, ac.last_attempted_at, u.id AS user_id, u.first_name, u.phone_number, cp.city,
                 cp.goals, cp.activity_preferences,
                 (ac.last_surfaced_at IS NULL OR ac.last_surfaced_at <= NOW() - INTERVAL '3 days') AS cooldown_cleared
          FROM ask_checkins ac
@@ -266,7 +298,20 @@ export function registerJobs(io: Server) {
       }
 
       await runWithConcurrency(Array.from(rowsByUser.values()), 5, async (userRows) => {
+        // Resolved once per user (all their rows share the same profile
+        // city), not once per ask — cheap either way since getTimezoneForCity
+        // is cache-backed, but no reason to repeat it per row.
+        const timezone = userRows[0].city ? await getTimezoneForCity(userRows[0].city) : null;
+        if (!isReasonableLocalHour(timezone)) return; // wrong hour for this user — nothing touched, retried next hourly tick
+
+        const localToday = (timezone ? DateTime.now().setZone(timezone) : DateTime.now()).toISODate();
+
         for (const row of userRows) {
+          const lastAttemptedLocalDay = row.last_attempted_at
+            ? DateTime.fromJSDate(row.last_attempted_at).setZone(timezone ?? "utc").toISODate()
+            : null;
+          if (lastAttemptedLocalDay === localToday) continue; // already ran today's check for this ask — don't re-run every hourly tick inside the window
+
           let sent = false;
           let throttled = false;
           try {
@@ -284,18 +329,21 @@ export function registerJobs(io: Server) {
           } catch (err: any) {
             console.error(`Event surfacing sweep failed for ${row.user_id}:`, err?.message ?? err);
           }
-          // A normal cadence-cleared cycle always bumps regardless of outcome
-          // (same reasoning as last_checked_at above: a miss should wait for
-          // the next window, not retry every tick) — UNLESS the only reason
+          // last_attempted_at always bumps on a real attempt — it's a "did
+          // we run today's check" marker, separate from the cadence clock.
+          // last_surfaced_at (the 3-day cadence) only bumps under the same
+          // condition as before: a normal cadence-cleared cycle always
+          // advances it regardless of outcome, UNLESS the only reason
           // nothing sent was the unrelated cross-mechanism daily nudge cap
-          // (Royce, 2026-08-30), which isn't a fact about this ask and
-          // shouldn't cost it a 3-day wait. A day where the cooldown hadn't
-          // cleared only bumps if the urgent check actually found and sent
-          // something — a quiet urgent-check miss must NOT touch the clock,
-          // or it would silently reset someone's normal 3-day cadence early.
-          if (!throttled && (row.cooldown_cleared || sent)) {
-            await pool.query(`UPDATE ask_checkins SET last_surfaced_at = NOW() WHERE id = $1`, [row.id]);
-          }
+          // (Royce, 2026-08-30) — a quiet urgent-check miss must not touch
+          // that clock, or it would silently reset someone's 3-day cadence
+          // early.
+          await pool.query(
+            !throttled && (row.cooldown_cleared || sent)
+              ? `UPDATE ask_checkins SET last_attempted_at = NOW(), last_surfaced_at = NOW() WHERE id = $1`
+              : `UPDATE ask_checkins SET last_attempted_at = NOW() WHERE id = $1`,
+            [row.id],
+          );
         }
       });
     } catch (error) {
