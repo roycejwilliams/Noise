@@ -134,12 +134,31 @@ function extractProseMirrorText(node: any): string {
   return "";
 }
 
+// Hard timeout (Royce, 2026-09-02) — confirmed live, the hard way: this
+// call happens INSIDE the classification chain that runs BEFORE
+// sendblue.ts's immediate webhook ack (that ack is much later in the file,
+// after this whole path), so a fetch with no timeout hung the entire
+// inbound-message pipeline indefinitely the first time Luma's page was
+// slow to respond — a full curl timeout, zero response, not a graceful
+// failure. AbortController + a 5s cap ensures a slow/unresponsive page
+// degrades to the existing fail-open behavior (no description, gate
+// passes through) instead of blocking the whole webhook.
+const DESCRIPTION_FETCH_TIMEOUT_MS = 5000;
+
 export async function fetchEventDescription(eventUrl: string): Promise<string | null> {
   try {
-    const res = await fetch(eventUrl, {
-      headers: { "User-Agent": "Mozilla/5.0" },
-      redirect: "follow",
-    });
+    const controller = new AbortController();
+    const timeout = setTimeout(() => controller.abort(), DESCRIPTION_FETCH_TIMEOUT_MS);
+    let res: Response;
+    try {
+      res = await fetch(eventUrl, {
+        headers: { "User-Agent": "Mozilla/5.0" },
+        redirect: "follow",
+        signal: controller.signal,
+      });
+    } finally {
+      clearTimeout(timeout);
+    }
     if (!res.ok) return null;
     const html = await res.text();
 
