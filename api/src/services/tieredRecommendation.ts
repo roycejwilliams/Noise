@@ -180,7 +180,7 @@ async function proposeOpportunityQuery(ask: StatedIntent, city: string | null): 
 
 Today's date: ${todayStr}
 
-If this maps reasonably to the kind of thing a founder or high-agency builder would search X/Twitter for right now — an accelerator, fellowship, cohort-based program, or similar real opportunity with an open or upcoming application — propose a short X search query (keywords, not a question) likely to surface real, recent posts about it. Never include a specific year in the query unless the person's own ask text stated one — a wrong or stale year keyword will filter out real current posts that don't happen to mention that exact year. If it doesn't map to that kind of thing at all (e.g. it's purely social, not opportunity-shaped), return null.
+If this maps reasonably to the kind of thing a founder or high-agency builder would search X/Twitter for right now — an accelerator, fellowship, cohort-based program, or similar real opportunity with an open or upcoming application — propose a short X search query (2-4 broad, distinctive keywords, not a question) likely to surface real, recent posts about it. Never include a specific year in the query unless the person's own ask text stated one — a wrong or stale year keyword will filter out real current posts that don't happen to mention that exact year. Never include the person's own city/region as a keyword either (confirmed live: adding "SF Bay Area" to an otherwise-good query dropped real matching posts to zero) — a real opportunity post almost never mentions the seeker's own location, only the program's own name and field. If it doesn't map to that kind of thing at all (e.g. it's purely social, not opportunity-shaped), return null.
 
 Return ONLY valid JSON: {"query": "..." or null}`,
     });
