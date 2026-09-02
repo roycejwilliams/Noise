@@ -225,6 +225,20 @@ export function registerJobs(io: Server) {
   // eventSurfacingSweep.ts.
   cron.schedule("0 9 * * *", async () => {
     try {
+      // ORDER BY added (Royce, 2026-09-02: "Co is not prioritizing the
+      // unresolved ask from the start") — a user with more than one open ask
+      // had no defined processing order at all, and the one-nudge-per-day
+      // cap (tryClaimProactiveNudge, claimed inside runEventDiscoverySurfacingAgent)
+      // means whichever ask happens to process first in a given run wins
+      // that day's single message; every ask after it just gets throttled.
+      // A throttled ask doesn't lose its own cadence (see the update below),
+      // so it isn't penalized in isolation — but if Postgres keeps returning
+      // rows in the same order run after run (likely for a plain unindexed
+      // scan), the same ask could keep winning indefinitely, starving the
+      // others regardless of relevance or how long they've been waiting.
+      // last_surfaced_at ASC NULLS FIRST gives the ask that's gone longest
+      // without a successful send first crack each day — real rotation
+      // instead of an accidental permanent winner.
       const due = await pool.query(
         `SELECT ac.id, ac.ask_text, u.id AS user_id, u.first_name, u.phone_number, cp.city,
                 cp.goals, cp.activity_preferences,
@@ -232,7 +246,8 @@ export function registerJobs(io: Server) {
          FROM ask_checkins ac
          JOIN users u ON u.id = ac.user_id
          LEFT JOIN co_profiles cp ON cp.user_id = ac.user_id
-         WHERE ac.resolved_at IS NULL`,
+         WHERE ac.resolved_at IS NULL
+         ORDER BY ac.last_surfaced_at ASC NULLS FIRST`,
       );
 
       // Grouped by user, not run flat (Royce, 2026-08-30) — attemptEventSurfacing's
