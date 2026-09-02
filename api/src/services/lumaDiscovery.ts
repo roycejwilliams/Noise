@@ -47,11 +47,25 @@ export async function fetchPublicEvents(limit: number): Promise<DiscoveredEvent[
     }));
 }
 
-// First-guess default, same spirit as the other unconfirmed thresholds in
-// this codebase — "is this event actually relevant to the ask" is a looser
-// question than "are these two mentions the SAME event" (eventMatching.ts's
-// 0.85 bar), so this is deliberately lower. Not tuned against real data yet.
-const RELEVANCE_THRESHOLD = 0.72;
+// Calibrated against real data (Royce, 2026-09-02) — the 0.72 first-guess
+// default turned out to reject even a textbook-perfect match: "Looking to
+// meet other AI builders and founders in San Francisco..." vs a real,
+// live "AI Builders Breakfast @ Tesla" (San Francisco, next day) scored
+// only 0.517 — nowhere close to 0.72. This embedding model's cosine
+// similarity for a full-sentence ask against a short event-name candidate
+// just runs lower than 0.72 would ever allow, regardless of how good the
+// match actually is — a real ceiling issue with the old value, not a case
+// of that one match being unusually weak.
+//
+// Live-measured spread across a mix of real candidates: genuine
+// good-to-strong matches landed at 0.406-0.517 (AI Builders Breakfast:
+// 0.517; a founder-focused coffee meetup: 0.406); genuinely unrelated
+// events (a fragrance talk, an adults' game night, a microscopy lunch
+// talk) landed at 0.087-0.201 — including one event whose NAME sounded
+// AI-adjacent ("The Agent Has Entered the Chat") but scored 0.169, closer
+// to the unrelated cluster than the real matches. 0.35 sits in the clear
+// gap between those two clusters, with real margin on both sides.
+const RELEVANCE_THRESHOLD = 0.35;
 
 // Shared ranking core — takes any list of {name, city}-shaped candidates
 // (public discovery events here, but also reused by tieredRecommendation.ts
