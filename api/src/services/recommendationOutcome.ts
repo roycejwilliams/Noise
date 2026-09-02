@@ -76,9 +76,9 @@ export async function classifyNamedOutcome(replyText: string, matchName: string)
 Their reply: "${replyText}"
 
 Classify as ONE of:
-- "named_positive" — they mention someone or something specific and it reads as a good/worthwhile connection or experience
-- "named_critical" — they mention someone or something specific and it reads as a bad, disappointing, or not-worthwhile experience
-- "not_mentioned" — they answered, but didn't actually name anyone or describe a specific outcome (e.g. "it was fine", "didn't end up going")
+- "named_positive" — they name someone or something specific and it reads as a good/worthwhile connection or experience
+- "named_critical" — a real negative assessment of the experience itself, whether or not they name a specific person (e.g. "nobody interesting there", "waste of time" both count — the negative signal matters even without a name)
+- "not_mentioned" — a neutral or non-committal answer with no real positive or negative signal either way (e.g. "it was fine", "didn't end up going", "no one really")
 - "unrelated" — this reply isn't actually answering the question at all, normal unrelated conversation
 
 Return ONLY the classification, nothing else.`,
