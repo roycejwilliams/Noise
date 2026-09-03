@@ -61,13 +61,24 @@ export type LumaEventDetail = {
   location: string | null;
 };
 
-// GET /v1/calendars/events/lookup — a single event's current details, for
-// diffing against a stored snapshot when an Event Updated webhook fires
-// (see eventChangeNotification.ts). Cheaper and more direct than filtering
+// GET /v1/event/get — a single event's current details, for diffing against
+// a stored snapshot when an Event Updated webhook fires (see
+// eventChangeNotification.ts). Cheaper and more direct than filtering
 // listCalendarEvents() by id for a single lookup.
+//
+// Was calling GET /v1/calendars/events/lookup (confirmed live, 2026-09-02:
+// every real call 400'd with "platform: Invalid discriminator value" —
+// every event.updated webhook was silently failing this lookup). That
+// endpoint is semantically wrong for this anyway: Luma's own docs describe
+// it as "see if an event already exists on the calendar" (a pre-submission
+// dedup check, response shape is just {id, status, submitted_by}), not a
+// full-detail fetch. /v1/event/get with api_id is the actual "return
+// details about an event" endpoint and is what listCalendarEvents/
+// getEventGuestList's sibling calls in this file expect — confirmed live
+// against a real event and matches LumaEventDetail's shape below.
 export async function getEventDetails(eventId: string): Promise<LumaEventDetail | null> {
-  const url = new URL(`${LUMA_BASE_URL}/v1/calendars/events/lookup`);
-  url.searchParams.set("event_id", eventId);
+  const url = new URL(`${LUMA_BASE_URL}/v1/event/get`);
+  url.searchParams.set("api_id", eventId);
 
   const res = await fetch(url, { headers: lumaHeaders() });
   if (res.status === 404) return null;
@@ -81,7 +92,11 @@ export async function getEventDetails(eventId: string): Promise<LumaEventDetail 
     name: event.name,
     start_at: event.start_at,
     end_at: event.end_at ?? null,
-    location: event.geo_address_info?.full_address ?? event.geo_address_info?.city ?? null,
+    // Field is geo_address_json, not geo_address_info (confirmed live against
+    // a real event) — the old field name never existed on Luma's response,
+    // so this silently returned null for every event regardless of whether
+    // it actually had a location.
+    location: event.geo_address_json?.full_address ?? event.geo_address_json?.city ?? null,
   };
 }
 
