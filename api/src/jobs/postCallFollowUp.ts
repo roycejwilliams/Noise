@@ -62,37 +62,11 @@ export async function sendDueFollowUps(): Promise<void> {
       });
       const trimmed = followUpMessage.trim();
 
-      // Guards against ever texting a real user raw model meta-commentary
-      // (e.g. "I don't have access to...") instead of an actual follow-up —
-      // the exact failure this job produced live before the persona-prompt
-      // template tokens above were being filled in. An unresolved "{{" or a
-      // literal mention of an internal field name are things a real
-      // follow-up text would never contain, so either is a reliable signal
-      // the model fell back to explaining what it's missing rather than
-      // writing the message. Row is already claimed (sent_at set above), so
-      // skipping here just means no text goes out this round — not a retry.
-      //
-      // Broadened 2026-09-02 (Royce, "check the recent text messages through
-      // sendblue") — the original {{ / context_summary check was written for
-      // one specific failure (unfilled template tokens) and missed a whole
-      // other class that shipped live: a thin/no-content transcript (see
-      // routes/co.ts's hasRealUserTurn, the actual root-cause fix) led the
-      // model to explain what it's missing instead — "I don't have a record
-      // of a completed call with Royce yet", "I can't actually send texts,
-      // that's outside what I can do in this interface. I can only take
-      // calls." Neither contains "{{" or "context_summary", so both went out
-      // as real texts. This is a backstop for the same failure shape
-      // resurfacing some other way, not a replacement for fixing root causes.
-      const LEAKED_METACOMMENTARY =
-        /\{\{|context_summary|\bi don'?t have (a |any )?(record|access|context|information)\b|\bi can'?t (actually )?(send|text)\b|\boutside what i can do\b|\bi can only (take|make) calls?\b/i;
-      if (LEAKED_METACOMMENTARY.test(trimmed)) {
-        console.error(
-          `postCallFollowUp: generated text for follow-up ${row.id} looked like leaked prompt/meta-commentary, not sending:`,
-          trimmed,
-        );
-        continue;
-      }
-
+      // Row is already claimed (sent_at set above), so a send rejected by
+      // sendblue.ts's meta-commentary guard just means no text goes out this
+      // round — not a retry. (That guard used to live here as its own
+      // regex — moved to services/sendblue.ts 2026-09-03 so every send gets
+      // it, not just this job's.)
       const capped = trimmed.length > 160 ? `${trimmed.slice(0, 159)}…` : trimmed;
       await sendblue.messages.send({
         number: row.phone_number,

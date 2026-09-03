@@ -133,11 +133,9 @@ export async function getTierBias(userId: string): Promise<Record<number, number
 
 // Cron-callable — mirrors jobs/postCallFollowUp.ts's sendDueFollowUps()
 // exactly: poll due rows, claim atomically so overlapping ticks can't
-// double-send, generate fresh text at send time, guard against leaked
-// model meta-commentary before ever sending.
-const LEAKED_METACOMMENTARY =
-  /\{\{|context_summary|\bi don'?t have (a |any )?(record|access|context|information)\b|\bi can'?t (actually )?(send|text)\b|\boutside what i can do\b|\bi can only (take|make) calls?\b/i;
-
+// double-send, generate fresh text at send time. Leaked-meta-commentary
+// guard lives in services/sendblue.ts (moved there 2026-09-03) so every
+// send gets it, not just this one.
 export async function sendDueOutcomeFollowUps(): Promise<void> {
   const due = await pool.query(
     `SELECT rof.id, rof.user_id, rof.ask_text, rof.match_name, u.phone_number, u.first_name
@@ -165,10 +163,6 @@ Draft a short, warm, genuinely curious message asking how it went — who they m
 Return ONLY the message text.`,
       });
       const trimmed = draft.trim();
-      if (LEAKED_METACOMMENTARY.test(trimmed)) {
-        console.error(`recommendationOutcome: generated text for follow-up ${row.id} looked like leaked meta-commentary, not sending:`, trimmed);
-        continue;
-      }
       const cleaned = cleanCoMessage(trimmed);
       await sendblue.messages.send({
         number: row.phone_number,

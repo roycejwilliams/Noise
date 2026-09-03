@@ -43,17 +43,37 @@ export function cleanCoMessage(text: string): string {
   return cleaned;
 }
 
-// Every message send goes through this one wrapper so cleanup applies
-// uniformly, regardless of which prompt or call site generated the content.
+// Guards against ever texting a real user raw model meta-commentary (e.g.
+// "I don't have access to...") instead of an actual message — the exact
+// failure jobs/postCallFollowUp.ts produced live before this existed there,
+// then services/recommendationOutcome.ts copy-pasted the same check for its
+// own sends. Centralized here 2026-09-03 (Royce, "how can we fix the
+// mitigated piece fully") after confirming most other call sites that draft
+// free text (agent/tools.ts's sendSms, eventAskSolicitation.ts,
+// eventChangeNotification.ts, calendarFollowReachOut.ts,
+// eventDiscoverySurfacing.ts) had no guard at all — this can't stop the
+// model from occasionally breaking character, but living in the one choke
+// point every send passes through means no call site, present or future,
+// can ship without it by forgetting to copy the check.
+const LEAKED_METACOMMENTARY =
+  /\{\{|context_summary|\bi don'?t have (a |any )?(record|access|context|information)\b|\bi can'?t (actually )?(send|text)\b|\boutside what i can do\b|\bi can only (take|make) calls?\b/i;
+
+// Every message send goes through this one wrapper so cleanup and the
+// meta-commentary guard apply uniformly, regardless of which prompt or call
+// site generated the content.
 const sendblue = {
   ...client,
   messages: {
     ...client.messages,
-    send: (body: Parameters<typeof client.messages.send>[0], options?: Parameters<typeof client.messages.send>[1]) =>
-      client.messages.send(
-        { ...body, content: body.content ? cleanCoMessage(body.content) : body.content },
-        options,
-      ),
+    send: (body: Parameters<typeof client.messages.send>[0], options?: Parameters<typeof client.messages.send>[1]) => {
+      const content = body.content ? cleanCoMessage(body.content) : body.content;
+      if (content && LEAKED_METACOMMENTARY.test(content)) {
+        return Promise.reject(
+          new Error(`sendblue: outbound content looked like leaked model meta-commentary, refusing to send: ${content}`),
+        );
+      }
+      return client.messages.send({ ...body, content }, options);
+    },
   },
 } as unknown as typeof client;
 
