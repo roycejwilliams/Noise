@@ -114,6 +114,15 @@ export type LumaGuest = {
 // approval_status/registered_at are populated ahead of the event (not gated
 // on check-in), which is what makes pre-event scoring possible at all — see
 // the "Standing profile scored against full Luma guest list" board item.
+//
+// Field names fixed 2026-09-03 after live-testing against a real registered
+// guest (previously only inferred, never confirmed against an actual
+// response): a guest record's own id is `id`, not `api_id` (events use
+// `api_id`, guests don't); email/name are `user_email`/`user_name` (with
+// `user_first_name`/`user_last_name` as a fallback), not `email`/`name`.
+// The old field names existed nowhere in Luma's real response, so every
+// guest silently came back with a null id/email/name regardless of what
+// Luma actually had on file.
 export async function getEventGuestList(eventId: string): Promise<LumaGuest[]> {
   const guests: LumaGuest[] = [];
   let cursor: string | undefined;
@@ -130,10 +139,11 @@ export async function getEventGuestList(eventId: string): Promise<LumaGuest[]> {
     const data: any = await res.json();
     for (const entry of data.entries ?? []) {
       const guest = entry.guest ?? entry;
+      const fullName = [guest.user_first_name, guest.user_last_name].filter(Boolean).join(" ") || null;
       guests.push({
-        api_id: guest.api_id,
-        email: guest.email ?? null,
-        name: guest.name ?? null,
+        api_id: guest.id,
+        email: guest.user_email ?? null,
+        name: guest.user_name ?? fullName,
         phone: guest.phone_number ?? guest.phone ?? null,
         approval_status: guest.approval_status,
         registered_at: guest.registered_at ?? null,

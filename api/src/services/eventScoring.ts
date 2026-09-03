@@ -29,18 +29,34 @@ export type RankedCandidate = {
 
 // Luma gives us email/phone/name, never a user_id — this is the only place
 // that translates "who's on the guest list" into "which of them are actual
-// Co users we have a profile for." A guest with no phone match isn't a
-// candidate for or against anyone's ranking; there's nothing to score.
+// Co users we have a profile for."
+//
+// Email added to the match 2026-09-03 (Royce: "find something more
+// reliable") after live-testing exposed phone-only matching as close to
+// useless in practice: Luma's own Add Guests API doesn't even accept a
+// phone number as input (confirmed against its OpenAPI spec — phone is
+// only ever collected if the event's own `phone_number_requirement` is set
+// to require it at checkout), and a real guest added through it came back
+// with `phone_number: null`. Email (`user_email`) is the one field Luma
+// reliably has on every guest regardless of event configuration, and
+// `users.email` is a required column here — so matching OR's both signals
+// instead of relying on phone alone. Case-insensitively, since Gmail-style
+// email casing differences would otherwise silently miss a real match (the
+// existing exact-string email lookup in routes/luma.ts's
+// reachOutToSubscriber doesn't have this problem today only because it's
+// matching Luma's own subscriber-webhook email, not comparing two
+// independently-typed addresses across systems the way this does).
 export async function matchGuestsToUsers(guests: LumaGuest[]): Promise<ScorableGuest[]> {
   const phones = guests.map((g) => g.phone).filter((p): p is string => Boolean(p));
-  if (!phones.length) return [];
+  const emails = guests.map((g) => g.email?.toLowerCase()).filter((e): e is string => Boolean(e));
+  if (!phones.length && !emails.length) return [];
 
   const { rows } = await pool.query(
     `SELECT cp.user_id, u.first_name, u.phone_number, cp.goals, cp.blockers, cp.activity_preferences, cp.intent
      FROM co_profiles cp
      JOIN users u ON u.id = cp.user_id
-     WHERE u.phone_number = ANY($1::text[])`,
-    [phones],
+     WHERE u.phone_number = ANY($1::text[]) OR LOWER(u.email) = ANY($2::text[])`,
+    [phones, emails],
   );
   return rows;
 }
