@@ -13,6 +13,7 @@ export type ScorableGuest = {
   user_id: string;
   first_name: string;
   phone_number: string;
+  city?: string | null;
   goals?: string[];
   blockers?: string[];
   activity_preferences?: string[];
@@ -52,7 +53,7 @@ export async function matchGuestsToUsers(guests: LumaGuest[]): Promise<ScorableG
   if (!phones.length && !emails.length) return [];
 
   const { rows } = await pool.query(
-    `SELECT cp.user_id, u.first_name, u.phone_number, cp.goals, cp.blockers, cp.activity_preferences, cp.intent
+    `SELECT cp.user_id, u.first_name, u.phone_number, cp.city, cp.goals, cp.blockers, cp.activity_preferences, cp.intent
      FROM co_profiles cp
      JOIN users u ON u.id = cp.user_id
      WHERE u.phone_number = ANY($1::text[]) OR LOWER(u.email) = ANY($2::text[])`,

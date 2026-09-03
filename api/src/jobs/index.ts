@@ -14,6 +14,7 @@ import { placeDueCalls, sendDueReminders } from "./scheduledCall.js";
 import { placeDueProactiveCalls } from "./proactiveCheckinCall.js";
 import { buildRecap, findUsersDueForRecap } from "../services/memoryCompaction.js";
 import { sendDueOutcomeFollowUps } from "../services/recommendationOutcome.js";
+import { runEventChangeNotificationAgent } from "../agent/eventChangeNotification.js";
 
 // Bounded-concurrency worker pool (Royce, 2026-08-30) — the event surfacing
 // sweep now runs for every open ask daily (see below), and a plain
@@ -150,6 +151,46 @@ export function registerJobs(io: Server) {
       }
     } catch (error) {
       console.error("Delayed missed-call follow-up cron error:", error);
+    }
+  });
+
+  // Every 15 min — deferred event-change/cancellation notifications
+  // (Royce, 2026-09-03). eventChangeDetection.ts's notifyMatchedGuests
+  // sends immediately when it's a reasonable hour for the recipient, and
+  // only queues a row here when a host's edit/cancel lands off-hours for
+  // them. Row is left untouched on a skip, so it's re-checked next tick.
+  cron.schedule("*/15 * * * *", async () => {
+    try {
+      const due = await pool.query(
+        `SELECT ecn.id, ecn.user_id, ecn.event_name, ecn.message, u.first_name, u.phone_number, cp.city
+         FROM event_change_notifications ecn
+         JOIN users u ON u.id = ecn.user_id
+         LEFT JOIN co_profiles cp ON cp.user_id = ecn.user_id
+         WHERE ecn.sent_at IS NULL`,
+      );
+
+      for (const row of due.rows) {
+        const timezone = row.city ? await getTimezoneForCity(row.city) : null;
+        if (!isReasonableLocalHour(timezone)) continue;
+
+        const claim = await pool.query(
+          `UPDATE event_change_notifications SET sent_at = NOW() WHERE id = $1 AND sent_at IS NULL RETURNING id`,
+          [row.id],
+        );
+        if (!claim.rows[0]) continue;
+
+        try {
+          await runEventChangeNotificationAgent(
+            { userId: row.user_id, firstName: row.first_name, phoneNumber: row.phone_number },
+            row.event_name,
+            row.message,
+          );
+        } catch (err: any) {
+          console.error(`Deferred event-change notification failed for ${row.user_id} (non-fatal, already claimed):`, err?.message ?? err);
+        }
+      }
+    } catch (error) {
+      console.error("Deferred event-change notification cron error:", error);
     }
   });
 

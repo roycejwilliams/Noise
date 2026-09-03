@@ -2,6 +2,8 @@ import pool from "../db/db.js";
 import { getEventDetails, getEventGuestList, type LumaEventDetail } from "./luma.js";
 import { matchGuestsToUsers } from "./eventScoring.js";
 import { runEventChangeNotificationAgent } from "../agent/eventChangeNotification.js";
+import { getTimezoneForCity } from "./geocoding.js";
+import { isReasonableLocalHour } from "./localHours.js";
 
 // "Proactive event-change/cancellation texts" board item. Event Updated
 // carries the event's current full state, not a diff — this stores the
@@ -48,19 +50,39 @@ function diffSnapshot(previous: Snapshot, current: LumaEventDetail): string[] {
   return changes;
 }
 
+// Gated on local hour, unlike calendar-follow/guest-registered reach-outs
+// (Royce, 2026-09-03) — those fire off the RECIPIENT's own action, so
+// immediate is the right call (like a signup confirmation). This one fires
+// off the HOST editing or canceling the event, so an attendee gets no
+// signal they're awake — same unprompted-2am-contact risk as the crons
+// already fixed. A row due at a bad hour is queued (event_change_notifications)
+// instead of sent immediately; jobs/index.ts polls it and sends once it's
+// actually a reasonable hour for that person, rather than dropping it.
 async function notifyMatchedGuests(eventId: string, eventName: string, message: string): Promise<void> {
   const guests = await getEventGuestList(eventId);
   const matched = await matchGuestsToUsers(guests);
   await Promise.all(
-    matched.map((person) =>
-      runEventChangeNotificationAgent(
+    matched.map(async (person) => {
+      const timezone = person.city ? await getTimezoneForCity(person.city) : null;
+      if (!isReasonableLocalHour(timezone)) {
+        await pool
+          .query(
+            `INSERT INTO event_change_notifications (user_id, event_name, message) VALUES ($1, $2, $3)`,
+            [person.user_id, eventName, message],
+          )
+          .catch((err: any) =>
+            console.error(`eventChangeDetection: failed to queue deferred notification for ${person.user_id}:`, err?.message ?? err),
+          );
+        return;
+      }
+      await runEventChangeNotificationAgent(
         { userId: person.user_id, firstName: person.first_name, phoneNumber: person.phone_number },
         eventName,
         message,
       ).catch((err: any) =>
         console.error(`eventChangeDetection: notification failed for ${person.user_id} (non-fatal):`, err?.message ?? err),
-      ),
-    ),
+      );
+    }),
   );
 }
 

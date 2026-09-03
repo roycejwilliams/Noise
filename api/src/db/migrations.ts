@@ -1063,4 +1063,33 @@ export function runMigrations() {
       `),
     )
     .catch((err: Error) => console.error("recommendation_outcome_followups table init failed:", err));
+
+  // Deferred queue for event.updated/event.canceled notifications (Royce,
+  // 2026-09-03) — these fire off a Luma webhook the instant a host edits or
+  // cancels an event, which could land at any hour since it's the host's
+  // action, not the recipient's (unlike calendar-follow or guest-registered
+  // reach-outs, which stay immediate since the recipient just took an
+  // action of their own). eventChangeDetection.ts's notifyMatchedGuests
+  // sends right away when it's a reasonable hour for that person, and only
+  // queues a row here otherwise. event_name/message are the already-composed
+  // diff/cancellation text, snapshotted at webhook time — same
+  // denormalized-snapshot convention as post_call_follow_ups.transcript.
+  pool
+    .query(`
+      CREATE TABLE IF NOT EXISTS event_change_notifications (
+        id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+        user_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+        event_name TEXT NOT NULL,
+        message TEXT NOT NULL,
+        sent_at TIMESTAMPTZ,
+        created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+      )
+    `)
+    .then(() =>
+      pool.query(`
+        CREATE INDEX IF NOT EXISTS idx_event_change_notifications_pending
+          ON event_change_notifications (created_at) WHERE sent_at IS NULL
+      `),
+    )
+    .catch((err: Error) => console.error("event_change_notifications table init failed:", err));
 }
