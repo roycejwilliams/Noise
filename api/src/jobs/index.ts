@@ -114,16 +114,26 @@ export function registerJobs(io: Server) {
   // no-answer/busy/failed/canceled — nobody and nothing picked up). Plain
   // text, no AI drafting or voice note — voicemail-detected calls are
   // handled instantly elsewhere (co.ts call-status handler).
+  //
+  // Gated on local hour (Royce, 2026-09-03) — same reasoning as the other
+  // three crons above and postCallFollowUp.ts's reflection text: a call
+  // attempt near the 8pm window edge plus this 2hr delay could otherwise
+  // push a send past it. due_at is left untouched on a skip, so it's
+  // re-checked next tick instead of dropped.
   cron.schedule("*/15 * * * *", async () => {
     try {
       const due = await pool.query(
-        `SELECT pcf.id, pcf.call_status, u.id AS user_id, u.first_name, u.phone_number
+        `SELECT pcf.id, pcf.call_status, u.id AS user_id, u.first_name, u.phone_number, cp.city
          FROM pending_call_followups pcf
          JOIN users u ON u.id = pcf.user_id
+         LEFT JOIN co_profiles cp ON cp.user_id = pcf.user_id
          WHERE pcf.due_at <= NOW() AND pcf.sent_at IS NULL`,
       );
 
       for (const row of due.rows) {
+        const timezone = row.city ? await getTimezoneForCity(row.city) : null;
+        if (!isReasonableLocalHour(timezone)) continue;
+
         try {
           await sendblue.messages.send({
             number: row.phone_number,
