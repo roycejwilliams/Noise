@@ -15,6 +15,7 @@ import { placeDueProactiveCalls } from "./proactiveCheckinCall.js";
 import { buildRecap, findUsersDueForRecap } from "../services/memoryCompaction.js";
 import { sendDueOutcomeFollowUps } from "../services/recommendationOutcome.js";
 import { runEventChangeNotificationAgent } from "../agent/eventChangeNotification.js";
+import { runCompanionCheckinAgent } from "../agent/companionCheckin.js";
 
 // Bounded-concurrency worker pool (Royce, 2026-08-30) — the event surfacing
 // sweep now runs for every open ask daily (see below), and a plain
@@ -429,5 +430,54 @@ export function registerJobs(io: Server) {
   // for due rows and claims atomically, cheap even run often.
   cron.schedule("*/15 * * * *", () => {
     sendDueOutcomeFollowUps().catch((err) => console.error("recommendationOutcome: poll failed:", err?.message ?? err));
+  });
+
+  // Companion check-in (Royce, 2026-09-03: "how can we make it a companion
+  // with what we have now" — every other proactive text has a reason
+  // attached (an ask, an event, an outcome); this is the one that
+  // doesn't). Seeded by the recap memoryCompaction.ts already builds —
+  // previously pure internal bookkeeping, never surfaced to the user.
+  // Targets users PAST onboarding (life_chapters populated) — the auto-call
+  // cron above only calls users who AREN'T past onboarding yet, so together
+  // these cover before/after without overlap. 7-day cadence is a first
+  // guess, not tuned. Hourly + hour-gated, same shape as ask-checkin/event
+  // surfacing; last_companion_checkin_at always bumps on an attempt (sent
+  // or the model deciding to skip) so a skip doesn't retry every tick.
+  cron.schedule("0 * * * *", async () => {
+    try {
+      const due = await pool.query(
+        `SELECT u.id AS user_id, u.first_name, u.phone_number, cp.city,
+                (SELECT content FROM co_memories cm
+                 WHERE cm.user_id = u.id AND cm.memory_type = 'recap'
+                 ORDER BY cm.created_at DESC LIMIT 1) AS recap
+         FROM users u
+         JOIN co_profiles cp ON cp.user_id = u.id
+         WHERE u.subscription_status = 'active'
+           AND u.sms_opted_out = false
+           AND cp.life_chapters IS NOT NULL AND array_length(cp.life_chapters, 1) IS NOT NULL
+           AND cp.last_recap_at IS NOT NULL
+           AND (cp.last_companion_checkin_at IS NULL OR cp.last_companion_checkin_at <= NOW() - INTERVAL '7 days')
+         LIMIT 25`,
+      );
+
+      for (const row of due.rows) {
+        if (!row.recap) continue; // last_recap_at set but no recap row somehow — nothing to seed the check-in with
+
+        const timezone = row.city ? await getTimezoneForCity(row.city) : null;
+        if (!isReasonableLocalHour(timezone)) continue; // wrong hour for them — untouched, retried next hourly tick
+
+        try {
+          await runCompanionCheckinAgent(
+            { userId: row.user_id, firstName: row.first_name, phoneNumber: row.phone_number },
+            row.recap,
+          );
+        } catch (err: any) {
+          console.error(`Companion check-in failed for ${row.user_id}:`, err?.message ?? err);
+        }
+        await pool.query(`UPDATE co_profiles SET last_companion_checkin_at = NOW() WHERE user_id = $1`, [row.user_id]);
+      }
+    } catch (error) {
+      console.error("Companion check-in cron error:", error);
+    }
   });
 }

@@ -263,7 +263,7 @@ export function runMigrations() {
           'call_offer_pending','call_offer_resolved','recommendation','call_offer_declined_topic',
           'event_ask_solicitation','calendar_follow_reach_out','event_discovery_surfacing',
           'event_change_notification','event_offer_pending','event_offer_resolved',
-          'recommendation_outcome'
+          'recommendation_outcome','companion_checkin'
         ]));
     `)
     .catch((err: Error) =>
@@ -764,6 +764,16 @@ export function runMigrations() {
   pool
     .query(`ALTER TABLE co_profiles ADD COLUMN IF NOT EXISTS last_recap_at TIMESTAMPTZ`)
     .catch((err: Error) => console.error("co_profiles.last_recap_at migration failed:", err));
+
+  // Companion check-in cadence (Royce, 2026-09-03: "how can we make it a
+  // companion with what we have now" — every other proactive text has a
+  // reason attached; this is the one that doesn't, seeded by the recap
+  // above instead of an ask/event/outcome). Own column, own cadence,
+  // separate from last_recap_at's "did we resummarize" clock — see
+  // agent/companionCheckin.ts and the cron in jobs/index.ts.
+  pool
+    .query(`ALTER TABLE co_profiles ADD COLUMN IF NOT EXISTS last_companion_checkin_at TIMESTAMPTZ`)
+    .catch((err: Error) => console.error("co_profiles.last_companion_checkin_at migration failed:", err));
 
   // Real source of truth for a call's SID/status once calls are placed via
   // the media-stream bridge (services/mediaStreamBridge.ts) rather than
