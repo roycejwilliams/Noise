@@ -33,7 +33,7 @@ import {
   recordOutcome,
 } from "../services/recommendationOutcome.js";
 import { findRealVenues } from "../services/venueLookup.js";
-import { runConversationReplyAgent, filterRelevantMemories } from "../agent/conversationReply.js";
+import { runConversationReplyAgent, filterRelevantMemories, CALL_OFFER_EXPIRY_DAYS } from "../agent/conversationReply.js";
 import { triggerCallForUser } from "../services/callTrigger.js";
 import sendblue from "../services/sendblue.js";
 import { generateVoiceNote } from "../services/voiceNote.js";
@@ -632,12 +632,13 @@ Return ONLY strict JSON: {"full_name": string or null, "email": string or null, 
         const pendingOfferResult = await pool.query(
           `SELECT p.id, p.content FROM co_memories p
            WHERE p.user_id = $1 AND p.memory_type = 'call_offer_pending'
+           AND p.created_at > NOW() - ($2 || ' days')::interval
            AND NOT EXISTS (
              SELECT 1 FROM co_memories r
              WHERE r.user_id = $1 AND r.memory_type = 'call_offer_resolved' AND r.created_at > p.created_at
            )
            ORDER BY p.created_at DESC LIMIT 1`,
-          [user.id],
+          [user.id, CALL_OFFER_EXPIRY_DAYS],
         );
         const pendingOffer = pendingOfferResult.rows[0] ?? null;
         const hasPendingOffer = !!pendingOffer;

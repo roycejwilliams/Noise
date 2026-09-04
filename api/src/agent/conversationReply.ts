@@ -52,6 +52,15 @@ export type ConversationReplyInput = {
   sendCoReply: SendCoReply;
 };
 
+// How long an unanswered call offer stays "open" before Co treats it as
+// abandoned. Referenced by sendblue.ts's pending-offer lookup — same
+// reasoning as eventSurfacingSweep.ts's EVENT_OFFER_EXPIRY_DAYS. Gap closed
+// 2026-09-04 (Royce): previously there was no expiry at all, so a call offer
+// from 2026-08-27 was still "pending" over a week later and got matched
+// against an unrelated "For sure" reply on 2026-09-04, triggering an
+// unwanted real outbound call.
+export const CALL_OFFER_EXPIRY_DAYS = 7;
+
 // Re-checks the actual sent text for whether it's a call offer, rather than
 // trusting the model to have self-declared it via a tool call. Restored
 // after a real conversation showed the model calling offerCall right after a
