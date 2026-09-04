@@ -101,6 +101,42 @@ function deriveStyleHint(chronological: { content: string }[]): string {
   return notes.length ? `\nHow they text (match this energy, not their exact words): ${notes.join("; ")}.` : "";
 }
 
+// Marks a visible gap between conversation lines whenever there's a real
+// pause since the previous one — without this, two lines sitting next to
+// each other in this block read as equally "just now" to the reply model,
+// regardless of whether they were 30 seconds or 2 days apart. Confirmed
+// live, 2026-09-04: a real "Call me" from 2 days earlier sat directly above
+// an unrelated "For sure" from today with nothing marking the gap, and the
+// reply model (told this whole block is "the actual thread") stitched them
+// into one exchange — producing a reply that confidently, and wrongly,
+// claimed the user had just said "call me" today. Threshold-gated, not
+// shown on every line, so an ordinary back-and-forth doesn't get cluttered
+// with markers for normal reply-time pauses.
+const CONVERSATION_GAP_THRESHOLD_MS = 3 * 60 * 60 * 1000; // 3 hours
+
+function formatGap(ms: number): string {
+  const minutes = Math.round(ms / 60000);
+  if (minutes < 60) return `${minutes} minute${minutes === 1 ? "" : "s"}`;
+  const hours = Math.round(minutes / 60);
+  if (hours < 24) return `${hours} hour${hours === 1 ? "" : "s"}`;
+  const days = Math.round(hours / 24);
+  return `${days} day${days === 1 ? "" : "s"}`;
+}
+
+function annotateConversationGaps(rows: { content: string; created_at: Date }[]): string {
+  const lines: string[] = [];
+  let prevTime: Date | null = null;
+  for (const row of rows) {
+    const time = new Date(row.created_at);
+    if (prevTime && time.getTime() - prevTime.getTime() > CONVERSATION_GAP_THRESHOLD_MS) {
+      lines.push(`[— ${formatGap(time.getTime() - prevTime.getTime())} later —]`);
+    }
+    lines.push(row.content);
+    prevTime = time;
+  }
+  return lines.join("\n");
+}
+
 // Detect whether a media_url is a voice memo by checking its Content-Type
 async function isAudioUrl(url: string): Promise<boolean> {
   try {
@@ -618,11 +654,9 @@ Return ONLY strict JSON: {"full_name": string or null, "email": string or null, 
            LIMIT 20`,
           [user.id],
         );
-        const recentConversation = chronologicalResult.rows
-          .reverse()
-          .map((m: any) => m.content)
-          .join("\n");
-        const styleHint = deriveStyleHint(chronologicalResult.rows);
+        const chronologicalRows = chronologicalResult.rows.reverse();
+        const recentConversation = annotateConversationGaps(chronologicalRows);
+        const styleHint = deriveStyleHint(chronologicalRows);
 
         // Advisory-only read on what they need (heard vs. helped toward an
         // answer) rather than how they feel — needs the conversation, not
