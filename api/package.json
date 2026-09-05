@@ -8,7 +8,8 @@
     "dev": "tsx watch src/server.ts",
     "build": "tsc",
     "start": "npm run build && node dist/server.js",
-    "notify-testers": "tsx src/scripts/notifyTesters.ts"
+    "notify-testers": "tsx src/scripts/notifyTesters.ts",
+    "simulate-inbound": "tsx src/scripts/simulateInboundText.ts"
   },
   "keywords": [],
   "author": "",
