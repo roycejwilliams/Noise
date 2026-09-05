@@ -21,6 +21,13 @@ async function main() {
     process.exit(1);
   }
 
+  // Stamped BEFORE the webhook call — bug fix, 2026-09-05 (found live: a
+  // stale "Co replied:" row from an earlier, unrelated turn was still
+  // sitting in the last-5 window and got reported back as if it were this
+  // call's reply). Only a reply row created strictly after this timestamp
+  // can actually be a response to the message being sent here.
+  const sentAt = new Date();
+
   const port = process.env.PORT ?? 3000;
   const res = await fetch(`http://localhost:${port}/sendblue/webhook`, {
     method: "POST",
@@ -37,9 +44,9 @@ async function main() {
     const { rows } = await pool.query(
       `SELECT cm.content, cm.created_at FROM co_memories cm
        JOIN users u ON u.id = cm.user_id
-       WHERE u.phone_number = $1 AND cm.memory_type = 'text_exchange'
+       WHERE u.phone_number = $1 AND cm.memory_type = 'text_exchange' AND cm.created_at > $2
        ORDER BY cm.created_at DESC LIMIT 5`,
-      [phone],
+      [phone, sentAt.toISOString()],
     );
     const reply = rows.find((r: any) => typeof r.content === "string" && r.content.startsWith("Co replied:"));
     if (reply) {

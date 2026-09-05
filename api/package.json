@@ -12,7 +12,8 @@
     "simulate-inbound": "tsx src/scripts/simulateInboundText.ts",
     "set-stated-ask": "tsx src/scripts/setStatedAsk.ts",
     "trigger-event-scoring": "tsx src/scripts/triggerEventScoring.ts",
-    "resolve-active-ask": "tsx src/scripts/resolveActiveAsk.ts"
+    "resolve-active-ask": "tsx src/scripts/resolveActiveAsk.ts",
+    "show-intent": "tsx src/scripts/showIntent.ts"
   },
   "keywords": [],
   "author": "",
