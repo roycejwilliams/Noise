@@ -9,7 +9,9 @@
     "build": "tsc",
     "start": "npm run build && node dist/server.js",
     "notify-testers": "tsx src/scripts/notifyTesters.ts",
-    "simulate-inbound": "tsx src/scripts/simulateInboundText.ts"
+    "simulate-inbound": "tsx src/scripts/simulateInboundText.ts",
+    "set-stated-ask": "tsx src/scripts/setStatedAsk.ts",
+    "trigger-event-scoring": "tsx src/scripts/triggerEventScoring.ts"
   },
   "keywords": [],
   "author": "",
