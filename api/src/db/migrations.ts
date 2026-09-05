@@ -1074,6 +1074,36 @@ export function runMigrations() {
     )
     .catch((err: Error) => console.error("recommendation_outcome_followups table init failed:", err));
 
+  // Event Curation's own end-of-night check-in (Notion V1 board row 8, "who
+  // did you meet that was interesting?") — sibling to
+  // recommendation_outcome_followups above (same due-timestamp + nullable
+  // claim column + partial index convention), but keyed off a REAL Luma
+  // check-in at one of Co's own curated events (guest.checked_in_at, seen via
+  // routes/luma.ts's guest.updated handler → services/eventScoring.ts), not
+  // off Co having merely recommended something. UNIQUE(event_api_id, user_id)
+  // makes scheduling idempotent — guest.updated can fire repeatedly for the
+  // same already-checked-in guest without re-scheduling or double-sending.
+  pool
+    .query(`
+      CREATE TABLE IF NOT EXISTS event_checkin_followups (
+        id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+        user_id UUID NOT NULL REFERENCES users(id),
+        event_api_id TEXT NOT NULL,
+        event_name TEXT NOT NULL,
+        send_at TIMESTAMPTZ NOT NULL,
+        sent_at TIMESTAMPTZ,
+        created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+        UNIQUE (event_api_id, user_id)
+      )
+    `)
+    .then(() =>
+      pool.query(`
+        CREATE INDEX IF NOT EXISTS idx_event_checkin_followups_due
+          ON event_checkin_followups (send_at) WHERE sent_at IS NULL
+      `),
+    )
+    .catch((err: Error) => console.error("event_checkin_followups table init failed:", err));
+
   // Deferred queue for event.updated/event.canceled notifications (Royce,
   // 2026-09-03) — these fire off a Luma webhook the instant a host edits or
   // cancels an event, which could land at any hour since it's the host's

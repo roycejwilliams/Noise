@@ -14,6 +14,7 @@ import { placeDueCalls, sendDueReminders } from "./scheduledCall.js";
 import { placeDueProactiveCalls } from "./proactiveCheckinCall.js";
 import { buildRecap, findUsersDueForRecap } from "../services/memoryCompaction.js";
 import { sendDueOutcomeFollowUps } from "../services/recommendationOutcome.js";
+import { sendDueEventCheckinFollowUps } from "../services/eventCheckinFollowUp.js";
 import { runEventChangeNotificationAgent } from "../agent/eventChangeNotification.js";
 import { runCompanionCheckinAgent } from "../agent/companionCheckin.js";
 
@@ -430,6 +431,13 @@ export function registerJobs(io: Server) {
   // for due rows and claims atomically, cheap even run often.
   cron.schedule("*/15 * * * *", () => {
     sendDueOutcomeFollowUps().catch((err) => console.error("recommendationOutcome: poll failed:", err?.message ?? err));
+  });
+
+  // End-of-night check-in (Notion V1 board row 8) — same lightweight polling
+  // cadence as the outcome-followup cron right above; sibling mechanism, gated
+  // on a real Luma check-in instead of a mere recommendation.
+  cron.schedule("*/15 * * * *", () => {
+    sendDueEventCheckinFollowUps().catch((err) => console.error("eventCheckinFollowUp: poll failed:", err?.message ?? err));
   });
 
   // Companion check-in (Royce, 2026-09-03: "how can we make it a companion

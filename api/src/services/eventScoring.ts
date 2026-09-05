@@ -2,6 +2,7 @@ import pool from "../db/db.js";
 import { runEventAskSolicitationAgent } from "../agent/eventAskSolicitation.js";
 import { getEventGuestList, listCalendarEvents, type LumaGuest } from "./luma.js";
 import { getActiveSeekingAsk, scoreAgainstStatedAsk } from "./matching.js";
+import { detectAndScheduleCheckins } from "./eventCheckinFollowUp.js";
 
 // Event Curation — "Standing profile scored against full Luma guest list."
 // Scoped strictly to one event's guest list, not the whole network — a Co
@@ -13,6 +14,7 @@ export type ScorableGuest = {
   user_id: string;
   first_name: string;
   phone_number: string;
+  email: string;
   city?: string | null;
   goals?: string[];
   blockers?: string[];
@@ -53,7 +55,7 @@ export async function matchGuestsToUsers(guests: LumaGuest[]): Promise<ScorableG
   if (!phones.length && !emails.length) return [];
 
   const { rows } = await pool.query(
-    `SELECT cp.user_id, u.first_name, u.phone_number, cp.city, cp.goals, cp.blockers, cp.activity_preferences, cp.intent
+    `SELECT cp.user_id, u.first_name, u.phone_number, u.email, cp.city, cp.goals, cp.blockers, cp.activity_preferences, cp.intent
      FROM co_profiles cp
      JOIN users u ON u.id = cp.user_id
      WHERE u.phone_number = ANY($1::text[]) OR LOWER(u.email) = ANY($2::text[])`,
@@ -201,5 +203,17 @@ export async function scoreGuestListForEvent(
     resolveEventName(eventId, eventName),
   ]);
   const matched = await matchGuestsToUsers(guests);
+
+  // End-of-night check-in (Notion V1 board row 8) — guest.updated is Luma's
+  // real-time check-in signal (see routes/luma.ts's own comment on this),
+  // so every re-scoring pass triggered by it is also the right moment to
+  // notice someone who just physically checked in and schedule their
+  // "who did you meet?" text for later tonight. Fire-and-forget: a failure
+  // here shouldn't block the scoring pass itself, same reasoning as every
+  // other non-fatal side effect in this webhook path.
+  detectAndScheduleCheckins(eventId, resolvedName, guests, matched, opts).catch((err: any) =>
+    console.error(`eventScoring: detectAndScheduleCheckins failed for ${eventId} (non-fatal):`, err?.message ?? err),
+  );
+
   return scoreMatchedGroup(eventId, resolvedName, matched, opts);
 }

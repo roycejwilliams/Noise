@@ -32,6 +32,10 @@ import {
   classifyNamedOutcome,
   recordOutcome,
 } from "../services/recommendationOutcome.js";
+import {
+  findPendingEventCheckinFollowUp,
+  recordEventCheckinOutcome,
+} from "../services/eventCheckinFollowUp.js";
 import { findRealVenues } from "../services/venueLookup.js";
 import { runConversationReplyAgent, filterRelevantMemories, CALL_OFFER_EXPIRY_DAYS } from "../agent/conversationReply.js";
 import { triggerCallForUser } from "../services/callTrigger.js";
@@ -898,6 +902,33 @@ Return ONLY the classification, nothing else.`,
           }
         }
 
+        // Resolve the end-of-night check-in, if one's pending (Notion V1
+        // board row 8 — sibling to the outcome follow-up above, but gated on
+        // a real Luma check-in at one of Co's own curated events rather than
+        // Co merely having recommended something). Same reuse-the-shared-
+        // classifier, fold-into-the-same-reply reasoning throughout this file.
+        let eventCheckinContext = "";
+        if (hasText) {
+          try {
+            const pendingCheckin = await findPendingEventCheckinFollowUp(user.id);
+            if (pendingCheckin) {
+              const outcome = await classifyNamedOutcome(resolvedContent, pendingCheckin.event_name);
+              if (outcome !== "unrelated") {
+                await recordEventCheckinOutcome(user.id, pendingCheckin.id, pendingCheckin.event_api_id, outcome);
+                if (outcome === "named_positive") {
+                  eventCheckinContext = `\nThey just told you something good came out of "${pendingCheckin.event_name}" — someone worthwhile they met or a good moment from tonight. Respond warmly to what they specifically shared, genuinely glad for them, no exclamation points.`;
+                } else if (outcome === "named_critical") {
+                  eventCheckinContext = `\nThey just told you "${pendingCheckin.event_name}" wasn't worthwhile or didn't go well. Acknowledge that honestly and warmly, no forced positivity, no apologizing on behalf of the event itself.`;
+                } else {
+                  eventCheckinContext = `\nThey answered about "${pendingCheckin.event_name}" but didn't name anyone specific or describe a real moment. Acknowledge lightly, no pressure to elaborate.`;
+                }
+              }
+            }
+          } catch (err: any) {
+            console.error("sendblue: event check-in reply classification failed (non-fatal):", err?.message ?? err);
+          }
+        }
+
         // "Any updates?" reactive reply (Royce, 2026-08-31: "once someone
         // joins the test copatible account, if they ask 'any updates' or
         // something similar just send them that" — and, if nothing's been
@@ -1448,6 +1479,7 @@ Return ONLY valid JSON, no preamble: {"wants_venue": true or false, "venue_type"
                 recommendationContext,
                 eventOfferContext,
                 outcomeFollowupContext,
+                eventCheckinContext,
                 updatesContext,
                 venueContext,
                 callFeatureQuestionContext,
