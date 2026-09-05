@@ -1104,6 +1104,23 @@ export function runMigrations() {
     )
     .catch((err: Error) => console.error("event_checkin_followups table init failed:", err));
 
+  // Coalesces duplicate scoring triggers (Royce, 2026-09-05 — found via real
+  // guest-add testing) — Luma fires guest.registered AND guest.updated as two
+  // separate webhooks for a single guest-add action (confirmed live,
+  // ~3 microseconds apart), and routes/luma.ts's runScoringPass had no
+  // debounce between them: both independently ran the full scoring pass,
+  // each with its own real, billed LLM call per matched guest, for the exact
+  // same underlying data. See services/eventScoring.ts's
+  // tryClaimScoringDebounce.
+  pool
+    .query(`
+      CREATE TABLE IF NOT EXISTS event_scoring_debounce (
+        event_id TEXT PRIMARY KEY,
+        last_triggered_at TIMESTAMPTZ NOT NULL
+      )
+    `)
+    .catch((err: Error) => console.error("event_scoring_debounce table init failed:", err));
+
   // Deferred queue for event.updated/event.canceled notifications (Royce,
   // 2026-09-03) — these fire off a Luma webhook the instant a host edits or
   // cancels an event, which could land at any hour since it's the host's

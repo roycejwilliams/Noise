@@ -88,6 +88,35 @@ async function markSolicited(eventId: string, personId: string): Promise<void> {
   );
 }
 
+// Debounce guard (Royce, 2026-09-05 — found via real guest-add testing):
+// Luma fires guest.registered AND guest.updated as two separate webhooks for
+// a single guest-add action (confirmed live, ~3 microseconds apart), and
+// routes/luma.ts's runScoringPass had nothing stopping both from
+// independently running the full scoring pass — each with its own real,
+// billed LLM call per matched guest, for the exact same underlying data.
+// Same atomic claim-before-act pattern as proactiveThrottle.ts's
+// tryClaimProactiveNudge (a plain check-then-write would let two near-
+// simultaneous webhooks both read "not scored recently" before either had
+// written its claim). Short window — this is only meant to coalesce near-
+// duplicate signals for the SAME action, not throttle genuinely distinct
+// guest registrations, which are vanishingly unlikely to land within
+// seconds of each other in practice; even if they did, nothing is lost,
+// just picked up on the next trigger.
+const SCORING_DEBOUNCE_SECONDS = 15;
+
+async function tryClaimScoringDebounce(eventId: string): Promise<boolean> {
+  const { rows } = await pool.query(
+    `INSERT INTO event_scoring_debounce (event_id, last_triggered_at)
+     VALUES ($1, NOW())
+     ON CONFLICT (event_id) DO UPDATE
+       SET last_triggered_at = NOW()
+       WHERE event_scoring_debounce.last_triggered_at <= NOW() - ($2 || ' seconds')::interval
+     RETURNING event_id`,
+    [eventId, SCORING_DEBOUNCE_SECONDS],
+  );
+  return rows.length > 0;
+}
+
 async function storeRanking(eventId: string, personId: string, ranked: RankedCandidate[], methodSummary: string): Promise<void> {
   await pool.query(
     `INSERT INTO event_guest_rankings (event_id, person_id, ranked_candidates, method_summary)
@@ -198,6 +227,11 @@ export async function scoreGuestListForEvent(
   eventName?: string,
   opts: { dryRun?: boolean } = {},
 ): Promise<{ scoredCount: number; solicitedCount: number; matchedCount: number }> {
+  if (!(await tryClaimScoringDebounce(eventId))) {
+    console.log(`eventScoring: ${eventId} scored within the last ${SCORING_DEBOUNCE_SECONDS}s — skipping duplicate pass`);
+    return { scoredCount: 0, solicitedCount: 0, matchedCount: 0 };
+  }
+
   const [guests, resolvedName] = await Promise.all([
     getEventGuestList(eventId),
     resolveEventName(eventId, eventName),
