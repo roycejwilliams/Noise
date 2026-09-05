@@ -13,7 +13,8 @@
     "set-stated-ask": "tsx src/scripts/setStatedAsk.ts",
     "trigger-event-scoring": "tsx src/scripts/triggerEventScoring.ts",
     "resolve-active-ask": "tsx src/scripts/resolveActiveAsk.ts",
-    "show-intent": "tsx src/scripts/showIntent.ts"
+    "show-intent": "tsx src/scripts/showIntent.ts",
+    "reset-profile": "tsx src/scripts/resetProfile.ts"
   },
   "keywords": [],
   "author": "",
