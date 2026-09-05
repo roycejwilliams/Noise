@@ -57,6 +57,7 @@ export async function buildContextSummary(userId: string): Promise<string> {
       recapResult.rows[0]?.content ? `Ongoing summary: ${recapResult.rows[0].content}` : null,
       profile?.life_chapters?.length ? `Life chapter: ${profile.life_chapters.join(", ")}` : null,
       profile?.city ? `City: ${profile.city}` : null,
+      profile?.emotional_state ? `Emotional state as of the last call: ${profile.emotional_state}` : null,
       profile?.goals?.length ? `Goals: ${profile.goals.slice(0, 3).join("; ")}` : null,
       profile?.blockers?.length ? `Blockers: ${profile.blockers.slice(0, 2).join("; ")}` : null,
       latestIntent?.text ? `Stated ask: ${latestIntent.text}` : null,
