@@ -956,9 +956,23 @@ Return ONLY "yes" or "no".`,
             if (rawAsksForUpdates.trim().toLowerCase().startsWith("yes")) {
               const latestUpdateResult = await pool.query(`SELECT content FROM product_updates ORDER BY created_at DESC LIMIT 1`);
               const latestUpdate = latestUpdateResult.rows[0];
-              updatesContext = latestUpdate
-                ? `\nThey're asking what's new. Share the real updates below as part of your reply — your own natural framing around them is fine, but don't alter, summarize away, or invent anything in the list itself; it's fine for this one reply to run longer than usual since they asked directly:\n${latestUpdate.content}`
-                : `\nThey're asking what's new, but there's genuinely nothing posted yet. Let them know honestly, briefly, that there's nothing new to report right now — don't invent something or brush past the question.`;
+              if (latestUpdate) {
+                // Sent deterministically, not via agent tool-calling (Royce,
+                // 2026-09-07, confirmed live) — asking the agent to relay
+                // this "as part of your reply" let it paraphrase the bullets
+                // despite being told not to, and blend in an unrelated past
+                // recommendation from contextSummary as if it were part of
+                // the same update. Sending the real content verbatim here
+                // removes both failure modes; the agent only has to
+                // acknowledge it, same pattern as recommendationContext/
+                // eventOfferContext above.
+                const updateMessage = `Here's what's new:\n\n${latestUpdate.content}`;
+                await sendCoReply({ phone: user.phone_number, message: updateMessage, asVoice: false });
+                await logTextExchange(user.id, `Co replied: ${updateMessage}`);
+                updatesContext = `\nThey just asked what's new — you already sent them the real update list separately, verbatim, that already happened. Don't repeat, paraphrase, or re-list it in this reply, and don't blend in anything else (like a past recommendation) as if it were part of that list. If it's natural, briefly acknowledge you just sent it, then respond to whatever else they said — keep this reply short.`;
+              } else {
+                updatesContext = `\nThey're asking what's new, but there's genuinely nothing posted yet. Let them know honestly, briefly, that there's nothing new to report right now — don't invent something or brush past the question.`;
+              }
             }
           } catch (err: any) {
             console.error("sendblue: asks-for-updates classification failed (non-fatal):", err?.message ?? err);
