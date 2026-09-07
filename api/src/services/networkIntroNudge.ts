@@ -41,17 +41,24 @@ type ShortlistCandidate = {
 };
 
 async function findShortlistCandidates(personId: string): Promise<ShortlistCandidate[]> {
+  // A person can have several open relevance_edges to the SAME candidate
+  // (different ask_ids logged across separate sweeps) — DISTINCT ON keeps
+  // only that candidate's single best-scoring edge, so the shortlist is 1-5
+  // distinct PEOPLE, never the same person twice at different scores.
   const { rows } = await pool.query(
-    `SELECT re.id AS edge_id, re.candidate_id, re.match_score, re.match_reason,
-            u.first_name, u.phone_number, u.email
-     FROM relevance_edges re
-     JOIN users u ON u.id = re.candidate_id
-     WHERE re.person_id = $1 AND re.status = 'open' AND re.match_score >= $2
-       AND NOT EXISTS (
-         SELECT 1 FROM event_guest_match_nudges n
-         WHERE n.person_id = re.person_id AND n.candidate_id = re.candidate_id AND n.event_id LIKE 'network:%'
-       )
-     ORDER BY re.match_score DESC
+    `SELECT edge_id, candidate_id, match_score, match_reason, first_name, phone_number, email FROM (
+       SELECT DISTINCT ON (re.candidate_id) re.id AS edge_id, re.candidate_id, re.match_score, re.match_reason,
+              u.first_name, u.phone_number, u.email
+       FROM relevance_edges re
+       JOIN users u ON u.id = re.candidate_id
+       WHERE re.person_id = $1 AND re.status = 'open' AND re.match_score >= $2
+         AND NOT EXISTS (
+           SELECT 1 FROM event_guest_match_nudges n
+           WHERE n.person_id = re.person_id AND n.candidate_id = re.candidate_id AND n.event_id LIKE 'network:%'
+         )
+       ORDER BY re.candidate_id, re.match_score DESC
+     ) distinct_candidates
+     ORDER BY match_score DESC
      LIMIT $3`,
     [personId, NETWORK_NUDGE_MIN_SCORE, MAX_NETWORK_CANDIDATES],
   );
