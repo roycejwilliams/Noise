@@ -134,7 +134,8 @@ export function runMigrations() {
           'call_offer_pending','call_offer_resolved','recommendation','call_offer_declined_topic',
           'event_ask_solicitation','calendar_follow_reach_out','event_discovery_surfacing',
           'event_change_notification','event_offer_pending','event_offer_resolved',
-          'recommendation_outcome','companion_checkin','event_checkin_outcome'
+          'recommendation_outcome','companion_checkin','event_checkin_outcome',
+          'event_guest_match_nudge'
         ]));
     `)
     .catch((err: Error) =>
@@ -566,6 +567,27 @@ export function runMigrations() {
       )`,
     )
     .catch((err: Error) => console.error("event_ask_solicitations table init failed:", err));
+
+  // Minimal text-based version of the "one-time nudge" (Notion V1 board row
+  // 9's eventual top-5 ranked card stack / App Clip) — Royce, 2026-09-07:
+  // "build it fully" after confirming the ranking engine (event_guest_
+  // rankings above) computed real, correctly-differentiated matches but
+  // nothing ever told the person about their best one. One row per (event,
+  // person) forever, not a cooldown — this is a genuinely one-time nudge,
+  // not a recurring check-in, so once sent it's done regardless of how
+  // many more times the guest list gets re-scored.
+  pool
+    .query(
+      `CREATE TABLE IF NOT EXISTS event_guest_match_nudges (
+        event_id TEXT NOT NULL,
+        person_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+        candidate_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+        score INT NOT NULL,
+        sent_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+        PRIMARY KEY (event_id, person_id)
+      )`,
+    )
+    .catch((err: Error) => console.error("event_guest_match_nudges table init failed:", err));
 
   // "Nudge Co users at events Co doesn't own" — captured from conversation
   // (extractPlannedEventMention, profileExtraction.ts), the same way

@@ -1,8 +1,13 @@
+import { anthropic } from "@ai-sdk/anthropic";
+import { generateText } from "ai";
 import pool from "../db/db.js";
 import { runEventAskSolicitationAgent } from "../agent/eventAskSolicitation.js";
 import { getEventGuestList, listCalendarEvents, type LumaGuest } from "./luma.js";
 import { getActiveSeekingAsk, scoreAgainstStatedAsk } from "./matching.js";
 import { detectAndScheduleCheckins } from "./eventCheckinFollowUp.js";
+import sendblue, { cleanCoMessage } from "./sendblue.js";
+import { tryClaimProactiveNudge } from "./proactiveThrottle.js";
+import { writeMemory } from "./memory.js";
 
 // Event Curation — "Standing profile scored against full Luma guest list."
 // Scoped strictly to one event's guest list, not the whole network — a Co
@@ -129,6 +134,95 @@ async function storeRanking(eventId: string, personId: string, ranked: RankedCan
   );
 }
 
+// Minimal text-based version of the "one-time nudge" (Notion V1 board row
+// 9's eventual top-5 ranked card stack / App Clip) — see
+// event_guest_match_nudges' migration comment. Only fires on a genuinely
+// strong match, not just the best of a weak field (confirmed live,
+// 2026-09-07: three real independent users with genuinely unrelated asks
+// all correctly scored 0-5 against each other — this threshold is exactly
+// what keeps that from becoming a false "you two should meet!" text).
+const MATCH_NUDGE_MIN_SCORE = 60;
+
+async function wasAlreadyNudgedForMatch(eventId: string, personId: string): Promise<boolean> {
+  const { rows } = await pool.query(
+    `SELECT 1 FROM event_guest_match_nudges WHERE event_id = $1 AND person_id = $2`,
+    [eventId, personId],
+  );
+  return rows.length > 0;
+}
+
+async function markMatchNudgeSent(eventId: string, personId: string, candidateId: string, score: number): Promise<void> {
+  await pool
+    .query(
+      `INSERT INTO event_guest_match_nudges (event_id, person_id, candidate_id, score)
+       VALUES ($1, $2, $3, $4)
+       ON CONFLICT (event_id, person_id) DO NOTHING`,
+      [eventId, personId, candidateId, score],
+    )
+    .catch((err: any) => console.error("markMatchNudgeSent: insert failed (non-fatal):", err?.message ?? err));
+}
+
+// One-time, not a cooldown (see the table's migration comment) — checked
+// BEFORE the shared proactive-nudge throttle so a person already nudged for
+// this event doesn't spend today's one discretionary-text slot on a repeat
+// pass finding the same top match again.
+async function maybeSendMatchNudge(
+  eventId: string,
+  eventName: string,
+  person: ScorableGuest,
+  top: RankedCandidate,
+  candidate: ScorableGuest,
+  opts: { dryRun?: boolean },
+): Promise<boolean> {
+  if (top.score < MATCH_NUDGE_MIN_SCORE) return false;
+  if (await wasAlreadyNudgedForMatch(eventId, person.user_id)) return false;
+
+  if (opts.dryRun) {
+    console.log(
+      `[eventScoring dryRun] would nudge ${person.user_id} about ${candidate.user_id} at ${eventId} (score ${top.score})`,
+    );
+    return false;
+  }
+  if (!(await tryClaimProactiveNudge(person.user_id))) {
+    console.log(`eventScoring: match nudge throttled for ${person.user_id} (proactive nudge used elsewhere in last 24h)`);
+    return false;
+  }
+
+  let message: string;
+  try {
+    const { text } = await generateText({
+      model: anthropic("claude-haiku-4-5-20251001"),
+      experimental_telemetry: { isEnabled: true, functionId: "eventScoring.matchNudge.draft" },
+      prompt: `You are Co, texting ${person.first_name} about "${eventName}," an event they're going to. You found someone else going who's genuinely worth them meeting: ${candidate.first_name}. Why they're worth meeting: ${top.reason}
+
+Draft a short, warm, low-pressure text (1-2 sentences, no exclamation points, no em dashes) letting ${person.first_name} know about ${candidate.first_name} and naming the real reason above in your own words. Not a hard sell, just a genuine heads-up, like a friend connecting two people who'd get along. Return ONLY the message text.`,
+    });
+    message = cleanCoMessage(text.trim());
+  } catch (err: any) {
+    console.error(`eventScoring: match nudge draft failed for ${person.user_id} (non-fatal):`, err?.message ?? err);
+    return false;
+  }
+
+  try {
+    await sendblue.messages.send({
+      number: person.phone_number,
+      content: message,
+      from_number: process.env.SENDBLUE_PHONE_NUMBER!,
+    });
+  } catch (err: any) {
+    console.error(`eventScoring: match nudge send failed for ${person.user_id} (non-fatal):`, err?.message ?? err);
+    return false;
+  }
+
+  await markMatchNudgeSent(eventId, person.user_id, candidate.user_id, top.score);
+  await writeMemory(
+    person.user_id,
+    "event_guest_match_nudge",
+    `Nudged ${person.first_name} that ${candidate.first_name} is also going to "${eventName}" and worth meeting: ${top.reason} (score ${top.score})`,
+  );
+  return true;
+}
+
 // Shared core: given a group of already-matched Co users (however that group
 // was assembled — a Luma guest list, or a cluster of people who separately
 // reported the same non-Co event, see eventMatching.ts), score every person
@@ -200,6 +294,14 @@ export async function scoreMatchedGroup(
 
     await storeRanking(eventId, person.user_id, ranked, `ask: "${ask.text}"`);
     scoredCount++;
+
+    const top = ranked[0];
+    const topCandidate = top ? others.find((o) => o.user_id === top.candidate_id) : undefined;
+    if (top && topCandidate) {
+      await maybeSendMatchNudge(eventId, eventName, person, top, topCandidate, opts).catch((err: any) =>
+        console.error(`eventScoring: maybeSendMatchNudge failed for ${person.user_id} (non-fatal):`, err?.message ?? err),
+      );
+    }
   }
 
   return { scoredCount, solicitedCount, matchedCount: matched.length };
