@@ -28,6 +28,14 @@ async function main() {
   console.log(`[dumpUserActivity] ${user.first_name} (${user.id}) — phone: ${user.phone_number}, email: ${user.email}`);
   console.log(`[dumpUserActivity] call_status: ${user.call_status}, call_sid: ${user.call_sid}`);
 
+  const { rows: profileRows } = await pool.query(
+    `SELECT life_chapters, goals, blockers, availability_pattern, city, emotional_state, intent, updated_at
+     FROM co_profiles WHERE user_id = $1`,
+    [user.id],
+  );
+  const profile = profileRows[0];
+  console.log(`[dumpUserActivity] co_profiles row: ${profile ? JSON.stringify({ ...profile, intent: profile.intent?.length }) : "(none)"}`);
+
   const { rows: memories } = await pool.query(
     `SELECT memory_type, content, created_at FROM co_memories
      WHERE user_id = $1 AND created_at > NOW() - ($2 || ' hours')::interval
