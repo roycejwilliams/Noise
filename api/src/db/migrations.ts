@@ -26,76 +26,6 @@ export function runMigrations() {
     );
 
   pool
-    .query(`ALTER TABLE moments ADD COLUMN IF NOT EXISTS suggested_time TEXT`)
-    .catch((err: Error) =>
-      console.error("moments.suggested_time migration failed:", err),
-    );
-
-  pool
-    .query(
-      `ALTER TABLE moments ADD COLUMN IF NOT EXISTS venue_booking_url TEXT`,
-    )
-    .catch((err: Error) =>
-      console.error("moments.venue_booking_url migration failed:", err),
-    );
-
-  // Unused — was set when the Connector was texted a booking task, removed
-  // along with that flow. Left in place rather than dropped.
-  pool
-    .query(
-      `ALTER TABLE moments ADD COLUMN IF NOT EXISTS booking_link_sent_at TIMESTAMPTZ`,
-    )
-    .catch((err: Error) =>
-      console.error("moments.booking_link_sent_at migration failed:", err),
-    );
-
-  pool
-    .query(
-      `ALTER TABLE moments ADD COLUMN IF NOT EXISTS consensus_nudge_sent_at TIMESTAMPTZ`,
-    )
-    .catch((err: Error) =>
-      console.error("moments.consensus_nudge_sent_at migration failed:", err),
-    );
-
-  // Two earlier checkpoints ahead of the 48hr force-lock above — a 4hr
-  // participant nudge and an 8hr informational Moderator heads-up. Each
-  // gated on its own timestamp so the 15-min cron doesn't re-send on every
-  // tick once past that mark.
-  pool
-    .query(
-      `ALTER TABLE moments ADD COLUMN IF NOT EXISTS consensus_4hr_nudge_sent_at TIMESTAMPTZ`,
-    )
-    .catch((err: Error) =>
-      console.error("moments.consensus_4hr_nudge_sent_at migration failed:", err),
-    );
-
-  pool
-    .query(
-      `ALTER TABLE moments ADD COLUMN IF NOT EXISTS consensus_8hr_notice_sent_at TIMESTAMPTZ`,
-    )
-    .catch((err: Error) =>
-      console.error("moments.consensus_8hr_notice_sent_at migration failed:", err),
-    );
-
-  // Unused — was the 4hr-nudge clock for an unresponsive Connector, removed
-  // along with that flow. Left in place rather than dropped.
-  pool
-    .query(
-      `ALTER TABLE moments ADD COLUMN IF NOT EXISTS connector_nudge_sent_at TIMESTAMPTZ`,
-    )
-    .catch((err: Error) =>
-      console.error("moments.connector_nudge_sent_at migration failed:", err),
-    );
-
-  pool
-    .query(
-      `ALTER TABLE moment_responses ADD COLUMN IF NOT EXISTS responded_at TIMESTAMPTZ`,
-    )
-    .catch((err: Error) =>
-      console.error("moment_responses.responded_at migration failed:", err),
-    );
-
-  pool
     .query(
       `ALTER TABLE co_profiles ADD COLUMN IF NOT EXISTS hume_chat_group_id TEXT`,
     )
@@ -105,57 +35,10 @@ export function runMigrations() {
 
   pool
     .query(
-      `ALTER TABLE moments ADD COLUMN IF NOT EXISTS status TEXT DEFAULT 'polling'`,
-    )
-    .catch((err: Error) =>
-      console.error("moments.status migration failed:", err),
-    );
-
-  pool
-    .query(
       `ALTER TABLE users ADD COLUMN IF NOT EXISTS subscription_status TEXT`,
     )
     .catch((err: Error) =>
       console.error("users.subscription_status migration failed:", err),
-    );
-
-  pool
-    .query(
-      `ALTER TABLE circles ADD COLUMN IF NOT EXISTS status TEXT DEFAULT 'pending_approval'`,
-    )
-    .catch((err: Error) =>
-      console.error("circles.status migration failed:", err),
-    );
-
-  // Single atomic block, not a separate rename + ADD COLUMN IF NOT EXISTS —
-  // those are two unawaited pool.query calls with no ordering guarantee
-  // between them, so a plain ADD COLUMN could win the race and create the
-  // new column first, permanently orphaning any existing keana_notified_at
-  // data (the rename's own NOT EXISTS guard would then never fire again).
-  pool
-    .query(
-      `DO $$
-       BEGIN
-         IF EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name = 'circles' AND column_name = 'keana_notified_at')
-            AND NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name = 'circles' AND column_name = 'moderator_notified_at')
-         THEN
-           ALTER TABLE circles RENAME COLUMN keana_notified_at TO moderator_notified_at;
-         ELSIF NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name = 'circles' AND column_name = 'moderator_notified_at')
-         THEN
-           ALTER TABLE circles ADD COLUMN moderator_notified_at TIMESTAMPTZ;
-         END IF;
-       END $$;`,
-    )
-    .catch((err: Error) =>
-      console.error("circles.moderator_notified_at migration failed:", err),
-    );
-
-  pool
-    .query(
-      `ALTER TABLE moment_photos ALTER COLUMN uploader_id DROP NOT NULL`,
-    )
-    .catch((err: Error) =>
-      console.error("moment_photos.uploader_id nullable migration failed:", err),
     );
 
   pool
@@ -243,18 +126,6 @@ export function runMigrations() {
     );
 
   pool
-    .query(`ALTER TABLE moments ADD COLUMN IF NOT EXISTS venue TEXT`)
-    .catch((err: Error) =>
-      console.error("moments.venue migration failed:", err),
-    );
-
-  pool
-    .query(`ALTER TABLE moments ADD COLUMN IF NOT EXISTS recap TEXT`)
-    .catch((err: Error) =>
-      console.error("moments.recap migration failed:", err),
-    );
-
-  pool
     .query(`
       ALTER TABLE co_memories DROP CONSTRAINT IF EXISTS co_memories_memory_type_check;
       ALTER TABLE co_memories ADD CONSTRAINT co_memories_memory_type_check
@@ -322,55 +193,6 @@ export function runMigrations() {
       console.error("users.intake_asked migration failed:", err),
     );
 
-  // Tracks whether the "day of" reminder has gone out for a confirmed moment,
-  // so the reminder cron (every 15 min) doesn't re-send it on every tick.
-  pool
-    .query(`ALTER TABLE moments ADD COLUMN IF NOT EXISTS day_of_reminder_sent_at TIMESTAMPTZ`)
-    .catch((err: Error) =>
-      console.error("moments.day_of_reminder_sent_at migration failed:", err),
-    );
-
-  // Gates whether a member has consented to their circle placement. The
-  // curated moment isn't revealed to a member until they accept — declining
-  // marks them 'declined' (kept, not deleted, so it also serves as the
-  // replacement-attempt counter) and triggers a rematch attempt for the group.
-  pool
-    .query(
-      `ALTER TABLE circle_members ADD COLUMN IF NOT EXISTS status TEXT NOT NULL DEFAULT 'pending'
-       CHECK (status IN ('pending', 'accepted', 'declined'))`,
-    )
-    .catch((err: Error) =>
-      console.error("circle_members.status migration failed:", err),
-    );
-
-  // Every ON CONFLICT DO NOTHING against moment_responses throughout the
-  // codebase silently assumed this constraint already existed — without it,
-  // duplicate (moment_id, user_id) rows could be (and were) inserted.
-  pool
-    .query(
-      `DO $$ BEGIN
-         IF NOT EXISTS (
-           SELECT 1 FROM pg_constraint WHERE conname = 'moment_responses_moment_user_unique'
-         ) THEN
-           ALTER TABLE moment_responses
-             ADD CONSTRAINT moment_responses_moment_user_unique UNIQUE (moment_id, user_id);
-         END IF;
-       END $$;`,
-    )
-    .catch((err: Error) =>
-      console.error("moment_responses unique constraint migration failed:", err),
-    );
-
-  // Lets us look up the venue's real phone number and a Maps link at
-  // booking-confirmation time, without a fresh (less precise) name search —
-  // Google Places was already queried once at moment creation; this just
-  // keeps the same result identifiable later.
-  pool
-    .query(`ALTER TABLE moments ADD COLUMN IF NOT EXISTS venue_place_id TEXT`)
-    .catch((err: Error) =>
-      console.error("moments.venue_place_id migration failed:", err),
-    );
-
   // True no-answer/busy/failed/canceled calls (nobody and nothing picked up)
   // get a delayed follow-up text instead of an instant one — see
   // sendMissedCallFollowUp's call sites in co.ts and the follow-up cron.
@@ -390,70 +212,6 @@ export function runMigrations() {
       console.error("pending_call_followups table init failed:", err),
     );
 
-  // Backing the moderator venue-approval gate — mirrors circles.moderator_notified_at.
-  // Consensus is reached, but nothing texts the Connector until the
-  // Moderator approves the selected venue via the same approve/reject reply
-  // pattern circle placement already uses.
-  //
-  // Single atomic block, same reasoning as circles.moderator_notified_at
-  // above — avoids a race between a rename and a plain ADD COLUMN.
-  pool
-    .query(
-      `DO $$
-       BEGIN
-         IF EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name = 'moments' AND column_name = 'keana_venue_notified_at')
-            AND NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name = 'moments' AND column_name = 'moderator_venue_notified_at')
-         THEN
-           ALTER TABLE moments RENAME COLUMN keana_venue_notified_at TO moderator_venue_notified_at;
-         ELSIF NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name = 'moments' AND column_name = 'moderator_venue_notified_at')
-         THEN
-           ALTER TABLE moments ADD COLUMN moderator_venue_notified_at TIMESTAMPTZ;
-         END IF;
-       END $$;`,
-    )
-    .catch((err: Error) =>
-      console.error("moments.moderator_venue_notified_at migration failed:", err),
-    );
-
-  // Venue names the Moderator has rejected for this moment, so re-selection
-  // after a reject excludes them instead of re-rolling the same pick.
-  pool
-    .query(`ALTER TABLE moments ADD COLUMN IF NOT EXISTS rejected_venues TEXT[] DEFAULT '{}'`)
-    .catch((err: Error) =>
-      console.error("moments.rejected_venues migration failed:", err),
-    );
-
-  // venue_type/vibe — persisted from the moment-generation LLM call so the
-  // Moderator venue-rejection path can re-run venue selection later (a fresh
-  // request, not the original one) with the same search criteria instead of
-  // guessing at what kind of venue was wanted.
-  pool
-    .query(`ALTER TABLE moments ADD COLUMN IF NOT EXISTS venue_type TEXT`)
-    .catch((err: Error) => console.error("moments.venue_type migration failed:", err));
-
-  pool
-    .query(`ALTER TABLE moments ADD COLUMN IF NOT EXISTS vibe TEXT`)
-    .catch((err: Error) => console.error("moments.vibe migration failed:", err));
-
-  // The original neighborhood search term used for venue selection —
-  // location_name gets overwritten with the selected venue's actual street
-  // address once one's found, so it can't be reused to re-search on a
-  // Moderator rejection (confirmed: would search Places for an address string
-  // instead of a neighborhood).
-  pool
-    .query(`ALTER TABLE moments ADD COLUMN IF NOT EXISTS neighborhood TEXT`)
-    .catch((err: Error) => console.error("moments.neighborhood migration failed:", err));
-
-  // Unused — was part of the Connector booking-task reassignment loop,
-  // removed once Co stopped asking anyone to book a table. Left in place
-  // rather than dropped, per a deliberate choice not to run destructive
-  // schema migrations for a few dead columns.
-  pool
-    .query(`ALTER TABLE moments ADD COLUMN IF NOT EXISTS tried_connector_ids UUID[] DEFAULT '{}'`)
-    .catch((err: Error) =>
-      console.error("moments.tried_connector_ids migration failed:", err),
-    );
-
   // Marks calls the AMD callback flagged as an answering machine/voicemail.
   // The Hume chat_ended webhook still fires normally for these (we hang up
   // cleanly now instead of killing the call abruptly) — without this flag it
@@ -470,67 +228,6 @@ export function runMigrations() {
     .catch((err: Error) =>
       console.error("voicemail_calls table init failed:", err),
     );
-
-  // Candidate time windows offered by the simultaneous availability poll —
-  // computed once from the venue's real opening hours + the circle's stated
-  // schedule preferences, and stored here so every member's poll text and
-  // the consensus cron's tally are reading the exact same option set.
-  pool
-    .query(`ALTER TABLE moments ADD COLUMN IF NOT EXISTS candidate_windows JSONB`)
-    .catch((err: Error) => console.error("moments.candidate_windows migration failed:", err));
-
-  // Which candidate_windows indices (1-based) a member said work for them —
-  // separate from `response`, which keeps its existing yes/no/time/booked/
-  // unclear meaning; a windows-poll reply sets response = 'windows' as a
-  // sentinel and the actual picks land here.
-  pool
-    .query(`ALTER TABLE moment_responses ADD COLUMN IF NOT EXISTS selected_windows INT[]`)
-    .catch((err: Error) =>
-      console.error("moment_responses.selected_windows migration failed:", err),
-    );
-
-  // Confidence-gated Moderator escalation — a circle score barely clearing
-  // its floor (LOW_CONFIDENCE_GROUP_SCORE, matching.ts) sets this true so
-  // the auto-approve cron in server.ts skips it instead of silently
-  // approving; confidence_note is the human-readable reason surfaced in the
-  // Moderator notification.
-  pool
-    .query(`ALTER TABLE circles ADD COLUMN IF NOT EXISTS requires_moderator_reply BOOLEAN NOT NULL DEFAULT false`)
-    .catch((err: Error) => console.error("circles.requires_moderator_reply migration failed:", err));
-  pool
-    .query(`ALTER TABLE circles ADD COLUMN IF NOT EXISTS confidence_note TEXT`)
-    .catch((err: Error) => console.error("circles.confidence_note migration failed:", err));
-
-  // Same idea for moments — venue_fit_score is Co's own self-rated fit for
-  // the selected venue (0-1, see scoreVenuesWithCo in places.ts), persisted
-  // at moment creation so it's still available when the consensus cron
-  // requests Moderator approval later. consensus_low_confidence is set when
-  // the consensus cron had to force-lock a time window at the 48hr cutoff
-  // without ever reaching a real majority. Either one sets
-  // requires_moderator_reply — see requestVenueApprovalFromModerator in
-  // booking.ts.
-  pool
-    .query(`ALTER TABLE moments ADD COLUMN IF NOT EXISTS requires_moderator_reply BOOLEAN NOT NULL DEFAULT false`)
-    .catch((err: Error) => console.error("moments.requires_moderator_reply migration failed:", err));
-  pool
-    .query(`ALTER TABLE moments ADD COLUMN IF NOT EXISTS confidence_note TEXT`)
-    .catch((err: Error) => console.error("moments.confidence_note migration failed:", err));
-  pool
-    .query(`ALTER TABLE moments ADD COLUMN IF NOT EXISTS venue_fit_score REAL`)
-    .catch((err: Error) => console.error("moments.venue_fit_score migration failed:", err));
-  pool
-    .query(`ALTER TABLE moments ADD COLUMN IF NOT EXISTS consensus_low_confidence BOOLEAN NOT NULL DEFAULT false`)
-    .catch((err: Error) => console.error("moments.consensus_low_confidence migration failed:", err));
-
-  // circle_name was varchar(50) — fine for the old bare-name generation
-  // ("Co Circle — new to city"), but generateCircleTitle now returns
-  // "{title} {description}" (circleInvite.ts), which routinely exceeds 50
-  // characters. Confirmed for real: co-test's real-test-placement approval
-  // flow (dynamicPlacementTest.ts) started throwing a hard varchar-length
-  // error on every approval, before the real invite text ever got sent.
-  pool
-    .query(`ALTER TABLE circles ALTER COLUMN circle_name TYPE TEXT`)
-    .catch((err: Error) => console.error("circles.circle_name widen migration failed:", err));
 
   // Post-call reflection text used to fire immediately at chat_ended — reads
   // as a scripted status update landing the second the call ends, not
