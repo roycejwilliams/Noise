@@ -699,7 +699,7 @@ Return ONLY strict JSON: {"full_name": string or null, "email": string or null, 
         const seekingMode = hasText ? await detectSeekingMode(resolvedContent, recentConversation, "sendblue.detectSeekingMode") : null;
 
         const pendingOfferResult = await pool.query(
-          `SELECT p.id, p.content FROM co_memories p
+          `SELECT p.id, p.content, p.created_at FROM co_memories p
            WHERE p.user_id = $1 AND p.memory_type = 'call_offer_pending'
            AND p.created_at > NOW() - ($2 || ' days')::interval
            AND NOT EXISTS (
@@ -711,6 +711,31 @@ Return ONLY strict JSON: {"full_name": string or null, "email": string or null, 
         );
         const pendingOffer = pendingOfferResult.rows[0] ?? null;
         const hasPendingOffer = !!pendingOffer;
+
+        // Confirmed live, 2026-09-07: a bare "yes" meant as the answer to a
+        // fresh, specific ask (e.g. "would you like to be introduced to
+        // Royce?") got classified as accepting an unrelated call offer from
+        // days earlier instead, placing a real, unwanted call. A short
+        // affirmation is ambiguous whenever more than one open question is
+        // pending — this treats the MOST RECENTLY asked one as the one a
+        // bare reply is actually answering, so an old call offer never
+        // outranks a same-minute match-nudge/method-choice ask. The offer
+        // itself stays pending either way — an unambiguous later reply
+        // ("yes let's talk about the cofounder thing") can still resolve it.
+        let offerIsFreshestPending = hasPendingOffer;
+        if (hasPendingOffer) {
+          const rivalPendingResult = await pool.query(
+            `SELECT GREATEST(
+               (SELECT MAX(sent_at) FROM event_guest_match_nudges WHERE person_id = $1),
+               (SELECT MAX(asked_at) FROM event_intro_method_pending WHERE person_id = $1)
+             ) AS freshest`,
+            [user.id],
+          );
+          const freshestRivalPendingAt = rivalPendingResult.rows[0]?.freshest ?? null;
+          if (freshestRivalPendingAt && new Date(freshestRivalPendingAt) > new Date(pendingOffer.created_at)) {
+            offerIsFreshestPending = false;
+          }
+        }
 
         // Ask-first event/opportunity surfacing (Royce, 2026-08-30) — same
         // pending/resolved shape as the call offer above, separate memory
@@ -783,7 +808,7 @@ Return ONLY strict JSON: {"full_name": string or null, "email": string or null, 
             generateText({
               model: anthropic("claude-haiku-4-5-20251001"),
               experimental_telemetry: { isEnabled: true, functionId: "sendblue.callOffer.classify" },
-              prompt: `A user is texting Co, a life concierge.${hasPendingOffer ? ` Co already offered them a call about this: "${pendingOffer.content}", and is waiting to hear back on it. This does NOT mean every message from them now is a response to that offer — if they're just continuing to talk, that's normal conversation, not an answer to the offer, unless it's actually about being called or talking by phone. A genuinely different topic or problem is always free to get its own fresh read below, regardless of this still-open offer.` : ""}
+              prompt: `A user is texting Co, a life concierge.${offerIsFreshestPending ? ` Co already offered them a call about this: "${pendingOffer.content}", and is waiting to hear back on it. This does NOT mean every message from them now is a response to that offer — if they're just continuing to talk, that's normal conversation, not an answer to the offer, unless it's actually about being called or talking by phone. A genuinely different topic or problem is always free to get its own fresh read below, regardless of this still-open offer.` : ""}
 
 Recent conversation, in order (their latest message may only make sense combined with what came before — e.g. a time given in one message and a date/timezone confirmed in a later one is still a single schedule request, not two separate things):
 ${recentConversation || "(start of the conversation)"}
@@ -795,7 +820,7 @@ Classify their LATEST message, read in light of the recent conversation above, a
 - "asks_about_calling" — they are asking whether, or how, calling works — as a question about the feature, not a command to place one. Examples: "can I just call you?", "is it true I can call you now?", "do you call people?". Never triggered by their phrasing containing the word "call" alone — it's specifically a question rather than an instruction.
 - "schedule_request" — they want a call at a specific future date/time, whether that time was fully stated just now ("call me tomorrow at 3") or is only complete once combined with what they said earlier in this conversation (e.g. they gave a time a few messages ago and are now confirming the date or timezone Co asked for) — not right now
 - "cancel_scheduled_call" — they want to cancel a call they'd previously scheduled, with no new time given
-${hasPendingOffer ? '- "accepts_offer" — they are clearly and affirmatively saying yes to the call Co just offered (e.g. "yes", "sure", "call me now", "go ahead"). A bare acknowledgment with no clear yes/no of its own — "thanks", "ok", "got it", "sounds good" — is NOT this; classify it as "none" unless it unambiguously affirms the offer.\n- "declines_offer" — they are saying no to the call Co just offered\n' : ""}- "would_benefit" — none of the above, but what they're describing is complex, emotional, or hard to unpack over short texts, and voice would genuinely help
+${offerIsFreshestPending ? '- "accepts_offer" — they are clearly and affirmatively saying yes to the call Co just offered (e.g. "yes", "sure", "call me now", "go ahead"). A bare acknowledgment with no clear yes/no of its own — "thanks", "ok", "got it", "sounds good" — is NOT this; classify it as "none" unless it unambiguously affirms the offer.\n- "declines_offer" — they are saying no to the call Co just offered\n' : ""}- "would_benefit" — none of the above, but what they're describing is complex, emotional, or hard to unpack over short texts, and voice would genuinely help
 - "none" — normal conversation, no call is relevant${declinedTopicsContext}
 
 Return ONLY the classification, nothing else.`,
@@ -803,7 +828,7 @@ Return ONLY the classification, nothing else.`,
         );
         const callAction = rawCallClassification.trim().toLowerCase().replace(/^[`"']+|[`"']+$/g, "");
 
-        if (hasPendingOffer && (callAction === "accepts_offer" || callAction === "declines_offer")) {
+        if (offerIsFreshestPending && (callAction === "accepts_offer" || callAction === "declines_offer")) {
           await pool.query(
             `INSERT INTO co_memories (user_id, memory_type, content) VALUES ($1, 'call_offer_resolved', $2)`,
             [user.id, callAction],
@@ -1119,7 +1144,7 @@ Return ONLY "yes" or "no".`,
           }
         }
 
-        const shouldTriggerCall = callAction === "explicit_request" || (hasPendingOffer && callAction === "accepts_offer");
+        const shouldTriggerCall = callAction === "explicit_request" || (offerIsFreshestPending && callAction === "accepts_offer");
 
         // Schedule-a-call — a specific future time, not "call me now"
         // (shouldTriggerCall above). Extracted as structured date/time/
