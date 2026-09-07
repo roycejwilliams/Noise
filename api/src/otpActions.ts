@@ -35,7 +35,7 @@ async function varied(instruction: string, fallback: string, maxChars: number): 
 // whole point is testing against real phones/inboxes. Any other
 // non-production deployment stubs to a console log instead of silently
 // sending real messages to whatever's in its data.
-const ALLOW_REAL_SENDS = process.env.NODE_ENV === "production" || process.env.ALLOW_REAL_SMS === "true";
+export const ALLOW_REAL_SENDS = process.env.NODE_ENV === "production" || process.env.ALLOW_REAL_SMS === "true";
 
 interface EmailProp {
   status?: "accepted" | "rejected";

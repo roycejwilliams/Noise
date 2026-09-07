@@ -135,7 +135,8 @@ export function runMigrations() {
           'event_ask_solicitation','calendar_follow_reach_out','event_discovery_surfacing',
           'event_change_notification','event_offer_pending','event_offer_resolved',
           'recommendation_outcome','companion_checkin','event_checkin_outcome',
-          'event_guest_match_nudge'
+          'event_guest_match_nudge','event_guest_match_optin','event_intro_group_created',
+          'event_intro_email_sent'
         ]));
     `)
     .catch((err: Error) =>
@@ -588,6 +589,71 @@ export function runMigrations() {
       )`,
     )
     .catch((err: Error) => console.error("event_guest_match_nudges table init failed:", err));
+
+  // Double opt-in handoff (Royce, 2026-09-07: "should Co make a group chat
+  // once they've been opted in" + "not replying until it's asked a
+  // question") — services/eventGuestMatchHandoff.ts. Records each person's
+  // real decision (interested/declined) about a specific candidate, reusing
+  // event_guest_match_nudges' shape as "has this person been told about
+  // this candidate and asked yet" — a person can end up with a nudge row
+  // either from the automatic scoring pass or from a direct reciprocal ask
+  // once the OTHER side says yes first, so the same pending-reply check
+  // covers both origins. PRIMARY KEY includes candidate_id, not just
+  // (event_id, person_id) like the nudges table — a person could in theory
+  // be asked about more than one candidate across a re-score.
+  pool
+    .query(
+      `CREATE TABLE IF NOT EXISTS event_guest_match_opt_ins (
+        event_id TEXT NOT NULL,
+        person_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+        candidate_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+        status TEXT NOT NULL CHECK (status IN ('interested', 'declined')),
+        decided_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+        PRIMARY KEY (event_id, person_id, candidate_id)
+      )`,
+    )
+    .catch((err: Error) => console.error("event_guest_match_opt_ins table init failed:", err));
+
+  // The actual handoff once both sides are in — a real Sendblue group
+  // iMessage thread (services/sendblue.ts's groups API), not a simulated
+  // one. Co stays in it (Sendblue's group API only exposes add_recipient,
+  // no leave/remove-self — confirmed live, 2026-09-07 — so this is a
+  // deliberate design choice matching that constraint, not an oversight:
+  // Co sits in quietly and only replies when directly mentioned, same
+  // "silence by default" philosophy as companionCheckin.ts). event_name is
+  // denormalized here (not looked up live from Luma each time) since a
+  // stale name in an old group thread is harmless and this avoids a live
+  // API call on every inbound group message.
+  pool
+    .query(
+      `CREATE TABLE IF NOT EXISTS event_intro_groups (
+        group_id TEXT PRIMARY KEY,
+        event_id TEXT NOT NULL,
+        event_name TEXT NOT NULL,
+        person_a_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+        person_b_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+        created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+      )`,
+    )
+    .catch((err: Error) => console.error("event_intro_groups table init failed:", err));
+
+  // Royce, 2026-09-07: "Co should give them 2 options -> connect by phone
+  // or email for the intro" — asked of whoever's "yes" completes the
+  // reciprocal opt-in, before the handoff itself happens (so
+  // createIntroGroup below only fires on an actual phone choice, not
+  // unconditionally). Same pending-then-classify shape as
+  // event_guest_match_nudges/opt_ins above.
+  pool
+    .query(
+      `CREATE TABLE IF NOT EXISTS event_intro_method_pending (
+        event_id TEXT NOT NULL,
+        person_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+        candidate_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+        asked_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+        PRIMARY KEY (event_id, person_id, candidate_id)
+      )`,
+    )
+    .catch((err: Error) => console.error("event_intro_method_pending table init failed:", err));
 
   // "Nudge Co users at events Co doesn't own" — captured from conversation
   // (extractPlannedEventMention, profileExtraction.ts), the same way

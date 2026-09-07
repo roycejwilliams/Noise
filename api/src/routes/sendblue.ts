@@ -36,6 +36,15 @@ import {
   findPendingEventCheckinFollowUp,
   recordEventCheckinOutcome,
 } from "../services/eventCheckinFollowUp.js";
+import {
+  findPendingMatchNudge,
+  classifyMatchNudgeReply,
+  handleMatchNudgeReply,
+  handleGroupMessage,
+  findPendingMethodChoice,
+  classifyMethodChoice,
+  handleMethodChoiceReply,
+} from "../services/eventGuestMatchHandoff.js";
 import { findRealVenues } from "../services/venueLookup.js";
 import { runConversationReplyAgent, filterRelevantMemories, CALL_OFFER_EXPIRY_DAYS } from "../agent/conversationReply.js";
 import { triggerCallForUser } from "../services/callTrigger.js";
@@ -296,7 +305,24 @@ export function sendblueRouter(io: Server): Router {
           error_code,
           error_message,
           type,
+          group_id,
+          message_type,
         } = req.body;
+
+        // Group messages (event intro handoff, services/eventGuestMatchHandoff.ts)
+        // — entirely separate from the normal 1:1 conversation pipeline below.
+        // Co only ever speaks in a group when directly mentioned by name; every
+        // other group message (including this same send's own outbound delivery
+        // status) is just acknowledged and never treated as a personal
+        // conversational turn the way a 1:1 text would be.
+        if (message_type === "group" || group_id) {
+          if (!is_outbound && typeof content === "string" && content.trim() && group_id) {
+            handleGroupMessage(group_id, number, content).catch((err: any) =>
+              console.error("sendblue webhook: handleGroupMessage failed (non-fatal):", err?.message ?? err),
+            );
+          }
+          return res.status(200).send({ received: true });
+        }
 
         // Handle typing indicators
         if (type === "typing") {
@@ -940,6 +966,69 @@ Return ONLY the classification, nothing else.`,
           }
         }
 
+        // Double opt-in event-guest handoff (Royce, 2026-09-07 — sibling to
+        // the two blocks above, same shared-classifier/fold-into-the-same-
+        // reply reasoning, but resolving a match nudge rather than an
+        // outcome). See services/eventGuestMatchHandoff.ts for the actual
+        // opt-in/reciprocal-ask/group-creation logic — this block only
+        // classifies the reply and hands it off.
+        let matchNudgeContext = "";
+        if (hasText) {
+          try {
+            const pendingMatchNudge = await findPendingMatchNudge(user.id);
+            if (pendingMatchNudge) {
+              const classification = await classifyMatchNudgeReply(
+                resolvedContent,
+                pendingMatchNudge.candidate_first_name,
+                recentConversation,
+              );
+              if (classification !== "unrelated") {
+                await handleMatchNudgeReply(
+                  pendingMatchNudge.event_id,
+                  pendingMatchNudge.event_name,
+                  classification,
+                  { user_id: user.id, first_name: user.first_name, phone_number: user.phone_number, email: user.email },
+                  {
+                    user_id: pendingMatchNudge.candidate_id,
+                    first_name: pendingMatchNudge.candidate_first_name,
+                    phone_number: pendingMatchNudge.candidate_phone,
+                    email: pendingMatchNudge.candidate_email,
+                  },
+                );
+                matchNudgeContext =
+                  classification === "interested"
+                    ? `\nThey just said yes to being connected with ${pendingMatchNudge.candidate_first_name}. Acknowledge it warmly and briefly — you may have already asked them a separate follow-up question about how they'd like to connect (text or email), or you're still waiting on ${pendingMatchNudge.candidate_first_name} to answer — don't promise a specific thing is happening, just confirm you've got it and you're on it.`
+                    : `\nThey just passed on being connected with ${pendingMatchNudge.candidate_first_name} (internal only, never say this name back to them as a pressure tactic). Acknowledge lightly, no pressure, don't explain further.`;
+              }
+            }
+          } catch (err: any) {
+            console.error("sendblue: match nudge reply classification failed (non-fatal):", err?.message ?? err);
+          }
+        }
+
+        // Connection-method choice (phone vs email) once both sides have
+        // opted in — see services/eventGuestMatchHandoff.ts. Separate
+        // pending-check from the opt-in block above since it's a genuinely
+        // different question asked at a later moment.
+        if (hasText && !matchNudgeContext) {
+          try {
+            const pendingMethodChoice = await findPendingMethodChoice(user.id);
+            if (pendingMethodChoice) {
+              const methodClassification = await classifyMethodChoice(resolvedContent, recentConversation);
+              if (methodClassification !== "unclear") {
+                await handleMethodChoiceReply(pendingMethodChoice, methodClassification);
+                const otherFirstName = pendingMethodChoice.a.user_id === user.id ? pendingMethodChoice.b.first_name : pendingMethodChoice.a.first_name;
+                matchNudgeContext =
+                  methodClassification === "phone"
+                    ? `\nThey just chose to be connected with ${otherFirstName} by text. You've already handled creating that group text separately — acknowledge briefly, don't repeat details or promise a specific timing.`
+                    : `\nThey just chose to be connected with ${otherFirstName} by email. You've already handled sending that email separately — acknowledge briefly, don't repeat details or promise a specific timing.`;
+              }
+            }
+          } catch (err: any) {
+            console.error("sendblue: method choice classification failed (non-fatal):", err?.message ?? err);
+          }
+        }
+
         // "Any updates?" reactive reply (Royce, 2026-08-31: "once someone
         // joins the test copatible account, if they ask 'any updates' or
         // something similar just send them that" — and, if nothing's been
@@ -1521,6 +1610,7 @@ Return ONLY valid JSON, no preamble: {"wants_venue": true or false, "venue_type"
                 eventOfferContext,
                 outcomeFollowupContext,
                 eventCheckinContext,
+                matchNudgeContext,
                 updatesContext,
                 venueContext,
                 callFeatureQuestionContext,
