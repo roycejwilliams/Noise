@@ -106,7 +106,7 @@ Return ONLY the classification, nothing else.`,
   }
 }
 
-async function recordOptIn(
+export async function recordOptIn(
   eventId: string,
   personId: string,
   personFirstName: string,
@@ -129,7 +129,7 @@ async function recordOptIn(
   );
 }
 
-async function hasReciprocalOptIn(eventId: string, personId: string, candidateId: string): Promise<boolean> {
+export async function hasReciprocalOptIn(eventId: string, personId: string, candidateId: string): Promise<boolean> {
   const { rows } = await pool.query(
     `SELECT 1 FROM event_guest_match_opt_ins
      WHERE event_id = $1 AND person_id = $2 AND candidate_id = $3 AND status = 'interested'`,

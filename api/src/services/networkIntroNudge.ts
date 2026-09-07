@@ -4,7 +4,13 @@ import pool from "../db/db.js";
 import sendblue, { cleanCoMessage } from "./sendblue.js";
 import { tryClaimProactiveNudge } from "./proactiveThrottle.js";
 import { writeMemory } from "./memory.js";
-import { handleMatchNudgeReply, type MatchNudgeCandidate, type MatchNudgeReplyClassification } from "./eventGuestMatchHandoff.js";
+import {
+  handleMatchNudgeReply,
+  recordOptIn,
+  hasReciprocalOptIn,
+  type MatchNudgeCandidate,
+  type MatchNudgeReplyClassification,
+} from "./eventGuestMatchHandoff.js";
 
 // "What about actually surfacing someone with a background that can help?"
 // (Royce, 2026-09-07) — services/relevance.ts's Stage 3 sweep already
@@ -162,14 +168,25 @@ export type NetworkShortlistDecision = { event_id: string; candidate_id: string;
 // reply might name one person, several, or none; anyone not clearly
 // addressed stays pending rather than being silently assumed one way or
 // the other.
+//
+// Confirmed live, 2026-09-07: the same real candidate can show up as TWO
+// pending entries under different synthetic event_ids — their own edge
+// from this person's shortlist sweep, plus a separate edge created when
+// the candidate's OWN shortlist nudge led to a direct ask back to this
+// person. A prompt built from the raw (possibly duplicate-name) pending
+// list gave the classifier an unparseable "Royce, Jacqueline, Royce" and
+// it just gave up on both Royce entries. Deduping to one prompt line per
+// distinct person, then fanning the resulting decision back out to every
+// event_id that names them, fixes both the prompt and the result.
 export async function classifyNetworkShortlistReply(
   replyText: string,
   pending: PendingNetworkNudge[],
   recentConversation?: string,
 ): Promise<NetworkShortlistDecision[]> {
   if (!pending.length) return [];
+  const distinctCandidates = Array.from(new Map(pending.map((p) => [p.candidate.user_id, p.candidate])).values());
   try {
-    const names = pending.map((p) => p.candidate.first_name).join(", ");
+    const names = distinctCandidates.map((c) => c.first_name).join(", ");
     const { text: raw } = await generateText({
       model: anthropic("claude-haiku-4-5-20251001"),
       experimental_telemetry: { isEnabled: true, functionId: "networkIntroNudge.classifyShortlistReply" },
@@ -183,14 +200,15 @@ Return ONLY valid JSON, no preamble: {"Name1": "interested|not_interested|unrela
     });
     const clean = raw.replace(/```json|```/g, "").trim();
     const parsed = JSON.parse(clean) as Record<string, string>;
-    return pending
-      .map((p) => {
-        const cls = parsed[p.candidate.first_name];
-        const classification: MatchNudgeReplyClassification =
-          cls === "interested" || cls === "not_interested" ? cls : "unrelated";
-        return { event_id: p.event_id, candidate_id: p.candidate.user_id, classification };
-      })
-      .filter((d) => d.classification !== "unrelated");
+    const decisions: NetworkShortlistDecision[] = [];
+    for (const candidate of distinctCandidates) {
+      const cls = parsed[candidate.first_name];
+      if (cls !== "interested" && cls !== "not_interested") continue;
+      for (const p of pending.filter((p) => p.candidate.user_id === candidate.user_id)) {
+        decisions.push({ event_id: p.event_id, candidate_id: candidate.user_id, classification: cls });
+      }
+    }
+    return decisions;
   } catch (err: any) {
     console.error("classifyNetworkShortlistReply: failed (non-fatal, treating as no decisions):", err?.message ?? err);
     return [];
@@ -202,9 +220,46 @@ export async function handleNetworkShortlistReply(
   pending: PendingNetworkNudge[],
   person: MatchNudgeCandidate,
 ): Promise<void> {
+  const handledCandidates = new Set<string>();
   for (const decision of decisions) {
-    const match = pending.find((p) => p.candidate.user_id === decision.candidate_id);
-    if (!match) continue;
-    await handleMatchNudgeReply(match.event_id, "a real connection Co found", decision.classification, person, match.candidate);
+    if (handledCandidates.has(decision.candidate_id)) continue;
+    const matches = pending.filter((p) => p.candidate.user_id === decision.candidate_id);
+    if (!matches.length) continue;
+    handledCandidates.add(decision.candidate_id);
+
+    // Resolve through whichever event_id the OTHER person already answered
+    // on, so this actually closes an existing loop instead of opening a
+    // redundant second thread for the same real pair; fall back to
+    // whichever entry is pending first if neither side has answered yet.
+    let authoritative = matches[0];
+    for (const m of matches) {
+      if (await hasReciprocalOptIn(m.event_id, person.user_id, decision.candidate_id)) {
+        authoritative = m;
+        break;
+      }
+    }
+
+    await handleMatchNudgeReply(
+      authoritative.event_id,
+      "a real connection Co found",
+      decision.classification,
+      person,
+      authoritative.candidate,
+    );
+
+    // Any OTHER pending event_id for this same real candidate is now
+    // redundant — record the same answer there too so it stops showing as
+    // pending, without a second round of asks/messages.
+    for (const m of matches) {
+      if (m.event_id === authoritative.event_id) continue;
+      await recordOptIn(
+        m.event_id,
+        person.user_id,
+        person.first_name,
+        decision.candidate_id,
+        m.candidate.first_name,
+        decision.classification === "interested" ? "interested" : "declined",
+      ).catch((err: any) => console.error("handleNetworkShortlistReply: redundant opt-in record failed (non-fatal):", err?.message ?? err));
+    }
   }
 }
