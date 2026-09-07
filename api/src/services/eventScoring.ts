@@ -2,7 +2,7 @@ import { anthropic } from "@ai-sdk/anthropic";
 import { generateText } from "ai";
 import pool from "../db/db.js";
 import { runEventAskSolicitationAgent } from "../agent/eventAskSolicitation.js";
-import { getEventGuestList, listCalendarEvents, type LumaGuest } from "./luma.js";
+import { getEventDetails, getEventGuestList, listCalendarEvents, type LumaGuest } from "./luma.js";
 import { getActiveSeekingAsk, scoreAgainstStatedAsk } from "./matching.js";
 import { detectAndScheduleCheckins } from "./eventCheckinFollowUp.js";
 import sendblue, { cleanCoMessage } from "./sendblue.js";
@@ -309,10 +309,22 @@ export async function scoreMatchedGroup(
 
 // eventName isn't always available to the caller (guest.registered/
 // guest.updated webhook payloads carry guest data, not necessarily the
-// event's own name) — fall back to looking it up rather than fail. Small
-// list (one calendar's worth of events), so a linear find is fine.
+// event's own name) — fall back to looking it up rather than fail.
+//
+// Real gap found live, 2026-09-07: a brand-new event's first
+// guest.registered webhook can fire before Luma's own list endpoint
+// (/v1/calendars/events/list, what listCalendarEvents scans) has caught up
+// to include it yet, silently falling all the way through to the generic
+// "the event" and shipping a real nudge text that named the wrong thing.
+// getEventDetails hits Luma's single-event GET (/v1/event/get) directly by
+// id instead of scanning a list for it — same endpoint already preferred
+// elsewhere in this file for exactly this reliability reason (see its own
+// comment in services/luma.ts) — so try that first and only fall back to
+// the list scan if it comes back empty.
 async function resolveEventName(eventId: string, providedName?: string): Promise<string> {
   if (providedName) return providedName;
+  const details = await getEventDetails(eventId).catch(() => null);
+  if (details?.name) return details.name;
   const events = await listCalendarEvents().catch(() => []);
   return events.find((e) => e.api_id === eventId)?.name ?? "the event";
 }
