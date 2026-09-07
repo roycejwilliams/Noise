@@ -45,6 +45,11 @@ import {
   classifyMethodChoice,
   handleMethodChoiceReply,
 } from "../services/eventGuestMatchHandoff.js";
+import {
+  findPendingNetworkNudges,
+  classifyNetworkShortlistReply,
+  handleNetworkShortlistReply,
+} from "../services/networkIntroNudge.js";
 import { findRealVenues } from "../services/venueLookup.js";
 import { runConversationReplyAgent, filterRelevantMemories, CALL_OFFER_EXPIRY_DAYS } from "../agent/conversationReply.js";
 import { triggerCallForUser } from "../services/callTrigger.js";
@@ -1003,6 +1008,41 @@ Return ONLY the classification, nothing else.`,
             }
           } catch (err: any) {
             console.error("sendblue: match nudge reply classification failed (non-fatal):", err?.message ?? err);
+          }
+        }
+
+        // Network intro shortlist (Royce, 2026-09-07: "recommend between 1-5
+        // people") — services/networkIntroNudge.ts. Reuses the same opt-in
+        // machinery as the block above via synthetic "network:" event_ids,
+        // but a shortlist can have several candidates pending at once, so it
+        // gets its own multi-candidate classifier rather than
+        // classifyMatchNudgeReply's single-candidate one.
+        if (hasText && !matchNudgeContext) {
+          try {
+            const pendingNetworkNudges = await findPendingNetworkNudges(user.id);
+            if (pendingNetworkNudges.length) {
+              const decisions = await classifyNetworkShortlistReply(resolvedContent, pendingNetworkNudges, recentConversation);
+              if (decisions.length) {
+                await handleNetworkShortlistReply(decisions, pendingNetworkNudges, {
+                  user_id: user.id,
+                  first_name: user.first_name,
+                  phone_number: user.phone_number,
+                  email: user.email,
+                });
+                const named = decisions.map((d) => {
+                  const match = pendingNetworkNudges.find((p) => p.candidate.user_id === d.candidate_id);
+                  return { name: match?.candidate.first_name ?? "them", interested: d.classification === "interested" };
+                });
+                const yesNames = named.filter((n) => n.interested).map((n) => n.name);
+                const noNames = named.filter((n) => !n.interested).map((n) => n.name);
+                const parts: string[] = [];
+                if (yesNames.length) parts.push(`They just said yes to being connected with ${yesNames.join(" and ")}.`);
+                if (noNames.length) parts.push(`They passed on ${noNames.join(" and ")} (internal only, never repeat these names back as a pressure tactic).`);
+                matchNudgeContext = `\n${parts.join(" ")} Acknowledge warmly and briefly — don't promise a specific thing is happening, just confirm you've got it and you're on it.`;
+              }
+            }
+          } catch (err: any) {
+            console.error("sendblue: network shortlist reply classification failed (non-fatal):", err?.message ?? err);
           }
         }
 

@@ -50,6 +50,7 @@ export async function findPendingMatchNudge(userId: string): Promise<PendingMatc
      FROM event_guest_match_nudges n
      JOIN users u ON u.id = n.candidate_id
      WHERE n.person_id = $1
+       AND n.event_id NOT LIKE 'network:%'
        AND n.sent_at > NOW() - ($2 || ' days')::interval
        AND NOT EXISTS (
          SELECT 1 FROM event_guest_match_opt_ins o

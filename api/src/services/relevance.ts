@@ -1,13 +1,15 @@
 import pool from "../db/db.js";
 import { getActiveOfferingAsk, getActiveSeekingAsk, scoreAgainstStatedAsk, scoreOfferingAgainstCandidates } from "./matching.js";
+import { maybeSendNetworkIntroNudges } from "./networkIntroNudge.js";
 
 // Co Loop Stage 3 — "identify relevance." Runs scoreAgainstStatedAsk
 // standalone against the whole network — no eligibility gating of any kind,
 // a relevance signal between two people doesn't require anything else to be
 // true first. Every candidate scored above LOG_SCORE_FLOOR is logged to
-// relevance_edges, even a near-miss, not just a full match — nothing here
-// acts on that data, it's the density-phase deliverable per the current
-// build priority (Stages 1/2/3/5/6).
+// relevance_edges, even a near-miss, not just a full match. Surfacing a real
+// shortlist (1-5 people) from this data to the person themselves is
+// networkIntroNudge.ts's job, called at the end of sweepAllOpenAsks below —
+// this file's job stays just computing and logging the graph.
 
 const PREFILTER_LIMIT = 40;
 
@@ -176,5 +178,8 @@ export async function sweepAllOpenAsks(): Promise<void> {
   for (const row of rows) {
     await sweepAskAgainstNetwork(row.user_id);
     await sweepOfferingAgainstNetwork(row.user_id);
+    await maybeSendNetworkIntroNudges(row.user_id).catch((err: any) =>
+      console.error(`sweepAllOpenAsks: network intro nudge failed for ${row.user_id} (non-fatal):`, err?.message ?? err),
+    );
   }
 }
