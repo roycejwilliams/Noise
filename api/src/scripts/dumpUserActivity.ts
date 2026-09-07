@@ -16,7 +16,8 @@ async function main() {
   const hoursBack = Number(hoursArg ?? 6);
 
   const { rows: users } = await pool.query(
-    `SELECT id, first_name, phone_number, email, call_status, call_sid FROM users WHERE phone_number = $1 OR LOWER(email) = LOWER($1)`,
+    `SELECT id, first_name, phone_number, email, call_status, call_sid FROM users
+     WHERE phone_number = $1 OR LOWER(email) = LOWER($1) OR LOWER(first_name) = LOWER($1)`,
     [identifier],
   );
   const user = users[0];
