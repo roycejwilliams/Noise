@@ -743,7 +743,7 @@ Return ONLY strict JSON: {"full_name": string or null, "email": string or null, 
           [user.id],
         );
         const declinedTopicsContext = declinedTopicsResult.rows.length
-          ? `\n\nCo has previously offered a call about the following, and the user said no each time:\n${declinedTopicsResult.rows.map((r: any) => `- ${r.content}`).join("\n")}\nIf what they're describing now is essentially the same situation as any of these, classify as "none" instead of "would_benefit" — don't re-offer about something already declined. A genuinely different, new situation is free to classify as "would_benefit" regardless of these.`
+          ? `\n\nCo has previously offered a call about the following, and the user said no each time:\n${declinedTopicsResult.rows.map((r: any) => `- ${r.content}`).join("\n")}\n"Essentially the same situation" means the same underlying topic or feeling, even if worded completely differently the second time — e.g. "building solo without a cofounder, don't know other founders locally" and "still feeling isolated without other founders around" are the SAME situation (solo-founder isolation), not two different ones, even though neither sentence repeats the other's words. Read for the real thing underneath the phrasing, not a text match. If what they're describing now is essentially the same situation as any of these, classify as "none" instead of "would_benefit" — don't re-offer about something already declined. A genuinely different, new situation (a different topic entirely) is free to classify as "would_benefit" regardless of these.`
           : "";
 
         const { text: rawCallClassification } = await propagateAttributes(
@@ -1145,7 +1145,10 @@ Return ONLY valid JSON, no preamble: {"date": "YYYY-MM-DD or null", "time": "HH:
                 prompt: `Classify this message as either "wants_something_concrete" or "normal_conversation".
 
 "wants_something_concrete" means they're asking Co to actually suggest, recommend, help find, or surface something specific right now (e.g. "what can you surface for me", "find me something", "what should I do about this").
-"normal_conversation" means anything else — small talk, questions about Co, answering a question, general chat.
+"normal_conversation" means anything else — small talk, questions about Co, answering a question, general chat. This also covers a false-premise callback — e.g. "that job posting you sent me, is it still open" when no such thing was ever actually sent — read the recent conversation below and check whether "it"/"that" genuinely refers to something Co actually did; if it doesn't, this is normal_conversation (Co should address the mix-up, not go find something new to match the false premise), not a fresh ask.
+
+Recent conversation, in order:
+${recentConversation || "(start of the conversation)"}
 
 Message: "${resolvedContent}"
 
@@ -1199,7 +1202,7 @@ Return ONLY the classification, nothing else.`,
               // Generic fallback path (no tiered match found) — a
               // category/type suggestion, never a specific real venue with
               // a link, since there's genuinely nothing to link to here.
-              recommendationContext = `\nYou just thought of a real recommendation for them: "${recommendation.match}" — ${recommendation.reason}. Work this into your reply naturally, as your own suggestion. This is an idea, not a specific place with a link — never say you're "sending" or "sharing" anything for this, you have nothing to send.`;
+              recommendationContext = `\nYou just thought of a real recommendation for them: "${recommendation.match}" — ${recommendation.reason}. Work this into your reply naturally, as your own suggestion. This is an idea, not a specific place with a link — never say you're "sending" or "sharing" anything for this, you have nothing to send. Never name a specific real company, program, or organization as an example (e.g. "YC", "On Deck") unless that exact name is literally what's written in "${recommendation.match}" above — if the match itself is generic, describe only the general type of thing, don't dress it up with real names you're not actually sure fit.`;
             }
           }
         } catch (err: any) {

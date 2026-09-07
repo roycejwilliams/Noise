@@ -42,6 +42,13 @@ type HumeConnectionHandle = {
   closed: boolean;
   twilioWs: WebSocket | null;
   streamSid: string | null;
+  callSid: string | null;
+  // Set true the first time Hume's own STT actually transcribes a real
+  // spoken utterance from the caller (a "user_message" event) — the ground
+  // truth that a live human is on the line, independent of and more
+  // reliable than Twilio's own async AMD verdict (see hasReceivedRealSpeech
+  // and its call site in co.ts's /call-status AMD handler).
+  receivedUserMessage: boolean;
   // Caller audio (mulaw) arriving before humeSocket is open.
   pendingInbound: Buffer[];
   // Co's own audio (mulaw) arriving before a Twilio stream is attached to
@@ -56,6 +63,21 @@ type HumeConnectionHandle = {
 // (the second prewarm is a no-op, the first's connection gets adopted by
 // whichever stream starts first) — not worth solving given call volume.
 const pendingConnections = new Map<string, HumeConnectionHandle>();
+
+// Live (already-claimed) connections, keyed by Twilio's CallSid — separate
+// from pendingConnections above, which only covers the pre-warm window and
+// is deleted once a stream attaches. Real bug found live, 2026-09-07: Royce
+// answered a real call and said "hello," but Twilio's async AMD still came
+// back "machine" (a known real false-positive risk — short greetings can
+// fool it), and co.ts's AMD handler had no way to know a live human had
+// already spoken, so it cut the call to a canned voicemail line anyway.
+// hasReceivedRealSpeech lets that handler check Hume's own ground truth
+// before trusting AMD's verdict.
+const callsBySid = new Map<string, HumeConnectionHandle>();
+
+export function hasReceivedRealSpeech(callSid: string): boolean {
+  return callsBySid.get(callSid)?.receivedUserMessage ?? false;
+}
 
 function forwardCallerAudio(handle: HumeConnectionHandle, mulawBuf: Buffer) {
   if (!handle.humeSocket || handle.humeSocket.readyState !== 1 /* WebSocket.OPEN */) {
@@ -72,6 +94,7 @@ function closeHandle(handle: HumeConnectionHandle) {
   handle.closed = true;
   if (handle.evictionTimer) clearTimeout(handle.evictionTimer);
   if (pendingConnections.get(handle.userId) === handle) pendingConnections.delete(handle.userId);
+  if (handle.callSid && callsBySid.get(handle.callSid) === handle) callsBySid.delete(handle.callSid);
   try {
     handle.humeSocket?.close();
   } catch (err: any) {
@@ -97,6 +120,8 @@ function createHumeConnection(userId: string): HumeConnectionHandle {
     closed: false,
     twilioWs: null,
     streamSid: null,
+    callSid: null,
+    receivedUserMessage: false,
     pendingInbound: [],
     pendingOutbound: [],
     evictionTimer: null,
@@ -161,8 +186,13 @@ function createHumeConnection(userId: string): HumeConnectionHandle {
           }
         } else if (m.type === "error") {
           console.error("mediaStreamBridge: Hume reported an error:", m);
+        } else if (m.type === "user_message") {
+          // Ground truth that a live human is actually talking — see
+          // hasReceivedRealSpeech above. Only a flag flip, not a transcript
+          // hook: the real extraction/tool-call pipeline stays on /webhook.
+          handle.receivedUserMessage = true;
         }
-        // chat_started/chat_ended/tool_call/user_message/assistant_message are
+        // chat_started/chat_ended/tool_call/assistant_message are
         // deliberately not handled here — those still arrive at /webhook the
         // same way they always have (webhooks are a config-level Hume feature,
         // independent of which client opened the audio connection), so the
@@ -202,7 +232,7 @@ export function prewarmHumeConnection(userId: string): void {
 export function bridgeTwilioMediaStream(twilioWs: WebSocket): void {
   let handle: HumeConnectionHandle | null = null;
 
-  function attach(userId: string, streamSid: string) {
+  function attach(userId: string, streamSid: string, callSid: string | null) {
     const prewarmed = pendingConnections.get(userId);
     if (prewarmed && !prewarmed.closed) {
       pendingConnections.delete(userId);
@@ -216,6 +246,10 @@ export function bridgeTwilioMediaStream(twilioWs: WebSocket): void {
     }
     handle.twilioWs = twilioWs;
     handle.streamSid = streamSid;
+    if (callSid) {
+      handle.callSid = callSid;
+      callsBySid.set(callSid, handle);
+    }
     while (handle.pendingOutbound.length) {
       const mulawBuf = handle.pendingOutbound.shift()!;
       twilioWs.send(
@@ -243,12 +277,16 @@ export function bridgeTwilioMediaStream(twilioWs: WebSocket): void {
         // callTrigger.ts always sets it for outbound calls — so closing here
         // is a real signal something's wrong, not an expected path.
         const userId: string | undefined = msg.start?.customParameters?.user_id;
+        // Twilio's own call SID, native to every Media Streams "start" event
+        // — used only to correlate against the /call-status AMD callback
+        // (see callsBySid above), never relied on as a required field.
+        const callSid: string | null = msg.start?.callSid ?? null;
         if (!userId || !streamSid) {
           console.error("mediaStreamBridge: start event missing user_id or streamSid, closing");
           twilioWs.close();
           break;
         }
-        attach(userId, streamSid);
+        attach(userId, streamSid, callSid);
         break;
       }
 

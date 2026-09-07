@@ -23,7 +23,7 @@ import { buildContextSummary } from "../services/callContext.js";
 import sendblue from "../services/sendblue.js";
 import { generateHumeVoiceLine, generateVoiceNote } from "../services/voiceNote.js";
 import { triggerCallForUser } from "../services/callTrigger.js";
-import { prewarmHumeConnection } from "../services/mediaStreamBridge.js";
+import { prewarmHumeConnection, hasReceivedRealSpeech } from "../services/mediaStreamBridge.js";
 
 // io is injected by the server so call-status and webhook handlers can push
 // real-time state transitions to the connected mobile client.
@@ -306,6 +306,20 @@ router.post(
         if (!AnsweredBy.startsWith("machine")) {
           // human/fax/unknown — the live Hume conversation is already
           // proceeding correctly, nothing to do here.
+          return res.sendStatus(204);
+        }
+
+        // Real bug found live, 2026-09-07: Royce answered and said "hello,"
+        // but Twilio's async AMD still came back "machine" — a known real
+        // false-positive risk (short greetings can fool it) — and the code
+        // had no way to know a live human had already spoken, so it cut a
+        // genuine live call to the canned voicemail line below. Hume's own
+        // STT is ground truth for whether a real person is actually
+        // talking, and it's strictly more reliable than Twilio's guess —
+        // if it already transcribed real speech on this call, trust that
+        // over a late "machine" verdict and leave the live conversation
+        // alone.
+        if (hasReceivedRealSpeech(CallSid)) {
           return res.sendStatus(204);
         }
 
