@@ -186,6 +186,15 @@ async function maybeAskCandidateDirectly(
     return;
   }
 
+  // Confirmed live, 2026-09-07: without this, a bare "yes" reply to this
+  // exact message is unresolvable — routes/sendblue.ts's recentConversation
+  // is built only from co_memories.text_exchange rows, and this send used
+  // to leave no trace there. Match its "Co replied: ..." convention exactly
+  // so the classifier can see what was just asked.
+  await writeMemory(candidate.user_id, "text_exchange", `Co replied: ${message}`).catch((err: any) =>
+    console.error("maybeAskCandidateDirectly: text_exchange log failed (non-fatal):", err?.message ?? err),
+  );
+
   await pool
     .query(
       `INSERT INTO event_guest_match_nudges (event_id, person_id, candidate_id, score)
