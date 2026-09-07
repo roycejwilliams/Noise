@@ -885,7 +885,7 @@ Return ONLY the classification, nothing else.`,
           try {
             const pendingOutcomeFollowUp = await findPendingOutcomeFollowUp(user.id);
             if (pendingOutcomeFollowUp) {
-              const outcome = await classifyNamedOutcome(resolvedContent, pendingOutcomeFollowUp.match_name);
+              const outcome = await classifyNamedOutcome(resolvedContent, pendingOutcomeFollowUp.match_name, recentConversation);
               if (outcome !== "unrelated") {
                 await recordOutcome(user.id, pendingOutcomeFollowUp.id, pendingOutcomeFollowUp.tier, outcome);
                 if (outcome === "named_positive") {
@@ -912,7 +912,7 @@ Return ONLY the classification, nothing else.`,
           try {
             const pendingCheckin = await findPendingEventCheckinFollowUp(user.id);
             if (pendingCheckin) {
-              const outcome = await classifyNamedOutcome(resolvedContent, pendingCheckin.event_name);
+              const outcome = await classifyNamedOutcome(resolvedContent, pendingCheckin.event_name, recentConversation);
               if (outcome !== "unrelated") {
                 await recordEventCheckinOutcome(user.id, pendingCheckin.id, pendingCheckin.event_api_id, outcome);
                 if (outcome === "named_positive") {

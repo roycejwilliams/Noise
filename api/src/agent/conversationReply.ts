@@ -70,16 +70,23 @@ export const CALL_OFFER_EXPIRY_DAYS = 7;
 // to two unwanted real outbound calls. Same question and gating the deleted
 // offerCall tool / original callOfferCheck used.
 async function verifyAndRecordCallOffer(
-  input: Pick<ConversationReplyInput, "userId" | "resolvedContent" | "hasPendingOffer" | "recentOfferBurstActive">,
+  input: Pick<ConversationReplyInput, "userId" | "resolvedContent" | "hasPendingOffer" | "recentOfferBurstActive" | "callAction">,
   replyText: string,
   dryRun: boolean,
 ): Promise<boolean> {
   if (input.hasPendingOffer || input.recentOfferBurstActive || !replyText) return false;
+  // "asks_about_calling" replies restate Co's own standing number so the
+  // USER can call CO — they never mean Co is proposing to call THEM, so this
+  // must never register as a pending call offer. Root cause of a real
+  // 2026-09-07 incident: this got tagged pending anyway, sat unresolved for
+  // 14+ hours, and an unrelated later "sure" (accepting a recommendation)
+  // got misread as accepting it, placing a real unwanted outbound call.
+  if (input.callAction === "asks_about_calling") return false;
   try {
     const { text: rawCheck } = await generateText({
       model: anthropic("claude-haiku-4-5-20251001"),
       experimental_telemetry: { isEnabled: true, functionId: "agent.conversationReply.callOfferCheck" },
-      prompt: `Does this text message actually offer, invite, or gesture toward a phone call — in any wording, even indirectly (e.g. "I'm here if you want to talk this through")? Not just related to talking or listening in general — specifically about a phone call.
+      prompt: `Does this text message actually offer that CO will call THEM — Co proposing to place an outbound call to the person, not just telling them how they can call Co themselves — in any wording, even indirectly (e.g. "I'm here if you want to talk this through")? Not just related to talking or listening in general — specifically Co offering to call them.
 
 Message: "${replyText}"
 

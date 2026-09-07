@@ -66,20 +66,20 @@ export type NamedOutcome = "named_positive" | "named_critical" | "not_mentioned"
 // One-shot classification, same pattern as sendblue.ts's eventOffer.classify
 // (routes/sendblue.ts) — a single classification, not a multi-step decision,
 // so this doesn't need the heavier agent/ tool-calling shape.
-export async function classifyNamedOutcome(replyText: string, matchName: string): Promise<NamedOutcome> {
+export async function classifyNamedOutcome(replyText: string, matchName: string, recentConversation?: string): Promise<NamedOutcome> {
   try {
     const { text: raw } = await generateText({
       model: anthropic("claude-haiku-4-5-20251001"),
       experimental_telemetry: { isEnabled: true, functionId: "recommendationOutcome.classify" },
-      prompt: `Co previously texted this person asking how "${matchName}" went — specifically, who they met or talked to there.
-
+      prompt: `Co previously texted this person asking how "${matchName}" went — specifically, who they met or talked to there. This does NOT mean every message from them now is answering that — if the recent conversation shows they're actually responding to something else that came up more recently (a different question, a different offer), that's normal conversation, not an answer to this older one.
+${recentConversation ? `\nRecent conversation, in order:\n${recentConversation}\n` : ""}
 Their reply: "${replyText}"
 
 Classify as ONE of:
 - "named_positive" — they name someone or something specific and it reads as a good/worthwhile connection or experience
 - "named_critical" — a real negative assessment of the experience itself, whether or not they name a specific person (e.g. "nobody interesting there", "waste of time" both count — the negative signal matters even without a name)
 - "not_mentioned" — a neutral or non-committal answer with no real positive or negative signal either way (e.g. "it was fine", "didn't end up going", "no one really")
-- "unrelated" — this reply isn't actually answering the question at all, normal unrelated conversation
+- "unrelated" — this reply isn't actually answering the question at all — normal unrelated conversation, or clearly answering something else more recent in the thread instead
 
 Return ONLY the classification, nothing else.`,
     });
