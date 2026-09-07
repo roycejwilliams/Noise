@@ -2,7 +2,7 @@ import { generateText } from "ai";
 import { anthropic } from "@ai-sdk/anthropic";
 import pool from "../db/db.js";
 import sendblue, { cleanCoMessage } from "./sendblue.js";
-import { getEventDetails, type LumaGuest } from "./luma.js";
+import { getEventDetails } from "./luma.js";
 import { classifyNamedOutcome, type NamedOutcome } from "./recommendationOutcome.js";
 import type { ScorableGuest } from "./eventScoring.js";
 
@@ -10,11 +10,19 @@ import type { ScorableGuest } from "./eventScoring.js";
 // did you meet that was interesting?") — distinct from
 // services/recommendationOutcome.ts's near-identical-looking mechanism,
 // which fires off Co having merely RECOMMENDED a Tier 1/2 event (no
-// confirmation anyone actually went). This one is gated on a REAL Luma
-// check-in (guest.checked_in_at) at one of Co's OWN curated/guest-list-
-// scored events — the signal routes/luma.ts's own comment already named
-// "guest.updated is also meant to be the check-in signal" but never had
-// consumption logic wired to it, until now.
+// confirmation anyone actually went).
+//
+// Gated on registration (matchGuestsToUsers already confirms they're on the
+// real guest list of one of Co's OWN curated/guest-list-scored events) plus
+// the event's real end_at, not on guest.checked_in_at (Royce, 2026-09-07:
+// confirmed live that Luma's API has no way to set check-in status at all —
+// only a real physical scan or the host manually toggling it on Luma's own
+// sign-in-gated page can ever populate it, which made this feature
+// practically untestable and, worse, meant it would silently never fire for
+// any registered guest who simply forgot to check in on Luma even though
+// they genuinely attended). Trades off the ability to skip a no-show
+// specifically (registering doesn't guarantee attendance) for a signal that
+// actually exists and fires reliably.
 //
 // Reuses classifyNamedOutcome as-is (Notion board row 13 already said the
 // Event Curation surface "would reuse this same function once it exists")
@@ -30,11 +38,6 @@ import type { ScorableGuest } from "./eventScoring.js";
 // recommendationOutcome.ts's next-day-late-morning cadence fits its own
 // different framing ("did you go to the thing I mentioned last week").
 const CHECKIN_FOLLOWUP_DELAY_HOURS = 3;
-// Some real guests check in before an event's official end_at even exists
-// yet in Luma's data (or end_at is simply absent) — fall back to a flat
-// window after the check-in timestamp itself rather than skipping
-// scheduling entirely.
-const CHECKIN_FOLLOWUP_FALLBACK_DELAY_HOURS = 4;
 
 export async function scheduleEventCheckinFollowUp(
   userId: string,
@@ -49,8 +52,8 @@ export async function scheduleEventCheckinFollowUp(
   }
   try {
     // ON CONFLICT DO NOTHING, not DO UPDATE — once scheduled, a repeat
-    // guest.updated for the same already-checked-in guest shouldn't push
-    // the send time around or risk re-arming a row a claim already sent.
+    // guest.registered/guest.updated for the same guest shouldn't push the
+    // send time around or risk re-arming a row a claim already sent.
     await pool.query(
       `INSERT INTO event_checkin_followups (user_id, event_api_id, event_name, send_at)
        VALUES ($1, $2, $3, $4)
@@ -62,40 +65,28 @@ export async function scheduleEventCheckinFollowUp(
   }
 }
 
-// Correlates a matched Co user back to their originating Luma guest record
-// (matchGuestsToUsers' SQL join drops this) to read checked_in_at — same
-// phone-OR-email-case-insensitive logic eventScoring.ts's matchGuestsToUsers
-// already uses to go the other direction.
-function findOriginatingGuest(scorable: ScorableGuest, guests: LumaGuest[]): LumaGuest | undefined {
-  const email = scorable.email?.toLowerCase();
-  return guests.find(
-    (g) => (g.phone && g.phone === scorable.phone_number) || (g.email && email && g.email.toLowerCase() === email),
-  );
-}
-
 export async function detectAndScheduleCheckins(
   eventId: string,
   eventName: string,
-  guests: LumaGuest[],
   matched: ScorableGuest[],
   opts: { dryRun?: boolean } = {},
 ): Promise<void> {
-  const checkedIn = matched
-    .map((person) => ({ person, guest: findOriginatingGuest(person, guests) }))
-    .filter((x): x is { person: ScorableGuest; guest: LumaGuest } => Boolean(x.guest?.checked_in_at));
-  if (!checkedIn.length) return;
+  if (!matched.length) return;
 
   // One lookup for the whole event, not per-guest — end_at doesn't vary
-  // per person.
+  // per person. No check-in-time fallback anymore (see comment above) —
+  // without a real end_at there's no grounded "how was tonight" moment to
+  // schedule against, so this cycle is skipped rather than guessing one;
+  // a later guest.updated for the same event (Luma backfilling end_at,
+  // say) gets another chance via ON CONFLICT DO NOTHING below.
   const details = await getEventDetails(eventId).catch((err: any) => {
     console.error(`detectAndScheduleCheckins: getEventDetails failed for ${eventId} (non-fatal):`, err?.message ?? err);
     return null;
   });
+  if (!details?.end_at) return;
 
-  for (const { person, guest } of checkedIn) {
-    const baseTime = details?.end_at ? new Date(details.end_at) : new Date(guest.checked_in_at!);
-    const delayHours = details?.end_at ? CHECKIN_FOLLOWUP_DELAY_HOURS : CHECKIN_FOLLOWUP_FALLBACK_DELAY_HOURS;
-    const sendAt = new Date(baseTime.getTime() + delayHours * 60 * 60 * 1000);
+  const sendAt = new Date(new Date(details.end_at).getTime() + CHECKIN_FOLLOWUP_DELAY_HOURS * 60 * 60 * 1000);
+  for (const person of matched) {
     await scheduleEventCheckinFollowUp(person.user_id, eventId, eventName, sendAt, opts);
   }
 }

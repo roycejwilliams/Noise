@@ -774,12 +774,16 @@ export function runMigrations() {
   // Event Curation's own end-of-night check-in (Notion V1 board row 8, "who
   // did you meet that was interesting?") — sibling to
   // recommendation_outcome_followups above (same due-timestamp + nullable
-  // claim column + partial index convention), but keyed off a REAL Luma
-  // check-in at one of Co's own curated events (guest.checked_in_at, seen via
-  // routes/luma.ts's guest.updated handler → services/eventScoring.ts), not
-  // off Co having merely recommended something. UNIQUE(event_api_id, user_id)
-  // makes scheduling idempotent — guest.updated can fire repeatedly for the
-  // same already-checked-in guest without re-scheduling or double-sending.
+  // claim column + partial index convention), but keyed off registration at
+  // one of Co's own curated events + the event's real end_at (services/
+  // eventCheckinFollowUp.ts), not off Co having merely recommended
+  // something. Originally gated on a real Luma check-in (guest.checked_in_at)
+  // instead of registration, changed 2026-09-07 (Royce, confirmed live:
+  // Luma's API has no way to ever set check-in status, making that signal
+  // both untestable and unreliable for a genuine attendee who just didn't
+  // check in on Luma itself). UNIQUE(event_api_id, user_id) makes scheduling
+  // idempotent — guest.registered/guest.updated can fire repeatedly for the
+  // same guest without re-scheduling or double-sending.
   pool
     .query(`
       CREATE TABLE IF NOT EXISTS event_checkin_followups (

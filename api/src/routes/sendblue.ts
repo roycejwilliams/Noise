@@ -888,12 +888,19 @@ Return ONLY the classification, nothing else.`,
               const outcome = await classifyNamedOutcome(resolvedContent, pendingOutcomeFollowUp.match_name, recentConversation);
               if (outcome !== "unrelated") {
                 await recordOutcome(user.id, pendingOutcomeFollowUp.id, pendingOutcomeFollowUp.tier, outcome);
+                // Stay-scoped clause (Royce, 2026-09-07, confirmed live) —
+                // without this, a name or detail from a DIFFERENT,
+                // already-resolved outcome follow-up sitting in
+                // recentMemories (e.g. someone named a few messages ago
+                // about an unrelated event) got blended into this reply as
+                // if it belonged to the outcome actually being resolved here.
+                const stayScoped = ` Keep this reply scoped to "${pendingOutcomeFollowUp.match_name}" specifically — don't pull in a name or detail from a different, already-resolved outcome or an unrelated recent memory, even if one is sitting in context.`;
                 if (outcome === "named_positive") {
-                  outcomeFollowupContext = `\nThey just told you something good came out of "${pendingOutcomeFollowUp.match_name}" — someone worthwhile they met or a good outcome. Respond warmly to what they specifically shared, genuinely glad for them, no exclamation points.`;
+                  outcomeFollowupContext = `\nThey just told you something good came out of "${pendingOutcomeFollowUp.match_name}" — someone worthwhile they met or a good outcome. Respond warmly to what they specifically shared, genuinely glad for them, no exclamation points.${stayScoped}`;
                 } else if (outcome === "named_critical") {
-                  outcomeFollowupContext = `\nThey just told you "${pendingOutcomeFollowUp.match_name}" wasn't worthwhile or didn't go well. Acknowledge that honestly and warmly, no forced positivity, no apologizing on behalf of the thing itself.`;
+                  outcomeFollowupContext = `\nThey just told you "${pendingOutcomeFollowUp.match_name}" wasn't worthwhile or didn't go well. Acknowledge that honestly and warmly, no forced positivity, no apologizing on behalf of the thing itself.${stayScoped}`;
                 } else {
-                  outcomeFollowupContext = `\nThey answered about "${pendingOutcomeFollowUp.match_name}" but didn't name anyone specific or describe a real outcome. Acknowledge lightly, no pressure to elaborate.`;
+                  outcomeFollowupContext = `\nThey answered about "${pendingOutcomeFollowUp.match_name}" but didn't name anyone specific or describe a real outcome. Acknowledge lightly, no pressure to elaborate.${stayScoped}`;
                 }
               }
             }
@@ -915,12 +922,16 @@ Return ONLY the classification, nothing else.`,
               const outcome = await classifyNamedOutcome(resolvedContent, pendingCheckin.event_name, recentConversation);
               if (outcome !== "unrelated") {
                 await recordEventCheckinOutcome(user.id, pendingCheckin.id, pendingCheckin.event_api_id, outcome);
+                // Same stay-scoped fix as the outcome follow-up above — a
+                // name/detail from a different, already-resolved follow-up
+                // could otherwise blend into this reply.
+                const stayScoped = ` Keep this reply scoped to "${pendingCheckin.event_name}" specifically — don't pull in a name or detail from a different, already-resolved outcome or an unrelated recent memory, even if one is sitting in context.`;
                 if (outcome === "named_positive") {
-                  eventCheckinContext = `\nThey just told you something good came out of "${pendingCheckin.event_name}" — someone worthwhile they met or a good moment from tonight. Respond warmly to what they specifically shared, genuinely glad for them, no exclamation points.`;
+                  eventCheckinContext = `\nThey just told you something good came out of "${pendingCheckin.event_name}" — someone worthwhile they met or a good moment from tonight. Respond warmly to what they specifically shared, genuinely glad for them, no exclamation points.${stayScoped}`;
                 } else if (outcome === "named_critical") {
-                  eventCheckinContext = `\nThey just told you "${pendingCheckin.event_name}" wasn't worthwhile or didn't go well. Acknowledge that honestly and warmly, no forced positivity, no apologizing on behalf of the event itself.`;
+                  eventCheckinContext = `\nThey just told you "${pendingCheckin.event_name}" wasn't worthwhile or didn't go well. Acknowledge that honestly and warmly, no forced positivity, no apologizing on behalf of the event itself.${stayScoped}`;
                 } else {
-                  eventCheckinContext = `\nThey answered about "${pendingCheckin.event_name}" but didn't name anyone specific or describe a real moment. Acknowledge lightly, no pressure to elaborate.`;
+                  eventCheckinContext = `\nThey answered about "${pendingCheckin.event_name}" but didn't name anyone specific or describe a real moment. Acknowledge lightly, no pressure to elaborate.${stayScoped}`;
                 }
               }
             }

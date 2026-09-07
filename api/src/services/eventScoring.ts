@@ -238,14 +238,16 @@ export async function scoreGuestListForEvent(
   ]);
   const matched = await matchGuestsToUsers(guests);
 
-  // End-of-night check-in (Notion V1 board row 8) — guest.updated is Luma's
-  // real-time check-in signal (see routes/luma.ts's own comment on this),
-  // so every re-scoring pass triggered by it is also the right moment to
-  // notice someone who just physically checked in and schedule their
-  // "who did you meet?" text for later tonight. Fire-and-forget: a failure
-  // here shouldn't block the scoring pass itself, same reasoning as every
-  // other non-fatal side effect in this webhook path.
-  detectAndScheduleCheckins(eventId, resolvedName, guests, matched, opts).catch((err: any) =>
+  // End-of-night check-in (Notion V1 board row 8) — gated on registration
+  // (matched, above) + the event's real end_at, not a Luma check-in signal
+  // (Royce, 2026-09-07: Luma's API has no way to ever set check-in status,
+  // making that gate both untestable and unreliable for anyone who
+  // genuinely attended but didn't check in on Luma itself). Every
+  // registered/updated pass is a fine moment to (re-)schedule this — the
+  // underlying INSERT is idempotent (ON CONFLICT DO NOTHING). Fire-and-
+  // forget: a failure here shouldn't block the scoring pass itself, same
+  // reasoning as every other non-fatal side effect in this webhook path.
+  detectAndScheduleCheckins(eventId, resolvedName, matched, opts).catch((err: any) =>
     console.error(`eventScoring: detectAndScheduleCheckins failed for ${eventId} (non-fatal):`, err?.message ?? err),
   );
 

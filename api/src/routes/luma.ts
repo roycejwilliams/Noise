@@ -96,9 +96,21 @@ function runScoringPass(eventId: string, eventName: string | undefined, triggere
 // notification (services/eventChangeDetection.ts); calendar.person_subscribed
 // triggers a reach-out if the subscriber is already a Co user
 // (reachOutToSubscriber below); calendar.event_added is capture-only (see
-// its case below for why). One remaining real gap: guest.updated is also
-// meant to be the check-in signal for the one-time nudge's presence filter —
-// that consumption logic isn't built yet, this only re-triggers scoring.
+// its case below for why). One remaining real gap: the one-time nudge's
+// presence filter (top-5 ranked card stack, Notion V1 board row 9) isn't
+// built yet.
+//
+// Design note, 2026-09-07 (Royce, same reasoning as the end-of-night
+// check-in fix in services/eventCheckinFollowUp.ts): this was originally
+// planned to gate on guest.checked_in_at as the real check-in signal, but
+// Luma's API has no way to ever set check-in status — only a real physical
+// scan or the host manually toggling their own sign-in-gated page can
+// populate it, which would make the presence filter structurally unreliable
+// to depend on. Build it instead on registration (already confirmed via
+// matchGuestsToUsers/services/eventScoring.ts's matched list) plus the
+// event's real start_at having passed, not checked_in_at. Same trade-off as
+// the check-in fix: gives up specifically excluding a no-show, in exchange
+// for a signal that actually exists and fires reliably.
 router.post("/webhook", (req: Request, res: Response) => {
   if (!validateLumaWebhook(req)) {
     return res.status(401).send("Invalid Luma signature.");
