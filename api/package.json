@@ -14,7 +14,8 @@
     "trigger-event-scoring": "tsx src/scripts/triggerEventScoring.ts",
     "resolve-active-ask": "tsx src/scripts/resolveActiveAsk.ts",
     "show-intent": "tsx src/scripts/showIntent.ts",
-    "reset-profile": "tsx src/scripts/resetProfile.ts"
+    "reset-profile": "tsx src/scripts/resetProfile.ts",
+    "dump-user-activity": "tsx src/scripts/dumpUserActivity.ts"
   },
   "keywords": [],
   "author": "",
