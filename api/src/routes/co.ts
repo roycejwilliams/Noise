@@ -19,6 +19,7 @@ import {
   storeTranscriptMemory,
 } from "../services/profileExtraction.js";
 import { generateRecommendation } from "../services/recommendation.js";
+import { buildContextSummary } from "../services/callContext.js";
 import sendblue from "../services/sendblue.js";
 import { generateHumeVoiceLine, generateVoiceNote } from "../services/voiceNote.js";
 import { triggerCallForUser } from "../services/callTrigger.js";
@@ -582,7 +583,17 @@ async function handleToolCall(
 
   try {
     const { transcript } = await fetchHumeCallData(chatId);
-    const assessment = await assessConversationCoverage(transcript);
+    // Confirmed live, 2026-09-06: this call never passed priorContext, so
+    // every single call judged coverage purely off its own live transcript —
+    // even when co_profiles already had a rich, recent profile from a call
+    // minutes earlier. That's exactly the gap assessConversationCoverage's
+    // own priorContext parameter exists to close (see its comment above);
+    // it just wasn't being wired in at this, its only real call site. A
+    // real back-to-back call re-ran the entire 9-topic Rapport discovery
+    // from scratch as a result, with the model never marking anything
+    // "already covered."
+    const priorContext = userId ? await buildContextSummary(userId).catch(() => "") : "";
+    const assessment = await assessConversationCoverage(transcript, priorContext);
     if (userId) persistCoveredTopics(userId, assessment);
     // elapsed_minutes rides along on the same tool result the prompt already
     // polls periodically, rather than a separate tool.

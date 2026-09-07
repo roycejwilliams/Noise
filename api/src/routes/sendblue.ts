@@ -1063,7 +1063,7 @@ Return ONLY valid JSON, no preamble: {"date": "YYYY-MM-DD or null", "time": "HH:
         // calls to people who were just asking how the feature works.
         const callFeatureQuestionContext =
           callAction === "asks_about_calling"
-            ? `\nThey just asked a plain question about how calling works — answer it directly and honestly, don't place a call, and don't say or imply a call is happening. The true answer: Co can call them — by text right now ("call me") or scheduled for later — and that's real and live. They can also call Co directly at this same number anytime — that connects to a real, live conversation with Co. Only mention this second part if it's actually what they're asking about; don't volunteer it unprompted.`
+            ? `\nThey just asked a plain question about how calling works — answer it directly and honestly, don't place a call, and don't say or imply a call is happening. The true answer: Co can call them — by text right now ("call me") or scheduled for later — and that's real and live. They can also call Co directly anytime, from this exact number — that connects to a real, live conversation with Co. Refer to it only as "this number" or "this exact number," never write out or guess actual digits — you are not given the real number here, and a specific-looking one you invent will be wrong and won't work. Only mention this second part if it's actually what they're asking about; don't volunteer it unprompted.`
             : "";
 
         // Burst limiter — separate from, and in addition to, the topic-aware
