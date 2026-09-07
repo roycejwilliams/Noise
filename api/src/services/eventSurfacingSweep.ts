@@ -343,12 +343,32 @@ export async function attemptEventSurfacing(candidate: SurfacingCandidate): Prom
     // "already handled") so sendblue.ts's pending-offer lookup doesn't
     // mistake the person's next message for an answer to a tease that was
     // never actually asked — revealNow skipped the yes/no step entirely.
-    await pool
-      .query(`INSERT INTO co_memories (user_id, memory_type, content) VALUES ($1, 'event_offer_pending', $2)`, [
-        candidate.userId,
-        JSON.stringify({ askText: item.askText, match: item.match }),
-      ])
-      .catch((err: any) => console.error("attemptEventSurfacing: event_offer_pending write failed (non-fatal):", err?.message ?? err));
+    {
+      // Stored as JSON (parsed elsewhere by sendblue.ts's pending-offer
+      // lookup) but embedded from a plain-language rendering — otherwise
+      // this real name/reason (Co's own record of what it actually
+      // surfaced) is never reachable by recentMemories' semantic search on
+      // a later turn, the same gap that let a real recommendation link go
+      // unexplained when asked "what is this?" later.
+      const pendingContent = JSON.stringify({ askText: item.askText, match: item.match });
+      const embeddingSource = `${item.match.name} — ${item.match.reason} (asked about: ${item.askText})`;
+      await pool
+        .query(`INSERT INTO co_memories (user_id, memory_type, content) VALUES ($1, 'event_offer_pending', $2) RETURNING id`, [
+          candidate.userId,
+          pendingContent,
+        ])
+        .then((mem) =>
+          generateEmbedding(embeddingSource)
+            .then((emb) =>
+              pool.query(`UPDATE co_memories SET content_embedding = $1::vector WHERE id = $2`, [
+                `[${emb.join(",")}]`,
+                mem.rows[0].id,
+              ]),
+            )
+            .catch((err: any) => console.error("event_offer_pending embedding failed (non-fatal):", err?.message ?? err)),
+        )
+        .catch((err: any) => console.error("attemptEventSurfacing: event_offer_pending write failed (non-fatal):", err?.message ?? err));
+    }
 
     if (shortNotice) {
       await pool

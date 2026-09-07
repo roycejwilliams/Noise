@@ -1281,12 +1281,25 @@ Return ONLY valid JSON, no preamble: {"wants_venue": true or false, "venue_type"
                   console.error("sendblue: venue delivery intro generation failed (non-fatal, sending list plainly):", err?.message ?? err);
                   venueDeliveryMessage = venues.map((v) => `${v.name} — ${v.mapsUrl}`).join("\n\n");
                 }
-                await pool
-                  .query(`INSERT INTO co_memories (user_id, memory_type, content) VALUES ($1, 'recommendation', $2)`, [
-                    user.id,
-                    `Co surfaced ${venues.length} real venue(s) — ${venues.map((v) => `${v.name} (${v.address}): ${v.mapsUrl}`).join("; ")}`,
-                  ])
-                  .catch((err: any) => console.error("sendblue: venue memory write failed (non-fatal):", err?.message ?? err));
+                {
+                  const venueMemoryContent = `Co surfaced ${venues.length} real venue(s) — ${venues.map((v) => `${v.name} (${v.address}): ${v.mapsUrl}`).join("; ")}`;
+                  await pool
+                    .query(`INSERT INTO co_memories (user_id, memory_type, content) VALUES ($1, 'recommendation', $2) RETURNING id`, [
+                      user.id,
+                      venueMemoryContent,
+                    ])
+                    .then((mem) =>
+                      generateEmbedding(venueMemoryContent)
+                        .then((emb) =>
+                          pool.query(`UPDATE co_memories SET content_embedding = $1::vector WHERE id = $2`, [
+                            `[${emb.join(",")}]`,
+                            mem.rows[0].id,
+                          ]),
+                        )
+                        .catch((err) => console.error("Venue memory embedding failed (non-fatal):", err)),
+                    )
+                    .catch((err: any) => console.error("sendblue: venue memory write failed (non-fatal):", err?.message ?? err));
+                }
               } else {
                 // Must not repeat the "claimed to deliver, delivered
                 // nothing" failure — if the search genuinely came up empty,

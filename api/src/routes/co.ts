@@ -393,11 +393,22 @@ router.post(
         // written down anywhere, so there was no way to review what Co
         // actually said on a real person's voicemail after the fact.
         if (user) {
+          const voicemailMemContent = `Co left this voicemail: "${voicemailLine}"`;
           await pool
-            .query(`INSERT INTO co_memories (user_id, memory_type, content) VALUES ($1, 'system', $2)`, [
+            .query(`INSERT INTO co_memories (user_id, memory_type, content) VALUES ($1, 'system', $2) RETURNING id`, [
               user.id,
-              `Co left this voicemail: "${voicemailLine}"`,
+              voicemailMemContent,
             ])
+            .then((mem) =>
+              generateEmbedding(voicemailMemContent)
+                .then((emb) =>
+                  pool.query(`UPDATE co_memories SET content_embedding = $1::vector WHERE id = $2`, [
+                    `[${emb.join(",")}]`,
+                    mem.rows[0].id,
+                  ]),
+                )
+                .catch((err: any) => console.error("Voicemail-line embedding failed (non-fatal):", err?.message ?? err)),
+            )
             .catch((err: any) => console.error("Voicemail-line logging failed (non-fatal):", err?.message ?? err));
           await sendMissedCallFollowUp(
             user,

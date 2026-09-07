@@ -263,7 +263,7 @@ export function runMigrations() {
           'call_offer_pending','call_offer_resolved','recommendation','call_offer_declined_topic',
           'event_ask_solicitation','calendar_follow_reach_out','event_discovery_surfacing',
           'event_change_notification','event_offer_pending','event_offer_resolved',
-          'recommendation_outcome','companion_checkin'
+          'recommendation_outcome','companion_checkin','event_checkin_outcome'
         ]));
     `)
     .catch((err: Error) =>

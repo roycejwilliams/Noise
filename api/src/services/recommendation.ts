@@ -3,6 +3,7 @@ import { anthropic } from "@ai-sdk/anthropic";
 import { propagateAttributes } from "@langfuse/tracing";
 import pool from "../db/db.js";
 import { getTieredRecommendation, type TierMatch } from "./tieredRecommendation.js";
+import { generateEmbedding } from "./embeddings.js";
 
 // Intent-Layer-only real action: Co can actually invoke this (voice via
 // Hume's tool_call plane, iMessage via a direct call from the ongoing-chat
@@ -104,12 +105,25 @@ export async function generateRecommendation(userId: string, currentMessage?: st
           reason: tierMatches.map((m) => m.reason).join(" "),
           matches: tierMatches,
         };
-        await pool
-          .query(`INSERT INTO co_memories (user_id, memory_type, content) VALUES ($1, 'recommendation', $2)`, [
-            userId,
-            `Co surfaced ${tierMatches.length} tiered recommendation(s) — ${tierMatches.map((m) => `[Tier ${m.kind}] ${m.name}: ${m.reason}`).join(" | ")}`,
-          ])
-          .catch((err) => console.error("Recommendation memory write failed (non-fatal):", err));
+        {
+          const tieredContent = `Co surfaced ${tierMatches.length} tiered recommendation(s) — ${tierMatches.map((m) => `[Tier ${m.kind}] ${m.name}: ${m.reason}`).join(" | ")}`;
+          await pool
+            .query(`INSERT INTO co_memories (user_id, memory_type, content) VALUES ($1, 'recommendation', $2) RETURNING id`, [
+              userId,
+              tieredContent,
+            ])
+            .then((mem) =>
+              generateEmbedding(tieredContent)
+                .then((emb) =>
+                  pool.query(`UPDATE co_memories SET content_embedding = $1::vector WHERE id = $2`, [
+                    `[${emb.join(",")}]`,
+                    mem.rows[0].id,
+                  ]),
+                )
+                .catch((err) => console.error("Recommendation memory embedding failed (non-fatal):", err)),
+            )
+            .catch((err) => console.error("Recommendation memory write failed (non-fatal):", err));
+        }
 
         // Royce, 2026-08-30: Tier 1/2 matches carry a real event_api_id —
         // record it so another person getting surfaced this exact same
@@ -162,12 +176,25 @@ or
 
     const result: RecommendationResult = { available: true, match: parsed.match, reason: parsed.reason ?? "" };
 
-    await pool
-      .query(`INSERT INTO co_memories (user_id, memory_type, content) VALUES ($1, 'recommendation', $2)`, [
-        userId,
-        `Co surfaced a recommendation — ${result.match}: ${result.reason}`,
-      ])
-      .catch((err) => console.error("Recommendation memory write failed (non-fatal):", err));
+    {
+      const fallbackContent = `Co surfaced a recommendation — ${result.match}: ${result.reason}`;
+      await pool
+        .query(`INSERT INTO co_memories (user_id, memory_type, content) VALUES ($1, 'recommendation', $2) RETURNING id`, [
+          userId,
+          fallbackContent,
+        ])
+        .then((mem) =>
+          generateEmbedding(fallbackContent)
+            .then((emb) =>
+              pool.query(`UPDATE co_memories SET content_embedding = $1::vector WHERE id = $2`, [
+                `[${emb.join(",")}]`,
+                mem.rows[0].id,
+              ]),
+            )
+            .catch((err) => console.error("Recommendation memory embedding failed (non-fatal):", err)),
+        )
+        .catch((err) => console.error("Recommendation memory write failed (non-fatal):", err));
+    }
 
     return result;
   } catch (err: any) {

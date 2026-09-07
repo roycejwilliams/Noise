@@ -28,7 +28,7 @@ import pool from "../db/db.js";
 // specifics the recap's own cadence hasn't folded in yet.
 export async function buildContextSummary(userId: string): Promise<string> {
   try {
-    const [profileResult, recentTextResult, recapResult] = await Promise.all([
+    const [profileResult, recentTextResult, recapResult, recentRecommendationResult] = await Promise.all([
       pool.query(
         `SELECT life_chapters, goals, blockers, availability_pattern, city, emotional_state, intent
          FROM co_profiles WHERE user_id = $1`,
@@ -43,6 +43,18 @@ export async function buildContextSummary(userId: string): Promise<string> {
       pool.query(
         `SELECT content FROM co_memories
          WHERE user_id = $1 AND memory_type = 'recap'
+         ORDER BY created_at DESC LIMIT 1`,
+        [userId],
+      ),
+      // Real gap found 2026-09-07: Co asked "what did you find me?" on a
+      // fresh call had no way to answer — this summary read profile/text/
+      // recap only, never what Co itself actually surfaced. One bounded,
+      // recency-limited line (not the full pending/resolved offer machinery
+      // sendblue.ts owns for text) covers the common "did I miss what you
+      // found me" case without growing every call's opening context.
+      pool.query(
+        `SELECT content FROM co_memories
+         WHERE user_id = $1 AND memory_type = 'recommendation' AND created_at > NOW() - INTERVAL '3 days'
          ORDER BY created_at DESC LIMIT 1`,
         [userId],
       ),
@@ -62,6 +74,7 @@ export async function buildContextSummary(userId: string): Promise<string> {
       profile?.blockers?.length ? `Blockers: ${profile.blockers.slice(0, 2).join("; ")}` : null,
       latestIntent?.text ? `Stated ask: ${latestIntent.text}` : null,
       latestIntent?.wants?.length ? `Wants: ${latestIntent.wants.slice(0, 2).join(", ")}` : null,
+      recentRecommendationResult.rows[0]?.content ? `Most recent thing Co suggested: ${recentRecommendationResult.rows[0].content}` : null,
     ].filter(Boolean);
 
     const recentTextLine = recentTextResult.rows.length
