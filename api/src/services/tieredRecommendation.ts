@@ -280,6 +280,8 @@ Some posts list SEVERAL distinct opportunities in one message (e.g. "1. Slush 10
 
 If a post's own text gives a deadline or application window that has clearly already closed relative to today's date, don't pick it — there's nothing left to act on. Rolling admissions, no stated deadline, or a deadline still ahead are all fine to pick. If the post states an explicit application deadline date for the SPECIFIC opportunity you're naming, include it as "deadline" in YYYY-MM-DD form — only if that opportunity itself actually states one, never estimate, infer, or borrow one from a different program in the same post.
 
+Write "reason" the way Co would say it to a friend over text — one short, casual sentence. Keep exactly one concrete, grounded detail that proves it's real (not vague hype), but never in analyst language ("demonstrates," "concrete evidence of," "showcasing") — say it plainly, the way a person would, not a scoring rationale. E.g. "Real accelerator, and there's a founder spotlight from someone who actually went through it — not just marketing copy," not "A named, specific accelerator program with a concrete founder spotlight demonstrating active participation and real companies."
+
 Return ONLY valid JSON: {"index": 0, "name": "the specific opportunity name", "reason": "one short grounded sentence", "deadline": "YYYY-MM-DD" or null} or {"index": null}`,
     });
     // Robust extraction (Royce, 2026-09-02, confirmed live: "Unexpected
