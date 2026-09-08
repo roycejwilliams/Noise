@@ -3,6 +3,7 @@ import { anthropic } from "@ai-sdk/anthropic";
 import pool from "../db/db.js";
 import sendblue, { cleanCoMessage } from "./sendblue.js";
 import type { TierMatch } from "./tieredRecommendation.js";
+import { writeMemory } from "./memory.js";
 
 // Outcome-learning loop (Royce, 2026-09-02: "Co follows up" + the shared
 // "named someone?" classifier + wiring signal weighting into future
@@ -169,6 +170,13 @@ Return ONLY the message text.`,
         content: cleaned,
         from_number: process.env.SENDBLUE_PHONE_NUMBER!,
       });
+      // Royce, 2026-09-08 sweep — this send had zero logging of any kind,
+      // so recentConversation had no record of Co's own question. Matters
+      // more here than most: the reply to THIS message is what drives
+      // classifyNamedOutcome downstream.
+      await writeMemory(row.user_id, "text_exchange", `Co replied: ${cleaned}`).catch((err: any) =>
+        console.error(`sendDueOutcomeFollowUps: text_exchange log failed for ${row.id} (non-fatal):`, err?.message ?? err),
+      );
     } catch (err: any) {
       console.error(`sendDueOutcomeFollowUps: send failed for ${row.id} (non-fatal, already claimed — will not retry):`, err?.message ?? err);
     }

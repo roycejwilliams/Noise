@@ -2,6 +2,7 @@ import { generateText } from "ai";
 import { anthropic } from "@ai-sdk/anthropic";
 import pool from "../db/db.js";
 import sendblue from "../services/sendblue.js";
+import { writeMemory } from "../services/memory.js";
 import { renderCoPersonaPrompt } from "../services/coPersona.js";
 import { buildContextSummary } from "../services/callContext.js";
 import { getTimezoneForCity } from "../services/geocoding.js";
@@ -73,6 +74,11 @@ export async function sendDueFollowUps(): Promise<void> {
         content: capped,
         from_number: process.env.SENDBLUE_PHONE_NUMBER!,
       });
+      // Royce, 2026-09-08 sweep — this send had zero logging of any kind,
+      // so recentConversation had no record of it at all.
+      await writeMemory(row.user_id, "text_exchange", `Co replied: ${capped}`).catch((err: any) =>
+        console.error(`postCallFollowUp: text_exchange log failed for ${row.id} (non-fatal):`, err?.message ?? err),
+      );
     } catch (err: any) {
       console.error(`postCallFollowUp: send failed for follow-up ${row.id} (non-fatal, already claimed — will not retry):`, err?.message ?? err);
     }

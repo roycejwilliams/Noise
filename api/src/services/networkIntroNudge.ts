@@ -156,6 +156,12 @@ export async function attemptNetworkSurfacing(
       JSON.stringify({ askId, candidate: item.candidate }),
     ])
     .catch((err: any) => console.error("attemptNetworkSurfacing: network_offer_pending write failed (non-fatal):", err?.message ?? err));
+  // Royce, 2026-09-08 sweep — this, the tease itself, was the one message
+  // in this file's own flow that never got a text_exchange log (the reveal
+  // and direct-ask messages downstream of it already do).
+  await writeMemory(userId, "text_exchange", `Co replied: ${message}`).catch((err: any) =>
+    console.error("attemptNetworkSurfacing: text_exchange log failed (non-fatal):", err?.message ?? err),
+  );
 
   return { sent: true, throttled: false };
 }

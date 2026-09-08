@@ -257,6 +257,12 @@ Draft a short, warm, low-pressure text (1-2 sentences, no exclamation points, no
     "event_guest_match_nudge",
     `Nudged ${person.first_name} that ${candidate.first_name} is also going to "${eventName}" and worth meeting: ${top.reason} (score ${top.score})`,
   );
+  // Royce, 2026-09-08 sweep — the descriptive log above is a summary, not
+  // the actual text sent, so recentConversation (routes/sendblue.ts, which
+  // only reads text_exchange rows) never saw this message either.
+  await writeMemory(person.user_id, "text_exchange", `Co replied: ${message}`).catch((err: any) =>
+    console.error("eventScoring: match nudge text_exchange log failed (non-fatal):", err?.message ?? err),
+  );
   return true;
 }
 

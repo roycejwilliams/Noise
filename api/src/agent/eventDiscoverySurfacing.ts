@@ -75,6 +75,15 @@ export async function runEventDiscoverySurfacingAgent(
           from_number: process.env.SENDBLUE_PHONE_NUMBER!,
         });
         state.sent = true;
+        // Hooked here, not left to the agent's own writeMemory tool call
+        // below (Royce, 2026-09-08 sweep) — recentConversation (routes/
+        // sendblue.ts) only ever reads text_exchange rows, and this
+        // agent's own writeMemory tool writes a different, descriptive
+        // type. Doing it here guarantees it happens exactly once, right
+        // alongside the real send, regardless of what the model logs.
+        await writeMemory(person.userId, "text_exchange", `Co replied: ${cleaned}`).catch((err: any) =>
+          console.error("eventDiscoverySurfacing: text_exchange log failed (non-fatal):", err?.message ?? err),
+        );
         return { delivered: true, message: cleaned };
       },
     }),
@@ -184,6 +193,9 @@ Return ONLY the message text (or SKIP), nothing else — no preamble, no quotes.
       content: url,
       from_number: process.env.SENDBLUE_PHONE_NUMBER!,
     });
+    await writeMemory(person.userId, "text_exchange", `Co replied: ${url}`).catch((err: any) =>
+      console.error("eventDiscoverySurfacing: text_exchange log failed for url (non-fatal):", err?.message ?? err),
+    );
     await new Promise((resolve) => setTimeout(resolve, 2000));
   }
   await sendblue.messages.send({
@@ -192,6 +204,12 @@ Return ONLY the message text (or SKIP), nothing else — no preamble, no quotes.
     from_number: process.env.SENDBLUE_PHONE_NUMBER!,
   });
   await writeMemory(person.userId, "event_discovery_surfacing", `Revealed directly (short notice): ${match.name} — ${description}`);
+  // Same gap as the tool-based path above (Royce, 2026-09-08 sweep) — this
+  // deterministic path never called the writeMemory tool at all, so
+  // recentConversation had no record of the actual message text either.
+  await writeMemory(person.userId, "text_exchange", `Co replied: ${description}`).catch((err: any) =>
+    console.error("eventDiscoverySurfacing: text_exchange log failed (non-fatal):", err?.message ?? err),
+  );
 
   return { sent: true, throttled: false };
 }

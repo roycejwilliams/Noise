@@ -5,6 +5,7 @@ import pool from "../db/db.js";
 import { getTimezoneForCity } from "../services/geocoding.js";
 import { isReasonableLocalHour } from "../services/localHours.js";
 import sendblue from "../services/sendblue.js";
+import { writeMemory } from "../services/memory.js";
 import { sweepAllOpenAsks } from "../services/relevance.js";
 import { runAskCheckinAgent } from "../agent/askCheckin.js";
 import { attemptEventSurfacing } from "../services/eventSurfacingSweep.js";
@@ -140,12 +141,18 @@ export function registerJobs(io: Server) {
         const timezone = row.city ? await getTimezoneForCity(row.city) : null;
         if (!isReasonableLocalHour(timezone)) continue;
 
+        const missedCallText = `${row.first_name}, I tried calling but must have missed you. I'll try again soon, or reply here whenever works.`;
         try {
           await sendblue.messages.send({
             number: row.phone_number,
-            content: `${row.first_name}, I tried calling but must have missed you. I'll try again soon, or reply here whenever works.`,
+            content: missedCallText,
             from_number: process.env.SENDBLUE_PHONE_NUMBER!,
           });
+          // Royce, 2026-09-08 sweep — this send had zero logging of any
+          // kind, so recentConversation had no record of it at all.
+          await writeMemory(row.user_id, "text_exchange", `Co replied: ${missedCallText}`).catch((err: any) =>
+            console.error(`Delayed missed-call follow-up text_exchange log failed for ${row.user_id} (non-fatal):`, err?.message ?? err),
+          );
         } catch (smsErr: any) {
           console.error(`Delayed missed-call follow-up failed for ${row.user_id}:`, smsErr?.message ?? smsErr);
         }

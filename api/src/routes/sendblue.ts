@@ -91,11 +91,24 @@ const DEBOUNCE_MS = 8000;
 // those aren't a per-user mirroring target. Needs at least 2 of the user's
 // own messages before saying anything, so a first-ever text doesn't get a
 // hint built off n=1.
+// Recency-weighted, not a flat average over the whole window (Royce,
+// 2026-09-08, confirmed live: "capitalization is no longer working,
+// everything being texted back is lowercase") — this used to average
+// lowercaseRate/avgWords/emojiRate over every user line in the 10-turn
+// window with equal weight, so a real register shift (e.g. today's texts
+// switching to normal capitalization) stayed invisible for turns, outvoted
+// by older, more casual test messages earlier in the window. Only the
+// last STYLE_HINT_RECENT_LINES user messages are considered now, so an
+// actual shift in how someone's texting dominates within a message or two
+// instead of a full window's worth.
+const STYLE_HINT_RECENT_LINES = 4;
+
 function deriveStyleHint(chronological: { content: string }[]): string {
   const userLines = chronological
     .map((m) => m.content)
     .filter((c) => c.startsWith("User said: ") || c.startsWith("User sent a voice memo: "))
-    .map((c) => c.replace(/^User (said|sent a voice memo): /, ""));
+    .map((c) => c.replace(/^User (said|sent a voice memo): /, ""))
+    .slice(-STYLE_HINT_RECENT_LINES);
 
   if (userLines.length < 2) return "";
 
