@@ -267,7 +267,9 @@ async function sendIntroEmail(eventId: string, eventName: string, a: MatchNudgeC
   } else {
     try {
       const resend = new Resend(process.env.RESEND_API_KEY);
-      await resend.emails.send({ from: "Co <hello@copatible.com>", to: [a.email, b.email], subject, html });
+      // Co cc'd (Royce, 2026-09-07: "Co would need to be the driver of the
+      // email") — visibly present so a reply-all naturally includes it.
+      await resend.emails.send({ from: "Co <hello@copatible.com>", to: [a.email, b.email], cc: ["hello@copatible.com"], subject, html });
     } catch (err: any) {
       console.error("sendIntroEmail: send failed (non-fatal):", err?.message ?? err);
       return;

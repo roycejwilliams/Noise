@@ -1,42 +1,41 @@
 import { generateText } from "ai";
 import { anthropic } from "@ai-sdk/anthropic";
+import { Resend } from "resend";
 import pool from "../db/db.js";
 import sendblue, { cleanCoMessage } from "./sendblue.js";
 import { tryClaimProactiveNudge } from "./proactiveThrottle.js";
 import { writeMemory } from "./memory.js";
-import {
-  handleMatchNudgeReply,
-  recordOptIn,
-  hasReciprocalOptIn,
-  type MatchNudgeCandidate,
-  type MatchNudgeReplyClassification,
-} from "./eventGuestMatchHandoff.js";
+import { ALLOW_REAL_SENDS } from "../otpActions.js";
+import type { MatchNudgeCandidate } from "./eventGuestMatchHandoff.js";
 
-// "What about actually surfacing someone with a background that can help?"
-// (Royce, 2026-09-07) — services/relevance.ts's Stage 3 sweep already
-// computes real person-to-person matches into relevance_edges, but nothing
-// ever revealed them: agent/askCheckin.ts is explicitly told "Co has some
-// open leads for this, but nothing to introduce yet — don't imply anything
-// is imminent." This closes that gap using the SAME double opt-in machinery
-// already built for the event guest-match nudge (services/
-// eventGuestMatchHandoff.ts) — reused, not duplicated, by giving each
-// candidate its own synthetic "event_id" (`network:<relevance_edge id>`),
-// so event_guest_match_nudges/event_guest_match_opt_ins/event_intro_groups
-// all just work per (person, candidate) pair without any schema changes.
+// Redesigned 2026-09-07 (Royce: "how would you implement the networking
+// recommendation... if you just didn't get fed this information but only
+// know about my product purpose"). Two changes from the original version:
 //
-// Recommends a real SHORTLIST, 1-5 people (Royce, 2026-09-07: "I want them
-// to recommend between 1-5 people"), not just a single top match — closer
-// to how a real well-connected friend would say "a few people come to
-// mind," not a single forced pairing.
+// 1. One candidate at a time, backlogged and teased — not a bundled 1-5
+//    shortlist in one text. "Oh I was thinking about you" is a friend
+//    mentioning ONE thing; a list of names reads like a matching engine's
+//    output, which contradicts Co's actual purpose (genuine ongoing
+//    companion, not a matchmaking tool). Mirrors eventSurfacingSweep.ts's
+//    tease → backlog → reveal pattern exactly, just for people instead of
+//    events/opportunities.
+// 2. A real canonical-pair relationship table (network_introductions),
+//    not a synthetic "network:<edge_id>" event_id reused from
+//    event_guest_match_nudges. That hack was the direct cause of a real
+//    bug (the same candidate showing up as two separate pending nudges
+//    under two different synthetic ids, depending on which direction the
+//    relevance edge came from) — a canonical (person_a_id < person_b_id)
+//    pair collapses both directions into one row structurally, instead of
+//    patching around duplicates after the fact.
 
-const NETWORK_NUDGE_MIN_SCORE = 60; // same bar as the event guest-match nudge — a genuinely strong match, not the best of a weak field
-const MAX_NETWORK_CANDIDATES = 5;
+const NETWORK_NUDGE_MIN_SCORE = 60; // same bar as the event guest-match nudge
+export const NETWORK_OFFER_EXPIRY_DAYS = 7;
 
-function networkEventId(relevanceEdgeId: string): string {
-  return `network:${relevanceEdgeId}`;
+function canonicalPair(a: string, b: string): [string, string] {
+  return a < b ? [a, b] : [b, a];
 }
 
-type ShortlistCandidate = {
+type NetworkCandidate = {
   edge_id: string;
   candidate_id: string;
   first_name: string;
@@ -46,220 +45,399 @@ type ShortlistCandidate = {
   match_reason: string;
 };
 
-async function findShortlistCandidates(personId: string): Promise<ShortlistCandidate[]> {
-  // A person can have several open relevance_edges to the SAME candidate
-  // (different ask_ids logged across separate sweeps) — DISTINCT ON keeps
-  // only that candidate's single best-scoring edge, so the shortlist is 1-5
-  // distinct PEOPLE, never the same person twice at different scores.
+type BacklogItem = { askId: string; candidate: NetworkCandidate };
+
+async function getBacklog(userId: string, askId: string): Promise<BacklogItem[]> {
+  const { rows } = await pool.query(`SELECT items FROM network_backlogs WHERE user_id = $1 AND ask_id = $2`, [userId, askId]);
+  return (rows[0]?.items as BacklogItem[]) ?? [];
+}
+
+async function saveBacklog(userId: string, askId: string, items: BacklogItem[]): Promise<void> {
+  await pool
+    .query(
+      `INSERT INTO network_backlogs (user_id, ask_id, items, updated_at) VALUES ($1, $2, $3, NOW())
+       ON CONFLICT (user_id, ask_id) DO UPDATE SET items = $3, updated_at = NOW()`,
+      [userId, askId, JSON.stringify(items)],
+    )
+    .catch((err: any) => console.error("saveBacklog: write failed (non-fatal):", err?.message ?? err));
+}
+
+// A pair already has a network_introductions row (suggested, decided, or
+// introduced either way) — never re-suggest it, regardless of which
+// person's ask or which relevance direction produced the candidate again.
+async function alreadySuggested(personId: string, candidateId: string): Promise<boolean> {
+  const [a, b] = canonicalPair(personId, candidateId);
+  const { rows } = await pool.query(`SELECT 1 FROM network_introductions WHERE person_a_id = $1 AND person_b_id = $2`, [a, b]);
+  return rows.length > 0;
+}
+
+async function dropStaleFront(userId: string, items: BacklogItem[]): Promise<BacklogItem[]> {
+  let rest = items;
+  while (rest.length && (await alreadySuggested(userId, rest[0].candidate.candidate_id))) {
+    rest = rest.slice(1);
+  }
+  return rest;
+}
+
+async function findFreshCandidates(userId: string, askId: string): Promise<BacklogItem[]> {
+  // DISTINCT ON (candidate_id): the same candidate can have several open
+  // edges logged against the same ask across separate sweep cycles — keep
+  // only their single best-scoring one.
   const { rows } = await pool.query(
     `SELECT edge_id, candidate_id, match_score, match_reason, first_name, phone_number, email FROM (
        SELECT DISTINCT ON (re.candidate_id) re.id AS edge_id, re.candidate_id, re.match_score, re.match_reason,
               u.first_name, u.phone_number, u.email
        FROM relevance_edges re
        JOIN users u ON u.id = re.candidate_id
-       WHERE re.person_id = $1 AND re.status = 'open' AND re.match_score >= $2
-         AND NOT EXISTS (
-           SELECT 1 FROM event_guest_match_nudges n
-           WHERE n.person_id = re.person_id AND n.candidate_id = re.candidate_id AND n.event_id LIKE 'network:%'
-         )
+       WHERE re.person_id = $1 AND re.ask_id = $2 AND re.status = 'open' AND re.match_score >= $3
        ORDER BY re.candidate_id, re.match_score DESC
      ) distinct_candidates
-     ORDER BY match_score DESC
-     LIMIT $3`,
-    [personId, NETWORK_NUDGE_MIN_SCORE, MAX_NETWORK_CANDIDATES],
+     ORDER BY match_score DESC`,
+    [userId, askId, NETWORK_NUDGE_MIN_SCORE],
   );
-  return rows;
+  const fresh: BacklogItem[] = [];
+  for (const row of rows) {
+    if (await alreadySuggested(userId, row.candidate_id)) continue;
+    fresh.push({ askId, candidate: row });
+  }
+  return fresh;
 }
 
-// Entry point — called from relevance.ts's sweepAllOpenAsks, once per user,
-// after both sweep directions have logged this cycle's relevance_edges.
-export async function maybeSendNetworkIntroNudges(personId: string): Promise<void> {
-  const candidates = await findShortlistCandidates(personId);
-  if (!candidates.length) return;
+// Entry point — called once per (user, open ask) on the same daily cadence
+// as the relevance sweep itself. Sends a TEASE, no name yet (mirrors
+// eventSurfacingSweep.ts's ask-first pattern) — the actual reveal only
+// happens once they say they want to hear who.
+export async function attemptNetworkSurfacing(
+  userId: string,
+  firstName: string,
+  phoneNumber: string,
+  askId: string,
+): Promise<{ sent: boolean; throttled: boolean }> {
+  let pending = await dropStaleFront(userId, await getBacklog(userId, askId));
+  if (!pending.length) {
+    pending = await dropStaleFront(userId, await findFreshCandidates(userId, askId));
+  }
+  if (!pending.length) {
+    await saveBacklog(userId, askId, []);
+    return { sent: false, throttled: false };
+  }
 
-  const { rows: personRows } = await pool.query(`SELECT first_name, phone_number FROM users WHERE id = $1`, [personId]);
-  const person = personRows[0];
-  if (!person) return;
+  const [item, ...rest] = pending;
 
-  if (!(await tryClaimProactiveNudge(personId))) {
-    console.log(`networkIntroNudge: throttled for ${personId} (proactive nudge used elsewhere in last 24h)`);
-    return;
+  if (!(await tryClaimProactiveNudge(userId))) {
+    await saveBacklog(userId, askId, pending); // nothing consumed — stays at the front for next time
+    return { sent: false, throttled: true };
   }
 
   let message: string;
   try {
-    const list = candidates
-      .map((c) => `${c.first_name}: ${c.match_reason}`)
-      .join("\n");
     const { text } = await generateText({
       model: anthropic("claude-haiku-4-5-20251001"),
-      experimental_telemetry: { isEnabled: true, functionId: "networkIntroNudge.draft" },
-      prompt: `You are Co, texting ${person.first_name}. You found ${candidates.length === 1 ? "someone" : `${candidates.length} people`} in the network worth them meeting:
-${list}
-
-Draft a short, warm text (2-4 sentences, no exclamation points, no em dashes) naming ${candidates.length === 1 ? "this person" : "each person by first name"} and the real reason each is worth meeting, in your own words — not a bare list, but not a hard sell either, like a well-connected friend genuinely thinking of them. End by asking which (if any) they'd like an actual introduction to. Return ONLY the message text.`,
+      experimental_telemetry: { isEnabled: true, functionId: "networkIntroNudge.tease.draft" },
+      prompt: `You are Co, texting ${firstName}. Someone in the network crossed your mind for them — related to what they've told you they're looking for, but you haven't said who yet. Draft a short, warm text (1-2 sentences, no exclamation points, no em dashes) like a friend who just thought of someone, asking if they'd like to hear who. Don't name anyone or describe them yet. Return ONLY the message text.`,
     });
     message = cleanCoMessage(text.trim());
   } catch (err: any) {
-    console.error("maybeSendNetworkIntroNudges: draft failed (non-fatal):", err?.message ?? err);
-    return;
+    console.error("attemptNetworkSurfacing: tease draft failed (non-fatal):", err?.message ?? err);
+    return { sent: false, throttled: false };
   }
 
   try {
-    await sendblue.messages.send({ number: person.phone_number, content: message, from_number: process.env.SENDBLUE_PHONE_NUMBER! });
+    await sendblue.messages.send({ number: phoneNumber, content: message, from_number: process.env.SENDBLUE_PHONE_NUMBER! });
   } catch (err: any) {
-    console.error("maybeSendNetworkIntroNudges: send failed (non-fatal):", err?.message ?? err);
-    return;
+    console.error("attemptNetworkSurfacing: send failed (non-fatal):", err?.message ?? err);
+    return { sent: false, throttled: false };
   }
 
-  for (const c of candidates) {
-    await pool
-      .query(
-        `INSERT INTO event_guest_match_nudges (event_id, person_id, candidate_id, score)
-         VALUES ($1, $2, $3, $4)
-         ON CONFLICT (event_id, person_id) DO NOTHING`,
-        [networkEventId(c.edge_id), personId, c.candidate_id, c.match_score],
-      )
-      .catch((err: any) => console.error("maybeSendNetworkIntroNudges: nudge-row insert failed (non-fatal):", err?.message ?? err));
-  }
+  await saveBacklog(userId, askId, rest);
+  await pool
+    .query(`INSERT INTO co_memories (user_id, memory_type, content) VALUES ($1, 'network_offer_pending', $2)`, [
+      userId,
+      JSON.stringify({ askId, candidate: item.candidate }),
+    ])
+    .catch((err: any) => console.error("attemptNetworkSurfacing: network_offer_pending write failed (non-fatal):", err?.message ?? err));
 
-  await writeMemory(
-    personId,
-    "event_guest_match_nudge",
-    `Surfaced a network shortlist to ${person.first_name}: ${candidates.map((c) => `${c.first_name} (${c.match_reason})`).join("; ")}.`,
-  );
+  return { sent: true, throttled: false };
 }
 
-export type PendingNetworkNudge = {
-  event_id: string;
-  candidate: MatchNudgeCandidate;
-};
+export type PendingNetworkTease = { askId: string; candidate: NetworkCandidate };
 
-const NETWORK_NUDGE_REPLY_EXPIRY_DAYS = 7;
-
-// Unlike the event nudge's findPendingMatchNudge (single most recent), a
-// network shortlist can have up to 5 simultaneously pending — a reply names
-// whichever specific person(s) it's actually about, so the classifier below
-// needs the whole list, not just the latest one.
-export async function findPendingNetworkNudges(userId: string): Promise<PendingNetworkNudge[]> {
+export async function findPendingNetworkTease(userId: string): Promise<PendingNetworkTease | null> {
   const { rows } = await pool.query(
-    `SELECT n.event_id, n.candidate_id, u.first_name, u.phone_number, u.email
-     FROM event_guest_match_nudges n
-     JOIN users u ON u.id = n.candidate_id
-     WHERE n.person_id = $1
-       AND n.event_id LIKE 'network:%'
-       AND n.sent_at > NOW() - ($2 || ' days')::interval
+    `SELECT p.id, p.content FROM co_memories p
+     WHERE p.user_id = $1 AND p.memory_type = 'network_offer_pending'
+       AND p.created_at > NOW() - ($2 || ' days')::interval
        AND NOT EXISTS (
-         SELECT 1 FROM event_guest_match_opt_ins o
-         WHERE o.event_id = n.event_id AND o.person_id = n.person_id AND o.candidate_id = n.candidate_id
+         SELECT 1 FROM co_memories r
+         WHERE r.user_id = $1 AND r.memory_type = 'network_offer_resolved' AND r.created_at > p.created_at
        )
-     ORDER BY n.sent_at DESC`,
-    [userId, NETWORK_NUDGE_REPLY_EXPIRY_DAYS],
+     ORDER BY p.created_at DESC LIMIT 1`,
+    [userId, NETWORK_OFFER_EXPIRY_DAYS],
   );
-  return rows.map((r: any) => ({
-    event_id: r.event_id,
-    candidate: { user_id: r.candidate_id, first_name: r.first_name, phone_number: r.phone_number, email: r.email },
-  }));
+  if (!rows[0]) return null;
+  return JSON.parse(rows[0].content);
 }
 
-export type NetworkShortlistDecision = { event_id: string; candidate_id: string; classification: MatchNudgeReplyClassification };
+export type TeaseReplyClassification = "interested" | "not_interested" | "unrelated";
 
-// One classification pass over the whole pending shortlist at once — a
-// reply might name one person, several, or none; anyone not clearly
-// addressed stays pending rather than being silently assumed one way or
-// the other.
-//
-// Confirmed live, 2026-09-07: the same real candidate can show up as TWO
-// pending entries under different synthetic event_ids — their own edge
-// from this person's shortlist sweep, plus a separate edge created when
-// the candidate's OWN shortlist nudge led to a direct ask back to this
-// person. A prompt built from the raw (possibly duplicate-name) pending
-// list gave the classifier an unparseable "Royce, Jacqueline, Royce" and
-// it just gave up on both Royce entries. Deduping to one prompt line per
-// distinct person, then fanning the resulting decision back out to every
-// event_id that names them, fixes both the prompt and the result.
-export async function classifyNetworkShortlistReply(
-  replyText: string,
-  pending: PendingNetworkNudge[],
-  recentConversation?: string,
-): Promise<NetworkShortlistDecision[]> {
-  if (!pending.length) return [];
-  const distinctCandidates = Array.from(new Map(pending.map((p) => [p.candidate.user_id, p.candidate])).values());
+export async function classifyNetworkTeaseReply(replyText: string, recentConversation?: string): Promise<TeaseReplyClassification> {
   try {
-    const names = distinctCandidates.map((c) => c.first_name).join(", ");
     const { text: raw } = await generateText({
       model: anthropic("claude-haiku-4-5-20251001"),
-      experimental_telemetry: { isEnabled: true, functionId: "networkIntroNudge.classifyShortlistReply" },
-      prompt: `Co recently texted this person a shortlist of people worth meeting: ${names}. This does NOT mean every message from them now is answering that — if the recent conversation shows they're clearly responding to something else, none of these apply.
+      experimental_telemetry: { isEnabled: true, functionId: "networkIntroNudge.classifyTeaseReply" },
+      prompt: `Co just texted this person that someone in the network crossed its mind for them, without saying who, and asked if they'd like to hear who. This does NOT mean every message from them now is a response to that — if the recent conversation shows they're clearly talking about something else, it's unrelated.
 ${recentConversation ? `\nRecent conversation, in order:\n${recentConversation}\n` : ""}
 Their reply: "${replyText}"
 
-For EACH name in the shortlist (${names}), classify their response to that specific person as one of: "interested", "not_interested", or "unrelated" (they didn't actually address this specific person one way or the other — leave it pending, don't guess).
+Classify as ONE of:
+- "interested" — they want to hear who (e.g. "sure", "yeah who", "go on")
+- "not_interested" — they're passing
+- "unrelated" — normal conversation, not answering this
 
-Return ONLY valid JSON, no preamble: {"Name1": "interested|not_interested|unrelated", "Name2": "..."}`,
+Return ONLY the classification, nothing else.`,
     });
-    const clean = raw.replace(/```json|```/g, "").trim();
-    const parsed = JSON.parse(clean) as Record<string, string>;
-    const decisions: NetworkShortlistDecision[] = [];
-    for (const candidate of distinctCandidates) {
-      const cls = parsed[candidate.first_name];
-      if (cls !== "interested" && cls !== "not_interested") continue;
-      for (const p of pending.filter((p) => p.candidate.user_id === candidate.user_id)) {
-        decisions.push({ event_id: p.event_id, candidate_id: candidate.user_id, classification: cls });
-      }
-    }
-    return decisions;
+    const cls = raw.trim().toLowerCase().replace(/^[`"']+|[`"']+$/g, "");
+    return cls === "interested" || cls === "not_interested" ? cls : "unrelated";
   } catch (err: any) {
-    console.error("classifyNetworkShortlistReply: failed (non-fatal, treating as no decisions):", err?.message ?? err);
-    return [];
+    console.error("classifyNetworkTeaseReply: failed (non-fatal, treating as unrelated):", err?.message ?? err);
+    return "unrelated";
   }
 }
 
-export async function handleNetworkShortlistReply(
-  decisions: NetworkShortlistDecision[],
-  pending: PendingNetworkNudge[],
-  person: MatchNudgeCandidate,
-): Promise<void> {
-  const handledCandidates = new Set<string>();
-  for (const decision of decisions) {
-    if (handledCandidates.has(decision.candidate_id)) continue;
-    const matches = pending.filter((p) => p.candidate.user_id === decision.candidate_id);
-    if (!matches.length) continue;
-    handledCandidates.add(decision.candidate_id);
+async function stashIntroOfferPending(personId: string, candidate: NetworkCandidate, askId: string | null): Promise<void> {
+  await pool
+    .query(`INSERT INTO co_memories (user_id, memory_type, content) VALUES ($1, 'network_intro_offer_pending', $2)`, [
+      personId,
+      JSON.stringify({ askId, candidate }),
+    ])
+    .catch((err: any) => console.error("stashIntroOfferPending: write failed (non-fatal):", err?.message ?? err));
+}
 
-    // Resolve through whichever event_id the OTHER person already answered
-    // on, so this actually closes an existing loop instead of opening a
-    // redundant second thread for the same real pair; fall back to
-    // whichever entry is pending first if neither side has answered yet.
-    let authoritative = matches[0];
-    for (const m of matches) {
-      if (await hasReciprocalOptIn(m.event_id, person.user_id, decision.candidate_id)) {
-        authoritative = m;
-        break;
-      }
-    }
+// Resolves a reply to the tease — called from routes/sendblue.ts. On
+// "interested", reveals who it is AND asks the actual intro question in
+// the same message (no third round trip): "It's Celine — [reason]. Want
+// me to see if she's open to it too?"
+export async function resolveNetworkTeaseReply(
+  userId: string,
+  firstName: string,
+  phoneNumber: string,
+  pending: PendingNetworkTease,
+  classification: TeaseReplyClassification,
+): Promise<string | null> {
+  if (classification === "unrelated") return null;
 
-    await handleMatchNudgeReply(
-      authoritative.event_id,
-      "a real connection Co found",
-      decision.classification,
-      person,
-      authoritative.candidate,
-    );
+  await pool
+    .query(`INSERT INTO co_memories (user_id, memory_type, content) VALUES ($1, 'network_offer_resolved', $2)`, [
+      userId,
+      classification,
+    ])
+    .catch((err: any) => console.error("resolveNetworkTeaseReply: resolved-write failed (non-fatal):", err?.message ?? err));
 
-    // Any OTHER pending event_id for this same real candidate is now
-    // redundant — record the same answer there too so it stops showing as
-    // pending, without a second round of asks/messages.
-    for (const m of matches) {
-      if (m.event_id === authoritative.event_id) continue;
-      await recordOptIn(
-        m.event_id,
-        person.user_id,
-        person.first_name,
-        decision.candidate_id,
-        m.candidate.first_name,
-        decision.classification === "interested" ? "interested" : "declined",
-      ).catch((err: any) => console.error("handleNetworkShortlistReply: redundant opt-in record failed (non-fatal):", err?.message ?? err));
+  if (classification === "not_interested") {
+    // Passing on hearing who it is at all is treated as a decline on the
+    // pair itself — otherwise the same candidate would just resurface from
+    // the backlog again next cycle.
+    const [a, b] = canonicalPair(userId, pending.candidate.candidate_id);
+    await pool
+      .query(
+        `INSERT INTO network_introductions (person_a_id, person_b_id, status, match_reason, ask_id)
+         VALUES ($1, $2, 'declined', $3, $4)
+         ON CONFLICT (person_a_id, person_b_id) DO NOTHING`,
+        [a, b, pending.candidate.match_reason, pending.askId],
+      )
+      .catch((err: any) => console.error("resolveNetworkTeaseReply: decline write failed (non-fatal):", err?.message ?? err));
+    return `\nThey just passed on even hearing who it was (internal only, never say the name back to them). Acknowledge lightly, no pressure, don't explain further.`;
+  }
+
+  let message: string;
+  try {
+    const { text } = await generateText({
+      model: anthropic("claude-haiku-4-5-20251001"),
+      experimental_telemetry: { isEnabled: true, functionId: "networkIntroNudge.reveal.draft" },
+      prompt: `You are Co, texting ${firstName}. You just told them someone in the network crossed your mind, and they said yes, they want to hear who. Draft a short, warm text (2-3 sentences, no exclamation points, no em dashes) naming ${pending.candidate.first_name} and explaining in your own words why they're worth meeting: ${pending.candidate.match_reason}. End by asking if they'd like you to see if ${pending.candidate.first_name} is open to it too. Return ONLY the message text.`,
+    });
+    message = cleanCoMessage(text.trim());
+  } catch (err: any) {
+    console.error("resolveNetworkTeaseReply: reveal draft failed (non-fatal):", err?.message ?? err);
+    return null;
+  }
+
+  try {
+    await sendblue.messages.send({ number: phoneNumber, content: message, from_number: process.env.SENDBLUE_PHONE_NUMBER! });
+  } catch (err: any) {
+    console.error("resolveNetworkTeaseReply: reveal send failed (non-fatal):", err?.message ?? err);
+    return null;
+  }
+  await writeMemory(userId, "text_exchange", `Co replied: ${message}`);
+  await stashIntroOfferPending(userId, pending.candidate, pending.askId);
+
+  return `\nThey just said yes to hearing who it was — you've already sent the reveal separately (naming ${pending.candidate.first_name} and asking if they want an intro). Acknowledge briefly that you've got it, don't repeat the name or reason again.`;
+}
+
+export type PendingNetworkIntroOffer = { askId: string | null; candidate: NetworkCandidate };
+
+export async function findPendingNetworkIntroOffer(userId: string): Promise<PendingNetworkIntroOffer | null> {
+  const { rows } = await pool.query(
+    `SELECT p.id, p.content FROM co_memories p
+     WHERE p.user_id = $1 AND p.memory_type = 'network_intro_offer_pending'
+       AND p.created_at > NOW() - ($2 || ' days')::interval
+       AND NOT EXISTS (
+         SELECT 1 FROM network_introductions ni
+         WHERE (ni.person_a_id = $1 OR ni.person_b_id = $1)
+           AND ni.created_at > p.created_at
+       )
+     ORDER BY p.created_at DESC LIMIT 1`,
+    [userId, NETWORK_OFFER_EXPIRY_DAYS],
+  );
+  if (!rows[0]) return null;
+  return JSON.parse(rows[0].content);
+}
+
+export async function classifyNetworkIntroReply(
+  replyText: string,
+  candidateFirstName: string,
+  recentConversation?: string,
+): Promise<TeaseReplyClassification> {
+  try {
+    const { text: raw } = await generateText({
+      model: anthropic("claude-haiku-4-5-20251001"),
+      experimental_telemetry: { isEnabled: true, functionId: "networkIntroNudge.classifyIntroReply" },
+      prompt: `Co is waiting to hear whether this person wants an actual introduction to ${candidateFirstName}. This does NOT mean every message from them now is answering that — if the recent conversation shows they're clearly talking about something else, it's unrelated.
+${recentConversation ? `\nRecent conversation, in order:\n${recentConversation}\n` : ""}
+Their reply: "${replyText}"
+
+Classify their response about ${candidateFirstName} specifically as ONE of: "interested", "not_interested", or "unrelated" (they didn't actually address this one way or the other).
+
+Return ONLY the classification, nothing else.`,
+    });
+    const cls = raw.trim().toLowerCase().replace(/^[`"']+|[`"']+$/g, "");
+    return cls === "interested" || cls === "not_interested" ? cls : "unrelated";
+  } catch (err: any) {
+    console.error("classifyNetworkIntroReply: failed (non-fatal, treating as unrelated):", err?.message ?? err);
+    return "unrelated";
+  }
+}
+
+async function sendNetworkIntroEmail(a: MatchNudgeCandidate, b: MatchNudgeCandidate, matchReason: string): Promise<void> {
+  const subject = `Introducing ${a.first_name} and ${b.first_name}`;
+  const html = `<p>Hi both,</p><p>${matchReason}</p><p>Figured you two should actually meet — consider this your intro, take it from here.</p><p>— Co</p>`;
+  if (!ALLOW_REAL_SENDS) {
+    console.log(`[sendNetworkIntroEmail stub, ${process.env.NODE_ENV ?? "no NODE_ENV"}] to ${a.email}, ${b.email}: ${subject}`);
+  } else {
+    try {
+      const resend = new Resend(process.env.RESEND_API_KEY);
+      // Co CC'd (Royce, 2026-09-07: "Co would need to be the driver of the
+      // email") — visibly present on the thread so a reply-all naturally
+      // includes it, matching the group-chat design's spirit. No reply
+      // parsing built for this — Resend has no inbound capability at all,
+      // and email has no natural "@-mention" convention the way a group
+      // chat does, so Co doesn't act on anything that comes back here; the
+      // real outcome signal stays the existing proactive SMS check-in.
+      await resend.emails.send({ from: "Co <hello@copatible.com>", to: [a.email, b.email], cc: ["hello@copatible.com"], subject, html });
+    } catch (err: any) {
+      console.error("sendNetworkIntroEmail: send failed (non-fatal):", err?.message ?? err);
+      return;
     }
   }
+  await writeMemory(a.user_id, "event_intro_email_sent", `Sent a network intro email connecting ${a.first_name} and ${b.first_name}: ${matchReason}`);
+}
+
+async function askCandidateDirectly(candidate: MatchNudgeCandidate, asker: MatchNudgeCandidate, matchReason: string, askId: string | null): Promise<void> {
+  let message: string;
+  try {
+    const { text } = await generateText({
+      model: anthropic("claude-haiku-4-5-20251001"),
+      experimental_telemetry: { isEnabled: true, functionId: "networkIntroNudge.directAsk.draft" },
+      prompt: `You are Co, texting ${candidate.first_name}. ${asker.first_name} would like to be introduced — you're both in Co's network. Draft a short, warm text (1-2 sentences, no exclamation points, no em dashes) letting ${candidate.first_name} know and asking if they'd be open to it too. Low-pressure, genuinely a question. Return ONLY the message text.`,
+    });
+    message = cleanCoMessage(text.trim());
+  } catch (err: any) {
+    console.error("askCandidateDirectly: draft failed (non-fatal):", err?.message ?? err);
+    return;
+  }
+  try {
+    await sendblue.messages.send({ number: candidate.phone_number, content: message, from_number: process.env.SENDBLUE_PHONE_NUMBER! });
+  } catch (err: any) {
+    console.error("askCandidateDirectly: send failed (non-fatal):", err?.message ?? err);
+    return;
+  }
+  await writeMemory(candidate.user_id, "text_exchange", `Co replied: ${message}`);
+  await stashIntroOfferPending(
+    candidate.user_id,
+    {
+      edge_id: "",
+      candidate_id: asker.user_id,
+      first_name: asker.first_name,
+      phone_number: asker.phone_number,
+      email: asker.email,
+      match_score: 0,
+      match_reason: matchReason,
+    },
+    askId,
+  );
+}
+
+// Shared resolution for BOTH directions of the intro question — the
+// original asker replying to their own reveal, and a candidate replying to
+// a direct ask — since once revealed, "do you want to meet this named
+// person" resolves identically either way.
+export async function resolveNetworkIntroReply(
+  person: MatchNudgeCandidate,
+  pending: PendingNetworkIntroOffer,
+  classification: TeaseReplyClassification,
+): Promise<string | null> {
+  if (classification === "unrelated") return null;
+
+  const candidateId = pending.candidate.candidate_id;
+  const [aId, bId] = canonicalPair(person.user_id, candidateId);
+  const isPersonA = person.user_id === aId;
+  const interestedCol = isPersonA ? "a_interested_at" : "b_interested_at";
+  const otherInterestedCol = isPersonA ? "b_interested_at" : "a_interested_at";
+  const initialStatus = isPersonA ? "a_interested" : "b_interested";
+
+  if (classification === "not_interested") {
+    await pool
+      .query(
+        `INSERT INTO network_introductions (person_a_id, person_b_id, status, match_reason, ask_id)
+         VALUES ($1, $2, 'declined', $3, $4)
+         ON CONFLICT (person_a_id, person_b_id) DO UPDATE SET status = 'declined'`,
+        [aId, bId, pending.candidate.match_reason, pending.askId],
+      )
+      .catch((err: any) => console.error("resolveNetworkIntroReply: decline write failed (non-fatal):", err?.message ?? err));
+    return `\nThey just passed on being connected with ${pending.candidate.first_name} (internal only, never say this name back to them as a pressure tactic). Acknowledge lightly, no pressure, don't explain further.`;
+  }
+
+  const { rows } = await pool.query(
+    `INSERT INTO network_introductions (person_a_id, person_b_id, status, match_reason, ask_id, ${interestedCol})
+     VALUES ($1, $2, $3, $4, $5, NOW())
+     ON CONFLICT (person_a_id, person_b_id) DO UPDATE SET
+       ${interestedCol} = NOW(),
+       status = CASE WHEN network_introductions.${otherInterestedCol} IS NOT NULL THEN 'both_interested' ELSE $3 END
+     RETURNING status, ${otherInterestedCol} IS NOT NULL AS both_interested`,
+    [aId, bId, initialStatus, pending.candidate.match_reason, pending.askId],
+  );
+  const bothInterested = rows[0]?.both_interested === true;
+
+  if (bothInterested) {
+    await pool
+      .query(`UPDATE network_introductions SET status = 'introduced', introduced_at = NOW() WHERE person_a_id = $1 AND person_b_id = $2`, [aId, bId])
+      .catch((err: any) => console.error("resolveNetworkIntroReply: introduced-mark failed (non-fatal):", err?.message ?? err));
+    const candidateInfo: MatchNudgeCandidate = {
+      user_id: pending.candidate.candidate_id,
+      first_name: pending.candidate.first_name,
+      phone_number: pending.candidate.phone_number,
+      email: pending.candidate.email,
+    };
+    await sendNetworkIntroEmail(person, candidateInfo, pending.candidate.match_reason);
+    return `\nThey just said yes to being connected with ${pending.candidate.first_name}, and ${pending.candidate.first_name} had already said yes too — you've already sent a real intro email to both of them. Acknowledge warmly and briefly, don't repeat the email content back.`;
+  }
+
+  const candidateInfo: MatchNudgeCandidate = {
+    user_id: pending.candidate.candidate_id,
+    first_name: pending.candidate.first_name,
+    phone_number: pending.candidate.phone_number,
+    email: pending.candidate.email,
+  };
+  await askCandidateDirectly(candidateInfo, person, pending.candidate.match_reason, pending.askId);
+  return `\nThey just said yes to being connected with ${pending.candidate.first_name}. Acknowledge it warmly and briefly — you're now waiting to hear back from ${pending.candidate.first_name}, don't promise a specific thing is happening yet.`;
 }

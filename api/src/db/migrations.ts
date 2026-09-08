@@ -136,7 +136,8 @@ export function runMigrations() {
           'event_change_notification','event_offer_pending','event_offer_resolved',
           'recommendation_outcome','companion_checkin','event_checkin_outcome',
           'event_guest_match_nudge','event_guest_match_optin','event_intro_group_created',
-          'event_intro_email_sent'
+          'event_intro_email_sent','network_offer_pending','network_offer_resolved',
+          'network_intro_offer_pending'
         ]));
     `)
     .catch((err: Error) =>
@@ -782,6 +783,54 @@ export function runMigrations() {
       )
     `)
     .catch((err: Error) => console.error("event_backlogs table init failed:", err));
+
+  // Network intro shortlist redesign (Royce, 2026-09-07: "how would you
+  // implement the networking recommendation... if you just didn't get fed
+  // this information but only know about my product purpose" — the answer
+  // was two changes from the original per-event_id-hack version:
+  // (1) one candidate at a time via a real backlog, same tease/reveal
+  // pattern as event_backlogs above, not a bundled 1-5-name shortlist —
+  // "Oh I was thinking about you" is a friend mentioning ONE thing; (2) a
+  // real canonical-pair relationship table instead of a synthetic
+  // "network:<edge_id>" event_id reused from event_guest_match_nudges —
+  // that hack was the direct cause of a real bug (the same candidate
+  // showing up as two separate pending nudges under two different
+  // synthetic ids, once per relevance direction).
+  pool
+    .query(`
+      CREATE TABLE IF NOT EXISTS network_backlogs (
+        user_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+        ask_id TEXT NOT NULL,
+        items JSONB NOT NULL DEFAULT '[]',
+        updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+        PRIMARY KEY (user_id, ask_id)
+      )
+    `)
+    .catch((err: Error) => console.error("network_backlogs table init failed:", err));
+
+  // One row per real, undirected relationship between two people — never
+  // two rows for the same pair, regardless of which direction (or which
+  // of their asks) first surfaced it. person_a_id < person_b_id is
+  // enforced so the pair is always canonicalized the same way on insert,
+  // no matter which side of the relationship triggered it.
+  pool
+    .query(`
+      CREATE TABLE IF NOT EXISTS network_introductions (
+        person_a_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+        person_b_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+        status TEXT NOT NULL DEFAULT 'suggested'
+          CHECK (status IN ('suggested','a_interested','b_interested','both_interested','declined','introduced')),
+        match_reason TEXT NOT NULL,
+        ask_id TEXT,
+        a_interested_at TIMESTAMPTZ,
+        b_interested_at TIMESTAMPTZ,
+        introduced_at TIMESTAMPTZ,
+        created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+        PRIMARY KEY (person_a_id, person_b_id),
+        CHECK (person_a_id < person_b_id)
+      )
+    `)
+    .catch((err: Error) => console.error("network_introductions table init failed:", err));
 
   // Dedicated table + pgvector column, same pattern as surfaced_events above
   // (Royce, 2026-08-30 code review fix) — alreadyOfferedTier3 in

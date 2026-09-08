@@ -8,6 +8,7 @@ import sendblue from "../services/sendblue.js";
 import { sweepAllOpenAsks } from "../services/relevance.js";
 import { runAskCheckinAgent } from "../agent/askCheckin.js";
 import { attemptEventSurfacing } from "../services/eventSurfacingSweep.js";
+import { attemptNetworkSurfacing } from "../services/networkIntroNudge.js";
 import { triggerCallForUser } from "../services/callTrigger.js";
 import { sendDueFollowUps } from "./postCallFollowUp.js";
 import { placeDueCalls, sendDueReminders } from "./scheduledCall.js";
@@ -397,6 +398,19 @@ export function registerJobs(io: Server) {
               : `UPDATE ask_checkins SET last_attempted_at = NOW() WHERE id = $1`,
             [row.id],
           );
+
+          // Network intro shortlist redesign (Royce, 2026-09-07) — same
+          // per-ask rotation as event surfacing above, right alongside it.
+          // Its own backlog (network_backlogs) paces "one candidate at a
+          // time" independently of ask_checkins' cadence columns; the
+          // shared tryClaimProactiveNudge cap (inside attemptNetworkSurfacing)
+          // is what actually prevents this from stacking a second text on
+          // top of whatever attemptEventSurfacing just sent above.
+          try {
+            await attemptNetworkSurfacing(row.user_id, row.first_name, row.phone_number, row.id);
+          } catch (err: any) {
+            console.error(`Network surfacing sweep failed for ${row.user_id}:`, err?.message ?? err);
+          }
         }
       });
     } catch (error) {
