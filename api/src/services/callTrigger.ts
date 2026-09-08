@@ -22,9 +22,19 @@ export type TriggerCallResult =
   | { success: true; call_sid: string }
   | { success: false; error: string };
 
+// The only values users.call_status ever holds while a call is genuinely
+// still ringing/connected — 'initiated' (set right below, at dial time) and
+// 'ringing'/'in-progress' (Twilio's own /call-status webhook, co.ts). Every
+// other value — including 'processing', which belongs to a DIFFERENT state
+// machine entirely (chat_ended's post-call extraction idempotency claim,
+// also in co.ts) — means no live call is in progress. Conflating the two
+// would wrongly block a new call for minutes after a PREVIOUS call already
+// ended, just because its extraction pipeline was still running.
+const LIVE_CALL_STATUSES = ["initiated", "ringing", "in-progress"];
+
 export async function triggerCallForUser(userId: string, io: IOServer | null): Promise<TriggerCallResult> {
   const userResult = await pool.query(
-    `SELECT u.first_name, u.phone_number, u.subscription_status
+    `SELECT u.first_name, u.phone_number, u.subscription_status, u.call_status
      FROM users u
      WHERE u.id = $1`,
     [userId],
@@ -34,6 +44,14 @@ export async function triggerCallForUser(userId: string, io: IOServer | null): P
 
   if (process.env.NODE_ENV === "production" && user.subscription_status !== "active") {
     return { success: false, error: "User does not have an active subscription." };
+  }
+
+  // Concurrent-call guard (Royce, 2026-09-07: "would that affect the
+  // concurrent calls?" — confirmed live via code trace that nothing
+  // previously stopped a second real Twilio call from being placed to
+  // someone already mid-call).
+  if (LIVE_CALL_STATUSES.includes(user.call_status)) {
+    return { success: false, error: "A call is already in progress for this user." };
   }
 
   const statusCallbackUrl = `${process.env.API_URL}/co/call-status`;
@@ -81,7 +99,9 @@ export async function triggerCallForUser(userId: string, io: IOServer | null): P
   // Start the Hume handshake now, during ring time, instead of waiting for
   // the Twilio media stream's "start" event after pickup — see
   // mediaStreamBridge.ts's prewarmHumeConnection for why that pause existed.
-  prewarmHumeConnection(userId);
+  // Passes this call's real CallSid so two overlapping calls to the same
+  // user each get their own prewarmed connection instead of colliding.
+  prewarmHumeConnection(userId, call.sid);
 
   const attemptContent = `Co initiated call to ${user.first_name} — call_sid: ${call.sid}`;
   const attemptMem = await pool.query(

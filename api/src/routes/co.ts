@@ -519,6 +519,7 @@ router.post(
       }
 
       const from = req.body.From as string | undefined;
+      const callSid = req.body.CallSid as string | undefined;
       const result = from
         ? await pool.query(`SELECT id FROM users WHERE phone_number = $1`, [from])
         : null;
@@ -534,8 +535,10 @@ router.post(
       // Start the Hume handshake now, while this TwiML response is still in
       // flight back to Twilio and its media stream is connecting — instead
       // of waiting for the stream's "start" event after that's already
-      // done. See mediaStreamBridge.ts's prewarmHumeConnection.
-      prewarmHumeConnection(userId);
+      // done. See mediaStreamBridge.ts's prewarmHumeConnection. Twilio's
+      // Voice webhook always includes CallSid — used to key the prewarm so
+      // it can't collide with a concurrent outbound call to the same user.
+      if (callSid) prewarmHumeConnection(userId, callSid);
 
       const mediaStreamUrl = `${process.env.API_URL!.replace(/^http/, "ws")}/media-stream`;
       const stream = twiml.connect().stream({ url: mediaStreamUrl });

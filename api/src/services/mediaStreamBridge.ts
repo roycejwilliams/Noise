@@ -58,10 +58,16 @@ type HumeConnectionHandle = {
   evictionTimer: ReturnType<typeof setTimeout> | null;
 };
 
-// Pre-warmed connections, keyed by userId — see prewarmHumeConnection.
-// Known limitation: two simultaneous calls to the same user would collide
-// (the second prewarm is a no-op, the first's connection gets adopted by
-// whichever stream starts first) — not worth solving given call volume.
+// Pre-warmed connections, keyed by Twilio's CallSid — not userId. Fixed
+// 2026-09-07 (Royce, "would that affect the concurrent calls?" — confirmed
+// live via code trace): keying by bare userId meant two overlapping calls to
+// the same person collided — the second prewarm was a no-op, and whichever
+// Twilio stream attached first adopted the wrong call's Hume session,
+// regardless of which physical call it actually belonged to. Both call sites
+// (callTrigger.ts, co.ts's /incoming-call) already have a real CallSid before
+// they ever call prewarmHumeConnection, so keying on it instead makes two
+// concurrent calls to the same user get two independent, correctly-attached
+// connections.
 const pendingConnections = new Map<string, HumeConnectionHandle>();
 
 // Live (already-claimed) connections, keyed by Twilio's CallSid — separate
@@ -93,7 +99,7 @@ function closeHandle(handle: HumeConnectionHandle) {
   if (handle.closed) return;
   handle.closed = true;
   if (handle.evictionTimer) clearTimeout(handle.evictionTimer);
-  if (pendingConnections.get(handle.userId) === handle) pendingConnections.delete(handle.userId);
+  if (handle.callSid && pendingConnections.get(handle.callSid) === handle) pendingConnections.delete(handle.callSid);
   if (handle.callSid && callsBySid.get(handle.callSid) === handle) callsBySid.delete(handle.callSid);
   try {
     handle.humeSocket?.close();
@@ -113,14 +119,14 @@ function closeHandle(handle: HumeConnectionHandle) {
 // is still ringing / the inbound TwiML round-trip is happening) or, as a
 // fallback, on-demand from bridgeTwilioMediaStream's "start" handler if no
 // prewarmed connection was found for that user.
-function createHumeConnection(userId: string): HumeConnectionHandle {
+function createHumeConnection(userId: string, callSid: string | null = null): HumeConnectionHandle {
   const handle: HumeConnectionHandle = {
     userId,
     humeSocket: null,
     closed: false,
     twilioWs: null,
     streamSid: null,
-    callSid: null,
+    callSid,
     receivedUserMessage: false,
     pendingInbound: [],
     pendingOutbound: [],
@@ -217,32 +223,35 @@ function createHumeConnection(userId: string): HumeConnectionHandle {
   return handle;
 }
 
-// Called from callTrigger.ts (right after placing an outbound call) and
-// co.ts's /incoming-call (right after resolving the caller) — as early as
+// Called from callTrigger.ts (right after placing an outbound call, with
+// that call's real CallSid) and co.ts's /incoming-call (right after
+// resolving the caller, with Twilio's inbound CallSid) — as early as
 // possible, so the DB lookup + Hume handshake happen during ring time
 // instead of only starting after the person has already picked up. No-ops
-// if a connection is already pending for this user.
-export function prewarmHumeConnection(userId: string): void {
-  if (pendingConnections.has(userId)) return;
-  const handle = createHumeConnection(userId);
+// if a connection is already pending for this exact call.
+export function prewarmHumeConnection(userId: string, callSid: string): void {
+  if (pendingConnections.has(callSid)) return;
+  const handle = createHumeConnection(userId, callSid);
   handle.evictionTimer = setTimeout(() => closeHandle(handle), PREWARM_CLAIM_TIMEOUT_MS);
-  pendingConnections.set(userId, handle);
+  pendingConnections.set(callSid, handle);
 }
 
 export function bridgeTwilioMediaStream(twilioWs: WebSocket): void {
   let handle: HumeConnectionHandle | null = null;
 
   function attach(userId: string, streamSid: string, callSid: string | null) {
-    const prewarmed = pendingConnections.get(userId);
+    const prewarmed = callSid ? pendingConnections.get(callSid) : undefined;
     if (prewarmed && !prewarmed.closed) {
-      pendingConnections.delete(userId);
+      pendingConnections.delete(callSid!);
       if (prewarmed.evictionTimer) clearTimeout(prewarmed.evictionTimer);
       handle = prewarmed;
     } else {
-      // Fallback — no usable prewarmed connection found (shouldn't normally
-      // happen since both call sites prewarm, but keeps this working on its
-      // own if that's ever not the case).
-      handle = createHumeConnection(userId);
+      // Fallback — no usable prewarmed connection found for this exact
+      // CallSid (shouldn't normally happen since both call sites prewarm
+      // with the real CallSid before this attaches, but keeps this working
+      // on its own if that's ever not the case, or if callSid was somehow
+      // absent from the "start" event).
+      handle = createHumeConnection(userId, callSid);
     }
     handle.twilioWs = twilioWs;
     handle.streamSid = streamSid;
