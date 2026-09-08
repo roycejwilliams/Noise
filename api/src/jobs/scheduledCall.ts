@@ -3,6 +3,7 @@ import { generateText } from "ai";
 import pool from "../db/db.js";
 import sendblue from "../services/sendblue.js";
 import { triggerCallForUser } from "../services/callTrigger.js";
+import { writeMemory } from "../services/memory.js";
 
 // Places calls booked via the schedule-a-call flow in sendblue.ts
 // (scheduled_calls, distinct from the existing "call me now" explicit_request
@@ -56,7 +57,7 @@ export async function placeDueCalls(io: import("socket.io").Server | null): Prom
 // window itself.
 export async function sendDueReminders(): Promise<void> {
   const due = await pool.query(
-    `SELECT sc.id, u.first_name, u.phone_number
+    `SELECT sc.id, u.id AS user_id, u.first_name, u.phone_number
      FROM scheduled_calls sc
      JOIN users u ON u.id = sc.user_id
      WHERE sc.status = 'pending'
@@ -106,6 +107,17 @@ export async function sendDueReminders(): Promise<void> {
       });
     } catch (err: any) {
       console.error(`scheduledCall: reminder send failed for ${row.id} (non-fatal):`, err?.message ?? err);
+      continue;
     }
+
+    // Confirmed live, 2026-09-08: without this, a reminder sent here was
+    // completely invisible to Co's own reply-generation (recentConversation
+    // only reads text_exchange rows) — asked "why are you calling me in 15
+    // mins?" moments later, Co had no memory of having just said that and
+    // flatly denied it, when the scheduling itself had actually worked
+    // correctly the whole time.
+    await writeMemory(row.user_id, "text_exchange", `Co replied: ${reminderMessage}`).catch((err: any) =>
+      console.error(`scheduledCall: reminder text_exchange log failed for ${row.id} (non-fatal):`, err?.message ?? err),
+    );
   }
 }
