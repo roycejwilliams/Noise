@@ -19,7 +19,7 @@ import {
   storeTranscriptMemory,
 } from "../services/profileExtraction.js";
 import { generateRecommendation } from "../services/recommendation.js";
-import { buildContextSummary } from "../services/callContext.js";
+import { buildContextSummary, summarizeCallForTextContext } from "../services/callContext.js";
 import sendblue from "../services/sendblue.js";
 import { generateHumeVoiceLine, generateVoiceNote } from "../services/voiceNote.js";
 import { triggerCallForUser } from "../services/callTrigger.js";
@@ -844,6 +844,9 @@ router.post(
         // Step 7 — Ambient intent capture (non-blocking — runs in background)
         captureIntent(user_id, transcript).catch(() => {});
         extractPlannedEventMention(user_id, transcript).catch(() => {});
+        // Bridges this call into the text side's own conversation log (Royce,
+        // 2026-09-07) — see summarizeCallForTextContext for the gap this closes.
+        summarizeCallForTextContext(user_id, transcript).catch(() => {});
 
         // The recap exists now (transcript + extraction persisted) — safe to
         // mark completed. Everything after this point (scheduling the
@@ -986,6 +989,7 @@ router.post(
       // Ambient intent capture (non-blocking)
       captureIntent(String(user_id), String(transcript)).catch(() => {});
       extractPlannedEventMention(String(user_id), String(transcript)).catch(() => {});
+      summarizeCallForTextContext(String(user_id), String(transcript)).catch(() => {});
 
       _io?.to(`user:${user_id}`).emit("co:profile_ready");
 

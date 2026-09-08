@@ -1,4 +1,7 @@
+import { generateText } from "ai";
+import { anthropic } from "@ai-sdk/anthropic";
 import pool from "../db/db.js";
+import { writeMemory } from "./memory.js";
 
 // Builds a compact summary of everything already known about a person —
 // from a prior call's extracted profile/intent AND recent text exchanges —
@@ -91,5 +94,37 @@ export async function buildContextSummary(userId: string): Promise<string> {
   } catch (err: any) {
     console.error("callContext: buildContextSummary failed (non-fatal, calling with no prior context):", err?.message ?? err);
     return "";
+  }
+}
+
+// The other direction of the same bridge — closes a real gap (Royce,
+// 2026-09-07: "anything overlapping that may cause confusion... between
+// voice and text?"): routes/sendblue.ts's recentConversation, read by every
+// text-reply classifier, only ever queries co_memories.text_exchange rows,
+// never call_transcript — and the only other channel-bridging mechanism is
+// memoryCompaction.ts's recap, which runs once a day at 4am. Without this, a
+// text reply arriving the SAME DAY as a call had zero visibility into what
+// was just discussed until the next day's recap. Written as its own
+// text_exchange row (not call_transcript) specifically so it's picked up by
+// that same existing query with no changes needed there. Best-effort,
+// call-ending pipeline continues regardless — matches storeProfile's own
+// non-blocking Step 7 siblings (captureIntent, extractPlannedEventMention).
+export async function summarizeCallForTextContext(userId: string, transcript: string): Promise<void> {
+  try {
+    const { text: raw } = await generateText({
+      model: anthropic("claude-haiku-4-5-20251001"),
+      experimental_telemetry: { isEnabled: true, functionId: "callContext.summarizeCallForText" },
+      prompt: `Summarize what was actually discussed in this phone call transcript, in 1-2 plain sentences, third person, as if briefing someone on what just happened. Ground it only in what's actually in the transcript — no invented detail, no therapy-speak.
+
+Transcript:
+"${transcript}"
+
+Return ONLY the summary, no preamble.`,
+    });
+    const summary = raw.trim();
+    if (!summary) return;
+    await writeMemory(userId, "text_exchange", `[Call] ${summary}`);
+  } catch (err: any) {
+    console.error("summarizeCallForTextContext: failed (non-fatal):", err?.message ?? err);
   }
 }
