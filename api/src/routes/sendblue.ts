@@ -56,7 +56,7 @@ import {
 import { findRealVenues } from "../services/venueLookup.js";
 import { runConversationReplyAgent, filterRelevantMemories, CALL_OFFER_EXPIRY_DAYS } from "../agent/conversationReply.js";
 import { triggerCallForUser } from "../services/callTrigger.js";
-import sendblue from "../services/sendblue.js";
+import sendblue, { cleanCoMessage } from "../services/sendblue.js";
 import { generateVoiceNote } from "../services/voiceNote.js";
 
 // Serializes webhook processing per phone number. Without this, two
@@ -222,7 +222,16 @@ async function sendCoReply(params: {
   message: string;
   asVoice: boolean;
 }): Promise<void> {
-  const { phone, message, asVoice } = params;
+  const { phone, asVoice } = params;
+  // Confirmed live, 2026-09-08 sweep: this, the actual send function behind
+  // the main conversational reply path (by far the highest-volume path in
+  // the app), never applied cleanCoMessage — despite a since-corrected
+  // comment elsewhere (conversationTools.ts) claiming it ran "inside
+  // sendCoReply's send call." git history confirms cleanCoMessage has never
+  // appeared in this file at all: not just the em dash/en dash cleanup, the
+  // LEAKED_METACOMMENTARY safety guard bundled into the same function never
+  // applied here either, on the single highest-traffic send path.
+  const message = cleanCoMessage(params.message);
 
   let audioUrl: string | null = null;
   if (asVoice) {

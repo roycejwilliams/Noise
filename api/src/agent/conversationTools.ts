@@ -58,7 +58,13 @@ export function createConversationTools(ctx: ConversationToolContext) {
           console.log(`[conversationReply dryRun] would reply to ${ctx.userId}: "${cleanCoMessage(message)}"`);
         } else {
           await ctx.sendCoReply({ phone: ctx.phoneNumber, message, asVoice: ctx.isVoice });
-          await writeMemory(ctx.userId, "text_exchange", `Co replied: ${message}`);
+          // Logs the cleaned text, not the raw draft (Royce, 2026-09-08
+          // sweep) — sendCoReply applies cleanCoMessage internally before
+          // the real send, so logging the raw `message` here meant
+          // recentConversation's own record of what Co said didn't always
+          // match what was actually delivered (an em dash the user never
+          // saw, since it was rewritten to a comma before sending).
+          await writeMemory(ctx.userId, "text_exchange", `Co replied: ${cleanCoMessage(message)}`);
         }
         state.sent = true;
         state.replyCount += 1;
