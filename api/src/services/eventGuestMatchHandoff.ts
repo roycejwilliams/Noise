@@ -323,7 +323,15 @@ export async function handleMatchNudgeReply(
   if (classification !== "interested") return;
 
   if (await hasReciprocalOptIn(eventId, person.user_id, candidate.user_id)) {
-    await askConnectionMethod(eventId, person, candidate);
+    // Skips the text/email choice and goes straight to email (Royce,
+    // 2026-09-07: "if we can't do group chat accurately... I don't want
+    // it"). Confirmed live: Sendblue's "Allow Inbound First" is locked on
+    // under the current plan, so createIntroGroup fails on any brand-new
+    // thread — offering "text" as a real choice when it silently can't
+    // deliver is worse than not offering it. askConnectionMethod/
+    // createIntroGroup stay in place, dormant, to re-enable once that
+    // plan restriction is resolved.
+    await sendIntroEmail(eventId, eventName, person, candidate);
   } else {
     await maybeAskCandidateDirectly(eventId, eventName, person.first_name, candidate, person);
   }
