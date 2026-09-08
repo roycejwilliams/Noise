@@ -99,7 +99,7 @@ export async function matchAndScoreEventMention(mentionId: string): Promise<void
   console.log(
     `eventMatching: mention ${mentionId} ("${mention.event_name_raw}") matched ${matches.length} other Co user(s) (event id: ${eventId}), scoring group`,
   );
-  await scoreMatchedGroup(eventId, mention.event_name_raw, matched);
+  await scoreMatchedGroup(eventId, mention.event_name_raw, matched, null);
 }
 
 // Called right after a real event gets surfaced/recommended to someone
@@ -138,5 +138,5 @@ export async function recordSurfacedEventAndMatch(
   );
   // Always the real Luma id here — this path only ever runs for a real,
   // surfaced Tier 1/2 event, never a self-report with no canonical id.
-  await scoreMatchedGroup(eventApiId, eventName, matched);
+  await scoreMatchedGroup(eventApiId, eventName, matched, null);
 }

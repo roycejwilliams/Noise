@@ -2,7 +2,7 @@ import { anthropic } from "@ai-sdk/anthropic";
 import { generateText } from "ai";
 import pool from "../db/db.js";
 import { runEventAskSolicitationAgent } from "../agent/eventAskSolicitation.js";
-import { getEventDetails, getEventGuestList, listCalendarEvents, type LumaGuest } from "./luma.js";
+import { getEventDetails, getEventGuestList, listCalendarEvents, type LumaGuest, type LumaEventDetail } from "./luma.js";
 import { getActiveSeekingAsk, scoreAgainstStatedAsk } from "./matching.js";
 import { detectAndScheduleCheckins } from "./eventCheckinFollowUp.js";
 import sendblue, { cleanCoMessage } from "./sendblue.js";
@@ -143,6 +143,38 @@ async function storeRanking(eventId: string, personId: string, ranked: RankedCan
 // what keeps that from becoming a false "you two should meet!" text).
 const MATCH_NUDGE_MIN_SCORE = 60;
 
+// Royce, 2026-09-07: "we want to facilitate the nudge as the event is
+// happening" — a match found days before the event started was firing
+// immediately, so by the time the person actually arrived the text (if they
+// even still remembered it) was already stale. Gated on the event's real
+// start_at/end_at (Luma always has these) — the same reliable-timestamp
+// pattern already used for the end-of-night check-in, not Luma's check-in
+// status, which has no API to ever set it at all.
+//
+// Known follow-on gap, not built here: a match found before start_at is
+// correctly withheld (not marked as nudged, so a later pass can still send
+// it), but nothing proactively wakes up right at start_at to retry it for an
+// event whose guest-list webhooks have gone quiet by then — it only actually
+// re-fires if some other real Luma webhook (a late registration, an update)
+// happens to arrive after start_at. Worth a dedicated retry pass if that
+// turns out to matter in practice; not added speculatively.
+//
+// "Diminishing value near the end" (Royce, 2026-09-07) — a match surfaced
+// with only a few minutes left in the event isn't actionable. Same
+// reasoning eventSurfacingSweep.ts's isShortNotice already uses for teases
+// on a same-day event, just the mirror case (too LATE, not too early).
+const MATCH_NUDGE_END_CUTOFF_MINUTES = 30;
+
+function withinNudgeWindow(startAt: string, endAt: string | null): boolean {
+  const now = Date.now();
+  if (now < new Date(startAt).getTime()) return false;
+  if (endAt) {
+    const cutoff = new Date(endAt).getTime() - MATCH_NUDGE_END_CUTOFF_MINUTES * 60 * 1000;
+    if (now > cutoff) return false;
+  }
+  return true;
+}
+
 async function wasAlreadyNudgedForMatch(eventId: string, personId: string): Promise<boolean> {
   const { rows } = await pool.query(
     `SELECT 1 FROM event_guest_match_nudges WHERE event_id = $1 AND person_id = $2`,
@@ -172,10 +204,15 @@ async function maybeSendMatchNudge(
   person: ScorableGuest,
   top: RankedCandidate,
   candidate: ScorableGuest,
+  eventTiming: { start_at: string; end_at: string | null } | null,
   opts: { dryRun?: boolean },
 ): Promise<boolean> {
   if (top.score < MATCH_NUDGE_MIN_SCORE) return false;
   if (await wasAlreadyNudgedForMatch(eventId, person.user_id)) return false;
+  // eventTiming is null for the non-Luma paths (eventMatching.ts's
+  // self-reported-event grouping) — no reliable start/end there to gate on,
+  // same as before this change.
+  if (eventTiming && !withinNudgeWindow(eventTiming.start_at, eventTiming.end_at)) return false;
 
   if (opts.dryRun) {
     console.log(
@@ -237,6 +274,7 @@ export async function scoreMatchedGroup(
   eventId: string,
   eventName: string,
   matched: ScorableGuest[],
+  eventTiming: { start_at: string; end_at: string | null } | null,
   opts: { dryRun?: boolean } = {},
 ): Promise<{ scoredCount: number; solicitedCount: number; matchedCount: number }> {
   if (matched.length < 2) {
@@ -298,7 +336,7 @@ export async function scoreMatchedGroup(
     const top = ranked[0];
     const topCandidate = top ? others.find((o) => o.user_id === top.candidate_id) : undefined;
     if (top && topCandidate) {
-      await maybeSendMatchNudge(eventId, eventName, person, top, topCandidate, opts).catch((err: any) =>
+      await maybeSendMatchNudge(eventId, eventName, person, top, topCandidate, eventTiming, opts).catch((err: any) =>
         console.error(`eventScoring: maybeSendMatchNudge failed for ${person.user_id} (non-fatal):`, err?.message ?? err),
       );
     }
@@ -321,9 +359,13 @@ export async function scoreMatchedGroup(
 // elsewhere in this file for exactly this reliability reason (see its own
 // comment in services/luma.ts) — so try that first and only fall back to
 // the list scan if it comes back empty.
-async function resolveEventName(eventId: string, providedName?: string): Promise<string> {
+async function resolveEventName(
+  eventId: string,
+  providedName?: string,
+  prefetchedDetails?: LumaEventDetail | null,
+): Promise<string> {
   if (providedName) return providedName;
-  const details = await getEventDetails(eventId).catch(() => null);
+  const details = prefetchedDetails !== undefined ? prefetchedDetails : await getEventDetails(eventId).catch(() => null);
   if (details?.name) return details.name;
   const events = await listCalendarEvents().catch(() => []);
   return events.find((e) => e.api_id === eventId)?.name ?? "the event";
@@ -346,11 +388,13 @@ export async function scoreGuestListForEvent(
     return { scoredCount: 0, solicitedCount: 0, matchedCount: 0 };
   }
 
-  const [guests, resolvedName] = await Promise.all([
+  const [guests, details] = await Promise.all([
     getEventGuestList(eventId),
-    resolveEventName(eventId, eventName),
+    getEventDetails(eventId).catch(() => null),
   ]);
+  const resolvedName = await resolveEventName(eventId, eventName, details);
   const matched = await matchGuestsToUsers(guests);
+  const eventTiming = details ? { start_at: details.start_at, end_at: details.end_at } : null;
 
   // End-of-night check-in (Notion V1 board row 8) — gated on registration
   // (matched, above) + the event's real end_at, not a Luma check-in signal
@@ -365,5 +409,5 @@ export async function scoreGuestListForEvent(
     console.error(`eventScoring: detectAndScheduleCheckins failed for ${eventId} (non-fatal):`, err?.message ?? err),
   );
 
-  return scoreMatchedGroup(eventId, resolvedName, matched, opts);
+  return scoreMatchedGroup(eventId, resolvedName, matched, eventTiming, opts);
 }

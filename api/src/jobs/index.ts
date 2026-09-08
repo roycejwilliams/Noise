@@ -9,6 +9,8 @@ import { sweepAllOpenAsks } from "../services/relevance.js";
 import { runAskCheckinAgent } from "../agent/askCheckin.js";
 import { attemptEventSurfacing } from "../services/eventSurfacingSweep.js";
 import { attemptNetworkSurfacing } from "../services/networkIntroNudge.js";
+import { scoreGuestListForEvent } from "../services/eventScoring.js";
+import { listCalendarEvents } from "../services/luma.js";
 import { triggerCallForUser } from "../services/callTrigger.js";
 import { sendDueFollowUps } from "./postCallFollowUp.js";
 import { placeDueCalls, sendDueReminders } from "./scheduledCall.js";
@@ -415,6 +417,39 @@ export function registerJobs(io: Server) {
       });
     } catch (error) {
       console.error("Event surfacing sweep cron error:", error);
+    }
+  });
+
+  // In-room match nudge retry (Royce, 2026-09-07: "we want to facilitate the
+  // nudge as the event is happening" + "add the periodic retry") —
+  // eventScoring.ts's maybeSendMatchNudge now withholds a match found before
+  // an event's real start_at instead of firing immediately, so it lands
+  // while the person is actually there instead of days early. That withheld
+  // match only naturally retries if some OTHER real Luma webhook (a late
+  // registration, an update) happens to fire after start_at — for an event
+  // whose registration traffic has gone quiet by the time it starts, nothing
+  // would otherwise ever re-check it. This re-runs the real scoring pass for
+  // any Co-calendar event that started in the last 20 minutes, a narrow
+  // window matching this cron's own 15-min cadence (not "poll for the whole
+  // event") — one retry shortly after start_at is all a withheld match
+  // needs; wasAlreadyNudgedForMatch already makes a repeat retry harmless.
+  cron.schedule("*/15 * * * *", async () => {
+    try {
+      const events = await listCalendarEvents();
+      const now = Date.now();
+      const justStarted = events.filter((e) => {
+        const startMs = new Date(e.start_at).getTime();
+        return startMs <= now && now - startMs <= 20 * 60 * 1000;
+      });
+      for (const event of justStarted) {
+        try {
+          await scoreGuestListForEvent(event.api_id, event.name);
+        } catch (err: any) {
+          console.error(`In-room match nudge retry failed for event ${event.api_id}:`, err?.message ?? err);
+        }
+      }
+    } catch (error) {
+      console.error("In-room match nudge retry cron error:", error);
     }
   });
 
