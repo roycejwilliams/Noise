@@ -12,18 +12,25 @@ export type LumaEvent = {
   start_at: string;
   end_at: string | null;
   city: string | null;
+  url: string | null;
 };
 
 // GET /v1/calendars/events/list — resolves which event_id to pull a guest
 // list for. Paginated; follows next_cursor until Luma reports has_more: false.
 //
-// city added 2026-08-30 (Royce: "city and the proximity to each user
-// matter") — getEventDetails() below already proves the underlying Luma
-// event object carries geo_address_info; this list endpoint just never
-// extracted it, leaving Tier 1 (tieredRecommendation.ts) ranking Co's own
-// events on name alone, with zero location signal, unlike Tier 2 (which
-// does have city from the discover feed). Same field, same fallback shape
-// as getEventDetails uses.
+// Two real field-name bugs found live, 2026-09-09 (Royce, confirmed via a
+// real event that got a wrong start time and location told to him, and no
+// link sent at all): this endpoint's raw event object uses `id`, not
+// `api_id` — a DIFFERENT field name than /v1/event/get (which genuinely
+// does use api_id, see getEventDetails below) — so event_api_id has been
+// undefined for every single event this function has ever returned, and
+// everything downstream keyed off it (Tier 1 recommendation dedup,
+// recordSurfacedEventAndMatch, the in-room match-nudge retry cron) has been
+// silently broken since it shipped. Second: city read `geo_address_info`,
+// the exact wrong field name already found and fixed in getEventDetails
+// below on 2026-08-30 — that fix was never carried over here. `url` is a
+// real field on the raw response (confirmed live) that was never captured
+// at all, which is why Tier 1 recommendations never had a real link to send.
 export async function listCalendarEvents(): Promise<LumaEvent[]> {
   const events: LumaEvent[] = [];
   let cursor: string | undefined;
@@ -40,11 +47,12 @@ export async function listCalendarEvents(): Promise<LumaEvent[]> {
     for (const entry of data.entries ?? []) {
       const event = entry.event ?? entry;
       events.push({
-        api_id: event.api_id,
+        api_id: event.id,
         name: event.name,
         start_at: event.start_at,
         end_at: event.end_at ?? null,
-        city: event.geo_address_info?.city ?? null,
+        city: event.geo_address_json?.city ?? null,
+        url: event.url ?? null,
       });
     }
     cursor = data.has_more ? data.next_cursor : undefined;
@@ -59,6 +67,7 @@ export type LumaEventDetail = {
   start_at: string;
   end_at: string | null;
   location: string | null;
+  url: string | null;
 };
 
 // GET /v1/event/get — a single event's current details, for diffing against
@@ -97,6 +106,7 @@ export async function getEventDetails(eventId: string): Promise<LumaEventDetail 
     // so this silently returned null for every event regardless of whether
     // it actually had a location.
     location: event.geo_address_json?.full_address ?? event.geo_address_json?.city ?? null,
+    url: event.url ?? null,
   };
 }
 

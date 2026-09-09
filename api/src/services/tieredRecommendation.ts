@@ -160,6 +160,13 @@ async function tryTier1(ask: StatedIntent, userCity: string | null, filter?: (st
     event_date: match.start_at.slice(0, 10),
     name: match.name,
     reason: `Matches a Co event happening ${new Date(match.start_at).toLocaleDateString()}${match.city ? ` in ${match.city}` : ""}.`,
+    // Real gap found live, 2026-09-09: this never set url at all, so
+    // Tier 1 recommendations never had a real link to send, and the
+    // follow-up "give me the details" reply (agent.conversationReply, not
+    // grounded in any real Luma fields) fabricated a start time, location,
+    // and headcount instead. listCalendarEvents() now actually captures
+    // the real url Luma returns for every event.
+    ...(match.url ? { url: match.url } : {}),
   };
 }
 
