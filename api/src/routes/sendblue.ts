@@ -786,6 +786,43 @@ Return ONLY strict JSON: {"full_name": string or null, "email": string or null, 
         );
         const pendingEventOffer = pendingEventOfferResult.rows[0] ?? null;
 
+        // Grounds any follow-up question about a recently revealed event in
+        // the REAL structured data, not the model's own memory of the
+        // conversation (Royce, 2026-09-09, confirmed live: asked for the
+        // details on a real Co event, got a fabricated start time 2.5 hours
+        // off the real one, an invented neighborhood, and a made-up
+        // headcount — none of which exist anywhere in Luma's real data).
+        // Separate from pendingEventOfferResult above, which only covers the
+        // unanswered "want to hear more?" window — this looks up the most
+        // recent reveal regardless of resolved status, since fabrication risk
+        // continues for as long as someone might still ask "what time does
+        // it start" after already saying yes.
+        const recentRevealResult = await pool.query(
+          `SELECT content FROM co_memories
+           WHERE user_id = $1 AND memory_type = 'event_offer_pending'
+             AND created_at > NOW() - INTERVAL '3 days'
+           ORDER BY created_at DESC LIMIT 1`,
+          [user.id],
+        );
+        let recentEventDetailsContext = "";
+        if (recentRevealResult.rows[0]) {
+          try {
+            const parsed = JSON.parse(recentRevealResult.rows[0].content) as { askText: string; match: any };
+            const m = parsed.match;
+            const facts = [
+              `name: "${m.name}"`,
+              m.event_date ? `date: ${m.event_date}` : null,
+              m.url ? `link: ${m.url}` : null,
+              m.reason ? `why it fits: ${m.reason}` : null,
+            ]
+              .filter(Boolean)
+              .join(", ");
+            recentEventDetailsContext = `\n\nIf they ask about specifics of the event/opportunity you recently told them about ("${m.name}"), these are the ONLY real facts you actually have: ${facts}. Never state a specific start time, exact address or neighborhood, headcount, or any other detail not listed here — if asked something not covered (like exact start time or venue address), be honest that you don't have that specific detail and point them to the real link${m.url ? "" : " once you have one"} instead of guessing.`;
+          } catch {
+            // Malformed or pre-fix content shape — skip silently, non-fatal.
+          }
+        }
+
         // Feeds the thin-profile first-message call offer below. Count-based
         // rather than existence-based on purpose — unlike co-test's version
         // of this same check, this message's own text_exchange row was
@@ -1702,6 +1739,7 @@ Return ONLY valid JSON, no preamble: {"wants_venue": true or false, "venue_type"
                 momentContext,
                 recommendationContext,
                 eventOfferContext,
+                recentEventDetailsContext,
                 outcomeFollowupContext,
                 eventCheckinContext,
                 matchNudgeContext,
