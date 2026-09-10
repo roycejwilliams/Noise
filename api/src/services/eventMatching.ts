@@ -38,9 +38,18 @@ async function fetchScorableGuests(userIds: string[]): Promise<ScorableGuest[]> 
 async function findCrossMatches(
   excludeUserId: string,
   excludeMentionId: string | null,
-  embedding: number[],
+  embedding: number[] | string,
   eventDate: string,
 ): Promise<CrossMatch[]> {
+  // embedding arrives as a real number[] from a fresh generateEmbedding() call
+  // (recordSurfacedEventAndMatch below), but as pgvector's own text format
+  // ("[0.1,0.2,...]") when read back from a `vector` column via a plain
+  // SELECT (matchAndScoreEventMention above) — pg has no type parser
+  // registered for `vector`, so that column always comes back as a string,
+  // not an array. Real gap found live, 2026-09-10: calling .join(",") on
+  // that string crashed every mention-match attempt. It's already in the
+  // exact literal form the query needs, so pass it through as-is.
+  const embeddingLiteral = Array.isArray(embedding) ? `[${embedding.join(",")}]` : embedding;
   const [mentionRows, surfacedRows] = await Promise.all([
     pool.query(
       `SELECT user_id, NULL::text AS event_api_id
@@ -50,7 +59,7 @@ async function findCrossMatches(
          AND event_date IS NOT NULL
          AND event_date BETWEEN $3::date - $4::int AND $3::date + $4::int
          AND 1 - (embedding <=> $5::vector) >= $6`,
-      [excludeMentionId, excludeUserId, eventDate, DATE_WINDOW_DAYS, `[${embedding.join(",")}]`, SIMILARITY_THRESHOLD],
+      [excludeMentionId, excludeUserId, eventDate, DATE_WINDOW_DAYS, embeddingLiteral, SIMILARITY_THRESHOLD],
     ),
     pool.query(
       `SELECT user_id, event_api_id
@@ -60,7 +69,7 @@ async function findCrossMatches(
          AND embedding IS NOT NULL
          AND event_date BETWEEN $2::date - $3::int AND $2::date + $3::int
          AND 1 - (embedding <=> $4::vector) >= $5`,
-      [excludeUserId, eventDate, DATE_WINDOW_DAYS, `[${embedding.join(",")}]`, SIMILARITY_THRESHOLD],
+      [excludeUserId, eventDate, DATE_WINDOW_DAYS, embeddingLiteral, SIMILARITY_THRESHOLD],
     ),
   ]);
   return [...mentionRows.rows, ...surfacedRows.rows];

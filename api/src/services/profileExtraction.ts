@@ -369,6 +369,34 @@ export async function getCoverageNudge(
 // three. A resolved ask closes the loop back to Stage 3 — storeProfile
 // retires the matching relevance_edges rows and stops further Stage 5
 // check-ins for it.
+// Scans for the first balanced {...} object, respecting string literals so a
+// brace inside a quoted value doesn't throw off the depth count. Used to pull
+// a JSON object out of model output that may carry leading or trailing prose
+// around it, rather than trusting markdown-fence stripping alone.
+function extractFirstJsonObject(text: string): string | null {
+  const start = text.indexOf("{");
+  if (start === -1) return null;
+  let depth = 0;
+  let inString = false;
+  let escapeNext = false;
+  for (let i = start; i < text.length; i++) {
+    const ch = text[i];
+    if (inString) {
+      if (escapeNext) escapeNext = false;
+      else if (ch === "\\") escapeNext = true;
+      else if (ch === '"') inString = false;
+      continue;
+    }
+    if (ch === '"') inString = true;
+    else if (ch === "{") depth++;
+    else if (ch === "}") {
+      depth--;
+      if (depth === 0) return text.slice(start, i + 1);
+    }
+  }
+  return null;
+}
+
 async function assessResolvedItems(
   transcript: string,
   existingGoals: string[],
@@ -400,8 +428,15 @@ Return ONLY valid JSON, reusing the exact original text for goals/blockers and t
       experimental_telemetry: { isEnabled: true, functionId: "profileExtraction.assessResolvedItems" },
     });
 
+    // Real gap found live, 2026-09-10: despite "Return ONLY valid JSON",
+    // Haiku sometimes appends a "**Reasoning:**" section after the fenced
+    // block explaining its answer. Stripping just the ```json fences left
+    // that trailing prose in place, and JSON.parse fails on the first
+    // non-whitespace character after the object closes. Extract the actual
+    // balanced {...} object instead of trusting the fence markers alone.
     const clean = raw.replace(/```json|```/g, "").trim();
-    const parsed = JSON.parse(clean);
+    const jsonText = extractFirstJsonObject(clean) ?? clean;
+    const parsed = JSON.parse(jsonText);
     const resolvedGoals = Array.isArray(parsed.resolved_goals)
       ? parsed.resolved_goals.filter((g: unknown) => existingGoals.includes(g as string))
       : [];
