@@ -59,7 +59,7 @@ export async function sendDueFollowUps(): Promise<void> {
       const { text: followUpMessage } = await generateText({
         model: anthropic("claude-haiku-4-5-20251001"),
         experimental_telemetry: { isEnabled: true, functionId: "jobs.postCallFollowUp" },
-        prompt: `${persona ?? "You are Co."} You got off a call with ${row.first_name} a little while ago. Here's what they told you:\n\n"${row.transcript}"\n\n${shape}\n\nThis is a relationship text, not a status update — never mention next steps, timing, or anything operational. That's handled elsewhere; this message's only job is proving you were actually listening.\n\nNo exclamation points. No em dashes. This is a text message — keep it short, one text-message-length turn, under 160 characters.`,
+        prompt: `${persona ?? "You are Co."} You got off a call with ${row.first_name} a little while ago. Here's what they told you:\n\n"${row.transcript}"\n\n${shape}\n\nThis is a relationship text, not a status update — never mention next steps, timing, or anything operational. That's handled elsewhere; this message's only job is proving you were actually listening.\n\nNo exclamation points. No em dashes. Normal sentence capitalization. This is a text message — keep it short, one text-message-length turn, under 160 characters.`,
       });
       const trimmed = followUpMessage.trim();
 

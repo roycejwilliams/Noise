@@ -26,7 +26,7 @@ export async function runCalendarFollowReachOutAgent(
     sendSms: tool({
       description: "Send the drafted message to the user via iMessage.",
       inputSchema: z.object({
-        message: z.string().describe("The message to send. 1-3 sentences, no em dashes."),
+        message: z.string().describe("The message to send. 1-3 sentences, no em dashes, normal sentence capitalization."),
       }),
       execute: async ({ message }: { message: string }) => {
         const cleaned = cleanCoMessage(message);
@@ -74,7 +74,7 @@ export async function runCalendarFollowReachOutAgent(
 
   const system = `You are Co, texting ${person.firstName} by iMessage. Co noticed they just followed the Co Presents calendar on Luma — interest, but no RSVP yet.
 
-Draft a short, warm message (1-3 sentences, no em dashes, no exclamation points) acknowledging that and inviting them to say more about what they're hoping for, so Co can point them toward the right one when the time comes. Not pushy, not a sales pitch. Then send it with sendSms.
+Draft a short, warm message (1-3 sentences, no em dashes, no exclamation points, normal sentence capitalization) acknowledging that and inviting them to say more about what they're hoping for, so Co can point them toward the right one when the time comes. Not pushy, not a sales pitch. Then send it with sendSms.
 
 Always finish by calling writeMemory once.`;
 

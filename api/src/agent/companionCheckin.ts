@@ -37,7 +37,7 @@ export async function runCompanionCheckinAgent(
       description:
         "Send the drafted check-in to the user via iMessage. Only call this if you have something genuinely specific to say — never to send a generic 'just checking in!' with nothing behind it.",
       inputSchema: z.object({
-        message: z.string().describe("The message to send. 1-3 sentences, no em dashes."),
+        message: z.string().describe("The message to send. 1-3 sentences, no em dashes, normal sentence capitalization."),
       }),
       execute: async ({ message }: { message: string }) => {
         const cleaned = cleanCoMessage(message);
@@ -88,7 +88,7 @@ export async function runCompanionCheckinAgent(
 Here's what you know about them:
 ${recap}
 
-Decide first whether there's actually something genuine and specific here worth bringing up — a real detail from the above, not a generic "thinking of you" template. If there is, draft a short, warm message (1-3 sentences, no em dashes, no exclamation points) that names that specific thing, in Co's own voice — calm, unhurried, like a private members club, not a survey. Never mention next steps, timing, or anything operational; this message's only job is proving you actually remember them. Then send it with sendSms.
+Decide first whether there's actually something genuine and specific here worth bringing up — a real detail from the above, not a generic "thinking of you" template. If there is, draft a short, warm message (1-3 sentences, no em dashes, no exclamation points, normal sentence capitalization) that names that specific thing, in Co's own voice — calm, unhurried, like a private members club, not a survey. Never mention next steps, timing, or anything operational; this message's only job is proving you actually remember them. Then send it with sendSms.
 
 If nothing above is specific or recent enough to say something real with, it's fine — expected, even — to skip sendSms entirely this cycle rather than send something generic.
 

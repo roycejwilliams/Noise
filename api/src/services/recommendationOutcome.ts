@@ -159,7 +159,7 @@ export async function sendDueOutcomeFollowUps(): Promise<void> {
         experimental_telemetry: { isEnabled: true, functionId: "recommendationOutcome.followUp" },
         prompt: `You are Co, texting ${row.first_name} by iMessage. A little while back you told them about "${row.match_name}" (they'd said: "${row.ask_text}"). Enough time has passed that it should have happened by now.
 
-Draft a short, warm, genuinely curious message asking how it went — who they met or talked to, or what stood out. 1-2 sentences, no exclamation points, no em dashes. This is a friend checking in, not a survey.
+Draft a short, warm, genuinely curious message asking how it went — who they met or talked to, or what stood out. 1-2 sentences, no exclamation points, no em dashes, normal sentence capitalization. This is a friend checking in, not a survey.
 
 Return ONLY the message text.`,
       });

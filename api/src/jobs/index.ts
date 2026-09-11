@@ -4,14 +4,14 @@ import type { Server } from "socket.io";
 import pool from "../db/db.js";
 import { getTimezoneForCity } from "../services/geocoding.js";
 import { isReasonableLocalHour } from "../services/localHours.js";
-import sendblue from "../services/sendblue.js";
+import sendblue, { cleanCoMessage } from "../services/sendblue.js";
 import { writeMemory } from "../services/memory.js";
 import { sweepAllOpenAsks } from "../services/relevance.js";
 import { runAskCheckinAgent } from "../agent/askCheckin.js";
 import { attemptEventSurfacing } from "../services/eventSurfacingSweep.js";
 import { attemptNetworkSurfacing } from "../services/networkIntroNudge.js";
 import { scoreGuestListForEvent } from "../services/eventScoring.js";
-import { listCalendarEvents } from "../services/luma.js";
+import { listCalendarEvents, getEventDetails } from "../services/luma.js";
 import { triggerCallForUser } from "../services/callTrigger.js";
 import { sendDueFollowUps } from "./postCallFollowUp.js";
 import { placeDueCalls, sendDueReminders } from "./scheduledCall.js";
@@ -457,6 +457,86 @@ export function registerJobs(io: Server) {
       }
     } catch (error) {
       console.error("In-room match nudge retry cron error:", error);
+    }
+  });
+
+  // Deferred call-offer follow-up for day-of QR check-ins (Royce, 2026-09-10)
+  // — a walk-in's check-in flow deliberately skips deep profile-building in
+  // the moment (only a name/email + a single one-line ask, if either was
+  // even needed). This is the other half: once the event they checked into
+  // has actually wrapped, proactively offer a call framed around getting
+  // them stronger matches, so the real profile-building conversation
+  // happens when they have real attention to give it, not mid-event.
+  // followup_sent_at is the one-time-only guard — never re-fires for the
+  // same checked-in person once set. Bypasses tryClaimProactiveNudge
+  // deliberately: this is a deliberate, event-tied, one-time reach-out (not
+  // a routine background nudge), and getting silently swallowed by an
+  // unrelated same-day proactive text would mean the one touchpoint meant
+  // to recover a thin check-in profile just never lands.
+  const WALKIN_FOLLOWUP_BUFFER_MINUTES = 45;
+  cron.schedule("*/15 * * * *", async () => {
+    try {
+      const { rows } = await pool.query(
+        `SELECT ewc.id, ewc.event_api_id, u.id AS user_id, u.first_name, u.phone_number
+         FROM event_walkin_checkins ewc
+         JOIN users u ON u.id = ewc.person_id
+         WHERE ewc.followup_sent_at IS NULL`,
+      );
+      if (!rows.length) return;
+
+      // Group by event so each event's real end_at is only looked up once,
+      // not once per checked-in person.
+      const rowsByEvent = new Map<string, typeof rows>();
+      for (const row of rows) {
+        const list = rowsByEvent.get(row.event_api_id) ?? [];
+        list.push(row);
+        rowsByEvent.set(row.event_api_id, list);
+      }
+
+      for (const [eventApiId, eventRows] of rowsByEvent) {
+        const details = await getEventDetails(eventApiId).catch((err: any) => {
+          console.error(`Walk-in follow-up: getEventDetails failed for ${eventApiId} (non-fatal):`, err?.message ?? err);
+          return null;
+        });
+        if (!details?.end_at) continue; // can't confirm the event has wrapped yet — retry next tick
+
+        const endedAt = new Date(details.end_at).getTime();
+        if (Date.now() - endedAt < WALKIN_FOLLOWUP_BUFFER_MINUTES * 60 * 1000) continue; // hasn't cleared the buffer yet
+
+        for (const row of eventRows) {
+          try {
+            const message = cleanCoMessage(
+              "Hope you had a good time tonight. Let's grab some time this week so I can get to know you better and get you stronger matches going forward.",
+            );
+            await sendblue.messages.send({
+              number: row.phone_number,
+              content: message,
+              from_number: process.env.SENDBLUE_PHONE_NUMBER!,
+            });
+            await writeMemory(row.user_id, "text_exchange", `Co replied: ${message}`).catch((err: any) =>
+              console.error("Walk-in follow-up: text_exchange log failed (non-fatal):", err?.message ?? err),
+            );
+            // Same call_offer_pending shape the reactive flow in
+            // routes/sendblue.ts already watches for on the next inbound
+            // reply — this is what lets their next message be picked up as
+            // a proposed time and turned into a real scheduled call,
+            // without building any new scheduling logic here.
+            await pool
+              .query(`INSERT INTO co_memories (user_id, memory_type, content) VALUES ($1, 'call_offer_pending', $2)`, [
+                row.user_id,
+                `Co proactively offered: "${message}" (post-event follow-up after checking in at "${details.name}")`,
+              ])
+              .catch((err: any) =>
+                console.error("Walk-in follow-up: call_offer_pending write failed (non-fatal):", err?.message ?? err),
+              );
+            await pool.query(`UPDATE event_walkin_checkins SET followup_sent_at = NOW() WHERE id = $1`, [row.id]);
+          } catch (err: any) {
+            console.error(`Walk-in follow-up failed for ${row.user_id}:`, err?.message ?? err);
+          }
+        }
+      }
+    } catch (error) {
+      console.error("Walk-in follow-up cron error:", error);
     }
   });
 

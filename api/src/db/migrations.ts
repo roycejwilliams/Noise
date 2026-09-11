@@ -987,4 +987,46 @@ export function runMigrations() {
       `),
     )
     .catch((err: Error) => console.error("event_change_notifications table init failed:", err));
+
+  // Day-of QR check-in flow (Royce, 2026-09-10) — walk-ins who scan a venue
+  // QR and text Co's fixed check-in phrase, resolved against whichever real
+  // Luma event the phrase names, not tied to any single hardcoded event.
+  // UNIQUE (event_api_id, person_id): a repeat scan/resend must be a no-op,
+  // never a second name/email ask or a duplicate scoring-pool entry.
+  // ask_text is filled in once the person answers the one-line ask question
+  // (skipped entirely if they already had an active ask); followup_sent_at
+  // marks the deferred post-event call-offer as sent, so it's a one-time
+  // reach-out per checked-in person, not per cron tick.
+  pool
+    .query(`
+      CREATE TABLE IF NOT EXISTS event_walkin_checkins (
+        id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+        event_api_id TEXT NOT NULL,
+        person_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+        ask_text TEXT,
+        checked_in_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+        followup_sent_at TIMESTAMPTZ,
+        UNIQUE (event_api_id, person_id)
+      )
+    `)
+    .catch((err: Error) => console.error("event_walkin_checkins table init failed:", err));
+
+  // Debounce for the "additive offer" nudge (Royce, 2026-09-10: a later
+  // re-score must never silently swap someone's existing match — it sends a
+  // separate "I found N more people who just checked in" offer instead, but
+  // that offer must not re-fire once per new arrival during a busy stretch
+  // of check-ins). One row per (event, already-matched person); a fresh
+  // offer is only sent once the debounce window since last_offered_at has
+  // cleared, same spirit as event_scoring_debounce above but scoped to this
+  // specific nudge rather than the whole scoring pass.
+  pool
+    .query(`
+      CREATE TABLE IF NOT EXISTS event_walkin_offer_batches (
+        event_api_id TEXT NOT NULL,
+        person_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+        last_offered_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+        PRIMARY KEY (event_api_id, person_id)
+      )
+    `)
+    .catch((err: Error) => console.error("event_walkin_offer_batches table init failed:", err));
 }

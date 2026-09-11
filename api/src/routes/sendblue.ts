@@ -26,6 +26,7 @@ import {
 } from "../services/profileExtraction.js";
 import { generateRecommendation } from "../services/recommendation.js";
 import { EVENT_OFFER_EXPIRY_DAYS } from "../services/eventSurfacingSweep.js";
+import { detectCheckinPhrase, recordCheckin, hasActiveAsk, recordWalkinAsk } from "../services/eventWalkinCheckin.js";
 import {
   scheduleOutcomeFollowUp,
   findPendingOutcomeFollowUp,
@@ -471,6 +472,26 @@ export function sendblueRouter(io: Server): Router {
           )
           .catch((err: any) => console.error("ask_checkins response tracking failed (non-fatal):", err?.message ?? err));
 
+        // Day-of QR check-in (Royce, 2026-09-10) — detected before the
+        // brand-new-contact intake branch below, which returns early: a
+        // walk-in's very first-ever message to Co can BE the check-in text
+        // itself, and the row needs to exist regardless of whether identity
+        // capture has happened yet. Fire-and-forget on the write; never let
+        // this block or fail the real reply below.
+        let walkinCheckinEventName: string | null = null;
+        if (hasText) {
+          const checkin = await detectCheckinPhrase(content).catch((err: any) => {
+            console.error("sendblue: detectCheckinPhrase failed (non-fatal):", err?.message ?? err);
+            return null;
+          });
+          if (checkin) {
+            await recordCheckin(checkin.eventApiId, user.id).catch((err: any) =>
+              console.error("sendblue: recordCheckin failed (non-fatal):", err?.message ?? err),
+            );
+            walkinCheckinEventName = checkin.eventName;
+          }
+        }
+
         // Step 1.2 — Name/email intake for a brand-new contact. Gated on
         // identity_captured, not on user existence — the placeholder row
         // from findOrCreateUserByPhone above already exists by this point.
@@ -821,6 +842,47 @@ Return ONLY strict JSON: {"full_name": string or null, "email": string or null, 
           } catch {
             // Malformed or pre-fix content shape — skip silently, non-fatal.
           }
+        }
+
+        // Day-of QR check-in — the ask-question step. Looked up independently
+        // of walkinCheckinEventName above (which only reflects THIS turn's
+        // message) since a brand-new contact's check-in text is entirely
+        // consumed by the intake-start branch above, which returns early —
+        // the ask can only happen once identity capture completes, on a
+        // later turn, once event_walkin_checkins already has the row but no
+        // ask_text yet.
+        const pendingWalkinCheckinResult = await pool.query(
+          `SELECT event_api_id FROM event_walkin_checkins
+           WHERE person_id = $1 AND ask_text IS NULL
+             AND checked_in_at > NOW() - INTERVAL '1 day'
+           ORDER BY checked_in_at DESC LIMIT 1`,
+          [user.id],
+        );
+        let eventCheckinAskContext = "";
+        const pendingWalkinCheckin = pendingWalkinCheckinResult.rows[0] ?? null;
+        if (pendingWalkinCheckin && walkinCheckinEventName) {
+          // This turn's message IS the fresh check-in trigger itself (set
+          // above) — nothing to capture as an answer yet, so decide whether
+          // to ask based on whatever's already on file.
+          const alreadyHasAsk = await hasActiveAsk(user.id).catch((err: any) => {
+            console.error("sendblue: hasActiveAsk failed (non-fatal):", err?.message ?? err);
+            return true; // fail toward not re-asking rather than risk a duplicate ask on error
+          });
+          if (!alreadyHasAsk) {
+            eventCheckinAskContext = `\n\nThey just checked in at "${walkinCheckinEventName}" and don't have a stated ask on file yet. Ask them directly, once, in their own words: "what are you hoping to find here / who'd be good to meet?" Keep it to that one question this turn, don't pad it with anything else.`;
+          }
+        } else if (pendingWalkinCheckin) {
+          // Not a fresh check-in this turn, and the row is still missing
+          // ask_text — this turn's message is their answer to the question
+          // Co asked on a previous turn. Capture it directly rather than
+          // checking hasActiveAsk here: profile extraction only runs AFTER a
+          // reply is sent, so at this point in the turn hasActiveAsk would
+          // still reflect state from BEFORE this exact message is processed
+          // and would read false again, making Co ask the same question a
+          // second time instead of recognizing they just answered it.
+          await recordWalkinAsk(pendingWalkinCheckin.event_api_id, user.id, content).catch((err: any) =>
+            console.error("sendblue: recordWalkinAsk failed (non-fatal):", err?.message ?? err),
+          );
         }
 
         // Feeds the thin-profile first-message call offer below. Count-based
@@ -1740,6 +1802,7 @@ Return ONLY valid JSON, no preamble: {"wants_venue": true or false, "venue_type"
                 recommendationContext,
                 eventOfferContext,
                 recentEventDetailsContext,
+                eventCheckinAskContext,
                 outcomeFollowupContext,
                 eventCheckinContext,
                 matchNudgeContext,

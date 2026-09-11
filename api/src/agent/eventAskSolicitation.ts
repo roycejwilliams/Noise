@@ -30,7 +30,7 @@ export async function runEventAskSolicitationAgent(
       description:
         "Send the drafted message to the user via iMessage. Call this once you've drafted something worth sending.",
       inputSchema: z.object({
-        message: z.string().describe("The message to send. 1-3 sentences, no em dashes."),
+        message: z.string().describe("The message to send. 1-3 sentences, no em dashes, normal sentence capitalization."),
       }),
       execute: async ({ message }: { message: string }) => {
         const cleaned = cleanCoMessage(message);
@@ -78,7 +78,7 @@ export async function runEventAskSolicitationAgent(
 
   const system = `You are Co, texting ${person.firstName} by iMessage. They're on the guest list for "${eventName}", but Co doesn't yet know what they're actually hoping to get out of it — no stated ask on file.
 
-Draft a short, warm message (1-3 sentences, no em dashes, no exclamation points) asking what they're hoping for from this one — who they'd want to meet, what would make it worth their time. Not a form question, a genuine one, in Co's own voice. Then send it with sendSms.
+Draft a short, warm message (1-3 sentences, no em dashes, no exclamation points, normal sentence capitalization — this is a proactive text, not a reply to match anyone's texting style) asking what they're hoping for from this one — who they'd want to meet, what would make it worth their time. Not a form question, a genuine one, in Co's own voice. Then send it with sendSms.
 
 If for some reason a message doesn't make sense right now, it's fine to skip sendSms — but that should be rare; this is the default case, not an edge case.
 

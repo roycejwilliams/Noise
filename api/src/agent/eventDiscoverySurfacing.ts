@@ -56,7 +56,7 @@ export async function runEventDiscoverySurfacingAgent(
     sendSms: tool({
       description: "Send the drafted message to the user via iMessage.",
       inputSchema: z.object({
-        message: z.string().describe("The message to send. 1-3 sentences, no em dashes."),
+        message: z.string().describe("The message to send. 1-3 sentences, no em dashes, normal sentence capitalization."),
       }),
       execute: async ({ message }: { message: string }) => {
         const cleaned = cleanCoMessage(message);
@@ -117,7 +117,7 @@ export async function runEventDiscoverySurfacingAgent(
 
 Co found ${kindLabel} that might genuinely fit — internal-only, do not reveal this in the message: "${match.name}" — ${match.reason}
 
-Draft a short, warm message (1-3 sentences, no em dashes, no exclamation points) that hints something crossed your mind for them, without naming what it is, and asks if they'd like to hear more. The register is "I was thinking about you, and this made me think of you" — Co bringing them something because it had them in mind, not delivering a match result or a recommendation-engine output. Don't mention the specific name, link, or event details yet — that's step two, only if they say yes. Then send it with sendSms.
+Draft a short, warm message (1-3 sentences, no em dashes, no exclamation points, normal sentence capitalization) that hints something crossed your mind for them, without naming what it is, and asks if they'd like to hear more. The register is "I was thinking about you, and this made me think of you" — Co bringing them something because it had them in mind, not delivering a match result or a recommendation-engine output. Don't mention the specific name, link, or event details yet — that's step two, only if they say yes. Then send it with sendSms.
 
 If on reflection this doesn't actually fit well enough to even bring up, skip sendSms — don't force it.
 
@@ -168,7 +168,7 @@ Co found ${kindLabel} that fits, but it's short notice: "${match.name}" — ${ma
 
 ${url ? "The real link is being sent as its own separate message right before this one — never mention a link, never say you're \"sharing\" or \"sending\" one, just reference the thing itself." : ""}
 
-Draft a short, warm message (1-3 sentences, no em dashes, no exclamation points) in the same "I was thinking about you" register Co always uses, naming what it is and why it fits, while being upfront that it's short notice so there's no pressure if the timing doesn't work. Skip the usual "want to hear more?" step — there isn't time for a back-and-forth, and the details are already going out.
+Draft a short, warm message (1-3 sentences, no em dashes, no exclamation points, normal sentence capitalization) in the same "I was thinking about you" register Co always uses, naming what it is and why it fits, while being upfront that it's short notice so there's no pressure if the timing doesn't work. Skip the usual "want to hear more?" step — there isn't time for a back-and-forth, and the details are already going out.
 
 If on reflection this doesn't actually fit well enough to even bring up, return exactly the single word: SKIP
 

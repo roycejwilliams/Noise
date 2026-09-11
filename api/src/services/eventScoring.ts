@@ -8,6 +8,7 @@ import { detectAndScheduleCheckins } from "./eventCheckinFollowUp.js";
 import sendblue, { cleanCoMessage } from "./sendblue.js";
 import { tryClaimProactiveNudge } from "./proactiveThrottle.js";
 import { writeMemory } from "./memory.js";
+import { mergeWalkinsIntoGuestPool } from "./eventWalkinCheckin.js";
 
 // Event Curation — "Standing profile scored against full Luma guest list."
 // Scoped strictly to one event's guest list, not the whole network — a Co
@@ -69,6 +70,22 @@ export async function matchGuestsToUsers(guests: LumaGuest[]): Promise<ScorableG
   return rows;
 }
 
+// A person could plausibly show up in both sources in the same pass — a
+// Luma-registered guest who also scans the venue QR and checks in. Keep one
+// entry per user_id (first one wins; both sources carry the same underlying
+// co_profiles row anyway, so there's nothing to merge) rather than scoring
+// the same person twice against everyone else in scoreMatchedGroup below.
+function dedupeByUserId(guests: ScorableGuest[]): ScorableGuest[] {
+  const seen = new Set<string>();
+  const out: ScorableGuest[] = [];
+  for (const g of guests) {
+    if (seen.has(g.user_id)) continue;
+    seen.add(g.user_id);
+    out.push(g);
+  }
+  return out;
+}
+
 // Cooldown guard (Royce, 2026-08-30) — without this, guest.registered/
 // guest.updated retriggering scoreMatchedGroup would re-solicit the same
 // person every time, since "no ask yet" stays true until they actually
@@ -122,6 +139,20 @@ async function tryClaimScoringDebounce(eventId: string): Promise<boolean> {
   return rows.length > 0;
 }
 
+// Read BEFORE storeRanking overwrites the row below — this is the "who did
+// this person already know about as of the last scoring pass" snapshot that
+// maybeSendAdditiveOffer diffs the new ranking against, to find candidates
+// that are genuinely new since last time rather than the whole re-ranked
+// list (which includes everyone already considered, not just fresh arrivals).
+async function getPreviousRankedCandidateIds(eventId: string, personId: string): Promise<Set<string>> {
+  const { rows } = await pool.query(
+    `SELECT ranked_candidates FROM event_guest_rankings WHERE event_id = $1 AND person_id = $2`,
+    [eventId, personId],
+  );
+  const prior = rows[0]?.ranked_candidates as RankedCandidate[] | undefined;
+  return new Set((prior ?? []).map((c) => c.candidate_id));
+}
+
 async function storeRanking(eventId: string, personId: string, ranked: RankedCandidate[], methodSummary: string): Promise<void> {
   await pool.query(
     `INSERT INTO event_guest_rankings (event_id, person_id, ranked_candidates, method_summary)
@@ -164,6 +195,43 @@ const MATCH_NUDGE_MIN_SCORE = 60;
 // reasoning eventSurfacingSweep.ts's isShortNotice already uses for teases
 // on a same-day event, just the mirror case (too LATE, not too early).
 const MATCH_NUDGE_END_CUTOFF_MINUTES = 30;
+
+// Debounce for the "additive offer" nudge (Royce, 2026-09-10) — a re-score
+// triggered by a fresh walk-in check-in must never silently swap or replace
+// someone's existing match; it sends a separate, distinct offer instead. But
+// during a busy stretch of check-ins that could mean one text per arrival,
+// which is exactly the kind of spam the existing anti-nag patterns in this
+// codebase (no-reply-means-no-repeat-nudge, the daily proactive-nudge cap)
+// are built to avoid. 20 minutes, not the 15-SECOND scoring debounce above —
+// that one only coalesces near-duplicate webhooks for the same action, this
+// one paces a real outbound text to a real person.
+//
+// Known limitation, not closed here (stayed in scope of this file only,
+// schema fixed at event_walkin_offer_batches(event_api_id, person_id,
+// last_offered_at) — no column tracks exactly which candidate_ids were
+// already included in the last SENT offer): the "new since last time" diff
+// below compares against the immediately-PRIOR scoring pass's stored
+// ranking, not against whatever was known as of the last successfully SENT
+// offer. If several scoring passes land inside one 20-minute debounce window
+// while the offer keeps getting skipped, only the delta from the pass
+// immediately before the send is reflected, not the full cumulative set of
+// arrivals across the whole debounced window. Closing that properly needs a
+// new column (e.g. last_offered_candidate_ids) — not added here to avoid
+// touching migrations.ts while other agents are working in parallel.
+const ADDITIVE_OFFER_DEBOUNCE_MINUTES = 20;
+
+async function tryClaimAdditiveOfferDebounce(eventId: string, personId: string): Promise<boolean> {
+  const { rows } = await pool.query(
+    `INSERT INTO event_walkin_offer_batches (event_api_id, person_id, last_offered_at)
+     VALUES ($1, $2, NOW())
+     ON CONFLICT (event_api_id, person_id) DO UPDATE
+       SET last_offered_at = NOW()
+       WHERE event_walkin_offer_batches.last_offered_at <= NOW() - ($3 || ' minutes')::interval
+     RETURNING event_api_id`,
+    [eventId, personId, ADDITIVE_OFFER_DEBOUNCE_MINUTES],
+  );
+  return rows.length > 0;
+}
 
 function withinNudgeWindow(startAt: string, endAt: string | null): boolean {
   const now = Date.now();
@@ -232,7 +300,7 @@ async function maybeSendMatchNudge(
       experimental_telemetry: { isEnabled: true, functionId: "eventScoring.matchNudge.draft" },
       prompt: `You are Co, texting ${person.first_name} about "${eventName}," an event they're going to. You found someone else going who's genuinely worth them meeting: ${candidate.first_name}. Why they're worth meeting: ${top.reason}
 
-Draft a short, warm, low-pressure text (1-2 sentences, no exclamation points, no em dashes) letting ${person.first_name} know about ${candidate.first_name} and naming the real reason above in your own words. Not a hard sell, just a genuine heads-up, like a friend connecting two people who'd get along. Return ONLY the message text.`,
+Draft a short, warm, low-pressure text (1-2 sentences, no exclamation points, no em dashes, normal sentence capitalization) letting ${person.first_name} know about ${candidate.first_name} and naming the real reason above in your own words. Not a hard sell, just a genuine heads-up, like a friend connecting two people who'd get along. Return ONLY the message text.`,
     });
     message = cleanCoMessage(text.trim());
   } catch (err: any) {
@@ -262,6 +330,82 @@ Draft a short, warm, low-pressure text (1-2 sentences, no exclamation points, no
   // only reads text_exchange rows) never saw this message either.
   await writeMemory(person.user_id, "text_exchange", `Co replied: ${message}`).catch((err: any) =>
     console.error("eventScoring: match nudge text_exchange log failed (non-fatal):", err?.message ?? err),
+  );
+  return true;
+}
+
+// The additive-offer path for someone who ALREADY has a match nudge for this
+// event (Royce, 2026-09-10: "we should give them the 5 people they should
+// meet, but instead of just switching them in and out... add those people
+// later"). newCandidates is whatever the caller determined is genuinely new
+// since the last scoring pass — never touches or re-sends the original
+// nudge/match, purely a "more people showed up" heads-up.
+async function maybeSendAdditiveOffer(
+  eventId: string,
+  eventName: string,
+  person: ScorableGuest,
+  newCandidates: ScorableGuest[],
+  eventTiming: { start_at: string; end_at: string | null } | null,
+  opts: { dryRun?: boolean },
+): Promise<boolean> {
+  if (!newCandidates.length) return false;
+  // Same "don't nudge before the event starts or in its last stretch" gate
+  // as the original match nudge — a new arrival scored an hour before start
+  // is not something to text about yet.
+  if (eventTiming && !withinNudgeWindow(eventTiming.start_at, eventTiming.end_at)) return false;
+
+  if (opts.dryRun) {
+    console.log(
+      `[eventScoring dryRun] would send additive offer to ${person.user_id} at ${eventId} (${newCandidates.length} new candidate(s))`,
+    );
+    return false;
+  }
+  if (!(await tryClaimAdditiveOfferDebounce(eventId, person.user_id))) {
+    console.log(
+      `eventScoring: additive offer debounced for ${person.user_id} at ${eventId} (sent one within the last ${ADDITIVE_OFFER_DEBOUNCE_MINUTES}m)`,
+    );
+    return false;
+  }
+  // Proactive-nudge cap still applies — this is still one of today's
+  // discretionary outbound texts, same as the original match nudge.
+  if (!(await tryClaimProactiveNudge(person.user_id))) {
+    console.log(`eventScoring: additive offer throttled for ${person.user_id} (proactive nudge used elsewhere in last 24h)`);
+    return false;
+  }
+
+  let message: string;
+  try {
+    const { text } = await generateText({
+      model: anthropic("claude-haiku-4-5-20251001"),
+      experimental_telemetry: { isEnabled: true, functionId: "eventScoring.additiveOffer.draft" },
+      prompt: `You are Co, texting ${person.first_name} about "${eventName}," an event they're already going to and already have a match at. Since then, ${newCandidates.length} more ${newCandidates.length === 1 ? "person has" : "people have"} checked in who could also be worth ${person.first_name} meeting.
+
+Draft a short, warm, low-pressure text (1-2 sentences, no exclamation points, no em dashes, normal sentence capitalization) letting them know you found ${newCandidates.length === 1 ? "someone else" : `${newCandidates.length} more people`} who just checked in that could be good for them, and ask if they want to hear who. Do NOT name anyone yet or mention their existing match — this is just the offer to see more, nothing more. Return ONLY the message text.`,
+    });
+    message = cleanCoMessage(text.trim());
+  } catch (err: any) {
+    console.error(`eventScoring: additive offer draft failed for ${person.user_id} (non-fatal):`, err?.message ?? err);
+    return false;
+  }
+
+  try {
+    await sendblue.messages.send({
+      number: person.phone_number,
+      content: message,
+      from_number: process.env.SENDBLUE_PHONE_NUMBER!,
+    });
+  } catch (err: any) {
+    console.error(`eventScoring: additive offer send failed for ${person.user_id} (non-fatal):`, err?.message ?? err);
+    return false;
+  }
+
+  await writeMemory(
+    person.user_id,
+    "event_guest_match_nudge",
+    `Additive offer sent to ${person.first_name} at "${eventName}": ${newCandidates.length} new candidate(s) checked in since their last match (${newCandidates.map((c) => c.first_name).join(", ")})`,
+  );
+  await writeMemory(person.user_id, "text_exchange", `Co replied: ${message}`).catch((err: any) =>
+    console.error("eventScoring: additive offer text_exchange log failed (non-fatal):", err?.message ?? err),
   );
   return true;
 }
@@ -336,15 +480,32 @@ export async function scoreMatchedGroup(
       }))
       .sort((a, b) => b.score - a.score);
 
+    // Read BEFORE storeRanking overwrites the row — this is the diff basis
+    // for the additive-offer path below.
+    const previouslyRankedIds = await getPreviousRankedCandidateIds(eventId, person.user_id);
     await storeRanking(eventId, person.user_id, ranked, `ask: "${ask.text}"`);
     scoredCount++;
 
+    const alreadyNudged = await wasAlreadyNudgedForMatch(eventId, person.user_id);
     const top = ranked[0];
     const topCandidate = top ? others.find((o) => o.user_id === top.candidate_id) : undefined;
-    if (top && topCandidate) {
+    if (top && topCandidate && !alreadyNudged) {
       await maybeSendMatchNudge(eventId, eventName, person, top, topCandidate, eventTiming, opts).catch((err: any) =>
         console.error(`eventScoring: maybeSendMatchNudge failed for ${person.user_id} (non-fatal):`, err?.message ?? err),
       );
+    } else if (alreadyNudged) {
+      // Never silently swap or replace an existing match (Royce, 2026-09-10)
+      // — anyone newly qualifying who wasn't in the previous pass's ranking
+      // gets offered as a separate, additive heads-up instead.
+      const newCandidates = ranked
+        .filter((r) => r.score >= MATCH_NUDGE_MIN_SCORE && !previouslyRankedIds.has(r.candidate_id))
+        .map((r) => others.find((o) => o.user_id === r.candidate_id))
+        .filter((c): c is ScorableGuest => Boolean(c));
+      if (newCandidates.length) {
+        await maybeSendAdditiveOffer(eventId, eventName, person, newCandidates, eventTiming, opts).catch((err: any) =>
+          console.error(`eventScoring: maybeSendAdditiveOffer failed for ${person.user_id} (non-fatal):`, err?.message ?? err),
+        );
+      }
     }
   }
 
@@ -399,7 +560,19 @@ export async function scoreGuestListForEvent(
     getEventDetails(eventId).catch(() => null),
   ]);
   const resolvedName = await resolveEventName(eventId, eventName, details);
-  const matched = await matchGuestsToUsers(guests);
+  // Two sources feed the same guest pool now: Luma's real guest list, and
+  // anyone who checked in via the day-of QR flow without ever RSVPing on
+  // Luma (services/eventWalkinCheckin.ts). Deduped by user_id — a
+  // Luma-registered guest who also scans the QR should still only be scored
+  // once per pass.
+  const [lumaMatched, walkinMatched] = await Promise.all([
+    matchGuestsToUsers(guests),
+    mergeWalkinsIntoGuestPool(eventId).catch((err: any) => {
+      console.error(`eventScoring: mergeWalkinsIntoGuestPool failed for ${eventId} (non-fatal):`, err?.message ?? err);
+      return [];
+    }),
+  ]);
+  const matched = dedupeByUserId([...lumaMatched, ...walkinMatched]);
   const eventTiming = details ? { start_at: details.start_at, end_at: details.end_at } : null;
 
   // End-of-night check-in (Notion V1 board row 8) — gated on registration
