@@ -32,9 +32,13 @@ export type TriggerCallResult =
 // ended, just because its extraction pipeline was still running.
 const LIVE_CALL_STATUSES = ["initiated", "ringing", "in-progress"];
 
+// See the call_status_updated_at migration comment (db/migrations.ts) for
+// why this exists and why it's a dedicated column rather than users.updated_at.
+const LIVE_CALL_RECLAIM_MINUTES = 30;
+
 export async function triggerCallForUser(userId: string, io: IOServer | null): Promise<TriggerCallResult> {
   const userResult = await pool.query(
-    `SELECT u.first_name, u.phone_number, u.subscription_status, u.call_status
+    `SELECT u.first_name, u.phone_number, u.subscription_status, u.call_status, u.call_status_updated_at
      FROM users u
      WHERE u.id = $1`,
     [userId],
@@ -50,7 +54,18 @@ export async function triggerCallForUser(userId: string, io: IOServer | null): P
   // concurrent calls?" — confirmed live via code trace that nothing
   // previously stopped a second real Twilio call from being placed to
   // someone already mid-call).
-  if (LIVE_CALL_STATUSES.includes(user.call_status)) {
+  //
+  // Reclaimable after LIVE_CALL_RECLAIM_MINUTES (Royce, 2026-09-14: confirmed
+  // live that a real user's call_status was stuck at 'in-progress' for days,
+  // permanently blocking every future call, because nothing ever clears a
+  // LIVE status if Hume's chat_ended webhook is ever missed for that call —
+  // the only thing that normally moves it off a live value). Real calls
+  // through this product are short conversational check-ins, not long
+  // meetings, so 30 minutes is generous enough to never cut off a genuinely
+  // ongoing call while still recovering from a wedged one in bounded time.
+  const isLive = LIVE_CALL_STATUSES.includes(user.call_status);
+  const staleSinceMs = user.call_status_updated_at ? Date.now() - new Date(user.call_status_updated_at).getTime() : Infinity;
+  if (isLive && staleSinceMs < LIVE_CALL_RECLAIM_MINUTES * 60 * 1000) {
     return { success: false, error: "A call is already in progress for this user." };
   }
 
@@ -118,7 +133,7 @@ export async function triggerCallForUser(userId: string, io: IOServer | null): P
     .catch((err) => console.error("Memory embedding failed (non-fatal):", err));
 
   await pool.query(
-    `UPDATE users SET call_sid = $2, call_status = 'initiated' WHERE id = $1`,
+    `UPDATE users SET call_sid = $2, call_status = 'initiated', call_status_updated_at = NOW() WHERE id = $1`,
     [userId, call.sid],
   );
 

@@ -1385,6 +1385,15 @@ Return ONLY valid JSON, no preamble: {"date": "YYYY-MM-DD or null", "time": "HH:
         );
         const recentOfferBurstActive = parseInt(recentOfferCountResult.rows[0].count, 10) > 0;
 
+        // Real gap found live, 2026-09-14 (Royce: "Call me" got back "This
+        // is text, I can't actually call" — false; Co genuinely can and the
+        // classifier correctly recognized the request, but the actual dial
+        // attempt failed and the fallthrough reply below had zero context
+        // about what happened, so the model invented its own — wrong —
+        // explanation). Same fix shape as callFeatureQuestionContext below:
+        // ground the reply in the real reason instead of leaving the model
+        // to guess why nothing happened.
+        let callFailureContext = "";
         if (shouldTriggerCall) {
           const callResult = await triggerCallForUser(user.id, io);
           if (callResult.success) {
@@ -1407,6 +1416,10 @@ Return ONLY valid JSON, no preamble: {"date": "YYYY-MM-DD or null", "time": "HH:
           console.error(`sendblue: call trigger failed for user ${user.id} (non-fatal, falling through to normal reply):`, callResult.error);
           // Falls through to the normal reply flow below on failure — a
           // failed dial attempt should never leave the conversation silent.
+          callFailureContext =
+            callResult.error === "A call is already in progress for this user."
+              ? `\nThey just asked you to call them, and Co genuinely can (this is real and live) — but a call attempt just failed because a call is already showing as in progress for them. Be honest that something's not letting the call go through right now and you're not sure why, rather than saying calling isn't possible at all. Don't place a call, and don't say "calling you now."`
+              : `\nThey just asked you to call them, and Co genuinely can (this is real and live) — but the call attempt just failed. Be honest that something went wrong placing it, without inventing a specific reason you don't actually have, and never claim calling isn't possible. Don't place a call, and don't say "calling you now."`;
         }
 
         // Two independent reasons Co might fold in a secondary call-offer
@@ -1809,6 +1822,7 @@ Return ONLY valid JSON, no preamble: {"wants_venue": true or false, "venue_type"
                 updatesContext,
                 venueContext,
                 callFeatureQuestionContext,
+                callFailureContext,
                 scheduleCallContext,
                 toneContext,
                 seekingModeContext,

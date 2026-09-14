@@ -29,6 +29,7 @@ export type ConversationReplyInput = {
   updatesContext: string;
   venueContext: string;
   callFeatureQuestionContext: string;
+  callFailureContext: string;
   scheduleCallContext: string;
   toneContext: string;
   seekingModeContext: string;
@@ -189,7 +190,7 @@ What you already know about ${input.firstName} from before — treat this the sa
 ${input.contextSummary || "(nothing on file yet — this is effectively a first real conversation with them)"}
 
 ${input.momentContext}
-${input.recommendationContext}${input.eventOfferContext}${input.recentEventDetailsContext}${input.eventCheckinAskContext}${input.outcomeFollowupContext}${input.eventCheckinContext}${input.matchNudgeContext}${input.updatesContext}${input.venueContext}${input.callFeatureQuestionContext}${input.scheduleCallContext}
+${input.recommendationContext}${input.eventOfferContext}${input.recentEventDetailsContext}${input.eventCheckinAskContext}${input.outcomeFollowupContext}${input.eventCheckinContext}${input.matchNudgeContext}${input.updatesContext}${input.venueContext}${input.callFeatureQuestionContext}${input.callFailureContext}${input.scheduleCallContext}
 ${input.toneContext}
 ${input.seekingModeContext}
 ${input.styleHint}

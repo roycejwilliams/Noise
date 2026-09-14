@@ -456,8 +456,12 @@ router.post(
       // forward the early, Twilio-owned states; chat_ended is the sole
       // writer of the terminal ones.
       if (CallStatus !== "completed" && CallSid) {
+        // call_status_updated_at stamped alongside every live-state
+        // transition (see callTrigger.ts's dial-time write and its reclaim
+        // guard) — this is the clock that lets a wedged call_status recover
+        // on its own if chat_ended's webhook is ever missed for this call.
         await pool.query(
-          `UPDATE users SET call_status = $2 WHERE phone_number = $1 AND call_sid = $3`,
+          `UPDATE users SET call_status = $2, call_status_updated_at = NOW() WHERE phone_number = $1 AND call_sid = $3`,
           [To, CallStatus, CallSid],
         );
       }

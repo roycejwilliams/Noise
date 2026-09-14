@@ -489,6 +489,23 @@ export function runMigrations() {
     .query(`ALTER TABLE users ADD COLUMN IF NOT EXISTS call_status TEXT`)
     .catch((err: Error) => console.error("users.call_status migration failed:", err));
 
+  // Real gap found live, 2026-09-14 (Royce: "Call me" got a false "I can't
+  // actually call" reply): call_status got stuck at 'in-progress' for days
+  // straight after a real call, with nothing ever clearing it — Hume's
+  // chat_ended webhook is the only writer that ever moves call_status OFF a
+  // live value, and if it's ever missed (dropped delivery, a call that never
+  // reached a real Hume session, etc.) the concurrent-call guard in
+  // callTrigger.ts blocks every future call attempt for that user forever.
+  // 'processing' already has its own 10-minute reclaim window based on this
+  // same idea (see co.ts's chat_ended handler) — this is that same pattern
+  // for the LIVE states. A dedicated timestamp, not users.updated_at: that
+  // column can be (and is) touched by unrelated writes to the same row
+  // (profile updates, intake, phone number changes), which would wrongly
+  // reset the staleness clock even though no real call activity happened.
+  pool
+    .query(`ALTER TABLE users ADD COLUMN IF NOT EXISTS call_status_updated_at TIMESTAMPTZ`)
+    .catch((err: Error) => console.error("users.call_status_updated_at migration failed:", err));
+
   // Someone asking for a call at a specific future time, not right now —
   // distinct from the existing explicit_request/would_benefit call-offer
   // flow, which only ever places a call immediately. scheduled_for is the
