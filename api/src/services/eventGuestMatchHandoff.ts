@@ -5,6 +5,7 @@ import pool from "../db/db.js";
 import sendblue, { cleanCoMessage } from "./sendblue.js";
 import { writeMemory } from "./memory.js";
 import { ALLOW_REAL_SENDS } from "../otpActions.js";
+import { CO_VOICE, CO_TEXT_CHANNEL } from "./coVoice.js";
 
 // Double opt-in handoff (Royce, 2026-09-07 — "should Co make a group chat
 // once they've been opted in", "sit in the group chat as like a personal
@@ -167,7 +168,7 @@ async function maybeAskCandidateDirectly(
     const { text } = await generateText({
       model: anthropic("claude-haiku-4-5-20251001"),
       experimental_telemetry: { isEnabled: true, functionId: "eventGuestMatchHandoff.directAsk.draft" },
-      prompt: `You are Co, texting ${candidate.first_name} about "${eventName}." ${askerFirstName}, who's also going, said they'd like to be introduced. Draft a short, warm text (1-2 sentences, no exclamation points, no em dashes) letting ${candidate.first_name} know and asking if they'd be open to it too. Low-pressure, genuinely a question, not an assumption. Return ONLY the message text.`,
+      prompt: `${CO_VOICE}\n\n${CO_TEXT_CHANNEL} You're texting ${candidate.first_name} about "${eventName}." ${askerFirstName}, who's also going, said they'd like to be introduced. Draft a short, warm text (1-2 sentences, no exclamation points, no em dashes) letting ${candidate.first_name} know and asking if they'd be open to it too. Low-pressure, genuinely a question, not an assumption. Return ONLY the message text.`,
     });
     message = cleanCoMessage(text.trim());
   } catch (err: any) {
@@ -450,11 +451,11 @@ export async function handleGroupMessage(groupId: string, senderNumber: string, 
     const { text } = await generateText({
       model: anthropic("claude-sonnet-4-6"),
       experimental_telemetry: { isEnabled: true, functionId: "eventGuestMatchHandoff.groupReply" },
-      prompt: `You are Co, sitting quietly in a group iMessage thread with ${group.a_first_name} and ${group.b_first_name} — you introduced them ahead of "${group.event_name}" and mostly stay out of their actual conversation, only speaking when directly addressed, which just happened.
+      prompt: `${CO_VOICE}\n\n${CO_TEXT_CHANNEL} You're sitting quietly in a group iMessage thread with ${group.a_first_name} and ${group.b_first_name} — you introduced them ahead of "${group.event_name}" and mostly stay out of their actual conversation, only speaking when directly addressed, which just happened.
 
 ${senderFirstName ? `${senderFirstName} just said: "${content}"` : `Someone in the group just said: "${content}"`}
 
-Reply briefly and naturally, like a helpful friend who's still around but never trying to take over the conversation between them. Ground everything only in what's actually in this message — you don't have any other context about their conversation so far. No exclamation points, no em dashes, 1-2 sentences unless they genuinely asked something that needs more room. Return ONLY the reply text.`,
+Reply briefly and naturally, like someone who's still around but never trying to take over the conversation between them. Ground everything only in what's actually in this message — you don't have any other context about their conversation so far. No exclamation points, no em dashes, 1-2 sentences unless they genuinely asked something that needs more room. Return ONLY the reply text.`,
     });
     reply = cleanCoMessage(text.trim());
   } catch (err: any) {

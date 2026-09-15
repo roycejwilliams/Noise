@@ -15,7 +15,7 @@ export async function detectTurnTone(message: string, functionId: string): Promi
     const { text } = await generateText({
       model: anthropic("claude-haiku-4-5-20251001"),
       experimental_telemetry: { isEnabled: true, functionId },
-      prompt: `Read this text message someone just sent Co, a life concierge. Is there a clear, strong emotional tone here that Co should genuinely respond differently because of (e.g. frustrated, anxious, excited, grieving, overwhelmed, discouraged)?
+      prompt: `Read this text message someone just sent Co. Is there a clear, strong emotional tone here that Co should genuinely respond differently because of (e.g. frustrated, anxious, excited, grieving, overwhelmed, discouraged)?
 
 Ignore mild or ambiguous tone, tone you're not confident about, sarcasm, or ordinary neutral conversation — "none" should be your answer far more often than not.
 
@@ -48,7 +48,7 @@ export async function detectSeekingMode(
     const { text } = await generateText({
       model: anthropic("claude-haiku-4-5-20251001"),
       experimental_telemetry: { isEnabled: true, functionId },
-      prompt: `Read this text conversation with Co, a life concierge, and their latest message.
+      prompt: `Read this text conversation with Co, and their latest message.
 
 Recent conversation, in order:
 ${recentConversation || "(start of the conversation)"}

@@ -6,6 +6,7 @@ import { getEventDetails } from "./luma.js";
 import { writeMemory } from "./memory.js";
 import { classifyNamedOutcome, type NamedOutcome } from "./recommendationOutcome.js";
 import type { ScorableGuest } from "./eventScoring.js";
+import { CO_VOICE, CO_TEXT_CHANNEL } from "./coVoice.js";
 
 // Event Curation's own "end-of-night check-in" (Notion V1 board row 8, "who
 // did you meet that was interesting?") — distinct from
@@ -158,7 +159,7 @@ export async function sendDueEventCheckinFollowUps(): Promise<void> {
       const { text: draft } = await generateText({
         model: anthropic("claude-haiku-4-5-20251001"),
         experimental_telemetry: { isEnabled: true, functionId: "eventCheckinFollowUp.followUp" },
-        prompt: `You are Co, texting ${row.first_name} by iMessage. They were just at "${row.event_name}" tonight — Co's own event.
+        prompt: `${CO_VOICE}\n\n${CO_TEXT_CHANNEL} You're texting ${row.first_name}. They were just at "${row.event_name}" tonight — Co's own event.
 
 Draft a short, warm, genuinely curious message asking who they met that was interesting, or what stood out. 1-2 sentences, no exclamation points, no em dashes. This is a friend checking in after the fact, not a survey.
 

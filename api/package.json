@@ -15,7 +15,8 @@
     "resolve-active-ask": "tsx src/scripts/resolveActiveAsk.ts",
     "show-intent": "tsx src/scripts/showIntent.ts",
     "reset-profile": "tsx src/scripts/resetProfile.ts",
-    "dump-user-activity": "tsx src/scripts/dumpUserActivity.ts"
+    "dump-user-activity": "tsx src/scripts/dumpUserActivity.ts",
+    "check-co-voice": "tsx src/scripts/checkCoVoice.ts"
   },
   "keywords": [],
   "author": "",

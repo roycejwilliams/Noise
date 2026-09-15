@@ -4,6 +4,7 @@ import { z } from "zod";
 import sendblue, { cleanCoMessage } from "../services/sendblue.js";
 import { writeMemory } from "../services/memory.js";
 import { tryClaimProactiveNudge } from "../services/proactiveThrottle.js";
+import { CO_VOICE, CO_TEXT_CHANNEL } from "../services/coVoice.js";
 
 export type CalendarFollowPerson = {
   userId: string;
@@ -72,7 +73,7 @@ export async function runCalendarFollowReachOutAgent(
     }),
   };
 
-  const system = `You are Co, texting ${person.firstName} by iMessage. Co noticed they just followed the Co Presents calendar on Luma — interest, but no RSVP yet.
+  const system = `${CO_VOICE}\n\n${CO_TEXT_CHANNEL} You're texting ${person.firstName}. Co noticed they just followed the Co Presents calendar on Luma — interest, but no RSVP yet.
 
 Draft a short, warm message (1-3 sentences, no em dashes, no exclamation points, normal sentence capitalization) acknowledging that and inviting them to say more about what they're hoping for, so Co can point them toward the right one when the time comes. Not pushy, not a sales pitch. Then send it with sendSms.
 

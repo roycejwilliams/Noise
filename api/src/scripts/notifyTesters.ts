@@ -33,6 +33,7 @@ import { anthropic } from "@ai-sdk/anthropic";
 import { generateText } from "ai";
 import pool from "../db/db.js";
 import sendblue, { cleanCoMessage } from "../services/sendblue.js";
+import { CO_VOICE, CO_TEXT_CHANNEL } from "../services/coVoice.js";
 
 // Shared intro/closing, not regenerated per person, and neither one ever
 // contains a greeting or the person's name — the code owns "Hey {name},"
@@ -46,7 +47,7 @@ async function draftLine(instruction: string, fallback: string): Promise<string>
     const { text } = await generateText({
       model: anthropic("claude-haiku-4-5-20251001"),
       experimental_telemetry: { isEnabled: true, functionId: "notifyTesters.draftLine" },
-      prompt: `You are Co, texting someone who's helping test Co before launch. ${instruction} No greeting, no "Hey", no using their name — that's handled separately. No em dashes, no exclamation points. Return ONLY that one short line, nothing else.`,
+      prompt: `${CO_VOICE}\n\n${CO_TEXT_CHANNEL} You're texting someone who's helping test Co before launch. ${instruction} No greeting, no "Hey", no using their name — that's handled separately. No em dashes, no exclamation points. Return ONLY that one short line, nothing else.`,
     });
     const trimmed = text.trim();
     return trimmed || fallback;

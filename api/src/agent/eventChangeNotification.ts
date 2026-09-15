@@ -3,6 +3,7 @@ import { generateText, stepCountIs, tool } from "ai";
 import { z } from "zod";
 import sendblue, { cleanCoMessage } from "../services/sendblue.js";
 import { writeMemory } from "../services/memory.js";
+import { CO_VOICE, CO_TEXT_CHANNEL } from "../services/coVoice.js";
 
 export type EventChangeNotificationPerson = {
   userId: string;
@@ -69,7 +70,7 @@ export async function runEventChangeNotificationAgent(
     }),
   };
 
-  const system = `You are Co, texting ${person.firstName} by iMessage about "${eventName}", which they're on the guest list for.
+  const system = `${CO_VOICE}\n\n${CO_TEXT_CHANNEL} You're texting ${person.firstName} about "${eventName}", which they're on the guest list for.
 
 Real fact to communicate, exactly as given, no additions: ${fact}
 

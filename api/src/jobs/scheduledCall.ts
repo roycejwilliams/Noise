@@ -4,6 +4,7 @@ import pool from "../db/db.js";
 import sendblue from "../services/sendblue.js";
 import { triggerCallForUser } from "../services/callTrigger.js";
 import { writeMemory } from "../services/memory.js";
+import { CO_VOICE, CO_TEXT_CHANNEL } from "../services/coVoice.js";
 
 // Places calls booked via the schedule-a-call flow in sendblue.ts
 // (scheduled_calls, distinct from the existing "call me now" explicit_request
@@ -88,7 +89,7 @@ export async function sendDueReminders(): Promise<void> {
           isEnabled: true,
           functionId: "jobs.scheduledCallReminder",
         },
-        prompt: `You are Co. You're about to call ${row.first_name} in about 15 minutes, as scheduled. Send a short, natural one-line heads-up text. Vary how you say it, don't just say "Calling you soon." No exclamation points, no em dashes. Under 60 characters.`,
+        prompt: `${CO_VOICE}\n\n${CO_TEXT_CHANNEL} You're about to call ${row.first_name} in about 15 minutes, as scheduled. Send a short, natural one-line heads-up text. Vary how you say it, don't just say "Calling you soon." No exclamation points, no em dashes. Under 60 characters.`,
       });
       const trimmed = variedReminder.trim();
       if (trimmed) reminderMessage = trimmed;

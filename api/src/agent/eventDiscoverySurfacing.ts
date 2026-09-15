@@ -5,6 +5,7 @@ import sendblue, { cleanCoMessage } from "../services/sendblue.js";
 import { writeMemory } from "../services/memory.js";
 import { tryClaimProactiveNudge } from "../services/proactiveThrottle.js";
 import type { TierMatch } from "../services/tieredRecommendation.js";
+import { CO_VOICE, CO_TEXT_CHANNEL } from "../services/coVoice.js";
 
 export type EventDiscoverySurfacingPerson = {
   userId: string;
@@ -113,7 +114,7 @@ export async function runEventDiscoverySurfacingAgent(
   // follow-up, drawing from the event_offer_pending row eventSurfacingSweep.ts
   // writes right after this sends). The revealNow (short-notice) case is
   // handled entirely by runRevealNowDeterministic below, before this point.
-  const system = `You are Co, texting ${person.firstName} by iMessage. They recently told you: "${askText}"
+  const system = `${CO_VOICE}\n\n${CO_TEXT_CHANNEL} You're texting ${person.firstName}. They recently told you: "${askText}"
 
 Co found ${kindLabel} that might genuinely fit — internal-only, do not reveal this in the message: "${match.name}" — ${match.reason}
 
@@ -162,7 +163,7 @@ async function runRevealNowDeterministic(
   const { text: raw } = await generateText({
     model: anthropic("claude-sonnet-4-6"),
     experimental_telemetry: { isEnabled: true, functionId: "agent.eventDiscoverySurfacing.revealNowDraft" },
-    prompt: `You are Co, texting ${person.firstName} by iMessage. They recently told you: "${askText}"
+    prompt: `${CO_VOICE}\n\n${CO_TEXT_CHANNEL} You're texting ${person.firstName}. They recently told you: "${askText}"
 
 Co found ${kindLabel} that fits, but it's short notice: "${match.name}" — ${match.reason}.
 

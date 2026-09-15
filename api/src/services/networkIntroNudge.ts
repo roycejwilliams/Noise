@@ -7,6 +7,7 @@ import { tryClaimProactiveNudge } from "./proactiveThrottle.js";
 import { writeMemory } from "./memory.js";
 import { ALLOW_REAL_SENDS } from "../otpActions.js";
 import type { MatchNudgeCandidate } from "./eventGuestMatchHandoff.js";
+import { CO_VOICE, CO_TEXT_CHANNEL } from "./coVoice.js";
 
 // Redesigned 2026-09-07 (Royce: "how would you implement the networking
 // recommendation... if you just didn't get fed this information but only
@@ -134,7 +135,7 @@ export async function attemptNetworkSurfacing(
     const { text } = await generateText({
       model: anthropic("claude-haiku-4-5-20251001"),
       experimental_telemetry: { isEnabled: true, functionId: "networkIntroNudge.tease.draft" },
-      prompt: `You are Co, texting ${firstName}. Someone in the network crossed your mind for them — related to what they've told you they're looking for, but you haven't said who yet. Draft a short, warm text (1-2 sentences, no exclamation points, no em dashes, normal sentence capitalization) like a friend who just thought of someone, asking if they'd like to hear who. Don't name anyone or describe them yet. Return ONLY the message text.`,
+      prompt: `${CO_VOICE}\n\n${CO_TEXT_CHANNEL} You're texting ${firstName}. Someone in the network crossed your mind for them — related to what they've told you they're looking for, but you haven't said who yet. Draft a short, warm text (1-2 sentences, no exclamation points, no em dashes, normal sentence capitalization) like a friend who just thought of someone, asking if they'd like to hear who. Don't name anyone or describe them yet. Return ONLY the message text.`,
     });
     message = cleanCoMessage(text.trim());
   } catch (err: any) {
@@ -260,7 +261,7 @@ export async function resolveNetworkTeaseReply(
     const { text } = await generateText({
       model: anthropic("claude-haiku-4-5-20251001"),
       experimental_telemetry: { isEnabled: true, functionId: "networkIntroNudge.reveal.draft" },
-      prompt: `You are Co, texting ${firstName}. You just told them someone in the network crossed your mind, and they said yes, they want to hear who. Draft a short, warm text (2-3 sentences, no exclamation points, no em dashes, normal sentence capitalization) naming ${pending.candidate.first_name} and explaining in your own words why they're worth meeting: ${pending.candidate.match_reason}. End by asking if they'd like you to see if ${pending.candidate.first_name} is open to it too. Return ONLY the message text.`,
+      prompt: `${CO_VOICE}\n\n${CO_TEXT_CHANNEL} You're texting ${firstName}. You just told them someone in the network crossed your mind, and they said yes, they want to hear who. Draft a short, warm text (2-3 sentences, no exclamation points, no em dashes, normal sentence capitalization) naming ${pending.candidate.first_name} and explaining in your own words why they're worth meeting: ${pending.candidate.match_reason}. End by asking if they'd like you to see if ${pending.candidate.first_name} is open to it too. Return ONLY the message text.`,
     });
     message = cleanCoMessage(text.trim());
   } catch (err: any) {
@@ -354,7 +355,7 @@ async function askCandidateDirectly(candidate: MatchNudgeCandidate, asker: Match
     const { text } = await generateText({
       model: anthropic("claude-haiku-4-5-20251001"),
       experimental_telemetry: { isEnabled: true, functionId: "networkIntroNudge.directAsk.draft" },
-      prompt: `You are Co, texting ${candidate.first_name}. ${asker.first_name} would like to be introduced — you're both in Co's network. Draft a short, warm text (1-2 sentences, no exclamation points, no em dashes, normal sentence capitalization) letting ${candidate.first_name} know and asking if they'd be open to it too. Low-pressure, genuinely a question. Return ONLY the message text.`,
+      prompt: `${CO_VOICE}\n\n${CO_TEXT_CHANNEL} You're texting ${candidate.first_name}. ${asker.first_name} would like to be introduced — you're both in Co's network. Draft a short, warm text (1-2 sentences, no exclamation points, no em dashes, normal sentence capitalization) letting ${candidate.first_name} know and asking if they'd be open to it too. Low-pressure, genuinely a question. Return ONLY the message text.`,
     });
     message = cleanCoMessage(text.trim());
   } catch (err: any) {

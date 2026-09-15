@@ -3,10 +3,10 @@ import { anthropic } from "@ai-sdk/anthropic";
 import pool from "../db/db.js";
 import sendblue from "../services/sendblue.js";
 import { writeMemory } from "../services/memory.js";
-import { renderCoPersonaPrompt } from "../services/coPersona.js";
 import { buildContextSummary } from "../services/callContext.js";
 import { getTimezoneForCity } from "../services/geocoding.js";
 import { isReasonableLocalHour } from "../services/localHours.js";
+import { CO_VOICE, CO_TEXT_CHANNEL } from "../services/coVoice.js";
 
 // A person who was actually listening doesn't follow up the same way every
 // time — one fixed "observation + reframe" template, generated over and
@@ -54,12 +54,11 @@ export async function sendDueFollowUps(): Promise<void> {
 
     try {
       const contextSummary = await buildContextSummary(row.user_id);
-      const persona = await renderCoPersonaPrompt(row.first_name, contextSummary);
       const shape = SHAPES[Math.floor(Math.random() * SHAPES.length)];
       const { text: followUpMessage } = await generateText({
         model: anthropic("claude-haiku-4-5-20251001"),
         experimental_telemetry: { isEnabled: true, functionId: "jobs.postCallFollowUp" },
-        prompt: `${persona ?? "You are Co."} You got off a call with ${row.first_name} a little while ago. Here's what they told you:\n\n"${row.transcript}"\n\n${shape}\n\nThis is a relationship text, not a status update — never mention next steps, timing, or anything operational. That's handled elsewhere; this message's only job is proving you were actually listening.\n\nNo exclamation points. No em dashes. Normal sentence capitalization. This is a text message — keep it short, one text-message-length turn, under 160 characters.`,
+        prompt: `${CO_VOICE}\n\n${CO_TEXT_CHANNEL} You got off a call with ${row.first_name} a little while ago.${contextSummary ? `\n\nWhat you already know about them (background only, don't recite it):\n${contextSummary}` : ""}\n\nHere's what they told you on the call:\n\n"${row.transcript}"\n\n${shape}\n\nThis is a relationship text, not a status update — never mention next steps, timing, or anything operational. That's handled elsewhere; this message's only job is proving you were actually listening.\n\nNo exclamation points. No em dashes. Normal sentence capitalization. This is a text message — keep it short, one text-message-length turn, under 160 characters.`,
       });
       const trimmed = followUpMessage.trim();
 

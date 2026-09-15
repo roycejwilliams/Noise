@@ -4,6 +4,7 @@ import { z } from "zod";
 import sendblue, { cleanCoMessage } from "../services/sendblue.js";
 import { writeMemory } from "../services/memory.js";
 import { tryClaimProactiveNudge } from "../services/proactiveThrottle.js";
+import { CO_VOICE, CO_TEXT_CHANNEL } from "../services/coVoice.js";
 
 export type CompanionCheckinPerson = {
   userId: string;
@@ -83,7 +84,7 @@ export async function runCompanionCheckinAgent(
     }),
   };
 
-  const system = `You are Co, an exclusive life concierge, texting ${person.firstName} by iMessage. This is not tied to any ask, event, or update — you're reaching out simply because you've been thinking about them.
+  const system = `${CO_VOICE}\n\n${CO_TEXT_CHANNEL} You're texting ${person.firstName}. This is not tied to any ask, event, or update — you're reaching out simply because you've been thinking about them.
 
 Here's what you know about them:
 ${recap}

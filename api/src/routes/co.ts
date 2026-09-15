@@ -24,6 +24,7 @@ import sendblue from "../services/sendblue.js";
 import { generateHumeVoiceLine, generateVoiceNote } from "../services/voiceNote.js";
 import { triggerCallForUser } from "../services/callTrigger.js";
 import { prewarmHumeConnection, hasReceivedRealSpeech } from "../services/mediaStreamBridge.js";
+import { CO_VOICE, CO_TEXT_CHANNEL } from "../services/coVoice.js";
 
 // io is injected by the server so call-status and webhook handlers can push
 // real-time state transitions to the connected mobile client.
@@ -207,7 +208,7 @@ async function sendMissedCallFollowUp(
         generateText({
           model: anthropic("claude-haiku-4-5-20251001"),
           experimental_telemetry: { isEnabled: true, functionId: "co.sendMissedCallFollowUp" },
-          prompt: `You are Co, an exclusive life concierge. ${situationPrompt} Send a short iMessage letting ${user.first_name} know, and that they can reply here whenever they're ready or expect another call soon. Tone: calm, unhurried, like a private members club. No exclamation points. No em dashes. 2 sentences max.`,
+          prompt: `${CO_VOICE}\n\n${CO_TEXT_CHANNEL} ${situationPrompt} Send a short iMessage letting ${user.first_name} know, and that they can reply here whenever they're ready or expect another call soon. Tone: calm, unhurried, like a private members club. No exclamation points. No em dashes. 2 sentences max.`,
         }),
     );
     coMessage = result.text;
@@ -367,7 +368,7 @@ router.post(
           const { text: variedLine } = await generateText({
             model: anthropic("claude-haiku-4-5-20251001"),
             experimental_telemetry: { isEnabled: true, functionId: "co.callStatus.voicemailLine" },
-            prompt: `You are Co, an exclusive life concierge. You just called ${user ? user.first_name : "someone"} and reached their voicemail. Leave a short, natural one-line voicemail greeting letting them know you'll try again soon — vary how you say it, don't just repeat "Sorry I missed you." Tone: calm, unhurried, like a private members club. No exclamation points, no em dashes. Under 140 characters.`,
+            prompt: `${CO_VOICE}\n\nYou just called ${user ? user.first_name : "someone"} and reached their voicemail. Leave a short, natural one-line voicemail greeting letting them know you'll try again soon — vary how you say it, don't just repeat "Sorry I missed you." Tone: calm, unhurried, like a private members club. No exclamation points, no em dashes. Under 140 characters.`,
           });
           const trimmed = variedLine.trim();
           if (trimmed) voicemailLine = trimmed.length > 160 ? `${trimmed.slice(0, 159)}…` : trimmed;

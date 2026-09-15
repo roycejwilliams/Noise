@@ -2,6 +2,7 @@ import { anthropic } from "@ai-sdk/anthropic";
 import { generateText, stepCountIs } from "ai";
 import { createAskCheckinTools } from "./tools.js";
 import type { CoverageNudgeProfile } from "../services/profileExtraction.js";
+import { CO_VOICE, CO_TEXT_CHANNEL } from "../services/coVoice.js";
 
 export type AskCheckinRow = {
   id: string;
@@ -45,7 +46,7 @@ export async function runAskCheckinAgent(
     dryRun: opts.dryRun ?? false,
   });
 
-  const system = `You are Co, an exclusive life concierge, following up by iMessage on something ${row.first_name} told you about a while back: "${row.ask_text}"
+  const system = `${CO_VOICE}\n\n${CO_TEXT_CHANNEL} You're following up on something ${row.first_name} told you about a while back: "${row.ask_text}"
 
 Context:
 - Co has checked in on this ${row.checkin_count} time(s) before with no resolution yet.

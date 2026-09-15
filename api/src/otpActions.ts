@@ -3,6 +3,7 @@ import "dotenv/config";
 import { anthropic } from "@ai-sdk/anthropic";
 import { generateText } from "ai";
 import sendblue from "./services/sendblue.js";
+import { CO_VOICE, CO_TEXT_CHANNEL } from "./services/coVoice.js";
 
 // A fixed line every time reads as a canned system message, not someone
 // actually greeting you — same reasoning as webhooks.ts's variedConfirmation/
@@ -14,7 +15,7 @@ async function varied(instruction: string, fallback: string, maxChars: number): 
     const { text } = await generateText({
       model: anthropic("claude-haiku-4-5-20251001"),
       experimental_telemetry: { isEnabled: true, functionId: "otpActions.introLine" },
-      prompt: `You are Co, an exclusive life concierge, texting someone. ${instruction} Vary how you say it call to call — don't just repeat the same phrasing every time. Tone: calm, unhurried, like a private members club. No exclamation points, no em dashes. Under ${maxChars} characters. Return ONLY the single message you would actually send, nothing else — never multiple options, a numbered or lettered list, headers, or any markdown formatting.`,
+      prompt: `${CO_VOICE}\n\n${CO_TEXT_CHANNEL} ${instruction} Vary how you say it call to call — don't just repeat the same phrasing every time. Tone: calm, unhurried, like a private members club. No exclamation points, no em dashes. Under ${maxChars} characters. Return ONLY the single message you would actually send, nothing else — never multiple options, a numbered or lettered list, headers, or any markdown formatting.`,
     });
     const trimmed = text.trim();
     // Confirmed live: Haiku sometimes ignores "return only one" and returns
@@ -157,7 +158,7 @@ export const sendSMS = async ({
       await send(
         await varied(
           "You already greeted them warmly in a separate message just before this one — do not say \"welcome\" or greet them again here. Continuing on, let them know, in your own words: Co is invite-only and they're getting early access, you're still learning and listening for now, and more is coming later. Also mention, briefly and factually, that they can just call this number any time they'd rather talk than text — not a suggestion to do it now, just letting them know it's always an option.",
-          `Co is invite-only. You're getting early access. She's learning and listening for now. More comes later. You can also just call this number any time you'd rather talk than text.`,
+          `Co is invite-only. You're getting early access. Co is still getting to know people, and more comes later. You can also just call this number any time you'd rather talk than text.`,
           220,
         ),
       );
@@ -314,7 +315,7 @@ export const sendEmail = async ({
         subject: `Welcome to Co.`,
         html: emailTemplate(
           h1("You're in.") +
-            p("Co is invite-only. You're getting early access. She's learning and listening for now.") +
+            p("Co is invite-only. You're getting early access. Co is still getting to know people.") +
             p("More comes later.") +
             ctaButton("Open Co", "https://app.copatible.com"),
         ),
@@ -336,7 +337,7 @@ export const sendEmail = async ({
         subject: `Co noticed you.`,
         html: emailTemplate(
           h1(firstName ? `Hey ${firstName}.` : "Hey there.") +
-            p("Co noticed you followed the Co Presents calendar — Co is an invite-only life concierge, not just an events page.") +
+            p("Co noticed you followed the Co Presents calendar — Co is invite-only, not just an events page.") +
             p("Reply and tell Co a little about what you're hoping to find, and it'll keep you in mind for what's next."),
         ),
       });

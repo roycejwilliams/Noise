@@ -58,6 +58,7 @@ import { findRealVenues } from "../services/venueLookup.js";
 import { runConversationReplyAgent, filterRelevantMemories, CALL_OFFER_EXPIRY_DAYS } from "../agent/conversationReply.js";
 import { triggerCallForUser } from "../services/callTrigger.js";
 import sendblue, { cleanCoMessage } from "../services/sendblue.js";
+import { CO_VOICE, CO_TEXT_CHANNEL } from "../services/coVoice.js";
 import { generateVoiceNote } from "../services/voiceNote.js";
 
 // Serializes webhook processing per phone number. Without this, two
@@ -82,7 +83,7 @@ function withPhoneLock<T>(phone: string, fn: () => Promise<T>): Promise<T> {
 // the fastest bursts. Not pushed further toward 16s itself: that would
 // make every single-message reply feel sluggish for the common case just
 // to fully cover one slower outlier.
-const DEBOUNCE_MS = 8000;
+const DEBOUNCE_MS = 4000;
 
 // Heuristic-only (no LLM call — this is directly observable, not something
 // to infer) read of how the user themselves texts, from their own lines in
@@ -566,7 +567,7 @@ Return ONLY strict JSON: {"full_name": string or null, "email": string or null, 
               const { text } = await generateText({
                 model: anthropic("claude-haiku-4-5-20251001"),
                 experimental_telemetry: { isEnabled: true, functionId: "sendblue.intake.kickoff" },
-                prompt: `You are Co, an exclusive life concierge. ${first_name} just gave you their name and email to get started. Write a short, warm iMessage welcoming them in and opening the real conversation — invite them to share what's on their mind or going on in their life right now. Tone: like a thoughtful friend, genuine warmth, real personality. No exclamation points. No em dashes. 2 sentences max.`,
+                prompt: `${CO_VOICE}\n\n${CO_TEXT_CHANNEL} ${first_name} just gave you their name and email to get started. Write a short message welcoming them in and opening the real conversation: invite them to share what's on their mind or going on in their life right now. 2 sentences max.`,
               });
               kickoffMsg = text;
             } catch (genErr: any) {
@@ -591,13 +592,32 @@ Return ONLY strict JSON: {"full_name": string or null, "email": string or null, 
           // "Sorry, didn't catch that" is the right tone for a genuinely
           // garbled attempt, but wrong here: nothing was missed, they just
           // hadn't answered yet.
+          // Rotated and never an exact repeat of Co's previous line (this
+          // retry was the single most-sent Co message, the same sentence
+          // over and over). Asks only for what's actually missing.
+          const lastCoLine = (
+            await pool
+              .query(
+                `SELECT content FROM co_memories WHERE user_id = $1 AND memory_type = 'text_exchange' AND content LIKE 'Co replied:%' ORDER BY created_at DESC LIMIT 1`,
+                [user.id],
+              )
+              .catch(() => ({ rows: [] as { content: string }[] }))
+          ).rows[0]?.content?.replace(/^Co replied: /, "");
+          const pickFresh = (options: string[]) => {
+            const fresh = options.filter((o) => o !== lastCoLine);
+            return fresh[Math.floor(Math.random() * fresh.length)] ?? options[0];
+          };
           const missingReply = !finalName
             ? extracted.is_acknowledgment
-              ? "Of course. So, what's your full name and email?"
+              ? pickFresh(["Of course. What's your full name and email?", "Glad you're here. What name and email should I use for you?"])
               : extracted.email && !emailValid
-                ? "That email didn't look quite right — mind double-checking it?"
-                : "Sorry, didn't catch that. What's your full name and email?"
-            : "Got your name — what's the best email for you?";
+                ? pickFresh(["That email didn't look quite right. Mind double-checking it?", "I think that email has a typo. Can you send it again?"])
+                : pickFresh([
+                      "Before we get into it, what's your full name and email?",
+                      "I want to hear about that. First, what name and email should I have for you?",
+                      "Let's get you set up first. What's your full name and email?",
+                  ])
+            : pickFresh(["Got your name. What's the best email for you?", "Thanks. What email should I use for you?"]);
           await sendCoReply({ phone: number, message: missingReply, asVoice: false });
           await logTextExchange(user.id, `Co replied: ${missingReply}`);
           return res.status(200).send({ received: true, action: "intake_incomplete" });
@@ -689,6 +709,25 @@ Return ONLY strict JSON: {"full_name": string or null, "email": string or null, 
           // text that was never really there.
           hasText ? detectTurnTone(resolvedContent, "sendblue.detectTurnTone") : Promise.resolve(null),
         ]);
+
+        // Same text sent again within a couple of minutes (confirmed live:
+        // people resend when a reply is slow). The reply agent is told so it
+        // answers once instead of treating each copy as a new message.
+        let repeatContext = "";
+        if (hasText) {
+          const repeats = await pool
+            .query(
+              `SELECT COUNT(*)::int AS n FROM co_memories
+               WHERE user_id = $1 AND memory_type = 'text_exchange' AND content = $2
+                 AND id <> $3 AND created_at > NOW() - INTERVAL '2 minutes'`,
+              [user.id, inboundContent, inboundMemory.rows[0].id],
+            )
+            .then((r) => r.rows[0]?.n ?? 0)
+            .catch(() => 0);
+          if (repeats > 0) {
+            repeatContext = `\nThey've sent this exact message ${repeats + 1} times in the last couple of minutes, probably because your reply felt slow. Answer it once, as a single reply. Don't treat it as new, and don't point out that they repeated it.`;
+          }
+        }
 
         if (queryEmbedding) {
           pool
@@ -843,7 +882,7 @@ Return ONLY strict JSON: {"full_name": string or null, "email": string or null, 
             ]
               .filter(Boolean)
               .join(", ");
-            recentEventDetailsContext = `\n\nIf they ask about specifics of the event/opportunity you recently told them about ("${m.name}"), these are the ONLY real facts you actually have: ${facts}. Never state a specific start time, exact address or neighborhood, headcount, or any other detail not listed here — if asked something not covered (like exact start time or venue address), be honest that you don't have that specific detail and point them to the real link${m.url ? "" : " once you have one"} instead of guessing.`;
+            recentEventDetailsContext = `\n\nIf they ask about specifics of the event/opportunity you recently told them about ("${m.name}"), these are the ONLY real facts you actually have: ${facts}. Never state a specific start time, exact address or neighborhood, headcount, or any other detail not listed here — if asked something not covered (like exact start time or venue address), be honest that you don't have that specific detail and ${m.url ? "point them to the real link" : "say you don't have a link for it"} instead of guessing.`;
           } catch {
             // Malformed or pre-fix content shape — skip silently, non-fatal.
           }
@@ -937,7 +976,7 @@ Return ONLY strict JSON: {"full_name": string or null, "email": string or null, 
             generateText({
               model: anthropic("claude-haiku-4-5-20251001"),
               experimental_telemetry: { isEnabled: true, functionId: "sendblue.callOffer.classify" },
-              prompt: `A user is texting Co, a life concierge.${offerIsFreshestPending ? ` Co already offered them a call about this: "${pendingOffer.content}", and is waiting to hear back on it. This does NOT mean every message from them now is a response to that offer — if they're just continuing to talk, that's normal conversation, not an answer to the offer, unless it's actually about being called or talking by phone. A genuinely different topic or problem is always free to get its own fresh read below, regardless of this still-open offer.` : ""}
+              prompt: `A user is texting Co.${offerIsFreshestPending ? ` Co already offered them a call about this: "${pendingOffer.content}", and is waiting to hear back on it. This does NOT mean every message from them now is a response to that offer — if they're just continuing to talk, that's normal conversation, not an answer to the offer, unless it's actually about being called or talking by phone. A genuinely different topic or problem is always free to get its own fresh read below, regardless of this still-open offer.` : ""}
 
 Recent conversation, in order (their latest message may only make sense combined with what came before — e.g. a time given in one message and a date/timezone confirmed in a later one is still a single schedule request, not two separate things):
 ${recentConversation || "(start of the conversation)"}
@@ -1499,7 +1538,19 @@ Return ONLY the classification, nothing else.`,
                   await logTextExchange(user.id, `Co replied: ${m.url}`);
                   await new Promise((resolve) => setTimeout(resolve, 2000));
                 }
-                const description = `${m.name} — ${m.reason}`;
+                // Drafted in Co's voice instead of sending the matching
+                // engine's raw "name — reason" line straight to the user.
+                let description = `${m.name}. ${m.reason}`;
+                try {
+                  const { text: drafted } = await generateText({
+                    model: anthropic("claude-haiku-4-5-20251001"),
+                    experimental_telemetry: { isEnabled: true, functionId: "sendblue.recommendation.describe" },
+                    prompt: `${CO_VOICE}\n\n${CO_TEXT_CHANNEL} You're telling ${user.first_name ?? "them"} about "${m.name}"${"url" in m && m.url ? ". You sent the link a moment ago; this message goes right under it" : ""}. Why it fits them, from the matching notes: ${m.reason}\n\nWrite 1-2 sentences naming it and saying why it fits, in your own words. Only use facts from the name and notes above: no dates, times, or details that aren't written there. No link. Return ONLY the message.`,
+                  });
+                  if (drafted.trim()) description = cleanCoMessage(drafted.trim());
+                } catch (err: any) {
+                  console.error("sendblue: recommendation description drafting failed (non-fatal, sending plain):", err?.message ?? err);
+                }
                 await sendCoReply({ phone: user.phone_number, message: description, asVoice: isVoice });
                 await logTextExchange(user.id, `Co replied: ${description}`);
                 await new Promise((resolve) => setTimeout(resolve, 2000));
@@ -1569,10 +1620,11 @@ Return ONLY valid JSON, no preamble: {"wants_venue": true or false, "venue_type"
                     generateText({
                       model: anthropic("claude-haiku-4-5-20251001"),
                       experimental_telemetry: { isEnabled: true, functionId: "sendblue.venueRequest.holdMessage" },
-                      prompt: `You are Co, texting someone. They just asked about finding ${requestedCount > 1 ? `${requestedCount} ${venueType}s` : `a ${venueType}`}. You're about to go actually look them up for them — send a brief, warm, personalized "give me a sec" acknowledgment, referencing what they're actually looking for, not generic. Don't claim you've found anything yet. One short sentence. No exclamation points, no em dashes. Under 100 characters.`,
+                      prompt: `${CO_VOICE}\n\n${CO_TEXT_CHANNEL} They just asked about finding ${requestedCount > 1 ? `${requestedCount} ${venueType}s` : `a ${venueType}`}. You're about to go actually look them up for them — send a brief "give me a sec" acknowledgment that names what they're looking for (the ${venueType}), not generic. Normal capitalization. Don't claim you've found anything yet. One short sentence. No exclamation points, no em dashes. Under 100 characters.`,
                     }),
                 );
-                const holdMessage = rawHold.trim().slice(0, 100);
+                const trimmedHold = rawHold.trim().slice(0, 100);
+                const holdMessage = trimmedHold.charAt(0).toUpperCase() + trimmedHold.slice(1);
                 await logTextExchange(user.id, `Co replied: ${holdMessage}`);
                 try {
                   await sendblue.messages.send({
@@ -1599,7 +1651,7 @@ Return ONLY valid JSON, no preamble: {"wants_venue": true or false, "venue_type"
                       generateText({
                         model: anthropic("claude-haiku-4-5-20251001"),
                         experimental_telemetry: { isEnabled: true, functionId: "sendblue.venueRequest.introMessage" },
-                        prompt: `You are Co, texting someone. You just found ${venues.length} real ${venueType}${venues.length > 1 ? "s" : ""} for them${venues.length < requestedCount ? ` — they asked for ${requestedCount}, this is genuinely all that came back as a solid match, say so honestly` : ""}. Write ONE short, warm intro sentence to go right before a list (the list itself follows separately after your sentence — do not write the list yourself, do not include any links). No exclamation points, no em dashes. Under 150 characters.`,
+                        prompt: `${CO_VOICE}\n\n${CO_TEXT_CHANNEL} You just found ${venues.length} real ${venueType}${venues.length > 1 ? "s" : ""} for them${venues.length < requestedCount ? ` — they asked for ${requestedCount}, this is genuinely all that came back as a solid match, say so honestly` : ""}. Write ONE short, warm intro sentence to go right before a list (the list itself follows separately after your sentence — do not write the list yourself, do not include any links). No exclamation points, no em dashes. Under 150 characters.`,
                       }),
                   );
                   const introLine = rawIntro.trim().slice(0, 150);
@@ -1828,6 +1880,7 @@ Return ONLY valid JSON, no preamble: {"wants_venue": true or false, "venue_type"
                 venueContext,
                 callFeatureQuestionContext,
                 callFailureContext,
+                repeatContext,
                 scheduleCallContext,
                 toneContext,
                 seekingModeContext,

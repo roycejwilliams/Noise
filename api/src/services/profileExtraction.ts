@@ -467,7 +467,7 @@ async function extractCheckinCadencePreference(transcript: string): Promise<numb
   try {
     const { text: raw } = await generateText({
       model: anthropic("claude-haiku-4-5-20251001"),
-      prompt: `Here is a call transcript between Co (a life concierge) and a caller. Near the end of the call, Co may have asked how often the caller would like Co to proactively call them to check in.
+      prompt: `Here is a call transcript between Co and a caller. Near the end of the call, Co may have asked how often the caller would like Co to proactively call them to check in.
 
 Transcript:
 "${transcript}"

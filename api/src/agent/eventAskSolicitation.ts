@@ -4,6 +4,7 @@ import { z } from "zod";
 import sendblue, { cleanCoMessage } from "../services/sendblue.js";
 import { writeMemory } from "../services/memory.js";
 import { tryClaimProactiveNudge } from "../services/proactiveThrottle.js";
+import { CO_VOICE, CO_TEXT_CHANNEL } from "../services/coVoice.js";
 
 export type EventAskSolicitationPerson = {
   userId: string;
@@ -76,7 +77,7 @@ export async function runEventAskSolicitationAgent(
     }),
   };
 
-  const system = `You are Co, texting ${person.firstName} by iMessage. They're on the guest list for "${eventName}", but Co doesn't yet know what they're actually hoping to get out of it — no stated ask on file.
+  const system = `${CO_VOICE}\n\n${CO_TEXT_CHANNEL} You're texting ${person.firstName}. They're on the guest list for "${eventName}", but Co doesn't yet know what they're actually hoping to get out of it — no stated ask on file.
 
 Draft a short, warm message (1-3 sentences, no em dashes, no exclamation points, normal sentence capitalization — this is a proactive text, not a reply to match anyone's texting style) asking what they're hoping for from this one — who they'd want to meet, what would make it worth their time. Not a form question, a genuine one, in Co's own voice. Then send it with sendSms.
 

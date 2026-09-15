@@ -4,6 +4,7 @@ import pool from "../db/db.js";
 import sendblue, { cleanCoMessage } from "./sendblue.js";
 import type { TierMatch } from "./tieredRecommendation.js";
 import { writeMemory } from "./memory.js";
+import { CO_VOICE, CO_TEXT_CHANNEL } from "./coVoice.js";
 
 // Outcome-learning loop (Royce, 2026-09-02: "Co follows up" + the shared
 // "named someone?" classifier + wiring signal weighting into future
@@ -157,7 +158,7 @@ export async function sendDueOutcomeFollowUps(): Promise<void> {
       const { text: draft } = await generateText({
         model: anthropic("claude-haiku-4-5-20251001"),
         experimental_telemetry: { isEnabled: true, functionId: "recommendationOutcome.followUp" },
-        prompt: `You are Co, texting ${row.first_name} by iMessage. A little while back you told them about "${row.match_name}" (they'd said: "${row.ask_text}"). Enough time has passed that it should have happened by now.
+        prompt: `${CO_VOICE}\n\n${CO_TEXT_CHANNEL} You're texting ${row.first_name}. A little while back you told them about "${row.match_name}" (they'd said: "${row.ask_text}"). Enough time has passed that it should have happened by now.
 
 Draft a short, warm, genuinely curious message asking how it went — who they met or talked to, or what stood out. 1-2 sentences, no exclamation points, no em dashes, normal sentence capitalization. This is a friend checking in, not a survey.
 
