@@ -3,6 +3,10 @@ import { generateText } from "ai";
 import pool from "../db/db.js";
 import { writeMemory } from "./memory.js";
 
+// The recap decides what's stale and what to drop from Co's running picture
+// of someone, so it's a judgment call: Sonnet 5 (Royce's model policy).
+const RECAP_MODEL = "claude-sonnet-5";
+
 // Memory compaction (Royce, 2026-09-01: "go ahead and have that built") —
 // Co's own suggestion, made live while diagnosing a real memory-continuity
 // gap with Royce: "Build a compaction layer that periodically distills and
@@ -64,7 +68,7 @@ export async function buildRecap(userId: string): Promise<void> {
 
   try {
     const { text: raw } = await generateText({
-      model: anthropic("claude-sonnet-4-6"),
+      model: anthropic(RECAP_MODEL),
       experimental_telemetry: { isEnabled: true, functionId: "memoryCompaction.buildRecap" },
       prompt: `You maintain Co's running understanding of one specific person, across many conversations over time.
 

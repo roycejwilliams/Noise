@@ -5,6 +5,21 @@ import crypto from "crypto";
 import pool from "../db/db.js";
 import { generateEmbedding, generateGoalEmbedding } from "./embeddings.js";
 import { sweepAskAgainstNetwork, sweepOfferingAgainstNetwork } from "./relevance.js";
+import { recordDecision } from "../harness/core.js";
+import {
+  PROFILE_JUDGMENT_MODEL,
+  decideAskWrite,
+  gateResolutions,
+  sanitizeExtractedProfile,
+  type OpenAsk,
+  type ProposedResolution,
+} from "../harness/profileWrite.js";
+
+// Model per job (Royce's policy): Sonnet 5 for judgment that changes the
+// profile (psychographic extraction, retiring items, same-ask calls);
+// Haiku 4.5 for narrow extraction that code checks afterward.
+const PROFILE_EXTRACT_MODEL = PROFILE_JUDGMENT_MODEL;
+const NARROW_MODEL = "claude-haiku-4-5-20251001";
 
 // Shared by the Hume call webhook (co.ts /webhook), the typed-intake fallback
 // (co.ts /typed-intake/:user_id), and co-test's browser-EVI intake — all three
@@ -130,7 +145,7 @@ export async function extractPsychographicProfile(
     : "";
 
   const { text: rawExtraction } = await generateText({
-    model: anthropic("claude-sonnet-4-6"),
+    model: anthropic(PROFILE_EXTRACT_MODEL),
     prompt: `You are extracting psychographic profile data from a conversation transcript.
 
         Based on this transcript, extract the following fields and return ONLY valid JSON with no preamble or markdown:
@@ -201,7 +216,7 @@ export async function assessConversationCoverage(
 
   try {
     const { text: raw } = await generateText({
-      model: anthropic("claude-haiku-4-5-20251001"),
+      model: anthropic(NARROW_MODEL),
       prompt: `${priorContextBlock}Transcript of an in-progress conversation so far between Co (an assistant) and a person, by phone or text:
 "${transcriptSoFar.trim() || "(nothing said yet in this conversation)"}"
 
@@ -402,6 +417,7 @@ async function assessResolvedItems(
   existingGoals: string[],
   existingBlockers: string[],
   openAsks: { id: string; text: string }[] = [],
+  userId: string | null = null,
 ): Promise<{ resolvedGoals: string[]; resolvedBlockers: string[]; resolvedAskIds: string[] }> {
   if (existingGoals.length === 0 && existingBlockers.length === 0 && openAsks.length === 0) {
     return { resolvedGoals: [], resolvedBlockers: [], resolvedAskIds: [] };
@@ -412,48 +428,92 @@ async function assessResolvedItems(
       ? `\nOpen asks (numbered):\n${openAsks.map((a, i) => `${i}. ${a.text}`).join("\n")}\n`
       : "";
 
+    // Retiring something is a judgment with a side effect (it stops check-ins
+    // and retires matches), so Sonnet 5, and every retirement must quote the
+    // person's own words. gateResolutions (src/harness/profileWrite.ts)
+    // rejects anything whose quote isn't really in the transcript or was
+    // said by Co.
     const { text: raw } = await generateText({
-      model: anthropic("claude-haiku-4-5-20251001"),
-      prompt: `Here is what we already have on file for this person:
+      model: anthropic(PROFILE_JUDGMENT_MODEL),
+      prompt: buildResolutionPrompt(transcript, existingGoals, existingBlockers, askListBlock),
+      experimental_telemetry: { isEnabled: true, functionId: "profileExtraction.assessResolvedItems" },
+    });
+
+    const gated = gateResolutionOutput(raw, transcript, existingGoals, existingBlockers, openAsks);
+    if (gated.proposals.length) {
+      await recordDecision({
+        layer: 4,
+        decision: "profile.write",
+        userId,
+        outcome: gated.accepted.length ? "act" : "skip",
+        action: "retire_items",
+        proposal: gated.proposals,
+        checks: gated.checks,
+        reason: `${gated.accepted.length} of ${gated.proposals.length} retirements supported by a quote`,
+      });
+    }
+
+    return {
+      resolvedGoals: gated.accepted.filter((p) => p.kind === "goal").map((p) => p.item),
+      resolvedBlockers: gated.accepted.filter((p) => p.kind === "blocker").map((p) => p.item),
+      resolvedAskIds: gated.accepted.filter((p) => p.kind === "ask").map((p) => p.item),
+    };
+  } catch (err) {
+    console.error("assessResolvedItems failed (non-fatal):", err);
+    return { resolvedGoals: [], resolvedBlockers: [], resolvedAskIds: [] };
+  }
+}
+
+// Exported for evals/profile, which runs the real prompt and gate.
+export function buildResolutionPrompt(
+  transcript: string,
+  existingGoals: string[],
+  existingBlockers: string[],
+  askListBlock: string,
+): string {
+  return `Here is what we already have on file for this person:
 Goals: ${JSON.stringify(existingGoals)}
 Blockers: ${JSON.stringify(existingBlockers)}
 ${askListBlock}
-Based on this new call transcript, which of the EXACT goals/blockers above (if any) has the caller indicated is now achieved, resolved, or no longer relevant? Separately, which numbered open asks (if any) has the transcript signaled are now resolved, no longer needed, or no longer true? Only include something if the transcript gives a clear signal — do not guess, and leave it out if unclear.
+Based on this new transcript, which of the EXACT goals/blockers above (if any) has the person said is now achieved, resolved, or no longer relevant? Separately, which numbered open asks (if any) has the person said are now resolved, no longer needed, or no longer true? Only include something when the person clearly says so. Restating it, still wanting it, or Co mentioning it does not count. Leave it out if unclear.
+
+For every item you include, copy the person's exact words that show it, verbatim from the transcript (at least a few words, from their line, not Co's).
 
 Transcript:
 "${transcript}"
 
 Return ONLY valid JSON, reusing the exact original text for goals/blockers and the number for asks:
-{"resolved_goals": [], "resolved_blockers": [], "resolved_ask_indices": []}`,
-      experimental_telemetry: { isEnabled: true, functionId: "profileExtraction.assessResolvedItems" },
-    });
+{"resolved_goals": [{"item": "...", "quote": "..."}], "resolved_blockers": [{"item": "...", "quote": "..."}], "resolved_asks": [{"index": 0, "quote": "..."}]}`;
+}
 
-    // Real gap found live, 2026-09-10: despite "Return ONLY valid JSON",
-    // Haiku sometimes appends a "**Reasoning:**" section after the fenced
-    // block explaining its answer. Stripping just the ```json fences left
-    // that trailing prose in place, and JSON.parse fails on the first
-    // non-whitespace character after the object closes. Extract the actual
-    // balanced {...} object instead of trusting the fence markers alone.
-    const clean = raw.replace(/```json|```/g, "").trim();
-    const jsonText = extractFirstJsonObject(clean) ?? clean;
-    const parsed = JSON.parse(jsonText);
-    const resolvedGoals = Array.isArray(parsed.resolved_goals)
-      ? parsed.resolved_goals.filter((g: unknown) => existingGoals.includes(g as string))
-      : [];
-    const resolvedBlockers = Array.isArray(parsed.resolved_blockers)
-      ? parsed.resolved_blockers.filter((b: unknown) => existingBlockers.includes(b as string))
-      : [];
-    const resolvedAskIds = Array.isArray(parsed.resolved_ask_indices)
-      ? parsed.resolved_ask_indices
-          .filter((i: unknown): i is number => Number.isInteger(i) && (i as number) >= 0 && (i as number) < openAsks.length)
-          .map((i: number) => openAsks[i].id)
-      : [];
-
-    return { resolvedGoals, resolvedBlockers, resolvedAskIds };
-  } catch (err) {
-    console.error("assessResolvedItems failed (non-fatal):", err);
-    return { resolvedGoals: [], resolvedBlockers: [], resolvedAskIds: [] };
-  }
+export function gateResolutionOutput(
+  raw: string,
+  transcript: string,
+  existingGoals: string[],
+  existingBlockers: string[],
+  openAsks: { id: string; text: string }[],
+) {
+  // Real gap found live, 2026-09-10: despite "Return ONLY valid JSON", the
+  // model sometimes appends a "**Reasoning:**" section after the fenced
+  // block. Extract the balanced {...} object instead of trusting fences.
+  const clean = raw.replace(/```json|```/g, "").trim();
+  const parsed = JSON.parse(extractFirstJsonObject(clean) ?? clean);
+  const proposals: ProposedResolution[] = [
+    ...(Array.isArray(parsed.resolved_goals) ? parsed.resolved_goals : []).map((g: any) => ({
+      kind: "goal" as const,
+      item: String(g?.item ?? ""),
+      quote: String(g?.quote ?? ""),
+    })),
+    ...(Array.isArray(parsed.resolved_blockers) ? parsed.resolved_blockers : []).map((b: any) => ({
+      kind: "blocker" as const,
+      item: String(b?.item ?? ""),
+      quote: String(b?.quote ?? ""),
+    })),
+    ...(Array.isArray(parsed.resolved_asks) ? parsed.resolved_asks : [])
+      .filter((a: any) => Number.isInteger(a?.index) && a.index >= 0 && a.index < openAsks.length)
+      .map((a: any) => ({ kind: "ask" as const, item: openAsks[a.index].id, quote: String(a?.quote ?? "") })),
+  ];
+  return { proposals, ...gateResolutions(proposals, { goals: existingGoals, blockers: existingBlockers, asks: openAsks }, transcript) };
 }
 
 // Proactive check-in call cadence — Hume's own voice prompt (Phase 4, Next
@@ -466,7 +526,7 @@ Return ONLY valid JSON, reusing the exact original text for goals/blockers and t
 async function extractCheckinCadencePreference(transcript: string): Promise<number | null> {
   try {
     const { text: raw } = await generateText({
-      model: anthropic("claude-haiku-4-5-20251001"),
+      model: anthropic(NARROW_MODEL),
       prompt: `Here is a call transcript between Co and a caller. Near the end of the call, Co may have asked how often the caller would like Co to proactively call them to check in.
 
 Transcript:
@@ -547,24 +607,36 @@ export async function storeProfile(
     existing?.goals ?? [],
     existing?.blockers ?? [],
     openAsks,
+    user_id,
   );
 
-  const safeChapters = union(
-    existing?.life_chapters,
-    (extracted.life_chapters ?? []).filter((c: string) => ALLOWED_LIFE_CHAPTERS.includes(c)),
-  );
-  const safeStyle = ALLOWED_CONNECTION_STYLES.includes(extracted.connection_style as string)
-    ? (extracted.connection_style as string)
-    : (existing?.connection_style ?? "small_group");
-  const activityPreferences = union(existing?.activity_preferences, extracted.activity_preferences);
-  const goals = union(existing?.goals, extracted.goals).filter((g) => !resolvedGoals.includes(g));
-  const blockers = union(existing?.blockers, extracted.blockers).filter(
+  // Layer 4 gate: every model value is checked against allowed enums and
+  // ranges before it can reach the upsert.
+  const { profile: clean, checks: sanitizeChecks } = sanitizeExtractedProfile(extracted);
+  if (sanitizeChecks.length) {
+    await recordDecision({
+      layer: 4,
+      decision: "profile.write",
+      userId: user_id,
+      outcome: "act",
+      action: "sanitize_extraction",
+      proposal: extracted,
+      checks: sanitizeChecks,
+      reason: "dropped invalid extracted values",
+    });
+  }
+
+  const safeChapters = union(existing?.life_chapters, clean.life_chapters);
+  const safeStyle = clean.connection_style ?? existing?.connection_style ?? "small_group";
+  const activityPreferences = union(existing?.activity_preferences, clean.activity_preferences);
+  const goals = union(existing?.goals, clean.goals).filter((g) => !resolvedGoals.includes(g));
+  const blockers = union(existing?.blockers, clean.blockers).filter(
     (b) => !resolvedBlockers.includes(b),
   );
-  const socialEnergy = extracted.social_energy ?? existing?.social_energy ?? 50;
-  const availabilityPattern = extracted.availability_pattern || existing?.availability_pattern || null;
-  const city = extracted.city || existing?.city || null;
-  const longTermDirection = extracted.long_term_direction || existing?.long_term_direction || null;
+  const socialEnergy = clean.social_energy ?? existing?.social_energy ?? 50;
+  const availabilityPattern = clean.availability_pattern || existing?.availability_pattern || null;
+  const city = clean.city || existing?.city || null;
+  const longTermDirection = clean.long_term_direction || existing?.long_term_direction || null;
 
   // Non-fatal like every other embedding call in this file (storeTranscriptMemory,
   // captureIntent) — an embedding-provider hiccup (rate limit, quota, network)
@@ -619,7 +691,7 @@ export async function storeProfile(
       socialEnergy,
       safeStyle,
       activityPreferences,
-      extracted.emotional_state ?? opts.emotions?.[0]?.name ?? null,
+      clean.emotional_state ?? opts.emotions?.[0]?.name ?? null,
       goals,
       blockers,
       availabilityPattern,
@@ -719,7 +791,7 @@ export async function captureIntent(
       { userId: user_id, traceName: "profileExtraction.captureIntent" },
       () =>
         generateText({
-          model: anthropic("claude-haiku-4-5-20251001"),
+          model: anthropic(NARROW_MODEL),
           experimental_telemetry: { isEnabled: true, functionId: "profileExtraction.captureIntent" },
           prompt: `Read this transcript and extract four things. Only include what's actually stated by the user (the "user:" lines) — never guess or infer beyond what's said, and never treat something Co (the "assistant:" lines) said as if the user said it.
 
@@ -755,12 +827,53 @@ Transcript:
     // record just to have one.
     if (!ask && !concrete_preferences.length && !wants.length && !availability) return null;
 
-    const intentId = crypto.randomUUID();
     // Embedding covers the ask sentence when present (what goal-similarity
     // matching would compare against); falls back to the richest available
     // text so a record with no ask still gets a usable embedding.
     const embeddingSource = ask?.text || [...concrete_preferences, ...wants].join("; ") || availability || "";
     const embedding = embeddingSource ? await generateEmbedding(embeddingSource).catch(() => null) : null;
+
+    // Layer 4 gate (src/harness/profileWrite.ts): a restated ask updates the
+    // open ask it repeats instead of opening another one. Every capture used
+    // to mint a new intent id, so one tester ended up with 90 ask rows.
+    let intentId: string = crypto.randomUUID();
+    let deduped = false;
+    let existingIntent: any[] = [];
+    if (ask) {
+      const [{ rows: openRows }, { rows: profileRows }] = await Promise.all([
+        pool.query(`SELECT ask_id, ask_text FROM ask_checkins WHERE user_id = $1 AND resolved_at IS NULL`, [user_id]),
+        pool.query(`SELECT intent FROM co_profiles WHERE user_id = $1`, [user_id]),
+      ]);
+      existingIntent = Array.isArray(profileRows[0]?.intent) ? profileRows[0].intent : [];
+      const openAsks: OpenAsk[] = openRows.map((r: any) => ({
+        askId: r.ask_id,
+        text: r.ask_text,
+        embedding: existingIntent.find((i: any) => i?.id === r.ask_id)?.embedding ?? null,
+      }));
+      let decision = decideAskWrite({ text: ask.text, embedding }, openAsks);
+      let judged: boolean | null = null;
+      if (decision.action === "needs_judgment") {
+        const match = openAsks.find((a) => a.askId === (decision as { askId: string }).askId)!;
+        judged = await judgeSameAsk(user_id, ask.text, match.text);
+        decision = judged
+          ? { action: "update_existing", askId: match.askId, similarity: decision.similarity, checks: decision.checks, reason: `model: same ask as "${match.text}"` }
+          : { action: "open_new", checks: decision.checks, reason: `model: different from "${match.text}"` };
+      }
+      if (decision.action === "update_existing") {
+        intentId = decision.askId;
+        deduped = true;
+      }
+      await recordDecision({
+        layer: 4,
+        decision: "profile.write",
+        userId: user_id,
+        outcome: "act",
+        action: deduped ? "update_existing_ask" : "open_new_ask",
+        proposal: { ask, judged },
+        checks: decision.checks,
+        reason: decision.reason,
+      });
+    }
 
     const newIntent: ExtractedIntent = {
       id: intentId,
@@ -773,18 +886,38 @@ Transcript:
       created_at: new Date().toISOString(),
     };
 
-    // Upsert, not a plain UPDATE — the call/typed-intake path is the only
-    // other place a co_profiles row gets created (storeProfile), so a
-    // text-only user who has never called would otherwise have no row for
-    // this to update against and the ask would silently vanish.
-    await pool.query(
-      `INSERT INTO co_profiles (user_id, intent, updated_at)
-       VALUES ($1, $2::jsonb, NOW())
-       ON CONFLICT (user_id) DO UPDATE SET
-         intent = COALESCE(co_profiles.intent, '[]'::jsonb) || EXCLUDED.intent,
-         updated_at = NOW()`,
-      [user_id, JSON.stringify([newIntent])],
-    );
+    if (deduped) {
+      // Replace the restated entry in place (latest wording wins, preferences
+      // merged) and keep it last so getActiveSeekingAsk still picks it.
+      const prior = existingIntent.find((i: any) => i?.id === intentId) ?? {};
+      const merged: ExtractedIntent = {
+        ...newIntent,
+        created_at: prior.created_at ?? newIntent.created_at,
+        concrete_preferences: [...new Set([...(prior.concrete_preferences ?? []), ...concrete_preferences])],
+        wants: [...new Set([...(prior.wants ?? []), ...wants])],
+        availability: availability ?? prior.availability ?? null,
+      };
+      Object.assign(newIntent, merged);
+      const rest = existingIntent.filter((i: any) => i?.id !== intentId);
+      await pool.query(`UPDATE co_profiles SET intent = $2::jsonb, updated_at = NOW() WHERE user_id = $1`, [
+        user_id,
+        JSON.stringify([...rest, merged]),
+      ]);
+      await pool.query(`UPDATE ask_checkins SET ask_text = $3 WHERE user_id = $1 AND ask_id = $2`, [user_id, intentId, ask!.text]);
+    } else {
+      // Upsert, not a plain UPDATE — the call/typed-intake path is the only
+      // other place a co_profiles row gets created (storeProfile), so a
+      // text-only user who has never called would otherwise have no row for
+      // this to update against and the ask would silently vanish.
+      await pool.query(
+        `INSERT INTO co_profiles (user_id, intent, updated_at)
+         VALUES ($1, $2::jsonb, NOW())
+         ON CONFLICT (user_id) DO UPDATE SET
+           intent = COALESCE(co_profiles.intent, '[]'::jsonb) || EXCLUDED.intent,
+           updated_at = NOW()`,
+        [user_id, JSON.stringify([newIntent])],
+      );
+    }
 
     const memParts = [
       ask ? `${ask.type}: ${ask.text}` : null,
@@ -806,15 +939,13 @@ Transcript:
       )
       .catch((err) => console.error("Intent memory embedding failed:", err));
 
-    // Co Loop Stage 5 — start the check-in cadence for this ask so it never
-    // just goes stale after being captured once (see ask_checkins in
-    // migrations.ts and the check-in cron in jobs/index.ts).
-    if (ask) {
-      pool
+    // Co Loop Stage 5 — start the check-in cadence for a genuinely new ask
+    // (see ask_checkins in migrations.ts and the check-in cron in
+    // jobs/index.ts). The NOT EXISTS guard stays as a backstop for two
+    // captures of the same text racing each other.
+    if (ask && !deduped) {
+      await pool
         .query(
-          // Every capture mints a new intent id, so the same ask restated
-          // used to open another check-in row (one tester had 90 rows, 60
-          // distinct texts). Skip when an identical open ask already exists.
           `INSERT INTO ask_checkins (user_id, ask_id, ask_text)
            SELECT $1::uuid, $2::text, $3::text
            WHERE NOT EXISTS (
@@ -829,29 +960,74 @@ Transcript:
 
     // Co Loop Stage 3 — a fresh "seeking" ask is exactly what filterByStatedAsk
     // reasons over, so sweep it against the whole network immediately rather
-    // than waiting for the next daily sweepAllOpenAsks run. Fire-and-forget,
-    // same as this function's own call sites treat captureIntent itself. A
-    // fresh "offering" gets the mirrored reverse sweep — otherwise it would
-    // only ever surface as a side-effect of someone else's seeking sweep.
-    if (ask?.type === "seeking") {
+    // than waiting for the next daily sweepAllOpenAsks run. A restated ask
+    // waits for the daily sweep. A fresh "offering" gets the mirrored
+    // reverse sweep — otherwise it would only ever surface as a side-effect
+    // of someone else's seeking sweep.
+    if (ask?.type === "seeking" && !deduped) {
       sweepAskAgainstNetwork(user_id).catch((err) =>
         console.error("sweepAskAgainstNetwork failed (non-fatal):", err),
       );
       // Luma/X event surfacing moved off this instant-fire-on-every-ask path
       // (Royce, 2026-08-30 — "needs to surface periodically") onto
-      // jobs/index.ts's cadence cron instead, same shape as ask_checkins'
-      // existing check-in cadence — see eventSurfacingSweep.ts.
-    } else if (ask?.type === "offering") {
+      // jobs/index.ts's cadence cron instead — see eventSurfacingSweep.ts.
+    } else if (ask?.type === "offering" && !deduped) {
       sweepOfferingAgainstNetwork(user_id).catch((err) =>
         console.error("sweepOfferingAgainstNetwork failed (non-fatal):", err),
       );
     }
 
+    lastCaptureDeduped.set(newIntent.id, deduped);
     return newIntent;
   } catch (err: any) {
     console.error("captureIntent failed (non-fatal):", err?.message ?? err);
     return null;
   }
+}
+
+const lastCaptureDeduped = new Map<string, boolean>();
+
+// Borderline similarity only: is the new wording the same request as the
+// open ask? A wrong "yes" hides a real new ask, so this is a Sonnet 5 call.
+export async function judgeSameAsk(userId: string | null, newText: string, openText: string): Promise<boolean> {
+  try {
+    const { text } = await generateText({
+      model: anthropic(PROFILE_JUDGMENT_MODEL),
+      experimental_telemetry: { isEnabled: true, functionId: "profileExtraction.judgeSameAsk", metadata: { userId: userId ?? "" } },
+      prompt: sameAskPrompt(newText, openText),
+    });
+    return /"same"\s*:\s*true/.test(text);
+  } catch (err: any) {
+    // Can't tell: opening a separate ask is the safer mistake.
+    console.error("judgeSameAsk failed (non-fatal, treating as different):", err?.message ?? err);
+    return false;
+  }
+}
+
+export function sameAskPrompt(newText: string, openText: string): string {
+  return `Someone already has this open request with Co: "${openText}"
+They just said they're looking for: "${newText}"
+
+Is the new one the same request restated (same kind of thing, same purpose, maybe more detail or different wording)? Or a different request (a different kind of person, thing, or goal)? A narrower or more specific version of the same request counts as the same.
+
+Return ONLY valid JSON: {"same": true} or {"same": false}`;
+}
+
+export type TurnAsk = { ask: { text: string; type: "seeking" | "offering" }; askId: string; deduped: boolean };
+
+// Same-turn hook for the reply section (see the header of
+// src/harness/profileWrite.ts). Waits up to timeoutMs for the capture; the
+// capture itself always runs to completion.
+export async function captureIntentForTurn(
+  userId: string,
+  transcript: string,
+  opts: { timeoutMs?: number } = {},
+): Promise<TurnAsk | null> {
+  const capture = captureIntent(userId, transcript);
+  const timeout = new Promise<null>((resolve) => setTimeout(() => resolve(null), opts.timeoutMs ?? 2500));
+  const intent = await Promise.race([capture, timeout]);
+  if (!intent?.text || !intent.type) return null;
+  return { ask: { text: intent.text, type: intent.type }, askId: intent.id, deduped: lastCaptureDeduped.get(intent.id) ?? false };
 }
 
 type CapturedEventMentionData = {
@@ -874,7 +1050,7 @@ export async function extractPlannedEventMention(user_id: string, transcript: st
       { userId: user_id, traceName: "profileExtraction.extractPlannedEventMention" },
       () =>
         generateText({
-          model: anthropic("claude-haiku-4-5-20251001"),
+          model: anthropic(NARROW_MODEL),
           experimental_telemetry: { isEnabled: true, functionId: "profileExtraction.extractPlannedEventMention" },
           prompt: `Read this transcript. Only include what the user (the "user:" lines) actually stated — never guess or infer, never treat something Co said as if the user said it.
 
