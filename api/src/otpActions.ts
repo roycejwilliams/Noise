@@ -125,7 +125,7 @@ export const sendSMS = async ({
   first_name,
   welcome,
   welcome_back,
-}: MessageProp) => {
+}: MessageProp): Promise<{ ok: boolean; reason?: "inbound_only" | "error" }> => {
   const send = (content: string, mediaUrl?: string) => {
     if (!ALLOW_REAL_SENDS) {
       console.log(`[sendSMS stub, ${process.env.NODE_ENV ?? "no NODE_ENV"}] to ${phone_number}: ${content}`);
@@ -206,9 +206,16 @@ export const sendSMS = async ({
     if (welcome_back) {
       await send(`Welcome back to Co.`);
     }
-  } catch (error) {
+  } catch (error: any) {
+    // co-test's Sendblue plan is inbound-only: Co can't text a number that
+    // hasn't texted Co first. Surfaced so callers (the test site's login)
+    // can tell the person what to do instead of reporting a code that
+    // never arrives.
+    const inboundOnly = error?.error?.error_message === "INBOUND_ONLY_PLAN" || error?.error?.error_code === 402;
     console.error("Cannot process SMS at this time", error);
+    return { ok: false, reason: inboundOnly ? "inbound_only" : "error" };
   }
+  return { ok: true };
 };
 
 export const sendEmail = async ({

@@ -1179,4 +1179,26 @@ export function runMigrations() {
   pool
     .query(`ALTER TABLE users ADD COLUMN IF NOT EXISTS intake_retries INT NOT NULL DEFAULT 0`)
     .catch((err: Error) => console.error("users.intake_retries migration failed:", err));
+
+  // Deleting a user (co-test's "Start over", or removing a tester) failed on
+  // these FKs, which were created without ON DELETE CASCADE (2026-09-15).
+  pool
+    .query(
+      `DO $$
+       DECLARE r record;
+       BEGIN
+         FOR r IN
+           SELECT c.conname, t.relname AS tbl, a.attname AS col
+           FROM pg_constraint c
+           JOIN pg_class t ON t.oid = c.conrelid
+           JOIN pg_attribute a ON a.attrelid = c.conrelid AND a.attnum = c.conkey[1]
+           WHERE c.contype = 'f' AND c.confrelid = 'users'::regclass AND c.confdeltype = 'a'
+             AND t.relname IN ('recommendation_outcome_followups', 'event_checkin_followups', 'referrals')
+         LOOP
+           EXECUTE format('ALTER TABLE %I DROP CONSTRAINT %I', r.tbl, r.conname);
+           EXECUTE format('ALTER TABLE %I ADD CONSTRAINT %I FOREIGN KEY (%I) REFERENCES users(id) ON DELETE CASCADE', r.tbl, r.conname, r.col);
+         END LOOP;
+       END $$`,
+    )
+    .catch((err: Error) => console.error("users FK cascade migration failed:", err));
 }

@@ -51,6 +51,18 @@ async function sendCode() {
       body: JSON.stringify({ phone_number: value }),
     });
     const data = await res.json();
+    if (!data.success && data.textCoFirst) {
+      // Inbound-only Sendblue plan: offer a one-tap text to Co instead of a
+      // dead end. The person sends it, then taps Send code again.
+      phoneError.innerHTML = "";
+      phoneError.append(document.createTextNode(data.error + " "));
+      const link = document.createElement("a");
+      link.href = `sms:${data.textCoFirst}&body=${encodeURIComponent("Hi Co")}`;
+      link.textContent = "Text Co now";
+      phoneError.append(link);
+      phoneError.classList.remove("hidden");
+      return;
+    }
     if (!data.success) throw new Error(data.error ?? "Failed to send code.");
     phoneNumber = value;
     statusEl.textContent = "Code sent — check your texts.";

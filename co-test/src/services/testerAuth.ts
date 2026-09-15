@@ -12,7 +12,7 @@ import { sendSMS } from "../../../api/src/otpActions.js";
 const SESSION_TTL_MS = 30 * 24 * 60 * 60 * 1000; // 30 days
 const OTP_LOCKOUT_ATTEMPTS = 5;
 
-export async function startLogin(rawPhone: string): Promise<{ success: boolean; error?: string }> {
+export async function startLogin(rawPhone: string): Promise<{ success: boolean; error?: string; textCoFirst?: string }> {
   const phone_number = normalizePhone(rawPhone);
   if (!phone_number || phone_number === rawPhone.trim()) {
     // normalizePhone falls back to the raw input on a parse failure — that's
@@ -64,9 +64,24 @@ export async function startLogin(rawPhone: string): Promise<{ success: boolean; 
   // /api/login/start always reported success with zero messages ever
   // reaching Sendblue's own API — not a delivery failure, a send that never
   // happened.
-  await sendSMS({ phone_number, otp_code: otp.toString(), login: true });
+  const sent = await sendSMS({ phone_number, otp_code: otp.toString(), login: true });
+  if (!sent.ok) {
+    const coNumber = process.env.SENDBLUE_PHONE_NUMBER ?? "";
+    return sent.reason === "inbound_only"
+      ? {
+          success: false,
+          textCoFirst: coNumber,
+          error: `Co can only text numbers that have texted Co first. Send any message to ${formatUs(coNumber)} from this phone, then tap Send code again.`,
+        }
+      : { success: false, error: "Couldn't send the code. Try again in a minute." };
+  }
 
   return { success: true };
+}
+
+function formatUs(e164: string): string {
+  const m = e164.match(/^\+1(\d{3})(\d{3})(\d{4})$/);
+  return m ? `(${m[1]}) ${m[2]}-${m[3]}` : e164;
 }
 
 export async function verifyLogin(
