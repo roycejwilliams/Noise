@@ -1,5 +1,5 @@
 import express, { Request, Response, NextFunction } from "express";
-import { logoutTester, resetOwnData, startLogin, verifyLogin, verifyTesterSession } from "../services/testerAuth.js";
+import { checkTextLogin, logoutTester, resetOwnData, startTextLogin, verifyTesterSession } from "../services/testerAuth.js";
 import { COOKIE_NAME } from "../middleware/requireTesterLogin.js";
 
 const router = express.Router();
@@ -11,29 +11,31 @@ const COOKIE_OPTIONS = {
   maxAge: 30 * 24 * 60 * 60 * 1000,
 };
 
-router.post("/start", async (req: Request, res: Response, next: NextFunction) => {
+const PENDING_COOKIE = "co_test_login_pending";
+
+// POST /api/login/start — a fresh sign-in code for the "Text Co" button.
+router.post("/start", async (_req: Request, res: Response, next: NextFunction) => {
   try {
-    const { phone_number } = req.body as { phone_number?: string };
-    if (!phone_number) return res.status(400).json({ success: false, error: "phone_number is required." });
-    const result = await startLogin(phone_number);
-    return res.status(result.success ? 200 : 400).json(result);
+    const { token, code, textInNumber } = await startTextLogin();
+    res.cookie(PENDING_COOKIE, token, { ...COOKIE_OPTIONS, maxAge: 15 * 60 * 1000 });
+    return res.status(200).json({ success: true, code, text_in_number: textInNumber });
   } catch (error) {
     next(error);
   }
 });
 
-router.post("/verify", async (req: Request, res: Response, next: NextFunction) => {
+// GET /api/login/check — polled by the login page until the text arrives.
+router.get("/check", async (req: Request, res: Response, next: NextFunction) => {
   try {
-    const { phone_number, otp_code } = req.body as { phone_number?: string; otp_code?: string };
-    if (!phone_number || !otp_code) {
-      return res.status(400).json({ success: false, error: "phone_number and otp_code are required." });
+    const token = req.cookies?.[PENDING_COOKIE];
+    if (!token) return res.status(200).json({ success: true, status: "expired" });
+    const result = await checkTextLogin(token);
+    if (result.status === "signed_in") {
+      res.clearCookie(PENDING_COOKIE);
+      res.cookie(COOKIE_NAME, result.sessionToken, COOKIE_OPTIONS);
+      return res.status(200).json({ success: true, status: "signed_in" });
     }
-    const result = await verifyLogin(phone_number, otp_code);
-    if (!result.success || !result.sessionToken) {
-      return res.status(400).json({ success: false, error: result.error });
-    }
-    res.cookie(COOKIE_NAME, result.sessionToken, COOKIE_OPTIONS);
-    return res.status(200).json({ success: true });
+    return res.status(200).json({ success: true, status: result.status });
   } catch (error) {
     next(error);
   }

@@ -10,25 +10,15 @@
   <div class="login-wrap">
     <div class="login-card">
       <div class="app-name">Co (test)</div>
-      <p id="login-status" class="status-line">Enter your phone number to continue.</p>
+      <p id="login-status" class="status-line">Text Co from your phone to sign in.</p>
 
-      <section id="step-phone" class="phone-step">
-        <div class="phone-form-row">
-          <input id="phone-input" type="tel" inputmode="tel" placeholder="+1 555 555 5555" autocomplete="tel" />
-          <button id="send-code-button" class="download-button button-primary">Meet Co</button>
-        </div>
-        <p id="phone-error" class="phone-error hidden"></p>
-      </section>
+      <a id="text-co-button" href="#" class="download-button button-primary login-text-co" aria-disabled="true">Text Co</a>
+      <p id="login-waiting" class="phone-waiting hidden">Waiting for your text… <span class="login-spinner">●</span></p>
 
-      <section id="step-otp" class="phone-step hidden">
-        <p>Enter the 6-digit code we texted you.</p>
-        <div class="phone-form-row">
-          <input id="otp-input" type="text" inputmode="numeric" placeholder="123456" maxlength="6" />
-          <button id="verify-button" class="download-button button-primary">Verify</button>
-        </div>
-        <p id="otp-error" class="phone-error hidden"></p>
-        <button id="back-button" class="login-link-button">Use a different number</button>
-      </section>
+      <p id="login-desktop" class="login-desktop hidden">
+        On a computer? From your phone, text <strong id="login-message"></strong> to <strong id="login-number"></strong>.
+      </p>
+      <p id="login-error" class="phone-error hidden"></p>
     </div>
   </div>
 

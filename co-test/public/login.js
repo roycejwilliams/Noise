@@ -2,89 +2,80 @@
 (() => {
   // src/client/login.ts
   var statusEl = document.getElementById("login-status");
-  var stepPhone = document.getElementById("step-phone");
-  var stepOtp = document.getElementById("step-otp");
-  var phoneInput = document.getElementById("phone-input");
-  var sendCodeButton = document.getElementById("send-code-button");
-  var phoneError = document.getElementById("phone-error");
-  var otpInput = document.getElementById("otp-input");
-  var verifyButton = document.getElementById("verify-button");
-  var otpError = document.getElementById("otp-error");
-  var backButton = document.getElementById("back-button");
-  var phoneNumber = "";
-  function showStep(step) {
-    for (const el of [stepPhone, stepOtp]) el.classList.add("hidden");
-    step.classList.remove("hidden");
+  var textCoButton = document.getElementById("text-co-button");
+  var waitingEl = document.getElementById("login-waiting");
+  var desktopEl = document.getElementById("login-desktop");
+  var messageEl = document.getElementById("login-message");
+  var numberEl = document.getElementById("login-number");
+  var errorEl = document.getElementById("login-error");
+  var POLL_MS = 2e3;
+  var pollTimer = null;
+  function formatUs(e164) {
+    const m = e164.match(/^\+1(\d{3})(\d{3})(\d{4})$/);
+    return m ? `(${m[1]}) ${m[2]}-${m[3]}` : e164;
+  }
+  function showError(message) {
+    errorEl.textContent = message;
+    errorEl.classList.remove("hidden");
   }
   async function redirectIfAlreadyLoggedIn() {
     try {
-      const res = await fetch("/api/login/status");
-      const data = await res.json();
+      const data = await (await fetch("/api/login/status")).json();
       if (data.success && data.loggedIn) {
         window.location.href = "/phone";
+        return true;
       }
     } catch (err) {
       console.error("Login status check failed:", err);
     }
+    return false;
   }
-  async function sendCode() {
-    phoneError.classList.add("hidden");
-    const value = phoneInput.value.trim();
-    if (!value) {
-      phoneError.textContent = "Phone number is required.";
-      phoneError.classList.remove("hidden");
+  async function prepareCode() {
+    errorEl.classList.add("hidden");
+    try {
+      const data = await (await fetch("/api/login/start", { method: "POST" })).json();
+      if (!data.success || !data.text_in_number) throw new Error("Couldn't start sign-in. Refresh to try again.");
+      const message = `Hi Co! (test site code: ${data.code})`;
+      const separator = /iPhone|iPad|iPod/i.test(navigator.userAgent) ? "&" : "?";
+      textCoButton.href = `sms:${data.text_in_number}${separator}body=${encodeURIComponent(message)}`;
+      textCoButton.removeAttribute("aria-disabled");
+      messageEl.textContent = `"${message}"`;
+      numberEl.textContent = formatUs(data.text_in_number);
+      if (!/iPhone|iPad|iPod|Android/i.test(navigator.userAgent)) desktopEl.classList.remove("hidden");
+      startPolling();
+    } catch (err) {
+      showError(err instanceof Error ? err.message : String(err));
+    }
+  }
+  function startPolling() {
+    if (pollTimer !== null) window.clearInterval(pollTimer);
+    pollTimer = window.setInterval(async () => {
+      try {
+        const data = await (await fetch("/api/login/check")).json();
+        if (data.status === "signed_in") {
+          window.clearInterval(pollTimer);
+          statusEl.textContent = "Signed in.";
+          window.location.href = "/phone";
+        } else if (data.status === "expired") {
+          window.clearInterval(pollTimer);
+          waitingEl.classList.add("hidden");
+          statusEl.textContent = "That code expired. Here's a new one.";
+          await prepareCode();
+        }
+      } catch (err) {
+        console.error("Sign-in check failed:", err);
+      }
+    }, POLL_MS);
+  }
+  textCoButton.addEventListener("click", (e) => {
+    if (textCoButton.getAttribute("aria-disabled") === "true") {
+      e.preventDefault();
       return;
     }
-    sendCodeButton.disabled = true;
-    try {
-      const res = await fetch("/api/login/start", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ phone_number: value })
-      });
-      const data = await res.json();
-      if (!data.success) throw new Error(data.error ?? "Failed to send code.");
-      phoneNumber = value;
-      statusEl.textContent = "Code sent \u2014 check your texts.";
-      showStep(stepOtp);
-      otpInput.focus();
-    } catch (err) {
-      phoneError.textContent = err instanceof Error ? err.message : String(err);
-      phoneError.classList.remove("hidden");
-    } finally {
-      sendCodeButton.disabled = false;
-    }
-  }
-  async function verifyCode() {
-    otpError.classList.add("hidden");
-    const otp_code = otpInput.value.trim();
-    if (!otp_code) return;
-    verifyButton.disabled = true;
-    try {
-      const res = await fetch("/api/login/verify", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ phone_number: phoneNumber, otp_code })
-      });
-      const data = await res.json();
-      if (!data.success) throw new Error(data.error ?? "Verification failed.");
-      window.location.href = "/phone";
-    } catch (err) {
-      otpError.textContent = err instanceof Error ? err.message : String(err);
-      otpError.classList.remove("hidden");
-    } finally {
-      verifyButton.disabled = false;
-    }
-  }
-  sendCodeButton.addEventListener("click", sendCode);
-  phoneInput.addEventListener("keydown", (e) => e.key === "Enter" && sendCode());
-  verifyButton.addEventListener("click", verifyCode);
-  otpInput.addEventListener("keydown", (e) => e.key === "Enter" && verifyCode());
-  backButton.addEventListener("click", () => {
-    otpInput.value = "";
-    statusEl.textContent = "Enter your phone number to continue.";
-    showStep(stepPhone);
-    phoneInput.focus();
+    waitingEl.classList.remove("hidden");
+    statusEl.textContent = "Send the text, then come back here.";
   });
-  redirectIfAlreadyLoggedIn();
+  (async () => {
+    if (!await redirectIfAlreadyLoggedIn()) await prepareCode();
+  })();
 })();

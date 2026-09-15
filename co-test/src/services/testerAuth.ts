@@ -1,123 +1,57 @@
 import { randomBytes, randomInt, timingSafeEqual } from "crypto";
 import pool from "../../../api/src/db/db.js";
-import { PENDING_EMAIL_DOMAIN } from "../../../api/src/services/identity.js";
-import { normalizePhone } from "../../../api/src/utils/phone.js";
-import { sendSMS } from "../../../api/src/otpActions.js";
 
-// Tool-access login — proves a tester controls a real phone number before
-// test.copatible.com shows them anything but the login form. Deliberately
-// separate from phone.ts's own identity-intake step (which now tests
-// production's real text-in-first onboarding UX, name/email included) —
-// this one just answers "should this browser be let in at all."
+// Tool-access login: text-to-sign-in. The page asks for a short code, opens
+// iMessage prefilled with it, and polls until the text arrives. The inbound
+// webhook (api/src/services/textLogin.ts) claims the code for the sending
+// number, which proves the tester controls that phone. No phone form, no
+// outbound OTP, which co-test's inbound-only Sendblue plan couldn't send to
+// a number that hadn't texted Co first anyway.
 const SESSION_TTL_MS = 30 * 24 * 60 * 60 * 1000; // 30 days
-const OTP_LOCKOUT_ATTEMPTS = 5;
+const LOGIN_REQUEST_TTL_MINUTES = 15;
+// No 0/O/1/I so a code typed by hand on desktop isn't ambiguous.
+const CODE_ALPHABET = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789";
 
-export async function startLogin(rawPhone: string): Promise<{ success: boolean; error?: string; textCoFirst?: string }> {
-  const phone_number = normalizePhone(rawPhone);
-  if (!phone_number || phone_number === rawPhone.trim()) {
-    // normalizePhone falls back to the raw input on a parse failure — that's
-    // the signal an invalid number was submitted, not a US number we just
-    // failed to prettify.
-    if (!/^\+\d{8,15}$/.test(phone_number)) {
-      return { success: false, error: "Enter a valid phone number." };
-    }
-  }
-
-  const existing = await pool.query(`SELECT id FROM users WHERE phone_number = $1`, [phone_number]);
-  let userId: string;
-  if (existing.rows[0]) {
-    userId = existing.rows[0].id;
-  } else {
-    // No more name/email at login — that used to mirror the Framer intake
-    // form's 3-field flow, but CoPatible doesn't collect identity through a
-    // form at all anymore. This row starts exactly like a genuinely unknown
-    // number would (identity_captured=false, intake_asked=false, throwaway
-    // placeholder email — see api/src/services/identity.ts), so /phone's
-    // real text-in-first step actually exercises the same name/email ask
-    // production now runs, rather than skipping past it. contact_verified is
-    // true here (not the column's false default) because logging into the
-    // tool already round-trips a real OTP to this number below — that's
-    // proof of ownership on its own, same reasoning as texting in directly.
-    const suffix = Math.random().toString(36).slice(2, 8);
-    const created = await pool.query(
-      `INSERT INTO users (first_name, last_name, email, phone_number, username, test_channel, contact_verified, identity_captured, intake_asked)
-       VALUES ('', '', $1, $2, $3, 'phone', true, false, false) RETURNING id`,
-      [`pending-${suffix}${PENDING_EMAIL_DOMAIN}`, phone_number, `pending_${suffix}`],
+export async function startTextLogin(): Promise<{ token: string; code: string; textInNumber: string }> {
+  const token = randomBytes(32).toString("hex");
+  for (let attempt = 0; attempt < 5; attempt++) {
+    const code = Array.from({ length: 5 }, () => CODE_ALPHABET[randomInt(CODE_ALPHABET.length)]).join("");
+    const { rowCount } = await pool.query(
+      `INSERT INTO text_login_requests (token, code, expires_at)
+       VALUES ($1, $2, NOW() + ($3 || ' minutes')::interval)
+       ON CONFLICT (code) DO NOTHING`,
+      [token, code, LOGIN_REQUEST_TTL_MINUTES],
     );
-    userId = created.rows[0].id;
+    if (rowCount) return { token, code, textInNumber: process.env.SENDBLUE_PHONE_NUMBER ?? "" };
   }
-
-  const otp = randomInt(100000, 1000000);
-  await pool.query(
-    `UPDATE users SET otp_code = $2, otp_expiry = NOW() + INTERVAL '5 minutes', otp_attempts = 0 WHERE id = $1`,
-    [userId, otp],
-  );
-
-  // sendSMS catches its own errors internally and never throws (matches
-  // every other Sendblue send in this codebase) — a delivery failure here
-  // just means the tester never gets a code and retries "Send code".
-  //
-  // login: true is required, not decorative — sendSMS is one big if-chain
-  // keyed entirely on boolean flags (login/register/resent/etc.); with none
-  // set, it matches no branch, never calls Sendblue, and still resolves
-  // successfully. Confirmed the hard way: this call used to omit it, so
-  // /api/login/start always reported success with zero messages ever
-  // reaching Sendblue's own API — not a delivery failure, a send that never
-  // happened.
-  const sent = await sendSMS({ phone_number, otp_code: otp.toString(), login: true });
-  if (!sent.ok) {
-    const coNumber = process.env.SENDBLUE_PHONE_NUMBER ?? "";
-    return sent.reason === "inbound_only"
-      ? {
-          success: false,
-          textCoFirst: coNumber,
-          error: `Co can only text numbers that have texted Co first. Send any message to ${formatUs(coNumber)} from this phone, then tap Send code again.`,
-        }
-      : { success: false, error: "Couldn't send the code. Try again in a minute." };
-  }
-
-  return { success: true };
+  throw new Error("Couldn't create a sign-in code.");
 }
 
-function formatUs(e164: string): string {
-  const m = e164.match(/^\+1(\d{3})(\d{3})(\d{4})$/);
-  return m ? `(${m[1]}) ${m[2]}-${m[3]}` : e164;
-}
-
-export async function verifyLogin(
-  rawPhone: string,
-  otpCode: string,
-): Promise<{ success: boolean; error?: string; sessionToken?: string }> {
-  const phone_number = normalizePhone(rawPhone);
-
-  const attemptsCheck = await pool.query(`SELECT id, otp_attempts FROM users WHERE phone_number = $1`, [
-    phone_number,
-  ]);
-  const user = attemptsCheck.rows[0];
-  if (!user) return { success: false, error: "Request a code first." };
-  if (user.otp_attempts >= OTP_LOCKOUT_ATTEMPTS) {
-    return { success: false, error: "Too many incorrect attempts — request a new code." };
-  }
-
-  const match = await pool.query(
-    `SELECT id FROM users WHERE id = $1 AND otp_code = $2 AND otp_expiry > NOW()`,
-    [user.id, otpCode],
+// Signs the browser in once its code has been texted in. Returns a session
+// token, "pending" while waiting, or "expired".
+export async function checkTextLogin(token: string): Promise<{ status: "pending" | "expired" } | { status: "signed_in"; sessionToken: string }> {
+  const { rows } = await pool.query(
+    `SELECT phone_number, verified_at, expires_at FROM text_login_requests WHERE token = $1`,
+    [token],
   );
-  if (!match.rows[0]) {
-    await pool.query(`UPDATE users SET otp_attempts = otp_attempts + 1 WHERE id = $1`, [user.id]);
-    return { success: false, error: "Incorrect or expired code." };
-  }
+  const req = rows[0];
+  if (!req) return { status: "expired" };
+  if (!req.verified_at) return { status: new Date(req.expires_at) < new Date() ? "expired" : "pending" };
+
+  // claimTextLogin already created the user if the number was new.
+  const user = (await pool.query(`SELECT id FROM users WHERE phone_number = $1`, [req.phone_number])).rows[0];
+  if (!user) return { status: "pending" };
 
   const sessionToken = randomBytes(32).toString("hex");
   await pool.query(
     `UPDATE users
-     SET otp_code = NULL, otp_expiry = NULL, otp_attempts = 0,
-         login_session_token = $2, login_session_expiry = NOW() + INTERVAL '30 days'
+     SET login_session_token = $2, login_session_expiry = NOW() + ($3 || ' milliseconds')::interval,
+         test_channel = 'phone'
      WHERE id = $1`,
-    [user.id, sessionToken],
+    [user.id, sessionToken, SESSION_TTL_MS],
   );
-
-  return { success: true, sessionToken };
+  await pool.query(`DELETE FROM text_login_requests WHERE token = $1 OR expires_at < NOW() - INTERVAL '1 day'`, [token]);
+  return { status: "signed_in", sessionToken };
 }
 
 export async function verifyTesterSession(token: string | undefined): Promise<{ userId: string } | null> {

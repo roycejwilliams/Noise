@@ -15,6 +15,7 @@ import { generateEmbedding } from "../services/embeddings.js";
 import { detectSeekingMode, detectTurnTone } from "../services/emotionalTone.js";
 import { buildContextSummary } from "../services/callContext.js";
 import { findOrCreateUserByPhone, hasPendingEmail, splitFullName } from "../services/identity.js";
+import { claimTextLogin } from "../services/textLogin.js";
 import {
   INTAKE_EXTRACT_MODEL,
   buildIntakeExtractionPrompt,
@@ -295,6 +296,9 @@ export function sendblueRouter(io: Server): Router {
       // from "wait in line to be processed."
       let myInboundAt: string | null = null;
       const bodyForStamp = req.body ?? {};
+      if (lockKey && !bodyForStamp.is_outbound && typeof bodyForStamp.content === "string") {
+        bodyForStamp.content = await claimTextLogin(lockKey, bodyForStamp.content);
+      }
       const isGenuineInbound =
         bodyForStamp.type !== "typing" &&
         !bodyForStamp.is_outbound &&

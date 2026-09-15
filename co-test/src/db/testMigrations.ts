@@ -201,4 +201,20 @@ export function runTestMigrations() {
   pool
     .query(`ALTER TABLE users ADD COLUMN IF NOT EXISTS sms_opted_out BOOLEAN NOT NULL DEFAULT false`)
     .catch((err: Error) => console.error("users.sms_opted_out migration failed:", err));
+
+  // Text-to-sign-in (2026-09-15): the login page makes a request with a short
+  // code; api/src/services/textLogin.ts claims it when the prefilled text
+  // arrives from a phone. token is the browser's cookie, code is what's texted.
+  pool
+    .query(
+      `CREATE TABLE IF NOT EXISTS text_login_requests (
+        token TEXT PRIMARY KEY,
+        code TEXT NOT NULL UNIQUE,
+        phone_number TEXT,
+        verified_at TIMESTAMPTZ,
+        expires_at TIMESTAMPTZ NOT NULL,
+        created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+      )`,
+    )
+    .catch((err: Error) => console.error("text_login_requests table init failed:", err));
 }

@@ -1,113 +1,90 @@
+// Text-to-sign-in: get a short code, open iMessage prefilled with it, and
+// poll until that text reaches Co (see routes/login.ts and
+// api/src/services/textLogin.ts). Texting first is also what lets Co text
+// the tester back on co-test's inbound-only Sendblue plan.
 const statusEl = document.getElementById("login-status") as HTMLElement;
+const textCoButton = document.getElementById("text-co-button") as HTMLAnchorElement;
+const waitingEl = document.getElementById("login-waiting") as HTMLElement;
+const desktopEl = document.getElementById("login-desktop") as HTMLElement;
+const messageEl = document.getElementById("login-message") as HTMLElement;
+const numberEl = document.getElementById("login-number") as HTMLElement;
+const errorEl = document.getElementById("login-error") as HTMLElement;
 
-const stepPhone = document.getElementById("step-phone") as HTMLElement;
-const stepOtp = document.getElementById("step-otp") as HTMLElement;
+const POLL_MS = 2000;
+let pollTimer: number | null = null;
 
-const phoneInput = document.getElementById("phone-input") as HTMLInputElement;
-const sendCodeButton = document.getElementById("send-code-button") as HTMLButtonElement;
-const phoneError = document.getElementById("phone-error") as HTMLElement;
-
-const otpInput = document.getElementById("otp-input") as HTMLInputElement;
-const verifyButton = document.getElementById("verify-button") as HTMLButtonElement;
-const otpError = document.getElementById("otp-error") as HTMLElement;
-const backButton = document.getElementById("back-button") as HTMLButtonElement;
-
-let phoneNumber = "";
-
-function showStep(step: HTMLElement) {
-  for (const el of [stepPhone, stepOtp]) el.classList.add("hidden");
-  step.classList.remove("hidden");
+function formatUs(e164: string): string {
+  const m = e164.match(/^\+1(\d{3})(\d{3})(\d{4})$/);
+  return m ? `(${m[1]}) ${m[2]}-${m[3]}` : e164;
 }
 
-// A returning tester with a still-valid session cookie skips straight past
-// the form — this is a tool-access check (routes/login.ts's /status), not a
-// page reload of the actual test flow, which starts fresh at /phone either way.
-async function redirectIfAlreadyLoggedIn() {
+function showError(message: string) {
+  errorEl.textContent = message;
+  errorEl.classList.remove("hidden");
+}
+
+async function redirectIfAlreadyLoggedIn(): Promise<boolean> {
   try {
-    const res = await fetch("/api/login/status");
-    const data = await res.json();
+    const data = await (await fetch("/api/login/status")).json();
     if (data.success && data.loggedIn) {
       window.location.href = "/phone";
+      return true;
     }
   } catch (err) {
     console.error("Login status check failed:", err);
   }
+  return false;
 }
 
-async function sendCode() {
-  phoneError.classList.add("hidden");
-  const value = phoneInput.value.trim();
-  if (!value) {
-    phoneError.textContent = "Phone number is required.";
-    phoneError.classList.remove("hidden");
+async function prepareCode() {
+  errorEl.classList.add("hidden");
+  try {
+    const data = await (await fetch("/api/login/start", { method: "POST" })).json();
+    if (!data.success || !data.text_in_number) throw new Error("Couldn't start sign-in. Refresh to try again.");
+    const message = `Hi Co! (test site code: ${data.code})`;
+    // iOS and Android use different separators before body= on sms: links.
+    const separator = /iPhone|iPad|iPod/i.test(navigator.userAgent) ? "&" : "?";
+    textCoButton.href = `sms:${data.text_in_number}${separator}body=${encodeURIComponent(message)}`;
+    textCoButton.removeAttribute("aria-disabled");
+    messageEl.textContent = `"${message}"`;
+    numberEl.textContent = formatUs(data.text_in_number);
+    if (!/iPhone|iPad|iPod|Android/i.test(navigator.userAgent)) desktopEl.classList.remove("hidden");
+    startPolling();
+  } catch (err) {
+    showError(err instanceof Error ? err.message : String(err));
+  }
+}
+
+function startPolling() {
+  if (pollTimer !== null) window.clearInterval(pollTimer);
+  pollTimer = window.setInterval(async () => {
+    try {
+      const data = await (await fetch("/api/login/check")).json();
+      if (data.status === "signed_in") {
+        window.clearInterval(pollTimer!);
+        statusEl.textContent = "Signed in.";
+        window.location.href = "/phone";
+      } else if (data.status === "expired") {
+        window.clearInterval(pollTimer!);
+        waitingEl.classList.add("hidden");
+        statusEl.textContent = "That code expired. Here's a new one.";
+        await prepareCode();
+      }
+    } catch (err) {
+      console.error("Sign-in check failed:", err);
+    }
+  }, POLL_MS);
+}
+
+textCoButton.addEventListener("click", (e) => {
+  if (textCoButton.getAttribute("aria-disabled") === "true") {
+    e.preventDefault();
     return;
   }
-
-  sendCodeButton.disabled = true;
-  try {
-    const res = await fetch("/api/login/start", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ phone_number: value }),
-    });
-    const data = await res.json();
-    if (!data.success && data.textCoFirst) {
-      // Inbound-only Sendblue plan: offer a one-tap text to Co instead of a
-      // dead end. The person sends it, then taps Send code again.
-      phoneError.innerHTML = "";
-      phoneError.append(document.createTextNode(data.error + " "));
-      const link = document.createElement("a");
-      link.href = `sms:${data.textCoFirst}&body=${encodeURIComponent("Hi Co")}`;
-      link.textContent = "Text Co now";
-      phoneError.append(link);
-      phoneError.classList.remove("hidden");
-      return;
-    }
-    if (!data.success) throw new Error(data.error ?? "Failed to send code.");
-    phoneNumber = value;
-    statusEl.textContent = "Code sent — check your texts.";
-    showStep(stepOtp);
-    otpInput.focus();
-  } catch (err) {
-    phoneError.textContent = err instanceof Error ? err.message : String(err);
-    phoneError.classList.remove("hidden");
-  } finally {
-    sendCodeButton.disabled = false;
-  }
-}
-
-async function verifyCode() {
-  otpError.classList.add("hidden");
-  const otp_code = otpInput.value.trim();
-  if (!otp_code) return;
-
-  verifyButton.disabled = true;
-  try {
-    const res = await fetch("/api/login/verify", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ phone_number: phoneNumber, otp_code }),
-    });
-    const data = await res.json();
-    if (!data.success) throw new Error(data.error ?? "Verification failed.");
-    window.location.href = "/phone";
-  } catch (err) {
-    otpError.textContent = err instanceof Error ? err.message : String(err);
-    otpError.classList.remove("hidden");
-  } finally {
-    verifyButton.disabled = false;
-  }
-}
-
-sendCodeButton.addEventListener("click", sendCode);
-phoneInput.addEventListener("keydown", (e) => e.key === "Enter" && sendCode());
-verifyButton.addEventListener("click", verifyCode);
-otpInput.addEventListener("keydown", (e) => e.key === "Enter" && verifyCode());
-backButton.addEventListener("click", () => {
-  otpInput.value = "";
-  statusEl.textContent = "Enter your phone number to continue.";
-  showStep(stepPhone);
-  phoneInput.focus();
+  waitingEl.classList.remove("hidden");
+  statusEl.textContent = "Send the text, then come back here.";
 });
 
-redirectIfAlreadyLoggedIn();
+(async () => {
+  if (!(await redirectIfAlreadyLoggedIn())) await prepareCode();
+})();

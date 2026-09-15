@@ -2127,3 +2127,21 @@ button {
   cursor: pointer;
   padding: 0;
 }
+
+.login-text-co {
+  display: block;
+  width: 100%;
+  text-align: center;
+}
+
+.login-text-co[aria-disabled="true"] {
+  opacity: 0.5;
+  pointer-events: none;
+}
+
+.login-desktop {
+  margin-top: var(--space-4);
+  font-size: 13px;
+  color: var(--text-secondary);
+  line-height: 1.5;
+}
