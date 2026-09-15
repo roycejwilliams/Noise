@@ -2,6 +2,10 @@ import { anthropic } from "@ai-sdk/anthropic";
 import { generateText } from "ai";
 import pool from "../db/db.js";
 
+// Model policy (Royce, 2026-09-14): scoring decides who gets introduced to
+// whom, so it runs on Sonnet 5.
+const SCORING_MODEL = "claude-sonnet-5";
+
 // Co Loop Stage 3 — "identify relevance." Judges whether a candidate
 // satisfies someone's stated ask. Used standalone by relevance.ts's network
 // sweep — the only active caller right now, per the current build priority
@@ -128,7 +132,11 @@ async function buildCandidateDigest<T extends ScorableCandidate>(
     askEmbedding && askEmbedding.length
       ? await fetchTopMemoryPerCandidate(candidates.map((c) => c.user_id), askEmbedding)
       : new Map<string, string[]>();
+  return formatCandidateDigest(candidates, memoryByUser);
+}
 
+// Pure half of buildCandidateDigest, exported for evals/matching.
+export function formatCandidateDigest<T extends ScorableCandidate>(candidates: T[], memoryByUser: Map<string, string[]>): string {
   return candidates
     .map((c, i) => {
       const facts = [...(c.goals ?? []), ...(c.blockers ?? []), ...(c.activity_preferences ?? [])];
@@ -154,13 +162,13 @@ async function runAskScoring<T extends ScorableCandidate>(
 ): Promise<AskScore<T>[]> {
   try {
     const { text: raw } = await generateText({
-      model: anthropic("claude-haiku-4-5-20251001"),
+      model: anthropic(SCORING_MODEL),
       experimental_telemetry: { isEnabled: true, functionId },
       prompt,
     });
 
-    const clean = raw.replace(/```json|```/g, "").trim();
-    const parsed = JSON.parse(clean);
+    const stripped = raw.replace(/```json|```/g, "").trim();
+    const parsed = JSON.parse(stripped.match(/\{[\s\S]*\}/)?.[0] ?? stripped);
     const results = Array.isArray(parsed.results) ? parsed.results : [];
     return results
       .filter((r: any) => Number.isInteger(r.index) && r.index >= 0 && r.index < candidates.length)
@@ -201,8 +209,11 @@ export async function scoreAgainstStatedAsk<T extends ScorableCandidate>(
   if (!candidates.length || !ask.text) return [];
 
   const digest = await buildCandidateDigest(candidates, ask.embedding);
+  return runAskScoring("matching.scoreAgainstStatedAsk", buildStatedAskPrompt(ask.text, digest, askerContext), candidates);
+}
 
-  const prompt = `Someone wants to be connected with people who match this: "${ask.text}"
+export function buildStatedAskPrompt(askText: string, digest: string, askerContext?: string): string {
+  return `Someone wants to be connected with people who match this: "${askText}"
 ${askerContext ? `\nWhat's known about the person asking (use ONLY to judge "mutual" below, never to inflate the score itself): ${askerContext}\n` : ""}
 Here is what's known about each candidate, one per line:
 ${digest}
@@ -216,8 +227,6 @@ score: 0-100. 0 means nothing on file supports it, 100 means they clearly satisf
 reason: one short sentence explaining the score, referencing only what's actually listed for that candidate. Internal only, never shown to anyone.
 share_reason: one short sentence that is safe to say to OTHER people about why this candidate fits. It may use ONLY the candidate's own stated ask/offering text (the part in quotes after "their own stated"), because they said that in order to be matched. Never use anything from their goals, blockers, activities, or "mentioned" memories, and never imply they said they want to meet anyone. Empty string if their stated ask/offering doesn't support the match.
 mutual: true only if the candidate's own stated ask/offering (if listed) also plausibly points back at what's known about the asker above. false if the candidate has no stated ask/offering listed, or it doesn't plausibly connect.`;
-
-  return runAskScoring("matching.scoreAgainstStatedAsk", prompt, candidates);
 }
 
 // Reverse direction of scoreAgainstStatedAsk — "I have something to offer,
@@ -253,4 +262,11 @@ mutual: true only if the candidate's own stated ask (if listed) is a "seeking" a
   return runAskScoring("matching.scoreOfferingAgainstCandidates", prompt, candidates);
 }
 
-export { getActiveAsk, getActiveSeekingAsk, getActiveOfferingAsk };
+// Every active stated ask/offering text (the only profile text a person
+// gave in order to be matched; see harness/matchGate.ts and introConsent.ts).
+function getActiveAsks(intent: unknown): string[] {
+  if (!Array.isArray(intent)) return [];
+  return (intent as StatedIntent[]).filter((i) => i?.status === "active" && i?.text).map((i) => String(i.text));
+}
+
+export { getActiveAsk, getActiveAsks, getActiveSeekingAsk, getActiveOfferingAsk };

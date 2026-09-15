@@ -5,6 +5,11 @@ import pool from "../db/db.js";
 import { getTieredRecommendation, type TierMatch } from "./tieredRecommendation.js";
 import { generateEmbedding } from "./embeddings.js";
 
+// Model policy (Royce, 2026-09-14): Haiku for the narrow message-to-search
+// rewrite; Sonnet 5 for the fallback suggestion, which nothing re-checks.
+const REWRITE_MODEL = "claude-haiku-4-5-20251001";
+const SUGGEST_MODEL = "claude-sonnet-5";
+
 // Intent-Layer-only real action: Co can actually invoke this (voice via
 // Hume's tool_call plane, iMessage via a direct call from the ongoing-chat
 // handler) and get back something concrete, grounded in what's actually
@@ -73,7 +78,7 @@ async function dropAlreadyRecommended(userId: string, matches: TierMatch[]): Pro
 async function toSearchRequest(userId: string, message: string, statedAsk: string | null): Promise<string | null> {
   try {
     const { text: raw } = await generateText({
-      model: anthropic("claude-haiku-4-5-20251001"),
+      model: anthropic(REWRITE_MODEL),
       experimental_telemetry: { isEnabled: true, functionId: "co.recommendation.toSearchRequest", metadata: { userId } },
       prompt: `Someone texted: "${message}"${statedAsk ? `\nWhat they've told Co they're looking for overall: "${statedAsk}"` : ""}
 
@@ -150,6 +155,8 @@ export async function generateRecommendation(userId: string, currentMessage?: st
       const found: TierMatch[] = await getTieredRecommendation(
         { text: askText, embedding: askText === latestIntent?.text ? latestIntent?.embedding : null },
         profile.city ?? null,
+        // Repeats are handled below so the reply can say it was already shared.
+        { userId, checkRepeat: false },
       ).catch((err: any) => {
         console.error("generateRecommendation: getTieredRecommendation failed (non-fatal):", err?.message ?? err);
         return [];
@@ -219,7 +226,7 @@ export async function generateRecommendation(userId: string, currentMessage?: st
       { userId, traceName: "co.recommendation.generate" },
       () =>
         generateText({
-          model: anthropic("claude-haiku-4-5-20251001"),
+          model: anthropic(SUGGEST_MODEL),
           experimental_telemetry: { isEnabled: true, functionId: "co.recommendation.generate" },
           prompt: `Here is everything actually known about this person, captured from real conversations:
 ${knownData}
