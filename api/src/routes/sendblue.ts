@@ -16,7 +16,16 @@ import { detectSeekingMode, detectTurnTone } from "../services/emotionalTone.js"
 import { buildContextSummary } from "../services/callContext.js";
 import { findOrCreateUserByPhone, hasPendingEmail, splitFullName } from "../services/identity.js";
 import { recordDecision } from "../harness/core.js";
-import { INTAKE_EXTRACT_MODEL, decideIntake, gatherIntakeState, isEmailOnOtherAccount, isValidEmail, type IntakeProposal } from "../harness/intake.js";
+import {
+  INTAKE_EXTRACT_MODEL,
+  buildIntakeExtractionPrompt,
+  decideIntake,
+  gatherIntakeState,
+  isEmailOnOtherAccount,
+  isValidEmail,
+  parseIntakeProposal,
+  type IntakeProposal,
+} from "../harness/intake.js";
 import { isOptInKeyword, isOptOutKeyword } from "../services/optOut.js";
 import {
   captureIntent,
@@ -508,22 +517,19 @@ export function sendblueRouter(io: Server): Router {
             const { text: rawExtraction } = await generateText({
               model: anthropic(INTAKE_EXTRACT_MODEL),
               experimental_telemetry: { isEnabled: true, functionId: "sendblue.intake.extractIdentity" },
-              prompt: `Co asked a new contact for their full name and email. Extract what's in their reply.
-
-Already known — name: ${intakeState.knownName ?? "not yet given"}, email: ${intakeState.knownEmail ?? intakeState.partialEmail ?? "not yet given"}
-
-Their reply: "${hasText ? content : "[no text — sent a photo or voice memo instead]"}"
-
-Return ONLY strict JSON: {"full_name": string or null, "email": string or null, "is_acknowledgment": boolean}. Only set full_name/email when this reply actually contains them — don't repeat an already-known value and don't guess at a missing one. Set is_acknowledgment true when the reply is just a social acknowledgment of Co's welcome (e.g. "thanks", "ok", "sounds good") with no attempt to give a name or email — false otherwise, including when they did attempt an answer that just didn't parse.`,
+              prompt: buildIntakeExtractionPrompt(intakeState, hasText ? content : null),
             });
-            extracted = JSON.parse(rawExtraction.trim().replace(/^```(?:json)?\n?|\n?```$/g, ""));
+            extracted = parseIntakeProposal(rawExtraction);
           } catch (err: any) {
             console.error("sendblue intake: identity extraction failed (non-fatal, asking again):", err?.message ?? err);
           }
 
           const proposedEmail = extracted.email?.trim() || null;
           const emailTaken = isValidEmail(proposedEmail) ? await isEmailOnOtherAccount(proposedEmail, user.id) : false;
-          let intake = decideIntake(intakeState, extracted, { emailTakenByOtherAccount: emailTaken });
+          let intake = decideIntake(intakeState, extracted, {
+            emailTakenByOtherAccount: emailTaken,
+            replyText: hasText ? content : null,
+          });
 
           if (intake.action === "capture") {
             const { first_name, last_name } = splitFullName(intake.name!);

@@ -1,0 +1,473 @@
+[
+  {
+    "id": "i01",
+    "kind": "intake",
+    "message": "Jordan Lee, jordan.lee@gmail.com",
+    "proposal": {
+      "full_name": "Jordan Lee",
+      "email": "jordan.lee@gmail.com"
+    },
+    "state": {
+      "knownName": null,
+      "knownEmail": null,
+      "partialEmail": null,
+      "retries": 0,
+      "lastCoLine": null
+    },
+    "expect": {
+      "action": "capture",
+      "name": "Jordan Lee",
+      "email": "jordan.lee@gmail.com"
+    }
+  },
+  {
+    "id": "i02",
+    "kind": "intake",
+    "message": "jordan.lee@gmail.com",
+    "proposal": {
+      "full_name": null,
+      "email": "jordan.lee@gmail.com"
+    },
+    "state": {
+      "knownName": null,
+      "knownEmail": null,
+      "partialEmail": null,
+      "retries": 0,
+      "lastCoLine": null
+    },
+    "expect": {
+      "action": "ask",
+      "email": "jordan.lee@gmail.com",
+      "mustNotAskFor": [
+        "email"
+      ]
+    },
+    "note": "email sent alone used to be lost (extractor only saw the users table)"
+  },
+  {
+    "id": "i03",
+    "kind": "intake",
+    "message": "Jordan Lee",
+    "proposal": {
+      "full_name": "Jordan Lee",
+      "email": null
+    },
+    "state": {
+      "knownName": null,
+      "knownEmail": null,
+      "partialEmail": "jordan.lee@gmail.com",
+      "retries": 1,
+      "lastCoLine": "Got your email. What's your full name?"
+    },
+    "expect": {
+      "action": "capture",
+      "name": "Jordan Lee",
+      "email": "jordan.lee@gmail.com"
+    }
+  },
+  {
+    "id": "i04",
+    "kind": "intake",
+    "message": "jordan.lee@gmial",
+    "proposal": {
+      "full_name": null,
+      "email": "jordan.lee@gmial"
+    },
+    "state": {
+      "knownName": "Jordan",
+      "knownEmail": null,
+      "partialEmail": null,
+      "retries": 1,
+      "lastCoLine": "Got your name. What's the best email for you?"
+    },
+    "expect": {
+      "action": "ask",
+      "mustNotAskFor": [
+        "name"
+      ]
+    }
+  },
+  {
+    "id": "i05",
+    "kind": "intake",
+    "message": "royce@example.com",
+    "proposal": {
+      "full_name": null,
+      "email": "royce@example.com"
+    },
+    "emailTaken": true,
+    "state": {
+      "knownName": "Sam",
+      "knownEmail": null,
+      "partialEmail": null,
+      "retries": 1,
+      "lastCoLine": "Got your name. What's the best email for you?"
+    },
+    "expect": {
+      "action": "ask",
+      "mustNotAskFor": [
+        "name"
+      ]
+    }
+  },
+  {
+    "id": "i06",
+    "kind": "intake",
+    "message": "thanks!",
+    "proposal": {
+      "full_name": null,
+      "email": null,
+      "is_acknowledgment": true
+    },
+    "state": {
+      "knownName": null,
+      "knownEmail": null,
+      "partialEmail": null,
+      "retries": 0,
+      "lastCoLine": null
+    },
+    "expect": {
+      "action": "ask",
+      "explain": false
+    }
+  },
+  {
+    "id": "i07",
+    "kind": "intake",
+    "message": "why do you need that",
+    "proposal": {
+      "full_name": null,
+      "email": null
+    },
+    "state": {
+      "knownName": null,
+      "knownEmail": null,
+      "partialEmail": null,
+      "retries": 3,
+      "lastCoLine": "Let's get you set up first. What's your full name and email?"
+    },
+    "expect": {
+      "action": "ask",
+      "explain": true
+    },
+    "note": "the 'Sorry, didn't catch that' loop: after 3 retries explain instead of repeating"
+  },
+  {
+    "id": "i08",
+    "kind": "intake",
+    "message": "hmm",
+    "proposal": {
+      "full_name": null,
+      "email": null
+    },
+    "state": {
+      "knownName": null,
+      "knownEmail": null,
+      "partialEmail": null,
+      "retries": 1,
+      "lastCoLine": "Before we get into it, what's your full name and email?"
+    },
+    "expect": {
+      "action": "ask",
+      "explain": false
+    }
+  },
+  {
+    "id": "i09",
+    "kind": "intake",
+    "message": "it's Priya",
+    "proposal": {
+      "full_name": "Priya",
+      "email": null
+    },
+    "state": {
+      "knownName": null,
+      "knownEmail": null,
+      "partialEmail": null,
+      "retries": 0,
+      "lastCoLine": null
+    },
+    "expect": {
+      "action": "ask",
+      "mustNotAskFor": [
+        "name"
+      ]
+    }
+  },
+  {
+    "id": "i10",
+    "kind": "intake",
+    "message": "Priya Shah and my email is priya@shah.dev",
+    "proposal": {
+      "full_name": "Priya Shah",
+      "email": "priya@shah.dev"
+    },
+    "state": {
+      "knownName": "Priya",
+      "knownEmail": null,
+      "partialEmail": null,
+      "retries": 1,
+      "lastCoLine": "Got your name. What's the best email for you?"
+    },
+    "expect": {
+      "action": "capture",
+      "email": "priya@shah.dev"
+    }
+  },
+  {
+    "id": "i11",
+    "kind": "intake",
+    "message": "call me Alex. alex at gmail dot com",
+    "proposal": {
+      "full_name": "Alex",
+      "email": "alex@gmail.com"
+    },
+    "state": {
+      "knownName": null,
+      "knownEmail": null,
+      "partialEmail": null,
+      "retries": 0,
+      "lastCoLine": null
+    },
+    "expect": {
+      "action": "capture",
+      "email": "alex@gmail.com"
+    },
+    "note": "spoken email form counts as given"
+  },
+  {
+    "id": "i12",
+    "kind": "intake",
+    "message": "[sent a photo]",
+    "proposal": {
+      "full_name": null,
+      "email": null
+    },
+    "state": {
+      "knownName": "Jordan",
+      "knownEmail": null,
+      "partialEmail": null,
+      "retries": 4,
+      "lastCoLine": "I only use your email to send you things like event links and details. What's the best one for you?"
+    },
+    "expect": {
+      "action": "ask",
+      "mustNotAskFor": [
+        "name"
+      ],
+      "explain": true
+    }
+  },
+  {
+    "id": "i13",
+    "kind": "intake",
+    "message": "I'm Jordan",
+    "proposal": {
+      "full_name": "Jordan",
+      "email": "jordan@gmail.com"
+    },
+    "state": {
+      "knownName": null,
+      "knownEmail": null,
+      "partialEmail": null,
+      "retries": 0,
+      "lastCoLine": null
+    },
+    "expect": {
+      "action": "ask",
+      "mustNotAskFor": [
+        "name"
+      ]
+    },
+    "note": "model invents an email from a name; must not be written"
+  },
+  {
+    "id": "i14",
+    "kind": "intake",
+    "message": "Sam Lee",
+    "proposal": {
+      "full_name": "Sam Lee",
+      "email": null
+    },
+    "state": {
+      "knownName": null,
+      "knownEmail": "sam@lee.io",
+      "partialEmail": null,
+      "retries": 0,
+      "lastCoLine": null
+    },
+    "expect": {
+      "action": "capture",
+      "email": "sam@lee.io"
+    },
+    "note": "email already on file from signup: capture with it, never re-ask"
+  },
+  {
+    "id": "i15",
+    "kind": "intake",
+    "message": "hey there",
+    "proposal": {
+      "full_name": "Jordan Lee",
+      "email": null
+    },
+    "state": {
+      "knownName": null,
+      "knownEmail": null,
+      "partialEmail": "jordan.lee@gmail.com",
+      "retries": 0,
+      "lastCoLine": null
+    },
+    "expect": {
+      "action": "ask",
+      "mustNotAskFor": [
+        "email"
+      ]
+    },
+    "note": "a name the model made up (not in their message) must not be written"
+  },
+  {
+    "id": "o01",
+    "kind": "otp",
+    "state": {
+      "storedCode": "123456",
+      "expiresInSec": 120,
+      "attempts": 0,
+      "locked": false,
+      "lockedAgoMin": null
+    },
+    "submitted": "123456",
+    "expect": {
+      "result": "verified",
+      "alertTeam": false
+    }
+  },
+  {
+    "id": "o02",
+    "kind": "otp",
+    "state": {
+      "storedCode": "123456",
+      "expiresInSec": -10,
+      "attempts": 0,
+      "locked": false,
+      "lockedAgoMin": null
+    },
+    "submitted": "123456",
+    "expect": {
+      "result": "expired",
+      "alertTeam": false
+    }
+  },
+  {
+    "id": "o03",
+    "kind": "otp",
+    "state": {
+      "storedCode": "123456",
+      "expiresInSec": 120,
+      "attempts": 3,
+      "locked": false,
+      "lockedAgoMin": null
+    },
+    "submitted": "000000",
+    "expect": {
+      "result": "wrong",
+      "alertTeam": false
+    }
+  },
+  {
+    "id": "o04",
+    "kind": "otp",
+    "state": {
+      "storedCode": "123456",
+      "expiresInSec": 120,
+      "attempts": 4,
+      "locked": false,
+      "lockedAgoMin": null
+    },
+    "submitted": "000000",
+    "expect": {
+      "result": "wrong",
+      "alertTeam": true
+    }
+  },
+  {
+    "id": "o05",
+    "kind": "otp",
+    "state": {
+      "storedCode": "123456",
+      "expiresInSec": 120,
+      "attempts": 5,
+      "locked": true,
+      "lockedAgoMin": 3
+    },
+    "submitted": "000000",
+    "expect": {
+      "result": "locked",
+      "alertTeam": false
+    }
+  },
+  {
+    "id": "o06",
+    "kind": "otp",
+    "state": {
+      "storedCode": "123456",
+      "expiresInSec": 120,
+      "attempts": 5,
+      "locked": true,
+      "lockedAgoMin": 3
+    },
+    "submitted": "123456",
+    "expect": {
+      "result": "locked",
+      "alertTeam": false
+    }
+  },
+  {
+    "id": "o07",
+    "kind": "otp",
+    "state": {
+      "storedCode": "123456",
+      "expiresInSec": 120,
+      "attempts": 5,
+      "locked": true,
+      "lockedAgoMin": 20
+    },
+    "submitted": "123456",
+    "expect": {
+      "result": "verified",
+      "alertTeam": false
+    }
+  },
+  {
+    "id": "o08",
+    "kind": "otp",
+    "state": {
+      "storedCode": "123456",
+      "expiresInSec": 120,
+      "attempts": 5,
+      "locked": true,
+      "lockedAgoMin": null
+    },
+    "submitted": "123456",
+    "expect": {
+      "result": "verified",
+      "alertTeam": false
+    },
+    "note": "a lock from before locked_at existed is treated as expired, not permanent"
+  },
+  {
+    "id": "o09",
+    "kind": "otp",
+    "state": {
+      "storedCode": null,
+      "expiresInSec": null,
+      "attempts": 0,
+      "locked": false,
+      "lockedAgoMin": null
+    },
+    "submitted": "123456",
+    "expect": {
+      "result": "no_code",
+      "alertTeam": false
+    }
+  }
+]

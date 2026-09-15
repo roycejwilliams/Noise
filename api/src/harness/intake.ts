@@ -26,6 +26,20 @@ export function isValidEmail(email: string | null | undefined): email is string 
   return !!email && EMAIL_RE.test(email.trim()) && !hasPendingEmail(email.trim());
 }
 
+// The email has to be in what they actually wrote (spoken forms like
+// "alex at gmail dot com" count). Stops the model filling in an address
+// from a name.
+export function emailAppearsInReply(email: string, reply: string): boolean {
+  const norm = (t: string) =>
+    t
+      .toLowerCase()
+      .replace(/\s*\(?\bat\b\)?\s*/g, "@")
+      .replace(/\s*\(?\bdot\b\)?\s*/g, ".")
+      .replace(/\s+/g, "");
+  const e = email.trim().toLowerCase();
+  return reply.toLowerCase().includes(e) || norm(reply).includes(e);
+}
+
 export type IntakeState = {
   userId: string;
   knownName: string | null;
@@ -96,10 +110,14 @@ export function pickFresh(options: readonly string[], lastCoLine: string | null,
 export function decideIntake(
   state: IntakeState,
   proposal: IntakeProposal,
-  opts: { emailTakenByOtherAccount: boolean; seed?: number },
+  opts: { emailTakenByOtherAccount: boolean; seed?: number; replyText?: string | null },
 ): IntakeDecision {
   const checks: GateCheck[] = [];
-  const proposedEmail = proposal.email?.trim() || null;
+  let proposedEmail = proposal.email?.trim() || null;
+  if (proposedEmail && typeof opts.replyText === "string" && !emailAppearsInReply(proposedEmail, opts.replyText)) {
+    checks.push({ name: "email_in_reply", pass: false, reason: `"${proposedEmail}" isn't in what they wrote` });
+    proposedEmail = null;
+  }
   const proposedEmailValid = isValidEmail(proposedEmail);
   checks.push({
     name: "email_format",
@@ -116,7 +134,13 @@ export function decideIntake(
 
   // Fields already on file win over anything the model didn't actually get
   // this turn; a newly proposed valid value can still correct them.
-  const name = proposal.full_name?.trim() || state.knownName || null;
+  const proposedName = proposal.full_name?.trim() || null;
+  const nameInReply =
+    !proposedName ||
+    typeof opts.replyText !== "string" ||
+    proposedName.split(/\s+/).every((part) => opts.replyText!.toLowerCase().includes(part.toLowerCase()));
+  if (!nameInReply) checks.push({ name: "name_in_reply", pass: false, reason: `"${proposedName}" isn't in what they wrote` });
+  const name = (nameInReply ? proposedName : null) || state.knownName || null;
   const email = (proposedEmailValid && !emailTaken ? proposedEmail : null) ?? state.knownEmail ?? state.partialEmail ?? null;
 
   if (name && email) {
@@ -161,6 +185,26 @@ export function decideIntake(
     reply: pickFresh(lines, state.lastCoLine, opts.seed),
     checks,
     reason: `still missing ${missing.join(" and ")}`,
+  };
+}
+
+export function buildIntakeExtractionPrompt(state: Pick<IntakeState, "knownName" | "knownEmail" | "partialEmail">, reply: string | null): string {
+  return `Co asked a new contact for their full name and email. Extract what's in their reply.
+
+Already known — name: ${state.knownName ?? "not yet given"}, email: ${state.knownEmail ?? state.partialEmail ?? "not yet given"}
+
+Their reply: "${reply ?? "[no text — sent a photo or voice memo instead]"}"
+
+Return ONLY strict JSON: {"full_name": string or null, "email": string or null, "is_acknowledgment": boolean}. Only set full_name/email when this reply actually contains them — don't repeat an already-known value and don't guess at a missing one. A first name alone counts as a name. Set is_acknowledgment true when the reply is just a social acknowledgment of Co's welcome (e.g. "thanks", "ok", "sounds good") with no attempt to give a name or email — false otherwise, including when they did attempt an answer that just didn't parse.`;
+}
+
+export function parseIntakeProposal(raw: string): IntakeProposal {
+  const m = raw.match(/\{[\s\S]*\}/);
+  const parsed = JSON.parse(m ? m[0] : raw);
+  return {
+    full_name: typeof parsed?.full_name === "string" && parsed.full_name.trim() ? parsed.full_name.trim() : null,
+    email: typeof parsed?.email === "string" && parsed.email.trim() ? parsed.email.trim() : null,
+    is_acknowledgment: parsed?.is_acknowledgment === true,
   };
 }
 
