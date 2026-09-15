@@ -4,6 +4,8 @@
 import {
   ANSWER_VALUES,
   askIsFresh,
+  coAskedSeveralThings,
+  followUpStillCurrent,
   isIrreversible,
   type Decision,
   type OpenItem,
@@ -47,11 +49,23 @@ export function routerGateChecks(
           pass: fresh,
           reason: fresh ? undefined : `Co's last message didn't ask about ${item.kind}`,
         });
+        const several = coAskedSeveralThings(openItems, turn);
+        checks.push({
+          name: "irreversible_single_question",
+          pass: !several,
+          reason: several ? "Co asked more than one thing and the reply didn't say which" : undefined,
+        });
       } else if (valueOk) {
         checks.push({
           name: "reversible_not_low_confidence",
           pass: out.confidence !== "low",
           reason: out.confidence !== "low" ? undefined : "low confidence; nothing resolved",
+        });
+        const current = followUpStillCurrent(item, turn.recentConversation);
+        checks.push({
+          name: "followup_still_current",
+          pass: current,
+          reason: current ? undefined : "Co's last message asked something else",
         });
       }
     }

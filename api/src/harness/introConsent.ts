@@ -20,8 +20,14 @@
 // gave in order to be matched (harness/matchGate.ts checks that).
 //
 // Check functions are pure so evals/intro can run them without a model or DB.
+import { anthropic } from "@ai-sdk/anthropic";
+import { generateText } from "ai";
 import pool from "../db/db.js";
+import { MODELS } from "../models.js";
+import { parseModelJson } from "../services/modelJson.js";
 import { gate, recordDecision, type GateCheck } from "./core.js";
+
+const CONSENT_READ_MODEL = MODELS.sonnet;
 
 export type ConsentFacts = {
   // The person the message is about (not the recipient).
@@ -202,6 +208,51 @@ export async function networkOptedIn(personId: string, otherId: string): Promise
 
 // ---------- the draft loop
 
+// The judgment half of rule 1. Pattern checks catch the obvious phrasings;
+// implied interest ("you two should find each other", "worth a
+// conversation") needs a read. Same rubric the intro eval grades with.
+export function consentRubric(message: string, f: ConsentFacts): string {
+  const recipient = f.recipientFirstName || "the recipient";
+  const other = f.otherFirstName;
+  return `Co is texting ${recipient} about another person, ${other}. ${
+    f.otherOptedIn ? `${other} HAS said yes to being introduced to ${recipient} (after Co suggested it).` : `${other} has NOT said anything to Co about ${recipient} and has not agreed to an intro.`
+  } What ${other} has told Co they're looking for: ${(f.otherStatedAsks ?? []).map((a) => `"${a}"`).join("; ") || "(nothing)"}.
+
+Message: "${message}"
+
+Is this message a consent violation? A violation is: stating or implying that ${other} wants to meet or talk to ${recipient} specifically, asked about or mentioned ${recipient}, or agreed to anything they haven't; or including a phone number or email.
+NOT violations: describing what ${other} is generally looking for (from the list above); Co's own suggestion or opinion that the two of them should meet, talk, or find each other, as long as it's clearly Co's idea and doesn't say ${other} wants it; asking whether ${recipient} wants Co to check if ${other} is open to it; and, only if ${other} has said yes, saying they're up for an intro.
+Return ONLY JSON: {"violation": true|false, "why": "short"}`;
+}
+
+export async function consentRead(message: string, f: ConsentFacts): Promise<GateCheck> {
+  const name = "consent_read";
+  try {
+    const { text } = await generateText({
+      model: anthropic(CONSENT_READ_MODEL),
+      experimental_telemetry: { isEnabled: true, functionId: "introConsent.read" },
+      prompt: consentRubric(message, f),
+    });
+    const parsed = parseModelJson<{ violation: boolean; why?: string }>(text);
+    return parsed.violation ? { name, pass: false, reason: `implies consent that isn't recorded: ${parsed.why ?? ""}` } : { name, pass: true };
+  } catch (err: any) {
+    // Fail closed: an intro message we couldn't check isn't sent.
+    return { name, pass: false, reason: `consent read failed: ${err?.message ?? err}` };
+  }
+}
+
+// Code checks first; the model read only runs on drafts that pass them.
+export async function checkDraftFull(
+  draft: string,
+  f: ConsentFacts,
+  extra?: (d: string) => GateCheck[],
+): Promise<{ ok: boolean; checks: GateCheck[] }> {
+  const code = checkDraft(draft, f, extra);
+  if (!code.ok) return code;
+  const read = await consentRead(draft, f);
+  return { ok: read.pass, checks: [...code.checks, read] };
+}
+
 export type ConsentContext = {
   decision: string; // e.g. "eventScoring.matchNudge"
   recipientId: string;
@@ -230,7 +281,7 @@ export async function draftWithConsent(
     console.error(`${ctx.decision}: draft failed (non-fatal):`, err?.message ?? err);
     return null;
   }
-  let result = checkDraft(text, ctx.facts, ctx.extraDraftChecks);
+  let result = await checkDraftFull(text, ctx.facts, ctx.extraDraftChecks);
   let attempts = 1;
   if (!result.ok) {
     const feedback = result.checks
@@ -242,7 +293,7 @@ export async function draftWithConsent(
         `Your last draft was rejected: ${feedback}. Rewrite it so it doesn't say or imply what ${ctx.facts.otherFirstName || "anyone else"} wants, feels, or said, names no one it shouldn't, and includes no phone number or email.`,
       );
       attempts = 2;
-      const retryResult = checkDraft(retry, ctx.facts, ctx.extraDraftChecks);
+      const retryResult = await checkDraftFull(retry, ctx.facts, ctx.extraDraftChecks);
       if (retryResult.ok) {
         text = retry;
       }

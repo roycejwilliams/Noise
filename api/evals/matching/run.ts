@@ -19,7 +19,7 @@ import { generateText } from "ai";
 import { anthropic } from "@ai-sdk/anthropic";
 import { loadCases, runEval, type CaseScore, type EvalCase } from "../lib.js";
 import { checkShareReason, evaluateMatch, evaluateNetworkCandidate, type MatchFacts, type NetworkFacts } from "../../src/harness/matchGate.js";
-import { buildStatedAskPrompt, formatCandidateDigest } from "../../src/services/matching.js";
+import { buildStatedAskPrompt, formatCandidateDigest, shareReasonFromOwnAsk } from "../../src/services/matching.js";
 import type { TierMatch } from "../../src/services/tieredRecommendation.js";
 
 const JUDGE_MODEL = "claude-sonnet-5";
@@ -94,7 +94,11 @@ async function main() {
     for (const r of results) {
       const cand = c.candidates[r.index];
       if (!cand) continue;
-      const share = typeof r.share_reason === "string" ? r.share_reason.trim() : "";
+      // Same as production: the model only flags whether the stated ask
+      // supports the match; the shown words come from shareReasonFromOwnAsk.
+      const share = typeof r.share_reason === "string" && r.share_reason.trim()
+        ? shareReasonFromOwnAsk(cand.statedAsk ? [{ status: "active", type: "seeking", text: cand.statedAsk }] : [])
+        : "";
       const privateTexts = [...cand.goals, ...cand.blockers, ...cand.activity_preferences];
       const gateCheck = checkShareReason({
         shareReason: share,

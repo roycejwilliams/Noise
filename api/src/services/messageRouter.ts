@@ -487,6 +487,32 @@ export function askIsFresh(item: Pick<OpenItem, "kind" | "detail">, message: str
   }
 }
 
+// Co's last turn asked more than one question while more than one item is
+// open, and the reply doesn't name which: an irreversible yes can't be
+// assigned to either (eval s11: "sure" after a tease question and an intro
+// question). Resolves nothing and asks which they meant.
+export function coAskedSeveralThings(openItems: Pick<OpenItem, "detail">[], turn: { message: string; recentConversation: string }): boolean {
+  if (openItems.length < 2) return false;
+  const questions = (lastCoTurn(turn.recentConversation).match(/\?/g) ?? []).length;
+  if (questions < 2) return false;
+  const msg = turn.message.toLowerCase();
+  const namesOne = openItems.some((i) => i.detail && msg.includes(i.detail.toLowerCase()));
+  return !namesOne;
+}
+
+// A follow-up question ("how did X go?", "who did you meet?") only counts as
+// answered if Co's most recent turn isn't a different question. Eval c098:
+// "not much really, just busy" answered Co's greeting question, but an older
+// outcome follow-up was resolved as "not mentioned".
+export function followUpStillCurrent(item: Pick<OpenItem, "kind" | "detail">, recentConversation: string): boolean {
+  if (item.kind !== "outcome_followup" && item.kind !== "event_checkin") return true;
+  const last = lastCoTurn(recentConversation);
+  if (!last || !last.includes("?")) return true;
+  if (/\bhow('d| did| was)\b[^?]{0,40}\b(go|went|it)\b|\bhow was\b|\bwho did you\b|\bdid you (go|make it|end up)\b|\b(meet|met|talk(ed)? to) anyone\b/i.test(last)) return true;
+  const detailWords = (item.detail ?? "").toLowerCase().split(/[^a-z0-9]+/).filter((w) => w.length >= 4);
+  return detailWords.some((w) => last.toLowerCase().includes(w));
+}
+
 export function decideActions<T extends RoutableItem>(
   out: RouterOutput,
   openItems: T[],
@@ -520,8 +546,8 @@ export function decideActions<T extends RoutableItem>(
     if (item && valueOk) {
       const irreversible = isIrreversible(item.kind, out.answers.value);
       const ok = irreversible
-        ? out.confidence === "high" && askIsFresh(item, turn.message, turn.recentConversation)
-        : out.confidence !== "low";
+        ? out.confidence === "high" && askIsFresh(item, turn.message, turn.recentConversation) && !coAskedSeveralThings(openItems, turn)
+        : out.confidence !== "low" && followUpStillCurrent(item, turn.recentConversation);
       if (ok) {
         d.resolve = { item, value: out.answers.value };
       } else if (irreversible) {

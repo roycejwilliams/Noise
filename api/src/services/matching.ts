@@ -157,6 +157,12 @@ export function formatCandidateDigest<T extends ScorableCandidate>(candidates: T
 // Shared prompt-call/parse logic for both scoring directions below — only
 // the prompt text itself actually differs between "who satisfies my ask"
 // and "who wants my offering".
+export function shareReasonFromOwnAsk(intent: unknown): string {
+  const ask = getActiveAsk(intent);
+  if (!ask?.text) return "";
+  return ask.type === "offering" ? `what they've said they can offer: "${ask.text}"` : `what they've said they're looking for: "${ask.text}"`;
+}
+
 async function runAskScoring<T extends ScorableCandidate>(
   functionId: string,
   prompt: string,
@@ -177,7 +183,10 @@ async function runAskScoring<T extends ScorableCandidate>(
         candidate: candidates[r.index],
         score: typeof r.score === "number" ? Math.max(0, Math.min(100, Math.round(r.score))) : 0,
         reason: typeof r.reason === "string" ? r.reason : "",
-        shareReason: typeof r.share_reason === "string" ? r.share_reason.trim() : "",
+        // The model only decides WHETHER their stated ask supports the match;
+        // the words shown to people are always their own stated ask, so
+        // nothing private or inferred (e.g. "actively fundraising") can leak.
+        shareReason: typeof r.share_reason === "string" && r.share_reason.trim() ? shareReasonFromOwnAsk(candidates[r.index].intent) : "",
         mutual: Boolean(r.mutual),
       }));
   } catch (err) {
