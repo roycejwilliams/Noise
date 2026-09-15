@@ -561,13 +561,16 @@ export function registerJobs(io: Server) {
   });
 
   // Decision log monitoring: hourly spike alerts, weekly review email
-  // (harness/monitor.ts).
-  cron.schedule("23 * * * *", () => {
-    runMonitor().catch((err: any) => console.error("monitor cron error:", err?.message ?? err));
-  });
-  cron.schedule("7 16 * * 1", () => {
-    runWeeklyReview().catch((err: any) => console.error("weekly review cron error:", err?.message ?? err));
-  });
+  // (harness/monitor.ts). Paused (Royce, 2026-09-15: "Pause 4 for now");
+  // set MONITORING_ENABLED=true to turn it back on.
+  if (process.env.MONITORING_ENABLED === "true") {
+    cron.schedule("23 * * * *", () => {
+      runMonitor().catch((err: any) => console.error("monitor cron error:", err?.message ?? err));
+    });
+    cron.schedule("7 16 * * 1", () => {
+      runWeeklyReview().catch((err: any) => console.error("weekly review cron error:", err?.message ?? err));
+    });
+  }
 
   // Harness decision log retention: keep 60 days. Every reply, route, and
   // skipped send writes a row, so without this the table only grows.
