@@ -1,5 +1,6 @@
 import type { TierMatch } from "../services/tieredRecommendation.js";
 import { draftProactive, nameTokens, type Facts, type OutputRules } from "../harness/proactive.js";
+import { renderEventDetails } from "../services/eventDetails.js";
 
 export type EventDiscoverySurfacingPerson = {
   userId: string;
@@ -36,7 +37,16 @@ function matchFacts(askText: string, fromProfile: boolean, match: TierMatch): Fa
     name: match.name,
     date: "event_date" in match ? match.event_date : null,
     application_deadline: "deadline" in match ? (match.deadline ?? null) : null,
-    why_it_fits: match.reason,
+    why_it_fits: match.whyItFits ?? match.reason,
+  };
+}
+
+// The reveal can use the real record; the tease can't (it names nothing).
+function revealFacts(askText: string, fromProfile: boolean, match: TierMatch): Facts {
+  return {
+    ...matchFacts(askText, fromProfile, match),
+    details: match.details ? renderEventDetails(match.name, match.details) : null,
+    source_post: match.opportunity?.postText ?? null,
   };
 }
 
@@ -83,7 +93,7 @@ export async function draftEventReveal(
   const text = await draftProactive({
     functionId: "agent.eventDiscoverySurfacing.revealNowDraft",
     firstName: person.firstName,
-    facts: matchFacts(askText, fromProfile, match),
+    facts: revealFacts(askText, fromProfile, match),
     task: `It's short notice, so skip the "want to hear more?" step. Name it and when it is, say in plain words why it fits them, and be upfront that it's short notice so there's no pressure.${url ? " The link goes out as its own message right before yours; don't mention a link." : ""} If it doesn't actually fit, return SKIP.`,
   });
   if (!text) return null;

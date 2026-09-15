@@ -1,7 +1,8 @@
 import { generateText } from "ai";
 import { anthropic } from "@ai-sdk/anthropic";
 import { listCalendarEvents } from "./luma.js";
-import { fetchPublicEvents, rankByRelevance, fetchEventDescription } from "./lumaDiscovery.js";
+import { fetchPublicEvents, rankByRelevance } from "./lumaDiscovery.js";
+import { fetchLumaEventDetails, type EventDetails, type OpportunityDetails } from "./eventDetails.js";
 import { searchRecentPosts } from "./xSearch.js";
 import { withinRadius } from "./geocoding.js";
 import type { StatedIntent } from "./matching.js";
@@ -61,10 +62,14 @@ const JUDGE_MODEL = MODELS.sonnet;
 // harness/matchGate.ts checks location and grounding against. Optional so
 // backlog items queued before 2026-09-14 still parse; the gate treats a
 // missing value as unverified.
+// details / opportunity / whyItFits (2026-09-15, services/eventDetails.ts):
+// the real record (event page or source post) and a personal reason, so Co
+// can answer "tell me more" and say why it fits this person.
+type MatchExtras = { details?: EventDetails; opportunity?: OpportunityDetails; whyItFits?: string };
 export type TierMatch =
-  | { tier: 1; kind: "co_event"; event_api_id: string; event_date: string; name: string; url?: string; reason: string; city?: string | null }
-  | { tier: 2; kind: "public_event"; event_api_id: string; event_date: string; name: string; url: string; reason: string; city?: string | null }
-  | { tier: 3; kind: "opportunity"; name: string; url: string; reason: string; deadline?: string; evidence?: string };
+  | ({ tier: 1; kind: "co_event"; event_api_id: string; event_date: string; name: string; url?: string; reason: string; city?: string | null } & MatchExtras)
+  | ({ tier: 2; kind: "public_event"; event_api_id: string; event_date: string; name: string; url: string; reason: string; city?: string | null } & MatchExtras)
+  | ({ tier: 3; kind: "opportunity"; name: string; url: string; reason: string; deadline?: string; evidence?: string } & MatchExtras);
 
 // Lead-time window (Royce, 2026-08-30) — "how far out in advance are we
 // searching?" Neither listCalendarEvents() nor fetchPublicEvents() take a
@@ -199,7 +204,9 @@ async function tryTier1(ask: StatedIntent, userCity: string | null, filter?: (st
   const nearby = await filterByRadius(inWindow, userCity);
   const match = await rankByRelevance(nearby, ask);
   if (!match) return null;
+  const details = match.url ? ((await fetchLumaEventDetails(match.url)) ?? undefined) : undefined;
   return {
+    details,
     tier: 1,
     kind: "co_event",
     event_api_id: match.api_id,
@@ -234,11 +241,12 @@ async function tryTier2(ask: StatedIntent, userCity: string | null, filter?: (st
   const nearby = await filterByRadius(inWindow, userCity);
   const match = await rankByRelevance(nearby, ask);
   if (!match) return null;
+  const details = (await fetchLumaEventDetails(match.url)) ?? undefined;
   if (ask.text) {
-    const description = await fetchEventDescription(match.url).catch(() => null);
-    if (!(await isGenuinelyRelevant(ask.text, match.name, match.city, description))) return null;
+    if (!(await isGenuinelyRelevant(ask.text, match.name, match.city, details?.description ?? null))) return null;
   }
   return {
+    details,
     tier: 2,
     kind: "public_event",
     event_api_id: match.api_id,
@@ -352,6 +360,7 @@ Return ONLY valid JSON: {"index": 0, "name": "the specific opportunity name", "r
       reason: parsed.reason ?? "Found via a real, recent post.",
       ...(typeof parsed?.deadline === "string" ? { deadline: parsed.deadline } : {}),
       evidence: posts[parsed.index].text,
+      opportunity: { postText: posts[parsed.index].text },
     };
   } catch (err: any) {
     console.error("tieredRecommendation: extractRealOpportunity failed (non-fatal):", err?.message ?? err);

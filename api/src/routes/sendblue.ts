@@ -54,6 +54,7 @@ import { CO_VOICE, CO_TEXT_CHANNEL } from "../services/coVoice.js";
 import { generateVoiceNote } from "../services/voiceNote.js";
 import { MODELS } from "../models.js";
 import { parseModelJson } from "../services/modelJson.js";
+import { enrichMatch, renderEventDetails } from "../services/eventDetails.js";
 
 // Serializes webhook processing per phone number. Without this, two
 // messages sent seconds apart from the same person can be handled
@@ -1014,7 +1015,15 @@ export function sendblueRouter(io: Server): Router {
             ).catch((err: any) => console.error("sendblue: event_offer_resolved memory write failed (non-fatal):", err?.message ?? err));
 
             const parsed = JSON.parse(pendingEventOffer.content) as { askText: string; match: any };
-            const match = parsed.match;
+            // Real details and a personal reason for the reveal (filled in on
+            // demand for offers queued before details existed).
+            const match: any = await enrichMatch(parsed.match, {
+              firstName: user.first_name,
+              askText: parsed.askText,
+              goals: profile?.goals ?? null,
+              city: profile?.city ?? null,
+              feeling: renderEmotionalContext(emotional),
+            });
             // Staleness check (Royce, 2026-08-30) — Tier 1/2 carry the
             // event's own date; if they said yes days after the tease and
             // the event's already passed, revealing it as if it's still
@@ -1057,7 +1066,7 @@ export function sendblueRouter(io: Server): Router {
                 addFact(replyFacts, "did_this_turn", `Sent the link ${match.url} for "${match.name}" as its own message just before this reply.`);
               }
               addEventFacts(replyFacts, match);
-              addFact(replyFacts, "known", `Why "${match.name}" fits them: ${match.reason}`);
+              if (!match.whyItFits) addFact(replyFacts, "known", `Why "${match.name}" fits them: ${match.reason}`);
               addInstruction(replyFacts, `They just said yes to hearing more about the thing you teased earlier. Share why it fits now, naturally, as part of your reply: "${match.name}". Be honest it's a suggestion, not a guarantee it's right for them.${match.url ? " Don't repeat the link or say you're \"sending\" or \"sharing\" anything, it already went out." : " There's no link for it, so don't mention one."}`);
               // Outcome-learning loop (Royce, 2026-09-02) — schedule the
               // "who did you meet?" follow-up right at the moment real
@@ -1500,14 +1509,22 @@ Return ONLY valid JSON, no preamble: {"date": "YYYY-MM-DD or null", "time": "HH:
                   await logTextExchange(user.id, `Co replied: ${m.url}`);
                   await new Promise((resolve) => setTimeout(resolve, 2000));
                 }
-                // Drafted in Co's voice instead of sending the matching
-                // engine's raw "name — reason" line straight to the user.
-                let description = `${m.name}. ${m.reason}`;
+                // Drafted in Co's voice from the real record and a personal
+                // reason, not the matching engine's raw "name — reason" line.
+                const em = await enrichMatch(m, {
+                  firstName: user.first_name,
+                  askText: resolvedContent,
+                  goals: profile?.goals ?? null,
+                  city: profile?.city ?? null,
+                  feeling: renderEmotionalContext(emotional),
+                });
+                let description = `${m.name}. ${em.whyItFits ?? m.reason}`;
                 try {
+                  const record = em.details ? renderEventDetails(em.name, em.details).join("\n") : em.opportunity ? `What the post says: ${em.opportunity.postText}` : "";
                   const { text: drafted } = await generateText({
-                    model: anthropic(MODELS.haiku),
+                    model: anthropic(MODELS.sonnet),
                     experimental_telemetry: { isEnabled: true, functionId: "sendblue.recommendation.describe" },
-                    prompt: `${CO_VOICE}\n\n${CO_TEXT_CHANNEL} You're telling ${user.first_name ?? "them"} about "${m.name}"${"url" in m && m.url ? ". You sent the link a moment ago; this message goes right under it" : ""}. Why it fits them, from the matching notes: ${m.reason}\n\nWrite 1-2 sentences naming it and saying why it fits, in your own words. Only use facts from the name and notes above: no dates, times, or details that aren't written there. No link. Return ONLY the message.`,
+                    prompt: `${CO_VOICE}\n\n${CO_TEXT_CHANNEL} You're telling ${user.first_name ?? "them"} about "${m.name}"${"url" in m && m.url ? ". You sent the link a moment ago; this message goes right under it" : ""}.\n\nWhy it fits them: ${em.whyItFits ?? m.reason}\n${record ? `\nWhat's actually known about it:\n${record}\n` : ""}\nWrite 1-3 sentences naming it, the one or two details that matter most to them (when, where, who), and why it fits, in your own words. Only use what's written above. No link. Return ONLY the message.`,
                   });
                   if (drafted.trim()) description = cleanCoMessage(drafted.trim());
                 } catch (err: any) {

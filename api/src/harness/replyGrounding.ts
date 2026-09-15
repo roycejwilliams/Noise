@@ -27,6 +27,7 @@ import { recordDecision, type GateCheck } from "./core.js";
 import { MODELS } from "../models.js";
 import { parseModelJson } from "../services/modelJson.js";
 import { checkNoEmotionLabel } from "./emotion.js";
+import { enrichMatch, missingEventDetails, renderEventDetails, type EventDetails, type OpportunityDetails } from "../services/eventDetails.js";
 
 // Model policy (Royce, 2026-09-14): Sonnet 5 for anything with judgment or
 // side effects; Haiku only for narrow, code-checked reads.
@@ -118,7 +119,8 @@ export async function gatherReplyFacts(
   if (reveal.rows[0]) {
     try {
       const { match } = JSON.parse(reveal.rows[0].content) as { match: any };
-      addEventFacts(rf, match);
+      // Offers stored before details existed get them on demand.
+      addEventFacts(rf, await enrichMatch(match));
     } catch {
       // Malformed or pre-fix content shape; nothing reliable to add.
     }
@@ -128,12 +130,21 @@ export async function gatherReplyFacts(
 
 // Real fields only, plus the gaps stated as gaps so "I don't have that" is
 // itself grounded.
-export function addEventFacts(rf: ReplyFacts, match: { name: string; event_date?: string; deadline?: string; url?: string; kind?: string }): void {
+export function addEventFacts(
+  rf: ReplyFacts,
+  match: { name: string; event_date?: string; deadline?: string; url?: string; kind?: string; details?: EventDetails; opportunity?: OpportunityDetails; whyItFits?: string },
+): void {
   const label = match.kind === "opportunity" ? "Opportunity" : "Event";
   addFact(rf, "known", `${label} Co told them about: "${match.name}"${match.event_date ? `, on ${match.event_date}` : ""}${match.deadline ? `, application deadline ${match.deadline}` : ""}.`);
   addFact(rf, "known", match.url ? `Link for "${match.name}": ${match.url}` : `There is no link on file for "${match.name}".`);
+  // The real record (event page or source post), so "tell me more" gets
+  // real answers instead of "I don't have that".
+  if (match.details) for (const line of renderEventDetails(match.name, match.details)) addFact(rf, "known", line);
+  if (match.opportunity) addFact(rf, "known", `What the source post for "${match.name}" says: ${match.opportunity.postText}`);
+  if (match.whyItFits) addFact(rf, "known", `Why "${match.name}" fits them: ${match.whyItFits}`);
   if (match.kind !== "opportunity") {
-    addFact(rf, "unknown", `For "${match.name}", Co does not have the start time, address or neighborhood, host, headcount, or format.`);
+    const missing = missingEventDetails(match.name, match.details);
+    if (missing) addFact(rf, "unknown", missing);
   }
 }
 
@@ -218,7 +229,8 @@ export function codeChecks(draft: string, rf: ReplyFacts, src: GroundingSources)
   // link turns up or when the other person answers (an intro goes out by
   // email, not a text from Co).
   const promise = draft.match(
-    /\b(i'?ll|i will|i can|let me|will)\s+(keep (an eye out|watching|looking|searching|checking)|flag (it|that|one)|circle back|follow up|get back to you|let you know|text you (when|once|as soon|the moment|if)|track (it|that|one) down|find out|look into|reach out to|send (it|one|the link) (when|once|as soon)|send (it|one|them|that) your way|pass (it|one|that) along|ping you|be in touch)\b/i,
+    // "If one turns up, I'll text you" (conditional first) is the same promise.
+    /\b(?:if|when|once|as soon as)\b[^.?!]{0,80}\b(?:i'?ll|i will)\s+(?:text|send|ping|message|let)\s+you\b|\b(i'?ll|i will|i can|let me|will)\s+(keep (an eye out|watching|looking|searching|checking)|flag (it|that|one)|circle back|follow up|get back to you|let you know|text you (when|once|as soon|the moment|if)|track (it|that|one) down|find out|look into|reach out to|send (it|one|the link) (when|once|as soon)|send (it|one|them|that) your way|pass (it|one|that) along|ping you|be in touch)\b/i,
   );
   if (promise) {
     checks.push({ name: "no_followup_promise", pass: false, reason: `promises a follow-up nothing will do: "${promise[0]}"` });

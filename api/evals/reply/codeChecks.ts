@@ -28,6 +28,9 @@ const cases: [string, string | null, string][] = [
   ["If a good one turns up in Oakland I'll send it your way.", "no_followup_promise", "send it your way"],
   ["I'll pass it along if I hear anything.", "no_followup_promise", "pass it along"],
   ["Send it my way whenever.", null, "their send, not Co's"],
+  ["Will do. If a good Oakland running group turns up, I'll text you.", "no_followup_promise", "conditional promise first"],
+  ["When you get there, I'll text you the address?", "no_followup_promise", "when-clause promise"],
+  ["If you want, I can look now.", null, "offer to act now, not later"],
 ];
 
 let failed = 0;

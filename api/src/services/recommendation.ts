@@ -6,6 +6,7 @@ import { getTieredRecommendation, type TierMatch } from "./tieredRecommendation.
 import { generateEmbedding } from "./embeddings.js";
 import { MODELS } from "../models.js";
 import { parseModelJson } from "./modelJson.js";
+import { getEmotionalContext, renderEmotionalContext } from "../harness/emotion.js";
 
 // Model policy (Royce, 2026-09-14): Haiku for the narrow message-to-search
 // rewrite; Sonnet 5 for the fallback suggestion, which nothing re-checks.
@@ -79,6 +80,7 @@ async function dropAlreadyRecommended(userId: string, matches: TierMatch[]): Pro
 // thanks). Fails open to the raw message so an outage doesn't block recs.
 async function toSearchRequest(userId: string, message: string, statedAsk: string | null): Promise<string | null> {
   try {
+    const feeling = renderEmotionalContext(await getEmotionalContext(userId));
     const { text: raw } = await generateText({
       model: anthropic(REWRITE_MODEL),
       experimental_telemetry: { isEnabled: true, functionId: "co.recommendation.toSearchRequest", metadata: { userId } },
@@ -86,7 +88,7 @@ async function toSearchRequest(userId: string, message: string, statedAsk: strin
 
 Is this message asking Co to find or suggest something new for them (an event, a group, a program, something to do)? Saying they want to find something counts ("I'd love to find a pickup basketball group"). These are NOT: follow-up questions about something already mentioned ("any details?", "where's the link?", "what time?"), asking for help planning or organizing something ("can you help me plan?"), scheduling, and thanks. If it's unclear, treat it as a request.
 
-If yes, rewrite it as one standalone sentence describing what to look for, keeping the place, timing, and topic they gave. If they named a topic, use only their words for it and add nothing from their overall goal ("founder meetups" stays "founder meetups"). Only borrow the topic from what they're looking for overall when the message gives none (like "what's going on this weekend"). Return ONLY valid JSON: {"request": "..."} or {"request": null}.`,
+If yes, rewrite it as one standalone sentence describing what to look for, keeping the place, timing, and topic they gave.${feeling ? ` How they've been feeling, which can shape the format or size (smaller and lower-key when they're drained, community over networking when they're isolated) but never the topic they asked for:\n${feeling}\n` : ""} If they named a topic, use only their words for it and add nothing from their overall goal ("founder meetups" stays "founder meetups"). Only borrow the topic from what they're looking for overall when the message gives none (like "what's going on this weekend"). Return ONLY valid JSON: {"request": "..."} or {"request": null}.`,
     });
     const parsed = parseModelJson(raw);
     if (parsed && "request" in parsed) return typeof parsed.request === "string" && parsed.request.trim() ? parsed.request.trim() : null;

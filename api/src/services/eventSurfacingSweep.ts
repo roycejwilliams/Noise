@@ -3,6 +3,9 @@ import { getTieredRecommendation, type TierMatch } from "./tieredRecommendation.
 import { enqueueCandidate } from "../harness/proactive.js";
 import { generateEmbedding } from "./embeddings.js";
 import { scheduleOutcomeFollowUp, getTierBias } from "./recommendationOutcome.js";
+import { enrichMatch } from "./eventDetails.js";
+import { getEmotionalContext, renderEmotionalContext } from "../harness/emotion.js";
+import { buildSearchBrief } from "./searchBrief.js";
 
 export type SurfacingCandidate = {
   // ask_checkins.id — NOT the same as userId. A user can have more than one
@@ -257,7 +260,16 @@ function isShortNotice(match: TierMatch): boolean {
 const URGENT_WINDOW_DAYS = 3;
 
 async function findFreshPending(candidate: SurfacingCandidate): Promise<BacklogItem[]> {
-  const matches = await getTieredRecommendation({ text: candidate.askText }, candidate.city).catch((err: any) => {
+  // What to search for comes from the whole person (ask, goals, recent
+  // texts, feelings), not the ask's words alone (services/searchBrief.ts).
+  const brief = await buildSearchBrief({
+    userId: candidate.userId,
+    askText: candidate.askText,
+    fromProfile: candidate.fromProfile ?? false,
+    goals: candidate.goals,
+    activityPreferences: candidate.activityPreferences,
+  });
+  const matches = await getTieredRecommendation({ text: brief.searchText }, candidate.city).catch((err: any) => {
     console.error("attemptEventSurfacing: getTieredRecommendation failed (non-fatal):", err?.message ?? err);
     return [] as TierMatch[];
   });
@@ -350,11 +362,21 @@ export async function attemptEventSurfacing(candidate: SurfacingCandidate): Prom
   if (item.source === "full" && !candidate.cooldownCleared && !isShortNotice(item.match)) return { queued: false };
 
   const date = relevantDate(item.match);
+  // Real details plus a personal reason, computed once when it's queued, so
+  // the tease, the reveal, and any "tell me more" all work from the same
+  // record (services/eventDetails.ts).
+  const match = await enrichMatch(item.match, {
+    firstName: candidate.firstName,
+    askText: candidate.fromProfile ? null : item.askText,
+    goals: candidate.goals,
+    city: candidate.city,
+    feeling: renderEmotionalContext(await getEmotionalContext(candidate.userId)),
+  });
   const payload: EventOfferPayload = {
     askId: candidate.askId,
     askText: item.askText,
     fromProfile: candidate.fromProfile ?? false,
-    match: item.match,
+    match,
   };
   const { queued: ok } = await enqueueCandidate({
     userId: candidate.userId,
