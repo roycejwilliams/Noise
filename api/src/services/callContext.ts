@@ -3,6 +3,9 @@ import { anthropic } from "@ai-sdk/anthropic";
 import pool from "../db/db.js";
 import { writeMemory } from "./memory.js";
 
+// A 1-2 sentence call summary: narrow work, Haiku.
+const SUMMARY_MODEL = "claude-haiku-4-5-20251001";
+
 // Builds a compact summary of everything already known about a person —
 // from a prior call's extracted profile/intent AND recent text exchanges —
 // so a new call's opening can pick up from it instead of a cold generic
@@ -112,7 +115,7 @@ export async function buildContextSummary(userId: string): Promise<string> {
 export async function summarizeCallForTextContext(userId: string, transcript: string): Promise<void> {
   try {
     const { text: raw } = await generateText({
-      model: anthropic("claude-haiku-4-5-20251001"),
+      model: anthropic(SUMMARY_MODEL),
       experimental_telemetry: { isEnabled: true, functionId: "callContext.summarizeCallForText" },
       prompt: `Summarize what was actually discussed in this phone call transcript, in 1-2 plain sentences, third person, as if briefing someone on what just happened. Ground it only in what's actually in the transcript — no invented detail, no therapy-speak.
 

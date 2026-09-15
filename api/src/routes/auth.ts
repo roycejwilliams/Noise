@@ -6,6 +6,8 @@ import { authLimiter } from "../middleware/rateLimiter.js";
 import { Resend } from "resend";
 import { ALLOW_REAL_SENDS, sendEmail, sendSMS } from "../otpActions.js";
 import { normalizePhone } from "../utils/phone.js";
+import { recordDecision } from "../harness/core.js";
+import { OTP_LOCK_MINUTES, decideOtpAttempt, decideOtpResend } from "../harness/intake.js";
 
 function generateOTP() {
   return randomInt(100000, 1000000);
@@ -18,7 +20,7 @@ function generateOTP() {
 // short enough that a real person who fat-fingered it isn't shut out. A
 // lock with no locked_at predates this column, so it's treated as expired
 // rather than left permanent.
-const LOCK_MINUTES = 15;
+const LOCK_MINUTES = OTP_LOCK_MINUTES;
 
 async function isStillLocked(userId: string): Promise<boolean> {
   await pool.query(
@@ -62,17 +64,59 @@ export function createAuthRouter(): Router {
   router.post("/verify-otp", authLimiter, async (req, res, next) => {
     const { user_id, otp_code } = req.body;
 
+    const client = await pool.connect();
     try {
-      if (await isStillLocked(user_id)) {
+      // Layer 1 harness (src/harness/intake.ts): one locked read of the OTP
+      // state, a pure decision, and one write, so two wrong guesses racing
+      // each other can't both skip the lock or alert the team twice.
+      await client.query("BEGIN");
+      const { rows: stateRows } = await client.query(
+        `SELECT email, phone_number, otp_code, otp_expiry, otp_attempts, locked, locked_at, username, id, created_at, role
+         FROM users WHERE id = $1 FOR UPDATE`,
+        [user_id],
+      );
+      const row = stateRows[0];
+      if (!row) {
+        await client.query("ROLLBACK");
+        return res.status(400).send(`Authentication failed`);
+      }
+      const otp = decideOtpAttempt(
+        {
+          storedCode: row.otp_code == null ? null : String(row.otp_code),
+          expiresAt: row.otp_expiry ? new Date(row.otp_expiry) : null,
+          attempts: row.otp_attempts ?? 0,
+          locked: row.locked === true,
+          lockedAt: row.locked_at ? new Date(row.locked_at) : null,
+        },
+        String(otp_code ?? ""),
+        new Date(),
+      );
+      if (otp.result === "verified") {
+        await client.query(`UPDATE users SET otp_code = null, otp_expiry = null, otp_attempts = 0, locked = false, locked_at = NULL WHERE id = $1`, [user_id]);
+      } else if (otp.result === "wrong") {
+        await client.query(
+          `UPDATE users SET otp_attempts = $2, locked = $3, locked_at = CASE WHEN $3 THEN NOW() ELSE NULL END WHERE id = $1`,
+          [user_id, otp.attempts, otp.lockNow],
+        );
+      } else if (otp.clearExpiredLock) {
+        await client.query(`UPDATE users SET locked = false, locked_at = NULL, otp_attempts = 0 WHERE id = $1`, [user_id]);
+      }
+      await client.query("COMMIT");
+      recordDecision({
+        layer: 1,
+        decision: "auth.otp",
+        userId: user_id,
+        outcome: otp.result === "verified" ? "act" : "skip",
+        action: otp.result,
+        checks: otp.checks,
+        reason: otp.lockNow ? "locked after too many wrong codes" : null,
+      });
+
+      if (otp.result === "locked") {
         return res.status(429).send("User Locked!");
       }
 
-      const authUser = await pool.query(
-        `SELECT email, phone_number, otp_code, otp_expiry, username, id, created_at, role FROM users WHERE id = $1 AND otp_code = $2 AND otp_expiry > NOW()`,
-        [user_id, otp_code],
-      );
-
-      const UserAuthorize: UserProp = authUser.rows[0];
+      const UserAuthorize: UserProp | undefined = otp.result === "verified" ? row : undefined;
 
       if (UserAuthorize) {
         const authorize = jwt.sign(
@@ -86,11 +130,6 @@ export function createAuthRouter(): Router {
           {
             expiresIn: "1y",
           },
-        );
-
-        await pool.query(
-          `UPDATE users SET otp_code = null, otp_expiry = null, otp_attempts = 0 WHERE id = $1 RETURNING *`,
-          [user_id],
         );
 
         const accountAge =
@@ -119,35 +158,24 @@ export function createAuthRouter(): Router {
         });
       }
 
-      const attempts = await pool.query(
-        `UPDATE users
-           SET otp_attempts = otp_attempts + 1,
-             locked = CASE
-             WHEN otp_attempts + 1 >= 5 THEN true ELSE false END,
-             locked_at = CASE
-             WHEN otp_attempts + 1 >= 5 THEN NOW() ELSE locked_at END
-           WHERE id = $1
-           RETURNING otp_attempts, locked`,
-        [user_id],
-      );
-
-      const lockAttempts: UserProp = attempts.rows[0];
-
-      if (lockAttempts.otp_attempts === 5) {
+      if (otp.alertTeam) {
         await alertTeamAccountLocked(user_id);
         return res.status(423).send({
           success: true,
           message: "Exceeded the number of Sign in request",
           data: {
-            locked: lockAttempts.locked,
-            attempts: lockAttempts.otp_attempts,
+            locked: true,
+            attempts: otp.attempts,
           },
         });
       }
 
       return res.status(400).send(`Authentication failed`);
     } catch (error) {
+      await client.query("ROLLBACK").catch(() => {});
       next(error);
+    } finally {
+      client.release();
     }
   });
 
@@ -282,6 +310,22 @@ export function createAuthRouter(): Router {
     try {
       if (await isStillLocked(user_id)) {
         return res.status(429).send("User Locked!");
+      }
+
+      const { rows: resendRows } = await pool.query(`SELECT otp_expiry, locked, locked_at FROM users WHERE id = $1`, [user_id]);
+      if (resendRows[0]) {
+        const resend = decideOtpResend(
+          {
+            expiresAt: resendRows[0].otp_expiry ? new Date(resendRows[0].otp_expiry) : null,
+            locked: resendRows[0].locked === true,
+            lockedAt: resendRows[0].locked_at ? new Date(resendRows[0].locked_at) : null,
+          },
+          new Date(),
+        );
+        if (!resend.send) {
+          // A code went out seconds ago: don't mint and text another one.
+          return res.status(200).send({ success: true, message: "OTP resent successfully" });
+        }
       }
 
       const updateOTP = await pool.query(

@@ -25,6 +25,11 @@ import { generateHumeVoiceLine, generateVoiceNote } from "../services/voiceNote.
 import { triggerCallForUser } from "../services/callTrigger.js";
 import { prewarmHumeConnection, hasReceivedRealSpeech } from "../services/mediaStreamBridge.js";
 import { CO_VOICE, CO_TEXT_CHANNEL } from "../services/coVoice.js";
+import { recordDecision } from "../harness/core.js";
+import { decideMissedCallFollowUp, gatherMissedCallState } from "../harness/callGate.js";
+
+// One-line drafts (missed-call text, voicemail line): narrow work, Haiku.
+const DRAFT_MODEL = "claude-haiku-4-5-20251001";
 
 // io is injected by the server so call-status and webhook handlers can push
 // real-time state transitions to the connected mobile client.
@@ -206,7 +211,7 @@ async function sendMissedCallFollowUp(
       { userId: user.id, traceName: "co.sendMissedCallFollowUp" },
       () =>
         generateText({
-          model: anthropic("claude-haiku-4-5-20251001"),
+          model: anthropic(DRAFT_MODEL),
           experimental_telemetry: { isEnabled: true, functionId: "co.sendMissedCallFollowUp" },
           prompt: `${CO_VOICE}\n\n${CO_TEXT_CHANNEL} ${situationPrompt} Send a short iMessage letting ${user.first_name} know, and that they can reply here whenever they're ready or expect another call soon. Tone: calm, unhurried, like a private members club. No exclamation points. No em dashes. 2 sentences max.`,
         }),
@@ -267,7 +272,7 @@ router.post(
           .send("Unauthorized: You can only access your own account");
       }
 
-      const result = await triggerCallForUser(user_id, _io);
+      const result = await triggerCallForUser(user_id, _io, { kind: "user_initiated" });
       if (!result.success) {
         const status = result.error === "User not found." ? 404 : 403;
         return res.status(status).send(result.error);
@@ -357,6 +362,18 @@ router.post(
           _io?.to(`user:${user.id}`).emit("co:call_completed", { call_sid: CallSid, status: "voicemail" });
         }
 
+        // Claim the call before drafting anything (Layer 8 harness): Twilio
+        // can deliver the AMD callback more than once, and each delivery
+        // used to draft a new voicemail line and send another follow-up.
+        // This insert also flags the call so chat_ended skips extraction.
+        const vmClaim = await pool.query(
+          `INSERT INTO voicemail_calls (call_sid) VALUES ($1) ON CONFLICT DO NOTHING RETURNING call_sid`,
+          [CallSid],
+        );
+        if (!vmClaim.rows[0]) {
+          return res.sendStatus(204);
+        }
+
         // A fixed voicemail line every time reads as a canned system
         // message — vary it (Haiku, one short line, hard fallback), said
         // directly into the call's TwiML while it's still live, so
@@ -366,7 +383,7 @@ router.post(
           : `Hey, it's Co. Sorry I missed you — I'll try you again soon.`;
         try {
           const { text: variedLine } = await generateText({
-            model: anthropic("claude-haiku-4-5-20251001"),
+            model: anthropic(DRAFT_MODEL),
             experimental_telemetry: { isEnabled: true, functionId: "co.callStatus.voicemailLine" },
             prompt: `${CO_VOICE}\n\nYou just called ${user ? user.first_name : "someone"} and reached their voicemail. Leave a short, natural one-line voicemail greeting letting them know you'll try again soon — vary how you say it, don't just repeat "Sorry I missed you." Tone: calm, unhurried, like a private members club. No exclamation points, no em dashes. Under 140 characters.`,
           });
@@ -397,13 +414,6 @@ router.post(
         } catch (redirectErr: any) {
           console.error("Failed to redirect call to voicemail TwiML (non-fatal):", redirectErr?.message ?? redirectErr);
         }
-        // Flag this call so the Hume chat_ended webhook (which still fires
-        // normally since we hang up cleanly, not abruptly) skips the
-        // full extraction/follow-up pipeline below.
-        await pool.query(
-          `INSERT INTO voicemail_calls (call_sid) VALUES ($1) ON CONFLICT DO NOTHING`,
-          [CallSid],
-        );
         // Previously unrecoverable — generated fresh every call but never
         // written down anywhere, so there was no way to review what Co
         // actually said on a real person's voicemail after the fact.
@@ -425,12 +435,23 @@ router.post(
                 .catch((err: any) => console.error("Voicemail-line embedding failed (non-fatal):", err?.message ?? err)),
             )
             .catch((err: any) => console.error("Voicemail-line logging failed (non-fatal):", err?.message ?? err));
-          await sendMissedCallFollowUp(
-            user,
-            CallSid,
-            "voicemail",
-            `You just tried to call ${user.first_name} and reached voicemail.`,
-          );
+          const missed = decideMissedCallFollowUp(await gatherMissedCallState(user.id, CallSid), new Date());
+          await recordDecision({
+            layer: 8,
+            decision: "call.gate",
+            userId: user.id,
+            outcome: missed.send ? "act" : "skip",
+            action: "missed_call_followup:voicemail",
+            checks: missed.checks,
+          });
+          if (missed.send) {
+            await sendMissedCallFollowUp(
+              user,
+              CallSid,
+              "voicemail",
+              `You just tried to call ${user.first_name} and reached voicemail.`,
+            );
+          }
         }
         return res.sendStatus(204);
       }
@@ -492,11 +513,24 @@ router.post(
         return res.sendStatus(204);
       }
 
-      await pool.query(
-        `INSERT INTO pending_call_followups (user_id, call_sid, call_status, due_at)
-         VALUES ($1, $2, $3, NOW() + INTERVAL '2 hours')`,
-        [user.id, CallSid, CallStatus],
-      );
+      // One missed-call text, not one per missed call (Layer 8 harness): a
+      // run of unanswered calls used to queue a text for each.
+      const missed = decideMissedCallFollowUp(await gatherMissedCallState(user.id, CallSid), new Date());
+      await recordDecision({
+        layer: 8,
+        decision: "call.gate",
+        userId: user.id,
+        outcome: missed.send ? "act" : "skip",
+        action: `missed_call_followup:${CallStatus}`,
+        checks: missed.checks,
+      });
+      if (missed.send) {
+        await pool.query(
+          `INSERT INTO pending_call_followups (user_id, call_sid, call_status, due_at)
+           VALUES ($1, $2, $3, NOW() + INTERVAL '2 hours')`,
+          [user.id, CallSid, CallStatus],
+        );
+      }
 
       return res.sendStatus(204);
     } catch (error) {

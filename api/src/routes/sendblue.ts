@@ -15,6 +15,17 @@ import { generateEmbedding } from "../services/embeddings.js";
 import { detectSeekingMode, detectTurnTone } from "../services/emotionalTone.js";
 import { buildContextSummary } from "../services/callContext.js";
 import { findOrCreateUserByPhone, hasPendingEmail, splitFullName } from "../services/identity.js";
+import { recordDecision } from "../harness/core.js";
+import {
+  INTAKE_EXTRACT_MODEL,
+  buildIntakeExtractionPrompt,
+  decideIntake,
+  gatherIntakeState,
+  isEmailOnOtherAccount,
+  isValidEmail,
+  parseIntakeProposal,
+  type IntakeProposal,
+} from "../harness/intake.js";
 import { isOptInKeyword, isOptOutKeyword } from "../services/optOut.js";
 import {
   captureIntent,
@@ -497,56 +508,83 @@ export function sendblueRouter(io: Server): Router {
             hasText ? `User said: ${content}` : "User sent a photo or voice memo (name/email intake)",
           );
 
-          const { text: rawExtraction } = await generateText({
-            model: anthropic("claude-haiku-4-5-20251001"),
-            experimental_telemetry: { isEnabled: true, functionId: "sendblue.intake.extractIdentity" },
-            prompt: `Co asked a new contact for their full name and email. Extract both from their reply, combining with anything already known.
-
-Already known — name: ${user.first_name || "not yet given"}, email: ${hasPendingEmail(user.email) ? "not yet given" : user.email}
-
-Their reply: "${hasText ? content : "[no text — sent a photo or voice memo instead]"}"
-
-Return ONLY strict JSON: {"full_name": string or null, "email": string or null, "is_acknowledgment": boolean}. Only set full_name/email when you're actually confident — carry forward an already-known value if this reply doesn't repeat it, and don't guess at one that's still missing. Set is_acknowledgment true when the reply is just a social acknowledgment of Co's welcome (e.g. "thanks", "ok", "sounds good") with no attempt to give a name or email — false otherwise, including when they did attempt an answer that just didn't parse.`,
-          });
-
-          let extracted: { full_name: string | null; email: string | null; is_acknowledgment?: boolean };
+          // Layer 1 harness (src/harness/intake.ts): the model only proposes
+          // name/email; code decides whether to capture, hold a partial
+          // email, or ask, and never re-asks for something already on file.
+          const intakeState = await gatherIntakeState(user);
+          let extracted: IntakeProposal = { full_name: null, email: null };
           try {
-            extracted = JSON.parse(rawExtraction.trim().replace(/^```(?:json)?\n?|\n?```$/g, ""));
-          } catch {
-            extracted = { full_name: null, email: null };
+            const { text: rawExtraction } = await generateText({
+              model: anthropic(INTAKE_EXTRACT_MODEL),
+              experimental_telemetry: { isEnabled: true, functionId: "sendblue.intake.extractIdentity" },
+              prompt: buildIntakeExtractionPrompt(intakeState, hasText ? content : null),
+            });
+            extracted = parseIntakeProposal(rawExtraction);
+          } catch (err: any) {
+            console.error("sendblue intake: identity extraction failed (non-fatal, asking again):", err?.message ?? err);
           }
 
-          const emailValid = !!extracted.email && /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(extracted.email);
-          const finalName = extracted.full_name?.trim() || user.first_name || null;
-          const finalEmail = emailValid ? extracted.email!.trim() : hasPendingEmail(user.email) ? null : user.email;
+          const proposedEmail = extracted.email?.trim() || null;
+          const emailTaken = isValidEmail(proposedEmail) ? await isEmailOnOtherAccount(proposedEmail, user.id) : false;
+          let intake = decideIntake(intakeState, extracted, {
+            emailTakenByOtherAccount: emailTaken,
+            replyText: hasText ? content : null,
+          });
 
-          if (finalName && finalEmail) {
-            const { first_name, last_name } = splitFullName(finalName);
-            try {
-              const updated = await pool.query(
-                `UPDATE users SET first_name = $2, last_name = $3, email = $4, username = $5, identity_captured = true
+          if (intake.action === "capture") {
+            const { first_name, last_name } = splitFullName(intake.name!);
+            const captureIdentity = (username: string) =>
+              pool.query(
+                `UPDATE users SET first_name = $2, last_name = $3, email = $4, username = $5, identity_captured = true,
+                   intake_partial_email = NULL, intake_retries = 0
                  WHERE id = $1 RETURNING *`,
-                [user.id, first_name, last_name, finalEmail, finalEmail.split("@")[0]],
+                [user.id, first_name, last_name, intake.email, username],
               );
+            const localPart = intake.email!.split("@")[0];
+            try {
+              let updated;
+              try {
+                updated = await captureIdentity(localPart);
+              } catch (err: any) {
+                // usernames are UNIQUE too; two people can share an email
+                // local part, which isn't an email conflict at all.
+                if (err?.code !== "23505" || !String(err?.constraint ?? "").includes("username")) throw err;
+                updated = await captureIdentity(`${localPart}_${user.id.slice(0, 6)}`);
+              }
               user = updated.rows[0];
             } catch (err: any) {
-              if (err?.code === "23505") {
-                const conflictMsg = "Looks like that email's already on file. Mind sending a different one?";
-                await sendCoReply({ phone: number, message: conflictMsg, asVoice: false });
-                await logTextExchange(user.id, `Co replied: ${conflictMsg}`);
-                return res.status(200).send({ received: true, action: "intake_email_conflict" });
-              }
-              throw err;
+              if (err?.code !== "23505") throw err;
+              // Lost a race with another account for the same email (or a
+              // held partial email was taken since): drop it and ask again.
+              intake = decideIntake(
+                { ...intakeState, knownName: intake.name, partialEmail: null, knownEmail: null },
+                { full_name: intake.name, email: intake.email },
+                { emailTakenByOtherAccount: true },
+              );
             }
+          }
 
+          await recordDecision({
+            layer: 1,
+            decision: "intake.identity",
+            userId: user.id,
+            outcome: intake.outcome,
+            action: intake.action,
+            proposal: extracted,
+            checks: intake.checks,
+            reason: intake.reason,
+          });
+
+          if (intake.action === "capture") {
+            const first_name = user.first_name;
             let kickoffMsg = `Good to meet you, ${first_name}. What's been on your mind lately?`;
             try {
               const { text } = await generateText({
-                model: anthropic("claude-haiku-4-5-20251001"),
+                model: anthropic(INTAKE_EXTRACT_MODEL),
                 experimental_telemetry: { isEnabled: true, functionId: "sendblue.intake.kickoff" },
                 prompt: `${CO_VOICE}\n\n${CO_TEXT_CHANNEL} ${first_name} just gave you their name and email to get started. Write a short message welcoming them in and opening the real conversation: invite them to share what's on their mind or going on in their life right now. 2 sentences max.`,
               });
-              kickoffMsg = text;
+              if (text.trim()) kickoffMsg = cleanCoMessage(text.trim());
             } catch (genErr: any) {
               console.error("Intake kickoff message generation failed, using fallback (non-fatal):", genErr?.message ?? genErr);
             }
@@ -555,46 +593,18 @@ Return ONLY strict JSON: {"full_name": string or null, "email": string or null, 
             return res.status(200).send({ received: true, action: "identity_captured" });
           }
 
-          if (finalName && finalName !== user.first_name) {
-            const { first_name, last_name } = splitFullName(finalName);
-            await pool.query(`UPDATE users SET first_name = $2, last_name = $3 WHERE id = $1`, [
-              user.id,
-              first_name,
-              last_name,
-            ]);
-          }
-          // A bare "thanks" or "ok" after the welcome sequence isn't a failed
-          // attempt to answer — it's a normal reaction to being welcomed in,
-          // and Co only had the name/email question to compare it against.
-          // "Sorry, didn't catch that" is the right tone for a genuinely
-          // garbled attempt, but wrong here: nothing was missed, they just
-          // hadn't answered yet.
-          // Rotated and never an exact repeat of Co's previous line (this
-          // retry was the single most-sent Co message, the same sentence
-          // over and over). Asks only for what's actually missing.
-          const lastCoLine = (
-            await pool
-              .query(
-                `SELECT content FROM co_memories WHERE user_id = $1 AND memory_type = 'text_exchange' AND content LIKE 'Co replied:%' ORDER BY created_at DESC LIMIT 1`,
-                [user.id],
-              )
-              .catch(() => ({ rows: [] as { content: string }[] }))
-          ).rows[0]?.content?.replace(/^Co replied: /, "");
-          const pickFresh = (options: string[]) => {
-            const fresh = options.filter((o) => o !== lastCoLine);
-            return fresh[Math.floor(Math.random() * fresh.length)] ?? options[0];
-          };
-          const missingReply = !finalName
-            ? extracted.is_acknowledgment
-              ? pickFresh(["Of course. What's your full name and email?", "Glad you're here. What name and email should I use for you?"])
-              : extracted.email && !emailValid
-                ? pickFresh(["That email didn't look quite right. Mind double-checking it?", "I think that email has a typo. Can you send it again?"])
-                : pickFresh([
-                      "Before we get into it, what's your full name and email?",
-                      "I want to hear about that. First, what name and email should I have for you?",
-                      "Let's get you set up first. What's your full name and email?",
-                  ])
-            : pickFresh(["Got your name. What's the best email for you?", "Thanks. What email should I use for you?"]);
+          const nameChanged = intake.name && intake.name !== intakeState.knownName;
+          const nameParts = intake.name ? splitFullName(intake.name) : null;
+          await pool.query(
+            `UPDATE users SET
+               first_name = COALESCE($2, first_name),
+               last_name = COALESCE($3, last_name),
+               intake_partial_email = COALESCE($4, intake_partial_email),
+               intake_retries = intake_retries + 1
+             WHERE id = $1`,
+            [user.id, nameChanged ? nameParts!.first_name : null, nameChanged ? nameParts!.last_name : null, intake.savePartialEmail],
+          );
+          const missingReply = intake.reply!;
           await sendCoReply({ phone: number, message: missingReply, asVoice: false });
           await logTextExchange(user.id, `Co replied: ${missingReply}`);
           return res.status(200).send({ received: true, action: "intake_incomplete" });

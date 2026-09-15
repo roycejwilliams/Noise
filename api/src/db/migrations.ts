@@ -1168,4 +1168,15 @@ export function runMigrations() {
       .query(`ALTER TABLE ${table} ADD COLUMN IF NOT EXISTS harness_status TEXT`)
       .catch((err: Error) => console.error(`${table}.harness_status migration failed:`, err));
   }
+
+  // Layer 1 intake harness (2026-09-14, src/harness/intake.ts). A valid
+  // email sent before the name used to be dropped (users.email is only
+  // written together with the name); it's held here instead. intake_retries
+  // caps the "what's your name and email" loop.
+  pool
+    .query(`ALTER TABLE users ADD COLUMN IF NOT EXISTS intake_partial_email TEXT`)
+    .catch((err: Error) => console.error("users.intake_partial_email migration failed:", err));
+  pool
+    .query(`ALTER TABLE users ADD COLUMN IF NOT EXISTS intake_retries INT NOT NULL DEFAULT 0`)
+    .catch((err: Error) => console.error("users.intake_retries migration failed:", err));
 }
