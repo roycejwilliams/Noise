@@ -51,13 +51,24 @@ export async function draftEventTease(
     functionId: "agent.eventDiscoverySurfacing",
     firstName: person.firstName,
     facts: matchFacts(askText, fromProfile, match),
-    task: `Something came up that fits them: ${kindLabel(match)}. Write a short text saying you came across something that made you think of them, tied to one concrete detail of what they're looking for (in plain words), without naming it, its host, or its date. End with one yes/no question asking if they want the details. If it doesn't actually fit what they're looking for, return SKIP.`,
+    task: `Something came up that fits them: ${kindLabel(match)}. Write a short text saying you came across something that made you think of them, tied to one concrete detail of what they're looking for (in plain words), without naming it, its host, its date, or what kind of gathering it is (don't say mixer, dinner, office hours, meetup, or any word from its name that they didn't use themselves). End with one yes/no question asking if they want the details. If it doesn't actually fit what they're looking for, return SKIP.`,
   });
   if (!text) return null;
-  // Withhold the full name and its distinctive words (6+ letters, so common
-  // words like "founders" can still describe what they're looking for).
-  const distinctive = nameTokens(match.name).filter((t) => t.length >= 6 && !askText.toLowerCase().includes(t));
-  return { text, rules: { maxSentences: 2, maxChars: 260, mustNotInclude: [match.name, ...distinctive] } };
+  // Withhold the name and every word of it they didn't use themselves, so
+  // "climate founders" can still describe what they want but "mixer" or
+  // "office hours" can't give the event away (eval l01/l02, 2026-09-15).
+  const distinctive = nameTokens(match.name).filter((t) => !askText.toLowerCase().includes(t));
+  return {
+    text,
+    rules: {
+      maxSentences: 2,
+      maxChars: 260,
+      mustNotInclude: [match.name, ...distinctive],
+      // The date is step two as well ("something's happening on the 18th",
+      // eval l01).
+      forbidden: [{ pattern: /\b(\d{1,2}(st|nd|rd|th)|\d{1,2}\/\d{1,2}|(mon|tues|wednes|thurs|fri|satur|sun)day|tonight|tomorrow)\b/i, reason: "reveals when it is in a tease" }],
+    },
+  };
 }
 
 // Short-notice reveal: name it, when, and why it fits, upfront that it's

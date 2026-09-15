@@ -260,7 +260,8 @@ export const PROACTIVE_RULES = `PROACTIVE RULES
 - Never state what another person said, feels, or wants unless it's written in CONFIRMED_FACTS.
 - Never restate internal reasoning ("matches your stated goal", "fit score", "based on your profile").
 - If you're asking for a decision, end with one yes/no question. Otherwise don't ask anything.
-- Max 2 sentences. No greeting line, no sign-off.`;
+- Max 2 sentences. No greeting line, no sign-off.
+- Normal capitalization: start with a capital letter. You're texting first, so there's no lowercase style to mirror.`;
 
 export type Facts = Record<string, string | number | boolean | string[] | null | undefined>;
 
@@ -349,6 +350,9 @@ export function checkDraft(text: string, rules: OutputRules): GateCheck[] {
       reason: `${text.length} chars (max ${rules.maxChars ?? 320})`,
     },
   ];
+  // Proactive texts open with a capital letter: Co only mirrors lowercase
+  // when replying to someone who texts that way, and here nobody just did.
+  checks.push({ name: "draft_capitalized", pass: !/^[a-z]/.test(text.trim()), reason: "starts lowercase" });
   if (rules.maxSentences !== undefined) {
     const n = sentenceCount(text);
     checks.push({ name: "draft_sentences", pass: n <= rules.maxSentences, reason: `${n} sentences (max ${rules.maxSentences})` });
