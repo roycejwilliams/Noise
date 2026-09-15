@@ -1,5 +1,5 @@
 import pool from "../db/db.js";
-import { getTieredRecommendation, checkForUrgentMatch, type TierMatch } from "./tieredRecommendation.js";
+import { getTieredRecommendation, type TierMatch } from "./tieredRecommendation.js";
 import { runEventDiscoverySurfacingAgent } from "../agent/eventDiscoverySurfacing.js";
 import { generateEmbedding } from "./embeddings.js";
 import { scheduleOutcomeFollowUp, getTierBias } from "./recommendationOutcome.js";
@@ -17,6 +17,10 @@ export type SurfacingCandidate = {
   firstName: string;
   phoneNumber: string;
   askText: string;
+  // true when there's no stated ask and askText was built from what's on
+  // their profile (goals, interests, wants), so drafts don't claim they
+  // "told you" it.
+  fromProfile?: boolean;
   city: string | null;
   goals: string[] | null;
   activityPreferences: string[] | null;
@@ -246,23 +250,17 @@ function isShortNotice(match: TierMatch): boolean {
 // whatever's real, tier-ordered — factored out so attemptEventSurfacing can
 // retry it in the same cycle if the backlog turns out fully stale, instead
 // of just giving up until the next cadence window.
+// Daily full search across all three tiers (Royce, 2026-09-14: "it should
+// be actively searching for all 3 tiers"). Searching and sending are paced
+// separately: anything happening within URGENT_WINDOW_DAYS is "urgent" and
+// may go out before the 3-day cadence clears; everything else waits for it.
+const URGENT_WINDOW_DAYS = 3;
+
 async function findFreshPending(candidate: SurfacingCandidate): Promise<BacklogItem[]> {
-  const source: "full" | "urgent" = candidate.cooldownCleared ? "full" : "urgent";
-  let matches: TierMatch[];
-  if (candidate.cooldownCleared) {
-    matches = await getTieredRecommendation({ text: candidate.askText }, candidate.city).catch((err: any) => {
-      console.error("attemptEventSurfacing: getTieredRecommendation failed (non-fatal):", err?.message ?? err);
-      return [];
-    });
-  } else {
-    const profileContext = [candidate.askText, ...(candidate.goals ?? []), ...(candidate.activityPreferences ?? [])]
-      .filter(Boolean)
-      .join(". ");
-    matches = await checkForUrgentMatch({ text: profileContext }, candidate.city).catch((err: any) => {
-      console.error("attemptEventSurfacing: checkForUrgentMatch failed (non-fatal):", err?.message ?? err);
-      return [];
-    });
-  }
+  const matches = await getTieredRecommendation({ text: candidate.askText }, candidate.city).catch((err: any) => {
+    console.error("attemptEventSurfacing: getTieredRecommendation failed (non-fatal):", err?.message ?? err);
+    return [] as TierMatch[];
+  });
   // Tier order as the mention priority (Tier 1 first by default) — same
   // "route people into Co's own events first" reasoning the old
   // decideBestMatch had, just spread across separate texts over time
@@ -275,7 +273,16 @@ async function findFreshPending(candidate: SurfacingCandidate): Promise<BacklogI
   const bias = await getTierBias(candidate.userId);
   return fresh
     .sort((a, b) => bias[b.tier] - bias[a.tier] || a.tier - b.tier)
-    .map((match) => ({ askText: candidate.askText, match, source }));
+    .map((match) => {
+      const date = relevantDate(match);
+      const source: "full" | "urgent" = date !== null && daysUntilDate(date) <= URGENT_WINDOW_DAYS ? "urgent" : "full";
+      return { askText: candidate.askText, match, source };
+    });
+}
+
+function sameMatch(a: TierMatch, b: TierMatch): boolean {
+  if ("event_api_id" in a && "event_api_id" in b) return a.event_api_id === b.event_api_id;
+  return a.name.toLowerCase() === b.name.toLowerCase();
 }
 
 // Drops anything at the front that's gone stale — either already offered
@@ -290,17 +297,16 @@ async function dropStaleFront(userId: string, items: BacklogItem[]): Promise<Bac
 }
 
 export async function attemptEventSurfacing(candidate: SurfacingCandidate): Promise<{ sent: boolean; throttled: boolean }> {
-  let pending = await dropStaleFront(candidate.userId, await getBacklog(candidate.userId, candidate.askId));
-
-  // Falls through to a fresh search in the SAME cycle whenever there's
-  // nothing usable queued — whether the backlog was empty to begin with, or
-  // turned out to be entirely stale once checked. Without this, a backlog
-  // that goes fully stale would silently wait out the rest of the normal
-  // cadence with nothing sent, even on a cycle that was otherwise free to
-  // look for something new right now.
-  if (!pending.length) {
-    pending = await dropStaleFront(candidate.userId, await findFreshPending(candidate));
-  }
+  // Search every day, not only when the backlog is empty, and merge
+  // anything new behind what's already queued. Urgent items (happening
+  // soon) move to the front so they aren't stuck behind a later event.
+  const queued = await dropStaleFront(candidate.userId, await getBacklog(candidate.userId, candidate.askId));
+  const found = await findFreshPending(candidate);
+  const merged = [...queued, ...found.filter((f) => !queued.some((q) => sameMatch(q.match, f.match)))];
+  let pending = await dropStaleFront(candidate.userId, [
+    ...merged.filter((i) => i.source === "urgent" || isShortNotice(i.match)),
+    ...merged.filter((i) => !(i.source === "urgent" || isShortNotice(i.match))),
+  ]);
 
   if (!pending.length) {
     await saveBacklog(candidate.userId, candidate.askId, []);
@@ -330,7 +336,7 @@ export async function attemptEventSurfacing(candidate: SurfacingCandidate): Prom
     { userId: candidate.userId, firstName: candidate.firstName, phoneNumber: candidate.phoneNumber },
     item.askText,
     item.match,
-    { revealNow: shortNotice },
+    { revealNow: shortNotice, askFromProfile: candidate.fromProfile ?? false },
   );
 
   // Only consume the item once it actually goes out — a throttled attempt,

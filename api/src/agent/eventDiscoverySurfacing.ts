@@ -32,9 +32,10 @@ export async function runEventDiscoverySurfacingAgent(
   person: EventDiscoverySurfacingPerson,
   askText: string,
   match: TierMatch,
-  opts: { dryRun?: boolean; revealNow?: boolean } = {},
+  opts: { dryRun?: boolean; revealNow?: boolean; askFromProfile?: boolean } = {},
 ): Promise<{ sent: boolean; throttled: boolean }> {
   const dryRun = opts.dryRun ?? false;
+  const askLine = describeAsk(askText, opts.askFromProfile ?? false);
 
   // revealNow sends deterministically, not via agent tool-calling (Royce,
   // 2026-09-02, confirmed live) — this is the exact path that produced the
@@ -48,7 +49,7 @@ export async function runEventDiscoverySurfacingAgent(
   // that second message's text (no tools, no link to embed), it never
   // owns the send sequence itself.
   if (opts.revealNow ?? false) {
-    return runRevealNowDeterministic(person, askText, match, dryRun);
+    return runRevealNowDeterministic(person, askLine, match, dryRun);
   }
 
   const state = { sent: false, throttled: false };
@@ -114,7 +115,7 @@ export async function runEventDiscoverySurfacingAgent(
   // follow-up, drawing from the event_offer_pending row eventSurfacingSweep.ts
   // writes right after this sends). The revealNow (short-notice) case is
   // handled entirely by runRevealNowDeterministic below, before this point.
-  const system = `${CO_VOICE}\n\n${CO_TEXT_CHANNEL} You're texting ${person.firstName}. They recently told you: "${askText}"
+  const system = `${CO_VOICE}\n\n${CO_TEXT_CHANNEL} You're texting ${person.firstName}. ${askLine}
 
 Co found ${kindLabel} that might genuinely fit — internal-only, do not reveal this in the message: "${match.name}" — ${match.reason}
 
@@ -146,9 +147,17 @@ Always finish by calling writeMemory once with a short factual note of what you 
 // recommendation sending (an LLM asked to execute a precise multi-message
 // sequence via tool-calling instructions proved unreliable once other
 // context was competing for its attention in that case).
+// No stated ask means askText was built from their profile; the draft must
+// not claim they said it.
+function describeAsk(askText: string, fromProfile: boolean): string {
+  return fromProfile
+    ? `They haven't asked you for anything specific. From what they've shared with you: ${askText}`
+    : `They recently told you: "${askText}"`;
+}
+
 async function runRevealNowDeterministic(
   person: EventDiscoverySurfacingPerson,
-  askText: string,
+  askLine: string,
   match: TierMatch,
   dryRun: boolean,
 ): Promise<{ sent: boolean; throttled: boolean }> {
@@ -163,7 +172,7 @@ async function runRevealNowDeterministic(
   const { text: raw } = await generateText({
     model: anthropic("claude-sonnet-4-6"),
     experimental_telemetry: { isEnabled: true, functionId: "agent.eventDiscoverySurfacing.revealNowDraft" },
-    prompt: `${CO_VOICE}\n\n${CO_TEXT_CHANNEL} You're texting ${person.firstName}. They recently told you: "${askText}"
+    prompt: `${CO_VOICE}\n\n${CO_TEXT_CHANNEL} You're texting ${person.firstName}. ${askLine}
 
 Co found ${kindLabel} that fits, but it's short notice: "${match.name}" — ${match.reason}.
 

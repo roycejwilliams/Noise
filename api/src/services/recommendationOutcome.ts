@@ -168,7 +168,7 @@ export async function sendDueOutcomeFollowUps(): Promise<void> {
       const { text: draft } = await generateText({
         model: anthropic("claude-haiku-4-5-20251001"),
         experimental_telemetry: { isEnabled: true, functionId: "recommendationOutcome.followUp" },
-        prompt: `${CO_VOICE}\n\n${CO_TEXT_CHANNEL} You're texting ${row.first_name}. A little while back you told them about "${row.match_name}" (they'd said: "${row.ask_text}"). Enough time has passed that it should have happened by now.
+        prompt: `${CO_VOICE}\n\n${CO_TEXT_CHANNEL} You're texting ${row.first_name}. A little while back you told them about "${row.match_name}" (it was for: "${row.ask_text}"). Enough time has passed that it should have happened by now.
 
 Draft a short, warm, genuinely curious message asking how it went — who they met or talked to, or what stood out. 1-2 sentences, no exclamation points, no em dashes, normal sentence capitalization. This is a friend checking in, not a survey.
 
