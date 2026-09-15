@@ -5,7 +5,6 @@
 const statusEl = document.getElementById("login-status") as HTMLElement;
 const textCoButton = document.getElementById("text-co-button") as HTMLAnchorElement;
 const waitingEl = document.getElementById("login-waiting") as HTMLElement;
-const desktopEl = document.getElementById("login-desktop") as HTMLElement;
 const errorEl = document.getElementById("login-error") as HTMLElement;
 
 const POLL_MS = 2000;
@@ -76,17 +75,9 @@ textCoButton.addEventListener("click", (e) => {
 });
 
 // The code only ever lives in the iMessage prefill, never on screen, so
-// nobody looking at the page can use it. A computer can't open iMessage
-// with a prefill, so it just points people to their phone.
-const isPhone = /iPhone|iPad|iPod|Android/i.test(navigator.userAgent);
-
+// nobody looking at the page can see or use it. The button always shows:
+// phones and Macs both open Messages from an sms: link.
 (async () => {
   if (await redirectIfAlreadyLoggedIn()) return;
-  if (!isPhone) {
-    textCoButton.classList.add("hidden");
-    statusEl.textContent = "Sign in from your phone.";
-    desktopEl.classList.remove("hidden");
-    return;
-  }
   await prepareCode();
 })();

@@ -4,7 +4,6 @@
   var statusEl = document.getElementById("login-status");
   var textCoButton = document.getElementById("text-co-button");
   var waitingEl = document.getElementById("login-waiting");
-  var desktopEl = document.getElementById("login-desktop");
   var errorEl = document.getElementById("login-error");
   var POLL_MS = 2e3;
   var pollTimer = null;
@@ -66,15 +65,8 @@
     waitingEl.classList.remove("hidden");
     statusEl.textContent = "Send the text, then come back here.";
   });
-  var isPhone = /iPhone|iPad|iPod|Android/i.test(navigator.userAgent);
   (async () => {
     if (await redirectIfAlreadyLoggedIn()) return;
-    if (!isPhone) {
-      textCoButton.classList.add("hidden");
-      statusEl.textContent = "Sign in from your phone.";
-      desktopEl.classList.remove("hidden");
-      return;
-    }
     await prepareCode();
   })();
 })();
