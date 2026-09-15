@@ -40,9 +40,12 @@ export function cosineSimilarity(a: number[], b: number[]): number {
 export const PROFILE_JUDGMENT_MODEL = "claude-sonnet-5";
 
 // Embedding similarity at or above this is the same ask restated; between
-// the two thresholds the model decides; below LOW it's a new ask.
+// the two thresholds the model decides; below LOW it's a new ask. Measured
+// with text-embedding-3-small on evals/profile: real paraphrases scored as
+// low as 0.72 while different asks reached 0.78, so the model owns the
+// whole 0.65-0.90 band (run evals/profile/sims.ts to re-check).
 export const SAME_ASK_HIGH = 0.9;
-export const SAME_ASK_LOW = 0.78;
+export const SAME_ASK_LOW = 0.65;
 
 export type OpenAsk = { askId: string; text: string; embedding: number[] | null };
 
