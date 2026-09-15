@@ -1,0 +1,565 @@
+[
+  {
+    "id": "v01",
+    "kind": "call",
+    "auth": {
+      "kind": "router_decision"
+    },
+    "state": {
+      "callStatus": null,
+      "statusMinsAgo": null,
+      "optedOut": false,
+      "subscriptionActive": true,
+      "requireSubscription": false,
+      "localHourOk": true,
+      "lastCallMinsAgo": null,
+      "evidence": {
+        "scheduledCallDue": false,
+        "recentInboundText": true,
+        "routerPlaceCallDecision": false,
+        "cadenceSet": false,
+        "autoIntakeEligible": false
+      }
+    },
+    "expect": {
+      "allowed": true
+    },
+    "note": "they texted 'call me'"
+  },
+  {
+    "id": "v02",
+    "kind": "call",
+    "auth": {
+      "kind": "router_decision"
+    },
+    "state": {
+      "callStatus": null,
+      "statusMinsAgo": null,
+      "optedOut": false,
+      "subscriptionActive": true,
+      "requireSubscription": false,
+      "localHourOk": true,
+      "lastCallMinsAgo": null,
+      "evidence": {
+        "scheduledCallDue": false,
+        "recentInboundText": false,
+        "routerPlaceCallDecision": false,
+        "cadenceSet": false,
+        "autoIntakeEligible": false
+      }
+    },
+    "expect": {
+      "allowed": false
+    },
+    "note": "router auth claimed but nobody texted"
+  },
+  {
+    "id": "v03",
+    "kind": "call",
+    "auth": {
+      "kind": "router_decision"
+    },
+    "state": {
+      "callStatus": "in-progress",
+      "statusMinsAgo": 4000,
+      "optedOut": false,
+      "subscriptionActive": true,
+      "requireSubscription": false,
+      "localHourOk": true,
+      "lastCallMinsAgo": null,
+      "evidence": {
+        "scheduledCallDue": false,
+        "recentInboundText": true,
+        "routerPlaceCallDecision": false,
+        "cadenceSet": false,
+        "autoIntakeEligible": false
+      }
+    },
+    "expect": {
+      "allowed": true
+    },
+    "note": "real co-test incident 2026-09-14: status stuck at in-progress for days blocked every call"
+  },
+  {
+    "id": "v04",
+    "kind": "call",
+    "auth": {
+      "kind": "router_decision"
+    },
+    "state": {
+      "callStatus": "in-progress",
+      "statusMinsAgo": 5,
+      "optedOut": false,
+      "subscriptionActive": true,
+      "requireSubscription": false,
+      "localHourOk": true,
+      "lastCallMinsAgo": null,
+      "evidence": {
+        "scheduledCallDue": false,
+        "recentInboundText": true,
+        "routerPlaceCallDecision": false,
+        "cadenceSet": false,
+        "autoIntakeEligible": false
+      }
+    },
+    "expect": {
+      "allowed": false
+    },
+    "note": "genuinely mid-call"
+  },
+  {
+    "id": "v05",
+    "kind": "call",
+    "auth": {
+      "kind": "router_decision"
+    },
+    "state": {
+      "callStatus": "processing",
+      "statusMinsAgo": 1,
+      "optedOut": false,
+      "subscriptionActive": true,
+      "requireSubscription": false,
+      "localHourOk": true,
+      "lastCallMinsAgo": null,
+      "evidence": {
+        "scheduledCallDue": false,
+        "recentInboundText": true,
+        "routerPlaceCallDecision": false,
+        "cadenceSet": false,
+        "autoIntakeEligible": false
+      }
+    },
+    "expect": {
+      "allowed": true
+    },
+    "note": "'processing' is post-call extraction, not a live call"
+  },
+  {
+    "id": "v06",
+    "kind": "call",
+    "auth": null,
+    "state": {
+      "callStatus": null,
+      "statusMinsAgo": null,
+      "optedOut": false,
+      "subscriptionActive": true,
+      "requireSubscription": false,
+      "localHourOk": false,
+      "lastCallMinsAgo": null,
+      "evidence": {
+        "scheduledCallDue": true,
+        "recentInboundText": false,
+        "routerPlaceCallDecision": false,
+        "cadenceSet": false,
+        "autoIntakeEligible": false
+      }
+    },
+    "expect": {
+      "allowed": true
+    },
+    "note": "scheduled for a time they chose, even at night"
+  },
+  {
+    "id": "v07",
+    "kind": "call",
+    "auth": {
+      "kind": "scheduled_call",
+      "scheduledCallId": "x"
+    },
+    "state": {
+      "callStatus": null,
+      "statusMinsAgo": null,
+      "optedOut": false,
+      "subscriptionActive": true,
+      "requireSubscription": false,
+      "localHourOk": true,
+      "lastCallMinsAgo": null,
+      "evidence": {
+        "scheduledCallDue": false,
+        "recentInboundText": false,
+        "routerPlaceCallDecision": false,
+        "cadenceSet": false,
+        "autoIntakeEligible": false
+      }
+    },
+    "expect": {
+      "allowed": false
+    },
+    "note": "scheduled row was cancelled / not due"
+  },
+  {
+    "id": "v08",
+    "kind": "call",
+    "auth": null,
+    "state": {
+      "callStatus": null,
+      "statusMinsAgo": null,
+      "optedOut": false,
+      "subscriptionActive": true,
+      "requireSubscription": false,
+      "localHourOk": false,
+      "lastCallMinsAgo": null,
+      "evidence": {
+        "scheduledCallDue": false,
+        "recentInboundText": false,
+        "routerPlaceCallDecision": false,
+        "cadenceSet": true,
+        "autoIntakeEligible": false
+      }
+    },
+    "expect": {
+      "allowed": false
+    },
+    "note": "check-in call at night"
+  },
+  {
+    "id": "v09",
+    "kind": "call",
+    "auth": null,
+    "state": {
+      "callStatus": null,
+      "statusMinsAgo": null,
+      "optedOut": false,
+      "subscriptionActive": true,
+      "requireSubscription": false,
+      "localHourOk": true,
+      "lastCallMinsAgo": null,
+      "evidence": {
+        "scheduledCallDue": false,
+        "recentInboundText": false,
+        "routerPlaceCallDecision": false,
+        "cadenceSet": true,
+        "autoIntakeEligible": false
+      }
+    },
+    "expect": {
+      "allowed": true
+    },
+    "note": "check-in cadence they asked for, daytime"
+  },
+  {
+    "id": "v10",
+    "kind": "call",
+    "auth": null,
+    "state": {
+      "callStatus": null,
+      "statusMinsAgo": null,
+      "optedOut": false,
+      "subscriptionActive": true,
+      "requireSubscription": false,
+      "localHourOk": true,
+      "lastCallMinsAgo": 90,
+      "evidence": {
+        "scheduledCallDue": false,
+        "recentInboundText": false,
+        "routerPlaceCallDecision": false,
+        "cadenceSet": true,
+        "autoIntakeEligible": false
+      }
+    },
+    "expect": {
+      "allowed": false
+    },
+    "note": "Co just called 90 min ago"
+  },
+  {
+    "id": "v11",
+    "kind": "call",
+    "auth": null,
+    "state": {
+      "callStatus": null,
+      "statusMinsAgo": null,
+      "optedOut": true,
+      "subscriptionActive": true,
+      "requireSubscription": false,
+      "localHourOk": true,
+      "lastCallMinsAgo": null,
+      "evidence": {
+        "scheduledCallDue": false,
+        "recentInboundText": false,
+        "routerPlaceCallDecision": false,
+        "cadenceSet": true,
+        "autoIntakeEligible": false
+      }
+    },
+    "expect": {
+      "allowed": false
+    },
+    "note": "opted out"
+  },
+  {
+    "id": "v12",
+    "kind": "call",
+    "auth": {
+      "kind": "user_initiated"
+    },
+    "state": {
+      "callStatus": null,
+      "statusMinsAgo": null,
+      "optedOut": true,
+      "subscriptionActive": true,
+      "requireSubscription": false,
+      "localHourOk": true,
+      "lastCallMinsAgo": null,
+      "evidence": {
+        "scheduledCallDue": false,
+        "recentInboundText": false,
+        "routerPlaceCallDecision": false,
+        "cadenceSet": false,
+        "autoIntakeEligible": false
+      }
+    },
+    "expect": {
+      "allowed": true
+    },
+    "note": "pressed call in the app themselves"
+  },
+  {
+    "id": "v13",
+    "kind": "call",
+    "auth": null,
+    "state": {
+      "callStatus": null,
+      "statusMinsAgo": null,
+      "optedOut": false,
+      "subscriptionActive": true,
+      "requireSubscription": false,
+      "localHourOk": true,
+      "lastCallMinsAgo": null,
+      "evidence": {
+        "scheduledCallDue": false,
+        "recentInboundText": false,
+        "routerPlaceCallDecision": false,
+        "cadenceSet": false,
+        "autoIntakeEligible": false
+      }
+    },
+    "expect": {
+      "allowed": false
+    },
+    "note": "nothing authorizes this call"
+  },
+  {
+    "id": "v14",
+    "kind": "call",
+    "auth": null,
+    "state": {
+      "callStatus": null,
+      "statusMinsAgo": null,
+      "optedOut": false,
+      "subscriptionActive": true,
+      "requireSubscription": false,
+      "localHourOk": true,
+      "lastCallMinsAgo": 600,
+      "evidence": {
+        "scheduledCallDue": false,
+        "recentInboundText": false,
+        "routerPlaceCallDecision": false,
+        "cadenceSet": false,
+        "autoIntakeEligible": true
+      }
+    },
+    "expect": {
+      "allowed": false
+    },
+    "note": "intake auto-call again within 24h"
+  },
+  {
+    "id": "v15",
+    "kind": "call",
+    "auth": null,
+    "state": {
+      "callStatus": null,
+      "statusMinsAgo": null,
+      "optedOut": false,
+      "subscriptionActive": true,
+      "requireSubscription": false,
+      "localHourOk": true,
+      "lastCallMinsAgo": null,
+      "evidence": {
+        "scheduledCallDue": false,
+        "recentInboundText": false,
+        "routerPlaceCallDecision": false,
+        "cadenceSet": false,
+        "autoIntakeEligible": true
+      }
+    },
+    "expect": {
+      "allowed": true
+    },
+    "note": "new subscriber intake call, daytime"
+  },
+  {
+    "id": "v16",
+    "kind": "call",
+    "auth": {
+      "kind": "router_decision"
+    },
+    "state": {
+      "callStatus": null,
+      "statusMinsAgo": null,
+      "optedOut": false,
+      "subscriptionActive": true,
+      "requireSubscription": false,
+      "localHourOk": true,
+      "lastCallMinsAgo": 1,
+      "evidence": {
+        "scheduledCallDue": false,
+        "recentInboundText": true,
+        "routerPlaceCallDecision": false,
+        "cadenceSet": false,
+        "autoIntakeEligible": false
+      }
+    },
+    "expect": {
+      "allowed": false
+    },
+    "note": "double-fire within a minute"
+  },
+  {
+    "id": "v17",
+    "kind": "call",
+    "auth": {
+      "kind": "router_decision"
+    },
+    "state": {
+      "callStatus": null,
+      "statusMinsAgo": null,
+      "optedOut": false,
+      "subscriptionActive": true,
+      "requireSubscription": false,
+      "localHourOk": true,
+      "lastCallMinsAgo": 5,
+      "evidence": {
+        "scheduledCallDue": false,
+        "recentInboundText": true,
+        "routerPlaceCallDecision": false,
+        "cadenceSet": false,
+        "autoIntakeEligible": false
+      }
+    },
+    "expect": {
+      "allowed": true
+    },
+    "note": "dropped call, they asked again 5 min later"
+  },
+  {
+    "id": "v18",
+    "kind": "call",
+    "auth": {
+      "kind": "router_decision"
+    },
+    "state": {
+      "callStatus": null,
+      "statusMinsAgo": null,
+      "optedOut": false,
+      "subscriptionActive": false,
+      "requireSubscription": true,
+      "localHourOk": true,
+      "lastCallMinsAgo": null,
+      "evidence": {
+        "scheduledCallDue": false,
+        "recentInboundText": true,
+        "routerPlaceCallDecision": false,
+        "cadenceSet": false,
+        "autoIntakeEligible": false
+      }
+    },
+    "expect": {
+      "allowed": false
+    },
+    "note": "prod, no subscription"
+  },
+  {
+    "id": "v19",
+    "kind": "call",
+    "auth": {
+      "kind": "checkin_cadence"
+    },
+    "state": {
+      "callStatus": null,
+      "statusMinsAgo": null,
+      "optedOut": false,
+      "subscriptionActive": true,
+      "requireSubscription": false,
+      "localHourOk": true,
+      "lastCallMinsAgo": null,
+      "evidence": {
+        "scheduledCallDue": false,
+        "recentInboundText": true,
+        "routerPlaceCallDecision": false,
+        "cadenceSet": false,
+        "autoIntakeEligible": false
+      }
+    },
+    "expect": {
+      "allowed": false
+    },
+    "note": "claims cadence without one on file"
+  },
+  {
+    "id": "m01",
+    "kind": "missed",
+    "state": {
+      "alreadyHandledThisCall": false,
+      "pendingQueued": false,
+      "lastFollowUpMinsAgo": null
+    },
+    "expect": {
+      "send": true
+    },
+    "note": "first missed call"
+  },
+  {
+    "id": "m02",
+    "kind": "missed",
+    "state": {
+      "alreadyHandledThisCall": true,
+      "pendingQueued": false,
+      "lastFollowUpMinsAgo": null
+    },
+    "expect": {
+      "send": false
+    },
+    "note": "Twilio sent the AMD callback twice for one call"
+  },
+  {
+    "id": "m03",
+    "kind": "missed",
+    "state": {
+      "alreadyHandledThisCall": false,
+      "pendingQueued": true,
+      "lastFollowUpMinsAgo": null
+    },
+    "expect": {
+      "send": false
+    },
+    "note": "three unanswered calls in a row used to queue three texts"
+  },
+  {
+    "id": "m04",
+    "kind": "missed",
+    "state": {
+      "alreadyHandledThisCall": false,
+      "pendingQueued": false,
+      "lastFollowUpMinsAgo": 180
+    },
+    "expect": {
+      "send": false
+    },
+    "note": "already texted about a missed call 3h ago"
+  },
+  {
+    "id": "m05",
+    "kind": "missed",
+    "state": {
+      "alreadyHandledThisCall": false,
+      "pendingQueued": false,
+      "lastFollowUpMinsAgo": 1800
+    },
+    "expect": {
+      "send": true
+    },
+    "note": "last missed-call text was yesterday"
+  }
+]
