@@ -3,11 +3,52 @@ import { Router } from "express"; // isolated, modular instance of routes and mi
 import jwt from "jsonwebtoken";
 import pool from "../db/db.js";
 import { authLimiter } from "../middleware/rateLimiter.js";
-import { sendEmail, sendSMS } from "../otpActions.js";
+import { Resend } from "resend";
+import { ALLOW_REAL_SENDS, sendEmail, sendSMS } from "../otpActions.js";
 import { normalizePhone } from "../utils/phone.js";
 
 function generateOTP() {
   return randomInt(100000, 1000000);
+}
+
+// A lock after 5 wrong codes used to be permanent (Royce, 2026-09-14): no
+// code path ever cleared users.locked and nobody was told it happened, so
+// the only way back in was a manual database edit. Now a lock lifts itself
+// after LOCK_MINUTES — long enough to blunt brute-forcing a 6-digit code,
+// short enough that a real person who fat-fingered it isn't shut out. A
+// lock with no locked_at predates this column, so it's treated as expired
+// rather than left permanent.
+const LOCK_MINUTES = 15;
+
+async function isStillLocked(userId: string): Promise<boolean> {
+  await pool.query(
+    `UPDATE users SET locked = false, otp_attempts = 0, locked_at = NULL
+     WHERE id = $1 AND locked = true
+       AND (locked_at IS NULL OR locked_at < NOW() - ($2 || ' minutes')::interval)`,
+    [userId, LOCK_MINUTES],
+  );
+  const { rows } = await pool.query(`SELECT locked FROM users WHERE id = $1`, [userId]);
+  return rows[0]?.locked === true;
+}
+
+// Email the team when an account locks, so a real person stuck at sign-in
+// is visible instead of silent. Non-fatal: a failed alert must never break
+// the auth response itself.
+async function alertTeamAccountLocked(userId: string): Promise<void> {
+  try {
+    const { rows } = await pool.query(`SELECT first_name, email, phone_number FROM users WHERE id = $1`, [userId]);
+    const u = rows[0];
+    const to = process.env.TEAM_ALERT_EMAIL ?? "hello@copatible.com";
+    const subject = `Co account locked: ${u?.first_name ?? "unknown"} (${u?.phone_number ?? userId})`;
+    const html = `<p>An account hit 5 wrong verification codes and is locked for ${LOCK_MINUTES} minutes. It unlocks on its own after that.</p><p>Name: ${u?.first_name ?? "—"}<br>Email: ${u?.email ?? "—"}<br>Phone: ${u?.phone_number ?? "—"}<br>User id: ${userId}</p>`;
+    if (!ALLOW_REAL_SENDS) {
+      console.log(`[alertTeamAccountLocked stub] to ${to}: ${subject}`);
+      return;
+    }
+    await new Resend(process.env.RESEND_API_KEY).emails.send({ from: "Co <hello@copatible.com>", to: [to], subject, html });
+  } catch (err: any) {
+    console.error("auth: account-locked team alert failed (non-fatal):", err?.message ?? err);
+  }
 }
 
 export function createAuthRouter(): Router {
@@ -22,14 +63,7 @@ export function createAuthRouter(): Router {
     const { user_id, otp_code } = req.body;
 
     try {
-      const isUserLocked = await pool.query(
-        `SELECT locked FROM users WHERE id = $1`,
-        [user_id],
-      );
-
-      const lockedUser: UserProp = isUserLocked.rows[0];
-
-      if (lockedUser.locked) {
+      if (await isStillLocked(user_id)) {
         return res.status(429).send("User Locked!");
       }
 
@@ -89,7 +123,9 @@ export function createAuthRouter(): Router {
         `UPDATE users
            SET otp_attempts = otp_attempts + 1,
              locked = CASE
-             WHEN otp_attempts + 1 >= 5 THEN true ELSE false END
+             WHEN otp_attempts + 1 >= 5 THEN true ELSE false END,
+             locked_at = CASE
+             WHEN otp_attempts + 1 >= 5 THEN NOW() ELSE locked_at END
            WHERE id = $1
            RETURNING otp_attempts, locked`,
         [user_id],
@@ -98,6 +134,7 @@ export function createAuthRouter(): Router {
       const lockAttempts: UserProp = attempts.rows[0];
 
       if (lockAttempts.otp_attempts === 5) {
+        await alertTeamAccountLocked(user_id);
         return res.status(423).send({
           success: true,
           message: "Exceeded the number of Sign in request",
@@ -243,14 +280,7 @@ export function createAuthRouter(): Router {
     const { user_id } = req.body;
 
     try {
-      const isUserLocked = await pool.query(
-        `SELECT locked FROM users WHERE id = $1`,
-        [user_id],
-      );
-
-      const lockedUser: UserProp = isUserLocked.rows[0];
-
-      if (lockedUser.locked === true) {
+      if (await isStillLocked(user_id)) {
         return res.status(429).send("User Locked!");
       }
 

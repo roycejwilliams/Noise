@@ -502,6 +502,13 @@ export function runMigrations() {
   // column can be (and is) touched by unrelated writes to the same row
   // (profile updates, intake, phone number changes), which would wrongly
   // reset the staleness clock even though no real call activity happened.
+  // When an account got locked after 5 wrong OTP codes (routes/auth.ts).
+  // Before this existed, a lock was permanent: nothing ever set
+  // users.locked back to false, and nobody was told it happened.
+  pool
+    .query(`ALTER TABLE users ADD COLUMN IF NOT EXISTS locked_at TIMESTAMPTZ`)
+    .catch((err: Error) => console.error("users.locked_at migration failed:", err));
+
   pool
     .query(`ALTER TABLE users ADD COLUMN IF NOT EXISTS call_status_updated_at TIMESTAMPTZ`)
     .catch((err: Error) => console.error("users.call_status_updated_at migration failed:", err));

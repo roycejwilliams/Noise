@@ -506,6 +506,10 @@ export function sendblueRouter(io: Server): Router {
             await pool.query(`UPDATE users SET intake_asked = true WHERE id = $1`, [user.id]);
             await sendSMS({ phone_number: number, welcome: true });
             await sendSMS({ phone_number: number, intro: true });
+            // Contact card (Royce, 2026-09-14): otpActions.ts has always had
+            // a save_contact send with the vCard attached, but nothing ever
+            // called it, so new people never got Co saved in their phone.
+            await sendSMS({ phone_number: number, save_contact: true });
             await sendSMS({ phone_number: number, intake_ask: true });
             return res.status(200).send({ received: true, action: "intake_started" });
           }
@@ -619,6 +623,7 @@ Return ONLY strict JSON: {"full_name": string or null, "email": string or null, 
           // code doesn't land as a bare 6-digit text from an unknown number.
           await sendSMS({ phone_number: user.phone_number, welcome: true });
           await sendSMS({ phone_number: user.phone_number, intro: true });
+          await sendSMS({ phone_number: user.phone_number, save_contact: true });
           await sendSMS({
             phone_number: user.phone_number,
             otp_code: otp.toString(),
