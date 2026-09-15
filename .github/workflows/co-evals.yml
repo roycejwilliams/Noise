@@ -3,11 +3,17 @@
 # code: typecheck, voice check, and every model-free eval (no secrets needed).
 # live: model evals, on demand only (they cost money); needs ANTHROPIC_API_KEY.
 name: co-evals
+# co-test's Railway service has "Wait for CI" on, so a failing run here
+# blocks the co-test deploy (co-test builds from both api/ and co-test/).
 on:
   push:
-    paths: ["api/**", ".github/workflows/co-evals.yml"]
+    paths: ["api/**", "co-test/**", ".github/workflows/co-evals.yml"]
   pull_request:
-    paths: ["api/**"]
+    paths: ["api/**", "co-test/**"]
+  # Nightly live model evals, only when api/ changed in the last day (they
+  # cost a few dollars a run).
+  schedule:
+    - cron: "17 10 * * *"
   workflow_dispatch:
     inputs:
       live:
@@ -16,6 +22,7 @@ on:
         default: false
 jobs:
   code:
+    if: github.event_name != 'schedule'
     runs-on: ubuntu-latest
     defaults:
       run:
@@ -41,8 +48,7 @@ jobs:
       - run: npm ci
       - run: npm run -s evals:code
   live:
-    if: github.event_name == 'workflow_dispatch' && inputs.live
-    needs: code
+    if: (github.event_name == 'workflow_dispatch' && inputs.live) || github.event_name == 'schedule'
     runs-on: ubuntu-latest
     defaults:
       run:
@@ -58,10 +64,18 @@ jobs:
       DATABASE_URL: postgres://ci:ci@127.0.0.1:1/ci
     steps:
       - uses: actions/checkout@v4
+        with:
+          fetch-depth: 50
       - uses: actions/setup-node@v4
         with:
           node-version: 20
           cache: npm
           cache-dependency-path: api/package-lock.json
-      - run: npm ci
-      - run: npm run -s evals:live
+      - id: changed
+        working-directory: .
+        run: |
+          if [ "${{ github.event_name }}" != "schedule" ] || [ -n "$(git log --since='26 hours ago' --format=%H -- api)" ]; then echo "run=true" >> "$GITHUB_OUTPUT"; else echo "run=false" >> "$GITHUB_OUTPUT"; fi
+      - if: steps.changed.outputs.run == 'true'
+        run: npm ci
+      - if: steps.changed.outputs.run == 'true'
+        run: npm run -s evals:live

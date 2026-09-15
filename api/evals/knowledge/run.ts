@@ -13,7 +13,7 @@ import { fileURLToPath } from "url";
 import { anthropic } from "@ai-sdk/anthropic";
 import { generateText } from "ai";
 import { loadCases, runEval, type EvalCase } from "../lib.js";
-import { parseSnapshot, snapshotPrompt, renderSnapshot, type PersonSnapshot } from "../../src/harness/personSnapshot.js";
+import { parseSnapshot, snapshotCheckPrompt, snapshotPrompt, renderSnapshot, type PersonSnapshot, type SnapshotProblem } from "../../src/harness/personSnapshot.js";
 import { callAuditPrompt, type CallClaim } from "../../src/harness/callGrounding.js";
 import { parseModelJson } from "../../src/services/modelJson.js";
 import { MODELS } from "../../src/models.js";
@@ -52,6 +52,18 @@ const cases: Case[] = [
     mustMatch: { worked: "mixer" },
   },
   {
+    id: "s01_check_catches_stale", kind: "check",
+    snapshot: { work: "solo pre-seed cleantech founder", place: "Fargo", wantsNow: ["meet cleantech investors"], weighingOn: ["lack of information from Co"], valuesInPeople: [], worked: [], didntWork: [], asOf: "2026-09-08T10:00" },
+    recent: [{ at: "2026-09-15T19:24", text: "We are a series A company building AI infrastructure for B2B. We just landed a 35 million dollar deal on a team of 8" }],
+    expectProblems: true,
+  },
+  {
+    id: "s02_check_passes_current", kind: "check",
+    snapshot: { work: "Series A AI infrastructure company for B2B, team of 8, recent $35M deal", place: null, wantsNow: ["a logo designer by Friday", "friends to spend time with"], weighingOn: [], valuesInPeople: ["calm, collected, a life beyond the computer"], worked: [], didntWork: [], asOf: "2026-09-15T20:42" },
+    recent: [{ at: "2026-09-15T19:24", text: "We are a series A company building AI infrastructure for B2B. We just landed a 35 million dollar deal on a team of 8" }, { at: "2026-09-15T19:28", text: "In the mean time, I want to look for some friends" }],
+    expectProblems: false,
+  },
+  {
     id: "c01_call_audit", kind: "audit",
     known: "Who they are right now:\nWork: Series A AI infrastructure company\nWants right now: a designer for logo and branding",
     transcript: "user: I need a logo designer by Friday\nassistant: Friday is tight but doable. I'll look for a couple of designers after we hang up and text you if I find a fit.\nuser: Cool. Is the Tech Week mixer still on?\nassistant: Yeah, it starts at 6pm at Heavybit and 40 people are going.\nassistant: I'll have three designer intros in your inbox by Thursday.",
@@ -69,6 +81,10 @@ await runEval<Case, any>({
       const { text } = await generateText({ model: anthropic(MODELS.sonnet), providerOptions: { anthropic: { effort: "low" } }, prompt: snapshotPrompt(c.input) });
       return parseSnapshot(text);
     }
+    if (c.kind === "check") {
+      const { text } = await generateText({ model: anthropic(MODELS.sonnet), providerOptions: { anthropic: { effort: "low" } }, prompt: snapshotCheckPrompt(c.snapshot, c.recent) });
+      return parseModelJson<{ problems: SnapshotProblem[] }>(text).problems ?? [];
+    }
     const { text } = await generateText({ model: anthropic(MODELS.sonnet), providerOptions: { anthropic: { effort: "low" } }, prompt: callAuditPrompt(c.transcript, c.known) });
     return parseModelJson<{ claims: CallClaim[] }>(text).claims ?? [];
   },
@@ -84,6 +100,9 @@ await runEval<Case, any>({
       if (c.mustNotMatch && new RegExp(c.mustNotMatch, "i").test(all)) hard.push(`kept stale, Co-related, or invented content: ${all.replace(/\n/g, " | ")}`);
       if (c.weighingOnEmpty && r.weighingOn.length) hard.push(`invented something weighing on them: ${r.weighingOn.join("; ")}`);
       for (const [k, v] of Object.entries(r)) if (Array.isArray(v) && v.length > 4) hard.push(`${k} has ${v.length} items`);
+    } else if (c.kind === "check") {
+      const found = (r as SnapshotProblem[]).length > 0;
+      if (found !== c.expectProblems) hard.push(c.expectProblems ? "missed a stale summary" : `flagged a current summary: ${JSON.stringify(r)}`);
     } else {
       const counts: Record<string, number> = {};
       for (const cl of r as CallClaim[]) counts[cl.type] = (counts[cl.type] ?? 0) + 1;

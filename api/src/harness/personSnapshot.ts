@@ -144,6 +144,55 @@ async function loadOutcomeLines(userId: string): Promise<string[]> {
   return rows.map((r: any) => `${r.kind} "${r.item_name}": ${r.result}${r.note ? ` (${r.note})` : ""}`);
 }
 
+// The check after every rebuild (Royce, 2026-09-15: "What Co knows about a
+// person has no check"): a read of the new snapshot against their own words
+// from the last 48 hours. A problem means the snapshot kept something they've
+// since changed, or dropped a new fact they stated.
+export function snapshotCheckPrompt(snapshot: PersonSnapshot, recent: { at: string; text: string }[]): string {
+  return `Here is Co's current picture of someone, and what they've said in the last 48 hours.
+
+Picture:
+${renderSnapshot(snapshot) || "(empty)"}
+
+What they said, oldest first:
+${recent.map((s) => `- [${s.at}] ${s.text}`).join("\n")}
+
+The picture also draws on things they said before this window, so a line these messages don't mention is fine. Only list:
+- a line their recent words contradict (they said something newer that changes it), or anything about Co itself rather than them ("contradicted");
+- an important new fact about them they stated here that the picture is missing: their work or stage, where they are, or something they want ("missing").
+Ignore wording differences and small details.
+
+Return ONLY JSON: {"problems": [{"line": "the picture line, or null if missing", "kind": "contradicted" | "missing", "evidence": "their words that show it"}]}`;
+}
+
+export type SnapshotProblem = { line: string | null; kind: "contradicted" | "missing"; evidence: string };
+
+async function checkSnapshot(userId: string, snapshot: PersonSnapshot, recent: { at: string; text: string }[]): Promise<SnapshotProblem[]> {
+  if (!recent.length) return [];
+  try {
+    const { text } = await generateText({
+      model: anthropic(MODELS.sonnet),
+      providerOptions: { anthropic: { effort: "low" } },
+      experimental_telemetry: { isEnabled: true, functionId: "personSnapshot.check" },
+      prompt: snapshotCheckPrompt(snapshot, recent),
+    });
+    const problems = (parseModelJson<{ problems?: SnapshotProblem[] }>(text).problems ?? []).filter((p) => p && p.kind);
+    await recordDecision({
+      layer: 4,
+      decision: "profile.snapshotCheck",
+      userId,
+      outcome: problems.length ? "skip" : "act",
+      action: problems.length ? "problems_found" : "matches_recent",
+      proposal: { snapshot, problems },
+      checks: problems.map((p) => ({ name: `snapshot_${p.kind}`, pass: false, reason: `${p.line ?? "(missing)"}: ${p.evidence}`.slice(0, 300) })),
+    });
+    return problems;
+  } catch (err: any) {
+    console.error("personSnapshot: check failed (non-fatal):", err?.message ?? err);
+    return [];
+  }
+}
+
 // Non-blocking callers: fire and forget. Returns whether it rebuilt.
 export async function refreshPersonSnapshot(userId: string, opts: { force?: boolean } = {}): Promise<boolean> {
   try {
@@ -160,14 +209,28 @@ export async function refreshPersonSnapshot(userId: string, opts: { force?: bool
     }
     const input = await gatherInputs(userId);
     if (!input || (!input.recentStatements.length && !input.openAsks.length)) return false;
-    const { text } = await generateText({
-      model: anthropic(MODELS.sonnet),
-      providerOptions: { anthropic: { effort: "low" } },
-      experimental_telemetry: { isEnabled: true, functionId: "personSnapshot.rebuild" },
-      prompt: snapshotPrompt(input),
-    });
-    const snapshot = parseSnapshot(text);
+    const build = async (feedback: string | null) => {
+      const { text } = await generateText({
+        model: anthropic(MODELS.sonnet),
+        providerOptions: { anthropic: { effort: "low" } },
+        experimental_telemetry: { isEnabled: true, functionId: "personSnapshot.rebuild" },
+        prompt: snapshotPrompt(input) + (feedback ? `\n\nYour last picture had these problems; fix them:\n${feedback}` : ""),
+      });
+      return parseSnapshot(text);
+    };
+    let snapshot = await build(null);
     if (!snapshot) return false;
+    // Check against the last 48 hours; one rebuild with the problems named.
+    const cutoff = new Date(Date.now() - 48 * 3600_000).toISOString().slice(0, 16);
+    const recent = input.recentStatements.filter((s) => s.at >= cutoff);
+    const problems = await checkSnapshot(userId, snapshot, recent);
+    if (problems.length) {
+      const retry = await build(problems.map((p) => `- ${p.kind}: ${p.line ?? "(missing)"} (they said: ${p.evidence})`).join("\n"));
+      if (retry) {
+        const remaining = await checkSnapshot(userId, retry, recent);
+        if (remaining.length <= problems.length) snapshot = retry;
+      }
+    }
     await pool.query(
       `INSERT INTO person_snapshots (user_id, snapshot, updated_at) VALUES ($1, $2, NOW())
        ON CONFLICT (user_id) DO UPDATE SET snapshot = EXCLUDED.snapshot, updated_at = NOW()`,

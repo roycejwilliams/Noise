@@ -33,6 +33,7 @@ export const SIGNALS: Signal[] = [
   { key: "search_timeout", label: "Searches that hit the time cap or found nothing", bad: `decision = 'recommendation.search' AND outcome = 'skip'`, total: `decision = 'recommendation.search'`, floor: 0.5, minCount: 3 },
   { key: "latency_over", label: "Replies over the latency budget", bad: `decision = 'turn.latency' AND checks @> '[{"pass": false}]'`, total: `decision = 'turn.latency'`, floor: 0.2, minCount: 5 },
   { key: "call_ungrounded", label: "Calls with unsupported promises or facts", bad: `decision = 'call.grounding' AND outcome = 'skip'`, total: `decision = 'call.grounding'`, floor: 0.3, minCount: 2 },
+  { key: "snapshot_problems", label: "Person summaries that contradict recent messages", bad: `decision = 'profile.snapshotCheck' AND outcome = 'skip'`, total: `decision = 'profile.snapshotCheck'`, floor: 0.3, minCount: 3 },
   { key: "router_unavailable", label: "Router failures (no actions taken)", bad: `decision = 'router.decideActions' AND checks @> '[{"name": "router_available", "pass": false}]'`, total: `decision = 'router.decideActions'`, floor: 0.05, minCount: 3 },
 ];
 
@@ -98,6 +99,20 @@ export async function runMonitor(): Promise<void> {
   } catch (err: any) {
     console.error("monitor: run failed (non-fatal):", err?.message ?? err);
   }
+}
+
+// Proves the alert path end to end (Resend, the address, the log) without
+// waiting for a real spike.
+export async function sendTestAlert(): Promise<void> {
+  const readings = await readSignals();
+  const pct = (x: number) => `${Math.round(x * 100)}%`;
+  await sendTeamEmail(
+    "Co alert test: monitoring is on",
+    `<p>This is a test from Co's hourly monitoring on co-test. Real alerts look like this, one per signal, at most every 12 hours.</p><ul>${readings
+      .map((r) => `<li>${r.signal.label}: ${pct(r.recentRate)} in the last 6 hours (${r.recentBad} of ${r.recentTotal}) vs ${pct(r.baselineRate)} over the week${shouldAlert(r) ? " (would alert)" : ""}</li>`)
+      .join("")}</ul>`,
+  );
+  await recordDecision({ layer: 3, decision: "monitor.alert", userId: null, outcome: "act", action: "test", reason: "test alert sent" });
 }
 
 // ---------------------------------------------------------------------------
