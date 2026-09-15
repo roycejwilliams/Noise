@@ -49,7 +49,7 @@ import { addEventFacts, addFact, addInstruction, gatherReplyFacts } from "../har
 import { findRealVenues } from "../services/venueLookup.js";
 import { runConversationReplyAgent, filterRelevantMemories, CALL_OFFER_EXPIRY_DAYS } from "../agent/conversationReply.js";
 import { triggerCallForUser } from "../services/callTrigger.js";
-import sendblue, { cleanCoMessage } from "../services/sendblue.js";
+import sendblue, { cleanCoMessage, markRead } from "../services/sendblue.js";
 import { CO_VOICE, CO_TEXT_CHANNEL } from "../services/coVoice.js";
 import { generateVoiceNote } from "../services/voiceNote.js";
 import { MODELS } from "../models.js";
@@ -306,6 +306,11 @@ export function sendblueRouter(io: Server): Router {
         !bodyForStamp.is_outbound &&
         ((typeof bodyForStamp.content === "string" && bodyForStamp.content.trim().length > 0) ||
           (typeof bodyForStamp.media_url === "string" && bodyForStamp.media_url.length > 0));
+      // Read receipt right away for a real 1:1 inbound text (not groups, not
+      // Co's own delivery updates), before debounce or reply work.
+      if (lockKey && isGenuineInbound && bodyForStamp.message_type !== "group" && !bodyForStamp.group_id) {
+        markRead(lockKey).catch(() => {});
+      }
       if (lockKey && isGenuineInbound) {
         try {
           const stampResult = await pool.query(

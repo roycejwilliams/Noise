@@ -78,3 +78,25 @@ const sendblue = {
 } as unknown as typeof client;
 
 export default sendblue;
+
+// Read receipts (Royce, 2026-09-15): the moment a 1:1 text reaches Co, the
+// sender sees it was read, even while the reply is still being worked on.
+// Sendblue sends these only for iMessage/RCS, best effort; never blocks.
+export async function markRead(number: string): Promise<void> {
+  const from = process.env.SENDBLUE_PHONE_NUMBER;
+  if (!from || !process.env.SENDBLUE_API_KEY || !process.env.SENDBLUE_SECRET_KEY) return;
+  try {
+    const res = await fetch("https://api.sendblue.com/api/mark-read", {
+      method: "POST",
+      headers: {
+        "sb-api-key-id": process.env.SENDBLUE_API_KEY,
+        "sb-api-secret-key": process.env.SENDBLUE_SECRET_KEY,
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({ number, from_number: from }),
+    });
+    if (!res.ok) console.error(`markRead: ${res.status} for ${number} (non-fatal)`);
+  } catch (err: any) {
+    console.error("markRead failed (non-fatal):", err?.message ?? err);
+  }
+}
