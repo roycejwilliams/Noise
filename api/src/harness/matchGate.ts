@@ -228,7 +228,7 @@ export async function gateMatches(
 
 // Words that point at something private about a person. A share reason may
 // only use one of these if the candidate's own stated ask/offering does.
-const SENSITIVE = [
+export const SENSITIVE = [
   "burnout", "burned out", "burnt out", "quit", "quitting", "unemployed", "laid off", "fired", "lost a co-founder",
   "lost their co-founder", "lost co-founder", "cofounder conflict", "co-founder conflict", "equity", "divorce", "breakup",
   "anxiety", "anxious", "depress", "therapy", "therapist", "grief", "health", "illness", "debt", "visa", "pregnan",
@@ -264,9 +264,11 @@ export function checkShareReason(f: NetworkFacts): GateCheck {
   const name = "share_reason_private";
   const reason = f.shareReason?.trim();
   if (!reason) return { name, pass: false, reason: "no shareable reason" };
-  const allowed = norm(f.candidateStatedAsks.join(" "));
-  const hit = SENSITIVE.find((w) => norm(reason).includes(norm(w)) && !allowed.includes(norm(w)));
-  if (hit) return { name, pass: false, reason: `mentions "${hit}", which isn't in their stated ask` };
+  // Sensitive even when it's in their own stated ask (burnout, health, money
+  // trouble): they told Co, not everyone they might be introduced to
+  // (2026-09-15, a pending intro quoted a tester's burnout).
+  const sensitive = SENSITIVE.find((w) => norm(reason).includes(norm(w)));
+  if (sensitive) return { name, pass: false, reason: `mentions "${sensitive}", which is too personal to share in an intro` };
 
   const allowedShingles = shingles(contentWords(f.candidateStatedAsks.join(" . ")), 3);
   const reasonShingles = shingles(contentWords(reason), 3);

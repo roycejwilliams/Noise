@@ -29,6 +29,7 @@ import { recordDecision } from "../harness/core.js";
 import { decideMissedCallFollowUp, gatherMissedCallState } from "../harness/callGate.js";
 import { MODELS } from "../models.js";
 import { humeMoments, recordEmotionSignals, renderHumeMoments, type HumeUtterance } from "../harness/emotion.js";
+import { surfaceNewAsksNow } from "../services/eventSurfacingSweep.js";
 
 // One-line drafts (missed-call text, voicemail line): narrow work, Haiku.
 const DRAFT_MODEL = MODELS.haiku;
@@ -896,7 +897,11 @@ router.post(
         }
 
         // Step 7 — Ambient intent capture (non-blocking — runs in background)
-        captureIntent(user_id, transcript).catch(() => {});
+        // A real ask from the call is searched right away (paced by the
+        // proactive harness), not left for the next sweep.
+        captureIntent(user_id, transcript)
+          .then(() => surfaceNewAsksNow(user_id))
+          .catch(() => {});
         extractPlannedEventMention(user_id, transcript).catch(() => {});
         // Bridges this call into the text side's own conversation log (Royce,
         // 2026-09-07) — see summarizeCallForTextContext for the gap this closes.

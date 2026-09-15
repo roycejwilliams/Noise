@@ -398,7 +398,7 @@
   {
     "id": "n03-burnout-in-own-ask",
     "kind": "network",
-    "expect": "pass",
+    "expect": "reject",
     "facts": {
       "shareReason": "She wants to talk with founders who went through burnout and found a way through.",
       "candidateStatedAsks": [
@@ -411,7 +411,8 @@
       "alreadySuggestedOrDeclined": false,
       "askerActive": true,
       "candidateActive": true
-    }
+    },
+    "note": "2026-09-15: sensitive topics aren't shared in intros even from the person's own stated ask"
   },
   {
     "id": "n04-quotes-goal",

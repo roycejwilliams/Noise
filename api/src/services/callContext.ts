@@ -36,7 +36,7 @@ const SUMMARY_MODEL = MODELS.haiku;
 // specifics the recap's own cadence hasn't folded in yet.
 export async function buildContextSummary(userId: string): Promise<string> {
   try {
-    const [profileResult, recentTextResult, recapResult, recentRecommendationResult, emotional] = await Promise.all([
+    const [profileResult, recentTextResult, recapResult, recentRecommendationResult, emotional, ownWordsResult, openAsksResult] = await Promise.all([
       pool.query(
         `SELECT life_chapters, goals, blockers, availability_pattern, city, emotional_state, intent
          FROM co_profiles WHERE user_id = $1`,
@@ -69,6 +69,17 @@ export async function buildContextSummary(userId: string): Promise<string> {
       // Emotion loop: the same read of how they've been feeling that texts
       // use, so a call opens knowing what the texts showed and vice versa.
       getEmotionalContext(userId),
+      // What they've told Co themselves in the last 48 hours, first: newer
+      // facts beat an older recap or profile (2026-09-15 call opened as if he
+      // were still pre-seed, after he'd texted he's Series A with a $35M deal).
+      pool.query(
+        `SELECT content FROM co_memories
+         WHERE user_id = $1 AND memory_type = 'text_exchange' AND (content LIKE 'User said:%' OR content LIKE '[Call]%')
+           AND created_at > NOW() - INTERVAL '48 hours'
+         ORDER BY created_at DESC LIMIT 25`,
+        [userId],
+      ),
+      pool.query(`SELECT ask_text FROM ask_checkins WHERE user_id = $1 AND resolved_at IS NULL ORDER BY created_at DESC LIMIT 4`, [userId]),
     ]);
     const emotionalLine = renderEmotionalContext(emotional);
 
@@ -77,14 +88,18 @@ export async function buildContextSummary(userId: string): Promise<string> {
       ? profile.intent[profile.intent.length - 1]
       : null;
 
+    const ownWords = ownWordsResult.rows.map((r: any) => String(r.content).replace(/^User said: /, "- ")).reverse();
+    const openAsks = openAsksResult.rows.map((r: any) => `- ${r.ask_text}`);
     const lines = [
+      ownWords.length ? `What they've told you in the last two days (newest facts win over anything below):\n${ownWords.join("\n")}` : null,
+      openAsks.length ? `What they're looking for right now:\n${openAsks.join("\n")}` : null,
       recapResult.rows[0]?.content ? `Ongoing summary: ${recapResult.rows[0].content}` : null,
       profile?.life_chapters?.length ? `Life chapter: ${profile.life_chapters.join(", ")}` : null,
       profile?.city ? `City: ${profile.city}` : null,
       emotionalLine ? `How they've been feeling:\n${emotionalLine}` : null,
       profile?.goals?.length ? `Goals: ${profile.goals.slice(0, 3).join("; ")}` : null,
       profile?.blockers?.length ? `Blockers: ${profile.blockers.slice(0, 2).join("; ")}` : null,
-      latestIntent?.text ? `Stated ask: ${latestIntent.text}` : null,
+      !openAsks.length && latestIntent?.text ? `Stated ask: ${latestIntent.text}` : null,
       latestIntent?.wants?.length ? `Wants: ${latestIntent.wants.slice(0, 2).join(", ")}` : null,
       recentRecommendationResult.rows[0]?.content ? `Most recent thing Co suggested: ${recentRecommendationResult.rows[0].content}` : null,
     ].filter(Boolean);
@@ -94,12 +109,16 @@ export async function buildContextSummary(userId: string): Promise<string> {
       : null;
     if (recentTextLine) lines.push(recentTextLine);
 
-    const summary = lines.join(". ");
-    // Generous sanity bound, not a real constraint (see the note above) —
-    // a few thousand characters costs nothing meaningful in an LLM prompt
-    // or a JSON payload; this just guards against a genuinely pathological
-    // profile ballooning without limit.
-    return summary.length > 4000 ? `${summary.slice(0, 4000)}…` : summary;
+    // Newest and most important sections come first, so the bound drops the
+    // oldest, least important lines whole instead of cutting mid-sentence.
+    const MAX = 4500;
+    let summary = "";
+    for (const line of lines as string[]) {
+      const next = summary ? `${summary}\n\n${line}` : line;
+      if (next.length > MAX) break;
+      summary = next;
+    }
+    return summary;
   } catch (err: any) {
     console.error("callContext: buildContextSummary failed (non-fatal, calling with no prior context):", err?.message ?? err);
     return "";

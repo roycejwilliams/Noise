@@ -251,12 +251,15 @@ function ago(at: Date, now: Date): string {
 // Empty when there's nothing to go on.
 export function renderEmotionalContext(ctx: EmotionalContext, now = new Date()): string {
   const lines: string[] = [];
-  if (ctx.current?.source === "text") {
+  // A low-intensity read ("low clarifying") is noise in a prompt; only show
+  // feelings strong enough to change how Co should respond.
+  if (ctx.current?.source === "text" && ctx.current.intensity !== "low") {
     lines.push(`Right now (their texts, ${ago(ctx.current.at, now)}): ${ctx.current.intensity} ${ctx.current.emotion}${ctx.current.about ? ` about ${ctx.current.about}` : ""}.`);
   }
-  if (ctx.lastCall?.moments.length) {
+  if (ctx.lastCall?.moments.some((m) => m.intensity !== "low")) {
     lines.push(
       `On your call ${ago(ctx.lastCall.at, now)}, their voice showed: ${ctx.lastCall.moments
+        .filter((m) => m.intensity !== "low")
         .map((m) => `${m.emotion} (${m.intensity})${m.quote ? ` when they said "${m.quote}"` : ""}`)
         .join("; ")}.`,
     );

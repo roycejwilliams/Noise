@@ -158,7 +158,7 @@ export async function extractPsychographicProfile(
           "connection_style": "", // one of: small_group, medium_group, large_social
           "activity_preferences": [], // array of activities they mentioned or implied enjoying
           "goals": [], // array of things they are working toward
-          "blockers": [], // array of challenges or struggles they mentioned
+          "blockers": [], // array of challenges or struggles in their life they mentioned (never frustrations with Co itself)
           "availability_pattern": "", // how often and when they want to connect (e.g. "weekday evenings", "weekends")
           "city": "", // city they are in or moving to
           "emotional_state": "", // one word describing their current emotional state (e.g. anxious, energized, overwhelmed, motivated, isolated, confident, focused, excited, lost, burnout)
@@ -523,6 +523,37 @@ Return ONLY valid JSON, no preamble: {"preference": "weekly" | "biweekly" | "non
 // *this* call, so a call with no signal just clears it.
 // hume_chat_group_id is intentionally not handled here — it's a call-resume
 // concern specific to the Twilio/Hume webhook path, not part of extraction.
+const PROFILE_STOPWORDS = new Set(["the", "a", "an", "and", "or", "to", "of", "in", "for", "with", "on", "at", "their", "his", "her", "my", "more", "other"]);
+function listWords(s: string): Set<string> {
+  return new Set(s.toLowerCase().replace(/[^a-z0-9 ]/g, " ").split(/\s+/).filter((w) => w.length > 2 && !PROFILE_STOPWORDS.has(w)));
+}
+function nearDuplicate(a: string, b: string): boolean {
+  const wa = listWords(a);
+  const wb = listWords(b);
+  if (!wa.size || !wb.size) return a.trim().toLowerCase() === b.trim().toLowerCase();
+  const shared = [...wa].filter((w) => wb.has(w)).length;
+  return shared / Math.min(wa.size, wb.size) >= 0.75;
+}
+
+// Newest items win, near-duplicates of an item already kept are dropped,
+// and the list is capped. Exported for evals.
+export function mergeProfileList(existing: string[] | null | undefined, fresh: string[] | null | undefined, cap: number): string[] {
+  const out: string[] = [];
+  for (const item of [...(fresh ?? []), ...(existing ?? [])]) {
+    const t = item?.trim();
+    if (!t || out.some((kept) => nearDuplicate(kept, t))) continue;
+    out.push(t);
+    if (out.length >= cap) break;
+  }
+  return out;
+}
+
+// Complaints about Co ("lack of information from Co") aren't the person's
+// blockers. "co-founder" is not Co.
+export function isAboutCo(item: string): boolean {
+  return /\bco(?!-)\b|\bco's\b|\bcopatible\b/i.test(item);
+}
+
 export async function storeProfile(
   user_id: string,
   extracted: ExtractedProfile,
@@ -577,10 +608,12 @@ export async function storeProfile(
 
   const safeChapters = union(existing?.life_chapters, clean.life_chapters);
   const safeStyle = clean.connection_style ?? existing?.connection_style ?? "small_group";
-  const activityPreferences = union(existing?.activity_preferences, clean.activity_preferences);
-  const goals = union(existing?.goals, clean.goals).filter((g) => !resolvedGoals.includes(g));
-  const blockers = union(existing?.blockers, clean.blockers).filter(
-    (b) => !resolvedBlockers.includes(b),
+  // Newest first, near-duplicates collapsed, capped: these lists used to only
+  // grow (one tester reached 126 goals and 115 blockers, most rewordings).
+  const activityPreferences = mergeProfileList(existing?.activity_preferences, clean.activity_preferences, 15);
+  const goals = mergeProfileList(existing?.goals, clean.goals, 12).filter((g) => !resolvedGoals.includes(g));
+  const blockers = mergeProfileList(existing?.blockers, (clean.blockers ?? []).filter((b) => !isAboutCo(b)), 10).filter(
+    (b) => !resolvedBlockers.includes(b) && !isAboutCo(b),
   );
   const socialEnergy = clean.social_energy ?? existing?.social_energy ?? 50;
   const availabilityPattern = clean.availability_pattern || existing?.availability_pattern || null;
@@ -640,7 +673,9 @@ export async function storeProfile(
       socialEnergy,
       safeStyle,
       activityPreferences,
-      clean.emotional_state ?? opts.emotions?.[0]?.name ?? null,
+      // Only from what the conversation showed, never one voice moment
+      // (a single awkward second set this to "awkward").
+      clean.emotional_state ?? null,
       goals,
       blockers,
       availabilityPattern,

@@ -469,3 +469,40 @@ export async function onEventOfferSent(userId: string, payload: EventOfferPayloa
 export async function onEventOfferDropped(userId: string, payload: EventOfferPayload): Promise<void> {
   await removeFromBacklog(userId, payload.askId, payload.match);
 }
+
+// A real ask captured on a call gets searched right away instead of waiting
+// for the next sweep tick (2026-09-15: a designer ask from a call sat with
+// nothing looking for it). Anything found goes through the same queue and
+// daily pick as the sweep, so it's still paced.
+export async function surfaceNewAsksNow(userId: string): Promise<void> {
+  const { rows } = await pool.query(
+    `SELECT ac.id, ac.ask_id, ac.ask_text, u.first_name, u.phone_number, cp.city, cp.goals, cp.activity_preferences
+     FROM ask_checkins ac
+     JOIN users u ON u.id = ac.user_id
+     LEFT JOIN co_profiles cp ON cp.user_id = ac.user_id
+     WHERE ac.user_id = $1 AND ac.resolved_at IS NULL AND ac.last_attempted_at IS NULL
+       AND ac.created_at > NOW() - INTERVAL '30 minutes'`,
+    [userId],
+  );
+  for (const row of rows) {
+    await pool.query(`UPDATE ask_checkins SET last_attempted_at = NOW() WHERE id = $1`, [row.id]);
+    try {
+      await attemptEventSurfacing({
+        askId: row.id,
+        userId,
+        firstName: row.first_name,
+        phoneNumber: row.phone_number,
+        askText: row.ask_text,
+        city: row.city ?? null,
+        goals: row.goals ?? null,
+        activityPreferences: row.activity_preferences ?? null,
+        cooldownCleared: true,
+      });
+      const { attemptNetworkSurfacing } = await import("./networkIntroNudge.js");
+      await attemptNetworkSurfacing(userId, row.first_name, row.phone_number, row.ask_id);
+    } catch (err: any) {
+      console.error(`surfaceNewAsksNow failed for ${userId} (non-fatal):`, err?.message ?? err);
+    }
+  }
+}
+

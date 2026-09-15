@@ -81,7 +81,7 @@ ${profileLines || "(nothing on file yet)"}
 New raw exchanges since your last recap, in order:
 ${newExchanges.map((e: any) => e.content).join("\n")}
 
-Write an UPDATED recap: a compact, accurate running narrative of who this person is and what's actually going on with them, weighted toward what's recent. If something from your previous recap is now stale, resolved, or contradicted by what's happened since, drop or correct it — don't just append to a list that only ever grows. Ground every claim strictly in what's actually in the profile fields or was actually said in the exchanges above; never invent or assume a detail that isn't there. Write it as prose, not a bulleted list. 4-8 sentences.
+Write an UPDATED recap: a compact, accurate running narrative of who this person is and what's actually going on with them, weighted toward what's recent. If something from your previous recap is now stale, resolved, or contradicted by what's happened since, drop or correct it — don't just append to a list that only ever grows. Ground every claim strictly in what's actually in the profile fields or was actually said in the exchanges above; never invent or assume a detail that isn't there. When something newer contradicts something older (their company stage, city, team, what they're looking for), the newer one wins and the older one goes. This is only about them: never record how Co performed, Co's mistakes, trust in Co, or complaints about Co. Write it as prose, not a bulleted list. 4-8 sentences.
 
 Return ONLY the recap text, nothing else — no preamble, no labels.`,
     });
