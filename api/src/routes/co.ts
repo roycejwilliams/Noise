@@ -30,6 +30,8 @@ import { decideMissedCallFollowUp, gatherMissedCallState } from "../harness/call
 import { MODELS } from "../models.js";
 import { humeMoments, recordEmotionSignals, renderHumeMoments, type HumeUtterance } from "../harness/emotion.js";
 import { surfaceNewAsksNow } from "../services/eventSurfacingSweep.js";
+import { refreshPersonSnapshot } from "../harness/personSnapshot.js";
+import { auditCall } from "../harness/callGrounding.js";
 
 // One-line drafts (missed-call text, voicemail line): narrow work, Haiku.
 const DRAFT_MODEL = MODELS.haiku;
@@ -870,10 +872,17 @@ router.post(
         }
 
         // Step 1 — Store raw transcript in co_memories immediately
+        // What Co knew going into the call, captured before this call's own
+        // summary is written, for the grounding audit below.
+        const knownBeforeCall = await buildContextSummary(user_id).catch(() => "");
         const transcriptMemoryId = await storeTranscriptMemory(user_id, transcript, {
           emotionalContext: emotions,
           audioUrl: recording_url,
         });
+        // Calls can't be gated live (Hume speaks as it generates), so every
+        // call is audited right after: keepable promises are kept, the rest
+        // become corrections for the next text (harness/callGrounding.ts).
+        auditCall(user_id, transcript, knownBeforeCall).catch(() => {});
 
         // Emotion loop: the strongest voice moments, with what they said,
         // recorded for every layer to read and fed into extraction below.
@@ -905,7 +914,10 @@ router.post(
         extractPlannedEventMention(user_id, transcript).catch(() => {});
         // Bridges this call into the text side's own conversation log (Royce,
         // 2026-09-07) — see summarizeCallForTextContext for the gap this closes.
-        summarizeCallForTextContext(user_id, transcript, emotionalHighlights).catch(() => {});
+        // Call summary first (it feeds the picture), then rebuild the picture.
+        summarizeCallForTextContext(user_id, transcript, emotionalHighlights)
+          .then(() => refreshPersonSnapshot(user_id, { force: true }))
+          .catch(() => {});
 
         // The recap exists now (transcript + extraction persisted) — safe to
         // mark completed. Everything after this point (scheduling the

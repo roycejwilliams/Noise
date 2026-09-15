@@ -9,6 +9,7 @@ import type { StatedIntent } from "./matching.js";
 import { gateMatches } from "../harness/matchGate.js";
 import { MODELS } from "../models.js";
 import { parseModelJson } from "./modelJson.js";
+import pool from "../db/db.js";
 
 // Model policy (Royce, 2026-09-14): Haiku only for narrow work code checks
 // afterwards (city extraction, query rewrite, opportunity extraction backed
@@ -195,8 +196,26 @@ Return ONLY "yes" or "no".`,
 // start_at) is reused by checkForUrgentMatch below to further restrict to a
 // near-term window on top of the lookahead baseline, rather than
 // duplicating this construction a second time.
+// Event lists are the same for everyone, so fetch them at most every 15
+// minutes instead of once per search.
+const LIST_TTL_MS = 15 * 60 * 1000;
+let calendarCache: { at: number; events: Awaited<ReturnType<typeof listCalendarEvents>> } | null = null;
+let publicCache: { at: number; events: Awaited<ReturnType<typeof fetchPublicEvents>> } | null = null;
+async function cachedCalendarEvents() {
+  if (calendarCache && Date.now() - calendarCache.at < LIST_TTL_MS) return calendarCache.events;
+  const events = await listCalendarEvents();
+  calendarCache = { at: Date.now(), events };
+  return events;
+}
+async function cachedPublicEvents() {
+  if (publicCache && Date.now() - publicCache.at < LIST_TTL_MS) return publicCache.events;
+  const events = await fetchPublicEvents(50);
+  publicCache = { at: Date.now(), events };
+  return events;
+}
+
 async function tryTier1(ask: StatedIntent, userCity: string | null, filter?: (startAt: string) => boolean): Promise<TierMatch | null> {
-  const events = await listCalendarEvents().catch((err: any) => {
+  const events = await cachedCalendarEvents().catch((err: any) => {
     console.error("tieredRecommendation: tryTier1 listCalendarEvents failed (non-fatal):", err?.message ?? err);
     return [];
   });
@@ -233,7 +252,7 @@ async function tryTier1(ask: StatedIntent, userCity: string | null, filter?: (st
 // optional near-term `filter` can be applied before ranking — same reuse
 // reasoning as tryTier1 above. `userCity` drives the same hard radius filter.
 async function tryTier2(ask: StatedIntent, userCity: string | null, filter?: (startAt: string) => boolean): Promise<TierMatch | null> {
-  const events = await fetchPublicEvents(50).catch((err: any) => {
+  const events = await cachedPublicEvents().catch((err: any) => {
     console.error("tieredRecommendation: tryTier2 fetchPublicEvents failed (non-fatal):", err?.message ?? err);
     return [];
   });
@@ -408,21 +427,66 @@ async function tryTier3(ask: StatedIntent, query: string): Promise<TierMatch | n
 // Every match goes through harness/matchGate.ts before it's returned
 // (location, timing, grounding; plus no-repeat and a decision log when
 // userId is given), so no caller can queue or show one the gate rejects.
+// Speed and cost (2026-09-15). The same search (text + city) within a few
+// hours reuses its raw results; gating still runs per person. Tier 3 is the
+// only paid search (X), so it has a budget: the background sweep gets one X
+// search per person every X_SEARCH_SWEEP_DAYS, and all X searches together
+// stop at X_SEARCH_DAILY_CAP a day. Someone asking directly always counts
+// toward the daily cap but isn't held to the per-person sweep limit.
+const SEARCH_CACHE_TTL_MS = 6 * 60 * 60 * 1000;
+const searchCache = new Map<string, { at: number; found: TierMatch[] }>();
+const X_SEARCH_SWEEP_DAYS = Number(process.env.X_SEARCH_SWEEP_DAYS ?? 3);
+const X_SEARCH_DAILY_CAP = Number(process.env.X_SEARCH_DAILY_CAP ?? 100);
+
+async function paidSearchAllowed(userId: string | null, source: "sweep" | "request"): Promise<{ ok: boolean; reason: string }> {
+  try {
+    const { rows } = await pool.query(
+      `SELECT
+         (SELECT COUNT(*)::int FROM x_search_log WHERE created_at > NOW() - INTERVAL '1 day') AS today,
+         (SELECT COUNT(*)::int FROM x_search_log WHERE user_id = $1 AND source = 'sweep' AND created_at > NOW() - ($2 || ' days')::interval) AS mine`,
+      [userId, X_SEARCH_SWEEP_DAYS],
+    );
+    if (rows[0].today >= X_SEARCH_DAILY_CAP) return { ok: false, reason: `daily X search cap (${X_SEARCH_DAILY_CAP}) reached` };
+    if (source === "sweep" && userId && rows[0].mine > 0) return { ok: false, reason: `already searched X for them in the last ${X_SEARCH_SWEEP_DAYS} days` };
+    return { ok: true, reason: "within budget" };
+  } catch {
+    return { ok: true, reason: "budget check unavailable" };
+  }
+}
+
 export async function getTieredRecommendation(
   ask: StatedIntent,
   profileCity: string | null,
-  opts: { userId?: string; checkRepeat?: boolean } = {},
+  opts: { userId?: string; checkRepeat?: boolean; source?: "sweep" | "request" } = {},
 ): Promise<TierMatch[]> {
   const city = await resolveSearchCity(ask.text, profileCity);
-  const [tier1, tier2, opportunityQuery] = await Promise.all([
-    tryTier1(ask, city),
-    tryTier2(ask, city),
-    proposeOpportunityQuery(ask, city),
-  ]);
+  const cacheKey = `${(city ?? "").toLowerCase()}|${(ask.text ?? "").trim().toLowerCase()}`;
+  const cached = searchCache.get(cacheKey);
+  let found: TierMatch[];
+  if (cached && Date.now() - cached.at < SEARCH_CACHE_TTL_MS) {
+    found = cached.found;
+  } else {
+    const source = opts.source ?? "request";
+    const [tier1, tier2, budget] = await Promise.all([
+      tryTier1(ask, city),
+      tryTier2(ask, city),
+      paidSearchAllowed(opts.userId ?? null, source),
+    ]);
+    let tier3: TierMatch | null = null;
+    if (budget.ok) {
+      const opportunityQuery = await proposeOpportunityQuery(ask, city);
+      if (opportunityQuery) {
+        await pool
+          .query(`INSERT INTO x_search_log (user_id, source, query) VALUES ($1, $2, $3)`, [opts.userId ?? null, source, opportunityQuery])
+          .catch(() => {});
+        tier3 = await tryTier3(ask, opportunityQuery);
+      }
+    }
+    found = [tier1, tier2, tier3].filter((m): m is TierMatch => m !== null);
+    if (searchCache.size > 300) searchCache.clear();
+    searchCache.set(cacheKey, { at: Date.now(), found });
+  }
 
-  const tier3 = opportunityQuery ? await tryTier3(ask, opportunityQuery) : null;
-
-  const found = [tier1, tier2, tier3].filter((m): m is TierMatch => m !== null);
   return gateMatches(found, { userId: opts.userId ?? null, searchCity: city, checkRepeat: opts.checkRepeat });
 }
 

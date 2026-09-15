@@ -1,0 +1,182 @@
+// What Co knows about a person, kept current (Royce, 2026-09-15: "Keep what
+// Co knows about each person accurate... newer facts beating older ones
+// matters more than anything else").
+//
+// A short snapshot (what they do and at what stage, where they are, what
+// they want right now, what's weighing on them, what matters to them in
+// people and plans) rebuilt from what they've actually said recently,
+// instead of profile lists that only grow and a recap that lags. Every layer
+// that talks to or about them reads it first: the reply and the Hume call
+// (via buildContextSummary), the sweep's search brief, and why-it-fits.
+//
+// Gate: the rebuild must be grounded in their own recent words; newer
+// statements replace older ones; nothing about Co's own performance. The
+// knowledge eval (evals/knowledge) checks a stale profile plus newer texts
+// produce the newer facts.
+import { anthropic } from "@ai-sdk/anthropic";
+import { generateText } from "ai";
+import pool from "../db/db.js";
+import { MODELS } from "../models.js";
+import { parseModelJson } from "../services/modelJson.js";
+import { recordDecision } from "./core.js";
+
+export type PersonSnapshot = {
+  work: string | null; // what they do and at what stage
+  place: string | null;
+  wantsNow: string[];
+  weighingOn: string[];
+  valuesInPeople: string[]; // what "worth it" means to them
+  worked: string[]; // suggestions that helped
+  didntWork: string[]; // suggestions that didn't
+  asOf: string; // newest statement it reflects
+};
+
+export type SnapshotInputs = {
+  firstName: string;
+  previous: PersonSnapshot | null;
+  recentStatements: { at: string; text: string }[]; // their own words, oldest first
+  openAsks: string[];
+  outcomes: string[];
+};
+
+// Rebuilt at most this often while they're actively talking.
+const REBUILD_MIN_INTERVAL_MS = 10 * 60 * 1000;
+
+export function snapshotPrompt(input: SnapshotInputs): string {
+  return `Keep Co's short, current picture of ${input.firstName}. Rebuild it from what they've actually said.
+
+${input.previous ? `Your previous picture (may be out of date):\n${JSON.stringify(input.previous, null, 2)}` : "No previous picture."}
+
+What ${input.firstName} has said recently, oldest first (their own words and call summaries):
+${input.recentStatements.map((s) => `- [${s.at}] ${s.text}`).join("\n") || "(nothing recent)"}
+
+What they're asking Co to look for right now:
+${input.openAsks.map((a) => `- ${a}`).join("\n") || "(nothing open)"}
+
+How past suggestions went:
+${input.outcomes.map((o) => `- ${o}`).join("\n") || "(no results yet)"}
+
+Rules:
+- Newer statements replace older ones. If they said they're Series A, they're not pre-seed anymore, whatever the old picture says.
+- Only what they actually said or what's listed above. No guesses about their feelings or circumstances.
+- Only about them. Never about Co, Co's mistakes, or complaints about Co.
+- Keep every list short (at most 4 items), specific, and current. Drop anything resolved or contradicted.
+
+Return ONLY JSON:
+{"work": "what they do and at what stage, or null", "place": "where they are, or null", "wantsNow": [], "weighingOn": [], "valuesInPeople": [], "worked": [], "didntWork": [], "asOf": "the timestamp of the newest statement you used"}`;
+}
+
+export function parseSnapshot(text: string): PersonSnapshot | null {
+  try {
+    const p = parseModelJson<Partial<PersonSnapshot>>(text);
+    const list = (v: unknown) => (Array.isArray(v) ? v.filter((x) => typeof x === "string" && x.trim()).map((x) => String(x).slice(0, 160)).slice(0, 4) : []);
+    return {
+      work: typeof p.work === "string" && p.work.trim() ? p.work.slice(0, 200) : null,
+      place: typeof p.place === "string" && p.place.trim() ? p.place.slice(0, 80) : null,
+      wantsNow: list(p.wantsNow),
+      weighingOn: list(p.weighingOn),
+      valuesInPeople: list(p.valuesInPeople),
+      worked: list(p.worked),
+      didntWork: list(p.didntWork),
+      asOf: typeof p.asOf === "string" ? p.asOf : new Date().toISOString(),
+    };
+  } catch {
+    return null;
+  }
+}
+
+export function renderSnapshot(s: PersonSnapshot | null): string {
+  if (!s) return "";
+  const lines = [
+    s.work ? `Work: ${s.work}` : null,
+    s.place ? `Where: ${s.place}` : null,
+    s.wantsNow.length ? `Wants right now: ${s.wantsNow.join("; ")}` : null,
+    s.weighingOn.length ? `Weighing on them: ${s.weighingOn.join("; ")}` : null,
+    s.valuesInPeople.length ? `What matters to them in people and plans: ${s.valuesInPeople.join("; ")}` : null,
+    s.worked.length ? `Suggestions that helped: ${s.worked.join("; ")}` : null,
+    s.didntWork.length ? `Suggestions that didn't: ${s.didntWork.join("; ")}` : null,
+  ].filter(Boolean);
+  return lines.join("\n");
+}
+
+export async function getPersonSnapshot(userId: string): Promise<PersonSnapshot | null> {
+  const { rows } = await pool
+    .query(`SELECT snapshot FROM person_snapshots WHERE user_id = $1`, [userId])
+    .catch(() => ({ rows: [] as any[] }));
+  return (rows[0]?.snapshot as PersonSnapshot) ?? null;
+}
+
+async function gatherInputs(userId: string): Promise<SnapshotInputs | null> {
+  const [user, statements, asks, outcomes, previous] = await Promise.all([
+    pool.query(`SELECT first_name FROM users WHERE id = $1`, [userId]),
+    pool.query(
+      `SELECT created_at, content FROM co_memories
+       WHERE user_id = $1 AND memory_type = 'text_exchange' AND (content LIKE 'User said:%' OR content LIKE '[Call]%')
+         AND created_at > NOW() - INTERVAL '21 days'
+       ORDER BY created_at DESC LIMIT 60`,
+      [userId],
+    ),
+    pool.query(`SELECT ask_text FROM ask_checkins WHERE user_id = $1 AND resolved_at IS NULL ORDER BY created_at DESC LIMIT 5`, [userId]),
+    loadOutcomeLines(userId),
+    getPersonSnapshot(userId),
+  ]);
+  if (!user.rows[0]) return null;
+  return {
+    firstName: user.rows[0].first_name || "them",
+    previous,
+    recentStatements: statements.rows
+      .reverse()
+      .map((r: any) => ({ at: new Date(r.created_at).toISOString().slice(0, 16), text: String(r.content).replace(/^User said: /, "").slice(0, 400) })),
+    openAsks: asks.rows.map((r: any) => r.ask_text),
+    outcomes,
+  };
+}
+
+// Outcome lines (services/outcomes.ts writes them); kept here as a plain read
+// so the snapshot doesn't depend on the outcome loop's internals.
+async function loadOutcomeLines(userId: string): Promise<string[]> {
+  const { rows } = await pool
+    .query(
+      `SELECT item_name, kind, result, note FROM suggestion_outcomes WHERE user_id = $1 AND created_at > NOW() - INTERVAL '90 days' ORDER BY created_at DESC LIMIT 10`,
+      [userId],
+    )
+    .catch(() => ({ rows: [] as any[] }));
+  return rows.map((r: any) => `${r.kind} "${r.item_name}": ${r.result}${r.note ? ` (${r.note})` : ""}`);
+}
+
+// Non-blocking callers: fire and forget. Returns whether it rebuilt.
+export async function refreshPersonSnapshot(userId: string, opts: { force?: boolean } = {}): Promise<boolean> {
+  try {
+    if (!opts.force) {
+      const { rows } = await pool.query(
+        `SELECT s.updated_at,
+                (SELECT MAX(created_at) FROM co_memories m WHERE m.user_id = $1 AND m.memory_type = 'text_exchange' AND (m.content LIKE 'User said:%' OR m.content LIKE '[Call]%')) AS newest
+         FROM (SELECT $1::uuid AS user_id) u LEFT JOIN person_snapshots s ON s.user_id = u.user_id`,
+        [userId],
+      );
+      const updated = rows[0]?.updated_at ? new Date(rows[0].updated_at).getTime() : 0;
+      const newest = rows[0]?.newest ? new Date(rows[0].newest).getTime() : 0;
+      if (newest <= updated || Date.now() - updated < REBUILD_MIN_INTERVAL_MS) return false;
+    }
+    const input = await gatherInputs(userId);
+    if (!input || (!input.recentStatements.length && !input.openAsks.length)) return false;
+    const { text } = await generateText({
+      model: anthropic(MODELS.sonnet),
+      providerOptions: { anthropic: { effort: "low" } },
+      experimental_telemetry: { isEnabled: true, functionId: "personSnapshot.rebuild" },
+      prompt: snapshotPrompt(input),
+    });
+    const snapshot = parseSnapshot(text);
+    if (!snapshot) return false;
+    await pool.query(
+      `INSERT INTO person_snapshots (user_id, snapshot, updated_at) VALUES ($1, $2, NOW())
+       ON CONFLICT (user_id) DO UPDATE SET snapshot = EXCLUDED.snapshot, updated_at = NOW()`,
+      [userId, JSON.stringify(snapshot)],
+    );
+    await recordDecision({ layer: 4, decision: "profile.snapshot", userId, outcome: "act", action: "rebuilt", proposal: { previous: input.previous, snapshot } });
+    return true;
+  } catch (err: any) {
+    console.error("refreshPersonSnapshot failed (non-fatal):", err?.message ?? err);
+    return false;
+  }
+}

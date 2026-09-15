@@ -19,6 +19,7 @@ import { generateText } from "ai";
 import { DateTime } from "luxon";
 import { MODELS } from "../models.js";
 import type { TierMatch } from "./tieredRecommendation.js";
+import { getPersonSnapshot, renderSnapshot } from "../harness/personSnapshot.js";
 
 export type EventDetails = {
   startAt: string | null;
@@ -154,11 +155,12 @@ export function missingEventDetails(name: string, d: EventDetails | undefined): 
   return missing.length ? `For "${name}", Co does not have: ${missing.join(", ")}.` : null;
 }
 
-export type PersonForFit = { firstName: string; askText: string | null; goals?: string[] | null; city?: string | null; feeling?: string };
+export type PersonForFit = { userId?: string; firstName: string; askText: string | null; goals?: string[] | null; city?: string | null; feeling?: string };
 
 // A personal reason, grounded only in what they've said and the real
 // details. Sonnet: it's shown to them and needs judgment.
 export async function explainFit(match: EnrichedMatch, person: PersonForFit): Promise<string | null> {
+  const picture = person.userId ? renderSnapshot(await getPersonSnapshot(person.userId)) : "";
   const detailLines =
     match.details ? renderEventDetails(match.name, match.details) : match.opportunity ? [`What the post says: ${match.opportunity.postText}`] : [];
   try {
@@ -170,7 +172,7 @@ export async function explainFit(match: EnrichedMatch, person: PersonForFit): Pr
 
 What ${person.firstName} has told Co:
 - Looking for: ${person.askText ?? "(no specific ask)"}
-${person.goals?.length ? `- Goals: ${person.goals.slice(0, 4).join("; ")}` : ""}
+${picture ? `- Who they are right now:\n${picture}` : person.goals?.length ? `- Goals: ${person.goals.slice(0, 4).join("; ")}` : ""}
 ${person.city ? `- Based in: ${person.city}` : ""}
 ${person.feeling ? `- How they've been feeling: ${person.feeling}` : ""}
 

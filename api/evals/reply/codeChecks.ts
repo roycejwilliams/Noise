@@ -34,7 +34,9 @@ const cases: [string, string | null, string][] = [
   // From Royce's 2026-09-15 thread: no open search behind these.
   ["I'll keep watching for one that fits a Series A team and text you the second something real shows up.", "no_followup_promise", "keep watching, no open ask"],
   ["Got it. I'll keep my eyes open for people worth putting you in front of.", "no_followup_promise", "keep my eyes open, no open ask"],
-  ["No pressure if the timing doesn't work, want me to keep an eye out for the next one?", "no_followup_promise", "offer to keep an eye out, no open ask"],
+  ["No pressure if the timing doesn't work, want me to keep an eye out for the next one?", null, "offer (saveAsk makes a yes real)"],
+  ["On it, I'll ask Devon and let you know what he says.", "no_followup_promise", "promise after another verb"],
+  ["I'll dig into it and get back to you.", "no_followup_promise", "dig in and get back"],
 ];
 
 // With an open ask the daily search really runs: keeping looking is true,

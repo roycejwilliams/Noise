@@ -423,6 +423,20 @@ export async function resolveNetworkIntroReply(
       email: pending.candidate.email,
     };
     await sendNetworkIntroEmail(person, candidateInfo, pending.candidate.match_reason);
+    // "Did it help?" for the intro itself: a follow-up for both people about
+    // five days out, delivered through the same next-morning debrief as events
+    // (tier 0 marks an intro; services/outcomes.ts records the answer).
+    const followupDate = new Date(Date.now() + 4 * 24 * 3600_000).toISOString().slice(0, 10);
+    for (const [uid, otherName] of [[person.user_id, pending.candidate.first_name], [pending.candidate.candidate_id, person.first_name]] as const) {
+      await pool
+        .query(
+          `INSERT INTO recommendation_outcome_followups (user_id, ask_text, tier, match_name, match, send_at)
+           SELECT $1::uuid, $2::text, 0, $3::text, $4::jsonb, NOW() + INTERVAL '5 days'
+           WHERE NOT EXISTS (SELECT 1 FROM recommendation_outcome_followups WHERE user_id = $1 AND lower(match_name) = lower($3))`,
+          [uid, "an intro Co made", `your intro to ${otherName}`, JSON.stringify({ kind: "intro", event_date: followupDate })],
+        )
+        .catch((err: any) => console.error("resolveNetworkIntroReply: intro follow-up schedule failed (non-fatal):", err?.message ?? err));
+    }
     return `\nThey just said yes to being connected with ${pending.candidate.first_name}, and ${pending.candidate.first_name} had already said yes too — you've already sent a real intro email to both of them. Acknowledge warmly and briefly, don't repeat the email content back.`;
   }
 

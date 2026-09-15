@@ -269,7 +269,7 @@ async function findFreshPending(candidate: SurfacingCandidate): Promise<BacklogI
     goals: candidate.goals,
     activityPreferences: candidate.activityPreferences,
   });
-  const matches = await getTieredRecommendation({ text: brief.searchText }, candidate.city).catch((err: any) => {
+  const matches = await getTieredRecommendation({ text: brief.searchText }, candidate.city, { userId: candidate.userId, source: "sweep" }).catch((err: any) => {
     console.error("attemptEventSurfacing: getTieredRecommendation failed (non-fatal):", err?.message ?? err);
     return [] as TierMatch[];
   });
@@ -366,6 +366,7 @@ export async function attemptEventSurfacing(candidate: SurfacingCandidate): Prom
   // the tease, the reveal, and any "tell me more" all work from the same
   // record (services/eventDetails.ts).
   const match = await enrichMatch(item.match, {
+    userId: candidate.userId,
     firstName: candidate.firstName,
     askText: candidate.fromProfile ? null : item.askText,
     goals: candidate.goals,

@@ -28,6 +28,7 @@ import { MODELS } from "../models.js";
 import { parseModelJson } from "../services/modelJson.js";
 import { checkNoEmotionLabel } from "./emotion.js";
 import { enrichMatch, missingEventDetails, renderEventDetails, type EventDetails, type OpportunityDetails } from "../services/eventDetails.js";
+import { recentCallCorrections } from "./callGrounding.js";
 
 // Model policy (Royce, 2026-09-14): Sonnet 5 for anything with judgment or
 // side effects; Haiku only for narrow, code-checked reads.
@@ -76,6 +77,7 @@ const STANDING_CAPABILITIES = [
   `They can also call Co from this same number. You are not given the digits, so never write a phone number.`,
   `Co can't go chase down a specific link, detail, or answer later: if it isn't here, it won't show up.`,
   `Co can send its contact card (so they can save Co) with the sendContactCard tool when they ask for it or want to save Co.`,
+  `Co can search right now (searchNow), save something they want found (people, events, a community, an opportunity) so the daily search keeps looking (saveAsk; it can't dig up a missing detail about something already sent), and send a link that's on file (shareLink). Co can't book, buy, register them for events, email or call other people for them, or post anywhere. If they ask for something Co can't do, say so plainly and say what Co can do instead.`,
 ];
 
 // Facts that are true for every reply, before anything about this person.
@@ -95,6 +97,7 @@ export async function gatherReplyFacts(
   const rf = baseReplyFacts();
   for (const d of opts.pendingDescriptions ?? []) addFact(rf, "pending", `Waiting to hear back: ${d}`);
   await addOngoingSearchFacts(rf, userId);
+  for (const correction of await recentCallCorrections(userId)) addFact(rf, "known", correction);
 
   const [scheduled, reveal] = await Promise.all([
     pool
@@ -225,6 +228,25 @@ function clockTimes(s: string): string[] {
 }
 
 // Deterministic checks that don't need a model.
+// Promises of a later action Co makes on its own. Offers to use a real tool
+// ("I can save it if you want", "want me to look?") aren't promises.
+export function followupPromiseMatch(text: string): RegExpMatchArray | null {
+  const promise = text.match(
+    // "If one turns up, I'll text you" (conditional first) is the same promise.
+    /\b(?:if|when|once|as soon as)\b[^.?!]{0,80}\b(?:i'?ll|i will)\s+(?:text|send|ping|message|let)\s+you\b|\b(i'?ll|i will|let me|will)\s+(keep (an eye out|watching|looking|searching|checking)|flag (it|that|one)|circle back|follow up|get back to you|let you know|text you (when|once|as soon|the moment|if)|track (it|that|one) down|find out|look into|reach out to|send (it|one|the link) (when|once|as soon)|send (it|one|them|that) your way|pass (it|one|that) along|ping you|be in touch)\b/i,
+  );
+  if (promise) return promise;
+  const later = text.match(/\b(i'?ll|i will)\b[^.?!]{0,60}\b(let you know|get back to you|follow up|circle back|report back|keep you posted|update you)\b/i);
+  if (later) return later;
+  const lookout = text.match(/\b(keep (my|an|our) eyes? (open|out|peeled)|keep (watching|looking|an eye out)|be on the lookout|watch(ing)? for (one|it|something|that)|text you (the second|the moment|right when|as soon as))\b/i);
+  if (lookout) {
+    const sentence = text.split(/(?<=[.!?])\s+/).find((x) => x.includes(lookout[0])) ?? "";
+    if (/\b(if you want|want me to|should i|would you like)\b/i.test(sentence) && !/\b(i'?ll|i will)\b/i.test(sentence)) return null;
+    return lookout;
+  }
+  return null;
+}
+
 export function codeChecks(draft: string, rf: ReplyFacts, src: GroundingSources): GateCheck[] {
   const emotionLabel = checkNoEmotionLabel(draft);
   const checks: GateCheck[] = [];
@@ -252,12 +274,7 @@ export function codeChecks(draft: string, rf: ReplyFacts, src: GroundingSources)
   // Follow-up promises nothing in the code keeps: no job texts them when a
   // link turns up or when the other person answers (an intro goes out by
   // email, not a text from Co).
-  const promise = draft.match(
-    // "If one turns up, I'll text you" (conditional first) is the same promise.
-    /\b(?:if|when|once|as soon as)\b[^.?!]{0,80}\b(?:i'?ll|i will)\s+(?:text|send|ping|message|let)\s+you\b|\b(i'?ll|i will|i can|let me|will)\s+(keep (an eye out|watching|looking|searching|checking)|flag (it|that|one)|circle back|follow up|get back to you|let you know|text you (when|once|as soon|the moment|if)|track (it|that|one) down|find out|look into|reach out to|send (it|one|the link) (when|once|as soon)|send (it|one|them|that) your way|pass (it|one|that) along|ping you|be in touch)\b/i,
-  );
-  const lookoutPromise = draft.match(/\b(keep (my|an|our) eyes? (open|out|peeled)|keep (watching|looking|an eye out)|be on the lookout|watch(ing)? for (one|it|something|that)|text you (the second|the moment|right when|as soon as))\b/i);
-  const found = promise ?? lookoutPromise;
+  const found = followupPromiseMatch(draft);
   // A promise to keep looking is only true while an ask is open (the sweep
   // really does search it), and never with a timing commitment.
   const ongoing = rf.facts.some((f) => f.kind === "ongoing");
@@ -391,7 +408,7 @@ function stripUnsupported(draft: string, failed: GateCheck[]): string {
     const ns = norm(s);
     if (failed.some((f) => f.name === "no_call_placed_claim") && /(calling|ringing|dialing) you|i'?m (calling|ringing|dialing)/i.test(s)) return false;
     if (failed.some((f) => f.name === "no_emotion_label") && !checkNoEmotionLabel(s).pass) return false;
-    if (failed.some((f) => f.name === "no_followup_promise") && /\b(i'?ll|i will|i can|let me|will)\s+(keep|flag|circle|follow|get back|let you know|text you|track|find out|look into|reach out|send)/i.test(s)) return false;
+    if (failed.some((f) => f.name === "no_followup_promise") && followupPromiseMatch(s)) return false;
     if (failed.some((f) => f.name === "no_capability_denial") && /\b(can(no|')?t|unable to|this is (just )?text)\b/i.test(s)) return false;
     if (failed.some((f) => f.name === "link_on_file") && /https?:\/\//i.test(s)) return false;
     if (failed.some((f) => f.name === "phone_on_file") && /\d{3}[\s.-]?\d{4}/.test(s)) return false;

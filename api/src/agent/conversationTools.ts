@@ -4,6 +4,9 @@ import sendblue, { cleanCoMessage } from "../services/sendblue.js";
 import { writeMemory } from "../services/memory.js";
 import { recordDecision } from "../harness/core.js";
 import { markTopicAsked as persistTopicAsked, RAPPORT_TOPICS } from "../services/profileExtraction.js";
+import { captureIntentForTurn } from "../services/profileExtraction.js";
+import { generateRecommendation } from "../services/recommendation.js";
+import { enrichMatch, renderEventDetails } from "../services/eventDetails.js";
 
 export type SendCoReply = (params: { phone: string; message: string; asVoice: boolean }) => Promise<void>;
 
@@ -19,6 +22,9 @@ export type ConversationToolContext = {
   // Layer 3 grounding gate (harness/replyGrounding.ts): runs on each drafted
   // message before it's sent or logged, and returns what actually goes out.
   gate?: (draft: string, sentThisTurn: string[]) => Promise<string>;
+  // Facts for this reply (replyGrounding). Tools add what they actually did
+  // so the grounding check accepts it, and shareLink only sends links on file.
+  facts?: { add: (kind: "did_this_turn" | "known" | "ongoing", text: string) => void; text: () => string };
 };
 
 // Side-effecting tools are bound to server-known context (userId,
@@ -93,6 +99,70 @@ export function createConversationTools(ctx: ConversationToolContext) {
         }
         state.sentMessages.push("[sent Co's contact card]");
         if (!ctx.dryRun) await recordDecision({ layer: 3, decision: "reply.contactCard", userId: ctx.userId, outcome: "act", action: "sent_contact_card" });
+        return { ok: true };
+      },
+    }),
+
+    // Save what they want so the daily search keeps looking. This is what
+    // makes "I'll keep looking" true.
+    saveAsk: tool({
+      description:
+        "Save something they want Co to look for (people, events, a community, an opportunity) so Co's daily search keeps looking and can text them when something real fits. Use when they ask for something and nothing fits right now, or they want Co to keep an eye out.",
+      inputSchema: z.object({ what: z.string().describe("What they're looking for, in one plain sentence, in their words.") }),
+      execute: async ({ what }) => {
+        if (ctx.dryRun) {
+          console.log(`[conversationReply dryRun] would save ask for ${ctx.userId}: "${what}"`);
+        } else {
+          const saved = await captureIntentForTurn(ctx.userId, `user: ${what}`, { timeoutMs: 6000 }).catch(() => null);
+          if (!saved?.ask?.text) return { ok: false, error: "couldn't save that as something to look for" };
+          await recordDecision({ layer: 3, decision: "reply.saveAsk", userId: ctx.userId, outcome: "act", action: saved.deduped ? "updated_ask" : "saved_ask", proposal: { what, saved: saved.ask.text } });
+        }
+        ctx.facts?.add("ongoing", `Co's daily search is now looking for: "${what}". If something real fits, Co may text them (at most one text a day). Co can't promise it will find anything, or when.`);
+        return { ok: true, note: "Saved. You can say you'll keep looking and text them if something real fits. Don't promise a time." };
+      },
+    }),
+
+    // Search right now when they ask and nothing was searched this turn.
+    searchNow: tool({
+      description:
+        "Search right now for events, communities, or opportunities they're asking for, when no search already ran this turn. Returns real results with details; tell them about the best one with sendReply and share its link with shareLink.",
+      inputSchema: z.object({ what: z.string().describe("What to look for, one plain sentence.") }),
+      execute: async ({ what }) => {
+        const result = await Promise.race([
+          generateRecommendation(ctx.userId, what),
+          new Promise<{ available: false; reason: string }>((resolve) => setTimeout(() => resolve({ available: false, reason: "search took too long" }), 40_000)),
+        ]).catch(() => ({ available: false as const, reason: "search failed" }));
+        if (!result.available || !("matches" in result) || !result.matches?.length) {
+          ctx.facts?.add("did_this_turn", `Searched just now for "${what}" and found nothing real that fits yet.`);
+          if (!ctx.dryRun) await recordDecision({ layer: 3, decision: "reply.searchNow", userId: ctx.userId, outcome: "skip", action: "nothing_found", proposal: { what } });
+          return { ok: true, found: [], note: "Nothing real found. Say so plainly. You can offer saveAsk so Co keeps looking." };
+        }
+        const found = [];
+        for (const m of result.matches.slice(0, 2)) {
+          const em = await enrichMatch(m, { userId: ctx.userId, firstName: "them", askText: what });
+          const lines = em.details ? renderEventDetails(em.name, em.details) : em.opportunity ? [`What the post says: ${em.opportunity.postText}`] : [];
+          ctx.facts?.add("known", `Found just now: "${em.name}"${"url" in em && em.url ? `, link ${em.url}` : ""}. ${lines.join(" ")}${em.whyItFits ? ` Why it fits: ${em.whyItFits}` : ""}`);
+          found.push({ name: em.name, link: "url" in em ? em.url ?? null : null, details: lines, whyItFits: em.whyItFits ?? m.reason });
+        }
+        if (!ctx.dryRun) await recordDecision({ layer: 3, decision: "reply.searchNow", userId: ctx.userId, outcome: "act", action: "found", proposal: { what, found: found.map((f) => f.name) } });
+        return { ok: true, found };
+      },
+    }),
+
+    // Send a link as its own message, only if it's actually on file.
+    shareLink: tool({
+      description: "Send a link as its own message (so it previews). Only links that appear in the facts you were given.",
+      inputSchema: z.object({ url: z.string() }),
+      execute: async ({ url }) => {
+        if (!ctx.facts?.text().includes(url)) return { ok: false, error: "that link isn't on file, so it can't be sent" };
+        if (ctx.dryRun) {
+          console.log(`[conversationReply dryRun] would share link ${url} with ${ctx.userId}`);
+        } else {
+          await ctx.sendCoReply({ phone: ctx.phoneNumber, message: url, asVoice: false });
+          await writeMemory(ctx.userId, "text_exchange", `Co replied: ${url}`);
+        }
+        state.sentMessages.push(url);
+        ctx.facts?.add("did_this_turn", `Sent the link ${url} as its own message.`);
         return { ok: true };
       },
     }),

@@ -20,6 +20,7 @@ import { runEventChangeNotificationAgent } from "../agent/eventChangeNotificatio
 import type { AskCheckinPayload } from "../agent/askCheckin.js";
 import { enqueueCandidate, runProactiveDispatch, sendExempt } from "../harness/proactive.js";
 import { proactiveRegistry } from "../harness/proactiveRegistry.js";
+import { runMonitor, runWeeklyReview } from "../harness/monitor.js";
 
 // Bounded-concurrency worker pool (Royce, 2026-08-30) — the event surfacing
 // sweep now runs for every open ask daily (see below), and a plain
@@ -557,6 +558,15 @@ export function registerJobs(io: Server) {
     } catch (error) {
       console.error("Memory compaction cron error:", error);
     }
+  });
+
+  // Decision log monitoring: hourly spike alerts, weekly review email
+  // (harness/monitor.ts).
+  cron.schedule("23 * * * *", () => {
+    runMonitor().catch((err: any) => console.error("monitor cron error:", err?.message ?? err));
+  });
+  cron.schedule("7 16 * * 1", () => {
+    runWeeklyReview().catch((err: any) => console.error("weekly review cron error:", err?.message ?? err));
   });
 
   // Harness decision log retention: keep 60 days. Every reply, route, and

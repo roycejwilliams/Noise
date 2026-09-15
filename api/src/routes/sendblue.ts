@@ -56,6 +56,8 @@ import { generateVoiceNote } from "../services/voiceNote.js";
 import { MODELS } from "../models.js";
 import { parseModelJson } from "../services/modelJson.js";
 import { enrichMatch, renderEventDetails } from "../services/eventDetails.js";
+import { refreshPersonSnapshot } from "../harness/personSnapshot.js";
+import { recordSuggestionOutcome, resultFromNamedOutcome } from "../services/outcomes.js";
 
 // Serializes webhook processing per phone number. Without this, two
 // messages sent seconds apart from the same person can be handled
@@ -100,6 +102,11 @@ const DEBOUNCE_MS = 4000;
 // actual shift in how someone's texting dominates within a message or two
 // instead of a full window's worth.
 const STYLE_HINT_RECENT_LINES = 4;
+
+// Reply latency budgets, logged per turn (turn.latency). A search turn gets
+// longer because a hold message already went out.
+const REPLY_BUDGET_MS = 20_000;
+const REPLY_BUDGET_SEARCH_MS = 60_000;
 
 // Sent before a search so nobody waits in silence. Not a real reply: a copy
 // of the message sent after one of these is still a duplicate.
@@ -1062,6 +1069,7 @@ export function sendblueRouter(io: Server): Router {
             // Real details and a personal reason for the reveal (filled in on
             // demand for offers queued before details existed).
             const match: any = await enrichMatch(parsed.match, {
+              userId: user.id,
               firstName: user.first_name,
               askText: parsed.askText,
               goals: profile?.goals ?? null,
@@ -1092,6 +1100,13 @@ export function sendblueRouter(io: Server): Router {
             const todayStr = new Date().toISOString().slice(0, 10);
             const relevantDate: string | undefined = match.event_date ?? match.deadline;
             const isStale = relevantDate && relevantDate < todayStr;
+            await recordSuggestionOutcome(
+              user.id,
+              match.kind === "opportunity" ? "opportunity" : "event",
+              match.event_api_id ? `event:${match.event_api_id}` : `name:${String(match.name).toLowerCase()}`,
+              match.name,
+              eventReplyAction === "interested" ? "interested" : "declined",
+            );
             if (eventReplyAction === "interested" && isStale) {
               const passedPhrase = match.event_date ? `it was on ${relevantDate}` : `the application window closed on ${relevantDate}`;
               addFact(replyFacts, "known", `The thing Co teased earlier already passed (${passedPhrase}).`);
@@ -1139,6 +1154,7 @@ export function sendblueRouter(io: Server): Router {
             const pendingOutcomeFollowUp = resolvedOutcome.item.ref.pending;
             const outcome = resolvedOutcome.value as "named_positive" | "named_critical" | "not_mentioned";
             await recordOutcome(user.id, pendingOutcomeFollowUp.id, pendingOutcomeFollowUp.tier, outcome);
+            await recordSuggestionOutcome(user.id, pendingOutcomeFollowUp.tier === 0 ? "intro" : pendingOutcomeFollowUp.tier === 3 ? "opportunity" : "event", `followup:${pendingOutcomeFollowUp.id}`, pendingOutcomeFollowUp.match_name, resultFromNamedOutcome(outcome), resolvedContent.slice(0, 160));
             addFact(replyFacts, "did_this_turn", `Recorded what they said about how "${pendingOutcomeFollowUp.match_name}" went.`);
             // Stay-scoped clause (Royce, 2026-09-07, confirmed live) —
             // without this, a name or detail from a DIFFERENT,
@@ -1170,6 +1186,7 @@ export function sendblueRouter(io: Server): Router {
             const pendingCheckin = resolvedCheckin.item.ref.pending;
             const outcome = resolvedCheckin.value as "named_positive" | "named_critical" | "not_mentioned";
             await recordEventCheckinOutcome(user.id, pendingCheckin.id, pendingCheckin.event_api_id, outcome);
+            await recordSuggestionOutcome(user.id, "event", `event:${pendingCheckin.event_api_id}`, pendingCheckin.event_name, resultFromNamedOutcome(outcome), resolvedContent.slice(0, 160));
             addFact(replyFacts, "did_this_turn", `Recorded what they said about "${pendingCheckin.event_name}".`);
             // Same stay-scoped fix as the outcome follow-up above — a
             // name/detail from a different, already-resolved follow-up
@@ -1235,6 +1252,8 @@ export function sendblueRouter(io: Server): Router {
         if (resolvedTease?.item.ref?.kind === "network_tease") {
           try {
             const classification = resolvedTease.value === "yes" ? "interested" : "not_interested";
+            const teaseCandidate = resolvedTease.item.ref.pending.candidate;
+            await recordSuggestionOutcome(user.id, "intro", `intro:${teaseCandidate.candidate_id}`, `an intro to ${teaseCandidate.first_name}`, classification === "interested" ? "interested" : "declined");
             const context = await resolveNetworkTeaseReply(user.id, user.first_name, user.phone_number, resolvedTease.item.ref.pending, classification);
             if (context) {
               addInstruction(replyFacts, context);
@@ -1251,6 +1270,8 @@ export function sendblueRouter(io: Server): Router {
         if (resolvedIntro?.item.ref?.kind === "network_intro") {
           try {
             const classification = resolvedIntro.value === "yes" ? "interested" : "not_interested";
+            const introCandidate = resolvedIntro.item.ref.pending.candidate;
+            await recordSuggestionOutcome(user.id, "intro", `intro:${introCandidate.candidate_id}`, `an intro to ${introCandidate.first_name}`, classification === "interested" ? "interested" : "declined");
             const context = await resolveNetworkIntroReply(
               { user_id: user.id, first_name: user.first_name, phone_number: user.phone_number, email: user.email },
               resolvedIntro.item.ref.pending,
@@ -1567,6 +1588,7 @@ Return ONLY valid JSON, no preamble: {"date": "YYYY-MM-DD or null", "time": "HH:
                 // Drafted in Co's voice from the real record and a personal
                 // reason, not the matching engine's raw "name — reason" line.
                 const em = await enrichMatch(m, {
+                  userId: user.id,
                   firstName: user.first_name,
                   askText: resolvedContent,
                   goals: profile?.goals ?? null,
@@ -1929,6 +1951,20 @@ Return ONLY valid JSON, no preamble: {"date": "YYYY-MM-DD or null", "time": "HH:
               }),
           );
           coReply = replyText;
+          // Latency budget (2026-09-15: a 70s reply led to five resends).
+          // Measured from when the text reached Co to the reply going out.
+          if (myInboundAt) {
+            const turnMs = Date.now() - new Date(myInboundAt).getTime();
+            recordDecision({
+              layer: 3,
+              decision: "turn.latency",
+              userId: user.id,
+              outcome: "act",
+              action: decision.wantsRecommendation ? "reply_with_search" : "reply",
+              checks: [{ name: "within_budget", pass: turnMs <= (decision.wantsRecommendation ? REPLY_BUDGET_SEARCH_MS : REPLY_BUDGET_MS), reason: `${Math.round(turnMs / 1000)}s` }],
+              proposal: { ms: turnMs },
+            }).catch(() => {});
+          }
         }
 
         // Fire-and-forget, same real pipeline a call uses (extractPsychographicProfile
@@ -1942,6 +1978,9 @@ Return ONLY valid JSON, no preamble: {"date": "YYYY-MM-DD or null", "time": "HH:
         extractPsychographicProfile(textTranscript)
           .then(({ extracted }) => storeProfile(user.id, extracted, textTranscript))
           .catch((err: any) => console.error("sendblue: text-based profile extraction failed (non-fatal):", err?.message ?? err));
+        // Keep the current picture of them fresh (harness/personSnapshot.ts);
+        // rebuilds only when they've said something new, at most every 10 min.
+        refreshPersonSnapshot(user.id).catch(() => {});
         captureIntent(user.id, textTranscript).catch((err: any) =>
           console.error("sendblue: text-based intent capture failed (non-fatal):", err?.message ?? err),
         );

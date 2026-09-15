@@ -16,6 +16,7 @@ import { MODELS } from "../models.js";
 import { parseModelJson } from "./modelJson.js";
 import { getEmotionalContext, renderEmotionalContext } from "../harness/emotion.js";
 import { recordDecision } from "../harness/core.js";
+import { getPersonSnapshot, renderSnapshot } from "../harness/personSnapshot.js";
 
 export type SearchBrief = {
   // One sentence used for search and relevance ranking.
@@ -49,7 +50,8 @@ async function recentUserTexts(userId: string): Promise<string[]> {
 export async function buildSearchBrief(input: BriefInput): Promise<SearchBrief> {
   const fallback = { searchText: input.askText, reasoning: "fallback: ask text only" };
   try {
-    const [emotional, texts] = await Promise.all([getEmotionalContext(input.userId), recentUserTexts(input.userId)]);
+    const [emotional, texts, snapshot] = await Promise.all([getEmotionalContext(input.userId), recentUserTexts(input.userId), getPersonSnapshot(input.userId)]);
+    const picture = renderSnapshot(snapshot);
     const feeling = renderEmotionalContext(emotional);
     const { text } = await generateText({
       model: anthropic(MODELS.sonnet),
@@ -58,7 +60,7 @@ export async function buildSearchBrief(input: BriefInput): Promise<SearchBrief> 
       prompt: `Co is about to search for events, communities, and opportunities for someone. Write what to search for so the results fit who they are and how they're doing right now, not just the words of their ask.
 
 ${input.fromProfile ? "They haven't asked for anything specific. From their profile" : "What they asked Co for"}: ${input.askText}
-${input.goals?.length ? `Goals: ${input.goals.slice(0, 6).join("; ")}` : ""}
+${picture ? `Who they are right now (newest facts):\n${picture}` : input.goals?.length ? `Goals: ${input.goals.slice(0, 6).join("; ")}` : ""}
 ${input.activityPreferences?.length ? `Things they enjoy: ${input.activityPreferences.slice(0, 6).join("; ")}` : ""}
 
 What they've said to Co lately (oldest first):
@@ -67,7 +69,7 @@ ${texts.length ? texts.map((t) => `- ${t}`).join("\n") : "(nothing recent)"}
 How they've been feeling:
 ${feeling || "(nothing notable)"}
 
-Let their feelings and recent words change the search where they should: drained or overwhelmed points to smaller, lower-key things; isolated or lonely points to recurring community over one-off networking; a worry that keeps coming up (like fundraising) points to things that help with it; excitement points to things that build on it. Keep their actual ask at the center. Don't invent interests they haven't shown.
+Let their feelings and recent words change the search where they should: drained or overwhelmed points to smaller, lower-key things; isolated or lonely points to recurring community over one-off networking; a worry that keeps coming up (like fundraising) points to things that help with it; excitement points to things that build on it. Keep their actual ask at the center. Lean toward what's worked for them before and away from what hasn't. Don't invent interests they haven't shown.
 
 Return ONLY JSON: {"searchText": "one sentence describing what to look for, including topic, format, and size or energy when it matters", "reasoning": "one short sentence on what shaped it"}`,
     });

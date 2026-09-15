@@ -24,7 +24,7 @@ export async function draftAskCheckin(firstName: string, p: AskCheckinPayload): 
     },
     task: escalate
       ? `You've checked in on this ${p.checkinCount} times already. Ask, lightly, whether it's still something they want, and make it easy to say no. Name what it is in plain words.`
-      : `Ask where things stand with what they told you they want, naming it in plain words. Don't imply anything is lined up. If there's nothing worth asking right now, return SKIP.`,
+      : `Check that this is still what they want, naming it in plain words, so Co keeps looking for the right thing ("Still looking for Series A operators, or has that changed?"). Don't imply anything is lined up. If there's nothing worth asking right now, return SKIP.`,
   });
   if (!text) return null;
   return { text, rules: { maxSentences: 2, maxChars: 260 } };

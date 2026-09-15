@@ -1,0 +1,67 @@
+# Co evals on every push and PR that touches api/ (Royce, 2026-09-15: "Wire
+# them into CI... so a model or prompt change can't slip through").
+# code: typecheck, voice check, and every model-free eval (no secrets needed).
+# live: model evals, on demand only (they cost money); needs ANTHROPIC_API_KEY.
+name: co-evals
+on:
+  push:
+    paths: ["api/**", ".github/workflows/co-evals.yml"]
+  pull_request:
+    paths: ["api/**"]
+  workflow_dispatch:
+    inputs:
+      live:
+        description: "Also run the live model evals"
+        type: boolean
+        default: false
+jobs:
+  code:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: api
+    env:
+      # Placeholders: clients read these at import, but code-only evals never
+      # call out.
+      SENDBLUE_API_KEY: ci
+      SENDBLUE_SECRET_KEY: ci
+      ANTHROPIC_API_KEY: ci
+      OPENAI_API_KEY: ci
+      GOOGLE_PLACES_API_KEY: ci
+      RESEND_API_KEY: re_ci
+      HUME_API_KEY: ci
+      DATABASE_URL: postgres://ci:ci@127.0.0.1:1/ci
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+          cache-dependency-path: api/package-lock.json
+      - run: npm ci
+      - run: npm run -s evals:code
+  live:
+    if: github.event_name == 'workflow_dispatch' && inputs.live
+    needs: code
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: api
+    env:
+      ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+      SENDBLUE_API_KEY: ci
+      SENDBLUE_SECRET_KEY: ci
+      OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+      GOOGLE_PLACES_API_KEY: ci
+      RESEND_API_KEY: re_ci
+      HUME_API_KEY: ci
+      DATABASE_URL: postgres://ci:ci@127.0.0.1:1/ci
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+          cache-dependency-path: api/package-lock.json
+      - run: npm ci
+      - run: npm run -s evals:live

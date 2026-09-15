@@ -50,7 +50,7 @@ type ReplyCase = EvalCase & {
   style?: "capitalized" | "lowercase";
 };
 
-type Result = { final: string; grounding: GroundingResult[]; replyMs?: number; answers?: boolean };
+type Result = { final: string; grounding: GroundingResult[]; replyMs?: number; answers?: boolean; rf?: ReplyFacts };
 
 const here = dirname(fileURLToPath(import.meta.url));
 const args = process.argv.slice(2);
@@ -115,7 +115,8 @@ async function run(c: ReplyCase): Promise<Result> {
     { dryRun: true, record: false },
   );
   const replyMs = Date.now() - started - out.grounding.reduce((a, g) => a + g.latencyMs, 0);
-  return { final: out.replyText, grounding: out.grounding, replyMs, answers: await answersMessage(c, out.replyText) };
+  // rf now includes anything the reply's tools did (a saved ask, a link sent).
+  return { final: out.replyText, grounding: out.grounding, replyMs, answers: await answersMessage(c, out.replyText), rf };
 }
 
 function score(c: ReplyCase, r: Result): CaseScore {
@@ -124,7 +125,11 @@ function score(c: ReplyCase, r: Result): CaseScore {
     const m = r.final.match(new RegExp(pat, "i"));
     if (m) hard.push(`forbidden "${m[0]}" in: ${r.final}`);
   }
-  const rf = buildFacts(c);
+  const rf = r.rf ?? buildFacts(c);
+  if ((c as any).forbiddenWithoutOpenSearch && !rf.facts.some((f) => f.kind === "ongoing")) {
+    const m = r.final.match(new RegExp((c as any).forbiddenWithoutOpenSearch, "i"));
+    if (m) hard.push(`promised to keep looking with nothing open: ${r.final}`);
+  }
   for (const chk of codeChecks(r.final, rf, { message: c.message, recentConversation: c.recentConversation, contextSummary: c.contextSummary })) {
     if (!chk.pass) hard.push(`${chk.name} (${chk.reason}) in: ${r.final}`);
   }

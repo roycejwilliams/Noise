@@ -1221,4 +1221,51 @@ export function runMigrations() {
     )
     .then(() => pool.query(`CREATE INDEX IF NOT EXISTS idx_emotion_signals_user ON emotion_signals (user_id, created_at DESC)`))
     .catch((err: Error) => console.error("emotion_signals table init failed:", err));
+
+  // Tier 3 (paid X search) budget log (2026-09-15) — tieredRecommendation.ts.
+  pool
+    .query(
+      `CREATE TABLE IF NOT EXISTS x_search_log (
+        id BIGSERIAL PRIMARY KEY,
+        user_id UUID REFERENCES users(id) ON DELETE CASCADE,
+        source TEXT NOT NULL,
+        query TEXT NOT NULL,
+        created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+      )`,
+    )
+    .then(() => pool.query(`CREATE INDEX IF NOT EXISTS idx_x_search_log_created ON x_search_log (created_at DESC)`))
+    .catch((err: Error) => console.error("x_search_log table init failed:", err));
+
+  // Current picture of each person (harness/personSnapshot.ts) and the
+  // result of every suggestion (services/outcomes.ts), 2026-09-15.
+  pool
+    .query(
+      `CREATE TABLE IF NOT EXISTS person_snapshots (
+        user_id UUID PRIMARY KEY REFERENCES users(id) ON DELETE CASCADE,
+        snapshot JSONB NOT NULL,
+        updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+      )`,
+    )
+    .catch((err: Error) => console.error("person_snapshots table init failed:", err));
+  pool
+    .query(
+      `CREATE TABLE IF NOT EXISTS suggestion_outcomes (
+        id BIGSERIAL PRIMARY KEY,
+        user_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+        kind TEXT NOT NULL,
+        item_key TEXT NOT NULL,
+        item_name TEXT NOT NULL,
+        result TEXT NOT NULL,
+        note TEXT,
+        created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+        UNIQUE (user_id, item_key, result)
+      )`,
+    )
+    .then(() => pool.query(`CREATE INDEX IF NOT EXISTS idx_suggestion_outcomes_user ON suggestion_outcomes (user_id, created_at DESC)`))
+    .catch((err: Error) => console.error("suggestion_outcomes table init failed:", err));
+
+  // Monitoring alert dedupe (harness/monitor.ts), 2026-09-15.
+  pool
+    .query(`CREATE TABLE IF NOT EXISTS harness_alerts (signal_key TEXT PRIMARY KEY, sent_at TIMESTAMPTZ NOT NULL)`)
+    .catch((err: Error) => console.error("harness_alerts table init failed:", err));
 }

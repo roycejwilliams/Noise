@@ -4,7 +4,7 @@ import { createConversationTools, type SendCoReply } from "./conversationTools.j
 import { writeMemory } from "../services/memory.js";
 import pool from "../db/db.js";
 import { CO_VOICE, CO_TEXT_CHANNEL } from "../services/coVoice.js";
-import { groundReply, LAYER3_MODELS, renderReplyFacts, type GroundingResult, type ReplyFacts } from "../harness/replyGrounding.js";
+import { groundReply, LAYER3_MODELS, renderReplyFacts, type GroundingResult, type ReplyFacts, addFact } from "../harness/replyGrounding.js";
 import { capitalizeSentences, textsInLowercase, userLinesFrom } from "../services/textStyle.js";
 
 // Co's most recent message in the thread, so a short reply can be read
@@ -187,6 +187,10 @@ export async function runConversationReplyAgent(
     recentOfferBurstActive: input.recentOfferBurstActive,
     dryRun: opts.dryRun ?? false,
     sendCoReply: input.sendCoReply,
+    facts: {
+      add: (kind, text) => addFact(input.facts, kind, text),
+      text: () => renderReplyFacts(input.facts),
+    },
     gate: async (draft, sentThisTurn) => {
       const result = await groundReply(
         draft,
@@ -275,7 +279,7 @@ ${input.missingTopic ? `  - Co doesn't yet have a good sense of ${input.missingT
     // raised to 12 for a multi-message recommendation sequence the agent
     // used to own — that sending is now deterministic in sendblue.ts
     // instead, so this reverted back to 6.)
-    stopWhen: stepCountIs(6),
+    stopWhen: stepCountIs(8),
     experimental_telemetry: { isEnabled: true, functionId: "agent.conversationReply" },
     ...(input.imageForVision
       ? {

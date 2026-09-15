@@ -4,6 +4,7 @@ import pool from "../db/db.js";
 import { writeMemory } from "./memory.js";
 import { MODELS } from "../models.js";
 import { getEmotionalContext, renderEmotionalContext } from "../harness/emotion.js";
+import { getPersonSnapshot, renderSnapshot } from "../harness/personSnapshot.js";
 
 // A 1-2 sentence call summary: narrow work, Haiku.
 const SUMMARY_MODEL = MODELS.haiku;
@@ -36,7 +37,7 @@ const SUMMARY_MODEL = MODELS.haiku;
 // specifics the recap's own cadence hasn't folded in yet.
 export async function buildContextSummary(userId: string): Promise<string> {
   try {
-    const [profileResult, recentTextResult, recapResult, recentRecommendationResult, emotional, ownWordsResult, openAsksResult] = await Promise.all([
+    const [profileResult, recentTextResult, recapResult, recentRecommendationResult, emotional, ownWordsResult, openAsksResult, snapshot] = await Promise.all([
       pool.query(
         `SELECT life_chapters, goals, blockers, availability_pattern, city, emotional_state, intent
          FROM co_profiles WHERE user_id = $1`,
@@ -80,6 +81,7 @@ export async function buildContextSummary(userId: string): Promise<string> {
         [userId],
       ),
       pool.query(`SELECT ask_text FROM ask_checkins WHERE user_id = $1 AND resolved_at IS NULL ORDER BY created_at DESC LIMIT 4`, [userId]),
+      getPersonSnapshot(userId),
     ]);
     const emotionalLine = renderEmotionalContext(emotional);
 
@@ -90,7 +92,9 @@ export async function buildContextSummary(userId: string): Promise<string> {
 
     const ownWords = ownWordsResult.rows.map((r: any) => String(r.content).replace(/^User said: /, "- ")).reverse();
     const openAsks = openAsksResult.rows.map((r: any) => `- ${r.ask_text}`);
+    const picture = renderSnapshot(snapshot);
     const lines = [
+      picture ? `Who they are right now:\n${picture}` : null,
       ownWords.length ? `What they've told you in the last two days (newest facts win over anything below):\n${ownWords.join("\n")}` : null,
       openAsks.length ? `What they're looking for right now:\n${openAsks.join("\n")}` : null,
       recapResult.rows[0]?.content ? `Ongoing summary: ${recapResult.rows[0].content}` : null,
