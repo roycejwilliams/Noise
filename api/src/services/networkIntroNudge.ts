@@ -304,7 +304,7 @@ export async function resolveNetworkTeaseReply(
       const { text } = await generateText({
         model: anthropic(NAMING_DRAFT_MODEL),
         experimental_telemetry: { isEnabled: true, functionId: "networkIntroNudge.reveal.draft" },
-        prompt: `${CO_VOICE}\n\n${CO_TEXT_CHANNEL} You're texting ${firstName}. You just told them someone in the network crossed your mind, and they said yes, they want to hear who. Draft a short, warm text (2-3 sentences, no exclamation points, no em dashes, normal sentence capitalization) naming ${pending.candidate.first_name} and explaining in your own words why they're worth meeting: ${pending.candidate.match_reason}. Use only that reason, and never say ${pending.candidate.first_name} wants to meet them or said anything about them. End by asking if they'd like you to see if ${pending.candidate.first_name} is open to it too. Return ONLY the message text.${feedback ? `\n\n${feedback}` : ""}`,
+        prompt: networkRevealPrompt({ recipientFirstName: firstName, otherFirstName: pending.candidate.first_name, shareReason: pending.candidate.match_reason, feedback }),
       });
       return cleanCoMessage(text.trim());
     },
@@ -421,7 +421,7 @@ async function askCandidateDirectly(candidate: MatchNudgeCandidate, asker: Match
       const { text } = await generateText({
         model: anthropic(NAMING_DRAFT_MODEL),
         experimental_telemetry: { isEnabled: true, functionId: "networkIntroNudge.directAsk.draft" },
-        prompt: `${CO_VOICE}\n\n${CO_TEXT_CHANNEL} You're texting ${candidate.first_name}. ${asker.first_name} would like to be introduced — you're both in Co's network. Draft a short, warm text (1-2 sentences, no exclamation points, no em dashes, normal sentence capitalization) letting ${candidate.first_name} know and asking if they'd be open to it too. Low-pressure, genuinely a question. Don't share any contact details. Return ONLY the message text.${feedback ? `\n\n${feedback}` : ""}`,
+        prompt: networkDirectAskPrompt({ recipientFirstName: candidate.first_name, askerFirstName: asker.first_name, feedback }),
       });
       return cleanCoMessage(text.trim());
     },
@@ -514,4 +514,14 @@ export async function resolveNetworkIntroReply(
   };
   await askCandidateDirectly(candidateInfo, person, pending.candidate.match_reason, pending.askId);
   return `\nThey just said yes to being connected with ${pending.candidate.first_name}. Acknowledge it warmly and briefly — you're now waiting to hear back from ${pending.candidate.first_name}, don't promise a specific thing is happening yet.`;
+}
+
+// Exported so evals/intro can run the exact production prompt.
+export function networkRevealPrompt(p: { recipientFirstName: string; otherFirstName: string; shareReason: string; feedback: string | null }): string {
+  return `${CO_VOICE}\n\n${CO_TEXT_CHANNEL} You're texting ${p.recipientFirstName}. You just told them someone in the network crossed your mind, and they said yes, they want to hear who. Draft a short, warm text (2-3 sentences, no exclamation points, no em dashes, normal sentence capitalization) naming ${p.otherFirstName} and explaining in your own words why they're worth meeting: ${p.shareReason}. Use only that reason, and never say ${p.otherFirstName} wants to meet them or said anything about them. End by asking if they'd like you to see if ${p.otherFirstName} is open to it too. Return ONLY the message text.${p.feedback ? `\n\n${p.feedback}` : ""}`;
+}
+
+// Exported so evals/intro can run the exact production prompt.
+export function networkDirectAskPrompt(p: { recipientFirstName: string; askerFirstName: string; feedback: string | null }): string {
+  return `${CO_VOICE}\n\n${CO_TEXT_CHANNEL} You're texting ${p.recipientFirstName}. ${p.askerFirstName} would like to be introduced — you're both in Co's network. Draft a short, warm text (1-2 sentences, no exclamation points, no em dashes, normal sentence capitalization) letting ${p.recipientFirstName} know and asking if they'd be open to it too. Low-pressure, genuinely a question. Don't share any contact details. Return ONLY the message text.${p.feedback ? `\n\n${p.feedback}` : ""}`;
 }

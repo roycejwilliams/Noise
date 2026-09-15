@@ -127,9 +127,16 @@ export function checkGrounding(match: TierMatch, facts: MatchFacts): GateCheck {
   if (match.deadline) {
     const [, mm, dd] = match.deadline.split("-").map(Number);
     const month = MONTHS[mm - 1];
-    const dayRe = new RegExp(`\\b0?${dd}(st|nd|rd|th)?\\b`);
-    const hasMonth = evidence.includes(month) || evidence.includes(month.slice(0, 3)) || new RegExp(`\\b0?${mm}[/-]0?${dd}\\b`).test(facts.evidence!);
-    if (!hasMonth || !dayRe.test(evidence)) return { name, pass: false, reason: `deadline ${match.deadline} isn't stated in the post` };
+    // Posts often list several programs; the deadline has to be stated in the
+    // part of the post about this one, not borrowed from its neighbor.
+    const segments = facts.evidence!.split(/\n+|(?:^|[.!?]\s+)\d{1,2}[.)]\s+(?=[A-Z])|•|;/).map(norm).filter(Boolean);
+    const own = segments.filter((seg) => nameWords.some((w) => seg.includes(w)));
+    const stated = (own.length ? own : [evidence]).some((seg) => {
+      const hasMonth = seg.includes(month) || new RegExp(`\\b${month.slice(0, 3)}`).test(seg);
+      const hasDay = new RegExp(`\\b0?${dd}(st|nd|rd|th)?\\b`).test(seg);
+      return (hasMonth && hasDay) || new RegExp(`\\b0?${mm} 0?${dd}\\b`).test(seg);
+    });
+    if (!stated) return { name, pass: false, reason: `deadline ${match.deadline} isn't stated for ${match.name} in the post` };
   }
   const wrongPlace = placesClaimed(match.reason).find((p) => !evidence.includes(norm(p)));
   if (wrongPlace) return { name, pass: false, reason: `reason says "${wrongPlace}", which isn't in the post` };

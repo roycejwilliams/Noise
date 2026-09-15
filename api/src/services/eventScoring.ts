@@ -319,9 +319,7 @@ async function maybeSendMatchNudge(
       const { text } = await generateText({
         model: anthropic(NAMING_DRAFT_MODEL),
         experimental_telemetry: { isEnabled: true, functionId: "eventScoring.matchNudge.draft" },
-        prompt: `${CO_VOICE}\n\n${CO_TEXT_CHANNEL} You're texting ${person.first_name} about "${eventName}," an event they're going to. You found someone else going who's genuinely worth them meeting: ${candidate.first_name}. Why they're worth meeting: ${top.shareReason}
-
-Draft a short, warm, low-pressure text (1-2 sentences, no exclamation points, no em dashes, normal sentence capitalization) letting ${person.first_name} know about ${candidate.first_name} and naming the real reason above in your own words. Use only that reason. Never say ${candidate.first_name} wants to meet them, mentioned them, or said anything about them. Not a hard sell, just a genuine heads-up, like a friend connecting two people who'd get along. Return ONLY the message text.${feedback ? `\n\n${feedback}` : ""}`,
+        prompt: matchNudgePrompt({ recipientFirstName: person.first_name, otherFirstName: candidate.first_name, eventName, shareReason: top.shareReason!, feedback }),
       });
       return cleanCoMessage(text.trim());
     },
@@ -623,4 +621,11 @@ export async function scoreGuestListForEvent(
   );
 
   return scoreMatchedGroup(eventId, resolvedName, matched, eventTiming, opts);
+}
+
+// Exported so evals/intro can run the exact production prompt.
+export function matchNudgePrompt(p: { recipientFirstName: string; otherFirstName: string; eventName: string; shareReason: string; feedback: string | null }): string {
+  return `${CO_VOICE}\n\n${CO_TEXT_CHANNEL} You're texting ${p.recipientFirstName} about "${p.eventName}," an event they're going to. You found someone else going who's genuinely worth them meeting: ${p.otherFirstName}. Why they're worth meeting: ${p.shareReason}
+
+Draft a short, warm, low-pressure text (1-2 sentences, no exclamation points, no em dashes, normal sentence capitalization) letting ${p.recipientFirstName} know about ${p.otherFirstName} and naming the real reason above in your own words. Use only that reason. Never say ${p.otherFirstName} wants to meet them, mentioned them, or said anything about them. Not a hard sell, just a genuine heads-up, like a friend connecting two people who'd get along. Return ONLY the message text.${p.feedback ? `\n\n${p.feedback}` : ""}`;
 }
