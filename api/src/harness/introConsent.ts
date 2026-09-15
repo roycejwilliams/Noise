@@ -54,6 +54,8 @@ const words = (t: string) => t.toLowerCase().replace(/[^a-z0-9\s]/g, " ").split(
 // the other person's own stated ask, never the recipient.
 function interestIsAboutRecipient(s: string, f: ConsentFacts): string | null {
   for (const m of s.matchAll(INTEREST_PHRASE)) {
+    // "Want me to see if Jordan's open to connecting?" asks; it doesn't claim.
+    if (/\b(see|check|ask(?:\s+\w+)?|find out)\s+(if|whether)\b[^.!?]*$/i.test(s.slice(0, m.index))) continue;
     const object = words(m[1]).slice(0, 6);
     const toRecipient =
       !object.length ||
