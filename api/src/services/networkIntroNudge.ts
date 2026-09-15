@@ -289,9 +289,11 @@ export async function findPendingNetworkIntroOffer(userId: string): Promise<Pend
   return parsed?.candidate?.share_safe === true ? parsed : null;
 }
 
-async function sendNetworkIntroEmail(a: MatchNudgeCandidate, b: MatchNudgeCandidate, matchReason: string): Promise<void> {
+// Returns whether the email actually went out, so Co never says it did when
+// it didn't (Resend reports failures in the result, not by throwing).
+async function sendNetworkIntroEmail(a: MatchNudgeCandidate, b: MatchNudgeCandidate, matchReason: string): Promise<boolean> {
   const [aYes, bYes] = await Promise.all([networkOptedIn(a.user_id, b.user_id), networkOptedIn(b.user_id, a.user_id)]);
-  if (!(await gateIntroAction(a.user_id, "networkIntroNudge.introEmail", [checkBothYes(aYes, bYes)], { b: b.user_id }))) return;
+  if (!(await gateIntroAction(a.user_id, "networkIntroNudge.introEmail", [checkBothYes(aYes, bYes)], { b: b.user_id }))) return false;
   const subject = `Introducing ${a.first_name} and ${b.first_name}`;
   const html = `<p>Hi both,</p><p>${matchReason}</p><p>Figured you two should actually meet — consider this your intro, take it from here.</p><p>— Co</p>`;
   if (!ALLOW_REAL_SENDS) {
@@ -306,13 +308,15 @@ async function sendNetworkIntroEmail(a: MatchNudgeCandidate, b: MatchNudgeCandid
       // and email has no natural "@-mention" convention the way a group
       // chat does, so Co doesn't act on anything that comes back here; the
       // real outcome signal stays the existing proactive SMS check-in.
-      await resend.emails.send({ from: "Co <hello@copatible.com>", to: [a.email, b.email], cc: ["hello@copatible.com"], subject, html });
+      const { error } = await resend.emails.send({ from: "Co <hello@copatible.com>", to: [a.email, b.email], cc: ["hello@copatible.com"], subject, html });
+      if (error) throw new Error(error.message);
     } catch (err: any) {
       console.error("sendNetworkIntroEmail: send failed (non-fatal):", err?.message ?? err);
-      return;
+      return false;
     }
   }
   await writeMemory(a.user_id, "event_intro_email_sent", `Sent a network intro email connecting ${a.first_name} and ${b.first_name}: ${matchReason}`);
+  return true;
 }
 
 async function askCandidateDirectly(candidate: MatchNudgeCandidate, asker: MatchNudgeCandidate, matchReason: string, askId: string | null): Promise<void> {
@@ -422,7 +426,10 @@ export async function resolveNetworkIntroReply(
       phone_number: pending.candidate.phone_number,
       email: pending.candidate.email,
     };
-    await sendNetworkIntroEmail(person, candidateInfo, pending.candidate.match_reason);
+    const emailed = await sendNetworkIntroEmail(person, candidateInfo, pending.candidate.match_reason);
+    if (!emailed) {
+      return `\nThey just said yes to being connected with ${pending.candidate.first_name}, and ${pending.candidate.first_name} had already said yes too. The intro email to both of them failed to send. Tell them plainly that both of you are in, but the intro email didn't go through yet. Don't say it was sent.`;
+    }
     // "Did it help?" for the intro itself: a follow-up for both people about
     // five days out, delivered through the same next-morning debrief as events
     // (tier 0 marks an intro; services/outcomes.ts records the answer).

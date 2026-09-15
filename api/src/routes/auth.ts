@@ -47,7 +47,8 @@ async function alertTeamAccountLocked(userId: string): Promise<void> {
       console.log(`[alertTeamAccountLocked stub] to ${to}: ${subject}`);
       return;
     }
-    await new Resend(process.env.RESEND_API_KEY).emails.send({ from: "Co <hello@copatible.com>", to: [to], subject, html });
+    const { error } = await new Resend(process.env.RESEND_API_KEY).emails.send({ from: "Co <hello@copatible.com>", to: [to], subject, html });
+    if (error) throw new Error(error.message);
   } catch (err: any) {
     console.error("auth: account-locked team alert failed (non-fatal):", err?.message ?? err);
   }

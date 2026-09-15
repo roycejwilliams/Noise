@@ -75,7 +75,10 @@ async function sendTeamEmail(subject: string, html: string): Promise<void> {
     console.log(`[monitor] ${subject}\n${html.replace(/<[^>]+>/g, " ")}`);
     return;
   }
-  await new Resend(process.env.RESEND_API_KEY).emails.send({ from: "Co <hello@copatible.com>", to: [to], subject, html });
+  // Resend reports failures in the result instead of throwing (2026-09-15:
+  // an unverified domain made every send fail while this said "sent").
+  const { error } = await new Resend(process.env.RESEND_API_KEY).emails.send({ from: "Co <hello@copatible.com>", to: [to], subject, html });
+  if (error) throw new Error(`Resend: ${error.message}`);
 }
 
 export async function runMonitor(): Promise<void> {

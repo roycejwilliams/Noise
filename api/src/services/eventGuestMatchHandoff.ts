@@ -268,9 +268,9 @@ async function createIntroGroup(
 // of existing templates — appsubmit/welcome/otp/etc — not a generic
 // send-anything utility, so a new Resend call here is more honest than
 // bolting an unrelated template onto it).
-async function sendIntroEmail(eventId: string, eventName: string, a: MatchNudgeCandidate, b: MatchNudgeCandidate): Promise<void> {
+async function sendIntroEmail(eventId: string, eventName: string, a: MatchNudgeCandidate, b: MatchNudgeCandidate): Promise<boolean> {
   const { a: aYes, b: bYes } = await bothOptedIn(eventId, a.user_id, b.user_id);
-  if (!(await gateIntroAction(a.user_id, "eventGuestMatchHandoff.introEmail", [checkBothYes(aYes, bYes)], { eventId, b: b.user_id }))) return;
+  if (!(await gateIntroAction(a.user_id, "eventGuestMatchHandoff.introEmail", [checkBothYes(aYes, bYes)], { eventId, b: b.user_id }))) return false;
 
   const subject = `Introducing ${a.first_name} and ${b.first_name}`;
   const html = `<p>Hi both,</p><p>Figured you two should actually meet before ${eventName} — you're both on my radar for it, so consider this your intro. Take it from here!</p><p>— Co</p>`;
@@ -281,14 +281,16 @@ async function sendIntroEmail(eventId: string, eventName: string, a: MatchNudgeC
       const resend = new Resend(process.env.RESEND_API_KEY);
       // Co cc'd (Royce, 2026-09-07: "Co would need to be the driver of the
       // email") — visibly present so a reply-all naturally includes it.
-      await resend.emails.send({ from: "Co <hello@copatible.com>", to: [a.email, b.email], cc: ["hello@copatible.com"], subject, html });
+      const { error } = await resend.emails.send({ from: "Co <hello@copatible.com>", to: [a.email, b.email], cc: ["hello@copatible.com"], subject, html });
+      if (error) throw new Error(error.message);
     } catch (err: any) {
       console.error("sendIntroEmail: send failed (non-fatal):", err?.message ?? err);
-      return;
+      return false;
     }
   }
   await writeMemory(a.user_id, "event_intro_email_sent", `Sent an intro email connecting ${a.first_name} and ${b.first_name} ahead of "${eventName}".`);
   await writeMemory(b.user_id, "event_intro_email_sent", `Sent an intro email connecting ${a.first_name} and ${b.first_name} ahead of "${eventName}".`);
+  return true;
 }
 
 // Asks whoever's "yes" completes the reciprocal opt-in how they'd like to

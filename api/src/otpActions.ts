@@ -238,7 +238,12 @@ export const sendEmail = async ({
           console.log(`[sendEmail stub, ${process.env.NODE_ENV ?? "no NODE_ENV"}] to ${params.to}: ${params.subject}`);
           return Promise.resolve();
         }
-        return resendClient.emails.send(params);
+        // Resend reports failures in the result; surface them instead of
+        // treating the send as done.
+        return resendClient.emails.send(params).then((r: any) => {
+          if (r?.error) throw new Error(`Resend: ${r.error.message}`);
+          return r;
+        });
       },
     },
   };
