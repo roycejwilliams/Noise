@@ -15,6 +15,9 @@ export type ConversationToolContext = {
   recentOfferBurstActive: boolean;
   dryRun: boolean;
   sendCoReply: SendCoReply;
+  // Layer 3 grounding gate (harness/replyGrounding.ts): runs on each drafted
+  // message before it's sent or logged, and returns what actually goes out.
+  gate?: (draft: string, sentThisTurn: string[]) => Promise<string>;
 };
 
 // Side-effecting tools are bound to server-known context (userId,
@@ -34,7 +37,7 @@ export function createConversationTools(ctx: ConversationToolContext) {
   // sent is an out-of-band signal for the caller (sendblue.ts), same
   // reasoning as askCheckin.ts's state.sent — generateText's return value
   // doesn't cleanly expose which tools actually executed.
-  const state = { sent: false, replyCount: 0, lastReplyText: "" };
+  const state = { sent: false, replyCount: 0, lastReplyText: "", sentMessages: [] as string[] };
 
   const tools = {
     // Genuinely callable more than once for a text reply (never for a voice
@@ -48,8 +51,10 @@ export function createConversationTools(ctx: ConversationToolContext) {
       inputSchema: z.object({
         message: z.string().describe("One complete reply. A sentence or two, no em dashes, no exclamation points."),
       }),
-      execute: async ({ message }) => {
+      execute: async ({ message: draft }) => {
+        const message = ctx.gate ? await ctx.gate(draft, [...state.sentMessages]) : draft;
         if (state.replyCount > 0) await new Promise((resolve) => setTimeout(resolve, 2000));
+        state.sentMessages.push(message);
         state.lastReplyText = state.lastReplyText ? `${state.lastReplyText} ${message}` : message;
         if (ctx.dryRun) {
           // cleanCoMessage normally only runs inside sendCoReply's send

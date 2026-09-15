@@ -31,6 +31,9 @@ import { recordEventCheckinOutcome } from "../services/eventCheckinFollowUp.js";
 import { handleMatchNudgeReply, handleGroupMessage, handleMethodChoiceReply } from "../services/eventGuestMatchHandoff.js";
 import { resolveNetworkTeaseReply, resolveNetworkIntroReply } from "../services/networkIntroNudge.js";
 import { NO_ROUTE, decideActions, gatherOpenItems, routeMessage, type RouterOutput } from "../services/messageRouter.js";
+import { recordDecision } from "../harness/core.js";
+import { routerGateChecks } from "../harness/routerChecks.js";
+import { addEventFacts, addFact, addInstruction, gatherReplyFacts } from "../harness/replyGrounding.js";
 import { findRealVenues } from "../services/venueLookup.js";
 import { runConversationReplyAgent, filterRelevantMemories, CALL_OFFER_EXPIRY_DAYS } from "../agent/conversationReply.js";
 import { triggerCallForUser } from "../services/callTrigger.js";
@@ -779,43 +782,11 @@ Return ONLY strict JSON: {"full_name": string or null, "email": string or null, 
         const pendingOffer = pendingOfferResult.rows[0] ?? null;
         const hasPendingOffer = !!pendingOffer;
 
-        // Grounds any follow-up question about a recently revealed event in
-        // the REAL structured data, not the model's own memory of the
-        // conversation (Royce, 2026-09-09, confirmed live: asked for the
-        // details on a real Co event, got a fabricated start time 2.5 hours
-        // off the real one, an invented neighborhood, and a made-up
-        // headcount — none of which exist anywhere in Luma's real data).
-        // Separate from the event_tease open item (see gatherOpenItems in
-        // services/messageRouter.ts), which only covers the
-        // unanswered "want to hear more?" window — this looks up the most
-        // recent reveal regardless of resolved status, since fabrication risk
-        // continues for as long as someone might still ask "what time does
-        // it start" after already saying yes.
-        const recentRevealResult = await pool.query(
-          `SELECT content FROM co_memories
-           WHERE user_id = $1 AND memory_type = 'event_offer_pending'
-             AND created_at > NOW() - INTERVAL '3 days'
-           ORDER BY created_at DESC LIMIT 1`,
-          [user.id],
-        );
-        let recentEventDetailsContext = "";
-        if (recentRevealResult.rows[0]) {
-          try {
-            const parsed = JSON.parse(recentRevealResult.rows[0].content) as { askText: string; match: any };
-            const m = parsed.match;
-            const facts = [
-              `name: "${m.name}"`,
-              m.event_date ? `date: ${m.event_date}` : null,
-              m.url ? `link: ${m.url}` : null,
-              m.reason ? `why it fits: ${m.reason}` : null,
-            ]
-              .filter(Boolean)
-              .join(", ");
-            recentEventDetailsContext = `\n\nIf they ask about specifics of the event/opportunity you recently told them about ("${m.name}"), these are the ONLY real facts you actually have: ${facts}. Never state a specific start time, exact address or neighborhood, headcount, or any other detail not listed here — if asked something not covered (like exact start time or venue address), be honest that you don't have that specific detail and ${m.url ? "point them to the real link" : "say you don't have a link for it"} instead of guessing.`;
-          } catch {
-            // Malformed or pre-fix content shape — skip silently, non-fatal.
-          }
-        }
+        // Real event fields for follow-up questions ("what time does it
+        // start?") now come from gatherReplyFacts (harness/replyGrounding.ts),
+        // along with the details Co explicitly doesn't have. Confirmed live
+        // 2026-09-09: without them the reply invented a start time, a
+        // neighborhood, and a headcount.
 
         // Day-of QR check-in — the ask-question step. Looked up independently
         // of walkinCheckinEventName above (which only reflects THIS turn's
@@ -831,8 +802,8 @@ Return ONLY strict JSON: {"full_name": string or null, "email": string or null, 
            ORDER BY checked_in_at DESC LIMIT 1`,
           [user.id],
         );
-        let eventCheckinAskContext = "";
         const pendingWalkinCheckin = pendingWalkinCheckinResult.rows[0] ?? null;
+        let walkinAskInstruction = "";
         if (pendingWalkinCheckin && walkinCheckinEventName) {
           // This turn's message IS the fresh check-in trigger itself (set
           // above) — nothing to capture as an answer yet, so decide whether
@@ -842,7 +813,7 @@ Return ONLY strict JSON: {"full_name": string or null, "email": string or null, 
             return true; // fail toward not re-asking rather than risk a duplicate ask on error
           });
           if (!alreadyHasAsk) {
-            eventCheckinAskContext = `\n\nThey just checked in at "${walkinCheckinEventName}" and don't have a stated ask on file yet. Ask them directly, once, in their own words: "what are you hoping to find here / who'd be good to meet?" Keep it to that one question this turn, don't pad it with anything else.`;
+            walkinAskInstruction = `They just checked in at "${walkinCheckinEventName}" and don't have a stated ask on file yet. Ask them directly, once, in their own words: "what are you hoping to find here / who'd be good to meet?" Keep it to that one question this turn, don't pad it with anything else.`;
           }
         }
         // Not a fresh check-in this turn and the row is still missing
@@ -902,6 +873,8 @@ Return ONLY strict JSON: {"full_name": string or null, "email": string or null, 
           return [];
         });
         let routerOutput: RouterOutput = NO_ROUTE;
+        let routerFailed = false;
+        let routerLatencyMs: number | null = null;
         try {
           const routed = await propagateAttributes({ userId: user.id, traceName: "sendblue.router.route" }, () =>
             routeMessage({
@@ -912,7 +885,9 @@ Return ONLY strict JSON: {"full_name": string or null, "email": string or null, 
             }),
           );
           routerOutput = routed.output;
+          routerLatencyMs = routed.latencyMs;
         } catch (err: any) {
+          routerFailed = true;
           // Fail safe: act on nothing rather than guess.
           console.error("sendblue: message router failed (non-fatal, taking no actions this turn):", err?.message ?? err);
         }
@@ -921,7 +896,42 @@ Return ONLY strict JSON: {"full_name": string or null, "email": string or null, 
         // as the classifiers this replaces.
         const resolvedItem = decision.resolve && (hasText || decision.resolve.item.kind === "call_offer") ? decision.resolve : null;
         const resolvedAs = <K extends string>(kind: K) => (resolvedItem?.item.kind === kind ? resolvedItem : null);
-        const clarifyContext = decision.clarifyContext;
+
+        // Layer 2 harness record: the router's proposal, the code gates it
+        // went through, and what was allowed to run.
+        {
+          const checks = routerGateChecks(routerOutput, openItems, decision, { message: resolvedContent, recentConversation }, routerFailed);
+          const acted = [
+            resolvedItem ? `resolve:${resolvedItem.item.kind}=${resolvedItem.value}` : null,
+            decision.placeCall ? "place_call" : null,
+            decision.scheduleCall ? "schedule_call" : null,
+            decision.cancelCall ? "cancel_call" : null,
+            decision.wantsRecommendation ? "recommendation" : null,
+            decision.asksForUpdates ? "updates" : null,
+            decision.venue ? "venue" : null,
+          ].filter(Boolean);
+          recordDecision({
+            layer: 2,
+            decision: "router.decideActions",
+            userId: user.id,
+            outcome: acted.length ? "act" : decision.clarifyContext ? "ask" : "skip",
+            action: acted.join(",") || (decision.clarifyAbout ? `clarify:${decision.clarifyAbout}` : null),
+            proposal: { ...routerOutput, openItems: openItems.map((i) => i.id), latencyMs: routerLatencyMs },
+            checks,
+            confidence: routerOutput.confidence,
+            reason: routerFailed ? "router unavailable" : routerOutput.reason,
+          });
+        }
+
+        // Layer 3 harness facts: what's actually true this turn. Branches
+        // below add what they did (a link sent, a call that failed) as they
+        // act; the reply can only claim what ends up here.
+        const replyFacts = await gatherReplyFacts(user.id, {
+          pendingDescriptions: openItems.filter((i) => i.id !== resolvedItem?.item.id).map((i) => i.description),
+        });
+        if (repeatContext) addInstruction(replyFacts, repeatContext);
+        if (walkinAskInstruction) addInstruction(replyFacts, walkinAskInstruction);
+        if (decision.clarifyContext) addInstruction(replyFacts, decision.clarifyContext);
 
         // Same strings downstream code (and the reply agent) already key on.
         const callAction =
@@ -972,7 +982,6 @@ Return ONLY strict JSON: {"full_name": string or null, "email": string or null, 
         // reason to spend a call checking on every message otherwise.
         // Folded into the SAME reply below via eventOfferContext, never a
         // second message — same reasoning as recommendationContext.
-        let eventOfferContext = "";
         const resolvedEventTease = resolvedAs("event_tease");
         if (resolvedEventTease?.item.ref?.kind === "event_tease") {
           const pendingEventOffer = resolvedEventTease.item.ref;
@@ -1012,7 +1021,8 @@ Return ONLY strict JSON: {"full_name": string or null, "email": string or null, 
             const isStale = relevantDate && relevantDate < todayStr;
             if (eventReplyAction === "interested" && isStale) {
               const passedPhrase = match.event_date ? `it was on ${relevantDate}` : `the application window closed on ${relevantDate}`;
-              eventOfferContext = `\nThey just said yes to hearing more about the thing you teased earlier, but it's already passed (${passedPhrase}) — let them know honestly that it's already happened so there's nothing to share, no pressure or apology needed, and mention you'll keep an eye out for the next one that fits. Never reveal the name "${match.name}" since there's nothing to act on now.`;
+              addFact(replyFacts, "known", `The thing Co teased earlier already passed (${passedPhrase}).`);
+              addInstruction(replyFacts, `They just said yes to hearing more about the thing you teased earlier, but it's already passed (${passedPhrase}). Let them know honestly that it's already happened so there's nothing to share, no pressure or apology needed. Never reveal the name "${match.name}" since there's nothing to act on now.`);
             } else if (eventReplyAction === "interested") {
               // Sent deterministically, not via agent tool-calling (Royce,
               // 2026-09-02, confirmed live on a DIFFERENT reveal path that
@@ -1024,8 +1034,11 @@ Return ONLY strict JSON: {"full_name": string or null, "email": string or null, 
                 await sendCoReply({ phone: user.phone_number, message: match.url, asVoice: false });
                 await logTextExchange(user.id, `Co replied: ${match.url}`);
                 await new Promise((resolve) => setTimeout(resolve, 2000));
+                addFact(replyFacts, "did_this_turn", `Sent the link ${match.url} for "${match.name}" as its own message just before this reply.`);
               }
-              eventOfferContext = `\nThey just said yes to hearing more about the thing you teased earlier${match.url ? " — you already sent them the link separately, that already happened" : ""}. Share why it fits now, naturally, as part of your reply: "${match.name}" — ${match.reason}. Be honest it's a suggestion, not a guarantee it's right for them.${match.url ? " Don't repeat the link or say you're \"sending\" or \"sharing\" anything — it already went out." : ""}`;
+              addEventFacts(replyFacts, match);
+              addFact(replyFacts, "known", `Why "${match.name}" fits them: ${match.reason}`);
+              addInstruction(replyFacts, `They just said yes to hearing more about the thing you teased earlier. Share why it fits now, naturally, as part of your reply: "${match.name}". Be honest it's a suggestion, not a guarantee it's right for them.${match.url ? " Don't repeat the link or say you're \"sending\" or \"sharing\" anything, it already went out." : " There's no link for it, so don't mention one."}`);
               // Outcome-learning loop (Royce, 2026-09-02) — schedule the
               // "who did you meet?" follow-up right at the moment real
               // details are actually revealed, same trigger point the
@@ -1035,7 +1048,7 @@ Return ONLY strict JSON: {"full_name": string or null, "email": string or null, 
                 console.error("sendblue: scheduleOutcomeFollowUp failed (non-fatal):", err?.message ?? err),
               );
             } else {
-              eventOfferContext = `\nThey just passed on hearing more about the thing you teased earlier (internal only, never say this name to them: "${match.name}"). Acknowledge lightly, no pressure, don't explain what it was.`;
+              addInstruction(replyFacts, `They just passed on hearing more about the thing you teased earlier (internal only, never say this name to them: "${match.name}"). Acknowledge lightly, no pressure, don't explain what it was.`);
             }
           } catch (err: any) {
             console.error("sendblue: event offer reply handling failed (non-fatal):", err?.message ?? err);
@@ -1047,13 +1060,13 @@ Return ONLY strict JSON: {"full_name": string or null, "email": string or null, 
         // follows up" + shared classifier + signal weighting loop-back).
         // Same "only classify when something's actually pending, fold into
         // the SAME reply" reasoning as eventOfferContext above.
-        let outcomeFollowupContext = "";
         const resolvedOutcome = resolvedAs("outcome_followup");
         if (resolvedOutcome?.item.ref?.kind === "outcome_followup") {
           try {
             const pendingOutcomeFollowUp = resolvedOutcome.item.ref.pending;
             const outcome = resolvedOutcome.value as "named_positive" | "named_critical" | "not_mentioned";
             await recordOutcome(user.id, pendingOutcomeFollowUp.id, pendingOutcomeFollowUp.tier, outcome);
+            addFact(replyFacts, "did_this_turn", `Recorded what they said about how "${pendingOutcomeFollowUp.match_name}" went.`);
             // Stay-scoped clause (Royce, 2026-09-07, confirmed live) —
             // without this, a name or detail from a DIFFERENT,
             // already-resolved outcome follow-up sitting in
@@ -1062,11 +1075,11 @@ Return ONLY strict JSON: {"full_name": string or null, "email": string or null, 
             // if it belonged to the outcome actually being resolved here.
             const stayScoped = ` Keep this reply scoped to "${pendingOutcomeFollowUp.match_name}" specifically — don't pull in a name or detail from a different, already-resolved outcome or an unrelated recent memory, even if one is sitting in context.`;
             if (outcome === "named_positive") {
-              outcomeFollowupContext = `\nThey just told you something good came out of "${pendingOutcomeFollowUp.match_name}" — someone worthwhile they met or a good outcome. Respond warmly to what they specifically shared, genuinely glad for them, no exclamation points.${stayScoped}`;
+              addInstruction(replyFacts, `They just told you something good came out of "${pendingOutcomeFollowUp.match_name}" — someone worthwhile they met or a good outcome. Respond warmly to what they specifically shared, genuinely glad for them, no exclamation points.${stayScoped}`);
             } else if (outcome === "named_critical") {
-              outcomeFollowupContext = `\nThey just told you "${pendingOutcomeFollowUp.match_name}" wasn't worthwhile or didn't go well. Acknowledge that honestly and warmly, no forced positivity, no apologizing on behalf of the thing itself.${stayScoped}`;
+              addInstruction(replyFacts, `They just told you "${pendingOutcomeFollowUp.match_name}" wasn't worthwhile or didn't go well. Acknowledge that honestly and warmly, no forced positivity, no apologizing on behalf of the thing itself.${stayScoped}`);
             } else {
-              outcomeFollowupContext = `\nThey answered about "${pendingOutcomeFollowUp.match_name}" but didn't name anyone specific or describe a real outcome. Acknowledge lightly, no pressure to elaborate.${stayScoped}`;
+              addInstruction(replyFacts, `They answered about "${pendingOutcomeFollowUp.match_name}" but didn't name anyone specific or describe a real outcome. Acknowledge lightly, no pressure to elaborate.${stayScoped}`);
             }
           } catch (err: any) {
             console.error("sendblue: outcome follow-up reply handling failed (non-fatal):", err?.message ?? err);
@@ -1078,23 +1091,23 @@ Return ONLY strict JSON: {"full_name": string or null, "email": string or null, 
         // a real Luma check-in at one of Co's own curated events rather than
         // Co merely having recommended something). Same reuse-the-shared-
         // classifier, fold-into-the-same-reply reasoning throughout this file.
-        let eventCheckinContext = "";
         const resolvedCheckin = resolvedAs("event_checkin");
         if (resolvedCheckin?.item.ref?.kind === "event_checkin") {
           try {
             const pendingCheckin = resolvedCheckin.item.ref.pending;
             const outcome = resolvedCheckin.value as "named_positive" | "named_critical" | "not_mentioned";
             await recordEventCheckinOutcome(user.id, pendingCheckin.id, pendingCheckin.event_api_id, outcome);
+            addFact(replyFacts, "did_this_turn", `Recorded what they said about "${pendingCheckin.event_name}".`);
             // Same stay-scoped fix as the outcome follow-up above — a
             // name/detail from a different, already-resolved follow-up
             // could otherwise blend into this reply.
             const stayScoped = ` Keep this reply scoped to "${pendingCheckin.event_name}" specifically — don't pull in a name or detail from a different, already-resolved outcome or an unrelated recent memory, even if one is sitting in context.`;
             if (outcome === "named_positive") {
-              eventCheckinContext = `\nThey just told you something good came out of "${pendingCheckin.event_name}" — someone worthwhile they met or a good moment from tonight. Respond warmly to what they specifically shared, genuinely glad for them, no exclamation points.${stayScoped}`;
+              addInstruction(replyFacts, `They just told you something good came out of "${pendingCheckin.event_name}" — someone worthwhile they met or a good moment from tonight. Respond warmly to what they specifically shared, genuinely glad for them, no exclamation points.${stayScoped}`);
             } else if (outcome === "named_critical") {
-              eventCheckinContext = `\nThey just told you "${pendingCheckin.event_name}" wasn't worthwhile or didn't go well. Acknowledge that honestly and warmly, no forced positivity, no apologizing on behalf of the event itself.${stayScoped}`;
+              addInstruction(replyFacts, `They just told you "${pendingCheckin.event_name}" wasn't worthwhile or didn't go well. Acknowledge that honestly and warmly, no forced positivity, no apologizing on behalf of the event itself.${stayScoped}`);
             } else {
-              eventCheckinContext = `\nThey answered about "${pendingCheckin.event_name}" but didn't name anyone specific or describe a real moment. Acknowledge lightly, no pressure to elaborate.${stayScoped}`;
+              addInstruction(replyFacts, `They answered about "${pendingCheckin.event_name}" but didn't name anyone specific or describe a real moment. Acknowledge lightly, no pressure to elaborate.${stayScoped}`);
             }
           } catch (err: any) {
             console.error("sendblue: event check-in reply handling failed (non-fatal):", err?.message ?? err);
@@ -1107,7 +1120,6 @@ Return ONLY strict JSON: {"full_name": string or null, "email": string or null, 
         // outcome). See services/eventGuestMatchHandoff.ts for the actual
         // opt-in/reciprocal-ask/group-creation logic — this block only
         // classifies the reply and hands it off.
-        let matchNudgeContext = "";
         const resolvedMatchNudge = resolvedAs("match_nudge");
         if (resolvedMatchNudge?.item.ref?.kind === "match_nudge") {
           try {
@@ -1125,10 +1137,13 @@ Return ONLY strict JSON: {"full_name": string or null, "email": string or null, 
                 email: pendingMatchNudge.candidate_email,
               },
             );
-            matchNudgeContext =
-              classification === "interested"
-                ? `\nThey just said yes to being connected with ${pendingMatchNudge.candidate_first_name}. Acknowledge it warmly and briefly — you may have already asked them a separate follow-up question about how they'd like to connect (text or email), or you're still waiting on ${pendingMatchNudge.candidate_first_name} to answer — don't promise a specific thing is happening, just confirm you've got it and you're on it.`
-                : `\nThey just passed on being connected with ${pendingMatchNudge.candidate_first_name} (internal only, never say this name back to them as a pressure tactic). Acknowledge lightly, no pressure, don't explain further.`;
+            if (classification === "interested") {
+              addFact(replyFacts, "did_this_turn", `Recorded that they want to be connected with ${pendingMatchNudge.candidate_first_name}. No introduction has been made yet; it depends on ${pendingMatchNudge.candidate_first_name} saying yes too.`);
+              addInstruction(replyFacts, `They just said yes to being connected with ${pendingMatchNudge.candidate_first_name}. Acknowledge it warmly and briefly. You may have already asked them a separate follow-up question about how they'd like to connect (text or email), or you're still waiting on ${pendingMatchNudge.candidate_first_name} to answer. Don't promise a specific thing is happening, and don't say what ${pendingMatchNudge.candidate_first_name} thinks or wants.`);
+            } else {
+              addFact(replyFacts, "did_this_turn", `Recorded that they passed on being connected with ${pendingMatchNudge.candidate_first_name}.`);
+              addInstruction(replyFacts, `They just passed on being connected with ${pendingMatchNudge.candidate_first_name} (internal only, never say this name back to them as a pressure tactic). Acknowledge lightly, no pressure, don't explain further.`);
+            }
           } catch (err: any) {
             console.error("sendblue: match nudge reply handling failed (non-fatal):", err?.message ?? err);
           }
@@ -1148,7 +1163,12 @@ Return ONLY strict JSON: {"full_name": string or null, "email": string or null, 
           try {
             const classification = resolvedTease.value === "yes" ? "interested" : "not_interested";
             const context = await resolveNetworkTeaseReply(user.id, user.first_name, user.phone_number, resolvedTease.item.ref.pending, classification);
-            if (context) matchNudgeContext = context;
+            if (context) {
+              addInstruction(replyFacts, context);
+              if (classification === "interested") {
+                addFact(replyFacts, "did_this_turn", `Sent a separate message just before this reply naming ${resolvedTease.item.ref.pending.candidate.first_name} and asking if they want an intro.`);
+              }
+            }
           } catch (err: any) {
             console.error("sendblue: network tease reply handling failed (non-fatal):", err?.message ?? err);
           }
@@ -1163,7 +1183,13 @@ Return ONLY strict JSON: {"full_name": string or null, "email": string or null, 
               resolvedIntro.item.ref.pending,
               classification,
             );
-            if (context) matchNudgeContext = context;
+            if (context) {
+              addInstruction(replyFacts, context);
+              const other = resolvedIntro.item.ref.pending.candidate.first_name;
+              if (classification === "not_interested") addFact(replyFacts, "did_this_turn", `Recorded that they passed on an intro to ${other}.`);
+              else if (/intro email/i.test(context)) addFact(replyFacts, "did_this_turn", `${other} had already said yes, so Co sent an intro email to both of them.`);
+              else addFact(replyFacts, "did_this_turn", `Asked ${other} whether they're open to an intro. Waiting to hear back; no intro has been made. If ${other} says yes, Co emails an intro to both of them.`);
+            }
           } catch (err: any) {
             console.error("sendblue: network intro-offer reply handling failed (non-fatal):", err?.message ?? err);
           }
@@ -1180,10 +1206,12 @@ Return ONLY strict JSON: {"full_name": string or null, "email": string or null, 
             const methodClassification = resolvedMethod.value === "email" ? "email" : "phone";
             await handleMethodChoiceReply(pendingMethodChoice, methodClassification);
             const otherFirstName = pendingMethodChoice.a.user_id === user.id ? pendingMethodChoice.b.first_name : pendingMethodChoice.a.first_name;
-            matchNudgeContext =
-              methodClassification === "phone"
-                ? `\nThey just chose to be connected with ${otherFirstName} by text. You've already handled creating that group text separately — acknowledge briefly, don't repeat details or promise a specific timing.`
-                : `\nThey just chose to be connected with ${otherFirstName} by email. You've already handled sending that email separately — acknowledge briefly, don't repeat details or promise a specific timing.`;
+            addFact(
+              replyFacts,
+              "did_this_turn",
+              methodClassification === "phone" ? `Started a group text with them and ${otherFirstName}.` : `Sent an intro email to them and ${otherFirstName}.`,
+            );
+            addInstruction(replyFacts, `They just chose to be connected with ${otherFirstName} by ${methodClassification === "phone" ? "text" : "email"}. That's already handled separately. Acknowledge briefly, don't repeat details or promise a specific timing.`);
           } catch (err: any) {
             console.error("sendblue: method choice handling failed (non-fatal):", err?.message ?? err);
           }
@@ -1200,7 +1228,6 @@ Return ONLY strict JSON: {"full_name": string or null, "email": string or null, 
         // time a real update goes out, independent of who was on that
         // broadcast — this works for ANY co-test user, not just the named
         // testers the script itself texts.
-        let updatesContext = "";
         if (hasText && decision.asksForUpdates) {
           try {
             const latestUpdateResult = await pool.query(`SELECT content FROM product_updates ORDER BY created_at DESC LIMIT 1`);
@@ -1218,9 +1245,11 @@ Return ONLY strict JSON: {"full_name": string or null, "email": string or null, 
               const updateMessage = `Here's what's new:\n\n${latestUpdate.content}`;
               await sendCoReply({ phone: user.phone_number, message: updateMessage, asVoice: false });
               await logTextExchange(user.id, `Co replied: ${updateMessage}`);
-              updatesContext = `\nThey just asked what's new — you already sent them the real update list separately, verbatim, that already happened. Don't repeat, paraphrase, or re-list it in this reply, and don't blend in anything else (like a past recommendation) as if it were part of that list. If it's natural, briefly acknowledge you just sent it, then respond to whatever else they said — keep this reply short.`;
+              addFact(replyFacts, "did_this_turn", "Sent the latest product update list as its own message just before this reply.");
+              addInstruction(replyFacts, "They just asked what's new, and the real update list already went out separately, verbatim. Don't repeat, paraphrase, or re-list it, and don't blend in anything else (like a past recommendation) as if it were part of that list. If it's natural, briefly acknowledge you just sent it, then respond to whatever else they said. Keep this reply short.");
             } else {
-              updatesContext = `\nThey're asking what's new, but there's genuinely nothing posted yet. Let them know honestly, briefly, that there's nothing new to report right now — don't invent something or brush past the question.`;
+              addFact(replyFacts, "known", "There are no product updates posted.");
+              addInstruction(replyFacts, "They're asking what's new, but there's genuinely nothing posted yet. Let them know honestly, briefly, that there's nothing new to report right now. Don't invent something or brush past the question.");
             }
           } catch (err: any) {
             console.error("sendblue: asks-for-updates reply failed (non-fatal):", err?.message ?? err);
@@ -1237,7 +1266,6 @@ Return ONLY strict JSON: {"full_name": string or null, "email": string or null, 
         // extraction; the reply below asks for whatever's missing instead
         // of guessing a timezone, which would silently call someone at the
         // wrong time.
-        let scheduleCallContext = "";
         if (callAction === "schedule_request") {
           try {
             const nowUtc = DateTime.now().toUTC();
@@ -1281,21 +1309,32 @@ Return ONLY valid JSON, no preamble: {"date": "YYYY-MM-DD or null", "time": "HH:
                   [user.id, resolvedContent, parsed.timezone, local.toUTC().toISO()],
                 );
                 const formattedTime = local.toFormat("cccc, LLLL d 'at' h:mm a");
-                scheduleCallContext = superseded.rows.length
-                  ? `\nThey just rescheduled — this replaces a call they'd already booked, now moved to ${formattedTime} (${parsed.timezone}). Confirm the NEW time back to them naturally, making clear this is a change from before, not a new addition. Do not place a call now, it's scheduled for later.`
-                  : `\nThey just successfully scheduled a call for ${formattedTime} (${parsed.timezone}) — confirm that back to them naturally, referencing the actual day and time so they know it landed correctly. Do not place a call now, it's scheduled for later.`;
+                addFact(
+                  replyFacts,
+                  "did_this_turn",
+                  `${superseded.rows.length ? "Rescheduled their call (replacing the earlier booking)" : "Scheduled a call"} for ${formattedTime} (${parsed.timezone}). Co will call them then.`,
+                );
+                addInstruction(
+                  replyFacts,
+                  superseded.rows.length
+                    ? `They just rescheduled. Confirm the NEW time (${formattedTime}, ${parsed.timezone}) back to them naturally, making clear this is a change from before, not a new addition. Do not place a call now, it's scheduled for later.`
+                    : `They just scheduled a call for ${formattedTime} (${parsed.timezone}). Confirm that back to them naturally, referencing the actual day and time so they know it landed correctly. Do not place a call now, it's scheduled for later.`,
+                );
               } else {
-                scheduleCallContext = `\nThey tried to schedule a call, but the time they gave (${parsed.date} ${parsed.time}, ${parsed.timezone}) is invalid or already in the past — let them know naturally and ask for a time that hasn't passed yet. Do not place a call now.`;
+                addFact(replyFacts, "did_this_turn", `No call was scheduled: the time they gave (${parsed.date} ${parsed.time}, ${parsed.timezone}) is invalid or already past.`);
+                addInstruction(replyFacts, "They tried to schedule a call, but the time they gave is invalid or already in the past. Let them know naturally and ask for a time that hasn't passed yet. Do not place a call now.");
               }
             } else {
               const missing = [!parsed.date && "the date", !parsed.time && "the time", !parsed.timezone && "their timezone"]
                 .filter(Boolean)
                 .join(" and ");
-              scheduleCallContext = `\nThey want to schedule a call for later but haven't given ${missing} yet — ask for exactly that, specifically. Never guess or assume a timezone. Do not place a call now.`;
+              addFact(replyFacts, "did_this_turn", `No call was scheduled yet: still missing ${missing}.`);
+              addInstruction(replyFacts, `They want to schedule a call for later but haven't given ${missing} yet. Ask for exactly that, specifically. Never guess or assume a timezone. Do not place a call now.`);
             }
           } catch (err: any) {
             console.error("sendblue: schedule_request extraction failed (non-fatal):", err?.message ?? err);
-            scheduleCallContext = `\nThey want to schedule a call for a specific time but something went wrong figuring out when — ask them to state the day, time, and their timezone clearly. Do not place a call now.`;
+            addFact(replyFacts, "did_this_turn", "No call was scheduled: Co couldn't work out the time they meant.");
+            addInstruction(replyFacts, "They want to schedule a call for a specific time but something went wrong figuring out when. Ask them to state the day, time, and their timezone clearly. Do not place a call now.");
           }
         } else if (callAction === "cancel_scheduled_call") {
           // No new time to extract here — just clear whatever's pending.
@@ -1307,12 +1346,17 @@ Return ONLY valid JSON, no preamble: {"date": "YYYY-MM-DD or null", "time": "HH:
               `UPDATE scheduled_calls SET status = 'cancelled' WHERE user_id = $1 AND status = 'pending' RETURNING id`,
               [user.id],
             );
-            scheduleCallContext = cancelled.rows.length
-              ? `\nThey just cancelled their scheduled call — confirm that naturally. Do not place a call now.`
-              : `\nThey're trying to cancel a scheduled call, but nothing is actually scheduled right now — let them know that naturally, there's nothing to cancel. Do not place a call now.`;
+            addFact(replyFacts, "did_this_turn", cancelled.rows.length ? "Cancelled their scheduled call." : "They asked to cancel a call, but nothing was scheduled.");
+            addInstruction(
+              replyFacts,
+              cancelled.rows.length
+                ? "They just cancelled their scheduled call. Confirm that naturally. Do not place a call now."
+                : "They're trying to cancel a scheduled call, but nothing is actually scheduled right now. Let them know that naturally, there's nothing to cancel. Do not place a call now.",
+            );
           } catch (err: any) {
             console.error("sendblue: cancel_scheduled_call failed (non-fatal):", err?.message ?? err);
-            scheduleCallContext = `\nThey want to cancel a scheduled call but something went wrong doing that — let them know you'll sort it out. Do not place a call now.`;
+            addFact(replyFacts, "did_this_turn", "Trying to cancel their scheduled call failed; it may still be scheduled.");
+            addInstruction(replyFacts, "They want to cancel a scheduled call but cancelling it failed. Tell them it didn't go through and ask them to try again in a minute. Don't promise you'll fix it. Do not place a call now.");
           }
         }
 
@@ -1323,10 +1367,9 @@ Return ONLY valid JSON, no preamble: {"date": "YYYY-MM-DD or null", "time": "HH:
         // "calling you now" language, and separately, this question being
         // misread as explicit_request would place real outbound Twilio
         // calls to people who were just asking how the feature works.
-        const callFeatureQuestionContext =
-          callAction === "asks_about_calling"
-            ? `\nThey just asked a plain question about how calling works — answer it directly and honestly, don't place a call, and don't say or imply a call is happening. The true answer: Co can call them — by text right now ("call me") or scheduled for later — and that's real and live. They can also call Co directly anytime, from this exact number — that connects to a real, live conversation with Co. Refer to it only as "this number" or "this exact number," never write out or guess actual digits — you are not given the real number here, and a specific-looking one you invent will be wrong and won't work. Only mention this second part if it's actually what they're asking about; don't volunteer it unprompted.`
-            : "";
+        if (callAction === "asks_about_calling") {
+          addInstruction(replyFacts, `They just asked a plain question about how calling works — answer it directly and honestly, don't place a call, and don't say or imply a call is happening. The true answer: Co can call them — by text right now ("call me") or scheduled for later — and that's real and live. They can also call Co directly anytime, from this exact number — that connects to a real, live conversation with Co. Refer to it only as "this number" or "this exact number," never write out or guess actual digits — you are not given the real number here, and a specific-looking one you invent will be wrong and won't work. Only mention this second part if it's actually what they're asking about; don't volunteer it unprompted.`);
+        }
 
         // Burst limiter — separate from, and in addition to, the topic-aware
         // suppression above. Topic-matching only stops Co re-offering about
@@ -1348,7 +1391,6 @@ Return ONLY valid JSON, no preamble: {"date": "YYYY-MM-DD or null", "time": "HH:
         // explanation). Same fix shape as callFeatureQuestionContext below:
         // ground the reply in the real reason instead of leaving the model
         // to guess why nothing happened.
-        let callFailureContext = "";
         if (shouldTriggerCall) {
           const callResult = await triggerCallForUser(user.id, io);
           if (callResult.success) {
@@ -1371,10 +1413,20 @@ Return ONLY valid JSON, no preamble: {"date": "YYYY-MM-DD or null", "time": "HH:
           console.error(`sendblue: call trigger failed for user ${user.id} (non-fatal, falling through to normal reply):`, callResult.error);
           // Falls through to the normal reply flow below on failure — a
           // failed dial attempt should never leave the conversation silent.
-          callFailureContext =
-            callResult.error === "A call is already in progress for this user."
-              ? `\nThey just asked you to call them, and Co genuinely can (this is real and live) — but a call attempt just failed because a call is already showing as in progress for them. Be honest that something's not letting the call go through right now and you're not sure why, rather than saying calling isn't possible at all. Don't place a call, and don't say "calling you now."`
-              : `\nThey just asked you to call them, and Co genuinely can (this is real and live) — but the call attempt just failed. Be honest that something went wrong placing it, without inventing a specific reason you don't actually have, and never claim calling isn't possible. Don't place a call, and don't say "calling you now."`;
+          const alreadyInProgress = callResult.error === "A call is already in progress for this user.";
+          addFact(
+            replyFacts,
+            "did_this_turn",
+            alreadyInProgress
+              ? "Tried to call them just now; it didn't go through because a call already shows as in progress for them."
+              : "Tried to call them just now; the call attempt failed. The reason isn't known.",
+          );
+          addInstruction(
+            replyFacts,
+            alreadyInProgress
+              ? `They just asked you to call them, and Co genuinely can (this is real and live) — but a call attempt just failed because a call is already showing as in progress for them. Be honest that something's not letting the call go through right now and you're not sure why, rather than saying calling isn't possible at all. Don't place a call, and don't say "calling you now."`
+              : `They just asked you to call them, and Co genuinely can (this is real and live) — but the call attempt just failed. Be honest that something went wrong placing it, without inventing a specific reason you don't actually have, and never claim calling isn't possible. Don't place a call, and don't say "calling you now."`,
+          );
         }
 
         // Two independent reasons Co might fold in a secondary call-offer
@@ -1395,7 +1447,6 @@ Return ONLY valid JSON, no preamble: {"date": "YYYY-MM-DD or null", "time": "HH:
         // generateRecommendation() gated by the router's wantsRecommendation
         // instead. Folded into the one reply below (never sent as a second
         // message).
-        let recommendationContext = "";
         try {
           if (decision.wantsRecommendation) {
             const recommendation = await generateRecommendation(user.id, resolvedContent);
@@ -1440,17 +1491,23 @@ Return ONLY valid JSON, no preamble: {"date": "YYYY-MM-DD or null", "time": "HH:
                 await sendCoReply({ phone: user.phone_number, message: description, asVoice: isVoice });
                 await logTextExchange(user.id, `Co replied: ${description}`);
                 await new Promise((resolve) => setTimeout(resolve, 2000));
+                addFact(
+                  replyFacts,
+                  "did_this_turn",
+                  `Sent "${m.name}"${"url" in m && m.url ? ` (link ${m.url})` : " (no link)"} as separate messages just before this reply: "${description}"`,
+                );
               }
               // The agent still runs after this (see below) to genuinely
               // respond to what they said — this just tells it the
               // recommendation itself already went out, so it doesn't
               // repeat the details or the link.
-              recommendationContext = `\nYou already sent them ${recommendation.matches.length > 1 ? "a couple of real things" : "something real"} you thought of, each as its own link message followed by its own description message — that already happened, separately from this reply. Don't repeat the name, link, or details in this reply. If it's natural, you can briefly acknowledge you just sent those, but keep this reply focused on genuinely responding to what they just said.`;
+              addInstruction(replyFacts, `You already sent them ${recommendation.matches.length > 1 ? "a couple of real things" : "something real"} you thought of, separately from this reply. Don't repeat the name, link, or details in this reply. If it's natural, you can briefly acknowledge you just sent those, but keep this reply focused on genuinely responding to what they just said.`);
             } else if (recommendation.available) {
               // Generic fallback path (no tiered match found) — a
               // category/type suggestion, never a specific real venue with
               // a link, since there's genuinely nothing to link to here.
-              recommendationContext = `\nYou just thought of a real recommendation for them: "${recommendation.match}" — ${recommendation.reason}. Work this into your reply naturally, as your own suggestion. This is an idea, not a specific place with a link — never say you're "sending" or "sharing" anything for this, you have nothing to send. Never name a specific real company, program, or organization as an example (e.g. "YC", "On Deck") unless that exact name is literally what's written in "${recommendation.match}" above — if the match itself is generic, describe only the general type of thing, don't dress it up with real names you're not actually sure fit.`;
+              addFact(replyFacts, "known", `An idea to suggest (a type of thing, not a specific place, and there's no link): "${recommendation.match}". Why: ${recommendation.reason}`);
+              addInstruction(replyFacts, `You just thought of a real recommendation for them: "${recommendation.match}". Work this into your reply naturally, as your own suggestion. This is an idea, not a specific place with a link — never say you're "sending" or "sharing" anything for this, you have nothing to send. Never name a specific real company, program, or organization as an example (e.g. "YC", "On Deck") unless that exact name is literally what's written in "${recommendation.match}" above — if the match itself is generic, describe only the general type of thing, don't dress it up with real names you're not actually sure fit.`);
             }
           }
         } catch (err: any) {
@@ -1463,7 +1520,6 @@ Return ONLY valid JSON, no preamble: {"date": "YYYY-MM-DD or null", "time": "HH:
         // and send an actual Google Maps link — not a description of what
         // Co would send. Needs a known city to search against; silently
         // skipped if none is on file yet rather than guessing one.
-        let venueContext = "";
         let venueDeliveryMessage: string | null = null;
         if (profile?.city) {
           try {
@@ -1549,7 +1605,8 @@ Return ONLY valid JSON, no preamble: {"date": "YYYY-MM-DD or null", "time": "HH:
                 // nothing" failure — if the search genuinely came up empty,
                 // the reply has to say so honestly, not go quiet or invent
                 // a name.
-                venueContext = `\nYou looked for a real ${venueType} but didn't find a solid match nearby. Say so honestly in your reply — don't invent a name or pretend you found one.`;
+                addFact(replyFacts, "did_this_turn", `Searched for a real ${venueType} near them and found no solid match.`);
+                addInstruction(replyFacts, `You looked for a real ${venueType} but didn't find a solid match nearby. Say so honestly in your reply. Don't invent a name or pretend you found one.`);
               }
             }
           } catch (err: any) {
@@ -1654,12 +1711,6 @@ Return ONLY valid JSON, no preamble: {"date": "YYYY-MM-DD or null", "time": "HH:
         // text doesn't get re-judged or re-asked here.
         const { missingTopic } = await getCoverageNudge(user.id, recentConversation, profile);
 
-        // Moments are no longer part of the product — conversationReply.ts's
-        // agent input still requires momentContext (see its own prompt),
-        // so this stays a static fallback rather than a live query against
-        // the now-unused moments/moment_responses tables. Cleaning that
-        // required field out of the agent itself is a separate change.
-        const momentContext = "They have no upcoming moment scheduled right now.";
 
         // Not gated like the reply-agent's secondary gestures above — this
         // isn't a competing "extra ask" for the reply's one secondary slot,
@@ -1732,21 +1783,7 @@ Return ONLY valid JSON, no preamble: {"date": "YYYY-MM-DD or null", "time": "HH:
                 isFirstContact: isFirstRealMessage,
                 missingTopic,
                 missingTopicDescription: missingTopic ? RAPPORT_TOPIC_DESCRIPTIONS[missingTopic] : null,
-                momentContext,
-                recommendationContext,
-                eventOfferContext,
-                recentEventDetailsContext,
-                eventCheckinAskContext,
-                outcomeFollowupContext,
-                eventCheckinContext,
-                matchNudgeContext,
-                updatesContext,
-                venueContext,
-                callFeatureQuestionContext,
-                callFailureContext,
-                repeatContext,
-                clarifyContext,
-                scheduleCallContext,
+                facts: replyFacts,
                 toneContext,
                 seekingModeContext,
                 styleHint,

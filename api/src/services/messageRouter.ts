@@ -449,7 +449,7 @@ export type Decision<T extends RoutableItem = RoutableItem> = {
   clarifyAbout: "items" | "call" | null;
 };
 
-function isIrreversible(kind: OpenItemKind, value: string): boolean {
+export function isIrreversible(kind: OpenItemKind, value: string): boolean {
   return (
     (kind === "call_offer" && value === "accept") ||
     (kind === "match_nudge" && value === "yes") ||
@@ -493,7 +493,7 @@ export function lastCoTurn(recentConversation: string): string {
 // actually just asked, or that names it outright. Confirmed in the eval
 // (c148): a bare "yes" to an unrelated Co question was read as opting into a
 // match intro that was open but hadn't been mentioned in the conversation.
-function askIsFresh(item: Pick<OpenItem, "kind" | "detail">, message: string, recentConversation: string): boolean {
+export function askIsFresh(item: Pick<OpenItem, "kind" | "detail">, message: string, recentConversation: string): boolean {
   const text = `${lastCoTurn(recentConversation)}\n${message}`;
   switch (item.kind) {
     case "call_offer":
