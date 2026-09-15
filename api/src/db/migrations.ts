@@ -164,7 +164,7 @@ export function runMigrations() {
           'recommendation_outcome','companion_checkin','event_checkin_outcome',
           'event_guest_match_nudge','event_guest_match_optin','event_intro_group_created',
           'event_intro_email_sent','network_offer_pending','network_offer_resolved',
-          'network_intro_offer_pending'
+          'network_intro_offer_pending','recommendation_offered','call_correction'
         ]));
     `)
     .catch((err: Error) =>
@@ -467,6 +467,18 @@ export function runMigrations() {
       )`,
     )
     .catch((err: Error) => console.error("phone_debounce table init failed:", err));
+
+  // Sendblue delivery retries (2026-09-15): one inbound text is processed
+  // once, keyed by Sendblue's message_handle, however many times the webhook
+  // is delivered.
+  pool
+    .query(
+      `CREATE TABLE IF NOT EXISTS inbound_webhook_handles (
+        handle TEXT PRIMARY KEY,
+        received_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+      )`,
+    )
+    .catch((err: Error) => console.error("inbound_webhook_handles table init failed:", err));
 
   // Proactive check-in call cadence — user-set preference (7 or 14 days,
   // captured post-call via extractCheckinCadencePreference in

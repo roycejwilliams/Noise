@@ -373,6 +373,11 @@ export async function attemptEventSurfacing(candidate: SurfacingCandidate): Prom
     city: candidate.city,
     feeling: renderEmotionalContext(await getEmotionalContext(candidate.userId)),
   });
+  // The personal read says it doesn't fit what they asked: drop it.
+  if (match.fits === false) {
+    await removeFromBacklog(candidate.userId, candidate.askId, item.match);
+    return { queued: false };
+  }
   const payload: EventOfferPayload = {
     askId: candidate.askId,
     askText: item.askText,

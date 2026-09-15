@@ -30,7 +30,7 @@
       }
     ],
     "instructions": [
-      "They just said yes to being connected with Devon. Acknowledge it warmly and briefly \u2014 you're now waiting to hear back from Devon, don't promise a specific thing is happening yet."
+      "They just said yes to being connected with Devon. Acknowledge it warmly and briefly — you're now waiting to hear back from Devon, don't promise a specific thing is happening yet."
     ],
     "draft": "Done, I just emailed you both an intro so you can take it from there.",
     "forbidden": [
@@ -111,7 +111,7 @@
       }
     ],
     "instructions": [
-      "They just asked you to call them, and Co genuinely can (this is real and live) \u2014 but the call attempt just failed. Be honest that something went wrong placing it, without inventing a specific reason you don't actually have, and never claim calling isn't possible. Don't place a call, and don't say \"calling you now.\""
+      "They just asked you to call them, and Co genuinely can (this is real and live) — but the call attempt just failed. Be honest that something went wrong placing it, without inventing a specific reason you don't actually have, and never claim calling isn't possible. Don't place a call, and don't say \"calling you now.\""
     ],
     "draft": "Calling you now, give me a sec.",
     "forbidden": [
@@ -278,5 +278,32 @@
       "keep watching"
     ],
     "groundedDraft": false
+  },
+  {
+    "id": "t0915b_what_do_you_know",
+    "message": "What do you know about me?",
+    "recentConversation": "User said: Your conversation feels so much better\nCo replied: Good. That's the goal.\nUser said: What do you know about me?",
+    "facts": [
+      {
+        "kind": "known",
+        "text": "What they've told Co: Work: Series A founder building AI infra for B2B, team of 8, just closed a $35M deal"
+      },
+      {
+        "kind": "known",
+        "text": "What they've told Co: Wants right now: a designer for elegant, minimal logo and branding, locked in by Friday ahead of an October 10 deadline; friends to build with"
+      },
+      {
+        "kind": "ongoing",
+        "text": "Co is still looking for: a designer for logo and branding (the daily search checks this)."
+      }
+    ],
+    "draft": "You're running a Series A AI infra company for B2B with a team of 8, and you just closed a $35M deal. Right now you want a designer for elegant, minimal branding locked in by Friday before your October 10 deadline, and some friends to build with.",
+    "forbidden": [
+      "not much",
+      "don't know much",
+      "honestly not"
+    ],
+    "groundedDraft": true,
+    "style": "capitalized"
   }
 ]

@@ -296,8 +296,35 @@ export function sendblueRouter(io: Server): Router {
   // Handles: inbound messages (text + voice memos), outbound delivery status, typing indicators
   router.post(
     "/webhook",
-    async (req: Request, res: Response, next: NextFunction) => {
+    async (req: Request, webhookRes: Response, next: NextFunction) => {
       const lockKey: string | undefined = req.body?.number;
+
+      // Ack every delivery first, before any database or model work
+      // (2026-09-15: a 25-second turn outlasted Sendblue's wait, it resent the
+      // same text five more times, and the copies jammed the phone's lock).
+      // Everything below answers a stand-in that ignores the response.
+      webhookRes.status(200).send({ received: true });
+      const res: any = { headersSent: true, status: () => res, send: () => res, json: () => res, sendStatus: () => res };
+
+      // One inbound text is handled once, however many times it's delivered.
+      const handle: unknown = req.body?.message_handle;
+      if (typeof handle === "string" && handle && !req.body?.is_outbound && req.body?.type !== "typing") {
+        const fresh = await pool
+          .query(`INSERT INTO inbound_webhook_handles (handle) VALUES ($1) ON CONFLICT (handle) DO NOTHING RETURNING handle`, [handle])
+          .then((r) => r.rows.length > 0)
+          .catch(() => true);
+        if (!fresh) {
+          await recordDecision({
+            layer: 2,
+            decision: "turn.duplicate",
+            userId: null,
+            outcome: "skip",
+            action: "redelivery",
+            checks: [{ name: "same_message_handle", pass: false, reason: "Sendblue delivered this text again" }],
+          }).catch(() => {});
+          return;
+        }
+      }
 
       // Stamped here, before withPhoneLock, not inside run() below. Once a
       // phone's advisory lock is held, a second inbound message for that
@@ -1584,7 +1611,7 @@ Return ONLY valid JSON, no preamble: {"date": "YYYY-MM-DD or null", "time": "HH:
               // already uses for a real second message.
               // Details, the personal reason, and the text for every match
               // are prepared in parallel, then sent in order.
-              const prepared = await Promise.all(recommendation.matches.map(async (m) => {
+              const preparedAll = await Promise.all(recommendation.matches.map(async (m) => {
                 // Drafted in Co's voice from the real record and a personal
                 // reason, not the matching engine's raw "name — reason" line.
                 const em = await enrichMatch(m, {
@@ -1607,8 +1634,19 @@ Return ONLY valid JSON, no preamble: {"date": "YYYY-MM-DD or null", "time": "HH:
                 } catch (err: any) {
                   console.error("sendblue: recommendation description drafting failed (non-fatal, sending plain):", err?.message ?? err);
                 }
-                return { m, description };
+                return { m, description, fits: em.fits, why: em.whyItFits };
               }));
+              // Only what the personal read says fits what they asked
+              // (services/eventDetails.ts fitPrompt).
+              const prepared = preparedAll.filter((p) => p.fits !== false);
+              if (!prepared.length) {
+                addFact(
+                  replyFacts,
+                  "did_this_turn",
+                  `Searched just now. What came up didn't fit what they asked: ${preparedAll.map((p) => `"${p.m.name}" (${p.why ?? "not a fit"})`).join("; ")}.`,
+                );
+                addInstruction(replyFacts, "You searched and nothing that came up fits what they asked. Say that plainly and briefly. Don't send or describe the misfits unless they ask.");
+              }
               for (const { m, description } of prepared) {
                 if ("url" in m && m.url) {
                   await sendCoReply({ phone: user.phone_number, message: m.url, asVoice: false });
@@ -1632,11 +1670,11 @@ Return ONLY valid JSON, no preamble: {"date": "YYYY-MM-DD or null", "time": "HH:
                 layer: 5,
                 decision: "recommendation.search",
                 userId: user.id,
-                outcome: "act",
-                action: "sent_matches",
-                proposal: { message: resolvedContent, holdLine, ms: Date.now() - searchStarted, matches: prepared.map((p) => ({ name: p.m.name, tier: p.m.tier, soldOut: p.m.details?.soldOut ?? null })) },
+                outcome: prepared.length ? "act" : "skip",
+                action: prepared.length ? "sent_matches" : "nothing_fit",
+                proposal: { message: resolvedContent, holdLine, ms: Date.now() - searchStarted, matches: preparedAll.map((p) => ({ name: p.m.name, tier: p.m.tier, fits: p.fits ?? null, why: p.why ?? null, soldOut: p.m.details?.soldOut ?? null })) },
               });
-              addInstruction(replyFacts, `You already sent them ${recommendation.matches.length > 1 ? "a couple of real things" : "something real"} you thought of, separately from this reply. Don't repeat the name, link, or details in this reply. If it's natural, you can briefly acknowledge you just sent those, but keep this reply focused on genuinely responding to what they just said.`);
+              if (prepared.length) addInstruction(replyFacts, `You already sent them ${prepared.length > 1 ? "a couple of real things" : "something real"} you thought of, separately from this reply. Don't repeat the name, link, or details in this reply. If it's natural, you can briefly acknowledge you just sent those, but keep this reply focused on genuinely responding to what they just said.`);
             } else if (recommendation.available) {
               // Generic fallback path (no tiered match found) — a
               // category/type suggestion, never a specific real venue with

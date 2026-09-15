@@ -66,7 +66,8 @@ const JUDGE_MODEL = MODELS.sonnet;
 // details / opportunity / whyItFits (2026-09-15, services/eventDetails.ts):
 // the real record (event page or source post) and a personal reason, so Co
 // can answer "tell me more" and say why it fits this person.
-type MatchExtras = { details?: EventDetails; opportunity?: OpportunityDetails; whyItFits?: string };
+// fits: false when the personal read says it doesn't fit what they asked.
+type MatchExtras = { details?: EventDetails; opportunity?: OpportunityDetails; whyItFits?: string; fits?: boolean };
 export type TierMatch =
   | ({ tier: 1; kind: "co_event"; event_api_id: string; event_date: string; name: string; url?: string; reason: string; city?: string | null } & MatchExtras)
   | ({ tier: 2; kind: "public_event"; event_api_id: string; event_date: string; name: string; url: string; reason: string; city?: string | null } & MatchExtras)

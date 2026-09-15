@@ -14,6 +14,7 @@
 //   headcount, description).
 //   Tier 3 (X opportunities): the source post's own text, which is the only
 //   real record there is.
+import { parseModelJson } from "./modelJson.js";
 import { anthropic } from "@ai-sdk/anthropic";
 import { generateText } from "ai";
 import { DateTime } from "luxon";
@@ -159,29 +160,48 @@ export type PersonForFit = { userId?: string; firstName: string; askText: string
 
 // A personal reason, grounded only in what they've said and the real
 // details. Sonnet: it's shown to them and needs judgment.
-export async function explainFit(match: EnrichedMatch, person: PersonForFit): Promise<string | null> {
-  const picture = person.userId ? renderSnapshot(await getPersonSnapshot(person.userId)) : "";
+//
+// Fit is judged against what they're asking for now, including a new or
+// hypothetical direction (2026-09-15: "accelerators that could help me if I
+// decide to build something else" got a pre-seed accelerator called a
+// mismatch because the person's current company is Series A).
+export function fitPrompt(match: EnrichedMatch, person: PersonForFit, picture: string): string {
   const detailLines =
     match.details ? renderEventDetails(match.name, match.details) : match.opportunity ? [`What the post says: ${match.opportunity.postText}`] : [];
+  return `Decide whether "${match.name}" fits ${person.firstName}, and explain why in one or two plain sentences, to Co's own notes.
+
+What ${person.firstName} is asking for right now, in their words:
+${person.askText ?? "(no specific ask)"}
+
+Background on them:
+${picture ? picture : person.goals?.length ? `Goals: ${person.goals.slice(0, 4).join("; ")}` : "(none)"}
+${person.city ? `Based in: ${person.city}` : ""}
+${person.feeling ? `How they've been feeling: ${person.feeling}` : ""}
+
+What's actually known about "${match.name}":
+${detailLines.join("\n") || "(only the name)"}
+
+Rules:
+- Judge fit against what they're asking for right now. The background is context, not the test.
+- If they're asking about a new or possible direction ("if I start something new", "if I decide to build something else"), judge it for that new thing. A new company starts from zero, so pre-seed and seed programs fit it. Their current company's stage, funding, or other asks never make it a misfit.
+- Only say it doesn't fit when it doesn't match what they're asking for right now (wrong kind of thing, wrong place, wrong stage for the thing they're asking about).
+- Connect a specific thing they said to a specific real detail above. Use only what's written here.
+
+Return ONLY JSON: {"fits": true or false, "why": "the explanation"}`;
+}
+
+export async function explainFit(match: EnrichedMatch, person: PersonForFit): Promise<{ fits: boolean; why: string } | null> {
+  const picture = person.userId ? renderSnapshot(await getPersonSnapshot(person.userId)) : "";
   try {
     const { text } = await generateText({
       model: anthropic(MODELS.sonnet),
       providerOptions: { anthropic: { effort: "low" } },
       experimental_telemetry: { isEnabled: true, functionId: "eventDetails.explainFit" },
-      prompt: `Explain in one or two plain sentences, to Co's own notes, why "${match.name}" fits ${person.firstName} specifically.
-
-What ${person.firstName} has told Co:
-- Looking for: ${person.askText ?? "(no specific ask)"}
-${picture ? `- Who they are right now:\n${picture}` : person.goals?.length ? `- Goals: ${person.goals.slice(0, 4).join("; ")}` : ""}
-${person.city ? `- Based in: ${person.city}` : ""}
-${person.feeling ? `- How they've been feeling: ${person.feeling}` : ""}
-
-What's actually known about "${match.name}":
-${detailLines.join("\n") || "(only the name)"}
-
-Connect a specific thing they said to a specific real detail above (who'll be there, what it's about, format, size). Use only what's written here. If it doesn't really fit, say so plainly in one sentence. Return ONLY the explanation.`,
+      prompt: fitPrompt(match, person, picture),
     });
-    return text.trim() || null;
+    const p = parseModelJson<{ fits?: boolean; why?: string }>(text);
+    if (typeof p.why !== "string" || !p.why.trim()) return null;
+    return { fits: p.fits !== false, why: p.why.trim() };
   } catch (err: any) {
     console.error("eventDetails: explainFit failed (non-fatal):", err?.message ?? err);
     return null;
@@ -196,6 +216,12 @@ export async function enrichMatch(match: TierMatch | EnrichedMatch, person?: Per
     m.details = (await fetchLumaEventDetails(m.url)) ?? undefined;
   }
   if (m.kind === "opportunity" && !m.opportunity && m.evidence) m.opportunity = { postText: m.evidence };
-  if (person && !m.whyItFits) m.whyItFits = (await explainFit(m, person)) ?? undefined;
+  if (person && !m.whyItFits) {
+    const fit = await explainFit(m, person);
+    if (fit) {
+      m.whyItFits = fit.why;
+      m.fits = fit.fits;
+    }
+  }
   return m;
 }

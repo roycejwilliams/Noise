@@ -578,6 +578,7 @@ export function registerJobs(io: Server) {
     try {
       const { rowCount } = await pool.query(`DELETE FROM harness_decisions WHERE created_at < NOW() - INTERVAL '60 days'`);
       if (rowCount) console.log(`harness_decisions: removed ${rowCount} rows older than 60 days`);
+      await pool.query(`DELETE FROM inbound_webhook_handles WHERE received_at < NOW() - INTERVAL '3 days'`);
     } catch (error) {
       console.error("harness_decisions retention cron error:", error);
     }

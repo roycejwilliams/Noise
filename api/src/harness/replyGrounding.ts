@@ -17,6 +17,7 @@
 //             sentences are dropped. The reply is never blocked.
 //   record  — recordDecision(layer 3, "reply.grounding")
 //   eval    — evals/reply/run.ts
+import { getPersonSnapshot, renderSnapshot } from "./personSnapshot.js";
 import { anthropic } from "@ai-sdk/anthropic";
 import { generateText } from "ai";
 import { DateTime } from "luxon";
@@ -98,6 +99,11 @@ export async function gatherReplyFacts(
   for (const d of opts.pendingDescriptions ?? []) addFact(rf, "pending", `Waiting to hear back: ${d}`);
   await addOngoingSearchFacts(rf, userId);
   for (const correction of await recentCallCorrections(userId)) addFact(rf, "known", correction);
+  // What Co knows about them, so "what do you know about me?" can be
+  // answered from it (2026-09-15: the claim check had no copy of the person
+  // summary and cut "designer by Friday" and "Series A" as unsupported).
+  const picture = renderSnapshot(await getPersonSnapshot(userId).catch(() => null));
+  for (const line of picture.split("\n").filter(Boolean)) addFact(rf, "known", `What they've told Co: ${line}`);
 
   const [scheduled, reveal] = await Promise.all([
     pool

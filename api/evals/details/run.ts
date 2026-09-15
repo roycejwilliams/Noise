@@ -13,7 +13,7 @@ import { fileURLToPath } from "url";
 import { anthropic } from "@ai-sdk/anthropic";
 import { generateText } from "ai";
 import { loadCases, runEval, type CaseScore, type EvalCase } from "../lib.js";
-import { missingEventDetails, parseLumaEventPage, renderEventDetails, fetchLumaEventDetails, type EventDetails } from "../../src/services/eventDetails.js";
+import { fitPrompt, missingEventDetails, parseLumaEventPage, renderEventDetails, fetchLumaEventDetails, type EventDetails } from "../../src/services/eventDetails.js";
 import { addEventFacts, baseReplyFacts, codeChecks } from "../../src/harness/replyGrounding.js";
 import { runConversationReplyAgent } from "../../src/agent/conversationReply.js";
 import { MODELS } from "../../src/models.js";
@@ -57,6 +57,14 @@ async function run(c: Case): Promise<any> {
       );
       return { reply: out.replyText, rf };
     }
+    case "fit": {
+      const { text } = await generateText({
+        model: anthropic(MODELS.sonnet),
+        providerOptions: { anthropic: { effort: "low" } },
+        prompt: fitPrompt(c.match, c.person, c.picture),
+      });
+      return JSON.parse(text.match(/\{[\s\S]*\}/)?.[0] ?? "{}");
+    }
     case "brief": {
       // The brief prompt, with the case's inputs in place of the database.
       const { text } = await generateText({
@@ -88,6 +96,10 @@ function score(c: Case, r: any): CaseScore {
     for (const s of c.mustMention ?? []) soft.push({ name: `mentions ${s}`, ok: new RegExp(s, "i").test(r.reply) });
     for (const chk of codeChecks(r.reply, r.rf, { message: c.message, recentConversation: c.recentConversation })) if (!chk.pass) hard.push(`${chk.name}: ${r.reply}`);
   }
+  if (c.kind === "fit") {
+    if (r.fits !== c.expectFits) hard.push(`fits=${r.fits}, expected ${c.expectFits}: ${r.why}`);
+    if (c.whyMustNot && new RegExp(c.whyMustNot, "i").test(r.why ?? "")) soft.push({ name: "why avoids stage mismatch", ok: false });
+  }
   if (c.kind === "brief") {
     if (!r.searchText) hard.push("no brief");
     else {
@@ -118,8 +130,17 @@ const briefCases: Case[] = [
   { id: "b03_drained", kind: "brief", askText: "find climate tech events", texts: ["this week has been insane", "barely sleeping"], feeling: "Right now: high overwhelmed about work.\nThey've been struggling in the last day.", askMustInclude: "climate", feelingShouldShow: "small|low-key|casual|relaxed|intimate|quiet|short" },
 ];
 
-const cases = [...loadCases<Case>(here), ...syntheticCases, ...briefCases, { id: "live_pages", kind: "livePage" } as Case].filter((c) =>
-  live ? ["reply", "brief", "livePage"].includes(c.kind) : c.kind === "parse",
+// Fit judged against the current ask (2026-09-15, Royce's thread).
+const seriesA = "Work: Series A founder building AI infra for B2B, team of 8, just closed a $35M deal\nWants right now: a designer for logo and branding";
+const accelerator = { name: "16vc accelerator", kind: "opportunity", url: "https://x.com/i/status/2097579083265929343", reason: "", opportunity: { postText: "Applications open: 20-25 pre-seed and seed companies across SF, NY and London. $200K on a SAFE, three months." } };
+const fitCases: Case[] = [
+  { id: "f01_new_direction", kind: "fit", match: accelerator, picture: seriesA, person: { firstName: "Royce", askText: "Wasn't feeling it man. Have you seen any vcs or come across any accelerators that could help me if I decide to build something else?" }, expectFits: true, whyMustNot: "series a|mismatch|not quite where" },
+  { id: "f02_current_company", kind: "fit", match: accelerator, picture: seriesA, person: { firstName: "Royce", askText: "Know any investors who lead Series B for our company?" }, expectFits: false },
+  { id: "f03_event_fits", kind: "fit", match: { name: "Climate Founders Mixer", kind: "public_event", event_date: "2026-09-23", url: "https://lu.ma/cfm", reason: "", details }, picture: "", person: { firstName: "Sam", askText: "I want to meet climate investors before we raise" }, expectFits: true },
+];
+
+const cases = [...loadCases<Case>(here), ...syntheticCases, ...briefCases, ...fitCases, { id: "live_pages", kind: "livePage" } as Case].filter((c) =>
+  live ? ["reply", "brief", "livePage", "fit"].includes(c.kind) : c.kind === "parse",
 );
 await runEval<Case, any>({
   name: live ? "details (live)" : "details (code)",
