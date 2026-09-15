@@ -6,17 +6,10 @@ const statusEl = document.getElementById("login-status") as HTMLElement;
 const textCoButton = document.getElementById("text-co-button") as HTMLAnchorElement;
 const waitingEl = document.getElementById("login-waiting") as HTMLElement;
 const desktopEl = document.getElementById("login-desktop") as HTMLElement;
-const messageEl = document.getElementById("login-message") as HTMLElement;
-const numberEl = document.getElementById("login-number") as HTMLElement;
 const errorEl = document.getElementById("login-error") as HTMLElement;
 
 const POLL_MS = 2000;
 let pollTimer: number | null = null;
-
-function formatUs(e164: string): string {
-  const m = e164.match(/^\+1(\d{3})(\d{3})(\d{4})$/);
-  return m ? `(${m[1]}) ${m[2]}-${m[3]}` : e164;
-}
 
 function showError(message: string) {
   errorEl.textContent = message;
@@ -46,9 +39,6 @@ async function prepareCode() {
     const separator = /iPhone|iPad|iPod/i.test(navigator.userAgent) ? "&" : "?";
     textCoButton.href = `sms:${data.text_in_number}${separator}body=${encodeURIComponent(message)}`;
     textCoButton.removeAttribute("aria-disabled");
-    messageEl.textContent = `"${message}"`;
-    numberEl.textContent = formatUs(data.text_in_number);
-    if (!/iPhone|iPad|iPod|Android/i.test(navigator.userAgent)) desktopEl.classList.remove("hidden");
     startPolling();
   } catch (err) {
     showError(err instanceof Error ? err.message : String(err));
@@ -67,7 +57,7 @@ function startPolling() {
       } else if (data.status === "expired") {
         window.clearInterval(pollTimer!);
         waitingEl.classList.add("hidden");
-        statusEl.textContent = "That code expired. Here's a new one.";
+        statusEl.textContent = "That took a while. Tap Text Co again.";
         await prepareCode();
       }
     } catch (err) {
@@ -85,6 +75,18 @@ textCoButton.addEventListener("click", (e) => {
   statusEl.textContent = "Send the text, then come back here.";
 });
 
+// The code only ever lives in the iMessage prefill, never on screen, so
+// nobody looking at the page can use it. A computer can't open iMessage
+// with a prefill, so it just points people to their phone.
+const isPhone = /iPhone|iPad|iPod|Android/i.test(navigator.userAgent);
+
 (async () => {
-  if (!(await redirectIfAlreadyLoggedIn())) await prepareCode();
+  if (await redirectIfAlreadyLoggedIn()) return;
+  if (!isPhone) {
+    textCoButton.classList.add("hidden");
+    statusEl.textContent = "Sign in from your phone.";
+    desktopEl.classList.remove("hidden");
+    return;
+  }
+  await prepareCode();
 })();

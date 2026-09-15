@@ -5,15 +5,9 @@
   var textCoButton = document.getElementById("text-co-button");
   var waitingEl = document.getElementById("login-waiting");
   var desktopEl = document.getElementById("login-desktop");
-  var messageEl = document.getElementById("login-message");
-  var numberEl = document.getElementById("login-number");
   var errorEl = document.getElementById("login-error");
   var POLL_MS = 2e3;
   var pollTimer = null;
-  function formatUs(e164) {
-    const m = e164.match(/^\+1(\d{3})(\d{3})(\d{4})$/);
-    return m ? `(${m[1]}) ${m[2]}-${m[3]}` : e164;
-  }
   function showError(message) {
     errorEl.textContent = message;
     errorEl.classList.remove("hidden");
@@ -39,9 +33,6 @@
       const separator = /iPhone|iPad|iPod/i.test(navigator.userAgent) ? "&" : "?";
       textCoButton.href = `sms:${data.text_in_number}${separator}body=${encodeURIComponent(message)}`;
       textCoButton.removeAttribute("aria-disabled");
-      messageEl.textContent = `"${message}"`;
-      numberEl.textContent = formatUs(data.text_in_number);
-      if (!/iPhone|iPad|iPod|Android/i.test(navigator.userAgent)) desktopEl.classList.remove("hidden");
       startPolling();
     } catch (err) {
       showError(err instanceof Error ? err.message : String(err));
@@ -59,7 +50,7 @@
         } else if (data.status === "expired") {
           window.clearInterval(pollTimer);
           waitingEl.classList.add("hidden");
-          statusEl.textContent = "That code expired. Here's a new one.";
+          statusEl.textContent = "That took a while. Tap Text Co again.";
           await prepareCode();
         }
       } catch (err) {
@@ -75,7 +66,15 @@
     waitingEl.classList.remove("hidden");
     statusEl.textContent = "Send the text, then come back here.";
   });
+  var isPhone = /iPhone|iPad|iPod|Android/i.test(navigator.userAgent);
   (async () => {
-    if (!await redirectIfAlreadyLoggedIn()) await prepareCode();
+    if (await redirectIfAlreadyLoggedIn()) return;
+    if (!isPhone) {
+      textCoButton.classList.add("hidden");
+      statusEl.textContent = "Sign in from your phone.";
+      desktopEl.classList.remove("hidden");
+      return;
+    }
+    await prepareCode();
   })();
 })();
