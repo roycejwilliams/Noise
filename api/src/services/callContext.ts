@@ -3,6 +3,7 @@ import { anthropic } from "@ai-sdk/anthropic";
 import pool from "../db/db.js";
 import { writeMemory } from "./memory.js";
 import { MODELS } from "../models.js";
+import { getEmotionalContext, renderEmotionalContext } from "../harness/emotion.js";
 
 // A 1-2 sentence call summary: narrow work, Haiku.
 const SUMMARY_MODEL = MODELS.haiku;
@@ -35,7 +36,7 @@ const SUMMARY_MODEL = MODELS.haiku;
 // specifics the recap's own cadence hasn't folded in yet.
 export async function buildContextSummary(userId: string): Promise<string> {
   try {
-    const [profileResult, recentTextResult, recapResult, recentRecommendationResult] = await Promise.all([
+    const [profileResult, recentTextResult, recapResult, recentRecommendationResult, emotional] = await Promise.all([
       pool.query(
         `SELECT life_chapters, goals, blockers, availability_pattern, city, emotional_state, intent
          FROM co_profiles WHERE user_id = $1`,
@@ -65,7 +66,11 @@ export async function buildContextSummary(userId: string): Promise<string> {
          ORDER BY created_at DESC LIMIT 1`,
         [userId],
       ),
+      // Emotion loop: the same read of how they've been feeling that texts
+      // use, so a call opens knowing what the texts showed and vice versa.
+      getEmotionalContext(userId),
     ]);
+    const emotionalLine = renderEmotionalContext(emotional);
 
     const profile = profileResult.rows[0] ?? null;
     const latestIntent = Array.isArray(profile?.intent) && profile.intent.length
@@ -76,7 +81,7 @@ export async function buildContextSummary(userId: string): Promise<string> {
       recapResult.rows[0]?.content ? `Ongoing summary: ${recapResult.rows[0].content}` : null,
       profile?.life_chapters?.length ? `Life chapter: ${profile.life_chapters.join(", ")}` : null,
       profile?.city ? `City: ${profile.city}` : null,
-      profile?.emotional_state ? `Emotional state as of the last call: ${profile.emotional_state}` : null,
+      emotionalLine ? `How they've been feeling:\n${emotionalLine}` : null,
       profile?.goals?.length ? `Goals: ${profile.goals.slice(0, 3).join("; ")}` : null,
       profile?.blockers?.length ? `Blockers: ${profile.blockers.slice(0, 2).join("; ")}` : null,
       latestIntent?.text ? `Stated ask: ${latestIntent.text}` : null,
@@ -113,7 +118,7 @@ export async function buildContextSummary(userId: string): Promise<string> {
 // that same existing query with no changes needed there. Best-effort,
 // call-ending pipeline continues regardless — matches storeProfile's own
 // non-blocking Step 7 siblings (captureIntent, extractPlannedEventMention).
-export async function summarizeCallForTextContext(userId: string, transcript: string): Promise<void> {
+export async function summarizeCallForTextContext(userId: string, transcript: string, emotionalHighlights?: string): Promise<void> {
   try {
     const { text: raw } = await generateText({
       model: anthropic(SUMMARY_MODEL),
@@ -122,7 +127,7 @@ export async function summarizeCallForTextContext(userId: string, transcript: st
 
 Transcript:
 "${transcript}"
-
+${emotionalHighlights ? `\nHume's voice analysis of how they sounded (measured, not guessed):\n${emotionalHighlights}\n\nAdd one short sentence on how they came across and about what, using only those moments. Describe it plainly ("sounded anxious talking about the raise"), not clinically.\n` : ""}
 Return ONLY the summary, no preamble.`,
     });
     const summary = raw.trim();

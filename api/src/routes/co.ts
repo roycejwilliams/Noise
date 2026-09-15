@@ -28,6 +28,7 @@ import { CO_VOICE, CO_TEXT_CHANNEL } from "../services/coVoice.js";
 import { recordDecision } from "../harness/core.js";
 import { decideMissedCallFollowUp, gatherMissedCallState } from "../harness/callGate.js";
 import { MODELS } from "../models.js";
+import { humeMoments, recordEmotionSignals, renderHumeMoments, type HumeUtterance } from "../harness/emotion.js";
 
 // One-line drafts (missed-call text, voicemail line): narrow work, Haiku.
 const DRAFT_MODEL = MODELS.haiku;
@@ -151,7 +152,7 @@ async function fetchHumeChatEvents(chatId: string): Promise<HumeChatEvent[]> {
 
 async function fetchHumeCallData(
   chatId: string,
-): Promise<{ transcript: string; emotions: { name: string; score: number }[] | null }> {
+): Promise<{ transcript: string; emotions: { name: string; score: number }[] | null; utterances: HumeUtterance[] }> {
   const events = await fetchHumeChatEvents(chatId);
 
   const transcript = events
@@ -176,7 +177,14 @@ async function fetchHumeCallData(
       .sort((a, b) => b.score - a.score);
   }
 
-  return { transcript, emotions };
+  // Per-utterance scores with what was said, for the emotion loop's moments
+  // (harness/emotion.ts). The whole-call average above loses exactly the
+  // moments that matter.
+  const utterances: HumeUtterance[] = events
+    .filter((e) => e.type === "USER_MESSAGE" && e.emotion_features && e.message_text)
+    .map((e) => ({ text: e.message_text!, scores: JSON.parse(e.emotion_features!) as Record<string, number> }));
+
+  return { transcript, emotions, utterances };
 }
 
 // Best-effort — Hume's audio reconstruction is an async job that may not be
@@ -849,7 +857,7 @@ router.post(
         // Let the app know the call ended and Co is now extracting the profile
         _io?.to(`user:${user_id}`).emit("co:processing");
 
-        const [{ transcript, emotions }, recording_url] = await Promise.all([
+        const [{ transcript, emotions, utterances }, recording_url] = await Promise.all([
           fetchHumeCallData(chat_id),
           fetchHumeRecordingUrl(chat_id),
         ]);
@@ -861,16 +869,22 @@ router.post(
         }
 
         // Step 1 — Store raw transcript in co_memories immediately
-        await storeTranscriptMemory(user_id, transcript, {
+        const transcriptMemoryId = await storeTranscriptMemory(user_id, transcript, {
           emotionalContext: emotions,
           audioUrl: recording_url,
         });
+
+        // Emotion loop: the strongest voice moments, with what they said,
+        // recorded for every layer to read and fed into extraction below.
+        const moments = humeMoments(utterances);
+        const emotionalHighlights = moments.length ? renderHumeMoments(moments) : undefined;
+        await recordEmotionSignals(user_id, moments.map((m) => ({ ...m, about: null, memoryId: transcriptMemoryId })));
 
         // Steps 2-5 — Extract psychographic data via Anthropic, sanitize against
         // DB CHECK constraints, generate goal embeddings, and upsert co_profiles.
         // Shared with the typed-intake fallback and the text channel — see
         // profileExtraction.ts.
-        const { extracted } = await extractPsychographicProfile(transcript);
+        const { extracted } = await extractPsychographicProfile(transcript, emotionalHighlights);
         await storeProfile(user_id, extracted, transcript, { emotions });
 
         // Step 6 — Persist Hume chat group ID so the next call resumes this conversation
@@ -886,7 +900,7 @@ router.post(
         extractPlannedEventMention(user_id, transcript).catch(() => {});
         // Bridges this call into the text side's own conversation log (Royce,
         // 2026-09-07) — see summarizeCallForTextContext for the gap this closes.
-        summarizeCallForTextContext(user_id, transcript).catch(() => {});
+        summarizeCallForTextContext(user_id, transcript, emotionalHighlights).catch(() => {});
 
         // The recap exists now (transcript + extraction persisted) — safe to
         // mark completed. Everything after this point (scheduling the

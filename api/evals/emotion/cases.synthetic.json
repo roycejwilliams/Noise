@@ -1,0 +1,341 @@
+[
+  {
+    "id": "h01_fundraise_anxiety",
+    "kind": "hume",
+    "utterances": [
+      {
+        "text": "so we're trying to raise the pre-seed right now",
+        "scores": {
+          "Anxiety": 0.58,
+          "Interest": 0.4
+        }
+      },
+      {
+        "text": "yeah the demo at tech week went really well actually",
+        "scores": {
+          "Excitement": 0.47,
+          "Joy": 0.3
+        }
+      },
+      {
+        "text": "ok cool",
+        "scores": {
+          "Calmness": 0.6
+        }
+      }
+    ],
+    "expectIncludes": [
+      "anxiety",
+      "excitement"
+    ],
+    "expectMax": 3
+  },
+  {
+    "id": "h02_neutral_call",
+    "kind": "hume",
+    "utterances": [
+      {
+        "text": "I live in the city and work in software",
+        "scores": {
+          "Calmness": 0.5,
+          "Concentration": 0.4
+        }
+      },
+      {
+        "text": "I usually go to the gym after work",
+        "scores": {
+          "Interest": 0.45
+        }
+      }
+    ],
+    "expectEmpty": true
+  },
+  {
+    "id": "h03_weak_scores",
+    "kind": "hume",
+    "utterances": [
+      {
+        "text": "things are fine I guess overall",
+        "scores": {
+          "Sadness": 0.12,
+          "Tiredness": 0.1
+        }
+      }
+    ],
+    "expectEmpty": true
+  },
+  {
+    "id": "h04_one_per_emotion",
+    "kind": "hume",
+    "utterances": [
+      {
+        "text": "I'm worried about money this month",
+        "scores": {
+          "Anxiety": 0.5
+        }
+      },
+      {
+        "text": "and worried about the lease too honestly",
+        "scores": {
+          "Anxiety": 0.55
+        }
+      },
+      {
+        "text": "I miss having friends around here",
+        "scores": {
+          "Sadness": 0.44
+        }
+      }
+    ],
+    "expectIncludes": [
+      "anxiety",
+      "sadness"
+    ],
+    "expectMax": 2
+  },
+  {
+    "id": "c01_struggling_now",
+    "kind": "context",
+    "signals": [
+      {
+        "source": "text",
+        "emotion": "overwhelmed",
+        "intensity": "high",
+        "valence": "negative",
+        "about": "work deadlines",
+        "hoursAgo": 2
+      }
+    ],
+    "expectNeedsCare": true,
+    "expectCurrent": "overwhelmed"
+  },
+  {
+    "id": "c02_recovered",
+    "kind": "context",
+    "signals": [
+      {
+        "source": "text",
+        "emotion": "stressed",
+        "intensity": "medium",
+        "valence": "negative",
+        "about": "investor call",
+        "hoursAgo": 10
+      },
+      {
+        "source": "text",
+        "emotion": "relieved",
+        "intensity": "medium",
+        "valence": "positive",
+        "about": "investor call went well",
+        "hoursAgo": 3
+      }
+    ],
+    "expectNeedsCare": false,
+    "expectCurrent": "relieved"
+  },
+  {
+    "id": "c03_old_struggle",
+    "kind": "context",
+    "signals": [
+      {
+        "source": "text",
+        "emotion": "discouraged",
+        "intensity": "high",
+        "valence": "negative",
+        "about": "job search",
+        "hoursAgo": 60
+      }
+    ],
+    "expectNeedsCare": false,
+    "expectCurrent": null
+  },
+  {
+    "id": "c04_recurring_topic",
+    "kind": "context",
+    "signals": [
+      {
+        "source": "text",
+        "emotion": "anxious",
+        "intensity": "medium",
+        "valence": "negative",
+        "about": "raising pre-seed funding",
+        "hoursAgo": 30
+      },
+      {
+        "source": "call",
+        "emotion": "anxiety",
+        "intensity": "high",
+        "valence": "negative",
+        "about": "raising pre-seed",
+        "hoursAgo": 80
+      },
+      {
+        "source": "text",
+        "emotion": "frustrated",
+        "intensity": "low",
+        "valence": "negative",
+        "about": "raising pre-seed round",
+        "hoursAgo": 150
+      }
+    ],
+    "expectRecurring": 1,
+    "expectNeedsCare": false
+  },
+  {
+    "id": "c05_call_moment_current",
+    "kind": "context",
+    "signals": [
+      {
+        "source": "call",
+        "emotion": "sadness",
+        "intensity": "high",
+        "valence": "negative",
+        "about": null,
+        "quote": "I miss having friends here",
+        "hoursAgo": 20
+      }
+    ],
+    "expectNeedsCare": true,
+    "expectCurrent": "sadness"
+  },
+  {
+    "id": "c06_low_intensity",
+    "kind": "context",
+    "signals": [
+      {
+        "source": "text",
+        "emotion": "tired",
+        "intensity": "low",
+        "valence": "negative",
+        "about": "long day",
+        "hoursAgo": 1
+      }
+    ],
+    "expectNeedsCare": false
+  },
+  {
+    "id": "l01",
+    "kind": "label",
+    "draft": "You sound really stressed about the raise.",
+    "expectBlocked": true
+  },
+  {
+    "id": "l02",
+    "kind": "label",
+    "draft": "I can tell you're anxious, and that's okay.",
+    "expectBlocked": true
+  },
+  {
+    "id": "l03",
+    "kind": "label",
+    "draft": "It sounds like you're feeling overwhelmed right now.",
+    "expectBlocked": true
+  },
+  {
+    "id": "l04",
+    "kind": "label",
+    "draft": "That's a lot to carry in one week. What's weighing on you most?",
+    "expectBlocked": false
+  },
+  {
+    "id": "l05",
+    "kind": "label",
+    "draft": "That sounds like a great night, who'd you end up talking to?",
+    "expectBlocked": false
+  },
+  {
+    "id": "p01",
+    "kind": "hold",
+    "type": "event_offer",
+    "needsCare": true,
+    "expectHeld": true
+  },
+  {
+    "id": "p02",
+    "kind": "hold",
+    "type": "product_update",
+    "needsCare": true,
+    "expectHeld": true
+  },
+  {
+    "id": "p03",
+    "kind": "hold",
+    "type": "companion",
+    "needsCare": true,
+    "expectHeld": false
+  },
+  {
+    "id": "p04",
+    "kind": "hold",
+    "type": "post_call",
+    "needsCare": true,
+    "expectHeld": false
+  },
+  {
+    "id": "p05",
+    "kind": "hold",
+    "type": "event_offer",
+    "needsCare": false,
+    "expectHeld": false
+  },
+  {
+    "id": "t01",
+    "kind": "text",
+    "message": "honestly this week has been brutal, I can barely keep up",
+    "expectValence": "negative"
+  },
+  {
+    "id": "t02",
+    "kind": "text",
+    "message": "WE GOT INTO ERA!!",
+    "expectValence": "positive"
+  },
+  {
+    "id": "t03",
+    "kind": "text",
+    "message": "what time does it start?",
+    "expectNone": true
+  },
+  {
+    "id": "t04",
+    "kind": "text",
+    "message": "fine",
+    "recentConversation": "User said: my cofounder just quit\nCo replied: Oh no. How are you holding up?",
+    "expectValence": "negative"
+  },
+  {
+    "id": "t05",
+    "kind": "text",
+    "message": "Hi Co!",
+    "expectNone": true
+  },
+  {
+    "id": "t06",
+    "kind": "text",
+    "message": "sounds good, see you thursday",
+    "expectNone": true
+  },
+  {
+    "id": "r01_struggling_asks",
+    "kind": "reply",
+    "message": "honestly I don't even know if I should go to the mixer. everything feels like too much right now",
+    "recentConversation": "User said: hey\nCo replied: Hey Sam, how's the week going?\nUser said: honestly I don't even know if I should go to the mixer. everything feels like too much right now",
+    "feeling": "Right now (their texts, just now): high overwhelmed about everything this week.\nOn your call 2 days ago, their voice showed: anxiety (high) when they said \"I don't know if the startup is going to make it\".\nThey've been struggling in the last day.",
+    "expectNoPitch": true
+  },
+  {
+    "id": "r02_good_news",
+    "kind": "reply",
+    "message": "we got into ERA!!",
+    "recentConversation": "User said: we got into ERA!!",
+    "feeling": "Right now (their texts, just now): high excited about getting into ERA.\nKeeps coming up: anxiety about raising pre-seed (3 times in two weeks)."
+  },
+  {
+    "id": "r03_recurring_worry",
+    "kind": "reply",
+    "message": "another investor passed today",
+    "recentConversation": "User said: another investor passed today",
+    "feeling": "Right now (their texts, just now): medium discouraged about investor rejection.\nKeeps coming up: anxious, frustrated about raising pre-seed (3 times in two weeks).\nThey've been struggling in the last day.",
+    "expectNoPitch": true
+  }
+]

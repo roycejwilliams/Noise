@@ -26,6 +26,7 @@ import { CO_TEXT_CHANNEL, CO_VOICE } from "../services/coVoice.js";
 import { recordDecision, type GateCheck } from "./core.js";
 import { MODELS } from "../models.js";
 import { parseModelJson } from "../services/modelJson.js";
+import { checkNoEmotionLabel } from "./emotion.js";
 
 // Model policy (Royce, 2026-09-14): Sonnet 5 for anything with judgment or
 // side effects; Haiku only for narrow, code-checked reads.
@@ -190,6 +191,7 @@ function clockTimes(s: string): string[] {
 
 // Deterministic checks that don't need a model.
 export function codeChecks(draft: string, rf: ReplyFacts, src: GroundingSources): GateCheck[] {
+  const emotionLabel = checkNoEmotionLabel(draft);
   const checks: GateCheck[] = [];
   const sources = sourceText(rf, src);
   const rawSources = [rf.facts.map((f) => f.text).join("\n"), src.recentConversation, src.contextSummary ?? "", src.recentMemories ?? "", src.message, ...(src.sentThisTurn ?? [])].join("\n");
@@ -221,6 +223,7 @@ export function codeChecks(draft: string, rf: ReplyFacts, src: GroundingSources)
   if (promise) {
     checks.push({ name: "no_followup_promise", pass: false, reason: `promises a follow-up nothing will do: "${promise[0]}"` });
   }
+  if (!emotionLabel.pass) checks.push(emotionLabel);
   return checks;
 }
 
@@ -337,6 +340,7 @@ function stripUnsupported(draft: string, failed: GateCheck[]): string {
   const keep = sentences.filter((s) => {
     const ns = norm(s);
     if (failed.some((f) => f.name === "no_call_placed_claim") && /(calling|ringing|dialing) you|i'?m (calling|ringing|dialing)/i.test(s)) return false;
+    if (failed.some((f) => f.name === "no_emotion_label") && !checkNoEmotionLabel(s).pass) return false;
     if (failed.some((f) => f.name === "no_followup_promise") && /\b(i'?ll|i will|i can|let me|will)\s+(keep|flag|circle|follow|get back|let you know|text you|track|find out|look into|reach out|send)/i.test(s)) return false;
     if (failed.some((f) => f.name === "no_capability_denial") && /\b(can(no|')?t|unable to|this is (just )?text)\b/i.test(s)) return false;
     if (failed.some((f) => f.name === "link_on_file") && /https?:\/\//i.test(s)) return false;

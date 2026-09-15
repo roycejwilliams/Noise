@@ -35,6 +35,12 @@ import { CO_VOICE, CO_TEXT_CHANNEL } from "../services/coVoice.js";
 import { describeFailed, gate, recordDecision, type GateCheck } from "./core.js";
 import { MODELS } from "../models.js";
 import { capitalizeSentences } from "../services/textStyle.js";
+import { AsyncLocalStorage } from "node:async_hooks";
+import { getEmotionalContext, renderEmotionalContext } from "./emotion.js";
+
+// The person's emotional context for whatever draft runs inside dispatch,
+// without threading it through every registry and agent draft call.
+const feelingForDraft = new AsyncLocalStorage<string>();
 
 // Judgment with side effects (which text goes to a person, and its words)
 // runs on Sonnet 5 per Royce's model policy (2026-09-14).
@@ -121,7 +127,21 @@ export type PickState = {
   sends: SendRecord[];
   // Last time they texted Co, from any channel that logs text_exchange.
   lastInboundAt: Date | null;
+  // Emotion loop: struggling in the last day (harness/emotion.ts).
+  needsCare?: boolean;
 };
+
+// While someone is struggling, only texts that are about them (a check-in, a
+// follow-up on a call) go out. Pitches, asks, and updates wait.
+export const HOLD_WHILE_STRUGGLING = new Set<ProactiveType>([
+  "event_offer",
+  "network_tease",
+  "ask_solicitation",
+  "ask_checkin",
+  "product_update",
+  "calendar_follow",
+  "debrief",
+]);
 
 export type CandidateEvaluation = { candidate: Candidate; checks: GateCheck[]; ok: boolean };
 
@@ -191,7 +211,7 @@ export function userLevelChecks(state: Omit<PickState, "candidates">, opts: { sk
   return checks;
 }
 
-export function candidateChecks(c: Candidate, state: Pick<PickState, "now" | "sends" | "lastInboundAt">): GateCheck[] {
+export function candidateChecks(c: Candidate, state: Pick<PickState, "now" | "sends" | "lastInboundAt" | "needsCare">): GateCheck[] {
   const policy = TYPE_POLICY[c.type];
   const sameTarget = state.sends.find((s) => s.targetKey === c.targetKey);
   const unansweredTopic = state.sends.find((s) => s.topicKey && s.topicKey === c.topicKey && unansweredSince(s, state.lastInboundAt));
@@ -225,6 +245,9 @@ export function candidateChecks(c: Candidate, state: Pick<PickState, "now" | "se
       pass: !lastOfTopic || state.now.getTime() - lastOfTopic.sentAt.getTime() >= policy.topicGapDays * DAY,
       reason: `${c.topicKey} came up within ${policy.topicGapDays} days`,
     });
+  }
+  if (state.needsCare && HOLD_WHILE_STRUGGLING.has(c.type)) {
+    checks.push({ name: "emotional_timing", pass: false, reason: "they've been struggling in the last day; this can wait" });
   }
   return checks;
 }
@@ -280,6 +303,7 @@ export async function draftProactive(opts: {
   task: string;
   model?: string;
 }): Promise<string | null> {
+  const feeling = feelingForDraft.getStore();
   const { text } = await generateText({
     model: anthropic(opts.model ?? DRAFT_MODEL),
     experimental_telemetry: { isEnabled: true, functionId: opts.functionId },
@@ -291,6 +315,7 @@ ${PROACTIVE_RULES}
 
 CONFIRMED_FACTS (the only facts you may state)
 ${renderFacts(opts.facts)}
+${feeling ? `\nHOW THEY'VE BEEN FEELING (let it shape your tone and whether this is the right moment; if it isn't, return SKIP; never name the feeling)\n${feeling}\n` : ""}
 
 TASK
 ${opts.task}
@@ -737,6 +762,8 @@ export async function dispatchForUser(registry: ProactiveRegistry, userId: strin
     sends: await loadSends(pool, userId),
     lastInboundAt: await loadLastInbound(pool, userId),
   };
+  const emotional = await getEmotionalContext(userId);
+  state.needsCare = emotional.needsCare;
   const ev = evaluateCandidates(state);
   const proposal = {
     candidates: ev.perCandidate.map((p) => ({
@@ -778,7 +805,7 @@ export async function dispatchForUser(registry: ProactiveRegistry, userId: strin
 
   let draft: DraftResult;
   try {
-    draft = await registry[c.type].draft(c, person);
+    draft = await feelingForDraft.run(renderEmotionalContext(emotional), () => registry[c.type].draft(c, person));
   } catch (err: any) {
     await pool.query(`UPDATE proactive_candidates SET attempts = attempts + 1, updated_at = NOW() WHERE id = $1`, [c.id]);
     if (c.attempts + 1 >= RULES.maxDraftAttempts) await dropCandidate(registry, c, "skipped", `draft error: ${err?.message ?? err}`);

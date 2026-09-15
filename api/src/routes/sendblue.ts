@@ -12,7 +12,8 @@ import { sendSMS } from "../otpActions.js";
 import { renderCoPersonaPrompt } from "../services/coPersona.js";
 import elevenlabs from "../services/elevenlabs.js";
 import { generateEmbedding } from "../services/embeddings.js";
-import { detectSeekingMode, detectTurnTone } from "../services/emotionalTone.js";
+import { detectSeekingMode } from "../services/emotionalTone.js";
+import { getEmotionalContext, readTextEmotion, recordEmotionSignals, renderEmotionalContext } from "../harness/emotion.js";
 import { buildContextSummary } from "../services/callContext.js";
 import { findOrCreateUserByPhone, hasPendingEmail, splitFullName } from "../services/identity.js";
 import { claimTextLogin } from "../services/textLogin.js";
@@ -686,7 +687,7 @@ export function sendblueRouter(io: Server): Router {
           ? `User sent a voice memo: ${resolvedContent}`
           : `User said: ${resolvedContent}`;
 
-        const [inboundMemory, queryEmbedding, turnTone] = await Promise.all([
+        const [inboundMemory, queryEmbedding] = await Promise.all([
           pool.query(
             `INSERT INTO co_memories (user_id, memory_type, content)
              VALUES ($1, 'text_exchange', $2) RETURNING id`,
@@ -696,13 +697,6 @@ export function sendblueRouter(io: Server): Router {
             console.error("Inbound embedding failed (non-fatal):", err);
             return null;
           }),
-          // Run alongside everything else above rather than after it — this
-          // is a pure add-on signal for the reply prompt built in Step 6, not
-          // something anything else here depends on. hasText guards it so a
-          // photo/voice-memo-only message (resolvedContent is a placeholder
-          // like "[sent a photo]") doesn't burn a classification call on
-          // text that was never really there.
-          hasText ? detectTurnTone(resolvedContent, "sendblue.detectTurnTone") : Promise.resolve(null),
         ]);
 
         // Same text sent again within a couple of minutes (confirmed live:
@@ -778,10 +772,21 @@ export function sendblueRouter(io: Server): Router {
         const recentConversation = annotateConversationGaps(chronologicalRows);
         const styleHint = deriveStyleHint(chronologicalRows);
 
-        // Advisory-only read on what they need (heard vs. helped toward an
-        // answer) rather than how they feel — needs the conversation, not
-        // just this one message, unlike detectTurnTone.
-        const seekingMode = hasText ? await detectSeekingMode(resolvedContent, recentConversation, "sendblue.detectSeekingMode") : null;
+        // Emotion loop (harness/emotion.ts): read how this message feels in
+        // the context of the conversation, record it, then load the shared
+        // picture (this text, recent calls, what keeps coming up) that the
+        // reply reasons from. Alongside: whether they want to be heard or
+        // helped toward an answer.
+        const [seekingMode, textEmotion] = hasText
+          ? await Promise.all([
+              detectSeekingMode(resolvedContent, recentConversation, "sendblue.detectSeekingMode"),
+              readTextEmotion(resolvedContent, recentConversation, "sendblue.readTextEmotion"),
+            ])
+          : [null, null];
+        if (textEmotion) {
+          await recordEmotionSignals(user.id, [{ source: "text", ...textEmotion, quote: resolvedContent.slice(0, 140), memoryId: inboundMemory.rows[0].id }]);
+        }
+        const emotional = await getEmotionalContext(user.id);
 
         const pendingOfferResult = await pool.query(
           `SELECT p.id, p.content, p.created_at FROM co_memories p
@@ -1462,7 +1467,13 @@ Return ONLY valid JSON, no preamble: {"date": "YYYY-MM-DD or null", "time": "HH:
         // instead. Folded into the one reply below (never sent as a second
         // message).
         try {
-          if (decision.wantsRecommendation) {
+          // Emotion loop: someone who's struggling and just wants to be heard
+          // doesn't get an event or opportunity pitched in the same reply.
+          const holdRecommendationForFeelings = emotional.needsCare && seekingMode !== "solving";
+          if (holdRecommendationForFeelings && decision.wantsRecommendation) {
+            addInstruction(replyFacts, "They asked for a suggestion, but they've been struggling. Respond to how they're doing first; offer to look for something once they want it, without naming anything now.");
+          }
+          if (decision.wantsRecommendation && !holdRecommendationForFeelings) {
             const recommendation = await generateRecommendation(user.id, resolvedContent);
             if (recommendation.available && recommendation.matches?.length) {
               // Sent DETERMINISTICALLY, not via agent tool-calling (Royce,
@@ -1729,12 +1740,10 @@ Return ONLY valid JSON, no preamble: {"date": "YYYY-MM-DD or null", "time": "HH:
         // Not gated like the reply-agent's secondary gestures above — this
         // isn't a competing "extra ask" for the reply's one secondary slot,
         // it's an instruction about HOW to say whatever Co was already going
-        // to say. Advisory only (see detectTurnTone) and never named back to
+        // to say. Advisory only (see harness/emotion.ts) and never named back to
         // the user — a good friend responds differently to someone who's
         // upset, they don't announce "you sound upset."
-        const toneContext = turnTone
-          ? `They sound ${turnTone} right now. Let that genuinely shape your tone and pacing, not just your words — don't be breezy, joke, or rush past it if it doesn't fit. Never name the emotion back at them like a label.`
-          : "";
+        const toneContext = renderEmotionalContext(emotional);
 
         // Advisory only, same reasoning as toneContext above — reading a
         // shift the person never actually asked you to notice, not a rule.

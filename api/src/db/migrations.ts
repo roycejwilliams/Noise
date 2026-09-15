@@ -1201,4 +1201,24 @@ export function runMigrations() {
        END $$`,
     )
     .catch((err: Error) => console.error("users FK cascade migration failed:", err));
+
+  // Emotion loop (2026-09-15) — see src/harness/emotion.ts. One row per
+  // emotional moment: a Hume voice moment from a call, or a text read.
+  pool
+    .query(
+      `CREATE TABLE IF NOT EXISTS emotion_signals (
+        id BIGSERIAL PRIMARY KEY,
+        user_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+        source TEXT NOT NULL CHECK (source IN ('call', 'text')),
+        emotion TEXT NOT NULL,
+        intensity TEXT NOT NULL CHECK (intensity IN ('low', 'medium', 'high')),
+        valence TEXT NOT NULL CHECK (valence IN ('negative', 'positive', 'mixed')),
+        about TEXT,
+        quote TEXT,
+        memory_id UUID,
+        created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+      )`,
+    )
+    .then(() => pool.query(`CREATE INDEX IF NOT EXISTS idx_emotion_signals_user ON emotion_signals (user_id, created_at DESC)`))
+    .catch((err: Error) => console.error("emotion_signals table init failed:", err));
 }

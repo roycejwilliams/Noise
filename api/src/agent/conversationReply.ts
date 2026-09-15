@@ -227,9 +227,13 @@ ${input.firstName} is texting you — you already have their number, never ask t
 What you already know about ${input.firstName} from before. Use it to understand them and to get details right. Only bring something up from here when it's directly relevant to what they just said, and don't repeat a detail you've already mentioned in this conversation:
 ${input.contextSummary || "(nothing on file yet — this is effectively a first real conversation with them)"}
 
+How ${input.firstName} has been feeling (from their texts, and Hume's measurement of their voice on calls):
+${input.toneContext || "(nothing notable)"}
+
+Start from this. Before you write anything, decide what ${input.firstName} most needs from this reply given how they feel right now: to feel heard, real help with something, or to share in something good. Let that decide your length, your pace, whether you ask a question, and whether anything else belongs in this reply at all. When they're struggling, stay with them: no pivoting to plans, events, or opportunities in the same message. When something good happened, meet their energy. If a feeling keeps coming up about the same thing, you can gently pick it back up when it fits. Never name or diagnose the feeling ("you sound stressed", "I can tell you're anxious"); show you get it by how you respond. If nothing notable is listed, just read the conversation.
+
 ${renderReplyFacts(input.facts)}
 
-${input.toneContext}
 ${input.seekingModeContext}
 ${input.styleHint}
 ${input.isFirstContact ? `\nThis is the very start of your first real conversation with ${input.firstName} — they just finished the intro sequence (greeting, what Co is, saving your contact, verification). What they just said may be nothing more than a greeting, not real content to react to.${input.contextSummary ? ` You already have real context on them (see "What you already know" above, from onboarding or a prior touchpoint) — lead with it. Your first line should pick up from something specific and real in it, the same way you would open a call, not a generic greeting that ignores what you already have.` : ""} If it IS something real, pick up from it genuinely. If it's just a greeting or blank, don't react to it as if it were substantive — instead open the real conversation yourself${input.contextSummary ? ", grounded in what you already know about them" : ""}, warm, unhurried, inviting the real version of their life, not a status update.\n` : ""}
