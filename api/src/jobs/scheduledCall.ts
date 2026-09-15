@@ -1,10 +1,13 @@
 import { anthropic } from "@ai-sdk/anthropic";
 import { generateText } from "ai";
 import pool from "../db/db.js";
-import sendblue from "../services/sendblue.js";
+import { cleanCoMessage } from "../services/sendblue.js";
 import { triggerCallForUser } from "../services/callTrigger.js";
-import { writeMemory } from "../services/memory.js";
+import { sendExempt } from "../harness/proactive.js";
 import { CO_VOICE, CO_TEXT_CHANNEL } from "../services/coVoice.js";
+
+// One-line heads-up draft checked by length; narrow work, so Haiku.
+const REMINDER_MODEL = "claude-haiku-4-5-20251001";
 
 // Places calls booked via the schedule-a-call flow in sendblue.ts
 // (scheduled_calls, distinct from the existing "call me now" explicit_request
@@ -50,6 +53,13 @@ export async function placeDueCalls(io: import("socket.io").Server | null): Prom
   }
 }
 
+// A reminder only makes sense for a call that's still pending and still
+// coming up in the next ~20 minutes. Pure, so the Layer 7 eval can test it.
+export function reminderStillDue(call: { status: string; scheduled_for: Date | string }, now: Date): boolean {
+  const at = new Date(call.scheduled_for).getTime();
+  return call.status === "pending" && at > now.getTime() && at <= now.getTime() + 20 * 60 * 1000;
+}
+
 // Heads-up text ~15 minutes before a scheduled call actually fires — the
 // window is deliberately wide relative to this job's 5-min tick (rather
 // than a narrow "exactly 15 min out" check) so a slow tick or a brief
@@ -84,7 +94,7 @@ export async function sendDueReminders(): Promise<void> {
     let reminderMessage = "Calling you soon, like we said.";
     try {
       const { text: variedReminder } = await generateText({
-        model: anthropic("claude-haiku-4-5-20251001"),
+        model: anthropic(REMINDER_MODEL),
         experimental_telemetry: {
           isEnabled: true,
           functionId: "jobs.scheduledCallReminder",
@@ -92,7 +102,7 @@ export async function sendDueReminders(): Promise<void> {
         prompt: `${CO_VOICE}\n\n${CO_TEXT_CHANNEL} You're about to call ${row.first_name} in about 15 minutes, as scheduled. Send a short, natural one-line heads-up text. Vary how you say it, don't just say "Calling you soon." No exclamation points, no em dashes. Under 60 characters.`,
       });
       const trimmed = variedReminder.trim();
-      if (trimmed) reminderMessage = trimmed;
+      if (trimmed && trimmed.length <= 80 && !/[!—–]|https?:/.test(trimmed)) reminderMessage = trimmed;
     } catch (err: any) {
       console.error(
         `scheduledCall: reminder message generation failed for ${row.id} (non-fatal, using fallback):`,
@@ -100,25 +110,28 @@ export async function sendDueReminders(): Promise<void> {
       );
     }
 
-    try {
-      await sendblue.messages.send({
-        number: row.phone_number,
-        content: reminderMessage,
-        from_number: process.env.SENDBLUE_PHONE_NUMBER!,
-      });
-    } catch (err: any) {
-      console.error(`scheduledCall: reminder send failed for ${row.id} (non-fatal):`, err?.message ?? err);
+    // Re-read right before sending (live 2026-09-10: "gonna ring you in like
+    // 15" went out for a call that had been cancelled after the reminder
+    // row was claimed). Anything but still-pending and still ~15 min out
+    // means no reminder.
+    const still = await pool.query(`SELECT status, scheduled_for FROM scheduled_calls WHERE id = $1`, [row.id]);
+    if (!still.rows[0] || !reminderStillDue(still.rows[0], new Date())) {
+      console.log(`scheduledCall: reminder for ${row.id} skipped, call no longer pending at that time`);
       continue;
     }
 
-    // Confirmed live, 2026-09-08: without this, a reminder sent here was
-    // completely invisible to Co's own reply-generation (recentConversation
-    // only reads text_exchange rows) — asked "why are you calling me in 15
-    // mins?" moments later, Co had no memory of having just said that and
-    // flatly denied it, when the scheduling itself had actually worked
-    // correctly the whole time.
-    await writeMemory(row.user_id, "text_exchange", `Co replied: ${reminderMessage}`).catch((err: any) =>
-      console.error(`scheduledCall: reminder text_exchange log failed for ${row.id} (non-fatal):`, err?.message ?? err),
-    );
+    // Transactional: outside the daily proactive pick, but idempotent per
+    // call through the proactive ledger. sendExempt logs text_exchange.
+    try {
+      await sendExempt({
+        userId: row.user_id,
+        phoneNumber: row.phone_number,
+        type: "call_reminder",
+        targetKey: `call_reminder:${row.id}`,
+        messages: [cleanCoMessage(reminderMessage)],
+      });
+    } catch (err: any) {
+      console.error(`scheduledCall: reminder send failed for ${row.id} (non-fatal):`, err?.message ?? err);
+    }
   }
 }

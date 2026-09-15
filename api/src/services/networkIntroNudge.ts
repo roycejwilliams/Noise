@@ -3,7 +3,7 @@ import { anthropic } from "@ai-sdk/anthropic";
 import { Resend } from "resend";
 import pool from "../db/db.js";
 import sendblue, { cleanCoMessage } from "./sendblue.js";
-import { tryClaimProactiveNudge } from "./proactiveThrottle.js";
+import { enqueueCandidate } from "../harness/proactive.js";
 import { writeMemory } from "./memory.js";
 import { ALLOW_REAL_SENDS } from "../otpActions.js";
 import type { MatchNudgeCandidate } from "./eventGuestMatchHandoff.js";
@@ -109,67 +109,35 @@ async function findFreshCandidates(userId: string, askId: string): Promise<Backl
   return fresh;
 }
 
-// Entry point — called once per (user, open ask) on the same daily cadence
-// as the relevance sweep itself. Sends a TEASE, no name yet (mirrors
-// eventSurfacingSweep.ts's ask-first pattern) — the actual reveal only
-// happens once they say they want to hear who.
+// Entry point — called once per (user, open ask) on the daily sweep. Layer 7
+// (2026-09-14): queues the front candidate as a "network_tease" (no name
+// yet); src/harness/proactive.ts decides whether it goes out and drafts it.
+// The harness's onSent hook (harness/proactiveRegistry.ts) removes it from
+// network_backlogs and writes network_offer_pending; a skipped or expired
+// tease is removed from the backlog there too.
 export async function attemptNetworkSurfacing(
   userId: string,
-  firstName: string,
-  phoneNumber: string,
+  _firstName: string,
+  _phoneNumber: string,
   askId: string,
-): Promise<{ sent: boolean; throttled: boolean }> {
+): Promise<{ queued: boolean }> {
   let pending = await dropStaleFront(userId, await getBacklog(userId, askId));
   if (!pending.length) {
     pending = await dropStaleFront(userId, await findFreshCandidates(userId, askId));
   }
-  if (!pending.length) {
-    await saveBacklog(userId, askId, []);
-    return { sent: false, throttled: false };
-  }
+  await saveBacklog(userId, askId, pending);
+  if (!pending.length) return { queued: false };
 
-  const [item, ...rest] = pending;
-
-  if (!(await tryClaimProactiveNudge(userId))) {
-    await saveBacklog(userId, askId, pending); // nothing consumed — stays at the front for next time
-    return { sent: false, throttled: true };
-  }
-
-  let message: string;
-  try {
-    const { text } = await generateText({
-      model: anthropic("claude-haiku-4-5-20251001"),
-      experimental_telemetry: { isEnabled: true, functionId: "networkIntroNudge.tease.draft" },
-      prompt: `${CO_VOICE}\n\n${CO_TEXT_CHANNEL} You're texting ${firstName}. Someone in the network crossed your mind for them — related to what they've told you they're looking for, but you haven't said who yet. Draft a short, warm text (1-2 sentences, no exclamation points, no em dashes, normal sentence capitalization) like a friend who just thought of someone, asking if they'd like to hear who. Don't name anyone or describe them yet. Return ONLY the message text.`,
-    });
-    message = cleanCoMessage(text.trim());
-  } catch (err: any) {
-    console.error("attemptNetworkSurfacing: tease draft failed (non-fatal):", err?.message ?? err);
-    return { sent: false, throttled: false };
-  }
-
-  try {
-    await sendblue.messages.send({ number: phoneNumber, content: message, from_number: process.env.SENDBLUE_PHONE_NUMBER! });
-  } catch (err: any) {
-    console.error("attemptNetworkSurfacing: send failed (non-fatal):", err?.message ?? err);
-    return { sent: false, throttled: false };
-  }
-
-  await saveBacklog(userId, askId, rest);
-  await pool
-    .query(`INSERT INTO co_memories (user_id, memory_type, content) VALUES ($1, 'network_offer_pending', $2)`, [
-      userId,
-      JSON.stringify({ askId, candidate: item.candidate }),
-    ])
-    .catch((err: any) => console.error("attemptNetworkSurfacing: network_offer_pending write failed (non-fatal):", err?.message ?? err));
-  // Royce, 2026-09-08 sweep — this, the tease itself, was the one message
-  // in this file's own flow that never got a text_exchange log (the reveal
-  // and direct-ask messages downstream of it already do).
-  await writeMemory(userId, "text_exchange", `Co replied: ${message}`).catch((err: any) =>
-    console.error("attemptNetworkSurfacing: text_exchange log failed (non-fatal):", err?.message ?? err),
-  );
-
-  return { sent: true, throttled: false };
+  const [item] = pending;
+  const { queued } = await enqueueCandidate({
+    userId,
+    type: "network_tease",
+    targetKey: `network_tease:${item.candidate.candidate_id}`,
+    summary: `Someone in Co's network who fits what they're looking for (not named until they say yes): ${item.candidate.match_reason.slice(0, 160)}`,
+    payload: { askId, candidate: item.candidate },
+    expiresAt: new Date(Date.now() + 14 * 24 * 60 * 60 * 1000),
+  });
+  return { queued };
 }
 
 export type PendingNetworkTease = { askId: string; candidate: NetworkCandidate };

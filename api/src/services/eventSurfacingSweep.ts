@@ -1,6 +1,6 @@
 import pool from "../db/db.js";
-import { getTieredRecommendation, checkForUrgentMatch, type TierMatch } from "./tieredRecommendation.js";
-import { runEventDiscoverySurfacingAgent } from "../agent/eventDiscoverySurfacing.js";
+import { getTieredRecommendation, type TierMatch } from "./tieredRecommendation.js";
+import { enqueueCandidate } from "../harness/proactive.js";
 import { generateEmbedding } from "./embeddings.js";
 import { scheduleOutcomeFollowUp, getTierBias } from "./recommendationOutcome.js";
 
@@ -17,6 +17,10 @@ export type SurfacingCandidate = {
   firstName: string;
   phoneNumber: string;
   askText: string;
+  // true when there's no stated ask and askText was built from what's on
+  // their profile (goals, interests, wants), so drafts don't claim they
+  // "told you" it.
+  fromProfile?: boolean;
   city: string | null;
   goals: string[] | null;
   activityPreferences: string[] | null;
@@ -246,23 +250,17 @@ function isShortNotice(match: TierMatch): boolean {
 // whatever's real, tier-ordered — factored out so attemptEventSurfacing can
 // retry it in the same cycle if the backlog turns out fully stale, instead
 // of just giving up until the next cadence window.
+// Daily full search across all three tiers (Royce, 2026-09-14: "it should
+// be actively searching for all 3 tiers"). Searching and sending are paced
+// separately: anything happening within URGENT_WINDOW_DAYS is "urgent" and
+// may go out before the 3-day cadence clears; everything else waits for it.
+const URGENT_WINDOW_DAYS = 3;
+
 async function findFreshPending(candidate: SurfacingCandidate): Promise<BacklogItem[]> {
-  const source: "full" | "urgent" = candidate.cooldownCleared ? "full" : "urgent";
-  let matches: TierMatch[];
-  if (candidate.cooldownCleared) {
-    matches = await getTieredRecommendation({ text: candidate.askText }, candidate.city).catch((err: any) => {
-      console.error("attemptEventSurfacing: getTieredRecommendation failed (non-fatal):", err?.message ?? err);
-      return [];
-    });
-  } else {
-    const profileContext = [candidate.askText, ...(candidate.goals ?? []), ...(candidate.activityPreferences ?? [])]
-      .filter(Boolean)
-      .join(". ");
-    matches = await checkForUrgentMatch({ text: profileContext }, candidate.city).catch((err: any) => {
-      console.error("attemptEventSurfacing: checkForUrgentMatch failed (non-fatal):", err?.message ?? err);
-      return [];
-    });
-  }
+  const matches = await getTieredRecommendation({ text: candidate.askText }, candidate.city).catch((err: any) => {
+    console.error("attemptEventSurfacing: getTieredRecommendation failed (non-fatal):", err?.message ?? err);
+    return [] as TierMatch[];
+  });
   // Tier order as the mention priority (Tier 1 first by default) — same
   // "route people into Co's own events first" reasoning the old
   // decideBestMatch had, just spread across separate texts over time
@@ -275,146 +273,177 @@ async function findFreshPending(candidate: SurfacingCandidate): Promise<BacklogI
   const bias = await getTierBias(candidate.userId);
   return fresh
     .sort((a, b) => bias[b.tier] - bias[a.tier] || a.tier - b.tier)
-    .map((match) => ({ askText: candidate.askText, match, source }));
+    .map((match) => {
+      const date = relevantDate(match);
+      const source: "full" | "urgent" = date !== null && daysUntilDate(date) <= URGENT_WINDOW_DAYS ? "urgent" : "full";
+      return { askText: candidate.askText, match, source };
+    });
 }
 
-// Drops anything at the front that's gone stale — either already offered
-// through some other path, or a real event/deadline that's fully passed
-// while it sat waiting its turn — without losing what's behind it.
+function sameMatch(a: TierMatch, b: TierMatch): boolean {
+  if ("event_api_id" in a && "event_api_id" in b) return a.event_api_id === b.event_api_id;
+  return a.name.toLowerCase() === b.name.toLowerCase();
+}
+
+// Stable identity for one event/opportunity, shared by the backlog and the
+// proactive harness's idempotency key.
+export function matchKey(match: TierMatch): string {
+  return "event_api_id" in match ? `event:${match.event_api_id}` : `opportunity:${match.name.toLowerCase().trim()}`;
+}
+
+// The harness already sent, skipped, or expired this one for this person.
+async function alreadyDecided(userId: string, match: TierMatch): Promise<boolean> {
+  const { rows } = await pool.query(
+    `SELECT 1 FROM proactive_candidates WHERE user_id = $1 AND target_key = $2 AND status <> 'pending'`,
+    [userId, `event_offer:${matchKey(match)}`],
+  );
+  return rows.length > 0;
+}
+
+// Drops anything at the front that's gone stale — already offered through
+// some other path, already decided by the harness, or a real event/deadline
+// that's fully passed while it sat waiting its turn — without losing what's
+// behind it.
 async function dropStaleFront(userId: string, items: BacklogItem[]): Promise<BacklogItem[]> {
   let rest = items;
-  while (rest.length && ((await alreadyOffered(userId, rest[0].match)) || isPastEvent(rest[0].match))) {
+  while (
+    rest.length &&
+    ((await alreadyOffered(userId, rest[0].match)) || isPastEvent(rest[0].match) || (await alreadyDecided(userId, rest[0].match)))
+  ) {
     rest = rest.slice(1);
   }
   return rest;
 }
 
-export async function attemptEventSurfacing(candidate: SurfacingCandidate): Promise<{ sent: boolean; throttled: boolean }> {
-  let pending = await dropStaleFront(candidate.userId, await getBacklog(candidate.userId, candidate.askId));
+export type EventOfferPayload = {
+  askId: string;
+  askText: string;
+  fromProfile: boolean;
+  match: TierMatch;
+};
 
-  // Falls through to a fresh search in the SAME cycle whenever there's
-  // nothing usable queued — whether the backlog was empty to begin with, or
-  // turned out to be entirely stale once checked. Without this, a backlog
-  // that goes fully stale would silently wait out the rest of the normal
-  // cadence with nothing sent, even on a cycle that was otherwise free to
-  // look for something new right now.
-  if (!pending.length) {
-    pending = await dropStaleFront(candidate.userId, await findFreshPending(candidate));
+// ask_id used for the backlog of people with no open stated ask, whose
+// search text comes from their profile (jobs/index.ts).
+export const PROFILE_ASK_ID = "profile";
+
+// Layer 7 (2026-09-14): searches every day and QUEUES the front item as an
+// "event_offer" candidate; src/harness/proactive.ts decides whether it goes
+// out and drafts it (a tease, or a direct reveal if it's short notice by
+// then). queued: true when the front item is waiting in the harness.
+export async function attemptEventSurfacing(candidate: SurfacingCandidate): Promise<{ queued: boolean }> {
+  // Search every day, not only when the backlog is empty, and merge
+  // anything new behind what's already queued. Urgent items (happening
+  // soon) move to the front so they aren't stuck behind a later event.
+  const queued = await dropStaleFront(candidate.userId, await getBacklog(candidate.userId, candidate.askId));
+  const found = await findFreshPending(candidate);
+  const merged = [...queued, ...found.filter((f) => !queued.some((q) => sameMatch(q.match, f.match)))];
+  const pending = await dropStaleFront(candidate.userId, [
+    ...merged.filter((i) => i.source === "urgent" || isShortNotice(i.match)),
+    ...merged.filter((i) => !(i.source === "urgent" || isShortNotice(i.match))),
+  ]);
+  await saveBacklog(candidate.userId, candidate.askId, pending);
+  if (!pending.length) return { queued: false };
+
+  const item = pending[0];
+  // Cadence gate (Royce, 2026-08-30): a "full" item waits for the 3-day
+  // cadence; urgent and short-notice items don't.
+  if (item.source === "full" && !candidate.cooldownCleared && !isShortNotice(item.match)) return { queued: false };
+
+  const date = relevantDate(item.match);
+  const payload: EventOfferPayload = {
+    askId: candidate.askId,
+    askText: item.askText,
+    fromProfile: candidate.fromProfile ?? false,
+    match: item.match,
+  };
+  const { queued: ok } = await enqueueCandidate({
+    userId: candidate.userId,
+    type: "event_offer",
+    targetKey: `event_offer:${matchKey(item.match)}`,
+    summary: `${item.match.kind === "opportunity" ? "An opportunity" : "An event"} that fits ${candidate.fromProfile ? "what they've shared" : `their ask "${item.askText.slice(0, 120)}"`}: "${item.match.name}"${date ? ` (${date})` : ""}${isShortNotice(item.match) ? ", short notice" : ""}`,
+    payload,
+    // Expires at the end of the event's (or deadline's) day; an undated
+    // opportunity gets two weeks.
+    expiresAt: date ? new Date(`${date}T23:59:00Z`) : new Date(Date.now() + 14 * 24 * 60 * 60 * 1000),
+    // Short notice is the most time-bound thing Co can send.
+    priority: isShortNotice(item.match) ? 95 : undefined,
+  });
+  return { queued: ok };
+}
+
+export { isShortNotice };
+
+async function removeFromBacklog(userId: string, askId: string, match: TierMatch): Promise<void> {
+  const items = await getBacklog(userId, askId);
+  await saveBacklog(userId, askId, items.filter((i) => !sameMatch(i.match, match)));
+}
+
+// Harness hook after the text actually went out.
+export async function onEventOfferSent(userId: string, payload: EventOfferPayload, revealed: boolean): Promise<void> {
+  const { match, askText, askId } = payload;
+  await removeFromBacklog(userId, askId, match);
+
+  if (askId === PROFILE_ASK_ID) {
+    await pool.query(
+      `INSERT INTO profile_surfacing_state (user_id, last_surfaced_at) VALUES ($1, NOW())
+       ON CONFLICT (user_id) DO UPDATE SET last_surfaced_at = NOW()`,
+      [userId],
+    );
+  } else {
+    await pool.query(`UPDATE ask_checkins SET last_surfaced_at = NOW() WHERE id = $1`, [askId]);
   }
 
-  if (!pending.length) {
-    await saveBacklog(candidate.userId, candidate.askId, []);
-    return { sent: false, throttled: false };
-  }
-
-  const [item, ...rest] = pending;
-  const shortNotice = isShortNotice(item.match);
-
-  // Cadence gate (Royce, 2026-08-30 code review fix): a "full"-sourced item
-  // sitting in the backlog must still wait for the normal 3-day cadence to
-  // clear, same as it would have if it were being found fresh right now —
-  // otherwise, once the unrelated 24h nudge cap clears, the backlog would
-  // drain a real match every day instead of every 3 days, directly
-  // contradicting "people don't want to get notified about an event every
-  // day." An "urgent"-sourced item is exempt (it's near-term by
-  // construction) and anything that's become short-notice while queued is
-  // exempt too, for the same reason short-notice reveals skip the tease
-  // step in the first place — waiting three more days isn't an option for
-  // something happening tomorrow.
-  if (item.source === "full" && !candidate.cooldownCleared && !shortNotice) {
-    await saveBacklog(candidate.userId, candidate.askId, pending);
-    return { sent: false, throttled: false };
-  }
-
-  const { sent, throttled } = await runEventDiscoverySurfacingAgent(
-    { userId: candidate.userId, firstName: candidate.firstName, phoneNumber: candidate.phoneNumber },
-    item.askText,
-    item.match,
-    { revealNow: shortNotice },
-  );
-
-  // Only consume the item once it actually goes out — a throttled attempt,
-  // or one the model itself decided not to send, leaves it at the front of
-  // the backlog for next time instead of silently dropping it.
-  await saveBacklog(candidate.userId, candidate.askId, sent ? rest : pending);
-
-  if (sent) {
-    // Short-notice reveals still need a permanent-dedup record — alreadyOffered
-    // only scans 'event_offer_pending' rows, and skipping this write entirely
-    // would mean a directly-revealed event could get offered again later.
-    // Immediately followed by 'event_offer_resolved' (not a real reply, just
-    // "already handled") so sendblue.ts's pending-offer lookup doesn't
-    // mistake the person's next message for an answer to a tease that was
-    // never actually asked — revealNow skipped the yes/no step entirely.
-    {
-      // Stored as JSON (parsed elsewhere by sendblue.ts's pending-offer
-      // lookup) but embedded from a plain-language rendering — otherwise
-      // this real name/reason (Co's own record of what it actually
-      // surfaced) is never reachable by recentMemories' semantic search on
-      // a later turn, the same gap that let a real recommendation link go
-      // unexplained when asked "what is this?" later.
-      const pendingContent = JSON.stringify({ askText: item.askText, match: item.match });
-      const embeddingSource = `${item.match.name} — ${item.match.reason} (asked about: ${item.askText})`;
-      await pool
-        .query(`INSERT INTO co_memories (user_id, memory_type, content) VALUES ($1, 'event_offer_pending', $2) RETURNING id`, [
-          candidate.userId,
-          pendingContent,
-        ])
-        .then((mem) =>
-          generateEmbedding(embeddingSource)
-            .then((emb) =>
-              pool.query(`UPDATE co_memories SET content_embedding = $1::vector WHERE id = $2`, [
-                `[${emb.join(",")}]`,
-                mem.rows[0].id,
-              ]),
-            )
-            .catch((err: any) => console.error("event_offer_pending embedding failed (non-fatal):", err?.message ?? err)),
+  // event_offer_pending is both the permanent dedup record (alreadyOffered)
+  // and what routes/sendblue.ts reads to answer "yes, tell me more". Stored
+  // as JSON but embedded from plain language so later semantic search can
+  // find what Co actually surfaced.
+  const pendingContent = JSON.stringify({ askText, match });
+  const embeddingSource = `${match.name}: ${match.reason} (asked about: ${askText})`;
+  await pool
+    .query(`INSERT INTO co_memories (user_id, memory_type, content) VALUES ($1, 'event_offer_pending', $2) RETURNING id`, [
+      userId,
+      pendingContent,
+    ])
+    .then((mem) =>
+      generateEmbedding(embeddingSource)
+        .then((emb) =>
+          pool.query(`UPDATE co_memories SET content_embedding = $1::vector WHERE id = $2`, [`[${emb.join(",")}]`, mem.rows[0].id]),
         )
-        .catch((err: any) => console.error("attemptEventSurfacing: event_offer_pending write failed (non-fatal):", err?.message ?? err));
-    }
+        .catch((err: any) => console.error("event_offer_pending embedding failed (non-fatal):", err?.message ?? err)),
+    )
+    .catch((err: any) => console.error("onEventOfferSent: event_offer_pending write failed (non-fatal):", err?.message ?? err));
 
-    if (shortNotice) {
-      await pool
-        .query(`INSERT INTO co_memories (user_id, memory_type, content) VALUES ($1, 'event_offer_resolved', $2)`, [
-          candidate.userId,
-          "revealed_directly",
-        ])
-        .catch((err: any) => console.error("attemptEventSurfacing: event_offer_resolved write failed (non-fatal):", err?.message ?? err));
-
-      // Outcome-learning loop (Royce, 2026-09-02) — the ask-first path
-      // schedules this in sendblue.ts's "interested" branch; this is the
-      // OTHER real-details-revealed moment (revealNow skips the tease
-      // entirely), so it needs the same trigger here. No-op for Tier 3.
-      scheduleOutcomeFollowUp(candidate.userId, item.askText, item.match).catch((err: any) =>
-        console.error("attemptEventSurfacing: scheduleOutcomeFollowUp failed (non-fatal):", err?.message ?? err),
-      );
-    }
-
-    // Only Tier 1/2 are real shared events worth cross-matching another
-    // person against (see eventMatching.ts) — Tier 3 opportunities aren't
-    // something two people both "attend." This fires regardless of whether
-    // the recipient ends up saying they're interested — Co already surfaced
-    // the same real event to two different people either way.
-    if ("event_api_id" in item.match) {
-      const { recordSurfacedEventAndMatch } = await import("./eventMatching.js");
-      recordSurfacedEventAndMatch(candidate.userId, item.match.event_api_id, item.match.name, item.match.event_date).catch(
-        (err: any) => console.error("attemptEventSurfacing: recordSurfacedEventAndMatch failed (non-fatal):", err?.message ?? err),
-      );
-    } else {
-      // Stores the embedding once, at offer time, so alreadyOfferedTier3
-      // never has to recompute it on a future dedup check (see that
-      // function's note above).
-      generateEmbedding(item.match.name)
-        .then((embedding) =>
-          pool.query(`INSERT INTO tier3_offered_opportunities (user_id, name, embedding) VALUES ($1, $2, $3::vector)`, [
-            candidate.userId,
-            item.match.name,
-            `[${embedding.join(",")}]`,
-          ]),
-        )
-        .catch((err: any) => console.error("attemptEventSurfacing: tier3_offered_opportunities write failed (non-fatal):", err?.message ?? err));
-    }
+  if (revealed) {
+    // A direct reveal skipped the yes/no step, so nothing waits on a reply;
+    // and the real details went out, so the debrief gets scheduled.
+    await pool
+      .query(`INSERT INTO co_memories (user_id, memory_type, content) VALUES ($1, 'event_offer_resolved', 'revealed_directly')`, [userId])
+      .catch((err: any) => console.error("onEventOfferSent: event_offer_resolved write failed (non-fatal):", err?.message ?? err));
+    await scheduleOutcomeFollowUp(userId, askText, match).catch((err: any) =>
+      console.error("onEventOfferSent: scheduleOutcomeFollowUp failed (non-fatal):", err?.message ?? err),
+    );
   }
 
-  return { sent, throttled };
+  if ("event_api_id" in match) {
+    const { recordSurfacedEventAndMatch } = await import("./eventMatching.js");
+    await recordSurfacedEventAndMatch(userId, match.event_api_id, match.name, match.event_date).catch((err: any) =>
+      console.error("onEventOfferSent: recordSurfacedEventAndMatch failed (non-fatal):", err?.message ?? err),
+    );
+  } else {
+    await generateEmbedding(match.name)
+      .then((embedding) =>
+        pool.query(`INSERT INTO tier3_offered_opportunities (user_id, name, embedding) VALUES ($1, $2, $3::vector)`, [
+          userId,
+          match.name,
+          `[${embedding.join(",")}]`,
+        ]),
+      )
+      .catch((err: any) => console.error("onEventOfferSent: tier3_offered_opportunities write failed (non-fatal):", err?.message ?? err));
+  }
+}
+
+// Harness hook when the candidate is skipped or expires: take it out of the
+// backlog so the next match can be queued.
+export async function onEventOfferDropped(userId: string, payload: EventOfferPayload): Promise<void> {
+  await removeFromBacklog(userId, payload.askId, payload.match);
 }

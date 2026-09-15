@@ -20,6 +20,10 @@ import pool from "../db/db.js";
 // Deliberately NOT applied to event_change_notification — a real
 // cancellation/change to something someone's actually registered for is
 // time-critical information, not a discretionary nudge, so it stays exempt.
+// Layer 7 (2026-09-14): discretionary texts now go through the proactive
+// harness (src/harness/proactive.ts), which has its own ledger and caps.
+// This claim is still used by Layer 6 in-room nudges during a live event
+// (eventScoring.ts), which are deliberately outside that harness.
 const TEXT_NUDGE_COOLDOWN_HOURS = 24;
 
 // Single atomic claim, not check-then-write (bug fix, 2026-08-30) — two

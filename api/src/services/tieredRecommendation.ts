@@ -261,7 +261,7 @@ async function proposeOpportunityQuery(ask: StatedIntent, city: string | null): 
 
 Today's date: ${todayStr}
 
-If this maps reasonably to the kind of thing a founder or high-agency builder would search X/Twitter for right now — an accelerator, fellowship, cohort-based program, or similar real opportunity with an open or upcoming application — propose a short X search query (2-4 broad, distinctive keywords, not a question) likely to surface real, recent posts about it. Never include a specific year in the query unless the person's own ask text stated one — a wrong or stale year keyword will filter out real current posts that don't happen to mention that exact year. Never include the person's own city/region as a keyword either (confirmed live: adding "SF Bay Area" to an otherwise-good query dropped real matching posts to zero) — a real opportunity post almost never mentions the seeker's own location, only the program's own name and field. If it doesn't map to that kind of thing at all (e.g. it's purely social, not opportunity-shaped), return null.
+Propose a short X search query (2-4 broad, distinctive keywords, not a question) likely to surface real, recent posts about a concrete opportunity that fits what they want: an accelerator, fellowship, cohort-based program, residency, grant, or a named community, club, or recurring group they could join. Always propose one when there's any topic to search on; social or hobby asks map to communities and groups. Never include a specific year in the query unless the person's own ask text stated one — a wrong or stale year keyword will filter out real current posts that don't happen to mention that exact year. Never include the person's own city/region as a keyword either (confirmed live: adding "SF Bay Area" to an otherwise-good query dropped real matching posts to zero) — a real opportunity post almost never mentions the seeker's own location, only the program's own name and field. Return null only when there's no topic at all to search on.
 
 Return ONLY valid JSON: {"query": "..." or null}`,
     });
@@ -312,7 +312,7 @@ Today's date: ${todayStr}
 Here are real recent posts from X, one per line:
 ${digest}
 
-Pick the ONE post (if any) that names a real, concrete opportunity (a specific accelerator, fellowship, or program — not vague hype, not an unrelated post) genuinely relevant to what they want. Name the opportunity using only what's actually in that post — never add details that aren't there.
+Pick the ONE post (if any) that names a real, concrete opportunity (a specific accelerator, fellowship, program, residency, grant, or a named community, club, or recurring group someone can actually join — not vague hype, not an unrelated post) genuinely relevant to what they want. Name the opportunity using only what's actually in that post — never add details that aren't there.
 
 Skip anything that reads as hype, clickbait, or an engagement-bait "BREAKING" post without real concrete substance behind it (a specific program name, a real application process) — prefer a plainly-stated, verifiable opportunity over a dramatic-sounding one. A repost/retweet of someone else's claim is not independently more credible just because it's been shared multiple times.
 
@@ -399,34 +399,6 @@ export async function getTieredRecommendation(ask: StatedIntent, profileCity: st
   return [tier1, tier2, tier3].filter((m): m is TierMatch => m !== null);
 }
 
-// Urgency pre-check (Royce, 2026-08-30) — "something cheap that scans for
-// something relevant to that person's wants/ask/intent" for someone whose
-// normal 3-day surfacing cooldown hasn't cleared yet (see
-// eventSurfacingSweep.ts). Safe to run for EVERY open ask, EVERY day: only
-// real events within URGENT_WINDOW_DAYS, ranked by the same embedding-only
-// relevance check Tier 1/2 already use — no LLM generation, no paid Tier 3
-// X search — so running it daily for everyone doesn't multiply cost the way
-// running the full engine daily would. Tier 3 (an "opportunity") doesn't
-// have the same tight, missable date window a specific event does, so it
-// deliberately stays on the normal cadence only, not here.
-const URGENT_WINDOW_DAYS = 3;
-
-function isWithinUrgentWindow(startAt: string): boolean {
-  const days = (new Date(startAt).getTime() - Date.now()) / (1000 * 60 * 60 * 24);
-  return days >= 0 && days <= URGENT_WINDOW_DAYS;
-}
-
-// Reuses tryTier1/tryTier2 with the near-term filter applied, rather than
-// re-deriving the same {tier, kind, event_api_id, ...} construction a
-// second time — dedup fix, 2026-08-30 (previously duplicated verbatim,
-// risking silent drift between the two copies on a future change). Returns
-// both if both have an urgent match — same no-winner reasoning as
-// getTieredRecommendation above.
-export async function checkForUrgentMatch(ask: StatedIntent, profileCity: string | null): Promise<TierMatch[]> {
-  const city = await resolveSearchCity(ask.text, profileCity);
-  const [tier1, tier2] = await Promise.all([
-    tryTier1(ask, city, isWithinUrgentWindow),
-    tryTier2(ask, city, isWithinUrgentWindow),
-  ]);
-  return [tier1, tier2].filter((m): m is TierMatch => m !== null);
-}
+// The daily urgent-only Tier 1/2 pre-check (checkForUrgentMatch) was removed
+// 2026-09-14 (Royce: "it should be actively searching for all 3 tiers"): the
+// sweep now runs the full engine every day and paces sends separately.

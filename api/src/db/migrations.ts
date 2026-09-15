@@ -842,6 +842,18 @@ export function runMigrations() {
     `)
     .catch((err: Error) => console.error("event_backlogs table init failed:", err));
 
+  // Pacing for proactive searching of users with no open stated ask
+  // (2026-09-14). Same two clocks ask_checkins keeps per ask, kept per user.
+  pool
+    .query(
+      `CREATE TABLE IF NOT EXISTS profile_surfacing_state (
+        user_id UUID PRIMARY KEY REFERENCES users(id) ON DELETE CASCADE,
+        last_attempted_at TIMESTAMPTZ,
+        last_surfaced_at TIMESTAMPTZ
+      )`,
+    )
+    .catch((err: Error) => console.error("profile_surfacing_state table init failed:", err));
+
   // Network intro shortlist redesign (Royce, 2026-09-07: "how would you
   // implement the networking recommendation... if you just didn't get fed
   // this information but only know about my product purpose" — the answer
@@ -1087,4 +1099,73 @@ export function runMigrations() {
       )
     `)
     .catch((err: Error) => console.error("event_walkin_offer_batches table init failed:", err));
+
+  // Layer 7 proactive harness (2026-09-14) — see src/harness/proactive.ts.
+  // proactive_candidates: things Co could text about, produced by sweeps and
+  // schedulers, never sent directly. proactive_sends: the send ledger and
+  // idempotency key (UNIQUE user_id, target_key), written in the same
+  // transaction as the send. proactive_user_state: pick-none hold and
+  // skip-log dedup.
+  pool
+    .query(
+      `CREATE TABLE IF NOT EXISTS proactive_candidates (
+        id BIGSERIAL PRIMARY KEY,
+        user_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+        type TEXT NOT NULL,
+        target_key TEXT NOT NULL,
+        topic_key TEXT NOT NULL,
+        summary TEXT NOT NULL,
+        payload JSONB NOT NULL DEFAULT '{}',
+        priority INT NOT NULL DEFAULT 0,
+        due_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+        expires_at TIMESTAMPTZ,
+        status TEXT NOT NULL DEFAULT 'pending',
+        skip_reason TEXT,
+        attempts INT NOT NULL DEFAULT 0,
+        decided_at TIMESTAMPTZ,
+        created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+        updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+        UNIQUE (user_id, target_key)
+      )`,
+    )
+    .then(() =>
+      pool.query(`CREATE INDEX IF NOT EXISTS idx_proactive_candidates_pending ON proactive_candidates (due_at) WHERE status = 'pending'`),
+    )
+    .then(() =>
+      pool.query(
+        `CREATE TABLE IF NOT EXISTS proactive_sends (
+          id BIGSERIAL PRIMARY KEY,
+          user_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+          type TEXT NOT NULL,
+          target_key TEXT NOT NULL,
+          topic_key TEXT,
+          candidate_id BIGINT,
+          message TEXT,
+          exempt BOOLEAN NOT NULL DEFAULT false,
+          sent_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+          UNIQUE (user_id, target_key)
+        )`,
+      ),
+    )
+    .then(() => pool.query(`CREATE INDEX IF NOT EXISTS idx_proactive_sends_user ON proactive_sends (user_id, sent_at DESC)`))
+    .then(() =>
+      pool.query(
+        `CREATE TABLE IF NOT EXISTS proactive_user_state (
+          user_id UUID PRIMARY KEY REFERENCES users(id) ON DELETE CASCADE,
+          hold_until TIMESTAMPTZ,
+          last_skip_reason TEXT,
+          last_skip_at TIMESTAMPTZ
+        )`,
+      ),
+    )
+    .catch((err: Error) => console.error("proactive harness tables init failed:", err));
+
+  // Layer 7 (2026-09-14): which source rows have been handed to the proactive
+  // harness (queued / sent / dropped / expired), separate from sent_at so a
+  // dropped follow-up never looks like an open question to routing.
+  for (const table of ["recommendation_outcome_followups", "event_checkin_followups", "post_call_follow_ups"]) {
+    pool
+      .query(`ALTER TABLE ${table} ADD COLUMN IF NOT EXISTS harness_status TEXT`)
+      .catch((err: Error) => console.error(`${table}.harness_status migration failed:`, err));
+  }
 }

@@ -32,7 +32,9 @@ import "dotenv/config";
 import { anthropic } from "@ai-sdk/anthropic";
 import { generateText } from "ai";
 import pool from "../db/db.js";
-import sendblue, { cleanCoMessage } from "../services/sendblue.js";
+import { createHash } from "crypto";
+import { cleanCoMessage } from "../services/sendblue.js";
+import { enqueueCandidate } from "../harness/proactive.js";
 import { CO_VOICE, CO_TEXT_CHANNEL } from "../services/coVoice.js";
 
 // Shared intro/closing, not regenerated per person, and neither one ever
@@ -42,10 +44,13 @@ import { CO_VOICE, CO_TEXT_CHANNEL } from "../services/coVoice.js";
 // The update bullets themselves are never touched by an LLM — what
 // actually changed must never drift or get invented, so each item is sent
 // verbatim, exactly as written.
+// One-line intro/closing, human bullets stay verbatim; narrow work, so Haiku.
+const LINE_MODEL = "claude-haiku-4-5-20251001";
+
 async function draftLine(instruction: string, fallback: string): Promise<string> {
   try {
     const { text } = await generateText({
-      model: anthropic("claude-haiku-4-5-20251001"),
+      model: anthropic(LINE_MODEL),
       experimental_telemetry: { isEnabled: true, functionId: "notifyTesters.draftLine" },
       prompt: `${CO_VOICE}\n\n${CO_TEXT_CHANNEL} You're texting someone who's helping test Co before launch. ${instruction} No greeting, no "Hey", no using their name — that's handled separately. No em dashes, no exclamation points. Return ONLY that one short line, nothing else.`,
     });
@@ -77,7 +82,7 @@ async function main() {
 
   const intro = await draftLine(
     "Write a short, warm phrase thanking them for helping test Co and saying here's what's new.",
-    "thanks so much for helping test Co — here's what's new:",
+    "thanks for helping test Co. Here's what's new:",
   );
   const closing = await draftLine(
     "Write a short, warm closing line inviting them to share what they think after trying it.",
@@ -110,26 +115,26 @@ async function main() {
     process.exit(0);
   }
 
-  console.log(`notifyTesters: about to send to ${users.length} user(s), e.g.:\nHey {name}, ${intro}\n\n${bulletList}\n\n${closing}\n`);
-
-  let sentCount = 0;
+  // Layer 7 (2026-09-14): queued as a "product_update" candidate, not sent
+  // directly. The proactive harness sends it inside the person's local
+  // hours, at most one update a week, and never on a day Co already texted
+  // them first or while an earlier text is still unanswered.
+  const updateKey = createHash("sha1").update(bulletList).digest("hex").slice(0, 16);
+  let queuedCount = 0;
   for (const user of users) {
-    const greeting = user.first_name ? `Hey ${user.first_name}, ` : "Hey, ";
-    const content = cleanCoMessage(`${greeting}${intro}\n\n${bulletList}\n\n${closing}`);
-    try {
-      await sendblue.messages.send({
-        number: user.phone_number,
-        content,
-        from_number: process.env.SENDBLUE_PHONE_NUMBER!,
-      });
-      sentCount++;
-      console.log(`notifyTesters: sent to ${user.id}`);
-    } catch (err: any) {
-      console.error(`notifyTesters: failed to send to ${user.id}:`, err?.message ?? err);
-    }
+    const { queued } = await enqueueCandidate({
+      userId: user.id,
+      type: "product_update",
+      targetKey: `product_update:${updateKey}`,
+      summary: `Product update for testers: ${updates.join("; ").slice(0, 200)}`,
+      payload: { intro: cleanCoMessage(intro), closing: cleanCoMessage(closing), bulletList },
+      expiresAt: new Date(Date.now() + 7 * 24 * 60 * 60 * 1000),
+    });
+    if (queued) queuedCount++;
+    console.log(`notifyTesters: ${queued ? "queued" : "already queued or sent"} for ${user.id}`);
   }
 
-  console.log(`notifyTesters: done — sent to ${sentCount}/${users.length} user(s).`);
+  console.log(`notifyTesters: done — queued for ${queuedCount}/${users.length} user(s); the proactive harness sends it.`);
   process.exit(0);
 }
 

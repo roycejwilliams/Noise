@@ -1,10 +1,4 @@
-import { anthropic } from "@ai-sdk/anthropic";
-import { generateText, stepCountIs, tool } from "ai";
-import { z } from "zod";
-import sendblue, { cleanCoMessage } from "../services/sendblue.js";
-import { writeMemory } from "../services/memory.js";
-import { tryClaimProactiveNudge } from "../services/proactiveThrottle.js";
-import { CO_VOICE, CO_TEXT_CHANNEL } from "../services/coVoice.js";
+import { enqueueCandidate, draftProactive, type OutputRules } from "../harness/proactive.js";
 
 export type EventAskSolicitationPerson = {
   userId: string;
@@ -13,86 +7,43 @@ export type EventAskSolicitationPerson = {
 };
 
 // Product decision (2026-08-30): a guest with no stated ask does NOT get an
-// embedding-similarity fallback nudge — that tier was judged too weak to
-// actually nudge someone toward. Instead, before this person is eligible for
-// any ranking at all, Co tries once to get a real stated ask out of them,
-// the same way it already does everywhere else (captureIntent). Only once
-// that lands does eventScoring.ts's scoreAgainstStatedAsk path apply to them.
+// embedding-similarity fallback nudge. Before this person can be ranked, Co
+// asks once what they're hoping to get out of the event; once that lands,
+// eventScoring.ts's scoreAgainstStatedAsk path applies to them.
+//
+// Layer 7 (2026-09-14): this no longer sends. It queues an "ask_solicitation"
+// candidate and the proactive harness decides when (or whether) it goes out.
+// `sent` means queued, which is what eventScoring.ts's markSolicited needs:
+// the ask is in motion, don't queue it again for this event.
 export async function runEventAskSolicitationAgent(
   person: EventAskSolicitationPerson,
   eventName: string,
   opts: { dryRun?: boolean } = {},
 ): Promise<{ sent: boolean }> {
-  const state = { sent: false };
-  const dryRun = opts.dryRun ?? false;
-
-  const tools = {
-    sendSms: tool({
-      description:
-        "Send the drafted message to the user via iMessage. Call this once you've drafted something worth sending.",
-      inputSchema: z.object({
-        message: z.string().describe("The message to send. 1-3 sentences, no em dashes, normal sentence capitalization."),
-      }),
-      execute: async ({ message }: { message: string }) => {
-        const cleaned = cleanCoMessage(message);
-        if (dryRun) {
-          console.log(`[eventAskSolicitation dryRun] would send to ${person.userId}: "${cleaned}"`);
-          return { delivered: false, dryRun: true, message: cleaned };
-        }
-        if (!(await tryClaimProactiveNudge(person.userId))) {
-          console.log(`eventAskSolicitation: throttled — ${person.userId} was proactively nudged in the last 24h`);
-          return { delivered: false, throttled: true };
-        }
-        await sendblue.messages.send({
-          number: person.phoneNumber,
-          content: cleaned,
-          from_number: process.env.SENDBLUE_PHONE_NUMBER!,
-        });
-        state.sent = true;
-        // Hooked here, not left to the agent's own writeMemory tool call
-        // below (Royce, 2026-09-08 sweep) — recentConversation (routes/
-        // sendblue.ts) only ever reads text_exchange rows, and this
-        // agent's own writeMemory tool writes a different, descriptive
-        // type. Doing it here guarantees it happens exactly once, right
-        // alongside the real send, regardless of what the model logs.
-        await writeMemory(person.userId, "text_exchange", `Co replied: ${cleaned}`).catch((err: any) =>
-          console.error("eventAskSolicitation: text_exchange log failed (non-fatal):", err?.message ?? err),
-        );
-        return { delivered: true, message: cleaned };
-      },
-    }),
-    writeMemory: tool({
-      description: "Log what happened, once, after sending (or after deciding not to send).",
-      inputSchema: z.object({
-        content: z.string().describe("Short factual note, e.g. what was asked or why it was skipped."),
-      }),
-      execute: async ({ content }: { content: string }) => {
-        if (dryRun) {
-          console.log(`[eventAskSolicitation dryRun] would write memory for ${person.userId}: "${content}"`);
-        } else {
-          await writeMemory(person.userId, "event_ask_solicitation", content);
-        }
-        return { ok: true };
-      },
-    }),
-  };
-
-  const system = `${CO_VOICE}\n\n${CO_TEXT_CHANNEL} You're texting ${person.firstName}. They're on the guest list for "${eventName}", but Co doesn't yet know what they're actually hoping to get out of it — no stated ask on file.
-
-Draft a short, warm message (1-3 sentences, no em dashes, no exclamation points, normal sentence capitalization — this is a proactive text, not a reply to match anyone's texting style) asking what they're hoping for from this one — who they'd want to meet, what would make it worth their time. Not a form question, a genuine one, in Co's own voice. Then send it with sendSms.
-
-If for some reason a message doesn't make sense right now, it's fine to skip sendSms — but that should be rare; this is the default case, not an edge case.
-
-Always finish by calling writeMemory once with a short factual note of what you asked (or why you skipped).`;
-
-  await generateText({
-    model: anthropic("claude-sonnet-4-6"),
-    system,
-    prompt: "Draft and send the ask-solicitation message, then log it.",
-    tools,
-    stopWhen: stepCountIs(4),
-    experimental_telemetry: { isEnabled: true, functionId: "agent.eventAskSolicitation" },
+  if (opts.dryRun) {
+    console.log(`[eventAskSolicitation dryRun] would queue ask solicitation for ${person.userId} (${eventName})`);
+    return { sent: false };
+  }
+  const { queued } = await enqueueCandidate({
+    userId: person.userId,
+    type: "ask_solicitation",
+    targetKey: `ask_solicitation:${eventName.toLowerCase()}`,
+    summary: `Ask what they're hoping to get out of "${eventName}", which they're on the guest list for (no stated ask on file)`,
+    payload: { eventName },
+    // This signature has no event date; a week is the outer bound for an
+    // upcoming guest list to still be relevant.
+    expiresAt: new Date(Date.now() + 7 * 24 * 60 * 60 * 1000),
   });
+  return { sent: queued };
+}
 
-  return { sent: state.sent };
+export async function draftAskSolicitation(firstName: string, eventName: string): Promise<{ text: string; rules: OutputRules } | null> {
+  const text = await draftProactive({
+    functionId: "agent.eventAskSolicitation",
+    firstName,
+    facts: { event_they_registered_for: eventName, what_co_knows_about_their_goals_for_it: "nothing yet" },
+    task: `Ask, as one real question, who they'd want to meet or what would make "${eventName}" worth their time, so you can point them to the right people there. Name the event.`,
+  });
+  if (!text) return null;
+  return { text, rules: { maxSentences: 2, maxChars: 260 } };
 }
