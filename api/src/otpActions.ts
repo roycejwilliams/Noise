@@ -19,7 +19,7 @@ async function varied(instruction: string, fallback: string, maxChars: number): 
     const { text } = await generateText({
       model: anthropic(INTRO_LINE_MODEL),
       experimental_telemetry: { isEnabled: true, functionId: "otpActions.introLine" },
-      prompt: `${CO_VOICE}\n\n${CO_TEXT_CHANNEL} ${instruction} Vary how you say it call to call — don't just repeat the same phrasing every time. Tone: calm, unhurried, like a private members club. No exclamation points, no em dashes. Under ${maxChars} characters. Return ONLY the single message you would actually send, nothing else — never multiple options, a numbered or lettered list, headers, or any markdown formatting.`,
+      prompt: `${CO_VOICE}\n\n${CO_TEXT_CHANNEL} ${instruction} Vary how you say it call to call — don't just repeat the same phrasing every time. Tone: calm, unhurried, like a private members club. No em dashes. Under ${maxChars} characters. Return ONLY the single message you would actually send, nothing else — never multiple options, a numbered or lettered list, headers, or any markdown formatting.`,
     });
     const trimmed = text.trim();
     // Confirmed live: Haiku sometimes ignores "return only one" and returns

@@ -174,7 +174,7 @@ async function maybeAskCandidateDirectly(
       const { text } = await generateText({
         model: anthropic(NAMING_DRAFT_MODEL),
         experimental_telemetry: { isEnabled: true, functionId: "eventGuestMatchHandoff.directAsk.draft" },
-        prompt: `${CO_VOICE}\n\n${CO_TEXT_CHANNEL} You're texting ${candidate.first_name} about "${eventName}." ${askerFirstName}, who's also going, said they'd like to be introduced. Draft a short, warm text (1-2 sentences, no exclamation points, no em dashes) letting ${candidate.first_name} know and asking if they'd be open to it too. Low-pressure, genuinely a question, not an assumption. Don't share any contact details. Return ONLY the message text.${feedback ? `\n\n${feedback}` : ""}`,
+        prompt: `${CO_VOICE}\n\n${CO_TEXT_CHANNEL} You're texting ${candidate.first_name} about "${eventName}." ${askerFirstName}, who's also going, said they'd like to be introduced. Draft a short, warm text (1-2 sentences, no em dashes) letting ${candidate.first_name} know and asking if they'd be open to it too. Low-pressure, genuinely a question, not an assumption. Don't share any contact details. Return ONLY the message text.${feedback ? `\n\n${feedback}` : ""}`,
       });
       return cleanCoMessage(text.trim());
     },
@@ -447,7 +447,7 @@ export async function handleGroupMessage(groupId: string, senderNumber: string, 
 
 ${senderFirstName ? `${senderFirstName} just said: "${content}"` : `Someone in the group just said: "${content}"`}
 
-Reply briefly and naturally, like someone who's still around but never trying to take over the conversation between them. Ground everything only in what's actually in this message — you don't have any other context about their conversation so far. No exclamation points, no em dashes, 1-2 sentences unless they genuinely asked something that needs more room. Return ONLY the reply text.`,
+Reply briefly and naturally, like someone who's still around but never trying to take over the conversation between them. Ground everything only in what's actually in this message — you don't have any other context about their conversation so far. No em dashes, 1-2 sentences unless they genuinely asked something that needs more room. Return ONLY the reply text.`,
     });
     reply = cleanCoMessage(text.trim());
   } catch (err: any) {

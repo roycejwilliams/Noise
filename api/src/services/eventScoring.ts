@@ -406,7 +406,7 @@ async function maybeSendAdditiveOffer(
         experimental_telemetry: { isEnabled: true, functionId: "eventScoring.additiveOffer.draft" },
         prompt: `${CO_VOICE}\n\n${CO_TEXT_CHANNEL} You're texting ${person.first_name} about "${eventName}," an event they're already going to and already have a match at. Since then, ${newCandidates.length} more ${newCandidates.length === 1 ? "person has" : "people have"} checked in who could also be worth ${person.first_name} meeting.
 
-Draft a short, warm, low-pressure text (1-2 sentences, no exclamation points, no em dashes, normal sentence capitalization) letting them know you found ${newCandidates.length === 1 ? "someone else" : `${newCandidates.length} more people`} who just checked in that could be good for them, and ask if they want to hear who. Do NOT name anyone yet or mention their existing match. Don't say what anyone wants or said. This is just the offer to see more, nothing more. Return ONLY the message text.${feedback ? `\n\n${feedback}` : ""}`,
+Draft a short, warm, low-pressure text (1-2 sentences, no em dashes, normal sentence capitalization) letting them know you found ${newCandidates.length === 1 ? "someone else" : `${newCandidates.length} more people`} who just checked in that could be good for them, and ask if they want to hear who. Do NOT name anyone yet or mention their existing match. Don't say what anyone wants or said. This is just the offer to see more, nothing more. Return ONLY the message text.${feedback ? `\n\n${feedback}` : ""}`,
       });
       return cleanCoMessage(text.trim());
     },
@@ -629,5 +629,5 @@ export async function scoreGuestListForEvent(
 export function matchNudgePrompt(p: { recipientFirstName: string; otherFirstName: string; eventName: string; shareReason: string; feedback: string | null }): string {
   return `${CO_VOICE}\n\n${CO_TEXT_CHANNEL} You're texting ${p.recipientFirstName} about "${p.eventName}," an event they're going to. You found someone else going who's genuinely worth them meeting: ${p.otherFirstName}. Why they're worth meeting: ${p.shareReason}
 
-Draft a short, warm, low-pressure text (1-2 sentences, no exclamation points, no em dashes, normal sentence capitalization) letting ${p.recipientFirstName} know about ${p.otherFirstName} and naming the real reason above in your own words. Use only that reason. Never say ${p.otherFirstName} wants to meet them, mentioned them, or said anything about them. Not a hard sell, just a genuine heads-up, like a friend connecting two people who'd get along. Return ONLY the message text.${p.feedback ? `\n\n${p.feedback}` : ""}`;
+Draft a short, warm, low-pressure text (1-2 sentences, no em dashes, normal sentence capitalization) letting ${p.recipientFirstName} know about ${p.otherFirstName} and naming the real reason above in your own words. Use only that reason. Never say ${p.otherFirstName} wants to meet them, mentioned them, or said anything about them. Not a hard sell, just a genuine heads-up, like a friend connecting two people who'd get along. Return ONLY the message text.${p.feedback ? `\n\n${p.feedback}` : ""}`;
 }

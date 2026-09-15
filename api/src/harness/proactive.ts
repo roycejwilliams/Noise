@@ -34,6 +34,7 @@ import { getTimezoneForCity } from "../services/geocoding.js";
 import { CO_VOICE, CO_TEXT_CHANNEL } from "../services/coVoice.js";
 import { describeFailed, gate, recordDecision, type GateCheck } from "./core.js";
 import { MODELS } from "../models.js";
+import { capitalizeSentences } from "../services/textStyle.js";
 
 // Judgment with side effects (which text goes to a person, and its words)
 // runs on Sonnet 5 per Royce's model policy (2026-09-14).
@@ -314,7 +315,7 @@ export type OutputRules = {
 };
 
 const ALWAYS_FORBIDDEN: { pattern: RegExp; reason: string }[] = [
-  { pattern: /!/, reason: "exclamation point" },
+  { pattern: /!{2,}|(?:!.*){3,}/, reason: "piled-up exclamation points" },
   { pattern: /[—–]/, reason: "em dash" },
   { pattern: /\bjust (checking|touching) (in|base)\b/i, reason: "generic check-in filler" },
   { pattern: /\b(someone|anyone|people) (cool|interesting)\b/i, reason: "vague instead of naming the person" },
@@ -791,6 +792,8 @@ export async function dispatchForUser(registry: ProactiveRegistry, userId: strin
     return;
   }
 
+  // Co texts first here, so there's no lowercase style to mirror.
+  draft = { ...draft, text: capitalizeSentences(draft.text), messages: draft.messages.map(capitalizeSentences) };
   const draftChecks = checkDraft(draft.text, draft.rules);
   const dg = gate(draftChecks);
   if (!dg.ok) {

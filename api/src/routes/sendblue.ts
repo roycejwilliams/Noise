@@ -82,7 +82,7 @@ const DEBOUNCE_MS = 4000;
 // to infer) read of how the user themselves texts, from their own lines in
 // the chronological window already fetched for the reply prompt. Nudges
 // phrasing only (length/formality/emoji) — deliberately leaves Co's core
-// brand-voice rules (no em dashes, no exclamation points) alone, since
+// brand-voice rules (no em dashes) alone, since
 // those aren't a per-user mirroring target. Needs at least 2 of the user's
 // own messages before saying anything, so a first-ever text doesn't get a
 // hint built off n=1.
@@ -1090,7 +1090,7 @@ export function sendblueRouter(io: Server): Router {
             // if it belonged to the outcome actually being resolved here.
             const stayScoped = ` Keep this reply scoped to "${pendingOutcomeFollowUp.match_name}" specifically — don't pull in a name or detail from a different, already-resolved outcome or an unrelated recent memory, even if one is sitting in context.`;
             if (outcome === "named_positive") {
-              addInstruction(replyFacts, `They just told you something good came out of "${pendingOutcomeFollowUp.match_name}" — someone worthwhile they met or a good outcome. Respond warmly to what they specifically shared, genuinely glad for them, no exclamation points.${stayScoped}`);
+              addInstruction(replyFacts, `They just told you something good came out of "${pendingOutcomeFollowUp.match_name}" — someone worthwhile they met or a good outcome. Respond warmly to what they specifically shared, genuinely glad for them.${stayScoped}`);
             } else if (outcome === "named_critical") {
               addInstruction(replyFacts, `They just told you "${pendingOutcomeFollowUp.match_name}" wasn't worthwhile or didn't go well. Acknowledge that honestly and warmly, no forced positivity, no apologizing on behalf of the thing itself.${stayScoped}`);
             } else {
@@ -1118,7 +1118,7 @@ export function sendblueRouter(io: Server): Router {
             // could otherwise blend into this reply.
             const stayScoped = ` Keep this reply scoped to "${pendingCheckin.event_name}" specifically — don't pull in a name or detail from a different, already-resolved outcome or an unrelated recent memory, even if one is sitting in context.`;
             if (outcome === "named_positive") {
-              addInstruction(replyFacts, `They just told you something good came out of "${pendingCheckin.event_name}" — someone worthwhile they met or a good moment from tonight. Respond warmly to what they specifically shared, genuinely glad for them, no exclamation points.${stayScoped}`);
+              addInstruction(replyFacts, `They just told you something good came out of "${pendingCheckin.event_name}" — someone worthwhile they met or a good moment from tonight. Respond warmly to what they specifically shared, genuinely glad for them.${stayScoped}`);
             } else if (outcome === "named_critical") {
               addInstruction(replyFacts, `They just told you "${pendingCheckin.event_name}" wasn't worthwhile or didn't go well. Acknowledge that honestly and warmly, no forced positivity, no apologizing on behalf of the event itself.${stayScoped}`);
             } else {
@@ -1554,7 +1554,7 @@ Return ONLY valid JSON, no preamble: {"date": "YYYY-MM-DD or null", "time": "HH:
                     generateText({
                       model: anthropic(MODELS.haiku),
                       experimental_telemetry: { isEnabled: true, functionId: "sendblue.venueRequest.holdMessage" },
-                      prompt: `${CO_VOICE}\n\n${CO_TEXT_CHANNEL} They just asked about finding ${requestedCount > 1 ? `${requestedCount} ${venueType}s` : `a ${venueType}`}. You're about to go actually look them up for them — send a brief "give me a sec" acknowledgment that names what they're looking for (the ${venueType}), not generic. Normal capitalization. Don't claim you've found anything yet. One short sentence. No exclamation points, no em dashes. Under 100 characters.`,
+                      prompt: `${CO_VOICE}\n\n${CO_TEXT_CHANNEL} They just asked about finding ${requestedCount > 1 ? `${requestedCount} ${venueType}s` : `a ${venueType}`}. You're about to go actually look them up for them — send a brief "give me a sec" acknowledgment that names what they're looking for (the ${venueType}), not generic. Normal capitalization. Don't claim you've found anything yet. One short sentence. No em dashes. Under 100 characters.`,
                     }),
                 );
                 const trimmedHold = rawHold.trim().slice(0, 100);
@@ -1585,7 +1585,7 @@ Return ONLY valid JSON, no preamble: {"date": "YYYY-MM-DD or null", "time": "HH:
                       generateText({
                         model: anthropic(MODELS.haiku),
                         experimental_telemetry: { isEnabled: true, functionId: "sendblue.venueRequest.introMessage" },
-                        prompt: `${CO_VOICE}\n\n${CO_TEXT_CHANNEL} You just found ${venues.length} real ${venueType}${venues.length > 1 ? "s" : ""} for them${venues.length < requestedCount ? ` — they asked for ${requestedCount}, this is genuinely all that came back as a solid match, say so honestly` : ""}. Write ONE short, warm intro sentence to go right before a list (the list itself follows separately after your sentence — do not write the list yourself, do not include any links). No exclamation points, no em dashes. Under 150 characters.`,
+                        prompt: `${CO_VOICE}\n\n${CO_TEXT_CHANNEL} You just found ${venues.length} real ${venueType}${venues.length > 1 ? "s" : ""} for them${venues.length < requestedCount ? ` — they asked for ${requestedCount}, this is genuinely all that came back as a solid match, say so honestly` : ""}. Write ONE short, warm intro sentence to go right before a list (the list itself follows separately after your sentence — do not write the list yourself, do not include any links). No em dashes. Under 150 characters.`,
                       }),
                   );
                   const introLine = rawIntro.trim().slice(0, 150);

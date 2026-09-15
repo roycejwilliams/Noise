@@ -30,7 +30,8 @@ import { parseModelJson } from "../services/modelJson.js";
 // Model policy (Royce, 2026-09-14): Sonnet 5 for anything with judgment or
 // side effects; Haiku only for narrow, code-checked reads.
 export const LAYER3_MODELS = {
-  reply: MODELS.sonnet,
+  // REPLY_EVAL_MODEL only exists so evals/reply can compare models.
+  reply: process.env.REPLY_EVAL_MODEL || MODELS.sonnet,
   grounding: MODELS.sonnet,
   redraft: MODELS.sonnet,
   narrow: MODELS.haiku,

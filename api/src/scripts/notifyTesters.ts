@@ -53,7 +53,7 @@ async function draftLine(instruction: string, fallback: string): Promise<string>
     const { text } = await generateText({
       model: anthropic(LINE_MODEL),
       experimental_telemetry: { isEnabled: true, functionId: "notifyTesters.draftLine" },
-      prompt: `${CO_VOICE}\n\n${CO_TEXT_CHANNEL} You're texting someone who's helping test Co before launch. ${instruction} No greeting, no "Hey", no using their name — that's handled separately. No em dashes, no exclamation points. Return ONLY that one short line, nothing else.`,
+      prompt: `${CO_VOICE}\n\n${CO_TEXT_CHANNEL} You're texting someone who's helping test Co before launch. ${instruction} No greeting, no "Hey", no using their name — that's handled separately. No em dashes. Return ONLY that one short line, nothing else.`,
     });
     const trimmed = text.trim();
     return trimmed || fallback;
