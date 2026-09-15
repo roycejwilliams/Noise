@@ -24,14 +24,16 @@ import pool from "../db/db.js";
 import { cleanCoMessage } from "../services/sendblue.js";
 import { CO_TEXT_CHANNEL, CO_VOICE } from "../services/coVoice.js";
 import { recordDecision, type GateCheck } from "./core.js";
+import { MODELS } from "../models.js";
+import { parseModelJson } from "../services/modelJson.js";
 
 // Model policy (Royce, 2026-09-14): Sonnet 5 for anything with judgment or
 // side effects; Haiku only for narrow, code-checked reads.
 export const LAYER3_MODELS = {
-  reply: "claude-sonnet-5",
-  grounding: "claude-sonnet-5",
-  redraft: "claude-sonnet-5",
-  narrow: "claude-haiku-4-5-20251001",
+  reply: MODELS.sonnet,
+  grounding: MODELS.sonnet,
+  redraft: MODELS.sonnet,
+  narrow: MODELS.haiku,
 } as const;
 
 // Effort for the grounding check and redraft. The check is extraction plus a
@@ -222,21 +224,11 @@ export function codeChecks(draft: string, rf: ReplyFacts, src: GroundingSources)
 }
 
 function extractJson(text: string): any {
-  const s = text.replace(/```json|```/g, "");
-  const start = s.indexOf("{");
-  if (start < 0) return null;
-  let depth = 0;
-  for (let i = start; i < s.length; i++) {
-    if (s[i] === "{") depth++;
-    else if (s[i] === "}" && --depth === 0) {
-      try {
-        return JSON.parse(s.slice(start, i + 1));
-      } catch {
-        return null;
-      }
-    }
+  try {
+    return parseModelJson(text);
+  } catch {
+    return null;
   }
-  return null;
 }
 
 async function extractClaims(draft: string, rf: ReplyFacts, src: GroundingSources): Promise<{ claims: Claim[]; latencyMs: number } | null> {
@@ -366,8 +358,29 @@ export type GroundingResult = {
 
 const MINIMAL_FALLBACK = "I don't have that, so I'd rather not guess.";
 
+// Cheap pre-filter for the model claim read. Plain conversational replies
+// ("That sounds hard. What's been the toughest part?") have nothing to
+// verify, and the Sonnet read added ~2s p50 to every reply. Anything that
+// could carry a checkable claim still gets read: numbers, times and dates,
+// links or contact details, a proper name mid-sentence, Co describing its own
+// actions or plans, or someone else's words or intent.
+const CLAIM_SHAPED = [
+  /\d/,
+  /https?:\/\/|www\.|@/i,
+  /\b(today|tonight|tomorrow|yesterday|week|weekend|morning|afternoon|evening|monday|tuesday|wednesday|thursday|friday|saturday|sunday|january|february|march|april|may|june|july|august|september|october|november|december|noon|midnight)\b/i,
+  /\b(i'?ll|i will|i'?ve|i have|i just|i already|i can'?t|i cannot|i'?m (going|calling|sending|booking|looking|checking)|let me|we'?ll|will be)\b/i,
+  /\b(sent|shared|booked|scheduled|called|calling|texted|emailed|introduced|intro|registered|signed up|added|found|reached out|confirmed|link|address|located|starts|ends|event|call)\b/i,
+  /\b(said|says|mentioned|told|asked|wants|wanted|would like|is going|are going|attending|opted|agreed|interested)\b/i,
+  /[a-z,]\s+[A-Z][a-z]{2,}/,
+];
+
+export function needsClaimCheck(draft: string): boolean {
+  return CLAIM_SHAPED.some((re) => re.test(draft));
+}
+
 async function check(draft: string, rf: ReplyFacts, src: GroundingSources): Promise<{ checks: GateCheck[]; modelOk: boolean; ms: number }> {
   const code = codeChecks(draft, rf, src);
+  if (!needsClaimCheck(draft)) return { checks: [...code, { name: "claim_read", pass: true, reason: "nothing claim-shaped, model read skipped" }], modelOk: true, ms: 0 };
   try {
     const extracted = await extractClaims(draft, rf, src);
     if (!extracted) return { checks: code, modelOk: false, ms: 0 };

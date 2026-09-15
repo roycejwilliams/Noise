@@ -27,9 +27,10 @@ import { prewarmHumeConnection, hasReceivedRealSpeech } from "../services/mediaS
 import { CO_VOICE, CO_TEXT_CHANNEL } from "../services/coVoice.js";
 import { recordDecision } from "../harness/core.js";
 import { decideMissedCallFollowUp, gatherMissedCallState } from "../harness/callGate.js";
+import { MODELS } from "../models.js";
 
 // One-line drafts (missed-call text, voicemail line): narrow work, Haiku.
-const DRAFT_MODEL = "claude-haiku-4-5-20251001";
+const DRAFT_MODEL = MODELS.haiku;
 
 // io is injected by the server so call-status and webhook handlers can push
 // real-time state transitions to the connected mobile client.

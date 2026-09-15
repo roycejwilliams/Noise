@@ -2,10 +2,11 @@ import { anthropic } from "@ai-sdk/anthropic";
 import { generateText } from "ai";
 import pool from "../db/db.js";
 import { writeMemory } from "./memory.js";
+import { MODELS } from "../models.js";
 
 // The recap decides what's stale and what to drop from Co's running picture
 // of someone, so it's a judgment call: Sonnet 5 (Royce's model policy).
-const RECAP_MODEL = "claude-sonnet-5";
+const RECAP_MODEL = MODELS.sonnet;
 
 // Memory compaction (Royce, 2026-09-01: "go ahead and have that built") —
 // Co's own suggestion, made live while diagnosing a real memory-continuity

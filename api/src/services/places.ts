@@ -23,35 +23,6 @@ function haversineMiles(a: GeoPoint, b: GeoPoint): number {
   return 2 * EARTH_RADIUS_MILES * Math.asin(Math.sqrt(h));
 }
 
-// Step 1 — Query Google Places for candidates
-export async function searchVenues(
-  venueType: string,
-  neighborhood: string,
-  city: string,
-  groupSize: number,
-  geoCenter?: GeoPoint | null,
-): Promise<any[]> {
-  const query = `${venueType} for ${groupSize} people in ${neighborhood} ${city}`;
-
-  const response = await client.textSearch({
-    params: {
-      query,
-      key: process.env.GOOGLE_PLACES_API_KEY!,
-      // Biases results toward where the circle actually lives — "city" is a
-      // free-text field (sometimes a loose region like "San Francisco Bay
-      // Area") that Places can't reliably geocode on its own.
-      ...(geoCenter
-        ? {
-            location: `${geoCenter.lat},${geoCenter.lng}`,
-            radius: MAX_VENUE_DISTANCE_MILES * 1609.344,
-          }
-        : {}),
-    },
-  });
-
-  return response.data.results ?? [];
-}
-
 // Step 2 — Apply hard filters
 export function hardFilterVenues(venues: any[], geoCenter?: GeoPoint | null): any[] {
   return venues.filter((v) => {

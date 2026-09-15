@@ -12,9 +12,11 @@
 import pool from "../db/db.js";
 import { hasPendingEmail } from "../services/identity.js";
 import type { GateCheck, Outcome } from "./core.js";
+import { MODELS } from "../models.js";
+import { parseModelJson } from "../services/modelJson.js";
 
 // Narrow extraction checked by code below, so Haiku (Royce's model policy).
-export const INTAKE_EXTRACT_MODEL = "claude-haiku-4-5-20251001";
+export const INTAKE_EXTRACT_MODEL = MODELS.haiku;
 
 // After this many retry messages in a row without capturing identity, Co
 // stops asking the same way and explains in one plain line why it needs it.
@@ -199,8 +201,7 @@ Return ONLY strict JSON: {"full_name": string or null, "email": string or null, 
 }
 
 export function parseIntakeProposal(raw: string): IntakeProposal {
-  const m = raw.match(/\{[\s\S]*\}/);
-  const parsed = JSON.parse(m ? m[0] : raw);
+  const parsed = parseModelJson(raw);
   return {
     full_name: typeof parsed?.full_name === "string" && parsed.full_name.trim() ? parsed.full_name.trim() : null,
     email: typeof parsed?.email === "string" && parsed.email.trim() ? parsed.email.trim() : null,

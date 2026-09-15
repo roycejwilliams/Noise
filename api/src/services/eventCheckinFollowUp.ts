@@ -1,7 +1,7 @@
 import pool from "../db/db.js";
 import { getTimezoneForCity } from "./geocoding.js";
 import { getEventDetails } from "./luma.js";
-import { classifyNamedOutcome, enqueueDebrief, type NamedOutcome } from "./recommendationOutcome.js";
+import { enqueueDebrief, type NamedOutcome } from "./recommendationOutcome.js";
 import type { ScorableGuest } from "./eventScoring.js";
 
 // Event Curation's own "end-of-night check-in" (Notion V1 board row 8, "who
@@ -22,7 +22,7 @@ import type { ScorableGuest } from "./eventScoring.js";
 // specifically (registering doesn't guarantee attendance) for a signal that
 // actually exists and fires reliably.
 //
-// Reuses classifyNamedOutcome as-is (Notion board row 13 already said the
+// Used to reuse classifyNamedOutcome (now read by the Layer 2 router) (Notion board row 13 already said the
 // Event Curation surface "would reuse this same function once it exists")
 // — same four-way classification, same reasoning. Outcome is written to its
 // OWN co_memories type ('event_checkin_outcome'), not 'recommendation_outcome'
@@ -130,7 +130,6 @@ export async function recordEventCheckinOutcome(
     .catch((err: any) => console.error("recordEventCheckinOutcome: memory write failed (non-fatal):", err?.message ?? err));
 }
 
-export { classifyNamedOutcome };
 
 // Layer 7 (2026-09-14): no longer sends at end+3h. Merged into the same
 // per-event "debrief" candidate as the recommendation outcome follow-up

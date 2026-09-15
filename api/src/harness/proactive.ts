@@ -10,8 +10,7 @@
 //   gather  — pending candidates, this person's proactive send ledger, when
 //             they last texted Co, their local time
 //   gate    — code rules (evaluateCandidates), no model involved
-//   propose — PICK_MODEL chooses one eligible candidate or none (code
-//             priority when there's only one, or the model fails)
+//   propose — code picks the highest-priority eligible candidate
 //   draft   — DRAFT_MODEL writes it under PROACTIVE_RULES + CONFIRMED_FACTS,
 //             may return SKIP; checkDraft validates the text in code
 //   send    — sendWithLedger re-checks the caps and idempotency key inside
@@ -34,13 +33,13 @@ import { writeMemory } from "../services/memory.js";
 import { getTimezoneForCity } from "../services/geocoding.js";
 import { CO_VOICE, CO_TEXT_CHANNEL } from "../services/coVoice.js";
 import { describeFailed, gate, recordDecision, type GateCheck } from "./core.js";
+import { MODELS } from "../models.js";
 
 // Judgment with side effects (which text goes to a person, and its words)
 // runs on Sonnet 5 per Royce's model policy (2026-09-14).
-export const PICK_MODEL = "claude-sonnet-5";
 // The eval (evals/proactive/run.ts --draft-model) can compare models; in
 // production this is always Sonnet 5.
-export const DRAFT_MODEL = process.env.PROACTIVE_EVAL_DRAFT_MODEL || "claude-sonnet-5";
+export const DRAFT_MODEL = process.env.PROACTIVE_EVAL_DRAFT_MODEL || MODELS.sonnet;
 
 export type ProactiveType =
   | "event_offer"
@@ -550,59 +549,15 @@ async function loadPerson(userId: string): Promise<(Person & { optedOut: boolean
   };
 }
 
-async function recentConversation(userId: string): Promise<string> {
-  const { rows } = await pool.query(
-    `SELECT content, created_at FROM co_memories
-     WHERE user_id = $1 AND memory_type = 'text_exchange'
-     ORDER BY created_at DESC LIMIT 12`,
-    [userId],
-  );
-  return rows
-    .reverse()
-    .map((r: any) => `[${new Date(r.created_at).toISOString().slice(0, 16)}] ${String(r.content).slice(0, 300)}`)
-    .join("\n");
-}
-
 // ---------- pick proposal
 
-export async function proposePick(
-  eligible: Candidate[],
-  conversation: string,
-  firstName: string,
-): Promise<{ pick: Candidate | null; reason: string; source: "model" | "code" }> {
-  if (eligible.length <= 1) {
-    return { pick: eligible[0] ?? null, reason: "only one eligible candidate", source: "code" };
-  }
-  try {
-    const list = eligible.map((c) => `- id ${c.id} [${c.type}]: ${c.summary}`).join("\n");
-    const { text } = await generateText({
-      model: anthropic(PICK_MODEL),
-      experimental_telemetry: { isEnabled: true, functionId: "proactive.pick" },
-      prompt: `You decide whether Co, a companion who texts people it knows, should text ${firstName} first today, and about what. At most one text today.
-
-Recent conversation (oldest first):
-${conversation || "(none)"}
-
-Things Co could text about (all already passed timing and frequency rules):
-${list}
-
-Pick the one that is most useful and timely for ${firstName} right now, given the conversation. Prefer something time-sensitive over something that can wait. Choose none if every option would feel like noise right now (for example they're in the middle of something else, or it repeats what was just discussed).
-
-Return ONLY JSON: {"reason": "one sentence", "pick": "<id>" or null}`,
-    });
-    const m = text.match(/\{[\s\S]*\}/);
-    const parsed = m ? JSON.parse(m[0]) : null;
-    if (parsed && "pick" in parsed) {
-      if (parsed.pick === null) return { pick: null, reason: String(parsed.reason ?? "model chose none"), source: "model" };
-      const chosen = eligible.find((c) => c.id === String(parsed.pick));
-      if (chosen) return { pick: chosen, reason: String(parsed.reason ?? ""), source: "model" };
-    }
-    const fallback = codePick(eligible);
-    return { pick: fallback, reason: "model output invalid, code priority used", source: "code" };
-  } catch (err: any) {
-    console.error("proactive.proposePick failed (non-fatal, code priority used):", err?.message ?? err);
-    return { pick: codePick(eligible), reason: "model unavailable, code priority used", source: "code" };
-  }
+// Code picks by priority, then soonest expiry, then due time. A model pick
+// was tried first but only ever ran when 2+ candidates were eligible on the
+// same day (rare under the caps), and the draft step can still return SKIP
+// when a text would be noise, so it wasn't earning its cost.
+export function proposePick(eligible: Candidate[]): { pick: Candidate | null; reason: string; source: "code" } {
+  const pick = codePick(eligible);
+  return { pick, reason: pick ? `highest priority of ${eligible.length} eligible` : "nothing eligible", source: "code" };
 }
 
 // ---------- sending
@@ -712,6 +667,19 @@ export async function sendExempt(opts: {
 // happening. They still go in the ledger as counted (non-exempt) sends, so
 // the daily pick's caps and unanswered pause see them and don't stack a
 // second discretionary text on the same day.
+// At most this many in-room texts (match nudge + additive offers) per person
+// per event. Replaces the old 24h tryClaimProactiveNudge claim, which also
+// blocked a legitimate additive offer later the same night.
+export const MAX_IN_ROOM_SENDS_PER_EVENT = 3;
+
+export async function inRoomSendAllowed(userId: string, eventId: string): Promise<boolean> {
+  const { rows } = await pool.query(
+    `SELECT COUNT(*)::int AS n FROM proactive_sends WHERE user_id = $1 AND type = 'in_room' AND target_key LIKE $2`,
+    [userId, `in_room:%:${eventId}%`],
+  );
+  return (rows[0]?.n ?? 0) < MAX_IN_ROOM_SENDS_PER_EVENT;
+}
+
 export async function recordInRoomSend(userId: string, targetKey: string, message: string): Promise<void> {
   await pool
     .query(
@@ -794,8 +762,7 @@ export async function dispatchForUser(registry: ProactiveRegistry, userId: strin
     return;
   }
 
-  const conversation = await recentConversation(userId);
-  const picked = await proposePick(ev.eligible, conversation, person.firstName);
+  const picked = proposePick(ev.eligible);
   if (!picked.pick) {
     await pool.query(
       `INSERT INTO proactive_user_state (user_id, hold_until) VALUES ($1, NOW() + ($2 || ' hours')::interval)

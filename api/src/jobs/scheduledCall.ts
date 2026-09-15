@@ -5,9 +5,10 @@ import { cleanCoMessage } from "../services/sendblue.js";
 import { triggerCallForUser } from "../services/callTrigger.js";
 import { sendExempt } from "../harness/proactive.js";
 import { CO_VOICE, CO_TEXT_CHANNEL } from "../services/coVoice.js";
+import { MODELS } from "../models.js";
 
 // One-line heads-up draft checked by length; narrow work, so Haiku.
-const REMINDER_MODEL = "claude-haiku-4-5-20251001";
+const REMINDER_MODEL = MODELS.haiku;
 
 // Places calls booked via the schedule-a-call flow in sendblue.ts
 // (scheduled_calls, distinct from the existing "call me now" explicit_request

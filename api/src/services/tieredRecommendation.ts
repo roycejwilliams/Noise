@@ -6,13 +6,15 @@ import { searchRecentPosts } from "./xSearch.js";
 import { withinRadius } from "./geocoding.js";
 import type { StatedIntent } from "./matching.js";
 import { gateMatches } from "../harness/matchGate.js";
+import { MODELS } from "../models.js";
+import { parseModelJson } from "./modelJson.js";
 
 // Model policy (Royce, 2026-09-14): Haiku only for narrow work code checks
 // afterwards (city extraction, query rewrite, opportunity extraction backed
 // by matchGate's grounding check); Sonnet 5 for the relevance judgment,
 // which nothing downstream re-checks.
-const EXTRACT_MODEL = "claude-haiku-4-5-20251001";
-const JUDGE_MODEL = "claude-sonnet-5";
+const EXTRACT_MODEL = MODELS.haiku;
+const JUDGE_MODEL = MODELS.sonnet;
 
 // The actual "Tiered recommendation engine (Tier 1 event → Tier 2 community/
 // meetup → Tier 3 opportunity fallback)" board item. Never invents something
@@ -130,8 +132,7 @@ async function resolveSearchCity(askText: string | undefined, profileCity: strin
 
 Return ONLY valid JSON: {"city": "City, State/Country" or null}. null if no place is named or it's only "near me"/"online".`,
       });
-      const m = raw.match(/\{[\s\S]*\}/);
-      const parsed = m ? JSON.parse(m[0]) : null;
+      const parsed = parseModelJson(raw);
       city = typeof parsed?.city === "string" && parsed.city.trim() ? parsed.city.trim() : null;
     } catch (err: any) {
       console.error("tieredRecommendation: resolveSearchCity failed (non-fatal, using profile city):", err?.message ?? err);
@@ -282,10 +283,7 @@ Return ONLY valid JSON: {"query": "..." or null}`,
     // Same robustness fix as extractRealOpportunity below — a preamble/
     // trailing-commentary wrap around the JSON isn't caught by stripping
     // code fences alone.
-    const stripped = raw.replace(/```json|```/g, "").trim();
-    const jsonMatch = stripped.match(/\{[\s\S]*\}/);
-    const clean = jsonMatch ? jsonMatch[0] : stripped;
-    const parsed = JSON.parse(clean);
+    const parsed = parseModelJson(raw);
     return typeof parsed?.query === "string" ? parsed.query : null;
   } catch (err: any) {
     console.error("tieredRecommendation: proposeOpportunityQuery failed (non-fatal):", err?.message ?? err);
@@ -344,10 +342,7 @@ Return ONLY valid JSON: {"index": 0, "name": "the specific opportunity name", "r
     // behavior) doesn't help when there's no fence at all, just a preamble/
     // trailing commentary around the object. Grabbing the outermost {...}
     // span handles both that case and the plain-JSON case identically.
-    const stripped = raw.replace(/```json|```/g, "").trim();
-    const jsonMatch = stripped.match(/\{[\s\S]*\}/);
-    const clean = jsonMatch ? jsonMatch[0] : stripped;
-    const parsed = JSON.parse(clean);
+    const parsed = parseModelJson(raw);
     if (typeof parsed?.index !== "number" || !posts[parsed.index]) return null;
     return {
       tier: 3,

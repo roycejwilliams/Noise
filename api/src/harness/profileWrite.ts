@@ -22,6 +22,7 @@
 // nothing is lost. Prefer turnAsk.ask over getActiveSeekingAsk(profile.intent)
 // for this turn. Don't also call captureIntent separately for the same text.
 import type { GateCheck } from "./core.js";
+import { MODELS } from "../models.js";
 
 // Local copy so this file (and its eval) doesn't pull in a DB-backed module.
 export function cosineSimilarity(a: number[], b: number[]): number {
@@ -37,7 +38,7 @@ export function cosineSimilarity(a: number[], b: number[]): number {
 
 // Judgment calls with side effects (retiring items, deciding borderline
 // "same ask") use Sonnet 5 per Royce's model policy.
-export const PROFILE_JUDGMENT_MODEL = "claude-sonnet-5";
+export const PROFILE_JUDGMENT_MODEL = MODELS.sonnet;
 
 // Embedding similarity at or above this is the same ask restated; between
 // the two thresholds the model decides; below LOW it's a new ask. Measured

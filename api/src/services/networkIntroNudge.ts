@@ -11,12 +11,13 @@ import { CO_VOICE, CO_TEXT_CHANNEL } from "./coVoice.js";
 import { gateNetworkCandidate } from "../harness/matchGate.js";
 import { checkBothYes, draftWithConsent, gateIntroAction, networkOptedIn } from "../harness/introConsent.js";
 import { getActiveAsks } from "./matching.js";
+import { MODELS } from "../models.js";
 
 // Model policy (Royce, 2026-09-14): Haiku for the yes/no reply reads (code
 // acts on them only through the consent checks); Sonnet 5 for drafts that
 // name another person.
-const CLASSIFY_MODEL = "claude-haiku-4-5-20251001";
-const NAMING_DRAFT_MODEL = "claude-sonnet-5";
+const CLASSIFY_MODEL = MODELS.haiku;
+const NAMING_DRAFT_MODEL = MODELS.sonnet;
 
 async function statedAsksFor(userId: string): Promise<string[]> {
   const { rows } = await pool.query(`SELECT intent FROM co_profiles WHERE user_id = $1`, [userId]).catch(() => ({ rows: [] as any[] }));
@@ -179,30 +180,6 @@ export async function findPendingNetworkTease(userId: string): Promise<PendingNe
 
 export type TeaseReplyClassification = "interested" | "not_interested" | "unrelated";
 
-export async function classifyNetworkTeaseReply(replyText: string, recentConversation?: string): Promise<TeaseReplyClassification> {
-  try {
-    const { text: raw } = await generateText({
-      model: anthropic(CLASSIFY_MODEL),
-      experimental_telemetry: { isEnabled: true, functionId: "networkIntroNudge.classifyTeaseReply" },
-      prompt: `Co just texted this person that someone in the network crossed its mind for them, without saying who, and asked if they'd like to hear who. This does NOT mean every message from them now is a response to that — if the recent conversation shows they're clearly talking about something else, it's unrelated.
-${recentConversation ? `\nRecent conversation, in order:\n${recentConversation}\n` : ""}
-Their reply: "${replyText}"
-
-Classify as ONE of:
-- "interested" — they want to hear who (e.g. "sure", "yeah who", "go on")
-- "not_interested" — they're passing
-- "unrelated" — normal conversation, not answering this
-
-Return ONLY the classification, nothing else.`,
-    });
-    const cls = raw.trim().toLowerCase().replace(/^[`"']+|[`"']+$/g, "");
-    return cls === "interested" || cls === "not_interested" ? cls : "unrelated";
-  } catch (err: any) {
-    console.error("classifyNetworkTeaseReply: failed (non-fatal, treating as unrelated):", err?.message ?? err);
-    return "unrelated";
-  }
-}
-
 async function stashIntroOfferPending(personId: string, candidate: NetworkCandidate, askId: string | null): Promise<void> {
   await pool
     .query(`INSERT INTO co_memories (user_id, memory_type, content) VALUES ($1, 'network_intro_offer_pending', $2)`, [
@@ -310,31 +287,6 @@ export async function findPendingNetworkIntroOffer(userId: string): Promise<Pend
   const parsed = JSON.parse(rows[0].content);
   // Stashed before share_reason existed: its reason may hold private detail.
   return parsed?.candidate?.share_safe === true ? parsed : null;
-}
-
-export async function classifyNetworkIntroReply(
-  replyText: string,
-  candidateFirstName: string,
-  recentConversation?: string,
-): Promise<TeaseReplyClassification> {
-  try {
-    const { text: raw } = await generateText({
-      model: anthropic(CLASSIFY_MODEL),
-      experimental_telemetry: { isEnabled: true, functionId: "networkIntroNudge.classifyIntroReply" },
-      prompt: `Co is waiting to hear whether this person wants an actual introduction to ${candidateFirstName}. This does NOT mean every message from them now is answering that — if the recent conversation shows they're clearly talking about something else, it's unrelated.
-${recentConversation ? `\nRecent conversation, in order:\n${recentConversation}\n` : ""}
-Their reply: "${replyText}"
-
-Classify their response about ${candidateFirstName} specifically as ONE of: "interested", "not_interested", or "unrelated" (they didn't actually address this one way or the other).
-
-Return ONLY the classification, nothing else.`,
-    });
-    const cls = raw.trim().toLowerCase().replace(/^[`"']+|[`"']+$/g, "");
-    return cls === "interested" || cls === "not_interested" ? cls : "unrelated";
-  } catch (err: any) {
-    console.error("classifyNetworkIntroReply: failed (non-fatal, treating as unrelated):", err?.message ?? err);
-    return "unrelated";
-  }
 }
 
 async function sendNetworkIntroEmail(a: MatchNudgeCandidate, b: MatchNudgeCandidate, matchReason: string): Promise<void> {

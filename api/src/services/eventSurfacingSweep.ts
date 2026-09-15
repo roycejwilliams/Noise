@@ -119,7 +119,7 @@ async function filterFreshMatches(userId: string, matches: TierMatch[]): Promise
 // Explicitly NOT gated on a reply (Royce, 2026-08-30): "I don't want it to
 // be [that] a user has to text back first in order to get the backlog
 // queue." Progression through the backlog is purely time-based — the same
-// 3-day ask cadence and 24h cross-mechanism nudge cap (proactiveThrottle.ts)
+// 3-day ask cadence and the Layer 7 send caps (src/harness/proactive.ts)
 // that already govern every other proactive text. sendblue.ts's reply
 // resolution already always targets the MOST RECENTLY sent, still-unresolved
 // tease (ORDER BY created_at DESC), so an ignored earlier tease is simply
@@ -228,7 +228,7 @@ function isShortNotice(match: TierMatch): boolean {
 // could return something different by then).
 // throttled: true means this attempt never actually went out, purely
 // because of the unrelated cross-mechanism daily nudge cap
-// (proactiveThrottle.ts) — jobs/index.ts uses this to decide whether to
+// (the Layer 7 send caps) — jobs/index.ts uses this to decide whether to
 // spend this ask's 3-day cadence window or retry tomorrow. Nothing found is
 // lost either way: it's still sitting in the backlog for next time.
 //

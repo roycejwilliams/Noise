@@ -1,5 +1,6 @@
 import { anthropic } from "@ai-sdk/anthropic";
 import { generateText } from "ai";
+import { MODELS } from "../models.js";
 
 // One cheap classification per inbound text, advisory only — folded into
 // that same turn's reply prompt as a soft tone nudge, never a rule Co must
@@ -13,7 +14,7 @@ import { generateText } from "ai";
 export async function detectTurnTone(message: string, functionId: string): Promise<string | null> {
   try {
     const { text } = await generateText({
-      model: anthropic("claude-haiku-4-5-20251001"),
+      model: anthropic(MODELS.haiku),
       experimental_telemetry: { isEnabled: true, functionId },
       prompt: `Read this text message someone just sent Co. Is there a clear, strong emotional tone here that Co should genuinely respond differently because of (e.g. frustrated, anxious, excited, grieving, overwhelmed, discouraged)?
 
@@ -46,7 +47,7 @@ export async function detectSeekingMode(
 ): Promise<"solving" | null> {
   try {
     const { text } = await generateText({
-      model: anthropic("claude-haiku-4-5-20251001"),
+      model: anthropic(MODELS.haiku),
       experimental_telemetry: { isEnabled: true, functionId },
       prompt: `Read this text conversation with Co, and their latest message.
 

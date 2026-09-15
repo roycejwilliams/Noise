@@ -4,9 +4,10 @@ import { anthropic } from "@ai-sdk/anthropic";
 import { generateText } from "ai";
 import sendblue from "./services/sendblue.js";
 import { CO_VOICE, CO_TEXT_CHANNEL } from "./services/coVoice.js";
+import { MODELS } from "./models.js";
 
 // One-line intro drafts with a strict fallback: narrow work, Haiku.
-const INTRO_LINE_MODEL = "claude-haiku-4-5-20251001";
+const INTRO_LINE_MODEL = MODELS.haiku;
 
 // A fixed line every time reads as a canned system message, not someone
 // actually greeting you — same reasoning as webhooks.ts's variedConfirmation/

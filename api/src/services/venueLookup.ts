@@ -10,19 +10,6 @@ export type RealVenueMatch = {
   rating: number;
 };
 
-// Real, grounded venue search — triggered when someone mentions wanting a
-// specific category of place (a gym, a cafe, a climbing spot), backed by a
-// live Google Places search. Deliberately distinct from generateRecommendation,
-// which never names a real venue because it has no data source to back one up
-// — this one does, and only ever returns something with a real place_id
-// behind it. Built after a real conversation showed Co inventing a
-// plausible-sounding gym name from general knowledge with nothing behind
-// it — this replaces that guess with an actual lookup.
-export async function findRealVenue(venueType: string, city: string): Promise<RealVenueMatch | null> {
-  const results = await findRealVenues(venueType, city, 1);
-  return results[0] ?? null;
-}
-
 // Google's text search is fuzzy — confirmed a real climbing-gym search
 // returned "Great Western Power Company" (an events venue, not a gym) as
 // its 4th result, which cleared hardFilterVenues fine since that filter

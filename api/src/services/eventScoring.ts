@@ -6,18 +6,18 @@ import { getEventDetails, getEventGuestList, listCalendarEvents, type LumaGuest,
 import { getActiveAsks, getActiveSeekingAsk, scoreAgainstStatedAsk } from "./matching.js";
 import { detectAndScheduleCheckins } from "./eventCheckinFollowUp.js";
 import sendblue, { cleanCoMessage } from "./sendblue.js";
-import { tryClaimProactiveNudge } from "./proactiveThrottle.js";
-import { recordInRoomSend } from "../harness/proactive.js";
+import { inRoomSendAllowed, recordInRoomSend } from "../harness/proactive.js";
 import { writeMemory } from "./memory.js";
 import { mergeWalkinsIntoGuestPool } from "./eventWalkinCheckin.js";
 import { CO_VOICE, CO_TEXT_CHANNEL } from "./coVoice.js";
 import { checkEventWindow, checkNamesWithheld, checkOneNudgePerEvent, draftWithConsent, eventOptedIn } from "../harness/introConsent.js";
 import { gateShareReason } from "../harness/matchGate.js";
+import { MODELS } from "../models.js";
 
 // Model policy (Royce, 2026-09-14): a draft that names another person is
 // Sonnet 5; the additive offer names no one (checked in code) and stays Haiku.
-const NAMING_DRAFT_MODEL = "claude-sonnet-5";
-const PLAIN_DRAFT_MODEL = "claude-haiku-4-5-20251001";
+const NAMING_DRAFT_MODEL = MODELS.sonnet;
+const PLAIN_DRAFT_MODEL = MODELS.haiku;
 
 // Event Curation — "Standing profile scored against full Luma guest list."
 // Scoped strictly to one event's guest list, not the whole network — a Co
@@ -128,8 +128,7 @@ async function markSolicited(eventId: string, personId: string): Promise<void> {
 // routes/luma.ts's runScoringPass had nothing stopping both from
 // independently running the full scoring pass — each with its own real,
 // billed LLM call per matched guest, for the exact same underlying data.
-// Same atomic claim-before-act pattern as proactiveThrottle.ts's
-// tryClaimProactiveNudge (a plain check-then-write would let two near-
+// Atomic claim-before-act (a plain check-then-write would let two near-
 // simultaneous webhooks both read "not scored recently" before either had
 // written its claim). Short window — this is only meant to coalesce near-
 // duplicate signals for the SAME action, not throttle genuinely distinct
@@ -327,8 +326,8 @@ async function maybeSendMatchNudge(
   );
   if (!message) return false;
 
-  if (!(await tryClaimProactiveNudge(person.user_id))) {
-    console.log(`eventScoring: match nudge throttled for ${person.user_id} (proactive nudge used elsewhere in last 24h)`);
+  if (!(await inRoomSendAllowed(person.user_id, eventId))) {
+    console.log(`eventScoring: match nudge throttled for ${person.user_id} (in-room text limit for this event reached)`);
     return false;
   }
 
@@ -416,8 +415,8 @@ Draft a short, warm, low-pressure text (1-2 sentences, no exclamation points, no
 
   // Proactive-nudge cap still applies — this is still one of today's
   // discretionary outbound texts, same as the original match nudge.
-  if (!(await tryClaimProactiveNudge(person.user_id))) {
-    console.log(`eventScoring: additive offer throttled for ${person.user_id} (proactive nudge used elsewhere in last 24h)`);
+  if (!(await inRoomSendAllowed(person.user_id, eventId))) {
+    console.log(`eventScoring: additive offer throttled for ${person.user_id} (in-room text limit for this event reached)`);
     return false;
   }
 
@@ -485,7 +484,7 @@ export async function scoreMatchedGroup(
         return { sent: false };
       });
       // Only starts the 3-day cooldown on an actual send — a throttled
-      // attempt (see proactiveThrottle.ts's shared daily nudge cap) isn't a
+      // attempt (see the Layer 7 send caps) isn't a
       // real ask, and shouldn't cost this person 3 days of silence for it.
       // The next scoring pass (e.g. the next guest.updated) retries normally.
       if (solicitationSent) {

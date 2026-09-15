@@ -18,6 +18,8 @@ import {
   type PendingNetworkTease,
   type PendingNetworkIntroOffer,
 } from "./networkIntroNudge.js";
+import { MODELS } from "../models.js";
+import { extractFirstJsonObject, parseModelJson } from "./modelJson.js";
 
 // Layer 2 router (Royce, 2026-09-14). Replaces ~10 independent classifiers
 // that each decided, without seeing the others, whether a message answered
@@ -29,7 +31,7 @@ import {
 // pass evals/router/run.ts before shipping.
 
 // Single place to change the router model.
-export const ROUTER_MODEL = "claude-sonnet-5";
+export const ROUTER_MODEL = MODELS.sonnet;
 const ROUTER_EFFORT: "low" | "medium" | "high" | undefined = "low";
 
 export type OpenItemKind =
@@ -311,29 +313,6 @@ function ago(at: Date | null, now: Date): string {
   return `${Math.round(mins / 1440)} days ago`;
 }
 
-function extractFirstJsonObject(text: string): string | null {
-  const start = text.indexOf("{");
-  if (start === -1) return null;
-  let depth = 0;
-  let inString = false;
-  let escapeNext = false;
-  for (let i = start; i < text.length; i++) {
-    const ch = text[i];
-    if (inString) {
-      if (escapeNext) escapeNext = false;
-      else if (ch === "\\") escapeNext = true;
-      else if (ch === '"') inString = false;
-      continue;
-    }
-    if (ch === '"') inString = true;
-    else if (ch === "{") depth++;
-    else if (ch === "}") {
-      depth--;
-      if (depth === 0) return text.slice(start, i + 1);
-    }
-  }
-  return null;
-}
 
 export function buildRouterPrompt(input: RouteInput): string {
   const now = input.now ?? new Date();
@@ -407,7 +386,7 @@ export async function routeMessage(input: RouteInput, opts: { model?: string; ef
     experimental_telemetry: { isEnabled: true, functionId: "router.route" },
     prompt: buildRouterPrompt(input),
   });
-  const json = extractFirstJsonObject(text.replace(/```json|```/g, ""));
+  const json = extractFirstJsonObject(text.replace(/```(?:json)?/g, ""));
   if (!json) throw new Error(`router returned no JSON: ${text.slice(0, 200)}`);
   const parsed = routerOutputSchema.parse(JSON.parse(json));
   return {

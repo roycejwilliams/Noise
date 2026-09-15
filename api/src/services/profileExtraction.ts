@@ -14,12 +14,14 @@ import {
   type OpenAsk,
   type ProposedResolution,
 } from "../harness/profileWrite.js";
+import { MODELS } from "../models.js";
+import { parseModelJson } from "./modelJson.js";
 
 // Model per job (Royce's policy): Sonnet 5 for judgment that changes the
 // profile (psychographic extraction, retiring items, same-ask calls);
 // Haiku 4.5 for narrow extraction that code checks afterward.
 const PROFILE_EXTRACT_MODEL = PROFILE_JUDGMENT_MODEL;
-const NARROW_MODEL = "claude-haiku-4-5-20251001";
+const NARROW_MODEL = MODELS.haiku;
 
 // Shared by the Hume call webhook (co.ts /webhook), the typed-intake fallback
 // (co.ts /typed-intake/:user_id), and co-test's browser-EVI intake — all three
@@ -170,8 +172,8 @@ export async function extractPsychographicProfile(
 
   let extracted: ExtractedProfile = {};
   try {
-    const clean = rawExtraction.replace(/```json|```/g, "").trim();
-    extracted = JSON.parse(clean);
+    const clean = rawExtraction.trim();
+    extracted = parseModelJson(clean);
   } catch {
     console.error("Failed to parse psychographic extraction:", rawExtraction);
   }
@@ -230,8 +232,8 @@ ready_to_summarize is true only if at most one or two minor topics remain missin
       experimental_telemetry: { isEnabled: true, functionId: "profileExtraction.assessConversationCoverage" },
     });
 
-    const clean = raw.replace(/```json|```/g, "").trim();
-    const parsed = JSON.parse(clean);
+    const clean = raw.trim();
+    const parsed = parseModelJson(clean);
     const missing = Array.isArray(parsed.missing_topics)
       ? parsed.missing_topics.filter((t: unknown): t is RapportTopic =>
           RAPPORT_TOPICS.includes(t as RapportTopic),
@@ -301,17 +303,6 @@ export function markTopicAsked(userId: string, topic: RapportTopic): void {
     .catch((err) => console.error("topics_asked update failed (non-fatal):", err));
 }
 
-// Simple 0-100 read of how much of RAPPORT_TOPICS is on file for someone —
-// not stored anywhere itself (topics_covered is the source of truth; this is
-// just a derived read of it), useful for a future network-wide density
-// report (Stage 2) without needing a separate synced column that could go
-// stale.
-export function getProfileCompletenessPercent(topicsCovered: Record<string, string> | null | undefined): number {
-  if (!topicsCovered) return 0;
-  const covered = RAPPORT_TOPICS.filter((t) => topicsCovered[t]).length;
-  return Math.round((covered / RAPPORT_TOPICS.length) * 100);
-}
-
 export type CoverageNudgeProfile = {
   life_chapters?: string[] | null;
   goals?: string[] | null;
@@ -369,48 +360,6 @@ export async function getCoverageNudge(
   return { missingTopic };
 }
 
-// Cheap Haiku pass (same shape as assessConversationCoverage) that checks
-// whether this call's transcript signals that an already-on-file goal or
-// blocker is done/resolved/no longer relevant — otherwise the union in
-// storeProfile only ever grows and stale items pile up forever. Only fires
-// when there's something on file to check against. Matches are filtered back
-// against the original arrays so a hallucinated or reworded item can't
-// accidentally drop something real — worst case a resolved item just lingers
-// until the next call catches it.
-// openAsks (added for Co Loop Stage 6) — the person's currently-open
-// ask_checkins rows, {id, text}. Folded into this same Haiku pass rather than
-// a separate call: the judgment ("has the transcript signaled this is done")
-// is identical in kind to resolving a goal/blocker, so one call handles all
-// three. A resolved ask closes the loop back to Stage 3 — storeProfile
-// retires the matching relevance_edges rows and stops further Stage 5
-// check-ins for it.
-// Scans for the first balanced {...} object, respecting string literals so a
-// brace inside a quoted value doesn't throw off the depth count. Used to pull
-// a JSON object out of model output that may carry leading or trailing prose
-// around it, rather than trusting markdown-fence stripping alone.
-function extractFirstJsonObject(text: string): string | null {
-  const start = text.indexOf("{");
-  if (start === -1) return null;
-  let depth = 0;
-  let inString = false;
-  let escapeNext = false;
-  for (let i = start; i < text.length; i++) {
-    const ch = text[i];
-    if (inString) {
-      if (escapeNext) escapeNext = false;
-      else if (ch === "\\") escapeNext = true;
-      else if (ch === '"') inString = false;
-      continue;
-    }
-    if (ch === '"') inString = true;
-    else if (ch === "{") depth++;
-    else if (ch === "}") {
-      depth--;
-      if (depth === 0) return text.slice(start, i + 1);
-    }
-  }
-  return null;
-}
 
 async function assessResolvedItems(
   transcript: string,
@@ -496,8 +445,8 @@ export function gateResolutionOutput(
   // Real gap found live, 2026-09-10: despite "Return ONLY valid JSON", the
   // model sometimes appends a "**Reasoning:**" section after the fenced
   // block. Extract the balanced {...} object instead of trusting fences.
-  const clean = raw.replace(/```json|```/g, "").trim();
-  const parsed = JSON.parse(extractFirstJsonObject(clean) ?? clean);
+  const clean = raw.trim();
+  const parsed = parseModelJson(clean);
   const proposals: ProposedResolution[] = [
     ...(Array.isArray(parsed.resolved_goals) ? parsed.resolved_goals : []).map((g: any) => ({
       kind: "goal" as const,
@@ -542,8 +491,8 @@ Return ONLY valid JSON, no preamble: {"preference": "weekly" | "biweekly" | "non
       experimental_telemetry: { isEnabled: true, functionId: "profileExtraction.extractCheckinCadencePreference" },
     });
 
-    const clean = raw.replace(/```json|```/g, "").trim();
-    const parsed = JSON.parse(clean);
+    const clean = raw.trim();
+    const parsed = parseModelJson(clean);
     switch (parsed.preference) {
       case "weekly":
         return 7;
@@ -808,12 +757,12 @@ Transcript:
         }),
     );
 
-    const clean = rawIntent.replace(/```json|```/g, "").trim();
+    const clean = rawIntent.trim();
     if (!clean) return null;
 
     let parsed: CapturedIntentData | null = null;
     try {
-      parsed = JSON.parse(clean);
+      parsed = parseModelJson(clean);
     } catch {
       return null;
     }
@@ -1067,12 +1016,12 @@ Transcript:
         }),
     );
 
-    const clean = raw.replace(/```json|```/g, "").trim();
+    const clean = raw.trim();
     if (!clean) return;
 
     let parsed: CapturedEventMentionData | null = null;
     try {
-      parsed = JSON.parse(clean);
+      parsed = parseModelJson(clean);
     } catch {
       return;
     }

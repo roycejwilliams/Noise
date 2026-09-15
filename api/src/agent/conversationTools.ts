@@ -22,7 +22,7 @@ export type ConversationToolContext = {
 
 // Side-effecting tools are bound to server-known context (userId,
 // phoneNumber, the two hard call-offer gates) rather than letting the model
-// supply them — same principle as agent/tools.ts's ask-checkin tools.
+// supply them.
 //
 // No offerCall tool here (removed) — a real conversation confirmed the model
 // self-declaring "I included a call offer" via a second tool call is not

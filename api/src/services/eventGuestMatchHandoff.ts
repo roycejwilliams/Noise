@@ -7,12 +7,13 @@ import { writeMemory } from "./memory.js";
 import { ALLOW_REAL_SENDS } from "../otpActions.js";
 import { CO_VOICE, CO_TEXT_CHANNEL } from "./coVoice.js";
 import { checkBothYes, draftWithConsent, eventOptedIn, gateIntroAction } from "../harness/introConsent.js";
+import { MODELS } from "../models.js";
 
 // Model policy (Royce, 2026-09-14): Haiku for the narrow yes/no reads (code
 // acts on them only through the consent checks); Sonnet 5 for drafts that
 // name another person and for replies inside an intro thread.
-const CLASSIFY_MODEL = "claude-haiku-4-5-20251001";
-const NAMING_DRAFT_MODEL = "claude-sonnet-5";
+const CLASSIFY_MODEL = MODELS.haiku;
+const NAMING_DRAFT_MODEL = MODELS.sonnet;
 
 // Double opt-in handoff (Royce, 2026-09-07 — "should Co make a group chat
 // once they've been opted in", "sit in the group chat as like a personal
@@ -84,35 +85,6 @@ export async function findPendingMatchNudge(userId: string): Promise<PendingMatc
 }
 
 export type MatchNudgeReplyClassification = "interested" | "not_interested" | "unrelated";
-
-export async function classifyMatchNudgeReply(
-  replyText: string,
-  candidateFirstName: string,
-  recentConversation?: string,
-): Promise<MatchNudgeReplyClassification> {
-  try {
-    const { text: raw } = await generateText({
-      model: anthropic(CLASSIFY_MODEL),
-      experimental_telemetry: { isEnabled: true, functionId: "eventGuestMatchHandoff.classifyReply" },
-      prompt: `Co recently told this person about ${candidateFirstName}, someone else going to the same event who might be worth meeting, and asked (or implied) whether they'd want to be connected. This does NOT mean every message from them now is answering that — if the recent conversation shows they're clearly responding to something else, this is unrelated, not a real answer.
-${recentConversation ? `\nRecent conversation, in order:\n${recentConversation}\n` : ""}
-Their reply: "${replyText}"
-
-Classify as ONE of:
-- "interested" — they're saying yes, they'd like to be connected/introduced (e.g. "sure", "yeah connect us", "I'd like that")
-- "not_interested" — they're passing on being introduced
-- "unrelated" — normal conversation, or clearly answering something else more recent in the thread instead
-
-Return ONLY the classification, nothing else.`,
-    });
-    const cleaned = raw.trim().toLowerCase().replace(/^[`"']+|[`"']+$/g, "");
-    if (cleaned === "interested" || cleaned === "not_interested" || cleaned === "unrelated") return cleaned;
-    return "unrelated";
-  } catch (err: any) {
-    console.error("classifyMatchNudgeReply: generateText failed (non-fatal, treating as unrelated):", err?.message ?? err);
-    return "unrelated";
-  }
-}
 
 export async function recordOptIn(
   eventId: string,
@@ -414,31 +386,6 @@ export async function findPendingMethodChoice(userId: string): Promise<PendingMe
 }
 
 export type MethodChoiceClassification = "phone" | "email" | "unclear";
-
-export async function classifyMethodChoice(replyText: string, recentConversation?: string): Promise<MethodChoiceClassification> {
-  try {
-    const { text: raw } = await generateText({
-      model: anthropic(CLASSIFY_MODEL),
-      experimental_telemetry: { isEnabled: true, functionId: "eventGuestMatchHandoff.classifyMethodChoice" },
-      prompt: `Co just asked this person whether they'd rather be connected with someone by text (a group chat) or by email.
-${recentConversation ? `\nRecent conversation, in order:\n${recentConversation}\n` : ""}
-Their reply: "${replyText}"
-
-Classify as ONE of:
-- "phone" — they want the text/group chat connection
-- "email" — they want an email introduction instead
-- "unclear" — they didn't actually answer this, or answered something else
-
-Return ONLY the classification, nothing else.`,
-    });
-    const cleaned = raw.trim().toLowerCase().replace(/^[`"']+|[`"']+$/g, "");
-    if (cleaned === "phone" || cleaned === "email") return cleaned;
-    return "unclear";
-  } catch (err: any) {
-    console.error("classifyMethodChoice: generateText failed (non-fatal, treating as unclear):", err?.message ?? err);
-    return "unclear";
-  }
-}
 
 export async function handleMethodChoiceReply(pending: PendingMethodChoice, classification: MethodChoiceClassification): Promise<void> {
   if (classification === "unclear") return;

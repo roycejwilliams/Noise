@@ -49,7 +49,7 @@ export function cleanCoMessage(text: string): string {
 // then services/recommendationOutcome.ts copy-pasted the same check for its
 // own sends. Centralized here 2026-09-03 (Royce, "how can we fix the
 // mitigated piece fully") after confirming most other call sites that draft
-// free text (agent/tools.ts's sendSms, eventAskSolicitation.ts,
+// free text (eventAskSolicitation.ts,
 // eventChangeNotification.ts, calendarFollowReachOut.ts,
 // eventDiscoverySurfacing.ts) had no guard at all — this can't stop the
 // model from occasionally breaking character, but living in the one choke

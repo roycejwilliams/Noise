@@ -4,11 +4,13 @@ import { propagateAttributes } from "@langfuse/tracing";
 import pool from "../db/db.js";
 import { getTieredRecommendation, type TierMatch } from "./tieredRecommendation.js";
 import { generateEmbedding } from "./embeddings.js";
+import { MODELS } from "../models.js";
+import { parseModelJson } from "./modelJson.js";
 
 // Model policy (Royce, 2026-09-14): Haiku for the narrow message-to-search
 // rewrite; Sonnet 5 for the fallback suggestion, which nothing re-checks.
-const REWRITE_MODEL = "claude-haiku-4-5-20251001";
-const SUGGEST_MODEL = "claude-sonnet-5";
+const REWRITE_MODEL = MODELS.haiku;
+const SUGGEST_MODEL = MODELS.sonnet;
 
 // Intent-Layer-only real action: Co can actually invoke this (voice via
 // Hume's tool_call plane, iMessage via a direct call from the ongoing-chat
@@ -86,8 +88,7 @@ Is this message asking Co to find or suggest something new for them (an event, a
 
 If yes, rewrite it as one standalone sentence describing what to look for, keeping the place, timing, and topic they gave. If they named a topic, use only their words for it and add nothing from their overall goal ("founder meetups" stays "founder meetups"). Only borrow the topic from what they're looking for overall when the message gives none (like "what's going on this weekend"). Return ONLY valid JSON: {"request": "..."} or {"request": null}.`,
     });
-    const m = raw.match(/\{[\s\S]*\}/);
-    const parsed = m ? JSON.parse(m[0]) : null;
+    const parsed = parseModelJson(raw);
     if (parsed && "request" in parsed) return typeof parsed.request === "string" && parsed.request.trim() ? parsed.request.trim() : null;
     return message;
   } catch (err: any) {
@@ -241,10 +242,10 @@ or
         }),
     );
 
-    const clean = raw.replace(/```json|```/g, "").trim();
+    const clean = raw.trim();
     let parsed: RecommendationResult | null = null;
     try {
-      parsed = JSON.parse(clean);
+      parsed = parseModelJson(clean);
     } catch {
       return NOT_ENOUGH_DATA;
     }

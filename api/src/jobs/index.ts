@@ -559,6 +559,17 @@ export function registerJobs(io: Server) {
     }
   });
 
+  // Harness decision log retention: keep 60 days. Every reply, route, and
+  // skipped send writes a row, so without this the table only grows.
+  cron.schedule("17 4 * * *", async () => {
+    try {
+      const { rowCount } = await pool.query(`DELETE FROM harness_decisions WHERE created_at < NOW() - INTERVAL '60 days'`);
+      if (rowCount) console.log(`harness_decisions: removed ${rowCount} rows older than 60 days`);
+    } catch (error) {
+      console.error("harness_decisions retention cron error:", error);
+    }
+  });
+
   // Outcome-learning loop (Royce, 2026-09-02: "Co follows up" + shared
   // signal classifier + wiring weighting into future matching — Notion V1
   // board rows 7/12/13). Every 15 min, same cadence as the other lightweight

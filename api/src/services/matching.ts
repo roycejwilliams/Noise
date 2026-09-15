@@ -1,10 +1,12 @@
 import { anthropic } from "@ai-sdk/anthropic";
 import { generateText } from "ai";
 import pool from "../db/db.js";
+import { MODELS } from "../models.js";
+import { parseModelJson } from "./modelJson.js";
 
 // Model policy (Royce, 2026-09-14): scoring decides who gets introduced to
 // whom, so it runs on Sonnet 5.
-const SCORING_MODEL = "claude-sonnet-5";
+const SCORING_MODEL = MODELS.sonnet;
 
 // Co Loop Stage 3 — "identify relevance." Judges whether a candidate
 // satisfies someone's stated ask. Used standalone by relevance.ts's network
@@ -167,8 +169,7 @@ async function runAskScoring<T extends ScorableCandidate>(
       prompt,
     });
 
-    const stripped = raw.replace(/```json|```/g, "").trim();
-    const parsed = JSON.parse(stripped.match(/\{[\s\S]*\}/)?.[0] ?? stripped);
+    const parsed = parseModelJson(raw);
     const results = Array.isArray(parsed.results) ? parsed.results : [];
     return results
       .filter((r: any) => Number.isInteger(r.index) && r.index >= 0 && r.index < candidates.length)

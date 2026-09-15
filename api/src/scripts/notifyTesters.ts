@@ -36,6 +36,7 @@ import { createHash } from "crypto";
 import { cleanCoMessage } from "../services/sendblue.js";
 import { enqueueCandidate } from "../harness/proactive.js";
 import { CO_VOICE, CO_TEXT_CHANNEL } from "../services/coVoice.js";
+import { MODELS } from "../models.js";
 
 // Shared intro/closing, not regenerated per person, and neither one ever
 // contains a greeting or the person's name — the code owns "Hey {name},"
@@ -45,7 +46,7 @@ import { CO_VOICE, CO_TEXT_CHANNEL } from "../services/coVoice.js";
 // actually changed must never drift or get invented, so each item is sent
 // verbatim, exactly as written.
 // One-line intro/closing, human bullets stay verbatim; narrow work, so Haiku.
-const LINE_MODEL = "claude-haiku-4-5-20251001";
+const LINE_MODEL = MODELS.haiku;
 
 async function draftLine(instruction: string, fallback: string): Promise<string> {
   try {
@@ -80,11 +81,13 @@ async function main() {
     process.exit(1);
   }
 
-  const intro = await draftLine(
+  // NOTIFY_INTRO / NOTIFY_CLOSING pin the exact lines (e.g. after the text
+  // was approved word for word); otherwise they're drafted.
+  const intro = process.env.NOTIFY_INTRO ?? await draftLine(
     "Write a short, warm phrase thanking them for helping test Co and saying here's what's new.",
     "thanks for helping test Co. Here's what's new:",
   );
-  const closing = await draftLine(
+  const closing = process.env.NOTIFY_CLOSING ?? await draftLine(
     "Write a short, warm closing line inviting them to share what they think after trying it.",
     "Let Co know what you think once you've had a chance to try it.",
   );
@@ -105,7 +108,8 @@ async function main() {
   // this being the co-test database. Name-filtered rather than by
   // hardcoded phone/email so it stays correct without baking in contact
   // details here; update this list directly as the tester group changes.
-  const TESTER_FIRST_NAMES = ["Royce", "Jacqueline"];
+  // Royce, 2026-09-15: "send to all co-test users" (Royce, Jacqueline, Celine).
+  const TESTER_FIRST_NAMES = ["Royce", "Jacqueline", "Celine"];
   const { rows: users } = await pool.query(
     `SELECT id, first_name, phone_number FROM users WHERE phone_number IS NOT NULL AND first_name = ANY($1)`,
     [TESTER_FIRST_NAMES],

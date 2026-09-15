@@ -50,6 +50,8 @@ import { triggerCallForUser } from "../services/callTrigger.js";
 import sendblue, { cleanCoMessage } from "../services/sendblue.js";
 import { CO_VOICE, CO_TEXT_CHANNEL } from "../services/coVoice.js";
 import { generateVoiceNote } from "../services/voiceNote.js";
+import { MODELS } from "../models.js";
+import { parseModelJson } from "../services/modelJson.js";
 
 // Serializes webhook processing per phone number. Without this, two
 // messages sent seconds apart from the same person can be handled
@@ -1279,7 +1281,7 @@ export function sendblueRouter(io: Server): Router {
           try {
             const nowUtc = DateTime.now().toUTC();
             const { text: rawSchedule } = await generateText({
-              model: anthropic("claude-haiku-4-5-20251001"),
+              model: anthropic(MODELS.haiku),
               experimental_telemetry: { isEnabled: true, functionId: "sendblue.scheduleCallExtract" },
               prompt: `A user is texting Co to schedule a call for later. The date, time, and timezone can be spread across several messages (e.g. they gave a time earlier and are only now confirming the date/timezone Co asked for) — read the whole conversation, not just the latest message, to piece it together.
 
@@ -1298,8 +1300,7 @@ Extract, combining information from the whole conversation above:
 Return ONLY valid JSON, no preamble: {"date": "YYYY-MM-DD or null", "time": "HH:MM or null", "timezone": "IANA name or null"}`,
             });
 
-            const clean = rawSchedule.replace(/```json|```/g, "").trim();
-            const parsed = JSON.parse(clean) as { date: string | null; time: string | null; timezone: string | null };
+            const parsed = parseModelJson<{ date: string | null; time: string | null; timezone: string | null }>(rawSchedule);
 
             if (parsed.date && parsed.time && parsed.timezone) {
               const local = DateTime.fromISO(`${parsed.date}T${parsed.time}`, { zone: parsed.timezone });
@@ -1489,7 +1490,7 @@ Return ONLY valid JSON, no preamble: {"date": "YYYY-MM-DD or null", "time": "HH:
                 let description = `${m.name}. ${m.reason}`;
                 try {
                   const { text: drafted } = await generateText({
-                    model: anthropic("claude-haiku-4-5-20251001"),
+                    model: anthropic(MODELS.haiku),
                     experimental_telemetry: { isEnabled: true, functionId: "sendblue.recommendation.describe" },
                     prompt: `${CO_VOICE}\n\n${CO_TEXT_CHANNEL} You're telling ${user.first_name ?? "them"} about "${m.name}"${"url" in m && m.url ? ". You sent the link a moment ago; this message goes right under it" : ""}. Why it fits them, from the matching notes: ${m.reason}\n\nWrite 1-2 sentences naming it and saying why it fits, in your own words. Only use facts from the name and notes above: no dates, times, or details that aren't written there. No link. Return ONLY the message.`,
                   });
@@ -1547,7 +1548,7 @@ Return ONLY valid JSON, no preamble: {"date": "YYYY-MM-DD or null", "time": "HH:
                   { userId: user.id, traceName: "sendblue.venueRequest.holdMessage" },
                   () =>
                     generateText({
-                      model: anthropic("claude-haiku-4-5-20251001"),
+                      model: anthropic(MODELS.haiku),
                       experimental_telemetry: { isEnabled: true, functionId: "sendblue.venueRequest.holdMessage" },
                       prompt: `${CO_VOICE}\n\n${CO_TEXT_CHANNEL} They just asked about finding ${requestedCount > 1 ? `${requestedCount} ${venueType}s` : `a ${venueType}`}. You're about to go actually look them up for them — send a brief "give me a sec" acknowledgment that names what they're looking for (the ${venueType}), not generic. Normal capitalization. Don't claim you've found anything yet. One short sentence. No exclamation points, no em dashes. Under 100 characters.`,
                     }),
@@ -1578,7 +1579,7 @@ Return ONLY valid JSON, no preamble: {"date": "YYYY-MM-DD or null", "time": "HH:
                     { userId: user.id, traceName: "sendblue.venueRequest.introMessage" },
                     () =>
                       generateText({
-                        model: anthropic("claude-haiku-4-5-20251001"),
+                        model: anthropic(MODELS.haiku),
                         experimental_telemetry: { isEnabled: true, functionId: "sendblue.venueRequest.introMessage" },
                         prompt: `${CO_VOICE}\n\n${CO_TEXT_CHANNEL} You just found ${venues.length} real ${venueType}${venues.length > 1 ? "s" : ""} for them${venues.length < requestedCount ? ` — they asked for ${requestedCount}, this is genuinely all that came back as a solid match, say so honestly` : ""}. Write ONE short, warm intro sentence to go right before a list (the list itself follows separately after your sentence — do not write the list yourself, do not include any links). No exclamation points, no em dashes. Under 150 characters.`,
                       }),
