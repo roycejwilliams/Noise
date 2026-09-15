@@ -133,7 +133,6 @@ export async function attemptNetworkSurfacing(
     userId,
     type: "network_tease",
     targetKey: `network_tease:${item.candidate.candidate_id}`,
-    topicKey: `network_tease:${askId}`,
     summary: `Someone in Co's network who fits what they're looking for (not named until they say yes): ${item.candidate.match_reason.slice(0, 160)}`,
     payload: { askId, candidate: item.candidate },
     expiresAt: new Date(Date.now() + 14 * 24 * 60 * 60 * 1000),

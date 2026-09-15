@@ -53,6 +53,13 @@ export async function placeDueCalls(io: import("socket.io").Server | null): Prom
   }
 }
 
+// A reminder only makes sense for a call that's still pending and still
+// coming up in the next ~20 minutes. Pure, so the Layer 7 eval can test it.
+export function reminderStillDue(call: { status: string; scheduled_for: Date | string }, now: Date): boolean {
+  const at = new Date(call.scheduled_for).getTime();
+  return call.status === "pending" && at > now.getTime() && at <= now.getTime() + 20 * 60 * 1000;
+}
+
 // Heads-up text ~15 minutes before a scheduled call actually fires — the
 // window is deliberately wide relative to this job's 5-min tick (rather
 // than a narrow "exactly 15 min out" check) so a slow tick or a brief
@@ -107,13 +114,8 @@ export async function sendDueReminders(): Promise<void> {
     // 15" went out for a call that had been cancelled after the reminder
     // row was claimed). Anything but still-pending and still ~15 min out
     // means no reminder.
-    const still = await pool.query(
-      `SELECT 1 FROM scheduled_calls
-       WHERE id = $1 AND status = 'pending'
-         AND scheduled_for > NOW() AND scheduled_for <= NOW() + INTERVAL '20 minutes'`,
-      [row.id],
-    );
-    if (!still.rows[0]) {
+    const still = await pool.query(`SELECT status, scheduled_for FROM scheduled_calls WHERE id = $1`, [row.id]);
+    if (!still.rows[0] || !reminderStillDue(still.rows[0], new Date())) {
       console.log(`scheduledCall: reminder for ${row.id} skipped, call no longer pending at that time`);
       continue;
     }

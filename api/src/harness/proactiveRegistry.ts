@@ -51,6 +51,10 @@ async function peopleCoPointedTo(userId: string, eventApiId: string | null): Pro
 async function draftDebrief(c: Candidate, firstName: string): Promise<DraftResult> {
   const p = c.payload as DebriefPayload;
   const people = await peopleCoPointedTo(c.userId, p.eventApiId);
+  return draftDebriefText(firstName, p, people);
+}
+
+export async function draftDebriefText(firstName: string, p: DebriefPayload, people: string[]): Promise<DraftResult> {
   const walkin = (p.walkinCheckinIds ?? []).length > 0;
   const text = await draftProactive({
     functionId: "proactive.debrief",

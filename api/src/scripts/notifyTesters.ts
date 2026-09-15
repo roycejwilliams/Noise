@@ -126,7 +126,6 @@ async function main() {
       userId: user.id,
       type: "product_update",
       targetKey: `product_update:${updateKey}`,
-      topicKey: "product_update",
       summary: `Product update for testers: ${updates.join("; ").slice(0, 200)}`,
       payload: { intro: cleanCoMessage(intro), closing: cleanCoMessage(closing), bulletList },
       expiresAt: new Date(Date.now() + 7 * 24 * 60 * 60 * 1000),

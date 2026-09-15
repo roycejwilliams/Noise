@@ -30,7 +30,6 @@ export async function enqueueDuePostCallFollowUps(): Promise<void> {
       userId: row.user_id,
       type: "post_call",
       targetKey: `post_call:${row.id}`,
-      topicKey: "post_call",
       summary: `Short text about one specific thing they said on a call ${Math.round((Date.now() - createdAt.getTime()) / 3600000)}h ago`,
       payload: { followUpId: row.id },
       dueAt: new Date(createdAt.getTime() + 20 * 60 * 1000),
@@ -45,6 +44,10 @@ export async function draftPostCall(userId: string, firstName: string, followUpI
   const transcript: string | undefined = rows[0]?.transcript;
   if (!transcript) return null;
   const contextSummary = await buildContextSummary(userId).catch(() => "");
+  return draftPostCallText(firstName, transcript, contextSummary);
+}
+
+export async function draftPostCallText(firstName: string, transcript: string, contextSummary: string): Promise<{ text: string; rules: OutputRules } | null> {
   const text = await draftProactive({
     functionId: "jobs.postCallFollowUp",
     firstName,

@@ -214,7 +214,6 @@ export async function enqueueDebrief(opts: {
     userId: opts.userId,
     type: "debrief",
     targetKey: `debrief:${opts.eventApiId ?? opts.eventName.toLowerCase()}`,
-    topicKey: "debrief",
     summary: `Morning-after "how was ${opts.eventName}?" (one text covering who they met there)`,
     payload,
     dueAt,

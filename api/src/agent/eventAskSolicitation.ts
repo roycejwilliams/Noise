@@ -28,7 +28,6 @@ export async function runEventAskSolicitationAgent(
     userId: person.userId,
     type: "ask_solicitation",
     targetKey: `ask_solicitation:${eventName.toLowerCase()}`,
-    topicKey: "ask_solicitation",
     summary: `Ask what they're hoping to get out of "${eventName}", which they're on the guest list for (no stated ask on file)`,
     payload: { eventName },
     // This signature has no event date; a week is the outer bound for an

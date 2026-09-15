@@ -38,7 +38,9 @@ import { describeFailed, gate, recordDecision, type GateCheck } from "./core.js"
 // Judgment with side effects (which text goes to a person, and its words)
 // runs on Sonnet 5 per Royce's model policy (2026-09-14).
 export const PICK_MODEL = "claude-sonnet-5";
-export const DRAFT_MODEL = "claude-sonnet-5";
+// The eval (evals/proactive/run.ts --draft-model) can compare models; in
+// production this is always Sonnet 5.
+export const DRAFT_MODEL = process.env.PROACTIVE_EVAL_DRAFT_MODEL || "claude-sonnet-5";
 
 export type ProactiveType =
   | "event_offer"
@@ -315,6 +317,8 @@ const ALWAYS_FORBIDDEN: { pattern: RegExp; reason: string }[] = [
   { pattern: /!/, reason: "exclamation point" },
   { pattern: /[—–]/, reason: "em dash" },
   { pattern: /\bjust (checking|touching) (in|base)\b/i, reason: "generic check-in filler" },
+  { pattern: /\b(someone|anyone|people) (cool|interesting)\b/i, reason: "vague instead of naming the person" },
+  { pattern: /\b(someone|a person) (asking|looking) for\b/i, reason: "engine reasoning leaked" },
   { pattern: /\b(fit score|stated goal|your profile|based on your (ask|goals?))\b/i, reason: "internal reasoning leaked" },
   { pattern: /\bi('ll| will) (send|text|follow up|let you know|reach out)\b.*\b(later|soon|tomorrow)\b/i, reason: "promise of a later action" },
 ];
@@ -809,7 +813,17 @@ export async function dispatchForUser(registry: ProactiveRegistry, userId: strin
     return;
   }
 
-  const result = await sendWithLedger(c, person, draft.messages);
+  let result: Awaited<ReturnType<typeof sendWithLedger>>;
+  try {
+    result = await sendWithLedger(c, person, draft.messages);
+  } catch (err: any) {
+    // Send failed and the ledger row rolled back. Retry on a later tick, up
+    // to the attempt limit, instead of every 15 minutes until it expires.
+    await pool.query(`UPDATE proactive_candidates SET attempts = attempts + 1, updated_at = NOW() WHERE id = $1`, [c.id]);
+    if (c.attempts + 1 >= RULES.maxDraftAttempts) await dropCandidate(registry, c, "skipped", `send error: ${err?.message ?? err}`);
+    await recordDecision({ layer: 7, decision: "proactive.dailyPick", userId, outcome: "skip", action: `send:${c.type}`, proposal: { ...proposal, picked: c.id }, checks: [...ev.userChecks, ...pickChecks, ...draftChecks], reason: `send failed: ${err?.message ?? err}` });
+    return;
+  }
   if (!result.sent) {
     await recordDecision({ layer: 7, decision: "proactive.dailyPick", userId, outcome: "skip", action: `send:${c.type}`, proposal: { ...proposal, picked: c.id }, checks: [...ev.userChecks, ...pickChecks, ...draftChecks, ...result.failed], reason: `blocked at send: ${describeFailed(result.failed)}` });
     return;

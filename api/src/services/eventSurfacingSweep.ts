@@ -360,7 +360,6 @@ export async function attemptEventSurfacing(candidate: SurfacingCandidate): Prom
     userId: candidate.userId,
     type: "event_offer",
     targetKey: `event_offer:${matchKey(item.match)}`,
-    topicKey: `event_offer:${candidate.askId}`,
     summary: `${item.match.kind === "opportunity" ? "An opportunity" : "An event"} that fits ${candidate.fromProfile ? "what they've shared" : `their ask "${item.askText.slice(0, 120)}"`}: "${item.match.name}"${date ? ` (${date})` : ""}${isShortNotice(item.match) ? ", short notice" : ""}`,
     payload,
     // Expires at the end of the event's (or deadline's) day; an undated
