@@ -1,6 +1,33 @@
 import pool from "./db.js";
 
 export function runMigrations() {
+  // Harness decision log (2026-09-14) — see src/harness/core.ts. One row
+  // per gated AI decision in any layer: what was proposed, which hard
+  // checks passed or failed, and what actually happened.
+  pool
+    .query(
+      `CREATE TABLE IF NOT EXISTS harness_decisions (
+        id BIGSERIAL PRIMARY KEY,
+        layer SMALLINT NOT NULL,
+        decision TEXT NOT NULL,
+        user_id UUID REFERENCES users(id) ON DELETE CASCADE,
+        outcome TEXT NOT NULL,
+        action TEXT,
+        proposal JSONB,
+        checks JSONB NOT NULL DEFAULT '[]',
+        confidence TEXT,
+        reason TEXT,
+        created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+      )`,
+    )
+    .then(() =>
+      Promise.all([
+        pool.query(`CREATE INDEX IF NOT EXISTS idx_harness_decisions_user ON harness_decisions (user_id, created_at DESC)`),
+        pool.query(`CREATE INDEX IF NOT EXISTS idx_harness_decisions_decision ON harness_decisions (layer, decision, created_at DESC)`),
+      ]),
+    )
+    .catch((err: Error) => console.error("harness_decisions table init failed:", err));
+
   pool
     .query(
       `
