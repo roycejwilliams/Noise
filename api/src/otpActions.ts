@@ -5,6 +5,9 @@ import { generateText } from "ai";
 import sendblue from "./services/sendblue.js";
 import { CO_VOICE, CO_TEXT_CHANNEL } from "./services/coVoice.js";
 
+// One-line intro drafts with a strict fallback: narrow work, Haiku.
+const INTRO_LINE_MODEL = "claude-haiku-4-5-20251001";
+
 // A fixed line every time reads as a canned system message, not someone
 // actually greeting you — same reasoning as webhooks.ts's variedConfirmation/
 // voicemailLine. Generates a short varied version of `fallback` and always
@@ -13,7 +16,7 @@ import { CO_VOICE, CO_TEXT_CHANNEL } from "./services/coVoice.js";
 async function varied(instruction: string, fallback: string, maxChars: number): Promise<string> {
   try {
     const { text } = await generateText({
-      model: anthropic("claude-haiku-4-5-20251001"),
+      model: anthropic(INTRO_LINE_MODEL),
       experimental_telemetry: { isEnabled: true, functionId: "otpActions.introLine" },
       prompt: `${CO_VOICE}\n\n${CO_TEXT_CHANNEL} ${instruction} Vary how you say it call to call — don't just repeat the same phrasing every time. Tone: calm, unhurried, like a private members club. No exclamation points, no em dashes. Under ${maxChars} characters. Return ONLY the single message you would actually send, nothing else — never multiple options, a numbered or lettered list, headers, or any markdown formatting.`,
     });

@@ -3,6 +3,8 @@ import type { Server as IOServer } from "socket.io";
 import pool from "../db/db.js";
 import { generateEmbedding } from "./embeddings.js";
 import { prewarmHumeConnection } from "./mediaStreamBridge.js";
+import { recordDecision } from "../harness/core.js";
+import { decideCall, gatherCallState, type CallAuthorization } from "../harness/callGate.js";
 
 // Extracted from co.ts's POST /call/:user_id so a second call site (Co
 // triggering a call from within a texting conversation, see sendblue.ts's
@@ -22,21 +24,17 @@ export type TriggerCallResult =
   | { success: true; call_sid: string }
   | { success: false; error: string };
 
-// The only values users.call_status ever holds while a call is genuinely
-// still ringing/connected — 'initiated' (set right below, at dial time) and
-// 'ringing'/'in-progress' (Twilio's own /call-status webhook, co.ts). Every
-// other value — including 'processing', which belongs to a DIFFERENT state
-// machine entirely (chat_ended's post-call extraction idempotency claim,
-// also in co.ts) — means no live call is in progress. Conflating the two
-// would wrongly block a new call for minutes after a PREVIOUS call already
-// ended, just because its extraction pipeline was still running.
-const LIVE_CALL_STATUSES = ["initiated", "ringing", "in-progress"];
-
-// See the call_status_updated_at migration comment (db/migrations.ts) for
-// why this exists and why it's a dedicated column rather than users.updated_at.
-const LIVE_CALL_RECLAIM_MINUTES = 30;
-
-export async function triggerCallForUser(userId: string, io: IOServer | null): Promise<TriggerCallResult> {
+// Every dial goes through the Layer 8 gate (src/harness/callGate.ts): live
+// call status (with the 30-minute reclaim for a status stuck after a missed
+// chat_ended webhook), opt-out, subscription, local hours for calls Co starts
+// itself, no call placed in the last few minutes, and something that
+// actually authorizes this call. Pass `auth` when the caller knows why it is
+// calling; otherwise the gate infers it from the database and records that.
+export async function triggerCallForUser(
+  userId: string,
+  io: IOServer | null,
+  auth: CallAuthorization | null = null,
+): Promise<TriggerCallResult> {
   const userResult = await pool.query(
     `SELECT u.first_name, u.phone_number, u.subscription_status, u.call_status, u.call_status_updated_at
      FROM users u
@@ -46,27 +44,20 @@ export async function triggerCallForUser(userId: string, io: IOServer | null): P
   const user = userResult.rows[0];
   if (!user) return { success: false, error: "User not found." };
 
-  if (process.env.NODE_ENV === "production" && user.subscription_status !== "active") {
-    return { success: false, error: "User does not have an active subscription." };
-  }
-
-  // Concurrent-call guard (Royce, 2026-09-07: "would that affect the
-  // concurrent calls?" — confirmed live via code trace that nothing
-  // previously stopped a second real Twilio call from being placed to
-  // someone already mid-call).
-  //
-  // Reclaimable after LIVE_CALL_RECLAIM_MINUTES (Royce, 2026-09-14: confirmed
-  // live that a real user's call_status was stuck at 'in-progress' for days,
-  // permanently blocking every future call, because nothing ever clears a
-  // LIVE status if Hume's chat_ended webhook is ever missed for that call —
-  // the only thing that normally moves it off a live value). Real calls
-  // through this product are short conversational check-ins, not long
-  // meetings, so 30 minutes is generous enough to never cut off a genuinely
-  // ongoing call while still recovering from a wedged one in bounded time.
-  const isLive = LIVE_CALL_STATUSES.includes(user.call_status);
-  const staleSinceMs = user.call_status_updated_at ? Date.now() - new Date(user.call_status_updated_at).getTime() : Infinity;
-  if (isLive && staleSinceMs < LIVE_CALL_RECLAIM_MINUTES * 60 * 1000) {
-    return { success: false, error: "A call is already in progress for this user." };
+  const callState = await gatherCallState(userId, user, auth);
+  const gateResult = decideCall(callState, auth, new Date());
+  await recordDecision({
+    layer: 8,
+    decision: "call.gate",
+    userId,
+    outcome: gateResult.allowed ? "act" : "skip",
+    action: gateResult.allowed ? "place_call" : "blocked",
+    proposal: { requested: auth, evidence: callState.evidence },
+    checks: gateResult.checks,
+    reason: gateResult.authorization ? `${gateResult.inferred ? "inferred " : ""}${gateResult.authorization}` : null,
+  });
+  if (!gateResult.allowed) {
+    return { success: false, error: gateResult.error ?? "Call blocked." };
   }
 
   const statusCallbackUrl = `${process.env.API_URL}/co/call-status`;
