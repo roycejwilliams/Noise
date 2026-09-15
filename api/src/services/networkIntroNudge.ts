@@ -8,6 +8,20 @@ import { writeMemory } from "./memory.js";
 import { ALLOW_REAL_SENDS } from "../otpActions.js";
 import type { MatchNudgeCandidate } from "./eventGuestMatchHandoff.js";
 import { CO_VOICE, CO_TEXT_CHANNEL } from "./coVoice.js";
+import { gateNetworkCandidate } from "../harness/matchGate.js";
+import { checkBothYes, draftWithConsent, gateIntroAction, networkOptedIn } from "../harness/introConsent.js";
+import { getActiveAsks } from "./matching.js";
+
+// Model policy (Royce, 2026-09-14): Haiku for the yes/no reply reads (code
+// acts on them only through the consent checks); Sonnet 5 for drafts that
+// name another person.
+const CLASSIFY_MODEL = "claude-haiku-4-5-20251001";
+const NAMING_DRAFT_MODEL = "claude-sonnet-5";
+
+async function statedAsksFor(userId: string): Promise<string[]> {
+  const { rows } = await pool.query(`SELECT intent FROM co_profiles WHERE user_id = $1`, [userId]).catch(() => ({ rows: [] as any[] }));
+  return getActiveAsks(rows[0]?.intent);
+}
 
 // Redesigned 2026-09-07 (Royce: "how would you implement the networking
 // recommendation... if you just didn't get fed this information but only
@@ -104,6 +118,9 @@ async function findFreshCandidates(userId: string, askId: string): Promise<Backl
   const fresh: BacklogItem[] = [];
   for (const row of rows) {
     if (await alreadySuggested(userId, row.candidate_id)) continue;
+    // Layer 5 match gate: shareable reason is really from their stated ask,
+    // pair not already suggested/declined, both people active.
+    if (!(await gateNetworkCandidate(userId, row.candidate_id, row.match_reason, "queue"))) continue;
     fresh.push({ askId, candidate: row });
   }
   return fresh;
@@ -197,7 +214,7 @@ export type TeaseReplyClassification = "interested" | "not_interested" | "unrela
 export async function classifyNetworkTeaseReply(replyText: string, recentConversation?: string): Promise<TeaseReplyClassification> {
   try {
     const { text: raw } = await generateText({
-      model: anthropic("claude-haiku-4-5-20251001"),
+      model: anthropic(CLASSIFY_MODEL),
       experimental_telemetry: { isEnabled: true, functionId: "networkIntroNudge.classifyTeaseReply" },
       prompt: `Co just texted this person that someone in the network crossed its mind for them, without saying who, and asked if they'd like to hear who. This does NOT mean every message from them now is a response to that — if the recent conversation shows they're clearly talking about something else, it's unrelated.
 ${recentConversation ? `\nRecent conversation, in order:\n${recentConversation}\n` : ""}
@@ -263,18 +280,36 @@ export async function resolveNetworkTeaseReply(
     return `\nThey just passed on even hearing who it was (internal only, never say the name back to them). Acknowledge lightly, no pressure, don't explain further.`;
   }
 
-  let message: string;
-  try {
-    const { text } = await generateText({
-      model: anthropic("claude-haiku-4-5-20251001"),
-      experimental_telemetry: { isEnabled: true, functionId: "networkIntroNudge.reveal.draft" },
-      prompt: `${CO_VOICE}\n\n${CO_TEXT_CHANNEL} You're texting ${firstName}. You just told them someone in the network crossed your mind, and they said yes, they want to hear who. Draft a short, warm text (2-3 sentences, no exclamation points, no em dashes, normal sentence capitalization) naming ${pending.candidate.first_name} and explaining in your own words why they're worth meeting: ${pending.candidate.match_reason}. Use only that reason, and never say ${pending.candidate.first_name} wants to meet them or said anything about them. End by asking if they'd like you to see if ${pending.candidate.first_name} is open to it too. Return ONLY the message text.`,
-    });
-    message = cleanCoMessage(text.trim());
-  } catch (err: any) {
-    console.error("resolveNetworkTeaseReply: reveal draft failed (non-fatal):", err?.message ?? err);
-    return null;
-  }
+  // Re-gate at reveal time: the candidate may have gone inactive, been
+  // introduced another way, or the reason may not pass the privacy check.
+  const candidateId = pending.candidate.candidate_id;
+  const cantReveal = `\nThey said yes to hearing who it was, but that introduction isn't available anymore. Say so briefly and honestly, don't name or describe anyone, and don't promise another one.`;
+  if (!(await gateNetworkCandidate(userId, candidateId, pending.candidate.match_reason, "reveal"))) return cantReveal;
+
+  const message = await draftWithConsent(
+    {
+      decision: "networkIntroNudge.reveal",
+      recipientId: userId,
+      facts: {
+        otherFirstName: pending.candidate.first_name,
+        otherOptedIn: await networkOptedIn(candidateId, userId),
+        recipientOptedIn: false,
+        recipientFirstName: firstName,
+        otherStatedAsks: await statedAsksFor(candidateId),
+        otherPhone: pending.candidate.phone_number,
+        otherEmail: pending.candidate.email,
+      },
+    },
+    async (feedback) => {
+      const { text } = await generateText({
+        model: anthropic(NAMING_DRAFT_MODEL),
+        experimental_telemetry: { isEnabled: true, functionId: "networkIntroNudge.reveal.draft" },
+        prompt: `${CO_VOICE}\n\n${CO_TEXT_CHANNEL} You're texting ${firstName}. You just told them someone in the network crossed your mind, and they said yes, they want to hear who. Draft a short, warm text (2-3 sentences, no exclamation points, no em dashes, normal sentence capitalization) naming ${pending.candidate.first_name} and explaining in your own words why they're worth meeting: ${pending.candidate.match_reason}. Use only that reason, and never say ${pending.candidate.first_name} wants to meet them or said anything about them. End by asking if they'd like you to see if ${pending.candidate.first_name} is open to it too. Return ONLY the message text.${feedback ? `\n\n${feedback}` : ""}`,
+      });
+      return cleanCoMessage(text.trim());
+    },
+  );
+  if (!message) return cantReveal;
 
   try {
     await sendblue.messages.send({ number: phoneNumber, content: message, from_number: process.env.SENDBLUE_PHONE_NUMBER! });
@@ -316,7 +351,7 @@ export async function classifyNetworkIntroReply(
 ): Promise<TeaseReplyClassification> {
   try {
     const { text: raw } = await generateText({
-      model: anthropic("claude-haiku-4-5-20251001"),
+      model: anthropic(CLASSIFY_MODEL),
       experimental_telemetry: { isEnabled: true, functionId: "networkIntroNudge.classifyIntroReply" },
       prompt: `Co is waiting to hear whether this person wants an actual introduction to ${candidateFirstName}. This does NOT mean every message from them now is answering that — if the recent conversation shows they're clearly talking about something else, it's unrelated.
 ${recentConversation ? `\nRecent conversation, in order:\n${recentConversation}\n` : ""}
@@ -335,6 +370,8 @@ Return ONLY the classification, nothing else.`,
 }
 
 async function sendNetworkIntroEmail(a: MatchNudgeCandidate, b: MatchNudgeCandidate, matchReason: string): Promise<void> {
+  const [aYes, bYes] = await Promise.all([networkOptedIn(a.user_id, b.user_id), networkOptedIn(b.user_id, a.user_id)]);
+  if (!(await gateIntroAction(a.user_id, "networkIntroNudge.introEmail", [checkBothYes(aYes, bYes)], { b: b.user_id }))) return;
   const subject = `Introducing ${a.first_name} and ${b.first_name}`;
   const html = `<p>Hi both,</p><p>${matchReason}</p><p>Figured you two should actually meet — consider this your intro, take it from here.</p><p>— Co</p>`;
   if (!ALLOW_REAL_SENDS) {
@@ -359,18 +396,38 @@ async function sendNetworkIntroEmail(a: MatchNudgeCandidate, b: MatchNudgeCandid
 }
 
 async function askCandidateDirectly(candidate: MatchNudgeCandidate, asker: MatchNudgeCandidate, matchReason: string, askId: string | null): Promise<void> {
-  let message: string;
-  try {
-    const { text } = await generateText({
-      model: anthropic("claude-haiku-4-5-20251001"),
-      experimental_telemetry: { isEnabled: true, functionId: "networkIntroNudge.directAsk.draft" },
-      prompt: `${CO_VOICE}\n\n${CO_TEXT_CHANNEL} You're texting ${candidate.first_name}. ${asker.first_name} would like to be introduced — you're both in Co's network. Draft a short, warm text (1-2 sentences, no exclamation points, no em dashes, normal sentence capitalization) letting ${candidate.first_name} know and asking if they'd be open to it too. Low-pressure, genuinely a question. Return ONLY the message text.`,
-    });
-    message = cleanCoMessage(text.trim());
-  } catch (err: any) {
-    console.error("askCandidateDirectly: draft failed (non-fatal):", err?.message ?? err);
-    return;
-  }
+  // The message tells the candidate the asker wants an intro, so that has
+  // to be on record first.
+  const askerOptedIn = await networkOptedIn(asker.user_id, candidate.user_id);
+  const message = await draftWithConsent(
+    {
+      decision: "networkIntroNudge.directAsk",
+      recipientId: candidate.user_id,
+      preChecks: [
+        askerOptedIn
+          ? { name: "asker_opted_in", pass: true }
+          : { name: "asker_opted_in", pass: false, reason: `${asker.first_name} has no recorded yes for this intro` },
+      ],
+      facts: {
+        otherFirstName: asker.first_name,
+        otherOptedIn: askerOptedIn,
+        recipientOptedIn: false,
+        recipientFirstName: candidate.first_name,
+        otherPhone: asker.phone_number,
+        otherEmail: asker.email,
+      },
+    },
+    async (feedback) => {
+      const { text } = await generateText({
+        model: anthropic(NAMING_DRAFT_MODEL),
+        experimental_telemetry: { isEnabled: true, functionId: "networkIntroNudge.directAsk.draft" },
+        prompt: `${CO_VOICE}\n\n${CO_TEXT_CHANNEL} You're texting ${candidate.first_name}. ${asker.first_name} would like to be introduced — you're both in Co's network. Draft a short, warm text (1-2 sentences, no exclamation points, no em dashes, normal sentence capitalization) letting ${candidate.first_name} know and asking if they'd be open to it too. Low-pressure, genuinely a question. Don't share any contact details. Return ONLY the message text.${feedback ? `\n\n${feedback}` : ""}`,
+      });
+      return cleanCoMessage(text.trim());
+    },
+  );
+  if (!message) return;
+
   try {
     await sendblue.messages.send({ number: candidate.phone_number, content: message, from_number: process.env.SENDBLUE_PHONE_NUMBER! });
   } catch (err: any) {

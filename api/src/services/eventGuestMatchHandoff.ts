@@ -6,6 +6,13 @@ import sendblue, { cleanCoMessage } from "./sendblue.js";
 import { writeMemory } from "./memory.js";
 import { ALLOW_REAL_SENDS } from "../otpActions.js";
 import { CO_VOICE, CO_TEXT_CHANNEL } from "./coVoice.js";
+import { checkBothYes, draftWithConsent, eventOptedIn, gateIntroAction } from "../harness/introConsent.js";
+
+// Model policy (Royce, 2026-09-14): Haiku for the narrow yes/no reads (code
+// acts on them only through the consent checks); Sonnet 5 for drafts that
+// name another person and for replies inside an intro thread.
+const CLASSIFY_MODEL = "claude-haiku-4-5-20251001";
+const NAMING_DRAFT_MODEL = "claude-sonnet-5";
 
 // Double opt-in handoff (Royce, 2026-09-07 — "should Co make a group chat
 // once they've been opted in", "sit in the group chat as like a personal
@@ -85,7 +92,7 @@ export async function classifyMatchNudgeReply(
 ): Promise<MatchNudgeReplyClassification> {
   try {
     const { text: raw } = await generateText({
-      model: anthropic("claude-haiku-4-5-20251001"),
+      model: anthropic(CLASSIFY_MODEL),
       experimental_telemetry: { isEnabled: true, functionId: "eventGuestMatchHandoff.classifyReply" },
       prompt: `Co recently told this person about ${candidateFirstName}, someone else going to the same event who might be worth meeting, and asked (or implied) whether they'd want to be connected. This does NOT mean every message from them now is answering that — if the recent conversation shows they're clearly responding to something else, this is unrelated, not a real answer.
 ${recentConversation ? `\nRecent conversation, in order:\n${recentConversation}\n` : ""}
@@ -139,6 +146,13 @@ export async function hasReciprocalOptIn(eventId: string, personId: string, cand
   return rows.length > 0;
 }
 
+// Both people said yes to each other for this event, read fresh from the
+// opt-in table (never inferred from the caller's flow).
+async function bothOptedIn(eventId: string, aId: string, bId: string): Promise<{ a: boolean; b: boolean }> {
+  const [a, b] = await Promise.all([eventOptedIn(eventId, aId, bId), eventOptedIn(eventId, bId, aId)]);
+  return { a, b };
+}
+
 async function hasPendingOrAnsweredNudge(eventId: string, personId: string, candidateId: string): Promise<boolean> {
   const { rows } = await pool.query(
     `SELECT 1 FROM event_guest_match_nudges WHERE event_id = $1 AND person_id = $2 AND candidate_id = $3`,
@@ -163,18 +177,37 @@ async function maybeAskCandidateDirectly(
 ): Promise<void> {
   if (await hasPendingOrAnsweredNudge(eventId, candidate.user_id, asker.user_id)) return; // already asked (or already answered) from their own side
 
-  let message: string;
-  try {
-    const { text } = await generateText({
-      model: anthropic("claude-haiku-4-5-20251001"),
-      experimental_telemetry: { isEnabled: true, functionId: "eventGuestMatchHandoff.directAsk.draft" },
-      prompt: `${CO_VOICE}\n\n${CO_TEXT_CHANNEL} You're texting ${candidate.first_name} about "${eventName}." ${askerFirstName}, who's also going, said they'd like to be introduced. Draft a short, warm text (1-2 sentences, no exclamation points, no em dashes) letting ${candidate.first_name} know and asking if they'd be open to it too. Low-pressure, genuinely a question, not an assumption. Return ONLY the message text.`,
-    });
-    message = cleanCoMessage(text.trim());
-  } catch (err: any) {
-    console.error("maybeAskCandidateDirectly: draft failed (non-fatal):", err?.message ?? err);
-    return;
-  }
+  // The message tells the candidate the asker wants an intro, so that has
+  // to be on record first.
+  const askerOptedIn = await eventOptedIn(eventId, asker.user_id, candidate.user_id);
+  const message = await draftWithConsent(
+    {
+      decision: "eventGuestMatchHandoff.directAsk",
+      recipientId: candidate.user_id,
+      preChecks: [
+        askerOptedIn
+          ? { name: "asker_opted_in", pass: true }
+          : { name: "asker_opted_in", pass: false, reason: `${askerFirstName} has no recorded yes for this intro` },
+      ],
+      facts: {
+        otherFirstName: askerFirstName,
+        otherOptedIn: askerOptedIn,
+        recipientOptedIn: false,
+        recipientFirstName: candidate.first_name,
+        otherPhone: asker.phone_number,
+        otherEmail: asker.email,
+      },
+    },
+    async (feedback) => {
+      const { text } = await generateText({
+        model: anthropic(NAMING_DRAFT_MODEL),
+        experimental_telemetry: { isEnabled: true, functionId: "eventGuestMatchHandoff.directAsk.draft" },
+        prompt: `${CO_VOICE}\n\n${CO_TEXT_CHANNEL} You're texting ${candidate.first_name} about "${eventName}." ${askerFirstName}, who's also going, said they'd like to be introduced. Draft a short, warm text (1-2 sentences, no exclamation points, no em dashes) letting ${candidate.first_name} know and asking if they'd be open to it too. Low-pressure, genuinely a question, not an assumption. Don't share any contact details. Return ONLY the message text.${feedback ? `\n\n${feedback}` : ""}`,
+      });
+      return cleanCoMessage(text.trim());
+    },
+  );
+  if (!message) return;
 
   try {
     await sendblue.messages.send({
@@ -219,6 +252,9 @@ async function createIntroGroup(
   a: MatchNudgeCandidate,
   b: MatchNudgeCandidate,
 ): Promise<void> {
+  const { a: aYes, b: bYes } = await bothOptedIn(eventId, a.user_id, b.user_id);
+  if (!(await gateIntroAction(a.user_id, "eventGuestMatchHandoff.introGroup", [checkBothYes(aYes, bYes)], { eventId, b: b.user_id }))) return;
+
   const introText = `Hey both — ${a.first_name}, ${b.first_name} — figured you two should actually meet before ${eventName}. I'll mostly stay out of the way here, but say the word if you ever want me for anything.`;
   let groupId: string | undefined;
   try {
@@ -261,6 +297,9 @@ async function createIntroGroup(
 // send-anything utility, so a new Resend call here is more honest than
 // bolting an unrelated template onto it).
 async function sendIntroEmail(eventId: string, eventName: string, a: MatchNudgeCandidate, b: MatchNudgeCandidate): Promise<void> {
+  const { a: aYes, b: bYes } = await bothOptedIn(eventId, a.user_id, b.user_id);
+  if (!(await gateIntroAction(a.user_id, "eventGuestMatchHandoff.introEmail", [checkBothYes(aYes, bYes)], { eventId, b: b.user_id }))) return;
+
   const subject = `Introducing ${a.first_name} and ${b.first_name}`;
   const html = `<p>Hi both,</p><p>Figured you two should actually meet before ${eventName} — you're both on my radar for it, so consider this your intro. Take it from here!</p><p>— Co</p>`;
   if (!ALLOW_REAL_SENDS) {
@@ -286,6 +325,8 @@ async function sendIntroEmail(eventId: string, eventName: string, a: MatchNudgeC
 // answer decides the medium for both, same as they're the one whose
 // message actually closes the loop.
 async function askConnectionMethod(eventId: string, askedPerson: MatchNudgeCandidate, other: MatchNudgeCandidate): Promise<void> {
+  const { a: aYes, b: bYes } = await bothOptedIn(eventId, askedPerson.user_id, other.user_id);
+  if (!(await gateIntroAction(askedPerson.user_id, "eventGuestMatchHandoff.askMethod", [checkBothYes(aYes, bYes)], { eventId, other: other.user_id }))) return;
   const message = cleanCoMessage(`Want me to connect you two by text or would email work better?`);
   try {
     await sendblue.messages.send({ number: askedPerson.phone_number, content: message, from_number: process.env.SENDBLUE_PHONE_NUMBER! });
@@ -377,7 +418,7 @@ export type MethodChoiceClassification = "phone" | "email" | "unclear";
 export async function classifyMethodChoice(replyText: string, recentConversation?: string): Promise<MethodChoiceClassification> {
   try {
     const { text: raw } = await generateText({
-      model: anthropic("claude-haiku-4-5-20251001"),
+      model: anthropic(CLASSIFY_MODEL),
       experimental_telemetry: { isEnabled: true, functionId: "eventGuestMatchHandoff.classifyMethodChoice" },
       prompt: `Co just asked this person whether they'd rather be connected with someone by text (a group chat) or by email.
 ${recentConversation ? `\nRecent conversation, in order:\n${recentConversation}\n` : ""}
@@ -432,7 +473,7 @@ export async function handleGroupMessage(groupId: string, senderNumber: string, 
   if (!MENTION_PATTERN.test(content)) return; // not addressed to Co — stay quiet, this is the default
 
   const { rows } = await pool.query(
-    `SELECT eig.event_name,
+    `SELECT eig.event_name, eig.event_id, eig.person_a_id, eig.person_b_id,
             ua.first_name AS a_first_name, ua.phone_number AS a_phone,
             ub.first_name AS b_first_name, ub.phone_number AS b_phone
      FROM event_intro_groups eig
@@ -444,12 +485,16 @@ export async function handleGroupMessage(groupId: string, senderNumber: string, 
   const group = rows[0];
   if (!group) return; // not a group Co is tracking
 
+  // Co only speaks in a thread for a pair that both said yes.
+  const { a: aYes, b: bYes } = await bothOptedIn(group.event_id, group.person_a_id, group.person_b_id);
+  if (!(await gateIntroAction(group.person_a_id, "eventGuestMatchHandoff.groupReply", [checkBothYes(aYes, bYes)], { groupId }))) return;
+
   const senderFirstName = senderNumber === group.a_phone ? group.a_first_name : senderNumber === group.b_phone ? group.b_first_name : null;
 
   let reply: string;
   try {
     const { text } = await generateText({
-      model: anthropic("claude-sonnet-4-6"),
+      model: anthropic(NAMING_DRAFT_MODEL),
       experimental_telemetry: { isEnabled: true, functionId: "eventGuestMatchHandoff.groupReply" },
       prompt: `${CO_VOICE}\n\n${CO_TEXT_CHANNEL} You're sitting quietly in a group iMessage thread with ${group.a_first_name} and ${group.b_first_name} — you introduced them ahead of "${group.event_name}" and mostly stay out of their actual conversation, only speaking when directly addressed, which just happened.
 

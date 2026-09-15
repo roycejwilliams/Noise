@@ -3,13 +3,20 @@ import { generateText } from "ai";
 import pool from "../db/db.js";
 import { runEventAskSolicitationAgent } from "../agent/eventAskSolicitation.js";
 import { getEventDetails, getEventGuestList, listCalendarEvents, type LumaGuest, type LumaEventDetail } from "./luma.js";
-import { getActiveSeekingAsk, scoreAgainstStatedAsk } from "./matching.js";
+import { getActiveAsks, getActiveSeekingAsk, scoreAgainstStatedAsk } from "./matching.js";
 import { detectAndScheduleCheckins } from "./eventCheckinFollowUp.js";
 import sendblue, { cleanCoMessage } from "./sendblue.js";
 import { tryClaimProactiveNudge } from "./proactiveThrottle.js";
 import { writeMemory } from "./memory.js";
 import { mergeWalkinsIntoGuestPool } from "./eventWalkinCheckin.js";
 import { CO_VOICE, CO_TEXT_CHANNEL } from "./coVoice.js";
+import { checkEventWindow, checkNamesWithheld, checkOneNudgePerEvent, draftWithConsent, eventOptedIn } from "../harness/introConsent.js";
+import { gateShareReason } from "../harness/matchGate.js";
+
+// Model policy (Royce, 2026-09-14): a draft that names another person is
+// Sonnet 5; the additive offer names no one (checked in code) and stays Haiku.
+const NAMING_DRAFT_MODEL = "claude-sonnet-5";
+const PLAIN_DRAFT_MODEL = "claude-haiku-4-5-20251001";
 
 // Event Curation — "Standing profile scored against full Luma guest list."
 // Scoped strictly to one event's guest list, not the whole network — a Co
@@ -67,7 +74,8 @@ export async function matchGuestsToUsers(guests: LumaGuest[]): Promise<ScorableG
     `SELECT cp.user_id, u.first_name, u.phone_number, u.email, cp.city, cp.goals, cp.blockers, cp.activity_preferences, cp.intent
      FROM co_profiles cp
      JOIN users u ON u.id = cp.user_id
-     WHERE u.phone_number = ANY($1::text[]) OR LOWER(u.email) = ANY($2::text[])`,
+     WHERE (u.phone_number = ANY($1::text[]) OR LOWER(u.email) = ANY($2::text[]))
+       AND coalesce(u.sms_opted_out, false) = false`,
     [phones, emails],
   );
   return rows;
@@ -197,7 +205,6 @@ const MATCH_NUDGE_MIN_SCORE = 60;
 // with only a few minutes left in the event isn't actionable. Same
 // reasoning eventSurfacingSweep.ts's isShortNotice already uses for teases
 // on a same-day event, just the mirror case (too LATE, not too early).
-const MATCH_NUDGE_END_CUTOFF_MINUTES = 30;
 
 // Debounce for the "additive offer" nudge (Royce, 2026-09-10) — a re-score
 // triggered by a fresh walk-in check-in must never silently swap or replace
@@ -236,15 +243,6 @@ async function tryClaimAdditiveOfferDebounce(eventId: string, personId: string):
   return rows.length > 0;
 }
 
-function withinNudgeWindow(startAt: string, endAt: string | null): boolean {
-  const now = Date.now();
-  if (now < new Date(startAt).getTime()) return false;
-  if (endAt) {
-    const cutoff = new Date(endAt).getTime() - MATCH_NUDGE_END_CUTOFF_MINUTES * 60 * 1000;
-    if (now > cutoff) return false;
-  }
-  return true;
-}
 
 async function wasAlreadyNudgedForMatch(eventId: string, personId: string): Promise<boolean> {
   const { rows } = await pool.query(
@@ -279,16 +277,20 @@ async function maybeSendMatchNudge(
   opts: { dryRun?: boolean },
 ): Promise<boolean> {
   if (top.score < MATCH_NUDGE_MIN_SCORE) return false;
-  if (await wasAlreadyNudgedForMatch(eventId, person.user_id)) return false;
-  // eventTiming is null for the non-Luma paths (eventMatching.ts's
-  // self-reported-event grouping) — no reliable start/end there to gate on,
-  // same as before this change.
-  if (eventTiming && !withinNudgeWindow(eventTiming.start_at, eventTiming.end_at)) return false;
-
   // Privacy (2026-09-14): top.reason comes from the candidate's private
   // profile + memories. Without a shareable reason there's nothing we can
   // honestly tell this person, so no nudge.
   if (!top.shareReason) return false;
+
+  // Consent harness (harness/introConsent.ts): event window and one nudge
+  // per event are hard checks; eventTiming is null only for the non-Luma
+  // self-reported path (eventMatching.ts), where there's no live window.
+  const preChecks = [
+    checkOneNudgePerEvent(await wasAlreadyNudgedForMatch(eventId, person.user_id)),
+    checkEventWindow(eventTiming, new Date()),
+  ];
+  if (preChecks.some((c) => !c.pass)) return false;
+  if (!(await gateShareReason(person.user_id, candidate.user_id, top.shareReason, "eventScoring.matchNudge"))) return false;
 
   if (opts.dryRun) {
     console.log(
@@ -296,23 +298,38 @@ async function maybeSendMatchNudge(
     );
     return false;
   }
+
+  const candidateOptedIn = await eventOptedIn(eventId, candidate.user_id, person.user_id);
+  const message = await draftWithConsent(
+    {
+      decision: "eventScoring.matchNudge",
+      recipientId: person.user_id,
+      preChecks,
+      facts: {
+        otherFirstName: candidate.first_name,
+        otherOptedIn: candidateOptedIn,
+        recipientOptedIn: false,
+        recipientFirstName: person.first_name,
+        otherStatedAsks: getActiveAsks(candidate.intent),
+        otherPhone: candidate.phone_number,
+        otherEmail: candidate.email,
+      },
+    },
+    async (feedback) => {
+      const { text } = await generateText({
+        model: anthropic(NAMING_DRAFT_MODEL),
+        experimental_telemetry: { isEnabled: true, functionId: "eventScoring.matchNudge.draft" },
+        prompt: `${CO_VOICE}\n\n${CO_TEXT_CHANNEL} You're texting ${person.first_name} about "${eventName}," an event they're going to. You found someone else going who's genuinely worth them meeting: ${candidate.first_name}. Why they're worth meeting: ${top.shareReason}
+
+Draft a short, warm, low-pressure text (1-2 sentences, no exclamation points, no em dashes, normal sentence capitalization) letting ${person.first_name} know about ${candidate.first_name} and naming the real reason above in your own words. Use only that reason. Never say ${candidate.first_name} wants to meet them, mentioned them, or said anything about them. Not a hard sell, just a genuine heads-up, like a friend connecting two people who'd get along. Return ONLY the message text.${feedback ? `\n\n${feedback}` : ""}`,
+      });
+      return cleanCoMessage(text.trim());
+    },
+  );
+  if (!message) return false;
+
   if (!(await tryClaimProactiveNudge(person.user_id))) {
     console.log(`eventScoring: match nudge throttled for ${person.user_id} (proactive nudge used elsewhere in last 24h)`);
-    return false;
-  }
-
-  let message: string;
-  try {
-    const { text } = await generateText({
-      model: anthropic("claude-haiku-4-5-20251001"),
-      experimental_telemetry: { isEnabled: true, functionId: "eventScoring.matchNudge.draft" },
-      prompt: `${CO_VOICE}\n\n${CO_TEXT_CHANNEL} You're texting ${person.first_name} about "${eventName}," an event they're going to. You found someone else going who's genuinely worth them meeting: ${candidate.first_name}. Why they're worth meeting: ${top.shareReason}
-
-Draft a short, warm, low-pressure text (1-2 sentences, no exclamation points, no em dashes, normal sentence capitalization) letting ${person.first_name} know about ${candidate.first_name} and naming the real reason above in your own words. Use only that reason. Never say ${candidate.first_name} wants to meet them, mentioned them, or said anything about them. Not a hard sell, just a genuine heads-up, like a friend connecting two people who'd get along. Return ONLY the message text.`,
-    });
-    message = cleanCoMessage(text.trim());
-  } catch (err: any) {
-    console.error(`eventScoring: match nudge draft failed for ${person.user_id} (non-fatal):`, err?.message ?? err);
     return false;
   }
 
@@ -331,7 +348,7 @@ Draft a short, warm, low-pressure text (1-2 sentences, no exclamation points, no
   await writeMemory(
     person.user_id,
     "event_guest_match_nudge",
-    `Nudged ${person.first_name} that ${candidate.first_name} is also going to "${eventName}" and worth meeting: ${top.reason} (score ${top.score})`,
+    `Nudged ${person.first_name} that ${candidate.first_name} is also going to "${eventName}" and worth meeting: ${top.shareReason} (score ${top.score})`,
   );
   // Royce, 2026-09-08 sweep — the descriptive log above is a summary, not
   // the actual text sent, so recentConversation (routes/sendblue.ts, which
@@ -360,7 +377,8 @@ async function maybeSendAdditiveOffer(
   // Same "don't nudge before the event starts or in its last stretch" gate
   // as the original match nudge — a new arrival scored an hour before start
   // is not something to text about yet.
-  if (eventTiming && !withinNudgeWindow(eventTiming.start_at, eventTiming.end_at)) return false;
+  const windowCheck = checkEventWindow(eventTiming, new Date());
+  if (!windowCheck.pass) return false;
 
   if (opts.dryRun) {
     console.log(
@@ -374,25 +392,32 @@ async function maybeSendAdditiveOffer(
     );
     return false;
   }
+
+  const message = await draftWithConsent(
+    {
+      decision: "eventScoring.additiveOffer",
+      recipientId: person.user_id,
+      preChecks: [windowCheck, { name: "additive_debounce", pass: true }],
+      facts: { otherFirstName: "", otherOptedIn: false, recipientOptedIn: false, recipientFirstName: person.first_name },
+      extraDraftChecks: (d) => [checkNamesWithheld(d, newCandidates.map((c) => c.first_name))],
+    },
+    async (feedback) => {
+      const { text } = await generateText({
+        model: anthropic(PLAIN_DRAFT_MODEL),
+        experimental_telemetry: { isEnabled: true, functionId: "eventScoring.additiveOffer.draft" },
+        prompt: `${CO_VOICE}\n\n${CO_TEXT_CHANNEL} You're texting ${person.first_name} about "${eventName}," an event they're already going to and already have a match at. Since then, ${newCandidates.length} more ${newCandidates.length === 1 ? "person has" : "people have"} checked in who could also be worth ${person.first_name} meeting.
+
+Draft a short, warm, low-pressure text (1-2 sentences, no exclamation points, no em dashes, normal sentence capitalization) letting them know you found ${newCandidates.length === 1 ? "someone else" : `${newCandidates.length} more people`} who just checked in that could be good for them, and ask if they want to hear who. Do NOT name anyone yet or mention their existing match. Don't say what anyone wants or said. This is just the offer to see more, nothing more. Return ONLY the message text.${feedback ? `\n\n${feedback}` : ""}`,
+      });
+      return cleanCoMessage(text.trim());
+    },
+  );
+  if (!message) return false;
+
   // Proactive-nudge cap still applies — this is still one of today's
   // discretionary outbound texts, same as the original match nudge.
   if (!(await tryClaimProactiveNudge(person.user_id))) {
     console.log(`eventScoring: additive offer throttled for ${person.user_id} (proactive nudge used elsewhere in last 24h)`);
-    return false;
-  }
-
-  let message: string;
-  try {
-    const { text } = await generateText({
-      model: anthropic("claude-haiku-4-5-20251001"),
-      experimental_telemetry: { isEnabled: true, functionId: "eventScoring.additiveOffer.draft" },
-      prompt: `${CO_VOICE}\n\n${CO_TEXT_CHANNEL} You're texting ${person.first_name} about "${eventName}," an event they're already going to and already have a match at. Since then, ${newCandidates.length} more ${newCandidates.length === 1 ? "person has" : "people have"} checked in who could also be worth ${person.first_name} meeting.
-
-Draft a short, warm, low-pressure text (1-2 sentences, no exclamation points, no em dashes, normal sentence capitalization) letting them know you found ${newCandidates.length === 1 ? "someone else" : `${newCandidates.length} more people`} who just checked in that could be good for them, and ask if they want to hear who. Do NOT name anyone yet or mention their existing match — this is just the offer to see more, nothing more. Return ONLY the message text.`,
-    });
-    message = cleanCoMessage(text.trim());
-  } catch (err: any) {
-    console.error(`eventScoring: additive offer draft failed for ${person.user_id} (non-fatal):`, err?.message ?? err);
     return false;
   }
 

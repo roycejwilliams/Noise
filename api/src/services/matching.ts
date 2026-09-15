@@ -2,6 +2,10 @@ import { anthropic } from "@ai-sdk/anthropic";
 import { generateText } from "ai";
 import pool from "../db/db.js";
 
+// Model policy (Royce, 2026-09-14): scoring decides who gets introduced to
+// whom, so it runs on Sonnet 5.
+const SCORING_MODEL = "claude-sonnet-5";
+
 // Co Loop Stage 3 — "identify relevance." Judges whether a candidate
 // satisfies someone's stated ask. Used standalone by relevance.ts's network
 // sweep — the only active caller right now, per the current build priority
@@ -154,7 +158,7 @@ async function runAskScoring<T extends ScorableCandidate>(
 ): Promise<AskScore<T>[]> {
   try {
     const { text: raw } = await generateText({
-      model: anthropic("claude-haiku-4-5-20251001"),
+      model: anthropic(SCORING_MODEL),
       experimental_telemetry: { isEnabled: true, functionId },
       prompt,
     });
@@ -253,4 +257,11 @@ mutual: true only if the candidate's own stated ask (if listed) is a "seeking" a
   return runAskScoring("matching.scoreOfferingAgainstCandidates", prompt, candidates);
 }
 
-export { getActiveAsk, getActiveSeekingAsk, getActiveOfferingAsk };
+// Every active stated ask/offering text (the only profile text a person
+// gave in order to be matched; see harness/matchGate.ts and introConsent.ts).
+function getActiveAsks(intent: unknown): string[] {
+  if (!Array.isArray(intent)) return [];
+  return (intent as StatedIntent[]).filter((i) => i?.status === "active" && i?.text).map((i) => String(i.text));
+}
+
+export { getActiveAsk, getActiveAsks, getActiveSeekingAsk, getActiveOfferingAsk };

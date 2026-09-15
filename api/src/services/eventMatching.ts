@@ -22,10 +22,10 @@ type CrossMatch = { user_id: string; event_api_id: string | null };
 async function fetchScorableGuests(userIds: string[]): Promise<ScorableGuest[]> {
   if (!userIds.length) return [];
   const { rows } = await pool.query(
-    `SELECT cp.user_id, u.first_name, u.phone_number, cp.goals, cp.blockers, cp.activity_preferences, cp.intent
+    `SELECT cp.user_id, u.first_name, u.phone_number, u.email, cp.city, cp.goals, cp.blockers, cp.activity_preferences, cp.intent
      FROM co_profiles cp
      JOIN users u ON u.id = cp.user_id
-     WHERE cp.user_id = ANY($1::uuid[])`,
+     WHERE cp.user_id = ANY($1::uuid[]) AND coalesce(u.sms_opted_out, false) = false`,
     [userIds],
   );
   return rows;

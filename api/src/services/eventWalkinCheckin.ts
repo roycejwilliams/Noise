@@ -43,6 +43,21 @@ function overlapScore(sentWords: Set<string>, eventWords: Set<string>): number {
 
 const MATCH_THRESHOLD = 0.5;
 
+// A check-in only counts for an event that's actually on right now (Layer 6
+// consent harness, 2026-09-14): a QR text for an event that ended yesterday
+// or starts next week must not put someone into that event's live scoring
+// pool, where in-room nudges would name them to strangers.
+export const CHECKIN_OPENS_BEFORE_START_MINUTES = 180;
+
+export function isCheckinOpen(event: { start_at: string; end_at?: string | null }, now: Date): boolean {
+  const t = now.getTime();
+  const start = new Date(event.start_at).getTime();
+  if (t < start - CHECKIN_OPENS_BEFORE_START_MINUTES * 60_000) return false;
+  // No end time on file: treat it as a same-day event (12h after start).
+  const end = event.end_at ? new Date(event.end_at).getTime() : start + 12 * 3_600_000;
+  return t <= end;
+}
+
 // Resolves an inbound text to a real, currently-listed Luma event. Returns
 // null whenever it isn't confidently a check-in — never forces a false
 // positive; the caller falls through to normal conversation handling.
@@ -58,7 +73,9 @@ export async function detectCheckinPhrase(
   if (!events.length) return null;
 
   const sentWords = significantWords(messageText);
+  const now = new Date();
   const scored = events
+    .filter((e) => isCheckinOpen(e, now))
     .map((e) => ({ event: e, score: overlapScore(sentWords, significantWords(e.name)) }))
     .filter((s) => s.score >= MATCH_THRESHOLD)
     .sort((a, b) => {
@@ -130,7 +147,7 @@ export async function mergeWalkinsIntoGuestPool(eventApiId: string): Promise<Sco
      FROM event_walkin_checkins ewc
      JOIN co_profiles cp ON cp.user_id = ewc.person_id
      JOIN users u ON u.id = cp.user_id
-     WHERE ewc.event_api_id = $1`,
+     WHERE ewc.event_api_id = $1 AND coalesce(u.sms_opted_out, false) = false`,
     [eventApiId],
   );
   return rows;

@@ -5,6 +5,14 @@ import { fetchPublicEvents, rankByRelevance, fetchEventDescription } from "./lum
 import { searchRecentPosts } from "./xSearch.js";
 import { withinRadius } from "./geocoding.js";
 import type { StatedIntent } from "./matching.js";
+import { gateMatches } from "../harness/matchGate.js";
+
+// Model policy (Royce, 2026-09-14): Haiku only for narrow work code checks
+// afterwards (city extraction, query rewrite, opportunity extraction backed
+// by matchGate's grounding check); Sonnet 5 for the relevance judgment,
+// which nothing downstream re-checks.
+const EXTRACT_MODEL = "claude-haiku-4-5-20251001";
+const JUDGE_MODEL = "claude-sonnet-5";
 
 // The actual "Tiered recommendation engine (Tier 1 event → Tier 2 community/
 // meetup → Tier 3 opportunity fallback)" board item. Never invents something
@@ -47,10 +55,14 @@ import type { StatedIntent } from "./matching.js";
 // catching an expired window at the moment it was first extracted. Absent
 // for rolling admissions or posts with no stated deadline — there's nothing
 // to re-check in that case, same as today.
+// city (Tier 1/2) and evidence (Tier 3, the source post's text) are what
+// harness/matchGate.ts checks location and grounding against. Optional so
+// backlog items queued before 2026-09-14 still parse; the gate treats a
+// missing value as unverified.
 export type TierMatch =
-  | { tier: 1; kind: "co_event"; event_api_id: string; event_date: string; name: string; url?: string; reason: string }
-  | { tier: 2; kind: "public_event"; event_api_id: string; event_date: string; name: string; url: string; reason: string }
-  | { tier: 3; kind: "opportunity"; name: string; url: string; reason: string; deadline?: string };
+  | { tier: 1; kind: "co_event"; event_api_id: string; event_date: string; name: string; url?: string; reason: string; city?: string | null }
+  | { tier: 2; kind: "public_event"; event_api_id: string; event_date: string; name: string; url: string; reason: string; city?: string | null }
+  | { tier: 3; kind: "opportunity"; name: string; url: string; reason: string; deadline?: string; evidence?: string };
 
 // Lead-time window (Royce, 2026-08-30) — "how far out in advance are we
 // searching?" Neither listCalendarEvents() nor fetchPublicEvents() take a
@@ -112,7 +124,7 @@ async function resolveSearchCity(askText: string | undefined, profileCity: strin
     let city: string | null = null;
     try {
       const { text: raw } = await generateText({
-        model: anthropic("claude-haiku-4-5-20251001"),
+        model: anthropic(EXTRACT_MODEL),
         experimental_telemetry: { isEnabled: true, functionId: "tieredRecommendation.resolveSearchCity" },
         prompt: `Does this request name a specific city, metro, or region where they want to find something? "${askText}"
 
@@ -149,7 +161,7 @@ async function isGenuinelyRelevant(askText: string, candidateName: string, candi
   if (!description) return true;
   try {
     const { text: raw } = await generateText({
-      model: anthropic("claude-haiku-4-5-20251001"),
+      model: anthropic(JUDGE_MODEL),
       experimental_telemetry: { isEnabled: true, functionId: "tieredRecommendation.relevanceGate" },
       prompt: `Someone said: "${askText}"
 
@@ -193,6 +205,7 @@ async function tryTier1(ask: StatedIntent, userCity: string | null, filter?: (st
     event_date: match.start_at.slice(0, 10),
     name: match.name,
     reason: `Matches a Co event happening ${new Date(match.start_at).toLocaleDateString()}${match.city ? ` in ${match.city}` : ""}.`,
+    city: match.city ?? null,
     // Real gap found live, 2026-09-09: this never set url at all, so
     // Tier 1 recommendations never had a real link to send, and the
     // follow-up "give me the details" reply (agent.conversationReply, not
@@ -232,6 +245,7 @@ async function tryTier2(ask: StatedIntent, userCity: string | null, filter?: (st
     name: match.name,
     url: match.url,
     reason: `A public event that looks like a real fit${match.city ? ` in ${match.city}` : ""}.`,
+    city: match.city ?? null,
   };
 }
 
@@ -255,7 +269,7 @@ async function proposeOpportunityQuery(ask: StatedIntent, city: string | null): 
     // reason.
     const todayStr = new Date().toISOString().slice(0, 10);
     const { text: raw } = await generateText({
-      model: anthropic("claude-haiku-4-5-20251001"),
+      model: anthropic(EXTRACT_MODEL),
       experimental_telemetry: { isEnabled: true, functionId: "tieredRecommendation.proposeOpportunityQuery" },
       prompt: `Someone wants: "${ask.text}"${city ? ` (based in ${city})` : ""}
 
@@ -303,7 +317,7 @@ async function extractRealOpportunity(
     const digest = posts.map((p, i) => `${i}. ${p.text.replace(/\n+/g, " ")}`).join("\n");
     const todayStr = new Date().toISOString().slice(0, 10);
     const { text: raw } = await generateText({
-      model: anthropic("claude-haiku-4-5-20251001"),
+      model: anthropic(EXTRACT_MODEL),
       experimental_telemetry: { isEnabled: true, functionId: "tieredRecommendation.extractRealOpportunity" },
       prompt: `Someone wants: "${ask.text}"
 
@@ -342,6 +356,7 @@ Return ONLY valid JSON: {"index": 0, "name": "the specific opportunity name", "r
       url: posts[parsed.index].url,
       reason: parsed.reason ?? "Found via a real, recent post.",
       ...(typeof parsed?.deadline === "string" ? { deadline: parsed.deadline } : {}),
+      evidence: posts[parsed.index].text,
     };
   } catch (err: any) {
     console.error("tieredRecommendation: extractRealOpportunity failed (non-fatal):", err?.message ?? err);
@@ -386,7 +401,14 @@ async function tryTier3(ask: StatedIntent, query: string): Promise<TierMatch | n
 // search for anyway, whether or not 1&2 found something. Empty array means
 // nothing grounded was found anywhere — the caller (recommendation.ts) still
 // has its own generic fallback for that case, same as before this existed.
-export async function getTieredRecommendation(ask: StatedIntent, profileCity: string | null): Promise<TierMatch[]> {
+// Every match goes through harness/matchGate.ts before it's returned
+// (location, timing, grounding; plus no-repeat and a decision log when
+// userId is given), so no caller can queue or show one the gate rejects.
+export async function getTieredRecommendation(
+  ask: StatedIntent,
+  profileCity: string | null,
+  opts: { userId?: string; checkRepeat?: boolean } = {},
+): Promise<TierMatch[]> {
   const city = await resolveSearchCity(ask.text, profileCity);
   const [tier1, tier2, opportunityQuery] = await Promise.all([
     tryTier1(ask, city),
@@ -396,7 +418,8 @@ export async function getTieredRecommendation(ask: StatedIntent, profileCity: st
 
   const tier3 = opportunityQuery ? await tryTier3(ask, opportunityQuery) : null;
 
-  return [tier1, tier2, tier3].filter((m): m is TierMatch => m !== null);
+  const found = [tier1, tier2, tier3].filter((m): m is TierMatch => m !== null);
+  return gateMatches(found, { userId: opts.userId ?? null, searchCity: city, checkRepeat: opts.checkRepeat });
 }
 
 // Urgency pre-check (Royce, 2026-08-30) — "something cheap that scans for
