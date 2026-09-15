@@ -31,6 +31,21 @@ const cases: [string, string | null, string][] = [
   ["Will do. If a good Oakland running group turns up, I'll text you.", "no_followup_promise", "conditional promise first"],
   ["When you get there, I'll text you the address?", "no_followup_promise", "when-clause promise"],
   ["If you want, I can look now.", null, "offer to act now, not later"],
+  // From Royce's 2026-09-15 thread: no open search behind these.
+  ["I'll keep watching for one that fits a Series A team and text you the second something real shows up.", "no_followup_promise", "keep watching, no open ask"],
+  ["Got it. I'll keep my eyes open for people worth putting you in front of.", "no_followup_promise", "keep my eyes open, no open ask"],
+  ["No pressure if the timing doesn't work, want me to keep an eye out for the next one?", "no_followup_promise", "offer to keep an eye out, no open ask"],
+];
+
+// With an open ask the daily search really runs: keeping looking is true,
+// a timing commitment still isn't.
+const rfOngoing = baseReplyFacts();
+addFact(rfOngoing, "ongoing", 'Co\'s daily search is looking for: "friends to hang out with in SF". If something real fits, Co may text them about it (at most one text a day).');
+const ongoingCases: [string, string | null, string][] = [
+  ["Nothing real yet, but I'll keep looking and text you if something fits.", null, "keep looking with open ask"],
+  ["I'll keep an eye out for people worth meeting.", null, "keep an eye out with open ask"],
+  ["I'll keep looking and text you the second something shows up.", "no_followup_promise", "timing commitment even with open ask"],
+  ["I'll keep looking and get back to you tomorrow.", "no_followup_promise", "tomorrow commitment"],
 ];
 
 let failed = 0;
@@ -42,5 +57,14 @@ for (const [draft, expected, label] of cases) {
     console.log(`FAIL ${label}: "${draft}" -> ${failing.join(", ") || "(none)"}`);
   }
 }
-console.log(`codeChecks: ${cases.length - failed}/${cases.length} passed`);
+for (const [draft, expected, label] of ongoingCases) {
+  const failing = codeChecks(draft, rfOngoing, src).filter((c) => !c.pass).map((c) => c.name);
+  const ok = expected ? failing.includes(expected) : failing.length === 0;
+  if (!ok) {
+    failed++;
+    console.log(`FAIL ${label}: "${draft}" -> ${failing.join(", ") || "(none)"}`);
+  }
+}
+const total = cases.length + ongoingCases.length;
+console.log(`codeChecks: ${total - failed}/${total} passed`);
 if (failed) process.exitCode = 1;

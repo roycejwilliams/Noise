@@ -731,6 +731,22 @@ type CapturedIntentData = {
 // synchronously (co-test's post-call view) can display it; the production
 // call sites (co.ts) still call this fire-and-forget and ignore the
 // resolved value, unchanged.
+// Exported so evals/capture can check what counts as an ask.
+export function captureIntentPrompt(transcript: string): string {
+  return `Read this transcript and extract four things. Only include what's actually stated by the user (the "user:" lines) — never guess or infer beyond what's said, and never treat something Co (the "assistant:" lines) said as if the user said it.
+
+1. ask — something specific they are actively seeking or could offer to others (a connection, an introduction, a resource, expertise, a kind of event or community). One clear sentence, classified as 'seeking' or 'offering'. Take it from the LAST user message, using the earlier conversation only to understand it. null when the last message isn't asking for or offering something: small talk, thanks, feedback about Co, questions about Co itself ("how can you improve?", "anything you need to ask me?"), logistics, or answers to Co's questions about them.
+2. concrete_preferences — named, specific things they mentioned liking or wanting, not vague vibes. A specific gym or workout style, a coffee/drink preference, a type of venue or neighborhood, a specific activity. "SoulCycle", "oat milk lattes", "speakeasy-style bars" — not "fitness" or "good coffee".
+3. wants — things they said they miss or want to find (a running group, a book club, a version of something from a previous city).
+4. availability — their stated GENERAL, RECURRING availability pattern, in their own words (e.g. "weekday evenings", "usually free on weekends"). A one-off request for a specific call or meeting at a specific time ("call me at 2pm today", "can we talk Thursday morning") is NOT a recurring availability pattern — leave this null for those, even if a specific time or day appears in the transcript. Only fill this in when they're describing when they're generally free, not when they want THIS ONE call to happen.
+
+Return ONLY valid JSON, no preamble:
+{"ask": {"text": "Looking for climate tech founders at $1M+ ARR", "type": "seeking"} or null, "concrete_preferences": ["..."], "wants": ["..."], "availability": "..." or null}
+
+Transcript:
+"${transcript}"`;
+}
+
 export async function captureIntent(
   user_id: string,
   transcript: string,
@@ -742,18 +758,7 @@ export async function captureIntent(
         generateText({
           model: anthropic(NARROW_MODEL),
           experimental_telemetry: { isEnabled: true, functionId: "profileExtraction.captureIntent" },
-          prompt: `Read this transcript and extract four things. Only include what's actually stated by the user (the "user:" lines) — never guess or infer beyond what's said, and never treat something Co (the "assistant:" lines) said as if the user said it.
-
-1. ask — something specific they are actively seeking or could offer to others (a connection, an introduction, a resource, expertise). One clear sentence, classified as 'seeking' or 'offering'. null if no specific ask is present.
-2. concrete_preferences — named, specific things they mentioned liking or wanting, not vague vibes. A specific gym or workout style, a coffee/drink preference, a type of venue or neighborhood, a specific activity. "SoulCycle", "oat milk lattes", "speakeasy-style bars" — not "fitness" or "good coffee".
-3. wants — things they said they miss or want to find (a running group, a book club, a version of something from a previous city).
-4. availability — their stated GENERAL, RECURRING availability pattern, in their own words (e.g. "weekday evenings", "usually free on weekends"). A one-off request for a specific call or meeting at a specific time ("call me at 2pm today", "can we talk Thursday morning") is NOT a recurring availability pattern — leave this null for those, even if a specific time or day appears in the transcript. Only fill this in when they're describing when they're generally free, not when they want THIS ONE call to happen.
-
-Return ONLY valid JSON, no preamble:
-{"ask": {"text": "Looking for climate tech founders at $1M+ ARR", "type": "seeking"} or null, "concrete_preferences": ["..."], "wants": ["..."], "availability": "..." or null}
-
-Transcript:
-"${transcript}"`,
+          prompt: captureIntentPrompt(transcript),
         }),
     );
 

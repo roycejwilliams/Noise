@@ -135,6 +135,7 @@ function score(c: Case, r: any): CaseScore {
     case "reply": {
       if (!checkNoEmotionLabel(r.reply).pass) hard.push(`named the feeling: ${r.reply}`);
       if (c.expectNoPitch && r.judged.pitches) hard.push(`pitched while struggling: ${r.reply}`);
+      if (c.forbidden && new RegExp(c.forbidden, "i").test(r.reply)) hard.push(`assumed something they didn't say: ${r.reply}`);
       soft.push({ name: "tone fits feeling", ok: r.judged.toneFits });
       break;
     }

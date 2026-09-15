@@ -30,6 +30,7 @@ import {
 import { isOptInKeyword, isOptOutKeyword } from "../services/optOut.js";
 import {
   captureIntent,
+  captureIntentForTurn,
   extractPlannedEventMention,
   extractPsychographicProfile,
   getCoverageNudge,
@@ -45,7 +46,7 @@ import { resolveNetworkTeaseReply, resolveNetworkIntroReply } from "../services/
 import { NO_ROUTE, decideActions, gatherOpenItems, routeMessage, type RouterOutput } from "../services/messageRouter.js";
 import { recordDecision } from "../harness/core.js";
 import { routerGateChecks } from "../harness/routerChecks.js";
-import { addEventFacts, addFact, addInstruction, gatherReplyFacts } from "../harness/replyGrounding.js";
+import { addEventFacts, addFact, addInstruction, addOngoingSearchFacts, gatherReplyFacts } from "../harness/replyGrounding.js";
 import { findRealVenues } from "../services/venueLookup.js";
 import { runConversationReplyAgent, filterRelevantMemories, CALL_OFFER_EXPIRY_DAYS } from "../agent/conversationReply.js";
 import { triggerCallForUser } from "../services/callTrigger.js";
@@ -99,6 +100,10 @@ const DEBOUNCE_MS = 4000;
 // actual shift in how someone's texting dominates within a message or two
 // instead of a full window's worth.
 const STYLE_HINT_RECENT_LINES = 4;
+
+// Sent before a search so nobody waits in silence. Not a real reply: a copy
+// of the message sent after one of these is still a duplicate.
+const HOLD_LINES = ["On it, give me a sec.", "Let me look, one sec.", "Looking now, give me a minute."];
 
 function deriveStyleHint(chronological: { content: string }[]): string {
   const userLines = chronological
@@ -721,6 +726,40 @@ export function sendblueRouter(io: Server): Router {
             .catch(() => 0);
           if (repeats > 0) {
             repeatContext = `\nThey've sent this exact message ${repeats + 1} times in the last couple of minutes, probably because your reply felt slow. Answer it once, as a single reply. Don't treat it as new, and don't point out that they repeated it.`;
+          }
+          // A copy sent while Co was still working on the same message (no
+          // Co reply between the earlier copy and this one's arrival) gets
+          // no second pass: the first one's search and reply cover it
+          // (2026-09-15: five copies each re-ran routing and the paid search).
+          if (repeats > 0 && myInboundAt) {
+            const resentWhileWaiting = await pool
+              .query(
+                `SELECT 1 FROM co_memories earlier
+                 WHERE earlier.user_id = $1 AND earlier.memory_type = 'text_exchange' AND earlier.content = $2
+                   AND earlier.id <> $3 AND earlier.created_at > $4::timestamptz - INTERVAL '3 minutes' AND earlier.created_at < $4::timestamptz
+                   AND NOT EXISTS (
+                     SELECT 1 FROM co_memories reply
+                     WHERE reply.user_id = $1 AND reply.memory_type = 'text_exchange' AND reply.content LIKE 'Co replied:%'
+                       AND reply.created_at > earlier.created_at AND reply.created_at < $4::timestamptz
+                       AND reply.content <> ALL($5::text[])
+                   )
+                 LIMIT 1`,
+                [user.id, inboundContent, inboundMemory.rows[0].id, myInboundAt, HOLD_LINES.map((l) => `Co replied: ${l}`)],
+              )
+              .then((r) => r.rows.length > 0)
+              .catch(() => false);
+            if (resentWhileWaiting) {
+              await recordDecision({
+                layer: 2,
+                decision: "turn.duplicate",
+                userId: user.id,
+                outcome: "skip",
+                action: "no_second_pass",
+                checks: [{ name: "resent_while_waiting", pass: false, reason: "same text already being handled, no reply in between" }],
+                proposal: { message: resolvedContent, copies: repeats + 1 },
+              });
+              return res.status(200).send({ received: true, action: "duplicate_while_processing" });
+            }
           }
         }
 
@@ -1488,7 +1527,21 @@ Return ONLY valid JSON, no preamble: {"date": "YYYY-MM-DD or null", "time": "HH:
             addInstruction(replyFacts, "They asked for a suggestion, but they've been struggling. Respond to how they're doing first; offer to look for something once they want it, without naming anything now.");
           }
           if (decision.wantsRecommendation && !holdRecommendationForFeelings) {
-            const recommendation = await generateRecommendation(user.id, resolvedContent);
+            // Searching all tiers can take a while: say so first, so the
+            // person isn't left waiting and resending (2026-09-15: a 70s
+            // wait led to the same message sent five times).
+            const holdLine = HOLD_LINES[Math.floor(Math.random() * HOLD_LINES.length)];
+            await sendCoReply({ phone: user.phone_number, message: holdLine, asVoice: false });
+            await logTextExchange(user.id, `Co replied: ${holdLine}`);
+            addFact(replyFacts, "did_this_turn", `Told them "${holdLine}" before searching.`);
+            const RECOMMENDATION_TIME_CAP_MS = 45_000;
+            const searchStarted = Date.now();
+            const recommendation = await Promise.race([
+              generateRecommendation(user.id, resolvedContent),
+              new Promise<{ available: false; reason: string }>((resolve) =>
+                setTimeout(() => resolve({ available: false, reason: "search took too long" }), RECOMMENDATION_TIME_CAP_MS),
+              ),
+            ]);
             if (recommendation.available && recommendation.matches?.length) {
               // Sent DETERMINISTICALLY, not via agent tool-calling (Royce,
               // 2026-09-02, confirmed live) — the previous version asked the
@@ -1508,12 +1561,9 @@ Return ONLY valid JSON, no preamble: {"date": "YYYY-MM-DD or null", "time": "HH:
               // mode entirely — same sendCoReply/logTextExchange helpers
               // and 2s pacing convention conversationTools.ts's sendReply
               // already uses for a real second message.
-              for (const m of recommendation.matches) {
-                if ("url" in m && m.url) {
-                  await sendCoReply({ phone: user.phone_number, message: m.url, asVoice: false });
-                  await logTextExchange(user.id, `Co replied: ${m.url}`);
-                  await new Promise((resolve) => setTimeout(resolve, 2000));
-                }
+              // Details, the personal reason, and the text for every match
+              // are prepared in parallel, then sent in order.
+              const prepared = await Promise.all(recommendation.matches.map(async (m) => {
                 // Drafted in Co's voice from the real record and a personal
                 // reason, not the matching engine's raw "name — reason" line.
                 const em = await enrichMatch(m, {
@@ -1535,6 +1585,14 @@ Return ONLY valid JSON, no preamble: {"date": "YYYY-MM-DD or null", "time": "HH:
                 } catch (err: any) {
                   console.error("sendblue: recommendation description drafting failed (non-fatal, sending plain):", err?.message ?? err);
                 }
+                return { m, description };
+              }));
+              for (const { m, description } of prepared) {
+                if ("url" in m && m.url) {
+                  await sendCoReply({ phone: user.phone_number, message: m.url, asVoice: false });
+                  await logTextExchange(user.id, `Co replied: ${m.url}`);
+                  await new Promise((resolve) => setTimeout(resolve, 2000));
+                }
                 await sendCoReply({ phone: user.phone_number, message: description, asVoice: isVoice });
                 await logTextExchange(user.id, `Co replied: ${description}`);
                 await new Promise((resolve) => setTimeout(resolve, 2000));
@@ -1548,6 +1606,14 @@ Return ONLY valid JSON, no preamble: {"date": "YYYY-MM-DD or null", "time": "HH:
               // respond to what they said — this just tells it the
               // recommendation itself already went out, so it doesn't
               // repeat the details or the link.
+              await recordDecision({
+                layer: 5,
+                decision: "recommendation.search",
+                userId: user.id,
+                outcome: "act",
+                action: "sent_matches",
+                proposal: { message: resolvedContent, holdLine, ms: Date.now() - searchStarted, matches: prepared.map((p) => ({ name: p.m.name, tier: p.m.tier, soldOut: p.m.details?.soldOut ?? null })) },
+              });
               addInstruction(replyFacts, `You already sent them ${recommendation.matches.length > 1 ? "a couple of real things" : "something real"} you thought of, separately from this reply. Don't repeat the name, link, or details in this reply. If it's natural, you can briefly acknowledge you just sent those, but keep this reply focused on genuinely responding to what they just said.`);
             } else if (recommendation.available) {
               // Generic fallback path (no tiered match found) — a
@@ -1555,6 +1621,29 @@ Return ONLY valid JSON, no preamble: {"date": "YYYY-MM-DD or null", "time": "HH:
               // a link, since there's genuinely nothing to link to here.
               addFact(replyFacts, "known", `An idea to suggest (a type of thing, not a specific place, and there's no link): "${recommendation.match}". Why: ${recommendation.reason}`);
               addInstruction(replyFacts, `You just thought of a real recommendation for them: "${recommendation.match}". Work this into your reply naturally, as your own suggestion. This is an idea, not a specific place with a link — never say you're "sending" or "sharing" anything for this, you have nothing to send. Never name a specific real company, program, or organization as an example (e.g. "YC", "On Deck") unless that exact name is literally what's written in "${recommendation.match}" above — if the match itself is generic, describe only the general type of thing, don't dress it up with real names you're not actually sure fit.`);
+            } else {
+              // Nothing real found right now. Save what they asked for as an
+              // ask so the daily search really keeps looking; that's what
+              // makes "I'll keep looking" true (replyGrounding's ongoing fact).
+              const turnAsk = await captureIntentForTurn(user.id, `${recentConversation}\nuser: ${resolvedContent}`, { timeoutMs: 4000 }).catch(() => null);
+              addFact(replyFacts, "did_this_turn", `Searched just now for what they asked for and found nothing real that fits yet${recommendation.reason ? ` (${recommendation.reason})` : ""}.`);
+              if (turnAsk?.ask?.text) {
+                replyFacts.facts = replyFacts.facts.filter((fact) => fact.kind !== "ongoing" && !/isn't searching for anything/.test(fact.text));
+                await addOngoingSearchFacts(replyFacts, user.id);
+              }
+              await recordDecision({
+                layer: 5,
+                decision: "recommendation.search",
+                userId: user.id,
+                outcome: "skip",
+                action: turnAsk?.ask?.text ? "nothing_found_ask_saved" : "nothing_found",
+                checks: [
+                  { name: "found_something_real", pass: false, reason: recommendation.reason },
+                  { name: "ask_saved_for_daily_search", pass: !!turnAsk?.ask?.text, reason: turnAsk?.ask?.text ?? "no ask captured" },
+                ],
+                proposal: { message: resolvedContent, holdLine, ms: Date.now() - searchStarted },
+              });
+              addInstruction(replyFacts, "You searched and found nothing real yet. Say that plainly. Don't make up a suggestion.");
             }
           }
         } catch (err: any) {

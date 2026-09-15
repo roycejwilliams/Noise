@@ -1,89 +1,579 @@
 [
-  { "id": "m01-sf-event-sf-ask", "kind": "match", "expect": "pass",
-    "match": { "tier": 1, "kind": "co_event", "event_api_id": "evt-1", "event_date": "2026-09-20", "name": "SF Founders Dinner", "url": "https://lu.ma/abc123", "reason": "Matches a Co event happening 9/20/2026 in San Francisco.", "city": "San Francisco" },
-    "facts": { "searchCity": "San Francisco", "distanceMiles": 0, "alreadyOffered": false, "now": "2026-09-14T18:00:00Z" } },
-  { "id": "m02-walnut-creek-to-sf", "kind": "match", "expect": "pass",
-    "match": { "tier": 2, "kind": "public_event", "event_api_id": "evt-2", "event_date": "2026-09-18", "name": "AI Builders Breakfast", "url": "https://lu.ma/ai-breakfast", "reason": "A public event that looks like a real fit in San Francisco.", "city": "San Francisco" },
-    "facts": { "searchCity": "Walnut Creek, CA", "distanceMiles": 23, "alreadyOffered": false, "now": "2026-09-14T18:00:00Z" } },
-  { "id": "m03-far-city", "kind": "match", "expect": "reject", "violation": "location",
-    "match": { "tier": 2, "kind": "public_event", "event_api_id": "evt-3", "event_date": "2026-09-18", "name": "Denver Founders Night", "url": "https://lu.ma/denver", "reason": "A public event that looks like a real fit in Denver.", "city": "Denver" },
-    "facts": { "searchCity": "San Francisco", "distanceMiles": 948, "alreadyOffered": false, "now": "2026-09-14T18:00:00Z" } },
-  { "id": "m04-no-city-with-search-city", "kind": "match", "expect": "reject", "violation": "location",
-    "match": { "tier": 1, "kind": "co_event", "event_api_id": "evt-4", "event_date": "2026-09-16", "name": "Co Mixer", "reason": "Matches a Co event happening 9/16/2026.", "city": null },
-    "facts": { "searchCity": "Austin, TX", "distanceMiles": null, "alreadyOffered": false, "now": "2026-09-14T18:00:00Z" } },
-  { "id": "m05-no-search-city", "kind": "match", "expect": "pass",
-    "match": { "tier": 1, "kind": "co_event", "event_api_id": "evt-5", "event_date": "2026-09-16", "name": "Co Mixer", "reason": "Matches a Co event happening 9/16/2026.", "city": null },
-    "facts": { "searchCity": null, "distanceMiles": null, "alreadyOffered": false, "now": "2026-09-14T18:00:00Z" } },
-  { "id": "m06-past-event", "kind": "match", "expect": "reject", "violation": "timing",
-    "match": { "tier": 1, "kind": "co_event", "event_api_id": "evt-6", "event_date": "2026-09-10", "name": "SF Founders Meetup", "url": "https://lu.ma/sffm", "reason": "Matches a Co event happening 9/10/2026 in San Francisco.", "city": "San Francisco" },
-    "facts": { "searchCity": "San Francisco", "distanceMiles": 0, "alreadyOffered": false, "now": "2026-09-14T18:00:00Z" } },
-  { "id": "m07-too-far-out-tier2", "kind": "match", "expect": "reject", "violation": "timing",
-    "match": { "tier": 2, "kind": "public_event", "event_api_id": "evt-7", "event_date": "2026-10-20", "name": "Climate Week Party", "url": "https://lu.ma/cw", "reason": "A public event that looks like a real fit in San Francisco.", "city": "San Francisco" },
-    "facts": { "searchCity": "San Francisco", "distanceMiles": 0, "alreadyOffered": false, "now": "2026-09-14T18:00:00Z" } },
-  { "id": "m08-today", "kind": "match", "expect": "pass",
-    "match": { "tier": 2, "kind": "public_event", "event_api_id": "evt-8", "event_date": "2026-09-14", "name": "Tonight: Hardware Happy Hour", "url": "https://lu.ma/hhh", "reason": "A public event that looks like a real fit in Oakland.", "city": "Oakland" },
-    "facts": { "searchCity": "San Francisco", "distanceMiles": 9, "alreadyOffered": false, "now": "2026-09-14T18:00:00Z" } },
-  { "id": "m09-reason-wrong-city", "kind": "match", "expect": "reject", "violation": "grounding",
-    "match": { "tier": 1, "kind": "co_event", "event_api_id": "evt-9", "event_date": "2026-09-16", "name": "Climate Founders Mixer", "reason": "A founders mixer close to Fargo.", "city": "San Francisco" },
-    "facts": { "searchCity": null, "distanceMiles": null, "alreadyOffered": false, "now": "2026-09-14T18:00:00Z" } },
-  { "id": "m10-tier2-fake-link", "kind": "match", "expect": "reject", "violation": "grounding",
-    "match": { "tier": 2, "kind": "public_event", "event_api_id": "evt-10", "event_date": "2026-09-16", "name": "Growth Night", "url": "https://example.com/growth", "reason": "A public event that looks like a real fit in San Francisco.", "city": "San Francisco" },
-    "facts": { "searchCity": "San Francisco", "distanceMiles": 0, "alreadyOffered": false, "now": "2026-09-14T18:00:00Z" } },
-  { "id": "m11-tier3-grounded", "kind": "match", "expect": "pass",
-    "match": { "tier": 3, "kind": "opportunity", "name": "Slush 100", "url": "https://x.com/i/status/1834000000000000001", "reason": "Real pre-seed program, $100k checks and the application is open.", "deadline": "2026-09-30" },
-    "facts": { "searchCity": "San Francisco", "distanceMiles": null, "alreadyOffered": false, "now": "2026-09-14T18:00:00Z",
-      "evidence": "Applications for Slush 100 are open. $100k checks for pre-seed founders. Deadline: Sept 30. Apply at slush100.com" } },
-  { "id": "m12-tier3-invented-amount", "kind": "match", "expect": "reject", "violation": "grounding",
-    "match": { "tier": 3, "kind": "opportunity", "name": "Slush 100", "url": "https://x.com/i/status/1834000000000000001", "reason": "Real pre-seed program with $250k checks.", "deadline": null },
-    "facts": { "searchCity": null, "distanceMiles": null, "alreadyOffered": false, "now": "2026-09-14T18:00:00Z",
-      "evidence": "Applications for Slush 100 are open. $100k checks for pre-seed founders. Apply at slush100.com" } },
-  { "id": "m13-tier3-borrowed-deadline", "kind": "match", "expect": "reject", "violation": "grounding",
-    "match": { "tier": 3, "kind": "opportunity", "name": "Techstars Anywhere", "url": "https://x.com/i/status/1834000000000000002", "reason": "Remote accelerator, applications open now.", "deadline": "2026-09-07" },
-    "facts": { "searchCity": null, "distanceMiles": null, "alreadyOffered": false, "now": "2026-09-01T18:00:00Z",
-      "evidence": "1. Slush 100 - Deadline: Sept 7. 2. Techstars Anywhere - rolling applications, remote accelerator." } },
-  { "id": "m14-tier3-deadline-passed", "kind": "match", "expect": "reject", "violation": "timing",
-    "match": { "tier": 3, "kind": "opportunity", "name": "Slush 100", "url": "https://x.com/i/status/1834000000000000001", "reason": "Real pre-seed program, applications open.", "deadline": "2026-09-07" },
-    "facts": { "searchCity": null, "distanceMiles": null, "alreadyOffered": false, "now": "2026-09-14T18:00:00Z",
-      "evidence": "Slush 100 applications are open. Deadline: Sept 7." } },
-  { "id": "m15-tier3-no-post-link", "kind": "match", "expect": "reject", "violation": "grounding",
-    "match": { "tier": 3, "kind": "opportunity", "name": "YC W27", "url": "https://ycombinator.com/apply", "reason": "Y Combinator's next batch." },
-    "facts": { "searchCity": null, "distanceMiles": null, "alreadyOffered": false, "now": "2026-09-14T18:00:00Z", "evidence": "YC W27 applications open" } },
-  { "id": "m16-tier3-no-evidence", "kind": "match", "expect": "reject", "violation": "grounding",
-    "match": { "tier": 3, "kind": "opportunity", "name": "ERA Winter 2027", "url": "https://x.com/i/status/1834000000000000003", "reason": "Actual accelerator with specific funding amounts." },
-    "facts": { "searchCity": null, "distanceMiles": null, "alreadyOffered": false, "now": "2026-09-14T18:00:00Z", "evidence": null } },
-  { "id": "m17-repeat", "kind": "match", "expect": "reject", "violation": "repeat",
-    "match": { "tier": 1, "kind": "co_event", "event_api_id": "evt-17", "event_date": "2026-09-16", "name": "SF Founders Meetup", "url": "https://lu.ma/sffm", "reason": "Matches a Co event happening 9/16/2026 in San Francisco.", "city": "San Francisco" },
-    "facts": { "searchCity": "San Francisco", "distanceMiles": 0, "alreadyOffered": true, "now": "2026-09-14T18:00:00Z" } },
-
-  { "id": "n01-share-from-stated-ask", "kind": "network", "expect": "pass",
-    "facts": { "shareReason": "She's looking to meet other climate founders in SF to compare notes on fundraising.",
-      "candidateStatedAsks": ["Looking to connect with other climate tech founders in SF building early-stage companies, want to compare notes on fundraising"],
-      "candidatePrivateTexts": ["burnout", "manager moving goalposts on a project", "figure out cofounder/equity situation"],
-      "alreadySuggestedOrDeclined": false, "askerActive": true, "candidateActive": true } },
-  { "id": "n02-burnout-leak", "kind": "network", "expect": "reject", "violation": "privacy",
-    "facts": { "shareReason": "She's a founder who has been through burnout and is looking for peers.",
-      "candidateStatedAsks": ["Looking to connect with other climate tech founders in SF"],
-      "candidatePrivateTexts": ["burnout", "feeling stuck and unable to get traction"],
-      "alreadySuggestedOrDeclined": false, "askerActive": true, "candidateActive": true } },
-  { "id": "n03-burnout-in-own-ask", "kind": "network", "expect": "pass",
-    "facts": { "shareReason": "She wants to talk with founders who went through burnout and found a way through.",
-      "candidateStatedAsks": ["Seeking to connect with founders or early employees who have experienced burnout and considered quitting but found a way through"],
-      "candidatePrivateTexts": ["burnout", "manager moving goalposts on a project"],
-      "alreadySuggestedOrDeclined": false, "askerActive": true, "candidateActive": true } },
-  { "id": "n04-quotes-goal", "kind": "network", "expect": "reject", "violation": "privacy",
-    "facts": { "shareReason": "He wants to land a role on a startup go-to-market team.",
-      "candidateStatedAsks": ["Looking to meet early-stage climate tech founders in SF"],
-      "candidatePrivateTexts": ["land a role on a startup go-to-market or growth team", "7 months unemployed"],
-      "alreadySuggestedOrDeclined": false, "askerActive": true, "candidateActive": true } },
-  { "id": "n05-empty", "kind": "network", "expect": "reject", "violation": "privacy",
-    "facts": { "shareReason": "", "candidateStatedAsks": ["x"], "candidatePrivateTexts": [], "alreadySuggestedOrDeclined": false, "askerActive": true, "candidateActive": true } },
-  { "id": "n06-already-declined", "kind": "network", "expect": "reject", "violation": "repeat",
-    "facts": { "shareReason": "She's looking to meet climate founders.", "candidateStatedAsks": ["Looking to meet climate founders"], "candidatePrivateTexts": [], "alreadySuggestedOrDeclined": true, "askerActive": true, "candidateActive": true } },
-  { "id": "n07-candidate-inactive", "kind": "network", "expect": "reject", "violation": "inactive",
-    "facts": { "shareReason": "She's looking to meet climate founders.", "candidateStatedAsks": ["Looking to meet climate founders"], "candidatePrivateTexts": [], "alreadySuggestedOrDeclined": false, "askerActive": true, "candidateActive": false } },
-  { "id": "n08-memory-quote", "kind": "network", "expect": "reject", "violation": "privacy",
-    "facts": { "shareReason": "He's raising a pre-seed round after his cofounder walked away last month.",
-      "candidateStatedAsks": ["Looking to meet other pre-seed founders"],
-      "candidatePrivateTexts": ["User said: my cofounder walked away last month and I'm raising alone now"],
-      "alreadySuggestedOrDeclined": false, "askerActive": true, "candidateActive": true } }
+  {
+    "id": "m01-sf-event-sf-ask",
+    "kind": "match",
+    "expect": "pass",
+    "match": {
+      "tier": 1,
+      "kind": "co_event",
+      "event_api_id": "evt-1",
+      "event_date": "2026-09-20",
+      "name": "SF Founders Dinner",
+      "url": "https://lu.ma/abc123",
+      "reason": "Matches a Co event happening 9/20/2026 in San Francisco.",
+      "city": "San Francisco"
+    },
+    "facts": {
+      "searchCity": "San Francisco",
+      "distanceMiles": 0,
+      "alreadyOffered": false,
+      "now": "2026-09-14T18:00:00Z"
+    }
+  },
+  {
+    "id": "m02-walnut-creek-to-sf",
+    "kind": "match",
+    "expect": "pass",
+    "match": {
+      "tier": 2,
+      "kind": "public_event",
+      "event_api_id": "evt-2",
+      "event_date": "2026-09-18",
+      "name": "AI Builders Breakfast",
+      "url": "https://lu.ma/ai-breakfast",
+      "reason": "A public event that looks like a real fit in San Francisco.",
+      "city": "San Francisco"
+    },
+    "facts": {
+      "searchCity": "Walnut Creek, CA",
+      "distanceMiles": 23,
+      "alreadyOffered": false,
+      "now": "2026-09-14T18:00:00Z"
+    }
+  },
+  {
+    "id": "m03-far-city",
+    "kind": "match",
+    "expect": "reject",
+    "violation": "location",
+    "match": {
+      "tier": 2,
+      "kind": "public_event",
+      "event_api_id": "evt-3",
+      "event_date": "2026-09-18",
+      "name": "Denver Founders Night",
+      "url": "https://lu.ma/denver",
+      "reason": "A public event that looks like a real fit in Denver.",
+      "city": "Denver"
+    },
+    "facts": {
+      "searchCity": "San Francisco",
+      "distanceMiles": 948,
+      "alreadyOffered": false,
+      "now": "2026-09-14T18:00:00Z"
+    }
+  },
+  {
+    "id": "m04-no-city-with-search-city",
+    "kind": "match",
+    "expect": "reject",
+    "violation": "location",
+    "match": {
+      "tier": 1,
+      "kind": "co_event",
+      "event_api_id": "evt-4",
+      "event_date": "2026-09-16",
+      "name": "Co Mixer",
+      "reason": "Matches a Co event happening 9/16/2026.",
+      "city": null
+    },
+    "facts": {
+      "searchCity": "Austin, TX",
+      "distanceMiles": null,
+      "alreadyOffered": false,
+      "now": "2026-09-14T18:00:00Z"
+    }
+  },
+  {
+    "id": "m05-no-search-city",
+    "kind": "match",
+    "expect": "pass",
+    "match": {
+      "tier": 1,
+      "kind": "co_event",
+      "event_api_id": "evt-5",
+      "event_date": "2026-09-16",
+      "name": "Co Mixer",
+      "reason": "Matches a Co event happening 9/16/2026.",
+      "city": null
+    },
+    "facts": {
+      "searchCity": null,
+      "distanceMiles": null,
+      "alreadyOffered": false,
+      "now": "2026-09-14T18:00:00Z"
+    }
+  },
+  {
+    "id": "m06-past-event",
+    "kind": "match",
+    "expect": "reject",
+    "violation": "timing",
+    "match": {
+      "tier": 1,
+      "kind": "co_event",
+      "event_api_id": "evt-6",
+      "event_date": "2026-09-10",
+      "name": "SF Founders Meetup",
+      "url": "https://lu.ma/sffm",
+      "reason": "Matches a Co event happening 9/10/2026 in San Francisco.",
+      "city": "San Francisco"
+    },
+    "facts": {
+      "searchCity": "San Francisco",
+      "distanceMiles": 0,
+      "alreadyOffered": false,
+      "now": "2026-09-14T18:00:00Z"
+    }
+  },
+  {
+    "id": "m07-too-far-out-tier2",
+    "kind": "match",
+    "expect": "reject",
+    "violation": "timing",
+    "match": {
+      "tier": 2,
+      "kind": "public_event",
+      "event_api_id": "evt-7",
+      "event_date": "2026-10-20",
+      "name": "Climate Week Party",
+      "url": "https://lu.ma/cw",
+      "reason": "A public event that looks like a real fit in San Francisco.",
+      "city": "San Francisco"
+    },
+    "facts": {
+      "searchCity": "San Francisco",
+      "distanceMiles": 0,
+      "alreadyOffered": false,
+      "now": "2026-09-14T18:00:00Z"
+    }
+  },
+  {
+    "id": "m08-today",
+    "kind": "match",
+    "expect": "pass",
+    "match": {
+      "tier": 2,
+      "kind": "public_event",
+      "event_api_id": "evt-8",
+      "event_date": "2026-09-14",
+      "name": "Tonight: Hardware Happy Hour",
+      "url": "https://lu.ma/hhh",
+      "reason": "A public event that looks like a real fit in Oakland.",
+      "city": "Oakland"
+    },
+    "facts": {
+      "searchCity": "San Francisco",
+      "distanceMiles": 9,
+      "alreadyOffered": false,
+      "now": "2026-09-14T18:00:00Z"
+    }
+  },
+  {
+    "id": "m09-reason-wrong-city",
+    "kind": "match",
+    "expect": "reject",
+    "violation": "grounding",
+    "match": {
+      "tier": 1,
+      "kind": "co_event",
+      "event_api_id": "evt-9",
+      "event_date": "2026-09-16",
+      "name": "Climate Founders Mixer",
+      "reason": "A founders mixer close to Fargo.",
+      "city": "San Francisco"
+    },
+    "facts": {
+      "searchCity": null,
+      "distanceMiles": null,
+      "alreadyOffered": false,
+      "now": "2026-09-14T18:00:00Z"
+    }
+  },
+  {
+    "id": "m10-tier2-fake-link",
+    "kind": "match",
+    "expect": "reject",
+    "violation": "grounding",
+    "match": {
+      "tier": 2,
+      "kind": "public_event",
+      "event_api_id": "evt-10",
+      "event_date": "2026-09-16",
+      "name": "Growth Night",
+      "url": "https://example.com/growth",
+      "reason": "A public event that looks like a real fit in San Francisco.",
+      "city": "San Francisco"
+    },
+    "facts": {
+      "searchCity": "San Francisco",
+      "distanceMiles": 0,
+      "alreadyOffered": false,
+      "now": "2026-09-14T18:00:00Z"
+    }
+  },
+  {
+    "id": "m11-tier3-grounded",
+    "kind": "match",
+    "expect": "pass",
+    "match": {
+      "tier": 3,
+      "kind": "opportunity",
+      "name": "Slush 100",
+      "url": "https://x.com/i/status/1834000000000000001",
+      "reason": "Real pre-seed program, $100k checks and the application is open.",
+      "deadline": "2026-09-30"
+    },
+    "facts": {
+      "searchCity": "San Francisco",
+      "distanceMiles": null,
+      "alreadyOffered": false,
+      "now": "2026-09-14T18:00:00Z",
+      "evidence": "Applications for Slush 100 are open. $100k checks for pre-seed founders. Deadline: Sept 30. Apply at slush100.com"
+    }
+  },
+  {
+    "id": "m12-tier3-invented-amount",
+    "kind": "match",
+    "expect": "reject",
+    "violation": "grounding",
+    "match": {
+      "tier": 3,
+      "kind": "opportunity",
+      "name": "Slush 100",
+      "url": "https://x.com/i/status/1834000000000000001",
+      "reason": "Real pre-seed program with $250k checks.",
+      "deadline": null
+    },
+    "facts": {
+      "searchCity": null,
+      "distanceMiles": null,
+      "alreadyOffered": false,
+      "now": "2026-09-14T18:00:00Z",
+      "evidence": "Applications for Slush 100 are open. $100k checks for pre-seed founders. Apply at slush100.com"
+    }
+  },
+  {
+    "id": "m13-tier3-borrowed-deadline",
+    "kind": "match",
+    "expect": "reject",
+    "violation": "grounding",
+    "match": {
+      "tier": 3,
+      "kind": "opportunity",
+      "name": "Techstars Anywhere",
+      "url": "https://x.com/i/status/1834000000000000002",
+      "reason": "Remote accelerator, applications open now.",
+      "deadline": "2026-09-07"
+    },
+    "facts": {
+      "searchCity": null,
+      "distanceMiles": null,
+      "alreadyOffered": false,
+      "now": "2026-09-01T18:00:00Z",
+      "evidence": "1. Slush 100 - Deadline: Sept 7. 2. Techstars Anywhere - rolling applications, remote accelerator."
+    }
+  },
+  {
+    "id": "m14-tier3-deadline-passed",
+    "kind": "match",
+    "expect": "reject",
+    "violation": "timing",
+    "match": {
+      "tier": 3,
+      "kind": "opportunity",
+      "name": "Slush 100",
+      "url": "https://x.com/i/status/1834000000000000001",
+      "reason": "Real pre-seed program, applications open.",
+      "deadline": "2026-09-07"
+    },
+    "facts": {
+      "searchCity": null,
+      "distanceMiles": null,
+      "alreadyOffered": false,
+      "now": "2026-09-14T18:00:00Z",
+      "evidence": "Slush 100 applications are open. Deadline: Sept 7."
+    }
+  },
+  {
+    "id": "m15-tier3-no-post-link",
+    "kind": "match",
+    "expect": "reject",
+    "violation": "grounding",
+    "match": {
+      "tier": 3,
+      "kind": "opportunity",
+      "name": "YC W27",
+      "url": "https://ycombinator.com/apply",
+      "reason": "Y Combinator's next batch."
+    },
+    "facts": {
+      "searchCity": null,
+      "distanceMiles": null,
+      "alreadyOffered": false,
+      "now": "2026-09-14T18:00:00Z",
+      "evidence": "YC W27 applications open"
+    }
+  },
+  {
+    "id": "m16-tier3-no-evidence",
+    "kind": "match",
+    "expect": "reject",
+    "violation": "grounding",
+    "match": {
+      "tier": 3,
+      "kind": "opportunity",
+      "name": "ERA Winter 2027",
+      "url": "https://x.com/i/status/1834000000000000003",
+      "reason": "Actual accelerator with specific funding amounts."
+    },
+    "facts": {
+      "searchCity": null,
+      "distanceMiles": null,
+      "alreadyOffered": false,
+      "now": "2026-09-14T18:00:00Z",
+      "evidence": null
+    }
+  },
+  {
+    "id": "m17-repeat",
+    "kind": "match",
+    "expect": "reject",
+    "violation": "repeat",
+    "match": {
+      "tier": 1,
+      "kind": "co_event",
+      "event_api_id": "evt-17",
+      "event_date": "2026-09-16",
+      "name": "SF Founders Meetup",
+      "url": "https://lu.ma/sffm",
+      "reason": "Matches a Co event happening 9/16/2026 in San Francisco.",
+      "city": "San Francisco"
+    },
+    "facts": {
+      "searchCity": "San Francisco",
+      "distanceMiles": 0,
+      "alreadyOffered": true,
+      "now": "2026-09-14T18:00:00Z"
+    }
+  },
+  {
+    "id": "n01-share-from-stated-ask",
+    "kind": "network",
+    "expect": "pass",
+    "facts": {
+      "shareReason": "She's looking to meet other climate founders in SF to compare notes on fundraising.",
+      "candidateStatedAsks": [
+        "Looking to connect with other climate tech founders in SF building early-stage companies, want to compare notes on fundraising"
+      ],
+      "candidatePrivateTexts": [
+        "burnout",
+        "manager moving goalposts on a project",
+        "figure out cofounder/equity situation"
+      ],
+      "alreadySuggestedOrDeclined": false,
+      "askerActive": true,
+      "candidateActive": true
+    }
+  },
+  {
+    "id": "n02-burnout-leak",
+    "kind": "network",
+    "expect": "reject",
+    "violation": "privacy",
+    "facts": {
+      "shareReason": "She's a founder who has been through burnout and is looking for peers.",
+      "candidateStatedAsks": [
+        "Looking to connect with other climate tech founders in SF"
+      ],
+      "candidatePrivateTexts": [
+        "burnout",
+        "feeling stuck and unable to get traction"
+      ],
+      "alreadySuggestedOrDeclined": false,
+      "askerActive": true,
+      "candidateActive": true
+    }
+  },
+  {
+    "id": "n03-burnout-in-own-ask",
+    "kind": "network",
+    "expect": "pass",
+    "facts": {
+      "shareReason": "She wants to talk with founders who went through burnout and found a way through.",
+      "candidateStatedAsks": [
+        "Seeking to connect with founders or early employees who have experienced burnout and considered quitting but found a way through"
+      ],
+      "candidatePrivateTexts": [
+        "burnout",
+        "manager moving goalposts on a project"
+      ],
+      "alreadySuggestedOrDeclined": false,
+      "askerActive": true,
+      "candidateActive": true
+    }
+  },
+  {
+    "id": "n04-quotes-goal",
+    "kind": "network",
+    "expect": "reject",
+    "violation": "privacy",
+    "facts": {
+      "shareReason": "He wants to land a role on a startup go-to-market team.",
+      "candidateStatedAsks": [
+        "Looking to meet early-stage climate tech founders in SF"
+      ],
+      "candidatePrivateTexts": [
+        "land a role on a startup go-to-market or growth team",
+        "7 months unemployed"
+      ],
+      "alreadySuggestedOrDeclined": false,
+      "askerActive": true,
+      "candidateActive": true
+    }
+  },
+  {
+    "id": "n05-empty",
+    "kind": "network",
+    "expect": "reject",
+    "violation": "privacy",
+    "facts": {
+      "shareReason": "",
+      "candidateStatedAsks": [
+        "x"
+      ],
+      "candidatePrivateTexts": [],
+      "alreadySuggestedOrDeclined": false,
+      "askerActive": true,
+      "candidateActive": true
+    }
+  },
+  {
+    "id": "n06-already-declined",
+    "kind": "network",
+    "expect": "reject",
+    "violation": "repeat",
+    "facts": {
+      "shareReason": "She's looking to meet climate founders.",
+      "candidateStatedAsks": [
+        "Looking to meet climate founders"
+      ],
+      "candidatePrivateTexts": [],
+      "alreadySuggestedOrDeclined": true,
+      "askerActive": true,
+      "candidateActive": true
+    }
+  },
+  {
+    "id": "n07-candidate-inactive",
+    "kind": "network",
+    "expect": "reject",
+    "violation": "inactive",
+    "facts": {
+      "shareReason": "She's looking to meet climate founders.",
+      "candidateStatedAsks": [
+        "Looking to meet climate founders"
+      ],
+      "candidatePrivateTexts": [],
+      "alreadySuggestedOrDeclined": false,
+      "askerActive": true,
+      "candidateActive": false
+    }
+  },
+  {
+    "id": "n08-memory-quote",
+    "kind": "network",
+    "expect": "reject",
+    "violation": "privacy",
+    "facts": {
+      "shareReason": "He's raising a pre-seed round after his cofounder walked away last month.",
+      "candidateStatedAsks": [
+        "Looking to meet other pre-seed founders"
+      ],
+      "candidatePrivateTexts": [
+        "User said: my cofounder walked away last month and I'm raising alone now"
+      ],
+      "alreadySuggestedOrDeclined": false,
+      "askerActive": true,
+      "candidateActive": true
+    }
+  },
+  {
+    "id": "m-sold-out",
+    "kind": "match",
+    "expect": "reject",
+    "match": {
+      "tier": 2,
+      "kind": "public_event",
+      "event_api_id": "evt-so",
+      "event_date": "2026-09-16",
+      "name": "Meet On-Device AI Builders and Investors",
+      "url": "https://lu.ma/w46efjs0",
+      "reason": "A public event that looks like a real fit in San Francisco.",
+      "city": "San Francisco",
+      "details": {
+        "startAt": "2026-09-17T00:30:00.000Z",
+        "endAt": null,
+        "timezone": "America/Los_Angeles",
+        "online": false,
+        "venue": "Corgi Cafe",
+        "address": null,
+        "city": "San Francisco",
+        "hosts": [
+          "Mac OGA"
+        ],
+        "price": "free",
+        "spotsRemaining": 0,
+        "requiresApproval": true,
+        "soldOut": true,
+        "guestCount": 40,
+        "description": null
+      }
+    },
+    "facts": {
+      "searchCity": "San Francisco",
+      "distanceMiles": 0,
+      "alreadyOffered": false,
+      "now": "2026-09-15T18:00:00Z"
+    }
+  },
+  {
+    "id": "m-approval-open",
+    "kind": "match",
+    "expect": "pass",
+    "match": {
+      "tier": 2,
+      "kind": "public_event",
+      "event_api_id": "evt-ap",
+      "event_date": "2026-09-18",
+      "name": "Series A Operators Dinner",
+      "url": "https://lu.ma/abc999",
+      "reason": "A public event that looks like a real fit in San Francisco.",
+      "city": "San Francisco",
+      "details": {
+        "startAt": "2026-09-19T01:00:00.000Z",
+        "endAt": null,
+        "timezone": "America/Los_Angeles",
+        "online": false,
+        "venue": null,
+        "address": null,
+        "city": "San Francisco",
+        "hosts": [
+          "Ops Club"
+        ],
+        "price": "free",
+        "spotsRemaining": 10,
+        "requiresApproval": true,
+        "soldOut": false,
+        "guestCount": 20,
+        "description": null
+      }
+    },
+    "facts": {
+      "searchCity": "San Francisco",
+      "distanceMiles": 0,
+      "alreadyOffered": false,
+      "now": "2026-09-15T18:00:00Z"
+    }
+  }
 ]

@@ -360,7 +360,7 @@ call — about Co calling them:
 - "would_benefit": none of the above, but what they're describing is complex or emotional enough that voice would genuinely help. Never for short, light, or logistical messages.
 - "none": anything else. Accepting or declining a waiting call offer goes in answers, not here (use "none").
 
-wantsRecommendation — they're asking Co to find, suggest, or surface something concrete in the world right now (events, programs, people, opportunities): "find me a networking event", "anything real you can find for me", "found anything for me?", "have you surfaced anything lately?". It can be true alongside an answer ("never mind the call, can you find me a founder event"). false when:
+wantsRecommendation — they're asking Co to find, suggest, or surface something concrete in the world right now (events, programs, people, opportunities): "find me a networking event", "anything real you can find for me", "found anything for me?", "have you surfaced anything lately?", "don't see anything on X?", "anything on Twitter?", "point me in the right direction" (after Co offered to look), "I want to look for some friends". It can be true alongside an answer ("never mind the call, can you find me a founder event"). false when:
 - they're only answering a waiting item ("yes", "tell me more"), or asking about something Co already sent ("what did you send me", "where's the link?", "any details?", "who is hosting it?");
 - a false-premise callback ("that job posting you sent me, is it still open") when the conversation shows Co never sent it;
 - they want Co's own opinion or advice (how to fix something, help planning their pitch, feedback on their build);

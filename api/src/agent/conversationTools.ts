@@ -1,7 +1,8 @@
 import { z } from "zod";
 import { tool } from "ai";
-import { cleanCoMessage } from "../services/sendblue.js";
+import sendblue, { cleanCoMessage } from "../services/sendblue.js";
 import { writeMemory } from "../services/memory.js";
+import { recordDecision } from "../harness/core.js";
 import { markTopicAsked as persistTopicAsked, RAPPORT_TOPICS } from "../services/profileExtraction.js";
 
 export type SendCoReply = (params: { phone: string; message: string; asVoice: boolean }) => Promise<void>;
@@ -73,6 +74,25 @@ export function createConversationTools(ctx: ConversationToolContext) {
         }
         state.sent = true;
         state.replyCount += 1;
+        return { ok: true };
+      },
+    }),
+
+    // Real action behind "can you send your contact card": the same vCard
+    // intake sends, so they can save Co.
+    sendContactCard: tool({
+      description: "Send Co's contact card (vCard) so they can save Co's contact. Use when they ask for your contact or card, or want to save you. Still send a short reply with sendReply.",
+      inputSchema: z.object({}),
+      execute: async () => {
+        if (!process.env.CO_VCARD_URL) return { ok: false, error: "no contact card configured" };
+        if (ctx.dryRun) {
+          console.log(`[conversationReply dryRun] would send contact card to ${ctx.userId}`);
+        } else {
+          await sendblue.messages.send({ number: ctx.phoneNumber, content: "Here's my card.", media_url: process.env.CO_VCARD_URL, from_number: process.env.SENDBLUE_PHONE_NUMBER! });
+          await writeMemory(ctx.userId, "text_exchange", "Co replied: [sent Co's contact card]");
+        }
+        state.sentMessages.push("[sent Co's contact card]");
+        if (!ctx.dryRun) await recordDecision({ layer: 3, decision: "reply.contactCard", userId: ctx.userId, outcome: "act", action: "sent_contact_card" });
         return { ok: true };
       },
     }),

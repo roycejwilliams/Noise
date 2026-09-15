@@ -149,7 +149,7 @@ const pct = (xs: number[], p: number) => {
   return s[Math.min(s.length - 1, Math.floor((p / 100) * s.length))];
 };
 
-const cases = loadCases<ReplyCase>(here);
+const cases = loadCases<ReplyCase>(here).filter((c) => !(c as any).onlyMode || (c as any).onlyMode === mode);
 const results: Result[] = [];
 await runEval<ReplyCase, Result>({
   name: `reply grounding (${mode})`,

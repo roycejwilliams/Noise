@@ -337,5 +337,13 @@
     "recentConversation": "User said: another investor passed today",
     "feeling": "Right now (their texts, just now): medium discouraged about investor rejection.\nKeeps coming up: anxious, frustrated about raising pre-seed (3 times in two weeks).\nThey've been struggling in the last day.",
     "expectNoPitch": true
+  },
+  {
+    "id": "r04_no_assumed_solo",
+    "kind": "reply",
+    "message": "In the mean time, I want to look for some friends",
+    "recentConversation": "User said: We are a series A company building AI infrastructure. We recently landed a 35 million dollar deal on a small team of 8 people\nCo replied: That's a real business.\nUser said: In the mean time, I want to look for some friends",
+    "feeling": "(nothing notable)",
+    "forbidden": "\\b(alone|solo|by yourself|on your own)\\b"
   }
 ]

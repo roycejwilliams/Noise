@@ -342,6 +342,7 @@ export type OutputRules = {
 const ALWAYS_FORBIDDEN: { pattern: RegExp; reason: string }[] = [
   { pattern: /!{2,}|(?:!.*){3,}/, reason: "piled-up exclamation points" },
   { pattern: /[—–]/, reason: "em dash" },
+  { pattern: /\b(keep (my|an) eyes? (open|out)|keep (watching|looking|an eye out)|be on the lookout|want me to (watch|look) for)\b/i, reason: "offers to keep watching; the sweep already does that without asking" },
   { pattern: /\bjust (checking|touching) (in|base)\b/i, reason: "generic check-in filler" },
   { pattern: /\b(someone|anyone|people) (cool|interesting)\b/i, reason: "vague instead of naming the person" },
   { pattern: /\b(someone|a person) (asking|looking) for\b/i, reason: "engine reasoning leaked" },

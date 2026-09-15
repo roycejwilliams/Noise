@@ -15,7 +15,7 @@
     ],
     "draft": "Maya's building grid storage software, and she actually mentioned she'd love to meet you. Want me to set it up?",
     "forbidden": [
-      "mentioned (she|that)|she.?d (love|like) to meet you|wants to meet you|asked (about|for) you"
+      "\\b(she|maya)('s| is)? (actually )?(mentioned|said)( that)? she.?d (love|like) to meet you|\\b(she|maya) (wants|would love|'d love|would like) to meet you|asked (about|for) you"
     ],
     "groundedDraft": false
   },
@@ -247,5 +247,35 @@
     "forbidden": [],
     "groundedDraft": true,
     "style": "lowercase"
+  },
+  {
+    "id": "t0915_contact_card",
+    "message": "Also can you send over your contact card when you get the chance",
+    "recentConversation": "User said: Yeah let's just focus on me\nCo replied: Got it.\nUser said: Also can you send over your contact card when you get the chance",
+    "facts": [],
+    "draft": "This same number works if you ever want to call me directly.",
+    "forbidden": [
+      "nothing to save",
+      "same number works"
+    ],
+    "groundedDraft": false,
+    "onlyMode": "e2e"
+  },
+  {
+    "id": "t0915_nothing_found_no_ask",
+    "message": "Yeah definitely, point me in the right direction",
+    "recentConversation": "Co replied: What you're more likely to need now is Series A rooms. Worth me thinking in that direction instead?\nUser said: Yeah definitely, point me in the right direction",
+    "facts": [
+      {
+        "kind": "did_this_turn",
+        "text": "Searched just now for what they asked for and found nothing real that fits yet."
+      }
+    ],
+    "draft": "I don't have a specific one lined up yet, but I'll keep watching for one and text you the second something real shows up.",
+    "forbidden": [
+      "the second",
+      "keep watching"
+    ],
+    "groundedDraft": false
   }
 ]

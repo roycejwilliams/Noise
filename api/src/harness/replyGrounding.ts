@@ -49,7 +49,8 @@ export type FactKind =
   | "scheduled" // a real scheduled call
   | "known" // a real field Co has (event name, date, link, recommendation)
   | "unknown" // a detail Co explicitly does not have
-  | "capability"; // what Co can and can't do
+  | "capability" // what Co can and can't do
+  | "ongoing"; // a search that really keeps running for them (an open ask)
 
 export type Fact = { id: string; kind: FactKind; text: string };
 
@@ -73,7 +74,8 @@ export function addInstruction(rf: ReplyFacts, text: string): void {
 const STANDING_CAPABILITIES = [
   `Co can call them right now when they ask ("call me"), and can schedule a call for a specific later time. Calling is real and working.`,
   `They can also call Co from this same number. You are not given the digits, so never write a phone number.`,
-  `Co does look for events and people that fit what they've asked for, and may text them when something fits, but can't promise it will find anything or when. Co can't go chase down a specific link, detail, or answer later: if it isn't here, it won't show up.`,
+  `Co can't go chase down a specific link, detail, or answer later: if it isn't here, it won't show up.`,
+  `Co can send its contact card (so they can save Co) with the sendContactCard tool when they ask for it or want to save Co.`,
 ];
 
 // Facts that are true for every reply, before anything about this person.
@@ -92,6 +94,7 @@ export async function gatherReplyFacts(
 ): Promise<ReplyFacts> {
   const rf = baseReplyFacts();
   for (const d of opts.pendingDescriptions ?? []) addFact(rf, "pending", `Waiting to hear back: ${d}`);
+  await addOngoingSearchFacts(rf, userId);
 
   const [scheduled, reveal] = await Promise.all([
     pool
@@ -126,6 +129,27 @@ export async function gatherReplyFacts(
     }
   }
   return rf;
+}
+
+// What Co is really still looking for, from open asks. Only these make
+// "I'll keep looking and text you if something fits" true: the daily sweep
+// searches each open ask and the daily pick can text about a result. With
+// none open, nothing is being looked for and any such promise is false.
+export async function addOngoingSearchFacts(rf: ReplyFacts, userId: string): Promise<void> {
+  const { rows } = await pool
+    .query(`SELECT ask_text FROM ask_checkins WHERE user_id = $1 AND resolved_at IS NULL ORDER BY created_at DESC LIMIT 3`, [userId])
+    .catch(() => ({ rows: [] as any[] }));
+  const asks = rows.map((r: any) => String(r.ask_text)).filter(Boolean);
+  if (rf.facts.some((f) => f.kind === "ongoing")) return;
+  if (asks.length) {
+    addFact(
+      rf,
+      "ongoing",
+      `Co's daily search is looking for: ${asks.map((a) => `"${a}"`).join("; ")}. If something real fits, Co may text them about it (at most one text a day). Co can't promise it will find anything, or when.`,
+    );
+  } else {
+    addFact(rf, "unknown", "Co isn't searching for anything for them right now. Nothing will be looked for later unless they ask for something specific.");
+  }
 }
 
 // Real fields only, plus the gaps stated as gaps so "I don't have that" is
@@ -232,8 +256,15 @@ export function codeChecks(draft: string, rf: ReplyFacts, src: GroundingSources)
     // "If one turns up, I'll text you" (conditional first) is the same promise.
     /\b(?:if|when|once|as soon as)\b[^.?!]{0,80}\b(?:i'?ll|i will)\s+(?:text|send|ping|message|let)\s+you\b|\b(i'?ll|i will|i can|let me|will)\s+(keep (an eye out|watching|looking|searching|checking)|flag (it|that|one)|circle back|follow up|get back to you|let you know|text you (when|once|as soon|the moment|if)|track (it|that|one) down|find out|look into|reach out to|send (it|one|the link) (when|once|as soon)|send (it|one|them|that) your way|pass (it|one|that) along|ping you|be in touch)\b/i,
   );
-  if (promise) {
-    checks.push({ name: "no_followup_promise", pass: false, reason: `promises a follow-up nothing will do: "${promise[0]}"` });
+  const lookoutPromise = draft.match(/\b(keep (my|an|our) eyes? (open|out|peeled)|keep (watching|looking|an eye out)|be on the lookout|watch(ing)? for (one|it|something|that)|text you (the second|the moment|right when|as soon as))\b/i);
+  const found = promise ?? lookoutPromise;
+  // A promise to keep looking is only true while an ask is open (the sweep
+  // really does search it), and never with a timing commitment.
+  const ongoing = rf.facts.some((f) => f.kind === "ongoing");
+  const timingCommitment = /\b(the second|the moment|right when|as soon as|right away|immediately|tonight|tomorrow|today|this week)\b/i.test(draft);
+  const lookingOnly = found && /keep (looking|watching|an eye|my eyes|eyes)|on the lookout|watch(ing)? for|if (something|anything|one) (real )?(turns up|comes up|fits|shows up)/i.test(found[0] + " " + draft);
+  if (found && !(ongoing && lookingOnly && !timingCommitment)) {
+    checks.push({ name: "no_followup_promise", pass: false, reason: `promises a follow-up nothing will do: "${found[0]}"` });
   }
   if (!emotionLabel.pass) checks.push(emotionLabel);
   return checks;
@@ -303,6 +334,13 @@ function claimChecks(claims: Claim[], rf: ReplyFacts, src: GroundingSources): Ga
   return claims.map((c) => {
     let pass = c.supported;
     let reason = `${c.type}: "${c.text}"`;
+    if (pass && c.type === "future_promise") {
+      const cited = rf.facts.find((f) => f.id === c.factId);
+      if (!cited || !["ongoing", "scheduled", "did_this_turn"].includes(cited.kind)) {
+        pass = false;
+        reason += " (a future action needs a real scheduled call or an open search behind it)";
+      }
+    }
     if (pass) {
       const factOk = !!c.factId && factIds.has(c.factId);
       const quoteOk = !!c.quote && norm(c.quote).length >= 6 && sources.includes(norm(c.quote));
@@ -339,7 +377,7 @@ Your draft reply:
 These parts of the draft aren't supported by the facts or the conversation:
 ${failed.map((f) => `- ${f.reason ?? f.name}`).join("\n")}
 
-Rewrite the draft so it still responds to what they said, keeping everything that's supported. Fix or remove each unsupported part. If you don't have something they asked for, say so plainly, and don't promise to get it later. Match the draft's capitalization style. Same length or shorter. Return ONLY the message.`,
+Rewrite the draft so it still responds to what they said, keeping everything that's supported. Fix or remove each unsupported part. If you don't have something they asked for, say it once, plainly, naming exactly what you don't have ("I don't have the start time"), then what you can do now if anything. Don't hedge, don't point them at a link instead, and don't promise to get it later. Match the draft's capitalization style. Same length or shorter. Return ONLY the message.`,
   });
   const out = text.trim().replace(/^"|"$/g, "");
   return out || null;

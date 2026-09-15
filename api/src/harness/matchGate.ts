@@ -149,8 +149,16 @@ export function checkNoRepeat(facts: MatchFacts): GateCheck {
     : { name: "no_repeat", pass: true };
 }
 
+// A sold-out event isn't something to pitch (2026-09-15: Co pitched a sold-out,
+// approval-only meetup as a fit).
+export function checkAvailable(match: TierMatch): GateCheck {
+  return match.details?.soldOut
+    ? { name: "available", pass: false, reason: "sold out" }
+    : { name: "available", pass: true, reason: match.details?.requiresApproval ? "needs host approval" : undefined };
+}
+
 export function evaluateMatch(match: TierMatch, facts: MatchFacts): { ok: boolean; checks: GateCheck[] } {
-  const checks = [checkLocation(match, facts), checkTiming(match, facts), checkGrounding(match, facts), checkNoRepeat(facts)];
+  const checks = [checkLocation(match, facts), checkTiming(match, facts), checkGrounding(match, facts), checkNoRepeat(facts), checkAvailable(match)];
   return { ok: gate(checks).ok, checks };
 }
 
