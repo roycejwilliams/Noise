@@ -43,14 +43,18 @@ type NetworkCandidate = {
   phone_number: string;
   email: string;
   match_score: number;
+  // Always relevance_edges.share_reason (never the private match_reason),
+  // see findFreshCandidates. share_safe marks items built after that fix;
+  // anything without it predates it and is dropped.
   match_reason: string;
+  share_safe?: boolean;
 };
 
 type BacklogItem = { askId: string; candidate: NetworkCandidate };
 
 async function getBacklog(userId: string, askId: string): Promise<BacklogItem[]> {
   const { rows } = await pool.query(`SELECT items FROM network_backlogs WHERE user_id = $1 AND ask_id = $2`, [userId, askId]);
-  return (rows[0]?.items as BacklogItem[]) ?? [];
+  return ((rows[0]?.items as BacklogItem[]) ?? []).filter((i) => i.candidate?.share_safe === true);
 }
 
 async function saveBacklog(userId: string, askId: string, items: BacklogItem[]): Promise<void> {
@@ -85,12 +89,13 @@ async function findFreshCandidates(userId: string, askId: string): Promise<Backl
   // edges logged against the same ask across separate sweep cycles — keep
   // only their single best-scoring one.
   const { rows } = await pool.query(
-    `SELECT edge_id, candidate_id, match_score, match_reason, first_name, phone_number, email FROM (
-       SELECT DISTINCT ON (re.candidate_id) re.id AS edge_id, re.candidate_id, re.match_score, re.match_reason,
+    `SELECT edge_id, candidate_id, match_score, match_reason, true AS share_safe, first_name, phone_number, email FROM (
+       SELECT DISTINCT ON (re.candidate_id) re.id AS edge_id, re.candidate_id, re.match_score, re.share_reason AS match_reason,
               u.first_name, u.phone_number, u.email
        FROM relevance_edges re
        JOIN users u ON u.id = re.candidate_id
        WHERE re.person_id = $1 AND re.ask_id = $2 AND re.status = 'open' AND re.match_score >= $3
+         AND re.share_reason IS NOT NULL AND re.share_reason <> ''
        ORDER BY re.candidate_id, re.match_score DESC
      ) distinct_candidates
      ORDER BY match_score DESC`,
@@ -182,7 +187,9 @@ export async function findPendingNetworkTease(userId: string): Promise<PendingNe
     [userId, NETWORK_OFFER_EXPIRY_DAYS],
   );
   if (!rows[0]) return null;
-  return JSON.parse(rows[0].content);
+  const parsed = JSON.parse(rows[0].content);
+  // Stashed before share_reason existed: its reason may hold private detail.
+  return parsed?.candidate?.share_safe === true ? parsed : null;
 }
 
 export type TeaseReplyClassification = "interested" | "not_interested" | "unrelated";
@@ -261,7 +268,7 @@ export async function resolveNetworkTeaseReply(
     const { text } = await generateText({
       model: anthropic("claude-haiku-4-5-20251001"),
       experimental_telemetry: { isEnabled: true, functionId: "networkIntroNudge.reveal.draft" },
-      prompt: `${CO_VOICE}\n\n${CO_TEXT_CHANNEL} You're texting ${firstName}. You just told them someone in the network crossed your mind, and they said yes, they want to hear who. Draft a short, warm text (2-3 sentences, no exclamation points, no em dashes, normal sentence capitalization) naming ${pending.candidate.first_name} and explaining in your own words why they're worth meeting: ${pending.candidate.match_reason}. End by asking if they'd like you to see if ${pending.candidate.first_name} is open to it too. Return ONLY the message text.`,
+      prompt: `${CO_VOICE}\n\n${CO_TEXT_CHANNEL} You're texting ${firstName}. You just told them someone in the network crossed your mind, and they said yes, they want to hear who. Draft a short, warm text (2-3 sentences, no exclamation points, no em dashes, normal sentence capitalization) naming ${pending.candidate.first_name} and explaining in your own words why they're worth meeting: ${pending.candidate.match_reason}. Use only that reason, and never say ${pending.candidate.first_name} wants to meet them or said anything about them. End by asking if they'd like you to see if ${pending.candidate.first_name} is open to it too. Return ONLY the message text.`,
     });
     message = cleanCoMessage(text.trim());
   } catch (err: any) {
@@ -297,7 +304,9 @@ export async function findPendingNetworkIntroOffer(userId: string): Promise<Pend
     [userId, NETWORK_OFFER_EXPIRY_DAYS],
   );
   if (!rows[0]) return null;
-  return JSON.parse(rows[0].content);
+  const parsed = JSON.parse(rows[0].content);
+  // Stashed before share_reason existed: its reason may hold private detail.
+  return parsed?.candidate?.share_safe === true ? parsed : null;
 }
 
 export async function classifyNetworkIntroReply(
@@ -379,6 +388,7 @@ async function askCandidateDirectly(candidate: MatchNudgeCandidate, asker: Match
       email: asker.email,
       match_score: 0,
       match_reason: matchReason,
+      share_safe: true,
     },
     askId,
   );

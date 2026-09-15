@@ -812,8 +812,15 @@ Transcript:
     if (ask) {
       pool
         .query(
+          // Every capture mints a new intent id, so the same ask restated
+          // used to open another check-in row (one tester had 90 rows, 60
+          // distinct texts). Skip when an identical open ask already exists.
           `INSERT INTO ask_checkins (user_id, ask_id, ask_text)
-           VALUES ($1, $2, $3)
+           SELECT $1::uuid, $2::text, $3::text
+           WHERE NOT EXISTS (
+             SELECT 1 FROM ask_checkins
+             WHERE user_id = $1 AND resolved_at IS NULL AND lower(trim(ask_text)) = lower(trim($3))
+           )
            ON CONFLICT (user_id, ask_id) DO NOTHING`,
           [user_id, intentId, ask.text],
         )

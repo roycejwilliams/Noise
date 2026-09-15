@@ -33,6 +33,8 @@ export type RankedCandidate = {
   candidate_id: string;
   score: number;
   reason: string;
+  // Only this may be shown to a person; see matching.ts AskScore.shareReason.
+  shareReason?: string;
   mutual: boolean;
   method: "ask";
 };
@@ -283,6 +285,11 @@ async function maybeSendMatchNudge(
   // same as before this change.
   if (eventTiming && !withinNudgeWindow(eventTiming.start_at, eventTiming.end_at)) return false;
 
+  // Privacy (2026-09-14): top.reason comes from the candidate's private
+  // profile + memories. Without a shareable reason there's nothing we can
+  // honestly tell this person, so no nudge.
+  if (!top.shareReason) return false;
+
   if (opts.dryRun) {
     console.log(
       `[eventScoring dryRun] would nudge ${person.user_id} about ${candidate.user_id} at ${eventId} (score ${top.score})`,
@@ -299,9 +306,9 @@ async function maybeSendMatchNudge(
     const { text } = await generateText({
       model: anthropic("claude-haiku-4-5-20251001"),
       experimental_telemetry: { isEnabled: true, functionId: "eventScoring.matchNudge.draft" },
-      prompt: `${CO_VOICE}\n\n${CO_TEXT_CHANNEL} You're texting ${person.first_name} about "${eventName}," an event they're going to. You found someone else going who's genuinely worth them meeting: ${candidate.first_name}. Why they're worth meeting: ${top.reason}
+      prompt: `${CO_VOICE}\n\n${CO_TEXT_CHANNEL} You're texting ${person.first_name} about "${eventName}," an event they're going to. You found someone else going who's genuinely worth them meeting: ${candidate.first_name}. Why they're worth meeting: ${top.shareReason}
 
-Draft a short, warm, low-pressure text (1-2 sentences, no exclamation points, no em dashes, normal sentence capitalization) letting ${person.first_name} know about ${candidate.first_name} and naming the real reason above in your own words. Not a hard sell, just a genuine heads-up, like a friend connecting two people who'd get along. Return ONLY the message text.`,
+Draft a short, warm, low-pressure text (1-2 sentences, no exclamation points, no em dashes, normal sentence capitalization) letting ${person.first_name} know about ${candidate.first_name} and naming the real reason above in your own words. Use only that reason. Never say ${candidate.first_name} wants to meet them, mentioned them, or said anything about them. Not a hard sell, just a genuine heads-up, like a friend connecting two people who'd get along. Return ONLY the message text.`,
     });
     message = cleanCoMessage(text.trim());
   } catch (err: any) {
@@ -476,6 +483,7 @@ export async function scoreMatchedGroup(
         candidate_id: s.candidate.user_id,
         score: s.score,
         reason: s.reason,
+        shareReason: s.shareReason,
         mutual: s.mutual,
         method: "ask" as const,
       }))

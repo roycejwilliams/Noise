@@ -140,7 +140,10 @@ type BacklogItem = { askText: string; match: TierMatch; source: "full" | "urgent
 // turn. Scoped by (userId, askId) with a real upsert.
 async function getBacklog(userId: string, askId: string): Promise<BacklogItem[]> {
   const { rows } = await pool.query(`SELECT items FROM event_backlogs WHERE user_id = $1 AND ask_id = $2`, [userId, askId]);
-  return (rows[0]?.items as BacklogItem[]) ?? [];
+  // Tier 1 items queued before the 2026-09-09 listCalendarEvents field fix
+  // have no event_api_id, so dedup and match recording can't key off them.
+  // Drop them; the next full cycle re-finds the event with a real id.
+  return ((rows[0]?.items as BacklogItem[]) ?? []).filter((i) => i.match.tier === 3 || Boolean((i.match as any).event_api_id));
 }
 
 async function saveBacklog(userId: string, askId: string, items: BacklogItem[]): Promise<void> {

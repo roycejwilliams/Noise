@@ -91,6 +91,11 @@ export type AskScore<T> = {
   candidate: T;
   score: number;
   reason: string;
+  // The only reason that may ever be shown to a person (the asker, the
+  // candidate, an intro email). `reason` is built from the candidate's
+  // private profile and memories and stays internal. Empty = nothing
+  // shareable, so the match must not be surfaced to anyone.
+  shareReason: string;
   mutual: boolean;
 };
 
@@ -163,6 +168,7 @@ async function runAskScoring<T extends ScorableCandidate>(
         candidate: candidates[r.index],
         score: typeof r.score === "number" ? Math.max(0, Math.min(100, Math.round(r.score))) : 0,
         reason: typeof r.reason === "string" ? r.reason : "",
+        shareReason: typeof r.share_reason === "string" ? r.share_reason.trim() : "",
         mutual: Boolean(r.mutual),
       }));
   } catch (err) {
@@ -204,10 +210,11 @@ ${digest}
 For each candidate, judge how well they satisfy the ask, based only on what's listed — never assume or infer facts that aren't present.
 
 Return ONLY valid JSON, no preamble:
-{"results": [{"index": 0, "score": 0, "reason": "one short grounded sentence", "mutual": false}, ...]}
+{"results": [{"index": 0, "score": 0, "reason": "one short grounded sentence", "share_reason": "", "mutual": false}, ...]}
 
 score: 0-100. 0 means nothing on file supports it, 100 means they clearly satisfy it. Score every candidate, even a 0.
-reason: one short sentence explaining the score, referencing only what's actually listed for that candidate.
+reason: one short sentence explaining the score, referencing only what's actually listed for that candidate. Internal only, never shown to anyone.
+share_reason: one short sentence that is safe to say to OTHER people about why this candidate fits. It may use ONLY the candidate's own stated ask/offering text (the part in quotes after "their own stated"), because they said that in order to be matched. Never use anything from their goals, blockers, activities, or "mentioned" memories, and never imply they said they want to meet anyone. Empty string if their stated ask/offering doesn't support the match.
 mutual: true only if the candidate's own stated ask/offering (if listed) also plausibly points back at what's known about the asker above. false if the candidate has no stated ask/offering listed, or it doesn't plausibly connect.`;
 
   return runAskScoring("matching.scoreAgainstStatedAsk", prompt, candidates);
@@ -236,10 +243,11 @@ ${digest}
 For each candidate, judge how much they would likely want or benefit from this offering, based only on what's listed — never assume or infer facts that aren't present.
 
 Return ONLY valid JSON, no preamble:
-{"results": [{"index": 0, "score": 0, "reason": "one short grounded sentence", "mutual": false}, ...]}
+{"results": [{"index": 0, "score": 0, "reason": "one short grounded sentence", "share_reason": "", "mutual": false}, ...]}
 
 score: 0-100. 0 means nothing on file suggests they'd want this, 100 means it clearly matches something they're after. Score every candidate, even a 0.
-reason: one short sentence explaining the score, referencing only what's actually listed for that candidate.
+reason: one short sentence explaining the score, referencing only what's actually listed for that candidate. Internal only, never shown to anyone.
+share_reason: one short sentence that is safe to say to OTHER people about why this candidate fits. It may use ONLY the candidate's own stated ask/offering text (the part in quotes after "their own stated"), because they said that in order to be matched. Never use anything from their goals, blockers, activities, or "mentioned" memories, and never imply they said they want to meet anyone. Empty string if their stated ask/offering doesn't support the match.
 mutual: true only if the candidate's own stated ask (if listed) is a "seeking" ask that plausibly wants this specific offering. false if the candidate has no stated ask listed, or it doesn't plausibly connect.`;
 
   return runAskScoring("matching.scoreOfferingAgainstCandidates", prompt, candidates);

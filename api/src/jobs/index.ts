@@ -336,7 +336,7 @@ export function registerJobs(io: Server) {
       // without a successful send first crack each day — real rotation
       // instead of an accidental permanent winner.
       const due = await pool.query(
-        `SELECT ac.id, ac.ask_text, ac.last_attempted_at, u.id AS user_id, u.first_name, u.phone_number, cp.city,
+        `SELECT ac.id, ac.ask_id, ac.ask_text, ac.last_attempted_at, u.id AS user_id, u.first_name, u.phone_number, cp.city,
                 cp.goals, cp.activity_preferences,
                 (ac.last_surfaced_at IS NULL OR ac.last_surfaced_at <= NOW() - INTERVAL '3 days') AS cooldown_cleared
          FROM ask_checkins ac
@@ -416,7 +416,10 @@ export function registerJobs(io: Server) {
           // is what actually prevents this from stacking a second text on
           // top of whatever attemptEventSurfacing just sent above.
           try {
-            await attemptNetworkSurfacing(row.user_id, row.first_name, row.phone_number, row.id);
+            // ac.ask_id, not ac.id: relevance_edges and network_backlogs are
+            // keyed by the intent's ask id. Passing the ask_checkins row id
+            // matched nothing, so this never sent (found 2026-09-14).
+            await attemptNetworkSurfacing(row.user_id, row.first_name, row.phone_number, row.ask_id);
           } catch (err: any) {
             console.error(`Network surfacing sweep failed for ${row.user_id}:`, err?.message ?? err);
           }

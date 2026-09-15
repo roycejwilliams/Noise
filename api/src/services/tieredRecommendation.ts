@@ -94,8 +94,41 @@ async function filterByRadius<T extends { city?: string | null }>(
   userCity: string | null,
 ): Promise<T[]> {
   if (!userCity) return candidates;
-  const withinFlags = await Promise.all(candidates.map((c) => withinRadius(userCity, c.city ?? null)));
+  // An event with no city on file can't be claimed as nearby (2026-09-14:
+  // a city-less Co event in SF passed this filter and got described to
+  // someone asking about Fargo as "close to Fargo"). Only drop it when we
+  // do know where the person wants to be; ungeocodable strings still pass.
+  const withinFlags = await Promise.all(candidates.map((c) => (c.city ? withinRadius(userCity, c.city) : false)));
   return candidates.filter((_, i) => withinFlags[i]);
+}
+
+// The ask's own place wins over the profile city ("founder meetups near
+// Fargo" from someone whose profile says SF). Cached per ask text since the
+// urgent pre-check re-runs the same asks every day.
+const askCityCache = new Map<string, string | null>();
+async function resolveSearchCity(askText: string | undefined, profileCity: string | null): Promise<string | null> {
+  if (!askText) return profileCity;
+  if (!askCityCache.has(askText)) {
+    let city: string | null = null;
+    try {
+      const { text: raw } = await generateText({
+        model: anthropic("claude-haiku-4-5-20251001"),
+        experimental_telemetry: { isEnabled: true, functionId: "tieredRecommendation.resolveSearchCity" },
+        prompt: `Does this request name a specific city, metro, or region where they want to find something? "${askText}"
+
+Return ONLY valid JSON: {"city": "City, State/Country" or null}. null if no place is named or it's only "near me"/"online".`,
+      });
+      const m = raw.match(/\{[\s\S]*\}/);
+      const parsed = m ? JSON.parse(m[0]) : null;
+      city = typeof parsed?.city === "string" && parsed.city.trim() ? parsed.city.trim() : null;
+    } catch (err: any) {
+      console.error("tieredRecommendation: resolveSearchCity failed (non-fatal, using profile city):", err?.message ?? err);
+      return profileCity;
+    }
+    if (askCityCache.size > 500) askCityCache.clear();
+    askCityCache.set(askText, city);
+  }
+  return askCityCache.get(askText) ?? profileCity;
 }
 
 // Real judgment gate, take two (Royce, 2026-09-02) — the first attempt at
@@ -353,7 +386,8 @@ async function tryTier3(ask: StatedIntent, query: string): Promise<TierMatch | n
 // search for anyway, whether or not 1&2 found something. Empty array means
 // nothing grounded was found anywhere — the caller (recommendation.ts) still
 // has its own generic fallback for that case, same as before this existed.
-export async function getTieredRecommendation(ask: StatedIntent, city: string | null): Promise<TierMatch[]> {
+export async function getTieredRecommendation(ask: StatedIntent, profileCity: string | null): Promise<TierMatch[]> {
+  const city = await resolveSearchCity(ask.text, profileCity);
   const [tier1, tier2, opportunityQuery] = await Promise.all([
     tryTier1(ask, city),
     tryTier2(ask, city),
@@ -388,7 +422,8 @@ function isWithinUrgentWindow(startAt: string): boolean {
 // risking silent drift between the two copies on a future change). Returns
 // both if both have an urgent match — same no-winner reasoning as
 // getTieredRecommendation above.
-export async function checkForUrgentMatch(ask: StatedIntent, city: string | null): Promise<TierMatch[]> {
+export async function checkForUrgentMatch(ask: StatedIntent, profileCity: string | null): Promise<TierMatch[]> {
+  const city = await resolveSearchCity(ask.text, profileCity);
   const [tier1, tier2] = await Promise.all([
     tryTier1(ask, city, isWithinUrgentWindow),
     tryTier2(ask, city, isWithinUrgentWindow),

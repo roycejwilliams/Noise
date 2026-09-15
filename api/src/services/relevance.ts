@@ -64,17 +64,18 @@ async function logRelevanceEdges(
   personId: string,
   askId: string,
   askText: string,
-  scored: { user_id: string; score: number; reason: string; mutual: boolean }[],
+  scored: { user_id: string; score: number; reason: string; shareReason: string; mutual: boolean }[],
 ): Promise<void> {
   const loggable = scored.filter((s) => s.score >= LOG_SCORE_FLOOR);
   if (!loggable.length) return;
   await pool.query(
-    `INSERT INTO relevance_edges (person_id, candidate_id, ask_id, ask_text, match_score, match_reason, mutual)
-     SELECT $1, x.candidate_id, $2, $3, x.score, x.reason, x.mutual
-     FROM UNNEST($4::uuid[], $5::int[], $6::text[], $7::boolean[]) AS x(candidate_id, score, reason, mutual)
+    `INSERT INTO relevance_edges (person_id, candidate_id, ask_id, ask_text, match_score, match_reason, share_reason, mutual)
+     SELECT $1, x.candidate_id, $2, $3, x.score, x.reason, NULLIF(x.share_reason, ''), x.mutual
+     FROM UNNEST($4::uuid[], $5::int[], $6::text[], $7::boolean[], $8::text[]) AS x(candidate_id, score, reason, mutual, share_reason)
      ON CONFLICT (person_id, candidate_id, ask_id) DO UPDATE SET
        match_score = EXCLUDED.match_score,
        match_reason = EXCLUDED.match_reason,
+       share_reason = EXCLUDED.share_reason,
        mutual = EXCLUDED.mutual
      WHERE relevance_edges.status = 'open'`,
     [
@@ -85,6 +86,7 @@ async function logRelevanceEdges(
       loggable.map((s) => s.score),
       loggable.map((s) => s.reason),
       loggable.map((s) => s.mutual),
+      loggable.map((s) => s.shareReason),
     ],
   );
 }
@@ -121,7 +123,7 @@ export async function sweepAskAgainstNetwork(userId: string): Promise<void> {
       userId,
       ask.id,
       ask.text,
-      scored.map((s) => ({ user_id: s.candidate.user_id, score: s.score, reason: s.reason, mutual: s.mutual })),
+      scored.map((s) => ({ user_id: s.candidate.user_id, score: s.score, reason: s.reason, shareReason: s.shareReason, mutual: s.mutual })),
     );
   } catch (err) {
     console.error(`sweepAskAgainstNetwork failed for user ${userId} (non-fatal):`, err);
@@ -155,7 +157,7 @@ export async function sweepOfferingAgainstNetwork(userId: string): Promise<void>
       userId,
       offering.id,
       offering.text,
-      scored.map((s) => ({ user_id: s.candidate.user_id, score: s.score, reason: s.reason, mutual: s.mutual })),
+      scored.map((s) => ({ user_id: s.candidate.user_id, score: s.score, reason: s.reason, shareReason: s.shareReason, mutual: s.mutual })),
     );
   } catch (err) {
     console.error(`sweepOfferingAgainstNetwork failed for user ${userId} (non-fatal):`, err);

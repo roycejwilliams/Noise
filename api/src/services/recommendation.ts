@@ -39,6 +39,58 @@ const NOT_ENOUGH_DATA: RecommendationResult = {
 // about them) even when the person had explicitly moved on to a different
 // topic (dinner spots) — Co kept redirecting back to the stale topic
 // instead of just answering what was actually asked.
+const RECOMMENDATION_REPEAT_DAYS = 30;
+
+// Same event or opportunity recommended in conversation within the last
+// RECOMMENDATION_REPEAT_DAYS isn't offered again as if it were new.
+async function dropAlreadyRecommended(userId: string, matches: TierMatch[]): Promise<TierMatch[]> {
+  if (!matches.length) return matches;
+  const { rows } = await pool
+    .query(
+      `SELECT content FROM co_memories
+       WHERE user_id = $1 AND memory_type = 'recommendation_offered'
+         AND created_at > NOW() - ($2 || ' days')::interval`,
+      [userId, RECOMMENDATION_REPEAT_DAYS],
+    )
+    .catch(() => ({ rows: [] as { content: string }[] }));
+  const seenIds = new Set<string>();
+  const seenNames = new Set<string>();
+  for (const r of rows) {
+    try {
+      const c = JSON.parse(r.content);
+      if (c.event_api_id) seenIds.add(c.event_api_id);
+      if (c.name) seenNames.add(String(c.name).toLowerCase());
+    } catch {}
+  }
+  return matches.filter(
+    (m) => !("event_api_id" in m && seenIds.has(m.event_api_id)) && !seenNames.has(m.name.toLowerCase()),
+  );
+}
+
+// Returns a standalone description of what to look for, or null when the
+// message isn't asking for a new thing (a follow-up question, scheduling,
+// thanks). Fails open to the raw message so an outage doesn't block recs.
+async function toSearchRequest(userId: string, message: string, statedAsk: string | null): Promise<string | null> {
+  try {
+    const { text: raw } = await generateText({
+      model: anthropic("claude-haiku-4-5-20251001"),
+      experimental_telemetry: { isEnabled: true, functionId: "co.recommendation.toSearchRequest", metadata: { userId } },
+      prompt: `Someone texted: "${message}"${statedAsk ? `\nWhat they've told Co they're looking for overall: "${statedAsk}"` : ""}
+
+Is this message asking Co to find or suggest something new for them (an event, a group, a program, something to do)? Saying they want to find something counts ("I'd love to find a pickup basketball group"). These are NOT: follow-up questions about something already mentioned ("any details?", "where's the link?", "what time?"), asking for help planning or organizing something ("can you help me plan?"), scheduling, and thanks. If it's unclear, treat it as a request.
+
+If yes, rewrite it as one standalone sentence describing what to look for, keeping the place, timing, and topic they gave. If they named a topic, use only their words for it and add nothing from their overall goal ("founder meetups" stays "founder meetups"). Only borrow the topic from what they're looking for overall when the message gives none (like "what's going on this weekend"). Return ONLY valid JSON: {"request": "..."} or {"request": null}.`,
+    });
+    const m = raw.match(/\{[\s\S]*\}/);
+    const parsed = m ? JSON.parse(m[0]) : null;
+    if (parsed && "request" in parsed) return typeof parsed.request === "string" && parsed.request.trim() ? parsed.request.trim() : null;
+    return message;
+  } catch (err: any) {
+    console.error("generateRecommendation: toSearchRequest failed (non-fatal, using raw message):", err?.message ?? err);
+    return message;
+  }
+}
+
 export async function generateRecommendation(userId: string, currentMessage?: string): Promise<RecommendationResult> {
   try {
     const { rows } = await pool.query(
@@ -85,16 +137,35 @@ export async function generateRecommendation(userId: string, currentMessage?: st
     // through to the old generic LLM-category behavior below if all three
     // tiers come back empty, same "something is better than silence" logic
     // this function always had, just no longer the FIRST thing tried.
-    const askText = currentMessage || latestIntent?.text || profile.goals?.[0];
+    // The raw text message is not a search request ("Any details?" and
+    // "where's the link?" were being searched as-is). Turn it into one, or
+    // stop if it isn't asking for something new.
+    let askText = latestIntent?.text || profile.goals?.[0];
+    if (currentMessage) {
+      const request = await toSearchRequest(userId, currentMessage, latestIntent?.text ?? null);
+      if (request === null) return { available: false, reason: "their message isn't asking for something new to try" };
+      askText = request;
+    }
     if (askText) {
-      const tierMatches: TierMatch[] = await getTieredRecommendation(
+      const found: TierMatch[] = await getTieredRecommendation(
         { text: askText, embedding: askText === latestIntent?.text ? latestIntent?.embedding : null },
         profile.city ?? null,
       ).catch((err: any) => {
         console.error("generateRecommendation: getTieredRecommendation failed (non-fatal):", err?.message ?? err);
         return [];
       });
+      const tierMatches = await dropAlreadyRecommended(userId, found);
+      if (found.length && !tierMatches.length) {
+        return { available: false, reason: `already recommended ${found.map((m) => m.name).join(", ")} recently` };
+      }
       if (tierMatches.length) {
+        await pool
+          .query(
+            `INSERT INTO co_memories (user_id, memory_type, content)
+             SELECT $1, 'recommendation_offered', x FROM UNNEST($2::text[]) AS x`,
+            [userId, tierMatches.map((m) => JSON.stringify({ name: m.name, event_api_id: "event_api_id" in m ? m.event_api_id : null }))],
+          )
+          .catch((err: any) => console.error("generateRecommendation: recommendation_offered write failed (non-fatal):", err?.message ?? err));
         // No winner here either (Royce, 2026-08-30 — see tieredRecommendation.ts)
         // — this is a live, in-conversation reply, not an unprompted text, so
         // bundling every real match into one description carries none of the

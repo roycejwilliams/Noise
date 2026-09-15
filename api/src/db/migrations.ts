@@ -336,6 +336,13 @@ export function runMigrations() {
   pool
     .query(`ALTER TABLE relevance_edges ADD COLUMN IF NOT EXISTS match_reason TEXT`)
     .catch((err: Error) => console.error("relevance_edges.match_reason migration failed:", err));
+  // share_reason (2026-09-14): match_reason is built from the candidate's
+  // private profile + memories and was being revealed to the asker and put
+  // in intro emails. share_reason only draws on the candidate's own stated
+  // ask/offering; it's the only reason network intros may show anyone.
+  pool
+    .query(`ALTER TABLE relevance_edges ADD COLUMN IF NOT EXISTS share_reason TEXT`)
+    .catch((err: Error) => console.error("relevance_edges.share_reason migration failed:", err));
   pool
     .query(`ALTER TABLE relevance_edges ADD COLUMN IF NOT EXISTS mutual BOOLEAN NOT NULL DEFAULT false`)
     .catch((err: Error) => console.error("relevance_edges.mutual migration failed:", err));

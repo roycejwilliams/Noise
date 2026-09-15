@@ -23,8 +23,18 @@ export async function scheduleOutcomeFollowUp(userId: string, askText: string, m
 
   try {
     await pool.query(
+      // One follow-up per recommended event, however many times it got
+      // recommended (2026-09-14: the same event produced two follow-ups
+      // sent 2 seconds apart).
       `INSERT INTO recommendation_outcome_followups (user_id, ask_text, tier, match_name, match, send_at)
-       VALUES ($1, $2, $3, $4, $5, ($6::date + INTERVAL '1 day 11 hours'))`,
+       SELECT $1::uuid, $2::text, $3::int, $4::text, $5::jsonb, ($6::date + INTERVAL '1 day 11 hours')
+       WHERE NOT EXISTS (
+         SELECT 1 FROM recommendation_outcome_followups
+         WHERE user_id = $1 AND (
+           (match ->> 'event_api_id') = ($5::jsonb ->> 'event_api_id')
+           OR lower(match_name) = lower($4)
+         )
+       )`,
       [userId, askText, match.tier, match.name, JSON.stringify(match), match.event_date],
     );
   } catch (err: any) {
