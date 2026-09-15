@@ -7,6 +7,7 @@ import { getActiveAsks, getActiveSeekingAsk, scoreAgainstStatedAsk } from "./mat
 import { detectAndScheduleCheckins } from "./eventCheckinFollowUp.js";
 import sendblue, { cleanCoMessage } from "./sendblue.js";
 import { tryClaimProactiveNudge } from "./proactiveThrottle.js";
+import { recordInRoomSend } from "../harness/proactive.js";
 import { writeMemory } from "./memory.js";
 import { mergeWalkinsIntoGuestPool } from "./eventWalkinCheckin.js";
 import { CO_VOICE, CO_TEXT_CHANNEL } from "./coVoice.js";
@@ -342,6 +343,7 @@ async function maybeSendMatchNudge(
     return false;
   }
 
+  await recordInRoomSend(person.user_id, `in_room:match:${eventId}`, message);
   await markMatchNudgeSent(eventId, person.user_id, candidate.user_id, top.score);
   await writeMemory(
     person.user_id,
@@ -430,6 +432,7 @@ Draft a short, warm, low-pressure text (1-2 sentences, no exclamation points, no
     return false;
   }
 
+  await recordInRoomSend(person.user_id, `in_room:additive:${eventId}:${Date.now()}`, message);
   await writeMemory(
     person.user_id,
     "event_guest_match_nudge",

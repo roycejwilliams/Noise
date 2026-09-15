@@ -707,6 +707,22 @@ export async function sendExempt(opts: {
   return { sent };
 }
 
+// Layer 6 in-room nudges during a live event are sent by eventScoring.ts,
+// outside the daily pick, because they only make sense while the event is
+// happening. They still go in the ledger as counted (non-exempt) sends, so
+// the daily pick's caps and unanswered pause see them and don't stack a
+// second discretionary text on the same day.
+export async function recordInRoomSend(userId: string, targetKey: string, message: string): Promise<void> {
+  await pool
+    .query(
+      `INSERT INTO proactive_sends (user_id, type, target_key, topic_key, message, exempt)
+       VALUES ($1, 'in_room', $2, $2, $3, false)
+       ON CONFLICT (user_id, target_key) DO NOTHING`,
+      [userId, targetKey, message],
+    )
+    .catch((err: any) => console.error("recordInRoomSend failed (non-fatal):", err?.message ?? err));
+}
+
 // ---------- dispatch
 
 async function dropCandidate(registry: ProactiveRegistry, c: Candidate, status: "skipped" | "expired", reason: string): Promise<void> {
