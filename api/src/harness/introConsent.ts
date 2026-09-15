@@ -92,7 +92,14 @@ function sentencesAbout(text: string, name: string): string[] {
 
 export function checkInterestClaim(draft: string, f: ConsentFacts): GateCheck {
   const name = "no_unconsented_interest";
-  if (f.otherOptedIn) return { name, pass: true, reason: `${f.otherFirstName} opted in` };
+  if (f.otherOptedIn) {
+    // An opt-in is a yes to Co's suggestion. It still doesn't mean they
+    // brought the recipient up, asked about them, or reached out.
+    const overstated = sentencesAbout(draft, f.otherFirstName).find((s) => ATTRIBUTION_VERBS.test(s.replace(/\b(said yes|says yes|agreed|opted in)\b/gi, "")));
+    return overstated
+      ? { name, pass: false, reason: `${f.otherFirstName} only said yes to Co's suggestion, but the draft says they did more ("${overstated.trim().slice(0, 120)}")` }
+      : { name, pass: true, reason: `${f.otherFirstName} opted in` };
+  }
   for (const s of sentencesAbout(draft, f.otherFirstName)) {
     const hit = interestIsAboutRecipient(s, f) ?? (AGREEMENT.test(s) || ATTRIBUTION_VERBS.test(s) ? s : null);
     if (hit) {

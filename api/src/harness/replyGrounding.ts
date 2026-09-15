@@ -213,7 +213,7 @@ export function codeChecks(draft: string, rf: ReplyFacts, src: GroundingSources)
   // link turns up or when the other person answers (an intro goes out by
   // email, not a text from Co).
   const promise = draft.match(
-    /\b(i'?ll|i will|i can|let me|will)\s+(keep (an eye out|watching|looking|searching|checking)|flag (it|that|one)|circle back|follow up|get back to you|let you know|text you (when|once|as soon|the moment|if)|track (it|that|one) down|find out|look into|reach out to|send (it|one|the link) (when|once|as soon))\b/i,
+    /\b(i'?ll|i will|i can|let me|will)\s+(keep (an eye out|watching|looking|searching|checking)|flag (it|that|one)|circle back|follow up|get back to you|let you know|text you (when|once|as soon|the moment|if)|track (it|that|one) down|find out|look into|reach out to|send (it|one|the link) (when|once|as soon)|send (it|one|them|that) your way|pass (it|one|that) along|ping you|be in touch)\b/i,
   );
   if (promise) {
     checks.push({ name: "no_followup_promise", pass: false, reason: `promises a follow-up nothing will do: "${promise[0]}"` });

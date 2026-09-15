@@ -25,6 +25,9 @@ const cases: [string, string | null, string][] = [
   ["I can keep an eye out for one.", "no_followup_promise", "keep an eye out"],
   ["Let me know if anything changes.", null, "their follow-up, not Co's"],
   ["Will do.", null, "bare will do"],
+  ["If a good one turns up in Oakland I'll send it your way.", "no_followup_promise", "send it your way"],
+  ["I'll pass it along if I hear anything.", "no_followup_promise", "pass it along"],
+  ["Send it my way whenever.", null, "their send, not Co's"],
 ];
 
 let failed = 0;

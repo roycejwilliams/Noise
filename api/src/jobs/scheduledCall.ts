@@ -36,7 +36,7 @@ export async function placeDueCalls(io: import("socket.io").Server | null): Prom
     if (!claim.rows[0]) continue;
 
     try {
-      const result = await triggerCallForUser(row.user_id, io);
+      const result = await triggerCallForUser(row.user_id, io, { kind: "scheduled_call", scheduledCallId: row.id });
       if (result.success) {
         await pool.query(
           `UPDATE scheduled_calls SET status = 'completed', call_sid = $2 WHERE id = $1`,

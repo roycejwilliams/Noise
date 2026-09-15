@@ -82,7 +82,7 @@ export function registerJobs(io: Server) {
         if (!isReasonableLocalHour(timezone)) continue; // wrong hour for them — no state touched, retried next hourly tick
         placed++;
         try {
-          const result = await triggerCallForUser(user.id, io);
+          const result = await triggerCallForUser(user.id, io, { kind: "auto_intake" });
           if (!result.success) {
             console.error(`Auto-call failed for user ${user.id}:`, result.error);
           }

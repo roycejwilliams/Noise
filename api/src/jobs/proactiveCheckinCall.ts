@@ -39,7 +39,7 @@ export async function placeDueProactiveCalls(io: import("socket.io").Server | nu
 
   for (const row of claimed.rows) {
     try {
-      const result = await triggerCallForUser(row.user_id, io);
+      const result = await triggerCallForUser(row.user_id, io, { kind: "checkin_cadence" });
       if (!result.success) {
         console.error(`proactiveCheckinCall: triggerCallForUser failed for user ${row.user_id}:`, result.error);
       }

@@ -15,7 +15,6 @@ import { generateEmbedding } from "../services/embeddings.js";
 import { detectSeekingMode, detectTurnTone } from "../services/emotionalTone.js";
 import { buildContextSummary } from "../services/callContext.js";
 import { findOrCreateUserByPhone, hasPendingEmail, splitFullName } from "../services/identity.js";
-import { recordDecision } from "../harness/core.js";
 import {
   INTAKE_EXTRACT_MODEL,
   buildIntakeExtractionPrompt,
@@ -1402,7 +1401,7 @@ Return ONLY valid JSON, no preamble: {"date": "YYYY-MM-DD or null", "time": "HH:
         // ground the reply in the real reason instead of leaving the model
         // to guess why nothing happened.
         if (shouldTriggerCall) {
-          const callResult = await triggerCallForUser(user.id, io);
+          const callResult = await triggerCallForUser(user.id, io, { kind: "router_decision" });
           if (callResult.success) {
             const confirmation = "Calling you now.";
             await pool.query(
