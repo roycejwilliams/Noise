@@ -4,23 +4,22 @@ import type { Server } from "socket.io";
 import pool from "../db/db.js";
 import { getTimezoneForCity } from "../services/geocoding.js";
 import { isReasonableLocalHour } from "../services/localHours.js";
-import sendblue, { cleanCoMessage } from "../services/sendblue.js";
-import { writeMemory } from "../services/memory.js";
 import { sweepAllOpenAsks } from "../services/relevance.js";
-import { runAskCheckinAgent } from "../agent/askCheckin.js";
-import { attemptEventSurfacing } from "../services/eventSurfacingSweep.js";
+import { attemptEventSurfacing, PROFILE_ASK_ID } from "../services/eventSurfacingSweep.js";
 import { attemptNetworkSurfacing } from "../services/networkIntroNudge.js";
 import { scoreGuestListForEvent } from "../services/eventScoring.js";
 import { listCalendarEvents, getEventDetails } from "../services/luma.js";
 import { triggerCallForUser } from "../services/callTrigger.js";
-import { sendDueFollowUps } from "./postCallFollowUp.js";
+import { enqueueDuePostCallFollowUps } from "./postCallFollowUp.js";
 import { placeDueCalls, sendDueReminders } from "./scheduledCall.js";
 import { placeDueProactiveCalls } from "./proactiveCheckinCall.js";
 import { buildRecap, findUsersDueForRecap } from "../services/memoryCompaction.js";
-import { sendDueOutcomeFollowUps } from "../services/recommendationOutcome.js";
-import { sendDueEventCheckinFollowUps } from "../services/eventCheckinFollowUp.js";
+import { enqueueDebrief, enqueueDueOutcomeFollowUps } from "../services/recommendationOutcome.js";
+import { enqueueDueEventCheckinFollowUps } from "../services/eventCheckinFollowUp.js";
 import { runEventChangeNotificationAgent } from "../agent/eventChangeNotification.js";
-import { runCompanionCheckinAgent } from "../agent/companionCheckin.js";
+import type { AskCheckinPayload } from "../agent/askCheckin.js";
+import { enqueueCandidate, runProactiveDispatch, sendExempt } from "../harness/proactive.js";
+import { proactiveRegistry } from "../harness/proactiveRegistry.js";
 
 // Bounded-concurrency worker pool (Royce, 2026-08-30) — the event surfacing
 // sweep now runs for every open ask daily (see below), and a plain
@@ -96,12 +95,28 @@ export function registerJobs(io: Server) {
     }
   });
 
-  // Every 10 min — delayed post-call reflection text (2h-2d out, rotating
-  // shape). Scheduled rather than sent instantly at chat_ended — landing the
-  // second the call ends read as a scripted status update, not something a
-  // person who was actually listening would send.
+  // Layer 7 proactive harness (2026-09-14): the ONE place Co texts first.
+  // Every sweep/scheduler below only queues candidates; this picks at most
+  // one per person per local day under the gates in src/harness/proactive.ts
+  // (local hours, 1/day, 3/week, 72h pause after an unanswered text, no
+  // repeats) and sends it.
+  let dispatchRunning = false;
+  cron.schedule("*/15 * * * *", async () => {
+    if (dispatchRunning) return;
+    dispatchRunning = true;
+    try {
+      await runProactiveDispatch(proactiveRegistry);
+    } catch (err: any) {
+      console.error("proactive dispatch cron error:", err?.message ?? err);
+    } finally {
+      dispatchRunning = false;
+    }
+  });
+
+  // Every 10 min — queue the post-call text for recent calls (sent within
+  // local hours by the harness, dropped if it would land >24h after the call).
   cron.schedule("*/10 * * * *", () => {
-    sendDueFollowUps().catch((err) => console.error("postCallFollowUp: poll failed:", err?.message ?? err));
+    enqueueDuePostCallFollowUps().catch((err: any) => console.error("postCallFollowUp: enqueue failed:", err?.message ?? err));
   });
 
   // Every 5 min — place calls booked via the schedule-a-call text flow, and
@@ -143,16 +158,15 @@ export function registerJobs(io: Server) {
 
         const missedCallText = `${row.first_name}, I tried calling but must have missed you. I'll try again soon, or reply here whenever works.`;
         try {
-          await sendblue.messages.send({
-            number: row.phone_number,
-            content: missedCallText,
-            from_number: process.env.SENDBLUE_PHONE_NUMBER!,
+          // Transactional: one per missed call through the proactive ledger
+          // (sendExempt logs text_exchange), outside the daily pick.
+          await sendExempt({
+            userId: row.user_id,
+            phoneNumber: row.phone_number,
+            type: "missed_call",
+            targetKey: `missed_call:${row.id}`,
+            messages: [missedCallText],
           });
-          // Royce, 2026-09-08 sweep — this send had zero logging of any
-          // kind, so recentConversation had no record of it at all.
-          await writeMemory(row.user_id, "text_exchange", `Co replied: ${missedCallText}`).catch((err: any) =>
-            console.error(`Delayed missed-call follow-up text_exchange log failed for ${row.user_id} (non-fatal):`, err?.message ?? err),
-          );
         } catch (smsErr: any) {
           console.error(`Delayed missed-call follow-up failed for ${row.user_id}:`, smsErr?.message ?? smsErr);
         }
@@ -221,68 +235,50 @@ export function registerJobs(io: Server) {
     }
   });
 
-  // Co Loop Stage 5 — was fixed at 11am UTC (3am Pacific — the same class
-  // of bug as the auto-call and event-surfacing crons, Royce 2026-09-02),
-  // now hourly and gated on the recipient's own local hour (localHours.ts)
-  // instead. Cadence is adaptive, not a flat 21 days: an ask with open
-  // relevance_edges (Stage 3 found something) is checked every 14 days
-  // since it's more "live"; an ask with no matches yet is checked every 30
-  // days since there's nothing new to report. Repeats until Stage 6
-  // (assessResolvedItems, profileExtraction.ts) marks it resolved. Message
-  // is generated fresh at send time, same reasoning as the post-call
-  // follow-up cron above — not stored/reused.
+  // Co Loop Stage 5 check-in on an open ask. Layer 7 (2026-09-14): queues an
+  // "ask_checkin" candidate only when there's movement (a new possible match
+  // logged for this ask since the last check-in, at least 3 days on) or 14
+  // days have passed; the harness decides when it goes out. The target key
+  // includes the check-in number, so re-running this hourly never queues a
+  // second copy.
   cron.schedule("0 * * * *", async () => {
     try {
       const due = await pool.query(
-        `SELECT ac.id, ac.ask_text, ac.checkin_count, u.id AS user_id, u.first_name, u.phone_number,
-                COALESCE(re.match_count, 0) > 0 AS has_matches,
-                cp.life_chapters, cp.goals, cp.blockers, cp.long_term_direction, cp.city,
-                cp.topics_covered, cp.topics_asked
+        `SELECT ac.id, ac.ask_id, ac.ask_text, ac.checkin_count, ac.user_id,
+                COALESCE(re.match_count, 0) > 0 AS has_matches
          FROM ask_checkins ac
          JOIN users u ON u.id = ac.user_id
-         LEFT JOIN co_profiles cp ON cp.user_id = ac.user_id
          LEFT JOIN (
-           SELECT person_id, ask_id, COUNT(*) AS match_count
+           SELECT person_id, ask_id, COUNT(*) AS match_count, MAX(created_at) AS newest
            FROM relevance_edges
            WHERE status = 'open'
            GROUP BY person_id, ask_id
          ) re ON re.person_id = ac.user_id AND re.ask_id = ac.ask_id
-         WHERE ac.resolved_at IS NULL
-         AND COALESCE(ac.last_checked_at, ac.created_at) <=
-           NOW() - (CASE WHEN COALESCE(re.match_count, 0) > 0 THEN INTERVAL '14 days' ELSE INTERVAL '30 days' END)`,
+         WHERE ac.resolved_at IS NULL AND u.sms_opted_out = false
+           AND (
+             COALESCE(ac.last_checked_at, ac.created_at) <= NOW() - INTERVAL '14 days'
+             OR (re.newest > COALESCE(ac.last_checked_at, ac.created_at)
+                 AND COALESCE(ac.last_checked_at, ac.created_at) <= NOW() - INTERVAL '3 days')
+           )`,
       );
 
       for (const row of due.rows) {
-        const timezone = row.city ? await getTimezoneForCity(row.city) : null;
-        if (!isReasonableLocalHour(timezone)) continue; // wrong hour for them — last_checked_at untouched, retried next hourly tick
-
-        // Escalation framing, whether to mention match-absence, and whether
-        // to fold in a topic nudge are no longer decided here — the agent
-        // weighs those itself (agent/askCheckin.ts) using the raw
-        // checkin_count/has_matches signals below instead of a hardcoded
-        // threshold, and owns sending + logging the outcome.
-        let sent = false;
-        try {
-          ({ sent } = await runAskCheckinAgent(row));
-        } catch (err: any) {
-          console.error(`Ask check-in failed for ${row.user_id}:`, err?.message ?? err);
-        }
-        // last_checked_at always bumps — same reasoning as every other
-        // *_sent_at guard in this file: a permanently-failing (or
-        // intentionally-skipped) cycle should not retry on every tick, it
-        // should wait for the next cadence window like a successful send
-        // would. checkin_count/awaiting_response_since only advance on an
-        // actual send — a deliberate agent skip isn't a check-in attempt and
-        // shouldn't count toward the escalation threshold the same way a
-        // real (or failed) send does.
-        await pool.query(
-          sent
-            ? `UPDATE ask_checkins
-               SET last_checked_at = NOW(), checkin_count = checkin_count + 1, awaiting_response_since = NOW()
-               WHERE id = $1`
-            : `UPDATE ask_checkins SET last_checked_at = NOW() WHERE id = $1`,
-          [row.id],
-        );
+        const payload: AskCheckinPayload = {
+          askCheckinId: row.id,
+          askId: row.ask_id,
+          askText: row.ask_text,
+          checkinCount: row.checkin_count,
+          hasMatches: row.has_matches,
+        };
+        await enqueueCandidate({
+          userId: row.user_id,
+          type: "ask_checkin",
+          targetKey: `ask_checkin:${row.ask_id}:${row.checkin_count + 1}`,
+          topicKey: `ask:${row.ask_id}`,
+          summary: `Check in on what they told you they want: "${String(row.ask_text).slice(0, 140)}" (${row.checkin_count} earlier check-ins${row.has_matches ? ", some possible leads" : ""})`,
+          payload,
+          expiresAt: new Date(Date.now() + 7 * 24 * 60 * 60 * 1000),
+        }).catch((err: any) => console.error(`Ask check-in enqueue failed for ${row.user_id}:`, err?.message ?? err));
       }
     } catch (error) {
       console.error("Ask check-in cron error:", error);
@@ -299,42 +295,13 @@ export function registerJobs(io: Server) {
   // its own last_surfaced_at column so this cadence is independent of the
   // check-in cadence above.
   //
-  // Runs for EVERY open ask now, not just cadence-cleared ones (Royce,
-  // 2026-08-30) — the urgency pre-check ("something cheap that scans for
-  // something relevant to their wants/ask/intent") needs a daily look at
-  // everyone so a time-sensitive match doesn't wait out someone else's
-  // 3-day clock. cooldown_cleared tells attemptEventSurfacing whether to run
-  // the full tiered engine or just the cheap urgent check — see
-  // eventSurfacingSweep.ts.
-  // Was fixed at 9am UTC = 2am Pacific — confirmed live, Royce 2026-09-02,
-  // this is the exact cron that sent a "thinking about you" text at 2am to
-  // a Walnut Creek user. Now hourly, gated per-user on their own local hour
-  // (localHours.ts). Real cost gap caught before shipping this: this cron
-  // already runs attemptEventSurfacing for EVERY open ask EVERY day
-  // unconditionally (the urgency pre-check below), which calls real
-  // embedding/Luma/LLM APIs on every invocation — naively adding an hour
-  // gate and going hourly would re-run that expensive check on every one of
-  // the ~11 hourly ticks inside a user's reasonable-hours window, not once.
-  // last_attempted_at (new column, separate from last_surfaced_at's 3-day
-  // cadence) gates "have we already run today's check for this ask",
-  // independent of "is it currently a reasonable hour" — so the expensive
-  // path still only actually runs once per local calendar day.
+  // Layer 7 (2026-09-14): searches all three tiers for every open ask once
+  // per local day (last_attempted_at) and QUEUES the front match; the
+  // proactive harness decides whether it goes out. Hour-gated only so the
+  // expensive search runs during the day, not to protect the send.
   cron.schedule("0 * * * *", async () => {
     try {
-      // ORDER BY added (Royce, 2026-09-02: "Co is not prioritizing the
-      // unresolved ask from the start") — a user with more than one open ask
-      // had no defined processing order at all, and the one-nudge-per-day
-      // cap (tryClaimProactiveNudge, claimed inside runEventDiscoverySurfacingAgent)
-      // means whichever ask happens to process first in a given run wins
-      // that day's single message; every ask after it just gets throttled.
-      // A throttled ask doesn't lose its own cadence (see the update below),
-      // so it isn't penalized in isolation — but if Postgres keeps returning
-      // rows in the same order run after run (likely for a plain unindexed
-      // scan), the same ask could keep winning indefinitely, starving the
-      // others regardless of relevance or how long they've been waiting.
-      // last_surfaced_at ASC NULLS FIRST gives the ask that's gone longest
-      // without a successful send first crack each day — real rotation
-      // instead of an accidental permanent winner.
+      // Oldest-surfaced ask first, so one ask can't win every day.
       const due = await pool.query(
         `SELECT ac.id, ac.ask_id, ac.ask_text, ac.last_attempted_at, u.id AS user_id, u.first_name, u.phone_number, cp.city,
                 cp.goals, cp.activity_preferences,
@@ -375,10 +342,8 @@ export function registerJobs(io: Server) {
             : null;
           if (lastAttemptedLocalDay === localToday) continue; // already ran today's check for this ask — don't re-run every hourly tick inside the window
 
-          let sent = false;
-          let throttled = false;
           try {
-            ({ sent, throttled } = await attemptEventSurfacing({
+            await attemptEventSurfacing({
               askId: row.id,
               userId: row.user_id,
               firstName: row.first_name,
@@ -388,37 +353,19 @@ export function registerJobs(io: Server) {
               goals: row.goals ?? null,
               activityPreferences: row.activity_preferences ?? null,
               cooldownCleared: row.cooldown_cleared,
-            }));
+            });
           } catch (err: any) {
             console.error(`Event surfacing sweep failed for ${row.user_id}:`, err?.message ?? err);
           }
-          // last_attempted_at always bumps on a real attempt — it's a "did
-          // we run today's check" marker, separate from the cadence clock.
-          // last_surfaced_at (the 3-day cadence) only bumps under the same
-          // condition as before: a normal cadence-cleared cycle always
-          // advances it regardless of outcome, UNLESS the only reason
-          // nothing sent was the unrelated cross-mechanism daily nudge cap
-          // (Royce, 2026-08-30) — a quiet urgent-check miss must not touch
-          // that clock, or it would silently reset someone's 3-day cadence
-          // early.
-          await pool.query(
-            !throttled && (row.cooldown_cleared || sent)
-              ? `UPDATE ask_checkins SET last_attempted_at = NOW(), last_surfaced_at = NOW() WHERE id = $1`
-              : `UPDATE ask_checkins SET last_attempted_at = NOW() WHERE id = $1`,
-            [row.id],
-          );
+          // "Did we run today's search" marker. last_surfaced_at (the 3-day
+          // cadence) now moves only when a text actually goes out, in the
+          // harness's onSent hook.
+          await pool.query(`UPDATE ask_checkins SET last_attempted_at = NOW() WHERE id = $1`, [row.id]);
 
-          // Network intro shortlist redesign (Royce, 2026-09-07) — same
-          // per-ask rotation as event surfacing above, right alongside it.
-          // Its own backlog (network_backlogs) paces "one candidate at a
-          // time" independently of ask_checkins' cadence columns; the
-          // shared tryClaimProactiveNudge cap (inside attemptNetworkSurfacing)
-          // is what actually prevents this from stacking a second text on
-          // top of whatever attemptEventSurfacing just sent above.
+          // Network intro candidates for the same ask. ac.ask_id, not ac.id:
+          // relevance_edges and network_backlogs are keyed by the intent's
+          // ask id (found 2026-09-14).
           try {
-            // ac.ask_id, not ac.id: relevance_edges and network_backlogs are
-            // keyed by the intent's ask id. Passing the ask_checkins row id
-            // matched nothing, so this never sent (found 2026-09-14).
             await attemptNetworkSurfacing(row.user_id, row.first_name, row.phone_number, row.ask_id);
           } catch (err: any) {
             console.error(`Network surfacing sweep failed for ${row.user_id}:`, err?.message ?? err);
@@ -427,6 +374,66 @@ export function registerJobs(io: Server) {
       });
     } catch (error) {
       console.error("Event surfacing sweep cron error:", error);
+    }
+  });
+
+  // Active search for people with NO open stated ask (Royce, 2026-09-14: "it
+  // should be actively searching for all 3 tiers"). Search text is built
+  // from what they've shared (goals, interests, direction, wants), the
+  // drafts say so instead of claiming they asked, and there's no network
+  // surfacing (that needs a real ask). Same daily/3-day pacing as the ask
+  // sweep, kept per person in profile_surfacing_state.
+  cron.schedule("30 * * * *", async () => {
+    try {
+      const { rows } = await pool.query(
+        `SELECT u.id AS user_id, u.first_name, u.phone_number, cp.city, cp.goals, cp.activity_preferences,
+                cp.long_term_direction, cp.intent, pss.last_attempted_at,
+                (pss.last_surfaced_at IS NULL OR pss.last_surfaced_at <= NOW() - INTERVAL '3 days') AS cooldown_cleared
+         FROM users u
+         JOIN co_profiles cp ON cp.user_id = u.id
+         LEFT JOIN profile_surfacing_state pss ON pss.user_id = u.id
+         WHERE u.sms_opted_out = false AND u.phone_number IS NOT NULL
+           AND NOT EXISTS (SELECT 1 FROM ask_checkins ac WHERE ac.user_id = u.id AND ac.resolved_at IS NULL)
+           AND (array_length(cp.goals, 1) > 0 OR array_length(cp.activity_preferences, 1) > 0
+                OR COALESCE(cp.long_term_direction, '') <> '' OR jsonb_array_length(COALESCE(cp.intent, '[]'::jsonb)) > 0)
+           AND (pss.last_attempted_at IS NULL OR pss.last_attempted_at <= NOW() - INTERVAL '20 hours')
+         LIMIT 50`,
+      );
+      await runWithConcurrency(rows, 3, async (row: any) => {
+        const intents = Array.isArray(row.intent) ? row.intent : [];
+        const latest = intents[intents.length - 1] ?? {};
+        const parts = [
+          row.goals?.length ? `goals: ${row.goals.join("; ")}` : null,
+          row.activity_preferences?.length ? `enjoys: ${row.activity_preferences.join(", ")}` : null,
+          row.long_term_direction ? `direction: ${row.long_term_direction}` : null,
+          latest.wants?.length ? `wants: ${latest.wants.join(", ")}` : null,
+          latest.concrete_preferences?.length ? `specifics: ${latest.concrete_preferences.join(", ")}` : null,
+        ].filter(Boolean);
+        if (!parts.length) return;
+        await pool.query(
+          `INSERT INTO profile_surfacing_state (user_id, last_attempted_at) VALUES ($1, NOW())
+           ON CONFLICT (user_id) DO UPDATE SET last_attempted_at = NOW()`,
+          [row.user_id],
+        );
+        try {
+          await attemptEventSurfacing({
+            askId: PROFILE_ASK_ID,
+            userId: row.user_id,
+            firstName: row.first_name,
+            phoneNumber: row.phone_number,
+            askText: parts.join(". ").slice(0, 600),
+            fromProfile: true,
+            city: row.city ?? null,
+            goals: row.goals ?? null,
+            activityPreferences: row.activity_preferences ?? null,
+            cooldownCleared: row.cooldown_cleared,
+          });
+        } catch (err: any) {
+          console.error(`Profile surfacing sweep failed for ${row.user_id}:`, err?.message ?? err);
+        }
+      });
+    } catch (error) {
+      console.error("Profile surfacing sweep cron error:", error);
     }
   });
 
@@ -470,20 +477,22 @@ export function registerJobs(io: Server) {
   // has actually wrapped, proactively offer a call framed around getting
   // them stronger matches, so the real profile-building conversation
   // happens when they have real attention to give it, not mid-event.
-  // followup_sent_at is the one-time-only guard — never re-fires for the
-  // same checked-in person once set. Bypasses tryClaimProactiveNudge
-  // deliberately: this is a deliberate, event-tied, one-time reach-out (not
-  // a routine background nudge), and getting silently swallowed by an
-  // unrelated same-day proactive text would mean the one touchpoint meant
-  // to recover a thin check-in profile just never lands.
+  // Queued into the morning-after debrief (see below); followup_sent_at is
+  // set by the harness once that text goes out.
   const WALKIN_FOLLOWUP_BUFFER_MINUTES = 45;
   cron.schedule("*/15 * * * *", async () => {
     try {
       const { rows } = await pool.query(
-        `SELECT ewc.id, ewc.event_api_id, u.id AS user_id, u.first_name, u.phone_number
+        `SELECT ewc.id, ewc.event_api_id, ewc.ask_text, u.id AS user_id, cp.city
          FROM event_walkin_checkins ewc
          JOIN users u ON u.id = ewc.person_id
-         WHERE ewc.followup_sent_at IS NULL`,
+         LEFT JOIN co_profiles cp ON cp.user_id = ewc.person_id
+         WHERE ewc.followup_sent_at IS NULL
+           AND NOT EXISTS (
+             SELECT 1 FROM proactive_candidates pc
+             WHERE pc.user_id = ewc.person_id AND pc.target_key = 'debrief:' || ewc.event_api_id
+               AND pc.payload -> 'walkinCheckinIds' ? ewc.id::text
+           )`,
       );
       if (!rows.length) return;
 
@@ -506,35 +515,22 @@ export function registerJobs(io: Server) {
         const endedAt = new Date(details.end_at).getTime();
         if (Date.now() - endedAt < WALKIN_FOLLOWUP_BUFFER_MINUTES * 60 * 1000) continue; // hasn't cleared the buffer yet
 
+        // Layer 7 (2026-09-14): the walk-in call offer is part of the
+        // morning-after debrief for this event, not a second text the same
+        // night. The harness marks followup_sent_at when it goes out.
         for (const row of eventRows) {
           try {
-            const message = cleanCoMessage(
-              "Hope you had a good time tonight. Let's grab some time this week so I can get to know you better and get you stronger matches going forward.",
-            );
-            await sendblue.messages.send({
-              number: row.phone_number,
-              content: message,
-              from_number: process.env.SENDBLUE_PHONE_NUMBER!,
+            const timezone = row.city ? await getTimezoneForCity(row.city).catch(() => null) : null;
+            await enqueueDebrief({
+              userId: row.user_id,
+              eventApiId: eventApiId,
+              eventName: details.name,
+              eventEnd: new Date(details.end_at),
+              timezone,
+              part: { walkinCheckinIds: [row.id], askText: row.ask_text ?? null },
             });
-            await writeMemory(row.user_id, "text_exchange", `Co replied: ${message}`).catch((err: any) =>
-              console.error("Walk-in follow-up: text_exchange log failed (non-fatal):", err?.message ?? err),
-            );
-            // Same call_offer_pending shape the reactive flow in
-            // routes/sendblue.ts already watches for on the next inbound
-            // reply — this is what lets their next message be picked up as
-            // a proposed time and turned into a real scheduled call,
-            // without building any new scheduling logic here.
-            await pool
-              .query(`INSERT INTO co_memories (user_id, memory_type, content) VALUES ($1, 'call_offer_pending', $2)`, [
-                row.user_id,
-                `Co proactively offered: "${message}" (post-event follow-up after checking in at "${details.name}")`,
-              ])
-              .catch((err: any) =>
-                console.error("Walk-in follow-up: call_offer_pending write failed (non-fatal):", err?.message ?? err),
-              );
-            await pool.query(`UPDATE event_walkin_checkins SET followup_sent_at = NOW() WHERE id = $1`, [row.id]);
           } catch (err: any) {
-            console.error(`Walk-in follow-up failed for ${row.user_id}:`, err?.message ?? err);
+            console.error(`Walk-in follow-up enqueue failed for ${row.user_id}:`, err?.message ?? err);
           }
         }
       }
@@ -569,14 +565,14 @@ export function registerJobs(io: Server) {
   // polling crons (scheduledCall, proactiveCheckinCall) — this just polls
   // for due rows and claims atomically, cheap even run often.
   cron.schedule("*/15 * * * *", () => {
-    sendDueOutcomeFollowUps().catch((err) => console.error("recommendationOutcome: poll failed:", err?.message ?? err));
+    enqueueDueOutcomeFollowUps().catch((err: any) => console.error("recommendationOutcome: enqueue failed:", err?.message ?? err));
   });
 
   // End-of-night check-in (Notion V1 board row 8) — same lightweight polling
   // cadence as the outcome-followup cron right above; sibling mechanism, gated
   // on a real Luma check-in instead of a mere recommendation.
   cron.schedule("*/15 * * * *", () => {
-    sendDueEventCheckinFollowUps().catch((err) => console.error("eventCheckinFollowUp: poll failed:", err?.message ?? err));
+    enqueueDueEventCheckinFollowUps().catch((err: any) => console.error("eventCheckinFollowUp: enqueue failed:", err?.message ?? err));
   });
 
   // Companion check-in (Royce, 2026-09-03: "how can we make it a companion
@@ -593,7 +589,10 @@ export function registerJobs(io: Server) {
   cron.schedule("0 * * * *", async () => {
     try {
       const due = await pool.query(
-        `SELECT u.id AS user_id, u.first_name, u.phone_number, cp.city,
+        `SELECT u.id AS user_id,
+                (SELECT id FROM co_memories cm
+                 WHERE cm.user_id = u.id AND cm.memory_type = 'recap'
+                 ORDER BY cm.created_at DESC LIMIT 1) AS recap_id,
                 (SELECT content FROM co_memories cm
                  WHERE cm.user_id = u.id AND cm.memory_type = 'recap'
                  ORDER BY cm.created_at DESC LIMIT 1) AS recap
@@ -603,25 +602,23 @@ export function registerJobs(io: Server) {
            AND u.sms_opted_out = false
            AND cp.life_chapters IS NOT NULL AND array_length(cp.life_chapters, 1) IS NOT NULL
            AND cp.last_recap_at IS NOT NULL
-           AND (cp.last_companion_checkin_at IS NULL OR cp.last_companion_checkin_at <= NOW() - INTERVAL '7 days')
-         LIMIT 25`,
+           AND (cp.last_companion_checkin_at IS NULL OR cp.last_companion_checkin_at <= NOW() - INTERVAL '14 days')
+         LIMIT 50`,
       );
 
+      // Layer 7 (2026-09-14): queued, not sent. Lowest priority in the
+      // harness, so it only goes out on a day nothing more timely is waiting.
       for (const row of due.rows) {
-        if (!row.recap) continue; // last_recap_at set but no recap row somehow — nothing to seed the check-in with
-
-        const timezone = row.city ? await getTimezoneForCity(row.city) : null;
-        if (!isReasonableLocalHour(timezone)) continue; // wrong hour for them — untouched, retried next hourly tick
-
-        try {
-          await runCompanionCheckinAgent(
-            { userId: row.user_id, firstName: row.first_name, phoneNumber: row.phone_number },
-            row.recap,
-          );
-        } catch (err: any) {
-          console.error(`Companion check-in failed for ${row.user_id}:`, err?.message ?? err);
-        }
-        await pool.query(`UPDATE co_profiles SET last_companion_checkin_at = NOW() WHERE user_id = $1`, [row.user_id]);
+        if (!row.recap) continue;
+        await enqueueCandidate({
+          userId: row.user_id,
+          type: "companion",
+          targetKey: `companion:${row.recap_id}`,
+          topicKey: "companion",
+          summary: "No-reason check-in about one specific open thread from their recent recap (skip if there isn't one)",
+          payload: { recap: row.recap },
+          expiresAt: new Date(Date.now() + 3 * 24 * 60 * 60 * 1000),
+        }).catch((err: any) => console.error(`Companion check-in enqueue failed for ${row.user_id}:`, err?.message ?? err));
       }
     } catch (error) {
       console.error("Companion check-in cron error:", error);
