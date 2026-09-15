@@ -49,6 +49,9 @@ export type ConversationReplyInput = {
   callFeatureQuestionContext: string;
   callFailureContext: string;
   repeatContext: string;
+  // Set when the router couldn't safely tell what a short reply was
+  // answering (or whether they want a call): the reply asks instead of acting.
+  clarifyContext: string;
   scheduleCallContext: string;
   toneContext: string;
   seekingModeContext: string;
@@ -215,7 +218,7 @@ What you already know about ${input.firstName} from before. Use it to understand
 ${input.contextSummary || "(nothing on file yet — this is effectively a first real conversation with them)"}
 
 ${input.momentContext}
-${input.recommendationContext}${input.eventOfferContext}${input.recentEventDetailsContext}${input.eventCheckinAskContext}${input.outcomeFollowupContext}${input.eventCheckinContext}${input.matchNudgeContext}${input.updatesContext}${input.venueContext}${input.callFeatureQuestionContext}${input.callFailureContext}${input.repeatContext}${input.scheduleCallContext}
+${input.recommendationContext}${input.eventOfferContext}${input.recentEventDetailsContext}${input.eventCheckinAskContext}${input.outcomeFollowupContext}${input.eventCheckinContext}${input.matchNudgeContext}${input.updatesContext}${input.venueContext}${input.callFeatureQuestionContext}${input.callFailureContext}${input.repeatContext}${input.clarifyContext}${input.scheduleCallContext}
 ${input.toneContext}
 ${input.seekingModeContext}
 ${input.styleHint}

@@ -1,0 +1,110 @@
+[
+  {
+    "id": "s01-venue-climbing",
+    "source": "synthetic",
+    "message": "any good climbing gyms near me",
+    "recentConversation": "Co replied: how was the rest of your week?\nUser said: pretty good, trying to get out of the apartment more\nCo replied: love that. anything in particular you've been wanting to get into?\nUser said: any good climbing gyms near me",
+    "openItems": [],
+    "current": null,
+    "label": { "ans": ["none"], "call": ["nothing"], "rec": null, "upd": false, "venue": true, "nope": ["place_call"] }
+  },
+  {
+    "id": "s02-walkin-answer",
+    "source": "synthetic",
+    "message": "honestly looking for a technical cofounder, ideally someone who's done infra before",
+    "recentConversation": "User said: checked in at SF Founders Night\nCo replied: you're in. what are you hoping to find here tonight, who'd be good to meet?\nUser said: honestly looking for a technical cofounder, ideally someone who's done infra before",
+    "openItems": [{ "kind": "walkin_ask", "detail": null }],
+    "current": null,
+    "label": { "ans": ["walkin_ask:answered"], "call": ["nothing"], "rec": false, "upd": false, "venue": false, "nope": ["place_call"] }
+  },
+  {
+    "id": "s03-network-tease-yes",
+    "source": "synthetic",
+    "message": "oh yeah who?",
+    "recentConversation": "Co replied: someone in my network crossed my mind for you, they're working on something close to what you described. want to hear who?\nUser said: oh yeah who?",
+    "openItems": [{ "kind": "network_tease", "detail": null }],
+    "current": null,
+    "label": { "ans": ["network_tease:yes"], "call": ["nothing"], "rec": false, "upd": false, "venue": false, "nope": ["place_call", "network_tease:no"] }
+  },
+  {
+    "id": "s04-network-intro-no",
+    "source": "synthetic",
+    "message": "eh I think I'll pass on that one for now",
+    "recentConversation": "Co replied: it's Maya, she runs growth at a climate fintech and just left to start her own thing. want me to introduce you two?\nUser said: eh I think I'll pass on that one for now",
+    "openItems": [{ "kind": "network_intro", "detail": "Maya" }],
+    "current": null,
+    "label": { "ans": ["network_intro:no"], "call": ["nothing"], "rec": false, "upd": false, "venue": false, "nope": ["place_call", "network_intro:yes"] }
+  },
+  {
+    "id": "s05-method-email",
+    "source": "synthetic",
+    "message": "email is better for me",
+    "recentConversation": "Co replied: Priya said yes too. would you rather I connect you two over a group text or by email?\nUser said: email is better for me",
+    "openItems": [{ "kind": "method_choice", "detail": "Priya" }],
+    "current": null,
+    "label": { "ans": ["method_choice:email"], "call": ["nothing"], "rec": false, "upd": false, "venue": false, "nope": ["place_call", "method_choice:text"] }
+  },
+  {
+    "id": "s06-bare-yes-fresh-nudge-old-offer",
+    "source": "synthetic",
+    "message": "yes",
+    "recentConversation": "User said: work has been a lot, my cofounder and I keep butting heads\nCo replied: that sounds heavy. if you ever want to talk it through by voice I'm around.\nUser said: maybe later, gotta run to this event\nCo replied: have fun tonight\nCo replied: quick one, Royce is at the same event and he's also building in climate. want me to connect you two?\nUser said: yes",
+    "openItems": [
+      { "kind": "match_nudge", "detail": "Royce" },
+      { "kind": "call_offer", "detail": "User described: work has been a lot, my cofounder and I keep butting heads | Co offered: that sounds heavy. if you ever want to talk it through by voice I'm around." }
+    ],
+    "current": null,
+    "label": { "ans": ["match_nudge:yes", "ambiguous"], "call": ["nothing"], "rec": false, "upd": false, "venue": false, "nope": ["place_call", "call_offer:accept"] }
+  },
+  {
+    "id": "s07-call-me-with-tease-open",
+    "source": "synthetic",
+    "message": "can you call me",
+    "recentConversation": "Co replied: something crossed my mind for you this week, want to hear about it?\nUser said: honestly today has been rough, I just got off a really bad investor meeting\nCo replied: oof, that's a hard one to shake. what happened?\nUser said: can you call me",
+    "openItems": [{ "kind": "event_tease", "detail": null }],
+    "current": null,
+    "label": { "ans": ["none"], "call": ["place_call"], "rec": false, "upd": false, "venue": false, "nope": ["event_tease:yes", "event_tease:no"] }
+  },
+  {
+    "id": "s08-outcome-with-call-offer-open",
+    "source": "synthetic",
+    "message": "it was great actually, met a founder named Leo who's doing robotics and we're getting coffee next week",
+    "recentConversation": "Co replied: if you want to talk through the fundraising stuff by voice sometime, I'm here.\nUser said: maybe\nCo replied: how did the AI Tech & Startup Night go? meet anyone good?\nUser said: it was great actually, met a founder named Leo who's doing robotics and we're getting coffee next week",
+    "openItems": [
+      { "kind": "outcome_followup", "detail": "AI Tech & Startup Night" },
+      { "kind": "call_offer", "detail": "User described: stressed about fundraising | Co offered: if you want to talk through the fundraising stuff by voice sometime, I'm here." }
+    ],
+    "current": null,
+    "label": { "ans": ["outcome_followup:named_positive"], "call": ["nothing"], "rec": false, "upd": false, "venue": false, "nope": ["place_call", "call_offer:accept"] }
+  },
+  {
+    "id": "s09-thanks-with-call-offer",
+    "source": "synthetic",
+    "message": "thanks, appreciate it",
+    "recentConversation": "User said: I'm kind of spiraling about whether to quit my job\nCo replied: that's a big one. happy to talk it through by voice if that'd be easier than texting.\nUser said: thanks, appreciate it",
+    "openItems": [{ "kind": "call_offer", "detail": "User described: spiraling about whether to quit my job | Co offered: that's a big one. happy to talk it through by voice if that'd be easier than texting." }],
+    "current": null,
+    "label": { "ans": ["none", "ambiguous"], "call": ["nothing"], "rec": false, "upd": false, "venue": false, "nope": ["place_call", "call_offer:accept"] }
+  },
+  {
+    "id": "s10-checkin-critical",
+    "source": "synthetic",
+    "message": "kind of a bust, mostly recruiters",
+    "recentConversation": "Co replied: how was Climate Builders tonight? meet anyone worth following up with?\nUser said: kind of a bust, mostly recruiters",
+    "openItems": [{ "kind": "event_checkin", "detail": "Climate Builders" }],
+    "current": null,
+    "label": { "ans": ["event_checkin:named_critical"], "call": ["nothing"], "rec": false, "upd": false, "venue": false, "nope": ["place_call"] }
+  },
+  {
+    "id": "s11-yes-tease-and-nudge-unclear",
+    "source": "synthetic",
+    "message": "sure",
+    "recentConversation": "Co replied: something crossed my mind for you, want to hear about it?\nCo replied: also, Dana is at the same event as you and works on developer tools. want me to connect you?\nUser said: sure",
+    "openItems": [
+      { "kind": "match_nudge", "detail": "Dana" },
+      { "kind": "event_tease", "detail": null }
+    ],
+    "current": null,
+    "label": { "ans": ["ambiguous", "event_tease:yes"], "call": ["nothing"], "rec": false, "upd": false, "venue": false, "nope": ["place_call", "match_nudge:yes"] }
+  }
+]

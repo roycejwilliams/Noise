@@ -25,35 +25,12 @@ import {
   storeProfile,
 } from "../services/profileExtraction.js";
 import { generateRecommendation } from "../services/recommendation.js";
-import { EVENT_OFFER_EXPIRY_DAYS } from "../services/eventSurfacingSweep.js";
 import { detectCheckinPhrase, recordCheckin, hasActiveAsk, recordWalkinAsk } from "../services/eventWalkinCheckin.js";
-import {
-  scheduleOutcomeFollowUp,
-  findPendingOutcomeFollowUp,
-  classifyNamedOutcome,
-  recordOutcome,
-} from "../services/recommendationOutcome.js";
-import {
-  findPendingEventCheckinFollowUp,
-  recordEventCheckinOutcome,
-} from "../services/eventCheckinFollowUp.js";
-import {
-  findPendingMatchNudge,
-  classifyMatchNudgeReply,
-  handleMatchNudgeReply,
-  handleGroupMessage,
-  findPendingMethodChoice,
-  classifyMethodChoice,
-  handleMethodChoiceReply,
-} from "../services/eventGuestMatchHandoff.js";
-import {
-  findPendingNetworkTease,
-  classifyNetworkTeaseReply,
-  resolveNetworkTeaseReply,
-  findPendingNetworkIntroOffer,
-  classifyNetworkIntroReply,
-  resolveNetworkIntroReply,
-} from "../services/networkIntroNudge.js";
+import { scheduleOutcomeFollowUp, recordOutcome } from "../services/recommendationOutcome.js";
+import { recordEventCheckinOutcome } from "../services/eventCheckinFollowUp.js";
+import { handleMatchNudgeReply, handleGroupMessage, handleMethodChoiceReply } from "../services/eventGuestMatchHandoff.js";
+import { resolveNetworkTeaseReply, resolveNetworkIntroReply } from "../services/networkIntroNudge.js";
+import { NO_ROUTE, decideActions, gatherOpenItems, routeMessage, type RouterOutput } from "../services/messageRouter.js";
 import { findRealVenues } from "../services/venueLookup.js";
 import { runConversationReplyAgent, filterRelevantMemories, CALL_OFFER_EXPIRY_DAYS } from "../agent/conversationReply.js";
 import { triggerCallForUser } from "../services/callTrigger.js";
@@ -802,62 +779,14 @@ Return ONLY strict JSON: {"full_name": string or null, "email": string or null, 
         const pendingOffer = pendingOfferResult.rows[0] ?? null;
         const hasPendingOffer = !!pendingOffer;
 
-        // Confirmed live, 2026-09-07: a bare "yes" meant as the answer to a
-        // fresh, specific ask (e.g. "would you like to be introduced to
-        // Royce?") got classified as accepting an unrelated call offer from
-        // days earlier instead, placing a real, unwanted call. A short
-        // affirmation is ambiguous whenever more than one open question is
-        // pending — this treats the MOST RECENTLY asked one as the one a
-        // bare reply is actually answering, so an old call offer never
-        // outranks a same-minute match-nudge/method-choice ask. The offer
-        // itself stays pending either way — an unambiguous later reply
-        // ("yes let's talk about the cofounder thing") can still resolve it.
-        let offerIsFreshestPending = hasPendingOffer;
-        if (hasPendingOffer) {
-          const rivalPendingResult = await pool.query(
-            `SELECT GREATEST(
-               (SELECT MAX(sent_at) FROM event_guest_match_nudges WHERE person_id = $1),
-               (SELECT MAX(asked_at) FROM event_intro_method_pending WHERE person_id = $1)
-             ) AS freshest`,
-            [user.id],
-          );
-          const freshestRivalPendingAt = rivalPendingResult.rows[0]?.freshest ?? null;
-          if (freshestRivalPendingAt && new Date(freshestRivalPendingAt) > new Date(pendingOffer.created_at)) {
-            offerIsFreshestPending = false;
-          }
-        }
-
-        // Ask-first event/opportunity surfacing (Royce, 2026-08-30) — same
-        // pending/resolved shape as the call offer above, separate memory
-        // types since these are unrelated gestures. Set by
-        // eventSurfacingSweep.ts right after it texts a tease with no
-        // details; the JSON content carries the actual match so the reply
-        // below can share real details without re-running the tiered engine.
-        // created_at cutoff (Royce, 2026-08-30) — matches
-        // eventSurfacingSweep.ts's EVENT_OFFER_EXPIRY_DAYS: a tease that's
-        // sat unanswered that long is abandoned, not still awaiting a reply.
-        // Without this, a "yes" weeks later would resolve a tease the
-        // person almost certainly wasn't responding to.
-        const pendingEventOfferResult = await pool.query(
-          `SELECT p.id, p.content FROM co_memories p
-           WHERE p.user_id = $1 AND p.memory_type = 'event_offer_pending'
-           AND p.created_at > NOW() - ($2 || ' days')::interval
-           AND NOT EXISTS (
-             SELECT 1 FROM co_memories r
-             WHERE r.user_id = $1 AND r.memory_type = 'event_offer_resolved' AND r.created_at > p.created_at
-           )
-           ORDER BY p.created_at DESC LIMIT 1`,
-          [user.id, EVENT_OFFER_EXPIRY_DAYS],
-        );
-        const pendingEventOffer = pendingEventOfferResult.rows[0] ?? null;
-
         // Grounds any follow-up question about a recently revealed event in
         // the REAL structured data, not the model's own memory of the
         // conversation (Royce, 2026-09-09, confirmed live: asked for the
         // details on a real Co event, got a fabricated start time 2.5 hours
         // off the real one, an invented neighborhood, and a made-up
         // headcount — none of which exist anywhere in Luma's real data).
-        // Separate from pendingEventOfferResult above, which only covers the
+        // Separate from the event_tease open item (see gatherOpenItems in
+        // services/messageRouter.ts), which only covers the
         // unanswered "want to hear more?" window — this looks up the most
         // recent reveal regardless of resolved status, since fabrication risk
         // continues for as long as someone might still ask "what time does
@@ -915,19 +844,10 @@ Return ONLY strict JSON: {"full_name": string or null, "email": string or null, 
           if (!alreadyHasAsk) {
             eventCheckinAskContext = `\n\nThey just checked in at "${walkinCheckinEventName}" and don't have a stated ask on file yet. Ask them directly, once, in their own words: "what are you hoping to find here / who'd be good to meet?" Keep it to that one question this turn, don't pad it with anything else.`;
           }
-        } else if (pendingWalkinCheckin) {
-          // Not a fresh check-in this turn, and the row is still missing
-          // ask_text — this turn's message is their answer to the question
-          // Co asked on a previous turn. Capture it directly rather than
-          // checking hasActiveAsk here: profile extraction only runs AFTER a
-          // reply is sent, so at this point in the turn hasActiveAsk would
-          // still reflect state from BEFORE this exact message is processed
-          // and would read false again, making Co ask the same question a
-          // second time instead of recognizing they just answered it.
-          await recordWalkinAsk(pendingWalkinCheckin.event_api_id, user.id, content).catch((err: any) =>
-            console.error("sendblue: recordWalkinAsk failed (non-fatal):", err?.message ?? err),
-          );
         }
+        // Not a fresh check-in this turn and the row is still missing
+        // ask_text: the walkin_ask open item below lets the router decide
+        // whether this message actually answers it (recorded after routing).
 
         // Feeds the thin-profile first-message call offer below. Count-based
         // rather than existence-based on purpose — unlike co-test's version
@@ -958,56 +878,93 @@ Return ONLY strict JSON: {"full_name": string or null, "email": string or null, 
         // own text is stored (see the call_offer_pending write near the end
         // of this handler — it captures what the USER described, not just
         // Co's own offer text, since Co's gesture is often deliberately
-        // generic and makes a weak fingerprint on its own), and the
-        // classifier is given that list directly so the SAME call decides
-        // both "would voice help" and "haven't we already asked about this"
-        // in one pass.
+        // generic and makes a weak fingerprint on its own), and the router
+        // is given that list directly so the SAME call decides both "would
+        // voice help" and "haven't we already asked about this" in one pass.
         const declinedTopicsResult = await pool.query(
           `SELECT content FROM co_memories WHERE user_id = $1 AND memory_type = 'call_offer_declined_topic' ORDER BY created_at DESC LIMIT 20`,
           [user.id],
         );
-        const declinedTopicsContext = declinedTopicsResult.rows.length
-          ? `\n\nCo has previously offered a call about the following, and the user said no each time:\n${declinedTopicsResult.rows.map((r: any) => `- ${r.content}`).join("\n")}\n"Essentially the same situation" means the same underlying topic or feeling, even if worded completely differently the second time — e.g. "building solo without a cofounder, don't know other founders locally" and "still feeling isolated without other founders around" are the SAME situation (solo-founder isolation), not two different ones, even though neither sentence repeats the other's words. Read for the real thing underneath the phrasing, not a text match. If what they're describing now is essentially the same situation as any of these, classify as "none" instead of "would_benefit" — don't re-offer about something already declined. A genuinely different, new situation (a different topic entirely) is free to classify as "would_benefit" regardless of these.`
-          : "";
 
-        const { text: rawCallClassification } = await propagateAttributes(
-          { userId: user.id, traceName: "sendblue.callOffer.classify" },
-          () =>
-            generateText({
-              model: anthropic("claude-haiku-4-5-20251001"),
-              experimental_telemetry: { isEnabled: true, functionId: "sendblue.callOffer.classify" },
-              prompt: `A user is texting Co.${offerIsFreshestPending ? ` Co already offered them a call about this: "${pendingOffer.content}", and is waiting to hear back on it. This does NOT mean every message from them now is a response to that offer — if they're just continuing to talk, that's normal conversation, not an answer to the offer, unless it's actually about being called or talking by phone. A genuinely different topic or problem is always free to get its own fresh read below, regardless of this still-open offer.` : ""}
-
-Recent conversation, in order (their latest message may only make sense combined with what came before — e.g. a time given in one message and a date/timezone confirmed in a later one is still a single schedule request, not two separate things):
-${recentConversation || "(start of the conversation)"}
-
-Their latest message: "${resolvedContent}"
-
-Classify their LATEST message, read in light of the recent conversation above, as ONE of:
-- "explicit_request" — they are directly asking Co to call them RIGHT NOW, or asking to talk by phone with no specific future time attached. This is a command, not a question — "call me", "let's talk on the phone". It is NOT this if they are asking whether or how calling works rather than asking for one — see "asks_about_calling" below. It is also NOT this if their message only mentions "call" while questioning, declining, or complaining about one that already happened or was offered (e.g. "why did you call me", "stop calling me") — those are "none". When in doubt whether something is a request or a question about the feature, treat it as the question.
-- "asks_about_calling" — they are asking whether, or how, calling works — as a question about the feature, not a command to place one. Examples: "can I just call you?", "is it true I can call you now?", "do you call people?". Never triggered by their phrasing containing the word "call" alone — it's specifically a question rather than an instruction.
-- "schedule_request" — they want a call at a specific future date/time, whether that time was fully stated just now ("call me tomorrow at 3") or is only complete once combined with what they said earlier in this conversation (e.g. they gave a time a few messages ago and are now confirming the date or timezone Co asked for) — not right now
-- "cancel_scheduled_call" — they want to cancel a call they'd previously scheduled, with no new time given
-${offerIsFreshestPending ? '- "accepts_offer" — they are clearly and affirmatively saying yes to the call Co just offered (e.g. "yes", "sure", "call me now", "go ahead"). A bare acknowledgment with no clear yes/no of its own — "thanks", "ok", "got it", "sounds good" — is NOT this; classify it as "none" unless it unambiguously affirms the offer.\n- "declines_offer" — they are saying no to the call Co just offered\n' : ""}- "would_benefit" — none of the above, but what they're describing is complex, emotional, or hard to unpack over short texts, and voice would genuinely help
-- "none" — normal conversation, no call is relevant${declinedTopicsContext}
-
-Return ONLY the classification, nothing else.`,
+        // Layer 2 router (Royce, 2026-09-14). Replaces the separate call-offer,
+        // event-tease, outcome, check-in, match-nudge, network, method-choice,
+        // updates, recommendation and venue classifiers, which each decided on
+        // their own whether this message was "theirs" — one "yes" could accept
+        // a stale call offer AND opt into an intro. Now one call sees every
+        // open item, and decideActions (plain code) decides what runs: at most
+        // one item resolved, and irreversible actions (placing a call, opting
+        // into an intro, a connection method) only on a clear, high-confidence
+        // read of something Co actually just asked. Otherwise nothing resolves
+        // and clarifyContext has the reply ask which they meant. Any change to
+        // the router must pass evals/router/run.ts first.
+        const openItems = await gatherOpenItems(user.id, { skipWalkinAsk: !!walkinCheckinEventName }).catch((err: any) => {
+          console.error("sendblue: gatherOpenItems failed (non-fatal, routing with no open items):", err?.message ?? err);
+          return [];
+        });
+        let routerOutput: RouterOutput = NO_ROUTE;
+        try {
+          const routed = await propagateAttributes({ userId: user.id, traceName: "sendblue.router.route" }, () =>
+            routeMessage({
+              message: resolvedContent,
+              recentConversation,
+              openItems,
+              declinedCallTopics: declinedTopicsResult.rows.map((r: any) => r.content),
             }),
-        );
-        const callAction = rawCallClassification.trim().toLowerCase().replace(/^[`"']+|[`"']+$/g, "");
+          );
+          routerOutput = routed.output;
+        } catch (err: any) {
+          // Fail safe: act on nothing rather than guess.
+          console.error("sendblue: message router failed (non-fatal, taking no actions this turn):", err?.message ?? err);
+        }
+        const decision = decideActions(routerOutput, openItems, { message: resolvedContent, recentConversation });
+        // Items other than a call offer only ever resolved on real text, same
+        // as the classifiers this replaces.
+        const resolvedItem = decision.resolve && (hasText || decision.resolve.item.kind === "call_offer") ? decision.resolve : null;
+        const resolvedAs = <K extends string>(kind: K) => (resolvedItem?.item.kind === kind ? resolvedItem : null);
+        const clarifyContext = decision.clarifyContext;
 
-        if (offerIsFreshestPending && (callAction === "accepts_offer" || callAction === "declines_offer")) {
+        // Same strings downstream code (and the reply agent) already key on.
+        const callAction =
+          resolvedAs("call_offer")?.value === "accept"
+            ? "accepts_offer"
+            : resolvedAs("call_offer")?.value === "decline"
+              ? "declines_offer"
+              : decision.placeCall
+                ? "explicit_request"
+                : decision.scheduleCall
+                  ? "schedule_request"
+                  : decision.cancelCall
+                    ? "cancel_scheduled_call"
+                    : decision.answerCallingQuestion
+                      ? "asks_about_calling"
+                      : decision.callWouldBenefit
+                        ? "would_benefit"
+                        : "none";
+
+        const resolvedCallOffer = resolvedAs("call_offer");
+        if (resolvedCallOffer?.item.ref?.kind === "call_offer") {
           await pool.query(
             `INSERT INTO co_memories (user_id, memory_type, content) VALUES ($1, 'call_offer_resolved', $2)`,
             [user.id, callAction],
           ).catch((err: any) => console.error("sendblue: call_offer_resolved memory write failed (non-fatal):", err?.message ?? err));
 
-          if (callAction === "declines_offer" && pendingOffer.content) {
+          if (callAction === "declines_offer" && resolvedCallOffer.item.ref.content) {
             await pool.query(
               `INSERT INTO co_memories (user_id, memory_type, content) VALUES ($1, 'call_offer_declined_topic', $2)`,
-              [user.id, pendingOffer.content],
+              [user.id, resolvedCallOffer.item.ref.content],
             ).catch((err: any) => console.error("sendblue: call_offer_declined_topic memory write failed (non-fatal):", err?.message ?? err));
           }
+        }
+
+        // Walk-in check-in answer. Captured directly rather than checking
+        // hasActiveAsk: profile extraction only runs AFTER a reply is sent,
+        // so hasActiveAsk would still read false for this exact message and
+        // Co would ask the same question a second time.
+        const walkinAnswer = resolvedAs("walkin_ask");
+        if (walkinAnswer?.item.ref?.kind === "walkin_ask") {
+          await recordWalkinAsk(walkinAnswer.item.ref.eventApiId, user.id, content).catch((err: any) =>
+            console.error("sendblue: recordWalkinAsk failed (non-fatal):", err?.message ?? err),
+          );
         }
 
         // Resolve the ask-first event/opportunity tease, if one's pending.
@@ -1016,86 +973,72 @@ Return ONLY the classification, nothing else.`,
         // Folded into the SAME reply below via eventOfferContext, never a
         // second message — same reasoning as recommendationContext.
         let eventOfferContext = "";
-        if (pendingEventOffer && hasText) {
+        const resolvedEventTease = resolvedAs("event_tease");
+        if (resolvedEventTease?.item.ref?.kind === "event_tease") {
+          const pendingEventOffer = resolvedEventTease.item.ref;
           try {
-            const { text: rawEventReply } = await generateText({
-              model: anthropic("claude-haiku-4-5-20251001"),
-              experimental_telemetry: { isEnabled: true, functionId: "sendblue.eventOffer.classify" },
-              prompt: `Co recently texted this person hinting that something (an event or opportunity) crossed its mind for them, without naming it, and asked if they'd like to hear more. This does NOT mean every message from them now is a response to that — if they're just continuing to talk about something else, that's normal conversation, not an answer, unless it's actually a yes/no to hearing more.
+            const eventReplyAction = resolvedEventTease.value === "yes" ? "interested" : "not_interested";
 
-Their latest message: "${resolvedContent}"
+            await pool.query(
+              `INSERT INTO co_memories (user_id, memory_type, content) VALUES ($1, 'event_offer_resolved', $2)`,
+              [user.id, eventReplyAction],
+            ).catch((err: any) => console.error("sendblue: event_offer_resolved memory write failed (non-fatal):", err?.message ?? err));
 
-Classify as ONE of:
-- "interested" — they're saying yes, they want to hear more (e.g. "sure", "yeah tell me", "what is it", "go on")
-- "not_interested" — they're saying no or passing
-- "unrelated" — anything else, normal conversation not answering this
-
-Return ONLY the classification, nothing else.`,
-            });
-            const eventReplyAction = rawEventReply.trim().toLowerCase().replace(/^[`"']+|[`"']+$/g, "");
-
-            if (eventReplyAction === "interested" || eventReplyAction === "not_interested") {
-              await pool.query(
-                `INSERT INTO co_memories (user_id, memory_type, content) VALUES ($1, 'event_offer_resolved', $2)`,
-                [user.id, eventReplyAction],
-              ).catch((err: any) => console.error("sendblue: event_offer_resolved memory write failed (non-fatal):", err?.message ?? err));
-
-              const parsed = JSON.parse(pendingEventOffer.content) as { askText: string; match: any };
-              const match = parsed.match;
-              // Staleness check (Royce, 2026-08-30) — Tier 1/2 carry the
-              // event's own date; if they said yes days after the tease and
-              // the event's already passed, revealing it as if it's still
-              // live would be misleading. Tier 3 opportunities have an
-              // optional `deadline` (set only when the source post stated
-              // one explicitly — see tieredRecommendation.ts's TierMatch)
-              // checked the same way; a Tier 3 match with no stated deadline
-              // (rolling admissions, or the post just didn't say) has
-              // nothing to check here. Bug fix, 2026-08-30 (code review):
-              // this used to only ever check event_date, so an expired Tier
-              // 3 opportunity that had been sitting pending for days could
-              // still get revealed as if the application window were open —
-              // exactly what `deadline` was added to prevent, just not
-              // wired into this reply-resolution path yet.
-              // Date-only comparison, not a timestamp one (bug fix,
-              // 2026-08-30) — event_date/deadline are bare YYYY-MM-DD with
-              // no time component, so `new Date(x) < new Date()` treats ANY
-              // time past midnight UTC on that day as already stale,
-              // wrongly flagging a same-day evening event as "already
-              // passed" hours before it happens. Comparing calendar dates
-              // instead means today's date is never stale.
-              const todayStr = new Date().toISOString().slice(0, 10);
-              const relevantDate: string | undefined = match.event_date ?? match.deadline;
-              const isStale = relevantDate && relevantDate < todayStr;
-              if (eventReplyAction === "interested" && isStale) {
-                const passedPhrase = match.event_date ? `it was on ${relevantDate}` : `the application window closed on ${relevantDate}`;
-                eventOfferContext = `\nThey just said yes to hearing more about the thing you teased earlier, but it's already passed (${passedPhrase}) — let them know honestly that it's already happened so there's nothing to share, no pressure or apology needed, and mention you'll keep an eye out for the next one that fits. Never reveal the name "${match.name}" since there's nothing to act on now.`;
-              } else if (eventReplyAction === "interested") {
-                // Sent deterministically, not via agent tool-calling (Royce,
-                // 2026-09-02, confirmed live on a DIFFERENT reveal path that
-                // clumped a link mid-sentence into one paragraph) — same fix
-                // applied here: the link goes out as its own bare message
-                // (real iMessage preview) BEFORE the agent's reply, which
-                // then only has to explain why it fits, never repeat the link.
-                if (match.url) {
-                  await sendCoReply({ phone: user.phone_number, message: match.url, asVoice: false });
-                  await logTextExchange(user.id, `Co replied: ${match.url}`);
-                  await new Promise((resolve) => setTimeout(resolve, 2000));
-                }
-                eventOfferContext = `\nThey just said yes to hearing more about the thing you teased earlier${match.url ? " — you already sent them the link separately, that already happened" : ""}. Share why it fits now, naturally, as part of your reply: "${match.name}" — ${match.reason}. Be honest it's a suggestion, not a guarantee it's right for them.${match.url ? " Don't repeat the link or say you're \"sending\" or \"sharing\" anything — it already went out." : ""}`;
-                // Outcome-learning loop (Royce, 2026-09-02) — schedule the
-                // "who did you meet?" follow-up right at the moment real
-                // details are actually revealed, same trigger point the
-                // Figma board shows. No-op for Tier 3 (no event_date) — see
-                // scheduleOutcomeFollowUp.
-                scheduleOutcomeFollowUp(user.id, parsed.askText, match).catch((err: any) =>
-                  console.error("sendblue: scheduleOutcomeFollowUp failed (non-fatal):", err?.message ?? err),
-                );
-              } else {
-                eventOfferContext = `\nThey just passed on hearing more about the thing you teased earlier (internal only, never say this name to them: "${match.name}"). Acknowledge lightly, no pressure, don't explain what it was.`;
+            const parsed = JSON.parse(pendingEventOffer.content) as { askText: string; match: any };
+            const match = parsed.match;
+            // Staleness check (Royce, 2026-08-30) — Tier 1/2 carry the
+            // event's own date; if they said yes days after the tease and
+            // the event's already passed, revealing it as if it's still
+            // live would be misleading. Tier 3 opportunities have an
+            // optional `deadline` (set only when the source post stated
+            // one explicitly — see tieredRecommendation.ts's TierMatch)
+            // checked the same way; a Tier 3 match with no stated deadline
+            // (rolling admissions, or the post just didn't say) has
+            // nothing to check here. Bug fix, 2026-08-30 (code review):
+            // this used to only ever check event_date, so an expired Tier
+            // 3 opportunity that had been sitting pending for days could
+            // still get revealed as if the application window were open —
+            // exactly what `deadline` was added to prevent, just not
+            // wired into this reply-resolution path yet.
+            // Date-only comparison, not a timestamp one (bug fix,
+            // 2026-08-30) — event_date/deadline are bare YYYY-MM-DD with
+            // no time component, so `new Date(x) < new Date()` treats ANY
+            // time past midnight UTC on that day as already stale,
+            // wrongly flagging a same-day evening event as "already
+            // passed" hours before it happens. Comparing calendar dates
+            // instead means today's date is never stale.
+            const todayStr = new Date().toISOString().slice(0, 10);
+            const relevantDate: string | undefined = match.event_date ?? match.deadline;
+            const isStale = relevantDate && relevantDate < todayStr;
+            if (eventReplyAction === "interested" && isStale) {
+              const passedPhrase = match.event_date ? `it was on ${relevantDate}` : `the application window closed on ${relevantDate}`;
+              eventOfferContext = `\nThey just said yes to hearing more about the thing you teased earlier, but it's already passed (${passedPhrase}) — let them know honestly that it's already happened so there's nothing to share, no pressure or apology needed, and mention you'll keep an eye out for the next one that fits. Never reveal the name "${match.name}" since there's nothing to act on now.`;
+            } else if (eventReplyAction === "interested") {
+              // Sent deterministically, not via agent tool-calling (Royce,
+              // 2026-09-02, confirmed live on a DIFFERENT reveal path that
+              // clumped a link mid-sentence into one paragraph) — same fix
+              // applied here: the link goes out as its own bare message
+              // (real iMessage preview) BEFORE the agent's reply, which
+              // then only has to explain why it fits, never repeat the link.
+              if (match.url) {
+                await sendCoReply({ phone: user.phone_number, message: match.url, asVoice: false });
+                await logTextExchange(user.id, `Co replied: ${match.url}`);
+                await new Promise((resolve) => setTimeout(resolve, 2000));
               }
+              eventOfferContext = `\nThey just said yes to hearing more about the thing you teased earlier${match.url ? " — you already sent them the link separately, that already happened" : ""}. Share why it fits now, naturally, as part of your reply: "${match.name}" — ${match.reason}. Be honest it's a suggestion, not a guarantee it's right for them.${match.url ? " Don't repeat the link or say you're \"sending\" or \"sharing\" anything — it already went out." : ""}`;
+              // Outcome-learning loop (Royce, 2026-09-02) — schedule the
+              // "who did you meet?" follow-up right at the moment real
+              // details are actually revealed, same trigger point the
+              // Figma board shows. No-op for Tier 3 (no event_date) — see
+              // scheduleOutcomeFollowUp.
+              scheduleOutcomeFollowUp(user.id, parsed.askText, match).catch((err: any) =>
+                console.error("sendblue: scheduleOutcomeFollowUp failed (non-fatal):", err?.message ?? err),
+              );
+            } else {
+              eventOfferContext = `\nThey just passed on hearing more about the thing you teased earlier (internal only, never say this name to them: "${match.name}"). Acknowledge lightly, no pressure, don't explain what it was.`;
             }
           } catch (err: any) {
-            console.error("sendblue: event offer reply classification failed (non-fatal):", err?.message ?? err);
+            console.error("sendblue: event offer reply handling failed (non-fatal):", err?.message ?? err);
           }
         }
 
@@ -1105,31 +1048,28 @@ Return ONLY the classification, nothing else.`,
         // Same "only classify when something's actually pending, fold into
         // the SAME reply" reasoning as eventOfferContext above.
         let outcomeFollowupContext = "";
-        if (hasText) {
+        const resolvedOutcome = resolvedAs("outcome_followup");
+        if (resolvedOutcome?.item.ref?.kind === "outcome_followup") {
           try {
-            const pendingOutcomeFollowUp = await findPendingOutcomeFollowUp(user.id);
-            if (pendingOutcomeFollowUp) {
-              const outcome = await classifyNamedOutcome(resolvedContent, pendingOutcomeFollowUp.match_name, recentConversation);
-              if (outcome !== "unrelated") {
-                await recordOutcome(user.id, pendingOutcomeFollowUp.id, pendingOutcomeFollowUp.tier, outcome);
-                // Stay-scoped clause (Royce, 2026-09-07, confirmed live) —
-                // without this, a name or detail from a DIFFERENT,
-                // already-resolved outcome follow-up sitting in
-                // recentMemories (e.g. someone named a few messages ago
-                // about an unrelated event) got blended into this reply as
-                // if it belonged to the outcome actually being resolved here.
-                const stayScoped = ` Keep this reply scoped to "${pendingOutcomeFollowUp.match_name}" specifically — don't pull in a name or detail from a different, already-resolved outcome or an unrelated recent memory, even if one is sitting in context.`;
-                if (outcome === "named_positive") {
-                  outcomeFollowupContext = `\nThey just told you something good came out of "${pendingOutcomeFollowUp.match_name}" — someone worthwhile they met or a good outcome. Respond warmly to what they specifically shared, genuinely glad for them, no exclamation points.${stayScoped}`;
-                } else if (outcome === "named_critical") {
-                  outcomeFollowupContext = `\nThey just told you "${pendingOutcomeFollowUp.match_name}" wasn't worthwhile or didn't go well. Acknowledge that honestly and warmly, no forced positivity, no apologizing on behalf of the thing itself.${stayScoped}`;
-                } else {
-                  outcomeFollowupContext = `\nThey answered about "${pendingOutcomeFollowUp.match_name}" but didn't name anyone specific or describe a real outcome. Acknowledge lightly, no pressure to elaborate.${stayScoped}`;
-                }
-              }
+            const pendingOutcomeFollowUp = resolvedOutcome.item.ref.pending;
+            const outcome = resolvedOutcome.value as "named_positive" | "named_critical" | "not_mentioned";
+            await recordOutcome(user.id, pendingOutcomeFollowUp.id, pendingOutcomeFollowUp.tier, outcome);
+            // Stay-scoped clause (Royce, 2026-09-07, confirmed live) —
+            // without this, a name or detail from a DIFFERENT,
+            // already-resolved outcome follow-up sitting in
+            // recentMemories (e.g. someone named a few messages ago
+            // about an unrelated event) got blended into this reply as
+            // if it belonged to the outcome actually being resolved here.
+            const stayScoped = ` Keep this reply scoped to "${pendingOutcomeFollowUp.match_name}" specifically — don't pull in a name or detail from a different, already-resolved outcome or an unrelated recent memory, even if one is sitting in context.`;
+            if (outcome === "named_positive") {
+              outcomeFollowupContext = `\nThey just told you something good came out of "${pendingOutcomeFollowUp.match_name}" — someone worthwhile they met or a good outcome. Respond warmly to what they specifically shared, genuinely glad for them, no exclamation points.${stayScoped}`;
+            } else if (outcome === "named_critical") {
+              outcomeFollowupContext = `\nThey just told you "${pendingOutcomeFollowUp.match_name}" wasn't worthwhile or didn't go well. Acknowledge that honestly and warmly, no forced positivity, no apologizing on behalf of the thing itself.${stayScoped}`;
+            } else {
+              outcomeFollowupContext = `\nThey answered about "${pendingOutcomeFollowUp.match_name}" but didn't name anyone specific or describe a real outcome. Acknowledge lightly, no pressure to elaborate.${stayScoped}`;
             }
           } catch (err: any) {
-            console.error("sendblue: outcome follow-up reply classification failed (non-fatal):", err?.message ?? err);
+            console.error("sendblue: outcome follow-up reply handling failed (non-fatal):", err?.message ?? err);
           }
         }
 
@@ -1139,28 +1079,25 @@ Return ONLY the classification, nothing else.`,
         // Co merely having recommended something). Same reuse-the-shared-
         // classifier, fold-into-the-same-reply reasoning throughout this file.
         let eventCheckinContext = "";
-        if (hasText) {
+        const resolvedCheckin = resolvedAs("event_checkin");
+        if (resolvedCheckin?.item.ref?.kind === "event_checkin") {
           try {
-            const pendingCheckin = await findPendingEventCheckinFollowUp(user.id);
-            if (pendingCheckin) {
-              const outcome = await classifyNamedOutcome(resolvedContent, pendingCheckin.event_name, recentConversation);
-              if (outcome !== "unrelated") {
-                await recordEventCheckinOutcome(user.id, pendingCheckin.id, pendingCheckin.event_api_id, outcome);
-                // Same stay-scoped fix as the outcome follow-up above — a
-                // name/detail from a different, already-resolved follow-up
-                // could otherwise blend into this reply.
-                const stayScoped = ` Keep this reply scoped to "${pendingCheckin.event_name}" specifically — don't pull in a name or detail from a different, already-resolved outcome or an unrelated recent memory, even if one is sitting in context.`;
-                if (outcome === "named_positive") {
-                  eventCheckinContext = `\nThey just told you something good came out of "${pendingCheckin.event_name}" — someone worthwhile they met or a good moment from tonight. Respond warmly to what they specifically shared, genuinely glad for them, no exclamation points.${stayScoped}`;
-                } else if (outcome === "named_critical") {
-                  eventCheckinContext = `\nThey just told you "${pendingCheckin.event_name}" wasn't worthwhile or didn't go well. Acknowledge that honestly and warmly, no forced positivity, no apologizing on behalf of the event itself.${stayScoped}`;
-                } else {
-                  eventCheckinContext = `\nThey answered about "${pendingCheckin.event_name}" but didn't name anyone specific or describe a real moment. Acknowledge lightly, no pressure to elaborate.${stayScoped}`;
-                }
-              }
+            const pendingCheckin = resolvedCheckin.item.ref.pending;
+            const outcome = resolvedCheckin.value as "named_positive" | "named_critical" | "not_mentioned";
+            await recordEventCheckinOutcome(user.id, pendingCheckin.id, pendingCheckin.event_api_id, outcome);
+            // Same stay-scoped fix as the outcome follow-up above — a
+            // name/detail from a different, already-resolved follow-up
+            // could otherwise blend into this reply.
+            const stayScoped = ` Keep this reply scoped to "${pendingCheckin.event_name}" specifically — don't pull in a name or detail from a different, already-resolved outcome or an unrelated recent memory, even if one is sitting in context.`;
+            if (outcome === "named_positive") {
+              eventCheckinContext = `\nThey just told you something good came out of "${pendingCheckin.event_name}" — someone worthwhile they met or a good moment from tonight. Respond warmly to what they specifically shared, genuinely glad for them, no exclamation points.${stayScoped}`;
+            } else if (outcome === "named_critical") {
+              eventCheckinContext = `\nThey just told you "${pendingCheckin.event_name}" wasn't worthwhile or didn't go well. Acknowledge that honestly and warmly, no forced positivity, no apologizing on behalf of the event itself.${stayScoped}`;
+            } else {
+              eventCheckinContext = `\nThey answered about "${pendingCheckin.event_name}" but didn't name anyone specific or describe a real moment. Acknowledge lightly, no pressure to elaborate.${stayScoped}`;
             }
           } catch (err: any) {
-            console.error("sendblue: event check-in reply classification failed (non-fatal):", err?.message ?? err);
+            console.error("sendblue: event check-in reply handling failed (non-fatal):", err?.message ?? err);
           }
         }
 
@@ -1171,36 +1108,29 @@ Return ONLY the classification, nothing else.`,
         // opt-in/reciprocal-ask/group-creation logic — this block only
         // classifies the reply and hands it off.
         let matchNudgeContext = "";
-        if (hasText) {
+        const resolvedMatchNudge = resolvedAs("match_nudge");
+        if (resolvedMatchNudge?.item.ref?.kind === "match_nudge") {
           try {
-            const pendingMatchNudge = await findPendingMatchNudge(user.id);
-            if (pendingMatchNudge) {
-              const classification = await classifyMatchNudgeReply(
-                resolvedContent,
-                pendingMatchNudge.candidate_first_name,
-                recentConversation,
-              );
-              if (classification !== "unrelated") {
-                await handleMatchNudgeReply(
-                  pendingMatchNudge.event_id,
-                  pendingMatchNudge.event_name,
-                  classification,
-                  { user_id: user.id, first_name: user.first_name, phone_number: user.phone_number, email: user.email },
-                  {
-                    user_id: pendingMatchNudge.candidate_id,
-                    first_name: pendingMatchNudge.candidate_first_name,
-                    phone_number: pendingMatchNudge.candidate_phone,
-                    email: pendingMatchNudge.candidate_email,
-                  },
-                );
-                matchNudgeContext =
-                  classification === "interested"
-                    ? `\nThey just said yes to being connected with ${pendingMatchNudge.candidate_first_name}. Acknowledge it warmly and briefly — you may have already asked them a separate follow-up question about how they'd like to connect (text or email), or you're still waiting on ${pendingMatchNudge.candidate_first_name} to answer — don't promise a specific thing is happening, just confirm you've got it and you're on it.`
-                    : `\nThey just passed on being connected with ${pendingMatchNudge.candidate_first_name} (internal only, never say this name back to them as a pressure tactic). Acknowledge lightly, no pressure, don't explain further.`;
-              }
-            }
+            const pendingMatchNudge = resolvedMatchNudge.item.ref.pending;
+            const classification = resolvedMatchNudge.value === "yes" ? "interested" : "not_interested";
+            await handleMatchNudgeReply(
+              pendingMatchNudge.event_id,
+              pendingMatchNudge.event_name,
+              classification,
+              { user_id: user.id, first_name: user.first_name, phone_number: user.phone_number, email: user.email },
+              {
+                user_id: pendingMatchNudge.candidate_id,
+                first_name: pendingMatchNudge.candidate_first_name,
+                phone_number: pendingMatchNudge.candidate_phone,
+                email: pendingMatchNudge.candidate_email,
+              },
+            );
+            matchNudgeContext =
+              classification === "interested"
+                ? `\nThey just said yes to being connected with ${pendingMatchNudge.candidate_first_name}. Acknowledge it warmly and briefly — you may have already asked them a separate follow-up question about how they'd like to connect (text or email), or you're still waiting on ${pendingMatchNudge.candidate_first_name} to answer — don't promise a specific thing is happening, just confirm you've got it and you're on it.`
+                : `\nThey just passed on being connected with ${pendingMatchNudge.candidate_first_name} (internal only, never say this name back to them as a pressure tactic). Acknowledge lightly, no pressure, don't explain further.`;
           } catch (err: any) {
-            console.error("sendblue: match nudge reply classification failed (non-fatal):", err?.message ?? err);
+            console.error("sendblue: match nudge reply handling failed (non-fatal):", err?.message ?? err);
           }
         }
 
@@ -1213,33 +1143,29 @@ Return ONLY the classification, nothing else.`,
         // reveal+ask ("it's Celine — want an intro?"). Only one of these two
         // is ever pending for a given person at a time, so — unlike the old
         // design — there's no multi-candidate disambiguation needed at all.
-        if (hasText && !matchNudgeContext) {
+        const resolvedTease = resolvedAs("network_tease");
+        if (resolvedTease?.item.ref?.kind === "network_tease") {
           try {
-            const pendingTease = await findPendingNetworkTease(user.id);
-            if (pendingTease) {
-              const classification = await classifyNetworkTeaseReply(resolvedContent, recentConversation);
-              const context = await resolveNetworkTeaseReply(user.id, user.first_name, user.phone_number, pendingTease, classification);
-              if (context) matchNudgeContext = context;
-            }
+            const classification = resolvedTease.value === "yes" ? "interested" : "not_interested";
+            const context = await resolveNetworkTeaseReply(user.id, user.first_name, user.phone_number, resolvedTease.item.ref.pending, classification);
+            if (context) matchNudgeContext = context;
           } catch (err: any) {
-            console.error("sendblue: network tease reply classification failed (non-fatal):", err?.message ?? err);
+            console.error("sendblue: network tease reply handling failed (non-fatal):", err?.message ?? err);
           }
         }
 
-        if (hasText && !matchNudgeContext) {
+        const resolvedIntro = resolvedAs("network_intro");
+        if (resolvedIntro?.item.ref?.kind === "network_intro") {
           try {
-            const pendingIntroOffer = await findPendingNetworkIntroOffer(user.id);
-            if (pendingIntroOffer) {
-              const classification = await classifyNetworkIntroReply(resolvedContent, pendingIntroOffer.candidate.first_name, recentConversation);
-              const context = await resolveNetworkIntroReply(
-                { user_id: user.id, first_name: user.first_name, phone_number: user.phone_number, email: user.email },
-                pendingIntroOffer,
-                classification,
-              );
-              if (context) matchNudgeContext = context;
-            }
+            const classification = resolvedIntro.value === "yes" ? "interested" : "not_interested";
+            const context = await resolveNetworkIntroReply(
+              { user_id: user.id, first_name: user.first_name, phone_number: user.phone_number, email: user.email },
+              resolvedIntro.item.ref.pending,
+              classification,
+            );
+            if (context) matchNudgeContext = context;
           } catch (err: any) {
-            console.error("sendblue: network intro-offer reply classification failed (non-fatal):", err?.message ?? err);
+            console.error("sendblue: network intro-offer reply handling failed (non-fatal):", err?.message ?? err);
           }
         }
 
@@ -1247,22 +1173,19 @@ Return ONLY the classification, nothing else.`,
         // opted in — see services/eventGuestMatchHandoff.ts. Separate
         // pending-check from the opt-in block above since it's a genuinely
         // different question asked at a later moment.
-        if (hasText && !matchNudgeContext) {
+        const resolvedMethod = resolvedAs("method_choice");
+        if (resolvedMethod?.item.ref?.kind === "method_choice") {
           try {
-            const pendingMethodChoice = await findPendingMethodChoice(user.id);
-            if (pendingMethodChoice) {
-              const methodClassification = await classifyMethodChoice(resolvedContent, recentConversation);
-              if (methodClassification !== "unclear") {
-                await handleMethodChoiceReply(pendingMethodChoice, methodClassification);
-                const otherFirstName = pendingMethodChoice.a.user_id === user.id ? pendingMethodChoice.b.first_name : pendingMethodChoice.a.first_name;
-                matchNudgeContext =
-                  methodClassification === "phone"
-                    ? `\nThey just chose to be connected with ${otherFirstName} by text. You've already handled creating that group text separately — acknowledge briefly, don't repeat details or promise a specific timing.`
-                    : `\nThey just chose to be connected with ${otherFirstName} by email. You've already handled sending that email separately — acknowledge briefly, don't repeat details or promise a specific timing.`;
-              }
-            }
+            const pendingMethodChoice = resolvedMethod.item.ref.pending;
+            const methodClassification = resolvedMethod.value === "email" ? "email" : "phone";
+            await handleMethodChoiceReply(pendingMethodChoice, methodClassification);
+            const otherFirstName = pendingMethodChoice.a.user_id === user.id ? pendingMethodChoice.b.first_name : pendingMethodChoice.a.first_name;
+            matchNudgeContext =
+              methodClassification === "phone"
+                ? `\nThey just chose to be connected with ${otherFirstName} by text. You've already handled creating that group text separately — acknowledge briefly, don't repeat details or promise a specific timing.`
+                : `\nThey just chose to be connected with ${otherFirstName} by email. You've already handled sending that email separately — acknowledge briefly, don't repeat details or promise a specific timing.`;
           } catch (err: any) {
-            console.error("sendblue: method choice classification failed (non-fatal):", err?.message ?? err);
+            console.error("sendblue: method choice handling failed (non-fatal):", err?.message ?? err);
           }
         }
 
@@ -1270,53 +1193,41 @@ Return ONLY the classification, nothing else.`,
         // joins the test copatible account, if they ask 'any updates' or
         // something similar just send them that" — and, if nothing's been
         // posted yet, "make sure ... just say that" rather than leaving the
-        // question unanswered). Classification runs on every message with
-        // text, same cost profile as the call-offer classifier above — it
-        // can't be gated on an update already existing, since "nothing new
+        // question unanswered). Decided by the router on every message with
+        // text — it can't be gated on an update already existing, since "nothing new
         // right now" is itself a valid, honest answer this needs to give.
         // product_updates is written by scripts/notifyTesters.ts every
         // time a real update goes out, independent of who was on that
         // broadcast — this works for ANY co-test user, not just the named
         // testers the script itself texts.
         let updatesContext = "";
-        if (hasText) {
+        if (hasText && decision.asksForUpdates) {
           try {
-            const { text: rawAsksForUpdates } = await generateText({
-              model: anthropic("claude-haiku-4-5-20251001"),
-              experimental_telemetry: { isEnabled: true, functionId: "sendblue.asksForUpdates.classify" },
-              prompt: `Is this message genuinely asking Co whether there's anything new, any recent updates, or what's changed lately — not just casual conversation that happens to mention something similar?
-
-Message: "${resolvedContent}"
-
-Return ONLY "yes" or "no".`,
-            });
-            if (rawAsksForUpdates.trim().toLowerCase().startsWith("yes")) {
-              const latestUpdateResult = await pool.query(`SELECT content FROM product_updates ORDER BY created_at DESC LIMIT 1`);
-              const latestUpdate = latestUpdateResult.rows[0];
-              if (latestUpdate) {
-                // Sent deterministically, not via agent tool-calling (Royce,
-                // 2026-09-07, confirmed live) — asking the agent to relay
-                // this "as part of your reply" let it paraphrase the bullets
-                // despite being told not to, and blend in an unrelated past
-                // recommendation from contextSummary as if it were part of
-                // the same update. Sending the real content verbatim here
-                // removes both failure modes; the agent only has to
-                // acknowledge it, same pattern as recommendationContext/
-                // eventOfferContext above.
-                const updateMessage = `Here's what's new:\n\n${latestUpdate.content}`;
-                await sendCoReply({ phone: user.phone_number, message: updateMessage, asVoice: false });
-                await logTextExchange(user.id, `Co replied: ${updateMessage}`);
-                updatesContext = `\nThey just asked what's new — you already sent them the real update list separately, verbatim, that already happened. Don't repeat, paraphrase, or re-list it in this reply, and don't blend in anything else (like a past recommendation) as if it were part of that list. If it's natural, briefly acknowledge you just sent it, then respond to whatever else they said — keep this reply short.`;
-              } else {
-                updatesContext = `\nThey're asking what's new, but there's genuinely nothing posted yet. Let them know honestly, briefly, that there's nothing new to report right now — don't invent something or brush past the question.`;
-              }
+            const latestUpdateResult = await pool.query(`SELECT content FROM product_updates ORDER BY created_at DESC LIMIT 1`);
+            const latestUpdate = latestUpdateResult.rows[0];
+            if (latestUpdate) {
+              // Sent deterministically, not via agent tool-calling (Royce,
+              // 2026-09-07, confirmed live) — asking the agent to relay
+              // this "as part of your reply" let it paraphrase the bullets
+              // despite being told not to, and blend in an unrelated past
+              // recommendation from contextSummary as if it were part of
+              // the same update. Sending the real content verbatim here
+              // removes both failure modes; the agent only has to
+              // acknowledge it, same pattern as recommendationContext/
+              // eventOfferContext above.
+              const updateMessage = `Here's what's new:\n\n${latestUpdate.content}`;
+              await sendCoReply({ phone: user.phone_number, message: updateMessage, asVoice: false });
+              await logTextExchange(user.id, `Co replied: ${updateMessage}`);
+              updatesContext = `\nThey just asked what's new — you already sent them the real update list separately, verbatim, that already happened. Don't repeat, paraphrase, or re-list it in this reply, and don't blend in anything else (like a past recommendation) as if it were part of that list. If it's natural, briefly acknowledge you just sent it, then respond to whatever else they said — keep this reply short.`;
+            } else {
+              updatesContext = `\nThey're asking what's new, but there's genuinely nothing posted yet. Let them know honestly, briefly, that there's nothing new to report right now — don't invent something or brush past the question.`;
             }
           } catch (err: any) {
-            console.error("sendblue: asks-for-updates classification failed (non-fatal):", err?.message ?? err);
+            console.error("sendblue: asks-for-updates reply failed (non-fatal):", err?.message ?? err);
           }
         }
 
-        const shouldTriggerCall = callAction === "explicit_request" || (offerIsFreshestPending && callAction === "accepts_offer");
+        const shouldTriggerCall = decision.placeCall;
 
         // Schedule-a-call — a specific future time, not "call me now"
         // (shouldTriggerCall above). Extracted as structured date/time/
@@ -1481,37 +1392,12 @@ Return ONLY valid JSON, no preamble: {"date": "YYYY-MM-DD or null", "time": "HH:
         // Real action-triggering — mirrors the surface_recommendation Hume
         // tool on the voice path, but iMessage has no tool_call plane to
         // invoke it through, so this is a direct call to the same shared
-        // generateRecommendation() gated by a cheap classification step
+        // generateRecommendation() gated by the router's wantsRecommendation
         // instead. Folded into the one reply below (never sent as a second
         // message).
         let recommendationContext = "";
         try {
-          const { text: wantsClassification } = await propagateAttributes(
-            { userId: user.id, traceName: "sendblue.wantsRecommendation.classify" },
-            () =>
-              generateText({
-                model: anthropic("claude-haiku-4-5-20251001"),
-                experimental_telemetry: { isEnabled: true, functionId: "sendblue.wantsRecommendation.classify" },
-                prompt: `Classify this message as either "wants_something_concrete" or "normal_conversation".
-
-"wants_something_concrete" means they're asking Co to actually suggest, recommend, help find, or surface something specific right now (e.g. "what can you surface for me", "find me something", "what should I do about this").
-"normal_conversation" means anything else — small talk, questions about Co, answering a question, general chat. This also covers a false-premise callback — e.g. "that job posting you sent me, is it still open" when no such thing was ever actually sent — read the recent conversation below and check whether "it"/"that" genuinely refers to something Co actually did; if it doesn't, this is normal_conversation (Co should address the mix-up, not go find something new to match the false premise), not a fresh ask.
-
-Recent conversation, in order:
-${recentConversation || "(start of the conversation)"}
-
-Message: "${resolvedContent}"
-
-Return ONLY the classification, nothing else.`,
-              }),
-          );
-          const wantsSomethingConcrete = wantsClassification
-            .trim()
-            .toLowerCase()
-            .replace(/^[`"']+|[`"']+$/g, "")
-            .includes("wants_something_concrete");
-
-          if (wantsSomethingConcrete) {
+          if (decision.wantsRecommendation) {
             const recommendation = await generateRecommendation(user.id, resolvedContent);
             if (recommendation.available && recommendation.matches?.length) {
               // Sent DETERMINISTICALLY, not via agent tool-calling (Royce,
@@ -1568,7 +1454,7 @@ Return ONLY the classification, nothing else.`,
             }
           }
         } catch (err: any) {
-          console.error("sendblue: recommendation classification failed (non-fatal):", err?.message ?? err);
+          console.error("sendblue: recommendation failed (non-fatal):", err?.message ?? err);
         }
 
         // Real venue lookup — distinct from the abstract recommendation
@@ -1581,31 +1467,9 @@ Return ONLY the classification, nothing else.`,
         let venueDeliveryMessage: string | null = null;
         if (profile?.city) {
           try {
-            const { text: rawVenueClassification } = await propagateAttributes(
-              { userId: user.id, traceName: "sendblue.venueRequest.classify" },
-              () =>
-                generateText({
-                  model: anthropic("claude-haiku-4-5-20251001"),
-                  experimental_telemetry: { isEnabled: true, functionId: "sendblue.venueRequest.classify" },
-                  prompt: `Recent text conversation, in order:
-${recentConversation || "(start of the conversation)"}
-
-Their latest message: "${resolvedContent}"
-
-In light of the conversation above, is their latest message wanting, looking for, or asking about a specific CATEGORY of physical place — a gym, a cafe, a climbing spot, a coworking space, a restaurant, a bar, etc.? This includes a plain follow-up like "send me some" or "yes please" if the category was already established earlier in the conversation. Not a person, not an abstract idea, an actual type of place someone could visit.
-
-Critically, this does NOT include events, meetups, accelerator/fellowship programs, conferences, or similar time-bound things — even though those happen at a real location, what they're asking for is the event/program itself, not "a type of place." A real event or accelerator program is handled by a completely different mechanism (confirmed live, 2026-09-02: this classifier was misfiring on exactly this — "any AI events" and "accelerator programs" were getting treated as if they were a venue category like "coworking space," triggering a physical-place search for a random unrelated business instead of the real event/opportunity engine). If their message is about events, meetups, or programs specifically, always return wants_venue: false regardless of what's in the recent conversation.
-
-If yes, how many did they ask for? Default to 1 if they didn't say a number or range; if they gave a range (e.g. "2-5"), use the upper end, capped at 5.
-
-Return ONLY valid JSON, no preamble: {"wants_venue": true or false, "venue_type": "the category, in a few words" or null, "count": a number from 1 to 5}`,
-                }),
-            );
-            const cleanVenue = rawVenueClassification.replace(/```json|```/g, "").trim();
-            const parsedVenue = JSON.parse(cleanVenue);
-            if (parsedVenue?.wants_venue && typeof parsedVenue.venue_type === "string" && parsedVenue.venue_type) {
-              const venueType: string = parsedVenue.venue_type;
-              const requestedCount = Math.max(1, Math.min(Number(parsedVenue.count) || 1, 5));
+            if (decision.venue) {
+              const venueType: string = decision.venue.type;
+              const requestedCount = decision.venue.count;
 
               // The real Places search below has genuine network latency on
               // top of the classification calls already run this turn —
@@ -1881,6 +1745,7 @@ Return ONLY valid JSON, no preamble: {"wants_venue": true or false, "venue_type"
                 callFeatureQuestionContext,
                 callFailureContext,
                 repeatContext,
+                clarifyContext,
                 scheduleCallContext,
                 toneContext,
                 seekingModeContext,
