@@ -1,12 +1,8 @@
-import { generateText } from "ai";
-import { anthropic } from "@ai-sdk/anthropic";
 import pool from "../db/db.js";
-import sendblue, { cleanCoMessage } from "./sendblue.js";
+import { getTimezoneForCity } from "./geocoding.js";
 import { getEventDetails } from "./luma.js";
-import { writeMemory } from "./memory.js";
-import { classifyNamedOutcome, type NamedOutcome } from "./recommendationOutcome.js";
+import { classifyNamedOutcome, enqueueDebrief, type NamedOutcome } from "./recommendationOutcome.js";
 import type { ScorableGuest } from "./eventScoring.js";
-import { CO_VOICE, CO_TEXT_CHANNEL } from "./coVoice.js";
 
 // Event Curation's own "end-of-night check-in" (Notion V1 board row 8, "who
 // did you meet that was interesting?") — distinct from
@@ -136,50 +132,31 @@ export async function recordEventCheckinOutcome(
 
 export { classifyNamedOutcome };
 
-// Cron-callable — mirrors recommendationOutcome.ts's sendDueOutcomeFollowUps
-// exactly: poll due rows, claim atomically so overlapping ticks can't
-// double-send, generate fresh text at send time.
-export async function sendDueEventCheckinFollowUps(): Promise<void> {
-  const due = await pool.query(
-    `SELECT ecf.id, ecf.user_id, ecf.event_name, u.phone_number, u.first_name
+// Layer 7 (2026-09-14): no longer sends at end+3h. Merged into the same
+// per-event "debrief" candidate as the recommendation outcome follow-up
+// (recommendationOutcome.ts enqueueDebrief), due the morning after.
+export async function enqueueDueEventCheckinFollowUps(): Promise<void> {
+  const { rows } = await pool.query(
+    `SELECT ecf.id, ecf.user_id, ecf.event_api_id, ecf.event_name, ecf.send_at, cp.city
      FROM event_checkin_followups ecf
      JOIN users u ON u.id = ecf.user_id
-     WHERE ecf.send_at <= NOW() AND ecf.sent_at IS NULL AND u.sms_opted_out = false
-     LIMIT 20`,
+     LEFT JOIN co_profiles cp ON cp.user_id = ecf.user_id
+     WHERE ecf.sent_at IS NULL AND ecf.harness_status IS NULL AND u.sms_opted_out = false
+       AND ecf.send_at <= NOW() + INTERVAL '1 day'
+     LIMIT 50`,
   );
-
-  for (const row of due.rows) {
-    const claim = await pool.query(
-      `UPDATE event_checkin_followups SET sent_at = NOW() WHERE id = $1 AND sent_at IS NULL RETURNING id`,
-      [row.id],
-    );
-    if (!claim.rows[0]) continue;
-
-    try {
-      const { text: draft } = await generateText({
-        model: anthropic("claude-haiku-4-5-20251001"),
-        experimental_telemetry: { isEnabled: true, functionId: "eventCheckinFollowUp.followUp" },
-        prompt: `${CO_VOICE}\n\n${CO_TEXT_CHANNEL} You're texting ${row.first_name}. They were just at "${row.event_name}" tonight — Co's own event.
-
-Draft a short, warm, genuinely curious message asking who they met that was interesting, or what stood out. 1-2 sentences, no exclamation points, no em dashes. This is a friend checking in after the fact, not a survey.
-
-Return ONLY the message text.`,
-      });
-      const cleaned = cleanCoMessage(draft.trim());
-      await sendblue.messages.send({
-        number: row.phone_number,
-        content: cleaned,
-        from_number: process.env.SENDBLUE_PHONE_NUMBER!,
-      });
-      // Royce, 2026-09-08 sweep — this send had zero logging of any kind,
-      // so recentConversation had no record of Co's own question. Matters
-      // more here than most: the reply to THIS message is what drives
-      // classifyNamedOutcome below.
-      await writeMemory(row.user_id, "text_exchange", `Co replied: ${cleaned}`).catch((err: any) =>
-        console.error(`sendDueEventCheckinFollowUps: text_exchange log failed for ${row.id} (non-fatal):`, err?.message ?? err),
-      );
-    } catch (err: any) {
-      console.error(`sendDueEventCheckinFollowUps: send failed for ${row.id} (non-fatal, already claimed — will not retry):`, err?.message ?? err);
-    }
+  for (const row of rows) {
+    const timezone = row.city ? await getTimezoneForCity(row.city).catch(() => null) : null;
+    // send_at was scheduled as end_at + CHECKIN_FOLLOWUP_DELAY_HOURS.
+    const eventEnd = new Date(new Date(row.send_at).getTime() - CHECKIN_FOLLOWUP_DELAY_HOURS * 60 * 60 * 1000);
+    await enqueueDebrief({
+      userId: row.user_id,
+      eventApiId: row.event_api_id,
+      eventName: row.event_name,
+      eventEnd,
+      timezone,
+      part: { checkinFollowupIds: [row.id] },
+    });
+    await pool.query(`UPDATE event_checkin_followups SET harness_status = 'queued' WHERE id = $1`, [row.id]);
   }
 }

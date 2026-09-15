@@ -1159,4 +1159,13 @@ export function runMigrations() {
       ),
     )
     .catch((err: Error) => console.error("proactive harness tables init failed:", err));
+
+  // Layer 7 (2026-09-14): which source rows have been handed to the proactive
+  // harness (queued / sent / dropped / expired), separate from sent_at so a
+  // dropped follow-up never looks like an open question to routing.
+  for (const table of ["recommendation_outcome_followups", "event_checkin_followups", "post_call_follow_ups"]) {
+    pool
+      .query(`ALTER TABLE ${table} ADD COLUMN IF NOT EXISTS harness_status TEXT`)
+      .catch((err: Error) => console.error(`${table}.harness_status migration failed:`, err));
+  }
 }

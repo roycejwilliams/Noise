@@ -1,10 +1,10 @@
 import { generateText } from "ai";
 import { anthropic } from "@ai-sdk/anthropic";
 import pool from "../db/db.js";
-import sendblue, { cleanCoMessage } from "./sendblue.js";
+import { DateTime } from "luxon";
 import type { TierMatch } from "./tieredRecommendation.js";
-import { writeMemory } from "./memory.js";
-import { CO_VOICE, CO_TEXT_CHANNEL } from "./coVoice.js";
+import { getTimezoneForCity } from "./geocoding.js";
+import { enqueueCandidate, nextLocalHour } from "../harness/proactive.js";
 
 // Outcome-learning loop (Royce, 2026-09-02: "Co follows up" + the shared
 // "named someone?" classifier + wiring signal weighting into future
@@ -143,53 +143,89 @@ export async function getTierBias(userId: string): Promise<Record<number, number
   return bias;
 }
 
-// Cron-callable — mirrors jobs/postCallFollowUp.ts's sendDueFollowUps()
-// exactly: poll due rows, claim atomically so overlapping ticks can't
-// double-send, generate fresh text at send time. Leaked-meta-commentary
-// guard lives in services/sendblue.ts (moved there 2026-09-03) so every
-// send gets it, not just this one.
-export async function sendDueOutcomeFollowUps(): Promise<void> {
-  const due = await pool.query(
-    `SELECT rof.id, rof.user_id, rof.ask_text, rof.match_name, u.phone_number, u.first_name
+// Layer 7 (2026-09-14): no longer sends. Each due follow-up becomes part of
+// one "debrief" candidate per event (merged with the end-of-night check-in
+// from eventCheckinFollowUp.ts and the walk-in call offer), due the morning
+// after at 10am their time. Live before this: three follow-ups all at 4am
+// Pacific, one a duplicate two seconds after the other.
+export async function enqueueDueOutcomeFollowUps(): Promise<void> {
+  const { rows } = await pool.query(
+    `SELECT rof.id, rof.user_id, rof.ask_text, rof.match_name, rof.match, cp.city
      FROM recommendation_outcome_followups rof
      JOIN users u ON u.id = rof.user_id
-     WHERE rof.send_at <= NOW() AND rof.sent_at IS NULL AND u.sms_opted_out = false
-     LIMIT 20`,
+     LEFT JOIN co_profiles cp ON cp.user_id = rof.user_id
+     WHERE rof.sent_at IS NULL AND rof.harness_status IS NULL AND u.sms_opted_out = false
+       AND rof.send_at <= NOW() + INTERVAL '2 days'
+     LIMIT 50`,
   );
-
-  for (const row of due.rows) {
-    const claim = await pool.query(
-      `UPDATE recommendation_outcome_followups SET sent_at = NOW() WHERE id = $1 AND sent_at IS NULL RETURNING id`,
-      [row.id],
-    );
-    if (!claim.rows[0]) continue;
-
-    try {
-      const { text: draft } = await generateText({
-        model: anthropic("claude-haiku-4-5-20251001"),
-        experimental_telemetry: { isEnabled: true, functionId: "recommendationOutcome.followUp" },
-        prompt: `${CO_VOICE}\n\n${CO_TEXT_CHANNEL} You're texting ${row.first_name}. A little while back you told them about "${row.match_name}" (it was for: "${row.ask_text}"). Enough time has passed that it should have happened by now.
-
-Draft a short, warm, genuinely curious message asking how it went — who they met or talked to, or what stood out. 1-2 sentences, no exclamation points, no em dashes, normal sentence capitalization. This is a friend checking in, not a survey.
-
-Return ONLY the message text.`,
-      });
-      const trimmed = draft.trim();
-      const cleaned = cleanCoMessage(trimmed);
-      await sendblue.messages.send({
-        number: row.phone_number,
-        content: cleaned,
-        from_number: process.env.SENDBLUE_PHONE_NUMBER!,
-      });
-      // Royce, 2026-09-08 sweep — this send had zero logging of any kind,
-      // so recentConversation had no record of Co's own question. Matters
-      // more here than most: the reply to THIS message is what drives
-      // classifyNamedOutcome downstream.
-      await writeMemory(row.user_id, "text_exchange", `Co replied: ${cleaned}`).catch((err: any) =>
-        console.error(`sendDueOutcomeFollowUps: text_exchange log failed for ${row.id} (non-fatal):`, err?.message ?? err),
-      );
-    } catch (err: any) {
-      console.error(`sendDueOutcomeFollowUps: send failed for ${row.id} (non-fatal, already claimed — will not retry):`, err?.message ?? err);
+  for (const row of rows) {
+    const match = row.match ?? {};
+    const eventDate: string | undefined = match.event_date;
+    if (!eventDate) {
+      await pool.query(`UPDATE recommendation_outcome_followups SET harness_status = 'dropped' WHERE id = $1`, [row.id]);
+      continue;
     }
+    const timezone = row.city ? await getTimezoneForCity(row.city).catch(() => null) : null;
+    await enqueueDebrief({
+      userId: row.user_id,
+      eventApiId: match.event_api_id ?? null,
+      eventName: row.match_name,
+      eventEnd: endOfLocalDay(eventDate, timezone),
+      timezone,
+      part: { outcomeFollowupIds: [row.id], askText: row.ask_text },
+    });
+    await pool.query(`UPDATE recommendation_outcome_followups SET harness_status = 'queued' WHERE id = $1`, [row.id]);
   }
+}
+
+function endOfLocalDay(isoDate: string, timezone: string | null): Date {
+  const d = DateTime.fromISO(isoDate, { zone: timezone ?? "America/Los_Angeles" });
+  return (d.isValid ? d.endOf("day") : DateTime.fromISO(isoDate).endOf("day")).toJSDate();
+}
+
+export type DebriefPayload = {
+  eventApiId: string | null;
+  eventName: string;
+  outcomeFollowupIds: string[];
+  checkinFollowupIds: string[];
+  walkinCheckinIds: string[];
+  askText: string | null;
+};
+
+// Shared by the three debrief sources. One candidate per (person, event).
+export async function enqueueDebrief(opts: {
+  userId: string;
+  eventApiId: string | null;
+  eventName: string;
+  eventEnd: Date;
+  timezone: string | null;
+  part: Partial<Pick<DebriefPayload, "outcomeFollowupIds" | "checkinFollowupIds" | "walkinCheckinIds" | "askText">>;
+}): Promise<void> {
+  const payload: DebriefPayload = {
+    eventApiId: opts.eventApiId,
+    eventName: opts.eventName,
+    outcomeFollowupIds: opts.part.outcomeFollowupIds ?? [],
+    checkinFollowupIds: opts.part.checkinFollowupIds ?? [],
+    walkinCheckinIds: opts.part.walkinCheckinIds ?? [],
+    askText: opts.part.askText ?? null,
+  };
+  const dueAt = nextLocalHour(opts.eventEnd, opts.timezone, 10);
+  await enqueueCandidate({
+    userId: opts.userId,
+    type: "debrief",
+    targetKey: `debrief:${opts.eventApiId ?? opts.eventName.toLowerCase()}`,
+    topicKey: "debrief",
+    summary: `Morning-after "how was ${opts.eventName}?" (one text covering who they met there)`,
+    payload,
+    dueAt,
+    expiresAt: new Date(dueAt.getTime() + 3 * 24 * 60 * 60 * 1000),
+    merge: (existing: DebriefPayload, incoming: DebriefPayload) => ({
+      ...existing,
+      eventName: existing.eventName || incoming.eventName,
+      askText: existing.askText ?? incoming.askText,
+      outcomeFollowupIds: Array.from(new Set([...(existing.outcomeFollowupIds ?? []), ...incoming.outcomeFollowupIds])),
+      checkinFollowupIds: Array.from(new Set([...(existing.checkinFollowupIds ?? []), ...incoming.checkinFollowupIds])),
+      walkinCheckinIds: Array.from(new Set([...(existing.walkinCheckinIds ?? []), ...incoming.walkinCheckinIds])),
+    }),
+  });
 }

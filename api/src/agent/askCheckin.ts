@@ -1,73 +1,31 @@
-import { anthropic } from "@ai-sdk/anthropic";
-import { generateText, stepCountIs } from "ai";
-import { createAskCheckinTools } from "./tools.js";
-import type { CoverageNudgeProfile } from "../services/profileExtraction.js";
-import { CO_VOICE, CO_TEXT_CHANNEL } from "../services/coVoice.js";
+import { draftProactive, type OutputRules } from "../harness/proactive.js";
 
-export type AskCheckinRow = {
-  id: string;
-  ask_text: string;
-  checkin_count: number;
-  user_id: string;
-  first_name: string;
-  phone_number: string;
-  has_matches: boolean;
-  life_chapters: string[] | null;
-  goals: string[] | null;
-  blockers: string[] | null;
-  long_term_direction: string | null;
-  city: string | null;
-  topics_covered: Record<string, string> | null;
-  topics_asked: Record<string, string> | null;
+export type AskCheckinPayload = {
+  askCheckinId: string;
+  askId: string;
+  askText: string;
+  checkinCount: number;
+  hasMatches: boolean;
 };
 
-// Co Loop Stage 5, agentized: replaces the hardcoded escalation/topic-nudge
-// branching that used to live in jobs/index.ts with a tool-calling loop that
-// decides for itself — the cron still owns *when* a row is due (cadence is
-// plumbing, not judgment), this owns *what to do about it*.
-export async function runAskCheckinAgent(
-  row: AskCheckinRow,
-  opts: { dryRun?: boolean } = {},
-): Promise<{ sent: boolean }> {
-  const profile: CoverageNudgeProfile = {
-    life_chapters: row.life_chapters,
-    goals: row.goals,
-    blockers: row.blockers,
-    long_term_direction: row.long_term_direction,
-    city: row.city,
-    topics_covered: row.topics_covered,
-    topics_asked: row.topics_asked,
-  };
-
-  const { tools, state } = createAskCheckinTools({
-    userId: row.user_id,
-    phoneNumber: row.phone_number,
-    profile,
-    dryRun: opts.dryRun ?? false,
+// Co Loop Stage 5 check-in on an open ask. Layer 7 (2026-09-14): jobs/index.ts
+// only queues an "ask_checkin" candidate when there's movement (open leads
+// for the ask) or 14 days have passed; the proactive harness decides when it
+// goes out. Never "no match yet" as the whole message.
+export async function draftAskCheckin(firstName: string, p: AskCheckinPayload): Promise<{ text: string; rules: OutputRules } | null> {
+  const escalate = p.checkinCount >= 2;
+  const text = await draftProactive({
+    functionId: "agent.askCheckin",
+    firstName,
+    facts: {
+      what_they_told_you_they_want: p.askText,
+      times_you_have_checked_in_on_this: p.checkinCount,
+      open_leads: p.hasMatches ? "Co has some possible leads but nothing to introduce yet" : "none yet",
+    },
+    task: escalate
+      ? `You've checked in on this ${p.checkinCount} times already. Ask, lightly, whether it's still something they want, and make it easy to say no. Name what it is in plain words.`
+      : `Ask where things stand with what they told you they want, naming it in plain words. Don't imply anything is lined up. If there's nothing worth asking right now, return SKIP.`,
   });
-
-  const system = `${CO_VOICE}\n\n${CO_TEXT_CHANNEL} You're following up on something ${row.first_name} told you about a while back: "${row.ask_text}"
-
-Context:
-- Co has checked in on this ${row.checkin_count} time(s) before with no resolution yet.
-- ${row.has_matches ? "Co has some open leads for this, but nothing to introduce yet — don't imply anything is imminent." : "Co hasn't found a strong match for this yet. It's fine to say so honestly (e.g. \"still keeping an eye out\") — don't imply anything is imminent either way."}
-
-Decide what to do, then act using your tools:
-- If this still deserves a check-in right now, draft a short message (1-3 sentences, no em dashes, no exclamation points — calm and unhurried, like a private members club, not a survey) and send it with sendSms. The check-in question about their ask always comes first and matters most.
-- If Co has already checked in multiple times with no resolution, consider asking whether this is still actually a priority for them, and give them an easy way to say "stop asking about this" — rather than just re-asking the same way again. Use your judgment on when this applies; there's no fixed threshold.
-- Only when it's NOT an escalation: you may call checkTopicGap to see if there's a rapport topic worth gently working in. Only fold it in if it fits naturally after the check-in question — never force it, and never let it dilute an escalation message.
-- If a check-in doesn't actually make sense for this person right now, it's fine to decide not to send anything this cycle — just skip sendSms.
-- If you used a suggested topic in the message you sent, call markTopicAsked with that topic.
-- Always finish by calling writeMemory once, with a short factual note of what you did (or why you skipped).`;
-
-  await generateText({
-    model: anthropic("claude-sonnet-4-6"),
-    system,
-    prompt: "Decide what to do about this check-in and act.",
-    tools,
-    stopWhen: stepCountIs(6),
-    experimental_telemetry: { isEnabled: true, functionId: "agent.askCheckin" },
-  });
-
-  return { sent: state.sent };
+  if (!text) return null;
+  return { text, rules: { maxSentences: 2, maxChars: 260 } };
 }
