@@ -2,6 +2,7 @@
 // (2026-09-15 call review: 126 goals, complaints about Co stored as
 // blockers, "low clarifying" shown in the call prompt).
 //   npx tsx evals/profile/lists.ts
+import { cityChangeAllowed } from "../../src/services/profileExtraction.js";
 import "dotenv/config";
 import { isAboutCo, mergeProfileList } from "../../src/services/profileExtraction.js";
 import { renderEmotionalContext, summarizeSignals } from "../../src/harness/emotion.js";
@@ -34,5 +35,26 @@ check("medium read shown", renderEmotionalContext(med, now).includes("frustrated
 const lowCall = summarizeSignals([{ source: "call", emotion: "awkwardness", intensity: "low", valence: "negative", about: null, quote: "not really", at: new Date(now.getTime() - 7200_000) }], now);
 check("low call moment hidden", !renderEmotionalContext(lowCall, now).includes("awkwardness"));
 
-console.log(`profile lists + emotion render: ${11 - failed}/11 passed`);
+
+// Where someone lives only changes when they say so (Royce, 2026-09-16:
+// "founding engineer roles in NYC" moved his city off San Francisco).
+const cityCases: [boolean, string][] = [
+  [!cityChangeAllowed("San Francisco", "NYC", "Cool, I'm also looking for founding engineer roles too in the mean time"), "a role preference doesn't move them"],
+  [!cityChangeAllowed("San Francisco", "NYC", "any accelerators in NYC worth applying to?"), "an accelerator preference doesn't move them"],
+  [!cityChangeAllowed("San Francisco", "Miami", "are there good events in Miami this weekend?"), "an events question doesn't move them"],
+  [cityChangeAllowed("San Francisco", "NYC", "I'm in NYC now, moved last week"), "saying they're there moves them"],
+  [cityChangeAllowed("San Francisco", "Austin", "we're moving to Austin next month"), "moving moves them"],
+  [cityChangeAllowed("San Francisco", "Oakland", "based in Oakland these days"), "based in moves them"],
+  [cityChangeAllowed(null, "San Francisco", "any events this weekend?"), "first city on file is kept"],
+  [cityChangeAllowed("San Francisco", "san francisco", "whatever"), "same city is fine"],
+  [!cityChangeAllowed("San Francisco", null, "I'm in NYC"), "no new city means no change"],
+];
+for (const [ok, label] of cityCases) {
+  if (!ok) {
+    failed++;
+    console.log(`FAIL city: ${label}`);
+  }
+}
+
+console.log(`profile lists, emotion render, city changes: ${20 - failed}/20 passed`);
 if (failed) process.exitCode = 1;

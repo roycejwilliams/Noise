@@ -160,7 +160,7 @@ export async function extractPsychographicProfile(
           "goals": [], // array of things they are working toward
           "blockers": [], // array of challenges or struggles in their life they mentioned (never frustrations with Co itself)
           "availability_pattern": "", // how often and when they want to connect (e.g. "weekday evenings", "weekends")
-          "city": "", // city they are in or moving to
+          "city": "", // ONLY where they live now or are actually moving to ("I'm in Oakland", "moving to Austin next month"). Never a city that only comes up as a preference or target — "roles in NYC", "investors in NYC", "events in Miami" say nothing about where they are. Empty string if they didn't say.
           "emotional_state": "", // one word describing their current emotional state (e.g. anxious, energized, overwhelmed, motivated, isolated, confident, focused, excited, lost, burnout)
           "long_term_direction": "" // a sentence capturing their longer-term personal + career direction/trajectory — where they're headed, distinct from immediate goals/blockers. Empty string if not discussed.
         }
@@ -516,6 +516,25 @@ Return ONLY valid JSON, no preamble: {"preference": "weekly" | "biweekly" | "non
 // goal mentioned on call 1 but not call 2 would silently vanish. Goals and
 // blockers are then trimmed by assessResolvedItems so items the caller has
 // since resolved don't accumulate forever. Scalar fields (social_energy,
+// A city only replaces the one on file when their own words place them
+// there. A city named as a target ("roles in NYC", "investors in NYC") is a
+// preference, not a move.
+const LIVES_THERE = [
+  /\b(i(?:'m| am)?|we(?:'re| are)?)\s+(?:currently\s+)?(?:in|based in|living in|out here in|over in)\b/i,
+  /\b(i|we)\s+(?:live|moved|relocated)\b/i,
+  /\b(moving|relocating|heading|headed)\s+(?:to|out to|back to)\b/i,
+  /\bbased (?:in|out of)\b/i,
+  /\bmy (?:place|apartment|home|office) (?:is )?in\b/i,
+  /\b(?:i(?:'m| am)?)\s+(?:from|back in)\b/i,
+];
+
+export function cityChangeAllowed(existingCity: string | null, newCity: string | null, transcript: string): boolean {
+  if (!newCity) return false;
+  if (!existingCity) return true; // nothing to protect yet
+  if (newCity.trim().toLowerCase() === existingCity.trim().toLowerCase()) return true;
+  return LIVES_THERE.some((re) => re.test(transcript));
+}
+
 // connection_style, availability_pattern, city) are the model's holistic
 // read of the latest call and take precedence, but fall back to the existing
 // value when this call's extraction came back empty. emotional_state is
@@ -617,7 +636,10 @@ export async function storeProfile(
   );
   const socialEnergy = clean.social_energy ?? existing?.social_energy ?? 50;
   const availabilityPattern = clean.availability_pattern || existing?.availability_pattern || null;
-  const city = clean.city || existing?.city || null;
+  // Where they live only changes when they actually said so (Royce,
+  // 2026-09-16: "founding engineer roles in NYC" moved his city from San
+  // Francisco to NYC, and every event search went to the wrong coast).
+  const city = cityChangeAllowed(existing?.city ?? null, clean.city ?? null, transcript) ? clean.city || existing?.city || null : (existing?.city ?? null);
   const longTermDirection = clean.long_term_direction || existing?.long_term_direction || null;
 
   // Non-fatal like every other embedding call in this file (storeTranscriptMemory,
