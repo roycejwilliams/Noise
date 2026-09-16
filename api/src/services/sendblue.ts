@@ -1,5 +1,5 @@
 import { SendblueAPI } from "sendblue";
-import { capitalizeSentences } from "./textStyle.js";
+import { capitalizeSentences, looksLikeMetaReply } from "./textStyle.js";
 
 const client = new SendblueAPI({
   apiKey: process.env.SENDBLUE_API_KEY!,
@@ -73,7 +73,7 @@ const sendblue = {
     ...client.messages,
     send: (body: Parameters<typeof client.messages.send>[0], options?: Parameters<typeof client.messages.send>[1]) => {
       const content = body.content ? cleanCoMessage(body.content) : body.content;
-      if (content && LEAKED_METACOMMENTARY.test(content)) {
+      if (content && (LEAKED_METACOMMENTARY.test(content) || looksLikeMetaReply(content))) {
         return Promise.reject(
           new Error(`sendblue: outbound content looked like leaked model meta-commentary, refusing to send: ${content}`),
         );

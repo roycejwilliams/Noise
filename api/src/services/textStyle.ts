@@ -10,6 +10,9 @@
 // links, handles, and words with their own internal capitals ("iPhone")
 // alone.
 export function capitalizeSentences(text: string): string {
+  // "i", "i'm", "i'll", "i've", "i'd" anywhere (2026-09-16: "so i can get
+  // started"), then the first word of each sentence.
+  text = text.replace(/(^|[^\p{L}\p{N}_'’])i(?=$|[\s,.!?;:)]|['’](m|ll|ve|d|s)\b)/gu, "$1I");
   return text.replace(/(^|[.!?]\s+|\n\s*)([a-z][^\s.!?]*)/g, (whole, lead: string, word: string, offset: number, str: string) => {
     const token = str.slice(offset + lead.length).split(/\s/)[0];
     if (/^(https?:|www\.|@)/i.test(token) || /[A-Z]/.test(word.slice(1))) return whole;
@@ -37,4 +40,12 @@ export function userLinesFrom(recentConversation: string, latestMessage?: string
     .map((l) => l.replace(/^User said: /, ""));
   if (latestMessage && lines[lines.length - 1] !== latestMessage) lines.push(latestMessage);
   return lines;
+}
+
+// A drafted line that answers the drafting instruction instead of the person
+// (2026-09-16, onboarding: "I'm ready to be Co. Send me what you'd like me to
+// say, and I'll write a single message."). Short generated lines are checked
+// against this and fall back to fixed copy.
+export function looksLikeMetaReply(text: string): boolean {
+  return /\b(i'?m ready to be co(?![-\w])|ready to be co(?![-\w])|(to|i) be co(?![-\w])|as co(?![-\w])(?! (knows|sees|said))|send me what you'?d like|what you'?d like me to (say|write)|i'?ll (write|draft|compose) (a|the|one|your|that) (single )?(message|text|reply)|here'?s (a|the|my) (draft|version|message for)|(write|draft) (a|the|one) single (message|text))/i.test(text);
 }

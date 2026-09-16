@@ -1,5 +1,5 @@
 import { Resend } from "resend";
-import { capitalizeSentences } from "./services/textStyle.js";
+import { capitalizeSentences, looksLikeMetaReply } from "./services/textStyle.js";
 import "dotenv/config";
 import { anthropic } from "@ai-sdk/anthropic";
 import { generateText } from "ai";
@@ -32,7 +32,9 @@ async function varied(instruction: string, fallback: string, maxChars: number): 
     // than guess which option was meant, fall all the way back — this is
     // the first thing a new user ever hears from Co, worth being strict.
     const looksLikeMultipleOptions = /\n|^#|\*\*|option\s*\d|^\d+[.)]/im.test(trimmed);
-    if (!trimmed || looksLikeMultipleOptions) return fallback;
+    // Or it answered the instruction instead of the person ("I'm ready to be
+    // Co. Send me what you'd like me to say", 2026-09-16): use the fixed copy.
+    if (!trimmed || looksLikeMultipleOptions || looksLikeMetaReply(trimmed)) return fallback;
     return trimmed.length > maxChars + 20 ? trimmed.slice(0, maxChars + 19) + "…" : trimmed;
   } catch (err: any) {
     console.error("otpActions: varied intro-line generation failed (non-fatal, using default):", err?.message ?? err);

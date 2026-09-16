@@ -1,6 +1,6 @@
 // Model-free checks for the Layer 3 gate's deterministic rules. Runs in a
 // second, no API calls: npx tsx evals/reply/codeChecks.ts
-import { capitalizeSentences } from "../../src/services/textStyle.js";
+import { capitalizeSentences, looksLikeMetaReply } from "../../src/services/textStyle.js";
 import { nearestPlace, parseDiscoverPlaces } from "../../src/services/lumaDiscovery.js";
 import { DateTime } from "luxon";
 import { isBrowseAsk, parseAskWindow, withinWindow } from "../../src/services/askWindow.js";
@@ -162,6 +162,21 @@ onboardingCaseCases.push(
   [capitalizeSentences("got it, keeping it to text. i'll be in touch") === "Got it, keeping it to text. I'll be in touch", "every sentence capitalized"],
   [capitalizeSentences("https://lu.ma/4nkiwp04") === "https://lu.ma/4nkiwp04", "a bare link is left alone"],
   [capitalizeSentences("hey, did you end up meeting anyone? curious what stood out") === "Hey, did you end up meeting anyone? Curious what stood out", "after a question mark"],
+);
+
+// A drafted line that answers its instruction instead of the person never
+// goes out (2026-09-16 onboarding: "I'm ready to be Co. Send me what you'd
+// like me to say, and I'll write a single message.").
+onboardingCaseCases.push(
+  [looksLikeMetaReply("I'm ready to be Co. Send me what you'd like me to say, and I'll write a single message."), "the onboarding leak is caught"],
+  [looksLikeMetaReply("Send me what you'd like me to say."), "asking for what to say is caught"],
+  [!looksLikeMetaReply("Save my contact so we can keep talking."), "the real line passes"],
+  [!looksLikeMetaReply("Would you like me to look for more founder events this week?"), "a normal offer passes"],
+  [!looksLikeMetaReply("You and your co-founder should both come."), "co-founder is not being Co"],
+  [!looksLikeMetaReply("I'll text you if something real turns up."), "a normal promise passes"],
+  [capitalizeSentences("what's your full name and email so i can get started?") === "What's your full name and email so I can get started?", "a lone i is capitalized"],
+  [capitalizeSentences("i'm in. i'll text you") === "I'm in. I'll text you", "i'm and i'll are capitalized"],
+  [capitalizeSentences("hit the wifi") === "Hit the wifi", "words containing i are left alone"],
 );
 
 let failed = 0;
