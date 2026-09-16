@@ -157,15 +157,24 @@ export async function recentlySent(userId: string): Promise<string[]> {
       [userId],
     )
     .catch(() => ({ rows: [] as any[] }));
-  const links = rows.filter((r: any) => r.memory_type === "text_exchange").map((r: any) => ({ at: new Date(r.created_at).getTime(), url: String(r.content).replace("Co replied: ", "").trim() }));
+  // A link is sent right after the recommendation it belongs to, so each one
+  // is matched to the first link that follows it and then used up. Matching
+  // on "closest in time" paired two accelerators with the same link
+  // (2026-09-16: "same link for both", which wasn't true).
+  const links = rows
+    .filter((r: any) => r.memory_type === "text_exchange")
+    .map((r: any) => ({ at: new Date(r.created_at).getTime(), url: String(r.content).replace("Co replied: ", "").trim(), used: false }))
+    .sort((a, b) => a.at - b.at);
   const out: string[] = [];
-  for (const row of rows.filter((r: any) => r.memory_type === "recommendation").slice(0, 3)) {
+  const recommendations = rows.filter((r: any) => r.memory_type === "recommendation").reverse(); // oldest first
+  for (const row of recommendations) {
     const at = new Date(row.created_at).getTime();
-    const near = links.find((l) => Math.abs(l.at - at) < 5 * 60 * 1000);
+    const near = links.find((l) => !l.used && l.at >= at - 30_000 && l.at - at < 5 * 60 * 1000);
+    if (near) near.used = true;
     const what = String(row.content).replace(/^Co surfaced [^—]*— /, "");
-    out.push(`Co sent them ${DateTime.fromJSDate(new Date(row.created_at)).toRelative()}: ${what}${near ? ` (link ${near.url})` : ""}`);
+    out.push(`Co sent them ${DateTime.fromJSDate(new Date(row.created_at)).toRelative()}: ${what}${near ? ` (link ${near.url})` : " (no link on file)"}`);
   }
-  return out;
+  return out.slice(-3);
 }
 
 // What Co is really still looking for, from open asks. Only these make

@@ -51,7 +51,9 @@ export function createConversationTools(ctx: ConversationToolContext) {
   // one:"). shareLink queues; the reply flushes the queue once it's out, and
   // conversationReply flushes anything left at the end of the turn.
   const flushLinks = async () => {
-    const urls = state.pendingLinks.splice(0, state.pendingLinks.length);
+    const queued = state.pendingLinks.splice(0, state.pendingLinks.length);
+    // Never the same link twice in one turn, however often it's asked for.
+    const urls = [...new Set(queued)].filter((u) => !state.sentMessages.includes(u));
     for (const url of urls) {
       await new Promise((resolve) => setTimeout(resolve, 1500));
       if (ctx.dryRun) {
