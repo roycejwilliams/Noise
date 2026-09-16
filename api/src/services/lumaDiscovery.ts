@@ -172,6 +172,29 @@ const RELEVANCE_THRESHOLD = 0.35;
 // events (different city string) or let through a same-vibe event states
 // away (embedding similarity has no real distance sense). This function is
 // now purely topic relevance — geography is handled entirely upstream.
+// The best few, in order. One-shot ranking meant a single odd top pick
+// ("East Bay Neurotech Happy Hour" for "startup or tech meetups") took the
+// whole search down with it when the relevance check rejected it, while real
+// matches sat further down the same list (2026-09-16).
+export async function rankTopByRelevance<T extends { name: string; city?: string | null }>(
+  candidates: T[],
+  ask: StatedIntent,
+  limit = 4,
+): Promise<(T & { similarity: number })[]> {
+  if (!ask.text || !candidates.length) return [];
+  const askEmbedding = ask.embedding?.length ? ask.embedding : await generateEmbedding(ask.text).catch(() => null);
+  if (!askEmbedding) return [];
+  const candidateEmbeddings = await Promise.all(candidates.map((c) => generateEmbedding(c.name).catch(() => null)));
+  const scored: (T & { similarity: number })[] = [];
+  candidates.forEach((candidate, i) => {
+    const embedding = candidateEmbeddings[i];
+    if (!embedding) return;
+    const similarity = cosineSimilarity(askEmbedding, embedding);
+    if (similarity >= RELEVANCE_THRESHOLD) scored.push({ ...candidate, similarity });
+  });
+  return scored.sort((a, b) => b.similarity - a.similarity).slice(0, limit);
+}
+
 export async function rankByRelevance<T extends { name: string; city?: string | null }>(
   candidates: T[],
   ask: StatedIntent,

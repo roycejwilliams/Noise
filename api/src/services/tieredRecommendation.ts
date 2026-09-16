@@ -3,7 +3,7 @@ import { DateTime } from "luxon";
 import { isBrowseAsk, parseAskWindow, withinWindow } from "./askWindow.js";
 import { anthropic } from "@ai-sdk/anthropic";
 import { listCalendarEvents } from "./luma.js";
-import { fetchPublicEvents, rankByRelevance } from "./lumaDiscovery.js";
+import { fetchPublicEvents, rankByRelevance, rankTopByRelevance } from "./lumaDiscovery.js";
 import { fetchLumaEventDetails, type EventDetails, type OpportunityDetails } from "./eventDetails.js";
 import { searchRecentPosts } from "./xSearch.js";
 import { withinRadius } from "./geocoding.js";
@@ -272,29 +272,34 @@ async function tryTier2(ask: StatedIntent, userCity: string | null, filter?: (st
   });
   const inWindow = events.filter((e) => isWithinLookaheadWindow(e.start_at, opts.maxDays ?? TIER2_MAX_LOOKAHEAD_DAYS) && (!filter || filter(e.start_at)));
   const nearby = await filterByRadius(inWindow, userCity);
-  const match = opts.browse ? soonest(nearby) : await rankByRelevance(nearby, ask);
-  if (!match) return null;
-  const details = (await fetchLumaEventDetails(match.url)) ?? undefined;
-  if (ask.text && !opts.browse) {
-    if (!(await isGenuinelyRelevant(ask.text, match.name, match.city, details?.description ?? null))) {
-      // The one place a real, nearby, in-window event still disappears, so
-      // it says so out loud (2026-09-16: "Humongous AI Meetup" ranked 0.579
-      // for an AI-meetups ask and vanished with no trace).
-      lastTierDrop = { tier: 2, name: match.name, reason: "the relevance check said it doesn't match what they asked" };
-      return null;
+  // The best few, not just the top one: a single odd top pick used to take
+  // the whole search down when the relevance check rejected it, with real
+  // matches sitting further down the same list (2026-09-16).
+  const candidates = opts.browse ? [soonest(nearby)].filter((m): m is (typeof nearby)[number] => !!m) : await rankTopByRelevance(nearby, ask);
+  const rejected: string[] = [];
+  for (const match of candidates) {
+    const details = (await fetchLumaEventDetails(match.url)) ?? undefined;
+    if (ask.text && !opts.browse && !(await isGenuinelyRelevant(ask.text, match.name, match.city, details?.description ?? null))) {
+      rejected.push(match.name);
+      continue;
     }
+    return {
+      details,
+      tier: 2,
+      kind: "public_event",
+      event_api_id: match.api_id,
+      event_date: match.start_at.slice(0, 10),
+      name: match.name,
+      url: match.url,
+      reason: `A public event that looks like a real fit${match.city ? ` in ${match.city}` : ""}.`,
+      city: match.city ?? null,
+    };
   }
-  return {
-    details,
-    tier: 2,
-    kind: "public_event",
-    event_api_id: match.api_id,
-    event_date: match.start_at.slice(0, 10),
-    name: match.name,
-    url: match.url,
-    reason: `A public event that looks like a real fit${match.city ? ` in ${match.city}` : ""}.`,
-    city: match.city ?? null,
-  };
+  // Nothing survived: say which ones were considered and dropped.
+  if (rejected.length) {
+    lastTierDrop = { tier: 2, name: rejected.join("; "), reason: `the relevance check rejected ${rejected.length === 1 ? "it" : "all of them"} as not matching what they asked` };
+  }
+  return null;
 }
 
 // Tier 3 — a real opportunity (accelerator, fellowship, program), via X's
