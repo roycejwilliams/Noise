@@ -160,13 +160,20 @@ ${recent.map((s) => `- [${s.at}] ${s.text}`).join("\n")}
 The picture also draws on things they said before this window, so a line these messages don't mention is fine. Only list:
 - a line their recent words contradict (they said something newer that changes it), or anything about Co itself rather than them ("contradicted");
 - an important new fact about them they stated here that the picture is missing: their work or stage, where they are, or something they want ("missing").
-Ignore wording differences and small details.
+
+Before calling anything missing, read the whole picture, not one line. If any
+line already covers it, in any wording, it is not missing. Ignore wording
+differences and small details. Most of the time there are no problems; return
+an empty list then.
 
 Return ONLY JSON: {"problems": [{"line": "the picture line, or null if missing", "kind": "contradicted" | "missing", "evidence": "their words that show it"}]}`;
 }
 
 export type SnapshotProblem = { line: string | null; kind: "contradicted" | "missing"; evidence: string };
 
+// Returns the problems it found. Recording is the caller's job: a problem the
+// rebuild then fixes isn't a problem (Royce, 2026-09-16: 89% of rebuilds were
+// logging one, which would have paged us every 12 hours for nothing).
 async function checkSnapshot(userId: string, snapshot: PersonSnapshot, recent: { at: string; text: string }[]): Promise<SnapshotProblem[]> {
   if (!recent.length) return [];
   try {
@@ -176,17 +183,7 @@ async function checkSnapshot(userId: string, snapshot: PersonSnapshot, recent: {
       experimental_telemetry: { isEnabled: true, functionId: "personSnapshot.check" },
       prompt: snapshotCheckPrompt(snapshot, recent),
     });
-    const problems = (parseModelJson<{ problems?: SnapshotProblem[] }>(text).problems ?? []).filter((p) => p && p.kind);
-    await recordDecision({
-      layer: 4,
-      decision: "profile.snapshotCheck",
-      userId,
-      outcome: problems.length ? "skip" : "act",
-      action: problems.length ? "problems_found" : "matches_recent",
-      proposal: { snapshot, problems },
-      checks: problems.map((p) => ({ name: `snapshot_${p.kind}`, pass: false, reason: `${p.line ?? "(missing)"}: ${p.evidence}`.slice(0, 300) })),
-    });
-    return problems;
+    return (parseModelJson<{ problems?: SnapshotProblem[] }>(text).problems ?? []).filter((p) => p && p.kind);
   } catch (err: any) {
     console.error("personSnapshot: check failed (non-fatal):", err?.message ?? err);
     return [];
@@ -224,12 +221,29 @@ export async function refreshPersonSnapshot(userId: string, opts: { force?: bool
     const cutoff = new Date(Date.now() - 48 * 3600_000).toISOString().slice(0, 16);
     const recent = input.recentStatements.filter((s) => s.at >= cutoff);
     const problems = await checkSnapshot(userId, snapshot, recent);
+    let unresolved = problems;
     if (problems.length) {
       const retry = await build(problems.map((p) => `- ${p.kind}: ${p.line ?? "(missing)"} (they said: ${p.evidence})`).join("\n"));
       if (retry) {
         const remaining = await checkSnapshot(userId, retry, recent);
-        if (remaining.length <= problems.length) snapshot = retry;
+        if (remaining.length <= problems.length) {
+          snapshot = retry;
+          unresolved = remaining;
+        }
       }
+    }
+    // Only what the rebuild couldn't fix counts as a problem worth watching.
+    if (recent.length) {
+      await recordDecision({
+        layer: 4,
+        decision: "profile.snapshotCheck",
+        userId,
+        outcome: unresolved.length ? "skip" : "act",
+        action: unresolved.length ? "problems_found" : problems.length ? "fixed_on_rebuild" : "matches_recent",
+        proposal: { snapshot, found: problems, unresolved },
+        checks: unresolved.map((p) => ({ name: `snapshot_${p.kind}`, pass: false, reason: `${p.line ?? "(missing)"}: ${p.evidence}`.slice(0, 300) })),
+        reason: problems.length && !unresolved.length ? `${problems.length} problem(s) fixed on the rebuild` : null,
+      });
     }
     await pool.query(
       `INSERT INTO person_snapshots (user_id, snapshot, updated_at) VALUES ($1, $2, NOW())
