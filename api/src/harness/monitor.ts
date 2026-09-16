@@ -34,6 +34,9 @@ export const SIGNALS: Signal[] = [
   { key: "latency_over", label: "Replies over the latency budget", bad: `decision = 'turn.latency' AND checks @> '[{"pass": false}]'`, total: `decision = 'turn.latency'`, floor: 0.2, minCount: 5 },
   { key: "call_ungrounded", label: "Calls with unsupported promises or facts", bad: `decision = 'call.grounding' AND outcome = 'skip'`, total: `decision = 'call.grounding'`, floor: 0.3, minCount: 2 },
   { key: "snapshot_problems", label: "Person summaries that contradict recent messages", bad: `decision = 'profile.snapshotCheck' AND outcome = 'skip'`, total: `decision = 'profile.snapshotCheck'`, floor: 0.3, minCount: 3 },
+  { key: "city_overwritten", label: "Profile city changes blocked (extraction drifting)", bad: `decision = 'profile.city' AND outcome = 'skip'`, total: `decision = 'profile.city'`, floor: 0.5, minCount: 3 },
+  { key: "card_misfire", label: "Contact card asked for when they wanted something else", bad: `decision = 'reply.contactCard' AND outcome = 'skip'`, total: `decision = 'reply.contactCard'`, floor: 0.3, minCount: 2 },
+  { key: "reaction_withheld", label: "Reactions held back because a reply was still owed", bad: `decision = 'turn.closing' AND outcome = 'skip'`, total: `decision = 'turn.closing'`, floor: 0.4, minCount: 3 },
   { key: "router_unavailable", label: "Router failures (no actions taken)", bad: `decision = 'router.decideActions' AND checks @> '[{"name": "router_available", "pass": false}]'`, total: `decision = 'router.decideActions'`, floor: 0.05, minCount: 3 },
 ];
 

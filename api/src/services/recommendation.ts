@@ -5,7 +5,7 @@ import { getTimezoneForCity } from "./geocoding.js";
 import { anthropic } from "@ai-sdk/anthropic";
 import { propagateAttributes } from "@langfuse/tracing";
 import pool from "../db/db.js";
-import { getTieredRecommendation, type TierMatch } from "./tieredRecommendation.js";
+import { getTieredRecommendation, takeLastSearchScope, type SearchScope, type TierMatch } from "./tieredRecommendation.js";
 import { generateEmbedding } from "./embeddings.js";
 import { MODELS } from "../models.js";
 import { parseModelJson } from "./modelJson.js";
@@ -34,8 +34,8 @@ const SUGGEST_MODEL = MODELS.sonnet;
 // to present each one as its own distinct, link-previewable block instead
 // of one clumped paragraph.
 export type RecommendationResult =
-  | { available: true; match: string; reason: string; matches?: TierMatch[] }
-  | { available: false; reason: string };
+  | { available: true; match: string; reason: string; matches?: TierMatch[]; scope?: SearchScope | null }
+  | { available: false; reason: string; scope?: SearchScope | null };
 
 const NOT_ENOUGH_DATA: RecommendationResult = {
   available: false,
@@ -168,12 +168,13 @@ export async function generateRecommendation(userId: string, currentMessage?: st
         return [];
       });
       const tierMatches = await dropAlreadyRecommended(userId, found);
+      const scope = takeLastSearchScope();
       // "What's on this weekend?" is a question about the calendar. If
       // nothing's on it in that window, the honest answer is nothing, not a
       // generic "look for startup meetups" suggestion (2026-09-16).
       if (!tierMatches.length && currentMessage && isBrowseAsk(currentMessage)) {
         const window = parseAskWindow(currentMessage, DateTime.now());
-        return { available: false, reason: `nothing real on the calendar${window ? ` for ${window.label}` : ""}` };
+        return { available: false, reason: `nothing real on the calendar${window ? ` for ${window.label}` : ""}`, scope };
       }
       if (found.length && !tierMatches.length) {
         return { available: false, reason: `already recommended ${found.map((m) => m.name).join(", ")} recently` };
@@ -195,6 +196,7 @@ export async function generateRecommendation(userId: string, currentMessage?: st
           match: tierMatches.map((m) => `${m.name} (${m.url ?? "Co's own calendar"})`).join("; "),
           reason: tierMatches.map((m) => m.reason).join(" "),
           matches: tierMatches,
+          scope,
         };
         {
           const tieredContent = `Co surfaced ${tierMatches.length} tiered recommendation(s) — ${tierMatches.map((m) => `[Tier ${m.kind}] ${m.name}: ${m.reason}`).join(" | ")}`;

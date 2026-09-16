@@ -639,7 +639,19 @@ export async function storeProfile(
   // Where they live only changes when they actually said so (Royce,
   // 2026-09-16: "founding engineer roles in NYC" moved his city from San
   // Francisco to NYC, and every event search went to the wrong coast).
-  const city = cityChangeAllowed(existing?.city ?? null, clean.city ?? null, transcript) ? clean.city || existing?.city || null : (existing?.city ?? null);
+  const cityAllowed = cityChangeAllowed(existing?.city ?? null, clean.city ?? null, transcript);
+  const city = cityAllowed ? clean.city || existing?.city || null : (existing?.city ?? null);
+  if (clean.city && existing?.city && clean.city !== existing.city) {
+    await recordDecision({
+      layer: 4,
+      decision: "profile.city",
+      userId: user_id,
+      outcome: cityAllowed ? "act" : "skip",
+      action: cityAllowed ? "moved" : "kept_existing",
+      proposal: { from: existing.city, to: clean.city },
+      checks: [{ name: "they_said_they_live_there", pass: cityAllowed, reason: cityAllowed ? "their own words place them there" : "named as a preference, not a move" }],
+    }).catch(() => {});
+  }
   const longTermDirection = clean.long_term_direction || existing?.long_term_direction || null;
 
   // Non-fatal like every other embedding call in this file (storeTranscriptMemory,

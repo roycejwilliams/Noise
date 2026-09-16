@@ -1770,7 +1770,7 @@ Return ONLY valid JSON, no preamble: {"date": "YYYY-MM-DD or null", "time": "HH:
                 userId: user.id,
                 outcome: prepared.length ? "act" : "skip",
                 action: prepared.length ? "sent_matches" : "nothing_fit",
-                proposal: { message: resolvedContent, holdLine, ms: Date.now() - searchStarted, matches: preparedAll.map((p) => ({ name: p.m.name, tier: p.m.tier, fits: p.fits ?? null, why: p.why ?? null, soldOut: p.m.details?.soldOut ?? null })) },
+                proposal: { message: resolvedContent, holdLine, ms: Date.now() - searchStarted, scope: "scope" in recommendation ? recommendation.scope : null, matches: preparedAll.map((p) => ({ name: p.m.name, tier: p.m.tier, fits: p.fits ?? null, why: p.why ?? null, soldOut: p.m.details?.soldOut ?? null })) },
               });
               if (prepared.length) addInstruction(replyFacts, `You already sent them ${prepared.length > 1 ? "a couple of real things" : "something real"} you thought of, separately from this reply. Don't repeat the name, link, or details in this reply. If it's natural, you can briefly acknowledge you just sent those, but keep this reply focused on genuinely responding to what they just said.`);
             } else if (recommendation.available) {
@@ -1800,7 +1800,7 @@ Return ONLY valid JSON, no preamble: {"date": "YYYY-MM-DD or null", "time": "HH:
                   { name: "found_something_real", pass: false, reason: recommendation.reason },
                   { name: "ask_saved_for_daily_search", pass: !!turnAsk?.ask?.text, reason: turnAsk?.ask?.text ?? "no ask captured" },
                 ],
-                proposal: { message: resolvedContent, holdLine, ms: Date.now() - searchStarted },
+                proposal: { message: resolvedContent, holdLine, ms: Date.now() - searchStarted, scope: "scope" in recommendation ? recommendation.scope : null },
               });
               addInstruction(replyFacts, "You searched and found nothing real yet. Say that plainly. Don't make up a suggestion.");
             }

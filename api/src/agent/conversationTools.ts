@@ -120,6 +120,17 @@ export function createConversationTools(ctx: ConversationToolContext) {
         // They have to have actually asked for Co's contact (2026-09-16:
         // "You send it over", about a link, got the contact card).
         if (!asksForContactCard(theirWords) && !asksForContactCard(ctx.resolvedContent)) {
+          if (!ctx.dryRun) {
+            await recordDecision({
+              layer: 3,
+              decision: "reply.contactCard",
+              userId: ctx.userId,
+              outcome: "skip",
+              action: "not_asked_for",
+              proposal: { theirWords, message: ctx.resolvedContent },
+              checks: [{ name: "asked_for_cos_contact", pass: false, reason: "they asked for something else" }],
+            }).catch(() => {});
+          }
           return { ok: false, error: "they didn't ask for your contact card, so it wasn't sent. Send what they actually asked for." };
         }
         if (ctx.dryRun) {

@@ -33,5 +33,24 @@ check("unkeepable promise fails", checks.find((c) => c.name === "call_promise_un
 check("invented fact fails", checks.find((c) => c.name === "call_invented_fact")?.pass === false);
 check("ok claims not listed", checks.length === 3);
 
-console.log(`monitor + call audit rules: ${9 - failed}/9 passed`);
+
+// Every signal reads a decision the code actually writes (2026-09-16: new
+// records for the city guard, the contact card and held-back reactions).
+const WRITTEN_DECISIONS = [
+  "reply.grounding", "proactive.dailyPick", "recommendation.search", "turn.latency", "call.grounding",
+  "profile.snapshotCheck", "profile.city", "reply.contactCard", "turn.closing", "router.decideActions",
+];
+for (const signal of SIGNALS) {
+  const named = WRITTEN_DECISIONS.find((d) => signal.bad.includes(`'${d}'`));
+  if (!named) {
+    failed++;
+    console.log(`FAIL signal ${signal.key}: watches a decision nothing writes`);
+  }
+  if (!signal.total.includes(`'${named}'`)) {
+    failed++;
+    console.log(`FAIL signal ${signal.key}: its share is measured against a different decision`);
+  }
+}
+
+console.log(`monitor + call audit rules: ${31 - failed}/31 passed`);
 if (failed) process.exitCode = 1;
