@@ -203,17 +203,22 @@ Return ONLY "yes" or "no".`,
 // minutes instead of once per search.
 const LIST_TTL_MS = 15 * 60 * 1000;
 let calendarCache: { at: number; events: Awaited<ReturnType<typeof listCalendarEvents>> } | null = null;
-let publicCache: { at: number; events: Awaited<ReturnType<typeof fetchPublicEvents>> } | null = null;
 async function cachedCalendarEvents() {
   if (calendarCache && Date.now() - calendarCache.at < LIST_TTL_MS) return calendarCache.events;
   const events = await listCalendarEvents();
   calendarCache = { at: Date.now(), events };
   return events;
 }
-async function cachedPublicEvents() {
-  if (publicCache && Date.now() - publicCache.at < LIST_TTL_MS) return publicCache.events;
-  const events = await fetchPublicEvents(50);
-  publicCache = { at: Date.now(), events };
+// Cached per city, since the feed is city-scoped now.
+const publicCacheByCity = new Map<string, { at: number; events: Awaited<ReturnType<typeof fetchPublicEvents>> }>();
+
+async function cachedPublicEvents(city?: string | null) {
+  const key = (city ?? "").toLowerCase();
+  const cached = publicCacheByCity.get(key);
+  if (cached && Date.now() - cached.at < LIST_TTL_MS) return cached.events;
+  const events = await fetchPublicEvents(50, city ?? null);
+  if (publicCacheByCity.size > 20) publicCacheByCity.clear();
+  publicCacheByCity.set(key, { at: Date.now(), events });
   return events;
 }
 
@@ -261,7 +266,7 @@ function soonest<T extends { start_at: string }>(events: T[]): T | null {
 }
 
 async function tryTier2(ask: StatedIntent, userCity: string | null, filter?: (startAt: string) => boolean, opts: { browse?: boolean; maxDays?: number } = {}): Promise<TierMatch | null> {
-  const events = await cachedPublicEvents().catch((err: any) => {
+  const events = await cachedPublicEvents(userCity).catch((err: any) => {
     console.error("tieredRecommendation: tryTier2 fetchPublicEvents failed (non-fatal):", err?.message ?? err);
     return [];
   });

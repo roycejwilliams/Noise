@@ -20,12 +20,55 @@ export type DiscoveredEvent = {
   url: string;
 };
 
-// No confirmed location/category filter param — parse.bot's "Discover
-// Events by City" listing implies one exists, but the exact param name
-// isn't confirmed against real testing, so this fetches unfiltered and
-// ranks client-side instead of risking a silently-wrong filter param.
-// Genuinely global result set until that's confirmed — a real limitation
-// for a Bay-Area-focused product, flagged rather than silently accepted.
+// The location filter is confirmed (2026-09-16): discover_place_api_id,
+// the id Luma's own city pages use. Without it the feed is personalised by
+// the caller's IP, which from a datacenter returned one day of events for
+// whatever city Luma guessed — every question about a later day found
+// nothing. With it, results are the city's own upcoming events across days.
+// The id comes from the city page itself (lu.ma/sf), cached in memory.
+const CITY_SLUGS: [RegExp, string][] = [
+  [/san francisco|bay area|sf\b|oakland|berkeley|palo alto|mountain view|menlo park|san jose/i, "sf"],
+  [/new york|nyc|brooklyn|manhattan/i, "nyc"],
+  [/los angeles|\bla\b|santa monica|venice/i, "la"],
+  [/london/i, "london"],
+  [/austin/i, "austin"],
+  [/miami/i, "miami"],
+  [/seattle/i, "seattle"],
+  [/boston|cambridge/i, "boston"],
+  [/chicago/i, "chicago"],
+  [/toronto/i, "toronto"],
+  [/berlin/i, "berlin"],
+  [/paris/i, "paris"],
+  [/bangalore|bengaluru/i, "bangalore"],
+  [/singapore/i, "singapore"],
+];
+
+const placeIdCache = new Map<string, { at: number; id: string | null }>();
+const PLACE_CACHE_TTL_MS = 24 * 60 * 60 * 1000;
+
+export function citySlug(city: string | null): string | null {
+  if (!city) return null;
+  return CITY_SLUGS.find(([re]) => re.test(city))?.[1] ?? null;
+}
+
+// Luma's own id for a city, read off its public city page. Null when the
+// city isn't one Luma has a page for — the feed then falls back to
+// unfiltered, exactly as before.
+export async function discoverPlaceId(city: string | null): Promise<string | null> {
+  const slug = citySlug(city);
+  if (!slug) return null;
+  const cached = placeIdCache.get(slug);
+  if (cached && Date.now() - cached.at < PLACE_CACHE_TTL_MS) return cached.id;
+  let id: string | null = null;
+  try {
+    const res = await fetch(`https://lu.ma/${slug}`, { headers: { "User-Agent": "Mozilla/5.0" }, redirect: "follow" });
+    if (res.ok) id = (await res.text()).match(/discplace-[A-Za-z0-9]+/)?.[0] ?? null;
+  } catch (err: any) {
+    console.error(`lumaDiscovery: place id lookup failed for ${slug} (non-fatal):`, err?.message ?? err);
+  }
+  placeIdCache.set(slug, { at: Date.now(), id });
+  return id;
+}
 // One page of Luma's discover feed is today's events only, so a question
 // about any later day used to have nothing to search (Royce, 2026-09-16:
 // "what's been surfacing on Luma this weekend" found nothing on Luma at
@@ -33,13 +76,15 @@ export type DiscoveredEvent = {
 const PAGE_SIZE = 20;
 const MAX_PAGES = 6;
 
-export async function fetchPublicEvents(limit: number): Promise<DiscoveredEvent[]> {
+export async function fetchPublicEvents(limit: number, city?: string | null): Promise<DiscoveredEvent[]> {
+  const placeId = await discoverPlaceId(city ?? null);
   const out: DiscoveredEvent[] = [];
   const seen = new Set<string>();
   let cursor: string | null = null;
   for (let page = 0; page < MAX_PAGES && out.length < limit; page++) {
     const url = new URL(DISCOVER_URL);
     url.searchParams.set("pagination_limit", String(PAGE_SIZE));
+    if (placeId) url.searchParams.set("discover_place_api_id", placeId);
     if (cursor) url.searchParams.set("pagination_cursor", cursor);
 
     const res = await fetch(url);
