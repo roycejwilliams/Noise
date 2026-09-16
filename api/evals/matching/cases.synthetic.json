@@ -576,5 +576,72 @@
       "alreadyOffered": false,
       "now": "2026-09-15T18:00:00Z"
     }
+  },
+  {
+    "id": "m40-asked-range-far-ok",
+    "kind": "match",
+    "expect": "offer",
+    "match": {
+      "tier": 2,
+      "kind": "public_event",
+      "event_api_id": "evt-wos",
+      "name": "Demo Night @ WorkOS",
+      "url": "https://lu.ma/wos",
+      "reason": "A public event that looks like a real fit in San Francisco.",
+      "city": "San Francisco",
+      "event_date": "2026-10-06"
+    },
+    "facts": {
+      "searchCity": "San Francisco",
+      "distanceMiles": 0,
+      "alreadyOffered": false,
+      "now": "2026-09-16T18:00:00Z",
+      "askedUntil": "2026-10-14"
+    }
+  },
+  {
+    "id": "m41-after-asked-range",
+    "kind": "match",
+    "expect": "reject",
+    "violation": "timing",
+    "match": {
+      "tier": 2,
+      "kind": "public_event",
+      "event_api_id": "evt-wos",
+      "name": "Demo Night @ WorkOS",
+      "url": "https://lu.ma/wos",
+      "reason": "A public event that looks like a real fit in San Francisco.",
+      "city": "San Francisco",
+      "event_date": "2026-10-20"
+    },
+    "facts": {
+      "searchCity": "San Francisco",
+      "distanceMiles": 0,
+      "alreadyOffered": false,
+      "now": "2026-09-16T18:00:00Z",
+      "askedUntil": "2026-10-14"
+    }
+  },
+  {
+    "id": "m42-no-range-still-14-days",
+    "kind": "match",
+    "expect": "reject",
+    "violation": "timing",
+    "match": {
+      "tier": 2,
+      "kind": "public_event",
+      "event_api_id": "evt-wos",
+      "name": "Demo Night @ WorkOS",
+      "url": "https://lu.ma/wos",
+      "reason": "A public event that looks like a real fit in San Francisco.",
+      "city": "San Francisco",
+      "event_date": "2026-10-06"
+    },
+    "facts": {
+      "searchCity": "San Francisco",
+      "distanceMiles": 0,
+      "alreadyOffered": false,
+      "now": "2026-09-16T18:00:00Z"
+    }
   }
 ]

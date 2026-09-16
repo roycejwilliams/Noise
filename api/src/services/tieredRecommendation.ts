@@ -553,7 +553,7 @@ export async function getTieredRecommendation(
   lastSearchScope = { city, window: window?.label ?? null, windowStart: window?.start.toISO() ?? null, windowEnd: window?.end.toISO() ?? null, browse, tiers: found.map((m) => m.tier), dropped: lastTierDrop };
   lastTierDrop = null;
   const gatedOut: GatedOut[] = [];
-  const gated = await gateMatches(found, { userId: opts.userId ?? null, searchCity: city, checkRepeat: opts.checkRepeat, gatedOut });
+  const gated = await gateMatches(found, { userId: opts.userId ?? null, searchCity: city, checkRepeat: opts.checkRepeat, gatedOut, askedUntil: window ? window.end.toISODate() : null });
   if (lastSearchScope) lastSearchScope.gatedOut = gatedOut;
   // Every offerable candidate, best first. Collapsing to one per tier here
   // threw the right event away (2026-09-16: "Voice AI Happy Hour" passed the

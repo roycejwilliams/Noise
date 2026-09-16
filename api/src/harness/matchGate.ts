@@ -45,6 +45,9 @@ export type MatchFacts = {
   // Already offered to this person (conversation or proactive).
   alreadyOffered: boolean;
   now: Date;
+  // The last day of a time frame they named ("Oct 5 - Oct 14th"), YYYY-MM-DD.
+  // Replaces the fixed lookahead for this search: they asked about those days.
+  askedUntil?: string | null;
 };
 
 export function checkLocation(match: TierMatch, facts: MatchFacts): GateCheck {
@@ -74,8 +77,13 @@ export function checkTiming(match: TierMatch, facts: MatchFacts): GateCheck {
   if (!match.event_date) return { name, pass: false, reason: "event has no date" };
   const days = daysBetween(today, match.event_date);
   if (days < 0) return { name, pass: false, reason: `event on ${match.event_date} already happened` };
-  const max = TIER_LOOKAHEAD_DAYS[match.tier];
-  if (days > max) return { name, pass: false, reason: `event is ${days} days out, past the ${max}-day window` };
+  // A time frame they named sets how far out is fine (2026-09-16: an Oct 6
+  // event inside the "Oct 5 - Oct 14th" they asked about was rejected as past
+  // the 14-day lookahead, and Co told them it was outside their range).
+  const max = facts.askedUntil ? Math.max(daysBetween(today, facts.askedUntil), 0) : TIER_LOOKAHEAD_DAYS[match.tier];
+  if (days > max) {
+    return { name, pass: false, reason: facts.askedUntil ? `event on ${match.event_date} is after the time frame they asked about` : `event is ${days} days out, past the ${max}-day window` };
+  }
   return { name, pass: true, reason: `in ${days} day(s)` };
 }
 
@@ -198,7 +206,7 @@ export type GatedOut = { name: string; tier: number; reasons: string[] };
 
 export async function gateMatches(
   matches: TierMatch[],
-  ctx: { userId: string | null; searchCity: string | null; checkRepeat?: boolean; evidenceByUrl?: Map<string, string>; now?: Date; gatedOut?: GatedOut[] },
+  ctx: { userId: string | null; searchCity: string | null; checkRepeat?: boolean; evidenceByUrl?: Map<string, string>; now?: Date; gatedOut?: GatedOut[]; askedUntil?: string | null },
 ): Promise<TierMatch[]> {
   const now = ctx.now ?? new Date();
   const kept: TierMatch[] = [];
@@ -211,6 +219,7 @@ export async function gateMatches(
       evidence: match.tier === 3 ? (match.evidence ?? ctx.evidenceByUrl?.get(match.url) ?? null) : null,
       alreadyOffered: ctx.userId && ctx.checkRepeat !== false ? await wasAlreadyOffered(ctx.userId, match) : false,
       now,
+      askedUntil: ctx.askedUntil ?? null,
     };
     const { ok, checks } = evaluateMatch(match, facts);
     if (ok) kept.push(match);
