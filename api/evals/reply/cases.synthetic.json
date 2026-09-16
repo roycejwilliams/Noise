@@ -305,5 +305,24 @@
     ],
     "groundedDraft": true,
     "style": "capitalized"
+  },
+  {
+    "id": "t0916_which_one",
+    "message": "Which one?",
+    "recentConversation": "Co replied: https://x.com/i/status/2097579083265929343\nCo replied: This one's pre-seed/seed, three months across SF, NY and London.\nUser said: Hey\nCo replied: Did that last one look any better?\nUser said: Which one?",
+    "facts": [
+      {
+        "kind": "did_before",
+        "text": "Co sent them 20 minutes ago: [Tier opportunity] 16vc accelerator: applications open for 20-25 pre-seed and seed companies, $200K on a SAFE (link https://x.com/i/status/2097579083265929343)"
+      }
+    ],
+    "draft": "The 16vc accelerator I sent earlier, the one taking pre-seed and seed companies with $200K on a SAFE.",
+    "forbidden": [
+      "don'?t have that",
+      "rather not guess",
+      "can'?t re-?pull"
+    ],
+    "groundedDraft": true,
+    "style": "capitalized"
   }
 ]

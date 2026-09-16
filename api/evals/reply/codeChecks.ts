@@ -1,5 +1,6 @@
 // Model-free checks for the Layer 3 gate's deterministic rules. Runs in a
 // second, no API calls: npx tsx evals/reply/codeChecks.ts
+import { closingReaction } from "../../src/services/conversationClose.js";
 import "dotenv/config";
 import { addFact, baseReplyFacts, codeChecks } from "../../src/harness/replyGrounding.js";
 
@@ -50,7 +51,37 @@ const ongoingCases: [string, string | null, string][] = [
   ["I'll keep looking and get back to you tomorrow.", "no_followup_promise", "tomorrow commitment"],
 ];
 
+// When a thread is over: react instead of replying (services/conversationClose.ts).
+const closingCases: [string, string | null][] = [
+  ["Cool", "like"],
+  ["cool thanks!", "like"],
+  ["Nice thanks \u{1F64F}\u{1F3FE}", "like"],
+  ["\u{1F44D}", "like"],
+  ["ok cool thanks so much", "like"],
+  ["got it", "like"],
+  ["sounds good", "like"],
+  ["perfect", "love"],
+  ["lol", "laugh"],
+  ["haha amazing", null],
+  ["Cool, can you send it again?", null],
+  ["thanks, what time does it start", null],
+  ["Which one?", null],
+  ["cool i'll check it out and let you know what i think", null],
+  ["Yeah", null],
+  ["ok call me now", null],
+  ["Tell me more", null],
+  ["no", null],
+];
+
 let failed = 0;
+for (const [message, expected] of closingCases) {
+  const got = closingReaction(message);
+  if (got !== expected) {
+    failed++;
+    console.log(`FAIL closing "${message}" -> ${got ?? "(reply)"} , expected ${expected ?? "(reply)"}`);
+  }
+}
+
 for (const [draft, expected, label] of cases) {
   const failing = codeChecks(draft, rf, src).filter((c) => !c.pass).map((c) => c.name);
   const ok = expected ? failing.includes(expected) : failing.length === 0;
@@ -67,6 +98,6 @@ for (const [draft, expected, label] of ongoingCases) {
     console.log(`FAIL ${label}: "${draft}" -> ${failing.join(", ") || "(none)"}`);
   }
 }
-const total = cases.length + ongoingCases.length;
+const total = cases.length + ongoingCases.length + closingCases.length;
 console.log(`codeChecks: ${total - failed}/${total} passed`);
 if (failed) process.exitCode = 1;

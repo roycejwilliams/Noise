@@ -50,7 +50,8 @@ import { addEventFacts, addFact, addInstruction, addOngoingSearchFacts, gatherRe
 import { findRealVenues } from "../services/venueLookup.js";
 import { runConversationReplyAgent, filterRelevantMemories, CALL_OFFER_EXPIRY_DAYS } from "../agent/conversationReply.js";
 import { triggerCallForUser } from "../services/callTrigger.js";
-import sendblue, { cleanCoMessage, markRead } from "../services/sendblue.js";
+import sendblue, { cleanCoMessage, markRead, sendReaction } from "../services/sendblue.js";
+import { closingReaction, emojiFor } from "../services/conversationClose.js";
 import { CO_VOICE, CO_TEXT_CHANNEL } from "../services/coVoice.js";
 import { generateVoiceNote } from "../services/voiceNote.js";
 import { MODELS } from "../models.js";
@@ -998,6 +999,7 @@ export function sendblueRouter(io: Server): Router {
 
         // Layer 2 harness record: the router's proposal, the code gates it
         // went through, and what was allowed to run.
+        let routerActed = false;
         {
           const checks = routerGateChecks(routerOutput, openItems, decision, { message: resolvedContent, recentConversation }, routerFailed);
           const acted = [
@@ -1009,6 +1011,7 @@ export function sendblueRouter(io: Server): Router {
             decision.asksForUpdates ? "updates" : null,
             decision.venue ? "venue" : null,
           ].filter(Boolean);
+          routerActed = acted.length > 0 || !!decision.clarifyContext || !!decision.clarifyAbout;
           recordDecision({
             layer: 2,
             decision: "router.decideActions",
@@ -1020,6 +1023,32 @@ export function sendblueRouter(io: Server): Router {
             confidence: routerOutput.confidence,
             reason: routerFailed ? "router unavailable" : routerOutput.reason,
           });
+        }
+
+        // The thread just ended ("cool", "thanks 🙏"): react to their
+        // message instead of writing a sentence that keeps it going
+        // (services/conversationClose.ts). Only when the router found nothing
+        // to act on, so a real answer is never swallowed.
+        const closing = hasText && !routerActed && !resolvedItem ? closingReaction(resolvedContent) : null;
+        if (closing) {
+          const handle = typeof req.body?.message_handle === "string" ? req.body.message_handle : null;
+          const tapped = handle ? await sendReaction(handle, closing) : false;
+          // No tapback (SMS, or an old message): a single emoji says the same
+          // thing without restarting the conversation.
+          if (!tapped) {
+            await sendCoReply({ phone: user.phone_number, message: emojiFor(closing), asVoice: false });
+            await logTextExchange(user.id, `Co replied: ${emojiFor(closing)}`);
+          }
+          await recordDecision({
+            layer: 3,
+            decision: "turn.closing",
+            userId: user.id,
+            outcome: "act",
+            action: tapped ? `tapback:${closing}` : `emoji:${closing}`,
+            proposal: { message: resolvedContent },
+            checks: [{ name: "router_found_nothing_to_do", pass: true }],
+          });
+          return;
         }
 
         // Layer 3 harness facts: what's actually true this turn. Branches
@@ -1570,7 +1599,11 @@ Return ONLY valid JSON, no preamble: {"date": "YYYY-MM-DD or null", "time": "HH:
         try {
           // Emotion loop: someone who's struggling and just wants to be heard
           // doesn't get an event or opportunity pitched in the same reply.
-          const holdRecommendationForFeelings = emotional.needsCare && seekingMode !== "solving";
+          // A direct question or request gets answered, even when they've
+          // been struggling (2026-09-16: "Tell me more" got "how are you
+          // doing?" back). The hold is for open-ended messages.
+          const directRequest = /\?\s*$/.test(resolvedContent.trim()) || /^(tell me|send|show|give me|find|look|search|what|which|who|when|where|how|any\b)/i.test(resolvedContent.trim());
+          const holdRecommendationForFeelings = emotional.needsCare && seekingMode !== "solving" && !directRequest;
           if (holdRecommendationForFeelings && decision.wantsRecommendation) {
             addInstruction(replyFacts, "They asked for a suggestion, but they've been struggling. Respond to how they're doing first; offer to look for something once they want it, without naming anything now.");
           }

@@ -47,6 +47,7 @@ const GROUNDING_EFFORT = "low";
 
 export type FactKind =
   | "did_this_turn" // something Co actually did during this turn
+  | "did_before" // something Co really did on an earlier turn (what it sent)
   | "pending" // something Co asked and is still waiting on
   | "scheduled" // a real scheduled call
   | "known" // a real field Co has (event name, date, link, recommendation)
@@ -104,6 +105,10 @@ export async function gatherReplyFacts(
   // summary and cut "designer by Friday" and "Series A" as unsupported).
   const picture = renderSnapshot(await getPersonSnapshot(userId).catch(() => null));
   for (const line of picture.split("\n").filter(Boolean)) addFact(rf, "known", `What they've told Co: ${line}`);
+  // What Co already sent them, so "which one?" can be answered instead of
+  // "I don't have that" (2026-09-16: Co couldn't name a link it had sent
+  // three minutes earlier).
+  for (const sent of await recentlySent(userId)) addFact(rf, "did_before", sent);
 
   const [scheduled, reveal] = await Promise.all([
     pool
@@ -138,6 +143,29 @@ export async function gatherReplyFacts(
     }
   }
   return rf;
+}
+
+// Events and opportunities Co has actually sent them recently, newest first,
+// with the link it sent alongside each one.
+export async function recentlySent(userId: string): Promise<string[]> {
+  const { rows } = await pool
+    .query(
+      `SELECT created_at, memory_type, content FROM co_memories
+       WHERE user_id = $1 AND created_at > NOW() - INTERVAL '3 days'
+         AND (memory_type = 'recommendation' OR (memory_type = 'text_exchange' AND content LIKE 'Co replied: http%'))
+       ORDER BY created_at DESC LIMIT 12`,
+      [userId],
+    )
+    .catch(() => ({ rows: [] as any[] }));
+  const links = rows.filter((r: any) => r.memory_type === "text_exchange").map((r: any) => ({ at: new Date(r.created_at).getTime(), url: String(r.content).replace("Co replied: ", "").trim() }));
+  const out: string[] = [];
+  for (const row of rows.filter((r: any) => r.memory_type === "recommendation").slice(0, 3)) {
+    const at = new Date(row.created_at).getTime();
+    const near = links.find((l) => Math.abs(l.at - at) < 5 * 60 * 1000);
+    const what = String(row.content).replace(/^Co surfaced [^—]*— /, "");
+    out.push(`Co sent them ${DateTime.fromJSDate(new Date(row.created_at)).toRelative()}: ${what}${near ? ` (link ${near.url})` : ""}`);
+  }
+  return out;
 }
 
 // What Co is really still looking for, from open asks. Only these make

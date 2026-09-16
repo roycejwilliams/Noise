@@ -100,3 +100,31 @@ export async function markRead(number: string): Promise<void> {
     console.error("markRead failed (non-fatal):", err?.message ?? err);
   }
 }
+
+// Tapbacks (Royce, 2026-09-15: "see if Co is able to react to messages like a
+// thumbs up ... or just send an emoji when it doesn't have anything to say").
+// Apple only delivers these on iMessage, so the caller falls back to a plain
+// emoji text when this returns false.
+export async function sendReaction(messageHandle: string, reaction: string): Promise<boolean> {
+  const from = process.env.SENDBLUE_PHONE_NUMBER;
+  if (!from || !process.env.SENDBLUE_API_KEY || !process.env.SENDBLUE_SECRET_KEY) return false;
+  try {
+    const res = await fetch("https://api.sendblue.com/api/send-reaction", {
+      method: "POST",
+      headers: {
+        "sb-api-key-id": process.env.SENDBLUE_API_KEY,
+        "sb-api-secret-key": process.env.SENDBLUE_SECRET_KEY,
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({ from_number: from, message_handle: messageHandle, reaction }),
+    });
+    if (!res.ok) {
+      console.error(`sendReaction: ${res.status} (non-fatal)`);
+      return false;
+    }
+    return true;
+  } catch (err: any) {
+    console.error("sendReaction failed (non-fatal):", err?.message ?? err);
+    return false;
+  }
+}
