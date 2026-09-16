@@ -1,8 +1,10 @@
 // Capitalization enforced in code, not left to the prompt (2026-09-15).
 // Replies were going out lowercase ("hey! good to hear from you. so, ...")
-// to people texting in normal sentences: the model copied Co's own earlier
-// lowercase texts in the thread despite being told not to. Co mirrors
-// lowercase only when the person really texts that way.
+// because the model copied Co's own earlier lowercase texts in the thread.
+// Since 2026-09-16 Co always writes in sentence case, whatever the person's
+// own style: services/sendblue.ts cleanCoMessage applies this to every
+// message on its way out. textsInLowercase is kept only for reading style
+// hints, never for casing.
 
 // Uppercases the first letter of the message and of each sentence. Leaves
 // links, handles, and words with their own internal capitals ("iPhone")

@@ -1,5 +1,6 @@
 // Model-free checks for the Layer 3 gate's deterministic rules. Runs in a
 // second, no API calls: npx tsx evals/reply/codeChecks.ts
+import { capitalizeSentences } from "../../src/services/textStyle.js";
 import { nearestPlace, parseDiscoverPlaces } from "../../src/services/lumaDiscovery.js";
 import { DateTime } from "luxon";
 import { isBrowseAsk, parseAskWindow, withinWindow } from "../../src/services/askWindow.js";
@@ -148,7 +149,28 @@ const placeCases: [boolean, string][] = [
   [parseDiscoverPlaces("<html>no next data</html>").length === 0, "a page without data parses to nothing"],
 ];
 
+// Onboarding lines go out in sentence case (otpActions.ts varied): these two
+// went out lowercase on 2026-09-16.
+const onboardingCaseCases: [boolean, string][] = [
+  [capitalizeSentences("hey, good to have you here.") === "Hey, good to have you here.", "welcome line"],
+  [capitalizeSentences("what's your full name and email? want to get you set up.") === "What's your full name and email? Want to get you set up.", "intake ask"],
+];
+
+// cleanCoMessage (services/sendblue.ts) runs this on every send; tested
+// directly because importing the Sendblue client needs API keys.
+onboardingCaseCases.push(
+  [capitalizeSentences("got it, keeping it to text. i'll be in touch") === "Got it, keeping it to text. I'll be in touch", "every sentence capitalized"],
+  [capitalizeSentences("https://lu.ma/4nkiwp04") === "https://lu.ma/4nkiwp04", "a bare link is left alone"],
+  [capitalizeSentences("hey, did you end up meeting anyone? curious what stood out") === "Hey, did you end up meeting anyone? Curious what stood out", "after a question mark"],
+);
+
 let failed = 0;
+for (const [ok, label] of onboardingCaseCases) {
+  if (!ok) {
+    failed++;
+    console.log(`FAIL onboarding capitalization: ${label}`);
+  }
+}
 for (const [ok, label] of placeCases) {
   if (!ok) {
     failed++;
@@ -194,6 +216,6 @@ for (const [draft, expected, label] of ongoingCases) {
     console.log(`FAIL ${label}: "${draft}" -> ${failing.join(", ") || "(none)"}`);
   }
 }
-const total = cases.length + ongoingCases.length + closingCases.length + formatCases.length + windowCases.length + placeCases.length;
+const total = cases.length + ongoingCases.length + closingCases.length + formatCases.length + windowCases.length + placeCases.length + onboardingCaseCases.length;
 console.log(`codeChecks: ${total - failed}/${total} passed`);
 if (failed) process.exitCode = 1;

@@ -101,7 +101,7 @@ export async function gatherReplyFacts(
   for (const d of opts.pendingDescriptions ?? []) addFact(rf, "pending", `Waiting to hear back: ${d}`);
   // Every source is a separate read, so they run together: in series this
   // was six round trips before the reply could even start drafting.
-  const [corrections, snapshot, sent, notes, scheduled, reveal] = await Promise.all([
+  const [corrections, snapshot, sent, notes, scheduled, reveal, preference] = await Promise.all([
     recentCallCorrections(userId),
     getPersonSnapshot(userId).catch(() => null),
     recentlySent(userId),
@@ -120,7 +120,11 @@ export async function gatherReplyFacts(
         [userId],
       )
       .catch(() => ({ rows: [] as any[] })),
+    // Whether they said they'd rather text or talk (asked at onboarding).
+    pool.query(`SELECT contact_preference FROM users WHERE id = $1`, [userId]).then((r) => r.rows[0]?.contact_preference ?? null).catch(() => null),
   ]);
+  if (preference === "text") addFact(rf, "known", "They told Co they'd rather text. Only bring up a call if they ask for one.");
+  if (preference === "call") addFact(rf, "known", "They told Co they like talking on the phone. Offering a call when there's a lot to talk through is welcome.");
   await addOngoingSearchFacts(rf, userId);
   for (const correction of corrections) addFact(rf, "known", correction);
   // What Co knows about them, so "what do you know about me?" can be

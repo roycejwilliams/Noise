@@ -468,6 +468,12 @@ export function runMigrations() {
     )
     .catch((err: Error) => console.error("phone_debounce table init failed:", err));
 
+  // Whether they'd rather text or talk, asked at the end of onboarding
+  // (Royce, 2026-09-16). 'text' | 'call' | null (not asked or unclear).
+  pool
+    .query(`ALTER TABLE users ADD COLUMN IF NOT EXISTS contact_preference TEXT`)
+    .catch((err: Error) => console.error("users.contact_preference migration failed:", err));
+
   // Issues test users report to Co (services/issueReports.ts). Test only:
   // written where CAPTURE_USER_ISSUES=true.
   pool

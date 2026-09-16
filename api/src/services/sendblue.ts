@@ -1,4 +1,5 @@
 import { SendblueAPI } from "sendblue";
+import { capitalizeSentences } from "./textStyle.js";
 
 const client = new SendblueAPI({
   apiKey: process.env.SENDBLUE_API_KEY!,
@@ -40,7 +41,12 @@ export function cleanCoMessage(text: string): string {
   cleaned = cleaned.replace(/\s*[—–]\s*/g, ", ").replace(/\s+--\s+/g, ", ").trim();
   const quoteMatch = cleaned.match(WRAPPED_QUOTE);
   if (quoteMatch) cleaned = quoteMatch[1].trim();
-  return cleaned;
+  // Always sentence case (Royce, 2026-09-16, after a deep dive on why casing
+  // was inconsistent: it was applied path by path, the reply mirrored people
+  // who text in lowercase while check-ins and onboarding didn't, and several
+  // senders skipped it entirely). This is the one place every message passes
+  // through before it's sent and logged.
+  return capitalizeSentences(cleaned);
 }
 
 // Guards against ever texting a real user raw model meta-commentary (e.g.

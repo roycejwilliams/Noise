@@ -5,7 +5,7 @@ import { writeMemory } from "../services/memory.js";
 import pool from "../db/db.js";
 import { CO_VOICE, CO_TEXT_CHANNEL } from "../services/coVoice.js";
 import { groundReply, LAYER3_MODELS, renderReplyFacts, type GroundingResult, type ReplyFacts, addFact } from "../harness/replyGrounding.js";
-import { capitalizeSentences, textsInLowercase, userLinesFrom } from "../services/textStyle.js";
+import { capitalizeSentences } from "../services/textStyle.js";
 
 // Co's most recent message in the thread, so a short reply can be read
 // against the question it's answering. In the full prompt that question sits
@@ -205,9 +205,8 @@ export async function runConversationReplyAgent(
         { userId: input.userId, record: opts.record !== false && !opts.dryRun },
       );
       grounding.push(result);
-      return textsInLowercase(userLinesFrom(input.recentConversation, input.resolvedContent))
-        ? result.final
-        : capitalizeSentences(result.final);
+      // Always sentence case, however they text (2026-09-16).
+      return capitalizeSentences(result.final);
     },
   });
 

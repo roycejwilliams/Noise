@@ -35,7 +35,7 @@ import {
   type ReplyFacts,
 } from "../../src/harness/replyGrounding.js";
 import { runConversationReplyAgent } from "../../src/agent/conversationReply.js";
-import { capitalizeSentences, textsInLowercase, userLinesFrom } from "../../src/services/textStyle.js";
+import { capitalizeSentences } from "../../src/services/textStyle.js";
 
 type ReplyCase = EvalCase & {
   message: string;
@@ -83,7 +83,8 @@ async function run(c: ReplyCase): Promise<Result> {
   if (mode === "gate") {
     const g = await groundReply(c.draft, rf, src, { record: false });
     // Same capitalization step the reply agent applies before sending.
-    const final = textsInLowercase(userLinesFrom(c.recentConversation, c.message)) ? g.final : capitalizeSentences(g.final);
+    // Same sentence case the reply agent always applies (2026-09-16).
+    const final = capitalizeSentences(g.final);
     return { final, grounding: [g] };
   }
   const started = Date.now();
@@ -140,8 +141,8 @@ function score(c: ReplyCase, r: Result): CaseScore {
     else soft.push({ name: "confabulation_caught", ok: g.outcome !== "as_drafted" && g.outcome !== "unchecked" });
   }
   if (mode === "e2e") soft.push({ name: "answers_message", ok: r.answers === true });
-  if (c.style === "capitalized" && /^[a-z]/.test(r.final.trim())) hard.push(`starts lowercase for someone texting in normal sentences: ${r.final}`);
-  if (c.style === "lowercase") soft.push({ name: "mirrors_lowercase", ok: !/^[A-Z]/.test(r.final.trim()) });
+  // Always sentence case, whatever the person's own style (2026-09-16).
+  if (/^[a-z]/.test(r.final.trim()) && !/^https?:/.test(r.final.trim())) hard.push(`starts lowercase: ${r.final}`);
   // The model's own draft, before code capitalizes it: tracks how often the
   // model itself gets the register wrong (compare models with REPLY_EVAL_MODEL).
   if (mode === "e2e" && c.style === "capitalized" && g) soft.push({ name: "model_draft_capitalized", ok: !/^[a-z]/.test(g.final.trim()) });

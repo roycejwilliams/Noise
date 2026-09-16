@@ -365,5 +365,111 @@
         "place_call"
       ]
     }
+  },
+  {
+    "id": "s30-onboarding-text",
+    "source": "synthetic",
+    "message": "Texting is fine",
+    "recentConversation": "User said: Royce Williams\\nroycewilliamsj@gmail.com\nCo replied: Good to meet you, Royce. Do you want to keep texting, or would a quick call be easier to get started?\nUser said: Texting is fine",
+    "openItems": [
+      {
+        "kind": "call_offer",
+        "detail": "[onboarding] Asked whether they'd rather keep texting or take a quick call to get started | Co offered: Good to meet you, Royce. Do you want to keep texting, or would a quick call be easier to get started?"
+      }
+    ],
+    "current": null,
+    "label": {
+      "ans": [
+        "call_offer:decline"
+      ],
+      "call": [
+        "nothing"
+      ],
+      "rec": false,
+      "upd": false,
+      "nope": [
+        "place_call",
+        "call_offer:accept"
+      ]
+    }
+  },
+  {
+    "id": "s31-onboarding-call",
+    "source": "synthetic",
+    "message": "Call me",
+    "recentConversation": "User said: Royce Williams\\nroycewilliamsj@gmail.com\nCo replied: Good to meet you, Royce. Do you want to keep texting, or would a quick call be easier to get started?\nUser said: Call me",
+    "openItems": [
+      {
+        "kind": "call_offer",
+        "detail": "[onboarding] Asked whether they'd rather keep texting or take a quick call to get started | Co offered: Good to meet you, Royce. Do you want to keep texting, or would a quick call be easier to get started?"
+      }
+    ],
+    "current": null,
+    "label": {
+      "ans": [
+        "call_offer:accept"
+      ],
+      "call": [
+        "place_call"
+      ],
+      "rec": false,
+      "upd": false,
+      "nope": [
+        "call_offer:decline"
+      ]
+    }
+  },
+  {
+    "id": "s32-onboarding-lets-talk",
+    "source": "synthetic",
+    "message": "Let's do a call",
+    "recentConversation": "User said: Royce Williams\\nroycewilliamsj@gmail.com\nCo replied: Good to meet you, Royce. Do you want to keep texting, or would a quick call be easier to get started?\nUser said: Let's do a call",
+    "openItems": [
+      {
+        "kind": "call_offer",
+        "detail": "[onboarding] Asked whether they'd rather keep texting or take a quick call to get started | Co offered: Good to meet you, Royce. Do you want to keep texting, or would a quick call be easier to get started?"
+      }
+    ],
+    "current": null,
+    "label": {
+      "ans": [
+        "call_offer:accept"
+      ],
+      "call": [
+        "place_call"
+      ],
+      "rec": false,
+      "upd": false,
+      "nope": [
+        "call_offer:decline"
+      ]
+    }
+  },
+  {
+    "id": "s33-onboarding-text-for-now",
+    "source": "synthetic",
+    "message": "text for now, I'm at work",
+    "recentConversation": "User said: Royce Williams\\nroycewilliamsj@gmail.com\nCo replied: Good to meet you, Royce. Do you want to keep texting, or would a quick call be easier to get started?\nUser said: text for now, I'm at work",
+    "openItems": [
+      {
+        "kind": "call_offer",
+        "detail": "[onboarding] Asked whether they'd rather keep texting or take a quick call to get started | Co offered: Good to meet you, Royce. Do you want to keep texting, or would a quick call be easier to get started?"
+      }
+    ],
+    "current": null,
+    "label": {
+      "ans": [
+        "call_offer:decline"
+      ],
+      "call": [
+        "nothing"
+      ],
+      "rec": false,
+      "upd": false,
+      "nope": [
+        "place_call",
+        "call_offer:accept"
+      ]
+    }
   }
 ]

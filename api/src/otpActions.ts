@@ -1,4 +1,5 @@
 import { Resend } from "resend";
+import { capitalizeSentences } from "./services/textStyle.js";
 import "dotenv/config";
 import { anthropic } from "@ai-sdk/anthropic";
 import { generateText } from "ai";
@@ -21,7 +22,11 @@ async function varied(instruction: string, fallback: string, maxChars: number): 
       experimental_telemetry: { isEnabled: true, functionId: "otpActions.introLine" },
       prompt: `${CO_VOICE}\n\n${CO_TEXT_CHANNEL} ${instruction} Vary how you say it call to call — don't just repeat the same phrasing every time. Tone: calm, unhurried, like a private members club. No em dashes. Under ${maxChars} characters. Return ONLY the single message you would actually send, nothing else — never multiple options, a numbered or lettered list, headers, or any markdown formatting.`,
     });
-    const trimmed = text.trim();
+    // Onboarding is the first thing anyone hears from Co, so it always reads
+    // in normal sentence case (2026-09-16: "hey, good to have you here." and
+    // "what's your full name and email?" went out lowercase, because these
+    // lines skip the capitalization every other reply gets).
+    const trimmed = capitalizeSentences(text.trim());
     // Confirmed live: Haiku sometimes ignores "return only one" and returns
     // a menu of options instead ("# Option 1 ... # Option 2 ..."). Rather
     // than guess which option was meant, fall all the way back — this is

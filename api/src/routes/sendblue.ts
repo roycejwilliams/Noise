@@ -1,4 +1,5 @@
 import { anthropic } from "@ai-sdk/anthropic";
+import { capitalizeSentences } from "../services/textStyle.js";
 import { captureIssueReport } from "../services/issueReports.js";
 import { enqueueCandidate, nextLocalHour } from "../harness/proactive.js";
 import { getTimezoneForCity } from "../services/geocoding.js";
@@ -115,6 +116,10 @@ const REPLY_BUDGET_SEARCH_MS = 60_000;
 
 // Sent before a search so nobody waits in silence. Not a real reply: a copy
 // of the message sent after one of these is still a duplicate.
+// Marks the call-or-text question asked at the end of onboarding, so its
+// answer can be saved as their contact preference.
+const ONBOARDING_CALL_OFFER_PREFIX = "[onboarding]";
+
 const HOLD_LINES = ["On it, give me a sec.", "Let me look, one sec.", "Looking now, give me a minute."];
 
 function deriveStyleHint(chronological: { content: string }[]): string {
@@ -143,7 +148,7 @@ function deriveStyleHint(chronological: { content: string }[]): string {
     notes.push("they use emoji — an occasional one back is fine, don't force it every message");
   }
   if (lowercaseRate >= 0.6) {
-    notes.push("they text casually, lowercase, minimal punctuation — match that relaxed tone");
+    notes.push("they text casually with minimal punctuation, so keep your tone relaxed (but always write in normal sentence case)");
   }
 
   return notes.length ? `\nHow they text (match this energy, not their exact words): ${notes.join("; ")}.` : "";
@@ -666,19 +671,30 @@ export function sendblueRouter(io: Server): Router {
 
           if (intake.action === "capture") {
             const first_name = user.first_name;
-            let kickoffMsg = `Good to meet you, ${first_name}. What's been on your mind lately?`;
+            // Last step of onboarding: ask whether they'd rather text or talk
+            // (Royce, 2026-09-16: "We don't ask the user if they would prefer
+            // a call or text"). Recorded as a pending call offer, so their
+            // answer goes through the same router and call gates as any other
+            // call offer: "call me" places a call, "text is fine" keeps texting.
+            let kickoffMsg = `Good to meet you, ${first_name}. Do you want to keep texting, or would a quick call be easier to get started?`;
             try {
               const { text } = await generateText({
                 model: anthropic(INTAKE_EXTRACT_MODEL),
                 experimental_telemetry: { isEnabled: true, functionId: "sendblue.intake.kickoff" },
-                prompt: `${CO_VOICE}\n\n${CO_TEXT_CHANNEL} ${first_name} just gave you their name and email to get started. Write a short message welcoming them in and opening the real conversation: invite them to share what's on their mind or going on in their life right now. 2 sentences max.`,
+                prompt: `${CO_VOICE}\n\n${CO_TEXT_CHANNEL} ${first_name} just gave you their name and email to get started. Write a short message welcoming them in by name and asking one question: would they rather keep texting, or hop on a quick call to get started. Make both sound equally fine. Don't ask anything else. 2 sentences max.`,
               });
-              if (text.trim()) kickoffMsg = cleanCoMessage(text.trim());
+              if (text.trim()) kickoffMsg = capitalizeSentences(cleanCoMessage(text.trim()));
             } catch (genErr: any) {
               console.error("Intake kickoff message generation failed, using fallback (non-fatal):", genErr?.message ?? genErr);
             }
             await sendCoReply({ phone: number, message: kickoffMsg, asVoice: false });
             await logTextExchange(user.id, `Co replied: ${kickoffMsg}`);
+            await pool
+              .query(`INSERT INTO co_memories (user_id, memory_type, content) VALUES ($1, 'call_offer_pending', $2)`, [
+                user.id,
+                `${ONBOARDING_CALL_OFFER_PREFIX} Asked whether they'd rather keep texting or take a quick call to get started | Co offered: ${kickoffMsg}`,
+              ])
+              .catch((err: any) => console.error("sendblue: onboarding call-or-text offer write failed (non-fatal):", err?.message ?? err));
             return res.status(200).send({ received: true, action: "identity_captured" });
           }
 
@@ -1144,6 +1160,25 @@ export function sendblueRouter(io: Server): Router {
                         : "none";
 
         const resolvedCallOffer = resolvedAs("call_offer");
+        const onboardingPreference =
+          resolvedCallOffer?.item.ref?.kind === "call_offer" && String(resolvedCallOffer.item.ref.content ?? "").startsWith(ONBOARDING_CALL_OFFER_PREFIX);
+        if (onboardingPreference && (callAction === "accepts_offer" || callAction === "declines_offer")) {
+          const preference = callAction === "accepts_offer" ? "call" : "text";
+          await pool.query(`UPDATE users SET contact_preference = $2 WHERE id = $1`, [user.id, preference]).catch(() => {});
+          await recordDecision({
+            layer: 1,
+            decision: "intake.contactPreference",
+            userId: user.id,
+            outcome: "act",
+            action: preference,
+            proposal: { message: resolvedContent },
+          }).catch(() => {});
+        }
+        // They just answered the onboarding call-or-text question with text:
+        // take that and open the real conversation.
+        if (onboardingPreference && callAction === "declines_offer") {
+          addInstruction(replyFacts, "They just said they'd rather keep texting. Say that works in a few words, then invite them to share what's on their mind or going on in their life right now. One question, no call offer.");
+        }
         if (resolvedCallOffer?.item.ref?.kind === "call_offer") {
           await pool.query(
             `INSERT INTO co_memories (user_id, memory_type, content) VALUES ($1, 'call_offer_resolved', $2)`,
