@@ -265,7 +265,11 @@ function soonest<T extends { start_at: string }>(events: T[]): T | null {
   return [...events].sort((a, b) => a.start_at.localeCompare(b.start_at))[0] ?? null;
 }
 
-async function tryTier2(ask: StatedIntent, userCity: string | null, filter?: (startAt: string) => boolean, opts: { browse?: boolean; maxDays?: number } = {}): Promise<TierMatch | null> {
+// Returns the candidates worth offering, best first — the gate
+// (harness/matchGate.ts) makes the final call, and it needs more than one to
+// choose from (2026-09-16: the single candidate it got was sold out, so the
+// search ended with nothing while other real events were available).
+async function tryTier2(ask: StatedIntent, userCity: string | null, filter?: (startAt: string) => boolean, opts: { browse?: boolean; maxDays?: number } = {}): Promise<TierMatch[]> {
   const events = await cachedPublicEvents(userCity).catch((err: any) => {
     console.error("tieredRecommendation: tryTier2 fetchPublicEvents failed (non-fatal):", err?.message ?? err);
     return [];
@@ -277,13 +281,14 @@ async function tryTier2(ask: StatedIntent, userCity: string | null, filter?: (st
   // matches sitting further down the same list (2026-09-16).
   const candidates = opts.browse ? [soonest(nearby)].filter((m): m is (typeof nearby)[number] => !!m) : await rankTopByRelevance(nearby, ask);
   const rejected: string[] = [];
+  const kept: TierMatch[] = [];
   for (const match of candidates) {
     const details = (await fetchLumaEventDetails(match.url)) ?? undefined;
     if (ask.text && !opts.browse && !(await isGenuinelyRelevant(ask.text, match.name, match.city, details?.description ?? null))) {
       rejected.push(match.name);
       continue;
     }
-    return {
+    kept.push({
       details,
       tier: 2,
       kind: "public_event",
@@ -293,13 +298,12 @@ async function tryTier2(ask: StatedIntent, userCity: string | null, filter?: (st
       url: match.url,
       reason: `A public event that looks like a real fit${match.city ? ` in ${match.city}` : ""}.`,
       city: match.city ?? null,
-    };
+    });
   }
-  // Nothing survived: say which ones were considered and dropped.
-  if (rejected.length) {
+  if (rejected.length && !kept.length) {
     lastTierDrop = { tier: 2, name: rejected.join("; "), reason: `the relevance check rejected ${rejected.length === 1 ? "it" : "all of them"} as not matching what they asked` };
   }
-  return null;
+  return kept;
 }
 
 // Tier 3 — a real opportunity (accelerator, fellowship, program), via X's
@@ -535,14 +539,22 @@ export async function getTieredRecommendation(
         tier3 = await tryTier3(ask, opportunityQuery);
       }
     }
-    found = [tier1, tier2, tier3].filter((m): m is TierMatch => m !== null);
+    // Every tier's candidates go to the gate, which keeps what's actually
+    // offerable; one per tier survives below.
+    const gateable = [tier1, ...tier2, tier3].filter((m): m is TierMatch => m != null);
+    found = gateable;
     if (searchCache.size > 300) searchCache.clear();
     searchCache.set(cacheKey, { at: Date.now(), found });
   }
 
   lastSearchScope = { city, window: window?.label ?? null, browse, tiers: found.map((m) => m.tier), dropped: lastTierDrop };
   lastTierDrop = null;
-  return gateMatches(found, { userId: opts.userId ?? null, searchCity: city, checkRepeat: opts.checkRepeat });
+  const gated = await gateMatches(found, { userId: opts.userId ?? null, searchCity: city, checkRepeat: opts.checkRepeat });
+  // One per tier: the gate may have kept several Tier 2 candidates, and this
+  // is a suggestion, not a listing.
+  const perTier = new Map<number, TierMatch>();
+  for (const match of gated) if (!perTier.has(match.tier)) perTier.set(match.tier, match);
+  return [...perTier.values()];
 }
 
 // The daily urgent-only Tier 1/2 pre-check (checkForUrgentMatch) was removed
