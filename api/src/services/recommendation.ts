@@ -1,4 +1,5 @@
 import { generateText } from "ai";
+import { getTimezoneForCity } from "./geocoding.js";
 import { anthropic } from "@ai-sdk/anthropic";
 import { propagateAttributes } from "@langfuse/tracing";
 import pool from "../db/db.js";
@@ -159,7 +160,7 @@ export async function generateRecommendation(userId: string, currentMessage?: st
         { text: askText, embedding: askText === latestIntent?.text ? latestIntent?.embedding : null },
         profile.city ?? null,
         // Repeats are handled below so the reply can say it was already shared.
-        { userId, checkRepeat: false },
+        { userId, checkRepeat: false, rawMessage: currentMessage, timezone: profile.city ? await getTimezoneForCity(profile.city).catch(() => null) : null },
       ).catch((err: any) => {
         console.error("generateRecommendation: getTieredRecommendation failed (non-fatal):", err?.message ?? err);
         return [];

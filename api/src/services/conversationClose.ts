@@ -56,3 +56,12 @@ export function closingReaction(rawText: string): Tapback | null {
   FILLER.lastIndex = 0;
   return !stripped && /[a-z]/.test(text) ? "like" : null;
 }
+
+// A real request for Co's own contact details, not for something else Co
+// should send (2026-09-16: "You send it over", meaning a link, produced the
+// contact card).
+export function asksForContactCard(text: string): boolean {
+  const t = text.toLowerCase();
+  if (!/\b(your|you'?re|co'?s|ur)\b/.test(t) && !/\bcontact card\b/.test(t)) return false;
+  return /\bcontact card\b|\bvcard\b|\bcontact info\b|\bcontact details\b|\byour (number|contact|info|details|card)\b|\bsave (you|your number|your contact|co)\b|\badd you to my contacts\b/.test(t);
+}

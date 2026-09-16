@@ -1,4 +1,6 @@
 import { generateText } from "ai";
+import { DateTime } from "luxon";
+import { isBrowseAsk, parseAskWindow, withinWindow } from "./askWindow.js";
 import { anthropic } from "@ai-sdk/anthropic";
 import { listCalendarEvents } from "./luma.js";
 import { fetchPublicEvents, rankByRelevance } from "./lumaDiscovery.js";
@@ -215,14 +217,16 @@ async function cachedPublicEvents() {
   return events;
 }
 
-async function tryTier1(ask: StatedIntent, userCity: string | null, filter?: (startAt: string) => boolean): Promise<TierMatch | null> {
+async function tryTier1(ask: StatedIntent, userCity: string | null, filter?: (startAt: string) => boolean, opts: { browse?: boolean; maxDays?: number } = {}): Promise<TierMatch | null> {
   const events = await cachedCalendarEvents().catch((err: any) => {
     console.error("tieredRecommendation: tryTier1 listCalendarEvents failed (non-fatal):", err?.message ?? err);
     return [];
   });
-  const inWindow = events.filter((e) => isWithinLookaheadWindow(e.start_at, TIER1_MAX_LOOKAHEAD_DAYS) && (!filter || filter(e.start_at)));
+  const inWindow = events.filter((e) => isWithinLookaheadWindow(e.start_at, opts.maxDays ?? TIER1_MAX_LOOKAHEAD_DAYS) && (!filter || filter(e.start_at)));
   const nearby = await filterByRadius(inWindow, userCity);
-  const match = await rankByRelevance(nearby, ask);
+  // They asked what's on in a window, not for a topic: the soonest one in
+  // that window is the answer, so relevance ranking would only reject it.
+  const match = opts.browse ? soonest(nearby) : await rankByRelevance(nearby, ask);
   if (!match) return null;
   const details = match.url ? ((await fetchLumaEventDetails(match.url)) ?? undefined) : undefined;
   return {
@@ -252,17 +256,21 @@ async function tryTier1(ask: StatedIntent, userCity: string | null, filter?: (st
 // directly (rather than lumaDiscovery's findEventMatchingAsk wrapper) so an
 // optional near-term `filter` can be applied before ranking — same reuse
 // reasoning as tryTier1 above. `userCity` drives the same hard radius filter.
-async function tryTier2(ask: StatedIntent, userCity: string | null, filter?: (startAt: string) => boolean): Promise<TierMatch | null> {
+function soonest<T extends { start_at: string }>(events: T[]): T | null {
+  return [...events].sort((a, b) => a.start_at.localeCompare(b.start_at))[0] ?? null;
+}
+
+async function tryTier2(ask: StatedIntent, userCity: string | null, filter?: (startAt: string) => boolean, opts: { browse?: boolean; maxDays?: number } = {}): Promise<TierMatch | null> {
   const events = await cachedPublicEvents().catch((err: any) => {
     console.error("tieredRecommendation: tryTier2 fetchPublicEvents failed (non-fatal):", err?.message ?? err);
     return [];
   });
-  const inWindow = events.filter((e) => isWithinLookaheadWindow(e.start_at, TIER2_MAX_LOOKAHEAD_DAYS) && (!filter || filter(e.start_at)));
+  const inWindow = events.filter((e) => isWithinLookaheadWindow(e.start_at, opts.maxDays ?? TIER2_MAX_LOOKAHEAD_DAYS) && (!filter || filter(e.start_at)));
   const nearby = await filterByRadius(inWindow, userCity);
-  const match = await rankByRelevance(nearby, ask);
+  const match = opts.browse ? soonest(nearby) : await rankByRelevance(nearby, ask);
   if (!match) return null;
   const details = (await fetchLumaEventDetails(match.url)) ?? undefined;
-  if (ask.text) {
+  if (ask.text && !opts.browse) {
     if (!(await isGenuinelyRelevant(ask.text, match.name, match.city, details?.description ?? null))) return null;
   }
   return {
@@ -458,10 +466,19 @@ async function paidSearchAllowed(userId: string | null, source: "sweep" | "reque
 export async function getTieredRecommendation(
   ask: StatedIntent,
   profileCity: string | null,
-  opts: { userId?: string; checkRepeat?: boolean; source?: "sweep" | "request" } = {},
+  // rawMessage: their own words, used for the time frame and for spotting a
+  // "what's on?" ask, since the search text is a rewrite that can drop both.
+  opts: { userId?: string; checkRepeat?: boolean; source?: "sweep" | "request"; timezone?: string | null; rawMessage?: string } = {},
 ): Promise<TierMatch[]> {
   const city = await resolveSearchCity(ask.text, profileCity);
-  const cacheKey = `${(city ?? "").toLowerCase()}|${(ask.text ?? "").trim().toLowerCase()}`;
+  // A time frame they named ("this weekend", "next Tuesday") scopes the
+  // search to those days, whatever the default lookahead is.
+  const asked = opts.rawMessage ?? ask.text ?? "";
+  const window = asked ? parseAskWindow(asked, DateTime.now().setZone(opts.timezone ?? "local")) : null;
+  const browse = !!asked && isBrowseAsk(asked);
+  const windowFilter = window ? (startAt: string) => withinWindow(startAt, window) : undefined;
+  const maxDays = window ? Math.max(1, Math.ceil(window.end.diffNow("days").days) + 1) : undefined;
+  const cacheKey = `${(city ?? "").toLowerCase()}|${(ask.text ?? "").trim().toLowerCase()}|${window?.label ?? ""}`;
   const cached = searchCache.get(cacheKey);
   let found: TierMatch[];
   if (cached && Date.now() - cached.at < SEARCH_CACHE_TTL_MS) {
@@ -469,12 +486,15 @@ export async function getTieredRecommendation(
   } else {
     const source = opts.source ?? "request";
     const [tier1, tier2, budget] = await Promise.all([
-      tryTier1(ask, city),
-      tryTier2(ask, city),
+      tryTier1(ask, city, windowFilter, { browse, maxDays }),
+      tryTier2(ask, city, windowFilter, { browse, maxDays }),
       paidSearchAllowed(opts.userId ?? null, source),
     ]);
     let tier3: TierMatch | null = null;
-    if (budget.ok) {
+    // Asking what's on the calendar is a question about events, not about
+    // posts on X (2026-09-16: "what's been surfacing on Luma this weekend"
+    // came back with an X post, and Co never said where it came from).
+    if (budget.ok && !browse) {
       const opportunityQuery = await proposeOpportunityQuery(ask, city);
       if (opportunityQuery) {
         await pool

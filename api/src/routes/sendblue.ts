@@ -46,13 +46,13 @@ import { resolveNetworkTeaseReply, resolveNetworkIntroReply } from "../services/
 import { NO_ROUTE, decideActions, gatherOpenItems, routeMessage, type RouterOutput } from "../services/messageRouter.js";
 import { recordDecision } from "../harness/core.js";
 import { routerGateChecks } from "../harness/routerChecks.js";
-import { addEventFacts, addFact, addInstruction, addOngoingSearchFacts, gatherReplyFacts } from "../harness/replyGrounding.js";
+import { addEventFacts, addFact, addInstruction, addOngoingSearchFacts, gatherReplyFacts, recordSearchNote } from "../harness/replyGrounding.js";
 import { findRealVenues } from "../services/venueLookup.js";
 import { runConversationReplyAgent, filterRelevantMemories, CALL_OFFER_EXPIRY_DAYS } from "../agent/conversationReply.js";
 import { triggerCallForUser } from "../services/callTrigger.js";
 import sendblue, { cleanCoMessage, markRead, sendReaction } from "../services/sendblue.js";
 import { closingReaction, emojiFor } from "../services/conversationClose.js";
-import { renderMatchList } from "../services/messageFormat.js";
+import { renderMatchList, sourceOf } from "../services/messageFormat.js";
 import { CO_VOICE, CO_TEXT_CHANNEL } from "../services/coVoice.js";
 import { generateVoiceNote } from "../services/voiceNote.js";
 import { MODELS } from "../models.js";
@@ -276,6 +276,25 @@ async function sendCoReply(params: {
 // during intake left zero trace in co_memories, unlike every other exchange
 // in the app. Embedding is fire-and-forget, matching Step 3/7's own
 // non-blocking pattern — nothing here should delay Co's reply.
+// True when Co hasn't replied since the message before this one — it owes a
+// real answer, so a reaction would swallow it.
+async function replyOwed(userId: string): Promise<boolean> {
+  const { rows } = await pool
+    .query(
+      `SELECT content FROM co_memories
+       WHERE user_id = $1 AND memory_type = 'text_exchange' AND created_at > NOW() - INTERVAL '30 minutes'
+       ORDER BY created_at DESC LIMIT 6`,
+      [userId],
+    )
+    .catch(() => ({ rows: [] as any[] }));
+  // rows[0] is the message being handled now; look for their previous one.
+  const earlier = rows.slice(1);
+  const prevUser = earlier.findIndex((r: any) => String(r.content).startsWith("User said:"));
+  if (prevUser === -1) return false;
+  const since = earlier.slice(0, prevUser);
+  return !since.some((r: any) => String(r.content).startsWith("Co replied:") && !HOLD_LINES.some((l) => String(r.content) === `Co replied: ${l}`));
+}
+
 async function logTextExchange(userId: string, content: string): Promise<void> {
   const inserted = await pool.query(
     `INSERT INTO co_memories (user_id, memory_type, content) VALUES ($1, 'text_exchange', $2) RETURNING id`,
@@ -1031,7 +1050,23 @@ export function sendblueRouter(io: Server): Router {
         // (services/conversationClose.ts). Only when the router found nothing
         // to act on, so a real answer is never swallowed.
         const closing = hasText && !routerActed && !resolvedItem ? closingReaction(resolvedContent) : null;
-        if (closing) {
+        // A tapback is never an answer. If Co hasn't replied since their
+        // previous message, it still owes one (2026-09-16: a search was
+        // dropped mid-turn and the next "Ok, thanks!" got a thumbs up, so
+        // the question was never answered).
+        const owesReply = closing ? await replyOwed(user.id) : false;
+        if (closing && owesReply) {
+          await recordDecision({
+            layer: 3,
+            decision: "turn.closing",
+            userId: user.id,
+            outcome: "skip",
+            action: "reply_owed",
+            proposal: { message: resolvedContent },
+            checks: [{ name: "co_answered_their_last_message", pass: false, reason: "Co still owes an answer, so a reaction would drop it" }],
+          });
+        }
+        if (closing && !owesReply) {
           const handle = typeof req.body?.message_handle === "string" ? req.body.message_handle : null;
           const tapped = handle ? await sendReaction(handle, closing) : false;
           // No tapback (SMS, or an old message): a single emoji says the same
@@ -1055,9 +1090,11 @@ export function sendblueRouter(io: Server): Router {
         // Layer 3 harness facts: what's actually true this turn. Branches
         // below add what they did (a link sent, a call that failed) as they
         // act; the reply can only claim what ends up here.
+        const factsStarted = Date.now();
         const replyFacts = await gatherReplyFacts(user.id, {
           pendingDescriptions: openItems.filter((i) => i.id !== resolvedItem?.item.id).map((i) => i.description),
         });
+        const factsMs = Date.now() - factsStarted;
         if (repeatContext) addInstruction(replyFacts, repeatContext);
         if (walkinAskInstruction) addInstruction(replyFacts, walkinAskInstruction);
         if (decision.clarifyContext) addInstruction(replyFacts, decision.clarifyContext);
@@ -1681,6 +1718,10 @@ Return ONLY valid JSON, no preamble: {"date": "YYYY-MM-DD or null", "time": "HH:
                   `Searched just now. What came up didn't fit what they asked: ${preparedAll.map((p) => `"${p.m.name}" (${p.why ?? "not a fit"})`).join("; ")}.`,
                 );
                 addInstruction(replyFacts, "You searched and nothing that came up fits what they asked. Say that plainly and briefly. Don't send or describe the misfits unless they ask.");
+                await recordSearchNote(
+                  user.id,
+                  `Co searched for "${resolvedContent.slice(0, 120)}" and what came up didn't fit: ${preparedAll.map((p) => `"${p.m.name}" from ${sourceOf(p.m)} (${p.why ?? "not a fit"})`).join("; ")}.`,
+                );
               }
               // What they are always comes before its link (Royce,
               // 2026-09-16: Co sent a link, then a message pointing back at
@@ -1702,9 +1743,13 @@ Return ONLY valid JSON, no preamble: {"date": "YYYY-MM-DD or null", "time": "HH:
                   addFact(
                     replyFacts,
                     "did_this_turn",
-                    `Sent "${m.name}"${"url" in m && m.url ? ` (link ${m.url})` : " (no link)"} just before this reply: "${description}"`,
+                    `Sent "${m.name}", found through ${sourceOf(m)}${"url" in m && m.url ? ` (link ${m.url})` : " (no link)"}, just before this reply: "${description}"`,
                   );
                 }
+                await recordSearchNote(
+                  user.id,
+                  `Co searched for "${resolvedContent.slice(0, 120)}" and sent: ${prepared.map((p) => `"${p.m.name}" from ${sourceOf(p.m)}`).join("; ")}.`,
+                );
               }
               // The agent still runs after this (see below) to genuinely
               // respond to what they said — this just tells it the
@@ -1731,6 +1776,7 @@ Return ONLY valid JSON, no preamble: {"date": "YYYY-MM-DD or null", "time": "HH:
               // makes "I'll keep looking" true (replyGrounding's ongoing fact).
               const turnAsk = await captureIntentForTurn(user.id, `${recentConversation}\nuser: ${resolvedContent}`, { timeoutMs: 4000 }).catch(() => null);
               addFact(replyFacts, "did_this_turn", `Searched just now for what they asked for and found nothing real that fits yet${recommendation.reason ? ` (${recommendation.reason})` : ""}.`);
+              await recordSearchNote(user.id, `Co searched for "${resolvedContent.slice(0, 120)}" and found nothing real${recommendation.reason ? ` (${recommendation.reason})` : ""}.`);
               if (turnAsk?.ask?.text) {
                 replyFacts.facts = replyFacts.facts.filter((fact) => fact.kind !== "ongoing" && !/isn't searching for anything/.test(fact.text));
                 await addOngoingSearchFacts(replyFacts, user.id);
@@ -2004,7 +2050,8 @@ Return ONLY valid JSON, no preamble: {"date": "YYYY-MM-DD or null", "time": "HH:
           // (offerCall/markTopicAsked), rather than code pre-deciding and a
           // second LLM call inferring after the fact whether the drafted
           // text happened to include one.
-          const { replyText } = await propagateAttributes(
+          const replyStarted = Date.now();
+          const { replyText, grounding } = await propagateAttributes(
             { userId: user.id, traceName: "sendblue.generateReply" },
             () =>
               runConversationReplyAgent({
@@ -2033,6 +2080,8 @@ Return ONLY valid JSON, no preamble: {"date": "YYYY-MM-DD or null", "time": "HH:
               }),
           );
           coReply = replyText;
+          const groundingMs = grounding.reduce((a, g) => a + g.latencyMs, 0);
+          const replyMs = Date.now() - replyStarted - groundingMs;
           // Latency budget (2026-09-15: a 70s reply led to five resends).
           // Measured from when the text reached Co to the reply going out.
           if (myInboundAt) {
@@ -2044,7 +2093,9 @@ Return ONLY valid JSON, no preamble: {"date": "YYYY-MM-DD or null", "time": "HH:
               outcome: "act",
               action: decision.wantsRecommendation ? "reply_with_search" : "reply",
               checks: [{ name: "within_budget", pass: turnMs <= (decision.wantsRecommendation ? REPLY_BUDGET_SEARCH_MS : REPLY_BUDGET_MS), reason: `${Math.round(turnMs / 1000)}s` }],
-              proposal: { ms: turnMs },
+              // Where the time went, so slow turns can be read without
+              // guessing (Royce, 2026-09-16: 36s replies).
+              proposal: { ms: turnMs, routerMs: routerLatencyMs, factsMs, replyMs, groundingMs, debounceMs: DEBOUNCE_MS },
             }).catch(() => {});
           }
         }

@@ -17,6 +17,7 @@
 //             sentences are dropped. The reply is never blocked.
 //   record  — recordDecision(layer 3, "reply.grounding")
 //   eval    — evals/reply/run.ts
+import { sourceOf } from "../services/messageFormat.js";
 import { getPersonSnapshot, renderSnapshot } from "./personSnapshot.js";
 import { anthropic } from "@ai-sdk/anthropic";
 import { generateText } from "ai";
@@ -98,19 +99,13 @@ export async function gatherReplyFacts(
 ): Promise<ReplyFacts> {
   const rf = baseReplyFacts();
   for (const d of opts.pendingDescriptions ?? []) addFact(rf, "pending", `Waiting to hear back: ${d}`);
-  await addOngoingSearchFacts(rf, userId);
-  for (const correction of await recentCallCorrections(userId)) addFact(rf, "known", correction);
-  // What Co knows about them, so "what do you know about me?" can be
-  // answered from it (2026-09-15: the claim check had no copy of the person
-  // summary and cut "designer by Friday" and "Series A" as unsupported).
-  const picture = renderSnapshot(await getPersonSnapshot(userId).catch(() => null));
-  for (const line of picture.split("\n").filter(Boolean)) addFact(rf, "known", `What they've told Co: ${line}`);
-  // What Co already sent them, so "which one?" can be answered instead of
-  // "I don't have that" (2026-09-16: Co couldn't name a link it had sent
-  // three minutes earlier).
-  for (const sent of await recentlySent(userId)) addFact(rf, "did_before", sent);
-
-  const [scheduled, reveal] = await Promise.all([
+  // Every source is a separate read, so they run together: in series this
+  // was six round trips before the reply could even start drafting.
+  const [corrections, snapshot, sent, notes, scheduled, reveal] = await Promise.all([
+    recentCallCorrections(userId),
+    getPersonSnapshot(userId).catch(() => null),
+    recentlySent(userId),
+    recentSearchNotes(userId),
     pool
       .query(
         `SELECT scheduled_for, timezone FROM scheduled_calls WHERE user_id = $1 AND status = 'pending' AND scheduled_for > NOW() ORDER BY scheduled_for LIMIT 3`,
@@ -126,6 +121,16 @@ export async function gatherReplyFacts(
       )
       .catch(() => ({ rows: [] as any[] })),
   ]);
+  await addOngoingSearchFacts(rf, userId);
+  for (const correction of corrections) addFact(rf, "known", correction);
+  // What Co knows about them, so "what do you know about me?" can be
+  // answered from it (2026-09-15: the claim check had no copy of the person
+  // summary and cut "designer by Friday" and "Series A" as unsupported).
+  for (const line of renderSnapshot(snapshot).split("\n").filter(Boolean)) addFact(rf, "known", `What they've told Co: ${line}`);
+  // What Co already sent them, and what its searches turned up, so "which
+  // one?" and "are you actually searching?" are answerable (2026-09-16).
+  for (const line of sent) addFact(rf, "did_before", line);
+  for (const note of notes) addFact(rf, "did_before", note);
 
   if (!scheduled.rows.length) addFact(rf, "scheduled", "No calls are scheduled with them.");
   for (const row of scheduled.rows) {
@@ -143,6 +148,25 @@ export async function gatherReplyFacts(
     }
   }
   return rf;
+}
+
+// What a search did, written down so the next message can still say it
+// honestly (2026-09-16: a search was dropped mid-turn when a newer message
+// arrived, and the answer was lost with it).
+export async function recordSearchNote(userId: string, note: string): Promise<void> {
+  await pool
+    .query(`INSERT INTO co_memories (user_id, memory_type, content) VALUES ($1, 'system', $2)`, [userId, `[search] ${note}`])
+    .catch((err: any) => console.error("recordSearchNote failed (non-fatal):", err?.message ?? err));
+}
+
+async function recentSearchNotes(userId: string): Promise<string[]> {
+  const { rows } = await pool
+    .query(
+      `SELECT content FROM co_memories WHERE user_id = $1 AND memory_type = 'system' AND content LIKE '[search]%' AND created_at > NOW() - INTERVAL '2 hours' ORDER BY created_at DESC LIMIT 3`,
+      [userId],
+    )
+    .catch(() => ({ rows: [] as any[] }));
+  return rows.map((r: any) => String(r.content).replace("[search] ", ""));
 }
 
 // Events and opportunities Co has actually sent them recently, newest first,
@@ -210,6 +234,7 @@ export function addEventFacts(
   // The real record (event page or source post), so "tell me more" gets
   // real answers instead of "I don't have that".
   if (match.details) for (const line of renderEventDetails(match.name, match.details)) addFact(rf, "known", line);
+  addFact(rf, "known", `Co found "${match.name}" through ${sourceOf(match)}. If they ask where it came from, say that.`);
   if (match.opportunity) addFact(rf, "known", `What the source post for "${match.name}" says: ${match.opportunity.postText}`);
   if (match.whyItFits) addFact(rf, "known", `Why "${match.name}" fits them: ${match.whyItFits}`);
   if (match.kind !== "opportunity") {

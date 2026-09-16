@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { asksForContactCard } from "../services/conversationClose.js";
 import { tool } from "ai";
 import sendblue, { cleanCoMessage } from "../services/sendblue.js";
 import { writeMemory } from "../services/memory.js";
@@ -109,10 +110,18 @@ export function createConversationTools(ctx: ConversationToolContext) {
     // Real action behind "can you send your contact card": the same vCard
     // intake sends, so they can save Co.
     sendContactCard: tool({
-      description: "Send Co's contact card (vCard) so they can save Co's contact. Use when they ask for your contact or card, or want to save you. Still send a short reply with sendReply.",
-      inputSchema: z.object({}),
-      execute: async () => {
+      description:
+        "Send Co's contact card (vCard), only when they ask for YOUR contact details: \"send your contact card\", \"what's your number\", \"how do I save you\". Never for anything else they ask you to send, like a link or an event. Still send a short reply with sendReply.",
+      inputSchema: z.object({
+        theirWords: z.string().describe("The exact words where they asked for your contact card or number."),
+      }),
+      execute: async ({ theirWords }) => {
         if (!process.env.CO_VCARD_URL) return { ok: false, error: "no contact card configured" };
+        // They have to have actually asked for Co's contact (2026-09-16:
+        // "You send it over", about a link, got the contact card).
+        if (!asksForContactCard(theirWords) && !asksForContactCard(ctx.resolvedContent)) {
+          return { ok: false, error: "they didn't ask for your contact card, so it wasn't sent. Send what they actually asked for." };
+        }
         if (ctx.dryRun) {
           console.log(`[conversationReply dryRun] would send contact card to ${ctx.userId}`);
         } else {

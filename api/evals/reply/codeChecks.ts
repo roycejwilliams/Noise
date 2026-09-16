@@ -1,5 +1,8 @@
 // Model-free checks for the Layer 3 gate's deterministic rules. Runs in a
 // second, no API calls: npx tsx evals/reply/codeChecks.ts
+import { DateTime } from "luxon";
+import { isBrowseAsk, parseAskWindow, withinWindow } from "../../src/services/askWindow.js";
+import { asksForContactCard } from "../../src/services/conversationClose.js";
 import { renderMatchList } from "../../src/services/messageFormat.js";
 import { closingReaction } from "../../src/services/conversationClose.js";
 import "dotenv/config";
@@ -88,7 +91,40 @@ const formatCases: [boolean, string][] = [
   [!twoItems.includes("http"), "links are never in the list message"],
 ];
 
+// Time frames someone names in an ask (services/askWindow.ts). Reference
+// "now" is Tue 2026-09-15 18:00 local.
+const now = DateTime.fromISO("2026-09-15T18:00:00", { zone: "America/Los_Angeles" });
+const w = (text: string) => parseAskWindow(text, now);
+const windowCases: [boolean, string][] = [
+  [w("anything this weekend?")?.label === "this weekend", "this weekend"],
+  [w("what's on this weekend")?.start.toISODate() === "2026-09-19", "weekend starts Saturday"],
+  [w("what's on this weekend")?.end.toISODate() === "2026-09-20", "weekend ends Sunday"],
+  [w("anything tonight")?.label === "tonight", "tonight"],
+  [w("what about tomorrow")?.end.toISODate() === "2026-09-16", "tomorrow"],
+  [w("free next tuesday?")?.start.toISODate() === "2026-09-22", "next tuesday"],
+  [w("anything next week")?.label === "next week", "next week"],
+  [w("anything in the next 10 days")?.end.toISODate() === "2026-09-25", "next 10 days"],
+  [w("find me climate founders") === null, "no time frame means no window"],
+  [withinWindow("2026-09-19T19:00:00-07:00", w("this weekend")!), "saturday evening is in the weekend window"],
+  [!withinWindow("2026-09-23T19:00:00-07:00", w("this weekend")!), "next wednesday is not"],
+  [isBrowseAsk("What's been surfacing on Luma this weekend?"), "luma browse ask"],
+  [isBrowseAsk("anything coming up this week?"), "generic browse ask"],
+  [!isBrowseAsk("any climate events this weekend?"), "a subject means a normal search"],
+  [!isBrowseAsk("find me a designer"), "not a browse ask"],
+  [asksForContactCard("can you send your contact card"), "asks for the card"],
+  [asksForContactCard("what's your number?"), "asks for the number"],
+  [!asksForContactCard("You send it over"), "sending a link is not a card request"],
+  [!asksForContactCard("send me both accelerator links again"), "links are not a card request"],
+];
+
 let failed = 0;
+for (const [ok, label] of windowCases) {
+  if (!ok) {
+    failed++;
+    console.log(`FAIL window: ${label}`);
+  }
+}
+
 for (const [ok, label] of formatCases) {
   if (!ok) {
     failed++;
@@ -120,6 +156,6 @@ for (const [draft, expected, label] of ongoingCases) {
     console.log(`FAIL ${label}: "${draft}" -> ${failing.join(", ") || "(none)"}`);
   }
 }
-const total = cases.length + ongoingCases.length + closingCases.length + formatCases.length;
+const total = cases.length + ongoingCases.length + closingCases.length + formatCases.length + windowCases.length;
 console.log(`codeChecks: ${total - failed}/${total} passed`);
 if (failed) process.exitCode = 1;
