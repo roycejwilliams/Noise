@@ -32,7 +32,7 @@ type Case = {
   recentConversation: string;
   openItems: { kind: OpenItemKind; detail: string | null }[];
   current: Record<string, string | undefined> | null;
-  label: { ans: string[]; call: string[]; rec: boolean | null; upd: boolean | null; venue: boolean | null; nope: string[] };
+  label: { ans: string[]; call: string[]; rec: boolean | null; upd: boolean | null; nope: string[] };
   repeats?: number;
 };
 
@@ -43,7 +43,6 @@ type Acted = {
   call: "place_call" | "schedule" | "cancel" | "answer_calling_question" | "nothing";
   rec: boolean;
   upd: boolean;
-  venue: boolean;
 };
 
 const here = dirname(fileURLToPath(import.meta.url));
@@ -106,19 +105,12 @@ function baselineActions(c: Case): Acted {
   if (cur.matchNudge === "not_interested") resolved.push("match_nudge:no");
   if (cur.methodChoice === "phone") resolved.push("method_choice:text");
   if (cur.methodChoice === "email") resolved.push("method_choice:email");
-  let venue = false;
-  if (cur.venue) {
-    try {
-      venue = JSON.parse(cur.venue.replace(/```json|```/g, "").trim()).wants_venue === true;
-    } catch {}
-  }
   return {
     resolved,
     clarified: false,
     call,
     rec: (cur.wantsRecommendation ?? "").trim().toLowerCase().replace(/^[`"']+|[`"']+$/g, "") === "wants_something_concrete",
     upd: (cur.asksForUpdates ?? "").trim().toLowerCase().startsWith("yes"),
-    venue,
   };
 }
 
@@ -130,7 +122,6 @@ function routerActions(d: Decision): Acted {
     call: d.placeCall ? "place_call" : d.scheduleCall ? "schedule" : d.cancelCall ? "cancel" : d.answerCallingQuestion ? "answer_calling_question" : "nothing",
     rec: d.wantsRecommendation,
     upd: d.asksForUpdates,
-    venue: !!d.venue,
   };
 }
 
@@ -160,7 +151,6 @@ function score(c: Case, a: Acted) {
   soft.call = c.label.call.includes(a.call);
   soft.rec = c.label.rec === null ? null : a.rec === c.label.rec;
   soft.upd = c.label.upd === null ? null : a.upd === c.label.upd;
-  soft.venue = c.label.venue === null ? null : a.venue === c.label.venue;
   return { hard, soft };
 }
 
@@ -219,7 +209,7 @@ async function main() {
   console.log(`\n=== ${label} — ${results.length} cases ===\n`);
 
   const hardCases = results.filter((r) => r.hard.length);
-  const fields = ["ans", "call", "rec", "upd", "venue"] as const;
+  const fields = ["ans", "call", "rec", "upd"] as const;
   const acc: Record<string, string> = {};
   let softRight = 0;
   let softTotal = 0;

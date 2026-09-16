@@ -15,7 +15,6 @@
       ],
       "rec": null,
       "upd": false,
-      "venue": true,
       "nope": [
         "place_call"
       ]
@@ -42,7 +41,6 @@
       ],
       "rec": false,
       "upd": false,
-      "venue": false,
       "nope": [
         "place_call"
       ]
@@ -69,7 +67,6 @@
       ],
       "rec": false,
       "upd": false,
-      "venue": false,
       "nope": [
         "place_call",
         "network_tease:no"
@@ -97,7 +94,6 @@
       ],
       "rec": false,
       "upd": false,
-      "venue": false,
       "nope": [
         "place_call",
         "network_intro:yes"
@@ -125,7 +121,6 @@
       ],
       "rec": false,
       "upd": false,
-      "venue": false,
       "nope": [
         "place_call",
         "method_choice:text"
@@ -158,7 +153,6 @@
       ],
       "rec": false,
       "upd": false,
-      "venue": false,
       "nope": [
         "place_call",
         "call_offer:accept"
@@ -186,7 +180,6 @@
       ],
       "rec": false,
       "upd": false,
-      "venue": false,
       "nope": [
         "event_tease:yes",
         "event_tease:no"
@@ -218,7 +211,6 @@
       ],
       "rec": false,
       "upd": false,
-      "venue": false,
       "nope": [
         "place_call",
         "call_offer:accept"
@@ -247,7 +239,6 @@
       ],
       "rec": false,
       "upd": false,
-      "venue": false,
       "nope": [
         "place_call",
         "call_offer:accept"
@@ -275,7 +266,6 @@
       ],
       "rec": false,
       "upd": false,
-      "venue": false,
       "nope": [
         "place_call"
       ]
@@ -307,7 +297,6 @@
       ],
       "rec": false,
       "upd": false,
-      "venue": false,
       "nope": [
         "place_call",
         "match_nudge:yes"
@@ -330,7 +319,6 @@
       ],
       "rec": true,
       "upd": false,
-      "venue": false,
       "nope": [
         "place_call"
       ]
@@ -352,7 +340,6 @@
       ],
       "rec": true,
       "upd": false,
-      "venue": false,
       "nope": [
         "place_call"
       ]
@@ -374,7 +361,6 @@
       ],
       "rec": false,
       "upd": false,
-      "venue": false,
       "nope": [
         "place_call"
       ]

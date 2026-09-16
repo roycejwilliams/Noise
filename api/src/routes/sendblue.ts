@@ -47,7 +47,6 @@ import { NO_ROUTE, decideActions, gatherOpenItems, routeMessage, type RouterOutp
 import { recordDecision } from "../harness/core.js";
 import { routerGateChecks } from "../harness/routerChecks.js";
 import { addEventFacts, addFact, addInstruction, addOngoingSearchFacts, gatherReplyFacts, recordSearchNote } from "../harness/replyGrounding.js";
-import { findRealVenues } from "../services/venueLookup.js";
 import { runConversationReplyAgent, filterRelevantMemories, CALL_OFFER_EXPIRY_DAYS } from "../agent/conversationReply.js";
 import { triggerCallForUser } from "../services/callTrigger.js";
 import sendblue, { cleanCoMessage, markRead, sendReaction } from "../services/sendblue.js";
@@ -979,7 +978,7 @@ export function sendblueRouter(io: Server): Router {
 
         // Layer 2 router (Royce, 2026-09-14). Replaces the separate call-offer,
         // event-tease, outcome, check-in, match-nudge, network, method-choice,
-        // updates, recommendation and venue classifiers, which each decided on
+        // updates and recommendation classifiers, which each decided on
         // their own whether this message was "theirs" — one "yes" could accept
         // a stale call offer AND opt into an intro. Now one call sees every
         // open item, and decideActions (plain code) decides what runs: at most
@@ -1029,7 +1028,6 @@ export function sendblueRouter(io: Server): Router {
             decision.cancelCall ? "cancel_call" : null,
             decision.wantsRecommendation ? "recommendation" : null,
             decision.asksForUpdates ? "updates" : null,
-            decision.venue ? "venue" : null,
           ].filter(Boolean);
           routerActed = acted.length > 0 || !!decision.clarifyContext || !!decision.clarifyAbout;
           recordDecision({
@@ -1771,7 +1769,7 @@ Return ONLY valid JSON, no preamble: {"date": "YYYY-MM-DD or null", "time": "HH:
               if (prepared.length) addInstruction(replyFacts, `You already sent them ${prepared.length > 1 ? "a couple of real things" : "something real"} you thought of, separately from this reply. Don't repeat the name, link, or details in this reply. If it's natural, you can briefly acknowledge you just sent those, but keep this reply focused on genuinely responding to what they just said.`);
             } else if (recommendation.available) {
               // Generic fallback path (no tiered match found) — a
-              // category/type suggestion, never a specific real venue with
+              // category/type suggestion, never a specific real place with
               // a link, since there's genuinely nothing to link to here.
               addFact(replyFacts, "known", `An idea to suggest (a type of thing, not a specific place, and there's no link): "${recommendation.match}". Why: ${recommendation.reason}`);
               addInstruction(replyFacts, `You just thought of a real recommendation for them: "${recommendation.match}". Work this into your reply naturally, as your own suggestion. This is an idea, not a specific place with a link — never say you're "sending" or "sharing" anything for this, you have nothing to send. Never name a specific real company, program, or organization as an example (e.g. "YC", "On Deck") unless that exact name is literally what's written in "${recommendation.match}" above — if the match itself is generic, describe only the general type of thing, don't dress it up with real names you're not actually sure fit.`);
@@ -1803,106 +1801,6 @@ Return ONLY valid JSON, no preamble: {"date": "YYYY-MM-DD or null", "time": "HH:
           }
         } catch (err: any) {
           console.error("sendblue: recommendation failed (non-fatal):", err?.message ?? err);
-        }
-
-        // Real venue lookup — distinct from the abstract recommendation
-        // above. When someone mentions wanting a specific CATEGORY of place
-        // (a gym, a cafe, a climbing spot), search Google Places for real,
-        // and send an actual Google Maps link — not a description of what
-        // Co would send. Needs a known city to search against; silently
-        // skipped if none is on file yet rather than guessing one.
-        let venueDeliveryMessage: string | null = null;
-        if (profile?.city) {
-          try {
-            if (decision.venue) {
-              const venueType: string = decision.venue.type;
-              const requestedCount = decision.venue.count;
-
-              // The real Places search below has genuine network latency on
-              // top of the classification calls already run this turn —
-              // send a real, personalized acknowledgment now, before the
-              // search, then deliver the actual result as the reply below —
-              // never claim delivery before there's something real to
-              // deliver.
-              try {
-                const { text: rawHold } = await propagateAttributes(
-                  { userId: user.id, traceName: "sendblue.venueRequest.holdMessage" },
-                  () =>
-                    generateText({
-                      model: anthropic(MODELS.haiku),
-                      experimental_telemetry: { isEnabled: true, functionId: "sendblue.venueRequest.holdMessage" },
-                      prompt: `${CO_VOICE}\n\n${CO_TEXT_CHANNEL} They just asked about finding ${requestedCount > 1 ? `${requestedCount} ${venueType}s` : `a ${venueType}`}. You're about to go actually look them up for them — send a brief "give me a sec" acknowledgment that names what they're looking for (the ${venueType}), not generic. Normal capitalization. Don't claim you've found anything yet. One short sentence. No em dashes. Under 100 characters.`,
-                    }),
-                );
-                const trimmedHold = rawHold.trim().slice(0, 100);
-                const holdMessage = trimmedHold.charAt(0).toUpperCase() + trimmedHold.slice(1);
-                await logTextExchange(user.id, `Co replied: ${holdMessage}`);
-                try {
-                  await sendblue.messages.send({
-                    number,
-                    content: holdMessage,
-                    from_number: process.env.SENDBLUE_PHONE_NUMBER!,
-                  });
-                } catch (smsErr: any) {
-                  console.error(`Sendblue venue-lookup hold message failed for ${number} (non-fatal):`, smsErr?.message ?? smsErr);
-                }
-              } catch (err: any) {
-                console.error("sendblue: venue hold-message generation failed (non-fatal, proceeding to search anyway):", err?.message ?? err);
-              }
-
-              const venues = await findRealVenues(venueType, profile.city, requestedCount);
-              if (venues.length) {
-                // Sent as its own dedicated, complete message instead of
-                // folded into the general reply — a list of real, named
-                // things needs the room to actually say all of them.
-                try {
-                  const { text: rawIntro } = await propagateAttributes(
-                    { userId: user.id, traceName: "sendblue.venueRequest.introMessage" },
-                    () =>
-                      generateText({
-                        model: anthropic(MODELS.haiku),
-                        experimental_telemetry: { isEnabled: true, functionId: "sendblue.venueRequest.introMessage" },
-                        prompt: `${CO_VOICE}\n\n${CO_TEXT_CHANNEL} You just found ${venues.length} real ${venueType}${venues.length > 1 ? "s" : ""} for them${venues.length < requestedCount ? ` — they asked for ${requestedCount}, this is genuinely all that came back as a solid match, say so honestly` : ""}. Write ONE short, warm intro sentence to go right before a list (the list itself follows separately after your sentence — do not write the list yourself, do not include any links). No em dashes. Under 150 characters.`,
-                      }),
-                  );
-                  const introLine = rawIntro.trim().slice(0, 150);
-                  const listBlock = venues.map((v) => `${v.name} — ${v.mapsUrl}`).join("\n\n");
-                  venueDeliveryMessage = `${introLine}\n\n${listBlock}`;
-                } catch (err: any) {
-                  console.error("sendblue: venue delivery intro generation failed (non-fatal, sending list plainly):", err?.message ?? err);
-                  venueDeliveryMessage = venues.map((v) => `${v.name} — ${v.mapsUrl}`).join("\n\n");
-                }
-                {
-                  const venueMemoryContent = `Co surfaced ${venues.length} real venue(s) — ${venues.map((v) => `${v.name} (${v.address}): ${v.mapsUrl}`).join("; ")}`;
-                  await pool
-                    .query(`INSERT INTO co_memories (user_id, memory_type, content) VALUES ($1, 'recommendation', $2) RETURNING id`, [
-                      user.id,
-                      venueMemoryContent,
-                    ])
-                    .then((mem) =>
-                      generateEmbedding(venueMemoryContent)
-                        .then((emb) =>
-                          pool.query(`UPDATE co_memories SET content_embedding = $1::vector WHERE id = $2`, [
-                            `[${emb.join(",")}]`,
-                            mem.rows[0].id,
-                          ]),
-                        )
-                        .catch((err) => console.error("Venue memory embedding failed (non-fatal):", err)),
-                    )
-                    .catch((err: any) => console.error("sendblue: venue memory write failed (non-fatal):", err?.message ?? err));
-                }
-              } else {
-                // Must not repeat the "claimed to deliver, delivered
-                // nothing" failure — if the search genuinely came up empty,
-                // the reply has to say so honestly, not go quiet or invent
-                // a name.
-                addFact(replyFacts, "did_this_turn", `Searched for a real ${venueType} near them and found no solid match.`);
-                addInstruction(replyFacts, `You looked for a real ${venueType} but didn't find a solid match nearby. Say so honestly in your reply. Don't invent a name or pretend you found one.`);
-              }
-            }
-          } catch (err: any) {
-            console.error("sendblue: venue lookup classification failed (non-fatal):", err?.message ?? err);
-          }
         }
 
         // Step 4.7 — Debounce the free-form reply only. Every deterministic
@@ -2019,23 +1917,7 @@ Return ONLY valid JSON, no preamble: {"date": "YYYY-MM-DD or null", "time": "HH:
             : "";
 
         let coReply: string;
-        if (venueDeliveryMessage) {
-          // A venue list already went out as its own dedicated message above
-          // — that IS the response to what they asked for. Running the
-          // general persona reply on top of it would mean a 3rd message
-          // every time (hold + list + generic reply).
-          coReply = venueDeliveryMessage;
-          await logTextExchange(user.id, `Co replied: ${venueDeliveryMessage}`);
-          try {
-            await sendblue.messages.send({
-              number,
-              content: venueDeliveryMessage,
-              from_number: process.env.SENDBLUE_PHONE_NUMBER!,
-            });
-          } catch (smsErr: any) {
-            console.error(`Sendblue venue delivery send failed for ${number} (non-fatal):`, smsErr?.message ?? smsErr);
-          }
-        } else {
+        {
           // Same persona the real call uses, not a separate thinner one —
           // Co should be the same entity whether someone's talking by voice
           // or text. contextSummary reuses buildContextSummary (the exact

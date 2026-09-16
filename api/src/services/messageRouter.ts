@@ -288,9 +288,6 @@ const routerOutputSchema = z.object({
   call: z.enum(["explicit_request", "asks_about_calling", "schedule_request", "cancel_scheduled_call", "would_benefit", "none"]),
   wantsRecommendation: z.boolean(),
   asksForUpdates: z.boolean(),
-  venue: z
-    .object({ type: z.string(), count: z.number() })
-    .nullable(),
   confidence: z.enum(["high", "medium", "low"]),
   reason: z.string().default(""),
 });
@@ -336,7 +333,7 @@ Things Co has asked that are still waiting on a reply from them (newest first, w
 ${itemsBlock}
 ${declined}
 Return ONLY a JSON object:
-{"reason": "one short sentence: what their message is doing", "answers": {"itemId": "...", "value": "..."} or null, "ambiguousBetween": [itemIds], "call": "...", "wantsRecommendation": true/false, "asksForUpdates": true/false, "venue": {"type": "...", "count": n} or null, "confidence": "high" | "medium" | "low"}
+{"reason": "one short sentence: what their message is doing", "answers": {"itemId": "...", "value": "..."} or null, "ambiguousBetween": [itemIds], "call": "...", "wantsRecommendation": true/false, "asksForUpdates": true/false, "confidence": "high" | "medium" | "low"}
 Write "reason" first, then make every other field agree with it: if your reason says the message isn't answering a waiting item, answers must be null.
 
 answers — which waiting item (if any) the latest message is actually replying to:
@@ -368,7 +365,6 @@ wantsRecommendation — they're asking Co to find, suggest, or surface something
 
 asksForUpdates — they're asking what's new or changed with Co itself ("any updates?", "you got some recent updates?", "what's new?"). false for a casual greeting ("what's up?"), for "found anything for me?" or "surfaced anything lately?" (those are recommendation asks), for reactions to an update message, and for telling Co about their own week.
 
-venue — they want a CATEGORY of physical place to go (a gym, cafe, climbing spot, coworking space, restaurant, bar), including "send me some" when the category was already established. Events, meetups, conferences, accelerator or fellowship programs are never venues, even though they happen somewhere. count = how many they asked for: default 1, the upper end of a range ("2-5" is 5), max 5. Otherwise null.
 
 confidence — "high" if the read is unambiguous, "medium" if it's the most reasonable read but another is possible, "low" if you're guessing.`;
 }
@@ -405,7 +401,6 @@ export const NO_ROUTE: RouterOutput = {
   call: "none",
   wantsRecommendation: false,
   asksForUpdates: false,
-  venue: null,
   confidence: "low",
   reason: "router unavailable",
 };
@@ -421,7 +416,6 @@ export type Decision<T extends RoutableItem = RoutableItem> = {
   callWouldBenefit: boolean;
   wantsRecommendation: boolean;
   asksForUpdates: boolean;
-  venue: { type: string; count: number } | null;
   clarifyContext: string;
   // What the clarifying question is about, if any: which waiting item they
   // meant, or whether they want a call.
@@ -527,7 +521,6 @@ export function decideActions<T extends RoutableItem>(
     callWouldBenefit: false,
     wantsRecommendation: false,
     asksForUpdates: out.asksForUpdates,
-    venue: out.venue && out.venue.type ? { type: out.venue.type, count: Math.max(1, Math.min(Math.round(out.venue.count) || 1, 5)) } : null,
     clarifyContext: "",
     clarifyAbout: null,
   };
