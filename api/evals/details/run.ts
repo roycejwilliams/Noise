@@ -136,6 +136,7 @@ const accelerator = { name: "16vc accelerator", kind: "opportunity", url: "https
 const fitCases: Case[] = [
   { id: "f01_new_direction", kind: "fit", match: accelerator, picture: seriesA, person: { firstName: "Royce", askText: "Wasn't feeling it man. Have you seen any vcs or come across any accelerators that could help me if I decide to build something else?" }, expectFits: true, whyMustNot: "series a|mismatch|not quite where" },
   { id: "f02_current_company", kind: "fit", match: accelerator, picture: seriesA, person: { firstName: "Royce", askText: "Know any investors who lead Series B for our company?" }, expectFits: false },
+  { id: "f04_outside_time_frame", kind: "fit", match: { name: "SFTechWeek", kind: "opportunity", url: "https://x.com/i/status/2100208577356931426", reason: "", opportunity: { postText: "SF Tech Week Oct 5-11: Oktoberfest night with people building AI, data centers and infrastructure." } }, picture: seriesA, person: { firstName: "Royce", askText: "Anything tech happening Thursday?", timeFrame: "thursday (Thursday, September 17)" }, expectFits: false },
   { id: "f03_event_fits", kind: "fit", match: { name: "Climate Founders Mixer", kind: "public_event", event_date: "2026-09-23", url: "https://lu.ma/cfm", reason: "", details }, picture: "", person: { firstName: "Sam", askText: "I want to meet climate investors before we raise" }, expectFits: true },
 ];
 

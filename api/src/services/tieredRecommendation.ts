@@ -487,7 +487,7 @@ async function paidSearchAllowed(userId: string | null, source: "sweep" | "reque
 // city Luma was asked about, the time frame from their own words, and
 // whether it was a "what's on?" browse. Without it a "nothing found" record
 // can't be told apart from "searched the wrong place".
-export type SearchScope = { city: string | null; window: string | null; windowEnd?: string | null; browse: boolean; tiers: number[]; dropped?: TierDrop | null; gatedOut?: GatedOut[] };
+export type SearchScope = { city: string | null; window: string | null; windowStart?: string | null; windowEnd?: string | null; browse: boolean; tiers: number[]; dropped?: TierDrop | null; gatedOut?: GatedOut[] };
 export type TierDrop = { tier: number; name: string; reason: string };
 let lastSearchScope: SearchScope | null = null;
 let lastTierDrop: TierDrop | null = null;
@@ -547,16 +547,16 @@ export async function getTieredRecommendation(
     searchCache.set(cacheKey, { at: Date.now(), found });
   }
 
-  lastSearchScope = { city, window: window?.label ?? null, windowEnd: window?.end.toISO() ?? null, browse, tiers: found.map((m) => m.tier), dropped: lastTierDrop };
+  lastSearchScope = { city, window: window?.label ?? null, windowStart: window?.start.toISO() ?? null, windowEnd: window?.end.toISO() ?? null, browse, tiers: found.map((m) => m.tier), dropped: lastTierDrop };
   lastTierDrop = null;
   const gatedOut: GatedOut[] = [];
   const gated = await gateMatches(found, { userId: opts.userId ?? null, searchCity: city, checkRepeat: opts.checkRepeat, gatedOut });
   if (lastSearchScope) lastSearchScope.gatedOut = gatedOut;
-  // One per tier: the gate may have kept several Tier 2 candidates, and this
-  // is a suggestion, not a listing.
-  const perTier = new Map<number, TierMatch>();
-  for (const match of gated) if (!perTier.has(match.tier)) perTier.set(match.tier, match);
-  return [...perTier.values()];
+  // Every offerable candidate, best first. Collapsing to one per tier here
+  // threw the right event away (2026-09-16: "Voice AI Happy Hour" passed the
+  // gate but lost the Tier 2 slot to a higher-ranked event the fit check then
+  // rejected). The caller picks one per tier after the fit check.
+  return gated;
 }
 
 // The daily urgent-only Tier 1/2 pre-check (checkForUrgentMatch) was removed

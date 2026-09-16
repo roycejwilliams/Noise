@@ -280,6 +280,17 @@ async function sendCoReply(params: {
 // non-blocking pattern — nothing here should delay Co's reply.
 // True when Co hasn't replied since the message before this one — it owes a
 // real answer, so a reaction would swallow it.
+// "thursday (Thursday, September 17)": the words they used plus the actual
+// dates, so the fit check can't read "Thursday" as any Thursday (2026-09-16:
+// an Oct 5-11 event was judged a fit for "Thursday").
+function describeTimeFrame(scope: { window: string | null; windowStart?: string | null; windowEnd?: string | null } | null | undefined): string | null {
+  if (!scope?.window || !scope.windowStart || !scope.windowEnd) return null;
+  const fmt = (iso: string) => DateTime.fromISO(iso, { setZone: true }).toFormat("cccc, LLLL d");
+  const start = fmt(scope.windowStart);
+  const end = fmt(scope.windowEnd);
+  return `${scope.window} (${start === end ? start : `${start} to ${end}`})`;
+}
+
 async function replyOwed(userId: string): Promise<boolean> {
   const { rows } = await pool
     .query(
@@ -1688,14 +1699,24 @@ Return ONLY valid JSON, no preamble: {"date": "YYYY-MM-DD or null", "time": "HH:
               // already uses for a real second message.
               // Details, the personal reason, and the text for every match
               // are prepared in parallel, then sent in order.
-              const matchCount = recommendation.matches.length;
-              const preparedAll = await Promise.all(recommendation.matches.map(async (m) => {
+              // At most two per tier get the fit check and a drafted
+              // description: enough for a fallback when the first doesn't
+              // fit, without a model call for every candidate.
+              const perTierCount = new Map<number, number>();
+              const toPrepare = recommendation.matches.filter((m) => {
+                const n = perTierCount.get(m.tier) ?? 0;
+                perTierCount.set(m.tier, n + 1);
+                return n < 2;
+              });
+              const matchCount = new Set(toPrepare.map((m) => m.tier)).size;
+              const preparedAll = await Promise.all(toPrepare.map(async (m) => {
                 // Drafted in Co's voice from the real record and a personal
                 // reason, not the matching engine's raw "name — reason" line.
                 const em = await enrichMatch(m, {
                   userId: user.id,
                   firstName: user.first_name,
                   askText: resolvedContent,
+                  timeFrame: describeTimeFrame("scope" in recommendation ? recommendation.scope : null),
                   goals: profile?.goals ?? null,
                   city: profile?.city ?? null,
                   feeling: renderEmotionalContext(emotional),
@@ -1716,7 +1737,9 @@ Return ONLY valid JSON, no preamble: {"date": "YYYY-MM-DD or null", "time": "HH:
               }));
               // Only what the personal read says fits what they asked
               // (services/eventDetails.ts fitPrompt).
-              const prepared = preparedAll.filter((p) => p.fits !== false);
+              // What fits, then one per tier, best first.
+              const seenTier = new Set<number>();
+              const prepared = preparedAll.filter((p) => p.fits !== false).filter((p) => (seenTier.has(p.m.tier) ? false : (seenTier.add(p.m.tier), true)));
               if (!prepared.length) {
                 addFact(
                   replyFacts,

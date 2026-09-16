@@ -156,7 +156,7 @@ export function missingEventDetails(name: string, d: EventDetails | undefined): 
   return missing.length ? `For "${name}", Co does not have: ${missing.join(", ")}.` : null;
 }
 
-export type PersonForFit = { userId?: string; firstName: string; askText: string | null; goals?: string[] | null; city?: string | null; feeling?: string };
+export type PersonForFit = { userId?: string; firstName: string; askText: string | null; timeFrame?: string | null; goals?: string[] | null; city?: string | null; feeling?: string };
 
 // A personal reason, grounded only in what they've said and the real
 // details. Sonnet: it's shown to them and needs judgment.
@@ -185,6 +185,7 @@ Rules:
 - Judge fit against what they're asking for right now. The background is context, not the test.
 - If they're asking about a new or possible direction ("if I start something new", "if I decide to build something else"), judge it for that new thing. A new company starts from zero, so pre-seed and seed programs fit it. Their current company's stage, funding, or other asks never make it a misfit.
 - Only say it doesn't fit when it doesn't match what they're asking for right now (wrong kind of thing, wrong place, wrong stage for the thing they're asking about).
+- ${person.timeFrame ? `They asked about ${person.timeFrame}. Something clearly happening outside that time frame doesn't fit, however good it is otherwise.` : "They didn't name a time frame."}
 - Connect a specific thing they said to a specific real detail above. Use only what's written here.
 
 Return ONLY JSON: {"fits": true or false, "why": "the explanation"}`;
