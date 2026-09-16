@@ -191,9 +191,14 @@ export async function wasAlreadyOffered(userId: string, match: TierMatch): Promi
 
 // Gate a list of matches for one person. userId null = no repeat check
 // (the proactive sweep keeps its own dedup) and no decision log.
+// Real matches the gate turned away, and the plain reason, so the reply can
+// say "the ones I found are sold out" instead of inventing a generic idea
+// (2026-09-16).
+export type GatedOut = { name: string; tier: number; reasons: string[] };
+
 export async function gateMatches(
   matches: TierMatch[],
-  ctx: { userId: string | null; searchCity: string | null; checkRepeat?: boolean; evidenceByUrl?: Map<string, string>; now?: Date },
+  ctx: { userId: string | null; searchCity: string | null; checkRepeat?: boolean; evidenceByUrl?: Map<string, string>; now?: Date; gatedOut?: GatedOut[] },
 ): Promise<TierMatch[]> {
   const now = ctx.now ?? new Date();
   const kept: TierMatch[] = [];
@@ -209,6 +214,7 @@ export async function gateMatches(
     };
     const { ok, checks } = evaluateMatch(match, facts);
     if (ok) kept.push(match);
+    else ctx.gatedOut?.push({ name: match.name, tier: match.tier, reasons: checks.filter((c) => !c.pass).map((c) => c.reason ?? c.name) });
     if (ctx.userId) {
       await recordDecision({
         layer: 5,

@@ -1818,7 +1818,17 @@ Return ONLY valid JSON, no preamble: {"date": "YYYY-MM-DD or null", "time": "HH:
                 ],
                 proposal: { message: resolvedContent, holdLine, ms: Date.now() - searchStarted, scope: "scope" in recommendation ? recommendation.scope : null },
               });
-              addInstruction(replyFacts, "You searched and found nothing real yet. Say that plainly. Don't make up a suggestion.");
+              const gatedOut = ("scope" in recommendation ? recommendation.scope?.gatedOut : null) ?? [];
+              if (gatedOut.length) {
+                addFact(
+                  replyFacts,
+                  "did_this_turn",
+                  `Found real ones but couldn't offer them: ${gatedOut.map((g) => `"${g.name}" (${g.reasons.join(", ")})`).join("; ")}.`,
+                );
+                addInstruction(replyFacts, "You did find real things, but none you can offer (for example they're sold out). Say that plainly, name what you found and why in a short sentence, and don't suggest a generic type of thing instead.");
+              } else {
+                addInstruction(replyFacts, "You searched and found nothing real yet. Say that plainly. Don't make up a suggestion.");
+              }
             }
           }
         } catch (err: any) {

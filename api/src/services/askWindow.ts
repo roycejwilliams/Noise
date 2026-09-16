@@ -70,14 +70,17 @@ export function parseAskWindow(text: string, now: DateTime): AskWindow | null {
     const n = Math.min(90, Number(inDays[1]));
     return mk(now, now.plus({ days: n }).endOf("day"), `the next ${n} days`);
   }
-  // "next tuesday", "on friday", "this thursday"
-  const weekday = t.match(/\b(?:next|this|on|coming)\s+(monday|tuesday|wednesday|thursday|friday|saturday|sunday)\b/);
+  // "next tuesday", "on friday", "this thursday", and a bare "thursday" or
+  // "thursday night" (2026-09-16: "anything happening Thursday?" had no
+  // window and got an event nine days out). A bare day means the coming one,
+  // today included.
+  const weekday = t.match(/\b(?:(next|this|on|coming)\s+)?(monday|tuesday|wednesday|thursday|friday|saturday|sunday)s?\b/);
   if (weekday) {
-    const idx = WEEKDAYS.indexOf(weekday[1]) + 1;
-    const allowToday = !/\bnext\b/.test(weekday[0]);
+    const idx = WEEKDAYS.indexOf(weekday[2]) + 1;
+    const allowToday = weekday[1] !== "next";
     const d = nextWeekday(now, idx, allowToday);
     const { start, end } = day(d);
-    return mk(start, end, weekday[0].replace(/\s+/g, " "));
+    return mk(start, end, weekday[1] ? `${weekday[1]} ${weekday[2]}` : weekday[2]);
   }
   return null;
 }
@@ -96,7 +99,7 @@ export function isBrowseAsk(text: string): boolean {
   if (!/\b(luma|events?|anything|what's|whats|what is|what has|surfacing|going on|happening|coming up|on the calendar)\b/.test(t)) return false;
   // A real subject means it's a normal search ("climate events this weekend").
   const subject = t
-    .replace(/\b(luma|event|events|anything|something|what's|whats|what|is|has|been|surfacing|going|on|happening|coming|up|this|next|the|weekend|week|weekday|today|tonight|tomorrow|month|for|me|you|any|got|do|have|there|calendar|in|a|new|see|show|find|check|look|at|your|around|near|to|of|us|we|i|and|or|it|that|right|now|soon|please|hey|co)\b/g, " ")
+    .replace(/\b(luma|event|events|anything|something|what's|whats|what|is|has|been|surfacing|going|on|happening|coming|up|this|next|the|weekend|week|weekday|today|tonight|tomorrow|month|for|me|you|any|got|do|have|there|calendar|in|a|new|see|show|find|check|look|at|your|around|near|to|of|us|we|i|and|or|it|that|right|now|soon|please|hey|co|monday|tuesday|wednesday|thursday|friday|saturday|sunday|mondays|tuesdays|wednesdays|thursdays|fridays|saturdays|sundays|night|evening|morning|afternoon)\b/g, " ")
     .replace(/[^a-z]+/g, " ")
     .trim();
   return subject.length === 0;

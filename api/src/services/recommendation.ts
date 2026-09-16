@@ -177,6 +177,12 @@ export async function generateRecommendation(userId: string, currentMessage?: st
       // "What's on this weekend?" is a question about the calendar. If
       // nothing's on it in that window, the honest answer is nothing, not a
       // generic "look for startup meetups" suggestion (2026-09-16).
+      // Real events were found and the gate turned every one away (sold out,
+      // already sent, too far): that's the answer, not a generic idea.
+      if (!tierMatches.length && scope?.gatedOut?.length) {
+        const why = scope.gatedOut.map((g) => `"${g.name}" (${g.reasons.join(", ")})`).join("; ");
+        return { available: false, reason: `found real ones but couldn't offer them: ${why}`, scope };
+      }
       if (!tierMatches.length && currentMessage && isBrowseAsk(currentMessage)) {
         const window = parseAskWindow(currentMessage, DateTime.now());
         return { available: false, reason: `nothing real on the calendar${window ? ` for ${window.label}` : ""}`, scope };

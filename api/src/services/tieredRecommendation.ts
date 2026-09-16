@@ -8,7 +8,7 @@ import { fetchLumaEventDetails, type EventDetails, type OpportunityDetails } fro
 import { searchRecentPosts } from "./xSearch.js";
 import { withinRadius } from "./geocoding.js";
 import type { StatedIntent } from "./matching.js";
-import { gateMatches } from "../harness/matchGate.js";
+import { gateMatches, type GatedOut } from "../harness/matchGate.js";
 import { MODELS } from "../models.js";
 import { parseModelJson } from "./modelJson.js";
 import pool from "../db/db.js";
@@ -487,7 +487,7 @@ async function paidSearchAllowed(userId: string | null, source: "sweep" | "reque
 // city Luma was asked about, the time frame from their own words, and
 // whether it was a "what's on?" browse. Without it a "nothing found" record
 // can't be told apart from "searched the wrong place".
-export type SearchScope = { city: string | null; window: string | null; browse: boolean; tiers: number[]; dropped?: TierDrop | null };
+export type SearchScope = { city: string | null; window: string | null; browse: boolean; tiers: number[]; dropped?: TierDrop | null; gatedOut?: GatedOut[] };
 export type TierDrop = { tier: number; name: string; reason: string };
 let lastSearchScope: SearchScope | null = null;
 let lastTierDrop: TierDrop | null = null;
@@ -549,7 +549,9 @@ export async function getTieredRecommendation(
 
   lastSearchScope = { city, window: window?.label ?? null, browse, tiers: found.map((m) => m.tier), dropped: lastTierDrop };
   lastTierDrop = null;
-  const gated = await gateMatches(found, { userId: opts.userId ?? null, searchCity: city, checkRepeat: opts.checkRepeat });
+  const gatedOut: GatedOut[] = [];
+  const gated = await gateMatches(found, { userId: opts.userId ?? null, searchCity: city, checkRepeat: opts.checkRepeat, gatedOut });
+  if (lastSearchScope) lastSearchScope.gatedOut = gatedOut;
   // One per tier: the gate may have kept several Tier 2 candidates, and this
   // is a suggestion, not a listing.
   const perTier = new Map<number, TierMatch>();
