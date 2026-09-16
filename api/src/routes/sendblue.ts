@@ -1780,6 +1780,19 @@ Return ONLY valid JSON, no preamble: {"date": "YYYY-MM-DD or null", "time": "HH:
               // Generic fallback path (no tiered match found) — a
               // category/type suggestion, never a specific real place with
               // a link, since there's genuinely nothing to link to here.
+              // This branch had no record at all, so a turn that fell back to
+              // a generic idea looked identical to one that never searched
+              // (2026-09-16).
+              await recordDecision({
+                layer: 5,
+                decision: "recommendation.search",
+                userId: user.id,
+                outcome: "skip",
+                action: "generic_idea",
+                proposal: { message: resolvedContent, holdLine, ms: Date.now() - searchStarted, scope: "scope" in recommendation ? recommendation.scope : null, idea: recommendation.match },
+                checks: [{ name: "found_something_real", pass: false, reason: "no tier match; suggested a type of thing instead" }],
+              });
+              await recordSearchNote(user.id, `Co searched for "${resolvedContent.slice(0, 120)}" and found nothing real, so it suggested a type of thing: ${recommendation.match}.`);
               addFact(replyFacts, "known", `An idea to suggest (a type of thing, not a specific place, and there's no link): "${recommendation.match}". Why: ${recommendation.reason}`);
               addInstruction(replyFacts, `You just thought of a real recommendation for them: "${recommendation.match}". Work this into your reply naturally, as your own suggestion. This is an idea, not a specific place with a link — never say you're "sending" or "sharing" anything for this, you have nothing to send. Never name a specific real company, program, or organization as an example (e.g. "YC", "On Deck") unless that exact name is literally what's written in "${recommendation.match}" above — if the match itself is generic, describe only the general type of thing, don't dress it up with real names you're not actually sure fit.`);
             } else {
