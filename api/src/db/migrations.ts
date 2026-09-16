@@ -468,6 +468,24 @@ export function runMigrations() {
     )
     .catch((err: Error) => console.error("phone_debounce table init failed:", err));
 
+  // Issues test users report to Co (services/issueReports.ts). Test only:
+  // written where CAPTURE_USER_ISSUES=true.
+  pool
+    .query(
+      `CREATE TABLE IF NOT EXISTS user_reported_issues (
+        id BIGSERIAL PRIMARY KEY,
+        user_id UUID REFERENCES users(id) ON DELETE CASCADE,
+        message TEXT NOT NULL,
+        summary TEXT NOT NULL,
+        category TEXT NOT NULL,
+        severity TEXT NOT NULL,
+        conversation TEXT,
+        status TEXT NOT NULL DEFAULT 'open',
+        created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+      )`,
+    )
+    .catch((err: Error) => console.error("user_reported_issues table init failed:", err));
+
   // Sendblue delivery retries (2026-09-15): one inbound text is processed
   // once, keyed by Sendblue's message_handle, however many times the webhook
   // is delivered.

@@ -1,4 +1,5 @@
 import { anthropic } from "@ai-sdk/anthropic";
+import { captureIssueReport } from "../services/issueReports.js";
 import { enqueueCandidate, nextLocalHour } from "../harness/proactive.js";
 import { getTimezoneForCity } from "../services/geocoding.js";
 import type { WindowFollowUpPayload } from "../agent/windowFollowUp.js";
@@ -1110,6 +1111,16 @@ export function sendblueRouter(io: Server): Router {
           pendingDescriptions: openItems.filter((i) => i.id !== resolvedItem?.item.id).map((i) => i.description),
         });
         const factsMs = Date.now() - factsStarted;
+        // A problem they're reporting about Co itself is saved for the team
+        // (test only, services/issueReports.ts), and the reply can say so.
+        const reportedIssue = hasText ? await captureIssueReport(user.id, resolvedContent, recentConversation) : null;
+        if (reportedIssue) {
+          addFact(replyFacts, "did_this_turn", `Saved what they reported about how Co works, for the team to look at: "${reportedIssue.summary}"`);
+          addInstruction(
+            replyFacts,
+            "They pointed out a problem with how you work. Acknowledge it plainly in a sentence, say you've passed it along to the team, and don't promise whether or when it gets fixed. Then respond to anything else they said.",
+          );
+        }
         if (repeatContext) addInstruction(replyFacts, repeatContext);
         if (walkinAskInstruction) addInstruction(replyFacts, walkinAskInstruction);
         if (decision.clarifyContext) addInstruction(replyFacts, decision.clarifyContext);
