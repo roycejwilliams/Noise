@@ -98,12 +98,19 @@ export async function discoverPlaceId(city: string | null): Promise<string | nul
 const PAGE_SIZE = 20;
 const MAX_PAGES = 6;
 
-export async function fetchPublicEvents(limit: number, city?: string | null): Promise<DiscoveredEvent[]> {
+// until: keep paging until the feed reaches this date, for a time frame
+// weeks out ("Oct 5 - Oct 14th"); a normal page budget only covers about the
+// next nine days.
+const MAX_PAGES_FAR = 20;
+
+export async function fetchPublicEvents(limit: number, city?: string | null, until?: Date | null): Promise<DiscoveredEvent[]> {
   const placeId = await discoverPlaceId(city ?? null);
   const out: DiscoveredEvent[] = [];
   const seen = new Set<string>();
   let cursor: string | null = null;
-  for (let page = 0; page < MAX_PAGES && out.length < limit; page++) {
+  const reachedUntil = () => !until || (out.length > 0 && new Date(out[out.length - 1].start_at) > until);
+  const pageBudget = until ? MAX_PAGES_FAR : MAX_PAGES;
+  for (let page = 0; page < pageBudget && (out.length < limit || !reachedUntil()); page++) {
     const url = new URL(DISCOVER_URL);
     url.searchParams.set("pagination_limit", String(PAGE_SIZE));
     if (placeId) url.searchParams.set("discover_place_api_id", placeId);
@@ -131,7 +138,7 @@ export async function fetchPublicEvents(limit: number, city?: string | null): Pr
     cursor = typeof data.next_cursor === "string" ? data.next_cursor : null;
     if (!data.has_more || !cursor) break;
   }
-  return out.slice(0, limit);
+  return until ? out : out.slice(0, limit);
 }
 
 // Calibrated against real data (Royce, 2026-09-02) — the 0.72 first-guess

@@ -28,10 +28,53 @@ function nextWeekday(from: DateTime, weekday: number, allowToday: boolean): Date
   return d;
 }
 
+const MONTHS: Record<string, number> = {
+  jan: 1, january: 1, feb: 2, february: 2, mar: 3, march: 3, apr: 4, april: 4, may: 5, jun: 6, june: 6,
+  jul: 7, july: 7, aug: 8, august: 8, sep: 9, sept: 9, september: 9, oct: 10, october: 10, nov: 11, november: 11, dec: 12, december: 12,
+};
+const MONTH_RE = "(jan(?:uary)?|feb(?:ruary)?|mar(?:ch)?|apr(?:il)?|may|june?|july?|aug(?:ust)?|sept?(?:ember)?|oct(?:ober)?|nov(?:ember)?|dec(?:ember)?)";
+const DAY_RE = "(\\d{1,2})(?:st|nd|rd|th)?";
+
+// A calendar date they typed, in their zone. A date already behind them this
+// year means next year ("Jan 5" said in September).
+function calendarDate(now: DateTime, month: string, dayOfMonth: string): DateTime | null {
+  const m = MONTHS[month.toLowerCase()];
+  const d = Number(dayOfMonth);
+  if (!m || !d) return null;
+  let date = DateTime.fromObject({ year: now.year, month: m, day: d }, { zone: now.zone });
+  if (!date.isValid) return null;
+  if (date.endOf("day") < now.startOf("day")) date = date.plus({ years: 1 });
+  return date;
+}
+
+// Explicit dates (Royce, 2026-09-16: "can we give it a date period like for
+// example 'Oct 5 - Oct 14th'?"): "Oct 5 - Oct 14th", "Oct 5-14",
+// "October 5 to 14", "between Oct 5 and Oct 14", or a single "Oct 5".
+function explicitDates(t: string, now: DateTime): AskWindow | null {
+  const range = t.match(new RegExp(`\\b${MONTH_RE}\\.?\\s+${DAY_RE}\\s*(?:-|–|to|through|thru|until|and)\\s*(?:${MONTH_RE}\\.?\\s+)?${DAY_RE}\\b`, "i"));
+  if (range) {
+    const start = calendarDate(now, range[1], range[2]);
+    let end = calendarDate(now, range[3] ?? range[1], range[4]);
+    if (start && end) {
+      if (end < start) end = end.plus({ years: 1 });
+      return { start: start.startOf("day"), end: end.endOf("day"), label: `${start.toFormat("LLL d")} to ${end.toFormat("LLL d")}` };
+    }
+  }
+  const single = t.match(new RegExp(`\\b${MONTH_RE}\\.?\\s+${DAY_RE}\\b`, "i"));
+  if (single) {
+    const d = calendarDate(now, single[1], single[2]);
+    if (d) return { start: d.startOf("day"), end: d.endOf("day"), label: d.toFormat("LLL d") };
+  }
+  return null;
+}
+
 // Returns the window they named, or null when they didn't name one.
 export function parseAskWindow(text: string, now: DateTime): AskWindow | null {
   const t = text.toLowerCase();
   const mk = (start: DateTime, end: DateTime, label: string): AskWindow => ({ start, end, label });
+
+  const dates = explicitDates(t, now);
+  if (dates) return dates;
 
   if (/\b(tonight|this evening)\b/.test(t)) {
     const d = day(now);
@@ -88,7 +131,9 @@ export function parseAskWindow(text: string, now: DateTime): AskWindow | null {
 // Whether a start time falls inside the window.
 export function withinWindow(startAt: string, w: AskWindow): boolean {
   const t = DateTime.fromISO(startAt, { zone: w.start.zone });
-  return t.isValid && t >= w.start.minus({ hours: 6 }) && t <= w.end;
+  // No slack before the start: six hours of it let a Wednesday-evening event
+  // into a Thursday window (2026-09-16).
+  return t.isValid && t >= w.start && t <= w.end;
 }
 
 // An ask with a time frame but no subject ("what's on this weekend?",
@@ -99,7 +144,8 @@ export function isBrowseAsk(text: string): boolean {
   if (!/\b(luma|events?|anything|what's|whats|what is|what has|surfacing|going on|happening|coming up|on the calendar)\b/.test(t)) return false;
   // A real subject means it's a normal search ("climate events this weekend").
   const subject = t
-    .replace(/\b(luma|event|events|anything|something|what's|whats|what|is|has|been|surfacing|going|on|happening|coming|up|this|next|the|weekend|week|weekday|today|tonight|tomorrow|month|for|me|you|any|got|do|have|there|calendar|in|a|new|see|show|find|check|look|at|your|around|near|to|of|us|we|i|and|or|it|that|right|now|soon|please|hey|co|monday|tuesday|wednesday|thursday|friday|saturday|sunday|mondays|tuesdays|wednesdays|thursdays|fridays|saturdays|sundays|night|evening|morning|afternoon)\b/g, " ")
+    .replace(/\d+(?:st|nd|rd|th)?\b/g, " ")
+    .replace(/\b(luma|event|events|anything|something|what's|whats|what|is|has|been|surfacing|going|on|happening|coming|up|this|next|the|weekend|week|weekday|today|tonight|tomorrow|month|for|me|you|any|got|do|have|there|calendar|in|a|new|see|show|find|check|look|at|your|around|near|to|of|us|we|i|and|or|it|that|right|now|soon|please|hey|co|monday|tuesday|wednesday|thursday|friday|saturday|sunday|mondays|tuesdays|wednesdays|thursdays|fridays|saturdays|sundays|night|evening|morning|afternoon|between|from|to|through|and|jan|january|feb|february|mar|march|apr|april|may|jun|june|jul|july|aug|august|sep|sept|september|oct|october|nov|november|dec|december|st|nd|rd|th)\b/g, " ")
     .replace(/[^a-z]+/g, " ")
     .trim();
   return subject.length === 0;

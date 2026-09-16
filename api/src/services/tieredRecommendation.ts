@@ -212,11 +212,12 @@ async function cachedCalendarEvents() {
 // Cached per city, since the feed is city-scoped now.
 const publicCacheByCity = new Map<string, { at: number; events: Awaited<ReturnType<typeof fetchPublicEvents>> }>();
 
-async function cachedPublicEvents(city?: string | null) {
-  const key = (city ?? "").toLowerCase();
+async function cachedPublicEvents(city?: string | null, until?: Date | null) {
+  // A far window needs a deeper fetch, cached separately by the day it reaches.
+  const key = `${(city ?? "").toLowerCase()}|${until ? until.toISOString().slice(0, 10) : ""}`;
   const cached = publicCacheByCity.get(key);
   if (cached && Date.now() - cached.at < LIST_TTL_MS) return cached.events;
-  const events = await fetchPublicEvents(50, city ?? null);
+  const events = await fetchPublicEvents(50, city ?? null, until ?? null);
   if (publicCacheByCity.size > 20) publicCacheByCity.clear();
   publicCacheByCity.set(key, { at: Date.now(), events });
   return events;
@@ -269,8 +270,10 @@ function soonest<T extends { start_at: string }>(events: T[]): T | null {
 // (harness/matchGate.ts) makes the final call, and it needs more than one to
 // choose from (2026-09-16: the single candidate it got was sold out, so the
 // search ended with nothing while other real events were available).
-async function tryTier2(ask: StatedIntent, userCity: string | null, filter?: (startAt: string) => boolean, opts: { browse?: boolean; maxDays?: number } = {}): Promise<TierMatch[]> {
-  const events = await cachedPublicEvents(userCity).catch((err: any) => {
+async function tryTier2(ask: StatedIntent, userCity: string | null, filter?: (startAt: string) => boolean, opts: { browse?: boolean; maxDays?: number; until?: Date | null } = {}): Promise<TierMatch[]> {
+  // Only page deep when the window reaches past what a normal fetch covers.
+  const farUntil = opts.until && opts.until.getTime() - Date.now() > 8 * 24 * 60 * 60 * 1000 ? opts.until : null;
+  const events = await cachedPublicEvents(userCity, farUntil).catch((err: any) => {
     console.error("tieredRecommendation: tryTier2 fetchPublicEvents failed (non-fatal):", err?.message ?? err);
     return [];
   });
@@ -523,7 +526,7 @@ export async function getTieredRecommendation(
     const source = opts.source ?? "request";
     const [tier1, tier2, budget] = await Promise.all([
       tryTier1(ask, city, windowFilter, { browse, maxDays }),
-      tryTier2(ask, city, windowFilter, { browse, maxDays }),
+      tryTier2(ask, city, windowFilter, { browse, maxDays, until: window ? window.end.toJSDate() : null }),
       paidSearchAllowed(opts.userId ?? null, source),
     ]);
     let tier3: TierMatch | null = null;
