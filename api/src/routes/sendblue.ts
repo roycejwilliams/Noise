@@ -1,4 +1,7 @@
 import { anthropic } from "@ai-sdk/anthropic";
+import { enqueueCandidate, nextLocalHour } from "../harness/proactive.js";
+import { getTimezoneForCity } from "../services/geocoding.js";
+import type { WindowFollowUpPayload } from "../agent/windowFollowUp.js";
 import { generateText } from "ai";
 import { propagateAttributes } from "@langfuse/tracing";
 import { randomInt } from "crypto";
@@ -1829,6 +1832,31 @@ Return ONLY valid JSON, no preamble: {"date": "YYYY-MM-DD or null", "time": "HH:
               } else {
                 addInstruction(replyFacts, "You searched and found nothing real yet. Say that plainly. Don't make up a suggestion.");
               }
+            }
+
+            // They named a time frame: once it's passed, check in on how it
+            // went for them (agent/windowFollowUp.ts). Queued through the
+            // proactive harness, so the daily and weekly caps and the
+            // unanswered back-off all still apply.
+            const scope = "scope" in recommendation ? recommendation.scope : null;
+            if (scope?.window && scope.windowEnd) {
+              const timezone = profile?.city ? await getTimezoneForCity(profile.city).catch(() => null) : null;
+              const dueAt = nextLocalHour(new Date(scope.windowEnd), timezone, 11);
+              const payload: WindowFollowUpPayload = {
+                label: scope.window,
+                asked: resolvedContent.slice(0, 200),
+                sent: recommendation.available && recommendation.matches?.length ? recommendation.matches.map((m) => m.name) : [],
+              };
+              await enqueueCandidate({
+                userId: user.id,
+                type: "window_followup",
+                targetKey: `window_followup:${scope.windowEnd.slice(0, 10)}`,
+                topicKey: `window_followup:${scope.windowEnd.slice(0, 10)}`,
+                summary: `Ask how ${scope.window} went for them (they asked Co to look for "${resolvedContent.slice(0, 80)}")`,
+                payload,
+                dueAt,
+                expiresAt: new Date(dueAt.getTime() + 3 * 24 * 60 * 60 * 1000),
+              }).catch((err: any) => console.error("sendblue: window follow-up enqueue failed (non-fatal):", err?.message ?? err));
             }
           }
         } catch (err: any) {

@@ -8,6 +8,7 @@ import { draftProactive, nameTokens, type Candidate, type DraftResult, type Proa
 import { draftEventReveal, draftEventTease } from "../agent/eventDiscoverySurfacing.js";
 import { draftAskCheckin, type AskCheckinPayload } from "../agent/askCheckin.js";
 import { draftCompanionCheckin } from "../agent/companionCheckin.js";
+import { draftWindowFollowUp, type WindowFollowUpPayload } from "../agent/windowFollowUp.js";
 import { draftCalendarFollow } from "../agent/calendarFollowReachOut.js";
 import { draftAskSolicitation } from "../agent/eventAskSolicitation.js";
 import { draftPostCall, markPostCallDropped, markPostCallSent } from "../jobs/postCallFollowUp.js";
@@ -138,6 +139,17 @@ export const proactiveRegistry: ProactiveRegistry = {
     async onDropped(c) {
       await pool.query(`UPDATE ask_checkins SET last_checked_at = NOW() WHERE id = $1`, [(c.payload as AskCheckinPayload).askCheckinId]);
     },
+  },
+
+  window_followup: {
+    async draft(c, person) {
+      const r = await draftWindowFollowUp(person.firstName, c.payload as WindowFollowUpPayload);
+      return r ? { messages: [r.text], ...r } : skip("model chose SKIP");
+    },
+    async onSent(c, _p, messages) {
+      await writeMemory(c.userId, "check_in", `Followed up on ${(c.payload as WindowFollowUpPayload).label}: ${messages.join(" ")}`);
+    },
+    async onDropped() {},
   },
 
   companion: {

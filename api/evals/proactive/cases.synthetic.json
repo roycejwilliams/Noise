@@ -1,197 +1,898 @@
 {
   "scenarios": [
     {
-      "id": "s01", "about": "duplicate outcome follow-ups 2 seconds apart at 4am Pacific become one text inside local hours",
-      "timezone": "America/Los_Angeles", "start": "2026-09-15T10:45:00Z", "end": "2026-09-17T06:00:00Z",
+      "id": "s01",
+      "about": "duplicate outcome follow-ups 2 seconds apart at 4am Pacific become one text inside local hours",
+      "timezone": "America/Los_Angeles",
+      "start": "2026-09-15T10:45:00Z",
+      "end": "2026-09-17T06:00:00Z",
       "arrivals": [
-        { "at": "2026-09-15T10:59:58Z", "type": "debrief", "target": "debrief:evt-sf-founders" },
-        { "at": "2026-09-15T11:00:00Z", "type": "debrief", "target": "debrief:evt-sf-founders" }
+        {
+          "at": "2026-09-15T10:59:58Z",
+          "type": "debrief",
+          "target": "debrief:evt-sf-founders"
+        },
+        {
+          "at": "2026-09-15T11:00:00Z",
+          "type": "debrief",
+          "target": "debrief:evt-sf-founders"
+        }
       ],
-      "expect": { "sends": 1, "noSendBefore": "2026-09-15T16:00:00Z" }
+      "expect": {
+        "sends": 1,
+        "noSendBefore": "2026-09-15T16:00:00Z"
+      }
     },
     {
-      "id": "s02", "about": "post-call text scheduled at 3am local waits for 9am",
-      "timezone": "America/Los_Angeles", "start": "2026-09-15T10:00:00Z", "end": "2026-09-16T12:00:00Z",
-      "arrivals": [{ "at": "2026-09-15T10:00:00Z", "type": "post_call", "target": "post_call:c1", "expiresInHours": 24 }],
-      "expect": { "sends": 1, "noSendBefore": "2026-09-15T16:00:00Z" }
-    },
-    {
-      "id": "s03", "about": "event check-in re-queued three days running with no reply goes out once",
-      "timezone": "America/Los_Angeles", "start": "2026-09-11T15:00:00Z", "end": "2026-09-15T06:00:00Z",
+      "id": "s02",
+      "about": "post-call text scheduled at 3am local waits for 9am",
+      "timezone": "America/Los_Angeles",
+      "start": "2026-09-15T10:00:00Z",
+      "end": "2026-09-16T12:00:00Z",
       "arrivals": [
-        { "at": "2026-09-11T17:00:00Z", "type": "debrief", "target": "debrief:evt-climate" },
-        { "at": "2026-09-12T17:00:00Z", "type": "debrief", "target": "debrief:evt-climate" },
-        { "at": "2026-09-13T17:00:00Z", "type": "debrief", "target": "debrief:evt-climate" }
+        {
+          "at": "2026-09-15T10:00:00Z",
+          "type": "post_call",
+          "target": "post_call:c1",
+          "expiresInHours": 24
+        }
       ],
-      "expect": { "sends": 1 }
+      "expect": {
+        "sends": 1,
+        "noSendBefore": "2026-09-15T16:00:00Z"
+      }
     },
     {
-      "id": "s04", "about": "throttle storm: 20 surfacing attempts in 7 minutes, nobody replies: one text, then nothing until the 72h pause lifts",
-      "timezone": "America/Los_Angeles", "start": "2026-09-08T15:45:00Z", "end": "2026-09-15T06:00:00Z",
+      "id": "s03",
+      "about": "event check-in re-queued three days running with no reply goes out once",
+      "timezone": "America/Los_Angeles",
+      "start": "2026-09-11T15:00:00Z",
+      "end": "2026-09-15T06:00:00Z",
       "arrivals": [
-        { "at": "2026-09-08T16:00:00Z", "type": "event_offer", "target": "event_offer:event:e1" },
-        { "at": "2026-09-08T16:00:20Z", "type": "event_offer", "target": "event_offer:event:e2" },
-        { "at": "2026-09-08T16:00:40Z", "type": "event_offer", "target": "event_offer:event:e3" },
-        { "at": "2026-09-08T16:01:00Z", "type": "event_offer", "target": "event_offer:event:e1" },
-        { "at": "2026-09-08T16:01:20Z", "type": "event_offer", "target": "event_offer:event:e4" },
-        { "at": "2026-09-08T16:01:40Z", "type": "network_tease", "target": "network_tease:n1" },
-        { "at": "2026-09-08T16:02:00Z", "type": "event_offer", "target": "event_offer:event:e2" },
-        { "at": "2026-09-08T16:02:20Z", "type": "event_offer", "target": "event_offer:event:e5" },
-        { "at": "2026-09-08T16:02:40Z", "type": "event_offer", "target": "event_offer:event:e6" },
-        { "at": "2026-09-08T16:03:00Z", "type": "event_offer", "target": "event_offer:event:e3" },
-        { "at": "2026-09-08T16:03:20Z", "type": "ask_checkin", "target": "ask_checkin:a1:1", "topic": "ask:a1" },
-        { "at": "2026-09-08T16:03:40Z", "type": "event_offer", "target": "event_offer:event:e7" },
-        { "at": "2026-09-08T16:04:00Z", "type": "event_offer", "target": "event_offer:event:e1" },
-        { "at": "2026-09-08T16:04:20Z", "type": "event_offer", "target": "event_offer:event:e8" },
-        { "at": "2026-09-08T16:04:40Z", "type": "event_offer", "target": "event_offer:event:e9" },
-        { "at": "2026-09-08T16:05:00Z", "type": "network_tease", "target": "network_tease:n2" },
-        { "at": "2026-09-08T16:05:30Z", "type": "event_offer", "target": "event_offer:event:e10" },
-        { "at": "2026-09-08T16:06:00Z", "type": "event_offer", "target": "event_offer:event:e4" },
-        { "at": "2026-09-08T16:06:30Z", "type": "event_offer", "target": "event_offer:event:e11" },
-        { "at": "2026-09-08T16:07:00Z", "type": "event_offer", "target": "event_offer:event:e12" }
+        {
+          "at": "2026-09-11T17:00:00Z",
+          "type": "debrief",
+          "target": "debrief:evt-climate"
+        },
+        {
+          "at": "2026-09-12T17:00:00Z",
+          "type": "debrief",
+          "target": "debrief:evt-climate"
+        },
+        {
+          "at": "2026-09-13T17:00:00Z",
+          "type": "debrief",
+          "target": "debrief:evt-climate"
+        }
       ],
-      "expect": { "sends": 2, "noSendBefore": "2026-09-08T16:00:00Z" }
+      "expect": {
+        "sends": 1
+      }
     },
     {
-      "id": "s05", "about": "unanswered text pauses everything else for 72 hours",
-      "timezone": "America/Los_Angeles", "start": "2026-09-15T15:45:00Z", "end": "2026-09-20T06:00:00Z",
+      "id": "s04",
+      "about": "throttle storm: 20 surfacing attempts in 7 minutes, nobody replies: one text, then nothing until the 72h pause lifts",
+      "timezone": "America/Los_Angeles",
+      "start": "2026-09-08T15:45:00Z",
+      "end": "2026-09-15T06:00:00Z",
       "arrivals": [
-        { "at": "2026-09-15T16:00:00Z", "type": "ask_checkin", "target": "ask_checkin:a1:1", "topic": "ask:a1" },
-        { "at": "2026-09-16T17:00:00Z", "type": "event_offer", "target": "event_offer:event:e1", "expiresInHours": 96 }
+        {
+          "at": "2026-09-08T16:00:00Z",
+          "type": "event_offer",
+          "target": "event_offer:event:e1"
+        },
+        {
+          "at": "2026-09-08T16:00:20Z",
+          "type": "event_offer",
+          "target": "event_offer:event:e2"
+        },
+        {
+          "at": "2026-09-08T16:00:40Z",
+          "type": "event_offer",
+          "target": "event_offer:event:e3"
+        },
+        {
+          "at": "2026-09-08T16:01:00Z",
+          "type": "event_offer",
+          "target": "event_offer:event:e1"
+        },
+        {
+          "at": "2026-09-08T16:01:20Z",
+          "type": "event_offer",
+          "target": "event_offer:event:e4"
+        },
+        {
+          "at": "2026-09-08T16:01:40Z",
+          "type": "network_tease",
+          "target": "network_tease:n1"
+        },
+        {
+          "at": "2026-09-08T16:02:00Z",
+          "type": "event_offer",
+          "target": "event_offer:event:e2"
+        },
+        {
+          "at": "2026-09-08T16:02:20Z",
+          "type": "event_offer",
+          "target": "event_offer:event:e5"
+        },
+        {
+          "at": "2026-09-08T16:02:40Z",
+          "type": "event_offer",
+          "target": "event_offer:event:e6"
+        },
+        {
+          "at": "2026-09-08T16:03:00Z",
+          "type": "event_offer",
+          "target": "event_offer:event:e3"
+        },
+        {
+          "at": "2026-09-08T16:03:20Z",
+          "type": "ask_checkin",
+          "target": "ask_checkin:a1:1",
+          "topic": "ask:a1"
+        },
+        {
+          "at": "2026-09-08T16:03:40Z",
+          "type": "event_offer",
+          "target": "event_offer:event:e7"
+        },
+        {
+          "at": "2026-09-08T16:04:00Z",
+          "type": "event_offer",
+          "target": "event_offer:event:e1"
+        },
+        {
+          "at": "2026-09-08T16:04:20Z",
+          "type": "event_offer",
+          "target": "event_offer:event:e8"
+        },
+        {
+          "at": "2026-09-08T16:04:40Z",
+          "type": "event_offer",
+          "target": "event_offer:event:e9"
+        },
+        {
+          "at": "2026-09-08T16:05:00Z",
+          "type": "network_tease",
+          "target": "network_tease:n2"
+        },
+        {
+          "at": "2026-09-08T16:05:30Z",
+          "type": "event_offer",
+          "target": "event_offer:event:e10"
+        },
+        {
+          "at": "2026-09-08T16:06:00Z",
+          "type": "event_offer",
+          "target": "event_offer:event:e4"
+        },
+        {
+          "at": "2026-09-08T16:06:30Z",
+          "type": "event_offer",
+          "target": "event_offer:event:e11"
+        },
+        {
+          "at": "2026-09-08T16:07:00Z",
+          "type": "event_offer",
+          "target": "event_offer:event:e12"
+        }
       ],
-      "expect": { "sends": 2, "noSendBefore": "2026-09-15T16:00:00Z" }
+      "expect": {
+        "sends": 2,
+        "noSendBefore": "2026-09-08T16:00:00Z"
+      }
     },
     {
-      "id": "s06", "about": "a reply lifts the pause; next local day the next text can go",
-      "timezone": "America/Los_Angeles", "start": "2026-09-15T15:45:00Z", "end": "2026-09-17T06:00:00Z",
+      "id": "s05",
+      "about": "unanswered text pauses everything else for 72 hours",
+      "timezone": "America/Los_Angeles",
+      "start": "2026-09-15T15:45:00Z",
+      "end": "2026-09-20T06:00:00Z",
       "arrivals": [
-        { "at": "2026-09-15T16:00:00Z", "type": "ask_checkin", "target": "ask_checkin:a1:1", "topic": "ask:a1" },
-        { "at": "2026-09-15T17:00:00Z", "type": "event_offer", "target": "event_offer:event:e1" }
+        {
+          "at": "2026-09-15T16:00:00Z",
+          "type": "ask_checkin",
+          "target": "ask_checkin:a1:1",
+          "topic": "ask:a1"
+        },
+        {
+          "at": "2026-09-16T17:00:00Z",
+          "type": "event_offer",
+          "target": "event_offer:event:e1",
+          "expiresInHours": 96
+        }
       ],
-      "inbound": ["2026-09-15T18:00:00Z"],
-      "expect": { "sends": 2 }
+      "expect": {
+        "sends": 2,
+        "noSendBefore": "2026-09-15T16:00:00Z"
+      }
     },
     {
-      "id": "s07", "about": "weekly cap: a new event every day and fast replies still means 3 texts in 7 days",
-      "timezone": "America/Los_Angeles", "start": "2026-09-14T15:45:00Z", "end": "2026-09-21T06:00:00Z",
+      "id": "s06",
+      "about": "a reply lifts the pause; next local day the next text can go",
+      "timezone": "America/Los_Angeles",
+      "start": "2026-09-15T15:45:00Z",
+      "end": "2026-09-17T06:00:00Z",
+      "arrivals": [
+        {
+          "at": "2026-09-15T16:00:00Z",
+          "type": "ask_checkin",
+          "target": "ask_checkin:a1:1",
+          "topic": "ask:a1"
+        },
+        {
+          "at": "2026-09-15T17:00:00Z",
+          "type": "event_offer",
+          "target": "event_offer:event:e1"
+        }
+      ],
+      "inbound": [
+        "2026-09-15T18:00:00Z"
+      ],
+      "expect": {
+        "sends": 2
+      }
+    },
+    {
+      "id": "s07",
+      "about": "weekly cap: a new event every day and fast replies still means 3 texts in 7 days",
+      "timezone": "America/Los_Angeles",
+      "start": "2026-09-14T15:45:00Z",
+      "end": "2026-09-21T06:00:00Z",
       "replyAfterMinutes": 30,
       "arrivals": [
-        { "at": "2026-09-14T16:00:00Z", "type": "event_offer", "target": "event_offer:event:d1", "expiresInHours": 200 },
-        { "at": "2026-09-15T16:00:00Z", "type": "event_offer", "target": "event_offer:event:d2", "expiresInHours": 200 },
-        { "at": "2026-09-16T16:00:00Z", "type": "event_offer", "target": "event_offer:event:d3", "expiresInHours": 200 },
-        { "at": "2026-09-17T16:00:00Z", "type": "event_offer", "target": "event_offer:event:d4", "expiresInHours": 200 },
-        { "at": "2026-09-18T16:00:00Z", "type": "event_offer", "target": "event_offer:event:d5", "expiresInHours": 200 },
-        { "at": "2026-09-19T16:00:00Z", "type": "event_offer", "target": "event_offer:event:d6", "expiresInHours": 200 }
+        {
+          "at": "2026-09-14T16:00:00Z",
+          "type": "event_offer",
+          "target": "event_offer:event:d1",
+          "expiresInHours": 200
+        },
+        {
+          "at": "2026-09-15T16:00:00Z",
+          "type": "event_offer",
+          "target": "event_offer:event:d2",
+          "expiresInHours": 200
+        },
+        {
+          "at": "2026-09-16T16:00:00Z",
+          "type": "event_offer",
+          "target": "event_offer:event:d3",
+          "expiresInHours": 200
+        },
+        {
+          "at": "2026-09-17T16:00:00Z",
+          "type": "event_offer",
+          "target": "event_offer:event:d4",
+          "expiresInHours": 200
+        },
+        {
+          "at": "2026-09-18T16:00:00Z",
+          "type": "event_offer",
+          "target": "event_offer:event:d5",
+          "expiresInHours": 200
+        },
+        {
+          "at": "2026-09-19T16:00:00Z",
+          "type": "event_offer",
+          "target": "event_offer:event:d6",
+          "expiresInHours": 200
+        }
       ],
-      "expect": { "sends": 3 }
+      "expect": {
+        "sends": 3
+      }
     },
     {
-      "id": "s08", "about": "the time-bound debrief wins over the no-reason companion check-in",
-      "timezone": "America/Los_Angeles", "start": "2026-09-15T15:45:00Z", "end": "2026-09-15T20:00:00Z",
+      "id": "s08",
+      "about": "the time-bound debrief wins over the no-reason companion check-in",
+      "timezone": "America/Los_Angeles",
+      "start": "2026-09-15T15:45:00Z",
+      "end": "2026-09-15T20:00:00Z",
       "arrivals": [
-        { "at": "2026-09-15T16:00:00Z", "type": "companion", "target": "companion:r1", "topic": "companion" },
-        { "at": "2026-09-15T16:00:00Z", "type": "debrief", "target": "debrief:evt-climate" }
+        {
+          "at": "2026-09-15T16:00:00Z",
+          "type": "companion",
+          "target": "companion:r1",
+          "topic": "companion"
+        },
+        {
+          "at": "2026-09-15T16:00:00Z",
+          "type": "debrief",
+          "target": "debrief:evt-climate"
+        }
       ],
-      "expect": { "sends": 1, "firstType": "debrief" }
+      "expect": {
+        "sends": 1,
+        "firstType": "debrief"
+      }
     },
     {
-      "id": "s09", "about": "no time zone on file: waits for the US-safe UTC window instead of sending any hour",
-      "timezone": null, "start": "2026-09-15T08:00:00Z", "end": "2026-09-16T00:00:00Z",
-      "arrivals": [{ "at": "2026-09-15T08:00:00Z", "type": "event_offer", "target": "event_offer:event:e1" }],
-      "expect": { "sends": 1, "noSendBefore": "2026-09-15T16:00:00Z" }
+      "id": "s09",
+      "about": "no time zone on file: waits for the US-safe UTC window instead of sending any hour",
+      "timezone": null,
+      "start": "2026-09-15T08:00:00Z",
+      "end": "2026-09-16T00:00:00Z",
+      "arrivals": [
+        {
+          "at": "2026-09-15T08:00:00Z",
+          "type": "event_offer",
+          "target": "event_offer:event:e1"
+        }
+      ],
+      "expect": {
+        "sends": 1,
+        "noSendBefore": "2026-09-15T16:00:00Z"
+      }
     },
     {
-      "id": "s10", "about": "transactional texts (call reminder, event change) don't use up the daily text",
-      "timezone": "America/Los_Angeles", "start": "2026-09-15T15:45:00Z", "end": "2026-09-15T23:00:00Z",
+      "id": "s10",
+      "about": "transactional texts (call reminder, event change) don't use up the daily text",
+      "timezone": "America/Los_Angeles",
+      "start": "2026-09-15T15:45:00Z",
+      "end": "2026-09-15T23:00:00Z",
       "exemptSends": [
-        { "at": "2026-09-15T15:50:00Z", "type": "call_reminder", "target": "call_reminder:sc1" },
-        { "at": "2026-09-15T16:05:00Z", "type": "event_change", "target": "event_change:x" }
+        {
+          "at": "2026-09-15T15:50:00Z",
+          "type": "call_reminder",
+          "target": "call_reminder:sc1"
+        },
+        {
+          "at": "2026-09-15T16:05:00Z",
+          "type": "event_change",
+          "target": "event_change:x"
+        }
       ],
-      "arrivals": [{ "at": "2026-09-15T16:00:00Z", "type": "event_offer", "target": "event_offer:event:e1" }],
-      "expect": { "sends": 1 }
-    },
-    {
-      "id": "s11", "about": "never re-ask an ask check-in they never answered",
-      "timezone": "America/Los_Angeles", "start": "2026-09-01T15:45:00Z", "end": "2026-09-20T06:00:00Z",
       "arrivals": [
-        { "at": "2026-09-01T16:00:00Z", "type": "ask_checkin", "target": "ask_checkin:a1:1", "topic": "ask:a1", "expiresInHours": 168 },
-        { "at": "2026-09-16T16:00:00Z", "type": "ask_checkin", "target": "ask_checkin:a1:2", "topic": "ask:a1", "expiresInHours": 168 }
+        {
+          "at": "2026-09-15T16:00:00Z",
+          "type": "event_offer",
+          "target": "event_offer:event:e1"
+        }
       ],
-      "expect": { "sends": 1 }
+      "expect": {
+        "sends": 1
+      }
     },
     {
-      "id": "s12", "about": "companion check-in at most every 14 days even when they reply",
-      "timezone": "America/Los_Angeles", "start": "2026-09-01T15:45:00Z", "end": "2026-09-10T06:00:00Z",
+      "id": "s11",
+      "about": "never re-ask an ask check-in they never answered",
+      "timezone": "America/Los_Angeles",
+      "start": "2026-09-01T15:45:00Z",
+      "end": "2026-09-20T06:00:00Z",
+      "arrivals": [
+        {
+          "at": "2026-09-01T16:00:00Z",
+          "type": "ask_checkin",
+          "target": "ask_checkin:a1:1",
+          "topic": "ask:a1",
+          "expiresInHours": 168
+        },
+        {
+          "at": "2026-09-16T16:00:00Z",
+          "type": "ask_checkin",
+          "target": "ask_checkin:a1:2",
+          "topic": "ask:a1",
+          "expiresInHours": 168
+        }
+      ],
+      "expect": {
+        "sends": 1
+      }
+    },
+    {
+      "id": "s12",
+      "about": "companion check-in at most every 14 days even when they reply",
+      "timezone": "America/Los_Angeles",
+      "start": "2026-09-01T15:45:00Z",
+      "end": "2026-09-10T06:00:00Z",
       "replyAfterMinutes": 20,
       "arrivals": [
-        { "at": "2026-09-01T16:00:00Z", "type": "companion", "target": "companion:r1", "topic": "companion" },
-        { "at": "2026-09-06T16:00:00Z", "type": "companion", "target": "companion:r2", "topic": "companion" }
+        {
+          "at": "2026-09-01T16:00:00Z",
+          "type": "companion",
+          "target": "companion:r1",
+          "topic": "companion"
+        },
+        {
+          "at": "2026-09-06T16:00:00Z",
+          "type": "companion",
+          "target": "companion:r2",
+          "topic": "companion"
+        }
       ],
-      "expect": { "sends": 1 }
+      "expect": {
+        "sends": 1
+      }
     },
     {
-      "id": "s13", "about": "calendar-follow reach-out happens once, even if they follow again",
-      "timezone": "America/Los_Angeles", "start": "2026-09-01T15:45:00Z", "end": "2026-09-10T06:00:00Z",
+      "id": "s13",
+      "about": "calendar-follow reach-out happens once, even if they follow again",
+      "timezone": "America/Los_Angeles",
+      "start": "2026-09-01T15:45:00Z",
+      "end": "2026-09-10T06:00:00Z",
       "replyAfterMinutes": 20,
       "arrivals": [
-        { "at": "2026-09-01T16:00:00Z", "type": "calendar_follow", "target": "calendar_follow" },
-        { "at": "2026-09-05T16:00:00Z", "type": "calendar_follow", "target": "calendar_follow" }
+        {
+          "at": "2026-09-01T16:00:00Z",
+          "type": "calendar_follow",
+          "target": "calendar_follow"
+        },
+        {
+          "at": "2026-09-05T16:00:00Z",
+          "type": "calendar_follow",
+          "target": "calendar_follow"
+        }
       ],
-      "expect": { "sends": 1 }
+      "expect": {
+        "sends": 1
+      }
     },
     {
-      "id": "s14", "about": "queued at 8:10pm local waits for 9am the next day",
-      "timezone": "America/Los_Angeles", "start": "2026-09-16T03:10:00Z", "end": "2026-09-17T00:00:00Z",
-      "arrivals": [{ "at": "2026-09-16T03:10:00Z", "type": "event_offer", "target": "event_offer:event:e1" }],
-      "expect": { "sends": 1, "noSendBefore": "2026-09-16T16:00:00Z" }
-    },
-    {
-      "id": "s15", "about": "post-call text that can't go out within 24h is dropped, not sent late",
-      "timezone": "America/Los_Angeles", "start": "2026-09-15T15:45:00Z", "end": "2026-09-20T06:00:00Z",
+      "id": "s14",
+      "about": "queued at 8:10pm local waits for 9am the next day",
+      "timezone": "America/Los_Angeles",
+      "start": "2026-09-16T03:10:00Z",
+      "end": "2026-09-17T00:00:00Z",
       "arrivals": [
-        { "at": "2026-09-15T16:00:00Z", "type": "debrief", "target": "debrief:evt-1" },
-        { "at": "2026-09-15T16:00:00Z", "type": "post_call", "target": "post_call:c9", "expiresInHours": 24 }
+        {
+          "at": "2026-09-16T03:10:00Z",
+          "type": "event_offer",
+          "target": "event_offer:event:e1"
+        }
       ],
-      "expect": { "sends": 1, "neverTypes": ["post_call"] }
+      "expect": {
+        "sends": 1,
+        "noSendBefore": "2026-09-16T16:00:00Z"
+      }
     },
     {
-      "id": "s16", "about": "Eastern user: 9am-8pm in their own zone",
-      "timezone": "America/New_York", "start": "2026-09-15T10:00:00Z", "end": "2026-09-16T06:00:00Z",
-      "arrivals": [{ "at": "2026-09-15T10:00:00Z", "type": "event_offer", "target": "event_offer:event:e1" }],
-      "expect": { "sends": 1, "noSendBefore": "2026-09-15T13:00:00Z" }
+      "id": "s15",
+      "about": "post-call text that can't go out within 24h is dropped, not sent late",
+      "timezone": "America/Los_Angeles",
+      "start": "2026-09-15T15:45:00Z",
+      "end": "2026-09-20T06:00:00Z",
+      "arrivals": [
+        {
+          "at": "2026-09-15T16:00:00Z",
+          "type": "debrief",
+          "target": "debrief:evt-1"
+        },
+        {
+          "at": "2026-09-15T16:00:00Z",
+          "type": "post_call",
+          "target": "post_call:c9",
+          "expiresInHours": 24
+        }
+      ],
+      "expect": {
+        "sends": 1,
+        "neverTypes": [
+          "post_call"
+        ]
+      }
+    },
+    {
+      "id": "s16",
+      "about": "Eastern user: 9am-8pm in their own zone",
+      "timezone": "America/New_York",
+      "start": "2026-09-15T10:00:00Z",
+      "end": "2026-09-16T06:00:00Z",
+      "arrivals": [
+        {
+          "at": "2026-09-15T10:00:00Z",
+          "type": "event_offer",
+          "target": "event_offer:event:e1"
+        }
+      ],
+      "expect": {
+        "sends": 1,
+        "noSendBefore": "2026-09-15T13:00:00Z"
+      }
     }
   ],
   "drafts": [
-    { "id": "d01", "about": "real pre-harness check-in: vague 'anyone cool', no event named", "text": "hey, did you end up talking to anyone cool tonight at the event?", "rules": { "maxSentences": 2, "mustIncludeAny": ["climate", "founders", "mixer"] }, "shouldPass": false },
-    { "id": "d02", "about": "real pre-harness reveal with engine reasoning", "text": "ERA:AI Fellows, real fellowship program, exactly what someone asking for details would need.", "rules": { "maxSentences": 2 }, "shouldPass": false },
-    { "id": "d03", "about": "tease that reveals the event name", "text": "Thought of you when I saw the Climate Founders Mixer. Want the details?", "rules": { "maxSentences": 2, "mustNotInclude": ["Climate Founders Mixer", "climate", "founders"] }, "shouldPass": false },
-    { "id": "d04", "about": "link inside the drafted text", "text": "This one fits what you wanted, https://lu.ma/abc123", "rules": { "maxSentences": 2 }, "shouldPass": false },
-    { "id": "d05", "about": "greeting line", "text": "Hey Maya, how was the Climate Founders Mixer?", "rules": { "maxSentences": 2, "mustIncludeAny": ["climate"] }, "shouldPass": false },
-    { "id": "d06", "about": "three sentences", "text": "How was the mixer. Did you meet anyone. Want to call this week?", "rules": { "maxSentences": 2 }, "shouldPass": false },
-    { "id": "d07", "about": "promise of a later action", "text": "I'll send you the details later today.", "rules": { "maxSentences": 2 }, "shouldPass": false },
-    { "id": "d08", "about": "good tease", "text": "Came across something small this week that made me think of the climate founders you wanted to meet. Want the details?", "rules": { "maxSentences": 2, "mustNotInclude": ["Climate Founders Mixer", "mixer"] }, "shouldPass": true },
-    { "id": "d09", "about": "good debrief naming the person", "text": "How was the Climate Founders Mixer last night? Did you and Jacqueline end up talking?", "rules": { "maxSentences": 2, "mustIncludeAny": ["climate", "founders", "mixer"] }, "shouldPass": true },
-    { "id": "d10", "about": "one real exclamation point is fine", "text": "So glad you made it to the mixer!", "rules": { "maxSentences": 2 }, "shouldPass": true },
-    { "id": "d10b", "about": "piled-up exclamation points", "text": "So glad you made it!! It was a great one!", "rules": { "maxSentences": 2 }, "shouldPass": false },
-    { "id": "d11", "about": "generic check-in filler", "text": "Just checking in to see how things are going.", "rules": { "maxSentences": 2 }, "shouldPass": false },
-    { "id": "d12", "about": "good short-notice reveal", "text": "The SF Founders Meetup is tomorrow, short notice I know, but it's mostly early founders like you. No pressure if the timing doesn't work.", "rules": { "maxSentences": 2, "mustIncludeAny": ["founders"] }, "shouldPass": true },
-    { "id": "d14", "about": "starts lowercase", "text": "still on the hunt for a cofounder, or has that shifted?", "rules": { "maxSentences": 2 }, "shouldPass": false },
-    { "id": "d13", "about": "internal reasoning", "text": "This matches your stated goal of meeting investors, want it?", "rules": { "maxSentences": 2 }, "shouldPass": false }
+    {
+      "id": "d01",
+      "about": "real pre-harness check-in: vague 'anyone cool', no event named",
+      "text": "hey, did you end up talking to anyone cool tonight at the event?",
+      "rules": {
+        "maxSentences": 2,
+        "mustIncludeAny": [
+          "climate",
+          "founders",
+          "mixer"
+        ]
+      },
+      "shouldPass": false
+    },
+    {
+      "id": "d02",
+      "about": "real pre-harness reveal with engine reasoning",
+      "text": "ERA:AI Fellows, real fellowship program, exactly what someone asking for details would need.",
+      "rules": {
+        "maxSentences": 2
+      },
+      "shouldPass": false
+    },
+    {
+      "id": "d03",
+      "about": "tease that reveals the event name",
+      "text": "Thought of you when I saw the Climate Founders Mixer. Want the details?",
+      "rules": {
+        "maxSentences": 2,
+        "mustNotInclude": [
+          "Climate Founders Mixer",
+          "climate",
+          "founders"
+        ]
+      },
+      "shouldPass": false
+    },
+    {
+      "id": "d04",
+      "about": "link inside the drafted text",
+      "text": "This one fits what you wanted, https://lu.ma/abc123",
+      "rules": {
+        "maxSentences": 2
+      },
+      "shouldPass": false
+    },
+    {
+      "id": "d05",
+      "about": "greeting line",
+      "text": "Hey Maya, how was the Climate Founders Mixer?",
+      "rules": {
+        "maxSentences": 2,
+        "mustIncludeAny": [
+          "climate"
+        ]
+      },
+      "shouldPass": false
+    },
+    {
+      "id": "d06",
+      "about": "three sentences",
+      "text": "How was the mixer. Did you meet anyone. Want to call this week?",
+      "rules": {
+        "maxSentences": 2
+      },
+      "shouldPass": false
+    },
+    {
+      "id": "d07",
+      "about": "promise of a later action",
+      "text": "I'll send you the details later today.",
+      "rules": {
+        "maxSentences": 2
+      },
+      "shouldPass": false
+    },
+    {
+      "id": "d08",
+      "about": "good tease",
+      "text": "Came across something small this week that made me think of the climate founders you wanted to meet. Want the details?",
+      "rules": {
+        "maxSentences": 2,
+        "mustNotInclude": [
+          "Climate Founders Mixer",
+          "mixer"
+        ]
+      },
+      "shouldPass": true
+    },
+    {
+      "id": "d09",
+      "about": "good debrief naming the person",
+      "text": "How was the Climate Founders Mixer last night? Did you and Jacqueline end up talking?",
+      "rules": {
+        "maxSentences": 2,
+        "mustIncludeAny": [
+          "climate",
+          "founders",
+          "mixer"
+        ]
+      },
+      "shouldPass": true
+    },
+    {
+      "id": "d10",
+      "about": "one real exclamation point is fine",
+      "text": "So glad you made it to the mixer!",
+      "rules": {
+        "maxSentences": 2
+      },
+      "shouldPass": true
+    },
+    {
+      "id": "d10b",
+      "about": "piled-up exclamation points",
+      "text": "So glad you made it!! It was a great one!",
+      "rules": {
+        "maxSentences": 2
+      },
+      "shouldPass": false
+    },
+    {
+      "id": "d11",
+      "about": "generic check-in filler",
+      "text": "Just checking in to see how things are going.",
+      "rules": {
+        "maxSentences": 2
+      },
+      "shouldPass": false
+    },
+    {
+      "id": "d12",
+      "about": "good short-notice reveal",
+      "text": "The SF Founders Meetup is tomorrow, short notice I know, but it's mostly early founders like you. No pressure if the timing doesn't work.",
+      "rules": {
+        "maxSentences": 2,
+        "mustIncludeAny": [
+          "founders"
+        ]
+      },
+      "shouldPass": true
+    },
+    {
+      "id": "d14",
+      "about": "starts lowercase",
+      "text": "still on the hunt for a cofounder, or has that shifted?",
+      "rules": {
+        "maxSentences": 2
+      },
+      "shouldPass": false
+    },
+    {
+      "id": "d13",
+      "about": "internal reasoning",
+      "text": "This matches your stated goal of meeting investors, want it?",
+      "rules": {
+        "maxSentences": 2
+      },
+      "shouldPass": false
+    }
   ],
   "live": [
-    { "id": "l01", "kind": "event_tease", "input": { "askText": "meet other early-stage climate founders in SF", "match": { "tier": 1, "kind": "co_event", "event_api_id": "evt-1", "event_date": "2026-09-18", "name": "Climate Founders Mixer", "reason": "Matches a Co event happening 9/18/2026 in San Francisco." } }, "mustNotMention": ["Climate Founders Mixer", "mixer"], "noInventedTime": true },
-    { "id": "l02", "kind": "event_tease", "input": { "fromProfile": true, "askText": "goals: raise a pre-seed round; enjoys: running, climbing", "match": { "tier": 2, "kind": "public_event", "event_api_id": "evt-2", "event_date": "2026-09-22", "name": "Pre-seed Office Hours with Angels", "url": "https://lu.ma/x", "reason": "A public event that looks like a real fit in San Francisco." } }, "mustNotMention": ["Office Hours", "Angels", "you mentioned", "you told me", "you asked"], "noInventedTime": true },
-    { "id": "l03", "kind": "event_reveal", "input": { "askText": "find a cofounder-matching event soon", "match": { "tier": 1, "kind": "co_event", "event_api_id": "evt-3", "event_date": "2026-09-15", "name": "SF Founders Meetup", "url": "https://lu.ma/y", "reason": "Matches a Co event happening 9/15/2026 in San Francisco." } }, "mustNotMention": ["pm", "https"] },
-    { "id": "l04", "kind": "ask_solicitation", "input": { "eventName": "Climate Founders Mixer" }, "noInventedTime": true },
-    { "id": "l05", "kind": "calendar_follow", "input": {}, "noInventedTime": true },
-    { "id": "l06", "kind": "companion", "input": { "recap": "Maya was deciding between two job offers (Stripe and a climate startup called Heliograph) and said she'd decide by the end of last week. She's also training for the SF half marathon on Oct 12." } },
-    { "id": "l07", "kind": "companion", "input": { "recap": "Maya is a product designer in San Francisco. Enjoys coffee and design meetups. Generally positive mood." }, "expectSkip": true },
-    { "id": "l08", "kind": "ask_checkin", "input": { "askCheckinId": "x", "askId": "a", "askText": "find a technical cofounder for a climate hardware idea", "checkinCount": 0, "hasMatches": true }, "mustNotMention": ["found someone", "introduce you"], "noInventedTime": true },
-    { "id": "l09", "kind": "ask_checkin", "input": { "askCheckinId": "x", "askId": "a", "askText": "find a weekly pickup basketball group", "checkinCount": 3, "hasMatches": false } },
-    { "id": "l10", "kind": "post_call", "input": { "transcript": "Co: How's the week been?\nMaya: Honestly stressful. I'm pitching my first investor soon and I keep rewriting the deck.\nCo: What's the part you keep rewriting?\nMaya: The market size slide. I never know if it sounds made up.\nCo: That makes sense.\nMaya: Anyway I'm also finally taking a pottery class, which helps." }, "mustNotMention": ["recap", "next steps", "schedule"], "noInventedTime": true },
-    { "id": "l11", "kind": "post_call", "input": { "transcript": "Co: Hey Maya, it's Co, just calling to catch up. Give me a call back whenever works." }, "expectSkip": true },
-    { "id": "l12", "kind": "debrief", "input": { "payload": { "eventApiId": "evt-1", "eventName": "Climate Founders Mixer", "outcomeFollowupIds": ["o1"], "checkinFollowupIds": ["c1"], "walkinCheckinIds": [], "askText": "meet other climate founders" }, "people": ["Jacqueline"] }, "mustNotMention": ["Celine"], "noInventedTime": false },
-    { "id": "l13", "kind": "debrief", "input": { "payload": { "eventApiId": "evt-4", "eventName": "Co Presents: Builders Night", "outcomeFollowupIds": [], "checkinFollowupIds": [], "walkinCheckinIds": ["w1"], "askText": null }, "people": [] } },
-    { "id": "l14", "kind": "network_tease", "input": { "candidate": { "candidate_id": "u2", "first_name": "Celine", "match_reason": "Looking for a designer cofounder" } }, "mustNotMention": ["Celine", "designer"], "noInventedTime": true }
+    {
+      "id": "l01",
+      "kind": "event_tease",
+      "input": {
+        "askText": "meet other early-stage climate founders in SF",
+        "match": {
+          "tier": 1,
+          "kind": "co_event",
+          "event_api_id": "evt-1",
+          "event_date": "2026-09-18",
+          "name": "Climate Founders Mixer",
+          "reason": "Matches a Co event happening 9/18/2026 in San Francisco."
+        }
+      },
+      "mustNotMention": [
+        "Climate Founders Mixer",
+        "mixer"
+      ],
+      "noInventedTime": true
+    },
+    {
+      "id": "l02",
+      "kind": "event_tease",
+      "input": {
+        "fromProfile": true,
+        "askText": "goals: raise a pre-seed round; enjoys: running, climbing",
+        "match": {
+          "tier": 2,
+          "kind": "public_event",
+          "event_api_id": "evt-2",
+          "event_date": "2026-09-22",
+          "name": "Pre-seed Office Hours with Angels",
+          "url": "https://lu.ma/x",
+          "reason": "A public event that looks like a real fit in San Francisco."
+        }
+      },
+      "mustNotMention": [
+        "Office Hours",
+        "Angels",
+        "you mentioned",
+        "you told me",
+        "you asked"
+      ],
+      "noInventedTime": true
+    },
+    {
+      "id": "l03",
+      "kind": "event_reveal",
+      "input": {
+        "askText": "find a cofounder-matching event soon",
+        "match": {
+          "tier": 1,
+          "kind": "co_event",
+          "event_api_id": "evt-3",
+          "event_date": "2026-09-15",
+          "name": "SF Founders Meetup",
+          "url": "https://lu.ma/y",
+          "reason": "Matches a Co event happening 9/15/2026 in San Francisco."
+        }
+      },
+      "mustNotMention": [
+        "pm",
+        "https"
+      ]
+    },
+    {
+      "id": "l04",
+      "kind": "ask_solicitation",
+      "input": {
+        "eventName": "Climate Founders Mixer"
+      },
+      "noInventedTime": true
+    },
+    {
+      "id": "l05",
+      "kind": "calendar_follow",
+      "input": {},
+      "noInventedTime": true
+    },
+    {
+      "id": "l06",
+      "kind": "companion",
+      "input": {
+        "recap": "Maya was deciding between two job offers (Stripe and a climate startup called Heliograph) and said she'd decide by the end of last week. She's also training for the SF half marathon on Oct 12."
+      }
+    },
+    {
+      "id": "l07",
+      "kind": "companion",
+      "input": {
+        "recap": "Maya is a product designer in San Francisco. Enjoys coffee and design meetups. Generally positive mood."
+      },
+      "expectSkip": true
+    },
+    {
+      "id": "l08",
+      "kind": "ask_checkin",
+      "input": {
+        "askCheckinId": "x",
+        "askId": "a",
+        "askText": "find a technical cofounder for a climate hardware idea",
+        "checkinCount": 0,
+        "hasMatches": true
+      },
+      "mustNotMention": [
+        "found someone",
+        "introduce you"
+      ],
+      "noInventedTime": true
+    },
+    {
+      "id": "l09",
+      "kind": "ask_checkin",
+      "input": {
+        "askCheckinId": "x",
+        "askId": "a",
+        "askText": "find a weekly pickup basketball group",
+        "checkinCount": 3,
+        "hasMatches": false
+      }
+    },
+    {
+      "id": "l10",
+      "kind": "post_call",
+      "input": {
+        "transcript": "Co: How's the week been?\nMaya: Honestly stressful. I'm pitching my first investor soon and I keep rewriting the deck.\nCo: What's the part you keep rewriting?\nMaya: The market size slide. I never know if it sounds made up.\nCo: That makes sense.\nMaya: Anyway I'm also finally taking a pottery class, which helps."
+      },
+      "mustNotMention": [
+        "recap",
+        "next steps",
+        "schedule"
+      ],
+      "noInventedTime": true
+    },
+    {
+      "id": "l11",
+      "kind": "post_call",
+      "input": {
+        "transcript": "Co: Hey Maya, it's Co, just calling to catch up. Give me a call back whenever works."
+      },
+      "expectSkip": true
+    },
+    {
+      "id": "l12",
+      "kind": "debrief",
+      "input": {
+        "payload": {
+          "eventApiId": "evt-1",
+          "eventName": "Climate Founders Mixer",
+          "outcomeFollowupIds": [
+            "o1"
+          ],
+          "checkinFollowupIds": [
+            "c1"
+          ],
+          "walkinCheckinIds": [],
+          "askText": "meet other climate founders"
+        },
+        "people": [
+          "Jacqueline"
+        ]
+      },
+      "mustNotMention": [
+        "Celine"
+      ],
+      "noInventedTime": false
+    },
+    {
+      "id": "l13",
+      "kind": "debrief",
+      "input": {
+        "payload": {
+          "eventApiId": "evt-4",
+          "eventName": "Co Presents: Builders Night",
+          "outcomeFollowupIds": [],
+          "checkinFollowupIds": [],
+          "walkinCheckinIds": [
+            "w1"
+          ],
+          "askText": null
+        },
+        "people": []
+      }
+    },
+    {
+      "id": "l14",
+      "kind": "network_tease",
+      "input": {
+        "candidate": {
+          "candidate_id": "u2",
+          "first_name": "Celine",
+          "match_reason": "Looking for a designer cofounder"
+        }
+      },
+      "mustNotMention": [
+        "Celine",
+        "designer"
+      ],
+      "noInventedTime": true
+    },
+    {
+      "id": "w01_weekend_nothing_sent",
+      "kind": "window_followup",
+      "input": {
+        "label": "this weekend",
+        "asked": "anything happening this weekend I should check out?",
+        "sent": []
+      },
+      "mustNotMention": [
+        "luma",
+        "event",
+        "meetup",
+        "want me to",
+        "i can look",
+        "i'll look",
+        "search",
+        "link",
+        "check out"
+      ]
+    },
+    {
+      "id": "w02_thursday_with_event",
+      "kind": "window_followup",
+      "input": {
+        "label": "thursday",
+        "asked": "any AI meetups in SF on Thursday?",
+        "sent": [
+          "Humongous AI Meetup"
+        ]
+      },
+      "mustNotMention": [
+        "want me to",
+        "i can look",
+        "i'll look",
+        "search",
+        "another",
+        "more events",
+        "next week"
+      ]
+    }
   ]
 }

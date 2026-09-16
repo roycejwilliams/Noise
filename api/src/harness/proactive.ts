@@ -57,7 +57,8 @@ export type ProactiveType =
   | "ask_solicitation"
   | "debrief"
   | "post_call"
-  | "product_update";
+  | "product_update"
+  | "window_followup";
 
 export type ExemptType = "event_change" | "call_reminder" | "missed_call";
 
@@ -79,6 +80,8 @@ export const TYPE_POLICY: Record<ProactiveType, TypePolicy> = {
   ask_solicitation: { priority: 55 },
   network_tease: { priority: 50 },
   ask_checkin: { priority: 30, topicGapDays: 14 },
+  // After a time frame they searched has passed; about them, not a pitch.
+  window_followup: { priority: 35, typeGapDays: 5 },
   product_update: { priority: 20, typeGapDays: 7 },
   companion: { priority: 10, typeGapDays: 14 },
 };

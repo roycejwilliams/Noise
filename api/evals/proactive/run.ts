@@ -203,7 +203,7 @@ type DraftCase = {
 type LiveCase = {
   id: string;
   source?: "synthetic";
-  kind: "event_tease" | "event_reveal" | "ask_solicitation" | "calendar_follow" | "companion" | "ask_checkin" | "post_call" | "debrief" | "network_tease";
+  kind: "event_tease" | "event_reveal" | "ask_solicitation" | "calendar_follow" | "companion" | "ask_checkin" | "post_call" | "debrief" | "network_tease" | "window_followup";
   input: any;
   // Eval-only checks on top of production checks.
   expectSkip?: boolean;
@@ -256,6 +256,11 @@ async function runLive(c: LiveCase): Promise<{ text: string | null; rules?: Outp
       const { draftDebriefText } = await import("../../src/harness/proactiveRegistry.js");
       const r = await draftDebriefText(first, c.input.payload, c.input.people);
       return "skip" in r ? { text: null } : { text: r.text, rules: r.rules };
+    }
+    case "window_followup": {
+      const { draftWindowFollowUp } = await import("../../src/agent/windowFollowUp.js");
+      const r = await draftWindowFollowUp(first, c.input);
+      return { text: r?.text ?? null, rules: r?.rules };
     }
     case "network_tease": {
       const { proactiveRegistry } = await import("../../src/harness/proactiveRegistry.js");
