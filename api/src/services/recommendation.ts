@@ -103,6 +103,10 @@ If yes, rewrite it as one standalone sentence describing what to look for, keepi
 }
 
 export async function generateRecommendation(userId: string, currentMessage?: string): Promise<RecommendationResult> {
+  // What the tiered search actually covered this turn, attached to whatever
+  // this returns so the decision record shows it even when the answer is a
+  // generic idea rather than a real match (2026-09-16).
+  let scopeForTurn: SearchScope | null = null;
   try {
     const { rows } = await pool.query(
       `SELECT life_chapters, goals, blockers, activity_preferences, availability_pattern, city, emotional_state, intent
@@ -168,7 +172,8 @@ export async function generateRecommendation(userId: string, currentMessage?: st
         return [];
       });
       const tierMatches = await dropAlreadyRecommended(userId, found);
-      const scope = takeLastSearchScope();
+      scopeForTurn = takeLastSearchScope();
+      const scope = scopeForTurn;
       // "What's on this weekend?" is a question about the calendar. If
       // nothing's on it in that window, the honest answer is nothing, not a
       // generic "look for startup meetups" suggestion (2026-09-16).
@@ -267,7 +272,7 @@ or
     if (!parsed.available) return { available: false, reason: parsed.reason || NOT_ENOUGH_DATA.reason };
     if (!("match" in parsed) || !parsed.match) return NOT_ENOUGH_DATA;
 
-    const result: RecommendationResult = { available: true, match: parsed.match, reason: parsed.reason ?? "" };
+    const result: RecommendationResult = { available: true, match: parsed.match, reason: parsed.reason ?? "", scope: scopeForTurn };
 
     {
       const fallbackContent = `Co surfaced a recommendation — ${result.match}: ${result.reason}`;
