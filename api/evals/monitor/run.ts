@@ -39,6 +39,7 @@ check("ok claims not listed", checks.length === 3);
 const WRITTEN_DECISIONS = [
   "reply.grounding", "proactive.dailyPick", "recommendation.search", "turn.latency", "call.grounding",
   "profile.snapshotCheck", "profile.city", "reply.contactCard", "turn.closing", "router.decideActions",
+  "proactive.windowFollowUp",
 ];
 for (const signal of SIGNALS) {
   const named = WRITTEN_DECISIONS.find((d) => signal.bad.includes(`'${d}'`));
@@ -52,5 +53,5 @@ for (const signal of SIGNALS) {
   }
 }
 
-console.log(`monitor + call audit rules: ${31 - failed}/31 passed`);
+console.log(`monitor + call audit rules: ${9 + SIGNALS.length * 2 - failed}/${9 + SIGNALS.length * 2} passed`);
 if (failed) process.exitCode = 1;

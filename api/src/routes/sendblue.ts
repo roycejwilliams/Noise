@@ -1873,16 +1873,31 @@ Return ONLY valid JSON, no preamble: {"date": "YYYY-MM-DD or null", "time": "HH:
                 asked: resolvedContent.slice(0, 200),
                 sent: recommendation.available && recommendation.matches?.length ? recommendation.matches.map((m) => m.name) : [],
               };
-              await enqueueCandidate({
+              const targetKey = `window_followup:${scope.windowEnd.slice(0, 10)}`;
+              const queued = await enqueueCandidate({
                 userId: user.id,
                 type: "window_followup",
-                targetKey: `window_followup:${scope.windowEnd.slice(0, 10)}`,
-                topicKey: `window_followup:${scope.windowEnd.slice(0, 10)}`,
+                targetKey,
+                topicKey: targetKey,
                 summary: `Ask how ${scope.window} went for them (they asked Co to look for "${resolvedContent.slice(0, 80)}")`,
                 payload,
                 dueAt,
                 expiresAt: new Date(dueAt.getTime() + 3 * 24 * 60 * 60 * 1000),
-              }).catch((err: any) => console.error("sendblue: window follow-up enqueue failed (non-fatal):", err?.message ?? err));
+              }).catch((err: any) => {
+                console.error("sendblue: window follow-up enqueue failed (non-fatal):", err?.message ?? err);
+                return { queued: false, error: String(err?.message ?? err) };
+              });
+              // Which searches produced a follow-up, and when it's due, so one
+              // that never sends can be told apart from one never queued.
+              await recordDecision({
+                layer: 6,
+                decision: "proactive.windowFollowUp",
+                userId: user.id,
+                outcome: queued.queued ? "act" : "skip",
+                action: queued.queued ? "queued" : "error" in queued ? "enqueue_failed" : "not_queued",
+                proposal: { targetKey, window: scope.window, windowEnd: scope.windowEnd, dueAt: dueAt.toISOString(), sent: payload.sent },
+                checks: [{ name: "queued", pass: queued.queued, reason: queued.queued ? `due ${dueAt.toISOString()}` : "error" in queued ? queued.error : "already sent or no longer pending for this time frame" }],
+              }).catch(() => {});
             }
           }
         } catch (err: any) {

@@ -277,6 +277,10 @@ async function tryTier2(ask: StatedIntent, userCity: string | null, filter?: (st
     console.error("tieredRecommendation: tryTier2 fetchPublicEvents failed (non-fatal):", err?.message ?? err);
     return [];
   });
+  // How far the fetched feed actually reached, so a search that asked about
+  // Oct 5-14 but only got events through Oct 9 says so instead of reporting a
+  // clean "nothing found".
+  lastFetchedThrough = events.reduce<string | null>((latest, e) => (!latest || e.start_at > latest ? e.start_at : latest), null);
   const inWindow = events.filter((e) => isWithinLookaheadWindow(e.start_at, opts.maxDays ?? TIER2_MAX_LOOKAHEAD_DAYS) && (!filter || filter(e.start_at)));
   const nearby = await filterByRadius(inWindow, userCity);
   // The best few, not just the top one: a single odd top pick used to take
@@ -490,10 +494,19 @@ async function paidSearchAllowed(userId: string | null, source: "sweep" | "reque
 // city Luma was asked about, the time frame from their own words, and
 // whether it was a "what's on?" browse. Without it a "nothing found" record
 // can't be told apart from "searched the wrong place".
-export type SearchScope = { city: string | null; window: string | null; windowStart?: string | null; windowEnd?: string | null; browse: boolean; tiers: number[]; dropped?: TierDrop | null; gatedOut?: GatedOut[] };
+export type SearchScope = {
+  city: string | null;
+  window: string | null;
+  windowStart?: string | null;
+  windowEnd?: string | null;
+  // Latest event start in the Luma feed this search saw, and whether that
+  // covers the whole window they asked about.
+  fetchedThrough?: string | null;
+  windowCovered?: boolean | null; browse: boolean; tiers: number[]; dropped?: TierDrop | null; gatedOut?: GatedOut[] };
 export type TierDrop = { tier: number; name: string; reason: string };
 let lastSearchScope: SearchScope | null = null;
 let lastTierDrop: TierDrop | null = null;
+let lastFetchedThrough: string | null = null;
 
 export function takeLastSearchScope(): SearchScope | null {
   const scope = lastSearchScope;
@@ -512,6 +525,7 @@ export async function getTieredRecommendation(
   // A time frame they named ("this weekend", "next Tuesday") scopes the
   // search to those days, whatever the default lookahead is.
   lastTierDrop = null;
+  lastFetchedThrough = null;
   const asked = opts.rawMessage ?? ask.text ?? "";
   const window = asked ? parseAskWindow(asked, DateTime.now().setZone(opts.timezone ?? "local")) : null;
   const browse = !!asked && isBrowseAsk(asked);
@@ -550,7 +564,9 @@ export async function getTieredRecommendation(
     searchCache.set(cacheKey, { at: Date.now(), found });
   }
 
-  lastSearchScope = { city, window: window?.label ?? null, windowStart: window?.start.toISO() ?? null, windowEnd: window?.end.toISO() ?? null, browse, tiers: found.map((m) => m.tier), dropped: lastTierDrop };
+  lastSearchScope = { city, window: window?.label ?? null, windowStart: window?.start.toISO() ?? null, windowEnd: window?.end.toISO() ?? null,
+    fetchedThrough: lastFetchedThrough,
+    windowCovered: window && lastFetchedThrough ? new Date(lastFetchedThrough) >= window.end.toJSDate() : null, browse, tiers: found.map((m) => m.tier), dropped: lastTierDrop };
   lastTierDrop = null;
   const gatedOut: GatedOut[] = [];
   const gated = await gateMatches(found, { userId: opts.userId ?? null, searchCity: city, checkRepeat: opts.checkRepeat, gatedOut, askedUntil: window ? window.end.toISODate() : null });

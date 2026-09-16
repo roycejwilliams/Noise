@@ -37,6 +37,12 @@ export const SIGNALS: Signal[] = [
   { key: "city_overwritten", label: "Profile city changes blocked (extraction drifting)", bad: `decision = 'profile.city' AND outcome = 'skip'`, total: `decision = 'profile.city'`, floor: 0.5, minCount: 3 },
   { key: "card_misfire", label: "Contact card asked for when they wanted something else", bad: `decision = 'reply.contactCard' AND outcome = 'skip'`, total: `decision = 'reply.contactCard'`, floor: 0.3, minCount: 2 },
   { key: "reaction_withheld", label: "Reactions held back because a reply was still owed", bad: `decision = 'turn.closing' AND outcome = 'skip'`, total: `decision = 'turn.closing'`, floor: 0.4, minCount: 3 },
+  // Real events found, none offerable (sold out, already sent, out of range):
+  // the answer they get is "nothing", even though the search worked.
+  { key: "found_but_unofferable", label: "Searches that found real events but could offer none", bad: `decision = 'recommendation.search' AND action <> 'sent_matches' AND jsonb_array_length(COALESCE(proposal->'scope'->'gatedOut', '[]'::jsonb)) > 0`, total: `decision = 'recommendation.search'`, floor: 0.4, minCount: 3 },
+  // The Luma feed stopped before the end of the time frame they asked about.
+  { key: "window_partly_searched", label: "Searches whose event feed didn't reach the end of the asked time frame", bad: `decision = 'recommendation.search' AND proposal->'scope'->>'windowCovered' = 'false'`, total: `decision = 'recommendation.search' AND proposal->'scope'->>'windowCovered' IS NOT NULL`, floor: 0.3, minCount: 2 },
+  { key: "followup_not_queued", label: "Time-frame follow-ups that failed to queue", bad: `decision = 'proactive.windowFollowUp' AND action = 'enqueue_failed'`, total: `decision = 'proactive.windowFollowUp'`, floor: 0.2, minCount: 2 },
   { key: "router_unavailable", label: "Router failures (no actions taken)", bad: `decision = 'router.decideActions' AND checks @> '[{"name": "router_available", "pass": false}]'`, total: `decision = 'router.decideActions'`, floor: 0.05, minCount: 3 },
 ];
 
