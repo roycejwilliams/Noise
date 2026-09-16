@@ -55,7 +55,7 @@ export async function geocodeCity(city: string): Promise<GeoPoint | null> {
       params: { address: trimmed, key: process.env.GOOGLE_PLACES_API_KEY! },
     });
     const location = response.data.results?.[0]?.geometry?.location;
-    if (!location) return null;
+    if (!location) return openMeteoGeocode(trimmed);
 
     await pool
       .query(`INSERT INTO geocode_cache (query, lat, lng) VALUES ($1, $2, $3) ON CONFLICT (query) DO NOTHING`, [
@@ -67,7 +67,29 @@ export async function geocodeCity(city: string): Promise<GeoPoint | null> {
 
     return { lat: location.lat, lng: location.lng };
   } catch (err: any) {
-    console.error(`geocodeCity: failed for "${trimmed}" (non-fatal):`, err?.message ?? err);
+    // Google needs billing enabled on the Cloud project; without it every
+    // uncached city fails (2026-09-16: REQUEST_DENIED, which silently broke
+    // the distance checks, time zones, and event search for any city not
+    // already in the cache). The free fallback keeps those working.
+    console.error(`geocodeCity: Google failed for "${trimmed}", trying the open geocoder (non-fatal):`, err?.message ?? err);
+    return openMeteoGeocode(trimmed);
+  }
+}
+
+// Open-Meteo's geocoding API: free, no key, no billing.
+async function openMeteoGeocode(city: string): Promise<GeoPoint | null> {
+  try {
+    const res = await fetch(`https://geocoding-api.open-meteo.com/v1/search?name=${encodeURIComponent(city)}&count=1&language=en&format=json`);
+    if (!res.ok) return null;
+    const data: any = await res.json();
+    const hit = data?.results?.[0];
+    if (typeof hit?.latitude !== "number" || typeof hit?.longitude !== "number") return null;
+    await pool
+      .query(`INSERT INTO geocode_cache (query, lat, lng) VALUES ($1, $2, $3) ON CONFLICT (query) DO NOTHING`, [city, hit.latitude, hit.longitude])
+      .catch((err: any) => console.error("openMeteoGeocode: cache write failed (non-fatal):", err?.message ?? err));
+    return { lat: hit.latitude, lng: hit.longitude };
+  } catch (err: any) {
+    console.error(`openMeteoGeocode: failed for "${city}" (non-fatal):`, err?.message ?? err);
     return null;
   }
 }
