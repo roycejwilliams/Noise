@@ -1045,6 +1045,9 @@ export function sendblueRouter(io: Server): Router {
           });
         }
 
+        // How long the search took, for the latency record below.
+        let searchMsForTurn = 0;
+
         // The thread just ended ("cool", "thanks 🙏"): react to their
         // message instead of writing a sentence that keeps it going
         // (services/conversationClose.ts). Only when the router found nothing
@@ -1655,12 +1658,14 @@ Return ONLY valid JSON, no preamble: {"date": "YYYY-MM-DD or null", "time": "HH:
             addFact(replyFacts, "did_this_turn", `Told them "${holdLine}" before searching.`);
             const RECOMMENDATION_TIME_CAP_MS = 45_000;
             const searchStarted = Date.now();
+            searchMsForTurn = 0;
             const recommendation = await Promise.race([
               generateRecommendation(user.id, resolvedContent),
               new Promise<{ available: false; reason: string }>((resolve) =>
                 setTimeout(() => resolve({ available: false, reason: "search took too long" }), RECOMMENDATION_TIME_CAP_MS),
               ),
             ]);
+            searchMsForTurn = Date.now() - searchStarted;
             if (recommendation.available && recommendation.matches?.length) {
               // Sent DETERMINISTICALLY, not via agent tool-calling (Royce,
               // 2026-09-02, confirmed live) — the previous version asked the
@@ -2095,7 +2100,7 @@ Return ONLY valid JSON, no preamble: {"date": "YYYY-MM-DD or null", "time": "HH:
               checks: [{ name: "within_budget", pass: turnMs <= (decision.wantsRecommendation ? REPLY_BUDGET_SEARCH_MS : REPLY_BUDGET_MS), reason: `${Math.round(turnMs / 1000)}s` }],
               // Where the time went, so slow turns can be read without
               // guessing (Royce, 2026-09-16: 36s replies).
-              proposal: { ms: turnMs, routerMs: routerLatencyMs, factsMs, replyMs, groundingMs, debounceMs: DEBOUNCE_MS },
+              proposal: { ms: turnMs, routerMs: routerLatencyMs, factsMs, searchMs: searchMsForTurn, replyMs, groundingMs, debounceMs: DEBOUNCE_MS },
             }).catch(() => {});
           }
         }

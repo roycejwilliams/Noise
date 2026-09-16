@@ -26,25 +26,45 @@ export type DiscoveredEvent = {
 // ranks client-side instead of risking a silently-wrong filter param.
 // Genuinely global result set until that's confirmed — a real limitation
 // for a Bay-Area-focused product, flagged rather than silently accepted.
-export async function fetchPublicEvents(limit: number): Promise<DiscoveredEvent[]> {
-  const url = new URL(DISCOVER_URL);
-  url.searchParams.set("pagination_limit", String(limit));
+// One page of Luma's discover feed is today's events only, so a question
+// about any later day used to have nothing to search (Royce, 2026-09-16:
+// "what's been surfacing on Luma this weekend" found nothing on Luma at
+// all). Following the cursor reaches the days after today.
+const PAGE_SIZE = 20;
+const MAX_PAGES = 6;
 
-  const res = await fetch(url);
-  if (!res.ok) {
-    throw new Error(`lumaDiscovery: fetchPublicEvents failed (${res.status}): ${await res.text()}`);
+export async function fetchPublicEvents(limit: number): Promise<DiscoveredEvent[]> {
+  const out: DiscoveredEvent[] = [];
+  const seen = new Set<string>();
+  let cursor: string | null = null;
+  for (let page = 0; page < MAX_PAGES && out.length < limit; page++) {
+    const url = new URL(DISCOVER_URL);
+    url.searchParams.set("pagination_limit", String(PAGE_SIZE));
+    if (cursor) url.searchParams.set("pagination_cursor", cursor);
+
+    const res = await fetch(url);
+    if (!res.ok) {
+      // A later page failing still leaves the earlier ones usable.
+      if (out.length) break;
+      throw new Error(`lumaDiscovery: fetchPublicEvents failed (${res.status}): ${await res.text()}`);
+    }
+    const data: any = await res.json();
+    for (const entry of data.entries ?? []) {
+      const e = entry.event ?? entry;
+      if (!e?.api_id || !e?.name || seen.has(e.api_id)) continue;
+      seen.add(e.api_id);
+      out.push({
+        api_id: e.api_id,
+        name: e.name,
+        start_at: e.start_at,
+        city: e.geo_address_info?.city ?? null,
+        url: `https://lu.ma/${e.url}`,
+      });
+    }
+    cursor = typeof data.next_cursor === "string" ? data.next_cursor : null;
+    if (!data.has_more || !cursor) break;
   }
-  const data: any = await res.json();
-  return (data.entries ?? [])
-    .map((entry: any) => entry.event ?? entry)
-    .filter((e: any) => e?.api_id && e?.name)
-    .map((e: any) => ({
-      api_id: e.api_id,
-      name: e.name,
-      start_at: e.start_at,
-      city: e.geo_address_info?.city ?? null,
-      url: `https://lu.ma/${e.url}`,
-    }));
+  return out.slice(0, limit);
 }
 
 // Calibrated against real data (Royce, 2026-09-02) — the 0.72 first-guess

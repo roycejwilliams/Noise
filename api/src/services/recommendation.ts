@@ -1,4 +1,6 @@
 import { generateText } from "ai";
+import { DateTime } from "luxon";
+import { isBrowseAsk, parseAskWindow } from "./askWindow.js";
 import { getTimezoneForCity } from "./geocoding.js";
 import { anthropic } from "@ai-sdk/anthropic";
 import { propagateAttributes } from "@langfuse/tracing";
@@ -166,6 +168,13 @@ export async function generateRecommendation(userId: string, currentMessage?: st
         return [];
       });
       const tierMatches = await dropAlreadyRecommended(userId, found);
+      // "What's on this weekend?" is a question about the calendar. If
+      // nothing's on it in that window, the honest answer is nothing, not a
+      // generic "look for startup meetups" suggestion (2026-09-16).
+      if (!tierMatches.length && currentMessage && isBrowseAsk(currentMessage)) {
+        const window = parseAskWindow(currentMessage, DateTime.now());
+        return { available: false, reason: `nothing real on the calendar${window ? ` for ${window.label}` : ""}` };
+      }
       if (found.length && !tierMatches.length) {
         return { available: false, reason: `already recommended ${found.map((m) => m.name).join(", ")} recently` };
       }
