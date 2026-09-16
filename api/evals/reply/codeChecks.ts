@@ -1,5 +1,6 @@
 // Model-free checks for the Layer 3 gate's deterministic rules. Runs in a
 // second, no API calls: npx tsx evals/reply/codeChecks.ts
+import { nearestPlace, parseDiscoverPlaces } from "../../src/services/lumaDiscovery.js";
 import { DateTime } from "luxon";
 import { isBrowseAsk, parseAskWindow, withinWindow } from "../../src/services/askWindow.js";
 import { asksForContactCard } from "../../src/services/conversationClose.js";
@@ -117,7 +118,32 @@ const windowCases: [boolean, string][] = [
   [!asksForContactCard("send me both accelerator links again"), "links are not a card request"],
 ];
 
+// Mapping wherever someone says they are to Luma's own city list
+// (services/lumaDiscovery.ts), so no city list lives in our code.
+const catalog = [
+  { apiId: "discplace-sf", name: "San Francisco", slug: "sf", lat: 37.7749, lng: -122.4194 },
+  { apiId: "discplace-nyc", name: "New York", slug: "nyc", lat: 40.7128, lng: -74.006 },
+  { apiId: "discplace-la", name: "Los Angeles", slug: "la", lat: 34.0522, lng: -118.2437 },
+];
+const placeCases: [boolean, string][] = [
+  [nearestPlace(catalog, "San Francisco", null)?.apiId === "discplace-sf", "exact name needs no coordinates"],
+  [nearestPlace(catalog, "sf", null)?.apiId === "discplace-sf", "slug matches"],
+  [nearestPlace(catalog, "Oakland", { lat: 37.8044, lng: -122.2712 })?.apiId === "discplace-sf", "Oakland maps to San Francisco"],
+  [nearestPlace(catalog, "Brooklyn", { lat: 40.6782, lng: -73.9442 })?.apiId === "discplace-nyc", "Brooklyn maps to New York"],
+  [nearestPlace(catalog, "Boise", { lat: 43.615, lng: -116.2023 }) === null, "a city with nothing within 75 miles maps to nothing"],
+  [nearestPlace(catalog, "Nowhere", null) === null, "no coordinates and no name match means nothing"],
+  [nearestPlace([], "San Francisco", { lat: 37.7749, lng: -122.4194 }) === null, "an empty catalog maps to nothing"],
+  [parseDiscoverPlaces("<html>no next data</html>").length === 0, "a page without data parses to nothing"],
+];
+
 let failed = 0;
+for (const [ok, label] of placeCases) {
+  if (!ok) {
+    failed++;
+    console.log(`FAIL place: ${label}`);
+  }
+}
+
 for (const [ok, label] of windowCases) {
   if (!ok) {
     failed++;
@@ -156,6 +182,6 @@ for (const [draft, expected, label] of ongoingCases) {
     console.log(`FAIL ${label}: "${draft}" -> ${failing.join(", ") || "(none)"}`);
   }
 }
-const total = cases.length + ongoingCases.length + closingCases.length + formatCases.length + windowCases.length;
+const total = cases.length + ongoingCases.length + closingCases.length + formatCases.length + windowCases.length + placeCases.length;
 console.log(`codeChecks: ${total - failed}/${total} passed`);
 if (failed) process.exitCode = 1;

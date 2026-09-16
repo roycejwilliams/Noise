@@ -1,4 +1,5 @@
 import { generateEmbedding } from "./embeddings.js";
+import { geocodeCity, haversineMiles, type GeoPoint } from "./geocoding.js";
 import type { StatedIntent } from "./matching.js";
 
 // UNOFFICIAL — kept deliberately separate from luma.ts. This calls
@@ -26,53 +27,74 @@ export type DiscoveredEvent = {
 // whatever city Luma guessed — every question about a later day found
 // nothing. With it, results are the city's own upcoming events across days.
 // The id comes from the city page itself (lu.ma/sf), cached in memory.
-const CITY_SLUGS: [RegExp, string][] = [
-  [/san francisco|bay area|sf\b|oakland|berkeley|palo alto|mountain view|menlo park|san jose/i, "sf"],
-  [/new york|nyc|brooklyn|manhattan/i, "nyc"],
-  [/los angeles|\bla\b|santa monica|venice/i, "la"],
-  [/london/i, "london"],
-  [/austin/i, "austin"],
-  [/miami/i, "miami"],
-  [/seattle/i, "seattle"],
-  [/boston|cambridge/i, "boston"],
-  [/chicago/i, "chicago"],
-  [/toronto/i, "toronto"],
-  [/berlin/i, "berlin"],
-  [/paris/i, "paris"],
-  [/bangalore|bengaluru/i, "bangalore"],
-  [/singapore/i, "singapore"],
-];
-
-const placeIdCache = new Map<string, { at: number; id: string | null }>();
+// Luma's own catalog of discover cities, published in the page data of
+// lu.ma/discover: name, slug, api id and coordinates for each. Read once a
+// day and matched against wherever the person actually says they are, so
+// this works for any city Luma covers rather than a list we maintain.
+const DISCOVER_PAGE = "https://lu.ma/discover";
 const PLACE_CACHE_TTL_MS = 24 * 60 * 60 * 1000;
+// How far from a city Luma still counts as that city's scene.
+const PLACE_MAX_MILES = 75;
 
-export function citySlug(city: string | null): string | null {
-  if (!city) return null;
-  return CITY_SLUGS.find(([re]) => re.test(city))?.[1] ?? null;
-}
+export type DiscoverPlace = { apiId: string; name: string; slug: string; lat: number; lng: number };
 
-// Luma's own id for a city, read off its public city page. Null when the
-// city isn't one Luma has a page for — the feed then falls back to
-// unfiltered, exactly as before.
-export async function discoverPlaceId(city: string | null): Promise<string | null> {
-  const slug = citySlug(city);
-  if (!slug) return null;
-  const cached = placeIdCache.get(slug);
-  if (cached && Date.now() - cached.at < PLACE_CACHE_TTL_MS) return cached.id;
-  let id: string | null = null;
+let placeCache: { at: number; places: DiscoverPlace[] } | null = null;
+
+export function parseDiscoverPlaces(html: string): DiscoverPlace[] {
+  const raw = html.match(/<script id="__NEXT_DATA__"[^>]*>([\s\S]*?)<\/script>/)?.[1];
+  if (!raw) return [];
   try {
-    const res = await fetch(`https://lu.ma/${slug}`, { headers: { "User-Agent": "Mozilla/5.0" }, redirect: "follow" });
-    if (res.ok) id = (await res.text()).match(/discplace-[A-Za-z0-9]+/)?.[0] ?? null;
-  } catch (err: any) {
-    console.error(`lumaDiscovery: place id lookup failed for ${slug} (non-fatal):`, err?.message ?? err);
+    const entries = JSON.parse(raw)?.props?.pageProps?.initialData?.places ?? [];
+    return entries
+      .map((entry: any) => entry?.place ?? entry)
+      .filter((p: any) => p?.api_id && p?.name && p?.coordinate)
+      .map((p: any) => ({ apiId: p.api_id, name: p.name, slug: p.slug ?? "", lat: Number(p.coordinate.latitude), lng: Number(p.coordinate.longitude) }))
+      .filter((p: DiscoverPlace) => Number.isFinite(p.lat) && Number.isFinite(p.lng));
+  } catch {
+    return [];
   }
-  placeIdCache.set(slug, { at: Date.now(), id });
-  return id;
 }
-// One page of Luma's discover feed is today's events only, so a question
-// about any later day used to have nothing to search (Royce, 2026-09-16:
-// "what's been surfacing on Luma this weekend" found nothing on Luma at
-// all). Following the cursor reaches the days after today.
+
+export async function discoverPlaces(): Promise<DiscoverPlace[]> {
+  if (placeCache && Date.now() - placeCache.at < PLACE_CACHE_TTL_MS) return placeCache.places;
+  let places: DiscoverPlace[] = [];
+  try {
+    const res = await fetch(DISCOVER_PAGE, { headers: { "User-Agent": "Mozilla/5.0" }, redirect: "follow" });
+    if (res.ok) places = parseDiscoverPlaces(await res.text());
+  } catch (err: any) {
+    console.error("lumaDiscovery: place catalog fetch failed (non-fatal):", err?.message ?? err);
+  }
+  if (places.length) placeCache = { at: Date.now(), places };
+  return places.length ? places : (placeCache?.places ?? []);
+}
+
+// Pure: the closest city in the catalog, by name or by distance.
+export function nearestPlace(places: DiscoverPlace[], city: string, point: GeoPoint | null): DiscoverPlace | null {
+  const wanted = city.trim().toLowerCase();
+  const named = places.find((p) => p.name.toLowerCase() === wanted || p.slug.toLowerCase() === wanted);
+  if (named) return named;
+  if (!point) return null;
+  let best: { place: DiscoverPlace; miles: number } | null = null;
+  for (const place of places) {
+    const miles = haversineMiles(point, { lat: place.lat, lng: place.lng });
+    if (miles <= PLACE_MAX_MILES && (!best || miles < best.miles)) best = { place, miles };
+  }
+  return best?.place ?? null;
+}
+
+// The id Luma's city pages use, for wherever this person actually is. Null
+// when they have no city on file or Luma doesn't cover it — the feed then
+// falls back to unfiltered, as before.
+export async function discoverPlaceId(city: string | null): Promise<string | null> {
+  if (!city?.trim()) return null;
+  const [places, point] = await Promise.all([discoverPlaces(), geocodeCity(city).catch(() => null)]);
+  if (!places.length) return null;
+  return nearestPlace(places, city, point)?.apiId ?? null;
+}
+
+// One page of the discover feed is a single day, so the days after today
+// need the cursor (Royce, 2026-09-16: "what's been surfacing on Luma this
+// weekend" found nothing on Luma at all).
 const PAGE_SIZE = 20;
 const MAX_PAGES = 6;
 
