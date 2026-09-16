@@ -44,7 +44,25 @@ export function createConversationTools(ctx: ConversationToolContext) {
   // sent is an out-of-band signal for the caller (sendblue.ts), same
   // reasoning as askCheckin.ts's state.sent — generateText's return value
   // doesn't cleanly expose which tools actually executed.
-  const state = { sent: false, replyCount: 0, lastReplyText: "", sentMessages: [] as string[] };
+  const state = { sent: false, replyCount: 0, lastReplyText: "", sentMessages: [] as string[], pendingLinks: [] as string[] };
+
+  // Links always land after the message that introduces them (Royce,
+  // 2026-09-16: Co sent the link first, then a text ending "Here's the ERA
+  // one:"). shareLink queues; the reply flushes the queue once it's out, and
+  // conversationReply flushes anything left at the end of the turn.
+  const flushLinks = async () => {
+    const urls = state.pendingLinks.splice(0, state.pendingLinks.length);
+    for (const url of urls) {
+      await new Promise((resolve) => setTimeout(resolve, 1500));
+      if (ctx.dryRun) {
+        console.log(`[conversationReply dryRun] would share link ${url} with ${ctx.userId}`);
+      } else {
+        await ctx.sendCoReply({ phone: ctx.phoneNumber, message: url, asVoice: false });
+        await writeMemory(ctx.userId, "text_exchange", `Co replied: ${url}`);
+      }
+      state.sentMessages.push(url);
+    }
+  };
 
   const tools = {
     // Genuinely callable more than once for a text reply (never for a voice
@@ -80,6 +98,8 @@ export function createConversationTools(ctx: ConversationToolContext) {
         }
         state.sent = true;
         state.replyCount += 1;
+        // Anything shareLink queued belongs right under this message.
+        await flushLinks();
         return { ok: true };
       },
     }),
@@ -156,19 +176,18 @@ export function createConversationTools(ctx: ConversationToolContext) {
 
     // Send a link as its own message, only if it's actually on file.
     shareLink: tool({
-      description: "Send a link as its own message (so it previews). Only links that appear in the facts you were given.",
-      inputSchema: z.object({ url: z.string() }),
-      execute: async ({ url }) => {
-        if (!ctx.facts?.text().includes(url)) return { ok: false, error: "that link isn't on file, so it can't be sent" };
-        if (ctx.dryRun) {
-          console.log(`[conversationReply dryRun] would share link ${url} with ${ctx.userId}`);
-        } else {
-          await ctx.sendCoReply({ phone: ctx.phoneNumber, message: url, asVoice: false });
-          await writeMemory(ctx.userId, "text_exchange", `Co replied: ${url}`);
-        }
-        state.sentMessages.push(url);
-        ctx.facts?.add("did_this_turn", `Sent the link ${url} as its own message.`);
-        return { ok: true };
+      description:
+        "Share the link (or links) for what you just named. Each one is sent as its own message so it previews, always after your reply, in the order you list them. Name every one of them in your reply first: if you mention two things, share both links. Only links that appear in the facts you were given.",
+      inputSchema: z.object({ urls: z.array(z.string()).min(1).max(3).describe("Every link for what you named, in the same order you named them.") }),
+      execute: async ({ urls }) => {
+        const known = urls.filter((u) => ctx.facts?.text().includes(u));
+        const unknown = urls.filter((u) => !known.includes(u));
+        if (!known.length) return { ok: false, error: "none of those links are on file, so they can't be sent" };
+        state.pendingLinks.push(...known);
+        for (const url of known) ctx.facts?.add("did_this_turn", `Sent the link ${url} as its own message.`);
+        // Already replied: send them now. Otherwise they go out right after.
+        if (state.replyCount > 0) await flushLinks();
+        return unknown.length ? { ok: true, note: `These weren't on file and weren't sent: ${unknown.join(", ")}` } : { ok: true };
       },
     }),
 
@@ -185,5 +204,5 @@ export function createConversationTools(ctx: ConversationToolContext) {
     }),
   };
 
-  return { tools, state };
+  return { tools, state, flushLinks };
 }

@@ -52,6 +52,7 @@ import { runConversationReplyAgent, filterRelevantMemories, CALL_OFFER_EXPIRY_DA
 import { triggerCallForUser } from "../services/callTrigger.js";
 import sendblue, { cleanCoMessage, markRead, sendReaction } from "../services/sendblue.js";
 import { closingReaction, emojiFor } from "../services/conversationClose.js";
+import { renderMatchList } from "../services/messageFormat.js";
 import { CO_VOICE, CO_TEXT_CHANNEL } from "../services/coVoice.js";
 import { generateVoiceNote } from "../services/voiceNote.js";
 import { MODELS } from "../models.js";
@@ -1644,6 +1645,7 @@ Return ONLY valid JSON, no preamble: {"date": "YYYY-MM-DD or null", "time": "HH:
               // already uses for a real second message.
               // Details, the personal reason, and the text for every match
               // are prepared in parallel, then sent in order.
+              const matchCount = recommendation.matches.length;
               const preparedAll = await Promise.all(recommendation.matches.map(async (m) => {
                 // Drafted in Co's voice from the real record and a personal
                 // reason, not the matching engine's raw "name — reason" line.
@@ -1661,7 +1663,7 @@ Return ONLY valid JSON, no preamble: {"date": "YYYY-MM-DD or null", "time": "HH:
                   const { text: drafted } = await generateText({
                     model: anthropic(MODELS.sonnet),
                     experimental_telemetry: { isEnabled: true, functionId: "sendblue.recommendation.describe" },
-                    prompt: `${CO_VOICE}\n\n${CO_TEXT_CHANNEL} You're telling ${user.first_name ?? "them"} about "${m.name}"${"url" in m && m.url ? ". You sent the link a moment ago; this message goes right under it" : ""}.\n\nWhy it fits them: ${em.whyItFits ?? m.reason}\n${record ? `\nWhat's actually known about it:\n${record}\n` : ""}\nWrite 1-3 sentences naming it, the one or two details that matter most to them (when, where, who), and why it fits, in your own words. Only use what's written above. No link. Return ONLY the message.`,
+                    prompt: `${CO_VOICE}\n\n${CO_TEXT_CHANNEL} You're telling ${user.first_name ?? "them"} about "${m.name}"${"url" in m && m.url ? ". The link goes out right after this message, so don't paste it" : ""}${matchCount > 1 ? `. This is one of ${matchCount} you're sending together, so it reads as a bullet in a short list` : ""}.\n\nWhy it fits them: ${em.whyItFits ?? m.reason}\n${record ? `\nWhat's actually known about it:\n${record}\n` : ""}\nWrite ${matchCount > 1 ? "one sentence" : "1-3 sentences"} naming it, the one or two details that matter most to them (when, where, who), and why it fits, in your own words. Only use what's written above. No link. Return ONLY the message.`,
                   });
                   if (drafted.trim()) description = cleanCoMessage(drafted.trim());
                 } catch (err: any) {
@@ -1680,20 +1682,29 @@ Return ONLY valid JSON, no preamble: {"date": "YYYY-MM-DD or null", "time": "HH:
                 );
                 addInstruction(replyFacts, "You searched and nothing that came up fits what they asked. Say that plainly and briefly. Don't send or describe the misfits unless they ask.");
               }
-              for (const { m, description } of prepared) {
-                if ("url" in m && m.url) {
+              // What they are always comes before its link (Royce,
+              // 2026-09-16: Co sent a link, then a message pointing back at
+              // it). One thing: a sentence, then the link. Several: one
+              // bulleted message the way the product updates read, then each
+              // link on its own so every one of them previews.
+              if (prepared.length) {
+                const intro = renderMatchList(prepared.map((p) => p.description));
+                await sendCoReply({ phone: user.phone_number, message: intro, asVoice: isVoice });
+                await logTextExchange(user.id, `Co replied: ${intro}`);
+                for (const { m } of prepared) {
+                  if (!("url" in m) || !m.url) continue;
+                  await new Promise((resolve) => setTimeout(resolve, 1500));
                   await sendCoReply({ phone: user.phone_number, message: m.url, asVoice: false });
                   await logTextExchange(user.id, `Co replied: ${m.url}`);
-                  await new Promise((resolve) => setTimeout(resolve, 2000));
                 }
-                await sendCoReply({ phone: user.phone_number, message: description, asVoice: isVoice });
-                await logTextExchange(user.id, `Co replied: ${description}`);
-                await new Promise((resolve) => setTimeout(resolve, 2000));
-                addFact(
-                  replyFacts,
-                  "did_this_turn",
-                  `Sent "${m.name}"${"url" in m && m.url ? ` (link ${m.url})` : " (no link)"} as separate messages just before this reply: "${description}"`,
-                );
+                await new Promise((resolve) => setTimeout(resolve, 1500));
+                for (const { m, description } of prepared) {
+                  addFact(
+                    replyFacts,
+                    "did_this_turn",
+                    `Sent "${m.name}"${"url" in m && m.url ? ` (link ${m.url})` : " (no link)"} just before this reply: "${description}"`,
+                  );
+                }
               }
               // The agent still runs after this (see below) to genuinely
               // respond to what they said — this just tells it the

@@ -1,5 +1,6 @@
 // Model-free checks for the Layer 3 gate's deterministic rules. Runs in a
 // second, no API calls: npx tsx evals/reply/codeChecks.ts
+import { renderMatchList } from "../../src/services/messageFormat.js";
 import { closingReaction } from "../../src/services/conversationClose.js";
 import "dotenv/config";
 import { addFact, baseReplyFacts, codeChecks } from "../../src/harness/replyGrounding.js";
@@ -73,7 +74,28 @@ const closingCases: [string, string | null][] = [
   ["no", null],
 ];
 
+// How several real things read in one message (services/messageFormat.ts).
+const oneItem = renderMatchList(["ERA Winter 2027 is NYC, $150K on a SAFE, applications open now."]);
+const twoItems = renderMatchList(["ERA Winter 2027, NYC, $150K SAFE, open now.", "16vc, 20-25 companies, $200K, pre-seed/seed."]);
+const threeItems = renderMatchList(["a", "b", "c"]);
+const formatCases: [boolean, string][] = [
+  [oneItem === "ERA Winter 2027 is NYC, $150K on a SAFE, applications open now.", "one item is the sentence itself, no bullet"],
+  [!oneItem.includes("\u2022"), "one item has no bullet"],
+  [twoItems.startsWith("Two that fit:\n\n"), "two items get the lead-in"],
+  [twoItems.split("\u2022").length === 3, "two items get two bullets"],
+  [twoItems.includes("open now.\n\n\u2022"), "bullets are separated by a blank line"],
+  [threeItems.startsWith("3 that fit:"), "three items count in the lead-in"],
+  [!twoItems.includes("http"), "links are never in the list message"],
+];
+
 let failed = 0;
+for (const [ok, label] of formatCases) {
+  if (!ok) {
+    failed++;
+    console.log(`FAIL format: ${label}`);
+  }
+}
+
 for (const [message, expected] of closingCases) {
   const got = closingReaction(message);
   if (got !== expected) {
@@ -98,6 +120,6 @@ for (const [draft, expected, label] of ongoingCases) {
     console.log(`FAIL ${label}: "${draft}" -> ${failing.join(", ") || "(none)"}`);
   }
 }
-const total = cases.length + ongoingCases.length + closingCases.length;
+const total = cases.length + ongoingCases.length + closingCases.length + formatCases.length;
 console.log(`codeChecks: ${total - failed}/${total} passed`);
 if (failed) process.exitCode = 1;

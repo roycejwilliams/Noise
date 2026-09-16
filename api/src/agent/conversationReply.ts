@@ -178,7 +178,7 @@ export async function runConversationReplyAgent(
   opts: { dryRun?: boolean; record?: boolean } = {},
 ): Promise<{ sent: boolean; offered: boolean; replyText: string; grounding: GroundingResult[] }> {
   const grounding: GroundingResult[] = [];
-  const { tools, state } = createConversationTools({
+  const { tools, state, flushLinks } = createConversationTools({
     userId: input.userId,
     phoneNumber: input.phoneNumber,
     resolvedContent: input.resolvedContent,
@@ -316,6 +316,10 @@ ${input.missingTopic ? `  - Co doesn't yet have a good sense of ${input.missingT
     state.sent = true;
     state.lastReplyText = fallback;
   }
+
+  // A link queued but never flushed (the model shared one and then stopped)
+  // still goes out, after the reply it belongs to.
+  if (state.pendingLinks.length) await flushLinks();
 
   const offered = await verifyAndRecordCallOffer(input, state.lastReplyText, opts.dryRun ?? false);
 
