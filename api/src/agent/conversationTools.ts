@@ -47,10 +47,10 @@ export function createConversationTools(ctx: ConversationToolContext) {
   // doesn't cleanly expose which tools actually executed.
   const state = { sent: false, replyCount: 0, lastReplyText: "", sentMessages: [] as string[], pendingLinks: [] as string[] };
 
-  // Links always land after the message that introduces them (Royce,
-  // 2026-09-16: Co sent the link first, then a text ending "Here's the ERA
-  // one:"). shareLink queues; the reply flushes the queue once it's out, and
-  // conversationReply flushes anything left at the end of the turn.
+  // A link goes out ahead of the message about it (Royce, 2026-09-16: "I
+  // want the link first then description"), so the preview lands and the
+  // reply reads as its caption. shareLink sends immediately; the queue and
+  // the flush at the end of the turn only catch anything left over.
   const flushLinks = async () => {
     const queued = state.pendingLinks.splice(0, state.pendingLinks.length);
     // Never the same link twice in one turn, however often it's asked for.
@@ -101,8 +101,6 @@ export function createConversationTools(ctx: ConversationToolContext) {
         }
         state.sent = true;
         state.replyCount += 1;
-        // Anything shareLink queued belongs right under this message.
-        await flushLinks();
         return { ok: true };
       },
     }),
@@ -199,7 +197,7 @@ export function createConversationTools(ctx: ConversationToolContext) {
     // Send a link as its own message, only if it's actually on file.
     shareLink: tool({
       description:
-        "Share the link (or links) for what you just named. Each one is sent as its own message so it previews, always after your reply, in the order you list them. Name every one of them in your reply first: if you mention two things, share both links. Only links that appear in the facts you were given.",
+        "Share the link (or links) for what you're about to tell them about. Each one is sent as its own message so it previews, and they go out BEFORE your reply, in the order you list them, so call this first and then describe them with sendReply. If you mention two things, share both links. Only links that appear in the facts you were given.",
       inputSchema: z.object({ urls: z.array(z.string()).min(1).max(3).describe("Every link for what you named, in the same order you named them.") }),
       execute: async ({ urls }) => {
         const known = urls.filter((u) => ctx.facts?.text().includes(u));
@@ -207,8 +205,7 @@ export function createConversationTools(ctx: ConversationToolContext) {
         if (!known.length) return { ok: false, error: "none of those links are on file, so they can't be sent" };
         state.pendingLinks.push(...known);
         for (const url of known) ctx.facts?.add("did_this_turn", `Sent the link ${url} as its own message.`);
-        // Already replied: send them now. Otherwise they go out right after.
-        if (state.replyCount > 0) await flushLinks();
+        await flushLinks();
         return unknown.length ? { ok: true, note: `These weren't on file and weren't sent: ${unknown.join(", ")}` } : { ok: true };
       },
     }),

@@ -1,8 +1,8 @@
 // How several real things arrive (Royce, 2026-09-16, choosing the layout:
-// "Paired: item then its link"). One thing is just its own message with the
-// link under it. Several get a one-line heads-up, then each one as its own
-// message with its own link right below it, so every preview sits under the
-// thing it belongs to instead of stacking at the end.
+// "Paired: item then its link", then "I want the link first then
+// description"). One thing is its link, then a message saying what it is.
+// Several get a one-line heads-up, then each link followed by its own
+// description, so every preview has its caption directly under it.
 const COUNT_WORDS = ["", "One", "Two", "Three", "Four", "Five"];
 
 export function renderMatchLead(count: number): string {

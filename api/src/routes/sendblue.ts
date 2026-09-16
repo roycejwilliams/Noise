@@ -1703,7 +1703,7 @@ Return ONLY valid JSON, no preamble: {"date": "YYYY-MM-DD or null", "time": "HH:
                   const { text: drafted } = await generateText({
                     model: anthropic(MODELS.sonnet),
                     experimental_telemetry: { isEnabled: true, functionId: "sendblue.recommendation.describe" },
-                    prompt: `${CO_VOICE}\n\n${CO_TEXT_CHANNEL} You're telling ${user.first_name ?? "them"} about "${m.name}"${"url" in m && m.url ? ". The link goes out right after this message, so don't paste it" : ""}${matchCount > 1 ? `. This is one of ${matchCount} you're sending together, so it reads as a bullet in a short list` : ""}.\n\nWhy it fits them: ${em.whyItFits ?? m.reason}\n${record ? `\nWhat's actually known about it:\n${record}\n` : ""}\nWrite ${matchCount > 1 ? "one sentence" : "1-3 sentences"} naming it, the one or two details that matter most to them (when, where, who), and why it fits, in your own words. Only use what's written above. No link. Return ONLY the message.`,
+                    prompt: `${CO_VOICE}\n\n${CO_TEXT_CHANNEL} You're telling ${user.first_name ?? "them"} about "${m.name}"${"url" in m && m.url ? ". Its link went out just before this message, so don't paste it again; this message says what it is" : ""}${matchCount > 1 ? `. This is one of ${matchCount} you're sending together, so it reads as a bullet in a short list` : ""}.\n\nWhy it fits them: ${em.whyItFits ?? m.reason}\n${record ? `\nWhat's actually known about it:\n${record}\n` : ""}\nWrite ${matchCount > 1 ? "one sentence" : "1-3 sentences"} naming it, the one or two details that matter most to them (when, where, who), and why it fits, in your own words. Only use what's written above. No link. Return ONLY the message.`,
                   });
                   if (drafted.trim()) description = cleanCoMessage(drafted.trim());
                 } catch (err: any) {
@@ -1738,14 +1738,17 @@ Return ONLY valid JSON, no preamble: {"date": "YYYY-MM-DD or null", "time": "HH:
                   await logTextExchange(user.id, `Co replied: ${lead}`);
                   await new Promise((resolve) => setTimeout(resolve, 1500));
                 }
+                // Link first, then what it is (Royce, 2026-09-16: "I want the
+                // link first then description"), so the preview lands and the
+                // description reads as the caption under it.
                 for (const { m, description } of prepared) {
-                  await sendCoReply({ phone: user.phone_number, message: description, asVoice: isVoice });
-                  await logTextExchange(user.id, `Co replied: ${description}`);
                   if ("url" in m && m.url) {
-                    await new Promise((resolve) => setTimeout(resolve, 1500));
                     await sendCoReply({ phone: user.phone_number, message: m.url, asVoice: false });
                     await logTextExchange(user.id, `Co replied: ${m.url}`);
+                    await new Promise((resolve) => setTimeout(resolve, 1500));
                   }
+                  await sendCoReply({ phone: user.phone_number, message: description, asVoice: isVoice });
+                  await logTextExchange(user.id, `Co replied: ${description}`);
                   await new Promise((resolve) => setTimeout(resolve, 1500));
                 }
                 for (const { m, description } of prepared) {
