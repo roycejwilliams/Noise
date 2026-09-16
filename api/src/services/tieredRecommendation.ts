@@ -276,7 +276,13 @@ async function tryTier2(ask: StatedIntent, userCity: string | null, filter?: (st
   if (!match) return null;
   const details = (await fetchLumaEventDetails(match.url)) ?? undefined;
   if (ask.text && !opts.browse) {
-    if (!(await isGenuinelyRelevant(ask.text, match.name, match.city, details?.description ?? null))) return null;
+    if (!(await isGenuinelyRelevant(ask.text, match.name, match.city, details?.description ?? null))) {
+      // The one place a real, nearby, in-window event still disappears, so
+      // it says so out loud (2026-09-16: "Humongous AI Meetup" ranked 0.579
+      // for an AI-meetups ask and vanished with no trace).
+      lastTierDrop = { tier: 2, name: match.name, reason: "the relevance check said it doesn't match what they asked" };
+      return null;
+    }
   }
   return {
     details,
@@ -472,8 +478,10 @@ async function paidSearchAllowed(userId: string | null, source: "sweep" | "reque
 // city Luma was asked about, the time frame from their own words, and
 // whether it was a "what's on?" browse. Without it a "nothing found" record
 // can't be told apart from "searched the wrong place".
-export type SearchScope = { city: string | null; window: string | null; browse: boolean; tiers: number[] };
+export type SearchScope = { city: string | null; window: string | null; browse: boolean; tiers: number[]; dropped?: TierDrop | null };
+export type TierDrop = { tier: number; name: string; reason: string };
 let lastSearchScope: SearchScope | null = null;
+let lastTierDrop: TierDrop | null = null;
 
 export function takeLastSearchScope(): SearchScope | null {
   const scope = lastSearchScope;
@@ -491,6 +499,7 @@ export async function getTieredRecommendation(
   const city = await resolveSearchCity(ask.text, profileCity);
   // A time frame they named ("this weekend", "next Tuesday") scopes the
   // search to those days, whatever the default lookahead is.
+  lastTierDrop = null;
   const asked = opts.rawMessage ?? ask.text ?? "";
   const window = asked ? parseAskWindow(asked, DateTime.now().setZone(opts.timezone ?? "local")) : null;
   const browse = !!asked && isBrowseAsk(asked);
@@ -526,7 +535,8 @@ export async function getTieredRecommendation(
     searchCache.set(cacheKey, { at: Date.now(), found });
   }
 
-  lastSearchScope = { city, window: window?.label ?? null, browse, tiers: found.map((m) => m.tier) };
+  lastSearchScope = { city, window: window?.label ?? null, browse, tiers: found.map((m) => m.tier), dropped: lastTierDrop };
+  lastTierDrop = null;
   return gateMatches(found, { userId: opts.userId ?? null, searchCity: city, checkRepeat: opts.checkRepeat });
 }
 

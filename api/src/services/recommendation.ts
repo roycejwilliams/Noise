@@ -22,8 +22,8 @@ const SUGGEST_MODEL = MODELS.sonnet;
 // stored for that specific person — not a hypothetical description. No
 // venue/moment/circle logic here by design; "match" names a type of
 // activity/community/next-step, never a real business or place, since we
-// have no real venue data to ground that (that's the separate venue-lookup
-// mechanism in venueLookup.ts).
+// have no real venue data to ground that (venue lookup was removed
+// 2026-09-16 — tiers 1-3 are the whole search).
 // matches is only present when this came from the tiered engine (real
 // events/opportunities, each with its own url) — the generic LLM-guessed
 // fallback below has no matches array since it never has a real link.
