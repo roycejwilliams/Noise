@@ -68,8 +68,22 @@ function explicitDates(t: string, now: DateTime): AskWindow | null {
   return null;
 }
 
+// How far ahead a named time frame can reach. The default search looks two
+// weeks out; asking for a later range extends it, up to this (Royce,
+// 2026-09-16: "Can it have a limit but still have a stated ask to look
+// ahead?").
+export const MAX_ASK_DAYS_AHEAD = 90;
+
 // Returns the window they named, or null when they didn't name one.
 export function parseAskWindow(text: string, now: DateTime): AskWindow | null {
+  const w = parseAskWindowUncapped(text, now);
+  if (!w) return null;
+  const ceiling = now.plus({ days: MAX_ASK_DAYS_AHEAD }).endOf("day");
+  if (w.start > ceiling) return null; // too far to search; treat as no window
+  return w.end > ceiling ? { ...w, end: ceiling } : w;
+}
+
+function parseAskWindowUncapped(text: string, now: DateTime): AskWindow | null {
   const t = text.toLowerCase();
   const mk = (start: DateTime, end: DateTime, label: string): AskWindow => ({ start, end, label });
 

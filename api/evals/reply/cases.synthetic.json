@@ -324,5 +324,24 @@
     ],
     "groundedDraft": true,
     "style": "capitalized"
+  },
+  {
+    "id": "t0916_send_the_near_miss",
+    "message": "Hey actually can you send me that WorkOS demo night? I'm staying in town a bit longer",
+    "recentConversation": "User said: Any founder events Oct 5 - Oct 10th?\nCo replied: One real one turned up, Demo Night @ WorkOS on Oct 12, just past your dates. Nothing else in that range yet.\nUser said: Hey actually can you send me that WorkOS demo night? I'm staying in town a bit longer",
+    "facts": [
+      {
+        "kind": "did_before",
+        "text": "Co searched for \"Any founder events Oct 5 - Oct 10th?\" and found nothing real (found real ones but couldn't offer them: \"Demo Night @ WorkOS\" on 2026-10-12, link https://lu.ma/tbj6dk8b (event on 2026-10-12 is after the time frame they asked about))."
+      }
+    ],
+    "draft": "Here it is, Demo Night @ WorkOS on Oct 12: https://lu.ma/tbj6dk8b",
+    "forbidden": [
+      "don'?t have (that|the) link",
+      "can'?t send",
+      "no link"
+    ],
+    "groundedDraft": true,
+    "style": "capitalized"
   }
 ]

@@ -180,7 +180,7 @@ export async function generateRecommendation(userId: string, currentMessage?: st
       // Real events were found and the gate turned every one away (sold out,
       // already sent, too far): that's the answer, not a generic idea.
       if (!tierMatches.length && scope?.gatedOut?.length) {
-        const why = scope.gatedOut.map((g) => `"${g.name}" (${g.reasons.join(", ")})`).join("; ");
+        const why = scope.gatedOut.map((g) => `"${g.name}"${g.date ? ` on ${g.date}` : ""}${g.url ? `, link ${g.url}` : ""} (${g.reasons.join(", ")})`).join("; ");
         return { available: false, reason: `found real ones but couldn't offer them: ${why}`, scope };
       }
       if (!tierMatches.length && currentMessage && isBrowseAsk(currentMessage)) {

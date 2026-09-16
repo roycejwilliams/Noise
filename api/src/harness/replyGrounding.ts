@@ -162,7 +162,7 @@ export async function recordSearchNote(userId: string, note: string): Promise<vo
 async function recentSearchNotes(userId: string): Promise<string[]> {
   const { rows } = await pool
     .query(
-      `SELECT content FROM co_memories WHERE user_id = $1 AND memory_type = 'system' AND content LIKE '[search]%' AND created_at > NOW() - INTERVAL '2 hours' ORDER BY created_at DESC LIMIT 3`,
+      `SELECT content FROM co_memories WHERE user_id = $1 AND memory_type = 'system' AND content LIKE '[search]%' AND created_at > NOW() - INTERVAL '7 days' ORDER BY created_at DESC LIMIT 5`,
       [userId],
     )
     .catch(() => ({ rows: [] as any[] }));

@@ -202,7 +202,7 @@ export async function wasAlreadyOffered(userId: string, match: TierMatch): Promi
 // Real matches the gate turned away, and the plain reason, so the reply can
 // say "the ones I found are sold out" instead of inventing a generic idea
 // (2026-09-16).
-export type GatedOut = { name: string; tier: number; reasons: string[] };
+export type GatedOut = { name: string; tier: number; reasons: string[]; url: string | null; date: string | null };
 
 export async function gateMatches(
   matches: TierMatch[],
@@ -223,7 +223,14 @@ export async function gateMatches(
     };
     const { ok, checks } = evaluateMatch(match, facts);
     if (ok) kept.push(match);
-    else ctx.gatedOut?.push({ name: match.name, tier: match.tier, reasons: checks.filter((c) => !c.pass).map((c) => c.reason ?? c.name) });
+    else
+      ctx.gatedOut?.push({
+        name: match.name,
+        tier: match.tier,
+        reasons: checks.filter((c) => !c.pass).map((c) => c.reason ?? c.name),
+        url: match.url ?? null,
+        date: match.tier === 3 ? (match.deadline ?? null) : (match.event_date ?? null),
+      });
     if (ctx.userId) {
       await recordDecision({
         layer: 5,

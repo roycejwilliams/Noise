@@ -1749,7 +1749,7 @@ Return ONLY valid JSON, no preamble: {"date": "YYYY-MM-DD or null", "time": "HH:
                 addInstruction(replyFacts, "You searched and nothing that came up fits what they asked. Say that plainly and briefly. Don't send or describe the misfits unless they ask.");
                 await recordSearchNote(
                   user.id,
-                  `Co searched for "${resolvedContent.slice(0, 120)}" and what came up didn't fit: ${preparedAll.map((p) => `"${p.m.name}" from ${sourceOf(p.m)} (${p.why ?? "not a fit"})`).join("; ")}.`,
+                  `Co searched for "${resolvedContent.slice(0, 120)}" and what came up didn't fit: ${preparedAll.map((p) => `"${p.m.name}" from ${sourceOf(p.m)}${"url" in p.m && p.m.url ? `, link ${p.m.url}` : ""} (${p.why ?? "not a fit"})`).join("; ")}.`,
                 );
               }
               // What they are always comes before its link (Royce,
@@ -1849,9 +1849,12 @@ Return ONLY valid JSON, no preamble: {"date": "YYYY-MM-DD or null", "time": "HH:
                 addFact(
                   replyFacts,
                   "did_this_turn",
-                  `Found real ones but couldn't offer them: ${gatedOut.map((g) => `"${g.name}" (${g.reasons.join(", ")})`).join("; ")}.`,
+                  `Found real ones but couldn't offer them: ${gatedOut.map((g) => `"${g.name}"${g.date ? ` on ${g.date}` : ""}${g.url ? `, link ${g.url}` : ""} (${g.reasons.join(", ")})`).join("; ")}.`,
                 );
-                addInstruction(replyFacts, "You did find real things, but none you can offer (for example they're sold out). Say that plainly, name what you found and why in a short sentence, and don't suggest a generic type of thing instead.");
+                addInstruction(
+                  replyFacts,
+                  "You did find real things, but none you can offer as asked (for example sold out, or just outside the dates they gave). Say that plainly in a short sentence: name what you found, when it is, and why it didn't make the cut, and don't suggest a generic type of thing instead. If one is close, like just past their dates, say so briefly so they can ask for it if their plans change. Don't send its link unless they ask.",
+                );
               } else {
                 addInstruction(replyFacts, "You searched and found nothing real yet. Say that plainly. Don't make up a suggestion.");
               }
