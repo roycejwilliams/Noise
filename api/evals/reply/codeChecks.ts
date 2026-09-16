@@ -4,7 +4,7 @@ import { nearestPlace, parseDiscoverPlaces } from "../../src/services/lumaDiscov
 import { DateTime } from "luxon";
 import { isBrowseAsk, parseAskWindow, withinWindow } from "../../src/services/askWindow.js";
 import { asksForContactCard } from "../../src/services/conversationClose.js";
-import { renderMatchList } from "../../src/services/messageFormat.js";
+import { renderMatchLead } from "../../src/services/messageFormat.js";
 import { closingReaction } from "../../src/services/conversationClose.js";
 import "dotenv/config";
 import { addFact, baseReplyFacts, codeChecks } from "../../src/harness/replyGrounding.js";
@@ -78,18 +78,13 @@ const closingCases: [string, string | null][] = [
   ["no", null],
 ];
 
-// How several real things read in one message (services/messageFormat.ts).
-const oneItem = renderMatchList(["ERA Winter 2027 is NYC, $150K on a SAFE, applications open now."]);
-const twoItems = renderMatchList(["ERA Winter 2027, NYC, $150K SAFE, open now.", "16vc, 20-25 companies, $200K, pre-seed/seed."]);
-const threeItems = renderMatchList(["a", "b", "c"]);
+// How several real things arrive (services/messageFormat.ts): a one-line
+// heads-up, then each item followed by its own link.
 const formatCases: [boolean, string][] = [
-  [oneItem === "ERA Winter 2027 is NYC, $150K on a SAFE, applications open now.", "one item is the sentence itself, no bullet"],
-  [!oneItem.includes("\u2022"), "one item has no bullet"],
-  [twoItems.startsWith("Two that fit:\n\n"), "two items get the lead-in"],
-  [twoItems.split("\u2022").length === 3, "two items get two bullets"],
-  [twoItems.includes("open now.\n\n\u2022"), "bullets are separated by a blank line"],
-  [threeItems.startsWith("3 that fit:"), "three items count in the lead-in"],
-  [!twoItems.includes("http"), "links are never in the list message"],
+  [renderMatchLead(2) === "Two that fit, sending both now.", "two reads naturally"],
+  [renderMatchLead(3) === "Three that fit, sending them now.", "three reads naturally"],
+  [!renderMatchLead(2).includes("http"), "the lead-in never carries a link"],
+  [!renderMatchLead(2).includes("\u2022"), "the lead-in is not a bulleted list"],
 ];
 
 // Time frames someone names in an ask (services/askWindow.ts). Reference

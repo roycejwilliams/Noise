@@ -1,13 +1,13 @@
-// How several real things read in one text (Royce, 2026-09-16: "if there's
-// more than 1 present them correctly like how we do for the updates push").
-//
-// One thing: the sentence as drafted, and its link follows as its own
-// message. Several: a short lead-in and one bullet each, the same shape the
-// product update texts use, then every link on its own so each one previews.
-export function renderMatchList(descriptions: string[]): string {
-  if (descriptions.length === 1) return descriptions[0];
-  const lead = descriptions.length === 2 ? "Two that fit:" : `${descriptions.length} that fit:`;
-  return `${lead}\n\n${descriptions.map((d) => `• ${d}`).join("\n\n")}`;
+// How several real things arrive (Royce, 2026-09-16, choosing the layout:
+// "Paired: item then its link"). One thing is just its own message with the
+// link under it. Several get a one-line heads-up, then each one as its own
+// message with its own link right below it, so every preview sits under the
+// thing it belongs to instead of stacking at the end.
+const COUNT_WORDS = ["", "One", "Two", "Three", "Four", "Five"];
+
+export function renderMatchLead(count: number): string {
+  const word = COUNT_WORDS[count] ?? String(count);
+  return `${word} that fit, sending ${count === 2 ? "both" : "them"} now.`;
 }
 
 // Where a result actually came from, in plain words (Royce, 2026-09-16:

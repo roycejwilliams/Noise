@@ -51,7 +51,7 @@ import { runConversationReplyAgent, filterRelevantMemories, CALL_OFFER_EXPIRY_DA
 import { triggerCallForUser } from "../services/callTrigger.js";
 import sendblue, { cleanCoMessage, markRead, sendReaction } from "../services/sendblue.js";
 import { closingReaction, emojiFor } from "../services/conversationClose.js";
-import { renderMatchList, sourceOf } from "../services/messageFormat.js";
+import { renderMatchLead, sourceOf } from "../services/messageFormat.js";
 import { CO_VOICE, CO_TEXT_CHANNEL } from "../services/coVoice.js";
 import { generateVoiceNote } from "../services/voiceNote.js";
 import { MODELS } from "../models.js";
@@ -1732,16 +1732,22 @@ Return ONLY valid JSON, no preamble: {"date": "YYYY-MM-DD or null", "time": "HH:
               // bulleted message the way the product updates read, then each
               // link on its own so every one of them previews.
               if (prepared.length) {
-                const intro = renderMatchList(prepared.map((p) => p.description));
-                await sendCoReply({ phone: user.phone_number, message: intro, asVoice: isVoice });
-                await logTextExchange(user.id, `Co replied: ${intro}`);
-                for (const { m } of prepared) {
-                  if (!("url" in m) || !m.url) continue;
+                if (prepared.length > 1) {
+                  const lead = renderMatchLead(prepared.length);
+                  await sendCoReply({ phone: user.phone_number, message: lead, asVoice: isVoice });
+                  await logTextExchange(user.id, `Co replied: ${lead}`);
                   await new Promise((resolve) => setTimeout(resolve, 1500));
-                  await sendCoReply({ phone: user.phone_number, message: m.url, asVoice: false });
-                  await logTextExchange(user.id, `Co replied: ${m.url}`);
                 }
-                await new Promise((resolve) => setTimeout(resolve, 1500));
+                for (const { m, description } of prepared) {
+                  await sendCoReply({ phone: user.phone_number, message: description, asVoice: isVoice });
+                  await logTextExchange(user.id, `Co replied: ${description}`);
+                  if ("url" in m && m.url) {
+                    await new Promise((resolve) => setTimeout(resolve, 1500));
+                    await sendCoReply({ phone: user.phone_number, message: m.url, asVoice: false });
+                    await logTextExchange(user.id, `Co replied: ${m.url}`);
+                  }
+                  await new Promise((resolve) => setTimeout(resolve, 1500));
+                }
                 for (const { m, description } of prepared) {
                   addFact(
                     replyFacts,
