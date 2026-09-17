@@ -110,3 +110,79 @@ await runEval<Kind, any>({
     return { hard, soft: [] };
   },
 });
+
+// ---------------------------------------------------------------------------
+// Profile alignment (Royce, 2026-09-16: "we align users with the intent we
+// gather. We actually give them things that match their profile").
+// Two different people send the same message and must get different events,
+// each better suited to them; and the ask still wins over the profile.
+const FOUNDER = "Works on: technical co-founder of a Series A AI infrastructure company, team of 8\nWants right now: meet AI engineers and investors; find a designer for branding\nCares about in people and plans: builders who ship, calm and direct";
+const ARTIST = "Works on: painter and ceramics artist, part-time barista\nWants right now: an art community to belong to; creative workshops; low-key social things on weekends\nCares about in people and plans: warmth, making things by hand, nothing corporate";
+
+type Align = EvalCase & { kind: "pair" | "askWins" | "tier3"; message: string; profiles: string[] };
+const aligns: Align[] = [
+  { id: "p01_same_ask_different_people", kind: "pair", message: "Anything happening in SF next week?", profiles: [FOUNDER, ARTIST] },
+  { id: "p02_ask_beats_profile", kind: "askWins", message: "Any pottery or ceramics classes in SF next week?", profiles: [FOUNDER] },
+  { id: "p03_tier3_query_follows_profile", kind: "tier3", message: "Any accelerators or programs I should look at?", profiles: [FOUNDER, ARTIST] },
+];
+
+async function judge(prompt: string): Promise<string> {
+  const { anthropic } = await import("@ai-sdk/anthropic");
+  const { generateText } = await import("ai");
+  const { text } = await generateText({ model: anthropic(MODELS.sonnet), prompt });
+  return text.trim();
+}
+
+await runEval<Align, any>({
+  name: "profile alignment (live feed)",
+  dir: here,
+  cases: aligns,
+  concurrency: 1,
+  run: async (a) => {
+    const results = [];
+    for (const profile of a.profiles) {
+      const found = await getTieredRecommendation({ text: a.message }, "San Francisco", { rawMessage: a.message, timezone: "America/Los_Angeles", checkRepeat: false, profile });
+      const scope = takeLastSearchScope();
+      results.push({ offered: found.filter((m) => m.tier !== 3).map((m) => m.name), tier3: found.filter((m) => m.tier === 3).map((m) => m.name), scope });
+    }
+    if (a.kind === "pair") {
+      const [f, r] = results.map((x) => x.offered[0] ?? null);
+      const verdicts = [];
+      for (const [pick, owner] of [[f, "A"], [r, "B"]] as [string | null, string][]) {
+        if (!pick) { verdicts.push({ pick, owner, answer: "none" }); continue; }
+        const answer = await judge(`Person A: ${FOUNDER}\n\nPerson B: ${ARTIST}\n\nEvent: "${pick}"\n\nWhich person is this event better suited to? Answer only A or B.`);
+        verdicts.push({ pick, owner, answer: answer.slice(0, 1).toUpperCase() });
+      }
+      return { results, verdicts };
+    }
+    if (a.kind === "askWins") {
+      const picks = results[0].offered;
+      const checks = [];
+      for (const pick of picks) checks.push({ pick, answer: (await judge(`Someone asked for pottery or ceramics classes. Is the event "${pick}" a pottery, ceramics, or hands-on art-making class or workshop? Answer only yes or no.`)).toLowerCase().startsWith("yes") });
+      return { results, checks };
+    }
+    return { results };
+  },
+  score: (a, r) => {
+    const hard: string[] = [];
+    const soft: { name: string; ok: boolean }[] = [];
+    if (a.kind === "pair") {
+      const [f, b] = r.verdicts;
+      console.log(`  [${a.id}] founder got ${JSON.stringify(f.pick)} (judged ${f.answer}); artist got ${JSON.stringify(b.pick)} (judged ${b.answer})`);
+      if (f.pick && b.pick && f.pick === b.pick) hard.push(`both people got the same event: "${f.pick}"`);
+      for (const v of r.verdicts) if (v.pick && v.answer !== v.owner) hard.push(`"${v.pick}" went to person ${v.owner} but suits person ${v.answer} better`);
+      soft.push({ name: "both got something", ok: !!f.pick && !!b.pick });
+    }
+    if (a.kind === "askWins") {
+      console.log(`  [${a.id}] founder asking for pottery got ${JSON.stringify(r.checks)}`);
+      for (const c of r.checks) if (!c.answer) hard.push(`asked for pottery, got "${c.pick}" (the profile overrode the ask)`);
+      soft.push({ name: "found a pottery class", ok: r.checks.some((c: any) => c.answer) });
+    }
+    if (a.kind === "tier3") {
+      const queries = r.results.map((x: any) => x.scope?.xQuery ?? null);
+      console.log(`  [${a.id}] X queries: founder ${JSON.stringify(queries[0])}, artist ${JSON.stringify(queries[1])} | picks ${JSON.stringify(r.results.map((x: any) => x.tier3))}`);
+      soft.push({ name: "X query differs by profile", ok: !!queries[0] && !!queries[1] && queries[0] !== queries[1] });
+    }
+    return { hard, soft };
+  },
+});

@@ -182,12 +182,14 @@ What's actually known about "${match.name}":
 ${detailLines.join("\n") || "(only the name)"}
 
 Rules:
-- Judge fit against what they're asking for right now. The background is context, not the test.
+- Two tests, both must pass (Royce, 2026-09-16: "give them things that match their profile"):
+  1. It's the kind of thing they're asking for right now. Their ask decides: if they asked for a pottery class, a founder event doesn't fit however good it is for them.
+  2. It's worth their time given who they are right now: their work and stage, what they want, what matters to them in people, and what has or hasn't worked before. Something clearly aimed at a different audience or stage (a beginner coding workshop for an experienced technical founder, a job fair for someone not looking) doesn't fit. When the background says nothing either way, this test passes.
 - Judge the event by its own main activity. Who attends, hosts, or sponsors never changes what kind of event it is: a chess night full of AI researchers is a chess night, not an AI meetup.
 - If they're asking about a new or possible direction ("if I start something new", "if I decide to build something else"), judge it for that new thing. A new company starts from zero, so pre-seed and seed programs fit it. Their current company's stage, funding, or other asks never make it a misfit.
-- Only say it doesn't fit when it doesn't match what they're asking for right now (wrong kind of thing, wrong place, wrong stage for the thing they're asking about).
+- Say it doesn't fit when it fails either test: the wrong kind of thing, the wrong place or time, or clearly not worth their time for who they are now.
 - ${person.timeFrame ? `They asked about ${person.timeFrame}. Something clearly happening outside that time frame doesn't fit, however good it is otherwise.` : "They didn't name a time frame."}
-- Connect a specific thing they said to a specific real detail above. Use only what's written here.
+- Connect a specific thing about them (their ask, or who they are right now) to a specific real detail above. Use only what's written here.
 
 Return ONLY JSON: {"fits": true or false, "why": "the explanation"}`;
 }

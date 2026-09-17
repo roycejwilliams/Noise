@@ -1,7 +1,7 @@
 // Model-free checks for the Layer 3 gate's deterministic rules. Runs in a
 // second, no API calls: npx tsx evals/reply/codeChecks.ts
 import { canSkipReplyAfterResults, messageIsOnlyTheAsk, rewriteKeepsAsk, shouldCacheSearch, xPostFitsWindow } from "../../src/services/searchRules.js";
-import { localDate, orderForOffering } from "../../src/services/eventOrder.js";
+import { localDate, offerScore, orderForOffering } from "../../src/services/eventOrder.js";
 import { capitalizeSentences, looksLikeMetaReply } from "../../src/services/textStyle.js";
 import { nearestPlace, parseDiscoverPlaces } from "../../src/services/lumaDiscovery.js";
 import { DateTime } from "luxon";
@@ -224,6 +224,11 @@ onboardingCaseCases.push(
     [!canSkipReplyAfterResults({ sentResults: 0, original: "Any design events in SF next week?", rewritten: "Find design events in SF next week", ruledOut: 0, firstRealMessage: false }), "nothing sent means a reply"],
     [!messageIsOnlyTheAsk("anything this weekend 🙏🏾", "Find events this weekend"), "any emoji counts as more than the ask"],
     [messageIsOnlyTheAsk("Any AI/ML talks in SF next week?", "Find AI/ML talks in SF next week"), "ordinary punctuation like a slash is still just the ask"],
+    [offerScore(0.5, null, false) === 0.5, "no profile: order by the ask alone"],
+    [offerScore(0.4, 0.6, false) > offerScore(0.45, 0.2, false), "with a profile, a slightly weaker ask match that suits them better comes first"],
+    [offerScore(0.6, 0.1, false) > offerScore(0.35, 0.3, false), "a much stronger ask match still beats a small profile edge"],
+    [offerScore(0.1, 0.7, true) === 0.7, "a what's-on ask is ordered by the profile"],
+    [(() => { const o = orderForOffering([{ name: "a", similarity: 0.5, offerScore: 0.3 }, { name: "b", similarity: 0.4, offerScore: 0.5 }]); return o[0].name === "b"; })(), "ordering uses the offer score when there is one"],
     [localDate("2026-09-18T02:00:00.000Z", "America/Los_Angeles") === "2026-09-17", "a 7pm Thursday SF event is Thursday, not Friday"],
     [localDate("2026-09-18T02:00:00.000Z", null) === "2026-09-18", "without a zone, the UTC date is kept"],
   );

@@ -266,7 +266,7 @@ async function cachedPublicEvents(city?: string | null, until?: Date | null) {
   return events;
 }
 
-async function tryTier1(ask: StatedIntent, userCity: string | null, filter?: (startAt: string) => boolean, opts: { browse?: boolean; maxDays?: number; zone?: string | null } = {}): Promise<TierMatch | null> {
+async function tryTier1(ask: StatedIntent, userCity: string | null, filter?: (startAt: string) => boolean, opts: { browse?: boolean; maxDays?: number; zone?: string | null; profileText?: string | null } = {}): Promise<TierMatch | null> {
   const events = await cachedCalendarEvents().catch((err: any) => {
     console.error("tieredRecommendation: tryTier1 listCalendarEvents failed (non-fatal):", err?.message ?? err);
     return [];
@@ -275,7 +275,10 @@ async function tryTier1(ask: StatedIntent, userCity: string | null, filter?: (st
   const nearby = await filterByRadius(inWindow, userCity);
   // They asked what's on in a window, not for a topic: the soonest one in
   // that window is the answer, so relevance ranking would only reject it.
-  const match = opts.browse ? soonest(nearby) : (await rankEventsByDescription(nearby, ask.text ?? "", { limit: 1 })).ranked[0] ?? null;
+  const match =
+    opts.browse && !opts.profileText
+      ? soonest(nearby)
+      : (await rankEventsByDescription(nearby, opts.browse ? "" : ask.text ?? "", { limit: 1, profileText: opts.profileText, browse: opts.browse })).ranked[0] ?? null;
   if (!match) return null;
   const details = ("details" in match ? (match.details as EventDetails | undefined) : undefined) ?? (match.url ? ((await fetchLumaEventDetails(match.url)) ?? undefined) : undefined);
   return {
@@ -314,7 +317,7 @@ function soonest<T extends { start_at: string }>(events: T[]): T | null {
 // (harness/matchGate.ts) makes the final call, and it needs more than one to
 // choose from (2026-09-16: the single candidate it got was sold out, so the
 // search ended with nothing while other real events were available).
-async function tryTier2(ask: StatedIntent, userCity: string | null, filter?: (startAt: string) => boolean, opts: { browse?: boolean; maxDays?: number; until?: Date | null; zone?: string | null } = {}): Promise<TierMatch[]> {
+async function tryTier2(ask: StatedIntent, userCity: string | null, filter?: (startAt: string) => boolean, opts: { browse?: boolean; maxDays?: number; until?: Date | null; zone?: string | null; profileText?: string | null } = {}): Promise<TierMatch[]> {
   // Only page deep when the window reaches past what a normal fetch covers.
   const farUntil = opts.until && opts.until.getTime() - Date.now() > 8 * 24 * 60 * 60 * 1000 ? opts.until : null;
   const events = await cachedPublicEvents(userCity, farUntil).catch((err: any) => {
@@ -334,9 +337,13 @@ async function tryTier2(ask: StatedIntent, userCity: string | null, filter?: (st
   lastNearbyCount = nearby.length;
   // Ranked on each event's description, open events first
   // (services/eventRanking.ts); the closest one is kept for a near miss.
-  const ranking = opts.browse
-    ? { ranked: [soonest(nearby)].filter((m): m is (typeof nearby)[number] => !!m).map((m) => ({ ...m, similarity: 1, details: undefined as EventDetails | undefined })), closest: null }
-    : await rankEventsByDescription(nearby, ask.text ?? "", { limit: 6, topScores: lastTopScores, zone: opts.zone });
+  // With a profile, even a "what's on?" ask is ordered by what fits them,
+  // not by what's soonest (Royce, 2026-09-16: "give them things that match
+  // their profile").
+  const ranking =
+    opts.browse && !opts.profileText
+      ? { ranked: [soonest(nearby)].filter((m): m is (typeof nearby)[number] => !!m).map((m) => ({ ...m, similarity: 1, details: undefined as EventDetails | undefined })), closest: null }
+      : await rankEventsByDescription(nearby, opts.browse ? "" : ask.text ?? "", { limit: 6, topScores: lastTopScores, zone: opts.zone, profileText: opts.profileText, browse: opts.browse });
   // The near miss comes only from events the relevance check actually read
   // and judged related; an unread best score is never named on its own.
   const candidates = ranking.ranked;
@@ -433,7 +440,7 @@ async function tryTier2(ask: StatedIntent, userCity: string | null, filter?: (st
 // never invent one" discipline as before — the difference from the old
 // venue version is the grounding element is a real post URL, not a
 // place_id.
-async function proposeOpportunityQuery(ask: StatedIntent, city: string | null): Promise<string | null> {
+async function proposeOpportunityQuery(ask: StatedIntent, city: string | null, profile?: string | null): Promise<string | null> {
   if (!ask.text) return null;
   try {
     // Today's date, explicit (Royce, 2026-09-02) — confirmed live: without
@@ -449,7 +456,7 @@ async function proposeOpportunityQuery(ask: StatedIntent, city: string | null): 
       model: anthropic(EXTRACT_MODEL),
       experimental_telemetry: { isEnabled: true, functionId: "tieredRecommendation.proposeOpportunityQuery" },
       prompt: `Someone wants: "${ask.text}"${city ? ` (based in ${city})` : ""}
-
+${profile ? `\nWho they are right now (use it to aim the query at opportunities suited to their stage and situation, e.g. Series A programs rather than beginner ones; their ask still decides the topic):\n${profile}\n` : ""}
 Today's date: ${todayStr}
 
 Propose a short X search query (2-4 broad, distinctive keywords, not a question) likely to surface real, recent posts about a concrete opportunity that fits what they want: an accelerator, fellowship, cohort-based program, residency, grant, or a named community, club, or recurring group they could join. Always propose one when there's any topic to search on; social or hobby asks map to communities and groups. Never include a specific year in the query unless the person's own ask text stated one — a wrong or stale year keyword will filter out real current posts that don't happen to mention that exact year. Never include the person's own city/region as a keyword either (confirmed live: adding "SF Bay Area" to an otherwise-good query dropped real matching posts to zero) — a real opportunity post almost never mentions the seeker's own location, only the program's own name and field. Return null only when there's no topic at all to search on.
@@ -485,6 +492,7 @@ Return ONLY valid JSON: {"query": "..." or null}`,
 async function extractRealOpportunity(
   ask: StatedIntent,
   posts: { id: string; text: string; url: string }[],
+  profile?: string | null,
 ): Promise<TierMatch | null> {
   if (!posts.length) return null;
   try {
@@ -494,7 +502,7 @@ async function extractRealOpportunity(
       model: anthropic(EXTRACT_MODEL),
       experimental_telemetry: { isEnabled: true, functionId: "tieredRecommendation.extractRealOpportunity" },
       prompt: `Someone wants: "${ask.text}"
-
+${profile ? `\nWho they are right now:\n${profile}\n\nAmong posts that fit what they want, pick the one best suited to who they are (their stage, what they're working on, what they want now). Skip an opportunity clearly aimed at a different stage or audience than theirs.\n` : ""}
 Today's date: ${todayStr}
 
 Here are real recent posts from X, one per line:
@@ -542,12 +550,12 @@ Return ONLY valid JSON: {"index": 0, "name": "the specific opportunity name", "r
 // query is pre-computed by the caller (proposeOpportunityQuery) so that
 // classification — cheap, LLM-only — and the actual paid X search stay two
 // separately-gateable steps, not one bundled call.
-async function tryTier3(ask: StatedIntent, query: string): Promise<TierMatch | null> {
+async function tryTier3(ask: StatedIntent, query: string, profile?: string | null): Promise<TierMatch | null> {
   const posts = await searchRecentPosts(query).catch((err: any) => {
     console.error("tieredRecommendation: tryTier3 searchRecentPosts failed (non-fatal):", err?.message ?? err);
     return [];
   });
-  return extractRealOpportunity(ask, posts);
+  return extractRealOpportunity(ask, posts, profile);
 }
 
 // No winner-picking (Royce, 2026-08-30): "I don't think there should be a
@@ -624,7 +632,9 @@ export type SearchScope = {
   // relevance scores against the 0.35 bar, so an empty search shows why.
   searchText?: string | null;
   tier2Nearby?: number | null;
-  tier2TopScores?: { name: string; similarity: number }[];
+  tier2TopScores?: { name: string; similarity: number; profile?: number | null }[];
+  // Whether their profile ordered the results.
+  profileUsed?: boolean;
   // The best real event that didn't make it, with why, for a near miss.
   closest?: (Closest & { why: string }) | null;
   // Their own message, the rewrite into a search, which one was searched, and
@@ -634,16 +644,19 @@ export type SearchScope = {
   relevanceRejected?: { name: string; why: string; related?: boolean }[];
   // An X post that was found but kept out, and why.
   xDropped?: { name: string; reason: string } | null;
+  // The X search query actually used (shaped by the ask and their profile).
+  xQuery?: string | null;
   // Milliseconds: all tiers together, Tier 3 on its own, Tier 2's relevance reads.
   timings?: { tiersMs?: number; tier3Ms?: number; relevanceMs?: number }; browse: boolean; tiers: number[]; dropped?: TierDrop | null; gatedOut?: GatedOut[] };
 export type TierDrop = { tier: number; name: string; reason: string };
 let lastSearchScope: SearchScope | null = null;
 let lastTierDrop: TierDrop | null = null;
 let lastFetchedThrough: string | null = null;
-let lastTopScores: { name: string; similarity: number }[] = [];
+let lastTopScores: { name: string; similarity: number; profile?: number | null }[] = [];
 let lastClosest: (Closest & { why: string }) | null = null;
 let lastRelevanceRejected: { name: string; why: string; related?: boolean }[] = [];
 let lastXDropped: { name: string; reason: string } | null = null;
+let lastXQuery: string | null = null;
 // Where the search time goes, for turn.latency-style reading of one search.
 let lastTimings: { tiersMs?: number; tier3Ms?: number; relevanceMs?: number } = {};
 let lastNearbyCount: number | null = null;
@@ -659,7 +672,9 @@ export async function getTieredRecommendation(
   profileCity: string | null,
   // rawMessage: their own words, used for the time frame and for spotting a
   // "what's on?" ask, since the search text is a rewrite that can drop both.
-  opts: { userId?: string; checkRepeat?: boolean; source?: "sweep" | "request"; timezone?: string | null; rawMessage?: string } = {},
+  // profile: what Co knows they want right now (personSnapshot.ts
+  // profileFocusText); orders what matches the ask.
+  opts: { userId?: string; checkRepeat?: boolean; source?: "sweep" | "request"; timezone?: string | null; rawMessage?: string; profile?: string | null } = {},
 ): Promise<TierMatch[]> {
   const city = await resolveSearchCity(ask.text, profileCity);
   // A time frame they named ("this weekend", "next Tuesday") scopes the
@@ -671,13 +686,14 @@ export async function getTieredRecommendation(
   lastClosest = null;
   lastRelevanceRejected = [];
   lastXDropped = null;
+  lastXQuery = null;
   lastTimings = {};
   const asked = opts.rawMessage ?? ask.text ?? "";
   const window = asked ? parseAskWindow(asked, DateTime.now().setZone(opts.timezone ?? "local")) : null;
   const browse = !!asked && isBrowseAsk(asked);
   const windowFilter = window ? (startAt: string) => withinWindow(startAt, window) : undefined;
   const maxDays = window ? Math.max(1, Math.ceil(window.end.diffNow("days").days) + 1) : undefined;
-  const cacheKey = `${(city ?? "").toLowerCase()}|${(ask.text ?? "").trim().toLowerCase()}|${window?.label ?? ""}`;
+  const cacheKey = `${(city ?? "").toLowerCase()}|${(ask.text ?? "").trim().toLowerCase()}|${window?.label ?? ""}|${opts.profile ? opts.profile.length + ":" + opts.profile.slice(0, 40) : ""}`;
   const cached = searchCache.get(cacheKey);
   let found: TierMatch[];
   if (cached && Date.now() - cached.at < SEARCH_CACHE_TTL_MS) {
@@ -696,12 +712,13 @@ export async function getTieredRecommendation(
         if (browse) return null;
         const budget = await paidSearchAllowed(opts.userId ?? null, source);
         if (!budget.ok) return null;
-        const opportunityQuery = await proposeOpportunityQuery(ask, city);
+        const opportunityQuery = await proposeOpportunityQuery(ask, city, opts.profile);
         if (!opportunityQuery) return null;
         await pool
           .query(`INSERT INTO x_search_log (user_id, source, query) VALUES ($1, $2, $3)`, [opts.userId ?? null, source, opportunityQuery])
           .catch(() => {});
-        let found = await tryTier3(ask, opportunityQuery);
+        lastXQuery = opportunityQuery;
+        let found = await tryTier3(ask, opportunityQuery, opts.profile);
         // A named time frame: an X post only counts when the post itself
         // states a date inside it (the thing's own dates, or its deadline).
         // Posts with no date are kept out, with the reason recorded.
@@ -719,8 +736,8 @@ export async function getTieredRecommendation(
       }
     };
     const [tier1, tier2, tier3] = await Promise.all([
-      tryTier1(ask, city, windowFilter, { browse, maxDays, zone: opts.timezone }),
-      tryTier2(ask, city, windowFilter, { browse, maxDays, until: window ? window.end.toJSDate() : null, zone: opts.timezone }),
+      tryTier1(ask, city, windowFilter, { browse, maxDays, zone: opts.timezone, profileText: opts.profile }),
+      tryTier2(ask, city, windowFilter, { browse, maxDays, until: window ? window.end.toJSDate() : null, zone: opts.timezone, profileText: opts.profile }),
       runTier3(),
     ]);
     lastTimings.tiersMs = Date.now() - tierStarted;
@@ -740,8 +757,10 @@ export async function getTieredRecommendation(
     tier2Nearby: lastNearbyCount,
     tier2TopScores: lastTopScores,
     closest: lastClosest,
+    profileUsed: !!opts.profile,
     relevanceRejected: lastRelevanceRejected,
     xDropped: lastXDropped,
+    xQuery: lastXQuery,
     timings: lastTimings,
     windowCovered: window && lastFetchedThrough ? new Date(lastFetchedThrough) >= window.end.toJSDate() : null, browse, tiers: found.map((m) => m.tier), dropped: lastTierDrop };
   lastTierDrop = null;

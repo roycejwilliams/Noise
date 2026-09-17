@@ -18,7 +18,7 @@
 import { generateEmbeddings } from "./embeddings.js";
 import { cosineSimilarity } from "./lumaDiscovery.js";
 import { fetchLumaEventDetails, type EventDetails } from "./eventDetails.js";
-import { localDate, orderForOffering } from "./eventOrder.js";
+import { localDate, offerScore, orderForOffering } from "./eventOrder.js";
 
 export const RELEVANCE_BAR_WITH_DESCRIPTION = 0.3;
 const DESCRIPTION_CHARS = 500;
@@ -26,7 +26,7 @@ const DESCRIPTION_CHARS = 500;
 // a month-long window.
 const MAX_CANDIDATES = 40;
 
-export type RankedEvent<T> = T & { similarity: number; details?: EventDetails };
+export type RankedEvent<T> = T & { similarity: number; profileSimilarity?: number | null; offerScore?: number; details?: EventDetails };
 export type Closest = { name: string; url: string | null; date: string | null; similarity: number };
 
 const embeddingCache = new Map<string, { at: number; vector: number[] }>();
@@ -41,10 +41,22 @@ function rankingText(name: string, details: EventDetails | undefined): string {
 export async function rankEventsByDescription<T extends { name: string; url?: string | null; start_at: string }>(
   candidates: T[],
   askText: string,
-  opts: { limit?: number; bar?: number; topScores?: { name: string; similarity: number }[]; zone?: string | null } = {},
+  opts: {
+    limit?: number;
+    bar?: number;
+    topScores?: { name: string; similarity: number; profile?: number | null }[];
+    zone?: string | null;
+    // What Co knows they want right now (services/personSnapshot.ts
+    // profileFocusText). Orders events that match the ask.
+    profileText?: string | null;
+    // No subject in the ask: every event in the window counts, ordered by the
+    // profile.
+    browse?: boolean;
+  } = {},
 ): Promise<{ ranked: RankedEvent<T>[]; closest: Closest | null }> {
   const pool = candidates.slice(0, MAX_CANDIDATES);
-  if (!askText || !pool.length) return { ranked: [], closest: null };
+  const profileText = opts.profileText?.trim() || null;
+  if ((!askText && !(opts.browse && profileText)) || !pool.length) return { ranked: [], closest: null };
   const details = await Promise.all(pool.map((c) => (c.url ? fetchLumaEventDetails(c.url).catch(() => null) : Promise.resolve(null))));
   const texts = pool.map((c, i) => rankingText(c.name, details[i] ?? undefined));
 
@@ -53,20 +65,34 @@ export async function rankEventsByDescription<T extends { name: string; url?: st
     const hit = embeddingCache.get(t);
     return !hit || now - hit.at > EMBED_TTL_MS;
   });
-  const [askVector, ...fresh] = await generateEmbeddings([askText, ...missing.map(([t]) => t)]);
+  const heads = [askText || profileText!, ...(profileText ? [profileText] : [])];
+  const vectors = await generateEmbeddings([...heads, ...missing.map(([t]) => t)]);
+  const askVector = vectors[0];
+  const profileVector = profileText ? vectors[1] : null;
+  const fresh = vectors.slice(heads.length);
   missing.forEach(([t], k) => embeddingCache.set(t, { at: now, vector: fresh[k] }));
   if (embeddingCache.size > 2000) embeddingCache.clear();
 
-  const scored: RankedEvent<T>[] = pool.map((c, i) => ({
-    ...c,
-    details: details[i] ?? undefined,
-    similarity: cosineSimilarity(askVector, embeddingCache.get(texts[i])?.vector ?? askVector.map(() => 0)),
-  }));
+  const round = (x: number) => Math.round(x * 1000) / 1000;
+  const scored: RankedEvent<T>[] = pool.map((c, i) => {
+    const vector = embeddingCache.get(texts[i])?.vector ?? askVector.map(() => 0);
+    const similarity = cosineSimilarity(askVector, vector);
+    const profileSimilarity = profileVector ? cosineSimilarity(profileVector, vector) : null;
+    return { ...c, details: details[i] ?? undefined, similarity, profileSimilarity, offerScore: offerScore(similarity, profileSimilarity, !!opts.browse) };
+  });
   const byScore = [...scored].sort((a, b) => b.similarity - a.similarity);
-  opts.topScores?.push(...byScore.slice(0, 5).map((e) => ({ name: e.name, similarity: Math.round(e.similarity * 1000) / 1000 })));
+  opts.topScores?.push(
+    ...[...scored]
+      .sort((a, b) => (b.offerScore ?? 0) - (a.offerScore ?? 0))
+      .slice(0, 5)
+      .map((e) => ({ name: e.name, similarity: round(e.similarity), profile: e.profileSimilarity == null ? null : round(e.profileSimilarity) })),
+  );
 
   const bar = opts.bar ?? RELEVANCE_BAR_WITH_DESCRIPTION;
-  const ranked = orderForOffering(scored.filter((e) => e.similarity >= bar)).slice(0, opts.limit ?? 6);
+  // The ask is the gate; the profile only orders what passes it. A browse ask
+  // has no subject to gate on, so everything in the window is eligible.
+  const eligible = opts.browse ? scored : scored.filter((e) => e.similarity >= bar);
+  const ranked = orderForOffering(eligible).slice(0, opts.limit ?? 6);
   const best = byScore[0];
   const closest: Closest | null = best
     ? { name: best.name, url: best.url ?? null, date: localDate(best.start_at, opts.zone), similarity: Math.round(best.similarity * 1000) / 1000 }

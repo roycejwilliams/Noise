@@ -99,6 +99,23 @@ export function renderSnapshot(s: PersonSnapshot | null): string {
   return lines.join("\n");
 }
 
+// What to match events against for this person: what they do, what they want
+// right now, what's on their mind, what matters to them in people, and what
+// has worked before. Left out: what didn't work (that's a reason against, not
+// a direction). Empty when Co knows nothing yet.
+export function profileFocusText(s: PersonSnapshot | null): string {
+  if (!s) return "";
+  return [
+    s.work ? `Works on: ${s.work}` : null,
+    s.wantsNow.length ? `Wants right now: ${s.wantsNow.join("; ")}` : null,
+    s.weighingOn.length ? `On their mind: ${s.weighingOn.join("; ")}` : null,
+    s.valuesInPeople.length ? `Cares about in people and plans: ${s.valuesInPeople.join("; ")}` : null,
+    s.worked.length ? `Things that went well before: ${s.worked.join("; ")}` : null,
+  ]
+    .filter(Boolean)
+    .join("\n");
+}
+
 export async function getPersonSnapshot(userId: string): Promise<PersonSnapshot | null> {
   const { rows } = await pool
     .query(`SELECT snapshot FROM person_snapshots WHERE user_id = $1`, [userId])

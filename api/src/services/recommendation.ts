@@ -1,4 +1,5 @@
 import { generateText } from "ai";
+import { getPersonSnapshot, profileFocusText } from "../harness/personSnapshot.js";
 import { rewriteKeepsAsk } from "./searchRules.js";
 import { DateTime } from "luxon";
 import { isBrowseAsk, parseAskWindow } from "./askWindow.js";
@@ -149,7 +150,14 @@ export async function generateRecommendation(userId: string, currentMessage?: st
         { text: askText, embedding: askText === latestIntent?.text ? latestIntent?.embedding : null },
         profile.city ?? null,
         // Repeats are handled below so the reply can say it was already shared.
-        { userId, checkRepeat: false, rawMessage: currentMessage, timezone: profile.city ? await getTimezoneForCity(profile.city).catch(() => null) : null },
+        {
+          userId,
+          checkRepeat: false,
+          rawMessage: currentMessage,
+          timezone: profile.city ? await getTimezoneForCity(profile.city).catch(() => null) : null,
+          // What Co knows they want right now orders what matches the ask.
+          profile: profileFocusText(await getPersonSnapshot(userId).catch(() => null)) || null,
+        },
       ).catch((err: any) => {
         console.error("generateRecommendation: getTieredRecommendation failed (non-fatal):", err?.message ?? err);
         return [];
