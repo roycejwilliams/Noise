@@ -474,6 +474,22 @@ export function runMigrations() {
     .query(`ALTER TABLE users ADD COLUMN IF NOT EXISTS contact_preference TEXT`)
     .catch((err: Error) => console.error("users.contact_preference migration failed:", err));
 
+  // Co's own events announced to nearby users on creation
+  // (services/coEventAnnouncement.ts): one row per event and person.
+  pool
+    .query(
+      `CREATE TABLE IF NOT EXISTS co_event_announcements (
+        id BIGSERIAL PRIMARY KEY,
+        event_api_id TEXT NOT NULL,
+        user_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+        created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+        sent_at TIMESTAMPTZ,
+        gave_up_at TIMESTAMPTZ,
+        UNIQUE (event_api_id, user_id)
+      )`,
+    )
+    .catch((err: Error) => console.error("co_event_announcements table init failed:", err));
+
   // Issues test users report to Co (services/issueReports.ts). Test only:
   // written where CAPTURE_USER_ISSUES=true.
   pool

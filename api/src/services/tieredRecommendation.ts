@@ -275,10 +275,10 @@ async function tryTier1(ask: StatedIntent, userCity: string | null, filter?: (st
   const nearby = await filterByRadius(inWindow, userCity);
   // They asked what's on in a window, not for a topic: the soonest one in
   // that window is the answer, so relevance ranking would only reject it.
-  const match =
-    opts.browse && !opts.profileText
-      ? soonest(nearby)
-      : (await rankEventsByDescription(nearby, opts.browse ? "" : ask.text ?? "", { limit: 1, profileText: opts.profileText, browse: opts.browse })).ranked[0] ?? null;
+  // Co's own events come first no matter what (Royce, 2026-09-16): not
+  // filtered by what they asked or by their profile. The soonest nearby one in
+  // the window; the gate still checks place, timing, availability and repeats.
+  const match = soonest(nearby);
   if (!match) return null;
   const details = ("details" in match ? (match.details as EventDetails | undefined) : undefined) ?? (match.url ? ((await fetchLumaEventDetails(match.url)) ?? undefined) : undefined);
   return {
@@ -607,7 +607,8 @@ async function paidSearchAllowed(userId: string | null, source: "sweep" | "reque
       [userId, X_SEARCH_SWEEP_DAYS],
     );
     if (rows[0].today >= X_SEARCH_DAILY_CAP) return { ok: false, reason: `daily X search cap (${X_SEARCH_DAILY_CAP}) reached` };
-    if (source === "sweep" && userId && rows[0].mine > 0) return { ok: false, reason: `already searched X for them in the last ${X_SEARCH_SWEEP_DAYS} days` };
+    // No per-person cadence any more: every ask includes Tier 3 (2026-09-16).
+    // The overall daily cap above stays as the cost guard.
     return { ok: true, reason: "within budget" };
   } catch {
     return { ok: true, reason: "budget check unavailable" };
@@ -706,10 +707,9 @@ export async function getTieredRecommendation(
     const runTier3 = async (): Promise<TierMatch | null> => {
       const started = Date.now();
       try {
-        // Asking what's on the calendar is a question about events, not about
-        // posts on X (2026-09-16: "what's been surfacing on Luma this weekend"
-        // came back with an X post, and Co never said where it came from).
-        if (browse) return null;
+        // Every ask searches Tier 3 too (Royce, 2026-09-16: "Asks should always
+        // include tier 2 and 3"). A post for a time-frame ask still has to
+        // state a date inside it (below), and results name their source.
         const budget = await paidSearchAllowed(opts.userId ?? null, source);
         if (!budget.ok) return null;
         const opportunityQuery = await proposeOpportunityQuery(ask, city, opts.profile);

@@ -60,7 +60,8 @@ export type ProactiveType =
   | "product_update"
   | "window_followup";
 
-export type ExemptType = "event_change" | "call_reminder" | "missed_call";
+// co_event: Co's own event, announced to nearby users on creation (services/coEventAnnouncement.ts).
+export type ExemptType = "event_change" | "call_reminder" | "missed_call" | "co_event";
 
 export type TypePolicy = {
   priority: number;

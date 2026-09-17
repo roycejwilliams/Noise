@@ -1,4 +1,5 @@
 import cron from "node-cron";
+import { sendDueCoEventAnnouncements } from "../services/coEventAnnouncement.js";
 import { DateTime } from "luxon";
 import type { Server } from "socket.io";
 import pool from "../db/db.js";
@@ -571,6 +572,12 @@ export function registerJobs(io: Server) {
       runWeeklyReview().catch((err: any) => console.error("weekly review cron error:", err?.message ?? err));
     });
   }
+
+  // Co's own events: send announcements that were waiting for the person's
+  // daytime hours (services/coEventAnnouncement.ts).
+  cron.schedule("*/10 * * * *", () => {
+    sendDueCoEventAnnouncements().catch((err: any) => console.error("co event announcement cron error:", err?.message ?? err));
+  });
 
   // Harness decision log retention: keep 60 days. Every reply, route, and
   // skipped send writes a row, so without this the table only grows.

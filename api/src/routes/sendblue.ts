@@ -1808,7 +1808,10 @@ Return ONLY valid JSON, no preamble: {"date": "YYYY-MM-DD or null", "time": "HH:
               // (services/eventDetails.ts fitPrompt).
               // What fits, then one per tier, best first.
               const seenTier = new Set<number>();
-              const prepared = preparedAll.filter((p) => p.fits !== false).filter((p) => (seenTier.has(p.m.tier) ? false : (seenTier.add(p.m.tier), true)));
+              // Co's own events (Tier 1) are always kept; Tiers 2 and 3 must fit.
+              const prepared = preparedAll
+                .filter((p) => p.m.tier === 1 || p.fits !== false)
+                .filter((p) => (seenTier.has(p.m.tier) ? false : (seenTier.add(p.m.tier), true)));
               if (!prepared.length) {
                 addFact(
                   replyFacts,

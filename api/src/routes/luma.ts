@@ -1,4 +1,5 @@
 import { createHmac, timingSafeEqual } from "crypto";
+import { announceCoEvent } from "../services/coEventAnnouncement.js";
 import express, { Request, Response } from "express";
 import pool from "../db/db.js";
 import { runCalendarFollowReachOutAgent } from "../agent/calendarFollowReachOut.js";
@@ -137,6 +138,11 @@ router.post("/webhook", (req: Request, res: Response) => {
         break;
       }
       runScoringPass(eventId, data?.name, "event.created");
+      // Co's own event: everyone near it sees it right away
+      // (services/coEventAnnouncement.ts).
+      announceCoEvent(eventId)
+        .then((r) => console.log(`luma/webhook: event.created (${eventId}) — announced to ${r.sent}, queued ${r.queued}`))
+        .catch((err: any) => console.error(`luma/webhook: event.created (${eventId}) — announceCoEvent failed:`, err?.message ?? err));
       break;
     }
     case "guest.registered":
