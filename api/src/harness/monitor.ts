@@ -43,6 +43,9 @@ export const SIGNALS: Signal[] = [
   // The Luma feed stopped before the end of the time frame they asked about.
   { key: "window_partly_searched", label: "Searches whose event feed didn't reach the end of the asked time frame", bad: `decision = 'recommendation.search' AND proposal->'scope'->>'windowCovered' = 'false'`, total: `decision = 'recommendation.search' AND proposal->'scope'->>'windowCovered' IS NOT NULL`, floor: 0.3, minCount: 2 },
   { key: "followup_not_queued", label: "Time-frame follow-ups that failed to queue", bad: `decision = 'proactive.windowFollowUp' AND action = 'enqueue_failed'`, total: `decision = 'proactive.windowFollowUp'`, floor: 0.2, minCount: 2 },
+  // Nothing offered and nothing turned away by the gate: the closest miss was
+  // the only real thing the person heard about.
+  { key: "closest_miss_only", label: "Searches where the closest miss was the only thing shown", bad: `decision = 'recommendation.search' AND action LIKE 'nothing_found%' AND jsonb_typeof(proposal->'scope'->'closest') = 'object' AND jsonb_array_length(COALESCE(proposal->'scope'->'gatedOut', '[]'::jsonb)) = 0`, total: `decision = 'recommendation.search'`, floor: 0.4, minCount: 3 },
   { key: "router_unavailable", label: "Router failures (no actions taken)", bad: `decision = 'router.decideActions' AND checks @> '[{"name": "router_available", "pass": false}]'`, total: `decision = 'router.decideActions'`, floor: 0.05, minCount: 3 },
 ];
 

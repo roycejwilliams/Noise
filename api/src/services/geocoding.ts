@@ -40,7 +40,11 @@ export async function geocodeCity(city: string): Promise<GeoPoint | null> {
   const trimmed = city.trim();
   if (!trimmed) return null;
 
-  const cached = await pool.query(`SELECT lat, lng FROM geocode_cache WHERE query = $1`, [trimmed]);
+  // The cache is an optimization: without a database (evals, local runs) the
+  // lookup still works, it just isn't cached.
+  const cached = await pool
+    .query(`SELECT lat, lng FROM geocode_cache WHERE query = $1`, [trimmed])
+    .catch(() => ({ rows: [] as any[] }));
   if (cached.rows.length) {
     return { lat: Number(cached.rows[0].lat), lng: Number(cached.rows[0].lng) };
   }

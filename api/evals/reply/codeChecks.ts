@@ -1,5 +1,6 @@
 // Model-free checks for the Layer 3 gate's deterministic rules. Runs in a
 // second, no API calls: npx tsx evals/reply/codeChecks.ts
+import { rewriteKeepsAsk, shouldCacheSearch, xPostFitsWindow } from "../../src/services/searchRules.js";
 import { orderForOffering } from "../../src/services/eventOrder.js";
 import { capitalizeSentences, looksLikeMetaReply } from "../../src/services/textStyle.js";
 import { nearestPlace, parseDiscoverPlaces } from "../../src/services/lumaDiscovery.js";
@@ -187,6 +188,30 @@ onboardingCaseCases.push(
   const order = orderForOffering([ev("sold out best", 0.5, true), ev("open second", 0.4, false), ev("no details", 0.45, null), ev("open low", 0.31, false)]).map((e) => e.name);
   onboardingCaseCases.push(
     [order[0] === "no details" && order[1] === "open second" && order[2] === "open low" && order[3] === "sold out best", `open before sold out, then score (got ${order.join(", ")})`],
+  );
+}
+
+// Search rules (services/searchRules.ts), 2026-09-16.
+{
+  const now916 = DateTime.fromISO("2026-09-16T18:00:00", { zone: "America/Los_Angeles" });
+  const keeps = (o: string, r: string) => rewriteKeepsAsk(o, r, now916).ok;
+  const weekend = { start: "2026-09-19T00:00:00-07:00", end: "2026-09-20T23:59:59-07:00" };
+  onboardingCaseCases.push(
+    [!shouldCacheSearch([]), "an empty search result is not cached"],
+    [shouldCacheSearch([{ name: "x" }]), "a search with a result is cached"],
+    [keeps("Can you help me find a founder or builder meetup this weekend?", "Find a founder or builder meetup this weekend"), "rewrite that only drops filler is kept"],
+    [!keeps("That sounds interesting maybe you can help me find that founder/builder meetup this weekend", "a weekend founder/builder meetup at a casual cafe setting"), "rewrite that adds Co's invented words is refused"],
+    [!keeps("Any AI meetups in SF on Thursday?", "AI meetups on Thursday"), "rewrite that drops the place is refused"],
+    [!keeps("Any AI meetups in SF on Thursday?", "AI meetups in SF this weekend"), "rewrite that changes the time frame is refused"],
+    [!keeps("looking for climate tech founders near Oakland", "climate tech founders"), "rewrite that drops a named city is refused"],
+    [keeps("Any founder events Oct 5 - Oct 14th?", "founder events from Oct 5 to Oct 14"), "rewrite that keeps explicit dates is kept"],
+    [keeps("What's going on this weekend?", "founder and investor events this weekend"), "no topic of their own: borrowing one is allowed"],
+    [keeps("I'd love to find a pickup basketball group", "pickup basketball group"), "their own topic survives"],
+    [xPostFitsWindow({ start: "2026-09-19" }, weekend).ok, "an X post dated inside the window passes"],
+    [xPostFitsWindow({ start: "2026-09-15", end: "2026-09-21" }, weekend).ok, "an X post whose range overlaps the window passes"],
+    [!xPostFitsWindow({ start: "2026-10-05", end: "2026-10-11" }, weekend).ok, "an X post dated outside the window is kept out"],
+    [!xPostFitsWindow(null, weekend).ok, "an X post with no date is kept out of a time-frame ask"],
+    [xPostFitsWindow(null, null).ok, "without a time frame, a dateless X post is fine"],
   );
 }
 

@@ -1,4 +1,5 @@
 import { generateText } from "ai";
+import { rewriteKeepsAsk } from "./searchRules.js";
 import { DateTime } from "luxon";
 import { isBrowseAsk, parseAskWindow } from "./askWindow.js";
 import { getTimezoneForCity } from "./geocoding.js";
@@ -88,7 +89,7 @@ async function toSearchRequest(userId: string, message: string, statedAsk: strin
 
 Is this message asking Co to find or suggest something new for them (an event, a group, a program, something to do)? Saying they want to find something counts ("I'd love to find a pickup basketball group"). These are NOT: follow-up questions about something already mentioned ("any details?", "where's the link?", "what time?"), asking for help planning or organizing something ("can you help me plan?"), scheduling, and thanks. If it's unclear, treat it as a request.
 
-If yes, rewrite it as one standalone sentence describing what to look for, keeping the place, timing, and topic they gave.${feeling ? ` How they've been feeling, which can shape the format or size (smaller and lower-key when they're drained, community over networking when they're isolated) but never the topic they asked for:\n${feeling}\n` : ""} If they named a topic, use only their words for it and add nothing from their overall goal ("founder meetups" stays "founder meetups"). Only borrow the topic from what they're looking for overall when the message gives none (like "what's going on this weekend"). Return ONLY valid JSON: {"request": "..."} or {"request": null}.`,
+If yes, rewrite it as one standalone sentence describing what to look for. Only drop filler. Keep their topic, place, and time frame in their own words. Never add details they didn't say, including anything Co suggested earlier in the conversation.${feeling ? ` How they've been feeling, which can shape the format or size (smaller and lower-key when they're drained, community over networking when they're isolated) but never the topic they asked for:\n${feeling}\n` : ""} If they named a topic, use only their words for it and add nothing from their overall goal ("founder meetups" stays "founder meetups"). Only borrow the topic from what they're looking for overall when the message gives none (like "what's going on this weekend"). Return ONLY valid JSON: {"request": "..."} or {"request": null}.`,
     });
     const parsed = parseModelJson(raw);
     if (parsed && "request" in parsed) return typeof parsed.request === "string" && parsed.request.trim() ? parsed.request.trim() : null;
@@ -132,10 +133,16 @@ export async function generateRecommendation(userId: string, currentMessage?: st
     // "where's the link?" were being searched as-is). Turn it into one, or
     // stop if it isn't asking for something new.
     let askText = latestIntent?.text || profile.goals?.[0];
+    let rewrite: { original: string; rewritten: string; used: string; rejectedBecause: string | null } | null = null;
     if (currentMessage) {
       const request = await toSearchRequest(userId, currentMessage, latestIntent?.text ?? null);
       if (request === null) return { available: false, reason: "their message isn't asking for something new to try" };
-      askText = request;
+      // The rewrite may only drop filler. If it changed their topic, place or
+      // time frame, or added words, search their own message instead
+      // (services/searchRules.ts).
+      const check = rewriteKeepsAsk(currentMessage, request);
+      askText = check.ok ? request : currentMessage;
+      rewrite = { original: currentMessage, rewritten: request, used: askText, rejectedBecause: check.reason };
     }
     if (askText) {
       const found: TierMatch[] = await getTieredRecommendation(
@@ -149,6 +156,7 @@ export async function generateRecommendation(userId: string, currentMessage?: st
       });
       const tierMatches = await dropAlreadyRecommended(userId, found);
       scopeForTurn = takeLastSearchScope();
+      if (scopeForTurn && rewrite) scopeForTurn.rewrite = rewrite;
       const scope = scopeForTurn;
       // "What's on this weekend?" is a question about the calendar. If
       // nothing's on it in that window, the honest answer is nothing, not a

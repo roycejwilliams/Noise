@@ -1,4 +1,5 @@
 import pool from "../db/db.js";
+import { getTimezoneForCity } from "./geocoding.js";
 import { getTieredRecommendation, type TierMatch } from "./tieredRecommendation.js";
 import { enqueueCandidate } from "../harness/proactive.js";
 import { generateEmbedding } from "./embeddings.js";
@@ -269,7 +270,9 @@ async function findFreshPending(candidate: SurfacingCandidate): Promise<BacklogI
     goals: candidate.goals,
     activityPreferences: candidate.activityPreferences,
   });
-  const matches = await getTieredRecommendation({ text: brief.searchText }, candidate.city, { userId: candidate.userId, source: "sweep" }).catch((err: any) => {
+  // Their time zone, so event dates are their local calendar dates.
+  const timezone = candidate.city ? await getTimezoneForCity(candidate.city).catch(() => null) : null;
+  const matches = await getTieredRecommendation({ text: brief.searchText }, candidate.city, { userId: candidate.userId, source: "sweep", timezone }).catch((err: any) => {
     console.error("attemptEventSurfacing: getTieredRecommendation failed (non-fatal):", err?.message ?? err);
     return [] as TierMatch[];
   });

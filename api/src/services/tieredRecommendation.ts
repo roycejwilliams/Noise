@@ -1,4 +1,5 @@
 import { generateText } from "ai";
+import { shouldCacheSearch, xPostFitsWindow } from "./searchRules.js";
 import { DateTime } from "luxon";
 import { isBrowseAsk, parseAskWindow, withinWindow } from "./askWindow.js";
 import { anthropic } from "@ai-sdk/anthropic";
@@ -74,7 +75,7 @@ type MatchExtras = { details?: EventDetails; opportunity?: OpportunityDetails; w
 export type TierMatch =
   | ({ tier: 1; kind: "co_event"; event_api_id: string; event_date: string; name: string; url?: string; reason: string; city?: string | null } & MatchExtras)
   | ({ tier: 2; kind: "public_event"; event_api_id: string; event_date: string; name: string; url: string; reason: string; city?: string | null } & MatchExtras)
-  | ({ tier: 3; kind: "opportunity"; name: string; url: string; reason: string; deadline?: string; evidence?: string } & MatchExtras);
+  | ({ tier: 3; kind: "opportunity"; name: string; url: string; reason: string; deadline?: string; evidence?: string; statedDates?: { start: string; end?: string | null } } & MatchExtras);
 
 // Lead-time window (Royce, 2026-08-30) — "how far out in advance are we
 // searching?" Neither listCalendarEvents() nor fetchPublicEvents() take a
@@ -168,26 +169,40 @@ Return ONLY valid JSON: {"city": "City, State/Country" or null}. null if no plac
 // available (fetch failed, or Tier 1 which has no url field yet) means no
 // gate — fails open, same "don't drop a real candidate to an infra gap"
 // philosophy as the radius/geocoding fallback.
-async function isGenuinelyRelevant(askText: string, candidateName: string, candidateCity: string | null, description: string | null): Promise<boolean> {
-  if (!description) return true;
-  try {
-    const { text: raw } = await generateText({
-      model: anthropic(JUDGE_MODEL),
-      experimental_telemetry: { isEnabled: true, functionId: "tieredRecommendation.relevanceGate" },
-      prompt: `Someone said: "${askText}"
+// Whether a real event fits what they asked, reading its description, and
+// in a few words why not when it doesn't. The reason is what Co tells them
+// about a near miss (2026-09-16: "it's a hands-on build session, not a
+// meetup", instead of a generic "not close enough").
+export type RelevanceVerdict = { fit: boolean; why: string | null };
+
+export function relevancePrompt(askText: string, candidateName: string, candidateCity: string | null, description: string): string {
+  return `Someone said: "${askText}"
 
 Co is considering recommending this real event: "${candidateName}"${candidateCity ? ` in ${candidateCity}` : ""}.
 
 Its actual description: "${description}"
 
-Based on the real description, not just the name, is this genuinely a strong, specific fit for what they're actually asking for? Reject it only if the real description makes clear this is a meaningfully different kind of thing than what they want — a loose, plausible topical connection is fine to accept, but a clear mismatch once you read what it's actually about should be rejected.
+Based on the real description, not just the name, is this genuinely a fit for what they're actually asking for? Reject it only if the real description makes clear this is a meaningfully different kind of thing than what they want. A loose, plausible topical connection is fine to accept.
 
-Return ONLY "yes" or "no".`,
+If you reject it, say in a few plain words what it actually is compared with what they asked, the way you'd tell a friend (e.g. "it's a hands-on build session, not a meetup"). No names, no more than about 12 words.
+
+Return ONLY JSON: {"fit": true} or {"fit": false, "why": "..."}`;
+}
+
+async function isGenuinelyRelevant(askText: string, candidateName: string, candidateCity: string | null, description: string | null): Promise<RelevanceVerdict> {
+  if (!description) return { fit: true, why: null };
+  try {
+    const { text: raw } = await generateText({
+      model: anthropic(JUDGE_MODEL),
+      experimental_telemetry: { isEnabled: true, functionId: "tieredRecommendation.relevanceGate" },
+      prompt: relevancePrompt(askText, candidateName, candidateCity, description),
     });
-    return raw.trim().toLowerCase().startsWith("yes");
+    const parsed = parseModelJson<{ fit?: boolean; why?: string }>(raw);
+    if (typeof parsed?.fit !== "boolean") return { fit: /\byes\b|"fit":\s*true/i.test(raw), why: null };
+    return { fit: parsed.fit, why: parsed.fit ? null : typeof parsed.why === "string" && parsed.why.trim() ? parsed.why.trim().slice(0, 140) : null };
   } catch (err: any) {
     console.error("tieredRecommendation: isGenuinelyRelevant failed (non-fatal, allowing match through):", err?.message ?? err);
-    return true;
+    return { fit: true, why: null };
   }
 }
 
@@ -224,7 +239,7 @@ async function cachedPublicEvents(city?: string | null, until?: Date | null) {
   return events;
 }
 
-async function tryTier1(ask: StatedIntent, userCity: string | null, filter?: (startAt: string) => boolean, opts: { browse?: boolean; maxDays?: number } = {}): Promise<TierMatch | null> {
+async function tryTier1(ask: StatedIntent, userCity: string | null, filter?: (startAt: string) => boolean, opts: { browse?: boolean; maxDays?: number; zone?: string | null } = {}): Promise<TierMatch | null> {
   const events = await cachedCalendarEvents().catch((err: any) => {
     console.error("tieredRecommendation: tryTier1 listCalendarEvents failed (non-fatal):", err?.message ?? err);
     return [];
@@ -241,7 +256,7 @@ async function tryTier1(ask: StatedIntent, userCity: string | null, filter?: (st
     tier: 1,
     kind: "co_event",
     event_api_id: match.api_id,
-    event_date: match.start_at.slice(0, 10),
+    event_date: localDate(match.start_at, opts.zone),
     name: match.name,
     reason: `Matches a Co event happening ${new Date(match.start_at).toLocaleDateString()}${match.city ? ` in ${match.city}` : ""}.`,
     city: match.city ?? null,
@@ -263,6 +278,18 @@ async function tryTier1(ask: StatedIntent, userCity: string | null, filter?: (st
 // directly (rather than lumaDiscovery's findEventMatchingAsk wrapper) so an
 // optional near-term `filter` can be applied before ranking — same reuse
 // reasoning as tryTier1 above. `userCity` drives the same hard radius filter.
+// The event's calendar date where they are. start_at is UTC, so a 7pm
+// Thursday event in San Francisco is already Friday in UTC; using that date
+// made the gate turn Thursday-night events away as "after the time frame"
+// (2026-09-16).
+export function localDate(startAt: string, zone?: string | null): string {
+  if (zone) {
+    const d = DateTime.fromISO(startAt, { zone: "utc" }).setZone(zone);
+    if (d.isValid) return d.toISODate()!;
+  }
+  return startAt.slice(0, 10);
+}
+
 function soonest<T extends { start_at: string }>(events: T[]): T | null {
   return [...events].sort((a, b) => a.start_at.localeCompare(b.start_at))[0] ?? null;
 }
@@ -271,7 +298,7 @@ function soonest<T extends { start_at: string }>(events: T[]): T | null {
 // (harness/matchGate.ts) makes the final call, and it needs more than one to
 // choose from (2026-09-16: the single candidate it got was sold out, so the
 // search ended with nothing while other real events were available).
-async function tryTier2(ask: StatedIntent, userCity: string | null, filter?: (startAt: string) => boolean, opts: { browse?: boolean; maxDays?: number; until?: Date | null } = {}): Promise<TierMatch[]> {
+async function tryTier2(ask: StatedIntent, userCity: string | null, filter?: (startAt: string) => boolean, opts: { browse?: boolean; maxDays?: number; until?: Date | null; zone?: string | null } = {}): Promise<TierMatch[]> {
   // Only page deep when the window reaches past what a normal fetch covers.
   const farUntil = opts.until && opts.until.getTime() - Date.now() > 8 * 24 * 60 * 60 * 1000 ? opts.until : null;
   const events = await cachedPublicEvents(userCity, farUntil).catch((err: any) => {
@@ -300,8 +327,10 @@ async function tryTier2(ask: StatedIntent, userCity: string | null, filter?: (st
   const kept: TierMatch[] = [];
   for (const match of candidates) {
     const details = match.details ?? (await fetchLumaEventDetails(match.url)) ?? undefined;
-    if (ask.text && !opts.browse && !(await isGenuinelyRelevant(ask.text, match.name, match.city, details?.description ?? null))) {
+    const verdict = ask.text && !opts.browse ? await isGenuinelyRelevant(ask.text, match.name, match.city, details?.description ?? null) : { fit: true, why: null };
+    if (!verdict.fit) {
       rejected.push(match.name);
+      lastRelevanceRejected.push({ name: match.name, why: verdict.why ?? "doesn't match what they asked" });
       // The nearest miss is the best-scoring one the check turned down, not
       // the first one it read: candidates are ordered open-first, so the first
       // read can be a weaker open event (2026-09-16: Maum Market was named
@@ -313,7 +342,7 @@ async function tryTier2(ask: StatedIntent, userCity: string | null, filter?: (st
           url: match.url ?? null,
           date: match.start_at.slice(0, 10),
           similarity,
-          why: `it came closest, but on reading what it's about it isn't quite what they asked for${details?.soldOut ? ", and it's sold out" : ""}`,
+          why: `${verdict.why ?? "on reading what it's about, it isn't quite what they asked for"}${details?.soldOut ? ", and it's sold out" : ""}`,
         };
       }
       continue;
@@ -323,12 +352,39 @@ async function tryTier2(ask: StatedIntent, userCity: string | null, filter?: (st
       tier: 2,
       kind: "public_event",
       event_api_id: match.api_id,
-      event_date: match.start_at.slice(0, 10),
+      event_date: localDate(match.start_at, opts.zone),
       name: match.name,
       url: match.url,
       reason: `A public event that looks like a real fit${match.city ? ` in ${match.city}` : ""}.`,
       city: match.city ?? null,
     });
+  }
+  // Nothing cleared the bar: read the closest one anyway. If it really fits,
+  // offer it (the bar only cuts noise); if not, its reason is what the person
+  // hears about the near miss, not a generic "not close enough".
+  if (!kept.length && !candidates.length && ask.text && !opts.browse && ranking.closest) {
+    const near = nearby.find((e) => e.name === ranking.closest!.name);
+    if (near) {
+      const details = (await fetchLumaEventDetails(near.url)) ?? undefined;
+      const verdict = await isGenuinelyRelevant(ask.text, near.name, near.city, details?.description ?? null);
+      if (verdict.fit) {
+        kept.push({
+          details,
+          tier: 2,
+          kind: "public_event",
+          event_api_id: near.api_id,
+          event_date: localDate(near.start_at, opts.zone),
+          name: near.name,
+          url: near.url,
+          reason: `A public event that looks like a real fit${near.city ? ` in ${near.city}` : ""}.`,
+          city: near.city ?? null,
+        });
+        lastClosest = null;
+      } else {
+        lastRelevanceRejected.push({ name: near.name, why: verdict.why ?? "doesn't match what they asked" });
+        lastClosest = { ...ranking.closest, why: `${verdict.why ?? "on reading what it's about, it isn't quite what they asked for"}${details?.soldOut ? ", and it's sold out" : ""}` };
+      }
+    }
   }
   if (rejected.length && !kept.length) {
     lastTierDrop = { tier: 2, name: rejected.join("; "), reason: `the relevance check rejected ${rejected.length === 1 ? "it" : "all of them"} as not matching what they asked` };
@@ -420,7 +476,9 @@ If a post's own text gives a deadline or application window that has clearly alr
 
 Write "reason" the way Co would say it to a friend over text — one short, casual sentence. Keep exactly one concrete, grounded detail that proves it's real (not vague hype), but never in analyst language ("demonstrates," "concrete evidence of," "showcasing") — say it plainly, the way a person would, not a scoring rationale. E.g. "Real accelerator, and there's a founder spotlight from someone who actually went through it — not just marketing copy," not "A named, specific accelerator program with a concrete founder spotlight demonstrating active participation and real companies."
 
-Return ONLY valid JSON: {"index": 0, "name": "the specific opportunity name", "reason": "one short grounded sentence", "deadline": "YYYY-MM-DD" or null} or {"index": null}`,
+If the post itself states when the thing happens (an event date or date range for the opportunity you're naming), include it as "dates" with "start" and optional "end" in YYYY-MM-DD form. Only dates the post actually states for that opportunity; never estimate.
+
+Return ONLY valid JSON: {"index": 0, "name": "the specific opportunity name", "reason": "one short grounded sentence", "deadline": "YYYY-MM-DD" or null, "dates": {"start": "YYYY-MM-DD", "end": "YYYY-MM-DD" or null} or null} or {"index": null}`,
     });
     // Robust extraction (Royce, 2026-09-02, confirmed live: "Unexpected
     // token 'I', "I can see "..." — the model ignored "Return ONLY valid
@@ -437,6 +495,7 @@ Return ONLY valid JSON: {"index": 0, "name": "the specific opportunity name", "r
       url: posts[parsed.index].url,
       reason: parsed.reason ?? "Found via a real, recent post.",
       ...(typeof parsed?.deadline === "string" ? { deadline: parsed.deadline } : {}),
+      ...(parsed?.dates && typeof parsed.dates.start === "string" ? { statedDates: { start: parsed.dates.start, end: typeof parsed.dates.end === "string" ? parsed.dates.end : null } } : {}),
       evidence: posts[parsed.index].text,
       opportunity: { postText: posts[parsed.index].text },
     };
@@ -533,13 +592,22 @@ export type SearchScope = {
   tier2Nearby?: number | null;
   tier2TopScores?: { name: string; similarity: number }[];
   // The best real event that didn't make it, with why, for a near miss.
-  closest?: (Closest & { why: string }) | null; browse: boolean; tiers: number[]; dropped?: TierDrop | null; gatedOut?: GatedOut[] };
+  closest?: (Closest & { why: string }) | null;
+  // Their own message, the rewrite into a search, which one was searched, and
+  // why the rewrite was set aside if it was.
+  rewrite?: { original: string; rewritten: string; used: string; rejectedBecause: string | null } | null;
+  // Everything the relevance check turned down, with its reason.
+  relevanceRejected?: { name: string; why: string }[];
+  // An X post that was found but kept out, and why.
+  xDropped?: { name: string; reason: string } | null; browse: boolean; tiers: number[]; dropped?: TierDrop | null; gatedOut?: GatedOut[] };
 export type TierDrop = { tier: number; name: string; reason: string };
 let lastSearchScope: SearchScope | null = null;
 let lastTierDrop: TierDrop | null = null;
 let lastFetchedThrough: string | null = null;
 let lastTopScores: { name: string; similarity: number }[] = [];
 let lastClosest: (Closest & { why: string }) | null = null;
+let lastRelevanceRejected: { name: string; why: string }[] = [];
+let lastXDropped: { name: string; reason: string } | null = null;
 let lastNearbyCount: number | null = null;
 
 export function takeLastSearchScope(): SearchScope | null {
@@ -563,6 +631,8 @@ export async function getTieredRecommendation(
   lastTopScores = [];
   lastNearbyCount = null;
   lastClosest = null;
+  lastRelevanceRejected = [];
+  lastXDropped = null;
   const asked = opts.rawMessage ?? ask.text ?? "";
   const window = asked ? parseAskWindow(asked, DateTime.now().setZone(opts.timezone ?? "local")) : null;
   const browse = !!asked && isBrowseAsk(asked);
@@ -576,8 +646,8 @@ export async function getTieredRecommendation(
   } else {
     const source = opts.source ?? "request";
     const [tier1, tier2, budget] = await Promise.all([
-      tryTier1(ask, city, windowFilter, { browse, maxDays }),
-      tryTier2(ask, city, windowFilter, { browse, maxDays, until: window ? window.end.toJSDate() : null }),
+      tryTier1(ask, city, windowFilter, { browse, maxDays, zone: opts.timezone }),
+      tryTier2(ask, city, windowFilter, { browse, maxDays, until: window ? window.end.toJSDate() : null, zone: opts.timezone }),
       paidSearchAllowed(opts.userId ?? null, source),
     ]);
     let tier3: TierMatch | null = null;
@@ -591,6 +661,17 @@ export async function getTieredRecommendation(
           .query(`INSERT INTO x_search_log (user_id, source, query) VALUES ($1, $2, $3)`, [opts.userId ?? null, source, opportunityQuery])
           .catch(() => {});
         tier3 = await tryTier3(ask, opportunityQuery);
+        // A named time frame: an X post only counts when the post itself
+        // states a date inside it (the thing's own dates, or its deadline).
+        // Posts with no date are kept out, with the reason recorded.
+        if (tier3 && tier3.kind === "opportunity" && window) {
+          const stated = tier3.statedDates ?? (tier3.deadline ? { start: tier3.deadline } : null);
+          const fits = xPostFitsWindow(stated, { start: window.start.toISO()!, end: window.end.toISO()! });
+          if (!fits.ok) {
+            lastXDropped = { name: tier3.name, reason: fits.reason ?? "outside the time frame" };
+            tier3 = null;
+          }
+        }
       }
     }
     // Every tier's candidates go to the gate, which keeps what's actually
@@ -598,7 +679,9 @@ export async function getTieredRecommendation(
     const gateable = [tier1, ...tier2, tier3].filter((m): m is TierMatch => m != null);
     found = gateable;
     if (searchCache.size > 300) searchCache.clear();
-    searchCache.set(cacheKey, { at: Date.now(), found });
+    // A "nothing" is never reused: events get added, and a cached empty
+    // result hid them for six hours.
+    if (shouldCacheSearch(found)) searchCache.set(cacheKey, { at: Date.now(), found });
   }
 
   lastSearchScope = { city, window: window?.label ?? null, windowStart: window?.start.toISO() ?? null, windowEnd: window?.end.toISO() ?? null,
@@ -607,6 +690,8 @@ export async function getTieredRecommendation(
     tier2Nearby: lastNearbyCount,
     tier2TopScores: lastTopScores,
     closest: lastClosest,
+    relevanceRejected: lastRelevanceRejected,
+    xDropped: lastXDropped,
     windowCovered: window && lastFetchedThrough ? new Date(lastFetchedThrough) >= window.end.toJSDate() : null, browse, tiers: found.map((m) => m.tier), dropped: lastTierDrop };
   lastTierDrop = null;
   const gatedOut: GatedOut[] = [];
