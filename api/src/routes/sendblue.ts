@@ -639,10 +639,29 @@ export function sendblueRouter(io: Server): Router {
         // has invite_verified defaulted true (migrations.ts), so this only
         // ever applies to a genuinely brand-new placeholder row.
         if (!user.invite_verified) {
+          // Even on the very first-ever message, try it as a code first
+          // (2026-09-17: a website deep link pre-fills the code as the
+          // first message someone sends — a real invite flow, not just a
+          // casual "hey", so waiting to ask would make them send it twice).
+          // Only falls through to the plain "what's your code?" ask when
+          // the first message ISN'T a real code, so a genuine cold "hey"
+          // still gets asked rather than told a code was wrong.
+          if (hasText) {
+            const firstTryRedeemed = await redeemInviteCode(content, user.id);
+            if (firstTryRedeemed.ok) {
+              await logTextExchange(user.id, `User said: ${content}`);
+              await pool.query(`UPDATE users SET invite_verified = true, invite_asked = true WHERE id = $1`, [user.id]);
+              user = { ...user, invite_verified: true, invite_asked: true };
+              await sendAndLog(user.id, number, "You're in.");
+              // Falls through below into normal identity intake, same turn.
+            }
+          }
+        }
+        if (!user.invite_verified) {
           if (!user.invite_asked) {
-            // First contact ever from an unverified number — ask for a
-            // code. Nothing in this inbound message is treated as a code
-            // yet, since Co hasn't asked for one (same "don't parse the
+            // First contact ever from an unverified number, and it wasn't
+            // a valid code — ask for one. Nothing in this inbound message
+            // is treated as a failed code attempt (same "don't parse the
             // greeting as an answer" shape as the intake_asked branch below).
             if (hasText) await logTextExchange(user.id, `User said: ${content}`);
             await pool.query(`UPDATE users SET invite_asked = true WHERE id = $1`, [user.id]);
