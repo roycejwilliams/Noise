@@ -156,6 +156,42 @@ export async function getTier3CategoryBias(userId: string): Promise<Record<strin
   return bias;
 }
 
+// A "closest miss" (real event that didn't quite fit) used to be presented
+// fresh every single search, even when it's the literal same event a daily
+// sweep surfaces again tomorrow — reading like Co forgot it already told
+// them (2026-09-17, "close the loop conversationally on near-misses").
+// Reuses co_memories the same way the outcome-learning rows do — no new
+// table. Scoped to name+ask rather than a real id since a closest miss has
+// no stable identity the way a sent recommendation does (Tier 3 in
+// particular has no event_api_id at all).
+const CLOSEST_MISS_RECALL_DAYS = 5;
+
+export async function wasClosestMissRecentlyMentioned(userId: string, name: string): Promise<boolean> {
+  try {
+    const { rows } = await pool.query(
+      `SELECT 1 FROM co_memories
+       WHERE user_id = $1 AND memory_type = 'closest_miss_mentioned'
+         AND lower(content::jsonb ->> 'name') = lower($2)
+         AND created_at > NOW() - ($3 || ' days')::interval
+       LIMIT 1`,
+      [userId, name, CLOSEST_MISS_RECALL_DAYS],
+    );
+    return rows.length > 0;
+  } catch (err: any) {
+    console.error("wasClosestMissRecentlyMentioned: query failed (non-fatal, treated as not yet mentioned):", err?.message ?? err);
+    return false;
+  }
+}
+
+export async function recordClosestMissMentioned(userId: string, name: string, askText: string): Promise<void> {
+  await pool
+    .query(`INSERT INTO co_memories (user_id, memory_type, content) VALUES ($1, 'closest_miss_mentioned', $2)`, [
+      userId,
+      JSON.stringify({ name, askText }),
+    ])
+    .catch((err: any) => console.error("recordClosestMissMentioned: write failed (non-fatal):", err?.message ?? err));
+}
+
 // Layer 7 (2026-09-14): no longer sends. Each due follow-up becomes part of
 // one "debrief" candidate per event (merged with the end-of-night check-in
 // from eventCheckinFollowUp.ts and the walk-in call offer), due the morning

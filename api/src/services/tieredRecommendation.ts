@@ -315,11 +315,15 @@ type SearchTrace = {
   xDropped: { name: string; reason: string } | null;
   xQuery: string | null;
   xBlocked: string | null;
+  // Which Tier 3 categories have (or haven't) gone anywhere for this person
+  // before, per getTier3CategoryBias — for an optional reply mention, not
+  // forced (2026-09-17).
+  categoryInsight: { worked: string[]; flopped: string[] } | null;
   timings: { tiersMs?: number; tier3Ms?: number; relevanceMs?: number };
 };
 
 function newTrace(): SearchTrace {
-  return { tierDrop: null, fetchedThrough: null, topScores: [], nearbyCount: null, closest: null, relevanceRejected: [], xDropped: null, xQuery: null, xBlocked: null, timings: {} };
+  return { tierDrop: null, fetchedThrough: null, topScores: [], nearbyCount: null, closest: null, relevanceRejected: [], xDropped: null, xQuery: null, xBlocked: null, categoryInsight: null, timings: {} };
 }
 
 // "Thursday, September 17" in their zone. toLocaleDateString() used the
@@ -517,8 +521,10 @@ async function tryTier2(ask: StatedIntent, userCity: string | null, filter: ((st
 // never invent one" discipline as before — the difference from the old
 // venue version is the grounding element is a real post URL, not a
 // place_id.
-async function proposeOpportunityQuery(ask: StatedIntent, city: string | null, profile: string | null | undefined, zone: string, userId?: string | null): Promise<string | null> {
-  if (!ask.text) return null;
+type OpportunityQuery = { query: string | null; worked: string[]; flopped: string[] };
+
+async function proposeOpportunityQuery(ask: StatedIntent, city: string | null, profile: string | null | undefined, zone: string, userId?: string | null): Promise<OpportunityQuery> {
+  if (!ask.text) return { query: null, worked: [], flopped: [] };
   try {
     // What's actually gone somewhere for this person before, not a guess
     // (2026-09-17, closing the outcome loop — see
@@ -558,10 +564,10 @@ Return ONLY valid JSON: {"query": "..." or null}`,
     // trailing-commentary wrap around the JSON isn't caught by stripping
     // code fences alone.
     const parsed = parseModelJson(raw);
-    return typeof parsed?.query === "string" ? parsed.query : null;
+    return { query: typeof parsed?.query === "string" ? parsed.query : null, worked, flopped };
   } catch (err: any) {
     console.error("tieredRecommendation: proposeOpportunityQuery failed (non-fatal):", err?.message ?? err);
-    return null;
+    return { query: null, worked: [], flopped: [] };
   }
 }
 
@@ -778,6 +784,9 @@ export type SearchScope = {
   xQuery?: string | null;
   // Why Tier 3 didn't search X at all (budget), when it didn't.
   xBlocked?: string | null;
+  // Which Tier 3 categories have (or haven't) worked out for this person
+  // before, for an optional reply mention — never forced (2026-09-17).
+  categoryInsight?: { worked: string[]; flopped: string[] } | null;
   // Whether these results were reused from an earlier identical search.
   cached?: boolean;
   // Milliseconds: all tiers together, Tier 3 on its own, Tier 2's relevance reads.
@@ -867,7 +876,14 @@ export async function getTieredRecommendation(
         // Every ask searches Tier 3 too (Royce, 2026-09-16: "Asks should always
         // include tier 2 and 3"). A post for a time-frame ask still has to
         // state a date inside it (below), and results name their source.
-        const opportunityQuery = await proposeOpportunityQuery(ask, city, opts.profile, zone, opts.userId);
+        const { query: opportunityQuery, worked, flopped } = await proposeOpportunityQuery(ask, city, opts.profile, zone, opts.userId);
+        // Surfaced so a reply can OPTIONALLY mention the pattern instead of
+        // only ever adjusting the search silently underneath them
+        // (2026-09-17, "make the outcome-learning visible, not just
+        // silent" — Royce, after noting Co's depth of awareness vs. Boardy's
+        // more surface-level context). Never forced into every reply — the
+        // reply agent decides if it's natural, same as every other fact.
+        if (worked.length || flopped.length) trace.categoryInsight = { worked, flopped };
         if (!opportunityQuery) return null;
         const budget = await reserveXSearch(opts.userId ?? null, source, opportunityQuery);
         if (!budget.ok) {
@@ -921,6 +937,7 @@ export async function getTieredRecommendation(
     xDropped: t.xDropped,
     xQuery: t.xQuery,
     xBlocked: t.xBlocked,
+    categoryInsight: t.categoryInsight,
     timings: t.timings,
     cached: usedCache,
     windowCovered: window && t.fetchedThrough ? new Date(t.fetchedThrough) >= window.end.toJSDate() : null,

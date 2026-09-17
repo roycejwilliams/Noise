@@ -47,7 +47,7 @@ import { generateRecommendation, recordRecommendationsSent } from "../services/r
 import { searchWithTimeCap } from "../agent/conversationTools.js";
 import type { TierMatch } from "../services/tieredRecommendation.js";
 import { detectCheckinPhrase, recordCheckin, hasActiveAsk, recordWalkinAsk } from "../services/eventWalkinCheckin.js";
-import { scheduleOutcomeFollowUp, recordOutcome } from "../services/recommendationOutcome.js";
+import { scheduleOutcomeFollowUp, recordOutcome, wasClosestMissRecentlyMentioned, recordClosestMissMentioned } from "../services/recommendationOutcome.js";
 import { recordEventCheckinOutcome } from "../services/eventCheckinFollowUp.js";
 import { handleMatchNudgeReply, handleGroupMessage, handleMethodChoiceReply } from "../services/eventGuestMatchHandoff.js";
 import { resolveNetworkTeaseReply, resolveNetworkIntroReply } from "../services/networkIntroNudge.js";
@@ -2068,10 +2068,20 @@ Return ONLY valid JSON, no preamble: {"date": "YYYY-MM-DD or null", "time": "HH:
                   "did_this_turn",
                   `The closest real event was "${closest.name}"${closest.date ? ` on ${dayLabel(closest.date)}` : ""}${closest.url ? `, link ${closest.url}` : ""}, but ${closest.why}.`,
                 );
+                // Presenting the SAME near-miss fresh every time a daily
+                // sweep re-runs the same ask reads like Co forgot it already
+                // said this (2026-09-17). Told once, referenced as already
+                // known after that, not represented as new each day.
+                const alreadyMentioned = await wasClosestMissRecentlyMentioned(user.id, closest.name).catch(() => false);
                 addInstruction(
                   replyFacts,
-                  "You searched and nothing real fits what they asked. Say that plainly, then name the closest real one in a short sentence: what it is, the day it's on exactly as written in the facts (like \"Sunday, September 20\"), and why it isn't quite it, so they can decide. Don't send its link unless they ask, and don't make up anything else.",
+                  alreadyMentioned
+                    ? "You searched again and nothing new fits what they asked. The closest real one is the same one you already told them about before — say plainly nothing new turned up, and only briefly note it's still the same option from before if it's natural, don't re-explain it from scratch like it's new."
+                    : "You searched and nothing real fits what they asked. Say that plainly, then name the closest real one in a short sentence: what it is, the day it's on exactly as written in the facts (like \"Sunday, September 20\"), and why it isn't quite it, so they can decide. Don't send its link unless they ask, and don't make up anything else.",
                 );
+                if (!alreadyMentioned) {
+                  recordClosestMissMentioned(user.id, closest.name, resolvedContent.slice(0, 160)).catch(() => {});
+                }
               } else {
                 addInstruction(replyFacts, "You searched and found nothing real yet. Say that plainly. Don't make up a suggestion.");
               }
@@ -2082,6 +2092,20 @@ Return ONLY valid JSON, no preamble: {"date": "YYYY-MM-DD or null", "time": "HH:
             // proactive harness, so the daily and weekly caps and the
             // unanswered back-off all still apply.
             const scope = "scope" in recommendation ? recommendation.scope : null;
+            // Optional color on the search pattern, not a directive
+            // (2026-09-17, "make the outcome-learning visible, not just
+            // silent"): only ever a soft fact the reply agent may weave in
+            // if it actually fits this reply — never forced, never its own
+            // sentence just to mention it. Only "flopped" categories are
+            // worth surfacing at all; a "worked" pattern already just shows
+            // up as a better search, it doesn't need narrating.
+            if (scope?.categoryInsight?.flopped.length) {
+              addFact(
+                replyFacts,
+                "known",
+                `${scope.categoryInsight.flopped.join(", ")}-type opportunities haven't gone anywhere for them before, based on what they've said in past follow-ups — only mention this if it genuinely fits the reply naturally (e.g. explaining why you searched wider this time), never as its own sentence.`,
+              );
+            }
             if (scope?.window && scope.windowEnd) {
               const timezone = profile?.city ? await getTimezoneForCity(profile.city).catch(() => null) : null;
               const dueAt = nextLocalHour(new Date(scope.windowEnd), timezone, 11);
