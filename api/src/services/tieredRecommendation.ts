@@ -174,7 +174,7 @@ Return ONLY valid JSON: {"city": "City, State/Country" or null}. null if no plac
 // in a few words why not when it doesn't. The reason is what Co tells them
 // about a near miss (2026-09-16: "it's a hands-on build session, not a
 // meetup", instead of a generic "not close enough").
-export type RelevanceVerdict = { fit: boolean; why: string | null };
+export type RelevanceVerdict = { fit: boolean; why: string | null; eventKind?: string | null; askedKind?: string | null };
 
 export function relevancePrompt(askText: string, candidateName: string, candidateCity: string | null, description: string): string {
   return `Someone said: "${askText}"
@@ -183,24 +183,49 @@ Co is considering recommending this real event: "${candidateName}"${candidateCit
 
 Its actual description: "${description}"
 
-Based on the real description, not just the name, is this genuinely a fit for what they're actually asking for? Reject it only if the real description makes clear this is a meaningfully different kind of thing than what they want. A loose, plausible topical connection is fine to accept.
+Answer three things, in order:
+1. eventKind: what kind of event this is, in 2 to 6 words, from its format and main activity (e.g. "chess social night", "hands-on hackathon", "panel conference", "founder networking mixer", "AI research talk").
+2. askedKind: what kind of event they asked for, in 2 to 6 words, from their words.
+3. fit: true only if the event's own main activity is the kind they asked for. Who attends, who hosts, or who sponsors never changes what kind of event it is: a chess night full of AI researchers is still a chess night. Close variants of the same kind are fine (an AI demo night fits "AI meetup"; a founder dinner fits "founder meetup"; a build day or hackathon fits an ask for builders, since building together is the point). Also false if it's clearly somewhere other than where they asked.
 
-If you reject it, say in a few plain words what it actually is compared with what they asked, the way you'd tell a friend (e.g. "it's a hands-on build session, not a meetup"). No names, no more than about 12 words.
+If fit is false, "why" says it plainly in a few words, like you'd tell a friend (e.g. "it's a hands-on build session, not a meetup"). No names, about 12 words at most.
 
-Return ONLY JSON: {"fit": true} or {"fit": false, "why": "..."}`;
+Return ONLY JSON: {"eventKind": "...", "askedKind": "...", "fit": true or false, "why": "..." or null}`;
+}
+
+// One verdict per ask and event per day, so asking the same thing twice gets
+// the same answer (2026-09-16: Claude Fable 5.1 Build Day was accepted on some
+// runs and rejected on another; a chess night was rejected, then accepted).
+const relevanceCache = new Map<string, { at: number; verdict: RelevanceVerdict }>();
+const RELEVANCE_CACHE_TTL_MS = 24 * 60 * 60 * 1000;
+
+export function relevanceCacheKey(askText: string, candidateName: string, description: string): string {
+  const norm = (t: string) => t.toLowerCase().replace(/[^a-z0-9]+/g, " ").trim();
+  return `${norm(askText)}|${norm(candidateName)}|${description.length}`;
 }
 
 async function isGenuinelyRelevant(askText: string, candidateName: string, candidateCity: string | null, description: string | null): Promise<RelevanceVerdict> {
   if (!description) return { fit: true, why: null };
+  const key = relevanceCacheKey(askText, candidateName, description);
+  const cached = relevanceCache.get(key);
+  if (cached && Date.now() - cached.at < RELEVANCE_CACHE_TTL_MS) return cached.verdict;
   try {
     const { text: raw } = await generateText({
       model: anthropic(JUDGE_MODEL),
       experimental_telemetry: { isEnabled: true, functionId: "tieredRecommendation.relevanceGate" },
       prompt: relevancePrompt(askText, candidateName, candidateCity, description),
     });
-    const parsed = parseModelJson<{ fit?: boolean; why?: string }>(raw);
-    if (typeof parsed?.fit !== "boolean") return { fit: /\byes\b|"fit":\s*true/i.test(raw), why: null };
-    return { fit: parsed.fit, why: parsed.fit ? null : typeof parsed.why === "string" && parsed.why.trim() ? parsed.why.trim().slice(0, 140) : null };
+    const parsed = parseModelJson<{ fit?: boolean; why?: string | null; eventKind?: string; askedKind?: string }>(raw);
+    if (typeof parsed?.fit !== "boolean") return { fit: /"fit":\s*true/i.test(raw), why: null };
+    const verdict: RelevanceVerdict = {
+      fit: parsed.fit,
+      why: parsed.fit ? null : typeof parsed.why === "string" && parsed.why.trim() ? parsed.why.trim().slice(0, 140) : null,
+      eventKind: parsed.eventKind ?? null,
+      askedKind: parsed.askedKind ?? null,
+    };
+    if (relevanceCache.size > 2000) relevanceCache.clear();
+    relevanceCache.set(key, { at: Date.now(), verdict });
+    return verdict;
   } catch (err: any) {
     console.error("tieredRecommendation: isGenuinelyRelevant failed (non-fatal, allowing match through):", err?.message ?? err);
     return { fit: true, why: null };
@@ -726,3 +751,6 @@ export async function getTieredRecommendation(
 // The daily urgent-only Tier 1/2 pre-check (checkForUrgentMatch) was removed
 // 2026-09-14 (Royce: "it should be actively searching for all 3 tiers"): the
 // sweep now runs the full engine every day and paces sends separately.
+
+// For evals.
+export { isGenuinelyRelevant };

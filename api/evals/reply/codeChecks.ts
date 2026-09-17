@@ -10,7 +10,7 @@ import { asksForContactCard } from "../../src/services/conversationClose.js";
 import { renderMatchLead } from "../../src/services/messageFormat.js";
 import { closingReaction } from "../../src/services/conversationClose.js";
 import "dotenv/config";
-import { addFact, baseReplyFacts, codeChecks } from "../../src/harness/replyGrounding.js";
+import { addFact, baseReplyFacts, codeChecks, predictionMatch } from "../../src/harness/replyGrounding.js";
 
 const rf = baseReplyFacts();
 addFact(rf, "scheduled", "A call is scheduled for Tuesday, September 8 at 2:00 PM (America/Los_Angeles).");
@@ -216,6 +216,18 @@ onboardingCaseCases.push(
     [localDate("2026-09-18T02:00:00.000Z", null) === "2026-09-18", "without a zone, the UTC date is kept"],
   );
 }
+
+// Predictions Co can't back (harness/replyGrounding.ts predictionMatch).
+onboardingCaseCases.push(
+  [!!predictionMatch("Honest read: I don't think a separate one is going to materialize by Saturday."), "the Saturday forecast is caught"],
+  [!!predictionMatch("It'll probably sell out, honestly."), "a sell-out forecast is caught"],
+  [!!predictionMatch("Nothing else is going to come up this week."), "a nothing-else-coming forecast is caught"],
+  [!!predictionMatch("That one isn't going to happen before Friday."), "a won't-happen forecast is caught"],
+  [!predictionMatch("I'll keep looking and text you if something real turns up."), "keeping an eye out is not a forecast"],
+  [!predictionMatch("I don't think I have the link for that one."), "not having something is not a forecast"],
+  [!predictionMatch("Only 9 spots left, so worth registering soon."), "stating spots left is not a forecast"],
+  [!predictionMatch("Are you going to Corgi on Saturday?"), "asking about their plans is not a forecast"],
+);
 
 let failed = 0;
 for (const [ok, label] of onboardingCaseCases) {

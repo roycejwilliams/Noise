@@ -12,7 +12,10 @@
 import "dotenv/config";
 import { dirname } from "path";
 import { fileURLToPath } from "url";
-import { getTieredRecommendation, takeLastSearchScope } from "../../src/services/tieredRecommendation.js";
+import { getTieredRecommendation, relevancePrompt, takeLastSearchScope } from "../../src/services/tieredRecommendation.js";
+import { fetchLumaEventDetails } from "../../src/services/eventDetails.js";
+import { parseModelJson } from "../../src/services/modelJson.js";
+import { MODELS } from "../../src/models.js";
 import { fetchPublicEvents } from "../../src/services/lumaDiscovery.js";
 import { runEval, type CaseScore, type EvalCase } from "../lib.js";
 
@@ -57,3 +60,41 @@ function score(c: Case, r: Awaited<ReturnType<typeof run>>): CaseScore {
 }
 
 await runEval<Case, any>({ name: "search (live feed)", dir: here, cases, concurrency: 1, run, score });
+
+// The relevance check gives the same answer each time on the events that
+// flipped between runs on 2026-09-16, and the right one. Three reads each.
+type Kind = EvalCase & { ask: string; event: RegExp; expectFit: boolean };
+const kinds: Kind[] = [
+  { id: "k01_chess_not_ai", ask: "Any AI meetups in SF on Thursday?", event: /Best Move Club/, expectFit: false },
+  { id: "k02_ai_talk_is_ai", ask: "Any AI meetups in SF on Thursday?", event: /multi-model architecture/, expectFit: true },
+  { id: "k03_build_day_for_builders", ask: "Find a founder or builder meetup this weekend", event: /Build Day/, expectFit: true },
+  { id: "k04_build_day_not_founder_meetup", ask: "Find a founder meetup this weekend", event: /Build Day/, expectFit: false },
+  { id: "k05_market_not_founders", ask: "Find a founder or builder meetup this weekend", event: /Maum Market/, expectFit: false },
+];
+const feed = await fetchPublicEvents(50, "San Francisco", new Date(Date.now() + 10 * 86400000)).catch(() => []);
+await runEval<Kind, any>({
+  name: "relevance check (live, consistency)",
+  dir: here,
+  cases: kinds,
+  concurrency: 2,
+  run: async (k) => {
+    const e = feed.find((x) => k.event.test(x.name));
+    if (!e) return { missing: true };
+    const d = await fetchLumaEventDetails(e.url);
+    const { anthropic } = await import("@ai-sdk/anthropic");
+    const { generateText } = await import("ai");
+    const reads = await Promise.all([0, 1, 2].map(async () => {
+      const { text } = await generateText({ model: anthropic(MODELS.sonnet), prompt: relevancePrompt(k.ask, e.name, e.city ?? null, d?.description ?? "") });
+      return parseModelJson<{ fit?: boolean }>(text).fit === true;
+    }));
+    return { reads };
+  },
+  score: (k, r) => {
+    // The feed changes day to day; an event that's gone isn't a failure.
+    if (r.missing) return { hard: [], soft: [{ name: "event still in feed", ok: false }] };
+    const hard: string[] = [];
+    if (new Set(r.reads).size > 1) hard.push(`inconsistent across reads: ${r.reads.join(", ")}`);
+    if (r.reads.some((x: boolean) => x !== k.expectFit)) hard.push(`expected fit=${k.expectFit}, got ${r.reads.join(", ")}`);
+    return { hard, soft: [] };
+  },
+});

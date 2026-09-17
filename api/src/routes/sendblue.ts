@@ -1080,8 +1080,10 @@ export function sendblueRouter(io: Server): Router {
           });
         }
 
-        // How long the search took, for the latency record below.
+        // How long the search took, and preparing what it found (fit check
+        // and description per match), for the latency record below.
         let searchMsForTurn = 0;
+        let prepMsForTurn = 0;
 
         // The thread just ended ("cool", "thanks 🙏"): react to their
         // message instead of writing a sentence that keeps it going
@@ -1761,6 +1763,7 @@ Return ONLY valid JSON, no preamble: {"date": "YYYY-MM-DD or null", "time": "HH:
                 return n < 2;
               });
               const matchCount = new Set(toPrepare.map((m) => m.tier)).size;
+              const prepStarted = Date.now();
               const preparedAll = await Promise.all(toPrepare.map(async (m) => {
                 // Drafted in Co's voice from the real record and a personal
                 // reason, not the matching engine's raw "name — reason" line.
@@ -1787,6 +1790,7 @@ Return ONLY valid JSON, no preamble: {"date": "YYYY-MM-DD or null", "time": "HH:
                 }
                 return { m, description, fits: em.fits, why: em.whyItFits };
               }));
+              prepMsForTurn = Date.now() - prepStarted;
               // Only what the personal read says fits what they asked
               // (services/eventDetails.ts fitPrompt).
               // What fits, then one per tier, best first.
@@ -2128,7 +2132,7 @@ Return ONLY valid JSON, no preamble: {"date": "YYYY-MM-DD or null", "time": "HH:
               checks: [{ name: "within_budget", pass: turnMs <= (decision.wantsRecommendation ? REPLY_BUDGET_SEARCH_MS : REPLY_BUDGET_MS), reason: `${Math.round(turnMs / 1000)}s` }],
               // Where the time went, so slow turns can be read without
               // guessing (Royce, 2026-09-16: 36s replies).
-              proposal: { ms: turnMs, routerMs: routerLatencyMs, factsMs, searchMs: searchMsForTurn, replyMs, groundingMs, debounceMs: DEBOUNCE_MS },
+              proposal: { ms: turnMs, routerMs: routerLatencyMs, factsMs, searchMs: searchMsForTurn, prepMs: prepMsForTurn, replyMs, groundingMs, debounceMs: DEBOUNCE_MS },
             }).catch(() => {});
           }
         }

@@ -349,5 +349,27 @@
     ],
     "groundedDraft": true,
     "style": "capitalized"
+  },
+  {
+    "id": "t0916c_no_prediction",
+    "message": "Find a founder or builder meetup this weekend",
+    "recentConversation": "User said: Find a founder or builder meetup this weekend",
+    "facts": [
+      {
+        "kind": "did_this_turn",
+        "text": "Found real ones but couldn't offer them: \"San Francisco | Claude Fable 5.1 Build Day\" on Saturday, September 19, link https://lu.ma/claudesanfranciscobuildday (sold out)."
+      },
+      {
+        "kind": "ongoing",
+        "text": "Co's daily search is looking for: \"founder or builder meetup this weekend\". If something real fits, Co may text them about it (at most one text a day). Co can't promise it will find anything, or when."
+      }
+    ],
+    "draft": "The Claude build day on Saturday, September 19 is sold out. Honest read: I don't think a separate one is going to materialize by Saturday.",
+    "forbidden": [
+      "going to materialize",
+      "don't think a separate one"
+    ],
+    "groundedDraft": false,
+    "style": "capitalized"
   }
 ]

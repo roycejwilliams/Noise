@@ -259,7 +259,7 @@ ${facts}${instr}`;
 
 export type Claim = {
   text: string;
-  type: "past_action" | "future_promise" | "time" | "place" | "link" | "other_person" | "count" | "capability" | "detail";
+  type: "past_action" | "future_promise" | "time" | "place" | "link" | "other_person" | "count" | "capability" | "detail" | "prediction";
   supported: boolean;
   factId: string | null;
   quote: string | null;
@@ -319,6 +319,13 @@ export function followupPromiseMatch(text: string): RegExpMatchArray | null {
   return null;
 }
 
+// Phrasings that forecast whether something will turn up, sell out, or happen.
+export function predictionMatch(text: string): RegExpMatchArray | null {
+  return text.match(
+    /\b(?:is|are)(?:n'?t| not) (?:going to|gonna|likely to) (?:materialize|turn up|show up|come up|pop up|happen|open up)\b|\bwon'?t (?:materialize|turn up|show up|come up|pop up|open up)\b|\b(?:probably|likely) (?:won'?t|will not|isn'?t going to|is going to|will) (?:be|turn up|show up|come up|pop up|sell out|fill up|happen|open)\b|\bi don'?t (?:think|expect|see) (?:a|another|any|anything|something|one|more|a separate)\b[^.?!]{0,40}\b(?:going to|gonna|will|turn up|show up|come up|pop up|materialize|happen)\b|\b(?:is|are) going to (?:sell out|fill up)\b|\b(?:probably|likely) (?:sell|fill) (?:out|up)\b|\b(?:it|this|that|they)'?ll (?:probably |likely )?(?:sell out|fill up)\b|\bnothing (?:else )?(?:is|'s) (?:going to|gonna) (?:come|turn|show|pop)\b/i,
+  );
+}
+
 export function codeChecks(draft: string, rf: ReplyFacts, src: GroundingSources): GateCheck[] {
   const emotionLabel = checkNoEmotionLabel(draft);
   const checks: GateCheck[] = [];
@@ -343,6 +350,11 @@ export function codeChecks(draft: string, rf: ReplyFacts, src: GroundingSources)
   if (/\bI\s*(can(no|')?t|can not|am unable to|'?m unable to|don'?t|do not)\s+(actually\s+)?(make|place|do)?\s*(a\s+|phone\s+)*calls?\b|\bthis is (just )?(a )?text\b/i.test(draft)) {
     checks.push({ name: "no_capability_denial", pass: false, reason: "says Co can't call, which is false" });
   }
+  // Forecasts about what will or won't turn up, which Co can't know
+  // (2026-09-16: "I don't think a separate one is going to materialize by
+  // Saturday"). Co says what it found and whether it's still looking instead.
+  const prediction = predictionMatch(draft);
+  if (prediction) checks.push({ name: "no_prediction", pass: false, reason: `predicts what will happen: "${prediction[0]}"` });
   // Follow-up promises nothing in the code keeps: no job texts them when a
   // link turns up or when the other person answers (an intro goes out by
   // email, not a text from Co).
@@ -384,10 +396,11 @@ Claims to find:
 - link: a link or an "it's in the link above"
 - other_person: what another person said, wants, feels, or did ("she mentioned she'd like to meet you")
 - capability: what Co can or can't do ("I can't call", "I don't have access to your calendar")
+- prediction: what Co says will or won't happen in the world, or how likely it is, that Co has no way to know ("I don't think another one will turn up by Saturday", "it'll probably sell out", "nothing else is coming this week")
 
 Don't list: opinions, feelings, questions, general encouragement, restating what they told Co, or how Co will talk in this conversation ("I'll keep it short", "switching back to normal caps", "let's keep going over text").
 
-A claim is supported only if a FACT below states it, or the conversation shows it. A future_promise is supported only if a FACT says it will actually happen (a scheduled call, a pending item). "I don't have X" is supported when X is not in the sources. Never count something as supported because it's plausible.
+A claim is supported only if a FACT below states it, or the conversation shows it. A future_promise is supported only if a FACT says it will actually happen (a scheduled call, a pending item). A prediction is supported only if a FACT states that outcome itself; guessing from what was or wasn't found is never support. "I don't have X" is supported when X is not in the sources. Never count something as supported because it's plausible.
 
 FACTS:
 ${facts}
@@ -481,6 +494,7 @@ function stripUnsupported(draft: string, failed: GateCheck[]): string {
     if (failed.some((f) => f.name === "no_call_placed_claim") && /(calling|ringing|dialing) you|i'?m (calling|ringing|dialing)/i.test(s)) return false;
     if (failed.some((f) => f.name === "no_emotion_label") && !checkNoEmotionLabel(s).pass) return false;
     if (failed.some((f) => f.name === "no_followup_promise") && followupPromiseMatch(s)) return false;
+    if (failed.some((f) => f.name === "no_prediction") && predictionMatch(s)) return false;
     if (failed.some((f) => f.name === "no_capability_denial") && /\b(can(no|')?t|unable to|this is (just )?text)\b/i.test(s)) return false;
     if (failed.some((f) => f.name === "link_on_file") && /https?:\/\//i.test(s)) return false;
     if (failed.some((f) => f.name === "phone_on_file") && /\d{3}[\s.-]?\d{4}/.test(s)) return false;
@@ -516,6 +530,8 @@ const CLAIM_SHAPED = [
   /\b(sent|shared|booked|scheduled|called|calling|texted|emailed|introduced|intro|registered|signed up|added|found|reached out|confirmed|link|address|located|starts|ends|event|call)\b/i,
   /\b(said|says|mentioned|told|asked|wants|wanted|would like|is going|are going|attending|opted|agreed|interested)\b/i,
   /[a-z,]\s+[A-Z][a-z]{2,}/,
+  // Forecasts ("probably won't", "I don't think another one will turn up").
+  /\b(probably|likely|unlikely|i don'?t think|i doubt|won'?t|going to|gonna|bet)\b/i,
 ];
 
 export function needsClaimCheck(draft: string): boolean {
