@@ -8,11 +8,11 @@ import { announcementAudience } from "../../src/services/coEventAnnouncement.js"
 import { resolveCoEventCity } from "../../src/services/luma.js";
 import { DateTime } from "luxon";
 import { isBrowseAsk, parseAskWindow, withinWindow } from "../../src/services/askWindow.js";
-import { asksForContactCard } from "../../src/services/conversationClose.js";
+import { asksForContactCard, reportsCardNotReceived } from "../../src/services/conversationClose.js";
 import { renderMatchLead } from "../../src/services/messageFormat.js";
 import { closingReaction } from "../../src/services/conversationClose.js";
 import "dotenv/config";
-import { addFact, baseReplyFacts, codeChecks, predictionMatch, stripUnsupported } from "../../src/harness/replyGrounding.js";
+import { addFact, baseReplyFacts, codeChecks, needsClaimCheck, predictionMatch, stripUnsupported } from "../../src/harness/replyGrounding.js";
 import { isLeakedMetaCommentary, webhookSecretMatches } from "../../src/services/sendblue.js";
 import { coAskedQuestion } from "../../src/services/conversationClose.js";
 
@@ -339,6 +339,21 @@ onboardingCaseCases.push(
   const out = stripUnsupported(draft, [{ name: "no_followup_promise", pass: false, reason: 'promises a follow-up nothing will do: "I\'ll keep an eye out for you."' }]);
   onboardingCaseCases.push([out === "" || out.trim() === "", "a whole-message follow-up promise with no other content strips to nothing"]);
 }
+
+// Real incident, 2026-09-17: Jacqueline asked for Co's contact card, it
+// apparently didn't arrive, and her plain "I dont see it" follow-up wasn't
+// itself a fresh ask — but the reply agent claimed "trying again" without
+// conversationTools.ts's sendContactCard tool ever running a real resend,
+// and that false claim slipped past grounding's claim-shape pre-filter
+// entirely (nothing in it matched CLAIM_SHAPED, so the model's claim read
+// was skipped, not even attempted).
+onboardingCaseCases.push(
+  [reportsCardNotReceived("I dont see it"), 'reportsCardNotReceived catches the real incident text ("I dont see it")'],
+  [reportsCardNotReceived("it didnt come through"), "reportsCardNotReceived catches a differently-worded non-receipt report"],
+  [!reportsCardNotReceived("can you send me a v card"), "reportsCardNotReceived does not fire on a fresh ask (that's asksForContactCard's job)"],
+  [!reportsCardNotReceived("sounds good"), "reportsCardNotReceived does not fire on an unrelated closing"],
+  [needsClaimCheck("Trying again, should come through as a separate contact card, not a text bubble."), "a retry/resend claim is now recognized as claim-shaped and gets checked, not skipped"],
+);
 
 // Real incident, 2026-09-17: groundReply used to strip only the redraft
 // when it also failed its own check, discarding the original draft's other,

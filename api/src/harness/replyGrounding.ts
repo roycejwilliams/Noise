@@ -544,6 +544,10 @@ const CLAIM_SHAPED = [
   /[a-z,]\s+[A-Z][a-z]{2,}/,
   // Forecasts ("probably won't", "I don't think another one will turn up").
   /\b(probably|likely|unlikely|i don'?t think|i doubt|won'?t|going to|gonna|bet)\b/i,
+  // Claiming a retry/resend happened (2026-09-17, real incident: "Trying
+  // again, should come through as a separate contact card" went out
+  // unchecked — a real action claim with none of the words above in it).
+  /\b(trying again|try again|resend(ing)?|re-send(ing)?|should (come through|arrive|land)|sending (it|that|this) again)\b/i,
 ];
 
 export function needsClaimCheck(draft: string): boolean {

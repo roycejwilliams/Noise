@@ -99,3 +99,17 @@ export function asksForContactCard(text: string): boolean {
   if (!/\b(your|you'?re|co'?s|ur)\b/.test(t) && !/\bcontact card\b/.test(t)) return false;
   return /\bcontact card\b|\bvcard\b|\bcontact info\b|\bcontact details\b|\byour (number|contact|info|details|card)\b|\bsave (you|your number|your contact|co)\b|\badd you to my contacts\b/.test(t);
 }
+
+// A real, live incident (2026-09-17): Jacqueline asked for the contact
+// card, it (apparently) didn't arrive, and "I dont see it" — a plain
+// non-receipt report, not a fresh ask — failed asksForContactCard's own
+// current-message-only check. The tool correctly declined to resend, but
+// the reply agent then claimed "trying again" anyway, a false claim that
+// slipped past grounding too (see replyGrounding.ts's CLAIM_SHAPED fix).
+// The actual fix is upstream of both: recognize this shape of follow-up so
+// a genuine resend happens for real, instead of either silently doing
+// nothing or lying about doing something.
+export function reportsCardNotReceived(text: string): boolean {
+  const t = text.toLowerCase().trim();
+  return /\b(i )?(don'?t|do not|didn'?t|did not|never|still (don'?t|didn'?t)) (see|get|got|receive[d]?|have)\b.*\b(it|that|card|contact)\b|\b(it|that|card)\b.*\b(didn'?t|did not|never|hasn'?t|has n[o']?t) (come|arrive|show(ed)? up|land(ed)?)\b|\bnothing (came|showed up|landed)\b|\bnot (there|showing|coming through)\b/.test(t);
+}

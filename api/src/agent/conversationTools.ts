@@ -1,8 +1,9 @@
 import { z } from "zod";
-import { asksForContactCard } from "../services/conversationClose.js";
+import { asksForContactCard, reportsCardNotReceived } from "../services/conversationClose.js";
 import { tool } from "ai";
 import sendblue, { cleanCoMessage } from "../services/sendblue.js";
 import { writeMemory } from "../services/memory.js";
+import pool from "../db/db.js";
 import { recordDecision } from "../harness/core.js";
 import { markTopicAsked as persistTopicAsked, RAPPORT_TOPICS } from "../services/profileExtraction.js";
 import { captureIntentForTurn } from "../services/profileExtraction.js";
@@ -180,8 +181,28 @@ export function createConversationTools(ctx: ConversationToolContext) {
       execute: async ({ theirWords }) => {
         if (!process.env.CO_VCARD_URL) return { ok: false, error: "no contact card configured" };
         // They have to have actually asked for Co's contact (2026-09-16:
-        // "You send it over", about a link, got the contact card).
-        if (!asksForContactCard(theirWords) && !asksForContactCard(ctx.resolvedContent)) {
+        // "You send it over", about a link, got the contact card). A plain
+        // non-receipt report ("I dont see it") isn't a fresh ask either, but
+        // it IS a legitimate continuation of one — checked against whether a
+        // card was actually sent recently, not guessed from wording alone
+        // (2026-09-17, real incident: Jacqueline said "I dont see it" after
+        // asking earlier, the tool correctly declined since that alone
+        // isn't a request, and the reply agent then falsely claimed
+        // "trying again" without this tool ever running a real resend).
+        const askedNow = asksForContactCard(theirWords) || asksForContactCard(ctx.resolvedContent);
+        let followUpToRealSend = false;
+        if (!askedNow && reportsCardNotReceived(ctx.resolvedContent)) {
+          const recent = await pool
+            .query(
+              `SELECT 1 FROM co_memories WHERE user_id = $1 AND memory_type = 'text_exchange'
+               AND content = 'Co replied: [sent Co''s contact card]' AND created_at > NOW() - INTERVAL '2 hours' LIMIT 1`,
+              [ctx.userId],
+            )
+            .then((r) => r.rows.length > 0)
+            .catch(() => false);
+          followUpToRealSend = recent;
+        }
+        if (!askedNow && !followUpToRealSend) {
           if (!ctx.dryRun) {
             await recordDecision({
               layer: 3,
