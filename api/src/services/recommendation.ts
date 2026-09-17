@@ -229,7 +229,10 @@ export async function generateRecommendation(userId: string, currentMessage?: st
     // found nothing. The old fallback ("a weekend founder/builder meetup at a
     // casual cafe") read like a real find, the person asked Co to find it,
     // and that made-up description then narrowed their next real search.
-    return { available: false, reason: "searched and found nothing real that fits yet", scope: scopeForTurn };
+    // Nothing to offer, but name the nearest real thing when there is one.
+    const closest = scopeForTurn?.closest;
+    const nearMiss = closest ? `; the closest real one was "${closest.name}"${closest.date ? ` on ${closest.date}` : ""}${closest.url ? `, link ${closest.url}` : ""} (${closest.why})` : "";
+    return { available: false, reason: `searched and found nothing real that fits yet${nearMiss}`, scope: scopeForTurn };
   } catch (err: any) {
     console.error("generateRecommendation failed (non-fatal):", err?.message ?? err);
     return { available: false, reason: "lookup failed" };

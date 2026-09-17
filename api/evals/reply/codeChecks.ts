@@ -1,5 +1,6 @@
 // Model-free checks for the Layer 3 gate's deterministic rules. Runs in a
 // second, no API calls: npx tsx evals/reply/codeChecks.ts
+import { orderForOffering } from "../../src/services/eventOrder.js";
 import { capitalizeSentences, looksLikeMetaReply } from "../../src/services/textStyle.js";
 import { nearestPlace, parseDiscoverPlaces } from "../../src/services/lumaDiscovery.js";
 import { DateTime } from "luxon";
@@ -178,6 +179,16 @@ onboardingCaseCases.push(
   [capitalizeSentences("i'm in. i'll text you") === "I'm in. I'll text you", "i'm and i'll are capitalized"],
   [capitalizeSentences("hit the wifi") === "Hit the wifi", "words containing i are left alone"],
 );
+
+// Open events are offered before sold-out ones, then by score
+// (services/eventOrder.ts, 2026-09-16: 14 of 40 SF events were sold out).
+{
+  const ev = (name: string, similarity: number, soldOut: boolean | null) => ({ name, similarity, details: soldOut === null ? undefined : ({ soldOut } as any) });
+  const order = orderForOffering([ev("sold out best", 0.5, true), ev("open second", 0.4, false), ev("no details", 0.45, null), ev("open low", 0.31, false)]).map((e) => e.name);
+  onboardingCaseCases.push(
+    [order[0] === "no details" && order[1] === "open second" && order[2] === "open low" && order[3] === "sold out best", `open before sold out, then score (got ${order.join(", ")})`],
+  );
+}
 
 let failed = 0;
 for (const [ok, label] of onboardingCaseCases) {

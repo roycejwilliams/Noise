@@ -1882,6 +1882,17 @@ Return ONLY valid JSON, no preamble: {"date": "YYYY-MM-DD or null", "time": "HH:
                   replyFacts,
                   "You did find real things, but none you can offer as asked (for example sold out, or just outside the dates they gave). Say that plainly in a short sentence: name what you found, when it is, and why it didn't make the cut, and don't suggest a generic type of thing instead. If one is close, like just past their dates, say so briefly so they can ask for it if their plans change. Don't send its link unless they ask.",
                 );
+              } else if (("scope" in recommendation ? recommendation.scope?.closest : null)) {
+                const closest = ("scope" in recommendation ? recommendation.scope?.closest : null)!;
+                addFact(
+                  replyFacts,
+                  "did_this_turn",
+                  `The closest real event was "${closest.name}"${closest.date ? ` on ${closest.date}` : ""}${closest.url ? `, link ${closest.url}` : ""}, but ${closest.why}.`,
+                );
+                addInstruction(
+                  replyFacts,
+                  "You searched and nothing real fits what they asked. Say that plainly, then name the closest real one in a short sentence (what it is and when) and why it isn't quite it, so they can decide. Don't send its link unless they ask, and don't make up anything else.",
+                );
               } else {
                 addInstruction(replyFacts, "You searched and found nothing real yet. Say that plainly. Don't make up a suggestion.");
               }

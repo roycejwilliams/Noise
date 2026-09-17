@@ -3,7 +3,8 @@ import { DateTime } from "luxon";
 import { isBrowseAsk, parseAskWindow, withinWindow } from "./askWindow.js";
 import { anthropic } from "@ai-sdk/anthropic";
 import { listCalendarEvents } from "./luma.js";
-import { fetchPublicEvents, rankByRelevance, rankTopByRelevance } from "./lumaDiscovery.js";
+import { fetchPublicEvents } from "./lumaDiscovery.js";
+import { rankEventsByDescription, type Closest } from "./eventRanking.js";
 import { fetchLumaEventDetails, type EventDetails, type OpportunityDetails } from "./eventDetails.js";
 import { searchRecentPosts } from "./xSearch.js";
 import { withinRadius } from "./geocoding.js";
@@ -232,9 +233,9 @@ async function tryTier1(ask: StatedIntent, userCity: string | null, filter?: (st
   const nearby = await filterByRadius(inWindow, userCity);
   // They asked what's on in a window, not for a topic: the soonest one in
   // that window is the answer, so relevance ranking would only reject it.
-  const match = opts.browse ? soonest(nearby) : await rankByRelevance(nearby, ask);
+  const match = opts.browse ? soonest(nearby) : (await rankEventsByDescription(nearby, ask.text ?? "", { limit: 1 })).ranked[0] ?? null;
   if (!match) return null;
-  const details = match.url ? ((await fetchLumaEventDetails(match.url)) ?? undefined) : undefined;
+  const details = ("details" in match ? (match.details as EventDetails | undefined) : undefined) ?? (match.url ? ((await fetchLumaEventDetails(match.url)) ?? undefined) : undefined);
   return {
     details,
     tier: 1,
@@ -288,13 +289,29 @@ async function tryTier2(ask: StatedIntent, userCity: string | null, filter?: (st
   // matches sitting further down the same list (2026-09-16).
   lastTopScores = [];
   lastNearbyCount = nearby.length;
-  const candidates = opts.browse ? [soonest(nearby)].filter((m): m is (typeof nearby)[number] => !!m) : await rankTopByRelevance(nearby, ask, 4, lastTopScores);
+  // Ranked on each event's description, open events first
+  // (services/eventRanking.ts); the closest one is kept for a near miss.
+  const ranking = opts.browse
+    ? { ranked: [soonest(nearby)].filter((m): m is (typeof nearby)[number] => !!m).map((m) => ({ ...m, similarity: 1, details: undefined as EventDetails | undefined })), closest: null }
+    : await rankEventsByDescription(nearby, ask.text ?? "", { limit: 6, topScores: lastTopScores });
+  if (ranking.closest) lastClosest = { ...ranking.closest, why: "the closest match, but not close enough to what they asked" };
+  const candidates = ranking.ranked;
   const rejected: string[] = [];
   const kept: TierMatch[] = [];
   for (const match of candidates) {
-    const details = (await fetchLumaEventDetails(match.url)) ?? undefined;
+    const details = match.details ?? (await fetchLumaEventDetails(match.url)) ?? undefined;
     if (ask.text && !opts.browse && !(await isGenuinelyRelevant(ask.text, match.name, match.city, details?.description ?? null))) {
       rejected.push(match.name);
+      // The first one the relevance check turns down is the nearest miss.
+      if (rejected.length === 1) {
+        lastClosest = {
+          name: match.name,
+          url: match.url ?? null,
+          date: match.start_at.slice(0, 10),
+          similarity: Math.round(match.similarity * 1000) / 1000,
+          why: "it came closest, but on reading what it's about it isn't what they asked for",
+        };
+      }
       continue;
     }
     kept.push({
@@ -510,12 +527,15 @@ export type SearchScope = {
   // relevance scores against the 0.35 bar, so an empty search shows why.
   searchText?: string | null;
   tier2Nearby?: number | null;
-  tier2TopScores?: { name: string; similarity: number }[]; browse: boolean; tiers: number[]; dropped?: TierDrop | null; gatedOut?: GatedOut[] };
+  tier2TopScores?: { name: string; similarity: number }[];
+  // The best real event that didn't make it, with why, for a near miss.
+  closest?: (Closest & { why: string }) | null; browse: boolean; tiers: number[]; dropped?: TierDrop | null; gatedOut?: GatedOut[] };
 export type TierDrop = { tier: number; name: string; reason: string };
 let lastSearchScope: SearchScope | null = null;
 let lastTierDrop: TierDrop | null = null;
 let lastFetchedThrough: string | null = null;
 let lastTopScores: { name: string; similarity: number }[] = [];
+let lastClosest: (Closest & { why: string }) | null = null;
 let lastNearbyCount: number | null = null;
 
 export function takeLastSearchScope(): SearchScope | null {
@@ -538,6 +558,7 @@ export async function getTieredRecommendation(
   lastFetchedThrough = null;
   lastTopScores = [];
   lastNearbyCount = null;
+  lastClosest = null;
   const asked = opts.rawMessage ?? ask.text ?? "";
   const window = asked ? parseAskWindow(asked, DateTime.now().setZone(opts.timezone ?? "local")) : null;
   const browse = !!asked && isBrowseAsk(asked);
@@ -581,6 +602,7 @@ export async function getTieredRecommendation(
     searchText: ask.text ?? null,
     tier2Nearby: lastNearbyCount,
     tier2TopScores: lastTopScores,
+    closest: lastClosest,
     windowCovered: window && lastFetchedThrough ? new Date(lastFetchedThrough) >= window.end.toJSDate() : null, browse, tiers: found.map((m) => m.tier), dropped: lastTierDrop };
   lastTierDrop = null;
   const gatedOut: GatedOut[] = [];

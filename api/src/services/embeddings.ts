@@ -9,6 +9,14 @@ const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY! });
 // Converts any text string into a 1536-dimension vector
 // The vector represents the semantic meaning of the text in mathematical space
 // Similar meanings produce similar vectors — this is what enables goal comparison
+// Many texts in one request, in order. Used to rank a whole list of events
+// at once instead of one call per event.
+export async function generateEmbeddings(texts: string[]): Promise<number[][]> {
+  if (!texts.length) return [];
+  const response = await openai.embeddings.create({ model: "text-embedding-3-small", input: texts });
+  return response.data.sort((a, b) => a.index - b.index).map((d) => d.embedding);
+}
+
 export async function generateEmbedding(text: string): Promise<number[]> {
   const response = await openai.embeddings.create({
     model: "text-embedding-3-small", // 1536 dimensions, fast, cheap
