@@ -1,6 +1,6 @@
 // Model-free checks for the Layer 3 gate's deterministic rules. Runs in a
 // second, no API calls: npx tsx evals/reply/codeChecks.ts
-import { rewriteKeepsAsk, shouldCacheSearch, xPostFitsWindow } from "../../src/services/searchRules.js";
+import { messageIsOnlyTheAsk, rewriteKeepsAsk, shouldCacheSearch, xPostFitsWindow } from "../../src/services/searchRules.js";
 import { localDate, orderForOffering } from "../../src/services/eventOrder.js";
 import { capitalizeSentences, looksLikeMetaReply } from "../../src/services/textStyle.js";
 import { nearestPlace, parseDiscoverPlaces } from "../../src/services/lumaDiscovery.js";
@@ -212,6 +212,11 @@ onboardingCaseCases.push(
     [!xPostFitsWindow({ start: "2026-10-05", end: "2026-10-11" }, weekend).ok, "an X post dated outside the window is kept out"],
     [!xPostFitsWindow(null, weekend).ok, "an X post with no date is kept out of a time-frame ask"],
     [xPostFitsWindow(null, null).ok, "without a time frame, a dateless X post is fine"],
+    [messageIsOnlyTheAsk("Any good tech talks in SF next week?", "Find good tech talks in SF next week"), "a pure ask needs no extra reply"],
+    [messageIsOnlyTheAsk("Anything for AI engineers happening Thursday night?", "Find AI engineer events happening Thursday night"), "a pure ask with a time frame needs no extra reply"],
+    [!messageIsOnlyTheAsk("Ugh rough week, any chill founder events this weekend?", "Find chill founder events this weekend"), "a feeling in the message still gets a reply"],
+    [!messageIsOnlyTheAsk("Any AI meetups Thursday? Also did you hear back from Maya?", "Find AI meetups Thursday"), "a second question still gets a reply"],
+    [!messageIsOnlyTheAsk("Wasn't feeling the mixer, any accelerators if I build something else?", "Find accelerators for a new company"), "news in the message still gets a reply"],
     [localDate("2026-09-18T02:00:00.000Z", "America/Los_Angeles") === "2026-09-17", "a 7pm Thursday SF event is Thursday, not Friday"],
     [localDate("2026-09-18T02:00:00.000Z", null) === "2026-09-18", "without a zone, the UTC date is kept"],
   );

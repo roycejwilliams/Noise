@@ -1,4 +1,5 @@
 import { anthropic } from "@ai-sdk/anthropic";
+import { messageIsOnlyTheAsk } from "../services/searchRules.js";
 import { capitalizeSentences } from "../services/textStyle.js";
 import { captureIssueReport } from "../services/issueReports.js";
 import { enqueueCandidate, nextLocalHour } from "../harness/proactive.js";
@@ -1084,6 +1085,9 @@ export function sendblueRouter(io: Server): Router {
         // and description per match), for the latency record below.
         let searchMsForTurn = 0;
         let prepMsForTurn = 0;
+        // Set to the last caption sent when the results fully answered a
+        // message that was only a search ask; the reply agent is skipped.
+        let resultsAnsweredAsk: string | null = null;
 
         // The thread just ended ("cool", "thanks 🙏"): react to their
         // message instead of writing a sentence that keeps it going
@@ -1866,6 +1870,12 @@ Return ONLY valid JSON, no preamble: {"date": "YYYY-MM-DD or null", "time": "HH:
                 action: prepared.length ? "sent_matches" : "nothing_fit",
                 proposal: { message: resolvedContent, holdLine, ms: Date.now() - searchStarted, scope: "scope" in recommendation ? recommendation.scope : null, matches: preparedAll.map((p) => ({ name: p.m.name, tier: p.m.tier, fits: p.fits ?? null, why: p.why ?? null, soldOut: p.m.details?.soldOut ?? null })) },
               });
+              // Their message was only the ask: the link and caption answered
+              // it, so no third message repeating them.
+              const rw = "scope" in recommendation ? recommendation.scope?.rewrite : null;
+              if (prepared.length && rw && messageIsOnlyTheAsk(rw.original, rw.rewritten)) {
+                resultsAnsweredAsk = prepared[prepared.length - 1].description;
+              }
               if (prepared.length) addInstruction(replyFacts, `You already sent them ${prepared.length > 1 ? "a couple of real things" : "something real"} you thought of, separately from this reply. Don't repeat the name, link, or details in this reply. If it's natural, you can briefly acknowledge you just sent those, but keep this reply focused on genuinely responding to what they just said.`);
             } else {
               // Nothing real found right now. Save what they asked for as an
@@ -2096,7 +2106,19 @@ Return ONLY valid JSON, no preamble: {"date": "YYYY-MM-DD or null", "time": "HH:
           // second LLM call inferring after the fact whether the drafted
           // text happened to include one.
           const replyStarted = Date.now();
-          const { replyText, grounding } = await propagateAttributes(
+          const { replyText, grounding } = resultsAnsweredAsk
+            ? await recordDecision({
+                layer: 3,
+                decision: "reply.skipped",
+                userId: user.id,
+                outcome: "skip",
+                action: "results_answered_the_ask",
+                proposal: { message: resolvedContent },
+                checks: [{ name: "message_was_only_the_ask", pass: true }],
+              })
+                .catch(() => {})
+                .then(() => ({ replyText: resultsAnsweredAsk!, grounding: [] as { latencyMs: number }[] }))
+            : await propagateAttributes(
             { userId: user.id, traceName: "sendblue.generateReply" },
             () =>
               runConversationReplyAgent({

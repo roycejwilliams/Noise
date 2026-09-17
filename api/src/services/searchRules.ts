@@ -96,3 +96,17 @@ export function xPostFitsWindow(stated: StatedDates, window: { start: string; en
   }
   return { ok: true, reason: null };
 }
+
+// ---------------------------------------------------------------------------
+// Whether their message was nothing but the search ask. Then the link and its
+// caption already answer it, and a third message repeating them is noise
+// (2026-09-16: "Just sent you one, actually, Codex Community Meetup this
+// Tuesday..." after the link and a full caption). Anything more in the
+// message (a feeling, a second question, news) still gets a reply.
+export function messageIsOnlyTheAsk(original: string, rewritten: string): boolean {
+  if (/\?.*\?/s.test(original)) return false; // two questions
+  const originalContent = contentWords(original);
+  if (!originalContent.length) return true;
+  const rewriteWords = new Set(words(rewritten));
+  return originalContent.every((w) => rewriteWords.has(w) || rewriteWords.has(w.replace(/s$/, "")) || rewriteWords.has(`${w}s`));
+}
