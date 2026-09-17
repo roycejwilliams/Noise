@@ -340,6 +340,32 @@ onboardingCaseCases.push(
   onboardingCaseCases.push([out === "" || out.trim() === "", "a whole-message follow-up promise with no other content strips to nothing"]);
 }
 
+// Real incident, 2026-09-17: groundReply used to strip only the redraft
+// when it also failed its own check, discarding the original draft's other,
+// still-good sentence entirely. A "checked already" past-action claim got
+// redrafted into an unsupported "let me check... one sec" future promise
+// instead of being fixed — stripping just that one-sentence redraft left
+// nothing, so the person got the generic fallback instead of the real,
+// grounded detail sitting right there in the original draft. groundReply
+// itself needs a live model call to fully exercise, so this locks in the
+// piece that made the fix correct: stripping the ORIGINAL draft (with its
+// own failure) has to actually survive with real content, so a
+// content-length comparison between the two candidates picks it over an
+// empty/near-empty redraft strip.
+{
+  const originalDraft = "Nothing real for Sep 24th, checked already. Only actual thing on the board right now for that window is the SOLO Founder Club on Oct 6.";
+  const originalFailed = [{ name: "claim_past_action", pass: false, reason: 'past_action: "Nothing real for Sep 24th, checked already."' }];
+  const redraftDraft = "Let me check for Sep 24th specifically, one sec.";
+  const redraftFailed = [{ name: "claim_future_promise", pass: false, reason: 'future_promise: "Let me check for Sep 24th specifically, one sec." (a future action needs a real scheduled call or an open search behind it)' }];
+  const strippedOriginal = stripUnsupported(originalDraft, originalFailed);
+  const strippedRedraft = stripUnsupported(redraftDraft, redraftFailed);
+  onboardingCaseCases.push(
+    [strippedOriginal.includes("SOLO Founder Club"), `stripping the original keeps its other real, grounded sentence (got "${strippedOriginal}")`],
+    [strippedOriginal.split(/\s+/).filter(Boolean).length >= 3, "the original's stripped result clears the minimal-fallback word floor"],
+    [strippedRedraft.split(/\s+/).filter(Boolean).length < 3, "the redraft's stripped result is the thin one here, confirming the original is the real candidate to prefer"],
+  );
+}
+
 // Predictions Co can't back (harness/replyGrounding.ts predictionMatch).
 onboardingCaseCases.push(
   [!!predictionMatch("Honest read: I don't think a separate one is going to materialize by Saturday."), "the Saturday forecast is caught"],

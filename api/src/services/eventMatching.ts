@@ -128,11 +128,21 @@ export async function matchAndScoreEventMention(mentionId: string): Promise<void
 // eventDate is the EVENT's own date (ISO, YYYY-MM-DD) — required now, not
 // optional, since matching against planned_event_mentions needs a real date
 // window; a surfacing with no confident date isn't recorded.
+//
+// startAt/endAt (2026-09-17): a real Tier 1/2 event has real timing
+// available (the same fields scoreGuestListForEvent's live path already
+// uses), but this was always passed to scoreMatchedGroup as null anyway —
+// not unsafe (still routed through the Layer 7 ledger either way), just a
+// missed chance at checkEventWindow's tighter timing read. Optional and
+// nullable so a caller with no details fetched yet degrades to the same
+// behavior as before.
 export async function recordSurfacedEventAndMatch(
   userId: string,
   eventApiId: string,
   eventName: string,
   eventDate: string,
+  startAt?: string | null,
+  endAt?: string | null,
 ): Promise<void> {
   const embedding = await generateEmbedding(eventName).catch((err: any) => {
     console.error("recordSurfacedEventAndMatch: generateEmbedding failed (non-fatal):", err?.message ?? err);
@@ -158,5 +168,6 @@ export async function recordSurfacedEventAndMatch(
   );
   // Always the real Luma id here — this path only ever runs for a real,
   // surfaced Tier 1/2 event, never a self-report with no canonical id.
-  await scoreMatchedGroup(eventApiId, eventName, matched, null);
+  const eventTiming = startAt ? { start_at: startAt, end_at: endAt ?? null } : null;
+  await scoreMatchedGroup(eventApiId, eventName, matched, eventTiming);
 }

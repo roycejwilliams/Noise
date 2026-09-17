@@ -33,7 +33,7 @@ const REWRITE_MODEL = MODELS.haiku;
 // of one clumped paragraph.
 export type RecommendationResult =
   | { available: true; match: string; reason: string; matches?: TierMatch[]; scope?: SearchScope | null }
-  | { available: false; reason: string; scope?: SearchScope | null };
+  | { available: false; reason: string; scope?: SearchScope | null; alreadyRecommended?: TierMatch[] };
 
 const NOT_ENOUGH_DATA: RecommendationResult = {
   available: false,
@@ -189,7 +189,13 @@ export async function generateRecommendation(userId: string, currentMessage?: st
         return { available: false, reason: `nothing real on the calendar${scope?.window ? ` for ${scope.window}` : ""}`, scope };
       }
       if (found.length && !tierMatches.length) {
-        return { available: false, reason: `already recommended ${found.map((m) => m.name).join(", ")} recently`, scope };
+        // Named, not just noted in a reason string (2026-09-17 code
+        // review): the only real match for a specific-date ask was
+        // something already sent hours earlier, and the reply just said
+        // "nothing found" instead of reminding them what it already told
+        // them — the honest, useful answer to "anything worth my time
+        // then?" is "yeah, the thing I already mentioned."
+        return { available: false, reason: `already recommended ${found.map((m) => m.name).join(", ")} recently`, scope, alreadyRecommended: found };
       }
       if (tierMatches.length) {
         // Nothing is recorded as offered here (2026-09-17): the caller sends
@@ -263,7 +269,7 @@ export async function recordRecommendationsSent(userId: string, matches: TierMat
     const { recordSurfacedEventAndMatch } = await import("./eventMatching.js");
     await Promise.all(
       eventMatches.map((m) =>
-        recordSurfacedEventAndMatch(userId, m.event_api_id, m.name, m.event_date).catch((err: any) =>
+        recordSurfacedEventAndMatch(userId, m.event_api_id, m.name, m.event_date, m.details?.startAt ?? null, m.details?.endAt ?? null).catch((err: any) =>
           console.error("recordSurfacedEventAndMatch failed (non-fatal):", err?.message ?? err),
         ),
       ),

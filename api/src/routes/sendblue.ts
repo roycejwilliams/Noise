@@ -2050,8 +2050,19 @@ Return ONLY valid JSON, no preamble: {"date": "YYYY-MM-DD or null", "time": "HH:
                 ],
                 proposal: { message: resolvedContent, holdLine, ms: Date.now() - searchStarted, scope: "scope" in recommendation ? recommendation.scope : null },
               });
+              const alreadyRecommended = ("alreadyRecommended" in recommendation ? recommendation.alreadyRecommended : null) ?? [];
               const gatedOut = ("scope" in recommendation ? recommendation.scope?.gatedOut : null) ?? [];
-              if (gatedOut.length) {
+              if (alreadyRecommended.length) {
+                addFact(
+                  replyFacts,
+                  "did_this_turn",
+                  `Searched again — the only real match is "${alreadyRecommended.map((m) => m.name).join('", "')}", which you already told them about earlier.`,
+                );
+                addInstruction(
+                  replyFacts,
+                  "You already told them about this earlier — don't say you found nothing. Say plainly that what you already mentioned is still the real answer for what they're asking now (name it by name, naturally, not as if it's new). Don't resend its link or re-describe it in full unless they ask for the details again.",
+                );
+              } else if (gatedOut.length) {
                 addFact(
                   replyFacts,
                   "did_this_turn",

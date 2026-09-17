@@ -620,11 +620,25 @@ export async function groundReply(
     if (rewritten && second && secondFailed && !secondFailed.length) {
       result = { final: rewritten, outcome: "redrafted", checks: [...first.checks, ...second.checks.map((c) => ({ ...c, name: `redraft.${c.name}` }))], latencyMs: Date.now() - started, firstCheckMs };
     } else {
-      const base = rewritten && second ? rewritten : draft;
-      const failed = rewritten && second ? secondFailed! : effectiveFailed1;
-      const stripped = stripUnsupported(base, failed);
+      // The redraft can fail its OWN check too (2026-09-17 code review: a
+      // "checked already" past-action claim got redrafted into an
+      // unsupported "let me check... one sec" future promise instead of
+      // being fixed). That used to mean stripping only the redraft,
+      // discarding the original draft's other, still-good sentences
+      // entirely — a real, grounded detail sitting right there in the
+      // original never got a chance because the redraft replaced it with a
+      // single bad sentence that then stripped to nothing. Strip BOTH
+      // candidates and keep whichever actually has real content left; only
+      // the minimal fallback if neither does.
+      const strippedOriginal = stripUnsupported(draft, effectiveFailed1);
+      const strippedRedraft = rewritten && second ? stripUnsupported(rewritten, secondFailed!) : "";
+      const originalWords = strippedOriginal.split(/\s+/).filter(Boolean).length;
+      const redraftWords = strippedRedraft.split(/\s+/).filter(Boolean).length;
+      // Prefer whichever survives with more real content; the original
+      // draft had the reply agent's full context, so ties favor it.
+      const stripped = redraftWords > originalWords ? strippedRedraft : strippedOriginal;
       result = {
-        final: stripped.split(/\s+/).length >= 3 ? stripped : MINIMAL_FALLBACK,
+        final: stripped.split(/\s+/).filter(Boolean).length >= 3 ? stripped : MINIMAL_FALLBACK,
         outcome: "stripped",
         checks: [...first.checks, ...(second?.checks ?? []).map((c) => ({ ...c, name: `redraft.${c.name}` }))],
         latencyMs: Date.now() - started,

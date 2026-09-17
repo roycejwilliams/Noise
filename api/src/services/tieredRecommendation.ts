@@ -10,6 +10,7 @@ import { localDate, localToday, searchZone } from "./eventOrder.js";
 import { fetchLumaEventDetails, type EventDetails, type OpportunityDetails } from "./eventDetails.js";
 import { getTier3CategoryBias } from "./recommendationOutcome.js";
 import { searchRecentPosts } from "./xSearch.js";
+import { reserveWebSearch, searchWebForOpportunity } from "./webOpportunitySearch.js";
 import { withinRadius } from "./geocoding.js";
 import type { StatedIntent } from "./matching.js";
 import { gateMatches, type GatedOut } from "../harness/matchGate.js";
@@ -315,6 +316,9 @@ type SearchTrace = {
   xDropped: { name: string; reason: string } | null;
   xQuery: string | null;
   xBlocked: string | null;
+  // General-web fallback, tried only when X found nothing (2026-09-17).
+  webQuery: string | null;
+  webBlocked: string | null;
   // Which Tier 3 categories have (or haven't) gone anywhere for this person
   // before, per getTier3CategoryBias — for an optional reply mention, not
   // forced (2026-09-17).
@@ -323,7 +327,7 @@ type SearchTrace = {
 };
 
 function newTrace(): SearchTrace {
-  return { tierDrop: null, fetchedThrough: null, topScores: [], nearbyCount: null, closest: null, relevanceRejected: [], xDropped: null, xQuery: null, xBlocked: null, categoryInsight: null, timings: {} };
+  return { tierDrop: null, fetchedThrough: null, topScores: [], nearbyCount: null, closest: null, relevanceRejected: [], xDropped: null, xQuery: null, xBlocked: null, webQuery: null, webBlocked: null, categoryInsight: null, timings: {} };
 }
 
 // "Thursday, September 17" in their zone. toLocaleDateString() used the
@@ -784,6 +788,10 @@ export type SearchScope = {
   xQuery?: string | null;
   // Why Tier 3 didn't search X at all (budget), when it didn't.
   xBlocked?: string | null;
+  // The general-web fallback query, tried only when X found nothing, and
+  // why it didn't run (budget) when it didn't (2026-09-17).
+  webQuery?: string | null;
+  webBlocked?: string | null;
   // Which Tier 3 categories have (or haven't) worked out for this person
   // before, for an optional reply mention — never forced (2026-09-17).
   categoryInsight?: { worked: string[]; flopped: string[] } | null;
@@ -863,7 +871,7 @@ export async function getTieredRecommendation(
   if (cached && Date.now() - cached.at < SEARCH_CACHE_TTL_MS) {
     found = await refreshAvailability(cached.found);
     // The record of what the original search saw, marked as reused.
-    t = { ...cached.trace, xBlocked: null };
+    t = { ...cached.trace, xBlocked: null, webBlocked: null };
     usedCache = true;
   } else {
     const source = opts.source ?? "request";
@@ -903,6 +911,20 @@ export async function getTieredRecommendation(
             found = null;
           }
         }
+        // X's recent-search only sees the last 7 days — a real fit for a
+        // just-announced thing, a bad fit for the evergreen program pages
+        // most grants/credits/city programs actually live on. Tried only
+        // when X found nothing, so this doesn't double the cost of every
+        // Tier 3 search (2026-09-17, "fold something like that into Co").
+        if (!found) {
+          const webBudget = await reserveWebSearch(opts.userId ?? null, source, opportunityQuery);
+          if (!webBudget.ok) {
+            trace.webBlocked = webBudget.reason ?? "web search budget";
+          } else {
+            trace.webQuery = opportunityQuery;
+            found = await searchWebForOpportunity(opportunityQuery, city, opts.profile, localToday(new Date(), zone));
+          }
+        }
         return found;
       } finally {
         trace.timings.tier3Ms = Date.now() - started;
@@ -937,6 +959,8 @@ export async function getTieredRecommendation(
     xDropped: t.xDropped,
     xQuery: t.xQuery,
     xBlocked: t.xBlocked,
+    webQuery: t.webQuery,
+    webBlocked: t.webBlocked,
     categoryInsight: t.categoryInsight,
     timings: t.timings,
     cached: usedCache,

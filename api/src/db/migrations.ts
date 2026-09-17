@@ -1346,6 +1346,22 @@ export async function runMigrations(): Promise<void> {
     .then(() => pool.query(`CREATE INDEX IF NOT EXISTS idx_x_search_log_created ON x_search_log (created_at DESC)`))
     .catch((err: Error) => console.error("x_search_log table init failed:", err));
 
+  // Tier 3's general web search budget log (2026-09-17) — services/webOpportunitySearch.ts.
+  // Same shape as x_search_log, separate table: a different API with its own
+  // cost, so it needs its own daily cap, not shared with X's budget.
+  await pool
+    .query(
+      `CREATE TABLE IF NOT EXISTS web_search_log (
+        id BIGSERIAL PRIMARY KEY,
+        user_id UUID REFERENCES users(id) ON DELETE CASCADE,
+        source TEXT NOT NULL,
+        query TEXT NOT NULL,
+        created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+      )`,
+    )
+    .then(() => pool.query(`CREATE INDEX IF NOT EXISTS idx_web_search_log_created ON web_search_log (created_at DESC)`))
+    .catch((err: Error) => console.error("web_search_log table init failed:", err));
+
   // Current picture of each person (harness/personSnapshot.ts) and the
   // result of every suggestion (services/outcomes.ts), 2026-09-15.
   await pool

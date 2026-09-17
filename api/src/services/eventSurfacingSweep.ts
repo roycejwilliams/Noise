@@ -462,7 +462,7 @@ export async function onEventOfferSent(userId: string, payload: EventOfferPayloa
 
   if ("event_api_id" in match) {
     const { recordSurfacedEventAndMatch } = await import("./eventMatching.js");
-    await recordSurfacedEventAndMatch(userId, match.event_api_id, match.name, match.event_date).catch((err: any) =>
+    await recordSurfacedEventAndMatch(userId, match.event_api_id, match.name, match.event_date, match.details?.startAt ?? null, match.details?.endAt ?? null).catch((err: any) =>
       console.error("onEventOfferSent: recordSurfacedEventAndMatch failed (non-fatal):", err?.message ?? err),
     );
   } else {
