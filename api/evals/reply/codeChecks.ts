@@ -1,6 +1,6 @@
 // Model-free checks for the Layer 3 gate's deterministic rules. Runs in a
 // second, no API calls: npx tsx evals/reply/codeChecks.ts
-import { messageIsOnlyTheAsk, rewriteKeepsAsk, shouldCacheSearch, xPostFitsWindow } from "../../src/services/searchRules.js";
+import { canSkipReplyAfterResults, messageIsOnlyTheAsk, rewriteKeepsAsk, shouldCacheSearch, xPostFitsWindow } from "../../src/services/searchRules.js";
 import { localDate, orderForOffering } from "../../src/services/eventOrder.js";
 import { capitalizeSentences, looksLikeMetaReply } from "../../src/services/textStyle.js";
 import { nearestPlace, parseDiscoverPlaces } from "../../src/services/lumaDiscovery.js";
@@ -217,6 +217,13 @@ onboardingCaseCases.push(
     [!messageIsOnlyTheAsk("Ugh rough week, any chill founder events this weekend?", "Find chill founder events this weekend"), "a feeling in the message still gets a reply"],
     [!messageIsOnlyTheAsk("Any AI meetups Thursday? Also did you hear back from Maya?", "Find AI meetups Thursday"), "a second question still gets a reply"],
     [!messageIsOnlyTheAsk("Wasn't feeling the mixer, any accelerators if I build something else?", "Find accelerators for a new company"), "news in the message still gets a reply"],
+    [!messageIsOnlyTheAsk("any founder events this weekend 😭", "Find founder events this weekend"), "a feeling shown only as an emoji still gets a reply"],
+    [canSkipReplyAfterResults({ sentResults: 1, original: "Any design events in SF next week?", rewritten: "Find design events in SF next week", ruledOut: 0, firstRealMessage: false }), "a plain ask with a result and nothing ruled out skips the reply"],
+    [!canSkipReplyAfterResults({ sentResults: 1, original: "Any AI engineer events Thursday?", rewritten: "Find AI engineer events Thursday", ruledOut: 1, firstRealMessage: false }), "something ruled out keeps the reply, so a wrong earlier pick gets corrected"],
+    [!canSkipReplyAfterResults({ sentResults: 1, original: "Any AI events in SF this week?", rewritten: "Find AI events in SF this week", ruledOut: 0, firstRealMessage: true }), "a first real message keeps the reply, so Co opens the conversation"],
+    [!canSkipReplyAfterResults({ sentResults: 0, original: "Any design events in SF next week?", rewritten: "Find design events in SF next week", ruledOut: 0, firstRealMessage: false }), "nothing sent means a reply"],
+    [!messageIsOnlyTheAsk("anything this weekend 🙏🏾", "Find events this weekend"), "any emoji counts as more than the ask"],
+    [messageIsOnlyTheAsk("Any AI/ML talks in SF next week?", "Find AI/ML talks in SF next week"), "ordinary punctuation like a slash is still just the ask"],
     [localDate("2026-09-18T02:00:00.000Z", "America/Los_Angeles") === "2026-09-17", "a 7pm Thursday SF event is Thursday, not Friday"],
     [localDate("2026-09-18T02:00:00.000Z", null) === "2026-09-18", "without a zone, the UTC date is kept"],
   );

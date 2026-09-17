@@ -105,8 +105,27 @@ export function xPostFitsWindow(stated: StatedDates, window: { start: string; en
 // message (a feeling, a second question, news) still gets a reply.
 export function messageIsOnlyTheAsk(original: string, rewritten: string): boolean {
   if (/\?.*\?/s.test(original)) return false; // two questions
+  // Emoji or anything beyond words and ordinary punctuation is extra: a
+  // feeling can be just "😭" (code review, 2026-09-16).
+  if (/[^\p{L}\p{N}\s.,!?'’"“”\-–:;()&/$#%@+]/u.test(original)) return false;
   const originalContent = contentWords(original);
   if (!originalContent.length) return true;
   const rewriteWords = new Set(words(rewritten));
   return originalContent.every((w) => rewriteWords.has(w) || rewriteWords.has(w.replace(/s$/, "")) || rewriteWords.has(`${w}s`));
+}
+
+// Whether the reply after sent results can be skipped. Only when the message
+// was nothing but the ask, the search ruled nothing out (that correction goes
+// out in the reply), and it isn't their first real message (opening the
+// conversation and the first-contact call offer live in the reply).
+export function canSkipReplyAfterResults(t: {
+  sentResults: number;
+  original: string | null;
+  rewritten: string | null;
+  ruledOut: number;
+  firstRealMessage: boolean;
+}): boolean {
+  if (!t.sentResults || !t.original || !t.rewritten) return false;
+  if (t.ruledOut > 0 || t.firstRealMessage) return false;
+  return messageIsOnlyTheAsk(t.original, t.rewritten);
 }

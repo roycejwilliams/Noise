@@ -1,5 +1,5 @@
 import { anthropic } from "@ai-sdk/anthropic";
-import { messageIsOnlyTheAsk } from "../services/searchRules.js";
+import { canSkipReplyAfterResults } from "../services/searchRules.js";
 import { capitalizeSentences } from "../services/textStyle.js";
 import { captureIssueReport } from "../services/issueReports.js";
 import { enqueueCandidate, nextLocalHour } from "../harness/proactive.js";
@@ -1871,9 +1871,21 @@ Return ONLY valid JSON, no preamble: {"date": "YYYY-MM-DD or null", "time": "HH:
                 proposal: { message: resolvedContent, holdLine, ms: Date.now() - searchStarted, scope: "scope" in recommendation ? recommendation.scope : null, matches: preparedAll.map((p) => ({ name: p.m.name, tier: p.m.tier, fits: p.fits ?? null, why: p.why ?? null, soldOut: p.m.details?.soldOut ?? null })) },
               });
               // Their message was only the ask: the link and caption answered
-              // it, so no third message repeating them.
+              // it, so no third message repeating them. Never when this search
+              // ruled out something (the correction only goes out in the
+              // reply), and never on their first real message (opening the
+              // conversation and the first-contact call offer live in the
+              // reply) (code review, 2026-09-16).
               const rw = "scope" in recommendation ? recommendation.scope?.rewrite : null;
-              if (prepared.length && rw && messageIsOnlyTheAsk(rw.original, rw.rewritten)) {
+              if (
+                canSkipReplyAfterResults({
+                  sentResults: prepared.length,
+                  original: rw?.original ?? null,
+                  rewritten: rw?.rewritten ?? null,
+                  ruledOut: ruledOut.length,
+                  firstRealMessage: isFirstRealMessage || isThinProfileFirstMessage,
+                })
+              ) {
                 resultsAnsweredAsk = prepared[prepared.length - 1].description;
               }
               if (prepared.length) addInstruction(replyFacts, `You already sent them ${prepared.length > 1 ? "a couple of real things" : "something real"} you thought of, separately from this reply. Don't repeat the name, link, or details in this reply. If it's natural, you can briefly acknowledge you just sent those, but keep this reply focused on genuinely responding to what they just said.`);
