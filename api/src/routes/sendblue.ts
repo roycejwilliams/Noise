@@ -297,6 +297,12 @@ function describeTimeFrame(scope: { window: string | null; windowStart?: string 
   return `${scope.window} (${start === end ? start : `${start} to ${end}`})`;
 }
 
+// "2026-09-19" as a person says it: "Saturday, September 19".
+function dayLabel(isoDate: string): string {
+  const d = DateTime.fromISO(isoDate);
+  return d.isValid ? d.toFormat("cccc, LLLL d") : isoDate;
+}
+
 async function replyOwed(userId: string): Promise<boolean> {
   const { rows } = await pool
     .query(
@@ -1876,22 +1882,22 @@ Return ONLY valid JSON, no preamble: {"date": "YYYY-MM-DD or null", "time": "HH:
                 addFact(
                   replyFacts,
                   "did_this_turn",
-                  `Found real ones but couldn't offer them: ${gatedOut.map((g) => `"${g.name}"${g.date ? ` on ${g.date}` : ""}${g.url ? `, link ${g.url}` : ""} (${g.reasons.join(", ")})`).join("; ")}.`,
+                  `Found real ones but couldn't offer them: ${gatedOut.map((g) => `"${g.name}"${g.date ? ` on ${dayLabel(g.date)}` : ""}${g.url ? `, link ${g.url}` : ""} (${g.reasons.join(", ")})`).join("; ")}.`,
                 );
                 addInstruction(
                   replyFacts,
-                  "You did find real things, but none you can offer as asked (for example sold out, or just outside the dates they gave). Say that plainly in a short sentence: name what you found, when it is, and why it didn't make the cut, and don't suggest a generic type of thing instead. If one is close, like just past their dates, say so briefly so they can ask for it if their plans change. Don't send its link unless they ask.",
+                  "You did find real things, but none you can offer as asked (for example sold out, or just outside the dates they gave). In one or two short sentences: name what you found, say the day it's on exactly as written in the facts (like \"Saturday, September 19\"), and the plain reason it didn't make the cut (for example \"it's already sold out\"). Don't blur the reason into something vaguer, and don't suggest a generic type of thing instead. If one is close, like just past their dates, say so briefly so they can ask for it if their plans change. Don't send its link unless they ask.",
                 );
               } else if (("scope" in recommendation ? recommendation.scope?.closest : null)) {
                 const closest = ("scope" in recommendation ? recommendation.scope?.closest : null)!;
                 addFact(
                   replyFacts,
                   "did_this_turn",
-                  `The closest real event was "${closest.name}"${closest.date ? ` on ${closest.date}` : ""}${closest.url ? `, link ${closest.url}` : ""}, but ${closest.why}.`,
+                  `The closest real event was "${closest.name}"${closest.date ? ` on ${dayLabel(closest.date)}` : ""}${closest.url ? `, link ${closest.url}` : ""}, but ${closest.why}.`,
                 );
                 addInstruction(
                   replyFacts,
-                  "You searched and nothing real fits what they asked. Say that plainly, then name the closest real one in a short sentence (what it is and when) and why it isn't quite it, so they can decide. Don't send its link unless they ask, and don't make up anything else.",
+                  "You searched and nothing real fits what they asked. Say that plainly, then name the closest real one in a short sentence: what it is, the day it's on exactly as written in the facts (like \"Sunday, September 20\"), and why it isn't quite it, so they can decide. Don't send its link unless they ask, and don't make up anything else.",
                 );
               } else {
                 addInstruction(replyFacts, "You searched and found nothing real yet. Say that plainly. Don't make up a suggestion.");
