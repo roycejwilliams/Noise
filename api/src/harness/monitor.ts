@@ -56,6 +56,18 @@ export const SIGNALS: Signal[] = [
   { key: "exempt_send_blocked_or_failed", label: "Transactional (exempt) sends blocked by hours/opt-out or failed", bad: `decision = 'proactive.exemptSend' AND outcome = 'skip'`, total: `decision = 'proactive.exemptSend'`, floor: 0.3, minCount: 3 },
   { key: "announcement_gave_up", label: "Co event announcements given up on (event gone/past, or opted out)", bad: `decision = 'tier1.announce' AND action LIKE 'gave_up%'`, total: `decision = 'tier1.announce'`, floor: 0.3, minCount: 2 },
   { key: "call_gate_blocked", label: "Calls blocked at the gate before dialing", bad: `decision = 'call.gate' AND outcome = 'skip'`, total: `decision = 'call.gate'`, floor: 0.3, minCount: 3 },
+  // Code review, 2026-09-17: the Tier 2 relevance judge was silently
+  // rejecting real events on their format label alone ("pitch night" isn't
+  // literally "meetup") for weeks before anyone noticed by feel. These two
+  // watch the two failure shapes that fix targeted, so a future prompt
+  // change that reintroduces either one shows up here instead of needing
+  // another live test session to catch.
+  { key: "tier2_relevance_overreject", label: "Real Tier 2 candidates existed but the relevance judge rejected all of them", bad: `decision = 'recommendation.search' AND outcome = 'skip' AND jsonb_array_length(COALESCE(proposal->'scope'->'relevanceRejected', '[]'::jsonb)) > 0 AND COALESCE((proposal->'scope'->>'tier2Nearby')::int, 0) > 0`, total: `decision = 'recommendation.search' AND COALESCE((proposal->'scope'->>'tier2Nearby')::int, 0) > 0`, floor: 0.4, minCount: 3 },
+  // Tier 3 genuinely finds nothing often (X's recent-search is only 7 days,
+  // and the bar for "real, concrete, not hype" is deliberately strict) —
+  // floor set high on purpose so this only fires on a real jump, not on
+  // Tier 3's normal baseline scarcity.
+  { key: "tier3_searched_found_nothing", label: "Tier 3 (X) was searched but nothing ended up offered", bad: `decision = 'recommendation.search' AND proposal->'scope'->>'xQuery' IS NOT NULL AND (outcome = 'skip' OR NOT EXISTS (SELECT 1 FROM jsonb_array_elements(COALESCE(proposal->'matches', '[]'::jsonb)) e WHERE e->>'tier' = '3'))`, total: `decision = 'recommendation.search' AND proposal->'scope'->>'xQuery' IS NOT NULL`, floor: 0.6, minCount: 3 },
 ];
 
 export type SignalReading = { signal: Signal; recentBad: number; recentTotal: number; recentRate: number; baselineRate: number };

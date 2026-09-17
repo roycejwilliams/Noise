@@ -8,6 +8,7 @@ import { DEFAULT_FEED_DAYS, fetchPublicEvents } from "./lumaDiscovery.js";
 import { rankEventsByDescription, type Closest } from "./eventRanking.js";
 import { localDate, localToday, searchZone } from "./eventOrder.js";
 import { fetchLumaEventDetails, type EventDetails, type OpportunityDetails } from "./eventDetails.js";
+import { getTier3CategoryBias } from "./recommendationOutcome.js";
 import { searchRecentPosts } from "./xSearch.js";
 import { withinRadius } from "./geocoding.js";
 import type { StatedIntent } from "./matching.js";
@@ -44,10 +45,16 @@ const JUDGE_MODEL = MODELS.sonnet;
 //
 // Tier 3 redefined 2026-08-30 (Royce): not a generic nearby-venue fallback
 // anymore — Co's actual audience is founders/builders/"high agency" people,
-// so Tier 3 is specifically accelerators, fellowships, and similar real
-// opportunities, sourced from X's recent-search (xSearch.ts), not Google
-// Places. A physical venue lookup isn't the fallback shape that matches who
-// Co is actually for.
+// so Tier 3 is real opportunities sourced from X's recent-search
+// (xSearch.ts), not Google Places. A physical venue lookup isn't the
+// fallback shape that matches who Co is actually for.
+// Widened 2026-09-17 (Royce, "high agency people are looking for more than
+// just that"): accelerators/fellowships/grants/communities were the first
+// examples, not the ceiling — an investor actively looking to fund people,
+// a mentor, a speaking slot, a co-founder or hire, or anything else a
+// high-agency person could actually act on all count too, as long as it's a
+// real, concrete, nameable thing grounded in one actual post, never vague
+// hype and never invented.
 // event_api_id is carried through on the two real-event tiers (not Tier 3 —
 // an "opportunity" isn't a shared event two people would both attend) so
 // callers can key exact same-event matching off it (see eventMatching.ts's
@@ -79,7 +86,7 @@ type MatchExtras = { details?: EventDetails; opportunity?: OpportunityDetails; w
 export type TierMatch =
   | ({ tier: 1; kind: "co_event"; event_api_id: string; event_date: string; name: string; url?: string; reason: string; city?: string | null; online?: boolean } & MatchExtras)
   | ({ tier: 2; kind: "public_event"; event_api_id: string; event_date: string; name: string; url: string; reason: string; city?: string | null; online?: boolean } & MatchExtras)
-  | ({ tier: 3; kind: "opportunity"; name: string; url: string; reason: string; deadline?: string; evidence?: string; statedDates?: { start: string; end?: string | null }; online?: undefined } & MatchExtras);
+  | ({ tier: 3; kind: "opportunity"; name: string; url: string; reason: string; deadline?: string; evidence?: string; statedDates?: { start: string; end?: string | null }; online?: undefined; category?: string | null } & MatchExtras);
 
 // Lead-time window (Royce, 2026-08-30) — "how far out in advance are we
 // searching?" Neither listCalendarEvents() nor fetchPublicEvents() take a
@@ -510,9 +517,18 @@ async function tryTier2(ask: StatedIntent, userCity: string | null, filter: ((st
 // never invent one" discipline as before — the difference from the old
 // venue version is the grounding element is a real post URL, not a
 // place_id.
-async function proposeOpportunityQuery(ask: StatedIntent, city: string | null, profile: string | null | undefined, zone: string): Promise<string | null> {
+async function proposeOpportunityQuery(ask: StatedIntent, city: string | null, profile: string | null | undefined, zone: string, userId?: string | null): Promise<string | null> {
   if (!ask.text) return null;
   try {
+    // What's actually gone somewhere for this person before, not a guess
+    // (2026-09-17, closing the outcome loop — see
+    // recommendationOutcome.ts's getTier3CategoryBias). Genuinely empty for
+    // a while: a Tier 3 outcome follow-up is deliberately delayed days, so
+    // this has nothing to say for anyone new. That's fine — the hint is
+    // just omitted, same prompt as today, until real signal exists.
+    const categoryBias: Record<string, number> = userId ? await getTier3CategoryBias(userId).catch(() => ({})) : {};
+    const worked = Object.entries(categoryBias).filter(([, v]) => v > 0).sort((a, b) => b[1] - a[1]).map(([k]) => k);
+    const flopped = Object.entries(categoryBias).filter(([, v]) => v < 0).sort((a, b) => a[1] - b[1]).map(([k]) => k);
     // Today's date, explicit (Royce, 2026-09-02) — confirmed live: without
     // this, the model defaulted to a plausible-sounding but wrong year from
     // its training data ("SF accelerator program applications open 2024"),
@@ -527,10 +543,10 @@ async function proposeOpportunityQuery(ask: StatedIntent, city: string | null, p
       model: anthropic(EXTRACT_MODEL),
       experimental_telemetry: { isEnabled: true, functionId: "tieredRecommendation.proposeOpportunityQuery" },
       prompt: `Someone wants: "${ask.text}"${city ? ` (based in ${city})` : ""}
-${profile ? `\nWho they are right now (use it to aim the query at opportunities suited to their stage and situation, e.g. Series A programs rather than beginner ones; their ask still decides the topic):\n${profile}\n` : ""}
+${profile ? `\nWho they are right now (use it to aim the query at opportunities suited to their stage and situation, e.g. Series A programs rather than beginner ones; their ask still decides the topic):\n${profile}\n` : ""}${worked.length ? `\nFor this person, ${worked.join(", ")} opportunities have actually led somewhere before — lean toward that kind of thing when their ask is open enough to allow it, but never instead of what they actually asked for.\n` : ""}${flopped.length ? `\n${flopped.join(", ")} opportunities haven't gone anywhere for this person before — still search if their ask is specifically that, just don't reach for it when the ask is open.\n` : ""}
 Today's date: ${todayStr}
 
-Propose a short X search query (2-4 broad, distinctive keywords, not a question) likely to surface real, recent posts about a concrete opportunity that fits what they want: an accelerator, fellowship, cohort-based program, residency, grant, or a named community, club, or recurring group they could join. Always propose one when there's any topic to search on; social or hobby asks map to communities and groups. Never include a specific year in the query unless the person's own ask text stated one — a wrong or stale year keyword will filter out real current posts that don't happen to mention that exact year. Never include the person's own city/region as a keyword either (confirmed live: adding "SF Bay Area" to an otherwise-good query dropped real matching posts to zero) — a real opportunity post almost never mentions the seeker's own location, only the program's own name and field.
+Propose a short X search query (2-4 broad, distinctive keywords, not a question) likely to surface real, recent posts about a concrete opportunity that fits what they want. That opportunity can be an accelerator, fellowship, cohort-based program, residency, grant, a named community/club/recurring group to join, an investor or fund actively looking to back people like them, a mentor or advisor, a speaking or demo slot, a co-founder or hire, or anything else concrete a high-agency person could actually act on — those are examples of the shape of thing to search for, not an exhaustive list, so read their actual ask and go after what THEY specifically want, even if it doesn't fit neatly into one of these labels. Always propose one when there's any topic to search on; social or hobby asks map to communities and groups. Never include a specific year in the query unless the person's own ask text stated one — a wrong or stale year keyword will filter out real current posts that don't happen to mention that exact year. Never include the person's own city/region as a keyword either (confirmed live: adding "SF Bay Area" to an otherwise-good query dropped real matching posts to zero) — a real opportunity post almost never mentions the seeker's own location, only the program's own name and field.
 
 The single phrase they used isn't the only real wording people post with — "founder meetup" misses a post that says "builder night" or "startup mixer" even though it's the same thing. Where there's a genuinely equivalent, commonly-used phrasing for the same core topic (2-3 real variants, not invented ones), combine them with X's OR operator, grouped in parentheses: (founder meetup OR builder night OR startup mixer). Only group phrasings someone would actually use for the same thing — don't pad the query with a loosely related second topic just to widen it. A single distinctive phrase with no real synonym is fine as-is.
 
@@ -585,7 +601,7 @@ Today's date: ${todayStr}
 Here are real recent posts from X, one per line:
 ${digest}
 
-Pick the ONE post (if any) that names a real, concrete opportunity (a specific accelerator, fellowship, program, residency, grant, or a named community, club, or recurring group someone can actually join — not vague hype, not an unrelated post) genuinely relevant to what they want. Name the opportunity using only what's actually in that post — never add details that aren't there.
+Pick the ONE post (if any) that names a real, concrete opportunity genuinely relevant to what they want — a specific accelerator, fellowship, program, residency, grant, community/club/recurring group, an investor or fund actively backing people, a mentor, a speaking slot, a co-founder or hire lead, or anything else a high-agency person could actually act on. Those are examples of the shape of thing, not the only things that count — what matters is it's a real, nameable thing someone could actually do something with, not vague hype and not an unrelated post. Name the opportunity using only what's actually in that post — never add details that aren't there.
 
 Skip anything that reads as hype, clickbait, or an engagement-bait "BREAKING" post without real concrete substance behind it (a specific program name, a real application process) — prefer a plainly-stated, verifiable opportunity over a dramatic-sounding one. A repost/retweet of someone else's claim is not independently more credible just because it's been shared multiple times.
 
@@ -597,7 +613,9 @@ Write "reason" the way Co would say it to a friend over text — one short, casu
 
 If the post itself states when the thing happens (an event date or date range for the opportunity you're naming), include it as "dates" with "start" and optional "end" in YYYY-MM-DD form. Only dates the post actually states for that opportunity; never estimate.
 
-Return ONLY valid JSON: {"index": 0, "name": "the specific opportunity name", "reason": "one short grounded sentence", "deadline": "YYYY-MM-DD" or null, "dates": {"start": "YYYY-MM-DD", "end": "YYYY-MM-DD" or null} or null} or {"index": null}`,
+Also give "category": one short word or two for the kind of thing this is (e.g. "accelerator", "fellowship", "grant", "investor", "mentor", "community", "speaking", "hiring", "other") — used later to notice which kinds of things actually work out for people, not shown to them.
+
+Return ONLY valid JSON: {"index": 0, "name": "the specific opportunity name", "reason": "one short grounded sentence", "category": "...", "deadline": "YYYY-MM-DD" or null, "dates": {"start": "YYYY-MM-DD", "end": "YYYY-MM-DD" or null} or null} or {"index": null}`,
     });
     // Robust extraction (Royce, 2026-09-02, confirmed live: "Unexpected
     // token 'I', "I can see "..." — the model ignored "Return ONLY valid
@@ -613,6 +631,7 @@ Return ONLY valid JSON: {"index": 0, "name": "the specific opportunity name", "r
       name: parsed.name ?? posts[parsed.index].text.slice(0, 80),
       url: posts[parsed.index].url,
       reason: parsed.reason ?? "Found via a real, recent post.",
+      category: typeof parsed?.category === "string" ? parsed.category.trim().toLowerCase().slice(0, 40) : null,
       ...(typeof parsed?.deadline === "string" ? { deadline: parsed.deadline } : {}),
       ...(parsed?.dates && typeof parsed.dates.start === "string" ? { statedDates: { start: parsed.dates.start, end: typeof parsed.dates.end === "string" ? parsed.dates.end : null } } : {}),
       evidence: posts[parsed.index].text,
@@ -627,8 +646,17 @@ Return ONLY valid JSON: {"index": 0, "name": "the specific opportunity name", "r
 // query is pre-computed by the caller (proposeOpportunityQuery) so that
 // classification — cheap, LLM-only — and the actual paid X search stay two
 // separately-gateable steps, not one bundled call.
+// A good match buried past X's default top-10 was never even seen by the
+// extraction step (code review, 2026-09-17). extractRealOpportunity already
+// reads every post in one digest, so the LLM step isn't the bottleneck —
+// the raw fetch was. Doubled, not maxed out: X bills per post read
+// regardless of the shared daily search-count budget (reserveXSearch caps
+// how many SEARCHES happen, not how many posts each one reads), so this is
+// a real cost increase per search, picked as a reasonable middle ground.
+const TIER3_MAX_RESULTS = 20;
+
 async function tryTier3(ask: StatedIntent, query: string, profile: string | null | undefined, zone: string): Promise<TierMatch | null> {
-  const posts = await searchRecentPosts(query).catch((err: any) => {
+  const posts = await searchRecentPosts(query, TIER3_MAX_RESULTS).catch((err: any) => {
     console.error("tieredRecommendation: tryTier3 searchRecentPosts failed (non-fatal):", err?.message ?? err);
     return [];
   });
@@ -839,7 +867,7 @@ export async function getTieredRecommendation(
         // Every ask searches Tier 3 too (Royce, 2026-09-16: "Asks should always
         // include tier 2 and 3"). A post for a time-frame ask still has to
         // state a date inside it (below), and results name their source.
-        const opportunityQuery = await proposeOpportunityQuery(ask, city, opts.profile, zone);
+        const opportunityQuery = await proposeOpportunityQuery(ask, city, opts.profile, zone, opts.userId);
         if (!opportunityQuery) return null;
         const budget = await reserveXSearch(opts.userId ?? null, source, opportunityQuery);
         if (!budget.ok) {

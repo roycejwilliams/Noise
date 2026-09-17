@@ -58,17 +58,26 @@ async function draftDebrief(c: Candidate, firstName: string): Promise<DraftResul
 
 export async function draftDebriefText(firstName: string, p: DebriefPayload, people: string[]): Promise<DraftResult> {
   const walkin = (p.walkinCheckinIds ?? []).length > 0;
+  // A Tier 3 opportunity (accelerator, investor, mentor — see
+  // tieredRecommendation.ts's category) has no eventApiId (it's not a real
+  // Luma event) and never comes with check-in/walk-in data (those only
+  // exist for a physical event). "Who did you meet there?" doesn't apply —
+  // ask whether they actually did anything with it instead (2026-09-17,
+  // closing the loop on outcomes for Tier 3).
+  const isOpportunity = !p.eventApiId && !walkin && (p.checkinFollowupIds ?? []).length === 0;
   const text = await draftProactive({
     functionId: "proactive.debrief",
     firstName,
     facts: {
       event: p.eventName,
-      when: "last night or recently",
+      when: isOpportunity ? "a few days ago" : "last night or recently",
       people_co_pointed_them_to_there: people,
       what_they_were_looking_for: p.askText,
       they_checked_in_at_the_door: walkin ? "yes, and Co doesn't know them well yet" : null,
     },
-    task: `Ask how "${p.eventName}" was, naming the event.${people.length ? ` Name one of the people Co pointed them to and ask if they ended up talking.` : " Ask who they met or what stood out."}${walkin ? " Then offer, in the same text, to find time for a call this week so you can get to know them and point them to better people next time." : ""} One text, not a survey.`,
+    task: isOpportunity
+      ? `Ask if they got a chance to look into or apply to "${p.eventName}" (a real opportunity Co pointed them to, not an event) — did anything come of it. One text, not a survey.`
+      : `Ask how "${p.eventName}" was, naming the event.${people.length ? ` Name one of the people Co pointed them to and ask if they ended up talking.` : " Ask who they met or what stood out."}${walkin ? " Then offer, in the same text, to find time for a call this week so you can get to know them and point them to better people next time." : ""} One text, not a survey.`,
   });
   if (!text) return skip("model chose SKIP");
   return {

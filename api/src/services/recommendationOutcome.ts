@@ -9,8 +9,15 @@ import { enqueueCandidate, nextLocalHour } from "../harness/proactive.js";
 // Outcome-learning loop (Royce, 2026-09-02: "Co follows up" + the shared
 // "named someone?" classifier + wiring signal weighting into future
 // matching — Notion V1 board rows 7/12/13, confirmed fully unbuilt before
-// this). Tier 1/2 only — a Tier 3 opportunity (accelerator, fellowship) has
-// no attendees to "meet," so "who did you meet?" doesn't apply to it.
+// this).
+//
+// Widened 2026-09-17 (Royce, "close the loop on outcomes" for Tier 3): a
+// Tier 3 opportunity has no attendees to "meet," so it never gets the
+// event-anchored "who did you meet?" question (draftDebriefText below asks
+// something Tier-3-appropriate instead), but it's still worth knowing
+// whether it went anywhere — that's what getTier3CategoryBias reads back
+// into proposeOpportunityQuery. No event_date to anchor "the day after," so
+// Tier 3 gets a fixed delay instead (TIER3_FOLLOWUP_DELAY_DAYS below).
 //
 // Same due-timestamp + nullable claim column + partial index convention as
 // post_call_follow_ups (jobs/postCallFollowUp.ts) — see migrations.ts's
@@ -18,16 +25,20 @@ import { enqueueCandidate, nextLocalHour } from "../harness/proactive.js";
 // a co_memories row ('recommendation_outcome'), not a new table — that's
 // exactly what co_memories already exists for (event_offer_pending/
 // event_offer_resolved/recap all follow this same shape).
+const TIER3_FOLLOWUP_DELAY_DAYS = 5;
+
 export async function scheduleOutcomeFollowUp(userId: string, askText: string, match: TierMatch): Promise<void> {
-  if (!("event_date" in match) || !match.event_date) return; // Tier 3 has no event_date — nothing to schedule
+  const eventDate = "event_date" in match ? match.event_date : null;
+  if (match.tier !== 3 && !eventDate) return; // Tier 1/2 need a real event date to anchor "the day after"; Tier 3 doesn't have or need one
 
   try {
     await pool.query(
-      // One follow-up per recommended event, however many times it got
-      // recommended (2026-09-14: the same event produced two follow-ups
-      // sent 2 seconds apart).
+      // One follow-up per recommended event/opportunity, however many times
+      // it got recommended (2026-09-14: the same event produced two
+      // follow-ups sent 2 seconds apart).
       `INSERT INTO recommendation_outcome_followups (user_id, ask_text, tier, match_name, match, send_at)
-       SELECT $1::uuid, $2::text, $3::int, $4::text, $5::jsonb, ($6::date + INTERVAL '1 day 11 hours')
+       SELECT $1::uuid, $2::text, $3::int, $4::text, $5::jsonb,
+         CASE WHEN $6::date IS NOT NULL THEN $6::date + INTERVAL '1 day 11 hours' ELSE NOW() + ($7 || ' days')::interval END
        WHERE NOT EXISTS (
          SELECT 1 FROM recommendation_outcome_followups
          WHERE user_id = $1 AND (
@@ -35,7 +46,7 @@ export async function scheduleOutcomeFollowUp(userId: string, askText: string, m
            OR lower(match_name) = lower($4)
          )
        )`,
-      [userId, askText, match.tier, match.name, JSON.stringify(match), match.event_date],
+      [userId, askText, match.tier, match.name, JSON.stringify(match), eventDate, TIER3_FOLLOWUP_DELAY_DAYS],
     );
   } catch (err: any) {
     console.error("scheduleOutcomeFollowUp: insert failed (non-fatal):", err?.message ?? err);
@@ -112,6 +123,39 @@ export async function getTierBias(userId: string): Promise<Record<number, number
   return bias;
 }
 
+// Same idea as getTierBias, one level more specific: which KIND of Tier 3
+// opportunity (tieredRecommendation.ts's category — accelerator, investor,
+// mentor, etc.) has actually gone somewhere for this person before, not just
+// whether Tier 3 in general has. Read back into proposeOpportunityQuery as
+// an optional hint (2026-09-17, "close the loop on outcomes"). The category
+// isn't stored on the co_memories outcome row itself — it's already sitting
+// in recommendation_outcome_followups.match (the whole TierMatch was stored
+// there at schedule time), so this joins back to it rather than needing a
+// new column. Real signal here takes days to accumulate (a Tier 3 follow-up
+// is deliberately delayed TIER3_FOLLOWUP_DELAY_DAYS) — an empty map is the
+// honest, expected result for a while, and the caller already treats "no
+// opinion" as "don't mention it," so this is safe to call from day one.
+export async function getTier3CategoryBias(userId: string): Promise<Record<string, number>> {
+  const bias: Record<string, number> = {};
+  try {
+    const { rows } = await pool.query(
+      `SELECT rof.match ->> 'category' AS category, m.content::jsonb ->> 'outcome' AS outcome
+       FROM co_memories m
+       JOIN recommendation_outcome_followups rof ON rof.id::text = (m.content::jsonb ->> 'followupId')
+       WHERE m.user_id = $1 AND m.memory_type = 'recommendation_outcome' AND (m.content::jsonb ->> 'tier')::int = 3`,
+      [userId],
+    );
+    for (const row of rows) {
+      const category = typeof row.category === "string" && row.category ? row.category : null;
+      if (!category) continue;
+      bias[category] = (bias[category] ?? 0) + (row.outcome === "named_positive" ? 1 : row.outcome === "named_critical" ? -1 : 0);
+    }
+  } catch (err: any) {
+    console.error("getTier3CategoryBias: query failed (non-fatal, no bias applied):", err?.message ?? err);
+  }
+  return bias;
+}
+
 // Layer 7 (2026-09-14): no longer sends. Each due follow-up becomes part of
 // one "debrief" candidate per event (merged with the end-of-night check-in
 // from eventCheckinFollowUp.ts and the walk-in call offer), due the morning
@@ -119,7 +163,7 @@ export async function getTierBias(userId: string): Promise<Record<number, number
 // Pacific, one a duplicate two seconds after the other.
 export async function enqueueDueOutcomeFollowUps(): Promise<void> {
   const { rows } = await pool.query(
-    `SELECT rof.id, rof.user_id, rof.ask_text, rof.match_name, rof.match, cp.city
+    `SELECT rof.id, rof.user_id, rof.ask_text, rof.match_name, rof.match, rof.send_at, cp.city
      FROM recommendation_outcome_followups rof
      JOIN users u ON u.id = rof.user_id
      LEFT JOIN co_profiles cp ON cp.user_id = rof.user_id
@@ -129,8 +173,12 @@ export async function enqueueDueOutcomeFollowUps(): Promise<void> {
   );
   for (const row of rows) {
     const match = row.match ?? {};
+    // Tier 1/2 anchor on the event's own date ("the day after"); Tier 3 has
+    // no event to anchor on, so its already-computed send_at (a fixed delay
+    // from when it was recommended) is the anchor instead (2026-09-17).
     const eventDate: string | undefined = match.event_date;
-    if (!eventDate) {
+    const anchor: Date | null = eventDate ? null : row.send_at instanceof Date ? row.send_at : row.send_at ? new Date(row.send_at) : null;
+    if (!eventDate && !anchor) {
       await pool.query(`UPDATE recommendation_outcome_followups SET harness_status = 'dropped' WHERE id = $1`, [row.id]);
       continue;
     }
@@ -141,7 +189,7 @@ export async function enqueueDueOutcomeFollowUps(): Promise<void> {
       userId: row.user_id,
       eventApiId: match.event_api_id ?? null,
       eventName: row.match_name,
-      eventEnd: endOfLocalDay(eventDate, timezone),
+      eventEnd: eventDate ? endOfLocalDay(eventDate, timezone) : anchor!,
       timezone,
       part: { outcomeFollowupIds: [row.id], askText: row.ask_text },
     }).catch((err: any) => {
