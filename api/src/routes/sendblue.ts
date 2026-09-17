@@ -1732,6 +1732,15 @@ Return ONLY valid JSON, no preamble: {"date": "YYYY-MM-DD or null", "time": "HH:
               ),
             ]);
             searchMsForTurn = Date.now() - searchStarted;
+            // What this search looked at and ruled out, so the reply never
+            // recommends one of them because it was sent earlier (2026-09-16:
+            // a search rejected the chess night as "not an AI engineer event"
+            // and the reply still called it "your real option").
+            const ruledOut = ("scope" in recommendation ? recommendation.scope?.relevanceRejected : null) ?? [];
+            if (ruledOut.length) {
+              addFact(replyFacts, "did_this_turn", `This search looked at and ruled out: ${ruledOut.map((r) => `"${r.name}" (${r.why})`).join("; ")}.`);
+              addInstruction(replyFacts, "Don't recommend or endorse anything this search ruled out, even if you sent it before. If they already have one of those from earlier, say plainly it isn't really what they asked for.");
+            }
             if (recommendation.available && recommendation.matches?.length) {
               // Sent DETERMINISTICALLY, not via agent tool-calling (Royce,
               // 2026-09-02, confirmed live) — the previous version asked the

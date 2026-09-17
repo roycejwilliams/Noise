@@ -188,7 +188,7 @@ Answer three things, in order:
 2. askedKind: what kind of event they asked for, in 2 to 6 words, from their words.
 3. fit: true only if the event's own main activity is the kind they asked for. Who attends, who hosts, or who sponsors never changes what kind of event it is: a chess night full of AI researchers is still a chess night. Close variants of the same kind are fine (an AI demo night fits "AI meetup"; a founder dinner fits "founder meetup"; a build day or hackathon fits an ask for builders, since building together is the point). Also false if it's clearly somewhere other than where they asked.
 
-If fit is false, "why" says it plainly in a few words, like you'd tell a friend (e.g. "it's a hands-on build session, not a meetup"). No names, about 12 words at most. And "related" says whether someone who asked this might still reasonably consider it as a near alternative (a hands-on build day for someone wanting a founder meetup: true; a shopping market or a tarot night: false).
+If fit is false, "why" says it plainly in a few words, like you'd tell a friend (e.g. "it's a hands-on build session, not a meetup"). No names, about 12 words at most. And "related" is true only when it serves the same purpose they asked for, the same people to meet or the same thing to do, just in a different format or setting (a hands-on build day full of founders for someone wanting a founder meetup: true; a general-interest run, a shopping market, or a tarot night: false, even if some founders might turn up).
 
 Return ONLY JSON: {"eventKind": "...", "askedKind": "...", "fit": true or false, "why": "..." or null, "related": true or false}`;
 }

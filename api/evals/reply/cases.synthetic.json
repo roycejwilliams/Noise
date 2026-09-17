@@ -371,5 +371,36 @@
     ],
     "groundedDraft": false,
     "style": "capitalized"
+  },
+  {
+    "id": "t0916d_no_endorsing_ruled_out",
+    "onlyMode": "e2e",
+    "message": "Anything for AI engineers happening Thursday night?",
+    "recentConversation": "Co replied: https://lu.ma/5aijb3kb\nCo replied: Thursday Sept 17, 5:30-8:30pm in SF: OpenRouter's hosting \"Best Move Club,\" a chess night with founders, engineers, and AI researchers.\nUser said: Anything for AI engineers happening Thursday night?",
+    "facts": [
+      {
+        "kind": "did_before",
+        "text": "Co sent them 1 hour ago: [Tier public_event] Best Move Club: Chess Community Event Series (link https://lu.ma/5aijb3kb)"
+      },
+      {
+        "kind": "did_this_turn",
+        "text": "Searched just now for what they asked for and found nothing real that fits yet."
+      },
+      {
+        "kind": "did_this_turn",
+        "text": "This search looked at and ruled out: \"Best Move Club: Chess Community Event Series\" (it's a chess social night, not an AI engineer event); \"East Bay Neurotech Happy Hour\" (it's a neurotech industry happy hour, not an AI-specific event)."
+      }
+    ],
+    "instructions": [
+      "Don't recommend or endorse anything this search ruled out, even if you sent it before. If they already have one of those from earlier, say plainly it isn't really what they asked for.",
+      "You searched and found nothing real yet. Say that plainly. Don't make up a suggestion."
+    ],
+    "forbidden": [
+      "real option",
+      "your best bet",
+      "still has spots",
+      "worth (going|registering|locking)"
+    ],
+    "style": "capitalized"
   }
 ]

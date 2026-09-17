@@ -75,6 +75,7 @@ const kinds: Kind[] = [
   { id: "k04_build_day_not_founder_meetup", ask: "Find a founder meetup this weekend", event: /Build Day/, expectFit: false, expectRelated: true },
   { id: "k05_market_not_founders", ask: "Find a founder or builder meetup this weekend", event: /Maum Market/, expectFit: false, expectRelated: false },
   { id: "k06_market_not_a_near_miss", ask: "Is there a founder meetup this weekend?", event: /Maum Market/, expectFit: false, expectRelated: false },
+  { id: "k07_run_not_a_near_miss", ask: "Is there a founder meetup this weekend?", event: /Bakery Run/, expectFit: false, expectRelated: false },
 ];
 const feed = await fetchPublicEvents(50, "San Francisco", new Date(Date.now() + 10 * 86400000)).catch(() => []);
 await runEval<Kind, any>({
