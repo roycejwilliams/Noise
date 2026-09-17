@@ -2087,6 +2087,7 @@ Return ONLY valid JSON, no preamble: {"date": "YYYY-MM-DD or null", "time": "HH:
             { userId: user.id, traceName: "sendblue.generateReply" },
             () =>
               runConversationReplyAgent({
+                searchedThisTurn: !!decision.wantsRecommendation,
                 userId: user.id,
                 phoneNumber: user.phone_number,
                 firstName: user.first_name,

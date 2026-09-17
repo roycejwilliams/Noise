@@ -25,6 +25,9 @@ function lastCoLineBeforeLatestUser(recentConversation: string): string | null {
 }
 
 export type ConversationReplyInput = {
+  // A search already ran and its results went out as their own messages, so
+  // this reply only has to respond around them; drafted at low effort.
+  searchedThisTurn?: boolean;
   userId: string;
   phoneNumber: string;
   firstName: string;
@@ -271,6 +274,10 @@ ${input.missingTopic ? `  - Co doesn't yet have a good sense of ${input.missingT
     // state-consistency issue, not just phrasing quality, so it justifies
     // the latency/cost tradeoff.
     model: anthropic(LAYER3_MODELS.reply),
+    // After a search the content is already written (link, description, or
+    // what was found and why not); the reply around it doesn't need full
+    // reasoning (2026-09-16: drafting was 7-10s of a 46s search turn).
+    ...(input.searchedThisTurn ? { providerOptions: { anthropic: { effort: "low" } } } : {}),
     system,
     tools,
     // 6, not 5 — a genuine second sendReply call now needs an extra

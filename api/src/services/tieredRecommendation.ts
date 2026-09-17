@@ -315,9 +315,21 @@ async function tryTier2(ask: StatedIntent, userCity: string | null, filter?: (st
   const candidates = ranking.ranked;
   const rejected: string[] = [];
   const kept: TierMatch[] = [];
-  for (const match of candidates) {
-    const details = match.details ?? (await fetchLumaEventDetails(match.url)) ?? undefined;
-    const verdict = ask.text && !opts.browse ? await isGenuinelyRelevant(ask.text, match.name, match.city, details?.description ?? null) : { fit: true, why: null };
+  // Every candidate is read at the same time, then handled in ranked order
+  // exactly as before (2026-09-16: reading up to six one after another was
+  // most of an 18-second search).
+  const relevanceStarted = Date.now();
+  const reads = await Promise.all(
+    candidates.map(async (match) => {
+      const details = match.details ?? (await fetchLumaEventDetails(match.url)) ?? undefined;
+      const verdict: RelevanceVerdict =
+        ask.text && !opts.browse ? await isGenuinelyRelevant(ask.text, match.name, match.city, details?.description ?? null) : { fit: true, why: null };
+      return { details, verdict };
+    }),
+  );
+  lastTimings.relevanceMs = Date.now() - relevanceStarted;
+  for (const [i, match] of candidates.entries()) {
+    const { details, verdict } = reads[i];
     if (!verdict.fit) {
       rejected.push(match.name);
       lastRelevanceRejected.push({ name: match.name, why: verdict.why ?? "doesn't match what they asked" });
@@ -589,7 +601,9 @@ export type SearchScope = {
   // Everything the relevance check turned down, with its reason.
   relevanceRejected?: { name: string; why: string }[];
   // An X post that was found but kept out, and why.
-  xDropped?: { name: string; reason: string } | null; browse: boolean; tiers: number[]; dropped?: TierDrop | null; gatedOut?: GatedOut[] };
+  xDropped?: { name: string; reason: string } | null;
+  // Milliseconds: all tiers together, Tier 3 on its own, Tier 2's relevance reads.
+  timings?: { tiersMs?: number; tier3Ms?: number; relevanceMs?: number }; browse: boolean; tiers: number[]; dropped?: TierDrop | null; gatedOut?: GatedOut[] };
 export type TierDrop = { tier: number; name: string; reason: string };
 let lastSearchScope: SearchScope | null = null;
 let lastTierDrop: TierDrop | null = null;
@@ -598,6 +612,8 @@ let lastTopScores: { name: string; similarity: number }[] = [];
 let lastClosest: (Closest & { why: string }) | null = null;
 let lastRelevanceRejected: { name: string; why: string }[] = [];
 let lastXDropped: { name: string; reason: string } | null = null;
+// Where the search time goes, for turn.latency-style reading of one search.
+let lastTimings: { tiersMs?: number; tier3Ms?: number; relevanceMs?: number } = {};
 let lastNearbyCount: number | null = null;
 
 export function takeLastSearchScope(): SearchScope | null {
@@ -623,6 +639,7 @@ export async function getTieredRecommendation(
   lastClosest = null;
   lastRelevanceRejected = [];
   lastXDropped = null;
+  lastTimings = {};
   const asked = opts.rawMessage ?? ask.text ?? "";
   const window = asked ? parseAskWindow(asked, DateTime.now().setZone(opts.timezone ?? "local")) : null;
   const browse = !!asked && isBrowseAsk(asked);
@@ -635,35 +652,46 @@ export async function getTieredRecommendation(
     found = cached.found;
   } else {
     const source = opts.source ?? "request";
-    const [tier1, tier2, budget] = await Promise.all([
-      tryTier1(ask, city, windowFilter, { browse, maxDays, zone: opts.timezone }),
-      tryTier2(ask, city, windowFilter, { browse, maxDays, until: window ? window.end.toJSDate() : null, zone: opts.timezone }),
-      paidSearchAllowed(opts.userId ?? null, source),
-    ]);
-    let tier3: TierMatch | null = null;
-    // Asking what's on the calendar is a question about events, not about
-    // posts on X (2026-09-16: "what's been surfacing on Luma this weekend"
-    // came back with an X post, and Co never said where it came from).
-    if (budget.ok && !browse) {
-      const opportunityQuery = await proposeOpportunityQuery(ask, city);
-      if (opportunityQuery) {
+    const tierStarted = Date.now();
+    // Tier 3 runs alongside Tiers 1 and 2 instead of after them (2026-09-16:
+    // it used to wait for both to finish).
+    const runTier3 = async (): Promise<TierMatch | null> => {
+      const started = Date.now();
+      try {
+        // Asking what's on the calendar is a question about events, not about
+        // posts on X (2026-09-16: "what's been surfacing on Luma this weekend"
+        // came back with an X post, and Co never said where it came from).
+        if (browse) return null;
+        const budget = await paidSearchAllowed(opts.userId ?? null, source);
+        if (!budget.ok) return null;
+        const opportunityQuery = await proposeOpportunityQuery(ask, city);
+        if (!opportunityQuery) return null;
         await pool
           .query(`INSERT INTO x_search_log (user_id, source, query) VALUES ($1, $2, $3)`, [opts.userId ?? null, source, opportunityQuery])
           .catch(() => {});
-        tier3 = await tryTier3(ask, opportunityQuery);
+        let found = await tryTier3(ask, opportunityQuery);
         // A named time frame: an X post only counts when the post itself
         // states a date inside it (the thing's own dates, or its deadline).
         // Posts with no date are kept out, with the reason recorded.
-        if (tier3 && tier3.kind === "opportunity" && window) {
-          const stated = tier3.statedDates ?? (tier3.deadline ? { start: tier3.deadline } : null);
+        if (found && found.kind === "opportunity" && window) {
+          const stated = found.statedDates ?? (found.deadline ? { start: found.deadline } : null);
           const fits = xPostFitsWindow(stated, { start: window.start.toISO()!, end: window.end.toISO()! });
           if (!fits.ok) {
-            lastXDropped = { name: tier3.name, reason: fits.reason ?? "outside the time frame" };
-            tier3 = null;
+            lastXDropped = { name: found.name, reason: fits.reason ?? "outside the time frame" };
+            found = null;
           }
         }
+        return found;
+      } finally {
+        lastTimings.tier3Ms = Date.now() - started;
       }
-    }
+    };
+    const [tier1, tier2, tier3] = await Promise.all([
+      tryTier1(ask, city, windowFilter, { browse, maxDays, zone: opts.timezone }),
+      tryTier2(ask, city, windowFilter, { browse, maxDays, until: window ? window.end.toJSDate() : null, zone: opts.timezone }),
+      runTier3(),
+    ]);
+    lastTimings.tiersMs = Date.now() - tierStarted;
     // Every tier's candidates go to the gate, which keeps what's actually
     // offerable; one per tier survives below.
     const gateable = [tier1, ...tier2, tier3].filter((m): m is TierMatch => m != null);
@@ -682,6 +710,7 @@ export async function getTieredRecommendation(
     closest: lastClosest,
     relevanceRejected: lastRelevanceRejected,
     xDropped: lastXDropped,
+    timings: lastTimings,
     windowCovered: window && lastFetchedThrough ? new Date(lastFetchedThrough) >= window.end.toJSDate() : null, browse, tiers: found.map((m) => m.tier), dropped: lastTierDrop };
   lastTierDrop = null;
   const gatedOut: GatedOut[] = [];
