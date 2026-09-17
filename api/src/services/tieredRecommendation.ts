@@ -302,14 +302,18 @@ async function tryTier2(ask: StatedIntent, userCity: string | null, filter?: (st
     const details = match.details ?? (await fetchLumaEventDetails(match.url)) ?? undefined;
     if (ask.text && !opts.browse && !(await isGenuinelyRelevant(ask.text, match.name, match.city, details?.description ?? null))) {
       rejected.push(match.name);
-      // The first one the relevance check turns down is the nearest miss.
-      if (rejected.length === 1) {
+      // The nearest miss is the best-scoring one the check turned down, not
+      // the first one it read: candidates are ordered open-first, so the first
+      // read can be a weaker open event (2026-09-16: Maum Market was named
+      // over Claude Fable 5.1 Build Day).
+      const similarity = Math.round(match.similarity * 1000) / 1000;
+      if (!lastClosest || rejected.length === 1 || similarity > lastClosest.similarity) {
         lastClosest = {
           name: match.name,
           url: match.url ?? null,
           date: match.start_at.slice(0, 10),
-          similarity: Math.round(match.similarity * 1000) / 1000,
-          why: "it came closest, but on reading what it's about it isn't what they asked for",
+          similarity,
+          why: `it came closest, but on reading what it's about it isn't quite what they asked for${details?.soldOut ? ", and it's sold out" : ""}`,
         };
       }
       continue;
