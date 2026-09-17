@@ -74,13 +74,25 @@ function explicitDates(t: string, now: DateTime): AskWindow | null {
 // ahead?").
 export const MAX_ASK_DAYS_AHEAD = 90;
 
-// Returns the window they named, or null when they didn't name one.
+// Returns the window they named, or null when they didn't name one (or named
+// one too far out to search; resolveAskWindow says which).
 export function parseAskWindow(text: string, now: DateTime): AskWindow | null {
+  return resolveAskWindow(text, now).window;
+}
+
+// The window they named, plus whether they named one Co can't search. A date
+// past the 90-day limit (or a date already behind them this year, which rolls
+// to next year) used to come back as "no time frame", so the search ran the
+// default two-week lookahead and "anything Jan 20?" got next week's events
+// (code review, 2026-09-17). outOfRange lets the search say so and stop.
+export type AskWindowResolution = { window: AskWindow | null; outOfRange: { label: string; start: DateTime } | null };
+
+export function resolveAskWindow(text: string, now: DateTime): AskWindowResolution {
   const w = parseAskWindowUncapped(text, now);
-  if (!w) return null;
+  if (!w) return { window: null, outOfRange: null };
   const ceiling = now.plus({ days: MAX_ASK_DAYS_AHEAD }).endOf("day");
-  if (w.start > ceiling) return null; // too far to search; treat as no window
-  return w.end > ceiling ? { ...w, end: ceiling } : w;
+  if (w.start > ceiling) return { window: null, outOfRange: { label: w.label, start: w.start } };
+  return { window: w.end > ceiling ? { ...w, end: ceiling } : w, outOfRange: null };
 }
 
 function parseAskWindowUncapped(text: string, now: DateTime): AskWindow | null {

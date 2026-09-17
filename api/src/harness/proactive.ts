@@ -58,10 +58,21 @@ export type ProactiveType =
   | "debrief"
   | "post_call"
   | "product_update"
-  | "window_followup";
+  | "window_followup"
+  // A guest-match nudge for a matched pair with no real event timing to be
+  // "in-room" for (eventMatching.ts's self-reported/recommended-event path —
+  // code review, 2026-09-17). Unlike eventScoring.ts's live in-room nudge,
+  // this has no event to be inside the window of, so it goes through the
+  // normal daily pick instead of bypassing it: local hours, the daily/weekly
+  // caps, and opt-out all apply.
+  | "event_match_nudge";
 
 // co_event: Co's own event, announced to nearby users on creation (services/coEventAnnouncement.ts).
-export type ExemptType = "event_change" | "call_reminder" | "missed_call" | "co_event";
+// direct_ask: a reply-triggered direct ask to a THIRD person who didn't just
+// text (eventGuestMatchHandoff.ts's maybeAskCandidateDirectly/
+// askConnectionMethod, networkIntroNudge.ts's askCandidateDirectly) — see
+// sendExemptWhenAllowed below.
+export type ExemptType = "event_change" | "call_reminder" | "missed_call" | "co_event" | "direct_ask";
 
 export type TypePolicy = {
   priority: number;
@@ -80,6 +91,7 @@ export const TYPE_POLICY: Record<ProactiveType, TypePolicy> = {
   event_offer: { priority: 60 },
   ask_solicitation: { priority: 55 },
   network_tease: { priority: 50 },
+  event_match_nudge: { priority: 50 },
   ask_checkin: { priority: 30, topicGapDays: 14 },
   // After a time frame they searched has passed; about them, not a pitch.
   window_followup: { priority: 35, typeGapDays: 5 },
@@ -145,6 +157,7 @@ export const HOLD_WHILE_STRUGGLING = new Set<ProactiveType>([
   "product_update",
   "calendar_follow",
   "debrief",
+  "event_match_nudge",
 ]);
 
 export type CandidateEvaluation = { candidate: Candidate; checks: GateCheck[]; ok: boolean };
@@ -464,12 +477,23 @@ export type EnqueueInput = {
 // Producers call this instead of sending. Idempotent per (user, target): a
 // target that was already sent, skipped, or expired is never re-queued, so a
 // sweep re-running every hour can't turn into repeated texts.
+// A re-enqueue never pushes an expiry later (code review, 2026-09-17): the
+// hourly ask check-in and companion crons re-enqueue a pending candidate with
+// "now + N days" every tick, so a candidate blocked by the caps kept moving
+// its own expiry out and never expired. The earlier of the two wins; null
+// means "no expiry", so a real expiry on either side is kept.
+export function mergeExpiry(existing: Date | null, incoming: Date | null): Date | null {
+  if (!existing) return incoming;
+  if (!incoming) return existing;
+  return existing.getTime() <= incoming.getTime() ? existing : incoming;
+}
+
 export async function enqueueCandidate(input: EnqueueInput): Promise<{ queued: boolean }> {
   const client = await pool.connect();
   try {
     await client.query("BEGIN");
     const existing = await client.query(
-      `SELECT id, status, payload FROM proactive_candidates WHERE user_id = $1 AND target_key = $2 FOR UPDATE`,
+      `SELECT id, status, payload, expires_at FROM proactive_candidates WHERE user_id = $1 AND target_key = $2 FOR UPDATE`,
       [input.userId, input.targetKey],
     );
     const priority = input.priority ?? TYPE_POLICY[input.type].priority;
@@ -480,11 +504,12 @@ export async function enqueueCandidate(input: EnqueueInput): Promise<{ queued: b
         return { queued: false };
       }
       const payload = input.merge ? input.merge(existing.rows[0].payload, input.payload) : input.payload;
+      const expiresAt = mergeExpiry(existing.rows[0].expires_at ? new Date(existing.rows[0].expires_at) : null, input.expiresAt ?? null);
       await client.query(
         `UPDATE proactive_candidates
          SET payload = $2, summary = $3, due_at = $4, expires_at = $5, priority = $6, updated_at = NOW()
          WHERE id = $1`,
-        [existing.rows[0].id, JSON.stringify(payload), input.summary, dueAt, input.expiresAt ?? null, priority],
+        [existing.rows[0].id, JSON.stringify(payload), input.summary, dueAt, expiresAt, priority],
       );
       await client.query("COMMIT");
       return { queued: true };
@@ -595,22 +620,38 @@ export function proposePick(eligible: Candidate[]): { pick: Candidate | null; re
 
 // Re-checks everything that could have changed since the gather, holds a
 // per-person advisory lock, and writes the idempotency key in the same
-// transaction as the send. A crash after the send but before COMMIT can
-// repeat one text; a failed send rolls the key back so it can retry.
+// transaction as the FIRST message's send only (code review, 2026-09-17).
+// Used to write the key around the whole multi-message send: if message 1
+// (e.g. a link) delivered but message 2 then failed, the whole transaction
+// rolled back, undoing the claim along with it — the next tick saw "never
+// sent" and resent the link. Now the claim only commits once message 1 is
+// actually confirmed delivered (so a total failure before anything went out
+// still rolls back cleanly and can retry from scratch, same as before), and
+// every message after that is sent outside the transaction: a later failure
+// can only ever mean a missed message, never a duplicate one. Returns which
+// messages actually went out so the caller only remembers/acts on those.
 async function sendWithLedger(
   c: Candidate,
   person: Person,
   messages: string[],
-): Promise<{ sent: true } | { sent: false; failed: GateCheck[] }> {
+): Promise<{ sent: true; delivered: string[] } | { sent: false; failed: GateCheck[] }> {
   const client = await pool.connect();
+  const delivered: string[] = [];
   try {
     await client.query("BEGIN");
     await client.query(`SELECT pg_advisory_xact_lock(hashtext($1))`, [`proactive:${person.userId}`]);
+    // Re-read opted-out inside the lock (code review, 2026-09-17): the
+    // caller's gather can be minutes stale, and a STOP sent while a draft was
+    // being written must still block this send. Was hardcoded false here,
+    // meaning opt-out was never actually enforced at send time.
+    const optedOutNow = await client
+      .query(`SELECT COALESCE(sms_opted_out, false) AS opted_out FROM users WHERE id = $1`, [person.userId])
+      .then((r) => r.rows[0]?.opted_out === true);
     const sends = await loadSends(client, person.userId);
     const lastInboundAt = await loadLastInbound(client, person.userId);
     const now = new Date();
     const checks = [
-      ...userLevelChecks({ now, timezone: person.timezone, optedOut: false, sends, lastInboundAt }),
+      ...userLevelChecks({ now, timezone: person.timezone, optedOut: optedOutNow, sends, lastInboundAt }),
       ...candidateChecks(c, { now, sends, lastInboundAt }),
     ];
     const g = gate(checks);
@@ -628,24 +669,55 @@ async function sendWithLedger(
       await client.query("ROLLBACK");
       return { sent: false, failed: [{ name: "not_sent_before", pass: false, reason: "idempotency key taken" }] };
     }
-    for (let i = 0; i < messages.length; i++) {
-      if (i > 0) await new Promise((r) => setTimeout(r, 2000));
-      await sendblue.messages.send({ number: person.phoneNumber, content: messages[i], from_number: process.env.SENDBLUE_PHONE_NUMBER! });
-    }
+    // First message inside the transaction: a failure here rolls the claim
+    // back entirely, so nothing was delivered and a later tick can retry
+    // cleanly from scratch.
+    await sendblue.messages.send({ number: person.phoneNumber, content: messages[0], from_number: process.env.SENDBLUE_PHONE_NUMBER! });
+    delivered.push(messages[0]);
     await client.query(`UPDATE proactive_candidates SET status = 'sent', decided_at = NOW(), updated_at = NOW() WHERE id = $1`, [c.id]);
     await client.query("COMMIT");
-    return { sent: true };
   } catch (err) {
     await client.query("ROLLBACK").catch(() => {});
-    throw err;
+    if (!delivered.length) throw err; // nothing delivered — safe to retry the whole send later
+    return { sent: true, delivered }; // message 1 delivered but the claim commit itself failed; treat as sent, don't retry
   } finally {
     client.release();
   }
+
+  // Claim is durable now. Remaining messages are sent outside the
+  // transaction; a failure here can only mean a missed message, never a
+  // resend of what already went out.
+  for (let i = 1; i < messages.length; i++) {
+    await new Promise((r) => setTimeout(r, 2000));
+    try {
+      await sendblue.messages.send({ number: person.phoneNumber, content: messages[i], from_number: process.env.SENDBLUE_PHONE_NUMBER! });
+      delivered.push(messages[i]);
+    } catch (err: any) {
+      console.error(
+        `proactive: sendWithLedger message ${i + 1}/${messages.length} failed for ${person.userId} (ledger already claimed, not retried, ${delivered.length} delivered):`,
+        err?.message ?? err,
+      );
+      break;
+    }
+  }
+  return { sent: true, delivered };
 }
 
 // For transactional texts outside the daily pick. Still idempotent per
 // target, still logged in the ledger (exempt = true, so they don't count
 // toward caps or the unanswered pause).
+//
+// Writes the idempotency key in the same transaction as message 1's send
+// only (code review, 2026-09-17), same reasoning as sendWithLedger above:
+// coEventAnnouncement's two-message send (link, then caption) used to write
+// the claim and send everything inside one transaction, so a caption
+// failure after the link delivered rolled the claim back too — the next
+// 10-minute retry saw "never sent" and resent the link. A total failure
+// before message 1 delivers still rolls back cleanly (retry from scratch);
+// once message 1 is confirmed delivered the claim commits, so anything
+// after that can only miss a message, never duplicate one. `delivered`
+// reports what actually went out so callers (and their memories) only ever
+// reflect real deliveries.
 export async function sendExempt(opts: {
   userId: string;
   phoneNumber: string;
@@ -654,13 +726,33 @@ export async function sendExempt(opts: {
   messages: string[];
   timezone?: string | null;
   respectHours?: boolean;
-}): Promise<{ sent: boolean; reason?: string }> {
-  if (opts.respectHours && !localHourOk(new Date(), opts.timezone ?? null)) return { sent: false, reason: "outside local hours" };
+}): Promise<{ sent: boolean; reason?: string; delivered?: string[] }> {
+  // Monitoring visibility (code review, 2026-09-17): send failures and
+  // hours/opt-out blocks at send time had nothing writing a decision at
+  // all, so harness/monitor.ts had no signal that could ever see them.
+  const record = (outcome: "act" | "skip", action: string, reason?: string) =>
+    recordDecision({ layer: 7, decision: "proactive.exemptSend", userId: opts.userId, outcome, action, reason, proposal: { type: opts.type, targetKey: opts.targetKey } }).catch(() => {});
+
+  if (opts.respectHours && !localHourOk(new Date(), opts.timezone ?? null)) {
+    await record("skip", "blocked_hours", "outside local hours");
+    return { sent: false, reason: "outside local hours" };
+  }
   const client = await pool.connect();
-  let sent = false;
+  const delivered: string[] = [];
   try {
     await client.query("BEGIN");
     await client.query(`SELECT pg_advisory_xact_lock(hashtext($1))`, [`proactive:${opts.userId}`]);
+    // Re-read opted-out inside the lock, same reasoning as sendWithLedger
+    // (code review, 2026-09-17): exempt sends skipped this check entirely
+    // before, so even STOP couldn't stop a transactional text.
+    const optedOutNow = await client
+      .query(`SELECT COALESCE(sms_opted_out, false) AS opted_out FROM users WHERE id = $1`, [opts.userId])
+      .then((r) => r.rows[0]?.opted_out === true);
+    if (optedOutNow) {
+      await client.query("ROLLBACK");
+      await record("skip", "blocked_opted_out", "opted out");
+      return { sent: false, reason: "opted out" };
+    }
     const ins = await client.query(
       `INSERT INTO proactive_sends (user_id, type, target_key, topic_key, message, exempt)
        VALUES ($1, $2, $3, $3, $4, true)
@@ -669,28 +761,82 @@ export async function sendExempt(opts: {
     );
     if (!ins.rows[0]) {
       await client.query("ROLLBACK");
-      return { sent: false, reason: "already sent" };
+      return { sent: false, reason: "already sent" }; // idempotent no-op, not worth a decision row
     }
-    for (let i = 0; i < opts.messages.length; i++) {
-      if (i > 0) await new Promise((r) => setTimeout(r, 2000));
-      await sendblue.messages.send({ number: opts.phoneNumber, content: opts.messages[i], from_number: process.env.SENDBLUE_PHONE_NUMBER! });
-    }
+    await sendblue.messages.send({ number: opts.phoneNumber, content: opts.messages[0], from_number: process.env.SENDBLUE_PHONE_NUMBER! });
+    delivered.push(opts.messages[0]);
     await client.query("COMMIT");
-    sent = true;
   } catch (err) {
     await client.query("ROLLBACK").catch(() => {});
-    throw err;
+    if (!delivered.length) {
+      await record("skip", "send_failed", `${err instanceof Error ? err.message : err}`);
+      throw err; // nothing delivered — safe to retry the whole send later
+    }
   } finally {
     client.release();
   }
-  if (sent) {
-    for (const m of opts.messages) {
-      await writeMemory(opts.userId, "text_exchange", `Co replied: ${m}`).catch((err: any) =>
-        console.error(`sendExempt(${opts.type}): text_exchange log failed (non-fatal):`, err?.message ?? err),
+  if (!delivered.length) {
+    await record("skip", "send_failed", "send failed before anything delivered");
+    return { sent: false, reason: "send failed before anything delivered" };
+  }
+
+  for (let i = 1; i < opts.messages.length; i++) {
+    await new Promise((r) => setTimeout(r, 2000));
+    try {
+      await sendblue.messages.send({ number: opts.phoneNumber, content: opts.messages[i], from_number: process.env.SENDBLUE_PHONE_NUMBER! });
+      delivered.push(opts.messages[i]);
+    } catch (err: any) {
+      console.error(
+        `sendExempt(${opts.type}): message ${i + 1}/${opts.messages.length} failed for ${opts.userId} (ledger already claimed, not retried, ${delivered.length} delivered):`,
+        err?.message ?? err,
       );
+      break;
     }
   }
-  return { sent };
+  for (const m of delivered) {
+    await writeMemory(opts.userId, "text_exchange", `Co replied: ${m}`).catch((err: any) =>
+      console.error(`sendExempt(${opts.type}): text_exchange log failed (non-fatal):`, err?.message ?? err),
+    );
+  }
+  await record("act", delivered.length < opts.messages.length ? "sent_partial" : "sent", delivered.length < opts.messages.length ? `${delivered.length}/${opts.messages.length} delivered` : undefined);
+  return { sent: true, delivered };
+}
+
+// For a reply-triggered direct ask to a THIRD person who didn't just text Co
+// (code review, 2026-09-17: eventGuestMatchHandoff.ts's
+// maybeAskCandidateDirectly/askConnectionMethod and networkIntroNudge.ts's
+// askCandidateDirectly sent a raw sendblue message with no opt-out or hours
+// check at all, since the trigger was the OTHER person's reply, not this
+// recipient's). Sends now if it's inside their local hours; otherwise
+// schedules exactly one in-process retry for the next local 9am instead of
+// texting at night. Opt-out is still enforced by sendExempt itself, at send
+// time, whichever branch runs.
+//
+// Best-effort, not a durable queue: a process restart between now and the
+// scheduled retry loses it. Acceptable here since these are low-volume,
+// reply-triggered sends, not a cron-polled backlog — unlike the announcement
+// and event-change queues, which are DB-backed because they're seeded from
+// a webhook that has no in-process continuation to hold a timer on.
+export async function sendExemptWhenAllowed(opts: {
+  userId: string;
+  phoneNumber: string;
+  type: ExemptType;
+  targetKey: string;
+  messages: string[];
+  timezone: string | null;
+}): Promise<{ sent: boolean; queued: boolean; reason?: string }> {
+  if (localHourOk(new Date(), opts.timezone)) {
+    const result = await sendExempt(opts).catch((err: any) => ({ sent: false, reason: String(err?.message ?? err) }));
+    return { sent: result.sent, queued: false, reason: result.reason };
+  }
+  const at = nextLocalHour(new Date(), opts.timezone, RULES.startHour);
+  const delayMs = Math.max(0, at.getTime() - Date.now());
+  setTimeout(() => {
+    sendExempt(opts).catch((err: any) =>
+      console.error(`sendExemptWhenAllowed(${opts.type}): deferred send failed for ${opts.userId} (non-fatal):`, err?.message ?? err),
+    );
+  }, delayMs);
+  return { sent: false, queued: true, reason: `outside local hours, retrying at ${at.toISOString()}` };
 }
 
 // Layer 6 in-room nudges during a live event are sent by eventScoring.ts,
@@ -851,13 +997,16 @@ export async function dispatchForUser(registry: ProactiveRegistry, userId: strin
     return;
   }
 
-  // Memories only after a confirmed send.
-  for (const m of draft.messages) {
+  // Memories and onSent only reflect what was actually delivered (code
+  // review, 2026-09-17) — a partial send (e.g. the link went out but the
+  // caption failed) used to still write "Co replied" memories and run
+  // onSent for messages that never reached the person.
+  for (const m of result.delivered) {
     await writeMemory(userId, "text_exchange", `Co replied: ${m}`).catch((err: any) =>
       console.error("proactive: text_exchange log failed (non-fatal):", err?.message ?? err),
     );
   }
-  await registry[c.type].onSent?.(c, person, draft.messages).catch((err: any) =>
+  await registry[c.type].onSent?.(c, person, result.delivered).catch((err: any) =>
     console.error(`proactive: onSent(${c.type}) failed (non-fatal):`, err?.message ?? err),
   );
   await recordDecision({
@@ -866,9 +1015,9 @@ export async function dispatchForUser(registry: ProactiveRegistry, userId: strin
     userId,
     outcome: "act",
     action: `send:${c.type}`,
-    proposal: { ...proposal, picked: c.id, pickSource: picked.source, messages: draft.messages },
+    proposal: { ...proposal, picked: c.id, pickSource: picked.source, messages: draft.messages, delivered: result.delivered.length },
     checks: [...ev.userChecks, ...pickChecks, ...draftChecks],
-    reason: picked.reason,
+    reason: result.delivered.length < draft.messages.length ? `${picked.reason} (partial send: ${result.delivered.length}/${draft.messages.length} delivered)` : picked.reason,
   });
 }
 

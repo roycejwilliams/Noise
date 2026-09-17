@@ -1,12 +1,12 @@
 import { generateText } from "ai";
-import { shouldCacheSearch, xPostFitsWindow } from "./searchRules.js";
+import { searchCacheKey, shouldCacheSearch, xPostFitsWindow, xSearchBudget } from "./searchRules.js";
 import { DateTime } from "luxon";
-import { isBrowseAsk, parseAskWindow, withinWindow } from "./askWindow.js";
+import { isBrowseAsk, MAX_ASK_DAYS_AHEAD, resolveAskWindow, withinWindow } from "./askWindow.js";
 import { anthropic } from "@ai-sdk/anthropic";
-import { listCalendarEvents } from "./luma.js";
-import { fetchPublicEvents } from "./lumaDiscovery.js";
+import { listCalendarEvents, resolveCoEventPlace } from "./luma.js";
+import { DEFAULT_FEED_DAYS, fetchPublicEvents } from "./lumaDiscovery.js";
 import { rankEventsByDescription, type Closest } from "./eventRanking.js";
-import { localDate } from "./eventOrder.js";
+import { localDate, localToday, searchZone } from "./eventOrder.js";
 import { fetchLumaEventDetails, type EventDetails, type OpportunityDetails } from "./eventDetails.js";
 import { searchRecentPosts } from "./xSearch.js";
 import { withinRadius } from "./geocoding.js";
@@ -15,6 +15,7 @@ import { gateMatches, type GatedOut } from "../harness/matchGate.js";
 import { MODELS } from "../models.js";
 import { parseModelJson } from "./modelJson.js";
 import pool from "../db/db.js";
+import type { PoolClient } from "pg";
 
 // Model policy (Royce, 2026-09-14): Haiku only for narrow work code checks
 // afterwards (city extraction, query rewrite, opportunity extraction backed
@@ -72,11 +73,13 @@ const JUDGE_MODEL = MODELS.sonnet;
 // the real record (event page or source post) and a personal reason, so Co
 // can answer "tell me more" and say why it fits this person.
 // fits: false when the personal read says it doesn't fit what they asked.
+// online (2026-09-17): an online event, reachable from anywhere, so it has no
+// city and skips the nearby filter.
 type MatchExtras = { details?: EventDetails; opportunity?: OpportunityDetails; whyItFits?: string; fits?: boolean };
 export type TierMatch =
-  | ({ tier: 1; kind: "co_event"; event_api_id: string; event_date: string; name: string; url?: string; reason: string; city?: string | null } & MatchExtras)
-  | ({ tier: 2; kind: "public_event"; event_api_id: string; event_date: string; name: string; url: string; reason: string; city?: string | null } & MatchExtras)
-  | ({ tier: 3; kind: "opportunity"; name: string; url: string; reason: string; deadline?: string; evidence?: string; statedDates?: { start: string; end?: string | null } } & MatchExtras);
+  | ({ tier: 1; kind: "co_event"; event_api_id: string; event_date: string; name: string; url?: string; reason: string; city?: string | null; online?: boolean } & MatchExtras)
+  | ({ tier: 2; kind: "public_event"; event_api_id: string; event_date: string; name: string; url: string; reason: string; city?: string | null; online?: boolean } & MatchExtras)
+  | ({ tier: 3; kind: "opportunity"; name: string; url: string; reason: string; deadline?: string; evidence?: string; statedDates?: { start: string; end?: string | null }; online?: undefined } & MatchExtras);
 
 // Lead-time window (Royce, 2026-08-30) — "how far out in advance are we
 // searching?" Neither listCalendarEvents() nor fetchPublicEvents() take a
@@ -115,16 +118,17 @@ function isWithinLookaheadWindow(startAt: string, maxDays: number): boolean {
 // comment. No userCity means no filter (nothing to be near); an
 // ungeocodable city on either side also passes through rather than
 // dropping a real candidate to a geocoding gap (see withinRadius).
-async function filterByRadius<T extends { city?: string | null }>(
+async function filterByRadius<T extends { city?: string | null; online?: boolean }>(
   candidates: T[],
   userCity: string | null,
 ): Promise<T[]> {
   if (!userCity) return candidates;
+  // Online events are reachable from anywhere (2026-09-17).
   // An event with no city on file can't be claimed as nearby (2026-09-14:
   // a city-less Co event in SF passed this filter and got described to
   // someone asking about Fargo as "close to Fargo"). Only drop it when we
   // do know where the person wants to be; ungeocodable strings still pass.
-  const withinFlags = await Promise.all(candidates.map((c) => (c.city ? withinRadius(userCity, c.city) : false)));
+  const withinFlags = await Promise.all(candidates.map((c) => (c.online ? true : c.city ? withinRadius(userCity, c.city) : false)));
   return candidates.filter((_, i) => withinFlags[i]);
 }
 
@@ -234,8 +238,8 @@ async function isGenuinelyRelevant(askText: string, candidateName: string, candi
 }
 
 // Tier 1 — Co's own calendar. Reuses the same ranking core as Tier 2
-// (lumaDiscovery.rankByRelevance) since both are "rank real events against
-// an ask" with the same signal (name + city) available — Co's own events
+// (lumaDiscovery.rankByRelevance) since both are "rank real events against an
+// ask" with the same signal (name + city) available — Co's own events
 // just come from luma.ts's sanctioned API instead of the unofficial
 // discovery feed. `userCity` now drives a hard radius filter (filterByRadius
 // above) before ranking, not a ranking bias; optional `filter` (by event
@@ -245,31 +249,81 @@ async function isGenuinelyRelevant(askText: string, candidateName: string, candi
 // Event lists are the same for everyone, so fetch them at most every 15
 // minutes instead of once per search.
 const LIST_TTL_MS = 15 * 60 * 1000;
-let calendarCache: { at: number; events: Awaited<ReturnType<typeof listCalendarEvents>> } | null = null;
-async function cachedCalendarEvents() {
-  if (calendarCache && Date.now() - calendarCache.at < LIST_TTL_MS) return calendarCache.events;
-  const events = await listCalendarEvents();
-  calendarCache = { at: Date.now(), events };
+// When a Co event's page couldn't be read, the list is only reused for a
+// minute, so the event comes back as soon as its page loads.
+const LIST_RETRY_TTL_MS = 60 * 1000;
+type CoCalendarEvent = Awaited<ReturnType<typeof listCalendarEvents>>[number] & { online?: boolean };
+let calendarCache: { at: number; ttl: number; events: CoCalendarEvent[] } | null = null;
+async function cachedCalendarEvents(): Promise<CoCalendarEvent[]> {
+  if (calendarCache && Date.now() - calendarCache.at < calendarCache.ttl) return calendarCache.events;
+  // Every Co event gets a place (luma.ts resolveCoEventPlace), or the nearby
+  // filter drops it and Tier 1 never shows up. Online events are reachable by
+  // everyone; an event whose page couldn't be read is left out until it can
+  // be, instead of being guessed into Co's home city (2026-09-17).
+  let unresolved = 0;
+  const resolved = await Promise.all(
+    (await listCalendarEvents()).map(async (e): Promise<CoCalendarEvent | null> => {
+      if (e.city) return e;
+      const page = e.url ? await fetchLumaEventDetails(e.url).catch(() => null) : null;
+      const place = resolveCoEventPlace(e.city, page, process.env.CO_HOME_CITY, !!e.url);
+      if (place.source === "unresolved") {
+        unresolved++;
+        return null;
+      }
+      return { ...e, city: place.city, online: place.online };
+    }),
+  );
+  const events = resolved.filter((e): e is CoCalendarEvent => e !== null);
+  calendarCache = { at: Date.now(), ttl: unresolved ? LIST_RETRY_TTL_MS : LIST_TTL_MS, events };
   return events;
 }
 // Cached per city, since the feed is city-scoped now.
 const publicCacheByCity = new Map<string, { at: number; events: Awaited<ReturnType<typeof fetchPublicEvents>> }>();
 
-async function cachedPublicEvents(city?: string | null, until?: Date | null) {
-  // A far window needs a deeper fetch, cached separately by the day it reaches.
-  const key = `${(city ?? "").toLowerCase()}|${until ? until.toISOString().slice(0, 10) : ""}`;
+async function cachedPublicEvents(city: string | null, until: Date) {
+  // Cached by the day the fetch has to reach.
+  const key = `${(city ?? "").toLowerCase()}|${until.toISOString().slice(0, 10)}`;
   const cached = publicCacheByCity.get(key);
   if (cached && Date.now() - cached.at < LIST_TTL_MS) return cached.events;
-  const events = await fetchPublicEvents(50, city ?? null, until ?? null);
+  const events = await fetchPublicEvents(50, city ?? null, until);
   if (publicCacheByCity.size > 20) publicCacheByCity.clear();
   publicCacheByCity.set(key, { at: Date.now(), events });
   return events;
 }
 
-async function tryTier1(ask: StatedIntent, userCity: string | null, filter?: (startAt: string) => boolean, opts: { browse?: boolean; maxDays?: number; zone?: string | null; profileText?: string | null } = {}): Promise<TierMatch | null> {
+// What one search saw, filled in as it runs (2026-09-17: this was module-level
+// "last*" state reset and filled across awaits, so two people searching at
+// once overwrote each other's record, and recommendation.ts read it after
+// another database await). One per getTieredRecommendation call now.
+type SearchTrace = {
+  tierDrop: TierDrop | null;
+  fetchedThrough: string | null;
+  topScores: { name: string; similarity: number; profile?: number | null }[];
+  nearbyCount: number | null;
+  closest: (Closest & { why: string }) | null;
+  relevanceRejected: { name: string; why: string; related?: boolean }[];
+  xDropped: { name: string; reason: string } | null;
+  xQuery: string | null;
+  xBlocked: string | null;
+  timings: { tiersMs?: number; tier3Ms?: number; relevanceMs?: number };
+};
+
+function newTrace(): SearchTrace {
+  return { tierDrop: null, fetchedThrough: null, topScores: [], nearbyCount: null, closest: null, relevanceRejected: [], xDropped: null, xQuery: null, xBlocked: null, timings: {} };
+}
+
+// "Thursday, September 17" in their zone. toLocaleDateString() used the
+// server's zone (UTC), so a Thursday 7pm Pacific event read as Friday
+// (2026-09-17).
+function localDayLabel(startAt: string, zone: string): string {
+  const d = DateTime.fromISO(startAt, { zone: "utc" }).setZone(zone);
+  return d.isValid ? d.toFormat("cccc, LLLL d") : startAt.slice(0, 10);
+}
+
+async function tryTier1(ask: StatedIntent, userCity: string | null, filter: ((startAt: string) => boolean) | undefined, opts: { browse?: boolean; maxDays?: number; zone: string; profileText?: string | null }): Promise<TierMatch | null> {
   const events = await cachedCalendarEvents().catch((err: any) => {
     console.error("tieredRecommendation: tryTier1 listCalendarEvents failed (non-fatal):", err?.message ?? err);
-    return [];
+    return [] as CoCalendarEvent[];
   });
   const inWindow = events.filter((e) => isWithinLookaheadWindow(e.start_at, opts.maxDays ?? TIER1_MAX_LOOKAHEAD_DAYS) && (!filter || filter(e.start_at)));
   const nearby = await filterByRadius(inWindow, userCity);
@@ -280,7 +334,8 @@ async function tryTier1(ask: StatedIntent, userCity: string | null, filter?: (st
   // the window; the gate still checks place, timing, availability and repeats.
   const match = soonest(nearby);
   if (!match) return null;
-  const details = ("details" in match ? (match.details as EventDetails | undefined) : undefined) ?? (match.url ? ((await fetchLumaEventDetails(match.url)) ?? undefined) : undefined);
+  const details = match.url ? ((await fetchLumaEventDetails(match.url)) ?? undefined) : undefined;
+  const online = !!match.online || !!details?.online;
   return {
     details,
     tier: 1,
@@ -288,8 +343,9 @@ async function tryTier1(ask: StatedIntent, userCity: string | null, filter?: (st
     event_api_id: match.api_id,
     event_date: localDate(match.start_at, opts.zone),
     name: match.name,
-    reason: `Matches a Co event happening ${new Date(match.start_at).toLocaleDateString()}${match.city ? ` in ${match.city}` : ""}.`,
-    city: match.city ?? null,
+    reason: `Matches a Co event happening ${localDayLabel(match.start_at, opts.zone)}${online ? ", online" : match.city ? ` in ${match.city}` : ""}.`,
+    city: online ? null : (match.city ?? null),
+    ...(online ? { online: true } : {}),
     // Real gap found live, 2026-09-09: this never set url at all, so
     // Tier 1 recommendations never had a real link to send, and the
     // follow-up "give me the details" reply (agent.conversationReply, not
@@ -313,28 +369,40 @@ function soonest<T extends { start_at: string }>(events: T[]): T | null {
   return [...events].sort((a, b) => a.start_at.localeCompare(b.start_at))[0] ?? null;
 }
 
+// The last part of a Luma link, which is the same for lu.ma and luma.com.
+function lumaSlug(url: string | null | undefined): string | null {
+  if (!url) return null;
+  const slug = url.replace(/[?#].*$/, "").replace(/\/+$/, "").split("/").pop();
+  return slug ? slug.toLowerCase() : null;
+}
+
 // Returns the candidates worth offering, best first — the gate
 // (harness/matchGate.ts) makes the final call, and it needs more than one to
 // choose from (2026-09-16: the single candidate it got was sold out, so the
 // search ended with nothing while other real events were available).
-async function tryTier2(ask: StatedIntent, userCity: string | null, filter?: (startAt: string) => boolean, opts: { browse?: boolean; maxDays?: number; until?: Date | null; zone?: string | null; profileText?: string | null } = {}): Promise<TierMatch[]> {
-  // Only page deep when the window reaches past what a normal fetch covers.
-  const farUntil = opts.until && opts.until.getTime() - Date.now() > 8 * 24 * 60 * 60 * 1000 ? opts.until : null;
-  const events = await cachedPublicEvents(userCity, farUntil).catch((err: any) => {
-    console.error("tieredRecommendation: tryTier2 fetchPublicEvents failed (non-fatal):", err?.message ?? err);
-    return [];
-  });
+async function tryTier2(ask: StatedIntent, userCity: string | null, filter: ((startAt: string) => boolean) | undefined, trace: SearchTrace, opts: { browse?: boolean; maxDays?: number; until: Date; zone: string; profileText?: string | null }): Promise<TierMatch[]> {
+  const [feed, coEvents] = await Promise.all([
+    cachedPublicEvents(userCity, opts.until).catch((err: any) => {
+      console.error("tieredRecommendation: tryTier2 fetchPublicEvents failed (non-fatal):", err?.message ?? err);
+      return [];
+    }),
+    cachedCalendarEvents().catch(() => [] as CoCalendarEvent[]),
+  ]);
+  // Co's own events are Tier 1; the same event showing up in the public feed
+  // was offered twice (2026-09-17).
+  const coIds = new Set(coEvents.map((e) => e.api_id).filter(Boolean));
+  const coSlugs = new Set(coEvents.map((e) => lumaSlug(e.url)).filter((x): x is string => !!x));
+  const events = feed.filter((e) => !coIds.has(e.api_id) && !coSlugs.has(lumaSlug(e.url) ?? ""));
   // How far the fetched feed actually reached, so a search that asked about
   // Oct 5-14 but only got events through Oct 9 says so instead of reporting a
   // clean "nothing found".
-  lastFetchedThrough = events.reduce<string | null>((latest, e) => (!latest || e.start_at > latest ? e.start_at : latest), null);
+  trace.fetchedThrough = feed.reduce<string | null>((latest, e) => (!latest || e.start_at > latest ? e.start_at : latest), null);
   const inWindow = events.filter((e) => isWithinLookaheadWindow(e.start_at, opts.maxDays ?? TIER2_MAX_LOOKAHEAD_DAYS) && (!filter || filter(e.start_at)));
   const nearby = await filterByRadius(inWindow, userCity);
   // The best few, not just the top one: a single odd top pick used to take
   // the whole search down when the relevance check rejected it, with real
   // matches sitting further down the same list (2026-09-16).
-  lastTopScores = [];
-  lastNearbyCount = nearby.length;
+  trace.nearbyCount = nearby.length;
   // Ranked on each event's description, open events first
   // (services/eventRanking.ts); the closest one is kept for a near miss.
   // With a profile, even a "what's on?" ask is ordered by what fits them,
@@ -343,12 +411,16 @@ async function tryTier2(ask: StatedIntent, userCity: string | null, filter?: (st
   const ranking =
     opts.browse && !opts.profileText
       ? { ranked: [soonest(nearby)].filter((m): m is (typeof nearby)[number] => !!m).map((m) => ({ ...m, similarity: 1, details: undefined as EventDetails | undefined })), closest: null }
-      : await rankEventsByDescription(nearby, opts.browse ? "" : ask.text ?? "", { limit: 6, topScores: lastTopScores, zone: opts.zone, profileText: opts.profileText, browse: opts.browse });
+      : await rankEventsByDescription(nearby, opts.browse ? "" : ask.text ?? "", { limit: 6, topScores: trace.topScores, zone: opts.zone, profileText: opts.profileText, browse: opts.browse });
   // The near miss comes only from events the relevance check actually read
   // and judged related; an unread best score is never named on its own.
   const candidates = ranking.ranked;
   const rejected: string[] = [];
   const kept: TierMatch[] = [];
+  // A page Co couldn't read is not verified: no description to judge fit
+  // and no sold-out status, so it isn't offered (2026-09-17: a failed read
+  // passed the relevance check automatically).
+  const UNREAD: RelevanceVerdict = { fit: false, why: "couldn't read the event page to check it", related: false };
   // Every candidate is read at the same time, then handled in ranked order
   // exactly as before (2026-09-16: reading up to six one after another was
   // most of an 18-second search).
@@ -356,17 +428,32 @@ async function tryTier2(ask: StatedIntent, userCity: string | null, filter?: (st
   const reads = await Promise.all(
     candidates.map(async (match) => {
       const details = match.details ?? (await fetchLumaEventDetails(match.url)) ?? undefined;
-      const verdict: RelevanceVerdict =
-        ask.text && !opts.browse ? await isGenuinelyRelevant(ask.text, match.name, match.city, details?.description ?? null) : { fit: true, why: null };
+      const verdict: RelevanceVerdict = !details
+        ? UNREAD
+        : ask.text && !opts.browse
+          ? await isGenuinelyRelevant(ask.text, match.name, match.city, details.description ?? null)
+          : { fit: true, why: null };
       return { details, verdict };
     }),
   );
-  lastTimings.relevanceMs = Date.now() - relevanceStarted;
+  trace.timings.relevanceMs = Date.now() - relevanceStarted;
+  const publicMatch = (e: (typeof nearby)[number], details: EventDetails): TierMatch => ({
+    details,
+    tier: 2,
+    kind: "public_event",
+    event_api_id: e.api_id,
+    event_date: localDate(e.start_at, opts.zone),
+    name: e.name,
+    url: e.url,
+    reason: details.online ? "A public online event that looks like a real fit." : `A public event that looks like a real fit${e.city ? ` in ${e.city}` : ""}.`,
+    city: details.online ? null : (e.city ?? null),
+    ...(details.online ? { online: true } : {}),
+  });
   for (const [i, match] of candidates.entries()) {
     const { details, verdict } = reads[i];
-    if (!verdict.fit) {
+    if (!verdict.fit || !details) {
       rejected.push(match.name);
-      lastRelevanceRejected.push({ name: match.name, why: verdict.why ?? "doesn't match what they asked", related: verdict.related ?? false });
+      trace.relevanceRejected.push({ name: match.name, why: verdict.why ?? "doesn't match what they asked", related: verdict.related ?? false });
       // The nearest miss is the best-scoring one the check turned down, not
       // the first one it read: candidates are ordered open-first, so the first
       // read can be a weaker open event (2026-09-16: Maum Market was named
@@ -375,8 +462,8 @@ async function tryTier2(ask: StatedIntent, userCity: string | null, filter?: (st
       // Only something they might still consider is worth naming as a near
       // miss (2026-09-16: a shopping market was offered as the closest thing
       // to a founder meetup).
-      if (verdict.related && (!lastClosest || similarity > lastClosest.similarity)) {
-        lastClosest = {
+      if (verdict.related && (!trace.closest || similarity > trace.closest.similarity)) {
+        trace.closest = {
           name: match.name,
           url: match.url ?? null,
           date: localDate(match.start_at, opts.zone),
@@ -386,17 +473,7 @@ async function tryTier2(ask: StatedIntent, userCity: string | null, filter?: (st
       }
       continue;
     }
-    kept.push({
-      details,
-      tier: 2,
-      kind: "public_event",
-      event_api_id: match.api_id,
-      event_date: localDate(match.start_at, opts.zone),
-      name: match.name,
-      url: match.url,
-      reason: `A public event that looks like a real fit${match.city ? ` in ${match.city}` : ""}.`,
-      city: match.city ?? null,
-    });
+    kept.push(publicMatch(match, details));
   }
   // Nothing cleared the bar: read the closest one anyway. If it really fits,
   // offer it (the bar only cuts noise); if not, its reason is what the person
@@ -405,30 +482,20 @@ async function tryTier2(ask: StatedIntent, userCity: string | null, filter?: (st
     const near = nearby.find((e) => e.name === ranking.closest!.name);
     if (near) {
       const details = (await fetchLumaEventDetails(near.url)) ?? undefined;
-      const verdict = await isGenuinelyRelevant(ask.text, near.name, near.city, details?.description ?? null);
-      if (verdict.fit) {
-        kept.push({
-          details,
-          tier: 2,
-          kind: "public_event",
-          event_api_id: near.api_id,
-          event_date: localDate(near.start_at, opts.zone),
-          name: near.name,
-          url: near.url,
-          reason: `A public event that looks like a real fit${near.city ? ` in ${near.city}` : ""}.`,
-          city: near.city ?? null,
-        });
-        lastClosest = null;
+      const verdict = details ? await isGenuinelyRelevant(ask.text, near.name, near.city, details.description ?? null) : UNREAD;
+      if (verdict.fit && details) {
+        kept.push(publicMatch(near, details));
+        trace.closest = null;
       } else {
-        lastRelevanceRejected.push({ name: near.name, why: verdict.why ?? "doesn't match what they asked", related: verdict.related ?? false });
+        trace.relevanceRejected.push({ name: near.name, why: verdict.why ?? "doesn't match what they asked", related: verdict.related ?? false });
         if (verdict.related) {
-          lastClosest = { ...ranking.closest!, why: `${verdict.why ?? "on reading what it's about, it isn't quite what they asked for"}${details?.soldOut ? ", and it's sold out" : ""}` };
+          trace.closest = { ...ranking.closest!, why: `${verdict.why ?? "on reading what it's about, it isn't quite what they asked for"}${details?.soldOut ? ", and it's sold out" : ""}` };
         }
       }
     }
   }
   if (rejected.length && !kept.length) {
-    lastTierDrop = { tier: 2, name: rejected.join("; "), reason: `the relevance check rejected ${rejected.length === 1 ? "it" : "all of them"} as not matching what they asked` };
+    trace.tierDrop = { tier: 2, name: rejected.join("; "), reason: `the relevance check rejected ${rejected.length === 1 ? "it" : "all of them"} as not matching what they asked` };
   }
   return kept;
 }
@@ -440,7 +507,7 @@ async function tryTier2(ask: StatedIntent, userCity: string | null, filter?: (st
 // never invent one" discipline as before — the difference from the old
 // venue version is the grounding element is a real post URL, not a
 // place_id.
-async function proposeOpportunityQuery(ask: StatedIntent, city: string | null, profile?: string | null): Promise<string | null> {
+async function proposeOpportunityQuery(ask: StatedIntent, city: string | null, profile: string | null | undefined, zone: string): Promise<string | null> {
   if (!ask.text) return null;
   try {
     // Today's date, explicit (Royce, 2026-09-02) — confirmed live: without
@@ -451,7 +518,8 @@ async function proposeOpportunityQuery(ask: StatedIntent, city: string | null, p
     // stale year string). extractRealOpportunity already gets today's date
     // for its own deadline check; this step needs it too, for the same
     // reason.
-    const todayStr = new Date().toISOString().slice(0, 10);
+    // Their local date, not UTC (2026-09-17).
+    const todayStr = localToday(new Date(), zone);
     const { text: raw } = await generateText({
       model: anthropic(EXTRACT_MODEL),
       experimental_telemetry: { isEnabled: true, functionId: "tieredRecommendation.proposeOpportunityQuery" },
@@ -492,12 +560,14 @@ Return ONLY valid JSON: {"query": "..." or null}`,
 async function extractRealOpportunity(
   ask: StatedIntent,
   posts: { id: string; text: string; url: string }[],
-  profile?: string | null,
+  profile: string | null | undefined,
+  zone: string,
 ): Promise<TierMatch | null> {
   if (!posts.length) return null;
   try {
     const digest = posts.map((p, i) => `${i}. ${p.text.replace(/\n+/g, " ")}`).join("\n");
-    const todayStr = new Date().toISOString().slice(0, 10);
+    // Their local date, not UTC (2026-09-17).
+    const todayStr = localToday(new Date(), zone);
     const { text: raw } = await generateText({
       model: anthropic(EXTRACT_MODEL),
       experimental_telemetry: { isEnabled: true, functionId: "tieredRecommendation.extractRealOpportunity" },
@@ -550,12 +620,12 @@ Return ONLY valid JSON: {"index": 0, "name": "the specific opportunity name", "r
 // query is pre-computed by the caller (proposeOpportunityQuery) so that
 // classification — cheap, LLM-only — and the actual paid X search stay two
 // separately-gateable steps, not one bundled call.
-async function tryTier3(ask: StatedIntent, query: string, profile?: string | null): Promise<TierMatch | null> {
+async function tryTier3(ask: StatedIntent, query: string, profile: string | null | undefined, zone: string): Promise<TierMatch | null> {
   const posts = await searchRecentPosts(query).catch((err: any) => {
     console.error("tieredRecommendation: tryTier3 searchRecentPosts failed (non-fatal):", err?.message ?? err);
     return [];
   });
-  return extractRealOpportunity(ask, posts, profile);
+  return extractRealOpportunity(ask, posts, profile, zone);
 }
 
 // No winner-picking (Royce, 2026-08-30): "I don't think there should be a
@@ -587,35 +657,51 @@ async function tryTier3(ask: StatedIntent, query: string, profile?: string | nul
 // Every match goes through harness/matchGate.ts before it's returned
 // (location, timing, grounding; plus no-repeat and a decision log when
 // userId is given), so no caller can queue or show one the gate rejects.
-// Speed and cost (2026-09-15). The same search (text + city) within a few
-// hours reuses its raw results; gating still runs per person. Tier 3 is the
-// only paid search (X), so it has a budget: the background sweep gets one X
-// search per person every X_SEARCH_SWEEP_DAYS, and all X searches together
-// stop at X_SEARCH_DAILY_CAP a day. Someone asking directly always counts
-// toward the daily cap but isn't held to the per-person sweep limit.
+// Speed and cost (2026-09-15). The same search within a few hours reuses its
+// raw results; gating still runs per person. Tier 3 is the only paid search
+// (X), so it has a budget: all X searches together stop at X_SEARCH_DAILY_CAP
+// a day, and the background sweep stops X_SEARCH_REQUEST_RESERVE short of it
+// so people asking directly still get Tier 3 (2026-09-17: the per-person sweep
+// limit was gone, so a sweep could use the whole cap).
 const SEARCH_CACHE_TTL_MS = 6 * 60 * 60 * 1000;
-const searchCache = new Map<string, { at: number; found: TierMatch[] }>();
-const X_SEARCH_SWEEP_DAYS = Number(process.env.X_SEARCH_SWEEP_DAYS ?? 3);
+// A cached result's events get their sold-out status re-read if the page read
+// is older than this.
+const CACHED_AVAILABILITY_MAX_AGE_MS = 10 * 60 * 1000;
+const searchCache = new Map<string, { at: number; found: TierMatch[]; trace: SearchTrace }>();
 const X_SEARCH_DAILY_CAP = Number(process.env.X_SEARCH_DAILY_CAP ?? 100);
+const X_SEARCH_REQUEST_RESERVE = Number(process.env.X_SEARCH_REQUEST_RESERVE ?? 30);
 
-async function paidSearchAllowed(userId: string | null, source: "sweep" | "request"): Promise<{ ok: boolean; reason: string }> {
+// Reserves one X search against the daily budget, or says why not. Count and
+// insert happen under one transaction-scoped advisory lock, so two searches
+// can't both see room for the last slot (2026-09-17: the count and the log
+// insert were separate statements). Fails closed: if the budget can't be
+// checked (table missing, database error) there is no X search, where it used
+// to allow unlimited ones.
+async function reserveXSearch(userId: string | null, source: "sweep" | "request", query: string): Promise<{ ok: boolean; reason: string | null }> {
+  let client: PoolClient | null = null;
   try {
-    const { rows } = await pool.query(
-      `SELECT
-         (SELECT COUNT(*)::int FROM x_search_log WHERE created_at > NOW() - INTERVAL '1 day') AS today,
-         (SELECT COUNT(*)::int FROM x_search_log WHERE user_id = $1 AND source = 'sweep' AND created_at > NOW() - ($2 || ' days')::interval) AS mine`,
-      [userId, X_SEARCH_SWEEP_DAYS],
-    );
-    if (rows[0].today >= X_SEARCH_DAILY_CAP) return { ok: false, reason: `daily X search cap (${X_SEARCH_DAILY_CAP}) reached` };
-    // No per-person cadence any more: every ask includes Tier 3 (2026-09-16).
-    // The overall daily cap above stays as the cost guard.
-    return { ok: true, reason: "within budget" };
-  } catch {
-    return { ok: true, reason: "budget check unavailable" };
+    client = await pool.connect();
+    await client.query("BEGIN");
+    await client.query("SELECT pg_advisory_xact_lock(hashtext('x_search_budget'))");
+    const { rows } = await client.query(`SELECT COUNT(*)::int AS today FROM x_search_log WHERE created_at > NOW() - INTERVAL '1 day'`);
+    const decision = xSearchBudget(Number(rows[0]?.today ?? 0), source, X_SEARCH_DAILY_CAP, X_SEARCH_REQUEST_RESERVE);
+    if (!decision.ok) {
+      await client.query("ROLLBACK");
+      return decision;
+    }
+    await client.query(`INSERT INTO x_search_log (user_id, source, query) VALUES ($1, $2, $3)`, [userId, source, query]);
+    await client.query("COMMIT");
+    return decision;
+  } catch (err: any) {
+    await client?.query("ROLLBACK").catch(() => {});
+    console.error("tieredRecommendation: X budget check failed (no X search):", err?.message ?? err);
+    return { ok: false, reason: `the X search budget couldn't be checked (${err?.message ?? "error"}), so no X search` };
+  } finally {
+    client?.release();
   }
 }
 
-// What the last search actually covered, for the decision record: which
+// What a search actually covered, for the decision record: which
 // city Luma was asked about, the time frame from their own words, and
 // whether it was a "what's on?" browse. Without it a "nothing found" record
 // can't be told apart from "searched the wrong place".
@@ -624,6 +710,14 @@ export type SearchScope = {
   window: string | null;
   windowStart?: string | null;
   windowEnd?: string | null;
+  // A time frame they named that's past how far Co searches (askWindow.ts
+  // MAX_ASK_DAYS_AHEAD). The search returns nothing instead of quietly
+  // searching the default window (2026-09-17).
+  windowOutOfRange?: { label: string; start: string; reason: string } | null;
+  // The zone dates were read in, and whether it's Co's default because they
+  // have no city or zone on file (2026-09-17).
+  timezone?: string;
+  timezoneDefaulted?: boolean;
   // Latest event start in the Luma feed this search saw, and whether that
   // covers the whole window they asked about.
   fetchedThrough?: string | null;
@@ -647,25 +741,29 @@ export type SearchScope = {
   xDropped?: { name: string; reason: string } | null;
   // The X search query actually used (shaped by the ask and their profile).
   xQuery?: string | null;
+  // Why Tier 3 didn't search X at all (budget), when it didn't.
+  xBlocked?: string | null;
+  // Whether these results were reused from an earlier identical search.
+  cached?: boolean;
   // Milliseconds: all tiers together, Tier 3 on its own, Tier 2's relevance reads.
   timings?: { tiersMs?: number; tier3Ms?: number; relevanceMs?: number }; browse: boolean; tiers: number[]; dropped?: TierDrop | null; gatedOut?: GatedOut[] };
 export type TierDrop = { tier: number; name: string; reason: string };
-let lastSearchScope: SearchScope | null = null;
-let lastTierDrop: TierDrop | null = null;
-let lastFetchedThrough: string | null = null;
-let lastTopScores: { name: string; similarity: number; profile?: number | null }[] = [];
-let lastClosest: (Closest & { why: string }) | null = null;
-let lastRelevanceRejected: { name: string; why: string; related?: boolean }[] = [];
-let lastXDropped: { name: string; reason: string } | null = null;
-let lastXQuery: string | null = null;
-// Where the search time goes, for turn.latency-style reading of one search.
-let lastTimings: { tiersMs?: number; tier3Ms?: number; relevanceMs?: number } = {};
-let lastNearbyCount: number | null = null;
 
-export function takeLastSearchScope(): SearchScope | null {
-  const scope = lastSearchScope;
-  lastSearchScope = null;
-  return scope;
+export type TieredResult = { matches: TierMatch[]; scope: SearchScope };
+
+// A cached result's events, with sold-out status re-read, since it can change
+// in the hours a result is reused (2026-09-17). A public event whose page
+// can't be re-read now is dropped, same as an unread page in a fresh search.
+async function refreshAvailability(found: TierMatch[]): Promise<TierMatch[]> {
+  const refreshed = await Promise.all(
+    found.map(async (m): Promise<TierMatch | null> => {
+      if (m.tier === 3 || !m.url) return { ...m };
+      const details = await fetchLumaEventDetails(m.url, { maxAgeMs: CACHED_AVAILABILITY_MAX_AGE_MS });
+      if (details) return { ...m, details };
+      return m.tier === 2 ? null : { ...m };
+    }),
+  );
+  return refreshed.filter((m): m is TierMatch => m !== null);
 }
 
 export async function getTieredRecommendation(
@@ -676,29 +774,53 @@ export async function getTieredRecommendation(
   // profile: what Co knows they want right now (personSnapshot.ts
   // profileFocusText); orders what matches the ask.
   opts: { userId?: string; checkRepeat?: boolean; source?: "sweep" | "request"; timezone?: string | null; rawMessage?: string; profile?: string | null } = {},
-): Promise<TierMatch[]> {
+): Promise<TieredResult> {
   const city = await resolveSearchCity(ask.text, profileCity);
+  const { zone, defaulted: timezoneDefaulted } = searchZone(opts.timezone);
+  const trace = newTrace();
   // A time frame they named ("this weekend", "next Tuesday") scopes the
   // search to those days, whatever the default lookahead is.
-  lastTierDrop = null;
-  lastFetchedThrough = null;
-  lastTopScores = [];
-  lastNearbyCount = null;
-  lastClosest = null;
-  lastRelevanceRejected = [];
-  lastXDropped = null;
-  lastXQuery = null;
-  lastTimings = {};
   const asked = opts.rawMessage ?? ask.text ?? "";
-  const window = asked ? parseAskWindow(asked, DateTime.now().setZone(opts.timezone ?? "local")) : null;
+  const now = DateTime.now().setZone(zone);
+  const resolution = asked ? resolveAskWindow(asked, now) : { window: null, outOfRange: null };
+  const window = resolution.window;
   const browse = !!asked && isBrowseAsk(asked);
+  const baseScope = { city, window: window?.label ?? null, windowStart: window?.start.toISO() ?? null, windowEnd: window?.end.toISO() ?? null, timezone: zone, timezoneDefaulted, searchText: ask.text ?? null, profileUsed: !!opts.profile, browse };
+
+  // A time frame past what Co searches: say so, don't search next week instead.
+  if (resolution.outOfRange) {
+    const start = resolution.outOfRange.start.toISODate()!;
+    return {
+      matches: [],
+      scope: {
+        ...baseScope,
+        windowOutOfRange: { label: resolution.outOfRange.label, start, reason: `${resolution.outOfRange.label} (${start}) is more than ${MAX_ASK_DAYS_AHEAD} days out, past how far ahead Co searches` },
+        tiers: [],
+      },
+    };
+  }
+
   const windowFilter = window ? (startAt: string) => withinWindow(startAt, window) : undefined;
   const maxDays = window ? Math.max(1, Math.ceil(window.end.diffNow("days").days) + 1) : undefined;
-  const cacheKey = `${(city ?? "").toLowerCase()}|${(ask.text ?? "").trim().toLowerCase()}|${window?.label ?? ""}|${opts.profile ? opts.profile.length + ":" + opts.profile.slice(0, 40) : ""}`;
+  const cacheKey = searchCacheKey({
+    city,
+    askText: ask.text,
+    windowStart: window?.start.toISODate() ?? null,
+    windowEnd: window?.end.toISODate() ?? null,
+    today: now.toISODate()!,
+    zone,
+    browse,
+    profile: opts.profile,
+  });
   const cached = searchCache.get(cacheKey);
   let found: TierMatch[];
+  let usedCache = false;
+  let t = trace;
   if (cached && Date.now() - cached.at < SEARCH_CACHE_TTL_MS) {
-    found = cached.found;
+    found = await refreshAvailability(cached.found);
+    // The record of what the original search saw, marked as reused.
+    t = { ...cached.trace, xBlocked: null };
+    usedCache = true;
   } else {
     const source = opts.source ?? "request";
     const tierStarted = Date.now();
@@ -710,15 +832,15 @@ export async function getTieredRecommendation(
         // Every ask searches Tier 3 too (Royce, 2026-09-16: "Asks should always
         // include tier 2 and 3"). A post for a time-frame ask still has to
         // state a date inside it (below), and results name their source.
-        const budget = await paidSearchAllowed(opts.userId ?? null, source);
-        if (!budget.ok) return null;
-        const opportunityQuery = await proposeOpportunityQuery(ask, city, opts.profile);
+        const opportunityQuery = await proposeOpportunityQuery(ask, city, opts.profile, zone);
         if (!opportunityQuery) return null;
-        await pool
-          .query(`INSERT INTO x_search_log (user_id, source, query) VALUES ($1, $2, $3)`, [opts.userId ?? null, source, opportunityQuery])
-          .catch(() => {});
-        lastXQuery = opportunityQuery;
-        let found = await tryTier3(ask, opportunityQuery, opts.profile);
+        const budget = await reserveXSearch(opts.userId ?? null, source, opportunityQuery);
+        if (!budget.ok) {
+          trace.xBlocked = budget.reason ?? "X search budget";
+          return null;
+        }
+        trace.xQuery = opportunityQuery;
+        let found = await tryTier3(ask, opportunityQuery, opts.profile, zone);
         // A named time frame: an X post only counts when the post itself
         // states a date inside it (the thing's own dates, or its deadline).
         // Posts with no date are kept out, with the reason recorded.
@@ -726,52 +848,57 @@ export async function getTieredRecommendation(
           const stated = found.statedDates ?? (found.deadline ? { start: found.deadline } : null);
           const fits = xPostFitsWindow(stated, { start: window.start.toISO()!, end: window.end.toISO()! });
           if (!fits.ok) {
-            lastXDropped = { name: found.name, reason: fits.reason ?? "outside the time frame" };
+            trace.xDropped = { name: found.name, reason: fits.reason ?? "outside the time frame" };
             found = null;
           }
         }
         return found;
       } finally {
-        lastTimings.tier3Ms = Date.now() - started;
+        trace.timings.tier3Ms = Date.now() - started;
       }
     };
+    // Always page the public feed to the end of the days being searched: the
+    // window they named, or the default lookahead (2026-09-17).
+    const until = window ? window.end.toJSDate() : new Date(Date.now() + DEFAULT_FEED_DAYS * 24 * 60 * 60 * 1000);
     const [tier1, tier2, tier3] = await Promise.all([
-      tryTier1(ask, city, windowFilter, { browse, maxDays, zone: opts.timezone, profileText: opts.profile }),
-      tryTier2(ask, city, windowFilter, { browse, maxDays, until: window ? window.end.toJSDate() : null, zone: opts.timezone, profileText: opts.profile }),
+      tryTier1(ask, city, windowFilter, { browse, maxDays, zone, profileText: opts.profile }),
+      tryTier2(ask, city, windowFilter, trace, { browse, maxDays, until, zone, profileText: opts.profile }),
       runTier3(),
     ]);
-    lastTimings.tiersMs = Date.now() - tierStarted;
+    trace.timings.tiersMs = Date.now() - tierStarted;
     // Every tier's candidates go to the gate, which keeps what's actually
     // offerable; one per tier survives below.
-    const gateable = [tier1, ...tier2, tier3].filter((m): m is TierMatch => m != null);
-    found = gateable;
+    found = [tier1, ...tier2, tier3].filter((m): m is TierMatch => m != null);
     if (searchCache.size > 300) searchCache.clear();
     // A "nothing" is never reused: events get added, and a cached empty
     // result hid them for six hours.
-    if (shouldCacheSearch(found)) searchCache.set(cacheKey, { at: Date.now(), found });
+    if (shouldCacheSearch(found)) searchCache.set(cacheKey, { at: Date.now(), found, trace });
   }
 
-  lastSearchScope = { city, window: window?.label ?? null, windowStart: window?.start.toISO() ?? null, windowEnd: window?.end.toISO() ?? null,
-    fetchedThrough: lastFetchedThrough,
-    searchText: ask.text ?? null,
-    tier2Nearby: lastNearbyCount,
-    tier2TopScores: lastTopScores,
-    closest: lastClosest,
-    profileUsed: !!opts.profile,
-    relevanceRejected: lastRelevanceRejected,
-    xDropped: lastXDropped,
-    xQuery: lastXQuery,
-    timings: lastTimings,
-    windowCovered: window && lastFetchedThrough ? new Date(lastFetchedThrough) >= window.end.toJSDate() : null, browse, tiers: found.map((m) => m.tier), dropped: lastTierDrop };
-  lastTierDrop = null;
   const gatedOut: GatedOut[] = [];
-  const gated = await gateMatches(found, { userId: opts.userId ?? null, searchCity: city, checkRepeat: opts.checkRepeat, gatedOut, askedUntil: window ? window.end.toISODate() : null });
-  if (lastSearchScope) lastSearchScope.gatedOut = gatedOut;
+  const scope: SearchScope = {
+    ...baseScope,
+    fetchedThrough: t.fetchedThrough,
+    tier2Nearby: t.nearbyCount,
+    tier2TopScores: t.topScores,
+    closest: t.closest,
+    relevanceRejected: t.relevanceRejected,
+    xDropped: t.xDropped,
+    xQuery: t.xQuery,
+    xBlocked: t.xBlocked,
+    timings: t.timings,
+    cached: usedCache,
+    windowCovered: window && t.fetchedThrough ? new Date(t.fetchedThrough) >= window.end.toJSDate() : null,
+    tiers: found.map((m) => m.tier),
+    dropped: t.tierDrop,
+    gatedOut,
+  };
+  const gated = await gateMatches(found, { userId: opts.userId ?? null, searchCity: city, checkRepeat: opts.checkRepeat, gatedOut, askedUntil: window ? window.end.toISODate() : null, zone });
   // Every offerable candidate, best first. Collapsing to one per tier here
   // threw the right event away (2026-09-16: "Voice AI Happy Hour" passed the
   // gate but lost the Tier 2 slot to a higher-ranked event the fit check then
   // rejected). The caller picks one per tier after the fit check.
-  return gated;
+  return { matches: gated, scope };
 }
 
 // The daily urgent-only Tier 1/2 pre-check (checkForUrgentMatch) was removed

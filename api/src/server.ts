@@ -24,7 +24,7 @@ import { createCoRouter } from "./routes/co.js";
 import { createLumaRouter } from "./routes/luma.js";
 import { createNotificationsRouter } from "./routes/notifications.js";
 import { createReferralsRouter } from "./routes/referrals.js";
-import { sendblueRouter } from "./routes/sendblue.js";
+import { reportUnfinishedTurns, sendblueRouter } from "./routes/sendblue.js";
 import { stripeRouter } from "./routes/stripe.js";
 import { createUsersRouter } from "./routes/users.js";
 import { bridgeTwilioMediaStream } from "./services/mediaStreamBridge.js";
@@ -59,13 +59,24 @@ httpServer.on("upgrade", (req, socket, head) => {
 // parameters from Stream URLs entirely (confirmed live and via Twilio's
 // docs), so it travels as a <Parameter> instead (see callTrigger.ts) and
 // only arrives once the socket sends its own "start" event.
-// bridgeTwilioMediaStream resolves it from there itself.
+// bridgeTwilioMediaStream resolves it from there itself — and, since
+// 2026-09-17, only trusts it once it's proven by a single-use signed token
+// in that same "start" event (see mediaStreamBridge.ts's "media-stream
+// auth" section); this upgrade handler stays auth-agnostic on purpose, the
+// same way it was before, since the real proof travels inside the socket's
+// own protocol, not the upgrade request.
 mediaStreamWss.on("connection", (ws) => {
   bridgeTwilioMediaStream(ws);
 });
 //Security check to make sure the right tables/columns
-// are there when the server starts
-runMigrations();
+// are there when the server starts. Fixed 2026-09-17: runMigrations()
+// became async/awaitable (auth/payments) but this call was still fired
+// unawaited — the server could start accepting requests (and cron jobs
+// could start firing) before migrations actually finished. migrationsReady
+// is awaited below, right before jobs are registered and the server starts
+// listening, instead of being awaited here — route registration itself
+// (app.use(...) below) doesn't touch the DB and doesn't need to wait.
+const migrationsReady = runMigrations();
 // Stripe webhook needs raw body for signature verification — must run before express.json()
 app.use("/payments/webhook", express.raw({ type: "application/json" }));
 // Hume's webhook signature is an HMAC over the exact raw body string, same
@@ -121,8 +132,24 @@ app.get("/audio/:id", (req, res) => {
 
 app.use(errorHandler);
 
-registerJobs(io);
+migrationsReady
+  .then(() => {
+    // One-time startup check for inbound texts that were mid-turn when the
+    // process last restarted or crashed (routes/sendblue.ts,
+    // 2026-09-17) — after migrations so the columns it reads (payload,
+    // finished_at) are guaranteed to exist. Report-only, non-fatal, must
+    // never block the server from starting.
+    reportUnfinishedTurns().catch((err: any) =>
+      console.error("reportUnfinishedTurns failed on startup (non-fatal):", err?.message ?? err),
+    );
 
-httpServer.listen(port, () => {
-  console.log(`Listening on port: ${port}`);
-});
+    registerJobs(io);
+
+    httpServer.listen(port, () => {
+      console.log(`Listening on port: ${port}`);
+    });
+  })
+  .catch((err) => {
+    console.error("Migrations failed — server not starting:", err);
+    process.exit(1);
+  });

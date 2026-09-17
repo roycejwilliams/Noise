@@ -11,6 +11,7 @@ import { generateEmbedding } from "../services/embeddings.js";
 import {
   assessConversationCoverage,
   captureIntent,
+  cityChangeAllowed,
   extractPlannedEventMention,
   extractPsychographicProfile,
   persistCoveredTopics,
@@ -20,13 +21,21 @@ import {
 } from "../services/profileExtraction.js";
 import { generateRecommendation } from "../services/recommendation.js";
 import { buildContextSummary, summarizeCallForTextContext } from "../services/callContext.js";
+import { writeMemory } from "../services/memory.js";
 import sendblue from "../services/sendblue.js";
 import { generateHumeVoiceLine, generateVoiceNote } from "../services/voiceNote.js";
 import { triggerCallForUser } from "../services/callTrigger.js";
-import { prewarmHumeConnection, hasReceivedRealSpeech } from "../services/mediaStreamBridge.js";
+import { issueStreamAuthToken, prewarmHumeConnection, hasReceivedRealSpeech } from "../services/mediaStreamBridge.js";
 import { CO_VOICE, CO_TEXT_CHANNEL } from "../services/coVoice.js";
 import { recordDecision } from "../harness/core.js";
-import { decideMissedCallFollowUp, gatherMissedCallState } from "../harness/callGate.js";
+import {
+  decideMissedCallFollowUp,
+  gatherMissedCallState,
+  hasRealUserTurn,
+  hadContactSince,
+  inboundCallerVerified,
+  stripVoicemailGreetingLines,
+} from "../harness/callGate.js";
 import { MODELS } from "../models.js";
 import { humeMoments, recordEmotionSignals, renderHumeMoments, type HumeUtterance } from "../harness/emotion.js";
 import { surfaceNewAsksNow } from "../services/eventSurfacingSweep.js";
@@ -59,12 +68,29 @@ const twilioClient = twilio(
 // TWILIO_AUTH_TOKEN, so this needs the subaccount's own token, not the
 // parent's (confirmed the hard way: every real call's status callback 401'd
 // once signature validation was added, despite a perfectly valid account).
+// Fixed 2026-09-17 (security): this only ever checked in production, so a
+// deployment with NODE_ENV unset or mis-set to anything else accepted
+// unsigned webhook calls to /co/call-status and /co/incoming-call — both of
+// which load and act on a real person's account. Now: verify whenever
+// TWILIO_AUTH is actually configured, in ANY environment; only skip when
+// it's genuinely absent, and then fail CLOSED (reject) in production —
+// missing the secret in prod is a real misconfiguration, not a reason to
+// wave every request through — while logging loudly and allowing it
+// elsewhere so local dev without the secret set still works.
 function validateTwilioSignature(req: Request, path: string): boolean {
-  if (process.env.NODE_ENV !== "production") return true;
+  const secret = process.env.TWILIO_AUTH;
+  if (!secret) {
+    if (process.env.NODE_ENV === "production") {
+      console.error(`validateTwilioSignature: TWILIO_AUTH not set in production — rejecting ${path} (fail closed)`);
+      return false;
+    }
+    console.warn(`validateTwilioSignature: TWILIO_AUTH not set — skipping signature check for ${path} (this would reject in production)`);
+    return true;
+  }
   const sig = req.headers["x-twilio-signature"] as string | undefined;
   if (!sig) return false;
   const url = `${process.env.API_URL}${path}`;
-  return twilio.validateRequest(process.env.TWILIO_AUTH!, sig, url, req.body);
+  return twilio.validateRequest(secret, sig, url, req.body);
 }
 
 // Reject webhook calls that didn't come from Hume. Hume signs each webhook
@@ -77,9 +103,21 @@ function validateTwilioSignature(req: Request, path: string): boolean {
 // server.ts's express.raw() on /co/webhook) — a re-serialized/parsed-then-
 // stringified body isn't guaranteed byte-identical to what Hume actually
 // signed.
+// Fixed 2026-09-17 (security): missing HUME_SIGNIN_KEY silently skipped
+// verification in every environment, including production — a deployment
+// that just never had the key set was wide open on /co/webhook forever with
+// no signal anything was wrong. Same fail-closed-in-prod, loud-elsewhere
+// posture as validateTwilioSignature above.
 function validateHumeWebhook(req: Request): boolean {
   const secret = process.env.HUME_SIGNIN_KEY;
-  if (!secret) return true; // skip when not configured (dev)
+  if (!secret) {
+    if (process.env.NODE_ENV === "production") {
+      console.error("validateHumeWebhook: HUME_SIGNIN_KEY not set in production — rejecting /co/webhook (fail closed)");
+      return false;
+    }
+    console.warn("validateHumeWebhook: HUME_SIGNIN_KEY not set — skipping signature check (this would reject in production)");
+    return true;
+  }
 
   const signature = req.headers["x-hume-ai-webhook-signature"] as string | undefined;
   const timestamp = req.headers["x-hume-ai-webhook-timestamp"] as string | undefined;
@@ -372,6 +410,21 @@ router.post(
         // cleanly.
         if (user) {
           _io?.to(`user:${user.id}`).emit("co:call_completed", { call_sid: CallSid, status: "voicemail" });
+          // Fixed 2026-09-17: chat_ended is normally the sole writer of a
+          // terminal call_status, but its handler returns early for a
+          // voicemail-flagged call (see voicemail_calls below) before ever
+          // reaching that write — so call_status was left stuck on
+          // whatever live value the call started with (e.g. 'in-progress')
+          // until it aged out 30 minutes later (callGate.ts's
+          // LIVE_CALL_RECLAIM_MINUTES), and "call me" was refused the whole
+          // time. This call is done the moment it's redirected to the
+          // voicemail line; nothing further will touch call_status for it.
+          await pool
+            .query(
+              `UPDATE users SET call_status = 'completed', call_status_updated_at = NOW() WHERE id = $1 AND call_sid = $2`,
+              [user.id, CallSid],
+            )
+            .catch((err: any) => console.error("call-status: failed to clear call_status after voicemail (non-fatal):", err?.message ?? err));
         }
 
         // Claim the call before drafting anything (Layer 8 harness): Twilio
@@ -556,11 +609,21 @@ router.post(
 // directly — the other half of "always lend an ear" alongside the proactive
 // check-in cron. Generates the same <Connect><Stream> TwiML
 // services/callTrigger.ts uses for outbound calls, into the same
-// mediaStreamBridge.ts. Only a recognized caller (phone number matches a
-// user) reaches that bridge at all — an unrecognized number is turned away
-// here, before any stream connects, rather than being bridged into Hume
-// with no identity (mediaStreamBridge.ts requires user_id and closes
-// without it).
+// mediaStreamBridge.ts. Only a recognized, carrier-verified caller reaches
+// that bridge at all.
+//
+// Fixed 2026-09-17 (security): matching on From alone trusted caller ID,
+// which is trivially spoofed — a spoofed number got that person's full
+// private context read to a stranger and could write into their profile.
+// StirVerstat is Twilio's own read of the ORIGINATING carrier's STIR/SHAKEN
+// attestation — "TN-Validation-Passed-A" is the one value that actually
+// means the carrier vouches this caller owns the number; anything else
+// (lower attestation, unverified, or simply absent on a carrier that
+// doesn't support it) is treated exactly like an unrecognized number: a
+// generic decline, no context loaded, no memory written. See
+// harness/callGate.ts's inboundCallerVerified. ALLOW_UNVERIFIED_INBOUND_CALLERS=true
+// is a local/dev escape hatch for testing on lines whose carrier never
+// attests — never set in production.
 router.post(
   "/incoming-call",
   async (req: Request, res: Response, next: NextFunction) => {
@@ -571,16 +634,39 @@ router.post(
 
       const from = req.body.From as string | undefined;
       const callSid = req.body.CallSid as string | undefined;
+      const stirVerstat = (req.body.StirVerstat as string | undefined) ?? null;
       const result = from
         ? await pool.query(`SELECT id FROM users WHERE phone_number = $1`, [from])
         : null;
       const userId: string | null = result?.rows[0]?.id ?? null;
+      const allowUnverified = process.env.ALLOW_UNVERIFIED_INBOUND_CALLERS === "true";
+      const verified = inboundCallerVerified(stirVerstat, allowUnverified);
 
       const twiml = new twilio.twiml.VoiceResponse();
-      if (!userId) {
+      if (!userId || !verified) {
+        if (userId && !verified) {
+          console.warn(
+            `incoming-call: caller ID for ${from} matched a user but wasn't carrier-verified (StirVerstat: ${stirVerstat ?? "none"}) — treating as unrecognized`,
+          );
+        }
         twiml.say("Sorry, we don't recognize this number. Text us instead and we'll get you set up.");
         twiml.hangup();
         return res.type("text/xml").send(twiml.toString());
+      }
+
+      // Fixed 2026-09-17: this never set call_sid/call_status for an inbound
+      // call, so the LEFTOVER state from whatever call last touched this
+      // user's row (often 'completed', set by the previous call's own
+      // chat_ended) was still sitting there. /webhook's chat_ended handler
+      // reads call_status to decide if a call was "already processed" — so
+      // after any finished call, every later inbound call looked already
+      // done and got silently skipped: no transcript, no profile update, no
+      // follow-up. Mirrors what callTrigger.ts already does for outbound.
+      if (callSid) {
+        await pool.query(
+          `UPDATE users SET call_sid = $2, call_status = 'initiated', call_status_updated_at = NOW() WHERE id = $1`,
+          [userId, callSid],
+        );
       }
 
       // Start the Hume handshake now, while this TwiML response is still in
@@ -594,6 +680,9 @@ router.post(
       const mediaStreamUrl = `${process.env.API_URL!.replace(/^http/, "ws")}/media-stream`;
       const stream = twiml.connect().stream({ url: mediaStreamUrl });
       stream.parameter({ name: "user_id", value: userId });
+      // Security fix, 2026-09-17 — see mediaStreamBridge.ts's "media-stream
+      // auth" section; the bridge no longer trusts user_id above on its own.
+      stream.parameter({ name: "auth", value: issueStreamAuthToken(userId) });
 
       return res.type("text/xml").send(twiml.toString());
     } catch (err) {
@@ -734,15 +823,12 @@ async function resolveUserId(
 // calls already have their own real follow-up path (the delayed missed-call
 // SMS via pending_call_followups) — this only needs to stop scheduling a
 // SECOND, content-less one on top of that.
-const VOICEMAIL_BOILERPLATE = /is not available at the tone|forwarded to voicemail|please record your message|record your message when you (have finished|are finished)/i;
-
-function hasRealUserTurn(transcript: string): boolean {
-  return transcript
-    .split("\n")
-    .filter((line) => /^user:/i.test(line.trim()))
-    .map((line) => line.replace(/^user:\s*/i, "").trim())
-    .some((line) => line.length > 0 && !VOICEMAIL_BOILERPLATE.test(line));
-}
+//
+// hasRealUserTurn now lives in harness/callGate.ts (2026-09-17) — the same
+// "did a person actually talk" test is needed there too (auto-intake's
+// "did an intake call happen" check), and the old version here only caught
+// a few literal voicemail phrases, not greetings/carrier messages/bare
+// fillers (see callGate.ts's isVoicemailGreeting).
 
 // Schedules the post-call reflection text instead of sending it immediately
 // — landing the second the call ends read as a scripted status update, not
@@ -871,31 +957,94 @@ router.post(
           return res.status(200).send({ success: true, empty: true });
         }
 
-        // Step 1 — Store raw transcript in co_memories immediately
-        // What Co knew going into the call, captured before this call's own
-        // summary is written, for the grounding audit below.
+        // Fixed 2026-09-17 (finding 2) — AMD-based voicemail detection only
+        // catches calls Twilio itself flagged as a machine; a transcribed
+        // voicemail/carrier greeting can still slip through on a call that
+        // wasn't (a borderline AMD result, a slow pickup). Strip any
+        // greeting-like lines before anything downstream reads them as the
+        // person's own words. The raw transcript (unstripped) is still what
+        // gets stored to co_memories — this only affects what extraction,
+        // grounding, and the follow-up draft see.
+        const cleanTranscript = stripVoicemailGreetingLines(transcript);
+
+        // Fixed 2026-09-17 (finding 3) — a call where only Co ever spoke
+        // (nobody picked up, or picked up and said nothing substantive) used
+        // to still run the full pipeline below: the transcript got treated
+        // as a real conversation, "[Call] ..." became a text-context summary
+        // as if the person said it, a profile got extracted from Co's own
+        // lines, and captureIntent/auditCall ran against nothing. Stop here
+        // instead, with one short factual note — hasRealUserTurn requires an
+        // actual back-and-forth (Co spoke, then the person said something
+        // that isn't a greeting/filler), same test the live bridge itself
+        // now uses for voicemail detection (mediaStreamBridge.ts).
+        if (!hasRealUserTurn(transcript)) {
+          if (callUser) {
+            // memory_type 'system' (not 'call_transcript') so this never
+            // gets misread as "a real intake call happened" by
+            // callGate.ts's decideAutoIntake, which looks for a genuine
+            // call_transcript row to know intake is done. Keyed on the
+            // note's own content (not the raw transcript) since that's what
+            // actually gets inserted — a redelivered chat_ended would
+            // otherwise write a second note every time.
+            const noteContent = `Co called ${callUser.first_name} but there was no real conversation (chat ${chat_id}).`;
+            const already = await pool.query(
+              `SELECT 1 FROM co_memories WHERE user_id = $1 AND memory_type = 'system' AND content = $2 LIMIT 1`,
+              [user_id, noteContent],
+            );
+            if (!already.rows[0]) {
+              await writeMemory(user_id, "system", noteContent).catch((err: any) =>
+                console.error("co/webhook: failed to log no-conversation call (non-fatal):", err?.message ?? err),
+              );
+            }
+          }
+          await pool.query(`UPDATE users SET call_status = 'completed', call_status_updated_at = NOW() WHERE id = $1`, [user_id]);
+          _io?.to(`user:${user_id}`).emit("co:profile_ready");
+          return res.status(200).send({ success: true, noRealConversation: true });
+        }
+
+        // Step 1 — Store raw transcript in co_memories immediately.
+        // Idempotent on exact transcript content (2026-09-17, finding 14): a
+        // partial-failure retry (chat_ended redelivered after a mid-pipeline
+        // crash) used to re-insert this — and duplicate the emotion_signals
+        // rows below — every time it reclaimed a 'failed' call_status.
         const knownBeforeCall = await buildContextSummary(user_id).catch(() => "");
-        const transcriptMemoryId = await storeTranscriptMemory(user_id, transcript, {
-          emotionalContext: emotions,
-          audioUrl: recording_url,
-        });
+        const existingTranscriptMem = await pool.query(
+          `SELECT id FROM co_memories WHERE user_id = $1 AND memory_type = 'call_transcript' AND content = $2 LIMIT 1`,
+          [user_id, transcript],
+        );
+        let transcriptMemoryId: string;
+        let transcriptAlreadyStored = false;
+        if (existingTranscriptMem.rows[0]) {
+          transcriptMemoryId = existingTranscriptMem.rows[0].id;
+          transcriptAlreadyStored = true;
+        } else {
+          transcriptMemoryId = await storeTranscriptMemory(user_id, transcript, {
+            emotionalContext: emotions,
+            audioUrl: recording_url,
+          });
+        }
         // Calls can't be gated live (Hume speaks as it generates), so every
         // call is audited right after: keepable promises are kept, the rest
         // become corrections for the next text (harness/callGrounding.ts).
-        auditCall(user_id, transcript, knownBeforeCall).catch(() => {});
+        auditCall(user_id, cleanTranscript, knownBeforeCall).catch(() => {});
 
         // Emotion loop: the strongest voice moments, with what they said,
         // recorded for every layer to read and fed into extraction below.
         const moments = humeMoments(utterances);
         const emotionalHighlights = moments.length ? renderHumeMoments(moments) : undefined;
-        await recordEmotionSignals(user_id, moments.map((m) => ({ ...m, about: null, memoryId: transcriptMemoryId })));
+        const existingSignal = transcriptAlreadyStored
+          ? await pool.query(`SELECT 1 FROM emotion_signals WHERE memory_id = $1 LIMIT 1`, [transcriptMemoryId])
+          : { rows: [] as unknown[] };
+        if (!existingSignal.rows.length) {
+          await recordEmotionSignals(user_id, moments.map((m) => ({ ...m, about: null, memoryId: transcriptMemoryId })));
+        }
 
         // Steps 2-5 — Extract psychographic data via Anthropic, sanitize against
         // DB CHECK constraints, generate goal embeddings, and upsert co_profiles.
         // Shared with the typed-intake fallback and the text channel — see
         // profileExtraction.ts.
-        const { extracted } = await extractPsychographicProfile(transcript, emotionalHighlights);
-        await storeProfile(user_id, extracted, transcript, { emotions });
+        const { extracted } = await extractPsychographicProfile(cleanTranscript, emotionalHighlights);
+        await storeProfile(user_id, extracted, cleanTranscript, { emotions });
 
         // Step 6 — Persist Hume chat group ID so the next call resumes this conversation
         if (chat_group_id) {
@@ -908,21 +1057,21 @@ router.post(
         // Step 7 — Ambient intent capture (non-blocking — runs in background)
         // A real ask from the call is searched right away (paced by the
         // proactive harness), not left for the next sweep.
-        captureIntent(user_id, transcript)
+        captureIntent(user_id, cleanTranscript)
           .then(() => surfaceNewAsksNow(user_id))
           .catch(() => {});
-        extractPlannedEventMention(user_id, transcript).catch(() => {});
+        extractPlannedEventMention(user_id, cleanTranscript).catch(() => {});
         // Bridges this call into the text side's own conversation log (Royce,
         // 2026-09-07) — see summarizeCallForTextContext for the gap this closes.
         // Call summary first (it feeds the picture), then rebuild the picture.
-        summarizeCallForTextContext(user_id, transcript, emotionalHighlights)
+        summarizeCallForTextContext(user_id, cleanTranscript, emotionalHighlights)
           .then(() => refreshPersonSnapshot(user_id, { force: true }))
           .catch(() => {});
 
         // The recap exists now (transcript + extraction persisted) — safe to
         // mark completed. Everything after this point (scheduling the
         // follow-up) is best-effort and must not affect retryability.
-        await pool.query(`UPDATE users SET call_status = 'completed' WHERE id = $1`, [user_id]);
+        await pool.query(`UPDATE users SET call_status = 'completed', call_status_updated_at = NOW() WHERE id = $1`, [user_id]);
 
         // Profile is fully extracted and stored — tell the app to show the Ready state
         _io?.to(`user:${user_id}`).emit("co:profile_ready");
@@ -931,9 +1080,10 @@ router.post(
         // scheduleFollowUpText) rather than sent instantly. The app only
         // shows "Ready" if it happens to be open — most people have hung up
         // and moved on, so the scheduled text is the only confirmation they
-        // actually get that the call did something.
-        if (callUser && hasRealUserTurn(transcript)) {
-          await scheduleFollowUpText(user_id, transcript);
+        // actually get that the call did something. hasRealUserTurn already
+        // confirmed above, so this always fires when callUser is known.
+        if (callUser) {
+          await scheduleFollowUpText(user_id, cleanTranscript);
         }
 
         return res.status(200).send({ success: true });
@@ -1002,9 +1152,53 @@ router.put(
         "city",
       ];
 
-      const filteredKeys = Object.keys(req.body).filter((key) =>
+      let filteredKeys = Object.keys(req.body).filter((key) =>
         allowed.includes(key),
       );
+
+      // Fixed 2026-09-17 (finding 17): an empty body (or one with no
+      // recognized fields) built `SET , updated_at = NOW()` — invalid SQL,
+      // a 500 with no useful message. Reject it plainly instead.
+      if (filteredKeys.length === 0) {
+        return res.status(400).send("No valid fields to update.");
+      }
+
+      // Fixed 2026-09-17 (finding 17): this let a self-service edit set
+      // `city` with no check at all — every OTHER writer of co_profiles.city
+      // (calls, texts) has to go through cityChangeAllowed, gated on the
+      // person's own words actually placing them somewhere, specifically so
+      // an unrelated mention can't silently move someone's city. A direct
+      // PUT to this field bypassed that entirely. The person explicitly
+      // naming their own city in this field IS itself first-person
+      // evidence — stronger than a transcript inference — so this runs it
+      // through the same gate (and the same audit trail) rather than a
+      // separate, weaker rule, using a synthesized line so it reads as
+      // their own words the same way a transcript-sourced one would.
+      if (filteredKeys.includes("city")) {
+        const requestedCity = typeof req.body.city === "string" ? req.body.city.trim() : "";
+        if (!requestedCity) {
+          filteredKeys = filteredKeys.filter((k) => k !== "city");
+        } else {
+          const existing = await pool.query(`SELECT city FROM co_profiles WHERE user_id = $1`, [req.params.user_id]);
+          const existingCity: string | null = existing.rows[0]?.city ?? null;
+          const cityAllowed = cityChangeAllowed(existingCity, requestedCity, `user: I'm in ${requestedCity}`);
+          await recordDecision({
+            layer: 4,
+            decision: "profile.city",
+            userId: req.params.user_id,
+            outcome: cityAllowed ? "act" : "skip",
+            action: cityAllowed ? "moved" : "kept_existing",
+            proposal: { from: existingCity, to: requestedCity, via: "self_service_edit" },
+            checks: [{ name: "they_said_they_live_there", pass: cityAllowed, reason: cityAllowed ? "self-service edit, their own field" : "named as a preference, not a move" }],
+          }).catch(() => {});
+          if (!cityAllowed) {
+            filteredKeys = filteredKeys.filter((k) => k !== "city");
+          }
+        }
+        if (filteredKeys.length === 0) {
+          return res.status(400).send("No valid fields to update.");
+        }
+      }
 
       const values = filteredKeys.map((key) => req.body[key]);
 

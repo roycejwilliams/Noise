@@ -17,7 +17,7 @@ import { scoreMatchedGroup, type ScorableGuest } from "./eventScoring.js";
 const DATE_WINDOW_DAYS = 2;
 const SIMILARITY_THRESHOLD = 0.85;
 
-type CrossMatch = { user_id: string; event_api_id: string | null };
+export type CrossMatch = { user_id: string; event_api_id: string | null };
 
 async function fetchScorableGuests(userIds: string[]): Promise<ScorableGuest[]> {
   if (!userIds.length) return [];
@@ -75,8 +75,18 @@ async function findCrossMatches(
   return [...mentionRows.rows, ...surfacedRows.rows];
 }
 
-function pickCanonicalEventId(matches: CrossMatch[], fallback: string): string {
-  return matches.find((m) => m.event_api_id)?.event_api_id ?? fallback;
+// Stable per-pair id when neither side has a real Luma event (code review,
+// 2026-09-17): this used to fall back to `self:${mentionId}`, a fresh id
+// every time either side re-mentioned the same plans, which reset the
+// one-nudge-per-event dedup (event_guest_match_nudges is keyed on event_id)
+// and let the exact same pair get nudged about each other again and again.
+// Deriving it from the sorted set of matched user_ids instead keeps it
+// identical across repeated mentions of the same real people, and only
+// changes when the actual group of matched people changes.
+// Exported so evals/proactive/rules.ts can test the dedupe key directly.
+export function pickCanonicalEventId(matches: CrossMatch[], matchedUserIds: string[]): string {
+  const real = matches.find((m) => m.event_api_id)?.event_api_id;
+  return real ?? `self:${[...matchedUserIds].sort().join(",")}`;
 }
 
 // Called right after a new planned_event_mentions row is inserted
@@ -101,9 +111,10 @@ export async function matchAndScoreEventMention(mentionId: string): Promise<void
   const matchedUserIds = [mention.user_id, ...matches.map((m) => m.user_id)];
   const matched = await fetchScorableGuests(matchedUserIds);
   // Real Luma id if any matched record has one (a surfaced_events match),
-  // otherwise fall back to a synthetic grouping key — there's no canonical
-  // event record when it's purely two self-reports matching each other.
-  const eventId = pickCanonicalEventId(matches, `self:${mentionId}`);
+  // otherwise a synthetic id stable across repeated mentions of the same
+  // people — there's no canonical event record when it's purely two
+  // self-reports matching each other.
+  const eventId = pickCanonicalEventId(matches, matchedUserIds);
 
   console.log(
     `eventMatching: mention ${mentionId} ("${mention.event_name_raw}") matched ${matches.length} other Co user(s) (event id: ${eventId}), scoring group`,

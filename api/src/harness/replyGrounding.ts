@@ -486,9 +486,16 @@ Rewrite the draft so it still responds to what they said, keeping everything tha
 }
 
 // Last resort: drop the sentences that carry an unsupported claim.
-function stripUnsupported(draft: string, failed: GateCheck[]): string {
+export function stripUnsupported(draft: string, failed: GateCheck[]): string {
   const sentences = draft.match(/[^.!?\n]+[.!?]*\s*/g) ?? [draft];
-  const bad = failed.map((f) => norm((f.reason ?? "").replace(/^[a-z_]+: "|"( \(cited support not found\))?$/g, "").replace(/^(link|phone number|time) /, "")));
+  // Strips the leading `type: "` and the trailing `"`, plus ANY trailing
+  // parenthetical claimChecks appended after it — not just literally
+  // " (cited support not found)" (2026-09-17 code review: a future_promise
+  // failure's real suffix is " (a future action needs a real scheduled call
+  // or an open search behind it)", which the old literal-only pattern left
+  // in place, so the quoted text never matched a sentence below and an
+  // unsupported promise could go out marked "stripped" while still present).
+  const bad = failed.map((f) => norm((f.reason ?? "").replace(/^[a-z_]+: "|"(\s*\([^)]*\))?$/g, "").replace(/^(link|phone number|time) /, "")));
   const keep = sentences.filter((s) => {
     const ns = norm(s);
     if (failed.some((f) => f.name === "no_call_placed_claim") && /(calling|ringing|dialing) you|i'?m (calling|ringing|dialing)/i.test(s)) return false;
@@ -499,6 +506,11 @@ function stripUnsupported(draft: string, failed: GateCheck[]): string {
     if (failed.some((f) => f.name === "link_on_file") && /https?:\/\//i.test(s)) return false;
     if (failed.some((f) => f.name === "phone_on_file") && /\d{3}[\s.-]?\d{4}/.test(s)) return false;
     if (failed.some((f) => f.name === "time_on_file") && clockTimes(s).length) return false;
+    // The claim read itself never came back (2026-09-17 code review): drop
+    // any sentence that could carry a checkable claim, since nothing
+    // verified it either way — same shape test needsClaimCheck uses to
+    // decide whether a whole draft needs the model read.
+    if (failed.some((f) => f.name === "claim_read_failed") && needsClaimCheck(s)) return false;
     return !bad.some((b) => b.length >= 6 && (ns.includes(b) || b.includes(ns.replace(/[.!?]+$/, ""))));
   });
   return keep.join("").trim();
@@ -538,18 +550,36 @@ export function needsClaimCheck(draft: string): boolean {
   return CLAIM_SHAPED.some((re) => re.test(draft));
 }
 
+// One retry before giving up on a claim-shaped draft (2026-09-17 code
+// review): a single bad JSON response or a transient failure used to send
+// the draft "unchecked," with only the cheap regex checks behind it.
 async function check(draft: string, rf: ReplyFacts, src: GroundingSources): Promise<{ checks: GateCheck[]; modelOk: boolean; ms: number }> {
   const code = codeChecks(draft, rf, src);
   if (!needsClaimCheck(draft)) return { checks: [...code, { name: "claim_read", pass: true, reason: "nothing claim-shaped, model read skipped" }], modelOk: true, ms: 0 };
-  try {
-    const extracted = await extractClaims(draft, rf, src);
-    if (!extracted) return { checks: code, modelOk: false, ms: 0 };
-    return { checks: [...code, ...claimChecks(extracted.claims, rf, src)], modelOk: true, ms: extracted.latencyMs };
-  } catch (err: any) {
-    console.error("replyGrounding: claim check failed (non-fatal, code checks only):", err?.message ?? err);
-    return { checks: code, modelOk: false, ms: 0 };
+  for (let attempt = 1; attempt <= 2; attempt++) {
+    try {
+      const extracted = await extractClaims(draft, rf, src);
+      if (extracted) return { checks: [...code, ...claimChecks(extracted.claims, rf, src)], modelOk: true, ms: extracted.latencyMs };
+      console.error(`replyGrounding: claim check returned unusable JSON on attempt ${attempt}${attempt === 1 ? ", retrying once" : ""}`);
+    } catch (err: any) {
+      console.error(`replyGrounding: claim check failed on attempt ${attempt}${attempt === 1 ? ", retrying once" : " (non-fatal, giving up)"}:`, err?.message ?? err);
+    }
   }
+  return { checks: code, modelOk: false, ms: 0 };
 }
+
+// True when the claim read never came back for a draft that's claim-shaped
+// (a number, a link, a name, an action, a promise, ...) — code checks alone
+// aren't enough to trust it, so this is treated as a failed check rather
+// than silently shipped "unchecked" (2026-09-17 code review).
+function claimReadUnavailable(draft: string, result: { modelOk: boolean }): boolean {
+  return !result.modelOk && needsClaimCheck(draft);
+}
+const CLAIM_READ_FAILED_CHECK: GateCheck = {
+  name: "claim_read_failed",
+  pass: false,
+  reason: "the claim check couldn't run twice; treating the draft as unverified",
+};
 
 export async function groundReply(
   rawDraft: string,
@@ -563,14 +593,18 @@ export async function groundReply(
   const firstCheckMs = Date.now() - started;
   let result: GroundingResult;
   const failed1 = first.checks.filter((c) => !c.pass);
+  // A claim-shaped draft whose claim read failed twice is treated as a
+  // failed check, not sent as "unchecked" on code checks alone (2026-09-17
+  // code review) — it goes through the same redraft-then-strip path below.
+  const effectiveFailed1 = claimReadUnavailable(draft, first) ? [...failed1, CLAIM_READ_FAILED_CHECK] : failed1;
 
-  if (!failed1.length) {
-    result = { final: draft, outcome: first.modelOk ? "as_drafted" : "unchecked", checks: first.checks, latencyMs: Date.now() - started, firstCheckMs };
+  if (!effectiveFailed1.length) {
+    result = { final: draft, outcome: "as_drafted", checks: first.checks, latencyMs: Date.now() - started, firstCheckMs };
   } else {
     let second: { checks: GateCheck[]; modelOk: boolean } | null = null;
     let rewritten: string | null = null;
     try {
-      rewritten = await redraft(draft, failed1, rf, src);
+      rewritten = await redraft(draft, effectiveFailed1, rf, src);
       if (rewritten) {
         rewritten = cleanCoMessage(rewritten);
         second = await check(rewritten, rf, src);
@@ -578,11 +612,16 @@ export async function groundReply(
     } catch (err: any) {
       console.error("replyGrounding: redraft failed (non-fatal, stripping instead):", err?.message ?? err);
     }
-    if (rewritten && second && second.checks.every((c) => c.pass)) {
+    const secondFailed = second
+      ? claimReadUnavailable(rewritten ?? "", second)
+        ? [...second.checks.filter((c) => !c.pass), CLAIM_READ_FAILED_CHECK]
+        : second.checks.filter((c) => !c.pass)
+      : null;
+    if (rewritten && second && secondFailed && !secondFailed.length) {
       result = { final: rewritten, outcome: "redrafted", checks: [...first.checks, ...second.checks.map((c) => ({ ...c, name: `redraft.${c.name}` }))], latencyMs: Date.now() - started, firstCheckMs };
     } else {
       const base = rewritten && second ? rewritten : draft;
-      const failed = rewritten && second ? second.checks.filter((c) => !c.pass) : failed1;
+      const failed = rewritten && second ? secondFailed! : effectiveFailed1;
       const stripped = stripUnsupported(base, failed);
       result = {
         final: stripped.split(/\s+/).length >= 3 ? stripped : MINIMAL_FALLBACK,

@@ -19,6 +19,7 @@ export type EventChangeNotificationPerson = {
 // for the jobs/index.ts cron, which checks the hour again).
 export async function runEventChangeNotificationAgent(
   person: EventChangeNotificationPerson,
+  eventId: string,
   eventName: string,
   fact: string,
   opts: { dryRun?: boolean } = {},
@@ -40,7 +41,12 @@ export async function runEventChangeNotificationAgent(
     console.log(`[eventChangeNotification dryRun] would send to ${person.userId}: "${message}"`);
     return { sent: false };
   }
-  const changeKey = createHash("sha1").update(`${eventName}\n${fact}`).digest("hex").slice(0, 16);
+  // eventId included (code review, 2026-09-17): without it, two different
+  // events that happen to share a name and get the same generic fact (e.g.
+  // "it's been canceled.") hashed to the same key, so sendExempt's
+  // idempotency check silently blocked the second event's real, distinct
+  // cancellation notice.
+  const changeKey = createHash("sha1").update(`${eventId}\n${eventName}\n${fact}`).digest("hex").slice(0, 16);
   const { sent } = await sendExempt({
     userId: person.userId,
     phoneNumber: person.phoneNumber,

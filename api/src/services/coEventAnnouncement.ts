@@ -12,7 +12,7 @@
 //           else), through sendExempt so it's logged but not counted
 //   record  tier1.announce per person: sent, waiting_for_hours, not_nearby
 import pool from "../db/db.js";
-import { listCalendarEvents, type LumaEvent } from "./luma.js";
+import { listCalendarEvents, getEventDetails, resolveCoEventCity, type LumaEvent } from "./luma.js";
 import { withinRadius, getTimezoneForCity } from "./geocoding.js";
 import { fetchLumaEventDetails, renderEventDetails } from "./eventDetails.js";
 import { draftProactive, checkDraft, localHourOk, sendExempt } from "../harness/proactive.js";
@@ -26,16 +26,60 @@ export function announcementAudience(people: { id: string; city: string | null; 
   return people.filter((p) => !p.optedOut && p.identityCaptured && !!p.city && nearby(p.city));
 }
 
-async function findEvent(eventId: string): Promise<LumaEvent | null> {
-  const events = await listCalendarEvents().catch(() => []);
-  return events.find((e) => e.api_id === eventId) ?? null;
+async function resolveCityFor(event: LumaEvent): Promise<LumaEvent> {
+  if (event.city) return event;
+  const url = event.url ? (/^https?:\/\//.test(event.url) ? event.url : `https://lu.ma/${event.url}`) : null;
+  const page = url ? await fetchLumaEventDetails(url).catch(() => null) : null;
+  const resolved = resolveCoEventCity(event.city, page?.city, process.env.CO_HOME_CITY, page?.address ?? page?.venue);
+  await recordDecision({ layer: 6, decision: "tier1.eventCity", userId: null, outcome: "act", action: resolved.source, proposal: { eventId: event.api_id, city: resolved.city } }).catch(() => {});
+  return { ...event, city: resolved.city };
+}
+
+// Returns the event, null when it's confirmed gone (a real 404, or found in
+// the list but genuinely absent), or undefined when neither lookup could
+// confirm either way (a transient error) — the caller must not treat
+// undefined as "doesn't exist" (code review, 2026-09-17).
+//
+// Tries the single-event endpoint (getEventDetails) first, not the calendar
+// list scan: the list lags event.created (confirmed live, 2026-09-07, in
+// eventScoring.ts's own resolveEventName), so scanning it for a
+// just-created event used to reliably return "not found" with nothing to
+// retry. getEventDetails looks the event up directly by id instead. Falls
+// back to the list scan only if the direct lookup itself fails.
+async function findEvent(eventId: string): Promise<LumaEvent | null | undefined> {
+  const details = await getEventDetails(eventId).catch(() => undefined);
+  if (details === null) return null; // confirmed 404
+  if (details) {
+    return resolveCityFor({ api_id: details.api_id, name: details.name, start_at: details.start_at, end_at: details.end_at, city: null, url: details.url });
+  }
+  // getEventDetails itself failed (network/API error) — fall back to the
+  // list scan rather than give up immediately.
+  const events = await listCalendarEvents().catch(() => null);
+  if (events === null) return undefined; // both lookups failed
+  const event = events.find((e) => e.api_id === eventId);
+  if (!event) return undefined; // not confirmed either way yet
+  return event.city ? event : resolveCityFor(event);
+}
+
+// A few retries a few seconds apart (code review, 2026-09-17) — event.created
+// fires the instant Luma creates the event, and getEventDetails can lag that
+// by a few seconds. Called only from the webhook path (announceCoEvent),
+// which is already fire-and-forget after the HTTP response is sent, so
+// waiting here doesn't block anything.
+async function findEventWithRetry(eventId: string, attempts = 5, delayMs = 4000): Promise<LumaEvent | null> {
+  for (let i = 0; i < attempts; i++) {
+    const event = await findEvent(eventId);
+    if (event !== undefined) return event;
+    if (i < attempts - 1) await new Promise((r) => setTimeout(r, delayMs));
+  }
+  return null; // genuinely couldn't resolve it after retrying
 }
 
 // Queue the announcement for everyone near the event, then send what can go
 // out now. Called from the Luma event.created webhook.
 export async function announceCoEvent(eventId: string): Promise<{ queued: number; sent: number }> {
-  const event = await findEvent(eventId);
-  if (!event || !event.city || new Date(event.start_at).getTime() < Date.now()) {
+  const event = await findEventWithRetry(eventId);
+  if (!event || new Date(event.start_at).getTime() < Date.now()) {
     await recordDecision({ layer: 6, decision: "tier1.announce", userId: null, outcome: "skip", action: "no_event_or_past", proposal: { eventId } }).catch(() => {});
     return { queued: 0, sent: 0 };
   }
@@ -69,10 +113,18 @@ export async function announceCoEvent(eventId: string): Promise<{ queued: number
   return { queued, sent };
 }
 
+// A Luma outage shouldn't cost anyone their announcement (code review,
+// 2026-09-17: a single failed listCalendarEvents() call used to mark every
+// pending row gave_up_at, permanently, in one shot). Past this many hours
+// with still no send, give up regardless — the same bound a retry-count
+// column would give, without needing a schema change; the event's own
+// start_at (checked per row below) is the tighter, more common bound.
+const ANNOUNCEMENT_MAX_AGE_HOURS = 24;
+
 // Send every queued announcement whose person is inside their daytime hours.
 export async function sendDueCoEventAnnouncements(onlyEventId?: string): Promise<number> {
   const { rows } = await pool.query(
-    `SELECT a.id, a.event_api_id, u.id AS user_id, u.first_name, u.phone_number, p.city, COALESCE(u.sms_opted_out, false) AS opted_out
+    `SELECT a.id, a.event_api_id, a.created_at, u.id AS user_id, u.first_name, u.phone_number, p.city, COALESCE(u.sms_opted_out, false) AS opted_out
      FROM co_event_announcements a
      JOIN users u ON u.id = a.user_id
      LEFT JOIN co_profiles p ON p.user_id = u.id
@@ -81,12 +133,39 @@ export async function sendDueCoEventAnnouncements(onlyEventId?: string): Promise
     [onlyEventId ?? null],
   );
   if (!rows.length) return 0;
-  const events = await listCalendarEvents().catch(() => []);
+  const events = await listCalendarEvents().catch((err: any) => {
+    console.error("coEventAnnouncement: listCalendarEvents failed (non-fatal, skipping this run, not giving up on anyone):", err?.message ?? err);
+    return null;
+  });
+  if (events === null) return 0; // list failed — retry next tick, touch nothing
   let sent = 0;
   for (const r of rows) {
-    const event = events.find((e) => e.api_id === r.event_api_id);
-    if (!event || new Date(event.start_at).getTime() < Date.now() || r.opted_out) {
+    let event = events.find((e) => e.api_id === r.event_api_id);
+    if (!event) {
+      // Not (yet) in the list scan — confirm via the single-event endpoint
+      // before giving up (code review, 2026-09-17): the list lags
+      // event.created, so "not in the list" isn't "doesn't exist."
+      const details = await getEventDetails(r.event_api_id).catch(() => undefined);
+      if (details === undefined) {
+        // Couldn't confirm either way — try again next tick, unless this
+        // row has been stuck long enough that it's not worth it anymore.
+        if (Date.now() - new Date(r.created_at).getTime() > ANNOUNCEMENT_MAX_AGE_HOURS * 3600_000) {
+          await pool.query(`UPDATE co_event_announcements SET gave_up_at = NOW() WHERE id = $1`, [r.id]);
+          await recordDecision({ layer: 6, decision: "tier1.announce", userId: r.user_id, outcome: "skip", action: "gave_up_stale_lookup", proposal: { eventId: r.event_api_id } }).catch(() => {});
+        }
+        continue;
+      }
+      if (details === null) {
+        // Confirmed gone.
+        await pool.query(`UPDATE co_event_announcements SET gave_up_at = NOW() WHERE id = $1`, [r.id]);
+        await recordDecision({ layer: 6, decision: "tier1.announce", userId: r.user_id, outcome: "skip", action: "gave_up_event_gone", proposal: { eventId: r.event_api_id } }).catch(() => {});
+        continue;
+      }
+      event = { api_id: details.api_id, name: details.name, start_at: details.start_at, end_at: details.end_at, city: r.city ?? null, url: details.url };
+    }
+    if (new Date(event.start_at).getTime() < Date.now() || r.opted_out) {
       await pool.query(`UPDATE co_event_announcements SET gave_up_at = NOW() WHERE id = $1`, [r.id]);
+      await recordDecision({ layer: 6, decision: "tier1.announce", userId: r.user_id, outcome: "skip", action: r.opted_out ? "gave_up_opted_out" : "gave_up_event_past", proposal: { eventId: r.event_api_id } }).catch(() => {});
       continue;
     }
     const timezone = r.city ? await getTimezoneForCity(r.city).catch(() => null) : null;

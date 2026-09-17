@@ -148,13 +148,15 @@ export async function extractPsychographicProfile(
 
   const { text: rawExtraction } = await generateText({
     model: anthropic(PROFILE_EXTRACT_MODEL),
-    prompt: `You are extracting psychographic profile data from a conversation transcript.
+    prompt: `You are extracting psychographic profile data from a conversation transcript between Co (an assistant, "assistant" lines) and a person ("user" lines).
+
+        Only what the PERSON said (the "user" lines) can fill any field below. Something Co suggested, asked about, or offered ("assistant" lines) is never the person's own goal, blocker, preference, or activity unless the person's own reply actually confirms it.
 
         Based on this transcript, extract the following fields and return ONLY valid JSON with no preamble or markdown:
 
         {
           "life_chapters": [], // array of applicable values from: new_to_city, building_solo, career_pivot, starting_over
-          "social_energy": 0, // number 0-100 (0 = very introverted/quiet preference, 100 = very extroverted/high energy)
+          "social_energy": null, // number 0-100 (0 = very introverted/quiet preference, 100 = very extroverted/high energy), or null if the person's own words didn't give a real signal this call — never guess a number
           "connection_style": "", // one of: small_group, medium_group, large_social
           "activity_preferences": [], // array of activities they mentioned or implied enjoying
           "goals": [], // array of things they are working toward
@@ -528,11 +530,64 @@ const LIVES_THERE = [
   /\b(?:i(?:'m| am)?)\s+(?:from|back in)\b/i,
 ];
 
+// Fixed 2026-09-17: this used to test the WHOLE transcript, Co's lines
+// included — "assistant: I'm in your corner" or "we moved fast" (talking
+// about the search, not a move) tripped LIVES_THERE just as easily as an
+// actual move did, and a curly apostrophe ("I’m in NYC") or a dropped one
+// ("im in sf") didn't match the straight-apostrophe-only pattern at all.
+// Now: only the person's own lines count, curly/missing apostrophes are
+// normalized first, and the phrase has to actually be followed by
+// something place-like — not "the middle of raising" or "a meeting" — a
+// short lowercase token (an abbreviation like "sf"/"nyc"), a capitalized
+// word (a proper noun), or the stated new city itself.
+function normalizeApostrophes(s: string): string {
+  return s.replace(/[‘’]/g, "'").replace(/\bim\b/gi, "i'm");
+}
+
+// Words that can follow "I'm in"/"we moved"/etc. without naming a place —
+// these keep a real move sentence ("I'm in NYC") distinguishable from one
+// that only happens to use the same words ("I'm in the middle of raising").
+const NON_PLACE_FOLLOWERS = new Set([
+  "the", "a", "an", "my", "your", "his", "her", "our", "their", "this", "that",
+  "some", "any", "not", "just", "still", "here", "there", "home", "back", "process",
+]);
+
+function placeLikeWordFollows(afterText: string, newCity: string): boolean {
+  const m = afterText.trimStart().match(/^[A-Za-z0-9']+/);
+  if (!m) return false;
+  const firstRaw = m[0];
+  const first = firstRaw.toLowerCase();
+  // Check against the stated new city BEFORE the stopword list — a real
+  // place can start with one ("The Bronx", "The Woodlands"); only fall back
+  // to excluding stopwords once there's no direct name match to trust.
+  const cityFirst = (newCity.trim().match(/^[A-Za-z0-9']+/)?.[0] ?? "").toLowerCase();
+  if (cityFirst && first === cityFirst) return true; // names the stated city
+  if (NON_PLACE_FOLLOWERS.has(first)) return false;
+  if (/^[A-Z]/.test(firstRaw)) return true; // reads as a proper noun
+  return firstRaw.length <= 3; // a short lowercase token reads as an abbreviation (sf, nyc, la)
+}
+
+function personsOwnLines(transcript: string): string {
+  return transcript
+    .split("\n")
+    .filter((line) => /^user:/i.test(line.trim()))
+    .map((line) => normalizeApostrophes(line.replace(/^user:\s*/i, "")))
+    .join(" ");
+}
+
 export function cityChangeAllowed(existingCity: string | null, newCity: string | null, transcript: string): boolean {
   if (!newCity) return false;
   if (!existingCity) return true; // nothing to protect yet
   if (newCity.trim().toLowerCase() === existingCity.trim().toLowerCase()) return true;
-  return LIVES_THERE.some((re) => re.test(transcript));
+
+  const ownWords = personsOwnLines(transcript);
+  for (const re of LIVES_THERE) {
+    const m = re.exec(ownWords);
+    if (!m) continue;
+    const after = ownWords.slice(m.index + m[0].length, m.index + m[0].length + 40);
+    if (placeLikeWordFollows(after, newCity)) return true;
+  }
+  return false;
 }
 
 // connection_style, availability_pattern, city) are the model's holistic

@@ -14,6 +14,7 @@ import { draftAskSolicitation } from "../agent/eventAskSolicitation.js";
 import { draftPostCall, markPostCallDropped, markPostCallSent } from "../jobs/postCallFollowUp.js";
 import { isShortNotice, onEventOfferDropped, onEventOfferSent, type EventOfferPayload } from "../services/eventSurfacingSweep.js";
 import type { DebriefPayload } from "../services/recommendationOutcome.js";
+import { markMatchNudgeSent, type EventMatchNudgePayload } from "../services/eventScoring.js";
 
 function skip(reason: string): DraftResult {
   return { skip: reason };
@@ -242,6 +243,30 @@ export const proactiveRegistry: ProactiveRegistry = {
       const { intro, closing, bulletList } = c.payload as { intro: string; closing: string; bulletList: string };
       const message = `Hey ${person.firstName}, ${intro}\n\n${bulletList}\n\n${closing}`;
       return { messages: [message], text: `${intro} ${closing}`, rules: { maxChars: 400, allowGreeting: true } };
+    },
+  },
+
+  // Match nudge for a pair with no real event timing to be "in-room" for
+  // (eventMatching.ts's self-reported/recommended-event path — code review,
+  // 2026-09-17: this used to send immediately via raw sendblue, bypassing
+  // local hours, the daily/weekly caps, and opt-out). The message was
+  // already drafted and consent-checked at enqueue time (eventScoring.ts's
+  // maybeSendMatchNudge), since that check needs live facts about the
+  // candidate's own opt-in status right then; here it's just handed to the
+  // harness's normal checks (hours, caps, opt-out) and output format rules.
+  event_match_nudge: {
+    async draft(c) {
+      const p = c.payload as EventMatchNudgePayload;
+      return { messages: [p.message], text: p.message, rules: p.rules };
+    },
+    async onSent(c) {
+      const p = c.payload as EventMatchNudgePayload;
+      await markMatchNudgeSent(p.eventId, c.userId, p.candidateId, p.score);
+      await writeMemory(
+        c.userId,
+        "event_guest_match_nudge",
+        `Nudged them that ${p.candidateFirstName} is also going to the same thing and worth meeting (score ${p.score})`,
+      );
     },
   },
 };

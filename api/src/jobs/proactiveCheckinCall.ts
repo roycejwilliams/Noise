@@ -1,4 +1,6 @@
 import pool from "../db/db.js";
+import { getTimezoneForCity } from "../services/geocoding.js";
+import { callHourOk, nextAllowedCallTime } from "../harness/callGate.js";
 import { triggerCallForUser } from "../services/callTrigger.js";
 
 // The other half of "always lend an ear" — inbound calling (POST
@@ -18,10 +20,14 @@ export async function placeDueProactiveCalls(io: import("socket.io").Server | nu
   // The UPDATE's own WHERE clause is both the due-check and the claim —
   // stamping last_proactive_outreach_at here, before triggerCallForUser runs,
   // means a concurrent tick can't also claim the same row (the due-condition
-  // no longer matches once stamped), and a failed call still waits out the
-  // full cadence before retrying rather than hammering every tick — same
-  // "bump regardless of send success" reasoning the ask-checkin cron already
-  // uses for the same class of problem.
+  // no longer matches once stamped). Fixed 2026-09-17 (Royce): stamping
+  // unconditionally at NOW() meant a call blocked purely by local hours
+  // (this cron runs every 15 min, all day, everywhere) consumed the whole
+  // 7/14-day cycle anyway — a person whose allowed window this cadence kept
+  // landing just outside could drift permanently. The claim below still
+  // happens up front (still race-safe), but a pure-hours block gets its
+  // stamp corrected afterward to the next allowed local hour instead of a
+  // full cadence out — see the local_hours check below.
   const claimed = await pool.query(
     `UPDATE co_profiles cp
      SET last_proactive_outreach_at = NOW()
@@ -34,14 +40,27 @@ export async function placeDueProactiveCalls(io: import("socket.io").Server | nu
          OR cp.last_proactive_outreach_at <= NOW() - (cp.checkin_call_cadence_days || ' days')::interval
        )
        AND u.sms_opted_out = false
-     RETURNING cp.user_id`,
+     RETURNING cp.user_id, cp.city, cp.checkin_call_cadence_days`,
   );
 
   for (const row of claimed.rows) {
     try {
       const result = await triggerCallForUser(row.user_id, io, { kind: "checkin_cadence" });
-      if (!result.success) {
-        console.error(`proactiveCheckinCall: triggerCallForUser failed for user ${row.user_id}:`, result.error);
+      if (result.success) continue; // cycle correctly consumed — a real call went out
+
+      console.error(`proactiveCheckinCall: triggerCallForUser failed for user ${row.user_id}:`, result.error);
+
+      // Only correct the stamp for a pure hours block — anything else
+      // (opted out mid-flight, subscription lapsed, a live/recent call)
+      // still waits out the normal cadence, same as before this fix.
+      const timezone = row.city ? await getTimezoneForCity(row.city).catch(() => null) : null;
+      const now = new Date();
+      if (!callHourOk(timezone, now)) {
+        const retryAt = nextAllowedCallTime(timezone, now);
+        await pool.query(
+          `UPDATE co_profiles SET last_proactive_outreach_at = $2::timestamptz - (checkin_call_cadence_days || ' days')::interval WHERE user_id = $1`,
+          [row.user_id, retryAt.toISOString()],
+        );
       }
     } catch (err: any) {
       console.error(`proactiveCheckinCall: unexpected error calling user ${row.user_id} (non-fatal):`, err?.message ?? err);

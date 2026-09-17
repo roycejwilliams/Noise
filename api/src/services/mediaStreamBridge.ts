@@ -1,8 +1,10 @@
+import { randomBytes } from "crypto";
 import { HumeClient } from "hume";
 import type WebSocket from "ws";
 import pool from "../db/db.js";
 import { buildContextSummary } from "./callContext.js";
 import { decodeMulawBuffer, encodeMulawBuffer, parseWav, resampleLinear, toMono } from "./audioCodec.js";
+import { isRealUserUtterance } from "../harness/callGate.js";
 
 // Replaces the simple server-to-server /v0/evi/twilio bridge — that endpoint
 // only accepts config_id/api_key as query params (confirmed against Hume's
@@ -43,12 +45,21 @@ type HumeConnectionHandle = {
   twilioWs: WebSocket | null;
   streamSid: string | null;
   callSid: string | null;
-  // Set true the first time Hume's own STT actually transcribes a real
-  // spoken utterance from the caller (a "user_message" event) — the ground
-  // truth that a live human is on the line, independent of and more
-  // reliable than Twilio's own async AMD verdict (see hasReceivedRealSpeech
-  // and its call site in co.ts's /call-status AMD handler).
+  // Set true only once the caller has actually responded to Co with
+  // something real — not the moment Hume transcribes ANY audio. Fixed
+  // 2026-09-17: this used to flip true on the very first "user_message"
+  // event, which included a transcribed voicemail greeting ("you've reached
+  // ... leave a message"). That made voicemail detection effectively a
+  // no-op — Co kept talking into the voicemail box, and the greeting itself
+  // got treated as a real person turn in the profile. Now it only flips once
+  // Co has said something (coHasSpoken) AND the caller's own words aren't a
+  // greeting/carrier-message/bare filler (isRealUserUtterance, shared with
+  // callGate.ts's post-call version of the same test).
   receivedUserMessage: boolean;
+  // True once any audio_output has actually gone out on this call — the
+  // signal that Co has started talking, which receivedUserMessage needs
+  // before it will count the caller's reply as real (see above).
+  coHasSpoken: boolean;
   // Caller audio (mulaw) arriving before humeSocket is open.
   pendingInbound: Buffer[];
   // Co's own audio (mulaw) arriving before a Twilio stream is attached to
@@ -84,6 +95,42 @@ const callsBySid = new Map<string, HumeConnectionHandle>();
 export function hasReceivedRealSpeech(callSid: string): boolean {
   return callsBySid.get(callSid)?.receivedUserMessage ?? false;
 }
+
+// ---- media-stream auth ---------------------------------------------------
+// Fixed 2026-09-17 (security): the /media-stream WebSocket had no auth at
+// all and trusted whatever user_id arrived in the "start" event's
+// customParameters — anyone who could guess or enumerate a user id could
+// open a stream claiming to be them and hear Co talk through that person's
+// private context, and have their own words written into that person's
+// profile. Twilio's <Connect><Stream> can only carry <Parameter> values,
+// and (for outbound calls specifically) the TwiML is built and handed to
+// Twilio BEFORE the call's own CallSid exists, so the token can't be bound
+// to a callSid up front — instead it's a single-use, short-lived opaque
+// token issued server-side (never derived from anything the client sends)
+// right before the TwiML is built, consumed exactly once when the stream's
+// "start" event arrives. The authenticated userId comes ONLY from this
+// token from that point on; the client-supplied user_id parameter is never
+// trusted on its own.
+const STREAM_AUTH_TTL_MS = 60_000;
+const streamAuthTokens = new Map<string, { userId: string; expiresAt: number }>();
+
+export function issueStreamAuthToken(userId: string): string {
+  const token = randomBytes(24).toString("hex");
+  streamAuthTokens.set(token, { userId, expiresAt: Date.now() + STREAM_AUTH_TTL_MS });
+  return token;
+}
+
+// One-time use — deletes on read whether or not it was valid, so a captured
+// token can't be replayed into a second stream.
+function consumeStreamAuthToken(token: string | undefined): string | null {
+  if (!token) return null;
+  const entry = streamAuthTokens.get(token);
+  streamAuthTokens.delete(token);
+  if (!entry) return null;
+  if (Date.now() > entry.expiresAt) return null;
+  return entry.userId;
+}
+
 
 function forwardCallerAudio(handle: HumeConnectionHandle, mulawBuf: Buffer) {
   if (!handle.humeSocket || handle.humeSocket.readyState !== 1 /* WebSocket.OPEN */) {
@@ -128,6 +175,7 @@ function createHumeConnection(userId: string, callSid: string | null = null): Hu
     streamSid: null,
     callSid,
     receivedUserMessage: false,
+    coHasSpoken: false,
     pendingInbound: [],
     pendingOutbound: [],
     evictionTimer: null,
@@ -165,6 +213,7 @@ function createHumeConnection(userId: string, callSid: string | null = null): Hu
 
       humeSocket.on("message", (m: any) => {
         if (m.type === "audio_output") {
+          handle.coHasSpoken = true;
           try {
             const wavBuf = Buffer.from(m.data, "base64");
             const { sampleRate, channels, samples } = parseWav(wavBuf);
@@ -194,9 +243,32 @@ function createHumeConnection(userId: string, callSid: string | null = null): Hu
           console.error("mediaStreamBridge: Hume reported an error:", m);
         } else if (m.type === "user_message") {
           // Ground truth that a live human is actually talking — see
-          // hasReceivedRealSpeech above. Only a flag flip, not a transcript
-          // hook: the real extraction/tool-call pipeline stays on /webhook.
-          handle.receivedUserMessage = true;
+          // hasReceivedRealSpeech above. Fixed 2026-09-17: only counts once
+          // Co has actually spoken AND the transcribed text isn't a
+          // voicemail greeting/carrier message/bare filler — see
+          // isRealUserUtterance (harness/callGate.ts, shared with the
+          // post-call transcript version of the same test). Only a flag
+          // flip, not a transcript hook: the real extraction/tool-call
+          // pipeline stays on /webhook.
+          const text = typeof m.message?.content === "string" ? m.message.content : "";
+          if (isRealUserUtterance(text, handle.coHasSpoken)) {
+            handle.receivedUserMessage = true;
+          }
+        } else if (m.type === "user_interruption") {
+          // Fixed 2026-09-17: nothing handled Hume's own interruption event,
+          // so Twilio kept playing whatever of Co's audio was already queued
+          // even after the person started talking over her — Co kept
+          // talking over them. Hume has already stopped generating; this
+          // just needs to stop what Twilio is about to play and drop
+          // anything still buffered for a not-yet-attached stream.
+          handle.pendingOutbound = [];
+          if (handle.twilioWs && handle.streamSid) {
+            try {
+              handle.twilioWs.send(JSON.stringify({ event: "clear", streamSid: handle.streamSid }));
+            } catch (err: any) {
+              console.error("mediaStreamBridge: failed to send Twilio clear on interruption (non-fatal):", err?.message ?? err);
+            }
+          }
         }
         // chat_started/chat_ended/tool_call/assistant_message are
         // deliberately not handled here — those still arrive at /webhook the
@@ -239,9 +311,21 @@ export function prewarmHumeConnection(userId: string, callSid: string): void {
 export function bridgeTwilioMediaStream(twilioWs: WebSocket): void {
   let handle: HumeConnectionHandle | null = null;
 
-  function attach(userId: string, streamSid: string, callSid: string | null) {
+  // authenticatedUserId comes ONLY from consumeStreamAuthToken — see the
+  // "media-stream auth" section above. The client-supplied user_id
+  // parameter is logged for a mismatch but never trusted on its own.
+  function attach(authenticatedUserId: string, streamSid: string, callSid: string | null) {
     const prewarmed = callSid ? pendingConnections.get(callSid) : undefined;
     if (prewarmed && !prewarmed.closed) {
+      if (prewarmed.userId !== authenticatedUserId) {
+        // The prewarmed connection (opened server-side, with a trusted
+        // userId — see prewarmHumeConnection's call sites) disagrees with
+        // what this token authorizes. Never happens on a legitimate call;
+        // refuse rather than bridge the wrong person's context.
+        console.error("mediaStreamBridge: token/prewarm userId mismatch, closing");
+        twilioWs.close();
+        return;
+      }
       pendingConnections.delete(callSid!);
       if (prewarmed.evictionTimer) clearTimeout(prewarmed.evictionTimer);
       handle = prewarmed;
@@ -250,8 +334,9 @@ export function bridgeTwilioMediaStream(twilioWs: WebSocket): void {
       // CallSid (shouldn't normally happen since both call sites prewarm
       // with the real CallSid before this attaches, but keeps this working
       // on its own if that's ever not the case, or if callSid was somehow
-      // absent from the "start" event).
-      handle = createHumeConnection(userId, callSid);
+      // absent from the "start" event). authenticatedUserId is still the
+      // token's userId, never the client-supplied one.
+      handle = createHumeConnection(authenticatedUserId, callSid);
     }
     handle.twilioWs = twilioWs;
     handle.streamSid = streamSid;
@@ -280,22 +365,36 @@ export function bridgeTwilioMediaStream(twilioWs: WebSocket): void {
         const streamSid: string | null = msg.start?.streamSid ?? msg.streamSid ?? null;
         // user_id arrives as a <Parameter> (see callTrigger.ts) — Twilio
         // strips query strings from Stream URLs entirely, so this is the
-        // only place it's actually reachable, confirmed live. Only ever
-        // absent if something upstream is broken — /incoming-call rejects
-        // an unrecognized caller before ever reaching this bridge, and
-        // callTrigger.ts always sets it for outbound calls — so closing here
-        // is a real signal something's wrong, not an expected path.
-        const userId: string | undefined = msg.start?.customParameters?.user_id;
+        // only place it's actually reachable, confirmed live. Kept for
+        // logging a mismatch only — see the security fix below.
+        const claimedUserId: string | undefined = msg.start?.customParameters?.user_id;
+        // Fixed 2026-09-17 (security): this endpoint had no auth at all —
+        // anyone who could open a WebSocket to /media-stream and send a
+        // "start" event with someone else's user_id got bridged straight
+        // into that person's private context, and their own words got
+        // written into that person's profile. "auth" is a single-use,
+        // short-lived token issued server-side (issueStreamAuthToken) right
+        // before the TwiML is built (see callTrigger.ts, co.ts's
+        // /incoming-call) and never derivable by a client — the
+        // authenticated userId comes only from it, not from the
+        // customParameters user_id above.
+        const authToken: string | undefined = msg.start?.customParameters?.auth;
+        const authenticatedUserId = consumeStreamAuthToken(authToken);
         // Twilio's own call SID, native to every Media Streams "start" event
         // — used only to correlate against the /call-status AMD callback
         // (see callsBySid above), never relied on as a required field.
         const callSid: string | null = msg.start?.callSid ?? null;
-        if (!userId || !streamSid) {
-          console.error("mediaStreamBridge: start event missing user_id or streamSid, closing");
+        if (!authenticatedUserId || !streamSid) {
+          console.error(
+            `mediaStreamBridge: start event missing a valid auth token or streamSid, closing (claimed user_id: ${claimedUserId ?? "none"})`,
+          );
           twilioWs.close();
           break;
         }
-        attach(userId, streamSid, callSid);
+        if (claimedUserId && claimedUserId !== authenticatedUserId) {
+          console.error(`mediaStreamBridge: claimed user_id ${claimedUserId} didn't match the token's ${authenticatedUserId} — using the token`);
+        }
+        attach(authenticatedUserId, streamSid, callSid);
         break;
       }
 

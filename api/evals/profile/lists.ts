@@ -38,16 +38,27 @@ check("low call moment hidden", !renderEmotionalContext(lowCall, now).includes("
 
 // Where someone lives only changes when they say so (Royce, 2026-09-16:
 // "founding engineer roles in NYC" moved his city off San Francisco).
+// cityChangeAllowed reads real Hume-transcript shape ("user: ..." /
+// "assistant: ..." lines) now that it only trusts the person's own words —
+// see profileExtraction.ts, fixed 2026-09-17.
 const cityCases: [boolean, string][] = [
-  [!cityChangeAllowed("San Francisco", "NYC", "Cool, I'm also looking for founding engineer roles too in the mean time"), "a role preference doesn't move them"],
-  [!cityChangeAllowed("San Francisco", "NYC", "any accelerators in NYC worth applying to?"), "an accelerator preference doesn't move them"],
-  [!cityChangeAllowed("San Francisco", "Miami", "are there good events in Miami this weekend?"), "an events question doesn't move them"],
-  [cityChangeAllowed("San Francisco", "NYC", "I'm in NYC now, moved last week"), "saying they're there moves them"],
-  [cityChangeAllowed("San Francisco", "Austin", "we're moving to Austin next month"), "moving moves them"],
-  [cityChangeAllowed("San Francisco", "Oakland", "based in Oakland these days"), "based in moves them"],
-  [cityChangeAllowed(null, "San Francisco", "any events this weekend?"), "first city on file is kept"],
-  [cityChangeAllowed("San Francisco", "san francisco", "whatever"), "same city is fine"],
-  [!cityChangeAllowed("San Francisco", null, "I'm in NYC"), "no new city means no change"],
+  [!cityChangeAllowed("San Francisco", "NYC", "user: Cool, I'm also looking for founding engineer roles too in the mean time"), "a role preference doesn't move them"],
+  [!cityChangeAllowed("San Francisco", "NYC", "user: any accelerators in NYC worth applying to?"), "an accelerator preference doesn't move them"],
+  [!cityChangeAllowed("San Francisco", "Miami", "user: are there good events in Miami this weekend?"), "an events question doesn't move them"],
+  [cityChangeAllowed("San Francisco", "NYC", "user: I'm in NYC now, moved last week"), "saying they're there moves them"],
+  [cityChangeAllowed("San Francisco", "Austin", "user: we're moving to Austin next month"), "moving moves them"],
+  [cityChangeAllowed("San Francisco", "Oakland", "user: based in Oakland these days"), "based in moves them"],
+  [cityChangeAllowed(null, "San Francisco", "user: any events this weekend?"), "first city on file is kept"],
+  [cityChangeAllowed("San Francisco", "san francisco", "user: whatever"), "same city is fine"],
+  [!cityChangeAllowed("San Francisco", null, "user: I'm in NYC"), "no new city means no change"],
+  // 2026-09-17 fixes below.
+  [!cityChangeAllowed("San Francisco", "Austin", "user: I'm in the middle of raising\nassistant: how's that going?"), "'in the middle of' isn't a place"],
+  [!cityChangeAllowed("San Francisco", "NYC", "assistant: I'm in your corner, we'll figure it out\nuser: thanks"), "only Co's own line said it, not the person's"],
+  [!cityChangeAllowed("San Francisco", "Austin", "user: we moved fast on the offer"), "'moved fast' isn't a move"],
+  [!cityChangeAllowed("San Francisco", "Austin", "user: I am heading to a meeting, can we talk later"), "'heading to a meeting' isn't a place"],
+  [cityChangeAllowed("San Francisco", "NYC", "user: im in nyc now"), "missing apostrophe still counts"],
+  [cityChangeAllowed("San Francisco", "SF", "user: im in sf"), "a lowercase abbreviation still counts"],
+  [cityChangeAllowed("San Francisco", "NYC", "user: I’m in NYC these days"), "a curly apostrophe still counts"],
 ];
 for (const [ok, label] of cityCases) {
   if (!ok) {
@@ -56,5 +67,6 @@ for (const [ok, label] of cityCases) {
   }
 }
 
-console.log(`profile lists, emotion render, city changes: ${20 - failed}/20 passed`);
+const TOTAL = 10 + cityCases.length;
+console.log(`profile lists, emotion render, city changes: ${TOTAL - failed}/${TOTAL} passed`);
 if (failed) process.exitCode = 1;

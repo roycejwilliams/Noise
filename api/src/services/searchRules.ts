@@ -1,5 +1,6 @@
 // Plain rules for the search path, kept free of imports that need API keys so
 // the code evals can test them directly (Royce, 2026-09-16).
+import { createHash } from "node:crypto";
 import { DateTime } from "luxon";
 import { parseAskWindow } from "./askWindow.js";
 
@@ -8,6 +9,50 @@ import { parseAskWindow } from "./askWindow.js";
 // kept missing events added after the first search.
 export function shouldCacheSearch(found: readonly unknown[]): boolean {
   return found.length > 0;
+}
+
+// What makes two searches the same (code review, 2026-09-17). The key used
+// the window's label ("tomorrow", "thursday"), so Monday's "tomorrow" results
+// answered Wednesday's; it left out the time zone and browse, and told
+// profiles apart only by length and first 40 characters, so two people with
+// similar profiles shared results. Now: the resolved dates of the window (or
+// today's local date when none was named), the zone, browse, and a hash of the
+// whole profile text.
+export function searchCacheKey(k: {
+  city: string | null;
+  askText: string | null | undefined;
+  windowStart: string | null;
+  windowEnd: string | null;
+  today: string;
+  zone: string;
+  browse: boolean;
+  profile: string | null | undefined;
+}): string {
+  const profileHash = k.profile ? createHash("sha256").update(k.profile).digest("hex").slice(0, 24) : "";
+  return [
+    (k.city ?? "").trim().toLowerCase(),
+    (k.askText ?? "").trim().toLowerCase(),
+    k.windowStart ?? "",
+    k.windowEnd ?? "",
+    k.windowStart ? "" : k.today,
+    k.zone,
+    k.browse ? "browse" : "",
+    profileHash,
+  ].join("|");
+}
+
+// ---------------------------------------------------------------------------
+// X search budget (code review, 2026-09-17). All X searches share one daily
+// cap; the background sweep may only use the part of it not held back for
+// people texting Co directly, so a big sweep can't leave a live ask with no
+// Tier 3 at all.
+export function xSearchBudget(usedToday: number, source: "sweep" | "request", dailyCap: number, requestReserve: number): RewriteCheck {
+  const reserve = Math.max(0, Math.min(requestReserve, dailyCap));
+  if (usedToday >= dailyCap) return { ok: false, reason: `daily X search cap (${dailyCap}) reached` };
+  if (source === "sweep" && usedToday >= dailyCap - reserve) {
+    return { ok: false, reason: `the sweep's share of the daily X search cap is used (${dailyCap - reserve} of ${dailyCap}; the rest is held for direct asks)` };
+  }
+  return { ok: true, reason: null };
 }
 
 // ---------------------------------------------------------------------------

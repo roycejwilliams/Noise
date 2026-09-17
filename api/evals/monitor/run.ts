@@ -39,7 +39,7 @@ check("ok claims not listed", checks.length === 3);
 const WRITTEN_DECISIONS = [
   "reply.grounding", "proactive.dailyPick", "recommendation.search", "turn.latency", "call.grounding",
   "profile.snapshotCheck", "profile.city", "reply.contactCard", "turn.closing", "router.decideActions",
-  "proactive.windowFollowUp",
+  "proactive.windowFollowUp", "proactive.exemptSend", "tier1.announce", "call.gate",
 ];
 for (const signal of SIGNALS) {
   const named = WRITTEN_DECISIONS.find((d) => signal.bad.includes(`'${d}'`));

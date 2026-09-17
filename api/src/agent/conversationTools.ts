@@ -6,10 +6,36 @@ import { writeMemory } from "../services/memory.js";
 import { recordDecision } from "../harness/core.js";
 import { markTopicAsked as persistTopicAsked, RAPPORT_TOPICS } from "../services/profileExtraction.js";
 import { captureIntentForTurn } from "../services/profileExtraction.js";
-import { generateRecommendation } from "../services/recommendation.js";
+import { generateRecommendation, recordRecommendationsSent, type RecommendationResult } from "../services/recommendation.js";
+import type { TierMatch } from "../services/tieredRecommendation.js";
 import { enrichMatch, renderEventDetails } from "../services/eventDetails.js";
 
-export type SendCoReply = (params: { phone: string; message: string; asVoice: boolean }) => Promise<void>;
+// Resolves false when the message didn't go out (a refused or failed send),
+// so callers only log and count what was really sent (2026-09-17 code review).
+export type SendCoReply = (params: { phone: string; message: string; asVoice: boolean }) => Promise<boolean | void>;
+
+// A search capped at capMs. Promise.race alone left the search running after
+// Co had already said it found nothing (2026-09-17 code review); a result
+// that lands after the cap is dropped here, and callers only record what
+// they actually sent, so nothing late is sent or written.
+export async function searchWithTimeCap(userId: string, ask: string, capMs: number, label: string): Promise<RecommendationResult> {
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  let settled = false;
+  const search = generateRecommendation(userId, ask).then((r) => {
+    if (settled) console.log(`${label}: search for ${userId} finished after the ${capMs}ms cap, result discarded`);
+    return r;
+  });
+  const cap = new Promise<RecommendationResult>((resolve) => {
+    timer = setTimeout(() => resolve({ available: false, reason: "search took too long" }), capMs);
+  });
+  try {
+    return await Promise.race([search, cap]);
+  } finally {
+    settled = true;
+    clearTimeout(timer);
+    search.catch(() => {});
+  }
+}
 
 export type ConversationToolContext = {
   userId: string;
@@ -46,11 +72,34 @@ export function createConversationTools(ctx: ConversationToolContext) {
   // reasoning as askCheckin.ts's state.sent — generateText's return value
   // doesn't cleanly expose which tools actually executed.
   const state = { sent: false, replyCount: 0, lastReplyText: "", sentMessages: [] as string[], pendingLinks: [] as string[] };
+  // What searchNow found, by link, so the matches are recorded as sent only
+  // once their link actually goes out (services/recommendation.ts
+  // recordRecommendationsSent, 2026-09-17).
+  const foundByUrl = new Map<string, TierMatch>();
+  const foundWithoutLink: TierMatch[] = [];
 
   // A link goes out ahead of the message about it (Royce, 2026-09-16: "I
   // want the link first then description"), so the preview lands and the
   // reply reads as its caption. shareLink sends immediately; the queue and
   // the flush at the end of the turn only catch anything left over.
+  const markSent = async (matches: TierMatch[]) => {
+    if (!matches.length || ctx.dryRun) return;
+    await recordRecommendationsSent(ctx.userId, matches).catch((err: any) =>
+      console.error("conversationTools: recordRecommendationsSent failed (non-fatal):", err?.message ?? err),
+    );
+  };
+  // A found match counts as sent once its link went out or the sent reply
+  // names it.
+  const markNamedInReply = async (message: string) => {
+    const lower = message.toLowerCase();
+    const named: TierMatch[] = [];
+    for (const [url, m] of foundByUrl) if (m.name && lower.includes(m.name.toLowerCase())) (named.push(m), foundByUrl.delete(url));
+    for (let i = foundWithoutLink.length - 1; i >= 0; i--) {
+      if (foundWithoutLink[i].name && lower.includes(foundWithoutLink[i].name.toLowerCase())) named.push(...foundWithoutLink.splice(i, 1));
+    }
+    await markSent(named);
+  };
+
   const flushLinks = async () => {
     const queued = state.pendingLinks.splice(0, state.pendingLinks.length);
     // Never the same link twice in one turn, however often it's asked for.
@@ -60,8 +109,14 @@ export function createConversationTools(ctx: ConversationToolContext) {
       if (ctx.dryRun) {
         console.log(`[conversationReply dryRun] would share link ${url} with ${ctx.userId}`);
       } else {
-        await ctx.sendCoReply({ phone: ctx.phoneNumber, message: url, asVoice: false });
+        const sent = await ctx.sendCoReply({ phone: ctx.phoneNumber, message: url, asVoice: false });
+        if (sent === false) continue;
         await writeMemory(ctx.userId, "text_exchange", `Co replied: ${url}`);
+        const m = foundByUrl.get(url);
+        if (m) {
+          foundByUrl.delete(url);
+          await markSent([m]);
+        }
       }
       state.sentMessages.push(url);
     }
@@ -82,6 +137,15 @@ export function createConversationTools(ctx: ConversationToolContext) {
       execute: async ({ message: draft }) => {
         const message = ctx.gate ? await ctx.gate(draft, [...state.sentMessages]) : draft;
         if (state.replyCount > 0) await new Promise((resolve) => setTimeout(resolve, 2000));
+        if (!ctx.dryRun) {
+          const sent = await ctx.sendCoReply({ phone: ctx.phoneNumber, message, asVoice: ctx.isVoice });
+          // Refused or failed: nothing is logged or counted as sent, so the
+          // model can try again and the fallback still runs (2026-09-17 code
+          // review: a refused line was marked sent and the person got nothing).
+          if (sent === false) {
+            return { ok: false, error: "That message didn't go out. Rewrite it as a plain, direct text to them and call sendReply again." };
+          }
+        }
         state.sentMessages.push(message);
         state.lastReplyText = state.lastReplyText ? `${state.lastReplyText} ${message}` : message;
         if (ctx.dryRun) {
@@ -90,7 +154,6 @@ export function createConversationTools(ctx: ConversationToolContext) {
           // reflects what would actually reach the user, not the raw draft.
           console.log(`[conversationReply dryRun] would reply to ${ctx.userId}: "${cleanCoMessage(message)}"`);
         } else {
-          await ctx.sendCoReply({ phone: ctx.phoneNumber, message, asVoice: ctx.isVoice });
           // Logs the cleaned text, not the raw draft (Royce, 2026-09-08
           // sweep) — sendCoReply applies cleanCoMessage internally before
           // the real send, so logging the raw `message` here meant
@@ -98,6 +161,7 @@ export function createConversationTools(ctx: ConversationToolContext) {
           // match what was actually delivered (an em dash the user never
           // saw, since it was rewritten to a comma before sending).
           await writeMemory(ctx.userId, "text_exchange", `Co replied: ${cleanCoMessage(message)}`);
+          await markNamedInReply(message);
         }
         state.sent = true;
         state.replyCount += 1;
@@ -168,10 +232,7 @@ export function createConversationTools(ctx: ConversationToolContext) {
         "Search right now for events, communities, or opportunities they're asking for, when no search already ran this turn. Returns real results with details; tell them about the best one with sendReply and share its link with shareLink.",
       inputSchema: z.object({ what: z.string().describe("What to look for, one plain sentence.") }),
       execute: async ({ what }) => {
-        const result = await Promise.race([
-          generateRecommendation(ctx.userId, what),
-          new Promise<{ available: false; reason: string }>((resolve) => setTimeout(() => resolve({ available: false, reason: "search took too long" }), 40_000)),
-        ]).catch(() => ({ available: false as const, reason: "search failed" }));
+        const result = await searchWithTimeCap(ctx.userId, what, 40_000, "conversationTools.searchNow").catch(() => ({ available: false as const, reason: "search failed" }));
         if (!result.available || !("matches" in result) || !result.matches?.length) {
           ctx.facts?.add("did_this_turn", `Searched just now for "${what}" and found nothing real that fits yet.`);
           if (!ctx.dryRun) await recordDecision({ layer: 3, decision: "reply.searchNow", userId: ctx.userId, outcome: "skip", action: "nothing_found", proposal: { what } });
@@ -181,6 +242,8 @@ export function createConversationTools(ctx: ConversationToolContext) {
         for (const m of result.matches.slice(0, 2)) {
           const em = await enrichMatch(m, { userId: ctx.userId, firstName: "them", askText: what });
           if (em.fits === false) continue;
+          if ("url" in m && m.url) foundByUrl.set(m.url, m);
+          else foundWithoutLink.push(m);
           const lines = em.details ? renderEventDetails(em.name, em.details) : em.opportunity ? [`What the post says: ${em.opportunity.postText}`] : [];
           ctx.facts?.add("known", `Found just now: "${em.name}"${"url" in em && em.url ? `, link ${em.url}` : ""}. ${lines.join(" ")}${em.whyItFits ? ` Why it fits: ${em.whyItFits}` : ""}`);
           found.push({ name: em.name, link: "url" in em ? em.url ?? null : null, details: lines, whyItFits: em.whyItFits ?? m.reason });

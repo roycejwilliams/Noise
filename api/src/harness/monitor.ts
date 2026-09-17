@@ -47,6 +47,15 @@ export const SIGNALS: Signal[] = [
   // the only real thing the person heard about.
   { key: "closest_miss_only", label: "Searches where the closest miss was the only thing shown", bad: `decision = 'recommendation.search' AND action LIKE 'nothing_found%' AND jsonb_typeof(proposal->'scope'->'closest') = 'object' AND jsonb_array_length(COALESCE(proposal->'scope'->'gatedOut', '[]'::jsonb)) = 0`, total: `decision = 'recommendation.search'`, floor: 0.4, minCount: 3 },
   { key: "router_unavailable", label: "Router failures (no actions taken)", bad: `decision = 'router.decideActions' AND checks @> '[{"name": "router_available", "pass": false}]'`, total: `decision = 'router.decideActions'`, floor: 0.05, minCount: 3 },
+  // Code review, 2026-09-17: none of the four signals below existed before —
+  // send failures, hours/opt-out blocks at send time, announcement
+  // give-ups, and call-gate blocks all happened silently as far as
+  // monitoring was concerned, even though the harness already recorded a
+  // decision for each one.
+  { key: "proactive_blocked_at_send", label: "Proactive sends blocked at send time (caps/hours/opt-out changed since the pick)", bad: `decision = 'proactive.dailyPick' AND reason LIKE 'blocked at send:%'`, total: `decision = 'proactive.dailyPick' AND action IS NOT NULL`, floor: 0.1, minCount: 2 },
+  { key: "exempt_send_blocked_or_failed", label: "Transactional (exempt) sends blocked by hours/opt-out or failed", bad: `decision = 'proactive.exemptSend' AND outcome = 'skip'`, total: `decision = 'proactive.exemptSend'`, floor: 0.3, minCount: 3 },
+  { key: "announcement_gave_up", label: "Co event announcements given up on (event gone/past, or opted out)", bad: `decision = 'tier1.announce' AND action LIKE 'gave_up%'`, total: `decision = 'tier1.announce'`, floor: 0.3, minCount: 2 },
+  { key: "call_gate_blocked", label: "Calls blocked at the gate before dialing", bad: `decision = 'call.gate' AND outcome = 'skip'`, total: `decision = 'call.gate'`, floor: 0.3, minCount: 3 },
 ];
 
 export type SignalReading = { signal: Signal; recentBad: number; recentTotal: number; recentRate: number; baselineRate: number };

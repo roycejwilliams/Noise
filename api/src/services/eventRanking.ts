@@ -18,12 +18,14 @@
 import { generateEmbeddings } from "./embeddings.js";
 import { cosineSimilarity } from "./lumaDiscovery.js";
 import { fetchLumaEventDetails, type EventDetails } from "./eventDetails.js";
-import { localDate, offerScore, orderForOffering } from "./eventOrder.js";
+import { localDate, offerScore, orderForOffering, spreadAcrossDays } from "./eventOrder.js";
 
 export const RELEVANCE_BAR_WITH_DESCRIPTION = 0.3;
 const DESCRIPTION_CHARS = 500;
 // Enough for a thin weekend or a busy one, without a page fetch per event in
-// a month-long window.
+// a month-long window. Spread across the days in the window rather than the
+// first 40 in feed order (code review, 2026-09-17: a long window only ever
+// ranked its first days).
 const MAX_CANDIDATES = 40;
 
 export type RankedEvent<T> = T & { similarity: number; profileSimilarity?: number | null; offerScore?: number; details?: EventDetails };
@@ -54,7 +56,7 @@ export async function rankEventsByDescription<T extends { name: string; url?: st
     browse?: boolean;
   } = {},
 ): Promise<{ ranked: RankedEvent<T>[]; closest: Closest | null }> {
-  const pool = candidates.slice(0, MAX_CANDIDATES);
+  const pool = spreadAcrossDays(candidates, MAX_CANDIDATES, opts.zone);
   const profileText = opts.profileText?.trim() || null;
   if ((!askText && !(opts.browse && profileText)) || !pool.length) return { ranked: [], closest: null };
   const details = await Promise.all(pool.map((c) => (c.url ? fetchLumaEventDetails(c.url).catch(() => null) : Promise.resolve(null))));

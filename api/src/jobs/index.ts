@@ -42,6 +42,13 @@ async function runWithConcurrency<T>(items: T[], limit: number, fn: (item: T) =>
   await Promise.all(Array.from({ length: Math.min(limit, items.length) }, worker));
 }
 
+// Consistent with the gate-side attempt cap the calls agent is adding to
+// src/harness/callGate.ts (code review, 2026-09-17) — this cron's own
+// selection query stops offering a user up once they've hit it, rather than
+// relying solely on the gate to keep rejecting an endless stream of
+// attempts.
+const MAX_AUTO_INTAKE_ATTEMPTS = 3;
+
 export function registerJobs(io: Server) {
   // Hourly, every hour (Royce, 2026-09-02: was "10am-8pm UTC" — 3am-1pm
   // Pacific, wrong for exactly the users this product is built around; a
@@ -58,22 +65,50 @@ export function registerJobs(io: Server) {
   // first_name/context_summary.
   cron.schedule("0 * * * *", async () => {
     try {
+      // Selection rewritten (code review, 2026-09-17): "empty life_chapters"
+      // isn't the same thing as "intake isn't done" — life_chapters can stay
+      // empty even after a real intake call or a profile with real content
+      // (a goals/activity_preferences/intent extraction gap, not a reason to
+      // keep calling someone who already came through intake). Now excludes
+      // anyone whose identity isn't captured yet (a text-first placeholder
+      // row, not someone to cold-call) or who already has a completed call
+      // transcript (not just an attempt marker — callTrigger.ts's own
+      // "Co initiated call to..." row) or a profile with any real content.
+      // MAX_AUTO_INTAKE_ATTEMPTS caps attempts consistent with the gate-side
+      // cap the calls agent is adding to src/harness/callGate.ts (not owned
+      // here) — attempts counted the same way callGate.ts already counts
+      // them, via the "Co initiated call to..." attempt-marker rows.
       const uncalled = await pool.query(
         `SELECT u.id, cp.city
          FROM users u
          LEFT JOIN co_profiles cp ON cp.user_id = u.id
          WHERE u.subscription_status = 'active'
+           AND COALESCE(u.identity_captured, true) = true
            AND NOT EXISTS (
              SELECT 1 FROM co_memories cm
              WHERE cm.user_id = u.id
                AND cm.memory_type = 'call_transcript'
                AND cm.created_at > NOW() - INTERVAL '24 hours'
            )
+           AND NOT EXISTS (
+             SELECT 1 FROM co_memories cm2
+             WHERE cm2.user_id = u.id AND cm2.memory_type = 'call_transcript'
+               AND cm2.content NOT LIKE 'Co initiated call%'
+           )
            AND (
              cp.user_id IS NULL
-             OR cp.life_chapters IS NULL
-             OR array_length(cp.life_chapters, 1) IS NULL
+             OR (
+               (cp.life_chapters IS NULL OR array_length(cp.life_chapters, 1) IS NULL)
+               AND (cp.goals IS NULL OR array_length(cp.goals, 1) IS NULL)
+               AND (cp.activity_preferences IS NULL OR array_length(cp.activity_preferences, 1) IS NULL)
+               AND jsonb_array_length(COALESCE(cp.intent, '[]'::jsonb)) = 0
+             )
            )
+           AND (
+             SELECT COUNT(*) FROM co_memories cm3
+             WHERE cm3.user_id = u.id AND cm3.memory_type = 'call_transcript'
+               AND cm3.content LIKE 'Co initiated call%'
+           ) < ${MAX_AUTO_INTAKE_ATTEMPTS}
          LIMIT 25`,
       );
 
@@ -146,12 +181,16 @@ export function registerJobs(io: Server) {
   // re-checked next tick instead of dropped.
   cron.schedule("*/15 * * * *", async () => {
     try {
+      // sms_opted_out filter added here as a cheap first pass (code review,
+      // 2026-09-17: this cron never checked it at all); sendExempt below is
+      // the real, race-safe enforcement since it re-reads the row inside the
+      // send transaction.
       const due = await pool.query(
         `SELECT pcf.id, pcf.call_status, u.id AS user_id, u.first_name, u.phone_number, cp.city
          FROM pending_call_followups pcf
          JOIN users u ON u.id = pcf.user_id
          LEFT JOIN co_profiles cp ON cp.user_id = pcf.user_id
-         WHERE pcf.due_at <= NOW() AND pcf.sent_at IS NULL`,
+         WHERE pcf.due_at <= NOW() AND pcf.sent_at IS NULL AND COALESCE(u.sms_opted_out, false) = false`,
       );
 
       for (const row of due.rows) {
@@ -189,12 +228,19 @@ export function registerJobs(io: Server) {
   // them. Row is left untouched on a skip, so it's re-checked next tick.
   cron.schedule("*/15 * * * *", async () => {
     try {
+      // sms_opted_out filter added here as a cheap first pass (code review,
+      // 2026-09-17: this cron never checked it at all); sendExempt inside
+      // runEventChangeNotificationAgent is the real, race-safe enforcement.
+      // ecn.event_id needs a migration (ALTER TABLE event_change_notifications
+      // ADD COLUMN IF NOT EXISTS event_id TEXT — see coEventAnnouncement
+      // dedupe-key fix in this same review); COALESCE to '' so this cron
+      // doesn't hard-fail before that migration lands.
       const due = await pool.query(
-        `SELECT ecn.id, ecn.user_id, ecn.event_name, ecn.message, u.first_name, u.phone_number, cp.city
+        `SELECT ecn.id, ecn.user_id, COALESCE(ecn.event_id, '') AS event_id, ecn.event_name, ecn.message, u.first_name, u.phone_number, cp.city
          FROM event_change_notifications ecn
          JOIN users u ON u.id = ecn.user_id
          LEFT JOIN co_profiles cp ON cp.user_id = ecn.user_id
-         WHERE ecn.sent_at IS NULL`,
+         WHERE ecn.sent_at IS NULL AND COALESCE(u.sms_opted_out, false) = false`,
       );
 
       for (const row of due.rows) {
@@ -210,6 +256,7 @@ export function registerJobs(io: Server) {
         try {
           await runEventChangeNotificationAgent(
             { userId: row.user_id, firstName: row.first_name, phoneNumber: row.phone_number },
+            row.event_id,
             row.event_name,
             row.message,
           );
@@ -520,10 +567,21 @@ export function registerJobs(io: Server) {
         // Layer 7 (2026-09-14): the walk-in call offer is part of the
         // morning-after debrief for this event, not a second text the same
         // night. The harness marks followup_sent_at when it goes out.
+        //
+        // Code review, 2026-09-17: this used to discard enqueueDebrief's
+        // result. When it came back {queued:false} (the debrief candidate
+        // for this event had already resolved via another source before
+        // this row got its turn), this row's id never made it into any
+        // payload, so followup_sent_at never got set by the harness either
+        // — the WHERE clause above kept matching it and this cron called
+        // Luma's getEventDetails for it again every 15 minutes, forever.
+        // Marking followup_sent_at here directly on a non-queue mirrors the
+        // registry's own onDropped convention for this table (a resolved
+        // slot, not literally "a text was sent" — see proactiveRegistry.ts).
         for (const row of eventRows) {
           try {
             const timezone = row.city ? await getTimezoneForCity(row.city).catch(() => null) : null;
-            await enqueueDebrief({
+            const result = await enqueueDebrief({
               userId: row.user_id,
               eventApiId: eventApiId,
               eventName: details.name,
@@ -531,6 +589,9 @@ export function registerJobs(io: Server) {
               timezone,
               part: { walkinCheckinIds: [row.id], askText: row.ask_text ?? null },
             });
+            if (!result.queued) {
+              await pool.query(`UPDATE event_walkin_checkins SET followup_sent_at = NOW() WHERE id = $1`, [row.id]);
+            }
           } catch (err: any) {
             console.error(`Walk-in follow-up enqueue failed for ${row.user_id}:`, err?.message ?? err);
           }

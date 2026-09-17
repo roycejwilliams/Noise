@@ -34,15 +34,26 @@ async function storeSnapshot(eventId: string, detail: LumaEventDetail): Promise<
 }
 
 // Plain-English list of what actually changed, comparing only fields that
-// differ — never claims something changed that didn't.
-function diffSnapshot(previous: Snapshot, current: LumaEventDetail): string[] {
+// differ — never claims something changed that didn't. Times are formatted
+// in the EVENT's own timezone (code review, 2026-09-17): toLocaleString()
+// with no timezone argument used the server's own local zone (UTC on
+// Railway), so an 8pm Pacific event read back as "3:00:00 AM" — a genuinely
+// wrong-looking time change, not just an unfamiliar one. current.location
+// is the event's full address, which getTimezoneForCity can geocode
+// directly (same function city lookups already use). Falls back to the
+// server's own formatting (still better than nothing) when there's no
+// location on file or the geocode fails.
+async function diffSnapshot(previous: Snapshot, current: LumaEventDetail): Promise<string[]> {
   const changes: string[] = [];
   if (previous.name !== current.name) changes.push(`the name changed to "${current.name}"`);
+  const timeChanged = previous.start_at !== current.start_at || (previous.end_at !== current.end_at && current.end_at);
+  const eventTimezone = timeChanged && current.location ? await getTimezoneForCity(current.location).catch(() => null) : null;
+  const fmt = (iso: string) => (eventTimezone ? new Date(iso).toLocaleString("en-US", { timeZone: eventTimezone }) : new Date(iso).toLocaleString());
   if (previous.start_at !== current.start_at) {
-    changes.push(`the start time moved to ${new Date(current.start_at).toLocaleString()}`);
+    changes.push(`the start time moved to ${fmt(current.start_at)}`);
   }
   if (previous.end_at !== current.end_at && current.end_at) {
-    changes.push(`the end time moved to ${new Date(current.end_at).toLocaleString()}`);
+    changes.push(`the end time moved to ${fmt(current.end_at)}`);
   }
   if (previous.location !== current.location && current.location) {
     changes.push(`the location changed to ${current.location}`);
@@ -65,10 +76,12 @@ async function notifyMatchedGuests(eventId: string, eventName: string, message: 
     matched.map(async (person) => {
       const timezone = person.city ? await getTimezoneForCity(person.city) : null;
       if (!isReasonableLocalHour(timezone)) {
+        // event_id included (code review, 2026-09-17) — see
+        // runEventChangeNotificationAgent's changeKey comment for why.
         await pool
           .query(
-            `INSERT INTO event_change_notifications (user_id, event_name, message) VALUES ($1, $2, $3)`,
-            [person.user_id, eventName, message],
+            `INSERT INTO event_change_notifications (user_id, event_id, event_name, message) VALUES ($1, $2, $3, $4)`,
+            [person.user_id, eventId, eventName, message],
           )
           .catch((err: any) =>
             console.error(`eventChangeDetection: failed to queue deferred notification for ${person.user_id}:`, err?.message ?? err),
@@ -77,6 +90,7 @@ async function notifyMatchedGuests(eventId: string, eventName: string, message: 
       }
       await runEventChangeNotificationAgent(
         { userId: person.user_id, firstName: person.first_name, phoneNumber: person.phone_number },
+        eventId,
         eventName,
         message,
       ).catch((err: any) =>
@@ -98,7 +112,7 @@ export async function handleEventUpdated(eventId: string): Promise<void> {
     return;
   }
 
-  const changes = diffSnapshot(previous, current);
+  const changes = await diffSnapshot(previous, current);
   await storeSnapshot(eventId, current);
   if (!changes.length) return; // Luma sent an update with no fields we track actually different
 

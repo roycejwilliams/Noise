@@ -5,13 +5,16 @@ import { localDate, offerScore, orderForOffering } from "../../src/services/even
 import { capitalizeSentences, looksLikeMetaReply } from "../../src/services/textStyle.js";
 import { nearestPlace, parseDiscoverPlaces } from "../../src/services/lumaDiscovery.js";
 import { announcementAudience } from "../../src/services/coEventAnnouncement.js";
+import { resolveCoEventCity } from "../../src/services/luma.js";
 import { DateTime } from "luxon";
 import { isBrowseAsk, parseAskWindow, withinWindow } from "../../src/services/askWindow.js";
 import { asksForContactCard } from "../../src/services/conversationClose.js";
 import { renderMatchLead } from "../../src/services/messageFormat.js";
 import { closingReaction } from "../../src/services/conversationClose.js";
 import "dotenv/config";
-import { addFact, baseReplyFacts, codeChecks, predictionMatch } from "../../src/harness/replyGrounding.js";
+import { addFact, baseReplyFacts, codeChecks, predictionMatch, stripUnsupported } from "../../src/harness/replyGrounding.js";
+import { isLeakedMetaCommentary, webhookSecretMatches } from "../../src/services/sendblue.js";
+import { coAskedQuestion } from "../../src/services/conversationClose.js";
 
 const rf = baseReplyFacts();
 addFact(rf, "scheduled", "A call is scheduled for Tuesday, September 8 at 2:00 PM (America/Los_Angeles).");
@@ -80,6 +83,21 @@ const closingCases: [string, string | null][] = [
   ["ok call me now", null],
   ["Tell me more", null],
   ["no", null],
+];
+
+// A closing acknowledgment that actually answers a question Co just asked is
+// not the end of the thread (2026-09-17 code review, live: Co asked "Want me
+// to keep an eye out?", they said "sounds good", and got a tapback with
+// nothing saved). closingReaction(text, lastCoMessage) must return null
+// whenever Co's last message asked or offered something.
+const closingWithLastCoMessageCases: [string, string | null, string][] = [
+  ["sounds good", "Want me to keep an eye out for one?", null],
+  ["for sure", "Should I text you if something opens up?", null],
+  ["ok", "Do you want me to save that so I keep looking?", null],
+  ["got it", "Here's what's new:\n\nWe added dark mode.", "like"],
+  ["perfect", "I found a mixer this Thursday.", "love"],
+  ["sounds good", null, "like"],
+  ["ok", "I'm here if you ever want to hop on a call and talk it through.", null],
 ];
 
 // How several real things arrive (services/messageFormat.ts): a one-line
@@ -226,6 +244,11 @@ onboardingCaseCases.push(
     [!messageIsOnlyTheAsk("anything this weekend 🙏🏾", "Find events this weekend"), "any emoji counts as more than the ask"],
     [messageIsOnlyTheAsk("Any AI/ML talks in SF next week?", "Find AI/ML talks in SF next week"), "ordinary punctuation like a slash is still just the ask"],
     [offerScore(0.5, null, false) === 0.5, "no profile: order by the ask alone"],
+    [resolveCoEventCity("Oakland", "San Francisco", "Austin").city === "Oakland", "a Co event's own calendar city wins"],
+    [resolveCoEventCity(null, "Brooklyn", "Austin").source === "event_page", "no calendar city: the event page's city"],
+    [resolveCoEventCity(null, null, "Austin", "San Francisco, CA").source === "event_address", "no city field: the page's venue text"],
+    [resolveCoEventCity(null, null, "Austin").city === "Austin", "no city anywhere: Co's home city"],
+    [resolveCoEventCity("", null, undefined).city === "San Francisco", "no home city set: San Francisco"],
     [(() => {
       const people = [
         { id: "near", city: "Oakland", optedOut: false, identityCaptured: true },
@@ -244,6 +267,77 @@ onboardingCaseCases.push(
     [localDate("2026-09-18T02:00:00.000Z", "America/Los_Angeles") === "2026-09-17", "a 7pm Thursday SF event is Thursday, not Friday"],
     [localDate("2026-09-18T02:00:00.000Z", null) === "2026-09-18", "without a zone, the UTC date is kept"],
   );
+}
+
+// Co's own last message asking or offering something (services/
+// conversationClose.ts coAskedQuestion) — feeds closingReaction above.
+onboardingCaseCases.push(
+  [coAskedQuestion("Want me to keep an eye out for one?"), "a question mark is an ask"],
+  [coAskedQuestion("If you want, I can look now."), "an offer without a question mark still counts"],
+  [coAskedQuestion("I'm here if you'd ever want to hop on a call and talk it through."), "an offer phrased as availability still counts"],
+  [!coAskedQuestion("Here's what's new:\n\nWe added dark mode."), "a plain statement is not an ask"],
+  [!coAskedQuestion(null), "no last message means no ask"],
+  [!coAskedQuestion("Check it out here: https://lu.ma/abc123?ref=co"), "a query string's ? doesn't count as Co asking something"],
+);
+
+// LEAKED_METACOMMENTARY / looksLikeMetaReply (services/sendblue.ts,
+// 2026-09-17 code review): the send wrapper must still block a real leak,
+// but must not reject an honest "I don't have X" / "I can't do X for you"
+// line — the old pattern did, sendCoReply swallowed the rejection, and the
+// person got nothing while every caller logged "Co replied."
+onboardingCaseCases.push(
+  [!isLeakedMetaCommentary("I don't have any information on the start time."), "honest gap about an event detail passes"],
+  [!isLeakedMetaCommentary("I can't send the ticket for you, but here's the link."), "honest capability limit passes"],
+  [!isLeakedMetaCommentary("I don't have the link for that one yet."), "honest missing link passes"],
+  [!isLeakedMetaCommentary("Booking that is outside what I can do, but I can point you to the link."), "an honest scope limit passes"],
+  [isLeakedMetaCommentary("I don't have access to the context_summary you gave me."), "a real prompt-plumbing leak is still caught"],
+  [isLeakedMetaCommentary("Here's a message: {{first_name}}, want to grab coffee?"), "an unfilled template variable is still caught"],
+  [isLeakedMetaCommentary("As an AI I can't form opinions about that."), "a real AI self-reference is still caught"],
+  [isLeakedMetaCommentary("I don't have access to our conversation history before this."), "a real memory/context leak is still caught"],
+  [isLeakedMetaCommentary("I can't actually send you a text message right now."), "claiming Co can't text at all is still caught"],
+  [isLeakedMetaCommentary("I'm ready to be Co. Send me what you'd like me to say."), "the looksLikeMetaReply leak is still caught (delegated)"],
+);
+
+// Sendblue's webhook secret comparison (services/sendblue.ts
+// webhookSecretMatches, 2026-09-17 code review) — the constant-time check
+// behind the webhook's auth.
+onboardingCaseCases.push(
+  [webhookSecretMatches("real-secret-123", "real-secret-123"), "matching secret passes"],
+  [!webhookSecretMatches("real-secret-123", "wrong-secret"), "wrong secret fails"],
+  [!webhookSecretMatches("real-secret-123", undefined), "missing header fails"],
+  [!webhookSecretMatches("real-secret-123", ""), "empty header fails"],
+  [!webhookSecretMatches(undefined, "real-secret-123"), "no configured secret fails closed even with a header present"],
+  [!webhookSecretMatches("", "real-secret-123"), "empty configured secret fails closed"],
+  [!webhookSecretMatches("real-secret-123", 12345 as any), "a non-string header fails"],
+);
+
+// stripUnsupported's suffix handling (harness/replyGrounding.ts, 2026-09-17
+// code review): claimChecks appends more than just " (cited support not
+// found)" — a future_promise failure's real suffix is " (a future action
+// needs a real scheduled call or an open search behind it)". The old
+// literal-only regex left that suffix in place, so the quoted claim text
+// never matched a sentence and an unsupported promise survived stripping.
+{
+  const draft = "Sounds fun! I'll text you the moment a spot opens up.";
+  const failed = [
+    {
+      name: "claim_future_promise",
+      pass: false,
+      reason: 'future_promise: "I\'ll text you the moment a spot opens up." (a future action needs a real scheduled call or an open search behind it)',
+    },
+  ];
+  const out = stripUnsupported(draft, failed);
+  onboardingCaseCases.push(
+    [!out.includes("I'll text you the moment"), `future_promise suffix is stripped along with the claim (got "${out}")`],
+    [out.includes("Sounds fun"), "the supported sentence is kept"],
+  );
+}
+{
+  // The generic no_followup_promise code check (a different suffix shape,
+  // no factId/quote) still strips as before.
+  const draft = "I'll keep an eye out for you.";
+  const out = stripUnsupported(draft, [{ name: "no_followup_promise", pass: false, reason: 'promises a follow-up nothing will do: "I\'ll keep an eye out for you."' }]);
+  onboardingCaseCases.push([out === "" || out.trim() === "", "a whole-message follow-up promise with no other content strips to nothing"]);
 }
 
 // Predictions Co can't back (harness/replyGrounding.ts predictionMatch).
@@ -291,6 +385,13 @@ for (const [message, expected] of closingCases) {
   if (got !== expected) {
     failed++;
     console.log(`FAIL closing "${message}" -> ${got ?? "(reply)"} , expected ${expected ?? "(reply)"}`);
+  }
+}
+for (const [message, lastCoMessage, expected] of closingWithLastCoMessageCases) {
+  const got = closingReaction(message, lastCoMessage);
+  if (got !== expected) {
+    failed++;
+    console.log(`FAIL closing (Co asked "${lastCoMessage}") "${message}" -> ${got ?? "(reply)"} , expected ${expected ?? "(reply)"}`);
   }
 }
 

@@ -1,7 +1,7 @@
 import { Router } from "express";
 import type { RequestHandler } from "express";
 import pool from "../db/db.js";
-import { normalizePhone } from "../utils/phone.js";
+import { SAFE_USER_FIELDS, UPDATABLE_USER_FIELDS, buildUserUpdate, pickSafeUser } from "./accountRules.js";
 
 export function createUsersRouter(authenticateToken: RequestHandler): Router {
   const router = Router();
@@ -58,61 +58,58 @@ export function createUsersRouter(authenticateToken: RequestHandler): Router {
     "/:id",
     authenticateToken,
     async (req, res, next) => {
-      if (!req.body) return res.status(400).send("Request body cannot be empty");
+      if (req.user?.id !== req.params.id) {
+        return res
+          .status(403)
+          .send("Unauthorized: You can only update your own account");
+      }
 
-      const allowed = [
-        "first_name",
-        "last_name",
-        "phone_number",
-        "email",
-        "description",
-        "username",
-        "location",
-        "instagram",
-        "twitter",
-        "linkedin",
-        "profile_image",
-      ];
+      // phone_number is no longer accepted here (2026-09-17): nothing
+      // verified the new number, so an account could be pointed at someone
+      // else's phone. A body with nothing updatable is a 400 now; it used to
+      // build "UPDATE users SET  WHERE" and 500.
+      if (req.body && Object.prototype.hasOwnProperty.call(req.body, "phone_number")) {
+        return res
+          .status(400)
+          .send("phone_number can't be changed here.");
+      }
+      const update = buildUserUpdate(req.body);
+      if (!update) {
+        return res
+          .status(400)
+          .send(`Nothing to update. Allowed fields: ${UPDATABLE_USER_FIELDS.join(", ")}`);
+      }
 
-      const filterKeys = Object.keys(req.body).filter((key) => {
-        return allowed.includes(key);
-      });
-
-      const values = filterKeys.map((key) =>
-        key === "phone_number" ? normalizePhone(req.body[key]) : req.body[key],
-      );
-
-      const userKeys = filterKeys
-        .map((key, index) => {
-          return `${key} = $${index + 2}`;
-        })
+      const setClause = update.columns
+        .map((key, index) => `${key} = $${index + 2}`)
         .join(", ");
 
       try {
-        if (req.user?.id !== req.params.id) {
-          return res
-            .status(403)
-            .send("Unauthorized: You can only update your own account");
-        }
-
+        // Only safe columns come back (2026-09-17): RETURNING * sent otp_code,
+        // lock state and stripe_customer_id to the client.
         const updateUserInformation = await pool.query(
-          `UPDATE users SET ${userKeys} WHERE id = $1 RETURNING *`,
-          [req.params.id, ...values],
+          `UPDATE users SET ${setClause} WHERE id = $1 RETURNING ${SAFE_USER_FIELDS.join(", ")}`,
+          [req.params.id, ...update.values],
         );
 
-        const updatedUser: UserProp = updateUserInformation.rows[0];
+        const updatedUser = updateUserInformation.rows[0];
 
         if (updatedUser) {
           return res.status(200).send({
             success: true,
-            data: updatedUser,
+            data: pickSafeUser(updatedUser),
           });
         }
 
         return res
           .status(404)
           .send(`User with id: ${req.params.id} doesn't exist.`);
-      } catch (error) {
+      } catch (error: any) {
+        // email and username are UNIQUE: a taken one is the caller's problem,
+        // not a server error.
+        if (error?.code === "23505") {
+          return res.status(409).send("That email or username is already taken.");
+        }
         next(error);
       }
     },

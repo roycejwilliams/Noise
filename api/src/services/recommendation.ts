@@ -1,12 +1,11 @@
 import { generateText } from "ai";
 import { getPersonSnapshot, profileFocusText } from "../harness/personSnapshot.js";
 import { rewriteKeepsAsk } from "./searchRules.js";
-import { DateTime } from "luxon";
-import { isBrowseAsk, parseAskWindow } from "./askWindow.js";
+import { isBrowseAsk } from "./askWindow.js";
 import { getTimezoneForCity } from "./geocoding.js";
 import { anthropic } from "@ai-sdk/anthropic";
 import pool from "../db/db.js";
-import { getTieredRecommendation, takeLastSearchScope, type SearchScope, type TierMatch } from "./tieredRecommendation.js";
+import { getTieredRecommendation, type SearchScope, type TierMatch } from "./tieredRecommendation.js";
 import { generateEmbedding } from "./embeddings.js";
 import { MODELS } from "../models.js";
 import { parseModelJson } from "./modelJson.js";
@@ -146,7 +145,10 @@ export async function generateRecommendation(userId: string, currentMessage?: st
       rewrite = { original: currentMessage, rewritten: request, used: askText, rejectedBecause: check.reason };
     }
     if (askText) {
-      const found: TierMatch[] = await getTieredRecommendation(
+      // The scope comes back with this search's own matches (2026-09-17: it
+      // was read from module state after another await, so two people
+      // searching at once could get each other's record).
+      const tiered = await getTieredRecommendation(
         { text: askText, embedding: askText === latestIntent?.text ? latestIntent?.embedding : null },
         profile.city ?? null,
         // Repeats are handled below so the reply can say it was already shared.
@@ -154,18 +156,26 @@ export async function generateRecommendation(userId: string, currentMessage?: st
           userId,
           checkRepeat: false,
           rawMessage: currentMessage,
+          // No city or zone on file: getTieredRecommendation uses Co's home
+          // zone and records that it did (scope.timezoneDefaulted).
           timezone: profile.city ? await getTimezoneForCity(profile.city).catch(() => null) : null,
           // What Co knows they want right now orders what matches the ask.
           profile: profileFocusText(await getPersonSnapshot(userId).catch(() => null)) || null,
         },
       ).catch((err: any) => {
         console.error("generateRecommendation: getTieredRecommendation failed (non-fatal):", err?.message ?? err);
-        return [];
+        return null;
       });
-      const tierMatches = await dropAlreadyRecommended(userId, found);
-      scopeForTurn = takeLastSearchScope();
+      const found: TierMatch[] = tiered?.matches ?? [];
+      scopeForTurn = tiered?.scope ?? null;
       if (scopeForTurn && rewrite) scopeForTurn.rewrite = rewrite;
       const scope = scopeForTurn;
+      // A time frame past how far Co searches: say that, rather than answering
+      // with the default window's events (2026-09-17).
+      if (scope?.windowOutOfRange) {
+        return { available: false, reason: `they asked about ${scope.windowOutOfRange.reason}; nothing searched`, scope };
+      }
+      const tierMatches = await dropAlreadyRecommended(userId, found);
       // "What's on this weekend?" is a question about the calendar. If
       // nothing's on it in that window, the honest answer is nothing, not a
       // generic "look for startup meetups" suggestion (2026-09-16).
@@ -176,67 +186,28 @@ export async function generateRecommendation(userId: string, currentMessage?: st
         return { available: false, reason: `found real ones but couldn't offer them: ${why}`, scope };
       }
       if (!tierMatches.length && currentMessage && isBrowseAsk(currentMessage)) {
-        const window = parseAskWindow(currentMessage, DateTime.now());
-        return { available: false, reason: `nothing real on the calendar${window ? ` for ${window.label}` : ""}`, scope };
+        return { available: false, reason: `nothing real on the calendar${scope?.window ? ` for ${scope.window}` : ""}`, scope };
       }
       if (found.length && !tierMatches.length) {
-        return { available: false, reason: `already recommended ${found.map((m) => m.name).join(", ")} recently` };
+        return { available: false, reason: `already recommended ${found.map((m) => m.name).join(", ")} recently`, scope };
       }
       if (tierMatches.length) {
-        await pool
-          .query(
-            `INSERT INTO co_memories (user_id, memory_type, content)
-             SELECT $1, 'recommendation_offered', x FROM UNNEST($2::text[]) AS x`,
-            [userId, tierMatches.map((m) => JSON.stringify({ name: m.name, event_api_id: "event_api_id" in m ? m.event_api_id : null }))],
-          )
-          .catch((err: any) => console.error("generateRecommendation: recommendation_offered write failed (non-fatal):", err?.message ?? err));
+        // Nothing is recorded as offered here (2026-09-17): the caller sends
+        // only some of these, sometimes none (the search can finish after the
+        // reply timed out), and recording all of them hid unsent events for
+        // 30 days and let grounding treat them as sent. The caller calls
+        // recordRecommendationsSent with what actually went out.
         // No winner here either (Royce, 2026-08-30 — see tieredRecommendation.ts)
         // — this is a live, in-conversation reply, not an unprompted text, so
         // bundling every real match into one description carries none of the
         // proactive-nudge spam risk the tease/reveal flow has to guard against.
-        const result: RecommendationResult = {
+        return {
           available: true,
           match: tierMatches.map((m) => `${m.name} (${m.url ?? "Co's own calendar"})`).join("; "),
           reason: tierMatches.map((m) => m.reason).join(" "),
           matches: tierMatches,
           scope,
         };
-        {
-          const tieredContent = `Co surfaced ${tierMatches.length} tiered recommendation(s) — ${tierMatches.map((m) => `[Tier ${m.kind}] ${m.name}: ${m.reason}`).join(" | ")}`;
-          await pool
-            .query(`INSERT INTO co_memories (user_id, memory_type, content) VALUES ($1, 'recommendation', $2) RETURNING id`, [
-              userId,
-              tieredContent,
-            ])
-            .then((mem) =>
-              generateEmbedding(tieredContent)
-                .then((emb) =>
-                  pool.query(`UPDATE co_memories SET content_embedding = $1::vector WHERE id = $2`, [
-                    `[${emb.join(",")}]`,
-                    mem.rows[0].id,
-                  ]),
-                )
-                .catch((err) => console.error("Recommendation memory embedding failed (non-fatal):", err)),
-            )
-            .catch((err) => console.error("Recommendation memory write failed (non-fatal):", err));
-        }
-
-        // Royce, 2026-08-30: Tier 1/2 matches carry a real event_api_id —
-        // record it so another person getting surfaced this exact same
-        // event later is caught as a certain match. Tier 3 "opportunities"
-        // have no event_api_id (not a shared event), skipped naturally.
-        const eventMatches = tierMatches.filter((m): m is Extract<TierMatch, { event_api_id: string }> => "event_api_id" in m);
-        if (eventMatches.length) {
-          const { recordSurfacedEventAndMatch } = await import("./eventMatching.js");
-          await Promise.all(
-            eventMatches.map((m) =>
-              recordSurfacedEventAndMatch(userId, m.event_api_id, m.name, m.event_date).catch((err: any) =>
-                console.error("recordSurfacedEventAndMatch failed (non-fatal):", err?.message ?? err),
-              ),
-            ),
-          );
-        }
-        return result;
       }
     }
 
@@ -252,5 +223,50 @@ export async function generateRecommendation(userId: string, currentMessage?: st
   } catch (err: any) {
     console.error("generateRecommendation failed (non-fatal):", err?.message ?? err);
     return { available: false, reason: "lookup failed" };
+  }
+}
+
+// What generateRecommendation used to write for every match it found, now
+// written only for the ones actually sent (2026-09-17). Call it after the
+// send succeeds, with exactly the matches that went out:
+//   recommendation_offered  so the same thing isn't offered again for 30 days
+//                           (dropAlreadyRecommended) and the gate's repeat check
+//   recommendation memory   "Co surfaced ...", which grounding reads as sent
+//   surfaced_events         Tier 1/2 only, so another person getting the same
+//                           event is caught as a certain match (eventMatching.ts)
+export async function recordRecommendationsSent(userId: string, matches: TierMatch[]): Promise<void> {
+  if (!matches.length) return;
+  await pool
+    .query(
+      `INSERT INTO co_memories (user_id, memory_type, content)
+       SELECT $1, 'recommendation_offered', x FROM UNNEST($2::text[]) AS x`,
+      [userId, matches.map((m) => JSON.stringify({ name: m.name, event_api_id: "event_api_id" in m ? m.event_api_id : null }))],
+    )
+    .catch((err: any) => console.error("recordRecommendationsSent: recommendation_offered write failed (non-fatal):", err?.message ?? err));
+
+  const tieredContent = `Co surfaced ${matches.length} tiered recommendation(s) — ${matches.map((m) => `[Tier ${m.kind}] ${m.name}: ${m.reason}`).join(" | ")}`;
+  await pool
+    .query(`INSERT INTO co_memories (user_id, memory_type, content) VALUES ($1, 'recommendation', $2) RETURNING id`, [userId, tieredContent])
+    .then((mem) =>
+      generateEmbedding(tieredContent)
+        .then((emb) => pool.query(`UPDATE co_memories SET content_embedding = $1::vector WHERE id = $2`, [`[${emb.join(",")}]`, mem.rows[0].id]))
+        .catch((err) => console.error("Recommendation memory embedding failed (non-fatal):", err)),
+    )
+    .catch((err) => console.error("Recommendation memory write failed (non-fatal):", err));
+
+  // Royce, 2026-08-30: Tier 1/2 matches carry a real event_api_id — record it
+  // so another person getting surfaced this exact same event later is caught
+  // as a certain match. Tier 3 "opportunities" have no event_api_id (not a
+  // shared event), skipped naturally.
+  const eventMatches = matches.filter((m): m is Extract<TierMatch, { event_api_id: string }> => "event_api_id" in m);
+  if (eventMatches.length) {
+    const { recordSurfacedEventAndMatch } = await import("./eventMatching.js");
+    await Promise.all(
+      eventMatches.map((m) =>
+        recordSurfacedEventAndMatch(userId, m.event_api_id, m.name, m.event_date).catch((err: any) =>
+          console.error("recordSurfacedEventAndMatch failed (non-fatal):", err?.message ?? err),
+        ),
+      ),
+    );
   }
 }

@@ -12,7 +12,7 @@
 import "dotenv/config";
 import { dirname } from "path";
 import { fileURLToPath } from "url";
-import { getTieredRecommendation, relevancePrompt, takeLastSearchScope } from "../../src/services/tieredRecommendation.js";
+import { getTieredRecommendation, relevancePrompt } from "../../src/services/tieredRecommendation.js";
 import { fetchLumaEventDetails } from "../../src/services/eventDetails.js";
 import { parseModelJson } from "../../src/services/modelJson.js";
 import { MODELS } from "../../src/models.js";
@@ -30,8 +30,7 @@ const cases: Case[] = [
 ];
 
 async function run(c: Case) {
-  const found = await getTieredRecommendation({ text: c.message }, c.city, { rawMessage: c.message, timezone: "America/Los_Angeles", checkRepeat: false });
-  const scope = takeLastSearchScope();
+  const { matches: found, scope } = await getTieredRecommendation({ text: c.message }, c.city, { rawMessage: c.message, timezone: "America/Los_Angeles", checkRepeat: false });
   const feed = await fetchPublicEvents(50, c.city, scope?.windowEnd ? new Date(scope.windowEnd) : null).catch(() => []);
   return { found: found.map((m) => ({ tier: m.tier, name: m.name })), scope, feedNames: new Set(feed.map((e) => e.name)) };
 }
@@ -141,8 +140,7 @@ await runEval<Align, any>({
   run: async (a) => {
     const results = [];
     for (const profile of a.profiles) {
-      const found = await getTieredRecommendation({ text: a.message }, "San Francisco", { rawMessage: a.message, timezone: "America/Los_Angeles", checkRepeat: false, profile });
-      const scope = takeLastSearchScope();
+      const { matches: found, scope } = await getTieredRecommendation({ text: a.message }, "San Francisco", { rawMessage: a.message, timezone: "America/Los_Angeles", checkRepeat: false, profile });
       results.push({ offered: found.filter((m) => m.tier !== 3).map((m) => m.name), tier3: found.filter((m) => m.tier === 3).map((m) => m.name), scope });
     }
     if (a.kind === "pair") {

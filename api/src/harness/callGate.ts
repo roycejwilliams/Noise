@@ -13,9 +13,10 @@
 // routes/sendblue.ts, { kind: "scheduled_call", scheduledCallId } from
 // jobs/scheduledCall.ts. Without one, the gate infers it from the database,
 // which works but records "inferred".
+import { DateTime } from "luxon";
 import pool from "../db/db.js";
 import { getTimezoneForCity } from "../services/geocoding.js";
-import { isReasonableLocalHour } from "../services/localHours.js";
+import { REASONABLE_HOUR_END, REASONABLE_HOUR_START } from "../services/localHours.js";
 import type { GateCheck } from "./core.js";
 
 export type CallAuthKind = "router_decision" | "scheduled_call" | "user_initiated" | "checkin_cadence" | "auto_intake";
@@ -50,6 +51,10 @@ export type CallState = {
   subscriptionActive: boolean;
   requireSubscription: boolean;
   localHourOk: boolean;
+  // False when no timezone could be resolved for them, so localHourOk came
+  // from the conservative UTC window (see callHourOk). Optional so older
+  // eval cases without it still read as "timezone known".
+  timezoneKnown?: boolean;
   lastCallAt: Date | null;
   // Evidence for each authorization kind, filled in by gatherCallState.
   evidence: {
@@ -124,7 +129,15 @@ export function decideCall(state: CallState, requested: CallAuthorization | null
   checks.push({ name: "subscription_active", pass: !subBlocks, reason: subBlocks ? "no active subscription" : undefined });
 
   const hoursBlock = !!kind && NEEDS_LOCAL_HOURS[kind] && !state.localHourOk;
-  checks.push({ name: "local_hours", pass: !hoursBlock, reason: hoursBlock ? "outside 9am-8pm their time" : undefined });
+  checks.push({
+    name: "local_hours",
+    pass: !hoursBlock,
+    reason: hoursBlock
+      ? state.timezoneKnown === false
+        ? `no timezone on file, so only between ${UNKNOWN_TZ_WINDOW_UTC.start}:00 and ${UNKNOWN_TZ_WINDOW_UTC.end}:00 UTC`
+        : "outside 9am-8pm their time"
+      : undefined,
+  });
 
   const gapMin = RECENT_CALL_MINUTES[kind ?? "auto_intake"];
   const sinceLastMs = state.lastCallAt ? now.getTime() - state.lastCallAt.getTime() : Infinity;
@@ -146,15 +159,89 @@ export function decideCall(state: CallState, requested: CallAuthorization | null
   return { allowed, authorization: kind, inferred, checks, error };
 }
 
+// ---- local hours when we don't know their timezone ----------------------------
+
+// Fixed 2026-09-17: isReasonableLocalHour(null) returns true, so anyone with
+// no city on file (or a city geo-tz can't place) could get a call Co started
+// itself at 3am. With no timezone, only call inside the hours that are
+// daytime across the continental US all year: 17:00-24:00 UTC is 1pm-8pm
+// Eastern in summer (noon-7pm in winter) and 10am-5pm Pacific in summer
+// (9am-4pm in winter). A later end (e.g. 02:00 UTC) would land at 10pm
+// Eastern.
+export const UNKNOWN_TZ_WINDOW_UTC = { start: 17, end: 24 };
+
+export function callHourOk(timezone: string | null, now: Date): boolean {
+  const local = timezone ? DateTime.fromJSDate(now).setZone(timezone) : null;
+  if (local && local.isValid) return local.hour >= REASONABLE_HOUR_START && local.hour < REASONABLE_HOUR_END;
+  const h = now.getUTCHours();
+  return h >= UNKNOWN_TZ_WINDOW_UTC.start && h < UNKNOWN_TZ_WINDOW_UTC.end;
+}
+
+// The start of the next hour a Co-started call is allowed (now, if it already
+// is one). Used to retry a blocked check-in call instead of dropping it.
+export function nextAllowedCallTime(timezone: string | null, now: Date): Date {
+  if (callHourOk(timezone, now)) return now;
+  const t = new Date(now);
+  t.setUTCMinutes(0, 0, 0);
+  for (let i = 0; i < 48; i++) {
+    t.setUTCHours(t.getUTCHours() + 1);
+    if (callHourOk(timezone, t)) return t;
+  }
+  return t;
+}
+
+// ---- auto-intake -------------------------------------------------------------
+
+// Fixed 2026-09-17: auto-intake judged "no profile yet" by an empty
+// life_chapters, which only accepts four values, so most people who had a
+// real intake call still looked profile-less and got called again every 24h
+// with no end. Intake is done once a real call conversation happened or a real
+// profile exists, and Co gives up after a few unanswered tries.
+export const AUTO_INTAKE_MAX_ATTEMPTS = 3;
+export const AUTO_INTAKE_MIN_GAP_HOURS = 48;
+
+export type AutoIntakeState = {
+  subscriptionActive: boolean;
+  // False only for a placeholder row still doing name/email intake by text.
+  identityCaptured: boolean;
+  // A stored call transcript that isn't just the dial marker.
+  hadRealCall: boolean;
+  // Goals, activities, blockers, or a long-term direction on file.
+  hasRealProfile: boolean;
+  attempts: number;
+  lastAttemptAt: Date | null;
+};
+
+export function decideAutoIntake(s: AutoIntakeState, now: Date): { eligible: boolean; reason: string } {
+  if (!s.subscriptionActive) return { eligible: false, reason: "no active subscription" };
+  if (!s.identityCaptured) return { eligible: false, reason: "still getting their name and email by text" };
+  if (s.hadRealCall) return { eligible: false, reason: "intake call already happened" };
+  if (s.hasRealProfile) return { eligible: false, reason: "a real profile already exists" };
+  if (s.attempts >= AUTO_INTAKE_MAX_ATTEMPTS) return { eligible: false, reason: `already tried ${s.attempts} intake calls` };
+  if (s.lastAttemptAt && now.getTime() - s.lastAttemptAt.getTime() < AUTO_INTAKE_MIN_GAP_HOURS * 3600 * 1000) {
+    return { eligible: false, reason: `last intake try was under ${AUTO_INTAKE_MIN_GAP_HOURS}h ago` };
+  }
+  return { eligible: true, reason: "new subscriber with no intake conversation yet" };
+}
+
 export async function gatherCallState(
   userId: string,
   user: { call_status: string | null; call_status_updated_at: string | Date | null; subscription_status: string | null },
   requested: CallAuthorization | null,
 ): Promise<CallState> {
-  const [extra, lastCall, scheduled, inbound, routerDecision] = await Promise.all([
+  const [extra, lastCall, scheduled, inbound, routerDecision, intakeAttempts] = await Promise.all([
     pool.query(
-      `SELECT u.sms_opted_out, cp.city, cp.checkin_call_cadence_days,
-              (cp.user_id IS NULL OR cp.life_chapters IS NULL OR array_length(cp.life_chapters, 1) IS NULL) AS no_profile
+      `SELECT u.sms_opted_out, COALESCE(u.identity_captured, true) AS identity_captured, cp.city, cp.checkin_call_cadence_days,
+              (cp.user_id IS NOT NULL AND (
+                 COALESCE(array_length(cp.goals, 1), 0) > 0
+                 OR COALESCE(array_length(cp.activity_preferences, 1), 0) > 0
+                 OR COALESCE(array_length(cp.blockers, 1), 0) > 0
+                 OR COALESCE(cp.long_term_direction, '') <> ''
+              )) AS has_real_profile,
+              EXISTS (
+                SELECT 1 FROM co_memories cm
+                WHERE cm.user_id = u.id AND cm.memory_type = 'call_transcript' AND cm.content NOT LIKE 'Co initiated call%'
+              ) AS had_real_call
        FROM users u LEFT JOIN co_profiles cp ON cp.user_id = u.id WHERE u.id = $1`,
       [userId],
     ),
@@ -182,25 +269,133 @@ export async function gatherCallState(
         [userId],
       )
       .catch(() => ({ rows: [] })),
+    // Auto-intake calls actually dialed (triggerCallForUser records
+    // place_call with reason "auto_intake" or "inferred auto_intake").
+    pool
+      .query(
+        `SELECT COUNT(*)::int AS n, MAX(created_at) AS at FROM harness_decisions
+         WHERE user_id = $1 AND layer = 8 AND decision = 'call.gate' AND action = 'place_call'
+           AND reason IN ('auto_intake', 'inferred auto_intake')`,
+        [userId],
+      )
+      .catch(() => ({ rows: [{ n: AUTO_INTAKE_MAX_ATTEMPTS, at: null }] })),
   ]);
   const x = extra.rows[0] ?? {};
   const timezone = x.city ? await getTimezoneForCity(x.city).catch(() => null) : null;
+  const now = new Date();
+  const intake = decideAutoIntake(
+    {
+      subscriptionActive: user.subscription_status === "active",
+      identityCaptured: x.identity_captured !== false,
+      hadRealCall: x.had_real_call === true,
+      hasRealProfile: x.has_real_profile === true,
+      attempts: Number(intakeAttempts.rows[0]?.n ?? 0),
+      lastAttemptAt: intakeAttempts.rows[0]?.at ? new Date(intakeAttempts.rows[0].at) : null,
+    },
+    now,
+  );
   return {
     callStatus: user.call_status,
     callStatusUpdatedAt: user.call_status_updated_at ? new Date(user.call_status_updated_at) : null,
     optedOut: x.sms_opted_out === true,
     subscriptionActive: user.subscription_status === "active",
     requireSubscription: process.env.NODE_ENV === "production",
-    localHourOk: isReasonableLocalHour(timezone),
+    localHourOk: callHourOk(timezone, now),
+    timezoneKnown: !!timezone && DateTime.now().setZone(timezone).isValid,
     lastCallAt: lastCall.rows[0]?.at ? new Date(lastCall.rows[0].at) : null,
     evidence: {
       scheduledCallDue: scheduled.rows.length > 0,
       recentInboundText: inbound.rows.length > 0,
       routerPlaceCallDecision: routerDecision.rows.length > 0,
       cadenceSet: Number(x.checkin_call_cadence_days) > 0,
-      autoIntakeEligible: user.subscription_status === "active" && x.no_profile === true,
+      autoIntakeEligible: intake.eligible,
     },
   };
+}
+
+// ---- what counts as a real conversation on a call ----------------------------
+
+// Fixed 2026-09-17: voicemail detection was effectively off. Hume transcribes
+// the voicemail greeting as a user message, which flipped "a real person is
+// talking", so Co kept talking into voicemail and the greeting became the
+// person's words in their profile. These lines are never the person talking
+// to Co: voicemail greetings, carrier messages, and call screening prompts.
+const VOICEMAIL_GREETING =
+  /you(?:'ve| have) reached|leave (?:me |us )?(?:a |your )?(?:message|name|number|voicemail)|after the (?:tone|beep)|at the (?:tone|beep)|is not available|isn'?t available|are not available|aren'?t available|is unavailable|not available right now|can'?t (?:come to|get to|take) (?:the|my|your) (?:phone|call)|unable to (?:take|answer) (?:your|the) call|get back to you|voice ?mail|mailbox|record your (?:message|name)|when you(?:'ve| have| are) finished recording|forwarded to (?:an )?automated|press (?:pound|star|any key|one|two|\d)|hang up or press|the (?:person|party|number|subscriber) you (?:are |were )?(?:trying to reach|calling|have dialed|dialed)|google (?:voice|subscriber)|screening (?:service|your call|this call)|state your name|say your name|who(?:'s| is) calling|what you(?:'re| are) calling about/i;
+
+// Short pickups that say nothing on their own ("hello?", "yeah").
+const FILLER_ONLY = /^(?:hello|hi|hey|yeah|yes|yep|ok|okay|uh+|um+|hm+|mhm|what|huh)[\s?.!,]*(?:hello|hi|hey)?[\s?.!,]*$/i;
+
+export function isVoicemailGreeting(text: string): boolean {
+  return VOICEMAIL_GREETING.test(text);
+}
+
+function isSubstantiveUserLine(text: string): boolean {
+  const t = text.trim();
+  return t.length > 0 && !VOICEMAIL_GREETING.test(t) && !FILLER_ONLY.test(t);
+}
+
+// A real conversation: after Co has said something, the person answered with
+// something that isn't a greeting, a carrier message, or a bare "hello?".
+// Transcript lines are "user: ..." / "assistant: ..." as built from Hume's
+// chat events.
+export function hasRealUserTurn(transcript: string): boolean {
+  let coSpoke = false;
+  for (const raw of transcript.split("\n")) {
+    const line = raw.trim();
+    if (/^assistant:/i.test(line)) {
+      coSpoke = true;
+    } else if (/^user:/i.test(line) && coSpoke && isSubstantiveUserLine(line.replace(/^user:\s*/i, ""))) {
+      return true;
+    }
+  }
+  return false;
+}
+
+// The live bridge's version of the same test, one utterance at a time.
+export function isRealUserUtterance(text: string, coHasSpoken: boolean): boolean {
+  return coHasSpoken && isSubstantiveUserLine(text);
+}
+
+// Drops greeting-like "user" lines so a voicemail greeting is never extracted
+// as something the person said about themselves.
+export function stripVoicemailGreetingLines(transcript: string): string {
+  return transcript
+    .split("\n")
+    .filter((line) => !(/^user:/i.test(line.trim()) && VOICEMAIL_GREETING.test(line)))
+    .join("\n");
+}
+
+// ---- inbound caller ID -------------------------------------------------------
+
+// Fixed 2026-09-17: inbound calls were matched on From alone, and caller ID is
+// trivially spoofed, so anyone could call in as a user and hear Co talk
+// through their private context. Only full carrier attestation (STIR/SHAKEN
+// "A": the carrier vouches the caller owns this number) loads a person.
+// ALLOW_UNVERIFIED_INBOUND_CALLERS=true is an escape hatch for testing on
+// lines whose carrier doesn't attest.
+export function inboundCallerVerified(stirVerstat: string | null | undefined, allowUnverified = false): boolean {
+  if (allowUnverified) return true;
+  return stirVerstat === "TN-Validation-Passed-A";
+}
+
+// ---- contact since a missed call ---------------------------------------------
+
+// Whether the person reached Co after `since`: a text, a voice memo, or a
+// call that actually had a conversation. Used so "tried calling but missed
+// you" doesn't go out after they already texted or called back.
+export async function hadContactSince(userId: string, since: Date): Promise<boolean> {
+  const { rows } = await pool.query(
+    `SELECT 1 FROM co_memories
+     WHERE user_id = $1 AND created_at > $2
+       AND (
+         (memory_type = 'text_exchange' AND (content LIKE 'User said:%' OR content LIKE 'User sent a voice memo:%' OR content LIKE '[Call]%'))
+         OR (memory_type = 'call_transcript' AND content NOT LIKE 'Co initiated call%')
+       )
+     LIMIT 1`,
+    [userId, since],
+  );
+  return rows.length > 0;
 }
 
 // ---- missed calls ------------------------------------------------------------

@@ -135,15 +135,20 @@ export async function enqueueDueOutcomeFollowUps(): Promise<void> {
       continue;
     }
     const timezone = row.city ? await getTimezoneForCity(row.city).catch(() => null) : null;
-    await enqueueDebrief({
+    // Only mark 'queued' on an actual queue (code review, 2026-09-17) — see
+    // enqueueDebrief's comment.
+    const result = await enqueueDebrief({
       userId: row.user_id,
       eventApiId: match.event_api_id ?? null,
       eventName: row.match_name,
       eventEnd: endOfLocalDay(eventDate, timezone),
       timezone,
       part: { outcomeFollowupIds: [row.id], askText: row.ask_text },
+    }).catch((err: any) => {
+      console.error(`recommendationOutcome: enqueueDebrief failed for ${row.id} (non-fatal):`, err?.message ?? err);
+      return { queued: false };
     });
-    await pool.query(`UPDATE recommendation_outcome_followups SET harness_status = 'queued' WHERE id = $1`, [row.id]);
+    await pool.query(`UPDATE recommendation_outcome_followups SET harness_status = $2 WHERE id = $1`, [row.id, result.queued ? "queued" : "skipped"]);
   }
 }
 
@@ -162,6 +167,10 @@ export type DebriefPayload = {
 };
 
 // Shared by the three debrief sources. One candidate per (person, event).
+// Returns whether it actually queued (code review, 2026-09-17): this used
+// to return void, so all three callers had no way to tell a real queue from
+// a no-op (the harness candidate already sent/dropped/expired) and marked
+// their own source row 'queued' regardless either way.
 export async function enqueueDebrief(opts: {
   userId: string;
   eventApiId: string | null;
@@ -169,7 +178,7 @@ export async function enqueueDebrief(opts: {
   eventEnd: Date;
   timezone: string | null;
   part: Partial<Pick<DebriefPayload, "outcomeFollowupIds" | "checkinFollowupIds" | "walkinCheckinIds" | "askText">>;
-}): Promise<void> {
+}): Promise<{ queued: boolean }> {
   const payload: DebriefPayload = {
     eventApiId: opts.eventApiId,
     eventName: opts.eventName,
@@ -179,7 +188,7 @@ export async function enqueueDebrief(opts: {
     askText: opts.part.askText ?? null,
   };
   const dueAt = nextLocalHour(opts.eventEnd, opts.timezone, 10);
-  await enqueueCandidate({
+  return enqueueCandidate({
     userId: opts.userId,
     type: "debrief",
     targetKey: `debrief:${opts.eventApiId ?? opts.eventName.toLowerCase()}`,

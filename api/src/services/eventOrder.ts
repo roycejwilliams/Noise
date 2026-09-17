@@ -25,6 +25,53 @@ export function offerScore(askSimilarity: number, profileSimilarity: number | nu
   return (1 - PROFILE_WEIGHT) * askSimilarity + PROFILE_WEIGHT * profileSimilarity;
 }
 
+// Co's home time zone, used when a person has no city or zone on file. The
+// server runs in UTC on Railway, so falling back to "local" made an evening
+// ask in San Francisco search tomorrow's calendar (code review, 2026-09-17).
+export const CO_DEFAULT_TIMEZONE = "America/Los_Angeles";
+
+export function searchZone(zone: string | null | undefined): { zone: string; defaulted: boolean } {
+  if (zone && DateTime.now().setZone(zone).isValid) return { zone, defaulted: false };
+  const fallback = process.env.CO_HOME_TIMEZONE && DateTime.now().setZone(process.env.CO_HOME_TIMEZONE).isValid ? process.env.CO_HOME_TIMEZONE : CO_DEFAULT_TIMEZONE;
+  return { zone: fallback, defaulted: true };
+}
+
+// Today's date where they are, YYYY-MM-DD. UTC only when no zone is known.
+export function localToday(now: Date, zone?: string | null): string {
+  if (zone) {
+    const d = DateTime.fromJSDate(now).setZone(zone);
+    if (d.isValid) return d.toISODate()!;
+  }
+  return now.toISOString().slice(0, 10);
+}
+
+// Pure: at most `max` events, spread across the days they fall on (round
+// robin, feed order within a day). Taking the first 40 in feed order meant a
+// long window ("Oct 5 - Oct 14") only ever ranked its first couple of days
+// (code review, 2026-09-17).
+export function spreadAcrossDays<T extends { start_at: string }>(events: T[], max: number, zone?: string | null): T[] {
+  if (events.length <= max) return events;
+  const byDay = new Map<string, T[]>();
+  for (const e of events) {
+    const d = localDate(e.start_at, zone);
+    if (!byDay.has(d)) byDay.set(d, []);
+    byDay.get(d)!.push(e);
+  }
+  const days = [...byDay.keys()].sort().map((d) => byDay.get(d)!);
+  const out: T[] = [];
+  for (let i = 0; out.length < max; i++) {
+    let added = false;
+    for (const list of days) {
+      if (i < list.length && out.length < max) {
+        out.push(list[i]);
+        added = true;
+      }
+    }
+    if (!added) break;
+  }
+  return out;
+}
+
 // The event's calendar date where they are. start_at is UTC, so a 7pm
 // Thursday event in San Francisco is already Friday in UTC; using that date
 // turned Thursday-night events away as "after the time frame" and named the

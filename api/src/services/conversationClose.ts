@@ -44,9 +44,43 @@ function normalize(text: string): string {
     .trim();
 }
 
+// Co's most recent message in the thread, so a short reply can be read
+// against the question it's answering. In the full prompt that question sits
+// far above "They just said" and was getting lost (confirmed live,
+// 2026-09-10: "Before the event and at check-in", an answer to Co's own
+// question, got "Go ahead."). Moved here from agent/conversationReply.ts
+// 2026-09-17 so the closing rule can use it too.
+export function lastCoLine(recentConversation: string): string | null {
+  const lines = recentConversation.split("\n");
+  for (let i = lines.length - 1; i >= 0; i--) {
+    if (!lines[i].startsWith("Co replied: ")) continue;
+    const parts = [lines[i].slice("Co replied: ".length)];
+    for (let j = i + 1; j < lines.length && !/^(User said|User sent|Co replied|\[)/.test(lines[j]); j++) parts.push(lines[j]);
+    const text = parts.join(" ").trim();
+    return text.length > 400 ? `${text.slice(0, 400)}…` : text;
+  }
+  return null;
+}
+
+// Whether Co's last message asked them something or offered to do something
+// (2026-09-17 code review: Co asked "Want me to keep an eye out?", they said
+// "sounds good", and got a thumbs up with nothing saved). Co's own questions
+// aren't open items, so the router doesn't see them; a short "ok" after one
+// is an answer, not the end of the thread.
+const OFFER =
+  /\b(want me to|should i|shall i|would you like|do you want|if you want,? i can|if you'?d like,? i can|happy to [^.!]{0,60} if you|let me know if you'?d like|i can [^.!]{0,60} if you want|if you'?d? (ever )?want(ed)? to|i'?m here if you)\b/i;
+
+export function coAskedQuestion(lastCoMessage: string | null | undefined): boolean {
+  if (!lastCoMessage) return false;
+  const text = lastCoMessage.replace(/https?:\/\/\S+/gi, " ");
+  return text.includes("?") || OFFER.test(text);
+}
+
 // The reaction a closing acknowledgment deserves, or null when the message
-// needs a real reply.
-export function closingReaction(rawText: string): Tapback | null {
+// needs a real reply. lastCoMessage is Co's last message in the thread: when
+// it asked something, their short reply answers it and gets a real reply.
+export function closingReaction(rawText: string, lastCoMessage?: string | null): Tapback | null {
+  if (coAskedQuestion(lastCoMessage)) return null;
   const text = normalize(rawText);
   if (!text || text.includes("?")) return null;
   if (text.split(" ").length > 5) return null;

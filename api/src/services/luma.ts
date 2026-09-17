@@ -165,3 +165,60 @@ export async function getEventGuestList(eventId: string): Promise<LumaGuest[]> {
 
   return guests;
 }
+
+// Where a Co event is, for deciding who's nearby (2026-09-16: every event on
+// Co's calendar came back with no city, so the Tier 1 announcement and "Co
+// events first" skipped all of them). In order: the calendar's own city, the
+// city on the event's public page, the page's venue or address text, then Co's
+// home city (CO_HOME_CITY, default San Francisco), since a Co event without
+// an address is still Co's event.
+export const CO_HOME_CITY_DEFAULT = "San Francisco";
+
+export function resolveCoEventCity(
+  calendarCity: string | null | undefined,
+  pageCity: string | null | undefined,
+  homeCity: string | null | undefined,
+  // The page's venue or address text ("San Francisco, CA"), which geocodes
+  // even when Luma leaves the city field empty.
+  pagePlace?: string | null,
+): { city: string; source: "calendar" | "event_page" | "event_address" | "home_city" } {
+  if (calendarCity?.trim()) return { city: calendarCity.trim(), source: "calendar" };
+  if (pageCity?.trim()) return { city: pageCity.trim(), source: "event_page" };
+  if (pagePlace?.trim()) return { city: pagePlace.trim(), source: "event_address" };
+  return { city: homeCity?.trim() || CO_HOME_CITY_DEFAULT, source: "home_city" };
+}
+
+// Where a Co event is, or that it's online, from what the event's page said
+// (code review, 2026-09-17). resolveCoEventCity above had two gaps: an online
+// Co event got Co's home city, so the nearby filter dropped it for anyone
+// outside San Francisco and it was described as "in San Francisco"; and a
+// page fetch that failed or timed out fell through to the home city too, so
+// an out-of-town event whose page didn't load was labeled SF.
+//   online       reachable by everyone: no city, no radius filter
+//   unresolved   the page couldn't be read, so where it is isn't known yet;
+//                the caller skips it for now and retries, never guesses
+//   home_city    the page was read and genuinely has no address info
+// page: the event page as read (services/eventDetails.ts), or null when the
+// fetch failed. Pass pageAttempted false when there was no url to fetch.
+export type CoEventPlace = {
+  city: string | null;
+  online: boolean;
+  source: "calendar" | "event_page" | "event_address" | "online" | "home_city" | "unresolved";
+};
+
+export function resolveCoEventPlace(
+  calendarCity: string | null | undefined,
+  page: { city?: string | null; address?: string | null; venue?: string | null; online?: boolean } | null | undefined,
+  homeCity: string | null | undefined,
+  pageAttempted = true,
+): CoEventPlace {
+  if (page?.online) return { city: null, online: true, source: "online" };
+  if (calendarCity?.trim()) return { city: calendarCity.trim(), online: false, source: "calendar" };
+  if (!page) {
+    return pageAttempted
+      ? { city: null, online: false, source: "unresolved" }
+      : { city: homeCity?.trim() || CO_HOME_CITY_DEFAULT, online: false, source: "home_city" };
+  }
+  const r = resolveCoEventCity(null, page.city, homeCity, page.address ?? page.venue);
+  return { city: r.city, online: false, source: r.source };
+}

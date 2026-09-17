@@ -3,7 +3,7 @@ import { anthropic } from "@ai-sdk/anthropic";
 import { Resend } from "resend";
 import pool from "../db/db.js";
 import sendblue, { cleanCoMessage } from "./sendblue.js";
-import { enqueueCandidate } from "../harness/proactive.js";
+import { enqueueCandidate, sendExemptWhenAllowed } from "../harness/proactive.js";
 import { writeMemory } from "./memory.js";
 import { ALLOW_REAL_SENDS } from "../otpActions.js";
 import type { MatchNudgeCandidate } from "./eventGuestMatchHandoff.js";
@@ -11,6 +11,7 @@ import { CO_VOICE, CO_TEXT_CHANNEL } from "./coVoice.js";
 import { gateNetworkCandidate } from "../harness/matchGate.js";
 import { checkBothYes, draftWithConsent, gateIntroAction, networkOptedIn } from "../harness/introConsent.js";
 import { getActiveAsks } from "./matching.js";
+import { getTimezoneForCity } from "./geocoding.js";
 import { MODELS } from "../models.js";
 
 // Model policy (Royce, 2026-09-14): Haiku for the yes/no reply reads (code
@@ -22,6 +23,14 @@ const NAMING_DRAFT_MODEL = MODELS.sonnet;
 async function statedAsksFor(userId: string): Promise<string[]> {
   const { rows } = await pool.query(`SELECT intent FROM co_profiles WHERE user_id = $1`, [userId]).catch(() => ({ rows: [] as any[] }));
   return getActiveAsks(rows[0]?.intent);
+}
+
+// This person's timezone, for the hours check on a reply-triggered direct
+// ask (code review, 2026-09-17 — see harness/proactive.ts's sendExemptWhenAllowed).
+async function timezoneFor(userId: string): Promise<string | null> {
+  const { rows } = await pool.query(`SELECT city FROM co_profiles WHERE user_id = $1`, [userId]).catch(() => ({ rows: [] as any[] }));
+  const city = rows[0]?.city;
+  return city ? await getTimezoneForCity(city).catch(() => null) : null;
 }
 
 // Redesigned 2026-09-07 (Royce: "how would you implement the networking
@@ -270,23 +279,42 @@ export async function resolveNetworkTeaseReply(
 
 export type PendingNetworkIntroOffer = { askId: string | null; candidate: NetworkCandidate };
 
+// Resolved once THIS person's own answer to THIS specific offer is on
+// record (code review, 2026-09-17): used to check for any network_
+// introductions row created after the stash, which closes correctly for
+// the original asker (their own row-insert always happens after their
+// reveal was stashed) but never for a directly-asked candidate — their
+// stash (askCandidateDirectly) always runs AFTER the asker's own
+// network_introductions insert, so that row's created_at is always BEFORE
+// the candidate's stash and the close-check never matched. A later message
+// could then re-run resolveNetworkIntroReply and send a duplicate intro
+// email or flip status again. Checking THIS person's own interested column
+// (set at the moment THEY reply, always after their own stash) instead of
+// the row's creation time fixes it for both directions.
 export async function findPendingNetworkIntroOffer(userId: string): Promise<PendingNetworkIntroOffer | null> {
   const { rows } = await pool.query(
-    `SELECT p.id, p.content FROM co_memories p
-     WHERE p.user_id = $1 AND p.memory_type = 'network_intro_offer_pending'
-       AND p.created_at > NOW() - ($2 || ' days')::interval
-       AND NOT EXISTS (
-         SELECT 1 FROM network_introductions ni
-         WHERE (ni.person_a_id = $1 OR ni.person_b_id = $1)
-           AND ni.created_at > p.created_at
-       )
-     ORDER BY p.created_at DESC LIMIT 1`,
+    `SELECT id, content, created_at FROM co_memories
+     WHERE user_id = $1 AND memory_type = 'network_intro_offer_pending'
+       AND created_at > NOW() - ($2 || ' days')::interval
+     ORDER BY created_at DESC LIMIT 1`,
     [userId, NETWORK_OFFER_EXPIRY_DAYS],
   );
   if (!rows[0]) return null;
   const parsed = JSON.parse(rows[0].content);
   // Stashed before share_reason existed: its reason may hold private detail.
-  return parsed?.candidate?.share_safe === true ? parsed : null;
+  if (parsed?.candidate?.share_safe !== true) return null;
+
+  const candidateId: string | undefined = parsed.candidate?.candidate_id;
+  if (!candidateId) return parsed;
+  const [aId, bId] = canonicalPair(userId, candidateId);
+  const ownCol = userId === aId ? "a_interested_at" : "b_interested_at";
+  const { rows: introRows } = await pool.query(
+    `SELECT status, ${ownCol} AS own_interested_at FROM network_introductions WHERE person_a_id = $1 AND person_b_id = $2`,
+    [aId, bId],
+  );
+  const intro = introRows[0];
+  const resolved = !!intro && (intro.status === "declined" || (intro.own_interested_at && new Date(intro.own_interested_at) > new Date(rows[0].created_at)));
+  return resolved ? null : parsed;
 }
 
 // Returns whether the email actually went out, so Co never says it did when
@@ -352,13 +380,22 @@ async function askCandidateDirectly(candidate: MatchNudgeCandidate, asker: Match
   );
   if (!message) return;
 
-  try {
-    await sendblue.messages.send({ number: candidate.phone_number, content: message, from_number: process.env.SENDBLUE_PHONE_NUMBER! });
-  } catch (err: any) {
-    console.error("askCandidateDirectly: send failed (non-fatal):", err?.message ?? err);
+  // Opt-out and local hours at send time, queued for the next allowed hour
+  // if it's night for them (code review, 2026-09-17) — triggered by the
+  // ASKER's reply, not anything this candidate just did. sendExempt writes
+  // the text_exchange memory itself once actually delivered.
+  const result = await sendExemptWhenAllowed({
+    userId: candidate.user_id,
+    phoneNumber: candidate.phone_number,
+    type: "direct_ask",
+    targetKey: `network_direct_ask:${[candidate.user_id, asker.user_id].sort().join(":")}`,
+    messages: [message],
+    timezone: await timezoneFor(candidate.user_id),
+  });
+  if (!result.sent && !result.queued) {
+    console.error(`askCandidateDirectly: send failed for ${candidate.user_id} (non-fatal):`, result.reason);
     return;
   }
-  await writeMemory(candidate.user_id, "text_exchange", `Co replied: ${message}`);
   await stashIntroOfferPending(
     candidate.user_id,
     {

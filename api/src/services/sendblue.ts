@@ -1,3 +1,4 @@
+import { createHash, timingSafeEqual } from "crypto";
 import { SendblueAPI } from "sendblue";
 import { capitalizeSentences, looksLikeMetaReply } from "./textStyle.js";
 
@@ -61,8 +62,30 @@ export function cleanCoMessage(text: string): string {
 // model from occasionally breaking character, but living in the one choke
 // point every send passes through means no call site, present or future,
 // can ship without it by forgetting to copy the check.
+//
+// Narrowed 2026-09-17 (code review): the old pattern also matched honest
+// lines Co is told to send ("I don't have any information on the start
+// time", "I can't send the ticket for you", "booking is outside what I can
+// do"). Each refused send was swallowed by sendCoReply, so the person got
+// nothing while every caller logged "Co replied". Only phrasings that are
+// about Co's own prompt, memory, or channel are blocked now.
 const LEAKED_METACOMMENTARY =
-  /\{\{|context_summary|\bi don'?t have (a |any )?(record|access|context|information)\b|\bi can'?t (actually )?(send|text)\b|\boutside what i can do\b|\bi can only (take|make) calls?\b/i;
+  /\{\{|context_summary|\bsystem prompt\b|\bi don'?t have (any )?(access to|a record of|any record of|context (on|about|for)|information (on|about)) (the |this |our |your |my |any )?(context|conversation history|chat history|message history|previous (conversations?|messages?|chats?)|prior (conversations?|messages?|chats?)|past (conversations?|messages?|chats?)|earlier (conversations?|messages?)|this (person|user|conversation)|the user|who (this|they) (is|are)|memory|memories|tools?|instructions)\b|\bi can'?t (actually )?(send|text) (you )?(a |any )?(texts?|text messages?|sms|imessages?|messages)\b|\bas an ai\b[^.?!]{0,30}\b(can'?t|cannot|don'?t|do not|am unable|'?m unable)\b|\b(a|an) (ai )?language model\b|\bi can only (take|make) calls?\b/i;
+
+export function isLeakedMetaCommentary(content: string): boolean {
+  return LEAKED_METACOMMENTARY.test(content) || looksLikeMetaReply(content);
+}
+
+// Sendblue's webhook secret (dashboard: Webhooks, secret; sent back verbatim
+// in the sb-signing-secret header). Compared as fixed-length digests so the
+// comparison takes the same time whatever the input (2026-09-17 code review:
+// the webhook accepted a fake inbound text from anyone with the URL).
+export function webhookSecretMatches(expected: string | undefined | null, provided: unknown): boolean {
+  if (!expected || typeof provided !== "string" || !provided) return false;
+  const a = createHash("sha256").update(expected).digest();
+  const b = createHash("sha256").update(provided).digest();
+  return timingSafeEqual(a, b);
+}
 
 // Every message send goes through this one wrapper so cleanup and the
 // meta-commentary guard apply uniformly, regardless of which prompt or call
@@ -73,7 +96,7 @@ const sendblue = {
     ...client.messages,
     send: (body: Parameters<typeof client.messages.send>[0], options?: Parameters<typeof client.messages.send>[1]) => {
       const content = body.content ? cleanCoMessage(body.content) : body.content;
-      if (content && (LEAKED_METACOMMENTARY.test(content) || looksLikeMetaReply(content))) {
+      if (content && isLeakedMetaCommentary(content)) {
         return Promise.reject(
           new Error(`sendblue: outbound content looked like leaked model meta-commentary, refusing to send: ${content}`),
         );

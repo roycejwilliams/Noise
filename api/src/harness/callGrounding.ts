@@ -67,6 +67,38 @@ export function callAuditChecks(claims: CallClaim[]): GateCheck[] {
     }));
 }
 
+// Fixed 2026-09-17: every keepable promise got saved as `user: ${what}` via
+// captureIntentForTurn regardless of who actually raised it — a promise Co
+// volunteered on its own ("I'll look into events for you while we're at it")
+// became a saved ask the person never made. Only save it as their ask when
+// their own words on the call actually asked for something like it.
+const GROUNDING_STOPWORDS = new Set([
+  "the", "a", "an", "and", "or", "to", "of", "in", "for", "with", "on", "at",
+  "their", "his", "her", "my", "more", "other", "if", "something", "real",
+  "fits", "after", "we", "hang", "up", "you", "your", "it", "that", "this",
+]);
+function significantWords(s: string): string[] {
+  return s.toLowerCase().replace(/[^a-z0-9 ]/g, " ").split(/\s+/).filter((w) => w.length > 2 && !GROUNDING_STOPWORDS.has(w));
+}
+
+// Exported for evals — whether the person's own lines on this call actually
+// asked for something like `what`, by simple word overlap (same tool
+// mergeProfileList's nearDuplicate uses elsewhere, just checked against the
+// transcript instead of another list item).
+export function personAskedForThis(transcript: string, what: string): boolean {
+  const userLines = transcript
+    .split("\n")
+    .filter((l) => /^user:/i.test(l.trim()))
+    .map((l) => l.replace(/^user:\s*/i, ""))
+    .join(" ")
+    .toLowerCase();
+  if (!userLines.trim()) return false;
+  const words = significantWords(what);
+  if (!words.length) return false;
+  const hits = words.filter((w) => userLines.includes(w)).length;
+  return hits / words.length >= 0.34;
+}
+
 export async function auditCall(userId: string, transcript: string, knownBefore: string): Promise<void> {
   try {
     const { text } = await generateText({
@@ -78,9 +110,20 @@ export async function auditCall(userId: string, transcript: string, knownBefore:
     const claims = (parseModelJson<{ claims?: CallClaim[] }>(text).claims ?? []).filter((c) => c && typeof c.quote === "string");
     const checks = callAuditChecks(claims);
 
-    // Keep the promises Co can keep.
+    // Keep the promises Co can keep — but only file it as the PERSON's ask
+    // when their own words on the call actually asked for it. A promise Co
+    // volunteered on its own is still real for Co to keep, but gets
+    // recorded as Co's own note, not a saved ask attributed to them.
     for (const c of claims.filter((x) => x.type === "promise_keepable" && x.what)) {
-      await captureIntentForTurn(userId, `user: ${c.what}`, { timeoutMs: 6000 }).catch(() => null);
+      if (personAskedForThis(transcript, c.what)) {
+        await captureIntentForTurn(userId, `user: ${c.what}`, { timeoutMs: 6000 }).catch(() => null);
+      } else {
+        await writeMemory(
+          userId,
+          "system",
+          `Co promised on a call to look into: "${c.what}" — Co's own initiative, not something the person actually asked for.`,
+        ).catch(() => null);
+      }
     }
     // Remember what needs correcting, for the next text reply.
     const corrections = claims.filter((x) => x.type === "promise_unkeepable" || x.type === "invented_fact" || x.type === "capability");

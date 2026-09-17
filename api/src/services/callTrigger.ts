@@ -2,7 +2,7 @@ import twilio from "twilio";
 import type { Server as IOServer } from "socket.io";
 import pool from "../db/db.js";
 import { generateEmbedding } from "./embeddings.js";
-import { prewarmHumeConnection } from "./mediaStreamBridge.js";
+import { issueStreamAuthToken, prewarmHumeConnection } from "./mediaStreamBridge.js";
 import { recordDecision } from "../harness/core.js";
 import { decideCall, gatherCallState, type CallAuthorization } from "../harness/callGate.js";
 
@@ -80,6 +80,15 @@ export async function triggerCallForUser(
   const twiml = new twilio.twiml.VoiceResponse();
   const stream = twiml.connect().stream({ url: mediaStreamUrl });
   stream.parameter({ name: "user_id", value: userId });
+  // Security fix, 2026-09-17: the bridge no longer trusts user_id above on
+  // its own — see mediaStreamBridge.ts's "media-stream auth" section. The
+  // call's real CallSid doesn't exist yet at this point (Twilio only
+  // assigns it once twilioClient.calls.create() below returns), so this
+  // can't be bound to a callSid the way the inbound path can; a single-use,
+  // short-lived opaque token tied only to userId is enough — it's never
+  // derivable by anyone who isn't this server or the real Twilio media
+  // stream for this exact call.
+  stream.parameter({ name: "auth", value: issueStreamAuthToken(userId) });
 
   const call = await twilioClient.calls.create({
     to: user.phone_number,

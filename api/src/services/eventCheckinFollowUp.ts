@@ -148,14 +148,19 @@ export async function enqueueDueEventCheckinFollowUps(): Promise<void> {
     const timezone = row.city ? await getTimezoneForCity(row.city).catch(() => null) : null;
     // send_at was scheduled as end_at + CHECKIN_FOLLOWUP_DELAY_HOURS.
     const eventEnd = new Date(new Date(row.send_at).getTime() - CHECKIN_FOLLOWUP_DELAY_HOURS * 60 * 60 * 1000);
-    await enqueueDebrief({
+    // Only mark 'queued' on an actual queue (code review, 2026-09-17) — see
+    // recommendationOutcome.ts's enqueueDebrief comment.
+    const result = await enqueueDebrief({
       userId: row.user_id,
       eventApiId: row.event_api_id,
       eventName: row.event_name,
       eventEnd,
       timezone,
       part: { checkinFollowupIds: [row.id] },
+    }).catch((err: any) => {
+      console.error(`eventCheckinFollowUp: enqueueDebrief failed for ${row.id} (non-fatal):`, err?.message ?? err);
+      return { queued: false };
     });
-    await pool.query(`UPDATE event_checkin_followups SET harness_status = 'queued' WHERE id = $1`, [row.id]);
+    await pool.query(`UPDATE event_checkin_followups SET harness_status = $2 WHERE id = $1`, [row.id, result.queued ? "queued" : "skipped"]);
   }
 }

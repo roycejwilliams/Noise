@@ -7,7 +7,17 @@ import { writeMemory } from "./memory.js";
 import { ALLOW_REAL_SENDS } from "../otpActions.js";
 import { CO_VOICE, CO_TEXT_CHANNEL } from "./coVoice.js";
 import { checkBothYes, draftWithConsent, eventOptedIn, gateIntroAction } from "../harness/introConsent.js";
+import { sendExemptWhenAllowed } from "../harness/proactive.js";
+import { getTimezoneForCity } from "./geocoding.js";
 import { MODELS } from "../models.js";
+
+// This person's timezone, for the hours check on a reply-triggered direct
+// ask (code review, 2026-09-17 — see sendExemptWhenAllowed).
+async function timezoneFor(userId: string): Promise<string | null> {
+  const { rows } = await pool.query(`SELECT city FROM co_profiles WHERE user_id = $1`, [userId]);
+  const city = rows[0]?.city;
+  return city ? await getTimezoneForCity(city).catch(() => null) : null;
+}
 
 // Model policy (Royce, 2026-09-14): Haiku for the narrow yes/no reads (code
 // acts on them only through the consent checks); Sonnet 5 for drafts that
@@ -53,6 +63,11 @@ export type PendingMatchNudge = {
 // "pending" forever.
 const MATCH_NUDGE_REPLY_EXPIRY_DAYS = 7;
 
+// event_guest_match_nudges is keyed (event_id, person_id) — one row per
+// person per event, kept current by maybeAskCandidateDirectly's UPSERT
+// above (code review, 2026-09-17), so ORDER BY sent_at DESC LIMIT 1 here
+// always resolves a reply against the candidate they were MOST RECENTLY
+// actually asked about, never a stale one from an earlier match.
 export async function findPendingMatchNudge(userId: string): Promise<PendingMatchNudge | null> {
   const { rows } = await pool.query(
     `SELECT n.event_id, n.candidate_id, u.first_name AS candidate_first_name, u.phone_number AS candidate_phone, u.email AS candidate_email
@@ -181,34 +196,46 @@ async function maybeAskCandidateDirectly(
   );
   if (!message) return;
 
-  try {
-    await sendblue.messages.send({
-      number: candidate.phone_number,
-      content: message,
-      from_number: process.env.SENDBLUE_PHONE_NUMBER!,
-    });
-  } catch (err: any) {
-    console.error("maybeAskCandidateDirectly: send failed (non-fatal):", err?.message ?? err);
+  // Opt-out and local hours checked at send time, queued for the next
+  // allowed hour if it's night for them (code review, 2026-09-17): this
+  // used to send a raw sendblue message unconditionally, triggered by the
+  // ASKER's reply, not anything this recipient just did. sendExempt (inside
+  // sendExemptWhenAllowed) writes the text_exchange memory itself once
+  // actually delivered, so there's no separate write needed here.
+  const result = await sendExemptWhenAllowed({
+    userId: candidate.user_id,
+    phoneNumber: candidate.phone_number,
+    type: "direct_ask",
+    targetKey: `direct_ask:${eventId}:${candidate.user_id}:${asker.user_id}`,
+    messages: [message],
+    timezone: await timezoneFor(candidate.user_id),
+  });
+  if (!result.sent && !result.queued) {
+    console.error(`maybeAskCandidateDirectly: send failed for ${candidate.user_id} (non-fatal):`, result.reason);
     return;
   }
 
-  // Confirmed live, 2026-09-07: without this, a bare "yes" reply to this
-  // exact message is unresolvable — routes/sendblue.ts's recentConversation
-  // is built only from co_memories.text_exchange rows, and this send used
-  // to leave no trace there. Match its "Co replied: ..." convention exactly
-  // so the classifier can see what was just asked.
-  await writeMemory(candidate.user_id, "text_exchange", `Co replied: ${message}`).catch((err: any) =>
-    console.error("maybeAskCandidateDirectly: text_exchange log failed (non-fatal):", err?.message ?? err),
-  );
-
+  // UPSERT, not ON CONFLICT DO NOTHING (code review, 2026-09-17): the
+  // recipient can already have a row here for a DIFFERENT match (an earlier
+  // automatic scoring-pass nudge, or a direct ask about someone else) —
+  // event_guest_match_nudges is keyed (event_id, person_id), one row per
+  // person per event. DO NOTHING left that old candidate_id in place while
+  // the message just sent asked about a completely different person
+  // (`asker`), so a later "yes" reply resolved via findPendingMatchNudge
+  // recorded the opt-in against the WRONG candidate and could connect the
+  // wrong pair. hasPendingOrAnsweredNudge above already confirmed there's no
+  // row specifically about (event, candidate, asker), so it's always
+  // correct here to make the row reflect what they were just actually
+  // asked — findPendingMatchNudge then always resolves a reply against the
+  // most recent real ask.
   await pool
     .query(
       `INSERT INTO event_guest_match_nudges (event_id, person_id, candidate_id, score)
        VALUES ($1, $2, $3, $4)
-       ON CONFLICT (event_id, person_id) DO NOTHING`,
+       ON CONFLICT (event_id, person_id) DO UPDATE SET candidate_id = EXCLUDED.candidate_id, score = EXCLUDED.score, sent_at = NOW()`,
       [eventId, candidate.user_id, asker.user_id, 100],
     )
-    .catch((err: any) => console.error("maybeAskCandidateDirectly: nudge-row insert failed (non-fatal):", err?.message ?? err));
+    .catch((err: any) => console.error("maybeAskCandidateDirectly: nudge-row upsert failed (non-fatal):", err?.message ?? err));
 }
 
 // The actual handoff, once both sides are genuinely in — a real Sendblue
@@ -302,10 +329,19 @@ async function askConnectionMethod(eventId: string, askedPerson: MatchNudgeCandi
   const { a: aYes, b: bYes } = await bothOptedIn(eventId, askedPerson.user_id, other.user_id);
   if (!(await gateIntroAction(askedPerson.user_id, "eventGuestMatchHandoff.askMethod", [checkBothYes(aYes, bYes)], { eventId, other: other.user_id }))) return;
   const message = cleanCoMessage(`Want me to connect you two by text or would email work better?`);
-  try {
-    await sendblue.messages.send({ number: askedPerson.phone_number, content: message, from_number: process.env.SENDBLUE_PHONE_NUMBER! });
-  } catch (err: any) {
-    console.error("askConnectionMethod: send failed (non-fatal):", err?.message ?? err);
+  // Opt-out and local hours at send time, queued for the next allowed hour
+  // if it's night for them (code review, 2026-09-17) — triggered by the
+  // OTHER person's opt-in completing, not anything askedPerson just did.
+  const result = await sendExemptWhenAllowed({
+    userId: askedPerson.user_id,
+    phoneNumber: askedPerson.phone_number,
+    type: "direct_ask",
+    targetKey: `ask_method:${eventId}:${askedPerson.user_id}:${other.user_id}`,
+    messages: [message],
+    timezone: await timezoneFor(askedPerson.user_id),
+  });
+  if (!result.sent && !result.queued) {
+    console.error(`askConnectionMethod: send failed for ${askedPerson.user_id} (non-fatal):`, result.reason);
     return;
   }
   await pool

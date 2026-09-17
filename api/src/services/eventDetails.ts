@@ -94,10 +94,21 @@ export function parseLumaEventPage(html: string): EventDetails | null {
   };
 }
 
-export async function fetchLumaEventDetails(url: string): Promise<EventDetails | null> {
+// A page read that worked is reused for an hour. One that failed or timed out
+// is only reused for two minutes (enough to avoid refetching it twice in the
+// same search): it used to be cached as null for an hour, and a page Co
+// couldn't read meant no description and unknown sold-out status, so an
+// off-topic sold-out event passed as a fit (code review, 2026-09-17).
+const DETAIL_TTL_MS = 60 * 60 * 1000;
+const FAILED_DETAIL_TTL_MS = 2 * 60 * 1000;
+
+// maxAgeMs: how old a cached successful read may be. A cached search result
+// re-checks availability with a short one, since sold-out status changes.
+export async function fetchLumaEventDetails(url: string, opts: { maxAgeMs?: number } = {}): Promise<EventDetails | null> {
   const key = lumaUrl(url);
   const cached = detailCache.get(key);
-  if (cached && Date.now() - cached.at < 60 * 60 * 1000) return cached.details;
+  const ttl = cached?.details ? Math.min(opts.maxAgeMs ?? DETAIL_TTL_MS, DETAIL_TTL_MS) : FAILED_DETAIL_TTL_MS;
+  if (cached && Date.now() - cached.at < ttl) return cached.details;
   let details: EventDetails | null = null;
   try {
     const controller = new AbortController();

@@ -274,10 +274,13 @@ async function findFreshPending(candidate: SurfacingCandidate): Promise<BacklogI
   // Their time zone, so event dates are their local calendar dates.
   const timezone = candidate.city ? await getTimezoneForCity(candidate.city).catch(() => null) : null;
   const profile = profileFocusText(await getPersonSnapshot(candidate.userId).catch(() => null)) || null;
-  const matches = await getTieredRecommendation({ text: brief.searchText }, candidate.city, { userId: candidate.userId, source: "sweep", timezone, profile }).catch((err: any) => {
-    console.error("attemptEventSurfacing: getTieredRecommendation failed (non-fatal):", err?.message ?? err);
-    return [] as TierMatch[];
-  });
+  // No zone for their city: the engine uses Co's home zone and says so.
+  const matches = await getTieredRecommendation({ text: brief.searchText }, candidate.city, { userId: candidate.userId, source: "sweep", timezone, profile })
+    .then((r) => r.matches)
+    .catch((err: any) => {
+      console.error("attemptEventSurfacing: getTieredRecommendation failed (non-fatal):", err?.message ?? err);
+      return [] as TierMatch[];
+    });
   // Tier order as the mention priority (Tier 1 first by default) — same
   // "route people into Co's own events first" reasoning the old
   // decideBestMatch had, just spread across separate texts over time

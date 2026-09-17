@@ -32,6 +32,20 @@ async function reachOutToSubscriber(email: string, name?: string): Promise<void>
   await runCalendarFollowReachOutAgent({ userId: user.id, firstName: user.first_name, phoneNumber: user.phone_number });
 }
 
+// A captured (or Luma-retried) delivery replayed later must not re-trigger
+// scoring/announce. 5 minutes, generous for real network delivery delay,
+// narrow for a replay attempt (code review, 2026-09-17).
+const WEBHOOK_TIMESTAMP_WINDOW_SECONDS = 5 * 60;
+
+// Pure: whether a webhook timestamp (unix seconds, as a string, per Luma's
+// t= field) is close enough to now to accept. Exported for evals/proactive's
+// model-free rules.
+export function lumaTimestampInWindow(timestampSeconds: string, now: Date = new Date()): boolean {
+  const t = Number(timestampSeconds);
+  if (!Number.isFinite(t)) return false;
+  return Math.abs(now.getTime() - t * 1000) <= WEBHOOK_TIMESTAMP_WINDOW_SECONDS * 1000;
+}
+
 // Reject webhook calls that didn't come from Luma. Luma signs each webhook
 // with a secret generated when the webhook is created in the Luma UI
 // (calendar → Settings → Developer → Webhooks), starting with "whsec_" —
@@ -40,9 +54,19 @@ async function reachOutToSubscriber(email: string, name?: string): Promise<void>
 // hex-encoded. Requires req.body to be the raw Buffer for this route (see
 // server.ts's express.raw() on /luma/webhook) — same reasoning as Hume's
 // /co/webhook and Stripe's /payments/webhook.
+//
+// Code review, 2026-09-17: this used to skip verification entirely whenever
+// LUMA_WEBHOOK_SECRET was unset (fine in dev, but the same fallback in
+// production means anyone who ever captured one real signed delivery could
+// replay it forever, re-running scoring and the Co event announcement) and
+// never checked the timestamp even when a secret WAS configured, so a
+// captured-and-still-correctly-signed payload could also be replayed
+// forever. Now: missing secret fails CLOSED in production; the timestamp is
+// checked whenever a signature is checked, valid or not, so a replay past
+// the window is rejected before the signature is even compared.
 function validateLumaWebhook(req: Request): boolean {
   const secret = process.env.LUMA_WEBHOOK_SECRET;
-  if (!secret) return true; // skip when not configured (dev) — matches validateHumeWebhook's fallback
+  if (!secret) return process.env.NODE_ENV !== "production"; // dev-only fallback; production fails closed
 
   const header = req.headers["webhook-signature"] as string | undefined;
   if (!header) return false;
@@ -53,6 +77,7 @@ function validateLumaWebhook(req: Request): boolean {
   const timestamp = parts["t"];
   const signature = parts["v1"];
   if (!timestamp || !signature) return false;
+  if (!lumaTimestampInWindow(timestamp)) return false;
 
   const rawBody = (req.body as Buffer).toString("utf-8");
   const expected = createHmac("sha256", secret).update(`${timestamp}.${rawBody}`).digest("hex");
@@ -62,6 +87,25 @@ function validateLumaWebhook(req: Request): boolean {
   } catch {
     return false;
   }
+}
+
+// event.created must only ever trigger scoring/the Co event announcement
+// ONCE per event id, however many times Luma (or a replay) delivers it
+// (code review, 2026-09-17) — the announcement queue already dedupes per
+// PERSON, but nothing stopped scoring/announceCoEvent from re-running for
+// the same event on a second delivery. Reuses inbound_webhook_handles (the
+// existing generic webhook-dedup table, already cleaned up by the 3-day
+// retention cron in jobs/index.ts) rather than adding a new table.
+async function claimEventCreatedOnce(eventId: string): Promise<boolean> {
+  const { rows } = await pool
+    .query(`INSERT INTO inbound_webhook_handles (handle) VALUES ($1) ON CONFLICT (handle) DO NOTHING RETURNING handle`, [
+      `luma:event.created:${eventId}`,
+    ])
+    .catch((err: any) => {
+      console.error(`claimEventCreatedOnce: insert failed for ${eventId} (non-fatal, treated as already claimed):`, err?.message ?? err);
+      return { rows: [] };
+    });
+  return rows.length > 0;
 }
 
 // POST /luma/webhook — Luma calls this for every subscribed action type
@@ -137,12 +181,22 @@ router.post("/webhook", (req: Request, res: Response) => {
         console.error("luma/webhook: event.created payload missing api_id:", JSON.stringify(data));
         break;
       }
-      runScoringPass(eventId, data?.name, "event.created");
-      // Co's own event: everyone near it sees it right away
-      // (services/coEventAnnouncement.ts).
-      announceCoEvent(eventId)
-        .then((r) => console.log(`luma/webhook: event.created (${eventId}) — announced to ${r.sent}, queued ${r.queued}`))
-        .catch((err: any) => console.error(`luma/webhook: event.created (${eventId}) — announceCoEvent failed:`, err?.message ?? err));
+      // Idempotent per event id (code review, 2026-09-17) — see
+      // claimEventCreatedOnce above.
+      claimEventCreatedOnce(eventId)
+        .then((claimed) => {
+          if (!claimed) {
+            console.log(`luma/webhook: event.created (${eventId}) — already processed once, skipping (replay or duplicate delivery)`);
+            return;
+          }
+          runScoringPass(eventId, data?.name, "event.created");
+          // Co's own event: everyone near it sees it right away
+          // (services/coEventAnnouncement.ts).
+          announceCoEvent(eventId)
+            .then((r) => console.log(`luma/webhook: event.created (${eventId}) — announced to ${r.sent}, queued ${r.queued}`))
+            .catch((err: any) => console.error(`luma/webhook: event.created (${eventId}) — announceCoEvent failed:`, err?.message ?? err));
+        })
+        .catch((err: any) => console.error(`luma/webhook: event.created (${eventId}) — claim failed:`, err?.message ?? err));
       break;
     }
     case "guest.registered":

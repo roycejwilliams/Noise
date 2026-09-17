@@ -10,14 +10,11 @@ import pool from "../db/db.js";
 import { geocodeCity, haversineMiles, SAME_METRO_MAX_MILES } from "../services/geocoding.js";
 import type { TierMatch } from "../services/tieredRecommendation.js";
 import { gate, recordDecision, type GateCheck } from "./core.js";
+import { localToday } from "../services/eventOrder.js";
 
 export const TIER_LOOKAHEAD_DAYS: Record<1 | 2, number> = { 1: 30, 2: 14 };
 
 // ---------- helpers
-
-function todayUtc(now: Date): string {
-  return now.toISOString().slice(0, 10);
-}
 
 function daysBetween(fromIso: string, toIso: string): number {
   return (new Date(`${toIso}T00:00:00Z`).getTime() - new Date(`${fromIso}T00:00:00Z`).getTime()) / 86_400_000;
@@ -48,11 +45,18 @@ export type MatchFacts = {
   // The last day of a time frame they named ("Oct 5 - Oct 14th"), YYYY-MM-DD.
   // Replaces the fixed lookahead for this search: they asked about those days.
   askedUntil?: string | null;
+  // The person's time zone. "Today" is their calendar day, since event_date is
+  // their local date too (code review, 2026-09-17: today was UTC, so after
+  // about 5pm Pacific every same-evening event read as already happened).
+  // UTC only when no zone is known.
+  zone?: string | null;
 };
 
 export function checkLocation(match: TierMatch, facts: MatchFacts): GateCheck {
   const name = "location";
   if (match.tier === 3) return { name, pass: true, reason: "opportunity, not a place" };
+  // An online event is reachable from anywhere (code review, 2026-09-17).
+  if (match.online || match.details?.online) return { name, pass: true, reason: "online" };
   if (!facts.searchCity) return { name, pass: true, reason: "no place to be near" };
   if (!match.city) return { name, pass: false, reason: `event has no city on file, can't be claimed as near ${facts.searchCity}` };
   if (facts.distanceMiles !== null) {
@@ -67,9 +71,16 @@ export function checkLocation(match: TierMatch, facts: MatchFacts): GateCheck {
 
 export function checkTiming(match: TierMatch, facts: MatchFacts): GateCheck {
   const name = "timing";
-  const today = todayUtc(facts.now);
+  const today = localToday(facts.now, facts.zone);
   if (match.tier === 3) {
-    if (!match.deadline) return { name, pass: true, reason: "no stated deadline" };
+    // The post's own dates count too: a demo day last week was offered as
+    // live because only the deadline was checked (code review, 2026-09-17).
+    const isDate = (d: string | null | undefined): d is string => !!d && /^\d{4}-\d{2}-\d{2}$/.test(d);
+    const statedLast = isDate(match.statedDates?.end) ? match.statedDates!.end : isDate(match.statedDates?.start) ? match.statedDates!.start : null;
+    if (statedLast && daysBetween(today, statedLast) < 0) {
+      return { name, pass: false, reason: `it happened on ${statedLast}, already past` };
+    }
+    if (!match.deadline) return { name, pass: true, reason: statedLast ? `happens through ${statedLast}` : "no stated deadline" };
     return daysBetween(today, match.deadline) >= 0
       ? { name, pass: true, reason: `deadline ${match.deadline}` }
       : { name, pass: false, reason: `deadline ${match.deadline} already passed` };
@@ -206,13 +217,13 @@ export type GatedOut = { name: string; tier: number; reasons: string[]; url: str
 
 export async function gateMatches(
   matches: TierMatch[],
-  ctx: { userId: string | null; searchCity: string | null; checkRepeat?: boolean; evidenceByUrl?: Map<string, string>; now?: Date; gatedOut?: GatedOut[]; askedUntil?: string | null },
+  ctx: { userId: string | null; searchCity: string | null; checkRepeat?: boolean; evidenceByUrl?: Map<string, string>; now?: Date; gatedOut?: GatedOut[]; askedUntil?: string | null; zone?: string | null },
 ): Promise<TierMatch[]> {
   const now = ctx.now ?? new Date();
   const kept: TierMatch[] = [];
   for (const match of matches) {
     const distance =
-      ctx.searchCity && match.tier !== 3 && match.city ? await distanceBetween(ctx.searchCity, match.city) : null;
+      ctx.searchCity && match.tier !== 3 && match.city && !match.online ? await distanceBetween(ctx.searchCity, match.city) : null;
     const facts: MatchFacts = {
       searchCity: ctx.searchCity,
       distanceMiles: distance,
@@ -220,6 +231,7 @@ export async function gateMatches(
       alreadyOffered: ctx.userId && ctx.checkRepeat !== false ? await wasAlreadyOffered(ctx.userId, match) : false,
       now,
       askedUntil: ctx.askedUntil ?? null,
+      zone: ctx.zone ?? null,
     };
     const { ok, checks } = evaluateMatch(match, facts);
     if (ok) kept.push(match);

@@ -6,23 +6,7 @@ import pool from "../db/db.js";
 import { CO_VOICE, CO_TEXT_CHANNEL } from "../services/coVoice.js";
 import { groundReply, LAYER3_MODELS, renderReplyFacts, type GroundingResult, type ReplyFacts, addFact } from "../harness/replyGrounding.js";
 import { capitalizeSentences } from "../services/textStyle.js";
-
-// Co's most recent message in the thread, so a short reply can be read
-// against the question it's answering. In the full prompt that question sits
-// far above "They just said" and was getting lost (confirmed live,
-// 2026-09-10: "Before the event and at check-in", an answer to Co's own
-// question, got "Go ahead.").
-function lastCoLineBeforeLatestUser(recentConversation: string): string | null {
-  const lines = recentConversation.split("\n");
-  for (let i = lines.length - 1; i >= 0; i--) {
-    if (!lines[i].startsWith("Co replied: ")) continue;
-    const parts = [lines[i].slice("Co replied: ".length)];
-    for (let j = i + 1; j < lines.length && !/^(User said|User sent|Co replied|\[)/.test(lines[j]); j++) parts.push(lines[j]);
-    const text = parts.join(" ").trim();
-    return text.length > 400 ? `${text.slice(0, 400)}…` : text;
-  }
-  return null;
-}
+import { lastCoLine } from "../services/conversationClose.js";
 
 export type ConversationReplyInput = {
   // A search already ran and its results went out as their own messages, so
@@ -218,7 +202,7 @@ export async function runConversationReplyAgent(
     !input.recentOfferBurstActive &&
     (input.callAction === "would_benefit" || input.isThinProfileFirstMessage);
 
-  const lastCoMessage = lastCoLineBeforeLatestUser(input.recentConversation);
+  const lastCoMessage = lastCoLine(input.recentConversation);
 
   const system = `${CO_VOICE}
 ${input.personaPrompt ? `
@@ -315,12 +299,20 @@ ${input.missingTopic ? `  - Co doesn't yet have a good sense of ${input.missingT
     const fallback = "Hey, sorry, got a bit tangled up on my end. What's on your mind?";
     if (opts.dryRun) {
       console.log(`[conversationReply dryRun] fallback would send to ${input.userId}: "${fallback}"`);
+      state.sent = true;
+      state.lastReplyText = fallback;
     } else {
-      await input.sendCoReply({ phone: input.phoneNumber, message: fallback, asVoice: input.isVoice });
-      await writeMemory(input.userId, "text_exchange", `Co replied: ${fallback}`);
+      // Only counted when it really went out (2026-09-17 code review: a
+      // refused send used to be marked sent, so nobody noticed the silence).
+      const sent = await input.sendCoReply({ phone: input.phoneNumber, message: fallback, asVoice: input.isVoice });
+      if (sent !== false) {
+        await writeMemory(input.userId, "text_exchange", `Co replied: ${fallback}`);
+        state.sent = true;
+        state.lastReplyText = fallback;
+      } else {
+        console.error(`conversationReply: fallback reply also failed to send for user ${input.userId}`);
+      }
     }
-    state.sent = true;
-    state.lastReplyText = fallback;
   }
 
   // A link queued but never flushed (the model shared one and then stopped)

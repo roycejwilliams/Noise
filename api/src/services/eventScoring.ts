@@ -6,7 +6,7 @@ import { getEventDetails, getEventGuestList, listCalendarEvents, type LumaGuest,
 import { getActiveAsks, getActiveSeekingAsk, scoreAgainstStatedAsk } from "./matching.js";
 import { detectAndScheduleCheckins } from "./eventCheckinFollowUp.js";
 import sendblue, { cleanCoMessage } from "./sendblue.js";
-import { inRoomSendAllowed, recordInRoomSend } from "../harness/proactive.js";
+import { inRoomSendAllowed, recordInRoomSend, enqueueCandidate, type OutputRules } from "../harness/proactive.js";
 import { writeMemory } from "./memory.js";
 import { mergeWalkinsIntoGuestPool } from "./eventWalkinCheckin.js";
 import { CO_VOICE, CO_TEXT_CHANNEL } from "./coVoice.js";
@@ -252,7 +252,10 @@ async function wasAlreadyNudgedForMatch(eventId: string, personId: string): Prom
   return rows.length > 0;
 }
 
-async function markMatchNudgeSent(eventId: string, personId: string, candidateId: string, score: number): Promise<void> {
+// Exported for the Layer 7 registry's onSent hook (harness/proactiveRegistry.ts,
+// event_match_nudge) — the self-report/no-timing path below only marks the
+// nudge sent once the harness actually delivers it, not at enqueue time.
+export async function markMatchNudgeSent(eventId: string, personId: string, candidateId: string, score: number): Promise<void> {
   await pool
     .query(
       `INSERT INTO event_guest_match_nudges (event_id, person_id, candidate_id, score)
@@ -262,6 +265,47 @@ async function markMatchNudgeSent(eventId: string, personId: string, candidateId
     )
     .catch((err: any) => console.error("markMatchNudgeSent: insert failed (non-fatal):", err?.message ?? err));
 }
+
+// Atomic claim for the live in-room path (code review, 2026-09-17): the
+// same INSERT ON CONFLICT DO NOTHING as markMatchNudgeSent, but run BEFORE
+// drafting/sending rather than after, so two overlapping scoring passes for
+// the same person can't both pass the "not yet nudged" check and both send.
+// Returns whether THIS call won the claim.
+async function tryClaimMatchNudge(eventId: string, personId: string, candidateId: string, score: number): Promise<boolean> {
+  const { rows } = await pool
+    .query(
+      `INSERT INTO event_guest_match_nudges (event_id, person_id, candidate_id, score)
+       VALUES ($1, $2, $3, $4)
+       ON CONFLICT (event_id, person_id) DO NOTHING RETURNING event_id`,
+      [eventId, personId, candidateId, score],
+    )
+    .catch((err: any) => {
+      console.error("tryClaimMatchNudge: insert failed (non-fatal, treated as not claimed):", err?.message ?? err);
+      return { rows: [] };
+    });
+  return rows.length > 0;
+}
+
+// Frees a claim that didn't result in an actual send (draft rejected,
+// throttled, or the send itself failed) so a later pass can retry — without
+// this, a failed attempt would permanently mark the event as "already
+// nudged" with nothing ever delivered.
+async function releaseMatchNudgeClaim(eventId: string, personId: string): Promise<void> {
+  await pool
+    .query(`DELETE FROM event_guest_match_nudges WHERE event_id = $1 AND person_id = $2`, [eventId, personId])
+    .catch((err: any) => console.error("releaseMatchNudgeClaim: delete failed (non-fatal):", err?.message ?? err));
+}
+
+// Payload for the Layer 7 "event_match_nudge" proactive type (registered in
+// harness/proactiveRegistry.ts) — the no-real-timing branch below.
+export type EventMatchNudgePayload = {
+  eventId: string;
+  candidateId: string;
+  candidateFirstName: string;
+  score: number;
+  message: string;
+  rules: OutputRules;
+};
 
 // One-time, not a cooldown (see the table's migration comment) — checked
 // BEFORE the shared proactive-nudge throttle so a person already nudged for
@@ -282,80 +326,131 @@ async function maybeSendMatchNudge(
   // honestly tell this person, so no nudge.
   if (!top.shareReason) return false;
 
-  // Consent harness (harness/introConsent.ts): event window and one nudge
-  // per event are hard checks; eventTiming is null only for the non-Luma
-  // self-reported path (eventMatching.ts), where there's no live window.
-  const preChecks = [
-    checkOneNudgePerEvent(await wasAlreadyNudgedForMatch(eventId, person.user_id)),
-    checkEventWindow(eventTiming, new Date()),
-  ];
-  if (preChecks.some((c) => !c.pass)) return false;
+  const oneNudgeCheck = checkOneNudgePerEvent(await wasAlreadyNudgedForMatch(eventId, person.user_id));
+  if (!oneNudgeCheck.pass) return false;
   if (!(await gateShareReason(person.user_id, candidate.user_id, top.shareReason, "eventScoring.matchNudge"))) return false;
 
-  if (opts.dryRun) {
-    console.log(
-      `[eventScoring dryRun] would nudge ${person.user_id} about ${candidate.user_id} at ${eventId} (score ${top.score})`,
+  const candidateOptedIn = await eventOptedIn(eventId, candidate.user_id, person.user_id);
+  const draftFacts = {
+    otherFirstName: candidate.first_name,
+    otherOptedIn: candidateOptedIn,
+    recipientOptedIn: false,
+    recipientFirstName: person.first_name,
+    otherStatedAsks: getActiveAsks(candidate.intent),
+    otherPhone: candidate.phone_number,
+    otherEmail: candidate.email,
+  };
+  const draftFn = async (feedback: string | null) => {
+    const { text } = await generateText({
+      model: anthropic(NAMING_DRAFT_MODEL),
+      experimental_telemetry: { isEnabled: true, functionId: "eventScoring.matchNudge.draft" },
+      prompt: matchNudgePrompt({ recipientFirstName: person.first_name, otherFirstName: candidate.first_name, eventName, shareReason: top.shareReason!, feedback }),
+    });
+    return cleanCoMessage(text.trim());
+  };
+
+  if (eventTiming) {
+    // Live in-room path: only makes sense while the event is actually
+    // happening, so it stays outside the Layer 7 daily pick (see that
+    // harness's own header comment) and sends immediately.
+    const preChecks = [oneNudgeCheck, checkEventWindow(eventTiming, new Date())];
+    if (preChecks.some((c) => !c.pass)) return false;
+
+    if (opts.dryRun) {
+      console.log(`[eventScoring dryRun] would nudge ${person.user_id} about ${candidate.user_id} at ${eventId} (score ${top.score})`);
+      return false;
+    }
+
+    // Claim atomically before drafting (code review, 2026-09-17): the
+    // scoring debounce only coalesces webhooks that arrive within its 15s
+    // window, not two full scoring passes that each take longer than that
+    // to run — two overlapping passes could otherwise both see "not yet
+    // nudged" via oneNudgeCheck above and both draft and send. This insert
+    // is the same one markMatchNudgeSent used to do only at the very end;
+    // doing it first and atomically means only one pass ever wins the row.
+    if (!(await tryClaimMatchNudge(eventId, person.user_id, candidate.user_id, top.score))) {
+      console.log(`eventScoring: match nudge for ${person.user_id} at ${eventId} already claimed by another pass`);
+      return false;
+    }
+
+    const message = await draftWithConsent({ decision: "eventScoring.matchNudge", recipientId: person.user_id, preChecks, facts: draftFacts }, draftFn);
+    if (!message) {
+      await releaseMatchNudgeClaim(eventId, person.user_id); // free it up so a later pass can retry
+      return false;
+    }
+
+    if (!(await inRoomSendAllowed(person.user_id, eventId))) {
+      console.log(`eventScoring: match nudge throttled for ${person.user_id} (in-room text limit for this event reached)`);
+      await releaseMatchNudgeClaim(eventId, person.user_id);
+      return false;
+    }
+
+    try {
+      await sendblue.messages.send({ number: person.phone_number, content: message, from_number: process.env.SENDBLUE_PHONE_NUMBER! });
+    } catch (err: any) {
+      console.error(`eventScoring: match nudge send failed for ${person.user_id} (non-fatal):`, err?.message ?? err);
+      await releaseMatchNudgeClaim(eventId, person.user_id); // send failed — free the claim so a later pass can retry
+      return false;
+    }
+
+    await recordInRoomSend(person.user_id, `in_room:match:${eventId}`, message);
+    // No markMatchNudgeSent call needed here — the claim above already
+    // wrote the row with the final candidate_id/score.
+    await writeMemory(
+      person.user_id,
+      "event_guest_match_nudge",
+      `Nudged ${person.first_name} that ${candidate.first_name} is also going to "${eventName}" and worth meeting: ${top.shareReason} (score ${top.score})`,
     );
+    // Royce, 2026-09-08 sweep — the descriptive log above is a summary, not
+    // the actual text sent, so recentConversation (routes/sendblue.ts, which
+    // only reads text_exchange rows) never saw this message either.
+    await writeMemory(person.user_id, "text_exchange", `Co replied: ${message}`).catch((err: any) =>
+      console.error("eventScoring: match nudge text_exchange log failed (non-fatal):", err?.message ?? err),
+    );
+    return true;
+  }
+
+  // No real event timing (code review, 2026-09-17): the self-reported/
+  // recommended-event path (eventMatching.ts) has no Luma start_at/end_at
+  // to check an "in-room" window against, so checkEventWindow's "not a live
+  // event, nothing to check" case used to pass here and this sent
+  // immediately via the same raw sendblue in-room path above — days before
+  // the event, at any hour, over the daily cap. There's no live event to be
+  // "in the room" for, so instead of sending directly this drafts and
+  // consent-checks the message now (the consent facts need to be current),
+  // then hands it to the Layer 7 daily pick, which enforces local hours,
+  // the daily/weekly caps, opt-out, and the unanswered-text pause.
+  if (opts.dryRun) {
+    console.log(`[eventScoring dryRun] would queue an event_match_nudge for ${person.user_id} about ${candidate.user_id} (${eventId}, score ${top.score})`);
     return false;
   }
 
-  const candidateOptedIn = await eventOptedIn(eventId, candidate.user_id, person.user_id);
-  const message = await draftWithConsent(
-    {
-      decision: "eventScoring.matchNudge",
-      recipientId: person.user_id,
-      preChecks,
-      facts: {
-        otherFirstName: candidate.first_name,
-        otherOptedIn: candidateOptedIn,
-        recipientOptedIn: false,
-        recipientFirstName: person.first_name,
-        otherStatedAsks: getActiveAsks(candidate.intent),
-        otherPhone: candidate.phone_number,
-        otherEmail: candidate.email,
-      },
-    },
-    async (feedback) => {
-      const { text } = await generateText({
-        model: anthropic(NAMING_DRAFT_MODEL),
-        experimental_telemetry: { isEnabled: true, functionId: "eventScoring.matchNudge.draft" },
-        prompt: matchNudgePrompt({ recipientFirstName: person.first_name, otherFirstName: candidate.first_name, eventName, shareReason: top.shareReason!, feedback }),
-      });
-      return cleanCoMessage(text.trim());
-    },
-  );
+  const message = await draftWithConsent({ decision: "eventScoring.matchNudge", recipientId: person.user_id, preChecks: [oneNudgeCheck], facts: draftFacts }, draftFn);
   if (!message) return false;
 
-  if (!(await inRoomSendAllowed(person.user_id, eventId))) {
-    console.log(`eventScoring: match nudge throttled for ${person.user_id} (in-room text limit for this event reached)`);
-    return false;
-  }
-
-  try {
-    await sendblue.messages.send({
-      number: person.phone_number,
-      content: message,
-      from_number: process.env.SENDBLUE_PHONE_NUMBER!,
-    });
-  } catch (err: any) {
-    console.error(`eventScoring: match nudge send failed for ${person.user_id} (non-fatal):`, err?.message ?? err);
-    return false;
-  }
-
-  await recordInRoomSend(person.user_id, `in_room:match:${eventId}`, message);
-  await markMatchNudgeSent(eventId, person.user_id, candidate.user_id, top.score);
-  await writeMemory(
-    person.user_id,
-    "event_guest_match_nudge",
-    `Nudged ${person.first_name} that ${candidate.first_name} is also going to "${eventName}" and worth meeting: ${top.shareReason} (score ${top.score})`,
-  );
-  // Royce, 2026-09-08 sweep — the descriptive log above is a summary, not
-  // the actual text sent, so recentConversation (routes/sendblue.ts, which
-  // only reads text_exchange rows) never saw this message either.
-  await writeMemory(person.user_id, "text_exchange", `Co replied: ${message}`).catch((err: any) =>
-    console.error("eventScoring: match nudge text_exchange log failed (non-fatal):", err?.message ?? err),
-  );
-  return true;
+  const payload: EventMatchNudgePayload = {
+    eventId,
+    candidateId: candidate.user_id,
+    candidateFirstName: candidate.first_name,
+    score: top.score,
+    message,
+    rules: { maxSentences: 2, maxChars: 320 },
+  };
+  // targetKey is keyed on the real people involved (eventId here is already
+  // stable per-pair for the no-Luma-id case — see eventMatching.ts's
+  // pickCanonicalEventId), so a re-score before this ever sends just updates
+  // the same pending candidate instead of queuing a duplicate, and once
+  // sent it can never be queued again for this exact pair.
+  const { queued } = await enqueueCandidate({
+    userId: person.user_id,
+    type: "event_match_nudge",
+    targetKey: `event_match_nudge:${eventId}:${candidate.user_id}`,
+    topicKey: `event_match_nudge:${eventId}`,
+    summary: `Nudge that ${candidate.first_name} is also going to "${eventName}" and worth meeting (score ${top.score})`,
+    payload,
+    expiresAt: new Date(Date.now() + 14 * 24 * 60 * 60 * 1000),
+  });
+  return queued;
 }
 
 // The additive-offer path for someone who ALREADY has a match nudge for this
@@ -373,6 +468,15 @@ async function maybeSendAdditiveOffer(
   opts: { dryRun?: boolean },
 ): Promise<boolean> {
   if (!newCandidates.length) return false;
+  // This is strictly the in-room "more people just checked in" follow-up to
+  // an already-sent live nudge, so it only makes sense with real event
+  // timing to be in-room for. Without it (code review, 2026-09-17: same
+  // class of bug as maybeSendMatchNudge's no-timing branch —
+  // checkEventWindow(null, ...) passes trivially), skip rather than send
+  // immediately outside hours/caps; there's no live-event reason to rush an
+  // "even more people" follow-up, so it's fine to just wait for the next
+  // scoring pass once this event does have real timing, or drop it.
+  if (!eventTiming) return false;
   // Same "don't nudge before the event starts or in its last stretch" gate
   // as the original match nudge — a new arrival scored an hour before start
   // is not something to text about yet.
@@ -479,6 +583,7 @@ export async function scoreMatchedGroup(
         { userId: person.user_id, firstName: person.first_name, phoneNumber: person.phone_number },
         eventName,
         opts,
+        eventTiming?.end_at ?? null,
       ).catch((err: any) => {
         console.error(`eventScoring: ask solicitation failed for ${person.user_id} (non-fatal):`, err?.message ?? err);
         return { sent: false };

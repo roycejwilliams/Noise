@@ -26,7 +26,14 @@ export async function enqueueDuePostCallFollowUps(): Promise<void> {
   );
   for (const row of rows) {
     const createdAt = new Date(row.created_at);
-    await enqueueCandidate({
+    // Only mark 'queued' when enqueueCandidate actually queued it (code
+    // review, 2026-09-17): this used to mark 'queued' unconditionally,
+    // including when the call threw (swallowed by .catch, ignoring the
+    // result) or came back {queued:false} (already sent/dropped, an
+    // idempotency no-op, not success) — either way harness_status='queued'
+    // made this row look like a real in-flight candidate forever, with
+    // nothing ever polling it again to notice it wasn't.
+    const result = await enqueueCandidate({
       userId: row.user_id,
       type: "post_call",
       targetKey: `post_call:${row.id}`,
@@ -34,8 +41,11 @@ export async function enqueueDuePostCallFollowUps(): Promise<void> {
       payload: { followUpId: row.id },
       dueAt: new Date(createdAt.getTime() + 20 * 60 * 1000),
       expiresAt: new Date(createdAt.getTime() + POST_CALL_EXPIRY_HOURS * 60 * 60 * 1000),
-    }).catch((err: any) => console.error(`postCallFollowUp: enqueue failed for ${row.id} (non-fatal):`, err?.message ?? err));
-    await pool.query(`UPDATE post_call_follow_ups SET harness_status = 'queued' WHERE id = $1`, [row.id]);
+    }).catch((err: any) => {
+      console.error(`postCallFollowUp: enqueue failed for ${row.id} (non-fatal):`, err?.message ?? err);
+      return { queued: false };
+    });
+    await pool.query(`UPDATE post_call_follow_ups SET harness_status = $2 WHERE id = $1`, [row.id, result.queued ? "queued" : "skipped"]);
   }
 }
 
