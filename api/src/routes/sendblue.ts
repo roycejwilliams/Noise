@@ -2053,14 +2053,19 @@ Return ONLY valid JSON, no preamble: {"date": "YYYY-MM-DD or null", "time": "HH:
               const alreadyRecommended = ("alreadyRecommended" in recommendation ? recommendation.alreadyRecommended : null) ?? [];
               const gatedOut = ("scope" in recommendation ? recommendation.scope?.gatedOut : null) ?? [];
               if (alreadyRecommended.length) {
+                // Include the actual date, not just the name (2026-09-17
+                // code review: without it, the reply had nothing to confirm
+                // the match against and hedged into a factually wrong "but
+                // that's not [the date they asked about]" for an event that
+                // genuinely was on that date).
                 addFact(
                   replyFacts,
                   "did_this_turn",
-                  `Searched again — the only real match is "${alreadyRecommended.map((m) => m.name).join('", "')}", which you already told them about earlier.`,
+                  `Searched again — the only real match is "${alreadyRecommended.map((m) => `${m.name}"${"event_date" in m && m.event_date ? ` on ${dayLabel(m.event_date)}` : ""}`).join(', "')}, which you already told them about earlier.`,
                 );
                 addInstruction(
                   replyFacts,
-                  "You already told them about this earlier — don't say you found nothing. Say plainly that what you already mentioned is still the real answer for what they're asking now (name it by name, naturally, not as if it's new). Don't resend its link or re-describe it in full unless they ask for the details again.",
+                  "You already told them about this earlier — don't say you found nothing. Say plainly that what you already mentioned is still the real answer for what they're asking now (name it by name, naturally, not as if it's new, and confirm the date matches what they asked using the date in the facts — don't guess or hedge on whether it's the same date). Don't resend its link or re-describe it in full unless they ask for the details again.",
                 );
               } else if (gatedOut.length) {
                 addFact(
