@@ -275,6 +275,37 @@ export async function runMigrations(): Promise<void> {
       console.error("users.intake_asked migration failed:", err),
     );
 
+  // Co is referral-only (2026-09-17, Royce: "we're trying to grow so large
+  // that we make a secret network" — a referral gate keeps who's in it tied
+  // to who's already in it, instead of open signup). Same
+  // default-true/false-only-on-placeholder-creation convention as
+  // identity_captured/intake_asked above: every pre-existing row is
+  // unaffected, only a brand-new placeholder row (services/identity.ts)
+  // starts unverified and gets asked for a code before intake begins.
+  await pool
+    .query(`ALTER TABLE users ADD COLUMN IF NOT EXISTS invite_verified BOOLEAN NOT NULL DEFAULT true`)
+    .catch((err: Error) => console.error("users.invite_verified migration failed:", err));
+  await pool
+    .query(`ALTER TABLE users ADD COLUMN IF NOT EXISTS invite_asked BOOLEAN NOT NULL DEFAULT true`)
+    .catch((err: Error) => console.error("users.invite_asked migration failed:", err));
+
+  // Single-use invite codes (Royce, 2026-09-17: "referral code to join").
+  // created_by is nullable for founder-seeded codes with no referring
+  // member; used_by/used_at are set atomically on redemption
+  // (services/inviteCodes.ts's row-locked transaction, same pattern as
+  // routes/referrals.ts's existing referral-credit spend).
+  await pool
+    .query(
+      `CREATE TABLE IF NOT EXISTS invite_codes (
+        code TEXT PRIMARY KEY,
+        created_by UUID REFERENCES users(id) ON DELETE SET NULL,
+        used_by UUID REFERENCES users(id) ON DELETE SET NULL,
+        used_at TIMESTAMPTZ,
+        created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+      )`,
+    )
+    .catch((err: Error) => console.error("invite_codes table init failed:", err));
+
   // True no-answer/busy/failed/canceled calls (nobody and nothing picked up)
   // get a delayed follow-up text instead of an instant one — see
   // sendMissedCallFollowUp's call sites in co.ts and the follow-up cron.

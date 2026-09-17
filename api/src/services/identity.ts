@@ -24,10 +24,14 @@ export async function findOrCreateUserByPhone(phoneNumber: string): Promise<any>
   const existing = await pool.query(`SELECT * FROM users WHERE phone_number = $1`, [phoneNumber]);
   if (existing.rows[0]) return existing.rows[0];
 
+  // Co is referral-only (2026-09-17) — a brand-new number starts
+  // unverified and gets asked for an invite code before intake begins
+  // (routes/sendblue.ts). Same false-only-on-placeholder-creation
+  // convention as identity_captured/intake_asked below.
   const suffix = Math.random().toString(36).slice(2, 10);
   const created = await pool.query(
-    `INSERT INTO users (first_name, last_name, email, phone_number, username, contact_verified, identity_captured, intake_asked)
-     VALUES ('', '', $1, $2, $3, true, false, false)
+    `INSERT INTO users (first_name, last_name, email, phone_number, username, contact_verified, identity_captured, intake_asked, invite_verified, invite_asked)
+     VALUES ('', '', $1, $2, $3, true, false, false, false, false)
      RETURNING *`,
     [`pending-${suffix}${PENDING_EMAIL_DOMAIN}`, phoneNumber, `pending_${suffix}`],
   );

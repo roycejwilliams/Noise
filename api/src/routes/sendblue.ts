@@ -22,6 +22,7 @@ import { detectSeekingMode } from "../services/emotionalTone.js";
 import { getEmotionalContext, readTextEmotion, recordEmotionSignals, renderEmotionalContext } from "../harness/emotion.js";
 import { buildContextSummary } from "../services/callContext.js";
 import { findOrCreateUserByPhone, hasPendingEmail, splitFullName } from "../services/identity.js";
+import { redeemInviteCode } from "../services/inviteCodes.js";
 import { claimTextLogin } from "../services/textLogin.js";
 import {
   INTAKE_EXTRACT_MODEL,
@@ -627,6 +628,42 @@ export function sendblueRouter(io: Server): Router {
               console.error("sendblue: recordCheckin failed (non-fatal):", err?.message ?? err),
             );
             walkinCheckinEventName = checkin.eventName;
+          }
+        }
+
+        // Step 1.1 — Invite code gate for a brand-new contact. Co is
+        // referral-only (2026-09-17, Royce: "we're trying to grow so large
+        // that we make a secret network" — density and fit over open
+        // signup volume). Checked before identity intake so an unverified
+        // number never starts the name/email flow. Every pre-existing row
+        // has invite_verified defaulted true (migrations.ts), so this only
+        // ever applies to a genuinely brand-new placeholder row.
+        if (!user.invite_verified) {
+          if (!user.invite_asked) {
+            // First contact ever from an unverified number — ask for a
+            // code. Nothing in this inbound message is treated as a code
+            // yet, since Co hasn't asked for one (same "don't parse the
+            // greeting as an answer" shape as the intake_asked branch below).
+            if (hasText) await logTextExchange(user.id, `User said: ${content}`);
+            await pool.query(`UPDATE users SET invite_asked = true WHERE id = $1`, [user.id]);
+            await sendAndLog(user.id, number, "Co is invite-only right now. What's your invite code?");
+            return res.status(200).send({ received: true, action: "invite_code_requested" });
+          }
+
+          await logTextExchange(
+            user.id,
+            hasText ? `User said: ${content}` : "User sent a photo or voice memo (invite code expected)",
+          );
+          const redeemed = hasText ? await redeemInviteCode(content, user.id) : { ok: false as const };
+          if (redeemed.ok) {
+            await pool.query(`UPDATE users SET invite_verified = true WHERE id = $1`, [user.id]);
+            // Reflected locally so the SAME turn falls through into real
+            // identity intake below instead of making them text again.
+            user = { ...user, invite_verified: true };
+            await sendAndLog(user.id, number, "You're in.");
+          } else {
+            await sendAndLog(user.id, number, "That code doesn't look right. Double check it and send it again.");
+            return res.status(200).send({ received: true, action: "invite_code_rejected" });
           }
         }
 
