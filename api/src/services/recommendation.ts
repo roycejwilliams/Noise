@@ -3,7 +3,6 @@ import { DateTime } from "luxon";
 import { isBrowseAsk, parseAskWindow } from "./askWindow.js";
 import { getTimezoneForCity } from "./geocoding.js";
 import { anthropic } from "@ai-sdk/anthropic";
-import { propagateAttributes } from "@langfuse/tracing";
 import pool from "../db/db.js";
 import { getTieredRecommendation, takeLastSearchScope, type SearchScope, type TierMatch } from "./tieredRecommendation.js";
 import { generateEmbedding } from "./embeddings.js";
@@ -12,9 +11,8 @@ import { parseModelJson } from "./modelJson.js";
 import { getEmotionalContext, renderEmotionalContext } from "../harness/emotion.js";
 
 // Model policy (Royce, 2026-09-14): Haiku for the narrow message-to-search
-// rewrite; Sonnet 5 for the fallback suggestion, which nothing re-checks.
+// rewrite. (The Sonnet generic-suggestion fallback was removed 2026-09-16.)
 const REWRITE_MODEL = MODELS.haiku;
-const SUGGEST_MODEL = MODELS.sonnet;
 
 // Intent-Layer-only real action: Co can actually invoke this (voice via
 // Hume's tool_call plane, iMessage via a direct call from the ongoing-chat
@@ -24,9 +22,8 @@ const SUGGEST_MODEL = MODELS.sonnet;
 // activity/community/next-step, never a real business or place, since we
 // have no real venue data to ground that (venue lookup was removed
 // 2026-09-16 — tiers 1-3 are the whole search).
-// matches is only present when this came from the tiered engine (real
-// events/opportunities, each with its own url) — the generic LLM-guessed
-// fallback below has no matches array since it never has a real link.
+// A result is available only when the tiered engine found real
+// events/opportunities, each with its own url; otherwise it says why not.
 // Royce, 2026-09-02: "the format should just be the link when it just
 // shows the preview then a description... we should be able to identify
 // which tier is what" — the old flattened match/reason strings gave
@@ -104,8 +101,8 @@ If yes, rewrite it as one standalone sentence describing what to look for, keepi
 
 export async function generateRecommendation(userId: string, currentMessage?: string): Promise<RecommendationResult> {
   // What the tiered search actually covered this turn, attached to whatever
-  // this returns so the decision record shows it even when the answer is a
-  // generic idea rather than a real match (2026-09-16).
+  // this returns so the decision record shows it even when nothing real was
+  // found (2026-09-16).
   let scopeForTurn: SearchScope | null = null;
   try {
     const { rows } = await pool.query(
@@ -128,30 +125,9 @@ export async function generateRecommendation(userId: string, currentMessage?: st
       Boolean(latestIntent?.text);
     if (!hasSignal) return NOT_ENOUGH_DATA;
 
-    const knownData = [
-      profile.life_chapters?.length ? `Life chapter: ${profile.life_chapters.join(", ")}` : null,
-      profile.city ? `City: ${profile.city}` : null,
-      profile.goals?.length ? `Goals: ${profile.goals.join("; ")}` : null,
-      profile.blockers?.length ? `Blockers: ${profile.blockers.join("; ")}` : null,
-      profile.activity_preferences?.length
-        ? `Activity preferences: ${profile.activity_preferences.join(", ")}`
-        : null,
-      profile.availability_pattern ? `Availability: ${profile.availability_pattern}` : null,
-      profile.emotional_state ? `Emotional state as of the last call: ${profile.emotional_state}` : null,
-      latestIntent?.text ? `Stated ask (${latestIntent.type}): ${latestIntent.text}` : null,
-      latestIntent?.concrete_preferences?.length
-        ? `Concrete preferences: ${latestIntent.concrete_preferences.join(", ")}`
-        : null,
-      latestIntent?.wants?.length ? `Things they want or miss: ${latestIntent.wants.join(", ")}` : null,
-    ]
-      .filter(Boolean)
-      .join("\n");
-
     // Tiered engine first (Tier 1 Co event → Tier 2 public event → Tier 3
-    // real opportunity via X) — real, grounded, never invented. Only falls
-    // through to the old generic LLM-category behavior below if all three
-    // tiers come back empty, same "something is better than silence" logic
-    // this function always had, just no longer the FIRST thing tried.
+    // real opportunity via X) — real, grounded, never invented. If all
+    // three come back empty, that's the answer: no generic suggestion.
     // The raw text message is not a search request ("Any details?" and
     // "where's the link?" were being searched as-is). Turn it into one, or
     // stop if it isn't asking for something new.
@@ -248,59 +224,12 @@ export async function generateRecommendation(userId: string, currentMessage?: st
       }
     }
 
-    const { text: raw } = await propagateAttributes(
-      { userId, traceName: "co.recommendation.generate" },
-      () =>
-        generateText({
-          model: anthropic(SUGGEST_MODEL),
-          experimental_telemetry: { isEnabled: true, functionId: "co.recommendation.generate" },
-          prompt: `Here is everything actually known about this person, captured from real conversations:
-${knownData}
-${currentMessage ? `\nWhat they just said, right now: "${currentMessage}"\n\nOnly recommend something if it's actually relevant to what they JUST said — not just relevant to their history in general. If they've moved on to a different topic than what the data above centers on, say there isn't enough to go on for THIS message rather than redirecting back to an old topic.` : ""}
-
-Based ONLY on this, name ONE concrete recommendation — a type of activity, group, or community, not a specific real business or venue (we have no real venue data, never invent one). Ground it in something they actually said. If nothing here is specific enough to recommend anything real, say so.
-
-Return ONLY valid JSON, no preamble or markdown:
-{"available": true, "match": "a consistent hiking or running group", "reason": "one sentence, grounded only in the data above"}
-or
-{"available": false, "reason": "why there isn't enough to go on"}`,
-        }),
-    );
-
-    const clean = raw.trim();
-    let parsed: RecommendationResult | null = null;
-    try {
-      parsed = parseModelJson(clean);
-    } catch {
-      return NOT_ENOUGH_DATA;
-    }
-    if (!parsed || typeof parsed.available !== "boolean") return NOT_ENOUGH_DATA;
-    if (!parsed.available) return { available: false, reason: parsed.reason || NOT_ENOUGH_DATA.reason };
-    if (!("match" in parsed) || !parsed.match) return NOT_ENOUGH_DATA;
-
-    const result: RecommendationResult = { available: true, match: parsed.match, reason: parsed.reason ?? "", scope: scopeForTurn };
-
-    {
-      const fallbackContent = `Co surfaced a recommendation — ${result.match}: ${result.reason}`;
-      await pool
-        .query(`INSERT INTO co_memories (user_id, memory_type, content) VALUES ($1, 'recommendation', $2) RETURNING id`, [
-          userId,
-          fallbackContent,
-        ])
-        .then((mem) =>
-          generateEmbedding(fallbackContent)
-            .then((emb) =>
-              pool.query(`UPDATE co_memories SET content_embedding = $1::vector WHERE id = $2`, [
-                `[${emb.join(",")}]`,
-                mem.rows[0].id,
-              ]),
-            )
-            .catch((err) => console.error("Recommendation memory embedding failed (non-fatal):", err)),
-        )
-        .catch((err) => console.error("Recommendation memory write failed (non-fatal):", err));
-    }
-
-    return result;
+    // No generic "type of thing" fallback (Royce, 2026-09-16: "drop the
+    // fallback"). When the search finds nothing real, the answer is that it
+    // found nothing. The old fallback ("a weekend founder/builder meetup at a
+    // casual cafe") read like a real find, the person asked Co to find it,
+    // and that made-up description then narrowed their next real search.
+    return { available: false, reason: "searched and found nothing real that fits yet", scope: scopeForTurn };
   } catch (err: any) {
     console.error("generateRecommendation failed (non-fatal):", err?.message ?? err);
     return { available: false, reason: "lookup failed" };

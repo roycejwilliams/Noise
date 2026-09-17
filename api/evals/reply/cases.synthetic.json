@@ -203,21 +203,27 @@
     "groundedDraft": false
   },
   {
-    "id": "s12_good_recommendation_idea",
-    "message": "I'd like to find more people who are into climbing",
-    "recentConversation": "Co replied: What have you been doing to meet people since the move?",
+    "id": "s12_nothing_found_says_so",
+    "message": "Anything you see anywhere for an event I can attend? Something that aligns with me?",
+    "recentConversation": "User said: Anything you see anywhere for an event I can attend? Something that aligns with me?",
     "facts": [
       {
-        "kind": "known",
-        "text": "An idea to suggest (a type of thing, not a specific place, and there's no link): \"a climbing gym's beginner meetup or social climb night\". Why: they just moved and want friends with the same hobby."
+        "kind": "did_this_turn",
+        "text": "Searched just now for what they asked for and found nothing real that fits yet (searched and found nothing real that fits yet)."
       }
     ],
-    "instructions": [
-      "You just thought of a real recommendation for them: \"a climbing gym's beginner meetup or social climb night\". Work this into your reply naturally, as your own suggestion. This is an idea, not a specific place with a link."
+    "draft": "I looked and didn't find anything real that fits you yet. Want me to keep an eye out?",
+    "forbidden": [
+      "casual cafe",
+      "worth scouting",
+      "something like a",
+      "could be worth"
     ],
-    "draft": "Social climb nights at a gym are a good way in, people actually talk between routes. Have you found a gym near you yet?",
-    "forbidden": [],
-    "groundedDraft": true
+    "groundedDraft": true,
+    "style": "capitalized",
+    "instructions": [
+      "You searched and found nothing real yet. Say that plainly. Don't make up a suggestion."
+    ]
   },
   {
     "id": "style_caps_after_lowercase_co",
