@@ -1,7 +1,7 @@
 // Model-free checks for the Layer 3 gate's deterministic rules. Runs in a
 // second, no API calls: npx tsx evals/reply/codeChecks.ts
 import { rewriteKeepsAsk, shouldCacheSearch, xPostFitsWindow } from "../../src/services/searchRules.js";
-import { orderForOffering } from "../../src/services/eventOrder.js";
+import { localDate, orderForOffering } from "../../src/services/eventOrder.js";
 import { capitalizeSentences, looksLikeMetaReply } from "../../src/services/textStyle.js";
 import { nearestPlace, parseDiscoverPlaces } from "../../src/services/lumaDiscovery.js";
 import { DateTime } from "luxon";
@@ -212,6 +212,8 @@ onboardingCaseCases.push(
     [!xPostFitsWindow({ start: "2026-10-05", end: "2026-10-11" }, weekend).ok, "an X post dated outside the window is kept out"],
     [!xPostFitsWindow(null, weekend).ok, "an X post with no date is kept out of a time-frame ask"],
     [xPostFitsWindow(null, null).ok, "without a time frame, a dateless X post is fine"],
+    [localDate("2026-09-18T02:00:00.000Z", "America/Los_Angeles") === "2026-09-17", "a 7pm Thursday SF event is Thursday, not Friday"],
+    [localDate("2026-09-18T02:00:00.000Z", null) === "2026-09-18", "without a zone, the UTC date is kept"],
   );
 }
 

@@ -18,7 +18,7 @@
 import { generateEmbeddings } from "./embeddings.js";
 import { cosineSimilarity } from "./lumaDiscovery.js";
 import { fetchLumaEventDetails, type EventDetails } from "./eventDetails.js";
-import { orderForOffering } from "./eventOrder.js";
+import { localDate, orderForOffering } from "./eventOrder.js";
 
 export const RELEVANCE_BAR_WITH_DESCRIPTION = 0.3;
 const DESCRIPTION_CHARS = 500;
@@ -41,7 +41,7 @@ function rankingText(name: string, details: EventDetails | undefined): string {
 export async function rankEventsByDescription<T extends { name: string; url?: string | null; start_at: string }>(
   candidates: T[],
   askText: string,
-  opts: { limit?: number; bar?: number; topScores?: { name: string; similarity: number }[] } = {},
+  opts: { limit?: number; bar?: number; topScores?: { name: string; similarity: number }[]; zone?: string | null } = {},
 ): Promise<{ ranked: RankedEvent<T>[]; closest: Closest | null }> {
   const pool = candidates.slice(0, MAX_CANDIDATES);
   if (!askText || !pool.length) return { ranked: [], closest: null };
@@ -69,7 +69,7 @@ export async function rankEventsByDescription<T extends { name: string; url?: st
   const ranked = orderForOffering(scored.filter((e) => e.similarity >= bar)).slice(0, opts.limit ?? 6);
   const best = byScore[0];
   const closest: Closest | null = best
-    ? { name: best.name, url: best.url ?? null, date: best.start_at.slice(0, 10), similarity: Math.round(best.similarity * 1000) / 1000 }
+    ? { name: best.name, url: best.url ?? null, date: localDate(best.start_at, opts.zone), similarity: Math.round(best.similarity * 1000) / 1000 }
     : null;
   return { ranked, closest };
 }

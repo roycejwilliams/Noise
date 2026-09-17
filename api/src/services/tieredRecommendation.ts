@@ -6,6 +6,7 @@ import { anthropic } from "@ai-sdk/anthropic";
 import { listCalendarEvents } from "./luma.js";
 import { fetchPublicEvents } from "./lumaDiscovery.js";
 import { rankEventsByDescription, type Closest } from "./eventRanking.js";
+import { localDate } from "./eventOrder.js";
 import { fetchLumaEventDetails, type EventDetails, type OpportunityDetails } from "./eventDetails.js";
 import { searchRecentPosts } from "./xSearch.js";
 import { withinRadius } from "./geocoding.js";
@@ -278,17 +279,6 @@ async function tryTier1(ask: StatedIntent, userCity: string | null, filter?: (st
 // directly (rather than lumaDiscovery's findEventMatchingAsk wrapper) so an
 // optional near-term `filter` can be applied before ranking — same reuse
 // reasoning as tryTier1 above. `userCity` drives the same hard radius filter.
-// The event's calendar date where they are. start_at is UTC, so a 7pm
-// Thursday event in San Francisco is already Friday in UTC; using that date
-// made the gate turn Thursday-night events away as "after the time frame"
-// (2026-09-16).
-export function localDate(startAt: string, zone?: string | null): string {
-  if (zone) {
-    const d = DateTime.fromISO(startAt, { zone: "utc" }).setZone(zone);
-    if (d.isValid) return d.toISODate()!;
-  }
-  return startAt.slice(0, 10);
-}
 
 function soonest<T extends { start_at: string }>(events: T[]): T | null {
   return [...events].sort((a, b) => a.start_at.localeCompare(b.start_at))[0] ?? null;
@@ -320,7 +310,7 @@ async function tryTier2(ask: StatedIntent, userCity: string | null, filter?: (st
   // (services/eventRanking.ts); the closest one is kept for a near miss.
   const ranking = opts.browse
     ? { ranked: [soonest(nearby)].filter((m): m is (typeof nearby)[number] => !!m).map((m) => ({ ...m, similarity: 1, details: undefined as EventDetails | undefined })), closest: null }
-    : await rankEventsByDescription(nearby, ask.text ?? "", { limit: 6, topScores: lastTopScores });
+    : await rankEventsByDescription(nearby, ask.text ?? "", { limit: 6, topScores: lastTopScores, zone: opts.zone });
   if (ranking.closest) lastClosest = { ...ranking.closest, why: "the closest match, but not close enough to what they asked" };
   const candidates = ranking.ranked;
   const rejected: string[] = [];
@@ -340,7 +330,7 @@ async function tryTier2(ask: StatedIntent, userCity: string | null, filter?: (st
         lastClosest = {
           name: match.name,
           url: match.url ?? null,
-          date: match.start_at.slice(0, 10),
+          date: localDate(match.start_at, opts.zone),
           similarity,
           why: `${verdict.why ?? "on reading what it's about, it isn't quite what they asked for"}${details?.soldOut ? ", and it's sold out" : ""}`,
         };
