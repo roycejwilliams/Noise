@@ -286,7 +286,9 @@ async function tryTier2(ask: StatedIntent, userCity: string | null, filter?: (st
   // The best few, not just the top one: a single odd top pick used to take
   // the whole search down when the relevance check rejected it, with real
   // matches sitting further down the same list (2026-09-16).
-  const candidates = opts.browse ? [soonest(nearby)].filter((m): m is (typeof nearby)[number] => !!m) : await rankTopByRelevance(nearby, ask);
+  lastTopScores = [];
+  lastNearbyCount = nearby.length;
+  const candidates = opts.browse ? [soonest(nearby)].filter((m): m is (typeof nearby)[number] => !!m) : await rankTopByRelevance(nearby, ask, 4, lastTopScores);
   const rejected: string[] = [];
   const kept: TierMatch[] = [];
   for (const match of candidates) {
@@ -502,11 +504,19 @@ export type SearchScope = {
   // Latest event start in the Luma feed this search saw, and whether that
   // covers the whole window they asked about.
   fetchedThrough?: string | null;
-  windowCovered?: boolean | null; browse: boolean; tiers: number[]; dropped?: TierDrop | null; gatedOut?: GatedOut[] };
+  windowCovered?: boolean | null;
+  // The text actually searched (after the message was rewritten into a
+  // request), how many nearby events were in the window, and the best Tier 2
+  // relevance scores against the 0.35 bar, so an empty search shows why.
+  searchText?: string | null;
+  tier2Nearby?: number | null;
+  tier2TopScores?: { name: string; similarity: number }[]; browse: boolean; tiers: number[]; dropped?: TierDrop | null; gatedOut?: GatedOut[] };
 export type TierDrop = { tier: number; name: string; reason: string };
 let lastSearchScope: SearchScope | null = null;
 let lastTierDrop: TierDrop | null = null;
 let lastFetchedThrough: string | null = null;
+let lastTopScores: { name: string; similarity: number }[] = [];
+let lastNearbyCount: number | null = null;
 
 export function takeLastSearchScope(): SearchScope | null {
   const scope = lastSearchScope;
@@ -526,6 +536,8 @@ export async function getTieredRecommendation(
   // search to those days, whatever the default lookahead is.
   lastTierDrop = null;
   lastFetchedThrough = null;
+  lastTopScores = [];
+  lastNearbyCount = null;
   const asked = opts.rawMessage ?? ask.text ?? "";
   const window = asked ? parseAskWindow(asked, DateTime.now().setZone(opts.timezone ?? "local")) : null;
   const browse = !!asked && isBrowseAsk(asked);
@@ -566,6 +578,9 @@ export async function getTieredRecommendation(
 
   lastSearchScope = { city, window: window?.label ?? null, windowStart: window?.start.toISO() ?? null, windowEnd: window?.end.toISO() ?? null,
     fetchedThrough: lastFetchedThrough,
+    searchText: ask.text ?? null,
+    tier2Nearby: lastNearbyCount,
+    tier2TopScores: lastTopScores,
     windowCovered: window && lastFetchedThrough ? new Date(lastFetchedThrough) >= window.end.toJSDate() : null, browse, tiers: found.map((m) => m.tier), dropped: lastTierDrop };
   lastTierDrop = null;
   const gatedOut: GatedOut[] = [];

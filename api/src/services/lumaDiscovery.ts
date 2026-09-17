@@ -187,18 +187,24 @@ export async function rankTopByRelevance<T extends { name: string; city?: string
   candidates: T[],
   ask: StatedIntent,
   limit = 4,
+  // Filled with the best few scores whether or not they cleared the bar, so
+  // a search that found nothing shows how close it came.
+  topScores?: { name: string; similarity: number }[],
 ): Promise<(T & { similarity: number })[]> {
   if (!ask.text || !candidates.length) return [];
   const askEmbedding = ask.embedding?.length ? ask.embedding : await generateEmbedding(ask.text).catch(() => null);
   if (!askEmbedding) return [];
   const candidateEmbeddings = await Promise.all(candidates.map((c) => generateEmbedding(c.name).catch(() => null)));
   const scored: (T & { similarity: number })[] = [];
+  const all: { name: string; similarity: number }[] = [];
   candidates.forEach((candidate, i) => {
     const embedding = candidateEmbeddings[i];
     if (!embedding) return;
     const similarity = cosineSimilarity(askEmbedding, embedding);
+    all.push({ name: candidate.name, similarity: Math.round(similarity * 1000) / 1000 });
     if (similarity >= RELEVANCE_THRESHOLD) scored.push({ ...candidate, similarity });
   });
+  if (topScores) topScores.push(...all.sort((a, b) => b.similarity - a.similarity).slice(0, 5));
   return scored.sort((a, b) => b.similarity - a.similarity).slice(0, limit);
 }
 
