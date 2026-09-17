@@ -48,7 +48,11 @@ function score(c: Case, r: Awaited<ReturnType<typeof run>>): CaseScore {
   }
   const offered = r.found.length > 0;
   const closest = r.scope?.closest ?? null;
-  if (!offered && !closest && (r.scope?.tier2Nearby ?? 0) > 0) hard.push("nothing offered and no closest miss named, though there were nearby events");
+  // With nothing offered, a near miss is named only when the check judged one
+  // related; if every rejection was unrelated, saying nothing is right.
+  const anyRelated = (r.scope?.relevanceRejected ?? []).some((x) => x.related) || (r.scope?.gatedOut ?? []).length > 0;
+  if (!offered && !closest && anyRelated && !(r.scope?.gatedOut ?? []).length) hard.push("a related near miss existed but none was named");
+  if (closest && (r.scope?.relevanceRejected ?? []).some((x) => x.name === closest.name && x.related === false)) hard.push(`named "${closest.name}" as the closest miss though it was judged unrelated`);
   if (!offered && closest) {
     if (GENERIC.test(closest.why)) hard.push(`closest miss has only a generic reason: "${closest.why}"`);
     if (!r.feedNames.has(closest.name)) hard.push(`closest miss "${closest.name}" isn't in the real feed`);
@@ -63,13 +67,14 @@ await runEval<Case, any>({ name: "search (live feed)", dir: here, cases, concurr
 
 // The relevance check gives the same answer each time on the events that
 // flipped between runs on 2026-09-16, and the right one. Three reads each.
-type Kind = EvalCase & { ask: string; event: RegExp; expectFit: boolean };
+type Kind = EvalCase & { ask: string; event: RegExp; expectFit: boolean; expectRelated?: boolean };
 const kinds: Kind[] = [
   { id: "k01_chess_not_ai", ask: "Any AI meetups in SF on Thursday?", event: /Best Move Club/, expectFit: false },
   { id: "k02_ai_talk_is_ai", ask: "Any AI meetups in SF on Thursday?", event: /multi-model architecture/, expectFit: true },
   { id: "k03_build_day_for_builders", ask: "Find a founder or builder meetup this weekend", event: /Build Day/, expectFit: true },
-  { id: "k04_build_day_not_founder_meetup", ask: "Find a founder meetup this weekend", event: /Build Day/, expectFit: false },
-  { id: "k05_market_not_founders", ask: "Find a founder or builder meetup this weekend", event: /Maum Market/, expectFit: false },
+  { id: "k04_build_day_not_founder_meetup", ask: "Find a founder meetup this weekend", event: /Build Day/, expectFit: false, expectRelated: true },
+  { id: "k05_market_not_founders", ask: "Find a founder or builder meetup this weekend", event: /Maum Market/, expectFit: false, expectRelated: false },
+  { id: "k06_market_not_a_near_miss", ask: "Is there a founder meetup this weekend?", event: /Maum Market/, expectFit: false, expectRelated: false },
 ];
 const feed = await fetchPublicEvents(50, "San Francisco", new Date(Date.now() + 10 * 86400000)).catch(() => []);
 await runEval<Kind, any>({
@@ -85,7 +90,8 @@ await runEval<Kind, any>({
     const { generateText } = await import("ai");
     const reads = await Promise.all([0, 1, 2].map(async () => {
       const { text } = await generateText({ model: anthropic(MODELS.sonnet), prompt: relevancePrompt(k.ask, e.name, e.city ?? null, d?.description ?? "") });
-      return parseModelJson<{ fit?: boolean }>(text).fit === true;
+      const p = parseModelJson<{ fit?: boolean; related?: boolean }>(text);
+      return { fit: p.fit === true, related: p.fit === true || p.related === true };
     }));
     return { reads };
   },
@@ -93,8 +99,13 @@ await runEval<Kind, any>({
     // The feed changes day to day; an event that's gone isn't a failure.
     if (r.missing) return { hard: [], soft: [{ name: "event still in feed", ok: false }] };
     const hard: string[] = [];
-    if (new Set(r.reads).size > 1) hard.push(`inconsistent across reads: ${r.reads.join(", ")}`);
-    if (r.reads.some((x: boolean) => x !== k.expectFit)) hard.push(`expected fit=${k.expectFit}, got ${r.reads.join(", ")}`);
+    const fits = r.reads.map((x: { fit: boolean }) => x.fit);
+    if (new Set(fits).size > 1) hard.push(`inconsistent fit across reads: ${fits.join(", ")}`);
+    if (fits.some((x: boolean) => x !== k.expectFit)) hard.push(`expected fit=${k.expectFit}, got ${fits.join(", ")}`);
+    if (k.expectRelated !== undefined) {
+      const related = r.reads.map((x: { related: boolean }) => x.related);
+      if (related.some((x: boolean) => x !== k.expectRelated)) hard.push(`expected related=${k.expectRelated}, got ${related.join(", ")}`);
+    }
     return { hard, soft: [] };
   },
 });

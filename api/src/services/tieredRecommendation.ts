@@ -174,7 +174,7 @@ Return ONLY valid JSON: {"city": "City, State/Country" or null}. null if no plac
 // in a few words why not when it doesn't. The reason is what Co tells them
 // about a near miss (2026-09-16: "it's a hands-on build session, not a
 // meetup", instead of a generic "not close enough").
-export type RelevanceVerdict = { fit: boolean; why: string | null; eventKind?: string | null; askedKind?: string | null };
+export type RelevanceVerdict = { fit: boolean; why: string | null; eventKind?: string | null; askedKind?: string | null; related?: boolean };
 
 export function relevancePrompt(askText: string, candidateName: string, candidateCity: string | null, description: string): string {
   return `Someone said: "${askText}"
@@ -188,9 +188,9 @@ Answer three things, in order:
 2. askedKind: what kind of event they asked for, in 2 to 6 words, from their words.
 3. fit: true only if the event's own main activity is the kind they asked for. Who attends, who hosts, or who sponsors never changes what kind of event it is: a chess night full of AI researchers is still a chess night. Close variants of the same kind are fine (an AI demo night fits "AI meetup"; a founder dinner fits "founder meetup"; a build day or hackathon fits an ask for builders, since building together is the point). Also false if it's clearly somewhere other than where they asked.
 
-If fit is false, "why" says it plainly in a few words, like you'd tell a friend (e.g. "it's a hands-on build session, not a meetup"). No names, about 12 words at most.
+If fit is false, "why" says it plainly in a few words, like you'd tell a friend (e.g. "it's a hands-on build session, not a meetup"). No names, about 12 words at most. And "related" says whether someone who asked this might still reasonably consider it as a near alternative (a hands-on build day for someone wanting a founder meetup: true; a shopping market or a tarot night: false).
 
-Return ONLY JSON: {"eventKind": "...", "askedKind": "...", "fit": true or false, "why": "..." or null}`;
+Return ONLY JSON: {"eventKind": "...", "askedKind": "...", "fit": true or false, "why": "..." or null, "related": true or false}`;
 }
 
 // One verdict per ask and event per day, so asking the same thing twice gets
@@ -215,13 +215,14 @@ async function isGenuinelyRelevant(askText: string, candidateName: string, candi
       experimental_telemetry: { isEnabled: true, functionId: "tieredRecommendation.relevanceGate" },
       prompt: relevancePrompt(askText, candidateName, candidateCity, description),
     });
-    const parsed = parseModelJson<{ fit?: boolean; why?: string | null; eventKind?: string; askedKind?: string }>(raw);
+    const parsed = parseModelJson<{ fit?: boolean; why?: string | null; eventKind?: string; askedKind?: string; related?: boolean }>(raw);
     if (typeof parsed?.fit !== "boolean") return { fit: /"fit":\s*true/i.test(raw), why: null };
     const verdict: RelevanceVerdict = {
       fit: parsed.fit,
       why: parsed.fit ? null : typeof parsed.why === "string" && parsed.why.trim() ? parsed.why.trim().slice(0, 140) : null,
       eventKind: parsed.eventKind ?? null,
       askedKind: parsed.askedKind ?? null,
+      related: parsed.fit ? true : parsed.related === true,
     };
     if (relevanceCache.size > 2000) relevanceCache.clear();
     relevanceCache.set(key, { at: Date.now(), verdict });
@@ -336,7 +337,8 @@ async function tryTier2(ask: StatedIntent, userCity: string | null, filter?: (st
   const ranking = opts.browse
     ? { ranked: [soonest(nearby)].filter((m): m is (typeof nearby)[number] => !!m).map((m) => ({ ...m, similarity: 1, details: undefined as EventDetails | undefined })), closest: null }
     : await rankEventsByDescription(nearby, ask.text ?? "", { limit: 6, topScores: lastTopScores, zone: opts.zone });
-  if (ranking.closest) lastClosest = { ...ranking.closest, why: "the closest match, but not close enough to what they asked" };
+  // The near miss comes only from events the relevance check actually read
+  // and judged related; an unread best score is never named on its own.
   const candidates = ranking.ranked;
   const rejected: string[] = [];
   const kept: TierMatch[] = [];
@@ -357,13 +359,16 @@ async function tryTier2(ask: StatedIntent, userCity: string | null, filter?: (st
     const { details, verdict } = reads[i];
     if (!verdict.fit) {
       rejected.push(match.name);
-      lastRelevanceRejected.push({ name: match.name, why: verdict.why ?? "doesn't match what they asked" });
+      lastRelevanceRejected.push({ name: match.name, why: verdict.why ?? "doesn't match what they asked", related: verdict.related ?? false });
       // The nearest miss is the best-scoring one the check turned down, not
       // the first one it read: candidates are ordered open-first, so the first
       // read can be a weaker open event (2026-09-16: Maum Market was named
       // over Claude Fable 5.1 Build Day).
       const similarity = Math.round(match.similarity * 1000) / 1000;
-      if (!lastClosest || rejected.length === 1 || similarity > lastClosest.similarity) {
+      // Only something they might still consider is worth naming as a near
+      // miss (2026-09-16: a shopping market was offered as the closest thing
+      // to a founder meetup).
+      if (verdict.related && (!lastClosest || similarity > lastClosest.similarity)) {
         lastClosest = {
           name: match.name,
           url: match.url ?? null,
@@ -408,8 +413,10 @@ async function tryTier2(ask: StatedIntent, userCity: string | null, filter?: (st
         });
         lastClosest = null;
       } else {
-        lastRelevanceRejected.push({ name: near.name, why: verdict.why ?? "doesn't match what they asked" });
-        lastClosest = { ...ranking.closest, why: `${verdict.why ?? "on reading what it's about, it isn't quite what they asked for"}${details?.soldOut ? ", and it's sold out" : ""}` };
+        lastRelevanceRejected.push({ name: near.name, why: verdict.why ?? "doesn't match what they asked", related: verdict.related ?? false });
+        if (verdict.related) {
+          lastClosest = { ...ranking.closest!, why: `${verdict.why ?? "on reading what it's about, it isn't quite what they asked for"}${details?.soldOut ? ", and it's sold out" : ""}` };
+        }
       }
     }
   }
@@ -624,7 +631,7 @@ export type SearchScope = {
   // why the rewrite was set aside if it was.
   rewrite?: { original: string; rewritten: string; used: string; rejectedBecause: string | null } | null;
   // Everything the relevance check turned down, with its reason.
-  relevanceRejected?: { name: string; why: string }[];
+  relevanceRejected?: { name: string; why: string; related?: boolean }[];
   // An X post that was found but kept out, and why.
   xDropped?: { name: string; reason: string } | null;
   // Milliseconds: all tiers together, Tier 3 on its own, Tier 2's relevance reads.
@@ -635,7 +642,7 @@ let lastTierDrop: TierDrop | null = null;
 let lastFetchedThrough: string | null = null;
 let lastTopScores: { name: string; similarity: number }[] = [];
 let lastClosest: (Closest & { why: string }) | null = null;
-let lastRelevanceRejected: { name: string; why: string }[] = [];
+let lastRelevanceRejected: { name: string; why: string; related?: boolean }[] = [];
 let lastXDropped: { name: string; reason: string } | null = null;
 // Where the search time goes, for turn.latency-style reading of one search.
 let lastTimings: { tiersMs?: number; tier3Ms?: number; relevanceMs?: number } = {};
