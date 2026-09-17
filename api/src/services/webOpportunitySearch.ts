@@ -79,11 +79,20 @@ export async function searchWebForOpportunity(
   todayStr: string,
 ): Promise<WebOpportunityResult> {
   try {
+    // Hard latency cap (2026-09-17 code review, found live): an isolated
+    // test of this call took 90+ seconds with maxUses:3 — the live reply
+    // path's whole search has a 45s budget total (sendblue.ts's
+    // RECOMMENDATION_TIME_CAP_MS), so an uncapped multi-search round here
+    // could blow the entire turn's budget on its own, timing out Tier 1/2's
+    // already-real results along with it. Bounded to fail open (return
+    // null, same as any other non-fatal search failure) well before that,
+    // not to hang until the whole turn gives up.
     const { text: raw } = await generateText({
       model: anthropic(WEB_SEARCH_MODEL),
       experimental_telemetry: { isEnabled: true, functionId: "webOpportunitySearch.searchWebForOpportunity" },
-      tools: { web_search: anthropic.tools.webSearch_20260209({ maxUses: 3 }) },
-      stopWhen: stepCountIs(4),
+      tools: { web_search: anthropic.tools.webSearch_20260209({ maxUses: 2 }) },
+      stopWhen: stepCountIs(3),
+      timeout: 20_000,
       prompt: `Someone wants: "${askText}"${city ? ` (based in ${city})` : ""}
 ${profile ? `\nWho they are right now:\n${profile}\n` : ""}
 Today's date: ${todayStr}
