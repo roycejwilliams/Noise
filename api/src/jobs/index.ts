@@ -22,6 +22,7 @@ import type { AskCheckinPayload } from "../agent/askCheckin.js";
 import { enqueueCandidate, runProactiveDispatch, sendExempt } from "../harness/proactive.js";
 import { proactiveRegistry } from "../harness/proactiveRegistry.js";
 import { runMonitor, runWeeklyReview } from "../harness/monitor.js";
+import { reviewEnabled, runMorningReview } from "../harness/devReview.js";
 import { expireStaleAsks } from "../services/askExpiry.js";
 
 // Bounded-concurrency worker pool (Royce, 2026-08-30) — the event surfacing
@@ -638,6 +639,14 @@ export function registerJobs(io: Server) {
   // Decision log monitoring: hourly spike alerts, weekly review email
   // (harness/monitor.ts). Paused (Royce, 2026-09-15: "Pause 4 for now");
   // set MONITORING_ENABLED=true to turn it back on.
+  // The dev-only morning "what broke" review, texted to Royce at 8am Pacific
+  // (harness/devReview.ts). Independent of the paused spike alerts below.
+  if (reviewEnabled()) {
+    cron.schedule("0 8 * * *", () => {
+      runMorningReview().catch((err: any) => console.error("dev review cron error:", err?.message ?? err));
+    }, { timezone: "America/Los_Angeles" });
+  }
+
   if (process.env.MONITORING_ENABLED === "true") {
     cron.schedule("23 * * * *", () => {
       runMonitor().catch((err: any) => console.error("monitor cron error:", err?.message ?? err));

@@ -607,6 +607,27 @@ export async function runMigrations(): Promise<void> {
         )`,
       )
       .catch((err: Error) => console.error("user_reported_issues table init failed:", err));
+    // The morning "what broke" review's flags (harness/devReview.ts), dev only
+    // like the reports above.
+    await pool
+      .query(
+        `CREATE TABLE IF NOT EXISTS review_flags (
+          id BIGSERIAL PRIMARY KEY,
+          flag_key TEXT NOT NULL UNIQUE,
+          user_id UUID REFERENCES users(id) ON DELETE CASCADE,
+          flagged_at TIMESTAMPTZ NOT NULL,
+          type TEXT NOT NULL,
+          severity TEXT NOT NULL,
+          snippet TEXT NOT NULL,
+          decision_ids BIGINT[] NOT NULL DEFAULT '{}',
+          cause TEXT NOT NULL,
+          cause_confirmed BOOLEAN NOT NULL DEFAULT false,
+          source TEXT NOT NULL,
+          created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+        )`,
+      )
+      .then(() => pool.query(`CREATE INDEX IF NOT EXISTS idx_review_flags_flagged ON review_flags (flagged_at DESC)`))
+      .catch((err: Error) => console.error("review_flags table init failed:", err));
   }
 
   // Sendblue delivery retries (2026-09-15): one inbound text is processed
