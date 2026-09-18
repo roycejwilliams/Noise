@@ -13,7 +13,7 @@ import { searchRecentPosts } from "./xSearch.js";
 import { reserveWebSearch, searchWebForOpportunity } from "./webOpportunitySearch.js";
 import { withinRadius } from "./geocoding.js";
 import type { StatedIntent } from "./matching.js";
-import { gateMatches, type GatedOut } from "../harness/matchGate.js";
+import { checkGrounding, checkTiming, gateMatches, type GatedOut } from "../harness/matchGate.js";
 import { MODELS } from "../models.js";
 import { parseModelJson } from "./modelJson.js";
 import pool from "../db/db.js";
@@ -935,11 +935,22 @@ export async function getTieredRecommendation(
             found = null;
           }
         }
+        // A post the gate is going to reject counts as nothing, so the web
+        // still gets its turn (2026-09-18: an a16z post with a deadline it
+        // never stated blocked the web search, and the ask got nothing).
+        if (found && found.tier === 3) {
+          const facts = { searchCity: null, distanceMiles: null, alreadyOffered: false, now: new Date(), evidence: found.evidence ?? null, zone };
+          const failed = [checkGrounding(found, facts), checkTiming(found, facts)].find((c) => !c.pass);
+          if (failed) {
+            trace.xDropped = { name: found.name, reason: failed.reason ?? failed.name };
+            found = null;
+          }
+        }
         // X's recent-search only sees the last 7 days — a real fit for a
         // just-announced thing, a bad fit for the evergreen program pages
         // most grants/credits/city programs actually live on. Tried only
-        // when X found nothing, so this doesn't double the cost of every
-        // Tier 3 search (2026-09-17, "fold something like that into Co").
+        // when X found nothing usable, so this doesn't double the cost of
+        // every Tier 3 search (2026-09-17, "fold something like that into Co").
         if (!found) {
           const webBudget = await reserveWebSearch(opts.userId ?? null, source, opportunityQuery);
           if (!webBudget.ok) {

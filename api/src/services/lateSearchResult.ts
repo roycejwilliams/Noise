@@ -10,6 +10,7 @@ import { enrichMatch } from "./eventDetails.js";
 import { matchKey } from "./eventSurfacingSweep.js";
 import { getTimezoneForCity } from "./geocoding.js";
 import { recordRecommendationsSent, type RecommendationResult } from "./recommendation.js";
+import { triesInOrder } from "./searchRules.js";
 
 export async function sendLateSearchResult(
   person: { userId: string; firstName: string | null; phoneNumber: string; city: string | null },
@@ -24,7 +25,7 @@ export async function sendLateSearchResult(
       phoneNumber: person.phoneNumber,
       type: "search_result",
       targetKey: `search_result:none:${Date.now()}`,
-      messages: ["Came up empty on that one for now. I'll keep looking and send anything good my way."],
+      messages: ["Came up empty on that one for now. I'll keep looking and send anything good your way."],
     });
     await recordDecision({ layer: 5, decision: "recommendation.lateResult", userId: person.userId, outcome: "skip", action: `${action}${sent.sent ? "_told_them" : ""}`, proposal: { askText, ...extra } });
   };
@@ -33,8 +34,10 @@ export async function sendLateSearchResult(
     return;
   }
   const timezone = person.city ? await getTimezoneForCity(person.city).catch(() => null) : null;
-  // The first one that fits, trying at most three.
-  for (const match of result.matches.slice(0, 3)) {
+  // The first one that fits, trying at most five: each tier's best first,
+  // then the rest (2026-09-18: a grants ask tried three events that didn't
+  // fit and said "came up empty" while the grant that did sat fifth).
+  for (const match of triesInOrder(result.matches)) {
     const em = await enrichMatch(match, { userId: person.userId, firstName: person.firstName ?? "there", askText, city: person.city });
     if (em.fits === false) continue;
     const draft = await draftEventReveal({ firstName: person.firstName ?? "there" }, askText, false, em);

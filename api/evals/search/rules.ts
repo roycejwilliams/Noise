@@ -10,7 +10,7 @@ import { DateTime } from "luxon";
 import { checkTiming, checkLocation, type MatchFacts } from "../../src/harness/matchGate.js";
 import type { TierMatch } from "../../src/services/tieredRecommendation.js";
 import { resolveAskWindow } from "../../src/services/askWindow.js";
-import { searchCacheKey, xSearchBudget } from "../../src/services/searchRules.js";
+import { searchCacheKey, triesInOrder, xSearchBudget } from "../../src/services/searchRules.js";
 import { resolveCoEventPlace } from "../../src/services/luma.js";
 import { localToday, searchZone } from "../../src/services/eventOrder.js";
 import { spelledNumbers } from "../../src/harness/matchGate.js";
@@ -205,6 +205,11 @@ c(!nextText.includes("cdn.example.com") && !nextText.includes("var a = 1"), "cod
 c(JSON.stringify(spelledNumbers("grants from zero to nineteen thousand dollars")) === "[0,19000]", "spelled-out amounts become digits");
 c(spelledNumbers("two hundred fifty thousand")[0] === 250000, "hundreds and thousands combine");
 c(spelledNumbers("one hundred and twenty-five")[0] === 125, "'and' and hyphens inside a number are fine");
+
+// A late search answer tries each tier's best before the rest (2026-09-18).
+const lateOrder = triesInOrder([{ tier: 2, n: "a" }, { tier: 2, n: "b" }, { tier: 2, n: "c" }, { tier: 2, n: "d" }, { tier: 3, n: "grant" }]).map((m) => m.n);
+c(lateOrder.join(",") === "a,grant,b,c,d", "a late answer tries the Tier 3 grant second, not never");
+c(triesInOrder([{ tier: 1 }, { tier: 2 }, { tier: 2 }, { tier: 2 }, { tier: 2 }, { tier: 2 }]).length === 5, "a late answer tries at most five");
 
 // ---------------------------------------------------------------------------
 let failed = 0;

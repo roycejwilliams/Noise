@@ -174,3 +174,12 @@ export function canSkipReplyAfterResults(t: {
   if (t.ruledOut > 0 || t.firstRealMessage) return false;
   return messageIsOnlyTheAsk(t.original, t.rewritten);
 }
+
+// Which results a late search answer tries, in order: each tier's best first,
+// then the rest, at most five (2026-09-18: a grants ask tried three events and
+// never reached the grant in fifth place).
+export function triesInOrder<T extends { tier: number }>(matches: T[], limit = 5): T[] {
+  const seenTier = new Set<number>();
+  const firsts = matches.filter((m) => !seenTier.has(m.tier) && seenTier.add(m.tier));
+  return [...firsts, ...matches.filter((m) => !firsts.includes(m))].slice(0, limit);
+}
