@@ -2,7 +2,9 @@ import { generateText } from "ai";
 import { getPersonSnapshot, profileForSearch } from "../harness/personSnapshot.js";
 import { recordRevealedOffers } from "./offerReactions.js";
 import { rewriteKeepsAsk } from "./searchRules.js";
-import { isBrowseAsk } from "./askWindow.js";
+import { carryTimeFrame, isBrowseAsk } from "./askWindow.js";
+import { searchZone } from "./eventOrder.js";
+import { DateTime } from "luxon";
 import { getTimezoneForCity } from "./geocoding.js";
 import { anthropic } from "@ai-sdk/anthropic";
 import pool from "../db/db.js";
@@ -53,28 +55,60 @@ const RECOMMENDATION_REPEAT_DAYS = 30;
 
 // Same event or opportunity recommended in conversation within the last
 // RECOMMENDATION_REPEAT_DAYS isn't offered again as if it were new.
+// Anything sent to them recently, however it went out: a texted search
+// (recommendation_offered), the daily pick's offers (event_offer_pending), or
+// any result recorded for reactions (revealed_offers). Only the first was
+// read, so WorkOS Demo Night went out at 11:30 as an offer and again at 3:38
+// in a texted search (2026-09-18).
 async function dropAlreadyRecommended(userId: string, matches: TierMatch[]): Promise<TierMatch[]> {
   if (!matches.length) return matches;
-  const { rows } = await pool
-    .query(
-      `SELECT content FROM co_memories
-       WHERE user_id = $1 AND memory_type = 'recommendation_offered'
-         AND created_at > NOW() - ($2 || ' days')::interval`,
-      [userId, RECOMMENDATION_REPEAT_DAYS],
-    )
-    .catch(() => ({ rows: [] as { content: string }[] }));
+  const [memories, revealed] = await Promise.all([
+    pool
+      .query(
+        `SELECT content FROM co_memories
+         WHERE user_id = $1 AND memory_type IN ('recommendation_offered', 'event_offer_pending')
+           AND created_at > NOW() - ($2 || ' days')::interval`,
+        [userId, RECOMMENDATION_REPEAT_DAYS],
+      )
+      .catch(() => ({ rows: [] as { content: string }[] })),
+    pool
+      .query(`SELECT item_key FROM revealed_offers WHERE user_id = $1 AND sent_at > NOW() - ($2 || ' days')::interval`, [userId, RECOMMENDATION_REPEAT_DAYS])
+      .catch(() => ({ rows: [] as { item_key: string }[] })),
+  ]);
   const seenIds = new Set<string>();
   const seenNames = new Set<string>();
-  for (const r of rows) {
+  for (const r of memories.rows) {
     try {
       const c = JSON.parse(r.content);
-      if (c.event_api_id) seenIds.add(c.event_api_id);
-      if (c.name) seenNames.add(String(c.name).toLowerCase());
+      const id = c.event_api_id ?? c.match?.event_api_id;
+      const name = c.name ?? c.match?.name;
+      if (id) seenIds.add(id);
+      if (name) seenNames.add(String(name).toLowerCase());
     } catch {}
+  }
+  for (const r of revealed.rows) {
+    if (r.item_key.startsWith("event:")) seenIds.add(r.item_key.slice(6));
+    else if (r.item_key.startsWith("name:")) seenNames.add(r.item_key.slice(5));
   }
   return matches.filter(
     (m) => !("event_api_id" in m && seenIds.has(m.event_api_id)) && !seenNames.has(m.name.toLowerCase()),
   );
+}
+
+// Their text just before this one, if it was in the last 15 minutes.
+async function previousMemberText(userId: string, current: string): Promise<string | null> {
+  const { rows } = await pool
+    .query(
+      `SELECT content FROM co_memories
+       WHERE user_id = $1 AND memory_type = 'text_exchange' AND (content LIKE 'User said:%' OR content LIKE 'User sent a voice memo:%') AND created_at > NOW() - INTERVAL '15 minutes'
+       ORDER BY created_at DESC LIMIT 3`,
+      [userId],
+    )
+    .catch(() => ({ rows: [] as { content: string }[] }));
+  const texts = rows.map((r: { content: string }) => r.content.replace(/^User (said|sent a voice memo):\s*/, "").trim());
+  // The newest is usually this message itself, already logged.
+  const earlier = texts[0] === current.trim() ? texts.slice(1) : texts;
+  return earlier[0] ?? null;
 }
 
 // Returns a standalone description of what to look for, or null when the
@@ -156,6 +190,10 @@ export async function generateRecommendation(userId: string, currentMessage?: st
     }
     if (askText) {
       const feelings = await getEmotionalContext(userId).catch(() => null);
+      const timezone = profile.city ? await getTimezoneForCity(profile.city).catch(() => null) : null;
+      // "Anything happening?" right after "What's the vibes for Sunday?" is
+      // about Sunday (services/askWindow.ts carryTimeFrame).
+      const forTimeFrame = currentMessage ? carryTimeFrame(currentMessage, await previousMemberText(userId, currentMessage), DateTime.now().setZone(searchZone(timezone).zone)) : undefined;
       // The scope comes back with this search's own matches (2026-09-17: it
       // was read from module state after another await, so two people
       // searching at once could get each other's record).
@@ -166,10 +204,10 @@ export async function generateRecommendation(userId: string, currentMessage?: st
         {
           userId,
           checkRepeat: false,
-          rawMessage: currentMessage,
+          rawMessage: forTimeFrame,
           // No city or zone on file: getTieredRecommendation uses Co's home
           // zone and records that it did (scope.timezoneDefaulted).
-          timezone: profile.city ? await getTimezoneForCity(profile.city).catch(() => null) : null,
+          timezone,
           // What Co knows they want right now orders what matches the ask.
           profile: [profileForSearch(await getPersonSnapshot(userId).catch(() => null)), feelings ? roomPreferenceFromFeelings(feelings) : null].filter(Boolean).join("\n") || null,
           // Frustrated with what Co has found: look wider (2026-09-18).

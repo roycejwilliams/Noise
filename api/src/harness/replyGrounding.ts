@@ -390,7 +390,7 @@ async function extractClaims(draft: string, rf: ReplyFacts, src: GroundingSource
     prompt: `You check a text message Co is about to send, before it goes out. Find every claim in it that could be false, and say whether the sources below support it.
 
 Claims to find:
-- past_action: something Co says it did or sent ("I sent you the link", "I scheduled it", "I emailed you both")
+- past_action: something Co says it did or sent ("I sent you the link", "I scheduled it", "I emailed you both"), including passing something along ("noted for the team", "that goes straight to the team", "I passed it on"): supported only if a FACT says it was saved for the team
 - future_promise: something Co says it will do later ("I'll send it when I have it", "I'll keep an eye out", "I'll call you then")
 - time, place, count, detail: a start time, date, address, neighborhood, headcount, format, host, price, or other specific about an event, program, or plan
 - link: a link or an "it's in the link above"
@@ -548,6 +548,9 @@ const CLAIM_SHAPED = [
   // again, should come through as a separate contact card" went out
   // unchecked — a real action claim with none of the words above in it).
   /\b(trying again|try again|resend(ing)?|re-send(ing)?|should (come through|arrive|land)|sending (it|that|this) again)\b/i,
+  // Passing something along (2026-09-18: "feedback like that goes straight to
+  // the team" went out unchecked when nothing had been saved).
+  /\b(the team|noted|logged|forwarded|flagged|passed (it|that|this) (on|along)|pass(es|ing)? (it|that|this) (on|along)|goes (straight )?to)\b/i,
 ];
 
 export function needsClaimCheck(draft: string): boolean {

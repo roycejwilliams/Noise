@@ -363,6 +363,9 @@ onboardingCaseCases.push(
   [!reportsCardNotReceived("can you send me a v card"), "reportsCardNotReceived does not fire on a fresh ask (that's asksForContactCard's job)"],
   [!reportsCardNotReceived("sounds good"), "reportsCardNotReceived does not fire on an unrelated closing"],
   [needsClaimCheck("Trying again, should come through as a separate contact card, not a text bubble."), "a retry/resend claim is now recognized as claim-shaped and gets checked, not skipped"],
+  [needsClaimCheck("Yeah, feedback like that goes straight to the team, not just logged and forgotten."), "saying feedback reached the team gets checked (2026-09-18, sent with nothing saved)"],
+  [needsClaimCheck("Noted, I passed that along."), "passing something along gets checked"],
+  [!needsClaimCheck("That sounds hard. What's been the toughest part?"), "a plain conversational reply still skips the check"],
 );
 
 // Real incident, 2026-09-17: groundReply used to strip only the redraft

@@ -9,7 +9,7 @@
 import { DateTime } from "luxon";
 import { checkTiming, checkLocation, type MatchFacts } from "../../src/harness/matchGate.js";
 import type { TierMatch } from "../../src/services/tieredRecommendation.js";
-import { resolveAskWindow } from "../../src/services/askWindow.js";
+import { carryTimeFrame, resolveAskWindow } from "../../src/services/askWindow.js";
 import { searchCacheKey, triesInOrder, xSearchBudget } from "../../src/services/searchRules.js";
 import { profileForSearch } from "../../src/harness/personSnapshot.js";
 import { resolveCoEventPlace } from "../../src/services/luma.js";
@@ -218,6 +218,16 @@ c(triesInOrder([{ tier: 1 }, { tier: 2 }, { tier: 2 }, { tier: 2 }, { tier: 2 },
 const searchProfile = profileForSearch({ asOf: "2026-09-18T19:53", work: "Founder of Co, pre-seed", place: "San Francisco", worked: [], wantsNow: ["Find pre-seed VCs in SF", "Find grants for a founder event"], didntWork: [], weighingOn: ["stressed about fundraising"], valuesInPeople: ["laid-back founders"] } as any);
 c(searchProfile.includes("Founder of Co") && searchProfile.includes("laid-back founders"), "the search profile keeps who they are");
 c(!/VCs|grants|fundraising/.test(searchProfile), "the search profile leaves out their other asks and what's on their mind");
+
+// A what's-on follow-up keeps the time frame they just asked about (2026-09-18:
+// "What's the vibes for Sunday?" then "Anything happening?" got Wed/Oct events).
+const sat = DateTime.fromISO("2026-09-18T15:38:00", { zone: "America/Los_Angeles" });
+const carried = carryTimeFrame("Anything happening?", "What’s the vibes for Sunday?", sat);
+c(resolveAskWindow(carried, sat).window?.start.toISODate() === "2026-09-20", "'Anything happening?' after 'vibes for Sunday?' searches Sunday");
+c(carryTimeFrame("Any leads on any design engineer positions?", "What’s the vibes for Sunday?", sat) === "Any leads on any design engineer positions?", "a question with its own subject doesn't inherit the time frame");
+c(resolveAskWindow(carryTimeFrame("Anything happening tomorrow?", "What’s the vibes for Sunday?", sat), sat).window?.start.toISODate() === "2026-09-19", "its own time frame wins over the earlier one");
+c(carryTimeFrame("Anything happening?", "Thanks 🙏🏾", sat) === "Anything happening?", "no time frame earlier, nothing carried");
+c(carryTimeFrame("Anything happening?", null, sat) === "Anything happening?", "no earlier message, nothing carried");
 
 // ---------------------------------------------------------------------------
 let failed = 0;

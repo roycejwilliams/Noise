@@ -36,11 +36,17 @@ const ABOUT_CO = /\b(you|your|you're|youre|co|co's|this app|the app|the bot|text
 const PROBLEM = /\b(bug|broken|glitch|error|issue|problem|wrong|incorrect|not working|doesn'?t work|didn'?t work|isn'?t working|won'?t|can'?t|couldn'?t|failed|fail|crash|twice|again and again|repeat(ed|ing)?|same (thing|message|event)|spam|slow|took (so )?long|forever|confus|weird|off|annoying|frustrat|should(n'?t)?|stop (doing|sending)|never (sent|came|got)|didn'?t (get|send|come)|missing|feedback|fix|so long|too long|takes? (you )?(so |too )?long|taking (so |too )?long|ignor\w*|didn'?t (answer|respond|reply|listen|read|hear)|not what i (asked|said|meant)|made (it|that|this) up|doesn'?t exist|not real|fake|invent\w*|hallucinat\w*|lying|lied)\b/i;
 const EXPLICIT = /\b(bug|feedback|report (a|an|this) (bug|issue|problem)|glitch)\b/i;
 
+// Feedback phrased as a suggestion rather than a complaint (2026-09-18: "if
+// you don't have an understanding of the context... ask clarifying questions
+// ... rather than just ... sending them anything" had no problem word, was
+// never saved, and Co said it went "straight to the team").
+const SUGGESTION = /\b(something to (think about|consider)|(you|co) (should|shouldn'?t|need to|needs to|have to|has to|must|ought to)|we (should|must|need to|have to)|(ask|asking) (clarifying|me|first|before)|clarifying questions?|rather than|instead of|would be (nice|better|great)|it'?d be (nice|better|great)|make sure (you|to|co)|be (more )?(diligent|careful)|next time)\b/i;
+
 // Plain-rule gate. Wide on purpose: the model confirms.
 export function mayBeIssueReport(text: string): boolean {
   const t = text.trim();
   if (t.length < 6) return false;
-  return EXPLICIT.test(t) || (ABOUT_CO.test(t) && PROBLEM.test(t));
+  return EXPLICIT.test(t) || (ABOUT_CO.test(t) && (PROBLEM.test(t) || SUGGESTION.test(t)));
 }
 
 export function issuePrompt(message: string, recentConversation: string): string {

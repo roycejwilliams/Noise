@@ -1277,6 +1277,22 @@ export function sendblueRouter(io: Server): Router {
         // A problem they're reporting about Co itself is saved for the team
         // (test only, services/issueReports.ts), and the reply can say so.
         const reportedIssue = hasText ? await captureIssueReport(user.id, resolvedContent, recentConversation) : null;
+        // What has really reached the team, so "is it noted to the team?" gets
+        // a true answer (2026-09-18: Co said feedback "goes straight to the
+        // team" when nothing had been saved).
+        if (!reportedIssue) {
+          const recentReports = await pool
+            .query(`SELECT summary FROM user_reported_issues WHERE user_id = $1 AND created_at > NOW() - INTERVAL '1 day' ORDER BY created_at DESC LIMIT 3`, [user.id])
+            .then((r) => r.rows.map((row: { summary: string }) => row.summary))
+            .catch(() => [] as string[]);
+          addFact(
+            replyFacts,
+            "known",
+            recentReports.length
+              ? `Saved for the team in the last day: ${recentReports.map((s) => `"${s}"`).join("; ")}. Nothing new was saved this turn.`
+              : "Nothing they've said has been saved for the team in the last day, including this message. Don't say anything was noted for, passed to, or sent to the team; say you'll keep it in mind.",
+          );
+        }
         if (reportedIssue) {
           turnDidWork = true;
           addFact(replyFacts, "did_this_turn", `Saved what they reported about how Co works, for the team to look at: "${reportedIssue.summary}"`);

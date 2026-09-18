@@ -28,6 +28,10 @@ const cases: Case[] = [
   { id: "i09_normal_ask", message: "Can you find me AI meetups this weekend?", isIssue: false },
   { id: "i10_thanks", message: "Thanks Co!", isIssue: false },
   { id: "i11_work_bug", message: "Spent all day fixing a bug in our payments code", isIssue: false },
+  // Royce's voice memo, 2026-09-18: a suggestion with no problem word.
+  { id: "i12_suggestion_memo", message: "Hey, something to think about. Basically, if you don't have an understanding of the context that the user is sending, ask clarifying questions about what they mean rather than just trying to suffice by just sending them anything. We must be diligent as far as our understanding what we're delivering to the actual user.", isIssue: true, category: "behavior" },
+  { id: "i13_should_ask", message: "You should ask me what I mean before sending random events", isIssue: true, category: "behavior" },
+  { id: "i14_life_should", message: "I should really ask my cofounder before I send the deck", isIssue: false },
 ];
 
 async function run(c: Case) {

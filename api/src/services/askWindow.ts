@@ -176,3 +176,17 @@ export function isBrowseAsk(text: string): boolean {
     .trim();
   return subject.length === 0;
 }
+
+// A what's-on follow-up with no time frame of its own keeps the one they just
+// asked about (2026-09-18: "What's the vibes for Sunday?" then "Anything
+// happening?" got events on Wednesday, Sep 30 and Oct 5). Returns the text to
+// read the time frame from: the earlier message when it named one and this
+// one is only "what's on", else this one. A message with its own subject
+// ("any design engineer leads?") never inherits it.
+export function carryTimeFrame(current: string, previous: string | null, now: DateTime): string {
+  if (!previous || !isBrowseAsk(current)) return current;
+  const own = resolveAskWindow(current, now);
+  if (own.window || own.outOfRange) return current;
+  const prior = resolveAskWindow(previous, now);
+  return prior.window ? `${current} (${previous})` : current;
+}
