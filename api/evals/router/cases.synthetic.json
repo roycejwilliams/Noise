@@ -471,5 +471,142 @@
         "call_offer:accept"
       ]
     }
+  },
+  {
+    "id": "s19-offer-reaction-interested-0",
+    "source": "synthetic",
+    "message": "ooh that looks good, I'll check it out",
+    "recentConversation": "Co replied: https://www.ycombinator.com/apply\nCo replied: YC's Winter 2027 batch is open, apply by November 2; it runs January to March in SF.\nUser said: ooh that looks good, I'll check it out",
+    "openItems": [
+      {
+        "kind": "offer_reaction",
+        "detail": "Y Combinator Winter 2027 Batch"
+      }
+    ],
+    "current": null,
+    "label": {
+      "ans": [
+        "offer_reaction:interested"
+      ],
+      "call": [
+        "nothing"
+      ],
+      "rec": false,
+      "upd": false,
+      "nope": [
+        "offer_reaction:not_interested",
+        "offer_reaction:already_did_it"
+      ]
+    }
+  },
+  {
+    "id": "s20-offer-reaction-not_interested-1",
+    "source": "synthetic",
+    "message": "Not really for me, I'm not doing YC",
+    "recentConversation": "Co replied: https://www.ycombinator.com/apply\nCo replied: YC's Winter 2027 batch is open, apply by November 2; it runs January to March in SF.\nUser said: Not really for me, I'm not doing YC",
+    "openItems": [
+      {
+        "kind": "offer_reaction",
+        "detail": "Y Combinator Winter 2027 Batch"
+      }
+    ],
+    "current": null,
+    "label": {
+      "ans": [
+        "offer_reaction:not_interested"
+      ],
+      "call": [
+        "nothing"
+      ],
+      "rec": false,
+      "upd": false,
+      "nope": [
+        "offer_reaction:interested",
+        "offer_reaction:already_did_it"
+      ]
+    }
+  },
+  {
+    "id": "s21-offer-reaction-already_did_it-2",
+    "source": "synthetic",
+    "message": "Already applied to that one actually",
+    "recentConversation": "Co replied: https://www.ycombinator.com/apply\nCo replied: YC's Winter 2027 batch is open, apply by November 2; it runs January to March in SF.\nUser said: Already applied to that one actually",
+    "openItems": [
+      {
+        "kind": "offer_reaction",
+        "detail": "Y Combinator Winter 2027 Batch"
+      }
+    ],
+    "current": null,
+    "label": {
+      "ans": [
+        "offer_reaction:already_did_it"
+      ],
+      "call": [
+        "nothing"
+      ],
+      "rec": false,
+      "upd": false,
+      "nope": [
+        "offer_reaction:interested",
+        "offer_reaction:not_interested"
+      ]
+    }
+  },
+  {
+    "id": "s22-offer-reaction-none-3",
+    "source": "synthetic",
+    "message": "Thanks Co.",
+    "recentConversation": "Co replied: https://www.ycombinator.com/apply\nCo replied: YC's Winter 2027 batch is open, apply by November 2; it runs January to March in SF.\nUser said: Thanks Co.",
+    "openItems": [
+      {
+        "kind": "offer_reaction",
+        "detail": "Y Combinator Winter 2027 Batch"
+      }
+    ],
+    "current": null,
+    "label": {
+      "ans": [
+        "none"
+      ],
+      "call": [
+        "nothing"
+      ],
+      "rec": false,
+      "upd": false,
+      "nope": [
+        "offer_reaction:interested",
+        "offer_reaction:not_interested",
+        "offer_reaction:already_did_it"
+      ]
+    }
+  },
+  {
+    "id": "s23-offer-reaction-none-4",
+    "source": "synthetic",
+    "message": "Anything going on tomorrow?",
+    "recentConversation": "Co replied: https://www.ycombinator.com/apply\nCo replied: YC's Winter 2027 batch is open, apply by November 2; it runs January to March in SF.\nUser said: Anything going on tomorrow?",
+    "openItems": [
+      {
+        "kind": "offer_reaction",
+        "detail": "Y Combinator Winter 2027 Batch"
+      }
+    ],
+    "current": null,
+    "label": {
+      "ans": [
+        "none"
+      ],
+      "call": [
+        "nothing"
+      ],
+      "rec": true,
+      "upd": false,
+      "nope": [
+        "offer_reaction:interested",
+        "offer_reaction:not_interested",
+        "offer_reaction:already_did_it"
+      ]
+    }
   }
 ]

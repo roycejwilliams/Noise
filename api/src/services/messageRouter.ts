@@ -1,3 +1,4 @@
+import { findPendingOfferReactions, type PendingOfferReaction } from "./offerReactions.js";
 import { anthropic } from "@ai-sdk/anthropic";
 import { generateText } from "ai";
 import { z } from "zod";
@@ -43,7 +44,8 @@ export type OpenItemKind =
   | "network_tease"
   | "network_intro"
   | "method_choice"
-  | "walkin_ask";
+  | "walkin_ask"
+  | "offer_reaction";
 
 export type OpenItem = {
   id: string;
@@ -62,7 +64,8 @@ export type OpenItem = {
     | { kind: "network_tease"; pending: PendingNetworkTease }
     | { kind: "network_intro"; pending: PendingNetworkIntroOffer }
     | { kind: "method_choice"; pending: PendingMethodChoice }
-    | { kind: "walkin_ask"; eventApiId: string };
+    | { kind: "walkin_ask"; eventApiId: string }
+    | { kind: "offer_reaction"; pending: PendingOfferReaction };
 };
 
 // Values the router may give when answering each kind of item.
@@ -76,6 +79,7 @@ export const ANSWER_VALUES: Record<OpenItemKind, readonly string[]> = {
   network_intro: ["yes", "no"],
   method_choice: ["text", "email"],
   walkin_ask: ["answered"],
+  offer_reaction: ["interested", "not_interested", "already_did_it"],
 };
 
 // One description per kind, shared by production and the eval set so the
@@ -103,6 +107,8 @@ export function describeOpenItem(kind: OpenItemKind, detail: string | null): str
       return `Co asked whether they'd rather be connected${detail ? ` with ${detail}` : ""} by group text or by email`;
     case "walkin_ask":
       return "They checked in at an event and Co asked what they're hoping to find there / who they'd want to meet";
+    case "offer_reaction":
+      return `Co sent them "${detail ?? "something"}" (with its details) and they haven't reacted to it yet. Only answer this if their message clearly reacts to it: interested ("ooh I'll check it out", "that looks good"), not_interested ("not for me", "I'll pass", "not really my thing"), or already_did_it (they say they signed up, registered, applied, or went). A bare thanks, an emoji, or talking about something else isn't a reaction`;
   }
 }
 
@@ -121,7 +127,7 @@ async function safe<T>(label: string, fn: () => Promise<T>): Promise<T | null> {
 export async function gatherOpenItems(userId: string, opts: { skipWalkinAsk?: boolean } = {}): Promise<OpenItem[]> {
   const items: OpenItem[] = [];
 
-  const [callOffer, eventTease, outcome, checkin, matchNudge, tease, intro, method, walkin] = await Promise.all([
+  const [callOffer, eventTease, outcome, checkin, matchNudge, tease, intro, method, walkin, offerReactions] = await Promise.all([
     safe("call_offer", async () => {
       const { rows } = await pool.query(
         `SELECT p.id, p.content, p.created_at FROM co_memories p
@@ -167,6 +173,7 @@ export async function gatherOpenItems(userId: string, opts: { skipWalkinAsk?: bo
           );
           return rows[0] ?? null;
         }),
+    safe("offer_reaction", () => findPendingOfferReactions(userId)),
   ]);
 
   if (callOffer) {
@@ -271,6 +278,17 @@ export async function gatherOpenItems(userId: string, opts: { skipWalkinAsk?: bo
       detail: null,
       askedAt: walkin.checked_in_at ? new Date(walkin.checked_in_at) : null,
       ref: { kind: "walkin_ask", eventApiId: walkin.event_api_id },
+    });
+  }
+
+  for (const o of offerReactions ?? []) {
+    items.push({
+      id: `offer_reaction:${o.id}`,
+      kind: "offer_reaction",
+      description: describeOpenItem("offer_reaction", o.itemName),
+      detail: o.itemName,
+      askedAt: o.sentAt,
+      ref: { kind: "offer_reaction", pending: o },
     });
   }
 
@@ -448,6 +466,8 @@ function plainOption(item: Pick<OpenItem, "kind" | "description">): string {
       return "hearing more about the event or opportunity Co mentioned";
     case "network_tease":
       return "hearing who Co had in mind";
+    case "offer_reaction":
+      return `what Co sent about ${item.description.match(/"([^"]+)"/)?.[1] ?? "something"}`;
     default:
       return item.description.replace(/^Co /, "").slice(0, 120);
   }

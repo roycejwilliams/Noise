@@ -9,6 +9,7 @@ import { enrichMatch } from "./eventDetails.js";
 import { getEmotionalContext, renderEmotionalContext, roomPreferenceFromFeelings } from "../harness/emotion.js";
 import { buildSearchBrief } from "./searchBrief.js";
 import { recordDecision } from "../harness/core.js";
+import { recordRevealedOffers } from "./offerReactions.js";
 import { offerHistory, repeatInput, repeatRule, type RepeatAction } from "../harness/matchGate.js";
 
 export type SurfacingCandidate = {
@@ -581,8 +582,10 @@ export async function onEventOfferSent(userId: string, payload: EventOfferPayloa
     .catch((err: any) => console.error("onEventOfferSent: event_offer_pending write failed (non-fatal):", err?.message ?? err));
 
   if (revealed) {
-    // A direct reveal skipped the yes/no step, so nothing waits on a reply;
-    // and the real details went out, so the debrief gets scheduled.
+    // A direct reveal skipped the yes/no step; their reaction to it is
+    // waited on instead (services/offerReactions.ts). The real details went
+    // out, so the debrief gets scheduled.
+    await recordRevealedOffers(userId, [match]);
     await pool
       .query(`INSERT INTO co_memories (user_id, memory_type, content) VALUES ($1, 'event_offer_resolved', 'revealed_directly')`, [userId])
       .catch((err: any) => console.error("onEventOfferSent: event_offer_resolved write failed (non-fatal):", err?.message ?? err));

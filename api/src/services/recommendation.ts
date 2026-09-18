@@ -1,5 +1,6 @@
 import { generateText } from "ai";
 import { getPersonSnapshot, profileForSearch } from "../harness/personSnapshot.js";
+import { recordRevealedOffers } from "./offerReactions.js";
 import { rewriteKeepsAsk } from "./searchRules.js";
 import { isBrowseAsk } from "./askWindow.js";
 import { getTimezoneForCity } from "./geocoding.js";
@@ -254,6 +255,8 @@ export async function generateRecommendation(userId: string, currentMessage?: st
 //                           event is caught as a certain match (eventMatching.ts)
 export async function recordRecommendationsSent(userId: string, matches: TierMatch[]): Promise<void> {
   if (!matches.length) return;
+  // Waiting on their reaction for the next two days (services/offerReactions.ts).
+  await recordRevealedOffers(userId, matches);
   await pool
     .query(
       `INSERT INTO co_memories (user_id, memory_type, content)

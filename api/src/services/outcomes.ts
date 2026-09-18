@@ -10,7 +10,9 @@
 import pool from "../db/db.js";
 
 export type SuggestionKind = "event" | "opportunity" | "intro";
-export type SuggestionResult = "interested" | "declined" | "helped" | "didnt_help" | "no_signal";
+// acted: they said they signed up, applied, or went (a reaction to something
+// Co sent, services/offerReactions.ts).
+export type SuggestionResult = "interested" | "declined" | "acted" | "helped" | "didnt_help" | "no_signal";
 
 export async function recordSuggestionOutcome(
   userId: string,

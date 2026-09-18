@@ -268,9 +268,10 @@ export async function distanceBetween(cityA: string, cityB: string): Promise<num
 //   - declined, or they went/applied ("helped"/"didn't help"): never again.
 //   - showed interest: not re-pitched; an opening with a stated deadline gets
 //     one reminder in the last OPPORTUNITY_REMINDER_DAYS before it.
-//   - they texted Co within a day of seeing it: not re-pitched. Replies to a
-//     direct reveal aren't classified yet, so an answer could have been a
-//     no; this keeps a "not for me" from ever coming back.
+//   - their reaction is read from their reply (services/offerReactions.ts)
+//     and saved as the outcome above. For something shown before reactions
+//     were recorded, any text to Co within a day of it counts as answered,
+//     so an unrecorded "not for me" never comes back.
 //   - never answered: can come back once, RESURFACE_AFTER_DAYS later, while
 //     it's still open (the sweep's fit check runs on it again).
 //   - an event within a day keeps its one day-before reminder unless declined.
@@ -347,7 +348,7 @@ export async function offerHistory(userId: string, match: TierMatch, extraShownA
   const outcomeRow = await pool
     .query(
       `SELECT result FROM suggestion_outcomes
-       WHERE user_id = $1 AND result IN ('declined', 'interested', 'helped', 'didnt_help')
+       WHERE user_id = $1 AND result IN ('declined', 'interested', 'acted', 'helped', 'didnt_help')
          AND (item_key = $2 OR item_key = $3 OR lower(item_name) = lower($4))
        ORDER BY (result = 'declined') DESC, created_at DESC LIMIT 1`,
       [userId, eventId ? `event:${eventId}` : "", `name:${match.name.toLowerCase()}`, match.name],
@@ -355,8 +356,13 @@ export async function offerHistory(userId: string, match: TierMatch, extraShownA
     .then((r) => r.rows[0]?.result as string | undefined)
     .catch(() => undefined);
   const outcome: OfferOutcome = outcomeRow === "declined" ? "declined" : outcomeRow === "interested" ? "interested" : outcomeRow ? "acted" : null;
+  // Shown since reactions were recorded: the outcome above is the answer.
+  const tracked = await pool
+    .query(`SELECT 1 FROM revealed_offers WHERE user_id = $1 AND (item_key = $2 OR item_key = $3) LIMIT 1`, [userId, eventId ? `event:${eventId}` : "", `name:${match.name.toLowerCase()}`])
+    .then((r) => r.rows.length > 0)
+    .catch(() => false);
   let answered = false;
-  if (shownAt.length) {
+  if (shownAt.length && !tracked) {
     answered = await pool
       .query(
         `SELECT 1 FROM co_memories m, unnest($2::timestamptz[]) AS shown(at)

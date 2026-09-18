@@ -12,6 +12,7 @@ import { pickCanonicalEventId, type CrossMatch } from "../../src/services/eventM
 import { lumaTimestampInWindow } from "../../src/routes/luma.js";
 import { gate } from "../../src/harness/core.js";
 import { countShowings, repeatRule, type OfferHistory } from "../../src/harness/matchGate.js";
+import { offerItemKey, outcomeForReaction, reactionFact } from "../../src/services/offerReactions.js";
 
 let failed = 0;
 let total = 0;
@@ -140,6 +141,15 @@ check("interested, deadline 12 days out: waits", act(hist([20], "interested"), o
 check("interested, no stated deadline: no reminder", act(hist([20], "interested"), opening(null)) === "blocked");
 check("interested, deadline today: too late for a reminder", act(hist([20], "interested"), opening("2026-10-20")) === "blocked");
 check("an event they saw, happening within a day: the day-before reminder stays", act(hist([6]), event("2026-10-21", true)) === "remind");
+
+// Reactions to sent offers become the outcome the repeat rule reads (2026-09-18).
+check("an event's reaction is keyed by its event id", offerItemKey({ name: "Demo Night", event_api_id: "evt-1" }) === "event:evt-1");
+check("an opening's reaction is keyed by its name", offerItemKey({ name: "Y Combinator Winter 2027 Batch" }) === "name:y combinator winter 2027 batch");
+check("'not interested' is saved as declined, so it never comes back", outcomeForReaction("not_interested") === "declined" && act(hist([40], "declined"), opening("2026-11-02")) === "blocked");
+check("'already applied' is saved as acted, so no reminder", outcomeForReaction("already_did_it") === "acted" && act(hist([20], "acted"), opening("2026-10-23")) === "blocked");
+check("'interested' earns the deadline reminder", outcomeForReaction("interested") === "interested" && act(hist([20], "interested"), opening("2026-10-23")) === "remind");
+const passed = { id: 1, itemKey: "name:x", itemName: "Precursor Ventures", kind: "opportunity" as const, url: null, sentAt: new Date() };
+check("the reply is told not to push after a pass", /no pressure/.test(reactionFact(passed, "not_interested")) && /don't push/.test(reactionFact(passed, "not_interested")));
 
 console.log(`proactive rules: ${total - failed}/${total} passed`);
 if (failed) process.exitCode = 1;

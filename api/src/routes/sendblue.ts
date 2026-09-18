@@ -46,6 +46,7 @@ import {
 } from "../services/profileExtraction.js";
 import { generateRecommendation, recordRecommendationsSent } from "../services/recommendation.js";
 import { isBrowseAsk } from "../services/askWindow.js";
+import { recordOfferReaction, reactionFact, type OfferReaction } from "../services/offerReactions.js";
 import { searchWithTimeCap } from "../agent/conversationTools.js";
 import type { TierMatch } from "../services/tieredRecommendation.js";
 import { detectCheckinPhrase, recordCheckin, hasActiveAsk, recordWalkinAsk } from "../services/eventWalkinCheckin.js";
@@ -1352,6 +1353,20 @@ export function sendblueRouter(io: Server): Router {
           await recordWalkinAsk(walkinAnswer.item.ref.eventApiId, user.id, content).catch((err: any) =>
             console.error("sendblue: recordWalkinAsk failed (non-fatal):", err?.message ?? err),
           );
+        }
+
+        // Their reaction to something Co sent directly (services/offerReactions.ts):
+        // saved as the outcome the repeat rule reads, and told to the reply.
+        const offerReaction = resolvedAs("offer_reaction");
+        if (offerReaction?.item.ref?.kind === "offer_reaction") {
+          const reaction = offerReaction.value as OfferReaction;
+          try {
+            await recordOfferReaction(user.id, offerReaction.item.ref.pending, reaction, content);
+            addFact(replyFacts, "known", reactionFact(offerReaction.item.ref.pending, reaction));
+            await recordDecision({ layer: 6, decision: "offer.reaction", userId: user.id, outcome: "act", action: reaction, proposal: { item: offerReaction.item.ref.pending.itemName, key: offerReaction.item.ref.pending.itemKey, message: content.slice(0, 200) } });
+          } catch (err: any) {
+            console.error("sendblue: offer reaction handling failed (non-fatal):", err?.message ?? err);
+          }
         }
 
         // Resolve the ask-first event/opportunity tease, if one's pending.
