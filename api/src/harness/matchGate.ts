@@ -24,8 +24,25 @@ function norm(s: string): string {
   return s.toLowerCase().replace(/[^a-z0-9\s]/g, " ").replace(/\s+/g, " ").trim();
 }
 
+// Short names people and pages use for the same city (2026-09-18: a YC
+// result was rejected because its reason said "SF" and the page said "San
+// Francisco").
+const CITY_ALIASES = [["san francisco", "sf"], ["new york", "new york city", "nyc"], ["los angeles", "la"], ["washington dc", "dc"]];
+
+function placeForms(place: string): string[] {
+  const n = norm(place);
+  return CITY_ALIASES.find((group) => group.includes(n)) ?? [n];
+}
+
+// Whole words only, so "la" doesn't match inside "place".
+function mentionsPlace(text: string, place: string): boolean {
+  const padded = ` ${norm(text)} `;
+  return placeForms(place).some((form) => padded.includes(` ${form} `));
+}
+
 function sameCityName(a: string, b: string): boolean {
   const first = (s: string) => norm(s.split(",")[0]);
+  if (placeForms(first(a)).includes(first(b))) return true;
   return first(a) === first(b) || norm(a).includes(first(b)) || norm(b).includes(first(a));
 }
 
@@ -45,6 +62,11 @@ export type MatchFacts = {
   // The last day of a time frame they named ("Oct 5 - Oct 14th"), YYYY-MM-DD.
   // Replaces the fixed lookahead for this search: they asked about those days.
   askedUntil?: string | null;
+  // How far out this search looked, when it looked further than the tier's
+  // usual lookahead (a widened search pages 21 days of the feed). Without it,
+  // events the widened search found 15-21 days out were all thrown out here
+  // (2026-09-18).
+  lookaheadDays?: number | null;
   // The person's time zone. "Today" is their calendar day, since event_date is
   // their local date too (code review, 2026-09-17: today was UTC, so after
   // about 5pm Pacific every same-evening event read as already happened).
@@ -91,7 +113,7 @@ export function checkTiming(match: TierMatch, facts: MatchFacts): GateCheck {
   // A time frame they named sets how far out is fine (2026-09-16: an Oct 6
   // event inside the "Oct 5 - Oct 14th" they asked about was rejected as past
   // the 14-day lookahead, and Co told them it was outside their range).
-  const max = facts.askedUntil ? Math.max(daysBetween(today, facts.askedUntil), 0) : TIER_LOOKAHEAD_DAYS[match.tier];
+  const max = facts.askedUntil ? Math.max(daysBetween(today, facts.askedUntil), 0) : Math.max(TIER_LOOKAHEAD_DAYS[match.tier], facts.lookaheadDays ?? 0);
   if (days > max) {
     return { name, pass: false, reason: facts.askedUntil ? `event on ${match.event_date} is after the time frame they asked about` : `event is ${days} days out, past the ${max}-day window` };
   }
@@ -105,8 +127,20 @@ export function checkTiming(match: TierMatch, facts: MatchFacts): GateCheck {
 const PLACE_PHRASE = /\b(?:in|near|close to|around|nearby)\s+([A-Z][A-Za-z.'-]+(?:\s+[A-Z][A-Za-z.'-]+){0,2})/g;
 const MONTHS = ["january", "february", "march", "april", "may", "june", "july", "august", "september", "october", "november", "december"];
 
+const isMonthWord = (w: string) => {
+  const head = w.toLowerCase().split(/[-.]/)[0];
+  return MONTHS.includes(head) || MONTHS.some((m) => m.slice(0, 3) === head) || head === "sept";
+};
+
+// A place phrase ends at a month: "in SF Jan-March" claims SF.
 export function placesClaimed(text: string): string[] {
-  return [...text.matchAll(PLACE_PHRASE)].map((m) => m[1]).filter((p) => !MONTHS.includes(p.toLowerCase().split(" ")[0]));
+  return [...text.matchAll(PLACE_PHRASE)]
+    .map((m) => {
+      const words = m[1].split(" ");
+      const cut = words.findIndex(isMonthWord);
+      return (cut === -1 ? words : words.slice(0, cut)).join(" ");
+    })
+    .filter(Boolean);
 }
 
 export function checkGrounding(match: TierMatch, facts: MatchFacts): GateCheck {
@@ -161,7 +195,7 @@ export function checkGrounding(match: TierMatch, facts: MatchFacts): GateCheck {
     });
     if (!stated) return { name, pass: false, reason: `deadline ${match.deadline} isn't stated for ${match.name} in the ${where}` };
   }
-  const wrongPlace = placesClaimed(match.reason).find((p) => !evidence.includes(norm(p)));
+  const wrongPlace = placesClaimed(match.reason).find((p) => !mentionsPlace(facts.evidence!, p));
   if (wrongPlace) return { name, pass: false, reason: `reason says "${wrongPlace}", which isn't in the ${where}` };
   return { name, pass: true };
 }
@@ -221,7 +255,7 @@ export type GatedOut = { name: string; tier: number; reasons: string[]; url: str
 
 export async function gateMatches(
   matches: TierMatch[],
-  ctx: { userId: string | null; searchCity: string | null; checkRepeat?: boolean; evidenceByUrl?: Map<string, string>; now?: Date; gatedOut?: GatedOut[]; askedUntil?: string | null; zone?: string | null },
+  ctx: { userId: string | null; searchCity: string | null; checkRepeat?: boolean; evidenceByUrl?: Map<string, string>; now?: Date; gatedOut?: GatedOut[]; askedUntil?: string | null; lookaheadDays?: number | null; zone?: string | null },
 ): Promise<TierMatch[]> {
   const now = ctx.now ?? new Date();
   const kept: TierMatch[] = [];
@@ -235,6 +269,7 @@ export async function gateMatches(
       alreadyOffered: ctx.userId && ctx.checkRepeat !== false ? await wasAlreadyOffered(ctx.userId, match) : false,
       now,
       askedUntil: ctx.askedUntil ?? null,
+      lookaheadDays: ctx.lookaheadDays ?? null,
       zone: ctx.zone ?? null,
     };
     const { ok, checks } = evaluateMatch(match, facts);

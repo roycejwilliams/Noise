@@ -793,5 +793,158 @@
       "now": "2026-09-18T18:00:00Z",
       "evidence": "San Francisco, CA - The Awesome Foundation. Want a $1000 grant? Please apply! Our microgrants of $1,000 are given with no strings attached based on your application. We fund based on our personal reaction."
     }
+  },
+  {
+    "id": "m37-web-sf-alias",
+    "kind": "match",
+    "expect": "pass",
+    "match": {
+      "tier": 3,
+      "kind": "opportunity",
+      "name": "Y Combinator Winter 2027 Batch",
+      "url": "https://www.ycombinator.com/apply",
+      "reason": "YC's Winter 2027 batch is open, runs in SF Jan-March, apply by Nov 2.",
+      "deadline": "2026-11-02",
+      "source": "web"
+    },
+    "facts": {
+      "searchCity": "San Francisco",
+      "distanceMiles": null,
+      "alreadyOffered": false,
+      "now": "2026-09-18T18:00:00Z",
+      "evidence": "Y Combinator is accepting applications for the Winter 2027 Batch funding cycle. The batch will take place from January to March in San Francisco. The deadline to apply on-time is November 2 at 8pm PT."
+    }
+  },
+  {
+    "id": "m38-web-wrong-city",
+    "kind": "match",
+    "expect": "reject",
+    "violation": "grounding",
+    "match": {
+      "tier": 3,
+      "kind": "opportunity",
+      "name": "Y Combinator Winter 2027 Batch",
+      "url": "https://www.ycombinator.com/apply",
+      "reason": "YC's Winter 2027 batch is open and runs in Oakland.",
+      "deadline": "2026-11-02",
+      "source": "web"
+    },
+    "facts": {
+      "searchCity": "San Francisco",
+      "distanceMiles": null,
+      "alreadyOffered": false,
+      "now": "2026-09-18T18:00:00Z",
+      "evidence": "Y Combinator is accepting applications for the Winter 2027 Batch funding cycle. The batch will take place from January to March in San Francisco. The deadline to apply on-time is November 2 at 8pm PT."
+    }
+  },
+  {
+    "id": "m39-web-la-not-substring",
+    "kind": "match",
+    "expect": "reject",
+    "violation": "grounding",
+    "match": {
+      "tier": 3,
+      "kind": "opportunity",
+      "name": "Y Combinator Winter 2027 Batch",
+      "url": "https://www.ycombinator.com/apply",
+      "reason": "YC's Winter 2027 batch is open and runs in LA.",
+      "deadline": "2026-11-02",
+      "source": "web"
+    },
+    "facts": {
+      "searchCity": "San Francisco",
+      "distanceMiles": null,
+      "alreadyOffered": false,
+      "now": "2026-09-18T18:00:00Z",
+      "evidence": "Y Combinator is accepting applications for the Winter 2027 Batch funding cycle. The batch will take place from January to March in San Francisco. The deadline to apply on-time is November 2 at 8pm PT. Take place, plan ahead."
+    }
+  },
+  {
+    "id": "m40-t2-sf-alias",
+    "kind": "match",
+    "expect": "pass",
+    "match": {
+      "tier": 2,
+      "kind": "public_event",
+      "event_api_id": "evt-w",
+      "event_date": "2026-09-24",
+      "name": "The SOLO Founder Club",
+      "url": "https://lu.ma/solo-founders",
+      "reason": "A founder dinner in SF next week.",
+      "city": "San Francisco"
+    },
+    "facts": {
+      "searchCity": "San Francisco",
+      "distanceMiles": 0,
+      "alreadyOffered": false,
+      "now": "2026-09-18T18:00:00Z"
+    }
+  },
+  {
+    "id": "m41-t2-18-days-default-window",
+    "kind": "match",
+    "expect": "reject",
+    "violation": "timing",
+    "match": {
+      "tier": 2,
+      "kind": "public_event",
+      "event_api_id": "evt-w",
+      "event_date": "2026-10-06",
+      "name": "The SOLO Founder Club",
+      "url": "https://lu.ma/solo-founders",
+      "reason": "A founder event that fits, in SF.",
+      "city": "San Francisco"
+    },
+    "facts": {
+      "searchCity": "San Francisco",
+      "distanceMiles": 0,
+      "alreadyOffered": false,
+      "now": "2026-09-18T18:00:00Z"
+    }
+  },
+  {
+    "id": "m42-t2-18-days-widened",
+    "kind": "match",
+    "expect": "pass",
+    "match": {
+      "tier": 2,
+      "kind": "public_event",
+      "event_api_id": "evt-w",
+      "event_date": "2026-10-06",
+      "name": "The SOLO Founder Club",
+      "url": "https://lu.ma/solo-founders",
+      "reason": "A founder event that fits, in SF.",
+      "city": "San Francisco"
+    },
+    "facts": {
+      "searchCity": "San Francisco",
+      "distanceMiles": 0,
+      "alreadyOffered": false,
+      "now": "2026-09-18T18:00:00Z",
+      "lookaheadDays": 21
+    }
+  },
+  {
+    "id": "m43-t2-23-days-widened",
+    "kind": "match",
+    "expect": "reject",
+    "violation": "timing",
+    "match": {
+      "tier": 2,
+      "kind": "public_event",
+      "event_api_id": "evt-w",
+      "event_date": "2026-10-11",
+      "name": "The SOLO Founder Club",
+      "url": "https://lu.ma/solo-founders",
+      "reason": "A founder event that fits, in SF.",
+      "city": "San Francisco"
+    },
+    "facts": {
+      "searchCity": "San Francisco",
+      "distanceMiles": 0,
+      "alreadyOffered": false,
+      "now": "2026-09-18T18:00:00Z",
+      "lookaheadDays": 21
+    }
   }
 ]

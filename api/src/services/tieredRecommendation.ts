@@ -994,7 +994,7 @@ export async function getTieredRecommendation(
     dropped: t.tierDrop,
     gatedOut,
   };
-  const gated = await gateMatches(found, { userId: opts.userId ?? null, searchCity: city, checkRepeat: opts.checkRepeat, gatedOut, askedUntil: window ? window.end.toISODate() : null, zone });
+  const gated = await gateMatches(found, { userId: opts.userId ?? null, searchCity: city, checkRepeat: opts.checkRepeat, gatedOut, askedUntil: window ? window.end.toISODate() : null, lookaheadDays: opts.widen && !window ? WIDEN_TIER2_DAYS : null, zone });
   // Every offerable candidate, best first. Collapsing to one per tier here
   // threw the right event away (2026-09-16: "Voice AI Happy Hour" passed the
   // gate but lost the Tier 2 slot to a higher-ranked event the fit check then
