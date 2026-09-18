@@ -358,6 +358,29 @@ function sameMatch(a: TierMatch, b: TierMatch): boolean {
   return a.name.toLowerCase() === b.name.toLowerCase();
 }
 
+// Openings the sweep already found for them and hasn't sent yet: waiting in a
+// backlog or queued as an offer. Live replies answer from these instead of
+// searching the web themselves (2026-09-18).
+export async function alreadyFoundOpenings(userId: string): Promise<TierMatch[]> {
+  const [backlogs, queued] = await Promise.all([
+    pool.query(`SELECT items FROM event_backlogs WHERE user_id = $1`, [userId]).catch(() => ({ rows: [] as any[] })),
+    pool
+      .query(`SELECT payload->'match' AS match FROM proactive_candidates WHERE user_id = $1 AND type = 'event_offer' AND status = 'pending'`, [userId])
+      .catch(() => ({ rows: [] as any[] })),
+  ]);
+  const matches: TierMatch[] = [
+    ...backlogs.rows.flatMap((r: any) => ((r.items as BacklogItem[]) ?? []).map((i) => i.match)),
+    ...queued.rows.map((r: any) => r.match as TierMatch),
+  ].filter((m): m is TierMatch => !!m && m.tier === 3 && !isPastEvent(m));
+  const seen = new Set<string>();
+  return matches.filter((m) => {
+    const key = m.name.toLowerCase();
+    if (seen.has(key)) return false;
+    seen.add(key);
+    return true;
+  });
+}
+
 // Stable identity for one event/opportunity, shared by the backlog and the
 // proactive harness's idempotency key.
 export function matchKey(match: TierMatch): string {

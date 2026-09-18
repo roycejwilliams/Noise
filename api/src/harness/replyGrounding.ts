@@ -173,36 +173,43 @@ async function recentSearchNotes(userId: string): Promise<string[]> {
   return rows.map((r: any) => String(r.content).replace("[search] ", ""));
 }
 
-// Events and opportunities Co has actually sent them recently, newest first,
-// with the link it sent alongside each one.
+// What Co has actually sent them lately, from every path (answers to their
+// texts, the daily pick's offers, late results): each link with the message
+// that went out right after it, in Co's own words, so its day and time are
+// there too. Was the last 3 search results from 3 days, which dropped a
+// Sunday event sent two days earlier; the claim check then called Co's true
+// "Still that one at The Love Potion Library, 3-6pm" unsupported and sent
+// "nothing on my end about it" instead (2026-09-18).
+export const SENT_LOOKBACK_DAYS = 7;
+const SENT_MAX = 10;
+
+export function pairSentLinks(messages: { at: Date; text: string }[]): { at: Date; url: string; caption: string | null }[] {
+  const sorted = [...messages].sort((a, b) => a.at.getTime() - b.at.getTime());
+  const out: { at: Date; url: string; caption: string | null }[] = [];
+  sorted.forEach((m, i) => {
+    const url = m.text.trim();
+    if (!/^https?:\/\/\S+$/.test(url)) return;
+    const next = sorted[i + 1];
+    const caption = next && !/^https?:\/\//.test(next.text.trim()) && next.at.getTime() - m.at.getTime() < 2 * 60 * 1000 ? next.text.trim() : null;
+    out.push({ at: m.at, url, caption });
+  });
+  return out;
+}
+
 export async function recentlySent(userId: string): Promise<string[]> {
   const { rows } = await pool
     .query(
-      `SELECT created_at, memory_type, content FROM co_memories
-       WHERE user_id = $1 AND created_at > NOW() - INTERVAL '3 days'
-         AND (memory_type = 'recommendation' OR (memory_type = 'text_exchange' AND content LIKE 'Co replied: http%'))
-       ORDER BY created_at DESC LIMIT 12`,
-      [userId],
+      `SELECT created_at, content FROM co_memories
+       WHERE user_id = $1 AND memory_type = 'text_exchange' AND content LIKE 'Co replied:%'
+         AND created_at > NOW() - ($2 || ' days')::interval
+       ORDER BY created_at DESC LIMIT 200`,
+      [userId, SENT_LOOKBACK_DAYS],
     )
     .catch(() => ({ rows: [] as any[] }));
-  // A link is sent right after the recommendation it belongs to, so each one
-  // is matched to the first link that follows it and then used up. Matching
-  // on "closest in time" paired two accelerators with the same link
-  // (2026-09-16: "same link for both", which wasn't true).
-  const links = rows
-    .filter((r: any) => r.memory_type === "text_exchange")
-    .map((r: any) => ({ at: new Date(r.created_at).getTime(), url: String(r.content).replace("Co replied: ", "").trim(), used: false }))
-    .sort((a, b) => a.at - b.at);
-  const out: string[] = [];
-  const recommendations = rows.filter((r: any) => r.memory_type === "recommendation").reverse(); // oldest first
-  for (const row of recommendations) {
-    const at = new Date(row.created_at).getTime();
-    const near = links.find((l) => !l.used && l.at >= at - 30_000 && l.at - at < 5 * 60 * 1000);
-    if (near) near.used = true;
-    const what = String(row.content).replace(/^Co surfaced [^—]*— /, "");
-    out.push(`Co sent them ${DateTime.fromJSDate(new Date(row.created_at)).toRelative()}: ${what}${near ? ` (link ${near.url})` : " (no link on file)"}`);
-  }
-  return out.slice(-3);
+  const pairs = pairSentLinks(rows.map((r: any) => ({ at: new Date(r.created_at), text: String(r.content).replace(/^Co replied:\s*/, "") })));
+  return pairs
+    .slice(-SENT_MAX)
+    .map((p) => `Co sent them ${DateTime.fromJSDate(p.at).toRelative()} (${DateTime.fromJSDate(p.at).toFormat("ccc LLL d")}): ${p.caption ? `"${p.caption}"` : "(no description on file)"} (link ${p.url})`);
 }
 
 // What Co is really still looking for, from open asks. Only these make
@@ -479,7 +486,7 @@ Your draft reply:
 These parts of the draft aren't supported by the facts or the conversation:
 ${failed.map((f) => `- ${f.reason ?? f.name}`).join("\n")}
 
-Rewrite the draft so it still responds to what they said, keeping everything that's supported. Fix or remove each unsupported part. If you don't have something they asked for, say it once, plainly, naming exactly what you don't have ("I don't have the start time"), then what you can do now if anything. Don't hedge, don't point them at a link instead, and don't promise to get it later. Match the draft's capitalization style. Same length or shorter. Return ONLY the message.`,
+Rewrite the draft so it still responds to what they said, keeping everything that's supported. Fix or remove each unsupported part. If you don't have something they asked for, say it once, plainly, naming exactly what you don't have ("I don't have the start time"), then what you can do now if anything. If an unsupported part was about something you did (sent, saved, passed along, noted), say what's actually true the way a person would in a text ("Honestly, that one didn't get passed to the team."), never a system-sounding line like "I don't have that", and without promising anything in its place. Don't hedge, don't point them at a link instead, and don't promise to get it later. Match the draft's capitalization style. Same length or shorter. Return ONLY the message.`,
   });
   const out = text.trim().replace(/^"|"$/g, "");
   return out || null;
@@ -526,7 +533,9 @@ export type GroundingResult = {
   firstCheckMs: number;
 };
 
-const MINIMAL_FALLBACK = "I don't have that, so I'd rather not guess.";
+// Claims nothing, and reads like a person (2026-09-18: "I don't have that, so
+// I'd rather not guess." answered "is it noted to the team?").
+const MINIMAL_FALLBACK = "Honestly, I'm not sure on that one.";
 
 // Cheap pre-filter for the model claim read. Plain conversational replies
 // ("That sounds hard. What's been the toughest part?") have nothing to
@@ -551,6 +560,11 @@ const CLAIM_SHAPED = [
   // Passing something along (2026-09-18: "feedback like that goes straight to
   // the team" went out unchecked when nothing had been saved).
   /\b(the team|noted|logged|forwarded|flagged|passed (it|that|this) (on|along)|pass(es|ing)? (it|that|this) (on|along)|goes (straight )?to)\b/i,
+  // Anything Co says about how it works or what it does, in any tense: the
+  // root of its false claims about itself has been a check that never read
+  // them (2026-09-18), not missing facts.
+  /\b(i|co)\s+(always\s+|usually\s+|automatically\s+|already\s+)?(keep|track|watch|save|store|remember|pass|share|check|search|look|flag|log|note|monitor|follow|remind|send)(s|ed|ing)?\b/i,
+  /\b(on my (list|radar)|my (daily )?search(es)?|i'?m (keeping|tracking|watching|saving|following))\b/i,
 ];
 
 export function needsClaimCheck(draft: string): boolean {

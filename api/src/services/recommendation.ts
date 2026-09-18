@@ -1,6 +1,7 @@
 import { generateText } from "ai";
 import { getPersonSnapshot, profileForSearch } from "../harness/personSnapshot.js";
 import { recordRevealedOffers } from "./offerReactions.js";
+import { alreadyFoundOpenings, matchKey } from "./eventSurfacingSweep.js";
 import { rewriteKeepsAsk } from "./searchRules.js";
 import { carryTimeFrame, isBrowseAsk } from "./askWindow.js";
 import { searchZone } from "./eventOrder.js";
@@ -217,7 +218,10 @@ export async function generateRecommendation(userId: string, currentMessage?: st
         console.error("generateRecommendation: getTieredRecommendation failed (non-fatal):", err?.message ?? err);
         return null;
       });
-      const found: TierMatch[] = tiered?.matches ?? [];
+      // Openings come from what the sweep already found, not a live web search
+      // (services/tieredRecommendation.ts); the reply's fit check decides
+      // whether one fits this question.
+      const found: TierMatch[] = [...(tiered?.matches ?? []), ...(await alreadyFoundOpenings(userId).catch(() => [] as TierMatch[]))];
       scopeForTurn = tiered?.scope ?? null;
       if (scopeForTurn && rewrite) scopeForTurn.rewrite = rewrite;
       const scope = scopeForTurn;
@@ -293,6 +297,14 @@ export async function generateRecommendation(userId: string, currentMessage?: st
 //                           event is caught as a certain match (eventMatching.ts)
 export async function recordRecommendationsSent(userId: string, matches: TierMatch[]): Promise<void> {
   if (!matches.length) return;
+  // Sent in a reply: the same thing queued as an offer doesn't go out again.
+  await pool
+    .query(
+      `UPDATE proactive_candidates SET status = 'skipped', skip_reason = 'sent in a reply', decided_at = NOW(), updated_at = NOW()
+       WHERE user_id = $1 AND type = 'event_offer' AND status = 'pending' AND target_key = ANY($2::text[])`,
+      [userId, matches.flatMap((m) => [`event_offer:${matchKey(m)}`, `event_offer:again:${matchKey(m)}`])],
+    )
+    .catch((err: any) => console.error("recordRecommendationsSent: queued offer cleanup failed (non-fatal):", err?.message ?? err));
   // Waiting on their reaction for the next two days (services/offerReactions.ts).
   await recordRevealedOffers(userId, matches);
   await pool

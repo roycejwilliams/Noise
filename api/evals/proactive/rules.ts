@@ -104,14 +104,9 @@ check("a struggling member's event offer is not held", !heldFor("event_offer"));
 check("a struggling member's ask check-in still waits", heldFor("ask_checkin"));
 check("a struggling member's product update still waits", heldFor("product_update"));
 
-// Openings have their own lane (2026-09-18), read from the key on a send and
-// from the match on a queued candidate.
-check("a sent opening is in the opportunity lane", laneOf("event_offer", "event_offer:opportunity:y combinator") === "opportunity");
-check("an opening's reminder is in the opportunity lane", laneOf("event_offer", "event_offer:reminder:opportunity:y combinator") === "opportunity");
-check("a queued opening is in the opportunity lane by its match", laneOf("event_offer", "event_offer:x", { match: { kind: "opportunity" } }) === "opportunity");
-check("an event offer stays in the room lane", laneOf("event_offer", "event_offer:event:evt-1", { match: { kind: "public_event" } }) === "room");
-check("an in-room nudge stays in the room lane", laneOf("in_room", "in_room:match:e1") === "room");
-check("a check-in stays in the other lane", laneOf("ask_checkin", "ask_checkin:a1") === "other");
+// Openings share the room lane (2026-09-18, merged back from their own lane).
+check("an opening's offer is in the room lane", laneOf("event_offer") === "room");
+check("a check-in stays in the other lane", laneOf("ask_checkin") === "other");
 
 // Repeats depend on what happened (2026-09-18), not just that it was shown.
 const rNow = new Date("2026-10-20T18:00:00Z");

@@ -309,6 +309,9 @@ const routerOutputSchema = z.object({
   // second question), or null when the message is only the ask. Missing
   // means the router didn't say (callers fall back to their own check).
   beyondAsk: z.preprocess((v) => (typeof v === "string" ? (v.trim() ? v.trim() : null) : v), z.string().nullable()).optional(),
+  // A short question to ask before searching, when what they want could mean
+  // clearly different things; null when it's clear enough to search.
+  askUnclear: z.preprocess((v) => (typeof v === "string" ? (v.trim() ? v.trim() : null) : v), z.string().nullable()).optional(),
   asksForUpdates: z.boolean(),
   confidence: z.enum(["high", "medium", "low"]),
   reason: z.string().default(""),
@@ -355,7 +358,7 @@ Things Co has asked that are still waiting on a reply from them (newest first, w
 ${itemsBlock}
 ${declined}
 Return ONLY a JSON object:
-{"reason": "one short sentence: what their message is doing", "answers": {"itemId": "...", "value": "..."} or null, "ambiguousBetween": [itemIds], "call": "...", "wantsRecommendation": true/false, "beyondAsk": "..." or null, "asksForUpdates": true/false, "confidence": "high" | "medium" | "low"}
+{"reason": "one short sentence: what their message is doing", "answers": {"itemId": "...", "value": "..."} or null, "ambiguousBetween": [itemIds], "call": "...", "wantsRecommendation": true/false, "beyondAsk": "..." or null, "askUnclear": "..." or null, "asksForUpdates": true/false, "confidence": "high" | "medium" | "low"}
 Write "reason" first, then make every other field agree with it: if your reason says the message isn't answering a waiting item, answers must be null.
 
 answers — which waiting item (if any) the latest message is actually replying to:
@@ -387,7 +390,9 @@ wantsRecommendation — they're asking Co to find, suggest, or surface something
 
 beyondAsk — when wantsRecommendation is true, separate the ask from everything else in the message. The ask is what they want found, including its time frame, place, and who it's for ("tech week, Oct 5th - Oct 11th?" is one ask; "anything about VC looking to fund?" is one ask). beyondAsk is anything else that needs a real response: a feeling ("ugh rough week"), news about their life ("wasn't feeling the mixer"), a second, different question, or a reaction to something Co said. Write it in a few plain words ("rough week", "asked about Maya too"), or null when the message is only the ask. A feeling or life update is never part of the ask. null when wantsRecommendation is false.
 
-asksForUpdates — they're asking what's new or changed with Co itself ("any updates?", "you got some recent updates?", "what's new?"). false for a casual greeting ("what's up?"), for "found anything for me?" or "surfaced anything lately?" (those are recommendation asks), for reactions to an update message, and for telling Co about their own week.
+askUnclear — when wantsRecommendation is true, a short, plain question to ask them first if what they want could reasonably mean two clearly different things, so searching would be a guess (Royce, 2026-09-18: "if you don't have an understanding of the context... ask clarifying questions... rather than just sending them anything"). Example: a founder asking "anyone hiring a design engineer?" could be hiring one or looking for a role, so: "Are you looking to hire a design engineer, or looking for a design engineer role?" null whenever the ask is clear enough to act on, including broad ones ("anything happening this weekend?", "any founder events?") and ones the conversation already makes clear. Never ask about details you could reasonably search broadly for.
+
+asksForUpdates — they're asking what's new or changed with Co itself ("any updates?", "you got some recent updates?", "what's new?"). A bare updates question ("Updates?", "any updates for me?") is only this: wantsRecommendation stays false, so Co doesn't also run a search (2026-09-18: "Updates?" got the update list and a search at once). It's a recommendation ask instead, with asksForUpdates false, only when they name what they want updates on ("any updates on the grants?", "anything new on the design engineer search?"). false for a casual greeting ("what's up?"), for "found anything for me?" or "surfaced anything lately?" (those are recommendation asks), for reactions to an update message, and for telling Co about their own week.
 
 
 confidence — "high" if the read is unambiguous, "medium" if it's the most reasonable read but another is possible, "low" if you're guessing.`;
@@ -446,7 +451,7 @@ export type Decision<T extends RoutableItem = RoutableItem> = {
   clarifyContext: string;
   // What the clarifying question is about, if any: which waiting item they
   // meant, or whether they want a call.
-  clarifyAbout: "items" | "call" | null;
+  clarifyAbout: "items" | "call" | "ask" | null;
 };
 
 export function isIrreversible(kind: OpenItemKind, value: string): boolean {
@@ -606,5 +611,11 @@ export function decideActions<T extends RoutableItem>(
 
   d.wantsRecommendation = out.wantsRecommendation;
   if (out.beyondAsk !== undefined) d.beyondAsk = out.wantsRecommendation ? out.beyondAsk : null;
+  // Unclear what they want: ask first instead of searching on a guess.
+  if (out.wantsRecommendation && out.askUnclear && !d.clarifyContext) {
+    d.wantsRecommendation = false;
+    d.clarifyContext = `\nWhat they're asking for could mean different things, so don't search or suggest anything yet. Ask them this, in your own words, as one short question: ${out.askUnclear}`;
+    d.clarifyAbout = "ask";
+  }
   return d;
 }

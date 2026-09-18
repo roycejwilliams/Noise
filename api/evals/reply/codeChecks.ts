@@ -1,6 +1,6 @@
 // Model-free checks for the Layer 3 gate's deterministic rules. Runs in a
 // second, no API calls: npx tsx evals/reply/codeChecks.ts
-import { canSkipReplyAfterResults, messageIsOnlyTheAsk, rewriteKeepsAsk, shouldCacheSearch, xPostFitsWindow } from "../../src/services/searchRules.js";
+import { canSkipReplyAfterResults, isOnlyUpdatesAsk, messageIsOnlyTheAsk, rewriteKeepsAsk, shouldCacheSearch, xPostFitsWindow } from "../../src/services/searchRules.js";
 import { localDate, offerScore, orderForOffering } from "../../src/services/eventOrder.js";
 import { capitalizeSentences, looksLikeMetaReply } from "../../src/services/textStyle.js";
 import { nearestPlace, parseDiscoverPlaces } from "../../src/services/lumaDiscovery.js";
@@ -12,7 +12,7 @@ import { asksForContactCard, reportsCardNotReceived } from "../../src/services/c
 import { renderMatchLead } from "../../src/services/messageFormat.js";
 import { closingReaction } from "../../src/services/conversationClose.js";
 import "dotenv/config";
-import { addFact, baseReplyFacts, codeChecks, needsClaimCheck, predictionMatch, stripUnsupported } from "../../src/harness/replyGrounding.js";
+import { addFact, baseReplyFacts, codeChecks, needsClaimCheck, pairSentLinks, predictionMatch, stripUnsupported } from "../../src/harness/replyGrounding.js";
 import { isLeakedMetaCommentary, webhookSecretMatches } from "../../src/services/sendblue.js";
 import { coAskedQuestion } from "../../src/services/conversationClose.js";
 
@@ -245,6 +245,8 @@ onboardingCaseCases.push(
     [!canSkipReplyAfterResults({ sentResults: 1, original: "Any AI engineer events Thursday?", rewritten: "Find AI engineer events Thursday", ruledOut: 1, firstRealMessage: false }), "something ruled out keeps the reply, so a wrong earlier pick gets corrected"],
     [!canSkipReplyAfterResults({ sentResults: 1, original: "Any AI events in SF this week?", rewritten: "Find AI events in SF this week", ruledOut: 0, firstRealMessage: true }), "a first real message keeps the reply, so Co opens the conversation"],
     [!canSkipReplyAfterResults({ sentResults: 0, original: "Any design events in SF next week?", rewritten: "Find design events in SF next week", ruledOut: 0, firstRealMessage: false }), "nothing sent means a reply"],
+    [isOnlyUpdatesAsk("Updates?") && isOnlyUpdatesAsk("any updates") && isOnlyUpdatesAsk("What's new?") && isOnlyUpdatesAsk("hey, any new updates on Co?"), "a bare updates question is only the ask (2026-09-18)"],
+    [!isOnlyUpdatesAsk("Updates? also did you find anything for Sunday") && !isOnlyUpdatesAsk("any updates on the grants?"), "updates plus something else still gets a reply"],
     // The router's split of the ask from everything else (2026-09-18).
     [canSkipReplyAfterResults({ sentResults: 1, original: "What does the SF tech week look like? Oct 5th - Oct 11th?", rewritten: "What tech events are happening during SF tech week Oct 5th - Oct 11th", ruledOut: 0, firstRealMessage: false, beyondAsk: null }), "router: a date range is part of the ask, so no restating reply"],
     [canSkipReplyAfterResults({ sentResults: 1, original: "Did you see anything about VC looking to fund?", rewritten: "Look for VC funding opportunities", ruledOut: 0, firstRealMessage: false, beyondAsk: null }), "router: only the ask, even when the words don't line up"],
@@ -365,6 +367,20 @@ onboardingCaseCases.push(
   [needsClaimCheck("Trying again, should come through as a separate contact card, not a text bubble."), "a retry/resend claim is now recognized as claim-shaped and gets checked, not skipped"],
   [needsClaimCheck("Yeah, feedback like that goes straight to the team, not just logged and forgotten."), "saying feedback reached the team gets checked (2026-09-18, sent with nothing saved)"],
   [needsClaimCheck("Noted, I passed that along."), "passing something along gets checked"],
+  // What Co sent, for the claim check: every link with its caption (2026-09-18).
+  [(() => {
+    const t = (m: number) => new Date(Date.UTC(2026, 8, 17, 4, m));
+    const p = pairSentLinks([
+      { at: t(21), text: "https://lu.ma/love-potion" },
+      { at: t(21.5), text: "Sunday 3-6pm at The Love Potion Library, this low-key one has coffee, tarot, and massages." },
+      { at: t(40), text: "Looking now, give me a minute." },
+      { at: t(41), text: "https://lu.ma/other" },
+    ]);
+    return p.length === 2 && p[0].caption?.includes("Love Potion") === true && p[1].caption === null;
+  })(), "each sent link keeps the description sent right after it; a lone link has none"],
+  [needsClaimCheck("Co keeps an eye on that for you."), "a claim about how Co works gets checked"],
+  [needsClaimCheck("That's on my radar now."), "'on my radar' gets checked"],
+  [needsClaimCheck("I save everything you tell me."), "a present-tense claim about what Co does gets checked"],
   [!needsClaimCheck("That sounds hard. What's been the toughest part?"), "a plain conversational reply still skips the check"],
 );
 

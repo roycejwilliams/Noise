@@ -162,17 +162,17 @@ function violations(sends: { at: Date; type: string; target: string; topic?: str
     }
     if (seenTargets.has(s.target)) out.push(`duplicate ${s.target} at ${s.at.toISOString()}`);
     seenTargets.add(s.target);
-    const lane = laneOf(s.type, s.target);
-    const inLane = (o: (typeof sorted)[number]) => laneOf(o.type, o.target) === lane;
-    const dayCap = lane === "room" ? RULES.roomMaxPerLocalDay : lane === "opportunity" ? RULES.opportunityMaxPerLocalDay : RULES.maxPerLocalDay;
-    const weekCap = lane === "room" ? RULES.roomMaxPer7Days : lane === "opportunity" ? RULES.opportunityMaxPer7Days : RULES.maxPer7Days;
+    const lane = laneOf(s.type);
+    const inLane = (o: (typeof sorted)[number]) => laneOf(o.type) === lane;
+    const dayCap = lane === "room" ? RULES.roomMaxPerLocalDay : RULES.maxPerLocalDay;
+    const weekCap = lane === "room" ? RULES.roomMaxPer7Days : RULES.maxPer7Days;
     const sameDay = sorted.filter((o, j) => j < i && inLane(o) && DateTime.fromJSDate(o.at).setZone(zone).hasSame(local, "day"));
     if (sameDay.length >= dayCap) out.push(`2nd ${lane}-lane text on ${local.toISODate()} (${s.type})`);
     const week = sorted.filter((o, j) => j < i && inLane(o) && s.at.getTime() - o.at.getTime() < 7 * 86400000);
     if (week.length >= weekCap) out.push(`${week.length + 1}th ${lane}-lane text in 7 days at ${s.at.toISOString()}`);
-    // One-way pause: room and opening sends are paused only by their own
-    // lane; the other lane is paused by anything unanswered.
-    const prev = sorted.slice(0, i).filter((o) => (lane === "other" ? true : inLane(o))).pop();
+    // One-way pause: room-lane sends are paused only by room-lane sends; the
+    // other lane is paused by anything unanswered.
+    const prev = sorted.slice(0, i).filter((o) => (lane === "room" ? inLane(o) : true)).pop();
     if (prev && s.at.getTime() - prev.at.getTime() < RULES.unansweredPauseHours * 3600000 && !replyBetween(prev.at.getTime(), s.at.getTime())) {
       out.push(`${s.type} at ${s.at.toISOString()} while ${prev.type} from ${prev.at.toISOString()} was unanswered`);
     }

@@ -974,7 +974,12 @@ export async function getTieredRecommendation(
     const [tier1, tier2, tier3] = await Promise.all([
       tryTier1(ask, city, windowFilter, { browse, maxDays, zone, profileText: opts.profile }),
       tryTier2(ask, city, windowFilter, trace, { browse, maxDays, until, zone, profileText: opts.profile, widen: opts.widen }),
-      runTier3(),
+      // Openings are searched by the daily sweep only (Royce, 2026-09-18:
+      // "Take the openings search out of live replies"). The web search,
+      // official-page lookup and reason rewrite were the slowest and flakiest
+      // part of a reply; live replies send openings the sweep already found
+      // (services/recommendation.ts alreadyFoundOpenings).
+      source === "sweep" ? runTier3() : Promise.resolve(null),
     ]);
     trace.timings.tiersMs = Date.now() - tierStarted;
     // Every tier's candidates go to the gate, which keeps what's actually

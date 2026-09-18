@@ -111,7 +111,11 @@ export type ReviewMessage = { id: string; at: string; from: "member" | "co" | "c
 export type ReviewDecision = { id: number; at: string; decision: string; outcome: string; action: string | null; reason: string | null; proposal: any; checks: any };
 export type ReviewEmotion = { at: string; source: "call" | "text"; emotion: string; intensity: string; about: string | null; quote: string | null; target: string | null };
 export type ReviewIssue = { at: string; message: string; summary: string; category: string; severity: string };
-export type ReviewData = { userId: string; firstName: string; messages: ReviewMessage[]; decisions: ReviewDecision[]; emotions: ReviewEmotion[]; issues: ReviewIssue[] };
+// openAsks: asks still open, whenever they were saved. A promise to keep
+// looking is backed by any of them, not only asks saved that day (2026-09-18:
+// "Still watching though." was flagged though the ask was days old).
+export type ReviewAsk = { text: string; savedAt: string };
+export type ReviewData = { userId: string; firstName: string; messages: ReviewMessage[]; decisions: ReviewDecision[]; emotions: ReviewEmotion[]; issues: ReviewIssue[]; openAsks?: ReviewAsk[] };
 
 const ms = (iso: string) => new Date(iso).getTime();
 const clip = (s: string, n = 220) => (s.length > n ? `${s.slice(0, n - 1)}…` : s);
@@ -348,7 +352,7 @@ export function transcriptFor(data: ReviewData): string {
 
 // What Co's log says it did, so claims about its own actions can be checked.
 export function loggedActions(data: ReviewData): string {
-  const lines: string[] = [];
+  const lines: string[] = (data.openAsks ?? []).map((a) => `[saved ${a.savedAt.slice(0, 10)}] open ask the daily search keeps looking for: "${a.text}"`);
   for (const d of data.decisions) {
     const t = new Date(d.at).toISOString().slice(11, 16);
     const p = d.proposal ?? {};
@@ -377,7 +381,7 @@ Flag these, and only these:
 - answer_missed_question: Co's reply doesn't answer what ${data.firstName} just asked (answers a different question, or ignores part of it).
 - contradiction_or_unbacked_claim: Co contradicts itself, or claims something about its own actions ("I sent you", "I found", "I checked", "I saved") that the decision log above doesn't back up.
 - off_voice: a reply that's robotic, templated, or breaks Co's voice described at the top (reads like a system, points at its own messages, lists, hype, filler).
-- promise_without_ask: Co promises to keep looking or text later, but the decision log shows no saved ask for that topic before or at that time.
+- promise_without_ask: Co promises to keep looking or text later, but nothing in the log above (an open ask, whenever it was saved, or an ask saved that day before the promise) covers that topic.
 
 Every flag must quote the exact words from the conversation that show it, copied character for character from the messages (one or two short quotes). If you can't quote it, don't flag it. Empty is a fine answer.
 
@@ -424,7 +428,7 @@ export async function modelFlags(data: ReviewData): Promise<ReviewFlag[]> {
 
 export async function loadReviewData(userId: string, since: Date, until: Date): Promise<ReviewData> {
   const range = [userId, since.toISOString(), until.toISOString()];
-  const [user, msgs, decisions, emotions, issues] = await Promise.all([
+  const [user, msgs, decisions, emotions, issues, asks] = await Promise.all([
     pool.query(`SELECT first_name FROM users WHERE id = $1`, [userId]),
     pool.query(
       `SELECT id, created_at, content FROM co_memories
@@ -442,6 +446,9 @@ export async function loadReviewData(userId: string, since: Date, until: Date): 
     pool
       .query(`SELECT created_at, message, summary, category, severity FROM user_reported_issues WHERE user_id = $1 AND created_at >= $2 AND created_at < $3`, range)
       .catch(() => ({ rows: [] as any[] })),
+    pool
+      .query(`SELECT ask_text, created_at FROM ask_checkins WHERE user_id = $1 AND created_at < $2 AND (resolved_at IS NULL OR resolved_at >= $2) ORDER BY created_at`, [userId, until.toISOString()])
+      .catch(() => ({ rows: [] as any[] })),
   ]);
   const iso = (d: any) => new Date(d).toISOString();
   return {
@@ -455,6 +462,7 @@ export async function loadReviewData(userId: string, since: Date, until: Date): 
     decisions: decisions.rows.map((r: any) => ({ id: Number(r.id), at: iso(r.created_at), decision: r.decision, outcome: r.outcome, action: r.action, reason: r.reason, proposal: r.proposal, checks: r.checks })),
     emotions: emotions.rows.map((r: any) => ({ at: iso(r.created_at), source: r.source, emotion: r.emotion, intensity: r.intensity, about: r.about, quote: r.quote, target: r.target })),
     issues: issues.rows.map((r: any) => ({ at: iso(r.created_at), message: r.message, summary: r.summary, category: r.category, severity: r.severity })),
+    openAsks: asks.rows.map((r: any) => ({ text: String(r.ask_text), savedAt: iso(r.created_at) })),
   };
 }
 
@@ -483,15 +491,17 @@ export function groupFlags(flags: ReviewFlag[]): FlagGroup[] {
 
 const pacific = (iso: string) => new Date(iso).toLocaleString("en-US", { timeZone: "America/Los_Angeles", hour: "numeric", minute: "2-digit", weekday: "short" });
 
-// The morning text: short enough for iMessage, one example per type.
-export function renderDigest(flags: ReviewFlag[], names: Record<string, string>, label: string, maxGroups = 8): string[] {
+// The morning text: the 6 flag types that fired most, one example each, so it
+// stays readable (Royce, 2026-09-18). The full review keeps every type.
+export const DIGEST_MAX_TYPES = 6;
+export function renderDigest(flags: ReviewFlag[], names: Record<string, string>, label: string, maxGroups = DIGEST_MAX_TYPES): string[] {
   const groups = groupFlags(flags);
   if (!groups.length) return [`Co review, ${label}: nothing flagged.`];
   const lines = groups.slice(0, maxGroups).map((g) => {
     const ex = [...g.flags].sort((a, b) => SEVERITY_RANK[b.severity] - SEVERITY_RANK[a.severity])[0];
     return `• ${FLAG_LABELS[g.type]} ×${g.count} (${g.worst})\n  ${names[ex.userId] ?? "?"}, ${pacific(ex.at)}: ${clip(ex.snippet, 140)}\n  Cause: ${clip(ex.cause, 110)}${ex.causeConfirmed ? "" : ex.cause.endsWith("(guess)") ? "" : " (guess)"}`;
   });
-  const more = groups.length > maxGroups ? `\n…and ${groups.length - maxGroups} more types.` : "";
+  const more = groups.length > maxGroups ? `\nPlus ${groups.length - maxGroups} less frequent type${groups.length - maxGroups === 1 ? "" : "s"} in the full review.` : "";
   return [`Co review, ${label}: ${flags.length} flag${flags.length === 1 ? "" : "s"} in ${groups.length} type${groups.length === 1 ? "" : "s"}.`, `${lines.join("\n")}${more}`, `Full detail with decision-log rows: ask Claude "what broke since ${label.replace(/^last /, "")}".`];
 }
 

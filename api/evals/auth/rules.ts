@@ -5,6 +5,7 @@
 // CI on every push with no live dependency and no flakiness budget.
 //
 //   npx tsx evals/auth/rules.ts
+import { maskEmail, parseCode, parseNumberChange } from "../../src/services/phoneChange.js";
 import {
   SAFE_USER_FIELDS,
   UPDATABLE_USER_FIELDS,
@@ -275,6 +276,22 @@ eq(
   buildUserUpdate({ first_name: "Jo", not_a_field: "x", last_name: "Lee" }),
   { columns: ["first_name", "last_name"], values: ["Jo", "Lee"] },
 );
+
+// Changing a phone number by text (services/phoneChange.ts, 2026-09-18).
+{
+  const intent = (t: string) => parseNumberChange(t).intent;
+  const num = (t: string) => { const r = parseNumberChange(t); return r.intent ? r.newNumber : "no-intent"; };
+  check("'change my number to 415 555 0123' is a change to +14155550123", num("change my number to 415 555 0123") === "+14155550123");
+  check("'I got a new number, it's (415) 555-0199' is a change", num("I got a new number, it's (415) 555-0199") === "+14155550199");
+  check("'update my phone number' with no number asks for it", intent("Can you update my phone number?") && num("Can you update my phone number?") === null);
+  check("'any new events? my phone died' is not a change", !intent("any new events? my phone died"));
+  check("'what's your number?' is not a change", !intent("what's your number?"));
+  check("'I need to update my cofounder's number in my contacts' is not a change", !intent("I need to update my cofounder's number in my contacts"));
+  check("'new phone who dis' is not a change", !intent("new phone who dis"));
+  check("a 6-digit code is read with or without a space or dash", parseCode("482913") === "482913" && parseCode("482 913") === "482913" && parseCode("482-913") === "482913");
+  check("a longer number isn't a code", parseCode("4155550123") === null);
+  check("the email is shown masked", maskEmail("royce@copatible.com") === "r•••@copatible.com");
+}
 
 const total = pass + fail;
 console.log(`auth rules: ${pass}/${total} passed`);

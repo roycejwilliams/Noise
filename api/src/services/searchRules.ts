@@ -197,3 +197,9 @@ export function triesInOrder<T extends { tier: number }>(matches: T[], limit = 5
   const firsts = matches.filter((m) => !seenTier.has(m.tier) && seenTier.add(m.tier));
   return [...firsts, ...matches.filter((m) => !firsts.includes(m))].slice(0, limit);
 }
+
+// A message that only asks what's new with Co ("Updates?", "any updates",
+// "what's new?"), with nothing else to answer.
+export function isOnlyUpdatesAsk(text: string): boolean {
+  return /^\s*(hey\s*,?\s*|yo\s*,?\s*)?(any\s+(new\s+)?updates|updates|what'?s\s+new|anything\s+new)(\s+(with|on)\s+(you|co))?\s*[?!.]*\s*$/i.test(text);
+}

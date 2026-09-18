@@ -1462,6 +1462,31 @@ export async function runMigrations(): Promise<void> {
     .then(() => pool.query(`CREATE INDEX IF NOT EXISTS idx_suggestion_outcomes_user ON suggestion_outcomes (user_id, created_at DESC)`))
     .catch((err: Error) => console.error("suggestion_outcomes table init failed:", err));
 
+  // Phone-number changes by text, confirmed with an emailed code
+  // (services/phoneChange.ts, 2026-09-18). Its own code, attempts and lock,
+  // so a change never touches the login code.
+  await pool
+    .query(
+      `CREATE TABLE IF NOT EXISTS phone_change_requests (
+        id BIGSERIAL PRIMARY KEY,
+        user_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+        new_number TEXT NOT NULL,
+        code TEXT,
+        expires_at TIMESTAMPTZ,
+        sent_at TIMESTAMPTZ,
+        attempts INT NOT NULL DEFAULT 0,
+        attempts_window_start TIMESTAMPTZ,
+        locked BOOLEAN NOT NULL DEFAULT false,
+        locked_at TIMESTAMPTZ,
+        lock_count INT NOT NULL DEFAULT 0,
+        status TEXT NOT NULL DEFAULT 'pending',
+        created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+        completed_at TIMESTAMPTZ
+      )`,
+    )
+    .then(() => pool.query(`CREATE INDEX IF NOT EXISTS idx_phone_change_user ON phone_change_requests (user_id, created_at DESC)`))
+    .catch((err: Error) => console.error("phone_change_requests table init failed:", err));
+
   // Everything Co sent directly, waiting on their reaction for two days
   // (services/offerReactions.ts, 2026-09-18).
   await pool

@@ -1,5 +1,5 @@
 import { anthropic } from "@ai-sdk/anthropic";
-import { canSkipReplyAfterResults } from "../services/searchRules.js";
+import { canSkipReplyAfterResults, isOnlyUpdatesAsk } from "../services/searchRules.js";
 import { capitalizeSentences } from "../services/textStyle.js";
 import { captureIssueReport } from "../services/issueReports.js";
 import { enqueueCandidate, nextLocalHour } from "../harness/proactive.js";
@@ -23,6 +23,7 @@ import { getEmotionalContext, readTextEmotion, recordEmotionSignals, renderEmoti
 import { buildContextSummary } from "../services/callContext.js";
 import { findOrCreateUserByPhone, hasPendingEmail, splitFullName } from "../services/identity.js";
 import { redeemInviteCode } from "../services/inviteCodes.js";
+import { handlePhoneChange } from "../services/phoneChange.js";
 import { claimTextLogin } from "../services/textLogin.js";
 import {
   INTAKE_EXTRACT_MODEL,
@@ -686,6 +687,23 @@ export function sendblueRouter(io: Server): Router {
           } else {
             await sendAndLog(user.id, number, "That code doesn't look right. Double check it and send it again.");
             return res.status(200).send({ received: true, action: "invite_code_rejected" });
+          }
+        }
+
+        // Changing their phone number (services/phoneChange.ts): handled here,
+        // start to finish, before anything else reads the message.
+        if (hasText && user.identity_captured) {
+          const phoneChangeReply = await handlePhoneChange(
+            { id: user.id, phone_number: number, email: user.email ?? null, first_name: user.first_name ?? null },
+            content,
+          ).catch((err: any) => {
+            console.error("sendblue: phone change failed (non-fatal):", err?.message ?? err);
+            return null;
+          });
+          if (phoneChangeReply) {
+            await logTextExchange(user.id, `User said: ${content}`);
+            await sendAndLog(user.id, number, phoneChangeReply);
+            return res.status(200).send({ received: true, action: "phone_change" });
           }
         }
 
@@ -1674,7 +1692,11 @@ export function sendblueRouter(io: Server): Router {
               const updateMessage = `Here's what's new:\n\n${latestUpdate.content}`;
               if (!(await sendAndLog(user.id, user.phone_number, updateMessage))) throw new Error("the update list didn't send");
               addFact(replyFacts, "did_this_turn", "Sent the latest product update list as its own message just before this reply.");
-              addInstruction(replyFacts, "They just asked what's new, and the real update list already went out separately, verbatim. Don't repeat, paraphrase, or re-list it, and don't blend in anything else (like a past recommendation) as if it were part of that list. If it's natural, briefly acknowledge you just sent it, then respond to whatever else they said. Keep this reply short.");
+              addInstruction(replyFacts, "They just asked what's new, and the real update list already went out separately, verbatim. Don't repeat, paraphrase, or re-list it, don't point back at it (\"just sent you the latest above\"), and don't blend in anything else (like a past recommendation) as if it were part of that list. Respond only to whatever else they said. Keep this reply short.");
+              // "Updates?" and nothing else: the list is the answer, no second
+              // message pointing at it (2026-09-18: "Just sent you the latest
+              // above." followed the list).
+              if (!decision.wantsRecommendation && isOnlyUpdatesAsk(resolvedContent)) resultsAnsweredAsk = updateMessage;
             } else {
               addFact(replyFacts, "known", "There are no product updates posted.");
               addInstruction(replyFacts, "They're asking what's new, but there's genuinely nothing posted yet. Let them know honestly, briefly, that there's nothing new to report right now. Don't invent something or brush past the question.");

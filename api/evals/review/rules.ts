@@ -5,6 +5,7 @@ import {
   conversationFlags,
   findQuoted,
   groupFlags,
+  loggedActions,
   logFlags,
   reactionFlags,
   renderDigest,
@@ -136,7 +137,14 @@ check("groups rank by how often each happened", groups[0].type === "restated_own
 const digest = renderDigest(all, { u1: "Royce" }, "last 24h");
 check("the digest opens with the count and ends with how to get detail", digest[0].startsWith("Co review, last 24h:") && digest[digest.length - 1].includes("what broke since"));
 check("the digest is short enough for a text", digest.join("\n").length < 3000);
+const manyTypes = ["slow_reply", "search_sent_nothing", "found_but_turned_away", "stretch_send", "came_up_empty_text", "reply_rewritten", "router_unsure", "off_topic_search"].map((type, i) => ({ userId: "u1", at: `2026-09-18T1${i}:00:00Z`, type, severity: "low", snippet: "x", decisionIds: [], cause: "c", causeConfirmed: true, source: "log" }) as any);
+const trimmed = renderDigest(manyTypes, { u1: "Royce" }, "last 24h").join("\n");
+check("the digest lists at most 6 types and points to the rest", (trimmed.match(/^• /gm) ?? []).length === 6 && trimmed.includes("Plus 2 less frequent types"));
 check("an empty day says so plainly", renderDigest([], {}, "last 24h")[0] === "Co review, last 24h: nothing flagged.");
+
+// --- The model review sees asks saved on earlier days.
+const withAsks = loggedActions(base({ openAsks: [{ text: "Looking for grants for a founder event", savedAt: "2026-09-15T18:00:00Z" }] }));
+check("open asks from earlier days are in the log the model reads", withAsks.includes("[saved 2026-09-15] open ask") && withAsks.includes("grants for a founder event"));
 
 // --- Dev only.
 check("never outside co-test", !reviewEnabled({ RAILWAY_ENVIRONMENT_NAME: "production", RAILWAY_SERVICE_NAME: "CoPatible", DEV_REVIEW: "true" } as any));

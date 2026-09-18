@@ -103,7 +103,7 @@ export async function readSignals(): Promise<SignalReading[]> {
 }
 
 async function sendTeamEmail(subject: string, html: string): Promise<void> {
-  const to = process.env.TEAM_ALERT_EMAIL ?? "hello@copatible.com";
+  const to = process.env.TEAM_ALERT_EMAIL ?? "team@copatible.com";
   if (!ALLOW_REAL_SENDS || !process.env.RESEND_API_KEY) {
     console.log(`[monitor] ${subject}\n${html.replace(/<[^>]+>/g, " ")}`);
     return;

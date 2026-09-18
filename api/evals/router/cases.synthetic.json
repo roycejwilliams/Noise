@@ -627,5 +627,63 @@
       "upd": false,
       "nope": []
     }
+  },
+  {
+    "id": "s25-hiring-ambiguous",
+    "source": "synthetic",
+    "message": "Anyone hiring a design engineer?",
+    "recentConversation": "Co replied: Pre-seed checks, dropout/deep-tech leaning, worth a look for your stage.\nUser said: Anyone hiring a design engineer?",
+    "openItems": [],
+    "current": null,
+    "label": {
+      "ans": [
+        "none",
+        "clarify"
+      ],
+      "call": [
+        "nothing"
+      ],
+      "rec": false,
+      "upd": false,
+      "nope": []
+    }
+  },
+  {
+    "id": "s26-bare-updates",
+    "source": "synthetic",
+    "message": "Updates?",
+    "recentConversation": "Co replied: https://flagship.aplica.500.co\nCo replied: 500 Global's Flagship Accelerator is taking applications now for Batch 37, based in SF, seed-stage. Worth a shot?\nUser said: Updates?",
+    "openItems": [],
+    "current": null,
+    "label": {
+      "ans": [
+        "none"
+      ],
+      "call": [
+        "nothing"
+      ],
+      "rec": false,
+      "upd": true,
+      "nope": []
+    }
+  },
+  {
+    "id": "s27-updates-on-a-search",
+    "source": "synthetic",
+    "message": "Any updates on the grants search?",
+    "recentConversation": "Co replied: Came up empty on that one for now.\nUser said: Any updates on the grants search?",
+    "openItems": [],
+    "current": null,
+    "label": {
+      "ans": [
+        "none"
+      ],
+      "call": [
+        "nothing"
+      ],
+      "rec": true,
+      "upd": false,
+      "nope": []
+    }
   }
 ]

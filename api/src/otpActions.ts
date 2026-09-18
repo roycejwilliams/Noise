@@ -60,6 +60,8 @@ interface EmailProp {
   welcome?: boolean;
   calendarFollow?: boolean;
   firstName?: string;
+  // A code to confirm changing their phone number (services/phoneChange.ts).
+  phoneChange?: { newNumberLast4: string };
 }
 
 interface MessageProp {
@@ -236,6 +238,7 @@ export const sendEmail = async ({
   welcome,
   calendarFollow,
   firstName,
+  phoneChange,
 }: EmailProp) => {
   const resendClient = new Resend(process.env.RESEND_API_KEY);
   const resend = {
@@ -313,6 +316,20 @@ export const sendEmail = async ({
             ) +
             OTP_BOX(otp_code!) +
             `<p class="muted-sm" style="font-size:11px;letter-spacing:2px;text-transform:uppercase;color:#333333;margin-top:32px;">This code expires in 5 minutes.</p>`,
+        ),
+      });
+    }
+
+    if (phoneChange) {
+      await resend.emails.send({
+        from: "Co <hello@copatible.com>",
+        to: email,
+        subject: `Confirm your new number.`,
+        html: emailTemplate(
+          h1("Changing your number.") +
+            p(`Text this code to Co from your current number to switch your account to the number ending in ${phoneChange.newNumberLast4}. It expires in 5 minutes.`) +
+            OTP_BOX(otp_code!) +
+            `<p class="muted-sm" style="font-size:11px;letter-spacing:2px;text-transform:uppercase;color:#333333;margin-top:32px;">If you didn't ask for this, ignore it and email team@copatible.com.</p>`,
         ),
       });
     }
