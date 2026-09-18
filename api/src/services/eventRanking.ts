@@ -49,7 +49,7 @@ export async function rankEventsByDescription<T extends { name: string; url?: st
     topScores?: { name: string; similarity: number; profile?: number | null }[];
     zone?: string | null;
     // What Co knows they want right now (services/personSnapshot.ts
-    // profileFocusText). Orders events that match the ask.
+    // profileForSearch). Orders events that match the ask.
     profileText?: string | null;
     // No subject in the ask: every event in the window counts, ordered by the
     // profile.

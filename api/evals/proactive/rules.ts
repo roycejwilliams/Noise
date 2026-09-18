@@ -7,10 +7,11 @@
 //   npx tsx evals/proactive/rules.ts
 import "dotenv/config";
 import { isReasonableLocalHour } from "../../src/services/localHours.js";
-import { userLevelChecks, mergeExpiry, localHourOk, type SendRecord } from "../../src/harness/proactive.js";
+import { userLevelChecks, mergeExpiry, localHourOk, candidateChecks, laneOf, type Candidate, type SendRecord } from "../../src/harness/proactive.js";
 import { pickCanonicalEventId, type CrossMatch } from "../../src/services/eventMatching.js";
 import { lumaTimestampInWindow } from "../../src/routes/luma.js";
 import { gate } from "../../src/harness/core.js";
+import { countShowings, repeatRule, type OfferHistory } from "../../src/harness/matchGate.js";
 
 let failed = 0;
 let total = 0;
@@ -91,6 +92,54 @@ check("a timestamp 2 minutes old is still in the window", lumaTimestampInWindow(
 check("a timestamp 30 minutes old (a captured replay) is rejected", !lumaTimestampInWindow(String(nowSec - 1800), new Date(nowSec * 1000)));
 check("a timestamp from the future (clock skew abuse) is rejected past the window", !lumaTimestampInWindow(String(nowSec + 1800), new Date(nowSec * 1000)));
 check("a non-numeric timestamp is rejected, not treated as valid", !lumaTimestampInWindow("not-a-number", new Date(nowSec * 1000)));
+
+// Feelings shape how, never whether (2026-09-18): on a hard day, anything
+// that brings them into the room still goes; only check-ins and updates wait.
+const hardDay = { now: new Date("2026-09-18T20:00:00Z"), sends: [] as SendRecord[], lastInboundAt: null, needsCare: true };
+const cand = (type: Candidate["type"]): Candidate => ({ id: "1", userId: "u", type, targetKey: `${type}:x`, topicKey: `${type}:x`, summary: "", priority: 50, dueAt: new Date("2026-09-18T19:00:00Z"), expiresAt: null, payload: {}, attempts: 0, createdAt: new Date("2026-09-18T19:00:00Z") });
+const heldFor = (type: Candidate["type"]) => candidateChecks(cand(type), hardDay).some((c) => c.name === "emotional_timing" && !c.pass);
+check("a struggling guest's event question (ask_solicitation) is not held", !heldFor("ask_solicitation"));
+check("a struggling member's event offer is not held", !heldFor("event_offer"));
+check("a struggling member's ask check-in still waits", heldFor("ask_checkin"));
+check("a struggling member's product update still waits", heldFor("product_update"));
+
+// Openings have their own lane (2026-09-18), read from the key on a send and
+// from the match on a queued candidate.
+check("a sent opening is in the opportunity lane", laneOf("event_offer", "event_offer:opportunity:y combinator") === "opportunity");
+check("an opening's reminder is in the opportunity lane", laneOf("event_offer", "event_offer:reminder:opportunity:y combinator") === "opportunity");
+check("a queued opening is in the opportunity lane by its match", laneOf("event_offer", "event_offer:x", { match: { kind: "opportunity" } }) === "opportunity");
+check("an event offer stays in the room lane", laneOf("event_offer", "event_offer:event:evt-1", { match: { kind: "public_event" } }) === "room");
+check("an in-room nudge stays in the room lane", laneOf("in_room", "in_room:match:e1") === "room");
+check("a check-in stays in the other lane", laneOf("ask_checkin", "ask_checkin:a1") === "other");
+
+// Repeats depend on what happened (2026-09-18), not just that it was shown.
+const rNow = new Date("2026-10-20T18:00:00Z");
+const rToday = "2026-10-20";
+const hist = (daysAgo: number[], outcome: OfferHistory["outcome"] = null, answered = false): OfferHistory => ({
+  shownAt: daysAgo.map((d) => new Date(rNow.getTime() - d * 86_400_000)),
+  outcome,
+  answered,
+});
+const opening = (date: string | null) => ({ isEvent: false, date, shortNotice: false });
+const event = (date: string, shortNotice = false) => ({ isEvent: true, date, shortNotice });
+const act = (h: OfferHistory, m: { isEvent: boolean; date: string | null; shortNotice: boolean }) => repeatRule(h, m, rToday, rNow).action;
+check("never shown is new", act(hist([]), opening("2026-11-02")) === "new");
+check("declined never comes back, even a month later", act(hist([40], "declined"), opening("2026-11-02")) === "blocked");
+check("declined gets no day-before reminder either", act(hist([5], "declined"), event("2026-10-21", true)) === "blocked");
+check("went or applied never comes back", act(hist([40], "acted"), opening(null)) === "blocked");
+check("unanswered, 31 days ago, still open: comes back once", act(hist([31]), opening("2026-11-02")) === "resurface");
+check("unanswered with no stated deadline can come back too", act(hist([31]), opening(null)) === "resurface");
+check("unanswered, 10 days ago: not yet", act(hist([10]), opening("2026-11-02")) === "blocked");
+check("unanswered but past its deadline: never", act(hist([31]), opening("2026-10-01")) === "blocked");
+check("already came back once: never a third time", act(hist([70, 35]), opening("2026-11-02")) === "blocked");
+check("same-day records count as one showing", countShowings(hist([31, 31, 30.5]).shownAt).length === 1);
+check("they replied right after seeing it: not re-pitched", act(hist([40], null, true), opening("2026-11-02")) === "blocked");
+check("interested, deadline 3 days out: one reminder", act(hist([20], "interested"), opening("2026-10-23")) === "remind");
+check("interested, deadline 5 days out: reminder", act(hist([20], "interested"), opening("2026-10-25")) === "remind");
+check("interested, deadline 12 days out: waits", act(hist([20], "interested"), opening("2026-11-01")) === "blocked");
+check("interested, no stated deadline: no reminder", act(hist([20], "interested"), opening(null)) === "blocked");
+check("interested, deadline today: too late for a reminder", act(hist([20], "interested"), opening("2026-10-20")) === "blocked");
+check("an event they saw, happening within a day: the day-before reminder stays", act(hist([6]), event("2026-10-21", true)) === "remind");
 
 console.log(`proactive rules: ${total - failed}/${total} passed`);
 if (failed) process.exitCode = 1;

@@ -83,7 +83,9 @@ const JUDGE_MODEL = MODELS.sonnet;
 // fits: false when the personal read says it doesn't fit what they asked.
 // online (2026-09-17): an online event, reachable from anywhere, so it has no
 // city and skips the nearby filter.
-type MatchExtras = { details?: EventDetails; opportunity?: OpportunityDetails; whyItFits?: string; fits?: boolean };
+// rightKind: the fit check's read of whether it's even the kind of thing they
+// asked for, separate from whether it fits on date, place, or stage.
+type MatchExtras = { details?: EventDetails; opportunity?: OpportunityDetails; whyItFits?: string; fits?: boolean; rightKind?: boolean };
 export type TierMatch =
   | ({ tier: 1; kind: "co_event"; event_api_id: string; event_date: string; name: string; url?: string; reason: string; city?: string | null; online?: boolean } & MatchExtras)
   | ({ tier: 2; kind: "public_event"; event_api_id: string; event_date: string; name: string; url: string; reason: string; city?: string | null; online?: boolean } & MatchExtras)
@@ -842,7 +844,7 @@ export async function getTieredRecommendation(
   // rawMessage: their own words, used for the time frame and for spotting a
   // "what's on?" ask, since the search text is a rewrite that can drop both.
   // profile: what Co knows they want right now (personSnapshot.ts
-  // profileFocusText); orders what matches the ask.
+  // profileForSearch); orders what matches the ask.
   // widen: they're frustrated with what Co has found; look further and keep more.
   // coreAsk: the member's own ask, for Tier 3. The sweep searches events with
   // a widened brief, but openings follow what they actually asked (2026-09-18:

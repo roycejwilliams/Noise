@@ -1,5 +1,5 @@
 import { generateText } from "ai";
-import { getPersonSnapshot, profileFocusText } from "../harness/personSnapshot.js";
+import { getPersonSnapshot, profileForSearch } from "../harness/personSnapshot.js";
 import { rewriteKeepsAsk } from "./searchRules.js";
 import { isBrowseAsk } from "./askWindow.js";
 import { getTimezoneForCity } from "./geocoding.js";
@@ -170,7 +170,7 @@ export async function generateRecommendation(userId: string, currentMessage?: st
           // zone and records that it did (scope.timezoneDefaulted).
           timezone: profile.city ? await getTimezoneForCity(profile.city).catch(() => null) : null,
           // What Co knows they want right now orders what matches the ask.
-          profile: [profileFocusText(await getPersonSnapshot(userId).catch(() => null)), feelings ? roomPreferenceFromFeelings(feelings) : null].filter(Boolean).join("\n") || null,
+          profile: [profileForSearch(await getPersonSnapshot(userId).catch(() => null)), feelings ? roomPreferenceFromFeelings(feelings) : null].filter(Boolean).join("\n") || null,
           // Frustrated with what Co has found: look wider (2026-09-18).
           widen: !!feelings?.withCo.frustrated,
         },

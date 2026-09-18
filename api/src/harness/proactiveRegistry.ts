@@ -94,7 +94,7 @@ export const proactiveRegistry: ProactiveRegistry = {
   event_offer: {
     async draft(c, person) {
       const p = c.payload as EventOfferPayload;
-      const r = await draftEventReveal(person, p.askText, p.fromProfile, p.match, { reminder: p.reminder });
+      const r = await draftEventReveal(person, p.askText, p.fromProfile, p.match, { reminder: p.reminder, again: p.again });
       return r ?? skip("model chose SKIP");
     },
     async onSent(c) {

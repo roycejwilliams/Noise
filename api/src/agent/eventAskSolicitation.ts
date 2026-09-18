@@ -50,7 +50,9 @@ export async function draftAskSolicitation(firstName: string, eventName: string)
     functionId: "agent.eventAskSolicitation",
     firstName,
     facts: { event_they_registered_for: eventName, what_co_knows_about_their_goals_for_it: "nothing yet" },
-    task: `Ask, as one real question, who they'd want to meet or what would make "${eventName}" worth their time, so you can point them to the right people there. Name the event.`,
+    // Their answer is how they get matched in the room, so this goes out on
+    // hard days too (2026-09-18); the feelings block softens it instead.
+    task: `Ask, as one real question, who they'd want to meet or what would make "${eventName}" worth their time, so you can point them to the right people there. Name the event. Keep it easy to answer in a few words.`,
   });
   if (!text) return null;
   return { text, rules: { maxSentences: 2, maxChars: 260 } };

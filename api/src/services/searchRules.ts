@@ -148,11 +148,15 @@ export function xPostFitsWindow(stated: StatedDates, window: { start: string; en
 // (2026-09-16: "Just sent you one, actually, Codex Community Meetup this
 // Tuesday..." after the link and a full caption). Anything more in the
 // message (a feeling, a second question, news) still gets a reply.
+// Emoji or anything beyond words and ordinary punctuation is extra: a
+// feeling can be just "😭" (code review, 2026-09-16).
+function hasEmojiOrSymbols(text: string): boolean {
+  return /[^\p{L}\p{N}\s.,!?'’"“”\-–:;()&/$#%@+]/u.test(text);
+}
+
 export function messageIsOnlyTheAsk(original: string, rewritten: string): boolean {
   if (/\?.*\?/s.test(original)) return false; // two questions
-  // Emoji or anything beyond words and ordinary punctuation is extra: a
-  // feeling can be just "😭" (code review, 2026-09-16).
-  if (/[^\p{L}\p{N}\s.,!?'’"“”\-–:;()&/$#%@+]/u.test(original)) return false;
+  if (hasEmojiOrSymbols(original)) return false;
   const originalContent = contentWords(original);
   if (!originalContent.length) return true;
   const rewriteWords = new Set(words(rewritten));
@@ -163,15 +167,25 @@ export function messageIsOnlyTheAsk(original: string, rewritten: string): boolea
 // was nothing but the ask, the search ruled nothing out (that correction goes
 // out in the reply), and it isn't their first real message (opening the
 // conversation and the first-contact call offer live in the reply).
+// beyondAsk is the router's read of everything else in the message: null
+// means only the ask (2026-09-18: "What does SF tech week look like? Oct 5th
+// - Oct 11th?" and "Did you see anything about VC looking to fund?" each got
+// a message restating the result, because the word-match below failed on a
+// date range and on "looking"/"look"). Undefined falls back to that match.
 export function canSkipReplyAfterResults(t: {
   sentResults: number;
   original: string | null;
   rewritten: string | null;
   ruledOut: number;
   firstRealMessage: boolean;
+  beyondAsk?: string | null;
 }): boolean {
-  if (!t.sentResults || !t.original || !t.rewritten) return false;
+  if (!t.sentResults) return false;
   if (t.ruledOut > 0 || t.firstRealMessage) return false;
+  if (t.original && hasEmojiOrSymbols(t.original)) return false;
+  if (t.beyondAsk === null) return true;
+  if (typeof t.beyondAsk === "string") return false;
+  if (!t.original || !t.rewritten) return false;
   return messageIsOnlyTheAsk(t.original, t.rewritten);
 }
 

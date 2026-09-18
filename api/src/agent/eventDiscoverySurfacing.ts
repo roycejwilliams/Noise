@@ -89,7 +89,7 @@ export async function draftEventReveal(
   askText: string,
   fromProfile: boolean,
   match: TierMatch,
-  opts: { reminder?: boolean } = {},
+  opts: { reminder?: boolean; again?: boolean } = {},
 ): Promise<{ messages: string[]; text: string; rules: OutputRules } | null> {
   const url: string | undefined = "url" in match ? match.url : undefined;
   const text = await draftProactive({
@@ -99,8 +99,10 @@ export async function draftEventReveal(
     // Every event offer goes out with its details now (2026-09-18), so "short
     // notice" is only said when it's true.
     task: opts.reminder
-      ? `They already heard about this one from you. This is a short heads-up that it's coming up: name it and when it is, in one or two sentences. Don't present it as new or re-explain it.${url ? " The link goes out as its own message right before yours; don't mention a link." : ""} If it doesn't fit anymore, return SKIP.`
-      : `Name it and when it is, and say in plain words why it fits them.${isShortNotice(match) ? " It's short notice, so be upfront about that so there's no pressure." : ""}${url ? " The link goes out as its own message right before yours; don't mention a link." : ""} If it doesn't actually fit, return SKIP.`,
+      ? match.kind === "opportunity"
+        ? `They were interested in this one when you mentioned it. This is a short heads-up that the deadline is coming up: name it and the deadline, in one or two sentences. Don't present it as new or re-explain it.${url ? " The link goes out as its own message right before yours; don't mention a link." : ""} If it doesn't fit anymore, return SKIP.`
+        : `They already heard about this one from you. This is a short heads-up that it's coming up: name it and when it is, in one or two sentences. Don't present it as new or re-explain it.${url ? " The link goes out as its own message right before yours; don't mention a link." : ""} If it doesn't fit anymore, return SKIP.`
+      : `${opts.again ? "You mentioned this to them over a month ago and they never replied; it's still open and still fits, so bring it up once more, lightly and with no pressure, as something you're circling back on. " : ""}Name it and when it is, and say in plain words why it fits them.${isShortNotice(match) ? " It's short notice, so be upfront about that so there's no pressure." : ""}${url ? " The link goes out as its own message right before yours; don't mention a link." : ""} If it doesn't actually fit, return SKIP.`,
   });
   if (!text) return null;
   const tokens = nameTokens(match.name);

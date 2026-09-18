@@ -76,6 +76,8 @@ type Scenario = {
   exemptSends?: { at: string; type: string; target: string }[];
   // Replies come a fixed number of minutes after each simulated send.
   replyAfterMinutes?: number;
+  // Struggling in the last day for the whole scenario (emotion loop).
+  needsCare?: boolean;
   expect?: {
     sends?: number;
     maxSends?: number;
@@ -133,7 +135,7 @@ function simulate(sc: Scenario): SimSend[] {
         pending.delete(c.targetKey);
       }
     }
-    const ev = evaluateCandidates({ now, timezone: sc.timezone, optedOut: false, candidates: [...pending.values()], sends: ledger, lastInboundAt });
+    const ev = evaluateCandidates({ now, timezone: sc.timezone, optedOut: false, candidates: [...pending.values()], sends: ledger, lastInboundAt, needsCare: sc.needsCare });
     const pick = codePick(ev.eligible);
     if (!pick) continue;
     sends.push({ at: now, type: pick.type, target: pick.targetKey, topic: pick.topicKey });
@@ -160,15 +162,17 @@ function violations(sends: { at: Date; type: string; target: string; topic?: str
     }
     if (seenTargets.has(s.target)) out.push(`duplicate ${s.target} at ${s.at.toISOString()}`);
     seenTargets.add(s.target);
-    const lane = laneOf(s.type);
-    const inLane = (o: (typeof sorted)[number]) => laneOf(o.type) === lane;
+    const lane = laneOf(s.type, s.target);
+    const inLane = (o: (typeof sorted)[number]) => laneOf(o.type, o.target) === lane;
+    const dayCap = lane === "room" ? RULES.roomMaxPerLocalDay : lane === "opportunity" ? RULES.opportunityMaxPerLocalDay : RULES.maxPerLocalDay;
+    const weekCap = lane === "room" ? RULES.roomMaxPer7Days : lane === "opportunity" ? RULES.opportunityMaxPer7Days : RULES.maxPer7Days;
     const sameDay = sorted.filter((o, j) => j < i && inLane(o) && DateTime.fromJSDate(o.at).setZone(zone).hasSame(local, "day"));
-    if (sameDay.length >= (lane === "room" ? RULES.roomMaxPerLocalDay : RULES.maxPerLocalDay)) out.push(`2nd ${lane}-lane text on ${local.toISODate()} (${s.type})`);
+    if (sameDay.length >= dayCap) out.push(`2nd ${lane}-lane text on ${local.toISODate()} (${s.type})`);
     const week = sorted.filter((o, j) => j < i && inLane(o) && s.at.getTime() - o.at.getTime() < 7 * 86400000);
-    if (week.length >= (lane === "room" ? RULES.roomMaxPer7Days : RULES.maxPer7Days)) out.push(`${week.length + 1}th ${lane}-lane text in 7 days at ${s.at.toISOString()}`);
-    // One-way pause: room-lane sends are paused only by room-lane sends; the
-    // other lane is paused by anything unanswered.
-    const prev = sorted.slice(0, i).filter((o) => (lane === "room" ? inLane(o) : true)).pop();
+    if (week.length >= weekCap) out.push(`${week.length + 1}th ${lane}-lane text in 7 days at ${s.at.toISOString()}`);
+    // One-way pause: room and opening sends are paused only by their own
+    // lane; the other lane is paused by anything unanswered.
+    const prev = sorted.slice(0, i).filter((o) => (lane === "other" ? true : inLane(o))).pop();
     if (prev && s.at.getTime() - prev.at.getTime() < RULES.unansweredPauseHours * 3600000 && !replyBetween(prev.at.getTime(), s.at.getTime())) {
       out.push(`${s.type} at ${s.at.toISOString()} while ${prev.type} from ${prev.at.toISOString()} was unanswered`);
     }
@@ -210,6 +214,8 @@ type LiveCase = {
   source?: "synthetic";
   kind: "event_tease" | "event_reveal" | "ask_solicitation" | "calendar_follow" | "companion" | "ask_checkin" | "post_call" | "debrief" | "network_tease" | "window_followup";
   input: any;
+  // How they've been feeling, as the daily pick would render it.
+  feeling?: string;
   // Eval-only checks on top of production checks.
   expectSkip?: boolean;
   mustNotMention?: string[];
@@ -234,7 +240,8 @@ async function runLive(c: LiveCase): Promise<{ text: string | null; rules?: Outp
     }
     case "ask_solicitation": {
       const { draftAskSolicitation } = await import("../../src/agent/eventAskSolicitation.js");
-      const r = await draftAskSolicitation(first, c.input.eventName);
+      const { draftWithFeeling } = await import("../../src/harness/proactive.js");
+      const r = c.feeling ? await draftWithFeeling(c.feeling, () => draftAskSolicitation(first, c.input.eventName)) : await draftAskSolicitation(first, c.input.eventName);
       return { text: r?.text ?? null, rules: r?.rules };
     }
     case "calendar_follow": {

@@ -261,24 +261,131 @@ export async function distanceBetween(cityA: string, cityB: string): Promise<num
   return a && b ? haversineMiles(a, b) : null;
 }
 
-export async function wasAlreadyOffered(userId: string, match: TierMatch): Promise<boolean> {
+// ---------- Repeats (2026-09-18)
+//
+// Whether something already shown comes back depends on what happened, not
+// just that it was shown (it used to be never, forever):
+//   - declined, or they went/applied ("helped"/"didn't help"): never again.
+//   - showed interest: not re-pitched; an opening with a stated deadline gets
+//     one reminder in the last OPPORTUNITY_REMINDER_DAYS before it.
+//   - they texted Co within a day of seeing it: not re-pitched. Replies to a
+//     direct reveal aren't classified yet, so an answer could have been a
+//     no; this keeps a "not for me" from ever coming back.
+//   - never answered: can come back once, RESURFACE_AFTER_DAYS later, while
+//     it's still open (the sweep's fit check runs on it again).
+//   - an event within a day keeps its one day-before reminder unless declined.
+// Different cycles of a program (YC W27 vs S27) are different names, so
+// they're different things here too.
+export const RESURFACE_AFTER_DAYS = 30;
+export const OPPORTUNITY_REMINDER_DAYS = 5;
+const SAME_SHOWING_DAYS = 3;
+const ANSWERED_WITHIN_HOURS = 24;
+
+export type OfferOutcome = "declined" | "interested" | "acted" | null;
+export type OfferHistory = { shownAt: Date[]; outcome: OfferOutcome; answered: boolean };
+export type RepeatAction = "new" | "remind" | "resurface" | "blocked";
+
+// One showing can leave several records (the offer, the dedup row, a texted
+// search) on the same day; count those as one.
+export function countShowings(shownAt: Date[]): Date[] {
+  const sorted = [...shownAt].sort((a, b) => a.getTime() - b.getTime());
+  const out: Date[] = [];
+  for (const d of sorted) {
+    if (!out.length || d.getTime() - out[out.length - 1].getTime() > SAME_SHOWING_DAYS * 86_400_000) out.push(d);
+  }
+  return out;
+}
+
+export function repeatRule(
+  h: OfferHistory,
+  m: { isEvent: boolean; date: string | null; shortNotice: boolean },
+  today: string,
+  now: Date,
+): { action: RepeatAction; reason: string } {
+  const showings = countShowings(h.shownAt);
+  if (!showings.length && !h.outcome) return { action: "new", reason: "never shown" };
+  if (h.outcome === "declined") return { action: "blocked", reason: "they passed on it" };
+  if (h.outcome === "acted") return { action: "blocked", reason: "they already went or applied" };
+  const daysLeft = m.date ? daysBetween(today, m.date) : null;
+  if (daysLeft !== null && daysLeft < 0) return { action: "blocked", reason: "no longer open" };
+  if (m.isEvent && m.shortNotice) return { action: "remind", reason: "shown before and it's within a day" };
+  if (h.outcome === "interested") {
+    return !m.isEvent && daysLeft !== null && daysLeft >= 1 && daysLeft <= OPPORTUNITY_REMINDER_DAYS
+      ? { action: "remind", reason: `they were interested and the deadline is ${daysLeft} day(s) out` }
+      : { action: "blocked", reason: "they were interested; only a reminder before the deadline" };
+  }
+  if (h.answered) return { action: "blocked", reason: "they replied after seeing it" };
+  if (showings.length >= 2) return { action: "blocked", reason: "already came back once" };
+  const since = Math.floor((now.getTime() - showings[0].getTime()) / 86_400_000);
+  if (since < RESURFACE_AFTER_DAYS) return { action: "blocked", reason: `shown ${since} day(s) ago, can come back after ${RESURFACE_AFTER_DAYS}` };
+  return { action: "resurface", reason: `shown ${since} days ago, never answered, still open` };
+}
+
+// When they were shown it, what they said about it, and whether they texted
+// Co right after. extraShownAt: showings found another way (the sweep's
+// fuzzy name match on openings).
+export async function offerHistory(userId: string, match: TierMatch, extraShownAt: Date[] = []): Promise<OfferHistory> {
   const eventId = "event_api_id" in match ? match.event_api_id : null;
-  const { rows } = await pool.query(
-    `SELECT 1 FROM co_memories
-     WHERE user_id = $1
-       AND memory_type IN ('recommendation_offered', 'event_offer_pending')
-       AND (
-         ($2::text IS NOT NULL AND (content::jsonb ->> 'event_api_id' = $2 OR content::jsonb -> 'match' ->> 'event_api_id' = $2))
-         OR lower(coalesce(content::jsonb ->> 'name', content::jsonb -> 'match' ->> 'name')) = lower($3)
-       )
-     UNION ALL
-     SELECT 1 FROM surfaced_events WHERE user_id = $1 AND $2::text IS NOT NULL AND event_api_id = $2
-     UNION ALL
-     SELECT 1 FROM tier3_offered_opportunities WHERE user_id = $1 AND lower(name) = lower($3)
-     LIMIT 1`,
-    [userId, eventId, match.name],
-  ).catch(() => ({ rows: [] as unknown[] }));
-  return rows.length > 0;
+  const shown = await pool
+    .query(
+      `SELECT created_at AS at FROM co_memories
+       WHERE user_id = $1
+         AND memory_type IN ('recommendation_offered', 'event_offer_pending')
+         AND (
+           ($2::text IS NOT NULL AND (content::jsonb ->> 'event_api_id' = $2 OR content::jsonb -> 'match' ->> 'event_api_id' = $2))
+           OR lower(coalesce(content::jsonb ->> 'name', content::jsonb -> 'match' ->> 'name')) = lower($3)
+         )
+       UNION ALL
+       SELECT surfaced_at FROM surfaced_events WHERE user_id = $1 AND $2::text IS NOT NULL AND event_api_id = $2
+       UNION ALL
+       SELECT created_at FROM tier3_offered_opportunities WHERE user_id = $1 AND lower(name) = lower($3)`,
+      [userId, eventId, match.name],
+    )
+    .then((r) => r.rows.map((row: { at: Date }) => new Date(row.at)))
+    .catch(() => [] as Date[]);
+  const shownAt = [...shown, ...extraShownAt];
+  const outcomeRow = await pool
+    .query(
+      `SELECT result FROM suggestion_outcomes
+       WHERE user_id = $1 AND result IN ('declined', 'interested', 'helped', 'didnt_help')
+         AND (item_key = $2 OR item_key = $3 OR lower(item_name) = lower($4))
+       ORDER BY (result = 'declined') DESC, created_at DESC LIMIT 1`,
+      [userId, eventId ? `event:${eventId}` : "", `name:${match.name.toLowerCase()}`, match.name],
+    )
+    .then((r) => r.rows[0]?.result as string | undefined)
+    .catch(() => undefined);
+  const outcome: OfferOutcome = outcomeRow === "declined" ? "declined" : outcomeRow === "interested" ? "interested" : outcomeRow ? "acted" : null;
+  let answered = false;
+  if (shownAt.length) {
+    answered = await pool
+      .query(
+        `SELECT 1 FROM co_memories m, unnest($2::timestamptz[]) AS shown(at)
+         WHERE m.user_id = $1 AND m.memory_type = 'text_exchange' AND m.content LIKE 'User %'
+           AND m.created_at > shown.at AND m.created_at <= shown.at + ($3 || ' hours')::interval
+         LIMIT 1`,
+        [userId, shownAt.map((d) => d.toISOString()), ANSWERED_WITHIN_HOURS],
+      )
+      .then((r) => r.rows.length > 0)
+      .catch(() => false);
+  }
+  return { shownAt, outcome, answered };
+}
+
+export function repeatInput(match: TierMatch, shortNotice: boolean): { isEvent: boolean; date: string | null; shortNotice: boolean } {
+  return {
+    isEvent: "event_api_id" in match,
+    date: "event_date" in match && match.event_date ? match.event_date : match.tier === 3 ? (match.deadline ?? null) : null,
+    shortNotice,
+  };
+}
+
+// For a texted search: anything but a fresh or resurfacing item counts as
+// already offered (a reminder isn't something to pitch as new).
+export async function wasAlreadyOffered(userId: string, match: TierMatch, now = new Date(), zone: string | null = null): Promise<boolean> {
+  const h = await offerHistory(userId, match);
+  const input = repeatInput(match, false);
+  const r = repeatRule(h, input, localToday(now, zone), now);
+  return r.action === "blocked" || r.action === "remind";
 }
 
 // Gate a list of matches for one person. userId null = no repeat check

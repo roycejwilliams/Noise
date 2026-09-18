@@ -245,6 +245,12 @@ onboardingCaseCases.push(
     [!canSkipReplyAfterResults({ sentResults: 1, original: "Any AI engineer events Thursday?", rewritten: "Find AI engineer events Thursday", ruledOut: 1, firstRealMessage: false }), "something ruled out keeps the reply, so a wrong earlier pick gets corrected"],
     [!canSkipReplyAfterResults({ sentResults: 1, original: "Any AI events in SF this week?", rewritten: "Find AI events in SF this week", ruledOut: 0, firstRealMessage: true }), "a first real message keeps the reply, so Co opens the conversation"],
     [!canSkipReplyAfterResults({ sentResults: 0, original: "Any design events in SF next week?", rewritten: "Find design events in SF next week", ruledOut: 0, firstRealMessage: false }), "nothing sent means a reply"],
+    // The router's split of the ask from everything else (2026-09-18).
+    [canSkipReplyAfterResults({ sentResults: 1, original: "What does the SF tech week look like? Oct 5th - Oct 11th?", rewritten: "What tech events are happening during SF tech week Oct 5th - Oct 11th", ruledOut: 0, firstRealMessage: false, beyondAsk: null }), "router: a date range is part of the ask, so no restating reply"],
+    [canSkipReplyAfterResults({ sentResults: 1, original: "Did you see anything about VC looking to fund?", rewritten: "Look for VC funding opportunities", ruledOut: 0, firstRealMessage: false, beyondAsk: null }), "router: only the ask, even when the words don't line up"],
+    [!canSkipReplyAfterResults({ sentResults: 1, original: "Ugh rough week, any chill founder events?", rewritten: "Find chill founder events", ruledOut: 0, firstRealMessage: false, beyondAsk: "rough week" }), "router: a feeling beyond the ask gets a reply"],
+    [!canSkipReplyAfterResults({ sentResults: 1, original: "any founder events this weekend 😭", rewritten: "Find founder events this weekend", ruledOut: 0, firstRealMessage: false, beyondAsk: null }), "an emoji still gets a reply even if the router missed it"],
+    [!canSkipReplyAfterResults({ sentResults: 1, original: "Any AI events Thursday?", rewritten: "Find AI events Thursday", ruledOut: 1, firstRealMessage: false, beyondAsk: null }), "router or not, something ruled out keeps the reply"],
     [!messageIsOnlyTheAsk("anything this weekend 🙏🏾", "Find events this weekend"), "any emoji counts as more than the ask"],
     [messageIsOnlyTheAsk("Any AI/ML talks in SF next week?", "Find AI/ML talks in SF next week"), "ordinary punctuation like a slash is still just the ask"],
     [offerScore(0.5, null, false) === 0.5, "no profile: order by the ask alone"],

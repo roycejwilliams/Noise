@@ -200,12 +200,15 @@ Rules:
 - If they're asking about a new or possible direction ("if I start something new", "if I decide to build something else"), judge it for that new thing. A new company starts from zero, so pre-seed and seed programs fit it. Their current company's stage, funding, or other asks never make it a misfit.
 - Say it doesn't fit when it fails either test: the wrong kind of thing, the wrong place or time, or clearly not worth their time for who they are now.
 - ${person.timeFrame ? `They asked about ${person.timeFrame}. Something clearly happening outside that time frame doesn't fit, however good it is otherwise.` : "They didn't name a time frame."}
+- How they've been feeling never makes something a misfit (2026-09-18): it changes how Co brings it up, not whether they hear about it.
 - Connect a specific thing about them (their ask, or who they are right now) to a specific real detail above. Use only what's written here.
 
-Return ONLY JSON: {"fits": true or false, "why": "the explanation"}`;
+Also say whether it's the right kind of thing for what they asked (test 1 alone), even when it fails on something else like the date or their stage: a founder mixer for someone asking for founder events is the right kind; a funding story for someone asking about hiring is not.
+
+Return ONLY JSON: {"fits": true or false, "rightKind": true or false, "why": "the explanation"}`;
 }
 
-export async function explainFit(match: EnrichedMatch, person: PersonForFit): Promise<{ fits: boolean; why: string } | null> {
+export async function explainFit(match: EnrichedMatch, person: PersonForFit): Promise<{ fits: boolean; rightKind: boolean; why: string } | null> {
   const picture = person.userId ? renderSnapshot(await getPersonSnapshot(person.userId)) : "";
   try {
     const { text } = await generateText({
@@ -214,9 +217,12 @@ export async function explainFit(match: EnrichedMatch, person: PersonForFit): Pr
       experimental_telemetry: { isEnabled: true, functionId: "eventDetails.explainFit" },
       prompt: fitPrompt(match, person, picture),
     });
-    const p = parseModelJson<{ fits?: boolean; why?: string }>(text);
+    const p = parseModelJson<{ fits?: boolean; rightKind?: boolean; why?: string }>(text);
     if (typeof p.why !== "string" || !p.why.trim()) return null;
-    return { fits: p.fits !== false, why: p.why.trim() };
+    const fits = p.fits !== false;
+    // Anything that fits is the right kind; a misfit is only the right kind
+    // when the model said so outright.
+    return { fits, rightKind: fits || p.rightKind === true, why: p.why.trim() };
   } catch (err: any) {
     console.error("eventDetails: explainFit failed (non-fatal):", err?.message ?? err);
     return null;
@@ -236,6 +242,7 @@ export async function enrichMatch(match: TierMatch | EnrichedMatch, person?: Per
     if (fit) {
       m.whyItFits = fit.why;
       m.fits = fit.fits;
+      m.rightKind = fit.rightKind;
     }
   }
   return m;

@@ -287,6 +287,10 @@ const routerOutputSchema = z.object({
   ambiguousBetween: z.array(z.string()).default([]),
   call: z.enum(["explicit_request", "asks_about_calling", "schedule_request", "cancel_scheduled_call", "would_benefit", "none"]),
   wantsRecommendation: z.boolean(),
+  // Everything in the message besides the ask itself (a feeling, news, a
+  // second question), or null when the message is only the ask. Missing
+  // means the router didn't say (callers fall back to their own check).
+  beyondAsk: z.preprocess((v) => (typeof v === "string" ? (v.trim() ? v.trim() : null) : v), z.string().nullable()).optional(),
   asksForUpdates: z.boolean(),
   confidence: z.enum(["high", "medium", "low"]),
   reason: z.string().default(""),
@@ -333,7 +337,7 @@ Things Co has asked that are still waiting on a reply from them (newest first, w
 ${itemsBlock}
 ${declined}
 Return ONLY a JSON object:
-{"reason": "one short sentence: what their message is doing", "answers": {"itemId": "...", "value": "..."} or null, "ambiguousBetween": [itemIds], "call": "...", "wantsRecommendation": true/false, "asksForUpdates": true/false, "confidence": "high" | "medium" | "low"}
+{"reason": "one short sentence: what their message is doing", "answers": {"itemId": "...", "value": "..."} or null, "ambiguousBetween": [itemIds], "call": "...", "wantsRecommendation": true/false, "beyondAsk": "..." or null, "asksForUpdates": true/false, "confidence": "high" | "medium" | "low"}
 Write "reason" first, then make every other field agree with it: if your reason says the message isn't answering a waiting item, answers must be null.
 
 answers — which waiting item (if any) the latest message is actually replying to:
@@ -362,6 +366,8 @@ wantsRecommendation — they're asking Co to find, suggest, or surface something
 - a false-premise callback ("that job posting you sent me, is it still open") when the conversation shows Co never sent it;
 - they want Co's own opinion or advice (how to fix something, help planning their pitch, feedback on their build);
 - venting or telling Co about their life.
+
+beyondAsk — when wantsRecommendation is true, separate the ask from everything else in the message. The ask is what they want found, including its time frame, place, and who it's for ("tech week, Oct 5th - Oct 11th?" is one ask; "anything about VC looking to fund?" is one ask). beyondAsk is anything else that needs a real response: a feeling ("ugh rough week"), news about their life ("wasn't feeling the mixer"), a second, different question, or a reaction to something Co said. Write it in a few plain words ("rough week", "asked about Maya too"), or null when the message is only the ask. A feeling or life update is never part of the ask. null when wantsRecommendation is false.
 
 asksForUpdates — they're asking what's new or changed with Co itself ("any updates?", "you got some recent updates?", "what's new?"). false for a casual greeting ("what's up?"), for "found anything for me?" or "surfaced anything lately?" (those are recommendation asks), for reactions to an update message, and for telling Co about their own week.
 
@@ -415,6 +421,9 @@ export type Decision<T extends RoutableItem = RoutableItem> = {
   answerCallingQuestion: boolean;
   callWouldBenefit: boolean;
   wantsRecommendation: boolean;
+  // Router's read of what else the message holds besides the ask; undefined
+  // when it didn't say.
+  beyondAsk?: string | null;
   asksForUpdates: boolean;
   clarifyContext: string;
   // What the clarifying question is about, if any: which waiting item they
@@ -576,5 +585,6 @@ export function decideActions<T extends RoutableItem>(
   }
 
   d.wantsRecommendation = out.wantsRecommendation;
+  if (out.beyondAsk !== undefined) d.beyondAsk = out.wantsRecommendation ? out.beyondAsk : null;
   return d;
 }

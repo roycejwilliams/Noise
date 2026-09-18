@@ -99,16 +99,18 @@ export function renderSnapshot(s: PersonSnapshot | null): string {
   return lines.join("\n");
 }
 
-// What to match events against for this person: what they do, what they want
-// right now, what's on their mind, what matters to them in people, and what
-// has worked before. Left out: what didn't work (that's a reason against, not
-// a direction). Empty when Co knows nothing yet.
-export function profileFocusText(s: PersonSnapshot | null): string {
+// Who this person is, for a search: what they do, what matters to them in
+// people, and what has worked before. The search's topic comes only from the
+// ask being searched. Their other asks ("wants right now") and what's on
+// their mind are left out (2026-09-18: "Anyone hiring a design engineer?"
+// searched pre-seed funding because the profile listed their funding asks;
+// feelings reach the search separately, as a room preference). Also left
+// out: what didn't work (a reason against, not a direction). Empty when Co
+// knows nothing yet.
+export function profileForSearch(s: PersonSnapshot | null): string {
   if (!s) return "";
   return [
     s.work ? `Works on: ${s.work}` : null,
-    s.wantsNow.length ? `Wants right now: ${s.wantsNow.join("; ")}` : null,
-    s.weighingOn.length ? `On their mind: ${s.weighingOn.join("; ")}` : null,
     s.valuesInPeople.length ? `Cares about in people and plans: ${s.valuesInPeople.join("; ")}` : null,
     s.worked.length ? `Things that went well before: ${s.worked.join("; ")}` : null,
   ]

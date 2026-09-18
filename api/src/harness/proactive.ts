@@ -42,6 +42,11 @@ import { getEmotionalContext, renderEmotionalContext } from "./emotion.js";
 // without threading it through every registry and agent draft call.
 const feelingForDraft = new AsyncLocalStorage<string>();
 
+// Draft with how they've been feeling in view, the way the daily pick does.
+export function draftWithFeeling<T>(feeling: string, fn: () => Promise<T>): Promise<T> {
+  return feelingForDraft.run(feeling, fn);
+}
+
 // Judgment with side effects (which text goes to a person, and its words)
 // runs on Sonnet 5 per Royce's model policy (2026-09-14).
 // The eval (evals/proactive/run.ts --draft-model) can compare models; in
@@ -111,6 +116,11 @@ export const RULES = {
   // (2026-09-18: five pending follow-ups competed with one event offer).
   roomMaxPerLocalDay: 1,
   roomMaxPer7Days: 4,
+  // Openings (Tier 3: accelerators, grants, investors) are a feature that
+  // serves the member, not the room, so they don't wait behind an event for
+  // the room's slot (2026-09-18: a YC offer sat behind WorkOS Demo Night).
+  opportunityMaxPerLocalDay: 1,
+  opportunityMaxPer7Days: 3,
   unansweredPauseHours: 72,
   maxDraftAttempts: 2,
   // After the model decides nothing is worth sending, don't ask it again for
@@ -205,27 +215,38 @@ function unansweredSince(send: SendRecord, lastInboundAt: Date | null): boolean 
   return !lastInboundAt || lastInboundAt.getTime() < send.sentAt.getTime();
 }
 
-// Two lanes, each with its own daily/weekly caps and its own unanswered
-// pause: things that bring someone into a room or toward a person, and
-// everything else. An ignored check-in no longer silences events for 72 hours.
-export type Lane = "room" | "other";
+// Three lanes, each with its own daily/weekly caps and its own unanswered
+// pause: things that bring someone into a room or toward a person, openings
+// (an event_offer whose match is a Tier 3 opportunity), and everything else.
+// An ignored check-in no longer silences events for 72 hours.
+export type Lane = "room" | "opportunity" | "other";
 const ROOM_LANE = new Set<string>(["event_offer", "event_match_nudge", "network_tease", "in_room"]);
-export function laneOf(type: string): Lane {
+const OPPORTUNITY_KEY = /^event_offer:(reminder:|again:)?opportunity:/;
+// Sends only have their target key; queued candidates also have the match.
+export function laneOf(type: string, targetKey?: string | null, payload?: { match?: { kind?: string } } | null): Lane {
+  if (type === "event_offer" && (payload?.match?.kind === "opportunity" || (targetKey && OPPORTUNITY_KEY.test(targetKey)))) return "opportunity";
   return ROOM_LANE.has(type) ? "room" : "other";
 }
 
+export const LANE_CAPS: Record<Lane, { perDay: number; per7Days: number }> = {
+  room: { perDay: RULES.roomMaxPerLocalDay, per7Days: RULES.roomMaxPer7Days },
+  opportunity: { perDay: RULES.opportunityMaxPerLocalDay, per7Days: RULES.opportunityMaxPer7Days },
+  other: { perDay: RULES.maxPerLocalDay, per7Days: RULES.maxPer7Days },
+};
+
 export function userLevelChecks(state: Omit<PickState, "candidates">, opts: { skipHours?: boolean; lane?: Lane } = {}): GateCheck[] {
   const lane = opts.lane ?? "other";
-  const maxDay = lane === "room" ? RULES.roomMaxPerLocalDay : RULES.maxPerLocalDay;
-  const maxWeek = lane === "room" ? RULES.roomMaxPer7Days : RULES.maxPer7Days;
-  const counted = state.sends.filter((s) => !s.exempt && laneOf(s.type) === lane);
+  const maxDay = LANE_CAPS[lane].perDay;
+  const maxWeek = LANE_CAPS[lane].per7Days;
+  const counted = state.sends.filter((s) => !s.exempt && laneOf(s.type, s.targetKey) === lane);
   const dayStart = startOfLocalDay(state.now, state.timezone);
   const today = counted.filter((s) => s.sentAt >= dayStart && s.sentAt <= state.now).length;
   const week = counted.filter((s) => state.now.getTime() - s.sentAt.getTime() < 7 * DAY && s.sentAt <= state.now).length;
-  // One-way pause: an unanswered event or intro pauses check-ins too, but an
-  // unanswered check-in never pauses events. So follow-ups can't isolate
-  // anyone from rooms, and someone who isn't replying still gets one text.
-  const pauseSource = lane === "room" ? counted : state.sends.filter((s) => !s.exempt);
+  // One-way pause: an unanswered event, intro, or opening pauses check-ins
+  // too, but an unanswered check-in never pauses events or openings, and the
+  // room and openings only pause on their own lane. So follow-ups can't
+  // isolate anyone from rooms, and someone who isn't replying still gets one text.
+  const pauseSource = lane === "other" ? state.sends.filter((s) => !s.exempt) : counted;
   const lastCounted = pauseSource.filter((s) => s.sentAt <= state.now).sort((a, b) => b.sentAt.getTime() - a.sentAt.getTime())[0];
   const pauseActive =
     !!lastCounted &&
@@ -300,12 +321,13 @@ export function evaluateCandidates(state: PickState): Evaluation {
   // pause apply per lane, so each candidate is checked against its own lane.
   const byLane: Record<Lane, GateCheck[]> = {
     room: userLevelChecks(state, { lane: "room" }),
+    opportunity: userLevelChecks(state, { lane: "opportunity" }),
     other: userLevelChecks(state, { lane: "other" }),
   };
   const userChecks = byLane.other.filter((k) => PERSON_CHECKS.has(k.name));
   const userOk = gate(userChecks).ok;
   const perCandidate = state.candidates.map((candidate) => {
-    const laneChecks = byLane[laneOf(candidate.type)].filter((k) => !PERSON_CHECKS.has(k.name));
+    const laneChecks = byLane[laneOf(candidate.type, candidate.targetKey, candidate.payload)].filter((k) => !PERSON_CHECKS.has(k.name));
     const checks = [...laneChecks, ...candidateChecks(candidate, state)];
     return { candidate, checks, ok: gate(checks).ok };
   });
@@ -365,7 +387,7 @@ ${PROACTIVE_RULES}
 
 CONFIRMED_FACTS (the only facts you may state)
 ${renderFacts(opts.facts)}
-${feeling ? `\nHOW THEY'VE BEEN FEELING (let it shape your tone and whether this is the right moment; if it isn't, return SKIP; never name the feeling)\n${feeling}\n` : ""}
+${feeling ? `\nHOW THEY'VE BEEN FEELING (let it shape how you say this, never whether you say it: it's not a reason to SKIP. If they've been struggling, be gentler and lower-pressure, and acknowledge it briefly and warmly in your own words before the rest. Never name the feeling)\n${feeling}\n` : ""}
 
 TASK
 ${opts.task}
@@ -392,7 +414,7 @@ export type OutputRules = {
 const ALWAYS_FORBIDDEN: { pattern: RegExp; reason: string }[] = [
   { pattern: /!{2,}|(?:!.*){3,}/, reason: "piled-up exclamation points" },
   { pattern: /[—–]/, reason: "em dash" },
-  { pattern: /\b(keep (my|an) eyes? (open|out)|keep (watching|looking|an eye out)|be on the lookout|want me to (watch|look) for)\b/i, reason: "offers to keep watching; the sweep already does that without asking" },
+  { pattern: /\b(keep (my|an) eyes? (open|out)|keep (watching|looking|tracking|track of|an eye out)|be on the lookout|want me to (watch|look|keep|track))\b/i, reason: "offers to keep watching; the sweep already does that without asking" },
   { pattern: /\bjust (checking|touching) (in|base)\b/i, reason: "generic check-in filler" },
   { pattern: /\b(someone|anyone|people) (cool|interesting)\b/i, reason: "vague instead of naming the person" },
   { pattern: /\b(someone|a person) (asking|looking) for\b/i, reason: "engine reasoning leaked" },
@@ -684,7 +706,7 @@ async function sendWithLedger(
     const lastInboundAt = await loadLastInbound(client, person.userId);
     const now = new Date();
     const checks = [
-      ...userLevelChecks({ now, timezone: person.timezone, optedOut: optedOutNow, sends, lastInboundAt }, { lane: laneOf(c.type) }),
+      ...userLevelChecks({ now, timezone: person.timezone, optedOut: optedOutNow, sends, lastInboundAt }, { lane: laneOf(c.type, c.targetKey, c.payload) }),
       ...candidateChecks(c, { now, sends, lastInboundAt }),
     ];
     const g = gate(checks);

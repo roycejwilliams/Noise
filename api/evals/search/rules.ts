@@ -11,6 +11,7 @@ import { checkTiming, checkLocation, type MatchFacts } from "../../src/harness/m
 import type { TierMatch } from "../../src/services/tieredRecommendation.js";
 import { resolveAskWindow } from "../../src/services/askWindow.js";
 import { searchCacheKey, triesInOrder, xSearchBudget } from "../../src/services/searchRules.js";
+import { profileForSearch } from "../../src/harness/personSnapshot.js";
 import { resolveCoEventPlace } from "../../src/services/luma.js";
 import { localToday, searchZone } from "../../src/services/eventOrder.js";
 import { spelledNumbers } from "../../src/harness/matchGate.js";
@@ -210,6 +211,13 @@ c(spelledNumbers("one hundred and twenty-five")[0] === 125, "'and' and hyphens i
 const lateOrder = triesInOrder([{ tier: 2, n: "a" }, { tier: 2, n: "b" }, { tier: 2, n: "c" }, { tier: 2, n: "d" }, { tier: 3, n: "grant" }]).map((m) => m.n);
 c(lateOrder.join(",") === "a,grant,b,c,d", "a late answer tries the Tier 3 grant second, not never");
 c(triesInOrder([{ tier: 1 }, { tier: 2 }, { tier: 2 }, { tier: 2 }, { tier: 2 }, { tier: 2 }]).length === 5, "a late answer tries at most five");
+
+// The search hears who they are, never their other asks or what's on their
+// mind (2026-09-18: a hiring question searched funding because the profile
+// listed their funding asks).
+const searchProfile = profileForSearch({ asOf: "2026-09-18T19:53", work: "Founder of Co, pre-seed", place: "San Francisco", worked: [], wantsNow: ["Find pre-seed VCs in SF", "Find grants for a founder event"], didntWork: [], weighingOn: ["stressed about fundraising"], valuesInPeople: ["laid-back founders"] } as any);
+c(searchProfile.includes("Founder of Co") && searchProfile.includes("laid-back founders"), "the search profile keeps who they are");
+c(!/VCs|grants|fundraising/.test(searchProfile), "the search profile leaves out their other asks and what's on their mind");
 
 // ---------------------------------------------------------------------------
 let failed = 0;

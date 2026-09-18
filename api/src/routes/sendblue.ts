@@ -45,6 +45,7 @@ import {
   storeProfile,
 } from "../services/profileExtraction.js";
 import { generateRecommendation, recordRecommendationsSent } from "../services/recommendation.js";
+import { isBrowseAsk } from "../services/askWindow.js";
 import { searchWithTimeCap } from "../agent/conversationTools.js";
 import type { TierMatch } from "../services/tieredRecommendation.js";
 import { detectCheckinPhrase, recordCheckin, hasActiveAsk, recordWalkinAsk } from "../services/eventWalkinCheckin.js";
@@ -1220,6 +1221,8 @@ export function sendblueRouter(io: Server): Router {
         // Set to the last caption sent when the results fully answered a
         // message that was only a search ask; the reply agent is skipped.
         let resultsAnsweredAsk: string | null = null;
+        // Names of the results that actually went out this turn.
+        let sentThisTurn: string[] = [];
 
         // The thread just ended ("cool", "thanks 🙏"): react to their
         // message instead of writing a sentence that keeps it going
@@ -1914,7 +1917,13 @@ Return ONLY valid JSON, no preamble: {"date": "YYYY-MM-DD or null", "time": "HH:
                 arr.push(m);
                 matchesByTier.set(m.tier, arr);
               }
-              const matchCount = matchesByTier.size;
+              // "What does SF tech week look like? Oct 5th - Oct 11th?" asks
+              // what's on, so one per tier undersold it (2026-09-18: five real
+              // events passed, one went out, and Co said it was the only one).
+              // A time frame or a what's-on question gets up to three a tier.
+              const searchScope = "scope" in recommendation ? recommendation.scope : null;
+              const perTier = searchScope?.window || isBrowseAsk(resolvedContent) ? 3 : 1;
+              const matchCount = [...matchesByTier.values()].reduce((n, c) => n + Math.min(c.length, c[0]?.tier === 1 ? 1 : perTier), 0);
               const prepStarted = Date.now();
 
               type PreparedMatch = { m: TierMatch; description: string; fits?: boolean; why?: string; em?: Awaited<ReturnType<typeof enrichMatch>> };
@@ -1955,44 +1964,57 @@ Return ONLY valid JSON, no preamble: {"date": "YYYY-MM-DD or null", "time": "HH:
 
               const preparedAll: PreparedMatch[] = [];
               const tierWinners = await Promise.all(
-                [...matchesByTier.values()].map(async (candidates): Promise<PreparedMatch | null> => {
+                [...matchesByTier.values()].map(async (candidates): Promise<PreparedMatch[]> => {
                   const tier = candidates[0]?.tier;
                   if (tier === 1) {
                     // Co's own events are always kept, no fit check.
                     const first = candidates[0];
-                    if (!first) return null;
+                    if (!first) return [];
                     const { em } = await enrichOne(first);
                     const p: PreparedMatch = { m: first, description: await draftDescription(first, em), fits: em.fits, why: em.whyItFits };
                     preparedAll.push(p);
-                    return p;
+                    return [p];
                   }
-                  let winner: PreparedMatch | null = null;
-                  for (let i = 0; i < candidates.length && !winner; i += FIT_CHECK_BATCH) {
+                  const winners: PreparedMatch[] = [];
+                  for (let i = 0; i < candidates.length && winners.length < perTier; i += FIT_CHECK_BATCH) {
                     const batch = candidates.slice(i, i + FIT_CHECK_BATCH);
                     const results = await Promise.all(batch.map(enrichOne));
                     for (const { m, em } of results) {
                       const attempted: PreparedMatch = { m, description: "", fits: em.fits, why: em.whyItFits, em };
                       preparedAll.push(attempted);
                       // Only the personal read says fits what they asked
-                      // (services/eventDetails.ts fitPrompt); first in order
-                      // that fits wins its tier.
-                      if (!winner && em.fits !== false) {
+                      // (services/eventDetails.ts fitPrompt); the first in order
+                      // that fit win their tier.
+                      if (winners.length < perTier && em.fits !== false) {
                         attempted.description = await draftDescription(m, em);
-                        winner = attempted;
+                        winners.push(attempted);
                       }
                     }
                   }
-                  return winner;
+                  return winners;
                 }),
               );
               prepMsForTurn = Date.now() - prepStarted;
-              // One per tier, best-fitting first, in the order tiers were returned.
-              const prepared = tierWinners.filter((p): p is PreparedMatch => !!p);
+              // Best-fitting first, in the order tiers were returned.
+              const prepared = tierWinners.flat();
+              // What passed every check but didn't go out this turn, so the
+              // reply never calls what it sent the only one (2026-09-18).
+              const notSent = recommendation.matches.filter((m) => !prepared.some((p) => p.m === m) && !preparedAll.some((p) => p.m === m && p.fits === false));
+              if (prepared.length && notSent.length) {
+                addFact(
+                  replyFacts,
+                  "known",
+                  `The search also turned up ${notSent.length} more real one${notSent.length > 1 ? "s" : ""} you didn't send: ${notSent.map((m) => `"${m.name}"`).join(", ")}. Never say what you sent is the only one; if it helps, offer to send more.`,
+                );
+              }
               // Nothing passed the fit check, but real things were found: send
               // the closest one with an honest caveat rather than "nothing"
               // (2026-09-18: a real event near Sep 24 was found and dropped,
-              // and the member heard nothing).
-              const closest = !prepared.length ? preparedAll.find((p) => p.em) : undefined;
+              // and the member heard nothing). Only something that's the right
+              // kind of thing for what they asked, off on a detail: a funding
+              // story went out for "Anyone hiring a design engineer?"
+              // (2026-09-18).
+              const closest = !prepared.length ? preparedAll.find((p) => p.em?.rightKind === true) : undefined;
               if (closest?.em) {
                 closest.description = await draftDescription(closest.m, closest.em, true);
                 prepared.push(closest);
@@ -2049,6 +2071,7 @@ Return ONLY valid JSON, no preamble: {"date": "YYYY-MM-DD or null", "time": "HH:
                     `Sent "${m.name}", found through ${sourceOf(m)}${"url" in m && m.url ? ` (link ${m.url})` : " (no link)"}, just before this reply: "${description}"`,
                   );
                 }
+                sentThisTurn = actuallySent.map((p) => p.m.name);
                 if (actuallySent.length) {
                   await recordSearchNote(
                     user.id,
@@ -2093,11 +2116,16 @@ Return ONLY valid JSON, no preamble: {"date": "YYYY-MM-DD or null", "time": "HH:
                   rewritten: rw?.rewritten ?? null,
                   ruledOut: ruledOut.length,
                   firstRealMessage: isFirstRealMessage || isThinProfileFirstMessage,
+                  beyondAsk: decision.beyondAsk,
                 })
               ) {
                 resultsAnsweredAsk = actuallySent[actuallySent.length - 1].description;
               }
-              if (actuallySent.length) addInstruction(replyFacts, `You already sent them ${actuallySent.length > 1 ? "a couple of real things" : "something real"} you thought of, separately from this reply. Don't repeat the name, link, or details in this reply. If it's natural, you can briefly acknowledge you just sent those, but keep this reply focused on genuinely responding to what they just said.`);
+              if (actuallySent.length)
+                addInstruction(
+                  replyFacts,
+                  `You already sent them ${actuallySent.length > 1 ? "a few real things" : "something real"} for what they asked, separately from this reply; that answered the ask. Don't repeat the name, link, or details, and don't point back at it ("check it above", "just sent you one", "already sent you"). Respond only to the rest of their message${decision.beyondAsk ? `: ${decision.beyondAsk}` : ""}.`,
+                );
               else if (prepared.length) addInstruction(replyFacts, "You found something real to tell them about, but sending it just failed. Say plainly that something went wrong sending it and you'll need them to ask again in a moment, without naming what it was.");
             } else {
               // Nothing real found right now. Save what they asked for as an
@@ -2206,7 +2234,9 @@ Return ONLY valid JSON, no preamble: {"date": "YYYY-MM-DD or null", "time": "HH:
               const payload: WindowFollowUpPayload = {
                 label: scope.window,
                 asked: resolvedContent.slice(0, 200),
-                sent: recommendation.available && recommendation.matches?.length ? recommendation.matches.map((m) => m.name) : [],
+                // What they actually got, not everything the search found
+                // (2026-09-18: five were recorded, one was sent).
+                sent: sentThisTurn,
               };
               const targetKey = `window_followup:${scope.windowEnd.slice(0, 10)}`;
               const queued = await enqueueCandidate({

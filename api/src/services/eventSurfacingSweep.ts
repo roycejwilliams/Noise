@@ -1,5 +1,5 @@
 import pool from "../db/db.js";
-import { getPersonSnapshot, profileFocusText } from "../harness/personSnapshot.js";
+import { getPersonSnapshot, profileForSearch } from "../harness/personSnapshot.js";
 import { getTimezoneForCity } from "./geocoding.js";
 import { getTieredRecommendation, type TierMatch } from "./tieredRecommendation.js";
 import { enqueueCandidate } from "../harness/proactive.js";
@@ -9,7 +9,7 @@ import { enrichMatch } from "./eventDetails.js";
 import { getEmotionalContext, renderEmotionalContext, roomPreferenceFromFeelings } from "../harness/emotion.js";
 import { buildSearchBrief } from "./searchBrief.js";
 import { recordDecision } from "../harness/core.js";
-import { wasAlreadyOffered } from "../harness/matchGate.js";
+import { offerHistory, repeatInput, repeatRule, type RepeatAction } from "../harness/matchGate.js";
 
 export type SurfacingCandidate = {
   // ask_checkins.id — NOT the same as userId. A user can have more than one
@@ -75,42 +75,29 @@ const OPPORTUNITY_IDENTITY_THRESHOLD = 0.88;
 // against everything past in a single query, the same pattern
 // eventMatching.ts already uses for real events instead of JS-side cosine
 // comparison.
-async function alreadyOfferedTier3(userId: string, name: string): Promise<boolean> {
+// When an opening with a similar name was offered (the dates feed the
+// repeat rule in harness/matchGate.ts, not a yes/no).
+async function tier3ShownAt(userId: string, name: string): Promise<Date[]> {
   const newEmbedding = await generateEmbedding(name).catch((err: any) => {
-    console.error("alreadyOfferedTier3: generateEmbedding failed (non-fatal, treating as not-a-repeat):", err?.message ?? err);
+    console.error("tier3ShownAt: generateEmbedding failed (non-fatal, treating as not shown):", err?.message ?? err);
     return null;
   });
-  if (!newEmbedding) return false;
+  if (!newEmbedding) return [];
   const { rows } = await pool.query(
-    `SELECT 1 FROM tier3_offered_opportunities
+    `SELECT created_at FROM tier3_offered_opportunities
      WHERE user_id = $1
-       AND 1 - (embedding <=> $2::vector) >= $3
-     LIMIT 1`,
+       AND 1 - (embedding <=> $2::vector) >= $3`,
     [userId, `[${newEmbedding.join(",")}]`, OPPORTUNITY_IDENTITY_THRESHOLD],
   );
-  return rows.length > 0;
+  return rows.map((r: { created_at: Date }) => new Date(r.created_at));
 }
 
-async function alreadyOffered(userId: string, match: TierMatch): Promise<boolean> {
-  if (!("event_api_id" in match)) return alreadyOfferedTier3(userId, match.name);
-  const { rows } = await pool.query(
-    `SELECT 1 FROM co_memories
-     WHERE user_id = $1
-       AND memory_type = 'event_offer_pending'
-       AND (content::jsonb -> 'match' ->> 'event_api_id') = $2
-     LIMIT 1`,
-    [userId, match.event_api_id],
-  );
-  return rows.length > 0;
-}
-
-// Filters a set of candidate matches down to only the ones not already
-// offered before — per-match, not all-or-nothing, so a repeat-offered Tier 1
-// event doesn't take a fresh Tier 2/3 one down with it (see the note on
-// getTieredRecommendation in tieredRecommendation.ts).
-async function filterFreshMatches(userId: string, matches: TierMatch[]): Promise<TierMatch[]> {
-  const flags = await Promise.all(matches.map((m) => alreadyOffered(userId, m)));
-  return matches.filter((_, i) => !flags[i]);
+// What happens to something already shown: new, a reminder, back once after
+// a month unanswered, or never (harness/matchGate.ts repeatRule).
+async function repeatFor(userId: string, match: TierMatch): Promise<{ action: RepeatAction; reason: string }> {
+  const extra = "event_api_id" in match ? [] : await tier3ShownAt(userId, match.name);
+  const history = await offerHistory(userId, match, extra);
+  return repeatRule(history, repeatInput(match, isShortNotice(match)), new Date().toISOString().slice(0, 10), new Date());
 }
 
 // One thing at a time, paced by a backlog (Royce, 2026-08-30) — "I don't
@@ -143,11 +130,14 @@ async function filterFreshMatches(userId: string, matches: TierMatch[]): Promise
 // URGENT_WINDOW_DAYS), so it's meant to reach the person regardless of
 // where the normal cadence clock stands.
 // reminder: they were already shown this one (in a texted search or an
-// earlier offer) and it's now within a day: a one-time heads-up, not a new pitch.
-type BacklogItem = { askText: string; match: TierMatch; source: "full" | "urgent"; reminder?: boolean };
+// earlier offer) and it's now within a day, or an opening they were
+// interested in is near its deadline: a one-time heads-up, not a new pitch.
+// again: shown over a month ago, never answered, still open: it comes back
+// once, under its own key so the first send's key doesn't block it.
+type BacklogItem = { askText: string; match: TierMatch; source: "full" | "urgent"; reminder?: boolean; again?: boolean };
 
-function offerTargetKey(item: Pick<BacklogItem, "match" | "reminder">): string {
-  return `event_offer:${item.reminder ? "reminder:" : ""}${matchKey(item.match)}`;
+function offerTargetKey(item: Pick<BacklogItem, "match" | "reminder" | "again">): string {
+  return `event_offer:${item.reminder ? "reminder:" : item.again ? "again:" : ""}${matchKey(item.match)}`;
 }
 
 // Stored in a dedicated table, not co_memories (Royce, 2026-08-30 code
@@ -276,6 +266,8 @@ type SweepSearchTrace = {
   roomPreference: string | null;
   found: { name: string; tier: number; date: string | null }[];
   staleOrRepeat: string[];
+  // Shown over a month ago with no reply, and coming back once.
+  resurfaced: string[];
   scope: Record<string, unknown> | null;
 };
 
@@ -297,7 +289,7 @@ async function findFreshPending(candidate: SurfacingCandidate): Promise<{ items:
   const feelings = await getEmotionalContext(candidate.userId).catch(() => null);
   const widen = !!feelings?.withCo.frustrated;
   const roomPreference = feelings ? roomPreferenceFromFeelings(feelings) : null;
-  const focus = profileFocusText(await getPersonSnapshot(candidate.userId).catch(() => null)) || null;
+  const focus = profileForSearch(await getPersonSnapshot(candidate.userId).catch(() => null)) || null;
   const profile = [focus, roomPreference].filter(Boolean).join("\n") || null;
   // No zone for their city: the engine uses Co's home zone and says so.
   const result = await getTieredRecommendation({ text: brief.searchText }, candidate.city, { userId: candidate.userId, source: "sweep", timezone, profile, widen, checkRepeat: false, coreAsk: candidate.askText })
@@ -314,24 +306,22 @@ async function findFreshPending(candidate: SurfacingCandidate): Promise<{ items:
   // that's landed well for this person before sorts earlier; a user with no
   // outcome history yet gets all-zero bias, which is exactly the same
   // tier-number order as before this existed.
-  // Anything they've already been shown (texted search or earlier offer) is
-  // never re-pitched. The gate used to drop those forever inside the search;
-  // now the sweep drops them here, except one that's within a day, which gets
-  // a one-time reminder (2026-09-18: twelve SF events shown in texted searches
-  // were excluded from every later sweep, so the backlog only held events
-  // weeks out).
-  const seen = await Promise.all(
-    matches.map(async (m) => (await alreadyOffered(candidate.userId, m)) || (await wasAlreadyOffered(candidate.userId, m))),
-  );
-  const fresh = matches.filter((_, i) => !seen[i]);
-  const reminders = matches.filter((m, i) => seen[i] && "event_api_id" in m && isShortNotice(m));
+  // Anything they've already been shown (texted search or earlier offer)
+  // follows the repeat rule (harness/matchGate.ts): never after a no, a
+  // reminder when it's close, back once after a month unanswered. The gate
+  // used to drop those forever inside the search (2026-09-18: twelve SF
+  // events shown in texted searches were excluded from every later sweep).
+  const repeats = await Promise.all(matches.map((m) => repeatFor(candidate.userId, m)));
+  const fresh = matches.filter((_, i) => repeats[i].action === "new" || repeats[i].action === "resurface");
+  const again = new Set(matches.filter((_, i) => repeats[i].action === "resurface"));
+  const reminders = matches.filter((_, i) => repeats[i].action === "remind");
   const bias = await getTierBias(candidate.userId);
   const items = fresh
     .sort((a, b) => bias[b.tier] - bias[a.tier] || a.tier - b.tier)
     .map((match) => {
       const date = relevantDate(match);
       const source: "full" | "urgent" = date !== null && daysUntilDate(date) <= URGENT_WINDOW_DAYS ? "urgent" : "full";
-      return { askText: candidate.askText, match, source };
+      return { askText: candidate.askText, match, source, ...(again.has(match) ? { again: true } : {}) };
     })
     .concat(reminders.map((match) => ({ askText: candidate.askText, match, source: "urgent" as const, reminder: true })));
   const sc = result?.scope;
@@ -342,7 +332,8 @@ async function findFreshPending(candidate: SurfacingCandidate): Promise<{ items:
       widened: widen,
       roomPreference,
       found: matches.map((m) => ({ name: m.name, tier: m.tier, date: relevantDate(m) })),
-      staleOrRepeat: matches.filter((m) => !fresh.includes(m) && !reminders.includes(m)).map((m) => m.name),
+      staleOrRepeat: matches.flatMap((m, i) => (repeats[i].action === "blocked" ? [`${m.name}: ${repeats[i].reason}`] : [])),
+      resurfaced: [...again].map((m) => m.name),
       scope: sc
         ? {
             city: sc.city,
@@ -373,7 +364,7 @@ export function matchKey(match: TierMatch): string {
 }
 
 // The harness already sent, skipped, or expired this one for this person.
-async function alreadyDecided(userId: string, item: Pick<BacklogItem, "match" | "reminder">): Promise<boolean> {
+async function alreadyDecided(userId: string, item: Pick<BacklogItem, "match" | "reminder" | "again">): Promise<boolean> {
   const { rows } = await pool.query(
     `SELECT 1 FROM proactive_candidates WHERE user_id = $1 AND target_key = $2 AND status <> 'pending'`,
     [userId, offerTargetKey(item)],
@@ -385,7 +376,7 @@ async function alreadyDecided(userId: string, item: Pick<BacklogItem, "match" | 
 // a new pitch is stale, a reminder isn't.
 async function shownSinceQueued(userId: string, item: BacklogItem): Promise<boolean> {
   if (item.reminder) return false;
-  return (await alreadyOffered(userId, item.match)) || (await wasAlreadyOffered(userId, item.match));
+  return (await repeatFor(userId, item.match)).action !== (item.again ? "resurface" : "new");
 }
 
 // Drops anything at the front that's gone stale — already offered through
@@ -413,6 +404,8 @@ export type EventOfferPayload = {
   revealNow?: boolean;
   // They've already been shown this one; it's a heads-up that it's coming up.
   reminder?: boolean;
+  // Shown over a month ago with no reply, and still open: brought up once more.
+  again?: boolean;
 };
 
 // ask_id used for the backlog of people with no open stated ask, whose
@@ -520,6 +513,7 @@ export async function attemptEventSurfacing(candidate: SurfacingCandidate): Prom
       // they have to answer before seeing it.
       ...(trace.widened ? { revealNow: true } : {}),
       ...(item.reminder ? { reminder: true } : {}),
+      ...(item.again ? { again: true } : {}),
     };
     const { queued: ok } = await enqueueCandidate({
       userId: candidate.userId,

@@ -236,7 +236,7 @@
     },
     {
       "id": "s07",
-      "about": "weekly cap: a new event every day and fast replies means 4 room-lane texts in 7 days (the room lane has its own cap, 2026-09-18)",
+      "about": "weekly cap: a new event every day and fast replies means 4 room-lane texts in 7 days (the room lane has its own cap, 2026-09-18; openings have their own lane and don't count here, see s07b)",
       "timezone": "America/Los_Angeles",
       "start": "2026-09-14T15:45:00Z",
       "end": "2026-09-21T06:00:00Z",
@@ -512,6 +512,197 @@
       "expect": {
         "sends": 2
       }
+    },
+    {
+      "id": "s18",
+      "about": "a struggling guest at a live event still gets asked what they want from it; their ask check-in waits (2026-09-18: holding the question cut them out of in-room matching)",
+      "timezone": "America/Los_Angeles",
+      "start": "2026-09-18T16:00:00Z",
+      "end": "2026-09-19T06:00:00Z",
+      "needsCare": true,
+      "arrivals": [
+        {
+          "at": "2026-09-18T17:00:00Z",
+          "type": "ask_solicitation",
+          "target": "ask_solicitation:climate founders mixer",
+          "expiresInHours": 8
+        },
+        {
+          "at": "2026-09-18T17:00:00Z",
+          "type": "ask_checkin",
+          "target": "ask_checkin:a1"
+        }
+      ],
+      "expect": {
+        "sends": 1,
+        "firstType": "ask_solicitation",
+        "neverTypes": [
+          "ask_checkin"
+        ]
+      }
+    },
+    {
+      "id": "s07b",
+      "about": "the same week as s07 plus an opening every day: events still cap at 4, openings at 3 in their own lane, so 7 texts (2026-09-18)",
+      "timezone": "America/Los_Angeles",
+      "start": "2026-09-14T15:45:00Z",
+      "end": "2026-09-21T06:00:00Z",
+      "replyAfterMinutes": 30,
+      "arrivals": [
+        {
+          "at": "2026-09-14T16:00:00Z",
+          "type": "event_offer",
+          "target": "event_offer:event:d1",
+          "expiresInHours": 200
+        },
+        {
+          "at": "2026-09-15T16:00:00Z",
+          "type": "event_offer",
+          "target": "event_offer:event:d2",
+          "expiresInHours": 200
+        },
+        {
+          "at": "2026-09-16T16:00:00Z",
+          "type": "event_offer",
+          "target": "event_offer:event:d3",
+          "expiresInHours": 200
+        },
+        {
+          "at": "2026-09-17T16:00:00Z",
+          "type": "event_offer",
+          "target": "event_offer:event:d4",
+          "expiresInHours": 200
+        },
+        {
+          "at": "2026-09-18T16:00:00Z",
+          "type": "event_offer",
+          "target": "event_offer:event:d5",
+          "expiresInHours": 200
+        },
+        {
+          "at": "2026-09-19T16:00:00Z",
+          "type": "event_offer",
+          "target": "event_offer:event:d6",
+          "expiresInHours": 200
+        },
+        {
+          "at": "2026-09-14T16:00:00Z",
+          "type": "event_offer",
+          "target": "event_offer:opportunity:program 1",
+          "expiresInHours": 200
+        },
+        {
+          "at": "2026-09-15T16:00:00Z",
+          "type": "event_offer",
+          "target": "event_offer:opportunity:program 2",
+          "expiresInHours": 200
+        },
+        {
+          "at": "2026-09-16T16:00:00Z",
+          "type": "event_offer",
+          "target": "event_offer:opportunity:program 3",
+          "expiresInHours": 200
+        },
+        {
+          "at": "2026-09-17T16:00:00Z",
+          "type": "event_offer",
+          "target": "event_offer:opportunity:program 4",
+          "expiresInHours": 200
+        },
+        {
+          "at": "2026-09-18T16:00:00Z",
+          "type": "event_offer",
+          "target": "event_offer:opportunity:program 5",
+          "expiresInHours": 200
+        },
+        {
+          "at": "2026-09-19T16:00:00Z",
+          "type": "event_offer",
+          "target": "event_offer:opportunity:program 6",
+          "expiresInHours": 200
+        }
+      ],
+      "expect": {
+        "sends": 7
+      }
+    },
+    {
+      "id": "s19",
+      "about": "an event and an opening queued the same day both go out; the opening no longer waits behind the room's slot (2026-09-18: YC waited behind WorkOS)",
+      "timezone": "America/Los_Angeles",
+      "start": "2026-09-18T15:45:00Z",
+      "end": "2026-09-19T06:00:00Z",
+      "arrivals": [
+        {
+          "at": "2026-09-18T16:00:00Z",
+          "type": "event_offer",
+          "target": "event_offer:event:d1",
+          "expiresInHours": 200
+        },
+        {
+          "at": "2026-09-18T16:00:00Z",
+          "type": "event_offer",
+          "target": "event_offer:opportunity:program 1",
+          "expiresInHours": 200
+        }
+      ],
+      "expect": {
+        "sends": 2
+      }
+    },
+    {
+      "id": "s20",
+      "about": "two openings queued the same day: one goes out, the other waits for the next day (1 opening per local day)",
+      "timezone": "America/Los_Angeles",
+      "start": "2026-09-18T15:45:00Z",
+      "end": "2026-09-19T06:00:00Z",
+      "replyAfterMinutes": 30,
+      "arrivals": [
+        {
+          "at": "2026-09-18T16:00:00Z",
+          "type": "event_offer",
+          "target": "event_offer:opportunity:program 1",
+          "expiresInHours": 200
+        },
+        {
+          "at": "2026-09-18T16:00:00Z",
+          "type": "event_offer",
+          "target": "event_offer:opportunity:program 2",
+          "expiresInHours": 200
+        }
+      ],
+      "expect": {
+        "sends": 1
+      }
+    },
+    {
+      "id": "s21",
+      "about": "an unanswered check-in doesn't pause openings, and an unanswered opening doesn't pause events (one-way pause per lane)",
+      "timezone": "America/Los_Angeles",
+      "start": "2026-09-14T15:45:00Z",
+      "end": "2026-09-16T06:00:00Z",
+      "arrivals": [
+        {
+          "at": "2026-09-14T16:00:00Z",
+          "type": "window_followup",
+          "target": "window_followup:w1"
+        },
+        {
+          "at": "2026-09-15T16:00:00Z",
+          "type": "event_offer",
+          "target": "event_offer:opportunity:program 1",
+          "expiresInHours": 200
+        },
+        {
+          "at": "2026-09-15T17:00:00Z",
+          "type": "event_offer",
+          "target": "event_offer:event:x1",
+          "expiresInHours": 100
+        }
+      ],
+      "expect": {
+        "sends": 3
+      }
     }
   ],
   "drafts": [
@@ -672,6 +863,17 @@
       "text": "This matches your stated goal of meeting investors, want it?",
       "rules": {
         "maxSentences": 2
+      },
+      "shouldPass": false
+    },
+    {
+      "id": "dr-keep-tracking",
+      "source": "real",
+      "about": "offered to keep tracking deadlines at the end of an opening (co-test draft, 2026-09-18)",
+      "text": "YC's Winter 2027 batch is open, deadline's November 2, runs January to March in SF. Want me to keep tracking deadlines like this for you?",
+      "rules": {
+        "maxSentences": 2,
+        "maxChars": 300
       },
       "shouldPass": false
     }
@@ -916,6 +1118,15 @@
         "more events",
         "next week"
       ]
+    },
+    {
+      "id": "l04b",
+      "kind": "ask_solicitation",
+      "input": {
+        "eventName": "Climate Founders Mixer"
+      },
+      "feeling": "Right now (their texts, 2 hours ago): high stressed about work.\nThey've been struggling in the last day.",
+      "noInventedTime": true
     }
   ]
 }
