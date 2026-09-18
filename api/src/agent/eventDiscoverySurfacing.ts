@@ -1,6 +1,7 @@
 import type { TierMatch } from "../services/tieredRecommendation.js";
 import { draftProactive, nameTokens, type Facts, type OutputRules } from "../harness/proactive.js";
 import { renderEventDetails } from "../services/eventDetails.js";
+import { isShortNotice } from "../services/eventSurfacingSweep.js";
 
 export type EventDiscoverySurfacingPerson = {
   userId: string;
@@ -88,13 +89,18 @@ export async function draftEventReveal(
   askText: string,
   fromProfile: boolean,
   match: TierMatch,
+  opts: { reminder?: boolean } = {},
 ): Promise<{ messages: string[]; text: string; rules: OutputRules } | null> {
   const url: string | undefined = "url" in match ? match.url : undefined;
   const text = await draftProactive({
     functionId: "agent.eventDiscoverySurfacing.revealNowDraft",
     firstName: person.firstName,
     facts: revealFacts(askText, fromProfile, match),
-    task: `It's short notice, so skip the "want to hear more?" step. Name it and when it is, say in plain words why it fits them, and be upfront that it's short notice so there's no pressure.${url ? " The link goes out as its own message right before yours; don't mention a link." : ""} If it doesn't actually fit, return SKIP.`,
+    // Every event offer goes out with its details now (2026-09-18), so "short
+    // notice" is only said when it's true.
+    task: opts.reminder
+      ? `They already heard about this one from you. This is a short heads-up that it's coming up: name it and when it is, in one or two sentences. Don't present it as new or re-explain it.${url ? " The link goes out as its own message right before yours; don't mention a link." : ""} If it doesn't fit anymore, return SKIP.`
+      : `Name it and when it is, and say in plain words why it fits them.${isShortNotice(match) ? " It's short notice, so be upfront about that so there's no pressure." : ""}${url ? " The link goes out as its own message right before yours; don't mention a link." : ""} If it doesn't actually fit, return SKIP.`,
   });
   if (!text) return null;
   const tokens = nameTokens(match.name);

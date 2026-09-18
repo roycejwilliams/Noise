@@ -6,6 +6,7 @@ import pool from "../db/db.js";
 import { generateEmbedding, generateGoalEmbedding } from "./embeddings.js";
 import { sweepAskAgainstNetwork, sweepOfferingAgainstNetwork } from "./relevance.js";
 import { recordDecision } from "../harness/core.js";
+import { askExpiresAtForUser } from "./askExpiry.js";
 import {
   PROFILE_JUDGMENT_MODEL,
   decideAskWrite,
@@ -981,7 +982,12 @@ export async function captureIntent(
         user_id,
         JSON.stringify([...rest, merged]),
       ]);
-      await pool.query(`UPDATE ask_checkins SET ask_text = $3 WHERE user_id = $1 AND ask_id = $2`, [user_id, intentId, ask!.text]);
+      // Restating an ask renews its time limit (services/askExpiry.ts).
+      const renewedUntil = await askExpiresAtForUser(user_id, ask!.text).catch(() => null);
+      await pool.query(
+        `UPDATE ask_checkins SET ask_text = $3, expires_at = COALESCE($4::timestamptz, expires_at) WHERE user_id = $1 AND ask_id = $2`,
+        [user_id, intentId, ask!.text, renewedUntil],
+      );
     } else {
       // Upsert, not a plain UPDATE — the call/typed-intake path is the only
       // other place a co_profiles row gets created (storeProfile), so a
@@ -1022,16 +1028,17 @@ export async function captureIntent(
     // jobs/index.ts). The NOT EXISTS guard stays as a backstop for two
     // captures of the same text racing each other.
     if (ask && !deduped) {
+      const expiresAt = await askExpiresAtForUser(user_id, ask.text).catch(() => null);
       await pool
         .query(
-          `INSERT INTO ask_checkins (user_id, ask_id, ask_text)
-           SELECT $1::uuid, $2::text, $3::text
+          `INSERT INTO ask_checkins (user_id, ask_id, ask_text, expires_at)
+           SELECT $1::uuid, $2::text, $3::text, $4::timestamptz
            WHERE NOT EXISTS (
              SELECT 1 FROM ask_checkins
              WHERE user_id = $1 AND resolved_at IS NULL AND lower(trim(ask_text)) = lower(trim($3))
            )
            ON CONFLICT (user_id, ask_id) DO NOTHING`,
-          [user_id, intentId, ask.text],
+          [user_id, intentId, ask.text, expiresAt],
         )
         .catch((err) => console.error("ask_checkins insert failed (non-fatal):", err));
     }

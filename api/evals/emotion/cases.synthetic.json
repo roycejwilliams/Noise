@@ -214,6 +214,111 @@
     "expectNeedsCare": false
   },
   {
+    "id": "c10_frustrated_with_co_not_a_hard_day",
+    "kind": "context",
+    "signals": [
+      {
+        "source": "text",
+        "emotion": "frustrated",
+        "intensity": "medium",
+        "valence": "negative",
+        "about": "Co not finding any events",
+        "target": "co",
+        "hoursAgo": 3
+      }
+    ],
+    "expectNeedsCare": false,
+    "expectFrustratedWithCo": true,
+    "expectRoom": null
+  },
+  {
+    "id": "c11_legacy_row_about_co",
+    "kind": "context",
+    "signals": [
+      {
+        "source": "text",
+        "emotion": "frustrated",
+        "intensity": "medium",
+        "valence": "negative",
+        "about": "repeated lack of results for Sep 24th",
+        "hoursAgo": 5
+      }
+    ],
+    "expectNeedsCare": false,
+    "expectFrustratedWithCo": true
+  },
+  {
+    "id": "c12_life_struggle_is_a_hard_day",
+    "kind": "context",
+    "signals": [
+      {
+        "source": "text",
+        "emotion": "burnt out",
+        "intensity": "high",
+        "valence": "negative",
+        "about": "the fundraise",
+        "target": "life",
+        "hoursAgo": 4
+      }
+    ],
+    "expectNeedsCare": true,
+    "expectFrustratedWithCo": false,
+    "expectRoom": "small, low-key"
+  },
+  {
+    "id": "c13_both_at_once",
+    "kind": "context",
+    "signals": [
+      {
+        "source": "text",
+        "emotion": "lonely",
+        "intensity": "medium",
+        "valence": "negative",
+        "about": "moving to SF",
+        "target": "life",
+        "hoursAgo": 6
+      },
+      {
+        "source": "text",
+        "emotion": "impatient",
+        "intensity": "medium",
+        "valence": "negative",
+        "about": "waiting on Co's suggestions",
+        "target": "co",
+        "hoursAgo": 2
+      }
+    ],
+    "expectNeedsCare": true,
+    "expectFrustratedWithCo": true,
+    "expectRoom": "community"
+  },
+  {
+    "id": "c14_happy_with_results_clears_frustration",
+    "kind": "context",
+    "signals": [
+      {
+        "source": "text",
+        "emotion": "frustrated",
+        "intensity": "medium",
+        "valence": "negative",
+        "about": "Co's search results",
+        "target": "co",
+        "hoursAgo": 20
+      },
+      {
+        "source": "text",
+        "emotion": "excited",
+        "intensity": "medium",
+        "valence": "positive",
+        "about": "the demo night Co found",
+        "target": "co",
+        "hoursAgo": 1
+      }
+    ],
+    "expectNeedsCare": false,
+    "expectFrustratedWithCo": false
+  },
+  {
     "id": "l01",
     "kind": "label",
     "draft": "You sound really stressed about the raise.",
@@ -248,7 +353,7 @@
     "kind": "hold",
     "type": "event_offer",
     "needsCare": true,
-    "expectHeld": true
+    "expectHeld": false
   },
   {
     "id": "p02",
@@ -276,6 +381,34 @@
     "kind": "hold",
     "type": "event_offer",
     "needsCare": false,
+    "expectHeld": false
+  },
+  {
+    "id": "p06",
+    "kind": "hold",
+    "type": "event_match_nudge",
+    "needsCare": true,
+    "expectHeld": false
+  },
+  {
+    "id": "p07",
+    "kind": "hold",
+    "type": "network_tease",
+    "needsCare": true,
+    "expectHeld": false
+  },
+  {
+    "id": "p08",
+    "kind": "hold",
+    "type": "ask_checkin",
+    "needsCare": true,
+    "expectHeld": true
+  },
+  {
+    "id": "p09",
+    "kind": "hold",
+    "type": "ask_solicitation",
+    "needsCare": true,
     "expectHeld": false
   },
   {

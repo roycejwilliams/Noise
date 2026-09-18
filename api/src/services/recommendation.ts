@@ -9,7 +9,7 @@ import { getTieredRecommendation, type SearchScope, type TierMatch } from "./tie
 import { generateEmbedding } from "./embeddings.js";
 import { MODELS } from "../models.js";
 import { parseModelJson } from "./modelJson.js";
-import { getEmotionalContext, renderEmotionalContext } from "../harness/emotion.js";
+import { getEmotionalContext, renderEmotionalContext, roomPreferenceFromFeelings } from "../harness/emotion.js";
 
 // Model policy (Royce, 2026-09-14): Haiku for the narrow message-to-search
 // rewrite. (The Sonnet generic-suggestion fallback was removed 2026-09-16.)
@@ -136,15 +136,25 @@ export async function generateRecommendation(userId: string, currentMessage?: st
     let rewrite: { original: string; rewritten: string; used: string; rejectedBecause: string | null } | null = null;
     if (currentMessage) {
       const request = await toSearchRequest(userId, currentMessage, latestIntent?.text ?? null);
-      if (request === null) return { available: false, reason: "their message isn't asking for something new to try" };
-      // The rewrite may only drop filler. If it changed their topic, place or
-      // time frame, or added words, search their own message instead
-      // (services/searchRules.ts).
-      const check = rewriteKeepsAsk(currentMessage, request);
-      askText = check.ok ? request : currentMessage;
-      rewrite = { original: currentMessage, rewritten: request, used: askText, rejectedBecause: check.reason };
+      if (request === null) {
+        // Every caller has already decided a search should run (the router's
+        // wantsRecommendation, or Co's own search tool), so the rewrite can't
+        // cancel it. "Anything you see today?" was being dropped whenever they
+        // were frustrated (2026-09-18). Search what they're looking for
+        // overall; rawMessage below still carries their time frame.
+        askText = askText || currentMessage;
+        rewrite = { original: currentMessage, rewritten: "", used: askText, rejectedBecause: "rewrite didn't read it as a request; searched their overall ask" };
+      } else {
+        // The rewrite may only drop filler. If it changed their topic, place or
+        // time frame, or added words, search their own message instead
+        // (services/searchRules.ts).
+        const check = rewriteKeepsAsk(currentMessage, request);
+        askText = check.ok ? request : currentMessage;
+        rewrite = { original: currentMessage, rewritten: request, used: askText, rejectedBecause: check.reason };
+      }
     }
     if (askText) {
+      const feelings = await getEmotionalContext(userId).catch(() => null);
       // The scope comes back with this search's own matches (2026-09-17: it
       // was read from module state after another await, so two people
       // searching at once could get each other's record).
@@ -160,7 +170,9 @@ export async function generateRecommendation(userId: string, currentMessage?: st
           // zone and records that it did (scope.timezoneDefaulted).
           timezone: profile.city ? await getTimezoneForCity(profile.city).catch(() => null) : null,
           // What Co knows they want right now orders what matches the ask.
-          profile: profileFocusText(await getPersonSnapshot(userId).catch(() => null)) || null,
+          profile: [profileFocusText(await getPersonSnapshot(userId).catch(() => null)), feelings ? roomPreferenceFromFeelings(feelings) : null].filter(Boolean).join("\n") || null,
+          // Frustrated with what Co has found: look wider (2026-09-18).
+          widen: !!feelings?.withCo.frustrated,
         },
       ).catch((err: any) => {
         console.error("generateRecommendation: getTieredRecommendation failed (non-fatal):", err?.message ?? err);

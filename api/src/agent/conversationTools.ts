@@ -16,14 +16,27 @@ import { enrichMatch, renderEventDetails } from "../services/eventDetails.js";
 export type SendCoReply = (params: { phone: string; message: string; asVoice: boolean }) => Promise<boolean | void>;
 
 // A search capped at capMs. Promise.race alone left the search running after
-// Co had already said it found nothing (2026-09-17 code review); a result
-// that lands after the cap is dropped here, and callers only record what
-// they actually sent, so nothing late is sent or written.
-export async function searchWithTimeCap(userId: string, ask: string, capMs: number, label: string): Promise<RecommendationResult> {
+// Co had already said it found nothing (2026-09-17 code review). A result that
+// lands after the cap goes to onLate when given (the caller sends it as the
+// answer, services/lateSearchResult.ts), otherwise it's dropped; callers only
+// record what they actually sent.
+export async function searchWithTimeCap(
+  userId: string,
+  ask: string,
+  capMs: number,
+  label: string,
+  onLate?: (r: RecommendationResult) => Promise<void>,
+): Promise<RecommendationResult> {
   let timer: ReturnType<typeof setTimeout> | undefined;
   let settled = false;
   const search = generateRecommendation(userId, ask).then((r) => {
-    if (settled) console.log(`${label}: search for ${userId} finished after the ${capMs}ms cap, result discarded`);
+    if (settled) {
+      if (onLate) {
+        onLate(r).catch((err: any) => console.error(`${label}: late result handling failed for ${userId} (non-fatal):`, err?.message ?? err));
+      } else {
+        console.log(`${label}: search for ${userId} finished after the ${capMs}ms cap, result discarded`);
+      }
+    }
     return r;
   });
   const cap = new Promise<RecommendationResult>((resolve) => {

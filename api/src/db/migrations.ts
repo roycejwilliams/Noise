@@ -520,6 +520,18 @@ export async function runMigrations(): Promise<void> {
     .query(`ALTER TABLE ask_checkins ADD COLUMN IF NOT EXISTS last_surfaced_at TIMESTAMPTZ`)
     .catch((err: Error) => console.error("ask_checkins.last_surfaced_at migration failed:", err));
 
+  // Asks have a time limit (Royce, 2026-09-18). expires_at: the end of the
+  // time frame they named, or a default lifespan renewed whenever they restate
+  // it. An expired ask is closed with resolved_at (so every reader drops it)
+  // and marked expired_at, to tell it apart from one that actually got
+  // resolved. See services/askExpiry.ts.
+  await pool
+    .query(`ALTER TABLE ask_checkins ADD COLUMN IF NOT EXISTS expires_at TIMESTAMPTZ`)
+    .catch((err: Error) => console.error("ask_checkins.expires_at migration failed:", err));
+  await pool
+    .query(`ALTER TABLE ask_checkins ADD COLUMN IF NOT EXISTS expired_at TIMESTAMPTZ`)
+    .catch((err: Error) => console.error("ask_checkins.expired_at migration failed:", err));
+
   // Coverage-awareness extensions (profileExtraction.ts's getCoverageNudge) —
   // topics_covered persists which RAPPORT_TOPICS have been confirmed (topic
   // -> ISO timestamp), shared across call/text/check-in so a topic answered
@@ -1197,6 +1209,11 @@ export async function runMigrations(): Promise<void> {
           ON event_change_notifications (created_at) WHERE sent_at IS NULL
       `),
     )
+    // eventChangeDetection.ts writes event_id and the deferred cron reads it,
+    // but the column was never added: every off-hours change/cancel notice
+    // failed to queue and the cron failed every 15 minutes (found
+    // 2026-09-18 in co-test logs).
+    .then(() => pool.query(`ALTER TABLE event_change_notifications ADD COLUMN IF NOT EXISTS event_id TEXT`))
     .catch((err: Error) => console.error("event_change_notifications table init failed:", err));
 
   // Day-of QR check-in flow (Royce, 2026-09-10) — walk-ins who scan a venue
@@ -1361,6 +1378,9 @@ export async function runMigrations(): Promise<void> {
       )`,
     )
     .then(() => pool.query(`CREATE INDEX IF NOT EXISTS idx_emotion_signals_user ON emotion_signals (user_id, created_at DESC)`))
+    // Who the feeling is about: 'co' (Co itself) or 'life'. NULL on older rows,
+    // classified from "about" at read time (harness/emotion.ts signalTarget).
+    .then(() => pool.query(`ALTER TABLE emotion_signals ADD COLUMN IF NOT EXISTS target TEXT`))
     .catch((err: Error) => console.error("emotion_signals table init failed:", err));
 
   // Tier 3 (paid X search) budget log (2026-09-15) — tieredRecommendation.ts.

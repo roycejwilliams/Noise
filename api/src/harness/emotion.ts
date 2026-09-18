@@ -31,6 +31,12 @@ import type { GateCheck } from "./core.js";
 export type Valence = "negative" | "positive" | "mixed";
 export type Intensity = "low" | "medium" | "high";
 
+// Who a feeling is about. "co": Co itself (what it found or didn't, its
+// replies, speed, mistakes). "life": everything else. Frustration with Co was
+// being read as someone struggling, which held back the very events they were
+// frustrated about not getting (2026-09-18).
+export type EmotionTarget = "co" | "life";
+
 export type EmotionSignal = {
   source: "call" | "text";
   emotion: string;
@@ -39,7 +45,18 @@ export type EmotionSignal = {
   about: string | null;
   quote: string | null;
   at: Date;
+  // Absent on signals recorded before the target existed; see signalTarget.
+  target?: EmotionTarget | null;
 };
+
+// Signals from before target was recorded are classified from what they
+// were about. Calls are always about their life (voice prosody can't tell).
+const ABOUT_CO = /\bco\b|\bco's\b|\bsearch|\bresults?\b|recommend|suggestion|surfac|\bsweep|contact card|\bleads\b|not finding|\breply\b|\breplies\b|\bresponse\b/i;
+export function signalTarget(s: Pick<EmotionSignal, "source" | "about" | "target">): EmotionTarget {
+  if (s.target === "co" || s.target === "life") return s.target;
+  if (s.source === "call") return "life";
+  return s.about && ABOUT_CO.test(s.about) ? "co" : "life";
+}
 
 // ---------------------------------------------------------------------------
 // Capture: calls (Hume prosody)
@@ -112,7 +129,7 @@ export function renderHumeMoments(moments: Omit<EmotionSignal, "at" | "about">[]
 // ---------------------------------------------------------------------------
 // Capture: texts
 
-export type TextEmotion = { emotion: string; intensity: Intensity; valence: Valence; about: string | null } | null;
+export type TextEmotion = { emotion: string; intensity: Intensity; valence: Valence; about: string | null; target: EmotionTarget } | null;
 
 // Narrow structured read of one message, so Haiku. Returns null for ordinary
 // neutral texts, which is most of them.
@@ -130,13 +147,17 @@ Latest message: "${message}"
 
 Does the latest message carry a real feeling Co should respond to (for example stressed, anxious, discouraged, lonely, frustrated, excited, proud, relieved)? Use the conversation to read it correctly: "fine" after bad news isn't fine. Ignore plain logistics, greetings, and tone you aren't confident about; most messages have none. "about" uses only what they actually said, never an assumed circumstance.
 
-Return ONLY JSON: {"emotion": "one or two words" or null, "intensity": "low" | "medium" | "high", "valence": "negative" | "positive" | "mixed", "about": "what the feeling is about, in a few words, or null"}`,
+"target" is who the feeling is about: "co" when it's about Co itself (what Co found or didn't find, Co's suggestions, replies, speed, or mistakes, like "you keep finding nothing" or "that's not what I asked"), otherwise "life" (their work, people, plans, health, anything else).
+
+Return ONLY JSON: {"emotion": "one or two words" or null, "intensity": "low" | "medium" | "high", "valence": "negative" | "positive" | "mixed", "about": "what the feeling is about, in a few words, or null", "target": "co" | "life"}`,
     });
-    const p = parseModelJson<{ emotion: string | null; intensity?: string; valence?: string; about?: string | null }>(text);
+    const p = parseModelJson<{ emotion: string | null; intensity?: string; valence?: string; about?: string | null; target?: string }>(text);
     if (!p.emotion || typeof p.emotion !== "string") return null;
     const intensity: Intensity = p.intensity === "high" || p.intensity === "medium" ? p.intensity : "low";
     const valence: Valence = p.valence === "negative" || p.valence === "positive" ? p.valence : "mixed";
-    return { emotion: p.emotion.toLowerCase().slice(0, 40), intensity, valence, about: typeof p.about === "string" ? p.about.slice(0, 80) : null };
+    const about = typeof p.about === "string" ? p.about.slice(0, 80) : null;
+    const target: EmotionTarget = p.target === "co" || p.target === "life" ? p.target : signalTarget({ source: "text", about, target: null });
+    return { emotion: p.emotion.toLowerCase().slice(0, 40), intensity, valence, about, target };
   } catch (err: any) {
     console.error("readTextEmotion failed (non-fatal):", err?.message ?? err);
     return null;
@@ -153,13 +174,13 @@ export async function recordEmotionSignals(
   if (!signals.length) return;
   await pool
     .query(
-      `INSERT INTO emotion_signals (user_id, source, emotion, intensity, valence, about, quote, memory_id)
-       SELECT $1, x.source, x.emotion, x.intensity, x.valence, x.about, x.quote, x.memory_id
-       FROM jsonb_to_recordset($2::jsonb) AS x(source text, emotion text, intensity text, valence text, about text, quote text, memory_id uuid)`,
+      `INSERT INTO emotion_signals (user_id, source, emotion, intensity, valence, about, quote, memory_id, target)
+       SELECT $1, x.source, x.emotion, x.intensity, x.valence, x.about, x.quote, x.memory_id, x.target
+       FROM jsonb_to_recordset($2::jsonb) AS x(source text, emotion text, intensity text, valence text, about text, quote text, memory_id uuid, target text)`,
       [
         userId,
         JSON.stringify(
-          signals.map((s) => ({ source: s.source, emotion: s.emotion, intensity: s.intensity, valence: s.valence, about: s.about, quote: s.quote, memory_id: s.memoryId ?? null })),
+          signals.map((s) => ({ source: s.source, emotion: s.emotion, intensity: s.intensity, valence: s.valence, about: s.about, quote: s.quote, memory_id: s.memoryId ?? null, target: signalTarget(s) })),
         ),
       ],
     )
@@ -176,16 +197,21 @@ export type EmotionalContext = {
   lastCall: { at: Date; moments: EmotionSignal[] } | null;
   // Negative feelings that came up more than once in the last 14 days.
   recurring: { about: string; emotions: string[]; count: number }[];
-  // Struggling recently enough that promotional or logistical outreach would
-  // land badly: a medium/high negative signal in the last 24 hours with no
-  // positive signal after it.
+  // Struggling in their life recently: a medium/high negative signal about
+  // their life in the last 24 hours with no positive signal after it. Shapes
+  // how Co talks and which rooms it picks; never whether they get one.
   needsCare: boolean;
+  // Frustrated with Co itself in the last 48 hours (what it has or hasn't
+  // found, its replies). Makes Co search wider and try harder; not a hard day.
+  withCo: { frustrated: boolean; about: string | null; count: number };
 };
 
 const HOUR = 3600_000;
 
-export function summarizeSignals(signals: EmotionSignal[], now: Date): EmotionalContext {
-  const sorted = [...signals].sort((a, b) => b.at.getTime() - a.at.getTime());
+export function summarizeSignals(allSignals: EmotionSignal[], now: Date): EmotionalContext {
+  const all = [...allSignals].sort((a, b) => b.at.getTime() - a.at.getTime());
+  const sorted = all.filter((s) => signalTarget(s) === "life");
+  const aboutCo = all.filter((s) => signalTarget(s) === "co");
   const age = (s: EmotionSignal) => now.getTime() - s.at.getTime();
 
   const latestText = sorted.find((s) => s.source === "text" && age(s) <= 6 * HOUR) ?? null;
@@ -213,12 +239,37 @@ export function summarizeSignals(signals: EmotionSignal[], now: Date): Emotional
     .slice(0, 2)
     .map((t) => ({ about: t.about, emotions: [...t.emotions], count: t.count }));
 
+  const coNeg = aboutCo.filter((s) => s.valence === "negative" && s.intensity !== "low" && age(s) <= 48 * HOUR);
+  const coPositiveAfter = coNeg.length ? aboutCo.some((s) => s.valence === "positive" && s.at > coNeg[0].at) : false;
+
   return {
     current,
     lastCall: lastCallAt ? { at: lastCallAt, moments: lastCallMoments } : null,
     recurring,
     needsCare: !!recentNeg && !positiveAfter,
+    withCo: { frustrated: coNeg.length > 0 && !coPositiveAfter, about: coNeg[0]?.about ?? null, count: coNeg.length },
   };
+}
+
+// What kind of room would suit how they've been, from feelings about their
+// life only. Orders search results (the ask still decides what's eligible),
+// so a hard stretch changes which rooms Co picks, not whether it picks one.
+const ROOM_FOR_FEELING: { re: RegExp; room: string }[] = [
+  { re: /burn|drain|exhaust|tired|overwhelm|stress|swamp|spent|fried/, room: "small, low-key, relaxed gatherings, not big networking events" },
+  { re: /lonel|isolat|disconnect|left out|alone|new (?:to|in) (?:the )?city|moved/, room: "recurring community gatherings where people get to know each other, over one-off networking" },
+  { re: /anx|worr|stuck|nervous|uncertain|discourag|rejected|doubt/, room: "rooms with people who've been through the same thing and can help" },
+  { re: /excit|proud|thrill|hopeful|energi|pumped/, room: "rooms that build on what's going well for them" },
+];
+
+export function roomPreferenceFromFeelings(ctx: EmotionalContext): string | null {
+  const life = [ctx.current, ...(ctx.lastCall?.moments ?? [])].filter((s): s is EmotionSignal => !!s && s.intensity !== "low");
+  const recurring = ctx.recurring.flatMap((r) => r.emotions.map((emotion) => ({ emotion, about: r.about })));
+  const pool = [...life.map((s) => ({ emotion: s.emotion, about: s.about })), ...recurring];
+  for (const { re, room } of ROOM_FOR_FEELING) {
+    const hit = pool.find((p) => re.test(`${p.emotion} ${p.about ?? ""}`.toLowerCase()));
+    if (hit) return `Right now, ${room}${hit.about ? ` (they've been feeling ${hit.emotion} about ${hit.about})` : ""}.`;
+  }
+  return null;
 }
 
 function rank(i: Intensity): number {
@@ -228,13 +279,13 @@ function rank(i: Intensity): number {
 export async function getEmotionalContext(userId: string, now = new Date()): Promise<EmotionalContext> {
   const { rows } = await pool
     .query(
-      `SELECT source, emotion, intensity, valence, about, quote, created_at FROM emotion_signals
+      `SELECT source, emotion, intensity, valence, about, quote, created_at, target FROM emotion_signals
        WHERE user_id = $1 AND created_at > NOW() - INTERVAL '14 days' ORDER BY created_at DESC LIMIT 100`,
       [userId],
     )
     .catch(() => ({ rows: [] as any[] }));
   return summarizeSignals(
-    rows.map((r: any) => ({ source: r.source, emotion: r.emotion, intensity: r.intensity, valence: r.valence, about: r.about, quote: r.quote, at: new Date(r.created_at) })),
+    rows.map((r: any) => ({ source: r.source, emotion: r.emotion, intensity: r.intensity, valence: r.valence, about: r.about, quote: r.quote, at: new Date(r.created_at), target: r.target ?? null })),
     now,
   );
 }
@@ -266,6 +317,11 @@ export function renderEmotionalContext(ctx: EmotionalContext, now = new Date()):
   }
   for (const r of ctx.recurring) lines.push(`Keeps coming up: ${r.emotions.join(", ")} about ${r.about} (${r.count} times in two weeks).`);
   if (ctx.needsCare) lines.push("They've been struggling in the last day.");
+  if (ctx.withCo?.frustrated) {
+    lines.push(
+      `They're frustrated with what Co has turned up lately${ctx.withCo.about ? ` (${ctx.withCo.about})` : ""}. That's about Co, not a hard day in their life: look wider and try harder rather than going quiet or getting smaller.`,
+    );
+  }
   return lines.join("\n");
 }
 

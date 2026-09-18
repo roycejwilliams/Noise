@@ -110,6 +110,12 @@ export type TierMatch =
 // "happening in your world right now."
 const TIER1_MAX_LOOKAHEAD_DAYS = 30;
 const TIER2_MAX_LOOKAHEAD_DAYS = 14;
+// A widened search (someone frustrated with what Co has found, 2026-09-18)
+// looks further ahead, keeps more candidates, and lowers the similarity bar a
+// notch. The ask still decides what counts.
+const WIDEN_TIER2_DAYS = 21;
+const WIDEN_TIER2_LIMIT = 12;
+const WIDEN_SIMILARITY_BAR = 0.25;
 
 function isWithinLookaheadWindow(startAt: string, maxDays: number): boolean {
   const days = (new Date(startAt).getTime() - Date.now()) / (1000 * 60 * 60 * 24);
@@ -398,7 +404,7 @@ function lumaSlug(url: string | null | undefined): string | null {
 // (harness/matchGate.ts) makes the final call, and it needs more than one to
 // choose from (2026-09-16: the single candidate it got was sold out, so the
 // search ended with nothing while other real events were available).
-async function tryTier2(ask: StatedIntent, userCity: string | null, filter: ((startAt: string) => boolean) | undefined, trace: SearchTrace, opts: { browse?: boolean; maxDays?: number; until: Date; zone: string; profileText?: string | null }): Promise<TierMatch[]> {
+async function tryTier2(ask: StatedIntent, userCity: string | null, filter: ((startAt: string) => boolean) | undefined, trace: SearchTrace, opts: { browse?: boolean; maxDays?: number; until: Date; zone: string; profileText?: string | null; widen?: boolean }): Promise<TierMatch[]> {
   const [feed, coEvents] = await Promise.all([
     cachedPublicEvents(userCity, opts.until).catch((err: any) => {
       console.error("tieredRecommendation: tryTier2 fetchPublicEvents failed (non-fatal):", err?.message ?? err);
@@ -415,7 +421,7 @@ async function tryTier2(ask: StatedIntent, userCity: string | null, filter: ((st
   // Oct 5-14 but only got events through Oct 9 says so instead of reporting a
   // clean "nothing found".
   trace.fetchedThrough = feed.reduce<string | null>((latest, e) => (!latest || e.start_at > latest ? e.start_at : latest), null);
-  const inWindow = events.filter((e) => isWithinLookaheadWindow(e.start_at, opts.maxDays ?? TIER2_MAX_LOOKAHEAD_DAYS) && (!filter || filter(e.start_at)));
+  const inWindow = events.filter((e) => isWithinLookaheadWindow(e.start_at, opts.maxDays ?? (opts.widen ? WIDEN_TIER2_DAYS : TIER2_MAX_LOOKAHEAD_DAYS)) && (!filter || filter(e.start_at)));
   const nearby = await filterByRadius(inWindow, userCity);
   // The best few, not just the top one: a single odd top pick used to take
   // the whole search down when the relevance check rejected it, with real
@@ -429,7 +435,14 @@ async function tryTier2(ask: StatedIntent, userCity: string | null, filter: ((st
   const ranking =
     opts.browse && !opts.profileText
       ? { ranked: [soonest(nearby)].filter((m): m is (typeof nearby)[number] => !!m).map((m) => ({ ...m, similarity: 1, details: undefined as EventDetails | undefined })), closest: null }
-      : await rankEventsByDescription(nearby, opts.browse ? "" : ask.text ?? "", { limit: 6, topScores: trace.topScores, zone: opts.zone, profileText: opts.profileText, browse: opts.browse });
+      : await rankEventsByDescription(nearby, opts.browse ? "" : ask.text ?? "", {
+          limit: opts.widen ? WIDEN_TIER2_LIMIT : 6,
+          bar: opts.widen ? WIDEN_SIMILARITY_BAR : undefined,
+          topScores: trace.topScores,
+          zone: opts.zone,
+          profileText: opts.profileText,
+          browse: opts.browse,
+        });
   // The near miss comes only from events the relevance check actually read
   // and judged related; an unread best score is never named on its own.
   const candidates = ranking.ranked;
@@ -752,6 +765,8 @@ async function reserveXSearch(userId: string | null, source: "sweep" | "request"
 // can't be told apart from "searched the wrong place".
 export type SearchScope = {
   city: string | null;
+  // Searched wider because they're frustrated with what Co has found.
+  widened?: boolean;
   window: string | null;
   windowStart?: string | null;
   windowEnd?: string | null;
@@ -825,7 +840,8 @@ export async function getTieredRecommendation(
   // "what's on?" ask, since the search text is a rewrite that can drop both.
   // profile: what Co knows they want right now (personSnapshot.ts
   // profileFocusText); orders what matches the ask.
-  opts: { userId?: string; checkRepeat?: boolean; source?: "sweep" | "request"; timezone?: string | null; rawMessage?: string; profile?: string | null } = {},
+  // widen: they're frustrated with what Co has found; look further and keep more.
+  opts: { userId?: string; checkRepeat?: boolean; source?: "sweep" | "request"; timezone?: string | null; rawMessage?: string; profile?: string | null; widen?: boolean } = {},
 ): Promise<TieredResult> {
   const city = await resolveSearchCity(ask.text, profileCity);
   const { zone, defaulted: timezoneDefaulted } = searchZone(opts.timezone);
@@ -837,7 +853,7 @@ export async function getTieredRecommendation(
   const resolution = asked ? resolveAskWindow(asked, now) : { window: null, outOfRange: null };
   const window = resolution.window;
   const browse = !!asked && isBrowseAsk(asked);
-  const baseScope = { city, window: window?.label ?? null, windowStart: window?.start.toISO() ?? null, windowEnd: window?.end.toISO() ?? null, timezone: zone, timezoneDefaulted, searchText: ask.text ?? null, profileUsed: !!opts.profile, browse };
+  const baseScope = { city, window: window?.label ?? null, windowStart: window?.start.toISO() ?? null, windowEnd: window?.end.toISO() ?? null, timezone: zone, timezoneDefaulted, searchText: ask.text ?? null, profileUsed: !!opts.profile, browse, widened: !!opts.widen };
 
   // A time frame past what Co searches: say so, don't search next week instead.
   if (resolution.outOfRange) {
@@ -862,7 +878,8 @@ export async function getTieredRecommendation(
     today: now.toISODate()!,
     zone,
     browse,
-    profile: opts.profile,
+    // A widened search is a different search; don't serve the narrow one's cache.
+    profile: opts.widen ? `${opts.profile ?? ""}|widen` : opts.profile,
   });
   const cached = searchCache.get(cacheKey);
   let found: TierMatch[];
@@ -932,10 +949,10 @@ export async function getTieredRecommendation(
     };
     // Always page the public feed to the end of the days being searched: the
     // window they named, or the default lookahead (2026-09-17).
-    const until = window ? window.end.toJSDate() : new Date(Date.now() + DEFAULT_FEED_DAYS * 24 * 60 * 60 * 1000);
+    const until = window ? window.end.toJSDate() : new Date(Date.now() + (opts.widen ? WIDEN_TIER2_DAYS : DEFAULT_FEED_DAYS) * 24 * 60 * 60 * 1000);
     const [tier1, tier2, tier3] = await Promise.all([
       tryTier1(ask, city, windowFilter, { browse, maxDays, zone, profileText: opts.profile }),
-      tryTier2(ask, city, windowFilter, trace, { browse, maxDays, until, zone, profileText: opts.profile }),
+      tryTier2(ask, city, windowFilter, trace, { browse, maxDays, until, zone, profileText: opts.profile, widen: opts.widen }),
       runTier3(),
     ]);
     trace.timings.tiersMs = Date.now() - tierStarted;

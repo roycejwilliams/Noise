@@ -236,7 +236,7 @@
     },
     {
       "id": "s07",
-      "about": "weekly cap: a new event every day and fast replies still means 3 texts in 7 days",
+      "about": "weekly cap: a new event every day and fast replies means 4 room-lane texts in 7 days (the room lane has its own cap, 2026-09-18)",
       "timezone": "America/Los_Angeles",
       "start": "2026-09-14T15:45:00Z",
       "end": "2026-09-21T06:00:00Z",
@@ -280,7 +280,7 @@
         }
       ],
       "expect": {
-        "sends": 3
+        "sends": 4
       }
     },
     {
@@ -488,6 +488,29 @@
       "expect": {
         "sends": 1,
         "noSendBefore": "2026-09-15T13:00:00Z"
+      }
+    },
+    {
+      "id": "s17",
+      "about": "an unanswered check-in never blocks the next day's event (one-way pause, 2026-09-18)",
+      "timezone": "America/Los_Angeles",
+      "start": "2026-09-14T15:45:00Z",
+      "end": "2026-09-17T06:00:00Z",
+      "arrivals": [
+        {
+          "at": "2026-09-14T16:00:00Z",
+          "type": "window_followup",
+          "target": "window_followup:w1"
+        },
+        {
+          "at": "2026-09-15T16:00:00Z",
+          "type": "event_offer",
+          "target": "event_offer:event:x1",
+          "expiresInHours": 100
+        }
+      ],
+      "expect": {
+        "sends": 2
       }
     }
   ],

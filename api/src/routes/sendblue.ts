@@ -68,6 +68,7 @@ import { parseModelJson } from "../services/modelJson.js";
 import { enrichMatch, renderEventDetails } from "../services/eventDetails.js";
 import { refreshPersonSnapshot } from "../harness/personSnapshot.js";
 import { recordSuggestionOutcome, resultFromNamedOutcome } from "../services/outcomes.js";
+import { sendLateSearchResult } from "../services/lateSearchResult.js";
 
 // Serializes webhook processing per phone number. Without this, two
 // messages sent seconds apart from the same person can be handled
@@ -1840,17 +1841,14 @@ Return ONLY valid JSON, no preamble: {"date": "YYYY-MM-DD or null", "time": "HH:
         // instead. Folded into the one reply below (never sent as a second
         // message).
         try {
-          // Emotion loop: someone who's struggling and just wants to be heard
-          // doesn't get an event or opportunity pitched in the same reply.
-          // A direct question or request gets answered, even when they've
-          // been struggling (2026-09-16: "Tell me more" got "how are you
-          // doing?" back). The hold is for open-ended messages.
-          const directRequest = /\?\s*$/.test(resolvedContent.trim()) || /^(tell me|send|show|give me|find|look|search|what|which|who|when|where|how|any\b)/i.test(resolvedContent.trim());
-          const holdRecommendationForFeelings = emotional.needsCare && seekingMode !== "solving" && !directRequest;
-          if (holdRecommendationForFeelings && decision.wantsRecommendation) {
-            addInstruction(replyFacts, "They asked for a suggestion, but they've been struggling. Respond to how they're doing first; offer to look for something once they want it, without naming anything now.");
+          // A struggling person who asks for something still gets it (Royce,
+          // 2026-09-18: "we can't isolate them"). Holding the search here left
+          // members frustrated about getting nothing with nothing again; Co
+          // acknowledges how they're doing in the same reply instead.
+          if (emotional.needsCare && decision.wantsRecommendation) {
+            addInstruction(replyFacts, "They've had a hard day. Acknowledge it briefly and warmly, in your own words, then share what you found.");
           }
-          if (decision.wantsRecommendation && !holdRecommendationForFeelings) {
+          if (decision.wantsRecommendation) {
             // A search is about to actually run: whatever happens, this turn
             // has now done real work and must see it through to a reply.
             turnDidWork = true;
@@ -1868,7 +1866,9 @@ Return ONLY valid JSON, no preamble: {"date": "YYYY-MM-DD or null", "time": "HH:
             // running and writing after Co had already said it found
             // nothing, and its late write could still land after "found
             // nothing" went out).
-            const recommendation = await searchWithTimeCap(user.id, resolvedContent, RECOMMENDATION_TIME_CAP_MS, "sendblue.recommendation");
+            const recommendation = await searchWithTimeCap(user.id, resolvedContent, RECOMMENDATION_TIME_CAP_MS, "sendblue.recommendation", (late) =>
+              sendLateSearchResult({ userId: user.id, firstName: user.first_name ?? null, phoneNumber: user.phone_number, city: profile?.city ?? null }, resolvedContent, late),
+            );
             searchMsForTurn = Date.now() - searchStarted;
             // What this search looked at and ruled out, so the reply never
             // recommends one of them because it was sent earlier (2026-09-16:
@@ -1917,18 +1917,21 @@ Return ONLY valid JSON, no preamble: {"date": "YYYY-MM-DD or null", "time": "HH:
               const matchCount = matchesByTier.size;
               const prepStarted = Date.now();
 
-              type PreparedMatch = { m: TierMatch; description: string; fits?: boolean; why?: string };
+              type PreparedMatch = { m: TierMatch; description: string; fits?: boolean; why?: string; em?: Awaited<ReturnType<typeof enrichMatch>> };
 
               // Drafted in Co's voice from the real record and a personal
               // reason, not the matching engine's raw "name — reason" line.
-              const draftDescription = async (m: TierMatch, em: Awaited<ReturnType<typeof enrichMatch>>): Promise<string> => {
+              // stretch: the fit check said it doesn't quite fit, but it's the
+              // closest real thing found, so it goes out with an honest caveat
+              // instead of "nothing" (2026-09-18).
+              const draftDescription = async (m: TierMatch, em: Awaited<ReturnType<typeof enrichMatch>>, stretch = false): Promise<string> => {
                 let description = `${m.name}. ${em.whyItFits ?? m.reason}`;
                 try {
                   const record = em.details ? renderEventDetails(em.name, em.details).join("\n") : em.opportunity ? `What the post says: ${em.opportunity.postText}` : "";
                   const { text: drafted } = await generateText({
                     model: anthropic(MODELS.sonnet),
                     experimental_telemetry: { isEnabled: true, functionId: "sendblue.recommendation.describe" },
-                    prompt: `${CO_VOICE}\n\n${CO_TEXT_CHANNEL} You're telling ${user.first_name ?? "them"} about "${m.name}"${"url" in m && m.url ? ". Its link preview is already showing right above this message, so this message is the caption under it: say what it is directly, and don't mention the link, sending it, or \"the one above\"" : ""}${matchCount > 1 ? `. This is one of ${matchCount} you're sending together, so it reads as a bullet in a short list` : ""}.\n\nWhy it fits them: ${em.whyItFits ?? m.reason}\n${record ? `\nWhat's actually known about it:\n${record}\n` : ""}\nWrite ${matchCount > 1 ? "one sentence" : "1-3 sentences"} naming it, the one or two details that matter most to them (when, where, who), and why it fits, in your own words. Only use what's written above. No link. Return ONLY the message.`,
+                    prompt: `${CO_VOICE}\n\n${CO_TEXT_CHANNEL} You're telling ${user.first_name ?? "them"} about "${m.name}"${"url" in m && m.url ? ". Its link preview is already showing right above this message, so this message is the caption under it: say what it is directly, and don't mention the link, sending it, or \"the one above\"" : ""}${matchCount > 1 ? `. This is one of ${matchCount} you're sending together, so it reads as a bullet in a short list` : ""}.\n\n${stretch ? `It isn't an exact fit for what they asked: ${em.whyItFits ?? "not quite what they described"}. Say that honestly in a few words, then why it could still be worth a look.` : `Why it fits them: ${em.whyItFits ?? m.reason}`}\n${record ? `\nWhat's actually known about it:\n${record}\n` : ""}\nWrite ${matchCount > 1 ? "one sentence" : "1-3 sentences"} naming it, the one or two details that matter most to them (when, where, who), and why it fits, in your own words. Only use what's written above. No link. Return ONLY the message.`,
                   });
                   if (drafted.trim()) description = cleanCoMessage(drafted.trim());
                 } catch (err: any) {
@@ -1968,7 +1971,7 @@ Return ONLY valid JSON, no preamble: {"date": "YYYY-MM-DD or null", "time": "HH:
                     const batch = candidates.slice(i, i + FIT_CHECK_BATCH);
                     const results = await Promise.all(batch.map(enrichOne));
                     for (const { m, em } of results) {
-                      const attempted: PreparedMatch = { m, description: "", fits: em.fits, why: em.whyItFits };
+                      const attempted: PreparedMatch = { m, description: "", fits: em.fits, why: em.whyItFits, em };
                       preparedAll.push(attempted);
                       // Only the personal read says fits what they asked
                       // (services/eventDetails.ts fitPrompt); first in order
@@ -1985,6 +1988,19 @@ Return ONLY valid JSON, no preamble: {"date": "YYYY-MM-DD or null", "time": "HH:
               prepMsForTurn = Date.now() - prepStarted;
               // One per tier, best-fitting first, in the order tiers were returned.
               const prepared = tierWinners.filter((p): p is PreparedMatch => !!p);
+              // Nothing passed the fit check, but real things were found: send
+              // the closest one with an honest caveat rather than "nothing"
+              // (2026-09-18: a real event near Sep 24 was found and dropped,
+              // and the member heard nothing).
+              const closest = !prepared.length ? preparedAll.find((p) => p.em) : undefined;
+              if (closest?.em) {
+                closest.description = await draftDescription(closest.m, closest.em, true);
+                prepared.push(closest);
+                addInstruction(
+                  replyFacts,
+                  "Nothing you found matched exactly, so you sent the closest real thing with a caveat. Don't apologize for it or call it a fail; if it helps, say what you'll keep looking for.",
+                );
+              }
               if (!prepared.length) {
                 addFact(
                   replyFacts,
@@ -2088,7 +2104,13 @@ Return ONLY valid JSON, no preamble: {"date": "YYYY-MM-DD or null", "time": "HH:
               // ask so the daily search really keeps looking; that's what
               // makes "I'll keep looking" true (replyGrounding's ongoing fact).
               const turnAsk = await captureIntentForTurn(user.id, `${recentConversation}\nuser: ${resolvedContent}`, { timeoutMs: 4000 }).catch(() => null);
-              addFact(replyFacts, "did_this_turn", `Searched just now for what they asked for and found nothing real that fits yet${recommendation.reason ? ` (${recommendation.reason})` : ""}.`);
+              // Ran past the reply's time cap: the search is still going and
+              // its result gets sent when it lands (services/lateSearchResult.ts).
+              const stillSearching = !recommendation.available && recommendation.reason === "search took too long";
+              if (stillSearching) {
+                addFact(replyFacts, "did_this_turn", "Started a search for what they asked for. It's still running and what it finds gets sent to them as soon as it lands.");
+                addInstruction(replyFacts, "Your search is still running. Say you're still looking and will send what turns up shortly. Don't say you found nothing.");
+              } else addFact(replyFacts, "did_this_turn", `Searched just now for what they asked for and found nothing real that fits yet${recommendation.reason ? ` (${recommendation.reason})` : ""}.`);
               await recordSearchNote(user.id, `Co searched for "${resolvedContent.slice(0, 120)}" and found nothing real${recommendation.reason ? ` (${recommendation.reason})` : ""}.`);
               if (turnAsk?.ask?.text) {
                 replyFacts.facts = replyFacts.facts.filter((fact) => fact.kind !== "ongoing" && !/isn't searching for anything/.test(fact.text));

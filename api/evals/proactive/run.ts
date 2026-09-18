@@ -29,6 +29,7 @@ import { DateTime } from "luxon";
 import { runEval, type CaseScore } from "../lib.js";
 import {
   RULES,
+  laneOf,
   TYPE_POLICY,
   checkDraft,
   codePick,
@@ -159,11 +160,15 @@ function violations(sends: { at: Date; type: string; target: string; topic?: str
     }
     if (seenTargets.has(s.target)) out.push(`duplicate ${s.target} at ${s.at.toISOString()}`);
     seenTargets.add(s.target);
-    const sameDay = sorted.filter((o, j) => j < i && DateTime.fromJSDate(o.at).setZone(zone).hasSame(local, "day"));
-    if (sameDay.length >= RULES.maxPerLocalDay) out.push(`2nd text on ${local.toISODate()} (${s.type})`);
-    const week = sorted.filter((o, j) => j < i && s.at.getTime() - o.at.getTime() < 7 * 86400000);
-    if (week.length >= RULES.maxPer7Days) out.push(`${week.length + 1}th text in 7 days at ${s.at.toISOString()}`);
-    const prev = sorted[i - 1];
+    const lane = laneOf(s.type);
+    const inLane = (o: (typeof sorted)[number]) => laneOf(o.type) === lane;
+    const sameDay = sorted.filter((o, j) => j < i && inLane(o) && DateTime.fromJSDate(o.at).setZone(zone).hasSame(local, "day"));
+    if (sameDay.length >= (lane === "room" ? RULES.roomMaxPerLocalDay : RULES.maxPerLocalDay)) out.push(`2nd ${lane}-lane text on ${local.toISODate()} (${s.type})`);
+    const week = sorted.filter((o, j) => j < i && inLane(o) && s.at.getTime() - o.at.getTime() < 7 * 86400000);
+    if (week.length >= (lane === "room" ? RULES.roomMaxPer7Days : RULES.maxPer7Days)) out.push(`${week.length + 1}th ${lane}-lane text in 7 days at ${s.at.toISOString()}`);
+    // One-way pause: room-lane sends are paused only by room-lane sends; the
+    // other lane is paused by anything unanswered.
+    const prev = sorted.slice(0, i).filter((o) => (lane === "room" ? inLane(o) : true)).pop();
     if (prev && s.at.getTime() - prev.at.getTime() < RULES.unansweredPauseHours * 3600000 && !replyBetween(prev.at.getTime(), s.at.getTime())) {
       out.push(`${s.type} at ${s.at.toISOString()} while ${prev.type} from ${prev.at.toISOString()} was unanswered`);
     }

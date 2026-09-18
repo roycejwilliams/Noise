@@ -72,7 +72,9 @@ export type ProactiveType =
 // text (eventGuestMatchHandoff.ts's maybeAskCandidateDirectly/
 // askConnectionMethod, networkIntroNudge.ts's askCandidateDirectly) — see
 // sendExemptWhenAllowed below.
-export type ExemptType = "event_change" | "call_reminder" | "missed_call" | "co_event" | "direct_ask";
+// search_result: the answer to a texted search that ran past the reply's time
+// cap, sent when it lands (services/lateSearchResult.ts).
+export type ExemptType = "event_change" | "call_reminder" | "missed_call" | "co_event" | "direct_ask" | "search_result";
 
 export type TypePolicy = {
   priority: number;
@@ -104,6 +106,11 @@ export const RULES = {
   endHour: 20,
   maxPerLocalDay: 1,
   maxPer7Days: 3,
+  // The room lane (events, in-room nudges, intros) has its own caps, so
+  // follow-ups and check-ins can't use up the slot an event needed
+  // (2026-09-18: five pending follow-ups competed with one event offer).
+  roomMaxPerLocalDay: 1,
+  roomMaxPer7Days: 4,
   unansweredPauseHours: 72,
   maxDraftAttempts: 2,
   // After the model decides nothing is worth sending, don't ask it again for
@@ -147,17 +154,18 @@ export type PickState = {
   needsCare?: boolean;
 };
 
-// While someone is struggling, only texts that are about them (a check-in, a
-// follow-up on a call) go out. Pitches, asks, and updates wait.
+// While someone is struggling, asks, check-ins on asks, and product updates
+// wait. Anything that brings them into a room or toward a person still goes
+// out (Royce, 2026-09-18: "we can't isolate them until the perfect event is
+// right"). Holding event offers on bad days meant a member frustrated about
+// getting nothing kept getting nothing; the draft carries their feelings.
+// ask_solicitation is never held: it's only queued for an event guest with no
+// stated ask, and without an answer they're never scored for a match, so
+// holding it would isolate them from the room.
 export const HOLD_WHILE_STRUGGLING = new Set<ProactiveType>([
-  "event_offer",
-  "network_tease",
-  "ask_solicitation",
   "ask_checkin",
   "product_update",
   "calendar_follow",
-  "debrief",
-  "event_match_nudge",
 ]);
 
 export type CandidateEvaluation = { candidate: Candidate; checks: GateCheck[]; ok: boolean };
@@ -197,12 +205,28 @@ function unansweredSince(send: SendRecord, lastInboundAt: Date | null): boolean 
   return !lastInboundAt || lastInboundAt.getTime() < send.sentAt.getTime();
 }
 
-export function userLevelChecks(state: Omit<PickState, "candidates">, opts: { skipHours?: boolean } = {}): GateCheck[] {
-  const counted = state.sends.filter((s) => !s.exempt);
+// Two lanes, each with its own daily/weekly caps and its own unanswered
+// pause: things that bring someone into a room or toward a person, and
+// everything else. An ignored check-in no longer silences events for 72 hours.
+export type Lane = "room" | "other";
+const ROOM_LANE = new Set<string>(["event_offer", "event_match_nudge", "network_tease", "in_room"]);
+export function laneOf(type: string): Lane {
+  return ROOM_LANE.has(type) ? "room" : "other";
+}
+
+export function userLevelChecks(state: Omit<PickState, "candidates">, opts: { skipHours?: boolean; lane?: Lane } = {}): GateCheck[] {
+  const lane = opts.lane ?? "other";
+  const maxDay = lane === "room" ? RULES.roomMaxPerLocalDay : RULES.maxPerLocalDay;
+  const maxWeek = lane === "room" ? RULES.roomMaxPer7Days : RULES.maxPer7Days;
+  const counted = state.sends.filter((s) => !s.exempt && laneOf(s.type) === lane);
   const dayStart = startOfLocalDay(state.now, state.timezone);
   const today = counted.filter((s) => s.sentAt >= dayStart && s.sentAt <= state.now).length;
   const week = counted.filter((s) => state.now.getTime() - s.sentAt.getTime() < 7 * DAY && s.sentAt <= state.now).length;
-  const lastCounted = counted.filter((s) => s.sentAt <= state.now).sort((a, b) => b.sentAt.getTime() - a.sentAt.getTime())[0];
+  // One-way pause: an unanswered event or intro pauses check-ins too, but an
+  // unanswered check-in never pauses events. So follow-ups can't isolate
+  // anyone from rooms, and someone who isn't replying still gets one text.
+  const pauseSource = lane === "room" ? counted : state.sends.filter((s) => !s.exempt);
+  const lastCounted = pauseSource.filter((s) => s.sentAt <= state.now).sort((a, b) => b.sentAt.getTime() - a.sentAt.getTime())[0];
   const pauseActive =
     !!lastCounted &&
     state.now.getTime() - lastCounted.sentAt.getTime() < RULES.unansweredPauseHours * HOUR &&
@@ -217,8 +241,8 @@ export function userLevelChecks(state: Omit<PickState, "candidates">, opts: { sk
     });
   }
   checks.push(
-    { name: "daily_cap", pass: today < RULES.maxPerLocalDay, reason: `${today} proactive text(s) already today` },
-    { name: "weekly_cap", pass: week < RULES.maxPer7Days, reason: `${week} proactive texts in the last 7 days` },
+    { name: "daily_cap", pass: today < maxDay, reason: `${today} ${lane}-lane proactive text(s) already today` },
+    { name: "weekly_cap", pass: week < maxWeek, reason: `${week} ${lane}-lane proactive texts in the last 7 days` },
     {
       name: "unanswered_pause",
       pass: !pauseActive,
@@ -269,11 +293,20 @@ export function candidateChecks(c: Candidate, state: Pick<PickState, "now" | "se
   return checks;
 }
 
+const PERSON_CHECKS = new Set(["not_opted_out", "local_hours"]);
+
 export function evaluateCandidates(state: PickState): Evaluation {
-  const userChecks = userLevelChecks(state);
+  // Opt-out and local hours apply to the person; caps and the unanswered
+  // pause apply per lane, so each candidate is checked against its own lane.
+  const byLane: Record<Lane, GateCheck[]> = {
+    room: userLevelChecks(state, { lane: "room" }),
+    other: userLevelChecks(state, { lane: "other" }),
+  };
+  const userChecks = byLane.other.filter((k) => PERSON_CHECKS.has(k.name));
   const userOk = gate(userChecks).ok;
   const perCandidate = state.candidates.map((candidate) => {
-    const checks = candidateChecks(candidate, state);
+    const laneChecks = byLane[laneOf(candidate.type)].filter((k) => !PERSON_CHECKS.has(k.name));
+    const checks = [...laneChecks, ...candidateChecks(candidate, state)];
     return { candidate, checks, ok: gate(checks).ok };
   });
   const eligible = userOk ? perCandidate.filter((p) => p.ok).map((p) => p.candidate) : [];
@@ -651,7 +684,7 @@ async function sendWithLedger(
     const lastInboundAt = await loadLastInbound(client, person.userId);
     const now = new Date();
     const checks = [
-      ...userLevelChecks({ now, timezone: person.timezone, optedOut: optedOutNow, sends, lastInboundAt }),
+      ...userLevelChecks({ now, timezone: person.timezone, optedOut: optedOutNow, sends, lastInboundAt }, { lane: laneOf(c.type) }),
       ...candidateChecks(c, { now, sends, lastInboundAt }),
     ];
     const g = gate(checks);

@@ -22,6 +22,7 @@ import type { AskCheckinPayload } from "../agent/askCheckin.js";
 import { enqueueCandidate, runProactiveDispatch, sendExempt } from "../harness/proactive.js";
 import { proactiveRegistry } from "../harness/proactiveRegistry.js";
 import { runMonitor, runWeeklyReview } from "../harness/monitor.js";
+import { expireStaleAsks } from "../services/askExpiry.js";
 
 // Bounded-concurrency worker pool (Royce, 2026-08-30) — the event surfacing
 // sweep now runs for every open ask daily (see below), and a plain
@@ -134,9 +135,10 @@ export function registerJobs(io: Server) {
 
   // Layer 7 proactive harness (2026-09-14): the ONE place Co texts first.
   // Every sweep/scheduler below only queues candidates; this picks at most
-  // one per person per local day under the gates in src/harness/proactive.ts
-  // (local hours, 1/day, 3/week, 72h pause after an unanswered text, no
-  // repeats) and sends it.
+  // under the gates in src/harness/proactive.ts and sends it: local hours; per
+  // lane (rooms and people vs. everything else) 1/day, and 4/week or 3/week;
+  // a 72h pause after an unanswered text (one-way: check-ins never pause
+  // events); no repeats.
   let dispatchRunning = false;
   cron.schedule("*/15 * * * *", async () => {
     if (dispatchRunning) return;
@@ -231,10 +233,8 @@ export function registerJobs(io: Server) {
       // sms_opted_out filter added here as a cheap first pass (code review,
       // 2026-09-17: this cron never checked it at all); sendExempt inside
       // runEventChangeNotificationAgent is the real, race-safe enforcement.
-      // ecn.event_id needs a migration (ALTER TABLE event_change_notifications
-      // ADD COLUMN IF NOT EXISTS event_id TEXT — see coEventAnnouncement
-      // dedupe-key fix in this same review); COALESCE to '' so this cron
-      // doesn't hard-fail before that migration lands.
+      // ecn.event_id comes from migrations.ts (added 2026-09-18; before that
+      // this query failed every run). COALESCE covers rows queued without one.
       const due = await pool.query(
         `SELECT ecn.id, ecn.user_id, COALESCE(ecn.event_id, '') AS event_id, ecn.event_name, ecn.message, u.first_name, u.phone_number, cp.city
          FROM event_change_notifications ecn
@@ -348,8 +348,16 @@ export function registerJobs(io: Server) {
   // per local day (last_attempted_at) and QUEUES the front match; the
   // proactive harness decides whether it goes out. Hour-gated only so the
   // expensive search runs during the day, not to protect the send.
+  const MAX_ASK_SEARCHES_PER_USER_PER_DAY = 4;
   cron.schedule("0 * * * *", async () => {
     try {
+      // Asks past their time limit are closed before anything searches them
+      // (services/askExpiry.ts).
+      const expiry = await expireStaleAsks().catch((err: any) => {
+        console.error("expireStaleAsks failed (non-fatal):", err?.message ?? err);
+        return null;
+      });
+      if (expiry?.expired) console.log(`Ask expiry: closed ${expiry.expired} ask(s) past their time limit`);
       // Oldest-surfaced ask first, so one ask can't win every day.
       const due = await pool.query(
         `SELECT ac.id, ac.ask_id, ac.ask_text, ac.last_attempted_at, u.id AS user_id, u.first_name, u.phone_number, cp.city,
@@ -359,7 +367,7 @@ export function registerJobs(io: Server) {
          JOIN users u ON u.id = ac.user_id
          LEFT JOIN co_profiles cp ON cp.user_id = ac.user_id
          WHERE ac.resolved_at IS NULL
-         ORDER BY ac.last_surfaced_at ASC NULLS FIRST`,
+         ORDER BY ac.last_attempted_at ASC NULLS FIRST, ac.last_surfaced_at ASC NULLS FIRST`,
       );
 
       // Grouped by user, not run flat (Royce, 2026-08-30) — attemptEventSurfacing's
@@ -384,12 +392,17 @@ export function registerJobs(io: Server) {
         if (!isReasonableLocalHour(timezone)) return; // wrong hour for this user — nothing touched, retried next hourly tick
 
         const localToday = (timezone ? DateTime.now().setZone(timezone) : DateTime.now()).toISODate();
+        const localDayOf = (d: Date | null) => (d ? DateTime.fromJSDate(d).setZone(timezone ?? "utc").toISODate() : null);
+        // At most this many of one person's asks get a full search per day
+        // (2026-09-18: one tester's ten overlapping asks each ran a full
+        // three-tier search every morning and kept finding the same events).
+        // Rows come least-recently-searched first, so every ask gets its turn.
+        let searchedToday = userRows.filter((r) => localDayOf(r.last_attempted_at) === localToday).length;
 
         for (const row of userRows) {
-          const lastAttemptedLocalDay = row.last_attempted_at
-            ? DateTime.fromJSDate(row.last_attempted_at).setZone(timezone ?? "utc").toISODate()
-            : null;
-          if (lastAttemptedLocalDay === localToday) continue; // already ran today's check for this ask — don't re-run every hourly tick inside the window
+          if (localDayOf(row.last_attempted_at) === localToday) continue; // already ran today's check for this ask — don't re-run every hourly tick inside the window
+          if (searchedToday >= MAX_ASK_SEARCHES_PER_USER_PER_DAY) break;
+          searchedToday++;
 
           try {
             await attemptEventSurfacing({

@@ -6,8 +6,10 @@ import { enqueueCandidate } from "../harness/proactive.js";
 import { generateEmbedding } from "./embeddings.js";
 import { scheduleOutcomeFollowUp, getTierBias } from "./recommendationOutcome.js";
 import { enrichMatch } from "./eventDetails.js";
-import { getEmotionalContext, renderEmotionalContext } from "../harness/emotion.js";
+import { getEmotionalContext, renderEmotionalContext, roomPreferenceFromFeelings } from "../harness/emotion.js";
 import { buildSearchBrief } from "./searchBrief.js";
+import { recordDecision } from "../harness/core.js";
+import { wasAlreadyOffered } from "../harness/matchGate.js";
 
 export type SurfacingCandidate = {
   // ask_checkins.id — NOT the same as userId. A user can have more than one
@@ -140,7 +142,13 @@ async function filterFreshMatches(userId: string, matches: TierMatch[]): Promise
 // (checkForUrgentMatch only ever returns something within
 // URGENT_WINDOW_DAYS), so it's meant to reach the person regardless of
 // where the normal cadence clock stands.
-type BacklogItem = { askText: string; match: TierMatch; source: "full" | "urgent" };
+// reminder: they were already shown this one (in a texted search or an
+// earlier offer) and it's now within a day: a one-time heads-up, not a new pitch.
+type BacklogItem = { askText: string; match: TierMatch; source: "full" | "urgent"; reminder?: boolean };
+
+function offerTargetKey(item: Pick<BacklogItem, "match" | "reminder">): string {
+  return `event_offer:${item.reminder ? "reminder:" : ""}${matchKey(item.match)}`;
+}
 
 // Stored in a dedicated table, not co_memories (Royce, 2026-08-30 code
 // review fix) — see event_backlogs in migrations.ts for why: co_memories is
@@ -261,7 +269,17 @@ function isShortNotice(match: TierMatch): boolean {
 // may go out before the 3-day cadence clears; everything else waits for it.
 const URGENT_WINDOW_DAYS = 3;
 
-async function findFreshPending(candidate: SurfacingCandidate): Promise<BacklogItem[]> {
+type SweepSearchTrace = {
+  searchText: string;
+  // Frustrated with what Co has found: searched wider and sends sooner.
+  widened: boolean;
+  roomPreference: string | null;
+  found: { name: string; tier: number; date: string | null }[];
+  staleOrRepeat: string[];
+  scope: Record<string, unknown> | null;
+};
+
+async function findFreshPending(candidate: SurfacingCandidate): Promise<{ items: BacklogItem[]; trace: SweepSearchTrace }> {
   // What to search for comes from the whole person (ask, goals, recent
   // texts, feelings), not the ask's words alone (services/searchBrief.ts).
   const brief = await buildSearchBrief({
@@ -273,14 +291,21 @@ async function findFreshPending(candidate: SurfacingCandidate): Promise<BacklogI
   });
   // Their time zone, so event dates are their local calendar dates.
   const timezone = candidate.city ? await getTimezoneForCity(candidate.city).catch(() => null) : null;
-  const profile = profileFocusText(await getPersonSnapshot(candidate.userId).catch(() => null)) || null;
+  // Feelings steer the search, never stop it (2026-09-18): frustration with
+  // what Co has found widens it; how their life has been shapes which rooms
+  // rank first.
+  const feelings = await getEmotionalContext(candidate.userId).catch(() => null);
+  const widen = !!feelings?.withCo.frustrated;
+  const roomPreference = feelings ? roomPreferenceFromFeelings(feelings) : null;
+  const focus = profileFocusText(await getPersonSnapshot(candidate.userId).catch(() => null)) || null;
+  const profile = [focus, roomPreference].filter(Boolean).join("\n") || null;
   // No zone for their city: the engine uses Co's home zone and says so.
-  const matches = await getTieredRecommendation({ text: brief.searchText }, candidate.city, { userId: candidate.userId, source: "sweep", timezone, profile })
-    .then((r) => r.matches)
+  const result = await getTieredRecommendation({ text: brief.searchText }, candidate.city, { userId: candidate.userId, source: "sweep", timezone, profile, widen, checkRepeat: false })
     .catch((err: any) => {
       console.error("attemptEventSurfacing: getTieredRecommendation failed (non-fatal):", err?.message ?? err);
-      return [] as TierMatch[];
+      return null;
     });
+  const matches: TierMatch[] = result?.matches ?? [];
   // Tier order as the mention priority (Tier 1 first by default) — same
   // "route people into Co's own events first" reasoning the old
   // decideBestMatch had, just spread across separate texts over time
@@ -289,15 +314,51 @@ async function findFreshPending(candidate: SurfacingCandidate): Promise<BacklogI
   // that's landed well for this person before sorts earlier; a user with no
   // outcome history yet gets all-zero bias, which is exactly the same
   // tier-number order as before this existed.
-  const fresh = await filterFreshMatches(candidate.userId, matches);
+  // Anything they've already been shown (texted search or earlier offer) is
+  // never re-pitched. The gate used to drop those forever inside the search;
+  // now the sweep drops them here, except one that's within a day, which gets
+  // a one-time reminder (2026-09-18: twelve SF events shown in texted searches
+  // were excluded from every later sweep, so the backlog only held events
+  // weeks out).
+  const seen = await Promise.all(
+    matches.map(async (m) => (await alreadyOffered(candidate.userId, m)) || (await wasAlreadyOffered(candidate.userId, m))),
+  );
+  const fresh = matches.filter((_, i) => !seen[i]);
+  const reminders = matches.filter((m, i) => seen[i] && "event_api_id" in m && isShortNotice(m));
   const bias = await getTierBias(candidate.userId);
-  return fresh
+  const items = fresh
     .sort((a, b) => bias[b.tier] - bias[a.tier] || a.tier - b.tier)
     .map((match) => {
       const date = relevantDate(match);
       const source: "full" | "urgent" = date !== null && daysUntilDate(date) <= URGENT_WINDOW_DAYS ? "urgent" : "full";
       return { askText: candidate.askText, match, source };
-    });
+    })
+    .concat(reminders.map((match) => ({ askText: candidate.askText, match, source: "urgent" as const, reminder: true })));
+  const sc = result?.scope;
+  return {
+    items,
+    trace: {
+      searchText: brief.searchText,
+      widened: widen,
+      roomPreference,
+      found: matches.map((m) => ({ name: m.name, tier: m.tier, date: relevantDate(m) })),
+      staleOrRepeat: matches.filter((m) => !fresh.includes(m) && !reminders.includes(m)).map((m) => m.name),
+      scope: sc
+        ? {
+            city: sc.city,
+            tiers: sc.tiers,
+            tier2Nearby: sc.tier2Nearby,
+            relevanceRejected: sc.relevanceRejected,
+            gatedOut: sc.gatedOut,
+            xQuery: sc.xQuery,
+            xBlocked: sc.xBlocked,
+            webBlocked: sc.webBlocked,
+            fetchedThrough: sc.fetchedThrough,
+            cached: sc.cached,
+          }
+        : null,
+    },
+  };
 }
 
 function sameMatch(a: TierMatch, b: TierMatch): boolean {
@@ -312,12 +373,19 @@ export function matchKey(match: TierMatch): string {
 }
 
 // The harness already sent, skipped, or expired this one for this person.
-async function alreadyDecided(userId: string, match: TierMatch): Promise<boolean> {
+async function alreadyDecided(userId: string, item: Pick<BacklogItem, "match" | "reminder">): Promise<boolean> {
   const { rows } = await pool.query(
     `SELECT 1 FROM proactive_candidates WHERE user_id = $1 AND target_key = $2 AND status <> 'pending'`,
-    [userId, `event_offer:${matchKey(match)}`],
+    [userId, offerTargetKey(item)],
   );
   return rows.length > 0;
+}
+
+// Shown to them since it was queued (in a texted search or an earlier offer):
+// a new pitch is stale, a reminder isn't.
+async function shownSinceQueued(userId: string, item: BacklogItem): Promise<boolean> {
+  if (item.reminder) return false;
+  return (await alreadyOffered(userId, item.match)) || (await wasAlreadyOffered(userId, item.match));
 }
 
 // Drops anything at the front that's gone stale — already offered through
@@ -328,7 +396,7 @@ async function dropStaleFront(userId: string, items: BacklogItem[]): Promise<Bac
   let rest = items;
   while (
     rest.length &&
-    ((await alreadyOffered(userId, rest[0].match)) || isPastEvent(rest[0].match) || (await alreadyDecided(userId, rest[0].match)))
+    ((await shownSinceQueued(userId, rest[0])) || isPastEvent(rest[0].match) || (await alreadyDecided(userId, rest[0])))
   ) {
     rest = rest.slice(1);
   }
@@ -340,6 +408,11 @@ export type EventOfferPayload = {
   askText: string;
   fromProfile: boolean;
   match: TierMatch;
+  // Send the details directly instead of a tease (short notice, or they're
+  // frustrated with what Co has found).
+  revealNow?: boolean;
+  // They've already been shown this one; it's a heads-up that it's coming up.
+  reminder?: boolean;
 };
 
 // ask_id used for the backlog of people with no open stated ask, whose
@@ -355,56 +428,120 @@ export async function attemptEventSurfacing(candidate: SurfacingCandidate): Prom
   // anything new behind what's already queued. Urgent items (happening
   // soon) move to the front so they aren't stuck behind a later event.
   const queued = await dropStaleFront(candidate.userId, await getBacklog(candidate.userId, candidate.askId));
-  const found = await findFreshPending(candidate);
-  const merged = [...queued, ...found.filter((f) => !queued.some((q) => sameMatch(q.match, f.match)))];
+  const { items: found, trace } = await findFreshPending(candidate);
+  // A reminder replaces an older queued pitch for the same event.
+  const merged = [
+    ...queued.filter((q) => !found.some((f) => f.reminder && sameMatch(f.match, q.match))),
+    ...found.filter((f) => f.reminder || !queued.some((q) => sameMatch(q.match, f.match))),
+  ];
   const pending = await dropStaleFront(candidate.userId, [
     ...merged.filter((i) => i.source === "urgent" || isShortNotice(i.match)),
     ...merged.filter((i) => !(i.source === "urgent" || isShortNotice(i.match))),
   ]);
   await saveBacklog(candidate.userId, candidate.askId, pending);
-  if (!pending.length) return { queued: false };
 
-  const item = pending[0];
-  // Cadence gate (Royce, 2026-08-30): a "full" item waits for the 3-day
-  // cadence; urgent and short-notice items don't.
-  if (item.source === "full" && !candidate.cooldownCleared && !isShortNotice(item.match)) return { queued: false };
+  // Every run is recorded, so a quiet week can be traced to where things
+  // were dropped instead of guessed at (2026-09-18).
+  const log = (outcome: "act" | "skip", action: string, extra: Record<string, unknown> = {}) =>
+    recordDecision({
+      layer: 5,
+      decision: "sweep.surface",
+      userId: candidate.userId,
+      outcome,
+      action,
+      proposal: {
+        askId: candidate.askId,
+        askText: candidate.askText.slice(0, 200),
+        fromProfile: candidate.fromProfile ?? false,
+        cooldownCleared: candidate.cooldownCleared,
+        ...trace,
+        backlog: pending.map((i) => ({ name: i.match.name, tier: i.match.tier, date: relevantDate(i.match), source: i.source })),
+        ...extra,
+      },
+    });
 
-  const date = relevantDate(item.match);
-  // Real details plus a personal reason, computed once when it's queued, so
-  // the tease, the reveal, and any "tell me more" all work from the same
-  // record (services/eventDetails.ts).
-  const match = await enrichMatch(item.match, {
-    userId: candidate.userId,
-    firstName: candidate.firstName,
-    askText: candidate.fromProfile ? null : item.askText,
-    goals: candidate.goals,
-    city: candidate.city,
-    feeling: renderEmotionalContext(await getEmotionalContext(candidate.userId)),
-  });
-  // The personal read says it doesn't fit what they asked: drop it.
-  if (match.fits === false) {
-    await removeFromBacklog(candidate.userId, candidate.askId, item.match);
+  if (!pending.length) {
+    await log("skip", trace.found.length ? "nothing_fresh" : "nothing_found");
     return { queued: false };
   }
-  const payload: EventOfferPayload = {
-    askId: candidate.askId,
-    askText: item.askText,
-    fromProfile: candidate.fromProfile ?? false,
-    match,
-  };
-  const { queued: ok } = await enqueueCandidate({
-    userId: candidate.userId,
-    type: "event_offer",
-    targetKey: `event_offer:${matchKey(item.match)}`,
-    summary: `${item.match.kind === "opportunity" ? "An opportunity" : "An event"} that fits ${candidate.fromProfile ? "what they've shared" : `their ask "${item.askText.slice(0, 120)}"`}: "${item.match.name}"${date ? ` (${date})` : ""}${isShortNotice(item.match) ? ", short notice" : ""}`,
-    payload,
-    // Expires at the end of the event's (or deadline's) day; an undated
-    // opportunity gets two weeks.
-    expiresAt: date ? new Date(`${date}T23:59:00Z`) : new Date(Date.now() + 14 * 24 * 60 * 60 * 1000),
-    // Short notice is the most time-bound thing Co can send.
-    priority: isShortNotice(item.match) ? 95 : undefined,
-  });
-  return { queued: ok };
+
+  // One queued offer per event: an event already waiting to go out (often
+  // queued by another of their asks) is skipped so this ask queues its next
+  // distinct one, instead of every ask re-touching the same candidate.
+  const { rows: waiting } = await pool.query(
+    `SELECT target_key FROM proactive_candidates WHERE user_id = $1 AND type = 'event_offer' AND status = 'pending'`,
+    [candidate.userId],
+  );
+  const alreadyWaiting = new Set(waiting.map((r: any) => r.target_key as string));
+  const skipped: { name: string; why: string }[] = [];
+  let tried = 0;
+
+  for (const item of pending) {
+    const targetKey = offerTargetKey(item);
+    if (alreadyWaiting.has(targetKey)) {
+      skipped.push({ name: item.match.name, why: "already queued" });
+      continue;
+    }
+    // Cadence gate (Royce, 2026-08-30): a "full" item waits for the 3-day
+    // cadence; urgent and short-notice items don't.
+    if (item.source === "full" && !candidate.cooldownCleared && !trace.widened && !isShortNotice(item.match)) {
+      skipped.push({ name: item.match.name, why: "waiting for the 3-day cadence" });
+      continue;
+    }
+    // Each try costs a fit read; three is plenty for one ask in one run.
+    if (tried >= 3) break;
+    tried++;
+
+    const date = relevantDate(item.match);
+    // Real details plus a personal reason, computed once when it's queued, so
+    // the tease, the reveal, and any "tell me more" all work from the same
+    // record (services/eventDetails.ts).
+    const match = await enrichMatch(item.match, {
+      userId: candidate.userId,
+      firstName: candidate.firstName,
+      askText: candidate.fromProfile ? null : item.askText,
+      goals: candidate.goals,
+      city: candidate.city,
+      feeling: renderEmotionalContext(await getEmotionalContext(candidate.userId)),
+    });
+    // The personal read says it doesn't fit what they asked: drop it and try
+    // the next one.
+    if (match.fits === false) {
+      await removeFromBacklog(candidate.userId, candidate.askId, item.match);
+      skipped.push({ name: item.match.name, why: `doesn't fit: ${match.whyItFits ?? "no reason given"}`.slice(0, 200) });
+      continue;
+    }
+    const payload: EventOfferPayload = {
+      askId: candidate.askId,
+      askText: item.askText,
+      fromProfile: candidate.fromProfile ?? false,
+      match,
+      // Frustrated with what Co has found: send the real thing, not a tease
+      // they have to answer before seeing it.
+      ...(trace.widened ? { revealNow: true } : {}),
+      ...(item.reminder ? { reminder: true } : {}),
+    };
+    const { queued: ok } = await enqueueCandidate({
+      userId: candidate.userId,
+      type: "event_offer",
+      targetKey,
+      summary: `${item.reminder ? "Reminder, already shown to them: " : ""}${item.match.kind === "opportunity" ? "An opportunity" : "An event"} that fits ${candidate.fromProfile ? "what they've shared" : `their ask "${item.askText.slice(0, 120)}"`}: "${item.match.name}"${date ? ` (${date})` : ""}${isShortNotice(item.match) ? ", short notice" : ""}`,
+      payload,
+      // Expires at the end of the event's (or deadline's) day; an undated
+      // opportunity gets two weeks.
+      expiresAt: date ? new Date(`${date}T23:59:00Z`) : new Date(Date.now() + 14 * 24 * 60 * 60 * 1000),
+      // Short notice is the most time-bound thing Co can send.
+      priority: isShortNotice(item.match) ? 95 : trace.widened ? 85 : undefined,
+    });
+    if (ok) {
+      await log("act", "queued", { queued: { name: item.match.name, tier: item.match.tier, date }, skipped });
+      return { queued: true };
+    }
+    skipped.push({ name: item.match.name, why: "already sent or decided" });
+  }
+
+  await log("skip", "nothing_queued", { skipped });
+  return { queued: false };
 }
 
 export { isShortNotice };

@@ -5,7 +5,7 @@
 import pool from "../db/db.js";
 import { writeMemory } from "../services/memory.js";
 import { draftProactive, nameTokens, type Candidate, type DraftResult, type ProactiveRegistry } from "./proactive.js";
-import { draftEventReveal, draftEventTease } from "../agent/eventDiscoverySurfacing.js";
+import { draftEventReveal } from "../agent/eventDiscoverySurfacing.js";
 import { draftAskCheckin, type AskCheckinPayload } from "../agent/askCheckin.js";
 import { draftCompanionCheckin } from "../agent/companionCheckin.js";
 import { draftWindowFollowUp, type WindowFollowUpPayload } from "../agent/windowFollowUp.js";
@@ -22,8 +22,11 @@ function skip(reason: string): DraftResult {
 
 // The candidate knows its own reveal decision at draft time, so onSent needs
 // to know which shape actually went out.
-function revealedNow(c: Candidate): boolean {
-  return isShortNotice((c.payload as EventOfferPayload).match);
+// Every event offer now goes out with its real details (Royce, 2026-09-18,
+// superseding the 2026-08-30 ask-first tease): a tease needed a reply before
+// anything happened, and an unanswered one blocked the next offer on it.
+function revealedNow(_c: Candidate): boolean {
+  return true;
 }
 
 async function removeNetworkBacklogItem(userId: string, askId: string, candidateId: string): Promise<void> {
@@ -91,17 +94,13 @@ export const proactiveRegistry: ProactiveRegistry = {
   event_offer: {
     async draft(c, person) {
       const p = c.payload as EventOfferPayload;
-      if (isShortNotice(p.match)) {
-        const r = await draftEventReveal(person, p.askText, p.fromProfile, p.match);
-        return r ?? skip("model chose SKIP");
-      }
-      const r = await draftEventTease(person, p.askText, p.fromProfile, p.match);
-      return r ? { messages: [r.text], ...r } : skip("model chose SKIP");
+      const r = await draftEventReveal(person, p.askText, p.fromProfile, p.match, { reminder: p.reminder });
+      return r ?? skip("model chose SKIP");
     },
     async onSent(c) {
       await onEventOfferSent(c.userId, c.payload as EventOfferPayload, revealedNow(c));
       const p = c.payload as EventOfferPayload;
-      await writeMemory(c.userId, "event_discovery_surfacing", `${revealedNow(c) ? "Revealed directly (short notice)" : "Teased"}: ${p.match.name}`);
+      await writeMemory(c.userId, "event_discovery_surfacing", `Sent directly${isShortNotice(p.match) ? " (short notice)" : ""}: ${p.match.name}`);
     },
     async onDropped(c) {
       await onEventOfferDropped(c.userId, c.payload as EventOfferPayload);
