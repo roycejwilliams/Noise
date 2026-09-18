@@ -64,6 +64,42 @@ export async function reserveWebSearch(userId: string | null, source: "sweep" | 
 
 export type WebOpportunityResult = (TierMatch & { tier: 3 }) | null;
 
+// The page's own text, read here rather than trusted from the model's answer:
+// the gate checks the name, numbers, deadline, and places against it, the way
+// an X result is checked against its post. Kept short because it also rides
+// into Co's drafting prompts as the source text.
+const PAGE_TEXT_LIMIT = 8000;
+
+export function htmlToText(html: string): string {
+  return html
+    .replace(/<(script|style|noscript|svg)[^>]*>[\s\S]*?<\/\1>/gi, " ")
+    .replace(/<[^>]+>/g, " ")
+    .replace(/&nbsp;/g, " ")
+    .replace(/&#x([0-9a-f]+);/gi, (_, h) => String.fromCodePoint(parseInt(h, 16)))
+    .replace(/&#(\d+);/g, (_, d) => String.fromCodePoint(Number(d)))
+    .replace(/&quot;/g, '"')
+    .replace(/&apos;/g, "'")
+    .replace(/&lt;/g, "<")
+    .replace(/&gt;/g, ">")
+    .replace(/&amp;/g, "&")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
+export async function readPageText(url: string): Promise<string | null> {
+  try {
+    const u = new URL(url);
+    // Public https pages only; never a local or bare-IP address.
+    if (u.protocol !== "https:" || u.hostname === "localhost" || /^[\d.]+$|:/.test(u.hostname)) return null;
+    const res = await fetch(u, { headers: { "user-agent": "Mozilla/5.0 (compatible; Co)" }, redirect: "follow", signal: AbortSignal.timeout(10_000) });
+    if (!res.ok || !/text\/(html|plain)/.test(res.headers.get("content-type") ?? "")) return null;
+    const text = htmlToText(await res.text());
+    return text ? text.slice(0, PAGE_TEXT_LIMIT) : null;
+  } catch {
+    return null;
+  }
+}
+
 // The ask decides what shape of thing counts (2026-09-18: this prompt was
 // written for one event-grant ask and told the model to reject accelerators,
 // even for someone asking for accelerators). The shape check stays: a real
@@ -100,17 +136,22 @@ Critical: a real program existing isn't the same as it fitting their ask. Match 
 
 Reject anything whose own page shows it's closed, expired, or from a past cycle relative to today's date, or that only fits an eligibility bar they clearly don't meet. Prefer things in or open to ${city ?? "their area"} when location matters.
 
-If you find a real, current, well-matched fit: give its category (a short word or two: "accelerator", "fellowship", "investor", "grant", "sponsorship", "credit_program", "city_program", "other"), and write "reason" the way you'd tell a friend over text: one short, casual sentence with the one concrete detail that proves it's real (a dollar amount, deadline, or eligibility line from the real page).
+If you find a real, current, well-matched fit: give its category (a short word or two: "accelerator", "fellowship", "investor", "grant", "sponsorship", "credit_program", "city_program", "other"), and write "reason" the way you'd tell a friend over text: one short, casual sentence with the one concrete detail that proves it's real (a dollar amount, deadline, or eligibility line). That detail, the name, and any deadline must be stated on the exact page you return as "url", not on another page or a search snippet: that page's text is checked, and anything it doesn't say gets the whole result thrown out. Return the program's or fund's own official page, not a blog or listicle about it, whenever the official page states those details.
 
 Return ONLY valid JSON, nothing else: {"found": true, "name": "...", "url": "the real page URL you actually read", "category": "...", "reason": "...", "deadline": "YYYY-MM-DD" or null} or {"found": false}`,
     });
     const parsed = parseModelJson<{ found?: boolean; name?: string; url?: string; category?: string; reason?: string; deadline?: string | null }>(raw);
     if (!parsed?.found || typeof parsed.name !== "string" || typeof parsed.url !== "string") return null;
+    // An unreadable page still goes to the gate, which turns it away with a
+    // reason the trace shows.
+    const pageText = await readPageText(parsed.url);
     return {
       tier: 3,
       kind: "opportunity",
+      source: "web",
       name: parsed.name,
       url: parsed.url,
+      ...(pageText ? { evidence: pageText } : {}),
       reason: typeof parsed.reason === "string" && parsed.reason.trim() ? parsed.reason.trim() : "Found via a real web search.",
       category: typeof parsed.category === "string" ? parsed.category.trim().toLowerCase().slice(0, 40) : null,
       ...(typeof parsed.deadline === "string" ? { deadline: parsed.deadline } : {}),

@@ -129,20 +129,24 @@ export function checkGrounding(match: TierMatch, facts: MatchFacts): GateCheck {
     return { name, pass: true };
   }
 
-  // Tier 3
-  if (!/^https:\/\/x\.com\/i\/status\/\d+$/.test(match.url ?? "")) {
-    return { name, pass: false, reason: `not a real post link: ${match.url}` };
+  // Tier 3. A web result is checked against the text of its own page the
+  // same way an X result is checked against its post (2026-09-18: every web
+  // result was failing the X-only link check, so none could ever send).
+  const web = match.source === "web";
+  const where = web ? "page" : "post";
+  if (web ? !/^https:\/\/[^\s/]+\.[^\s/]+/.test(match.url ?? "") : !/^https:\/\/x\.com\/i\/status\/\d+$/.test(match.url ?? "")) {
+    return { name, pass: false, reason: `not a real ${where} link: ${match.url}` };
   }
   const evidence = facts.evidence ? norm(facts.evidence) : null;
-  if (!evidence) return { name, pass: false, reason: "no source post text to check the opportunity against" };
+  if (!evidence) return { name, pass: false, reason: `no source ${where} text to check the opportunity against` };
 
   const nameWords = norm(match.name).split(" ").filter((w) => w.length > 2 && !["the", "and", "for", "program", "fellowship", "accelerator"].includes(w));
   if (nameWords.length && nameWords.filter((w) => evidence.includes(w)).length / nameWords.length < 0.5) {
-    return { name, pass: false, reason: `"${match.name}" isn't named in the post` };
+    return { name, pass: false, reason: `"${match.name}" isn't named in the ${where}` };
   }
   const numbersInReason = (match.reason.match(/\d[\d,.]*/g) ?? []).map((n) => n.replace(/[,.]$/, ""));
   const missingNumber = numbersInReason.find((n) => !evidence.includes(n.replace(/,/g, "")) && !facts.evidence!.includes(n));
-  if (missingNumber) return { name, pass: false, reason: `reason mentions "${missingNumber}", which isn't in the post` };
+  if (missingNumber) return { name, pass: false, reason: `reason mentions "${missingNumber}", which isn't in the ${where}` };
   if (match.deadline) {
     const [, mm, dd] = match.deadline.split("-").map(Number);
     const month = MONTHS[mm - 1];
@@ -155,10 +159,10 @@ export function checkGrounding(match: TierMatch, facts: MatchFacts): GateCheck {
       const hasDay = new RegExp(`\\b0?${dd}(st|nd|rd|th)?\\b`).test(seg);
       return (hasMonth && hasDay) || new RegExp(`\\b0?${mm} 0?${dd}\\b`).test(seg);
     });
-    if (!stated) return { name, pass: false, reason: `deadline ${match.deadline} isn't stated for ${match.name} in the post` };
+    if (!stated) return { name, pass: false, reason: `deadline ${match.deadline} isn't stated for ${match.name} in the ${where}` };
   }
   const wrongPlace = placesClaimed(match.reason).find((p) => !evidence.includes(norm(p)));
-  if (wrongPlace) return { name, pass: false, reason: `reason says "${wrongPlace}", which isn't in the post` };
+  if (wrongPlace) return { name, pass: false, reason: `reason says "${wrongPlace}", which isn't in the ${where}` };
   return { name, pass: true };
 }
 

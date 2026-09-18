@@ -643,5 +643,155 @@
       "alreadyOffered": false,
       "now": "2026-09-16T18:00:00Z"
     }
+  },
+  {
+    "id": "m30-web-grounded",
+    "kind": "match",
+    "expect": "pass",
+    "match": {
+      "tier": 3,
+      "kind": "opportunity",
+      "name": "Y Combinator Winter 2027 Batch",
+      "url": "https://www.ycombinator.com/apply",
+      "reason": "YC's Winter 2027 batch is open, apply by November 2.",
+      "deadline": "2026-11-02",
+      "source": "web"
+    },
+    "facts": {
+      "searchCity": "San Francisco",
+      "distanceMiles": null,
+      "alreadyOffered": false,
+      "now": "2026-09-18T18:00:00Z",
+      "evidence": "Y Combinator is accepting applications for the Winter 2027 Batch funding cycle. The batch will take place from January to March in San Francisco. The deadline to apply on-time is November 2 at 8pm PT; if you apply before the deadline, you will get a decision by December 11. YC invests $500,000 in every company."
+    }
+  },
+  {
+    "id": "m31-web-invented-deadline",
+    "kind": "match",
+    "expect": "reject",
+    "violation": "grounding",
+    "match": {
+      "tier": 3,
+      "kind": "opportunity",
+      "name": "Y Combinator Winter 2027 Batch",
+      "url": "https://www.ycombinator.com/apply",
+      "reason": "YC's Winter 2027 batch is open, apply by September 25.",
+      "deadline": "2026-09-25",
+      "source": "web"
+    },
+    "facts": {
+      "searchCity": "San Francisco",
+      "distanceMiles": null,
+      "alreadyOffered": false,
+      "now": "2026-09-18T18:00:00Z",
+      "evidence": "Y Combinator is accepting applications for the Winter 2027 Batch funding cycle. The batch will take place from January to March in San Francisco. The deadline to apply on-time is November 2 at 8pm PT; if you apply before the deadline, you will get a decision by December 11. YC invests $500,000 in every company."
+    }
+  },
+  {
+    "id": "m32-web-invented-amount",
+    "kind": "match",
+    "expect": "reject",
+    "violation": "grounding",
+    "match": {
+      "tier": 3,
+      "kind": "opportunity",
+      "name": "Y Combinator Winter 2027 Batch",
+      "url": "https://www.ycombinator.com/apply",
+      "reason": "YC's Winter 2027 batch is open and invests $750,000.",
+      "deadline": "2026-11-02",
+      "source": "web"
+    },
+    "facts": {
+      "searchCity": "San Francisco",
+      "distanceMiles": null,
+      "alreadyOffered": false,
+      "now": "2026-09-18T18:00:00Z",
+      "evidence": "Y Combinator is accepting applications for the Winter 2027 Batch funding cycle. The batch will take place from January to March in San Francisco. The deadline to apply on-time is November 2 at 8pm PT; if you apply before the deadline, you will get a decision by December 11. YC invests $500,000 in every company."
+    }
+  },
+  {
+    "id": "m33-web-unreadable-page",
+    "kind": "match",
+    "expect": "reject",
+    "violation": "grounding",
+    "match": {
+      "tier": 3,
+      "kind": "opportunity",
+      "name": "Y Combinator Winter 2027 Batch",
+      "url": "https://www.ycombinator.com/apply",
+      "reason": "YC's Winter 2027 batch is open, apply by November 2.",
+      "deadline": "2026-11-02",
+      "source": "web"
+    },
+    "facts": {
+      "searchCity": "San Francisco",
+      "distanceMiles": null,
+      "alreadyOffered": false,
+      "now": "2026-09-18T18:00:00Z"
+    }
+  },
+  {
+    "id": "m34-web-not-https",
+    "kind": "match",
+    "expect": "reject",
+    "violation": "grounding",
+    "match": {
+      "tier": 3,
+      "kind": "opportunity",
+      "name": "Y Combinator Winter 2027 Batch",
+      "url": "http://www.ycombinator.com/apply",
+      "reason": "YC's Winter 2027 batch is open, apply by November 2.",
+      "deadline": "2026-11-02",
+      "source": "web"
+    },
+    "facts": {
+      "searchCity": "San Francisco",
+      "distanceMiles": null,
+      "alreadyOffered": false,
+      "now": "2026-09-18T18:00:00Z",
+      "evidence": "Y Combinator is accepting applications for the Winter 2027 Batch funding cycle. The batch will take place from January to March in San Francisco. The deadline to apply on-time is November 2 at 8pm PT; if you apply before the deadline, you will get a decision by December 11. YC invests $500,000 in every company."
+    }
+  },
+  {
+    "id": "m35-x-result-still-needs-post-link",
+    "kind": "match",
+    "expect": "reject",
+    "violation": "grounding",
+    "match": {
+      "tier": 3,
+      "kind": "opportunity",
+      "name": "Y Combinator Winter 2027 Batch",
+      "url": "https://www.ycombinator.com/apply",
+      "reason": "YC's Winter 2027 batch is open, apply by November 2.",
+      "deadline": "2026-11-02"
+    },
+    "facts": {
+      "searchCity": "San Francisco",
+      "distanceMiles": null,
+      "alreadyOffered": false,
+      "now": "2026-09-18T18:00:00Z",
+      "evidence": "Y Combinator is accepting applications for the Winter 2027 Batch funding cycle. The batch will take place from January to March in San Francisco. The deadline to apply on-time is November 2 at 8pm PT; if you apply before the deadline, you will get a decision by December 11. YC invests $500,000 in every company."
+    }
+  },
+  {
+    "id": "m36-web-grant-grounded",
+    "kind": "match",
+    "expect": "pass",
+    "match": {
+      "tier": 3,
+      "kind": "opportunity",
+      "name": "Awesome Foundation San Francisco Chapter Grant",
+      "url": "https://www.awesomefoundation.org/en/chapters/sf",
+      "reason": "No-strings $1,000 microgrants for awesome projects, open every month.",
+      "deadline": null,
+      "source": "web"
+    },
+    "facts": {
+      "searchCity": "San Francisco",
+      "distanceMiles": null,
+      "alreadyOffered": false,
+      "now": "2026-09-18T18:00:00Z",
+      "evidence": "San Francisco, CA - The Awesome Foundation. Want a $1000 grant? Please apply! Our microgrants of $1,000 are given with no strings attached based on your application. We fund based on our personal reaction."
+    }
   }
 ]

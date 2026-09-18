@@ -87,7 +87,7 @@ type MatchExtras = { details?: EventDetails; opportunity?: OpportunityDetails; w
 export type TierMatch =
   | ({ tier: 1; kind: "co_event"; event_api_id: string; event_date: string; name: string; url?: string; reason: string; city?: string | null; online?: boolean } & MatchExtras)
   | ({ tier: 2; kind: "public_event"; event_api_id: string; event_date: string; name: string; url: string; reason: string; city?: string | null; online?: boolean } & MatchExtras)
-  | ({ tier: 3; kind: "opportunity"; name: string; url: string; reason: string; deadline?: string; evidence?: string; statedDates?: { start: string; end?: string | null }; online?: undefined; category?: string | null } & MatchExtras);
+  | ({ tier: 3; kind: "opportunity"; name: string; url: string; reason: string; deadline?: string; evidence?: string; source?: "x" | "web"; statedDates?: { start: string; end?: string | null }; online?: undefined; category?: string | null } & MatchExtras);
 
 // Lead-time window (Royce, 2026-08-30) — "how far out in advance are we
 // searching?" Neither listCalendarEvents() nor fetchPublicEvents() take a
