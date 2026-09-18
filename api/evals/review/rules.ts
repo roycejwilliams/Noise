@@ -47,6 +47,14 @@ const techWeek = base({
 const twConv = conversationFlags(techWeek);
 check("tech week: the 'Already sent you' message is flagged as restating", twConv.some((f) => f.type === "restated_own_message" && f.snippet.includes("Already sent you")));
 check("tech week: 'just that one' with five through the gate is flagged", twConv.some((f) => f.type === "only_one_claim" && f.decisionIds.length === 5));
+// The previous turn's gate rows don't count toward this one (2026-09-18: the
+// hike search's six were added to tech week's six, "12 passed").
+const twoTurns = base({
+  messages: [msg("2026-09-18T19:53:48Z", "member", "Is there anything going on tomorrow?"), ...techWeek.messages],
+  decisions: [...[1, 2, 3, 4, 5, 6].map((i) => dec(90 + i, "2026-09-18T19:54:10Z", "match.gate", "act", "offer:tier2", { name: `hike ${i}` })), ...techWeek.decisions],
+});
+check("only this turn's gate rows are counted", conversationFlags(twoTurns).find((f) => f.type === "only_one_claim")?.decisionIds.length === 5);
+check("a log flag's rows stop at the member's next message", !logFlags(twoTurns).some((f) => f.decisionIds.some((id) => id >= 91 && id <= 96)));
 check("tech week: a link-only message is never flagged as restating", !twConv.some((f) => f.type === "restated_own_message" && f.snippet.startsWith('"https')));
 const twLog = logFlags(techWeek);
 check("tech week: 44s turn is a slow reply, cause from the log", twLog.some((f) => f.type === "slow_reply" && f.severity === "medium" && f.causeConfirmed && f.cause.startsWith("search")));

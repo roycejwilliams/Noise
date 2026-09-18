@@ -116,10 +116,22 @@ export type ReviewData = { userId: string; firstName: string; messages: ReviewMe
 const ms = (iso: string) => new Date(iso).getTime();
 const clip = (s: string, n = 220) => (s.length > n ? `${s.slice(0, n - 1)}…` : s);
 
-// Decision rows from the same turn: shortly before and after a moment.
-export function turnRowIds(decisions: ReviewDecision[], at: string, beforeSec = 90, afterSec = 45): number[] {
+// The turn a moment belongs to: from the member's message that started it to
+// just before their next one. A fixed time window pulled the previous turn's
+// rows into a flag (2026-09-18: "12 passed the gate" when 6 did). Without a
+// member message nearby (a proactive send), a short window around it.
+export function turnBounds(messages: ReviewMessage[], at: string): { start: number; end: number } {
   const t = ms(at);
-  return decisions.filter((d) => ms(d.at) >= t - beforeSec * 1000 && ms(d.at) <= t + afterSec * 1000).map((d) => d.id);
+  const before = [...messages].reverse().find((m) => m.from === "member" && ms(m.at) <= t && t - ms(m.at) < 10 * 60_000);
+  const after = messages.find((m) => m.from === "member" && ms(m.at) > t);
+  const start = before ? ms(before.at) - 1000 : t - 90_000;
+  const end = after ? Math.min(ms(after.at) - 1, t + 5 * 60_000) : t + 45_000;
+  return { start, end };
+}
+
+export function turnRowIds(decisions: ReviewDecision[], at: string, messages: ReviewMessage[] = []): number[] {
+  const { start, end } = turnBounds(messages, at);
+  return decisions.filter((d) => ms(d.at) >= start && ms(d.at) <= end).map((d) => d.id);
 }
 
 // ---------------------------------------------------------------------------
@@ -154,7 +166,7 @@ export function topicWords(text: string): Set<string> {
 export function logFlags(data: ReviewData): ReviewFlag[] {
   const flags: ReviewFlag[] = [];
   const add = (d: ReviewDecision, type: FlagType, severity: Severity, snippet: string, cause: string, causeConfirmed: boolean) =>
-    flags.push({ userId: data.userId, at: d.at, type, severity, snippet: clip(snippet), decisionIds: turnRowIds(data.decisions, d.at), cause, causeConfirmed, source: "log" });
+    flags.push({ userId: data.userId, at: d.at, type, severity, snippet: clip(snippet), decisionIds: turnRowIds(data.decisions, d.at, data.messages), cause, causeConfirmed, source: "log" });
   const messageBefore = (at: string) =>
     [...data.messages].reverse().find((m) => m.from === "member" && ms(m.at) <= ms(at) && ms(at) - ms(m.at) < 5 * 60_000)?.text ?? null;
 
@@ -230,7 +242,7 @@ export function conversationFlags(data: ReviewData): ReviewFlag[] {
           type: "restated_own_message",
           severity: "medium",
           snippet: clip(`"${prior[0]?.text ?? earlier[0].text}" then "${m.text}"`, 300),
-          decisionIds: turnRowIds(data.decisions, m.at, 120, 10),
+          decisionIds: turnRowIds(data.decisions, m.at, data.messages),
           cause: POINT_BACK.test(m.text) ? "the reply after sent results pointed back at them" : "the reply repeated what was just sent",
           causeConfirmed: true,
           source: "conversation",
@@ -238,7 +250,8 @@ export function conversationFlags(data: ReviewData): ReviewFlag[] {
       }
     }
     if (ONLY_ONE.test(m.text)) {
-      const offered = data.decisions.filter((d) => d.decision === "match.gate" && d.outcome === "act" && ms(d.at) <= ms(m.at) && ms(m.at) - ms(d.at) < 3 * 60_000);
+      const { start } = turnBounds(msgs, m.at);
+      const offered = data.decisions.filter((d) => d.decision === "match.gate" && d.outcome === "act" && ms(d.at) >= start && ms(d.at) <= ms(m.at));
       if (offered.length > 1) {
         flags.push({
           userId: data.userId,
@@ -272,7 +285,7 @@ export function reactionFlags(data: ReviewData): ReviewFlag[] {
       type: "member_frustrated_with_co",
       severity: e.intensity === "high" ? "high" : "medium",
       snippet: clip(`${e.emotion} (${e.intensity})${e.about ? ` about ${e.about}` : ""}${e.quote ? `: "${e.quote}"` : ""}`),
-      decisionIds: turnRowIds(data.decisions, e.at),
+      decisionIds: turnRowIds(data.decisions, e.at, data.messages),
       cause: "emotion read targeted at Co",
       causeConfirmed: true,
       source: "reaction",
@@ -285,7 +298,7 @@ export function reactionFlags(data: ReviewData): ReviewFlag[] {
       type: "member_reported_issue",
       severity: (["low", "medium", "high"].includes(r.severity) ? r.severity : "medium") as Severity,
       snippet: clip(`"${r.message}" (${r.category}: ${r.summary})`),
-      decisionIds: turnRowIds(data.decisions, r.at),
+      decisionIds: turnRowIds(data.decisions, r.at, data.messages),
       cause: r.summary,
       causeConfirmed: false,
       source: "reaction",
@@ -302,7 +315,7 @@ export function reactionFlags(data: ReviewData): ReviewFlag[] {
       type: "member_called_out_miss",
       severity: "high",
       snippet: clip(`${lastCo ? `Co: "${clip(lastCo.text, 120)}" → ` : ""}member: "${m.text}"`, 300),
-      decisionIds: turnRowIds(data.decisions, m.at, 180, 30),
+      decisionIds: turnRowIds(data.decisions, lastCo?.at ?? m.at, data.messages),
       cause: "their reply calls out the message before it",
       causeConfirmed: false,
       source: "reaction",
@@ -393,7 +406,7 @@ export async function modelFlags(data: ReviewData): Promise<ReviewFlag[]> {
         type: f.type as FlagType,
         severity: (["low", "medium", "high"].includes(f.severity ?? "") ? f.severity : "medium") as Severity,
         snippet: clip(f.quotes.map((q) => `"${q}"`).join(" … "), 300),
-        decisionIds: turnRowIds(data.decisions, at),
+        decisionIds: turnRowIds(data.decisions, at, data.messages),
         cause: `${f.why ?? "flagged in review"} (guess)`,
         causeConfirmed: false,
         source: "model",
@@ -528,6 +541,35 @@ async function textDigest(userId: string, messages: string[]): Promise<void> {
     await sendblue.messages.send({ number, content, from_number: process.env.SENDBLUE_PHONE_NUMBER! });
     await new Promise((r) => setTimeout(r, 1500));
   }
+}
+
+// For a session ("what broke since X"): prints the full report or the digest.
+// On co-test, where the scripts folder isn't built:
+//   node --input-type=module -e "const m = await import('/app/co-test/dist/api/src/harness/devReview.js'); await m.printReview({ since: '24h' })"
+export async function printReview(opts: { since?: string; until?: string; model?: boolean; digest?: boolean; store?: boolean } = {}): Promise<void> {
+  const when = (v: string | undefined, fallback: Date): Date => {
+    if (!v) return fallback;
+    const rel = v.match(/^(\d+(?:\.\d+)?)(h|d)$/);
+    if (rel) return new Date(Date.now() - Number(rel[1]) * (rel[2] === "h" ? 3_600_000 : 86_400_000));
+    const d = new Date(v);
+    if (Number.isNaN(d.getTime())) throw new Error(`can't read the time "${v}"`);
+    return d;
+  };
+  const until = when(opts.until, new Date());
+  const since = when(opts.since, new Date(until.getTime() - 86_400_000));
+  const { flags, names } = await reviewWindow(since, until, { model: opts.model !== false });
+  const label = opts.since ? `since ${opts.since}` : "last 24h";
+  if (opts.digest) {
+    console.log(renderDigest(flags, names, label).join("\n\n"));
+  } else {
+    const ids = [...new Set(flags.flatMap((f) => f.decisionIds))];
+    const { rows } = ids.length ? await pool.query(`SELECT id, decision, action FROM harness_decisions WHERE id = ANY($1::bigint[])`, [ids]) : { rows: [] as any[] };
+    const decisionNames = new Map<number, string>(rows.map((r: any) => [Number(r.id), `${r.decision}${r.action ? `:${r.action}` : ""}`]));
+    console.log(`What broke ${label} (${since.toISOString()} to ${until.toISOString()}): ${flags.length} flags\n`);
+    console.log(renderReport(flags, names, decisionNames));
+  }
+  if (opts.store) console.log(reviewEnabled() ? `\nstored ${await storeFlags(flags)} new flags` : "\nnot stored: only on co-test with DEV_REVIEW=true");
+  await pool.end();
 }
 
 // The morning job: the last 24 hours, stored, and texted to Royce.

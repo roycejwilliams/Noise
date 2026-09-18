@@ -1462,6 +1462,25 @@ export async function runMigrations(): Promise<void> {
     .then(() => pool.query(`CREATE INDEX IF NOT EXISTS idx_suggestion_outcomes_user ON suggestion_outcomes (user_id, created_at DESC)`))
     .catch((err: Error) => console.error("suggestion_outcomes table init failed:", err));
 
+  // Everything Co sent directly, waiting on their reaction for two days
+  // (services/offerReactions.ts, 2026-09-18).
+  await pool
+    .query(
+      `CREATE TABLE IF NOT EXISTS revealed_offers (
+        id BIGSERIAL PRIMARY KEY,
+        user_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+        item_key TEXT NOT NULL,
+        item_name TEXT NOT NULL,
+        kind TEXT NOT NULL,
+        url TEXT,
+        sent_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+        reaction TEXT,
+        reacted_at TIMESTAMPTZ
+      )`,
+    )
+    .then(() => pool.query(`CREATE INDEX IF NOT EXISTS idx_revealed_offers_user ON revealed_offers (user_id, sent_at DESC)`))
+    .catch((err: Error) => console.error("revealed_offers table init failed:", err));
+
   // Monitoring alert dedupe (harness/monitor.ts), 2026-09-15.
   await pool
     .query(`CREATE TABLE IF NOT EXISTS harness_alerts (signal_key TEXT PRIMARY KEY, sent_at TIMESTAMPTZ NOT NULL)`)
