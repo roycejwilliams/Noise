@@ -999,7 +999,10 @@ export async function getTieredRecommendation(
   // threw the right event away (2026-09-16: "Voice AI Happy Hour" passed the
   // gate but lost the Tier 2 slot to a higher-ranked event the fit check then
   // rejected). The caller picks one per tier after the fit check.
-  return { matches: gated, scope };
+  // A web result's whole page was only needed for the gate; what gets queued
+  // and saved to backlogs keeps the short excerpt Co drafts from.
+  const trimmed = gated.map((m) => (m.tier === 3 && m.source === "web" && m.evidence ? { ...m, evidence: m.opportunity?.postText ?? m.evidence.slice(0, 2500) } : m));
+  return { matches: trimmed, scope };
 }
 
 // The daily urgent-only Tier 1/2 pre-check (checkForUrgentMatch) was removed

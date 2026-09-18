@@ -40,6 +40,40 @@ function mentionsPlace(text: string, place: string): boolean {
   return placeForms(place).some((form) => padded.includes(` ${form} `));
 }
 
+// Amounts a page writes out in words, as digits ("nineteen thousand
+// dollars" -> 19000), so a reason saying "$19k" can be checked against it
+// (2026-09-18: a real SF event fund was rejected over exactly that).
+const UNITS: Record<string, number> = { zero: 0, one: 1, two: 2, three: 3, four: 4, five: 5, six: 6, seven: 7, eight: 8, nine: 9, ten: 10, eleven: 11, twelve: 12, thirteen: 13, fourteen: 14, fifteen: 15, sixteen: 16, seventeen: 17, eighteen: 18, nineteen: 19 };
+const TENS: Record<string, number> = { twenty: 20, thirty: 30, forty: 40, fifty: 50, sixty: 60, seventy: 70, eighty: 80, ninety: 90 };
+const SCALES: Record<string, number> = { thousand: 1_000, million: 1_000_000, billion: 1_000_000_000 };
+
+export function spelledNumbers(text: string): number[] {
+  const found: number[] = [];
+  let total = 0;
+  let current = 0;
+  let inRun = false;
+  const end = () => {
+    if (inRun) found.push(total + current);
+    total = current = 0;
+    inRun = false;
+  };
+  const words = text.toLowerCase().split(/[^a-z]+/).filter(Boolean);
+  words.forEach((w, i) => {
+    if (w in UNITS) current += UNITS[w];
+    else if (w in TENS) current += TENS[w];
+    else if (w === "hundred" && inRun) current *= 100;
+    else if (w in SCALES && inRun) {
+      total += current * SCALES[w];
+      current = 0;
+    } else if (w === "a" && (words[i + 1] === "hundred" || words[i + 1] in SCALES)) current += 1;
+    else if (w === "and" && inRun) return;
+    else return end();
+    inRun = true;
+  });
+  end();
+  return found;
+}
+
 function sameCityName(a: string, b: string): boolean {
   const first = (s: string) => norm(s.split(",")[0]);
   if (placeForms(first(a)).includes(first(b))) return true;
@@ -171,7 +205,8 @@ export function checkGrounding(match: TierMatch, facts: MatchFacts): GateCheck {
   if (web ? !/^https:\/\/[^\s/]+\.[^\s/]+/.test(match.url ?? "") : !/^https:\/\/x\.com\/i\/status\/\d+$/.test(match.url ?? "")) {
     return { name, pass: false, reason: `not a real ${where} link: ${match.url}` };
   }
-  const evidence = facts.evidence ? norm(facts.evidence) : null;
+  const spelled = facts.evidence ? spelledNumbers(facts.evidence) : [];
+  const evidence = facts.evidence ? norm(`${facts.evidence} ${spelled.join(" ")}`) : null;
   if (!evidence) return { name, pass: false, reason: `no source ${where} text to check the opportunity against` };
 
   const nameWords = norm(match.name).split(" ").filter((w) => w.length > 2 && !["the", "and", "for", "program", "fellowship", "accelerator"].includes(w));

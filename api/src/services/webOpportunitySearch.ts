@@ -25,6 +25,7 @@ import { xSearchBudget } from "./searchRules.js";
 import { parseModelJson } from "./modelJson.js";
 import { MODELS } from "../models.js";
 import type { TierMatch } from "./tieredRecommendation.js";
+import { checkGrounding } from "../harness/matchGate.js";
 
 // Judgment call (does this real, current thing actually fit, or is it just
 // a real thing that exists), not narrow extraction — same policy reasoning
@@ -66,12 +67,31 @@ export type WebOpportunityResult = (TierMatch & { tier: 3 }) | null;
 
 // The page's own text, read here rather than trusted from the model's answer:
 // the gate checks the name, numbers, deadline, and places against it, the way
-// an X result is checked against its post. Kept short because it also rides
-// into Co's drafting prompts as the source text.
-const PAGE_TEXT_LIMIT = 8000;
+// an X result is checked against its post. The gate gets the whole page
+// (2026-09-18: the Awesome Foundation's "$1000" sat past an 8,000-character
+// cut, below a list of past grantees, and the result was rejected); Co's
+// drafting prompts get a short excerpt around what the result claims.
+const PAGE_TEXT_LIMIT = 60_000;
+const EXCERPT_LIMIT = 2500;
+
+// Readable sentences a page keeps in its script data rather than its HTML
+// (2026-09-18: NFX's "$500K - $2M SAFE" only exists in the page's Next.js
+// data, so the gate rejected a true reason). Only string values that read
+// like text: letters and spaces, not code or ids.
+function scriptText(html: string): string {
+  const out: string[] = [];
+  for (const [, body] of html.matchAll(/<script[^>]*>([\s\S]*?)<\/script>/gi)) {
+    for (const [, str] of body.matchAll(/"((?:[^"\\]|\\.){12,400})"/g)) {
+      const t = str.replace(/\\[nrt]/g, " ").replace(/\\(["\\/])/g, "$1").replace(/\\u([0-9a-f]{4})/gi, (_, h) => String.fromCharCode(parseInt(h, 16)));
+      if (/[a-z]{3,} [a-z]{2,}/i.test(t) && !/[{};=<>]|function|https?:|\.(js|css|png|svg)\b/.test(t)) out.push(t);
+    }
+  }
+  return [...new Set(out)].join(". ");
+}
 
 export function htmlToText(html: string): string {
-  return html
+  const fromScripts = scriptText(html);
+  return (html
     .replace(/<(script|style|noscript|svg)[^>]*>[\s\S]*?<\/\1>/gi, " ")
     .replace(/<[^>]+>/g, " ")
     .replace(/&nbsp;/g, " ")
@@ -82,6 +102,7 @@ export function htmlToText(html: string): string {
     .replace(/&lt;/g, "<")
     .replace(/&gt;/g, ">")
     .replace(/&amp;/g, "&")
+    + (fromScripts ? ` ${fromScripts}` : ""))
     .replace(/\s+/g, " ")
     .trim();
 }
@@ -95,6 +116,102 @@ export async function readPageText(url: string): Promise<string | null> {
     if (!res.ok || !/text\/(html|plain)/.test(res.headers.get("content-type") ?? "")) return null;
     const text = htmlToText(await res.text());
     return text ? text.slice(0, PAGE_TEXT_LIMIT) : null;
+  } catch {
+    return null;
+  }
+}
+
+// The opening of the page plus the passages around the result's name,
+// amounts, and deadline, so Co drafts from the parts that back the result.
+export function pageExcerpt(text: string, claims: { name: string; reason: string; deadline?: string | null }): string {
+  if (text.length <= EXCERPT_LIMIT) return text;
+  const lower = text.toLowerCase();
+  const needles = [
+    ...(claims.reason.match(/\d[\d,.]*/g) ?? []).map((n) => n.replace(/[,.]$/, "")),
+    ...claims.name.toLowerCase().split(/\s+/).filter((w) => w.length > 3),
+  ];
+  if (claims.deadline) {
+    const month = new Date(`${claims.deadline}T12:00:00Z`).toLocaleString("en-US", { month: "long", timeZone: "UTC" }).toLowerCase();
+    needles.push(month);
+  }
+  const spans: [number, number][] = [[0, 600]];
+  for (const needle of needles) {
+    const at = lower.indexOf(needle.toLowerCase());
+    if (at > 600) spans.push([Math.max(0, at - 250), at + 250]);
+  }
+  spans.sort((a, b) => a[0] - b[0]);
+  const merged: [number, number][] = [];
+  for (const span of spans) {
+    const last = merged[merged.length - 1];
+    if (last && span[0] <= last[1]) last[1] = Math.max(last[1], span[1]);
+    else merged.push([...span]);
+  }
+  return merged.map(([a, b]) => text.slice(a, b).trim()).join(" … ").slice(0, EXCERPT_LIMIT);
+}
+
+// Words that say what kind of thing it is, not whose it is.
+const GENERIC_NAME_WORDS = new Set(["the", "and", "for", "program", "programs", "accelerator", "fellowship", "fund", "grant", "grants", "foundation", "batch", "winter", "summer", "spring", "fall", "cohort", "applications", "application", "startup", "startups", "founder", "founders", "venture", "ventures", "capital", "city", "san", "francisco", "chapter", "global", "community", "challenge"]);
+
+// Whether a link is the program's own site: its domain carries the program's
+// name ("ycombinator.com" for "Y Combinator"), or it's a government site. A
+// blog about the program ("zyner.io/blog/yc-application-deadline") isn't.
+export function looksOfficial(url: string, name: string): boolean {
+  let host: string;
+  try {
+    host = new URL(url).hostname.toLowerCase().replace(/^www\./, "");
+  } catch {
+    return false;
+  }
+  if (/\.gov$/.test(host)) return true;
+  const labels = host.split(".").slice(0, -1).filter((l) => l.length >= 3);
+  const compactName = name.toLowerCase().replace(/[^a-z0-9]/g, "");
+  if (labels.some((l) => compactName.includes(l.replace(/-/g, "")))) return true;
+  const words = name.toLowerCase().split(/[^a-z0-9]+/).filter((w) => w.length >= 4 && !GENERIC_NAME_WORDS.has(w));
+  return words.some((w) => host.replace(/[.-]/g, "").includes(w));
+}
+
+// The reason and deadline again, from the page's own text only.
+async function rewriteFromPage(match: TierMatch & { tier: 3 }, timeout: number): Promise<{ reason: string; deadline: string | null } | null> {
+  try {
+    const { text: raw } = await generateText({
+      model: anthropic(MODELS.haiku),
+      experimental_telemetry: { isEnabled: true, functionId: "webOpportunitySearch.rewriteFromPage" },
+      timeout,
+      prompt: `Here is the text of the page for "${match.name}":
+
+${match.evidence!.slice(0, 15_000)}
+
+This one-line reason was written for it, but it includes details the page doesn't say:
+"${match.reason}"
+
+Rewrite it as one short, casual sentence, the way you'd tell a friend over text, using ONLY what this page says. Keep one concrete detail (an amount, deadline, or eligibility line) only if this page states it, written the same way the page writes it. Give the application deadline only if this page states one.
+
+Return ONLY valid JSON: {"reason": "...", "deadline": "YYYY-MM-DD" or null}`,
+    });
+    const parsed = parseModelJson<{ reason?: string; deadline?: string | null }>(raw);
+    if (typeof parsed?.reason !== "string" || !parsed.reason.trim()) return null;
+    return { reason: parsed.reason.trim(), deadline: typeof parsed.deadline === "string" && /^\d{4}-\d{2}-\d{2}$/.test(parsed.deadline) ? parsed.deadline : null };
+  } catch {
+    return null;
+  }
+}
+
+// One quick search for the program's own page, used when the result came
+// from a blog or listicle. Null when it can't find one.
+async function findOfficialPage(name: string, timeout: number): Promise<string | null> {
+  try {
+    const { text: raw } = await generateText({
+      model: anthropic(WEB_SEARCH_MODEL),
+      experimental_telemetry: { isEnabled: true, functionId: "webOpportunitySearch.findOfficialPage" },
+      tools: { web_search: anthropic.tools.webSearch_20250305({ maxUses: 1 }) },
+      stopWhen: stepCountIs(2),
+      timeout,
+      prompt: `Find the official website page for "${name}" (the program's or organization's own site, ideally its apply or program page, not a blog, news story, or directory about it).
+
+Return ONLY valid JSON: {"url": "https://..."} or {"url": null} if you can't find its own site.`,
+    });
+    const parsed = parseModelJson<{ url?: string | null }>(raw);
+    return typeof parsed?.url === "string" && /^https:\/\//.test(parsed.url) ? parsed.url : null;
   } catch {
     return null;
   }
@@ -142,20 +259,52 @@ Return ONLY valid JSON, nothing else: {"found": true, "name": "...", "url": "the
     });
     const parsed = parseModelJson<{ found?: boolean; name?: string; url?: string; category?: string; reason?: string; deadline?: string | null }>(raw);
     if (!parsed?.found || typeof parsed.name !== "string" || typeof parsed.url !== "string") return null;
-    // An unreadable page still goes to the gate, which turns it away with a
-    // reason the trace shows.
-    const pageText = await readPageText(parsed.url);
-    return {
+    const reason = typeof parsed.reason === "string" && parsed.reason.trim() ? parsed.reason.trim() : "Found via a real web search.";
+    const deadline = typeof parsed.deadline === "string" ? parsed.deadline : null;
+    const build = (url: string, pageText: string | null): TierMatch & { tier: 3 } => ({
       tier: 3,
       kind: "opportunity",
       source: "web",
-      name: parsed.name,
-      url: parsed.url,
-      ...(pageText ? { evidence: pageText } : {}),
-      reason: typeof parsed.reason === "string" && parsed.reason.trim() ? parsed.reason.trim() : "Found via a real web search.",
+      name: parsed.name!,
+      url,
+      // An unreadable page still goes to the gate, which turns it away with a
+      // reason the trace shows.
+      ...(pageText ? { evidence: pageText, opportunity: { postText: pageExcerpt(pageText, { name: parsed.name!, reason, deadline }) } } : {}),
+      reason,
       category: typeof parsed.category === "string" ? parsed.category.trim().toLowerCase().slice(0, 40) : null,
-      ...(typeof parsed.deadline === "string" ? { deadline: parsed.deadline } : {}),
-    };
+      ...(deadline ? { deadline } : {}),
+    });
+    const grounded = (m: TierMatch & { tier: 3 }) =>
+      checkGrounding(m, { searchCity: null, distanceMiles: null, alreadyOffered: false, now: new Date(), evidence: m.evidence ?? null }).pass;
+    const found = build(parsed.url, await readPageText(parsed.url));
+    // A blog about the program is a worse link to hand someone than the
+    // program's own page (2026-09-18: YC went out as a zyner.io blog post).
+    // Prefer the official page; keep what was found when it can't be had.
+    let official: (TierMatch & { tier: 3 }) | null = null;
+    if (!looksOfficial(parsed.url, parsed.name)) {
+      const officialUrl = await findOfficialPage(parsed.name, sweep ? 30_000 : 12_000);
+      if (officialUrl && officialUrl !== parsed.url && looksOfficial(officialUrl, parsed.name)) {
+        official = build(officialUrl, await readPageText(officialUrl));
+      }
+    }
+    const ordered = [official, found].filter((m): m is TierMatch & { tier: 3 } => m != null);
+    const ok = ordered.find(grounded);
+    if (ok) return ok;
+    // The model quoted something from another site (2026-09-18: "$500k" for
+    // YC, whose apply page never says it). Rewrite the reason once from the
+    // page alone rather than lose a real, open program over one detail.
+    for (const m of ordered) {
+      if (!m.evidence) continue;
+      const fixed = await rewriteFromPage(m, sweep ? 20_000 : 8_000);
+      if (fixed) {
+        const again = { ...m, reason: fixed.reason, ...(fixed.deadline ? { deadline: fixed.deadline } : {}) } as TierMatch & { tier: 3 };
+        if (!fixed.deadline) delete (again as { deadline?: string }).deadline;
+        if (again.evidence) again.opportunity = { postText: pageExcerpt(again.evidence, { name: again.name, reason: again.reason, deadline: fixed.deadline }) };
+        if (grounded(again)) return again;
+      }
+      break;
+    }
+    return found;
   } catch (err: any) {
     console.error("webOpportunitySearch: searchWebForOpportunity failed (non-fatal):", err?.message ?? err);
     return null;

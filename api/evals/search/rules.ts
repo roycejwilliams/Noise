@@ -13,6 +13,8 @@ import { resolveAskWindow } from "../../src/services/askWindow.js";
 import { searchCacheKey, xSearchBudget } from "../../src/services/searchRules.js";
 import { resolveCoEventPlace } from "../../src/services/luma.js";
 import { localToday, searchZone } from "../../src/services/eventOrder.js";
+import { spelledNumbers } from "../../src/harness/matchGate.js";
+import { htmlToText, looksOfficial, pageExcerpt } from "../../src/services/webOpportunitySearch.js";
 
 const cases: [boolean, string][] = [];
 const c = (ok: boolean, label: string) => cases.push([ok, label]);
@@ -180,6 +182,29 @@ const z2 = searchZone("America/New_York");
 c(z2.zone === "America/New_York" && z2.defaulted === false, "a real timezone is used as-is, not defaulted");
 c(localToday(evening, null) === "2026-09-17", "localToday with no zone falls back to the UTC date");
 c(localToday(evening, "America/Los_Angeles") === "2026-09-16", "localToday in a real zone is that zone's calendar date");
+
+// ---------------------------------------------------------------------------
+// Tier 3 web results (2026-09-18): official-page detection, the drafting
+// excerpt, and amounts a page spells out in words.
+c(!looksOfficial("https://zyner.io/blog/yc-application-deadline", "Y Combinator Winter 2027 Batch"), "a blog about YC isn't YC's own page");
+c(looksOfficial("https://www.ycombinator.com/apply", "Y Combinator Winter 2027 Batch"), "ycombinator.com is YC's own page");
+c(!looksOfficial("https://www.vcsheet.com/fund/precursor-ventures", "Precursor Ventures"), "a VC directory isn't the fund's own page");
+c(looksOfficial("https://precursorvc.com/", "Precursor Ventures"), "precursorvc.com is Precursor's own page");
+c(looksOfficial("https://www.sf.gov/departments", "SF Community Challenge Grants"), "a .gov page counts as official");
+c(looksOfficial("https://millercenterglobal.org/accelerator/", "Miller Center Accelerator"), "a distinctive name word in the domain counts");
+c(!looksOfficial("https://techcrunch.com/2026/09/techstars", "Techstars Anywhere"), "a news story about a program isn't its page");
+c(!looksOfficial("not a url", "Anything"), "a bad url is never official");
+const longPage = "Intro. ".repeat(200) + "Past grantees. ".repeat(600) + "Want a $1000 grant? Our microgrants of $1,000 are given monthly.";
+const ex = pageExcerpt(longPage, { name: "Awesome Foundation SF", reason: "No-strings $1,000 microgrants every month.", deadline: null });
+c(ex.includes("$1000 grant") && ex.length <= 2500, "the drafting excerpt keeps the amount from deep in a long page, and stays short");
+c(pageExcerpt("Short page, $500.", { name: "X", reason: "$500", deadline: null }) === "Short page, $500.", "a short page is used whole");
+const nextPage = `<html><body><h1>FAST</h1><script id="__NEXT_DATA__" type="application/json">{"props":{"rule":"Founder chooses $500K - $2M SAFE investment","id":"a1b2c3d4e5f6g7h8","src":"https://cdn.example.com/app.js"}}</script><script>function x(){return "var a = 1; b();"}</script></body></html>`;
+const nextText = htmlToText(nextPage);
+c(nextText.includes("$500K - $2M SAFE"), "text a page keeps in its script data is read");
+c(!nextText.includes("cdn.example.com") && !nextText.includes("var a = 1"), "code, links, and ids in scripts are left out");
+c(JSON.stringify(spelledNumbers("grants from zero to nineteen thousand dollars")) === "[0,19000]", "spelled-out amounts become digits");
+c(spelledNumbers("two hundred fifty thousand")[0] === 250000, "hundreds and thousands combine");
+c(spelledNumbers("one hundred and twenty-five")[0] === 125, "'and' and hyphens inside a number are fine");
 
 // ---------------------------------------------------------------------------
 let failed = 0;

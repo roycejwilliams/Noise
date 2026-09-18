@@ -946,5 +946,48 @@
       "now": "2026-09-18T18:00:00Z",
       "lookaheadDays": 21
     }
+  },
+  {
+    "id": "m44-web-amount-in-words",
+    "kind": "match",
+    "expect": "pass",
+    "match": {
+      "tier": 3,
+      "kind": "opportunity",
+      "name": "Francisco San",
+      "url": "https://franciscosan.org/",
+      "reason": "A rolling SF fund that gives up to $19,000 for parties and pop-ups.",
+      "deadline": null,
+      "source": "web"
+    },
+    "facts": {
+      "searchCity": "San Francisco",
+      "distanceMiles": null,
+      "alreadyOffered": false,
+      "now": "2026-09-18T18:00:00Z",
+      "evidence": "Francisco San is a rolling fund for parties, pop-ups, and eventures with a physical presence in San Francisco. Grants range from zero to nineteen thousand dollars, paid by venmo or zelle."
+    }
+  },
+  {
+    "id": "m45-web-amount-not-in-words-either",
+    "kind": "match",
+    "expect": "reject",
+    "violation": "grounding",
+    "match": {
+      "tier": 3,
+      "kind": "opportunity",
+      "name": "Francisco San",
+      "url": "https://franciscosan.org/",
+      "reason": "A rolling SF fund that gives up to $25,000 for parties and pop-ups.",
+      "deadline": null,
+      "source": "web"
+    },
+    "facts": {
+      "searchCity": "San Francisco",
+      "distanceMiles": null,
+      "alreadyOffered": false,
+      "now": "2026-09-18T18:00:00Z",
+      "evidence": "Francisco San is a rolling fund for parties, pop-ups, and eventures with a physical presence in San Francisco. Grants range from zero to nineteen thousand dollars, paid by venmo or zelle."
+    }
   }
 ]
