@@ -300,7 +300,7 @@ async function findFreshPending(candidate: SurfacingCandidate): Promise<{ items:
   const focus = profileFocusText(await getPersonSnapshot(candidate.userId).catch(() => null)) || null;
   const profile = [focus, roomPreference].filter(Boolean).join("\n") || null;
   // No zone for their city: the engine uses Co's home zone and says so.
-  const result = await getTieredRecommendation({ text: brief.searchText }, candidate.city, { userId: candidate.userId, source: "sweep", timezone, profile, widen, checkRepeat: false })
+  const result = await getTieredRecommendation({ text: brief.searchText }, candidate.city, { userId: candidate.userId, source: "sweep", timezone, profile, widen, checkRepeat: false, coreAsk: candidate.askText })
     .catch((err: any) => {
       console.error("attemptEventSurfacing: getTieredRecommendation failed (non-fatal):", err?.message ?? err);
       return null;

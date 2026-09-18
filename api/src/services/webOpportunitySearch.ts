@@ -64,46 +64,43 @@ export async function reserveWebSearch(userId: string | null, source: "sweep" | 
 
 export type WebOpportunityResult = (TierMatch & { tier: 3 }) | null;
 
-// The exact mistake caught live doing this by hand (2026-09-17): AWS
-// Activate and Google for Startups are real, but they're cloud/tool
-// credits, not cash for an event; a16z speedrun and Techstars are real
-// accelerators, not something you apply to just to fund one event;
-// Techstars "sponsor an event" is the reverse direction (them asking
-// companies to sponsor Techstars). The prompt below says this explicitly
-// so the model doesn't make the same category-mismatch call a first pass
-// through this content made.
+// The ask decides what shape of thing counts (2026-09-18: this prompt was
+// written for one event-grant ask and told the model to reject accelerators,
+// even for someone asking for accelerators). The shape check stays: a real
+// thing of the wrong kind for THIS ask is the same as nothing.
+//
+// The sweep runs in the background, so it gets a longer budget; the live
+// reply path keeps the short cap (its whole search has 45 seconds). Live
+// sweeps timed out at 20s every time (2026-09-18).
 export async function searchWebForOpportunity(
   askText: string,
   city: string | null,
   profile: string | null | undefined,
   todayStr: string,
+  opts: { source?: "sweep" | "request" } = {},
 ): Promise<WebOpportunityResult> {
+  const sweep = opts.source === "sweep";
   try {
-    // Hard latency cap (2026-09-17 code review, found live): an isolated
-    // test of this call took 90+ seconds with maxUses:3 — the live reply
-    // path's whole search has a 45s budget total (sendblue.ts's
-    // RECOMMENDATION_TIME_CAP_MS), so an uncapped multi-search round here
-    // could blow the entire turn's budget on its own, timing out Tier 1/2's
-    // already-real results along with it. Bounded to fail open (return
-    // null, same as any other non-fatal search failure) well before that,
-    // not to hang until the whole turn gives up.
     const { text: raw } = await generateText({
       model: anthropic(WEB_SEARCH_MODEL),
       experimental_telemetry: { isEnabled: true, functionId: "webOpportunitySearch.searchWebForOpportunity" },
-      tools: { web_search: anthropic.tools.webSearch_20260209({ maxUses: 2 }) },
-      stopWhen: stepCountIs(3),
-      timeout: 20_000,
+      // webSearch_20250305, not _20260209: the newer version never returned
+      // (every call hung until the timeout, 2026-09-18); this one answers in
+      // seconds.
+      tools: { web_search: anthropic.tools.webSearch_20250305({ maxUses: sweep ? 3 : 2 }) },
+      stopWhen: stepCountIs(sweep ? 4 : 3),
+      timeout: sweep ? 90_000 : 20_000,
       prompt: `Someone wants: "${askText}"${city ? ` (based in ${city})` : ""}
-${profile ? `\nWho they are right now:\n${profile}\n` : ""}
+${profile ? `\nWho they are right now (for their stage and situation; their ask decides the topic):\n${profile}\n` : ""}
 Today's date: ${todayStr}
 
-Search the real web for ONE genuinely concrete, currently-open thing that fits what they actually asked for — a grant, a corporate community/event credit or sponsorship program, a city or nonprofit program, or a similar real, applicable opportunity. Read the actual page, don't guess from a title or a summary snippet.
+Search the real web for ONE genuinely concrete, currently open thing that fits exactly what they asked for. Depending on the ask that could be an accelerator or fellowship taking applications, an investor or fund actively backing their stage, a grant, a sponsorship or credit program, a city or nonprofit program, a pitch or demo slot, or something else they could act on now. Read the actual page; don't guess from a title or a snippet.
 
-Critical: a real program existing isn't the same as it fitting what they asked. Reject anything that's real but the wrong SHAPE of thing — cloud/software credits (AWS Activate, Google for Startups, etc.) are not cash for an event; an equity-based accelerator (a16z, Techstars, Y Combinator) is not something you apply to just to fund one event; a company's "sponsor OUR event" page is the opposite direction from funding someone else's event. If everything you find is a real thing that doesn't actually fit the ask's shape, that's the same as finding nothing — say so, don't stretch a mismatch to look like an answer.
+Critical: a real program existing isn't the same as it fitting their ask. Match the SHAPE of what they asked for. If they asked for money to put on an event, cloud credits and equity accelerators don't fit, and a company's "sponsor OUR event" page is the wrong direction. If they asked for accelerators or fellowships, an accelerator with open applications is exactly right. If they asked for investors, a fund that's actively writing checks at their stage fits; a generic listicle doesn't. If everything you find is real but the wrong shape for this ask, that's the same as finding nothing: say so rather than stretch it.
 
-Also reject anything whose own page shows it's closed, expired, or from a past cycle relative to today's date, or that only fits an eligibility bar they clearly don't meet (e.g. a program only for nonprofits, when they're not one).
+Reject anything whose own page shows it's closed, expired, or from a past cycle relative to today's date, or that only fits an eligibility bar they clearly don't meet. Prefer things in or open to ${city ?? "their area"} when location matters.
 
-If you find a real, current, well-matched fit: give its category (a short word or two: "grant", "sponsorship", "credit_program", "city_program", "other"), and write "reason" the way you'd tell a friend over text — one short, casual sentence, plainly, with the one concrete detail that proves it's real (an actual dollar amount, deadline, or eligibility line from the real page), not analyst language.
+If you find a real, current, well-matched fit: give its category (a short word or two: "accelerator", "fellowship", "investor", "grant", "sponsorship", "credit_program", "city_program", "other"), and write "reason" the way you'd tell a friend over text: one short, casual sentence with the one concrete detail that proves it's real (a dollar amount, deadline, or eligibility line from the real page).
 
 Return ONLY valid JSON, nothing else: {"found": true, "name": "...", "url": "the real page URL you actually read", "category": "...", "reason": "...", "deadline": "YYYY-MM-DD" or null} or {"found": false}`,
     });

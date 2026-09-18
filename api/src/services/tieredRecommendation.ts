@@ -679,7 +679,10 @@ Return ONLY valid JSON: {"index": 0, "name": "the specific opportunity name", "r
 const TIER3_MAX_RESULTS = 20;
 
 async function tryTier3(ask: StatedIntent, query: string, profile: string | null | undefined, zone: string): Promise<TierMatch | null> {
-  const posts = await searchRecentPosts(query, TIER3_MAX_RESULTS).catch((err: any) => {
+  // English originals only: retweets and other-language spam crowded out real
+  // posts (2026-09-18 live check).
+  const q = /-is:retweet/.test(query) ? query : `${query} -is:retweet lang:en`;
+  const posts = await searchRecentPosts(q, TIER3_MAX_RESULTS).catch((err: any) => {
     console.error("tieredRecommendation: tryTier3 searchRecentPosts failed (non-fatal):", err?.message ?? err);
     return [];
   });
@@ -841,7 +844,10 @@ export async function getTieredRecommendation(
   // profile: what Co knows they want right now (personSnapshot.ts
   // profileFocusText); orders what matches the ask.
   // widen: they're frustrated with what Co has found; look further and keep more.
-  opts: { userId?: string; checkRepeat?: boolean; source?: "sweep" | "request"; timezone?: string | null; rawMessage?: string; profile?: string | null; widen?: boolean } = {},
+  // coreAsk: the member's own ask, for Tier 3. The sweep searches events with
+  // a widened brief, but openings follow what they actually asked (2026-09-18:
+  // "AI engineer meetups Thursday night" became a pre-seed funding X query).
+  opts: { userId?: string; checkRepeat?: boolean; source?: "sweep" | "request"; timezone?: string | null; rawMessage?: string; profile?: string | null; widen?: boolean; coreAsk?: string | null } = {},
 ): Promise<TieredResult> {
   const city = await resolveSearchCity(ask.text, profileCity);
   const { zone, defaulted: timezoneDefaulted } = searchZone(opts.timezone);
@@ -895,13 +901,14 @@ export async function getTieredRecommendation(
     const tierStarted = Date.now();
     // Tier 3 runs alongside Tiers 1 and 2 instead of after them (2026-09-16:
     // it used to wait for both to finish).
+    const tier3Ask: StatedIntent = opts.coreAsk?.trim() ? { ...ask, text: opts.coreAsk.trim() } : ask;
     const runTier3 = async (): Promise<TierMatch | null> => {
       const started = Date.now();
       try {
         // Every ask searches Tier 3 too (Royce, 2026-09-16: "Asks should always
         // include tier 2 and 3"). A post for a time-frame ask still has to
         // state a date inside it (below), and results name their source.
-        const { query: opportunityQuery, worked, flopped } = await proposeOpportunityQuery(ask, city, opts.profile, zone, opts.userId);
+        const { query: opportunityQuery, worked, flopped } = await proposeOpportunityQuery(tier3Ask, city, opts.profile, zone, opts.userId);
         // Surfaced so a reply can OPTIONALLY mention the pattern instead of
         // only ever adjusting the search silently underneath them
         // (2026-09-17, "make the outcome-learning visible, not just
@@ -916,7 +923,7 @@ export async function getTieredRecommendation(
           return null;
         }
         trace.xQuery = opportunityQuery;
-        let found = await tryTier3(ask, opportunityQuery, opts.profile, zone);
+        let found = await tryTier3(tier3Ask, opportunityQuery, opts.profile, zone);
         // A named time frame: an X post only counts when the post itself
         // states a date inside it (the thing's own dates, or its deadline).
         // Posts with no date are kept out, with the reason recorded.
@@ -939,7 +946,8 @@ export async function getTieredRecommendation(
             trace.webBlocked = webBudget.reason ?? "web search budget";
           } else {
             trace.webQuery = opportunityQuery;
-            found = await searchWebForOpportunity(opportunityQuery, city, opts.profile, localToday(new Date(), zone));
+            // Their own ask, not the X query string it was being handed.
+            found = await searchWebForOpportunity(tier3Ask.text ?? opportunityQuery, city, opts.profile, localToday(new Date(), zone), { source });
           }
         }
         return found;

@@ -83,6 +83,10 @@ const closingCases: [string, string | null][] = [
   ["ok call me now", null],
   ["Tell me more", null],
   ["no", null],
+  ["Thanks Co.", "like"],
+  ["Co thank you!", "like"],
+  ["love it co", "love"],
+  ["co can you look again", null],
 ];
 
 // A closing acknowledgment that actually answers a question Co just asked is
