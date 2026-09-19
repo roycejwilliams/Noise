@@ -24,6 +24,7 @@ import { buildContextSummary } from "../services/callContext.js";
 import { findOrCreateUserByPhone, hasPendingEmail, splitFullName } from "../services/identity.js";
 import { redeemInviteCode } from "../services/inviteCodes.js";
 import { handlePhoneChange } from "../services/phoneChange.js";
+import { CALL_OFFER, GATE_ASK, WELCOME, WRONG_CODE, pickLine } from "../services/onboardingLines.js";
 import { claimTextLogin } from "../services/textLogin.js";
 import {
   INTAKE_EXTRACT_MODEL,
@@ -642,6 +643,10 @@ export function sendblueRouter(io: Server): Router {
         // number never starts the name/email flow. Every pre-existing row
         // has invite_verified defaulted true (migrations.ts), so this only
         // ever applies to a genuinely brand-new placeholder row.
+        // Set once the "You're in" welcome goes out, so intake doesn't greet
+        // twice, and once their message is logged, so it isn't logged twice.
+        let welcomedThisTurn = false;
+        let loggedInboundThisTurn = false;
         if (!user.invite_verified) {
           // Even on the very first-ever message, try it as a code first
           // (2026-09-17: a website deep link pre-fills the code as the
@@ -654,9 +659,10 @@ export function sendblueRouter(io: Server): Router {
             const firstTryRedeemed = await redeemInviteCode(content, user.id);
             if (firstTryRedeemed.ok) {
               await logTextExchange(user.id, `User said: ${content}`);
+              loggedInboundThisTurn = true;
               await pool.query(`UPDATE users SET invite_verified = true, invite_asked = true WHERE id = $1`, [user.id]);
               user = { ...user, invite_verified: true, invite_asked: true };
-              await sendAndLog(user.id, number, "You're in.");
+              welcomedThisTurn = await sendAndLog(user.id, number, pickLine(WELCOME));
               // Falls through below into normal identity intake, same turn.
             }
           }
@@ -669,7 +675,9 @@ export function sendblueRouter(io: Server): Router {
             // greeting as an answer" shape as the intake_asked branch below).
             if (hasText) await logTextExchange(user.id, `User said: ${content}`);
             await pool.query(`UPDATE users SET invite_asked = true WHERE id = $1`, [user.id]);
-            await sendAndLog(user.id, number, "Co is invite-only right now. What's your invite code?");
+            // Who Co is, then the code (2026-09-19: a bare "Co is invite-only
+            // right now" was the first thing anyone saw). services/onboardingLines.ts.
+            await sendAndLog(user.id, number, pickLine(GATE_ASK));
             return res.status(200).send({ received: true, action: "invite_code_requested" });
           }
 
@@ -677,15 +685,16 @@ export function sendblueRouter(io: Server): Router {
             user.id,
             hasText ? `User said: ${content}` : "User sent a photo or voice memo (invite code expected)",
           );
+          loggedInboundThisTurn = true;
           const redeemed = hasText ? await redeemInviteCode(content, user.id) : { ok: false as const };
           if (redeemed.ok) {
             await pool.query(`UPDATE users SET invite_verified = true WHERE id = $1`, [user.id]);
             // Reflected locally so the SAME turn falls through into real
             // identity intake below instead of making them text again.
             user = { ...user, invite_verified: true };
-            await sendAndLog(user.id, number, "You're in.");
+            welcomedThisTurn = await sendAndLog(user.id, number, pickLine(WELCOME));
           } else {
-            await sendAndLog(user.id, number, "That code doesn't look right. Double check it and send it again.");
+            await sendAndLog(user.id, number, pickLine(WRONG_CODE));
             return res.status(200).send({ received: true, action: "invite_code_rejected" });
           }
         }
@@ -717,15 +726,23 @@ export function sendblueRouter(io: Server): Router {
             // First contact ever from this number — greet, then ask. Nothing
             // in this inbound message is treated as an answer, since Co
             // hasn't asked the question yet.
-            if (hasText) await logTextExchange(user.id, `User said: ${content}`);
+            if (hasText && !loggedInboundThisTurn) await logTextExchange(user.id, `User said: ${content}`);
             await pool.query(`UPDATE users SET intake_asked = true WHERE id = $1`, [user.id]);
-            await sendSMS({ phone_number: number, welcome: true });
-            await sendSMS({ phone_number: number, intro: true });
-            // Contact card (Royce, 2026-09-14): otpActions.ts has always had
-            // a save_contact send with the vCard attached, but nothing ever
-            // called it, so new people never got Co saved in their phone.
-            await sendSMS({ phone_number: number, save_contact: true });
-            await sendSMS({ phone_number: number, intake_ask: true });
+            // Onboarding lines are logged like any Co message, so the
+            // conversation and the morning review can see them (they weren't).
+            const onboardingSends = [
+              ...(welcomedThisTurn ? [] : [{ phone_number: number, welcome: true }]),
+              { phone_number: number, intro: true },
+              // Contact card (Royce, 2026-09-14): otpActions.ts has always had
+              // a save_contact send with the vCard attached, but nothing ever
+              // called it, so new people never got Co saved in their phone.
+              { phone_number: number, save_contact: true },
+              { phone_number: number, intake_ask: true },
+            ];
+            for (const params of onboardingSends) {
+              const result = await sendSMS(params);
+              for (const text of result.sent) await logTextExchange(user.id, `Co replied: ${text}`);
+            }
             return res.status(200).send({ received: true, action: "intake_started" });
           }
 
@@ -808,25 +825,15 @@ export function sendblueRouter(io: Server): Router {
             // a call or text"). Recorded as a pending call offer, so their
             // answer goes through the same router and call gates as any other
             // call offer: "call me" places a call, "text is fine" keeps texting.
-            const fixedKickoff = `Good to meet you, ${first_name}. Do you want to keep texting, or would a quick call be easier to get started?`;
-            let kickoffMsg = fixedKickoff;
-            try {
-              const { text } = await generateText({
-                model: anthropic(INTAKE_EXTRACT_MODEL),
-                experimental_telemetry: { isEnabled: true, functionId: "sendblue.intake.kickoff" },
-                prompt: `${CO_VOICE}\n\n${CO_TEXT_CHANNEL} ${first_name} just gave you their name and email to get started. Write a short message welcoming them in by name and asking one question: would they rather keep texting, or hop on a quick call to get started. Make both sound equally fine. Don't ask anything else. 2 sentences max.`,
-              });
-              if (text.trim()) kickoffMsg = capitalizeSentences(cleanCoMessage(text.trim()));
-            } catch (genErr: any) {
-              console.error("Intake kickoff message generation failed, using fallback (non-fatal):", genErr?.message ?? genErr);
-            }
-            // A refused drafted line falls back to the fixed copy, and the
-            // call offer is only recorded once the question really went out
+            // The first call offer, from the approved lines (Royce,
+            // 2026-09-19, after Boardy's "quick 5-minute call" offer): why the
+            // call matters for the room, now or a time, texting still fine.
+            // Recorded as a pending call offer only once it really went out
             // (2026-09-17 code review: a refused send still recorded it, so a
             // later "yeah" could accept a call they were never offered).
+            const kickoffMsg = pickLine(CALL_OFFER, { name: first_name });
             let askedKickoff: string | null = null;
             if (await sendAndLog(user.id, number, kickoffMsg)) askedKickoff = kickoffMsg;
-            else if (kickoffMsg !== fixedKickoff && (await sendAndLog(user.id, number, fixedKickoff))) askedKickoff = fixedKickoff;
             if (askedKickoff) {
               await pool
                 .query(`INSERT INTO co_memories (user_id, memory_type, content) VALUES ($1, 'call_offer_pending', $2)`, [

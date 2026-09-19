@@ -1,46 +1,7 @@
 import { Resend } from "resend";
-import { capitalizeSentences, looksLikeMetaReply } from "./services/textStyle.js";
 import "dotenv/config";
-import { anthropic } from "@ai-sdk/anthropic";
-import { generateText } from "ai";
 import sendblue from "./services/sendblue.js";
-import { CO_VOICE, CO_TEXT_CHANNEL } from "./services/coVoice.js";
-import { MODELS } from "./models.js";
-
-// One-line intro drafts with a strict fallback: narrow work, Haiku.
-const INTRO_LINE_MODEL = MODELS.haiku;
-
-// A fixed line every time reads as a canned system message, not someone
-// actually greeting you — same reasoning as webhooks.ts's variedConfirmation/
-// voicemailLine. Generates a short varied version of `fallback` and always
-// falls back to the exact original text on any failure, so the first thing a
-// new user hears from Co is never silently broken by a generation hiccup.
-async function varied(instruction: string, fallback: string, maxChars: number): Promise<string> {
-  try {
-    const { text } = await generateText({
-      model: anthropic(INTRO_LINE_MODEL),
-      experimental_telemetry: { isEnabled: true, functionId: "otpActions.introLine" },
-      prompt: `${CO_VOICE}\n\n${CO_TEXT_CHANNEL} ${instruction} Vary how you say it call to call — don't just repeat the same phrasing every time. Tone: calm, unhurried, like a private members club. No em dashes. Under ${maxChars} characters. Return ONLY the single message you would actually send, nothing else — never multiple options, a numbered or lettered list, headers, or any markdown formatting.`,
-    });
-    // Onboarding is the first thing anyone hears from Co, so it always reads
-    // in normal sentence case (2026-09-16: "hey, good to have you here." and
-    // "what's your full name and email?" went out lowercase, because these
-    // lines skip the capitalization every other reply gets).
-    const trimmed = capitalizeSentences(text.trim());
-    // Confirmed live: Haiku sometimes ignores "return only one" and returns
-    // a menu of options instead ("# Option 1 ... # Option 2 ..."). Rather
-    // than guess which option was meant, fall all the way back — this is
-    // the first thing a new user ever hears from Co, worth being strict.
-    const looksLikeMultipleOptions = /\n|^#|\*\*|option\s*\d|^\d+[.)]/im.test(trimmed);
-    // Or it answered the instruction instead of the person ("I'm ready to be
-    // Co. Send me what you'd like me to say", 2026-09-16): use the fixed copy.
-    if (!trimmed || looksLikeMultipleOptions || looksLikeMetaReply(trimmed)) return fallback;
-    return trimmed.length > maxChars + 20 ? trimmed.slice(0, maxChars + 19) + "…" : trimmed;
-  } catch (err: any) {
-    console.error("otpActions: varied intro-line generation failed (non-fatal, using default):", err?.message ?? err);
-    return fallback;
-  }
-}
+import { CARD, HOW_IT_WORKS, NAME_EMAIL, WELCOME, pickLine } from "./services/onboardingLines.js";
 
 // Real sends are on by default in production, and everywhere else only
 // with an explicit opt-in — co-test sets ALLOW_REAL_SMS=true because its
@@ -134,18 +95,26 @@ export const sendSMS = async ({
   first_name,
   welcome,
   welcome_back,
-}: MessageProp): Promise<{ ok: boolean; reason?: "inbound_only" | "error" }> => {
+}: MessageProp): Promise<{ ok: boolean; reason?: "inbound_only" | "error"; sent: string[] }> => {
+  // What actually went out, so callers can log it to the conversation.
+  const sent: string[] = [];
   const send = (content: string, mediaUrl?: string) => {
     if (!ALLOW_REAL_SENDS) {
       console.log(`[sendSMS stub, ${process.env.NODE_ENV ?? "no NODE_ENV"}] to ${phone_number}: ${content}`);
+      sent.push(content);
       return Promise.resolve();
     }
-    return sendblue.messages.send({
-      number: phone_number,
-      content,
-      ...(mediaUrl ? { media_url: mediaUrl } : {}),
-      from_number: process.env.SENDBLUE_PHONE_NUMBER!,
-    });
+    return sendblue.messages
+      .send({
+        number: phone_number,
+        content,
+        ...(mediaUrl ? { media_url: mediaUrl } : {}),
+        from_number: process.env.SENDBLUE_PHONE_NUMBER!,
+      })
+      .then((r) => {
+        sent.push(content);
+        return r;
+      });
   };
 
   try {
@@ -163,54 +132,20 @@ export const sendSMS = async ({
       await send(`Your Co login code is below. It expires in 5 minutes.\n${otp_code}`);
     }
 
-    if (intro) {
-      // Always preceded by its own separate "welcome" send (routes/sendblue.ts)
-      // — confirmed live this produced two back-to-back "Welcome to Co"
-      // openers, since each varied() call has no idea what the other one
-      // said. Explicitly told not to re-greet here.
-      await send(
-        await varied(
-          "You already greeted them warmly in a separate message just before this one — do not say \"welcome\" or greet them again here. Continuing on, let them know, in your own words: Co is invite-only and they're getting early access, you're still learning and listening for now, and more is coming later. Also mention, briefly and factually, that they can just call this number any time they'd rather talk than text — not a suggestion to do it now, just letting them know it's always an option.",
-          `Co is invite-only. You're getting early access. Co is still getting to know people, and more comes later. You can also just call this number any time you'd rather talk than text.`,
-          220,
-        ),
-      );
-    }
+    // Hand-written, approved lines, one picked at random (services/
+    // onboardingLines.ts, 2026-09-19). These were model-written, and one went
+    // out as "I need more context to write this message..." with the card.
+    if (intro) await send(pickLine(HOW_IT_WORKS));
 
-    if (save_contact) {
-      await send(
-        await varied(
-          "Ask them, briefly, to save your contact so you two can keep talking.",
-          `Save my contact so we can keep talking.`,
-          80,
-        ),
-        process.env.CO_VCARD_URL,
-      );
-    }
+    if (save_contact) await send(pickLine(CARD), process.env.CO_VCARD_URL);
 
-    if (intake_ask) {
-      await send(
-        await varied(
-          "Ask them for both their full name and their email, so you can get started — keep it brief and clearly ask for both.",
-          `Let's start with the basics. What's your full name and email?`,
-          100,
-        ),
-      );
-    }
+    if (intake_ask) await send(pickLine(NAME_EMAIL));
 
     if (register) {
       await send(`Your verification code is ${otp_code}. It expires in 5 minutes.`);
     }
 
-    if (welcome) {
-      await send(
-        await varied(
-          `Greet them warmly, welcoming them to Co for the first time.${first_name ? ` Their name is ${first_name} — use it.` : ""}`,
-          first_name ? `Hey ${first_name}, welcome to Co.` : `Hey, welcome to Co.`,
-          60,
-        ),
-      );
-    }
+    if (welcome) await send(pickLine(WELCOME));
 
     if (welcome_back) {
       await send(`Welcome back to Co.`);
@@ -222,9 +157,9 @@ export const sendSMS = async ({
     // never arrives.
     const inboundOnly = error?.error?.error_message === "INBOUND_ONLY_PLAN" || error?.error?.error_code === 402;
     console.error("Cannot process SMS at this time", error);
-    return { ok: false, reason: inboundOnly ? "inbound_only" : "error" };
+    return { ok: false, reason: inboundOnly ? "inbound_only" : "error", sent };
   }
-  return { ok: true };
+  return { ok: true, sent };
 };
 
 export const sendEmail = async ({
