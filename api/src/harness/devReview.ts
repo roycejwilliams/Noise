@@ -43,12 +43,23 @@ export function reviewEnabled(env: NodeJS.ProcessEnv = process.env): boolean {
   return env.DEV_REVIEW === "true";
 }
 
-// Royce and Jacqueline on co-test. DEV_REVIEW_USER_IDS (comma-separated)
-// overrides. The digest goes to the first one.
-const DEFAULT_REVIEW_USERS = ["aaf6fd99-1687-496a-b6d5-3079d0f9294b", "eca131b4-3206-4149-bcec-4cfcdfd24cba"];
-export function reviewUserIds(env: NodeJS.ProcessEnv = process.env): string[] {
+// Who gets reviewed: every account on co-test (it only holds testers), or
+// DEV_REVIEW_USER_IDS (comma-separated). Account ids change when testers
+// start over (all were reset 2026-09-18), so none are fixed here.
+export async function reviewUserIds(env: NodeJS.ProcessEnv = process.env): Promise<string[]> {
   const ids = (env.DEV_REVIEW_USER_IDS ?? "").split(",").map((s) => s.trim()).filter(Boolean);
-  return ids.length ? ids : DEFAULT_REVIEW_USERS;
+  if (ids.length) return ids;
+  const { rows } = await pool.query(`SELECT id FROM users ORDER BY created_at`);
+  return rows.map((r: { id: string }) => r.id);
+}
+
+// Who the digest is texted to: the account with this first name
+// (DEV_REVIEW_DIGEST_NAME, default Royce), the way scripts/notifyTesters.ts
+// finds testers. Null when that account doesn't exist yet.
+export async function digestRecipient(env: NodeJS.ProcessEnv = process.env): Promise<string | null> {
+  const name = (env.DEV_REVIEW_DIGEST_NAME ?? "Royce").trim();
+  const { rows } = await pool.query(`SELECT id FROM users WHERE lower(first_name) = lower($1) AND phone_number IS NOT NULL ORDER BY created_at LIMIT 1`, [name]);
+  return rows[0]?.id ?? null;
 }
 
 export type FlagType =
@@ -469,7 +480,7 @@ export async function loadReviewData(userId: string, since: Date, until: Date): 
 export async function reviewWindow(since: Date, until: Date, opts: { model?: boolean; userIds?: string[] } = {}): Promise<{ flags: ReviewFlag[]; names: Record<string, string> }> {
   const flags: ReviewFlag[] = [];
   const names: Record<string, string> = {};
-  for (const userId of opts.userIds ?? reviewUserIds()) {
+  for (const userId of opts.userIds ?? (await reviewUserIds())) {
     const data = await loadReviewData(userId, since, until);
     names[userId] = data.firstName;
     flags.push(...logFlags(data), ...conversationFlags(data), ...reactionFlags(data));
@@ -590,7 +601,11 @@ export async function runMorningReview(now = new Date()): Promise<void> {
     const { flags, names } = await reviewWindow(since, now);
     const stored = await storeFlags(flags);
     const digest = renderDigest(flags, names, "last 24h");
-    const recipient = reviewUserIds()[0];
+    const recipient = await digestRecipient();
+    if (!recipient) {
+      await recordDecision({ layer: 3, decision: "devReview.digest", userId: null, outcome: "skip", action: "no_recipient", reason: `no account named ${process.env.DEV_REVIEW_DIGEST_NAME ?? "Royce"} yet`, proposal: { flags: flags.length, stored } });
+      return;
+    }
     await textDigest(recipient, digest);
     await recordDecision({
       layer: 3,
