@@ -20,24 +20,11 @@
       <main class="scroll-area">
     <div class="checklist-page">
       <p class="checklist-explainer">
-        A status tracker, not a gatekeeper — nothing here blocks or requires completion. It just
-        makes clear what's actually done versus still open.
+        What's been tested so far, for whoever is signed in. Nothing here blocks anything. The first
+        list checks itself from your real texts and calls; the second is your own judgment.
       </p>
 
       <div id="stat-cards" class="stat-card-row"></div>
-
-      <div class="dashboard-card reset-session-card">
-        <div class="reset-session-text">
-          <strong>Real test session</strong>
-          <p class="sim-subtext">
-            This tool is shared — it only tracks one real tester at a time. Before handing it to
-            the next person (or starting your own next run), reset so their captured profile and
-            intent doesn't build on top of the last session's data.
-          </p>
-        </div>
-        <button id="reset-session-btn" class="download-button sim-reset-button">Start over — reset test session</button>
-      </div>
-      <div id="reset-session-status" class="sim-subtext"></div>
 
       <section class="checklist-section dashboard-card">
         <h2 class="checklist-section-title">Auto-verified — checked off from real data, no human input<span class="section-chevron">⌄</span></h2>
@@ -49,111 +36,6 @@
         <div id="manual-list" class="checklist-list section-collapsible"></div>
       </section>
 
-      <section class="checklist-section">
-        <h2 class="checklist-section-title">Circles pipeline test<span class="section-chevron">⌄</span></h2>
-        <div class="sim-panel section-collapsible">
-          <div class="sim-banner">Simulated pipeline test — validates matching / approval / booking logic only, not the real texting experience</div>
-          <p class="sim-subtext">
-            Seeded members and venues live entirely in co-test's own DB, flagged <code>is_simulated</code>.
-            Every stage below runs the same logic a real reply would — accept/decline, Moderator approve/reject,
-            availability poll — just triggered by these buttons instead of a real Sendblue round trip.
-          </p>
-
-          <div class="sim-steps">
-            <div class="sim-step">
-              <div class="sim-step-number">1</div>
-              <div class="sim-step-body">
-                <div class="sim-step-label">Pick a scenario and seed it</div>
-                <div class="sim-controls">
-                  <select id="sim-scenario-select" class="sim-scenario-select">
-                    <option value="">Random pool (stress test)</option>
-                  </select>
-                  <button id="sim-seed" class="download-button">Seed</button>
-                </div>
-                <p id="sim-scenario-desc" class="sim-subtext"></p>
-              </div>
-            </div>
-            <div class="sim-step">
-              <div class="sim-step-number">2</div>
-              <div class="sim-step-body">
-                <div class="sim-step-label">Run matching against the seeded pool</div>
-                <div class="sim-controls">
-                  <button id="sim-match" class="download-button" disabled>Run matching</button>
-                </div>
-              </div>
-            </div>
-          </div>
-
-          <div id="sim-scenario-result"></div>
-          <div id="sim-state"></div>
-
-          <div class="sim-controls sim-reset-row">
-            <button id="sim-reset" class="download-button sim-reset-button">Start over — reset simulated data</button>
-          </div>
-        </div>
-      </section>
-
-      <section class="checklist-section">
-        <h2 class="checklist-section-title">Real user vs. filler pool<span class="section-chevron">⌄</span></h2>
-        <div class="sim-panel section-collapsible">
-          <div class="sim-banner">Real onboarding, real matching algorithm — the "Approve" action below sends a real iMessage to the real test user's real phone</div>
-          <p class="sim-subtext">
-            Runs the real <code>findBestCircle</code>/stated-ask filter/scoring for whichever real, OTP-verified
-            phone-test user last texted or called in, against three filler pools an LLM generates fresh from their
-            own real captured profile — Dynamic-A (generated to clearly overlap), Dynamic-B (generated with no real
-            overlap), Dynamic-C (generated borderline).
-          </p>
-          <div id="dyn-real-user" class="sim-subtext"></div>
-
-          <div class="sim-steps">
-            <div class="sim-step">
-              <div class="sim-step-number">1</div>
-              <div class="sim-step-body">
-                <div class="sim-step-label">Generate filler pools from their real captured profile</div>
-                <div class="sim-controls">
-                  <button id="dyn-seed" class="download-button">Generate filler pools (A/B/C)</button>
-                </div>
-              </div>
-            </div>
-            <div class="sim-step">
-              <div class="sim-step-number">2</div>
-              <div class="sim-step-body">
-                <div class="sim-step-label">Run diagnostics against all three pools — read-only, nothing sent</div>
-                <div class="sim-controls">
-                  <button id="dyn-run-all" class="download-button" disabled>Run all 3 diagnostics</button>
-                </div>
-              </div>
-            </div>
-            <div class="sim-step">
-              <div class="sim-step-number">3</div>
-              <div class="sim-step-body">
-                <div class="sim-step-label">Pick a pool and attempt a real placement</div>
-                <div class="sim-controls">
-                  <select id="dyn-placement-variant" class="sim-scenario-select" disabled>
-                    <option value="A">Use Dynamic-A pool</option>
-                    <option value="B">Use Dynamic-B pool</option>
-                    <option value="C">Use Dynamic-C pool</option>
-                  </select>
-                  <button id="dyn-attempt-placement" class="download-button" disabled>Attempt real placement</button>
-                </div>
-              </div>
-            </div>
-          </div>
-
-          <div id="dyn-results"></div>
-          <div id="dyn-placement-state"></div>
-
-          <p class="sim-subtext sim-note">
-            If a circle above shows "pending_approval," Approve/Reject is a button here — but Approve only sends
-            the invite. Accepting or declining it happens by the real test user replying by text on their own
-            phone, not a button on this page.
-          </p>
-
-          <div class="sim-controls sim-reset-row">
-            <button id="dyn-reset" class="download-button sim-reset-button">Start over — reset filler pools</button>
-          </div>
-        </div>
-      </section>
     </div>
       </main>
     </div>

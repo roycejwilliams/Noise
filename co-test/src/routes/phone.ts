@@ -1,3 +1,4 @@
+import { isTestCase, TEST_CASES } from "../testCases.js";
 import express, { Request, Response, NextFunction } from "express";
 import pool from "../../../api/src/db/db.js";
 import { getLiveSnapshot, issueSocketToken } from "../services/liveCallState.js";
@@ -89,8 +90,8 @@ router.get("/:user_id/live-state", (req: Request, res: Response) => {
 router.post("/:user_id/tag", async (req: Request, res: Response, next: NextFunction) => {
   try {
     const { test_case } = req.body as { test_case?: string };
-    if (test_case !== "intent_layer") {
-      return res.status(400).json({ success: false, error: "test_case must be 'intent_layer'." });
+    if (!isTestCase(test_case)) {
+      return res.status(400).json({ success: false, error: `test_case must be one of: ${TEST_CASES.map((t) => t.value).join(", ")}.` });
     }
     await pool.query(`UPDATE users SET test_case = $2 WHERE id = $1`, [req.params.user_id, test_case]);
     return res.status(200).json({ success: true });

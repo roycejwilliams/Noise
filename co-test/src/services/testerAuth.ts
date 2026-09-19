@@ -1,5 +1,6 @@
 import { randomBytes, randomInt, timingSafeEqual } from "crypto";
 import pool from "../../../api/src/db/db.js";
+import { archiveAccount } from "./accountArchive.js";
 
 // Tool-access login: text-to-sign-in. The page asks for a short code, opens
 // iMessage prefilled with it, and polls until the text arrives. The inbound
@@ -85,7 +86,9 @@ export async function logoutTester(userId: string): Promise<void> {
 // every real tester at once for the "hand it to the next person" flow).
 // Logs the tester out too — their old row's identity is gone, so the
 // session token pointing at it must go with it.
+// "Start over" sets the account aside instead of deleting it (2026-09-19):
+// deleting cascaded to all of a tester's history, and co-test has no backups.
 export async function resetOwnData(userId: string): Promise<{ success: boolean }> {
-  await pool.query(`DELETE FROM users WHERE id = $1`, [userId]);
+  await archiveAccount(userId);
   return { success: true };
 }

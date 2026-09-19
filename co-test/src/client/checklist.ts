@@ -25,7 +25,6 @@ type ChecklistItem = {
   key: string;
   label: string;
   category: "auto" | "manual";
-  test_case: "intent_layer";
   // auto
   computed?: boolean;
   value?: string | null;

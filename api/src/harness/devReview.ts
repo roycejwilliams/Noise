@@ -58,7 +58,7 @@ export async function reviewUserIds(env: NodeJS.ProcessEnv = process.env): Promi
 // finds testers. Null when that account doesn't exist yet.
 export async function digestRecipient(env: NodeJS.ProcessEnv = process.env): Promise<string | null> {
   const name = (env.DEV_REVIEW_DIGEST_NAME ?? "Royce").trim();
-  const { rows } = await pool.query(`SELECT id FROM users WHERE lower(first_name) = lower($1) AND phone_number IS NOT NULL ORDER BY created_at LIMIT 1`, [name]);
+  const { rows } = await pool.query(`SELECT id FROM users WHERE lower(first_name) = lower($1) AND phone_number IS NOT NULL AND archived_at IS NULL ORDER BY created_at DESC LIMIT 1`, [name]);
   return rows[0]?.id ?? null;
 }
 

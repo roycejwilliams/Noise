@@ -40,7 +40,7 @@ type StoredResult = {
   coverage_history?: CoverageCheck[];
   turn_latency_ms?: { turn: number; latency_ms: number }[];
   channel?: "browser" | "phone";
-  test_case?: "intent_layer" | null;
+  test_case?: string | null;
   imessage_thread?: TranscriptMessage[];
 };
 

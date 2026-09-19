@@ -3,44 +3,73 @@ import pool from "../../../api/src/db/db.js";
 
 const router = express.Router();
 
-// Fixed catalog — split exactly as agreed (see task notes): auto-verifiable
-// items the system checks off itself from real data, and manual items that
-// only ever track whether a human has filled them in. Not a DB table: this
-// list doesn't change at runtime, so a table would just be an extra place
-// for the two to drift out of sync.
+// Fixed catalog, updated 2026-09-19 to what's being tested now (onboarding,
+// the first call, texted searches, reactions, follow-ups, feedback). Auto
+// items are checked from the signed-in tester's own data; manual items only
+// ever track what a human wrote. Not a DB table: this list doesn't change at
+// runtime.
 type ChecklistItem = {
   key: string;
   label: string;
   category: "auto" | "manual";
-  test_case: "intent_layer";
 };
 
 const CATALOG: ChecklistItem[] = [
-  // Manual — human input only, never inferred or fabricated by the system.
-  {
-    key: "recognition_check",
-    label: "Recognition check — does the extracted profile sound like the person",
-    category: "manual",
-    test_case: "intent_layer",
-  },
-  {
-    key: "specificity_check",
-    label: "Specificity of seeking/offering output",
-    category: "manual",
-    test_case: "intent_layer",
-  },
+  { key: "invite", label: "Got in with an invite code", category: "auto" },
+  { key: "onboarding", label: "Finished onboarding (name and email saved)", category: "auto" },
+  { key: "call_offer", label: "Co offered the first call", category: "auto" },
+  { key: "call", label: "Had a call with Co", category: "auto" },
+  { key: "search_result", label: "Asked Co for something and got a real result", category: "auto" },
+  { key: "reaction", label: "Reacted to something Co sent (interested, not interested, or already did it)", category: "auto" },
+  { key: "followup", label: "Co reached out on its own", category: "auto" },
+  { key: "issue", label: "Told Co about a problem, and it was saved for the team", category: "auto" },
+  { key: "onboarding_on_brand", label: "Onboarding felt on brand: a private social club, never salesy", category: "manual" },
+  { key: "call_worth_it", label: "The first call felt worth five minutes", category: "manual" },
+  { key: "results_matched", label: "What Co sent matched what I asked for", category: "manual" },
+  { key: "no_false_claims", label: "Nothing Co said about itself was untrue", category: "manual" },
 ];
 
-// GET /api/checklist — full catalog. Every current item is manual (read from
-// checklist_responses); nothing in CATALOG is category: "auto" right now,
-// but the shape stays here so a future auto-computed item doesn't need a
-// structural change to slot in.
-router.get("/", async (_req: Request, res: Response, next: NextFunction) => {
+const when = (d: Date | string | null | undefined) =>
+  d ? new Date(d).toLocaleString("en-US", { timeZone: "America/Los_Angeles", month: "short", day: "numeric", hour: "numeric", minute: "2-digit" }) : null;
+
+// Each auto item for one tester: done or not, and a short detail.
+async function computeAuto(userId: string): Promise<Record<string, { computed: boolean; value: string | null }>> {
+  const one = async (sql: string) => (await pool.query(sql, [userId]).catch(() => ({ rows: [] as any[] }))).rows[0] ?? null;
+  const [u, offer, call, search, reaction, followup, issue] = await Promise.all([
+    one(`SELECT invite_verified, identity_captured, first_name FROM users WHERE id = $1`),
+    one(`SELECT created_at FROM co_memories WHERE user_id = $1 AND memory_type = 'call_offer_pending' ORDER BY created_at LIMIT 1`),
+    one(`SELECT created_at FROM co_memories WHERE user_id = $1 AND memory_type = 'recap' ORDER BY created_at DESC LIMIT 1`),
+    one(`SELECT count(*)::int AS n, max(created_at) AS at FROM harness_decisions WHERE user_id = $1 AND decision = 'recommendation.search' AND action = 'sent_matches'`),
+    one(`SELECT count(*)::int AS n, max(reacted_at) AS at FROM revealed_offers WHERE user_id = $1 AND reaction IS NOT NULL`),
+    one(`SELECT count(*)::int AS n, max(sent_at) AS at FROM proactive_sends WHERE user_id = $1`),
+    one(`SELECT count(*)::int AS n, max(created_at) AS at FROM user_reported_issues WHERE user_id = $1`),
+  ]);
+  const count = (r: any, noun: string) => (r?.n ? { computed: true, value: `${r.n} ${noun}${r.n === 1 ? "" : "s"}, last ${when(r.at)}` } : { computed: false, value: null });
+  return {
+    invite: { computed: !!u?.invite_verified, value: u?.invite_verified ? "Yes" : null },
+    onboarding: { computed: !!u?.identity_captured, value: u?.identity_captured ? `Saved as ${u.first_name}` : null },
+    call_offer: { computed: !!offer, value: offer ? `Offered ${when(offer.created_at)}` : null },
+    call: { computed: !!call, value: call ? `Last call ${when(call.created_at)}` : null },
+    search_result: count(search, "result"),
+    reaction: count(reaction, "reaction"),
+    followup: count(followup, "text"),
+    issue: count(issue, "report"),
+  };
+}
+
+// GET /api/checklist — the catalog, with auto items computed for whoever is
+// signed in and manual items from checklist_responses.
+router.get("/", async (req: Request, res: Response, next: NextFunction) => {
   try {
-    const manualResult = await pool.query(`SELECT item_key, value, filled_in, updated_at FROM checklist_responses`);
+    const testerId = (req as any).testerId as string;
+    const [manualResult, auto] = await Promise.all([
+      pool.query(`SELECT item_key, value, filled_in, updated_at FROM checklist_responses`),
+      computeAuto(testerId),
+    ]);
     const manualByKey = new Map(manualResult.rows.map((r: any) => [r.item_key, r]));
 
     const items = CATALOG.map((item) => {
+      if (item.category === "auto") return { ...item, ...auto[item.key] };
       const manual = manualByKey.get(item.key);
       return {
         ...item,

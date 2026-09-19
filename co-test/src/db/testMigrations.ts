@@ -202,6 +202,17 @@ export function runTestMigrations() {
     .query(`ALTER TABLE users ADD COLUMN IF NOT EXISTS sms_opted_out BOOLEAN NOT NULL DEFAULT false`)
     .catch((err: Error) => console.error("users.sms_opted_out migration failed:", err));
 
+  // Accounts set aside so a tester can start over without losing their
+  // history (services/accountArchive.ts, 2026-09-19): the row and everything
+  // linked to it stay; its phone, email and username move here.
+  pool
+    .query(
+      `ALTER TABLE users ADD COLUMN IF NOT EXISTS archived_at TIMESTAMPTZ,
+         ADD COLUMN IF NOT EXISTS archived_phone TEXT,
+         ADD COLUMN IF NOT EXISTS archived_email TEXT`,
+    )
+    .catch((err: Error) => console.error("users archive columns migration failed:", err));
+
   // Text-to-sign-in (2026-09-15): the login page makes a request with a short
   // code; api/src/services/textLogin.ts claims it when the prefilled text
   // arrives from a phone. token is the browser's cookie, code is what's texted.
