@@ -305,6 +305,11 @@ export async function runMigrations(): Promise<void> {
       )`,
     )
     .catch((err: Error) => console.error("invite_codes table init failed:", err));
+  // When the member who made a code was told their friend joined
+  // (services/invites.ts claimJoinNotice), so the note goes out once.
+  await pool
+    .query(`ALTER TABLE invite_codes ADD COLUMN IF NOT EXISTS inviter_notified_at TIMESTAMPTZ`)
+    .catch((err: Error) => console.error("invite_codes.inviter_notified_at migration failed:", err));
 
   // True no-answer/busy/failed/canceled calls (nobody and nothing picked up)
   // get a delayed follow-up text instead of an instant one — see

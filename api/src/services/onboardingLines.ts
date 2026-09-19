@@ -47,7 +47,55 @@ export const CALL_OFFER = [
   "Nice to meet you, {name}. Easiest next step is a five-minute call so I actually know who you are. Now works, or tell me a time. Texting's fine too.",
 ];
 
-export function pickLine(pool: readonly string[], vars: { name?: string | null } = {}, rand: () => number = Math.random): string {
-  const line = pool[Math.floor(rand() * pool.length) % pool.length];
-  return line.replace(/\{name\}/g, (vars.name ?? "").trim() || "there");
+// Invites (Royce, 2026-09-19): each member gets 5, one only counts once
+// the friend joins, and unused ones never expire (services/invites.ts).
+
+// Right after a good code that came from a member's invite. {inviter} is
+// that member's first name.
+export const WELCOME_INVITED = [
+  "You're in. {inviter} brought you, so you're in good company.",
+  "You're in. Any friend of {inviter}'s is welcome here.",
+  "You're in. {inviter} has good taste.",
+];
+
+// A member asked for an invite. The link goes in its own text right after,
+// so it shows as a tappable card.
+export const INVITE_READY = [
+  "Here's an invite. Send it to them, and one tap opens a text to me with the code filled in.",
+  "Pass this along. One tap and they're texting me.",
+  "Here you go. Forward this to whoever you have in mind.",
+];
+
+export const NO_INVITES_LEFT = [
+  "All 5 of your invites are taken. Everyone you brought is in.",
+  "You've used all 5 of your invites. Good company, all of them.",
+  "No invites left. All 5 found someone.",
+];
+
+// To the member, once their friend finishes onboarding. {friend} is the
+// friend's first name; {left} is how many invites the member has left.
+export const INVITE_JOINED = [
+  "{friend}'s in. Good taste, {name}.",
+  "Your invite worked. {friend} just joined.",
+  "{friend} got in on your invite. You've got {left} left.",
+  "Just met {friend}. Thanks for bringing them in.",
+];
+
+type LineVars = { name?: string | null } & Record<string, string | number | null | undefined>;
+
+// {name} falls back to "there"; any other {key} is filled from vars. A line
+// needing a var that wasn't given (or {left} when it's 0) is skipped, so a
+// blank or "0 left" never goes out.
+export function pickLine(pool: readonly string[], vars: LineVars = {}, rand: () => number = Math.random): string {
+  const usable = pool.filter((line) =>
+    [...line.matchAll(/\{(\w+)\}/g)].every(([, key]) => {
+      if (key === "name") return true;
+      const v = vars[key];
+      if (v === null || v === undefined || String(v).trim() === "") return false;
+      return !(key === "left" && Number(v) <= 0);
+    }),
+  );
+  const from = usable.length ? usable : pool;
+  const line = from[Math.floor(rand() * from.length) % from.length];
+  return line.replace(/\{(\w+)\}/g, (_, key) => (key === "name" ? String(vars.name ?? "").trim() || "there" : String(vars[key] ?? "").trim()));
 }

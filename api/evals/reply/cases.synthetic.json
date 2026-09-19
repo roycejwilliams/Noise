@@ -403,5 +403,44 @@
       "worth (going|registering|locking)"
     ],
     "style": "capitalized"
+  },
+  {
+    "id": "s23_invite_sent_claim",
+    "message": "send my friend a code",
+    "recentConversation": "Co replied: Works for me. What's on your mind lately?",
+    "facts": [],
+    "draft": "Sending that now, one sec.",
+    "forbidden": [
+      "\\b(sending|sent|on (its|it's) way)\\b"
+    ],
+    "groundedDraft": false
+  },
+  {
+    "id": "s24_invite_add_claim",
+    "message": "my sister wants in, can you add her?",
+    "recentConversation": "Co replied: Works for me. What's on your mind lately?",
+    "facts": [],
+    "draft": "Yep, I can do that.",
+    "forbidden": [
+      "\\bi can (do that|add)\\b",
+      "\\badded\\b"
+    ],
+    "groundedDraft": false
+  },
+  {
+    "id": "s25_invite_really_sent",
+    "message": "rough week honestly. also can my friend Sam join?",
+    "recentConversation": "Co replied: Works for me. What's on your mind lately?",
+    "facts": [
+      {
+        "kind": "known",
+        "text": "Co just texted them an invite link for a friend, in its own messages this turn. Don't send or describe another one."
+      }
+    ],
+    "draft": "Sorry it's been a rough one. That link's for Sam, just forward it.",
+    "forbidden": [
+      "can't|cannot|no way to"
+    ],
+    "groundedDraft": true
   }
 ]

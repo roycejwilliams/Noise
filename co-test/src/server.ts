@@ -23,6 +23,7 @@ import { requireTesterLoginApi, requireTesterLoginPage } from "./middleware/requ
 import { bridgeTwilioMediaStream } from "../../api/src/services/mediaStreamBridge.js";
 import { createCoRouter } from "../../api/src/routes/co.js";
 import { sendblueRouter } from "../../api/src/routes/sendblue.js";
+import { serveInvitePage } from "../../api/src/routes/invitePage.js";
 import { createLumaRouter } from "../../api/src/routes/luma.js";
 import { registerJobs } from "../../api/src/jobs/index.js";
 
@@ -112,6 +113,10 @@ async function main() {
     res.setHeader("Cache-Control", "public, max-age=86400");
     return res.send(vcard);
   });
+
+  // A member's invite link: mirrors production's identical route in
+  // api/src/server.ts (api/src/routes/invitePage.ts).
+  app.get("/i/:code", serveInvitePage);
 
   // Serves generated voice-line audio (ElevenLabs SMS voice notes, and now
   // Hume-voiced TwiML lines for the AMD-misfire redirect) — mirrors

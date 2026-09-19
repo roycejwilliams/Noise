@@ -685,5 +685,271 @@
       "upd": false,
       "nope": []
     }
+  },
+  {
+    "id": "s30-onboarding-text",
+    "source": "synthetic",
+    "message": "Texting is fine",
+    "recentConversation": "User said: Royce Williams\\nroycewilliamsj@gmail.com\nCo replied: Good to meet you, Royce. Do you want to keep texting, or would a quick call be easier to get started?\nUser said: Texting is fine",
+    "openItems": [
+      {
+        "kind": "call_offer",
+        "detail": "[onboarding] Asked whether they'd rather keep texting or take a quick call to get started | Co offered: Good to meet you, Royce. Do you want to keep texting, or would a quick call be easier to get started?"
+      }
+    ],
+    "current": null,
+    "label": {
+      "ans": [
+        "call_offer:decline"
+      ],
+      "call": [
+        "nothing"
+      ],
+      "rec": false,
+      "upd": false,
+      "nope": [
+        "place_call",
+        "call_offer:accept"
+      ]
+    }
+  },
+  {
+    "id": "s31-onboarding-call",
+    "source": "synthetic",
+    "message": "Call me",
+    "recentConversation": "User said: Royce Williams\\nroycewilliamsj@gmail.com\nCo replied: Good to meet you, Royce. Do you want to keep texting, or would a quick call be easier to get started?\nUser said: Call me",
+    "openItems": [
+      {
+        "kind": "call_offer",
+        "detail": "[onboarding] Asked whether they'd rather keep texting or take a quick call to get started | Co offered: Good to meet you, Royce. Do you want to keep texting, or would a quick call be easier to get started?"
+      }
+    ],
+    "current": null,
+    "label": {
+      "ans": [
+        "call_offer:accept"
+      ],
+      "call": [
+        "place_call"
+      ],
+      "rec": false,
+      "upd": false,
+      "nope": [
+        "call_offer:decline"
+      ]
+    }
+  },
+  {
+    "id": "s32-onboarding-lets-talk",
+    "source": "synthetic",
+    "message": "Let's do a call",
+    "recentConversation": "User said: Royce Williams\\nroycewilliamsj@gmail.com\nCo replied: Good to meet you, Royce. Do you want to keep texting, or would a quick call be easier to get started?\nUser said: Let's do a call",
+    "openItems": [
+      {
+        "kind": "call_offer",
+        "detail": "[onboarding] Asked whether they'd rather keep texting or take a quick call to get started | Co offered: Good to meet you, Royce. Do you want to keep texting, or would a quick call be easier to get started?"
+      }
+    ],
+    "current": null,
+    "label": {
+      "ans": [
+        "call_offer:accept"
+      ],
+      "call": [
+        "place_call"
+      ],
+      "rec": false,
+      "upd": false,
+      "nope": [
+        "call_offer:decline"
+      ]
+    }
+  },
+  {
+    "id": "s33-onboarding-text-for-now",
+    "source": "synthetic",
+    "message": "text for now, I'm at work",
+    "recentConversation": "User said: Royce Williams\\nroycewilliamsj@gmail.com\nCo replied: Good to meet you, Royce. Do you want to keep texting, or would a quick call be easier to get started?\nUser said: text for now, I'm at work",
+    "openItems": [
+      {
+        "kind": "call_offer",
+        "detail": "[onboarding] Asked whether they'd rather keep texting or take a quick call to get started | Co offered: Good to meet you, Royce. Do you want to keep texting, or would a quick call be easier to get started?"
+      }
+    ],
+    "current": null,
+    "label": {
+      "ans": [
+        "call_offer:decline"
+      ],
+      "call": [
+        "nothing"
+      ],
+      "rec": false,
+      "upd": false,
+      "nope": [
+        "place_call",
+        "call_offer:accept"
+      ]
+    }
+  },
+  {
+    "id": "s28-invite-friend-join",
+    "source": "synthetic",
+    "message": "can my friend Sam join?",
+    "recentConversation": "Co replied: Works for me. What's on your mind lately?\nUser said: can my friend Sam join?",
+    "openItems": [],
+    "current": null,
+    "label": {
+      "ans": [
+        "none"
+      ],
+      "call": [
+        "nothing"
+      ],
+      "rec": false,
+      "upd": false,
+      "inv": true,
+      "nope": []
+    }
+  },
+  {
+    "id": "s29-invite-buddy-in",
+    "source": "synthetic",
+    "message": "how do I get my buddy in?",
+    "recentConversation": "Co replied: Works for me. What's on your mind lately?\nUser said: how do I get my buddy in?",
+    "openItems": [],
+    "current": null,
+    "label": {
+      "ans": [
+        "none"
+      ],
+      "call": [
+        "nothing"
+      ],
+      "rec": false,
+      "upd": false,
+      "inv": true,
+      "nope": []
+    }
+  },
+  {
+    "id": "s30-invite-add-sister",
+    "source": "synthetic",
+    "message": "my sister wants in, can you add her?",
+    "recentConversation": "Co replied: Works for me. What's on your mind lately?\nUser said: my sister wants in, can you add her?",
+    "openItems": [],
+    "current": null,
+    "label": {
+      "ans": [
+        "none"
+      ],
+      "call": [
+        "nothing"
+      ],
+      "rec": false,
+      "upd": false,
+      "inv": true,
+      "nope": []
+    }
+  },
+  {
+    "id": "s31-invite-send-code",
+    "source": "synthetic",
+    "message": "send my friend a code",
+    "recentConversation": "Co replied: Works for me. What's on your mind lately?\nUser said: send my friend a code",
+    "openItems": [],
+    "current": null,
+    "label": {
+      "ans": [
+        "none"
+      ],
+      "call": [
+        "nothing"
+      ],
+      "rec": false,
+      "upd": false,
+      "inv": true,
+      "nope": []
+    }
+  },
+  {
+    "id": "s32-invite-how-many-left",
+    "source": "synthetic",
+    "message": "how many invites do I have left?",
+    "recentConversation": "Co replied: Works for me. What's on your mind lately?\nUser said: how many invites do I have left?",
+    "openItems": [],
+    "current": null,
+    "label": {
+      "ans": [
+        "none"
+      ],
+      "call": [
+        "nothing"
+      ],
+      "rec": false,
+      "upd": false,
+      "inv": true,
+      "nope": []
+    }
+  },
+  {
+    "id": "s33-not-invite-event-friend",
+    "source": "synthetic",
+    "message": "can I bring a friend to Sunday's dinner?",
+    "recentConversation": "Co replied: Works for me. What's on your mind lately?\nUser said: can I bring a friend to Sunday's dinner?",
+    "openItems": [],
+    "current": null,
+    "label": {
+      "ans": [
+        "none"
+      ],
+      "call": [
+        "nothing"
+      ],
+      "rec": false,
+      "upd": false,
+      "inv": false,
+      "nope": []
+    }
+  },
+  {
+    "id": "s34-not-invite-talking-about-friend",
+    "source": "synthetic",
+    "message": "my friend Sam just got a new job, so happy for him",
+    "recentConversation": "Co replied: Works for me. What's on your mind lately?\nUser said: my friend Sam just got a new job, so happy for him",
+    "openItems": [],
+    "current": null,
+    "label": {
+      "ans": [
+        "none"
+      ],
+      "call": [
+        "nothing"
+      ],
+      "rec": false,
+      "upd": false,
+      "inv": false,
+      "nope": []
+    }
+  },
+  {
+    "id": "s35-not-invite-was-invited",
+    "source": "synthetic",
+    "message": "I got invited to a rooftop thing tonight, should I go?",
+    "recentConversation": "Co replied: Works for me. What's on your mind lately?\nUser said: I got invited to a rooftop thing tonight, should I go?",
+    "openItems": [],
+    "current": null,
+    "label": {
+      "ans": [
+        "none"
+      ],
+      "call": [
+        "nothing"
+      ],
+      "rec": false,
+      "upd": false,
+      "inv": false,
+      "nope": []
+    }
   }
 ]

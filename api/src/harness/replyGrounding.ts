@@ -80,6 +80,7 @@ const STANDING_CAPABILITIES = [
   `They can also call Co from this same number. You are not given the digits, so never write a phone number.`,
   `Co can't go chase down a specific link, detail, or answer later: if it isn't here, it won't show up.`,
   `Co can send its contact card (so they can save Co) with the sendContactCard tool when they ask for it or want to save Co.`,
+  `Members can invite friends to Co: 5 invites each, and one only counts once the friend joins. When they ask for an invite (or how a friend can get in), Co's invite step texts them a link to forward. Never write an invite link or code yourself, and never say an invite was sent unless it's listed as sent this turn. If they ask how it works, tell them to just ask you for an invite for their friend, and don't offer or promise to send one yourself.`,
   `Co can search right now (searchNow), save something they want found (people, events, a community, an opportunity) so the daily search keeps looking (saveAsk; it can't dig up a missing detail about something already sent), and send a link that's on file (shareLink). Co can't book, buy, register them for events, email or call other people for them, or post anywhere. If they ask for something Co can't do, say so plainly and say what Co can do instead.`,
 ];
 
@@ -333,6 +334,10 @@ export function predictionMatch(text: string): RegExpMatchArray | null {
   );
 }
 
+// Co saying it's sending, adding, or getting someone an invite, now or soon.
+const INVITE_ACTION_CLAIM =
+  /\b(sending|sent|i'?ll (send|add|invite|get)|i can (add|invite|do that|get)|adding (her|him|them)|let'?s get|getting (her|him|them|you)|one sec|here'?s (an|your|the) (invite|code|link)|on (its|it'?s) way)\b/i;
+
 export function codeChecks(draft: string, rf: ReplyFacts, src: GroundingSources): GateCheck[] {
   const emotionLabel = checkNoEmotionLabel(draft);
   const checks: GateCheck[] = [];
@@ -356,6 +361,19 @@ export function codeChecks(draft: string, rf: ReplyFacts, src: GroundingSources)
   }
   if (/\bI\s*(can(no|')?t|can not|am unable to|'?m unable to|don'?t|do not)\s+(actually\s+)?(make|place|do)?\s*(a\s+|phone\s+)*calls?\b|\bthis is (just )?(a )?text\b/i.test(draft)) {
     checks.push({ name: "no_capability_denial", pass: false, reason: "says Co can't call, which is false" });
+  }
+  // An invite said to be sent or on its way when this turn's invite step
+  // didn't send one (2026-09-19: "send my friend a code" drafted "Sending
+  // that now, one sec."). Only the invite step (services/invites.ts) sends
+  // invites, and it adds "texted them an invite link" to the facts when it does.
+  const inviteAsk = /\binvit|\bcodes?\b|\bjoin\b|\badd (her|him|them)\b|\bwants in\b|\bbring (someone|somebody|people)\b|\bget (my|her|him|them|\w+) (\w+ )?in\b/i.test(src.message);
+  const inviteSent = rf.facts.some((f) => /texted them an invite link/i.test(f.text));
+  if (inviteAsk && !inviteSent && INVITE_ACTION_CLAIM.test(draft)) {
+    checks.push({
+      name: "no_invite_sent_claim",
+      pass: false,
+      reason: "says an invite is sent or on its way, but none went out this turn. Tell them to ask Co for an invite for their friend; don't offer, promise or claim one",
+    });
   }
   // Forecasts about what will or won't turn up, which Co can't know
   // (2026-09-16: "I don't think a separate one is going to materialize by
@@ -510,6 +528,7 @@ export function stripUnsupported(draft: string, failed: GateCheck[]): string {
     if (failed.some((f) => f.name === "no_followup_promise") && followupPromiseMatch(s)) return false;
     if (failed.some((f) => f.name === "no_prediction") && predictionMatch(s)) return false;
     if (failed.some((f) => f.name === "no_capability_denial") && /\b(can(no|')?t|unable to|this is (just )?text)\b/i.test(s)) return false;
+    if (failed.some((f) => f.name === "no_invite_sent_claim") && INVITE_ACTION_CLAIM.test(s)) return false;
     if (failed.some((f) => f.name === "link_on_file") && /https?:\/\//i.test(s)) return false;
     if (failed.some((f) => f.name === "phone_on_file") && /\d{3}[\s.-]?\d{4}/.test(s)) return false;
     if (failed.some((f) => f.name === "time_on_file") && clockTimes(s).length) return false;
@@ -536,6 +555,10 @@ export type GroundingResult = {
 // Claims nothing, and reads like a person (2026-09-18: "I don't have that, so
 // I'd rather not guess." answered "is it noted to the team?").
 const MINIMAL_FALLBACK = "Honestly, I'm not sure on that one.";
+// When an invite claim had to come out: what's true instead, so the reply
+// still helps (2026-09-19). Asking with "invite" and "friend" goes through
+// the invite step (services/invites.ts isInviteRequest).
+const INVITE_FALLBACK = "Invites go through me. Ask me for an invite for your friend, and you'll get a link to forward.";
 
 // Cheap pre-filter for the model claim read. Plain conversational replies
 // ("That sounds hard. What's been the toughest part?") have nothing to
@@ -659,7 +682,11 @@ export async function groundReply(
       // draft had the reply agent's full context, so ties favor it.
       const stripped = redraftWords > originalWords ? strippedRedraft : strippedOriginal;
       result = {
-        final: stripped.split(/\s+/).filter(Boolean).length >= 3 ? stripped : MINIMAL_FALLBACK,
+        final: effectiveFailed1.some((c) => c.name === "no_invite_sent_claim")
+          ? [stripped.split(/\s+/).filter(Boolean).length >= 3 && !/invite/i.test(stripped) ? stripped : "", INVITE_FALLBACK].filter(Boolean).join(" ")
+          : stripped.split(/\s+/).filter(Boolean).length >= 3
+            ? stripped
+            : MINIMAL_FALLBACK,
         outcome: "stripped",
         checks: [...first.checks, ...(second?.checks ?? []).map((c) => ({ ...c, name: `redraft.${c.name}` }))],
         latencyMs: Date.now() - started,

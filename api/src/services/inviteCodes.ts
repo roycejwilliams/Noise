@@ -7,10 +7,9 @@
 // Deliberately separate from routes/referrals.ts's existing referral
 // system — that one is a member spending a credit to recommend a specific
 // person by name/reason (a human-to-human intro Co makes on their behalf).
-// This is a code a new person types in themselves to unlock signup. No
-// self-serve code generation yet (V1: scripts/generateInviteCode.ts, run
-// by hand) — that's a real product decision (who gets to mint codes, how
-// many) not made yet, not something to guess at here.
+// This is a code a new person types in themselves to unlock signup. Codes
+// with no referring member are minted by hand (scripts/generateInviteCode.ts);
+// members get their own by asking Co (services/invites.ts, 2026-09-19).
 import { randomBytes } from "crypto";
 import pool from "../db/db.js";
 import type { PoolClient } from "pg";
@@ -24,7 +23,23 @@ export function normalizeInviteCode(raw: string): string {
   return raw.trim().toUpperCase().replace(/[^A-Z0-9]/g, "");
 }
 
-export async function generateInviteCode(createdBy: string | null): Promise<string> {
+// Every chunk of a text that could be a code, so a friendly first text
+// ("Hi Co, Royce invited me. Code: 6VGF76VK", from an invite link) works as
+// well as a bare code. A bare code still counts when typed with a dash or
+// space in it.
+export function inviteCodeCandidates(text: string): string[] {
+  const tokens = text
+    .toUpperCase()
+    .split(/[^A-Z0-9]+/)
+    .filter((t) => t.length === CODE_LENGTH && [...t].every((c) => CODE_ALPHABET.includes(c)));
+  const whole = normalizeInviteCode(text);
+  const wholeFits = whole.length === CODE_LENGTH && [...whole].every((c) => CODE_ALPHABET.includes(c));
+  return [...new Set([...tokens, ...(wholeFits ? [whole] : [])])];
+}
+
+type Db = { query: (text: string, params?: unknown[]) => Promise<unknown> };
+
+export async function generateInviteCode(createdBy: string | null, db: Db = pool): Promise<string> {
   // Collision odds at 8 chars over a 32-symbol alphabet are astronomically
   // low, but retry-on-conflict costs nothing and means never having to
   // think about it again.
@@ -32,7 +47,7 @@ export async function generateInviteCode(createdBy: string | null): Promise<stri
     const bytes = randomBytes(CODE_LENGTH);
     const code = Array.from(bytes, (b) => CODE_ALPHABET[b % CODE_ALPHABET.length]).join("");
     try {
-      await pool.query(`INSERT INTO invite_codes (code, created_by) VALUES ($1, $2)`, [code, createdBy]);
+      await db.query(`INSERT INTO invite_codes (code, created_by) VALUES ($1, $2)`, [code, createdBy]);
       return code;
     } catch (err: any) {
       if (err?.code === "23505") continue; // code collision, retry
@@ -74,4 +89,15 @@ export async function redeemInviteCode(rawCode: string, userId: string): Promise
   } finally {
     client?.release();
   }
+}
+
+// Redeems the first real code found anywhere in a text (inviteCodeCandidates).
+export async function redeemInviteCodeIn(text: string, userId: string): Promise<RedeemResult> {
+  let result: RedeemResult = { ok: false, reason: "not_found" };
+  for (const candidate of inviteCodeCandidates(text)) {
+    const r = await redeemInviteCode(candidate, userId);
+    if (r.ok) return r;
+    if (r.reason === "already_used") result = r;
+  }
+  return result;
 }

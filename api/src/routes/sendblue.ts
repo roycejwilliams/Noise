@@ -22,9 +22,10 @@ import { detectSeekingMode } from "../services/emotionalTone.js";
 import { getEmotionalContext, readTextEmotion, recordEmotionSignals, renderEmotionalContext } from "../harness/emotion.js";
 import { buildContextSummary } from "../services/callContext.js";
 import { findOrCreateUserByPhone, hasPendingEmail, splitFullName } from "../services/identity.js";
-import { redeemInviteCode } from "../services/inviteCodes.js";
+import { redeemInviteCodeIn } from "../services/inviteCodes.js";
+import { claimJoinNotice, getMemberInvite, inviteLink, invitesLeftFor, inviterFirstName, isInviteRequest } from "../services/invites.js";
 import { handlePhoneChange } from "../services/phoneChange.js";
-import { CALL_OFFER, GATE_ASK, WELCOME, WRONG_CODE, pickLine } from "../services/onboardingLines.js";
+import { CALL_OFFER, GATE_ASK, INVITE_JOINED, INVITE_READY, NO_INVITES_LEFT, WELCOME, WELCOME_INVITED, WRONG_CODE, pickLine } from "../services/onboardingLines.js";
 import { claimTextLogin } from "../services/textLogin.js";
 import {
   INTAKE_EXTRACT_MODEL,
@@ -339,6 +340,56 @@ async function replyOwed(userId: string): Promise<boolean> {
   if (prevUser === -1) return false;
   const since = earlier.slice(0, prevUser);
   return !since.some((r: any) => String(r.content).startsWith("Co replied:") && !HOLD_LINES.some((l) => String(r.content) === `Co replied: ${l}`));
+}
+
+// "You're in" for a good code: names the member who invited them when the
+// code was a member's invite (services/invites.ts).
+async function welcomeLineFor(invitedBy: string | null | undefined): Promise<string> {
+  const inviter = await inviterFirstName(invitedBy).catch(() => null);
+  return inviter ? pickLine(WELCOME_INVITED, { inviter }) : pickLine(WELCOME);
+}
+
+// A member asked for an invite: the line, then the link in its own text so
+// it shows as a tappable card. Returns the action for the webhook response.
+async function handleInviteRequest(user: { id: string }, phone: string): Promise<string> {
+  const invite = await getMemberInvite(user.id);
+  const record = (action: string, extra: Record<string, unknown> = {}) =>
+    recordDecision({ layer: 3, decision: "account.invite", userId: user.id, outcome: invite.ok ? "act" : "skip", action, proposal: extra }).catch(() => {});
+  if (!invite.ok) {
+    await sendAndLog(user.id, phone, pickLine(NO_INVITES_LEFT));
+    await record("none_left");
+    return "invite_none_left";
+  }
+  const link = inviteLink(invite.code);
+  const count = `You have ${invite.left} left. One only counts once someone joins.`;
+  if (link) {
+    await sendAndLog(user.id, phone, `${pickLine(INVITE_READY)} ${count}`);
+    await sendAndLog(user.id, phone, link);
+  } else {
+    // No public URL configured: the bare code, texted to Co.
+    await sendAndLog(user.id, phone, `Here's an invite code: ${invite.code}. They text it to me at ${process.env.SENDBLUE_PHONE_NUMBER ?? "this number"} to get in. ${count}`);
+  }
+  await record(invite.reused ? "resent_open_code" : "made_code", { left: invite.left, link: Boolean(link) });
+  return "invite_sent";
+}
+
+// Once someone who came in on a member's invite finishes onboarding, Co
+// tells that member, once (services/invites.ts claimJoinNotice).
+async function tellInviterTheyJoined(newUser: { id: string; first_name?: string | null }): Promise<void> {
+  const inviterId = await claimJoinNotice(newUser.id);
+  if (!inviterId) return;
+  const { rows } = await pool.query(
+    `SELECT id, first_name, phone_number FROM users
+     WHERE id = $1 AND identity_captured = true AND NOT sms_opted_out`,
+    [inviterId],
+  );
+  // Archived test accounts (co-test) are opted out, so they drop out here too.
+  const inviter = rows[0];
+  if (!inviter?.phone_number) return;
+  const friend = newUser.first_name?.trim();
+  if (!friend) return;
+  const left = await invitesLeftFor(inviter.id);
+  await sendAndLog(inviter.id, inviter.phone_number, pickLine(INVITE_JOINED, { name: inviter.first_name, friend, left }));
 }
 
 async function logTextExchange(userId: string, content: string): Promise<void> {
@@ -656,13 +707,13 @@ export function sendblueRouter(io: Server): Router {
           // the first message ISN'T a real code, so a genuine cold "hey"
           // still gets asked rather than told a code was wrong.
           if (hasText) {
-            const firstTryRedeemed = await redeemInviteCode(content, user.id);
+            const firstTryRedeemed = await redeemInviteCodeIn(content, user.id);
             if (firstTryRedeemed.ok) {
               await logTextExchange(user.id, `User said: ${content}`);
               loggedInboundThisTurn = true;
               await pool.query(`UPDATE users SET invite_verified = true, invite_asked = true WHERE id = $1`, [user.id]);
               user = { ...user, invite_verified: true, invite_asked: true };
-              welcomedThisTurn = await sendAndLog(user.id, number, pickLine(WELCOME));
+              welcomedThisTurn = await sendAndLog(user.id, number, await welcomeLineFor(firstTryRedeemed.createdBy));
               // Falls through below into normal identity intake, same turn.
             }
           }
@@ -686,13 +737,13 @@ export function sendblueRouter(io: Server): Router {
             hasText ? `User said: ${content}` : "User sent a photo or voice memo (invite code expected)",
           );
           loggedInboundThisTurn = true;
-          const redeemed = hasText ? await redeemInviteCode(content, user.id) : { ok: false as const };
+          const redeemed = hasText ? await redeemInviteCodeIn(content, user.id) : { ok: false as const, createdBy: null };
           if (redeemed.ok) {
             await pool.query(`UPDATE users SET invite_verified = true WHERE id = $1`, [user.id]);
             // Reflected locally so the SAME turn falls through into real
             // identity intake below instead of making them text again.
             user = { ...user, invite_verified: true };
-            welcomedThisTurn = await sendAndLog(user.id, number, pickLine(WELCOME));
+            welcomedThisTurn = await sendAndLog(user.id, number, await welcomeLineFor(redeemed.createdBy));
           } else {
             await sendAndLog(user.id, number, pickLine(WRONG_CODE));
             return res.status(200).send({ received: true, action: "invite_code_rejected" });
@@ -714,6 +765,19 @@ export function sendblueRouter(io: Server): Router {
             await sendAndLog(user.id, number, phoneChangeReply);
             return res.status(200).send({ received: true, action: "phone_change" });
           }
+        }
+
+        // A member asking for an invite (services/invites.ts): handled here,
+        // start to finish, like a phone change.
+        if (hasText && user.identity_captured && isInviteRequest(content)) {
+          await logTextExchange(user.id, `User said: ${content}`);
+          const action = await handleInviteRequest(user, number).catch((err: any) => {
+            console.error("sendblue: invite request failed:", err?.message ?? err);
+            return null;
+          });
+          if (action) return res.status(200).send({ received: true, action });
+          await sendAndLog(user.id, number, "I couldn't make that invite just now. Try me again in a minute.");
+          return res.status(200).send({ received: true, action: "invite_failed" });
         }
 
         // Step 1.2 — Name/email intake for a brand-new contact. Gated on
@@ -842,6 +906,10 @@ export function sendblueRouter(io: Server): Router {
                 ])
                 .catch((err: any) => console.error("sendblue: onboarding call-or-text offer write failed (non-fatal):", err?.message ?? err));
             }
+            // They came in on a member's invite: tell that member, once.
+            await tellInviterTheyJoined(user).catch((err: any) =>
+              console.error("sendblue: invite joined note failed (non-fatal):", err?.message ?? err),
+            );
             return res.status(200).send({ received: true, action: "identity_captured" });
           }
 
@@ -1225,6 +1293,7 @@ export function sendblueRouter(io: Server): Router {
             decision.cancelCall ? "cancel_call" : null,
             decision.wantsRecommendation ? "recommendation" : null,
             decision.asksForUpdates ? "updates" : null,
+            decision.wantsInvite ? "invite" : null,
           ].filter(Boolean);
           routerActed = acted.length > 0 || !!decision.clarifyContext || !!decision.clarifyAbout;
           recordDecision({
@@ -1238,6 +1307,30 @@ export function sendblueRouter(io: Server): Router {
             confidence: routerOutput.confidence,
             reason: routerFailed ? "router unavailable" : routerOutput.reason,
           });
+        }
+
+        // Asking for an invite in words the invite pattern missed ("can my
+        // friend Sam join?", "send my friend a code"): same invite step. On its
+        // own it's the whole turn; alongside anything else, the reply still
+        // runs and knows what went out (2026-09-19: Co told all six of those
+        // phrasings it had no way to invite anyone).
+        let inviteNote: string | null = null;
+        if (hasText && user.identity_captured && decision.wantsInvite) {
+          const inviteAction = await handleInviteRequest(user, number).catch((err: any) => {
+            console.error("sendblue: invite request (router) failed:", err?.message ?? err);
+            return null;
+          });
+          if (inviteAction) {
+            turnDidWork = true;
+            const onlyInvite =
+              !resolvedItem && !decision.placeCall && !decision.scheduleCall && !decision.cancelCall && !decision.answerCallingQuestion &&
+              !decision.wantsRecommendation && !decision.asksForUpdates && !decision.clarifyContext;
+            if (onlyInvite) return res.status(200).send({ received: true, action: inviteAction });
+            inviteNote =
+              inviteAction === "invite_sent"
+                ? "Co just texted them an invite link for a friend, in its own messages this turn. Don't send or describe another one."
+                : "Co just told them all 5 of their invites are used.";
+          }
         }
 
         // How long the search took, and preparing what it found (fit check
@@ -1299,6 +1392,7 @@ export function sendblueRouter(io: Server): Router {
           pendingDescriptions: openItems.filter((i) => i.id !== resolvedItem?.item.id).map((i) => i.description),
         });
         const factsMs = Date.now() - factsStarted;
+        if (inviteNote) addFact(replyFacts, "known", inviteNote);
         // A problem they're reporting about Co itself is saved for the team
         // (test only, services/issueReports.ts), and the reply can say so.
         const reportedIssue = hasText ? await captureIssueReport(user.id, resolvedContent, recentConversation) : null;

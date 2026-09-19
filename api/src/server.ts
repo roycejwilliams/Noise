@@ -21,6 +21,7 @@ import {
 import applicationsRouter from "./routes/applications.js";
 import { createAuthRouter } from "./routes/auth.js";
 import { createCoRouter } from "./routes/co.js";
+import { serveInvitePage } from "./routes/invitePage.js";
 import { createLumaRouter } from "./routes/luma.js";
 import { createNotificationsRouter } from "./routes/notifications.js";
 import { createReferralsRouter } from "./routes/referrals.js";
@@ -119,6 +120,10 @@ app.get("/co.vcf", (_req, res) => {
   res.setHeader("Cache-Control", "public, max-age=86400");
   return res.send(vcard);
 });
+
+// A member's invite link (routes/invitePage.ts): opens a text to Co with the
+// code and a greeting filled in. Public, like /co.vcf.
+app.get("/i/:code", serveInvitePage);
 
 // Serve ElevenLabs-generated voice note audio files for Sendblue media messages
 // Files are stored in memory with a 10-minute TTL — long enough for Sendblue to fetch
