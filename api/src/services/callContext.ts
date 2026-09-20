@@ -5,6 +5,7 @@ import { writeMemory } from "./memory.js";
 import { MODELS } from "../models.js";
 import { getEmotionalContext, renderEmotionalContext } from "../harness/emotion.js";
 import { getPersonSnapshot, renderSnapshot } from "../harness/personSnapshot.js";
+import { latestAskEntry } from "../harness/profileWrite.js";
 
 // A 1-2 sentence call summary: narrow work, Haiku.
 const SUMMARY_MODEL = MODELS.haiku;
@@ -86,6 +87,11 @@ export async function buildContextSummary(userId: string): Promise<string> {
     const emotionalLine = renderEmotionalContext(emotional);
 
     const profile = profileResult.rows[0] ?? null;
+    // The stated ask comes from the newest entry that actually has ask text;
+    // wants come from the newest entry of any kind, because a call that found
+    // no ask still writes wants (2026-09-20 — a text-less entry written last
+    // was hiding the real ask from the call prompt).
+    const latestAsk = latestAskEntry(profile?.intent);
     const latestIntent = Array.isArray(profile?.intent) && profile.intent.length
       ? profile.intent[profile.intent.length - 1]
       : null;
@@ -103,7 +109,7 @@ export async function buildContextSummary(userId: string): Promise<string> {
       emotionalLine ? `How they've been feeling:\n${emotionalLine}` : null,
       profile?.goals?.length ? `Goals: ${profile.goals.slice(0, 3).join("; ")}` : null,
       profile?.blockers?.length ? `Blockers: ${profile.blockers.slice(0, 2).join("; ")}` : null,
-      !openAsks.length && latestIntent?.text ? `Stated ask: ${latestIntent.text}` : null,
+      !openAsks.length && latestAsk?.text ? `Stated ask: ${latestAsk.text}` : null,
       latestIntent?.wants?.length ? `Wants: ${latestIntent.wants.slice(0, 2).join(", ")}` : null,
       recentRecommendationResult.rows[0]?.content ? `Most recent thing Co suggested: ${recentRecommendationResult.rows[0].content}` : null,
     ].filter(Boolean);

@@ -2,6 +2,7 @@ import { anthropic } from "@ai-sdk/anthropic";
 import { generateText } from "ai";
 import pool from "../db/db.js";
 import { MODELS } from "../models.js";
+import { isOpenAsk } from "../harness/profileWrite.js";
 import { parseModelJson } from "./modelJson.js";
 
 // Model policy (Royce, 2026-09-14): scoring decides who gets introduced to
@@ -30,9 +31,7 @@ export type StatedIntent = {
 // with, so those are left alone.
 function getActiveSeekingAsk(intent: unknown): StatedIntent | null {
   if (!Array.isArray(intent)) return null;
-  const seeking = (intent as StatedIntent[]).filter(
-    (i) => i?.status === "active" && i?.type === "seeking" && i?.text,
-  );
+  const seeking = (intent as StatedIntent[]).filter((i) => isOpenAsk(i) && i?.type === "seeking");
   return seeking.length ? seeking[seeking.length - 1] : null;
 }
 
@@ -43,7 +42,7 @@ function getActiveSeekingAsk(intent: unknown): StatedIntent | null {
 // getActiveSeekingAsk this deliberately doesn't filter type out.
 function getActiveAsk(intent: unknown): StatedIntent | null {
   if (!Array.isArray(intent)) return null;
-  const active = (intent as StatedIntent[]).filter((i) => i?.status === "active" && i?.text);
+  const active = (intent as StatedIntent[]).filter(isOpenAsk);
   return active.length ? active[active.length - 1] : null;
 }
 
@@ -55,9 +54,7 @@ function getActiveAsk(intent: unknown): StatedIntent | null {
 // might actually want it.
 function getActiveOfferingAsk(intent: unknown): StatedIntent | null {
   if (!Array.isArray(intent)) return null;
-  const offering = (intent as StatedIntent[]).filter(
-    (i) => i?.status === "active" && i?.type === "offering" && i?.text,
-  );
+  const offering = (intent as StatedIntent[]).filter((i) => isOpenAsk(i) && i?.type === "offering");
   return offering.length ? offering[offering.length - 1] : null;
 }
 
@@ -276,7 +273,7 @@ mutual: true only if the candidate's own stated ask (if listed) is a "seeking" a
 // gave in order to be matched; see harness/matchGate.ts and introConsent.ts).
 function getActiveAsks(intent: unknown): string[] {
   if (!Array.isArray(intent)) return [];
-  return (intent as StatedIntent[]).filter((i) => i?.status === "active" && i?.text).map((i) => String(i.text));
+  return (intent as StatedIntent[]).filter(isOpenAsk).map((i) => String(i.text));
 }
 
 export { getActiveAsk, getActiveAsks, getActiveSeekingAsk, getActiveOfferingAsk };

@@ -60,7 +60,13 @@ export async function serveInvitePage(req: Request, res: Response) {
           .catch(() => ({ rows: [] as any[] }))
       ).rows[0]
     : null;
-  if (!row || !coPhone) {
+  if (!coPhone) {
+    // Config, not the code: don't send them back for a replacement that would
+    // fail the same way (2026-09-20 code review).
+    console.error("invite page: SENDBLUE_PHONE_NUMBER is not set, so no invite link can work");
+    return res.status(500).send(page("Something's off on our end.", "Not your invite. Try again in a bit.", null));
+  }
+  if (!row) {
     return res.status(404).send(page("This invite isn't valid.", "Ask whoever sent it for a new one.", null));
   }
   if (row.used_by) {

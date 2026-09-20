@@ -95,7 +95,11 @@ export function pickLine(pool: readonly string[], vars: LineVars = {}, rand: () 
       return !(key === "left" && Number(v) <= 0);
     }),
   );
-  const from = usable.length ? usable : pool;
-  const line = from[Math.floor(rand() * from.length) % from.length];
+  // No usable line means every option needs a var that wasn't given. Falling
+  // back to the raw pool printed the gap to the member ("'s in. Good taste,
+  // Royce.") — 2026-09-20 code review. Say nothing instead, and let the caller
+  // decide what to do.
+  if (!usable.length) return "";
+  const line = usable[Math.floor(rand() * usable.length) % usable.length];
   return line.replace(/\{(\w+)\}/g, (_, key) => (key === "name" ? String(vars.name ?? "").trim() || "there" : String(vars[key] ?? "").trim()));
 }

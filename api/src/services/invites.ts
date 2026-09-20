@@ -15,16 +15,39 @@ import { generateInviteCode } from "./inviteCodes.js";
 
 export const INVITES_PER_MEMBER = 5;
 
-// Only a first-person ask about inviting someone to Co. Inviting a friend to
-// an event, or "I got an invite to a party", is a normal message and must
-// never land here (this takes over the whole turn).
-const INVITE_WORD = /\binvit(?:e|es|ation|ations)\b/i;
-const TO_CO = /\b(?:friends?|someone|somebody|people|person|buddy|homie|co-?workers?|colleagues?|partner|girlfriend|boyfriend|wife|husband|sister|brother|cousin|roommate|links?|codes?|left|bring|join)\b/i;
-const ABOUT_AN_EVENT = /\b(?:events?|dinner|party|mixer|brunch|tonight|tomorrow|rsvp|luma|tickets?|guest ?list)\b/i;
+// Only a first-person ask to Co FOR an invite. This takes over the whole
+// turn, so it has to be narrow: blacklisting occasions didn't work (2026-09-20
+// code review: "my friend sent me an invite to his wedding" was hijacked and
+// answered with an invite link). Anything this misses is still caught by the
+// router's wantsInvite, which reads the message properly.
+const ASK_FOR_INVITE =
+  /\b(?:can|could|may)\s+i\s+(?:get|have|grab)\b[^.?!]{0,24}\binvit(?:e|es|ation|ations)\b|\b(?:send|give|get|make)\s+me\b[^.?!]{0,24}\binvit(?:e|es|ation|ations)\b|\bi\s+(?:need|want|could use)\b[^.?!]{0,24}\binvit(?:e|es|ation|ations)\b|\b(?:invite|invites)\s+(?:link|code)s?\b|\bhow\s+(?:do|can|would)\s+i\s+invite\b|\bi\s+(?:want|need|would like)\s+to\s+invite\b|\binvite\s+(?:my|a|an|another|some|someone|somebody)\b/i;
+
+// They're telling Co about an invite someone else gave THEM. Never an ask.
+// Past tense only: "a friend SENT me an invite" is news, "SEND me an invite"
+// is an ask aimed at Co.
+const RECEIVED_AN_INVITE =
+  /\b(?:sent|gave|got|gotten|received|forwarded|scored|landed)\s+(?:me|us)\b[^.?!]{0,24}\binvit/i;
+const WAS_INVITED = /\b(?:invited|invite[ds]?)\s+(?:me|us)\b|\bi\s+(?:got|have|received)\s+(?:an?\s+)?invit/i;
+
+// An invite to an occasion ("the invite link for the dinner", "invite my
+// friend to the event on Sunday") is about that occasion, not about joining Co.
+const INVITE_TO_AN_OCCASION =
+  /\b(?:to|for)\s+(?:the|his|her|their|my|our|a|an)?\s*(?:dinner|party|mixer|brunch|wedding|conference|housewarming|gallery|opening|meetup|hackathon|demo|show|game|event|events|tonight|tomorrow)\b/i;
+
+// How many invites they have left — a question to answer, not a reason to
+// mint a code (2026-09-20 code review: this used to burn a slot).
+const INVITE_COUNT_QUESTION =
+  /\bhow\s+many\s+invit(?:e|es)\b|\binvites?\s+(?:do\s+i\s+have\s+)?(?:left|remaining)\b|\bhow\s+many\s+(?:do\s+i\s+have\s+)?left\b/i;
+
+export function isInviteCountQuestion(text: string): boolean {
+  return INVITE_COUNT_QUESTION.test(text) && !ASK_FOR_INVITE.test(text);
+}
 
 // Pure: whether the text asks Co for an invite (or how many are left).
 export function isInviteRequest(text: string): boolean {
-  return INVITE_WORD.test(text) && TO_CO.test(text) && !ABOUT_AN_EVENT.test(text);
+  if (RECEIVED_AN_INVITE.test(text) || WAS_INVITED.test(text) || INVITE_TO_AN_OCCASION.test(text)) return false;
+  return ASK_FOR_INVITE.test(text) || INVITE_COUNT_QUESTION.test(text);
 }
 
 export type InviteDecision = { action: "none_left" } | { action: "mint" } | { action: "reuse"; code: string };
@@ -115,6 +138,15 @@ export async function claimJoinNotice(newUserId: string): Promise<string | null>
     [newUserId],
   );
   return rows[0]?.created_by ?? null;
+}
+
+// Hands the join notice back when the note couldn't be sent, so it isn't
+// lost forever (2026-09-20 code review: the claim was stamped before the
+// send, and a refused send left no note and no retry).
+export async function releaseJoinNotice(newUserId: string): Promise<void> {
+  await pool
+    .query(`UPDATE invite_codes SET inviter_notified_at = NULL WHERE used_by = $1 AND created_by IS NOT NULL`, [newUserId])
+    .catch((err: any) => console.error("releaseJoinNotice failed (non-fatal):", err?.message ?? err));
 }
 
 // Who a redeemed code came from, for the friend's welcome.

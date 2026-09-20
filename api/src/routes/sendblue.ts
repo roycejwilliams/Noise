@@ -23,7 +23,8 @@ import { getEmotionalContext, readTextEmotion, recordEmotionSignals, renderEmoti
 import { buildContextSummary } from "../services/callContext.js";
 import { findOrCreateUserByPhone, hasPendingEmail, splitFullName } from "../services/identity.js";
 import { redeemInviteCodeIn } from "../services/inviteCodes.js";
-import { claimJoinNotice, getMemberInvite, inviteLink, invitesLeftFor, inviterFirstName, isInviteRequest } from "../services/invites.js";
+import { claimJoinNotice, getMemberInvite, inviteLink, invitesLeftFor, inviterFirstName, isInviteCountQuestion, isInviteRequest, releaseJoinNotice } from "../services/invites.js";
+import { decideInviteJoinedGate } from "../services/inviteJoinGate.js";
 import { handlePhoneChange } from "../services/phoneChange.js";
 import { CALL_OFFER, GATE_ASK, INVITE_JOINED, INVITE_READY, NO_INVITES_LEFT, WELCOME, WELCOME_INVITED, WRONG_CODE, pickLine } from "../services/onboardingLines.js";
 import { claimTextLogin } from "../services/textLogin.js";
@@ -343,15 +344,38 @@ async function replyOwed(userId: string): Promise<boolean> {
 }
 
 // "You're in" for a good code: names the member who invited them when the
-// code was a member's invite (services/invites.ts).
-async function welcomeLineFor(invitedBy: string | null | undefined): Promise<string> {
+// code was a member's invite (services/invites.ts). Sends it and records the
+// claim it makes (who it names, if anyone) so the morning review can check
+// it against the invite log, the same as the join-note below.
+async function welcomeLineFor(userId: string, phone: string, invitedBy: string | null | undefined): Promise<boolean> {
   const inviter = await inviterFirstName(invitedBy).catch(() => null);
-  return inviter ? pickLine(WELCOME_INVITED, { inviter }) : pickLine(WELCOME);
+  // pickLine returns "" when a line's variable is missing; the plain welcome
+  // needs no variables, so it's always a safe fallback.
+  const line = (inviter ? pickLine(WELCOME_INVITED, { inviter }) : "") || pickLine(WELCOME);
+  const sent = await sendAndLog(userId, phone, line);
+  await recordDecision({
+    layer: 3,
+    decision: "account.inviteWelcome",
+    userId,
+    outcome: sent ? "act" : "skip",
+    action: inviter ? "named_inviter" : "no_inviter",
+    proposal: inviter ? { inviter } : {},
+  }).catch(() => {});
+  return sent;
 }
 
 // A member asked for an invite: the line, then the link in its own text so
 // it shows as a tappable card. Returns the action for the webhook response.
-async function handleInviteRequest(user: { id: string }, phone: string): Promise<string> {
+async function handleInviteRequest(user: { id: string }, phone: string, countOnly = false): Promise<string> {
+  // "How many invites do I have left?" is a question, not a reason to mint a
+  // code (2026-09-20 code review: it used to burn a slot to answer).
+  if (countOnly) {
+    const left = await invitesLeftFor(user.id);
+    const line = left > 0 ? `You have ${left} invite${left === 1 ? "" : "s"} left. One only counts once someone joins.` : pickLine(NO_INVITES_LEFT);
+    const sent = await sendAndLog(user.id, phone, line);
+    await recordDecision({ layer: 3, decision: "account.invite", userId: user.id, outcome: sent ? "act" : "skip", action: "count_only", proposal: { left } }).catch(() => {});
+    return sent ? "invite_count" : "invite_failed";
+  }
   const invite = await getMemberInvite(user.id);
   const record = (action: string, extra: Record<string, unknown> = {}) =>
     recordDecision({ layer: 3, decision: "account.invite", userId: user.id, outcome: invite.ok ? "act" : "skip", action, proposal: extra }).catch(() => {});
@@ -362,34 +386,82 @@ async function handleInviteRequest(user: { id: string }, phone: string): Promise
   }
   const link = inviteLink(invite.code);
   const count = `You have ${invite.left} left. One only counts once someone joins.`;
+  // Sends can be refused (sendCoReply returns false rather than throwing), and
+  // a refused send used to still report "invite_sent" — so the reply agent was
+  // told a link went out when nothing did (2026-09-20 code review).
+  let sent: boolean;
   if (link) {
-    await sendAndLog(user.id, phone, `${pickLine(INVITE_READY)} ${count}`);
-    await sendAndLog(user.id, phone, link);
+    const intro = await sendAndLog(user.id, phone, `${pickLine(INVITE_READY)} ${count}`);
+    const linkSent = await sendAndLog(user.id, phone, link);
+    sent = intro && linkSent;
   } else {
     // No public URL configured: the bare code, texted to Co.
-    await sendAndLog(user.id, phone, `Here's an invite code: ${invite.code}. They text it to me at ${process.env.SENDBLUE_PHONE_NUMBER ?? "this number"} to get in. ${count}`);
+    sent = await sendAndLog(user.id, phone, `Here's an invite code: ${invite.code}. They text it to me at ${process.env.SENDBLUE_PHONE_NUMBER ?? "this number"} to get in. ${count}`);
   }
-  await record(invite.reused ? "resent_open_code" : "made_code", { left: invite.left, link: Boolean(link) });
-  return "invite_sent";
+  await record(sent ? (invite.reused ? "resent_open_code" : "made_code") : "send_failed", { left: invite.left, link: Boolean(link), sent });
+  return sent ? "invite_sent" : "invite_failed";
 }
 
 // Once someone who came in on a member's invite finishes onboarding, Co
-// tells that member, once (services/invites.ts claimJoinNotice).
+// tells that member, once (services/invites.ts claimJoinNotice). Records the
+// outcome either way — this is the note flagged 2026-09-20 as an unbacked
+// claim ("Jacqueline's in. Good taste, Royce.") with nothing in the decision
+// log behind it, even though it was true.
 async function tellInviterTheyJoined(newUser: { id: string; first_name?: string | null }): Promise<void> {
-  const inviterId = await claimJoinNotice(newUser.id);
-  if (!inviterId) return;
-  const { rows } = await pool.query(
-    `SELECT id, first_name, phone_number FROM users
-     WHERE id = $1 AND identity_captured = true AND NOT sms_opted_out`,
-    [inviterId],
-  );
-  // Archived test accounts (co-test) are opted out, so they drop out here too.
-  const inviter = rows[0];
-  if (!inviter?.phone_number) return;
-  const friend = newUser.first_name?.trim();
-  if (!friend) return;
-  const left = await invitesLeftFor(inviter.id);
-  await sendAndLog(inviter.id, inviter.phone_number, pickLine(INVITE_JOINED, { name: inviter.first_name, friend, left }));
+  const record = (action: string, outcome: "act" | "skip", userId: string | null, extra: Record<string, unknown> = {}) =>
+    recordDecision({ layer: 3, decision: "account.inviteJoined", userId, outcome, action, proposal: extra }).catch(() => {});
+
+  const claimedInviterId = await claimJoinNotice(newUser.id);
+
+  let priorInviterId: string | null = null;
+  let inviterReachable = false;
+  let inviterPhone: string | null = null;
+  let inviterName: string | null = null;
+
+  if (!claimedInviterId) {
+    // claimJoinNotice returns null for either "nobody invited them" or "the
+    // note already went out" — this extra read only tells the two apart for
+    // the decision log; it changes nothing about what happens next.
+    const prior = await pool.query(
+      `SELECT created_by FROM invite_codes WHERE used_by = $1 AND created_by IS NOT NULL AND inviter_notified_at IS NOT NULL LIMIT 1`,
+      [newUser.id],
+    );
+    priorInviterId = prior.rows[0]?.created_by ?? null;
+  } else {
+    const { rows } = await pool.query(
+      `SELECT first_name, phone_number FROM users
+       WHERE id = $1 AND identity_captured = true AND NOT sms_opted_out`,
+      [claimedInviterId],
+    );
+    // Archived test accounts (co-test) are opted out, so they drop out here too.
+    inviterReachable = Boolean(rows[0]?.phone_number);
+    inviterPhone = rows[0]?.phone_number ?? null;
+    inviterName = rows[0]?.first_name ?? null;
+  }
+
+  const gate = decideInviteJoinedGate({
+    newUserId: newUser.id,
+    claimedInviterId,
+    priorInviterId,
+    inviterReachable,
+    friend: newUser.first_name?.trim() || null,
+  });
+
+  if (!gate.attempt) {
+    await record(gate.action, "skip", gate.userId);
+    // Unreachable/no-name are temporary states (opted out today, back tomorrow;
+    // name captured a minute later), so don't burn the one-shot claim on them.
+    if (claimedInviterId && (gate.action === "inviter_unreachable" || gate.action === "no_friend_name")) await releaseJoinNotice(newUser.id);
+    return;
+  }
+
+  const left = await invitesLeftFor(gate.userId);
+  const line = pickLine(INVITE_JOINED, { name: inviterName, friend: gate.friend, left });
+  const sent = line ? await sendAndLog(gate.userId, inviterPhone!, line) : false;
+  await record(sent ? "sent" : "send_failed", sent ? "act" : "skip", gate.userId, { friend: gate.friend, left });
+  // The claim was already stamped, so an unsent note would be lost forever
+  // with no retry (2026-09-20 code review). Hand it back instead.
+  if (!sent) await releaseJoinNotice(newUser.id);
 }
 
 async function logTextExchange(userId: string, content: string): Promise<void> {
@@ -713,7 +785,7 @@ export function sendblueRouter(io: Server): Router {
               loggedInboundThisTurn = true;
               await pool.query(`UPDATE users SET invite_verified = true, invite_asked = true WHERE id = $1`, [user.id]);
               user = { ...user, invite_verified: true, invite_asked: true };
-              welcomedThisTurn = await sendAndLog(user.id, number, await welcomeLineFor(firstTryRedeemed.createdBy));
+              welcomedThisTurn = await welcomeLineFor(user.id, number, firstTryRedeemed.createdBy);
               // Falls through below into normal identity intake, same turn.
             }
           }
@@ -743,7 +815,7 @@ export function sendblueRouter(io: Server): Router {
             // Reflected locally so the SAME turn falls through into real
             // identity intake below instead of making them text again.
             user = { ...user, invite_verified: true };
-            welcomedThisTurn = await sendAndLog(user.id, number, await welcomeLineFor(redeemed.createdBy));
+            welcomedThisTurn = await welcomeLineFor(user.id, number, redeemed.createdBy);
           } else {
             await sendAndLog(user.id, number, pickLine(WRONG_CODE));
             return res.status(200).send({ received: true, action: "invite_code_rejected" });
@@ -771,7 +843,7 @@ export function sendblueRouter(io: Server): Router {
         // start to finish, like a phone change.
         if (hasText && user.identity_captured && isInviteRequest(content)) {
           await logTextExchange(user.id, `User said: ${content}`);
-          const action = await handleInviteRequest(user, number).catch((err: any) => {
+          const action = await handleInviteRequest(user, number, isInviteCountQuestion(content)).catch((err: any) => {
             console.error("sendblue: invite request failed:", err?.message ?? err);
             return null;
           });
@@ -1316,7 +1388,7 @@ export function sendblueRouter(io: Server): Router {
         // phrasings it had no way to invite anyone).
         let inviteNote: string | null = null;
         if (hasText && user.identity_captured && decision.wantsInvite) {
-          const inviteAction = await handleInviteRequest(user, number).catch((err: any) => {
+          const inviteAction = await handleInviteRequest(user, number, isInviteCountQuestion(resolvedContent)).catch((err: any) => {
             console.error("sendblue: invite request (router) failed:", err?.message ?? err);
             return null;
           });
@@ -1329,7 +1401,11 @@ export function sendblueRouter(io: Server): Router {
             inviteNote =
               inviteAction === "invite_sent"
                 ? "Co just texted them an invite link for a friend, in its own messages this turn. Don't send or describe another one."
-                : "Co just told them all 5 of their invites are used.";
+                : inviteAction === "invite_count"
+                  ? "Co just told them how many invites they have left. No invite link was sent."
+                  : inviteAction === "invite_none_left"
+                    ? "Co just told them all 5 of their invites are used."
+                    : "Co tried to send an invite and the message didn't go through.";
           }
         }
 

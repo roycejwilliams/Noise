@@ -69,7 +69,10 @@ export type ExtractedIntent = {
   // General availability pattern, in their own words — not parsed into a
   // schedule, just captured as stated ("weekday evenings", "flexible except Sundays").
   availability: string | null;
-  status: "active";
+  // "preferences_only" marks an entry that carried no ask at all, just
+  // preferences/wants/availability (2026-09-20: those used to be written as
+  // "active" with no text, and counted as open asks everywhere downstream).
+  status: "active" | "preferences_only";
   embedding: number[] | null;
   created_at: string;
 };
@@ -598,11 +601,49 @@ export function cityChangeAllowed(existingCity: string | null, newCity: string |
 // *this* call, so a call with no signal just clears it.
 // hume_chat_group_id is intentionally not handled here — it's a call-resume
 // concern specific to the Twilio/Hume webhook path, not part of extraction.
-const PROFILE_STOPWORDS = new Set(["the", "a", "an", "and", "or", "to", "of", "in", "for", "with", "on", "at", "their", "his", "her", "my", "more", "other"]);
-function listWords(s: string): Set<string> {
-  return new Set(s.toLowerCase().replace(/[^a-z0-9 ]/g, " ").split(/\s+/).filter((w) => w.length > 2 && !PROFILE_STOPWORDS.has(w)));
+const PROFILE_STOPWORDS = new Set([
+  "the", "a", "an", "and", "or", "to", "of", "in", "for", "with", "on", "at", "their", "his", "her", "my", "more", "other",
+  // Two-letter function words. They're only listed because listWords now
+  // keeps two-character tokens, so acronyms that really do pin a goal down
+  // ("VC", "SF", "UX") count as content — without these, "is"/"it"/"by"
+  // would read as shared meaning instead.
+  "is", "it", "be", "as", "by", "we", "us", "me", "he", "so", "do", "if", "up", "no", "im", "ve", "re", "ll", "id", "ok",
+]);
+
+// "planning" -> "plann" -> "plan", "running" -> "runn" -> "run".
+const dedouble = (s: string): string => (s.length > 3 && /([a-z])\1$/.test(s) ? s.slice(0, -1) : s);
+
+// Crude, deterministic stemmer. The only job is making rewordings of the
+// same item collide — "find"/"finding", "lock"/"locking", "venue"/"venues" —
+// so a real stemmer isn't worth the dependency. Trailing "e" goes too, so
+// the "ing"/"ed" stems line up with the base word ("time"/"timing" -> "tim").
+function stemWord(w: string): string {
+  let s = w;
+  if (s.length > 4 && s.endsWith("ing")) s = dedouble(s.slice(0, -3));
+  else if (s.length > 4 && s.endsWith("ed")) s = dedouble(s.slice(0, -2));
+  else if (s.length > 3 && s.endsWith("s") && !s.endsWith("ss")) s = s.slice(0, -1);
+  if (s.length > 3 && s.endsWith("e")) s = s.slice(0, -1);
+  return s;
 }
-function nearDuplicate(a: string, b: string): boolean {
+
+function listWords(s: string): Set<string> {
+  return new Set(
+    s
+      .toLowerCase()
+      .replace(/[^a-z0-9 ]/g, " ")
+      .split(/\s+/)
+      .filter((w) => w.length >= 2 && !PROFILE_STOPWORDS.has(w))
+      .map(stemWord),
+  );
+}
+
+// Two items say the same thing. Compared on stemmed content words, so
+// "find VC and founder connections" and "finding VC and founder connections"
+// now collapse — 2026-09-20: one real profile sat at the 12-goal cap holding
+// nine restatements of two goals, and the crowding pushed a specific goal
+// from a call ("find collaborators from Google, Stripe, or Meta") off the
+// end. Exported for evals.
+export function nearDuplicate(a: string, b: string): boolean {
   const wa = listWords(a);
   const wb = listWords(b);
   if (!wa.size || !wb.size) return a.trim().toLowerCase() === b.trim().toLowerCase();
@@ -610,15 +651,48 @@ function nearDuplicate(a: string, b: string): boolean {
   return shared / Math.min(wa.size, wb.size) >= 0.75;
 }
 
-// Newest items win, near-duplicates of an item already kept are dropped,
-// and the list is capped. Exported for evals.
+// How much a phrasing actually pins down. Used only to choose between two
+// items that already mean the same thing, and at the cap to stop a vague
+// item displacing a pointed one — never to reorder the list on its own.
+// Named things and numbers are what make a goal actionable ("collaborators
+// from Google, Stripe, or Meta" over "VC and founder connections"), so they
+// count double. The first word is skipped so a sentence-initial capital
+// isn't mistaken for a name. Exported for evals.
+export function specificity(s: string): number {
+  const rest = s.trim().replace(/^\S+\s*/, "");
+  const named = (rest.match(/\b[A-Z][a-zA-Z]+\b/g) ?? []).length;
+  const numbers = (s.match(/\d+/g) ?? []).length;
+  return listWords(s).size + 2 * named + 2 * numbers;
+}
+
+// Newest items win. A restatement of something already kept collapses into
+// it, keeping whichever wording is more specific, so saying a goal a second
+// time sharpens the entry instead of taking a second slot. At the cap an
+// item still gets in when it's strictly more specific than the vaguest thing
+// kept — a generic restatement can no longer evict a specific goal.
+// Exported for evals.
 export function mergeProfileList(existing: string[] | null | undefined, fresh: string[] | null | undefined, cap: number): string[] {
   const out: string[] = [];
   for (const item of [...(fresh ?? []), ...(existing ?? [])]) {
     const t = item?.trim();
-    if (!t || out.some((kept) => nearDuplicate(kept, t))) continue;
-    out.push(t);
-    if (out.length >= cap) break;
+    if (!t) continue;
+    const dupe = out.findIndex((kept) => nearDuplicate(kept, t));
+    if (dupe >= 0) {
+      if (specificity(t) > specificity(out[dupe])) out[dupe] = t;
+      continue;
+    }
+    if (out.length < cap) {
+      out.push(t);
+      continue;
+    }
+    let vaguest = 0;
+    for (let i = 1; i < out.length; i++) if (specificity(out[i]) < specificity(out[vaguest])) vaguest = i;
+    if (specificity(t) > specificity(out[vaguest])) {
+      // Everything still arriving is older than what's kept (fresh comes
+      // first), so the survivor goes on the end and newest-first holds.
+      out.splice(vaguest, 1);
+      out.push(t);
+    }
   }
   return out;
 }
@@ -841,15 +915,45 @@ export async function storeTranscriptMemory(
 }
 
 type CapturedIntentData = {
-  ask: { text: string; type: "seeking" | "offering" } | null;
+  // Many asks now (a whole call can legitimately state more than one).
+  asks?: { text?: string; type?: "seeking" | "offering" }[] | null;
+  // The pre-2026-09-20 single-ask shape, still read so a model reply that
+  // falls back to the old key isn't silently dropped.
+  ask?: { text?: string; type?: "seeking" | "offering" } | null;
   concrete_preferences: string[];
   wants: string[];
   availability: string | null;
 };
 
+export type CapturedAsk = { text: string; type: "seeking" | "offering" };
+
+// How much of the transcript handed to captureIntent is NEW. This is the
+// only knob between the two channels — same prompt, same parser, same write
+// path either way (Royce, 2026-09-19: "text and call should grab the same
+// things, there should be no difference in the mechanism of retrieving").
+// It describes the input, not the channel: a text turn arrives with its
+// history attached, a call arrives whole.
+//
+//   last_user_message  a text turn — everything before the member's newest
+//                      message is context they already said, so at most one
+//                      ask comes out of it. Unchanged behaviour.
+//   whole_transcript   a whole call (or a typed-intake dump) — all of it is
+//                      new, so every distinct ask stated anywhere counts.
+//
+// The 2026-09-19 call is why the second one exists: the member opened with
+// "looking for other people to build with... ex-Google, ex-Stripe, ex-Meta"
+// and closed on "I'm actually just going to text you the rest" (logistics).
+// Under the last-message rule the entire call captured nothing.
+export type IntentScope = "last_user_message" | "whole_transcript";
+
+// A whole call yielding more than a handful of distinct asks means the pass
+// went wrong (every answer read as a new request), not that the member made
+// six requests. Cap rather than write the mess.
+const MAX_ASKS_PER_CAPTURE = 5;
+
 // Ambient intent capture — one Haiku pass, extended (not duplicated) to
 // also pull named concrete preferences, things mentioned as missed/wanted,
-// and stated availability, alongside the original seeking/offering ask.
+// and stated availability, alongside the seeking/offering asks.
 // Recommendation and Event both depend on this data existing with real
 // specificity — a vague vibe isn't enough to act on. Returns the extracted
 // record (or null if literally nothing was found) so callers that want it
@@ -857,25 +961,53 @@ type CapturedIntentData = {
 // call sites (co.ts) still call this fire-and-forget and ignore the
 // resolved value, unchanged.
 // Exported so evals/capture can check what counts as an ask.
-export function captureIntentPrompt(transcript: string): string {
-  return `Read this transcript and extract four things. Only include what's actually stated by the user (the "user:" lines) — never guess or infer beyond what's said, and never treat something Co (the "assistant:" lines) said as if the user said it.
+export function captureIntentPrompt(transcript: string, scope: IntentScope = "last_user_message"): string {
+  const askScope =
+    scope === "whole_transcript"
+      ? `This is a whole conversation and all of it is new, so capture EVERY distinct ask the user stated anywhere in it — including one they said early and then moved on from. What they happened to say LAST never cancels an ask they stated earlier: a conversation that ends on logistics ("I'm just going to text you the rest", "let's pick this up later"), small talk or a goodbye still carries every ask from earlier in it. Two wordings of the same request are one ask; genuinely different requests are separate asks.`
+      : `Take it from the LAST user message, using the earlier conversation only to understand it — anything they asked for before that is context they already said, not a new ask. Return at most one ask, and none at all when that last message isn't asking for or offering something.`;
+  return `Read this transcript and extract four things. Only include what's actually stated by the user (the "user:" lines) — never guess or infer beyond what's said, and never treat something Co (the "assistant:" lines) said as if the user said it. A question Co asked that the user never answered is not an ask.
 
-1. ask — something specific they are actively seeking or could offer to others (a connection, an introduction, a resource, expertise, a kind of event or community). One clear sentence, classified as 'seeking' or 'offering'. Take it from the LAST user message, using the earlier conversation only to understand it. null when the last message isn't asking for or offering something: small talk, thanks, feedback about Co, questions about Co itself ("how can you improve?", "anything you need to ask me?"), logistics, or answers to Co's questions about them.
+1. asks — specific things they are actively seeking or could offer to others (a connection, an introduction, a resource, expertise, a kind of event or community). Each one is a single clear sentence, classified as 'seeking' or 'offering'. ${askScope} None of these is ever an ask: small talk, thanks, feedback about Co, questions about Co itself ("how can you improve?", "anything you need to ask me?"), logistics, or answers to Co's questions about them.
 2. concrete_preferences — named, specific things they mentioned liking or wanting, not vague vibes. A specific gym or workout style, a coffee/drink preference, a type of venue or neighborhood, a specific activity. "SoulCycle", "oat milk lattes", "speakeasy-style bars" — not "fitness" or "good coffee".
 3. wants — things they said they miss or want to find (a running group, a book club, a version of something from a previous city).
 4. availability — their stated GENERAL, RECURRING availability pattern, in their own words (e.g. "weekday evenings", "usually free on weekends"). A one-off request for a specific call or meeting at a specific time ("call me at 2pm today", "can we talk Thursday morning") is NOT a recurring availability pattern — leave this null for those, even if a specific time or day appears in the transcript. Only fill this in when they're describing when they're generally free, not when they want THIS ONE call to happen.
 
-Return ONLY valid JSON, no preamble:
-{"ask": {"text": "Looking for climate tech founders at $1M+ ARR", "type": "seeking"} or null, "concrete_preferences": ["..."], "wants": ["..."], "availability": "..." or null}
+Return ONLY valid JSON, no preamble. "asks" is a list — use [] when there is no ask at all:
+{"asks": [{"text": "Looking for climate tech founders at $1M+ ARR", "type": "seeking"}], "concrete_preferences": ["..."], "wants": ["..."], "availability": "..." or null}
 
 Transcript:
 "${transcript}"`;
 }
 
+// Pure: model JSON -> the asks that actually get written. Exported so
+// evals/capture/rules.ts can pin this without an API call.
+export function normalizeCapturedAsks(parsed: CapturedIntentData | null, scope: IntentScope = "last_user_message"): CapturedAsk[] {
+  const raw = Array.isArray(parsed?.asks) ? parsed!.asks! : parsed?.ask ? [parsed.ask] : [];
+  const out: CapturedAsk[] = [];
+  for (const a of raw) {
+    const text = typeof a?.text === "string" ? a.text.trim() : "";
+    const type = a?.type === "seeking" || a?.type === "offering" ? a.type : null;
+    if (!text || !type) continue;
+    // The same ask returned twice in one pass is one ask row, not two.
+    if (out.some((o) => o.text.toLowerCase() === text.toLowerCase())) continue;
+    out.push({ text, type });
+  }
+  // A text turn is one member message — it can only ever open one ask, no
+  // matter what the model hands back. This is what keeps the text path
+  // exactly the shape it was before asks became a list.
+  return scope === "last_user_message" ? out.slice(0, 1) : out.slice(0, MAX_ASKS_PER_CAPTURE);
+}
+
+type IntentExtras = { concrete_preferences: string[]; wants: string[]; availability: string | null };
+const NO_EXTRAS: IntentExtras = { concrete_preferences: [], wants: [], availability: null };
+
 export async function captureIntent(
   user_id: string,
   transcript: string,
+  opts: { scope?: IntentScope } = {},
 ): Promise<ExtractedIntent | null> {
+  const scope = opts.scope ?? "last_user_message";
   try {
     const { text: rawIntent } = await propagateAttributes(
       { userId: user_id, traceName: "profileExtraction.captureIntent" },
@@ -883,7 +1015,7 @@ export async function captureIntent(
         generateText({
           model: anthropic(NARROW_MODEL),
           experimental_telemetry: { isEnabled: true, functionId: "profileExtraction.captureIntent" },
-          prompt: captureIntentPrompt(transcript),
+          prompt: captureIntentPrompt(transcript, scope),
         }),
     );
 
@@ -897,150 +1029,30 @@ export async function captureIntent(
       return null;
     }
 
-    const ask = parsed?.ask?.text && parsed?.ask?.type ? parsed.ask : null;
+    const asks = normalizeCapturedAsks(parsed, scope);
     const concrete_preferences = Array.isArray(parsed?.concrete_preferences) ? parsed!.concrete_preferences : [];
     const wants = Array.isArray(parsed?.wants) ? parsed!.wants : [];
     const availability = typeof parsed?.availability === "string" ? parsed!.availability : null;
 
     // Nothing real came out of this pass at all — don't write an empty
     // record just to have one.
-    if (!ask && !concrete_preferences.length && !wants.length && !availability) return null;
+    if (!asks.length && !concrete_preferences.length && !wants.length && !availability) return null;
 
-    // Embedding covers the ask sentence when present (what goal-similarity
-    // matching would compare against); falls back to the richest available
-    // text so a record with no ask still gets a usable embedding.
-    const embeddingSource = ask?.text || [...concrete_preferences, ...wants].join("; ") || availability || "";
-    const embedding = embeddingSource ? await generateEmbedding(embeddingSource).catch(() => null) : null;
-
-    // Layer 4 gate (src/harness/profileWrite.ts): a restated ask updates the
-    // open ask it repeats instead of opening another one. Every capture used
-    // to mint a new intent id, so one tester ended up with 90 ask rows.
-    let intentId: string = crypto.randomUUID();
-    let deduped = false;
-    let existingIntent: any[] = [];
-    if (ask) {
-      const [{ rows: openRows }, { rows: profileRows }] = await Promise.all([
-        pool.query(`SELECT ask_id, ask_text FROM ask_checkins WHERE user_id = $1 AND resolved_at IS NULL`, [user_id]),
-        pool.query(`SELECT intent FROM co_profiles WHERE user_id = $1`, [user_id]),
-      ]);
-      existingIntent = Array.isArray(profileRows[0]?.intent) ? profileRows[0].intent : [];
-      const openAsks: OpenAsk[] = openRows.map((r: any) => ({
-        askId: r.ask_id,
-        text: r.ask_text,
-        embedding: existingIntent.find((i: any) => i?.id === r.ask_id)?.embedding ?? null,
-      }));
-      let decision = decideAskWrite({ text: ask.text, embedding }, openAsks);
-      let judged: boolean | null = null;
-      if (decision.action === "needs_judgment") {
-        const match = openAsks.find((a) => a.askId === (decision as { askId: string }).askId)!;
-        judged = await judgeSameAsk(user_id, ask.text, match.text);
-        decision = judged
-          ? { action: "update_existing", askId: match.askId, similarity: decision.similarity, checks: decision.checks, reason: `model: same ask as "${match.text}"` }
-          : { action: "open_new", checks: decision.checks, reason: `model: different from "${match.text}"` };
-      }
-      if (decision.action === "update_existing") {
-        intentId = decision.askId;
-        deduped = true;
-      }
-      await recordDecision({
-        layer: 4,
-        decision: "profile.write",
-        userId: user_id,
-        outcome: "act",
-        action: deduped ? "update_existing_ask" : "open_new_ask",
-        proposal: { ask, judged },
-        checks: decision.checks,
-        reason: decision.reason,
-      });
-    }
-
-    const newIntent: ExtractedIntent = {
-      id: intentId,
-      ...(ask ? { text: ask.text, type: ask.type } : {}),
-      concrete_preferences,
-      wants,
-      availability,
-      status: "active",
-      embedding,
-      created_at: new Date().toISOString(),
-    };
-
-    if (deduped) {
-      // Replace the restated entry in place (latest wording wins, preferences
-      // merged) and keep it last so getActiveSeekingAsk still picks it.
-      const prior = existingIntent.find((i: any) => i?.id === intentId) ?? {};
-      const merged: ExtractedIntent = {
-        ...newIntent,
-        created_at: prior.created_at ?? newIntent.created_at,
-        concrete_preferences: [...new Set([...(prior.concrete_preferences ?? []), ...concrete_preferences])],
-        wants: [...new Set([...(prior.wants ?? []), ...wants])],
-        availability: availability ?? prior.availability ?? null,
-      };
-      Object.assign(newIntent, merged);
-      const rest = existingIntent.filter((i: any) => i?.id !== intentId);
-      await pool.query(`UPDATE co_profiles SET intent = $2::jsonb, updated_at = NOW() WHERE user_id = $1`, [
-        user_id,
-        JSON.stringify([...rest, merged]),
-      ]);
-      // Restating an ask renews its time limit (services/askExpiry.ts).
-      const renewedUntil = await askExpiresAtForUser(user_id, ask!.text).catch(() => null);
-      await pool.query(
-        `UPDATE ask_checkins SET ask_text = $3, expires_at = COALESCE($4::timestamptz, expires_at) WHERE user_id = $1 AND ask_id = $2`,
-        [user_id, intentId, ask!.text, renewedUntil],
-      );
+    // One write path for both channels: a text turn is just the N<=1 case of
+    // the loop a call runs. Sequential on purpose — each ask dedupes against
+    // what's on file INCLUDING the one written an iteration ago, so a call
+    // that circles back to the same request twice still lands one ask row.
+    const extras: IntentExtras = { concrete_preferences, wants, availability };
+    const written: ExtractedIntent[] = [];
+    if (!asks.length) {
+      written.push(await persistCapturedIntent(user_id, null, extras));
     } else {
-      // Upsert, not a plain UPDATE — the call/typed-intake path is the only
-      // other place a co_profiles row gets created (storeProfile), so a
-      // text-only user who has never called would otherwise have no row for
-      // this to update against and the ask would silently vanish.
-      await pool.query(
-        `INSERT INTO co_profiles (user_id, intent, updated_at)
-         VALUES ($1, $2::jsonb, NOW())
-         ON CONFLICT (user_id) DO UPDATE SET
-           intent = COALESCE(co_profiles.intent, '[]'::jsonb) || EXCLUDED.intent,
-           updated_at = NOW()`,
-        [user_id, JSON.stringify([newIntent])],
-      );
-    }
-
-    const memParts = [
-      ask ? `${ask.type}: ${ask.text}` : null,
-      concrete_preferences.length ? `preferences: ${concrete_preferences.join(", ")}` : null,
-      wants.length ? `wants: ${wants.join(", ")}` : null,
-      availability ? `availability: ${availability}` : null,
-    ].filter(Boolean);
-    const memContent = `Co captured intent — ${memParts.join(" | ")}`;
-    const mem = await pool.query(
-      `INSERT INTO co_memories (user_id, memory_type, content) VALUES ($1, 'intent', $2) RETURNING id`,
-      [user_id, memContent],
-    );
-    generateEmbedding(memContent)
-      .then((emb) =>
-        pool.query(`UPDATE co_memories SET content_embedding = $1::vector WHERE id = $2`, [
-          `[${emb.join(",")}]`,
-          mem.rows[0].id,
-        ]),
-      )
-      .catch((err) => console.error("Intent memory embedding failed:", err));
-
-    // Co Loop Stage 5 — start the check-in cadence for a genuinely new ask
-    // (see ask_checkins in migrations.ts and the check-in cron in
-    // jobs/index.ts). The NOT EXISTS guard stays as a backstop for two
-    // captures of the same text racing each other.
-    if (ask && !deduped) {
-      const expiresAt = await askExpiresAtForUser(user_id, ask.text).catch(() => null);
-      await pool
-        .query(
-          `INSERT INTO ask_checkins (user_id, ask_id, ask_text, expires_at)
-           SELECT $1::uuid, $2::text, $3::text, $4::timestamptz
-           WHERE NOT EXISTS (
-             SELECT 1 FROM ask_checkins
-             WHERE user_id = $1 AND resolved_at IS NULL AND lower(trim(ask_text)) = lower(trim($3))
-           )
-           ON CONFLICT (user_id, ask_id) DO NOTHING`,
-          [user_id, intentId, ask.text, expiresAt],
-        )
-        .catch((err) => console.error("ask_checkins insert failed (non-fatal):", err));
+      for (const [i, ask] of asks.entries()) {
+        // Preferences/wants/availability describe the member, not one
+        // particular ask — hang them on the first record so they're stored
+        // once, exactly as they were when there was only ever one record.
+        written.push(await persistCapturedIntent(user_id, ask, i === 0 ? extras : NO_EXTRAS));
+      }
     }
 
     // Co Loop Stage 3 — a fresh "seeking" ask is exactly what filterByStatedAsk
@@ -1049,25 +1061,184 @@ export async function captureIntent(
     // waits for the daily sweep. A fresh "offering" gets the mirrored
     // reverse sweep — otherwise it would only ever surface as a side-effect
     // of someone else's seeking sweep.
-    if (ask?.type === "seeking" && !deduped) {
+    // Fired once per capture rather than once per ask: both sweeps look up
+    // the member's most recent active ask of that type themselves
+    // (matching.ts's getActiveSeekingAsk / getActiveOfferingAsk), so calling
+    // them per ask would just redo the same sweep N times.
+    const fresh = written.filter((r) => r.text && !lastCaptureDeduped.get(r.id));
+    if (fresh.some((r) => r.type === "seeking")) {
       sweepAskAgainstNetwork(user_id).catch((err) =>
         console.error("sweepAskAgainstNetwork failed (non-fatal):", err),
       );
       // Luma/X event surfacing moved off this instant-fire-on-every-ask path
       // (Royce, 2026-08-30 — "needs to surface periodically") onto
       // jobs/index.ts's cadence cron instead — see eventSurfacingSweep.ts.
-    } else if (ask?.type === "offering" && !deduped) {
+    }
+    if (fresh.some((r) => r.type === "offering")) {
       sweepOfferingAgainstNetwork(user_id).catch((err) =>
         console.error("sweepOfferingAgainstNetwork failed (non-fatal):", err),
       );
     }
 
-    lastCaptureDeduped.set(newIntent.id, deduped);
-    return newIntent;
+    // Callers that want this turn's ask synchronously (captureIntentForTurn)
+    // get the first record; on a text turn that's the only one there is.
+    return written[0] ?? null;
   } catch (err: any) {
     console.error("captureIntent failed (non-fatal):", err?.message ?? err);
     return null;
   }
+}
+
+// Writes one captured ask (or the ask-less preferences/wants/availability
+// record) to co_profiles.intent + co_memories + ask_checkins. Split out of
+// captureIntent so a call transcript's several asks and a text turn's single
+// ask go through exactly the same storage and dedupe code.
+async function persistCapturedIntent(
+  user_id: string,
+  ask: CapturedAsk | null,
+  extras: IntentExtras,
+): Promise<ExtractedIntent> {
+  const { concrete_preferences, wants, availability } = extras;
+
+  // Embedding covers the ask sentence when present (what goal-similarity
+  // matching would compare against); falls back to the richest available
+  // text so a record with no ask still gets a usable embedding.
+  const embeddingSource = ask?.text || [...concrete_preferences, ...wants].join("; ") || availability || "";
+  const embedding = embeddingSource ? await generateEmbedding(embeddingSource).catch(() => null) : null;
+
+  // Layer 4 gate (src/harness/profileWrite.ts): a restated ask updates the
+  // open ask it repeats instead of opening another one. Every capture used
+  // to mint a new intent id, so one tester ended up with 90 ask rows.
+  let intentId: string = crypto.randomUUID();
+  let deduped = false;
+  let existingIntent: any[] = [];
+  if (ask) {
+    const [{ rows: openRows }, { rows: profileRows }] = await Promise.all([
+      pool.query(`SELECT ask_id, ask_text FROM ask_checkins WHERE user_id = $1 AND resolved_at IS NULL`, [user_id]),
+      pool.query(`SELECT intent FROM co_profiles WHERE user_id = $1`, [user_id]),
+    ]);
+    existingIntent = Array.isArray(profileRows[0]?.intent) ? profileRows[0].intent : [];
+    const openAsks: OpenAsk[] = openRows.map((r: any) => ({
+      askId: r.ask_id,
+      text: r.ask_text,
+      embedding: existingIntent.find((i: any) => i?.id === r.ask_id)?.embedding ?? null,
+    }));
+    let decision = decideAskWrite({ text: ask.text, embedding }, openAsks);
+    let judged: boolean | null = null;
+    if (decision.action === "needs_judgment") {
+      const match = openAsks.find((a) => a.askId === (decision as { askId: string }).askId)!;
+      judged = await judgeSameAsk(user_id, ask.text, match.text);
+      decision = judged
+        ? { action: "update_existing", askId: match.askId, similarity: decision.similarity, checks: decision.checks, reason: `model: same ask as "${match.text}"` }
+        : { action: "open_new", checks: decision.checks, reason: `model: different from "${match.text}"` };
+    }
+    if (decision.action === "update_existing") {
+      intentId = decision.askId;
+      deduped = true;
+    }
+    await recordDecision({
+      layer: 4,
+      decision: "profile.write",
+      userId: user_id,
+      outcome: "act",
+      action: deduped ? "update_existing_ask" : "open_new_ask",
+      proposal: { ask, judged },
+      checks: decision.checks,
+      reason: decision.reason,
+    });
+  }
+
+  const newIntent: ExtractedIntent = {
+    id: intentId,
+    ...(ask ? { text: ask.text, type: ask.type } : {}),
+    concrete_preferences,
+    wants,
+    availability,
+    status: ask ? "active" : "preferences_only",
+    embedding,
+    created_at: new Date().toISOString(),
+  };
+
+  if (deduped) {
+    // Replace the restated entry in place (latest wording wins, preferences
+    // merged) and keep it last so getActiveSeekingAsk still picks it.
+    const prior = existingIntent.find((i: any) => i?.id === intentId) ?? {};
+    const merged: ExtractedIntent = {
+      ...newIntent,
+      created_at: prior.created_at ?? newIntent.created_at,
+      concrete_preferences: [...new Set([...(prior.concrete_preferences ?? []), ...concrete_preferences])],
+      wants: [...new Set([...(prior.wants ?? []), ...wants])],
+      availability: availability ?? prior.availability ?? null,
+    };
+    Object.assign(newIntent, merged);
+    const rest = existingIntent.filter((i: any) => i?.id !== intentId);
+    await pool.query(`UPDATE co_profiles SET intent = $2::jsonb, updated_at = NOW() WHERE user_id = $1`, [
+      user_id,
+      JSON.stringify([...rest, merged]),
+    ]);
+    // Restating an ask renews its time limit (services/askExpiry.ts).
+    const renewedUntil = await askExpiresAtForUser(user_id, ask!.text).catch(() => null);
+    await pool.query(
+      `UPDATE ask_checkins SET ask_text = $3, expires_at = COALESCE($4::timestamptz, expires_at) WHERE user_id = $1 AND ask_id = $2`,
+      [user_id, intentId, ask!.text, renewedUntil],
+    );
+  } else {
+    // Upsert, not a plain UPDATE — the call/typed-intake path is the only
+    // other place a co_profiles row gets created (storeProfile), so a
+    // text-only user who has never called would otherwise have no row for
+    // this to update against and the ask would silently vanish.
+    await pool.query(
+      `INSERT INTO co_profiles (user_id, intent, updated_at)
+       VALUES ($1, $2::jsonb, NOW())
+       ON CONFLICT (user_id) DO UPDATE SET
+         intent = COALESCE(co_profiles.intent, '[]'::jsonb) || EXCLUDED.intent,
+         updated_at = NOW()`,
+      [user_id, JSON.stringify([newIntent])],
+    );
+  }
+
+  const memParts = [
+    ask ? `${ask.type}: ${ask.text}` : null,
+    concrete_preferences.length ? `preferences: ${concrete_preferences.join(", ")}` : null,
+    wants.length ? `wants: ${wants.join(", ")}` : null,
+    availability ? `availability: ${availability}` : null,
+  ].filter(Boolean);
+  const memContent = `Co captured intent — ${memParts.join(" | ")}`;
+  const mem = await pool.query(
+    `INSERT INTO co_memories (user_id, memory_type, content) VALUES ($1, 'intent', $2) RETURNING id`,
+    [user_id, memContent],
+  );
+  generateEmbedding(memContent)
+    .then((emb) =>
+      pool.query(`UPDATE co_memories SET content_embedding = $1::vector WHERE id = $2`, [
+        `[${emb.join(",")}]`,
+        mem.rows[0].id,
+      ]),
+    )
+    .catch((err) => console.error("Intent memory embedding failed:", err));
+
+  // Co Loop Stage 5 — start the check-in cadence for a genuinely new ask
+  // (see ask_checkins in migrations.ts and the check-in cron in
+  // jobs/index.ts). The NOT EXISTS guard stays as a backstop for two
+  // captures of the same text racing each other.
+  if (ask && !deduped) {
+    const expiresAt = await askExpiresAtForUser(user_id, ask.text).catch(() => null);
+    await pool
+      .query(
+        `INSERT INTO ask_checkins (user_id, ask_id, ask_text, expires_at)
+         SELECT $1::uuid, $2::text, $3::text, $4::timestamptz
+         WHERE NOT EXISTS (
+           SELECT 1 FROM ask_checkins
+           WHERE user_id = $1 AND resolved_at IS NULL AND lower(trim(ask_text)) = lower(trim($3))
+         )
+         ON CONFLICT (user_id, ask_id) DO NOTHING`,
+        [user_id, intentId, ask.text, expiresAt],
+      )
+      .catch((err) => console.error("ask_checkins insert failed (non-fatal):", err));
+  }
+
+  lastCaptureDeduped.set(newIntent.id, deduped);
+  return newIntent;
 }
 
 const lastCaptureDeduped = new Map<string, boolean>();

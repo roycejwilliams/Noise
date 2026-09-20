@@ -23,6 +23,7 @@ import { anthropic } from "@ai-sdk/anthropic";
 import { generateText } from "ai";
 import { DateTime } from "luxon";
 import pool from "../db/db.js";
+import { isInviteRequest } from "../services/invites.js";
 import { cleanCoMessage } from "../services/sendblue.js";
 import { CO_TEXT_CHANNEL, CO_VOICE } from "../services/coVoice.js";
 import { recordDecision, type GateCheck } from "./core.js";
@@ -334,9 +335,14 @@ export function predictionMatch(text: string): RegExpMatchArray | null {
   );
 }
 
-// Co saying it's sending, adding, or getting someone an invite, now or soon.
-const INVITE_ACTION_CLAIM =
-  /\b(sending|sent|i'?ll (send|add|invite|get)|i can (add|invite|do that|get)|adding (her|him|them)|let'?s get|getting (her|him|them|you)|one sec|here'?s (an|your|the) (invite|code|link)|on (its|it'?s) way)\b/i;
+// Co saying it's sending, adding, or getting someone an INVITE, now or soon.
+// The verb alone isn't enough: "I'll send the details once I have them" about
+// a dress code was being stripped and answered with invite copy (2026-09-20
+// code review), so the sentence has to name the invite itself.
+const INVITE_NOUN = /\b(invite|invites|invitation|invite code|invite link)\b/i;
+const INVITE_ACTION_VERB =
+  /\b(sending|sent|i'?ll (send|add|invite|get)|i can (add|invite|do that|get)|adding (her|him|them)|let'?s get|getting (her|him|them|you)|here'?s (an|your|the)|on (its|it'?s) way)\b/i;
+
 
 export function codeChecks(draft: string, rf: ReplyFacts, src: GroundingSources): GateCheck[] {
   const emotionLabel = checkNoEmotionLabel(draft);
@@ -366,9 +372,18 @@ export function codeChecks(draft: string, rf: ReplyFacts, src: GroundingSources)
   // didn't send one (2026-09-19: "send my friend a code" drafted "Sending
   // that now, one sec."). Only the invite step (services/invites.ts) sends
   // invites, and it adds "texted them an invite link" to the facts when it does.
-  const inviteAsk = /\binvit|\bcodes?\b|\bjoin\b|\badd (her|him|them)\b|\bwants in\b|\bbring (someone|somebody|people)\b|\bget (my|her|him|them|\w+) (\w+ )?in\b/i.test(src.message);
-  const inviteSent = rf.facts.some((f) => /texted them an invite link/i.test(f.text));
-  if (inviteAsk && !inviteSent && INVITE_ACTION_CLAIM.test(draft)) {
+  // Only when the turn is really about a Co invite. "What's the dress code?"
+  // and "should I join that founders group?" are not (2026-09-20 code review:
+  // both were being rewritten into invite copy). A plain ask counts, and so
+  // does invite/code wording aimed at a specific person.
+  const aboutSomeoneElse = /\b(friend|sister|brother|coworker|co-worker|colleague|partner|wife|husband|someone|somebody|buddy|roommate|cousin)\b/i.test(src.message);
+  const inviteWording = /\binvit|\bcodes?\b|\bwants? in\b/i.test(src.message);
+  const inviteAsk = isInviteRequest(src.message) || (inviteWording && aboutSomeoneElse);
+  // Already handled this turn: a link went out, the count was given, or they
+  // were told there are none left. Any of those means no claim to police.
+  const inviteHandled = rf.facts.some((f) => /texted them an invite link|how many invites they have left|invites are used/i.test(f.text));
+  const namesAnInvite = INVITE_ACTION_VERB.test(draft) && INVITE_NOUN.test(draft);
+  if (!inviteHandled && (namesAnInvite || (inviteAsk && INVITE_ACTION_VERB.test(draft)))) {
     checks.push({
       name: "no_invite_sent_claim",
       pass: false,
@@ -528,7 +543,7 @@ export function stripUnsupported(draft: string, failed: GateCheck[]): string {
     if (failed.some((f) => f.name === "no_followup_promise") && followupPromiseMatch(s)) return false;
     if (failed.some((f) => f.name === "no_prediction") && predictionMatch(s)) return false;
     if (failed.some((f) => f.name === "no_capability_denial") && /\b(can(no|')?t|unable to|this is (just )?text)\b/i.test(s)) return false;
-    if (failed.some((f) => f.name === "no_invite_sent_claim") && INVITE_ACTION_CLAIM.test(s)) return false;
+    if (failed.some((f) => f.name === "no_invite_sent_claim") && INVITE_ACTION_VERB.test(s)) return false;
     if (failed.some((f) => f.name === "link_on_file") && /https?:\/\//i.test(s)) return false;
     if (failed.some((f) => f.name === "phone_on_file") && /\d{3}[\s.-]?\d{4}/.test(s)) return false;
     if (failed.some((f) => f.name === "time_on_file") && clockTimes(s).length) return false;
@@ -682,11 +697,18 @@ export async function groundReply(
       // draft had the reply agent's full context, so ties favor it.
       const stripped = redraftWords > originalWords ? strippedRedraft : strippedOriginal;
       result = {
-        final: effectiveFailed1.some((c) => c.name === "no_invite_sent_claim")
-          ? [stripped.split(/\s+/).filter(Boolean).length >= 3 && !/invite/i.test(stripped) ? stripped : "", INVITE_FALLBACK].filter(Boolean).join(" ")
-          : stripped.split(/\s+/).filter(Boolean).length >= 3
-            ? stripped
-            : MINIMAL_FALLBACK,
+        // The invite line only helps when the invite claim is what was cut
+        // from the text that actually survived — and never when they've just
+        // been told they have none left (2026-09-20 code review).
+        final: (() => {
+          const keptRedraft = redraftWords > originalWords;
+          const failedForKept = keptRedraft ? secondFailed ?? [] : effectiveFailed1;
+          const enough = stripped.split(/\s+/).filter(Boolean).length >= 3;
+          if (failedForKept.some((c) => c.name === "no_invite_sent_claim") && !rf.facts.some((f) => /invites are used/i.test(f.text))) {
+            return [enough && !/invite/i.test(stripped) ? stripped : "", INVITE_FALLBACK].filter(Boolean).join(" ");
+          }
+          return enough ? stripped : MINIMAL_FALLBACK;
+        })(),
         outcome: "stripped",
         checks: [...first.checks, ...(second?.checks ?? []).map((c) => ({ ...c, name: `redraft.${c.name}` }))],
         latencyMs: Date.now() - started,

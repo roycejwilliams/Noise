@@ -4,10 +4,11 @@
 //   npx tsx evals/invites/rules.ts
 import "dotenv/config";
 import { inviteCodeCandidates } from "../../src/services/inviteCodes.js";
-import { decideInvite, inviteGreeting, inviteLink, invitesLeft, isInviteRequest, smsInviteHref } from "../../src/services/invites.js";
+import { decideInvite, inviteGreeting, inviteLink, invitesLeft, isInviteCountQuestion, isInviteRequest, smsInviteHref } from "../../src/services/invites.js";
 import { INVITE_JOINED, INVITE_READY, NO_INVITES_LEFT, WELCOME_INVITED, pickLine } from "../../src/services/onboardingLines.js";
 import { addFact, baseReplyFacts, codeChecks } from "../../src/harness/replyGrounding.js";
 import { decideActions, NO_ROUTE } from "../../src/services/messageRouter.js";
+import { decideInviteJoinedGate } from "../../src/services/inviteJoinGate.js";
 
 let total = 0;
 let failed = 0;
@@ -110,6 +111,103 @@ check("router invite ask, medium confidence: runs", routed("medium", true));
 check("router invite ask, low confidence: doesn't", !routed("low", true));
 check("router says no invite: doesn't", !routed("high", false));
 check("router outage: never an invite", !decideActions(NO_ROUTE, [], turn("x")).wantsInvite);
+
+// Grounding: the "your friend joined" note always produces a decision
+// (2026-09-20: Co told Royce "Jacqueline's in" with nothing in the decision
+// log behind it, true or not). tellInviterTheyJoined (routes/sendblue.ts) is
+// a thin DB/send wrapper around this gate — pinning the gate's branches pins
+// that every real outcome (sent, or one of the deliberate skips) is one
+// recordDecision away from being logged, without touching a database.
+const gate = (over: Partial<Parameters<typeof decideInviteJoinedGate>[0]>) =>
+  decideInviteJoinedGate({
+    newUserId: "new-user",
+    claimedInviterId: "inviter-1",
+    priorInviterId: null,
+    inviterReachable: true,
+    friend: "Jacqueline",
+    ...over,
+  });
+check(
+  "join note: sends and attributes the claim to the inviter",
+  (() => {
+    const g = gate({});
+    return g.attempt && g.action === "sent" && g.userId === "inviter-1" && g.friend === "Jacqueline";
+  })(),
+);
+check(
+  "join note: nobody invited them — skip, attributed to the new member",
+  (() => {
+    const g = gate({ claimedInviterId: null, priorInviterId: null });
+    return !g.attempt && g.action === "no_inviter" && g.userId === "new-user";
+  })(),
+);
+check(
+  "join note: already sent earlier — skip, attributed to the actual inviter",
+  (() => {
+    const g = gate({ claimedInviterId: null, priorInviterId: "inviter-1" });
+    return !g.attempt && g.action === "already_sent" && g.userId === "inviter-1";
+  })(),
+);
+check(
+  "join note: inviter opted out/unreachable — skip, not sent",
+  (() => {
+    const g = gate({ inviterReachable: false });
+    return !g.attempt && g.action === "inviter_unreachable" && g.userId === "inviter-1";
+  })(),
+);
+check(
+  "join note: no friend name to say — skip, not sent",
+  (() => {
+    const g = gate({ friend: null });
+    return !g.attempt && g.action === "no_friend_name" && g.userId === "inviter-1";
+  })(),
+);
+check(
+  "join note: a fresh claim wins even if a stray prior-notified row exists",
+  (() => {
+    const g = gate({ priorInviterId: "someone-else" });
+    return g.attempt && g.action === "sent";
+  })(),
+);
+
+// 2026-09-20 code review: the turn-hijack cases. An invite someone else gave
+// them, or an invite to an occasion, is ordinary conversation.
+for (const t of [
+  "My friend sent me an invite to his wedding next month",
+  "Got an invite to a conference from a colleague, worth going?",
+  "My sister got me an invitation to her housewarming",
+  "A friend sent me an invite to join their Slack",
+  "my wife got an invite to a gallery opening",
+  "can you send me the invite link for the dinner",
+  "invite my friend to the event on Sunday",
+]) check(`someone else's invite isn't an ask: "${t}"`, !isInviteRequest(t));
+for (const t of ["Can I get an invite for a friend?", "send me an invite link", "I want to invite my friend Sam", "how do I invite people"]) {
+  check(`still an ask: "${t}"`, isInviteRequest(t));
+}
+
+// Counting is a question, not a reason to mint a code (it used to burn a slot).
+check("count question detected", isInviteCountQuestion("how many invites do I have left"));
+check("count question, other wording", isInviteCountQuestion("how many invites left?"));
+check("a real ask is not a count question", !isInviteCountQuestion("can I get an invite for a friend"));
+check("count questions still route to the invite step", isInviteRequest("how many invites do I have left"));
+
+// A line whose variable is missing is never sent half-built.
+check("missing inviter: no line at all", pickLine(WELCOME_INVITED, {}, () => 0) === "");
+check("missing friend: no line at all", pickLine(INVITE_JOINED, { name: "Royce", left: 3 }, () => 0) === "");
+check("filled line still works", pickLine(WELCOME_INVITED, { inviter: "Royce" }, () => 0).includes("Royce"));
+
+// Grounding: ordinary replies must not be rewritten into invite copy.
+const notFlagged = (draft: string, message: string) => !claimFails(draft, message);
+check("dress code question isn't invite copy", notFlagged("Smart casual. I'll send the details once I have them.", "what's the dress code for Sunday?"));
+check("joining a founders group isn't an invite claim", notFlagged("Depends what you want out of it. I can get a read on it.", "should I join that founders group?"));
+check("getting a kid into a school isn't an invite claim", notFlagged("That's a lot. I'll send over anything I find.", "trying to get my daughter in to that school"));
+check("getting into a dinner isn't an invite claim", notFlagged("I'll add you to the list.", "can you get me in to Sunday's dinner?"));
+check("a real invite claim is still caught", claimFails("Sending that invite now, one sec.", "can I get an invite for my friend?"));
+check("no fallback pile-on when they have none left", (() => {
+  const rf = baseReplyFacts();
+  addFact(rf, "known", "Co just told them all 5 of their invites are used.");
+  return !codeChecks("I'll send you another invite once someone joins.", rf, turn("can I get an invite for a friend?")).some((c) => c.name === "no_invite_sent_claim" && !c.pass);
+})());
 
 console.log(`invite rules: ${total - failed}/${total} passed`);
 if (failed) process.exitCode = 1;

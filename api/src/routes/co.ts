@@ -1057,7 +1057,11 @@ router.post(
         // Step 7 — Ambient intent capture (non-blocking — runs in background)
         // A real ask from the call is searched right away (paced by the
         // proactive harness), not left for the next sweep.
-        captureIntent(user_id, cleanTranscript)
+        // scope: the whole call is new, so every ask stated anywhere in it
+        // counts — a member who says what they're looking for in the first
+        // 30 seconds and signs off on logistics ("I'll just text you the
+        // rest") used to have the whole call captured as nothing at all.
+        captureIntent(user_id, cleanTranscript, { scope: "whole_transcript" })
           .then(() => surfaceNewAsksNow(user_id))
           .catch(() => {});
         extractPlannedEventMention(user_id, cleanTranscript).catch(() => {});
@@ -1252,7 +1256,9 @@ router.post(
       await storeProfile(user_id, extracted, transcript);
 
       // Ambient intent capture (non-blocking)
-      captureIntent(String(user_id), String(transcript)).catch(() => {});
+      // Whole-transcript scope for the same reason as the Hume webhook
+      // above — this is a finished conversation, not one text turn.
+      captureIntent(String(user_id), String(transcript), { scope: "whole_transcript" }).catch(() => {});
       extractPlannedEventMention(String(user_id), String(transcript)).catch(() => {});
       summarizeCallForTextContext(String(user_id), String(transcript)).catch(() => {});
 

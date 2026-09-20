@@ -14,6 +14,7 @@ import { generateEmbedding } from "./embeddings.js";
 import { MODELS } from "../models.js";
 import { parseModelJson } from "./modelJson.js";
 import { getEmotionalContext, renderEmotionalContext, roomPreferenceFromFeelings } from "../harness/emotion.js";
+import { latestAskEntry } from "../harness/profileWrite.js";
 
 // Model policy (Royce, 2026-09-14): Haiku for the narrow message-to-search
 // rewrite. (The Sonnet generic-suggestion fallback was removed 2026-09-16.)
@@ -150,6 +151,13 @@ export async function generateRecommendation(userId: string, currentMessage?: st
     const profile = rows[0];
     if (!profile) return NOT_ENOUGH_DATA;
 
+    // Two different reads of co_profiles.intent, deliberately. The ask has to
+    // come from the newest entry that actually carries ask text — a text-less
+    // preferences entry written after it used to shadow the real ask and this
+    // search ran on goals[0] instead (2026-09-20). Preferences and wants still
+    // come from the newest entry of any kind, since that's where a call with
+    // no ask puts them.
+    const latestAsk = latestAskEntry(profile.intent);
     const latestIntent = Array.isArray(profile.intent) && profile.intent.length
       ? profile.intent[profile.intent.length - 1]
       : null;
@@ -159,7 +167,7 @@ export async function generateRecommendation(userId: string, currentMessage?: st
       (profile.activity_preferences?.length ?? 0) > 0 ||
       (latestIntent?.concrete_preferences?.length ?? 0) > 0 ||
       (latestIntent?.wants?.length ?? 0) > 0 ||
-      Boolean(latestIntent?.text);
+      Boolean(latestAsk?.text);
     if (!hasSignal) return NOT_ENOUGH_DATA;
 
     // Tiered engine first (Tier 1 Co event → Tier 2 public event → Tier 3
@@ -168,10 +176,10 @@ export async function generateRecommendation(userId: string, currentMessage?: st
     // The raw text message is not a search request ("Any details?" and
     // "where's the link?" were being searched as-is). Turn it into one, or
     // stop if it isn't asking for something new.
-    let askText = latestIntent?.text || profile.goals?.[0];
+    let askText = latestAsk?.text || profile.goals?.[0];
     let rewrite: { original: string; rewritten: string; used: string; rejectedBecause: string | null } | null = null;
     if (currentMessage) {
-      const request = await toSearchRequest(userId, currentMessage, latestIntent?.text ?? null);
+      const request = await toSearchRequest(userId, currentMessage, latestAsk?.text ?? null);
       if (request === null) {
         // Every caller has already decided a search should run (the router's
         // wantsRecommendation, or Co's own search tool), so the rewrite can't
@@ -199,7 +207,7 @@ export async function generateRecommendation(userId: string, currentMessage?: st
       // was read from module state after another await, so two people
       // searching at once could get each other's record).
       const tiered = await getTieredRecommendation(
-        { text: askText, embedding: askText === latestIntent?.text ? latestIntent?.embedding : null },
+        { text: askText, embedding: askText === latestAsk?.text ? latestAsk?.embedding : null },
         profile.city ?? null,
         // Repeats are handled below so the reply can say it was already shared.
         {

@@ -175,8 +175,17 @@ export async function sweepOfferingAgainstNetwork(userId: string): Promise<void>
 // every open ask through an LLM call on every single profile update would
 // scale badly.
 export async function sweepAllOpenAsks(): Promise<void> {
+  // "Has a standing ask" means an intent entry that actually carries ask
+  // text and is still active — the same thing getActiveSeekingAsk means.
+  // jsonb_array_length alone also swept people whose only entries were the
+  // text-less preference records captureIntent writes when a conversation
+  // produced no ask (2026-09-20).
   const { rows } = await pool.query(
-    `SELECT DISTINCT user_id FROM co_profiles WHERE intent IS NOT NULL AND jsonb_array_length(intent) > 0`,
+    `SELECT DISTINCT user_id FROM co_profiles
+     WHERE EXISTS (
+       SELECT 1 FROM jsonb_array_elements(COALESCE(intent, '[]'::jsonb)) AS e
+       WHERE e->>'status' = 'active' AND COALESCE(btrim(e->>'text'), '') <> ''
+     )`,
   );
   for (const row of rows) {
     await sweepAskAgainstNetwork(row.user_id);

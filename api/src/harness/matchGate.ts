@@ -10,6 +10,7 @@ import pool from "../db/db.js";
 import { geocodeCity, haversineMiles, SAME_METRO_MAX_MILES } from "../services/geocoding.js";
 import type { TierMatch } from "../services/tieredRecommendation.js";
 import { gate, recordDecision, type GateCheck } from "./core.js";
+import { isOpenAsk } from "./profileWrite.js";
 import { localToday } from "../services/eventOrder.js";
 
 export const TIER_LOOKAHEAD_DAYS: Record<1 | 2, number> = { 1: 30, 2: 14 };
@@ -543,9 +544,7 @@ export async function gatherNetworkFacts(
     ),
   ]);
   const p = profile.rows[0] ?? {};
-  const stated = Array.isArray(p.intent)
-    ? (p.intent as any[]).filter((i) => i?.status === "active" && i?.text).map((i) => String(i.text))
-    : [];
+  const stated = Array.isArray(p.intent) ? (p.intent as any[]).filter(isOpenAsk).map((i) => String(i.text)) : [];
   const activeIds = new Set(active.rows.map((r: any) => r.id));
   return {
     shareReason,

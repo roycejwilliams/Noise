@@ -43,14 +43,23 @@ export async function generateInviteCode(createdBy: string | null, db: Db = pool
   // Collision odds at 8 chars over a 32-symbol alphabet are astronomically
   // low, but retry-on-conflict costs nothing and means never having to
   // think about it again.
+  // Inside a transaction (getMemberInvite holds one), a failed INSERT aborts
+  // the whole transaction, so a bare retry hits 25P02 instead of retrying
+  // (2026-09-20 code review). A savepoint per attempt keeps the retry real.
+  const inTransaction = db !== (pool as unknown as Db);
   for (let attempt = 0; attempt < 5; attempt++) {
     const bytes = randomBytes(CODE_LENGTH);
     const code = Array.from(bytes, (b) => CODE_ALPHABET[b % CODE_ALPHABET.length]).join("");
     try {
+      if (inTransaction) await db.query(`SAVEPOINT invite_code_attempt`);
       await db.query(`INSERT INTO invite_codes (code, created_by) VALUES ($1, $2)`, [code, createdBy]);
+      if (inTransaction) await db.query(`RELEASE SAVEPOINT invite_code_attempt`);
       return code;
     } catch (err: any) {
-      if (err?.code === "23505") continue; // code collision, retry
+      if (err?.code === "23505") {
+        if (inTransaction) await db.query(`ROLLBACK TO SAVEPOINT invite_code_attempt`);
+        continue; // code collision, retry
+      }
       throw err;
     }
   }

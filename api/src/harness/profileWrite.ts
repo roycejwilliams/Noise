@@ -50,6 +50,58 @@ export const SAME_ASK_LOW = 0.65;
 
 export type OpenAsk = { askId: string; text: string; embedding: number[] | null };
 
+// ---- intent entries ----------------------------------------------------------
+//
+// One entry in co_profiles.intent. captureIntent writes an entry whenever a
+// conversation produced anything at all, which includes the case where it
+// found preferences/wants/availability but NO ask — that entry has no text
+// and no type, only `status: "active"`. Those are legitimate preference
+// records, but they are not asks, and 2026-09-20 one real profile carried
+// three of them being counted as open asks downstream. Everything that reads
+// co_profiles.intent for asks goes through these predicates so "is this an
+// ask" means one thing everywhere.
+
+export type IntentEntry = {
+  id?: string;
+  text?: string | null;
+  type?: string | null;
+  status?: string | null;
+  wants?: string[] | null;
+  concrete_preferences?: string[] | null;
+  availability?: string | null;
+  embedding?: number[] | null;
+  created_at?: string | null;
+};
+
+// An entry is an ask only when it actually carries ask text. Whitespace is
+// not text.
+export function hasAskText(entry: unknown): boolean {
+  const text = (entry as IntentEntry | null)?.text;
+  return typeof text === "string" && text.trim().length > 0;
+}
+
+export function isOpenAsk(entry: unknown): boolean {
+  return hasAskText(entry) && (entry as IntentEntry).status === "active";
+}
+
+export function askEntries(intent: unknown): IntentEntry[] {
+  return Array.isArray(intent) ? (intent as IntentEntry[]).filter(isOpenAsk) : [];
+}
+
+// The operative ask, newest last — captureIntent appends, so the last open
+// ask entry wins. A text-less entry written after it no longer hides it.
+export function latestAskEntry(intent: unknown): IntentEntry | null {
+  const asks = askEntries(intent);
+  return asks.length ? asks[asks.length - 1] : null;
+}
+
+// What the cleanup script (src/scripts/stripTextlessIntent.ts) writes back,
+// and the guard any writer can run before storing an intent array. Idempotent:
+// running it on an already-clean array returns the same entries.
+export function stripTextlessIntent(intent: unknown): IntentEntry[] {
+  return Array.isArray(intent) ? (intent as IntentEntry[]).filter((e) => hasAskText(e)) : [];
+}
+
 export function normalizeAskText(text: string): string {
   return text
     .toLowerCase()
