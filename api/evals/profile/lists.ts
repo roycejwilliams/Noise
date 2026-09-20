@@ -6,7 +6,7 @@ import { cityChangeAllowed } from "../../src/services/profileExtraction.js";
 import "dotenv/config";
 import { isAboutCo, mergeProfileList, nearDuplicate, specificity } from "../../src/services/profileExtraction.js";
 import { renderEmotionalContext, summarizeSignals } from "../../src/harness/emotion.js";
-import { hasAskText, isOpenAsk, latestAskEntry, stripTextlessIntent } from "../../src/harness/profileWrite.js";
+import { hasAskText, hasIntentPayload, isOpenAsk, latestAskEntry, settleTextlessIntent } from "../../src/harness/profileWrite.js";
 import { getActiveSeekingAsk } from "../../src/services/matching.js";
 
 let total = 0;
@@ -119,11 +119,26 @@ check("a non-array reads as none", latestAskEntry(null) === null);
 check("scoring skips the text-less entries", getActiveSeekingAsk(POLLUTED)?.id === "a2");
 check("scoring finds nothing in text-less entries alone", getActiveSeekingAsk([TEXTLESS]) === null);
 
-const cleaned = stripTextlessIntent(POLLUTED);
-check("cleanup keeps every real ask", cleaned.length === 2 && cleaned.every((e) => hasAskText(e)), JSON.stringify(cleaned.map((e) => e.id)));
-check("cleanup keeps their order", cleaned[0]?.id === "a0" && cleaned[1]?.id === "a2");
-check("cleanup is idempotent", JSON.stringify(stripTextlessIntent(cleaned)) === JSON.stringify(cleaned));
-check("cleanup leaves a clean profile alone", JSON.stringify(stripTextlessIntent([REAL_ASK])) === JSON.stringify([REAL_ASK]));
+// The cleanup keeps what the member said (2026-09-20: the first version deleted
+// these entries' wants, availability and preferences, and the fixture above,
+// which carries all three, was pinned as "junk to remove").
+const EMPTY = { id: "e0", status: "active", embedding: null, created_at: "2026-09-19T02:00:00.000Z", wants: [], concrete_preferences: [], availability: null };
+const settled = settleTextlessIntent(POLLUTED);
+check("cleanup keeps every real ask untouched", settled.filter((e) => hasAskText(e)).length === 2 && JSON.stringify(settled.filter((e) => hasAskText(e))) === JSON.stringify([OLDER_ASK, REAL_ASK]));
+check("cleanup KEEPS an entry that carries preferences", settled.some((e) => e.id === "a1") && settled.some((e) => e.id === "a3"), JSON.stringify(settled.map((e) => e.id)));
+check("a kept entry keeps its wants, availability and preferences", (() => {
+  const k = settled.find((e) => e.id === "a1");
+  return !!k && k.wants?.[0] === "VC and founder connections" && k.availability === "Weekdays after 3pm, weekends free" && k.concrete_preferences?.length === 2;
+})());
+check("a kept entry is marked preferences_only, so it is never an open ask", settled.filter((e) => !hasAskText(e)).every((e) => e.status === "preferences_only" && !isOpenAsk(e)));
+check("cleanup keeps their order", settled.map((e) => e.id).join(",") === "a0,a1,a2,a3", settled.map((e) => e.id).join(","));
+check("an entry with no ask text and nothing else is removed", settleTextlessIntent([EMPTY, REAL_ASK]).length === 1);
+check("blank strings are not payload", !hasIntentPayload({ wants: ["  "], concrete_preferences: [""], availability: " " }));
+check("cleanup is idempotent", JSON.stringify(settleTextlessIntent(settled)) === JSON.stringify(settled));
+check("cleanup leaves a clean profile alone", JSON.stringify(settleTextlessIntent([REAL_ASK])) === JSON.stringify([REAL_ASK]));
+check("cleanup never removes an entry that has anything to keep", settleTextlessIntent(POLLUTED).length === POLLUTED.length);
+check("a non-array settles to nothing, without crashing", settleTextlessIntent(null).length === 0);
+check("scoring still ignores the kept preference entries", getActiveSeekingAsk(settled)?.id === "a2");
 
 const now = new Date("2026-09-15T20:00:00Z");
 const low = summarizeSignals([{ source: "text", emotion: "clarifying", intensity: "low", valence: "mixed", about: null, quote: null, at: new Date(now.getTime() - 3600_000) }], now);

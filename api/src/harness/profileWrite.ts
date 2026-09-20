@@ -95,11 +95,33 @@ export function latestAskEntry(intent: unknown): IntentEntry | null {
   return asks.length ? asks[asks.length - 1] : null;
 }
 
-// What the cleanup script (src/scripts/stripTextlessIntent.ts) writes back,
-// and the guard any writer can run before storing an intent array. Idempotent:
-// running it on an already-clean array returns the same entries.
-export function stripTextlessIntent(intent: unknown): IntentEntry[] {
-  return Array.isArray(intent) ? (intent as IntentEntry[]).filter((e) => hasAskText(e)) : [];
+// Whether an entry with no ask text still carries something the member said:
+// wants, concrete preferences, or availability.
+export function hasIntentPayload(entry: unknown): boolean {
+  const e = entry as IntentEntry | null;
+  if (!e || typeof e !== "object") return false;
+  const list = (v: unknown) => Array.isArray(v) && v.some((x) => typeof x === "string" && x.trim().length > 0);
+  return list(e.wants) || list(e.concrete_preferences) || (typeof e.availability === "string" && e.availability.trim().length > 0);
+}
+
+// What the cleanup script (src/scripts/settleTextlessIntent.ts) writes back,
+// and the guard any writer can run before storing an intent array.
+//   - an entry with ask text is left exactly as it is
+//   - an entry with no ask text but real preferences is KEPT, marked
+//     "preferences_only" so nothing reads it as an open ask
+//   - an entry with no ask text and nothing else is dropped
+// The first version of this deleted the second kind too (2026-09-20), which
+// removed wants, availability and preferences a member had given Co. It was
+// restored from a backup; keeping the payload is the whole point of the
+// "preferences_only" status. Idempotent: a settled array comes back the same.
+export function settleTextlessIntent(intent: unknown): IntentEntry[] {
+  if (!Array.isArray(intent)) return [];
+  const out: IntentEntry[] = [];
+  for (const e of intent as IntentEntry[]) {
+    if (hasAskText(e)) out.push(e);
+    else if (hasIntentPayload(e)) out.push(e.status === "preferences_only" ? e : { ...e, status: "preferences_only" });
+  }
+  return out;
 }
 
 export function normalizeAskText(text: string): string {
