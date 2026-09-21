@@ -138,10 +138,10 @@ export function registerJobs(io: Server) {
   // Every sweep/scheduler below only queues candidates; this picks at most
   // under the gates in src/harness/proactive.ts and sends it: local hours; per
   // lane (rooms and people vs. everything else) 1/day, and 4/week or 3/week;
-  // a 72h pause after an unanswered text (one-way: check-ins never pause
-  // events); no repeats.
+  // a pause after an unanswered text, 24h after one and 72h after two in a row
+  // (one-way: check-ins never pause events); no repeats.
   let dispatchRunning = false;
-  cron.schedule("*/15 * * * *", async () => {
+  const runDispatch = async () => {
     if (dispatchRunning) return;
     dispatchRunning = true;
     try {
@@ -151,7 +151,12 @@ export function registerJobs(io: Server) {
     } finally {
       dispatchRunning = false;
     }
-  });
+  };
+  // Not on the hour or half hour: the surfacing sweeps run then, and each one
+  // calls runDispatch itself when it finishes queueing. Dispatching at the same
+  // minute sent one tier's offer three seconds before the sweep had queued the
+  // others (2026-09-21), so the offers of every tier could not go out together.
+  cron.schedule("15,45 * * * *", runDispatch);
 
   // Every 10 min — queue the post-call text for recent calls (sent within
   // local hours by the harness, dropped if it would land >24h after the call).
@@ -435,6 +440,8 @@ export function registerJobs(io: Server) {
           }
         }
       });
+      // Queueing is done; send whatever tiers are waiting, together.
+      await runDispatch();
     } catch (error) {
       console.error("Event surfacing sweep cron error:", error);
     }
@@ -495,6 +502,7 @@ export function registerJobs(io: Server) {
           console.error(`Profile surfacing sweep failed for ${row.user_id}:`, err?.message ?? err);
         }
       });
+      await runDispatch();
     } catch (error) {
       console.error("Profile surfacing sweep cron error:", error);
     }

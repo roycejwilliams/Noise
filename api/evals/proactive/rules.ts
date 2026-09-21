@@ -6,6 +6,7 @@
 //
 //   npx tsx evals/proactive/rules.ts
 import "dotenv/config";
+import { readFileSync } from "fs";
 import { isReasonableLocalHour } from "../../src/services/localHours.js";
 import { userLevelChecks, mergeExpiry, localHourOk, candidateChecks, laneOf, unansweredPauseFor, pickSiblingOffers, RULES, type Candidate, type SendRecord } from "../../src/harness/proactive.js";
 import { OFFER_FOLLOWUP_MANY, OFFER_FOLLOWUP_ONE, offerFollowUp, stripClosingQuestion } from "../../src/services/offerFollowUp.js";
@@ -186,6 +187,14 @@ check("no follow-up line has an em dash or exclamation", [...OFFER_FOLLOWUP_MANY
   check("a reminder rides alone", ids(pickSiblingOffers(cand("r", 2, 60, { reminder: true }), [t1, t3])) === "");
   check("a reminder is never pulled into another offer", ids(pickSiblingOffers(t2, [t1, cand("r", 3, 60, { reminder: true })])) === "a");
   check("non-offer candidates never ride along", ids(pickSiblingOffers(t2, [{ ...t1, type: "ask_checkin" } as Candidate])) === "");
+}
+
+// Dispatch must follow the sweeps, not race them (2026-09-21: the :00 dispatch
+// sent one tier's offer three seconds before the sweep queued the others).
+{
+  const jobs = readFileSync(new URL("../../src/jobs/index.ts", import.meta.url), "utf8");
+  check("the dispatch cron is not on the sweep minutes", jobs.includes('cron.schedule("15,45 * * * *", runDispatch)') && !/cron\.schedule\("\*\/15 \* \* \* \*", async \(\) => \{\s*if \(dispatchRunning\)/.test(jobs));
+  check("each surfacing sweep dispatches when it finishes queueing", (jobs.match(/await runDispatch\(\);/g) ?? []).length === 2);
 }
 
 console.log(`proactive rules: ${total - failed}/${total} passed`);

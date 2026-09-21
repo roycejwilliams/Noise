@@ -988,7 +988,8 @@ async function recordSkipOnce(userId: string, reason: string, decision: Paramete
   if (rows[0]) await recordDecision(decision);
 }
 
-export async function dispatchForUser(registry: ProactiveRegistry, userId: string, opts: { ignorePacing?: boolean } = {}): Promise<void> {
+// dryRun drafts and composes what would go out, prints it, and stops before the ledger and the send.
+export async function dispatchForUser(registry: ProactiveRegistry, userId: string, opts: { ignorePacing?: boolean; dryRun?: boolean } = {}): Promise<void> {
   const person = await loadPerson(userId);
   if (!person) return;
 
@@ -1091,6 +1092,12 @@ export async function dispatchForUser(registry: ProactiveRegistry, userId: strin
       }
     }
     outgoing = [...draft.messages, ...extras.flatMap((e) => e.messages), offerFollowUp(1 + extras.length)];
+  }
+
+  if (opts.dryRun) {
+    console.log(`[dispatch dryRun] would send ${outgoing.length} text(s) for ${c.targetKey} plus ${extras.length} batched:`);
+    outgoing.forEach((m, i) => console.log(`  ${i + 1}. ${m.replace(/\n/g, " / ")}`));
+    return;
   }
 
   let result: Awaited<ReturnType<typeof sendWithLedger>>;
