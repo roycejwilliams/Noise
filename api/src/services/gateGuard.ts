@@ -24,13 +24,13 @@ const AUTOMATED: RegExp[] = [
   /\bwe\s+(?:don['’]t|do\s+not)\s+accept\s+(?:inbound|incoming|replies|messages)/i,
   /\bcommands\s+you\s+can\s+use\b/i,
   /\bto\s+stop\b.*\b(?:sms|texts?)\b|\b(?:sms|texts?)\b.*\bto\s+stop\b/i,
-  /\bopted[\s-]*(?:out|in)\b/i,
+  /\byou(?:['’]ve|['’]re|\s+have|\s+are)?\s+(?:been\s+)?(?:opted|unsubscribed)\b/i,
   /\bmsg\s*&\s*data\s*rates\b|\bmessage\s+and\s+data\s+rates\b/i,
   /\bthis\s+(?:number|line|inbox)\s+(?:is|isn['’]t|is\s+not)\s+(?:monitored|checked|able)/i,
   /\b(?:do\s+not|don['’]t)\s+reply\b|\bno[-\s]?reply\b/i,
   /\bauto[-\s]?(?:reply|response|responder|generated)\b|\bautomated\s+(?:message|reply|response|text)\b/i,
   /\bout\s+of\s+(?:the\s+)?office\b/i,
-  /\b(?:verification|security|login|one[-\s]?time|confirmation)\s+code\b/i,
+  /\b(?:verification|security|login|one[-\s]?time|confirmation)\s+code\s*(?:is|:)\s*\d{4,8}\b/i,
   /\b\d{4,8}\s+is\s+your\b/i,
 ];
 

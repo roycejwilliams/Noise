@@ -42,6 +42,9 @@ check("every option can be picked", seen.size === WELCOME.length);
 // Co replied "that code didn't take" 32 times in 3 minutes.
 for (const auto of [
   "Reply STOP to unsubscribe.",
+  "You have been opted out of these messages.",
+  "You are opted in to Hotplate texts.",
+  "Your one-time code: 482913",
   "You have been unsubscribed from Hotplate messages. Msg&data rates may apply.",
   "This number is not monitored. Do not reply.",
   "Auto-reply: I'm out of the office until Monday.",
@@ -61,6 +64,12 @@ for (const human of [
   "yes",
   "who is this?",
   "please stop by later, I'm trying to get an invite from a friend",
+  "I don't have a verification code",
+  "what's a verification code?",
+  "is the invite code the same as the confirmation code?",
+  "I opted in last week, can you check?",
+  "did I get opted out by mistake?",
+  "he opted in already",
   "",
 ]) check(`reads as a person: ${JSON.stringify(human)}`, !looksAutomated(human));
 check("an automated message is never answered, even with budget left", decideGateReply({ text: "Reply STOP to unsubscribe.", recentGateReplies: 0 }) === "silent_automated");
