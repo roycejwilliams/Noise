@@ -248,7 +248,7 @@ async function isGenuinelyRelevant(askText: string, candidateName: string, candi
       askedKind: parsed.askedKind ?? null,
       related: parsed.fit ? true : parsed.related === true,
     };
-    void shadow("relevance", null, { fit: verdict.fit }, () => jevRelevance(askText, candidateName, candidateCity, description), (j) => j.fit === verdict.fit, (j) => ({ fit: j.fit, p: j.p }));
+    void shadow("relevance", null, { fit: verdict.fit }, () => jevRelevance(askText, candidateName, candidateCity, description), (j) => j.fit === verdict.fit, (j) => ({ fit: j.fit, p: j.p }), { ask: askText.slice(0, 200), event: candidateName.slice(0, 100), snippet: description.slice(0, 240) });
     if (relevanceCache.size > 2000) relevanceCache.clear();
     relevanceCache.set(key, { at: Date.now(), verdict });
     return verdict;

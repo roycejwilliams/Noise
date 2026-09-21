@@ -135,7 +135,10 @@ export async function jevRelevance(
   eventName: string,
   city: string | null,
   description: string,
-  t: JevThresholds = DEFAULT_THRESHOLDS,
+  // 0.45, not 0.5 (2026-09-21): on 35 hand-labelled disagreements with Claude,
+  // real tech events scored 0.44 to 0.49 and clear misses 0.10 to 0.26, so the
+  // even split cut real fits. A 0.45 cutoff got 25 right against 17 for Claude.
+  t: JevThresholds = { ...DEFAULT_THRESHOLDS, yes: 0.45 },
 ): Promise<{ fit: boolean; p: number; ms: number } | null> {
   const r = await askJev(
     { asked_for: askText, event: { name: eventName, city, description: description.slice(0, 1500) } },
@@ -183,13 +186,15 @@ export async function shadow<T>(
   run: () => Promise<T | null>,
   same: (jev: T) => boolean,
   view: (jev: T) => unknown = (j) => j,
+  // What the decision was about, kept so disagreements can be judged later.
+  extra: Record<string, unknown> = {},
 ): Promise<void> {
   if (!jevShadowEnabled(process.env, classifier)) return;
   try {
     const started = Date.now();
     const jev = await run();
     if (!jev) return;
-    await recordShadow(classifier, userId, current, view(jev), same(jev), Date.now() - started);
+    await recordShadow(classifier, userId, current, view(jev), same(jev), Date.now() - started, extra);
   } catch (err: any) {
     console.error("jev: shadow failed (non-fatal):", err?.message ?? err);
   }

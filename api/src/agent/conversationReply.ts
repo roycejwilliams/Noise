@@ -98,7 +98,7 @@ Message: "${replyText}"
 Return ONLY "yes" or "no".`,
     });
     const offered = rawCheck.trim().toLowerCase().startsWith("yes");
-    void shadow("callOffer", input.userId, { offers: offered }, () => jevCallOffer(replyText), (j) => j.offers === offered, (j) => ({ offers: j.offers, p: j.p }));
+    void shadow("callOffer", input.userId, { offers: offered }, () => jevCallOffer(replyText), (j) => j.offers === offered, (j) => ({ offers: j.offers, p: j.p }), { reply: replyText.slice(0, 200) });
     if (!offered) return false;
   } catch (err: any) {
     console.error("conversationReply: call-offer verification failed (non-fatal, not recording a pending offer):", err?.message ?? err);

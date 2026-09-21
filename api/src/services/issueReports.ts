@@ -84,7 +84,7 @@ export async function captureIssueReport(userId: string, message: string, recent
   if (!captureEnabled() || !mayBeIssueReport(message)) return null;
   try {
     const report = await classifyIssue(message, recentConversation);
-    void shadow("issue", userId, report ? { isIssue: true, category: report.category, severity: report.severity } : { isIssue: false }, () => jevIssue(message, recentConversation, ISSUE_CATEGORIES), (j) => j.isIssue === !!report, (j) => ({ isIssue: j.isIssue, category: j.category, severity: j.severity, p: j.pIssue }));
+    void shadow("issue", userId, report ? { isIssue: true, category: report.category, severity: report.severity } : { isIssue: false }, () => jevIssue(message, recentConversation, ISSUE_CATEGORIES), (j) => j.isIssue === !!report, (j) => ({ isIssue: j.isIssue, category: j.category, severity: j.severity, p: j.pIssue }), { message: message.slice(0, 200) });
     await recordDecision({
       layer: 2,
       decision: "feedback.issueReport",

@@ -91,6 +91,11 @@ async function main() {
   setJevClientForTests(fake((qs) => Object.fromEntries(Object.keys(qs).map((k) => [k, noul(0.1)]))));
   check("call offer: no", (await jevCallOffer("here's the link"))?.offers === false);
   check("relevance: not fit", (await jevRelevance("chess", "Hackathon", "SF", "build all day"))?.fit === false);
+  setJevClientForTests(fake((qs) => Object.fromEntries(Object.keys(qs).map((k) => [k, noul(0.46)]))));
+  check("relevance: 0.46 is a fit (cutoff is 0.45)", (await jevRelevance("a", "b", "SF", "d"))?.fit === true);
+  setJevClientForTests(fake((qs) => Object.fromEntries(Object.keys(qs).map((k) => [k, noul(0.44)]))));
+  check("relevance: 0.44 is not a fit", (await jevRelevance("a", "b", "SF", "d"))?.fit === false);
+  setJevClientForTests(fake((qs) => Object.fromEntries(Object.keys(qs).map((k) => [k, noul(0.1)]))));
   await jevRelevance("chess", "e", "SF", "d".repeat(9000));
   check("relevance: description is trimmed", JSON.stringify(lastState).length < 3000);
 
