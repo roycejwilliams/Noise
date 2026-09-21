@@ -6,6 +6,7 @@ import "dotenv/config";
 import { askJev, jevDecideEnabled, jevKey, jevShadowEnabled, setJevClientForTests, type JevAnswer, type JevClientLike, type JevQuestion } from "../../src/services/jev.js";
 import { JEV_SURE, cascadeDecision, jevCallOffer, jevConsent, jevIssue, jevRelevance, jevSameAsk, shadow, stripDatesFromAsk } from "../../src/services/jevClassifiers.js";
 import { relevancePrompt } from "../../src/services/tieredRecommendation.js";
+import { keepAfterPrune } from "../../src/services/jevMatching.js";
 import { routeWithJev } from "../../src/services/jevRouter.js";
 
 let total = 0;
@@ -162,6 +163,14 @@ async function main() {
   check("decide: a shadow flag alone does not turn it on", !jevDecideEnabled({ ...dOn, JEV_DECIDE: undefined, JEV_SHADOW: "relevance" } as NodeJS.ProcessEnv, "relevance"));
   check("prompt: Jev's read is added only when given", relevancePrompt("a", "b", null, "d", 0.6).includes("about 60% likely") && !relevancePrompt("a", "b", null, "d").includes("fast classifier"));
   check("ask cleaning keeps the ask and drops the dates", stripDatesFromAsk("Looking for event recommendations during tech week (Oct 5-12)") === "Looking for event recommendations during tech week" && stripDatesFromAsk("meet VC and founder connections before October 10th event") === "meet VC and founder connections event");
+
+  // Matching pruner: drop only the clear no's; keep anything unsure or unreadable.
+  check("prune: a clear no is dropped", keepAfterPrune([0.05, 0.9]).join() === "1");
+  check("prune: an unsure candidate is kept", keepAfterPrune([0.3, 0.5, 0.74]).join() === "0,1,2");
+  check("prune: the edge (0.25) is dropped, just above is kept", keepAfterPrune([0.25, 0.26]).join() === "1");
+  check("prune: a candidate Jev could not read is kept", keepAfterPrune([null, 0.02, null]).join() === "0,2");
+  check("prune: everyone unreadable keeps everyone", keepAfterPrune([null, null, null]).length === 3);
+  check("matching decide is off unless named", !jevDecideEnabled({ RAILWAY_ENVIRONMENT_NAME: "dev", RAILWAY_SERVICE_NAME: "co-test", JEV_DECIDE: "relevance", jev_co: "k" } as NodeJS.ProcessEnv, "matching"));
 
   setJevClientForTests(null);
   if (savedKey) process.env.TYPESAFE_API_KEY = savedKey;
