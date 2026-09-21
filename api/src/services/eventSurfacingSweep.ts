@@ -265,7 +265,7 @@ const URGENT_WINDOW_DAYS = 3;
 // Tier 2 kept filling the slot. Order within a tier is unchanged. Starts with
 // the tier after the one Co offered last (in the order the tiers appeared,
 // which already carries the outcome bias), then takes one from each in turn.
-export function interleaveByTier<T extends { match: { tier: number } }>(items: T[], lastTier: number | null): T[] {
+export function interleaveByTier<T extends { match: { tier: number } }>(items: T[], lastTier: number | null, waitingTiers: number[] = []): T[] {
   const groups = new Map<number, T[]>();
   for (const it of items) {
     const g = groups.get(it.match.tier) ?? [];
@@ -275,6 +275,9 @@ export function interleaveByTier<T extends { match: { tier: number } }>(items: T
   let order = [...groups.keys()];
   const at = lastTier === null ? -1 : order.indexOf(lastTier);
   if (at >= 0) order = [...order.slice(at + 1), ...order.slice(0, at + 1)];
+  // A tier that already has an offer waiting for this person goes last: the
+  // dispatcher sends one per tier together, so the next slot is a new tier's.
+  order = [...order.filter((t) => !waitingTiers.includes(t)), ...order.filter((t) => waitingTiers.includes(t))];
   const out: T[] = [];
   while (out.length < items.length) {
     for (const tier of order) {
@@ -283,6 +286,14 @@ export function interleaveByTier<T extends { match: { tier: number } }>(items: T
     }
   }
   return out;
+}
+
+// Tiers that already have an offer waiting to go out to this person.
+async function waitingOfferTiers(userId: string): Promise<number[]> {
+  const { rows } = await pool
+    .query(`SELECT DISTINCT payload->'match'->>'tier' AS tier FROM proactive_candidates WHERE user_id = $1 AND type = 'event_offer' AND status = 'pending'`, [userId])
+    .catch(() => ({ rows: [] as any[] }));
+  return rows.map((r: any) => Number(r.tier)).filter((n: number) => Number.isFinite(n));
 }
 
 // The tier of the last event offer that actually went out to this person.
@@ -495,6 +506,7 @@ export async function attemptEventSurfacing(candidate: SurfacingCandidate): Prom
     ...interleaveByTier(
       merged.filter((i) => !(i.source === "urgent" || isShortNotice(i.match))),
       await lastOfferedTier(candidate.userId),
+      await waitingOfferTiers(candidate.userId),
     ),
   ]);
   await saveBacklog(candidate.userId, candidate.askId, pending);

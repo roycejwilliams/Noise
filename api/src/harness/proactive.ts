@@ -35,6 +35,7 @@ import { CO_VOICE, CO_TEXT_CHANNEL } from "../services/coVoice.js";
 import { describeFailed, gate, recordDecision, type GateCheck } from "./core.js";
 import { MODELS } from "../models.js";
 import { capitalizeSentences } from "../services/textStyle.js";
+import { offerFollowUp } from "../services/offerFollowUp.js";
 import { AsyncLocalStorage } from "node:async_hooks";
 import { getEmotionalContext, renderEmotionalContext } from "./emotion.js";
 
@@ -336,6 +337,27 @@ export function evaluateCandidates(state: PickState, opts: { ignorePacing?: bool
   });
   const eligible = userOk ? perCandidate.filter((p) => p.ok).map((p) => p.candidate) : [];
   return { userChecks, userOk, perCandidate, eligible };
+}
+
+// Every tier that has something goes out together (2026-09-21): the picked
+// offer plus the best other waiting offer from each tier not yet in the group.
+// Reminders (a deadline heads-up) ride alone.
+export function pickSiblingOffers(primary: Candidate, eligible: Candidate[]): Candidate[] {
+  const tierOf = (c: Candidate) => Number((c.payload as { match?: { tier?: number } })?.match?.tier ?? 0);
+  const isReminder = (c: Candidate) => Boolean((c.payload as { reminder?: boolean })?.reminder);
+  if (primary.type !== "event_offer" || isReminder(primary)) return [];
+  const seen = new Set([tierOf(primary)]);
+  const out: Candidate[] = [];
+  const ranked = [...eligible]
+    .filter((c) => c.type === "event_offer" && c.id !== primary.id && !isReminder(c))
+    .sort((a, b) => b.priority - a.priority || (a.expiresAt?.getTime() ?? Infinity) - (b.expiresAt?.getTime() ?? Infinity) || a.dueAt.getTime() - b.dueAt.getTime());
+  for (const c of ranked) {
+    const t = tierOf(c);
+    if (seen.has(t)) continue;
+    seen.add(t);
+    out.push(c);
+  }
+  return out;
 }
 
 // Deterministic pick: priority, then whichever expires soonest, then oldest.
@@ -695,6 +717,7 @@ async function sendWithLedger(
   person: Person,
   messages: string[],
   opts: { ignorePacing?: boolean } = {},
+  extras: { candidate: Candidate; messages: string[] }[] = [],
 ): Promise<{ sent: true; delivered: string[] } | { sent: false; failed: GateCheck[] }> {
   const client = await pool.connect();
   const delivered: string[] = [];
@@ -729,6 +752,16 @@ async function sendWithLedger(
     if (!ins.rows[0]) {
       await client.query("ROLLBACK");
       return { sent: false, failed: [{ name: "not_sent_before", pass: false, reason: "idempotency key taken" }] };
+    }
+    // Offers that ride along count as part of this one send: ledgered as
+    // exempt so the day's cap sees a single text, and marked sent together.
+    for (const e of extras) {
+      await client.query(
+        `INSERT INTO proactive_sends (user_id, type, target_key, topic_key, candidate_id, message, exempt)
+         VALUES ($1, $2, $3, $4, $5, $6, true) ON CONFLICT (user_id, target_key) DO NOTHING`,
+        [person.userId, e.candidate.type, e.candidate.targetKey, e.candidate.topicKey, e.candidate.id, e.messages.join("\n\n")],
+      );
+      await client.query(`UPDATE proactive_candidates SET status = 'sent', decided_at = NOW(), updated_at = NOW() WHERE id = $1`, [e.candidate.id]);
     }
     // First message inside the transaction: a failure here rolls the claim
     // back entirely, so nothing was delivered and a later tick can retry
@@ -1042,9 +1075,27 @@ export async function dispatchForUser(registry: ProactiveRegistry, userId: strin
     return;
   }
 
+  // Every tier with something goes out together, then one question after the last.
+  let outgoing = draft.messages;
+  const extras: { candidate: Candidate; messages: string[] }[] = [];
+  if (c.type === "event_offer" && !(c.payload as { reminder?: boolean }).reminder) {
+    for (const sib of pickSiblingOffers(c, ev.eligible)) {
+      try {
+        const d = await feelingForDraft.run(renderEmotionalContext(emotional), () => registry.event_offer.draft(sib, person));
+        if ("skip" in d) continue;
+        const msgs = d.messages.map(capitalizeSentences);
+        if (!gate(checkDraft(capitalizeSentences(d.text), d.rules)).ok) continue;
+        extras.push({ candidate: sib, messages: msgs });
+      } catch (err: any) {
+        console.error("proactive: sibling offer draft failed (non-fatal):", err?.message ?? err);
+      }
+    }
+    outgoing = [...draft.messages, ...extras.flatMap((e) => e.messages), offerFollowUp(1 + extras.length)];
+  }
+
   let result: Awaited<ReturnType<typeof sendWithLedger>>;
   try {
-    result = await sendWithLedger(c, person, draft.messages, opts);
+    result = await sendWithLedger(c, person, outgoing, opts, extras);
   } catch (err: any) {
     // Send failed and the ledger row rolled back. Retry on a later tick, up
     // to the attempt limit, instead of every 15 minutes until it expires.
@@ -1070,13 +1121,18 @@ export async function dispatchForUser(registry: ProactiveRegistry, userId: strin
   await registry[c.type].onSent?.(c, person, result.delivered).catch((err: any) =>
     console.error(`proactive: onSent(${c.type}) failed (non-fatal):`, err?.message ?? err),
   );
+  for (const e of extras) {
+    await registry[e.candidate.type].onSent?.(e.candidate, person, e.messages).catch((err: any) =>
+      console.error(`proactive: onSent(${e.candidate.type}) for a batched offer failed (non-fatal):`, err?.message ?? err),
+    );
+  }
   await recordDecision({
     layer: 7,
     decision: "proactive.dailyPick",
     userId,
     outcome: "act",
     action: `send:${c.type}`,
-    proposal: { ...proposal, picked: c.id, pickSource: picked.source, messages: draft.messages, delivered: result.delivered.length },
+    proposal: { ...proposal, picked: c.id, pickSource: picked.source, messages: outgoing, batched: extras.map((e) => e.candidate.targetKey), delivered: result.delivered.length },
     checks: [...ev.userChecks, ...pickChecks, ...draftChecks],
     reason: result.delivered.length < draft.messages.length ? `${picked.reason} (partial send: ${result.delivered.length}/${draft.messages.length} delivered)` : picked.reason,
   });

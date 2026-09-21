@@ -1,6 +1,7 @@
 import type { TierMatch } from "../services/tieredRecommendation.js";
 import { draftProactive, nameTokens, type Facts, type OutputRules } from "../harness/proactive.js";
 import { renderEventDetails } from "../services/eventDetails.js";
+import { stripClosingQuestion } from "../services/offerFollowUp.js";
 import { isShortNotice } from "../services/eventSurfacingSweep.js";
 
 export type EventDiscoverySurfacingPerson = {
@@ -98,17 +99,19 @@ export async function draftEventReveal(
     facts: revealFacts(askText, fromProfile, match),
     // Every event offer goes out with its details now (2026-09-18), so "short
     // notice" is only said when it's true.
-    task: opts.reminder
+    task: `Do not end with a question or an offer ("want me to grab you a spot?", "want this on your radar?"); a separate text after this one asks if it interests them. ` + (opts.reminder
       ? match.kind === "opportunity"
         ? `They were interested in this one when you mentioned it. This is a short heads-up that the deadline is coming up: name it and the deadline, in one or two sentences. Don't present it as new or re-explain it.${url ? " The link goes out as its own message right before yours; don't mention a link." : ""} If it doesn't fit anymore, return SKIP.`
         : `They already heard about this one from you. This is a short heads-up that it's coming up: name it and when it is, in one or two sentences. Don't present it as new or re-explain it.${url ? " The link goes out as its own message right before yours; don't mention a link." : ""} If it doesn't fit anymore, return SKIP.`
-      : `${opts.again ? "You mentioned this to them over a month ago and they never replied; it's still open and still fits, so bring it up once more, lightly and with no pressure, as something you're circling back on. " : ""}Name it and when it is, and say in plain words why it fits them.${isShortNotice(match) ? " It's short notice, so be upfront about that so there's no pressure." : ""}${url ? " The link goes out as its own message right before yours; don't mention a link." : ""} If it doesn't actually fit, return SKIP.`,
+      : `${opts.again ? "You mentioned this to them over a month ago and they never replied; it's still open and still fits, so bring it up once more, lightly and with no pressure, as something you're circling back on. " : ""}Name it and when it is, and say in plain words why it fits them.${isShortNotice(match) ? " It's short notice, so be upfront about that so there's no pressure." : ""}${url ? " The link goes out as its own message right before yours; don't mention a link." : ""} If it doesn't actually fit, return SKIP.`),
   });
   if (!text) return null;
+  // The follow-up question is its own text after the last offer (services/offerFollowUp.ts).
+  const body = stripClosingQuestion(text);
   const tokens = nameTokens(match.name);
   return {
-    messages: url ? [url, text] : [text],
-    text,
+    messages: url ? [url, body] : [body],
+    text: body,
     rules: { maxSentences: 2, maxChars: 300, mustIncludeAny: tokens.length ? tokens : [match.name] },
   };
 }

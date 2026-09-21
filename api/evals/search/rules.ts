@@ -252,6 +252,8 @@ for (const [ok, label] of cases) {
   c((() => { const o = interleaveByTier(items, null).filter((x) => x.match.tier === 2).map((x) => x.id); return o.join(",") === "t2-1,t2-2,t2-3"; })(), "order inside a tier is kept");
   c(interleaveByTier([], 2).length === 0, "an empty list stays empty");
   c(ids(interleaveByTier([it(2, 1), it(2, 2)], 2)) === "t2-1,t2-2", "one tier only keeps its order");
+  c(ids(interleaveByTier(items, null, [2])).startsWith("t3-1,t1-1,t2-1"), "a tier with an offer already waiting goes last");
+  c(ids(interleaveByTier(items, null, [1, 2, 3])) === ids(interleaveByTier(items, null)), "every tier waiting changes nothing");
 }
 
 console.log(`search rules: ${cases.length - failed}/${cases.length} passed`);

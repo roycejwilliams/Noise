@@ -7,7 +7,8 @@
 //   npx tsx evals/proactive/rules.ts
 import "dotenv/config";
 import { isReasonableLocalHour } from "../../src/services/localHours.js";
-import { userLevelChecks, mergeExpiry, localHourOk, candidateChecks, laneOf, unansweredPauseFor, RULES, type Candidate, type SendRecord } from "../../src/harness/proactive.js";
+import { userLevelChecks, mergeExpiry, localHourOk, candidateChecks, laneOf, unansweredPauseFor, pickSiblingOffers, RULES, type Candidate, type SendRecord } from "../../src/harness/proactive.js";
+import { OFFER_FOLLOWUP_MANY, OFFER_FOLLOWUP_ONE, offerFollowUp, stripClosingQuestion } from "../../src/services/offerFollowUp.js";
 import { pickCanonicalEventId, type CrossMatch } from "../../src/services/eventMatching.js";
 import { lumaTimestampInWindow } from "../../src/routes/luma.js";
 import { gate } from "../../src/harness/core.js";
@@ -161,6 +162,30 @@ check("two unanswered texts in a row pause for 72 hours", unansweredPauseFor(2) 
   check("two unanswered offers, the last 25h ago, still pause", paused(st([send(49), send(25)], hoursAgo(60))));
   check("two unanswered offers, the last 73h ago, no longer pause", !paused(st([send(100), send(73)], hoursAgo(120))));
   check("a reply after the offer lifts the pause", !paused(st([send(10)], hoursAgo(5))));
+}
+
+// Every tier that has something goes out together, then one question
+// (2026-09-21, Royce: "it should always surface the 3 tiers if they are available").
+check("a closing offer question is dropped", stripClosingQuestion("Demo Night at WorkOS is Oct 5, live demos only. Want me to grab you a spot?") === "Demo Night at WorkOS is Oct 5, live demos only.");
+check("a closing 'on your radar' question is dropped", stripClosingQuestion("The SOLO Founder Club is Oct 6 in SF. It fits what you're building. Want this on your radar?") === "The SOLO Founder Club is Oct 6 in SF. It fits what you're building.");
+check("a description with no question is untouched", stripClosingQuestion("Tech Week runs Oct 5 to 11 and fits your window.") === "Tech Week runs Oct 5 to 11 and fits your window.");
+check("a question in the middle is kept", stripClosingQuestion("Ever been to Demo Night? It is Oct 5 and fits you.") === "Ever been to Demo Night? It is Oct 5 and fits you.");
+check("a lone question is kept rather than emptied", stripClosingQuestion("Want to hear about Demo Night?") === "Want to hear about Demo Night?");
+check("follow-up for several offers asks about 'any of these'", OFFER_FOLLOWUP_MANY.includes(offerFollowUp(3, () => 0)) && OFFER_FOLLOWUP_MANY.includes(offerFollowUp(2, () => 0.99)));
+check("follow-up for one offer asks about that one", OFFER_FOLLOWUP_ONE.includes(offerFollowUp(1, () => 0)));
+check("no follow-up line has an em dash or exclamation", [...OFFER_FOLLOWUP_MANY, ...OFFER_FOLLOWUP_ONE].every((l) => !/[—–!]/.test(l) && l.endsWith("?")));
+{
+  const cand = (id: string, tier: number, priority = 60, extra: Record<string, unknown> = {}): Candidate =>
+    ({ id, userId: "u", type: "event_offer", targetKey: `event_offer:${id}`, topicKey: `t:${id}`, summary: "", priority, dueAt: new Date("2026-09-21T16:00:00Z"), expiresAt: new Date("2026-10-06T00:00:00Z"), status: "pending", attempts: 0, payload: { match: { tier }, ...extra } } as unknown as Candidate);
+  const t1 = cand("a", 1), t2 = cand("b", 2), t3 = cand("c", 3), t3b = cand("d", 3, 55);
+  const ids = (xs: Candidate[]) => xs.map((x) => x.id).join(",");
+  check("the other tiers ride along with the picked offer", ids(pickSiblingOffers(t2, [t1, t2, t3])) === "a,c");
+  check("only one offer per tier goes out", ids(pickSiblingOffers(t2, [t2, t3, t3b])) === "c");
+  check("a second offer from the picked tier waits", ids(pickSiblingOffers(t3, [t3, t3b])) === "");
+  check("the best offer in a tier is the one that rides along", ids(pickSiblingOffers(t2, [t2, t3b, t3])) === "c");
+  check("a reminder rides alone", ids(pickSiblingOffers(cand("r", 2, 60, { reminder: true }), [t1, t3])) === "");
+  check("a reminder is never pulled into another offer", ids(pickSiblingOffers(t2, [t1, cand("r", 3, 60, { reminder: true })])) === "a");
+  check("non-offer candidates never ride along", ids(pickSiblingOffers(t2, [{ ...t1, type: "ask_checkin" } as Candidate])) === "");
 }
 
 console.log(`proactive rules: ${total - failed}/${total} passed`);
