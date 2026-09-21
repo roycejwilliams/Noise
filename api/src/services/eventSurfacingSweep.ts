@@ -260,6 +260,45 @@ function isShortNotice(match: TierMatch): boolean {
 // may go out before the 3-day cadence clears; everything else waits for it.
 const URGENT_WINDOW_DAYS = 3;
 
+// Rotates which tier goes next so every tier gets its turn (2026-09-21): the
+// search returns Tier 1, then 2, then 3, and with one queued offer per run
+// Tier 2 kept filling the slot. Order within a tier is unchanged. Starts with
+// the tier after the one Co offered last (in the order the tiers appeared,
+// which already carries the outcome bias), then takes one from each in turn.
+export function interleaveByTier<T extends { match: { tier: number } }>(items: T[], lastTier: number | null): T[] {
+  const groups = new Map<number, T[]>();
+  for (const it of items) {
+    const g = groups.get(it.match.tier) ?? [];
+    g.push(it);
+    groups.set(it.match.tier, g);
+  }
+  let order = [...groups.keys()];
+  const at = lastTier === null ? -1 : order.indexOf(lastTier);
+  if (at >= 0) order = [...order.slice(at + 1), ...order.slice(0, at + 1)];
+  const out: T[] = [];
+  while (out.length < items.length) {
+    for (const tier of order) {
+      const next = groups.get(tier)!.shift();
+      if (next) out.push(next);
+    }
+  }
+  return out;
+}
+
+// The tier of the last event offer that actually went out to this person.
+async function lastOfferedTier(userId: string): Promise<number | null> {
+  const { rows } = await pool
+    .query(
+      `SELECT payload->'match'->>'tier' AS tier FROM proactive_candidates
+       WHERE user_id = $1 AND type = 'event_offer' AND status = 'sent' AND payload->'match'->>'tier' IS NOT NULL
+       ORDER BY COALESCE(decided_at, updated_at) DESC LIMIT 1`,
+      [userId],
+    )
+    .catch(() => ({ rows: [] as any[] }));
+  const t = Number(rows[0]?.tier);
+  return Number.isFinite(t) ? t : null;
+}
+
 type SweepSearchTrace = {
   searchText: string;
   // Frustrated with what Co has found: searched wider and sends sooner.
@@ -453,7 +492,10 @@ export async function attemptEventSurfacing(candidate: SurfacingCandidate): Prom
   ];
   const pending = await dropStaleFront(candidate.userId, [
     ...merged.filter((i) => i.source === "urgent" || isShortNotice(i.match)),
-    ...merged.filter((i) => !(i.source === "urgent" || isShortNotice(i.match))),
+    ...interleaveByTier(
+      merged.filter((i) => !(i.source === "urgent" || isShortNotice(i.match))),
+      await lastOfferedTier(candidate.userId),
+    ),
   ]);
   await saveBacklog(candidate.userId, candidate.askId, pending);
 
@@ -499,12 +541,10 @@ export async function attemptEventSurfacing(candidate: SurfacingCandidate): Prom
       skipped.push({ name: item.match.name, why: "already queued" });
       continue;
     }
-    // Cadence gate (Royce, 2026-08-30): a "full" item waits for the 3-day
-    // cadence; urgent and short-notice items don't.
-    if (item.source === "full" && !candidate.cooldownCleared && !trace.widened && !isShortNotice(item.match)) {
-      skipped.push({ name: item.match.name, why: "waiting for the 3-day cadence" });
-      continue;
-    }
+    // No per-ask send hold here (2026-09-21, Royce: "the sweep should allow all
+    // the tiers to be surfaced"). The old 3-day cadence parked Tier 3 finds for
+    // days behind a Tier 2 send; pacing is the Layer 7 caps' job now (one room
+    // text a day, four a week, the unanswered pause). Queueing is not sending.
     // Each try costs a fit read; three is plenty for one ask in one run.
     if (tried >= 3) break;
     tried++;

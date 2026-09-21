@@ -14,6 +14,7 @@ import { searchCacheKey, triesInOrder, xSearchBudget } from "../../src/services/
 import { profileForSearch } from "../../src/harness/personSnapshot.js";
 import { resolveCoEventPlace } from "../../src/services/luma.js";
 import { localToday, searchZone } from "../../src/services/eventOrder.js";
+import { interleaveByTier } from "../../src/services/eventSurfacingSweep.js";
 import { spelledNumbers } from "../../src/harness/matchGate.js";
 import { htmlToText, looksOfficial, pageExcerpt } from "../../src/services/webOpportunitySearch.js";
 
@@ -237,5 +238,21 @@ for (const [ok, label] of cases) {
     console.log(`FAIL: ${label}`);
   }
 }
+// Every tier gets its turn (2026-09-21): the sweep queues one offer per run and
+// the search lists Tier 1, then 2, then 3, so Tier 2 kept taking the slot.
+{
+  const it = (tier: number, n: number) => ({ match: { tier }, id: `t${tier}-${n}` });
+  const ids = (xs: { id: string }[]) => xs.map((x) => x.id).join(",");
+  const items = [it(2, 1), it(2, 2), it(2, 3), it(3, 1), it(3, 2), it(1, 1)];
+  c(ids(interleaveByTier(items, null)) === "t2-1,t3-1,t1-1,t2-2,t3-2,t2-3", "with no history, tiers alternate starting from the first one listed");
+  c(ids(interleaveByTier(items, 2)).startsWith("t3-1,t1-1,t2-1"), "after a Tier 2 offer, Tier 3 goes next");
+  c(ids(interleaveByTier(items, 3)).startsWith("t1-1,t2-1,t3-1"), "after a Tier 3 offer, the next tier in the rotation goes");
+  c(ids(interleaveByTier(items, 9)) === ids(interleaveByTier(items, null)), "a last tier with nothing waiting changes nothing");
+  c(interleaveByTier(items, 2).length === items.length && new Set(interleaveByTier(items, 2).map((x) => x.id)).size === items.length, "nothing is dropped or duplicated");
+  c((() => { const o = interleaveByTier(items, null).filter((x) => x.match.tier === 2).map((x) => x.id); return o.join(",") === "t2-1,t2-2,t2-3"; })(), "order inside a tier is kept");
+  c(interleaveByTier([], 2).length === 0, "an empty list stays empty");
+  c(ids(interleaveByTier([it(2, 1), it(2, 2)], 2)) === "t2-1,t2-2", "one tier only keeps its order");
+}
+
 console.log(`search rules: ${cases.length - failed}/${cases.length} passed`);
 if (failed) process.exitCode = 1;
