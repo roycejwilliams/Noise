@@ -75,9 +75,12 @@ export function setJevClientForTests(client: JevClientLike | null): void {
 }
 
 let cached: JevClientLike | null = null;
+// Set when the SDK can't be loaded, so a missing package logs once, not on every call.
+let loadFailed = false;
 async function getClient(): Promise<JevClientLike | null> {
   if (injected) return injected;
   if (cached) return cached;
+  if (loadFailed) return null;
   const apiKey = jevKey();
   if (!apiKey) return null;
   try {
@@ -88,7 +91,8 @@ async function getClient(): Promise<JevClientLike | null> {
     cached = new mod.TypeSafeClient({ apiKey, timeout: 4000, retry: { maxRetries: 0 }, logLevel: "error" }) as JevClientLike;
     return cached;
   } catch (err: any) {
-    console.error("jev: client unavailable (non-fatal):", err?.message ?? err);
+    loadFailed = true;
+    console.error("jev: client unavailable, shadow is off until it is installed (non-fatal):", err?.message ?? err);
     return null;
   }
 }
