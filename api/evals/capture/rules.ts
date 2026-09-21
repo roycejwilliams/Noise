@@ -23,6 +23,7 @@
 // evals/capture/run.ts is the live half (does the model actually do it);
 // this half is the part that can't cost anything or flake.
 import { captureIntentPrompt, normalizeCapturedAsks } from "../../src/services/profileExtraction.js";
+import { getOpenAsksOfType } from "../../src/services/matching.js";
 
 let total = 0;
 let failed = 0;
@@ -101,6 +102,21 @@ check("legacy single-ask JSON still yields its ask", normalizeCapturedAsks(legac
 check("legacy null ask yields nothing", normalizeCapturedAsks({ ask: null, concrete_preferences: [], wants: [], availability: null }, "whole_transcript").length === 0);
 // A reply carrying both keys is the new shape's reply — asks wins.
 check("asks wins over a stale ask key", normalizeCapturedAsks({ ...legacy, asks: [{ text: "Looking for ex-Stripe engineers", type: "seeking" }] }, "whole_transcript")[0].text === "Looking for ex-Stripe engineers");
+
+// The daily network sweep covers every open ask of a type, oldest first, and
+// skips closed and text-less entries (2026-09-21: it used to read only the newest).
+const intent = [
+  { id: "a1", text: "Looking for ex-Stripe engineers", type: "seeking", status: "active" },
+  { id: "a2", text: "Want a climbing partner", type: "seeking", status: "active" },
+  { id: "a3", text: "Can intro founders to designers", type: "offering", status: "active" },
+  { id: "a4", text: "Looking for a cofounder", type: "seeking", status: "closed" },
+  { id: "a5", text: "", type: "seeking", status: "active" },
+  { id: "a6", type: "seeking", status: "preferences_only" },
+];
+check("open seeking asks: all active ones, oldest first", getOpenAsksOfType(intent, "seeking").map((a) => a.id).join(",") === "a1,a2");
+check("open offering asks: only the offering", getOpenAsksOfType(intent, "offering").map((a) => a.id).join(",") === "a3");
+check("closed, text-less and preference-only entries never count", !getOpenAsksOfType(intent, "seeking").some((a) => ["a4", "a5", "a6"].includes(a.id!)));
+check("a non-array intent is no asks", getOpenAsksOfType(null, "seeking").length === 0 && getOpenAsksOfType({}, "offering").length === 0);
 
 console.log(`capture rules: ${total - failed}/${total} passed`);
 if (failed) process.exitCode = 1;

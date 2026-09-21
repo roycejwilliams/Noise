@@ -75,7 +75,7 @@ export type ProactiveType =
 // co_event: Co's own event, announced to nearby users on creation (services/coEventAnnouncement.ts).
 // direct_ask: a reply-triggered direct ask to a THIRD person who didn't just
 // text (eventGuestMatchHandoff.ts's maybeAskCandidateDirectly/
-// askConnectionMethod, networkIntroNudge.ts's askCandidateDirectly) — see
+// networkIntroNudge.ts's askCandidateDirectly) — see
 // sendExemptWhenAllowed below.
 // search_result: the answer to a texted search that ran past the reply's time
 // cap, sent when it lands (services/lateSearchResult.ts).
@@ -116,7 +116,11 @@ export const RULES = {
   // (2026-09-18: five pending follow-ups competed with one event offer).
   roomMaxPerLocalDay: 1,
   roomMaxPer7Days: 4,
-  unansweredPauseHours: 72,
+  // After one unanswered text Co waits a day; after two in a row, three days.
+  // A busy or building member who hasn't replied isn't ignoring Co, so one
+  // quiet text must not silence events for 72 hours (2026-09-21).
+  unansweredPauseHours: 24,
+  unansweredPauseHoursAfterTwo: 72,
   maxDraftAttempts: 2,
   // After the model decides nothing is worth sending, don't ask it again for
   // this person until this many hours pass (or a new candidate arrives).
@@ -189,6 +193,10 @@ const DAY = 24 * HOUR;
 // hours when every continental US zone is inside 9am-8pm (16:00-24:00 UTC)
 // count. This used to fail open, which is how unknown-city users got texts
 // at any hour.
+export function unansweredPauseFor(unansweredCount: number): number {
+  return unansweredCount >= 2 ? RULES.unansweredPauseHoursAfterTwo : RULES.unansweredPauseHours;
+}
+
 export function localHourOk(now: Date, timezone: string | null): boolean {
   if (timezone) {
     const local = DateTime.fromJSDate(now).setZone(timezone);
@@ -239,9 +247,10 @@ export function userLevelChecks(state: Omit<PickState, "candidates">, opts: { sk
   // anyone from rooms, and someone who isn't replying still gets one text.
   const pauseSource = lane === "room" ? counted : state.sends.filter((s) => !s.exempt);
   const lastCounted = pauseSource.filter((s) => s.sentAt <= state.now).sort((a, b) => b.sentAt.getTime() - a.sentAt.getTime())[0];
+  const unansweredCount = pauseSource.filter((s) => s.sentAt <= state.now && unansweredSince(s, state.lastInboundAt)).length;
   const pauseActive =
     !!lastCounted &&
-    state.now.getTime() - lastCounted.sentAt.getTime() < RULES.unansweredPauseHours * HOUR &&
+    state.now.getTime() - lastCounted.sentAt.getTime() < unansweredPauseFor(unansweredCount) * HOUR &&
     unansweredSince(lastCounted, state.lastInboundAt);
 
   const checks: GateCheck[] = [{ name: "not_opted_out", pass: !state.optedOut, reason: "they opted out of texts" }];
@@ -364,6 +373,8 @@ export async function draftProactive(opts: {
   facts: Facts;
   task: string;
   model?: string;
+  // Most types are one or two sentences; a few (post-call reflection) need room.
+  maxSentences?: number;
 }): Promise<string | null> {
   const feeling = feelingForDraft.getStore();
   const { text } = await generateText({
@@ -373,7 +384,7 @@ export async function draftProactive(opts: {
 
 ${CO_TEXT_CHANNEL} You're texting ${opts.firstName}. Co is reaching out first; they didn't just text you.
 
-${PROACTIVE_RULES}
+${opts.maxSentences && opts.maxSentences !== 2 ? PROACTIVE_RULES.replace("Max 2 sentences", `Max ${opts.maxSentences} sentences`) : PROACTIVE_RULES}
 
 CONFIRMED_FACTS (the only facts you may state)
 ${renderFacts(opts.facts)}
@@ -849,7 +860,7 @@ export async function sendExempt(opts: {
 
 // For a reply-triggered direct ask to a THIRD person who didn't just text Co
 // (code review, 2026-09-17: eventGuestMatchHandoff.ts's
-// maybeAskCandidateDirectly/askConnectionMethod and networkIntroNudge.ts's
+// maybeAskCandidateDirectly and networkIntroNudge.ts's
 // askCandidateDirectly sent a raw sendblue message with no opt-out or hours
 // check at all, since the trigger was the OTHER person's reply, not this
 // recipient's). Sends now if it's inside their local hours; otherwise

@@ -2,7 +2,7 @@ import { generateText } from "ai";
 import { anthropic } from "@ai-sdk/anthropic";
 import { Resend } from "resend";
 import pool from "../db/db.js";
-import sendblue, { cleanCoMessage } from "./sendblue.js";
+import { cleanCoMessage } from "./sendblue.js";
 import { writeMemory } from "./memory.js";
 import { ALLOW_REAL_SENDS } from "../otpActions.js";
 import { CO_VOICE, CO_TEXT_CHANNEL } from "./coVoice.js";
@@ -25,10 +25,13 @@ async function timezoneFor(userId: string): Promise<string | null> {
 const CLASSIFY_MODEL = MODELS.haiku;
 const NAMING_DRAFT_MODEL = MODELS.sonnet;
 
-// Double opt-in handoff (Royce, 2026-09-07 — "should Co make a group chat
-// once they've been opted in", "sit in the group chat as like a personal
-// agent, not replying until it's asked a question"), on top of the
-// event-guest match nudge (services/eventScoring.ts). The nudge only ever
+// Double opt-in handoff (Royce, 2026-09-07), on top of the event-guest match
+// nudge (services/eventScoring.ts). The introduction is one email to both
+// people. Co never puts two people in a group text: Sendblue can only reply
+// to a number that has already texted in ("Allow Inbound First" is locked on
+// under the current plan), so it can't start a thread with two people, and
+// the group-chat code that once lived here (2026-09-07 to 2026-09-20) never
+// delivered a single thread. Removed on Royce's call, 2026-09-20. The nudge only ever
 // tells ONE side about a candidate — nothing shares contact info or
 // facilitates contact until BOTH people have said yes, same reasoning a
 // real introduction would use: you don't hand out someone's number to a
@@ -238,58 +241,10 @@ async function maybeAskCandidateDirectly(
     .catch((err: any) => console.error("maybeAskCandidateDirectly: nudge-row upsert failed (non-fatal):", err?.message ?? err));
 }
 
-// The actual handoff, once both sides are genuinely in — a real Sendblue
-// group iMessage thread, not a simulated one. Sendblue's group API only
-// exposes add_recipient, no leave/remove-self (confirmed live, 2026-09-07),
-// so Co staying in the group afterward is the deliberate design, not a
-// workaround: it sits quietly and only replies when directly addressed
-// (see handleGroupMessage below), same "silence by default" instinct as
-// companionCheckin.ts.
-async function createIntroGroup(
-  eventId: string,
-  eventName: string,
-  a: MatchNudgeCandidate,
-  b: MatchNudgeCandidate,
-): Promise<void> {
-  const { a: aYes, b: bYes } = await bothOptedIn(eventId, a.user_id, b.user_id);
-  if (!(await gateIntroAction(a.user_id, "eventGuestMatchHandoff.introGroup", [checkBothYes(aYes, bYes)], { eventId, b: b.user_id }))) return;
-
-  const introText = `Hey both — ${a.first_name}, ${b.first_name} — figured you two should actually meet before ${eventName}. I'll mostly stay out of the way here, but say the word if you ever want me for anything.`;
-  let groupId: string | undefined;
-  try {
-    const response: any = await sendblue.groups.sendMessage({
-      content: cleanCoMessage(introText),
-      from_number: process.env.SENDBLUE_PHONE_NUMBER!,
-      numbers: [a.phone_number, b.phone_number],
-    });
-    groupId = response?.group_id ?? response?.data?.group_id;
-  } catch (err: any) {
-    console.error("createIntroGroup: send failed (non-fatal):", err?.message ?? err);
-    return;
-  }
-  if (!groupId) {
-    console.error("createIntroGroup: no group_id in Sendblue response, can't track this group for future replies");
-    return;
-  }
-
-  await pool
-    .query(
-      `INSERT INTO event_intro_groups (group_id, event_id, event_name, person_a_id, person_b_id)
-       VALUES ($1, $2, $3, $4, $5)
-       ON CONFLICT (group_id) DO NOTHING`,
-      [groupId, eventId, eventName, a.user_id, b.user_id],
-    )
-    .catch((err: any) => console.error("createIntroGroup: event_intro_groups insert failed (non-fatal):", err?.message ?? err));
-
-  await writeMemory(a.user_id, "event_intro_group_created", `Connected ${a.first_name} and ${b.first_name} in a group chat ahead of "${eventName}".`);
-  await writeMemory(b.user_id, "event_intro_group_created", `Connected ${a.first_name} and ${b.first_name} in a group chat ahead of "${eventName}".`);
-}
-
-// Email alternative to the group chat (Royce, 2026-09-07: "Co should give
-// them 2 options -> connect by phone or email"). One email, both people as
-// recipients — the classic double-opt-in warm-intro convention (each
-// already has the other's email visible, same as a group thread gives each
-// person the other's number) — rather than two separate one-sided emails.
+// The introduction itself (Royce, 2026-09-07). One email, both people as
+// recipients: the classic double-opt-in warm-intro convention, where each
+// already has the other's email visible — rather than two separate
+// one-sided emails.
 // Reuses otpActions.ts's ALLOW_REAL_SENDS gate directly instead of its
 // sendEmail (that function is a tightly-coupled dispatcher for a fixed set
 // of existing templates — appsubmit/welcome/otp/etc — not a generic
@@ -320,40 +275,6 @@ async function sendIntroEmail(eventId: string, eventName: string, a: MatchNudgeC
   return true;
 }
 
-// Asks whoever's "yes" completes the reciprocal opt-in how they'd like to
-// connect, rather than assuming a group chat — see event_intro_method_
-// pending's migration comment. Only the completing person is asked; their
-// answer decides the medium for both, same as they're the one whose
-// message actually closes the loop.
-async function askConnectionMethod(eventId: string, askedPerson: MatchNudgeCandidate, other: MatchNudgeCandidate): Promise<void> {
-  const { a: aYes, b: bYes } = await bothOptedIn(eventId, askedPerson.user_id, other.user_id);
-  if (!(await gateIntroAction(askedPerson.user_id, "eventGuestMatchHandoff.askMethod", [checkBothYes(aYes, bYes)], { eventId, other: other.user_id }))) return;
-  const message = cleanCoMessage(`Want me to connect you two by text or would email work better?`);
-  // Opt-out and local hours at send time, queued for the next allowed hour
-  // if it's night for them (code review, 2026-09-17) — triggered by the
-  // OTHER person's opt-in completing, not anything askedPerson just did.
-  const result = await sendExemptWhenAllowed({
-    userId: askedPerson.user_id,
-    phoneNumber: askedPerson.phone_number,
-    type: "direct_ask",
-    targetKey: `ask_method:${eventId}:${askedPerson.user_id}:${other.user_id}`,
-    messages: [message],
-    timezone: await timezoneFor(askedPerson.user_id),
-  });
-  if (!result.sent && !result.queued) {
-    console.error(`askConnectionMethod: send failed for ${askedPerson.user_id} (non-fatal):`, result.reason);
-    return;
-  }
-  await pool
-    .query(
-      `INSERT INTO event_intro_method_pending (event_id, person_id, candidate_id)
-       VALUES ($1, $2, $3)
-       ON CONFLICT (event_id, person_id, candidate_id) DO NOTHING`,
-      [eventId, askedPerson.user_id, other.user_id],
-    )
-    .catch((err: any) => console.error("askConnectionMethod: pending insert failed (non-fatal):", err?.message ?? err));
-}
-
 // Entry point called from routes/sendblue.ts once a reply to a pending
 // match nudge is classified. Handles both directions: person is the one
 // who just replied, candidate is who the nudge was about.
@@ -377,129 +298,10 @@ export async function handleMatchNudgeReply(
   if (classification !== "interested") return;
 
   if (await hasReciprocalOptIn(eventId, person.user_id, candidate.user_id)) {
-    // Skips the text/email choice and goes straight to email (Royce,
-    // 2026-09-07: "if we can't do group chat accurately... I don't want
-    // it"). Confirmed live: Sendblue's "Allow Inbound First" is locked on
-    // under the current plan, so createIntroGroup fails on any brand-new
-    // thread — offering "text" as a real choice when it silently can't
-    // deliver is worse than not offering it. askConnectionMethod/
-    // createIntroGroup stay in place, dormant, to re-enable once that
-    // plan restriction is resolved.
+    // Both said yes: introduce them by email. There is deliberately no
+    // "text instead" option (see the note at the top of this file).
     await sendIntroEmail(eventId, eventName, person, candidate);
   } else {
     await maybeAskCandidateDirectly(eventId, eventName, person.first_name, candidate, person);
-  }
-}
-
-export type PendingMethodChoice = {
-  event_id: string;
-  event_name: string;
-  a: MatchNudgeCandidate;
-  b: MatchNudgeCandidate;
-};
-
-const METHOD_CHOICE_EXPIRY_DAYS = 3;
-
-export async function findPendingMethodChoice(userId: string): Promise<PendingMethodChoice | null> {
-  const { rows } = await pool.query(
-    `SELECT p.event_id, p.candidate_id,
-            ua.first_name AS a_first_name, ua.phone_number AS a_phone, ua.email AS a_email,
-            ub.first_name AS b_first_name, ub.phone_number AS b_phone, ub.email AS b_email
-     FROM event_intro_method_pending p
-     JOIN users ua ON ua.id = p.person_id
-     JOIN users ub ON ub.id = p.candidate_id
-     WHERE p.person_id = $1
-       AND p.asked_at > NOW() - ($2 || ' days')::interval
-     ORDER BY p.asked_at DESC LIMIT 1`,
-    [userId, METHOD_CHOICE_EXPIRY_DAYS],
-  );
-  if (!rows[0]) return null;
-  const r = rows[0];
-  return {
-    event_id: r.event_id,
-    event_name: "the event",
-    a: { user_id: userId, first_name: r.a_first_name, phone_number: r.a_phone, email: r.a_email },
-    b: { user_id: r.candidate_id, first_name: r.b_first_name, phone_number: r.b_phone, email: r.b_email },
-  };
-}
-
-export type MethodChoiceClassification = "phone" | "email" | "unclear";
-
-export async function handleMethodChoiceReply(pending: PendingMethodChoice, classification: MethodChoiceClassification): Promise<void> {
-  if (classification === "unclear") return;
-  await pool
-    .query(`DELETE FROM event_intro_method_pending WHERE event_id = $1 AND person_id = $2 AND candidate_id = $3`, [
-      pending.event_id,
-      pending.a.user_id,
-      pending.b.user_id,
-    ])
-    .catch((err: any) => console.error("handleMethodChoiceReply: pending delete failed (non-fatal):", err?.message ?? err));
-
-  if (classification === "phone") {
-    await createIntroGroup(pending.event_id, pending.event_name, pending.a, pending.b);
-  } else {
-    await sendIntroEmail(pending.event_id, pending.event_name, pending.a, pending.b);
-  }
-}
-
-// Group-message handling — entirely separate from the normal 1:1
-// conversation pipeline. Co only ever speaks here when directly mentioned
-// by name; every other group message is read (implicitly, via Sendblue's
-// own delivery) and ignored, never treated as a personal conversational
-// turn the way a 1:1 text would be.
-const MENTION_PATTERN = /\bco\b/i;
-
-export async function isTrackedIntroGroup(groupId: string): Promise<boolean> {
-  const { rows } = await pool.query(`SELECT 1 FROM event_intro_groups WHERE group_id = $1`, [groupId]);
-  return rows.length > 0;
-}
-
-export async function handleGroupMessage(groupId: string, senderNumber: string, content: string): Promise<void> {
-  if (!MENTION_PATTERN.test(content)) return; // not addressed to Co — stay quiet, this is the default
-
-  const { rows } = await pool.query(
-    `SELECT eig.event_name, eig.event_id, eig.person_a_id, eig.person_b_id,
-            ua.first_name AS a_first_name, ua.phone_number AS a_phone,
-            ub.first_name AS b_first_name, ub.phone_number AS b_phone
-     FROM event_intro_groups eig
-     JOIN users ua ON ua.id = eig.person_a_id
-     JOIN users ub ON ub.id = eig.person_b_id
-     WHERE eig.group_id = $1`,
-    [groupId],
-  );
-  const group = rows[0];
-  if (!group) return; // not a group Co is tracking
-
-  // Co only speaks in a thread for a pair that both said yes.
-  const { a: aYes, b: bYes } = await bothOptedIn(group.event_id, group.person_a_id, group.person_b_id);
-  if (!(await gateIntroAction(group.person_a_id, "eventGuestMatchHandoff.groupReply", [checkBothYes(aYes, bYes)], { groupId }))) return;
-
-  const senderFirstName = senderNumber === group.a_phone ? group.a_first_name : senderNumber === group.b_phone ? group.b_first_name : null;
-
-  let reply: string;
-  try {
-    const { text } = await generateText({
-      model: anthropic(NAMING_DRAFT_MODEL),
-      experimental_telemetry: { isEnabled: true, functionId: "eventGuestMatchHandoff.groupReply" },
-      prompt: `${CO_VOICE}\n\n${CO_TEXT_CHANNEL} You're sitting quietly in a group iMessage thread with ${group.a_first_name} and ${group.b_first_name} — you introduced them ahead of "${group.event_name}" and mostly stay out of their actual conversation, only speaking when directly addressed, which just happened.
-
-${senderFirstName ? `${senderFirstName} just said: "${content}"` : `Someone in the group just said: "${content}"`}
-
-Reply briefly and naturally, like someone who's still around but never trying to take over the conversation between them. Ground everything only in what's actually in this message — you don't have any other context about their conversation so far. No em dashes, 1-2 sentences unless they genuinely asked something that needs more room. Return ONLY the reply text.`,
-    });
-    reply = cleanCoMessage(text.trim());
-  } catch (err: any) {
-    console.error("handleGroupMessage: reply draft failed (non-fatal):", err?.message ?? err);
-    return;
-  }
-
-  try {
-    await sendblue.groups.sendMessage({
-      group_id: groupId,
-      content: reply,
-      from_number: process.env.SENDBLUE_PHONE_NUMBER!,
-    });
-  } catch (err: any) {
-    console.error("handleGroupMessage: send failed (non-fatal):", err?.message ?? err);
   }
 }

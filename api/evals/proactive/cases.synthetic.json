@@ -71,7 +71,7 @@
     },
     {
       "id": "s04",
-      "about": "throttle storm: 20 surfacing attempts in 7 minutes, nobody replies: one text, then nothing until the 72h pause lifts",
+      "about": "throttle storm: 20 surfacing attempts in 7 minutes, nobody replies: one text, then the pause (24h after one unanswered text, 72h after two in a row) holds the rest",
       "timezone": "America/Los_Angeles",
       "start": "2026-09-08T15:45:00Z",
       "end": "2026-09-15T06:00:00Z",
@@ -185,7 +185,7 @@
     },
     {
       "id": "s05",
-      "about": "unanswered text pauses everything else for 72 hours",
+      "about": "an unanswered text pauses everything else (24h after one, 72h after two in a row)",
       "timezone": "America/Los_Angeles",
       "start": "2026-09-15T15:45:00Z",
       "end": "2026-09-20T06:00:00Z",
@@ -593,6 +593,62 @@
       ],
       "expect": {
         "sends": 2
+      }
+    },
+    {
+      "id": "s22",
+      "about": "one unanswered text no longer silences events for 3 days: the next day's event offer goes out (2026-09-21)",
+      "timezone": "America/Los_Angeles",
+      "start": "2026-09-15T15:45:00Z",
+      "end": "2026-09-17T06:00:00Z",
+      "arrivals": [
+        {
+          "at": "2026-09-15T16:00:00Z",
+          "type": "event_offer",
+          "target": "event_offer:event:e1",
+          "expiresInHours": 200
+        },
+        {
+          "at": "2026-09-15T17:00:00Z",
+          "type": "event_offer",
+          "target": "event_offer:event:e2",
+          "expiresInHours": 200
+        }
+      ],
+      "expect": {
+        "sends": 2,
+        "noSendBefore": "2026-09-15T16:00:00Z"
+      }
+    },
+    {
+      "id": "s23",
+      "about": "two unanswered texts in a row: the third waits the full 72 hours (2026-09-21)",
+      "timezone": "America/Los_Angeles",
+      "start": "2026-09-15T15:45:00Z",
+      "end": "2026-09-19T06:00:00Z",
+      "arrivals": [
+        {
+          "at": "2026-09-15T16:00:00Z",
+          "type": "event_offer",
+          "target": "event_offer:event:e1",
+          "expiresInHours": 200
+        },
+        {
+          "at": "2026-09-15T17:00:00Z",
+          "type": "event_offer",
+          "target": "event_offer:event:e2",
+          "expiresInHours": 200
+        },
+        {
+          "at": "2026-09-17T17:00:00Z",
+          "type": "event_offer",
+          "target": "event_offer:event:e3",
+          "expiresInHours": 200
+        }
+      ],
+      "expect": {
+        "sends": 2,
+        "noSendBefore": "2026-09-15T16:00:00Z"
       }
     }
   ],

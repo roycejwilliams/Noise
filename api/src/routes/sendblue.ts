@@ -56,9 +56,10 @@ import type { TierMatch } from "../services/tieredRecommendation.js";
 import { detectCheckinPhrase, recordCheckin, hasActiveAsk, recordWalkinAsk } from "../services/eventWalkinCheckin.js";
 import { scheduleOutcomeFollowUp, recordOutcome, wasClosestMissRecentlyMentioned, recordClosestMissMentioned } from "../services/recommendationOutcome.js";
 import { recordEventCheckinOutcome } from "../services/eventCheckinFollowUp.js";
-import { handleMatchNudgeReply, handleGroupMessage, handleMethodChoiceReply } from "../services/eventGuestMatchHandoff.js";
+import { handleMatchNudgeReply } from "../services/eventGuestMatchHandoff.js";
 import { resolveNetworkTeaseReply, resolveNetworkIntroReply } from "../services/networkIntroNudge.js";
 import { NO_ROUTE, decideActions, gatherOpenItems, routeMessage, type RouterOutput } from "../services/messageRouter.js";
+import { shadowRoute } from "../services/jevRouter.js";
 import { recordDecision } from "../harness/core.js";
 import { routerGateChecks } from "../harness/routerChecks.js";
 import { addEventFacts, addFact, addInstruction, addOngoingSearchFacts, gatherReplyFacts, recordSearchNote } from "../harness/replyGrounding.js";
@@ -607,18 +608,12 @@ export function sendblueRouter(io: Server): Router {
           message_type,
         } = req.body;
 
-        // Group messages (event intro handoff, services/eventGuestMatchHandoff.ts)
-        // — entirely separate from the normal 1:1 conversation pipeline below.
-        // Co only ever speaks in a group when directly mentioned by name; every
-        // other group message (including this same send's own outbound delivery
-        // status) is just acknowledged and never treated as a personal
-        // conversational turn the way a 1:1 text would be.
+        // Group messages are acknowledged and ignored. Co never joins or
+        // starts a group text (Sendblue can only reply to a number that has
+        // already texted in, so it can't start one, and 2026-09-20 Royce took
+        // group chats out of the product), and a group message must never be
+        // treated as a personal 1:1 turn.
         if (message_type === "group" || group_id) {
-          if (!is_outbound && typeof content === "string" && content.trim() && group_id) {
-            handleGroupMessage(group_id, number, content).catch((err: any) =>
-              console.error("sendblue webhook: handleGroupMessage failed (non-fatal):", err?.message ?? err),
-            );
-          }
           return res.status(200).send({ received: true });
         }
 
@@ -1323,14 +1318,14 @@ export function sendblueRouter(io: Server): Router {
         let routerFailed = false;
         let routerLatencyMs: number | null = null;
         try {
-          const routed = await propagateAttributes({ userId: user.id, traceName: "sendblue.router.route" }, () =>
-            routeMessage({
-              message: resolvedContent,
-              recentConversation,
-              openItems,
-              declinedCallTopics: declinedTopicsResult.rows.map((r: any) => r.content),
-            }),
-          );
+          const routeInput = {
+            message: resolvedContent,
+            recentConversation,
+            openItems,
+            declinedCallTopics: declinedTopicsResult.rows.map((r: any) => r.content),
+          };
+          const routed = await propagateAttributes({ userId: user.id, traceName: "sendblue.router.route" }, () => routeMessage(routeInput));
+          void shadowRoute(user.id, routeInput, routed.output);
           routerOutput = routed.output;
           routerLatencyMs = routed.latencyMs;
         } catch (err: any) {
@@ -1816,28 +1811,6 @@ export function sendblueRouter(io: Server): Router {
             }
           } catch (err: any) {
             console.error("sendblue: network intro-offer reply handling failed (non-fatal):", err?.message ?? err);
-          }
-        }
-
-        // Connection-method choice (phone vs email) once both sides have
-        // opted in — see services/eventGuestMatchHandoff.ts. Separate
-        // pending-check from the opt-in block above since it's a genuinely
-        // different question asked at a later moment.
-        const resolvedMethod = resolvedAs("method_choice");
-        if (resolvedMethod?.item.ref?.kind === "method_choice") {
-          try {
-            const pendingMethodChoice = resolvedMethod.item.ref.pending;
-            const methodClassification = resolvedMethod.value === "email" ? "email" : "phone";
-            await handleMethodChoiceReply(pendingMethodChoice, methodClassification);
-            const otherFirstName = pendingMethodChoice.a.user_id === user.id ? pendingMethodChoice.b.first_name : pendingMethodChoice.a.first_name;
-            addFact(
-              replyFacts,
-              "did_this_turn",
-              methodClassification === "phone" ? `Started a group text with them and ${otherFirstName}.` : `Sent an intro email to them and ${otherFirstName}.`,
-            );
-            addInstruction(replyFacts, `They just chose to be connected with ${otherFirstName} by ${methodClassification === "phone" ? "text" : "email"}. That's already handled separately. Acknowledge briefly, don't repeat details or promise a specific timing.`);
-          } catch (err: any) {
-            console.error("sendblue: method choice handling failed (non-fatal):", err?.message ?? err);
           }
         }
 

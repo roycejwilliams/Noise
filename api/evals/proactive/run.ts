@@ -29,6 +29,7 @@ import { DateTime } from "luxon";
 import { runEval, type CaseScore } from "../lib.js";
 import {
   RULES,
+  unansweredPauseFor,
   laneOf,
   TYPE_POLICY,
   checkDraft,
@@ -172,8 +173,10 @@ function violations(sends: { at: Date; type: string; target: string; topic?: str
     if (week.length >= weekCap) out.push(`${week.length + 1}th ${lane}-lane text in 7 days at ${s.at.toISOString()}`);
     // One-way pause: room-lane sends are paused only by room-lane sends; the
     // other lane is paused by anything unanswered.
-    const prev = sorted.slice(0, i).filter((o) => (lane === "room" ? inLane(o) : true)).pop();
-    if (prev && s.at.getTime() - prev.at.getTime() < RULES.unansweredPauseHours * 3600000 && !replyBetween(prev.at.getTime(), s.at.getTime())) {
+    const priorInPause = sorted.slice(0, i).filter((o) => (lane === "room" ? inLane(o) : true));
+    const prev = priorInPause[priorInPause.length - 1];
+    const unansweredRun = priorInPause.filter((o) => !replyBetween(o.at.getTime(), s.at.getTime())).length;
+    if (prev && s.at.getTime() - prev.at.getTime() < unansweredPauseFor(unansweredRun) * 3600000 && !replyBetween(prev.at.getTime(), s.at.getTime())) {
       out.push(`${s.type} at ${s.at.toISOString()} while ${prev.type} from ${prev.at.toISOString()} was unanswered`);
     }
   });

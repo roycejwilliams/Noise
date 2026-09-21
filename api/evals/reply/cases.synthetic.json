@@ -442,5 +442,27 @@
       "can't|cannot|no way to"
     ],
     "groundedDraft": true
+  },
+  {
+    "id": "s26_group_text_offer",
+    "message": "can you put me and Maya in a group chat?",
+    "recentConversation": "Co replied: Maya said yes too.\nUser said: can you put me and Maya in a group chat?",
+    "facts": [],
+    "draft": "Sure, I'll start a group text with you both.",
+    "forbidden": [
+      "\\b(I'll|I will|let me|starting|started|creating|setting up|I can (set|start|make|put))\\b[^.?!]{0,40}\\bgroup (text|chat|thread)"
+    ],
+    "groundedDraft": false
+  },
+  {
+    "id": "s27_group_text_honest_denial",
+    "message": "text works better than email for me",
+    "recentConversation": "Co replied: Priya said yes too. I'll email you both to introduce you.\nUser said: text works better than email for me",
+    "facts": [],
+    "draft": "Understood. I can't start a group text, so I'll email you both to introduce you.",
+    "forbidden": [
+      "\\b(I'll|I will|let me|starting|started|creating|setting up|I can (set|start|make|put))\\b[^.?!]{0,40}\\bgroup (text|chat|thread)"
+    ],
+    "groundedDraft": true
   }
 ]

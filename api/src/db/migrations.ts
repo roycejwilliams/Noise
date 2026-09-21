@@ -875,12 +875,12 @@ export async function runMigrations(): Promise<void> {
     )
     .catch((err: Error) => console.error("event_intro_groups table init failed:", err));
 
-  // Royce, 2026-09-07: "Co should give them 2 options -> connect by phone
-  // or email for the intro" — asked of whoever's "yes" completes the
-  // reciprocal opt-in, before the handoff itself happens (so
-  // createIntroGroup below only fires on an actual phone choice, not
-  // unconditionally). Same pending-then-classify shape as
-  // event_guest_match_nudges/opt_ins above.
+  // NO LONGER WRITTEN (2026-09-20): this held the "connect by text or email"
+  // question, and event_intro_groups above held group threads. Co never
+  // starts a group text (Sendblue can only reply to a number that has
+  // already texted in), and the code that used both tables is gone. The
+  // tables are left in place so no data is dropped; they were empty on
+  // co-test. Introductions are one email to both people.
   await pool
     .query(
       `CREATE TABLE IF NOT EXISTS event_intro_method_pending (

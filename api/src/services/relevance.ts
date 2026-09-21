@@ -1,5 +1,5 @@
 import pool from "../db/db.js";
-import { getActiveOfferingAsk, getActiveSeekingAsk, scoreAgainstStatedAsk, scoreOfferingAgainstCandidates } from "./matching.js";
+import { getActiveOfferingAsk, getActiveSeekingAsk, getOpenAsksOfType, scoreAgainstStatedAsk, scoreOfferingAgainstCandidates, type StatedIntent } from "./matching.js";
 
 // Co Loop Stage 3 — "identify relevance." Runs scoreAgainstStatedAsk
 // standalone against the whole network — no eligibility gating of any kind,
@@ -36,12 +36,30 @@ type RelevanceCandidate = {
 // matching.ts, just against goal_embeddings instead of memory embeddings).
 // Also pulls each candidate's own intent[] — used by scoreAgainstStatedAsk's
 // mutual/two-way check, not by this prefilter itself.
+//
+// A candidate qualifies with goal_embeddings (written from a call transcript)
+// OR an open ask that carries its own embedding (written on every capture,
+// text included). Requiring goal_embeddings alone meant a member who had only
+// texted could never be matched (2026-09-21). Distance is the closer of the
+// two.
+const OPEN_ASK_EMBEDDINGS = `
+  SELECT (e->'embedding')::text::vector AS emb
+  FROM jsonb_array_elements(CASE WHEN jsonb_typeof(cp.intent) = 'array' THEN cp.intent ELSE '[]'::jsonb END) AS e
+  WHERE e->>'status' = 'active' AND COALESCE(btrim(e->>'text'), '') <> '' AND jsonb_typeof(e->'embedding') = 'array'`;
+
 async function prefilterCandidates(personId: string, askEmbedding: number[]): Promise<RelevanceCandidate[]> {
   const { rows } = await pool.query(
-    `SELECT cp.user_id, cp.goals, cp.blockers, cp.activity_preferences, cp.intent
-     FROM co_profiles cp
-     WHERE cp.user_id != $1 AND cp.goal_embeddings IS NOT NULL
-     ORDER BY cp.goal_embeddings <=> $2::vector
+    `SELECT user_id, goals, blockers, activity_preferences, intent FROM (
+       SELECT cp.user_id, cp.goals, cp.blockers, cp.activity_preferences, cp.intent,
+              LEAST(
+                COALESCE(cp.goal_embeddings <=> $2::vector, 2),
+                COALESCE((SELECT MIN(x.emb <=> $2::vector) FROM (${OPEN_ASK_EMBEDDINGS}) x), 2)
+              ) AS dist
+       FROM co_profiles cp
+       WHERE cp.user_id != $1
+         AND (cp.goal_embeddings IS NOT NULL OR EXISTS (${OPEN_ASK_EMBEDDINGS}))
+     ) c
+     ORDER BY dist
      LIMIT $3`,
     [personId, `[${askEmbedding.join(",")}]`, PREFILTER_LIMIT],
   );
@@ -95,13 +113,21 @@ async function logRelevanceEdges(
 // Fails silent, not closed — this is a background sweep, not a user-facing
 // gate, so an error here just means this sweep found nothing this time, not
 // that anyone was blocked from anything.
-export async function sweepAskAgainstNetwork(userId: string): Promise<void> {
+// The daily sweep covers a member's open asks, not just the newest one.
+const MAX_ASKS_PER_SWEEP = 5;
+
+export async function sweepAskAgainstNetwork(userId: string, opts: { all?: boolean } = {}): Promise<void> {
   const { rows } = await pool.query(
     `SELECT intent, goals, blockers, long_term_direction FROM co_profiles WHERE user_id = $1`,
     [userId],
   );
   const profile = rows[0];
-  const ask = getActiveSeekingAsk(profile?.intent);
+  const newest = getActiveSeekingAsk(profile?.intent);
+  const asks = opts.all ? getOpenAsksOfType(profile?.intent, "seeking").slice(-MAX_ASKS_PER_SWEEP) : newest ? [newest] : [];
+  for (const ask of asks) await sweepOneSeekingAsk(userId, ask, profile);
+}
+
+async function sweepOneSeekingAsk(userId: string, ask: StatedIntent, profile: any): Promise<void> {
   if (!ask?.id || !ask.text || !ask.embedding?.length) return;
 
   try {
@@ -139,13 +165,18 @@ export async function sweepAskAgainstNetwork(userId: string): Promise<void> {
 // is logged from the OFFERER's side (person_id = offerer, candidate_id =
 // the person who'd likely want it), same as every other relevance_edges row
 // is logged from the ask-holder's side.
-export async function sweepOfferingAgainstNetwork(userId: string): Promise<void> {
+export async function sweepOfferingAgainstNetwork(userId: string, opts: { all?: boolean } = {}): Promise<void> {
   const { rows } = await pool.query(
     `SELECT intent, goals, blockers, long_term_direction FROM co_profiles WHERE user_id = $1`,
     [userId],
   );
   const profile = rows[0];
-  const offering = getActiveOfferingAsk(profile?.intent);
+  const newest = getActiveOfferingAsk(profile?.intent);
+  const offerings = opts.all ? getOpenAsksOfType(profile?.intent, "offering").slice(-MAX_ASKS_PER_SWEEP) : newest ? [newest] : [];
+  for (const offering of offerings) await sweepOneOffering(userId, offering);
+}
+
+async function sweepOneOffering(userId: string, offering: StatedIntent): Promise<void> {
   if (!offering?.id || !offering.text || !offering.embedding?.length) return;
 
   try {
@@ -188,7 +219,7 @@ export async function sweepAllOpenAsks(): Promise<void> {
      )`,
   );
   for (const row of rows) {
-    await sweepAskAgainstNetwork(row.user_id);
-    await sweepOfferingAgainstNetwork(row.user_id);
+    await sweepAskAgainstNetwork(row.user_id, { all: true });
+    await sweepOfferingAgainstNetwork(row.user_id, { all: true });
   }
 }

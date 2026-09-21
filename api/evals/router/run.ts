@@ -24,6 +24,7 @@ import {
   type OpenItemKind,
   type RouterOutput,
 } from "../../src/services/messageRouter.js";
+import { routeWithJev } from "../../src/services/jevRouter.js";
 
 type Case = {
   id: string;
@@ -67,8 +68,12 @@ const PRICING: Record<string, [number, number]> = {
   "claude-opus-5": [5, 25],
 };
 
+// Jev is TypeSafe's hosted model. cases.local.json is real member messages, so it
+// stays off their servers until Royce clears their data terms (--allow-local).
+const jev = model === "jev";
 function loadCases(): Case[] {
-  const files = ["cases.local.json", "cases.synthetic.json"].map((f) => join(here, f)).filter(existsSync);
+  const names = jev && !args.includes("--allow-local") ? ["cases.synthetic.json"] : ["cases.local.json", "cases.synthetic.json"];
+  const files = names.map((f) => join(here, f)).filter(existsSync);
   const all = files.flatMap((f) => JSON.parse(readFileSync(f, "utf8")) as Case[]);
   return only ? all.filter((c) => only.includes(c.id)) : all;
 }
@@ -104,8 +109,6 @@ function baselineActions(c: Case): Acted {
   if (cur.outcome && cur.outcome !== "unrelated") resolved.push(`outcome_followup:${cur.outcome}`);
   if (cur.matchNudge === "interested") resolved.push("match_nudge:yes");
   if (cur.matchNudge === "not_interested") resolved.push("match_nudge:no");
-  if (cur.methodChoice === "phone") resolved.push("method_choice:text");
-  if (cur.methodChoice === "email") resolved.push("method_choice:email");
   return {
     resolved,
     clarified: false,
@@ -138,7 +141,7 @@ function score(c: Case, a: Acted) {
   // Resolving an item the label doesn't allow is hard. Resolving the right
   // item with the wrong value is soft (scored under ans) unless that value is
   // an irreversible one (accepting a call, opting into an intro, a method).
-  const irreversible = (r: string) => ["call_offer:accept", "match_nudge:yes", "network_intro:yes"].includes(r) || r.startsWith("method_choice:");
+  const irreversible = (r: string) => ["call_offer:accept", "match_nudge:yes", "network_intro:yes"].includes(r) ;
   for (const r of a.resolved) {
     if (inAns(r, c.label.ans) || c.label.nope.includes(r)) continue;
     const itemAllowed = c.label.ans.some((x) => x.split(":")[0] === r.split(":")[0]);
@@ -196,7 +199,10 @@ async function main() {
     let error: string | null = null;
     for (let attempt = 0; attempt < 2; attempt++) {
       try {
-        const r = await routeMessage({ message: c.message, recentConversation: c.recentConversation, openItems }, { model, effort });
+        const r = jev
+          ? await routeWithJev({ message: c.message, recentConversation: c.recentConversation, openItems })
+          : await routeMessage({ message: c.message, recentConversation: c.recentConversation, openItems }, { model, effort });
+        if (!r) throw new Error("jev returned no answer");
         ({ output, latencyMs } = r);
         inTok = r.inputTokens;
         outTok = r.outputTokens;
@@ -210,7 +216,7 @@ async function main() {
     return { c, acted, ...score(c, acted), latencyMs, inTok, outTok, output, error };
   });
 
-  const label = mode === "baseline" ? "baseline (current classifiers)" : `router ${model} effort=${effort ?? "none"}`;
+  const label = mode === "baseline" ? "baseline (current classifiers)" : jev ? "router jev (System One)" : `router ${model} effort=${effort ?? "none"}`;
   console.log(`\n=== ${label} — ${results.length} cases ===\n`);
 
   const hardCases = results.filter((r) => r.hard.length);

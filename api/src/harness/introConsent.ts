@@ -26,6 +26,7 @@ import pool from "../db/db.js";
 import { MODELS } from "../models.js";
 import { parseModelJson } from "../services/modelJson.js";
 import { gate, recordDecision, type GateCheck } from "./core.js";
+import { jevConsent, shadow } from "../services/jevClassifiers.js";
 
 const CONSENT_READ_MODEL = MODELS.sonnet;
 
@@ -234,6 +235,14 @@ export async function consentRead(message: string, f: ConsentFacts): Promise<Gat
       prompt: consentRubric(message, f),
     });
     const parsed = parseModelJson<{ violation: boolean; why?: string }>(text);
+    void shadow(
+      "consent",
+      null,
+      { violation: !!parsed.violation },
+      () => jevConsent(message, { recipient: f.recipientFirstName ?? "", other: f.otherFirstName, otherOptedIn: f.otherOptedIn, otherStatedAsks: f.otherStatedAsks ?? [] }),
+      (j) => j.violation === !!parsed.violation,
+      (j) => ({ violation: j.violation, p: j.p }),
+    );
     return parsed.violation ? { name, pass: false, reason: `implies consent that isn't recorded: ${parsed.why ?? ""}` } : { name, pass: true };
   } catch (err: any) {
     // Fail closed: an intro message we couldn't check isn't sent.
@@ -316,7 +325,7 @@ export async function draftWithConsent(
   return result.ok ? text : null;
 }
 
-// For sends with no model draft (intro emails, group threads): check and log.
+// For sends with no model draft (intro emails): check and log.
 export async function gateIntroAction(recipientId: string, action: string, checks: GateCheck[], proposal?: unknown): Promise<boolean> {
   const { ok } = gate(checks);
   await recordDecision({ layer: 6, decision: "intro.consent", userId: recipientId, outcome: ok ? "act" : "skip", action, checks, proposal });

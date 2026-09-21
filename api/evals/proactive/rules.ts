@@ -7,7 +7,7 @@
 //   npx tsx evals/proactive/rules.ts
 import "dotenv/config";
 import { isReasonableLocalHour } from "../../src/services/localHours.js";
-import { userLevelChecks, mergeExpiry, localHourOk, candidateChecks, laneOf, type Candidate, type SendRecord } from "../../src/harness/proactive.js";
+import { userLevelChecks, mergeExpiry, localHourOk, candidateChecks, laneOf, unansweredPauseFor, RULES, type Candidate, type SendRecord } from "../../src/harness/proactive.js";
 import { pickCanonicalEventId, type CrossMatch } from "../../src/services/eventMatching.js";
 import { lumaTimestampInWindow } from "../../src/routes/luma.js";
 import { gate } from "../../src/harness/core.js";
@@ -145,6 +145,23 @@ check("'already applied' is saved as acted, so no reminder", outcomeForReaction(
 check("'interested' earns the deadline reminder", outcomeForReaction("interested") === "interested" && act(hist([20], "interested"), opening("2026-10-23")) === "remind");
 const passed = { id: 1, itemKey: "name:x", itemName: "Precursor Ventures", kind: "opportunity" as const, url: null, sentAt: new Date() };
 check("the reply is told not to push after a pass", /no pressure/.test(reactionFact(passed, "not_interested")) && /don't push/.test(reactionFact(passed, "not_interested")));
+
+// The pause after unanswered texts: a day after one, three days after two in a
+// row (2026-09-21: one quiet text must not silence events for 72 hours).
+check("one unanswered text pauses for 24 hours", unansweredPauseFor(1) === 24 && RULES.unansweredPauseHours === 24);
+check("two unanswered texts in a row pause for 72 hours", unansweredPauseFor(2) === 72 && unansweredPauseFor(5) === 72);
+{
+  const now = new Date("2026-09-21T16:00:00Z");
+  const hoursAgo = (h: number) => new Date(now.getTime() - h * 3600000);
+  const send = (h: number, type = "event_offer"): SendRecord => ({ type, sentAt: hoursAgo(h), targetKey: `t${h}`, topicKey: null, exempt: false } as SendRecord);
+  const st = (sends: SendRecord[], lastInboundAt: Date | null) => ({ now, sends, lastInboundAt, timezone: "America/Los_Angeles", optedOut: false, needsCare: false } as any);
+  const paused = (state: any) => gate(userLevelChecks(state, { lane: "room" })).failed.some((c) => c.name === "unanswered_pause");
+  check("one unanswered offer 16h ago still pauses", paused(st([send(16)], hoursAgo(20))));
+  check("one unanswered offer 25h ago no longer pauses", !paused(st([send(25)], hoursAgo(30))));
+  check("two unanswered offers, the last 25h ago, still pause", paused(st([send(49), send(25)], hoursAgo(60))));
+  check("two unanswered offers, the last 73h ago, no longer pause", !paused(st([send(100), send(73)], hoursAgo(120))));
+  check("a reply after the offer lifts the pause", !paused(st([send(10)], hoursAgo(5))));
+}
 
 console.log(`proactive rules: ${total - failed}/${total} passed`);
 if (failed) process.exitCode = 1;

@@ -22,6 +22,7 @@ import pool from "../db/db.js";
 import { MODELS } from "../models.js";
 import { parseModelJson } from "./modelJson.js";
 import { recordDecision } from "../harness/core.js";
+import { jevIssue, shadow } from "./jevClassifiers.js";
 
 export const ISSUE_CATEGORIES = ["bug", "wrong_info", "behavior", "speed", "feature_request", "other"] as const;
 export type IssueCategory = (typeof ISSUE_CATEGORIES)[number];
@@ -83,6 +84,7 @@ export async function captureIssueReport(userId: string, message: string, recent
   if (!captureEnabled() || !mayBeIssueReport(message)) return null;
   try {
     const report = await classifyIssue(message, recentConversation);
+    void shadow("issue", userId, report ? { isIssue: true, category: report.category, severity: report.severity } : { isIssue: false }, () => jevIssue(message, recentConversation, ISSUE_CATEGORIES), (j) => j.isIssue === !!report, (j) => ({ isIssue: j.isIssue, category: j.category, severity: j.severity, p: j.pIssue }));
     await recordDecision({
       layer: 2,
       decision: "feedback.issueReport",

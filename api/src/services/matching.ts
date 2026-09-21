@@ -276,4 +276,11 @@ function getActiveAsks(intent: unknown): string[] {
   return (intent as StatedIntent[]).filter(isOpenAsk).map((i) => String(i.text));
 }
 
-export { getActiveAsk, getActiveAsks, getActiveSeekingAsk, getActiveOfferingAsk };
+// Every open ask of one type, oldest first. The immediate sweep after a capture
+// only needs the newest (getActiveSeekingAsk); the daily sweep covers them all.
+function getOpenAsksOfType(intent: unknown, type: "seeking" | "offering"): StatedIntent[] {
+  if (!Array.isArray(intent)) return [];
+  return (intent as StatedIntent[]).filter((i) => isOpenAsk(i) && i?.type === type);
+}
+
+export { getActiveAsk, getActiveAsks, getActiveSeekingAsk, getActiveOfferingAsk, getOpenAsksOfType };

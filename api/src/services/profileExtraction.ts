@@ -6,6 +6,7 @@ import pool from "../db/db.js";
 import { generateEmbedding, generateGoalEmbedding } from "./embeddings.js";
 import { sweepAskAgainstNetwork, sweepOfferingAgainstNetwork } from "./relevance.js";
 import { recordDecision } from "../harness/core.js";
+import { jevSameAsk, shadow } from "./jevClassifiers.js";
 import { askExpiresAtForUser } from "./askExpiry.js";
 import {
   PROFILE_JUDGMENT_MODEL,
@@ -1252,7 +1253,9 @@ export async function judgeSameAsk(userId: string | null, newText: string, openT
       experimental_telemetry: { isEnabled: true, functionId: "profileExtraction.judgeSameAsk", metadata: { userId: userId ?? "" } },
       prompt: sameAskPrompt(newText, openText),
     });
-    return /"same"\s*:\s*true/.test(text);
+    const same = /"same"\s*:\s*true/.test(text);
+    void shadow("sameAsk", userId, { same }, () => jevSameAsk(newText, openText), (j) => j.same === same, (j) => ({ same: j.same, p: j.p }));
+    return same;
   } catch (err: any) {
     // Can't tell: opening a separate ask is the safer mistake.
     console.error("judgeSameAsk failed (non-fatal, treating as different):", err?.message ?? err);

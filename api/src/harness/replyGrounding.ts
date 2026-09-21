@@ -81,6 +81,7 @@ const STANDING_CAPABILITIES = [
   `They can also call Co from this same number. You are not given the digits, so never write a phone number.`,
   `Co can't go chase down a specific link, detail, or answer later: if it isn't here, it won't show up.`,
   `Co can send its contact card (so they can save Co) with the sendContactCard tool when they ask for it or want to save Co.`,
+  `Co never starts a group text or adds anyone to one, and never joins one. Sendblue can only reply to a number that has already texted in, so Co can't start a thread with two people. Introductions go out as one email to both people, and only after both have said yes. If they ask for a group text, say so plainly and offer the email introduction instead.`,
   `Members can invite friends to Co: 5 invites each, and one only counts once the friend joins. When they ask for an invite (or how a friend can get in), Co's invite step texts them a link to forward. Never write an invite link or code yourself, and never say an invite was sent unless it's listed as sent this turn. If they ask how it works, tell them to just ask you for an invite for their friend, and don't offer or promise to send one yourself.`,
   `Co can search right now (searchNow), save something they want found (people, events, a community, an opportunity) so the daily search keeps looking (saveAsk; it can't dig up a missing detail about something already sent), and send a link that's on file (shareLink). Co can't book, buy, register them for events, email or call other people for them, or post anywhere. If they ask for something Co can't do, say so plainly and say what Co can do instead.`,
 ];
@@ -335,6 +336,16 @@ export function predictionMatch(text: string): RegExpMatchArray | null {
   );
 }
 
+// Co offering, promising or claiming a group text/chat. Co can't start one
+// (Sendblue can only reply to a number that has already texted in), and
+// group chats were taken out of the product on 2026-09-20. An honest "I can't
+// do a group text" is fine, so a denial anywhere near the words clears it.
+const GROUP_CHAT_WORDS = /\bgroup\s*(?:text|chat|thread|message|imessage)s?\b/i;
+const GROUP_CHAT_DENIAL = /\b(?:can'?t|cannot|can not|don'?t|do not|won'?t|never|not able|unable|no way|doesn'?t|isn'?t|not something)\b[^.?!]{0,60}\bgroup\b|\bgroup\b[^.?!]{0,60}\b(?:isn'?t|is not|not something|off the table|not an option)\b/i;
+export function claimsGroupChat(text: string): boolean {
+  return GROUP_CHAT_WORDS.test(text) && !GROUP_CHAT_DENIAL.test(text);
+}
+
 // Co saying it's sending, adding, or getting someone an INVITE, now or soon.
 // The verb alone isn't enough: "I'll send the details once I have them" about
 // a dress code was being stripped and answered with invite copy (2026-09-20
@@ -382,6 +393,13 @@ export function codeChecks(draft: string, rf: ReplyFacts, src: GroundingSources)
   // Already handled this turn: a link went out, the count was given, or they
   // were told there are none left. Any of those means no claim to police.
   const inviteHandled = rf.facts.some((f) => /texted them an invite link|how many invites they have left|invites are used/i.test(f.text));
+  if (claimsGroupChat(draft)) {
+    checks.push({
+      name: "no_group_chat_claim",
+      pass: false,
+      reason: "offers or claims a group text, which Co can't do. Introductions go out as one email to both people once both have said yes",
+    });
+  }
   const namesAnInvite = INVITE_ACTION_VERB.test(draft) && INVITE_NOUN.test(draft);
   if (!inviteHandled && (namesAnInvite || (inviteAsk && INVITE_ACTION_VERB.test(draft)))) {
     checks.push({
@@ -544,6 +562,7 @@ export function stripUnsupported(draft: string, failed: GateCheck[]): string {
     if (failed.some((f) => f.name === "no_prediction") && predictionMatch(s)) return false;
     if (failed.some((f) => f.name === "no_capability_denial") && /\b(can(no|')?t|unable to|this is (just )?text)\b/i.test(s)) return false;
     if (failed.some((f) => f.name === "no_invite_sent_claim") && INVITE_ACTION_VERB.test(s)) return false;
+    if (failed.some((f) => f.name === "no_group_chat_claim") && claimsGroupChat(s)) return false;
     if (failed.some((f) => f.name === "link_on_file") && /https?:\/\//i.test(s)) return false;
     if (failed.some((f) => f.name === "phone_on_file") && /\d{3}[\s.-]?\d{4}/.test(s)) return false;
     if (failed.some((f) => f.name === "time_on_file") && clockTimes(s).length) return false;

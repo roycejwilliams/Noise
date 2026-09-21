@@ -7,12 +7,7 @@ import { CALL_OFFER_EXPIRY_DAYS } from "../agent/conversationReply.js";
 import { EVENT_OFFER_EXPIRY_DAYS } from "./eventSurfacingSweep.js";
 import { findPendingOutcomeFollowUp, type PendingOutcomeFollowUp } from "./recommendationOutcome.js";
 import { findPendingEventCheckinFollowUp, type PendingEventCheckinFollowUp } from "./eventCheckinFollowUp.js";
-import {
-  findPendingMatchNudge,
-  findPendingMethodChoice,
-  type PendingMatchNudge,
-  type PendingMethodChoice,
-} from "./eventGuestMatchHandoff.js";
+import { findPendingMatchNudge, type PendingMatchNudge } from "./eventGuestMatchHandoff.js";
 import {
   findPendingNetworkTease,
   findPendingNetworkIntroOffer,
@@ -43,7 +38,6 @@ export type OpenItemKind =
   | "match_nudge"
   | "network_tease"
   | "network_intro"
-  | "method_choice"
   | "walkin_ask"
   | "offer_reaction";
 
@@ -51,7 +45,7 @@ export type OpenItem = {
   id: string;
   kind: OpenItemKind;
   description: string;
-  // The other person's first name (match_nudge, network_intro, method_choice)
+  // The other person's first name (match_nudge, network_intro)
   // or the event name; null when there isn't one.
   detail: string | null;
   askedAt: Date | null;
@@ -63,7 +57,6 @@ export type OpenItem = {
     | { kind: "match_nudge"; pending: PendingMatchNudge }
     | { kind: "network_tease"; pending: PendingNetworkTease }
     | { kind: "network_intro"; pending: PendingNetworkIntroOffer }
-    | { kind: "method_choice"; pending: PendingMethodChoice }
     | { kind: "walkin_ask"; eventApiId: string }
     | { kind: "offer_reaction"; pending: PendingOfferReaction };
 };
@@ -77,7 +70,6 @@ export const ANSWER_VALUES: Record<OpenItemKind, readonly string[]> = {
   match_nudge: ["yes", "no"],
   network_tease: ["yes", "no"],
   network_intro: ["yes", "no"],
-  method_choice: ["text", "email"],
   walkin_ask: ["answered"],
   offer_reaction: ["interested", "not_interested", "already_did_it"],
 };
@@ -103,8 +95,6 @@ export function describeOpenItem(kind: OpenItemKind, detail: string | null): str
       return "Co said someone in its network crossed its mind for them, without saying who, and asked if they want to hear who";
     case "network_intro":
       return `Co named ${detail ?? "someone"} and asked if they want an introduction`;
-    case "method_choice":
-      return `Co asked whether they'd rather be connected${detail ? ` with ${detail}` : ""} by group text or by email`;
     case "walkin_ask":
       return "They checked in at an event and Co asked what they're hoping to find there / who they'd want to meet";
     case "offer_reaction":
@@ -127,7 +117,7 @@ async function safe<T>(label: string, fn: () => Promise<T>): Promise<T | null> {
 export async function gatherOpenItems(userId: string, opts: { skipWalkinAsk?: boolean } = {}): Promise<OpenItem[]> {
   const items: OpenItem[] = [];
 
-  const [callOffer, eventTease, outcome, checkin, matchNudge, tease, intro, method, walkin, offerReactions] = await Promise.all([
+  const [callOffer, eventTease, outcome, checkin, matchNudge, tease, intro, walkin, offerReactions] = await Promise.all([
     safe("call_offer", async () => {
       const { rows } = await pool.query(
         `SELECT p.id, p.content, p.created_at FROM co_memories p
@@ -161,7 +151,6 @@ export async function gatherOpenItems(userId: string, opts: { skipWalkinAsk?: bo
     safe("match_nudge", () => findPendingMatchNudge(userId)),
     safe("network_tease", () => findPendingNetworkTease(userId)),
     safe("network_intro", () => findPendingNetworkIntroOffer(userId)),
-    safe("method_choice", () => findPendingMethodChoice(userId)),
     opts.skipWalkinAsk
       ? Promise.resolve(null)
       : safe("walkin_ask", async () => {
@@ -255,19 +244,6 @@ export async function gatherOpenItems(userId: string, opts: { skipWalkinAsk?: bo
       detail: intro.candidate.first_name,
       askedAt: at ? new Date(at) : null,
       ref: { kind: "network_intro", pending: intro },
-    });
-  }
-  if (method) {
-    const at = await safe("method choice asked_at", async () =>
-      (await pool.query(`SELECT MAX(asked_at) AS at FROM event_intro_method_pending WHERE person_id = $1`, [userId])).rows[0]?.at,
-    );
-    items.push({
-      id: `method_choice:${method.event_id}`,
-      kind: "method_choice",
-      description: describeOpenItem("method_choice", method.a.user_id === userId ? method.b.first_name : method.a.first_name),
-      detail: method.a.user_id === userId ? method.b.first_name : method.a.first_name,
-      askedAt: at ? new Date(at) : null,
-      ref: { kind: "method_choice", pending: method },
     });
   }
   if (walkin) {
@@ -374,7 +350,6 @@ answers — which waiting item (if any) the latest message is actually replying 
 - outcome_followup / event_checkin: "named_positive" = they name or describe someone specific they met, or a specific good outcome ("met a product person at LinkedIn and an investor" counts, no names needed); "named_critical" = a real negative assessment ("waste of time", "nobody interesting"), with or without a name; "not_mentioned" = neutral or non-committal ("it was fine", "didn't go", "no one really"). Talking about something unrelated is not an answer.
 - match_nudge / network_intro: "yes" = they want to be connected/introduced to that specific person; "no" = passing.
 - event_tease / network_tease: "yes" = they want to hear more / hear who; "no" = passing.
-- method_choice: "text" (group text) or "email".
 - walkin_ask: "answered" if their message says what they hope to find or who they want to meet.
 
 call — about Co calling them:
@@ -465,8 +440,7 @@ export function isIrreversible(kind: OpenItemKind, value: string): boolean {
   return (
     (kind === "call_offer" && value === "accept") ||
     (kind === "match_nudge" && value === "yes") ||
-    (kind === "network_intro" && value === "yes") ||
-    kind === "method_choice"
+    (kind === "network_intro" && value === "yes")
   );
 }
 
@@ -515,8 +489,6 @@ export function askIsFresh(item: Pick<OpenItem, "kind" | "detail">, message: str
     case "match_nudge":
     case "network_intro":
       return item.detail ? text.toLowerCase().includes(item.detail.toLowerCase()) : /connect|introduc|meet/i.test(text);
-    case "method_choice":
-      return /\b(text|email)\b/i.test(text);
     default:
       return true;
   }

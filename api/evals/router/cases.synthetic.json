@@ -101,33 +101,6 @@
     }
   },
   {
-    "id": "s05-method-email",
-    "source": "synthetic",
-    "message": "email is better for me",
-    "recentConversation": "Co replied: Priya said yes too. would you rather I connect you two over a group text or by email?\nUser said: email is better for me",
-    "openItems": [
-      {
-        "kind": "method_choice",
-        "detail": "Priya"
-      }
-    ],
-    "current": null,
-    "label": {
-      "ans": [
-        "method_choice:email"
-      ],
-      "call": [
-        "nothing"
-      ],
-      "rec": false,
-      "upd": false,
-      "nope": [
-        "place_call",
-        "method_choice:text"
-      ]
-    }
-  },
-  {
     "id": "s06-bare-yes-fresh-nudge-old-offer",
     "source": "synthetic",
     "message": "yes",

@@ -38,6 +38,15 @@ const cases: [string, string | null, string][] = [
   ["I can keep an eye out for one.", "no_followup_promise", "keep an eye out"],
   ["Let me know if anything changes.", null, "their follow-up, not Co's"],
   ["Will do.", null, "bare will do"],
+  // Co can't start a group text (Sendblue only replies to numbers that texted
+  // in), and group chats are out of the product (2026-09-20).
+  ["Sure, I'll start a group text with you both.", "no_group_chat_claim", "offers a group text"],
+  ["I can set up a group chat so you two can pick a time.", "no_group_chat_claim", "offers a group chat"],
+  ["She's in. Starting a group text so you two can pick a time.", "no_group_chat_claim", "the old phone-mockup line"],
+  ["I put you two in a group thread.", "no_group_chat_claim", "claims it already happened"],
+  ["I can't start a group text, but I can email you both once you've each said yes.", null, "honest denial passes"],
+  ["A group chat isn't something I do. I'll introduce you two by email once you both say yes.", null, "honest denial, other wording"],
+  ["I'll email you both once you've each said yes.", null, "the email introduction is fine"],
   ["If a good one turns up in Oakland I'll send it your way.", "no_followup_promise", "send it your way"],
   ["I'll pass it along if I hear anything.", "no_followup_promise", "pass it along"],
   ["Send it my way whenever.", null, "their send, not Co's"],

@@ -17,6 +17,7 @@ import { checkGrounding, checkTiming, gateMatches, type GatedOut } from "../harn
 import { MODELS } from "../models.js";
 import { parseModelJson } from "./modelJson.js";
 import pool from "../db/db.js";
+import { jevRelevance, shadow } from "./jevClassifiers.js";
 import type { PoolClient } from "pg";
 
 // Model policy (Royce, 2026-09-14): Haiku only for narrow work code checks
@@ -247,6 +248,7 @@ async function isGenuinelyRelevant(askText: string, candidateName: string, candi
       askedKind: parsed.askedKind ?? null,
       related: parsed.fit ? true : parsed.related === true,
     };
+    void shadow("relevance", null, { fit: verdict.fit }, () => jevRelevance(askText, candidateName, candidateCity, description), (j) => j.fit === verdict.fit, (j) => ({ fit: j.fit, p: j.p }));
     if (relevanceCache.size > 2000) relevanceCache.clear();
     relevanceCache.set(key, { at: Date.now(), verdict });
     return verdict;
