@@ -24,7 +24,6 @@ import {
   type OpenItemKind,
   type RouterOutput,
 } from "../../src/services/messageRouter.js";
-import { routeWithJev } from "../../src/services/jevRouter.js";
 
 type Case = {
   id: string;
@@ -68,11 +67,8 @@ const PRICING: Record<string, [number, number]> = {
   "claude-opus-5": [5, 25],
 };
 
-// Jev is TypeSafe's hosted model. cases.local.json is real member messages, so it
-// stays off their servers until Royce clears their data terms (--allow-local).
-const jev = model === "jev";
 function loadCases(): Case[] {
-  const names = jev && !args.includes("--allow-local") ? ["cases.synthetic.json"] : ["cases.local.json", "cases.synthetic.json"];
+  const names = ["cases.local.json", "cases.synthetic.json"];
   const files = names.map((f) => join(here, f)).filter(existsSync);
   const all = files.flatMap((f) => JSON.parse(readFileSync(f, "utf8")) as Case[]);
   return only ? all.filter((c) => only.includes(c.id)) : all;
@@ -199,10 +195,7 @@ async function main() {
     let error: string | null = null;
     for (let attempt = 0; attempt < 2; attempt++) {
       try {
-        const r = jev
-          ? await routeWithJev({ message: c.message, recentConversation: c.recentConversation, openItems })
-          : await routeMessage({ message: c.message, recentConversation: c.recentConversation, openItems }, { model, effort });
-        if (!r) throw new Error("jev returned no answer");
+        const r = await routeMessage({ message: c.message, recentConversation: c.recentConversation, openItems }, { model, effort });
         ({ output, latencyMs } = r);
         inTok = r.inputTokens;
         outTok = r.outputTokens;
@@ -216,7 +209,7 @@ async function main() {
     return { c, acted, ...score(c, acted), latencyMs, inTok, outTok, output, error };
   });
 
-  const label = mode === "baseline" ? "baseline (current classifiers)" : jev ? "router jev (System One)" : `router ${model} effort=${effort ?? "none"}`;
+  const label = mode === "baseline" ? "baseline (current classifiers)" : `router ${model} effort=${effort ?? "none"}`;
   console.log(`\n=== ${label} — ${results.length} cases ===\n`);
 
   const hardCases = results.filter((r) => r.hard.length);

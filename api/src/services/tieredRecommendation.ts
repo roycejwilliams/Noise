@@ -17,8 +17,6 @@ import { checkGrounding, checkTiming, gateMatches, type GatedOut } from "../harn
 import { MODELS } from "../models.js";
 import { parseModelJson } from "./modelJson.js";
 import pool from "../db/db.js";
-import { cascadeDecision, jevRelevance, recordJevDecision, shadow } from "./jevClassifiers.js";
-import { jevDecideEnabled } from "./jev.js";
 import type { PoolClient } from "pg";
 
 // Model policy (Royce, 2026-09-14): Haiku only for narrow work code checks
@@ -198,13 +196,13 @@ Return ONLY valid JSON: {"city": "City, State/Country" or null}. null if no plac
 // meetup", instead of a generic "not close enough").
 export type RelevanceVerdict = { fit: boolean; why: string | null; eventKind?: string | null; askedKind?: string | null; related?: boolean };
 
-export function relevancePrompt(askText: string, candidateName: string, candidateCity: string | null, description: string, jevRead?: number | null): string {
+export function relevancePrompt(askText: string, candidateName: string, candidateCity: string | null, description: string): string {
   return `Someone said: "${askText}"
 
 Co is considering recommending this real event: "${candidateName}"${candidateCity ? ` in ${candidateCity}` : ""}.
 
 Its actual description: "${description}"
-${typeof jevRead === "number" ? `\nA fast classifier read this event as about ${Math.round(jevRead * 100)}% likely to fit what they asked. That read is unsure, so treat it as one input to weigh, not the answer.\n` : ""}
+
 Answer three things, in order:
 1. eventKind: what kind of event this is, in 2 to 6 words, from its format and main activity (e.g. "chess social night", "hands-on hackathon", "panel conference", "founder networking mixer", "AI research talk").
 2. askedKind: what kind of event they asked for, in 2 to 6 words, from their words.
@@ -235,26 +233,10 @@ async function isGenuinelyRelevant(askText: string, candidateName: string, candi
   const cached = relevanceCache.get(key);
   if (cached && Date.now() - cached.at < RELEVANCE_CACHE_TTL_MS) return cached.verdict;
   try {
-    // Cascade (JEV_DECIDE=relevance): Jev decides when it is sure; otherwise Claude decides,
-    // with Jev's read in its prompt. Any Jev failure falls straight through to Claude.
-    let jevRead: number | null = null;
-    if (jevDecideEnabled(process.env, "relevance")) {
-      const j = await jevRelevance(askText, candidateName, candidateCity, description).catch(() => null);
-      if (j) {
-        const d = cascadeDecision(j.p);
-        void recordJevDecision("relevance", d === "ask_claude" ? "claude_with_jev_read" : `jev_${d}`, { p: j.p, ms: j.ms, ask: askText.slice(0, 160), event: candidateName.slice(0, 100) });
-        if (d !== "ask_claude") {
-          const decided: RelevanceVerdict = { fit: d === "yes", why: null, eventKind: null, askedKind: null, related: d === "yes" };
-          relevanceCache.set(key, { at: Date.now(), verdict: decided });
-          return decided;
-        }
-        jevRead = j.p;
-      }
-    }
     const { text: raw } = await generateText({
       model: anthropic(JUDGE_MODEL),
       experimental_telemetry: { isEnabled: true, functionId: "tieredRecommendation.relevanceGate" },
-      prompt: relevancePrompt(askText, candidateName, candidateCity, description, jevRead),
+      prompt: relevancePrompt(askText, candidateName, candidateCity, description),
     });
     const parsed = parseModelJson<{ fit?: boolean; why?: string | null; eventKind?: string; askedKind?: string; related?: boolean }>(raw);
     if (typeof parsed?.fit !== "boolean") return { fit: /"fit":\s*true/i.test(raw), why: null };
@@ -265,7 +247,6 @@ async function isGenuinelyRelevant(askText: string, candidateName: string, candi
       askedKind: parsed.askedKind ?? null,
       related: parsed.fit ? true : parsed.related === true,
     };
-    void shadow("relevance", null, { fit: verdict.fit }, () => jevRelevance(askText, candidateName, candidateCity, description), (j) => j.fit === verdict.fit, (j) => ({ fit: j.fit, p: j.p }), { ask: askText.slice(0, 200), event: candidateName.slice(0, 100), snippet: description.slice(0, 240) });
     if (relevanceCache.size > 2000) relevanceCache.clear();
     relevanceCache.set(key, { at: Date.now(), verdict });
     return verdict;

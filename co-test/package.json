@@ -16,7 +16,6 @@
     "@langfuse/otel": "^5.10.0",
     "@langfuse/tracing": "^5.10.0",
     "@opentelemetry/sdk-node": "^0.221.0",
-    "@typesafe-ai/sdk": "^0.6.0",
     "ai": "^6.0.191",
     "cookie-parser": "^1.4.7",
     "dotenv": "^17.3.1",

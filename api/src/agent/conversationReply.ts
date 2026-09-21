@@ -7,7 +7,6 @@ import { CO_VOICE, CO_TEXT_CHANNEL } from "../services/coVoice.js";
 import { groundReply, LAYER3_MODELS, renderReplyFacts, type GroundingResult, type ReplyFacts, addFact } from "../harness/replyGrounding.js";
 import { capitalizeSentences } from "../services/textStyle.js";
 import { lastCoLine } from "../services/conversationClose.js";
-import { jevCallOffer, shadow } from "../services/jevClassifiers.js";
 
 export type ConversationReplyInput = {
   // A search already ran and its results went out as their own messages, so
@@ -98,7 +97,6 @@ Message: "${replyText}"
 Return ONLY "yes" or "no".`,
     });
     const offered = rawCheck.trim().toLowerCase().startsWith("yes");
-    void shadow("callOffer", input.userId, { offers: offered }, () => jevCallOffer(replyText), (j) => j.offers === offered, (j) => ({ offers: j.offers, p: j.p }), { reply: replyText.slice(0, 200) });
     if (!offered) return false;
   } catch (err: any) {
     console.error("conversationReply: call-offer verification failed (non-fatal, not recording a pending offer):", err?.message ?? err);

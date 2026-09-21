@@ -6,7 +6,6 @@ import pool from "../db/db.js";
 import { generateEmbedding, generateGoalEmbedding } from "./embeddings.js";
 import { sweepAskAgainstNetwork, sweepOfferingAgainstNetwork } from "./relevance.js";
 import { recordDecision } from "../harness/core.js";
-import { jevSameAsk, shadow } from "./jevClassifiers.js";
 import { askExpiresAtForUser } from "./askExpiry.js";
 import {
   PROFILE_JUDGMENT_MODEL,
@@ -1254,7 +1253,6 @@ export async function judgeSameAsk(userId: string | null, newText: string, openT
       prompt: sameAskPrompt(newText, openText),
     });
     const same = /"same"\s*:\s*true/.test(text);
-    void shadow("sameAsk", userId, { same }, () => jevSameAsk(newText, openText), (j) => j.same === same, (j) => ({ same: j.same, p: j.p }));
     return same;
   } catch (err: any) {
     // Can't tell: opening a separate ask is the safer mistake.

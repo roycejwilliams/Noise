@@ -61,7 +61,6 @@ import { recordEventCheckinOutcome } from "../services/eventCheckinFollowUp.js";
 import { handleMatchNudgeReply } from "../services/eventGuestMatchHandoff.js";
 import { resolveNetworkTeaseReply, resolveNetworkIntroReply } from "../services/networkIntroNudge.js";
 import { NO_ROUTE, decideActions, gatherOpenItems, routeMessage, type RouterOutput } from "../services/messageRouter.js";
-import { shadowRoute } from "../services/jevRouter.js";
 import { recordDecision } from "../harness/core.js";
 import { routerGateChecks } from "../harness/routerChecks.js";
 import { addEventFacts, addFact, addInstruction, addOngoingSearchFacts, gatherReplyFacts, recordSearchNote } from "../harness/replyGrounding.js";
@@ -1335,7 +1334,6 @@ export function sendblueRouter(io: Server): Router {
             declinedCallTopics: declinedTopicsResult.rows.map((r: any) => r.content),
           };
           const routed = await propagateAttributes({ userId: user.id, traceName: "sendblue.router.route" }, () => routeMessage(routeInput));
-          void shadowRoute(user.id, routeInput, routed.output);
           routerOutput = routed.output;
           routerLatencyMs = routed.latencyMs;
         } catch (err: any) {

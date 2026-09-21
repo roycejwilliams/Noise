@@ -1,5 +1,3 @@
-import { jevDecideEnabled } from "./jev.js";
-import { recordJevDecision } from "./jevClassifiers.js";
 import { anthropic } from "@ai-sdk/anthropic";
 import { generateText } from "ai";
 import pool from "../db/db.js";
@@ -217,28 +215,8 @@ export async function scoreAgainstStatedAsk<T extends ScorableCandidate>(
 ): Promise<AskScore<T>[]> {
   if (!candidates.length || !ask.text) return [];
 
-  // Behind JEV_DECIDE=matching (co-test, off): Jev rules out the clear no's first and Claude
-  // scores only who is left. Candidates it dropped score 0, as Claude would give "nothing on
-  // file supports it". Any Jev problem keeps everyone (services/jevMatching.ts).
-  let toScore = candidates;
-  let dropped: T[] = [];
-  if (candidates.length > 6 && jevDecideEnabled(process.env, "matching")) {
-    try {
-      const { jevMatchScores, keepAfterPrune } = await import("./jevMatching.js");
-      const ps = await jevMatchScores(ask.text, candidates);
-      const keep = new Set(keepAfterPrune(ps));
-      toScore = candidates.filter((_, i) => keep.has(i));
-      dropped = candidates.filter((_, i) => !keep.has(i));
-      void recordJevDecision("matching", "pruned", { candidates: candidates.length, keptForClaude: toScore.length, ask: ask.text.slice(0, 120) });
-    } catch (err: any) {
-      console.error("matching: Jev prune failed, scoring everyone (non-fatal):", err?.message ?? err);
-    }
-  }
-  const digest = await buildCandidateDigest(toScore, ask.embedding);
-  const scored = toScore.length
-    ? await runAskScoring("matching.scoreAgainstStatedAsk", buildStatedAskPrompt(ask.text, digest, askerContext), toScore)
-    : [];
-  return [...scored, ...dropped.map((c) => ({ candidate: c, score: 0, reason: "", shareReason: "", mutual: false }))];
+  const digest = await buildCandidateDigest(candidates, ask.embedding);
+  return runAskScoring("matching.scoreAgainstStatedAsk", buildStatedAskPrompt(ask.text, digest, askerContext), candidates);
 }
 
 export function buildStatedAskPrompt(askText: string, digest: string, askerContext?: string): string {
