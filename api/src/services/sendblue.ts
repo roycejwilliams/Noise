@@ -1,3 +1,4 @@
+import { sendLimiter } from "./sendLimiter.js";
 import { createHash, timingSafeEqual } from "crypto";
 import { SendblueAPI } from "sendblue";
 import { capitalizeSentences, looksLikeMetaReply } from "./textStyle.js";
@@ -87,6 +88,18 @@ export function webhookSecretMatches(expected: string | undefined | null, provid
   return timingSafeEqual(a, b);
 }
 
+// Alerts once when the send breaker trips (services/sendLimiter.ts): the
+// console for the logs, and a harness decision so the morning review sees it.
+// Loaded lazily to keep this file free of harness imports.
+function reportSendBreaker(number: string, count: number, resumesAt: number): void {
+  console.error(`sendblue: send breaker tripped for ...${number.slice(-4)}: ${count} texts in 10 minutes, holding sends until ${new Date(resumesAt).toISOString()}`);
+  import("../harness/core.js")
+    .then(({ recordDecision }) =>
+      recordDecision({ layer: 7, decision: "send.breaker", userId: null, outcome: "skip", action: "tripped", reason: `${count} texts to ...${number.slice(-4)} in 10 minutes`, proposal: { last4: number.slice(-4), count, resumesAt: new Date(resumesAt).toISOString() } }),
+    )
+    .catch(() => {});
+}
+
 // Every message send goes through this one wrapper so cleanup and the
 // meta-commentary guard apply uniformly, regardless of which prompt or call
 // site generated the content.
@@ -100,6 +113,12 @@ const sendblue = {
         return Promise.reject(
           new Error(`sendblue: outbound content looked like leaked model meta-commentary, refusing to send: ${content}`),
         );
+      }
+      const to = (body as { number?: string }).number;
+      const limit = sendLimiter.check(to);
+      if (!limit.ok) {
+        if (limit.tripped) reportSendBreaker(to ?? "", limit.count, limit.resumesAt);
+        return Promise.reject(new Error(`sendblue: send breaker open for ...${String(to ?? "").slice(-4)}, refusing to send (${limit.count} texts in 10 minutes)`));
       }
       return client.messages.send({ ...body, content }, options);
     },
