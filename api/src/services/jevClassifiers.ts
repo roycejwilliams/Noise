@@ -135,10 +135,9 @@ export async function jevRelevance(
   eventName: string,
   city: string | null,
   description: string,
-  // 0.45, not 0.5 (2026-09-21): on 35 hand-labelled disagreements with Claude,
-  // real tech events scored 0.44 to 0.49 and clear misses 0.10 to 0.26, so the
-  // even split cut real fits. A 0.45 cutoff got 25 right against 17 for Claude.
-  t: JevThresholds = { ...DEFAULT_THRESHOLDS, yes: 0.45 },
+  // 0.5. A 0.45 cutoff looked better on a first, mixed comparison, but on 97 cases
+  // labelled before running (evals/jev/relevanceBlind.ts) 0.5 scored 92% and 0.45 91%.
+  t: JevThresholds = DEFAULT_THRESHOLDS,
 ): Promise<{ fit: boolean; p: number; ms: number } | null> {
   const r = await askJev(
     { asked_for: askText, event: { name: eventName, city, description: description.slice(0, 1500) } },
