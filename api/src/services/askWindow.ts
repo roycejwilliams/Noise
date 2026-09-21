@@ -68,6 +68,28 @@ function explicitDates(t: string, now: DateTime): AskWindow | null {
   return null;
 }
 
+// "Saturday on the 10th", "for the 26th": a day of the month with no month.
+// It is the next date with that day, and with that weekday when they gave one
+// (2026-09-21: "What about Saturday on the 10th?" said on Sat Sept 19 became
+// Saturday Sept 19, and the follow-up asked how a Saturday still three weeks
+// away had gone). Needs "on/for/by/before/around/until/of the" or a weekday
+// right before it, so "the 1st time" and "my 3rd startup" are not dates.
+function dayOfMonthDate(t: string, now: DateTime): AskWindow | null {
+  const wd = t.match(new RegExp(`\\b(monday|tuesday|wednesday|thursday|friday|saturday|sunday)s?,?\\s+(?:on\\s+)?(?:the\\s+)?(\\d{1,2})(?:st|nd|rd|th)\\b`));
+  const bare = t.match(/\b(?:on|for|by|before|around|until|of)\s+the\s+(\d{1,2})(?:st|nd|rd|th)\b/);
+  const dayNum = wd ? Number(wd[2]) : bare ? Number(bare[1]) : 0;
+  if (!dayNum || dayNum > 31) return null;
+  const weekday = wd ? WEEKDAYS.indexOf(wd[1]) + 1 : 0;
+  for (let i = 0; i < 14; i++) {
+    const d = now.startOf("month").plus({ months: i }).set({ day: dayNum });
+    if (!d.isValid || d.day !== dayNum) continue;
+    if (d.endOf("day") < now.startOf("day")) continue;
+    if (weekday && d.weekday !== weekday) continue;
+    return { start: d.startOf("day"), end: d.endOf("day"), label: d.toFormat(weekday ? "cccc, LLL d" : "LLL d") };
+  }
+  return null;
+}
+
 // How far ahead a named time frame can reach. The default search looks two
 // weeks out; asking for a later range extends it, up to this (Royce,
 // 2026-09-16: "Can it have a limit but still have a stated ask to look
@@ -101,6 +123,8 @@ function parseAskWindowUncapped(text: string, now: DateTime): AskWindow | null {
 
   const dates = explicitDates(t, now);
   if (dates) return dates;
+  const dayOfMonth = dayOfMonthDate(t, now);
+  if (dayOfMonth) return dayOfMonth;
 
   if (/\b(tonight|this evening)\b/.test(t)) {
     const d = day(now);
@@ -189,4 +213,11 @@ export function carryTimeFrame(current: string, previous: string | null, now: Da
   if (own.window || own.outOfRange) return current;
   const prior = resolveAskWindow(previous, now);
   return prior.window ? `${current} (${previous})` : current;
+}
+
+// True when the text names a day of the month (the 10th, 19th) that is not in
+// the real dates it is about.
+export function mentionsUnknownDay(text: string, dates: string): boolean {
+  const known = new Set([...dates.matchAll(/\b(\d{1,2})\b/g)].map((m) => Number(m[1])));
+  return [...text.matchAll(/\b(\d{1,2})(?:st|nd|rd|th)\b/gi)].some((m) => !known.has(Number(m[1])));
 }

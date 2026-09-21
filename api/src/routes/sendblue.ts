@@ -2454,6 +2454,7 @@ Return ONLY valid JSON, no preamble: {"date": "YYYY-MM-DD or null", "time": "HH:
                 // What they actually got, not everything the search found
                 // (2026-09-18: five were recorded, one was sent).
                 sent: sentThisTurn,
+                dates: describeTimeFrame(scope) ?? undefined,
               };
               const targetKey = `window_followup:${scope.windowEnd.slice(0, 10)}`;
               const queued = await enqueueCandidate({

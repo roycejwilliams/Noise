@@ -9,7 +9,7 @@
 import { DateTime } from "luxon";
 import { checkTiming, checkLocation, type MatchFacts } from "../../src/harness/matchGate.js";
 import type { TierMatch } from "../../src/services/tieredRecommendation.js";
-import { carryTimeFrame, resolveAskWindow } from "../../src/services/askWindow.js";
+import { carryTimeFrame, mentionsUnknownDay, resolveAskWindow } from "../../src/services/askWindow.js";
 import { searchCacheKey, triesInOrder, xSearchBudget } from "../../src/services/searchRules.js";
 import { profileForSearch } from "../../src/harness/personSnapshot.js";
 import { resolveCoEventPlace } from "../../src/services/luma.js";
@@ -260,6 +260,26 @@ for (const [ok, label] of cases) {
   c(!tierAlreadyCovered({ match: { tier: 2 }, source: "urgent" }, new Set([2]), false), "an urgent item queues even when its tier is covered");
   c(!tierAlreadyCovered(full(2), new Set([2]), true), "a short-notice item queues even when its tier is covered");
   c(!tierAlreadyCovered({ match: { tier: 2 }, source: "full", reminder: true }, new Set([2]), false), "a reminder queues even when its tier is covered");
+}
+
+// A day of the month with no month (2026-09-21): "What about Saturday on the 10th?",
+// asked on Saturday Sept 19, was read as Saturday Sept 19, and the follow-up asked
+// how a Saturday three weeks away had gone.
+{
+  const sat919 = DateTime.fromISO("2026-09-19T10:00:00", { zone: "America/Los_Angeles" });
+  const win = (text: string, now = sat919) => resolveAskWindow(text, now).window;
+  const day = (w: ReturnType<typeof win>) => w?.start.toFormat("yyyy-LL-dd");
+  c(day(win("What about Saturday on the 10th?")) === "2026-10-10", "'Saturday on the 10th' is Saturday Oct 10, not the coming Saturday");
+  c(day(win("anything for the 10th?")) === "2026-10-10", "'for the 10th' is the next 10th");
+  c(day(win("Saturday the 26th")) === "2026-09-26", "'Saturday the 26th' is Sept 26");
+  c(day(win("anything on the 21st?")) === "2026-09-21", "a day later this month resolves in this month");
+  c(day(win("what's on before October 10th?")) === "2026-10-10", "a month and day still resolve as before");
+  c(win("this is the 1st startup I have built") === null, "'the 1st startup' is not a date");
+  c(win("my 3rd time hosting an event") === null, "'my 3rd time' is not a date");
+  c(day(win("what about saturday?")) === "2026-09-19", "a bare weekday still means the coming one");
+  c(mentionsUnknownDay("Saturday the 10th, the day you asked. How'd it go?", "saturday (Saturday, September 19)") === true, "a follow-up naming the 10th for a Sept 19 window is caught");
+  c(mentionsUnknownDay("Saturday the 19th, the day you asked. How'd it go?", "saturday (Saturday, September 19)") === false, "a follow-up naming the real day is fine");
+  c(mentionsUnknownDay("How'd your weekend go?", "this weekend") === false, "no day number is fine");
 }
 
 console.log(`search rules: ${cases.length - failed}/${cases.length} passed`);
