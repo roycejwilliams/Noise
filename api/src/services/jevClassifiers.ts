@@ -157,6 +157,83 @@ export async function jevRelevance(
   return r && p !== null ? { fit: p >= t.yes, p, ms: r.ms } : null;
 }
 
+// Event fit, built the way TypeSafe's docs recommend (2026-09-21): several short questions,
+// one condition each, combined in code, over trimmed state. v1 above is one long branching
+// rubric over untrimmed state, which their docs name as the compound shape Jev is weak at.
+// Dates are stripped from the ask (Jev is poor at date reasoning; the sweep filters by date
+// before this runs), and the description is cut to what a person reads first.
+export function stripDatesFromAsk(ask: string): string {
+  const MONTH = "(?:jan(?:uary)?|feb(?:ruary)?|mar(?:ch)?|apr(?:il)?|may|june?|july?|aug(?:ust)?|sept?(?:ember)?|oct(?:ober)?|nov(?:ember)?|dec(?:ember)?)";
+  const DAY = "\\d{1,2}(?:st|nd|rd|th)?";
+  return ask
+    // a bracketed date, "(Oct 5-12)"
+    .replace(new RegExp(`\\([^()]*\\b${MONTH}\\b[^()]*\\)`, "gi"), " ")
+    // "before October 10th", "during Oct 5"
+    .replace(new RegExp(`\\b(?:before|by|until|after|around|during|on)\\s+(?:the\\s+)?${MONTH}\\.?\\s+${DAY}\\b`, "gi"), " ")
+    // a bare date or range, "Oct 5", "Oct 5 to 12"
+    .replace(new RegExp(`\\b${MONTH}\\.?\\s+${DAY}(?:\\s*(?:-|to|through)\\s*(?:${MONTH}\\.?\\s+)?${DAY})?\\b`, "gi"), " ")
+    .replace(/\s{2,}/g, " ")
+    .trim();
+}
+
+export async function jevRelevanceV2(
+  askText: string,
+  eventName: string,
+  description: string,
+): Promise<{ fit: boolean; p: number; ms: number; parts: Record<string, number> } | null> {
+  const r = await askJev(
+    { asked_for: stripDatesFromAsk(askText), event: { name: eventName, description: description.slice(0, 600) } },
+    {
+      names_an_activity: {
+        type: "noul",
+        instructions: "Does `asked_for` name one specific activity to do (such as chess, pottery, yoga, hiking, salsa), as opposed to a group of people or a general topic?",
+      },
+      main_activity_matches: {
+        type: "noul",
+        instructions: "Is the main activity of `event` the specific activity named in `asked_for`?",
+      },
+      audience_or_topic_matches: {
+        type: "noul",
+        instructions: "Is `event` for, or about, the people or topic that `asked_for` describes? The format does not matter: a talk, a hackathon, a conference, a demo night and a meetup all count if they bring those people together or cover that topic.",
+      },
+      open_to_public: {
+        type: "noul",
+        instructions: "Can anyone attend `event`? Answer no if it is private, employees only or invite-only.",
+      },
+    },
+  );
+  if (!r) return null;
+  const act = noulP(r.answers.names_an_activity);
+  const main = noulP(r.answers.main_activity_matches);
+  const aud = noulP(r.answers.audience_or_topic_matches);
+  const open = noulP(r.answers.open_to_public);
+  if (act === null || main === null || aud === null || open === null) return null;
+  // Fit = open, and matches on whichever test the ask calls for.
+  const p = open * (act * main + (1 - act) * aud);
+  return { fit: p >= 0.5, p, ms: r.ms, parts: { act, main, aud, open } };
+}
+
+// ---------- cascade: Jev decides the clear cases, Claude decides the rest with Jev's read
+
+// Outside this band Jev decides. The band was picked by cross-validation on 97 labelled
+// event-fit cases (evals/jev/stats.ts cascadeCV chose 0.25 to 0.75 in every fold): Jev was
+// right on 68 of 70 cases outside it and on only 16 of 27 inside it.
+export const JEV_SURE = { low: 0.25, high: 0.75 };
+
+export function cascadeDecision(p: number): "yes" | "no" | "ask_claude" {
+  if (p >= JEV_SURE.high) return "yes";
+  if (p <= JEV_SURE.low) return "no";
+  return "ask_claude";
+}
+
+export async function recordJevDecision(classifier: string, action: string, extra: Record<string, unknown>): Promise<void> {
+  try {
+    await recordDecision({ layer: 2, decision: `jev.decide.${classifier}`, userId: null, outcome: "act", action, proposal: extra });
+  } catch (err: any) {
+    console.error("jev: decision record failed (non-fatal):", err?.message ?? err);
+  }
+}
+
 // ---------- shadow log
 
 // Logs Jev's answer beside the current classifier's, for the morning review.

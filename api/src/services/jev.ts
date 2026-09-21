@@ -64,6 +64,15 @@ export function jevShadowEnabled(env: NodeJS.ProcessEnv = process.env, classifie
   return !!classifier && allowed.includes(classifier.toLowerCase());
 }
 
+// Where Jev's answer is USED, not just logged. JEV_DECIDE names the classifiers it may decide
+// for (comma separated, or "all"). Same guards as shadow: dev, co-test, key present.
+export function jevDecideEnabled(env: NodeJS.ProcessEnv = process.env, classifier?: string): boolean {
+  if (env.RAILWAY_ENVIRONMENT_NAME !== "dev" || env.RAILWAY_SERVICE_NAME !== "co-test" || !jevKey(env)) return false;
+  const allowed = (env.JEV_DECIDE ?? "").split(",").map((s) => s.trim().toLowerCase()).filter(Boolean);
+  if (allowed.includes("all")) return true;
+  return !!classifier && allowed.includes(classifier.toLowerCase());
+}
+
 // For the evals, which run locally with the key in api/.env.
 export function jevAvailable(env: NodeJS.ProcessEnv = process.env): boolean {
   return !!jevKey(env);

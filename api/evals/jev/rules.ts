@@ -3,8 +3,9 @@
 // for TypeSafe, so this makes no network call and needs no key:
 //   npx tsx evals/jev/rules.ts
 import "dotenv/config";
-import { askJev, jevKey, jevShadowEnabled, setJevClientForTests, type JevAnswer, type JevClientLike, type JevQuestion } from "../../src/services/jev.js";
-import { jevCallOffer, jevConsent, jevIssue, jevRelevance, jevSameAsk, shadow } from "../../src/services/jevClassifiers.js";
+import { askJev, jevDecideEnabled, jevKey, jevShadowEnabled, setJevClientForTests, type JevAnswer, type JevClientLike, type JevQuestion } from "../../src/services/jev.js";
+import { JEV_SURE, cascadeDecision, jevCallOffer, jevConsent, jevIssue, jevRelevance, jevSameAsk, shadow, stripDatesFromAsk } from "../../src/services/jevClassifiers.js";
+import { relevancePrompt } from "../../src/services/tieredRecommendation.js";
 import { routeWithJev } from "../../src/services/jevRouter.js";
 
 let total = 0;
@@ -147,6 +148,20 @@ async function main() {
   await routeWithJev({ ...base, recentConversation: "x".repeat(6000) });
   check("router: conversation is trimmed before sending", String(lastState.recent_conversation).length <= 1800);
   check("router: no items still works", !!(await routeWithJev({ ...base, openItems: [] })));
+
+  // Cascade: Jev decides the clear cases, Claude the rest.
+  check("cascade: 0.9 is a Jev yes", cascadeDecision(0.9) === "yes");
+  check("cascade: 0.1 is a Jev no", cascadeDecision(0.1) === "no");
+  check("cascade: the edges belong to Jev", cascadeDecision(JEV_SURE.high) === "yes" && cascadeDecision(JEV_SURE.low) === "no");
+  check("cascade: the middle goes to Claude", cascadeDecision(0.5) === "ask_claude" && cascadeDecision(0.26) === "ask_claude" && cascadeDecision(0.74) === "ask_claude");
+  const dOn = { RAILWAY_ENVIRONMENT_NAME: "dev", RAILWAY_SERVICE_NAME: "co-test", JEV_DECIDE: "relevance", jev_co: "k" } as NodeJS.ProcessEnv;
+  check("decide: on for the named classifier on co-test", jevDecideEnabled(dOn, "relevance"));
+  check("decide: off for a classifier not named", !jevDecideEnabled(dOn, "router"));
+  check("decide: off in production", !jevDecideEnabled({ ...dOn, RAILWAY_ENVIRONMENT_NAME: "production" }, "relevance"));
+  check("decide: off without the key", !jevDecideEnabled({ ...dOn, jev_co: undefined }, "relevance"));
+  check("decide: a shadow flag alone does not turn it on", !jevDecideEnabled({ ...dOn, JEV_DECIDE: undefined, JEV_SHADOW: "relevance" } as NodeJS.ProcessEnv, "relevance"));
+  check("prompt: Jev's read is added only when given", relevancePrompt("a", "b", null, "d", 0.6).includes("about 60% likely") && !relevancePrompt("a", "b", null, "d").includes("fast classifier"));
+  check("ask cleaning keeps the ask and drops the dates", stripDatesFromAsk("Looking for event recommendations during tech week (Oct 5-12)") === "Looking for event recommendations during tech week" && stripDatesFromAsk("meet VC and founder connections before October 10th event") === "meet VC and founder connections event");
 
   setJevClientForTests(null);
   if (savedKey) process.env.TYPESAFE_API_KEY = savedKey;
