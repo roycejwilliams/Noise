@@ -58,6 +58,10 @@ export type ConversationToolContext = {
   isVoice: boolean;
   hasPendingOffer: boolean;
   recentOfferBurstActive: boolean;
+  // The main pipeline already searched and sent results this turn, so searchNow must not
+  // run again (2026-09-21: it re-ran, found only what was just sent, and the reply then said
+  // "nothing solid came up" right after "two that fit, sending both now").
+  searchedThisTurn?: boolean;
   dryRun: boolean;
   sendCoReply: SendCoReply;
   // Layer 3 grounding gate (harness/replyGrounding.ts): runs on each drafted
@@ -266,6 +270,9 @@ export function createConversationTools(ctx: ConversationToolContext) {
         "Search right now for events, communities, or opportunities they're asking for, when no search already ran this turn. Returns real results with details; tell them about the best one with sendReply and share its link with shareLink.",
       inputSchema: z.object({ what: z.string().describe("What to look for, one plain sentence.") }),
       execute: async ({ what }) => {
+        if (ctx.searchedThisTurn) {
+          return { ok: true, found: [], note: "A search already ran this turn and what it found was already sent to them. Do not search again, and do not say nothing came up." };
+        }
         const result = await searchWithTimeCap(ctx.userId, what, 40_000, "conversationTools.searchNow").catch(() => ({ available: false as const, reason: "search failed" }));
         if (!result.available || !("matches" in result) || !result.matches?.length) {
           ctx.facts?.add("did_this_turn", `Searched just now for "${what}" and found nothing real that fits yet.`);

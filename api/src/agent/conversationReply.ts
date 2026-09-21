@@ -173,6 +173,7 @@ export async function runConversationReplyAgent(
     isVoice: input.isVoice,
     hasPendingOffer: input.hasPendingOffer,
     recentOfferBurstActive: input.recentOfferBurstActive,
+    searchedThisTurn: input.searchedThisTurn,
     dryRun: opts.dryRun ?? false,
     sendCoReply: input.sendCoReply,
     facts: {

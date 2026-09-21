@@ -7,6 +7,7 @@
 // (searchRules.ts searchCacheKey), and online Co event handling
 // (luma.ts resolveCoEventPlace).
 import { DateTime } from "luxon";
+import { readFileSync } from "fs";
 import { checkTiming, checkLocation, type MatchFacts } from "../../src/harness/matchGate.js";
 import type { TierMatch } from "../../src/services/tieredRecommendation.js";
 import { carryTimeFrame, mentionsUnknownDay, resolveAskWindow } from "../../src/services/askWindow.js";
@@ -280,6 +281,16 @@ for (const [ok, label] of cases) {
   c(mentionsUnknownDay("Saturday the 10th, the day you asked. How'd it go?", "saturday (Saturday, September 19)") === true, "a follow-up naming the 10th for a Sept 19 window is caught");
   c(mentionsUnknownDay("Saturday the 19th, the day you asked. How'd it go?", "saturday (Saturday, September 19)") === false, "a follow-up naming the real day is fine");
   c(mentionsUnknownDay("How'd your weekend go?", "this weekend") === false, "no day number is fine");
+}
+
+// The reply agent must not search a second time in a turn the pipeline already searched
+// (2026-09-21: it re-ran, found only what had just been sent, and told the member "nothing
+// solid came up" right after "two that fit, sending both now").
+{
+  const tools = readFileSync(new URL("../../src/agent/conversationTools.ts", import.meta.url), "utf8");
+  const reply = readFileSync(new URL("../../src/agent/conversationReply.ts", import.meta.url), "utf8");
+  c(/if \(ctx\.searchedThisTurn\) \{\s*return \{ ok: true, found: \[\]/.test(tools), "searchNow refuses to run when a search already ran this turn");
+  c(reply.includes("searchedThisTurn: input.searchedThisTurn"), "the reply agent tells its tools a search already ran");
 }
 
 console.log(`search rules: ${cases.length - failed}/${cases.length} passed`);
