@@ -2,6 +2,7 @@ import type { TierMatch } from "../services/tieredRecommendation.js";
 import { draftProactive, nameTokens, type Facts, type OutputRules } from "../harness/proactive.js";
 import { renderEventDetails } from "../services/eventDetails.js";
 import { stripClosingQuestion } from "../services/offerFollowUp.js";
+import { IDENTITY_RULE, stripUngroundedIdentity } from "../services/identityGuard.js";
 import { isShortNotice } from "../services/eventSurfacingSweep.js";
 
 export type EventDiscoverySurfacingPerson = {
@@ -99,7 +100,7 @@ export async function draftEventReveal(
     facts: revealFacts(askText, fromProfile, match),
     // Every event offer goes out with its details now (2026-09-18), so "short
     // notice" is only said when it's true.
-    task: `Do not end with a question or an offer ("want me to grab you a spot?", "want this on your radar?"); a separate text after this one asks if it interests them. ` + (opts.reminder
+    task: `${IDENTITY_RULE} Do not end with a question or an offer ("want me to grab you a spot?", "want this on your radar?"); a separate text after this one asks if it interests them. ` + (opts.reminder
       ? match.kind === "opportunity"
         ? `They were interested in this one when you mentioned it. This is a short heads-up that the deadline is coming up: name it and the deadline, in one or two sentences. Don't present it as new or re-explain it.${url ? " The link goes out as its own message right before yours; don't mention a link." : ""} If it doesn't fit anymore, return SKIP.`
         : `They already heard about this one from you. This is a short heads-up that it's coming up: name it and when it is, in one or two sentences. Don't present it as new or re-explain it.${url ? " The link goes out as its own message right before yours; don't mention a link." : ""} If it doesn't fit anymore, return SKIP.`
@@ -107,7 +108,10 @@ export async function draftEventReveal(
   });
   if (!text) return null;
   // The follow-up question is its own text after the last offer (services/offerFollowUp.ts).
-  const body = stripClosingQuestion(text);
+  // Nothing about who they are beyond what they said in their ask (identityGuard.ts).
+  const grounded = stripUngroundedIdentity(text, `${askText}\n${match.name}`);
+  if (!grounded) return null;
+  const body = stripClosingQuestion(grounded);
   const tokens = nameTokens(match.name);
   return {
     messages: url ? [url, body] : [body],

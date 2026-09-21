@@ -3,6 +3,7 @@
 //   npx tsx evals/onboarding/rules.ts
 import { CALL_OFFER, CARD, GATE_ASK, HOW_IT_WORKS, NAME_EMAIL, WELCOME, WRONG_CODE, pickLine } from "../../src/services/onboardingLines.js";
 import { GATE_REPLY_BUDGET, decideGateReply, looksAutomated } from "../../src/services/gateGuard.js";
+import { IDENTITY_RULE, stripUngroundedIdentity, ungroundedIdentityClaims } from "../../src/services/identityGuard.js";
 
 let total = 0;
 let failed = 0;
@@ -80,6 +81,23 @@ check("past the budget Co goes quiet", decideGateReply({ text: "ABCD2345", recen
     if (decideGateReply({ text: "ok", recentGateReplies: replies }) === "send") { sends++; replies++; }
   }
   check("even a non-obvious bot loop is capped at the budget", sends === GATE_REPLY_BUDGET.max);
+}
+
+// Co never tells someone what they are unless it was given (2026-09-21): a search
+// reply said "Given you're French" about an X post aimed at French founders.
+{
+  const said = "This is a16z's Tech Week thing for founders in October, they're specifically trying to get more French founders out to SF for it. Given you're French and already looking at VC/accelerator stuff, feels worth a look.";
+  const profile = "goals: meet VC and founder connections before the Oct 10th event; find tech week events";
+  check("the real reply's 'you're French' is caught", ungroundedIdentityClaims(said, profile).join() === "French");
+  check("it is not caught when they said it themselves", ungroundedIdentityClaims(said, profile + " I'm French and building in SF").length === 0);
+  check("the claim's sentence is dropped, the rest kept", stripUngroundedIdentity(said, profile) === "This is a16z's Tech Week thing for founders in October, they're specifically trying to get more French founders out to SF for it.");
+  check("a reply that is only the claim is dropped entirely", stripUngroundedIdentity("Given you're French, feels worth a look.", profile) === null);
+  check("'you're from' a place they never mentioned is caught", ungroundedIdentityClaims("Since you're from Paris this should feel familiar.", profile).join() === "Paris");
+  check("'you're from' a place in their profile is fine", ungroundedIdentityClaims("Since you're from Texas this is a change of scene.", profile + " just moved from Texas").length === 0);
+  check("'as a mom' with no basis is caught", ungroundedIdentityClaims("As a mom you'll like the kids' track.", profile).join() === "mom");
+  check("what they are doing is never a claim about who they are", ungroundedIdentityClaims("You're building Co, you're looking at accelerators, you're hosting an event Oct 10, you're in SF.", profile).length === 0);
+  check("a post that merely mentions French founders is fine", ungroundedIdentityClaims("It's aimed at French founders coming to SF.", profile).length === 0);
+  check("the drafting rule names the trap", IDENTITY_RULE.includes("French founders") && IDENTITY_RULE.includes("does not mean they belong"));
 }
 
 console.log(`onboarding rules: ${total - failed}/${total} passed`);

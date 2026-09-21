@@ -19,6 +19,7 @@ import { anthropic } from "@ai-sdk/anthropic";
 import { generateText } from "ai";
 import { DateTime } from "luxon";
 import { MODELS } from "../models.js";
+import { IDENTITY_RULE, stripUngroundedIdentity } from "./identityGuard.js";
 import type { TierMatch } from "./tieredRecommendation.js";
 import { getPersonSnapshot, renderSnapshot } from "../harness/personSnapshot.js";
 
@@ -193,6 +194,7 @@ What's actually known about "${match.name}":
 ${detailLines.join("\n") || "(only the name)"}
 
 Rules:
+- ${IDENTITY_RULE}
 - Two tests, both must pass (Royce, 2026-09-16: "give them things that match their profile"):
   1. It's the kind of thing they're asking for right now. Their ask decides: if they asked for a pottery class, a founder event doesn't fit however good it is for them.
   2. It's worth their time given who they are right now: their work and stage, what they want, what matters to them in people, and what has or hasn't worked before. Something clearly aimed at a different audience or stage (a beginner coding workshop for an experienced technical founder, a job fair for someone not looking) doesn't fit. When the background says nothing either way, this test passes.
@@ -219,6 +221,10 @@ export async function explainFit(match: EnrichedMatch, person: PersonForFit): Pr
     });
     const p = parseModelJson<{ fits?: boolean; rightKind?: boolean; why?: string }>(text);
     if (typeof p.why !== "string" || !p.why.trim()) return null;
+    // Never claim who they are beyond what Co was given about them (services/identityGuard.ts).
+    const cleanWhy = stripUngroundedIdentity(p.why, `${picture}\n${person.askText ?? ""}\n${(person.goals ?? []).join(" ")}\n${person.city ?? ""}`);
+    if (!cleanWhy) return null;
+    p.why = cleanWhy;
     const fits = p.fits !== false;
     // Anything that fits is the right kind; a misfit is only the right kind
     // when the model said so outright.

@@ -24,6 +24,7 @@ import { buildContextSummary } from "../services/callContext.js";
 import { findOrCreateUserByPhone, hasPendingEmail, splitFullName } from "../services/identity.js";
 import { redeemInviteCodeIn } from "../services/inviteCodes.js";
 import { countRecentGateReplies, decideGateReply } from "../services/gateGuard.js";
+import { IDENTITY_RULE, stripUngroundedIdentity } from "../services/identityGuard.js";
 import { claimJoinNotice, getMemberInvite, inviteLink, invitesLeftFor, inviterFirstName, isInviteCountQuestion, isInviteRequest, releaseJoinNotice } from "../services/invites.js";
 import { decideInviteJoinedGate } from "../services/inviteJoinGate.js";
 import { handlePhoneChange } from "../services/phoneChange.js";
@@ -2152,9 +2153,13 @@ Return ONLY valid JSON, no preamble: {"date": "YYYY-MM-DD or null", "time": "HH:
                   const { text: drafted } = await generateText({
                     model: anthropic(MODELS.sonnet),
                     experimental_telemetry: { isEnabled: true, functionId: "sendblue.recommendation.describe" },
-                    prompt: `${CO_VOICE}\n\n${CO_TEXT_CHANNEL} You're telling ${user.first_name ?? "them"} about "${m.name}"${"url" in m && m.url ? ". Its link preview is already showing right above this message, so this message is the caption under it: say what it is directly, and don't mention the link, sending it, or \"the one above\"" : ""}${matchCount > 1 ? `. This is one of ${matchCount} you're sending together, so it reads as a bullet in a short list` : ""}.\n\n${stretch ? `It isn't an exact fit for what they asked: ${em.whyItFits ?? "not quite what they described"}. Say that honestly in a few words, then why it could still be worth a look.` : `Why it fits them: ${em.whyItFits ?? m.reason}`}\n${record ? `\nWhat's actually known about it:\n${record}\n` : ""}\nWrite ${matchCount > 1 ? "one sentence" : "1-3 sentences"} naming it, the one or two details that matter most to them (when, where, who), and why it fits, in your own words. Only use what's written above. No link. Return ONLY the message.`,
+                    prompt: `${CO_VOICE}\n\n${CO_TEXT_CHANNEL} ${IDENTITY_RULE} You're telling ${user.first_name ?? "them"} about "${m.name}"${"url" in m && m.url ? ". Its link preview is already showing right above this message, so this message is the caption under it: say what it is directly, and don't mention the link, sending it, or \"the one above\"" : ""}${matchCount > 1 ? `. This is one of ${matchCount} you're sending together, so it reads as a bullet in a short list` : ""}.\n\n${stretch ? `It isn't an exact fit for what they asked: ${em.whyItFits ?? "not quite what they described"}. Say that honestly in a few words, then why it could still be worth a look.` : `Why it fits them: ${em.whyItFits ?? m.reason}`}\n${record ? `\nWhat's actually known about it:\n${record}\n` : ""}\nWrite ${matchCount > 1 ? "one sentence" : "1-3 sentences"} naming it, the one or two details that matter most to them (when, where, who), and why it fits, in your own words. Only use what's written above. No link. Return ONLY the message.`,
                   });
-                  if (drafted.trim()) description = cleanCoMessage(drafted.trim());
+                  if (drafted.trim()) {
+                    // No claim about who they are beyond their own words and profile (services/identityGuard.ts).
+                    const grounded = stripUngroundedIdentity(cleanCoMessage(drafted.trim()), `${resolvedContent}\n${(profile?.goals ?? []).join(" ")}\n${profile?.city ?? ""}\n${em.whyItFits ?? ""}`);
+                    if (grounded) description = grounded;
+                  }
                 } catch (err: any) {
                   console.error("sendblue: recommendation description drafting failed (non-fatal, sending plain):", err?.message ?? err);
                 }
