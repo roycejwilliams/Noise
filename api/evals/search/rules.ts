@@ -14,7 +14,7 @@ import { searchCacheKey, triesInOrder, xSearchBudget } from "../../src/services/
 import { profileForSearch } from "../../src/harness/personSnapshot.js";
 import { resolveCoEventPlace } from "../../src/services/luma.js";
 import { localToday, searchZone } from "../../src/services/eventOrder.js";
-import { interleaveByTier } from "../../src/services/eventSurfacingSweep.js";
+import { interleaveByTier, tierAlreadyCovered } from "../../src/services/eventSurfacingSweep.js";
 import { spelledNumbers } from "../../src/harness/matchGate.js";
 import { htmlToText, looksOfficial, pageExcerpt } from "../../src/services/webOpportunitySearch.js";
 
@@ -254,6 +254,12 @@ for (const [ok, label] of cases) {
   c(ids(interleaveByTier([it(2, 1), it(2, 2)], 2)) === "t2-1,t2-2", "one tier only keeps its order");
   c(ids(interleaveByTier(items, null, [2])).startsWith("t3-1,t1-1,t2-1"), "a tier with an offer already waiting goes last");
   c(ids(interleaveByTier(items, null, [1, 2, 3])) === ids(interleaveByTier(items, null)), "every tier waiting changes nothing");
+  const full = (tier: number) => ({ match: { tier }, source: "full" });
+  c(!tierAlreadyCovered(full(3), new Set([2]), false), "a tier with nothing waiting queues its offer (a missing tier holds nothing back)");
+  c(tierAlreadyCovered(full(2), new Set([2]), false), "a tier that already has an offer waiting does not stack a second");
+  c(!tierAlreadyCovered({ match: { tier: 2 }, source: "urgent" }, new Set([2]), false), "an urgent item queues even when its tier is covered");
+  c(!tierAlreadyCovered(full(2), new Set([2]), true), "a short-notice item queues even when its tier is covered");
+  c(!tierAlreadyCovered({ match: { tier: 2 }, source: "full", reminder: true }, new Set([2]), false), "a reminder queues even when its tier is covered");
 }
 
 console.log(`search rules: ${cases.length - failed}/${cases.length} passed`);

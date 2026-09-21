@@ -288,6 +288,14 @@ export function interleaveByTier<T extends { match: { tier: number } }>(items: T
   return out;
 }
 
+// A tier that already has an offer waiting doesn't queue a second one behind it
+// (the dispatcher sends one per tier together); urgent, short-notice and
+// reminder items are the exception, since they can't wait a day.
+export function tierAlreadyCovered(item: { match: { tier: number }; source: string; reminder?: boolean }, coveredTiers: Set<number>, shortNotice: boolean): boolean {
+  if (item.source === "urgent" || item.reminder || shortNotice) return false;
+  return coveredTiers.has(item.match.tier);
+}
+
 // Tiers that already have an offer waiting to go out to this person.
 async function waitingOfferTiers(userId: string): Promise<number[]> {
   const { rows } = await pool
@@ -546,6 +554,10 @@ export async function attemptEventSurfacing(candidate: SurfacingCandidate): Prom
   const alreadyWaiting = new Set(waiting.map((r: any) => r.target_key as string));
   const skipped: { name: string; why: string }[] = [];
   let tried = 0;
+  // One offer per tier per run (2026-09-21): a missing tier holds nothing back,
+  // and a person with a single ask still gets every tier that has something.
+  const coveredTiers = new Set<number>(await waitingOfferTiers(candidate.userId));
+  let queuedAny = false;
 
   for (const item of pending) {
     const targetKey = offerTargetKey(item);
@@ -553,12 +565,16 @@ export async function attemptEventSurfacing(candidate: SurfacingCandidate): Prom
       skipped.push({ name: item.match.name, why: "already queued" });
       continue;
     }
+    if (tierAlreadyCovered(item, coveredTiers, isShortNotice(item.match))) {
+      skipped.push({ name: item.match.name, why: `tier ${item.match.tier} already has an offer waiting` });
+      continue;
+    }
     // No per-ask send hold here (2026-09-21, Royce: "the sweep should allow all
     // the tiers to be surfaced"). The old 3-day cadence parked Tier 3 finds for
     // days behind a Tier 2 send; pacing is the Layer 7 caps' job now (one room
     // text a day, four a week, the unanswered pause). Queueing is not sending.
-    // Each try costs a fit read; three is plenty for one ask in one run.
-    if (tried >= 3) break;
+    // Each try costs a fit read; four covers three tiers and a rejection.
+    if (tried >= 4) break;
     tried++;
 
     const date = relevantDate(item.match);
@@ -605,11 +621,14 @@ export async function attemptEventSurfacing(candidate: SurfacingCandidate): Prom
     });
     if (ok) {
       await log("act", "queued", { queued: { name: item.match.name, tier: item.match.tier, date }, skipped });
-      return { queued: true };
+      coveredTiers.add(item.match.tier);
+      queuedAny = true;
+      continue;
     }
     skipped.push({ name: item.match.name, why: "already sent or decided" });
   }
 
+  if (queuedAny) return { queued: true };
   await log("skip", "nothing_queued", { skipped });
   return { queued: false };
 }
