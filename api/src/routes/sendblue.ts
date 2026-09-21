@@ -23,6 +23,7 @@ import { getEmotionalContext, readTextEmotion, recordEmotionSignals, renderEmoti
 import { buildContextSummary } from "../services/callContext.js";
 import { findOrCreateUserByPhone, hasPendingEmail, splitFullName } from "../services/identity.js";
 import { redeemInviteCodeIn } from "../services/inviteCodes.js";
+import { countRecentGateReplies, decideGateReply } from "../services/gateGuard.js";
 import { claimJoinNotice, getMemberInvite, inviteLink, invitesLeftFor, inviterFirstName, isInviteCountQuestion, isInviteRequest, releaseJoinNotice } from "../services/invites.js";
 import { decideInviteJoinedGate } from "../services/inviteJoinGate.js";
 import { handlePhoneChange } from "../services/phoneChange.js";
@@ -786,6 +787,14 @@ export function sendblueRouter(io: Server): Router {
           }
         }
         if (!user.invite_verified) {
+          // Never answer an automated sender, and never send one number more
+          // than a few gate replies a day (services/gateGuard.ts).
+          const gateDecision = decideGateReply({ text: hasText ? content : "", recentGateReplies: await countRecentGateReplies(user.id) });
+          if (gateDecision !== "send") {
+            if (hasText) await logTextExchange(user.id, `User said: ${content}`);
+            await recordDecision({ layer: 2, decision: "gate.silent", userId: user.id, outcome: "skip", action: gateDecision, proposal: { message: hasText ? content.slice(0, 200) : null } });
+            return res.status(200).send({ received: true, action: gateDecision });
+          }
           if (!user.invite_asked) {
             // First contact ever from an unverified number, and it wasn't
             // a valid code — ask for one. Nothing in this inbound message
