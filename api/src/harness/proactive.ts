@@ -234,7 +234,9 @@ export const LANE_CAPS: Record<Lane, { perDay: number; per7Days: number }> = {
   other: { perDay: RULES.maxPerLocalDay, per7Days: RULES.maxPer7Days },
 };
 
-export function userLevelChecks(state: Omit<PickState, "candidates">, opts: { skipHours?: boolean; lane?: Lane } = {}): GateCheck[] {
+// ignorePacing skips the daily cap, weekly cap and unanswered pause. Only a hand-run
+// dispatch sets it (scripts/forceDispatch.ts); the cron never does.
+export function userLevelChecks(state: Omit<PickState, "candidates">, opts: { skipHours?: boolean; lane?: Lane; ignorePacing?: boolean } = {}): GateCheck[] {
   const lane = opts.lane ?? "other";
   const maxDay = LANE_CAPS[lane].perDay;
   const maxWeek = LANE_CAPS[lane].per7Days;
@@ -261,15 +263,17 @@ export function userLevelChecks(state: Omit<PickState, "candidates">, opts: { sk
       reason: `outside ${RULES.startHour}am-${RULES.endHour - 12}pm ${state.timezone ?? "(no time zone, US-safe UTC window)"}`,
     });
   }
-  checks.push(
-    { name: "daily_cap", pass: today < maxDay, reason: `${today} ${lane}-lane proactive text(s) already today` },
-    { name: "weekly_cap", pass: week < maxWeek, reason: `${week} ${lane}-lane proactive texts in the last 7 days` },
-    {
-      name: "unanswered_pause",
-      pass: !pauseActive,
-      reason: lastCounted ? `last proactive text (${lastCounted.type}) at ${lastCounted.sentAt.toISOString()} has no reply yet` : undefined,
-    },
-  );
+  if (!opts.ignorePacing) {
+    checks.push(
+      { name: "daily_cap", pass: today < maxDay, reason: `${today} ${lane}-lane proactive text(s) already today` },
+      { name: "weekly_cap", pass: week < maxWeek, reason: `${week} ${lane}-lane proactive texts in the last 7 days` },
+      {
+        name: "unanswered_pause",
+        pass: !pauseActive,
+        reason: lastCounted ? `last proactive text (${lastCounted.type}) at ${lastCounted.sentAt.toISOString()} has no reply yet` : undefined,
+      },
+    );
+  }
   return checks;
 }
 
@@ -316,12 +320,12 @@ export function candidateChecks(c: Candidate, state: Pick<PickState, "now" | "se
 
 const PERSON_CHECKS = new Set(["not_opted_out", "local_hours"]);
 
-export function evaluateCandidates(state: PickState): Evaluation {
+export function evaluateCandidates(state: PickState, opts: { ignorePacing?: boolean } = {}): Evaluation {
   // Opt-out and local hours apply to the person; caps and the unanswered
   // pause apply per lane, so each candidate is checked against its own lane.
   const byLane: Record<Lane, GateCheck[]> = {
-    room: userLevelChecks(state, { lane: "room" }),
-    other: userLevelChecks(state, { lane: "other" }),
+    room: userLevelChecks(state, { lane: "room", ignorePacing: opts.ignorePacing }),
+    other: userLevelChecks(state, { lane: "other", ignorePacing: opts.ignorePacing }),
   };
   const userChecks = byLane.other.filter((k) => PERSON_CHECKS.has(k.name));
   const userOk = gate(userChecks).ok;
@@ -690,6 +694,7 @@ async function sendWithLedger(
   c: Candidate,
   person: Person,
   messages: string[],
+  opts: { ignorePacing?: boolean } = {},
 ): Promise<{ sent: true; delivered: string[] } | { sent: false; failed: GateCheck[] }> {
   const client = await pool.connect();
   const delivered: string[] = [];
@@ -707,7 +712,7 @@ async function sendWithLedger(
     const lastInboundAt = await loadLastInbound(client, person.userId);
     const now = new Date();
     const checks = [
-      ...userLevelChecks({ now, timezone: person.timezone, optedOut: optedOutNow, sends, lastInboundAt }, { lane: laneOf(c.type) }),
+      ...userLevelChecks({ now, timezone: person.timezone, optedOut: optedOutNow, sends, lastInboundAt }, { lane: laneOf(c.type), ignorePacing: opts.ignorePacing }),
       ...candidateChecks(c, { now, sends, lastInboundAt }),
     ];
     const g = gate(checks);
@@ -717,9 +722,9 @@ async function sendWithLedger(
     }
     const ins = await client.query(
       `INSERT INTO proactive_sends (user_id, type, target_key, topic_key, candidate_id, message, exempt)
-       VALUES ($1, $2, $3, $4, $5, $6, false)
+       VALUES ($1, $2, $3, $4, $5, $6, $7)
        ON CONFLICT (user_id, target_key) DO NOTHING RETURNING id`,
-      [person.userId, c.type, c.targetKey, c.topicKey, c.id, messages.join("\n\n")],
+      [person.userId, c.type, c.targetKey, c.topicKey, c.id, messages.join("\n\n"), opts.ignorePacing === true],
     );
     if (!ins.rows[0]) {
       await client.query("ROLLBACK");
@@ -950,7 +955,7 @@ async function recordSkipOnce(userId: string, reason: string, decision: Paramete
   if (rows[0]) await recordDecision(decision);
 }
 
-export async function dispatchForUser(registry: ProactiveRegistry, userId: string): Promise<void> {
+export async function dispatchForUser(registry: ProactiveRegistry, userId: string, opts: { ignorePacing?: boolean } = {}): Promise<void> {
   const person = await loadPerson(userId);
   if (!person) return;
 
@@ -971,7 +976,7 @@ export async function dispatchForUser(registry: ProactiveRegistry, userId: strin
   };
   const emotional = await getEmotionalContext(userId);
   state.needsCare = emotional.needsCare;
-  const ev = evaluateCandidates(state);
+  const ev = evaluateCandidates(state, opts);
   const proposal = {
     candidates: ev.perCandidate.map((p) => ({
       id: p.candidate.id,
@@ -1039,7 +1044,7 @@ export async function dispatchForUser(registry: ProactiveRegistry, userId: strin
 
   let result: Awaited<ReturnType<typeof sendWithLedger>>;
   try {
-    result = await sendWithLedger(c, person, draft.messages);
+    result = await sendWithLedger(c, person, draft.messages, opts);
   } catch (err: any) {
     // Send failed and the ledger row rolled back. Retry on a later tick, up
     // to the attempt limit, instead of every 15 minutes until it expires.
