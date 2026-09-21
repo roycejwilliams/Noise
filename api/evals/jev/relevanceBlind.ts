@@ -5,10 +5,12 @@
 //
 //   railway run --service co-test --environment dev -- npx tsx evals/jev/relevanceBlind.ts
 //
-// Result on the day: 97 cases (57 real in-window pairs + these 40), Claude 84%, Jev
-// 92% at a 0.5 cutoff; where they disagreed Jev was right 11 times to Claude's 3.
-// Claude's mistakes were nearly all false yeses (hackathons, conferences, a private
-// offsite); a 0.45 cutoff did not beat 0.5.
+// Results on the day (97 cases: 57 real in-window pairs + these 40; labels locked before
+// each run). Under the intent-aligned rule (Royce: anything that aligns with the member's
+// intent fits, in any format): Claude 89%, Jev alone 87%. As a cascade, with Jev deciding
+// when it is sure (outside 0.2 to 0.8) and Claude deciding the rest: 91%, with Claude
+// skipped on 63% of checks. Under a stricter rule Jev looked better (92% vs 84%), but that
+// came from Jev being handed a stricter rule than Claude, not from Jev being smarter.
 import "dotenv/config";
 import { existsSync, readFileSync } from "fs";
 import { isGenuinelyRelevant } from "../../src/services/tieredRecommendation.js";

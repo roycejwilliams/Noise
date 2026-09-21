@@ -145,10 +145,10 @@ export async function jevRelevance(
       fit: {
         type: "noul",
         instructions:
-          "Does this event's real purpose serve what the person asked for? If they named an ACTIVITY (chess, pottery, yoga), the event's own main activity has to be that activity; who attends, hosts or sponsors never changes what kind of event it is. If they named a PEOPLE or AUDIENCE (founders, builders, a community), the event has to bring that audience together to do what that audience does (pitch, demo, build, work alongside each other). Close variants of the same kind are fine.",
+          "Does this event serve what the person is looking for? Anything that aligns with their intent fits, in any format: a one-off experience, a talk, a fireside, a demo or pitch night, a hackathon, a conference or a recurring meetup all count. If they named an ACTIVITY (chess, pottery, yoga), the event's own main activity has to be that activity; who attends, hosts or sponsors never changes what kind of event it is. If they named a PEOPLE or AUDIENCE (founders, builders, a community), it fits when the event brings that audience together to do what that audience does (pitch, demo, build, work alongside each other, or just meet), whatever it is called; a build day or hackathon fits an ask for builders since building together is the point. It does not fit when it is aimed at a different audience or topic, is closed to them (private, employees only, invite-only), or is somewhere other than where they asked.",
         criteria: {
-          true: "The event's real purpose serves what they asked for.",
-          false: "It is a different kind of event, or a one-day build or hackathon when they asked for a meetup or community.",
+          true: "The event serves what they are looking for, in any format.",
+          false: "It is aimed at a different audience, topic or activity, is closed to them, or is somewhere else.",
         },
       },
     },
