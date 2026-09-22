@@ -28,6 +28,7 @@ import { IDENTITY_RULE, stripUngroundedIdentity } from "../services/identityGuar
 import { claimJoinNotice, getMemberInvite, inviteLink, invitesLeftFor, inviterFirstName, isInviteCountQuestion, isInviteRequest, releaseJoinNotice } from "../services/invites.js";
 import { decideInviteJoinedGate } from "../services/inviteJoinGate.js";
 import { handlePhoneChange } from "../services/phoneChange.js";
+import { handleMoReply } from "../mo/review.js";
 import { CALL_OFFER, GATE_ASK, INVITE_JOINED, INVITE_READY, NO_INVITES_LEFT, WELCOME, WELCOME_INVITED, WRONG_CODE, pickLine } from "../services/onboardingLines.js";
 import { claimTextLogin } from "../services/textLogin.js";
 import {
@@ -832,6 +833,25 @@ export function sendblueRouter(io: Server): Router {
           } else {
             await sendAndLog(user.id, number, pickLine(WRONG_CODE));
             return res.status(200).send({ received: true, action: "invite_code_rejected" });
+          }
+        }
+
+        // Mo approvals, in plain words (src/mo/review.ts): only for
+        // approvers, and only when the text answers what Mo asked them.
+        // Anything else falls through to a normal reply. Not logged as
+        // conversation, so it never reaches their own threads.
+        if (hasText && user.identity_captured) {
+          const moReply = await handleMoReply(user.id, content).catch((err: any) => {
+            console.error("sendblue: mo reply failed:", err?.message ?? err);
+            return null;
+          });
+          if (moReply !== null) {
+            if (moReply) {
+              await sendblue.messages.send({ number, content: moReply, from_number: process.env.SENDBLUE_PHONE_NUMBER! }).catch((err: any) =>
+                console.error("sendblue: mo reply send failed:", err?.message ?? err),
+              );
+            }
+            return res.status(200).send({ received: true, action: "mo_reply" });
           }
         }
 

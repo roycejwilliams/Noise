@@ -741,7 +741,7 @@ const X_SEARCH_REQUEST_RESERVE = Number(process.env.X_SEARCH_REQUEST_RESERVE ?? 
 // insert were separate statements). Fails closed: if the budget can't be
 // checked (table missing, database error) there is no X search, where it used
 // to allow unlimited ones.
-async function reserveXSearch(userId: string | null, source: "sweep" | "request", query: string): Promise<{ ok: boolean; reason: string | null }> {
+export async function reserveXSearch(userId: string | null, source: "sweep" | "request", query: string): Promise<{ ok: boolean; reason: string | null }> {
   let client: PoolClient | null = null;
   try {
     client = await pool.connect();

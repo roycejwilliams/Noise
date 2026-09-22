@@ -1297,6 +1297,68 @@ export async function runMigrations(): Promise<void> {
     .then(() => pool.query(`CREATE INDEX IF NOT EXISTS idx_member_threads_user ON member_threads (user_id, status)`))
     .catch((err: Error) => console.error("member_threads table init failed:", err));
 
+  // Mo (2026-09-22) — see src/mo/. People worth inviting, found on
+  // X and through web search, contacted only after a person approves.
+  await pool
+    .query(
+      `CREATE TABLE IF NOT EXISTS mo_prospects (
+        id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+        no SERIAL UNIQUE,
+        source TEXT NOT NULL CHECK (source IN ('x', 'linkedin')),
+        x_user_id TEXT UNIQUE,
+        x_handle TEXT,
+        name TEXT,
+        bio TEXT,
+        location TEXT,
+        post_id TEXT,
+        post_url TEXT,
+        post_text TEXT,
+        linkedin_url TEXT UNIQUE,
+        headline TEXT,
+        reason TEXT NOT NULL,
+        evidence_quote TEXT NOT NULL,
+        draft_reply TEXT,
+        draft_dm TEXT,
+        draft_email_subject TEXT,
+        draft_email_body TEXT,
+        email TEXT,
+        status TEXT NOT NULL DEFAULT 'shortlisted',
+        channel TEXT,
+        approved_by UUID,
+        approved_at TIMESTAMPTZ,
+        warmed_at TIMESTAMPTZ,
+        warm_reply_id TEXT,
+        contacted_at TIMESTAMPTZ,
+        followed_up_at TIMESTAMPTZ,
+        last_inbound_at TIMESTAMPTZ,
+        last_dm_event_id TEXT,
+        pending_question TEXT,
+        invite_code TEXT,
+        digest_sent_at TIMESTAMPTZ,
+        created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+        updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+      )`,
+    )
+    .then(() => pool.query(`CREATE INDEX IF NOT EXISTS idx_mo_prospects_status ON mo_prospects (status)`))
+    .then(() =>
+      pool.query(
+        `CREATE TABLE IF NOT EXISTS mo_suppression (
+          key TEXT PRIMARY KEY,
+          reason TEXT NOT NULL,
+          created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+        )`,
+      ),
+    )
+    .then(() =>
+      pool.query(
+        `ALTER TABLE users ADD COLUMN IF NOT EXISTS mo_approver BOOLEAN NOT NULL DEFAULT false,
+           ADD COLUMN IF NOT EXISTS mo_pending_no INTEGER,
+           ADD COLUMN IF NOT EXISTS mo_pending_kind TEXT,
+           ADD COLUMN IF NOT EXISTS mo_pending_at TIMESTAMPTZ`,
+      ),
+    )
+    .catch((err: Error) => console.error("mo tables init failed:", err));
+
   // Kinds of things a member told Co to stop suggesting ("no more
   // hackathons", 2026-09-22). Turning down one event only ever blocked that
   // one event; this is the lasting version, read by the personal fit check

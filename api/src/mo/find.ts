@@ -1,0 +1,219 @@
+// Mo, steps 1–3: find people on X (and LinkedIn through web search
+// only), keep the ones with a specific post that fits, and draft what Co
+// would say. Nothing is sent here; everything waits for a person's approval
+// (mo/review.ts).
+//
+// Leak rule (standing): the searches and reasons use what members want in
+// general terms ("design co-builders"), never who wants it. Drafts are
+// checked for member names in code (rules.ts namesAMember).
+import { anthropic } from "@ai-sdk/anthropic";
+import { generateText, stepCountIs } from "ai";
+import { DateTime } from "luxon";
+import pool from "../db/db.js";
+import { MODELS } from "../models.js";
+import { parseModelJson } from "../services/modelJson.js";
+import { recordDecision, type GateCheck } from "../harness/core.js";
+import { reserveXSearch } from "../services/tieredRecommendation.js";
+import { reserveWebSearch } from "../services/webOpportunitySearch.js";
+import { listCalendarEvents } from "../services/luma.js";
+import { searchPostsWithAuthors, type MoPost } from "./xApi.js";
+import { MO, inCity, quoteIsTheirs, suppressionKeys } from "./rules.js";
+import { draftOutreach } from "./draft.js";
+
+type Wants = { wants: string[]; event: string | null };
+
+// What the club is looking for right now, in general terms.
+async function clubWants(): Promise<Wants> {
+  const { rows } = await pool.query(
+    `SELECT a.ask_text FROM ask_checkins a JOIN users u ON u.id = a.user_id
+     WHERE a.resolved_at IS NULL AND u.archived_at IS NULL AND a.created_at > NOW() - INTERVAL '45 days'
+     ORDER BY a.created_at DESC LIMIT 30`,
+  );
+  const events = await listCalendarEvents().catch(() => []);
+  const next = events
+    .filter((e: any) => e.start_at && new Date(e.start_at) > new Date())
+    .sort((a: any, b: any) => (a.start_at < b.start_at ? -1 : 1))[0] as any;
+  return {
+    wants: rows.map((r: any) => String(r.ask_text).slice(0, 160)),
+    event: next
+      ? `${next.name} on ${DateTime.fromISO(String(next.start_at)).setZone("America/Los_Angeles").toFormat("cccc, LLLL d")}${next.city ? ` in ${next.city}` : ""}`
+      : null,
+  };
+}
+
+type Queries = { x: string[]; linkedin: string | null; themes: string[] };
+
+// Searches leave Co, so a query can't carry a member's words verbatim (any
+// run of 5+ words from one of their asks) or a member's name.
+let memberNameCache: string[] = [];
+async function loadMemberNames(): Promise<void> {
+  const { rows } = await pool.query(`SELECT first_name, last_name FROM users WHERE archived_at IS NULL`).catch(() => ({ rows: [] as any[] }));
+  memberNameCache = rows.flatMap((r: any) => [r.first_name, r.last_name]).filter((n: any) => typeof n === "string" && n.trim().length >= 3).map((n: string) => n.trim().toLowerCase());
+}
+export function queryLeaks(q: string, asks: string[], names: string[]): boolean {
+  const lq = ` ${q.toLowerCase().replace(/[^a-z0-9 ]/g, " ").replace(/\s+/g, " ")} `;
+  if (names.some((n) => lq.includes(` ${n} `))) return true;
+  for (const a of asks) {
+    const words = a.toLowerCase().replace(/[^a-z0-9 ]/g, " ").split(/\s+/).filter(Boolean);
+    for (let i = 0; i + 5 <= words.length; i++) if (lq.includes(` ${words.slice(i, i + 5).join(" ")} `)) return true;
+  }
+  return false;
+}
+function queryIsSafe(q: string, w: Wants): boolean {
+  return !queryLeaks(q, w.wants, memberNameCache);
+}
+
+async function planQueries(w: Wants): Promise<Queries> {
+  const { text } = await generateText({
+    model: anthropic(MODELS.haiku),
+    experimental_telemetry: { isEnabled: true, functionId: "mo.planQueries" },
+    prompt: `Co is a private, invite-only club for founders and builders in ${MO.city}. Plan searches for people worth inviting.
+
+What members are looking for (general themes only; never include anyone's name):
+${w.wants.map((x) => `- ${x}`).join("\n") || "- (nothing open; use founders, designers and engineers building early-stage products)"}
+${w.event ? `\nNext Co event: ${w.event}` : ""}
+
+Write 3 X recent-search queries that find people posting about doing these things themselves in ${MO.city} (use X operators, e.g. ("building" OR "shipping") ("SF" OR "San Francisco") design), 1 web search query for public LinkedIn profiles starting with site:linkedin.com/in, and the 3 themes (a few words each) the searches are for.
+
+Return ONLY JSON: {"x": ["..."], "linkedin": "site:linkedin.com/in ...", "themes": ["..."]}`,
+  });
+  const p = parseModelJson<Partial<Queries>>(text);
+  return {
+    x: (p.x ?? []).filter((q) => typeof q === "string" && q.length < 400 && queryIsSafe(q, w)).slice(0, 3),
+    linkedin: typeof p.linkedin === "string" && p.linkedin.startsWith("site:linkedin.com/in") && queryIsSafe(p.linkedin, w) ? p.linkedin.slice(0, 300) : null,
+    themes: (p.themes ?? []).filter((t) => typeof t === "string").slice(0, 3),
+  };
+}
+
+type Judged = { index: number; fit: boolean; reason: string; quote: string };
+
+export async function judge(posts: MoPost[], themes: string[], event: string | null): Promise<Judged[]> {
+  if (!posts.length) return [];
+  const { text } = await generateText({
+    model: anthropic(MODELS.sonnet),
+    providerOptions: { anthropic: { effort: "low" } },
+    experimental_telemetry: { isEnabled: true, functionId: "mo.judge" },
+    prompt: `Co is a private, invite-only club in ${MO.city} for people who build things and show up for others. You're deciding who is genuinely worth a personal invitation.
+
+What the club is looking for: ${themes.join("; ") || "founders, designers, engineers building early products"}
+${event ? `Next Co event: ${event}` : ""}
+
+Posts (one per person):
+${posts.map((p, i) => `[${i}] @${p.author.username} (${p.author.name}; location: ${p.author.location ?? "none"}; bio: ${(p.author.description ?? "").slice(0, 160)})\n${p.text.slice(0, 500)}`).join("\n\n")}
+
+Keep only people whose own post shows they're doing something specific that fits (building, hosting, looking for collaborators), not promoters, recruiters, bots, threads of generic advice, or companies. For each person, give "reason": one plain sentence on why they'd fit, in terms of what THEY posted (no names of anyone else), and "quote": 4 to 20 words copied exactly from their post that show it.
+
+Return ONLY JSON: {"people": [{"index": 0, "fit": true, "reason": "...", "quote": "..."}]}`,
+  });
+  return (parseModelJson<{ people?: Judged[] }>(text).people ?? []).filter((j) => j && typeof j.index === "number");
+}
+
+async function alreadyKnown(keys: string[], xUserId: string | null, linkedinUrl: string | null): Promise<boolean> {
+  const [supp, prospect] = await Promise.all([
+    keys.length ? pool.query(`SELECT 1 FROM mo_suppression WHERE key = ANY($1::text[]) LIMIT 1`, [keys]) : Promise.resolve({ rows: [] as any[] }),
+    pool.query(`SELECT 1 FROM mo_prospects WHERE (x_user_id IS NOT NULL AND x_user_id = $1) OR (linkedin_url IS NOT NULL AND linkedin_url = $2) LIMIT 1`, [xUserId, linkedinUrl]),
+  ]);
+  return Boolean(supp.rows[0] || prospect.rows[0]);
+}
+
+// LinkedIn through web search only: what the results page shows. No login,
+// no profile scraping. People found here are contacted by hand.
+async function linkedinCandidates(query: string, themes: string[]): Promise<{ name: string; headline: string; url: string; reason: string; quote: string }[]> {
+  const budget = await reserveWebSearch(null, "sweep", query);
+  if (!budget.ok) return [];
+  const { text } = await generateText({
+    model: anthropic(MODELS.sonnet),
+    tools: { web_search: anthropic.tools.webSearch_20250305({ maxUses: 2 }) },
+    stopWhen: stepCountIs(3),
+    timeout: 60_000,
+    experimental_telemetry: { isEnabled: true, functionId: "mo.linkedin" },
+    prompt: `Run this web search: ${query}
+
+From the search results only (don't open or log into LinkedIn), list up to 4 people in ${MO.city} whose headline or snippet shows they fit: ${themes.join("; ")}. For each: "name", "headline" (as shown), "url" (their linkedin.com/in/ link as shown), "reason" (one plain sentence), and "quote" (4 to 20 words copied exactly from their headline or snippet).
+
+Return ONLY JSON: {"people": [...]}`,
+  });
+  const people = parseModelJson<{ people?: any[] }>(text).people ?? [];
+  return people
+    .filter((p) => p && typeof p.url === "string" && /^https:\/\/([a-z]+\.)?linkedin\.com\/in\//i.test(p.url) && typeof p.headline === "string")
+    .map((p) => ({ name: String(p.name ?? "").slice(0, 80), headline: String(p.headline).slice(0, 240), url: p.url.replace(/\/+$/, ""), reason: String(p.reason ?? "").slice(0, 240), quote: String(p.quote ?? "") }));
+}
+
+export async function runMoFind(): Promise<{ shortlisted: number }> {
+  const checks: GateCheck[] = [];
+  const w = await clubWants();
+  await loadMemberNames();
+  const q = await planQueries(w);
+  let shortlisted = 0;
+
+  // X
+  const byAuthor = new Map<string, MoPost>();
+  for (const query of q.x) {
+    const budget = await reserveXSearch(null, "sweep", `mo: ${query}`);
+    if (!budget.ok) {
+      checks.push({ name: "x_budget", pass: false, reason: budget.reason ?? "over budget" });
+      break;
+    }
+    const posts = await searchPostsWithAuthors(query, 25).catch((err: any) => {
+      checks.push({ name: "x_search", pass: false, reason: String(err?.message ?? err).slice(0, 200) });
+      return [];
+    });
+    for (const p of posts) if (!byAuthor.has(p.author.id)) byAuthor.set(p.author.id, p);
+  }
+  const posts = [...byAuthor.values()].filter((p) => inCity(p.author.location, p.text)).slice(0, 25);
+  checks.push({ name: "x_candidates_in_city", pass: true, reason: `${posts.length} of ${byAuthor.size}` });
+  const judged = await judge(posts, q.themes, w.event).catch(() => [] as Judged[]);
+  for (const j of judged) {
+    if (shortlisted >= MO.shortlistPerRun) break;
+    const p = posts[j.index];
+    if (!p || !j.fit) continue;
+    if (!quoteIsTheirs(j.quote, p.text)) {
+      checks.push({ name: "quote_is_theirs", pass: false, reason: `@${p.author.username}: "${j.quote.slice(0, 60)}"` });
+      continue;
+    }
+    if (await alreadyKnown(suppressionKeys({ x_user_id: p.author.id }), p.author.id, null)) continue;
+    const drafts = await draftOutreach({ name: p.author.name, handle: p.author.username, postText: p.text, reason: j.reason, event: w.event, source: "x" });
+    if (!drafts.ok) {
+      checks.push({ name: "drafts_pass", pass: false, reason: `@${p.author.username}: ${drafts.failed.join(", ")}` });
+      continue;
+    }
+    await pool.query(
+      `INSERT INTO mo_prospects (source, x_user_id, x_handle, name, bio, location, post_id, post_url, post_text, reason, evidence_quote, draft_reply, draft_dm, draft_email_subject, draft_email_body)
+       VALUES ('x', $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14) ON CONFLICT DO NOTHING`,
+      [p.author.id, p.author.username, p.author.name, p.author.description, p.author.location, p.id, p.url, p.text, j.reason, j.quote, drafts.reply, drafts.dm, drafts.emailSubject, drafts.emailBody],
+    );
+    shortlisted++;
+  }
+
+  // LinkedIn (web search results only)
+  if (q.linkedin && shortlisted < MO.shortlistPerRun) {
+    const people = await linkedinCandidates(q.linkedin, q.themes).catch(() => []);
+    for (const li of people) {
+      if (shortlisted >= MO.shortlistPerRun) break;
+      if (!quoteIsTheirs(li.quote, li.headline) || !inCity(null, li.headline + " " + li.reason)) {
+        checks.push({ name: "linkedin_grounded", pass: false, reason: li.url });
+        continue;
+      }
+      if (await alreadyKnown(suppressionKeys({ linkedin_url: li.url }), null, li.url)) continue;
+      const drafts = await draftOutreach({ name: li.name, handle: null, postText: li.headline, reason: li.reason, event: w.event, source: "linkedin" });
+      if (!drafts.ok) continue;
+      await pool.query(
+        `INSERT INTO mo_prospects (source, name, linkedin_url, headline, post_text, reason, evidence_quote, draft_dm, draft_email_subject, draft_email_body, channel)
+         VALUES ('linkedin', $1, $2, $3, $3, $4, $5, $6, $7, $8, 'manual') ON CONFLICT DO NOTHING`,
+        [li.name, li.url, li.headline, li.reason, li.quote, drafts.dm, drafts.emailSubject, drafts.emailBody],
+      );
+      shortlisted++;
+    }
+  }
+
+  await recordDecision({
+    layer: 5,
+    decision: "mo.find",
+    userId: null,
+    outcome: shortlisted ? "act" : "skip",
+    action: `shortlisted ${shortlisted}`,
+    proposal: { themes: q.themes, xQueries: q.x, linkedin: q.linkedin, event: w.event },
+    checks,
+  });
+  return { shortlisted };
+}

@@ -1,0 +1,316 @@
+// Mo, steps 5–7: everything after a person approves. The warm-up reply
+// to their post, the DM a couple of days later (or the email, or a LinkedIn
+// note sent by hand), one follow-up, reading their replies, the code on a
+// yes, and the do-not-contact list on a no. Only ever for approved prospects,
+// under a daily cap, during daytime hours.
+import { anthropic } from "@ai-sdk/anthropic";
+import { generateText, stepCountIs } from "ai";
+import { createHmac, timingSafeEqual } from "crypto";
+import { DateTime } from "luxon";
+import { Resend } from "resend";
+import pool from "../db/db.js";
+import { MODELS } from "../models.js";
+import { recordDecision } from "../harness/core.js";
+import { generateInviteCode } from "../services/inviteCodes.js";
+import { inviteLink } from "../services/invites.js";
+import { readPageText, reserveWebSearch } from "../services/webOpportunitySearch.js";
+import { parseModelJson } from "../services/modelJson.js";
+import { clearStop, clearYes, nextOutreachStep, MO, suppressionKeys } from "./rules.js";
+import { isDmClosed, likePost, recentDmEvents, replyToPost, sendDm, xWriteConfigured } from "./xApi.js";
+import { presentNext, suppressProspect, textApprovers } from "./review.js";
+
+export function moEnabled(env: NodeJS.ProcessEnv = process.env): boolean {
+  return env.MO_ENABLED === "true";
+}
+export function emailConfigured(env: NodeJS.ProcessEnv = process.env): boolean {
+  // The opt-out link is signed, so there has to be a secret to sign it with.
+  return Boolean(env.RESEND_API_KEY && env.MO_FROM_EMAIL && env.MO_POSTAL_ADDRESS && env.API_URL && (env.MO_UNSUBSCRIBE_SECRET || env.JWT_SECRET));
+}
+
+// Why nothing can go out yet, in plain words, or null when it can.
+export function sendingBlocked(env: NodeJS.ProcessEnv = process.env): string | null {
+  if (!moEnabled(env)) return "Mo is switched off, so nothing goes out yet.";
+  if (!xWriteConfigured(env)) return "Co's X account isn't connected yet, so nothing goes out until it is.";
+  return null;
+}
+
+// What can actually go out right now, in plain words, for the team.
+export function sendingStatus(env: NodeJS.ProcessEnv = process.env): string {
+  const x = xWriteConfigured(env);
+  const email = emailConfigured(env);
+  if (!moEnabled(env)) return "Mo is switched off (MO_ENABLED isn't true), so nothing goes out.";
+  if (!x && !email) return "Co's X keys and the outreach email settings aren't set yet, so nothing goes out until they are.";
+  if (!x) return "Co's X keys aren't set, so no replies or DMs go out yet. Email works where Mo finds a published address.";
+  if (!email) return "X replies and DMs go out. Email isn't set up, so people with closed DMs are marked unreachable.";
+  return "X replies, DMs and email are all set up.";
+}
+
+const coNumber = () => process.env.SENDBLUE_PHONE_NUMBER ?? "Co's number";
+
+// On a yes (Royce, 2026-09-22: "send them an invite code and a link"): the
+// invite page (routes/invitePage.ts, /i/<code>) opens a text to Co with the
+// code already filled in. The code is spelled out too, in case the link
+// doesn't open. Without a public base URL, the number instead.
+export function codeMessage(code: string, link: string | null = inviteLink(code)): string {
+  return link
+    ? `Glad you're in. Here's your invite: ${link}\n\nIt opens a text to Co with your code (${code}) already filled in. Send it and we'll start there.`
+    : `Glad you're in. Your invite code is ${code}. Text it to Co at ${coNumber()} and we'll start there.`;
+}
+
+// Daytime in the club's city.
+export function moHours(now: Date): boolean {
+  const h = DateTime.fromJSDate(now).setZone("America/Los_Angeles").hour;
+  return h >= 10 && h < 18;
+}
+
+async function sentToday(column: "warmed_at" | "contacted_at" | "followed_up_at"): Promise<number> {
+  const { rows } = await pool.query(`SELECT count(*)::int AS n FROM mo_prospects WHERE ${column} > NOW() - INTERVAL '24 hours'`);
+  return rows[0]?.n ?? 0;
+}
+
+async function isSuppressed(p: any): Promise<boolean> {
+  const keys = suppressionKeys(p);
+  if (!keys.length) return false;
+  const { rows } = await pool.query(`SELECT 1 FROM mo_suppression WHERE key = ANY($1::text[]) LIMIT 1`, [keys]);
+  return Boolean(rows[0]);
+}
+
+export function unsubscribeToken(prospectId: string): string {
+  const secret = process.env.MO_UNSUBSCRIBE_SECRET || process.env.JWT_SECRET;
+  if (!secret) throw new Error("mo: no secret to sign opt-out links");
+  return createHmac("sha256", secret).update(`mo-unsub:${prospectId}`).digest("hex").slice(0, 32);
+}
+
+export function tokenMatches(prospectId: string, token: string): boolean {
+  let expected: string;
+  try {
+    expected = unsubscribeToken(prospectId);
+  } catch {
+    return false;
+  }
+  const a = Buffer.from(expected);
+  const b = Buffer.from(String(token ?? ""));
+  return a.length === b.length && timingSafeEqual(a, b);
+}
+
+// A public work email, only if it's actually on a page of theirs.
+async function findEmail(p: any): Promise<string | null> {
+  const budget = await reserveWebSearch(null, "sweep", `mo email: ${p.name ?? p.x_handle}`);
+  if (!budget.ok) return null;
+  const { text } = await generateText({
+    model: anthropic(MODELS.sonnet),
+    tools: { web_search: anthropic.tools.webSearch_20250305({ maxUses: 2 }) },
+    stopWhen: stepCountIs(3),
+    timeout: 60_000,
+    experimental_telemetry: { isEnabled: true, functionId: "mo.findEmail" },
+    prompt: `Find a public work email for ${p.name ?? ""}${p.x_handle ? ` (@${p.x_handle} on X)` : ""}${p.bio ? `, bio: "${String(p.bio).slice(0, 160)}"` : ""}, published on their own website or their company's site (not a data broker or directory). Return ONLY JSON: {"email": "..." or null, "url": "the page it's on" or null}`,
+  });
+  const r = parseModelJson<{ email?: string | null; url?: string | null }>(text);
+  if (!r.email || !r.url || !/^[^\s@]+@[^\s@]+\.[a-z]{2,}$/i.test(r.email)) return null;
+  const page = await readPageText(r.url);
+  return page && page.toLowerCase().includes(r.email.toLowerCase()) ? r.email.toLowerCase() : null;
+}
+
+async function sendMoEmail(p: any, followUp: boolean): Promise<boolean> {
+  if (!emailConfigured() || !p.email || !process.env.SENDBLUE_PHONE_NUMBER) return false;
+  const code = p.invite_code ?? (await generateInviteCode(null));
+  const unsub = `${process.env.API_URL}/mo/unsubscribe?p=${p.id}&t=${unsubscribeToken(p.id)}`;
+  const body = String(p.draft_email_body ?? "").split("{{CODE}}").join(code).split("{{PHONE}}").join(coNumber());
+  const link = inviteLink(code);
+  const lead = followUp ? "Following up once, in case this got buried.\n\n" : "";
+  const html = `${(lead + body)
+    .split(/\n{2,}/)
+    .map((para) => `<p>${para.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/\n/g, "<br>")}</p>`)
+    .join("")}${link ? `<p><a href="${link}">Tap here to text Co with your code filled in</a></p>` : ""}<p style="color:#777;font-size:12px">Not for you? <a href="${unsub}">Don't email me again</a>. ${String(process.env.MO_POSTAL_ADDRESS).replace(/</g, "&lt;")}</p>`;
+  const resend = new Resend(process.env.RESEND_API_KEY);
+  const { error } = await resend.emails.send({
+    from: process.env.MO_FROM_EMAIL!,
+    to: [p.email],
+    replyTo: "hello@copatible.com",
+    subject: followUp ? `Re: ${p.draft_email_subject}` : p.draft_email_subject,
+    html,
+    headers: { "List-Unsubscribe": `<${unsub}>` },
+  });
+  if (error) throw new Error(error.message);
+  if (!p.invite_code) await pool.query(`UPDATE mo_prospects SET invite_code = $2 WHERE id = $1`, [p.id, code]);
+  return true;
+}
+
+async function warm(p: any): Promise<string> {
+  if (!xWriteConfigured()) return "x_keys_missing";
+  let replyId: string | null = null;
+  if (p.draft_reply && p.post_id) replyId = await replyToPost(p.post_id, p.draft_reply);
+  if (p.post_id) await likePost(p.post_id).catch(() => {});
+  await pool.query(`UPDATE mo_prospects SET status = 'warmed', warmed_at = NOW(), warm_reply_id = $2, updated_at = NOW() WHERE id = $1`, [p.id, replyId]);
+  return "warmed";
+}
+
+async function contact(p: any): Promise<string> {
+  if (p.x_user_id && xWriteConfigured()) {
+    try {
+      await sendDm(p.x_user_id, p.draft_dm);
+      await pool.query(`UPDATE mo_prospects SET status = 'contacted', channel = 'dm', contacted_at = NOW(), updated_at = NOW() WHERE id = $1`, [p.id]);
+      return "dm_sent";
+    } catch (err) {
+      if (!isDmClosed(err)) throw err;
+    }
+  }
+  // DMs closed: their own published email, if there is one.
+  const email = p.email ?? (await findEmail(p).catch(() => null));
+  if (email && !(await isSuppressed({ email }))) {
+    await pool.query(`UPDATE mo_prospects SET email = $2 WHERE id = $1`, [p.id, email]);
+    if (await sendMoEmail({ ...p, email }, false)) {
+      await pool.query(`UPDATE mo_prospects SET status = 'contacted', channel = 'email', contacted_at = NOW(), updated_at = NOW() WHERE id = $1`, [p.id]);
+      return "email_sent";
+    }
+  }
+  await pool.query(`UPDATE mo_prospects SET status = 'unreachable', updated_at = NOW() WHERE id = $1`, [p.id]);
+  return email ? "email_not_configured" : "unreachable";
+}
+
+async function followUp(p: any): Promise<string> {
+  if (p.channel === "dm") {
+    await sendDm(p.x_user_id, "Following up once in case this got buried. If an invite isn't for you, no worries at all.");
+  } else if (p.channel === "email") {
+    if (!(await sendMoEmail(p, true))) return "email_not_configured";
+  } else return "no_follow_up_for_channel";
+  await pool.query(`UPDATE mo_prospects SET followed_up_at = NOW(), updated_at = NOW() WHERE id = $1`, [p.id]);
+  return "followed_up";
+}
+
+// Hourly, daytime only.
+export async function runMoOutreach(now = new Date()): Promise<void> {
+  if (!moEnabled() || !moHours(now)) return;
+  // Joined: their code was used.
+  await pool.query(
+    `UPDATE mo_prospects sp SET status = 'joined', updated_at = NOW() FROM invite_codes ic
+     WHERE ic.code = sp.invite_code AND ic.used_by IS NOT NULL AND sp.status <> 'joined'`,
+  );
+  const { rows } = await pool.query(
+    `SELECT * FROM mo_prospects WHERE status IN ('approved', 'warmed', 'contacted') ORDER BY approved_at NULLS LAST, no LIMIT 50`,
+  );
+  const report: string[] = [];
+  let warmedToday = await sentToday("warmed_at");
+  let outboundToday = (await sentToday("contacted_at")) + (await sentToday("followed_up_at"));
+  for (const p of rows) {
+    const step = nextOutreachStep(
+      {
+        status: p.status,
+        channel: p.channel,
+        warmedAt: p.warmed_at,
+        contactedAt: p.contacted_at,
+        followedUpAt: p.followed_up_at,
+        lastInboundAt: p.last_inbound_at,
+      },
+      now,
+    );
+    if (!step) continue;
+    if (step !== "close_silent" && (await isSuppressed(p))) {
+      await pool.query(`UPDATE mo_prospects SET status = 'closed', updated_at = NOW() WHERE id = $1`, [p.id]);
+      continue;
+    }
+    if (step === "warm" && warmedToday >= MO.dailyCap) continue;
+    if ((step === "contact" || step === "follow_up") && outboundToday >= MO.dailyCap) continue;
+    let action: string;
+    try {
+      if (step === "warm") action = await warm(p);
+      else if (step === "contact") action = await contact(p);
+      else if (step === "follow_up") action = await followUp(p);
+      else {
+        await pool.query(`UPDATE mo_prospects SET status = 'closed', updated_at = NOW() WHERE id = $1`, [p.id]);
+        await suppressProspect(p, "no reply after a follow-up");
+        action = "closed_silent";
+      }
+    } catch (err: any) {
+      action = `error: ${String(err?.message ?? err).slice(0, 200)}`;
+    }
+    const who = p.name ? p.name.trim().split(/\s+/)[0] : p.x_handle ? `@${p.x_handle}` : "someone";
+    const line: Record<string, string> = {
+      warmed: `replied publicly to ${who}'s post`,
+      dm_sent: `DMed ${who}`,
+      email_sent: `emailed ${who} (their DMs are closed)`,
+      followed_up: `followed up once with ${who}`,
+      closed_silent: `closed ${who} (no reply after the follow-up)`,
+      unreachable: `couldn't reach ${who}: DMs closed and no published email`,
+      email_not_configured: `couldn't reach ${who}: DMs closed and email isn't set up`,
+    };
+    if (line[action]) report.push(line[action][0].toUpperCase() + line[action].slice(1));
+    else if (action.startsWith("error")) report.push(`Couldn't reach ${who}: ${action.slice(7, 120)}`);
+    if (action === "warmed") warmedToday++;
+    if (["dm_sent", "email_sent", "followed_up"].includes(action)) outboundToday++;
+    await recordDecision({
+      layer: 5,
+      decision: "mo.outreach",
+      userId: null,
+      outcome: action.startsWith("error") || action.includes("missing") || action.includes("not_configured") ? "skip" : "act",
+      action,
+      proposal: { no: p.no, step, channel: p.channel },
+    });
+  }
+  // Only what was recorded as actually happening.
+  if (report.length) await textApprovers(`Mo update:\n${report.join(".\n")}.`);
+}
+
+async function classifyReply(text: string): Promise<"yes" | "no" | "question"> {
+  if (clearStop(text)) return "no";
+  if (clearYes(text)) return "yes";
+  const { text: out } = await generateText({
+    model: anthropic(MODELS.haiku),
+    experimental_telemetry: { isEnabled: true, functionId: "mo.classifyReply" },
+    prompt: `Co invited someone to a private club by DM and asked if they'd like an invite. Their reply: "${text.slice(0, 500)}"\n\nAnswer with one word: yes (they want the invite), no (they don't, or want to be left alone), or question (anything else, including questions).`,
+  });
+  const w = out.trim().toLowerCase();
+  return w.startsWith("yes") ? "yes" : w.startsWith("no") ? "no" : "question";
+}
+
+// Every 15 minutes: replies in Co's X DMs from people Mo contacted.
+export async function runMoInbox(): Promise<void> {
+  if (!moEnabled() || !xWriteConfigured()) return;
+  const events = await recentDmEvents().catch((err: any) => {
+    console.error("mo: reading DMs failed:", err?.message ?? err);
+    return [];
+  });
+  const coId = process.env.X_MO_USER_ID;
+  const inbound = events.filter((e) => e.senderId !== coId).sort((a, b) => (BigInt(a.id) < BigInt(b.id) ? -1 : 1));
+  for (const e of inbound) {
+    const { rows } = await pool.query(
+      `SELECT * FROM mo_prospects WHERE x_user_id = $1 AND status IN ('contacted', 'question', 'invited')`,
+      [e.senderId],
+    );
+    const p = rows[0];
+    if (!p || (p.last_dm_event_id && BigInt(p.last_dm_event_id) >= BigInt(e.id))) continue;
+    await pool.query(`UPDATE mo_prospects SET last_dm_event_id = $2, last_inbound_at = NOW(), updated_at = NOW() WHERE id = $1`, [p.id, e.id]);
+    const kind = p.status === "invited" && !clearStop(e.text) ? "question" : await classifyReply(e.text);
+    let action: string = kind;
+    try {
+      if (kind === "no") {
+        await suppressProspect(p, "declined");
+        await pool.query(`UPDATE mo_prospects SET status = 'declined', updated_at = NOW() WHERE id = $1`, [p.id]);
+        await sendDm(p.x_user_id, "Understood. I won't reach out again. Good luck with everything.").catch(() => {});
+      } else if (kind === "yes" && p.status !== "invited") {
+        const code = p.invite_code ?? (await generateInviteCode(null));
+        await sendDm(p.x_user_id, codeMessage(code));
+        await pool.query(`UPDATE mo_prospects SET status = 'invited', invite_code = $2, updated_at = NOW() WHERE id = $1`, [p.id, code]);
+        action = "code_sent";
+      } else {
+        await pool.query(`UPDATE mo_prospects SET status = 'question', pending_question = $2, updated_at = NOW() WHERE id = $1`, [p.id, e.text.slice(0, 500)]);
+        // Goes to a free approver as a plain question (review.ts).
+        await presentNext();
+        action = "asked_approver";
+      }
+    } catch (err: any) {
+      action = `error: ${String(err?.message ?? err).slice(0, 200)}`;
+    }
+    await recordDecision({ layer: 5, decision: "mo.reply", userId: null, outcome: action.startsWith("error") ? "skip" : "act", action, proposal: { no: p.no, text: e.text.slice(0, 300) } });
+  }
+}
+
+// GET /mo/unsubscribe?p=<id>&t=<token>
+export async function unsubscribe(prospectId: string, token: string): Promise<boolean> {
+  if (!/^[0-9a-f-]{36}$/i.test(prospectId) || !tokenMatches(prospectId, token)) return false;
+  const { rows } = await pool.query(`UPDATE mo_prospects SET status = 'declined', updated_at = NOW() WHERE id = $1 RETURNING *`, [prospectId]).catch(() => ({ rows: [] as any[] }));
+  if (!rows[0]) return false;
+  await suppressProspect(rows[0], "unsubscribed");
+  await recordDecision({ layer: 5, decision: "mo.reply", userId: null, outcome: "act", action: "unsubscribed", proposal: { no: rows[0].no } });
+  return true;
+}
