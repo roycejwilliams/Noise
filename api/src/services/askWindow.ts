@@ -90,6 +90,34 @@ function dayOfMonthDate(t: string, now: DateTime): AskWindow | null {
   return null;
 }
 
+// "the week of Oct 5th", "week starting the 20th", "week beginning Oct 5": the
+// seven days from that date (2026-09-21: "the week of Oct 5th" was read as
+// Oct 5 alone, so a fit event on Oct 7 was never looked at). A range they
+// typed ("the week of Oct 5 - Oct 11") keeps its own end.
+function weekOfDate(t: string, now: DateTime): AskWindow | null {
+  const m = t.match(/\bweek\s+(?:of|starting|beginning|commencing|from)\s+(.+)/);
+  if (!m) return null;
+  const rest = m[1];
+  const own = explicitDates(rest, now);
+  let start: DateTime | null = null;
+  if (own) {
+    if (own.label.includes(" to ")) return { ...own, label: `week of ${own.label}` };
+    start = own.start;
+  } else {
+    const dom = rest.match(/^(?:the\s+)?(\d{1,2})(?:st|nd|rd|th)\b/);
+    const dayNum = dom ? Number(dom[1]) : 0;
+    if (dayNum >= 1 && dayNum <= 31) {
+      for (let i = 0; i < 14 && !start; i++) {
+        const d = now.startOf("month").plus({ months: i }).set({ day: dayNum });
+        if (d.isValid && d.day === dayNum && d.endOf("day") >= now.startOf("day")) start = d;
+      }
+    }
+  }
+  if (!start) return null;
+  const from = start.startOf("day");
+  return { start: from, end: from.plus({ days: 6 }).endOf("day"), label: `week of ${from.toFormat("LLL d")}` };
+}
+
 // How far ahead a named time frame can reach. The default search looks two
 // weeks out; asking for a later range extends it, up to this (Royce,
 // 2026-09-16: "Can it have a limit but still have a stated ask to look
@@ -121,6 +149,8 @@ function parseAskWindowUncapped(text: string, now: DateTime): AskWindow | null {
   const t = text.toLowerCase();
   const mk = (start: DateTime, end: DateTime, label: string): AskWindow => ({ start, end, label });
 
+  const weekOf = weekOfDate(t, now);
+  if (weekOf) return weekOf;
   const dates = explicitDates(t, now);
   if (dates) return dates;
   const dayOfMonth = dayOfMonthDate(t, now);

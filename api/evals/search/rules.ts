@@ -283,6 +283,22 @@ for (const [ok, label] of cases) {
   c(mentionsUnknownDay("How'd your weekend go?", "this weekend") === false, "no day number is fine");
 }
 
+// "The week of Oct 5th" is seven days, not Oct 5 alone (2026-09-21: a fit event on Oct 7 was never
+// looked at because the window was one day).
+{
+  const mon = DateTime.fromISO("2026-09-21T17:00:00", { zone: "America/Los_Angeles" });
+  const win = (text: string) => resolveAskWindow(text, mon).window;
+  const span = (w: ReturnType<typeof win>) => (w ? `${w.start.toFormat("yyyy-LL-dd")}..${w.end.toFormat("yyyy-LL-dd")}` : null);
+  c(span(win("Find me a founder or AI event in SF the week of Oct 5th")) === "2026-10-05..2026-10-11", "'the week of Oct 5th' is Oct 5 to Oct 11");
+  c(span(win("anything the week of the 28th?")) === "2026-09-28..2026-10-04", "'the week of the 28th' is seven days from the 28th");
+  c(span(win("events week starting October 12")) === "2026-10-12..2026-10-18", "'week starting October 12' is seven days");
+  c(span(win("the week of Oct 5 - Oct 9")) === "2026-10-05..2026-10-09", "a typed range keeps its own end");
+  c(span(win("what's on Oct 5?")) === "2026-10-05..2026-10-05", "a single date with no 'week' is still one day");
+  c(span(win("next week")) === "2026-09-28..2026-10-04", "'next week' is unchanged");
+  c(span(win("I had a great week of meetings")) === null, "'week of meetings' is not a date");
+  c(win("the week of Oct 5th")?.label === "week of Oct 5", "the label says it is a week");
+}
+
 // The reply agent must not search a second time in a turn the pipeline already searched
 // (2026-09-21: it re-ran, found only what had just been sent, and told the member "nothing
 // solid came up" right after "two that fit, sending both now").
