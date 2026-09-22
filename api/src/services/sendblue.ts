@@ -1,7 +1,7 @@
 import { sendLimiter } from "./sendLimiter.js";
 import { createHash, timingSafeEqual } from "crypto";
 import { SendblueAPI } from "sendblue";
-import { capitalizeSentences, looksLikeMetaReply } from "./textStyle.js";
+import { capitalizeSentences, looksLikeMetaReply, paragraphize } from "./textStyle.js";
 
 const client = new SendblueAPI({
   apiKey: process.env.SENDBLUE_API_KEY!,
@@ -48,7 +48,7 @@ export function cleanCoMessage(text: string): string {
   // who text in lowercase while check-ins and onboarding didn't, and several
   // senders skipped it entirely). This is the one place every message passes
   // through before it's sent and logged.
-  return capitalizeSentences(cleaned);
+  return paragraphize(capitalizeSentences(cleaned));
 }
 
 // Guards against ever texting a real user raw model meta-commentary (e.g.

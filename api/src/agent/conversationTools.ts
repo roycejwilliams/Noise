@@ -171,7 +171,7 @@ export function createConversationTools(ctx: ConversationToolContext) {
         ? "Send your voice-note reply to the user and log it. Call this exactly once, with your full response — always respond to what they actually said before any secondary gesture."
         : "Send one text message to the user, and log it. Call this once for your reply. If you genuinely have two distinct thoughts that would read more naturally as two separate texts sent one after another — the way a person might send a quick reaction, then a follow-up — you may call it a second time. Most replies are a single call; never call it twice just to split one continuous thought into shorter pieces.",
       inputSchema: z.object({
-        message: z.string().describe("One complete reply. A sentence or two, no em dashes."),
+        message: z.string().describe("One complete reply, no em dashes. Usually a sentence or two; a walkthrough they asked for can be longer. Separate ideas or steps into short paragraphs with a blank line between them."),
       }),
       execute: async ({ message: draft }) => {
         const message = ctx.gate ? await ctx.gate(draft, [...state.sentMessages]) : draft;

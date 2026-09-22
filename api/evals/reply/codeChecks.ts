@@ -2,7 +2,8 @@
 // second, no API calls: npx tsx evals/reply/codeChecks.ts
 import { canSkipReplyAfterResults, isOnlyUpdatesAsk, messageIsOnlyTheAsk, rewriteKeepsAsk, shouldCacheSearch, xPostFitsWindow } from "../../src/services/searchRules.js";
 import { localDate, offerScore, orderForOffering } from "../../src/services/eventOrder.js";
-import { capitalizeSentences, looksLikeMetaReply } from "../../src/services/textStyle.js";
+import { capitalizeSentences, looksLikeMetaReply, paragraphize } from "../../src/services/textStyle.js";
+import { readFileSync } from "fs";
 import { nearestPlace, parseDiscoverPlaces } from "../../src/services/lumaDiscovery.js";
 import { announcementAudience } from "../../src/services/coEventAnnouncement.js";
 import { resolveCoEventCity } from "../../src/services/luma.js";
@@ -38,6 +39,10 @@ const cases: [string, string | null, string][] = [
   ["I can keep an eye out for one.", "no_followup_promise", "keep an eye out"],
   ["Let me know if anything changes.", null, "their follow-up, not Co's"],
   ["Will do.", null, "bare will do"],
+  // Advice about their own event's invites is not Co claiming a membership invite (2026-09-22).
+  ["Have a handful of founders each sending invites to 3 people they actually want there.", null, "event invite advice is not an invite claim"],
+  ["Sending your invite now, one sec.", "no_invite_sent_claim", "Co claiming an invite is still caught"],
+  ["I'll send an invite link to your friend.", "no_invite_sent_claim", "Co promising an invite is still caught"],
   // Co can't start a group text (Sendblue only replies to numbers that texted
   // in), and group chats are out of the product (2026-09-20).
   ["Sure, I'll start a group text with you both.", "no_group_chat_claim", "offers a group text"],
@@ -115,7 +120,20 @@ const closingWithLastCoMessageCases: [string, string | null, string][] = [
 
 // How several real things arrive (services/messageFormat.ts): a one-line
 // heads-up, then each item followed by its own link.
+const BLOCK = `Okay. Here's the shape I'd commit to. Arrival: one funnel, one bar, no check-in table. People drift toward that one point. Middle: a short round of intros from you as host, then let it release back into mingling. Close: end on something people remember leaving on, not just the bar closing, so the night has a real last beat instead of a slow fade.`;
+const PARA = paragraphize(BLOCK);
+const replyPrompt = readFileSync(new URL("../../src/agent/conversationReply.ts", import.meta.url), "utf8");
+const groundingPrompt = readFileSync(new URL("../../src/harness/replyGrounding.ts", import.meta.url), "utf8");
 const formatCases: [boolean, string][] = [
+  // Readable paragraphs, walkthroughs, and pressure-tested advice (2026-09-22).
+  [PARA.split("\n\n").length === 4 && PARA.split("\n\n")[1].startsWith("Arrival:") && PARA.split("\n\n")[3].startsWith("Close:"), "a long block splits into paragraphs, each labeled part on its own"],
+  [paragraphize("Short and sweet. Two lines. Three.") === "Short and sweet. Two lines. Three.", "short texts are left alone"],
+  [paragraphize("First para already.\n\nSecond one. " + "x".repeat(400)).startsWith("First para already.\n\nSecond"), "text that already has paragraphs is left alone"],
+  [/give the whole walkthrough in this one reply/.test(replyPrompt) && /End with one question that gauges where they are/.test(replyPrompt), "walkthroughs come whole, ending with a gauging question"],
+  [/challenge your own answer before you send it/.test(replyPrompt), "advice is pressure-tested against their specifics"],
+  [/meet the feeling first, then gauge before you plan/.test(replyPrompt) && /never make them ask twice/.test(replyPrompt), "a feeling is met first, then gauged, then walked through"],
+  [/each idea its own short paragraph with a blank line between them/.test(replyPrompt), "reply prompt asks for paragraphs"],
+  [/don't list general know-how and advice/.test(groundingPrompt), "the fact check doesn't strip ordinary advice as a prediction"],
   [renderMatchLead(2) === "Two that fit, sending both now.", "two reads naturally"],
   [renderMatchLead(3) === "Three that fit, sending them now.", "three reads naturally"],
   [!renderMatchLead(2).includes("http"), "the lead-in never carries a link"],

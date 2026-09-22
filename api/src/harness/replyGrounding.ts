@@ -400,7 +400,15 @@ export function codeChecks(draft: string, rf: ReplyFacts, src: GroundingSources)
       reason: "offers or claims a group text, which Co can't do. Introductions go out as one email to both people once both have said yes",
     });
   }
-  const namesAnInvite = INVITE_ACTION_VERB.test(draft) && INVITE_NOUN.test(draft);
+  // Per sentence, and Co has to be the one sending (2026-09-22: advice about
+  // their own event, "have a few founders send invites", was read as Co
+  // claiming a membership invite and the whole reply became invite copy).
+  const namesAnInvite = (draft.match(/[^.!?\n]+[.!?]*/g) ?? [draft]).some(
+    (s) =>
+      INVITE_NOUN.test(s) &&
+      INVITE_ACTION_VERB.test(s) &&
+      (/\b(i|i'?m|i'?ve|i'?ll|me|co)\b/i.test(s) || /^\s*(sending|sent|adding|getting)\b/i.test(s) || /\bhere'?s (an|your|the) invit|\binvit\w* (is |'s )?on (its|it'?s) way/i.test(s)),
+  );
   if (!inviteHandled && (namesAnInvite || (inviteAsk && INVITE_ACTION_VERB.test(draft)))) {
     checks.push({
       name: "no_invite_sent_claim",
@@ -456,7 +464,7 @@ Claims to find:
 - capability: what Co can or can't do ("I can't call", "I don't have access to your calendar")
 - prediction: what Co says will or won't happen in the world, or how likely it is, that Co has no way to know ("I don't think another one will turn up by Saturday", "it'll probably sell out", "nothing else is coming this week")
 
-Don't list: opinions, feelings, questions, general encouragement, restating what they told Co, or how Co will talk in this conversation ("I'll keep it short", "switching back to normal caps", "let's keep going over text").
+Don't list: opinions, feelings, questions, general encouragement, restating what they told Co, or how Co will talk in this conversation ("I'll keep it short", "switching back to normal caps", "let's keep going over text"). Also don't list general know-how and advice about how things usually go or what tends to work ("block parties live or die on people finding the spot", "a reminder a few days out helps turnout", "personal invites beat a mass email"): that's advice, not a claim about a specific event, person, or outcome (2026-09-22: flagging it as a prediction stripped the specifics out of Co's advice and left it generic). It still counts as a claim when it names a real venue, event, person, date, price, or number that isn't in the sources.
 
 A claim is supported only if a FACT below states it, or the conversation shows it. A future_promise is supported only if a FACT says it will actually happen (a scheduled call, a pending item). A prediction is supported only if a FACT states that outcome itself; guessing from what was or wasn't found is never support. "I don't have X" is supported when X is not in the sources. Never count something as supported because it's plausible.
 

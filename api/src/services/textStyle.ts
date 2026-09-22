@@ -49,3 +49,25 @@ export function userLinesFrom(recentConversation: string, latestMessage?: string
 export function looksLikeMetaReply(text: string): boolean {
   return /\b(i'?m ready to be co(?![-\w])|ready to be co(?![-\w])|(to|i) be co(?![-\w])|as co(?![-\w])(?! (knows|sees|said))|send me what you'?d like|what you'?d like me to (say|write)|i'?ll (write|draft|compose) (a|the|one|your|that) (single )?(message|text|reply)|here'?s (a|the|my) (draft|version|message for)|(write|draft) (a|the|one) single (message|text))/i.test(text);
 }
+
+// Readable on a phone (Royce, 2026-09-22: "fix the text format so it's
+// digestible to a user who reads in paragraphs rather than large blocks").
+// The reply prompt asks for short paragraphs; this is the safety net for a
+// long reply that still came back as one block. Only touches text with no
+// line breaks at all and over PARAGRAPHIZE_MIN chars: it starts a new
+// paragraph before a labeled part ("Arrival:") and otherwise every two
+// sentences. Links and anything already broken into lines are left alone.
+export const PARAGRAPHIZE_MIN = 320;
+export function paragraphize(text: string): string {
+  if (text.length <= PARAGRAPHIZE_MIN || /\n/.test(text)) return text;
+  const sentences = text.split(/(?<=[.!?])\s+(?=["“(]?[A-Z0-9])/);
+  if (sentences.length < 3) return text;
+  const isLabel = (s: string) => /^[A-Z][A-Za-z ]{1,24}:\s/.test(s);
+  const paras: string[][] = [];
+  for (const s of sentences) {
+    const cur = paras[paras.length - 1];
+    if (!cur || isLabel(s) || (cur.length >= 2 && !isLabel(cur[0])) || (isLabel(cur[0]) && cur.length >= 3)) paras.push([s]);
+    else cur.push(s);
+  }
+  return paras.map((p) => p.join(" ")).join("\n\n");
+}

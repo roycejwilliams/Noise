@@ -30,7 +30,7 @@
       }
     ],
     "instructions": [
-      "They just said yes to being connected with Devon. Acknowledge it warmly and briefly — you're now waiting to hear back from Devon, don't promise a specific thing is happening yet."
+      "They just said yes to being connected with Devon. Acknowledge it warmly and briefly \u2014 you're now waiting to hear back from Devon, don't promise a specific thing is happening yet."
     ],
     "draft": "Done, I just emailed you both an intro so you can take it from there.",
     "forbidden": [
@@ -111,7 +111,7 @@
       }
     ],
     "instructions": [
-      "They just asked you to call them, and Co genuinely can (this is real and live) — but the call attempt just failed. Be honest that something went wrong placing it, without inventing a specific reason you don't actually have, and never claim calling isn't possible. Don't place a call, and don't say \"calling you now.\""
+      "They just asked you to call them, and Co genuinely can (this is real and live) \u2014 but the call attempt just failed. Be honest that something went wrong placing it, without inventing a specific reason you don't actually have, and never claim calling isn't possible. Don't place a call, and don't say \"calling you now.\""
     ],
     "draft": "Calling you now, give me a sec.",
     "forbidden": [
@@ -464,5 +464,70 @@
       "\\b(I'll|I will|let me|starting|started|creating|setting up|I can (set|start|make|put))\\b[^.?!]{0,40}\\bgroup (text|chat|thread)"
     ],
     "groundedDraft": true
+  },
+  {
+    "id": "s40_walkthrough_full",
+    "onlyMode": "e2e",
+    "about": "2026-09-22 real thread: asked to lead and give the full plan; Co should walk the whole night in separate paragraphs and end with a gauging question, not ask them to pick a piece first",
+    "message": "Give me more detail, let's figure out how the night will happen. I want you to lead this.",
+    "recentConversation": "User said: That's how I want Oct 10th to feel. We need action to happen in the room and nudge others in the right direction\nCo replied: That's the harder part to design well. What's the first nudge you're picturing happening in that room?\nUser said: You answer that yourself. I built you to figure that out\nCo replied: Fair enough. If I had to commit: design the arrival so there's one funnel point, one bar, one food setup, not a check-in table with a line.",
+    "contextSummary": "Hosting an anti-networking block party launch on Oct 10 in SF for founders, VCs and engineers; moved off an expensive venue; wants people to actually connect, not collect cards.",
+    "facts": [],
+    "draft": "",
+    "groundedDraft": true,
+    "style": "capitalized",
+    "forbidden": [
+      "which (one|piece|part) do you want to start with",
+      "i don'?t (actually )?have the (space )?layout",
+      "can'?t map",
+      "without guessing"
+    ]
+  },
+  {
+    "id": "s41_advice_not_generic",
+    "onlyMode": "e2e",
+    "about": "Jacqueline 2026-09-22: challenge generic answers; advice should be tied to their situation",
+    "message": "How do I get people to actually show up to the block party?",
+    "recentConversation": "User said: That's how I want Oct 10th to feel. We need action to happen in the room and nudge others in the right direction\nCo replied: That's the harder part to design well. What's the first nudge you're picturing happening in that room?\nUser said: You answer that yourself. I built you to figure that out\nCo replied: Fair enough. If I had to commit: design the arrival so there's one funnel point, one bar, one food setup, not a check-in table with a line.",
+    "contextSummary": "Hosting an anti-networking block party launch on Oct 10 in SF for founders, VCs and engineers; moved off an expensive venue; wants people to actually connect, not collect cards.",
+    "facts": [],
+    "draft": "",
+    "groundedDraft": true,
+    "style": "capitalized",
+    "forbidden": [
+      "post (it )?on social media",
+      "leverage your network"
+    ]
+  },
+  {
+    "id": "s42_feeling_gauge_first",
+    "onlyMode": "e2e",
+    "about": "2026-09-22: a feeling, not a task: meet it, then one gauging question, no plan dumped on them yet",
+    "message": "honestly I'm nervous nobody is going to show up on the 10th",
+    "recentConversation": "User said: That's how I want Oct 10th to feel. We need action to happen in the room and nudge others in the right direction\nCo replied: That's the harder part to design well. What's the first nudge you're picturing happening in that room?\nUser said: You answer that yourself. I built you to figure that out\nCo replied: Fair enough. If I had to commit: design the arrival so there's one funnel point, one bar, one food setup, not a check-in table with a line.",
+    "contextSummary": "Hosting an anti-networking block party launch on Oct 10 in SF for founders, VCs and engineers; moved off an expensive venue; wants people to actually connect, not collect cards.",
+    "facts": [],
+    "draft": "",
+    "groundedDraft": true,
+    "style": "capitalized",
+    "forbidden": [
+      "\\n\\n.*\\n\\n.*\\n\\n.*\\n\\n",
+      "you sound (nervous|anxious|stressed)"
+    ]
+  },
+  {
+    "id": "s43_feeling_then_way_forward",
+    "onlyMode": "e2e",
+    "about": "2026-09-22: after the gauge they want the way forward: full walkthrough shaped around the nerves",
+    "message": "map it out",
+    "recentConversation": "User said: That's how I want Oct 10th to feel. We need action to happen in the room and nudge others in the right direction\nCo replied: That's the harder part to design well. What's the first nudge you're picturing happening in that room?\nUser said: You answer that yourself. I built you to figure that out\nCo replied: Fair enough. If I had to commit: design the arrival so there's one funnel point, one bar, one food setup, not a check-in table with a line.\nUser said: honestly I'm nervous nobody is going to show up on the 10th\nCo replied: That fear is real with a first one, and it usually means you care how it lands. Do you want to talk through what's feeding it, or map out a way to make sure the street's full?",
+    "contextSummary": "Hosting an anti-networking block party launch on Oct 10 in SF for founders, VCs and engineers; moved off an expensive venue; wants people to actually connect, not collect cards.",
+    "facts": [],
+    "draft": "",
+    "groundedDraft": true,
+    "style": "capitalized",
+    "forbidden": [
+      "which (one|piece|part) do you want to start with"
+    ]
   }
 ]
