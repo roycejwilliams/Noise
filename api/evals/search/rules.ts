@@ -303,5 +303,15 @@ for (const [ok, label] of cases) {
   c(alreadySentNames(null).length === 0 && alreadySentNames(undefined).length === 0, "no list means no names");
 }
 
+// The description prompt carries the dates they asked about, so an in-window event is never
+// called "outside your window" (2026-09-21: Sep 30 inside "next week", Sep 28 to Oct 4).
+{
+  const sb = readFileSync(new URL("../../src/routes/sendblue.ts", import.meta.url), "utf8");
+  c(/const dateRule = dateCaveatRule\(askedDates\)/.test(sb), "the description draft builds a date rule from the asked dates");
+  c(/\$\{dateRule\}\\nWrite \$\{matchCount/.test(sb), "the date rule is inside the description prompt");
+  c(sb.includes("if it falls inside, say nothing about their dates being off"), "the rule forbids calling an in-window event outside the dates");
+  c(/function dateCaveatRule\(askedDates: string \| null\): string \{\s*if \(!askedDates\) return ""/.test(sb), "no dates means no date rule");
+}
+
 console.log(`search rules: ${cases.length - failed}/${cases.length} passed`);
 if (failed) process.exitCode = 1;

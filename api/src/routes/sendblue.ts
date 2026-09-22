@@ -314,6 +314,14 @@ async function sendAndLog(userId: string, phone: string, message: string, asVoic
 // "thursday (Thursday, September 17)": the words they used plus the actual
 // dates, so the fit check can't read "Thursday" as any Thursday (2026-09-16:
 // an Oct 5-11 event was judged a fit for "Thursday").
+// The dates they asked about, so a description never calls an event "outside
+// your window" when it sits inside it (2026-09-21: Sep 30 was called outside
+// "next week", Sep 28 to Oct 4).
+function dateCaveatRule(askedDates: string | null): string {
+  if (!askedDates) return "";
+  return `\nThe dates they asked about: ${askedDates}. Only say something is outside their dates if its date above really falls outside that range; if it falls inside, say nothing about their dates being off.\n`;
+}
+
 function describeTimeFrame(scope: { window: string | null; windowStart?: string | null; windowEnd?: string | null } | null | undefined): string | null {
   if (!scope?.window || !scope.windowStart || !scope.windowEnd) return null;
   const fmt = (iso: string) => DateTime.fromISO(iso, { setZone: true }).toFormat("cccc, LLLL d");
@@ -2147,11 +2155,13 @@ Return ONLY valid JSON, no preamble: {"date": "YYYY-MM-DD or null", "time": "HH:
               const draftDescription = async (m: TierMatch, em: Awaited<ReturnType<typeof enrichMatch>>, stretch = false): Promise<string> => {
                 let description = `${m.name}. ${em.whyItFits ?? m.reason}`;
                 try {
+                  const askedDates = describeTimeFrame("scope" in recommendation ? recommendation.scope : null);
+                  const dateRule = dateCaveatRule(askedDates);
                   const record = em.details ? renderEventDetails(em.name, em.details).join("\n") : em.opportunity ? `What the post says: ${em.opportunity.postText}` : "";
                   const { text: drafted } = await generateText({
                     model: anthropic(MODELS.sonnet),
                     experimental_telemetry: { isEnabled: true, functionId: "sendblue.recommendation.describe" },
-                    prompt: `${CO_VOICE}\n\n${CO_TEXT_CHANNEL} ${IDENTITY_RULE} You're telling ${user.first_name ?? "them"} about "${m.name}"${"url" in m && m.url ? ". Its link preview is already showing right above this message, so this message is the caption under it: say what it is directly, and don't mention the link, sending it, or \"the one above\"" : ""}${matchCount > 1 ? `. This is one of ${matchCount} you're sending together, so it reads as a bullet in a short list` : ""}.\n\n${stretch ? `It isn't an exact fit for what they asked: ${em.whyItFits ?? "not quite what they described"}. Say that honestly in a few words, then why it could still be worth a look.` : `Why it fits them: ${em.whyItFits ?? m.reason}`}\n${record ? `\nWhat's actually known about it:\n${record}\n` : ""}\nWrite ${matchCount > 1 ? "one sentence" : "1-3 sentences"} naming it, the one or two details that matter most to them (when, where, who), and why it fits, in your own words. Only use what's written above. No link. Return ONLY the message.`,
+                    prompt: `${CO_VOICE}\n\n${CO_TEXT_CHANNEL} ${IDENTITY_RULE} You're telling ${user.first_name ?? "them"} about "${m.name}"${"url" in m && m.url ? ". Its link preview is already showing right above this message, so this message is the caption under it: say what it is directly, and don't mention the link, sending it, or \"the one above\"" : ""}${matchCount > 1 ? `. This is one of ${matchCount} you're sending together, so it reads as a bullet in a short list` : ""}.\n\n${stretch ? `It isn't an exact fit for what they asked: ${em.whyItFits ?? "not quite what they described"}. Say that honestly in a few words, then why it could still be worth a look.` : `Why it fits them: ${em.whyItFits ?? m.reason}`}\n${record ? `\nWhat's actually known about it:\n${record}\n` : ""}${dateRule}\nWrite ${matchCount > 1 ? "one sentence" : "1-3 sentences"} naming it, the one or two details that matter most to them (when, where, who), and why it fits, in your own words. Only use what's written above. No link. Return ONLY the message.`,
                   });
                   if (drafted.trim()) {
                     // No claim about who they are beyond their own words and profile (services/identityGuard.ts).
