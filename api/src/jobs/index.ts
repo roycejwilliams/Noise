@@ -26,6 +26,10 @@ import { runMonitor, runWeeklyReview } from "../harness/monitor.js";
 import { typesWithPurpose } from "../harness/proactivePurpose.js";
 import { reviewEnabled, runMorningReview } from "../harness/devReview.js";
 import { expireStaleAsks } from "../services/askExpiry.js";
+import { companionPayloadFor } from "../harness/memberThreads.js";
+import { recordDecision } from "../harness/core.js";
+import { runWeeklyReflections } from "../harness/memberReflection.js";
+import { runMembershipLapse } from "../services/membershipLapse.js";
 
 // Bounded-concurrency worker pool (Royce, 2026-08-30) — the event surfacing
 // sweep now runs for every open ask daily (see below), and a plain
@@ -666,6 +670,18 @@ export function registerJobs(io: Server) {
     });
   }
 
+  // Weekly reflection per member (2026-09-22, harness/memberReflection.ts):
+  // Sunday evening Pacific, so a queued check-in can go out Monday.
+  cron.schedule("0 18 * * 0", () => {
+    runWeeklyReflections().catch((err: any) => console.error("weekly reflection cron error:", err?.message ?? err));
+  }, { timezone: "America/Los_Angeles" });
+
+  // Members Co knows nothing about (2026-09-22, services/membershipLapse.ts):
+  // once a day; each step still waits for the proactive harness to send it.
+  cron.schedule("30 9 * * *", () => {
+    runMembershipLapse().catch((err: any) => console.error("membership lapse cron error:", err?.message ?? err));
+  }, { timezone: "America/Los_Angeles" });
+
   // Co's own events: send announcements that were waiting for the person's
   // daytime hours (services/coEventAnnouncement.ts).
   cron.schedule("*/10 * * * *", () => {
@@ -719,6 +735,9 @@ export function registerJobs(io: Server) {
   // Also queued early after a stretch of offers with nothing about the
   // person (see the query). Sent first when it's eligible (proactive.ts
   // codePick).
+  // Needs a recap, not life chapters (2026-09-22): the check-in is written
+  // from the recap, and life chapters mostly come from calls, so a member who
+  // only texts could never qualify. (Earlier note, kept for history:)
   // Targets users PAST onboarding (life_chapters populated) — the auto-call
   // cron above only calls users who AREN'T past onboarding yet, so together
   // these cover before/after without overlap. 7-day cadence is a first
@@ -739,7 +758,7 @@ export function registerJobs(io: Server) {
          JOIN co_profiles cp ON cp.user_id = u.id
          WHERE u.sms_opted_out = false
            AND u.archived_at IS NULL
-           AND cp.life_chapters IS NOT NULL AND array_length(cp.life_chapters, 1) IS NOT NULL
+           AND u.identity_captured = true
            AND cp.last_recap_at IS NOT NULL
            AND (
              (cp.last_companion_checkin_at IS NULL OR cp.last_companion_checkin_at <= NOW() - INTERVAL '14 days')
@@ -760,13 +779,34 @@ export function registerJobs(io: Server) {
       // harness, so it only goes out on a day nothing more timely is waiting.
       for (const row of due.rows) {
         if (!row.recap) continue;
+        // Already waiting in the queue: leave it (the hourly re-enqueue would
+        // otherwise run a new web lookup every hour).
+        const pending = await pool.query(
+          `SELECT 1 FROM proactive_candidates WHERE user_id = $1 AND type = 'companion' AND status = 'pending' LIMIT 1`,
+          [row.user_id],
+        );
+        if (pending.rows[0]) continue;
+        // One open thread and at most one useful thing for it (2026-09-22,
+        // harness/memberThreads.ts); the recap alone when nothing's open.
+        const parts = await companionPayloadFor(row.user_id).catch(() => null);
+        await recordDecision({
+          layer: 7,
+          decision: "proactive.companionPayload",
+          userId: row.user_id,
+          outcome: parts?.thread ? "act" : "skip",
+          action: parts?.item ? "thread_with_item" : parts?.thread ? "thread" : "recap_only",
+          proposal: { threadId: parts?.threadId ?? null, thread: parts?.thread ?? null, item: parts?.item ?? null },
+          checks: parts?.checks ?? [],
+        }).catch(() => {});
         await enqueueCandidate({
           userId: row.user_id,
           type: "companion",
-          targetKey: `companion:${row.recap_id}`,
+          targetKey: parts?.threadId ? `companion:thread:${parts.threadId}:${row.recap_id}` : `companion:${row.recap_id}`,
           topicKey: "companion",
-          summary: "No-reason check-in about one specific open thread from their recent recap (skip if there isn't one)",
-          payload: { recap: row.recap },
+          summary: parts?.thread
+            ? `Check in on "${parts.thread.text.slice(0, 80)}"${parts.item ? " with one thing found for it" : ""}`
+            : "No-reason check-in about one specific open thread from their recent recap (skip if there isn't one)",
+          payload: { recap: row.recap, threadId: parts?.threadId ?? null, thread: parts?.thread ?? null, item: parts?.item ?? null },
           expiresAt: new Date(Date.now() + 3 * 24 * 60 * 60 * 1000),
         }).catch((err: any) => console.error(`Companion check-in enqueue failed for ${row.user_id}:`, err?.message ?? err));
       }

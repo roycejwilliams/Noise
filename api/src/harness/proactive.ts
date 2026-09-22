@@ -71,7 +71,10 @@ export type ProactiveType =
   // this has no event to be inside the window of, so it goes through the
   // normal daily pick instead of bypassing it: local hours, the daily/weekly
   // caps, and opt-out all apply.
-  | "event_match_nudge";
+  | "event_match_nudge"
+  // Co doesn't know them yet and their membership will close unless they
+  // reply (services/membershipLapse.ts, 2026-09-22).
+  | "membership_lapse";
 
 // co_event: Co's own event, announced to nearby users on creation (services/coEventAnnouncement.ts).
 // direct_ask: a reply-triggered direct ask to a THIRD person who didn't just
@@ -112,6 +115,8 @@ export const TYPE_POLICY: Record<ProactiveType, TypePolicy> = {
   window_followup: { priority: 35, typeGapDays: 5 },
   product_update: { priority: 20, typeGapDays: 7 },
   companion: { priority: 10, typeGapDays: 14 },
+  // Weekly by design; the gap stops two in one week if one was delayed.
+  membership_lapse: { priority: 25, typeGapDays: 6 },
 };
 
 export const RULES = {

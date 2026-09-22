@@ -152,7 +152,7 @@ export async function summarizeCallForTextContext(userId: string, transcript: st
     const { text: raw } = await generateText({
       model: anthropic(SUMMARY_MODEL),
       experimental_telemetry: { isEnabled: true, functionId: "callContext.summarizeCallForText" },
-      prompt: `Summarize what was actually discussed in this phone call transcript, in 1-2 plain sentences, third person, as if briefing someone on what just happened. Ground it only in what's actually in the transcript — no invented detail, no therapy-speak.
+      prompt: `Summarize what was actually discussed in this phone call transcript, in 1-2 plain sentences, third person, as if briefing someone on what just happened. Ground it only in what's actually in the transcript — no invented detail, no therapy-speak. Refer to them by name or as "they", never "he" or "she" unless they said their pronouns in the call (2026-09-22: summaries were calling a member "he" from their name alone).
 
 Transcript:
 "${transcript}"

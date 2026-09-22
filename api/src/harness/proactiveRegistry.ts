@@ -15,6 +15,8 @@ import { draftPostCall, markPostCallDropped, markPostCallSent } from "../jobs/po
 import { isShortNotice, onEventOfferDropped, onEventOfferSent, type EventOfferPayload } from "../services/eventSurfacingSweep.js";
 import type { DebriefPayload } from "../services/recommendationOutcome.js";
 import { markMatchNudgeSent, type EventMatchNudgePayload } from "../services/eventScoring.js";
+import { lapseCloseDate, lapseText } from "../services/membershipLapse.js";
+import { getTimezoneForCity } from "../services/geocoding.js";
 
 function skip(reason: string): DraftResult {
   return { skip: reason };
@@ -163,11 +165,15 @@ export const proactiveRegistry: ProactiveRegistry = {
 
   companion: {
     async draft(c, person) {
-      const r = await draftCompanionCheckin(person.firstName, c.payload.recap ?? "");
+      const r = await draftCompanionCheckin(person.firstName, c.payload.recap ?? "", c.payload.thread ?? null, c.payload.item ?? null);
       return r ? { messages: [r.text], ...r } : skip("model chose SKIP: no specific open thread");
     },
     async onSent(c, _p, messages) {
       await pool.query(`UPDATE co_profiles SET last_companion_checkin_at = NOW() WHERE user_id = $1`, [c.userId]);
+      // Asked about it: fresh again, so the next check-in picks another thread.
+      if (c.payload.threadId) {
+        await pool.query(`UPDATE member_threads SET last_touched_at = NOW() WHERE id = $1 AND user_id = $2`, [c.payload.threadId, c.userId]);
+      }
       await writeMemory(c.userId, "companion_checkin", `Companion check-in: ${messages.join(" ")}`);
     },
     async onDropped(c) {
@@ -246,6 +252,30 @@ export const proactiveRegistry: ProactiveRegistry = {
 
   // Human-written bullets go out verbatim; only the intro/closing lines are
   // model-drafted, and those are what the output checks run on.
+  // Fixed wording, not a draft: it names the date their membership closes,
+  // which has to be exactly right (services/membershipLapse.ts).
+  membership_lapse: {
+    async draft(c, person) {
+      const final = Boolean(c.payload.final);
+      const { rows } = await pool.query(`SELECT city FROM co_profiles WHERE user_id = $1`, [c.userId]);
+      const zone = rows[0]?.city ? await getTimezoneForCity(rows[0].city).catch(() => null) : null;
+      const close = await lapseCloseDate(c.userId, final, zone);
+      if (!close) return skip("the lapse clock stopped");
+      const message = lapseText(person.firstName, close.label, final);
+      return { messages: [message], text: message, rules: { maxChars: 260, maxSentences: 3, allowGreeting: true, mustIncludeAny: [close.label] } };
+    },
+    async onSent(c, _p, messages) {
+      if (c.payload.final) {
+        // The date the final notice named is the date that holds.
+        await pool.query(
+          `UPDATE users SET lapse_close_at = GREATEST(lapse_close_at, NOW() + INTERVAL '7 days') WHERE id = $1 AND lapse_started_at IS NOT NULL`,
+          [c.userId],
+        );
+      }
+      await writeMemory(c.userId, "check_in", `Membership notice: ${messages.join(" ")}`);
+    },
+  },
+
   product_update: {
     async draft(c, person) {
       const { intro, closing, bulletList } = c.payload as { intro: string; closing: string; bulletList: string };

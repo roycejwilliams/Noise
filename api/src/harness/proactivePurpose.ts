@@ -25,6 +25,7 @@ export const PROACTIVE_PURPOSE: Record<ProactiveType | ExemptType | "in_room", P
   search_result: "offer",
   in_room: "offer",
   product_update: "ops",
+  membership_lapse: "ops",
   event_change: "ops",
   call_reminder: "ops",
   missed_call: "ops",

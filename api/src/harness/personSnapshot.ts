@@ -60,6 +60,7 @@ Rules:
 - Newer statements replace older ones. If they said they're Series A, they're not pre-seed anymore, whatever the old picture says.
 - Only what they actually said or what's listed above. No guesses about their feelings or circumstances.
 - Only about them. Never about Co, Co's mistakes, or complaints about Co.
+- Refer to them by name or as "they". Never "he" or "she" unless they told Co their pronouns (2026-09-22: a picture called a member "he" from their name alone).
 - Keep every list short (at most 4 items), specific, and current. Drop anything resolved or contradicted.
 
 Return ONLY JSON:
@@ -270,6 +271,11 @@ export async function refreshPersonSnapshot(userId: string, opts: { force?: bool
       [userId, JSON.stringify(snapshot)],
     );
     await recordDecision({ layer: 4, decision: "profile.snapshot", userId, outcome: "act", action: "rebuilt", proposal: { previous: input.previous, snapshot } });
+    // Their open threads move on the same beat: after they've said something
+    // new (2026-09-22, harness/memberThreads.ts). Loaded here so the many
+    // light importers of this file don't pull in the send path.
+    const { updateMemberThreads } = await import("./memberThreads.js");
+    await updateMemberThreads(userId);
     return true;
   } catch (err: any) {
     console.error("refreshPersonSnapshot failed (non-fatal):", err?.message ?? err);

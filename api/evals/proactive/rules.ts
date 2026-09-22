@@ -198,6 +198,24 @@ check("two unanswered texts in a row pause for 72 hours", unansweredPauseFor(2) 
   check("the ask check-in cron waits 7 days", /COALESCE\(ac\.last_checked_at, ac\.created_at\) <= NOW\(\) - INTERVAL '7 days'/.test(jobs));
 }
 
+// Everyone who has talked to Co gets a recap, and check-ins aren't silently off for anyone
+// (2026-09-22): a member who stopped after name and email had no profile row, so no recap, so no
+// check-in, and the auto-intake call needs a paid subscription, so nothing could reach them.
+{
+  const mc = readFileSync(new URL("../../src/services/memoryCompaction.ts", import.meta.url), "utf8");
+  const recapSelect = mc.slice(mc.indexOf("export async function findUsersDueForRecap"), mc.indexOf("return rows.map", mc.indexOf("export async function findUsersDueForRecap")));
+  check("recap selection starts from members, not only those with a profile row", /FROM users u\s+LEFT JOIN co_profiles cp/.test(recapSelect));
+  check("recap selection skips archived and pre-intake rows", /u\.identity_captured = true/.test(recapSelect) && /u\.archived_at IS NULL/.test(recapSelect));
+  check("a recap creates the profile row if it's missing", /INSERT INTO co_profiles \(user_id, last_recap_at, updated_at\)[\s\S]{0,120}ON CONFLICT \(user_id\) DO UPDATE SET last_recap_at = NOW\(\)/.test(mc));
+  const jobs = readFileSync(new URL("../../src/jobs/index.ts", import.meta.url), "utf8");
+  const where = jobs.slice(jobs.indexOf("WHERE u.sms_opted_out = false\n           AND u.archived_at IS NULL\n           AND u.identity_captured"), jobs.indexOf("LIMIT 50", jobs.indexOf("No paid subscription needed")));
+  check("companion check-ins need a recap, not life chapters (text-only members qualify)", where.length > 0 && !/life_chapters/.test(where) && /cp\.last_recap_at IS NOT NULL/.test(where));
+  const cc = readFileSync(new URL("../../src/agent/companionCheckin.ts", import.meta.url), "utf8");
+  check("a member Co barely knows gets a warm check-in instead of SKIP", /if the recap shows Co barely knows them yet[\s\S]{0,80}don't SKIP/.test(cc));
+  check("that check-in carries no events, offers, pitch or promises", /No events, no offers, no pitch, no promise of anything Co will do/.test(cc));
+  check("a member Co knows well with nothing open still gets SKIP, never a generic check-in", /a generic "thinking of you" is never acceptable/.test(cc));
+}
+
 // Every tier that has something goes out together, then one question
 // (2026-09-21, Royce: "it should always surface the 3 tiers if they are available").
 check("a closing offer question is dropped", stripClosingQuestion("Demo Night at WorkOS is Oct 5, live demos only. Want me to grab you a spot?") === "Demo Night at WorkOS is Oct 5, live demos only.");

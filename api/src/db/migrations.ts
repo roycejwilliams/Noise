@@ -1255,6 +1255,48 @@ export async function runMigrations(): Promise<void> {
     )
     .catch((err: Error) => console.error("call_processing table init failed:", err));
 
+  // Archive columns in the shared migrations (2026-09-22). They used to exist
+  // only in co-test's own migrations, while shared queries (the companion and
+  // recap crons, metrics) filter on users.archived_at, which would have failed
+  // in production. Idempotent, so running it on co-test too is harmless.
+  // lapse_*: the membership lapse clock (services/membershipLapse.ts);
+  // lapse_exempt marks team accounts it never starts for.
+  await pool
+    .query(
+      `ALTER TABLE users ADD COLUMN IF NOT EXISTS archived_at TIMESTAMPTZ,
+         ADD COLUMN IF NOT EXISTS archived_phone TEXT,
+         ADD COLUMN IF NOT EXISTS archived_email TEXT,
+         ADD COLUMN IF NOT EXISTS lapse_exempt BOOLEAN NOT NULL DEFAULT false,
+         ADD COLUMN IF NOT EXISTS lapse_started_at TIMESTAMPTZ,
+         ADD COLUMN IF NOT EXISTS lapse_close_at TIMESTAMPTZ`,
+    )
+    .catch((err: Error) => console.error("users archive/lapse columns migration failed:", err));
+
+  // Open threads (2026-09-22) — see src/harness/memberThreads.ts. What each
+  // member is in the middle of, in their words; opened and closed only with a
+  // quote of theirs.
+  await pool
+    .query(
+      `CREATE TABLE IF NOT EXISTS member_threads (
+        id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+        user_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+        text TEXT NOT NULL,
+        opened_quote TEXT NOT NULL,
+        opened_at TIMESTAMPTZ NOT NULL,
+        status TEXT NOT NULL DEFAULT 'open' CHECK (status IN ('open', 'waiting', 'resolved', 'changed')),
+        feeling TEXT,
+        due_date DATE,
+        next_step TEXT NOT NULL DEFAULT 'check_in' CHECK (next_step IN ('check_in', 'look_up', 'remember', 'suggest_someone')),
+        kind TEXT NOT NULL DEFAULT 'thread' CHECK (kind IN ('thread', 'commitment')),
+        closed_quote TEXT,
+        closed_at TIMESTAMPTZ,
+        last_touched_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+        created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+      )`,
+    )
+    .then(() => pool.query(`CREATE INDEX IF NOT EXISTS idx_member_threads_user ON member_threads (user_id, status)`))
+    .catch((err: Error) => console.error("member_threads table init failed:", err));
+
   // Kinds of things a member told Co to stop suggesting ("no more
   // hackathons", 2026-09-22). Turning down one event only ever blocked that
   // one event; this is the lasting version, read by the personal fit check

@@ -8,6 +8,9 @@ import type { OutputRules } from "../harness/proactive.js";
 import { mentionsUnknownDay } from "../services/askWindow.js";
 
 export type WindowFollowUpPayload = {
+  // "commitment" (2026-09-22): something they said they'd do by a date, from
+  // their open threads (harness/memberThreads.ts). Absent = a searched time frame.
+  kind?: "commitment";
   // Their time frame in their words ("this weekend", "thursday").
   label: string;
   // What they asked Co to look for.
@@ -20,7 +23,7 @@ export type WindowFollowUpPayload = {
 };
 
 export async function draftWindowFollowUp(firstName: string, p: WindowFollowUpPayload): Promise<{ text: string; rules: OutputRules } | null> {
-  const text = await draftProactive({
+  const text = p.kind === "commitment" ? await draftCommitment(firstName, p) : await draftProactive({
     functionId: "agent.windowFollowUp",
     firstName,
     facts: {
@@ -35,4 +38,18 @@ export async function draftWindowFollowUp(firstName: string, p: WindowFollowUpPa
   // Saturday the 10th end up going?" about a Saturday that hadn't happened).
   if (mentionsUnknownDay(text, p.dates ?? p.label)) return null;
   return { text, rules: { maxSentences: 2, maxChars: 260 } };
+}
+
+// Their own words, their own date: "I'll send the deck Friday" → the morning
+// after, how it went. About them, never a pitch (Royce, 2026-09-22).
+function draftCommitment(firstName: string, p: WindowFollowUpPayload): Promise<string | null> {
+  return draftProactive({
+    functionId: "agent.commitmentFollowUp",
+    firstName,
+    facts: {
+      what_they_said_they_would_do: p.asked,
+      the_day_they_named: p.dates ?? p.label,
+    },
+    task: `They told Co they'd do this by that day, and the day has passed. Write a short, warm text asking how it went, like a friend who remembered ("How'd sending the deck go on Friday?"). Name the thing in a few words and the day, using only the_day_they_named and never any other date or day number. No advice, no suggestions, no events, no offer to help, nothing Co will do. Start with the question itself, not a greeting like "Hey".`,
+  });
 }

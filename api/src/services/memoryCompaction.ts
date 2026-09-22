@@ -89,7 +89,17 @@ Return ONLY the recap text, nothing else — no preamble, no labels.`,
     if (!recap) return;
 
     await writeMemory(userId, "recap", recap);
-    await pool.query(`UPDATE co_profiles SET last_recap_at = NOW() WHERE user_id = $1`, [userId]);
+    // Upsert, not update: a member with no profile row yet still gets their
+    // recap recorded (storeProfile and captureIntent both upsert this row too).
+    await pool.query(
+      `INSERT INTO co_profiles (user_id, last_recap_at, updated_at) VALUES ($1, NOW(), NOW())
+       ON CONFLICT (user_id) DO UPDATE SET last_recap_at = NOW()`,
+      [userId],
+    );
+    // Open threads they've gone quiet on become "waiting" here; only their
+    // own words ever close one (harness/memberThreads.ts).
+    const { markQuietThreadsWaiting } = await import("../harness/memberThreads.js");
+    await markQuietThreadsWaiting(userId);
   } catch (err: any) {
     console.error(`memoryCompaction: buildRecap failed for ${userId} (non-fatal):`, err?.message ?? err);
   }
@@ -101,14 +111,21 @@ Return ONLY the recap text, nothing else — no preamble, no labels.`,
 // activity since their last recap are eligible, so an inactive user's
 // cadence timer effectively never fires — no point re-summarizing someone
 // who hasn't said anything new.
+// Every member who has talked to Co, not only those with a profile row
+// (2026-09-22): the row is only created once a call is extracted or an ask
+// is captured, so a member who stopped after giving their name and email
+// had none, never got a recap, and so never got a companion check-in either.
 export async function findUsersDueForRecap(): Promise<string[]> {
   const { rows } = await pool.query(`
-    SELECT DISTINCT cp.user_id
-    FROM co_profiles cp
-    WHERE (cp.last_recap_at IS NULL OR cp.last_recap_at <= NOW() - INTERVAL '3 days')
+    SELECT u.id AS user_id
+    FROM users u
+    LEFT JOIN co_profiles cp ON cp.user_id = u.id
+    WHERE u.identity_captured = true
+      AND u.archived_at IS NULL
+      AND (cp.last_recap_at IS NULL OR cp.last_recap_at <= NOW() - INTERVAL '3 days')
       AND EXISTS (
         SELECT 1 FROM co_memories m
-        WHERE m.user_id = cp.user_id
+        WHERE m.user_id = u.id
           AND m.memory_type IN ('text_exchange', 'call_transcript')
           AND m.created_at > COALESCE(cp.last_recap_at, '-infinity'::timestamptz)
       )

@@ -700,6 +700,69 @@
       "expect": {
         "sends": 2
       }
+    },
+    {
+      "id": "s26",
+      "about": "open threads (2026-09-22): a commitment follow-up from a date the member gave, a thread check-in, and an event offer are all waiting the same morning; the member's own follow-up goes first, the offer still goes, and nothing breaks the caps",
+      "timezone": "America/Los_Angeles",
+      "start": "2026-09-26T15:45:00Z",
+      "end": "2026-09-28T06:00:00Z",
+      "arrivals": [
+        {
+          "at": "2026-09-26T18:00:00Z",
+          "type": "window_followup",
+          "target": "thread:t1",
+          "expiresInHours": 72
+        },
+        {
+          "at": "2026-09-26T16:00:00Z",
+          "type": "companion",
+          "target": "companion:thread:t2:r1",
+          "expiresInHours": 72
+        },
+        {
+          "at": "2026-09-26T16:00:00Z",
+          "type": "event_offer",
+          "target": "event_offer:event:e1",
+          "expiresInHours": 100
+        }
+      ],
+      "expect": {
+        "minSends": 2,
+        "maxSends": 3,
+        "firstType": "companion"
+      }
+    },
+    {
+      "id": "s27",
+      "about": "membership lapse (2026-09-22): weekly notices to a member who never replies still go out a week apart, and a companion check-in the same day goes first",
+      "timezone": "America/Los_Angeles",
+      "start": "2026-09-23T15:45:00Z",
+      "end": "2026-10-02T06:00:00Z",
+      "arrivals": [
+        {
+          "at": "2026-09-23T16:30:00Z",
+          "type": "membership_lapse",
+          "target": "lapse:2026-09-23:1",
+          "expiresInHours": 144
+        },
+        {
+          "at": "2026-09-23T16:30:00Z",
+          "type": "companion",
+          "target": "companion:r9",
+          "expiresInHours": 72
+        },
+        {
+          "at": "2026-09-30T16:30:00Z",
+          "type": "membership_lapse",
+          "target": "lapse:2026-09-23:2",
+          "expiresInHours": 144
+        }
+      ],
+      "expect": {
+        "sends": 3,
+        "firstType": "companion"
+      }
     }
   ],
   "drafts": [
