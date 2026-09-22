@@ -9,6 +9,7 @@ import {
   logFlags,
   reactionFlags,
   renderDigest,
+  renderRejectedSample,
   reviewEnabled,
   topicWords,
   type ReviewData,
@@ -150,6 +151,16 @@ check("open asks from earlier days are in the log the model reads", withAsks.inc
 check("never outside co-test", !reviewEnabled({ RAILWAY_ENVIRONMENT_NAME: "production", RAILWAY_SERVICE_NAME: "CoPatible", DEV_REVIEW: "true" } as any));
 check("not on co-test without the flag", !reviewEnabled({ RAILWAY_ENVIRONMENT_NAME: "dev", RAILWAY_SERVICE_NAME: "co-test" } as any));
 check("on co-test with the flag", reviewEnabled({ RAILWAY_ENVIRONMENT_NAME: "dev", RAILWAY_SERVICE_NAME: "co-test", DEV_REVIEW: "true" } as any));
+
+// Rejected events shown in the morning digest (2026-09-21).
+{
+  const r = renderRejectedSample([{ name: "Sergey Levine fireside", why: "single founder fireside chat" }, { name: "Mahjong After Dark", why: null }, { name: "sergey levine fireside", why: "again" }]);
+  check("rejected sample lists each event once with its reason", !!r && r.includes("Sergey Levine fireside: single founder fireside chat") && (r.match(/fireside/gi) ?? []).length === 2 && r.includes("(2)"));
+  check("an event with no reason still shows", !!r && r.includes("• Mahjong After Dark"));
+  check("nothing rejected means no section", renderRejectedSample([]) === null);
+  const many = renderRejectedSample(Array.from({ length: 9 }, (_, i) => ({ name: `E${i}`, why: "x" })), 6);
+  check("the list is capped and says how many more", !!many && many.includes("Plus 3 more.") && !many.includes("E6"));
+}
 
 console.log(`review rules: ${total - failed}/${total} passed`);
 if (failed) process.exitCode = 1;

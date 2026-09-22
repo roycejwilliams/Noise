@@ -516,6 +516,37 @@ export function renderDigest(flags: ReviewFlag[], names: Record<string, string>,
   return [`Co review, ${label}: ${flags.length} flag${flags.length === 1 ? "" : "s"} in ${groups.length} type${groups.length === 1 ? "" : "s"}.`, `${lines.join("\n")}${more}`, `Full detail with decision-log rows: ask Claude "what broke since ${label.replace(/^last /, "")}".`];
 }
 
+// Events the fit check turned down, so a wrongly rejected good one is visible (2026-09-21: we
+// only ever see what Co sends). Pure half: dedupes by name, keeps the first reason, caps the list.
+export type RejectedEvent = { name: string; why: string | null };
+
+export function renderRejectedSample(items: RejectedEvent[], max = 6): string | null {
+  const seen = new Set<string>();
+  const unique = items.filter((i) => i.name && !seen.has(i.name.toLowerCase()) && seen.add(i.name.toLowerCase()));
+  if (!unique.length) return null;
+  const shown = unique.slice(0, max).map((i) => `• ${clip(i.name, 60)}${i.why ? `: ${clip(i.why, 80)}` : ""}`);
+  const more = unique.length > max ? `\nPlus ${unique.length - max} more.` : "";
+  return `Events Co turned down as not fitting (${unique.length}). Skim for a good one it missed:\n${shown.join("\n")}${more}`;
+}
+
+// The sweep records why each event was turned down (sweep.surface: the fit gate's rejections and
+// the personal-fit "doesn't fit" skips). Newest first, deduped by name.
+export async function rejectedEvents(since: Date, until: Date, limit = 40): Promise<RejectedEvent[]> {
+  const { rows } = await pool.query(
+    `SELECT proposal FROM harness_decisions WHERE decision = 'sweep.surface' AND created_at >= $1 AND created_at < $2 ORDER BY created_at DESC LIMIT 200`,
+    [since, until],
+  );
+  const out: RejectedEvent[] = [];
+  for (const r of rows) {
+    const p = r.proposal ?? {};
+    for (const x of Array.isArray(p.scope?.relevanceRejected) ? p.scope.relevanceRejected : []) if (typeof x?.name === "string") out.push({ name: x.name, why: typeof x.why === "string" ? x.why : null });
+    for (const x of Array.isArray(p.skipped) ? p.skipped : [])
+      if (typeof x?.name === "string" && typeof x?.why === "string" && /^doesn't fit/i.test(x.why)) out.push({ name: x.name, why: x.why.replace(/^doesn't fit:\s*/i, "") });
+    if (out.length >= limit) break;
+  }
+  return out;
+}
+
 // Plain-text report for a session ("what broke since X"): every flag, grouped.
 export function renderReport(flags: ReviewFlag[], names: Record<string, string>, decisionNames: Map<number, string>): string {
   const groups = groupFlags(flags);
@@ -589,6 +620,8 @@ export async function printReview(opts: { since?: string; until?: string; model?
     console.log(`What broke ${label} (${since.toISOString()} to ${until.toISOString()}): ${flags.length} flags\n`);
     console.log(renderReport(flags, names, decisionNames));
   }
+  const rejectedText = renderRejectedSample(await rejectedEvents(since, until).catch(() => []), 12);
+  if (rejectedText) console.log(`\n${rejectedText}`);
   if (opts.store) console.log(reviewEnabled() ? `\nstored ${await storeFlags(flags)} new flags` : "\nnot stored: only on co-test with DEV_REVIEW=true");
   await pool.end();
 }
@@ -606,7 +639,8 @@ export async function runMorningReview(now = new Date()): Promise<void> {
       await recordDecision({ layer: 3, decision: "devReview.digest", userId: null, outcome: "skip", action: "no_recipient", reason: `no account named ${process.env.DEV_REVIEW_DIGEST_NAME ?? "Royce"} yet`, proposal: { flags: flags.length, stored } });
       return;
     }
-    await textDigest(recipient, digest);
+    const rejected = renderRejectedSample(await rejectedEvents(since, now).catch(() => []));
+    await textDigest(recipient, rejected ? [...digest, rejected] : digest);
     await recordDecision({
       layer: 3,
       decision: "devReview.digest",

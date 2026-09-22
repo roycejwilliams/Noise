@@ -198,6 +198,14 @@ export function triesInOrder<T extends { tier: number }>(matches: T[], limit = 5
   return [...firsts, ...matches.filter((m) => !firsts.includes(m))].slice(0, limit);
 }
 
+// Matches the search found that were already sent to this person, by name (max 3). When
+// every good match is one already offered, the honest answer is "those are the ones I sent,
+// nothing new since", not "nothing came up" (2026-09-21).
+export function alreadySentNames(gatedOut: { name: string; reasons: string[] }[] | null | undefined): string[] {
+  const names = (gatedOut ?? []).filter((g) => g.reasons.some((r) => /already offered/i.test(r))).map((g) => g.name);
+  return [...new Set(names)].slice(0, 3);
+}
+
 // A message that only asks what's new with Co ("Updates?", "any updates",
 // "what's new?"), with nothing else to answer.
 export function isOnlyUpdatesAsk(text: string): boolean {

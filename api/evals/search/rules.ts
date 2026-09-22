@@ -11,7 +11,7 @@ import { readFileSync } from "fs";
 import { checkTiming, checkLocation, type MatchFacts } from "../../src/harness/matchGate.js";
 import type { TierMatch } from "../../src/services/tieredRecommendation.js";
 import { carryTimeFrame, mentionsUnknownDay, resolveAskWindow } from "../../src/services/askWindow.js";
-import { searchCacheKey, triesInOrder, xSearchBudget } from "../../src/services/searchRules.js";
+import { alreadySentNames, searchCacheKey, triesInOrder, xSearchBudget } from "../../src/services/searchRules.js";
 import { profileForSearch } from "../../src/harness/personSnapshot.js";
 import { resolveCoEventPlace } from "../../src/services/luma.js";
 import { localToday, searchZone } from "../../src/services/eventOrder.js";
@@ -291,6 +291,16 @@ for (const [ok, label] of cases) {
   const reply = readFileSync(new URL("../../src/agent/conversationReply.ts", import.meta.url), "utf8");
   c(/if \(ctx\.searchedThisTurn\) \{\s*return \{ ok: true, found: \[\]/.test(tools), "searchNow refuses to run when a search already ran this turn");
   c(reply.includes("searchedThisTurn: input.searchedThisTurn"), "the reply agent tells its tools a search already ran");
+}
+
+// When the good matches were already sent, say that (2026-09-21), not "nothing came up".
+{
+  const g = (name: string, ...reasons: string[]) => ({ name, reasons });
+  c(alreadySentNames([g("A", "already offered to this person"), g("B", "too far away")]).join() === "A", "an already-offered match is named");
+  c(alreadySentNames([g("A", "too far away"), g("B", "sold out")]).length === 0, "matches dropped for other reasons are not called already sent");
+  c(alreadySentNames([g("A", "already offered to this person"), g("A", "already offered to this person")]).length === 1, "a name is listed once");
+  c(alreadySentNames([g("A", "already offered to this person"), g("B", "already offered to this person"), g("C", "already offered to this person"), g("D", "already offered to this person")]).length === 3, "at most three names");
+  c(alreadySentNames(null).length === 0 && alreadySentNames(undefined).length === 0, "no list means no names");
 }
 
 console.log(`search rules: ${cases.length - failed}/${cases.length} passed`);

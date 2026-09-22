@@ -1,5 +1,5 @@
 import { anthropic } from "@ai-sdk/anthropic";
-import { canSkipReplyAfterResults, isOnlyUpdatesAsk } from "../services/searchRules.js";
+import { alreadySentNames, canSkipReplyAfterResults, isOnlyUpdatesAsk } from "../services/searchRules.js";
 import { capitalizeSentences } from "../services/textStyle.js";
 import { captureIssueReport } from "../services/issueReports.js";
 import { enqueueCandidate, nextLocalHour } from "../harness/proactive.js";
@@ -2353,8 +2353,15 @@ Return ONLY valid JSON, no preamble: {"date": "YYYY-MM-DD or null", "time": "HH:
               if (stillSearching) {
                 addFact(replyFacts, "did_this_turn", "Started a search for what they asked for. It's still running and what it finds gets sent to them as soon as it lands.");
                 addInstruction(replyFacts, "Your search is still running. Say you're still looking and will send what turns up shortly. Don't say you found nothing.");
-              } else addFact(replyFacts, "did_this_turn", `Searched just now for what they asked for and found nothing real that fits yet${recommendation.reason ? ` (${recommendation.reason})` : ""}.`);
-              await recordSearchNote(user.id, `Co searched for "${resolvedContent.slice(0, 120)}" and found nothing real${recommendation.reason ? ` (${recommendation.reason})` : ""}.`);
+              } else {
+                // What fits may already have been sent: say so instead of "nothing came up".
+                const sentBefore = alreadySentNames("scope" in recommendation ? recommendation.scope?.gatedOut : null);
+                if (sentBefore.length) {
+                  addFact(replyFacts, "did_this_turn", `Searched just now for what they asked for. What fits is what you already sent them earlier: ${sentBefore.join("; ")}. Nothing new has turned up since.`);
+                  addInstruction(replyFacts, "Tell them plainly that the ones that fit are the ones you already sent (name one or two) and nothing new has come up since. Don't say nothing came up, and don't send them again.");
+                } else addFact(replyFacts, "did_this_turn", `Searched just now for what they asked for and found nothing real that fits yet${recommendation.reason ? ` (${recommendation.reason})` : ""}.`);
+              }
+              await recordSearchNote(user.id, `Co searched for "${resolvedContent.slice(0, 120)}" and found nothing new${recommendation.reason ? ` (${recommendation.reason})` : ""}.`);
               if (turnAsk?.ask?.text) {
                 replyFacts.facts = replyFacts.facts.filter((fact) => fact.kind !== "ongoing" && !/isn't searching for anything/.test(fact.text));
                 await addOngoingSearchFacts(replyFacts, user.id);
