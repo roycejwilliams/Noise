@@ -211,3 +211,42 @@ export function alreadySentNames(gatedOut: { name: string; reasons: string[] }[]
 export function isOnlyUpdatesAsk(text: string): boolean {
   return /^\s*(hey\s*,?\s*|yo\s*,?\s*)?(any\s+(new\s+)?updates|updates|what'?s\s+new|anything\s+new)(\s+(with|on)\s+(you|co))?\s*[?!.]*\s*$/i.test(text);
 }
+
+// ---------- A named event in an ask (2026-09-21)
+//
+// Live replies don't run the web search (the sweep does), so "What's going on at AfroTech?"
+// could only ever say "nothing turned up". When the ask names ONE specific event and the
+// public Luma search found nothing, one web lookup for that event's own page runs
+// (services/namedEventLookup.ts). These are its checks on what the models say.
+
+const compactText = (s: string) => s.toLowerCase().replace(/[^a-z0-9]/g, "");
+const GENERIC_EVENT_NAMES = /^(events?|meetups?|conferences?|hackathons?|mixers?|parties|party|things|stuff|tech events?|networking)$/i;
+
+// The one event an ask names, as they wrote it. A name that isn't in their own message never
+// counts, so a name from earlier in the chat can't be swapped in.
+export function namedEventFromModel(parsed: unknown, askText: string): string | null {
+  const name = typeof (parsed as { name?: unknown } | null)?.name === "string" ? (parsed as { name: string }).name.trim() : "";
+  if (name.length < 3 || name.length > 60 || GENERIC_EVENT_NAMES.test(name)) return null;
+  return compactText(askText).includes(compactText(name)) ? name : null;
+}
+
+export type EventLookup = { name: string; url: string; start: string | null; end: string | null; reason: string };
+
+// What the web lookup found: a real https page, a name, a reason, and dates only when they're
+// well-formed.
+export function eventLookupFromModel(parsed: unknown): EventLookup | null {
+  const p = parsed as { found?: unknown; name?: unknown; url?: unknown; reason?: unknown; start?: unknown; end?: unknown } | null;
+  if (!p?.found || typeof p.name !== "string" || typeof p.url !== "string" || typeof p.reason !== "string") return null;
+  if (!p.name.trim() || !p.reason.trim() || !/^https:\/\/[^\s/]+\.[^\s/]+/.test(p.url)) return null;
+  const date = (d: unknown) => (typeof d === "string" && /^\d{4}-\d{2}-\d{2}$/.test(d) ? d : null);
+  return { name: p.name.trim(), url: p.url, reason: p.reason.trim(), start: date(p.start), end: date(p.end) };
+}
+
+// Ticketing pages an event's own organizers use, alongside a site that carries its name.
+export function isTicketingHost(url: string): boolean {
+  try {
+    return /(^|\.)(lu\.ma|luma\.com|eventbrite\.com|partiful\.com|meetup\.com)$/i.test(new URL(url).hostname);
+  } catch {
+    return false;
+  }
+}

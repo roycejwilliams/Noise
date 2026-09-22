@@ -11,7 +11,7 @@ import { readFileSync } from "fs";
 import { checkTiming, checkLocation, type MatchFacts } from "../../src/harness/matchGate.js";
 import type { TierMatch } from "../../src/services/tieredRecommendation.js";
 import { carryTimeFrame, mentionsUnknownDay, resolveAskWindow } from "../../src/services/askWindow.js";
-import { alreadySentNames, searchCacheKey, triesInOrder, xSearchBudget } from "../../src/services/searchRules.js";
+import { alreadySentNames, eventLookupFromModel, isTicketingHost, namedEventFromModel, searchCacheKey, triesInOrder, xSearchBudget } from "../../src/services/searchRules.js";
 import { profileForSearch } from "../../src/harness/personSnapshot.js";
 import { resolveCoEventPlace } from "../../src/services/luma.js";
 import { localToday, searchZone } from "../../src/services/eventOrder.js";
@@ -327,6 +327,32 @@ for (const [ok, label] of cases) {
   c(/\$\{dateRule\}\\nWrite \$\{matchCount/.test(sb), "the date rule is inside the description prompt");
   c(sb.includes("if it falls inside, say nothing about their dates being off"), "the rule forbids calling an in-window event outside the dates");
   c(/function dateCaveatRule\(askedDates: string \| null\): string \{\s*if \(!askedDates\) return ""/.test(sb), "no dates means no date rule");
+}
+
+// One live web lookup for an ask that names one event (2026-09-21: "What's happening at Afro tech?"
+// found nothing because live replies never search the web).
+{
+  const ask = "What’s happening at Afro tech this year?";
+  c(namedEventFromModel({ name: "AfroTech" }, ask) === "AfroTech", "a name spelled differently in the ask (Afro tech / AfroTech) still counts");
+  c(namedEventFromModel({ name: "Figma Config" }, "What about figcon this year?") === null, "a name that isn't in their message is refused");
+  c(namedEventFromModel({ name: "SF Tech Week" }, "Anything else?") === null, "a name from earlier in the chat can't be swapped in");
+  c(namedEventFromModel({ name: "Figcon" }, "What about figcon this year?") === "Figcon", "the name as they wrote it is kept");
+  c(namedEventFromModel({ name: "events" }, "any events this weekend?") === null, "a generic word is not a named event");
+  c(namedEventFromModel({ name: null }, ask) === null && namedEventFromModel(null, ask) === null, "no name means no lookup");
+  c(namedEventFromModel({ name: "x".repeat(80) }, "x".repeat(80)) === null, "an overlong name is refused");
+  const good = { found: true, name: "AfroTech", url: "https://afrotech.com/conference", reason: "A tech conference for Black professionals in Houston.", start: "2026-11-04", end: "2026-11-07" };
+  c(eventLookupFromModel(good)?.start === "2026-11-04", "a good lookup keeps its dates");
+  c(eventLookupFromModel({ ...good, start: "next November" })?.start === null, "a badly formed date is dropped, not kept");
+  c(eventLookupFromModel({ ...good, url: "http://afrotech.com" }) === null, "a non-https page is refused");
+  c(eventLookupFromModel({ found: false }) === null, "found:false is nothing");
+  c(eventLookupFromModel({ ...good, reason: " " }) === null, "no reason is nothing");
+  c(isTicketingHost("https://lu.ma/figma-config") && isTicketingHost("https://www.eventbrite.com/e/123"), "a ticketing page counts");
+  c(!isTicketingHost("https://someblog.com/afrotech-guide") && !isTicketingHost("not a url"), "a blog or a bad url doesn't");
+  const tr = readFileSync(new URL("../../src/services/tieredRecommendation.ts", import.meta.url), "utf8");
+  c(/if \(!found\.length && source !== "sweep"\) \{\s*const named = await lookupNamedEvent\(/.test(tr), "the lookup runs only for a live reply, and only when nothing else was found");
+  const nel = readFileSync(new URL("../../src/services/namedEventLookup.ts", import.meta.url), "utf8");
+  c(/reserveWebSearch\(opts\.userId, opts\.source/.test(nel), "the lookup spends the web search budget");
+  c(/checkGrounding\(match/.test(nel) && /looksOfficial\(found\.url/.test(nel), "the lookup checks the page and that it is the event's own");
 }
 
 console.log(`search rules: ${cases.length - failed}/${cases.length} passed`);
