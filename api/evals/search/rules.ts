@@ -309,6 +309,18 @@ for (const [ok, label] of cases) {
   c(reply.includes("searchedThisTurn: input.searchedThisTurn"), "the reply agent tells its tools a search already ran");
 }
 
+// "A companion you can ask 'what are you working on for me' is more trustworthy than one
+// that only surfaces results when it feels like it" (Royce, 2026-09-22) — listOpenAsks
+// answers from the real stated-ask list, never a guess reconstructed from the conversation.
+{
+  const tools = readFileSync(new URL("../../src/agent/conversationTools.ts", import.meta.url), "utf8");
+  c(/listOpenAsks: tool\(\{/.test(tools), "the listOpenAsks tool exists");
+  c(/Never guess or reconstruct this from the conversation alone/.test(tools), "the tool's own description forbids guessing from conversation memory");
+  c(/SELECT intent FROM co_profiles WHERE user_id = \$1/.test(tools), "it reads the real stated-ask list, not a summary");
+  c(/askEntries\(rows\[0\]\?\.intent/.test(tools), "it reuses the same askEntries parsing the search/profile pipeline already uses");
+  c(/Never add, drop, or invent anything beyond this list\./.test(tools), "the grounded fact it hands the reply agent is explicit that this is the complete, real list");
+}
+
 // When the good matches were already sent, say that (2026-09-21), not "nothing came up".
 {
   const g = (name: string, ...reasons: string[]) => ({ name, reasons });

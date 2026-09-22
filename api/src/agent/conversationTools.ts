@@ -11,6 +11,7 @@ import { generateRecommendation, recordRecommendationsSent, type RecommendationR
 import type { TierMatch } from "../services/tieredRecommendation.js";
 import { enrichMatch, renderEventDetails } from "../services/eventDetails.js";
 import { resolveNamedEventGuest, requestIntroToNamedGuest } from "../services/eventGuestMatchHandoff.js";
+import { askEntries } from "../harness/profileWrite.js";
 
 // Resolves false when the message didn't go out (a refused or failed send),
 // so callers only log and count what was really sent (2026-09-17 code review).
@@ -262,6 +263,37 @@ export function createConversationTools(ctx: ConversationToolContext) {
         }
         ctx.facts?.add("ongoing", `Co's daily search is now looking for: "${what}". If something real fits, Co may text them (at most one text a day). Co can't promise it will find anything, or when.`);
         return { ok: true, note: "Saved. You can say you'll keep looking and text them if something real fits. Don't promise a time." };
+      },
+    }),
+
+    // "A companion you can ask 'what are you working on for me' is more
+    // trustworthy than one that only surfaces results when it feels like
+    // it" (Royce, 2026-09-22). The daily search and sweeps already run off
+    // exactly these stated asks (getActiveAsks/askEntries) — this just
+    // answers honestly from the same real list instead of the model
+    // guessing from conversation memory, which can drift or go stale.
+    listOpenAsks: tool({
+      description:
+        "When they ask what you're keeping an eye out for them, what you're tracking or watching for, or what's still open/pending on their asks — call this and answer from the real list. Never guess or reconstruct this from the conversation alone; asks can be older than what's visible in recent messages, or already resolved.",
+      inputSchema: z.object({}),
+      execute: async () => {
+        if (ctx.dryRun) return { ok: true, asks: [] };
+        const { rows } = await pool.query(`SELECT intent FROM co_profiles WHERE user_id = $1`, [ctx.userId]);
+        const entries = askEntries(rows[0]?.intent ?? null);
+        const asks = entries
+          .filter((e) => e.text)
+          .map((e) => ({ text: e.text as string, type: e.type ?? null, openSince: e.created_at ?? null }));
+        if (!asks.length) {
+          ctx.facts?.add("known", "Co has nothing open on file that it's currently searching or watching for on their behalf.");
+          return { ok: true, asks: [] };
+        }
+        ctx.facts?.add(
+          "known",
+          `What Co currently has open for them, the real complete list: ${asks
+            .map((a) => `"${a.text}"${a.openSince ? ` (open since ${new Date(a.openSince).toDateString()})` : ""}`)
+            .join("; ")}. Never add, drop, or invent anything beyond this list.`,
+        );
+        return { ok: true, asks };
       },
     }),
 
