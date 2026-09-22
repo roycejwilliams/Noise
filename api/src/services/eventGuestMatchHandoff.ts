@@ -10,6 +10,9 @@ import { checkBothYes, draftWithConsent, eventOptedIn, gateIntroAction } from ".
 import { sendExemptWhenAllowed } from "../harness/proactive.js";
 import { getTimezoneForCity } from "./geocoding.js";
 import { MODELS } from "../models.js";
+import { getEventGuestList } from "./luma.js";
+import { matchGuestsToUsers, dedupeByUserId } from "./eventScoring.js";
+import { mergeWalkinsIntoGuestPool } from "./eventWalkinCheckin.js";
 
 // This person's timezone, for the hours check on a reply-triggered direct
 // ask (code review, 2026-09-17 — see sendExemptWhenAllowed).
@@ -272,6 +275,67 @@ async function sendIntroEmail(eventId: string, eventName: string, a: MatchNudgeC
   }
   await writeMemory(a.user_id, "event_intro_email_sent", `Sent an intro email connecting ${a.first_name} and ${b.first_name} ahead of "${eventName}".`);
   await writeMemory(b.user_id, "event_intro_email_sent", `Sent an intro email connecting ${a.first_name} and ${b.first_name} ahead of "${eventName}".`);
+  return true;
+}
+
+export type ResolvedEventGuest = { eventId: string; eventName: string; target: MatchNudgeCandidate } | { error: string };
+
+// Resolves "I met Sarah" to a real guest at the member's most recent Co
+// event — event_checkin_followups is scheduled as soon as their
+// registration is known (services/eventCheckinFollowUp.ts), before the
+// event even starts, so this also covers "still at the event right now."
+// Known limitation, not built here: always the MOST RECENT event, never one
+// they name explicitly ("at the one last month") — not added speculatively,
+// this is the case that actually came up.
+export async function resolveNamedEventGuest(userId: string, nameGuess: string): Promise<ResolvedEventGuest> {
+  const { rows: recent } = await pool.query(
+    `SELECT event_api_id, event_name FROM event_checkin_followups WHERE user_id = $1 ORDER BY created_at DESC LIMIT 1`,
+    [userId],
+  );
+  if (!recent[0]) return { error: "no recent Co event on file for them to have met someone at" };
+  const eventId: string = recent[0].event_api_id;
+  const eventName: string = recent[0].event_name;
+
+  const [guests, walkins] = await Promise.all([
+    getEventGuestList(eventId).then(matchGuestsToUsers).catch(() => []),
+    mergeWalkinsIntoGuestPool(eventId).catch(() => []),
+  ]);
+  const guestPool = dedupeByUserId([...guests, ...walkins]).filter((g) => g.user_id !== userId);
+
+  const needle = nameGuess.trim().toLowerCase();
+  if (!needle) return { error: "no name given" };
+  const matches = guestPool.filter((g) => {
+    const name = g.first_name.trim().toLowerCase();
+    return name === needle || name.startsWith(needle) || needle.startsWith(name);
+  });
+  if (!matches.length) return { error: `couldn't find anyone named "${nameGuess}" on the guest list for "${eventName}"` };
+  if (matches.length > 1) return { error: `more than one "${nameGuess}" was at "${eventName}" — ask which one, or something else about them, to tell them apart` };
+
+  const g = matches[0];
+  return { eventId, eventName, target: { user_id: g.user_id, first_name: g.first_name, phone_number: g.phone_number, email: g.email } };
+}
+
+// A member naming someone Co never nudged them about (Royce, 2026-09-22:
+// "if someone they met during the event was not recommended Co can still
+// intro that person"). requester has already told Co they want this — that
+// IS their opt-in, read the same way a "yes" reply to a real nudge is — so
+// this records it directly rather than waiting for a nudge Co never sent.
+// Everything after that reuses the exact same double opt-in machinery as a
+// real match: reciprocal check, direct ask to the other side, email intro
+// once both have said yes. See agent/conversationTools.ts's
+// requestEventIntro tool for where this is actually called from.
+export async function requestIntroToNamedGuest(
+  eventId: string,
+  eventName: string,
+  requester: MatchNudgeCandidate,
+  target: MatchNudgeCandidate,
+): Promise<boolean> {
+  await recordOptIn(eventId, requester.user_id, requester.first_name, target.user_id, target.first_name, "interested");
+
+  if (await hasReciprocalOptIn(eventId, requester.user_id, target.user_id)) {
+    return sendIntroEmail(eventId, eventName, requester, target);
+  }
+  await maybeAskCandidateDirectly(eventId, eventName, requester.first_name, target, requester);
   return true;
 }
 

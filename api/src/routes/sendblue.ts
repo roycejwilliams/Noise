@@ -55,6 +55,7 @@ import { isBrowseAsk } from "../services/askWindow.js";
 import { recordOfferReaction, reactionFact, type OfferReaction } from "../services/offerReactions.js";
 import { searchWithTimeCap } from "../agent/conversationTools.js";
 import type { TierMatch } from "../services/tieredRecommendation.js";
+import { lookupNamedEvent } from "../services/namedEventLookup.js";
 import { detectCheckinPhrase, recordCheckin, hasActiveAsk, recordWalkinAsk } from "../services/eventWalkinCheckin.js";
 import { scheduleOutcomeFollowUp, recordOutcome, wasClosestMissRecentlyMentioned, recordClosestMissMentioned } from "../services/recommendationOutcome.js";
 import { recordEventCheckinOutcome } from "../services/eventCheckinFollowUp.js";
@@ -2247,6 +2248,36 @@ Return ONLY valid JSON, no preamble: {"date": "YYYY-MM-DD or null", "time": "HH:
                   replyFacts,
                   "Nothing you found matched exactly, so you sent the closest real thing with a caveat. Don't apologize for it or call it a fail; if it helps, say what you'll keep looking for.",
                 );
+              }
+              // Nothing survived the real fit check, but the ask might name one specific event
+              // ("What's happening at AfroTech?") that tier 2's own coarse relevance gate let
+              // unrelated candidates through for (2026-09-21: 8 SF Tech Week events passed that
+              // gate, then all failed here). A live reply's web search is otherwise off
+              // (services/namedEventLookup.ts); this is its only path to a real answer, tried
+              // once, only as the true last resort.
+              if (!prepared.length) {
+                const scopeCity = "scope" in recommendation ? (recommendation.scope?.city ?? null) : null;
+                const scopeZone = ("scope" in recommendation && recommendation.scope?.timezone) || "America/Los_Angeles";
+                const named = await lookupNamedEvent(resolvedContent, scopeCity ?? profile?.city ?? null, DateTime.now().setZone(scopeZone).toISODate() ?? DateTime.now().toISODate()!, {
+                  userId: user.id,
+                  source: "request",
+                }).catch((err: any) => {
+                  console.error("sendblue: named event lookup failed (non-fatal):", err?.message ?? err);
+                  return { match: null, name: null, blocked: null, rejected: null };
+                });
+                if (named.match) {
+                  const { em } = await enrichOne(named.match);
+                  const attempted: PreparedMatch = { m: named.match, description: "", fits: em.fits, why: em.whyItFits, em };
+                  preparedAll.push(attempted);
+                  attempted.description = await draftDescription(named.match, em, em.fits === false);
+                  prepared.push(attempted);
+                  addInstruction(
+                    replyFacts,
+                    em.fits === false
+                      ? "Nothing else fit, so you looked up the named event itself and sent what its own page actually says, with an honest caveat about what's off. Don't apologize or call it a fail."
+                      : "Nothing else fit, so you looked up the named event itself and sent what its own page actually says.",
+                  );
+                }
               }
               if (!prepared.length) {
                 addFact(

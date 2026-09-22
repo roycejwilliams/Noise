@@ -1191,6 +1191,53 @@ export async function runMigrations(): Promise<void> {
     )
     .catch((err: Error) => console.error("event_checkin_followups table init failed:", err));
 
+  // "No one should feel left out" (Royce, 2026-09-22): scheduled the same
+  // way as event_checkin_followups (one row per matched guest, idempotent on
+  // UNIQUE(event_api_id, user_id)), but due at end_at minus
+  // MATCH_NUDGE_END_CUTOFF_MINUTES — right when maybeSendMatchNudge stops
+  // sending real matches — instead of hours after the event, so this still
+  // reads as "still at the event," not a next-day afterthought. See
+  // services/eventUnmatchedFollowUp.ts.
+  await pool
+    .query(`
+      CREATE TABLE IF NOT EXISTS event_unmatched_followups (
+        id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+        user_id UUID NOT NULL REFERENCES users(id),
+        event_api_id TEXT NOT NULL,
+        event_name TEXT NOT NULL,
+        send_at TIMESTAMPTZ NOT NULL,
+        sent_at TIMESTAMPTZ,
+        created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+        UNIQUE (event_api_id, user_id)
+      )
+    `)
+    .then(() =>
+      pool.query(`
+        CREATE INDEX IF NOT EXISTS idx_event_unmatched_followups_due
+          ON event_unmatched_followups (send_at) WHERE sent_at IS NULL
+      `),
+    )
+    .catch((err: Error) => console.error("event_unmatched_followups table init failed:", err));
+
+  // One-time idempotency marker for the SOLO "nothing stood out tonight"
+  // acknowledgment only (services/eventUnmatchedFollowUp.ts) — a real pairing
+  // is already tracked by event_guest_match_nudges (candidate_id NOT NULL
+  // there, so a person with no pair can't be recorded in it). paired_with_id
+  // is kept here too, purely for a human reading the table; the real
+  // reply-handling state for a pairing lives in event_guest_match_nudges /
+  // event_guest_match_opt_ins, reused as-is.
+  await pool
+    .query(
+      `CREATE TABLE IF NOT EXISTS event_unmatched_notices (
+        event_id TEXT NOT NULL,
+        person_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+        paired_with_id UUID REFERENCES users(id) ON DELETE SET NULL,
+        sent_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+        PRIMARY KEY (event_id, person_id)
+      )`,
+    )
+    .catch((err: Error) => console.error("event_unmatched_notices table init failed:", err));
+
   // Coalesces duplicate scoring triggers (Royce, 2026-09-05 — found via real
   // guest-add testing) — Luma fires guest.registered AND guest.updated as two
   // separate webhooks for a single guest-add action (confirmed live,

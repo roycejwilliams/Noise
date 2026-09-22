@@ -17,6 +17,7 @@ import { placeDueProactiveCalls } from "./proactiveCheckinCall.js";
 import { buildRecap, findUsersDueForRecap } from "../services/memoryCompaction.js";
 import { enqueueDebrief, enqueueDueOutcomeFollowUps } from "../services/recommendationOutcome.js";
 import { enqueueDueEventCheckinFollowUps } from "../services/eventCheckinFollowUp.js";
+import { processDueUnmatchedFollowUps } from "../services/eventUnmatchedFollowUp.js";
 import { runEventChangeNotificationAgent } from "../agent/eventChangeNotification.js";
 import type { AskCheckinPayload } from "../agent/askCheckin.js";
 import { enqueueCandidate, runProactiveDispatch, sendExempt } from "../harness/proactive.js";
@@ -696,6 +697,14 @@ export function registerJobs(io: Server) {
   // on a real Luma check-in instead of a mere recommendation.
   cron.schedule("*/15 * * * *", () => {
     enqueueDueEventCheckinFollowUps().catch((err: any) => console.error("eventCheckinFollowUp: enqueue failed:", err?.message ?? err));
+  });
+
+  // "No one should feel left out" (Royce, 2026-09-22) — same lightweight
+  // polling cadence as the two crons right above; due rows fire near the end
+  // of the event, not hours later, so 15 minutes stays close enough to still
+  // read as "at the event."
+  cron.schedule("*/15 * * * *", () => {
+    processDueUnmatchedFollowUps().catch((err: any) => console.error("eventUnmatchedFollowUp: process failed:", err?.message ?? err));
   });
 
   // Companion check-in (Royce, 2026-09-03: "how can we make it a companion

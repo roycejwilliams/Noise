@@ -10,6 +10,7 @@ import { captureIntentForTurn } from "../services/profileExtraction.js";
 import { generateRecommendation, recordRecommendationsSent, type RecommendationResult } from "../services/recommendation.js";
 import type { TierMatch } from "../services/tieredRecommendation.js";
 import { enrichMatch, renderEventDetails } from "../services/eventDetails.js";
+import { resolveNamedEventGuest, requestIntroToNamedGuest } from "../services/eventGuestMatchHandoff.js";
 
 // Resolves false when the message didn't go out (a refused or failed send),
 // so callers only log and count what was really sent (2026-09-17 code review).
@@ -311,6 +312,59 @@ export function createConversationTools(ctx: ConversationToolContext) {
         for (const url of known) ctx.facts?.add("did_this_turn", `Sent the link ${url} as its own message.`);
         await flushLinks();
         return unknown.length ? { ok: true, note: `These weren't on file and weren't sent: ${unknown.join(", ")}` } : { ok: true };
+      },
+    }),
+
+    // "If someone they met during the event was not recommended Co can
+    // still intro that person" (Royce, 2026-09-22). Only for a real person
+    // from a real Co event — resolveNamedEventGuest looks them up on that
+    // event's actual guest list, never invents someone.
+    requestEventIntro: tool({
+      description:
+        "When they say they met someone specific at a Co event who Co never nudged them about, and they want to be connected — look that person up on the real guest list and start the same double opt-in intro Co uses for its own matches. Only for a real person from a real Co event they actually attended, never a stranger with no shared event.",
+      inputSchema: z.object({
+        personName: z.string().describe("The first name (or full name) they used for the person they met."),
+      }),
+      execute: async ({ personName }) => {
+        if (ctx.dryRun) {
+          console.log(`[conversationReply dryRun] would look up "${personName}" for ${ctx.userId} to request an intro`);
+          return { ok: true, note: "dry run" };
+        }
+        const resolved = await resolveNamedEventGuest(ctx.userId, personName);
+        if ("error" in resolved) {
+          await recordDecision({
+            layer: 3,
+            decision: "reply.requestEventIntro",
+            userId: ctx.userId,
+            outcome: "skip",
+            action: "not_found",
+            proposal: { personName },
+            checks: [{ name: "resolved_on_guest_list", pass: false, reason: resolved.error }],
+          }).catch(() => {});
+          return { ok: false, error: `${resolved.error}. Tell them plainly, don't guess who they mean.` };
+        }
+        const { rows } = await pool.query(`SELECT first_name, phone_number, email FROM users WHERE id = $1`, [ctx.userId]);
+        const requester = rows[0];
+        if (!requester) return { ok: false, error: "couldn't look up their own contact details" };
+        await requestIntroToNamedGuest(
+          resolved.eventId,
+          resolved.eventName,
+          { user_id: ctx.userId, first_name: requester.first_name, phone_number: requester.phone_number, email: requester.email },
+          resolved.target,
+        ).catch((err: any) => console.error("requestEventIntro: requestIntroToNamedGuest failed (non-fatal):", err?.message ?? err));
+        await recordDecision({
+          layer: 3,
+          decision: "reply.requestEventIntro",
+          userId: ctx.userId,
+          outcome: "act",
+          action: "requested",
+          proposal: { personName, eventId: resolved.eventId, targetId: resolved.target.user_id },
+        }).catch(() => {});
+        ctx.facts?.add(
+          "did_this_turn",
+          `Co found ${resolved.target.first_name} on the guest list for "${resolved.eventName}" and started the same intro process it uses for its own matches — it'll ask ${resolved.target.first_name} too, and only connect them once both say yes.`,
+        );
+        return { ok: true, note: "Tell them plainly that Co's reaching out to that person to see if they're open to it too — it's not instant, both have to say yes." };
       },
     }),
 

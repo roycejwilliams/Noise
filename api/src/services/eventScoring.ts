@@ -5,6 +5,7 @@ import { runEventAskSolicitationAgent } from "../agent/eventAskSolicitation.js";
 import { getEventDetails, getEventGuestList, listCalendarEvents, type LumaGuest, type LumaEventDetail } from "./luma.js";
 import { getActiveAsks, getActiveSeekingAsk, scoreAgainstStatedAsk } from "./matching.js";
 import { detectAndScheduleCheckins } from "./eventCheckinFollowUp.js";
+import { scheduleUnmatchedFollowUp } from "./eventUnmatchedFollowUp.js";
 import sendblue, { cleanCoMessage } from "./sendblue.js";
 import { inRoomSendAllowed, recordInRoomSend, enqueueCandidate, type OutputRules } from "../harness/proactive.js";
 import { writeMemory } from "./memory.js";
@@ -87,7 +88,7 @@ export async function matchGuestsToUsers(guests: LumaGuest[]): Promise<ScorableG
 // entry per user_id (first one wins; both sources carry the same underlying
 // co_profiles row anyway, so there's nothing to merge) rather than scoring
 // the same person twice against everyone else in scoreMatchedGroup below.
-function dedupeByUserId(guests: ScorableGuest[]): ScorableGuest[] {
+export function dedupeByUserId(guests: ScorableGuest[]): ScorableGuest[] {
   const seen = new Set<string>();
   const out: ScorableGuest[] = [];
   for (const g of guests) {
@@ -244,7 +245,7 @@ async function tryClaimAdditiveOfferDebounce(eventId: string, personId: string):
 }
 
 
-async function wasAlreadyNudgedForMatch(eventId: string, personId: string): Promise<boolean> {
+export async function wasAlreadyNudgedForMatch(eventId: string, personId: string): Promise<boolean> {
   const { rows } = await pool.query(
     `SELECT 1 FROM event_guest_match_nudges WHERE event_id = $1 AND person_id = $2`,
     [eventId, personId],
@@ -318,9 +319,15 @@ async function maybeSendMatchNudge(
   top: RankedCandidate,
   candidate: ScorableGuest,
   eventTiming: { start_at: string; end_at: string | null } | null,
-  opts: { dryRun?: boolean },
+  opts: { dryRun?: boolean; honestLowConfidence?: boolean },
 ): Promise<boolean> {
-  if (top.score < MATCH_NUDGE_MIN_SCORE) return false;
+  // honestLowConfidence (Royce, 2026-09-22, "no one should feel left out"):
+  // services/eventUnmatchedFollowUp.ts's end-of-event pass, scoped to people
+  // who never cleared this bar with anyone. Reuses every consent/claim/send
+  // check below unchanged — only the score gate and the drafted message
+  // differ, and the message is honest about not being a confident match
+  // (unmatchedPairPrompt), never the real matchNudgePrompt's framing.
+  if (top.score < MATCH_NUDGE_MIN_SCORE && !opts.honestLowConfidence) return false;
   // Privacy (2026-09-14): top.reason comes from the candidate's private
   // profile + memories. Without a shareable reason there's nothing we can
   // honestly tell this person, so no nudge.
@@ -343,8 +350,14 @@ async function maybeSendMatchNudge(
   const draftFn = async (feedback: string | null) => {
     const { text } = await generateText({
       model: anthropic(NAMING_DRAFT_MODEL),
-      experimental_telemetry: { isEnabled: true, functionId: "eventScoring.matchNudge.draft" },
-      prompt: matchNudgePrompt({ recipientFirstName: person.first_name, otherFirstName: candidate.first_name, eventName, shareReason: top.shareReason!, feedback }),
+      experimental_telemetry: { isEnabled: true, functionId: opts.honestLowConfidence ? "eventScoring.unmatchedPair.draft" : "eventScoring.matchNudge.draft" },
+      prompt: (opts.honestLowConfidence ? unmatchedPairPrompt : matchNudgePrompt)({
+        recipientFirstName: person.first_name,
+        otherFirstName: candidate.first_name,
+        eventName,
+        shareReason: top.shareReason!,
+        feedback,
+      }),
     });
     return cleanCoMessage(text.trim());
   };
@@ -399,7 +412,9 @@ async function maybeSendMatchNudge(
     await writeMemory(
       person.user_id,
       "event_guest_match_nudge",
-      `Nudged ${person.first_name} that ${candidate.first_name} is also going to "${eventName}" and worth meeting: ${top.shareReason} (score ${top.score})`,
+      opts.honestLowConfidence
+        ? `Paired ${person.first_name} with ${candidate.first_name} at "${eventName}" (neither had a strong match): ${top.shareReason} (score ${top.score})`
+        : `Nudged ${person.first_name} that ${candidate.first_name} is also going to "${eventName}" and worth meeting: ${top.shareReason} (score ${top.score})`,
     );
     // Royce, 2026-09-08 sweep — the descriptive log above is a summary, not
     // the actual text sent, so recentConversation (routes/sendblue.ts, which
@@ -562,7 +577,10 @@ export async function scoreMatchedGroup(
   eventName: string,
   matched: ScorableGuest[],
   eventTiming: { start_at: string; end_at: string | null } | null,
-  opts: { dryRun?: boolean } = {},
+  // honestLowConfidence just passes through to maybeSendMatchNudge below —
+  // scoreMatchedGroup itself doesn't change; services/eventUnmatchedFollowUp.ts
+  // calls this with a pool already scoped to people nobody's matched yet.
+  opts: { dryRun?: boolean; honestLowConfidence?: boolean } = {},
 ): Promise<{ scoredCount: number; solicitedCount: number; matchedCount: number }> {
   if (matched.length < 2) {
     console.log(`eventScoring: ${eventId} has ${matched.length} matched Co user(s) — nothing to rank yet`);
@@ -726,6 +744,11 @@ export async function scoreGuestListForEvent(
   detectAndScheduleCheckins(eventId, resolvedName, matched, opts).catch((err: any) =>
     console.error(`eventScoring: detectAndScheduleCheckins failed for ${eventId} (non-fatal):`, err?.message ?? err),
   );
+  // "No one should feel left out" (Royce, 2026-09-22) — same idempotent,
+  // fire-and-forget reasoning as detectAndScheduleCheckins above.
+  scheduleUnmatchedFollowUp(eventId, resolvedName, matched, eventTiming, opts).catch((err: any) =>
+    console.error(`eventScoring: scheduleUnmatchedFollowUp failed for ${eventId} (non-fatal):`, err?.message ?? err),
+  );
 
   return scoreMatchedGroup(eventId, resolvedName, matched, eventTiming, opts);
 }
@@ -735,4 +758,16 @@ export function matchNudgePrompt(p: { recipientFirstName: string; otherFirstName
   return `${CO_VOICE}\n\n${CO_TEXT_CHANNEL} You're texting ${p.recipientFirstName} about "${p.eventName}," an event they're going to. You found someone else going who's genuinely worth them meeting: ${p.otherFirstName}. Why they're worth meeting: ${p.shareReason}
 
 Draft a short, warm, low-pressure text (1-2 sentences, no em dashes, normal sentence capitalization) letting ${p.recipientFirstName} know about ${p.otherFirstName} and naming the real reason above in your own words. Use only that reason. Never say ${p.otherFirstName} wants to meet them, mentioned them, or said anything about them. Not a hard sell, just a genuine heads-up, like a friend connecting two people who'd get along. Return ONLY the message text.${p.feedback ? `\n\n${p.feedback}` : ""}`;
+}
+
+// "No one should feel left out" (Royce, 2026-09-22): for the end-of-event
+// pass in services/eventUnmatchedFollowUp.ts, scoped to two people who each
+// didn't clear MATCH_NUDGE_MIN_SCORE with anyone. Deliberately NOT
+// matchNudgePrompt's confident "worth meeting" framing — that framing is
+// earned by the real score threshold it's built around, and this pool never
+// cleared it. Exported so evals/intro can check the honesty framing directly.
+export function unmatchedPairPrompt(p: { recipientFirstName: string; otherFirstName: string; eventName: string; shareReason: string; feedback: string | null }): string {
+  return `${CO_VOICE}\n\n${CO_TEXT_CHANNEL} You're texting ${p.recipientFirstName} near the end of "${p.eventName}." Nothing came up as a strong match for them tonight. ${p.otherFirstName} is also there and also didn't come up as a strong match for anyone else. What they might have in common: ${p.shareReason}
+
+Draft a short, low-key text (1-2 sentences, no em dashes, normal sentence capitalization) letting ${p.recipientFirstName} know about ${p.otherFirstName}. This is NOT a confident "you two should meet" recommendation — don't use that framing, don't oversell it, and don't call it a match. Something more like noticing they're both still around and it might be worth a quick hello, genuinely low-pressure. Never say ${p.otherFirstName} wants to meet them or said anything about them. Return ONLY the message text.${p.feedback ? `\n\n${p.feedback}` : ""}`;
 }

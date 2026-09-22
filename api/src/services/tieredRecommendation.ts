@@ -4,7 +4,6 @@ import { DateTime } from "luxon";
 import { isBrowseAsk, MAX_ASK_DAYS_AHEAD, resolveAskWindow, withinWindow } from "./askWindow.js";
 import { anthropic } from "@ai-sdk/anthropic";
 import { listCalendarEvents, resolveCoEventPlace } from "./luma.js";
-import { lookupNamedEvent } from "./namedEventLookup.js";
 import { DEFAULT_FEED_DAYS, fetchPublicEvents } from "./lumaDiscovery.js";
 import { rankEventsByDescription, type Closest } from "./eventRanking.js";
 import { localDate, localToday, searchZone } from "./eventOrder.js";
@@ -987,16 +986,12 @@ export async function getTieredRecommendation(
     // Every tier's candidates go to the gate, which keeps what's actually
     // offerable; one per tier survives below.
     found = [tier1, ...tier2, tier3].filter((m): m is TierMatch => m != null);
-    // A live reply skips the web search, but an ask that names one event ("What's going on at
-    // AfroTech?") has nothing else to find it with, so when nothing turned up, look that
-    // event's own page up once (services/namedEventLookup.ts, 2026-09-21).
-    if (!found.length && source !== "sweep") {
-      const named = await lookupNamedEvent(tier3Ask.text ?? ask.text ?? "", city, localToday(new Date(), zone), { userId: opts.userId ?? null, source });
-      if (named.name) trace.webQuery = `named event: ${named.name}`;
-      if (named.blocked) trace.webBlocked = named.blocked;
-      if (named.rejected) trace.xDropped = { name: named.name ?? "named event", reason: named.rejected };
-      if (named.match) found = [named.match];
-    }
+    // A live reply's named-event lookup (services/namedEventLookup.ts) runs later, in
+    // sendblue.ts, after the real per-candidate fit check — not here. Tier 2's own coarse
+    // relevance gate above often lets through things that are merely topic-adjacent (2026-09-21:
+    // 8 unrelated SF Tech Week events passed this gate for "What's happening at AfroTech?" and
+    // `found` was non-empty), so a check here that only fires when `found` is truly empty missed
+    // that case entirely. sendblue.ts fires it once, only when nothing survived either check.
     if (searchCache.size > 300) searchCache.clear();
     // A "nothing" is never reused: events get added, and a cached empty
     // result hid them for six hours.

@@ -330,7 +330,10 @@ for (const [ok, label] of cases) {
 }
 
 // One live web lookup for an ask that names one event (2026-09-21: "What's happening at Afro tech?"
-// found nothing because live replies never search the web).
+// found nothing because live replies never search the web). Triggers only once nothing survived
+// the real per-candidate fit check (2026-09-21, second pass): tier 2's own coarse relevance gate
+// let 8 unrelated SF Tech Week events through for that same AfroTech ask, so a trigger keyed on
+// "the raw search found nothing" never fired at all.
 {
   const ask = "What’s happening at Afro tech this year?";
   c(namedEventFromModel({ name: "AfroTech" }, ask) === "AfroTech", "a name spelled differently in the ask (Afro tech / AfroTech) still counts");
@@ -349,7 +352,10 @@ for (const [ok, label] of cases) {
   c(isTicketingHost("https://lu.ma/figma-config") && isTicketingHost("https://www.eventbrite.com/e/123"), "a ticketing page counts");
   c(!isTicketingHost("https://someblog.com/afrotech-guide") && !isTicketingHost("not a url"), "a blog or a bad url doesn't");
   const tr = readFileSync(new URL("../../src/services/tieredRecommendation.ts", import.meta.url), "utf8");
-  c(/if \(!found\.length && source !== "sweep"\) \{\s*const named = await lookupNamedEvent\(/.test(tr), "the lookup runs only for a live reply, and only when nothing else was found");
+  c(!tr.includes("lookupNamedEvent"), "the raw tiered search no longer triggers the lookup itself — it fires too early, before the real fit check");
+  const sb = readFileSync(new URL("../../src/routes/sendblue.ts", import.meta.url), "utf8");
+  c(/if \(!prepared\.length\) \{\s*const scopeCity/.test(sb), "the lookup runs in the live reply, gated on nothing having survived the real fit check");
+  c(/source: "request",\s*\}\)\.catch/.test(sb), "it always passes source: request, never sweep");
   const nel = readFileSync(new URL("../../src/services/namedEventLookup.ts", import.meta.url), "utf8");
   c(/reserveWebSearch\(opts\.userId, opts\.source/.test(nel), "the lookup spends the web search budget");
   c(/checkGrounding\(match/.test(nel) && /looksOfficial\(found\.url/.test(nel), "the lookup checks the page and that it is the event's own");
