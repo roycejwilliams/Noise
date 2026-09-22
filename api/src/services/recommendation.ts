@@ -178,6 +178,15 @@ export async function generateRecommendation(userId: string, currentMessage?: st
     // stop if it isn't asking for something new.
     let askText = latestAsk?.text || profile.goals?.[0];
     let rewrite: { original: string; rewritten: string; used: string; rejectedBecause: string | null } | null = null;
+    // None of these depend on the rewrite below, so they start now and run
+    // alongside it instead of one after another after it (2026-09-22: about
+    // 11s of an average search was spent outside the event search itself).
+    const contextReady = Promise.all([
+      getEmotionalContext(userId).catch(() => null),
+      profile.city ? getTimezoneForCity(profile.city).catch(() => null) : Promise.resolve(null),
+      currentMessage ? previousMemberText(userId, currentMessage).catch(() => null) : Promise.resolve(null),
+      getPersonSnapshot(userId).catch(() => null),
+    ]);
     if (currentMessage) {
       const request = await toSearchRequest(userId, currentMessage, latestAsk?.text ?? null);
       if (request === null) {
@@ -198,11 +207,12 @@ export async function generateRecommendation(userId: string, currentMessage?: st
       }
     }
     if (askText) {
-      const feelings = await getEmotionalContext(userId).catch(() => null);
-      const timezone = profile.city ? await getTimezoneForCity(profile.city).catch(() => null) : null;
+      const [feelings, timezone, previousText, snapshot] = await contextReady;
+      // Openings the sweep already found don't depend on this search either.
+      const openingsReady = alreadyFoundOpenings(userId).catch(() => [] as TierMatch[]);
       // "Anything happening?" right after "What's the vibes for Sunday?" is
       // about Sunday (services/askWindow.ts carryTimeFrame).
-      const forTimeFrame = currentMessage ? carryTimeFrame(currentMessage, await previousMemberText(userId, currentMessage), DateTime.now().setZone(searchZone(timezone).zone)) : undefined;
+      const forTimeFrame = currentMessage ? carryTimeFrame(currentMessage, previousText, DateTime.now().setZone(searchZone(timezone).zone)) : undefined;
       // The scope comes back with this search's own matches (2026-09-17: it
       // was read from module state after another await, so two people
       // searching at once could get each other's record).
@@ -218,7 +228,7 @@ export async function generateRecommendation(userId: string, currentMessage?: st
           // zone and records that it did (scope.timezoneDefaulted).
           timezone,
           // What Co knows they want right now orders what matches the ask.
-          profile: [profileForSearch(await getPersonSnapshot(userId).catch(() => null)), feelings ? roomPreferenceFromFeelings(feelings) : null].filter(Boolean).join("\n") || null,
+          profile: [profileForSearch(snapshot), feelings ? roomPreferenceFromFeelings(feelings) : null].filter(Boolean).join("\n") || null,
           // Frustrated with what Co has found: look wider (2026-09-18).
           widen: !!feelings?.withCo.frustrated,
         },
@@ -229,7 +239,7 @@ export async function generateRecommendation(userId: string, currentMessage?: st
       // Openings come from what the sweep already found, not a live web search
       // (services/tieredRecommendation.ts); the reply's fit check decides
       // whether one fits this question.
-      const found: TierMatch[] = [...(tiered?.matches ?? []), ...(await alreadyFoundOpenings(userId).catch(() => [] as TierMatch[]))];
+      const found: TierMatch[] = [...(tiered?.matches ?? []), ...(await openingsReady)];
       scopeForTurn = tiered?.scope ?? null;
       if (scopeForTurn && rewrite) scopeForTurn.rewrite = rewrite;
       const scope = scopeForTurn;

@@ -44,7 +44,10 @@ async function ensureBaseSchema(): Promise<void> {
 
 async function main() {
   await ensureBaseSchema();
-  runMigrations();
+  // Awaited (2026-09-22) — the same fix api/src/server.ts got on 2026-09-17:
+  // jobs and webhooks started before migrations finished, so a cron on a
+  // fresh deploy could query a table or column that didn't exist yet.
+  await runMigrations();
   runTestMigrations();
 
   const app = express();

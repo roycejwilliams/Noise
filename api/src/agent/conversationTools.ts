@@ -12,6 +12,25 @@ import type { TierMatch } from "../services/tieredRecommendation.js";
 import { enrichMatch, renderEventDetails } from "../services/eventDetails.js";
 import { resolveNamedEventGuest, requestIntroToNamedGuest } from "../services/eventGuestMatchHandoff.js";
 import { askEntries } from "../harness/profileWrite.js";
+import { getTimezoneForCity } from "../services/geocoding.js";
+import { DateTime } from "luxon";
+
+// A date as the member would say it, in their own zone (2026-09-22 code
+// review: toDateString() used the server's zone, so a Pacific evening showed
+// the next day). Null for a missing or unreadable date rather than
+// "Invalid Date".
+async function memberDate(userId: string): Promise<(iso: string | Date | null | undefined) => string | null> {
+  const city = await pool
+    .query(`SELECT city FROM co_profiles WHERE user_id = $1`, [userId])
+    .then((r) => r.rows[0]?.city as string | undefined)
+    .catch(() => undefined);
+  const zone = (city ? await getTimezoneForCity(city).catch(() => null) : null) ?? "America/Los_Angeles";
+  return (iso) => {
+    if (!iso) return null;
+    const d = iso instanceof Date ? DateTime.fromJSDate(iso) : DateTime.fromISO(String(iso));
+    return d.isValid ? d.setZone(zone).toFormat("ccc LLL d") : null;
+  };
+}
 
 // Resolves false when the message didn't go out (a refused or failed send),
 // so callers only log and count what was really sent (2026-09-17 code review).
@@ -278,22 +297,86 @@ export function createConversationTools(ctx: ConversationToolContext) {
       inputSchema: z.object({}),
       execute: async () => {
         if (ctx.dryRun) return { ok: true, asks: [] };
-        const { rows } = await pool.query(`SELECT intent FROM co_profiles WHERE user_id = $1`, [ctx.userId]);
+        const { rows } = await pool.query(`SELECT intent, avoid FROM co_profiles WHERE user_id = $1`, [ctx.userId]);
         const entries = askEntries(rows[0]?.intent ?? null);
+        const avoid: string[] = Array.isArray(rows[0]?.avoid) ? rows[0].avoid : [];
+        const fmt = await memberDate(ctx.userId);
         const asks = entries
           .filter((e) => e.text)
-          .map((e) => ({ text: e.text as string, type: e.type ?? null, openSince: e.created_at ?? null }));
-        if (!asks.length) {
-          ctx.facts?.add("known", "Co has nothing open on file that it's currently searching or watching for on their behalf.");
-          return { ok: true, asks: [] };
+          .map((e) => ({ text: e.text as string, type: e.type === "offering" ? "offering" : "seeking", openSince: fmt(e.created_at) }));
+        // Seeking and offering read differently (2026-09-22 code review): an
+        // offer is something they can give, which Co matches to people who
+        // want it, not something Co is looking for on their behalf.
+        const seeking = asks.filter((a) => a.type === "seeking");
+        const offering = asks.filter((a) => a.type === "offering");
+        const line = (a: (typeof asks)[number]) => `"${a.text}"${a.openSince ? ` (since ${a.openSince})` : ""}`;
+        const parts = [
+          seeking.length ? `Looking out for them: ${seeking.map(line).join("; ")}.` : "Nothing open that Co is looking out for on their behalf.",
+          offering.length ? `What they've offered to others, which Co matches to people who want it: ${offering.map(line).join("; ")}.` : null,
+          avoid.length ? `Kinds of things they asked Co to stop suggesting: ${avoid.map((a) => `"${a}"`).join(", ")}.` : null,
+        ].filter(Boolean);
+        ctx.facts?.add("known", `What Co currently has on file for them, the real complete list. ${parts.join(" ")} Never add, drop, or invent anything beyond this.`);
+        return { ok: true, asks, avoid };
+      },
+    }),
+
+    // "No more hackathons" (2026-09-22): turning down one event only ever
+    // blocked that one event. This keeps the kind itself out of every future
+    // search and sweep (co_profiles.avoid, read by eventDetails.ts's
+    // explainFit), until they say they're open to it again.
+    steerAwayFrom: tool({
+      description:
+        "When they say they don't want a KIND of thing anymore (\"no more hackathons\", \"stop sending me crypto stuff\", \"I'm not into big conferences\"), save it so Co stops suggesting that kind of thing everywhere. Also use it with undo=true when they say they're open to that kind of thing again. Not for turning down one specific event.",
+      inputSchema: z.object({
+        kind: z.string().describe("The kind of thing, short and plain, in their words: \"hackathons\", \"crypto events\"."),
+        undo: z.boolean().optional().describe("true when they're open to it again."),
+      }),
+      execute: async ({ kind, undo }) => {
+        const k = kind.trim().toLowerCase().slice(0, 80);
+        if (!k) return { ok: false, error: "no kind given" };
+        if (ctx.dryRun) return { ok: true };
+        const { rows } = await pool.query(`SELECT avoid FROM co_profiles WHERE user_id = $1`, [ctx.userId]);
+        const current: string[] = Array.isArray(rows[0]?.avoid) ? rows[0].avoid : [];
+        const next = undo ? current.filter((a) => a.toLowerCase() !== k) : [...current.filter((a) => a.toLowerCase() !== k), k].slice(-20);
+        await pool.query(`UPDATE co_profiles SET avoid = $2 WHERE user_id = $1`, [ctx.userId, next]);
+        await recordDecision({ layer: 3, decision: "reply.steerAwayFrom", userId: ctx.userId, outcome: "act", action: undo ? "removed" : "added", proposal: { kind: k, avoid: next } }).catch(() => {});
+        ctx.facts?.add(
+          "did_this_turn",
+          undo ? `Co will suggest "${k}" again when something fits.` : `Co will stop suggesting "${k}" in every search and sweep from now on, until they say otherwise.`,
+        );
+        return { ok: true };
+      },
+    }),
+
+    // "What did you send me?" (2026-09-22): answered from what was actually
+    // sent (revealed_offers, written by both live replies and sweeps), not
+    // reconstructed from the last 20 texts, which could miss something older
+    // or answer differently depending on how it was asked.
+    listSentOffers: tool({
+      description:
+        "When they ask what you've sent them, what you recommended, or want a recap of the events/opportunities you shared — call this and answer from the real list. Never reconstruct it from the conversation alone. You can share a link from it again with shareLink.",
+      inputSchema: z.object({}),
+      execute: async () => {
+        if (ctx.dryRun) return { ok: true, sent: [] };
+        const { rows } = await pool.query(
+          `SELECT item_name, kind, url, sent_at, reaction FROM revealed_offers
+           WHERE user_id = $1 AND sent_at > NOW() - INTERVAL '30 days'
+           ORDER BY sent_at DESC LIMIT 15`,
+          [ctx.userId],
+        );
+        if (!rows.length) {
+          ctx.facts?.add("known", "Co hasn't sent them any events or opportunities in the last 30 days.");
+          return { ok: true, sent: [] };
         }
+        const fmt = await memberDate(ctx.userId);
+        const sent = rows.map((r: any) => ({ name: r.item_name as string, kind: r.kind as string, link: (r.url as string | null) ?? null, sentOn: fmt(r.sent_at), reaction: (r.reaction as string | null) ?? null }));
         ctx.facts?.add(
           "known",
-          `What Co currently has open for them, the real complete list: ${asks
-            .map((a) => `"${a.text}"${a.openSince ? ` (open since ${new Date(a.openSince).toDateString()})` : ""}`)
+          `What Co actually sent them in the last 30 days, newest first, the real complete list: ${sent
+            .map((x) => `"${x.name}"${x.link ? `, link ${x.link}` : ""}${x.sentOn ? `, sent ${x.sentOn}` : ""}${x.reaction ? `, they said: ${x.reaction.replace(/_/g, " ")}` : ""}`)
             .join("; ")}. Never add, drop, or invent anything beyond this list.`,
         );
-        return { ok: true, asks };
+        return { ok: true, sent };
       },
     }),
 
@@ -373,7 +456,19 @@ export function createConversationTools(ctx: ConversationToolContext) {
             proposal: { personName },
             checks: [{ name: "resolved_on_guest_list", pass: false, reason: resolved.error }],
           }).catch(() => {});
-          return { ok: false, error: `${resolved.error}. Tell them plainly, don't guess who they mean.` };
+          // Never confirm or deny who is a Co member or who was on a guest
+          // list (2026-09-22): "couldn't find Sarah" and "reaching out to
+          // Sarah" each tell the asker something about Sarah. The same
+          // neutral answer covers both, and the internal reason stays in the
+          // decision log only. The one exception is two people with the name,
+          // where Co asks for a detail without saying how many there are.
+          const ambiguous = /more than one/i.test(resolved.error);
+          return {
+            ok: true,
+            note: ambiguous
+              ? "Ask them for one more detail about the person (last name, what they do, what you talked about) so you reach the right one. Never say how many people have that name or that anyone else does."
+              : "Tell them that if it's someone you know from that event, you'll check whether they're open to it too. Never confirm or deny that the person is someone you know, is a Co member, or was on the guest list, and don't say whether you found them.",
+          };
         }
         const { rows } = await pool.query(`SELECT first_name, phone_number, email FROM users WHERE id = $1`, [ctx.userId]);
         const requester = rows[0];
@@ -392,11 +487,16 @@ export function createConversationTools(ctx: ConversationToolContext) {
           action: "requested",
           proposal: { personName, eventId: resolved.eventId, targetId: resolved.target.user_id },
         }).catch(() => {});
+        // The same answer as when nobody resolves, so the reply never tells
+        // them whether the person is a Co member (see the note above).
         ctx.facts?.add(
           "did_this_turn",
-          `Co found ${resolved.target.first_name} on the guest list for "${resolved.eventName}" and started the same intro process it uses for its own matches — it'll ask ${resolved.target.first_name} too, and only connect them once both say yes.`,
+          `Co will check with the person they named whether they're open to an intro, only if that's someone Co knows from that event. Nothing happens unless both say yes. Don't confirm whether Co knows the person.`,
         );
-        return { ok: true, note: "Tell them plainly that Co's reaching out to that person to see if they're open to it too — it's not instant, both have to say yes." };
+        return {
+          ok: true,
+          note: "Tell them that if it's someone you know from that event, you'll check whether they're open to it too. Never confirm or deny that the person is someone you know, is a Co member, or was on the guest list.",
+        };
       },
     }),
 

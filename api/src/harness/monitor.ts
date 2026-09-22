@@ -14,6 +14,7 @@ import { Resend } from "resend";
 import pool from "../db/db.js";
 import { ALLOW_REAL_SENDS } from "../otpActions.js";
 import { recordDecision } from "./core.js";
+import { computeMetrics, renderMetricsHtml } from "./metrics.js";
 
 export type Signal = {
   key: string;
@@ -205,8 +206,14 @@ export function renderWeeklyReview(moments: ReviewMoment[], readings: SignalRead
 
 export async function runWeeklyReview(): Promise<void> {
   try {
-    const [moments, readings] = await Promise.all([gatherWeekMoments(), readSignals()]);
-    await sendTeamEmail(`Co weekly review: ${moments.length} moments`, renderWeeklyReview(moments, readings));
+    const [moments, readings, metrics] = await Promise.all([
+      gatherWeekMoments(),
+      readSignals(),
+      // The business numbers ride along weekly (2026-09-22); a failure here
+      // never blocks the review itself.
+      computeMetrics(30).catch((err: any) => (console.error("weekly review: metrics failed (non-fatal):", err?.message ?? err), null)),
+    ]);
+    await sendTeamEmail(`Co weekly review: ${moments.length} moments`, renderWeeklyReview(moments, readings) + (metrics ? `\n${renderMetricsHtml(metrics)}` : ""));
   } catch (err: any) {
     console.error("weekly review failed (non-fatal):", err?.message ?? err);
   }

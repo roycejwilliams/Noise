@@ -18,7 +18,12 @@ export function shouldCacheSearch(found: readonly unknown[]): boolean {
 // similar profiles shared results. Now: the resolved dates of the window (or
 // today's local date when none was named), the zone, browse, and a hash of the
 // whole profile text.
+// userId is part of the key (2026-09-22): a cached search carries per-person
+// data in its trace (categoryInsight comes from that person's own outcome
+// history), and two members with the same city, ask and an empty profile used
+// to share one cache entry, so one could be told about the other's history.
 export function searchCacheKey(k: {
+  userId: string | null | undefined;
   city: string | null;
   askText: string | null | undefined;
   windowStart: string | null;
@@ -30,6 +35,7 @@ export function searchCacheKey(k: {
 }): string {
   const profileHash = k.profile ? createHash("sha256").update(k.profile).digest("hex").slice(0, 24) : "";
   return [
+    k.userId ?? "anon",
     (k.city ?? "").trim().toLowerCase(),
     (k.askText ?? "").trim().toLowerCase(),
     k.windowStart ?? "",

@@ -61,7 +61,7 @@ export async function lookupNamedEvent(
       prompt: `Someone asked: "${askText}"${city ? ` (they're based in ${city})` : ""}
 Today's date: ${todayStr}
 
-They named "${name}" (it may be shorthand, an abbreviation or loosely spelled, like "figcon" for Figma's Config). Find that event's own official page for its next edition (or the one happening now): the organizer's own site, or its own ticketing page. Not a news story, blog, or listicle.
+They named "${name}" (it may be shorthand, an abbreviation or loosely spelled, like "figcon" for Figma's Config). Find that event's own official page for its next edition (or the one happening now): the organizer's own site, or its own ticketing page. Not a news story, blog, or listicle. When it runs in more than one city (Figma Config has an SF edition and others abroad), prefer the upcoming edition in or nearest ${city ?? "where they are"} over whichever turns up first. If the only upcoming edition is somewhere else, still return it, and say plainly in "reason" where it is.
 
 If it exists, say in "reason" what it is and where it is in one plain sentence, from what the page says. Put NO numbers or dates in "reason"; give the dates in "start" and "end" (YYYY-MM-DD, or null if the page doesn't state them). If you can't find it, or its latest edition is already over, return {"found": false}.
 

@@ -249,18 +249,24 @@ Today's date: ${todayStr}
 
 Search the real web for ONE genuinely concrete, currently open thing that fits exactly what they asked for. Depending on the ask that could be an accelerator or fellowship taking applications, an investor or fund actively backing their stage, a grant, a sponsorship or credit program, a city or nonprofit program, a pitch or demo slot, or something else they could act on now. Read the actual page; don't guess from a title or a snippet.
 
+If they asked for an event, meetup, class, workshop, or community gathering, look for ONE real upcoming one in or near ${city ?? "their area"} on any site: Eventbrite, Meetup, Partiful, or a venue's, community's or organizer's own page. Luma is already searched separately, so look beyond it. Plenty of founders and communities aren't on tech event sites, so don't assume the right room is a tech one: match what they actually asked for. Its date must be on the page, and give it as "date".
+
 Critical: a real program existing isn't the same as it fitting their ask. Match the SHAPE of what they asked for. If they asked for money to put on an event, cloud credits and equity accelerators don't fit, and a company's "sponsor OUR event" page is the wrong direction. If they asked for accelerators or fellowships, an accelerator with open applications is exactly right. If they asked for investors, a fund that's actively writing checks at their stage fits; a generic listicle doesn't. If everything you find is real but the wrong shape for this ask, that's the same as finding nothing: say so rather than stretch it.
 
 Reject anything whose own page shows it's closed, expired, or from a past cycle relative to today's date, or that only fits an eligibility bar they clearly don't meet. Prefer things in or open to ${city ?? "their area"} when location matters.
 
-If you find a real, current, well-matched fit: give its category (a short word or two: "accelerator", "fellowship", "investor", "grant", "sponsorship", "credit_program", "city_program", "other"), and write "reason" the way you'd tell a friend over text: one short, casual sentence with the one concrete detail that proves it's real (a dollar amount, deadline, or eligibility line). That detail, the name, and any deadline must be stated on the exact page you return as "url", not on another page or a search snippet: that page's text is checked, and anything it doesn't say gets the whole result thrown out. Return the program's or fund's own official page, not a blog or listicle about it, whenever the official page states those details.
+If you find a real, current, well-matched fit: give its category (a short word or two: "accelerator", "fellowship", "investor", "grant", "sponsorship", "credit_program", "city_program", "event", "other"), and write "reason" the way you'd tell a friend over text: one short, casual sentence with the one concrete detail that proves it's real (a dollar amount, deadline, or eligibility line). That detail, the name, and any deadline must be stated on the exact page you return as "url", not on another page or a search snippet: that page's text is checked, and anything it doesn't say gets the whole result thrown out. Return the program's or fund's own official page, not a blog or listicle about it, whenever the official page states those details.
 
-Return ONLY valid JSON, nothing else: {"found": true, "name": "...", "url": "the real page URL you actually read", "category": "...", "reason": "...", "deadline": "YYYY-MM-DD" or null} or {"found": false}`,
+Return ONLY valid JSON, nothing else: {"found": true, "name": "...", "url": "the real page URL you actually read", "category": "...", "reason": "...", "deadline": "YYYY-MM-DD" or null, "date": "YYYY-MM-DD" or null} or {"found": false}`,
     });
-    const parsed = parseModelJson<{ found?: boolean; name?: string; url?: string; category?: string; reason?: string; deadline?: string | null }>(raw);
+    const parsed = parseModelJson<{ found?: boolean; name?: string; url?: string; category?: string; reason?: string; deadline?: string | null; date?: string | null }>(raw);
     if (!parsed?.found || typeof parsed.name !== "string" || typeof parsed.url !== "string") return null;
     const reason = typeof parsed.reason === "string" && parsed.reason.trim() ? parsed.reason.trim() : "Found via a real web search.";
     const deadline = typeof parsed.deadline === "string" ? parsed.deadline : null;
+    // An event's own date (2026-09-22), carried as statedDates so the gate
+    // turns away one that already happened and the named-window check
+    // (tieredRecommendation.ts xPostFitsWindow) applies to it like any post.
+    const eventDate = typeof parsed.date === "string" && /^\d{4}-\d{2}-\d{2}$/.test(parsed.date) ? parsed.date : null;
     const build = (url: string, pageText: string | null): TierMatch & { tier: 3 } => ({
       tier: 3,
       kind: "opportunity",
@@ -273,6 +279,7 @@ Return ONLY valid JSON, nothing else: {"found": true, "name": "...", "url": "the
       reason,
       category: typeof parsed.category === "string" ? parsed.category.trim().toLowerCase().slice(0, 40) : null,
       ...(deadline ? { deadline } : {}),
+      ...(eventDate ? { statedDates: { start: eventDate, end: null } } : {}),
     });
     const grounded = (m: TierMatch & { tier: 3 }) =>
       checkGrounding(m, { searchCity: null, distanceMiles: null, alreadyOffered: false, now: new Date(), evidence: m.evidence ?? null }).pass;

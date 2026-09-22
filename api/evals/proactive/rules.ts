@@ -8,7 +8,7 @@
 import "dotenv/config";
 import { readFileSync } from "fs";
 import { isReasonableLocalHour } from "../../src/services/localHours.js";
-import { userLevelChecks, mergeExpiry, localHourOk, candidateChecks, laneOf, unansweredPauseFor, pickSiblingOffers, RULES, type Candidate, type SendRecord } from "../../src/harness/proactive.js";
+import { userLevelChecks, mergeExpiry, localHourOk, candidateChecks, laneOf, unansweredPauseFor, pickSiblingOffers, codePick, TYPE_POLICY, RULES, type Candidate, type SendRecord } from "../../src/harness/proactive.js";
 import { OFFER_FOLLOWUP_MANY, OFFER_FOLLOWUP_ONE, offerFollowUp, stripClosingQuestion } from "../../src/services/offerFollowUp.js";
 import { pickCanonicalEventId, type CrossMatch } from "../../src/services/eventMatching.js";
 import { lumaTimestampInWindow } from "../../src/routes/luma.js";
@@ -163,6 +163,39 @@ check("two unanswered texts in a row pause for 72 hours", unansweredPauseFor(2) 
   check("two unanswered offers, the last 25h ago, still pause", paused(st([send(49), send(25)], hoursAgo(60))));
   check("two unanswered offers, the last 73h ago, no longer pause", !paused(st([send(100), send(73)], hoursAgo(120))));
   check("a reply after the offer lifts the pause", !paused(st([send(10)], hoursAgo(5))));
+}
+
+// Companion first (2026-09-22, Royce: Co is a companion first; events are the wedge). Real case:
+// an offer boosted to 85 because the member seemed frustrated beat a post-call reflection (80),
+// then its unanswered pause kept the reflection from ever going out.
+{
+  const now = new Date("2026-09-22T16:02:00Z");
+  const cand = (type: string, priority: number, id: string): Candidate =>
+    ({ id, userId: "u", type, targetKey: `${type}:${id}`, topicKey: `${type}:${id}`, summary: "", priority, dueAt: now, expiresAt: null, payload: {}, attempts: 0, createdAt: now } as unknown as Candidate);
+  check("a companion message is picked before an offer, even one boosted to 85", codePick([cand("event_offer", 85, "a"), cand("post_call", 80, "b")])?.type === "post_call");
+  check("even the lowest companion message (a check-in) goes before an offer", codePick([cand("event_offer", 95, "a"), cand("companion", 10, "b")])?.type === "companion");
+  check("between two offers, priority still decides", codePick([cand("event_offer", 60, "a"), cand("event_offer", 85, "b")])?.id === "b");
+
+  const hoursAgo = (h: number) => new Date(now.getTime() - h * 3600000);
+  const send = (h: number, type: string): SendRecord => ({ type, sentAt: hoursAgo(h), targetKey: `${type}${h}`, topicKey: null, exempt: false } as SendRecord);
+  const st = (sends: SendRecord[]) => ({ now, sends, lastInboundAt: null, timezone: "America/Los_Angeles", optedOut: false, needsCare: false } as any);
+  const failed = (state: any, lane: "room" | "other") => gate(userLevelChecks(state, { lane })).failed.map((c) => c.name);
+  check("an unanswered offer no longer pauses a check-in on the person", !failed(st([send(5, "event_offer")]), "other").includes("unanswered_pause"));
+  check("an unanswered check-in still never pauses an offer", !failed(st([send(5, "post_call")]), "room").includes("unanswered_pause"));
+  check("an unanswered offer still pauses the next offer", failed(st([send(5, "event_offer")]), "room").includes("unanswered_pause"));
+  check("any two unprompted texts are at least 3 hours apart, whatever their lane", failed(st([send(1, "event_offer")]), "other").includes("spacing") && !failed(st([send(4, "event_offer")]), "other").includes("spacing"));
+  check("an exempt send (event change, reminder) doesn't count toward spacing", !failed(st([{ ...send(1, "event_change"), exempt: true } as SendRecord]), "other").includes("spacing"));
+  check("caps are unchanged: 1 room text a day, 4 a week", RULES.roomMaxPerLocalDay === 1 && RULES.roomMaxPer7Days === 4);
+  check("ask check-ins wait 7 days, not 14", TYPE_POLICY.ask_checkin.topicGapDays === 7);
+  check("the 'thinking about you' rhythm is unchanged at 14 days", TYPE_POLICY.companion.typeGapDays === 14);
+
+  const jobs = readFileSync(new URL("../../src/jobs/index.ts", import.meta.url), "utf8");
+  const companionCron = jobs.slice(jobs.indexOf("// No paid subscription needed"), jobs.indexOf("Companion check-in cron error"));
+  const companionWhere = companionCron.slice(companionCron.indexOf("WHERE u.sms_opted_out"), companionCron.indexOf("LIMIT 50"));
+  check("companion check-ins no longer require a paid subscription", companionWhere.length > 0 && !/subscription_status/.test(companionWhere));
+  check("a stretch of offers with nothing about the person queues a check-in early", /count\(DISTINCT date_trunc\('day', ps\.sent_at\)\)[\s\S]{0,200}>= 3/.test(companionCron) && /NOT EXISTS \(SELECT 1 FROM proactive_sends ps/.test(companionCron));
+  check("archived accounts never get a check-in", /u\.archived_at IS NULL/.test(companionCron));
+  check("the ask check-in cron waits 7 days", /COALESCE\(ac\.last_checked_at, ac\.created_at\) <= NOW\(\) - INTERVAL '7 days'/.test(jobs));
 }
 
 // Every tier that has something goes out together, then one question

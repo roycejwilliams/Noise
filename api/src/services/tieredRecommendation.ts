@@ -880,6 +880,7 @@ export async function getTieredRecommendation(
   const windowFilter = window ? (startAt: string) => withinWindow(startAt, window) : undefined;
   const maxDays = window ? Math.max(1, Math.ceil(window.end.diffNow("days").days) + 1) : undefined;
   const cacheKey = searchCacheKey({
+    userId: opts.userId,
     city,
     askText: ask.text,
     windowStart: window?.start.toISODate() ?? null,

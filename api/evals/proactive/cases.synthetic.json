@@ -71,7 +71,7 @@
     },
     {
       "id": "s04",
-      "about": "throttle storm: 20 surfacing attempts in 7 minutes, nobody replies: one text, then the pause (24h after one unanswered text, 72h after two in a row) holds the rest",
+      "about": "throttle storm: 20 surfacing attempts in 7 minutes, nobody replies: one offer, then each lane waits on its own unanswered text (24h after one, 72h after two in a row). The ask check-in still goes, 3h after the offer, not 15 minutes (2026-09-22: an ignored offer no longer pauses a check-in)",
       "timezone": "America/Los_Angeles",
       "start": "2026-09-08T15:45:00Z",
       "end": "2026-09-15T06:00:00Z",
@@ -179,7 +179,7 @@
         }
       ],
       "expect": {
-        "sends": 2,
+        "sends": 3,
         "noSendBefore": "2026-09-08T16:00:00Z"
       }
     },
@@ -649,6 +649,56 @@
       "expect": {
         "sends": 2,
         "noSendBefore": "2026-09-15T16:00:00Z"
+      }
+    },
+    {
+      "id": "s24",
+      "about": "companion first: a post-call reflection and an offer boosted to 85 (the member seemed frustrated) arrive together; the reflection goes first and the offer still goes later the same day (2026-09-22, real co-test case)",
+      "timezone": "America/Los_Angeles",
+      "start": "2026-09-22T15:45:00Z",
+      "end": "2026-09-23T06:00:00Z",
+      "arrivals": [
+        {
+          "at": "2026-09-22T16:00:00Z",
+          "type": "post_call",
+          "target": "post_call:c1",
+          "expiresInHours": 12
+        },
+        {
+          "at": "2026-09-22T16:00:00Z",
+          "type": "event_offer",
+          "target": "event_offer:event:boosted",
+          "priority": 85,
+          "expiresInHours": 100
+        }
+      ],
+      "expect": {
+        "sends": 2,
+        "firstType": "post_call"
+      }
+    },
+    {
+      "id": "s25",
+      "about": "an unanswered offer never pauses a check-in on the person: the post-call reflection still goes out the same day (2026-09-22: it used to be blocked and expired unsent)",
+      "timezone": "America/Los_Angeles",
+      "start": "2026-09-22T15:45:00Z",
+      "end": "2026-09-23T06:00:00Z",
+      "arrivals": [
+        {
+          "at": "2026-09-22T16:00:00Z",
+          "type": "event_offer",
+          "target": "event_offer:event:e9",
+          "expiresInHours": 100
+        },
+        {
+          "at": "2026-09-22T17:00:00Z",
+          "type": "post_call",
+          "target": "post_call:c2",
+          "expiresInHours": 12
+        }
+      ],
+      "expect": {
+        "sends": 2
       }
     }
   ],

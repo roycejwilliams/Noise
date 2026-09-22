@@ -1238,6 +1238,31 @@ export async function runMigrations(): Promise<void> {
     )
     .catch((err: Error) => console.error("event_unmatched_notices table init failed:", err));
 
+  // One row per Hume chat (2026-09-22): the call post-processing claim
+  // (routes/co.ts chat_ended). The per-user call_status claim stops
+  // duplicates only until the member's next call moves call_status on; this
+  // is keyed on the call itself, so a late redelivery of an old chat is
+  // always recognized.
+  await pool
+    .query(
+      `CREATE TABLE IF NOT EXISTS call_processing (
+        chat_id TEXT PRIMARY KEY,
+        user_id UUID REFERENCES users(id) ON DELETE CASCADE,
+        status TEXT NOT NULL CHECK (status IN ('processing', 'completed', 'failed')),
+        claimed_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+        finished_at TIMESTAMPTZ
+      )`,
+    )
+    .catch((err: Error) => console.error("call_processing table init failed:", err));
+
+  // Kinds of things a member told Co to stop suggesting ("no more
+  // hackathons", 2026-09-22). Turning down one event only ever blocked that
+  // one event; this is the lasting version, read by the personal fit check
+  // (services/eventDetails.ts explainFit) on every search and sweep.
+  await pool
+    .query(`ALTER TABLE co_profiles ADD COLUMN IF NOT EXISTS avoid TEXT[] NOT NULL DEFAULT '{}'`)
+    .catch((err: Error) => console.error("co_profiles.avoid migration failed:", err));
+
   // Coalesces duplicate scoring triggers (Royce, 2026-09-05 — found via real
   // guest-add testing) — Luma fires guest.registered AND guest.updated as two
   // separate webhooks for a single guest-add action (confirmed live,

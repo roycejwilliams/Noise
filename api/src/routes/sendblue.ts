@@ -2286,6 +2286,16 @@ Return ONLY valid JSON, no preamble: {"date": "YYYY-MM-DD or null", "time": "HH:
                   `Searched just now. What came up didn't fit what they asked: ${preparedAll.map((p) => `"${p.m.name}" (${p.why ?? "not a fit"})`).join("; ")}.`,
                 );
                 addInstruction(replyFacts, "You searched and nothing that came up fits what they asked. Say that plainly and briefly. Don't send or describe the misfits unless they ask.");
+                // Save the ask before the reply, as the nothing-found branch
+                // already does (2026-09-22). It used to be saved only after
+                // the reply, by Layer 4, so the grounding check saw no open
+                // search and stripped every "I'll keep an eye out" as a false
+                // promise (5 rewrites in one day, each a wasted draft).
+                const turnAsk = await captureIntentForTurn(user.id, `${recentConversation}\nuser: ${resolvedContent}`, { timeoutMs: 4000 }).catch(() => null);
+                if (turnAsk?.ask?.text) {
+                  replyFacts.facts = replyFacts.facts.filter((fact) => fact.kind !== "ongoing" && !/isn't searching for anything/.test(fact.text));
+                  await addOngoingSearchFacts(replyFacts, user.id);
+                }
                 await recordSearchNote(
                   user.id,
                   `Co searched for "${resolvedContent.slice(0, 120)}" and what came up didn't fit: ${preparedAll.map((p) => `"${p.m.name}" from ${sourceOf(p.m)}${"url" in p.m && p.m.url ? `, link ${p.m.url}` : ""} (${p.why ?? "not a fit"})`).join("; ")}.`,

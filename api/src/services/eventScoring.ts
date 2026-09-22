@@ -413,7 +413,10 @@ async function maybeSendMatchNudge(
       person.user_id,
       "event_guest_match_nudge",
       opts.honestLowConfidence
-        ? `Paired ${person.first_name} with ${candidate.first_name} at "${eventName}" (neither had a strong match): ${top.shareReason} (score ${top.score})`
+        ? // Only this person's own state: this memory is read back into
+          // their future replies, so it must not carry anything about the
+          // other person's night (2026-09-22).
+          `Suggested ${person.first_name} say hi to ${candidate.first_name} at "${eventName}" as a low-key hello, since nothing stood out as a strong match for ${person.first_name}: ${top.shareReason} (score ${top.score})`
         : `Nudged ${person.first_name} that ${candidate.first_name} is also going to "${eventName}" and worth meeting: ${top.shareReason} (score ${top.score})`,
     );
     // Royce, 2026-09-08 sweep — the descriptive log above is a summary, not
@@ -767,7 +770,12 @@ Draft a short, warm, low-pressure text (1-2 sentences, no em dashes, normal sent
 // earned by the real score threshold it's built around, and this pool never
 // cleared it. Exported so evals/intro can check the honesty framing directly.
 export function unmatchedPairPrompt(p: { recipientFirstName: string; otherFirstName: string; eventName: string; shareReason: string; feedback: string | null }): string {
-  return `${CO_VOICE}\n\n${CO_TEXT_CHANNEL} You're texting ${p.recipientFirstName} near the end of "${p.eventName}." Nothing came up as a strong match for them tonight. ${p.otherFirstName} is also there and also didn't come up as a strong match for anyone else. What they might have in common: ${p.shareReason}
+  // Nothing about the other person's own night goes in here (2026-09-22):
+  // an earlier version told the model the other person "also didn't come up
+  // as a strong match for anyone," and a draft could repeat that — telling
+  // one member something about another member who isn't in this
+  // conversation. Only the recipient's own situation and the share reason.
+  return `${CO_VOICE}\n\n${CO_TEXT_CHANNEL} You're texting ${p.recipientFirstName} near the end of "${p.eventName}." Nothing came up as a strong match for them tonight. ${p.otherFirstName} is also there. What they might have in common: ${p.shareReason}
 
-Draft a short, low-key text (1-2 sentences, no em dashes, normal sentence capitalization) letting ${p.recipientFirstName} know about ${p.otherFirstName}. This is NOT a confident "you two should meet" recommendation — don't use that framing, don't oversell it, and don't call it a match. Something more like noticing they're both still around and it might be worth a quick hello, genuinely low-pressure. Never say ${p.otherFirstName} wants to meet them or said anything about them. Return ONLY the message text.${p.feedback ? `\n\n${p.feedback}` : ""}`;
+Draft a short, low-key text (1-2 sentences, no em dashes, normal sentence capitalization) letting ${p.recipientFirstName} know about ${p.otherFirstName}. This is NOT a confident "you two should meet" recommendation — don't use that framing, don't oversell it, and don't call it a match. Something more like it might be worth a quick hello, genuinely low-pressure. Say nothing at all about ${p.otherFirstName}'s night, matches, or situation beyond the reason above, and never say ${p.otherFirstName} wants to meet them or said anything about them. Return ONLY the message text.${p.feedback ? `\n\n${p.feedback}` : ""}`;
 }

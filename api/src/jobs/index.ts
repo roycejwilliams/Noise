@@ -23,6 +23,7 @@ import type { AskCheckinPayload } from "../agent/askCheckin.js";
 import { enqueueCandidate, runProactiveDispatch, sendExempt } from "../harness/proactive.js";
 import { proactiveRegistry } from "../harness/proactiveRegistry.js";
 import { runMonitor, runWeeklyReview } from "../harness/monitor.js";
+import { typesWithPurpose } from "../harness/proactivePurpose.js";
 import { reviewEnabled, runMorningReview } from "../harness/devReview.js";
 import { expireStaleAsks } from "../services/askExpiry.js";
 
@@ -293,8 +294,8 @@ export function registerJobs(io: Server) {
 
   // Co Loop Stage 5 check-in on an open ask. Layer 7 (2026-09-14): queues an
   // "ask_checkin" candidate only when there's movement (a new possible match
-  // logged for this ask since the last check-in, at least 3 days on) or 14
-  // days have passed; the harness decides when it goes out. The target key
+  // logged for this ask since the last check-in, at least 3 days on) or 7
+  // days have passed (14 until 2026-09-22); the harness decides when it goes out. The target key
   // includes the check-in number, so re-running this hourly never queues a
   // second copy.
   cron.schedule("0 * * * *", async () => {
@@ -312,7 +313,7 @@ export function registerJobs(io: Server) {
          ) re ON re.person_id = ac.user_id AND re.ask_id = ac.ask_id
          WHERE ac.resolved_at IS NULL AND u.sms_opted_out = false
            AND (
-             COALESCE(ac.last_checked_at, ac.created_at) <= NOW() - INTERVAL '14 days'
+             COALESCE(ac.last_checked_at, ac.created_at) <= NOW() - INTERVAL '7 days'
              OR (re.newest > COALESCE(ac.last_checked_at, ac.created_at)
                  AND COALESCE(ac.last_checked_at, ac.created_at) <= NOW() - INTERVAL '3 days')
            )`,
@@ -712,6 +713,12 @@ export function registerJobs(io: Server) {
   // attached (an ask, an event, an outcome); this is the one that
   // doesn't). Seeded by the recap memoryCompaction.ts already builds —
   // previously pure internal bookkeeping, never surfaced to the user.
+  // No paid subscription needed (2026-09-22, Royce): it was gated on
+  // subscription_status = 'active', which no co-test member has, so not one
+  // had ever been queued. The companion is the product, not a paid extra.
+  // Also queued early after a stretch of offers with nothing about the
+  // person (see the query). Sent first when it's eligible (proactive.ts
+  // codePick).
   // Targets users PAST onboarding (life_chapters populated) — the auto-call
   // cron above only calls users who AREN'T past onboarding yet, so together
   // these cover before/after without overlap. 7-day cadence is a first
@@ -730,12 +737,23 @@ export function registerJobs(io: Server) {
                  ORDER BY cm.created_at DESC LIMIT 1) AS recap
          FROM users u
          JOIN co_profiles cp ON cp.user_id = u.id
-         WHERE u.subscription_status = 'active'
-           AND u.sms_opted_out = false
+         WHERE u.sms_opted_out = false
+           AND u.archived_at IS NULL
            AND cp.life_chapters IS NOT NULL AND array_length(cp.life_chapters, 1) IS NOT NULL
            AND cp.last_recap_at IS NOT NULL
-           AND (cp.last_companion_checkin_at IS NULL OR cp.last_companion_checkin_at <= NOW() - INTERVAL '14 days')
+           AND (
+             (cp.last_companion_checkin_at IS NULL OR cp.last_companion_checkin_at <= NOW() - INTERVAL '14 days')
+             -- A stretch of offers with nothing about them: 3+ days with an
+             -- offer and no companion message in the last 7 (2026-09-22).
+             OR (
+               (SELECT count(DISTINCT date_trunc('day', ps.sent_at)) FROM proactive_sends ps
+                 WHERE ps.user_id = u.id AND ps.sent_at > NOW() - INTERVAL '7 days' AND ps.type = ANY($1::text[])) >= 3
+               AND NOT EXISTS (SELECT 1 FROM proactive_sends ps
+                 WHERE ps.user_id = u.id AND ps.sent_at > NOW() - INTERVAL '7 days' AND ps.type = ANY($2::text[]))
+             )
+           )
          LIMIT 50`,
+        [typesWithPurpose("offer"), typesWithPurpose("companion")],
       );
 
       // Layer 7 (2026-09-14): queued, not sent. Lowest priority in the

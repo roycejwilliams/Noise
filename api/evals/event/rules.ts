@@ -77,8 +77,29 @@ const c = (ok: boolean, label: string) => cases.push([ok, label]);
   c(/requestEventIntro: tool\(\{/.test(tools), "the requestEventIntro tool exists");
   c(/const resolved = await resolveNamedEventGuest\(ctx\.userId, personName\)/.test(tools), "it resolves against the real guest list, not a guess from the model");
   c(/if \("error" in resolved\)/.test(tools), "an unresolved name returns the real error instead of proceeding");
-  c(/Tell them plainly, don't guess who they mean\./.test(tools), "the tool tells the model not to guess when the name doesn't resolve");
-  c(/only connect them once both say yes/.test(tools), "the tool's own success note is honest that this isn't instant or guaranteed");
+  c(/Nothing happens unless both say yes/.test(tools), "the tool's own success fact is honest that this isn't instant or guaranteed");
+}
+
+// ---------------------------------------------------------------------------
+// No cross-member leaks (Royce, 2026-09-22: "We can't have someone's
+// information being pulled from another conversation").
+{
+  const tools = readFileSync(new URL("../../src/agent/conversationTools.ts", import.meta.url), "utf8");
+  const introTool = tools.slice(tools.indexOf("requestEventIntro: tool({"), tools.indexOf("markTopicAsked: tool({"));
+  c(!/couldn't find anyone named|on the guest list for/.test(introTool), "the intro tool never tells the asker whether a named person was found on a guest list");
+  c((introTool.match(/Never confirm or deny that the person is someone you know, is a Co member, or was on the guest list/g) ?? []).length === 2, "found and not-found get the same neutral answer, so neither reveals membership");
+  c(/Never say how many people have that name/.test(introTool), "asking for a detail when two people share a name never reveals how many there are");
+
+  const pairPrompt = unmatchedPairPrompt({ recipientFirstName: "Jordan", otherFirstName: "Ellis", eventName: "Cache Me Outside", shareReason: "both building in climate tech", feedback: null });
+  c(!/didn't come up as a strong match for anyone|also didn't/i.test(pairPrompt), "the pair prompt never tells the model the other person had no match");
+  c(/Say nothing at all about Ellis's night, matches, or situation/.test(pairPrompt), "the pair prompt forbids describing the other person's night");
+
+  const es = readFileSync(new URL("../../src/services/eventScoring.ts", import.meta.url), "utf8");
+  c(!/neither had a strong match/.test(es), "the pairing memory (read back into the member's own replies) carries nothing about the other person's night");
+  c(/if \(!\(await gateShareReason\(person\.user_id, candidate\.user_id, top\.shareReason/.test(es), "every nudge, pairing included, still passes the share-reason privacy gate");
+
+  const sr = readFileSync(new URL("../../src/services/searchRules.ts", import.meta.url), "utf8");
+  c(/return \[\s*k\.userId \?\? "anon",/.test(sr), "the search cache is keyed per member, so one member's cached trace never reaches another");
 }
 
 // ---------------------------------------------------------------------------

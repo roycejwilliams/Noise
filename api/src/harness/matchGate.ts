@@ -408,19 +408,34 @@ export async function gateMatches(
 ): Promise<TierMatch[]> {
   const now = ctx.now ?? new Date();
   const kept: TierMatch[] = [];
-  for (const match of matches) {
-    const distance =
-      ctx.searchCity && match.tier !== 3 && match.city && !match.online ? await distanceBetween(ctx.searchCity, match.city) : null;
-    const facts: MatchFacts = {
-      searchCity: ctx.searchCity,
-      distanceMiles: distance,
-      evidence: match.tier === 3 ? (match.evidence ?? ctx.evidenceByUrl?.get(match.url) ?? null) : null,
-      alreadyOffered: ctx.userId && ctx.checkRepeat !== false ? await wasAlreadyOffered(ctx.userId, match) : false,
-      now,
-      askedUntil: ctx.askedUntil ?? null,
-      lookaheadDays: ctx.lookaheadDays ?? null,
-      zone: ctx.zone ?? null,
-    };
+  // Facts for every match gathered at once, not one match after another
+  // (2026-09-22: a search spent ~11s outside the tiers themselves, several
+  // database round trips per match in a row). The search city is geocoded
+  // once first so the parallel lookups all hit the cache instead of each
+  // calling the geocoding API. Evaluation and the kept/gatedOut order below
+  // are unchanged.
+  if (ctx.searchCity) await geocodeCity(ctx.searchCity).catch(() => null);
+  const allFacts = await Promise.all(
+    matches.map(async (match): Promise<MatchFacts> => {
+      const [distance, alreadyOffered] = await Promise.all([
+        ctx.searchCity && match.tier !== 3 && match.city && !match.online ? distanceBetween(ctx.searchCity, match.city) : Promise.resolve(null),
+        ctx.userId && ctx.checkRepeat !== false ? wasAlreadyOffered(ctx.userId, match) : Promise.resolve(false),
+      ]);
+      return {
+        searchCity: ctx.searchCity,
+        distanceMiles: distance,
+        evidence: match.tier === 3 ? (match.evidence ?? ctx.evidenceByUrl?.get(match.url) ?? null) : null,
+        alreadyOffered,
+        now,
+        askedUntil: ctx.askedUntil ?? null,
+        lookaheadDays: ctx.lookaheadDays ?? null,
+        zone: ctx.zone ?? null,
+      };
+    }),
+  );
+  const logs: Promise<unknown>[] = [];
+  for (const [i, match] of matches.entries()) {
+    const facts = allFacts[i];
     const { ok, checks } = evaluateMatch(match, facts);
     if (ok) kept.push(match);
     else
@@ -432,17 +447,20 @@ export async function gateMatches(
         date: match.tier === 3 ? (match.deadline ?? null) : (match.event_date ?? null),
       });
     if (ctx.userId) {
-      await recordDecision({
-        layer: 5,
-        decision: "match.gate",
-        userId: ctx.userId,
-        outcome: ok ? "act" : "skip",
-        action: ok ? `offer:tier${match.tier}` : null,
-        proposal: { tier: match.tier, name: match.name, city: match.tier !== 3 ? match.city ?? null : null, url: match.url ?? null },
-        checks,
-      });
+      logs.push(
+        recordDecision({
+          layer: 5,
+          decision: "match.gate",
+          userId: ctx.userId,
+          outcome: ok ? "act" : "skip",
+          action: ok ? `offer:tier${match.tier}` : null,
+          proposal: { tier: match.tier, name: match.name, city: match.tier !== 3 ? match.city ?? null : null, url: match.url ?? null },
+          checks,
+        }),
+      );
     }
   }
+  await Promise.all(logs);
   return kept;
 }
 

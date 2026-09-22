@@ -18,6 +18,7 @@ import { localToday, searchZone } from "../../src/services/eventOrder.js";
 import { interleaveByTier, tierAlreadyCovered } from "../../src/services/eventSurfacingSweep.js";
 import { spelledNumbers } from "../../src/harness/matchGate.js";
 import { htmlToText, looksOfficial, pageExcerpt } from "../../src/services/webOpportunitySearch.js";
+import { availabilityConflict, availabilityWindows } from "../../src/services/availability.js";
 
 const cases: [boolean, string][] = [];
 const c = (ok: boolean, label: string) => cases.push([ok, label]);
@@ -139,7 +140,7 @@ c(r4.window === null && r4.outOfRange !== null, "a past date rolled to next year
 
 // ---------------------------------------------------------------------------
 // searchCacheKey: differences that must produce different keys.
-const base = { city: "San Francisco", askText: "founder meetups", windowStart: null, windowEnd: null, today: "2026-09-17", zone: "America/Los_Angeles", browse: false, profile: "profile text" };
+const base = { userId: "member-a", city: "San Francisco", askText: "founder meetups", windowStart: null, windowEnd: null, today: "2026-09-17", zone: "America/Los_Angeles", browse: false, profile: "profile text" };
 c(
   searchCacheKey(base) !== searchCacheKey({ ...base, today: "2026-09-18" }),
   "same window label but a different 'today' (no named window) produces a different cache key",
@@ -159,6 +160,14 @@ c(
 c(
   searchCacheKey(base) === searchCacheKey({ ...base }),
   "identical inputs produce the same cache key",
+);
+c(
+  searchCacheKey(base) !== searchCacheKey({ ...base, userId: "member-b" }),
+  "two members with the same city, ask and profile never share a cached search (2026-09-22: the trace carries one person's own history)",
+);
+c(
+  searchCacheKey({ ...base, profile: null }) !== searchCacheKey({ ...base, userId: "member-b", profile: null }),
+  "two members with no profile at all never share a cached search either",
 );
 c(
   searchCacheKey({ ...base, windowStart: "2026-09-19", windowEnd: "2026-09-20" }) !==
@@ -316,9 +325,39 @@ for (const [ok, label] of cases) {
   const tools = readFileSync(new URL("../../src/agent/conversationTools.ts", import.meta.url), "utf8");
   c(/listOpenAsks: tool\(\{/.test(tools), "the listOpenAsks tool exists");
   c(/Never guess or reconstruct this from the conversation alone/.test(tools), "the tool's own description forbids guessing from conversation memory");
-  c(/SELECT intent FROM co_profiles WHERE user_id = \$1/.test(tools), "it reads the real stated-ask list, not a summary");
+  c(/SELECT intent, avoid FROM co_profiles WHERE user_id = \$1/.test(tools), "it reads the real stated-ask list, not a summary");
   c(/askEntries\(rows\[0\]\?\.intent/.test(tools), "it reuses the same askEntries parsing the search/profile pipeline already uses");
-  c(/Never add, drop, or invent anything beyond this list\./.test(tools), "the grounded fact it hands the reply agent is explicit that this is the complete, real list");
+  c(/the real complete list\. \$\{parts\.join\(" "\)\} Never add, drop, or invent anything beyond this\./.test(tools), "the grounded fact it hands the reply agent is explicit that this is the complete, real list");
+  // 2026-09-22 code review: an offer isn't something Co looks for on their behalf,
+  // and dates were in the server's zone.
+  c(/What they've offered to others, which Co matches to people who want it/.test(tools), "offering asks are described as offers, not as things Co is looking for");
+  c(!/toDateString\(\)/.test(tools), "no date is formatted in the server's time zone");
+  c(/d\.isValid \? d\.setZone\(zone\)/.test(tools), "dates are shown in the member's own zone, and an unreadable date is dropped instead of printing Invalid Date");
+}
+
+// "What did you send me" reads what was actually sent (2026-09-22), not the last 20 texts.
+{
+  const tools = readFileSync(new URL("../../src/agent/conversationTools.ts", import.meta.url), "utf8");
+  c(/listSentOffers: tool\(\{/.test(tools), "the listSentOffers tool exists");
+  c(/FROM revealed_offers\s+WHERE user_id = \$1/.test(tools), "it reads revealed_offers, the record both live replies and sweeps write");
+  c(/Never reconstruct it from the conversation alone/.test(tools), "its description forbids reconstructing the list from the conversation");
+  const sweep = readFileSync(new URL("../../src/services/eventSurfacingSweep.ts", import.meta.url), "utf8");
+  const rec = readFileSync(new URL("../../src/services/recommendation.ts", import.meta.url), "utf8");
+  c(/recordRevealedOffers\(/.test(sweep) && /recordRevealedOffers\(/.test(rec), "both send paths (sweep and live reply) record into revealed_offers, so the list is complete");
+}
+
+// "No more hackathons" is kept as a lasting filter (2026-09-22), enforced in code.
+{
+  const tools = readFileSync(new URL("../../src/agent/conversationTools.ts", import.meta.url), "utf8");
+  c(/steerAwayFrom: tool\(\{/.test(tools), "the steerAwayFrom tool exists");
+  c(/UPDATE co_profiles SET avoid = \$2 WHERE user_id = \$1/.test(tools), "it stores the kind on the member's own profile");
+  c(/undo \? current\.filter/.test(tools), "it can be undone when they're open to that kind again");
+  const details = readFileSync(new URL("../../src/services/eventDetails.ts", import.meta.url), "utf8");
+  c(/if \(p\.avoided === true && person\.avoid\?\.length\) return \{ fits: false, rightKind: false/.test(details), "a ruled-out kind never fits and can never go out as a closest-thing stretch, and 'avoided' only counts when something was actually ruled out");
+  c(/avoidList\.length \? ' "avoided": true or false,' : ""/.test(details), "the avoided field is only asked for when there's something ruled out (it caused false rejections when always present)");
+  c(/const prefs = await loadFitPreferences\(person\.userId\)/.test(details), "every fit check loads the member's ruled-out kinds and availability itself");
+  c(/They told Co to stop suggesting these kinds of things/.test(details), "the fit prompt carries the ruled-out kinds");
+  c(/When they've said they're usually free/.test(details), "the fit prompt carries their availability");
 }
 
 // When the good matches were already sent, say that (2026-09-21), not "nothing came up".
@@ -371,6 +410,39 @@ for (const [ok, label] of cases) {
   const nel = readFileSync(new URL("../../src/services/namedEventLookup.ts", import.meta.url), "utf8");
   c(/reserveWebSearch\(opts\.userId, opts\.source/.test(nel), "the lookup spends the web search budget");
   c(/checkGrounding\(match/.test(nel) && /looksOfficial\(found\.url/.test(nel), "the lookup checks the page and that it is the event's own");
+}
+
+// When they're usually free, checked in code (2026-09-22: the fit model called a Saturday fine
+// for "weeknights only" 9 of 9 times). Oct 3 2026 is a Saturday, Oct 6 a Tuesday.
+{
+  const LA = "America/Los_Angeles";
+  const sat11 = "2026-10-03T11:00:00-07:00", sat19 = "2026-10-03T19:00:00-07:00";
+  const tue1830 = "2026-10-06T18:30:00-07:00", wedNoon = "2026-10-07T12:00:00-07:00", tue8 = "2026-10-06T08:00:00-07:00";
+  const conflict = (a: string, t: string) => availabilityConflict(a, t, LA) !== null;
+  c(conflict("weeknights only", sat11) && conflict("weeknights only", sat19), "a Saturday is outside 'weeknights only', morning or night");
+  c(!conflict("weeknights only", tue1830), "a Tuesday evening is inside 'weeknights only'");
+  c(conflict("weeknights only", wedNoon), "a weekday noon is outside 'weeknights'");
+  c(conflict("evenings", wedNoon) && !conflict("evenings", tue1830) && !conflict("evenings", sat19), "'evenings' is any day after 5pm");
+  c(!conflict("weekday evenings", tue1830) && conflict("weekday evenings", sat19) && conflict("weekday evenings", wedNoon), "'weekday evenings' needs both a weekday and the evening");
+  c(conflict("no weekends", sat11) && !conflict("no weekends", wedNoon), "'no weekends' rules out Saturday and allows a weekday");
+  c(!conflict("weeknights and weekends", sat11) && !conflict("weeknights and weekends", tue1830) && conflict("weeknights and weekends", wedNoon), "two phrases allow either window");
+  c(!conflict("mornings", tue8) && conflict("mornings", tue1830), "'mornings' is before noon");
+  c(availabilityWindows("whenever works honestly") === null && !conflict("whenever works honestly", sat11), "an unrecognized phrase is no constraint at all");
+  c(availabilityConflict(null, sat11, LA) === null && availabilityConflict("weeknights only", null, LA) === null, "no availability or no start time means no conflict");
+  c(availabilityConflict("weeknights only", sat11, LA)?.includes("Saturday at 11:00 AM") === true, "the reason names the real day and time in the event's own zone");
+}
+
+// Sourcing beyond Luma (2026-09-22): the web search also looks for real events on any site, with
+// the event's own date carried so past and out-of-window ones are turned away.
+{
+  const web = readFileSync(new URL("../../src/services/webOpportunitySearch.ts", import.meta.url), "utf8");
+  c(/Eventbrite, Meetup, Partiful, or a venue's, community's or organizer's own page/.test(web), "the web search looks for events on non-Luma sites");
+  c(/don't assume the right room is a tech one/.test(web), "it's told not to assume a tech room for a non-tech ask");
+  c(/\.\.\.\(eventDate \? \{ statedDates: \{ start: eventDate, end: null \} \} : \{\}\)/.test(web), "an event's own date becomes statedDates, so the gate and window checks apply");
+  c(/"date": "YYYY-MM-DD" or null/.test(web), "the model is asked for the event's date");
+  const nel = readFileSync(new URL("../../src/services/namedEventLookup.ts", import.meta.url), "utf8");
+  c(/prefer the upcoming edition in or nearest/.test(nel), "a named event prefers the edition nearest the member");
+  c(/If the only upcoming edition is somewhere else, still return it, and say plainly in "reason" where it is/.test(nel), "an edition elsewhere is still returned, labeled with where it is");
 }
 
 console.log(`search rules: ${cases.length - failed}/${cases.length} passed`);

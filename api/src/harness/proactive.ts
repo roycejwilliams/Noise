@@ -82,6 +82,11 @@ export type ProactiveType =
 // cap, sent when it lands (services/lateSearchResult.ts).
 export type ExemptType = "event_change" | "call_reminder" | "missed_call" | "co_event" | "direct_ask" | "search_result";
 
+// What each proactive message is for (companion / offer / ops) lives in
+// ./proactivePurpose.ts, dependency-free so model-free checks can read it.
+export { PROACTIVE_PURPOSE, typesWithPurpose, type ProactivePurpose } from "./proactivePurpose.js";
+import { PROACTIVE_PURPOSE as PROACTIVE_PURPOSE_MAP } from "./proactivePurpose.js";
+
 export type TypePolicy = {
   priority: number;
   // No second send of this type within N days, whatever the target.
@@ -100,7 +105,9 @@ export const TYPE_POLICY: Record<ProactiveType, TypePolicy> = {
   ask_solicitation: { priority: 55 },
   network_tease: { priority: 50 },
   event_match_nudge: { priority: 50 },
-  ask_checkin: { priority: 30, topicGapDays: 14 },
+  // 7 days, not 14 (2026-09-22): two weeks of silence on something they
+  // asked for reads as Co forgetting it.
+  ask_checkin: { priority: 30, topicGapDays: 7 },
   // After a time frame they searched has passed; about them, not a pitch.
   window_followup: { priority: 35, typeGapDays: 5 },
   product_update: { priority: 20, typeGapDays: 7 },
@@ -122,6 +129,10 @@ export const RULES = {
   // quiet text must not silence events for 72 hours (2026-09-21).
   unansweredPauseHours: 24,
   unansweredPauseHoursAfterTwo: 72,
+  // Any two unprompted texts are at least this far apart, whatever their lane
+  // (2026-09-22): lanes now pause separately, so without this a check-in could
+  // land 15 minutes after an unanswered offer.
+  minHoursBetweenTexts: 3,
   maxDraftAttempts: 2,
   // After the model decides nothing is worth sending, don't ask it again for
   // this person until this many hours pass (or a new candidate arrives).
@@ -245,10 +256,12 @@ export function userLevelChecks(state: Omit<PickState, "candidates">, opts: { sk
   const dayStart = startOfLocalDay(state.now, state.timezone);
   const today = counted.filter((s) => s.sentAt >= dayStart && s.sentAt <= state.now).length;
   const week = counted.filter((s) => state.now.getTime() - s.sentAt.getTime() < 7 * DAY && s.sentAt <= state.now).length;
-  // One-way pause: an unanswered event or intro pauses check-ins too, but an
-  // unanswered check-in never pauses events. So follow-ups can't isolate
-  // anyone from rooms, and someone who isn't replying still gets one text.
-  const pauseSource = lane === "room" ? counted : state.sends.filter((s) => !s.exempt);
+  // Each lane waits only on its own unanswered texts (2026-09-22). An
+  // unanswered check-in still never pauses events (so follow-ups can't
+  // isolate anyone from rooms), and now an unanswered offer never pauses Co
+  // checking in on the person either: it used to, which is how an ignored
+  // event offer kept a post-call reflection from ever going out.
+  const pauseSource = counted;
   const lastCounted = pauseSource.filter((s) => s.sentAt <= state.now).sort((a, b) => b.sentAt.getTime() - a.sentAt.getTime())[0];
   const unansweredCount = pauseSource.filter((s) => s.sentAt <= state.now && unansweredSince(s, state.lastInboundAt)).length;
   const pauseActive =
@@ -256,6 +269,10 @@ export function userLevelChecks(state: Omit<PickState, "candidates">, opts: { sk
     state.now.getTime() - lastCounted.sentAt.getTime() < unansweredPauseFor(unansweredCount) * HOUR &&
     unansweredSince(lastCounted, state.lastInboundAt);
 
+  const lastAny = state.sends
+    .filter((s) => !s.exempt && s.sentAt <= state.now)
+    .sort((a, b) => b.sentAt.getTime() - a.sentAt.getTime())[0];
+  const spacedOk = !lastAny || state.now.getTime() - lastAny.sentAt.getTime() >= RULES.minHoursBetweenTexts * HOUR;
   const checks: GateCheck[] = [{ name: "not_opted_out", pass: !state.optedOut, reason: "they opted out of texts" }];
   if (!opts.skipHours) {
     checks.push({
@@ -268,6 +285,11 @@ export function userLevelChecks(state: Omit<PickState, "candidates">, opts: { sk
     checks.push(
       { name: "daily_cap", pass: today < maxDay, reason: `${today} ${lane}-lane proactive text(s) already today` },
       { name: "weekly_cap", pass: week < maxWeek, reason: `${week} ${lane}-lane proactive texts in the last 7 days` },
+      {
+        name: "spacing",
+        pass: spacedOk,
+        reason: lastAny ? `a ${lastAny.type} went out less than ${RULES.minHoursBetweenTexts}h ago` : undefined,
+      },
       {
         name: "unanswered_pause",
         pass: !pauseActive,
@@ -360,10 +382,18 @@ export function pickSiblingOffers(primary: Candidate, eligible: Candidate[]): Ca
   return out;
 }
 
-// Deterministic pick: priority, then whichever expires soonest, then oldest.
+// Deterministic pick: a companion message first (2026-09-22, Royce: Co is a
+// companion first; events are the wedge), then priority, then whichever
+// expires soonest, then oldest. On 2026-09-22 an event offer boosted to 85
+// because the member seemed frustrated beat a post-call reflection (80), and
+// the offer's unanswered pause then kept the reflection from ever going out.
+// The offer still goes: it's in its own lane with its own daily slot, so it
+// just waits for the next pick.
+const isCompanion = (c: Candidate) => PROACTIVE_PURPOSE_MAP[c.type] === "companion";
 export function codePick(eligible: Candidate[]): Candidate | null {
   const sorted = [...eligible].sort(
     (a, b) =>
+      Number(isCompanion(b)) - Number(isCompanion(a)) ||
       b.priority - a.priority ||
       (a.expiresAt?.getTime() ?? Infinity) - (b.expiresAt?.getTime() ?? Infinity) ||
       a.dueAt.getTime() - b.dueAt.getTime() ||

@@ -836,6 +836,35 @@ async function resolveUserId(
 // randomized 2h-2d out; jobs/postCallFollowUp.ts polls for due rows and
 // generates + sends the actual message at send time (not now), so it's a
 // fresh LLM call per send and can never be the same script twice.
+// One claim per Hume chat (2026-09-22) — see the chat_ended handler. Wins
+// the first time a chat is seen, and again only if its last attempt failed
+// or has been stuck in processing past any real pipeline run (a crash).
+// A completed chat can never be claimed again.
+async function claimCallProcessing(chatId: string, userId: string): Promise<boolean> {
+  const { rows } = await pool
+    .query(
+      `INSERT INTO call_processing (chat_id, user_id, status, claimed_at) VALUES ($1, $2, 'processing', NOW())
+       ON CONFLICT (chat_id) DO UPDATE SET status = 'processing', claimed_at = NOW()
+         WHERE call_processing.status = 'failed'
+            OR (call_processing.status = 'processing' AND call_processing.claimed_at < NOW() - INTERVAL '10 minutes')
+       RETURNING chat_id`,
+      [chatId, userId],
+    )
+    .catch((err: any) => {
+      // Fail open on a DB error: the user-level claim still runs, so this
+      // never blocks a real first delivery the way failing closed would.
+      console.error("claimCallProcessing failed (non-fatal, falling back to the user-level claim):", err?.message ?? err);
+      return { rows: [{ chat_id: chatId }] };
+    });
+  return rows.length > 0;
+}
+
+async function finishCallProcessing(chatId: string, status: "completed" | "failed"): Promise<void> {
+  await pool
+    .query(`UPDATE call_processing SET status = $2, finished_at = NOW() WHERE chat_id = $1`, [chatId, status])
+    .catch((err: any) => console.error("finishCallProcessing failed (non-fatal):", err?.message ?? err));
+}
+
 async function scheduleFollowUpText(userId: string, transcript: string): Promise<void> {
   try {
     const TWO_HOURS_MS = 2 * 60 * 60 * 1000;
@@ -926,6 +955,18 @@ router.post(
       // never reaches the catch block to reset to 'failed' — a row stuck in
       // 'processing' for longer than any real extraction takes is
       // reclaimable rather than permanently wedged.
+      // Per-call claim keyed on Hume's chat id (2026-09-22). The user-level
+      // claim below only blocks a duplicate while call_status still reads
+      // processing/completed; once the member's NEXT call moves call_status
+      // on, a late redelivery for the OLD chat used to pass it and re-run
+      // extraction and the post-call follow-up for a call already handled.
+      // The transcript-content match further down only ever protected the
+      // stored transcript, not everything after it.
+      if (chat_id && !(await claimCallProcessing(chat_id, user_id))) {
+        console.log(`co/webhook: chat ${chat_id} already processed or in progress — ignoring duplicate delivery`);
+        return res.status(200).send({ success: true, duplicate: true });
+      }
+
       const claimResult = await pool.query(
         `UPDATE users SET call_status = 'processing', updated_at = NOW()
          WHERE id = $1
@@ -939,6 +980,8 @@ router.post(
       );
       if (!claimResult.rows[0]) {
         console.log(`co/webhook: chat_ended already processed for user ${user_id} (chat ${chat_id}) — ignoring duplicate delivery`);
+        // Free this chat's claim so a genuine retry isn't blocked by it.
+        if (chat_id) await finishCallProcessing(chat_id, "failed");
         return res.status(200).send({ success: true, duplicate: true });
       }
 
@@ -954,6 +997,7 @@ router.post(
         if (!transcript) {
           console.error(`co/webhook: empty transcript for chat ${chat_id} (user ${user_id})`);
           await pool.query(`UPDATE users SET call_status = 'failed' WHERE id = $1`, [user_id]);
+          if (chat_id) await finishCallProcessing(chat_id, "failed");
           return res.status(200).send({ success: true, empty: true });
         }
 
@@ -998,6 +1042,7 @@ router.post(
             }
           }
           await pool.query(`UPDATE users SET call_status = 'completed', call_status_updated_at = NOW() WHERE id = $1`, [user_id]);
+          if (chat_id) await finishCallProcessing(chat_id, "completed");
           _io?.to(`user:${user_id}`).emit("co:profile_ready");
           return res.status(200).send({ success: true, noRealConversation: true });
         }
@@ -1076,6 +1121,7 @@ router.post(
         // mark completed. Everything after this point (scheduling the
         // follow-up) is best-effort and must not affect retryability.
         await pool.query(`UPDATE users SET call_status = 'completed', call_status_updated_at = NOW() WHERE id = $1`, [user_id]);
+        if (chat_id) await finishCallProcessing(chat_id, "completed");
 
         // Profile is fully extracted and stored — tell the app to show the Ready state
         _io?.to(`user:${user_id}`).emit("co:profile_ready");
@@ -1093,6 +1139,7 @@ router.post(
         return res.status(200).send({ success: true });
       } catch (pipelineErr) {
         await pool.query(`UPDATE users SET call_status = 'failed' WHERE id = $1`, [user_id]);
+        if (chat_id) await finishCallProcessing(chat_id, "failed");
         throw pipelineErr;
       }
     } catch (error) {

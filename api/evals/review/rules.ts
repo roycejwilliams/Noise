@@ -16,6 +16,7 @@ import {
   type ReviewDecision,
   type ReviewMessage,
 } from "../../src/harness/devReview.js";
+import { metricLines, rate, renderMetricsHtml, type Metrics } from "../../src/harness/metrics.js";
 
 let total = 0;
 let failed = 0;
@@ -160,6 +161,35 @@ check("on co-test with the flag", reviewEnabled({ RAILWAY_ENVIRONMENT_NAME: "dev
   check("nothing rejected means no section", renderRejectedSample([]) === null);
   const many = renderRejectedSample(Array.from({ length: 9 }, (_, i) => ({ name: `E${i}`, why: "x" })), 6);
   check("the list is capped and says how many more", !!many && many.includes("Plus 3 more.") && !many.includes("E6"));
+}
+
+// The business numbers (harness/metrics.ts, 2026-09-22): a rate always carries its counts, a
+// small sample never becomes a percentage, and an empty denominator never prints NaN.
+{
+  check("a small sample is shown as counts, not a percentage", rate(3, 4) === "3 of 4");
+  check("a large enough sample gets a percentage with its counts", rate(15, 20) === "75% (15 of 20)");
+  check("an empty denominator says so instead of NaN or 0%", rate(0, 0) === "none yet");
+  const m: Metrics = {
+    days: 30,
+    members: { total: 2, newInWindow: 2, joinedByInvite: 2 },
+    invites: { issued: 4, redeemed: 3 },
+    engagement: { activeLast7: 2, retainedEligible: 0, retainedActive: 0 },
+    offers: { sent: 24, reacted: 0, interested: 0, notInterested: 0, alreadyDid: 0 },
+    outcomes: { acted: 0, helped: 0, didntHelp: 0 },
+    intros: { inRoomYes: 0, inRoomNo: 0, introEmails: 0, networkIntroduced: 0 },
+    debriefs: { total: 0, positive: 0, critical: 0 },
+    relationship: { memberStarts: 3, coStarts: 6, companionSent: 2, companionReplied: 2, offerSent: 4, offerReplied: 2, sharedPersonal14d: 1 },
+  };
+  const lines = metricLines(m);
+  check("every metric gets a line", lines.length === 12);
+  check("no line prints NaN or undefined", !lines.some((l) => /NaN|undefined/.test(l)));
+  check("only the one large sample (24 offers) gets a percentage", lines.filter((l) => /%/.test(l)).length === 1 && lines.some((l) => l.includes("0% (0 of 24)")));
+  check("who starts the conversation reads as counts", lines.some((l) => l.includes("members started 3 of 9")));
+  check("companion replies and offer replies are reported separately", lines.some((l) => l.startsWith("Replies within a day to companion messages") && l.includes("2 of 2")) && lines.some((l) => l.startsWith("Replies within a day to offers") && l.includes("2 of 4")));
+  check("personal shares are counted against all members", lines.some((l) => l.includes("not an ask") && l.includes("1 of 2")));
+  check("retention with nobody old enough says so", lines.some((l) => l.includes("Still active after two weeks") && l.includes("none yet")));
+  const html = renderMetricsHtml(m);
+  check("the relationship comes first in the Monday email", html.indexOf("The relationship") < html.indexOf("Growth, offers and intros"));
 }
 
 console.log(`review rules: ${total - failed}/${total} passed`);
