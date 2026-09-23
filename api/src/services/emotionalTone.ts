@@ -1,6 +1,11 @@
 import { anthropic } from "@ai-sdk/anthropic";
 import { generateText } from "ai";
 import { MODELS } from "../models.js";
+import { JEV_SURE, raceWithJev, readTextSignals } from "./jevGateway.js";
+
+// Jev through Vercel's gateway with zero data retention races Haiku
+// (services/jevGateway.ts raceWithJev): Jev decides when it's sure, Haiku
+// otherwise, and the check is never slower than Haiku alone.
 
 // One cheap advisory classification, folded into the reply prompt as a
 // nudge, never a rule. Not how they feel (that's harness/emotion.ts), but
@@ -14,9 +19,18 @@ export async function detectSeekingMode(
   recentConversation: string,
   functionId: string,
 ): Promise<"solving" | null> {
+  const jevSure = readTextSignals(message, recentConversation).then((j) =>
+    j && j.solving >= JEV_SURE.yes ? { value: "solving" as const } : j && j.solving <= JEV_SURE.no ? { value: null } : null,
+  );
+  const { value } = await raceWithJev<"solving" | null>(jevSure, (abortSignal) => haikuSeekingMode(message, recentConversation, functionId, abortSignal));
+  return value;
+}
+
+async function haikuSeekingMode(message: string, recentConversation: string, functionId: string, abortSignal: AbortSignal): Promise<"solving" | null> {
   try {
     const { text } = await generateText({
       model: anthropic(MODELS.haiku),
+      abortSignal,
       experimental_telemetry: { isEnabled: true, functionId },
       prompt: `Read this text conversation with Co, and their latest message.
 
@@ -32,7 +46,7 @@ Return ONLY "solving" if you're genuinely confident. Otherwise return ONLY "none
     const mode = text.trim().toLowerCase().replace(/^[`"']+|[`"']+$/g, "");
     return mode === "solving" ? "solving" : null;
   } catch (err: any) {
-    console.error("detectSeekingMode failed (non-fatal):", err?.message ?? err);
+    if (!abortSignal.aborted) console.error("detectSeekingMode failed (non-fatal):", err?.message ?? err);
     return null;
   }
 }

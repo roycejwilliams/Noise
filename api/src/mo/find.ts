@@ -19,6 +19,7 @@ import { listCalendarEvents } from "../services/luma.js";
 import { searchPostsWithAuthors, type MoPost } from "./xApi.js";
 import { MO, inCity, quoteIsTheirs, suppressionKeys } from "./rules.js";
 import { draftOutreach } from "./draft.js";
+import { screenPosts } from "./jev.js";
 
 type Wants = { wants: string[]; event: string | null };
 
@@ -160,8 +161,13 @@ export async function runMoFind(): Promise<{ shortlisted: number }> {
     });
     for (const p of posts) if (!byAuthor.has(p.author.id)) byAuthor.set(p.author.id, p);
   }
-  const posts = [...byAuthor.values()].filter((p) => inCity(p.author.location, p.text)).slice(0, 25);
-  checks.push({ name: "x_candidates_in_city", pass: true, reason: `${posts.length} of ${byAuthor.size}` });
+  const inSf = [...byAuthor.values()].filter((p) => inCity(p.author.location, p.text)).slice(0, 80);
+  checks.push({ name: "x_candidates_in_city", pass: true, reason: `${inSf.length} of ${byAuthor.size}` });
+  // Jev drops the clear no's first (mo/jev.ts), so Claude reads only the
+  // plausible ones; without Jev, Claude reads the first 25 as before.
+  const screened = await screenPosts(inSf);
+  if (screened.jevUsed) checks.push({ name: "jev_screen", pass: true, reason: `kept ${screened.keep.length} of ${inSf.length} in ${screened.ms}ms` });
+  const posts = screened.keep.slice(0, 25);
   const judged = await judge(posts, q.themes, w.event).catch(() => [] as Judged[]);
   for (const j of judged) {
     if (shortlisted >= MO.shortlistPerRun) break;

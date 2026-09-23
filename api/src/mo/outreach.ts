@@ -18,6 +18,7 @@ import { parseModelJson } from "../services/modelJson.js";
 import { clearStop, clearYes, nextOutreachStep, MO, suppressionKeys } from "./rules.js";
 import { isDmClosed, likePost, recentDmEvents, replyToPost, sendDm, xWriteConfigured } from "./xApi.js";
 import { presentNext, suppressProspect, textApprovers } from "./review.js";
+import { readReplyWithJev } from "./jev.js";
 
 export function moEnabled(env: NodeJS.ProcessEnv = process.env): boolean {
   return env.MO_ENABLED === "true";
@@ -254,6 +255,10 @@ export async function runMoOutreach(now = new Date()): Promise<void> {
 async function classifyReply(text: string): Promise<"yes" | "no" | "question"> {
   if (clearStop(text)) return "no";
   if (clearYes(text)) return "yes";
+  // Jev next (mo/jev.ts); only a clear answer is used, anything else goes to Claude.
+  const jev = await readReplyWithJev(text);
+  await recordDecision({ layer: 5, decision: "mo.jev.reply", userId: null, outcome: jev.verdict ? "act" : "skip", action: jev.verdict ?? (jev.p ? "unsure" : "unavailable"), proposal: { p: jev.p } });
+  if (jev.verdict) return jev.verdict;
   const { text: out } = await generateText({
     model: anthropic(MODELS.haiku),
     experimental_telemetry: { isEnabled: true, functionId: "mo.classifyReply" },

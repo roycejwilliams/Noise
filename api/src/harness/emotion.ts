@@ -27,6 +27,7 @@ import pool from "../db/db.js";
 import { MODELS } from "../models.js";
 import { parseModelJson } from "../services/modelJson.js";
 import type { GateCheck } from "./core.js";
+import { JEV_SURE, raceWithJev, readTextSignals } from "../services/jevGateway.js";
 
 export type Valence = "negative" | "positive" | "mixed";
 export type Intensity = "low" | "medium" | "high";
@@ -133,10 +134,21 @@ export type TextEmotion = { emotion: string; intensity: Intensity; valence: Vale
 
 // Narrow structured read of one message, so Haiku. Returns null for ordinary
 // neutral texts, which is most of them.
+// Jev (zero data retention) races Haiku (services/jevGateway.ts): a sure "no
+// real feeling" (most texts) answers at once and cancels Haiku; otherwise
+// Haiku names the feeling.
+
 export async function readTextEmotion(message: string, recentConversation: string, functionId: string): Promise<TextEmotion> {
+  const jevSure = readTextSignals(message, recentConversation).then((j) => (j && j.feeling <= JEV_SURE.no ? { value: null } : null));
+  const { value } = await raceWithJev<TextEmotion>(jevSure, (abortSignal) => haikuTextEmotion(message, recentConversation, functionId, abortSignal));
+  return value;
+}
+
+async function haikuTextEmotion(message: string, recentConversation: string, functionId: string, abortSignal: AbortSignal): Promise<TextEmotion> {
   try {
     const { text } = await generateText({
       model: anthropic(MODELS.haiku),
+      abortSignal,
       experimental_telemetry: { isEnabled: true, functionId },
       prompt: `Read the latest text someone sent Co, with the conversation before it for context.
 
@@ -159,7 +171,7 @@ Return ONLY JSON: {"emotion": "one or two words" or null, "intensity": "low" | "
     const target: EmotionTarget = p.target === "co" || p.target === "life" ? p.target : signalTarget({ source: "text", about, target: null });
     return { emotion: p.emotion.toLowerCase().slice(0, 40), intensity, valence, about, target };
   } catch (err: any) {
-    console.error("readTextEmotion failed (non-fatal):", err?.message ?? err);
+    if (!abortSignal.aborted) console.error("readTextEmotion failed (non-fatal):", err?.message ?? err);
     return null;
   }
 }

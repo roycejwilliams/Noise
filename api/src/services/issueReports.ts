@@ -22,6 +22,7 @@ import pool from "../db/db.js";
 import { MODELS } from "../models.js";
 import { parseModelJson } from "./modelJson.js";
 import { recordDecision } from "../harness/core.js";
+import { JEV_SURE, raceWithJev, readTextSignals } from "./jevGateway.js";
 
 export const ISSUE_CATEGORIES = ["bug", "wrong_info", "behavior", "speed", "feature_request", "other"] as const;
 export type IssueCategory = (typeof ISSUE_CATEGORIES)[number];
@@ -64,9 +65,20 @@ Return ONLY JSON:
 {"isIssue": true or false, "summary": "one plain sentence a developer can act on, or null", "category": ${ISSUE_CATEGORIES.map((c) => `"${c}"`).join(" | ")}, "severity": "low" | "medium" | "high"}`;
 }
 
+// Jev (zero data retention) races Haiku (services/jevGateway.ts): a sure
+// "not about Co" answers at once and cancels Haiku; otherwise Haiku decides
+// and writes the summary.
+
 export async function classifyIssue(message: string, recentConversation: string): Promise<IssueReport | null> {
+  const jevSure = readTextSignals(message, recentConversation).then((j) => (j && j.issue <= JEV_SURE.no ? { value: null } : null));
+  const { value } = await raceWithJev<IssueReport | null>(jevSure, (abortSignal) => haikuIssue(message, recentConversation, abortSignal));
+  return value;
+}
+
+async function haikuIssue(message: string, recentConversation: string, abortSignal: AbortSignal): Promise<IssueReport | null> {
   const { text } = await generateText({
     model: anthropic(MODELS.haiku),
+    abortSignal,
     experimental_telemetry: { isEnabled: true, functionId: "issueReports.classify" },
     prompt: issuePrompt(message, recentConversation),
   });
