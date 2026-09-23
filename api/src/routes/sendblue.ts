@@ -29,6 +29,7 @@ import { claimJoinNotice, getMemberInvite, inviteLink, invitesLeftFor, inviterFi
 import { decideInviteJoinedGate } from "../services/inviteJoinGate.js";
 import { handlePhoneChange } from "../services/phoneChange.js";
 import { handleMoReply } from "../mo/review.js";
+import { describeImage } from "../services/imageRead.js";
 import { CALL_OFFER, GATE_ASK, INVITE_JOINED, INVITE_READY, NO_INVITES_LEFT, WELCOME, WELCOME_INVITED, WRONG_CODE, pickLine } from "../services/onboardingLines.js";
 import { claimTextLogin } from "../services/textLogin.js";
 import {
@@ -1070,6 +1071,7 @@ export function sendblueRouter(io: Server): Router {
         let resolvedContent = content ?? "";
         let isVoice = false;
         let imageForVision: { data: Buffer; mediaType: string } | null = null;
+        let photoDescription: string | null = null;
 
         if (hasMedia) {
           isVoice = await isAudioUrl(media_url);
@@ -1089,7 +1091,10 @@ export function sendblueRouter(io: Server): Router {
               const mediaType = imageRes.headers.get("content-type")?.split(";")[0].trim() ?? "image/jpeg";
               const buffer = Buffer.from(await imageRes.arrayBuffer());
               imageForVision = { data: buffer, mediaType };
-              if (!resolvedContent) resolvedContent = "[sent a photo]";
+              // Written down once, for the record and the reply's fact check
+              // (services/imageRead.ts, 2026-09-22).
+              photoDescription = await describeImage(buffer, mediaType);
+              if (!resolvedContent) resolvedContent = photoDescription ? `[sent a photo showing: ${photoDescription}]` : "[sent a photo]";
             } catch (imgErr: any) {
               console.error("Image fetch for vision failed (non-fatal):", imgErr?.message ?? imgErr);
               if (!resolvedContent) resolvedContent = "[sent a photo — couldn't load it]";
@@ -1100,7 +1105,7 @@ export function sendblueRouter(io: Server): Router {
         // Step 3 — Store inbound message, generate embedding (in parallel)
         const inboundContent = isVoice
           ? `User sent a voice memo: ${resolvedContent}`
-          : `User said: ${resolvedContent}`;
+          : `User said: ${resolvedContent}${hasText && imageForVision ? ` [They also sent a photo${photoDescription ? `. It shows: ${photoDescription}` : ""}]` : ""}`;
 
         const [inboundMemory, queryEmbedding] = await Promise.all([
           pool.query(
@@ -1501,6 +1506,17 @@ export function sendblueRouter(io: Server): Router {
         });
         const factsMs = Date.now() - factsStarted;
         if (inviteNote) addFact(replyFacts, "known", inviteNote);
+        // What their photo shows, so details Co takes from it count as on file
+        // in the reply's fact check (2026-09-22, services/imageRead.ts).
+        if (imageForVision) {
+          addFact(
+            replyFacts,
+            "known",
+            photoDescription
+              ? `They sent a photo this turn. It shows: ${photoDescription}`
+              : "They sent a photo this turn. You can see it attached; its details weren't written down, so describe only what you can see in it.",
+          );
+        }
         // A problem they're reporting about Co itself is saved for the team
         // (test only, services/issueReports.ts), and the reply can say so.
         const reportedIssue = hasText ? await captureIssueReport(user.id, resolvedContent, recentConversation) : null;

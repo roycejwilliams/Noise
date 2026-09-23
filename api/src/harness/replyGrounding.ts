@@ -126,6 +126,10 @@ export async function gatherReplyFacts(
     // Whether they said they'd rather text or talk (asked at onboarding).
     pool.query(`SELECT contact_preference FROM users WHERE id = $1`, [userId]).then((r) => r.rows[0]?.contact_preference ?? null).catch(() => null),
   ]);
+  // Today's date, so "Oct 10 is 18 days out" can be worked out instead of
+  // guessed (2026-09-22: a reply said "if today's around the 23rd" on the
+  // 22nd, and the fact check had nothing to check it against).
+  addFact(rf, "known", `Today is ${DateTime.now().setZone("America/Los_Angeles").toFormat("cccc, LLLL d, yyyy")} (Pacific time).`);
   if (preference === "text") addFact(rf, "known", "They told Co they'd rather text. Only bring up a call if they ask for one.");
   if (preference === "call") addFact(rf, "known", "They told Co they like talking on the phone. Offering a call when there's a lot to talk through is welcome.");
   await addOngoingSearchFacts(rf, userId);
@@ -464,7 +468,7 @@ Claims to find:
 - capability: what Co can or can't do ("I can't call", "I don't have access to your calendar")
 - prediction: what Co says will or won't happen in the world, or how likely it is, that Co has no way to know ("I don't think another one will turn up by Saturday", "it'll probably sell out", "nothing else is coming this week")
 
-Don't list: opinions, feelings, questions, general encouragement, restating what they told Co, or how Co will talk in this conversation ("I'll keep it short", "switching back to normal caps", "let's keep going over text"). Also don't list general know-how and advice about how things usually go or what tends to work ("block parties live or die on people finding the spot", "a reminder a few days out helps turnout", "personal invites beat a mass email"): that's advice, not a claim about a specific event, person, or outcome (2026-09-22: flagging it as a prediction stripped the specifics out of Co's advice and left it generic). It still counts as a claim when it names a real venue, event, person, date, price, or number that isn't in the sources.
+Don't list: opinions, feelings, questions, general encouragement, restating what they told Co, or how Co will talk in this conversation ("I'll keep it short", "switching back to normal caps", "let's keep going over text"). Also don't list general know-how and advice about how things usually go or what tends to work ("block parties live or die on people finding the spot", "a reminder a few days out helps turnout", "personal invites beat a mass email"): that's advice, not a claim about a specific event, person, or outcome (2026-09-22: flagging it as a prediction stripped the specifics out of Co's advice and left it generic). It still counts as a claim when it names a real venue, event, person, date, price, or number that isn't in the sources. Likewise a conclusion reasoned from the sources is advice, not a prediction: "if Oct 10 is less than 30 days out, the permit may not clear in time", when the sources give the 30-day rule and the date (2026-09-22: that reasoning about a member's own screenshot was being cut).
 
 A claim is supported only if a FACT below states it, or the conversation shows it. A future_promise is supported only if a FACT says it will actually happen (a scheduled call, a pending item). A prediction is supported only if a FACT states that outcome itself; guessing from what was or wasn't found is never support. "I don't have X" is supported when X is not in the sources. Never count something as supported because it's plausible.
 

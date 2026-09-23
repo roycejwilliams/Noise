@@ -124,6 +124,7 @@ const BLOCK = `Okay. Here's the shape I'd commit to. Arrival: one funnel, one ba
 const PARA = paragraphize(BLOCK);
 const replyPrompt = readFileSync(new URL("../../src/agent/conversationReply.ts", import.meta.url), "utf8");
 const groundingPrompt = readFileSync(new URL("../../src/harness/replyGrounding.ts", import.meta.url), "utf8");
+const sendblueRoute = readFileSync(new URL("../../src/routes/sendblue.ts", import.meta.url), "utf8");
 const formatCases: [boolean, string][] = [
   // Readable paragraphs, walkthroughs, and pressure-tested advice (2026-09-22).
   [PARA.split("\n\n").length === 4 && PARA.split("\n\n")[1].startsWith("Arrival:") && PARA.split("\n\n")[3].startsWith("Close:"), "a long block splits into paragraphs, each labeled part on its own"],
@@ -134,6 +135,12 @@ const formatCases: [boolean, string][] = [
   [/meet the feeling first, then gauge before you plan/.test(replyPrompt) && /never make them ask twice/.test(replyPrompt), "a feeling is met first, then gauged, then walked through"],
   [/each idea its own short paragraph with a blank line between them/.test(replyPrompt), "reply prompt asks for paragraphs"],
   [/don't list general know-how and advice/.test(groundingPrompt), "the fact check doesn't strip ordinary advice as a prediction"],
+  // A photo they send is written down once, for the record and the fact check (2026-09-22).
+  [/a conclusion reasoned from the sources is advice, not a prediction/.test(groundingPrompt), "reasoning from what's on file isn't cut as a prediction"],
+  [/addFact\(rf, "known", `Today is \$\{DateTime\.now\(\)/.test(groundingPrompt), "the reply's facts include today's date"],
+  [/photoDescription = await describeImage\(buffer, mediaType\)/.test(sendblueRoute), "an incoming photo is described once"],
+  [/\[They also sent a photo\$\{photoDescription \? `\. It shows: \$\{photoDescription\}`/.test(sendblueRoute), "the conversation record keeps the photo, not just their words"],
+  [/They sent a photo this turn\. It shows: \$\{photoDescription\}/.test(sendblueRoute), "the fact check sees what the photo shows"],
   [renderMatchLead(2) === "Two that fit, sending both now.", "two reads naturally"],
   [renderMatchLead(3) === "Three that fit, sending them now.", "three reads naturally"],
   [!renderMatchLead(2).includes("http"), "the lead-in never carries a link"],
