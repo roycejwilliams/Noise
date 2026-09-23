@@ -83,7 +83,7 @@ Post: "${postText.slice(0, 700)}"
 Messages:
 ${drafts.map((d, n) => `${n + 1}. ${d}`).join("\n")}
 
-Does any message state a place, date, number, or detail that the post doesn't say, or contradict the post or another message? Opinions and general statements about Co are fine.
+The messages are SUPPOSED to say that Co runs a small invite-only club in ${MO.city}, offer an invite, and (in the email) contain the placeholders {{CODE}} and {{PHONE}}; those are never a problem. Only check what the messages say about the AUTHOR and their post: does any message state a place, date, number, or detail about them that the post doesn't say, or contradict the post or another message?
 
 Return ONLY JSON: {"ok": true} or {"ok": false, "problem": "what's wrong, briefly"}`,
     });
