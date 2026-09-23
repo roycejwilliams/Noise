@@ -105,9 +105,70 @@ export function readTextSignals(message: string, recentConversation: string): Pr
   for (const [k, v] of memo) if (now - v.at > 60_000) memo.delete(k);
   const hit = memo.get(key);
   if (hit) return hit.p;
-  const p = askJevZdr({ latest_message: message, recent_conversation: convo }, TEXT_SIGNAL_QUESTIONS) as Promise<TextSignals | null>;
+  const started = Date.now();
+  const p = (askJevZdr({ latest_message: message, recent_conversation: convo }, TEXT_SIGNAL_QUESTIONS) as Promise<TextSignals | null>).then((r) => {
+    jevMs.set(key, Date.now() - started);
+    return r;
+  });
   memo.set(key, { at: now, p });
   return p;
+}
+
+// ---------------------------------------------------------------- per-text log
+// One harness_decisions row per text ("jev.co.race"): for each check that
+// ran, whether Jev or Haiku answered and the answer, plus Jev's scores and
+// how long Jev took. No message text is stored (2026-09-23, Royce: "add the
+// log", to see whether Jev helps on real use).
+const jevMs = new Map<string, number>();
+const pending = new Map<string, { checks: Record<string, { from: "jev" | "haiku"; answer: unknown }>; timer: ReturnType<typeof setTimeout> }>();
+
+export function noteRaceOutcome(message: string, recentConversation: string, check: "solving" | "issue" | "feeling", from: "jev" | "haiku", answer: unknown): void {
+  if (!jevForMemberText()) return;
+  const key = `${message}\u0000${recentConversation.slice(-1500)}`;
+  let entry = pending.get(key);
+  if (!entry) {
+    // The checks for one text finish within a second or two of each other;
+    // write once they've all had time to report.
+    entry = { checks: {}, timer: setTimeout(() => void flush(key), 5000) };
+    pending.set(key, entry);
+  }
+  entry.checks[check] = { from, answer };
+}
+
+async function flush(key: string): Promise<void> {
+  const entry = pending.get(key);
+  pending.delete(key);
+  if (!entry) return;
+  const signals = await (memo.get(key)?.p ?? Promise.resolve(null)).catch(() => null);
+  const ms = jevMs.get(key) ?? null;
+  jevMs.delete(key);
+  const { recordDecision } = await import("../harness/core.js");
+  await recordDecision(buildRaceLog(entry.checks, signals, ms)).catch(() => {});
+}
+
+// The row itself, pure so its shape can be checked (evals/jev/gateway.ts).
+export function buildRaceLog(
+  checks: Record<string, { from: "jev" | "haiku"; answer: unknown }>,
+  signals: TextSignals | null,
+  ms: number | null,
+) {
+  const order = ["solving", "issue", "feeling"].filter((k) => checks[k]);
+  return {
+    layer: 2 as const,
+    decision: "jev.co.race",
+    userId: null,
+    outcome: "act" as const,
+    // e.g. "solving:jev issue:haiku feeling:jev"
+    action: order.map((k) => `${k}:${checks[k].from}`).join(" "),
+    proposal: {
+      checks: Object.fromEntries(order.map((k) => [k, checks[k]])),
+      jevAnswered: Boolean(signals),
+      jevScores: signals ? Object.fromEntries(Object.entries(signals).map(([k, v]) => [k, Math.round(v * 1000) / 1000])) : null,
+      jevMs: ms,
+      sureBelow: JEV_SURE.no,
+      sureAbove: JEV_SURE.yes,
+    },
+  };
 }
 
 // Jev and Haiku start together. Jev's answer wins only when it's sure (and

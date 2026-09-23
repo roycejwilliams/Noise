@@ -27,7 +27,7 @@ import pool from "../db/db.js";
 import { MODELS } from "../models.js";
 import { parseModelJson } from "../services/modelJson.js";
 import type { GateCheck } from "./core.js";
-import { JEV_SURE, raceWithJev, readTextSignals } from "../services/jevGateway.js";
+import { JEV_SURE, noteRaceOutcome, raceWithJev, readTextSignals } from "../services/jevGateway.js";
 
 export type Valence = "negative" | "positive" | "mixed";
 export type Intensity = "low" | "medium" | "high";
@@ -140,7 +140,8 @@ export type TextEmotion = { emotion: string; intensity: Intensity; valence: Vale
 
 export async function readTextEmotion(message: string, recentConversation: string, functionId: string): Promise<TextEmotion> {
   const jevSure = readTextSignals(message, recentConversation).then((j) => (j && j.feeling <= JEV_SURE.no ? { value: null } : null));
-  const { value } = await raceWithJev<TextEmotion>(jevSure, (abortSignal) => haikuTextEmotion(message, recentConversation, functionId, abortSignal));
+  const { value, from } = await raceWithJev<TextEmotion>(jevSure, (abortSignal) => haikuTextEmotion(message, recentConversation, functionId, abortSignal));
+  noteRaceOutcome(message, recentConversation, "feeling", from, value !== null);
   return value;
 }
 

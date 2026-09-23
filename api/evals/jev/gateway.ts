@@ -76,6 +76,26 @@ Object.assign(process.env, coTest);
 setJevGatewayForTests(null);
 process.env = saved;
 check("'sure' means below 0.2 or above 0.8", JEV_SURE.no === 0.2 && JEV_SURE.yes === 0.8);
+// ---------------------------------------------------------------- the per-text log
+{
+  const { buildRaceLog } = await import("../../src/services/jevGateway.js");
+  const row = buildRaceLog(
+    { feeling: { from: "jev", answer: false }, solving: { from: "haiku", answer: true } },
+    { solving: 0.61234, issue: 0.04, feeling: 0.1 },
+    372,
+  );
+  check("log row: named jev.co.race, no user id", row.decision === "jev.co.race" && row.userId === null && row.layer === 2 && row.outcome === "act");
+  check("log row: a readable one-line summary in check order", row.action === "solving:haiku feeling:jev");
+  check("log row: each check's source and answer", JSON.stringify(row.proposal.checks) === JSON.stringify({ solving: { from: "haiku", answer: true }, feeling: { from: "jev", answer: false } }));
+  check("log row: Jev's scores rounded, and how long Jev took", row.proposal.jevAnswered && row.proposal.jevScores?.solving === 0.612 && row.proposal.jevMs === 372);
+  check("log row: when Jev didn't answer, that's recorded", buildRaceLog({ solving: { from: "haiku", answer: false } }, null, 3000).proposal.jevAnswered === false);
+  check("log row: never carries the message text", !JSON.stringify(row).includes("latest_message") && !/message|convo/.test(Object.keys(row.proposal).join(",")));
+  const g2 = src("services/jevGateway.ts");
+  check("one row per text, written after the checks report (not three rows)", /setTimeout\(\(\) => void flush\(key\), 5000\)/.test(g2) && /pending\.delete\(key\)/.test(g2));
+  const all = src("services/emotionalTone.ts") + src("services/issueReports.ts") + src("harness/emotion.ts");
+  check("every check reports its outcome", (all.match(/noteRaceOutcome\(message, recentConversation, "(solving|issue|feeling)", from,/g) ?? []).length === 3);
+}
+
 console.log(`jev gateway rules: ${total - failed}/${total} passed`);
 if (failed) process.exitCode = 1;
 process.exit();

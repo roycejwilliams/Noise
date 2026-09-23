@@ -1,7 +1,7 @@
 import { anthropic } from "@ai-sdk/anthropic";
 import { generateText } from "ai";
 import { MODELS } from "../models.js";
-import { JEV_SURE, raceWithJev, readTextSignals } from "./jevGateway.js";
+import { JEV_SURE, noteRaceOutcome, raceWithJev, readTextSignals } from "./jevGateway.js";
 
 // Jev through Vercel's gateway with zero data retention races Haiku
 // (services/jevGateway.ts raceWithJev): Jev decides when it's sure, Haiku
@@ -22,7 +22,8 @@ export async function detectSeekingMode(
   const jevSure = readTextSignals(message, recentConversation).then((j) =>
     j && j.solving >= JEV_SURE.yes ? { value: "solving" as const } : j && j.solving <= JEV_SURE.no ? { value: null } : null,
   );
-  const { value } = await raceWithJev<"solving" | null>(jevSure, (abortSignal) => haikuSeekingMode(message, recentConversation, functionId, abortSignal));
+  const { value, from } = await raceWithJev<"solving" | null>(jevSure, (abortSignal) => haikuSeekingMode(message, recentConversation, functionId, abortSignal));
+  noteRaceOutcome(message, recentConversation, "solving", from, value === "solving");
   return value;
 }
 

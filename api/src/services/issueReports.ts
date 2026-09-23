@@ -22,7 +22,7 @@ import pool from "../db/db.js";
 import { MODELS } from "../models.js";
 import { parseModelJson } from "./modelJson.js";
 import { recordDecision } from "../harness/core.js";
-import { JEV_SURE, raceWithJev, readTextSignals } from "./jevGateway.js";
+import { JEV_SURE, noteRaceOutcome, raceWithJev, readTextSignals } from "./jevGateway.js";
 
 export const ISSUE_CATEGORIES = ["bug", "wrong_info", "behavior", "speed", "feature_request", "other"] as const;
 export type IssueCategory = (typeof ISSUE_CATEGORIES)[number];
@@ -71,7 +71,8 @@ Return ONLY JSON:
 
 export async function classifyIssue(message: string, recentConversation: string): Promise<IssueReport | null> {
   const jevSure = readTextSignals(message, recentConversation).then((j) => (j && j.issue <= JEV_SURE.no ? { value: null } : null));
-  const { value } = await raceWithJev<IssueReport | null>(jevSure, (abortSignal) => haikuIssue(message, recentConversation, abortSignal));
+  const { value, from } = await raceWithJev<IssueReport | null>(jevSure, (abortSignal) => haikuIssue(message, recentConversation, abortSignal));
+  noteRaceOutcome(message, recentConversation, "issue", from, value !== null);
   return value;
 }
 
