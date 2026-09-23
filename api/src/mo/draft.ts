@@ -61,7 +61,37 @@ export async function draftOutreach(i: DraftInput): Promise<Drafts> {
     const leaked = namesAMember(t, members, { name: i.name, postText: i.postText });
     if (leaked) failed.push(`${label}_names_member(${leaked})`);
   }
-  return failed.length ? { ok: false, failed } : { ok: true, reply, dm, emailSubject, emailBody };
+  if (failed.length) return { ok: false, failed };
+  // Nothing beyond the post, and the drafts agree with each other (2026-09-23:
+  // a reply put an event at "nTopology HQ" while the DM said it was moving to
+  // NYC).
+  const consistency = await checkDraftsAgainstPost(i.postText, [reply, dm, emailBody].filter((t): t is string => Boolean(t)));
+  if (!consistency.ok) return { ok: false, failed: [`drafts_inconsistent(${consistency.problem})`] };
+  return { ok: true, reply, dm, emailSubject, emailBody };
+}
+
+export async function checkDraftsAgainstPost(postText: string, drafts: string[]): Promise<{ ok: boolean; problem: string }> {
+  try {
+    const { text } = await generateText({
+      model: anthropic(MODELS.sonnet),
+      providerOptions: { anthropic: { effort: "low" } },
+      experimental_telemetry: { isEnabled: true, functionId: "mo.draftCheck" },
+      prompt: `A post, and messages written to its author based on it.
+
+Post: "${postText.slice(0, 700)}"
+
+Messages:
+${drafts.map((d, n) => `${n + 1}. ${d}`).join("\n")}
+
+Does any message state a place, date, number, or detail that the post doesn't say, or contradict the post or another message? Opinions and general statements about Co are fine.
+
+Return ONLY JSON: {"ok": true} or {"ok": false, "problem": "what's wrong, briefly"}`,
+    });
+    const r = parseModelJson<{ ok?: boolean; problem?: string }>(text);
+    return r.ok === true ? { ok: true, problem: "" } : { ok: false, problem: String(r.problem ?? "unclear").slice(0, 120) };
+  } catch {
+    return { ok: false, problem: "check failed" };
+  }
 }
 
 // An approver's change, in their own words ("make the DM shorter"). Same

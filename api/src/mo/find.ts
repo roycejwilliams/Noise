@@ -17,7 +17,7 @@ import { reserveXSearch } from "../services/tieredRecommendation.js";
 import { reserveWebSearch } from "../services/webOpportunitySearch.js";
 import { listCalendarEvents } from "../services/luma.js";
 import { searchPostsWithAuthors, type MoPost } from "./xApi.js";
-import { MO, inCity, quoteIsTheirs, suppressionKeys } from "./rules.js";
+import { MO, inCity, locationInCity, neutralPronouns, placeOk, quoteIsTheirs, suppressionKeys } from "./rules.js";
 import { draftOutreach } from "./draft.js";
 import { screenPosts } from "./jev.js";
 
@@ -86,7 +86,7 @@ Return ONLY JSON: {"x": ["..."], "linkedin": "site:linkedin.com/in ...", "themes
   };
 }
 
-type Judged = { index: number; fit: boolean; reason: string; quote: string };
+type Judged = { index: number; fit: boolean; reason: string; quote: string; inCity?: boolean };
 
 export async function judge(posts: MoPost[], themes: string[], event: string | null): Promise<Judged[]> {
   if (!posts.length) return [];
@@ -102,9 +102,9 @@ ${event ? `Next Co event: ${event}` : ""}
 Posts (one per person):
 ${posts.map((p, i) => `[${i}] @${p.author.username} (${p.author.name}; location: ${p.author.location ?? "none"}; bio: ${(p.author.description ?? "").slice(0, 160)})\n${p.text.slice(0, 500)}`).join("\n\n")}
 
-Keep only people whose own post shows they're doing something specific that fits (building, hosting, looking for collaborators), not promoters, recruiters, bots, threads of generic advice, or companies. For each person, give "reason": one plain sentence on why they'd fit, in terms of what THEY posted (no names of anyone else), and "quote": 4 to 20 words copied exactly from their post that show it.
+Keep only people whose own post shows they're doing something specific that fits (building, hosting, looking for collaborators), not promoters, recruiters, bots, threads of generic advice, or companies. For each person, give "reason": one plain sentence on why they'd fit, in terms of what THEY posted (no names of anyone else; refer to them by name or "they", never "he" or "she"); "quote": 4 to 20 words copied exactly from their post that show it; and "inCity": true only if they, or the thing they're doing, are actually in ${MO.city} (a passing mention like "after my trip to SF" doesn't count).
 
-Return ONLY JSON: {"people": [{"index": 0, "fit": true, "reason": "...", "quote": "..."}]}`,
+Return ONLY JSON: {"people": [{"index": 0, "fit": true, "reason": "...", "quote": "...", "inCity": true}]}`,
   });
   return (parseModelJson<{ people?: Judged[] }>(text).people ?? []).filter((j) => j && typeof j.index === "number");
 }
@@ -119,7 +119,8 @@ async function alreadyKnown(keys: string[], xUserId: string | null, linkedinUrl:
 
 // LinkedIn through web search only: what the results page shows. No login,
 // no profile scraping. People found here are contacted by hand.
-async function linkedinCandidates(query: string, themes: string[]): Promise<{ name: string; headline: string; url: string; reason: string; quote: string }[]> {
+type LinkedinPerson = { name: string; headline: string; snippet: string; location: string; url: string; reason: string; quote: string };
+async function linkedinCandidates(query: string, themes: string[]): Promise<LinkedinPerson[]> {
   const budget = await reserveWebSearch(null, "sweep", query);
   if (!budget.ok) return [];
   const { text } = await generateText({
@@ -130,14 +131,22 @@ async function linkedinCandidates(query: string, themes: string[]): Promise<{ na
     experimental_telemetry: { isEnabled: true, functionId: "mo.linkedin" },
     prompt: `Run this web search: ${query}
 
-From the search results only (don't open or log into LinkedIn), list up to 4 people in ${MO.city} whose headline or snippet shows they fit: ${themes.join("; ")}. For each: "name", "headline" (as shown), "url" (their linkedin.com/in/ link as shown), "reason" (one plain sentence), and "quote" (4 to 20 words copied exactly from their headline or snippet).
+From the search results only (don't open or log into LinkedIn), list up to 4 people in ${MO.city} whose headline or snippet shows they fit: ${themes.join("; ")}. For each: "name", "headline" (as shown), "snippet" (the result's text as shown, copied exactly), "location" (as shown, or ""), "url" (their linkedin.com/in/ link as shown), "reason" (one plain sentence; their name or "they", never "he" or "she"), and "quote" (4 to 20 words copied exactly from the headline or snippet).
 
 Return ONLY JSON: {"people": [...]}`,
   });
   const people = parseModelJson<{ people?: any[] }>(text).people ?? [];
   return people
     .filter((p) => p && typeof p.url === "string" && /^https:\/\/([a-z]+\.)?linkedin\.com\/in\//i.test(p.url) && typeof p.headline === "string")
-    .map((p) => ({ name: String(p.name ?? "").slice(0, 80), headline: String(p.headline).slice(0, 240), url: p.url.replace(/\/+$/, ""), reason: String(p.reason ?? "").slice(0, 240), quote: String(p.quote ?? "") }));
+    .map((p) => ({
+      name: String(p.name ?? "").slice(0, 80),
+      headline: String(p.headline).slice(0, 240),
+      snippet: String(p.snippet ?? "").slice(0, 600),
+      location: String(p.location ?? "").slice(0, 80),
+      url: p.url.replace(/\/+$/, ""),
+      reason: neutralPronouns(String(p.reason ?? "").slice(0, 240)),
+      quote: String(p.quote ?? ""),
+    }));
 }
 
 export async function runMoFind(): Promise<{ shortlisted: number }> {
@@ -177,7 +186,12 @@ export async function runMoFind(): Promise<{ shortlisted: number }> {
       checks.push({ name: "quote_is_theirs", pass: false, reason: `@${p.author.username}: "${j.quote.slice(0, 60)}"` });
       continue;
     }
+    if (!placeOk(p.author.location, j.inCity)) {
+      checks.push({ name: "in_city", pass: false, reason: `@${p.author.username}: location "${p.author.location ?? "none"}", judge inCity=${j.inCity}` });
+      continue;
+    }
     if (await alreadyKnown(suppressionKeys({ x_user_id: p.author.id }), p.author.id, null)) continue;
+    j.reason = neutralPronouns(j.reason);
     const drafts = await draftOutreach({ name: p.author.name, handle: p.author.username, postText: p.text, reason: j.reason, event: w.event, source: "x" });
     if (!drafts.ok) {
       checks.push({ name: "drafts_pass", pass: false, reason: `@${p.author.username}: ${drafts.failed.join(", ")}` });
@@ -196,12 +210,15 @@ export async function runMoFind(): Promise<{ shortlisted: number }> {
     const people = await linkedinCandidates(q.linkedin, q.themes).catch(() => []);
     for (const li of people) {
       if (shortlisted >= MO.shortlistPerRun) break;
-      if (!quoteIsTheirs(li.quote, li.headline) || !inCity(null, li.headline + " " + li.reason)) {
+      // The quote must come from what the result showed (headline or
+      // snippet); the place from the result's own location or text.
+      const shown = `${li.headline} ${li.snippet}`;
+      if (!quoteIsTheirs(li.quote, shown) || !(locationInCity(li.location) || (!li.location && inCity(null, shown)))) {
         checks.push({ name: "linkedin_grounded", pass: false, reason: li.url });
         continue;
       }
       if (await alreadyKnown(suppressionKeys({ linkedin_url: li.url }), null, li.url)) continue;
-      const drafts = await draftOutreach({ name: li.name, handle: null, postText: li.headline, reason: li.reason, event: w.event, source: "linkedin" });
+      const drafts = await draftOutreach({ name: li.name, handle: null, postText: shown, reason: li.reason, event: w.event, source: "linkedin" });
       if (!drafts.ok) continue;
       await pool.query(
         `INSERT INTO mo_prospects (source, name, linkedin_url, headline, post_text, reason, evidence_quote, draft_dm, draft_email_subject, draft_email_body, channel)

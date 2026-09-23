@@ -37,6 +37,44 @@ export function inCity(location: string | null, postText: string, city = MO.city
   return re.test(location ?? "") || re.test(postText);
 }
 
+// Where they are (2026-09-23 live run: posts that only mention SF in passing,
+// "after trips to SF", "from SF and Zurich", let in people in Switzerland,
+// Germany and LA). A profile location outside the city rules them out; a
+// profile location in the city is enough unless the judge says they're
+// elsewhere; with no location, the judge has to place them in the city.
+export function locationInCity(location: string | null, city = MO.city): boolean {
+  const re = CITY_WORDS[city] ?? new RegExp(`\\b${city.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}\\b`, "i");
+  return re.test(location ?? "");
+}
+export function placeOk(location: string | null, judgeSaysInCity: boolean | undefined, city = MO.city): boolean {
+  const loc = (location ?? "").trim();
+  if (loc && !locationInCity(loc, city)) return false;
+  if (loc) return judgeSaysInCity !== false;
+  return judgeSaysInCity === true;
+}
+
+// Name or "they", never a guessed "he" or "she" (standing rule). The judge is
+// told so; this catches what slips through in the reason approvers read.
+export function neutralPronouns(text: string): string {
+  const swaps: [RegExp, string][] = [
+    [/\b(he|she) is\b/gi, "they are"],
+    [/\b(he|she) was\b/gi, "they were"],
+    [/\b(he|she) has\b/gi, "they have"],
+    [/\b(he|she)'s\b/gi, "they're"],
+    [/\b(himself|herself)\b/gi, "themself"],
+    [/\b(his|hers)\b/gi, "their"],
+    [/\bher(?=\s+[a-z])/gi, "their"],
+    [/\b(him|her)\b/gi, "them"],
+    [/\b(he|she)\b/gi, "they"],
+  ];
+  let out = text;
+  for (const [re, to] of swaps) out = out.replace(re, (m) => (m[0] === m[0].toUpperCase() ? to[0].toUpperCase() + to.slice(1) : to));
+  return out;
+}
+export function hasGenderedPronoun(text: string): boolean {
+  return /\b(he|she|his|him|her|hers|himself|herself)\b/i.test(text);
+}
+
 // No member's name in anything Mo sends: the first name only counts when
 // it isn't also the prospect's own name or a word in their own post.
 export function namesAMember(text: string, members: { first: string; last: string | null }[], prospect: { name: string | null; postText: string }): string | null {

@@ -18,6 +18,10 @@ import {
   plainDone,
   quoteIsTheirs,
   suppressionKeys,
+  placeOk,
+  locationInCity,
+  neutralPronouns,
+  hasGenderedPronoun,
   MO,
 } from "../../src/mo/rules.js";
 import { oauthSignature } from "../../src/mo/xApi.js";
@@ -45,6 +49,32 @@ check("SF in their profile location counts", inCity("San Francisco, CA", "shippi
 check("SF in the post counts", inCity(null, post));
 check("no city signal, no invite", !inCity("Earth", "shipping a new thing today"));
 check("'sf' as a word, not inside another word", !inCity(null, "transforming onboarding flows"));
+
+// ------------------------------------------------ where they are (2026-09-23 live run)
+check("a profile location outside SF rules them out, whatever the post says", !placeOk("Switzerland", true) && !placeOk("la/chi", true) && !placeOk("New York", true));
+check("an SF profile location counts", placeOk("San Francisco, CA", undefined) && placeOk("SF", true));
+check("an SF location the judge says is wrong doesn't count", !placeOk("San Francisco, CA", false));
+check("no location: only if the judge places them in SF", placeOk(null, true) && !placeOk(null, false) && !placeOk(null, undefined) && !placeOk("", undefined));
+check("'Bay Area' and nearby cities count as SF", locationInCity("Oakland, CA") && locationInCity("Bay Area"));
+{
+  const f = src("mo/find.ts");
+  check("the judge is asked whether they're really in SF, not just mentioning it", /a passing mention like "after my trip to SF" doesn't count/.test(f) && /if \(!placeOk\(p\.author\.location, j\.inCity\)\)/.test(f));
+  check("LinkedIn quotes are checked against the headline AND the snippet shown", /quoteIsTheirs\(li\.quote, shown\)/.test(f) && /"snippet" \(the result's text as shown, copied exactly\)/.test(f));
+}
+
+// ------------------------------------------------ name or "they", never a guessed pronoun
+check("'He is personally hosting' becomes 'They are personally hosting'", neutralPronouns("He is personally hosting an in-person event.") === "They are personally hosting an in-person event.");
+check("'She's co-hosting with her team' becomes neutral", neutralPronouns("She's co-hosting with her team") === "They're co-hosting with their team");
+check("'bringing him in' becomes 'bringing them in'", neutralPronouns("worth bringing him in") === "worth bringing them in");
+check("words containing 'he' are left alone", neutralPronouns("the chess tournament he founded, then") === "the chess tournament they founded, then" && neutralPronouns("hosting the event") === "hosting the event");
+check("no gendered pronoun survives", !hasGenderedPronoun(neutralPronouns("He said his cofounder told him she'd host herself")));
+
+// ------------------------------------------------ drafts stay true to the post
+{
+  const d = src("mo/draft.ts");
+  check("every draft set is checked against the post and against each other", /const consistency = await checkDraftsAgainstPost\(i\.postText/.test(d) && /contradict the post or another message/.test(d));
+  check("if that check fails to run, the drafts are rejected (never sent unchecked)", /catch \{\s*return \{ ok: false, problem: "check failed" \};/.test(d));
+}
 
 // ------------------------------------------------ member names never leave
 const members = [{ first: "Jordan", last: "Reyes" }, { first: "Ellis", last: null }];
