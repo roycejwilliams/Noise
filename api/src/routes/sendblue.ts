@@ -15,7 +15,6 @@ import type { Server } from "socket.io";
 import pool from "../db/db.js";
 import { withAdvisoryLock } from "../db/advisoryLock.js";
 import { sendSMS } from "../otpActions.js";
-import { renderCoPersonaPrompt } from "../services/coPersona.js";
 import elevenlabs from "../services/elevenlabs.js";
 import { generateEmbedding } from "../services/embeddings.js";
 import { detectSeekingMode } from "../services/emotionalTone.js";
@@ -2744,7 +2743,9 @@ Return ONLY valid JSON, no preamble: {"date": "YYYY-MM-DD or null", "time": "HH:
           // stay genuinely in sync rather than each maintaining their own
           // summary of the same underlying profile.
           const contextSummary = await buildContextSummary(user.id);
-          const personaPrompt = await renderCoPersonaPrompt(user.first_name, contextSummary);
+          // Texts no longer carry the call guide (agent/conversationReply.ts,
+          // 2026-09-24), so it isn't fetched from Hume on every text.
+          const personaPrompt = null;
 
           // Step 6 — Decide + send Co's reply via the conversation-reply
           // agent (agent/conversationReply.ts). Replaces the old fixed
