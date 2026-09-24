@@ -178,6 +178,52 @@ ${emotionalHighlights ? `\nHume's voice analysis of how they sounded (measured, 
 Return ONLY the summary, no preamble.`;
 }
 
+// "They" for the member only (code review, 2026-09-24): neutralizing every
+// pronoun turned "Their cofounder Maya is leaving. She is nervous." into
+// "They are nervous", pinning Maya's news on the member, and summaries now
+// name more people. A pronoun is only rewritten while the member is the last
+// person the summary named; once someone else is named, it's left alone
+// until the member's name comes back.
+const NOT_A_PERSON = new Set(
+  "the they their them he she his her it its this that these those a an on in at after before when while during and but so both co i also overall then we you our there by for with without as if one some most".split(" ")
+    .concat("monday tuesday wednesday thursday friday saturday sunday january february march april may june july august september october november december".split(" ")),
+);
+const RELATION = /\b(co-?founders?|partners?|wife|husband|girlfriend|boyfriend|fianc[eé]e?|mom|mother|dad|father|sisters?|brothers?|friends?|boss|manager|colleagues?|coworkers?|sons?|daughters?|roommates?|kids?|investors?)\b/i;
+const PLACE_OR_COMPANY_BEFORE = /\b([Aa]t|[Ii]n|[Ff]rom|to|near|into|of|for|about|via|using|joined|joining|building|built|founded|launched|started|called|named)\s+(the\s+)?([A-Z][\w.'&-]*\s+)*$/;
+function namesSomeoneElse(chunk: string, memberNames: string[]): number {
+  let first = -1;
+  for (const m of chunk.matchAll(/\b[A-Z][A-Za-z'.]*[a-z]\b/g)) {
+    const w = m[0].toLowerCase().replace(/'s$/, "");
+    if (NOT_A_PERSON.has(w) || memberNames.includes(w)) continue;
+    // Companies and places aren't a "he" or "she": "Lythe.ai", "at Stripe",
+    // "in Austin", "building Sangria".
+    if (/[.\d]/.test(w) || PLACE_OR_COMPANY_BEFORE.test(chunk.slice(0, m.index!))) continue;
+    first = m.index!;
+    break;
+  }
+  const rel = chunk.search(RELATION);
+  if (rel >= 0 && (first < 0 || rel < first)) first = rel;
+  return first;
+}
+export function neutralMemberPronouns(text: string, memberFirstName: string | null): string {
+  const memberNames = (memberFirstName ?? "").toLowerCase().split(/\s+/).map((n) => n.replace(/[^a-z0-9]/g, "")).filter(Boolean);
+  const namesMember = (s: string) => memberNames.some((n) => new RegExp(`\\b${n}\\b`, "i").test(s));
+  let aboutMember = true;
+  return text
+    .split(/(?<=[.!?])\s+/)
+    .map((sentence) => {
+      if (namesMember(sentence)) aboutMember = true;
+      const other = namesSomeoneElse(sentence, memberNames);
+      if (other < 0) return aboutMember ? neutralPronouns(sentence) : sentence;
+      // Up to the other person's mention it can still be about the member
+      // ("Royce said his cofounder Maya..." keeps "their cofounder").
+      const head = aboutMember ? neutralPronouns(sentence.slice(0, other)) : sentence.slice(0, other);
+      aboutMember = false;
+      return head + sentence.slice(other);
+    })
+    .join(" ");
+}
+
 export async function summarizeCallForTextContext(userId: string, transcript: string, emotionalHighlights?: string): Promise<void> {
   try {
     const { text: raw } = await generateText({
@@ -187,7 +233,11 @@ export async function summarizeCallForTextContext(userId: string, transcript: st
     });
     // The prompt already says "they"; the model still wrote "he" on all
     // three runs of a real call (2026-09-23), so it's enforced in code.
-    const summary = neutralPronouns(raw.trim());
+    const firstName = await pool
+      .query(`SELECT first_name FROM users WHERE id = $1`, [userId])
+      .then((r) => (r.rows[0]?.first_name as string | undefined) ?? null)
+      .catch(() => null);
+    const summary = neutralMemberPronouns(raw.trim(), firstName);
     if (!summary) return;
     await writeMemory(userId, "text_exchange", `[Call] ${summary}`);
   } catch (err: any) {

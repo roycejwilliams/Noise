@@ -263,7 +263,13 @@ function createHumeConnection(userId: string, callSid: string | null = null): Hu
           }
         } else if (m.type === "error") {
           console.error("mediaStreamBridge: Hume reported an error:", m);
-          noteCallFailure(handle.userId, (m as any).slug ?? (m as any).code ?? null);
+          // Only when the call never got going (code review, 2026-09-24):
+          // Hume can send an error mid-call on a call that works, and that
+          // used to have the next two hours of replies blaming a failure
+          // that didn't happen.
+          if (!handle.coHasSpoken && !handle.receivedUserMessage) {
+            noteCallFailure(handle.userId, (m as any).slug ?? (m as any).code ?? null);
+          }
         } else if (m.type === "user_message") {
           // Ground truth that a live human is actually talking — see
           // hasReceivedRealSpeech above. Fixed 2026-09-17: only counts once

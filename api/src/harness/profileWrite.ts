@@ -23,6 +23,7 @@
 // for this turn. Don't also call captureIntent separately for the same text.
 import type { GateCheck } from "./core.js";
 import { MODELS } from "../models.js";
+import { coAskedQuestion } from "../services/conversationClose.js";
 
 // Local copy so this file (and its eval) doesn't pull in a DB-backed module.
 export function cosineSimilarity(a: number[], b: number[]): number {
@@ -426,12 +427,28 @@ const ECHO_STOPWORDS = new Set(["with", "that", "this", "what", "your", "have", 
 function itemWords(s: string): string[] {
   return [...new Set((s.toLowerCase().match(/[a-z]{4,}/g) ?? []).filter((w) => !ECHO_STOPWORDS.has(w)))];
 }
+// A plain yes to what Co just asked or offered. Code review, 2026-09-24: "Want
+// me to look for founder communities in SF?" / "Yes please" was dropped as
+// Co's echo, so an ask they agreed to was never saved or searched.
+const AGREES = /^\s*(user said:|user:)\s*(yes|yeah|yep|yup|sure|please|definitely|absolutely|for sure|of course|that would be|that'?d be|sounds (good|great)|i'?d (like|love) that|let'?s do (it|that))\b/i;
 export function splitSpeakers(transcript: string): { theirs: string; cos: string } {
   const theirs: string[] = [];
   const cos: string[] = [];
+  let lastCo: string | null = null;
   for (const line of transcript.split("\n")) {
-    if (/^\s*(co replied:|assistant:|co:)/i.test(line)) cos.push(line);
-    else if (/^\s*(user said:|user:)/i.test(line)) theirs.push(line);
+    if (/^\s*(co replied:|assistant:|co:)/i.test(line)) {
+      cos.push(line);
+      lastCo = line;
+    } else if (/^\s*(user said:|user:)/i.test(line)) {
+      theirs.push(line);
+      // Co's question or offer they said yes to is theirs too.
+      if (lastCo && coAskedQuestion(lastCo) && AGREES.test(line)) theirs.push(lastCo);
+      lastCo = null;
+    } else if (lastCo && line.trim() && !line.startsWith("[")) {
+      // A text's later paragraphs are part of the same Co message.
+      cos.push(line);
+      lastCo += ` ${line}`;
+    }
   }
   return { theirs: theirs.join(" ").toLowerCase(), cos: cos.join(" ").toLowerCase() };
 }

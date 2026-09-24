@@ -29,6 +29,19 @@ const again = dropRepeatedQuestion("Fair enough, that's on my side.\n\nVenue lis
 check("#4 the same question isn't asked a third time", !/\?/.test(again) && again.startsWith("Fair enough, that's on my side."));
 check("#4 a new question still goes out", dropRepeatedQuestion("Glad that's sorted. How did the permit call go?", convo) === "Glad that's sorted. How did the permit call go?");
 check("#4 a reply that's only the repeated question is left alone (never empty)", dropRepeatedQuestion("Want to start with the venue types to call?", convo) === "Want to start with the venue types to call?");
+{
+  // Code review 2026-09-24: Co's texts are paragraphs; the question is in the last one.
+  const paras = `User said: Try again
+Co replied: Weird, not sure why it's not connecting.
+
+Want to start with the venue types to call, or the questions to ask when you get someone on the phone?
+User said: What's breaking?`;
+  check("#4 a question in a later paragraph of Co's text counts as asked", !/\?/.test(dropRepeatedQuestion("That's on my side.\n\nWant to start with the venue types to call, or the questions to ask?", paras)));
+  check("#4 a gap marker ends Co's message", dropRepeatedQuestion("Ok. Want to start with the venue types to call?", "Co replied: hi\n[— 2 hours later —]\nWant to start with the venue types to call?") === "Ok. Want to start with the venue types to call?");
+  const short = "Co replied: Nice. How's the permit going?\nUser said: slow";
+  const longer = "Got it, that sounds slow. How's the permit going, and did the venue get back about the Saturday date?";
+  check("#4 a new question that only contains an earlier short one still goes out", dropRepeatedQuestion(longer, short) === longer);
+}
 check("#4 no earlier question, nothing changes", dropRepeatedQuestion("Want to start with the venue types to call?", "User said: hi") === "Want to start with the venue types to call?");
 const stripped = stripUnsupported(
   "Nothing's changed on my end that I'd call an upgrade, so not sure what you mean by that.\n\nLet's not lose the 18 days we've got though. Want to start with the venue types?",
@@ -42,6 +55,7 @@ const rg = src("harness/replyGrounding.ts");
 check("#4 the fact check strips with both checks' failures", /const allFailed = \[\.\.\.effectiveFailed1, \.\.\.\(secondFailed \?\? \[\]\)\];/.test(rg) && /stripUnsupported\(draft, allFailed\)/.test(rg));
 check("#4 a failed call's real reason reaches the reply", /memory_type = 'call_failure'/.test(rg) && /the problem is on your side, not their phone/.test(rg));
 const bridge = src("services/mediaStreamBridge.ts");
+check("#4 a Hume error is only a failed call when the call never got going", /if \(!handle\.coHasSpoken && !handle\.receivedUserMessage\) \{\n\s+noteCallFailure/.test(bridge));
 check("#4 a Hume error on a call is noted in plain words, once per 10 min", /noteCallFailure\(handle\.userId/.test(bridge) && /a problem with Co's own voice setup/.test(bridge) && /INTERVAL '10 minutes'/.test(bridge));
 check("#4 the reply is told to follow where they went", /If they moved on from a question you asked, go where they went; don't ask it again\./.test(src("agent/conversationReply.ts")));
 
@@ -58,6 +72,13 @@ user: Honestly, just a friend. somebody they can kinda go through battles with a
   check("#2 their real ask is kept", !echoesCoNotMember("Looking to connect with down to earth, laid back people without inflated egos in the tech space", call));
   check("#2 their real want is kept", !echoesCoNotMember("people to go through battles with and depend on", call));
   check("#2 something both said is kept", !echoesCoNotMember("building with like minded individuals", call));
+  // Code review 2026-09-24: an ask they said yes to is theirs.
+  const agreed = `assistant: Want me to look for founder communities in SF?
+user: Yes please`;
+  check("#2 Co's offer they said yes to is kept", !echoesCoNotMember("founder communities in SF", agreed));
+  check("#2 a yes by text counts too", !echoesCoNotMember("founder communities in SF", "Co replied: Nice.\n\nShould I look for founder communities in SF?\nUser said: yeah that'd be great"));
+  check("#2 'okay' to Co's own plan is still not their want", echoesCoNotMember("founder communities in SF", "assistant: I'll dig into founder communities in SF after this.\nuser: sure"));
+  check("#2 a no isn't agreement", echoesCoNotMember("founder communities in SF", "assistant: Want me to look for founder communities in SF?\nuser: nah not really"));
   check("#2 a text turn with no Co line is never filtered", !echoesCoNotMember("founder communities in SF", "user: looking for founder communities in SF"));
   const pe = src("services/profileExtraction.ts");
   check("#2 captureIntent filters asks, wants and preferences", /const mine = \(x: unknown\) => typeof x === "string" && !echoesCoNotMember\(x, transcript\);/.test(pe) && /\.filter\(\(a\) => mine\(a\.text\)\)/.test(pe));
@@ -72,6 +93,7 @@ user: Honestly, just a friend. somebody they can kinda go through battles with a
   const sweep = src("services/eventSurfacingSweep.ts");
   check("#1 a sent offer for a promise doesn't touch ask_checkins", /\} else if \(!askId\.startsWith\(PROMISE_ASK_PREFIX\)\) \{/.test(sweep));
   const pc = src("jobs/postCallFollowUp.ts");
+  check("#1 promise results are tied to this call's row, not a fixed window from now", /f\.id = \$2/.test(pc) && /m\.created_at > f\.created_at - INTERVAL '30 minutes'/.test(pc) && !/INTERVAL '6 hours'/.test(pc));
   check("#1 the after-call text hears what the promise turned up", /what_co_said_it_would_look_into:/.test(pc) && /memory_type = 'promise_result'/.test(pc) && /without promising to keep looking/.test(pc));
 }
 
@@ -86,8 +108,14 @@ user: Honestly, just a friend. somebody they can kinda go through battles with a
   check("#3 how the call ended comes from their words, not a voice reading", /How the call ended comes only from what they said at the end, never from a voice reading/.test(sp) && /never what they wanted or meant/.test(sp));
   check("#5 named companies, people, dates and plans come first", /Lead with the concrete facts they gave/.test(sp) && /Keep every named company and person they mentioned/.test(sp));
   check("#5 spelled-out names are written as names", /"l y t h e dot a i" is lythe\.ai/.test(sp));
-  const { neutralPronouns } = await import("../../src/mo/rules.js");
-  check("#5 summaries never guess pronouns", neutralPronouns("Royce discussed his startup. He sounded tired.") === "Royce discussed their startup. They sounded tired." && /const summary = neutralPronouns\(raw\.trim\(\)\);/.test(src("services/callContext.ts")));
+  const { neutralMemberPronouns } = await import("../../src/services/callContext.js");
+  check("#5 summaries never guess the member's pronouns", neutralMemberPronouns("Royce discussed his startup. He sounded tired.", "Royce") === "Royce discussed their startup. They sounded tired." && /const summary = neutralMemberPronouns\(raw\.trim\(\), firstName\);/.test(src("services/callContext.ts")));
+  // Code review 2026-09-24: someone else's news isn't pinned on the member.
+  check("#5 another person's pronoun is left alone", neutralMemberPronouns("Royce talked about their cofounder Maya. She is leaving the company.", "Royce") === "Royce talked about their cofounder Maya. She is leaving the company.");
+  check("#5 the member's own pronoun before the other person is still fixed", neutralMemberPronouns("Royce said his cofounder Maya is leaving.", "Royce").startsWith("Royce said their cofounder Maya"));
+  check("#5 naming the member again brings 'they' back", neutralMemberPronouns("Maya is leaving. Royce sounded worried about it, and he wants a new partner.", "Royce") === "Maya is leaving. Royce sounded worried about it, and they want a new partner." || neutralMemberPronouns("Maya is leaving. Royce sounded worried about it, and he wants a new partner.", "Royce").includes("and they"));
+  check("#5 a company or place isn't another person", neutralMemberPronouns("Royce is building Lythe.ai with a partnership at Sangria in San Francisco. He sounded excited.", "Royce").endsWith("They sounded excited."));
+  check("#5 unknown name still neutralizes a summary about only them", neutralMemberPronouns("He sounded tired.", null) === "They sounded tired.");
 }
 
 // ---------------------------------------------------------------- run-ons and stutters on the call

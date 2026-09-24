@@ -55,11 +55,22 @@ export async function draftPostCall(userId: string, firstName: string, followUpI
   if (!transcript) return null;
   const contextSummary = await buildContextSummary(userId).catch(() => "");
   // What came of anything Co said on the call it would look into
-  // (harness/callGrounding.ts keepCallPromise), 2026-09-23.
+  // (harness/callGrounding.ts keepCallPromise), 2026-09-23. Tied to this
+  // call's row, not to now (code review, 2026-09-24: a fixed 6-hour window
+  // missed every result when the text waited past quiet hours, and it can
+  // be sent up to 24h after the call). The audit starts as the call is
+  // processed, so its results land from a little before this row onward.
   const { rows: promised } = await pool
     .query(
-      `SELECT content FROM co_memories WHERE user_id = $1 AND memory_type = 'promise_result' AND created_at > NOW() - INTERVAL '6 hours' ORDER BY created_at`,
-      [userId],
+      `SELECT m.content FROM co_memories m, post_call_follow_ups f
+       WHERE f.id = $2 AND m.user_id = $1 AND m.memory_type = 'promise_result'
+         AND m.created_at > f.created_at - INTERVAL '30 minutes'
+         AND m.created_at < COALESCE(
+           (SELECT MIN(n.created_at) FROM post_call_follow_ups n WHERE n.user_id = $1 AND n.created_at > f.created_at),
+           'infinity'::timestamptz
+         ) - INTERVAL '30 minutes'
+       ORDER BY m.created_at`,
+      [userId, followUpId],
     )
     .catch(() => ({ rows: [] as any[] }));
   return draftPostCallText(firstName, transcript, contextSummary, promised.map((r: any) => String(r.content)));
