@@ -26,6 +26,7 @@ import { reportUnfinishedTurns, sendblueRouter } from "../../api/src/routes/send
 import { serveInvitePage } from "../../api/src/routes/invitePage.js";
 import { createLumaRouter } from "../../api/src/routes/luma.js";
 import { registerJobs } from "../../api/src/jobs/index.js";
+import { installGracefulShutdown, trackRequests } from "../../api/src/services/shutdown.js";
 
 // A fresh Railway Postgres has none of brew_dev's tables yet — runMigrations()
 // (imported unchanged from api/) only ever does ALTER TABLE / CREATE TABLE IF
@@ -51,6 +52,7 @@ async function main() {
   runTestMigrations();
 
   const app = express();
+  app.use(trackRequests); // a restart waits for requests mid-flight (services/shutdown.ts)
   // Hume's webhook signature is an HMAC over the exact raw body string — a
   // re-serialized/parsed-then-stringified body isn't guaranteed byte-identical
   // to what Hume actually signed. Must run before express.json() below.
@@ -194,6 +196,7 @@ async function main() {
 
   const port = process.env.PORT ? Number(process.env.PORT) : 3000;
   httpServer.listen(port, () => console.log(`co-test listening on ${port}`));
+  installGracefulShutdown(httpServer);
 }
 
 main().catch((err) => {

@@ -101,6 +101,13 @@ export async function runMigrations(): Promise<void> {
     )
     .catch((err: Error) => console.error("event_presence table init failed:", err));
 
+  // True between claiming the day-of ask and it actually going out, so a
+  // server killed in between leaves a marker that services/strandedClaims.ts
+  // clears for a retry (2026-09-24). Old rows default to false: already sent.
+  await pool
+    .query(`ALTER TABLE event_presence ADD COLUMN IF NOT EXISTS ask_pending BOOLEAN NOT NULL DEFAULT false`)
+    .catch((err: Error) => console.error("event_presence.ask_pending migration failed:", err));
+
   // A heads-up about an event Co doesn't run names no one until both people
   // say yes (2026-09-23): marks those nudges so replies never name the other
   // person early.
@@ -900,6 +907,12 @@ export async function runMigrations(): Promise<void> {
       )`,
     )
     .catch((err: Error) => console.error("event_guest_match_nudges table init failed:", err));
+
+  // Same idea for the in-room match nudge claim (2026-09-24): true from the
+  // claim until the text is sent.
+  await pool
+    .query(`ALTER TABLE event_guest_match_nudges ADD COLUMN IF NOT EXISTS pending BOOLEAN NOT NULL DEFAULT false`)
+    .catch((err: Error) => console.error("event_guest_match_nudges.pending migration failed:", err));
 
   // Double opt-in handoff (Royce, 2026-09-07: "should Co make a group chat
   // once they've been opted in" + "not replying until it's asked a

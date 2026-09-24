@@ -1,4 +1,4 @@
-import cron from "node-cron";
+import cron from "./cron.js";
 import { sendDueCoEventAnnouncements } from "../services/coEventAnnouncement.js";
 import { DateTime } from "luxon";
 import type { Server } from "socket.io";
@@ -10,6 +10,7 @@ import { attemptEventSurfacing, PROFILE_ASK_ID } from "../services/eventSurfacin
 import { attemptNetworkSurfacing } from "../services/networkIntroNudge.js";
 import { scoreGuestListForEvent } from "../services/eventScoring.js";
 import { runArrivalAsks, runPresencePoll } from "../services/eventPresence.js";
+import { releaseStrandedClaims } from "../services/strandedClaims.js";
 import { listCalendarEvents, getEventDetails } from "../services/luma.js";
 import { triggerCallForUser } from "../services/callTrigger.js";
 import { enqueueDuePostCallFollowUps } from "./postCallFollowUp.js";
@@ -549,6 +550,13 @@ export function registerJobs(io: Server) {
     } catch (error) {
       console.error("In-room match nudge retry cron error:", error);
     }
+  });
+
+  // Frees arrival asks and match nudges a restart or crash marked as sent
+  // without sending (services/strandedClaims.ts), so the runs above and
+  // below retry them.
+  cron.schedule("*/5 * * * *", async () => {
+    await releaseStrandedClaims();
   });
 
   // Day-of arrival ask (services/eventPresence.ts, 2026-09-23): from 10am

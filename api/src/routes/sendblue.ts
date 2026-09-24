@@ -82,6 +82,7 @@ import { enrichMatch, renderEventDetails } from "../services/eventDetails.js";
 import { refreshPersonSnapshot } from "../harness/personSnapshot.js";
 import { recordSuggestionOutcome, resultFromNamedOutcome } from "../services/outcomes.js";
 import { sendLateSearchResult } from "../services/lateSearchResult.js";
+import { track } from "../services/shutdown.js";
 
 // Serializes webhook processing per phone number. Without this, two
 // messages sent seconds apart from the same person can be handled
@@ -2862,11 +2863,8 @@ Return ONLY valid JSON, no preamble: {"date": "YYYY-MM-DD or null", "time": "HH:
       };
 
       try {
-        if (lockKey) {
-          await withPhoneLock(lockKey, run);
-        } else {
-          await run();
-        }
+        // Tracked so a restart waits for a reply mid-draft (services/shutdown.ts).
+        await track(lockKey ? withPhoneLock(lockKey, run) : run());
       } finally {
         if (typeof handle === "string" && handle && !req.body?.is_outbound && req.body?.type !== "typing") {
           pool.query(`UPDATE inbound_webhook_handles SET finished_at = NOW() WHERE handle = $1`, [handle]).catch(() => {});

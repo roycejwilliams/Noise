@@ -11,6 +11,7 @@ import { Server } from "socket.io";
 import { WebSocketServer } from "ws";
 import { runMigrations } from "./db/migrations.js";
 import { registerJobs } from "./jobs/index.js";
+import { installGracefulShutdown, trackRequests } from "./services/shutdown.js";
 import { authenticateToken } from "./middleware/auth.js";
 import { corsOptions } from "./middleware/cors.js";
 import { errorHandler } from "./middleware/errorHandler.js";
@@ -36,6 +37,7 @@ import { createMoRouter } from "./routes/mo.js";
 
 const app = express();
 app.set("trust proxy", 1);
+app.use(trackRequests); // a restart waits for requests mid-flight (services/shutdown.ts)
 const port = process.env.PORT ?? "8080";
 
 const httpServer = createServer(app);
@@ -155,6 +157,7 @@ migrationsReady
     httpServer.listen(port, () => {
       console.log(`Listening on port: ${port}`);
     });
+    installGracefulShutdown(httpServer);
   })
   .catch((err) => {
     console.error("Migrations failed — server not starting:", err);

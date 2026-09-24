@@ -276,8 +276,8 @@ export async function markMatchNudgeSent(eventId: string, personId: string, cand
 async function tryClaimMatchNudge(eventId: string, personId: string, candidateId: string, score: number): Promise<boolean> {
   const { rows } = await pool
     .query(
-      `INSERT INTO event_guest_match_nudges (event_id, person_id, candidate_id, score)
-       VALUES ($1, $2, $3, $4)
+      `INSERT INTO event_guest_match_nudges (event_id, person_id, candidate_id, score, pending)
+       VALUES ($1, $2, $3, $4, true)
        ON CONFLICT (event_id, person_id) DO NOTHING RETURNING event_id`,
       [eventId, personId, candidateId, score],
     )
@@ -416,6 +416,10 @@ async function maybeSendMatchNudge(
       return false;
     }
 
+    // Sent: the claim is no longer at risk of being stranded (strandedClaims.ts).
+    await pool
+      .query(`UPDATE event_guest_match_nudges SET pending = false WHERE event_id = $1 AND person_id = $2`, [eventId, person.user_id])
+      .catch((err: any) => console.error("eventScoring: clearing pending failed (non-fatal):", err?.message ?? err));
     await recordInRoomSend(person.user_id, `in_room:match:${eventId}`, message);
     // No markMatchNudgeSent call needed here — the claim above already
     // wrote the row with the final candidate_id/score.

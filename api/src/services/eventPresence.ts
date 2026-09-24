@@ -244,8 +244,8 @@ export async function runArrivalAsks(now = new Date()): Promise<number> {
     for (const m of await eventMembers(event.api_id)) {
       // Claim first, so two runs never both ask.
       const { rows } = await pool.query(
-        `INSERT INTO event_presence (event_api_id, user_id, asked_at) VALUES ($1, $2, NOW())
-         ON CONFLICT (event_api_id, user_id) DO UPDATE SET asked_at = NOW() WHERE event_presence.asked_at IS NULL
+        `INSERT INTO event_presence (event_api_id, user_id, asked_at, ask_pending) VALUES ($1, $2, NOW(), true)
+         ON CONFLICT (event_api_id, user_id) DO UPDATE SET asked_at = NOW(), ask_pending = true WHERE event_presence.asked_at IS NULL
          RETURNING user_id`,
         [event.api_id, m.user_id],
       );
@@ -254,9 +254,10 @@ export async function runArrivalAsks(now = new Date()): Promise<number> {
         await sendblue.messages.send({ number: m.phone_number, content: message, from_number: process.env.SENDBLUE_PHONE_NUMBER! });
       } catch (err: any) {
         console.error(`eventPresence: arrival ask failed for ${m.user_id} (non-fatal):`, err?.message ?? err);
-        await pool.query(`UPDATE event_presence SET asked_at = NULL WHERE event_api_id = $1 AND user_id = $2`, [event.api_id, m.user_id]).catch(() => {});
+        await pool.query(`UPDATE event_presence SET asked_at = NULL, ask_pending = false WHERE event_api_id = $1 AND user_id = $2`, [event.api_id, m.user_id]).catch(() => {});
         continue;
       }
+      await pool.query(`UPDATE event_presence SET ask_pending = false WHERE event_api_id = $1 AND user_id = $2`, [event.api_id, m.user_id]).catch(() => {});
       sent++;
       // In the ledger so the daily caps and spacing see it; its key keeps it
       // out of the per-event in-room count (the nudges still get all three).
