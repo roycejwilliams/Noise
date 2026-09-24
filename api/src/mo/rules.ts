@@ -154,6 +154,9 @@ export function clearYes(text: string): boolean {
 
 export type ProspectClock = {
   status: string;
+  // No post to reply to (LinkedIn): skip the warm-up and go straight to
+  // reaching out.
+  hasPost?: boolean;
   channel: string | null;
   warmedAt: Date | null;
   contactedAt: Date | null;
@@ -166,7 +169,7 @@ export type NextStep = "warm" | "contact" | "follow_up" | "close_silent" | null;
 
 export function nextOutreachStep(p: ProspectClock, now: Date): NextStep {
   const days = (d: Date | null) => (d ? (now.getTime() - d.getTime()) / 86400_000 : Infinity);
-  if (p.status === "approved" && !p.warmedAt) return "warm";
+  if (p.status === "approved" && !p.warmedAt) return p.hasPost === false ? "contact" : "warm";
   if (p.status === "warmed" && days(p.warmedAt) >= MO.warmToDmDays) return "contact";
   if (p.status === "contacted" && p.channel !== "manual" && !p.followedUpAt && !p.lastInboundAt && days(p.contactedAt) >= MO.followUpAfterDays) return "follow_up";
   if (p.status === "contacted" && p.followedUpAt && !p.lastInboundAt && days(p.followedUpAt) >= MO.closeAfterFollowUpDays) return "close_silent";

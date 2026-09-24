@@ -241,9 +241,14 @@ export async function runMoFind(): Promise<{ shortlisted: number }> {
       const drafts = await draftOutreach({ name: li.name, handle: null, postText: shown, reason: li.reason, event: w.event, source: "linkedin", style });
       if (!drafts.ok) continue;
       await pool.query(
+        // post_text keeps what the result actually showed (headline and
+        // snippet), not the headline alone: the drafts were checked against
+        // both, so a later redraft (an approver's edit) needs both too
+        // (2026-09-24: "Build Bar" came from the snippet and a redraft was
+        // rejected as inventing it).
         `INSERT INTO mo_prospects (source, name, linkedin_url, headline, post_text, reason, evidence_quote, draft_dm, draft_email_subject, draft_email_body, channel, dm_style, draft_why)
-         VALUES ('linkedin', $1, $2, $3, $3, $4, $5, $6, $7, $8, 'manual', $9, $10) ON CONFLICT DO NOTHING`,
-        [li.name, li.url, li.headline, li.reason, li.quote, drafts.dm, drafts.emailSubject, drafts.emailBody, style, drafts.why],
+         VALUES ('linkedin', $1, $2, $3, $11, $4, $5, $6, $7, $8, NULL, $9, $10) ON CONFLICT DO NOTHING`,
+        [li.name, li.url, li.headline, li.reason, li.quote, drafts.dm, drafts.emailSubject, drafts.emailBody, style, drafts.why, shown],
       );
       shortlisted++;
     }

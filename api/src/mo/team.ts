@@ -102,7 +102,7 @@ export function prospectStatusLine(p: any): string {
     case "question": return `${n} wrote back with a question, and it's waiting on your answer.`;
     case "invited": return `${n} said yes and has their invite, but hasn't joined yet.`;
     case "joined": return `${n} joined${p.joined_at ? ` on ${fmtDay(p.joined_at)}` : ""}. They're Co's now.`;
-    case "manual_pending": return `${n} is only on LinkedIn; the note is waiting for you to send it.`;
+    case "manual_pending": return `${n} is only on LinkedIn; I'm reaching out by email from Co if I can find a public address.`;
     case "declined": return `${n} said no thanks, so I won't reach out again.`;
     case "skipped": return `You passed on ${n}, so they won't come up again.`;
     case "unreachable": return `I couldn't reach ${n}: DMs are closed and there's no public email.`;
@@ -241,20 +241,17 @@ export async function moStatusText(approverFirst: string | null): Promise<string
 // Mo's own description of what it does, for "Mo, what can you do?" and the
 // team update. Every line is something built.
 export function moCapabilitiesText(approverFirst: string | null): string {
+  // Short on purpose (Royce, 2026-09-24: "Mo explanations may be a little
+  // bit too long"). Every line is something built.
   return [
-    `${MO_RULES.opener(approverFirst)} Here's what I do and how to use me.`,
+    `${MO_RULES.opener(approverFirst)} Here's how I work.`,
     "",
-    `Every Monday I search X, plus LinkedIn through public web results, for people in SF who should be in Co, steered by what Co tells me the network's short on (never who's asking).`,
-    `Each morning I bring you one person at a time: what they wrote, why I think they fit, and what I'd send. Just answer yes, no, or what to change.`,
-    `Once you say yes, Co replies to their post and I DM them a few days later as Mo, in one of two styles Jacqueline wrote, so we can see which lands. If they say yes, they get the invite; if they ask something, I bring it to you and send your answer word for word.`,
-    `People who are only on LinkedIn get a note from you instead: I send it to you to post, with their invite.`,
-    `When someone I found joins, I tell you. From then on they're Co's.`,
+    `Mondays I search X and LinkedIn for people in SF who should be in Co, based on what Co says the network's short on.`,
+    `Mornings I bring you one person at a time. Answer yes, no, or what to change.`,
+    `On a yes I reach out as Mo, on Co's behalf. You never send anything.`,
+    `If someone asks a question, I bring it to you. When someone joins, I tell you.`,
     "",
-    `Text me any time starting with "Mo":`,
-    `"Mo, what did you find?" for where things stand`,
-    `"Mo, how's Noor?" for one person`,
-    `"Mo, find me designers who host events" to steer my next search`,
-    `"Mo, pause" or "Mo, back on"`,
+    `Text "Mo," plus: "what did you find?", "how's Noor?", "find me designers", "pause" or "back on".`,
   ].join("\n");
 }
 

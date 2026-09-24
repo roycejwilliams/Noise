@@ -1453,6 +1453,12 @@ export async function runMigrations(): Promise<void> {
       ),
     )
     .catch((err: Error) => console.error("mo team tables init failed:", err));
+  // The team never sends anything by hand (Royce, 2026-09-24): anyone left
+  // waiting on an approver to post a LinkedIn note goes back into Mo's own
+  // outreach (an email from Co if there's a public address).
+  await pool
+    .query(`UPDATE mo_prospects SET status = 'approved', channel = NULL, updated_at = NOW() WHERE status = 'manual_pending'`)
+    .catch((err: Error) => console.error("mo manual_pending cleanup failed:", err));
 
   // Kinds of things a member told Co to stop suggesting ("no more
   // hackathons", 2026-09-22). Turning down one event only ever blocked that

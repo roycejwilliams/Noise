@@ -220,23 +220,25 @@ check(
   check("says nothing goes out without keys", /nothing goes out/.test(noKeys));
   check("says email isn't set up when only X is", /Email isn't set up/.test(xOnly));
   const p = { no: 3, source: "x", x_handle: "noor", name: "Noor Haddad", reason: "Hosts small builder dinners.", evidence_quote: "design-engineer dinner in the Mission", post_url: "https://x.com/noor/status/1", linkedin_url: null, draft_reply: "Great filter.", draft_dm: "Want an invite?" };
-  const t = reviewText(p, 2, "Royce");
-  check("the review says it's Mo, greets them, and names the person plainly", t.startsWith("Hey Royce, it's Mo. Found someone worth a look (1 of 2): Noor Haddad (@noor) on X."));
-  check("without a name on file it still says it's Mo", reviewText(p, 1).startsWith("It's Mo. Found someone worth a look: Noor Haddad (@noor) on X."));
-  check("the review shows their exact words, labeled", t.includes('They wrote: "design-engineer dinner in the Mission"'));
-  check("the review links the real post", t.includes("https://x.com/noor/status/1"));
-  check("the review shows exactly what Co would send", t.includes('My plan: Co replies to their post with "Great filter.", then I DM them a few days later: "Want an invite?"'));
-  check("Mo gives its own read", t.includes("Why I think they'd fit: Hosts small builder dinners."));
-  check("the review ends with one plain question", t.trim().endsWith("Want me to go for it? Yes, no, or tell me what to change."));
+  const { reviewMessages, firstSentence } = await import("../../src/mo/review.js");
+  const m = reviewMessages(p, 2, "Royce");
+  const t = m.join("\n\n");
+  check("tier format: the link comes first, on its own (so it shows a preview)", m[0] === "https://x.com/noor/status/1");
+  check("tier format: then one line on who, what they wrote, and why", m[1] === `Hey Royce, it's Mo. Noor Haddad (@noor) on X, 1 of 2. They wrote: "design-engineer dinner in the Mission" Hosts small builder dinners.`);
+  check("tier format: then exactly what would go out", m[2] === 'Co replies to their post: "Great filter."\n\nThen I DM them: "Want an invite?"');
+  check("tier format: one question last, on its own", m[3] === "Want me to go for it? Yes, no, or tell me what to change." && m.length === 4);
+  check("without a name on file it still says it's Mo", reviewMessages(p, 1)[1].startsWith("It's Mo. Noor Haddad (@noor) on X. They wrote:"));
+  check("short: Mo's reason is cut to one sentence", firstSentence("Hosts dinners. Also runs a newsletter and a podcast.") === "Hosts dinners." && firstSentence("x ".repeat(200)).length <= 180);
+  check("curious style shows the why they'd get", reviewMessages({ ...p, dm_style: "curious", draft_why: "You host rooms like that." }, 1)[2].endsWith('If they ask why: "You host rooms like that."'));
   check("no #numbers or codes in what approvers read", !/#\d/.test(t));
   const q = questionText({ ...p, pending_question: "Is it free?" }, "Jacqueline");
-  check("a prospect's question is relayed word for word", q.startsWith("Hey Jacqueline, it's Mo.") && q.includes('wrote back to Co\'s DM: "Is it free?"') && /I'll send your next text to them word for word\./.test(q));
+  check("a prospect's question is relayed word for word", q === 'Hey Jacqueline, it\'s Mo. Noor Haddad (@noor) wrote back: "Is it free?"\n\nWhat should I say? I\'ll send your answer word for word.');
   // Mo is a person on the team (2026-09-24): first person, never "Mo" in the
   // third person, and Co is always the one prospects hear from.
   const moSrc = src("mo/review.ts");
   const moLines = [...moSrc.matchAll(/return `([^`]*)`/g)].map((m) => m[1]).concat(t, q, sendingStatus({ MO_ENABLED: "false" } as any));
   check("Mo never talks about itself in the third person", !moLines.some((l) => /\bMo (found|has|won't|will|is)\b/.test(l)));
-  check("Mo's texts to the team read as first person", /I'll leave \$\{name\} alone/.test(moSrc) && /I've got \$\{name\} marked as sent/.test(moSrc) && /^I'm switched off/.test(sendingStatus({ MO_ENABLED: "false" } as any)));
+  check("Mo's texts to the team read as first person", /I'll leave \$\{name\} alone/.test(moSrc) && /I'll email them from Co if I can find a public address/.test(moSrc) && /^I'm switched off/.test(sendingStatus({ MO_ENABLED: "false" } as any)));
   const { ENTITIES } = await import("../../src/services/entities.js");
   check("Co and Mo are defined once, as separate entities", ENTITIES.co.name === "Co" && ENTITIES.mo.name === "Mo" && /the people it finds/.test(ENTITIES.mo.talksTo) && ENTITIES.mo.never.includes("text a member") && ENTITIES.co.never.some((n) => /mention Mo .* to a member/.test(n)));
   // Co knows what it can do, so "what can you do?" gets a complete, true
@@ -279,13 +281,23 @@ check(
   check("joins: the team hears it in Mo's voice", T.joinText({ name: "Noor Haddad" }) === "It's Mo. Noor Haddad just joined with the invite I sent. They're Co's now.");
   check("gaps: general terms with counts", T.gapsLine([{ gap: "technical cofounders", members: 4 }, { gap: "designers who host events", members: 1 }]) === "The network's shortest on technical cofounders (4 members), designers who host events (1 member), so that's what I'm scouting for.");
   check("styles: which DM is landing", T.styleLine([{ style: "intro", reached: 4, yes: 1 }, { style: "curious", reached: 3, yes: 2 }]) === `So far 1 of 4 said yes to the full intro DM, and 2 of 3 said yes to the short "want to know why?" DM.`);
-  check("help: says it's Mo and how to use it", T.moCapabilitiesText("Royce").startsWith("Hey Royce, it's Mo.") && /"Mo, pause" or "Mo, back on"/.test(T.moCapabilitiesText(null)));
+  const help = T.moCapabilitiesText("Royce");
+  check("help: says it's Mo, short, and how to use it", help.startsWith("Hey Royce, it's Mo. Here's how I work.") && /"pause" or "back on"/.test(help) && help.length < 520);
+  check("help: says the team never sends anything", /You never send anything\./.test(help));
   const rv = src("mo/review.ts"), fd = src("mo/find.ts"), ot = src("mo/outreach.ts"), ic = src("services/inviteCodes.ts"), dr = src("mo/draft.ts");
   check("wired: tags are handled before the approval flow", /if \(addressedToMo\(text\)\) \{\n\s+const cmd = parseMoCommand\(stripMo\(text\)\);/.test(rv));
   check("wired: paused means no new reviews, but questions still come through", /if \(await isMoPaused\(\)\) return null;/.test(rv) && rv.indexOf("status = 'question'") < rv.indexOf("if (await isMoPaused()) return null;"));
   check("wired: paused means no searches and no outreach", /if \(await isMoPaused\(\)\) return \{ shortlisted: 0 \};/.test(fd) && /if \(await isMoPaused\(\)\) return;/.test(ot));
   check("wired: a redeemed code tells Mo right away", /m\.noteProspectJoined\(candidate\)/.test(ic) && /await tellTeamAboutJoins\(joined\);/.test(ot));
   check("wired: searches use Co's gaps and the team's asks, not members' words", /What the network is short on right now \(from Co, general terms\)/.test(fd) && !/What members are looking for/.test(fd));
+  check("LinkedIn keeps what the result showed, so redrafts can be checked against it", /\$10, \$11\) ON CONFLICT DO NOTHING|NULL, \$9, \$10\) ON CONFLICT DO NOTHING`,\n\s+\[li\.name, li\.url, li\.headline, li\.reason, li\.quote, drafts\.dm, drafts\.emailSubject, drafts\.emailBody, style, drafts\.why, shown\]/.test(fd));
+  // The team never sends anything by hand (Royce, 2026-09-24).
+  check("never asks the team to send anything", !/yours to send|note would come from you|send this note for me|Text me "sent"/.test(rv) && !/manual_pending' ORDER BY/.test(rv));
+  check("a yes on a LinkedIn-only person means an email from Co, not a task for you", /only on LinkedIn, which I can't message, so I'll email them from Co/.test(rv));
+  check("leftover 'send this note' items go back into Mo's own outreach", /UPDATE mo_prospects SET status = 'approved', channel = NULL, updated_at = NOW\(\) WHERE status = 'manual_pending'/.test(src("db/migrations.ts")));
+  check("LinkedIn skips the X warm-up and goes straight to reaching out", nextOutreachStep({ status: "approved", hasPost: false, channel: null, warmedAt: null, contactedAt: null, followedUpAt: null, lastInboundAt: null }, new Date()) === "contact" && nextOutreachStep({ status: "approved", hasPost: true, channel: null, warmedAt: null, contactedAt: null, followedUpAt: null, lastInboundAt: null }, new Date()) === "warm");
+  const { MO_VOICE: V } = await import("../../src/mo/moVoice.js");
+  check("Mo's definition: it sends everything itself", /You never ask the team to send, post, or forward anything for you/.test(V));
   check("wired: styles alternate and a yes to 'why?' gets the why", /const style = await nextDmStyle\(\);/.test(fd) && /p\.dm_style === "curious" && p\.draft_why \? `\$\{p\.draft_why\}/.test(ot) && /style === "curious"/.test(dr));
 }
 

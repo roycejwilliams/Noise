@@ -202,6 +202,7 @@ export async function runMoOutreach(now = new Date()): Promise<void> {
     const step = nextOutreachStep(
       {
         status: p.status,
+        hasPost: Boolean(p.post_id),
         channel: p.channel,
         warmedAt: p.warmed_at,
         contactedAt: p.contacted_at,

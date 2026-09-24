@@ -16,7 +16,6 @@ import { generateText } from "ai";
 import pool from "../db/db.js";
 import { MODELS } from "../models.js";
 import { recordDecision } from "../harness/core.js";
-import { generateInviteCode } from "../services/inviteCodes.js";
 import { parseModelJson } from "../services/modelJson.js";
 import { plainDone, plainNo, plainYes, MO, suppressionKeys } from "./rules.js";
 import { codeMessage, sendingStatus, sendingBlocked } from "./outreach.js";
@@ -62,34 +61,49 @@ const firstName = (p: { name: string | null; x_handle: string | null }) => (p.na
 // The texts, in Mo's own voice (mo/moVoice.ts): first person, a teammate
 // with a view, their exact quote, and one plain question. Mo shares Co's
 // number and thread, so each one opens by saying it's Mo.
-export function reviewText(p: any, left: number, approverFirst: string | null = null): string {
-  const lines = [
-    `${MO_RULES.opener(approverFirst)} Found someone worth a look${left > 1 ? ` (1 of ${left})` : ""}: ${who(p)}${p.source === "x" ? " on X" : " on LinkedIn"}.`,
-    "",
-    `They wrote: "${p.evidence_quote}"`,
-    p.post_url ?? p.linkedin_url ?? "",
-    "",
-    `Why I think they'd fit: ${p.reason}`,
-    "",
-    p.source === "x" && p.draft_reply
-      ? `My plan: Co replies to their post with "${p.draft_reply}", then I DM them a few days later: "${p.draft_dm}"`
-      : p.source === "x"
-        ? `My plan: I DM them: "${p.draft_dm}"`
-        : `They're only on LinkedIn, so the note would come from you: "${p.draft_dm}"`,
-    p.dm_style === "curious" && p.draft_why ? `If they want to know why, I'll tell them: "${p.draft_why}" and send the invite.` : null,
-    "",
+// One sentence of Mo's reason, so a review stays short (Royce, 2026-09-24:
+// "Mo explanations may be a little bit too long").
+export function firstSentence(text: string, max = 180): string {
+  const t = String(text ?? "").trim();
+  const one = t.match(/^.+?[.!?](?=\s|$)/)?.[0] ?? t;
+  return one.length <= max ? one : `${one.slice(0, max - 1).replace(/\s+\S*$/, "")}…`;
+}
+
+// A review arrives the way Co's tier offers do (Royce, 2026-09-24: "copy the
+// same format of how we do the tiers"): the link alone first so it shows a
+// preview, then one short line on who and why, then what Mo would send, then
+// one question. Separate texts, in order.
+export function reviewMessages(p: any, left: number, approverFirst: string | null = null): string[] {
+  const where = p.source === "x" ? "on X" : "on LinkedIn";
+  const link = p.post_url ?? p.linkedin_url ?? null;
+  const send =
+    p.source === "x"
+      ? [
+          p.draft_reply ? `Co replies to their post: "${p.draft_reply}"` : null,
+          `Then I DM them: "${p.draft_dm}"`,
+          p.dm_style === "curious" && p.draft_why ? `If they ask why: "${p.draft_why}"` : null,
+        ]
+      : [
+          `LinkedIn can't be messaged, so I'd email them from Co if I find a public address: "${p.draft_dm}"`,
+          p.dm_style === "curious" && p.draft_why ? `If they ask why: "${p.draft_why}"` : null,
+        ];
+  return [
+    link,
+    `${MO_RULES.opener(approverFirst)} ${who(p)} ${where}${left > 1 ? `, 1 of ${left}` : ""}. They wrote: "${p.evidence_quote}" ${firstSentence(p.reason)}`,
+    send.filter(Boolean).join("\n\n"),
     `Want me to go for it? Yes, no, or tell me what to change.`,
-  ];
-  return lines.filter((l) => l !== null).join("\n").replace(/\n{3,}/g, "\n\n");
+  ].filter((m): m is string => Boolean(m));
+}
+
+// The same review as one text (for replies like "here's the new version").
+export function reviewText(p: any, left: number, approverFirst: string | null = null): string {
+  return reviewMessages(p, left, approverFirst).join("\n\n");
 }
 
 export function questionText(p: any, approverFirst: string | null = null): string {
-  return `${MO_RULES.opener(approverFirst)} ${who(p)} wrote back to Co's DM: "${String(p.pending_question ?? "").slice(0, 400)}"\n\nWhat do you want Co to say? I'll send your next text to them word for word.`;
+  return `${MO_RULES.opener(approverFirst)} ${who(p)} wrote back: "${String(p.pending_question ?? "").slice(0, 400)}"\n\nWhat should I say? I'll send your answer word for word.`;
 }
 
-export function manualText(p: any, code: string, approverFirst: string | null = null): string {
-  return `${MO_RULES.opener(approverFirst)} ${who(p)} is only on LinkedIn, so this one needs you: ${p.linkedin_url}\n\nHere's the note:\n${p.draft_dm}\n\n${codeMessage(code).replace(/^Glad you're in\. /, "If you'd like one: ")}\n\nText me "sent" once it's out and I'll check them off.`;
-}
 
 // What an approver should see next, most urgent first: a prospect waiting on
 // an answer, then a note to send by hand, then someone new to review.
@@ -98,8 +112,6 @@ async function nextItemFor(): Promise<{ kind: PendingKind; p: any } | null> {
   if (q.rows[0]) return { kind: "question", p: q.rows[0] };
   // Paused: someone waiting on an answer still comes through; nothing new.
   if (await isMoPaused()) return null;
-  const m = await pool.query(`SELECT * FROM mo_prospects WHERE status = 'manual_pending' ORDER BY updated_at LIMIT 1`);
-  if (m.rows[0]) return { kind: "manual", p: m.rows[0] };
   const r = await pool.query(`SELECT * FROM mo_prospects WHERE status = 'shortlisted' ORDER BY no LIMIT 1`);
   if (r.rows[0]) return { kind: "review", p: r.rows[0] };
   return null;
@@ -111,11 +123,14 @@ async function shortlistedCount(): Promise<number> {
 }
 
 async function present(a: Approver, item: { kind: PendingKind; p: any }): Promise<void> {
-  let text: string;
-  if (item.kind === "review") text = reviewText(item.p, await shortlistedCount(), a.firstName);
-  else if (item.kind === "question") text = questionText(item.p, a.firstName);
-  else text = manualText(item.p, item.p.invite_code, a.firstName);
-  if (await textTo(a.phone, text)) {
+  let texts: string[];
+  if (item.kind === "review") texts = reviewMessages(item.p, await shortlistedCount(), a.firstName);
+  else if (item.kind === "question") texts = [questionText(item.p, a.firstName)];
+  else return; // nothing is ever handed to the team to send (2026-09-24)
+  // In order, stopping at the first failure so they never arrive half-shown.
+  let ok = true;
+  for (const t of texts) if (!(ok = await textTo(a.phone, t))) break;
+  if (ok) {
     await pool.query(`UPDATE users SET mo_pending_no = $2, mo_pending_kind = $3, mo_pending_at = NOW() WHERE id = $1`, [a.id, item.p.no, item.kind]);
     await pool.query(`UPDATE mo_prospects SET digest_sent_at = COALESCE(digest_sent_at, NOW()) WHERE no = $1`, [item.p.no]);
   }
@@ -234,12 +249,11 @@ async function coSpokeSince(userId: string, since: Date | null): Promise<boolean
 async function answer(userId: string, kind: PendingKind, p: any, text: string): Promise<string | null> {
   const name = firstName(p);
 
+  // A leftover "send this note" item from before 2026-09-24: it went back
+  // into Mo's own outreach (migrations.ts), so there's nothing to confirm.
   if (kind === "manual") {
-    if (!plainDone(text)) return null;
-    await pool.query(`UPDATE mo_prospects SET status = 'contacted', channel = 'manual', contacted_at = NOW(), updated_at = NOW() WHERE id = $1`, [p.id]);
     await clearItem(p.no);
-    await presentNext();
-    return `Nice, I've got ${name} marked as sent.`;
+    return null;
   }
 
   if (kind === "question") {
@@ -265,10 +279,14 @@ async function answer(userId: string, kind: PendingKind, p: any, text: string): 
     );
     await clearItem(p.no);
     let msg: string;
+    // Royce, 2026-09-24: "me nor jacqueline will never send anything for
+    // you... you will be sending it on behalf of the organization." LinkedIn
+    // can't be messaged by software, so a LinkedIn-only person gets an email
+    // from Co when Mo can find a public address.
     if (r.rows[0] && p.source === "linkedin") {
-      const code = await generateInviteCode(null);
-      await pool.query(`UPDATE mo_prospects SET invite_code = $2, status = 'manual_pending', updated_at = NOW() WHERE id = $1`, [p.id, code]);
-      msg = `On it. ${name}'s only on LinkedIn, so I'll send you the note to post next.`;
+      msg = `On it. ${name}'s only on LinkedIn, which I can't message, so I'll email them from Co if I can find a public address, and tell you if I can't.`;
+      const blocked = sendingBlocked();
+      if (blocked) msg += ` Heads up: ${blocked}`;
     } else {
       msg = `On it. Co replies to ${name}'s post first, then I DM them about ${MO.warmToDmDays} days later.`;
       const blocked = sendingBlocked();
@@ -290,5 +308,7 @@ async function answer(userId: string, kind: PendingKind, p: any, text: string): 
   if (!drafts.ok) return `I couldn't make that change and stay inside our rules (${drafts.failed.join(", ")}). Could you put it another way?`;
   await pool.query(`UPDATE mo_prospects SET draft_reply = $2, draft_dm = $3, updated_at = NOW() WHERE id = $1`, [p.id, drafts.reply, drafts.dm]);
   const updated = { ...p, draft_reply: drafts.reply, draft_dm: drafts.dm };
-  return `${reviewText(updated, 1).replace(/^[^\n]*Found someone worth a look[^\n]*\n\n/, "Here's the new version.\n\n")}`;
+  // Only what changed: the new wording and the same question.
+  const [, , send, ask] = ["", ...reviewMessages(updated, 1)].slice(-4);
+  return `Here's the new version.\n\n${send}\n\n${ask}`;
 }
