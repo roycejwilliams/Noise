@@ -176,3 +176,26 @@ export async function sendReaction(messageHandle: string, reaction: string): Pro
     return false;
   }
 }
+
+// Blocks a number in Sendblue so its texts stop reaching Co (2026-09-24,
+// used for automated senders at the invite gate). Account-wide, so it covers
+// prod too. The SDK has no call for it; POST /api/v2/block takes "handle"
+// (confirmed live: "number" is rejected with "Invalid handle"). Never throws.
+export async function blockSender(handle: string): Promise<boolean> {
+  try {
+    const res = await fetch("https://api.sendblue.co/api/v2/block", {
+      method: "POST",
+      headers: {
+        "sb-api-key-id": process.env.SENDBLUE_API_KEY ?? "",
+        "sb-api-secret-key": process.env.SENDBLUE_SECRET_KEY ?? "",
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({ handle, from_number: process.env.SENDBLUE_PHONE_NUMBER }),
+    });
+    if (!res.ok) console.error(`blockSender: Sendblue refused (${res.status}) (non-fatal)`);
+    return res.ok;
+  } catch (err: any) {
+    console.error("blockSender failed (non-fatal):", err?.message ?? err);
+    return false;
+  }
+}

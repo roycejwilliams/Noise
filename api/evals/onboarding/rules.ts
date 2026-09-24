@@ -1,3 +1,4 @@
+import { readFileSync } from "fs";
 // Model-free checks for the approved onboarding lines (services/
 // onboardingLines.ts, 2026-09-19). No API calls, no database:
 //   npx tsx evals/onboarding/rules.ts
@@ -54,6 +55,10 @@ for (const auto of [
   "482913 is your login code",
   "This is an automated message, please do not respond.",
   "We don't accept inbound messages. These are the commands you can use: UNSUB CHEFNAME, RESUB CHEFNAME, UNSUBALL, RESUBALL",
+  "Rosangela, did you know some insurances pay you for getting care at TFHC? Whether you need a check-up, chronic care follow-up, or a sick visit, we offer walk-ins, appointments, and video visits. Want us to call you to schedule? Reply YES or call us at 813-555-0100!",
+  "We are sorry, we did not understand your response. Please reply using YES or NO.",
+  "Reply Y to confirm your appointment.",
+  "Invalid response. Valid options are 1, 2 or 3.",
   "Spellbound Sourdough is about to drop!\n\nOrder now: https://go.hotplate.com/ATRe02\n\nUNSUB SPELLBOUNDSOURDOUGH to stop. UNSUBALL to stop all SMS\nPwd by Hotplate",
 ]) check(`reads as automated: ${auto}`, looksAutomated(auto));
 for (const human of [
@@ -70,6 +75,12 @@ for (const human of [
   "I opted in last week, can you check?",
   "did I get opted out by mistake?",
   "he opted in already",
+  "reply to me when you can",
+  "can you call me?",
+  "call me at 5 tomorrow",
+  "yes please",
+  "I said yes to Sam's invite",
+  "sorry, I didn't understand that",
   "",
 ]) check(`reads as a person: ${JSON.stringify(human)}`, !looksAutomated(human));
 check("an automated message is never answered, even with budget left", decideGateReply({ text: "Reply STOP to unsubscribe.", recentGateReplies: 0 }) === "silent_automated");
@@ -90,6 +101,21 @@ check("past the budget Co goes quiet", decideGateReply({ text: "ABCD2345", recen
     if (decideGateReply({ text: "ok", recentGateReplies: replies }) === "send") { sends++; replies++; }
   }
   check("even a non-obvious bot loop is capped at the budget", sends === GATE_REPLY_BUDGET.max);
+}
+{
+  // Replay of 2026-09-24 7:38am: a clinic's marketing bot got three replies.
+  const morning = [
+    "Rosangela, did you know some insurances pay you for getting care at TFHC? Whether you need a check-up, chronic care follow-up, or a sick visit, we offer walk-ins, appointments, and video visits. Want us to call you to schedule? Reply YES or call us at 813-555-0100!",
+    "We are sorry, we did not understand your response. Please reply using YES or NO.",
+    "We are sorry, we did not understand your response. Please reply using YES or NO.",
+  ];
+  let sends = 0;
+  for (const text of morning) if (decideGateReply({ text, recentGateReplies: sends }) === "send") sends++;
+  check("the 09-24 clinic bot gets zero replies", sends === 0);
+  check("a real person gets the greeting and one retry, then quiet for the day", GATE_REPLY_BUDGET.max === 2);
+  const route = readFileSync(new URL("../../src/routes/sendblue.ts", import.meta.url), "utf8");
+  check("an automated sender is blocked in Sendblue", /gateDecision === "silent_automated" \? await blockSender\(number\)/.test(route));
+  check("the block uses the field Sendblue accepts", /JSON\.stringify\(\{ handle, from_number: process\.env\.SENDBLUE_PHONE_NUMBER \}\)/.test(readFileSync(new URL("../../src/services/sendblue.ts", import.meta.url), "utf8")));
 }
 
 // Co never tells someone what they are unless it was given (2026-09-21): a search

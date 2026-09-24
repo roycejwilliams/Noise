@@ -69,7 +69,7 @@ import { routerGateChecks } from "../harness/routerChecks.js";
 import { addEventFacts, addFact, addInstruction, addOngoingSearchFacts, gatherReplyFacts, recordSearchNote } from "../harness/replyGrounding.js";
 import { runConversationReplyAgent, filterRelevantMemories, CALL_OFFER_EXPIRY_DAYS } from "../agent/conversationReply.js";
 import { triggerCallForUser } from "../services/callTrigger.js";
-import sendblue, { cleanCoMessage, markRead, sendReaction, webhookSecretMatches } from "../services/sendblue.js";
+import sendblue, { blockSender, cleanCoMessage, markRead, sendReaction, webhookSecretMatches } from "../services/sendblue.js";
 import { TURN_FAILED_NOTE, turnFailedNoteBlocked } from "../services/turnFailure.js";
 import { arrivedByText } from "../services/eventPresence.js";
 import { scoreGuestListForEvent } from "../services/eventScoring.js";
@@ -821,7 +821,10 @@ export function sendblueRouter(io: Server): Router {
           const gateDecision = decideGateReply({ text: hasText ? content : "", recentGateReplies: await countRecentGateReplies(user.id) });
           if (gateDecision !== "send") {
             if (hasText) await logTextExchange(user.id, `User said: ${content}`);
-            await recordDecision({ layer: 2, decision: "gate.silent", userId: user.id, outcome: "skip", action: gateDecision, proposal: { message: hasText ? content.slice(0, 200) : null } });
+            // An automated sender is blocked in Sendblue so it can't come back
+            // (2026-09-24). Only ever before a number is verified.
+            const blocked = gateDecision === "silent_automated" ? await blockSender(number) : false;
+            await recordDecision({ layer: 2, decision: "gate.silent", userId: user.id, outcome: "skip", action: gateDecision, proposal: { message: hasText ? content.slice(0, 200) : null, blocked } });
             return res.status(200).send({ received: true, action: gateDecision });
           }
           if (!user.invite_asked) {
