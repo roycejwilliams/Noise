@@ -430,7 +430,23 @@ function itemWords(s: string): string[] {
 // A plain yes to what Co just asked or offered. Code review, 2026-09-24: "Want
 // me to look for founder communities in SF?" / "Yes please" was dropped as
 // Co's echo, so an ask they agreed to was never saved or searched.
-const AGREES = /^\s*(user said:|user:)\s*(yes|yeah|yep|yup|sure|please|definitely|absolutely|for sure|of course|that would be|that'?d be|sounds (good|great)|i'?d (like|love) that|let'?s do (it|that))\b/i;
+const AGREES = /^\s*(user said:|user:|user sent a voice memo:)\s*(yes|yeah|yep|yup|sure|please|definitely|absolutely|for sure|of course|that would be|that'?d be|sounds (good|great)|i'?d (like|love) that|let'?s do (it|that))\b/i;
+// A yes that's taken back isn't one (second review, 2026-09-24): "of course
+// not", "yes, I mean no, forget that". "No worries" / "no problem" are
+// still agreement.
+const TAKES_IT_BACK = /\b(not|nah|nope|never|don'?t|no(?!\s+(worries|problem|rush|pressure)))\b|forget (it|that)|changed my mind|i mean no/i;
+export function agreesWith(line: string): boolean {
+  return AGREES.test(line) && !TAKES_IT_BACK.test(line.replace(/^\s*(user said:|user:|user sent a voice memo:)/i, ""));
+}
+// The one thing a yes answers: Co's last question or offer, not the whole
+// message (second review, 2026-09-24: a yes to "How was your weekend?"
+// claimed the plan Co had stated two lines earlier).
+export function lastAskedSentence(coMessage: string): string | null {
+  const body = coMessage.replace(/^\s*(co replied:|assistant:|co:)\s*/i, "");
+  const sentences = body.match(/[^.!?\n]+[.!?]*/g) ?? [];
+  for (let i = sentences.length - 1; i >= 0; i--) if (coAskedQuestion(sentences[i])) return sentences[i].trim();
+  return null;
+}
 export function splitSpeakers(transcript: string): { theirs: string; cos: string } {
   const theirs: string[] = [];
   const cos: string[] = [];
@@ -441,8 +457,9 @@ export function splitSpeakers(transcript: string): { theirs: string; cos: string
       lastCo = line;
     } else if (/^\s*(user said:|user:|user sent a voice memo:)/i.test(line)) {
       theirs.push(line);
-      // Co's question or offer they said yes to is theirs too.
-      if (lastCo && coAskedQuestion(lastCo) && AGREES.test(line)) theirs.push(lastCo);
+      // The question or offer they said yes to is theirs too; only that one.
+      const asked = lastCo ? lastAskedSentence(lastCo) : null;
+      if (asked && agreesWith(line)) theirs.push(asked);
       lastCo = null;
     } else if (/^\s*(user (said|sent)\b|co (replied|called)\b|\[)/i.test(line)) {
       // Any other labeled line ("User sent a photo...", "Co called...",

@@ -23,6 +23,7 @@ import { parseModelJson } from "../services/modelJson.js";
 import { captureIntentForTurn } from "../services/profileExtraction.js";
 import { writeMemory } from "../services/memory.js";
 import { recordDecision, type GateCheck } from "./core.js";
+import { callKey } from "../services/callKey.js";
 
 export type CallClaim = {
   quote: string;
@@ -102,7 +103,7 @@ export function personAskedForThis(transcript: string, what: string): boolean {
 // Runs the same search a member's own ask gets, keyed as Co's promise so the
 // offer never says they asked for it (fromProfile). Records what came of it,
 // so the post-call text can say plainly when nothing turned up.
-export async function keepCallPromise(userId: string, what: string): Promise<"queued" | "nothing"> {
+export async function keepCallPromise(userId: string, what: string, transcript?: string): Promise<"queued" | "nothing"> {
   const { rows } = await pool.query(
     `SELECT u.first_name, u.phone_number, cp.city, cp.goals, cp.activity_preferences
      FROM users u LEFT JOIN co_profiles cp ON cp.user_id = u.id WHERE u.id = $1`,
@@ -124,13 +125,17 @@ export async function keepCallPromise(userId: string, what: string): Promise<"qu
     activityPreferences: p.activity_preferences ?? null,
     cooldownCleared: true,
   });
-  await writeMemory(
-    userId,
-    "promise_result",
-    queued
-      ? `Looked into "${what}" after the call, as Co said it would, and found something; it's queued to send.`
-      : `Looked into "${what}" after the call, as Co said it would, and found nothing good enough to send yet.`,
-  ).catch(() => null);
+  const result = queued
+    ? `Looked into "${what}" after the call, as Co said it would, and found something; it's queued to send.`
+    : `Looked into "${what}" after the call, as Co said it would, and found nothing good enough to send yet.`;
+  await writeMemory(userId, "promise_result", result).catch(() => null);
+  // Tied to this call, so this call's after-call text is the one that
+  // reports it (services/callKey.ts).
+  if (transcript) {
+    await pool
+      .query(`INSERT INTO call_promise_results (user_id, call_key, content) VALUES ($1, $2, $3)`, [userId, callKey(transcript), result])
+      .catch((err: any) => console.error("callGrounding: promise result write failed (non-fatal):", err?.message ?? err));
+  }
   return queued ? "queued" : "nothing";
 }
 
@@ -160,7 +165,7 @@ export async function auditCall(userId: string, transcript: string, knownBefore:
         ).catch(() => null);
         // And actually look (2026-09-23: "I'll dig into those communities
         // and text you" was only ever written down, so nothing searched).
-        await keepCallPromise(userId, c.what).catch((err: any) =>
+        await keepCallPromise(userId, c.what, transcript).catch((err: any) =>
           console.error("callGrounding: keepCallPromise failed (non-fatal):", err?.message ?? err),
         );
       }

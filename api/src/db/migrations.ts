@@ -101,6 +101,22 @@ export async function runMigrations(): Promise<void> {
     )
     .catch((err: Error) => console.error("event_presence table init failed:", err));
 
+  // What came of each promise Co made on a call, tied to that call by a
+  // transcript fingerprint (services/callKey.ts), so the after-call text for
+  // that call is the one that reports it (2026-09-24).
+  await pool
+    .query(
+      `CREATE TABLE IF NOT EXISTS call_promise_results (
+        id BIGSERIAL PRIMARY KEY,
+        user_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+        call_key TEXT NOT NULL,
+        content TEXT NOT NULL,
+        created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+      )`,
+    )
+    .then(() => pool.query(`CREATE INDEX IF NOT EXISTS idx_call_promise_results_call ON call_promise_results (user_id, call_key)`))
+    .catch((err: Error) => console.error("call_promise_results table init failed:", err));
+
   // A heads-up about an event Co doesn't run names no one until both people
   // say yes (2026-09-23): marks those nudges so replies never name the other
   // person early.

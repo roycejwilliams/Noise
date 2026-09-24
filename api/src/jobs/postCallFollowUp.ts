@@ -1,6 +1,7 @@
 import pool from "../db/db.js";
 import { buildContextSummary } from "../services/callContext.js";
 import { enqueueCandidate, draftProactive, type OutputRules } from "../harness/proactive.js";
+import { callKey } from "../services/callKey.js";
 
 // Relationship text after a call: one real thought from what they said.
 //
@@ -54,23 +55,14 @@ export async function draftPostCall(userId: string, firstName: string, followUpI
   const transcript: string | undefined = rows[0]?.transcript;
   if (!transcript) return null;
   const contextSummary = await buildContextSummary(userId).catch(() => "");
-  // What came of anything Co said on the call it would look into
-  // (harness/callGrounding.ts keepCallPromise), 2026-09-23. Tied to this
-  // call's row, not to now (code review, 2026-09-24: a fixed 6-hour window
-  // missed every result when the text waited past quiet hours, and it can
-  // be sent up to 24h after the call). The audit starts as the call is
-  // processed, so its results land from a little before this row onward.
+  // What came of anything Co said on THIS call it would look into
+  // (harness/callGrounding.ts keepCallPromise), matched by the call's
+  // transcript fingerprint (services/callKey.ts). Second review, 2026-09-24:
+  // time windows put a quick callback's results in the wrong call's text.
   const { rows: promised } = await pool
     .query(
-      `SELECT m.content FROM co_memories m, post_call_follow_ups f
-       WHERE f.id = $2 AND m.user_id = $1 AND m.memory_type = 'promise_result'
-         AND m.created_at > f.created_at - INTERVAL '30 minutes'
-         AND m.created_at < COALESCE(
-           (SELECT MIN(n.created_at) FROM post_call_follow_ups n WHERE n.user_id = $1 AND n.created_at > f.created_at),
-           'infinity'::timestamptz
-         ) - INTERVAL '30 minutes'
-       ORDER BY m.created_at`,
-      [userId, followUpId],
+      `SELECT content FROM call_promise_results WHERE user_id = $1 AND call_key = $2 ORDER BY created_at`,
+      [userId, callKey(transcript)],
     )
     .catch(() => ({ rows: [] as any[] }));
   return draftPostCallText(firstName, transcript, contextSummary, promised.map((r: any) => String(r.content)));
