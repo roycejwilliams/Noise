@@ -41,6 +41,8 @@ check("a turn that crashes after the text was read tells the member", /if \(lock
 check("hold lines ('one sec') don't count as having answered", /r\.content <> ALL\(\$3::text\[\]\)/.test(sb) && /HOLD_LINES\.map\(\(l\) => `Co replied: \$\{l\}`\), `Co replied: \$\{TURN_FAILED_NOTE\}`/.test(sb));
 check("a restart mid-turn tells the member too (1:1 texts only)", /await tellMemberTurnFailed\(phone, new Date\(row\.received_at\), "restart"/.test(sb) && /!isGroup\)/.test(sb));
 check("every outcome is logged as turn.failed", /decision: "turn\.failed"/.test(sb));
+check("the columns the restart check reads actually exist", /ALTER TABLE inbound_webhook_handles ADD COLUMN IF NOT EXISTS payload JSONB, ADD COLUMN IF NOT EXISTS finished_at TIMESTAMPTZ/.test(src("src/db/migrations.ts")));
+check("saved message copies are dropped after two days", /SET payload = NULL WHERE payload IS NOT NULL AND received_at < NOW\(\) - INTERVAL '2 days'/.test(sb));
 check("co-test runs the restart check too", /reportUnfinishedTurns\(\)/.test(src("../co-test/src/server.ts")));
 
 console.log(`silence rules: ${total - failed}/${total} passed`);

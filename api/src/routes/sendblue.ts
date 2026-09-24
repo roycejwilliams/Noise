@@ -2955,6 +2955,11 @@ export async function reportUnfinishedTurns(): Promise<number> {
         await tellMemberTurnFailed(phone, new Date(row.received_at), "restart", "Restart");
       }
     }
+    // The saved copy of each text is only for this check: drop it after two
+    // days so members' messages don't pile up here.
+    await pool
+      .query(`UPDATE inbound_webhook_handles SET payload = NULL WHERE payload IS NOT NULL AND received_at < NOW() - INTERVAL '2 days'`)
+      .catch(() => {});
     return rows.length;
   } catch (err: any) {
     console.error("sendblue: reportUnfinishedTurns skipped (payload/finished_at columns missing?):", err?.message ?? err);

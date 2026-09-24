@@ -712,6 +712,13 @@ export async function runMigrations(): Promise<void> {
       )`,
     )
     .catch((err: Error) => console.error("inbound_webhook_handles table init failed:", err));
+  // What arrived and whether its turn finished (2026-09-23): the restart
+  // check (reportUnfinishedTurns) and the payload write in routes/sendblue.ts
+  // relied on these columns since 2026-09-17, but nothing ever added them, so
+  // both failed silently and a text lost to a restart was never noticed.
+  await pool
+    .query(`ALTER TABLE inbound_webhook_handles ADD COLUMN IF NOT EXISTS payload JSONB, ADD COLUMN IF NOT EXISTS finished_at TIMESTAMPTZ`)
+    .catch((err: Error) => console.error("inbound_webhook_handles payload/finished_at migration failed:", err));
 
   // Proactive check-in call cadence — user-set preference (7 or 14 days,
   // captured post-call via extractCheckinCadencePreference in
