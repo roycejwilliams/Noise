@@ -9,7 +9,14 @@ import { recordDecision } from "../harness/core.js";
 import { askExpiresAtForUser } from "./askExpiry.js";
 import {
   PROFILE_JUDGMENT_MODEL,
+  applyCorrections,
   decideAskWrite,
+  gateCorrections,
+  LIST_FIELDS,
+  mightBeCorrection,
+  type Correction,
+  type OnFile,
+  type ProposedCorrection,
   gateResolutions,
   sanitizeExtractedProfile,
   type OpenAsk,
@@ -703,11 +710,87 @@ export function isAboutCo(item: string): boolean {
   return /\bco(?!-)\b|\bco's\b|\bcopatible\b/i.test(item);
 }
 
+// Corrections (harness/profileWrite.ts). Sonnet 5, since removing something
+// from a profile is a judgment with a side effect; every correction must
+// quote their own words from what they just said.
+export function buildCorrectionPrompt(onFile: OnFile, newWords: string, context: string): string {
+  const fileLines = Object.entries(onFile)
+    .filter(([, v]) => (Array.isArray(v) ? v.length : v))
+    .map(([k, v]) => `${k}: ${JSON.stringify(v)}`)
+    .join("\n");
+  return `Here is what Co has on file about this person:
+${fileLines}
+
+Recent conversation, for context only:
+${context}
+
+What they just said:
+"${newWords}"
+
+In what they just said, do they correct or contradict something on file? Only a real correction counts: they say an item is wrong, no longer true, or has changed ("I'm not a founder", "I moved to Oakland", "I don't run anymore"). A new detail that doesn't contradict anything isn't a correction. A goal they achieved isn't a correction either. Don't guess from tone.
+
+For each correction, give the field, the EXACT on-file text it replaces (copied from above; for a list, the one item), what's true now if they said it (otherwise null), and their exact words from what they just said (at least a few words).
+
+Return ONLY valid JSON: {"corrections": [{"field": "...", "old": "...", "new": "..." or null, "quote": "..."}]}. Return {"corrections": []} when there are none.`;
+}
+
+export async function assessCorrections(onFile: OnFile, newWords: string, context: string, userId: string | null): Promise<Correction[]> {
+  if (!mightBeCorrection(newWords)) return [];
+  const hasAnything = Object.values(onFile).some((v) => (Array.isArray(v) ? v.length : v));
+  if (!hasAnything) return [];
+  try {
+    const { text: raw } = await generateText({
+      model: anthropic(PROFILE_JUDGMENT_MODEL),
+      prompt: buildCorrectionPrompt(onFile, newWords, context.slice(-3000)),
+      experimental_telemetry: { isEnabled: true, functionId: "profileExtraction.assessCorrections" },
+    });
+    const parsed = parseModelJson(raw.trim());
+    const proposals: ProposedCorrection[] = (Array.isArray(parsed?.corrections) ? parsed.corrections : []).map((c: any) => ({
+      field: String(c?.field ?? ""),
+      old: String(c?.old ?? ""),
+      new: c?.new == null ? null : String(c.new),
+      quote: String(c?.quote ?? ""),
+    }));
+    const gated = gateCorrections(proposals, onFile, newWords);
+    if (proposals.length) {
+      await recordDecision({
+        layer: 4,
+        decision: "profile.correct",
+        userId,
+        outcome: gated.accepted.length ? "act" : "skip",
+        action: "correct_items",
+        proposal: proposals,
+        checks: gated.checks,
+        reason: `${gated.accepted.length} of ${proposals.length} corrections supported by their own words`,
+      }).catch(() => {});
+    }
+    return gated.accepted;
+  } catch (err) {
+    console.error("assessCorrections failed (non-fatal):", err);
+    return [];
+  }
+}
+
+// Old values they've corrected in the last 90 days, so a later extraction
+// doesn't quietly put a corrected fact back.
+async function recentlyCorrected(userId: string): Promise<{ field: string; old_value: string; new_value: string | null }[]> {
+  const { rows } = await pool
+    .query(
+      `SELECT field, old_value, new_value FROM profile_corrections
+       WHERE user_id = $1 AND corrected_at > NOW() - INTERVAL '90 days' ORDER BY corrected_at DESC`,
+      [userId],
+    )
+    .catch(() => ({ rows: [] as any[] }));
+  return rows;
+}
+
 export async function storeProfile(
   user_id: string,
   extracted: ExtractedProfile,
   transcript: string,
-  opts: { emotions?: { name: string; score: number }[] | null } = {},
+  // newWords: what's new in this transcript (the text they just sent). A
+  // call transcript is new as a whole, so it defaults to the transcript.
+  opts: { emotions?: { name: string; score: number }[] | null; newWords?: string } = {},
 ): Promise<{ safeChapters: string[]; safeStyle: string }> {
   const { rows: existingRows } = await pool.query(
     `SELECT life_chapters, social_energy, connection_style, activity_preferences,
@@ -731,13 +814,20 @@ export async function storeProfile(
   );
   const openAsks = openAskRows.map((r: any) => ({ id: r.ask_id as string, text: r.ask_text as string }));
 
-  const { resolvedGoals, resolvedBlockers, resolvedAskIds } = await assessResolvedItems(
-    transcript,
-    existing?.goals ?? [],
-    existing?.blockers ?? [],
-    openAsks,
-    user_id,
-  );
+  const onFile: OnFile = {
+    city: existing?.city ?? null,
+    life_chapters: existing?.life_chapters ?? [],
+    goals: existing?.goals ?? [],
+    blockers: existing?.blockers ?? [],
+    activity_preferences: existing?.activity_preferences ?? [],
+    long_term_direction: existing?.long_term_direction ?? null,
+    availability_pattern: existing?.availability_pattern ?? null,
+  };
+  const [{ resolvedGoals, resolvedBlockers, resolvedAskIds }, corrections, pastCorrections] = await Promise.all([
+    assessResolvedItems(transcript, existing?.goals ?? [], existing?.blockers ?? [], openAsks, user_id),
+    existing ? assessCorrections(onFile, opts.newWords ?? transcript, transcript, user_id) : Promise.resolve([] as Correction[]),
+    recentlyCorrected(user_id),
+  ]);
 
   // Layer 4 gate: every model value is checked against allowed enums and
   // ranges before it can reach the upsert.
@@ -755,22 +845,22 @@ export async function storeProfile(
     });
   }
 
-  const safeChapters = union(existing?.life_chapters, clean.life_chapters);
+  const safeChaptersMerged = union(existing?.life_chapters, clean.life_chapters);
   const safeStyle = clean.connection_style ?? existing?.connection_style ?? "small_group";
   // Newest first, near-duplicates collapsed, capped: these lists used to only
   // grow (one tester reached 126 goals and 115 blockers, most rewordings).
-  const activityPreferences = mergeProfileList(existing?.activity_preferences, clean.activity_preferences, 15);
-  const goals = mergeProfileList(existing?.goals, clean.goals, 12).filter((g) => !resolvedGoals.includes(g));
-  const blockers = mergeProfileList(existing?.blockers, (clean.blockers ?? []).filter((b) => !isAboutCo(b)), 10).filter(
+  const activityPreferencesMerged = mergeProfileList(existing?.activity_preferences, clean.activity_preferences, 15);
+  const goalsMerged = mergeProfileList(existing?.goals, clean.goals, 12).filter((g) => !resolvedGoals.includes(g));
+  const blockersMerged = mergeProfileList(existing?.blockers, (clean.blockers ?? []).filter((b) => !isAboutCo(b)), 10).filter(
     (b) => !resolvedBlockers.includes(b) && !isAboutCo(b),
   );
   const socialEnergy = clean.social_energy ?? existing?.social_energy ?? 50;
-  const availabilityPattern = clean.availability_pattern || existing?.availability_pattern || null;
+  const availabilityPatternMerged = clean.availability_pattern || existing?.availability_pattern || null;
   // Where they live only changes when they actually said so (Royce,
   // 2026-09-16: "founding engineer roles in NYC" moved his city from San
   // Francisco to NYC, and every event search went to the wrong coast).
   const cityAllowed = cityChangeAllowed(existing?.city ?? null, clean.city ?? null, transcript);
-  const city = cityAllowed ? clean.city || existing?.city || null : (existing?.city ?? null);
+  const cityMerged = cityAllowed ? clean.city || existing?.city || null : (existing?.city ?? null);
   if (clean.city && existing?.city && clean.city !== existing.city) {
     await recordDecision({
       layer: 4,
@@ -782,7 +872,52 @@ export async function storeProfile(
       checks: [{ name: "they_said_they_live_there", pass: cityAllowed, reason: cityAllowed ? "their own words place them there" : "named as a preference, not a move" }],
     }).catch(() => {});
   }
-  const longTermDirection = clean.long_term_direction || existing?.long_term_direction || null;
+  const longTermDirectionMerged = clean.long_term_direction || existing?.long_term_direction || null;
+
+  // Corrections: this turn's come off (old out, new in), and anything they
+  // corrected before can't be put back by this extraction.
+  const wasCorrectedAway = (field: string, v: string | null | undefined) =>
+    !!v &&
+    [...corrections.map((c) => ({ field: c.field, old_value: c.old, new_value: c.new })), ...pastCorrections].some(
+      (c) => c.field === field && nearDuplicate(c.old_value, v) && !(c.new_value && nearDuplicate(c.new_value, v)),
+    );
+  const corrected = applyCorrections(
+    {
+      life_chapters: safeChaptersMerged,
+      goals: goalsMerged,
+      blockers: blockersMerged,
+      activity_preferences: activityPreferencesMerged,
+      city: cityMerged,
+      long_term_direction: longTermDirectionMerged,
+      availability_pattern: availabilityPatternMerged,
+    },
+    corrections,
+  );
+  const keep = (field: string, list: string[] | string | null | undefined) =>
+    (Array.isArray(list) ? list : []).filter((x) => !wasCorrectedAway(field, x));
+  const safeChapters = keep("life_chapters", corrected.life_chapters);
+  const goals = keep("goals", corrected.goals);
+  const blockers = keep("blockers", corrected.blockers);
+  const activityPreferences = keep("activity_preferences", corrected.activity_preferences);
+  const single = (field: "city" | "long_term_direction" | "availability_pattern", fromExisting: string | null) => {
+    const v = (corrected[field] as string | null) ?? null;
+    if (!wasCorrectedAway(field, v)) return v;
+    // The extraction put a corrected value back; keep what was on file,
+    // unless that's the corrected value too.
+    return wasCorrectedAway(field, fromExisting) ? null : fromExisting;
+  };
+  const city = single("city", existing?.city ?? null);
+  const longTermDirection = single("long_term_direction", existing?.long_term_direction ?? null);
+  const availabilityPattern = single("availability_pattern", existing?.availability_pattern ?? null);
+  if (corrections.length) {
+    await pool
+      .query(
+        `INSERT INTO profile_corrections (user_id, field, old_value, new_value, quote)
+         SELECT $1, f, o, n, q FROM UNNEST($2::text[], $3::text[], $4::text[], $5::text[]) AS t(f, o, n, q)`,
+        [user_id, corrections.map((c) => c.field), corrections.map((c) => c.old), corrections.map((c) => c.new), corrections.map((c) => c.quote)],
+      )
+      .catch((err: any) => console.error("profile_corrections write failed (non-fatal):", err?.message ?? err));
+  }
 
   // Non-fatal like every other embedding call in this file (storeTranscriptMemory,
   // captureIntent) — an embedding-provider hiccup (rate limit, quota, network)

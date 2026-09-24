@@ -22,7 +22,7 @@ import phoneRouter from "./routes/phone.js";
 import { requireTesterLoginApi, requireTesterLoginPage } from "./middleware/requireTesterLogin.js";
 import { bridgeTwilioMediaStream } from "../../api/src/services/mediaStreamBridge.js";
 import { createCoRouter } from "../../api/src/routes/co.js";
-import { sendblueRouter } from "../../api/src/routes/sendblue.js";
+import { reportUnfinishedTurns, sendblueRouter } from "../../api/src/routes/sendblue.js";
 import { serveInvitePage } from "../../api/src/routes/invitePage.js";
 import { createLumaRouter } from "../../api/src/routes/luma.js";
 import { registerJobs } from "../../api/src/jobs/index.js";
@@ -185,6 +185,11 @@ async function main() {
   // after creation, and manually replaying the sweep's own logic against
   // the real DB worked instantly with no errors — so the job logic was
   // fine, it just never ran.
+  // Texts that were mid-reply when this process last stopped: tell the
+  // member instead of leaving them on "Read" (api/src/routes/sendblue.ts).
+  reportUnfinishedTurns().catch((err: any) =>
+    console.error("reportUnfinishedTurns failed on startup (non-fatal):", err?.message ?? err),
+  );
   registerJobs(io);
 
   const port = process.env.PORT ? Number(process.env.PORT) : 3000;

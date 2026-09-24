@@ -13,6 +13,7 @@ import { mergeWalkinsIntoGuestPool } from "./eventWalkinCheckin.js";
 import { CO_VOICE, CO_TEXT_CHANNEL } from "./coVoice.js";
 import { checkEventWindow, checkNamesWithheld, checkOneNudgePerEvent, draftWithConsent, eventOptedIn } from "../harness/introConsent.js";
 import { gateShareReason } from "../harness/matchGate.js";
+import { arrivalWaitCheck, getPresence } from "./eventPresence.js";
 import { MODELS } from "../models.js";
 
 // Model policy (Royce, 2026-09-14): a draft that names another person is
@@ -256,13 +257,13 @@ export async function wasAlreadyNudgedForMatch(eventId: string, personId: string
 // Exported for the Layer 7 registry's onSent hook (harness/proactiveRegistry.ts,
 // event_match_nudge) — the self-report/no-timing path below only marks the
 // nudge sent once the harness actually delivers it, not at enqueue time.
-export async function markMatchNudgeSent(eventId: string, personId: string, candidateId: string, score: number): Promise<void> {
+export async function markMatchNudgeSent(eventId: string, personId: string, candidateId: string, score: number, anonymous = false): Promise<void> {
   await pool
     .query(
-      `INSERT INTO event_guest_match_nudges (event_id, person_id, candidate_id, score)
-       VALUES ($1, $2, $3, $4)
+      `INSERT INTO event_guest_match_nudges (event_id, person_id, candidate_id, score, anonymous)
+       VALUES ($1, $2, $3, $4, $5)
        ON CONFLICT (event_id, person_id) DO NOTHING`,
-      [eventId, personId, candidateId, score],
+      [eventId, personId, candidateId, score, anonymous],
     )
     .catch((err: any) => console.error("markMatchNudgeSent: insert failed (non-fatal):", err?.message ?? err));
 }
@@ -306,6 +307,8 @@ export type EventMatchNudgePayload = {
   score: number;
   message: string;
   rules: OutputRules;
+  // A heads-up about an event Co doesn't run: says no name until both yes.
+  anonymous?: boolean;
 };
 
 // One-time, not a cooldown (see the table's migration comment) — checked
@@ -366,7 +369,14 @@ async function maybeSendMatchNudge(
     // Live in-room path: only makes sense while the event is actually
     // happening, so it stays outside the Layer 7 daily pick (see that
     // harness's own header comment) and sends immediately.
-    const preChecks = [oneNudgeCheck, checkEventWindow(eventTiming, new Date())];
+    // Someone sharing their location hears it when they walk in, not at the
+    // start time (services/eventPresence.ts); the presence poll re-scores
+    // on arrival, and after an hour sends it regardless.
+    const preChecks = [
+      oneNudgeCheck,
+      checkEventWindow(eventTiming, new Date()),
+      arrivalWaitCheck(await getPresence(eventId, person.user_id), eventTiming.start_at, new Date()),
+    ];
     if (preChecks.some((c) => !c.pass)) return false;
 
     if (opts.dryRun) {
@@ -443,7 +453,27 @@ async function maybeSendMatchNudge(
     return false;
   }
 
-  const message = await draftWithConsent({ decision: "eventScoring.matchNudge", recipientId: person.user_id, preChecks: [oneNudgeCheck], facts: draftFacts }, draftFn);
+  // An event Co doesn't run (2026-09-23): unlike a Co event, where every
+  // guest knows members are in the room, telling someone "Sam is going"
+  // shares Sam's plans without Sam's yes. So this heads-up names no one; the
+  // name comes out only once both say yes (eventGuestMatchHandoff.ts).
+  const message = await draftWithConsent(
+    {
+      decision: "eventScoring.matchNudge",
+      recipientId: person.user_id,
+      preChecks: [oneNudgeCheck],
+      facts: draftFacts,
+      extraDraftChecks: (d) => [checkNamesWithheld(d, [candidate.first_name])],
+    },
+    async (feedback) => {
+      const { text } = await generateText({
+        model: anthropic(NAMING_DRAFT_MODEL),
+        experimental_telemetry: { isEnabled: true, functionId: "eventScoring.anonymousHeadsUp.draft" },
+        prompt: anonymousHeadsUpPrompt({ recipientFirstName: person.first_name, eventName, shareReason: top.shareReason!, feedback }),
+      });
+      return cleanCoMessage(text.trim());
+    },
+  );
   if (!message) return false;
 
   const payload: EventMatchNudgePayload = {
@@ -453,6 +483,7 @@ async function maybeSendMatchNudge(
     score: top.score,
     message,
     rules: { maxSentences: 2, maxChars: 320 },
+    anonymous: true,
   };
   // targetKey is keyed on the real people involved (eventId here is already
   // stable per-pair for the no-Luma-id case — see eventMatching.ts's
@@ -464,7 +495,7 @@ async function maybeSendMatchNudge(
     type: "event_match_nudge",
     targetKey: `event_match_nudge:${eventId}:${candidate.user_id}`,
     topicKey: `event_match_nudge:${eventId}`,
-    summary: `Nudge that ${candidate.first_name} is also going to "${eventName}" and worth meeting (score ${top.score})`,
+    summary: `Heads-up that another member they'd get along with is also going to "${eventName}", no name until both say yes (score ${top.score})`,
     payload,
     expiresAt: new Date(Date.now() + 14 * 24 * 60 * 60 * 1000),
   });
@@ -761,6 +792,14 @@ export function matchNudgePrompt(p: { recipientFirstName: string; otherFirstName
   return `${CO_VOICE}\n\n${CO_TEXT_CHANNEL} You're texting ${p.recipientFirstName} about "${p.eventName}," an event they're going to. You found someone else going who's genuinely worth them meeting: ${p.otherFirstName}. Why they're worth meeting: ${p.shareReason}
 
 Draft a short, warm, low-pressure text (1-2 sentences, no em dashes, normal sentence capitalization) letting ${p.recipientFirstName} know about ${p.otherFirstName} and naming the real reason above in your own words. Use only that reason. Never say ${p.otherFirstName} wants to meet them, mentioned them, or said anything about them. Not a hard sell, just a genuine heads-up, like a friend connecting two people who'd get along. Return ONLY the message text.${p.feedback ? `\n\n${p.feedback}` : ""}`;
+}
+
+// A heads-up about an event Co doesn't run (2026-09-23): no name, only why
+// they'd get along, and a question. Exported for evals/intro.
+export function anonymousHeadsUpPrompt(p: { recipientFirstName: string; eventName: string; shareReason: string; feedback: string | null }): string {
+  return `${CO_VOICE}\n\n${CO_TEXT_CHANNEL} You're texting ${p.recipientFirstName} about "${p.eventName}," an event they told you they're going to. Another member of the club is going too and seems worth meeting. Why: ${p.shareReason}
+
+Draft a short, warm text (1-2 sentences, no em dashes, normal sentence capitalization) that says another member is also going, gives that reason in your own words without anything that would identify who it is (no name, company, or title), and asks if they'd like an intro. Say you'll share who it is once you've checked with them too. Never say the other person wants to meet them or said anything about them. Return ONLY the message text.${p.feedback ? `\n\n${p.feedback}` : ""}`;
 }
 
 // "No one should feel left out" (Royce, 2026-09-22): for the end-of-event

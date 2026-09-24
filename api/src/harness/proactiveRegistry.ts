@@ -299,11 +299,15 @@ export const proactiveRegistry: ProactiveRegistry = {
     },
     async onSent(c) {
       const p = c.payload as EventMatchNudgePayload;
-      await markMatchNudgeSent(p.eventId, c.userId, p.candidateId, p.score);
+      await markMatchNudgeSent(p.eventId, c.userId, p.candidateId, p.score, !!p.anonymous);
       await writeMemory(
         c.userId,
         "event_guest_match_nudge",
-        `Nudged them that ${p.candidateFirstName} is also going to the same thing and worth meeting (score ${p.score})`,
+        // This note is read back into their replies, so an anonymous
+        // heads-up must not carry the other person's name.
+        p.anonymous
+          ? `Told them another member who's also going to the same thing could be worth meeting, without saying who, and asked if they'd like an intro (score ${p.score})`
+          : `Nudged them that ${p.candidateFirstName} is also going to the same thing and worth meeting (score ${p.score})`,
       );
     },
   },

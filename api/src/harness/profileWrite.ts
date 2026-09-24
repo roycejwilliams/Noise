@@ -313,3 +313,104 @@ export function sanitizeExtractedProfile(raw: Record<string, unknown> | null | u
     checks,
   };
 }
+
+// ---- corrections ---------------------------------------------------------------
+//
+// When someone corrects something Co has on file ("I'm not a founder, I'm a
+// designer", "I moved to Oakland"), the old item comes off the profile and a
+// dated record of the change is kept (Royce, 2026-09-23, from Instinct's
+// "dated corrections"). Co can then say honestly what it had and when it
+// changed, instead of silently holding a wrong fact or silently dropping it.
+
+export const CORRECTABLE_FIELDS = [
+  "city",
+  "life_chapters",
+  "goals",
+  "blockers",
+  "activity_preferences",
+  "long_term_direction",
+  "availability_pattern",
+] as const;
+export type CorrectableField = (typeof CORRECTABLE_FIELDS)[number];
+export const LIST_FIELDS: CorrectableField[] = ["life_chapters", "goals", "blockers", "activity_preferences"];
+
+export type OnFile = Partial<Record<CorrectableField, string | string[] | null>>;
+export type ProposedCorrection = { field: string; old: string; new: string | null; quote: string };
+export type Correction = { field: CorrectableField; old: string; new: string | null; quote: string };
+
+// Cheap first pass on what they just said, so the model check only runs when
+// a correction is plausible. Deliberately broad: a miss here means a wrong
+// fact stays on file, a false hit only costs one small model call.
+export function mightBeCorrection(message: string): boolean {
+  return /\b(actually|not|no longer|anymore|wrong|correct|incorrect|moved|changed|instead|never|isn'?t|wasn'?t|aren'?t|don'?t|doesn'?t|didn'?t|haven'?t|quit|left|stopped|no|now|these days|used to|prefer|rather|better)\b/i.test(message);
+}
+
+function onFileItems(onFile: OnFile, field: CorrectableField): string[] {
+  const v = onFile[field];
+  if (Array.isArray(v)) return v.filter((x): x is string => typeof x === "string");
+  return typeof v === "string" && v.trim() ? [v] : [];
+}
+
+// A correction is accepted only when the old value is really on file and
+// their own words in the new message say so. Co's lines never count.
+export function gateCorrections(
+  proposals: ProposedCorrection[],
+  onFile: OnFile,
+  newWords: string,
+): { accepted: Correction[]; rejected: { proposal: ProposedCorrection; reason: string }[]; checks: GateCheck[] } {
+  const accepted: Correction[] = [];
+  const rejected: { proposal: ProposedCorrection; reason: string }[] = [];
+  const isCoLine = (l: string) => /^\s*(co replied:|assistant:|co:)/i.test(l);
+  const theirs = squash(newWords.split("\n").filter((l) => !isCoLine(l)).join(" "));
+  for (const p of proposals) {
+    const field = CORRECTABLE_FIELDS.find((f) => f === p.field);
+    const q = squash(p.quote ?? "");
+    let reason: string | null = null;
+    if (!field) reason = "not a field that can be corrected";
+    else if (!onFileItems(onFile, field).includes(p.old)) reason = "old value isn't on file";
+    else if (q.split(" ").filter(Boolean).length < 3) reason = "no real supporting quote";
+    else if (!theirs.includes(q)) reason = "quote isn't in what they just said";
+    else if (p.new != null && squash(p.new) === squash(p.old)) reason = "nothing changed";
+    if (reason || !field) rejected.push({ proposal: p, reason: reason ?? "invalid" });
+    else accepted.push({ field, old: p.old, new: p.new?.trim() ? p.new.trim() : null, quote: p.quote });
+  }
+  const checks: GateCheck[] = rejected.map((r) => ({ name: "correction_supported", pass: false, reason: `${r.proposal.field}: ${r.reason}` }));
+  return { accepted, rejected, checks };
+}
+
+// The profile after corrections: old items out, new ones in (lists put the
+// new item first, as the newest).
+export function applyCorrections<T extends OnFile>(profile: T, corrections: Correction[]): T {
+  const out: any = { ...profile };
+  for (const c of corrections) {
+    if (LIST_FIELDS.includes(c.field)) {
+      const list = (Array.isArray(out[c.field]) ? out[c.field] : []).filter((x: string) => x !== c.old);
+      out[c.field] = c.new && !list.includes(c.new) ? [c.new, ...list] : list;
+    } else if (out[c.field] === c.old) {
+      out[c.field] = c.new;
+    }
+  }
+  return out;
+}
+
+// For Co's context: what changed and when, newest first.
+const FIELD_LABELS: Record<CorrectableField, string> = {
+  city: "where they live",
+  life_chapters: "life chapter",
+  goals: "goal",
+  blockers: "what's in their way",
+  activity_preferences: "what they like doing",
+  long_term_direction: "long-term direction",
+  availability_pattern: "when they're free",
+};
+export function renderCorrections(rows: { field: string; old_value: string; new_value: string | null; corrected_at: Date | string }[], timezone = "America/Los_Angeles"): string {
+  return rows
+    .map((r) => {
+      const label = FIELD_LABELS[r.field as CorrectableField] ?? r.field;
+      const day = new Date(r.corrected_at).toLocaleDateString("en-US", { month: "short", day: "numeric", timeZone: timezone });
+      return r.new_value
+        ? `- ${label}: you had "${r.old_value}"; they corrected it to "${r.new_value}" on ${day}`
+        : `- ${label}: you had "${r.old_value}"; they said that's wrong on ${day}`;
+    })
+    .join("\n");
+}

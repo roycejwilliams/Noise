@@ -206,13 +206,17 @@ export async function runConversationReplyAgent(
 
   const lastCoMessage = lastCoLine(input.recentConversation);
 
-  const system = `${CO_VOICE}
+  // Split so the slow-changing part (Co's voice and this member's call
+  // guide, which only changes when what Co knows about them does) can be
+  // cached on its own, and reused across texts in a back-and-forth; the rest
+  // is this moment (2026-09-23, prompt caching).
+  const sharedSystem = `${CO_VOICE}
 ${input.personaPrompt ? `
 Below is the guide you use on live phone calls. Over text, keep its listening principles, but not its call structure, phases, or pacing. If anything in it describes who you are differently from the above, the above wins.
 
 ${input.personaPrompt}
-` : ""}
-You are replying by iMessage to ${input.firstName}, picking up wherever this conversation actually is. ${CO_TEXT_CHANNEL}
+` : ""}`;
+  const system = `You are replying by iMessage to ${input.firstName}, picking up wherever this conversation actually is. ${CO_TEXT_CHANNEL}
 
 ${input.firstName} is texting you — you already have their number, never ask them for it.
 
@@ -263,8 +267,22 @@ ${input.missingTopic ? `  - Co doesn't yet have a good sense of ${input.missingT
     // After a search the content is already written (link, description, or
     // what was found and why not); the reply around it doesn't need full
     // reasoning (2026-09-16: drafting was 7-10s of a 46s search turn).
-    ...(input.searchedThisTurn ? { providerOptions: { anthropic: { effort: "low" } } } : {}),
-    system,
+    //
+    // Caching: the slow-changing part gets its own breakpoint (reused by
+    // their next text within 5 minutes), and the request-level cacheControl caches
+    // everything up to the latest message, so each step of this tool loop
+    // reads the prompt the step before it wrote instead of paying full
+    // price for it again.
+    providerOptions: {
+      anthropic: {
+        cacheControl: { type: "ephemeral" },
+        ...(input.searchedThisTurn ? { effort: "low" as const } : {}),
+      },
+    },
+    system: [
+      { role: "system" as const, content: sharedSystem, providerOptions: { anthropic: { cacheControl: { type: "ephemeral" } } } },
+      { role: "system" as const, content: system },
+    ],
     tools,
     // 6, not 5 — a genuine second sendReply call now needs an extra
     // call/result round trip the single-reply design didn't. (Briefly

@@ -90,7 +90,9 @@ export function describeOpenItem(kind: OpenItemKind, detail: string | null): str
     case "event_checkin":
       return `Co asked who they met at "${detail ?? "the event"}" tonight`;
     case "match_nudge":
-      return `Co told them about ${detail ?? "someone"}, someone at the same event, and asked if they want to be connected`;
+      return detail
+        ? `Co told them about ${detail}, someone at the same event, and asked if they want to be connected`
+        : "Co told them another member is going to the same event, without saying who, and asked if they'd like an intro";
     case "network_tease":
       return "Co said someone in its network crossed its mind for them, without saying who, and asked if they want to hear who";
     case "network_intro":
@@ -214,8 +216,9 @@ export async function gatherOpenItems(userId: string, opts: { skipWalkinAsk?: bo
     items.push({
       id: `match_nudge:${matchNudge.event_id}:${matchNudge.candidate_id}`,
       kind: "match_nudge",
-      description: describeOpenItem("match_nudge", matchNudge.candidate_first_name),
-      detail: matchNudge.candidate_first_name,
+      // Never the name for an anonymous heads-up: this text reaches the reply.
+      description: describeOpenItem("match_nudge", matchNudge.anonymous ? null : matchNudge.candidate_first_name),
+      detail: matchNudge.anonymous ? null : matchNudge.candidate_first_name,
       askedAt: at ? new Date(at) : null,
       ref: { kind: "match_nudge", pending: matchNudge },
     });

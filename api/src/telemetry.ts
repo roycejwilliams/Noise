@@ -1,5 +1,6 @@
 import { NodeSDK } from "@opentelemetry/sdk-node";
 import { LangfuseSpanProcessor } from "@langfuse/otel";
+import { LlmUsageSpanProcessor } from "./services/llmUsage.js";
 
 // Traces every Claude call the Vercel AI SDK makes (generateText across
 // profileExtraction/matching/circleInvite/circleApproval/booking/scheduling/
@@ -17,19 +18,19 @@ import { LangfuseSpanProcessor } from "@langfuse/otel";
 // invoked at the very top of server.ts, after dotenv/config loads the env
 // but before any route/service module that might call generateText.
 export function initTelemetry(): void {
+  // Cost per Claude request goes to llm_usage whether or not Langfuse is set.
+  const spanProcessors: any[] = [new LlmUsageSpanProcessor()];
   if (!process.env.LANGFUSE_SECRET_KEY || !process.env.LANGFUSE_PUBLIC_KEY) {
     console.warn("LANGFUSE_SECRET_KEY/LANGFUSE_PUBLIC_KEY not set — LLM call tracing is disabled.");
-    return;
-  }
-  const sdk = new NodeSDK({
+  } else {
     // Tags every trace so local/dev runs never mix into the "production"
     // view in Langfuse — reuses the same NODE_ENV check the rest of this
     // codebase already relies on (e.g. validateTwilioSignature in co.ts).
-    spanProcessors: [
+    spanProcessors.push(
       new LangfuseSpanProcessor({
         environment: process.env.NODE_ENV === "production" ? "production" : "development",
       }),
-    ],
-  });
-  sdk.start();
+    );
+  }
+  new NodeSDK({ spanProcessors }).start();
 }

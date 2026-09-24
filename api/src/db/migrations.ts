@@ -42,6 +42,72 @@ export async function runMigrations(): Promise<void> {
     )
     .catch((err: Error) => console.error("harness_decisions table init failed:", err));
 
+  // What each Claude request cost (2026-09-23), one row per request, written
+  // by services/llmUsage.ts. Token counts by billing type; no message text.
+  await pool
+    .query(
+      `CREATE TABLE IF NOT EXISTS llm_usage (
+        id BIGSERIAL PRIMARY KEY,
+        function_id TEXT NOT NULL,
+        trace_id TEXT,
+        model TEXT NOT NULL,
+        input_uncached INTEGER NOT NULL DEFAULT 0,
+        cache_read INTEGER NOT NULL DEFAULT 0,
+        cache_write INTEGER NOT NULL DEFAULT 0,
+        output INTEGER NOT NULL DEFAULT 0,
+        web_searches INTEGER NOT NULL DEFAULT 0,
+        cost_usd NUMERIC(12, 6),
+        created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+      )`,
+    )
+    .then(() => pool.query(`CREATE INDEX IF NOT EXISTS idx_llm_usage_time ON llm_usage (created_at DESC, function_id)`))
+    .catch((err: Error) => console.error("llm_usage table init failed:", err));
+
+  // Dated corrections (2026-09-23): when someone corrects something on
+  // their profile, the old value comes off co_profiles and the change is
+  // kept here with its date (services/profileExtraction.ts storeProfile).
+  await pool
+    .query(
+      `CREATE TABLE IF NOT EXISTS profile_corrections (
+        id BIGSERIAL PRIMARY KEY,
+        user_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+        field TEXT NOT NULL,
+        old_value TEXT NOT NULL,
+        new_value TEXT,
+        quote TEXT NOT NULL,
+        corrected_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+      )`,
+    )
+    .then(() => pool.query(`CREATE INDEX IF NOT EXISTS idx_profile_corrections_user ON profile_corrections (user_id, corrected_at DESC)`))
+    .catch((err: Error) => console.error("profile_corrections table init failed:", err));
+
+  // Who is at a Co event (2026-09-23, services/eventPresence.ts): when Co
+  // asked, when their shared location was first seen, and when they
+  // arrived or left. Times only, never coordinates.
+  await pool
+    .query(
+      `CREATE TABLE IF NOT EXISTS event_presence (
+        event_api_id TEXT NOT NULL,
+        user_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+        asked_at TIMESTAMPTZ,
+        sharing_seen_at TIMESTAMPTZ,
+        near_since TIMESTAMPTZ,
+        arrived_at TIMESTAMPTZ,
+        arrived_via TEXT CHECK (arrived_via IN ('location', 'text')),
+        away_since TIMESTAMPTZ,
+        left_at TIMESTAMPTZ,
+        PRIMARY KEY (event_api_id, user_id)
+      )`,
+    )
+    .catch((err: Error) => console.error("event_presence table init failed:", err));
+
+  // A heads-up about an event Co doesn't run names no one until both people
+  // say yes (2026-09-23): marks those nudges so replies never name the other
+  // person early.
+  await pool
+    .query(`ALTER TABLE event_guest_match_nudges ADD COLUMN IF NOT EXISTS anonymous BOOLEAN NOT NULL DEFAULT false`)
+    .catch((err: Error) => console.error("event_guest_match_nudges.anonymous migration failed:", err));
+
   await pool
     .query(
       `

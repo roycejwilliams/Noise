@@ -70,6 +70,9 @@ import { addEventFacts, addFact, addInstruction, addOngoingSearchFacts, gatherRe
 import { runConversationReplyAgent, filterRelevantMemories, CALL_OFFER_EXPIRY_DAYS } from "../agent/conversationReply.js";
 import { triggerCallForUser } from "../services/callTrigger.js";
 import sendblue, { cleanCoMessage, markRead, sendReaction, webhookSecretMatches } from "../services/sendblue.js";
+import { TURN_FAILED_NOTE, turnFailedNoteBlocked } from "../services/turnFailure.js";
+import { arrivedByText } from "../services/eventPresence.js";
+import { scoreGuestListForEvent } from "../services/eventScoring.js";
 import { closingReaction, emojiFor, lastCoLine } from "../services/conversationClose.js";
 import { renderMatchLead, sourceOf } from "../services/messageFormat.js";
 import { CO_VOICE, CO_TEXT_CHANNEL } from "../services/coVoice.js";
@@ -568,6 +571,7 @@ export function sendblueRouter(io: Server): Router {
       // lock and could never become visible during the wait. Stamping out
       // here, ahead of the lock, decouples "record that a message arrived"
       // from "wait in line to be processed."
+      const turnStartedAt = new Date();
       let myInboundAt: string | null = null;
       const bodyForStamp = req.body ?? {};
       if (lockKey && !bodyForStamp.is_outbound && typeof bodyForStamp.content === "string") {
@@ -753,6 +757,7 @@ export function sendblueRouter(io: Server): Router {
         // capture has happened yet. Fire-and-forget on the write; never let
         // this block or fail the real reply below.
         let walkinCheckinEventName: string | null = null;
+        let arrivedAtEvent: { eventApiId: string; eventName: string; isNew: boolean } | null = null;
         if (hasText) {
           const checkin = await detectCheckinPhrase(content).catch((err: any) => {
             console.error("sendblue: detectCheckinPhrase failed (non-fatal):", err?.message ?? err);
@@ -763,6 +768,19 @@ export function sendblueRouter(io: Server): Router {
               console.error("sendblue: recordCheckin failed (non-fatal):", err?.message ?? err),
             );
             walkinCheckinEventName = checkin.eventName;
+          } else if (user.identity_captured) {
+            // "I'm here" from a member registered for an event that's on now
+            // (services/eventPresence.ts): counts as arriving, and their
+            // in-room nudge goes out now if one was waiting on them.
+            arrivedAtEvent = await arrivedByText(user.id, content).catch((err: any) => {
+              console.error("sendblue: arrivedByText failed (non-fatal):", err?.message ?? err);
+              return null;
+            });
+            if (arrivedAtEvent?.isNew) {
+              scoreGuestListForEvent(arrivedAtEvent.eventApiId, arrivedAtEvent.eventName).catch((err: any) =>
+                console.error("sendblue: arrival re-score failed (non-fatal):", err?.message ?? err),
+              );
+            }
           }
         }
 
@@ -1546,6 +1564,12 @@ export function sendblueRouter(io: Server): Router {
         }
         if (repeatContext) addInstruction(replyFacts, repeatContext);
         if (walkinAskInstruction) addInstruction(replyFacts, walkinAskInstruction);
+        if (arrivedAtEvent) {
+          addInstruction(
+            replyFacts,
+            `They just told you they've arrived at "${arrivedAtEvent.eventName}". Welcome them in a line. If there's someone for them to meet, that comes in its own text, so don't name anyone or promise a person here.`,
+          );
+        }
         if (decision.clarifyContext) addInstruction(replyFacts, decision.clarifyContext);
 
         // Same strings downstream code (and the reply agent) already key on.
@@ -1805,12 +1829,18 @@ export function sendblueRouter(io: Server): Router {
                 email: pendingMatchNudge.candidate_email,
               },
             );
+            // An anonymous heads-up: they never learned who, so the reply
+            // can't either until both say yes.
+            const other = pendingMatchNudge.anonymous ? "the other member" : pendingMatchNudge.candidate_first_name;
+            if (pendingMatchNudge.anonymous) {
+              addInstruction(replyFacts, "They were never told who the other member is. Don't name them, describe them, or hint at who it is, even if asked; say you'll share once you've checked with them.");
+            }
             if (classification === "interested") {
-              addFact(replyFacts, "did_this_turn", `Recorded that they want to be connected with ${pendingMatchNudge.candidate_first_name}. No introduction has been made yet; it depends on ${pendingMatchNudge.candidate_first_name} saying yes too.`);
-              addInstruction(replyFacts, `They just said yes to being connected with ${pendingMatchNudge.candidate_first_name}. Acknowledge it warmly and briefly. You may have already asked them a separate follow-up question about how they'd like to connect (text or email), or you're still waiting on ${pendingMatchNudge.candidate_first_name} to answer. Don't promise a specific thing is happening, and don't say what ${pendingMatchNudge.candidate_first_name} thinks or wants.`);
+              addFact(replyFacts, "did_this_turn", `Recorded that they want to be connected with ${other}. No introduction has been made yet; it depends on ${other} saying yes too.`);
+              addInstruction(replyFacts, `They just said yes to being connected with ${other}. Acknowledge it warmly and briefly. You may have already asked them a separate follow-up question about how they'd like to connect (text or email), or you're still waiting on ${other} to answer. Don't promise a specific thing is happening, and don't say what ${other} thinks or wants.`);
             } else {
-              addFact(replyFacts, "did_this_turn", `Recorded that they passed on being connected with ${pendingMatchNudge.candidate_first_name}.`);
-              addInstruction(replyFacts, `They just passed on being connected with ${pendingMatchNudge.candidate_first_name} (internal only, never say this name back to them as a pressure tactic). Acknowledge lightly, no pressure, don't explain further.`);
+              addFact(replyFacts, "did_this_turn", `Recorded that they passed on being connected with ${other}.`);
+              addInstruction(replyFacts, `They just passed on being connected with ${other} (internal only, never say this name back to them as a pressure tactic). Acknowledge lightly, no pressure, don't explain further.`);
             }
           } catch (err: any) {
             console.error("sendblue: match nudge reply handling failed (non-fatal):", err?.message ?? err);
@@ -2794,7 +2824,7 @@ Return ONLY valid JSON, no preamble: {"date": "YYYY-MM-DD or null", "time": "HH:
         // co_profiles.intent for matching to use.
         const textTranscript = `${recentConversation}\nuser: ${resolvedContent}\nassistant: ${coReply}`.trim();
         extractPsychographicProfile(textTranscript)
-          .then(({ extracted }) => storeProfile(user.id, extracted, textTranscript))
+          .then(({ extracted }) => storeProfile(user.id, extracted, textTranscript, { newWords: resolvedContent }))
           .catch((err: any) => console.error("sendblue: text-based profile extraction failed (non-fatal):", err?.message ?? err));
         // Keep the current picture of them fresh (harness/personSnapshot.ts);
         // rebuilds only when they've said something new, at most every 10 min.
@@ -2817,6 +2847,10 @@ Return ONLY valid JSON, no preamble: {"date": "YYYY-MM-DD or null", "time": "HH:
         // path for a failure that happened before that ack.
         if (res.headersSent) {
           console.error("sendblue: error after early webhook ack (non-fatal, already ack'd):", (error as any)?.message ?? error);
+          // They already see "Read"; don't leave them with nothing.
+          if (lockKey && isGenuineInbound && !isGroupMessage) {
+            await tellMemberTurnFailed(lockKey, turnStartedAt, "turn_error", (error as any)?.constructor?.name ?? "Error");
+          }
           return;
         }
         next(error);
@@ -2840,15 +2874,58 @@ Return ONLY valid JSON, no preamble: {"date": "YYYY-MM-DD or null", "time": "HH:
   return router;
 }
 
+// A turn died after the text was marked read: send the one honest line
+// (services/turnFailure.ts), unless Co answered anyway, they've opted out,
+// or they were just told. Never throws.
+export async function tellMemberTurnFailed(phone: string, receivedAt: Date, source: "turn_error" | "restart", errorClass: string): Promise<boolean> {
+  try {
+    const { rows } = await pool.query(
+      `SELECT u.id, u.sms_opted_out, u.archived_at,
+         EXISTS (
+           SELECT 1 FROM co_memories r
+           WHERE r.user_id = u.id AND r.memory_type = 'text_exchange' AND r.content LIKE 'Co replied:%'
+             AND r.created_at > $2 AND r.content <> ALL($3::text[])
+         ) AS replied,
+         (SELECT MAX(n.created_at) FROM co_memories n
+           WHERE n.user_id = u.id AND n.memory_type = 'text_exchange' AND n.content = $4) AS last_note_at
+       FROM users u WHERE u.phone_number = $1 LIMIT 1`,
+      [phone, receivedAt, HOLD_LINES.map((l) => `Co replied: ${l}`), `Co replied: ${TURN_FAILED_NOTE}`],
+    );
+    const row = rows[0];
+    const blocked = turnFailedNoteBlocked({
+      member: row ? { optedOut: !!row.sms_opted_out, archived: !!row.archived_at } : null,
+      coRepliedSince: !!row?.replied,
+      lastNoteAt: row?.last_note_at ? new Date(row.last_note_at) : null,
+      receivedAt,
+      now: new Date(),
+    });
+    const sent = blocked ? false : await sendAndLog(row.id, phone, TURN_FAILED_NOTE);
+    await recordDecision({
+      layer: 2,
+      decision: "turn.failed",
+      userId: row?.id ?? null,
+      outcome: sent ? "act" : "skip",
+      action: sent ? "told_member" : blocked ?? "send_failed",
+      proposal: { source, errorClass },
+      checks: [{ name: "member_not_left_silent", pass: sent || blocked === "already_answered", reason: blocked ?? (sent ? "sent the note" : "the note itself failed to send") }],
+    }).catch(() => {});
+    return sent;
+  } catch (err: any) {
+    console.error("sendblue: tellMemberTurnFailed failed:", err?.message ?? err);
+    return false;
+  }
+}
+
 // Inbound texts whose turn never finished (the process restarted or crashed
 // mid-turn) and that never got a Co reply afterwards, so they're not lost
-// silently (2026-09-17 code review). Meant to run once on startup; it only
-// reports, since replaying a half-done turn could double-send. Quietly does
-// nothing until the payload and finished_at columns exist.
+// silently (2026-09-17 code review). Meant to run once on startup. It never
+// replays the turn (that could double-send); for a text from the last hour
+// it sends the one honest "please resend" line instead (2026-09-23). Quietly
+// does nothing until the payload and finished_at columns exist.
 export async function reportUnfinishedTurns(): Promise<number> {
   try {
     const { rows } = await pool.query(
-      `SELECT h.handle, h.payload, u.id AS user_id
+      `SELECT h.handle, h.payload, h.received_at, u.id AS user_id
        FROM inbound_webhook_handles h
        LEFT JOIN users u ON u.phone_number = h.payload->>'number'
        WHERE h.finished_at IS NULL AND h.payload IS NOT NULL
@@ -2872,6 +2949,11 @@ export async function reportUnfinishedTurns(): Promise<number> {
         proposal: { handle: row.handle, message: row.payload?.content ?? null },
         checks: [{ name: "turn_finished", pass: false, reason: "the process stopped mid-turn; nobody answered this text" }],
       }).catch(() => {});
+      const phone = row.payload?.number;
+      const isGroup = row.payload?.message_type === "group" || !!row.payload?.group_id;
+      if (typeof phone === "string" && phone && !isGroup) {
+        await tellMemberTurnFailed(phone, new Date(row.received_at), "restart", "Restart");
+      }
     }
     return rows.length;
   } catch (err: any) {

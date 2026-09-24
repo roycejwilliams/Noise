@@ -80,6 +80,34 @@ export async function geocodeCity(city: string): Promise<GeoPoint | null> {
   }
 }
 
+// A venue's exact spot, for noticing arrivals (services/eventPresence.ts,
+// 2026-09-23). Unlike geocodeCity there is no city-level fallback: a city's
+// center point would never match a real venue, and near one it could
+// wrongly mark people as arrived. Street-level or nothing.
+const VENUE_PRECISE = new Set(["ROOFTOP", "RANGE_INTERPOLATED"]);
+const VENUE_TYPES = ["street_address", "premise", "subpremise", "establishment", "point_of_interest"];
+export async function geocodeVenue(address: string): Promise<GeoPoint | null> {
+  const trimmed = address.trim();
+  if (!trimmed) return null;
+  const key = `venue:${trimmed}`;
+  const cached = await pool.query(`SELECT lat, lng FROM geocode_cache WHERE query = $1`, [key]).catch(() => ({ rows: [] as any[] }));
+  if (cached.rows.length) return { lat: Number(cached.rows[0].lat), lng: Number(cached.rows[0].lng) };
+  try {
+    const response = await client.geocode({ params: { address: trimmed, key: process.env.GOOGLE_PLACES_API_KEY! } });
+    const hit = response.data.results?.[0];
+    const precise = hit && (VENUE_PRECISE.has(String(hit.geometry?.location_type)) || (hit.types ?? []).some((t: string) => VENUE_TYPES.includes(t)));
+    if (!hit || !precise) return null;
+    const { lat, lng } = hit.geometry.location;
+    await pool
+      .query(`INSERT INTO geocode_cache (query, lat, lng) VALUES ($1, $2, $3) ON CONFLICT (query) DO NOTHING`, [key, lat, lng])
+      .catch(() => {});
+    return { lat, lng };
+  } catch (err: any) {
+    console.error("geocodeVenue: lookup failed (non-fatal):", err?.response?.data?.status ?? err?.message ?? err);
+    return null;
+  }
+}
+
 // Open-Meteo's geocoding API: free, no key, no billing.
 async function openMeteoGeocode(city: string): Promise<GeoPoint | null> {
   try {

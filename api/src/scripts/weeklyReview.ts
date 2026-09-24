@@ -35,6 +35,10 @@ async function main() {
   const file = `evals/review/${new Date().toISOString().slice(0, 10)}.local.json`;
   writeFileSync(file, JSON.stringify(out, null, 2));
   console.log(`weekly review: ${moments.length} moments -> ${file}`);
+  // Whether matching at events Co doesn't run is paying off (2026-09-23).
+  const { outsideEventOverlapStats } = await import("../services/eventMatching.js");
+  const o = await outsideEventOverlapStats(30).catch(() => null);
+  if (o) console.log(`outside events, last 30 days: ${o.eventsWithOverlap} with 2+ members going, ${o.headsUps} heads-ups sent, ${o.bothSaidYes} pairs both said yes`);
   process.exit(0);
 }
 main().catch((err) => {

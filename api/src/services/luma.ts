@@ -13,7 +13,23 @@ export type LumaEvent = {
   end_at: string | null;
   city: string | null;
   url: string | null;
+  // Venue coordinates and time zone (2026-09-23, arrival detection in
+  // services/eventPresence.ts). Luma leaves the coordinates null when an
+  // event has no mappable place, so either can be missing.
+  latitude?: number | null;
+  longitude?: number | null;
+  timezone?: string | null;
+  venue?: string | null;
+  // Full street address, for looking up the venue's coordinates when Luma
+  // doesn't give them (its API left them null on every event, 2026-09-23).
+  address?: string | null;
 };
+
+// A coordinate from Luma: a number or numeric string, else null.
+function coord(v: unknown): number | null {
+  const n = typeof v === "number" ? v : typeof v === "string" && v.trim() ? Number(v) : NaN;
+  return Number.isFinite(n) ? n : null;
+}
 
 // GET /v1/calendars/events/list — resolves which event_id to pull a guest
 // list for. Paginated; follows next_cursor until Luma reports has_more: false.
@@ -53,6 +69,13 @@ export async function listCalendarEvents(): Promise<LumaEvent[]> {
         end_at: event.end_at ?? null,
         city: event.geo_address_json?.city ?? null,
         url: event.url ?? null,
+        latitude: coord(event.geo_latitude ?? event.coordinate?.latitude),
+        longitude: coord(event.geo_longitude ?? event.coordinate?.longitude),
+        timezone: event.timezone ?? null,
+        venue: event.geo_address_json?.address ?? event.geo_address_json?.full_address ?? null,
+        address:
+          event.geo_address_json?.full_address ??
+          ([event.geo_address_json?.address, event.geo_address_json?.city_state ?? event.geo_address_json?.city].filter(Boolean).join(", ") || null),
       });
     }
     cursor = data.has_more ? data.next_cursor : undefined;

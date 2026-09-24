@@ -61,6 +61,8 @@ export type PendingMatchNudge = {
   candidate_first_name: string;
   candidate_phone: string;
   candidate_email: string;
+  // They weren't told who (an event Co doesn't run): never name them yet.
+  anonymous?: boolean;
 };
 
 // Mirrors sendblue.ts's other pending-offer lookups exactly (same
@@ -76,7 +78,7 @@ const MATCH_NUDGE_REPLY_EXPIRY_DAYS = 7;
 // actually asked about, never a stale one from an earlier match.
 export async function findPendingMatchNudge(userId: string): Promise<PendingMatchNudge | null> {
   const { rows } = await pool.query(
-    `SELECT n.event_id, n.candidate_id, u.first_name AS candidate_first_name, u.phone_number AS candidate_phone, u.email AS candidate_email
+    `SELECT n.event_id, n.candidate_id, n.anonymous, u.first_name AS candidate_first_name, u.phone_number AS candidate_phone, u.email AS candidate_email
      FROM event_guest_match_nudges n
      JOIN users u ON u.id = n.candidate_id
      WHERE n.person_id = $1
@@ -102,6 +104,7 @@ export async function findPendingMatchNudge(userId: string): Promise<PendingMatc
     candidate_first_name: rows[0].candidate_first_name,
     candidate_phone: rows[0].candidate_phone,
     candidate_email: rows[0].candidate_email,
+    anonymous: !!rows[0].anonymous,
   };
 }
 

@@ -1,6 +1,7 @@
 import pool from "../db/db.js";
 import { generateEmbedding } from "./embeddings.js";
 import { scoreMatchedGroup, type ScorableGuest } from "./eventScoring.js";
+import { recordDecision } from "../harness/core.js";
 
 // "Nudge Co users at events Co doesn't own" — the non-Luma counterpart to
 // eventScoring.ts. Two sources feed the same matching logic:
@@ -17,7 +18,7 @@ import { scoreMatchedGroup, type ScorableGuest } from "./eventScoring.js";
 const DATE_WINDOW_DAYS = 2;
 const SIMILARITY_THRESHOLD = 0.85;
 
-export type CrossMatch = { user_id: string; event_api_id: string | null };
+export type CrossMatch = { user_id: string; event_api_id: string | null; source?: "mention" | "surfaced" };
 
 async function fetchScorableGuests(userIds: string[]): Promise<ScorableGuest[]> {
   if (!userIds.length) return [];
@@ -52,7 +53,7 @@ async function findCrossMatches(
   const embeddingLiteral = Array.isArray(embedding) ? `[${embedding.join(",")}]` : embedding;
   const [mentionRows, surfacedRows] = await Promise.all([
     pool.query(
-      `SELECT user_id, NULL::text AS event_api_id
+      `SELECT user_id, NULL::text AS event_api_id, 'mention' AS source
        FROM planned_event_mentions
        WHERE ($1::uuid IS NULL OR id != $1::uuid)
          AND user_id != $2
@@ -62,7 +63,7 @@ async function findCrossMatches(
       [excludeMentionId, excludeUserId, eventDate, DATE_WINDOW_DAYS, embeddingLiteral, SIMILARITY_THRESHOLD],
     ),
     pool.query(
-      `SELECT user_id, event_api_id
+      `SELECT user_id, event_api_id, 'surfaced' AS source
        FROM surfaced_events
        WHERE user_id != $1
          AND event_date IS NOT NULL
@@ -105,16 +106,28 @@ export async function matchAndScoreEventMention(mentionId: string): Promise<void
     return;
   }
 
-  const matches = await findCrossMatches(mention.user_id, mentionId, mention.embedding, mention.event_date);
-  if (!matches.length) return; // no one else reported or was surfaced the same event yet
+  const found = await findCrossMatches(mention.user_id, mentionId, mention.embedding, mention.event_date);
+  // Only people who said they're going count (2026-09-23). A surfaced_events
+  // row means Co recommended the event, not that they're going, so it can
+  // give the event its real id but never adds a person to the group.
+  const matches = attendeesOnly(found);
+  if (!matches.length) return; // no one else said they're going to the same event yet
 
-  const matchedUserIds = [mention.user_id, ...matches.map((m) => m.user_id)];
+  const matchedUserIds = [...new Set([mention.user_id, ...matches.map((m) => m.user_id)])];
   const matched = await fetchScorableGuests(matchedUserIds);
   // Real Luma id if any matched record has one (a surfaced_events match),
   // otherwise a synthetic id stable across repeated mentions of the same
   // people — there's no canonical event record when it's purely two
   // self-reports matching each other.
-  const eventId = pickCanonicalEventId(matches, matchedUserIds);
+  const eventId = pickCanonicalEventId(found, matchedUserIds);
+  await recordDecision({
+    layer: 6,
+    decision: "event.overlap",
+    userId: mention.user_id,
+    outcome: "act",
+    action: "outside_event",
+    proposal: { eventId, members: matchedUserIds.length },
+  }).catch(() => {});
 
   console.log(
     `eventMatching: mention ${mentionId} ("${mention.event_name_raw}") matched ${matches.length} other Co user(s) (event id: ${eventId}), scoring group`,
@@ -144,6 +157,9 @@ export async function recordSurfacedEventAndMatch(
   startAt?: string | null,
   endAt?: string | null,
 ): Promise<void> {
+  // Recorded only (2026-09-23). Co recommending an event isn't the member
+  // going, so this no longer matches anyone; the recorded row still lends a
+  // real event id to people who later say they're going.
   const embedding = await generateEmbedding(eventName).catch((err: any) => {
     console.error("recordSurfacedEventAndMatch: generateEmbedding failed (non-fatal):", err?.message ?? err);
     return null;
@@ -155,19 +171,37 @@ export async function recordSurfacedEventAndMatch(
     [userId, eventApiId, eventName, eventDate, embedding ? `[${embedding.join(",")}]` : null],
   );
 
-  if (!embedding) return; // can't cross-match without an embedding, but the row is still recorded
+  void startAt;
+  void endAt;
+}
 
-  const matches = await findCrossMatches(userId, null, embedding, eventDate);
-  if (!matches.length) return;
+// People from planned_event_mentions (they said they're going), never from
+// surfaced_events (Co only recommended it). Exported for evals.
+export function attendeesOnly(found: CrossMatch[]): CrossMatch[] {
+  return found.filter((m) => m.source === "mention");
+}
 
-  const matchedUserIds = [userId, ...matches.map((m) => m.user_id)];
-  const matched = await fetchScorableGuests(matchedUserIds);
-
-  console.log(
-    `eventMatching: surfaced event ${eventApiId} ("${eventName}") matched ${matches.length} other Co user(s), scoring group`,
-  );
-  // Always the real Luma id here — this path only ever runs for a real,
-  // surfaced Tier 1/2 event, never a self-report with no canonical id.
-  const eventTiming = startAt ? { start_at: startAt, end_at: endAt ?? null } : null;
-  await scoreMatchedGroup(eventApiId, eventName, matched, eventTiming);
+// Is matching at events Co doesn't run worth it? (Royce, 2026-09-23: "if
+// overlap stays rare, that's a sign to put the effort into Co's own events".)
+// Over the last `days`: how many outside events had 2+ members going, how
+// many anonymous heads-ups went out, and how many pairs both said yes (the
+// intro email goes out on that second yes).
+export async function outsideEventOverlapStats(days = 30): Promise<{ eventsWithOverlap: number; headsUps: number; bothSaidYes: number }> {
+  const [overlap, headsUps, both] = await Promise.all([
+    pool.query(
+      `SELECT COUNT(DISTINCT proposal->>'eventId')::int AS n FROM harness_decisions
+       WHERE decision = 'event.overlap' AND created_at > NOW() - ($1 || ' days')::interval`,
+      [days],
+    ),
+    pool.query(`SELECT COUNT(*)::int AS n FROM event_guest_match_nudges WHERE anonymous AND sent_at > NOW() - ($1 || ' days')::interval`, [days]),
+    pool.query(
+      `SELECT COUNT(*)::int AS n FROM event_guest_match_opt_ins a
+       JOIN event_guest_match_opt_ins b ON b.event_id = a.event_id AND b.person_id = a.candidate_id AND b.candidate_id = a.person_id
+       WHERE a.status = 'interested' AND b.status = 'interested' AND a.person_id < a.candidate_id
+         AND EXISTS (SELECT 1 FROM event_guest_match_nudges n WHERE n.event_id = a.event_id AND n.anonymous)
+         AND GREATEST(a.decided_at, b.decided_at) > NOW() - ($1 || ' days')::interval`,
+      [days],
+    ),
+  ]);
+  return { eventsWithOverlap: overlap.rows[0].n, headsUps: headsUps.rows[0].n, bothSaidYes: both.rows[0].n };
 }

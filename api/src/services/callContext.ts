@@ -1,3 +1,4 @@
+import { renderCorrections } from "../harness/profileWrite.js";
 import { generateText } from "ai";
 import { anthropic } from "@ai-sdk/anthropic";
 import pool from "../db/db.js";
@@ -38,7 +39,7 @@ const SUMMARY_MODEL = MODELS.haiku;
 // specifics the recap's own cadence hasn't folded in yet.
 export async function buildContextSummary(userId: string): Promise<string> {
   try {
-    const [profileResult, recentTextResult, recapResult, recentRecommendationResult, emotional, ownWordsResult, openAsksResult, snapshot] = await Promise.all([
+    const [profileResult, recentTextResult, recapResult, recentRecommendationResult, emotional, ownWordsResult, openAsksResult, snapshot, correctionsResult] = await Promise.all([
       pool.query(
         `SELECT life_chapters, goals, blockers, availability_pattern, city, emotional_state, intent
          FROM co_profiles WHERE user_id = $1`,
@@ -83,6 +84,15 @@ export async function buildContextSummary(userId: string): Promise<string> {
       ),
       pool.query(`SELECT ask_text FROM ask_checkins WHERE user_id = $1 AND resolved_at IS NULL ORDER BY created_at DESC LIMIT 4`, [userId]),
       getPersonSnapshot(userId),
+      // Their dated corrections (harness/profileWrite.ts), newest first.
+      pool
+        .query(
+          `SELECT field, old_value, new_value, corrected_at FROM profile_corrections
+           WHERE user_id = $1 AND corrected_at > NOW() - INTERVAL '90 days'
+           ORDER BY corrected_at DESC LIMIT 8`,
+          [userId],
+        )
+        .catch(() => ({ rows: [] as any[] })),
     ]);
     const emotionalLine = renderEmotionalContext(emotional);
 
@@ -99,7 +109,11 @@ export async function buildContextSummary(userId: string): Promise<string> {
     const ownWords = ownWordsResult.rows.map((r: any) => String(r.content).replace(/^User said: /, "- ")).reverse();
     const openAsks = openAsksResult.rows.map((r: any) => `- ${r.ask_text}`);
     const picture = renderSnapshot(snapshot);
+    const corrections = renderCorrections(correctionsResult.rows);
     const lines = [
+      corrections
+        ? `Things they've corrected (the corrected version wins over anything below; never state the old one as true, and if they ask what you had or when it changed, say it plainly with the date):\n${corrections}`
+        : null,
       picture ? `Who they are right now:\n${picture}` : null,
       ownWords.length ? `What they've told you in the last two days (newest facts win over anything below):\n${ownWords.join("\n")}` : null,
       openAsks.length ? `What they're looking for right now:\n${openAsks.join("\n")}` : null,

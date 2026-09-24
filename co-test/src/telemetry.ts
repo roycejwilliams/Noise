@@ -1,5 +1,6 @@
 import { NodeSDK } from "@opentelemetry/sdk-node";
 import { LangfuseSpanProcessor } from "@langfuse/otel";
+import { LlmUsageSpanProcessor } from "../../api/src/services/llmUsage.js";
 
 // Same wiring as api/src/telemetry.ts — separate call because co-test is its
 // own Node process with its own entry point, so api/'s initTelemetry() never
@@ -12,18 +13,18 @@ import { LangfuseSpanProcessor } from "@langfuse/otel";
 // webhooks.ts, recommendation.ts, dynamicPlacementTest.ts, venues.ts) are
 // instrumented separately since they're not shared files.
 export function initTelemetry(): void {
+  // Cost per Claude request goes to llm_usage whether or not Langfuse is set.
+  const spanProcessors: any[] = [new LlmUsageSpanProcessor()];
   if (!process.env.LANGFUSE_SECRET_KEY || !process.env.LANGFUSE_PUBLIC_KEY) {
     console.warn("LANGFUSE_SECRET_KEY/LANGFUSE_PUBLIC_KEY not set — LLM call tracing is disabled.");
-    return;
-  }
-  const sdk = new NodeSDK({
-    spanProcessors: [
+  } else {
+    spanProcessors.push(
       new LangfuseSpanProcessor({
         // Always "development" — co-test is never production traffic, even
         // when NODE_ENV happens to be set to "production" on Railway.
         environment: "development",
       }),
-    ],
-  });
-  sdk.start();
+    );
+  }
+  new NodeSDK({ spanProcessors }).start();
 }

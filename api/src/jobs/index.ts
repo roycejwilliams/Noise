@@ -9,6 +9,7 @@ import { sweepAllOpenAsks } from "../services/relevance.js";
 import { attemptEventSurfacing, PROFILE_ASK_ID } from "../services/eventSurfacingSweep.js";
 import { attemptNetworkSurfacing } from "../services/networkIntroNudge.js";
 import { scoreGuestListForEvent } from "../services/eventScoring.js";
+import { runArrivalAsks, runPresencePoll } from "../services/eventPresence.js";
 import { listCalendarEvents, getEventDetails } from "../services/luma.js";
 import { triggerCallForUser } from "../services/callTrigger.js";
 import { enqueueDuePostCallFollowUps } from "./postCallFollowUp.js";
@@ -547,6 +548,38 @@ export function registerJobs(io: Server) {
       }
     } catch (error) {
       console.error("In-room match nudge retry cron error:", error);
+    }
+  });
+
+  // Day-of arrival ask (services/eventPresence.ts, 2026-09-23): from 10am
+  // local on the event day, each registered member is asked once to share
+  // their location or text "I'm here" when they arrive.
+  cron.schedule("*/15 * * * *", async () => {
+    try {
+      const sent = await runArrivalAsks();
+      if (sent) console.log(`eventPresence: sent ${sent} arrival ask(s)`);
+    } catch (error: any) {
+      console.error("Arrival ask cron error:", error?.message ?? error);
+    }
+  });
+
+  // Arrivals and departures from shared locations, every 2 minutes, only
+  // while a Co event is on (it returns right away otherwise). An arrival
+  // re-runs that event's in-room scoring so their nudge goes out now.
+  let presenceRunning = false;
+  cron.schedule("*/2 * * * *", async () => {
+    if (presenceRunning) return;
+    presenceRunning = true;
+    try {
+      for (const eventId of await runPresencePoll()) {
+        await scoreGuestListForEvent(eventId).catch((err: any) =>
+          console.error(`Presence re-score failed for ${eventId}:`, err?.message ?? err),
+        );
+      }
+    } catch (error: any) {
+      console.error("Presence poll cron error:", error?.message ?? error);
+    } finally {
+      presenceRunning = false;
     }
   });
 
