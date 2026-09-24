@@ -11,6 +11,7 @@ import {
   PROFILE_JUDGMENT_MODEL,
   applyCorrections,
   decideAskWrite,
+  echoesCoNotMember,
   gateCorrections,
   LIST_FIELDS,
   mightBeCorrection,
@@ -1164,9 +1165,12 @@ export async function captureIntent(
       return null;
     }
 
-    const asks = normalizeCapturedAsks(parsed, scope);
-    const concrete_preferences = Array.isArray(parsed?.concrete_preferences) ? parsed!.concrete_preferences : [];
-    const wants = Array.isArray(parsed?.wants) ? parsed!.wants : [];
+    // Only what THEY said: an item that's Co's own line echoed back is
+    // dropped (harness/profileWrite.ts echoesCoNotMember, 2026-09-23).
+    const mine = (x: unknown) => typeof x === "string" && !echoesCoNotMember(x, transcript);
+    const asks = normalizeCapturedAsks(parsed, scope).filter((a) => mine(a.text));
+    const concrete_preferences = (Array.isArray(parsed?.concrete_preferences) ? parsed!.concrete_preferences : []).filter(mine);
+    const wants = (Array.isArray(parsed?.wants) ? parsed!.wants : []).filter(mine);
     const availability = typeof parsed?.availability === "string" ? parsed!.availability : null;
 
     // Nothing real came out of this pass at all — don't write an empty

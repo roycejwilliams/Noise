@@ -41,6 +41,7 @@ import { humeMoments, recordEmotionSignals, renderHumeMoments, type HumeUtteranc
 import { surfaceNewAsksNow } from "../services/eventSurfacingSweep.js";
 import { refreshPersonSnapshot } from "../harness/personSnapshot.js";
 import { auditCall } from "../harness/callGrounding.js";
+import { getLiveCall } from "../services/liveCall.js";
 
 // One-line drafts (missed-call text, voicemail line): narrow work, Haiku.
 const DRAFT_MODEL = MODELS.haiku;
@@ -750,7 +751,16 @@ async function handleToolCall(
   if (toolCallMessage.name !== "assess_conversation_coverage") return;
 
   try {
-    const { transcript } = await fetchHumeCallData(chatId);
+    // The live transcript and the summary built at call start when this
+    // process has them (services/liveCall.ts); Hume and a fresh summary
+    // otherwise. Timed, so a slow check shows where the time went.
+    const t0 = Date.now();
+    const live = userId ? getLiveCall(userId, chatId) : null;
+    const [transcript, priorContext] = await Promise.all([
+      live?.lines.length ? Promise.resolve(live.lines.join("\n")) : fetchHumeCallData(chatId).then((d) => d.transcript),
+      userId ? (live?.contextSummary != null ? Promise.resolve(live.contextSummary) : buildContextSummary(userId).catch(() => "")) : Promise.resolve(""),
+    ]);
+    const t1 = Date.now();
     // Confirmed live, 2026-09-06: this call never passed priorContext, so
     // every single call judged coverage purely off its own live transcript —
     // even when co_profiles already had a rich, recent profile from a call
@@ -760,8 +770,8 @@ async function handleToolCall(
     // real back-to-back call re-ran the entire 9-topic Rapport discovery
     // from scratch as a result, with the model never marking anything
     // "already covered."
-    const priorContext = userId ? await buildContextSummary(userId).catch(() => "") : "";
     const assessment = await assessConversationCoverage(transcript, priorContext);
+    const t2 = Date.now();
     if (userId) persistCoveredTopics(userId, assessment);
     // elapsed_minutes rides along on the same tool result the prompt already
     // polls periodically, rather than a separate tool.
@@ -774,6 +784,14 @@ async function handleToolCall(
         ...(elapsedMinutes !== null ? { elapsed_minutes: Math.round(elapsedMinutes * 10) / 10 } : {}),
       }),
     );
+    recordDecision({
+      layer: 8,
+      decision: "call.coverage",
+      userId: userId ?? null,
+      outcome: "act",
+      action: live?.lines.length ? "live_transcript" : "fetched_from_hume",
+      proposal: { prepMs: t1 - t0, modelMs: t2 - t1, sendMs: Date.now() - t2, totalMs: Date.now() - t0, reusedSummary: live?.contextSummary != null },
+    }).catch(() => {});
   } catch (err: any) {
     console.error("co/webhook: assess_conversation_coverage failed, falling back to nothing-covered:", err?.message ?? err);
     await sendHumeToolResponse(

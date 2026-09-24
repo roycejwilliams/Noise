@@ -493,6 +493,8 @@ export type EventOfferPayload = {
 // ask_id used for the backlog of people with no open stated ask, whose
 // search text comes from their profile (jobs/index.ts).
 export const PROFILE_ASK_ID = "profile";
+// Backlog key for something Co promised on a call to look into.
+export const PROMISE_ASK_PREFIX = "promise:";
 
 // Layer 7 (2026-09-14): searches every day and QUEUES the front item as an
 // "event_offer" candidate; src/harness/proactive.ts decides whether it goes
@@ -651,7 +653,9 @@ export async function onEventOfferSent(userId: string, payload: EventOfferPayloa
        ON CONFLICT (user_id) DO UPDATE SET last_surfaced_at = NOW()`,
       [userId],
     );
-  } else {
+  } else if (!askId.startsWith(PROMISE_ASK_PREFIX)) {
+    // A promise Co made on a call has no ask_checkins row
+    // (harness/callGrounding.ts keepCallPromise).
     await pool.query(`UPDATE ask_checkins SET last_surfaced_at = NOW() WHERE id = $1`, [askId]);
   }
 

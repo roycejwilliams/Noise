@@ -71,3 +71,31 @@ export function paragraphize(text: string): string {
   }
   return paras.map((p) => p.join(" ")).join("\n\n");
 }
+
+// A question Co already asked in one of its last two texts isn't asked again
+// (2026-09-23: "Want to start with the venue types to call, or the questions
+// to ask..." went out four times in a row while the member was trying to get
+// calls working). Drops the repeated question sentence; keeps the text as is
+// if that would leave almost nothing.
+export function dropRepeatedQuestion(draft: string, recentConversation: string): string {
+  const coLines = recentConversation
+    .split("\n")
+    .filter((l) => /^\s*co replied:/i.test(l))
+    .slice(-2)
+    .map((l) => l.replace(/^\s*co replied:\s*/i, ""));
+  const words = (s: string) => new Set((s.toLowerCase().match(/[a-z']{4,}/g) ?? []).filter((w) => !REPEAT_STOPWORDS.has(w)));
+  const asked = coLines.flatMap((l) => l.match(/[^.!?\n]+\?/g) ?? []).map(words).filter((w) => w.size >= 3);
+  if (!asked.length) return draft;
+  const repeats = (q: string) => {
+    const w = words(q);
+    if (w.size < 3) return false;
+    return asked.some((a) => {
+      let shared = 0;
+      for (const x of w) if (a.has(x)) shared++;
+      return shared / Math.min(w.size, a.size) >= 0.6;
+    });
+  };
+  const kept = draft.replace(/[^.!?\n]*\?/g, (q) => (repeats(q) ? "" : q)).replace(/[ \t]+\n/g, "\n").replace(/\n{3,}/g, "\n\n").trim();
+  return kept.split(/\s+/).filter(Boolean).length >= 3 ? kept : draft;
+}
+const REPEAT_STOPWORDS = new Set(["want", "with", "that", "this", "what", "your", "have", "just", "like", "would", "could", "should", "when", "there", "about", "from", "they", "them", "then", "into", "some", "more"]);

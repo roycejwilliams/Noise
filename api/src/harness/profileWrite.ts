@@ -414,3 +414,33 @@ export function renderCorrections(rows: { field: string; old_value: string; new_
     })
     .join("\n");
 }
+
+// ---- Co's words aren't their wants ---------------------------------------------
+//
+// 2026-09-23: after a call where Co said "I'll dig into those founder, tech,
+// design, and product communities in SF", the member's profile gained
+// "wants: founder, tech, design, and product communities in SF". Their own
+// asks were about down-to-earth, dependable people. A captured item is Co's
+// echo when nearly all its words are in Co's lines and most aren't in theirs.
+const ECHO_STOPWORDS = new Set(["with", "that", "this", "what", "your", "have", "just", "like", "would", "want", "wants", "into", "some", "more", "they", "them", "their", "from", "about", "also", "really", "things", "people"]);
+function itemWords(s: string): string[] {
+  return [...new Set((s.toLowerCase().match(/[a-z]{4,}/g) ?? []).filter((w) => !ECHO_STOPWORDS.has(w)))];
+}
+export function splitSpeakers(transcript: string): { theirs: string; cos: string } {
+  const theirs: string[] = [];
+  const cos: string[] = [];
+  for (const line of transcript.split("\n")) {
+    if (/^\s*(co replied:|assistant:|co:)/i.test(line)) cos.push(line);
+    else if (/^\s*(user said:|user:)/i.test(line)) theirs.push(line);
+  }
+  return { theirs: theirs.join(" ").toLowerCase(), cos: cos.join(" ").toLowerCase() };
+}
+export function echoesCoNotMember(item: string, transcript: string): boolean {
+  const words = itemWords(item);
+  if (words.length < 2) return false;
+  const { theirs, cos } = splitSpeakers(transcript);
+  if (!cos) return false;
+  const inCo = words.filter((w) => cos.includes(w)).length / words.length;
+  const inTheirs = words.filter((w) => theirs.includes(w)).length / words.length;
+  return inCo >= 0.8 && inTheirs < 0.5;
+}

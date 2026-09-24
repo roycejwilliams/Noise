@@ -1,0 +1,104 @@
+// Checks for the five bugs from Royce's 2026-09-23 test call and the texts
+// around it. No network.
+//
+//   npx tsx evals/calls/sep23Bugs.ts
+import { readFileSync } from "fs";
+
+process.env.SENDBLUE_API_API_KEY ||= "unused-in-tests";
+process.env.SENDBLUE_API_API_SECRET ||= "unused-in-tests";
+const { dropRepeatedQuestion } = await import("../../src/services/textStyle.js");
+const { stripUnsupported } = await import("../../src/harness/replyGrounding.js");
+
+let failed = 0;
+let total = 0;
+const check = (label: string, ok: boolean) => {
+  total++;
+  if (!ok) {
+    failed++;
+    console.log(`FAIL ${label}`);
+  }
+};
+const src = (p: string) => readFileSync(new URL(`../../src/${p}`, import.meta.url), "utf8");
+
+// ---------------------------------------------------------------- #4 texts during call trouble
+const convo = `User said: Try again I had my phone on dnd
+Co replied: Weird, not sure why it's not connecting. Want to start with the venue types to call, or the questions to ask when you get someone on the phone?
+User said: What's breaking?
+Co replied: Honestly not sure. Want to start with the venue types to call, or the questions to ask when you get someone on the phone?`;
+const again = dropRepeatedQuestion("Fair enough, that's on my side.\n\nVenue list still needs building either way. Want to start with the types to call or the questions to ask when you get someone on the phone?", convo);
+check("#4 the same question isn't asked a third time", !/\?/.test(again) && again.startsWith("Fair enough, that's on my side."));
+check("#4 a new question still goes out", dropRepeatedQuestion("Glad that's sorted. How did the permit call go?", convo) === "Glad that's sorted. How did the permit call go?");
+check("#4 a reply that's only the repeated question is left alone (never empty)", dropRepeatedQuestion("Want to start with the venue types to call?", convo) === "Want to start with the venue types to call?");
+check("#4 no earlier question, nothing changes", dropRepeatedQuestion("Want to start with the venue types to call?", "User said: hi") === "Want to start with the venue types to call?");
+const stripped = stripUnsupported(
+  "Nothing's changed on my end that I'd call an upgrade, so not sure what you mean by that.\n\nLet's not lose the 18 days we've got though. Want to start with the venue types?",
+  [
+    { name: "claim_detail", pass: false, reason: `detail: "Let's not lose the 18 days we've got though."` },
+    { name: "claim_capability", pass: false, reason: `capability: "Nothing's changed on my end that I'd call an upgrade"` },
+  ],
+);
+check("#4 a claim either check flagged is removed", !/Nothing's changed/.test(stripped) && !/18 days/.test(stripped));
+const rg = src("harness/replyGrounding.ts");
+check("#4 the fact check strips with both checks' failures", /const allFailed = \[\.\.\.effectiveFailed1, \.\.\.\(secondFailed \?\? \[\]\)\];/.test(rg) && /stripUnsupported\(draft, allFailed\)/.test(rg));
+check("#4 a failed call's real reason reaches the reply", /memory_type = 'call_failure'/.test(rg) && /the problem is on your side, not their phone/.test(rg));
+const bridge = src("services/mediaStreamBridge.ts");
+check("#4 a Hume error on a call is noted in plain words, once per 10 min", /noteCallFailure\(handle\.userId/.test(bridge) && /a problem with Co's own voice setup/.test(bridge) && /INTERVAL '10 minutes'/.test(bridge));
+check("#4 the reply is told to follow where they went", /If they moved on from a question you asked, go where they went; don't ask it again\./.test(src("agent/conversationReply.ts")));
+
+// ---------------------------------------------------------------- #2 Co's words aren't their wants
+{
+  const { echoesCoNotMember } = await import("../../src/harness/profileWrite.js");
+  const call = `assistant: Like are they helping you bring people to the event, or is it more about building out what Co can actually do?
+user: i'm pretty much at the point now with code that um i'm ready to get hands off of coding. I am running to the problem where i'm not as network as her.
+user: Um, probably my co founder'cause we're both from texas. I wanna continue to keep building with like minded individuals like that. just having that sense of community that just very important.
+user: Ah, very down to earth and laid back like I feel like a lot of bloated egos in the tech space. somebody dependable and you know intelligent.
+assistant: I'll keep that in mind. After we hang up I'll dig into those founder, tech, design, and product communities in SF and text you if something real fits.
+user: Honestly, just a friend. somebody they can kinda go through battles with and you know, depend on.`;
+  check("#2 Co's own line is not saved as their want", echoesCoNotMember("founder, tech, design, and product communities in SF", call));
+  check("#2 their real ask is kept", !echoesCoNotMember("Looking to connect with down to earth, laid back people without inflated egos in the tech space", call));
+  check("#2 their real want is kept", !echoesCoNotMember("people to go through battles with and depend on", call));
+  check("#2 something both said is kept", !echoesCoNotMember("building with like minded individuals", call));
+  check("#2 a text turn with no Co line is never filtered", !echoesCoNotMember("founder communities in SF", "user: looking for founder communities in SF"));
+  const pe = src("services/profileExtraction.ts");
+  check("#2 captureIntent filters asks, wants and preferences", /const mine = \(x: unknown\) => typeof x === "string" && !echoesCoNotMember\(x, transcript\);/.test(pe) && /\.filter\(\(a\) => mine\(a\.text\)\)/.test(pe));
+}
+
+// ---------------------------------------------------------------- #1 promises Co makes on a call
+{
+  const cg = src("harness/callGrounding.ts");
+  check("#1 a promise Co volunteers on a call runs a real search", /await keepCallPromise\(userId, c\.what\)/.test(cg) && /attemptEventSurfacing\(\{\n\s+askId: `\$\{PROMISE_ASK_PREFIX\}\$\{key\}`/.test(cg));
+  check("#1 the search never says they asked for it", /askText: what,\n\s+fromProfile: true,/.test(cg));
+  check("#1 what came of it is recorded either way", /"promise_result"/.test(cg) && /found nothing good enough to send yet/.test(cg));
+  const sweep = src("services/eventSurfacingSweep.ts");
+  check("#1 a sent offer for a promise doesn't touch ask_checkins", /\} else if \(!askId\.startsWith\(PROMISE_ASK_PREFIX\)\) \{/.test(sweep));
+  const pc = src("jobs/postCallFollowUp.ts");
+  check("#1 the after-call text hears what the promise turned up", /what_co_said_it_would_look_into:/.test(pc) && /memory_type = 'promise_result'/.test(pc) && /without promising to keep looking/.test(pc));
+}
+
+// ---------------------------------------------------------------- #3 and #5 the call's end and its summary
+{
+  const prompt = readFileSync(new URL("../../prompts/co-system-prompt.md", import.meta.url), "utf8");
+  check("#3 'sounds good' / 'thank you' are not goodbyes", /"Sounds good," "thank you," and "okay" are them answering what you just said, not a goodbye/.test(prompt));
+  check("#3 the close ends with a spoken goodbye", /End the closing line with a plain, warm goodbye in words \("Talk soon, \{\{first_name\}\}\."\)/.test(prompt));
+  check("#3 every name placeholder is one Hume fills in", !/(?<!\{)\{first_name\}(?!\})/.test(prompt));
+  const { callSummaryPrompt } = await import("../../src/services/callContext.js");
+  const sp = callSummaryPrompt("user: hi", "- sounded disappointed at the end");
+  check("#3 how the call ended comes from their words, not a voice reading", /How the call ended comes only from what they said at the end, never from a voice reading/.test(sp) && /never what they wanted or meant/.test(sp));
+  check("#5 named companies, people, dates and plans come first", /Lead with the concrete facts they gave/.test(sp) && /Keep every named company and person they mentioned/.test(sp));
+  check("#5 spelled-out names are written as names", /"l y t h e dot a i" is lythe\.ai/.test(sp));
+  const { neutralPronouns } = await import("../../src/mo/rules.js");
+  check("#5 summaries never guess pronouns", neutralPronouns("Royce discussed his startup. He sounded tired.") === "Royce discussed their startup. They sounded tired." && /const summary = neutralPronouns\(raw\.trim\(\)\);/.test(src("services/callContext.ts")));
+}
+
+// ---------------------------------------------------------------- run-ons and stutters on the call
+{
+  const prompt = readFileSync(new URL("../../prompts/co-system-prompt.md", import.meta.url), "utf8");
+  check("speech: no dashes anywhere in the call prompt (Co copies its style; a spoken dash is a run-on)", !/[—–]/.test(prompt));
+  check("speech: short spoken sentences, never a dash", /Short sentences, one thought each/.test(prompt) && /Never put a dash in what you say/.test(prompt));
+  check("speech: one question per turn, never re-asked in other words", /Ask one question per turn\./.test(prompt) && /never follow it with the same question in other words/.test(prompt));
+  check("speech: 'hello?' mid-call means the line seemed to drop, not a new call", /say you're still here and pick up where you were, never greet them like a new call/.test(prompt));
+}
+
+console.log(`sep 23 call bugs: ${total - failed}/${total} passed`);
+if (failed) process.exitCode = 1;
+process.exit();

@@ -5,6 +5,7 @@ import pool from "../db/db.js";
 import { buildContextSummary } from "./callContext.js";
 import { decodeMulawBuffer, encodeMulawBuffer, parseWav, resampleLinear, toMono } from "./audioCodec.js";
 import { isRealUserUtterance } from "../harness/callGate.js";
+import { addLine, endLiveCall, noteChatId, startLiveCall } from "./liveCall.js";
 
 // Replaces the simple server-to-server /v0/evi/twilio bridge — that endpoint
 // only accepts config_id/api_key as query params (confirmed against Hume's
@@ -145,6 +146,7 @@ function forwardCallerAudio(handle: HumeConnectionHandle, mulawBuf: Buffer) {
 function closeHandle(handle: HumeConnectionHandle) {
   if (handle.closed) return;
   handle.closed = true;
+  endLiveCall(handle.userId);
   if (handle.evictionTimer) clearTimeout(handle.evictionTimer);
   if (handle.callSid && pendingConnections.get(handle.callSid) === handle) pendingConnections.delete(handle.callSid);
   if (handle.callSid && callsBySid.get(handle.callSid) === handle) callsBySid.delete(handle.callSid);
@@ -158,6 +160,24 @@ function closeHandle(handle: HumeConnectionHandle) {
   } catch (err: any) {
     console.error("mediaStreamBridge: error closing Twilio socket (non-fatal):", err?.message ?? err);
   }
+}
+
+// Why a call failed, in plain words, for Co's next text (2026-09-23: after
+// Hume rejected the config eight times, Co told the member "I don't have
+// visibility into why the connection's failing"). One note per 10 minutes.
+function noteCallFailure(userId: string, slug: string | null): void {
+  const why =
+    slug === "invalid_config"
+      ? "a problem with Co's own voice setup (the voice service rejected it)"
+      : "a technical problem on Co's side";
+  pool
+    .query(
+      `INSERT INTO co_memories (user_id, memory_type, content)
+       SELECT $1, 'call_failure', $2
+       WHERE NOT EXISTS (SELECT 1 FROM co_memories WHERE user_id = $1 AND memory_type = 'call_failure' AND created_at > NOW() - INTERVAL '10 minutes')`,
+      [userId, `Co's call didn't connect because of ${why}, not anything on their phone.`],
+    )
+    .catch(() => {});
 }
 
 // Opens the Hume EVI connection for a user and wires its audio/error/close
@@ -189,6 +209,8 @@ function createHumeConnection(userId: string, callSid: string | null = null): Hu
         buildContextSummary(userId),
       ]);
       if (handle.closed) return;
+      // Shared with the coverage tool so it doesn't rebuild this mid-call.
+      startLiveCall(userId, contextSummary);
       const firstName = userResult.rows[0]?.first_name ?? "";
       const resumedChatGroupId: string | undefined = profileResult.rows[0]?.hume_chat_group_id ?? undefined;
 
@@ -241,6 +263,7 @@ function createHumeConnection(userId: string, callSid: string | null = null): Hu
           }
         } else if (m.type === "error") {
           console.error("mediaStreamBridge: Hume reported an error:", m);
+          noteCallFailure(handle.userId, (m as any).slug ?? (m as any).code ?? null);
         } else if (m.type === "user_message") {
           // Ground truth that a live human is actually talking — see
           // hasReceivedRealSpeech above. Fixed 2026-09-17: only counts once
@@ -254,6 +277,15 @@ function createHumeConnection(userId: string, callSid: string | null = null): Hu
           if (isRealUserUtterance(text, handle.coHasSpoken)) {
             handle.receivedUserMessage = true;
           }
+          // The live transcript the coverage tool reads (services/liveCall.ts);
+          // interim partials would duplicate the final line.
+          if (!(m as any).interim) addLine(handle.userId, "user", text);
+        } else if (m.type === "assistant_message") {
+          const text = typeof (m as any).message?.content === "string" ? (m as any).message.content : "";
+          addLine(handle.userId, "assistant", text);
+        } else if (m.type === "chat_metadata") {
+          const chatId = (m as any).chatId ?? (m as any).chat_id;
+          if (typeof chatId === "string") noteChatId(handle.userId, chatId);
         } else if (m.type === "user_interruption") {
           // Fixed 2026-09-17: nothing handled Hume's own interruption event,
           // so Twilio kept playing whatever of Co's audio was already queued

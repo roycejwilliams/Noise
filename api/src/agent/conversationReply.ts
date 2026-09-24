@@ -5,7 +5,7 @@ import { writeMemory } from "../services/memory.js";
 import pool from "../db/db.js";
 import { CO_VOICE, CO_TEXT_CHANNEL } from "../services/coVoice.js";
 import { groundReply, LAYER3_MODELS, renderReplyFacts, type GroundingResult, type ReplyFacts, addFact } from "../harness/replyGrounding.js";
-import { capitalizeSentences, looksLikeMetaReply } from "../services/textStyle.js";
+import { capitalizeSentences, dropRepeatedQuestion, looksLikeMetaReply } from "../services/textStyle.js";
 import { lastCoLine } from "../services/conversationClose.js";
 
 export type ConversationReplyInput = {
@@ -194,8 +194,9 @@ export async function runConversationReplyAgent(
         { userId: input.userId, record: opts.record !== false && !opts.dryRun },
       );
       grounding.push(result);
-      // Always sentence case, however they text (2026-09-16).
-      return capitalizeSentences(result.final);
+      // Always sentence case, however they text (2026-09-16). Never the
+      // same question as one of Co's last two texts (2026-09-23).
+      return capitalizeSentences(dropRepeatedQuestion(result.final, input.recentConversation));
     },
   });
 
@@ -239,7 +240,7 @@ ${input.recentConversation || "(this is the start of the conversation)"}
 What Co knows from past conversations that's genuinely relevant to what they just said — already checked for relevance before being handed to you, so treat it with the same weight as this thread, not as optional trivia:
 ${input.recentMemories || "(nothing from past conversations applies to what they just said)"}
 
-${lastCoMessage ? `Your last message to them was: "${lastCoMessage}"\n` : ""}${input.imageForVision ? "They just sent the attached photo." : `They just said: "${input.resolvedContent}"`}${lastCoMessage ? `\nIf what they just said is a short answer, read it as an answer to your last message first.` : ""}
+${lastCoMessage ? `Your last message to them was: "${lastCoMessage}"\n` : ""}${input.imageForVision ? "They just sent the attached photo." : `They just said: "${input.resolvedContent}"`}${lastCoMessage ? `\nIf what they just said is a short answer, read it as an answer to your last message first. If they moved on from a question you asked, go where they went; don't ask it again.` : ""}
 
 Ground everything ONLY in "What's true right now" above, the information above, and what has actually been said in this conversation — never state or imply a specific personal detail, preference, or fact about them that isn't listed above or wasn't actually said in this thread. This includes real venues and businesses: never name a specific one unless it's given to you above as something you actually found — if you don't have a real one, describe what you'd look for, don't guess a plausible-sounding name.
 

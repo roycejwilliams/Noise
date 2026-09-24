@@ -104,7 +104,7 @@ export async function gatherReplyFacts(
   for (const d of opts.pendingDescriptions ?? []) addFact(rf, "pending", `Waiting to hear back: ${d}`);
   // Every source is a separate read, so they run together: in series this
   // was six round trips before the reply could even start drafting.
-  const [corrections, snapshot, sent, notes, scheduled, reveal, preference] = await Promise.all([
+  const [corrections, snapshot, sent, notes, scheduled, reveal, preference, callFailure] = await Promise.all([
     recentCallCorrections(userId),
     getPersonSnapshot(userId).catch(() => null),
     recentlySent(userId),
@@ -125,6 +125,14 @@ export async function gatherReplyFacts(
       .catch(() => ({ rows: [] as any[] })),
     // Whether they said they'd rather text or talk (asked at onboarding).
     pool.query(`SELECT contact_preference FROM users WHERE id = $1`, [userId]).then((r) => r.rows[0]?.contact_preference ?? null).catch(() => null),
+    // Why a recent call failed (services/mediaStreamBridge.ts noteCallFailure).
+    pool
+      .query(
+        `SELECT content FROM co_memories WHERE user_id = $1 AND memory_type = 'call_failure' AND created_at > NOW() - INTERVAL '2 hours' ORDER BY created_at DESC LIMIT 1`,
+        [userId],
+      )
+      .then((r) => (r.rows[0]?.content as string | undefined) ?? null)
+      .catch(() => null),
   ]);
   // Today's date, so "Oct 10 is 18 days out" can be worked out instead of
   // guessed (2026-09-22: a reply said "if today's around the 23rd" on the
@@ -132,6 +140,10 @@ export async function gatherReplyFacts(
   addFact(rf, "known", `Today is ${DateTime.now().setZone("America/Los_Angeles").toFormat("cccc, LLLL d, yyyy")} (Pacific time).`);
   if (preference === "text") addFact(rf, "known", "They told Co they'd rather text. Only bring up a call if they ask for one.");
   if (preference === "call") addFact(rf, "known", "They told Co they like talking on the phone. Offering a call when there's a lot to talk through is welcome.");
+  if (callFailure) {
+    addFact(rf, "did_before", callFailure);
+    addInstruction(rf, "If calls come up, say plainly the problem is on your side, not their phone. Don't guess at more detail than that, and don't promise when it'll be fixed.");
+  }
   await addOngoingSearchFacts(rf, userId);
   for (const correction of corrections) addFact(rf, "known", correction);
   // What Co knows about them, so "what do you know about me?" can be
@@ -720,8 +732,15 @@ export async function groundReply(
       // single bad sentence that then stripped to nothing. Strip BOTH
       // candidates and keep whichever actually has real content left; only
       // the minimal fallback if neither does.
-      const strippedOriginal = stripUnsupported(draft, effectiveFailed1);
-      const strippedRedraft = rewritten && second ? stripUnsupported(rewritten, secondFailed!) : "";
+      // Strip with what EITHER check caught (2026-09-23): the redraft's check
+      // flagged "Nothing's changed on my end that I'd call an upgrade", the
+      // first check had missed it, and the original draft still carried it,
+      // so stripping the original by the first check's failures alone sent
+      // it anyway. The two checks read the same kind of text; a claim one of
+      // them rejects is out of both.
+      const allFailed = [...effectiveFailed1, ...(secondFailed ?? [])];
+      const strippedOriginal = stripUnsupported(draft, allFailed);
+      const strippedRedraft = rewritten && second ? stripUnsupported(rewritten, allFailed) : "";
       const originalWords = strippedOriginal.split(/\s+/).filter(Boolean).length;
       const redraftWords = strippedRedraft.split(/\s+/).filter(Boolean).length;
       // Prefer whichever survives with more real content; the original
@@ -733,7 +752,8 @@ export async function groundReply(
         // been told they have none left (2026-09-20 code review).
         final: (() => {
           const keptRedraft = redraftWords > originalWords;
-          const failedForKept = keptRedraft ? secondFailed ?? [] : effectiveFailed1;
+          const failedForKept = allFailed;
+          void keptRedraft;
           const enough = stripped.split(/\s+/).filter(Boolean).length >= 3;
           if (failedForKept.some((c) => c.name === "no_invite_sent_claim") && !rf.facts.some((f) => /invites are used/i.test(f.text))) {
             return [enough && !/invite/i.test(stripped) ? stripped : "", INVITE_FALLBACK].filter(Boolean).join(" ");

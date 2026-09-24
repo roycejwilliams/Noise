@@ -99,6 +99,41 @@ export function personAskedForThis(transcript: string, what: string): boolean {
   return hits / words.length >= 0.34;
 }
 
+// Runs the same search a member's own ask gets, keyed as Co's promise so the
+// offer never says they asked for it (fromProfile). Records what came of it,
+// so the post-call text can say plainly when nothing turned up.
+export async function keepCallPromise(userId: string, what: string): Promise<"queued" | "nothing"> {
+  const { rows } = await pool.query(
+    `SELECT u.first_name, u.phone_number, cp.city, cp.goals, cp.activity_preferences
+     FROM users u LEFT JOIN co_profiles cp ON cp.user_id = u.id WHERE u.id = $1`,
+    [userId],
+  );
+  const p = rows[0];
+  if (!p?.phone_number) return "nothing";
+  const { attemptEventSurfacing, PROMISE_ASK_PREFIX } = await import("../services/eventSurfacingSweep.js");
+  const key = what.toLowerCase().replace(/[^a-z0-9]+/g, "-").slice(0, 60);
+  const { queued } = await attemptEventSurfacing({
+    askId: `${PROMISE_ASK_PREFIX}${key}`,
+    userId,
+    firstName: p.first_name,
+    phoneNumber: p.phone_number,
+    askText: what,
+    fromProfile: true,
+    city: p.city ?? null,
+    goals: p.goals ?? null,
+    activityPreferences: p.activity_preferences ?? null,
+    cooldownCleared: true,
+  });
+  await writeMemory(
+    userId,
+    "promise_result",
+    queued
+      ? `Looked into "${what}" after the call, as Co said it would, and found something; it's queued to send.`
+      : `Looked into "${what}" after the call, as Co said it would, and found nothing good enough to send yet.`,
+  ).catch(() => null);
+  return queued ? "queued" : "nothing";
+}
+
 export async function auditCall(userId: string, transcript: string, knownBefore: string): Promise<void> {
   try {
     const { text } = await generateText({
@@ -123,6 +158,11 @@ export async function auditCall(userId: string, transcript: string, knownBefore:
           "system",
           `Co promised on a call to look into: "${c.what}" — Co's own initiative, not something the person actually asked for.`,
         ).catch(() => null);
+        // And actually look (2026-09-23: "I'll dig into those communities
+        // and text you" was only ever written down, so nothing searched).
+        await keepCallPromise(userId, c.what).catch((err: any) =>
+          console.error("callGrounding: keepCallPromise failed (non-fatal):", err?.message ?? err),
+        );
       }
     }
     // Remember what needs correcting, for the next text reply.
