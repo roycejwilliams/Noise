@@ -20,17 +20,19 @@ import { generateInviteCode } from "../services/inviteCodes.js";
 import { parseModelJson } from "../services/modelJson.js";
 import { plainDone, plainNo, plainYes, MO, suppressionKeys } from "./rules.js";
 import { codeMessage, sendingStatus, sendingBlocked } from "./outreach.js";
+import { MO_RULES } from "./moVoice.js";
+import { addressedToMo, isMoPaused, parseMoCommand, runMoCommand, stripMo } from "./team.js";
 import { redraftOutreach } from "./draft.js";
 import { sendDm } from "./xApi.js";
 
-type Approver = { id: string; phone: string; pendingNo: number | null; pendingKind: string | null };
+type Approver = { id: string; firstName: string | null; phone: string; pendingNo: number | null; pendingKind: string | null };
 export type PendingKind = "review" | "question" | "manual";
 
 export async function approvers(): Promise<Approver[]> {
   const { rows } = await pool.query(
-    `SELECT id, phone_number, mo_pending_no, mo_pending_kind FROM users WHERE mo_approver = true AND archived_at IS NULL AND phone_number IS NOT NULL`,
+    `SELECT id, first_name, phone_number, mo_pending_no, mo_pending_kind FROM users WHERE mo_approver = true AND archived_at IS NULL AND phone_number IS NOT NULL`,
   );
-  return rows.map((r: any) => ({ id: r.id, phone: r.phone_number, pendingNo: r.mo_pending_no, pendingKind: r.mo_pending_kind }));
+  return rows.map((r: any) => ({ id: r.id, firstName: r.first_name ?? null, phone: r.phone_number, pendingNo: r.mo_pending_no, pendingKind: r.mo_pending_kind }));
 }
 
 async function textTo(phone: string, content: string): Promise<boolean> {
@@ -57,30 +59,36 @@ export function who(p: { name: string | null; x_handle: string | null; source: s
 }
 const firstName = (p: { name: string | null; x_handle: string | null }) => (p.name ?? "").trim().split(/\s+/)[0] || (p.x_handle ? `@${p.x_handle}` : "them");
 
-// The texts. Plain words, their exact quote, and one clear question.
-export function reviewText(p: any, left: number): string {
+// The texts, in Mo's own voice (mo/moVoice.ts): first person, a teammate
+// with a view, their exact quote, and one plain question. Mo shares Co's
+// number and thread, so each one opens by saying it's Mo.
+export function reviewText(p: any, left: number, approverFirst: string | null = null): string {
   const lines = [
-    `Mo found someone${left > 1 ? ` (${left} to look at)` : ""}: ${who(p)}${p.source === "x" ? " on X" : " on LinkedIn"}.`,
+    `${MO_RULES.opener(approverFirst)} Found someone worth a look${left > 1 ? ` (1 of ${left})` : ""}: ${who(p)}${p.source === "x" ? " on X" : " on LinkedIn"}.`,
     "",
     `They wrote: "${p.evidence_quote}"`,
     p.post_url ?? p.linkedin_url ?? "",
     "",
-    `Why they'd fit: ${p.reason}`,
+    `Why I think they'd fit: ${p.reason}`,
     "",
-    p.source === "x" && p.draft_reply ? `Co would reply to their post: "${p.draft_reply}"` : null,
-    p.source === "x" ? `Then DM them: "${p.draft_dm}"` : `The note you'd send them on LinkedIn: "${p.draft_dm}"`,
+    p.source === "x" && p.draft_reply
+      ? `My plan: Co replies to their post with "${p.draft_reply}", then I DM them a few days later: "${p.draft_dm}"`
+      : p.source === "x"
+        ? `My plan: I DM them: "${p.draft_dm}"`
+        : `They're only on LinkedIn, so the note would come from you: "${p.draft_dm}"`,
+    p.dm_style === "curious" && p.draft_why ? `If they want to know why, I'll tell them: "${p.draft_why}" and send the invite.` : null,
     "",
-    `Should Co reach out? Reply yes, no, or tell me what to change.`,
+    `Want me to go for it? Yes, no, or tell me what to change.`,
   ];
   return lines.filter((l) => l !== null).join("\n").replace(/\n{3,}/g, "\n\n");
 }
 
-export function questionText(p: any): string {
-  return `${who(p)} replied to Co's DM: "${String(p.pending_question ?? "").slice(0, 400)}"\n\nWhat should Co say back? Your next text goes to them as written.`;
+export function questionText(p: any, approverFirst: string | null = null): string {
+  return `${MO_RULES.opener(approverFirst)} ${who(p)} wrote back to Co's DM: "${String(p.pending_question ?? "").slice(0, 400)}"\n\nWhat do you want Co to say? I'll send your next text to them word for word.`;
 }
 
-export function manualText(p: any, code: string): string {
-  return `${who(p)} is only on LinkedIn, so this one's yours to send: ${p.linkedin_url}\n\nThe message:\n${p.draft_dm}\n\n${codeMessage(code).replace(/^Glad you're in\. /, "If you'd like one: ")}\n\nText me "sent" once it's out.`;
+export function manualText(p: any, code: string, approverFirst: string | null = null): string {
+  return `${MO_RULES.opener(approverFirst)} ${who(p)} is only on LinkedIn, so this one needs you: ${p.linkedin_url}\n\nHere's the note:\n${p.draft_dm}\n\n${codeMessage(code).replace(/^Glad you're in\. /, "If you'd like one: ")}\n\nText me "sent" once it's out and I'll check them off.`;
 }
 
 // What an approver should see next, most urgent first: a prospect waiting on
@@ -88,6 +96,8 @@ export function manualText(p: any, code: string): string {
 async function nextItemFor(): Promise<{ kind: PendingKind; p: any } | null> {
   const q = await pool.query(`SELECT * FROM mo_prospects WHERE status = 'question' ORDER BY updated_at LIMIT 1`);
   if (q.rows[0]) return { kind: "question", p: q.rows[0] };
+  // Paused: someone waiting on an answer still comes through; nothing new.
+  if (await isMoPaused()) return null;
   const m = await pool.query(`SELECT * FROM mo_prospects WHERE status = 'manual_pending' ORDER BY updated_at LIMIT 1`);
   if (m.rows[0]) return { kind: "manual", p: m.rows[0] };
   const r = await pool.query(`SELECT * FROM mo_prospects WHERE status = 'shortlisted' ORDER BY no LIMIT 1`);
@@ -102,9 +112,9 @@ async function shortlistedCount(): Promise<number> {
 
 async function present(a: Approver, item: { kind: PendingKind; p: any }): Promise<void> {
   let text: string;
-  if (item.kind === "review") text = reviewText(item.p, await shortlistedCount());
-  else if (item.kind === "question") text = questionText(item.p);
-  else text = manualText(item.p, item.p.invite_code);
+  if (item.kind === "review") text = reviewText(item.p, await shortlistedCount(), a.firstName);
+  else if (item.kind === "question") text = questionText(item.p, a.firstName);
+  else text = manualText(item.p, item.p.invite_code, a.firstName);
   if (await textTo(a.phone, text)) {
     await pool.query(`UPDATE users SET mo_pending_no = $2, mo_pending_kind = $3, mo_pending_at = NOW() WHERE id = $1`, [a.id, item.p.no, item.kind]);
     await pool.query(`UPDATE mo_prospects SET digest_sent_at = COALESCE(digest_sent_at, NOW()) WHERE no = $1`, [item.p.no]);
@@ -145,8 +155,8 @@ async function readAnswer(kind: PendingKind, p: any, text: string): Promise<{ in
     experimental_telemetry: { isEnabled: true, functionId: "mo.readAnswer" },
     prompt:
       kind === "review"
-        ? `Co asked a teammate: "Should Co reach out to ${who(p)}? Reply yes, no, or tell me what to change." Their reply: "${text.slice(0, 500)}"\n\nIf they're asking for a change to the message or the public reply, return {"intent": "change", "instruction": "the change, in their words"}. If the reply is about something else entirely, return {"intent": "other"}. Return ONLY JSON.`
-        : `Co asked a teammate: "${who(p)} replied to Co's DM. What should Co say back? Your next text goes to them as written." Their reply: "${text.slice(0, 500)}"\n\nIs this their answer for ${who(p)} (a message meant for that person), or about something else? Return ONLY JSON: {"intent": "answer"} or {"intent": "other"}.`,
+        ? `Mo, the team's scout, asked a teammate whether to reach out to ${who(p)}: "Want me to go for it? Yes, no, or tell me what to change." Their reply: "${text.slice(0, 500)}"\n\nIf they're asking for a change to the message or the public reply, return {"intent": "change", "instruction": "the change, in their words"}. If the reply is about something else entirely, return {"intent": "other"}. Return ONLY JSON.`
+        : `Mo, the team's scout, asked a teammate: "${who(p)} wrote back to Co's DM. What do you want Co to say? I'll send your next text to them word for word." Their reply: "${text.slice(0, 500)}"\n\nIs this their answer for ${who(p)} (a message meant for that person), or about something else? Return ONLY JSON: {"intent": "answer"} or {"intent": "other"}.`,
   });
   const r = parseModelJson<{ intent?: string; instruction?: string }>(out);
   if (r.intent === "change" && typeof r.instruction === "string" && r.instruction.trim()) return { intent: "change", instruction: r.instruction.trim() };
@@ -157,18 +167,28 @@ async function readAnswer(kind: PendingKind, p: any, text: string): Promise<{ in
 // Returns the text to send back, or null when this message isn't for Mo
 // (then it goes to Co as usual).
 export async function handleMoReply(userId: string, content: string): Promise<string | null> {
-  const { rows } = await pool.query(`SELECT mo_approver, mo_pending_no, mo_pending_kind, mo_pending_at FROM users WHERE id = $1`, [userId]).catch(() => ({ rows: [] as any[] }));
+  const { rows } = await pool.query(`SELECT mo_approver, first_name, mo_pending_no, mo_pending_kind, mo_pending_at FROM users WHERE id = $1`, [userId]).catch(() => ({ rows: [] as any[] }));
   const me = rows[0];
   if (!me?.mo_approver) return null;
   const text = content.trim();
 
-  // "What did Mo find?" and the like: where things stand.
+  // Tagging (mo/team.ts): "Mo, what did you find?", "Mo, how's Noor?",
+  // "Mo, find me designers who host events", "Mo, pause" / "Mo, back on".
+  // A plain yes/no to what Mo asked isn't a command and goes on below.
+  if (addressedToMo(text)) {
+    const cmd = parseMoCommand(stripMo(text));
+    if (cmd) {
+      const reply = await runMoCommand(cmd, userId, me.first_name ?? null);
+      // Asking where things stand also brings them the next person if
+      // nothing's waiting on them.
+      if (cmd.kind === "status" && !me.mo_pending_no) await presentNext();
+      return reply;
+    }
+  }
   if (!me.mo_pending_no && /\bmo\b/i.test(text)) {
-    const waiting = await shortlistedCount();
-    if (!waiting) return `Mo has nobody waiting for you right now. ${sendingStatus()}`;
-    // The next person arrives as its own text; nothing else to say.
+    const reply = await runMoCommand({ kind: "status" }, userId, me.first_name ?? null);
     await presentNext();
-    return "";
+    return reply;
   }
   if (!me.mo_pending_no) return null;
 
@@ -181,7 +201,7 @@ export async function handleMoReply(userId: string, content: string): Promise<st
     await pool.query(`UPDATE users SET mo_pending_no = NULL, mo_pending_kind = NULL, mo_pending_at = NULL WHERE id = $1`, [userId]);
     if (plainYes(text) || plainNo(text) || plainDone(text)) {
       await presentNext();
-      return `That one's already been handled.`;
+      return `Someone already took care of that one.`;
     }
     return null;
   }
@@ -219,22 +239,22 @@ async function answer(userId: string, kind: PendingKind, p: any, text: string): 
     await pool.query(`UPDATE mo_prospects SET status = 'contacted', channel = 'manual', contacted_at = NOW(), updated_at = NOW() WHERE id = $1`, [p.id]);
     await clearItem(p.no);
     await presentNext();
-    return `Got it, ${name}'s note is marked as sent.`;
+    return `Nice, I've got ${name} marked as sent.`;
   }
 
   if (kind === "question") {
     const r = await readAnswer("question", p, text);
     if (r.intent !== "answer") return null;
-    if (text.length > 1000) return "That's too long for a DM. Could you shorten it?";
+    if (text.length > 1000) return "That's too long for a DM. Could you trim it down?";
     try {
       await sendDm(p.x_user_id, text);
     } catch (err: any) {
-      return `That didn't go through to ${name}, so nothing was sent. X said: ${String(err?.message ?? err).slice(0, 120)}`;
+      return `That didn't go through to ${name}, so nothing went out. X said: ${String(err?.message ?? err).slice(0, 120)}`;
     }
     await pool.query(`UPDATE mo_prospects SET status = 'contacted', pending_question = NULL, updated_at = NOW() WHERE id = $1`, [p.id]);
     await clearItem(p.no);
     await presentNext();
-    return `Sent to ${name}.`;
+    return `Sent to ${name}. I'll let you know if they write back.`;
   }
 
   // review
@@ -248,9 +268,9 @@ async function answer(userId: string, kind: PendingKind, p: any, text: string): 
     if (r.rows[0] && p.source === "linkedin") {
       const code = await generateInviteCode(null);
       await pool.query(`UPDATE mo_prospects SET invite_code = $2, status = 'manual_pending', updated_at = NOW() WHERE id = $1`, [p.id, code]);
-      msg = `Great. Since ${name} is only on LinkedIn, I'll send you the note to post next.`;
+      msg = `On it. ${name}'s only on LinkedIn, so I'll send you the note to post next.`;
     } else {
-      msg = `Great. Co will reply to ${name}'s post first, then DM them about ${MO.warmToDmDays} days later.`;
+      msg = `On it. Co replies to ${name}'s post first, then I DM them about ${MO.warmToDmDays} days later.`;
       const blocked = sendingBlocked();
       if (blocked) msg += ` Heads up: ${blocked}`;
     }
@@ -262,13 +282,13 @@ async function answer(userId: string, kind: PendingKind, p: any, text: string): 
     await suppress(p, "skipped by approver");
     await clearItem(p.no);
     await presentNext();
-    return `Okay, Mo won't reach out to ${name}, and they won't come up again.`;
+    return `Got it, I'll leave ${name} alone. They won't come up again.`;
   }
   const r = await readAnswer("review", p, text);
   if (r.intent !== "change") return null;
   const drafts = await redraftOutreach(p, r.instruction!);
-  if (!drafts.ok) return `I couldn't make that change and keep it within the rules (${drafts.failed.join(", ")}). Could you put it another way?`;
+  if (!drafts.ok) return `I couldn't make that change and stay inside our rules (${drafts.failed.join(", ")}). Could you put it another way?`;
   await pool.query(`UPDATE mo_prospects SET draft_reply = $2, draft_dm = $3, updated_at = NOW() WHERE id = $1`, [p.id, drafts.reply, drafts.dm]);
   const updated = { ...p, draft_reply: drafts.reply, draft_dm: drafts.dm };
-  return `${reviewText(updated, 1).replace(/^Mo found someone[^\n]*\n\n/, "Here's the new version.\n\n")}`;
+  return `${reviewText(updated, 1).replace(/^[^\n]*Found someone worth a look[^\n]*\n\n/, "Here's the new version.\n\n")}`;
 }

@@ -18,7 +18,7 @@ import { reserveWebSearch } from "../services/webOpportunitySearch.js";
 import { listCalendarEvents } from "../services/luma.js";
 import { searchPostsWithAuthors, type MoPost } from "./xApi.js";
 import { MO, inCity, locationInCity, neutralPronouns, placeOk, quoteIsTheirs, suppressionKeys } from "./rules.js";
-import { draftOutreach } from "./draft.js";
+import { draftOutreach, type DmStyle } from "./draft.js";
 import { screenPosts } from "./jev.js";
 
 type Wants = { wants: string[]; event: string | null };
@@ -65,13 +65,19 @@ function queryIsSafe(q: string, w: Wants): boolean {
 }
 
 async function planQueries(w: Wants): Promise<Queries> {
+  // What Co says the network is short on, in general terms, and what the
+  // team asked Mo to look for (mo/team.ts). Members' own asks only feed the
+  // leak check below, never the search plan.
+  const { networkGaps, activeFocus } = await import("./team.js");
+  const [gaps, focus] = await Promise.all([networkGaps().catch(() => []), activeFocus().catch(() => [])]);
   const { text } = await generateText({
     model: anthropic(MODELS.haiku),
     experimental_telemetry: { isEnabled: true, functionId: "mo.planQueries" },
     prompt: `Co is a private, invite-only club for founders and builders in ${MO.city}. Plan searches for people worth inviting.
 
-What members are looking for (general themes only; never include anyone's name):
-${w.wants.map((x) => `- ${x}`).join("\n") || "- (nothing open; use founders, designers and engineers building early-stage products)"}
+What the network is short on right now (from Co, general terms):
+${gaps.map((g) => `- ${g.gap} (${g.members} members)`).join("\n") || "- (nothing open; use founders, designers and engineers building early-stage products)"}
+${focus.length ? `\nThe team asked you to look for (put these first):\n${focus.map((f) => `- ${f}`).join("\n")}\n` : ""}
 ${w.event ? `\nNext Co event: ${w.event}` : ""}
 
 Write 3 X recent-search queries that find people posting about doing these things themselves in ${MO.city} (use X operators, e.g. ("building" OR "shipping") ("SF" OR "San Francisco") design), 1 web search query for public LinkedIn profiles starting with site:linkedin.com/in, and the 3 themes (a few words each) the searches are for.
@@ -84,6 +90,15 @@ Return ONLY JSON: {"x": ["..."], "linkedin": "site:linkedin.com/in ...", "themes
     linkedin: typeof p.linkedin === "string" && p.linkedin.startsWith("site:linkedin.com/in") && queryIsSafe(p.linkedin, w) ? p.linkedin.slice(0, 300) : null,
     themes: (p.themes ?? []).filter((t) => typeof t === "string").slice(0, 3),
   };
+}
+
+// Whichever DM style has gone to fewer prospects, so both get a fair test.
+async function nextDmStyle(): Promise<DmStyle> {
+  const { rows } = await pool
+    .query(`SELECT dm_style, count(*)::int AS n FROM mo_prospects WHERE dm_style IS NOT NULL GROUP BY dm_style`)
+    .catch(() => ({ rows: [] as any[] }));
+  const count = (s: DmStyle) => rows.find((r: any) => r.dm_style === s)?.n ?? 0;
+  return count("curious") < count("intro") ? "curious" : "intro";
 }
 
 type Judged = { index: number; fit: boolean; reason: string; quote: string; inCity?: boolean };
@@ -150,6 +165,9 @@ Return ONLY JSON: {"people": [...]}`,
 }
 
 export async function runMoFind(): Promise<{ shortlisted: number }> {
+  // Paused by the team ("Mo, pause"): no new searches (mo/team.ts).
+  const { isMoPaused } = await import("./team.js");
+  if (await isMoPaused()) return { shortlisted: 0 };
   const checks: GateCheck[] = [];
   const w = await clubWants();
   await loadMemberNames();
@@ -192,15 +210,16 @@ export async function runMoFind(): Promise<{ shortlisted: number }> {
     }
     if (await alreadyKnown(suppressionKeys({ x_user_id: p.author.id }), p.author.id, null)) continue;
     j.reason = neutralPronouns(j.reason);
-    const drafts = await draftOutreach({ name: p.author.name, handle: p.author.username, postText: p.text, reason: j.reason, event: w.event, source: "x" });
+    const style = await nextDmStyle();
+    const drafts = await draftOutreach({ name: p.author.name, handle: p.author.username, postText: p.text, reason: j.reason, event: w.event, source: "x", style });
     if (!drafts.ok) {
       checks.push({ name: "drafts_pass", pass: false, reason: `@${p.author.username}: ${drafts.failed.join(", ")}` });
       continue;
     }
     await pool.query(
-      `INSERT INTO mo_prospects (source, x_user_id, x_handle, name, bio, location, post_id, post_url, post_text, reason, evidence_quote, draft_reply, draft_dm, draft_email_subject, draft_email_body)
-       VALUES ('x', $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14) ON CONFLICT DO NOTHING`,
-      [p.author.id, p.author.username, p.author.name, p.author.description, p.author.location, p.id, p.url, p.text, j.reason, j.quote, drafts.reply, drafts.dm, drafts.emailSubject, drafts.emailBody],
+      `INSERT INTO mo_prospects (source, x_user_id, x_handle, name, bio, location, post_id, post_url, post_text, reason, evidence_quote, draft_reply, draft_dm, draft_email_subject, draft_email_body, dm_style, draft_why)
+       VALUES ('x', $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16) ON CONFLICT DO NOTHING`,
+      [p.author.id, p.author.username, p.author.name, p.author.description, p.author.location, p.id, p.url, p.text, j.reason, j.quote, drafts.reply, drafts.dm, drafts.emailSubject, drafts.emailBody, style, drafts.why],
     );
     shortlisted++;
   }
@@ -218,12 +237,13 @@ export async function runMoFind(): Promise<{ shortlisted: number }> {
         continue;
       }
       if (await alreadyKnown(suppressionKeys({ linkedin_url: li.url }), null, li.url)) continue;
-      const drafts = await draftOutreach({ name: li.name, handle: null, postText: shown, reason: li.reason, event: w.event, source: "linkedin" });
+      const style = await nextDmStyle();
+      const drafts = await draftOutreach({ name: li.name, handle: null, postText: shown, reason: li.reason, event: w.event, source: "linkedin", style });
       if (!drafts.ok) continue;
       await pool.query(
-        `INSERT INTO mo_prospects (source, name, linkedin_url, headline, post_text, reason, evidence_quote, draft_dm, draft_email_subject, draft_email_body, channel)
-         VALUES ('linkedin', $1, $2, $3, $3, $4, $5, $6, $7, $8, 'manual') ON CONFLICT DO NOTHING`,
-        [li.name, li.url, li.headline, li.reason, li.quote, drafts.dm, drafts.emailSubject, drafts.emailBody],
+        `INSERT INTO mo_prospects (source, name, linkedin_url, headline, post_text, reason, evidence_quote, draft_dm, draft_email_subject, draft_email_body, channel, dm_style, draft_why)
+         VALUES ('linkedin', $1, $2, $3, $3, $4, $5, $6, $7, $8, 'manual', $9, $10) ON CONFLICT DO NOTHING`,
+        [li.name, li.url, li.headline, li.reason, li.quote, drafts.dm, drafts.emailSubject, drafts.emailBody, style, drafts.why],
       );
       shortlisted++;
     }

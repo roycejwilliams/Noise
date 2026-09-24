@@ -14,6 +14,8 @@ export const MO = {
   closeAfterFollowUpDays: 7,
   maxReplyChars: 200,
   maxDmChars: 280,
+  // Jacqueline's full intro (who Mo is, where, what Co is, fit, ask) is ~320.
+  maxIntroDmChars: 420,
 };
 
 export function squash(s: string): string {
@@ -92,7 +94,7 @@ export function namesAMember(text: string, members: { first: string; last: strin
 
 export type DraftCheck = { name: string; pass: boolean; reason?: string };
 
-export function checkMoDraft(kind: "reply" | "dm" | "email", text: string): DraftCheck[] {
+export function checkMoDraft(kind: "reply" | "dm" | "email" | "why", text: string, opts: { dmMax?: number } = {}): DraftCheck[] {
   const checks: DraftCheck[] = [
     { name: `${kind}_not_empty`, pass: text.trim().length > 0 },
     { name: `${kind}_no_em_dash`, pass: !/[—–]/.test(text) },
@@ -105,11 +107,18 @@ export function checkMoDraft(kind: "reply" | "dm" | "email", text: string): Draf
     checks.push({ name: "reply_no_pitch", pass: !/\b(invite|invitation|club|member|join|dm me|check your dms)\b/i.test(text) });
   }
   if (kind === "dm") {
-    checks.push({ name: "dm_length", pass: text.length <= MO.maxDmChars, reason: `${text.length} chars` });
+    checks.push({ name: "dm_length", pass: text.length <= (opts.dmMax ?? MO.maxDmChars), reason: `${text.length} chars` });
     checks.push({ name: "dm_no_link", pass: !/https?:\/\/|www\./i.test(text) });
     // The code only goes out after they say yes.
     checks.push({ name: "dm_no_code", pass: !/\b[A-HJ-NP-Z2-9]{8}\b/.test(text) });
     checks.push({ name: "dm_asks", pass: /\?\s*$/.test(text.trim()), reason: "ends by asking if they'd like an invite" });
+    // Mo reaches out as itself (2026-09-24).
+    checks.push({ name: "dm_says_its_mo", pass: /\bI['’]?m Mo\b/.test(text), reason: "introduces itself as Mo" });
+  }
+  if (kind === "why") {
+    checks.push({ name: "why_length", pass: text.length <= 260, reason: `${text.length} chars` });
+    checks.push({ name: "why_no_link", pass: !/https?:\/\/|www\./i.test(text) });
+    checks.push({ name: "why_no_code", pass: !/\b[A-HJ-NP-Z2-9]{8}\b/.test(text) });
   }
   if (kind === "email") {
     checks.push({ name: "email_has_code_slot", pass: text.includes("{{CODE}}") });

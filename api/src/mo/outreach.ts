@@ -39,10 +39,11 @@ export function sendingBlocked(env: NodeJS.ProcessEnv = process.env): string | n
 export function sendingStatus(env: NodeJS.ProcessEnv = process.env): string {
   const x = xWriteConfigured(env);
   const email = emailConfigured(env);
-  if (!moEnabled(env)) return "Mo is switched off (MO_ENABLED isn't true), so nothing goes out.";
+  // Mo's own words, first person (mo/moVoice.ts).
+  if (!moEnabled(env)) return "I'm switched off right now (MO_ENABLED isn't true), so nothing goes out.";
   if (!x && !email) return "Co's X keys and the outreach email settings aren't set yet, so nothing goes out until they are.";
-  if (!x) return "Co's X keys aren't set, so no replies or DMs go out yet. Email works where Mo finds a published address.";
-  if (!email) return "X replies and DMs go out. Email isn't set up, so people with closed DMs are marked unreachable.";
+  if (!x) return "Co's X keys aren't set, so no replies or DMs go out yet. Email works when I find a published address.";
+  if (!email) return "X replies and DMs go out. Email isn't set up, so people with closed DMs get marked unreachable.";
   return "X replies, DMs and email are all set up.";
 }
 
@@ -182,11 +183,15 @@ async function followUp(p: any): Promise<string> {
 // Hourly, daytime only.
 export async function runMoOutreach(now = new Date()): Promise<void> {
   if (!moEnabled() || !moHours(now)) return;
-  // Joined: their code was used.
-  await pool.query(
-    `UPDATE mo_prospects sp SET status = 'joined', updated_at = NOW() FROM invite_codes ic
-     WHERE ic.code = sp.invite_code AND ic.used_by IS NOT NULL AND sp.status <> 'joined'`,
+  // Joined: their code was used. Usually caught the moment it's redeemed
+  // (services/inviteCodes.ts); this is the backup. Either way the team hears.
+  const { rows: joined } = await pool.query(
+    `UPDATE mo_prospects sp SET status = 'joined', joined_at = NOW(), updated_at = NOW() FROM invite_codes ic
+     WHERE ic.code = sp.invite_code AND ic.used_by IS NOT NULL AND sp.status <> 'joined' RETURNING sp.*`,
   );
+  const { tellTeamAboutJoins, isMoPaused } = await import("./team.js");
+  await tellTeamAboutJoins(joined);
+  if (await isMoPaused()) return;
   const { rows } = await pool.query(
     `SELECT * FROM mo_prospects WHERE status IN ('approved', 'warmed', 'contacted') ORDER BY approved_at NULLS LAST, no LIMIT 50`,
   );
@@ -294,7 +299,8 @@ export async function runMoInbox(): Promise<void> {
         await sendDm(p.x_user_id, "Understood. I won't reach out again. Good luck with everything.").catch(() => {});
       } else if (kind === "yes" && p.status !== "invited") {
         const code = p.invite_code ?? (await generateInviteCode(null));
-        await sendDm(p.x_user_id, codeMessage(code));
+        // "Want to know why?" got a yes: the why Mo drafted, then the invite.
+        await sendDm(p.x_user_id, p.dm_style === "curious" && p.draft_why ? `${p.draft_why}\n\n${codeMessage(code)}` : codeMessage(code));
         await pool.query(`UPDATE mo_prospects SET status = 'invited', invite_code = $2, updated_at = NOW() WHERE id = $1`, [p.id, code]);
         action = "code_sent";
       } else {

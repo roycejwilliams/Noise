@@ -1432,6 +1432,28 @@ export async function runMigrations(): Promise<void> {
     )
     .catch((err: Error) => console.error("mo tables init failed:", err));
 
+  // Mo reaching out as itself, two DM styles tested side by side (Jacqueline,
+  // 2026-09-24), and Mo's team state: pause, what the team asked it to look
+  // for, and the network's gaps as Co reports them (mo/team.ts).
+  await pool
+    .query(
+      `ALTER TABLE mo_prospects ADD COLUMN IF NOT EXISTS dm_style TEXT, ADD COLUMN IF NOT EXISTS draft_why TEXT, ADD COLUMN IF NOT EXISTS joined_at TIMESTAMPTZ`,
+    )
+    .then(() =>
+      pool.query(`CREATE TABLE IF NOT EXISTS mo_settings (key TEXT PRIMARY KEY, value JSONB NOT NULL, updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW())`),
+    )
+    .then(() =>
+      pool.query(
+        `CREATE TABLE IF NOT EXISTS mo_focus (
+          id BIGSERIAL PRIMARY KEY,
+          text TEXT NOT NULL,
+          asked_by UUID REFERENCES users(id) ON DELETE SET NULL,
+          created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+        )`,
+      ),
+    )
+    .catch((err: Error) => console.error("mo team tables init failed:", err));
+
   // Kinds of things a member told Co to stop suggesting ("no more
   // hackathons", 2026-09-22). Turning down one event only ever blocked that
   // one event; this is the lasting version, read by the personal fit check
