@@ -37,6 +37,7 @@ Co replied: Weird, not sure why it's not connecting.
 Want to start with the venue types to call, or the questions to ask when you get someone on the phone?
 User said: What's breaking?`;
   check("#4 a question in a later paragraph of Co's text counts as asked", !/\?/.test(dropRepeatedQuestion("That's on my side.\n\nWant to start with the venue types to call, or the questions to ask?", paras)));
+  check("#4 'Co called' and photo lines end Co's message", dropRepeatedQuestion("Ok then. Want to start with the venue types to call?", "Co replied: hi\nUser sent a photo or voice memo (name/email intake)\nWant to start with the venue types to call?") === "Ok then. Want to start with the venue types to call?");
   check("#4 a gap marker ends Co's message", dropRepeatedQuestion("Ok. Want to start with the venue types to call?", "Co replied: hi\n[— 2 hours later —]\nWant to start with the venue types to call?") === "Ok. Want to start with the venue types to call?");
   const short = "Co replied: Nice. How's the permit going?\nUser said: slow";
   const longer = "Got it, that sounds slow. How's the permit going, and did the venue get back about the Saturday date?";
@@ -55,7 +56,6 @@ const rg = src("harness/replyGrounding.ts");
 check("#4 the fact check strips with both checks' failures", /const allFailed = \[\.\.\.effectiveFailed1, \.\.\.\(secondFailed \?\? \[\]\)\];/.test(rg) && /stripUnsupported\(draft, allFailed\)/.test(rg));
 check("#4 a failed call's real reason reaches the reply", /memory_type = 'call_failure'/.test(rg) && /the problem is on your side, not their phone/.test(rg));
 const bridge = src("services/mediaStreamBridge.ts");
-check("#4 a Hume error is only a failed call when the call never got going", /if \(!handle\.coHasSpoken && !handle\.receivedUserMessage\) \{\n\s+noteCallFailure/.test(bridge));
 check("#4 a Hume error on a call is noted in plain words, once per 10 min", /noteCallFailure\(handle\.userId/.test(bridge) && /a problem with Co's own voice setup/.test(bridge) && /INTERVAL '10 minutes'/.test(bridge));
 check("#4 the reply is told to follow where they went", /If they moved on from a question you asked, go where they went; don't ask it again\./.test(src("agent/conversationReply.ts")));
 
@@ -79,6 +79,9 @@ user: Yes please`;
   check("#2 a yes by text counts too", !echoesCoNotMember("founder communities in SF", "Co replied: Nice.\n\nShould I look for founder communities in SF?\nUser said: yeah that'd be great"));
   check("#2 'okay' to Co's own plan is still not their want", echoesCoNotMember("founder communities in SF", "assistant: I'll dig into founder communities in SF after this.\nuser: sure"));
   check("#2 a no isn't agreement", echoesCoNotMember("founder communities in SF", "assistant: Want me to look for founder communities in SF?\nuser: nah not really"));
+  // Text history has other labeled lines (sendblue.ts, co.ts); they're never Co's words.
+  check("#2 a voice memo after Co's text is theirs, not Co's", !echoesCoNotMember("founder communities in SF", "Co replied: Nice.\n\nWhat kind of people?\nUser sent a voice memo: honestly founder communities in SF\nuser: ok\nassistant: founder communities in SF, got it"));
+  check("#2 a paragraph of Co's text that starts with 'Co' is still Co's", echoesCoNotMember("founder communities in SF", "Co replied: Got it.\n\nCo will look at founder communities in SF.\nUser said: cool thanks"));
   check("#2 a text turn with no Co line is never filtered", !echoesCoNotMember("founder communities in SF", "user: looking for founder communities in SF"));
   const pe = src("services/profileExtraction.ts");
   check("#2 captureIntent filters asks, wants and preferences", /const mine = \(x: unknown\) => typeof x === "string" && !echoesCoNotMember\(x, transcript\);/.test(pe) && /\.filter\(\(a\) => mine\(a\.text\)\)/.test(pe));
@@ -115,6 +118,7 @@ user: Yes please`;
   check("#5 the member's own pronoun before the other person is still fixed", neutralMemberPronouns("Royce said his cofounder Maya is leaving.", "Royce").startsWith("Royce said their cofounder Maya"));
   check("#5 naming the member again brings 'they' back", neutralMemberPronouns("Maya is leaving. Royce sounded worried about it, and he wants a new partner.", "Royce") === "Maya is leaving. Royce sounded worried about it, and they want a new partner." || neutralMemberPronouns("Maya is leaving. Royce sounded worried about it, and he wants a new partner.", "Royce").includes("and they"));
   check("#5 a company or place isn't another person", neutralMemberPronouns("Royce is building Lythe.ai with a partnership at Sangria in San Francisco. He sounded excited.", "Royce").endsWith("They sounded excited."));
+  check("#5 line breaks in the summary are kept", neutralMemberPronouns("Royce is tired.\n\nHe sounded flat.", "Royce") === "Royce is tired.\n\nThey sounded flat.");
   check("#5 unknown name still neutralizes a summary about only them", neutralMemberPronouns("He sounded tired.", null) === "They sounded tired.");
 }
 

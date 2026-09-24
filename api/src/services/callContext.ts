@@ -209,9 +209,11 @@ export function neutralMemberPronouns(text: string, memberFirstName: string | nu
   const memberNames = (memberFirstName ?? "").toLowerCase().split(/\s+/).map((n) => n.replace(/[^a-z0-9]/g, "")).filter(Boolean);
   const namesMember = (s: string) => memberNames.some((n) => new RegExp(`\\b${n}\\b`, "i").test(s));
   let aboutMember = true;
+  // Split keeping the whitespace between sentences, so line breaks survive.
   return text
-    .split(/(?<=[.!?])\s+/)
-    .map((sentence) => {
+    .split(/(?<=[.!?])(\s+)/)
+    .map((sentence, i) => {
+      if (i % 2) return sentence;
       if (namesMember(sentence)) aboutMember = true;
       const other = namesSomeoneElse(sentence, memberNames);
       if (other < 0) return aboutMember ? neutralPronouns(sentence) : sentence;
@@ -221,7 +223,7 @@ export function neutralMemberPronouns(text: string, memberFirstName: string | nu
       aboutMember = false;
       return head + sentence.slice(other);
     })
-    .join(" ");
+    .join("");
 }
 
 export async function summarizeCallForTextContext(userId: string, transcript: string, emotionalHighlights?: string): Promise<void> {

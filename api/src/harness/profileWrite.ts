@@ -439,12 +439,16 @@ export function splitSpeakers(transcript: string): { theirs: string; cos: string
     if (/^\s*(co replied:|assistant:|co:)/i.test(line)) {
       cos.push(line);
       lastCo = line;
-    } else if (/^\s*(user said:|user:)/i.test(line)) {
+    } else if (/^\s*(user said:|user:|user sent a voice memo:)/i.test(line)) {
       theirs.push(line);
       // Co's question or offer they said yes to is theirs too.
       if (lastCo && coAskedQuestion(lastCo) && AGREES.test(line)) theirs.push(lastCo);
       lastCo = null;
-    } else if (lastCo && line.trim() && !line.startsWith("[")) {
+    } else if (/^\s*(user (said|sent)\b|co (replied|called)\b|\[)/i.test(line)) {
+      // Any other labeled line ("User sent a photo...", "Co called...",
+      // "[Call] ...", a gap marker) ends Co's message.
+      lastCo = null;
+    } else if (lastCo && line.trim()) {
       // A text's later paragraphs are part of the same Co message.
       cos.push(line);
       lastCo += ` ${line}`;

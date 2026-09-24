@@ -87,7 +87,7 @@ export function dropRepeatedQuestion(draft: string, recentConversation: string):
     if (/^\s*co replied:/i.test(l)) {
       coMessages.push(l.replace(/^\s*co replied:\s*/i, ""));
       inCo = true;
-    } else if (/^(User said|User sent|\[)/i.test(l)) inCo = false;
+    } else if (/^\s*(user (said|sent)\b|co (replied|called)\b|user:|assistant:|\[)/i.test(l)) inCo = false;
     else if (inCo) coMessages[coMessages.length - 1] += `\n${l}`;
   }
   const coLines = coMessages.slice(-2);
