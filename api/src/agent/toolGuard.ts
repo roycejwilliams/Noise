@@ -62,7 +62,7 @@ export function guardTools<T extends Record<string, any>>(tools: T, ctx: GuardCt
               outcome: receipt === "done" ? "act" : "skip",
               action: receipt,
               reason: String(input?.why ?? "").slice(0, 300),
-              proposal: { ability: ability.id, input: Object.fromEntries(Object.entries(input ?? {}).map(([k, v]) => [k, typeof v === "string" ? v.slice(0, 200) : v])), ...detail },
+              proposal: { ability: ability.id, message: ctx.resolvedContent.slice(0, 300), input: Object.fromEntries(Object.entries(input ?? {}).map(([k, v]) => [k, typeof v === "string" ? v.slice(0, 200) : v])), ...detail },
             }).catch(() => {});
       const refuse = async (receipt: Receipt, receiptText: string, tell: string) => {
         ctx.notDone(receiptText);

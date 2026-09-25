@@ -80,7 +80,8 @@ export type FlagType =
   | "promise_without_ask"
   | "member_frustrated_with_co"
   | "member_reported_issue"
-  | "member_called_out_miss";
+  | "member_called_out_miss"
+  | "questionable_tool_choice";
 
 export const FLAG_LABELS: Record<FlagType, string> = {
   slow_reply: "Slow reply (over the latency budget)",
@@ -101,6 +102,7 @@ export const FLAG_LABELS: Record<FlagType, string> = {
   member_frustrated_with_co: "Member frustrated with Co",
   member_reported_issue: "Member reported an issue",
   member_called_out_miss: "Member called out a miss",
+  questionable_tool_choice: "Questionable tool choice (Jev's read of Co's judgment)",
 };
 
 export type Severity = "low" | "medium" | "high";
@@ -477,6 +479,54 @@ export async function loadReviewData(userId: string, since: Date, until: Date): 
   };
 }
 
+// Co's own judgment (2026-09-25): every tool Co chose, with the member's
+// message and Co's stated reason, read by Jev in one request per member.
+// Only clear mismatches are flagged ("a contact card when they wanted a
+// link", "a search when they only wanted to talk"), always as a guess for a
+// person to check. Member text goes to Jev only through the zero-retention
+// gateway, and only where JEV_MEMBER=on (services/jevGateway.ts).
+export const JUDGMENT_FLAG_BELOW = 0.3;
+export async function judgmentFlags(data: ReviewData): Promise<ReviewFlag[]> {
+  const calls = data.decisions.filter((d) => d.decision.startsWith("tool.") && d.outcome === "act");
+  if (!calls.length) return [];
+  const { askJevZdr, jevForMemberText } = await import("../services/jevGateway.js");
+  if (!jevForMemberText()) return [];
+  const { abilityForTool } = await import("../services/capabilities.js");
+  const listed: Record<string, unknown> = {};
+  const questions: Record<string, { type: "boolean"; instructions: string }> = {};
+  calls.slice(0, 40).forEach((d, i) => {
+    const tool = d.decision.slice(5);
+    listed[`k${i}`] = {
+      member_said: String(d.proposal?.message ?? "").slice(0, 300),
+      co_chose: abilityForTool(tool)?.can ?? tool,
+      co_reason: d.reason ?? "",
+    };
+    questions[`k${i}`] = {
+      type: "boolean",
+      instructions: `For calls.k${i}: was what co_chose a sensible response to what member_said? Yes if it fits what they asked for or clearly helps them. No only if it's a clear mismatch, like sending a contact card when they wanted a link, or searching when they only wanted to talk.`,
+    };
+  });
+  const r = await askJevZdr({ calls: listed }, questions, 10_000).catch(() => null);
+  if (!r) return [];
+  const flags: ReviewFlag[] = [];
+  calls.slice(0, 40).forEach((d, i) => {
+    const p = r[`k${i}`];
+    if (typeof p !== "number" || p >= JUDGMENT_FLAG_BELOW) return;
+    flags.push({
+      userId: data.userId,
+      at: d.at,
+      type: "questionable_tool_choice",
+      severity: p < 0.1 ? "high" : "medium",
+      snippet: `"${String(d.proposal?.message ?? "").slice(0, 120)}" → ${d.decision.slice(5)}`,
+      decisionIds: [d.id],
+      cause: `Jev thinks this was a mismatch (${Math.round(p * 100)}% sensible). Co's reason: ${d.reason || "none given"}`,
+      causeConfirmed: false,
+      source: "model",
+    });
+  });
+  return flags;
+}
+
 export async function reviewWindow(since: Date, until: Date, opts: { model?: boolean; userIds?: string[] } = {}): Promise<{ flags: ReviewFlag[]; names: Record<string, string> }> {
   const flags: ReviewFlag[] = [];
   const names: Record<string, string> = {};
@@ -484,7 +534,7 @@ export async function reviewWindow(since: Date, until: Date, opts: { model?: boo
     const data = await loadReviewData(userId, since, until);
     names[userId] = data.firstName;
     flags.push(...logFlags(data), ...conversationFlags(data), ...reactionFlags(data));
-    if (opts.model !== false) flags.push(...(await modelFlags(data)));
+    if (opts.model !== false) flags.push(...(await modelFlags(data)), ...(await judgmentFlags(data).catch(() => [])));
   }
   return { flags: flags.sort((a, b) => ms(a.at) - ms(b.at)), names };
 }

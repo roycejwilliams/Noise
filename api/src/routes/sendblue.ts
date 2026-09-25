@@ -72,6 +72,7 @@ import sendblue, { blockSender, cleanCoMessage, markRead, sendReaction, webhookS
 import { TURN_FAILED_NOTE, turnFailedNoteBlocked } from "../services/turnFailure.js";
 import { arrivedByText } from "../services/eventPresence.js";
 import { lineInVoice } from "../services/voiceLine.js";
+import { privacyAlert } from "../services/privacyAlert.js";
 import { scoreGuestListForEvent } from "../services/eventScoring.js";
 import { closingReaction, emojiFor, lastCoLine } from "../services/conversationClose.js";
 import { renderMatchLead, sourceOf } from "../services/messageFormat.js";
@@ -1433,6 +1434,18 @@ export function sendblueRouter(io: Server): Router {
           pendingDescriptions: openItems.filter((i) => i.id !== resolvedItem?.item.id).map((i) => i.description),
         });
         const factsMs = Date.now() - factsStarted;
+        // Early warning (2026-09-25): a fast Jev read of whether they're
+        // asking about another person's private details or asking Co to
+        // contact someone for them. It only puts Co on alert; the privacy
+        // lines themselves are hard rules either way. Member text goes to Jev
+        // only through the zero-retention gateway where JEV_MEMBER=on.
+        if (hasText) {
+          const alert = await privacyAlert(resolvedContent).catch(() => null);
+          if (alert) {
+            addInstruction(replyFacts, alert.instruction);
+            recordDecision({ layer: 3, decision: "jev.privacy", userId: user.id, outcome: "act", action: alert.kind, proposal: { p: alert.p } }).catch(() => {});
+          }
+        }
         // What their photo shows, so details Co takes from it count as on file
         // in the reply's fact check (2026-09-22, services/imageRead.ts).
         if (imageForVision) {
