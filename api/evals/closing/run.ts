@@ -40,7 +40,7 @@ async function run(c: Case): Promise<{ acted: boolean; reaction: Tapback | null;
   }
   const d = decideActions(out, openItems, { message: c.message, recentConversation: c.recentConversation });
   // Same condition as routes/sendblue.ts.
-  const acted = !!(d.resolve || d.placeCall || d.scheduleCall || d.cancelCall || d.wantsRecommendation || d.asksForUpdates || d.clarifyContext || d.clarifyAbout);
+  const acted = !!(d.resolve || d.placeCall || d.scheduleCall || d.cancelCall || d.wantsRecommendation || d.clarifyContext || d.clarifyAbout);
   return { acted, reaction: acted ? null : closingReaction(c.message), routerReason: out.reason ?? "" };
 }
 

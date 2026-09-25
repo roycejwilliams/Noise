@@ -42,8 +42,6 @@ type Acted = {
   clarifiedCall?: boolean;
   call: "place_call" | "schedule" | "cancel" | "answer_calling_question" | "nothing";
   rec: boolean;
-  upd: boolean;
-  inv: boolean;
 };
 
 const here = dirname(fileURLToPath(import.meta.url));
@@ -110,8 +108,6 @@ function baselineActions(c: Case): Acted {
     clarified: false,
     call,
     rec: (cur.wantsRecommendation ?? "").trim().toLowerCase().replace(/^[`"']+|[`"']+$/g, "") === "wants_something_concrete",
-    upd: (cur.asksForUpdates ?? "").trim().toLowerCase().startsWith("yes"),
-    inv: false,
   };
 }
 
@@ -122,8 +118,6 @@ function routerActions(d: Decision): Acted {
     clarifiedCall: d.clarifyAbout === "call",
     call: d.placeCall ? "place_call" : d.scheduleCall ? "schedule" : d.cancelCall ? "cancel" : d.answerCallingQuestion ? "answer_calling_question" : "nothing",
     rec: d.wantsRecommendation,
-    upd: d.asksForUpdates,
-    inv: d.wantsInvite,
   };
 }
 
@@ -152,9 +146,7 @@ function score(c: Case, a: Acted) {
       : c.label.ans.includes("none");
   soft.call = c.label.call.includes(a.call);
   soft.rec = c.label.rec === null ? null : a.rec === c.label.rec;
-  soft.upd = c.label.upd === null ? null : a.upd === c.label.upd;
   // Invite asks (2026-09-19); cases without the label don't score it.
-  soft.inv = c.label.inv === undefined || c.label.inv === null ? null : a.inv === c.label.inv;
   return { hard, soft };
 }
 
@@ -213,7 +205,7 @@ async function main() {
   console.log(`\n=== ${label} — ${results.length} cases ===\n`);
 
   const hardCases = results.filter((r) => r.hard.length);
-  const fields = ["ans", "call", "rec", "upd", "inv"] as const;
+  const fields = ["ans", "call", "rec"] as const; // updates and invites are Co's own tools now
   const acc: Record<string, string> = {};
   let softRight = 0;
   let softTotal = 0;

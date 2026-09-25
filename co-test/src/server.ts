@@ -25,6 +25,7 @@ import { createCoRouter } from "../../api/src/routes/co.js";
 import { reportUnfinishedTurns, sendblueRouter } from "../../api/src/routes/sendblue.js";
 import { serveInvitePage } from "../../api/src/routes/invitePage.js";
 import { createLumaRouter } from "../../api/src/routes/luma.js";
+import { createMoRouter } from "../../api/src/routes/mo.js";
 import { registerJobs } from "../../api/src/jobs/index.js";
 import { installGracefulShutdown, trackRequests } from "../../api/src/services/shutdown.js";
 
@@ -67,6 +68,8 @@ async function main() {
   // has been 404ing silently since co-test became the only running server
   // for this environment.
   app.use("/luma/webhook", express.raw({ type: "application/json" }));
+  // Resend signs the raw body of Mo's inbound email posts (routes/mo.ts).
+  app.use("/mo/email/inbound", express.raw({ type: "application/json" }));
   app.use(express.json({ limit: "2mb" }));
   app.use(express.urlencoded({ extended: false })); // Twilio status callbacks are form-encoded
   app.use(cookieParser());
@@ -145,6 +148,9 @@ async function main() {
   app.use("/co", createCoRouter(io));
   app.use("/sendblue", sendblueRouter(io));
   app.use("/luma", createLumaRouter());
+  // Mo's email opt-out link and inbound email replies (2026-09-25: Mo runs
+  // here, so these have to be served here too).
+  app.use("/mo", createMoRouter());
 
   // Tool-access login (phone + OTP) — see services/testerAuth.ts. Public by
   // definition, it's the thing that grants access to everything below.

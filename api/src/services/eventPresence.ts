@@ -338,6 +338,13 @@ export async function runPresencePoll(now = new Date(), tickMs = 2 * 60_000): Pr
 // more than one.
 export async function arrivedByText(userId: string, message: string, now = new Date()): Promise<{ eventApiId: string; eventName: string; isNew: boolean } | null> {
   if (!isImHere(message)) return null;
+  return recordTextArrival(userId, now);
+}
+
+// They told Co they've arrived (Co's judgment, conversationTools.ts
+// markArrived, 2026-09-25): records it for the one Co event of theirs that's
+// on now, or null when there isn't exactly one.
+export async function recordTextArrival(userId: string, now = new Date()): Promise<{ eventApiId: string; eventName: string; isNew: boolean } | null> {
   const open = (await events()).filter((e) => {
     const start = new Date(e.start_at).getTime();
     const end = e.end_at ? new Date(e.end_at).getTime() : start + 6 * 3_600_000;

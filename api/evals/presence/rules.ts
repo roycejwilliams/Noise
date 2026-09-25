@@ -106,8 +106,11 @@ check("leaving early moves the end-of-night check-in up", /UPDATE event_checkin_
 const sc = src("src/services/eventScoring.ts");
 check("the in-room nudge waits for arrival", /arrivalWaitCheck\(await getPresence\(eventId, person\.user_id\), eventTiming\.start_at, new Date\(\)\)/.test(sc));
 const sb = src("src/routes/sendblue.ts");
-check("'I'm here' marks arrival and re-scores, for members only", /\} else if \(user\.identity_captured\) \{\n[\s\S]{0,300}arrivedByText\(user\.id, content\)/.test(sb) && /arrivedAtEvent\?\.isNew[\s\S]{0,80}scoreGuestListForEvent/.test(sb));
-check("the reply welcomes them without naming anyone", /don't name anyone or promise a person here/.test(sb));
+// Arrival is Co's call now (conversationTools.ts markArrived, 2026-09-25):
+// members only (the reply agent only runs for members), and it re-scores.
+check("saying they've arrived marks arrival and re-scores", /markArrived: tool\(\{[\s\S]{0,900}recordTextArrival\(ctx\.userId\)[\s\S]{0,400}arrived\.isNew[\s\S]{0,80}scoreGuestListForEvent/.test(src("src/agent/conversationTools.ts")));
+check("no Co event on: nothing recorded, and Co doesn't welcome them", /no Co event of theirs on right now/.test(src("src/agent/conversationTools.ts")));
+check("the reply welcomes them without naming anyone", /don't name anyone or promise a person here/.test(src("src/agent/conversationTools.ts")));
 {
   const geo = src("src/services/geocoding.ts");
   const fn = geo.slice(geo.indexOf("export async function geocodeVenue"), geo.indexOf("// Open-Meteo"));

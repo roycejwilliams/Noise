@@ -733,6 +733,51 @@ export function proposePick(eligible: Candidate[]): { pick: Candidate | null; re
   return { pick, reason: pick ? `highest priority of ${eligible.length} eligible` : "nothing eligible", source: "code" };
 }
 
+// Co chooses (Royce, 2026-09-25: "Co value is in it's intelligence"). When
+// two or more are eligible, Co reads the person (recent texts, how they've
+// been feeling) and picks the one that fits them right now. Everything that
+// decides what's eligible (caps, hours, opt-outs, spacing) stays in code, and
+// Co can't pick "nothing": feelings shape how Co says it, never whether a
+// member hears about something (feedback: never isolate frustrated members).
+// Any failure, or a pick that isn't eligible, falls back to code priority.
+// Only runs when there's a real choice, so most days cost nothing.
+export async function choosePick(
+  eligible: Candidate[],
+  about: { recentConversation: string; feeling: string },
+): Promise<{ pick: Candidate | null; reason: string; source: "code" | "co" }> {
+  if (eligible.length < 2) return proposePick(eligible);
+  try {
+    const { text } = await Promise.race([
+      generateText({
+        model: anthropic(DRAFT_MODEL),
+        maxOutputTokens: 200,
+        experimental_telemetry: { isEnabled: true, functionId: "proactive.choosePick" },
+        prompt: `${CO_VOICE}
+
+You're about to text this member first. Several things are ready to go; pick the ONE that fits them best right now, the way a friend who knows them would. Staying close to what's going on in their life comes before offers.
+
+How they've been: ${about.feeling || "(nothing notable)"}
+Their recent texts with you (oldest first):
+${about.recentConversation.slice(-2500) || "(none)"}
+
+Ready to send:
+${eligible.map((c) => `- ${c.id} [${c.type}] ${c.summary}`).join("\n")}
+
+Return ONLY JSON: {"id": "<one id from the list>", "why": "one short line"}`,
+      }),
+      new Promise<never>((_, reject) => setTimeout(() => reject(new Error("pick timed out")), 8000)),
+    ]);
+    const m = text.match(/\{[\s\S]*\}/);
+    const parsed = m ? JSON.parse(m[0]) : null;
+    const pick = eligible.find((c) => c.id === String(parsed?.id ?? ""));
+    if (pick) return { pick, reason: `Co's pick of ${eligible.length}: ${String(parsed?.why ?? "").slice(0, 200)}`, source: "co" };
+  } catch (err: any) {
+    console.error("proactive: Co's pick failed, using priority (non-fatal):", err?.message ?? err);
+  }
+  const fallback = proposePick(eligible);
+  return { ...fallback, reason: `${fallback.reason} (Co's pick unavailable)` };
+}
+
 // ---------- sending
 
 // Re-checks everything that could have changed since the gather, holds a
@@ -1071,7 +1116,11 @@ export async function dispatchForUser(registry: ProactiveRegistry, userId: strin
     return;
   }
 
-  const picked = proposePick(ev.eligible);
+  const recent = await pool
+    .query(`SELECT content FROM co_memories WHERE user_id = $1 AND memory_type = 'text_exchange' ORDER BY created_at DESC LIMIT 12`, [userId])
+    .then((r) => r.rows.map((x: any) => String(x.content)).reverse().join("\n"))
+    .catch(() => "");
+  const picked = await choosePick(ev.eligible, { recentConversation: recent, feeling: renderEmotionalContext(emotional) });
   if (!picked.pick) {
     await pool.query(
       `INSERT INTO proactive_user_state (user_id, hold_until) VALUES ($1, NOW() + ($2 || ' hours')::interval)
@@ -1174,7 +1223,7 @@ export async function dispatchForUser(registry: ProactiveRegistry, userId: strin
     userId,
     outcome: "act",
     action: `send:${c.type}`,
-    proposal: { ...proposal, picked: c.id, pickSource: picked.source, messages: outgoing, batched: extras.map((e) => e.candidate.targetKey), delivered: result.delivered.length },
+    proposal: { ...proposal, picked: c.id, pickSource: picked.source, pickWhy: picked.reason, messages: outgoing, batched: extras.map((e) => e.candidate.targetKey), delivered: result.delivered.length },
     checks: [...ev.userChecks, ...pickChecks, ...draftChecks],
     reason: result.delivered.length < draft.messages.length ? `${picked.reason} (partial send: ${result.delivered.length}/${draft.messages.length} delivered)` : picked.reason,
   });

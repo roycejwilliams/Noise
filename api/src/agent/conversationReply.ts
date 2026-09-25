@@ -28,6 +28,14 @@ export const TEXT_LISTENING = `How you listen, the same as on a call:
 - Real warmth, and real humor when something is actually funny.`;
 
 export type ConversationReplyInput = {
+  // For a tapback instead of a reply (conversationTools.ts
+  // reactInsteadOfReplying): their message's handle, and whether Co still
+  // owes them an answer from before.
+  messageHandle?: string | null;
+  replyOwed?: boolean;
+  // Runs and sends a search the way the text route always has
+  // (routes/sendblue.ts searchAndSend); Co's searchNow tool calls it.
+  searchAndSend?: (what: string) => Promise<{ answered: boolean; sentCount: number; briefing: string }>;
   // A search already ran and its results went out as their own messages, so
   // this reply only has to respond around them; drafted at low effort.
   searchedThisTurn?: boolean;
@@ -179,8 +187,8 @@ Return ONLY the numbers of the memories that are genuinely relevant to what the 
 // on explicit classifier output) — only the secondary gesture + reply.
 export async function runConversationReplyAgent(
   input: ConversationReplyInput,
-  opts: { dryRun?: boolean; record?: boolean } = {},
-): Promise<{ sent: boolean; offered: boolean; replyText: string; grounding: GroundingResult[] }> {
+  opts: { dryRun?: boolean; record?: boolean; stubSearch?: boolean } = {},
+): Promise<{ sent: boolean; offered: boolean; replyText: string; grounding: GroundingResult[]; toolsCalled: string[] }> {
   const grounding: GroundingResult[] = [];
   const { tools, state, flushLinks } = createConversationTools({
     userId: input.userId,
@@ -191,6 +199,11 @@ export async function runConversationReplyAgent(
     recentOfferBurstActive: input.recentOfferBurstActive,
     searchedThisTurn: input.searchedThisTurn,
     dryRun: opts.dryRun ?? false,
+    stubSearch: opts.stubSearch ?? false,
+    messageHandle: input.messageHandle ?? null,
+    searchAndSend: input.searchAndSend,
+    replyOwed: input.replyOwed ?? false,
+    lastCoMessage: lastCoLine(input.recentConversation),
     sendCoReply: input.sendCoReply,
     facts: {
       add: (kind, text) => addFact(input.facts, kind, text),
@@ -348,7 +361,7 @@ Then act with your tools:
     // instead, so this reverted back to 6.)
     // Also stops the moment a send is held (conversationTools.ts sendReply):
     // retrying can't get through and each step is a paid call.
-    stopWhen: [stepCountIs(8), () => state.sendStopped],
+    stopWhen: [stepCountIs(8), () => state.sendStopped, () => state.reacted],
     experimental_telemetry: { isEnabled: true, functionId: "agent.conversationReply" },
     ...(input.imageForVision
       ? {
@@ -421,5 +434,7 @@ Then act with your tools:
 
   const offered = await verifyAndRecordCallOffer(input, state.lastReplyText, opts.dryRun ?? false);
 
-  return { sent: state.sent, offered, replyText: state.lastReplyText, grounding };
+  // Which tools Co chose, in order (evals/capabilities/probe.ts reads this).
+  const toolsCalled = agentRun.steps.flatMap((st) => st.toolCalls.map((t) => t.toolName));
+  return { sent: state.sent, offered, replyText: state.lastReplyText, grounding, toolsCalled };
 }

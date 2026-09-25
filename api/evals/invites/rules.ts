@@ -5,7 +5,7 @@
 import "dotenv/config";
 import { inviteCodeCandidates } from "../../src/services/inviteCodes.js";
 import { decideInvite, inviteGreeting, inviteLink, invitesLeft, isInviteCountQuestion, isInviteRequest, smsInviteHref } from "../../src/services/invites.js";
-import { INVITE_JOINED, INVITE_READY, NO_INVITES_LEFT, WELCOME_INVITED, pickLine } from "../../src/services/onboardingLines.js";
+import { INVITE_JOINED, WELCOME_INVITED, pickLine } from "../../src/services/onboardingLines.js";
 import { addFact, baseReplyFacts, codeChecks } from "../../src/harness/replyGrounding.js";
 import { decideActions, NO_ROUTE } from "../../src/services/messageRouter.js";
 import { decideInviteJoinedGate } from "../../src/services/inviteJoinGate.js";
@@ -70,7 +70,7 @@ check("invite link is a web page on the base URL", inviteLink("6VGF76VK", "https
 check("no base URL, no link", inviteLink("6VGF76VK", "") === null);
 
 // Lines: on brand
-const pools = { WELCOME_INVITED, INVITE_READY, NO_INVITES_LEFT, INVITE_JOINED };
+const pools = { WELCOME_INVITED, INVITE_JOINED };
 for (const [name, pool] of Object.entries(pools)) {
   check(`${name} has at least 3 options`, pool.length >= 3);
   for (const line of pool) {
@@ -103,14 +103,8 @@ check("invite really sent this turn: not flagged", !claimFails("That link's for 
 check("not an invite message: not flagged", !claimFails("Sent you the event link above.", "what's on this weekend?"));
 check("honest how-to: not flagged", !claimFails("Invites go through me. Ask me for an invite for your friend, and you'll get a link to forward.", "how do invites work?"));
 
-// Router: acts on an invite ask unless it's only guessing
-const routed = (confidence: "high" | "medium" | "low", wantsInvite: boolean) =>
-  decideActions({ ...NO_ROUTE, wantsInvite, confidence }, [], turn("can my friend Sam join?")).wantsInvite;
-check("router invite ask, high confidence: runs", routed("high", true));
-check("router invite ask, medium confidence: runs", routed("medium", true));
-check("router invite ask, low confidence: doesn't", !routed("low", true));
-check("router says no invite: doesn't", !routed("high", false));
-check("router outage: never an invite", !decideActions(NO_ROUTE, [], turn("x")).wantsInvite);
+// Invites are Co's own choice (conversationTools.ts sendInvite, 2026-09-25);
+// the router no longer decides them.
 
 // Grounding: the "your friend joined" note always produces a decision
 // (2026-09-20: Co told Royce "Jacqueline's in" with nothing in the decision

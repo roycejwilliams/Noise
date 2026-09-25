@@ -291,10 +291,6 @@ const routerOutputSchema = z.object({
   // A short question to ask before searching, when what they want could mean
   // clearly different things; null when it's clear enough to search.
   askUnclear: z.preprocess((v) => (typeof v === "string" ? (v.trim() ? v.trim() : null) : v), z.string().nullable()).optional(),
-  asksForUpdates: z.boolean(),
-  // They want to bring someone into Co (services/invites.ts). Missing means
-  // false.
-  wantsInvite: z.boolean().default(false),
   confidence: z.enum(["high", "medium", "low"]),
   reason: z.string().default(""),
 });
@@ -340,7 +336,7 @@ Things Co has asked that are still waiting on a reply from them (newest first, w
 ${itemsBlock}
 ${declined}
 Return ONLY a JSON object:
-{"reason": "one short sentence: what their message is doing", "answers": {"itemId": "...", "value": "..."} or null, "ambiguousBetween": [itemIds], "call": "...", "wantsRecommendation": true/false, "beyondAsk": "..." or null, "askUnclear": "..." or null, "asksForUpdates": true/false, "wantsInvite": true/false, "confidence": "high" | "medium" | "low"}
+{"reason": "one short sentence: what their message is doing", "answers": {"itemId": "...", "value": "..."} or null, "ambiguousBetween": [itemIds], "call": "...", "wantsRecommendation": true/false, "beyondAsk": "..." or null, "askUnclear": "..." or null, "confidence": "high" | "medium" | "low"}
 Write "reason" first, then make every other field agree with it: if your reason says the message isn't answering a waiting item, answers must be null.
 
 answers — which waiting item (if any) the latest message is actually replying to:
@@ -363,7 +359,7 @@ call — about Co calling them:
 - "would_benefit": none of the above, but what they're describing is complex or emotional enough that voice would genuinely help. Never for short, light, or logistical messages.
 - "none": anything else. Accepting or declining a waiting call offer goes in answers, not here (use "none").
 
-wantsRecommendation — they're asking Co to find, suggest, or surface something concrete in the world right now (events, programs, people, opportunities): "find me a networking event", "anything real you can find for me", "found anything for me?", "have you surfaced anything lately?", "don't see anything on X?", "anything on Twitter?", "point me in the right direction" (after Co offered to look), "I want to look for some friends", "what's the vibes for Sunday?" (asking what's on then). It can be true alongside an answer ("never mind the call, can you find me a founder event"). false when:
+wantsRecommendation — they're asking Co to find, suggest, or surface something concrete in the world right now (events, programs, people, opportunities): "find me a networking event", "anything real you can find for me", "found anything for me?", "have you surfaced anything lately?", "don't see anything on X?", "anything on Twitter?", "point me in the right direction" (after Co offered to look), "I want to look for some friends", "what's the vibes for Sunday?" (asking what's on then). It can be true alongside an answer ("never mind the call, can you find me a founder event"). false when: Not when they only ask what's new or changed with Co itself ("Updates?", "what's new?"): Co answers that on its own, without a search.
 - they're only answering a waiting item ("yes", "tell me more"), or asking about something Co already sent ("what did you send me", "where's the link?", "any details?", "who is hosting it?");
 - a false-premise callback ("that job posting you sent me, is it still open") when the conversation shows Co never sent it;
 - they want Co's own opinion or advice (how to fix something, help planning their pitch, feedback on their build);
@@ -372,10 +368,6 @@ wantsRecommendation — they're asking Co to find, suggest, or surface something
 beyondAsk — when wantsRecommendation is true, separate the ask from everything else in the message. The ask is what they want found, including its time frame, place, and who it's for ("tech week, Oct 5th - Oct 11th?" is one ask; "anything about VC looking to fund?" is one ask). beyondAsk is anything else that needs a real response: a feeling ("ugh rough week"), news about their life ("wasn't feeling the mixer"), a second, different question, or a reaction to something Co said. Write it in a few plain words ("rough week", "asked about Maya too"), or null when the message is only the ask. A feeling or life update is never part of the ask. null when wantsRecommendation is false.
 
 askUnclear — when wantsRecommendation is true, a short, plain question to ask them first if what they want could reasonably mean two clearly different things, so searching would be a guess (Royce, 2026-09-18: "if you don't have an understanding of the context... ask clarifying questions... rather than just sending them anything"). Example: a founder asking "anyone hiring a design engineer?" could be hiring one or looking for a role, so: "Are you looking to hire a design engineer, or looking for a design engineer role?" null whenever the ask is clear enough to act on, including broad ones ("anything happening this weekend?", "any founder events?") and ones the conversation already makes clear. Never ask about details you could reasonably search broadly for.
-
-asksForUpdates — they're asking what's new or changed with Co itself ("any updates?", "you got some recent updates?", "what's new?"). A bare updates question ("Updates?", "any updates for me?") is only this: wantsRecommendation stays false, so Co doesn't also run a search (2026-09-18: "Updates?" got the update list and a search at once). It's a recommendation ask instead, with asksForUpdates false, only when they name what they want updates on ("any updates on the grants?", "anything new on the design engineer search?"). false for a casual greeting ("what's up?"), for "found anything for me?" or "surfaced anything lately?" (those are recommendation asks), for reactions to an update message, and for telling Co about their own week.
-
-wantsInvite — they want to bring someone into Co itself: asking for an invite, how a friend can join or get in, asking Co to add someone or send them a code, or how many invites they have left ("can my friend Sam join?", "how do I get my buddy in?", "my sister wants in, can you add her?", "send my friend a code", "Can I get an invite for a friend?"). false for bringing someone to an event ("can I bring a friend to Sunday's dinner?", "invite my friend to the mixer" are about the event), for just talking about a friend, and for telling Co they were invited somewhere.
 
 confidence — "high" if the read is unambiguous, "medium" if it's the most reasonable read but another is possible, "low" if you're guessing.`;
 }
@@ -411,8 +403,6 @@ export const NO_ROUTE: RouterOutput = {
   ambiguousBetween: [],
   call: "none",
   wantsRecommendation: false,
-  asksForUpdates: false,
-  wantsInvite: false,
   confidence: "low",
   reason: "router unavailable",
 };
@@ -430,9 +420,6 @@ export type Decision<T extends RoutableItem = RoutableItem> = {
   // Router's read of what else the message holds besides the ask; undefined
   // when it didn't say.
   beyondAsk?: string | null;
-  asksForUpdates: boolean;
-  // Asked for an invite in words services/invites.ts's pattern missed.
-  wantsInvite: boolean;
   clarifyContext: string;
   // What the clarifying question is about, if any: which waiting item they
   // meant, or whether they want a call.
@@ -536,9 +523,6 @@ export function decideActions<T extends RoutableItem>(
     answerCallingQuestion: false,
     callWouldBenefit: false,
     wantsRecommendation: false,
-    asksForUpdates: out.asksForUpdates,
-    // Nothing irreversible: it only texts them their own invite link.
-    wantsInvite: out.wantsInvite && out.confidence !== "low",
     clarifyContext: "",
     clarifyAbout: null,
   };

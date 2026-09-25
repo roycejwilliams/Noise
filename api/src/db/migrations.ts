@@ -1466,6 +1466,35 @@ export async function runMigrations(): Promise<void> {
       ),
     )
     .catch((err: Error) => console.error("mo team tables init failed:", err));
+
+  // A switch per ability (services/abilitySwitches.ts, 2026-09-25): turn
+  // any one of Co's abilities off without a deploy.
+  await pool
+    .query(
+      `CREATE TABLE IF NOT EXISTS ability_switches (
+        ability_id TEXT PRIMARY KEY,
+        off BOOLEAN NOT NULL DEFAULT false,
+        reason TEXT,
+        updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+      )`,
+    )
+    .catch((err: Error) => console.error("ability_switches table init failed:", err));
+
+  // Replies to Mo's emails (mo/emailReplies.ts, 2026-09-25): the thread to
+  // answer in, and each received email handled once however often Resend
+  // retries the post.
+  await pool
+    .query(`ALTER TABLE mo_prospects ADD COLUMN IF NOT EXISTS last_email_message_id TEXT`)
+    .catch((err: Error) => console.error("mo_prospects.last_email_message_id migration failed:", err));
+  await pool
+    .query(
+      `CREATE TABLE IF NOT EXISTS mo_email_inbound (
+        email_id TEXT PRIMARY KEY,
+        prospect_id UUID REFERENCES mo_prospects(id) ON DELETE SET NULL,
+        received_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+      )`,
+    )
+    .catch((err: Error) => console.error("mo_email_inbound table init failed:", err));
   // The team never sends anything by hand (Royce, 2026-09-24): anyone left
   // waiting on an approver to post a LinkedIn note goes back into Mo's own
   // outreach (an email from Co if there's a public address).

@@ -18,7 +18,7 @@ import { MODELS } from "../models.js";
 import { recordDecision } from "../harness/core.js";
 import { parseModelJson } from "../services/modelJson.js";
 import { plainDone, plainNo, plainYes, MO, suppressionKeys } from "./rules.js";
-import { codeMessage, sendingStatus, sendingBlocked } from "./outreach.js";
+import { codeMessage, sendMoEmailReply, sendingStatus, sendingBlocked } from "./outreach.js";
 import { MO_RULES } from "./moVoice.js";
 import { addressedToMo, isMoPaused, parseMoCommand, runMoCommand, stripMo } from "./team.js";
 import { redraftOutreach } from "./draft.js";
@@ -259,11 +259,15 @@ async function answer(userId: string, kind: PendingKind, p: any, text: string): 
   if (kind === "question") {
     const r = await readAnswer("question", p, text);
     if (r.intent !== "answer") return null;
-    if (text.length > 1000) return "That's too long for a DM. Could you trim it down?";
+    // Answered on the channel they wrote from (2026-09-25: email replies
+    // are read too, mo/emailReplies.ts).
+    const byEmail = p.channel === "email";
+    if (!byEmail && text.length > 1000) return "That's too long for a DM. Could you trim it down?";
     try {
-      await sendDm(p.x_user_id, text);
+      if (byEmail) await sendMoEmailReply(p, text);
+      else await sendDm(p.x_user_id, text);
     } catch (err: any) {
-      return `That didn't go through to ${name}, so nothing went out. X said: ${String(err?.message ?? err).slice(0, 120)}`;
+      return `That didn't go through to ${name}, so nothing went out. ${byEmail ? "The email service" : "X"} said: ${String(err?.message ?? err).slice(0, 120)}`;
     }
     await pool.query(`UPDATE mo_prospects SET status = 'contacted', pending_question = NULL, updated_at = NOW() WHERE id = $1`, [p.id]);
     await clearItem(p.no);

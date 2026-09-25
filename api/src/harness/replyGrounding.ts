@@ -17,6 +17,8 @@
 //             sentences are dropped. The reply is never blocked.
 //   record  — recordDecision(layer 3, "reply.grounding")
 //   eval    — evals/reply/run.ts
+import { capabilitySheet } from "../services/capabilities.js";
+import { switchedOff } from "../services/abilitySwitches.js";
 import { sourceOf } from "../services/messageFormat.js";
 import { getPersonSnapshot, renderSnapshot } from "./personSnapshot.js";
 import { anthropic } from "@ai-sdk/anthropic";
@@ -55,7 +57,8 @@ export type FactKind =
   | "known" // a real field Co has (event name, date, link, recommendation)
   | "unknown" // a detail Co explicitly does not have
   | "capability" // what Co can and can't do
-  | "ongoing"; // a search that really keeps running for them (an open ask)
+  | "ongoing" // a search that really keeps running for them (an open ask)
+  | "not_done"; // something Co tried this turn that did NOT happen (a receipt)
 
 export type Fact = { id: string; kind: FactKind; text: string };
 
@@ -76,30 +79,13 @@ export function addInstruction(rf: ReplyFacts, text: string): void {
   if (t && !rf.instructions.includes(t)) rf.instructions.push(t);
 }
 
-const STANDING_CAPABILITIES = [
-  `Co can call them right now when they ask ("call me"), and can schedule a call for a specific later time. Calling is real and working.`,
-  `They can also call Co from this same number. You are not given the digits, so never write a phone number.`,
-  `Co can't go chase down a specific link, detail, or answer later: if it isn't here, it won't show up.`,
-  `Co can send its contact card (so they can save Co) with the sendContactCard tool when they ask for it or want to save Co.`,
-  `Co never starts a group text or adds anyone to one, and never joins one. Sendblue can only reply to a number that has already texted in, so Co can't start a thread with two people. Introductions go out as one email to both people, and only after both have said yes. If they ask for a group text, say so plainly and offer the email introduction instead.`,
-  `Members can invite friends to Co: 5 invites each, and one only counts once the friend joins. When they ask for an invite (or how a friend can get in), Co's invite step texts them a link to forward. Never write an invite link or code yourself, and never say an invite was sent unless it's listed as sent this turn. If they ask how it works, tell them to just ask you for an invite for their friend, and don't offer or promise to send one yourself.`,
-  // What else Co can do, so "what can you do?" gets a true, complete answer
-  // (Royce, 2026-09-24: "make sure Co is aware of its functionalities through
-  // and through"). Each line is something built and live; keep it that way.
-  `Co can read photos and screenshots they send, and listens to voice memos.`,
-  `When something Co has about them is wrong, they can just say so ("I moved to Oakland", "I'm not a founder"). Co updates it and remembers what changed and when.`,
-  `Co keeps track of what they're in the middle of and may check in about it, or about a plan they mentioned with a date. Co never promises a specific time for that.`,
-  `At Co events: the day of, Co may ask them to share their location until the end of the day or text "I'm here" when they arrive, then tells them who's worth meeting in the room. Sharing location is optional, is only used to notice when they arrive and leave, and Co never tells anyone where they are.`,
-  `If they're going to an event Co doesn't run and another member is going too, Co may give them a heads-up without saying who, and names each person to the other only after both say yes to an intro.`,
-  `Co never shares what they've told it with other members. At Co events it may point another guest toward them as someone worth meeting, with a short reason.`,
-  `They can change their phone number by texting Co, and can text STOP at any time to stop all texts.`,
-  `Co can search right now (searchNow), save something they want found (people, events, a community, an opportunity) so the daily search keeps looking (saveAsk; it can't dig up a missing detail about something already sent), and send a link that's on file (shareLink). Co can't book, buy, register them for events, email or call other people for them, or post anywhere. If they ask for something Co can't do, say so plainly and say what Co can do instead.`,
-];
+// What Co can do and the lines it doesn't cross: one registry
+// (services/capabilities.ts), shared with the tools themselves.
 
 // Facts that are true for every reply, before anything about this person.
 export function baseReplyFacts(): ReplyFacts {
   const rf = createReplyFacts();
-  for (const c of STANDING_CAPABILITIES) addFact(rf, "capability", c);
+  for (const c of capabilitySheet()) addFact(rf, "capability", c);
   return rf;
 }
 
@@ -112,6 +98,10 @@ export async function gatherReplyFacts(
 ): Promise<ReplyFacts> {
   const rf = baseReplyFacts();
   for (const d of opts.pendingDescriptions ?? []) addFact(rf, "pending", `Waiting to hear back: ${d}`);
+  // Abilities switched off right now (services/abilitySwitches.ts).
+  for (const id of (await switchedOff().catch(() => new Map<string, string>())).keys()) {
+    addFact(rf, "capability", `Co's ${id.replace(/_/g, " ")} ability is switched off right now. If it comes up, say it isn't available at the moment.`);
+  }
   // Every source is a separate read, so they run together: in series this
   // was six round trips before the reply could even start drafting.
   const [corrections, snapshot, sent, notes, scheduled, reveal, preference, callFailure, sendHeld] = await Promise.all([
@@ -299,7 +289,9 @@ export function addEventFacts(
 }
 
 export function renderReplyFacts(rf: ReplyFacts): string {
-  const facts = rf.facts.map((f) => `[${f.id}] ${f.text}`).join("\n");
+  // Receipts (2026-09-25): what Co tried and didn't manage, marked so it's
+  // never read as done.
+  const facts = rf.facts.map((f) => `[${f.id}] ${f.kind === "not_done" ? `NOT DONE: ${f.text}` : f.text}`).join("\n");
   const instr = rf.instructions.length ? `\n\nFor this reply:\n${rf.instructions.map((i) => `- ${i}`).join("\n")}` : "";
   return `What's true right now. These, plus what's actually in the conversation, are the only actions, plans, links, times, places, numbers, and things about other people you can mention. If a detail isn't here, you don't have it: say so plainly, and don't promise to get it later.
 ${facts}${instr}`;
@@ -396,6 +388,12 @@ const INVITE_ACTION_VERB =
   /\b(sending|sent|i'?ll (send|add|invite|get)|i can (add|invite|do that|get)|adding (her|him|them)|let'?s get|getting (her|him|them|you)|here'?s (an|your|the)|on (its|it'?s) way)\b/i;
 
 
+// "Here you go", "here it is", "just sent it": words that only make sense
+// right after handing something over.
+export function claimsHandingOver(draft: string): boolean {
+  return /\b(here you go|there you go|here it is|here'?s (my|the|your) (card|contact|number|link|info)|(just |i )?sent (it|that|you|over)|sending (it|that) (now|over)|attached)\b/i.test(draft);
+}
+
 export function codeChecks(draft: string, rf: ReplyFacts, src: GroundingSources): GateCheck[] {
   const emotionLabel = checkNoEmotionLabel(draft);
   const checks: GateCheck[] = [];
@@ -434,6 +432,20 @@ export function codeChecks(draft: string, rf: ReplyFacts, src: GroundingSources)
   // Already handled this turn: a link went out, the count was given, or they
   // were told there are none left. Any of those means no claim to police.
   const inviteHandled = rf.facts.some((f) => /texted them an invite link|how many invites they have left|invites are used/i.test(f.text));
+  // Handing something over when nothing went out this turn (2026-09-24,
+  // real incident: "Here you go, Jacqueline. Save it so I'm easy to find."
+  // with no contact card sent). A card or a link sent by the reply's own
+  // tools counts, and so does anything the turn itself sent first (a search
+  // result's link, an intro email), which it records as a "Sent ..." fact.
+  // Co's own reply texts don't.
+  const handedOver =
+    (src.sentThisTurn ?? []).some((m) => m === "[sent Co's contact card]" || /^https?:\/\//i.test(m.trim())) ||
+    rf.facts.some((f) => f.kind === "did_this_turn" && /\bsent\b/i.test(f.text));
+  // A link inside the reply is itself the handover (link_on_file checks it).
+  const refusedHandover = rf.facts.some((f) => f.kind === "not_done" && /\b(card|link)\b/i.test(f.text));
+  if ((!handedOver || refusedHandover) && !/https?:\/\//i.test(draft) && claimsHandingOver(draft)) {
+    checks.push({ name: "no_handover_claim", pass: false, reason: "says something was sent or handed over, but nothing was sent this turn" });
+  }
   if (claimsGroupChat(draft)) {
     checks.push({
       name: "no_group_chat_claim",
@@ -549,6 +561,11 @@ function claimChecks(claims: Claim[], rf: ReplyFacts, src: GroundingSources): Ga
         pass = false;
         reason += " (a future action needs a real scheduled call or an open search behind it)";
       }
+    }
+    // A receipt says it didn't happen, so it can't back a claim that it did.
+    if (pass && c.type !== "capability" && rf.facts.find((f) => f.id === c.factId)?.kind === "not_done") {
+      pass = false;
+      reason += " (that was tried this turn and did NOT happen)";
     }
     if (pass) {
       const factOk = !!c.factId && factIds.has(c.factId);

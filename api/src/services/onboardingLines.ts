@@ -58,20 +58,6 @@ export const WELCOME_INVITED = [
   "You're in. {inviter} has good taste.",
 ];
 
-// A member asked for an invite. The link goes in its own text right after,
-// so it shows as a tappable card.
-export const INVITE_READY = [
-  "Here's an invite. Send it to them, and one tap opens a text to me with the code filled in.",
-  "Pass this along. One tap and they're texting me.",
-  "Here you go. Forward this to whoever you have in mind.",
-];
-
-export const NO_INVITES_LEFT = [
-  "All 5 of your invites are taken. Everyone you brought is in.",
-  "You've used all 5 of your invites. Good company, all of them.",
-  "No invites left. All 5 found someone.",
-];
-
 // To the member, once their friend finishes onboarding. {friend} is the
 // friend's first name; {left} is how many invites the member has left.
 export const INVITE_JOINED = [

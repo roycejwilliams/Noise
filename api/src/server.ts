@@ -90,6 +90,8 @@ app.use("/co/webhook", express.raw({ type: "application/json" }));
 // Luma's webhook signature is the same "HMAC over the raw body" shape as the
 // two above — see validateLumaWebhook in routes/luma.ts for the exact scheme.
 app.use("/luma/webhook", express.raw({ type: "application/json" }));
+// Resend signs the raw body of Mo's inbound email posts (routes/mo.ts).
+app.use("/mo/email/inbound", express.raw({ type: "application/json" }));
 
 app.use(express.json());
 app.use(express.urlencoded({ extended: false })); // Twilio status callbacks send form-encoded bodies

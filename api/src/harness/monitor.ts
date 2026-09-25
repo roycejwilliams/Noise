@@ -10,6 +10,7 @@
 // Weekly (buildWeeklyReview): the week's bad moments with the conversation
 // around them, for turning into eval cases (scripts/weeklyReview.ts writes
 // them locally; the cron emails the summary).
+import { ABILITIES } from "../services/capabilities.js";
 import { Resend } from "resend";
 import pool from "../db/db.js";
 import { ALLOW_REAL_SENDS } from "../otpActions.js";
@@ -37,8 +38,7 @@ export const SIGNALS: Signal[] = [
   { key: "call_ungrounded", label: "Calls with unsupported promises or facts", bad: `decision = 'call.grounding' AND outcome = 'skip'`, total: `decision = 'call.grounding'`, floor: 0.3, minCount: 2 },
   { key: "snapshot_problems", label: "Person summaries that contradict recent messages", bad: `decision = 'profile.snapshotCheck' AND outcome = 'skip'`, total: `decision = 'profile.snapshotCheck'`, floor: 0.3, minCount: 3 },
   { key: "city_overwritten", label: "Profile city changes blocked (extraction drifting)", bad: `decision = 'profile.city' AND outcome = 'skip'`, total: `decision = 'profile.city'`, floor: 0.5, minCount: 3 },
-  { key: "card_misfire", label: "Contact card asked for when they wanted something else", bad: `decision = 'reply.contactCard' AND outcome = 'skip'`, total: `decision = 'reply.contactCard'`, floor: 0.3, minCount: 2 },
-  { key: "reaction_withheld", label: "Reactions held back because a reply was still owed", bad: `decision = 'turn.closing' AND outcome = 'skip'`, total: `decision = 'turn.closing'`, floor: 0.4, minCount: 3 },
+  { key: "reaction_withheld", label: "Tapbacks Co chose but had to withhold (a reply was still owed)", bad: `decision = 'tool.reactInsteadOfReplying' AND action = 'not_done'`, total: `decision = 'tool.reactInsteadOfReplying'`, floor: 0.4, minCount: 3 },
   // Real events found, none offerable (sold out, already sent, out of range):
   // the answer they get is "nothing", even though the search worked.
   { key: "found_but_unofferable", label: "Searches that found real events but could offer none", bad: `decision = 'recommendation.search' AND action <> 'sent_matches' AND jsonb_array_length(COALESCE(proposal->'scope'->'gatedOut', '[]'::jsonb)) > 0`, total: `decision = 'recommendation.search'`, floor: 0.4, minCount: 3 },
@@ -70,6 +70,19 @@ export const SIGNALS: Signal[] = [
   // floor set high on purpose so this only fires on a real jump, not on
   // Tier 3's normal baseline scarcity.
   { key: "tier3_searched_found_nothing", label: "Tier 3 (X) was searched but nothing ended up offered", bad: `decision = 'recommendation.search' AND proposal->'scope'->>'xQuery' IS NOT NULL AND (outcome = 'skip' OR NOT EXISTS (SELECT 1 FROM jsonb_array_elements(COALESCE(proposal->'matches', '[]'::jsonb)) e WHERE e->>'tier' = '3'))`, total: `decision = 'recommendation.search' AND proposal->'scope'->>'xQuery' IS NOT NULL`, floor: 0.6, minCount: 3 },
+  // Drift in Co's own choices (2026-09-25, toolGuard.ts): how often a tool
+  // it chose didn't actually happen, and how often it hit a hard limit.
+  { key: "tool_not_done", label: "Tools Co chose that didn't go through", bad: `decision LIKE 'tool.%' AND action = 'not_done'`, total: `decision LIKE 'tool.%'`, floor: 0.2, minCount: 3 },
+  { key: "tool_limited", label: "Tool calls refused by a limit or missing yes", bad: `decision LIKE 'tool.%' AND action IN ('limited', 'needs_yes')`, total: `decision LIKE 'tool.%'`, floor: 0.25, minCount: 3 },
+  // How often each tool is used per reply, so a sudden jump in any one shows.
+  ...ABILITIES.filter((a) => a.tool && !["sendReply", "markTopicAsked"].includes(a.tool)).map((a) => ({
+    key: `tool_use_${a.tool}`,
+    label: `Replies where Co used ${a.tool}`,
+    bad: `decision = 'tool.${a.tool}'`,
+    total: `decision = 'turn.latency'`,
+    floor: 0.35,
+    minCount: 3,
+  })),
 ];
 
 export type SignalReading = { signal: Signal; recentBad: number; recentTotal: number; recentRate: number; baselineRate: number };

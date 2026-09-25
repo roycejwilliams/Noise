@@ -28,6 +28,11 @@ export function emailConfigured(env: NodeJS.ProcessEnv = process.env): boolean {
   return Boolean(env.RESEND_API_KEY && env.MO_FROM_EMAIL && env.MO_POSTAL_ADDRESS && env.API_URL && (env.MO_UNSUBSCRIBE_SECRET || env.JWT_SECRET));
 }
 
+// Replies to Mo's emails come back to Mo (mo/emailReplies.ts).
+export function emailRepliesConfigured(env: NodeJS.ProcessEnv = process.env): boolean {
+  return Boolean(env.MO_REPLY_DOMAIN && env.RESEND_WEBHOOK_SECRET);
+}
+
 // Why nothing can go out yet, in plain words, or null when it can.
 export function sendingBlocked(env: NodeJS.ProcessEnv = process.env): string | null {
   if (!moEnabled(env)) return "Mo is switched off, so nothing goes out yet.";
@@ -44,7 +49,8 @@ export function sendingStatus(env: NodeJS.ProcessEnv = process.env): string {
   if (!x && !email) return "Co's X keys and the outreach email settings aren't set yet, so nothing goes out until they are.";
   if (!x) return "Co's X keys aren't set, so no replies or DMs go out yet. Email works when I find a published address.";
   if (!email) return "X replies and DMs go out. Email isn't set up, so people with closed DMs get marked unreachable.";
-  return "X replies, DMs and email are all set up.";
+  if (!emailRepliesConfigured(env)) return "X replies, DMs and email are all set up. Replies to my emails still go to the hello@ inbox, since MO_REPLY_DOMAIN or RESEND_WEBHOOK_SECRET isn't set.";
+  return "X replies, DMs and email are all set up, and I read replies to my emails.";
 }
 
 const coNumber = () => process.env.SENDBLUE_PHONE_NUMBER ?? "Co's number";
@@ -113,6 +119,67 @@ async function findEmail(p: any): Promise<string | null> {
   return page && page.toLowerCase().includes(r.email.toLowerCase()) ? r.email.toLowerCase() : null;
 }
 
+// Where replies to Mo's emails go (2026-09-25). With MO_REPLY_DOMAIN set to
+// the account's Resend receiving domain (<id>.resend.app, or a custom one
+// with Resend's MX records), each prospect gets their own signed address,
+// so a reply maps back to them even from another inbox. Resend posts it to
+// /mo/email/inbound (mo/emailReplies.ts), and Mo reads it the same way it
+// reads a DM reply. Without it, replies go to the hello@ inbox as before and
+// nothing reads them.
+export function moReplyAddress(prospectId: string, env: NodeJS.ProcessEnv = process.env): string | null {
+  const domain = env.MO_REPLY_DOMAIN?.trim().toLowerCase();
+  if (!domain || !/^[a-z0-9.-]+\.[a-z]{2,}$/.test(domain)) return null;
+  let sig: string;
+  try {
+    sig = unsubscribeToken(prospectId).slice(0, 12);
+  } catch {
+    return null;
+  }
+  return `reply-${prospectId}-${sig}@${domain}`;
+}
+
+// The prospect a reply address belongs to, or null when it's not one of
+// Mo's or the signature doesn't match.
+export function prospectFromReplyAddress(address: string): string | null {
+  const m = String(address).toLowerCase().match(/reply-([0-9a-f-]{36})-([0-9a-f]{12})@/);
+  if (!m) return null;
+  let expected: string;
+  try {
+    expected = unsubscribeToken(m[1]).slice(0, 12);
+  } catch {
+    return null;
+  }
+  const a = Buffer.from(m[2]);
+  const b = Buffer.from(expected);
+  return a.length === b.length && timingSafeEqual(a, b) ? m[1] : null;
+}
+
+function emailHtml(text: string, unsub: string): string {
+  return `${text
+    .split(/\n{2,}/)
+    .map((para) => `<p>${para.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/\n/g, "<br>")}</p>`)
+    .join("")}<p style="color:#777;font-size:12px">Not for you? <a href="${unsub}">Don't email me again</a>. ${String(process.env.MO_POSTAL_ADDRESS).replace(/</g, "&lt;")}</p>`;
+}
+
+// Mo answering an email reply, in the same thread.
+export async function sendMoEmailReply(p: any, text: string): Promise<void> {
+  if (!emailConfigured() || !p.email) throw new Error("email isn't set up");
+  const unsub = `${process.env.API_URL}/mo/unsubscribe?p=${p.id}&t=${unsubscribeToken(p.id)}`;
+  const subject = String(p.draft_email_subject ?? "Co");
+  const { error } = await new Resend(process.env.RESEND_API_KEY).emails.send({
+    from: process.env.MO_FROM_EMAIL!,
+    to: [p.email],
+    replyTo: moReplyAddress(p.id) ?? "hello@copatible.com",
+    subject: subject.startsWith("Re:") ? subject : `Re: ${subject}`,
+    html: emailHtml(text, unsub),
+    headers: {
+      "List-Unsubscribe": `<${unsub}>`,
+      ...(p.last_email_message_id ? { "In-Reply-To": p.last_email_message_id, References: p.last_email_message_id } : {}),
+    },
+  });
+  if (error) throw new Error(error.message);
+}
+
 async function sendMoEmail(p: any, followUp: boolean): Promise<boolean> {
   if (!emailConfigured() || !p.email || !process.env.SENDBLUE_PHONE_NUMBER) return false;
   const code = p.invite_code ?? (await generateInviteCode(null));
@@ -128,7 +195,7 @@ async function sendMoEmail(p: any, followUp: boolean): Promise<boolean> {
   const { error } = await resend.emails.send({
     from: process.env.MO_FROM_EMAIL!,
     to: [p.email],
-    replyTo: "hello@copatible.com",
+    replyTo: moReplyAddress(p.id) ?? "hello@copatible.com",
     subject: followUp ? `Re: ${p.draft_email_subject}` : p.draft_email_subject,
     html,
     headers: { "List-Unsubscribe": `<${unsub}>` },
@@ -258,7 +325,7 @@ export async function runMoOutreach(now = new Date()): Promise<void> {
   if (report.length) await textApprovers(`Mo update:\n${report.join(".\n")}.`);
 }
 
-async function classifyReply(text: string): Promise<"yes" | "no" | "question"> {
+export async function classifyReply(text: string): Promise<"yes" | "no" | "question"> {
   if (clearStop(text)) return "no";
   if (clearYes(text)) return "yes";
   // Jev next (mo/jev.ts); only a clear answer is used, anything else goes to Claude.
@@ -291,30 +358,38 @@ export async function runMoInbox(): Promise<void> {
     const p = rows[0];
     if (!p || (p.last_dm_event_id && BigInt(p.last_dm_event_id) >= BigInt(e.id))) continue;
     await pool.query(`UPDATE mo_prospects SET last_dm_event_id = $2, last_inbound_at = NOW(), updated_at = NOW() WHERE id = $1`, [p.id, e.id]);
-    const kind = p.status === "invited" && !clearStop(e.text) ? "question" : await classifyReply(e.text);
-    let action: string = kind;
-    try {
-      if (kind === "no") {
-        await suppressProspect(p, "declined");
-        await pool.query(`UPDATE mo_prospects SET status = 'declined', updated_at = NOW() WHERE id = $1`, [p.id]);
-        await sendDm(p.x_user_id, "Understood. I won't reach out again. Good luck with everything.").catch(() => {});
-      } else if (kind === "yes" && p.status !== "invited") {
-        const code = p.invite_code ?? (await generateInviteCode(null));
-        // "Want to know why?" got a yes: the why Mo drafted, then the invite.
-        await sendDm(p.x_user_id, p.dm_style === "curious" && p.draft_why ? `${p.draft_why}\n\n${codeMessage(code)}` : codeMessage(code));
-        await pool.query(`UPDATE mo_prospects SET status = 'invited', invite_code = $2, updated_at = NOW() WHERE id = $1`, [p.id, code]);
-        action = "code_sent";
-      } else {
-        await pool.query(`UPDATE mo_prospects SET status = 'question', pending_question = $2, updated_at = NOW() WHERE id = $1`, [p.id, e.text.slice(0, 500)]);
-        // Goes to a free approver as a plain question (review.ts).
-        await presentNext();
-        action = "asked_approver";
-      }
-    } catch (err: any) {
-      action = `error: ${String(err?.message ?? err).slice(0, 200)}`;
-    }
-    await recordDecision({ layer: 5, decision: "mo.reply", userId: null, outcome: action.startsWith("error") ? "skip" : "act", action, proposal: { no: p.no, text: e.text.slice(0, 300) } });
+    const action = await handleProspectReply(p, e.text, (msg) => sendDm(p.x_user_id, msg));
+    await recordDecision({ layer: 5, decision: "mo.reply", userId: null, outcome: action.startsWith("error") ? "skip" : "act", action, proposal: { no: p.no, channel: "dm", text: e.text.slice(0, 300) } });
   }
+}
+
+// One reply from a prospect, by DM or email: read it (clear words, then Jev,
+// then Claude), then act. A no ends it, a yes gets the invite, anything
+// else goes to a free approver. `send` answers on the channel it came in on.
+export async function handleProspectReply(p: any, text: string, send: (msg: string) => Promise<unknown>): Promise<string> {
+  const kind = p.status === "invited" && !clearStop(text) ? "question" : await classifyReply(text);
+  let action: string = kind;
+  try {
+    if (kind === "no") {
+      await suppressProspect(p, "declined");
+      await pool.query(`UPDATE mo_prospects SET status = 'declined', updated_at = NOW() WHERE id = $1`, [p.id]);
+      await Promise.resolve(send("Understood. I won't reach out again. Good luck with everything.")).catch(() => {});
+    } else if (kind === "yes" && p.status !== "invited") {
+      const code = p.invite_code ?? (await generateInviteCode(null));
+      // "Want to know why?" got a yes: the why Mo drafted, then the invite.
+      await send(p.dm_style === "curious" && p.draft_why ? `${p.draft_why}\n\n${codeMessage(code)}` : codeMessage(code));
+      await pool.query(`UPDATE mo_prospects SET status = 'invited', invite_code = $2, updated_at = NOW() WHERE id = $1`, [p.id, code]);
+      action = "code_sent";
+    } else {
+      await pool.query(`UPDATE mo_prospects SET status = 'question', pending_question = $2, updated_at = NOW() WHERE id = $1`, [p.id, text.slice(0, 500)]);
+      // Goes to a free approver as a plain question (review.ts).
+      await presentNext();
+      action = "asked_approver";
+    }
+  } catch (err: any) {
+    action = `error: ${String(err?.message ?? err).slice(0, 200)}`;
+  }
+  return action;
 }
 
 // GET /mo/unsubscribe?p=<id>&t=<token>

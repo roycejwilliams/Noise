@@ -9,11 +9,10 @@ import { announcementAudience } from "../../src/services/coEventAnnouncement.js"
 import { resolveCoEventCity } from "../../src/services/luma.js";
 import { DateTime } from "luxon";
 import { isBrowseAsk, parseAskWindow, withinWindow } from "../../src/services/askWindow.js";
-import { asksForContactCard, reportsCardNotReceived } from "../../src/services/conversationClose.js";
 import { renderMatchLead } from "../../src/services/messageFormat.js";
 import { closingReaction } from "../../src/services/conversationClose.js";
 import "dotenv/config";
-import { addFact, baseReplyFacts, codeChecks, needsClaimCheck, pairSentLinks, predictionMatch, stripUnsupported } from "../../src/harness/replyGrounding.js";
+import { addFact, baseReplyFacts, codeChecks, renderReplyFacts, needsClaimCheck, pairSentLinks, predictionMatch, stripUnsupported } from "../../src/harness/replyGrounding.js";
 import { isLeakedMetaCommentary, webhookSecretMatches } from "../../src/services/sendblue.js";
 import { coAskedQuestion } from "../../src/services/conversationClose.js";
 
@@ -184,10 +183,15 @@ const windowCases: [boolean, string][] = [
   [!isBrowseAsk("find me a designer"), "not a browse ask"],
   [isBrowseAsk("what's happening thursday night?"), "a weekday alone is still a browse ask"],
   [!isBrowseAsk("anything tech happening thursday?"), "tech is a subject"],
-  [asksForContactCard("can you send your contact card"), "asks for the card"],
-  [asksForContactCard("what's your number?"), "asks for the number"],
-  [!asksForContactCard("You send it over"), "sending a link is not a card request"],
-  [!asksForContactCard("send me both accelerator links again"), "links are not a card request"],
+  // Receipts: what didn't happen is marked, and can't be claimed as done.
+  [renderReplyFacts((() => { const r = baseReplyFacts(); addFact(r, "not_done", "Co's contact card was not sent (the send failed)."); return r; })()).includes("NOT DONE: Co's contact card was not sent"), "a receipt is shown to Co as NOT DONE"],
+  [(() => { const r = baseReplyFacts(); addFact(r, "not_done", "Co's contact card was not sent (the send failed)."); return codeChecks("Here you go.", r, { message: "v card?", recentConversation: "", sentThisTurn: ["https://lu.ma/abc123"] }).some((c) => c.name === "no_handover_claim" && !c.pass); })(), "a failed card can't be claimed even when a link went out"],
+  // "Here you go" with nothing handed over this turn.
+  [codeChecks("Here you go, Jacqueline. Save it so I'm easy to find.", rf, { message: "can you send me a v card", recentConversation: "" }).some((c) => c.name === "no_handover_claim" && !c.pass), "\"here you go\" with nothing sent is caught"],
+  [!codeChecks("Here you go, save it so I'm easy to find.", rf, { message: "can you send me a v card", recentConversation: "", sentThisTurn: ["[sent Co's contact card]"] }).some((c) => c.name === "no_handover_claim"), "after a real card, \"here you go\" is fine"],
+  [!codeChecks("Here it is.", rf, { message: "link?", recentConversation: "Co replied: https://lu.ma/abc123", sentThisTurn: ["https://lu.ma/abc123"] }).some((c) => c.name === "no_handover_claim"), "after a real link, \"here it is\" is fine"],
+  [(() => { const r = baseReplyFacts(); addFact(r, "did_this_turn", "Sent the link https://lu.ma/abc123 for \"Mixer\" as its own message just before this reply."); return !codeChecks("There you go, that's the one.", r, src).some((c) => c.name === "no_handover_claim"); })(), "a link the turn sent first counts as handed over"],
+  [!codeChecks("Sounds good, talk soon.", rf, src).some((c) => c.name === "no_handover_claim"), "an ordinary reply isn't a handover claim"],
 ];
 
 // Mapping wherever someone says they are to Luma's own city list
@@ -394,10 +398,6 @@ onboardingCaseCases.push(
 // entirely (nothing in it matched CLAIM_SHAPED, so the model's claim read
 // was skipped, not even attempted).
 onboardingCaseCases.push(
-  [reportsCardNotReceived("I dont see it"), 'reportsCardNotReceived catches the real incident text ("I dont see it")'],
-  [reportsCardNotReceived("it didnt come through"), "reportsCardNotReceived catches a differently-worded non-receipt report"],
-  [!reportsCardNotReceived("can you send me a v card"), "reportsCardNotReceived does not fire on a fresh ask (that's asksForContactCard's job)"],
-  [!reportsCardNotReceived("sounds good"), "reportsCardNotReceived does not fire on an unrelated closing"],
   [needsClaimCheck("Trying again, should come through as a separate contact card, not a text bubble."), "a retry/resend claim is now recognized as claim-shaped and gets checked, not skipped"],
   [needsClaimCheck("Yeah, feedback like that goes straight to the team, not just logged and forgotten."), "saying feedback reached the team gets checked (2026-09-18, sent with nothing saved)"],
   [needsClaimCheck("Noted, I passed that along."), "passing something along gets checked"],
