@@ -1,6 +1,7 @@
 import { z } from "zod";
 import { asksForContactCard, reportsCardNotReceived } from "../services/conversationClose.js";
 import { tool } from "ai";
+import { sendLimiter } from "../services/sendLimiter.js";
 import sendblue, { cleanCoMessage } from "../services/sendblue.js";
 import { writeMemory } from "../services/memory.js";
 import pool from "../db/db.js";
@@ -110,7 +111,7 @@ export function createConversationTools(ctx: ConversationToolContext) {
   // sent is an out-of-band signal for the caller (sendblue.ts), same
   // reasoning as askCheckin.ts's state.sent — generateText's return value
   // doesn't cleanly expose which tools actually executed.
-  const state = { sent: false, replyCount: 0, lastReplyText: "", sentMessages: [] as string[], pendingLinks: [] as string[] };
+  const state = { sent: false, replyCount: 0, failedSends: 0, sendStopped: false, lastReplyText: "", sentMessages: [] as string[], pendingLinks: [] as string[] };
   // What searchNow found, by link, so the matches are recorded as sent only
   // once their link actually goes out (services/recommendation.ts
   // recordRecommendationsSent, 2026-09-17).
@@ -182,6 +183,15 @@ export function createConversationTools(ctx: ConversationToolContext) {
           // model can try again and the fallback still runs (2026-09-17 code
           // review: a refused line was marked sent and the person got nothing).
           if (sent === false) {
+            // Held by the send breaker, or failed twice: another try can't
+            // go through and each one is a paid model call (2026-09-24: 8
+            // sendReply calls in a row against a closed breaker). The agent
+            // loop stops on state.sendStopped.
+            state.failedSends += 1;
+            if (sendLimiter.blocked(ctx.phoneNumber) || state.failedSends >= 2) {
+              state.sendStopped = true;
+              return { ok: false, error: "Texts to them can't go out right now. Stop here; don't call any more tools." };
+            }
             return { ok: false, error: "That message didn't go out. Rewrite it as a plain, direct text to them and call sendReply again." };
           }
         }

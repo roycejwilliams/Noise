@@ -2,6 +2,7 @@ import { Resend } from "resend";
 import "dotenv/config";
 import sendblue from "./services/sendblue.js";
 import { CARD, HOW_IT_WORKS, NAME_EMAIL, WELCOME, pickLine } from "./services/onboardingLines.js";
+import { CO_EMAIL_FROM } from "./services/emailFrom.js";
 
 // Real sends are on by default in production, and everywhere else only
 // with an explicit opt-in — co-test sets ALLOW_REAL_SMS=true because its
@@ -197,7 +198,7 @@ export const sendEmail = async ({
 
     if (appsubmit) {
       await resend.emails.send({
-        from: "Co <hello@copatible.com>",
+        from: CO_EMAIL_FROM,
         to: email,
         subject: `New Request — ${applicant?.first_name} ${applicant?.last_name}`,
         html: emailTemplate(
@@ -211,7 +212,7 @@ export const sendEmail = async ({
 
     if (status === "accepted") {
       await resend.emails.send({
-        from: "Co <hello@copatible.com>",
+        from: CO_EMAIL_FROM,
         to: email,
         subject: `Welcome to Co.`,
         html: emailTemplate(
@@ -227,7 +228,7 @@ export const sendEmail = async ({
 
     if (status === "rejected") {
       await resend.emails.send({
-        from: "Co <hello@copatible.com>",
+        from: CO_EMAIL_FROM,
         to: email,
         subject: `Your Co application.`,
         html: emailTemplate(
@@ -241,7 +242,7 @@ export const sendEmail = async ({
 
     if (resent) {
       await resend.emails.send({
-        from: "Co <hello@copatible.com>",
+        from: CO_EMAIL_FROM,
         to: email,
         subject: `Your new Co verification code.`,
         html: emailTemplate(
@@ -257,7 +258,7 @@ export const sendEmail = async ({
 
     if (phoneChange) {
       await resend.emails.send({
-        from: "Co <hello@copatible.com>",
+        from: CO_EMAIL_FROM,
         to: email,
         subject: `Confirm your new number.`,
         html: emailTemplate(
@@ -271,7 +272,7 @@ export const sendEmail = async ({
 
     if (login) {
       await resend.emails.send({
-        from: "Co <hello@copatible.com>",
+        from: CO_EMAIL_FROM,
         to: email,
         subject: `Your Co login code.`,
         html: emailTemplate(
@@ -285,7 +286,7 @@ export const sendEmail = async ({
 
     if (welcome) {
       await resend.emails.send({
-        from: "Co <hello@copatible.com>",
+        from: CO_EMAIL_FROM,
         to: email,
         subject: `Welcome to Co.`,
         html: emailTemplate(
@@ -307,7 +308,7 @@ export const sendEmail = async ({
     // register as the SMS version.
     if (calendarFollow) {
       await resend.emails.send({
-        from: "Co <hello@copatible.com>",
+        from: CO_EMAIL_FROM,
         to: email,
         subject: `Co noticed you.`,
         html: emailTemplate(

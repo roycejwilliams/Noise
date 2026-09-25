@@ -14,6 +14,7 @@ import {
   decideOtpVerify,
   otpLockMinutes,
 } from "./accountRules.js";
+import { CO_EMAIL_FROM } from "../services/emailFrom.js";
 
 function generateOTP() {
   return randomInt(100000, 1000000);
@@ -33,7 +34,7 @@ async function alertTeamAccountLocked(userId: string, lockMinutes: number): Prom
       console.log(`[alertTeamAccountLocked stub] to ${to}: ${subject}`);
       return;
     }
-    const { error } = await new Resend(process.env.RESEND_API_KEY).emails.send({ from: "Co <hello@copatible.com>", to: [to], subject, html });
+    const { error } = await new Resend(process.env.RESEND_API_KEY).emails.send({ from: CO_EMAIL_FROM, to: [to], subject, html });
     if (error) throw new Error(error.message);
   } catch (err: any) {
     console.error("auth: account-locked team alert failed (non-fatal):", err?.message ?? err);

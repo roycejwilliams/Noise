@@ -13,6 +13,7 @@ import { MODELS } from "../models.js";
 import { getEventGuestList } from "./luma.js";
 import { matchGuestsToUsers, dedupeByUserId } from "./eventScoring.js";
 import { mergeWalkinsIntoGuestPool } from "./eventWalkinCheckin.js";
+import { CO_EMAIL_FROM } from "./emailFrom.js";
 
 // This person's timezone, for the hours check on a reply-triggered direct
 // ask (code review, 2026-09-17 — see sendExemptWhenAllowed).
@@ -269,7 +270,7 @@ async function sendIntroEmail(eventId: string, eventName: string, a: MatchNudgeC
       const resend = new Resend(process.env.RESEND_API_KEY);
       // Co cc'd (Royce, 2026-09-07: "Co would need to be the driver of the
       // email") — visibly present so a reply-all naturally includes it.
-      const { error } = await resend.emails.send({ from: "Co <hello@copatible.com>", to: [a.email, b.email], cc: ["hello@copatible.com"], subject, html });
+      const { error } = await resend.emails.send({ from: CO_EMAIL_FROM, to: [a.email, b.email], cc: ["hello@copatible.com"], subject, html });
       if (error) throw new Error(error.message);
     } catch (err: any) {
       console.error("sendIntroEmail: send failed (non-fatal):", err?.message ?? err);

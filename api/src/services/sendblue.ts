@@ -89,15 +89,40 @@ export function webhookSecretMatches(expected: string | undefined | null, provid
 }
 
 // Alerts once when the send breaker trips (services/sendLimiter.ts): the
-// console for the logs, and a harness decision so the morning review sees it.
-// Loaded lazily to keep this file free of harness imports.
-function reportSendBreaker(number: string, count: number, resumesAt: number): void {
-  console.error(`sendblue: send breaker tripped for ...${number.slice(-4)}: ${count} texts in 10 minutes, holding sends until ${new Date(resumesAt).toISOString()}`);
+// console for the logs, a harness decision so the morning review sees it,
+// an email to the team right away (2026-09-24: Royce sat through 32 silent
+// minutes and nobody knew), and a note on the member so Co can say what
+// happened instead of inventing a reason ("No rate limit, just me actually
+// searching"). Loaded lazily to keep this file free of harness imports.
+export function sendHeldNote(fromMs: number, untilMs: number): string {
+  const t = (ms: number) => new Date(ms).toLocaleTimeString("en-US", { hour: "numeric", minute: "2-digit", timeZone: "America/Los_Angeles" });
+  return `Co's texts to them were paused from ${t(fromMs)} to ${t(untilMs)} Pacific by Co's own limit on how many texts it sends one person. Anything Co tried to send them then never arrived, and anything they asked then may still be unanswered.`;
+}
+
+function reportSendBreaker(number: string, count: number, resumesAt: number, reason: string): void {
+  const last4 = number.slice(-4);
+  const why = reason === "unprompted" ? `${count} texts in a row with no reply from them` : `${count} texts in 10 minutes`;
+  console.error(`sendblue: send breaker tripped for ...${last4}: ${why}, holding sends until ${new Date(resumesAt).toISOString()}`);
   import("../harness/core.js")
     .then(({ recordDecision }) =>
-      recordDecision({ layer: 7, decision: "send.breaker", userId: null, outcome: "skip", action: "tripped", reason: `${count} texts to ...${number.slice(-4)} in 10 minutes`, proposal: { last4: number.slice(-4), count, resumesAt: new Date(resumesAt).toISOString() } }),
+      recordDecision({ layer: 7, decision: "send.breaker", userId: null, outcome: "skip", action: "tripped", reason: `${why} to ...${last4}`, proposal: { last4, count, reason, resumesAt: new Date(resumesAt).toISOString() } }),
     )
     .catch(() => {});
+  import("../db/db.js")
+    .then(async ({ default: pool }) => {
+      const { rows } = await pool.query(`SELECT id, first_name FROM users WHERE phone_number = $1 LIMIT 1`, [number]);
+      const user = rows[0];
+      if (user) {
+        await pool.query(`INSERT INTO co_memories (user_id, memory_type, content) VALUES ($1, 'send_held', $2)`, [user.id, sendHeldNote(Date.now(), resumesAt)]);
+      }
+      const { alertTeamNow } = await import("../harness/monitor.js");
+      await alertTeamNow(
+        `send_breaker:${last4}`,
+        `Co alert: texts to ${user?.first_name ?? "a number"} paused`,
+        `Co stopped texting ${user?.first_name ?? "an unknown number"} (...${last4}) after ${why}. Nothing goes to them until ${new Date(resumesAt).toLocaleTimeString("en-US", { hour: "numeric", minute: "2-digit", timeZone: "America/Los_Angeles" })} Pacific. If this was a real conversation, the limit is wrong; if it was a loop, it worked.`,
+      );
+    })
+    .catch((err: any) => console.error("sendblue: breaker follow-up failed (non-fatal):", err?.message ?? err));
 }
 
 // Every message send goes through this one wrapper so cleanup and the
@@ -117,8 +142,10 @@ const sendblue = {
       const to = (body as { number?: string }).number;
       const limit = sendLimiter.check(to);
       if (!limit.ok) {
-        if (limit.tripped) reportSendBreaker(to ?? "", limit.count, limit.resumesAt);
-        return Promise.reject(new Error(`sendblue: send breaker open for ...${String(to ?? "").slice(-4)}, refusing to send (${limit.count} texts in 10 minutes)`));
+        if (limit.tripped) reportSendBreaker(to ?? "", limit.count, limit.resumesAt, limit.reason);
+        return Promise.reject(
+          new Error(`sendblue: send breaker open for ...${String(to ?? "").slice(-4)}, refusing to send (${limit.reason === "unprompted" ? `${limit.count} texts with no reply` : `${limit.count} texts in 10 minutes`})`),
+        );
       }
       return client.messages.send({ ...body, content }, options);
     },

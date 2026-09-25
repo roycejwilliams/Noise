@@ -13,6 +13,7 @@ import { checkBothYes, draftWithConsent, gateIntroAction, networkOptedIn } from 
 import { getActiveAsks } from "./matching.js";
 import { getTimezoneForCity } from "./geocoding.js";
 import { MODELS } from "../models.js";
+import { CO_EMAIL_FROM } from "./emailFrom.js";
 
 // Model policy (Royce, 2026-09-14): Haiku for the yes/no reply reads (code
 // acts on them only through the consent checks); Sonnet 5 for drafts that
@@ -336,7 +337,7 @@ async function sendNetworkIntroEmail(a: MatchNudgeCandidate, b: MatchNudgeCandid
       // and email has no natural "@-mention" convention the way a group
       // chat does, so Co doesn't act on anything that comes back here; the
       // real outcome signal stays the existing proactive SMS check-in.
-      const { error } = await resend.emails.send({ from: "Co <hello@copatible.com>", to: [a.email, b.email], cc: ["hello@copatible.com"], subject, html });
+      const { error } = await resend.emails.send({ from: CO_EMAIL_FROM, to: [a.email, b.email], cc: ["hello@copatible.com"], subject, html });
       if (error) throw new Error(error.message);
     } catch (err: any) {
       console.error("sendNetworkIntroEmail: send failed (non-fatal):", err?.message ?? err);

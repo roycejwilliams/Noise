@@ -15,6 +15,7 @@ import pool from "../db/db.js";
 import { ALLOW_REAL_SENDS } from "../otpActions.js";
 import { recordDecision } from "./core.js";
 import { computeMetrics, renderMetricsHtml } from "./metrics.js";
+import { CO_EMAIL_FROM } from "../services/emailFrom.js";
 
 export type Signal = {
   key: string;
@@ -111,7 +112,7 @@ async function sendTeamEmail(subject: string, html: string): Promise<void> {
   }
   // Resend reports failures in the result instead of throwing (2026-09-15:
   // an unverified domain made every send fail while this said "sent").
-  const { error } = await new Resend(process.env.RESEND_API_KEY).emails.send({ from: "Co <hello@copatible.com>", to: [to], subject, html });
+  const { error } = await new Resend(process.env.RESEND_API_KEY).emails.send({ from: CO_EMAIL_FROM, to: [to], subject, html });
   if (error) throw new Error(`Resend: ${error.message}`);
 }
 
@@ -136,6 +137,20 @@ export async function runMonitor(): Promise<void> {
   } catch (err: any) {
     console.error("monitor: run failed (non-fatal):", err?.message ?? err);
   }
+}
+
+// An alert that can't wait for the hourly signal check (the send breaker,
+// 2026-09-24). One email per key per hour at most.
+export async function alertTeamNow(key: string, subject: string, detail: string): Promise<void> {
+  const claimed = await pool.query(
+    `INSERT INTO harness_alerts (signal_key, sent_at) VALUES ($1, NOW())
+     ON CONFLICT (signal_key) DO UPDATE SET sent_at = NOW() WHERE harness_alerts.sent_at < NOW() - INTERVAL '1 hour'
+     RETURNING signal_key`,
+    [key],
+  );
+  if (!claimed.rows[0]) return;
+  await sendTeamEmail(subject, `<p>${detail}</p>`).catch((err: any) => console.error("monitor: alert email failed (non-fatal):", err?.message ?? err));
+  await recordDecision({ layer: 3, decision: "monitor.alert", userId: null, outcome: "act", action: key, reason: detail }).catch(() => {});
 }
 
 // Proves the alert path end to end (Resend, the address, the log) without

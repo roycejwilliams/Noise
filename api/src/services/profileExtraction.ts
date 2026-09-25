@@ -1135,7 +1135,7 @@ export function normalizeCapturedAsks(parsed: CapturedIntentData | null, scope: 
   return scope === "last_user_message" ? out.slice(0, 1) : out.slice(0, MAX_ASKS_PER_CAPTURE);
 }
 
-type IntentExtras = { concrete_preferences: string[]; wants: string[]; availability: string | null };
+export type IntentExtras = { concrete_preferences: string[]; wants: string[]; availability: string | null };
 const NO_EXTRAS: IntentExtras = { concrete_preferences: [], wants: [], availability: null };
 
 export async function captureIntent(
@@ -1173,15 +1173,20 @@ export async function captureIntent(
     const wants = (Array.isArray(parsed?.wants) ? parsed!.wants : []).filter(mine);
     const availability = typeof parsed?.availability === "string" ? parsed!.availability : null;
 
+    // Only what's new: each text turn re-reads the recent conversation, so a
+    // line they said once ("I'm balancing a 9-5") came back every turn and
+    // was saved 5 times in a row (2026-09-24).
+    const { rows: onFile } = await pool.query(`SELECT intent FROM co_profiles WHERE user_id = $1`, [user_id]).catch(() => ({ rows: [] as any[] }));
+    const extras: IntentExtras = dropKnownExtras({ concrete_preferences, wants, availability }, Array.isArray(onFile[0]?.intent) ? onFile[0].intent : []);
+
     // Nothing real came out of this pass at all — don't write an empty
     // record just to have one.
-    if (!asks.length && !concrete_preferences.length && !wants.length && !availability) return null;
+    if (!asks.length && !extras.concrete_preferences.length && !extras.wants.length && !extras.availability) return null;
 
     // One write path for both channels: a text turn is just the N<=1 case of
     // the loop a call runs. Sequential on purpose — each ask dedupes against
     // what's on file INCLUDING the one written an iteration ago, so a call
     // that circles back to the same request twice still lands one ask row.
-    const extras: IntentExtras = { concrete_preferences, wants, availability };
     const written: ExtractedIntent[] = [];
     if (!asks.length) {
       written.push(await persistCapturedIntent(user_id, null, extras));
@@ -1226,6 +1231,23 @@ export async function captureIntent(
     console.error("captureIntent failed (non-fatal):", err?.message ?? err);
     return null;
   }
+}
+
+// Drops preferences, wants and availability already on file (any earlier
+// intent record), compared ignoring case, spacing and punctuation.
+export function dropKnownExtras(extras: IntentExtras, existing: any[]): IntentExtras {
+  const norm = (x: unknown) => String(x ?? "").toLowerCase().replace(/[^a-z0-9]+/g, " ").trim();
+  const known = new Set<string>();
+  for (const i of existing) {
+    for (const p of [...(i?.concrete_preferences ?? []), ...(i?.wants ?? [])]) known.add(norm(p));
+    if (i?.availability) known.add(norm(i.availability));
+  }
+  const fresh = (x: string) => !known.has(norm(x));
+  return {
+    concrete_preferences: extras.concrete_preferences.filter(fresh),
+    wants: extras.wants.filter(fresh),
+    availability: extras.availability && fresh(extras.availability) ? extras.availability : null,
+  };
 }
 
 // Writes one captured ask (or the ask-less preferences/wants/availability

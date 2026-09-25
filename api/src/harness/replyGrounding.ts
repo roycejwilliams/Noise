@@ -114,7 +114,7 @@ export async function gatherReplyFacts(
   for (const d of opts.pendingDescriptions ?? []) addFact(rf, "pending", `Waiting to hear back: ${d}`);
   // Every source is a separate read, so they run together: in series this
   // was six round trips before the reply could even start drafting.
-  const [corrections, snapshot, sent, notes, scheduled, reveal, preference, callFailure] = await Promise.all([
+  const [corrections, snapshot, sent, notes, scheduled, reveal, preference, callFailure, sendHeld] = await Promise.all([
     recentCallCorrections(userId),
     getPersonSnapshot(userId).catch(() => null),
     recentlySent(userId),
@@ -143,6 +143,14 @@ export async function gatherReplyFacts(
       )
       .then((r) => (r.rows[0]?.content as string | undefined) ?? null)
       .catch(() => null),
+    // Texts held by the send breaker (services/sendblue.ts reportSendBreaker).
+    pool
+      .query(
+        `SELECT content FROM co_memories WHERE user_id = $1 AND memory_type = 'send_held' AND created_at > NOW() - INTERVAL '3 hours' ORDER BY created_at DESC LIMIT 1`,
+        [userId],
+      )
+      .then((r) => (r.rows[0]?.content as string | undefined) ?? null)
+      .catch(() => null),
   ]);
   // Today's date, so "Oct 10 is 18 days out" can be worked out instead of
   // guessed (2026-09-22: a reply said "if today's around the 23rd" on the
@@ -153,6 +161,13 @@ export async function gatherReplyFacts(
   if (callFailure) {
     addFact(rf, "did_before", callFailure);
     addInstruction(rf, "If calls come up, say plainly the problem is on your side, not their phone. Don't guess at more detail than that, and don't promise when it'll be fixed.");
+  }
+  // 2026-09-24: asked "you have a rate limit set on text I see," Co said
+  // "No rate limit, just me actually searching." It had no idea its texts
+  // were held, so it made up a reason.
+  if (sendHeld) {
+    addFact(rf, "did_before", sendHeld);
+    addInstruction(rf, "If they ask why you went quiet, didn't answer, or mention a limit, say plainly that a limit on your side paused your texts for a while and it wasn't them. Never deny it or give another reason. If something they asked in that time never got an answer, answer it now.");
   }
   await addOngoingSearchFacts(rf, userId);
   for (const correction of corrections) addFact(rf, "known", correction);

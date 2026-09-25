@@ -346,7 +346,9 @@ Then act with your tools:
     // raised to 12 for a multi-message recommendation sequence the agent
     // used to own — that sending is now deterministic in sendblue.ts
     // instead, so this reverted back to 6.)
-    stopWhen: stepCountIs(8),
+    // Also stops the moment a send is held (conversationTools.ts sendReply):
+    // retrying can't get through and each step is a paid call.
+    stopWhen: [stepCountIs(8), () => state.sendStopped],
     experimental_telemetry: { isEnabled: true, functionId: "agent.conversationReply" },
     ...(input.imageForVision
       ? {
@@ -369,7 +371,13 @@ Then act with your tools:
   // plain text instead of using the tool. Silently sending nothing back is
   // a real regression versus the old code, which always produced something
   // to send, so this guarantees a reply goes out either way.
-  if (!state.sent) {
+  // Held by the send breaker: nothing can go out, so no plain-text retry and
+  // no fallback line. The member is told what happened once texts resume
+  // (replyGrounding.ts send_held).
+  if (!state.sent && state.sendStopped) {
+    console.error(`conversationReply: sends to ${input.userId} are held; stopped without retrying`);
+  }
+  if (!state.sent && !state.sendStopped) {
     // What the agent did instead, so a fallback can be traced (2026-09-22).
     const toolsCalled = agentRun.steps.flatMap((st) => st.toolCalls.map((t) => t.toolName));
     console.error(
@@ -387,7 +395,7 @@ Then act with your tools:
       );
     }
   }
-  if (!state.sent) {
+  if (!state.sent && !state.sendStopped) {
     const fallback = "Hey, sorry, got a bit tangled up on my end. What's on your mind?";
     if (opts.dryRun) {
       console.log(`[conversationReply dryRun] fallback would send to ${input.userId}: "${fallback}"`);
@@ -409,7 +417,7 @@ Then act with your tools:
 
   // A link queued but never flushed (the model shared one and then stopped)
   // still goes out, after the reply it belongs to.
-  if (state.pendingLinks.length) await flushLinks();
+  if (state.pendingLinks.length && !state.sendStopped) await flushLinks();
 
   const offered = await verifyAndRecordCallOffer(input, state.lastReplyText, opts.dryRun ?? false);
 

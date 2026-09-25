@@ -83,6 +83,7 @@ import { refreshPersonSnapshot } from "../harness/personSnapshot.js";
 import { recordSuggestionOutcome, resultFromNamedOutcome } from "../services/outcomes.js";
 import { sendLateSearchResult } from "../services/lateSearchResult.js";
 import { track } from "../services/shutdown.js";
+import { sendLimiter } from "../services/sendLimiter.js";
 
 // Serializes webhook processing per phone number. Without this, two
 // messages sent seconds apart from the same person can be handled
@@ -586,6 +587,8 @@ export function sendblueRouter(io: Server): Router {
       // Co's own delivery updates), before debounce or reply work.
       if (lockKey && isGenuineInbound && bodyForStamp.message_type !== "group" && !bodyForStamp.group_id) {
         markRead(lockKey).catch(() => {});
+        // They texted: Co's run of unprompted texts starts over (sendLimiter.ts).
+        sendLimiter.noteInbound(lockKey);
       }
       // Group messages never stamp the 1:1 debounce (2026-09-17 code review:
       // a group text from someone mid-turn in their 1:1 thread cancelled
