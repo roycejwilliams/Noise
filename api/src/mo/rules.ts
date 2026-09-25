@@ -122,7 +122,9 @@ export function checkMoDraft(kind: "reply" | "dm" | "email" | "why", text: strin
   }
   if (kind === "email") {
     checks.push({ name: "email_has_code_slot", pass: text.includes("{{CODE}}") });
-    checks.push({ name: "email_has_phone_slot", pass: text.includes("{{PHONE}}") });
+    // The button texts Co; the email never asks them to text a number
+    // (Royce, 2026-09-25).
+    checks.push({ name: "email_no_number", pass: !text.includes("{{PHONE}}") && !/\btext it to co at\b/i.test(text) && !/\(?\b\d{3}\)?[\s.-]?\d{3}[\s.-]?\d{4}\b/.test(text) });
     // Their post goes into the draft prompt, so a planted link could come
     // back out; the only link an invite email carries is the opt-out we add.
     checks.push({ name: "email_no_link", pass: !/https?:\/\/|www\./i.test(text) });

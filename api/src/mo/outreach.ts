@@ -19,6 +19,7 @@ import { clearStop, clearYes, nextOutreachStep, MO, suppressionKeys } from "./ru
 import { isDmClosed, likePost, recentDmEvents, replyToPost, sendDm, xWriteConfigured } from "./xApi.js";
 import { presentNext, suppressProspect, textApprovers } from "./review.js";
 import { readReplyWithJev } from "./jev.js";
+import { moEmail } from "../services/emailDesign.js";
 
 export function moEnabled(env: NodeJS.ProcessEnv = process.env): boolean {
   return env.MO_ENABLED === "true";
@@ -154,12 +155,6 @@ export function prospectFromReplyAddress(address: string): string | null {
   return a.length === b.length && timingSafeEqual(a, b) ? m[1] : null;
 }
 
-function emailHtml(text: string, unsub: string): string {
-  return `${text
-    .split(/\n{2,}/)
-    .map((para) => `<p>${para.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/\n/g, "<br>")}</p>`)
-    .join("")}<p style="color:#777;font-size:12px">Not for you? <a href="${unsub}">Don't email me again</a>. ${String(process.env.MO_POSTAL_ADDRESS).replace(/</g, "&lt;")}</p>`;
-}
 
 // Mo answering an email reply, in the same thread.
 export async function sendMoEmailReply(p: any, text: string): Promise<void> {
@@ -171,7 +166,7 @@ export async function sendMoEmailReply(p: any, text: string): Promise<void> {
     to: [p.email],
     replyTo: moReplyAddress(p.id) ?? "hello@copatible.com",
     subject: subject.startsWith("Re:") ? subject : `Re: ${subject}`,
-    html: emailHtml(text, unsub),
+    html: moEmail({ preview: text.slice(0, 120), paragraphs: text.split(/\n{2,}/), invite: null, unsubscribeUrl: unsub, postalAddress: String(process.env.MO_POSTAL_ADDRESS ?? "") }),
     headers: {
       "List-Unsubscribe": `<${unsub}>`,
       ...(p.last_email_message_id ? { "In-Reply-To": p.last_email_message_id, References: p.last_email_message_id } : {}),
@@ -184,13 +179,27 @@ async function sendMoEmail(p: any, followUp: boolean): Promise<boolean> {
   if (!emailConfigured() || !p.email || !process.env.SENDBLUE_PHONE_NUMBER) return false;
   const code = p.invite_code ?? (await generateInviteCode(null));
   const unsub = `${process.env.API_URL}/mo/unsubscribe?p=${p.id}&t=${unsubscribeToken(p.id)}`;
-  const body = String(p.draft_email_body ?? "").split("{{CODE}}").join(code).split("{{PHONE}}").join(coNumber());
+  // The button texts Co (Royce, 2026-09-25): a sentence asking them to text
+  // a number, left in older drafts, is dropped. The number only shows when
+  // there's no invite link for the button.
   const link = inviteLink(code);
+  let body = String(p.draft_email_body ?? "")
+    .replace(/[^.!?\n]*\{\{PHONE\}\}[^.!?\n]*[.!?]?/g, "")
+    .replace(/[ \t]+\n/g, "\n")
+    .replace(/[ \t]{2,}/g, " ")
+    .split("{{CODE}}")
+    .join(code);
+  if (!link) body = `${body.replace(/\n+Mo\s*$/, "")}\n\nText your code to Co at ${coNumber()}.\n\nMo`;
   const lead = followUp ? "Following up once, in case this got buried.\n\n" : "";
-  const html = `${(lead + body)
-    .split(/\n{2,}/)
-    .map((para) => `<p>${para.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/\n/g, "<br>")}</p>`)
-    .join("")}${link ? `<p><a href="${link}">Tap here to text Co with your code filled in</a></p>` : ""}<p style="color:#777;font-size:12px">Not for you? <a href="${unsub}">Don't email me again</a>. ${String(process.env.MO_POSTAL_ADDRESS).replace(/</g, "&lt;")}</p>`;
+  // Mo's letterhead (services/emailDesign.ts moEmail).
+  const paragraphs = (lead + body).split(/\n{2,}/);
+  const html = moEmail({
+    preview: paragraphs[0]?.slice(0, 120) ?? "",
+    paragraphs,
+    invite: link ? { href: link } : null,
+    unsubscribeUrl: unsub,
+    postalAddress: String(process.env.MO_POSTAL_ADDRESS ?? ""),
+  });
   const resend = new Resend(process.env.RESEND_API_KEY);
   const { error } = await resend.emails.send({
     from: process.env.MO_FROM_EMAIL!,

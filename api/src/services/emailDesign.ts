@@ -6,6 +6,8 @@
 //   letterpressEmail  2 · Letterpress: the welcome
 //   galleryEmail      1 · Gallery: introductions
 // Tables and inline styles only, so Gmail and Outlook render them too.
+// Body text is 14px (Royce, 2026-09-25: "make sure the body font for all
+// emails aren't too big").
 
 export const EMAIL_COLORS = {
   white: "#FFFFFF",
@@ -48,9 +50,9 @@ const headline = (text: string, size = 38) =>
   block(`<h1 style="margin:0;font-family:${SERIF};font-weight:300;font-size:${size}px;line-height:1.15;color:${C.ink};">${escapeHtml(text)}</h1>`);
 
 const para = (text: string, o: { size?: number; color?: string } = {}) =>
-  block(`<p style="margin:0;font-family:${SANS};font-size:${o.size ?? 15}px;line-height:1.65;color:${o.color ?? C.body};">${escapeHtml(text)}</p>`);
+  block(`<p style="margin:0;font-family:${SANS};font-size:${o.size ?? 14}px;line-height:1.65;color:${o.color ?? C.body};">${escapeHtml(text)}</p>`);
 
-const italic = (text: string, size = 18) =>
+const italic = (text: string, size = 16) =>
   block(`<p style="margin:0;font-family:${SERIF};font-style:italic;font-size:${size}px;line-height:1.5;color:${C.ink};">${escapeHtml(text)}</p>`);
 
 const button = (label: string, href: string, outline = false) =>
@@ -104,7 +106,7 @@ export function letterpressEmail(o: { preview: string; headline: string; lead: s
     brand() +
     block(`<div style="width:40px;height:1px;line-height:1px;font-size:1px;background:${C.gold};">&nbsp;</div>`) +
     headline(o.headline, 48) +
-    italic(o.lead, 17) +
+    italic(o.lead, 16) +
     steps +
     (o.cta ? button(o.cta.label, o.cta.href, true) : "") +
     italic("Co", 16);
@@ -125,4 +127,55 @@ export function galleryEmail(o: { preview: string; eyebrow: string; headline: st
     (o.cta ? button(o.cta.label, o.cta.href) : "") +
     footer();
   return shell(rows, o.preview);
+}
+
+// Mo's letterhead: "M3 · Postcard" (Royce, 2026-09-25: "I like M3 a lot";
+// Figma Email Campaigns page, Mo row). Mo writes to strangers on Co's
+// behalf, so its email looks nothing like Co's white ones: no card, cream
+// words straight on a maroon gradient (the brand's alternative accent, light
+// to dark), a large Fraunces "Mo". Inboxes without gradient support get a
+// solid maroon. Cold outreach stays light: no images, one button at most,
+// and the legally required opt-out link and postal address.
+export const MO_COLORS = { light: "#A23C59", dark: "#5E2034", solid: "#7E2E47", text: "#EFECE6", mark: "#FDFBF7", quiet: "#D7D0C1", rule: "#C77A90" } as const;
+
+export function moEmail(o: {
+  preview: string;
+  paragraphs: string[];
+  // "Text Co with your code": the invite page link, when there is one.
+  invite?: { href: string } | null;
+  unsubscribeUrl: string;
+  postalAddress: string;
+}): string {
+  const M = MO_COLORS;
+  const header =
+    block(`<div style="font-family:${SERIF};font-size:84px;line-height:1;color:${M.mark};">Mo</div>`, 18) +
+    block(`<div style="font-family:${SANS};font-size:11px;font-weight:500;letter-spacing:1.6px;text-transform:uppercase;color:${M.quiet};">Invitations &nbsp;&middot;&nbsp; Co</div>`, 32);
+  const body = o.paragraphs
+    .filter((p) => p.trim() && p.trim() !== "Mo")
+    .map((p) => block(`<p style="margin:0;font-family:${SANS};font-size:14px;line-height:1.65;color:${M.text};">${escapeHtml(p.trim())}</p>`, 24))
+    .join("");
+  const cta = o.invite
+    ? block(
+        `<a href="${escapeHtml(o.invite.href)}" style="display:inline-block;padding:14px 30px;border:1px solid ${M.text};background:transparent;color:${M.text};font-family:${SANS};font-size:13px;font-weight:500;letter-spacing:0.8px;text-transform:uppercase;text-decoration:none;border-radius:2px;">Text Co with your code</a>`,
+        28,
+      )
+    : "";
+  const signOff = block(`<div style="font-family:${SERIF};font-size:44px;line-height:1;color:${M.mark};">Mo</div>`, 32);
+  const foot =
+    `<tr><td style="padding:0;border-top:1px solid ${M.rule};font-size:1px;line-height:1px;">&nbsp;</td></tr>` +
+    block(
+      `<div style="padding-top:16px;font-family:${SANS};font-size:11px;line-height:1.6;color:${M.quiet};">Not for you? <a href="${escapeHtml(o.unsubscribeUrl)}" style="color:${M.quiet};text-decoration:underline;">Don't email me again</a>.<br>${escapeHtml(o.postalAddress)}</div>`,
+      0,
+    );
+  const rows = header + body + cta + signOff + foot;
+  const ground = `background-color:${M.solid};background-image:linear-gradient(180deg,${M.light} 0%,${M.dark} 100%);`;
+  return `<!DOCTYPE html><html lang="en"><head><meta charset="UTF-8"><meta name="viewport" content="width=device-width,initial-scale=1.0"><meta name="color-scheme" content="light only"><meta name="supported-color-schemes" content="light">
+<link href="https://fonts.googleapis.com/css2?family=Fraunces:ital,wght@0,300;0,400;1,400&display=swap" rel="stylesheet"><link href="https://api.fontshare.com/v2/css?f[]=satoshi@400,500&display=swap" rel="stylesheet">
+<style>body{margin:0;padding:0;background:${M.dark};}@media (max-width:620px){.mo-pad{padding:56px 24px!important;}}</style></head>
+<body style="margin:0;padding:0;background:${M.dark};">
+<div style="display:none;max-height:0;overflow:hidden;opacity:0;">${escapeHtml(o.preview)}</div>
+<table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0" bgcolor="${M.solid}" style="${ground}"><tr><td align="center" style="padding:0 12px;">
+<table role="presentation" width="600" cellpadding="0" cellspacing="0" border="0" style="width:100%;max-width:600px;text-align:center;"><tr><td class="mo-pad" style="padding:72px 56px 56px 56px;">
+<table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0" style="text-align:center;">${rows}</table>
+</td></tr></table></td></tr></table></body></html>`;
 }

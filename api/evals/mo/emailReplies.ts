@@ -81,5 +81,20 @@ for (const [name, file] of [["api", "src/server.ts"], ["co-test", "../co-test/sr
   check(`${name}: Mo's routes are served`, /app\.use\("\/mo", createMoRouter\(\)\)/.test(src(file)));
 }
 
+// Openings (draft.ts OPENERS, 2026-09-25)
+{
+  const { OPENERS, OPENER_IDS, draftPrompt } = await import("../../src/mo/draft.js");
+  check("four openings", OPENER_IDS.length === 4);
+  check("every opening says it's Mo", OPENER_IDS.every((o) => /I\\?'m Mo/.test(OPENERS[o])));
+  check("every opening says Mo extends invitations to Co", OPENER_IDS.every((o) => /extend invitations to Co/.test(OPENERS[o])));
+  const base = { name: "Noor", handle: "noor", postText: "post", reason: "r", event: null, source: "x" as const, style: "intro" as const };
+  check("the chosen opening shapes the DM and the email", OPENER_IDS.every((o) => (draftPrompt({ ...base, opener: o }).split(OPENERS[o]).length - 1) === 2));
+  check("the short DM keeps its shape and the new role", /I extend invitations to Co[^"]*Want to know why\?/.test(draftPrompt({ ...base, style: "curious", opener: "rooms" })));
+  const find = src("src/mo/find.ts");
+  check("openings rotate evenly and are stored", /async function nextOpener\(\)/.test(find) && (find.match(/, opener\)\n/g) ?? []).length === 2);
+  const draft = src("src/mo/draft.ts");
+  check("the fact check knows their name and the next gathering", /\{ name: i\.name, handle: i\.handle, event: i\.event \}\)/.test(draft));
+}
+
 console.log(`mo email reply rules: ${total - failed}/${total} passed`);
 process.exit(failed ? 1 : 0);

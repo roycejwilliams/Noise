@@ -18,7 +18,7 @@ import { reserveWebSearch } from "../services/webOpportunitySearch.js";
 import { listCalendarEvents } from "../services/luma.js";
 import { searchPostsWithAuthors, type MoPost } from "./xApi.js";
 import { MO, inCity, locationInCity, neutralPronouns, placeOk, quoteIsTheirs, suppressionKeys } from "./rules.js";
-import { draftOutreach, type DmStyle } from "./draft.js";
+import { draftOutreach, OPENER_IDS, type DmStyle, type OpenerId } from "./draft.js";
 import { screenPosts } from "./jev.js";
 
 type Wants = { wants: string[]; event: string | null };
@@ -93,6 +93,15 @@ Return ONLY JSON: {"x": ["..."], "linkedin": "site:linkedin.com/in ...", "themes
 }
 
 // Whichever DM style has gone to fewer prospects, so both get a fair test.
+// The least-used opener so far, so each gets a fair share (draft.ts OPENERS).
+async function nextOpener(): Promise<OpenerId> {
+  const { rows } = await pool
+    .query(`SELECT opener, count(*)::int AS n FROM mo_prospects WHERE opener IS NOT NULL GROUP BY opener`)
+    .catch(() => ({ rows: [] as any[] }));
+  const count = (o: OpenerId) => rows.find((r: any) => r.opener === o)?.n ?? 0;
+  return [...OPENER_IDS].sort((a, b) => count(a) - count(b))[0];
+}
+
 async function nextDmStyle(): Promise<DmStyle> {
   const { rows } = await pool
     .query(`SELECT dm_style, count(*)::int AS n FROM mo_prospects WHERE dm_style IS NOT NULL GROUP BY dm_style`)
@@ -211,15 +220,16 @@ export async function runMoFind(): Promise<{ shortlisted: number }> {
     if (await alreadyKnown(suppressionKeys({ x_user_id: p.author.id }), p.author.id, null)) continue;
     j.reason = neutralPronouns(j.reason);
     const style = await nextDmStyle();
-    const drafts = await draftOutreach({ name: p.author.name, handle: p.author.username, postText: p.text, reason: j.reason, event: w.event, source: "x", style });
+    const opener = await nextOpener();
+    const drafts = await draftOutreach({ name: p.author.name, handle: p.author.username, postText: p.text, reason: j.reason, event: w.event, source: "x", style, opener });
     if (!drafts.ok) {
       checks.push({ name: "drafts_pass", pass: false, reason: `@${p.author.username}: ${drafts.failed.join(", ")}` });
       continue;
     }
     await pool.query(
-      `INSERT INTO mo_prospects (source, x_user_id, x_handle, name, bio, location, post_id, post_url, post_text, reason, evidence_quote, draft_reply, draft_dm, draft_email_subject, draft_email_body, dm_style, draft_why)
-       VALUES ('x', $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16) ON CONFLICT DO NOTHING`,
-      [p.author.id, p.author.username, p.author.name, p.author.description, p.author.location, p.id, p.url, p.text, j.reason, j.quote, drafts.reply, drafts.dm, drafts.emailSubject, drafts.emailBody, style, drafts.why],
+      `INSERT INTO mo_prospects (source, x_user_id, x_handle, name, bio, location, post_id, post_url, post_text, reason, evidence_quote, draft_reply, draft_dm, draft_email_subject, draft_email_body, dm_style, draft_why, opener)
+       VALUES ('x', $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17) ON CONFLICT DO NOTHING`,
+      [p.author.id, p.author.username, p.author.name, p.author.description, p.author.location, p.id, p.url, p.text, j.reason, j.quote, drafts.reply, drafts.dm, drafts.emailSubject, drafts.emailBody, style, drafts.why, opener],
     );
     shortlisted++;
   }
@@ -238,7 +248,8 @@ export async function runMoFind(): Promise<{ shortlisted: number }> {
       }
       if (await alreadyKnown(suppressionKeys({ linkedin_url: li.url }), null, li.url)) continue;
       const style = await nextDmStyle();
-      const drafts = await draftOutreach({ name: li.name, handle: null, postText: shown, reason: li.reason, event: w.event, source: "linkedin", style });
+      const opener = await nextOpener();
+      const drafts = await draftOutreach({ name: li.name, handle: null, postText: shown, reason: li.reason, event: w.event, source: "linkedin", style, opener });
       if (!drafts.ok) continue;
       await pool.query(
         // post_text keeps what the result actually showed (headline and
@@ -246,9 +257,9 @@ export async function runMoFind(): Promise<{ shortlisted: number }> {
         // both, so a later redraft (an approver's edit) needs both too
         // (2026-09-24: "Build Bar" came from the snippet and a redraft was
         // rejected as inventing it).
-        `INSERT INTO mo_prospects (source, name, linkedin_url, headline, post_text, reason, evidence_quote, draft_dm, draft_email_subject, draft_email_body, channel, dm_style, draft_why)
-         VALUES ('linkedin', $1, $2, $3, $11, $4, $5, $6, $7, $8, NULL, $9, $10) ON CONFLICT DO NOTHING`,
-        [li.name, li.url, li.headline, li.reason, li.quote, drafts.dm, drafts.emailSubject, drafts.emailBody, style, drafts.why, shown],
+        `INSERT INTO mo_prospects (source, name, linkedin_url, headline, post_text, reason, evidence_quote, draft_dm, draft_email_subject, draft_email_body, channel, dm_style, draft_why, opener)
+         VALUES ('linkedin', $1, $2, $3, $11, $4, $5, $6, $7, $8, NULL, $9, $10, $12) ON CONFLICT DO NOTHING`,
+        [li.name, li.url, li.headline, li.reason, li.quote, drafts.dm, drafts.emailSubject, drafts.emailBody, style, drafts.why, shown, opener],
       );
       shortlisted++;
     }

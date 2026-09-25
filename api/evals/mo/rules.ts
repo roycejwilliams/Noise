@@ -94,17 +94,17 @@ const bad = (kind: "reply" | "dm" | "email", t: string) => checkMoDraft(kind, t)
 check("a good public reply passes", bad("reply", "The 12-person cap is the right call. Small enough that everyone actually talks.").length === 0);
 check("the warm-up reply never pitches the club", bad("reply", "Love this. You should join our club.").includes("reply_no_pitch"));
 check("the warm-up reply never carries a link", bad("reply", "Great thread https://example.com").includes("reply_no_link"));
-check("a good DM passes", bad("dm", "Hey, I'm Mo. I scout interesting people for Co, and your post on design-engineer dinners put you on my radar. Want me to send you an invite?").length === 0);
-check("the short DM passes", bad("dm", "I'm Mo. My job is to find people who should be in Co's private social network. Your post about design dinners led me to you. I think you're one of them. Want to know why?").length === 0);
+check("a good DM passes", bad("dm", "Hey, I'm Mo. I extend invitations to Co, and your post on design-engineer dinners put you on my radar. Want me to send you an invite?").length === 0);
+check("the short DM passes", bad("dm", "I'm Mo. I extend invitations to Co, a private social club in San Francisco. Your post about design dinners led me to you. I think you belong. Want to know why?").length === 0);
 check("a DM has to say it's Mo", bad("dm", "Co runs a small invite-only club in SF. Would you like an invite?").includes("dm_says_its_mo"));
 check("the 'why' has no link or code", bad("why", "You host rooms like that. https://x.co/ABCDEFGH").includes("why_no_link"));
 check("the DM never carries a code before they say yes", bad("dm", "Here's your code 6VGF76VK. Want in?").includes("dm_no_code"));
 check("the DM asks rather than assumes", bad("dm", "Co runs a small club in SF. You're in.").includes("dm_asks"));
 check("the DM has a length limit", bad("dm", `${"x".repeat(MO.maxDmChars)}?`).includes("dm_length"));
 check("the email carries the code slot", bad("email", "Co runs a small club in SF. Text Co to join.").includes("email_has_code_slot"));
-check("the email carries Co's number", bad("email", "Your code is {{CODE}}. Text it to Co.").includes("email_has_phone_slot"));
-check("a complete email passes", bad("email", "Saw your dinner post.\n\nYour code is {{CODE}}. Text it to Co at {{PHONE}}.\n\nCo").length === 0);
-check("the email carries no planted link", bad("email", "Your code is {{CODE}}, text {{PHONE}}. More at https://evil.example").includes("email_no_link"));
+check("the email doesn't ask them to text a number (the button does)", bad("email", "Your code is {{CODE}}. Text it to Co at {{PHONE}}.").includes("email_no_number") && bad("email", "Your code is {{CODE}}. Text (415) 555-0100.").includes("email_no_number"));
+check("a complete email passes", bad("email", "Saw your dinner post.\n\nIf you'd like in, here's your code: {{CODE}}.\n\nMo").length === 0);
+check("the email carries no planted link", bad("email", "Your code is {{CODE}}. More at https://evil.example").includes("email_no_link"));
 check("no em dashes anywhere", bad("dm", "Loved it — want an invite?").includes("dm_no_em_dash"));
 
 // ------------------------------------------------ approvers answer in plain words (no command syntax)
@@ -290,7 +290,7 @@ check(
   check("wired: paused means no searches and no outreach", /if \(await isMoPaused\(\)\) return \{ shortlisted: 0 \};/.test(fd) && /if \(await isMoPaused\(\)\) return;/.test(ot));
   check("wired: a redeemed code tells Mo right away", /m\.noteProspectJoined\(candidate\)/.test(ic) && /await tellTeamAboutJoins\(joined\);/.test(ot));
   check("wired: searches use Co's gaps and the team's asks, not members' words", /What the network is short on right now \(from Co, general terms\)/.test(fd) && !/What members are looking for/.test(fd));
-  check("LinkedIn keeps what the result showed, so redrafts can be checked against it", /\$10, \$11\) ON CONFLICT DO NOTHING|NULL, \$9, \$10\) ON CONFLICT DO NOTHING`,\n\s+\[li\.name, li\.url, li\.headline, li\.reason, li\.quote, drafts\.dm, drafts\.emailSubject, drafts\.emailBody, style, drafts\.why, shown\]/.test(fd));
+  check("LinkedIn keeps what the result showed, so redrafts can be checked against it", /NULL, \$9, \$10, \$12\) ON CONFLICT DO NOTHING`,\n\s+\[li\.name, li\.url, li\.headline, li\.reason, li\.quote, drafts\.dm, drafts\.emailSubject, drafts\.emailBody, style, drafts\.why, shown, opener\]/.test(fd));
   // The team never sends anything by hand (Royce, 2026-09-24).
   check("never asks the team to send anything", !/yours to send|note would come from you|send this note for me|Text me "sent"/.test(rv) && !/manual_pending' ORDER BY/.test(rv));
   check("a yes on a LinkedIn-only person means an email from Co, not a task for you", /only on LinkedIn, which I can't message, so I'll email them from Co/.test(rv));

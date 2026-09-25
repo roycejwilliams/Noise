@@ -173,7 +173,7 @@ export async function networkGaps(opts: { refresh?: boolean } = {}): Promise<Gap
     const { text } = await generateText({
       model: anthropic(MODELS.haiku),
       experimental_telemetry: { isEnabled: true, functionId: "mo.networkGaps" },
-      prompt: `These are what members of a private network are looking for right now, one per line:
+      prompt: `These are what members of a private social club are looking for right now, one per line:
 ${asks.map((a) => `- ${a}`).join("\n")}
 
 Group them into at most 3 gaps: the kinds of people the network is short on, each a few general words ("technical cofounders", "designers who host events"), with how many of the lines above point to it. No names, no companies, never more than three words in a row from any line.

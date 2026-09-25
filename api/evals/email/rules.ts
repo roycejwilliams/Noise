@@ -52,5 +52,22 @@ for (const f of ["src/services/networkIntroNudge.ts", "src/services/eventGuestMa
   check(`${f}: introductions use the Gallery layout`, /galleryEmail\(\{/.test(s) && !s.includes("<p>Hi both,</p>"));
 }
 
+// Mo's letterhead (moEmail, 2026-09-25)
+{
+  const { moEmail } = await import("../../src/services/emailDesign.js");
+  const mo = moEmail({ preview: "p", paragraphs: ["I'm Mo. <b>hi</b>", "Here's your code: ABC.", "Mo"], invite: { href: "https://x.co/i/ABC" }, unsubscribeUrl: "https://x.co/mo/unsubscribe?p=1&t=2", postalAddress: "1 Main St, SF" });
+  const reply = moEmail({ preview: "p", paragraphs: ["Happy to explain."], invite: null, unsubscribeUrl: "https://x.co/u", postalAddress: "1 Main St, SF" });
+  check("mo: Mo's own name up top in Fraunces, not Co's mark", /font-size:84px[^>]*>Mo<\/div>/.test(mo) && mo.includes("Invitations &nbsp;&middot;&nbsp; Co") && !mo.includes(">Co.</div>"));
+  check("mo: the invite button only when there's a link", mo.includes("Text Co with your code") && !reply.includes("Text Co with your code"));
+  check("mo: opt-out link and postal address always in the footer", mo.includes("email me again") && mo.includes("https://x.co/mo/unsubscribe?p=1&amp;t=2") && mo.includes("1 Main St, SF") && reply.includes("1 Main St, SF"));
+  check("mo: signed once, not twice", (mo.match(/font-size:44px[^>]*>Mo<\/div>/g) ?? []).length === 1 && !/<p[^>]*>Mo<\/p>/.test(mo));
+  check("mo: prospect text is escaped", mo.includes("&lt;b&gt;hi&lt;/b&gt;"));
+  check("mo: plain ASCII, white, same fonts", !/[^\x00-\x7F]/.test(mo) && mo.includes('content="light only"') && mo.includes("'Fraunces', Georgia"));
+  check("mo: M3, cream words on a maroon gradient with a solid fallback", mo.includes("linear-gradient(180deg,#A23C59 0%,#5E2034 100%)") && mo.includes('bgcolor="#7E2E47"') && mo.includes("color:#EFECE6"));
+  check("mo: no card, no images", !mo.includes('bgcolor="#FFFFFF"') && !/<img/i.test(mo));
+  const outreach = readFileSync(new URL("../../src/mo/outreach.ts", import.meta.url), "utf8");
+  check("mo: outreach and replies both use the letterhead", (outreach.match(/moEmail\(\{/g) ?? []).length === 2 && !/function emailHtml/.test(outreach));
+}
+
 console.log(`email design rules: ${total - failed}/${total} passed`);
 process.exit(failed ? 1 : 0);

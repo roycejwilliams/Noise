@@ -1483,6 +1483,10 @@ export async function runMigrations(): Promise<void> {
   // Replies to Mo's emails (mo/emailReplies.ts, 2026-09-25): the thread to
   // answer in, and each received email handled once however often Resend
   // retries the post.
+  // Which opening Mo used (mo/draft.ts OPENERS, 2026-09-25), to see which lands.
+  await pool
+    .query(`ALTER TABLE mo_prospects ADD COLUMN IF NOT EXISTS opener TEXT`)
+    .catch((err: Error) => console.error("mo_prospects.opener migration failed:", err));
   await pool
     .query(`ALTER TABLE mo_prospects ADD COLUMN IF NOT EXISTS last_email_message_id TEXT`)
     .catch((err: Error) => console.error("mo_prospects.last_email_message_id migration failed:", err));
