@@ -56,24 +56,6 @@ export async function handleInboundEmail(rawBody: string, headers: { id?: string
       webhookSecret: secret,
     });
   } catch {
-    // Temporary (2026-09-25): why a real Resend post fails the check. Only
-    // yes/no and counts are logged, never the secret or a signature.
-    try {
-      const { createHmac } = await import("crypto");
-      const signed = `${headers.id}.${headers.timestamp}.${rawBody}`;
-      const given = String(headers.signature ?? "").split(" ").filter((x) => x.startsWith("v1,")).map((x) => x.slice(3));
-      const sig = (key: Buffer) => createHmac("sha256", key).update(signed).digest("base64");
-      const body = secret.replace(/^whsec_/, "");
-      const diag = {
-        v1Count: given.length,
-        ageSec: Math.round(Date.now() / 1000 - Number(headers.timestamp)),
-        matchStandard: given.includes(sig(Buffer.from(body, "base64"))),
-        matchPlainText: given.includes(sig(Buffer.from(body, "utf8"))),
-        matchWithPrefix: given.includes(sig(Buffer.from(secret, "utf8"))),
-        bodyEndsWithNewline: rawBody.endsWith("\n"),
-      };
-      console.error(`mo: signature diagnostics ${JSON.stringify(diag)}`);
-    } catch {}
     return { status: 400, action: "bad_signature" };
   }
   if (event?.type !== "email.received" || !event?.data?.email_id) return { status: 200, action: "ignored" };
