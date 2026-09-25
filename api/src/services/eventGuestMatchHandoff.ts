@@ -14,6 +14,7 @@ import { getEventGuestList } from "./luma.js";
 import { matchGuestsToUsers, dedupeByUserId } from "./eventScoring.js";
 import { mergeWalkinsIntoGuestPool } from "./eventWalkinCheckin.js";
 import { CO_EMAIL_FROM } from "./emailFrom.js";
+import { galleryEmail } from "./emailDesign.js";
 
 // This person's timezone, for the hours check on a reply-triggered direct
 // ask (code review, 2026-09-17 — see sendExemptWhenAllowed).
@@ -262,7 +263,13 @@ async function sendIntroEmail(eventId: string, eventName: string, a: MatchNudgeC
   if (!(await gateIntroAction(a.user_id, "eventGuestMatchHandoff.introEmail", [checkBothYes(aYes, bYes)], { eventId, b: b.user_id }))) return false;
 
   const subject = `Introducing ${a.first_name} and ${b.first_name}`;
-  const html = `<p>Hi both,</p><p>Figured you two should actually meet before ${eventName} — you're both on my radar for it, so consider this your intro. Take it from here!</p><p>— Co</p>`;
+  const html = galleryEmail({
+    preview: `Before ${eventName}: Co thinks you two should meet.`,
+    eyebrow: "An introduction",
+    headline: `${a.first_name}, meet ${b.first_name}.`,
+    body: [`You're both going to ${eventName}, and Co figured you two should actually meet before it. Consider this your introduction.`],
+    close: "You both said yes. Take it from here.",
+  });
   if (!ALLOW_REAL_SENDS) {
     console.log(`[sendIntroEmail stub, ${process.env.NODE_ENV ?? "no NODE_ENV"}] to ${a.email}, ${b.email}: ${subject}`);
   } else {

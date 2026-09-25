@@ -14,6 +14,7 @@ import { getActiveAsks } from "./matching.js";
 import { getTimezoneForCity } from "./geocoding.js";
 import { MODELS } from "../models.js";
 import { CO_EMAIL_FROM } from "./emailFrom.js";
+import { galleryEmail } from "./emailDesign.js";
 
 // Model policy (Royce, 2026-09-14): Haiku for the yes/no reply reads (code
 // acts on them only through the consent checks); Sonnet 5 for drafts that
@@ -324,7 +325,13 @@ async function sendNetworkIntroEmail(a: MatchNudgeCandidate, b: MatchNudgeCandid
   const [aYes, bYes] = await Promise.all([networkOptedIn(a.user_id, b.user_id), networkOptedIn(b.user_id, a.user_id)]);
   if (!(await gateIntroAction(a.user_id, "networkIntroNudge.introEmail", [checkBothYes(aYes, bYes)], { b: b.user_id }))) return false;
   const subject = `Introducing ${a.first_name} and ${b.first_name}`;
-  const html = `<p>Hi both,</p><p>${matchReason}</p><p>Figured you two should actually meet — consider this your intro, take it from here.</p><p>— Co</p>`;
+  const html = galleryEmail({
+    preview: `Co thinks you two should meet.`,
+    eyebrow: "An introduction",
+    headline: `${a.first_name}, meet ${b.first_name}.`,
+    body: [matchReason, "Co figured you two should actually meet. Consider this your introduction."],
+    close: "You both said yes. Take it from here.",
+  });
   if (!ALLOW_REAL_SENDS) {
     console.log(`[sendNetworkIntroEmail stub, ${process.env.NODE_ENV ?? "no NODE_ENV"}] to ${a.email}, ${b.email}: ${subject}`);
   } else {
