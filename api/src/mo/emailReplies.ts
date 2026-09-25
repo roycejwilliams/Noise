@@ -82,7 +82,11 @@ export async function handleInboundEmail(rawBody: string, headers: { id?: string
   await pool.query(`UPDATE mo_email_inbound SET prospect_id = $2 WHERE email_id = $1`, [data.email_id, p.id]).catch(() => {});
   if (!["contacted", "question", "invited"].includes(p.status)) return log("not_waiting", { no: p.no, status: p.status });
 
-  const full = await resend.emails.receiving.get(data.email_id).catch(() => null as any);
+  // Reading a received email needs a full-access key; co-test's sending key
+  // is send-only (2026-09-25), so RESEND_RECEIVING_API_KEY is used when set.
+  const reader = process.env.RESEND_RECEIVING_API_KEY ? new Resend(process.env.RESEND_RECEIVING_API_KEY) : resend;
+  const full = await reader.emails.receiving.get(data.email_id).catch(() => null as any);
+  if (full?.error) console.error("mo: couldn't read the received email:", full.error.message);
   const email = full?.data ?? null;
   if (!email) return log("error", { no: p.no, why: "couldn't fetch the email" });
   if (isAutoReply(email.subject ?? data.subject ?? "", email.headers ?? {})) return log("auto_reply", { no: p.no });
