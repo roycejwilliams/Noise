@@ -60,7 +60,7 @@ const button = (label: string, href: string, outline = false) =>
 
 const codeBox = (code: string) =>
   block(
-    `<table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0"><tr><td align="center" bgcolor="${C.cream}" style="background:${C.cream};border-radius:4px;padding:26px 28px;font-family:${SERIF};font-weight:300;font-size:52px;line-height:1;letter-spacing:6px;color:${C.maroon};">${escapeHtml(spacedCode(code))}</td></tr></table>`,
+    `<table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0"><tr><td align="center" style="padding:10px 28px;font-family:${SERIF};font-weight:300;font-size:52px;line-height:1;letter-spacing:6px;color:${C.maroon};">${escapeHtml(spacedCode(code))}</td></tr></table>`,
   );
 
 const footer = () =>

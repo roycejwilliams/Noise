@@ -33,7 +33,8 @@ for (const [name, html] of [["quiet", quiet], ["letterpress", welcome], ["galler
   check(`${name}: hidden preview text`, html.includes("display:none;max-height:0"));
 }
 check("the code is set as two groups of three", quiet.includes("481 206") && spacedCode("123456") === "123 456" && spacedCode("12345") === "12345");
-check("the code sits on the cream panel in maroon", /bgcolor="#EFECE6"[^>]*>[^<]*?481 206/.test(quiet.replace(/\n/g, "")) || (quiet.includes("#EFECE6") && quiet.includes("color:#A23C59")));
+// Royce, 2026-09-24: no panel behind the code, just the maroon digits.
+check("the code is maroon with no background panel", quiet.includes("color:#A23C59") && !quiet.includes("#EFECE6"));
 check("welcome has the gold border and numbered steps", welcome.includes("border:1px solid #C2A885") && welcome.includes(">01<") && welcome.includes(">03<"));
 check("welcome button texts Co", welcome.includes('href="sms:+10000000000"') && welcome.includes("Text Co"));
 check("names and reasons are escaped, not injected", intro.includes("&lt;b&gt;with&lt;/b&gt;") && !intro.includes("<b>with</b>"));
