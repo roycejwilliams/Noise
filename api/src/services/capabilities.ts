@@ -61,7 +61,7 @@ export const ABILITIES: Ability[] = [
     can: "Co can search right now for events, communities, opportunities and people worth meeting.",
     tool: "searchNow",
     limits: { perTurn: 1, perDay: 30 },
-    use: "Search right now for events, communities, people or opportunities when they want something found, however they ask (\"anything this weekend?\", \"what about Saturday?\", \"find me a run club\"). Say what to look for in plain words with the context they gave (place, time, kind of thing). What fits goes out on its own, link then caption, before your reply, and the result tells you what happened. If what they want could mean clearly different things, ask them first instead of searching on a guess. Not for questions about Co itself or about what you already sent them.",
+    use: "Search right now for events, communities, people or opportunities when they want something found, however they ask (\"anything this weekend?\", \"what about Saturday?\", \"find me a run club\"). Say what to look for in plain words with the context they gave (place, time, kind of thing). What fits goes out on its own, link then caption, before your reply, and the result tells you what happened. Search again each time they ask, even if you sent something similar before: what's out there changes every day, so earlier results are never the answer to a new ask. If what they want could mean clearly different things, ask them first instead of searching on a guess. Not for questions about Co itself or about something specific you already sent them.",
   },
   {
     id: "share_link",

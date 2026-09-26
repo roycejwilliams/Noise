@@ -219,6 +219,12 @@ export async function recordSearchNote(userId: string, note: string): Promise<vo
     .catch((err: any) => console.error("recordSearchNote failed (non-fatal):", err?.message ?? err));
 }
 
+// The router's read that they want something found, passed to Co as
+// guidance (2026-09-26: "Anything happening this weekend?" was read right by
+// the router, and Co answered from results two days old). Co still decides.
+export const FRESH_SEARCH_INSTRUCTION =
+  "They're asking you to find something. Run a fresh search with searchNow, even if you sent something similar before, unless they're only asking about something specific you already sent.";
+
 // Counts in words at the front of a search note (2026-09-26): Co read a
 // note listing four misfits and said "those two were the results", and the
 // claim check passed it because the note never said how many there were.
@@ -647,6 +653,17 @@ Rewrite the draft so it still responds to what they said, keeping everything tha
   return out || null;
 }
 
+// True when every sentence of the rewrite appears word for word, in the
+// same order within itself, in the draft: it only removed things. A sentence
+// with a word dropped from its middle ("did not send" to "did send") doesn't
+// count, so a cut can't flip a meaning.
+export function onlyCuts(draft: string, rewrite: string): boolean {
+  const flat = (t: string) => ` ${t.toLowerCase().replace(/[’‘]/g, "'").replace(/[^a-z0-9' ]+/g, " ").replace(/\s+/g, " ").trim()} `;
+  const whole = flat(draft);
+  const parts = (rewrite.match(/[^.!?\n]+/g) ?? []).map(flat).filter((p) => p.trim().length > 0);
+  return parts.length > 0 && flat(rewrite).length < whole.length && parts.every((p) => whole.includes(p));
+}
+
 // Last resort: drop the sentences that carry an unsupported claim.
 export function stripUnsupported(draft: string, failed: GateCheck[]): string {
   const sentences = draft.match(/[^.!?\n]+[.!?]*\s*/g) ?? [draft];
@@ -794,7 +811,13 @@ export async function groundReply(
       rewritten = await redraft(draft, effectiveFailed1, rf, src);
       if (rewritten) {
         rewritten = cleanCoMessage(rewritten);
-        second = await check(rewritten, rf, src);
+        // A rewrite that only cut words from the checked draft can't add a
+        // claim, so it skips the second model read (2026-09-26: re-checking
+        // "Still just Mahjong After Dark from what I sent earlier." after the
+        // redraft dropped a clause cost ~5s of a 15.7s check).
+        second = onlyCuts(draft, rewritten)
+          ? { checks: [...codeChecks(rewritten, rf, src), { name: "claim_read", pass: true, reason: "the rewrite only cut words from the checked draft" }], modelOk: true, ms: 0 }
+          : await check(rewritten, rf, src);
       }
     } catch (err: any) {
       console.error("replyGrounding: redraft failed (non-fatal, stripping instead):", err?.message ?? err);

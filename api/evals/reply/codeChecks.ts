@@ -12,7 +12,7 @@ import { isBrowseAsk, parseAskWindow, withinWindow } from "../../src/services/as
 import { renderMatchLead } from "../../src/services/messageFormat.js";
 import { closingReaction } from "../../src/services/conversationClose.js";
 import "dotenv/config";
-import { addFact, baseReplyFacts, codeChecks, countOf, renderReplyFacts, needsClaimCheck, pairSentLinks, predictionMatch, stripUnsupported } from "../../src/harness/replyGrounding.js";
+import { addFact, baseReplyFacts, codeChecks, countOf, onlyCuts, renderReplyFacts, needsClaimCheck, pairSentLinks, predictionMatch, stripUnsupported } from "../../src/harness/replyGrounding.js";
 import { isLeakedMetaCommentary, webhookSecretMatches } from "../../src/services/sendblue.js";
 import { coAskedQuestion } from "../../src/services/conversationClose.js";
 
@@ -431,6 +431,10 @@ onboardingCaseCases.push(
   [/p\.em\?\.rightKind === true && !p\.em\?\.outsideTimeFrame/.test(readFileSync(new URL("../../src/routes/sendblue.ts", import.meta.url), "utf8")) && /"outsideTimeFrame": true or false/.test(readFileSync(new URL("../../src/services/eventDetails.ts", import.meta.url), "utf8")), "search: a near-miss outside the dates asked is named, never sent"],
   [/const retry = await redraft\(draft, \[\.\.\.effectiveFailed1, \.\.\.secondFailed\], rf, src, rewritten\);/.test(readFileSync(new URL("../../src/harness/replyGrounding.ts", import.meta.url), "utf8")), "grounding: a second, answer-first rewrite before stripping"],
   [(readFileSync(new URL("../../src/harness/replyGrounding.ts", import.meta.url), "utf8").match(/abortSignal: AbortSignal\.timeout\(GROUNDING_CALL_TIMEOUT_MS\)/g) ?? []).length === 2, "grounding: the check and the rewrite can't stall a reply"],
+  [onlyCuts("Still just Mahjong After Dark from what I sent earlier, nothing new has turned up since.", "Still just Mahjong After Dark from what I sent earlier."), "grounding: a rewrite that only drops a clause skips the second read"],
+  [!onlyCuts("I did not send it yet.", "I did send it."), "grounding: dropping a word from the middle of a sentence still gets re-checked"],
+  [!onlyCuts("Nothing new on my end.", "Nothing new, but I found a rooftop party Saturday."), "grounding: a rewrite that adds anything still gets re-checked"],
+  [!onlyCuts("Hey. What's up?", "Hey. What's up?"), "grounding: an unchanged rewrite isn't treated as a cut"],
   [needsClaimCheck("That's on my radar now."), "'on my radar' gets checked"],
   [needsClaimCheck("I save everything you tell me."), "a present-tense claim about what Co does gets checked"],
   [!needsClaimCheck("That sounds hard. What's been the toughest part?"), "a plain conversational reply still skips the check"],

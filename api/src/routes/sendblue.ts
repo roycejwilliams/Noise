@@ -65,7 +65,7 @@ import { resolveNetworkTeaseReply, resolveNetworkIntroReply } from "../services/
 import { NO_ROUTE, decideActions, gatherOpenItems, routeMessage, type RouterOutput } from "../services/messageRouter.js";
 import { recordDecision } from "../harness/core.js";
 import { routerGateChecks } from "../harness/routerChecks.js";
-import { addEventFacts, addFact, addInstruction, addOngoingSearchFacts, countOf, gatherReplyFacts, recordSearchNote } from "../harness/replyGrounding.js";
+import { addEventFacts, addFact, addInstruction, addOngoingSearchFacts, countOf, FRESH_SEARCH_INSTRUCTION, gatherReplyFacts, recordSearchNote } from "../harness/replyGrounding.js";
 import { runConversationReplyAgent, filterRelevantMemories, CALL_OFFER_EXPIRY_DAYS } from "../agent/conversationReply.js";
 import { triggerCallForUser } from "../services/callTrigger.js";
 import sendblue, { blockSender, cleanCoMessage, markRead, sendReaction, webhookSecretMatches } from "../services/sendblue.js";
@@ -1418,6 +1418,7 @@ export function sendblueRouter(io: Server): Router {
         const replyFacts = await gatherReplyFacts(user.id, {
           pendingDescriptions: openItems.filter((i) => i.id !== resolvedItem?.item.id).map((i) => i.description),
         });
+        if (decision.wantsRecommendation && hasText) addInstruction(replyFacts, FRESH_SEARCH_INSTRUCTION);
         const factsMs = Date.now() - factsStarted;
         // Early warning (2026-09-25): a fast Jev read of whether they're
         // asking about another person's private details or asking Co to
