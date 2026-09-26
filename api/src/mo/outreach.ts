@@ -262,7 +262,7 @@ export async function runMoOutreach(now = new Date()): Promise<void> {
   // Joined: their code was used. Usually caught the moment it's redeemed
   // (services/inviteCodes.ts); this is the backup. Either way the team hears.
   const { rows: joined } = await pool.query(
-    `UPDATE mo_prospects sp SET status = 'joined', joined_at = NOW(), updated_at = NOW() FROM invite_codes ic
+    `UPDATE mo_prospects sp SET status = 'joined', joined_at = NOW(), joined_user_id = ic.used_by, updated_at = NOW() FROM invite_codes ic
      WHERE ic.code = sp.invite_code AND ic.used_by IS NOT NULL AND sp.status <> 'joined' RETURNING sp.*`,
   );
   const { tellTeamAboutJoins, isMoPaused } = await import("./team.js");
@@ -376,6 +376,11 @@ export async function runMoInbox(): Promise<void> {
 // then Claude), then act. A no ends it, a yes gets the invite, anything
 // else goes to a free approver. `send` answers on the channel it came in on.
 export async function handleProspectReply(p: any, text: string, send: (msg: string) => Promise<unknown>): Promise<string> {
+  // Their own words, kept so Co can pick up from them if they join
+  // (services/extensions.ts handoff). Only ever shown in their own thread.
+  await pool
+    .query(`UPDATE mo_prospects SET their_words = (their_words || jsonb_build_array(jsonb_build_object('at', NOW(), 'text', $2::text))) WHERE id = $1`, [p.id, text.slice(0, 500)])
+    .catch(() => {});
   const kind = p.status === "invited" && !clearStop(text) ? "question" : await classifyReply(text);
   let action: string = kind;
   try {

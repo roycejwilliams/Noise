@@ -108,7 +108,7 @@ export async function redeemInviteCodeIn(text: string, userId: string): Promise<
     if (r.ok) {
       // Someone Mo found just joined: Mo tells the team (mo/team.ts).
       import("../mo/team.js")
-        .then((m) => m.noteProspectJoined(candidate))
+        .then((m) => m.noteProspectJoined(candidate, userId))
         .catch((err: any) => console.error("inviteCodes: Mo join note failed (non-fatal):", err?.message ?? err));
       return r;
     }

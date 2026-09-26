@@ -27,7 +27,7 @@ import { IDENTITY_RULE, stripUngroundedIdentity } from "../services/identityGuar
 import { claimJoinNotice, invitesLeftFor, inviterFirstName, releaseJoinNotice } from "../services/invites.js";
 import { decideInviteJoinedGate } from "../services/inviteJoinGate.js";
 import { handlePhoneChange } from "../services/phoneChange.js";
-import { handleMoReply } from "../mo/review.js";
+import { handleTeamText } from "../services/extensions.js";
 import { describeImage } from "../services/imageRead.js";
 import { CALL_OFFER, GATE_ASK, INVITE_JOINED, WELCOME, WELCOME_INVITED, WRONG_CODE, pickLine } from "../services/onboardingLines.js";
 import { claimTextLogin } from "../services/textLogin.js";
@@ -831,22 +831,23 @@ export function sendblueRouter(io: Server): Router {
           }
         }
 
-        // Mo approvals, in plain words (src/mo/review.ts): only for
-        // approvers, and only when the text answers what Mo asked them.
-        // Anything else falls through to a normal reply. Not logged as
-        // conversation, so it never reaches their own threads.
+        // Texts for an extension (services/extensions.ts), like Mo's team
+        // (src/mo/): only from teammates, and only when the extension reads
+        // the text as meant for it. Anything else falls through to a normal
+        // reply. Not logged as conversation, so it never reaches their own
+        // threads.
         if (hasText && user.identity_captured) {
-          const moReply = await handleMoReply(user.id, content).catch((err: any) => {
-            console.error("sendblue: mo reply failed:", err?.message ?? err);
+          const ext = await handleTeamText(user.id, content).catch((err: any) => {
+            console.error("sendblue: extension reply failed:", err?.message ?? err);
             return null;
           });
-          if (moReply !== null) {
-            if (moReply) {
-              await sendblue.messages.send({ number, content: moReply, from_number: process.env.SENDBLUE_PHONE_NUMBER! }).catch((err: any) =>
-                console.error("sendblue: mo reply send failed:", err?.message ?? err),
+          if (ext !== null) {
+            if (ext.reply) {
+              await sendblue.messages.send({ number, content: ext.reply, from_number: process.env.SENDBLUE_PHONE_NUMBER! }).catch((err: any) =>
+                console.error(`sendblue: ${ext.extension} reply send failed:`, err?.message ?? err),
               );
             }
-            return res.status(200).send({ received: true, action: "mo_reply" });
+            return res.status(200).send({ received: true, action: `${ext.extension}_reply` });
           }
         }
 

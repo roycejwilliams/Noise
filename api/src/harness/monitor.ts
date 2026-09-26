@@ -11,6 +11,7 @@
 // around them, for turning into eval cases (scripts/weeklyReview.ts writes
 // them locally; the cron emails the summary).
 import { ABILITIES } from "../services/capabilities.js";
+import { EXTENSIONS } from "../services/extensions.js";
 import { Resend } from "resend";
 import pool from "../db/db.js";
 import { ALLOW_REAL_SENDS } from "../otpActions.js";
@@ -72,7 +73,7 @@ export const SIGNALS: Signal[] = [
   { key: "tier3_searched_found_nothing", label: "Tier 3 (X) was searched but nothing ended up offered", bad: `decision = 'recommendation.search' AND proposal->'scope'->>'xQuery' IS NOT NULL AND (outcome = 'skip' OR NOT EXISTS (SELECT 1 FROM jsonb_array_elements(COALESCE(proposal->'matches', '[]'::jsonb)) e WHERE e->>'tier' = '3'))`, total: `decision = 'recommendation.search' AND proposal->'scope'->>'xQuery' IS NOT NULL`, floor: 0.6, minCount: 3 },
   // Drift in Co's own choices (2026-09-25, toolGuard.ts): how often a tool
   // it chose didn't actually happen, and how often it hit a hard limit.
-  { key: "tool_not_done", label: "Tools Co chose that didn't go through", bad: `decision LIKE 'tool.%' AND action = 'not_done'`, total: `decision LIKE 'tool.%'`, floor: 0.2, minCount: 3 },
+  { key: "tool_not_done", label: "Tools Co (or an extension) chose that didn't go through", bad: `decision LIKE 'tool.%' AND action = 'not_done'`, total: `decision LIKE 'tool.%'`, floor: 0.2, minCount: 3 },
   { key: "tool_limited", label: "Tool calls refused by a limit or missing yes", bad: `decision LIKE 'tool.%' AND action IN ('limited', 'needs_yes')`, total: `decision LIKE 'tool.%'`, floor: 0.25, minCount: 3 },
   // How often each tool is used per reply, so a sudden jump in any one shows.
   ...ABILITIES.filter((a) => a.tool && !["sendReply", "markTopicAsked"].includes(a.tool)).map((a) => ({
@@ -83,6 +84,18 @@ export const SIGNALS: Signal[] = [
     floor: 0.35,
     minCount: 3,
   })),
+  // The same for each extension's tools (services/extensions.ts), per turn
+  // it took with the team (logged as <id>.teamTurn).
+  ...EXTENSIONS.flatMap((e) =>
+    e.abilities.filter((a) => a.tool).map((a) => ({
+      key: `tool_use_${a.tool}`,
+      label: `${e.name} turns that used ${a.tool}`,
+      bad: `decision = 'tool.${a.tool}'`,
+      total: `decision = '${e.id}.teamTurn'`,
+      floor: 0.5,
+      minCount: 3,
+    })),
+  ),
 ];
 
 export type SignalReading = { signal: Signal; recentBad: number; recentTotal: number; recentRate: number; baselineRate: number };

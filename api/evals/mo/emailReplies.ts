@@ -91,7 +91,7 @@ for (const [name, file] of [["api", "src/server.ts"], ["co-test", "../co-test/sr
   check("the chosen opening shapes the DM and the email", OPENER_IDS.every((o) => (draftPrompt({ ...base, opener: o }).split(OPENERS[o]).length - 1) === 2));
   check("the short DM keeps its shape and the new role", /I extend invitations to Co[^"]*Want to know why\?/.test(draftPrompt({ ...base, style: "curious", opener: "rooms" })));
   const find = src("src/mo/find.ts");
-  check("openings rotate evenly and are stored", /async function nextOpener\(\)/.test(find) && (find.match(/, opener\)\n/g) ?? []).length === 2);
+  check("openings rotate evenly and are stored", /async function nextOpener\(\)/.test(find) && (find.match(/, opener, invited_for\)\n/g) ?? []).length === 2);
   const draft = src("src/mo/draft.ts");
   check("the fact check knows their name and the next gathering", /\{ name: i\.name, handle: i\.handle, event: i\.event \}\)/.test(draft));
 }

@@ -33,9 +33,7 @@ import { companionPayloadFor } from "../harness/memberThreads.js";
 import { recordDecision } from "../harness/core.js";
 import { runWeeklyReflections } from "../harness/memberReflection.js";
 import { runMembershipLapse } from "../services/membershipLapse.js";
-import { runMoFind } from "../mo/find.js";
-import { sendMoDigest } from "../mo/review.js";
-import { runMoInbox, runMoOutreach, moEnabled } from "../mo/outreach.js";
+import { extensionJobs } from "../services/extensions.js";
 
 // Bounded-concurrency worker pool (Royce, 2026-08-30) — the event surfacing
 // sweep now runs for every open ask daily (see below), and a plain
@@ -726,25 +724,19 @@ export function registerJobs(io: Server) {
     runWeeklyReflections().catch((err: any) => console.error("weekly reflection cron error:", err?.message ?? err));
   }, { timezone: "America/Los_Angeles" });
 
-  // Mo (2026-09-22, src/mo/). Off unless MO_ENABLED=true. Finds
-  // people weekly (Monday 9am Pacific), texts approvers the new ones daily,
-  // and only acts on approved prospects (hourly, daytime) and on replies in
-  // Co's X DMs (every 15 minutes). Sending waits on Co's X keys and the
-  // outreach email settings; without them it's shortlist-only.
-  if (moEnabled()) {
-    cron.schedule("0 9 * * 1", () => {
-      runMoFind().catch((err: any) => console.error("mo find cron error:", err?.message ?? err));
-    }, { timezone: "America/Los_Angeles" });
-    cron.schedule("30 9 * * *", () => {
-      sendMoDigest().catch((err: any) => console.error("mo digest cron error:", err?.message ?? err));
-    }, { timezone: "America/Los_Angeles" });
-    cron.schedule("20 * * * *", () => {
-      runMoOutreach().catch((err: any) => console.error("mo outreach cron error:", err?.message ?? err));
-    });
-    cron.schedule("7,22,37,52 * * * *", () => {
-      runMoInbox().catch((err: any) => console.error("mo inbox cron error:", err?.message ?? err));
-    });
-  }
+  // Extensions' schedules (services/extensions.ts), each only while that
+  // extension is enabled. Mo (src/mo/, off unless MO_ENABLED=true) finds
+  // people weekly, brings approvers the next person daily, and acts on
+  // approved prospects and replies in Co's X DMs.
+  extensionJobs()
+    .then((jobs) => {
+      for (const job of jobs) {
+        cron.schedule(job.cron, () => {
+          job.run().catch((err: any) => console.error(`${job.name} cron error:`, err?.message ?? err));
+        }, job.timezone ? { timezone: job.timezone } : undefined);
+      }
+    })
+    .catch((err: any) => console.error("extension jobs failed to register:", err?.message ?? err));
 
   // Members Co knows nothing about (2026-09-22, services/membershipLapse.ts):
   // once a day; each step still waits for the proactive harness to send it.

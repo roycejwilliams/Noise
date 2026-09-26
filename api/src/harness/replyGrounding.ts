@@ -21,6 +21,7 @@ import { capabilitySheet } from "../services/capabilities.js";
 import { switchedOff } from "../services/abilitySwitches.js";
 import { textingStyleFor } from "../services/textingStyle.js";
 import { tasteSummary } from "../services/outcomes.js";
+import { handoffFor } from "../services/extensions.js";
 import { sourceOf } from "../services/messageFormat.js";
 import { getPersonSnapshot, renderSnapshot } from "./personSnapshot.js";
 import { anthropic } from "@ai-sdk/anthropic";
@@ -106,6 +107,11 @@ export async function gatherReplyFacts(
   // How they've told Co they like to be texted (services/textingStyle.ts).
   const style = await textingStyleFor(userId).catch(() => [] as string[]);
   if (style.length) addInstruction(rf, `How they've told you they like to be texted, follow it: ${style.join("; ")}.`);
+  // A member an extension brought in (Mo's invitations): what it knew, to
+  // ask about rather than state (services/extensions.ts, mo/handoff.ts).
+  const handoff = await handoffFor(userId).catch(() => ({ known: [] as string[], instructions: [] as string[] }));
+  for (const k of handoff.known) addFact(rf, "known", k);
+  for (const line of handoff.instructions) addInstruction(rf, line);
   // Abilities switched off right now (services/abilitySwitches.ts).
   for (const id of (await switchedOff().catch(() => new Map<string, string>())).keys()) {
     addFact(rf, "capability", `Co's ${id.replace(/_/g, " ")} ability is switched off right now. If it comes up, say it isn't available at the moment.`);

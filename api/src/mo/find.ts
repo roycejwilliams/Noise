@@ -68,8 +68,16 @@ async function planQueries(w: Wants): Promise<Queries> {
   // What Co says the network is short on, in general terms, and what the
   // team asked Mo to look for (mo/team.ts). Members' own asks only feed the
   // leak check below, never the search plan.
-  const { networkGaps, activeFocus } = await import("./team.js");
-  const [gaps, focus] = await Promise.all([networkGaps().catch(() => []), activeFocus().catch(() => [])]);
+  // Who the next Co event's guests would most want to meet comes first
+  // (mo/team.ts roomNeeds, 2026-09-26), then what worked before (mo/learn.ts).
+  const { networkGaps, activeFocus, roomNeeds } = await import("./team.js");
+  const { moLessons } = await import("./learn.js");
+  const [gaps, focus, room, lessons] = await Promise.all([
+    networkGaps().catch(() => []),
+    activeFocus().catch(() => []),
+    roomNeeds().catch(() => null),
+    moLessons().catch(() => [] as string[]),
+  ]);
   const { text } = await generateText({
     model: anthropic(MODELS.haiku),
     experimental_telemetry: { isEnabled: true, functionId: "mo.planQueries" },
@@ -77,7 +85,9 @@ async function planQueries(w: Wants): Promise<Queries> {
 
 What the network is short on right now (from Co, general terms):
 ${gaps.map((g) => `- ${g.gap} (${g.members} members)`).join("\n") || "- (nothing open; use founders, designers and engineers building early-stage products)"}
+${room ? `\nWho the guests already coming to ${room.event} would most want to meet (put these ahead of the network's gaps):\n${room.gaps.map((g) => `- ${g.gap} (${g.members})`).join("\n")}\n` : ""}
 ${focus.length ? `\nThe team asked you to look for (put these first):\n${focus.map((f) => `- ${f}`).join("\n")}\n` : ""}
+${lessons.length ? `\nWhat's worked with people you invited before (lean this way):\n${lessons.map((l) => `- ${l}`).join("\n")}\n` : ""}
 ${w.event ? `\nNext Co event: ${w.event}` : ""}
 
 Write 3 X recent-search queries that find people posting about doing these things themselves in ${MO.city} (use X operators, e.g. ("building" OR "shipping") ("SF" OR "San Francisco") design), 1 web search query for public LinkedIn profiles starting with site:linkedin.com/in, and the 3 themes (a few words each) the searches are for.
@@ -114,6 +124,8 @@ type Judged = { index: number; fit: boolean; reason: string; quote: string; inCi
 
 export async function judge(posts: MoPost[], themes: string[], event: string | null): Promise<Judged[]> {
   if (!posts.length) return [];
+  const { moLessons } = await import("./learn.js");
+  const lessons = await moLessons().catch(() => [] as string[]);
   const { text } = await generateText({
     model: anthropic(MODELS.sonnet),
     providerOptions: { anthropic: { effort: "low" } },
@@ -122,6 +134,7 @@ export async function judge(posts: MoPost[], themes: string[], event: string | n
 
 What the club is looking for: ${themes.join("; ") || "founders, designers, engineers building early products"}
 ${event ? `Next Co event: ${event}` : ""}
+${lessons.length ? `What's predicted people taking to the club before: ${lessons.join("; ")}` : ""}
 
 Posts (one per person):
 ${posts.map((p, i) => `[${i}] @${p.author.username} (${p.author.name}; location: ${p.author.location ?? "none"}; bio: ${(p.author.description ?? "").slice(0, 160)})\n${p.text.slice(0, 500)}`).join("\n\n")}
@@ -227,9 +240,9 @@ export async function runMoFind(): Promise<{ shortlisted: number }> {
       continue;
     }
     await pool.query(
-      `INSERT INTO mo_prospects (source, x_user_id, x_handle, name, bio, location, post_id, post_url, post_text, reason, evidence_quote, draft_reply, draft_dm, draft_email_subject, draft_email_body, dm_style, draft_why, opener)
-       VALUES ('x', $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17) ON CONFLICT DO NOTHING`,
-      [p.author.id, p.author.username, p.author.name, p.author.description, p.author.location, p.id, p.url, p.text, j.reason, j.quote, drafts.reply, drafts.dm, drafts.emailSubject, drafts.emailBody, style, drafts.why, opener],
+      `INSERT INTO mo_prospects (source, x_user_id, x_handle, name, bio, location, post_id, post_url, post_text, reason, evidence_quote, draft_reply, draft_dm, draft_email_subject, draft_email_body, dm_style, draft_why, opener, invited_for)
+       VALUES ('x', $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18) ON CONFLICT DO NOTHING`,
+      [p.author.id, p.author.username, p.author.name, p.author.description, p.author.location, p.id, p.url, p.text, j.reason, j.quote, drafts.reply, drafts.dm, drafts.emailSubject, drafts.emailBody, style, drafts.why, opener, w.event],
     );
     shortlisted++;
   }
@@ -257,9 +270,9 @@ export async function runMoFind(): Promise<{ shortlisted: number }> {
         // both, so a later redraft (an approver's edit) needs both too
         // (2026-09-24: "Build Bar" came from the snippet and a redraft was
         // rejected as inventing it).
-        `INSERT INTO mo_prospects (source, name, linkedin_url, headline, post_text, reason, evidence_quote, draft_dm, draft_email_subject, draft_email_body, channel, dm_style, draft_why, opener)
-         VALUES ('linkedin', $1, $2, $3, $11, $4, $5, $6, $7, $8, NULL, $9, $10, $12) ON CONFLICT DO NOTHING`,
-        [li.name, li.url, li.headline, li.reason, li.quote, drafts.dm, drafts.emailSubject, drafts.emailBody, style, drafts.why, shown, opener],
+        `INSERT INTO mo_prospects (source, name, linkedin_url, headline, post_text, reason, evidence_quote, draft_dm, draft_email_subject, draft_email_body, channel, dm_style, draft_why, opener, invited_for)
+         VALUES ('linkedin', $1, $2, $3, $11, $4, $5, $6, $7, $8, NULL, $9, $10, $12, $13) ON CONFLICT DO NOTHING`,
+        [li.name, li.url, li.headline, li.reason, li.quote, drafts.dm, drafts.emailSubject, drafts.emailBody, style, drafts.why, shown, opener, w.event],
       );
       shortlisted++;
     }

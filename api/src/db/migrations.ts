@@ -1501,6 +1501,23 @@ export async function runMigrations(): Promise<void> {
   await pool
     .query(`ALTER TABLE mo_prospects ADD COLUMN IF NOT EXISTS opener TEXT`)
     .catch((err: Error) => console.error("mo_prospects.opener migration failed:", err));
+  // Mo as an extension of Co (2026-09-26): who a prospect became once they
+  // joined, what they said to Mo before joining (their own words), and the
+  // event they were invited for, so Co's first conversations don't start
+  // cold (services/extensions.ts handoff).
+  await pool
+    .query(
+      `ALTER TABLE mo_prospects ADD COLUMN IF NOT EXISTS joined_user_id UUID REFERENCES users(id) ON DELETE SET NULL,
+         ADD COLUMN IF NOT EXISTS their_words JSONB NOT NULL DEFAULT '[]',
+         ADD COLUMN IF NOT EXISTS invited_for TEXT`,
+    )
+    .then(() =>
+      pool.query(
+        `UPDATE mo_prospects sp SET joined_user_id = ic.used_by FROM invite_codes ic
+         WHERE sp.invite_code = ic.code AND sp.joined_user_id IS NULL AND ic.used_by IS NOT NULL`,
+      ),
+    )
+    .catch((err: Error) => console.error("mo_prospects handoff migration failed:", err));
   await pool
     .query(`ALTER TABLE mo_prospects ADD COLUMN IF NOT EXISTS last_email_message_id TEXT`)
     .catch((err: Error) => console.error("mo_prospects.last_email_message_id migration failed:", err));

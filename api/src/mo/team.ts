@@ -1,10 +1,11 @@
 // Mo as a teammate (Royce, 2026-09-24: "Could we tag Mo in conversations?
 // How would the relationship between Co & Mo work?" then "build all three").
 //
-// 1. Tagging: Royce and Jacqueline (users.mo_approver) text Co's number
-//    "Mo, ..." and Mo answers: where things stand, how a named person is
-//    going, "find me more X" (steers the next search), pause / back on.
-//    From anyone else "Mo" is just a word and Co answers as usual.
+// 1. Talking to Mo: Royce and Jacqueline (users.mo_approver) text Co's
+//    number and Mo answers, in plain words, whatever they ask of it: where
+//    things stand, how a named person is going, a steer for the next search,
+//    pause / back on (mo/teamAgent.ts). From anyone else "Mo" is just a word
+//    and Co answers as usual.
 // 2. Joins: the moment someone Mo found uses their invite, Mo tells the team.
 //    From then on they're Co's.
 // 3. Gaps: Co tells Mo what the network is short on, in general terms only
@@ -19,44 +20,8 @@ import { parseModelJson } from "../services/modelJson.js";
 import { recordDecision } from "../harness/core.js";
 import { MO_RULES } from "./moVoice.js";
 
-// ------------------------------------------------------------ tagging (pure)
-
-// "Mo, ...", "hey Mo ...", "@mo ...". Only ever checked for the team.
-export function addressedToMo(text: string): boolean {
-  return /^\s*(?:(?:hey|hi|yo|ok|okay|and)[\s,]+)?@?mo\b/i.test(text) || /(^|\s)@mo\b/i.test(text);
-}
-export function stripMo(text: string): string {
-  return text
-    .replace(/^\s*(?:(?:hey|hi|yo|ok|okay|and)[\s,]+)?@?mo\b[\s,:!.-]*/i, "")
-    .replace(/(^|\s)@mo\b[\s,:]*/i, " ")
-    .trim();
-}
-
-export type MoCommand =
-  | { kind: "help" }
-  | { kind: "pause" }
-  | { kind: "resume" }
-  | { kind: "status" }
-  | { kind: "focus"; text: string }
-  | { kind: "person"; query: string };
-
-// Null when it isn't a command (a plain yes/no to what Mo asked goes on to
-// the approval flow as before).
-export function parseMoCommand(body: string): MoCommand | null {
-  const t = body.trim().replace(/[.!?]+$/, "").trim();
-  if (/^(yes|yeah|yep|no|nope|nah|sure|ok|okay|sent|done|go|go ahead|do it|send it)\b/i.test(t) && t.split(/\s+/).length <= 4) return null;
-  if (/^(what can you do|what do you do|how do you work|help|what are you|who are you)\b/i.test(t)) return { kind: "help" };
-  if (/^(pause|hold off|stop( reaching out| for now)?|take a break|stand down)\b/i.test(t)) return { kind: "pause" };
-  if (/^(resume|unpause|back on|start (again|back up)|keep going|you can (start|go) again|go again)\b/i.test(t)) return { kind: "resume" };
-  const person = t.match(/^(?:how'?s|how is|how are|what happened (?:with|to)|any (?:news|word) (?:on|from)|update on|status (?:on|of)|where are we (?:with|on)|what about)\s+(.+)$/i);
-  if (person) return { kind: "person", query: person[1].trim() };
-  const focus = t.match(/^(?:(?:can you |could you |please )?(?:find|look for|search for|scout(?: for)?|go find|get me|bring me|i want)\s+(?:me\s+)?(?:some\s+|more\s+)?)(.{3,})$/i);
-  if (focus) return { kind: "focus", text: focus[1].trim() };
-  if (!t || /^(what did you find|what'?s new|anything( new)?|status|update|what'?s up|how'?s it going|what do you have|who do you have|report)\b/i.test(t)) return { kind: "status" };
-  return null;
-}
-
-// ------------------------------------------------------------ state
+// Mo understands the team in plain words (mo/teamAgent.ts, 2026-09-26):
+// what it can do is mo/abilities.ts, and these are the pieces its tools use.
 
 async function getSetting<T>(key: string): Promise<{ value: T; updatedAt: Date } | null> {
   const { rows } = await pool.query(`SELECT value, updated_at FROM mo_settings WHERE key = $1`, [key]).catch(() => ({ rows: [] as any[] }));
@@ -111,7 +76,7 @@ export function prospectStatusLine(p: any): string {
   }
 }
 
-async function findProspects(query: string): Promise<any[]> {
+export async function findProspects(query: string): Promise<any[]> {
   const q = query.replace(/^@/, "").replace(/[?.!,]+$/, "").trim();
   if (q.length < 2) return [];
   const { rows } = await pool.query(
@@ -131,11 +96,11 @@ export function joinText(p: any): string {
 
 // Called when an invite code is redeemed (services/inviteCodes.ts) and, as
 // a backup, from the outreach job. The status flip is the once-only guard.
-export async function noteProspectJoined(code: string): Promise<number> {
+export async function noteProspectJoined(code: string, userId: string | null = null): Promise<number> {
   const { rows } = await pool.query(
-    `UPDATE mo_prospects SET status = 'joined', joined_at = NOW(), updated_at = NOW()
+    `UPDATE mo_prospects SET status = 'joined', joined_at = NOW(), joined_user_id = COALESCE($2, joined_user_id), updated_at = NOW()
      WHERE invite_code = $1 AND status <> 'joined' RETURNING *`,
-    [code],
+    [code, userId],
   );
   await tellTeamAboutJoins(rows);
   return rows.length;
@@ -154,29 +119,92 @@ export async function tellTeamAboutJoins(rows: any[]): Promise<void> {
 export type Gap = { gap: string; members: number };
 
 // What the network is short on, in general terms. Built by Co from members'
-// open asks, and cut if a gap carries a member's name or 5+ of their words
-// in a row (the same leak rule as Mo's searches). Cached for a day.
+// open "find" asks (a "help" ask, like sponsors, isn't a kind of person to
+// invite), and cut if a gap carries a member's name or 5+ of their words in
+// a row (the same leak rule as Mo's searches). Cached for a day.
 export async function networkGaps(opts: { refresh?: boolean } = {}): Promise<Gap[]> {
   const cached = await getSetting<Gap[]>("gaps");
   if (!opts.refresh && cached && Date.now() - cached.updatedAt.getTime() < 24 * 3_600_000) return cached.value;
   const { rows } = await pool
     .query(
       `SELECT a.ask_text FROM ask_checkins a JOIN users u ON u.id = a.user_id
-       WHERE a.resolved_at IS NULL AND u.archived_at IS NULL AND a.created_at > NOW() - INTERVAL '45 days'
+       WHERE a.resolved_at IS NULL AND a.kind = 'find' AND u.archived_at IS NULL AND a.created_at > NOW() - INTERVAL '45 days'
        ORDER BY a.created_at DESC LIMIT 40`,
     )
     .catch(() => ({ rows: [] as any[] }));
   const asks = rows.map((r: any) => String(r.ask_text).slice(0, 200));
   if (!asks.length) return [];
+  const gaps = await groupIntoGaps(
+    asks,
+    `These are what members of a private social club are looking for right now, one per line:`,
+    `Group them into at most 3 gaps: the kinds of people the network is short on`,
+    "mo.networkGaps",
+  );
+  if (!gaps) return cached?.value ?? [];
+  await setSetting("gaps", gaps).catch(() => {});
+  return gaps;
+}
+
+// Who the next Co event needs (Royce, 2026-09-26: aim Mo at the room). From
+// the guests already on its list: what they're looking for, grouped into the
+// kinds of people they'd most want to meet there. General terms only, with
+// the same leak rule. Null when there's no Co event in the next 3 weeks or
+// no guest Co knows. Cached for 12 hours.
+export type RoomNeeds = { event: string; gaps: Gap[] };
+
+export async function roomNeeds(opts: { refresh?: boolean } = {}): Promise<RoomNeeds | null> {
+  const cached = await getSetting<RoomNeeds | null>("room");
+  if (!opts.refresh && cached && Date.now() - cached.updatedAt.getTime() < 12 * 3_600_000) return cached.value;
+  const { listCalendarEvents, getEventGuestList } = await import("../services/luma.js");
+  const { matchGuestsToUsers } = await import("../services/eventScoring.js");
+  const soon = Date.now() + 21 * 24 * 3_600_000;
+  const next = (await listCalendarEvents().catch(() => []))
+    .filter((e) => e.start_at && new Date(e.start_at).getTime() > Date.now() && new Date(e.start_at).getTime() < soon)
+    .sort((a, b) => (a.start_at < b.start_at ? -1 : 1))[0];
+  let value: RoomNeeds | null = null;
+  if (next) {
+    const guests = await getEventGuestList(next.api_id).catch(() => []);
+    const members = await matchGuestsToUsers(guests.filter((g) => g.approval_status !== "declined")).catch(() => []);
+    const ids = [...new Set(members.map((m) => m.user_id))];
+    const { rows } = ids.length
+      ? await pool
+          .query(
+            `SELECT a.ask_text FROM ask_checkins a WHERE a.user_id = ANY($1::uuid[]) AND a.resolved_at IS NULL AND a.kind = 'find' ORDER BY a.created_at DESC LIMIT 40`,
+            [ids],
+          )
+          .catch(() => ({ rows: [] as any[] }))
+      : { rows: [] as any[] };
+    const lines = [
+      ...rows.map((r: any) => String(r.ask_text).slice(0, 200)),
+      ...members.flatMap((m) => (m.goals ?? []).slice(0, 2)).map((g) => `goal: ${String(g).slice(0, 160)}`),
+    ];
+    const when = DateTime.fromISO(String(next.start_at)).setZone("America/Los_Angeles").toFormat("cccc, LLLL d");
+    const gaps = lines.length
+      ? await groupIntoGaps(
+          lines,
+          `These are what the guests already coming to a private social club's evening are looking for, one per line:`,
+          `Group them into at most 3 kinds of people these guests would most want to meet in that room`,
+          "mo.roomNeeds",
+        )
+      : [];
+    if (gaps?.length) value = { event: `${next.name} on ${when}`, gaps };
+  }
+  await setSetting("room", value).catch(() => {});
+  return value;
+}
+
+// Lines in, at most three general gaps out, with the leak rule applied.
+// Null when the read failed.
+async function groupIntoGaps(lines: string[], intro: string, ask: string, functionId: string): Promise<Gap[] | null> {
   let gaps: Gap[] = [];
   try {
     const { text } = await generateText({
       model: anthropic(MODELS.haiku),
-      experimental_telemetry: { isEnabled: true, functionId: "mo.networkGaps" },
-      prompt: `These are what members of a private social club are looking for right now, one per line:
-${asks.map((a) => `- ${a}`).join("\n")}
+      experimental_telemetry: { isEnabled: true, functionId },
+      prompt: `${intro}
+${lines.map((a) => `- ${a}`).join("\n")}
 
-Group them into at most 3 gaps: the kinds of people the network is short on, each a few general words ("technical cofounders", "designers who host events"), with how many of the lines above point to it. No names, no companies, never more than three words in a row from any line.
+${ask}, each a few general words ("technical cofounders", "designers who host events"), with how many of the lines above point to it. No names, no companies, never more than three words in a row from any line.
 
 Return ONLY JSON: {"gaps": [{"gap": "...", "members": 2}]}`,
     });
@@ -185,14 +213,12 @@ Return ONLY JSON: {"gaps": [{"gap": "...", "members": 2}]}`,
       .map((g) => ({ gap: g.gap.trim().slice(0, 80), members: Math.max(1, Math.round(Number(g.members))) }))
       .slice(0, 3);
   } catch {
-    return cached?.value ?? [];
+    return null;
   }
   const { queryLeaks } = await import("./find.js");
   const { rows: names } = await pool.query(`SELECT first_name, last_name FROM users WHERE archived_at IS NULL`).catch(() => ({ rows: [] as any[] }));
   const nameList = names.flatMap((r: any) => [r.first_name, r.last_name]).filter((n: any) => typeof n === "string" && n.trim().length >= 3).map((n: string) => n.trim().toLowerCase());
-  const safe = gaps.filter((g) => !queryLeaks(g.gap, asks, nameList));
-  await setSetting("gaps", safe).catch(() => {});
-  return safe;
+  return gaps.filter((g) => !queryLeaks(g.gap, lines, nameList));
 }
 
 export function gapsLine(gaps: Gap[]): string | null {
@@ -226,9 +252,14 @@ export async function moStatusText(approverFirst: string | null): Promise<string
   const waiting = n(["shortlisted"]);
   const moving = n(["approved", "warmed", "contacted", "question", "invited", "manual_pending"]);
   const joined = n(["joined"]);
+  const room = await roomNeeds().catch(() => null);
+  const { joinedOutcomes, outcomesLine } = await import("./learn.js");
+  const outcomes = await joinedOutcomes().catch(() => []);
   const parts = [
     `${MO_RULES.opener(approverFirst)} ${waiting ? `${waiting} ${waiting === 1 ? "person is" : "people are"} waiting on your yes` : "Nobody new waiting on you"}, ${moving} in progress, ${joined} joined so far.`,
     styleLine(styles as StyleResult[]),
+    outcomesLine(outcomes),
+    room ? `For ${room.event}, the guests would most want to meet ${room.gaps.map((g) => g.gap).join(", ")}, so they come first.` : null,
     gapsLine(gaps),
     focus.length ? `You asked me to look for: ${focus.join("; ")}.` : null,
     paused ? `I'm paused, so no new searches or outreach until you say "Mo, back on."` : sendingStatus(),
@@ -236,44 +267,12 @@ export async function moStatusText(approverFirst: string | null): Promise<string
   return parts.filter(Boolean).join(" ");
 }
 
-// ------------------------------------------------------------ commands
+// ------------------------------------------------------------ team asks
 
-// Mo's own description of what it does, for "Mo, what can you do?" and the
-// team update. Every line is something built.
-export function moCapabilitiesText(approverFirst: string | null): string {
-  // Short on purpose (Royce, 2026-09-24: "Mo explanations may be a little
-  // bit too long"). Every line is something built.
-  return [
-    `${MO_RULES.opener(approverFirst)} Here's how I work.`,
-    "",
-    `Mondays I search X and LinkedIn for people in SF who should be in Co, based on what Co says the network's short on.`,
-    `Mornings I bring you one person at a time. Answer yes, no, or what to change.`,
-    `On a yes I reach out as Mo, on Co's behalf. You never send anything.`,
-    `If someone asks a question, I bring it to you. When someone joins, I tell you.`,
-    "",
-    `Text "Mo," plus: "what did you find?", "how's Noor?", "find me designers", "pause" or "back on".`,
-  ].join("\n");
+export async function setPaused(paused: boolean, userId: string): Promise<void> {
+  await setSetting("paused", { paused, by: userId });
 }
 
-export async function runMoCommand(cmd: MoCommand, userId: string, approverFirst: string | null): Promise<string> {
-  let reply: string;
-  if (cmd.kind === "help") {
-    reply = moCapabilitiesText(approverFirst);
-  } else if (cmd.kind === "pause") {
-    await setSetting("paused", { paused: true, by: userId });
-    reply = `Paused. No new searches or outreach until you say "Mo, back on." If someone I already reached out to writes back, I'll still bring it to you.`;
-  } else if (cmd.kind === "resume") {
-    await setSetting("paused", { paused: false, by: userId });
-    reply = `Back on. I'll pick up where I left off.`;
-  } else if (cmd.kind === "focus") {
-    await pool.query(`INSERT INTO mo_focus (text, asked_by) VALUES ($1, $2)`, [cmd.text.slice(0, 200), userId]);
-    reply = `Got it, I'll look for ${cmd.text.replace(/^(for|some|more)\s+/i, "")} in my next search (Monday mornings).`;
-  } else if (cmd.kind === "person") {
-    const found = await findProspects(cmd.query);
-    reply = found.length ? found.map(prospectStatusLine).join(" ") : `I don't have anyone called ${cmd.query} on my list.`;
-  } else {
-    reply = await moStatusText(approverFirst);
-  }
-  await recordDecision({ layer: 5, decision: "mo.command", userId, outcome: "act", action: cmd.kind, proposal: cmd.kind === "focus" ? { focus: cmd.text } : cmd.kind === "person" ? { query: cmd.query } : {} }).catch(() => {});
-  return reply;
+export async function addFocus(text: string, userId: string): Promise<void> {
+  await pool.query(`INSERT INTO mo_focus (text, asked_by) VALUES ($1, $2)`, [text.slice(0, 200), userId]);
 }

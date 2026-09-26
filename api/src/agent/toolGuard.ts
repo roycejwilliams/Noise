@@ -10,11 +10,12 @@
 //     what actually happened, so the morning review can flag bad judgment
 //     and the hourly monitor can spot drift (harness/monitor.ts)
 // Limits and confirmation come from each ability's entry in
-// services/capabilities.ts.
+// services/capabilities.ts, or in an extension's own list (Mo's is
+// mo/abilities.ts), so every extension gets the same guards.
 import { z } from "zod";
 import pool from "../db/db.js";
 import { recordDecision } from "../harness/core.js";
-import { abilityForTool } from "../services/capabilities.js";
+import { abilityForTool, type Ability } from "../services/capabilities.js";
 import { isSwitchedOff } from "../services/abilitySwitches.js";
 
 // Replies and bookkeeping aren't choices worth logging one by one.
@@ -33,6 +34,8 @@ type GuardCtx = {
   resolvedContent: string;
   dryRun: boolean;
   notDone: (what: string) => void;
+  // Whose abilities these tools are. Co's registry by default.
+  abilityFor?: (tool: string) => Ability | undefined;
 };
 
 export type Receipt = "done" | "not_done" | "off" | "limited" | "needs_yes";
@@ -41,7 +44,7 @@ export function guardTools<T extends Record<string, any>>(tools: T, ctx: GuardCt
   const usedThisTurn = new Map<string, number>();
   for (const [name, t] of Object.entries(tools)) {
     if (UNGUARDED.has(name)) continue;
-    const ability = abilityForTool(name);
+    const ability = (ctx.abilityFor ?? abilityForTool)(name);
     if (!ability || typeof t.execute !== "function") continue;
     const limits = ability.limits ?? {};
 

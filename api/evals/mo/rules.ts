@@ -1,5 +1,5 @@
 // Model-free checks for Mo (src/mo/): the fit gates, the drafts,
-// approver commands, reply handling, the outreach clock, the do-not-contact
+// the team agent and Mo as an extension, reply handling, the outreach clock, the do-not-contact
 // list, OAuth signing, opt-out tokens, and what the team is told. No model,
 // no DB, no network.
 //
@@ -117,16 +117,16 @@ check("an unrelated text is none of these", !plainYes("what's on this weekend?")
 {
   const r = src("mo/review.ts");
   check("only approvers are ever asked or answered", /if \(!me\?\.mo_approver\) return null;/.test(r));
-  check("a text about something else goes to Co as usual", /if \(r\.intent !== "change"\) return null;/.test(r) && /if \(r\.intent !== "answer"\) return null;/.test(r));
-  check("an edit has to pass the same draft checks", /redraftOutreach\(p, r\.instruction!\)/.test(src("mo/review.ts")) && /checkMoDraft\("dm", dm, \{ dmMax: dmMaxFor\(input\.style\) \}\)/.test(src("mo/draft.ts")));
+  check("a text about something else goes to Co as usual", /const reply = passed && !says\.length \? null/.test(src("mo/teamAgent.ts")) && /notForMo: tool\(/.test(src("mo/teamAgent.ts")));
+  check("an edit has to pass the same draft checks", /redraftOutreach\(p, instruction\)/.test(src("mo/review.ts")) && /checkMoDraft\("dm", dm, \{ dmMax: dmMaxFor\(input\.style\) \}\)/.test(src("mo/draft.ts")));
   check("one open item per approver, cleared for everyone once handled", /WHERE mo_pending_no = \$1/.test(r));
   check("an item someone else already handled isn't acted on twice", /Someone already took care of that one\./.test(r));
   const route = src("routes/sendblue.ts");
-  check("approver answers aren't logged as conversation", /if \(moReply !== null\) \{/.test(route) && !/moReply[\s\S]{0,300}logTextExchange/.test(route));
+  check("approver answers aren't logged as conversation", /if \(ext !== null\) \{/.test(route) && !/ext\.reply[\s\S]{0,300}logTextExchange/.test(route));
   const noor = { name: "Noor Haddad", x_handle: "noorbuilds" };
   check("after Co has texted them, 'yes' alone isn't taken as Mo's answer", !namesThisItem("yes", noor));
   check("'yes to Noor' is", namesThisItem("yes to Noor", noor) && namesThisItem("Mo, yes", noor) && namesThisItem("skip @noorbuilds", noor));
-  check("that guard is in place", /if \(await coSpokeSince\(userId, me\.mo_pending_at\) && !namesThisItem\(text, p\)\) return null;/.test(r));
+  check("that guard is in place", /if \(pending && coSpoke && !namesThisItem\(text, pending\.p\)\) return null;/.test(r));
   check("no texts to approvers mention command syntax", !/"mo (yes|skip|edit|answer|sent)/i.test(r));
 }
 
@@ -206,7 +206,7 @@ check(
   check("email needs a signing secret and a postal address before it can send", /MO_POSTAL_ADDRESS && env\.API_URL && \(env\.MO_UNSUBSCRIBE_SECRET \|\| env\.JWT_SECRET\)/.test(o));
   check("an email address is used only if it's on their own page", /page && page\.toLowerCase\(\)\.includes\(r\.email\.toLowerCase\(\)\)/.test(o));
   const jobs = src("jobs/index.ts");
-  check("Mo is off unless MO_ENABLED is true", /if \(moEnabled\(\)\) \{\s*cron\.schedule\("0 9 \* \* 1"/.test(jobs));
+  check("Mo is off unless MO_ENABLED is true", /enabled: \(\) => moEnabled\(\)/.test(src("mo/extension.ts")) && /if \(!rt\?\.enabled\(\)\) continue;/.test(src("services/extensions.ts")) && /extensionJobs\(\)/.test(jobs));
   const x = src("mo/xApi.ts");
   check("keys are read from the environment, never written in code", !/(consumer|access)_?(key|secret|token)\s*[:=]\s*["'][A-Za-z0-9]{10,}/i.test(x));
 }
@@ -238,7 +238,7 @@ check(
   const moSrc = src("mo/review.ts");
   const moLines = [...moSrc.matchAll(/return `([^`]*)`/g)].map((m) => m[1]).concat(t, q, sendingStatus({ MO_ENABLED: "false" } as any));
   check("Mo never talks about itself in the third person", !moLines.some((l) => /\bMo (found|has|won't|will|is)\b/.test(l)));
-  check("Mo's texts to the team read as first person", /I'll leave \$\{name\} alone/.test(moSrc) && /I'll email them from Co if I can find a public address/.test(moSrc) && /^I'm switched off/.test(sendingStatus({ MO_ENABLED: "false" } as any)));
+  check("Mo's texts to the team read as first person", /I'll leave \$\{firstName\(p\)\} alone/.test(moSrc) && /I'll email them from Co if I can find a public address/.test(moSrc) && /^I'm switched off/.test(sendingStatus({ MO_ENABLED: "false" } as any)));
   const { ENTITIES } = await import("../../src/services/entities.js");
   check("Co and Mo are defined once, as separate entities", ENTITIES.co.name === "Co" && ENTITIES.mo.name === "Mo" && /the people it finds/.test(ENTITIES.mo.talksTo) && ENTITIES.mo.never.includes("text a member") && ENTITIES.co.never.some((n) => /mention Mo .* to a member/.test(n)));
   // Co knows what it can do, so "what can you do?" gets a complete, true
@@ -268,29 +268,17 @@ check(
 // ------------------------------------------------ Mo as a teammate (2026-09-24)
 {
   const T = await import("../../src/mo/team.js");
-  check("tag: 'Mo, ...' is for Mo", T.addressedToMo("Mo, what did you find?") && T.addressedToMo("hey mo how's Noor") && T.addressedToMo("@mo pause"));
-  check("tag: 'Mo' inside a sentence to Co isn't", !T.addressedToMo("tell me more about mochi") && !T.addressedToMo("I saw Monica today"));
-  const c = (t: string) => T.parseMoCommand(T.stripMo(t));
-  check("tag: status", c("Mo, what did you find?")?.kind === "status" && c("Mo")?.kind === "status");
-  check("tag: one person", JSON.stringify(c("Mo, how's Noor?")) === JSON.stringify({ kind: "person", query: "Noor" }));
-  check("tag: steer the next search", JSON.stringify(c("Mo, find me designers who host events")) === JSON.stringify({ kind: "focus", text: "designers who host events" }));
-  check("tag: pause and back on", c("Mo, pause")?.kind === "pause" && c("Mo, back on")?.kind === "resume");
-  check("tag: what can you do", c("Mo, what can you do?")?.kind === "help");
-  check("tag: a plain yes to what Mo asked isn't a command", c("Mo, yes") === null && c("mo no") === null);
   check("person: plain words for where they stand", T.prospectStatusLine({ name: "Noor Haddad", status: "invited" }) === "Noor Haddad said yes and has their invite, but hasn't joined yet.");
   check("joins: the team hears it in Mo's voice", T.joinText({ name: "Noor Haddad" }) === "It's Mo. Noor Haddad just joined with the invite I sent. They're Co's now.");
   check("gaps: general terms with counts", T.gapsLine([{ gap: "technical cofounders", members: 4 }, { gap: "designers who host events", members: 1 }]) === "The network's shortest on technical cofounders (4 members), designers who host events (1 member), so that's what I'm scouting for.");
   check("styles: which DM is landing", T.styleLine([{ style: "intro", reached: 4, yes: 1 }, { style: "curious", reached: 3, yes: 2 }]) === `So far 1 of 4 said yes to the full intro DM, and 2 of 3 said yes to the short "want to know why?" DM.`);
-  const help = T.moCapabilitiesText("Royce");
-  check("help: says it's Mo, short, and how to use it", help.startsWith("Hey Royce, it's Mo. Here's how I work.") && /"pause" or "back on"/.test(help) && help.length < 520);
-  check("help: says the team never sends anything", /You never send anything\./.test(help));
   const rv = src("mo/review.ts"), fd = src("mo/find.ts"), ot = src("mo/outreach.ts"), ic = src("services/inviteCodes.ts"), dr = src("mo/draft.ts");
-  check("wired: tags are handled before the approval flow", /if \(addressedToMo\(text\)\) \{\n\s+const cmd = parseMoCommand\(stripMo\(text\)\);/.test(rv));
+  check("wired: Mo reads the team's texts itself, no keyword parser", /runMoTeamTurn\(/.test(rv) && !/parseMoCommand|readAnswer/.test(rv + src("mo/team.ts")));
   check("wired: paused means no new reviews, but questions still come through", /if \(await isMoPaused\(\)\) return null;/.test(rv) && rv.indexOf("status = 'question'") < rv.indexOf("if (await isMoPaused()) return null;"));
   check("wired: paused means no searches and no outreach", /if \(await isMoPaused\(\)\) return \{ shortlisted: 0 \};/.test(fd) && /if \(await isMoPaused\(\)\) return;/.test(ot));
-  check("wired: a redeemed code tells Mo right away", /m\.noteProspectJoined\(candidate\)/.test(ic) && /await tellTeamAboutJoins\(joined\);/.test(ot));
+  check("wired: a redeemed code tells Mo right away", /m\.noteProspectJoined\(candidate, userId\)/.test(ic) && /await tellTeamAboutJoins\(joined\);/.test(ot));
   check("wired: searches use Co's gaps and the team's asks, not members' words", /What the network is short on right now \(from Co, general terms\)/.test(fd) && !/What members are looking for/.test(fd));
-  check("LinkedIn keeps what the result showed, so redrafts can be checked against it", /NULL, \$9, \$10, \$12\) ON CONFLICT DO NOTHING`,\n\s+\[li\.name, li\.url, li\.headline, li\.reason, li\.quote, drafts\.dm, drafts\.emailSubject, drafts\.emailBody, style, drafts\.why, shown, opener\]/.test(fd));
+  check("LinkedIn keeps what the result showed, so redrafts can be checked against it", /NULL, \$9, \$10, \$12, \$13\) ON CONFLICT DO NOTHING`,\n\s+\[li\.name, li\.url, li\.headline, li\.reason, li\.quote, drafts\.dm, drafts\.emailSubject, drafts\.emailBody, style, drafts\.why, shown, opener, w\.event\]/.test(fd));
   // The team never sends anything by hand (Royce, 2026-09-24).
   check("never asks the team to send anything", !/yours to send|note would come from you|send this note for me|Text me "sent"/.test(rv) && !/manual_pending' ORDER BY/.test(rv));
   check("a yes on a LinkedIn-only person means an email from Co, not a task for you", /only on LinkedIn, which I can't message, so I'll email them from Co/.test(rv));
@@ -299,6 +287,86 @@ check(
   const { MO_VOICE: V } = await import("../../src/mo/moVoice.js");
   check("Mo's definition: it sends everything itself", /You never ask the team to send, post, or forward anything for you/.test(V));
   check("wired: styles alternate and a yes to 'why?' gets the why", /const style = await nextDmStyle\(\);/.test(fd) && /p\.dm_style === "curious" && p\.draft_why \? `\$\{p\.draft_why\}/.test(ot) && /style === "curious"/.test(dr));
+}
+
+// ------------------------------------------------ Mo as an extension of Co (2026-09-26)
+{
+  const A = await import("../../src/mo/abilities.js");
+  const TA = await import("../../src/mo/teamAgent.js");
+  const H = await import("../../src/mo/handoff.js");
+  const L = await import("../../src/mo/learn.js");
+  const E = await import("../../src/services/extensions.js");
+  const { guardTools } = await import("../../src/agent/toolGuard.js");
+  const { setSwitchesForTest } = await import("../../src/services/abilitySwitches.js");
+  const { z } = await import("zod");
+  const ta = src("mo/teamAgent.ts");
+
+  // 1. Same frame as Co
+  const tools = [...ta.matchAll(/^\s{4}(mo[A-Z]\w+): tool\(/gm)].map((m) => m[1]);
+  check("every Mo tool has an entry in Mo's registry", tools.length === A.MO_ABILITIES.length && tools.every((t) => A.moAbilityForTool(t)));
+  check("tool descriptions come from the registry", tools.every((t) => ta.includes(`moToolUse("${t}")`)));
+  check("reaching out needs the approver's own yes", A.moAbilityForTool("moApprove")?.confirm === "affects_another_member");
+  const sheet = A.moCapabilitySheet().join(" ");
+  check("Mo knows its hard lines", /never name a member/.test(sheet) && /send everything myself/.test(sheet) && /never text members/.test(sheet));
+  check("Mo's tools go through Co's guard with Mo's registry", /abilityFor: moAbilityForTool/.test(ta));
+  check("an answer to a prospect is the approver's own words", /deps\.answer\(pending!\.p, input\.text\)/.test(ta));
+  {
+    let ran = 0;
+    const approveWith = (message: string, notes: string[] = []) =>
+      guardTools({ moApprove: { inputSchema: z.object({}), execute: async () => ((ran += 1), { ok: true }) } } as any, { userId: "u", resolvedContent: message, dryRun: true, notDone: (w) => notes.push(w), abilityFor: A.moAbilityForTool });
+    setSwitchesForTest({});
+    const notes: string[] = [];
+    const r1: any = await approveWith("hmm let me think", notes).moApprove.execute({ theirYes: "yes" }, {});
+    check("guard: no approval without their yes in the message", r1.ok === false && ran === 0 && notes.length === 1);
+    await approveWith("yes go for it").moApprove.execute({ theirYes: "yes go for it" }, {});
+    check("guard: runs on their yes", ran === 1);
+    setSwitchesForTest({ mo_approve: "testing" });
+    const r3: any = await approveWith("yes").moApprove.execute({ theirYes: "yes" }, {});
+    check("guard: a switched-off Mo ability doesn't run", r3.ok === false && ran === 1);
+    setSwitchesForTest({});
+  }
+  check("reply: carries what the tools said", TA.finalReply("On it. Co replies to Noor's post first.", ["On it. Co replies to Noor's post first."], "Royce") === "On it. Co replies to Noor's post first.");
+  check("reply: a paraphrase loses to the tools' own words", TA.finalReply("Done, I messaged Noor!", ["On it. Co replies to Noor's post first."], "Royce") === "On it. Co replies to Noor's post first.");
+  check("reply: the opener only once", TA.finalReply("Hey Royce, it's Mo. Hey Royce, it's Mo. 2 people are waiting on your yes.", ["Hey Royce, it's Mo. 2 people are waiting on your yes."], "Royce") === "Hey Royce, it's Mo. 2 people are waiting on your yes.");
+  check("reply: no em dashes", !TA.finalReply("Paused — nothing new goes out.", [], null).includes("—"));
+  const pl = TA.pendingLine({ kind: "review", p: { name: "Noor Haddad", source: "x", draft_dm: "Hi" } });
+  check("prompt: says who Mo is waiting on and which tool fits", /Noor Haddad/.test(pl) && /moApprove/.test(pl) && /moSkip/.test(pl));
+  check("prompt: a message for Co goes to Co", /notForMo/.test(TA.teamSystem({ approverFirst: "Royce", pending: null, coSpoke: false })));
+  check("prompt: after Co spoke, a short yes is probably Co's", /probably an answer to Co/.test(TA.teamSystem({ approverFirst: "Royce", pending: { kind: "review", p: { name: "Noor", source: "x" } }, coSpoke: true })));
+
+  // 2. Handoff
+  const h = H.handoffLine({ source: "x", evidence_quote: "shipping a climate data tool with two friends", bio: "builder", invited_for: "Rooftop evening on Friday, October 10", their_words: [{ text: "sounds great, what's the vibe?" }] });
+  check("handoff: what was public, their own words, and the event", !!h && h.includes("shipping a climate data tool") && h.includes("what's the vibe?") && h.includes("Rooftop evening"));
+  check("handoff: ask, don't state; never how or who", !!h && /as a question/.test(h) && /never as a fact/.test(h) && /Never say how you know it/.test(h) && /never mention anyone called Mo/.test(h));
+  check("handoff: nothing known, nothing said", H.handoffLine({ source: "x" }) === null);
+  const rg = src("harness/replyGrounding.ts");
+  check("handoff reaches Co as an instruction, never a citable fact", /for \(const line of handoff\.instructions\) addInstruction\(rf, line\);/.test(rg) && /for \(const k of handoff\.known\) addFact\(rf, "known", k\);/.test(rg));
+  check("handoff: the only plain fact is how they got in", H.HANDOFF_FACT === "They came in on one of the club's own invitations, not through a friend's invite.");
+  check("handoff: asked how they got in, Co says so plainly", !!h && /never pretend not to know/.test(h));
+  check("joins record who they became", /noteProspectJoined\(candidate, userId\)/.test(src("services/inviteCodes.ts")) && /joined_user_id = ic\.used_by/.test(src("mo/outreach.ts")));
+  check("a prospect's replies are kept in their own words", /their_words = \(their_words \|\| jsonb_build_array/.test(src("mo/outreach.ts")));
+
+  // 3. The room
+  const tm = src("mo/team.ts");
+  check("room: from the next Co event's guests, general terms, leak rule", /export async function roomNeeds/.test(tm) && /getEventGuestList/.test(tm) && /return gaps\.filter\(\(g\) => !queryLeaks\(g\.gap, lines, nameList\)\)/.test(tm));
+  check("room: guests' needs come ahead of the network's gaps", /put these ahead of the network's gaps/.test(src("mo/find.ts")));
+  check("gaps: only asks a search can meet (not sponsors)", /a\.resolved_at IS NULL AND a\.kind = 'find' AND u\.archived_at IS NULL/.test(tm));
+
+  // 4. Learning
+  check("learn: an event or an intro yes means they took to Co", L.tookToCo({ replies: 0, events: 1, introYes: 0, daysSinceJoin: 3 }) === "active" && L.tookToCo({ replies: 0, events: 0, introYes: 1, daysSinceJoin: 3 }) === "active");
+  check("learn: a week of near silence is quiet; less is early", L.tookToCo({ replies: 1, events: 0, introYes: 0, daysSinceJoin: 8 }) === "quiet" && L.tookToCo({ replies: 1, events: 0, introYes: 0, daysSinceJoin: 3 }) === "early");
+  check("learn: the team sees counts only", L.outcomesLine([{ took: "active" }, { took: "active" }, { took: "quiet" }]) === "Of the 3 who joined through me, 2 have really taken to Co, 1 went quiet.");
+  const fd2 = src("mo/find.ts");
+  check("learn: lessons shape the search plan and the judging", /What's worked with people you invited before/.test(fd2) && /What's predicted people taking to the club before/.test(fd2));
+  check("learn: lessons can't carry names", /lessons = lessons\.filter\(\(l\) => !queryLeaks\(l, source, nameList\)\)/.test(src("mo/learn.ts")));
+
+  // 5. Extensions
+  const mo = E.EXTENSIONS.find((e) => e.id === "mo");
+  check("extension: Mo is registered with its abilities and voice", !!mo && mo.abilities === A.MO_ABILITIES && mo.voiceFile === "mo/moVoice.ts");
+  const rt = mo ? await mo.load() : null;
+  check("extension: Mo plugs in team texts, handoff and its jobs", !!rt?.teamText && !!rt?.handoff && (rt?.jobs ?? []).map((j) => j.name).join(",") === "mo find,mo digest,mo outreach,mo inbox");
+  check("wired: texts, reply facts and jobs go through the registry", /handleTeamText\(user\.id, content\)/.test(src("routes/sendblue.ts")) && /extensionJobs\(\)/.test(src("jobs/index.ts")) && !/from "\.\.\/mo\//.test(src("jobs/index.ts") + src("routes/sendblue.ts")));
+  check("monitor: each extension tool has a drift signal", /EXTENSIONS\.flatMap/.test(src("harness/monitor.ts")));
 }
 
 console.log(`mo rules: ${total - failed}/${total} passed`);
