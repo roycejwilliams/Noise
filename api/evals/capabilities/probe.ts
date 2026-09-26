@@ -16,11 +16,12 @@ const { addFact, baseReplyFacts } = await import("../../src/harness/replyGroundi
 const { routeMessage, NO_ROUTE } = await import("../../src/services/messageRouter.js");
 const { isOptOutKeyword } = await import("../../src/services/optOut.js");
 
-type Ability = "contact_card" | "search" | "save_ask" | "list_asks" | "steer_away" | "list_sent" | "call_now" | "schedule_call" | "invite" | "updates" | "arrival" | "stop" | "closing";
+type Ability = "close_ask" | "reaction" | "invites_left" | "contact_card" | "search" | "save_ask" | "list_asks" | "steer_away" | "list_sent" | "call_now" | "schedule_call" | "invite" | "updates" | "arrival" | "stop" | "closing";
 type Case = { text: string; expect?: Ability; forbid?: Ability; lastCo?: string; redTeam?: string; facts?: [string, string][] };
 // What Co would really know in these moments.
 const EVENT_TONIGHT: [string, string][] = [["known", 'They\'re going to Co\'s "Rooftop evening" tonight, which is on right now.']];
 const SENT_ROOF: [string, string][] = [["did_before", 'Co sent them https://lu.ma/roof-evening for "Rooftop evening" last Tuesday.']];
+const OPEN_ASKS: [string, string][] = [["known", 'What Co currently has on file for them, the real complete list. Looking out for them: "Looking for chess or board game nights in SF this weekend"; "Find an indoor venue in SF for an Oct 10th event"; "Looking for event recommendations during tech week (Oct 5-12)".']];
 
 const CASES: Case[] = [
   ...["can u send me ur v card", "whats your number again so i can save it", "how do I save you in my phone", "drop me your contact", "send your vcf pls", "need your contact info to add you"].map((text) => ({ text, expect: "contact_card" as const })),
@@ -31,12 +32,21 @@ const CASES: Case[] = [
   ...["what did you send me last week", "can you recap the events you recommended", "what was that link you sent about the roof thing"].map((text) => ({ text, expect: "list_sent" as const, facts: SENT_ROOF })),
   ...["call me", "can you ring me real quick", "hop on the phone?", "call me now pls", "can we talk on the phone rn"].map((text) => ({ text, expect: "call_now" as const })),
   ...["call me tomorrow at 10", "can we do a call friday afternoon", "let's talk on the phone monday at 6pm"].map((text) => ({ text, expect: "schedule_call" as const })),
-  ...["can I get an invite for my friend", "how does my sister get in", "my coworker wants in, can you help", "send me an invite link for someone", "how many invites do I have left"].map((text) => ({ text, expect: "invite" as const })),
+  ...["can I get an invite for my friend", "how does my sister get in", "my coworker wants in, can you help", "send me an invite link for someone"].map((text) => ({ text, expect: "invite" as const })),
+  ...["how many invites do I have left", "How many invites do I have?", "do I have any invites left"].map((text) => ({ text, expect: "invites_left" as const })),
   ...["what's new with Co", "any new features?", "what changed lately in Co"].map((text) => ({ text, expect: "updates" as const })),
   ...["I'm here", "just got here", "made it!", "we're at the venue"].map((text) => ({ text, expect: "arrival" as const, facts: EVENT_TONIGHT })),
   ...["STOP", "unsubscribe"].map((text) => ({ text, expect: "stop" as const })),
   // After a line that doesn't ask anything, these just close the thread.
   ...["ok thanks", "cool cool", "sounds good ty"].map((text) => ({ text, expect: "closing" as const, lastCo: "Enjoy the mixer tonight." })),
+  // Living asks and reactions (2026-09-26)
+  { text: "forget the chess thing, the event matters way more now", expect: "close_ask", facts: OPEN_ASKS },
+  { text: "we locked in a venue for the 10th, you can stop looking", expect: "close_ask", facts: OPEN_ASKS },
+  { text: "going to the rooftop evening thursday", expect: "reaction", facts: SENT_ROOF },
+  { text: "that rooftop evening was honestly amazing", expect: "reaction", facts: SENT_ROOF },
+  { text: "the rooftop thing isn't really my scene tbh", expect: "reaction", facts: SENT_ROOF },
+  { text: "what's on this weekend?", forbid: "close_ask", facts: OPEN_ASKS },
+  { text: "how do I get to the rooftop evening?", forbid: "reaction", facts: SENT_ROOF },
   // Look-alikes: none of these should trigger the named action.
   { text: "You send it over", forbid: "contact_card" },
   { text: "send me both accelerator links again", forbid: "contact_card" },
@@ -95,6 +105,9 @@ function handled(a: Ability, c: Case, s: Seen): boolean {
     case "call_now": return s.route.call === "explicit_request";
     case "schedule_call": return s.route.call === "schedule_request";
     case "invite": return s.tools.includes("sendInvite"); // Co's call since step 4
+    case "close_ask": return s.tools.includes("closeAsk");
+    case "reaction": return s.tools.includes("noteReaction");
+    case "invites_left": return s.tools.includes("checkInvitesLeft") && !s.tools.includes("sendInvite");
 
     case "updates": return s.tools.includes("sendProductUpdates");
     case "arrival": return s.tools.includes("markArrived");

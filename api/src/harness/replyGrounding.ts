@@ -19,6 +19,8 @@
 //   eval    — evals/reply/run.ts
 import { capabilitySheet } from "../services/capabilities.js";
 import { switchedOff } from "../services/abilitySwitches.js";
+import { textingStyleFor } from "../services/textingStyle.js";
+import { tasteSummary } from "../services/outcomes.js";
 import { sourceOf } from "../services/messageFormat.js";
 import { getPersonSnapshot, renderSnapshot } from "./personSnapshot.js";
 import { anthropic } from "@ai-sdk/anthropic";
@@ -98,6 +100,12 @@ export async function gatherReplyFacts(
 ): Promise<ReplyFacts> {
   const rf = baseReplyFacts();
   for (const d of opts.pendingDescriptions ?? []) addFact(rf, "pending", `Waiting to hear back: ${d}`);
+  // What's landed with them (services/outcomes.ts tasteSummary).
+  const taste = await tasteSummary(userId).catch(() => null);
+  if (taste) addFact(rf, "known", taste);
+  // How they've told Co they like to be texted (services/textingStyle.ts).
+  const style = await textingStyleFor(userId).catch(() => [] as string[]);
+  if (style.length) addInstruction(rf, `How they've told you they like to be texted, follow it: ${style.join("; ")}.`);
   // Abilities switched off right now (services/abilitySwitches.ts).
   for (const id of (await switchedOff().catch(() => new Map<string, string>())).keys()) {
     addFact(rf, "capability", `Co's ${id.replace(/_/g, " ")} ability is switched off right now. If it comes up, say it isn't available at the moment.`);
@@ -389,9 +397,12 @@ const INVITE_ACTION_VERB =
 
 
 // "Here you go", "here it is", "just sent it": words that only make sense
-// right after handing something over.
+// right after handing something over. Pointing back at something sent on an
+// earlier turn ("already sent it above", "the link I sent you a few minutes
+// ago") isn't a handover; that's checked by the claim reader against what
+// was really sent (2026-09-26: two true replies were rewritten).
 export function claimsHandingOver(draft: string): boolean {
-  return /\b(here you go|there you go|here it is|here'?s (my|the|your) (card|contact|number|link|info)|(just |i )?sent (it|that|you|over)|sending (it|that) (now|over)|attached)\b/i.test(draft);
+  return /\b(here you go|there you go|here it is|here'?s (my|the|your) (card|contact|number|link|info)|just sent (it|that|you|over)|sending (it|that) (now|over)|attached)\b/i.test(draft);
 }
 
 export function codeChecks(draft: string, rf: ReplyFacts, src: GroundingSources): GateCheck[] {
@@ -431,7 +442,9 @@ export function codeChecks(draft: string, rf: ReplyFacts, src: GroundingSources)
   const inviteAsk = isInviteRequest(src.message) || (inviteWording && aboutSomeoneElse);
   // Already handled this turn: a link went out, the count was given, or they
   // were told there are none left. Any of those means no claim to police.
-  const inviteHandled = rf.facts.some((f) => /texted them an invite link|how many invites they have left|invites are used/i.test(f.text));
+  // What happened this turn, not what Co can do (2026-09-26: a capability
+  // line mentioning "how many invites they have left" counted as handled).
+  const inviteHandled = rf.facts.some((f) => f.kind !== "capability" && /texted them an invite link|how many invites they have left|invites are used/i.test(f.text));
   // Handing something over when nothing went out this turn (2026-09-24,
   // real incident: "Here you go, Jacqueline. Save it so I'm easy to find."
   // with no contact card sent). A card or a link sent by the reply's own

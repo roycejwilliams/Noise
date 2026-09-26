@@ -28,6 +28,7 @@ import { runMonitor, runWeeklyReview } from "../harness/monitor.js";
 import { typesWithPurpose } from "../harness/proactivePurpose.js";
 import { reviewEnabled, runMorningReview } from "../harness/devReview.js";
 import { expireStaleAsks } from "../services/askExpiry.js";
+import { classifyOpenAsks, syncClosedAsks } from "../services/askKind.js";
 import { companionPayloadFor } from "../harness/memberThreads.js";
 import { recordDecision } from "../harness/core.js";
 import { runWeeklyReflections } from "../harness/memberReflection.js";
@@ -375,7 +376,11 @@ export function registerJobs(io: Server) {
         return null;
       });
       if (expiry?.expired) console.log(`Ask expiry: closed ${expiry.expired} ask(s) past their time limit`);
-      // Oldest-surfaced ask first, so one ask can't win every day.
+      // Living asks (services/askKind.ts, 2026-09-26): only asks a search can
+      // find are searched; what they brought up in the last few days goes
+      // first, then the rest by oldest-searched, so one ask can't win every day.
+      await classifyOpenAsks().catch((err: any) => console.error("Ask kinds: classify failed (non-fatal):", err?.message ?? err));
+      await syncClosedAsks().catch((err: any) => console.error("Ask sync failed (non-fatal):", err?.message ?? err));
       const due = await pool.query(
         `SELECT ac.id, ac.ask_id, ac.ask_text, ac.last_attempted_at, u.id AS user_id, u.first_name, u.phone_number, cp.city,
                 cp.goals, cp.activity_preferences,
@@ -383,8 +388,9 @@ export function registerJobs(io: Server) {
          FROM ask_checkins ac
          JOIN users u ON u.id = ac.user_id
          LEFT JOIN co_profiles cp ON cp.user_id = ac.user_id
-         WHERE ac.resolved_at IS NULL
-         ORDER BY ac.last_attempted_at ASC NULLS FIRST, ac.last_surfaced_at ASC NULLS FIRST`,
+         WHERE ac.resolved_at IS NULL AND ac.kind = 'find'
+         ORDER BY (COALESCE(ac.last_mentioned_at, ac.created_at) > NOW() - INTERVAL '3 days') DESC,
+                  ac.last_attempted_at ASC NULLS FIRST, ac.last_surfaced_at ASC NULLS FIRST`,
       );
 
       // Grouped by user, not run flat (Royce, 2026-08-30) — attemptEventSurfacing's

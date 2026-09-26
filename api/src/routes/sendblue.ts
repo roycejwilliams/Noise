@@ -73,6 +73,7 @@ import { TURN_FAILED_NOTE, turnFailedNoteBlocked } from "../services/turnFailure
 import { arrivedByText } from "../services/eventPresence.js";
 import { lineInVoice } from "../services/voiceLine.js";
 import { privacyAlert } from "../services/privacyAlert.js";
+import { learnTextingStyle } from "../services/textingStyle.js";
 import { scoreGuestListForEvent } from "../services/eventScoring.js";
 import { closingReaction, emojiFor, lastCoLine } from "../services/conversationClose.js";
 import { renderMatchLead, sourceOf } from "../services/messageFormat.js";
@@ -2651,6 +2652,10 @@ Return ONLY valid JSON, no preamble: {"date": "YYYY-MM-DD or null", "time": "HH:
           // second LLM call inferring after the fact whether the drafted
           // text happened to include one.
           const replyStarted = Date.now();
+          // How they like to be texted, learned from this message against
+          // Co's last one (services/textingStyle.ts). In the background, so
+          // it never slows the reply; the next reply reads it.
+          if (hasText) learnTextingStyle(user.id, lastCoLine(recentConversation), resolvedContent).catch(() => {});
           const { replyText, grounding } = resultsAnsweredAsk
             ? await recordDecision({
                 layer: 3,

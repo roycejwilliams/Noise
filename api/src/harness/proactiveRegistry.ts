@@ -12,7 +12,7 @@ import { draftWindowFollowUp, type WindowFollowUpPayload } from "../agent/window
 import { draftCalendarFollow } from "../agent/calendarFollowReachOut.js";
 import { draftAskSolicitation } from "../agent/eventAskSolicitation.js";
 import { draftPostCall, markPostCallDropped, markPostCallSent } from "../jobs/postCallFollowUp.js";
-import { isShortNotice, onEventOfferDropped, onEventOfferSent, type EventOfferPayload } from "../services/eventSurfacingSweep.js";
+import { askStillOpen, isShortNotice, onEventOfferDropped, onEventOfferSent, type EventOfferPayload } from "../services/eventSurfacingSweep.js";
 import type { DebriefPayload } from "../services/recommendationOutcome.js";
 import { markMatchNudgeSent, type EventMatchNudgePayload } from "../services/eventScoring.js";
 import { lapseCloseDate, lapseText } from "../services/membershipLapse.js";
@@ -96,6 +96,8 @@ export const proactiveRegistry: ProactiveRegistry = {
   event_offer: {
     async draft(c, person) {
       const p = c.payload as EventOfferPayload;
+      // Their ask closed since this was queued: don't send it (2026-09-26).
+      if (!(await askStillOpen(p.askId))) return skip("their ask has since closed");
       const r = await draftEventReveal(person, p.askText, p.fromProfile, p.match, { reminder: p.reminder, again: p.again });
       return r ?? skip("model chose SKIP");
     },

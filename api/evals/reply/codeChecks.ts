@@ -192,6 +192,10 @@ const windowCases: [boolean, string][] = [
   [!codeChecks("Here it is.", rf, { message: "link?", recentConversation: "Co replied: https://lu.ma/abc123", sentThisTurn: ["https://lu.ma/abc123"] }).some((c) => c.name === "no_handover_claim"), "after a real link, \"here it is\" is fine"],
   [(() => { const r = baseReplyFacts(); addFact(r, "did_this_turn", "Sent the link https://lu.ma/abc123 for \"Mixer\" as its own message just before this reply."); return !codeChecks("There you go, that's the one.", r, src).some((c) => c.name === "no_handover_claim"); })(), "a link the turn sent first counts as handed over"],
   [!codeChecks("Sounds good, talk soon.", rf, src).some((c) => c.name === "no_handover_claim"), "an ordinary reply isn't a handover claim"],
+  // 2026-09-26: pointing back at an earlier send isn't a handover.
+  [!codeChecks("Already sent it above, should be there to save.", rf, src).some((c) => c.name === "no_handover_claim"), "\"already sent it above\" isn't a handover claim"],
+  [!codeChecks("The Tech Week link I sent you a few minutes ago is the latest.", rf, src).some((c) => c.name === "no_handover_claim"), "a link sent earlier isn't a handover claim"],
+  [codeChecks("Just sent it, check your texts.", rf, { message: "card?", recentConversation: "" }).some((c) => c.name === "no_handover_claim" && !c.pass), "\"just sent it\" with nothing sent is still caught"],
 ];
 
 // Mapping wherever someone says they are to Luma's own city list

@@ -743,7 +743,7 @@ export function proposePick(eligible: Candidate[]): { pick: Candidate | null; re
 // Only runs when there's a real choice, so most days cost nothing.
 export async function choosePick(
   eligible: Candidate[],
-  about: { recentConversation: string; feeling: string },
+  about: { recentConversation: string; feeling: string; taste?: string | null },
 ): Promise<{ pick: Candidate | null; reason: string; source: "code" | "co" }> {
   if (eligible.length < 2) return proposePick(eligible);
   try {
@@ -757,6 +757,7 @@ export async function choosePick(
 You're about to text this member first. Several things are ready to go; pick the ONE that fits them best right now, the way a friend who knows them would. Staying close to what's going on in their life comes before offers.
 
 How they've been: ${about.feeling || "(nothing notable)"}
+What's landed with them before: ${about.taste || "(nothing recorded yet)"}
 Their recent texts with you (oldest first):
 ${about.recentConversation.slice(-2500) || "(none)"}
 
@@ -1120,7 +1121,8 @@ export async function dispatchForUser(registry: ProactiveRegistry, userId: strin
     .query(`SELECT content FROM co_memories WHERE user_id = $1 AND memory_type = 'text_exchange' ORDER BY created_at DESC LIMIT 12`, [userId])
     .then((r) => r.rows.map((x: any) => String(x.content)).reverse().join("\n"))
     .catch(() => "");
-  const picked = await choosePick(ev.eligible, { recentConversation: recent, feeling: renderEmotionalContext(emotional) });
+  const taste = await import("../services/outcomes.js").then((m) => m.tasteSummary(userId)).catch(() => null);
+  const picked = await choosePick(ev.eligible, { recentConversation: recent, feeling: renderEmotionalContext(emotional), taste });
   if (!picked.pick) {
     await pool.query(
       `INSERT INTO proactive_user_state (user_id, hold_until) VALUES ($1, NOW() + ($2 || ' hours')::interval)

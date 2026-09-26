@@ -118,6 +118,17 @@ const c = (ok: boolean, label: string) => cases.push([ok, label]);
   c(/scheduleUnmatchedFollowUp\(eventId, resolvedName, matched, eventTiming, opts\)/.test(es), "scheduling is triggered from the same place the real scoring pass runs");
 }
 
+// Saved finds and queued offers only while their ask is open (2026-09-26:
+// a closed "chess this weekend" ask kept feeding chess meetups into every search).
+{
+  const sweepSrc = readFileSync(new URL("../../src/services/eventSurfacingSweep.ts", import.meta.url), "utf8");
+  const regSrc = readFileSync(new URL("../../src/harness/proactiveRegistry.ts", import.meta.url), "utf8");
+  c(/FROM event_backlogs b WHERE b\.user_id = \$1 AND \$\{ASK_STILL_OPEN\("b\.ask_id"\)\}/.test(sweepSrc), "saved finds from a closed ask stop coming back");
+  c(/\$\{ASK_STILL_OPEN\("pc\.payload->>'askId'"\)\}/.test(sweepSrc), "queued offers from a closed ask stop coming back");
+  c(/if \(!\(await askStillOpen\(p\.askId\)\)\) return skip\("their ask has since closed"\);/.test(regSrc), "a queued offer isn't sent once its ask has closed");
+  c(/ASK_STILL_OPEN = \(col: string\) =>\s*`\(\$\{col\} = '\$\{PROFILE_ASK_ID\}' OR \$\{col\} IS NULL/.test(sweepSrc), "profile-based finds (no ask) still count");
+}
+
 console.log(`event rules: ${cases.length - cases.filter(([ok]) => !ok).length}/${cases.length} passed`);
 const failed = cases.filter(([ok]) => !ok);
 if (failed.length) {

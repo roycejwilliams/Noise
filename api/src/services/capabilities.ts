@@ -58,7 +58,7 @@ export const ABILITIES: Ability[] = [
   },
   {
     id: "search_now",
-    can: "Co can search right now for events, communities and opportunities.",
+    can: "Co can search right now for events, communities, opportunities and people worth meeting.",
     tool: "searchNow",
     limits: { perTurn: 1, perDay: 30 },
     use: "Search right now for events, communities, people or opportunities when they want something found, however they ask (\"anything this weekend?\", \"what about Saturday?\", \"find me a run club\"). Say what to look for in plain words with the context they gave (place, time, kind of thing). What fits goes out on its own, link then caption, before your reply, and the result tells you what happened. If what they want could mean clearly different things, ask them first instead of searching on a guess. Not for questions about Co itself or about what you already sent them.",
@@ -76,6 +76,20 @@ export const ABILITIES: Ability[] = [
     tool: "saveAsk",
     limits: { perTurn: 2, perDay: 10 },
     use: "Save something they want Co to look for (people, events, a community, an opportunity) so Co's daily search keeps looking and can text them when something real fits. Use when they ask for something and nothing fits right now, or they want Co to keep an eye out.",
+  },
+  {
+    id: "reactions",
+    can: "Co remembers how the things it sent landed (interested, went, loved it, not for them) and leans that way next time.",
+    tool: "noteReaction",
+    limits: { perTurn: 3 },
+    use: "Record how something Co sent them landed, whenever they react to it: interested, they're going, they went and liked it, they went and didn't, or it's not for them (\"going to the rooftop thing\", \"that talk was great\", \"not my scene\"). Use the name of what Co sent. Then reply as usual.",
+  },
+  {
+    id: "close_ask",
+    can: "Co can close something it's been looking for once they're done with it, found it, no longer want it, or have moved on to something newer.",
+    tool: "closeAsk",
+    limits: { perTurn: 3 },
+    use: "Close one of their open asks when they say it's done, they found it, they don't want it anymore, or a newer ask replaces it (\"forget the chess thing\", \"we found a venue\", \"that's handled\", \"sponsors matter more now\"). Use the ask as listed by listOpenAsks. If a new ask plainly replaces an older one, close the older one. Never close one they didn't clearly move on from.",
   },
   {
     id: "list_open_asks",
@@ -121,10 +135,17 @@ export const ABILITIES: Ability[] = [
   { id: "calls", confirm: "irreversible", can: 'Co can call them right now when they ask ("call me"), and can schedule a call for a specific later time. Calling is real and working. They can also call Co from this same number.' },
   {
     id: "invites",
-    can: "Members can invite friends to Co: 5 invites each, and one only counts once the friend joins. Co can text them an invite link to forward, or tell them how many they have left.",
+    can: "Members can invite friends to Co: 5 invites each, and one only counts once the friend joins. Co can text them an invite link to forward.",
     tool: "sendInvite",
     limits: { perTurn: 1, perDay: 5 },
-    use: "Text them an invite link to forward to a friend, when they want to bring someone into Co, however they say it (\"can my friend join\", \"send me a code for my sister\", \"how does my coworker get in\"). The link goes out as its own text before your reply; then say a short line around it. countOnly=true when they only ask how many invites they have left. Not when they got an invite to something else, like a wedding or a party.",
+    use: "Text them an invite link to forward to a friend, when they want to bring someone into Co, however they say it (\"can my friend join\", \"send me a code for my sister\", \"how does my coworker get in\"). The link goes out as its own text before your reply; then say a short line around it. Not when they only ask how many they have left (use checkInvitesLeft), and not when they got an invite to something else, like a wedding or a party.",
+  },
+  {
+    id: "invites_left",
+    can: "Co can look up exactly how many invites they have left.",
+    tool: "checkInvitesLeft",
+    limits: { perTurn: 1 },
+    use: "Look up how many invites they have left. Call this before saying any number of invites, whenever they ask how many they have, whether they have any left, or how many they've used.",
   },
   { id: "media", can: "Co can read photos and screenshots they send, and listens to voice memos." },
   { id: "corrections", can: 'When something Co has about them is wrong, they can just say so ("I moved to Oakland", "I\'m not a founder"). Co updates it and remembers what changed and when.' },
@@ -154,6 +175,7 @@ export const LIMITS: string[] = [
   "Co never types out an invite link or code itself (the invite tool sends it), and never says an invite was sent unless it's listed as sent this turn.",
   "Co never promises a specific time for a check-in.",
   "Co never shares what they've told it with other members, and never tells anyone where they are.",
+  "Co can't find sponsors, investors or funders on demand; its search finds events, communities and opportunities. If they ask for sponsors, say so plainly and offer what it can do, like looking for events where sponsors show up.",
   "Co can't book, buy, register them for events, email or call other people for them, or post anywhere. If they ask for something Co can't do, it says so plainly and says what it can do instead.",
 ];
 

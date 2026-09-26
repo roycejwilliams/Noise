@@ -1467,6 +1467,20 @@ export async function runMigrations(): Promise<void> {
     )
     .catch((err: Error) => console.error("mo team tables init failed:", err));
 
+  // Living asks (services/askKind.ts, 2026-09-26): whether a search can find
+  // it, and when they last brought it up, so what matters now is searched first.
+  await pool
+    .query(
+      `ALTER TABLE ask_checkins ADD COLUMN IF NOT EXISTS kind TEXT NOT NULL DEFAULT 'find',
+         ADD COLUMN IF NOT EXISTS kind_checked_at TIMESTAMPTZ,
+         ADD COLUMN IF NOT EXISTS last_mentioned_at TIMESTAMPTZ`,
+    )
+    .catch((err: Error) => console.error("ask_checkins living-asks migration failed:", err));
+  // How each member likes to be texted (services/textingStyle.ts, 2026-09-26).
+  await pool
+    .query(`ALTER TABLE co_profiles ADD COLUMN IF NOT EXISTS texting_style TEXT[] NOT NULL DEFAULT '{}'`)
+    .catch((err: Error) => console.error("co_profiles.texting_style migration failed:", err));
+
   // A switch per ability (services/abilitySwitches.ts, 2026-09-25): turn
   // any one of Co's abilities off without a deploy.
   await pool

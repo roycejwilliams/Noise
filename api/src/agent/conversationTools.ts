@@ -8,6 +8,8 @@ import { coAskedQuestion, emojiFor } from "../services/conversationClose.js";
 import { writeMemory } from "../services/memory.js";
 import { getMemberInvite, inviteLink, invitesLeftFor } from "../services/invites.js";
 import { recordTextArrival } from "../services/eventPresence.js";
+import { closeAsk } from "../services/askKind.js";
+import { recordSuggestionOutcome } from "../services/outcomes.js";
 import { scoreGuestListForEvent } from "../services/eventScoring.js";
 import pool from "../db/db.js";
 import { recordDecision } from "../harness/core.js";
@@ -310,6 +312,19 @@ export function createConversationTools(ctx: ConversationToolContext) {
       },
     }),
 
+    // How many invites they have left: a lookup, its own tool (2026-09-26:
+    // tucked into sendInvite as an option, Co skipped it and made up "Still
+    // 5, none used yet").
+    checkInvitesLeft: tool({
+      description: toolUse("checkInvitesLeft"),
+      inputSchema: z.object({}),
+      execute: async () => {
+        const left = ctx.dryRun ? 5 : await invitesLeftFor(ctx.userId);
+        ctx.facts?.add("known", left > 0 ? `They have ${left} invite${left === 1 ? "" : "s"} left. One only counts once someone joins. (Co told them how many invites they have left; no invite link was sent.)` : "All 5 of their invites are used.");
+        return { ok: true, left, note: left > 0 ? `They have ${left} left; one only counts once someone joins.` : "All 5 are used." };
+      },
+    }),
+
     // They've arrived at a Co event (2026-09-25: Co's judgment, not an
     // "I'm here" pattern). Which event, and whether it's on, stays hard in
     // services/eventPresence.ts; their in-room nudge goes out if one was
@@ -380,18 +395,10 @@ export function createConversationTools(ctx: ConversationToolContext) {
     // it previews, and Co writes the words around it.
     sendInvite: tool({
       description: toolUse("sendInvite"),
-      inputSchema: z.object({
-        countOnly: z.boolean().describe("True when they only want to know how many invites they have left."),
-      }),
-      execute: async ({ countOnly }) => {
+      inputSchema: z.object({}),
+      execute: async () => {
         const record = (outcome: "act" | "skip", action: string, extra: Record<string, unknown> = {}) =>
           ctx.dryRun ? Promise.resolve() : recordDecision({ layer: 3, decision: "account.invite", userId: ctx.userId, outcome, action, proposal: extra }).catch(() => {});
-        if (countOnly) {
-          const left = ctx.dryRun ? 5 : await invitesLeftFor(ctx.userId);
-          await record("act", "count_only", { left });
-          ctx.facts?.add("known", left > 0 ? `They have ${left} invite${left === 1 ? "" : "s"} left. One only counts once someone joins. (Co told them how many invites they have left; no invite link was sent.)` : "All 5 of their invites are used.");
-          return { ok: true, left };
-        }
         if (ctx.dryRun) {
           console.log(`[conversationReply dryRun] would send an invite link to ${ctx.userId}`);
           state.sentMessages.push("https://example.com/i/DRYRUN");
@@ -447,6 +454,73 @@ export function createConversationTools(ctx: ConversationToolContext) {
     // exactly these stated asks (getActiveAsks/askEntries) — this just
     // answers honestly from the same real list instead of the model
     // guessing from conversation memory, which can drift or go stale.
+    // How something Co sent landed (2026-09-26: outcome learning). Co records
+    // it when they react to an event or opportunity it sent: interested,
+    // going, went and liked it, went and didn't, or not for them. Searches
+    // and Co's own choices lean on these (services/outcomes.ts tasteSummary).
+    noteReaction: tool({
+      description: toolUse("noteReaction"),
+      inputSchema: z.object({
+        item: z.string().describe("The name of the event or opportunity Co sent them."),
+        reaction: z.enum(["interested", "going", "went_liked", "went_disliked", "not_for_me"]),
+        note: z.string().optional().describe("Their words, briefly, if they said why."),
+      }),
+      execute: async ({ item, reaction, note }) => {
+        const norm = (t: string) => t.toLowerCase().replace(/[^a-z0-9 ]+/g, " ").replace(/\s+/g, " ").trim();
+        const want = norm(item);
+        const { rows } = ctx.dryRun
+          ? { rows: [] as any[] }
+          : await pool.query(
+              `SELECT content FROM co_memories WHERE user_id = $1 AND memory_type = 'recommendation_offered' AND created_at > NOW() - INTERVAL '45 days' ORDER BY created_at DESC LIMIT 60`,
+              [ctx.userId],
+            );
+        const sent = rows.map((r: any) => { try { return JSON.parse(r.content); } catch { return null; } }).filter((x: any) => x?.name);
+        const match = sent.find((x: any) => norm(x.name) === want) ?? sent.find((x: any) => norm(x.name).includes(want) || want.includes(norm(x.name)));
+        if (!ctx.dryRun && !match) {
+          notDone(`No reaction was recorded: "${item.slice(0, 80)}" isn't something Co sent them recently.`);
+          return { ok: false, error: "That isn't something Co sent them recently (check listSentOffers)." };
+        }
+        const result = ({ interested: "interested", going: "acted", went_liked: "helped", went_disliked: "didnt_help", not_for_me: "declined" } as const)[reaction];
+        if (ctx.dryRun) {
+          console.log(`[conversationReply dryRun] would record ${result} for "${item}" (${ctx.userId})`);
+          return { ok: true };
+        }
+        const key = match.event_api_id ? `event:${match.event_api_id}` : `opportunity:${norm(match.name)}`;
+        await recordSuggestionOutcome(ctx.userId, match.event_api_id ? "event" : "opportunity", key, match.name, result, note ?? null);
+        ctx.facts?.add("did_this_turn", `Noted how "${match.name}" landed with them (${reaction.replace(/_/g, " ")}), so Co leans that way next time.`);
+        return { ok: true };
+      },
+    }),
+
+    // Living asks (2026-09-26): Co closes an ask when they say it's done,
+    // found, no longer wanted, or replaced by a newer one. Closed in both
+    // places it lives (services/askKind.ts closeAsk), with a receipt.
+    closeAsk: tool({
+      description: toolUse("closeAsk"),
+      inputSchema: z.object({
+        ask: z.string().describe("The ask to close, as it appears in what Co has on file for them (listOpenAsks)."),
+        reason: z.string().describe("Why, in a few words: done, found it, no longer wanted, replaced by a newer ask."),
+      }),
+      execute: async ({ ask, reason }) => {
+        const norm = (t: string) => t.toLowerCase().replace(/[^a-z0-9 ]+/g, " ").replace(/\s+/g, " ").trim();
+        const want = norm(ask);
+        if (ctx.dryRun) {
+          console.log(`[conversationReply dryRun] would close ask "${ask}" for ${ctx.userId} (${reason})`);
+          return { ok: true, closed: ask };
+        }
+        const { rows } = await pool.query(`SELECT intent FROM co_profiles WHERE user_id = $1`, [ctx.userId]);
+        const open = askEntries(rows[0]?.intent ?? null).filter((e) => e.text);
+        const hits = open.filter((e) => norm(e.text as string) === want || norm(e.text as string).includes(want) || want.includes(norm(e.text as string)));
+        if (hits.length !== 1) {
+          notDone(`No ask was closed: "${ask.slice(0, 80)}" didn't match exactly one open ask.`);
+          return { ok: false, error: hits.length ? "That matches more than one open ask. Check listOpenAsks and use the exact one." : "That isn't one of their open asks. Check listOpenAsks first." };
+        }
+        await closeAsk(ctx.userId, hits[0].id as string, `closed by Co: ${reason}`);
+        ctx.facts?.add("did_this_turn", `Closed their ask "${hits[0].text}" (${reason.slice(0, 80)}). Co stops looking for it.`);
+        return { ok: true, closed: hits[0].text };
+      },
+    }),
+
     listOpenAsks: tool({
       description: toolUse("listOpenAsks"),
       inputSchema: z.object({}),

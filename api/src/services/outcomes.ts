@@ -35,3 +35,28 @@ export async function recordSuggestionOutcome(
 export function resultFromNamedOutcome(outcome: string): SuggestionResult {
   return outcome === "named_positive" ? "helped" : outcome === "named_critical" ? "didnt_help" : "no_signal";
 }
+
+// What's landed with them and what hasn't (2026-09-26: make Co more
+// adaptable). Until Co recorded reactions itself (conversationTools.ts
+// noteReaction), this table had one row, so nothing downstream had anything
+// to learn from. Read into replies (harness/replyGrounding.ts) and into which
+// message Co chooses to send first (harness/proactive.ts choosePick).
+export async function tasteSummary(userId: string, days = 120): Promise<string | null> {
+  const { rows } = await pool
+    .query(
+      `SELECT item_name, result FROM suggestion_outcomes WHERE user_id = $1 AND created_at > NOW() - ($2 || ' days')::interval AND result <> 'no_signal' ORDER BY created_at DESC LIMIT 40`,
+      [userId, days],
+    )
+    .catch(() => ({ rows: [] as any[] }));
+  if (!rows.length) return null;
+  const pick = (results: string[]) => [...new Set(rows.filter((r: any) => results.includes(r.result)).map((r: any) => r.item_name as string))].slice(0, 6);
+  const liked = pick(["helped", "acted"]);
+  const keen = pick(["interested"]).filter((n) => !liked.includes(n));
+  const not = pick(["declined", "didnt_help"]);
+  const parts = [
+    liked.length ? `went to or liked: ${liked.join(", ")}` : null,
+    keen.length ? `were interested in: ${keen.join(", ")}` : null,
+    not.length ? `said weren't for them or didn't help: ${not.join(", ")}` : null,
+  ].filter(Boolean);
+  return parts.length ? `From what they've told Co about things it sent, they ${parts.join("; and ")}.` : null;
+}

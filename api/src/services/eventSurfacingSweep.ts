@@ -419,11 +419,30 @@ function sameMatch(a: TierMatch, b: TierMatch): boolean {
 // Openings the sweep already found for them and hasn't sent yet: waiting in a
 // backlog or queued as an offer. Live replies answer from these instead of
 // searching the web themselves (2026-09-18).
+// Whether the ask a find belongs to is still open. Finds saved for an ask
+// that's since closed (a stale "chess this weekend", a fund that fell
+// through) stop coming back (Royce, 2026-09-26: "get my ask back on track so
+// I have the right events coming through"). Profile-based finds have no ask.
+const ASK_STILL_OPEN = (col: string) =>
+  `(${col} = '${PROFILE_ASK_ID}' OR ${col} IS NULL OR EXISTS (SELECT 1 FROM ask_checkins ac WHERE ac.id::text = ${col} AND ac.resolved_at IS NULL))`;
+
+export async function askStillOpen(askId: string | null | undefined): Promise<boolean> {
+  if (!askId || askId === PROFILE_ASK_ID) return true;
+  const { rows } = await pool
+    .query(`SELECT resolved_at IS NULL AS open FROM ask_checkins WHERE id::text = $1`, [askId])
+    .catch(() => ({ rows: [] as any[] }));
+  // No row: an ask from a call or an older shape; don't block it.
+  return rows.length ? rows[0].open === true : true;
+}
+
 export async function alreadyFoundOpenings(userId: string): Promise<TierMatch[]> {
   const [backlogs, queued] = await Promise.all([
-    pool.query(`SELECT items FROM event_backlogs WHERE user_id = $1`, [userId]).catch(() => ({ rows: [] as any[] })),
+    pool.query(`SELECT items FROM event_backlogs b WHERE b.user_id = $1 AND ${ASK_STILL_OPEN("b.ask_id")}`, [userId]).catch(() => ({ rows: [] as any[] })),
     pool
-      .query(`SELECT payload->'match' AS match FROM proactive_candidates WHERE user_id = $1 AND type = 'event_offer' AND status = 'pending'`, [userId])
+      .query(
+        `SELECT payload->'match' AS match FROM proactive_candidates pc WHERE pc.user_id = $1 AND pc.type = 'event_offer' AND pc.status = 'pending' AND ${ASK_STILL_OPEN("pc.payload->>'askId'")}`,
+        [userId],
+      )
       .catch(() => ({ rows: [] as any[] })),
   ]);
   const matches: TierMatch[] = [
@@ -726,7 +745,7 @@ export async function surfaceNewAsksNow(userId: string): Promise<void> {
      FROM ask_checkins ac
      JOIN users u ON u.id = ac.user_id
      LEFT JOIN co_profiles cp ON cp.user_id = ac.user_id
-     WHERE ac.user_id = $1 AND ac.resolved_at IS NULL AND ac.last_attempted_at IS NULL
+     WHERE ac.user_id = $1 AND ac.resolved_at IS NULL AND ac.last_attempted_at IS NULL AND ac.kind = 'find'
        AND ac.created_at > NOW() - INTERVAL '30 minutes'`,
     [userId],
   );

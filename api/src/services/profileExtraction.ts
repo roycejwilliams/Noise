@@ -3,6 +3,7 @@ import { generateText } from "ai";
 import { propagateAttributes } from "@langfuse/tracing";
 import crypto from "crypto";
 import pool from "../db/db.js";
+import { classifyAsk, markIntentResolved } from "./askKind.js";
 import { generateEmbedding, generateGoalEmbedding } from "./embeddings.js";
 import { sweepAskAgainstNetwork, sweepOfferingAgainstNetwork } from "./relevance.js";
 import { recordDecision } from "../harness/core.js";
@@ -994,6 +995,8 @@ export async function storeProfile(
       `UPDATE ask_checkins SET resolved_at = NOW() WHERE user_id = $1 AND ask_id = ANY($2::text[])`,
       [user_id, resolvedAskIds],
     );
+    // And in the profile, so it stops being listed as open (askKind.ts).
+    await markIntentResolved(user_id, resolvedAskIds).catch(() => {});
     await pool.query(
       `UPDATE relevance_edges SET status = 'retired', retired_at = NOW(),
         retired_reason = 'ask resolved independently, no intro made'
@@ -1340,7 +1343,7 @@ async function persistCapturedIntent(
     // Restating an ask renews its time limit (services/askExpiry.ts).
     const renewedUntil = await askExpiresAtForUser(user_id, ask!.text).catch(() => null);
     await pool.query(
-      `UPDATE ask_checkins SET ask_text = $3, expires_at = COALESCE($4::timestamptz, expires_at) WHERE user_id = $1 AND ask_id = $2`,
+      `UPDATE ask_checkins SET ask_text = $3, expires_at = COALESCE($4::timestamptz, expires_at), last_mentioned_at = NOW() WHERE user_id = $1 AND ask_id = $2`,
       [user_id, intentId, ask!.text, renewedUntil],
     );
   } else {
@@ -1383,17 +1386,17 @@ async function persistCapturedIntent(
   // jobs/index.ts). The NOT EXISTS guard stays as a backstop for two
   // captures of the same text racing each other.
   if (ask && !deduped) {
-    const expiresAt = await askExpiresAtForUser(user_id, ask.text).catch(() => null);
+    const [expiresAt, kind] = await Promise.all([askExpiresAtForUser(user_id, ask.text).catch(() => null), classifyAsk(ask.text)]);
     await pool
       .query(
-        `INSERT INTO ask_checkins (user_id, ask_id, ask_text, expires_at)
-         SELECT $1::uuid, $2::text, $3::text, $4::timestamptz
+        `INSERT INTO ask_checkins (user_id, ask_id, ask_text, expires_at, kind, kind_checked_at, last_mentioned_at)
+         SELECT $1::uuid, $2::text, $3::text, $4::timestamptz, $5::text, NOW(), NOW()
          WHERE NOT EXISTS (
            SELECT 1 FROM ask_checkins
            WHERE user_id = $1 AND resolved_at IS NULL AND lower(trim(ask_text)) = lower(trim($3))
          )
          ON CONFLICT (user_id, ask_id) DO NOTHING`,
-        [user_id, intentId, ask.text, expiresAt],
+        [user_id, intentId, ask.text, expiresAt, kind],
       )
       .catch((err) => console.error("ask_checkins insert failed (non-fatal):", err));
   }
