@@ -32,6 +32,7 @@ import { anthropic } from "@ai-sdk/anthropic";
 import { generateText } from "ai";
 import { createHash } from "crypto";
 import pool from "../db/db.js";
+import { capabilitySheet } from "../services/capabilities.js";
 import { MODELS } from "../models.js";
 import { CO_VOICE } from "../services/coVoice.js";
 import { parseModelJson } from "../services/modelJson.js";
@@ -128,7 +129,13 @@ export type ReviewIssue = { at: string; message: string; summary: string; catego
 // looking is backed by any of them, not only asks saved that day (2026-09-18:
 // "Still watching though." was flagged though the ask was days old).
 export type ReviewAsk = { text: string; savedAt: string };
-export type ReviewData = { userId: string; firstName: string; messages: ReviewMessage[]; decisions: ReviewDecision[]; emotions: ReviewEmotion[]; issues: ReviewIssue[]; openAsks?: ReviewAsk[] };
+// The week before the window (2026-09-26): what Co sent them and what they
+// told Co. Co's texts can rightly refer back to it ("the rooftop mixer
+// yesterday", "you're weighing accelerators vs VCs"); with only the day's
+// log, the review flagged both as invented when Co had sent the one and
+// Royce had said the other the day before.
+export type ReviewEarlier = { sent: string[]; theySaid: string[]; coSaid?: string[] };
+export type ReviewData = { userId: string; firstName: string; messages: ReviewMessage[]; decisions: ReviewDecision[]; emotions: ReviewEmotion[]; issues: ReviewIssue[]; openAsks?: ReviewAsk[]; earlier?: ReviewEarlier };
 
 const ms = (iso: string) => new Date(iso).getTime();
 const clip = (s: string, n = 220) => (s.length > n ? `${s.slice(0, n - 1)}…` : s);
@@ -378,13 +385,31 @@ export function loggedActions(data: ReviewData): string {
   return lines.join("\n") || "(nothing logged)";
 }
 
+export const EARLIER_DAYS = 7;
+
+export function earlierRecord(data: ReviewData): string {
+  const e = data.earlier;
+  if (!e || (!e.sent.length && !e.theySaid.length)) return "(nothing earlier)";
+  return [
+    e.sent.length ? `What Co sent them:\n${e.sent.join("\n")}` : null,
+    e.theySaid.length ? `What ${data.firstName} told Co:\n${e.theySaid.join("\n")}` : null,
+    e.coSaid?.length ? `What Co texted them (how it described what it sent):\n${e.coSaid.join("\n")}` : null,
+  ].filter(Boolean).join("\n\n");
+}
+
 export function modelReviewPrompt(data: ReviewData): string {
   return `${CO_VOICE}
 
 You're reviewing a day of texts between Co (above) and ${data.firstName}, a test user, to find Co's bad responses so a developer can fix them. Flag only what the conversation itself shows. Never infer a problem you can't point to.
 
-What Co's decision log says it did today (the only record of its actions):
+What Co can do and its standing rules (true; Co may state these):
+${capabilitySheet().map((c) => `- ${c}`).join("\n")}
+
+What Co's decision log says it did today:
 ${loggedActions(data)}
+
+The ${EARLIER_DAYS} days before today (also real, from the record; Co can rightly refer back to any of it):
+${earlierRecord(data)}
 
 The conversation (times UTC):
 ${transcriptFor(data)}
@@ -392,7 +417,7 @@ ${transcriptFor(data)}
 Flag these, and only these:
 - repeat_question: Co asks something it already asked today, or something the conversation already answered.
 - answer_missed_question: Co's reply doesn't answer what ${data.firstName} just asked (answers a different question, or ignores part of it).
-- contradiction_or_unbacked_claim: Co contradicts itself, or claims something about its own actions ("I sent you", "I found", "I checked", "I saved") that the decision log above doesn't back up.
+- contradiction_or_unbacked_claim: Co contradicts itself; or claims something about its own actions ("I sent you", "I found", "I checked", "I saved") that neither today's decision log nor the earlier record backs up; or says something about ${data.firstName} that they never said, today or in the earlier record, and that isn't one of their open asks. Co naming or describing something it sent in its own words (as it did in the earlier record) is backed; a loose "yesterday" for something sent in the last few days is not worth flagging.
 - off_voice: a reply that's robotic, templated, or breaks Co's voice described at the top (reads like a system, points at its own messages, lists, hype, filler).
 - promise_without_ask: Co promises to keep looking or text later, but nothing in the log above (an open ask, whenever it was saved, or an ask saved that day before the promise) covers that topic.
 
@@ -406,6 +431,10 @@ export async function modelFlags(data: ReviewData): Promise<ReviewFlag[]> {
   try {
     const { text } = await generateText({
       model: anthropic(MODELS.sonnet),
+      // Room to think and still answer: at the default 4,096 the model spent
+      // all of it thinking on a busy day and the review silently came back
+      // empty (2026-09-26).
+      maxOutputTokens: 16_000,
       experimental_telemetry: { isEnabled: true, functionId: "devReview.modelFlags" },
       prompt: modelReviewPrompt(data),
     });
@@ -463,19 +492,69 @@ export async function loadReviewData(userId: string, since: Date, until: Date): 
       .query(`SELECT ask_text, created_at FROM ask_checkins WHERE user_id = $1 AND created_at < $2 AND (resolved_at IS NULL OR resolved_at >= $2) ORDER BY created_at`, [userId, until.toISOString()])
       .catch(() => ({ rows: [] as any[] })),
   ]);
-  const iso = (d: any) => new Date(d).toISOString();
-  return {
+  // The week before: what Co sent (offers, search results, proactive
+  // texts) and what they said, newest kept when it's long.
+  const [earlierMem, earlierSends] = await Promise.all([
+    pool
+      .query(
+        `SELECT created_at, memory_type, content FROM co_memories
+         WHERE user_id = $1 AND created_at >= $2::timestamptz - make_interval(days => $3) AND created_at < $2
+           AND (memory_type = 'text_exchange' OR memory_type = 'recommendation_offered' OR (memory_type = 'system' AND content LIKE '[search]%sent:%'))
+         ORDER BY created_at DESC LIMIT 200`,
+        [userId, since.toISOString(), EARLIER_DAYS],
+      )
+      .catch(() => ({ rows: [] as any[] })),
+    pool
+      .query(
+        `SELECT sent_at, type, message FROM proactive_sends WHERE user_id = $1 AND sent_at >= $2::timestamptz - make_interval(days => $3) AND sent_at < $2 AND message IS NOT NULL ORDER BY sent_at DESC LIMIT 30`,
+        [userId, since.toISOString(), EARLIER_DAYS],
+      )
+      .catch(() => ({ rows: [] as any[] })),
+  ]);
+  return reviewDataFromRows({
     userId,
     firstName: user.rows[0]?.first_name ?? "Member",
-    messages: msgs.rows.map((r: any) => {
+    msgs: msgs.rows,
+    decisions: decisions.rows,
+    emotions: emotions.rows,
+    issues: issues.rows,
+    asks: asks.rows,
+    earlierMem: earlierMem.rows,
+    earlierSends: earlierSends.rows,
+  });
+}
+
+// Pure: the rows the review reads, shaped for it (tests replay real rows).
+export function reviewDataFromRows(r: { userId: string; firstName: string; msgs: any[]; decisions: any[]; emotions: any[]; issues: any[]; asks: any[]; earlierMem: any[]; earlierSends: any[] }): ReviewData {
+  const { userId } = r;
+  const iso = (d: any) => new Date(d).toISOString();
+  const day = (d: any) => new Date(d).toISOString().slice(0, 10);
+  const sent: string[] = [];
+  const theySaid: string[] = [];
+  const coSaid: string[] = [];
+  for (const m of r.earlierMem) {
+    const c = String(m.content).replace(/\s+/g, " ").trim();
+    if (m.memory_type === "text_exchange" && c.startsWith("User said:")) theySaid.push(`[${day(m.created_at)}] "${clip(c.replace(/^User said:\s*/, ""), 200)}"`);
+    else if (m.memory_type === "text_exchange") coSaid.push(`[${day(m.created_at)}] "${clip(c.replace(/^Co replied:\s*/, ""), 200)}"`);
+    else if (m.memory_type === "recommendation_offered") {
+      const name = (() => { try { return JSON.parse(c).name; } catch { return null; } })();
+      if (name) sent.push(`[${day(m.created_at)}] recommended "${clip(String(name), 120)}"`);
+    } else sent.push(`[${day(m.created_at)}] ${clip(c.replace(/^\[search\]\s*/, ""), 240)}`);
+  }
+  for (const x of r.earlierSends) sent.push(`[${day(x.sent_at)}] texted them unprompted (${x.type}): "${clip(String(x.message).replace(/\s+/g, " "), 160)}"`);
+  return {
+    userId,
+    firstName: r.firstName,
+    messages: r.msgs.map((r: any) => {
       const c = String(r.content);
       const from = c.startsWith("User said:") ? "member" : c.startsWith("Co replied:") ? "co" : "call";
       return { id: String(r.id), at: iso(r.created_at), from, text: c.replace(/^(User said|Co replied):\s*/, "").trim() } as ReviewMessage;
     }),
-    decisions: decisions.rows.map((r: any) => ({ id: Number(r.id), at: iso(r.created_at), decision: r.decision, outcome: r.outcome, action: r.action, reason: r.reason, proposal: r.proposal, checks: r.checks })),
-    emotions: emotions.rows.map((r: any) => ({ at: iso(r.created_at), source: r.source, emotion: r.emotion, intensity: r.intensity, about: r.about, quote: r.quote, target: r.target })),
-    issues: issues.rows.map((r: any) => ({ at: iso(r.created_at), message: r.message, summary: r.summary, category: r.category, severity: r.severity })),
-    openAsks: asks.rows.map((r: any) => ({ text: String(r.ask_text), savedAt: iso(r.created_at) })),
+    decisions: r.decisions.map((r: any) => ({ id: Number(r.id), at: iso(r.created_at), decision: r.decision, outcome: r.outcome, action: r.action, reason: r.reason, proposal: r.proposal, checks: r.checks })),
+    emotions: r.emotions.map((r: any) => ({ at: iso(r.created_at), source: r.source, emotion: r.emotion, intensity: r.intensity, about: r.about, quote: r.quote, target: r.target })),
+    issues: r.issues.map((r: any) => ({ at: iso(r.created_at), message: r.message, summary: r.summary, category: r.category, severity: r.severity })),
+    openAsks: r.asks.map((r: any) => ({ text: String(r.ask_text), savedAt: iso(r.created_at) })),
+    earlier: { sent: sent.slice(0, 50).reverse(), theySaid: theySaid.slice(0, 60).reverse(), coSaid: coSaid.slice(0, 60).reverse() },
   };
 }
 

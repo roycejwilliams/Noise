@@ -1,3 +1,4 @@
+import { readFileSync } from "fs";
 // Model-free checks for the dev-only "what broke" review (harness/devReview.ts),
 // built from real co-test turns on 2026-09-18. No API calls, no database:
 //   npx tsx evals/review/rules.ts
@@ -190,6 +191,28 @@ check("on co-test with the flag", reviewEnabled({ RAILWAY_ENVIRONMENT_NAME: "dev
   check("retention with nobody old enough says so", lines.some((l) => l.includes("Still active after two weeks") && l.includes("none yet")));
   const html = renderMetricsHtml(m);
   check("the relationship comes first in the Monday email", html.indexOf("The relationship") < html.indexOf("Growth, offers and intros"));
+}
+
+// The week before (2026-09-26): true references to earlier sends and to what
+// they said earlier aren't flagged as invented.
+{
+  const { reviewDataFromRows, modelReviewPrompt, earlierRecord } = await import("../../src/harness/devReview.js");
+  const d = reviewDataFromRows({
+    userId: "u", firstName: "Royce", msgs: [], decisions: [], emotions: [], issues: [], asks: [],
+    earlierMem: [
+      { created_at: "2026-09-24T22:26:00Z", memory_type: "text_exchange", content: "Co replied: Thursday rooftop mixer in SF, Sui's pulling together founders." },
+      { created_at: "2026-09-24T22:26:00Z", memory_type: "recommendation_offered", content: JSON.stringify({ name: "SVVR #102: Meta Connect Meetup + Party" }) },
+      { created_at: "2026-09-24T22:17:00Z", memory_type: "text_exchange", content: "User said: maybe it's time to figure out how to get into an accelerator or in touch with VCs" },
+    ],
+    earlierSends: [{ sent_at: "2026-09-23T17:00:00Z", type: "event_offer", message: "https://lu.ma/x  A dinner" }],
+  });
+  const rec = earlierRecord(d);
+  check("earlier: what Co sent, in its own words", /recommended "SVVR #102: Meta Connect Meetup \+ Party"/.test(rec) && /Thursday rooftop mixer/.test(rec) && /texted them unprompted \(event_offer\)/.test(rec));
+  check("earlier: what they told Co", /accelerator or in touch with VCs/.test(rec));
+  const pr = modelReviewPrompt(d);
+  check("prompt: the week before is in, and counts as backing", /The 7 days before today/.test(pr) && /neither today's decision log nor the earlier record backs up/.test(pr));
+  check("prompt: Co's own rules are in, so stating them isn't flagged", /What Co can do and its standing rules/.test(pr) && /5 invites each/.test(pr));
+  check("review has room to answer after thinking", /maxOutputTokens: 16_000/.test(readFileSync(new URL("../../src/harness/devReview.ts", import.meta.url), "utf8")));
 }
 
 console.log(`review rules: ${total - failed}/${total} passed`);
