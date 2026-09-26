@@ -12,7 +12,7 @@ import { isBrowseAsk, parseAskWindow, withinWindow } from "../../src/services/as
 import { renderMatchLead } from "../../src/services/messageFormat.js";
 import { closingReaction } from "../../src/services/conversationClose.js";
 import "dotenv/config";
-import { addFact, baseReplyFacts, codeChecks, renderReplyFacts, needsClaimCheck, pairSentLinks, predictionMatch, stripUnsupported } from "../../src/harness/replyGrounding.js";
+import { addFact, baseReplyFacts, codeChecks, countOf, renderReplyFacts, needsClaimCheck, pairSentLinks, predictionMatch, stripUnsupported } from "../../src/harness/replyGrounding.js";
 import { isLeakedMetaCommentary, webhookSecretMatches } from "../../src/services/sendblue.js";
 import { coAskedQuestion } from "../../src/services/conversationClose.js";
 
@@ -417,6 +417,10 @@ onboardingCaseCases.push(
     return p.length === 2 && p[0].caption?.includes("Love Potion") === true && p[1].caption === null;
   })(), "each sent link keeps the description sent right after it; a lone link has none"],
   [needsClaimCheck("Co keeps an eye on that for you."), "a claim about how Co works gets checked"],
+  [needsClaimCheck("Already ran that search, those two were the results."), "a spelled-out count of Co's own results gets checked (2026-09-25: went out unchecked when there were 4)"],
+  [countOf(4, "result") === "4 results" && countOf(1, "thing") === "1 thing", "search notes lead with the count in words"],
+  [/\$\{countOf\(preparedAll\.length, "result"\)\} came up; none fit, so nothing was sent/.test(readFileSync(new URL("../../src/routes/sendblue.ts", import.meta.url), "utf8")), "the no-fit search note says how many came up and that nothing was sent"],
+  [/A number must match the source exactly/.test(readFileSync(new URL("../../src/harness/replyGrounding.ts", import.meta.url), "utf8")), "the claim check compares numbers, not just topics"],
   [needsClaimCheck("That's on my radar now."), "'on my radar' gets checked"],
   [needsClaimCheck("I save everything you tell me."), "a present-tense claim about what Co does gets checked"],
   [!needsClaimCheck("That sounds hard. What's been the toughest part?"), "a plain conversational reply still skips the check"],

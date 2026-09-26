@@ -211,6 +211,13 @@ export async function recordSearchNote(userId: string, note: string): Promise<vo
     .catch((err: any) => console.error("recordSearchNote failed (non-fatal):", err?.message ?? err));
 }
 
+// Counts in words at the front of a search note (2026-09-26): Co read a
+// note listing four misfits and said "those two were the results", and the
+// claim check passed it because the note never said how many there were.
+export function countOf(n: number, one: string, many = `${one}s`): string {
+  return `${n} ${n === 1 ? one : many}`;
+}
+
 async function recentSearchNotes(userId: string): Promise<string[]> {
   const { rows } = await pool
     .query(
@@ -530,7 +537,7 @@ async function extractClaims(draft: string, rf: ReplyFacts, src: GroundingSource
 Claims to find:
 - past_action: something Co says it did or sent ("I sent you the link", "I scheduled it", "I emailed you both"), including passing something along ("noted for the team", "that goes straight to the team", "I passed it on"): supported only if a FACT says it was saved for the team
 - future_promise: something Co says it will do later ("I'll send it when I have it", "I'll keep an eye out", "I'll call you then")
-- time, place, count, detail: a start time, date, address, neighborhood, headcount, format, host, price, or other specific about an event, program, or plan
+- time, place, count, detail: a start time, date, address, neighborhood, headcount, format, host, price, or other specific about an event, program, or plan; a count also includes how many things Co found, sent, or searched ("those two were the results", "I sent you three")
 - link: a link or an "it's in the link above"
 - other_person: what another person said, wants, feels, or did ("she mentioned she'd like to meet you")
 - capability: what Co can or can't do ("I can't call", "I don't have access to your calendar")
@@ -538,7 +545,7 @@ Claims to find:
 
 Don't list: opinions, feelings, questions, general encouragement, restating what they told Co, or how Co will talk in this conversation ("I'll keep it short", "switching back to normal caps", "let's keep going over text"). Also don't list general know-how and advice about how things usually go or what tends to work ("block parties live or die on people finding the spot", "a reminder a few days out helps turnout", "personal invites beat a mass email"): that's advice, not a claim about a specific event, person, or outcome (2026-09-22: flagging it as a prediction stripped the specifics out of Co's advice and left it generic). It still counts as a claim when it names a real venue, event, person, date, price, or number that isn't in the sources. Likewise a conclusion reasoned from the sources is advice, not a prediction: "if Oct 10 is less than 30 days out, the permit may not clear in time", when the sources give the 30-day rule and the date (2026-09-22: that reasoning about a member's own screenshot was being cut).
 
-A claim is supported only if a FACT below states it, or the conversation shows it. A future_promise is supported only if a FACT says it will actually happen (a scheduled call, a pending item). A prediction is supported only if a FACT states that outcome itself; guessing from what was or wasn't found is never support. "I don't have X" is supported when X is not in the sources. Never count something as supported because it's plausible.
+A claim is supported only if a FACT below states it, or the conversation shows it. A future_promise is supported only if a FACT says it will actually happen (a scheduled call, a pending item). A prediction is supported only if a FACT states that outcome itself; guessing from what was or wasn't found is never support. "I don't have X" is supported when X is not in the sources. A number must match the source exactly: "those two were the results" is unsupported when the FACT says 4 results came up (2026-09-25: that exact line went out). Never count something as supported because it's plausible.
 
 FACTS:
 ${facts}
@@ -707,6 +714,11 @@ const CLAIM_SHAPED = [
   // them (2026-09-18), not missing facts.
   /\b(i|co)\s+(always\s+|usually\s+|automatically\s+|already\s+)?(keep|track|watch|save|store|remember|pass|share|check|search|look|flag|log|note|monitor|follow|remind|send)(s|ed|ing)?\b/i,
   /\b(on my (list|radar)|my (daily )?search(es)?|i'?m (keeping|tracking|watching|saving|following))\b/i,
+  // Co describing a search it ran, or a count spelled out (2026-09-25:
+  // "Already ran that search, those two were the results" went out
+  // unchecked, with no digit and no "I" in it, when the search had 4).
+  /\b(ran|searched|search|results?|came up|turned up|pulled (up|from))\b/i,
+  /\b(two|three|four|five|six|seven|eight|nine|ten|eleven|twelve|dozen)\b/i,
 ];
 
 export function needsClaimCheck(draft: string): boolean {

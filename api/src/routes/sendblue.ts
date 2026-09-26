@@ -65,7 +65,7 @@ import { resolveNetworkTeaseReply, resolveNetworkIntroReply } from "../services/
 import { NO_ROUTE, decideActions, gatherOpenItems, routeMessage, type RouterOutput } from "../services/messageRouter.js";
 import { recordDecision } from "../harness/core.js";
 import { routerGateChecks } from "../harness/routerChecks.js";
-import { addEventFacts, addFact, addInstruction, addOngoingSearchFacts, gatherReplyFacts, recordSearchNote } from "../harness/replyGrounding.js";
+import { addEventFacts, addFact, addInstruction, addOngoingSearchFacts, countOf, gatherReplyFacts, recordSearchNote } from "../harness/replyGrounding.js";
 import { runConversationReplyAgent, filterRelevantMemories, CALL_OFFER_EXPIRY_DAYS } from "../agent/conversationReply.js";
 import { triggerCallForUser } from "../services/callTrigger.js";
 import sendblue, { blockSender, cleanCoMessage, markRead, sendReaction, webhookSecretMatches } from "../services/sendblue.js";
@@ -2239,7 +2239,7 @@ Return ONLY valid JSON, no preamble: {"date": "YYYY-MM-DD or null", "time": "HH:
                   addFact(
                     replyFacts,
                     "did_this_turn",
-                    `Searched just now. What came up didn't fit what they asked: ${preparedAll.map((p) => `"${p.m.name}" (${p.why ?? "not a fit"})`).join("; ")}.`,
+                    `Searched just now. ${countOf(preparedAll.length, "result")} came up and none fit what they asked, so nothing was sent: ${preparedAll.map((p) => `"${p.m.name}" (${p.why ?? "not a fit"})`).join("; ")}.`,
                   );
                   addInstruction(replyFacts, "You searched and nothing that came up fits what they asked. Say that plainly and briefly. Don't send or describe the misfits unless they ask.");
                   // Save the ask before the reply, as the nothing-found branch
@@ -2254,7 +2254,7 @@ Return ONLY valid JSON, no preamble: {"date": "YYYY-MM-DD or null", "time": "HH:
                   }
                   await recordSearchNote(
                     user.id,
-                    `Co searched for "${resolvedContent.slice(0, 120)}" and what came up didn't fit: ${preparedAll.map((p) => `"${p.m.name}" from ${sourceOf(p.m)}${"url" in p.m && p.m.url ? `, link ${p.m.url}` : ""} (${p.why ?? "not a fit"})`).join("; ")}.`,
+                    `Co searched for "${resolvedContent.slice(0, 120)}" and ${countOf(preparedAll.length, "result")} came up; none fit, so nothing was sent: ${preparedAll.map((p) => `"${p.m.name}" from ${sourceOf(p.m)}${"url" in p.m && p.m.url ? `, link ${p.m.url}` : ""} (${p.why ?? "not a fit"})`).join("; ")}.`,
                   );
                 }
                 // What they are always comes before its link (Royce,
@@ -2297,7 +2297,7 @@ Return ONLY valid JSON, no preamble: {"date": "YYYY-MM-DD or null", "time": "HH:
                   if (actuallySent.length) {
                     await recordSearchNote(
                       user.id,
-                      `Co searched for "${resolvedContent.slice(0, 120)}" and sent: ${actuallySent.map((p) => `"${p.m.name}" from ${sourceOf(p.m)}`).join("; ")}.`,
+                      `Co searched for "${resolvedContent.slice(0, 120)}" and sent ${countOf(actuallySent.length, "thing")}: ${actuallySent.map((p) => `"${p.m.name}" from ${sourceOf(p.m)}`).join("; ")}.`,
                     );
                     // recordRecommendationsSent (services/recommendation.ts)
                     // writes recommendation_offered/recommendation for exactly

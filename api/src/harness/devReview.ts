@@ -499,7 +499,7 @@ export async function loadReviewData(userId: string, since: Date, until: Date): 
       .query(
         `SELECT created_at, memory_type, content FROM co_memories
          WHERE user_id = $1 AND created_at >= $2::timestamptz - make_interval(days => $3) AND created_at < $2
-           AND (memory_type = 'text_exchange' OR memory_type = 'recommendation_offered' OR (memory_type = 'system' AND content LIKE '[search]%sent:%'))
+           AND (memory_type = 'text_exchange' OR memory_type = 'recommendation_offered' OR (memory_type = 'system' AND content LIKE '[search]%'))
          ORDER BY created_at DESC LIMIT 200`,
         [userId, since.toISOString(), EARLIER_DAYS],
       )
