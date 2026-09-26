@@ -272,6 +272,11 @@ export async function runMigrations(): Promise<void> {
       "event_guest_match_nudge", "event_guest_match_optin", "event_intro_group_created",
       "event_intro_email_sent", "network_offer_pending", "network_offer_resolved",
       "network_intro_offer_pending", "recommendation_offered", "call_correction",
+      // Written by code but missing here, so every write failed quietly
+      // (found 2026-09-26): why a call failed, the closest miss Co
+      // mentioned, whether a promise was kept, a held send, and what a
+      // follow-up was about.
+      "call_failure", "closest_miss_mentioned", "promise_result", "send_held", "followup_context",
     ];
     const { rows } = await pool.query(
       `SELECT pg_get_constraintdef(oid) AS def FROM pg_constraint

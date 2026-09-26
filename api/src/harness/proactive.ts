@@ -547,7 +547,9 @@ export type Person = { userId: string; firstName: string; phoneNumber: string; c
 
 // messages: sent in order, links as their own message. text: the part the
 // model wrote, which is what checkDraft validates.
-export type DraftResult = { messages: string[]; text: string; rules: OutputRules } | { skip: string };
+// defer: not yet, but still worth sending later (a follow-up about an event
+// that hasn't happened); the candidate moves to that time instead of dropping.
+export type DraftResult = { messages: string[]; text: string; rules: OutputRules } | { skip: string } | { defer: Date; reason: string };
 
 export type TypeSpec = {
   draft(c: Candidate, person: Person): Promise<DraftResult>;
@@ -1145,6 +1147,15 @@ export async function dispatchForUser(registry: ProactiveRegistry, userId: strin
     return;
   }
 
+  if ("defer" in draft) {
+    await pool.query(
+      `UPDATE proactive_candidates SET due_at = $2, expires_at = $3, updated_at = NOW() WHERE id = $1 AND status = 'pending'`,
+      [c.id, draft.defer, new Date(draft.defer.getTime() + 3 * 24 * 3_600_000)],
+    );
+    await recordDecision({ layer: 7, decision: "proactive.dailyPick", userId, outcome: "skip", action: `defer:${c.type}`, proposal: { ...proposal, picked: c.id, pickSource: picked.source, deferTo: draft.defer.toISOString() }, checks: [...ev.userChecks, ...pickChecks], reason: `deferred: ${draft.reason}` });
+    return;
+  }
+
   if ("skip" in draft) {
     await dropCandidate(registry, c, "skipped", draft.skip);
     await recordDecision({ layer: 7, decision: "proactive.dailyPick", userId, outcome: "skip", action: `send:${c.type}`, proposal: { ...proposal, picked: c.id, pickSource: picked.source }, checks: [...ev.userChecks, ...pickChecks], reason: `draft skipped: ${draft.skip}` });
@@ -1169,7 +1180,7 @@ export async function dispatchForUser(registry: ProactiveRegistry, userId: strin
     for (const sib of pickSiblingOffers(c, ev.eligible)) {
       try {
         const d = await feelingForDraft.run(renderEmotionalContext(emotional), () => registry.event_offer.draft(sib, person));
-        if ("skip" in d) continue;
+        if ("skip" in d || "defer" in d) continue;
         const msgs = d.messages.map(capitalizeSentences);
         if (!gate(checkDraft(capitalizeSentences(d.text), d.rules)).ok) continue;
         extras.push({ candidate: sib, messages: msgs });

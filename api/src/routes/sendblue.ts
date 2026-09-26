@@ -1190,14 +1190,10 @@ export function sendblueRouter(io: Server): Router {
         // "thinks" — the Claude call below can take a few seconds, and a bare
         // gap before the reply lands reads as broken rather than considered.
         // Non-fatal: a failed typing indicator should never block the reply.
-        try {
-          await sendblue.typingIndicators.send({
-            number: user.phone_number,
-            from_number: process.env.SENDBLUE_PHONE_NUMBER!,
-          });
-        } catch (typingErr: any) {
-          console.error("Typing indicator failed (non-fatal):", typingErr?.message ?? typingErr);
-        }
+        // Not awaited: the dots are a courtesy, not a step the reply waits on.
+        sendblue.typingIndicators
+          .send({ number: user.phone_number, from_number: process.env.SENDBLUE_PHONE_NUMBER! })
+          .catch((typingErr: any) => console.error("Typing indicator failed (non-fatal):", typingErr?.message ?? typingErr));
 
         // Step 4.6 — Call-trigger detection. Two cases, per explicit product
         // decision: an explicit ask ("call me") triggers immediately;
@@ -1236,19 +1232,20 @@ export function sendblueRouter(io: Server): Router {
         // picture (this text, recent calls, what keeps coming up) that the
         // reply reasons from. Alongside: whether they want to be heard or
         // helped toward an answer.
-        const [seekingMode, textEmotion] = hasText
-          ? await Promise.all([
+        // Latency (2026-09-26): nothing before the router needs these reads,
+        // so they run alongside it (and the context reads below) instead of
+        // ahead of it; they're awaited once the router is done.
+        const seekingAndEmotion = hasText
+          ? Promise.all([
               detectSeekingMode(resolvedContent, recentConversation, "sendblue.detectSeekingMode"),
               readTextEmotion(resolvedContent, recentConversation, "sendblue.readTextEmotion"),
             ])
-          : [null, null];
-        if (textEmotion) {
-          await recordEmotionSignals(user.id, [{ source: "text", ...textEmotion, quote: resolvedContent.slice(0, 140), memoryId: inboundMemory.rows[0].id }]);
-        }
-        const emotional = await getEmotionalContext(user.id);
+          : Promise.resolve([null, null] as const);
 
-        const pendingOfferResult = await pool.query(
-          `SELECT p.id, p.content, p.created_at FROM co_memories p
+        // These reads don't depend on each other, so they run together.
+        const [pendingOfferResult, pendingWalkinCheckinResult, [profileResult, activityCountResult], declinedTopicsResult, openItems] = await Promise.all([
+          pool.query(
+            `SELECT p.id, p.content, p.created_at FROM co_memories p
            WHERE p.user_id = $1 AND p.memory_type = 'call_offer_pending'
            AND p.created_at > NOW() - ($2 || ' days')::interval
            AND NOT EXISTS (
@@ -1256,37 +1253,41 @@ export function sendblueRouter(io: Server): Router {
              WHERE r.user_id = $1 AND r.memory_type = 'call_offer_resolved' AND r.created_at > p.created_at
            )
            ORDER BY p.created_at DESC LIMIT 1`,
-          [user.id, CALL_OFFER_EXPIRY_DAYS],
-        );
-        const pendingOffer = pendingOfferResult.rows[0] ?? null;
-        const hasPendingOffer = !!pendingOffer;
-
-        // Real event fields for follow-up questions ("what time does it
-        // start?") now come from gatherReplyFacts (harness/replyGrounding.ts),
-        // along with the details Co explicitly doesn't have. Confirmed live
-        // 2026-09-09: without them the reply invented a start time, a
-        // neighborhood, and a headcount.
-
-        // Day-of QR check-in — the ask-question step. Looked up independently
-        // of walkinCheckinEventName above (which only reflects THIS turn's
-        // message) since a brand-new contact's check-in text is entirely
-        // consumed by the intake-start branch above, which returns early —
-        // the ask can only happen once identity capture completes, on a
-        // later turn, once event_walkin_checkins already has the row but no
-        // ask_text yet.
-        const pendingWalkinCheckinResult = await pool.query(
-          `SELECT event_api_id FROM event_walkin_checkins
+            [user.id, CALL_OFFER_EXPIRY_DAYS],
+          ),
+          pool.query(
+            `SELECT event_api_id FROM event_walkin_checkins
            WHERE person_id = $1 AND ask_text IS NULL
              AND checked_in_at > NOW() - INTERVAL '1 day'
            ORDER BY checked_in_at DESC LIMIT 1`,
-          [user.id],
-        );
+            [user.id],
+          ),
+          Promise.all([
+            pool.query(
+              `SELECT life_chapters, goals, blockers, long_term_direction, city, topics_covered, topics_asked
+             FROM co_profiles WHERE user_id = $1`,
+              [user.id],
+            ),
+            pool.query(
+              `SELECT count(*) FROM co_memories WHERE user_id = $1 AND memory_type IN ('text_exchange', 'call_transcript')`,
+              [user.id],
+            ),
+          ]),
+          pool.query(
+            `SELECT content FROM co_memories WHERE user_id = $1 AND memory_type = 'call_offer_declined_topic' ORDER BY created_at DESC LIMIT 20`,
+            [user.id],
+          ),
+          gatherOpenItems(user.id, { skipWalkinAsk: !!walkinCheckinEventName }).catch((err: any) => {
+            console.error("sendblue: gatherOpenItems failed (non-fatal, routing with no open items):", err?.message ?? err);
+            return [];
+          }),
+        ]);
+        const pendingOffer = pendingOfferResult.rows[0] ?? null;
+        const hasPendingOffer = !!pendingOffer;
+
         const pendingWalkinCheckin = pendingWalkinCheckinResult.rows[0] ?? null;
         let walkinAskInstruction = "";
         if (pendingWalkinCheckin && walkinCheckinEventName) {
-          // This turn's message IS the fresh check-in trigger itself (set
-          // above) — nothing to capture as an answer yet, so decide whether
-          // to ask based on whatever's already on file.
           const alreadyHasAsk = await hasActiveAsk(user.id).catch((err: any) => {
             console.error("sendblue: hasActiveAsk failed (non-fatal):", err?.message ?? err);
             return true; // fail toward not re-asking rather than risk a duplicate ask on error
@@ -1295,62 +1296,39 @@ export function sendblueRouter(io: Server): Router {
             walkinAskInstruction = `They just checked in at "${walkinCheckinEventName}" and don't have a stated ask on file yet. Ask them directly, once, in their own words: "what are you hoping to find here / who'd be good to meet?" Keep it to that one question this turn, don't pad it with anything else.`;
           }
         }
-        // Not a fresh check-in this turn and the row is still missing
-        // ask_text: the walkin_ask open item below lets the router decide
-        // whether this message actually answers it (recorded after routing).
 
-        // Feeds the thin-profile first-message call offer below. Count-based
-        // rather than existence-based on purpose — unlike co-test's version
-        // of this same check, this message's own text_exchange row was
-        // already written above (Step 3), before this point, so "any prior
-        // activity exists" would always be true even for a genuine first
-        // message. count <= 1 means the only row on file is this message's
-        // own.
-        const [profileResult, activityCountResult] = await Promise.all([
-          pool.query(
-            `SELECT life_chapters, goals, blockers, long_term_direction, city, topics_covered, topics_asked
-             FROM co_profiles WHERE user_id = $1`,
-            [user.id],
-          ),
-          pool.query(
-            `SELECT count(*) FROM co_memories WHERE user_id = $1 AND memory_type IN ('text_exchange', 'call_transcript')`,
-            [user.id],
-          ),
-        ]);
         const profile = profileResult.rows[0];
         const hasProfile = !!profile?.life_chapters?.length;
         const isFirstRealMessage = parseInt(activityCountResult.rows[0].count, 10) <= 1;
 
-        // Topic-aware, not a permanent opt-out and not a blanket timer either
-        // — per explicit product decision, Co should stay free to offer a
-        // call about a genuinely new situation at any time, but never
-        // re-offer about something already declined. Each declined offer's
-        // own text is stored (see the call_offer_pending write near the end
-        // of this handler — it captures what the USER described, not just
-        // Co's own offer text, since Co's gesture is often deliberately
-        // generic and makes a weak fingerprint on its own), and the router
-        // is given that list directly so the SAME call decides both "would
-        // voice help" and "haven't we already asked about this" in one pass.
-        const declinedTopicsResult = await pool.query(
-          `SELECT content FROM co_memories WHERE user_id = $1 AND memory_type = 'call_offer_declined_topic' ORDER BY created_at DESC LIMIT 20`,
-          [user.id],
-        );
+        // Context the reply needs (relevant memories, the rapport topic to
+        // raise), started now so it's ready by the time the reply drafts
+        // instead of running one after another after the debounce
+        // (2026-09-26: ~3.7s of every reply was these, in series).
+        const replyContextStarted = Date.now();
+        const recentMemoriesP = (async () => {
+          const memoriesResult = queryEmbedding
+            ? await pool
+                .query(
+                  `SELECT content FROM co_memories
+               WHERE user_id = $1 AND content_embedding IS NOT NULL AND memory_type != 'intent'
+               ORDER BY content_embedding <=> $2::vector
+               LIMIT 5`,
+                  [user.id, `[${queryEmbedding.join(",")}]`],
+                )
+                .catch((vecErr: any) => {
+                  console.error("Vector search failed, falling back to recency:", vecErr);
+                  return pool.query(`SELECT content FROM co_memories WHERE user_id = $1 AND memory_type != 'intent' ORDER BY created_at DESC LIMIT 5`, [user.id]);
+                })
+            : await pool.query(`SELECT content FROM co_memories WHERE user_id = $1 AND memory_type != 'intent' ORDER BY created_at DESC LIMIT 5`, [user.id]);
+          // Filtered for genuine relevance to what they just said before the
+          // reply agent ever sees it (filterRelevantMemories in
+          // conversationReply.ts): similarity alone isn't a relevance signal.
+          const candidates = memoriesResult.rows.map((m: any) => m.content).filter(Boolean);
+          return candidates.length ? await filterRelevantMemories(resolvedContent, candidates) : "";
+        })().catch(() => "");
+        const coverageP = getCoverageNudge(user.id, recentConversation, profile).catch(() => ({ missingTopic: null }));
 
-        // Layer 2 router (Royce, 2026-09-14). Replaces the separate call-offer,
-        // event-tease, outcome, check-in, match-nudge, network, method-choice,
-        // updates and recommendation classifiers, which each decided on
-        // their own whether this message was "theirs" — one "yes" could accept
-        // a stale call offer AND opt into an intro. Now one call sees every
-        // open item, and decideActions (plain code) decides what runs: at most
-        // one item resolved, and irreversible actions (placing a call, opting
-        // into an intro, a connection method) only on a clear, high-confidence
-        // read of something Co actually just asked. Otherwise nothing resolves
-        // and clarifyContext has the reply ask which they meant. Any change to
-        // the router must pass evals/router/run.ts first.
-        const openItems = await gatherOpenItems(user.id, { skipWalkinAsk: !!walkinCheckinEventName }).catch((err: any) => {
-          console.error("sendblue: gatherOpenItems failed (non-fatal, routing with no open items):", err?.message ?? err);
-          return [];
-        });
         let routerOutput: RouterOutput = NO_ROUTE;
         let routerFailed = false;
         let routerLatencyMs: number | null = null;
@@ -1370,6 +1348,11 @@ export function sendblueRouter(io: Server): Router {
           console.error("sendblue: message router failed (non-fatal, taking no actions this turn):", err?.message ?? err);
         }
         const decision = decideActions(routerOutput, openItems, { message: resolvedContent, recentConversation });
+        const [seekingMode, textEmotion] = await seekingAndEmotion;
+        if (textEmotion) {
+          await recordEmotionSignals(user.id, [{ source: "text", ...textEmotion, quote: resolvedContent.slice(0, 140), memoryId: inboundMemory.rows[0].id }]);
+        }
+        const emotional = await getEmotionalContext(user.id);
         // Items other than a call offer only ever resolved on real text, same
         // as the classifiers this replaces.
         const resolvedItem = decision.resolve && (hasText || decision.resolve.item.kind === "call_offer") ? decision.resolve : null;
@@ -2196,7 +2179,16 @@ Return ONLY valid JSON, no preamble: {"date": "YYYY-MM-DD or null", "time": "HH:
                 // kind of thing for what they asked, off on a detail: a funding
                 // story went out for "Anyone hiring a design engineer?"
                 // (2026-09-18).
-                const closest = !prepared.length ? preparedAll.find((p) => p.em?.rightKind === true) : undefined;
+                // Never something outside the dates they asked about
+                // (2026-09-25: "Anything good this weekend?" got Tech Week,
+                // Oct 5-11, as the closest thing). That one is only named in
+                // a sentence, without its link, below.
+                const closest = !prepared.length ? preparedAll.find((p) => p.em?.rightKind === true && !p.em?.outsideTimeFrame) : undefined;
+                const offWindow = !prepared.length && !closest ? preparedAll.find((p) => p.em?.rightKind === true && p.em?.outsideTimeFrame) : undefined;
+                if (offWindow) {
+                  addFact(replyFacts, "known", `The closest real one was "${offWindow.m.name}", but it's outside the dates they asked about (${offWindow.why ?? "different dates"}). It was NOT sent.`);
+                  addInstruction(replyFacts, "Nothing fits the dates they asked about. Say that plainly. You may name the closest one in a short sentence with its dates as written in the facts, so they can decide; don't send its link unless they ask.");
+                }
                 if (closest?.em) {
                   closest.description = await draftDescription(closest.m, closest.em, true);
                   prepared.push(closest);
@@ -2541,8 +2533,14 @@ Return ONLY valid JSON, no preamble: {"date": "YYYY-MM-DD or null", "time": "HH:
         // that never got drafted in the first place. Skipping the wait too
         // means the person isn't kept waiting on top of whatever the search
         // itself already took.
+        // The wait runs from when their text arrived, not from here
+        // (2026-09-26): it used to start after the router and prep, so every
+        // reply paid those seconds and then 4 more. A text that lands within
+        // DEBOUNCE_MS of this one still takes over the turn.
+        let debounceWaitMs = 0;
         if (myInboundAt && !turnDidWork) {
-          await new Promise((resolve) => setTimeout(resolve, DEBOUNCE_MS));
+          debounceWaitMs = Math.max(0, DEBOUNCE_MS - (Date.now() - new Date(myInboundAt).getTime()));
+          if (debounceWaitMs > 0) await new Promise((resolve) => setTimeout(resolve, debounceWaitMs));
           const latestStampResult = await pool.query(
             `SELECT last_inbound_at FROM phone_debounce WHERE phone = $1`,
             [number],
@@ -2564,62 +2562,14 @@ Return ONLY valid JSON, no preamble: {"date": "YYYY-MM-DD or null", "time": "HH:
         // Step 5 — Two separate context sources, since they answer different
         // questions. Topical similarity search answers "what's relevant to
         // what they just said" but has no sense of recency or conversation
-        // flow — on its own it can just as easily surface something said
-        // weeks ago in an unrelated exchange as it can the actual last thing
-        // discussed (confirmed: this produced a reply referencing an
-        // unrelated "3pm" proposal from a different circle entirely). The
-        // chronological block below answers "what did we just say," in
-        // order, so the model can actually follow the thread.
-        let memoriesResult;
-        if (queryEmbedding) {
-          try {
-            memoriesResult = await pool.query(
-              `SELECT content FROM co_memories
-               WHERE user_id = $1 AND content_embedding IS NOT NULL AND memory_type != 'intent'
-               ORDER BY content_embedding <=> $2::vector
-               LIMIT 5`,
-              [user.id, `[${queryEmbedding.join(",")}]`],
-            );
-          } catch (vecErr) {
-            console.error("Vector search failed, falling back to recency:", vecErr);
-            memoriesResult = await pool.query(
-              `SELECT content FROM co_memories WHERE user_id = $1 AND memory_type != 'intent' ORDER BY created_at DESC LIMIT 5`,
-              [user.id],
-            );
-          }
-        } else {
-          memoriesResult = await pool.query(
-            `SELECT content FROM co_memories WHERE user_id = $1 AND memory_type != 'intent' ORDER BY created_at DESC LIMIT 5`,
-            [user.id],
-          );
-        }
-        // Filtered for genuine relevance to what they just said before the
-        // reply agent ever sees it — see filterRelevantMemories in
-        // conversationReply.ts. Vector similarity alone isn't enough of a
-        // relevance signal to hand this to the model as foreground context;
-        // this is what makes it safe to do so.
-        const rawMemoryCandidates = memoriesResult.rows.map((m: any) => m.content).filter(Boolean);
-        const recentMemories = rawMemoryCandidates.length
-          ? await filterRelevantMemories(resolvedContent, rawMemoryCandidates)
-          : "";
+        // flow (confirmed: it once surfaced an unrelated "3pm" proposal). The
+        // chronological block (recentConversation) answers "what did we just
+        // say." Both were started before the router (recentMemoriesP,
+        // coverageP); the context summary reads state this turn may have
+        // changed, so it's read now, alongside them.
+        const [recentMemories, { missingTopic }, contextSummary] = await Promise.all([recentMemoriesP, coverageP, buildContextSummary(user.id)]);
+        const replyContextWaitMs = Date.now() - replyContextStarted;
 
-        // Co Loop Stage 1 — same coverage-nudge logic the Stage 5 check-in
-        // cron uses (jobs/index.ts), shared via profileExtraction.ts's
-        // getCoverageNudge so a text-only relationship also works toward
-        // RAPPORT_TOPICS instead of only ever reactively answering whatever
-        // comes up — matches co-test/src/routes/webhooks.ts's already-proven
-        // approach for this. Persisted topics_covered/topics_asked (read as
-        // part of `profile` above) mean a topic answered on a prior call or
-        // text doesn't get re-judged or re-asked here.
-        const { missingTopic } = await getCoverageNudge(user.id, recentConversation, profile);
-
-
-        // Not gated like the reply-agent's secondary gestures above — this
-        // isn't a competing "extra ask" for the reply's one secondary slot,
-        // it's an instruction about HOW to say whatever Co was already going
-        // to say. Advisory only (see harness/emotion.ts) and never named back to
-        // the user — a good friend responds differently to someone who's
-        // upset, they don't announce "you sound upset."
         const toneContext = renderEmotionalContext(emotional);
 
         // Advisory only, same reasoning as toneContext above — reading a
@@ -2637,8 +2587,7 @@ Return ONLY valid JSON, no preamble: {"date": "YYYY-MM-DD or null", "time": "HH:
           // same "what Co knows about this person" builder the call channel
           // uses for its own {{context_summary}} fill), so both channels
           // stay genuinely in sync rather than each maintaining their own
-          // summary of the same underlying profile.
-          const contextSummary = await buildContextSummary(user.id);
+          // summary of the same underlying profile. (Read in Step 5 above.)
           // Texts no longer carry the call guide (agent/conversationReply.ts,
           // 2026-09-24), so it isn't fetched from Hume on every text.
           const personaPrompt = null;
@@ -2653,6 +2602,7 @@ Return ONLY valid JSON, no preamble: {"date": "YYYY-MM-DD or null", "time": "HH:
           // second LLM call inferring after the fact whether the drafted
           // text happened to include one.
           const replyStarted = Date.now();
+          let firstSentAt: number | null = null;
           // How they like to be texted, learned from this message against
           // Co's last one (services/textingStyle.ts). In the background, so
           // it never slows the reply; the next reply reads it.
@@ -2697,7 +2647,11 @@ Return ONLY valid JSON, no preamble: {"date": "YYYY-MM-DD or null", "time": "HH:
                 recentMemories,
                 contextSummary,
                 personaPrompt,
-                sendCoReply,
+                sendCoReply: async (p: { phone: string; message: string; asVoice: boolean }) => {
+                  const ok = await sendCoReply(p);
+                  if (ok && firstSentAt === null) firstSentAt = Date.now();
+                  return ok;
+                },
               }),
           );
           coReply = replyText;
@@ -2716,7 +2670,10 @@ Return ONLY valid JSON, no preamble: {"date": "YYYY-MM-DD or null", "time": "HH:
               checks: [{ name: "within_budget", pass: turnMs <= (searchedThisTurn ? REPLY_BUDGET_SEARCH_MS : REPLY_BUDGET_MS), reason: `${Math.round(turnMs / 1000)}s` }],
               // Where the time went, so slow turns can be read without
               // guessing (Royce, 2026-09-16: 36s replies).
-              proposal: { ms: turnMs, routerMs: routerLatencyMs, factsMs, searchMs: searchMsForTurn, prepMs: prepMsForTurn, replyMs, groundingMs, debounceMs: DEBOUNCE_MS },
+              // firstSentMs: from their text to Co's first text going out,
+              // which is what they actually wait; ms runs to the end of the
+              // turn, including any step after the reply already went out.
+              proposal: { ms: turnMs, firstSentMs: firstSentAt ? firstSentAt - new Date(myInboundAt).getTime() : null, routerMs: routerLatencyMs, factsMs, searchMs: searchMsForTurn, prepMs: prepMsForTurn, replyMs, groundingMs, debounceMs: debounceWaitMs, contextSinceStartMs: replyContextWaitMs },
             }).catch(() => {});
           }
         }

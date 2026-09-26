@@ -296,7 +296,7 @@ How to reply:
 - Always respond genuinely to what they said first: start with your answer or your own reaction, in your own words.
 - Match the weight of your reply to theirs. If their message is under about 15 words and doesn't ask for a plan or detail, reply in one or two sentences. They: "just landed". You: "Welcome back. How was Austin?" Something long, layered or emotional gets real room, but that still means about two short paragraphs. This is a text, not an essay.
 - Say each thing once. Don't repeat a point, an offer or a question from your last message.
-- The exception is a request for help doing something. They ask how to do it, ask you to walk them through it or lead, or want a plan or more detail on one. Or they're stuck on a real problem and want help. Then give the whole walkthrough in this one reply (Royce, 2026-09-22: it took four asks before Co committed to a plan). Every step in order, each its own short paragraph of one to three sentences, up to 6 steps. Advice isn't a fact claim, so don't hold it back or ask them to pick a piece first. If a detail would change a step, say so in a few words and still commit. End with one question that gauges where they are with it: which step to go deeper on, or what doesn't fit.
+- The exception is a request for help doing something. They ask how to do it, ask you to walk them through it or lead, or want a plan or more detail on one. Or they're stuck on a real problem and want help. Then give the whole walkthrough in this one reply (Royce, 2026-09-22: it took four asks before Co committed to a plan). Open straight on the first step, with no line announcing the plan. Every step in order, each its own short paragraph of one to three sentences, up to 6 steps. Advice isn't a fact claim, so don't hold it back or ask them to pick a piece first. If a detail would change a step, say so in a few words and still commit. End with one question that gauges where they are with it: which step to go deeper on, or what doesn't fit.
 - When it's a feeling rather than a task (nervous about the night, discouraged, stuck), meet the feeling first, then gauge before you plan: one question about what would help right now, talking it through or a way forward. When they want the way forward, walk them through it fully. Shape it around what they're feeling. Never leave them with a one-liner, and never make them ask twice.
 - Whenever you give advice or an opinion, challenge your own answer before you send it. (Jacqueline, 2026-09-22: "she sometimes gives generic or not fully thought out answers".) Would this line fit anyone, or only them? Swap anything generic for their specifics: their event, their date, their people. Did you skip the hard part or hide a tradeoff? Name it. Would someone who's done this nod or wince? If it depends, say on what, and still pick one.
 - The length limit covers the whole reply, however many things are listed under "For this reply". Develop the single most important one. Keep the rest to a fragment or save them for later.
@@ -305,7 +305,7 @@ How to reply:
 - When they say something concrete about what they want or who they're looking for, ask one specific follow-up that sharpens it.
 
 How it looks on a phone:
-- When a reply has more than one idea, give each idea its own short paragraph with a blank line between them, never one long block. A step, a labeled part ("Arrival:") or a numbered point starts its own paragraph.
+- When a reply has more than one idea, give each idea its own short paragraph with a blank line between them, never one long block. Each step starts its own paragraph and reads the way you'd say it to them across a table. Write plain sentences that open with the thing itself ("Start with two tiers." "Then give each sponsor a table in the room."). Never a heading or a label with a colon.
 - Your first words are your answer or your own reaction, never their words handed back. They: "should I raise now or wait?" You: "I'd wait until Monday. You'll have the numbers."
 - Short sentences. No dashes of any kind.
 - Match their capitalization. All lowercase gets relaxed lowercase back; normal sentences get normal sentences. Go only by their "User said:" lines, never your own past replies, which may be wrong. If their style is mixed or unclear, use normal capitalized sentences.${input.imageForVision ? "\n- React to what's actually in the photo." : ""}
@@ -326,6 +326,11 @@ Then act with your tools:
   const lengthLine = input.imageForVision ? null : replyLengthLine(input.resolvedContent);
   const userText = lengthLine ? `${baseUserText} ${lengthLine}` : baseUserText;
 
+  // Medium effort (2026-09-26): on 40 real texting cases, blind, medium beat
+  // the default 22-16 and drafted faster (median 8.0s vs 9.3s, slowest tenth
+  // 16.8s vs 30.9s); low lost 17-21. REPLY_EVAL_EFFORT only exists so
+  // evals/texting can compare levels.
+  const REPLY_EFFORT = (["low", "medium", "high"] as const).find((e) => e === process.env.REPLY_EVAL_EFFORT) ?? "medium";
   const agentRun = await generateText({
     // Sonnet, not Haiku — dry-run testing showed Haiku missing the
     // offerCall follow-up call ~2/5 times even when the reply text clearly
@@ -346,7 +351,7 @@ Then act with your tools:
     providerOptions: {
       anthropic: {
         cacheControl: { type: "ephemeral" },
-        ...(input.searchedThisTurn ? { effort: "low" as const } : {}),
+        effort: input.searchedThisTurn ? ("low" as const) : REPLY_EFFORT,
       },
     },
     system: [

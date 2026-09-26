@@ -17,6 +17,7 @@ const cases: { person: string; message: string; recentConversation: string; cont
 const out = process.argv[2];
 
 async function one(c: (typeof cases)[number], id: number) {
+  const t0 = Date.now();
   const personaPrompt = process.env.TEXTING_NO_PERSONA ? null : await renderCoPersonaPrompt(c.person, c.contextSummary).catch(() => null);
   const r = await runConversationReplyAgent(
     {
@@ -45,10 +46,10 @@ async function one(c: (typeof cases)[number], id: number) {
     },
     { dryRun: true, record: false },
   );
-  return { id, reply: r.replyText };
+  return { id, reply: r.replyText, ms: Date.now() - t0 };
 }
 
-const results: { id: number; reply: string }[] = new Array(cases.length);
+const results: { id: number; reply: string; ms?: number }[] = new Array(cases.length);
 let next = 0;
 await Promise.all(
   Array.from({ length: 4 }, async () => {
@@ -64,5 +65,6 @@ await Promise.all(
   }),
 );
 writeFileSync(out, JSON.stringify(results.filter((r) => r.reply), null, 2));
-console.log(`wrote ${results.filter((r) => r.reply).length}/${cases.length} replies to ${out}`);
+const times = results.filter((r) => r.reply && r.ms).map((r) => r.ms!).sort((x, y) => x - y);
+console.log(`wrote ${results.filter((r) => r.reply).length}/${cases.length} replies to ${out}; median ${times[Math.floor(times.length / 2)]}ms, p90 ${times[Math.floor(times.length * 0.9)]}ms`);
 process.exit(0);

@@ -51,6 +51,7 @@ export const LAYER3_MODELS = {
 // Effort for the grounding check and redraft. The check is extraction plus a
 // supported/unsupported read, so low effort keeps latency down.
 const GROUNDING_EFFORT = "low";
+export const GROUNDING_CALL_TIMEOUT_MS = 20_000;
 
 export type FactKind =
   | "did_this_turn" // something Co actually did during this turn
@@ -183,6 +184,13 @@ export async function gatherReplyFacts(
   // one?" and "are you actually searching?" are answerable (2026-09-16).
   for (const line of sent) addFact(rf, "did_before", line);
   for (const note of notes) addFact(rf, "did_before", note);
+  // What Co's recent follow-ups were about, with the original send
+  // (proactiveRegistry.ts debrief onSent). 2026-09-26: asked "you never sent
+  // that", Co couldn't see a five-day-old send and agreed.
+  const { rows: followups } = await pool
+    .query(`SELECT content FROM co_memories WHERE user_id = $1 AND memory_type = 'followup_context' AND created_at > NOW() - INTERVAL '4 days' ORDER BY created_at DESC LIMIT 3`, [userId])
+    .catch(() => ({ rows: [] as any[] }));
+  for (const r of followups) addFact(rf, "did_before", String(r.content));
 
   if (!scheduled.rows.length) addFact(rf, "scheduled", "No calls are scheduled with them.");
   for (const row of scheduled.rows) {
@@ -531,6 +539,9 @@ async function extractClaims(draft: string, rf: ReplyFacts, src: GroundingSource
     model: anthropic(LAYER3_MODELS.grounding),
     maxOutputTokens: 2000,
     providerOptions: { anthropic: { effort: GROUNDING_EFFORT } },
+    // A stalled call held one check for 318s in a test (2026-09-26); past
+    // this the check counts as unavailable and the usual fallback runs.
+    abortSignal: AbortSignal.timeout(GROUNDING_CALL_TIMEOUT_MS),
     experimental_telemetry: { isEnabled: true, functionId: "reply.grounding.check" },
     prompt: `You check a text message Co is about to send, before it goes out. Find every claim in it that could be false, and say whether the sources below support it.
 
@@ -605,12 +616,13 @@ function claimChecks(claims: Claim[], rf: ReplyFacts, src: GroundingSources): Ga
   });
 }
 
-async function redraft(draft: string, failed: GateCheck[], rf: ReplyFacts, src: GroundingSources): Promise<string | null> {
+async function redraft(draft: string, failed: GateCheck[], rf: ReplyFacts, src: GroundingSources, earlierTry: string | null = null): Promise<string | null> {
   const tail = src.recentConversation.split("\n").slice(-14).join("\n");
   const { text } = await generateText({
     model: anthropic(LAYER3_MODELS.redraft),
     maxOutputTokens: 1000,
     providerOptions: { anthropic: { effort: GROUNDING_EFFORT } },
+    abortSignal: AbortSignal.timeout(GROUNDING_CALL_TIMEOUT_MS),
     experimental_telemetry: { isEnabled: true, functionId: "reply.grounding.redraft" },
     prompt: `${CO_VOICE}
 
@@ -628,7 +640,7 @@ Your draft reply:
 
 These parts of the draft aren't supported by the facts or the conversation:
 ${failed.map((f) => `- ${f.reason ?? f.name}`).join("\n")}
-
+${earlierTry ? `\nAn earlier rewrite also had unsupported parts (listed above too): "${earlierTry}"\nThis time, answer what they just asked first, in words the facts above actually support, even if the honest answer is short.\n` : ""}
 Rewrite the draft so it still responds to what they said, keeping everything that's supported. Fix or remove each unsupported part. If you don't have something they asked for, say it once, plainly, naming exactly what you don't have ("I don't have the start time"), then what you can do now if anything. If an unsupported part was about something you did (sent, saved, passed along, noted), say what's actually true the way a person would in a text ("Honestly, that one didn't get passed to the team."), never a system-sounding line like "I don't have that", and without promising anything in its place. Don't hedge, don't point them at a link instead, and don't promise to get it later. Match the draft's capitalization style. Same length or shorter. Return ONLY the message.`,
   });
   const out = text.trim().replace(/^"|"$/g, "");
@@ -792,8 +804,28 @@ export async function groundReply(
         ? [...second.checks.filter((c) => !c.pass), CLAIM_READ_FAILED_CHECK]
         : second.checks.filter((c) => !c.pass)
       : null;
+    // One more try when the redraft failed too, with everything both checks
+    // caught (2026-09-26): stripping kept whichever version had more words
+    // left, and for "Look on X?" that was the side remark, with the answer
+    // cut. A rewrite that answers from the facts beats a stripped one.
+    let third: { text: string; checks: GateCheck[] } | null = null;
+    if (!(rewritten && second && secondFailed && !secondFailed.length) && secondFailed) {
+      try {
+        const retry = await redraft(draft, [...effectiveFailed1, ...secondFailed], rf, src, rewritten);
+        if (retry) {
+          const cleaned = cleanCoMessage(retry);
+          const r3 = await check(cleaned, rf, src);
+          const failed3 = claimReadUnavailable(cleaned, r3) ? [...r3.checks.filter((c) => !c.pass), CLAIM_READ_FAILED_CHECK] : r3.checks.filter((c) => !c.pass);
+          if (!failed3.length) third = { text: cleaned, checks: r3.checks };
+        }
+      } catch (err: any) {
+        console.error("replyGrounding: second redraft failed (non-fatal, stripping instead):", err?.message ?? err);
+      }
+    }
     if (rewritten && second && secondFailed && !secondFailed.length) {
       result = { final: rewritten, outcome: "redrafted", checks: [...first.checks, ...second.checks.map((c) => ({ ...c, name: `redraft.${c.name}` }))], latencyMs: Date.now() - started, firstCheckMs };
+    } else if (third) {
+      result = { final: third.text, outcome: "redrafted", checks: [...first.checks, ...(second?.checks ?? []).map((c) => ({ ...c, name: `redraft.${c.name}` })), ...third.checks.map((c) => ({ ...c, name: `redraft2.${c.name}` }))], latencyMs: Date.now() - started, firstCheckMs };
     } else {
       // The redraft can fail its OWN check too (2026-09-17 code review: a
       // "checked already" past-action claim got redrafted into an

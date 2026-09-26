@@ -27,8 +27,17 @@ import { enqueueCandidate, nextLocalHour } from "../harness/proactive.js";
 // event_offer_resolved/recap all follow this same shape).
 const TIER3_FOLLOWUP_DELAY_DAYS = 5;
 
+// The day a follow-up is about: a real event date, or the dates a Tier 3
+// post itself states (2026-09-26: an X post for an Oct 7 demo day had
+// statedDates, which were ignored, so Co asked "did anything come of it?"
+// on Sep 26, a fixed 5 days after sending it). The last day when it spans.
+export function followUpDate(match: any): string | null {
+  const d = match?.event_date ?? match?.statedDates?.end ?? match?.statedDates?.start ?? null;
+  return typeof d === "string" && /^\d{4}-\d{2}-\d{2}/.test(d) ? d.slice(0, 10) : null;
+}
+
 export async function scheduleOutcomeFollowUp(userId: string, askText: string, match: TierMatch): Promise<void> {
-  const eventDate = "event_date" in match ? match.event_date : null;
+  const eventDate = followUpDate(match);
   if (match.tier !== 3 && !eventDate) return; // Tier 1/2 need a real event date to anchor "the day after"; Tier 3 doesn't have or need one
 
   try {
@@ -212,7 +221,7 @@ export async function enqueueDueOutcomeFollowUps(): Promise<void> {
     // Tier 1/2 anchor on the event's own date ("the day after"); Tier 3 has
     // no event to anchor on, so its already-computed send_at (a fixed delay
     // from when it was recommended) is the anchor instead (2026-09-17).
-    const eventDate: string | undefined = match.event_date;
+    const eventDate: string | undefined = followUpDate(match) ?? undefined;
     const anchor: Date | null = eventDate ? null : row.send_at instanceof Date ? row.send_at : row.send_at ? new Date(row.send_at) : null;
     if (!eventDate && !anchor) {
       await pool.query(`UPDATE recommendation_outcome_followups SET harness_status = 'dropped' WHERE id = $1`, [row.id]);
@@ -226,6 +235,7 @@ export async function enqueueDueOutcomeFollowUps(): Promise<void> {
       eventApiId: match.event_api_id ?? null,
       eventName: row.match_name,
       eventEnd: eventDate ? endOfLocalDay(eventDate, timezone) : anchor!,
+      eventDate: eventDate ?? null,
       timezone,
       part: { outcomeFollowupIds: [row.id], askText: row.ask_text },
     }).catch((err: any) => {
@@ -236,7 +246,7 @@ export async function enqueueDueOutcomeFollowUps(): Promise<void> {
   }
 }
 
-function endOfLocalDay(isoDate: string, timezone: string | null): Date {
+export function endOfLocalDay(isoDate: string, timezone: string | null): Date {
   const d = DateTime.fromISO(isoDate, { zone: timezone ?? "America/Los_Angeles" });
   return (d.isValid ? d.endOf("day") : DateTime.fromISO(isoDate).endOf("day")).toJSDate();
 }
@@ -244,6 +254,8 @@ function endOfLocalDay(isoDate: string, timezone: string | null): Date {
 export type DebriefPayload = {
   eventApiId: string | null;
   eventName: string;
+  // The day it's about, when known (followUpDate). Never followed up before.
+  eventDate?: string | null;
   outcomeFollowupIds: string[];
   checkinFollowupIds: string[];
   walkinCheckinIds: string[];
@@ -260,12 +272,14 @@ export async function enqueueDebrief(opts: {
   eventApiId: string | null;
   eventName: string;
   eventEnd: Date;
+  eventDate?: string | null;
   timezone: string | null;
   part: Partial<Pick<DebriefPayload, "outcomeFollowupIds" | "checkinFollowupIds" | "walkinCheckinIds" | "askText">>;
 }): Promise<{ queued: boolean }> {
   const payload: DebriefPayload = {
     eventApiId: opts.eventApiId,
     eventName: opts.eventName,
+    eventDate: opts.eventDate ?? null,
     outcomeFollowupIds: opts.part.outcomeFollowupIds ?? [],
     checkinFollowupIds: opts.part.checkinFollowupIds ?? [],
     walkinCheckinIds: opts.part.walkinCheckinIds ?? [],
@@ -283,6 +297,7 @@ export async function enqueueDebrief(opts: {
     merge: (existing: DebriefPayload, incoming: DebriefPayload) => ({
       ...existing,
       eventName: existing.eventName || incoming.eventName,
+      eventDate: existing.eventDate ?? incoming.eventDate ?? null,
       askText: existing.askText ?? incoming.askText,
       outcomeFollowupIds: Array.from(new Set([...(existing.outcomeFollowupIds ?? []), ...incoming.outcomeFollowupIds])),
       checkinFollowupIds: Array.from(new Set([...(existing.checkinFollowupIds ?? []), ...incoming.checkinFollowupIds])),

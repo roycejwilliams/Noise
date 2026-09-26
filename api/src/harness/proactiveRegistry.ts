@@ -4,7 +4,7 @@
 // and what to record once it actually went out, or was dropped.
 import pool from "../db/db.js";
 import { writeMemory } from "../services/memory.js";
-import { draftProactive, nameTokens, type Candidate, type DraftResult, type ProactiveRegistry } from "./proactive.js";
+import { draftProactive, nameTokens, nextLocalHour, type Candidate, type DraftResult, type ProactiveRegistry } from "./proactive.js";
 import { draftEventReveal } from "../agent/eventDiscoverySurfacing.js";
 import { draftAskCheckin, type AskCheckinPayload } from "../agent/askCheckin.js";
 import { draftCompanionCheckin } from "../agent/companionCheckin.js";
@@ -13,7 +13,7 @@ import { draftCalendarFollow } from "../agent/calendarFollowReachOut.js";
 import { draftAskSolicitation } from "../agent/eventAskSolicitation.js";
 import { draftPostCall, markPostCallDropped, markPostCallSent } from "../jobs/postCallFollowUp.js";
 import { askStillOpen, isShortNotice, onEventOfferDropped, onEventOfferSent, type EventOfferPayload } from "../services/eventSurfacingSweep.js";
-import type { DebriefPayload } from "../services/recommendationOutcome.js";
+import { endOfLocalDay, followUpDate, type DebriefPayload } from "../services/recommendationOutcome.js";
 import { markMatchNudgeSent, type EventMatchNudgePayload } from "../services/eventScoring.js";
 import { lapseCloseDate, lapseText } from "../services/membershipLapse.js";
 import { getTimezoneForCity } from "../services/geocoding.js";
@@ -55,13 +55,53 @@ async function peopleCoPointedTo(userId: string, eventApiId: string | null): Pro
   return rows.map((r: any) => r.first_name);
 }
 
-async function draftDebrief(c: Candidate, firstName: string): Promise<DraftResult> {
-  const p = c.payload as DebriefPayload;
-  const people = await peopleCoPointedTo(c.userId, p.eventApiId);
-  return draftDebriefText(firstName, p, people);
+// What Co actually sent them about it, and when: the link as its own text,
+// then the line right after it (2026-09-26: a follow-up said "a few days
+// ago" about a send from five days back, and when Royce said Co never sent
+// it, Co couldn't see the send and agreed).
+export type SentRecord = { date: string; caption: string | null };
+async function whatCoSent(userId: string, followupIds: string[]): Promise<SentRecord | null> {
+  if (!followupIds.length) return null;
+  const { rows: f } = await pool.query(`SELECT match->>'url' AS url, match_name FROM recommendation_outcome_followups WHERE id = ANY($1::uuid[])`, [followupIds]);
+  for (const r of f) {
+    if (!r.url) continue;
+    const { rows } = await pool.query(
+      `SELECT l.created_at,
+              (SELECT n.content FROM co_memories n WHERE n.user_id = l.user_id AND n.memory_type = 'text_exchange' AND n.content LIKE 'Co replied:%'
+                 AND n.created_at > l.created_at AND n.created_at < l.created_at + INTERVAL '2 minutes' AND n.content <> l.content ORDER BY n.created_at LIMIT 1) AS caption
+       FROM co_memories l WHERE l.user_id = $1 AND l.memory_type = 'text_exchange' AND l.content = 'Co replied: ' || $2
+       ORDER BY l.created_at DESC LIMIT 1`,
+      [userId, r.url],
+    );
+    if (rows[0]) return { date: new Date(rows[0].created_at).toISOString().slice(0, 10), caption: rows[0].caption ? String(rows[0].caption).replace(/^Co replied:\s*/, "") : null };
+  }
+  return null;
 }
 
-export async function draftDebriefText(firstName: string, p: DebriefPayload, people: string[]): Promise<DraftResult> {
+async function draftDebrief(c: Candidate, firstName: string): Promise<DraftResult> {
+  const p = c.payload as DebriefPayload;
+  const { rows: prof } = await pool.query(`SELECT city FROM co_profiles WHERE user_id = $1`, [c.userId]).catch(() => ({ rows: [] as any[] }));
+  const tz = prof[0]?.city ? await getTimezoneForCity(prof[0].city).catch(() => null) : null;
+  // Never before the day it's about. Older payloads carry no date, so it's
+  // read from their follow-up rows.
+  let date = p.eventDate ?? null;
+  if (!date && p.outcomeFollowupIds?.length) {
+    const { rows } = await pool.query(`SELECT match FROM recommendation_outcome_followups WHERE id = ANY($1::uuid[])`, [p.outcomeFollowupIds]).catch(() => ({ rows: [] as any[] }));
+    date = rows.map((r: any) => followUpDate(r.match)).filter((d: string | null): d is string => !!d).sort().pop() ?? null;
+  }
+  if (date) {
+    const end = endOfLocalDay(date, tz);
+    if (end.getTime() > Date.now()) return { defer: nextLocalHour(end, tz, 10), reason: `"${p.eventName}" is on ${date}, which hasn't happened yet` };
+  }
+  // A follow-up on something Co sent needs a record that Co sent it.
+  const sent = p.outcomeFollowupIds?.length ? await whatCoSent(c.userId, p.outcomeFollowupIds) : null;
+  const onlyAboutASend = !p.eventApiId && !(p.checkinFollowupIds ?? []).length && !(p.walkinCheckinIds ?? []).length;
+  if (onlyAboutASend && !sent) return skip("no record of Co sending it to them");
+  const people = await peopleCoPointedTo(c.userId, p.eventApiId);
+  return draftDebriefText(firstName, p, people, sent, date);
+}
+
+export async function draftDebriefText(firstName: string, p: DebriefPayload, people: string[], sent: SentRecord | null = null, date: string | null = null): Promise<DraftResult> {
   const walkin = (p.walkinCheckinIds ?? []).length > 0;
   // A Tier 3 opportunity (accelerator, investor, mentor — see
   // tieredRecommendation.ts's category) has no eventApiId (it's not a real
@@ -75,13 +115,16 @@ export async function draftDebriefText(firstName: string, p: DebriefPayload, peo
     firstName,
     facts: {
       event: p.eventName,
-      when: isOpportunity ? "a few days ago" : "last night or recently",
+      when: date ? `it was on ${date}` : isOpportunity ? null : "last night or recently",
+      co_sent_it_on: sent?.date ?? null,
+      what_co_said_when_it_sent_it: sent?.caption ?? null,
+      today: new Date().toISOString().slice(0, 10),
       people_co_pointed_them_to_there: people,
       what_they_were_looking_for: p.askText,
       they_checked_in_at_the_door: walkin ? "yes, and Co doesn't know them well yet" : null,
     },
     task: isOpportunity
-      ? `Ask if they got a chance to look into or apply to "${p.eventName}" (a real opportunity Co pointed them to, not an event) — did anything come of it. One text, not a survey.`
+      ? `Ask if they got a chance to look into or apply to "${p.eventName}" (a real opportunity Co pointed them to on the date above, not an event) — did anything come of it. If what Co said about it shows it's still ahead of today, SKIP. One text, not a survey.`
       : `Ask how "${p.eventName}" was, naming the event.${people.length ? ` Name one of the people Co pointed them to and ask if they ended up talking.` : " Ask who they met or what stood out."}${walkin ? " Then offer, in the same text, to find time for a call this week so you can get to know them and point them to better people next time." : ""} One text, not a survey.`,
   });
   if (!text) return skip("model chose SKIP");
@@ -209,6 +252,13 @@ export const proactiveRegistry: ProactiveRegistry = {
     },
     async onSent(c, _person, messages) {
       const p = c.payload as DebriefPayload;
+      // What the follow-up is about, so Co's next replies can see the
+      // original send even when it's older than its recent-sends list
+      // (harness/replyGrounding.ts reads followup_context).
+      const sent = p.outcomeFollowupIds?.length ? await whatCoSent(c.userId, p.outcomeFollowupIds).catch(() => null) : null;
+      if (sent) {
+        await writeMemory(c.userId, "followup_context", `Co's follow-up asked about "${p.eventName}", which Co sent them on ${sent.date}${sent.caption ? `: "${sent.caption}"` : ""}.`).catch(() => {});
+      }
       if (p.outcomeFollowupIds?.length) {
         await pool.query(`UPDATE recommendation_outcome_followups SET sent_at = NOW(), harness_status = 'sent' WHERE id = ANY($1::uuid[])`, [p.outcomeFollowupIds]);
       }

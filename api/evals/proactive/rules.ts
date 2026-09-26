@@ -248,5 +248,47 @@ check("no follow-up line has an em dash or exclamation", [...OFFER_FOLLOWUP_MANY
   check("each surfacing sweep dispatches when it finishes queueing", (jobs.match(/await runDispatch\(\);/g) ?? []).length === 2);
 }
 
+// Follow-ups about something Co sent (2026-09-26: "Did anything come of
+// AgentFi demo day?" on Sep 26 for an Oct 7 event; then Co agreed it had
+// never sent it).
+{
+  const { followUpDate } = await import("../../src/services/recommendationOutcome.js");
+  check("follow-up date: a post's stated date counts", followUpDate({ statedDates: { start: "2026-10-07", end: null } }) === "2026-10-07");
+  check("follow-up date: the last day when it spans", followUpDate({ statedDates: { start: "2026-10-05", end: "2026-10-11" } }) === "2026-10-11");
+  check("follow-up date: a real event date wins", followUpDate({ event_date: "2026-10-10", statedDates: { start: "2026-10-01", end: null } }) === "2026-10-10");
+  check("follow-up date: none is none", followUpDate({}) === null && followUpDate({ statedDates: { start: "soon" } }) === null);
+  const ro = readFileSync(new URL("../../src/services/recommendationOutcome.ts", import.meta.url), "utf8");
+  check("scheduling and queueing both use it", /const eventDate = followUpDate\(match\);/.test(ro) && /const eventDate: string \| undefined = followUpDate\(match\) \?\? undefined;/.test(ro));
+  const reg = readFileSync(new URL("../../src/harness/proactiveRegistry.ts", import.meta.url), "utf8");
+  check("a follow-up before its day is deferred, not sent or dropped", /if \(end\.getTime\(\) > Date\.now\(\)\) return \{ defer: nextLocalHour\(end, tz, 10\)/.test(reg));
+  check("no record of sending it, no follow-up about it", /if \(onlyAboutASend && !sent\) return skip\("no record of Co sending it to them"\);/.test(reg));
+  check("the draft knows when Co sent it and what it said", /co_sent_it_on: sent\?\.date/.test(reg) && /what_co_said_when_it_sent_it/.test(reg) && !/"a few days ago"/.test(reg));
+  check("the send is remembered for Co's next replies", /writeMemory\(c\.userId, "followup_context"/.test(reg) && /memory_type = 'followup_context'/.test(readFileSync(new URL("../../src/harness/replyGrounding.ts", import.meta.url), "utf8")));
+  const pr = readFileSync(new URL("../../src/harness/proactive.ts", import.meta.url), "utf8");
+  check("a deferred candidate moves, it isn't dropped", /if \("defer" in draft\) \{\s*await pool\.query\(\s*`UPDATE proactive_candidates SET due_at = \$2/.test(pr));
+}
+
+// Every memory type code writes must be allowed by the table (2026-09-26:
+// five weren't, so those writes all failed quietly, one of them for weeks).
+{
+  const { readdirSync, statSync } = await import("fs");
+  const { join } = await import("path");
+  const root = new URL("../../src/", import.meta.url).pathname;
+  const files: string[] = [];
+  const walk = (d: string) => { for (const f of readdirSync(d)) { const p = join(d, f); if (statSync(p).isDirectory()) walk(p); else if (p.endsWith(".ts")) files.push(p); } };
+  walk(root);
+  const written = new Set<string>();
+  for (const f of files) {
+    const t = readFileSync(f, "utf8");
+    for (const m of t.matchAll(/writeMemory\([^,]+,\s*"([a-z_]+)"/g)) written.add(m[1]);
+    for (const m of t.matchAll(/INTO co_memories \(user_id, memory_type, content\)\s*(?:VALUES \(\$1, |SELECT \$1, )'([a-z_]+)'/g)) written.add(m[1]);
+  }
+  const mig = readFileSync(new URL("../../src/db/migrations.ts", import.meta.url), "utf8");
+  const list = mig.slice(mig.indexOf("const memoryTypes = ["), mig.indexOf("];", mig.indexOf("const memoryTypes = [")));
+  const allowed = new Set(Array.from(list.matchAll(/"([a-z_]+)"/g)).map((m) => m[1]));
+  const missing = [...written].filter((w) => !allowed.has(w));
+  check(`every memory type code writes is allowed by the table${missing.length ? ` (missing: ${missing.join(", ")})` : ""}`, written.size > 5 && missing.length === 0);
+}
+
 console.log(`proactive rules: ${total - failed}/${total} passed`);
 if (failed) process.exitCode = 1;
