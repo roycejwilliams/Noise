@@ -5,6 +5,7 @@ import { localDate, offerScore, orderForOffering } from "../../src/services/even
 import { capitalizeSentences, looksLikeMetaReply, paragraphize } from "../../src/services/textStyle.js";
 import { readFileSync } from "fs";
 const { isTimeout } = await import("../../src/agent/conversationReply.js");
+const { firstSendTimes } = await import("../../src/services/turnLatency.js");
 import { nearestPlace, parseDiscoverPlaces } from "../../src/services/lumaDiscovery.js";
 import { announcementAudience } from "../../src/services/coEventAnnouncement.js";
 import { resolveCoEventCity } from "../../src/services/luma.js";
@@ -426,7 +427,9 @@ onboardingCaseCases.push(
   [/debounceWaitMs = Math\.max\(0, DEBOUNCE_MS - \(Date\.now\(\) - new Date\(myInboundAt\)\.getTime\(\)\)\)/.test(readFileSync(new URL("../../src/routes/sendblue.ts", import.meta.url), "utf8")), "latency: the debounce runs from when their text arrived, not after the router"],
   [(() => { const r = readFileSync(new URL("../../src/routes/sendblue.ts", import.meta.url), "utf8"); return r.indexOf("const seekingAndEmotion = hasText") < r.indexOf("routeMessage(routeInput)") && r.indexOf("await seekingAndEmotion") > r.indexOf("routeMessage(routeInput)"); })(), "latency: mood and seeking reads run alongside the router"],
   [/Promise\.all\(\[recentMemoriesP, coverageP, buildContextSummary\(user\.id\)\]\)/.test(readFileSync(new URL("../../src/routes/sendblue.ts", import.meta.url), "utf8")), "latency: memories, coverage and context summary run together"],
-  [/firstSentMs: firstSentAt/.test(readFileSync(new URL("../../src/routes/sendblue.ts", import.meta.url), "utf8")), "latency: time to Co's first text is recorded"],
+  [/firstSentMs: firsts\.firstSentMs, firstAnswerMs: firsts\.firstAnswerMs/.test(readFileSync(new URL("../../src/routes/sendblue.ts", import.meta.url), "utf8")), "latency: time to Co's first text and first real answer are recorded, whichever path sent them"],
+  [(() => { const t0 = new Date("2026-09-27T00:31:47Z"); const r = firstSendTimes([{ text: "https://lu.ma/full-moon", at: new Date("2026-09-27T00:32:11Z") }, { text: "Let me look, one sec.", at: new Date("2026-09-27T00:31:56Z") }], t0, ["Let me look, one sec."]); return r.firstSentMs === 9000 && r.firstAnswerMs === 24000; })(), "latency: a hold line counts as the first text, not as the answer"],
+  [firstSendTimes([], new Date(), []).firstSentMs === null, "latency: nothing sent, nothing recorded"],
   [/\?\? "medium";/.test(readFileSync(new URL("../../src/agent/conversationReply.ts", import.meta.url), "utf8")), "latency: replies draft at medium effort (won blind 22-16, faster)"],
   [/Never a heading or a label with a colon/.test(readFileSync(new URL("../../src/agent/conversationReply.ts", import.meta.url), "utf8")) && !/labeled part \("Arrival:"\)/.test(readFileSync(new URL("../../src/agent/conversationReply.ts", import.meta.url), "utf8")), "voice: walkthroughs read as spoken steps, not labeled sections"],
   [/p\.em\?\.rightKind === true && !p\.em\?\.outsideTimeFrame/.test(readFileSync(new URL("../../src/routes/sendblue.ts", import.meta.url), "utf8")) && /"outsideTimeFrame": true or false/.test(readFileSync(new URL("../../src/services/eventDetails.ts", import.meta.url), "utf8")), "search: a near-miss outside the dates asked is named, never sent"],

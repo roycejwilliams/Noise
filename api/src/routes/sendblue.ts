@@ -28,6 +28,7 @@ import { claimJoinNotice, invitesLeftFor, inviterFirstName, releaseJoinNotice } 
 import { decideInviteJoinedGate } from "../services/inviteJoinGate.js";
 import { handlePhoneChange } from "../services/phoneChange.js";
 import { handleTeamText } from "../services/extensions.js";
+import { firstSendTimes } from "../services/turnLatency.js";
 import { describeImage } from "../services/imageRead.js";
 import { CALL_OFFER, GATE_ASK, INVITE_JOINED, WELCOME, WELCOME_INVITED, WRONG_CODE, pickLine } from "../services/onboardingLines.js";
 import { claimTextLogin } from "../services/textLogin.js";
@@ -2206,7 +2207,8 @@ Return ONLY valid JSON, no preamble: {"date": "YYYY-MM-DD or null", "time": "HH:
                 // (services/namedEventLookup.ts); this is its only path to a real answer, tried
                 // once, only as the true last resort.
                 if (!prepared.length) {
-                  const scopeCity = "scope" in recommendation ? (recommendation.scope?.city ?? null) : null;
+                  // The first place when the search covered several ("Sacramento + San Francisco").
+                  const scopeCity = "scope" in recommendation ? (recommendation.scope?.city?.split(" + ")[0] ?? null) : null;
                   const scopeZone = ("scope" in recommendation && recommendation.scope?.timezone) || "America/Los_Angeles";
                   const named = await lookupNamedEvent(resolvedContent, scopeCity ?? profile?.city ?? null, DateTime.now().setZone(scopeZone).toISODate() ?? DateTime.now().toISODate()!, {
                     userId: user.id,
@@ -2604,7 +2606,6 @@ Return ONLY valid JSON, no preamble: {"date": "YYYY-MM-DD or null", "time": "HH:
           // second LLM call inferring after the fact whether the drafted
           // text happened to include one.
           const replyStarted = Date.now();
-          let firstSentAt: number | null = null;
           // How they like to be texted, learned from this message against
           // Co's last one (services/textingStyle.ts). In the background, so
           // it never slows the reply; the next reply reads it.
@@ -2649,11 +2650,7 @@ Return ONLY valid JSON, no preamble: {"date": "YYYY-MM-DD or null", "time": "HH:
                 recentMemories,
                 contextSummary,
                 personaPrompt,
-                sendCoReply: async (p: { phone: string; message: string; asVoice: boolean }) => {
-                  const ok = await sendCoReply(p);
-                  if (ok && firstSentAt === null) firstSentAt = Date.now();
-                  return ok;
-                },
+                sendCoReply,
               }),
           );
           coReply = replyText;
@@ -2663,6 +2660,15 @@ Return ONLY valid JSON, no preamble: {"date": "YYYY-MM-DD or null", "time": "HH:
           // Measured from when the text reached Co to the reply going out.
           if (myInboundAt) {
             const turnMs = Date.now() - new Date(myInboundAt).getTime();
+            // What they actually waited, from what was logged as sent this
+            // turn, whichever path sent it: the search's hold line and
+            // results go out before the reply step (2026-09-27: search turns
+            // logged no first-text time at all).
+            const sentRows = await pool
+              .query(`SELECT content, created_at FROM co_memories WHERE user_id = $1 AND memory_type = 'text_exchange' AND content LIKE 'Co replied:%' AND created_at >= $2 ORDER BY created_at LIMIT 20`, [user.id, myInboundAt])
+              .then((r) => r.rows)
+              .catch(() => [] as any[]);
+            const firsts = firstSendTimes(sentRows.map((r: any) => ({ text: String(r.content).replace(/^Co replied:\s*/, ""), at: new Date(r.created_at) })), new Date(myInboundAt), HOLD_LINES);
             recordDecision({
               layer: 3,
               decision: "turn.latency",
@@ -2672,10 +2678,10 @@ Return ONLY valid JSON, no preamble: {"date": "YYYY-MM-DD or null", "time": "HH:
               checks: [{ name: "within_budget", pass: turnMs <= (searchedThisTurn ? REPLY_BUDGET_SEARCH_MS : REPLY_BUDGET_MS), reason: `${Math.round(turnMs / 1000)}s` }],
               // Where the time went, so slow turns can be read without
               // guessing (Royce, 2026-09-16: 36s replies).
-              // firstSentMs: from their text to Co's first text going out,
-              // which is what they actually wait; ms runs to the end of the
-              // turn, including any step after the reply already went out.
-              proposal: { ms: turnMs, firstSentMs: firstSentAt ? firstSentAt - new Date(myInboundAt).getTime() : null, routerMs: routerLatencyMs, factsMs, searchMs: searchMsForTurn, prepMs: prepMsForTurn, replyMs, groundingMs, debounceMs: debounceWaitMs, contextSinceStartMs: replyContextWaitMs },
+              // firstSentMs: their text to Co's first text of any kind (a hold
+              // line counts); firstAnswerMs: to the first real answer. ms runs
+              // to the end of the turn, including steps after the reply went out.
+              proposal: { ms: turnMs, firstSentMs: firsts.firstSentMs, firstAnswerMs: firsts.firstAnswerMs, routerMs: routerLatencyMs, factsMs, searchMs: searchMsForTurn, prepMs: prepMsForTurn, replyMs, groundingMs, debounceMs: debounceWaitMs, contextSinceStartMs: replyContextWaitMs },
             }).catch(() => {});
           }
         }

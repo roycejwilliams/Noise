@@ -566,13 +566,14 @@ function extractJson(text: string): any {
   }
 }
 
-async function extractClaims(draft: string, rf: ReplyFacts, src: GroundingSources): Promise<{ claims: Claim[]; latencyMs: number } | null> {
+async function extractClaims(draft: string, rf: ReplyFacts, src: GroundingSources, model: string = LAYER3_MODELS.grounding): Promise<{ claims: Claim[]; latencyMs: number } | null> {
   const started = Date.now();
   const facts = rf.facts.map((f) => `[${f.id}] ${f.text}`).join("\n");
   const { text } = await generateText({
-    model: anthropic(LAYER3_MODELS.grounding),
+    model: anthropic(model),
     maxOutputTokens: 2000,
-    providerOptions: { anthropic: { effort: GROUNDING_EFFORT } },
+    // Haiku takes no effort setting (it errors, 2026-09-27).
+    ...(model === MODELS.haiku ? {} : { providerOptions: { anthropic: { effort: GROUNDING_EFFORT } } }),
     // A stalled call held one check for 318s in a test (2026-09-26); past
     // this the check counts as unavailable and the usual fallback runs.
     abortSignal: AbortSignal.timeout(GROUNDING_CALL_TIMEOUT_MS),
@@ -717,13 +718,17 @@ export function sentencesToRecheck(draft: string, rewrite: string, failed: GateC
     .filter((x) => !whole.includes(flat(x)) || bad.some((q) => flat(x).includes(` ${q} `) || flat(x).includes(q)));
 }
 
+// The model for the reads after a rewrite. GROUNDING_RECHECK_MODEL only
+// exists so evals/grounding can compare (2026-09-27).
+const RECHECK_MODEL = process.env.GROUNDING_RECHECK_MODEL === "haiku" ? MODELS.haiku : LAYER3_MODELS.grounding;
+
 async function recheck(draft: string, rewrite: string, failed: GateCheck[], rf: ReplyFacts, src: GroundingSources): Promise<{ checks: GateCheck[]; modelOk: boolean; ms: number }> {
   // GROUNDING_FULL_RECHECK only exists so evals/grounding can compare the old full re-read.
   if (process.env.GROUNDING_FULL_RECHECK) return onlyCuts(draft, rewrite) ? { checks: [...codeChecks(rewrite, rf, src), { name: "claim_read", pass: true, reason: "only cuts" }], modelOk: true, ms: 0 } : check(rewrite, rf, src);
   const code = codeChecks(rewrite, rf, src);
   const changed = sentencesToRecheck(draft, rewrite, failed);
   if (!changed.length) return { checks: [...code, { name: "claim_read", pass: true, reason: "the rewrite only kept or cut already-checked words" }], modelOk: true, ms: 0 };
-  const r = await check(changed.join(" "), rf, src);
+  const r = await check(changed.join(" "), rf, src, RECHECK_MODEL);
   return { checks: [...code, ...r.checks.filter((c) => c.name.startsWith("claim"))], modelOk: r.modelOk, ms: r.ms };
 }
 
@@ -822,12 +827,12 @@ export function needsClaimCheck(draft: string): boolean {
 // One retry before giving up on a claim-shaped draft (2026-09-17 code
 // review): a single bad JSON response or a transient failure used to send
 // the draft "unchecked," with only the cheap regex checks behind it.
-async function check(draft: string, rf: ReplyFacts, src: GroundingSources): Promise<{ checks: GateCheck[]; modelOk: boolean; ms: number }> {
+async function check(draft: string, rf: ReplyFacts, src: GroundingSources, model?: string): Promise<{ checks: GateCheck[]; modelOk: boolean; ms: number }> {
   const code = codeChecks(draft, rf, src);
   if (!needsClaimCheck(draft)) return { checks: [...code, { name: "claim_read", pass: true, reason: "nothing claim-shaped, model read skipped" }], modelOk: true, ms: 0 };
   for (let attempt = 1; attempt <= 2; attempt++) {
     try {
-      const extracted = await extractClaims(draft, rf, src);
+      const extracted = await extractClaims(draft, rf, src, model);
       if (extracted) return { checks: [...code, ...claimChecks(extracted.claims, rf, src)], modelOk: true, ms: extracted.latencyMs };
       console.error(`replyGrounding: claim check returned unusable JSON on attempt ${attempt}${attempt === 1 ? ", retrying once" : ""}`);
     } catch (err: any) {

@@ -150,33 +150,6 @@ async function filterByRadius<T extends { city?: string | null; online?: boolean
   return candidates.filter((_, i) => withinFlags[i]);
 }
 
-// The ask's own place wins over the profile city ("founder meetups near
-// Fargo" from someone whose profile says SF). Cached per ask text since the
-// urgent pre-check re-runs the same asks every day.
-const askCityCache = new Map<string, string | null>();
-async function resolveSearchCity(askText: string | undefined, profileCity: string | null): Promise<string | null> {
-  if (!askText) return profileCity;
-  if (!askCityCache.has(askText)) {
-    let city: string | null = null;
-    try {
-      const { text: raw } = await generateText({
-        model: anthropic(EXTRACT_MODEL),
-        experimental_telemetry: { isEnabled: true, functionId: "tieredRecommendation.resolveSearchCity" },
-        prompt: `Does this request name a specific city, metro, or region where they want to find something? "${askText}"
-
-Return ONLY valid JSON: {"city": "City, State/Country" or null}. null if no place is named or it's only "near me"/"online".`,
-      });
-      const parsed = parseModelJson(raw);
-      city = typeof parsed?.city === "string" && parsed.city.trim() ? parsed.city.trim() : null;
-    } catch (err: any) {
-      console.error("tieredRecommendation: resolveSearchCity failed (non-fatal, using profile city):", err?.message ?? err);
-      return profileCity;
-    }
-    if (askCityCache.size > 500) askCityCache.clear();
-    askCityCache.set(askText, city);
-  }
-  return askCityCache.get(askText) ?? profileCity;
-}
 
 // Real judgment gate, take two (Royce, 2026-09-02) — the first attempt at
 // this was reverted for being unreliable when judging from a bare event
@@ -841,9 +814,70 @@ async function refreshAvailability(found: TierMatch[]): Promise<TierMatch[]> {
   return refreshed.filter((m): m is TierMatch => m !== null);
 }
 
+// Every place the ask names, in the order it names them (the ask's own place
+// wins over the profile city: "founder meetups near Fargo" from someone whose
+// profile says SF), falling back to the profile city (2026-09-27: "this weekend in Sacramento or SF" became
+// an SF-only search while Royce was in Sacramento). At most two.
+const askCitiesCache = new Map<string, string[]>();
+export function parseCities(parsed: any): string[] {
+  const list = Array.isArray(parsed?.cities) ? parsed.cities : typeof parsed?.city === "string" ? [parsed.city] : [];
+  return [...new Set(list.filter((c: unknown): c is string => typeof c === "string" && c.trim().length > 1).map((c: string) => c.trim()))].slice(0, 2) as string[];
+}
+export async function resolveSearchCities(askText: string | undefined, profileCity: string | null): Promise<(string | null)[]> {
+  if (!askText) return [profileCity];
+  if (!askCitiesCache.has(askText)) {
+    let cities: string[] = [];
+    try {
+      const { text: raw } = await generateText({
+        model: anthropic(EXTRACT_MODEL),
+        experimental_telemetry: { isEnabled: true, functionId: "tieredRecommendation.resolveSearchCities" },
+        prompt: `Which specific cities, metros, or regions does this request name as places they want to find something? "${askText}"
+
+List every one, in the order named ("in Sacramento or SF" is two), each as a full name, never an abbreviation ("San Francisco, California", not "SF"). Return ONLY valid JSON: {"cities": ["City, State/Country", ...]} or {"cities": []} if no place is named or it's only "near me"/"online".`,
+      });
+      cities = parseCities(parseModelJson(raw));
+    } catch (err: any) {
+      console.error("tieredRecommendation: resolveSearchCities failed (non-fatal, using profile city):", err?.message ?? err);
+      return [profileCity];
+    }
+    if (askCitiesCache.size > 500) askCitiesCache.clear();
+    askCitiesCache.set(askText, cities);
+  }
+  const named = askCitiesCache.get(askText)!;
+  return named.length ? named : [profileCity];
+}
+
+// Pure: one result from several cities' searches, the first city's first,
+// each thing once.
+export function mergeCityResults(results: TieredResult[]): TieredResult {
+  const seen = new Set<string>();
+  const matches: TierMatch[] = [];
+  for (const r of results) {
+    for (const m of r.matches) {
+      const key = ("url" in m && m.url ? m.url : m.name).toLowerCase();
+      if (seen.has(key)) continue;
+      seen.add(key);
+      matches.push(m);
+    }
+  }
+  const scope = { ...results[0].scope, city: results.map((r) => r.scope.city).filter(Boolean).join(" + ") || results[0].scope.city };
+  return { matches, scope };
+}
+
 export async function getTieredRecommendation(
   ask: StatedIntent,
   profileCity: string | null,
+  opts: Parameters<typeof getTieredRecommendationFor>[2] = {},
+): Promise<TieredResult> {
+  const cities = await resolveSearchCities(ask.text, profileCity);
+  if (cities.length < 2) return getTieredRecommendationFor(ask, cities[0] ?? null, opts);
+  const results = await Promise.all(cities.map((c, i) => getTieredRecommendationFor(ask, c, { ...opts, skipTier3: i > 0 })));
+  return mergeCityResults(results);
+}
+
+async function getTieredRecommendationFor(
+  ask: StatedIntent,
+  city: string | null,
   // rawMessage: their own words, used for the time frame and for spotting a
   // "what's on?" ask, since the search text is a rewrite that can drop both.
   // profile: what Co knows they want right now (personSnapshot.ts
@@ -852,9 +886,8 @@ export async function getTieredRecommendation(
   // coreAsk: the member's own ask, for Tier 3. The sweep searches events with
   // a widened brief, but openings follow what they actually asked (2026-09-18:
   // "AI engineer meetups Thursday night" became a pre-seed funding X query).
-  opts: { userId?: string; checkRepeat?: boolean; source?: "sweep" | "request"; timezone?: string | null; rawMessage?: string; profile?: string | null; widen?: boolean; coreAsk?: string | null } = {},
+  opts: { userId?: string; checkRepeat?: boolean; source?: "sweep" | "request"; timezone?: string | null; rawMessage?: string; profile?: string | null; widen?: boolean; coreAsk?: string | null; skipTier3?: boolean } = {},
 ): Promise<TieredResult> {
-  const city = await resolveSearchCity(ask.text, profileCity);
   const { zone, defaulted: timezoneDefaulted } = searchZone(opts.timezone);
   const trace = newTrace();
   // A time frame they named ("this weekend", "next Tuesday") scopes the
@@ -909,6 +942,9 @@ export async function getTieredRecommendation(
     // it used to wait for both to finish).
     const tier3Ask: StatedIntent = opts.coreAsk?.trim() ? { ...ask, text: opts.coreAsk.trim() } : ask;
     const runTier3 = async (): Promise<TierMatch | null> => {
+      // A second city in the same ask (getTieredRecommendation): posts aren't
+      // tied to a city, so the first city's X search already covered them.
+      if (opts.skipTier3) return null;
       const started = Date.now();
       try {
         // Every ask searches Tier 3 too (Royce, 2026-09-16: "Asks should always

@@ -131,7 +131,9 @@ Return ONLY JSON: {"verdicts": [{"i": 0, "verdict": "true" | "false" | "unclear"
           const bad = (judged.get(d.id) ?? []).filter((j: any) => j.verdict === "false");
           const sentences = String(g.final).match(/[^.!?\n]+[.!?]*/g) ?? [String(g.final)];
           const left = bad.filter((j: any) => sentences.some((x) => overlap(x, j.claim) >= 0.6)).length;
-          res.push({ outcome: g.outcome, total: g.latencyMs, first: g.firstCheckMs, ...(g.stages ?? {}), bad: bad.length, left, secondFails: (g.checks ?? []).filter((c: any) => c.name.startsWith("redraft.") && !c.pass).map((c: any) => c.reason) });
+          const good = (judged.get(d.id) ?? []).filter((j: any) => j.verdict === "true");
+          const kept = good.filter((j: any) => sentences.some((x) => overlap(x, j.claim) >= 0.6)).length;
+          res.push({ outcome: g.outcome, total: g.latencyMs, first: g.firstCheckMs, ...(g.stages ?? {}), bad: bad.length, left, good: good.length, kept, secondFails: (g.checks ?? []).filter((c: any) => c.name.startsWith("redraft.") && !c.pass).map((c: any) => c.reason) });
         }
       }
     }),
@@ -141,7 +143,7 @@ Return ONLY JSON: {"verdicts": [{"i": 0, "verdict": "true" | "false" | "unclear"
   const p90 = (xs: number[]) => (xs.length ? [...xs].sort((a, b) => a - b)[Math.floor(xs.length * 0.9)] : 0);
   const col = (k: string) => rw.map((r) => r[k]).filter((x) => typeof x === "number");
   console.log(`${res.length} drafts: ${res.filter((r) => r.outcome === "as_drafted").length} as drafted, ${rw.length} rewritten or cut`);
-  console.log(`${process.env.GROUNDING_FULL_RECHECK ? "OLD full re-read" : "NEW changed-only re-read"}: judged-false claims left in what would be sent: ${res.reduce((a, r) => a + r.left, 0)}/${res.reduce((a, r) => a + r.bad, 0)}`);
+  console.log(`${process.env.GROUNDING_FULL_RECHECK ? "OLD full re-read" : "NEW changed-only re-read"}: judged-false claims left in what would be sent: ${res.reduce((a, r) => a + r.left, 0)}/${res.reduce((a, r) => a + r.bad, 0)}; judged-true claims kept: ${res.reduce((a, r) => a + r.kept, 0)}/${res.reduce((a, r) => a + r.good, 0)}`);
   if (process.env.SHOW_SECOND_FAILS) for (const r of rw.filter((r) => r.secondFails?.length)) console.log(`  second check failed: ${r.secondFails.join(" | ").slice(0, 200)}`);
   console.log(`rewritten ones, median / p90 seconds: total ${(med(col("total")) / 1000).toFixed(1)} / ${(p90(col("total")) / 1000).toFixed(1)}; first check ${(med(col("first")) / 1000).toFixed(1)}; rewrite ${(med(col("redraftMs")) / 1000).toFixed(1)}; second check ${(med(col("secondCheckMs")) / 1000).toFixed(1)} (${col("secondCheckMs").filter((x) => x < 50).length} skipped as cuts); second rewrite ran ${col("retryMs").length}x, median ${(med(col("retryMs")) / 1000).toFixed(1)}`);
 } else if (mode === "replay" || mode === "replay-old") {
