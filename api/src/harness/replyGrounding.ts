@@ -197,7 +197,14 @@ export async function gatherReplyFacts(
   for (const r of followups) addFact(rf, "did_before", String(r.content));
   // Co's own record of what it sent and did for them (services/coFacts.ts):
   // the last two weeks of sends, and anything older their message names.
-  for (const line of await ledgerFacts(userId, opts.context ?? "").catch(() => [] as string[])) addFact(rf, "did_before", line);
+  const ledger = await ledgerFacts(userId, opts.context ?? "").catch(() => ({ lines: [] as string[], named: [] as string[] }));
+  for (const line of ledger.lines) addFact(rf, "did_before", line);
+  // They're asking about something the record shows Co sent: the record
+  // answers, whatever earlier messages said (2026-09-27: after two earlier
+  // wrong denials in the thread, Co said "Still no, same as I said before").
+  if (ledger.named.length) {
+    addInstruction(rf, `What they're asking about is in Co's record as sent: ${ledger.named.join(" ")} Answer from that record. If an earlier message in this conversation said otherwise, say plainly that it was wrong.`);
+  }
 
   if (!scheduled.rows.length) addFact(rf, "scheduled", "No calls are scheduled with them.");
   for (const row of scheduled.rows) {
@@ -581,7 +588,7 @@ async function extractClaims(draft: string, rf: ReplyFacts, src: GroundingSource
     prompt: `You check a text message Co is about to send, before it goes out. Find every claim in it that could be false, and say whether the sources below support it.
 
 Claims to find:
-- past_action: something Co says it did or sent ("I sent you the link", "I scheduled it", "I emailed you both"), including passing something along ("noted for the team", "that goes straight to the team", "I passed it on"): supported only if a FACT says it was saved for the team
+- past_action: something Co says it did or sent ("I sent you the link", "I scheduled it", "I emailed you both"), including a yes or no to whether it did ("Still no", "Yep, I did"), including passing something along ("noted for the team", "that goes straight to the team", "I passed it on"): supported only if a FACT says it was saved for the team
 - future_promise: something Co says it will do later ("I'll send it when I have it", "I'll keep an eye out", "I'll keep digging daily", "I'll call you then"), or says it's already doing in the background ("I'm working the sponsor search"), or tells them to ask again later as if something will have changed ("ask me again in a bit")
 - time, place, count, detail: a start time, date, address, neighborhood, headcount, format, host, price, or other specific about an event, program, or plan; a count also includes how many things Co found, sent, or searched ("those two were the results", "I sent you three")
 - link: a link or an "it's in the link above"

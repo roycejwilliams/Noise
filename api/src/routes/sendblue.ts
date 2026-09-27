@@ -2125,6 +2125,7 @@ Return ONLY valid JSON, no preamble: {"date": "YYYY-MM-DD or null", "time": "HH:
                     timeFrame: describeTimeFrame("scope" in recommendation ? recommendation.scope : null),
                     goals: profile?.goals ?? null,
                     city: profile?.city ?? null,
+                    place: "scope" in recommendation ? (recommendation.scope?.city ?? null) : null,
                     feeling: renderEmotionalContext(emotional),
                   });
                   return { m, em };
@@ -2186,11 +2187,16 @@ Return ONLY valid JSON, no preamble: {"date": "YYYY-MM-DD or null", "time": "HH:
                 // (2026-09-25: "Anything good this weekend?" got Tech Week,
                 // Oct 5-11, as the closest thing). That one is only named in
                 // a sentence, without its link, below.
-                const closest = !prepared.length ? preparedAll.find((p) => p.em?.rightKind === true && !p.em?.outsideTimeFrame) : undefined;
-                const offWindow = !prepared.length && !closest ? preparedAll.find((p) => p.em?.rightKind === true && p.em?.outsideTimeFrame) : undefined;
+                // Nor somewhere other than where they asked (2026-09-27: "What
+                // about in San Francisco?" got a Bengaluru post, undated, so
+                // the date rule let it through).
+                const offTarget = (p: PreparedMatch) => !!(p.em?.outsideTimeFrame || p.em?.outsidePlace);
+                const closest = !prepared.length ? preparedAll.find((p) => p.em?.rightKind === true && !offTarget(p)) : undefined;
+                const offWindow = !prepared.length && !closest ? preparedAll.find((p) => p.em?.rightKind === true && offTarget(p)) : undefined;
                 if (offWindow) {
-                  addFact(replyFacts, "known", `The closest real one was "${offWindow.m.name}", but it's outside the dates they asked about (${offWindow.why ?? "different dates"}). It was NOT sent.`);
-                  addInstruction(replyFacts, "Nothing fits the dates they asked about. Say that plainly. You may name the closest one in a short sentence with its dates as written in the facts, so they can decide; don't send its link unless they ask.");
+                  const what = offWindow.em?.outsidePlace ? "somewhere other than where they asked" : "outside the dates they asked about";
+                  addFact(replyFacts, "known", `The closest real one was "${offWindow.m.name}", but it's ${what} (${offWindow.why ?? "a different time or place"}). It was NOT sent.`);
+                  addInstruction(replyFacts, "Nothing fits the dates and place they asked about. Say that plainly. You may name the closest one in a short sentence with its dates and place as written in the facts, so they can decide; don't send its link unless they ask.");
                 }
                 if (closest?.em) {
                   closest.description = await draftDescription(closest.m, closest.em, true);

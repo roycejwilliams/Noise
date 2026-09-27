@@ -87,7 +87,8 @@ const JUDGE_MODEL = MODELS.sonnet;
 // asked for, separate from whether it fits on date, place, or stage.
 // outsideTimeFrame: the fit check read it as happening outside the dates
 // they asked about (2026-09-26), so it never goes out as a "closest thing".
-type MatchExtras = { details?: EventDetails; opportunity?: OpportunityDetails; whyItFits?: string; fits?: boolean; rightKind?: boolean; outsideTimeFrame?: boolean };
+// outsidePlace: somewhere other than where they asked, and not online (2026-09-27).
+type MatchExtras = { details?: EventDetails; opportunity?: OpportunityDetails; whyItFits?: string; fits?: boolean; rightKind?: boolean; outsideTimeFrame?: boolean; outsidePlace?: boolean };
 export type TierMatch =
   | ({ tier: 1; kind: "co_event"; event_api_id: string; event_date: string; name: string; url?: string; reason: string; city?: string | null; online?: boolean } & MatchExtras)
   | ({ tier: 2; kind: "public_event"; event_api_id: string; event_date: string; name: string; url: string; reason: string; city?: string | null; online?: boolean } & MatchExtras)

@@ -180,6 +180,9 @@ export type PersonForFit = {
   timeFrame?: string | null;
   goals?: string[] | null;
   city?: string | null;
+  // Where this search looked ("San Francisco, California", or several joined
+  // with " + "): what they asked about, which can differ from their profile.
+  place?: string | null;
   feeling?: string;
   avoid?: string[] | null;
   availability?: string | null;
@@ -234,7 +237,9 @@ Also say whether it's the right kind of thing for what they asked (test 1 alone)
 
 ${person.timeFrame ? `Also say whether it clearly happens outside ${person.timeFrame} ("outsideTimeFrame": true), from its own dates above. When its dates aren't known, false.
 
-` : ""}Return ONLY JSON: {"fits": true or false, "rightKind": true or false,${person.timeFrame ? ' "outsideTimeFrame": true or false,' : ""}${avoidList.length ? ' "avoided": true or false,' : ""} "why": "the explanation"}`;
+` : ""}${person.place ? `They're looking in or near ${person.place.split(" + ").join(" or ")}. Also say whether it's clearly somewhere else and not online ("outsidePlace": true), from where it is above. When its place isn't known, false.
+
+` : ""}Return ONLY JSON: {"fits": true or false, "rightKind": true or false,${person.timeFrame ? ' "outsideTimeFrame": true or false,' : ""}${person.place ? ' "outsidePlace": true or false,' : ""}${avoidList.length ? ' "avoided": true or false,' : ""} "why": "the explanation"}`;
 }
 
 // What they've ruled out, and when they're usually free, straight from
@@ -251,7 +256,7 @@ async function loadFitPreferences(userId: string): Promise<{ avoid: string[]; av
   return { avoid: Array.isArray(r.avoid) ? r.avoid.filter((a: unknown) => typeof a === "string" && a.trim()) : [], availability };
 }
 
-export async function explainFit(match: EnrichedMatch, person: PersonForFit): Promise<{ fits: boolean; rightKind: boolean; outsideTimeFrame?: boolean; why: string } | null> {
+export async function explainFit(match: EnrichedMatch, person: PersonForFit): Promise<{ fits: boolean; rightKind: boolean; outsideTimeFrame?: boolean; outsidePlace?: boolean; why: string } | null> {
   const picture = person.userId ? renderSnapshot(await getPersonSnapshot(person.userId)) : "";
   if (person.userId && (person.avoid === undefined || person.availability === undefined)) {
     const prefs = await loadFitPreferences(person.userId);
@@ -264,8 +269,9 @@ export async function explainFit(match: EnrichedMatch, person: PersonForFit): Pr
       experimental_telemetry: { isEnabled: true, functionId: "eventDetails.explainFit" },
       prompt: fitPrompt(match, person, picture),
     });
-    const p = parseModelJson<{ fits?: boolean; rightKind?: boolean; outsideTimeFrame?: boolean; avoided?: boolean; why?: string }>(text);
+    const p = parseModelJson<{ fits?: boolean; rightKind?: boolean; outsideTimeFrame?: boolean; outsidePlace?: boolean; avoided?: boolean; why?: string }>(text);
     const outsideTimeFrame = !!person.timeFrame && p.outsideTimeFrame === true;
+    const outsidePlace = !!person.place && p.outsidePlace === true && !match.online;
     if (typeof p.why !== "string" || !p.why.trim()) return null;
     // Never claim who they are beyond what Co was given about them (services/identityGuard.ts).
     const cleanWhy = stripUngroundedIdentity(p.why, `${picture}\n${person.askText ?? ""}\n${(person.goals ?? []).join(" ")}\n${person.city ?? ""}`);
@@ -281,12 +287,12 @@ export async function explainFit(match: EnrichedMatch, person: PersonForFit): Pr
     // so it can go out as a caveated "closest thing" when nothing else fits,
     // and the caveat names the day and time.
     const conflict = availabilityConflict(person.availability, match.details?.startAt ?? null, match.details?.timezone ?? null);
-    if (conflict) return { fits: false, rightKind: p.rightKind !== false, outsideTimeFrame, why: `${p.why.trim()} ${conflict}` };
-    // Outside the dates they asked about never fits.
-    const fits = p.fits !== false && !outsideTimeFrame;
+    if (conflict) return { fits: false, rightKind: p.rightKind !== false, outsideTimeFrame, outsidePlace, why: `${p.why.trim()} ${conflict}` };
+    // Outside the dates or the place they asked about never fits.
+    const fits = p.fits !== false && !outsideTimeFrame && !outsidePlace;
     // Anything that fits is the right kind; a misfit is only the right kind
     // when the model said so outright.
-    return { fits, rightKind: fits || p.rightKind === true, outsideTimeFrame, why: p.why.trim() };
+    return { fits, rightKind: fits || p.rightKind === true, outsideTimeFrame, outsidePlace, why: p.why.trim() };
   } catch (err: any) {
     console.error("eventDetails: explainFit failed (non-fatal):", err?.message ?? err);
     return null;
@@ -308,6 +314,7 @@ export async function enrichMatch(match: TierMatch | EnrichedMatch, person?: Per
       m.fits = fit.fits;
       m.rightKind = fit.rightKind;
       m.outsideTimeFrame = fit.outsideTimeFrame;
+      m.outsidePlace = fit.outsidePlace;
     }
   }
   return m;

@@ -102,7 +102,7 @@ export async function recordProactiveText(userId: string, type: string, message:
 
 export type LedgerRow = { relation: string; label: string; url: string | null; at: Date; when?: string | null; whenEnd?: string | null };
 
-const STOP = new Set(["that", "this", "with", "from", "have", "what", "your", "about", "event", "thing", "there", "they", "when", "were", "just", "send", "sent", "never", "didn", "into", "some", "anything", "something", "really", "would", "could", "should"]);
+const STOP = new Set(["ever", "that", "this", "with", "from", "have", "what", "your", "about", "event", "thing", "there", "they", "when", "were", "just", "send", "sent", "never", "didn", "into", "some", "anything", "something", "really", "would", "could", "should"]);
 export function distinctiveWords(text: string): string[] {
   return [...new Set((text.toLowerCase().match(/[a-z0-9][a-z0-9'-]{3,}/g) ?? []).filter((w) => !STOP.has(w)))];
 }
@@ -111,9 +111,11 @@ export function distinctiveWords(text: string): string[] {
 export function rowsNamedIn(rows: LedgerRow[], text: string): LedgerRow[] {
   const words = distinctiveWords(text);
   if (!words.length) return [];
+  // Whole words only ("ever" isn't in "never").
+  const res = words.map((w) => new RegExp(`(^|[^a-z0-9])${w.replace(/[^a-z0-9'-]/g, "")}([^a-z0-9]|$)`));
   return rows.filter((r) => {
     const l = r.label.toLowerCase();
-    return words.some((w) => l.includes(w));
+    return res.some((re) => re.test(l));
   });
 }
 
@@ -122,7 +124,14 @@ export function ledgerLine(r: LedgerRow, today = localToday()): string {
   // The thing's own date, when known, read against today (dateGuard.ts).
   const note = r.when ? dateNote(readDates({ start: r.when, end: r.whenEnd && r.whenEnd >= r.when ? r.whenEnd : r.when }, today)) : "";
   if (r.relation === "sent") return `On ${day} Co sent them "${r.label}"${r.url && !r.label.includes(r.url) ? ` (${r.url})` : ""}${note}.`;
-  if (r.relation === "texted") return `On ${day} Co texted them first: "${r.label}"`;
+  // A first text that carried a link is a send of that link, said plainly
+  // (2026-09-27: "texted them first: https://…" was read as not having sent
+  // a link, and Co said it "never sent an actual link").
+  if (r.relation === "texted") {
+    const link = r.label.match(/https?:\/\/\S+/)?.[0];
+    const rest = link ? r.label.replace(link, "").trim() : r.label;
+    return link ? `On ${day} Co sent them this link, unprompted: ${link}${rest ? `, with: "${rest}"` : ""}` : `On ${day} Co texted them first: "${r.label}"`;
+  }
   if (r.relation === "searched") return `On ${day} Co searched for them: "${r.label}".`;
   return `On ${day} Co ${r.label}.`;
 }
@@ -130,7 +139,13 @@ export function ledgerLine(r: LedgerRow, today = localToday()): string {
 // For Co's reply: what it sent and did for them lately, plus anything older
 // that the message (or Co's own last messages) names. Read as facts, so
 // "you never sent me that" is checked against the record.
-export async function ledgerFacts(userId: string, context: string): Promise<string[]> {
+// Pure: the sends their message names (for the instruction to answer from
+// the record, harness/replyGrounding.ts).
+export function sendsNamedIn(all: LedgerRow[], message: string): LedgerRow[] {
+  return rowsNamedIn(all, message).filter((r) => r.relation === "sent" || (r.relation === "texted" && /https?:\/\//.test(r.label)));
+}
+
+export async function ledgerFacts(userId: string, context: string): Promise<{ lines: string[]; named: string[] }> {
   const { rows } = await pool
     .query(
       `SELECT relation, object_label AS label, url, happened_at AS at, meta->>'when' AS when, meta->>'when_end' AS when_end FROM co_facts
@@ -139,21 +154,33 @@ export async function ledgerFacts(userId: string, context: string): Promise<stri
       [userId],
     )
     .catch(() => ({ rows: [] as any[] }));
-  return ledgerLinesFrom(
-    rows.map((r: any) => ({ relation: r.relation, label: String(r.label), url: r.url ?? null, at: new Date(r.at), when: r.when ?? null, whenEnd: r.when_end ?? null })),
-    context,
-  );
+  const all: LedgerRow[] = rows.map((r: any) => ({ relation: r.relation, label: String(r.label), url: r.url ?? null, at: new Date(r.at), when: r.when ?? null, whenEnd: r.when_end ?? null }));
+  const message = context.split("\n")[0] ?? "";
+  return { lines: ledgerLinesFrom(all, context), named: sendsNamedIn(all, message).map((r) => ledgerLine(r)) };
 }
 
 // Pure half, newest first in: the last two weeks of sends (from replies and
 // unprompted offers alike), plus older rows the context names.
+// Pure: the same action recorded twice within a few minutes (a live write
+// and the startup backfill of it) shows once.
+export function dedupeRows(rows: LedgerRow[]): LedgerRow[] {
+  const out: LedgerRow[] = [];
+  for (const r of rows) {
+    const k = `${r.relation}|${(r.url ?? r.label).toLowerCase()}`;
+    if (out.some((o) => `${o.relation}|${(o.url ?? o.label).toLowerCase()}` === k && Math.abs(o.at.getTime() - r.at.getTime()) < 5 * 60_000)) continue;
+    out.push(r);
+  }
+  return out;
+}
+
 // The first line of context is their message; the rest is Co's last lines.
 // What their message names always comes through, however old or however
 // many recent sends there are (2026-09-27: "Did you ever send me the AgentFi
 // thing?" lost the Sep 21 send to the 20 newest sends and to matches on Co's
 // own wording, and Co said it never sent it).
-export function ledgerLinesFrom(all: LedgerRow[], context: string, now = Date.now()): string[] {
+export function ledgerLinesFrom(allRows: LedgerRow[], context: string, now = Date.now()): string[] {
   const today = localToday(DEFAULT_ZONE, new Date(now));
+  const all = dedupeRows(allRows);
   const [message = "", ...coLines] = context.split("\n");
   const theyNamed = rowsNamedIn(all, message).slice(0, 12);
   const recentCut = now - 14 * 24 * 3_600_000;
@@ -236,6 +263,8 @@ export async function backfillCoActions(): Promise<{ texted: number; sent: numbe
        ) l ON true
        WHERE m.memory_type = 'recommendation_offered' AND m.created_at > NOW() - INTERVAL '90 days'
          AND m.content ~ '^\\{' AND coalesce(m.content::jsonb ->> 'name', '') <> ''
+         -- Not already recorded live when it was sent (recordSentItems).
+         AND NOT EXISTS (SELECT 1 FROM co_facts f WHERE f.owner_user_id = m.user_id AND f.relation = 'sent' AND lower(f.object_label) = lower(m.content::jsonb ->> 'name') AND f.source NOT LIKE 'memory:%' AND abs(extract(epoch FROM f.happened_at - m.created_at)) < 300)
        ON CONFLICT (owner_user_id, relation, object_key, happened_at) DO NOTHING`,
     )
     .then((r) => r.rowCount ?? 0)
@@ -248,8 +277,14 @@ export async function backfillCoActions(): Promise<{ texted: number; sent: numbe
     )
     .catch(() => ({ rows: [] as any[] }));
   let tools = 0;
+  const { rows: live } = await pool
+    .query(`SELECT owner_user_id, relation, object_key, happened_at FROM co_facts WHERE subject = 'co' AND source NOT LIKE '%backfill' AND happened_at > NOW() - INTERVAL '90 days'`)
+    .catch(() => ({ rows: [] as any[] }));
+  const already = (owner: string, relation: string, k: string, at: Date) =>
+    live.some((l: any) => l.owner_user_id === owner && l.relation === relation && l.object_key === k && Math.abs(new Date(l.happened_at).getTime() - at.getTime()) < 5 * 60_000);
   for (const r of rows) {
     for (const a of toolAction(String(r.decision).slice(5), r.input ?? {}) ?? []) {
+      if (already(r.user_id, a.relation, key(a), new Date(r.created_at))) continue;
       await recordFact({ ownerUserId: r.user_id, subject: "co", relation: a.relation, label: a.label, url: a.url, visibility: "owner", source: `${r.decision}:backfill`, happenedAt: new Date(r.created_at) });
       tools++;
     }

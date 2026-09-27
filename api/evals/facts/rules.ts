@@ -36,6 +36,10 @@ const rows = [
 check("an older send is found when their message names it", F.rowsNamedIn(rows, "you never sent me the agentfi thing").map((r) => r.label).join() === "AgentFi demo day at The Avalon during SF Tech Week");
 check("…or when Co's own last line named it", F.rowsNamedIn(rows, "Did anything come of AgentFi demo day at The Avalon?").length === 1);
 check("common words don't pull in everything", F.rowsNamedIn(rows, "what did you send me about that event").length === 0);
+check("a first text that carried a link reads as sending it", F.ledgerLine({ relation: "texted", label: "https://x.com/i/status/1 AgentFi demo day, Oct 7.", url: null, at: new Date("2026-09-21T16:25:00Z") }, "2026-09-27") === 'On 2026-09-21 Co sent them this link, unprompted: https://x.com/i/status/1, with: "AgentFi demo day, Oct 7."');
+check("whole words only", F.rowsNamedIn([{ relation: "sent", label: "whatever you need", url: null, at: new Date() }], "did you ever send it").length === 0 && F.rowsNamedIn(rows, "the AgentFi thing").length === 1);
+check("the same action recorded twice shows once", F.dedupeRows([rows[0], { ...rows[0], at: new Date(rows[0].at.getTime() + 60_000) }, rows[1]]).length === 2);
+check("sends their message names, for answering from the record", F.sendsNamedIn(rows, "did you send me agentfi").length === 1 && F.sendsNamedIn(rows, "hey").length === 0);
 check("the line says when and what, with the link", F.ledgerLine(rows[0]) === 'On 2026-09-21 Co sent them "AgentFi demo day at The Avalon during SF Tech Week" (https://x.com/i/status/1).');
 
 // ------------------------------------------------ privacy
@@ -87,7 +91,7 @@ check("the shown reason is still their own stated ask", /shareReasonFromOwnAsk\(
 check("every tool Co uses goes on the record", /await recordToolAction\(ctx\.userId, name, input\)/.test(src("agent/toolGuard.ts")));
 check("every find Co sends goes on the record", /await recordSentItems\(/.test(src("services/recommendation.ts")));
 check("every unprompted text goes on the record", (src("harness/proactive.ts").match(/recordProactiveText\(/g) ?? []).length >= 3);
-check("Co's replies read the record, including older things they name", /await ledgerFacts\(userId, opts\.context \?\? ""\)/.test(src("harness/replyGrounding.ts")) && /context: `\$\{resolvedContent\}/.test(src("routes/sendblue.ts")));
+check("Co's replies read the record, including older things they name", /const ledger = await ledgerFacts\(userId, opts\.context \?\? ""\)/.test(src("harness/replyGrounding.ts")) && /context: `\$\{resolvedContent\}/.test(src("routes/sendblue.ts")));
 check("the record starts filled from what was already logged", /backfillCoActions\(\)/.test(src("db/migrations.ts")));
 
 console.log(`facts rules: ${total - failed}/${total} passed`);
