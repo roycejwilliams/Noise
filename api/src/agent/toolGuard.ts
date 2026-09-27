@@ -17,6 +17,7 @@ import pool from "../db/db.js";
 import { recordDecision } from "../harness/core.js";
 import { abilityForTool, type Ability } from "../services/capabilities.js";
 import { isSwitchedOff } from "../services/abilitySwitches.js";
+import { recordToolAction } from "../services/coFacts.js";
 
 // Replies and bookkeeping aren't choices worth logging one by one.
 const UNGUARDED = new Set(["sendReply", "markTopicAsked"]);
@@ -107,6 +108,9 @@ export function guardTools<T extends Record<string, any>>(tools: T, ctx: GuardCt
       const failed = !!result && typeof result === "object" && result.ok === false;
       if (failed) ctx.notDone(`${name} didn't go through${result.error ? `: ${String(result.error).slice(0, 160)}` : "."}`);
       await log(failed ? "not_done" : "done", failed ? { error: String(result.error ?? "").slice(0, 200) } : {});
+      // Co's record of what it did for them (services/coFacts.ts). Only
+      // Co's own tools: an extension's team tools act for the team.
+      if (!failed && !ctx.dryRun && !ctx.abilityFor) await recordToolAction(ctx.userId, name, input);
       return result;
     };
   }

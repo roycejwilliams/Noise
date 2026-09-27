@@ -182,6 +182,7 @@ async function maybeAskCandidateDirectly(
     {
       decision: "eventGuestMatchHandoff.directAsk",
       recipientId: candidate.user_id,
+      otherUserIds: [asker.user_id],
       preChecks: [
         askerOptedIn
           ? { name: "asker_opted_in", pass: true }

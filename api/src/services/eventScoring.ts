@@ -1,5 +1,6 @@
 import { anthropic } from "@ai-sdk/anthropic";
 import { generateText } from "ai";
+import { edgeHint, refreshRoom, roomEdges, type Edge } from "./peopleGraph.js";
 import pool from "../db/db.js";
 import { runEventAskSolicitationAgent } from "../agent/eventAskSolicitation.js";
 import { getEventDetails, getEventGuestList, listCalendarEvents, type LumaGuest, type LumaEventDetail } from "./luma.js";
@@ -47,6 +48,9 @@ export type RankedCandidate = {
   shareReason?: string;
   mutual: boolean;
   method: "ask";
+  // The people graph's link, internal only (peopleGraph.ts): why they were
+  // likely worth each other, for review and for explaining a ranking.
+  graph?: { score: number; want: string | null; offer: string | null; mutual: boolean } | null;
 };
 
 // Luma gives us email/phone/name, never a user_id — this is the only place
@@ -396,7 +400,7 @@ async function maybeSendMatchNudge(
       return false;
     }
 
-    const message = await draftWithConsent({ decision: "eventScoring.matchNudge", recipientId: person.user_id, preChecks, facts: draftFacts }, draftFn);
+    const message = await draftWithConsent({ decision: "eventScoring.matchNudge", recipientId: person.user_id, preChecks, facts: draftFacts, otherUserIds: [candidate.user_id] }, draftFn);
     if (!message) {
       await releaseMatchNudgeClaim(eventId, person.user_id); // free it up so a later pass can retry
       return false;
@@ -467,6 +471,7 @@ async function maybeSendMatchNudge(
       recipientId: person.user_id,
       preChecks: [oneNudgeCheck],
       facts: draftFacts,
+      otherUserIds: [candidate.user_id],
       extraDraftChecks: (d) => [checkNamesWithheld(d, [candidate.first_name])],
     },
     async (feedback) => {
@@ -555,6 +560,7 @@ async function maybeSendAdditiveOffer(
       recipientId: person.user_id,
       preChecks: [windowCheck, { name: "additive_debounce", pass: true }],
       facts: { otherFirstName: "", otherOptedIn: false, recipientOptedIn: false, recipientFirstName: person.first_name },
+      otherUserIds: newCandidates.map((c) => c.user_id),
       extraDraftChecks: (d) => [checkNamesWithheld(d, newCandidates.map((c) => c.first_name))],
     },
     async (feedback) => {
@@ -627,6 +633,9 @@ export async function scoreMatchedGroup(
 
   let scoredCount = 0;
   let solicitedCount = 0;
+  // Everyone's wants and offers current before the room is scored
+  // (services/peopleGraph.ts). A dry run reads only what's already there.
+  if (!opts.dryRun) await refreshRoom(matched.map((m) => m.user_id)).catch(() => {});
   for (const person of matched) {
     const others = matched.filter((m) => m.user_id !== person.user_id);
     const ask = getActiveSeekingAsk(person.intent);
@@ -659,20 +668,31 @@ export async function scoreMatchedGroup(
       person.goals?.length ? `goals: ${person.goals.join(", ")}` : null,
       person.blockers?.length ? `blockers: ${person.blockers.join(", ")}` : null,
     ].filter((p): p is string => Boolean(p));
+    const edges = await roomEdges(person.user_id, others.map((o) => o.user_id)).catch(() => new Map<string, Edge>());
+    const hints = new Map<string, string>();
+    for (const [id, e] of edges) {
+      const h = edgeHint(e);
+      if (h) hints.set(id, h);
+    }
     const scored = await scoreAgainstStatedAsk(
       ask,
       others,
       askerContextParts.length ? askerContextParts.join("; ") : undefined,
+      hints,
     );
     const ranked: RankedCandidate[] = scored
-      .map((s) => ({
-        candidate_id: s.candidate.user_id,
-        score: s.score,
-        reason: s.reason,
-        shareReason: s.shareReason,
-        mutual: s.mutual,
-        method: "ask" as const,
-      }))
+      .map((s) => {
+        const e = edges.get(s.candidate.user_id);
+        return {
+          candidate_id: s.candidate.user_id,
+          score: s.score,
+          reason: s.reason,
+          shareReason: s.shareReason,
+          mutual: s.mutual,
+          method: "ask" as const,
+          graph: e ? { score: e.score, want: e.want, offer: e.offer, mutual: e.mutual } : null,
+        };
+      })
       .sort((a, b) => b.score - a.score);
 
     // Read BEFORE storeRanking overwrites the row — this is the diff basis

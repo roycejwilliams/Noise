@@ -325,6 +325,13 @@ export async function recordRecommendationsSent(userId: string, matches: TierMat
     .catch((err: any) => console.error("recordRecommendationsSent: queued offer cleanup failed (non-fatal):", err?.message ?? err));
   // Waiting on their reaction for the next two days (services/offerReactions.ts).
   await recordRevealedOffers(userId, matches);
+  // Co's record of what it sent (services/coFacts.ts).
+  const { recordSentItems } = await import("./coFacts.js");
+  await recordSentItems(
+    userId,
+    matches.map((m) => ({ name: m.name, url: "url" in m ? (m.url ?? null) : null, kind: m.kind ?? null, when: "event_date" in m ? m.event_date : null })),
+    "recommendationsSent",
+  );
   await pool
     .query(
       `INSERT INTO co_memories (user_id, memory_type, content)

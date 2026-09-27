@@ -1416,6 +1416,7 @@ export function sendblueRouter(io: Server): Router {
         // act; the reply can only claim what ends up here.
         const factsStarted = Date.now();
         const replyFacts = await gatherReplyFacts(user.id, {
+          context: `${resolvedContent}\n${recentConversation.split("\n").filter((l) => l.startsWith("Co replied:")).slice(-3).join("\n")}`,
           pendingDescriptions: openItems.filter((i) => i.id !== resolvedItem?.item.id).map((i) => i.description),
         });
         if (decision.wantsRecommendation && hasText) addInstruction(replyFacts, FRESH_SEARCH_INSTRUCTION);

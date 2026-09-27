@@ -246,6 +246,7 @@ export async function resolveNetworkTeaseReply(
     {
       decision: "networkIntroNudge.reveal",
       recipientId: userId,
+      otherUserIds: [candidateId],
       facts: {
         otherFirstName: pending.candidate.first_name,
         otherOptedIn: await networkOptedIn(candidateId, userId),
@@ -363,6 +364,7 @@ async function askCandidateDirectly(candidate: MatchNudgeCandidate, asker: Match
     {
       decision: "networkIntroNudge.directAsk",
       recipientId: candidate.user_id,
+      otherUserIds: [asker.user_id],
       preChecks: [
         askerOptedIn
           ? { name: "asker_opted_in", pass: true }

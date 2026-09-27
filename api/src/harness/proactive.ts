@@ -28,6 +28,7 @@ import { anthropic } from "@ai-sdk/anthropic";
 import { DateTime } from "luxon";
 import type { PoolClient } from "pg";
 import pool from "../db/db.js";
+import { recordProactiveText } from "../services/coFacts.js";
 import sendblue, { cleanCoMessage } from "../services/sendblue.js";
 import { writeMemory } from "../services/memory.js";
 import { getTimezoneForCity } from "../services/geocoding.js";
@@ -943,6 +944,7 @@ export async function sendExempt(opts: {
     await sendblue.messages.send({ number: opts.phoneNumber, content: opts.messages[0], from_number: process.env.SENDBLUE_PHONE_NUMBER! });
     delivered.push(opts.messages[0]);
     await client.query("COMMIT");
+    await recordProactiveText(opts.userId, opts.type, opts.messages[0], ins.rows[0].id);
   } catch (err) {
     await client.query("ROLLBACK").catch(() => {});
     if (!delivered.length) {
@@ -1043,6 +1045,7 @@ export async function recordInRoomSend(userId: string, targetKey: string, messag
       [userId, targetKey, message],
     )
     .catch((err: any) => console.error("recordInRoomSend failed (non-fatal):", err?.message ?? err));
+  await recordProactiveText(userId, "in_room", message, targetKey);
 }
 
 // ---------- dispatch
@@ -1222,6 +1225,8 @@ export async function dispatchForUser(registry: ProactiveRegistry, userId: strin
       console.error("proactive: text_exchange log failed (non-fatal):", err?.message ?? err),
     );
   }
+  // Co's record of what it did (services/coFacts.ts).
+  if (result.delivered.length) await recordProactiveText(userId, c.type, result.delivered.join(" "), c.id);
   await registry[c.type].onSent?.(c, person, result.delivered).catch((err: any) =>
     console.error(`proactive: onSent(${c.type}) failed (non-fatal):`, err?.message ?? err),
   );

@@ -544,7 +544,7 @@ export async function gatherNetworkFacts(
   shareReason: string | null | undefined,
 ): Promise<NetworkFacts> {
   const [a, b] = askerId < candidateId ? [askerId, candidateId] : [candidateId, askerId];
-  const [profile, memories, suggested, active] = await Promise.all([
+  const [profile, memories, suggested, active, graphFacts] = await Promise.all([
     pool.query(`SELECT goals, blockers, activity_preferences, long_term_direction, intent FROM co_profiles WHERE user_id = $1`, [candidateId]),
     pool.query(
       `SELECT content FROM co_memories WHERE user_id = $1 AND memory_type <> 'intent' ORDER BY created_at DESC LIMIT 300`,
@@ -560,6 +560,9 @@ export async function gatherNetworkFacts(
          )`,
       [[askerId, candidateId], ACTIVE_WITHIN_DAYS],
     ),
+    // Their owner-only facts (services/coFacts.ts): inferred wants and
+    // offers are private too.
+    import("../services/coFacts.js").then((m) => m.ownerOnlyFacts(candidateId)).catch(() => [] as string[]),
   ]);
   const p = profile.rows[0] ?? {};
   const stated = Array.isArray(p.intent) ? (p.intent as any[]).filter(isOpenAsk).map((i) => String(i.text)) : [];
@@ -573,6 +576,7 @@ export async function gatherNetworkFacts(
       ...(p.activity_preferences ?? []),
       ...(p.long_term_direction ? [p.long_term_direction] : []),
       ...memories.rows.map((r: any) => String(r.content)),
+      ...graphFacts,
     ],
     alreadySuggestedOrDeclined: suggested.rows.length > 0,
     askerActive: activeIds.has(askerId),

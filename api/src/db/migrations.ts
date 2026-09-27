@@ -1499,6 +1499,38 @@ export async function runMigrations(): Promise<void> {
     )
     .catch((err: Error) => console.error("ability_switches table init failed:", err));
 
+  // What Co knows, as connected facts (services/coFacts.ts, 2026-09-26): Co's
+  // own actions for each member, and what members want and offer, each with
+  // an owner and who may see it. Filled from past records on every start
+  // (idempotent), then written as things happen.
+  await pool
+    .query(
+      `CREATE TABLE IF NOT EXISTS co_facts (
+        id BIGSERIAL PRIMARY KEY,
+        owner_user_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+        subject TEXT NOT NULL CHECK (subject IN ('co', 'member')),
+        relation TEXT NOT NULL,
+        object_label TEXT NOT NULL,
+        object_key TEXT NOT NULL,
+        url TEXT,
+        visibility TEXT NOT NULL CHECK (visibility IN ('owner', 'room', 'team')),
+        source TEXT NOT NULL,
+        happened_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+        meta JSONB NOT NULL DEFAULT '{}',
+        embedding vector(1536),
+        retired_at TIMESTAMPTZ,
+        created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+        UNIQUE (owner_user_id, relation, object_key, happened_at)
+      )`,
+    )
+    .then(() => pool.query(`CREATE INDEX IF NOT EXISTS idx_co_facts_owner ON co_facts (owner_user_id, subject, happened_at DESC)`))
+    .then(async () => {
+      const { backfillCoActions } = await import("../services/coFacts.js");
+      const n = await backfillCoActions();
+      if (n.texted || n.sent || n.tools) console.log(`co_facts backfill: ${n.texted} texted, ${n.sent} sent, ${n.tools} tool actions`);
+    })
+    .catch((err: Error) => console.error("co_facts init failed:", err));
+
   // Replies to Mo's emails (mo/emailReplies.ts, 2026-09-25): the thread to
   // answer in, and each received email handled once however often Resend
   // retries the post.

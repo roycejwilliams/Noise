@@ -22,6 +22,7 @@ import { switchedOff } from "../services/abilitySwitches.js";
 import { textingStyleFor } from "../services/textingStyle.js";
 import { tasteSummary } from "../services/outcomes.js";
 import { handoffFor } from "../services/extensions.js";
+import { ledgerFacts } from "../services/coFacts.js";
 import { sourceOf } from "../services/messageFormat.js";
 import { getPersonSnapshot, renderSnapshot } from "./personSnapshot.js";
 import { anthropic } from "@ai-sdk/anthropic";
@@ -98,7 +99,9 @@ export function baseReplyFacts(): ReplyFacts {
 // routes/sendblue.ts as it acts.
 export async function gatherReplyFacts(
   userId: string,
-  opts: { pendingDescriptions?: string[] } = {},
+  // context: their message and Co's last few lines, so older things they
+  // name can be looked up in Co's record (services/coFacts.ts).
+  opts: { pendingDescriptions?: string[]; context?: string } = {},
 ): Promise<ReplyFacts> {
   const rf = baseReplyFacts();
   for (const d of opts.pendingDescriptions ?? []) addFact(rf, "pending", `Waiting to hear back: ${d}`);
@@ -191,6 +194,9 @@ export async function gatherReplyFacts(
     .query(`SELECT content FROM co_memories WHERE user_id = $1 AND memory_type = 'followup_context' AND created_at > NOW() - INTERVAL '4 days' ORDER BY created_at DESC LIMIT 3`, [userId])
     .catch(() => ({ rows: [] as any[] }));
   for (const r of followups) addFact(rf, "did_before", String(r.content));
+  // Co's own record of what it sent and did for them (services/coFacts.ts):
+  // the last two weeks of sends, and anything older their message names.
+  for (const line of await ledgerFacts(userId, opts.context ?? "").catch(() => [] as string[])) addFact(rf, "did_before", line);
 
   if (!scheduled.rows.length) addFact(rf, "scheduled", "No calls are scheduled with them.");
   for (const row of scheduled.rows) {
