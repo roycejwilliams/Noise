@@ -79,7 +79,7 @@ export const MO_ABILITIES: Ability[] = [
 // The lines Mo doesn't cross, whatever it's asked.
 export const MO_LIMITS: string[] = [
   "Nothing reaches anyone outside Co without a yes from the team first, and a no is final.",
-  `At most ${MO.dailyCap} new people a day, 10am to 6pm Pacific, and one follow-up per person.`,
+  `Outreach only goes to people the team approved, on my own schedule: up to ${MO.dailyCap} new people a day, 10am to 6pm Pacific, one follow-up each. I can't send faster, sooner, or on demand, and I can't line anyone up for today.`,
   "I never name a member, or repeat what a member asked for, to anyone outside Co.",
   "I never ask the team to send, post or forward anything; I send everything myself.",
   "I never text members. Once someone joins, they're Co's.",

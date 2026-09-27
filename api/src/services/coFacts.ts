@@ -18,6 +18,7 @@
 // harness/introConsent.ts checks every text drafted about another member
 // against the other member's owner-only facts (privateFactLeak).
 import pool from "../db/db.js";
+import { DEFAULT_ZONE, dateNote, localToday, readDates } from "./dateGuard.js";
 
 export type Visibility = "owner" | "room" | "team";
 export type CoFact = {
@@ -89,9 +90,9 @@ export async function recordToolAction(userId: string, tool: string, input: any)
   }
 }
 
-export async function recordSentItems(userId: string, items: { name: string; url?: string | null; kind?: string | null; when?: string | null }[], source: string): Promise<void> {
+export async function recordSentItems(userId: string, items: { name: string; url?: string | null; kind?: string | null; when?: string | null; whenEnd?: string | null }[], source: string): Promise<void> {
   for (const it of items) {
-    await recordFact({ ownerUserId: userId, subject: "co", relation: "sent", label: it.name, url: it.url ?? null, visibility: "owner", source, meta: { kind: it.kind ?? null, when: it.when ?? null } });
+    await recordFact({ ownerUserId: userId, subject: "co", relation: "sent", label: it.name, url: it.url ?? null, visibility: "owner", source, meta: { kind: it.kind ?? null, when: it.when ?? null, when_end: it.whenEnd ?? null } });
   }
 }
 
@@ -99,7 +100,7 @@ export async function recordProactiveText(userId: string, type: string, message:
   await recordFact({ ownerUserId: userId, subject: "co", relation: "texted", label: message.replace(/\s+/g, " ").slice(0, 300), visibility: "owner", source: `proactive_sends:${sendId ?? "?"}`, meta: { type } });
 }
 
-export type LedgerRow = { relation: string; label: string; url: string | null; at: Date };
+export type LedgerRow = { relation: string; label: string; url: string | null; at: Date; when?: string | null; whenEnd?: string | null };
 
 const STOP = new Set(["that", "this", "with", "from", "have", "what", "your", "about", "event", "thing", "there", "they", "when", "were", "just", "send", "sent", "never", "didn", "into", "some", "anything", "something", "really", "would", "could", "should"]);
 export function distinctiveWords(text: string): string[] {
@@ -116,9 +117,11 @@ export function rowsNamedIn(rows: LedgerRow[], text: string): LedgerRow[] {
   });
 }
 
-export function ledgerLine(r: LedgerRow): string {
+export function ledgerLine(r: LedgerRow, today = localToday()): string {
   const day = r.at.toISOString().slice(0, 10);
-  if (r.relation === "sent") return `On ${day} Co sent them "${r.label}"${r.url && !r.label.includes(r.url) ? ` (${r.url})` : ""}.`;
+  // The thing's own date, when known, read against today (dateGuard.ts).
+  const note = r.when ? dateNote(readDates({ start: r.when, end: r.whenEnd && r.whenEnd >= r.when ? r.whenEnd : r.when }, today)) : "";
+  if (r.relation === "sent") return `On ${day} Co sent them "${r.label}"${r.url && !r.label.includes(r.url) ? ` (${r.url})` : ""}${note}.`;
   if (r.relation === "texted") return `On ${day} Co texted them first: "${r.label}"`;
   if (r.relation === "searched") return `On ${day} Co searched for them: "${r.label}".`;
   return `On ${day} Co ${r.label}.`;
@@ -130,25 +133,33 @@ export function ledgerLine(r: LedgerRow): string {
 export async function ledgerFacts(userId: string, context: string): Promise<string[]> {
   const { rows } = await pool
     .query(
-      `SELECT relation, object_label AS label, url, happened_at AS at FROM co_facts
+      `SELECT relation, object_label AS label, url, happened_at AS at, meta->>'when' AS when, meta->>'when_end' AS when_end FROM co_facts
        WHERE owner_user_id = $1 AND subject = 'co' AND happened_at > NOW() - INTERVAL '90 days'
        ORDER BY happened_at DESC LIMIT 400`,
       [userId],
     )
     .catch(() => ({ rows: [] as any[] }));
   return ledgerLinesFrom(
-    rows.map((r: any) => ({ relation: r.relation, label: String(r.label), url: r.url ?? null, at: new Date(r.at) })),
+    rows.map((r: any) => ({ relation: r.relation, label: String(r.label), url: r.url ?? null, at: new Date(r.at), when: r.when ?? null, whenEnd: r.when_end ?? null })),
     context,
   );
 }
 
 // Pure half, newest first in: the last two weeks of sends (from replies and
 // unprompted offers alike), plus older rows the context names.
+// The first line of context is their message; the rest is Co's last lines.
+// What their message names always comes through, however old or however
+// many recent sends there are (2026-09-27: "Did you ever send me the AgentFi
+// thing?" lost the Sep 21 send to the 20 newest sends and to matches on Co's
+// own wording, and Co said it never sent it).
 export function ledgerLinesFrom(all: LedgerRow[], context: string, now = Date.now()): string[] {
+  const today = localToday(DEFAULT_ZONE, new Date(now));
+  const [message = "", ...coLines] = context.split("\n");
+  const theyNamed = rowsNamedIn(all, message).slice(0, 12);
   const recentCut = now - 14 * 24 * 3_600_000;
-  const recent = all.filter((r) => r.at.getTime() >= recentCut && (r.relation === "sent" || r.relation === "texted")).slice(0, 20);
-  const named = rowsNamedIn(all.filter((r) => !recent.includes(r)), context).slice(0, 8);
-  return [...recent, ...named].sort((a, b) => a.at.getTime() - b.at.getTime()).map(ledgerLine);
+  const recent = all.filter((r) => !theyNamed.includes(r) && r.at.getTime() >= recentCut && (r.relation === "sent" || r.relation === "texted")).slice(0, 20);
+  const coNamed = rowsNamedIn(all.filter((r) => !theyNamed.includes(r) && !recent.includes(r)), coLines.join("\n")).slice(0, 6);
+  return [...theyNamed, ...recent, ...coNamed].sort((a, b) => a.at.getTime() - b.at.getTime()).map((r) => ledgerLine(r, today));
 }
 
 // ------------------------------------------------------------ privacy
@@ -213,7 +224,8 @@ export async function backfillCoActions(): Promise<{ texted: number; sent: numbe
       `INSERT INTO co_facts (owner_user_id, subject, relation, object_label, object_key, url, visibility, source, happened_at, meta)
        SELECT m.user_id, 'co', 'sent', m.content::jsonb ->> 'name',
               COALESCE(l.url, lower(m.content::jsonb ->> 'name')), l.url, 'owner', 'memory:' || m.id, m.created_at,
-              jsonb_build_object('event_api_id', m.content::jsonb ->> 'event_api_id')
+              jsonb_build_object('event_api_id', m.content::jsonb ->> 'event_api_id',
+                'when', (SELECT se.event_date::text FROM surfaced_events se WHERE se.user_id = m.user_id AND se.event_api_id = m.content::jsonb ->> 'event_api_id' AND se.event_date IS NOT NULL LIMIT 1))
        FROM co_memories m
        -- The link only when exactly one went out around it: with several,
        -- which is which can't be told, and a wrong link is worse than none.

@@ -1,4 +1,4 @@
-import { anthropic } from "@ai-sdk/anthropic";
+import { anthropic, createAnthropic } from "@ai-sdk/anthropic";
 import { generateText, stepCountIs } from "ai";
 import { createConversationTools, type SendCoReply } from "./conversationTools.js";
 import { writeMemory } from "../services/memory.js";
@@ -149,6 +149,34 @@ Return ONLY "yes" or "no".`,
 // classification, not a creative task. Fails closed (drops the memories)
 // rather than open, since passing through unverified content is exactly
 // the failure mode this exists to prevent.
+// Per model call, not per reply: a search inside the reply can take up to
+// 45s on its own, while a drafting call normally takes under 20s.
+export const REPLY_CALL_TIMEOUT_MS = Number(process.env.REPLY_CALL_TIMEOUT_MS ?? 40_000);
+
+// A fresh provider per reply whose fetch gives up on a stalled call.
+// REPLY_TEST_STALL_CALL=n[,m] (tests only) makes those calls hang until the cap.
+function replyProvider() {
+  let calls = 0;
+  const stallAt = new Set(String(process.env.REPLY_TEST_STALL_CALL ?? "").split(",").map(Number).filter((n) => n > 0));
+  return createAnthropic({
+    fetch: async (url: any, init: any = {}) => {
+      calls++;
+      const cap = AbortSignal.timeout(REPLY_CALL_TIMEOUT_MS);
+      const signal = init.signal ? AbortSignal.any([init.signal, cap]) : cap;
+      if (stallAt.has(calls)) {
+        await new Promise((_, reject) => signal.addEventListener("abort", () => reject(Object.assign(new Error("stalled call timed out"), { name: "TimeoutError" }))));
+      }
+      return fetch(url, { ...init, signal });
+    },
+  });
+}
+
+export function isTimeout(err: any, depth = 0): boolean {
+  if (!err || depth > 5) return false;
+  if (err.name === "TimeoutError" || err.name === "AbortError" || /timed? ?out|aborted/i.test(String(err.message ?? ""))) return true;
+  return isTimeout(err.cause, depth + 1) || isTimeout(err.lastError, depth + 1) || (Array.isArray(err.errors) && err.errors.some((e: any) => isTimeout(e, depth + 1)));
+}
+
 export async function filterRelevantMemories(resolvedContent: string, candidates: string[]): Promise<string> {
   if (!candidates.length) return "";
   try {
@@ -303,6 +331,7 @@ How to reply:
 - If you're also making the one extra gesture below, keep the response to what they shared to one or two sentences, then the gesture.
 - Keep a stalling conversation going with a question, an observation or a related thought. Don't lean only on questions, and don't force it when things are winding down or already moving.
 - When they say something concrete about what they want or who they're looking for, ask one specific follow-up that sharpens it.
+- Check what you mention against today. The facts mark each event as already over, happening today, or coming up. Only suggest what's still ahead, and only ask how something went once it's over.
 
 How it looks on a phone:
 - When a reply has more than one idea, give each idea its own short paragraph with a blank line between them, never one long block. Each step starts its own paragraph and reads the way you'd say it to them across a table. Write plain sentences that open with the thing itself ("Start with two tiers." "Then give each sponsor a table in the room."). Never a heading or a label with a colon.
@@ -331,14 +360,20 @@ Then act with your tools:
   // 16.8s vs 30.9s); low lost 17-21. REPLY_EVAL_EFFORT only exists so
   // evals/texting can compare levels.
   const REPLY_EFFORT = (["low", "medium", "high"] as const).find((e) => e === process.env.REPLY_EVAL_EFFORT) ?? "medium";
-  const agentRun = await generateText({
+  // Each model call is capped (2026-09-26: a call stalled for 318s in a
+  // test). A timeout after a text already went out ends the turn with what
+  // was sent; with nothing sent, the fallback line below goes out.
+  let agentRun: { steps: any[]; text: string; finishReason: string } | null = null;
+  try {
+  agentRun = await generateText({
     // Sonnet, not Haiku — dry-run testing showed Haiku missing the
     // offerCall follow-up call ~2/5 times even when the reply text clearly
     // gestured toward a call, which breaks call_offer_pending tracking (a
     // later "yes" gets misread as unrelated). This is a correctness/
     // state-consistency issue, not just phrasing quality, so it justifies
     // the latency/cost tradeoff.
-    model: anthropic(LAYER3_MODELS.reply),
+    model: replyProvider()(LAYER3_MODELS.reply),
+    maxRetries: 1,
     // After a search the content is already written (link, description, or
     // what was found and why not); the reply around it doesn't need full
     // reasoning (2026-09-16: drafting was 7-10s of a 46s search turn).
@@ -382,6 +417,14 @@ Then act with your tools:
         }
       : { prompt: userText }),
   });
+  } catch (err: any) {
+    if (!isTimeout(err)) throw err;
+    console.error(`conversationReply: a model call timed out for ${input.userId} (${state.sent ? "after a text went out; ending with what was sent" : "before anything went out; sending the fallback"})`);
+    if (!opts.dryRun) {
+      const { recordDecision } = await import("../harness/core.js");
+      await recordDecision({ layer: 3, decision: "reply.timeout", userId: input.userId, outcome: "skip", action: state.sent ? "after_send" : "before_send", proposal: { message: input.resolvedContent.slice(0, 200), capMs: REPLY_CALL_TIMEOUT_MS } }).catch(() => {});
+    }
+  }
 
   // Unlike a plain generateText completion (which always returns text), a
   // tool-calling loop can finish without ever invoking sendReply — the
@@ -397,16 +440,16 @@ Then act with your tools:
   }
   if (!state.sent && !state.sendStopped) {
     // What the agent did instead, so a fallback can be traced (2026-09-22).
-    const toolsCalled = agentRun.steps.flatMap((st) => st.toolCalls.map((t) => t.toolName));
+    const toolsCalled = (agentRun?.steps ?? []).flatMap((st: any) => st.toolCalls.map((t: any) => t.toolName));
     console.error(
-      `conversationReply: agent completed without calling sendReply for user ${input.userId} — sending its plain text, or the fallback if there is none (finish: ${agentRun.finishReason}, steps: ${agentRun.steps.length}, tools: ${toolsCalled.join(",") || "none"}, text: ${JSON.stringify(agentRun.text.slice(0, 300))})`,
+      `conversationReply: agent completed without calling sendReply for user ${input.userId} — sending its plain text, or the fallback if there is none (finish: ${agentRun?.finishReason ?? "timeout"}, steps: ${agentRun?.steps.length ?? 0}, tools: ${toolsCalled.join(",") || "none"}, text: ${JSON.stringify((agentRun?.text ?? "").slice(0, 300))})`,
     );
     // The model often writes a good reply as plain text instead of calling
     // sendReply (2026-09-22: 2 of 4 runs on "I'm nervous nobody will show",
     // and the member got the generic line below). That text goes out through
     // sendReply itself, so it's grounded and logged like any reply; the
     // generic line is only for when there's nothing usable.
-    const plain = agentRun.text.trim();
+    const plain = (agentRun?.text ?? "").trim();
     if (!input.isVoice && plain.split(/\s+/).length >= 4 && !looksLikeMetaReply(plain)) {
       await (tools.sendReply as any).execute({ message: plain }, { toolCallId: "plain-text-reply", messages: [] }).catch((err: any) =>
         console.error("conversationReply: sending the plain-text reply failed:", err?.message ?? err),
@@ -440,6 +483,6 @@ Then act with your tools:
   const offered = await verifyAndRecordCallOffer(input, state.lastReplyText, opts.dryRun ?? false);
 
   // Which tools Co chose, in order (evals/capabilities/probe.ts reads this).
-  const toolsCalled = agentRun.steps.flatMap((st) => st.toolCalls.map((t) => t.toolName));
+  const toolsCalled = (agentRun?.steps ?? []).flatMap((st: any) => st.toolCalls.map((t: any) => t.toolName));
   return { sent: state.sent, offered, replyText: state.lastReplyText, grounding, toolsCalled };
 }

@@ -327,9 +327,13 @@ export async function recordRecommendationsSent(userId: string, matches: TierMat
   await recordRevealedOffers(userId, matches);
   // Co's record of what it sent (services/coFacts.ts).
   const { recordSentItems } = await import("./coFacts.js");
+  const { itemDays } = await import("./dateGuard.js");
   await recordSentItems(
     userId,
-    matches.map((m) => ({ name: m.name, url: "url" in m ? (m.url ?? null) : null, kind: m.kind ?? null, when: "event_date" in m ? m.event_date : null })),
+    matches.map((m) => {
+      const d = itemDays(m);
+      return { name: m.name, url: "url" in m ? (m.url ?? null) : null, kind: m.kind ?? null, when: d.start, whenEnd: d.end };
+    }),
     "recommendationsSent",
   );
   await pool

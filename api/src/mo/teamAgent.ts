@@ -223,7 +223,11 @@ export async function runMoTeamTurn(input: TeamTurnInput): Promise<TeamTurn> {
     if (!says.length) return { reply: null, passed: true, tools: used, notDone };
   }
 
-  const reply = passed && !says.length ? null : finalReply(text, says, input.approverFirst);
+  let reply = passed && !says.length ? null : finalReply(text, says, input.approverFirst);
+  // Mo's own words are held to what Mo can do and what its tools just did,
+  // the same claim check as Co's (2026-09-26: "I can still get today's 5
+  // moving"). Unsupported sentences are cut; what the tools said stays.
+  if (reply) reply = await holdToFacts(reply, says, input);
   if (!input.dryRun) {
     await recordDecision({
       layer: 5,
@@ -242,11 +246,24 @@ export async function runMoTeamTurn(input: TeamTurnInput): Promise<TeamTurn> {
   return { reply, passed: reply === null, tools: used, notDone };
 }
 
+export async function holdToFacts(reply: string, says: string[], input: Pick<TeamTurnInput, "text" | "pending" | "approverFirst">): Promise<string> {
+  const { addFact, claimChecksOnly, createReplyFacts, stripUnsupported } = await import("../harness/replyGrounding.js");
+  const rf = createReplyFacts();
+  for (const c of moCapabilitySheet()) addFact(rf, "capability", c);
+  for (const s of says) addFact(rf, "did_this_turn", `Mo's tools just reported: ${s}`);
+  addFact(rf, "known", `What Mo is waiting on: ${pendingLine(input.pending)}`);
+  const failed = (await claimChecksOnly(reply, rf, { message: input.text, recentConversation: "" }).catch(() => [])).filter((c) => !c.pass);
+  if (!failed.length) return reply;
+  const kept = stripUnsupported(reply, failed).trim();
+  if (says.every((s) => kept.includes(s.trim())) && kept.split(/\s+/).length >= 3) return kept;
+  return says.length ? says.join("\n\n") : kept || `${MO_RULES.opener(input.approverFirst)} I can't do that one.`;
+}
+
 // Mo's words around what its tools reported. Every `say` has to be in the
 // reply as written; if the model paraphrased one away, the tools' own lines
 // are sent instead.
 export function finalReply(text: string, says: string[], approverFirst: string | null): string {
-  const clean = (s: string) => s.replace(/\s*[—–]\s*/g, ", ").trim();
+  const clean = (s: string) => s.replace(/\s*[—–]\s*/g, ", ").replace(/ - /g, ", ").trim();
   // The opener once: some tools' lines already start with it.
   const opener = MO_RULES.opener(approverFirst);
   const once = (s: string) => {

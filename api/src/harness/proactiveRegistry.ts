@@ -14,6 +14,7 @@ import { draftAskSolicitation } from "../agent/eventAskSolicitation.js";
 import { draftPostCall, markPostCallDropped, markPostCallSent } from "../jobs/postCallFollowUp.js";
 import { askStillOpen, isShortNotice, onEventOfferDropped, onEventOfferSent, type EventOfferPayload } from "../services/eventSurfacingSweep.js";
 import { endOfLocalDay, followUpDate, type DebriefPayload } from "../services/recommendationOutcome.js";
+import { itemDays, localToday, offerable, readDates } from "../services/dateGuard.js";
 import { markMatchNudgeSent, type EventMatchNudgePayload } from "../services/eventScoring.js";
 import { lapseCloseDate, lapseText } from "../services/membershipLapse.js";
 import { getTimezoneForCity } from "../services/geocoding.js";
@@ -141,6 +142,10 @@ export const proactiveRegistry: ProactiveRegistry = {
       const p = c.payload as EventOfferPayload;
       // Their ask closed since this was queued: don't send it (2026-09-26).
       if (!(await askStillOpen(p.askId))) return skip("their ask has since closed");
+      // Still ahead today, checked when it's about to go out, not only when
+      // it was queued (services/dateGuard.ts).
+      const when = offerable(readDates(itemDays(p.match), localToday()));
+      if (!when.ok) return skip(`not offered: ${when.why}`);
       const r = await draftEventReveal(person, p.askText, p.fromProfile, p.match, { reminder: p.reminder, again: p.again });
       return r ?? skip("model chose SKIP");
     },

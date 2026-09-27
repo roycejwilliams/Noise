@@ -4,6 +4,7 @@ import { canSkipReplyAfterResults, isOnlyUpdatesAsk, messageIsOnlyTheAsk, rewrit
 import { localDate, offerScore, orderForOffering } from "../../src/services/eventOrder.js";
 import { capitalizeSentences, looksLikeMetaReply, paragraphize } from "../../src/services/textStyle.js";
 import { readFileSync } from "fs";
+const { isTimeout } = await import("../../src/agent/conversationReply.js");
 import { nearestPlace, parseDiscoverPlaces } from "../../src/services/lumaDiscovery.js";
 import { announcementAudience } from "../../src/services/coEventAnnouncement.js";
 import { resolveCoEventCity } from "../../src/services/luma.js";
@@ -12,7 +13,7 @@ import { isBrowseAsk, parseAskWindow, withinWindow } from "../../src/services/as
 import { renderMatchLead } from "../../src/services/messageFormat.js";
 import { closingReaction } from "../../src/services/conversationClose.js";
 import "dotenv/config";
-import { addFact, baseReplyFacts, codeChecks, countOf, onlyCuts, renderReplyFacts, needsClaimCheck, pairSentLinks, predictionMatch, stripUnsupported } from "../../src/harness/replyGrounding.js";
+import { addFact, baseReplyFacts, codeChecks, countOf, onlyCuts, sentencesToRecheck, renderReplyFacts, needsClaimCheck, pairSentLinks, predictionMatch, stripUnsupported } from "../../src/harness/replyGrounding.js";
 import { isLeakedMetaCommentary, webhookSecretMatches } from "../../src/services/sendblue.js";
 import { coAskedQuestion } from "../../src/services/conversationClose.js";
 
@@ -435,6 +436,13 @@ onboardingCaseCases.push(
   [!onlyCuts("I did not send it yet.", "I did send it."), "grounding: dropping a word from the middle of a sentence still gets re-checked"],
   [!onlyCuts("Nothing new on my end.", "Nothing new, but I found a rooftop party Saturday."), "grounding: a rewrite that adds anything still gets re-checked"],
   [!onlyCuts("Hey. What's up?", "Hey. What's up?"), "grounding: an unchanged rewrite isn't treated as a cut"],
+  // 2026-09-26, fact check and stalls
+  [sentencesToRecheck("Mahjong is Saturday. It's casual.", "Mahjong is Saturday. Want me to look for more?", []).join() === "Want me to look for more?", "grounding: only new sentences are re-read"],
+  [sentencesToRecheck("I sent it Tuesday. It's casual.", "I sent it Tuesday. It's casual.", [{ name: "claim_past_action", pass: false, reason: 'past_action: "I sent it Tuesday"' }]).length === 1, "grounding: a kept sentence with a failed claim is re-read"],
+  [isTimeout({ name: "TimeoutError" }) && isTimeout({ lastError: { cause: { name: "AbortError" } } }) && !isTimeout(new Error("rate limited")), "stalls: a timeout is recognized however it's wrapped"],
+  [/if \(!isTimeout\(err\)\) throw err;/.test(readFileSync(new URL("../../src/agent/conversationReply.ts", import.meta.url), "utf8")) && /REPLY_CALL_TIMEOUT_MS = Number\(process\.env\.REPLY_CALL_TIMEOUT_MS \?\? 40_000\)/.test(readFileSync(new URL("../../src/agent/conversationReply.ts", import.meta.url), "utf8")), "stalls: each reply model call is capped at 40s and a timeout doesn't fail the turn"],
+  [/What Co did or didn't do before \(a past_action, including "I never sent that"\) is supported only by a FACT/.test(readFileSync(new URL("../../src/harness/replyGrounding.ts", import.meta.url), "utf8")), "grounding: what Co did needs a fact, not its own earlier words"],
+  [/This rewrite can't search or do anything, so never write "let me look"/.test(readFileSync(new URL("../../src/harness/replyGrounding.ts", import.meta.url), "utf8")), "grounding: a rewrite never promises a search it can't run"],
   [needsClaimCheck("That's on my radar now."), "'on my radar' gets checked"],
   [needsClaimCheck("I save everything you tell me."), "a present-tense claim about what Co does gets checked"],
   [!needsClaimCheck("That sounds hard. What's been the toughest part?"), "a plain conversational reply still skips the check"],

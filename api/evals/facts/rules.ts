@@ -67,6 +67,22 @@ const es = src("services/eventScoring.ts");
 check("scoring refreshes the room, reads the links, and hints the scorer", /await refreshRoom\(matched\.map/.test(es) && /await roomEdges\(person\.user_id/.test(es) && /askerContextParts\.join\("; "\) : undefined,\s*hints,/.test(es));
 check("the shown reason is still their own stated ask", /shareReasonFromOwnAsk\(candidates\[r\.index\]\.intent\)/.test(src("services/matching.ts")));
 
+// ------------------------------------------------ overpromising (2026-09-26)
+{
+  const { ongoingFactsFor } = await import("../../src/harness/replyGrounding.js");
+  const { capabilitySheet } = await import("../../src/services/capabilities.js");
+  const help = ongoingFactsFor([{ text: "Find sponsors for the event", kind: "help" }]);
+  check("a help ask is never called searched", !help.some((f) => f.kind === "ongoing") && help.some((f) => /not something Co's search looks for/.test(f.text) && /nothing is being looked for or worked on in the background/.test(f.text)));
+  const both = ongoingFactsFor([{ text: "a run club in Oakland", kind: "find" }, { text: "Find sponsors", kind: "help" }]);
+  check("a find ask is, and only it", both.some((f) => f.kind === "ongoing" && /run club/.test(f.text) && !/sponsors/.test(f.text)));
+  const sheet = capabilitySheet().join(" ");
+  check("search says what it can't find, and what it can instead", /It can't find sponsors, investors, or funders themselves, but it can find events where they show up/.test(sheet));
+  check("saving an ask says what isn't searched", /Finding sponsors, investors or funding themselves, and advice, are kept on file but not searched/.test(sheet));
+  const rg = src("harness/replyGrounding.ts");
+  check("every 'I can' is a capability claim, held to that exact thing", /every "I can…" is one, supported only by a capability FACT that covers that exact thing/.test(rg));
+  check("background work is a promise too", /or says it's already doing in the background/.test(rg));
+}
+
 // ------------------------------------------------ wiring
 check("every tool Co uses goes on the record", /await recordToolAction\(ctx\.userId, name, input\)/.test(src("agent/toolGuard.ts")));
 check("every find Co sends goes on the record", /await recordSentItems\(/.test(src("services/recommendation.ts")));

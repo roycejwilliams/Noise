@@ -58,7 +58,7 @@ export const ABILITIES: Ability[] = [
   },
   {
     id: "search_now",
-    can: "Co can search right now for events, communities, opportunities and people worth meeting.",
+    can: "Co can search right now for events, communities, publicly posted programs and opportunities (accelerators, grants, open calls), and public posts from people doing what they're after. It can't find sponsors, investors, or funders themselves, but it can find events where they show up (investor dinners, demo days, pitch nights).",
     tool: "searchNow",
     limits: { perTurn: 1, perDay: 30 },
     use: "Search right now for events, communities, people or opportunities when they want something found, however they ask (\"anything this weekend?\", \"what about Saturday?\", \"find me a run club\"). Say what to look for in plain words with the context they gave (place, time, kind of thing). What fits goes out on its own, link then caption, before your reply, and the result tells you what happened. Search again each time they ask, even if you sent something similar before: what's out there changes every day, so earlier results are never the answer to a new ask. If what they want could mean clearly different things, ask them first instead of searching on a guess. Not for questions about Co itself or about something specific you already sent them.",
@@ -72,7 +72,7 @@ export const ABILITIES: Ability[] = [
   },
   {
     id: "save_ask",
-    can: "Co can save something they want found (people, events, a community, an opportunity) so its daily search keeps looking and texts them when something real fits. It can't dig up a missing detail about something already sent.",
+    can: "Co can save something they want found that its search can find (people doing something, events, a community, a posted program or opportunity) so its daily search keeps looking and texts them when something real fits. Finding sponsors, investors or funding themselves, and advice, are kept on file but not searched; events where investors or sponsors show up can be saved and searched. It can't dig up a missing detail about something already sent.",
     tool: "saveAsk",
     limits: { perTurn: 2, perDay: 10 },
     use: "Save something they want Co to look for (people, events, a community, an opportunity) so Co's daily search keeps looking and can text them when something real fits. Use when they ask for something and nothing fits right now, or they want Co to keep an eye out.",

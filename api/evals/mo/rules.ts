@@ -117,7 +117,7 @@ check("an unrelated text is none of these", !plainYes("what's on this weekend?")
 {
   const r = src("mo/review.ts");
   check("only approvers are ever asked or answered", /if \(!me\?\.mo_approver\) return null;/.test(r));
-  check("a text about something else goes to Co as usual", /const reply = passed && !says\.length \? null/.test(src("mo/teamAgent.ts")) && /notForMo: tool\(/.test(src("mo/teamAgent.ts")));
+  check("a text about something else goes to Co as usual", /let reply = passed && !says\.length \? null/.test(src("mo/teamAgent.ts")) && /notForMo: tool\(/.test(src("mo/teamAgent.ts")));
   check("an edit has to pass the same draft checks", /redraftOutreach\(p, instruction\)/.test(src("mo/review.ts")) && /checkMoDraft\("dm", dm, \{ dmMax: dmMaxFor\(input\.style\) \}\)/.test(src("mo/draft.ts")));
   check("one open item per approver, cleared for everyone once handled", /WHERE mo_pending_no = \$1/.test(r));
   check("an item someone else already handled isn't acted on twice", /Someone already took care of that one\./.test(r));
@@ -328,6 +328,9 @@ check(
   check("reply: carries what the tools said", TA.finalReply("On it. Co replies to Noor's post first.", ["On it. Co replies to Noor's post first."], "Royce") === "On it. Co replies to Noor's post first.");
   check("reply: a paraphrase loses to the tools' own words", TA.finalReply("Done, I messaged Noor!", ["On it. Co replies to Noor's post first."], "Royce") === "On it. Co replies to Noor's post first.");
   check("reply: the opener only once", TA.finalReply("Hey Royce, it's Mo. Hey Royce, it's Mo. 2 people are waiting on your yes.", ["Hey Royce, it's Mo. 2 people are waiting on your yes."], "Royce") === "Hey Royce, it's Mo. 2 people are waiting on your yes.");
+  check("reply: no spaced hyphen used as a dash either", !TA.finalReply("I can't push more out today - it's capped.", [], null).includes(" - "));
+  check("Mo's replies are held to its facts, like Co's", /if \(reply\) reply = await holdToFacts\(reply, says, input\);/.test(ta) && /for \(const c of moCapabilitySheet\(\)\) addFact\(rf, "capability", c\);/.test(ta));
+  check("Mo's limits say it can't send faster or on demand", /I can't send faster, sooner, or on demand/.test(A.moCapabilitySheet().join(" ")));
   check("reply: no em dashes", !TA.finalReply("Paused — nothing new goes out.", [], null).includes("—"));
   const pl = TA.pendingLine({ kind: "review", p: { name: "Noor Haddad", source: "x", draft_dm: "Hi" } });
   check("prompt: says who Mo is waiting on and which tool fits", /Noor Haddad/.test(pl) && /moApprove/.test(pl) && /moSkip/.test(pl));
