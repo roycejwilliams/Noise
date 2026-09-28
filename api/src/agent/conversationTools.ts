@@ -10,6 +10,7 @@ import { getMemberInvite, inviteLink, invitesLeftFor } from "../services/invites
 import { recordTextArrival } from "../services/eventPresence.js";
 import { closeAsk } from "../services/askKind.js";
 import { recordSuggestionOutcome } from "../services/outcomes.js";
+import { REACTION_RESULT } from "../services/reactionCatchup.js";
 import { scoreGuestListForEvent } from "../services/eventScoring.js";
 import pool from "../db/db.js";
 import { recordDecision } from "../harness/core.js";
@@ -102,6 +103,9 @@ export type ConversationToolContext = {
   searchAndSend?: (what: string) => Promise<{ answered: boolean; sentCount: number; briefing: string }>;
   // For reactInsteadOfReplying.
   messageHandle?: string | null;
+  // Their message may mean they aren't safe (services/safety.ts): no tapback.
+  safetyConcern?: boolean;
+  firstName?: string | null;
   replyOwed?: boolean;
   lastCoMessage?: string | null;
   // Facts for this reply (replyGrounding). Tools add what they actually did
@@ -126,7 +130,7 @@ export function createConversationTools(ctx: ConversationToolContext) {
   // sent is an out-of-band signal for the caller (sendblue.ts), same
   // reasoning as askCheckin.ts's state.sent — generateText's return value
   // doesn't cleanly expose which tools actually executed.
-  const state = { sent: false, reacted: false, replyCount: 0, failedSends: 0, sendStopped: false, lastReplyText: "", sentMessages: [] as string[], pendingLinks: [] as string[] };
+  const state = { safetyFlagged: false, sent: false, reacted: false, replyCount: 0, failedSends: 0, sendStopped: false, lastReplyText: "", sentMessages: [] as string[], pendingLinks: [] as string[] };
   // Receipts (2026-09-25): anything tried this turn that didn't happen
   // becomes a fact Co writes from, so it can't say it did.
   const notDone = (what: string) => ctx.facts?.add("not_done", what);
@@ -272,6 +276,26 @@ export function createConversationTools(ctx: ConversationToolContext) {
       },
     }),
 
+    // Someone who may not be safe (services/safety.ts). Co's call, however
+    // it's worded; the phrase list in sendblue.ts is only a backstop.
+    flagSafetyConcern: tool({
+      description: toolUse("flagSafetyConcern"),
+      inputSchema: z.object({
+        what: z.string().describe("In a few words, what they said that worried you. Not a quote of anything private beyond that."),
+      }),
+      execute: async ({ what }) => {
+        state.safetyFlagged = true;
+        if (ctx.dryRun) {
+          console.log(`[conversationReply dryRun] would flag a safety concern for ${ctx.userId}: ${what}`);
+        } else {
+          const { recordSafetyConcern } = await import("../services/safety.js");
+          await recordSafetyConcern(ctx.userId, ctx.firstName ?? null, "co", what);
+        }
+        ctx.facts?.add("did_this_turn", "Flagged that they may not be safe: offers are on hold, and Co may check in on them tomorrow.");
+        return { ok: true, note: "Flagged. Now reply with sendReply: stay with them, ask plainly if they're safe right now, and share 988 once." };
+      },
+    }),
+
     // A tapback instead of a reply when the thread is winding down (2026-09-25:
     // Co's call now, not a pattern's). Hard lines kept from before: never
     // when Co still owes them an answer, and never right after Co asked them
@@ -283,6 +307,10 @@ export function createConversationTools(ctx: ConversationToolContext) {
       }),
       execute: async ({ reaction }) => {
         if (state.replyCount > 0) return { ok: false, error: "You already replied this turn." };
+        if (ctx.safetyConcern || state.safetyFlagged) {
+          notDone("No tapback: they may not be safe, so Co has to reply.");
+          return { ok: false, error: "They may not be safe. Reply to them properly." };
+        }
         if (ctx.replyOwed) {
           notDone("No tapback: Co still owes them an answer from before, so it has to reply.");
           return { ok: false, error: "You still owe them an answer from before. Reply properly instead." };
@@ -480,7 +508,7 @@ export function createConversationTools(ctx: ConversationToolContext) {
           notDone(`No reaction was recorded: "${item.slice(0, 80)}" isn't something Co sent them recently.`);
           return { ok: false, error: "That isn't something Co sent them recently (check listSentOffers)." };
         }
-        const result = ({ interested: "interested", going: "acted", went_liked: "helped", went_disliked: "didnt_help", not_for_me: "declined" } as const)[reaction];
+        const result = REACTION_RESULT[reaction];
         if (ctx.dryRun) {
           console.log(`[conversationReply dryRun] would record ${result} for "${item}" (${ctx.userId})`);
           return { ok: true };

@@ -290,5 +290,20 @@ check("no follow-up line has an em dash or exclamation", [...OFFER_FOLLOWUP_MANY
   check(`every memory type code writes is allowed by the table${missing.length ? ` (missing: ${missing.join(", ")})` : ""}`, written.size > 5 && missing.length === 0);
 }
 
+// Smarter first texts (2026-09-28): Co's pick is read even when cut off, and a
+// draft that breaks a check gets one rewrite told what to fix.
+{
+  const P = await import("../../src/harness/proactive.js");
+  check("a whole pick is read", P.readPick('{"id": "4", "why": "stressed about the deck"}')?.id === "4");
+  check("a pick cut off mid-reason still counts", P.readPick('{"id": "4", "why": "They\'re stuck on sponsors for the 10th, so checking in on the deck meets them wh')?.id === "4");
+  check("no id is no pick", P.readPick("") === null && P.readPick("I think the companion one") === null);
+  const pr = readFileSync(new URL("../../src/harness/proactive.ts", import.meta.url), "utf8");
+  check("the pick has room to answer, and time", /maxOutputTokens: 1000,\s*experimental_telemetry: \{ isEnabled: true, functionId: "proactive.choosePick" \}/.test(pr) && /"pick timed out"\)\), 15_000\)/.test(pr));
+  check("a failed draft gets one rewrite, told what it broke", /draftAgain\(first, \(\) => registry\[c\.type\]\.draft\(c, person\)\)/.test(pr) && /It broke: \$\{redo\.failed\}/.test(pr));
+  const reg = readFileSync(new URL("../../src/harness/proactiveRegistry.ts", import.meta.url), "utf8");
+  check("only Co's own skip holds check-ins for 14 days; a failed draft retries in about 2", /const coChoseSkip = \/\^model chose SKIP\//.test(reg) && /coChoseSkip \? "0" : "12"/.test(reg) && /onDropped\?\.\(c, status, reason\)/.test(pr) && /skip\("model chose SKIP/.test(reg));
+  check("\"Hey Sam,\" is named as a greeting", /no greeting \("Hey", "Hi", "Hey Sam,"\)/.test(P.PROACTIVE_RULES));
+}
+
 console.log(`proactive rules: ${total - failed}/${total} passed`);
 if (failed) process.exitCode = 1;

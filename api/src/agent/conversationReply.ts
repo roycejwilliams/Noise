@@ -33,6 +33,8 @@ export type ConversationReplyInput = {
   // owes them an answer from before.
   messageHandle?: string | null;
   replyOwed?: boolean;
+  // Their message may mean they aren't safe (services/safety.ts).
+  safetyConcern?: boolean;
   // Runs and sends a search the way the text route always has
   // (routes/sendblue.ts searchAndSend); Co's searchNow tool calls it.
   searchAndSend?: (what: string) => Promise<{ answered: boolean; sentCount: number; briefing: string }>;
@@ -231,6 +233,8 @@ export async function runConversationReplyAgent(
     messageHandle: input.messageHandle ?? null,
     searchAndSend: input.searchAndSend,
     replyOwed: input.replyOwed ?? false,
+    safetyConcern: input.safetyConcern ?? false,
+    firstName: input.firstName ?? null,
     lastCoMessage: lastCoLine(input.recentConversation),
     sendCoReply: input.sendCoReply,
     facts: {

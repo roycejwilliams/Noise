@@ -772,6 +772,10 @@ export async function runMigrations(): Promise<void> {
   await pool
     .query(`ALTER TABLE co_profiles ADD COLUMN IF NOT EXISTS last_companion_checkin_at TIMESTAMPTZ`)
     .catch((err: Error) => console.error("co_profiles.last_companion_checkin_at migration failed:", err));
+  // Offers held for a few days after a safety concern (services/safety.ts).
+  await pool
+    .query(`ALTER TABLE co_profiles ADD COLUMN IF NOT EXISTS safety_hold_until TIMESTAMPTZ`)
+    .catch((err: Error) => console.error("co_profiles.safety_hold_until migration failed:", err));
 
   // Real source of truth for a call's SID/status once calls are placed via
   // the media-stream bridge (services/mediaStreamBridge.ts) rather than

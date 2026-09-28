@@ -1,4 +1,5 @@
 import { anthropic } from "@ai-sdk/anthropic";
+import { recordSafetyConcern, soundsLikeCrisis } from "../services/safety.js";
 import { generateText } from "ai";
 import { propagateAttributes } from "@langfuse/tracing";
 import { createHmac, timingSafeEqual } from "crypto";
@@ -1128,6 +1129,16 @@ router.post(
           .then(() => surfaceNewAsksNow(user_id))
           .catch(() => {});
         extractPlannedEventMention(user_id, cleanTranscript).catch(() => {});
+        // Crisis wording on their side of the call (services/safety.ts): the
+        // call prompt tells Co what to do in the moment; this makes sure the
+        // team hears about it and offers are held afterward.
+        const theirLines = cleanTranscript.split("\n").filter((l: string) => /^user:/i.test(l)).join("\n");
+        if (soundsLikeCrisis(theirLines)) {
+          pool
+            .query(`SELECT first_name FROM users WHERE id = $1`, [user_id])
+            .then((r) => recordSafetyConcern(user_id, r.rows[0]?.first_name ?? null, "phrase", "crisis wording on a call"))
+            .catch(() => {});
+        }
         // Bridges this call into the text side's own conversation log (Royce,
         // 2026-09-07) — see summarizeCallForTextContext for the gap this closes.
         // Call summary first (it feeds the picture), then rebuild the picture.

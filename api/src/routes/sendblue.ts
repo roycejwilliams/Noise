@@ -29,6 +29,9 @@ import { decideInviteJoinedGate } from "../services/inviteJoinGate.js";
 import { handlePhoneChange } from "../services/phoneChange.js";
 import { handleTeamText } from "../services/extensions.js";
 import { firstSendTimes } from "../services/turnLatency.js";
+import { catchUpReaction } from "../services/reactionCatchup.js";
+import { inlineNote, repliedTo, repliedToFact, threadReason } from "../services/inlineReply.js";
+import { recordSafetyConcern, SAFETY_INSTRUCTION, soundsLikeCrisis } from "../services/safety.js";
 import { describeImage } from "../services/imageRead.js";
 import { CALL_OFFER, GATE_ASK, INVITE_JOINED, WELCOME, WELCOME_INVITED, WRONG_CODE, pickLine } from "../services/onboardingLines.js";
 import { claimTextLogin } from "../services/textLogin.js";
@@ -259,11 +262,17 @@ async function transcribeVoiceMemo(audioUrl: string): Promise<string> {
   return (result as { text: string }).text ?? "";
 }
 
+// Numbers Sendblue refused an inline reply to (SMS, or a line without it);
+// Co stops trying for them until the next restart.
+const inlineRefused = new Set<string>();
+
 // Send Co's reply — voice note if user sent audio, text if they sent text
 async function sendCoReply(params: {
   phone: string;
   message: string;
   asVoice: boolean;
+  // Thread this text under one of theirs (services/inlineReply.ts).
+  replyTo?: string | null;
 }): Promise<boolean> {
   const { phone, asVoice } = params;
   // Confirmed live, 2026-09-08 sweep: this, the actual send function behind
@@ -285,13 +294,30 @@ async function sendCoReply(params: {
     }
   }
 
+  const body = {
+    number: phone,
+    content: audioUrl ? "" : message,
+    ...(audioUrl ? { media_url: audioUrl } : {}),
+    from_number: process.env.SENDBLUE_PHONE_NUMBER!,
+  };
+  // An inline reply Sendblue refuses (not a V2 line, SMS, an old message) is
+  // never sent at all, so it goes again as a plain text.
+  if (params.replyTo && !audioUrl && !inlineRefused.has(phone)) {
+    try {
+      await sendblue.messages.send({ ...body, reply_to: { message_handle: params.replyTo } } as typeof body);
+      return true;
+    } catch (err: any) {
+      if (/send breaker|meta-commentary/.test(String(err?.message))) {
+        console.error(`sendCoReply failed for ${phone}:`, err?.message ?? err);
+        return false;
+      }
+      console.error("sendCoReply: inline reply refused, sending it plain (non-fatal):", err?.status ?? "", err?.message ?? err);
+      inlineRefused.add(phone);
+      recordDecision({ layer: 7, decision: "reply.inline", userId: null, outcome: "skip", action: "refused", reason: String(err?.message ?? err).slice(0, 200) }).catch(() => {});
+    }
+  }
   try {
-    await sendblue.messages.send({
-      number: phone,
-      content: audioUrl ? "" : message,
-      ...(audioUrl ? { media_url: audioUrl } : {}),
-      from_number: process.env.SENDBLUE_PHONE_NUMBER!,
-    });
+    await sendblue.messages.send(body);
   } catch (err: any) {
     // A real delivery failure (e.g. recipient hasn't texted in first) must
     // never crash the whole request — the reply was already generated and
@@ -1064,6 +1090,9 @@ export function sendblueRouter(io: Server): Router {
         // If it's an image, download it for the vision-enabled reply below.
         // Co matches energy: voice in → voice out, text in → text out
         let resolvedContent = content ?? "";
+        // Which text they long-pressed and replied to, if any (services/inlineReply.ts).
+        const inlineHandle: unknown = req.body?.reply_to?.message_handle;
+        const repliedToP = repliedTo(inlineHandle, number);
         let isVoice = false;
         let imageForVision: { data: Buffer; mediaType: string } | null = null;
         let photoDescription: string | null = null;
@@ -1098,9 +1127,12 @@ export function sendblueRouter(io: Server): Router {
         }
 
         // Step 3 — Store inbound message, generate embedding (in parallel)
+        // Which text they replied to stays with their message, so later turns
+        // still know what "I'm in" was about (services/inlineReply.ts).
+        const inlineTarget = await repliedToP;
         const inboundContent = isVoice
-          ? `User sent a voice memo: ${resolvedContent}`
-          : `User said: ${resolvedContent}${hasText && imageForVision ? ` [They also sent a photo${photoDescription ? `. It shows: ${photoDescription}` : ""}]` : ""}`;
+          ? `User sent a voice memo: ${resolvedContent}${inlineTarget ? ` ${inlineNote(inlineTarget)}` : ""}`
+          : `User said: ${resolvedContent}${hasText && imageForVision ? ` [They also sent a photo${photoDescription ? `. It shows: ${photoDescription}` : ""}]` : ""}${inlineTarget ? ` ${inlineNote(inlineTarget)}` : ""}`;
 
         const [inboundMemory, queryEmbedding] = await Promise.all([
           pool.query(
@@ -1416,11 +1448,49 @@ export function sendblueRouter(io: Server): Router {
         // below add what they did (a link sent, a call that failed) as they
         // act; the reply can only claim what ends up here.
         const factsStarted = Date.now();
+        if (inlineTarget) {
+          recordDecision({ layer: 2, decision: "turn.inlineReply", userId: user.id, outcome: "act", action: inlineTarget.fromCo ? "to_co" : "to_self", proposal: { repliedTo: inlineTarget.text.slice(0, 200) } }).catch(() => {});
+        }
         const replyFacts = await gatherReplyFacts(user.id, {
-          context: `${resolvedContent}\n${recentConversation.split("\n").filter((l) => l.startsWith("Co replied:")).slice(-3).join("\n")}`,
+          context: `${resolvedContent}\n${inlineTarget ? `${inlineTarget.text}\n` : ""}${recentConversation.split("\n").filter((l) => l.startsWith("Co replied:")).slice(-3).join("\n")}`,
           pendingDescriptions: openItems.filter((i) => i.id !== resolvedItem?.item.id).map((i) => i.description),
         });
         if (decision.wantsRecommendation && hasText) addInstruction(replyFacts, FRESH_SEARCH_INSTRUCTION);
+        if (inlineTarget) addFact(replyFacts, "known", repliedToFact(inlineTarget));
+        // Unmistakable crisis wording (services/safety.ts): Co gets the
+        // guidance and the team hears about it even if Co misses it. Co's own
+        // flagSafetyConcern covers everything this list doesn't.
+        const crisisWording = hasText && soundsLikeCrisis(resolvedContent);
+        if (crisisWording) {
+          addInstruction(replyFacts, SAFETY_INSTRUCTION);
+          recordSafetyConcern(user.id, user.first_name ?? null, "phrase", "their message used crisis wording").catch(() => {});
+        }
+
+        // Threading Co's texts under theirs this turn (services/inlineReply.ts):
+        // the first text Co sends, and the first text of search results.
+        // "They've texted since" is re-read each time, since a search can
+        // take long enough for them to text again.
+        const ownHandle = typeof req.body?.message_handle === "string" ? req.body.message_handle : null;
+        let threadNextSend = true;
+        const threadHandle = async (): Promise<string | null> => {
+          if (!ownHandle) return null;
+          const latest = myInboundAt
+            ? await pool.query(`SELECT last_inbound_at FROM phone_debounce WHERE phone = $1`, [number]).then((r) => r.rows[0]?.last_inbound_at ?? null).catch(() => null)
+            : null;
+          const why = threadReason({ theyRepliedInline: !!inlineTarget, newerTextSince: !!latest && !!myInboundAt && new Date(latest).getTime() > new Date(myInboundAt).getTime() });
+          if (why) recordDecision({ layer: 7, decision: "reply.inline", userId: user.id, outcome: "act", action: why }).catch(() => {});
+          return why ? ownHandle : null;
+        };
+        const threadedSend: typeof sendCoReply = async (p) => {
+          if (!threadNextSend || p.asVoice) return sendCoReply(p);
+          threadNextSend = false;
+          return sendCoReply({ ...p, replyTo: await threadHandle() });
+        };
+        const threadedSendAndLog = async (message: string, asVoice = false): Promise<boolean> => {
+          const sent = await threadedSend({ phone: user.phone_number, message, asVoice });
+          if (sent) await logTextExchange(user.id, `Co replied: ${cleanCoMessage(message)}`);
+          return sent;
+        };
         const factsMs = Date.now() - factsStarted;
         // Early warning (2026-09-25): a fast Jev read of whether they're
         // asking about another person's private details or asking Co to
@@ -2021,7 +2091,7 @@ Return ONLY valid JSON, no preamble: {"date": "YYYY-MM-DD or null", "time": "HH:
               // person isn't left waiting and resending (2026-09-15: a 70s
               // wait led to the same message sent five times).
               const holdLine = HOLD_LINES[Math.floor(Math.random() * HOLD_LINES.length)];
-              if (await sendAndLog(user.id, user.phone_number, holdLine)) addFact(replyFacts, "did_this_turn", `Told them "${holdLine}" before searching.`);
+              if (await threadedSendAndLog(holdLine)) addFact(replyFacts, "did_this_turn", `Told them "${holdLine}" before searching.`);
               const RECOMMENDATION_TIME_CAP_MS = 45_000;
               const searchStarted = Date.now();
               searchMsForTurn = 0;
@@ -2270,9 +2340,11 @@ Return ONLY valid JSON, no preamble: {"date": "YYYY-MM-DD or null", "time": "HH:
                 // something the person never received.
                 const actuallySent: typeof prepared = [];
                 if (prepared.length) {
+                  // The results thread under their ask too, not just the hold line.
+                  threadNextSend = true;
                   if (prepared.length > 1) {
                     const lead = renderMatchLead(prepared.length);
-                    await sendAndLog(user.id, user.phone_number, lead, isVoice);
+                    await threadedSendAndLog(lead, isVoice);
                     await new Promise((resolve) => setTimeout(resolve, 1500));
                   }
                   // Link first, then what it is (Royce, 2026-09-16: "I want the
@@ -2281,10 +2353,10 @@ Return ONLY valid JSON, no preamble: {"date": "YYYY-MM-DD or null", "time": "HH:
                   for (const p of prepared) {
                     const { m, description } = p;
                     if ("url" in m && m.url) {
-                      await sendAndLog(user.id, user.phone_number, m.url);
+                      await threadedSendAndLog(m.url);
                       await new Promise((resolve) => setTimeout(resolve, 1500));
                     }
-                    const descriptionSent = await sendAndLog(user.id, user.phone_number, description, isVoice);
+                    const descriptionSent = await threadedSendAndLog(description, isVoice);
                     await new Promise((resolve) => setTimeout(resolve, 1500));
                     if (descriptionSent) actuallySent.push(p);
                   }
@@ -2616,7 +2688,7 @@ Return ONLY valid JSON, no preamble: {"date": "YYYY-MM-DD or null", "time": "HH:
           // Co's last one (services/textingStyle.ts). In the background, so
           // it never slows the reply; the next reply reads it.
           if (hasText) learnTextingStyle(user.id, lastCoLine(recentConversation), resolvedContent).catch(() => {});
-          const { replyText, grounding } = resultsAnsweredAsk
+          const { replyText, grounding, toolsCalled } = resultsAnsweredAsk
             ? await recordDecision({
                 layer: 3,
                 decision: "reply.skipped",
@@ -2627,13 +2699,14 @@ Return ONLY valid JSON, no preamble: {"date": "YYYY-MM-DD or null", "time": "HH:
                 checks: [{ name: "message_was_only_the_ask", pass: true }],
               })
                 .catch(() => {})
-                .then(() => ({ replyText: resultsAnsweredAsk!, grounding: [] as { latencyMs: number }[] }))
+                .then(() => ({ replyText: resultsAnsweredAsk!, grounding: [] as { latencyMs: number }[], toolsCalled: [] as string[] }))
             : await propagateAttributes(
             { userId: user.id, traceName: "sendblue.generateReply" },
             () =>
               runConversationReplyAgent({
                 messageHandle: typeof req.body?.message_handle === "string" ? req.body.message_handle : null,
                 replyOwed: owesReply,
+                safetyConcern: crisisWording,
                 searchAndSend,
                 userId: user.id,
                 phoneNumber: user.phone_number,
@@ -2656,10 +2729,12 @@ Return ONLY valid JSON, no preamble: {"date": "YYYY-MM-DD or null", "time": "HH:
                 recentMemories,
                 contextSummary,
                 personaPrompt,
-                sendCoReply,
+                sendCoReply: threadedSend,
               }),
           );
           coReply = replyText;
+          // A reaction Co didn't record, caught after the reply (services/reactionCatchup.ts).
+          if (hasText && !resultsAnsweredAsk) catchUpReaction(user.id, resolvedContent, toolsCalled ?? [], inlineTarget?.fromCo ? inlineTarget.text : null).catch(() => {});
           const groundingMs = grounding.reduce((a, g) => a + g.latencyMs, 0);
           const replyMs = Date.now() - replyStarted - groundingMs;
           // Latency budget (2026-09-15: a 70s reply led to five resends).

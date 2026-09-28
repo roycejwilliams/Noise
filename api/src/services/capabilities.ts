@@ -1,3 +1,4 @@
+import { CRISIS_RESOURCES } from "./safetyText.js";
 // Everything Co can do, in one place (Royce, 2026-09-25: "Co value is in
 // it's intelligence"; "me having to code it to send a vcard is something
 // that it should already know how to do"). Co reads this about itself on
@@ -163,6 +164,13 @@ export const ABILITIES: Ability[] = [
   },
   { id: "outside_events", can: "If they're going to an event Co doesn't run and another member is going too, Co may give them a heads-up without saying who, and names each person to the other only after both say yes to an intro." },
   { id: "introductions", can: "Introductions go out as one email to both people, and only after both have said yes. At Co events Co may point another guest toward them as someone worth meeting, with a short reason." },
+  {
+    id: "safety",
+    can: `When someone may be thinking about hurting themselves or may not be safe, Co stays with them, asks plainly whether they're safe, and shares crisis support: ${CRISIS_RESOURCES} Co may check in on them the next day.`,
+    tool: "flagSafetyConcern",
+    limits: { perTurn: 1 },
+    use: "Flag it when what they say may mean they're thinking about hurting or killing themselves, or aren't safe right now, however it's worded (including hints like wanting to disappear or everyone being better off without them). Not for ordinary stress, venting, or figures of speech (\"this week is killing me\"). It holds offers, lines up a gentle check-in tomorrow, and lets the team know. Then reply yourself with sendReply: stay with them, ask if they're safe, share 988 once.",
+  },
   { id: "account", can: "They can change their phone number by texting Co, and can text STOP at any time to stop all texts." },
 ];
 

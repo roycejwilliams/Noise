@@ -61,6 +61,16 @@ export function createSendLimiter(cfg = SEND_LIMIT) {
       sinceInbound.set(key, unprompted + 1);
       return { ok: true };
     },
+    // A send Sendblue rejected never reached them, so it doesn't count
+    // (2026-09-28: a refused inline reply and its plain resend counted twice).
+    release(number: string | null | undefined): void {
+      const key = number ? keyOf(number) : "";
+      if (!key) return;
+      const recent = hits.get(key);
+      if (recent?.length) recent.pop();
+      const n = sinceInbound.get(key) ?? 0;
+      if (n > 0) sinceInbound.set(key, n - 1);
+    },
     // A real text from them: the unprompted count starts over. Never lifts
     // a breaker that already tripped.
     noteInbound(number: string | null | undefined): void {

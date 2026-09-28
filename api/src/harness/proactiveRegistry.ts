@@ -226,8 +226,16 @@ export const proactiveRegistry: ProactiveRegistry = {
       }
       await writeMemory(c.userId, "companion_checkin", `Companion check-in: ${messages.join(" ")}`);
     },
-    async onDropped(c) {
-      await pool.query(`UPDATE co_profiles SET last_companion_checkin_at = NOW() WHERE user_id = $1`, [c.userId]);
+    // Co choosing SKIP waits the full 14 days. A draft that failed its
+    // checks, errored, or expired unsent was never Co's call, so it comes
+    // back in about two days (2026-09-28: two failed drafts to Jacqueline on
+    // 09-23 held off every check-in until 10-07).
+    async onDropped(c, _status, reason) {
+      const coChoseSkip = /^model chose SKIP/.test(reason ?? "");
+      await pool.query(
+        `UPDATE co_profiles SET last_companion_checkin_at = NOW() - ($2 || ' days')::interval WHERE user_id = $1`,
+        [c.userId, coChoseSkip ? "0" : "12"],
+      );
     },
   },
 

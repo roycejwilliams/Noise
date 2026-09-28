@@ -139,5 +139,17 @@ check("new details still get saved", fresh.availability === "free weekends" && f
 const extraction = src("src/services/profileExtraction.ts");
 check("capture filters against what's on file before writing", /dropKnownExtras\(\{ concrete_preferences, wants, availability \}/.test(extraction));
 
+// A send Sendblue rejected doesn't count (2026-09-28).
+{
+  const lim = createSendLimiter({ max: 3, unprompted: 2, windowMs: 600_000, cooldownMs: 1_800_000 });
+  lim.check("+15551234567", 1);
+  lim.release("+15551234567");
+  lim.check("+15551234567", 2);
+  check("a rejected send is released, so the resend doesn't trip the limit", lim.check("+15551234567", 3).ok === true);
+  check("releasing with nothing recorded is harmless", (() => { lim.release("+15550000000"); lim.release(null); return true; })());
+  const sb = readFileSync(new URL("../../src/services/sendblue.ts", import.meta.url), "utf8");
+  check("only an outright rejection (4xx) is released", /err\.status >= 400 && err\.status < 500\) sendLimiter\.release\(to\)/.test(sb));
+}
+
 console.log(`send limit rules: ${total - failed}/${total} passed`);
 process.exit(failed ? 1 : 0);

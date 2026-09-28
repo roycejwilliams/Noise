@@ -87,6 +87,54 @@ check("the shown reason is still their own stated ask", /shareReasonFromOwnAsk\(
   check("background work is a promise too", /or says it's already doing in the background/.test(rg));
 }
 
+// ------------------------------------------------ missed reactions (2026-09-28)
+{
+  const R = await import("../../src/services/reactionCatchup.js");
+  const sent = [{ name: "Rooftop evening" }, { name: "Mahjong After Dark" }];
+  check("a reaction naming a send is a candidate", R.sentNamedIn("going to the rooftop evening thursday", sent).map((x) => x.name).join() === "Rooftop evening");
+  check("a message naming nothing sent isn't", R.sentNamedIn("going to the gym tonight", sent).length === 0 && R.sentNamedIn("the event was fun", sent).length === 0);
+  check("the catch-up and Co's tool store reactions the same way", /REACTION_RESULT\[reaction\]/.test(src("agent/conversationTools.ts")) && /REACTION_RESULT\[reaction\]/.test(src("services/reactionCatchup.ts")));
+  check("it runs after the reply, only when Co didn't record one", /toolsCalled\.includes\("noteReaction"\)/.test(src("services/reactionCatchup.ts")) && src("routes/sendblue.ts").includes("catchUpReaction(user.id, resolvedContent, toolsCalled ?? [], inlineTarget?.fromCo ? inlineTarget.text : null).catch"));
+}
+
+// ------------------------------------------------ inline replies (2026-09-28)
+{
+  const I = await import("../../src/services/inlineReply.js");
+  const me = "+15551234567";
+  check("a reply to Co's text in their thread is read", I.targetFromMessage({ content: "Rooftop evening Thursday: https://lu.ma/roof", is_outbound: true, number: me }, me)?.fromCo === true);
+  check("a reply to their own text is read as theirs", I.targetFromMessage({ content: "can you find me a run club", is_outbound: false, from_number: me }, me)?.fromCo === false);
+  check("a message from another member's thread is never read", I.targetFromMessage({ content: "Sam is raising a seed round", is_outbound: true, number: "+15559990000" }, me) === null && I.targetFromMessage({ content: "hi", is_outbound: false, from_number: "+15559990000" }, me) === null);
+  check("an empty or missing message is nothing", I.targetFromMessage(null, me) === null && I.targetFromMessage({ content: " ", is_outbound: true, number: me }, me) === null);
+  check("Co threads when they did, or when they've texted since", I.threadReason({ theyRepliedInline: true, newerTextSince: false }) === "mirror" && I.threadReason({ theyRepliedInline: false, newerTextSince: true }) === "newer_text");
+  check("…and not otherwise, and never in a group", I.threadReason({ theyRepliedInline: false, newerTextSince: false }) === null && I.threadReason({ theyRepliedInline: true, newerTextSince: true, isGroup: true }) === null);
+  const sb = src("routes/sendblue.ts");
+  check("a refused inline reply goes again as a plain text", /reply_to: \{ message_handle: params\.replyTo \}/.test(sb) && /inline reply refused, sending it plain/.test(sb) && /await sendblue\.messages\.send\(body\);/.test(sb));
+  check("the replied-to text reaches Co's facts and the record lookup", /addFact\(replyFacts, "known", repliedToFact\(inlineTarget\)\)/.test(sb) && /\$\{inlineTarget \? `\$\{inlineTarget\.text\}\\n` : ""\}/.test(sb));
+  check("Co's reply sends through the threading check", /sendCoReply: threadedSend,/.test(sb));
+  check("the replied-to text is kept with their message", I.inlineNote({ text: "Rooftop evening, Thursday", fromCo: true }) === '[Replying to Co\'s text: "Rooftop evening, Thursday"]' && /\$\{inlineTarget \? ` \$\{inlineNote\(inlineTarget\)\}` : ""\}`;/.test(sb));
+  check("a long replied-to text is shortened in the record", I.inlineNote({ text: "x".repeat(300), fromCo: false }).length < 260);
+  check("the hold line and the first search result thread too", /await threadedSendAndLog\(holdLine\)/.test(sb) && /threadNextSend = true;\s*if \(prepared\.length > 1\)/.test(sb) && /await threadedSendAndLog\(m\.url\)/.test(sb));
+}
+
+// ------------------------------------------------ safety (2026-09-28)
+{
+  const S = await import("../../src/services/safetyText.js");
+  const hits = ["honestly I don't want to be alive anymore", "everyone would be better off without me tbh", "I want to kill myself", "thinking about ending my life", "I'm not safe with myself tonight", "I've been suicidal lately"];
+  const misses = ["this week is literally killing me lol", "I'd die for a good ramen spot", "killing it at work today", "my grandma passed last week", "I'm dying to see that show", "that set killed", "I want to end it with my cofounder"];
+  check("unmistakable crisis wording is caught", hits.every((t) => S.soundsLikeCrisis(t)));
+  check("figures of speech and ordinary sadness aren't", misses.every((t) => !S.soundsLikeCrisis(t)));
+  check("the resource names 988 and 911", /\b988\b/.test(S.CRISIS_RESOURCES) && /\b911\b/.test(S.CRISIS_RESOURCES));
+  const { capabilitySheet } = await import("../../src/services/capabilities.js");
+  check("Co knows the resource as a fact, so the fact check never cuts it", capabilitySheet().some((l) => l.includes(S.CRISIS_RESOURCES)));
+  const sb = src("routes/sendblue.ts");
+  check("crisis wording adds the guidance and alerts, and Co's tool covers the rest", /if \(crisisWording\) \{\s*addInstruction\(replyFacts, SAFETY_INSTRUCTION\);\s*recordSafetyConcern\(/.test(sb) && /safetyConcern: crisisWording,/.test(sb) && /flagSafetyConcern: tool\(/.test(src("agent/conversationTools.ts")));
+  check("no tapback in place of a reply when they may not be safe", /if \(ctx\.safetyConcern \|\| state\.safetyFlagged\) \{/.test(src("agent/conversationTools.ts")));
+  const pr = src("harness/proactive.ts");
+  check("offers wait while a safety hold is on; the next-day check-in doesn't wait on the last one", /state\.safetyHold && PROACTIVE_PURPOSE_MAP\[c\.type\] === "offer"/.test(pr) && /safetyFollowUp === true/.test(pr));
+  check("calls: the prompt covers it, and their side of the transcript is checked after", /IF THEY MAY NOT BE SAFE/.test(readFileSync(new URL("../../prompts/co-system-prompt.md", import.meta.url), "utf8")) && /if \(soundsLikeCrisis\(theirLines\)\)/.test(src("routes/co.ts")));
+  check("the team email never carries their message", !/\$\{note\}|\$\{what\}/.test(src("services/safety.ts").slice(src("services/safety.ts").indexOf("alertTeamNow("))));
+}
+
 // ------------------------------------------------ wiring
 check("every tool Co uses goes on the record", /await recordToolAction\(ctx\.userId, name, input\)/.test(src("agent/toolGuard.ts")));
 check("every find Co sends goes on the record", /await recordSentItems\(/.test(src("services/recommendation.ts")));

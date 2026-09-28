@@ -38,11 +38,21 @@ import { MODELS } from "../models.js";
 import { capitalizeSentences } from "../services/textStyle.js";
 import { offerFollowUp } from "../services/offerFollowUp.js";
 import { AsyncLocalStorage } from "node:async_hooks";
+import { safetyHoldActive } from "../services/safety.js";
 import { getEmotionalContext, renderEmotionalContext } from "./emotion.js";
 
 // The person's emotional context for whatever draft runs inside dispatch,
 // without threading it through every registry and agent draft call.
 const feelingForDraft = new AsyncLocalStorage<string>();
+
+// A second try at a draft that failed its checks (2026-09-28): the draft and
+// what it broke, so the rewrite fixes that instead of the day's text being
+// lost. Two companion check-ins to Jacqueline on 09-23 opened "Hey
+// Jacqueline," and nothing went out.
+const redraftFor = new AsyncLocalStorage<{ draft: string; failed: string }>();
+export function draftAgain<T>(first: { draft: string; failed: string }, fn: () => Promise<T>): Promise<T> {
+  return redraftFor.run(first, fn);
+}
 
 // Draft with how they've been feeling in view, the way the daily pick does.
 export function draftWithFeeling<T>(feeling: string, fn: () => Promise<T>): Promise<T> {
@@ -179,6 +189,8 @@ export type PickState = {
   lastInboundAt: Date | null;
   // Emotion loop: struggling in the last day (harness/emotion.ts).
   needsCare?: boolean;
+  // A safety concern in the last three days (services/safety.ts).
+  safetyHold?: boolean;
 };
 
 // While someone is struggling, asks, check-ins on asks, and product updates
@@ -306,7 +318,7 @@ export function userLevelChecks(state: Omit<PickState, "candidates">, opts: { sk
   return checks;
 }
 
-export function candidateChecks(c: Candidate, state: Pick<PickState, "now" | "sends" | "lastInboundAt" | "needsCare">): GateCheck[] {
+export function candidateChecks(c: Candidate, state: Pick<PickState, "now" | "sends" | "lastInboundAt" | "needsCare" | "safetyHold">): GateCheck[] {
   const policy = TYPE_POLICY[c.type];
   const sameTarget = state.sends.find((s) => s.targetKey === c.targetKey);
   const unansweredTopic = state.sends.find((s) => s.topicKey && s.topicKey === c.topicKey && unansweredSince(s, state.lastInboundAt));
@@ -330,7 +342,8 @@ export function candidateChecks(c: Candidate, state: Pick<PickState, "now" | "se
   if (policy.typeGapDays !== undefined) {
     checks.push({
       name: "type_gap",
-      pass: !lastOfType || state.now.getTime() - lastOfType.sentAt.getTime() >= policy.typeGapDays * DAY,
+      // The day-after check-in following a safety concern never waits on the last check-in.
+      pass: !lastOfType || (c.payload as { safetyFollowUp?: boolean })?.safetyFollowUp === true || state.now.getTime() - lastOfType.sentAt.getTime() >= policy.typeGapDays * DAY,
       reason: `a ${c.type} went out within ${policy.typeGapDays} days`,
     });
   }
@@ -340,6 +353,9 @@ export function candidateChecks(c: Candidate, state: Pick<PickState, "now" | "se
       pass: !lastOfTopic || state.now.getTime() - lastOfTopic.sentAt.getTime() >= policy.topicGapDays * DAY,
       reason: `${c.topicKey} came up within ${policy.topicGapDays} days`,
     });
+  }
+  if (state.safetyHold && PROACTIVE_PURPOSE_MAP[c.type] === "offer") {
+    checks.push({ name: "safety_hold", pass: false, reason: "they may not have been safe in the last few days; no offers" });
   }
   if (state.needsCare && HOLD_WHILE_STRUGGLING.has(c.type)) {
     checks.push({ name: "emotional_timing", pass: false, reason: "they've been struggling in the last day; this can wait" });
@@ -416,7 +432,7 @@ export const PROACTIVE_RULES = `PROACTIVE RULES
 - Never state what another person said, feels, or wants unless it's written in CONFIRMED_FACTS.
 - Never restate internal reasoning ("matches your stated goal", "fit score", "based on your profile").
 - If you're asking for a decision, end with one yes/no question. Otherwise don't ask anything.
-- Max 2 sentences. No greeting line, no sign-off.
+- Max 2 sentences. Start with the thought itself: no greeting ("Hey", "Hi", "Hey Sam,"), no sign-off.
 - Normal capitalization: start with a capital letter. You're texting first, so there's no lowercase style to mirror.`;
 
 export type Facts = Record<string, string | number | boolean | string[] | null | undefined>;
@@ -439,6 +455,7 @@ export async function draftProactive(opts: {
   maxSentences?: number;
 }): Promise<string | null> {
   const feeling = feelingForDraft.getStore();
+  const redo = redraftFor.getStore();
   const { text } = await generateText({
     model: anthropic(opts.model ?? DRAFT_MODEL),
     experimental_telemetry: { isEnabled: true, functionId: opts.functionId },
@@ -454,7 +471,7 @@ ${feeling ? `\nHOW THEY'VE BEEN FEELING (let it shape how you say this, never wh
 
 TASK
 ${opts.task}
-
+${redo ? `\nYOUR LAST DRAFT (not sent)\n"${redo.draft}"\nIt broke: ${redo.failed}. Write it again with that fixed, keeping what it said.\n` : ""}
 Return ONLY the message text, or exactly SKIP.`,
   });
   const trimmed = text.trim().replace(/^["']|["']$/g, "").trim();
@@ -555,7 +572,7 @@ export type DraftResult = { messages: string[]; text: string; rules: OutputRules
 export type TypeSpec = {
   draft(c: Candidate, person: Person): Promise<DraftResult>;
   onSent?(c: Candidate, person: Person, messages: string[]): Promise<void>;
-  onDropped?(c: Candidate, status: "skipped" | "expired"): Promise<void>;
+  onDropped?(c: Candidate, status: "skipped" | "expired", reason?: string): Promise<void>;
 };
 
 export type ProactiveRegistry = Record<ProactiveType, TypeSpec>;
@@ -736,6 +753,20 @@ export function proposePick(eligible: Candidate[]): { pick: Candidate | null; re
   return { pick, reason: pick ? `highest priority of ${eligible.length} eligible` : "nothing eligible", source: "code" };
 }
 
+// Co's pick, read even when the "why" was cut off: the id comes first.
+export function readPick(text: string): { id: string; why: string } | null {
+  const whole = text.match(/\{[\s\S]*\}/);
+  if (whole) {
+    try {
+      const j = JSON.parse(whole[0]);
+      if (j?.id !== undefined) return { id: String(j.id), why: String(j.why ?? "") };
+    } catch {}
+  }
+  const id = text.match(/"id"\s*:\s*"?([^",}\s]+)"?/);
+  if (!id) return null;
+  return { id: id[1], why: text.match(/"why"\s*:\s*"([^"]*)/)?.[1] ?? "" };
+}
+
 // Co chooses (Royce, 2026-09-25: "Co value is in it's intelligence"). When
 // two or more are eligible, Co reads the person (recent texts, how they've
 // been feeling) and picks the one that fits them right now. Everything that
@@ -753,7 +784,9 @@ export async function choosePick(
     const { text } = await Promise.race([
       generateText({
         model: anthropic(DRAFT_MODEL),
-        maxOutputTokens: 200,
+        // 200 cut Co's answer off mid-sentence (2026-09-28: half its picks
+        // were thrown away and code priority chose instead).
+        maxOutputTokens: 1000,
         experimental_telemetry: { isEnabled: true, functionId: "proactive.choosePick" },
         prompt: `${CO_VOICE}
 
@@ -769,12 +802,12 @@ ${eligible.map((c) => `- ${c.id} [${c.type}] ${c.summary}`).join("\n")}
 
 Return ONLY JSON: {"id": "<one id from the list>", "why": "one short line"}`,
       }),
-      new Promise<never>((_, reject) => setTimeout(() => reject(new Error("pick timed out")), 8000)),
+      new Promise<never>((_, reject) => setTimeout(() => reject(new Error("pick timed out")), 15_000)),
     ]);
-    const m = text.match(/\{[\s\S]*\}/);
-    const parsed = m ? JSON.parse(m[0]) : null;
+    const parsed = readPick(text);
     const pick = eligible.find((c) => c.id === String(parsed?.id ?? ""));
     if (pick) return { pick, reason: `Co's pick of ${eligible.length}: ${String(parsed?.why ?? "").slice(0, 200)}`, source: "co" };
+    console.error("proactive: Co's pick named nothing eligible, using priority (non-fatal):", text.slice(0, 300));
   } catch (err: any) {
     console.error("proactive: Co's pick failed, using priority (non-fatal):", err?.message ?? err);
   }
@@ -1055,7 +1088,7 @@ async function dropCandidate(registry: ProactiveRegistry, c: Candidate, status: 
     `UPDATE proactive_candidates SET status = $2, skip_reason = $3, decided_at = NOW(), updated_at = NOW() WHERE id = $1 AND status = 'pending'`,
     [c.id, status, reason],
   );
-  await registry[c.type].onDropped?.(c, status).catch((err: any) =>
+  await registry[c.type].onDropped?.(c, status, reason).catch((err: any) =>
     console.error(`proactive: onDropped(${c.type}) failed (non-fatal):`, err?.message ?? err),
   );
 }
@@ -1096,6 +1129,7 @@ export async function dispatchForUser(registry: ProactiveRegistry, userId: strin
   };
   const emotional = await getEmotionalContext(userId);
   state.needsCare = emotional.needsCare;
+  state.safetyHold = await safetyHoldActive(userId);
   const ev = evaluateCandidates(state, opts);
   const proposal = {
     candidates: ev.perCandidate.map((p) => ({
@@ -1167,8 +1201,26 @@ export async function dispatchForUser(registry: ProactiveRegistry, userId: strin
 
   // Co texts first here, so there's no lowercase style to mirror.
   draft = { ...draft, text: capitalizeSentences(draft.text), messages: draft.messages.map(capitalizeSentences) };
-  const draftChecks = checkDraft(draft.text, draft.rules);
-  const dg = gate(draftChecks);
+  let draftChecks = checkDraft(draft.text, draft.rules);
+  let dg = gate(draftChecks);
+  // One rewrite, told what to fix, before the day's text is given up.
+  if (!dg.ok) {
+    const first = { draft: draft.text, failed: describeFailed(dg.failed) };
+    const second = await feelingForDraft
+      .run(renderEmotionalContext(emotional), () => draftAgain(first, () => registry[c.type].draft(c, person)))
+      .catch(() => null);
+    if (second && "messages" in second) {
+      const fixed = { ...second, text: capitalizeSentences(second.text), messages: second.messages.map(capitalizeSentences) };
+      const fixedChecks = checkDraft(fixed.text, fixed.rules);
+      const fg = gate(fixedChecks);
+      await recordDecision({ layer: 7, decision: "proactive.redraft", userId, outcome: fg.ok ? "act" : "skip", action: `send:${c.type}`, proposal: { picked: c.id, first: first.draft, second: fixed.text }, checks: fixedChecks, reason: `first draft broke: ${first.failed}` }).catch(() => {});
+      if (fg.ok) {
+        draft = fixed;
+        draftChecks = fixedChecks;
+        dg = fg;
+      }
+    }
+  }
   if (!dg.ok) {
     await pool.query(`UPDATE proactive_candidates SET attempts = attempts + 1, updated_at = NOW() WHERE id = $1`, [c.id]);
     if (c.attempts + 1 >= RULES.maxDraftAttempts) await dropCandidate(registry, c, "skipped", `draft failed checks: ${describeFailed(dg.failed)}`);

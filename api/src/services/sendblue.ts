@@ -147,7 +147,11 @@ const sendblue = {
           new Error(`sendblue: send breaker open for ...${String(to ?? "").slice(-4)}, refusing to send (${limit.reason === "unprompted" ? `${limit.count} texts with no reply` : `${limit.count} texts in 10 minutes`})`),
         );
       }
-      return client.messages.send({ ...body, content }, options);
+      return client.messages.send({ ...body, content }, options).catch((err: any) => {
+        // Rejected outright (4xx): nothing reached them, so it isn't counted.
+        if (typeof err?.status === "number" && err.status >= 400 && err.status < 500) sendLimiter.release(to);
+        throw err;
+      });
     },
   },
 } as unknown as typeof client;
