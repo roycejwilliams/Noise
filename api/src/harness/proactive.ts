@@ -275,7 +275,12 @@ export function userLevelChecks(state: Omit<PickState, "candidates">, opts: { sk
   const counted = state.sends.filter((s) => !s.exempt && laneOf(s.type) === lane);
   const dayStart = startOfLocalDay(state.now, state.timezone);
   const today = counted.filter((s) => s.sentAt >= dayStart && s.sentAt <= state.now).length;
-  const week = counted.filter((s) => state.now.getTime() - s.sentAt.getTime() < 7 * DAY && s.sentAt <= state.now).length;
+  // Companion check-ins sit outside the weekly count (2026-09-28): the 3 a week
+  // went to debriefs and follow-ups first, so a check-in was blocked 10 times in
+  // two weeks. Their own 4-day rhythm (TYPE_POLICY) is their weekly limit; the
+  // daily cap, spacing and unanswered pause still apply. Not a third lane
+  // (Royce, 2026-09-18: "A third set of caps is guesswork at this volume").
+  const week = counted.filter((s) => s.type !== "companion" && state.now.getTime() - s.sentAt.getTime() < 7 * DAY && s.sentAt <= state.now).length;
   // Each lane waits only on its own unanswered texts (2026-09-22). An
   // unanswered check-in still never pauses events (so follow-ups can't
   // isolate anyone from rooms), and now an unanswered offer never pauses Co
@@ -377,7 +382,7 @@ export function evaluateCandidates(state: PickState, opts: { ignorePacing?: bool
   const userChecks = byLane.other.filter((k) => PERSON_CHECKS.has(k.name));
   const userOk = gate(userChecks).ok;
   const perCandidate = state.candidates.map((candidate) => {
-    const laneChecks = byLane[laneOf(candidate.type)].filter((k) => !PERSON_CHECKS.has(k.name));
+    const laneChecks = byLane[laneOf(candidate.type)].filter((k) => !PERSON_CHECKS.has(k.name) && !(candidate.type === "companion" && k.name === "weekly_cap"));
     const checks = [...laneChecks, ...candidateChecks(candidate, state)];
     return { candidate, checks, ok: gate(checks).ok };
   });

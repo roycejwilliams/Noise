@@ -319,6 +319,18 @@ check("no follow-up line has an em dash or exclamation", [...OFFER_FOLLOWUP_MANY
   const cr = readFileSync(new URL("../../src/agent/conversationReply.ts", import.meta.url), "utf8");
   const cc = readFileSync(new URL("../../src/agent/companionCheckin.ts", import.meta.url), "utf8");
   check("curiosity only where the conversation leads, in replies and check-ins", /Only if what they just said actually leads there/.test(cr) && /never steer to it/.test(cr) && /If nothing they said leads there, return SKIP/.test(cc) && /what_co_cannot_do: "find sponsors, investors or funders themselves/.test(cc));
+  {
+    // Three other-lane texts this week: a check-in still goes; a fourth follow-up doesn't.
+    const now2 = new Date("2026-09-28T19:30:00Z");
+    const sent = (h: number, type: string) => ({ type, sentAt: new Date(now2.getTime() - h * 3_600_000), exempt: false }) as SendRecord;
+    const cand = (type: string) => ({ id: type, type, targetKey: type, topicKey: type, priority: TYPE_POLICY[type as keyof typeof TYPE_POLICY].priority, dueAt: now2, createdAt: now2, expiresAt: null, payload: {}, attempts: 0, summary: type }) as unknown as Candidate;
+    const state = { now: now2, timezone: "America/Los_Angeles", optedOut: false, lastInboundAt: now2, sends: [sent(100, "debrief"), sent(60, "post_call"), sent(30, "window_followup")], candidates: [cand("companion"), cand("ask_checkin")] } as any;
+    const ev = P.evaluateCandidates(state);
+    check("a full week of follow-ups doesn't block a companion check-in", ev.eligible.some((c: Candidate) => c.type === "companion"));
+    check("...but still blocks a fourth follow-up", !ev.eligible.some((c: Candidate) => c.type === "ask_checkin"));
+    const state2 = { ...state, sends: [sent(100, "companion"), sent(60, "companion"), sent(30, "debrief")] };
+    check("check-ins don't use up the follow-ups' weekly room", P.evaluateCandidates({ ...state2, candidates: [cand("ask_checkin")] }).eligible.length === 1);
+  }
   check("\"Hey Sam,\" is named as a greeting", /no greeting \("Hey", "Hi", "Hey Sam,"\)/.test(P.PROACTIVE_RULES));
 }
 
