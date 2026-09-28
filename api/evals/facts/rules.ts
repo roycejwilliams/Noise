@@ -94,7 +94,7 @@ check("the shown reason is still their own stated ask", /shareReasonFromOwnAsk\(
   check("a reaction naming a send is a candidate", R.sentNamedIn("going to the rooftop evening thursday", sent).map((x) => x.name).join() === "Rooftop evening");
   check("a message naming nothing sent isn't", R.sentNamedIn("going to the gym tonight", sent).length === 0 && R.sentNamedIn("the event was fun", sent).length === 0);
   check("the catch-up and Co's tool store reactions the same way", /REACTION_RESULT\[reaction\]/.test(src("agent/conversationTools.ts")) && /REACTION_RESULT\[reaction\]/.test(src("services/reactionCatchup.ts")));
-  check("it runs after the reply, only when Co didn't record one", /toolsCalled\.includes\("noteReaction"\)/.test(src("services/reactionCatchup.ts")) && src("routes/sendblue.ts").includes("catchUpReaction(user.id, resolvedContent, toolsCalled ?? [], inlineTarget?.fromCo ? inlineTarget.text : null).catch"));
+  check("it runs after the reply, only when Co didn't record one", /toolsCalled\.includes\("noteReaction"\)/.test(src("services/reactionCatchup.ts")) && src("routes/sendblue.ts").includes("catchUpReaction(user.id, resolvedContent, toolsCalled ?? [], inlineTarget?.fromCo ? `${inlineTarget.text} ${inlineTarget.what ?? \"\"}`.trim() : null).catch"));
 }
 
 // ------------------------------------------------ inline replies (2026-09-28)
@@ -111,6 +111,8 @@ check("the shown reason is still their own stated ask", /shareReasonFromOwnAsk\(
   check("a refused inline reply goes again as a plain text", /reply_to: \{ message_handle: params\.replyTo \}/.test(sb) && /inline reply refused, sending it plain/.test(sb) && /await sendblue\.messages\.send\(body\);/.test(sb));
   check("the replied-to text reaches Co's facts and the record lookup", /addFact\(replyFacts, "known", repliedToFact\(inlineTarget\)\)/.test(sb) && /\$\{inlineTarget \? `\$\{inlineTarget\.text\}\\n` : ""\}/.test(sb));
   check("Co's reply sends through the threading check", /sendCoReply: threadedSend,/.test(sb));
+  check("a bare link is recognized, a sentence with a link isn't", I.bareLink("https://lu.ma/grokbotproduct-sf") === "https://lu.ma/grokbotproduct-sf" && I.bareLink("see https://lu.ma/x for more") === null);
+  check("the pressed text and the event it was for reach Co and the router", /They pressed Reply on this earlier text from Co/.test(I.repliedToFact({ text: "https://lu.ma/g", fromCo: true, what: "Grok Bot x Notion night", alsoInThread: "Testing" })) && /Grok Bot x Notion night/.test(I.inlineNote({ text: "https://lu.ma/g", fromCo: true, what: "Grok Bot x Notion night" })) && /message: inlineTarget \? `\$\{resolvedContent\} \$\{inlineNote\(inlineTarget\)\}` : resolvedContent,/.test(sb));
   check("the replied-to text is kept with their message", I.inlineNote({ text: "Rooftop evening, Thursday", fromCo: true }) === '[Replying to Co\'s text: "Rooftop evening, Thursday"]' && /\$\{inlineTarget \? ` \$\{inlineNote\(inlineTarget\)\}` : ""\}`;/.test(sb));
   check("a long replied-to text is shortened in the record", I.inlineNote({ text: "x".repeat(300), fromCo: false }).length < 260);
   check("the hold line and the first search result thread too", /await threadedSendAndLog\(holdLine\)/.test(sb) && /threadNextSend = true;\s*if \(prepared\.length > 1\)/.test(sb) && /await threadedSendAndLog\(m\.url\)/.test(sb));

@@ -31,7 +31,7 @@ import { handleTeamText } from "../services/extensions.js";
 import { firstSendTimes } from "../services/turnLatency.js";
 import { catchUpReaction } from "../services/reactionCatchup.js";
 import { gapDescription } from "../services/understanding.js";
-import { inlineNote, repliedTo, repliedToFact, threadReason } from "../services/inlineReply.js";
+import { bareLink, inlineNote, repliedTo, repliedToFact, threadReason } from "../services/inlineReply.js";
 import { recordSafetyConcern, SAFETY_INSTRUCTION, soundsLikeCrisis } from "../services/safety.js";
 import { describeImage } from "../services/imageRead.js";
 import { CALL_OFFER, GATE_ASK, INVITE_JOINED, WELCOME, WELCOME_INVITED, WRONG_CODE, pickLine } from "../services/onboardingLines.js";
@@ -1092,8 +1092,16 @@ export function sendblueRouter(io: Server): Router {
         // Co matches energy: voice in → voice out, text in → text out
         let resolvedContent = content ?? "";
         // Which text they long-pressed and replied to, if any (services/inlineReply.ts).
-        const inlineHandle: unknown = req.body?.reply_to?.message_handle;
-        const repliedToP = repliedTo(inlineHandle, number);
+        // A bare event link is described as the event, from Co's action record.
+        const repliedToP = repliedTo(req.body, number).then(async (r) => {
+          const link = r?.fromCo ? bareLink(r.text) : null;
+          if (!r || !link) return r;
+          const { rows } = await pool
+            .query(`SELECT object_label FROM co_facts WHERE owner_user_id = (SELECT id FROM users WHERE phone_number = $1 LIMIT 1) AND (url = $2 OR object_label LIKE $2 || '%') ORDER BY happened_at DESC LIMIT 1`, [number, link])
+            .catch(() => ({ rows: [] as any[] }));
+          const label = String(rows[0]?.object_label ?? "").replace(link, "").trim();
+          return label ? { ...r, what: label } : r;
+        });
         let isVoice = false;
         let imageForVision: { data: Buffer; mediaType: string } | null = null;
         let photoDescription: string | null = null;
@@ -1368,7 +1376,8 @@ export function sendblueRouter(io: Server): Router {
         let routerLatencyMs: number | null = null;
         try {
           const routeInput = {
-            message: resolvedContent,
+            // Which text they replied to, so "I'm in" under an offer resolves to it.
+            message: inlineTarget ? `${resolvedContent} ${inlineNote(inlineTarget)}` : resolvedContent,
             recentConversation,
             openItems,
             declinedCallTopics: declinedTopicsResult.rows.map((r: any) => r.content),
@@ -2736,7 +2745,7 @@ Return ONLY valid JSON, no preamble: {"date": "YYYY-MM-DD or null", "time": "HH:
           );
           coReply = replyText;
           // A reaction Co didn't record, caught after the reply (services/reactionCatchup.ts).
-          if (hasText && !resultsAnsweredAsk) catchUpReaction(user.id, resolvedContent, toolsCalled ?? [], inlineTarget?.fromCo ? inlineTarget.text : null).catch(() => {});
+          if (hasText && !resultsAnsweredAsk) catchUpReaction(user.id, resolvedContent, toolsCalled ?? [], inlineTarget?.fromCo ? `${inlineTarget.text} ${inlineTarget.what ?? ""}`.trim() : null).catch(() => {});
           const groundingMs = grounding.reduce((a, g) => a + g.latencyMs, 0);
           const replyMs = Date.now() - replyStarted - groundingMs;
           // Latency budget (2026-09-15: a 70s reply led to five resends).
