@@ -29,3 +29,10 @@ Use punctuation the way a person texting does: an exclamation point when you gen
 
 // Appended for anything sent by iMessage.
 export const CO_TEXT_CHANNEL = `You're writing an iMessage. Keep it short, the way a person actually texts. An @name from a post is an X account: keep the @ or say what it is if you know; never write it as a name or a group of people ("the llama_index people").`;
+
+// Every link ties back to their why (Royce, 2026-09-28: "How is this helping
+// the user, where could this possibly take that why/stated ask, we want to
+// lead the user into thinking they are on the right track"). Where it could
+// lead is a real possibility in their own terms, never a promised outcome:
+// the fact check holds predictions to sources.
+export const CO_WHY = `Tie it back to their why: what they told you they want, in their words, and the bigger reason behind it if you know it. Say how this helps with that and where it could take them, as a real possibility ("a good place to…", "could be where…"), never a promised outcome ("you'll find a cofounder there"). Leave them feeling they're on the right track.`;

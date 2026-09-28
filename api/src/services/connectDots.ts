@@ -87,6 +87,14 @@ First decide whether what's happening now leads anywhere at all. Then return ONL
   }
 }
 
+// What they want and what's going on, for tying something Co sent back to
+// their why (services/coVoice.ts CO_WHY).
+export function whyContext(known: Pick<DotsInput, "asks" | "threads">): string {
+  const asks = known.asks.slice(0, 5).map((a) => `"${a}"`).join("; ");
+  const threads = known.threads.slice(0, 4).map((t) => t.text).join("; ");
+  return [asks ? `What they've asked Co for: ${asks}.` : "", threads ? `What they're in the middle of: ${threads}.` : ""].filter(Boolean).join(" ");
+}
+
 // How Co reads them in a reply or a draft.
 export function dotsInstruction(dots: Dot[]): string | null {
   const shape = dots.filter((d) => d.kind === "shape");

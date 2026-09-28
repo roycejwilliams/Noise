@@ -148,9 +148,21 @@ check("the shown reason is still their own stated ask", /shareReasonFromOwnAsk\(
   check("only their own asks, threads and sends are read", (cd.match(/WHERE user_id = \$1/g) ?? []).length === 3 && !/other_user|otherUser/.test(cd));
   check("a thanks or sign-off leads nowhere", /A thanks, an ok, a sign-off or pure logistics leads nowhere: return none/.test(cd) && /parsed\?\.leads_somewhere !== false/.test(cd));
   const sb = src("routes/sendblue.ts");
-  check("replies: found alongside the router, handed to Co before it drafts", /dotsP = gatherDots\(user\.id\)\.then/.test(sb) && /const dotsNote = dotsInstruction\(dots\);\s*if \(dotsNote\) \{\s*addInstruction\(replyFacts, dotsNote\);/.test(sb));
+  check("replies: found alongside the router, handed to Co before it drafts", /knownP = gatherDots\(user\.id\);\s*dotsP = knownP\.then/.test(sb) && /const dotsNote = dotsInstruction\(dots\);\s*if \(dotsNote\) \{\s*addInstruction\(replyFacts, dotsNote\);/.test(sb));
   const ev = src("agent/eventDiscoverySurfacing.ts");
-  check("event offers: the connection can be the reason it fits, and isn't stripped as an identity claim", /how_this_connects_to_the_rest_of_their_life/.test(ev) && /stripUngroundedIdentity\(text, `\$\{askText\}\\n\$\{match\.name\}\\n\$\{dots\.join\("\\n"\)\}`\)/.test(ev));
+  check("event offers: the connection can be the reason it fits, and isn't stripped as an identity claim", /how_this_connects_to_the_rest_of_their_life/.test(ev) && /stripUngroundedIdentity\(text, `\$\{askText\}\\n\$\{match\.name\}\\n\$\{dots\.join\("\\n"\)\}\\n\$\{why\}`\)/.test(ev));
+}
+
+// ------------------------------------------------ every link ties back to their why (2026-09-28)
+{
+  const { CO_WHY } = await import("../../src/services/coVoice.js");
+  const D = await import("../../src/services/connectDots.js");
+  check("the why rule: their words, where it could take them, never a promised outcome", /in their words/.test(CO_WHY) && /never a promised outcome/.test(CO_WHY) && /right track/.test(CO_WHY));
+  check("their why reads as their asks and what they're in the middle of", D.whyContext({ asks: ["a builder community"], threads: [{ text: "deciding on accelerators", feeling: null }] }) === 'What they\'ve asked Co for: "a builder community". What they\'re in the middle of: deciding on accelerators.' && D.whyContext({ asks: [], threads: [] }) === "");
+  const sb = src("routes/sendblue.ts");
+  check("reacting to a link or an offer ties the reply back to their why", /reactingToSent = true;/.test(sb) && /if \(reactingToSent\) \{/.test(sb) && /They're reacting to something Co sent them\. \$\{CO_WHY\}/.test(sb));
+  check("search captions and first offers carry the why, and it isn't stripped as an identity claim", /\$\{CO_WHY\}\$\{matchCount > 1/.test(sb) && /\\n\$\{em\.whyItFits \?\? ""\}\\n\$\{why\}`\)/.test(sb) && /their_why: why/.test(src("agent/eventDiscoverySurfacing.ts")));
+  check("what kind of people events draw is advice; who specifically is there is a claim", /Not a claim: what kind of people events like this tend to draw/.test(src("harness/replyGrounding.ts")));
 }
 
 // ------------------------------------------------ wiring

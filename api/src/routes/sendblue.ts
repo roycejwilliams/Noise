@@ -31,7 +31,8 @@ import { handleTeamText } from "../services/extensions.js";
 import { firstSendTimes } from "../services/turnLatency.js";
 import { catchUpReaction } from "../services/reactionCatchup.js";
 import { gapDescription } from "../services/understanding.js";
-import { dotsInstruction, findDots, gatherDots, type Dot } from "../services/connectDots.js";
+import { CO_WHY } from "../services/coVoice.js";
+import { dotsInstruction, findDots, gatherDots, whyContext, type Dot } from "../services/connectDots.js";
 import { bareLink, inlineNote, repliedTo, repliedToFact, threadReason } from "../services/inlineReply.js";
 import { recordSafetyConcern, SAFETY_INSTRUCTION, soundsLikeCrisis } from "../services/safety.js";
 import { describeImage } from "../services/imageRead.js";
@@ -1141,6 +1142,9 @@ export function sendblueRouter(io: Server): Router {
         // still know what "I'm in" was about (services/inlineReply.ts).
         const inlineTarget = await repliedToP;
         let dotsP: Promise<Dot[]> | null = null;
+        let knownP: ReturnType<typeof gatherDots> | null = null;
+        // Reacting to something Co sent: the reply ties back to their why.
+        let reactingToSent = !!inlineTarget?.fromCo && (!!inlineTarget.what || !!bareLink(inlineTarget.text));
         const inboundContent = isVoice
           ? `User sent a voice memo: ${resolvedContent}${inlineTarget ? ` ${inlineNote(inlineTarget)}` : ""}`
           : `User said: ${resolvedContent}${hasText && imageForVision ? ` [They also sent a photo${photoDescription ? `. It shows: ${photoDescription}` : ""}]` : ""}${inlineTarget ? ` ${inlineNote(inlineTarget)}` : ""}`;
@@ -1379,7 +1383,8 @@ export function sendblueRouter(io: Server): Router {
         try {
           // Connecting the dots, alongside the router (services/connectDots.ts).
           if (hasText && !dotsP) {
-            dotsP = gatherDots(user.id).then((known) =>
+            knownP = gatherDots(user.id);
+            dotsP = knownP.then((known) =>
               findDots({ ...known, now: `They just texted Co: "${resolvedContent}"${inlineTarget ? ` ${inlineNote(inlineTarget)}` : ""}` }),
             );
           }
@@ -1638,6 +1643,7 @@ export function sendblueRouter(io: Server): Router {
           try {
             await recordOfferReaction(user.id, offerReaction.item.ref.pending, reaction, content);
             addFact(replyFacts, "known", reactionFact(offerReaction.item.ref.pending, reaction));
+            reactingToSent = true;
             await recordDecision({ layer: 6, decision: "offer.reaction", userId: user.id, outcome: "act", action: reaction, proposal: { item: offerReaction.item.ref.pending.itemName, key: offerReaction.item.ref.pending.itemKey, message: content.slice(0, 200) } });
           } catch (err: any) {
             console.error("sendblue: offer reaction handling failed (non-fatal):", err?.message ?? err);
@@ -2186,17 +2192,19 @@ Return ONLY valid JSON, no preamble: {"date": "YYYY-MM-DD or null", "time": "HH:
                 const draftDescription = async (m: TierMatch, em: Awaited<ReturnType<typeof enrichMatch>>, stretch = false): Promise<string> => {
                   let description = `${m.name}. ${em.whyItFits ?? m.reason}`;
                   try {
+                    // Their why, so the caption says where this could take it (services/coVoice.ts CO_WHY).
+                    const why = whyContext(await (knownP ?? gatherDots(user.id)).catch(() => ({ asks: [], threads: [] })));
                     const askedDates = describeTimeFrame("scope" in recommendation ? recommendation.scope : null);
                     const dateRule = dateCaveatRule(askedDates);
                     const record = em.details ? renderEventDetails(em.name, em.details).join("\n") : em.opportunity ? `What the post says: ${em.opportunity.postText}` : "";
                     const { text: drafted } = await generateText({
                       model: anthropic(MODELS.sonnet),
                       experimental_telemetry: { isEnabled: true, functionId: "sendblue.recommendation.describe" },
-                      prompt: `${CO_VOICE}\n\n${CO_TEXT_CHANNEL} ${IDENTITY_RULE} You're telling ${user.first_name ?? "them"} about "${m.name}"${"url" in m && m.url ? ". Its link preview is already showing right above this message, so this message is the caption under it: say what it is directly, and don't mention the link, sending it, or \"the one above\"" : ""}${matchCount > 1 ? `. This is one of ${matchCount} you're sending together, so it reads as a bullet in a short list` : ""}.\n\n${stretch ? `It isn't an exact fit for what they asked: ${em.whyItFits ?? "not quite what they described"}. Say that honestly in a few words, then why it could still be worth a look.` : `Why it fits them: ${em.whyItFits ?? m.reason}`}\n${record ? `\nWhat's actually known about it:\n${record}\n` : ""}${dateRule}\nWrite ${matchCount > 1 ? "one sentence" : "1-3 sentences"} naming it, the one or two details that matter most to them (when, where, who), and why it fits, in your own words. Only use what's written above. No link. Return ONLY the message.`,
+                      prompt: `${CO_VOICE}\n\n${CO_TEXT_CHANNEL} ${IDENTITY_RULE} You're telling ${user.first_name ?? "them"} about "${m.name}"${"url" in m && m.url ? ". Its link preview is already showing right above this message, so this message is the caption under it: say what it is directly, and don't mention the link, sending it, or \"the one above\"" : ""}${matchCount > 1 ? `. This is one of ${matchCount} you're sending together, so it reads as a bullet in a short list` : ""}.\n\n${stretch ? `It isn't an exact fit for what they asked: ${em.whyItFits ?? "not quite what they described"}. Say that honestly in a few words, then why it could still be worth a look.` : `Why it fits them: ${em.whyItFits ?? m.reason}`}\n${record ? `\nWhat's actually known about it:\n${record}\n` : ""}${why ? `\n${why}\n` : ""}${dateRule}\nWrite ${matchCount > 1 ? "one sentence" : "1-3 sentences"} naming it, the one or two details that matter most to them (when, where), and why it fits. ${CO_WHY}${matchCount > 1 ? " Keep that to a few words in a list." : ""} Only use what's written above. No link. Return ONLY the message.`,
                     });
                     if (drafted.trim()) {
                       // No claim about who they are beyond their own words and profile (services/identityGuard.ts).
-                      const grounded = stripUngroundedIdentity(cleanCoMessage(drafted.trim()), `${resolvedContent}\n${(profile?.goals ?? []).join(" ")}\n${profile?.city ?? ""}\n${em.whyItFits ?? ""}`);
+                      const grounded = stripUngroundedIdentity(cleanCoMessage(drafted.trim()), `${resolvedContent}\n${(profile?.goals ?? []).join(" ")}\n${profile?.city ?? ""}\n${em.whyItFits ?? ""}\n${why}`);
                       if (grounded) description = grounded;
                     }
                   } catch (err: any) {
@@ -2707,6 +2715,10 @@ Return ONLY valid JSON, no preamble: {"date": "YYYY-MM-DD or null", "time": "HH:
           // it never slows the reply; the next reply reads it.
           if (hasText) learnTextingStyle(user.id, lastCoLine(recentConversation), resolvedContent).catch(() => {});
           const dots = dotsP ? await dotsP : [];
+          if (reactingToSent) {
+            const why = whyContext(await (knownP ?? gatherDots(user.id)));
+            if (why) addInstruction(replyFacts, `They're reacting to something Co sent them. ${CO_WHY} ${why}`);
+          }
           const dotsNote = dotsInstruction(dots);
           if (dotsNote) {
             addInstruction(replyFacts, dotsNote);
