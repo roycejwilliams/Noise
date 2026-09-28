@@ -10,7 +10,7 @@ import { getMemberInvite, inviteLink, invitesLeftFor } from "../services/invites
 import { recordTextArrival } from "../services/eventPresence.js";
 import { closeAsk } from "../services/askKind.js";
 import { recordSuggestionOutcome } from "../services/outcomes.js";
-import { REACTION_RESULT } from "../services/reactionCatchup.js";
+import { REACTION_RESULT, sentItems } from "../services/reactionCatchup.js";
 import { scoreGuestListForEvent } from "../services/eventScoring.js";
 import pool from "../db/db.js";
 import { recordDecision } from "../harness/core.js";
@@ -496,14 +496,9 @@ export function createConversationTools(ctx: ConversationToolContext) {
       execute: async ({ item, reaction, note }) => {
         const norm = (t: string) => t.toLowerCase().replace(/[^a-z0-9 ]+/g, " ").replace(/\s+/g, " ").trim();
         const want = norm(item);
-        const { rows } = ctx.dryRun
-          ? { rows: [] as any[] }
-          : await pool.query(
-              `SELECT content FROM co_memories WHERE user_id = $1 AND memory_type = 'recommendation_offered' AND created_at > NOW() - INTERVAL '45 days' ORDER BY created_at DESC LIMIT 60`,
-              [ctx.userId],
-            );
-        const sent = rows.map((r: any) => { try { return JSON.parse(r.content); } catch { return null; } }).filter((x: any) => x?.name);
-        const match = sent.find((x: any) => norm(x.name) === want) ?? sent.find((x: any) => norm(x.name).includes(want) || want.includes(norm(x.name)));
+        // Their searches' finds and the offers Co sent first (services/reactionCatchup.ts sentItems).
+        const sent = ctx.dryRun ? [] : await sentItems(ctx.userId);
+        const match = sent.find((x) => norm(x.name) === want) ?? sent.find((x) => norm(x.name).includes(want) || want.includes(norm(x.name)));
         if (!ctx.dryRun && !match) {
           notDone(`No reaction was recorded: "${item.slice(0, 80)}" isn't something Co sent them recently.`);
           return { ok: false, error: "That isn't something Co sent them recently (check listSentOffers)." };
@@ -513,8 +508,8 @@ export function createConversationTools(ctx: ConversationToolContext) {
           console.log(`[conversationReply dryRun] would record ${result} for "${item}" (${ctx.userId})`);
           return { ok: true };
         }
-        const key = match.event_api_id ? `event:${match.event_api_id}` : `opportunity:${norm(match.name)}`;
-        await recordSuggestionOutcome(ctx.userId, match.event_api_id ? "event" : "opportunity", key, match.name, result, note ?? null);
+        if (!match) return { ok: false, error: "That isn't something Co sent them recently." };
+        await recordSuggestionOutcome(ctx.userId, match.kind, match.key, match.name, result, note ?? null);
         ctx.facts?.add("did_this_turn", `Noted how "${match.name}" landed with them (${reaction.replace(/_/g, " ")}), so Co leans that way next time.`);
         return { ok: true };
       },

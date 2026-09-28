@@ -146,7 +146,10 @@ export const proactiveRegistry: ProactiveRegistry = {
       // it was queued (services/dateGuard.ts).
       const when = offerable(readDates(itemDays(p.match), localToday()));
       if (!when.ok) return skip(`not offered: ${when.why}`);
-      const r = await draftEventReveal(person, p.askText, p.fromProfile, p.match, { reminder: p.reminder, again: p.again });
+      // How this ties to the rest of what they've said (services/connectDots.ts).
+      const { gatherDots, findDots } = await import("../services/connectDots.js");
+      const dots = p.reminder ? [] : await findDots({ ...(await gatherDots(c.userId)), now: `Co is about to offer them: ${p.match.name}${"description" in p.match && p.match.description ? `, ${String(p.match.description).slice(0, 300)}` : ""} (it came up for their ask: "${p.askText}")` });
+      const r = await draftEventReveal(person, p.askText, p.fromProfile, p.match, { reminder: p.reminder, again: p.again, dots: dots.map((d) => d.link) });
       return r ?? skip("model chose SKIP");
     },
     async onSent(c) {

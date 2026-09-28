@@ -93,6 +93,7 @@ check("the shown reason is still their own stated ask", /shareReasonFromOwnAsk\(
   const sent = [{ name: "Rooftop evening" }, { name: "Mahjong After Dark" }];
   check("a reaction naming a send is a candidate", R.sentNamedIn("going to the rooftop evening thursday", sent).map((x) => x.name).join() === "Rooftop evening");
   check("a message naming nothing sent isn't", R.sentNamedIn("going to the gym tonight", sent).length === 0 && R.sentNamedIn("the event was fun", sent).length === 0);
+  check("Co's tool and the safety net both see offers Co sent first, under the router's own keys", /FROM revealed_offers WHERE user_id = \$1/.test(src("services/reactionCatchup.ts")) && /await sentItems\(ctx\.userId\)/.test(src("agent/conversationTools.ts")) && /const sent = await sentItems\(userId\);/.test(src("services/reactionCatchup.ts")) && /recordSuggestionOutcome\(userId, match\.kind, match\.key/.test(src("services/reactionCatchup.ts")));
   check("the catch-up and Co's tool store reactions the same way", /REACTION_RESULT\[reaction\]/.test(src("agent/conversationTools.ts")) && /REACTION_RESULT\[reaction\]/.test(src("services/reactionCatchup.ts")));
   check("it runs after the reply, only when Co didn't record one", /toolsCalled\.includes\("noteReaction"\)/.test(src("services/reactionCatchup.ts")) && src("routes/sendblue.ts").includes("catchUpReaction(user.id, resolvedContent, toolsCalled ?? [], inlineTarget?.fromCo ? `${inlineTarget.text} ${inlineTarget.what ?? \"\"}`.trim() : null).catch"));
 }
@@ -135,6 +136,21 @@ check("the shown reason is still their own stated ask", /shareReasonFromOwnAsk\(
   check("offers wait while a safety hold is on; the next-day check-in doesn't wait on the last one", /state\.safetyHold && PROACTIVE_PURPOSE_MAP\[c\.type\] === "offer"/.test(pr) && /safetyFollowUp === true/.test(pr));
   check("calls: the prompt covers it, and their side of the transcript is checked after", /IF THEY MAY NOT BE SAFE/.test(readFileSync(new URL("../../prompts/co-system-prompt.md", import.meta.url), "utf8")) && /if \(soundsLikeCrisis\(theirLines\)\)/.test(src("routes/co.ts")));
   check("the team email never carries their message", !/\$\{note\}|\$\{what\}/.test(src("services/safety.ts").slice(src("services/safety.ts").indexOf("alertTeamNow("))));
+}
+
+// ------------------------------------------------ connecting the dots (2026-09-28)
+{
+  const D = await import("../../src/services/connectDots.js");
+  check("no connections, nothing added", D.dotsInstruction([]) === null);
+  const both = D.dotsInstruction([{ kind: "shape", link: "burned out; check in first", why: "taking a break" }, { kind: "mention", link: "the builders night is the 0-to-1 crowd", why: "builder community" }]) ?? "";
+  check("a connection to make comes first, and how they're doing shapes the reply without silencing it", /^A connection worth making/.test(both) && /doesn't mean saying less/.test(both) && /don't lecture them/.test(both));
+  const cd = src("services/connectDots.ts");
+  check("only their own asks, threads and sends are read", (cd.match(/WHERE user_id = \$1/g) ?? []).length === 3 && !/other_user|otherUser/.test(cd));
+  check("a thanks or sign-off leads nowhere", /A thanks, an ok, a sign-off or pure logistics leads nowhere: return none/.test(cd) && /parsed\?\.leads_somewhere !== false/.test(cd));
+  const sb = src("routes/sendblue.ts");
+  check("replies: found alongside the router, handed to Co before it drafts", /dotsP = gatherDots\(user\.id\)\.then/.test(sb) && /const dotsNote = dotsInstruction\(dots\);\s*if \(dotsNote\) \{\s*addInstruction\(replyFacts, dotsNote\);/.test(sb));
+  const ev = src("agent/eventDiscoverySurfacing.ts");
+  check("event offers: the connection can be the reason it fits, and isn't stripped as an identity claim", /how_this_connects_to_the_rest_of_their_life/.test(ev) && /stripUngroundedIdentity\(text, `\$\{askText\}\\n\$\{match\.name\}\\n\$\{dots\.join\("\\n"\)\}`\)/.test(ev));
 }
 
 // ------------------------------------------------ wiring

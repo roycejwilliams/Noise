@@ -31,6 +31,7 @@ import { handleTeamText } from "../services/extensions.js";
 import { firstSendTimes } from "../services/turnLatency.js";
 import { catchUpReaction } from "../services/reactionCatchup.js";
 import { gapDescription } from "../services/understanding.js";
+import { dotsInstruction, findDots, gatherDots, type Dot } from "../services/connectDots.js";
 import { bareLink, inlineNote, repliedTo, repliedToFact, threadReason } from "../services/inlineReply.js";
 import { recordSafetyConcern, SAFETY_INSTRUCTION, soundsLikeCrisis } from "../services/safety.js";
 import { describeImage } from "../services/imageRead.js";
@@ -1139,6 +1140,7 @@ export function sendblueRouter(io: Server): Router {
         // Which text they replied to stays with their message, so later turns
         // still know what "I'm in" was about (services/inlineReply.ts).
         const inlineTarget = await repliedToP;
+        let dotsP: Promise<Dot[]> | null = null;
         const inboundContent = isVoice
           ? `User sent a voice memo: ${resolvedContent}${inlineTarget ? ` ${inlineNote(inlineTarget)}` : ""}`
           : `User said: ${resolvedContent}${hasText && imageForVision ? ` [They also sent a photo${photoDescription ? `. It shows: ${photoDescription}` : ""}]` : ""}${inlineTarget ? ` ${inlineNote(inlineTarget)}` : ""}`;
@@ -1375,6 +1377,12 @@ export function sendblueRouter(io: Server): Router {
         let routerFailed = false;
         let routerLatencyMs: number | null = null;
         try {
+          // Connecting the dots, alongside the router (services/connectDots.ts).
+          if (hasText && !dotsP) {
+            dotsP = gatherDots(user.id).then((known) =>
+              findDots({ ...known, now: `They just texted Co: "${resolvedContent}"${inlineTarget ? ` ${inlineNote(inlineTarget)}` : ""}` }),
+            );
+          }
           const routeInput = {
             // Which text they replied to, so "I'm in" under an offer resolves to it.
             message: inlineTarget ? `${resolvedContent} ${inlineNote(inlineTarget)}` : resolvedContent,
@@ -2698,6 +2706,12 @@ Return ONLY valid JSON, no preamble: {"date": "YYYY-MM-DD or null", "time": "HH:
           // Co's last one (services/textingStyle.ts). In the background, so
           // it never slows the reply; the next reply reads it.
           if (hasText) learnTextingStyle(user.id, lastCoLine(recentConversation), resolvedContent).catch(() => {});
+          const dots = dotsP ? await dotsP : [];
+          const dotsNote = dotsInstruction(dots);
+          if (dotsNote) {
+            addInstruction(replyFacts, dotsNote);
+            recordDecision({ layer: 3, decision: "reply.dots", userId: user.id, outcome: "act", action: `dots:${dots.length}`, proposal: { dots } }).catch(() => {});
+          }
           const { replyText, grounding, toolsCalled } = resultsAnsweredAsk
             ? await recordDecision({
                 layer: 3,

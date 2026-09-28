@@ -91,25 +91,26 @@ export async function draftEventReveal(
   askText: string,
   fromProfile: boolean,
   match: TierMatch,
-  opts: { reminder?: boolean; again?: boolean } = {},
+  opts: { reminder?: boolean; again?: boolean; dots?: string[] } = {},
 ): Promise<{ messages: string[]; text: string; rules: OutputRules } | null> {
   const url: string | undefined = "url" in match ? match.url : undefined;
+  const dots = opts.dots ?? [];
   const text = await draftProactive({
     functionId: "agent.eventDiscoverySurfacing.revealNowDraft",
     firstName: person.firstName,
-    facts: revealFacts(askText, fromProfile, match),
+    facts: { ...revealFacts(askText, fromProfile, match), ...(dots.length ? { how_this_connects_to_the_rest_of_their_life: dots.join(" / ") } : {}) },
     // Every event offer goes out with its details now (2026-09-18), so "short
     // notice" is only said when it's true.
     task: `${IDENTITY_RULE} Do not end with a question or an offer ("want me to grab you a spot?", "want this on your radar?"); a separate text after this one asks if it interests them. ` + (opts.reminder
       ? match.kind === "opportunity"
         ? `They were interested in this one when you mentioned it. This is a short heads-up that the deadline is coming up: name it and the deadline, in one or two sentences. Don't present it as new or re-explain it.${url ? " The link goes out as its own message right before yours; don't mention a link." : ""} If it doesn't fit anymore, return SKIP.`
         : `They already heard about this one from you. This is a short heads-up that it's coming up: name it and when it is, in one or two sentences. Don't present it as new or re-explain it.${url ? " The link goes out as its own message right before yours; don't mention a link." : ""} If it doesn't fit anymore, return SKIP.`
-      : `${opts.again ? "You mentioned this to them over a month ago and they never replied; it's still open and still fits, so bring it up once more, lightly and with no pressure, as something you're circling back on. " : ""}Name it and when it is, and say in plain words why it fits them.${isShortNotice(match) ? " It's short notice, so be upfront about that so there's no pressure." : ""}${url ? " The link goes out as its own message right before yours; don't mention a link." : ""} If it doesn't actually fit, return SKIP.`),
+      : `${opts.again ? "You mentioned this to them over a month ago and they never replied; it's still open and still fits, so bring it up once more, lightly and with no pressure, as something you're circling back on. " : ""}Name it and when it is, and say in plain words why it fits them${dots.length ? " (if how_this_connects_to_the_rest_of_their_life shows it serves more than one thing they want, or should be framed differently for how they're doing, say that instead of a generic reason)" : ""}.${isShortNotice(match) ? " It's short notice, so be upfront about that so there's no pressure." : ""}${url ? " The link goes out as its own message right before yours; don't mention a link." : ""} If it doesn't actually fit, return SKIP.`),
   });
   if (!text) return null;
   // The follow-up question is its own text after the last offer (services/offerFollowUp.ts).
   // Nothing about who they are beyond what they said in their ask (identityGuard.ts).
-  const grounded = stripUngroundedIdentity(text, `${askText}\n${match.name}`);
+  const grounded = stripUngroundedIdentity(text, `${askText}\n${match.name}\n${dots.join("\n")}`);
   if (!grounded) return null;
   const body = stripClosingQuestion(grounded);
   const tokens = nameTokens(match.name);
