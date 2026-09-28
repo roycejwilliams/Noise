@@ -382,7 +382,7 @@
     },
     {
       "id": "s12",
-      "about": "companion check-in at most every 14 days even when they reply",
+      "about": "companion check-in at most every 4 days even when they reply (was 14 until 2026-09-28)",
       "timezone": "America/Los_Angeles",
       "start": "2026-09-01T15:45:00Z",
       "end": "2026-09-10T06:00:00Z",
@@ -395,14 +395,20 @@
           "topic": "companion"
         },
         {
-          "at": "2026-09-06T16:00:00Z",
+          "at": "2026-09-03T16:00:00Z",
           "type": "companion",
           "target": "companion:r2",
+          "topic": "companion"
+        },
+        {
+          "at": "2026-09-06T16:00:00Z",
+          "type": "companion",
+          "target": "companion:r3",
           "topic": "companion"
         }
       ],
       "expect": {
-        "sends": 1
+        "sends": 2
       }
     },
     {

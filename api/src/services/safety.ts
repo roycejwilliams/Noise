@@ -43,7 +43,13 @@ export async function recordSafetyConcern(userId: string, firstName: string | nu
   await alertTeamNow(
     `safety:${userId}:${new Date().toISOString().slice(0, 10)}`,
     `Co alert: ${firstName ?? "a member"} may not be safe`,
-    `Something ${firstName ?? "a member"} texted Co today may mean they're thinking about hurting themselves (${source === "co" ? "Co flagged it" : "matched a crisis phrase"}). Co asked if they're safe and gave them 988. Their message isn't included here; read the conversation on the dashboard and decide whether someone should reach out personally.`,
+    `Something ${firstName ?? "a member"} said to Co today may mean they're thinking about hurting themselves (${source === "co" ? "Co flagged it" : "matched a crisis phrase"}). Co asked if they're safe and gave them 988. Their message isn't included here.</p>` +
+      `<p><b>What to do now:</b></p><ol>` +
+      `<li>Whoever reads this first: reply-all "I've got it" so no one else doubles up.</li>` +
+      `<li>Read the conversation on the dashboard within the hour.</li>` +
+      `<li>If they may be in immediate danger (a plan, a time, the means), call 911 for their location. Don't wait on Co.</li>` +
+      `<li>Otherwise, a real person from the team texts or calls them today, briefly and warmly, as themselves, not as Co. Point to 988 again.</li>` +
+      `<li>Note what you did in the dashboard. Co has already paused offers for 3 days and will check in tomorrow.</li></ol><p>`,
   ).catch(() => {});
 }
 

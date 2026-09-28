@@ -97,41 +97,15 @@ export type ExtractedIntent = {
 // (assessConversationCoverage's own prompt, built from RAPPORT_TOPICS
 // directly) picks this up correctly regardless. Confirm/update the Hume-side
 // schema before relying on this topic surfacing on calls.
-export const RAPPORT_TOPICS = [
-  "current_situation",
-  "major_transition",
-  "goals_challenges",
-  "looking_for",
-  "people_to_meet",
-  "ways_to_help",
-  "personality",
-  "location_availability",
-  "boundaries_preferences",
-  "long_term_direction",
-] as const;
-
-export type RapportTopic = (typeof RAPPORT_TOPICS)[number];
-
-// Single source of truth for what each topic actually means — used both to
-// build assessConversationCoverage's prompt below and, for the text channel
-// (webhooks.ts), to tell the reply-generation model in plain language what a
-// missing_topics key is actually asking about.
-export const RAPPORT_TOPIC_DESCRIPTIONS: Record<RapportTopic, string> = {
-  current_situation: "what's going on in their life right now",
-  major_transition: "the bigger context or change they're in the middle of",
-  goals_challenges: "what they're working toward or struggling with",
-  looking_for: "what kind of connection or outcome they want from this",
-  people_to_meet: "the kind of people they'd want to be introduced to",
-  ways_to_help: "what they could offer or help others with",
-  personality: "some sense of their personality or how they come across",
-  location_availability: "where they are and when they're free",
-  boundaries_preferences: "any stated boundaries or preferences",
-  long_term_direction:
-    "their longer-horizon personal and career direction — where they want to be in a few years, distinct from what's urgent right now",
-};
+export { RAPPORT_TOPICS, RAPPORT_TOPIC_DESCRIPTIONS, type RapportTopic } from "./profileTopics.js";
+import { RAPPORT_TOPICS, RAPPORT_TOPIC_DESCRIPTIONS, type RapportTopic } from "./profileTopics.js";
+import { understandingGaps, type Gap } from "./understanding.js";
 
 export type CoverageAssessment = {
   missing_topics: RapportTopic[];
+  // Addressed in this conversation itself, not just known from before. Only
+  // these count as freshly heard (services/understanding.ts staleness).
+  fresh_topics?: RapportTopic[];
   ready_to_summarize: boolean;
 };
 
@@ -241,7 +215,7 @@ Which of these topics has the person substantively addressed — either in what'
 ${topicList}
 
 Return ONLY valid JSON, no preamble or markdown:
-{"missing_topics": [...topic keys not yet covered...], "ready_to_summarize": true|false}
+{"missing_topics": [...topic keys not yet covered...], "fresh_topics": [...topic keys the person addressed in THIS conversation itself, not just in what was known before...], "ready_to_summarize": true|false}
 
 ready_to_summarize is true only if at most one or two minor topics remain missing, AND this conversation itself (not just prior context) has substantively happened — never mark it true based on prior context alone with nothing yet said in this conversation.`,
       experimental_telemetry: { isEnabled: true, functionId: "profileExtraction.assessConversationCoverage" },
@@ -255,7 +229,10 @@ ready_to_summarize is true only if at most one or two minor topics remain missin
         )
       : [...RAPPORT_TOPICS];
 
-    return { missing_topics: missing, ready_to_summarize: Boolean(parsed.ready_to_summarize) };
+    const fresh = Array.isArray(parsed.fresh_topics)
+      ? parsed.fresh_topics.filter((t: unknown): t is RapportTopic => RAPPORT_TOPICS.includes(t as RapportTopic))
+      : [];
+    return { missing_topics: missing, fresh_topics: fresh, ready_to_summarize: Boolean(parsed.ready_to_summarize) };
   } catch (err) {
     console.error("assessConversationCoverage failed, falling back to nothing-covered:", err);
     return COVERAGE_FALLBACK;
@@ -290,9 +267,12 @@ const RAPPORT_TOPIC_PRIORITY: RapportTopic[] = [
 // way around. jsonb `||` merge (not a full read-modify-write) so concurrent
 // callers can't clobber each other. Fire-and-forget/non-fatal, same as every
 // other best-effort profile write in this file.
+// Stamps only what they said in this conversation (2026-09-28): stamping
+// everything "known from before" re-dated old knowledge on every text, so
+// nothing could ever go stale.
 export function persistCoveredTopics(userId: string, coverage: CoverageAssessment): void {
   const missing = new Set(coverage.missing_topics);
-  const covered = RAPPORT_TOPICS.filter((t) => !missing.has(t));
+  const covered = (coverage.fresh_topics ?? []).filter((t) => !missing.has(t));
   if (!covered.length) return;
   const patch: Partial<Record<RapportTopic, string>> = {};
   const now = new Date().toISOString();
@@ -343,11 +323,13 @@ export async function getCoverageNudge(
   userId: string,
   transcriptSoFar: string,
   profile: CoverageNudgeProfile | null,
-): Promise<{ missingTopic: RapportTopic | null }> {
+): Promise<{ missingTopic: RapportTopic | null; refresh?: Gap | null }> {
   const topicsCovered = profile?.topics_covered ?? {};
   const topicsAsked = profile?.topics_asked ?? {};
+  // Known, but long enough ago that it may have changed (services/understanding.ts).
+  const stale = understandingGaps(topicsCovered, topicsAsked).find((g) => g.kind === "stale") ?? null;
 
-  if (RAPPORT_TOPICS.every((t) => topicsCovered[t])) return { missingTopic: null };
+  if (RAPPORT_TOPICS.every((t) => topicsCovered[t])) return stale ? { missingTopic: stale.topic, refresh: stale } : { missingTopic: null };
 
   const priorContextParts = [
     profile?.life_chapters?.length ? `life chapter: ${profile.life_chapters.join(", ")}` : null,
@@ -372,6 +354,7 @@ export async function getCoverageNudge(
   });
 
   const missingTopic = RAPPORT_TOPIC_PRIORITY.find((t) => candidates.includes(t)) ?? null;
+  if (!missingTopic && stale) return { missingTopic: stale.topic, refresh: stale };
   return { missingTopic };
 }
 

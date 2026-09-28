@@ -125,7 +125,9 @@ export const TYPE_POLICY: Record<ProactiveType, TypePolicy> = {
   // After a time frame they searched has passed; about them, not a pitch.
   window_followup: { priority: 35, typeGapDays: 5 },
   product_update: { priority: 20, typeGapDays: 7 },
-  companion: { priority: 10, typeGapDays: 14 },
+  // Every ~4 days at most, not 14 (2026-09-28, Royce: two weeks apart is an
+  // acquaintance, not a companion). Still skipped when there's nothing real.
+  companion: { priority: 10, typeGapDays: 4 },
   // Weekly by design; the gap stops two in one week if one was delayed.
   membership_lapse: { priority: 25, typeGapDays: 6 },
 };

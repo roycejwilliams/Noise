@@ -39,6 +39,9 @@ export const SIGNALS: Signal[] = [
   { key: "call_ungrounded", label: "Calls with unsupported promises or facts", bad: `decision = 'call.grounding' AND outcome = 'skip'`, total: `decision = 'call.grounding'`, floor: 0.3, minCount: 2 },
   { key: "snapshot_problems", label: "Person summaries that contradict recent messages", bad: `decision = 'profile.snapshotCheck' AND outcome = 'skip'`, total: `decision = 'profile.snapshotCheck'`, floor: 0.3, minCount: 3 },
   { key: "city_overwritten", label: "Profile city changes blocked (extraction drifting)", bad: `decision = 'profile.city' AND outcome = 'skip'`, total: `decision = 'profile.city'`, floor: 0.5, minCount: 3 },
+  // Co still paying attention (2026-09-28, services/understanding.ts): members
+  // it hasn't learned anything new about in three weeks.
+  { key: "understanding_quiet", label: "Members Co hasn't learned anything new about in 3 weeks", bad: `decision = 'understanding.check' AND outcome = 'skip'`, total: `decision = 'understanding.check'`, floor: 0.5, minCount: 2 },
   { key: "reaction_withheld", label: "Tapbacks Co chose but had to withhold (a reply was still owed)", bad: `decision = 'tool.reactInsteadOfReplying' AND action = 'not_done'`, total: `decision = 'tool.reactInsteadOfReplying'`, floor: 0.4, minCount: 3 },
   // Real events found, none offerable (sold out, already sent, out of range):
   // the answer they get is "nothing", even though the search worked.

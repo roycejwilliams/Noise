@@ -28,8 +28,10 @@ export async function draftCompanionCheckin(
   recap: string,
   thread?: CompanionThread | null,
   item?: CompanionItem | null,
+  curious?: CompanionCurious | null,
 ): Promise<{ text: string; rules: OutputRules } | null> {
   if (thread) return draftFromThread(firstName, recap, thread, item ?? null);
+  if (curious) return draftFromCuriosity(firstName, recap, curious);
   const text = await draftProactive({
     functionId: "agent.companionCheckin",
     firstName,
@@ -40,6 +42,29 @@ export async function draftCompanionCheckin(
     task: `Find ONE specific open thread in the recap: something they were in the middle of, deciding, or looking forward to, that they'd plausibly have news about now. Write a short text that names that exact thing and asks how it went or where it landed. No next steps, nothing operational. If the recap has no specific open thread like that, return SKIP; a generic "thinking of you" is never acceptable.
 
 One exception: if the recap shows Co barely knows them yet (little beyond joining and their name), don't SKIP. Write one short, warm, low-pressure text that picks up where things actually left off (the last thing Co asked, if the recap says) and invites them to share what's on their plate these days. No events, no offers, no pitch, no promise of anything Co will do.`,
+  });
+  if (!text) return null;
+  return { text, rules: { maxSentences: 2, maxChars: 240 } };
+}
+
+// What Co is still figuring out about them, with their own recent words
+// (services/understanding.ts). Only asked where the conversation leads
+// (Royce, 2026-09-28: "Co should always be figuring out something, but only
+// if the conversation leads them there").
+export type CompanionCurious = { topic: string; about: string; theirWords: string };
+
+async function draftFromCuriosity(firstName: string, recap: string, curious: CompanionCurious): Promise<{ text: string; rules: OutputRules } | null> {
+  const text = await draftProactive({
+    functionId: "agent.companionCheckin",
+    firstName,
+    facts: {
+      something_co_is_still_figuring_out_about_them: curious.about,
+      your_recent_texts_with_them: curious.theirWords,
+      ways_co_can_help: "search now for events, communities or opportunities for something they want; point them to people worth meeting at Co events; a quick call to think something through",
+      what_co_cannot_do: "find sponsors, investors or funders themselves (only events where they show up); promise to keep watching or keep an eye out",
+      recap_for_background_only: recap.slice(0, 1500),
+    },
+    task: `Text them first, like a friend who was paying attention. Look for one specific thing THEY said in your recent texts that naturally leads somewhere: either toward something_co_is_still_figuring_out_about_them, or toward one concrete way Co could help with it (only from ways_co_can_help, never what_co_cannot_do). Pick it up in their terms and ask one short, warm question, or offer that one way to help as a question. It has to feel like the next step of that conversation, never an interview question out of nowhere. If nothing they said leads there, return SKIP.`,
   });
   if (!text) return null;
   return { text, rules: { maxSentences: 2, maxChars: 240 } };

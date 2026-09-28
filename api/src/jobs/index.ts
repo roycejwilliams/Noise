@@ -30,6 +30,7 @@ import { reviewEnabled, runMorningReview } from "../harness/devReview.js";
 import { expireStaleAsks } from "../services/askExpiry.js";
 import { classifyOpenAsks, syncClosedAsks } from "../services/askKind.js";
 import { companionPayloadFor } from "../harness/memberThreads.js";
+import { gapDescription, lastLearned, QUIET_UNDERSTANDING_DAYS, understandingGaps } from "../services/understanding.js";
 import { recordDecision } from "../harness/core.js";
 import { runWeeklyReflections } from "../harness/memberReflection.js";
 import { runMembershipLapse } from "../services/membershipLapse.js";
@@ -815,7 +816,8 @@ export function registerJobs(io: Server) {
                  ORDER BY cm.created_at DESC LIMIT 1) AS recap_id,
                 (SELECT content FROM co_memories cm
                  WHERE cm.user_id = u.id AND cm.memory_type = 'recap'
-                 ORDER BY cm.created_at DESC LIMIT 1) AS recap
+                 ORDER BY cm.created_at DESC LIMIT 1) AS recap,
+                cp.topics_covered, cp.topics_asked
          FROM users u
          JOIN co_profiles cp ON cp.user_id = u.id
          WHERE u.sms_opted_out = false
@@ -823,7 +825,7 @@ export function registerJobs(io: Server) {
            AND u.identity_captured = true
            AND cp.last_recap_at IS NOT NULL
            AND (
-             (cp.last_companion_checkin_at IS NULL OR cp.last_companion_checkin_at <= NOW() - INTERVAL '14 days')
+             (cp.last_companion_checkin_at IS NULL OR cp.last_companion_checkin_at <= NOW() - INTERVAL '4 days')
              -- A stretch of offers with nothing about them: 3+ days with an
              -- offer and no companion message in the last 7 (2026-09-22).
              OR (
@@ -851,6 +853,28 @@ export function registerJobs(io: Server) {
         // One open thread and at most one useful thing for it (2026-09-22,
         // harness/memberThreads.ts); the recap alone when nothing's open.
         const parts = await companionPayloadFor(row.user_id).catch(() => null);
+        // Nothing open to ask about: the one thing Co is still figuring out
+        // about them, with their own recent words, so the check-in only asks
+        // where the conversation leads (services/understanding.ts).
+        const gaps = understandingGaps(row.topics_covered, row.topics_asked);
+        const learned = lastLearned(row.topics_covered);
+        await recordDecision({
+          layer: 7,
+          decision: "understanding.check",
+          userId: row.user_id,
+          outcome: learned && Date.now() - new Date(learned).getTime() < QUIET_UNDERSTANDING_DAYS * 86_400_000 ? "act" : "skip",
+          action: gaps.length ? `gaps:${gaps.length}` : "no_gaps",
+          proposal: { lastLearned: learned, gaps: gaps.slice(0, 4).map((g) => `${g.kind}:${g.topic}`) },
+        }).catch(() => {});
+        let curious: { topic: string; about: string; theirWords: string } | null = null;
+        if (!parts?.thread && gaps.length) {
+          const { rows: said } = await pool.query(
+            `SELECT content FROM co_memories WHERE user_id = $1 AND memory_type = 'text_exchange' ORDER BY created_at DESC LIMIT 14`,
+            [row.user_id],
+          );
+          const convo = said.reverse().map((r: any) => String(r.content)).join("\n").slice(-2000);
+          if (convo.includes("User said:")) curious = { topic: gaps[0].topic, about: gapDescription(gaps[0]), theirWords: convo };
+        }
         await recordDecision({
           layer: 7,
           decision: "proactive.companionPayload",
@@ -867,8 +891,10 @@ export function registerJobs(io: Server) {
           topicKey: "companion",
           summary: parts?.thread
             ? `Check in on "${parts.thread.text.slice(0, 80)}"${parts.item ? " with one thing found for it" : ""}`
-            : "No-reason check-in about one specific open thread from their recent recap (skip if there isn't one)",
-          payload: { recap: row.recap, threadId: parts?.threadId ?? null, thread: parts?.thread ?? null, item: parts?.item ?? null },
+            : curious
+              ? `Pick up something they said that leads to ${curious.about.slice(0, 80)}, or one way Co could help (skip if nothing they said leads there)`
+              : "No-reason check-in about one specific open thread from their recent recap (skip if there isn't one)",
+          payload: { recap: row.recap, threadId: parts?.threadId ?? null, thread: parts?.thread ?? null, item: parts?.item ?? null, curious },
           expiresAt: new Date(Date.now() + 3 * 24 * 60 * 60 * 1000),
         }).catch((err: any) => console.error(`Companion check-in enqueue failed for ${row.user_id}:`, err?.message ?? err));
       }

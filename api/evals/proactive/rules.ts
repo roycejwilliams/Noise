@@ -187,7 +187,7 @@ check("two unanswered texts in a row pause for 72 hours", unansweredPauseFor(2) 
   check("an exempt send (event change, reminder) doesn't count toward spacing", !failed(st([{ ...send(1, "event_change"), exempt: true } as SendRecord]), "other").includes("spacing"));
   check("caps are unchanged: 1 room text a day, 4 a week", RULES.roomMaxPerLocalDay === 1 && RULES.roomMaxPer7Days === 4);
   check("ask check-ins wait 7 days, not 14", TYPE_POLICY.ask_checkin.topicGapDays === 7);
-  check("the 'thinking about you' rhythm is unchanged at 14 days", TYPE_POLICY.companion.typeGapDays === 14);
+  check("the 'thinking about you' rhythm is every ~4 days (Royce, 2026-09-28)", TYPE_POLICY.companion.typeGapDays === 4 && /INTERVAL '4 days'/.test(readFileSync(new URL("../../src/jobs/index.ts", import.meta.url), "utf8")));
 
   const jobs = readFileSync(new URL("../../src/jobs/index.ts", import.meta.url), "utf8");
   const companionCron = jobs.slice(jobs.indexOf("// No paid subscription needed"), jobs.indexOf("Companion check-in cron error"));
@@ -302,6 +302,23 @@ check("no follow-up line has an em dash or exclamation", [...OFFER_FOLLOWUP_MANY
   check("a failed draft gets one rewrite, told what it broke", /draftAgain\(first, \(\) => registry\[c\.type\]\.draft\(c, person\)\)/.test(pr) && /It broke: \$\{redo\.failed\}/.test(pr));
   const reg = readFileSync(new URL("../../src/harness/proactiveRegistry.ts", import.meta.url), "utf8");
   check("only Co's own skip holds check-ins for 14 days; a failed draft retries in about 2", /const coChoseSkip = \/\^model chose SKIP\//.test(reg) && /coChoseSkip \? "0" : "12"/.test(reg) && /onDropped\?\.\(c, status, reason\)/.test(pr) && /skip\("model chose SKIP/.test(reg));
+  const U = await import("../../src/services/understanding.js");
+  const now = new Date("2026-09-28T12:00:00Z");
+  const daysAgo = (n: number) => new Date(now.getTime() - n * 86_400_000).toISOString();
+  const all = (d: number) => Object.fromEntries(U.RAPPORT_TOPICS.map((t) => [t, daysAgo(d)]));
+  check("a new member: everything is still to figure out, what's going on first", U.understandingGaps({}, {}, now)[0]?.topic === "current_situation" && U.understandingGaps({}, {}, now).length === U.RAPPORT_TOPICS.length);
+  check("recently heard: nothing to catch up on", U.understandingGaps(all(3), {}, now).length === 0);
+  check("what's going on goes stale after five weeks; who they are lasts longer", (() => { const g = U.understandingGaps(all(40), {}, now); return g.some((x) => x.topic === "current_situation" && x.kind === "stale") && !g.some((x) => x.topic === "personality"); })());
+  check("never asks the same thing twice in two weeks", U.understandingGaps({}, { current_situation: daysAgo(3) }, now)[0]?.topic !== "current_situation");
+  check("unknown comes before stale", (() => { const c = all(40); delete (c as any).people_to_meet; return U.understandingGaps(c, {}, now)[0]?.kind === "unknown"; })());
+  check("a stale topic reads as what's changed, with when Co last heard", /^what's changed with .*last heard about it on 2026-08-19/.test(U.gapDescription({ topic: "goals_challenges", kind: "stale", lastHeard: "2026-08-19" })));
+  check("last learned is the newest stamp", U.lastLearned({ a: "2026-09-01T00:00:00Z", b: "2026-09-20T00:00:00Z" }) === "2026-09-20T00:00:00Z" && U.lastLearned({}) === null);
+  check("companion texts can come every ~4 days, not 14", TYPE_POLICY.companion.typeGapDays === 4);
+  const pe = readFileSync(new URL("../../src/services/profileExtraction.ts", import.meta.url), "utf8");
+  check("only what they said in this conversation counts as freshly heard", /const covered = \(coverage\.fresh_topics \?\? \[\]\)/.test(pe) && /"fresh_topics": \[/.test(pe));
+  const cr = readFileSync(new URL("../../src/agent/conversationReply.ts", import.meta.url), "utf8");
+  const cc = readFileSync(new URL("../../src/agent/companionCheckin.ts", import.meta.url), "utf8");
+  check("curiosity only where the conversation leads, in replies and check-ins", /Only if what they just said actually leads there/.test(cr) && /never steer to it/.test(cr) && /If nothing they said leads there, return SKIP/.test(cc) && /what_co_cannot_do: "find sponsors, investors or funders themselves/.test(cc));
   check("\"Hey Sam,\" is named as a greeting", /no greeting \("Hey", "Hi", "Hey Sam,"\)/.test(P.PROACTIVE_RULES));
 }
 

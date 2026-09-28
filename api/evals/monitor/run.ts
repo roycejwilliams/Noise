@@ -42,6 +42,8 @@ const WRITTEN_DECISIONS = [
   "reply.grounding", "proactive.dailyPick", "recommendation.search", "turn.latency", "call.grounding",
   "profile.snapshotCheck", "profile.city", "turn.closing", "router.decideActions",
   "proactive.windowFollowUp", "proactive.exemptSend", "tier1.announce", "call.gate",
+  // Written by the companion cron (jobs/index.ts, services/understanding.ts).
+  "understanding.check",
   // Every tool Co chooses writes tool.<name> (agent/toolGuard.ts, 2026-09-25).
   "tool.%", ...ABILITIES.filter((a) => a.tool).map((a) => `tool.${a.tool}`),
   // Extensions' tools write the same, per team turn (services/extensions.ts).

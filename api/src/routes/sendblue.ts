@@ -30,6 +30,7 @@ import { handlePhoneChange } from "../services/phoneChange.js";
 import { handleTeamText } from "../services/extensions.js";
 import { firstSendTimes } from "../services/turnLatency.js";
 import { catchUpReaction } from "../services/reactionCatchup.js";
+import { gapDescription } from "../services/understanding.js";
 import { inlineNote, repliedTo, repliedToFact, threadReason } from "../services/inlineReply.js";
 import { recordSafetyConcern, SAFETY_INSTRUCTION, soundsLikeCrisis } from "../services/safety.js";
 import { describeImage } from "../services/imageRead.js";
@@ -1360,7 +1361,7 @@ export function sendblueRouter(io: Server): Router {
           const candidates = memoriesResult.rows.map((m: any) => m.content).filter(Boolean);
           return candidates.length ? await filterRelevantMemories(resolvedContent, candidates) : "";
         })().catch(() => "");
-        const coverageP = getCoverageNudge(user.id, recentConversation, profile).catch(() => ({ missingTopic: null }));
+        const coverageP = getCoverageNudge(user.id, recentConversation, profile).catch(() => ({ missingTopic: null, refresh: null }));
 
         let routerOutput: RouterOutput = NO_ROUTE;
         let routerFailed = false;
@@ -2649,7 +2650,7 @@ Return ONLY valid JSON, no preamble: {"date": "YYYY-MM-DD or null", "time": "HH:
         // say." Both were started before the router (recentMemoriesP,
         // coverageP); the context summary reads state this turn may have
         // changed, so it's read now, alongside them.
-        const [recentMemories, { missingTopic }, contextSummary] = await Promise.all([recentMemoriesP, coverageP, buildContextSummary(user.id)]);
+        const [recentMemories, { missingTopic, refresh: staleTopic }, contextSummary] = await Promise.all([recentMemoriesP, coverageP, buildContextSummary(user.id)]);
         const replyContextWaitMs = Date.now() - replyContextStarted;
 
         const toneContext = renderEmotionalContext(emotional);
@@ -2720,7 +2721,8 @@ Return ONLY valid JSON, no preamble: {"date": "YYYY-MM-DD or null", "time": "HH:
                 isThinProfileFirstMessage,
                 isFirstContact: isFirstRealMessage,
                 missingTopic,
-                missingTopicDescription: missingTopic ? RAPPORT_TOPIC_DESCRIPTIONS[missingTopic] : null,
+                // A stale topic reads as catching up on what's changed (services/understanding.ts).
+                missingTopicDescription: staleTopic ? gapDescription(staleTopic) : missingTopic ? RAPPORT_TOPIC_DESCRIPTIONS[missingTopic] : null,
                 facts: replyFacts,
                 toneContext,
                 seekingModeContext,

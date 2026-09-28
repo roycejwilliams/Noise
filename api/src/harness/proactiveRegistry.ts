@@ -215,7 +215,7 @@ export const proactiveRegistry: ProactiveRegistry = {
 
   companion: {
     async draft(c, person) {
-      const r = await draftCompanionCheckin(person.firstName, c.payload.recap ?? "", c.payload.thread ?? null, c.payload.item ?? null);
+      const r = await draftCompanionCheckin(person.firstName, c.payload.recap ?? "", c.payload.thread ?? null, c.payload.item ?? null, c.payload.curious ?? null);
       return r ? { messages: [r.text], ...r } : skip("model chose SKIP: no specific open thread");
     },
     async onSent(c, _p, messages) {
@@ -225,6 +225,11 @@ export const proactiveRegistry: ProactiveRegistry = {
         await pool.query(`UPDATE member_threads SET last_touched_at = NOW() WHERE id = $1 AND user_id = $2`, [c.payload.threadId, c.userId]);
       }
       await writeMemory(c.userId, "companion_checkin", `Companion check-in: ${messages.join(" ")}`);
+      // Asked about it: not again for a while (services/understanding.ts).
+      if (c.payload.curious?.topic) {
+        const { markTopicAsked } = await import("../services/profileExtraction.js");
+        markTopicAsked(c.userId, c.payload.curious.topic);
+      }
     },
     // Co choosing SKIP waits the full 14 days. A draft that failed its
     // checks, errored, or expired unsent was never Co's call, so it comes
