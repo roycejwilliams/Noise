@@ -11,6 +11,7 @@ import { recordTextArrival } from "../services/eventPresence.js";
 import { closeAsk } from "../services/askKind.js";
 import { recordSuggestionOutcome } from "../services/outcomes.js";
 import { REACTION_RESULT, sentItems } from "../services/reactionCatchup.js";
+import { findSent, type TurnContext } from "../services/turnContext.js";
 import { scoreGuestListForEvent } from "../services/eventScoring.js";
 import pool from "../db/db.js";
 import { recordDecision } from "../harness/core.js";
@@ -105,6 +106,8 @@ export type ConversationToolContext = {
   messageHandle?: string | null;
   // Their message may mean they aren't safe (services/safety.ts): no tapback.
   safetyConcern?: boolean;
+  // The one picture of this turn (services/turnContext.ts), for tools that read what Co sent.
+  turn?: TurnContext | null;
   firstName?: string | null;
   replyOwed?: boolean;
   lastCoMessage?: string | null;
@@ -273,6 +276,29 @@ export function createConversationTools(ctx: ConversationToolContext) {
         state.sentMessages.push("[sent Co's contact card]");
         ctx.facts?.add("did_this_turn", "Sent Co's contact card as its own message just before this reply.");
         return { ok: true };
+      },
+    }),
+
+    // Feedback for the team, saved by Co (services/issueReports.ts saveFeedback).
+    saveFeedbackForTeam: tool({
+      description: toolUse("saveFeedbackForTeam"),
+      inputSchema: z.object({
+        feedback: z.string().describe("The feedback, as one clear sentence the team can act on."),
+      }),
+      execute: async ({ feedback }) => {
+        if (ctx.dryRun) {
+          console.log(`[conversationReply dryRun] would save feedback for ${ctx.userId}: ${feedback}`);
+          ctx.facts?.add("did_this_turn", `Saved for the team: "${feedback.slice(0, 200)}"`);
+          return { ok: true };
+        }
+        const { saveFeedback } = await import("../services/issueReports.js");
+        const saved = await saveFeedback(ctx.userId, ctx.resolvedContent, feedback, ctx.facts?.text() ?? "").catch(() => false);
+        if (!saved) {
+          notDone(`Their feedback wasn't saved for the team: "${feedback.slice(0, 120)}".`);
+          return { ok: false, error: "Couldn't save that for the team. Don't say it was passed along." };
+        }
+        ctx.facts?.add("did_this_turn", `Saved for the team: "${feedback.slice(0, 200)}"`);
+        return { ok: true, note: "Saved. You can say it's been passed to the team; don't promise when or whether it changes." };
       },
     }),
 
@@ -496,9 +522,9 @@ export function createConversationTools(ctx: ConversationToolContext) {
       execute: async ({ item, reaction, note }) => {
         const norm = (t: string) => t.toLowerCase().replace(/[^a-z0-9 ]+/g, " ").replace(/\s+/g, " ").trim();
         const want = norm(item);
-        // Their searches' finds and the offers Co sent first (services/reactionCatchup.ts sentItems).
-        const sent = ctx.dryRun ? [] : await sentItems(ctx.userId);
-        const match = sent.find((x) => norm(x.name) === want) ?? sent.find((x) => norm(x.name).includes(want) || want.includes(norm(x.name)));
+        // The turn's one list of what Co sent (services/turnContext.ts): search results and first offers.
+        const sent = ctx.dryRun ? [] : (ctx.turn?.sent ?? (await sentItems(ctx.userId)));
+        const match = findSent(sent, item);
         if (!ctx.dryRun && !match) {
           notDone(`No reaction was recorded: "${item.slice(0, 80)}" isn't something Co sent them recently.`);
           return { ok: false, error: "That isn't something Co sent them recently (check listSentOffers)." };
@@ -608,18 +634,15 @@ export function createConversationTools(ctx: ConversationToolContext) {
       inputSchema: z.object({}),
       execute: async () => {
         if (ctx.dryRun) return { ok: true, sent: [] };
-        const { rows } = await pool.query(
-          `SELECT item_name, kind, url, sent_at, reaction FROM revealed_offers
-           WHERE user_id = $1 AND sent_at > NOW() - INTERVAL '30 days'
-           ORDER BY sent_at DESC LIMIT 15`,
-          [ctx.userId],
-        );
-        if (!rows.length) {
+        // The turn's one list (services/turnContext.ts), last 30 days.
+        const cutoff = Date.now() - 30 * 86_400_000;
+        const items = (ctx.turn?.sent ?? (await sentItems(ctx.userId))).filter((x) => x.sentAt.getTime() > cutoff).slice(0, 15);
+        if (!items.length) {
           ctx.facts?.add("known", "Co hasn't sent them any events or opportunities in the last 30 days.");
           return { ok: true, sent: [] };
         }
         const fmt = await memberDate(ctx.userId);
-        const sent = rows.map((r: any) => ({ name: r.item_name as string, kind: r.kind as string, link: (r.url as string | null) ?? null, sentOn: fmt(r.sent_at), reaction: (r.reaction as string | null) ?? null }));
+        const sent = items.map((r) => ({ name: r.name, kind: r.kind, link: r.url, sentOn: fmt(r.sentAt), reaction: r.reaction }));
         ctx.facts?.add(
           "known",
           `What Co actually sent them in the last 30 days, newest first, the real complete list: ${sent

@@ -58,15 +58,19 @@ export async function learnTextingStyle(userId: string, coSaid: string | null, t
       experimental_telemetry: { isEnabled: true, functionId: "textingStyle.learn" },
       prompt: styleLearningPrompt(current, coSaid, theySaid),
     });
-    const r = parseModelJson<{ changed?: boolean; notes?: unknown }>(text);
-    if (!r?.changed) return null;
-    const notes = mergeNotes(r.notes);
-    await pool.query(`UPDATE co_profiles SET texting_style = $2 WHERE user_id = $1`, [userId, notes]);
-    await recordDecision({ layer: 4, decision: "profile.textingStyle", userId, outcome: "act", action: "updated", proposal: { before: current, after: notes, theySaid: theySaid.slice(0, 200) } }).catch(() => {});
-    return notes;
+    return await applyStyleUpdate(userId, current, parseModelJson<{ changed?: boolean; notes?: unknown }>(text), theySaid);
   } catch {
     return null;
   }
+}
+
+// The same write for output produced elsewhere (services/turnLearning.ts).
+export async function applyStyleUpdate(userId: string, current: string[], r: { changed?: boolean; notes?: unknown } | null | undefined, theySaid: string): Promise<string[] | null> {
+  if (!r?.changed) return null;
+  const notes = mergeNotes(r.notes);
+  await pool.query(`UPDATE co_profiles SET texting_style = $2 WHERE user_id = $1`, [userId, notes]);
+  await recordDecision({ layer: 4, decision: "profile.textingStyle", userId, outcome: "act", action: "updated", proposal: { before: current, after: notes, theySaid: theySaid.slice(0, 200) } }).catch(() => {});
+  return notes;
 }
 
 export async function textingStyleFor(userId: string): Promise<string[]> {

@@ -60,7 +60,7 @@ check("today's search doesn't", /^Earlier today, /.test(searchNoteLine("[search]
 check("event facts carry the status", /const note = dateNote\(readDates\(itemDays\(match\), localToday\(\), asked\)\);/.test(src("harness/replyGrounding.ts")));
 check("an unprompted offer is checked when it's about to go out", /const when = offerable\(readDates\(itemDays\(p\.match\), localToday\(\)\)\);\s*if \(!when\.ok\) return skip/.test(src("harness/proactiveRegistry.ts")));
 check("sent finds record their own dates", /when: d\.start, whenEnd: d\.end/.test(src("services/recommendation.ts")));
-check("the claim check holds offers and follow-ups to the status", /an offer is supported only if a FACT shows it's still ahead/.test(src("harness/replyGrounding.ts")) && /- followup: asking how something went/.test(src("harness/replyGrounding.ts")));
+check("the claim check holds offers and follow-ups to the status", /an offer needs a FACT showing it's still ahead or today/.test(src("harness/replyGrounding.ts")) && /- followup: asking how something went/.test(src("harness/replyGrounding.ts")));
 
 console.log(`date rules: ${total - failed}/${total} passed`);
 if (failed) process.exitCode = 1;

@@ -39,7 +39,9 @@ const stripped = stripUnsupported(
 );
 check("#4 a claim either check flagged is removed", !/Nothing's changed/.test(stripped) && !/18 days/.test(stripped));
 const rg = src("harness/replyGrounding.ts");
-check("#4 the fact check strips with both checks' failures", /const allFailed = \[\.\.\.effectiveFailed1, \.\.\.\(secondFailed \?\? \[\]\)\];/.test(rg) && /stripUnsupported\(draft, allFailed\)/.test(rg));
+// Remove-only (2026-09-28): the cut drops what the first check flagged and what
+// code flags on the cut; a rewrite is only kept when its own check finds nothing.
+check("#4 nothing either check flagged goes out", /let cut = stripUnsupported\(draft, effectiveFailed1\);/.test(rg) && /if \(cutCode\.length\) cut = stripUnsupported\(cut, cutCode\);/.test(rg) && /if \(!failed2\.length\) kept = \{ text: cleaned, checks: r\.checks \};/.test(rg));
 check("#4 a failed call's real reason reaches the reply", /memory_type = 'call_failure'/.test(rg) && /the problem is on your side, not their phone/.test(rg));
 const bridge = src("services/mediaStreamBridge.ts");
 check("#4 a Hume error on a call is noted in plain words, once per 10 min", /noteCallFailure\(handle\.userId/.test(bridge) && /a problem with Co's own voice setup/.test(bridge) && /INTERVAL '10 minutes'/.test(bridge));

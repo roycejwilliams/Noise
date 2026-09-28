@@ -277,6 +277,8 @@ export async function runMigrations(): Promise<void> {
       // mentioned, whether a promise was kept, a held send, and what a
       // follow-up was about.
       "call_failure", "closest_miss_mentioned", "promise_result", "send_held", "followup_context",
+      // What Co learned about how to be with them from their pushback (services/connectDots.ts).
+      "co_lesson",
     ];
     const { rows } = await pool.query(
       `SELECT pg_get_constraintdef(oid) AS def FROM pg_constraint
@@ -712,6 +714,43 @@ export async function runMigrations(): Promise<void> {
       .then(() => pool.query(`CREATE INDEX IF NOT EXISTS idx_review_flags_flagged ON review_flags (flagged_at DESC)`))
       .catch((err: Error) => console.error("review_flags table init failed:", err));
   }
+
+  // Co's own sent messages, by Sendblue handle (2026-09-28), so a reply can
+  // thread under the thing being discussed (routes/sendblue.ts threadHandle).
+  // user_id is matched from the number at send time; owner-scoped lookups only.
+  await pool
+    .query(
+      `CREATE TABLE IF NOT EXISTS outbound_messages (
+        message_handle TEXT PRIMARY KEY,
+        user_id UUID,
+        content TEXT,
+        sent_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+      )`,
+    )
+    .catch((err: Error) => console.error("outbound_messages table init failed:", err));
+  // Every link, read once (services/linkReader.ts, 2026-09-28). owner_key is
+  // '' for public pages Co sent and the member's id for a link they texted,
+  // so a member's own links stay theirs.
+  await pool
+    .query(
+      `CREATE TABLE IF NOT EXISTS link_reads (
+        url TEXT NOT NULL,
+        owner_key TEXT NOT NULL DEFAULT '',
+        owner_user_id UUID,
+        final_url TEXT,
+        status TEXT NOT NULL,
+        why TEXT,
+        fields JSONB NOT NULL DEFAULT '{}'::jsonb,
+        summary TEXT,
+        source TEXT,
+        fetched_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+        PRIMARY KEY (url, owner_key)
+      )`,
+    )
+    .catch((err: Error) => console.error("link_reads table init failed:", err));
+  await pool
+    .query(`CREATE INDEX IF NOT EXISTS outbound_messages_user_sent ON outbound_messages (user_id, sent_at DESC)`)
+    .catch((err: Error) => console.error("outbound_messages index failed:", err));
 
   // Sendblue delivery retries (2026-09-15): one inbound text is processed
   // once, keyed by Sendblue's message_handle, however many times the webhook

@@ -21,7 +21,8 @@ import {
   storeTranscriptMemory,
 } from "../services/profileExtraction.js";
 import { generateRecommendation } from "../services/recommendation.js";
-import { buildContextSummary, summarizeCallForTextContext } from "../services/callContext.js";
+import { buildCallContextSummary, buildCallKnowledge, summarizeCallForTextContext } from "../services/callContext.js";
+import { learnFromCall } from "../services/callLearning.js";
 import { writeMemory } from "../services/memory.js";
 import sendblue from "../services/sendblue.js";
 import { generateHumeVoiceLine, generateVoiceNote } from "../services/voiceNote.js";
@@ -759,7 +760,7 @@ async function handleToolCall(
     const live = userId ? getLiveCall(userId, chatId) : null;
     const [transcript, priorContext] = await Promise.all([
       live?.lines.length ? Promise.resolve(live.lines.join("\n")) : fetchHumeCallData(chatId).then((d) => d.transcript),
-      userId ? (live?.contextSummary != null ? Promise.resolve(live.contextSummary) : buildContextSummary(userId).catch(() => "")) : Promise.resolve(""),
+      userId ? (live?.contextSummary != null ? Promise.resolve(live.contextSummary) : buildCallContextSummary(userId).catch(() => "")) : Promise.resolve(""),
     ]);
     const t1 = Date.now();
     // Confirmed live, 2026-09-06: this call never passed priorContext, so
@@ -1071,7 +1072,9 @@ router.post(
         // partial-failure retry (chat_ended redelivered after a mid-pipeline
         // crash) used to re-insert this — and duplicate the emotion_signals
         // rows below — every time it reclaimed a 'failed' call_status.
-        const knownBeforeCall = await buildContextSummary(user_id).catch(() => "");
+        // What Co had going in, split into facts and Co's own impressions, so
+        // the audit never takes a summary as proof (callContext.ts).
+        const knownBeforeCall = await buildCallKnowledge(user_id).catch(() => ({ summary: "", facts: "", impressions: "" }));
         const existingTranscriptMem = await pool.query(
           `SELECT id FROM co_memories WHERE user_id = $1 AND memory_type = 'call_transcript' AND content = $2 LIMIT 1`,
           [user_id, transcript],
@@ -1107,8 +1110,17 @@ router.post(
         // DB CHECK constraints, generate goal embeddings, and upsert co_profiles.
         // Shared with the typed-intake fallback and the text channel — see
         // profileExtraction.ts.
-        const { extracted } = await extractPsychographicProfile(cleanTranscript, emotionalHighlights);
-        await storeProfile(user_id, extracted, cleanTranscript, { emotions });
+        // One read for the profile, resolutions, corrections, cadence, planned
+        // event and lessons from moments they corrected Co (callLearning.ts),
+        // through the same gates and writes. Awaited, so a failure still marks
+        // the call failed and it's retried. CALL_LEARNING=off: the old calls.
+        if (process.env.CALL_LEARNING === "off") {
+          const { extracted } = await extractPsychographicProfile(cleanTranscript, emotionalHighlights);
+          await storeProfile(user_id, extracted, cleanTranscript, { emotions });
+          extractPlannedEventMention(user_id, cleanTranscript).catch(() => {});
+        } else {
+          await learnFromCall({ userId: user_id, transcript: cleanTranscript, emotions, emotionalHighlights });
+        }
 
         // Step 6 — Persist Hume chat group ID so the next call resumes this conversation
         if (chat_group_id) {
@@ -1128,7 +1140,6 @@ router.post(
         captureIntent(user_id, cleanTranscript, { scope: "whole_transcript" })
           .then(() => surfaceNewAsksNow(user_id))
           .catch(() => {});
-        extractPlannedEventMention(user_id, cleanTranscript).catch(() => {});
         // Crisis wording on their side of the call (services/safety.ts): the
         // call prompt tells Co what to do in the moment; this makes sure the
         // team hears about it and offers are held afterward.

@@ -6,6 +6,7 @@
 // and Co didn't record a reaction, a quick read decides whether they were
 // reacting to it, and records it the same way the tool does.
 import { anthropic } from "@ai-sdk/anthropic";
+import { loadSentItems, type SentItem } from "./turnContext.js";
 import { generateText } from "ai";
 import pool from "../db/db.js";
 import { MODELS } from "../models.js";
@@ -19,41 +20,15 @@ export const REACTION_RESULT = { interested: "interested", going: "acted", went_
 const norm = (t: string) => t.toLowerCase().replace(/[^a-z0-9 ]+/g, " ").replace(/\s+/g, " ").trim();
 const STOP = new Set(["the", "and", "for", "with", "that", "this", "from", "your", "event", "night", "thing", "about", "into", "going"]);
 
-// Everything Co sent them in the last 45 days that a reaction can be about:
-// what their own searches turned up (recommendation_offered) and what Co
-// offered first (revealed_offers), each under the key its own path records
-// outcomes with, so a reaction lands on the same item however it's caught
-// (2026-09-28: Co's tool couldn't find the daytonaio offer Co had sent first).
-export type SentItem = { name: string; key: string; kind: "event" | "opportunity" };
+// Everything Co sent them that a reaction can be about, from the one list
+// the whole turn reads (services/turnContext.ts loadSentItems): search results
+// and offers Co sent first, under the key the router's reaction path uses, so
+// a reaction lands on the same item however it's caught (2026-09-28: Co's
+// tool couldn't find the daytonaio offer Co had sent first).
+export type { SentItem } from "./turnContext.js";
 
 export async function sentItems(userId: string): Promise<SentItem[]> {
-  const [recs, offers] = await Promise.all([
-    pool
-      .query(`SELECT content FROM co_memories WHERE user_id = $1 AND memory_type = 'recommendation_offered' AND created_at > NOW() - INTERVAL '45 days' ORDER BY created_at DESC LIMIT 60`, [userId])
-      .then((r) => r.rows)
-      .catch(() => [] as any[]),
-    pool
-      .query(`SELECT item_key, item_name, kind FROM revealed_offers WHERE user_id = $1 AND sent_at > NOW() - INTERVAL '45 days' ORDER BY sent_at DESC LIMIT 60`, [userId])
-      .then((r) => r.rows)
-      .catch(() => [] as any[]),
-  ]);
-  const out: SentItem[] = [];
-  const seen = new Set<string>();
-  for (const r of recs) {
-    let x: any = null;
-    try {
-      x = JSON.parse(r.content);
-    } catch {}
-    if (!x?.name) continue;
-    const item: SentItem = { name: x.name, key: x.event_api_id ? `event:${x.event_api_id}` : `opportunity:${norm(x.name)}`, kind: x.event_api_id ? "event" : "opportunity" };
-    if (!seen.has(norm(item.name))) (seen.add(norm(item.name)), out.push(item));
-  }
-  for (const r of offers) {
-    if (!r.item_name || seen.has(norm(r.item_name))) continue;
-    seen.add(norm(r.item_name));
-    out.push({ name: r.item_name, key: r.item_key, kind: r.kind === "event" ? "event" : "opportunity" });
-  }
-  return out;
+  return loadSentItems(userId);
 }
 
 // Pure: which sent things their message names, by a whole distinctive word.
@@ -88,9 +63,10 @@ Return ONLY JSON: {"item": <number or null>, "reaction": "interested" | "going" 
   return { match, reaction: read.reaction as Reaction };
 }
 
-export async function catchUpReaction(userId: string, message: string, toolsCalled: string[], repliedToCo: string | null = null): Promise<void> {
+// sent: the turn's list when the caller has it (services/turnContext.ts).
+export async function catchUpReaction(userId: string, message: string, toolsCalled: string[], repliedToCo: string | null = null, sentList?: SentItem[]): Promise<void> {
   if (!message.trim() || toolsCalled.includes("noteReaction")) return;
-  const sent = await sentItems(userId);
+  const sent = sentList ?? (await sentItems(userId));
   // A reply threaded under one of Co's texts names what that text named.
   const named = sentNamedIn(repliedToCo ? `${message} ${repliedToCo}` : message, sent).slice(0, 5);
   if (!named.length) return;

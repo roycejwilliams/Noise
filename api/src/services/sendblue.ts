@@ -125,6 +125,19 @@ function reportSendBreaker(number: string, count: number, resumesAt: number, rea
     .catch((err: any) => console.error("sendblue: breaker follow-up failed (non-fatal):", err?.message ?? err));
 }
 
+function recordOutbound(handle: string, number: string, content: string): void {
+  import("../db/db.js")
+    .then(({ default: pool }) =>
+      pool.query(
+        `INSERT INTO outbound_messages (message_handle, user_id, content)
+         SELECT $1, (SELECT id FROM users WHERE right(regexp_replace(phone_number, '\\D', '', 'g'), 10) = right(regexp_replace($2, '\\D', '', 'g'), 10) LIMIT 1), $3
+         ON CONFLICT (message_handle) DO NOTHING`,
+        [handle, number, content.slice(0, 2000)],
+      ),
+    )
+    .catch((err: any) => console.error("sendblue: outbound handle not recorded (non-fatal):", err?.message ?? err));
+}
+
 // Every message send goes through this one wrapper so cleanup and the
 // meta-commentary guard apply uniformly, regardless of which prompt or call
 // site generated the content.
@@ -147,7 +160,14 @@ const sendblue = {
           new Error(`sendblue: send breaker open for ...${String(to ?? "").slice(-4)}, refusing to send (${limit.reason === "unprompted" ? `${limit.count} texts with no reply` : `${limit.count} texts in 10 minutes`})`),
         );
       }
-      return client.messages.send({ ...body, content }, options).catch((err: any) => {
+      return client.messages.send({ ...body, content }, options).then((res: any) => {
+        // Every message Co sends, kept by its handle so a later reply can
+        // thread under it (services/inlineReply.ts sentMessageHandle).
+        if (res?.message_handle) recordOutbound(String(res.message_handle), to ?? "", content ?? "");
+        // Every link Co sends is read once, in the background (services/linkReader.ts).
+        if (content && /https?:\/\//.test(content)) import("./linkReader.js").then((l) => l.readLinksLater(content)).catch(() => {});
+        return res;
+      }).catch((err: any) => {
         // Rejected outright (4xx): nothing reached them, so it isn't counted.
         if (typeof err?.status === "number" && err.status >= 400 && err.status < 500) sendLimiter.release(to);
         throw err;

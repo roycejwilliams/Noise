@@ -310,7 +310,30 @@ export async function updateMemberThreads(userId: string): Promise<void> {
       experimental_telemetry: { isEnabled: true, functionId: "memberThreads.update" },
       prompt: threadsPrompt(firstName, onFile, lines.slice(-80)),
     });
-    const parsed = parseModelJson<{ open?: ProposedOpen[]; close?: ProposedClose[] }>(text);
+    await applyThreadProposal(userId, parseModelJson<{ open?: ProposedOpen[]; close?: ProposedClose[] }>(text), onFile, lines);
+  } catch (err: any) {
+    console.error("updateMemberThreads failed (non-fatal):", err?.message ?? err);
+  }
+}
+
+// What the threads read needs, loaded once (the snapshot rebuild folds the
+// threads read into its own call: harness/personSnapshot.ts).
+export async function threadInputs(userId: string): Promise<{ lines: OwnLine[]; onFile: MemberThread[] }> {
+  const [lines, onFile] = await Promise.all([ownLines(userId), listThreads(userId)]);
+  return { lines, onFile };
+}
+
+// Everything updateMemberThreads does after its model call: the same gates
+// (quotes of their own words, their own dates) and writes.
+export async function applyThreadProposal(
+  userId: string,
+  parsed: { open?: ProposedOpen[]; close?: ProposedClose[] } | null | undefined,
+  onFile: MemberThread[],
+  lines: OwnLine[],
+): Promise<void> {
+  try {
+    if (!lines.length) return;
+    parsed = parsed ?? {};
     const zone = await zoneFor(userId);
     const { opened, closed, checks } = gateThreadChanges(parsed.open ?? [], parsed.close ?? [], onFile, lines, zone);
 

@@ -83,8 +83,8 @@ check("the shown reason is still their own stated ask", /shareReasonFromOwnAsk\(
   check("search says what it can't find, and what it can instead", /It can't find sponsors, investors, or funders themselves, but it can find events where they show up/.test(sheet));
   check("saving an ask says what isn't searched", /Finding sponsors, investors or funding themselves, and advice, are kept on file but not searched/.test(sheet));
   const rg = src("harness/replyGrounding.ts");
-  check("every 'I can' is a capability claim, held to that exact thing", /every "I can…" is one, supported only by a capability FACT that covers that exact thing/.test(rg));
-  check("background work is a promise too", /or says it's already doing in the background/.test(rg));
+  check("every 'I can' is a capability claim, held to that exact thing", (/every "I can…" is one/.test(rg) && /A capability needs a capability FACT covering that exact thing/.test(rg)));
+  check("background work is a promise too", /or is already doing in the background/.test(rg));
 }
 
 // ------------------------------------------------ missed reactions (2026-09-28)
@@ -93,9 +93,9 @@ check("the shown reason is still their own stated ask", /shareReasonFromOwnAsk\(
   const sent = [{ name: "Rooftop evening" }, { name: "Mahjong After Dark" }];
   check("a reaction naming a send is a candidate", R.sentNamedIn("going to the rooftop evening thursday", sent).map((x) => x.name).join() === "Rooftop evening");
   check("a message naming nothing sent isn't", R.sentNamedIn("going to the gym tonight", sent).length === 0 && R.sentNamedIn("the event was fun", sent).length === 0);
-  check("Co's tool and the safety net both see offers Co sent first, under the router's own keys", /FROM revealed_offers WHERE user_id = \$1/.test(src("services/reactionCatchup.ts")) && /await sentItems\(ctx\.userId\)/.test(src("agent/conversationTools.ts")) && /const sent = await sentItems\(userId\);/.test(src("services/reactionCatchup.ts")) && /recordSuggestionOutcome\(userId, match\.kind, match\.key/.test(src("services/reactionCatchup.ts")));
+  check("Co's tool and the safety net both see offers Co sent first, under the router's own keys", /FROM revealed_offers\s+WHERE user_id = \$1/.test(src("services/turnContext.ts")) && /return loadSentItems\(userId\)/.test(src("services/reactionCatchup.ts")) && /ctx\.turn\?\.sent \?\? \(await sentItems\(ctx\.userId\)\)/.test(src("agent/conversationTools.ts")) && /const sent = sentList \?\? \(await sentItems\(userId\)\);/.test(src("services/reactionCatchup.ts")) && /recordSuggestionOutcome\(userId, match\.kind, match\.key/.test(src("services/reactionCatchup.ts")));
   check("the catch-up and Co's tool store reactions the same way", /REACTION_RESULT\[reaction\]/.test(src("agent/conversationTools.ts")) && /REACTION_RESULT\[reaction\]/.test(src("services/reactionCatchup.ts")));
-  check("it runs after the reply, only when Co didn't record one", /toolsCalled\.includes\("noteReaction"\)/.test(src("services/reactionCatchup.ts")) && src("routes/sendblue.ts").includes("catchUpReaction(user.id, resolvedContent, toolsCalled ?? [], inlineTarget?.fromCo ? `${inlineTarget.text} ${inlineTarget.what ?? \"\"}`.trim() : null).catch"));
+  check("it runs after the reply, only when Co didn't record one", /toolsCalled\.includes\("noteReaction"\)/.test(src("services/reactionCatchup.ts")) && src("routes/sendblue.ts").includes("catchUpReaction(user.id, resolvedContent, toolsCalled ?? [], inlineTarget?.fromCo ? `${inlineTarget.text} ${inlineTarget.what ?? \"\"}`.trim() : null, turn?.sent).catch"));
 }
 
 // ------------------------------------------------ inline replies (2026-09-28)
@@ -145,10 +145,11 @@ check("the shown reason is still their own stated ask", /shareReasonFromOwnAsk\(
   const both = D.dotsInstruction([{ kind: "shape", link: "burned out; check in first", why: "taking a break" }, { kind: "mention", link: "the builders night is the 0-to-1 crowd", why: "builder community" }]) ?? "";
   check("a connection to make comes first, and how they're doing shapes the reply without silencing it", /^A connection worth making/.test(both) && /doesn't mean saying less/.test(both) && /don't lecture them/.test(both));
   const cd = src("services/connectDots.ts");
-  check("only their own asks, threads and sends are read", (cd.match(/WHERE user_id = \$1/g) ?? []).length === 3 && !/other_user|otherUser/.test(cd));
-  check("a thanks or sign-off leads nowhere", /A thanks, an ok, a sign-off or pure logistics leads nowhere: return none/.test(cd) && /parsed\?\.leads_somewhere !== false/.test(cd));
+  const ownerOnly = (t: string) => (t.match(/\bSELECT\b/g) ?? []).length === (t.match(/WHERE (owner_)?user_id = \$1/g) ?? []).length && !/other_user|otherUser/.test(t);
+  check("only their own asks, threads, sends and lessons are read, here and in the turn's one picture", ownerOnly(cd) && ownerOnly(src("services/turnContext.ts")));
+  check("a thanks or sign-off leads nowhere: connections only when they share or react", /"small_talk" \(thanks, ok, a sign-off\)/.test(cd) && /DOTS_MODES: Mode\[\] = \["sharing", "reacting"\]/.test(cd) && /dots: forReply && !DOTS_MODES\.includes\(mode\) \? \[\] : dots/.test(cd));
   const sb = src("routes/sendblue.ts");
-  check("replies: found alongside the router, handed to Co before it drafts", /knownP = gatherDots\(user\.id\);\s*dotsP = knownP\.then/.test(sb) && /const dotsNote = dotsInstruction\(dots\);\s*if \(dotsNote\) \{\s*addInstruction\(replyFacts, dotsNote\);/.test(sb));
+  check("replies: found alongside the router from the turn's picture, handed to Co before it drafts", /dotsP = turnP\.then\(\(t\) =>\s*readMoment\(/.test(sb) && /const dotsNote = dotsInstruction\(dots\);\s*if \(dotsNote\) \{\s*addInstruction\(replyFacts, dotsNote\);/.test(sb));
   const ev = src("agent/eventDiscoverySurfacing.ts");
   check("event offers: the connection can be the reason it fits, and isn't stripped as an identity claim", /how_this_connects_to_the_rest_of_their_life/.test(ev) && /stripUngroundedIdentity\(text, `\$\{askText\}\\n\$\{match\.name\}\\n\$\{dots\.join\("\\n"\)\}\\n\$\{why\}`\)/.test(ev));
 }
@@ -162,14 +163,31 @@ check("the shown reason is still their own stated ask", /shareReasonFromOwnAsk\(
   const sb = src("routes/sendblue.ts");
   check("reacting to a link or an offer ties the reply back to their why", /reactingToSent = true;/.test(sb) && /if \(reactingToSent\) \{/.test(sb) && /They're reacting to something Co sent them\. \$\{CO_WHY\}/.test(sb));
   check("search captions and first offers carry the why, and it isn't stripped as an identity claim", /\$\{CO_WHY\}\$\{matchCount > 1/.test(sb) && /\\n\$\{em\.whyItFits \?\? ""\}\\n\$\{why\}`\)/.test(sb) && /their_why: why/.test(src("agent/eventDiscoverySurfacing.ts")));
-  check("what kind of people events draw is advice; who specifically is there is a claim", /Not a claim: what kind of people events like this tend to draw/.test(src("harness/replyGrounding.ts")));
+  check("what kind of people events draw is advice; who specifically is there is a claim", (/what kind of people events like this tend to draw/.test(src("harness/replyGrounding.ts")) && /Saying specific people will be there, or that they're the member's people, is other_person/.test(src("harness/replyGrounding.ts"))));
+}
+
+// ------------------------------------------------ one picture per turn (2026-09-28, services/turnContext.ts)
+{
+  const T = await import("../../src/services/turnContext.js");
+  const now = Date.now();
+  const grok = { key: "event:evt-1", name: "Grok Bot x Notion for Product Builders night (SF)", kind: "event" as const, url: "https://lu.ma/grokbotproduct-sf", sentAt: new Date(now - 3_600_000), reaction: null, postText: null, details: { startAt: "2026-09-30T00:00:00.000Z", endAt: null, timezone: "America/Los_Angeles", online: false, venue: null, address: null, city: "San Francisco", hosts: [], price: null, spotsRemaining: null, requiresApproval: null, soldOut: null, guestCount: null, description: null } };
+  const dayt = { key: "name:daytonaio ai builders demo night", name: "daytonaio AI Builders Demo Night", kind: "opportunity" as const, url: "https://x.com/i/status/1", sentAt: new Date(now - 3_600_000), reaction: null, postText: null, details: null };
+  const lines = T.sentDetailLines({ sent: [grok, dayt] });
+  check("a recent send's start time is on file for the reply", /Details on file for "Grok Bot x Notion[^"]*"[^.]*starts Tuesday, September 29 at 5:00 PM/.test(lines[0] ?? "") && /Not on file: address/.test(lines[0] ?? ""));
+  check("...and what isn't on file is said plainly", /Co sent them "daytonaio AI Builders Demo Night".*hasn't been read yet, so Co has no start time or address/.test(lines[1] ?? ""));
+  check("an older send isn't loaded as a recent detail", T.sentDetailLines({ sent: [{ ...grok, sentAt: new Date(now - 9 * 86_400_000) }] }).length === 0);
+  check("a first offer is found by the name Co's tool uses", T.findSent([grok, dayt], "daytonaio AI Builders demo night")?.key === "name:daytonaio ai builders demo night" && T.findSent([grok, dayt], "Grok Bot x Notion")?.key === "event:evt-1" && T.findSent([grok], "pottery") === undefined);
+  const rg = src("harness/replyGrounding.ts");
+  check("reply facts come from the turn's picture: sends with details, asks, record; the summary is a hint", /if \(opts\.turn\) for \(const line of sentDetailLines\(opts\.turn\)\) addFact\(rf, "known", line\);/.test(rg) && /addOngoingSearchFacts\(rf, userId, opts\.turn\?\.asks\)/.test(rg) && /addHint\(rf, `Co's summary of what they've told it: \$\{line\}`\)/.test(rg));
+  const sb = src("routes/sendblue.ts");
+  check("no separate partial loads left in the text route", !/sentDetailFacts|lessonsFor\(|gatherDots\(/.test(sb) && /lessons = turn\?\.lessons \?\? \[\]/.test(sb) && /turn,\n/.test(sb));
 }
 
 // ------------------------------------------------ wiring
 check("every tool Co uses goes on the record", /await recordToolAction\(ctx\.userId, name, input\)/.test(src("agent/toolGuard.ts")));
 check("every find Co sends goes on the record", /await recordSentItems\(/.test(src("services/recommendation.ts")));
 check("every unprompted text goes on the record", (src("harness/proactive.ts").match(/recordProactiveText\(/g) ?? []).length >= 3);
-check("Co's replies read the record, including older things they name", /const ledger = await ledgerFacts\(userId, opts\.context \?\? ""\)/.test(src("harness/replyGrounding.ts")) && /context: `\$\{resolvedContent\}/.test(src("routes/sendblue.ts")));
+check("Co's replies read the record, including older things they name", /const ledger = opts\.turn\?\.ledger \?\? \(await ledgerFacts\(userId, opts\.context \?\? ""\)/.test(src("harness/replyGrounding.ts")) && /ledgerFacts\(userId, `\$\{message\}\\n\$\{opts\.ledgerContext \?\? ""\}`\)/.test(src("services/turnContext.ts")) && /turnP = assembleContext\(user\.id, resolvedContent, \{\s*inlineTarget,\s*ledgerContext:/.test(src("routes/sendblue.ts")) && /turn: turn \?\? undefined,/.test(src("routes/sendblue.ts")));
 check("the record starts filled from what was already logged", /backfillCoActions\(\)/.test(src("db/migrations.ts")));
 
 console.log(`facts rules: ${total - failed}/${total} passed`);

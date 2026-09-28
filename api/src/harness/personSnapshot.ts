@@ -210,6 +210,30 @@ async function checkSnapshot(userId: string, snapshot: PersonSnapshot, recent: {
   }
 }
 
+// The snapshot rebuild and the open-threads read used to be two calls on the
+// same beat over the same words (2026-09-28, reply-path restructure phase 4).
+// The first build now does both, with each prompt's own wording; the
+// snapshot's check and one fix-up rebuild are unchanged, and the threads
+// proposal goes through the same gates (harness/memberThreads.ts).
+function promptBody(prompt: string): { body: string; shape: string } {
+  const i = prompt.lastIndexOf("Return ONLY JSON:");
+  return i < 0 ? { body: prompt, shape: "{}" } : { body: prompt.slice(0, i).trim(), shape: prompt.slice(i + "Return ONLY JSON:".length).trim() };
+}
+
+export function snapshotAndThreadsPrompt(snapshotPromptText: string, threadsPromptText: string): string {
+  const a = promptBody(snapshotPromptText);
+  const b = promptBody(threadsPromptText);
+  return `Two tasks about the same person, from the same words. Do both.
+
+TASK 1: THE PICTURE
+${a.body}
+
+TASK 2: OPEN THREADS
+${b.body}
+
+Return ONLY JSON: {"snapshot": ${a.shape}, "threads": ${b.shape}}`;
+}
+
 // Non-blocking callers: fire and forget. Returns whether it rebuilt.
 export async function refreshPersonSnapshot(userId: string, opts: { force?: boolean } = {}): Promise<boolean> {
   try {
@@ -226,6 +250,9 @@ export async function refreshPersonSnapshot(userId: string, opts: { force?: bool
     }
     const input = await gatherInputs(userId);
     if (!input || (!input.recentStatements.length && !input.openAsks.length)) return false;
+    // Loaded here so the many light importers of this file don't pull in the send path.
+    const threads = await import("./memberThreads.js");
+    const { lines, onFile } = await threads.threadInputs(userId);
     const build = async (feedback: string | null) => {
       const { text } = await generateText({
         model: anthropic(MODELS.sonnet),
@@ -235,7 +262,25 @@ export async function refreshPersonSnapshot(userId: string, opts: { force?: bool
       });
       return parseSnapshot(text);
     };
-    let snapshot = await build(null);
+    // First build: the picture and the threads in one call.
+    let threadProposal: { open?: any[]; close?: any[] } | null = null;
+    let snapshot: PersonSnapshot | null;
+    if (lines.length) {
+      const { text } = await generateText({
+        model: anthropic(MODELS.sonnet),
+        providerOptions: { anthropic: { effort: "low" } },
+        experimental_telemetry: { isEnabled: true, functionId: "personSnapshot.rebuildWithThreads" },
+        prompt: snapshotAndThreadsPrompt(snapshotPrompt(input), threads.threadsPrompt(input.firstName, onFile, lines.slice(-80))),
+      });
+      let both: any = null;
+      try {
+        both = parseModelJson<any>(text);
+      } catch {}
+      snapshot = both?.snapshot ? parseSnapshot(JSON.stringify(both.snapshot)) : null;
+      threadProposal = both?.threads && typeof both.threads === "object" ? both.threads : null;
+    } else {
+      snapshot = await build(null);
+    }
     if (!snapshot) return false;
     // Check against the last 48 hours; one rebuild with the problems named.
     const cutoff = new Date(Date.now() - 48 * 3600_000).toISOString().slice(0, 16);
@@ -272,10 +317,8 @@ export async function refreshPersonSnapshot(userId: string, opts: { force?: bool
     );
     await recordDecision({ layer: 4, decision: "profile.snapshot", userId, outcome: "act", action: "rebuilt", proposal: { previous: input.previous, snapshot } });
     // Their open threads move on the same beat: after they've said something
-    // new (2026-09-22, harness/memberThreads.ts). Loaded here so the many
-    // light importers of this file don't pull in the send path.
-    const { updateMemberThreads } = await import("./memberThreads.js");
-    await updateMemberThreads(userId);
+    // new (2026-09-22, harness/memberThreads.ts), from the same first call.
+    if (lines.length) await threads.applyThreadProposal(userId, threadProposal, onFile, lines);
     return true;
   } catch (err: any) {
     console.error("refreshPersonSnapshot failed (non-fatal):", err?.message ?? err);

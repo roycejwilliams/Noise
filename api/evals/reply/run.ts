@@ -176,7 +176,7 @@ const totalMs = results.flatMap((r) => r.grounding.map((g) => g.latencyMs));
 const outcomes = results.flatMap((r) => r.grounding.map((g) => g.outcome));
 console.log(`grounding first check (added latency when a reply passes): p50 ${pct(firstCheckMs, 50)}ms, p95 ${pct(firstCheckMs, 95)}ms (n=${firstCheckMs.length})`);
 console.log(`grounding total incl. redraft: p50 ${pct(totalMs, 50)}ms, p95 ${pct(totalMs, 95)}ms`);
-console.log(`outcomes: ${["as_drafted", "redrafted", "stripped", "unchecked"].map((o) => `${o} ${outcomes.filter((x) => x === o).length}`).join(", ")}`);
+console.log(`outcomes: ${["as_drafted", "cut", "redrafted", "stripped", "unchecked"].map((o) => `${o} ${outcomes.filter((x) => x === o).length}`).join(", ")}`);
 if (mode === "e2e") {
   const replyMs = results.map((r) => r.replyMs ?? 0);
   console.log(`reply agent (without grounding): p50 ${pct(replyMs, 50)}ms, p95 ${pct(replyMs, 95)}ms`);

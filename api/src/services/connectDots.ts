@@ -23,6 +23,7 @@ export type Dot = { link: string; why: string; kind: "mention" | "shape" };
 
 export type DotsInput = {
   now: string; // what's happening now: their message, or the thing Co is about to offer
+  recent?: string; // the last few lines of the conversation, for a reply
   asks: string[];
   threads: { text: string; feeling: string | null }[];
   offersThisWeek: number;
@@ -47,16 +48,30 @@ export async function gatherDots(userId: string): Promise<Omit<DotsInput, "now">
   return { asks, threads, offersThisWeek: offers };
 }
 
-export async function findDots(input: DotsInput, timeoutMs = 6000): Promise<Dot[]> {
-  if (!input.now.trim() || (!input.asks.length && !input.threads.length)) return [];
+// The moment, read once per reply (Royce, 2026-09-28: "how can we make Co
+// aware?"): what the conversation is about and what they're doing in it, so
+// Co stays on it (a question about Tuesday's timing got tied to his Oct 10
+// sponsors, and he said "This has nothing to do with Oct 10th"); whether
+// they're pushing back on what Co just said; and a lesson worth keeping when
+// they are. Connections are only kept when they're sharing something or
+// reacting to something Co sent (Royce: "only if the conversation leads them
+// there"); code holds that line on the model's own read of the moment.
+export type Mode = "sharing" | "reacting" | "asking" | "logistics" | "feedback" | "planning" | "small_talk";
+export type Moment = { mode: Mode; topic: string; pushback: string | null; lesson: string | null; dots: Dot[] };
+const MODES: Mode[] = ["sharing", "reacting", "asking", "logistics", "feedback", "planning", "small_talk"];
+export const DOTS_MODES: Mode[] = ["sharing", "reacting"];
+
+export async function readMoment(input: DotsInput, opts: { forReply?: boolean; timeoutMs?: number } = {}): Promise<Moment | null> {
+  if (!input.now.trim()) return null;
+  const forReply = opts.forReply ?? true;
   try {
     const { text } = await generateText({
       model: anthropic(MODELS.haiku),
-      maxOutputTokens: 400,
-      abortSignal: AbortSignal.timeout(timeoutMs),
+      maxOutputTokens: 600,
+      abortSignal: AbortSignal.timeout(opts.timeoutMs ?? 6000),
       experimental_telemetry: { isEnabled: true, functionId: "connectDots" },
-      prompt: `You help Co, a companion who texts with one member, notice how things connect in their life, the way a friend who's been paying attention would.
-
+      prompt: `You help Co, a companion who texts with one member, stay aware of the moment, the way a friend who's been paying attention would.
+${input.recent ? `\nThe last few texts (oldest first):\n${input.recent.slice(-1500)}\n` : ""}
 What's happening now:
 ${input.now.slice(0, 800)}
 
@@ -68,23 +83,66 @@ ${input.threads.map((t) => `- ${t.text}${t.feeling ? ` (feeling: ${t.feeling})` 
 ${input.feeling ? `\nHow they've been lately: ${input.feeling}\n` : ""}
 Event offers Co has texted them in the last 7 days: ${input.offersThisWeek}
 
-Find at most two connections that what's happening now actually leads to, the way a friend who's been paying attention would:
-- "mention": something worth pointing out, like one thing serving two of their goals, or something now that bears on a decision they're stuck on.
-- "shape": how they're doing that should change how Co responds right now, not something to say (for example: burned out and asking for more events, so offer fewer, lower-pressure ones, or check in on them first).
-Only links what's happening now leads to. A thanks, an ok, a sign-off or pure logistics leads nowhere: return none. Only real, specific links from what's written above; never invent facts about an event, a person, or them.
+1. mode: what they're doing right now: "sharing" (telling Co about their life or feelings), "reacting" (responding to something Co sent), "asking" (a question), "logistics" (times, places, details), "feedback" (about how Co works), "planning", or "small_talk" (thanks, ok, a sign-off).
+2. topic: what this part of the conversation is about, in a few words.
+3. pushback: if their message corrects or pushes back on something Co just said, what (in a few words); otherwise null.
+4. lesson: only when there's pushback, one short standing note about how Co should be with them from now on, general enough to apply next time ("when he asks about logistics, answer the logistics; don't tie it to his own event"); otherwise null.
+5. dots: at most two connections what's happening now actually leads to: "mention" (one thing serving two of their goals, or bearing on a decision they're stuck on) or "shape" (how they're doing should change how Co responds right now, not something to say). Only real, specific links from what's written above; never invent facts. Leave empty unless what's happening now clearly leads there.
 
-First decide whether what's happening now leads anywhere at all. Then return ONLY JSON: {"leads_somewhere": true | false, "dots": [{"kind": "mention" | "shape", "link": "the connection in one short plain sentence", "why": "which of their asks or threads it ties to"}]}`,
+Return ONLY JSON: {"mode": "...", "topic": "...", "pushback": "..." or null, "lesson": "..." or null, "dots": [{"kind": "mention" | "shape", "link": "one short plain sentence", "why": "which of their asks or threads it ties to"}]}`,
     });
-    const parsed = parseModelJson(text);
-    const dots = parsed?.leads_somewhere !== false && Array.isArray(parsed?.dots) ? parsed.dots : [];
-    return dots
+    const p = parseModelJson(text) ?? {};
+    const mode: Mode = MODES.includes(p.mode) ? p.mode : "asking";
+    const rawDots = Array.isArray(p.dots) ? p.dots : [];
+    const dots: Dot[] = rawDots
       .filter((d: any) => typeof d?.link === "string" && d.link.trim())
       .slice(0, 2)
       .map((d: any) => ({ link: String(d.link).trim().slice(0, 240), why: String(d.why ?? "").trim().slice(0, 160), kind: d.kind === "shape" ? ("shape" as const) : ("mention" as const) }));
+    const str = (v: unknown, n: number) => (typeof v === "string" && v.trim() && v.trim().toLowerCase() !== "null" ? v.trim().slice(0, n) : null);
+    return {
+      mode,
+      topic: str(p.topic, 120) ?? "",
+      pushback: str(p.pushback, 200),
+      lesson: str(p.pushback, 200) ? str(p.lesson, 240) : null,
+      // A reply only connects the dots when they're sharing or reacting to something Co sent.
+      dots: forReply && !DOTS_MODES.includes(mode) ? [] : dots,
+    };
   } catch (err: any) {
-    console.error("connectDots: failed (non-fatal):", err?.message ?? err);
-    return [];
+    console.error("connectDots: moment read failed (non-fatal):", err?.message ?? err);
+    return null;
   }
+}
+
+// For event offers (no reply, no mode gate).
+export async function findDots(input: DotsInput, timeoutMs = 6000): Promise<Dot[]> {
+  if (!input.asks.length && !input.threads.length) return [];
+  return (await readMoment(input, { forReply: false, timeoutMs }))?.dots ?? [];
+}
+
+// How the moment reads to Co in a reply.
+export function momentInstruction(m: Moment | null): string | null {
+  if (!m) return null;
+  const parts: string[] = [];
+  if (m.topic) parts.push(`Right now the conversation is about: ${m.topic} (they're ${m.mode === "small_talk" ? "just closing out" : m.mode}). Stay on that; don't bring in their other plans or asks unless they do.`);
+  if (m.pushback) parts.push(`They're pushing back on what you said: ${m.pushback}. Own it plainly in a few words, fix it, and don't repeat it or defend it.`);
+  return parts.length ? parts.join(" ") : null;
+}
+
+// Lessons from their pushback, kept for next time (co_lesson memories).
+export async function saveLesson(userId: string, lesson: string): Promise<void> {
+  const { rows } = await pool
+    .query(`SELECT content FROM co_memories WHERE user_id = $1 AND memory_type = 'co_lesson' ORDER BY created_at DESC LIMIT 20`, [userId])
+    .catch(() => ({ rows: [] as any[] }));
+  const norm = (t: string) => t.toLowerCase().replace(/[^a-z0-9 ]+/g, "").trim();
+  if (rows.some((r: any) => norm(String(r.content)) === norm(lesson))) return;
+  await pool.query(`INSERT INTO co_memories (user_id, memory_type, content) VALUES ($1, 'co_lesson', $2)`, [userId, lesson]).catch(() => {});
+}
+
+export async function lessonsFor(userId: string): Promise<string[]> {
+  return pool
+    .query(`SELECT content FROM co_memories WHERE user_id = $1 AND memory_type = 'co_lesson' ORDER BY created_at DESC LIMIT 6`, [userId])
+    .then((r) => r.rows.map((x: any) => String(x.content)))
+    .catch(() => [] as string[]);
 }
 
 // What they want and what's going on, for tying something Co sent back to

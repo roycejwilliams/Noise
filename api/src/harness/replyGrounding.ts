@@ -18,6 +18,7 @@
 //   record  — recordDecision(layer 3, "reply.grounding")
 //   eval    — evals/reply/run.ts
 import { capabilitySheet } from "../services/capabilities.js";
+import { sentDetailHints, sentDetailLines, type TurnContext } from "../services/turnContext.js";
 import { switchedOff } from "../services/abilitySwitches.js";
 import { textingStyleFor } from "../services/textingStyle.js";
 import { tasteSummary } from "../services/outcomes.js";
@@ -64,7 +65,11 @@ export type FactKind =
   | "unknown" // a detail Co explicitly does not have
   | "capability" // what Co can and can't do
   | "ongoing" // a search that really keeps running for them (an open ask)
-  | "not_done"; // something Co tried this turn that did NOT happen (a receipt)
+  | "not_done" // something Co tried this turn that did NOT happen (a receipt)
+  // Model-written reads (a search's reason, a fit explanation, a connection,
+  // a summary): Co may draft from them, but they never support a claim
+  // (2026-09-28: a search's "this is their people" became "that's your crowd").
+  | "hint";
 
 export type Fact = { id: string; kind: FactKind; text: string };
 
@@ -78,6 +83,11 @@ export function addFact(rf: ReplyFacts, kind: FactKind, text: string): void {
   const t = text.trim();
   if (!t || rf.facts.some((f) => f.text === t)) return;
   rf.facts.push({ id: `F${rf.facts.length + 1}`, kind, text: t });
+}
+
+// A model-written read for drafting, never a source (FactKind "hint").
+export function addHint(rf: ReplyFacts, text: string): void {
+  addFact(rf, "hint", text);
 }
 
 export function addInstruction(rf: ReplyFacts, text: string): void {
@@ -102,7 +112,10 @@ export async function gatherReplyFacts(
   userId: string,
   // context: their message and Co's last few lines, so older things they
   // name can be looked up in Co's record (services/coFacts.ts).
-  opts: { pendingDescriptions?: string[]; context?: string } = {},
+  // turn: the one picture of this turn (services/turnContext.ts). When given,
+  // the snapshot, the record, open asks and what Co sent come from it instead
+  // of separate loads.
+  opts: { pendingDescriptions?: string[]; context?: string; turn?: TurnContext } = {},
 ): Promise<ReplyFacts> {
   const rf = baseReplyFacts();
   for (const d of opts.pendingDescriptions ?? []) addFact(rf, "pending", `Waiting to hear back: ${d}`);
@@ -125,7 +138,7 @@ export async function gatherReplyFacts(
   // was six round trips before the reply could even start drafting.
   const [corrections, snapshot, sent, notes, scheduled, reveal, preference, callFailure, sendHeld] = await Promise.all([
     recentCallCorrections(userId),
-    getPersonSnapshot(userId).catch(() => null),
+    opts.turn ? Promise.resolve(opts.turn.snapshot) : getPersonSnapshot(userId).catch(() => null),
     recentlySent(userId),
     recentSearchNotes(userId),
     pool
@@ -178,12 +191,13 @@ export async function gatherReplyFacts(
     addFact(rf, "did_before", sendHeld);
     addInstruction(rf, "If they ask why you went quiet, didn't answer, or mention a limit, say plainly that a limit on your side paused your texts for a while and it wasn't them. Never deny it or give another reason. If something they asked in that time never got an answer, answer it now.");
   }
-  await addOngoingSearchFacts(rf, userId);
+  await addOngoingSearchFacts(rf, userId, opts.turn?.asks);
   for (const correction of corrections) addFact(rf, "known", correction);
   // What Co knows about them, so "what do you know about me?" can be
   // answered from it (2026-09-15: the claim check had no copy of the person
   // summary and cut "designer by Friday" and "Series A" as unsupported).
-  for (const line of renderSnapshot(snapshot).split("\n").filter(Boolean)) addFact(rf, "known", `What they've told Co: ${line}`);
+  // A model-written summary of them: drafted from, never a source (2026-09-28).
+  for (const line of renderSnapshot(snapshot).split("\n").filter(Boolean)) addHint(rf, `Co's summary of what they've told it: ${line}`);
   // What Co already sent them, and what its searches turned up, so "which
   // one?" and "are you actually searching?" are answerable (2026-09-16).
   for (const line of sent) addFact(rf, "did_before", line);
@@ -197,7 +211,11 @@ export async function gatherReplyFacts(
   for (const r of followups) addFact(rf, "did_before", String(r.content));
   // Co's own record of what it sent and did for them (services/coFacts.ts):
   // the last two weeks of sends, and anything older their message names.
-  const ledger = await ledgerFacts(userId, opts.context ?? "").catch(() => ({ lines: [] as string[], named: [] as string[] }));
+  const ledger = opts.turn?.ledger ?? (await ledgerFacts(userId, opts.context ?? "").catch(() => ({ lines: [] as string[], named: [] as string[] })));
+  // What's on file for what Co recently sent: times and places, and what isn't
+  // (services/turnContext.ts), before Co ever says it doesn't have them.
+  if (opts.turn) for (const line of sentDetailLines(opts.turn)) addFact(rf, "known", line);
+  if (opts.turn) for (const hint of sentDetailHints(opts.turn)) addHint(rf, hint);
   for (const line of ledger.lines) addFact(rf, "did_before", line);
   // They're asking about something the record shows Co sent: the record
   // answers, whatever earlier messages said (2026-09-27: after two earlier
@@ -305,12 +323,15 @@ export async function recentlySent(userId: string): Promise<string[]> {
 // "I'll keep looking and text you if something fits" true: the daily sweep
 // searches each open ask and the daily pick can text about a result. With
 // none open, nothing is being looked for and any such promise is false.
-export async function addOngoingSearchFacts(rf: ReplyFacts, userId: string): Promise<void> {
-  const { rows } = await pool
-    .query(`SELECT ask_text, kind FROM ask_checkins WHERE user_id = $1 AND resolved_at IS NULL ORDER BY last_mentioned_at DESC NULLS LAST, created_at DESC LIMIT 12`, [userId])
-    .catch(() => ({ rows: [] as any[] }));
+export async function addOngoingSearchFacts(rf: ReplyFacts, userId: string, asks?: { text: string; kind: "find" | "help" }[]): Promise<void> {
   if (rf.facts.some((f) => f.kind === "ongoing")) return;
-  for (const f of ongoingFactsFor(rows.map((r: any) => ({ text: String(r.ask_text ?? ""), kind: r.kind === "help" ? "help" : "find" })))) addFact(rf, f.kind, f.text);
+  const open =
+    asks ??
+    (await pool
+      .query(`SELECT ask_text, kind FROM ask_checkins WHERE user_id = $1 AND resolved_at IS NULL ORDER BY last_mentioned_at DESC NULLS LAST, created_at DESC LIMIT 12`, [userId])
+      .then((r) => r.rows.map((x: any) => ({ text: String(x.ask_text ?? ""), kind: x.kind === "help" ? ("help" as const) : ("find" as const) })))
+      .catch(() => [] as { text: string; kind: "find" | "help" }[]));
+  for (const f of ongoingFactsFor(open)) addFact(rf, f.kind, f.text);
 }
 
 // Pure: only asks the daily search really looks for (kind 'find', the same
@@ -351,7 +372,7 @@ export function addEventFacts(
   if (match.details) for (const line of renderEventDetails(match.name, match.details)) addFact(rf, "known", line);
   addFact(rf, "known", `Co found "${match.name}" through ${sourceOf(match)}. If they ask where it came from, say that.`);
   if (match.opportunity) addFact(rf, "known", `What the source post for "${match.name}" says: ${match.opportunity.postText}`);
-  if (match.whyItFits) addFact(rf, "known", `Why "${match.name}" fits them: ${match.whyItFits}`);
+  if (match.whyItFits) addHint(rf, `Why "${match.name}" may fit them (a search's read, not a fact): ${match.whyItFits}`);
   if (match.kind !== "opportunity") {
     const missing = missingEventDetails(match.name, match.details);
     if (missing) addFact(rf, "unknown", missing);
@@ -361,7 +382,7 @@ export function addEventFacts(
 export function renderReplyFacts(rf: ReplyFacts): string {
   // Receipts (2026-09-25): what Co tried and didn't manage, marked so it's
   // never read as done.
-  const facts = rf.facts.map((f) => `[${f.id}] ${f.kind === "not_done" ? `NOT DONE: ${f.text}` : f.text}`).join("\n");
+  const facts = rf.facts.map((f) => `[${f.id}] ${f.kind === "not_done" ? `NOT DONE: ${f.text}` : f.kind === "hint" ? `YOUR READ, NOT A FACT (use for how you say it, never state it as fact): ${f.text}` : f.text}`).join("\n");
   const instr = rf.instructions.length ? `\n\nFor this reply:\n${rf.instructions.map((i) => `- ${i}`).join("\n")}` : "";
   return `What's true right now. These, plus what's actually in the conversation, are the only actions, plans, links, times, places, numbers, and things about other people you can mention. If a detail isn't here, you don't have it: say so plainly, and don't promise to get it later.
 ${facts}${instr}`;
@@ -395,10 +416,16 @@ const norm = (s: string) =>
     .replace(/\s+/g, " ")
     .trim();
 
-function sourceText(rf: ReplyFacts, src: GroundingSources): string {
-  return norm(
-    [rf.facts.map((f) => f.text).join("\n"), src.recentConversation, src.contextSummary ?? "", src.recentMemories ?? "", src.message, ...(src.sentThisTurn ?? [])].join("\n"),
-  );
+// What a quoted support may come from: facts (never hints) and the real
+// texts. The summary of them (contextSummary) and older memories are
+// model-built, so they can back a detail about the member but never a claim
+// about the world: an event's time or place, a count, a link, an offer, a
+// follow-up, a prediction, or another person (2026-09-28).
+const WORLD_CLAIMS = new Set(["time", "place", "link", "count", "offer", "followup", "prediction", "other_person"]);
+function sourceText(rf: ReplyFacts, src: GroundingSources, claimType?: string): string {
+  const realFacts = rf.facts.filter((f) => f.kind !== "hint").map((f) => f.text).join("\n");
+  const summaries = claimType && WORLD_CLAIMS.has(claimType) ? [] : [src.contextSummary ?? "", src.recentMemories ?? ""];
+  return norm([realFacts, src.recentConversation, ...summaries, src.message, ...(src.sentThisTurn ?? [])].join("\n"));
 }
 
 // "2pm", "2:00 PM", "14:00" -> "14:00"
@@ -470,8 +497,10 @@ export function claimsHandingOver(draft: string): boolean {
 export function codeChecks(draft: string, rf: ReplyFacts, src: GroundingSources): GateCheck[] {
   const emotionLabel = checkNoEmotionLabel(draft);
   const checks: GateCheck[] = [];
-  const sources = sourceText(rf, src);
-  const rawSources = [rf.facts.map((f) => f.text).join("\n"), src.recentConversation, src.contextSummary ?? "", src.recentMemories ?? "", src.message, ...(src.sentThisTurn ?? [])].join("\n");
+  // Links and times come only from real facts and texts, never hints or summaries.
+  const sources = sourceText(rf, src, "link");
+  const rawSources = [rf.facts.filter((f) => f.kind !== "hint").map((f) => f.text).join("\n"), src.recentConversation, src.message, ...(src.sentThisTurn ?? [])].join("\n");
+  const phoneSources = [rawSources, src.contextSummary ?? "", src.recentMemories ?? ""].join("\n");
 
   for (const url of draft.match(/https?:\/\/[^\s)]+/gi) ?? []) {
     const u = url.replace(/[.,!?]+$/, "");
@@ -479,11 +508,21 @@ export function codeChecks(draft: string, rf: ReplyFacts, src: GroundingSources)
   }
   for (const phone of draft.match(/\(?\b\d{3}\)?[\s.-]?\d{3}[\s.-]?\d{4}\b/g) ?? []) {
     const digits = phone.replace(/\D/g, "");
-    checks.push({ name: "phone_on_file", pass: rawSources.replace(/\D/g, "").includes(digits), reason: `phone number ${phone}` });
+    checks.push({ name: "phone_on_file", pass: phoneSources.replace(/\D/g, "").includes(digits), reason: `phone number ${phone}` });
   }
   const knownTimes = new Set(clockTimes(rawSources));
   for (const t of clockTimes(draft)) {
     checks.push({ name: "time_on_file", pass: knownTimes.has(t), reason: `time ${t}` });
+  }
+  // Who's in a room Co doesn't run is unknowable (2026-09-28: "go find the
+  // llama_index people, that's your crowd"); only a guest-list fact backs it.
+  if (crowdClaim(draft) && !rf.facts.some((f) => f.kind !== "hint" && /\b(guest list|who'?s going|attending|RSVP'?d|registered guests)\b/i.test(f.text))) {
+    checks.push({ name: "no_crowd_claim", pass: false, reason: "says who'll be at an event or that they're their people, with no guest list on file" });
+  }
+  // A clash needs both start times (2026-09-28: "same night, so it's one or
+  // the other" with only the Grok Bot time known).
+  if (clashClaim(draft) && new Set(clockTimes(rf.facts.filter((f) => f.kind !== "hint" && /\bstarts?\b/i.test(f.text)).map((f) => f.text).join("\n"))).size < 2) {
+    checks.push({ name: "no_unknown_clash", pass: false, reason: "says two events clash without both start times" });
   }
   if (/\b((calling|ringing|dialing) you (right )?now|i'?m (calling|ringing|dialing) you|still (calling|ringing|dialing) you)\b/i.test(draft)) {
     checks.push({ name: "no_call_placed_claim", pass: false, reason: "says a call is happening, but this reply never places one" });
@@ -575,7 +614,7 @@ function extractJson(text: string): any {
 
 async function extractClaims(draft: string, rf: ReplyFacts, src: GroundingSources, model: string = LAYER3_MODELS.grounding): Promise<{ claims: Claim[]; latencyMs: number } | null> {
   const started = Date.now();
-  const facts = rf.facts.map((f) => `[${f.id}] ${f.text}`).join("\n");
+  const facts = rf.facts.filter((f) => f.kind !== "hint").map((f) => `[${f.id}] ${f.text}`).join("\n");
   const { text } = await generateText({
     model: anthropic(model),
     maxOutputTokens: 2000,
@@ -587,20 +626,25 @@ async function extractClaims(draft: string, rf: ReplyFacts, src: GroundingSource
     experimental_telemetry: { isEnabled: true, functionId: "reply.grounding.check" },
     prompt: `You check a text message Co is about to send, before it goes out. Find every claim in it that could be false, and say whether the sources below support it.
 
-Claims to find:
-- past_action: something Co says it did or sent ("I sent you the link", "I scheduled it", "I emailed you both"), including a yes or no to whether it did ("Still no", "Yep, I did"), including passing something along ("noted for the team", "that goes straight to the team", "I passed it on"): supported only if a FACT says it was saved for the team
-- future_promise: something Co says it will do later ("I'll send it when I have it", "I'll keep an eye out", "I'll keep digging daily", "I'll call you then"), or says it's already doing in the background ("I'm working the sponsor search"), or tells them to ask again later as if something will have changed ("ask me again in a bit")
-- time, place, count, detail: a start time, date, address, neighborhood, headcount, format, host, price, or other specific about an event, program, or plan; a count also includes how many things Co found, sent, or searched ("those two were the results", "I sent you three")
-- link: a link or an "it's in the link above"
-- other_person: what another person said, wants, feels, or did ("she mentioned she'd like to meet you"), including saying who specifically will be at an event, or that the people there are theirs ("that's your crowd", "go find the llama_index people", "your cofounder will be there"): supported only by a FACT saying who's going. Not a claim: what kind of people events like this tend to draw, or that it could be a good place to meet the kind of person they're after; that's advice
-- capability: what Co can or can't do ("I can search for X", "I can't call", "I don't have access to your calendar"): every "I can…" is one, supported only by a capability FACT that covers that exact thing, never by a broader reading of it
+Claims to find (one type each):
+- past_action: something Co says it did or sent ("I sent you the link", "I scheduled it", "I emailed you both"), including a yes or no to whether it did ("Still no", "Yep, I did") and passing something along ("noted for the team", "that goes straight to the team", "I passed it on")
+- future_promise: something Co says it will do later ("I'll send it when I have it", "I'll keep an eye out", "I'll call you then"), or is already doing in the background ("I'm working the sponsor search"), or telling them to ask again later as if something will have changed
+- time, place, count, detail: a specific about an event, program, or plan: start time, date, address, neighborhood, headcount, format, host, price; a count includes how many things Co found, sent, or searched ("those two were the results"). Saying two events clash, or that it's "one or the other", is a time claim. Saying Co doesn't have a detail ("no start time listed", "I don't have the address") is a detail claim.
+- link: a link, or "it's in the link above"
+- other_person: what another person said, wants, feels, or did ("she mentioned she'd like to meet you"), or who specifically will be somewhere, or that the people there are theirs ("that's your crowd", "go find the llama_index people", "your cofounder will be there")
+- capability: what Co can or can't do ("I can search for X", "I can't call"); every "I can…" is one
 - offer: suggesting an event or opportunity as something for them to go to or do ("Mahjong After Dark is Saturday", "worth grabbing a spot at X")
 - followup: asking how something went or whether they went, or saying it happened ("how was the demo day?")
-- prediction: what Co says will or won't happen in the world, or how likely it is, that Co has no way to know ("I don't think another one will turn up by Saturday", "it'll probably sell out", "nothing else is coming this week")
+- prediction: what Co says will or won't happen in the world, or how likely it is ("it'll probably sell out", "nothing else is coming this week")
 
-Don't list: opinions, feelings, questions (an offer asked as a question, "Want me to look now?", is a question, not a promise), general encouragement, restating what they told Co, or how Co will talk in this conversation ("I'll keep it short", "switching back to normal caps", "let's keep going over text"). Also don't list general know-how and advice about how things usually go or what tends to work ("block parties live or die on people finding the spot", "a reminder a few days out helps turnout", "personal invites beat a mass email"): that's advice, not a claim about a specific event, person, or outcome (2026-09-22: flagging it as a prediction stripped the specifics out of Co's advice and left it generic). It still counts as a claim when it names a real venue, event, person, date, price, or number that isn't in the sources. A plan, schedule or structure Co is proposing for them, especially one they asked Co to lay out ("6:00 doors open, 6:30 first wave, close around 9"), is advice too, not a claim about an event. But a fact about the world inside advice still needs a source: a rule, fee, deadline, notice period, or how some process works ("the permit needs 30 days' notice", "there's sometimes a rush fee"). Likewise a conclusion reasoned from the sources is advice, not a prediction: "if Oct 10 is less than 30 days out, the permit may not clear in time", when the sources give the 30-day rule and the date (2026-09-22: that reasoning about a member's own screenshot was being cut).
+Never claims (don't list these):
+- The member's own words and choices from this conversation, restated or built on ("you already called the daytonaio night your pick", "since you said you're in"). The member is never "another person".
+- Opinions, feelings, questions (an offer asked as a question, "Want me to look now?", is a question), encouragement, and how Co will talk ("I'll keep it short").
+- Advice and possibilities: general know-how about how things usually go ("personal invites beat a mass email"); what kind of people events like this tend to draw; where this could take them ("could be a good place to find the dependable builder people you're after"); a plan or schedule Co proposes for them; a conclusion reasoned from the sources ("if Oct 10 is under 30 days out, the permit may not clear").
 
-A claim is supported only if a FACT below states it, or the conversation shows it. A future_promise is supported only if a FACT says it will actually happen (a scheduled call, a pending item). A prediction is supported only if a FACT states that outcome itself; guessing from what was or wasn't found is never support. "I don't have X" is supported when X is not in the sources. What Co did or didn't do before (a past_action, including "I never sent that") is supported only by a FACT: something Co said earlier in the conversation is not evidence of what it did, since Co can be wrong about itself, and if a FACT shows Co sent it, "never sent" is unsupported. Dates decide offers and follow-ups (services/dateGuard.ts writes each thing's status into the facts): an offer is supported only if a FACT shows it's still ahead or happening today, never one marked "already over" or "outside the dates they asked about"; a followup is supported only if a FACT shows it's already over, never one marked "coming up". A number must match the source exactly: "those two were the results" is unsupported when the FACT says 4 results came up (2026-09-25: that exact line went out). Never count something as supported because it's plausible.
+Precedence, when a sentence fits both: a named venue, event, person, date, price, number, rule, fee or deadline that isn't in the sources is a claim even inside advice. Saying specific people will be there, or that they're the member's people, is other_person even when phrased loosely. A possibility about the kind of person or outcome the member wants is advice.
+
+Support: a claim is supported only if a FACT below states it, or the real texts in the conversation show it. What Co did or didn't do (past_action, including "I never sent that") needs a FACT: Co's own earlier words aren't evidence of what it did, and if a FACT shows Co sent it, "never sent" is unsupported; passing something to the team needs a FACT that it was saved. A future_promise needs a FACT that it will actually happen (a scheduled call, a pending item). A capability needs a capability FACT covering that exact thing. A prediction needs a FACT stating that outcome; guessing from what was or wasn't found is never support. "I don't have X" is supported only when no FACT gives X. A clash needs FACTS giving both start times, overlapping. Dates decide offers and follow-ups: an offer needs a FACT showing it's still ahead or today, never one marked "already over" or "outside the dates they asked about"; a followup needs a FACT showing it's already over, never one marked "coming up". A number must match its source exactly. The summary of what Co knows about them can support a detail about the member themself, never a claim about an event, a count, a link, or another person. Never count something as supported because it's plausible.
 
 FACTS:
 ${facts}
@@ -631,9 +675,11 @@ Return ONLY JSON: {"claims": [{"text": "exact words from the message", "type": "
 
 // A model's "supported" only counts if its citation checks out in code.
 function claimChecks(claims: Claim[], rf: ReplyFacts, src: GroundingSources): GateCheck[] {
-  const sources = sourceText(rf, src);
-  const factIds = new Set(rf.facts.map((f) => f.id));
+  // A hint (model-written read) is never support, even when cited.
+  const factIds = new Set(rf.facts.filter((f) => f.kind !== "hint").map((f) => f.id));
+  const hintIds = new Set(rf.facts.filter((f) => f.kind === "hint").map((f) => f.id));
   return claims.map((c) => {
+    const sources = sourceText(rf, src, c.type);
     let pass = c.supported;
     let reason = `${c.type}: "${c.text}"`;
     if (pass && c.type === "future_promise") {
@@ -654,6 +700,10 @@ function claimChecks(claims: Claim[], rf: ReplyFacts, src: GroundingSources): Ga
     if (pass && c.type !== "capability" && rf.facts.find((f) => f.id === c.factId)?.kind === "not_done") {
       pass = false;
       reason += " (that was tried this turn and did NOT happen)";
+    }
+    if (pass && c.factId && hintIds.has(c.factId) && !(c.quote && norm(c.quote).length >= 6 && sources.includes(norm(c.quote)))) {
+      pass = false;
+      reason += " (that came from a model's read, which is a hint, not a source)";
     }
     if (pass) {
       const factOk = !!c.factId && factIds.has(c.factId);
@@ -692,7 +742,7 @@ Your draft reply:
 These parts of the draft aren't supported by the facts or the conversation:
 ${failed.map((f) => `- ${f.reason ?? f.name}`).join("\n")}
 ${earlierTry ? `\nAn earlier rewrite also had unsupported parts (listed above too): "${earlierTry}"\nThis time, answer what they just asked first, in words the facts above actually support, even if the honest answer is short.\n` : ""}
-Rewrite the draft so it still responds to what they said, keeping everything that's supported. Fix or remove each unsupported part. If you don't have something they asked for, say it once, plainly, naming exactly what you don't have ("I don't have the start time"), then what you can do now if anything. If an unsupported part was about something you did (sent, saved, passed along, noted), say what's actually true the way a person would in a text ("Honestly, that one didn't get passed to the team."), never a system-sounding line like "I don't have that", and without promising anything in its place. Don't hedge, don't point them at a link instead, and don't promise to get it later. This rewrite can't search or do anything, so never write "let me look", "one sec", or that you've looked or found nothing unless a FACT shows that search: if they want something found that the facts don't cover, offer it as a question ("Want me to look?"). Match the draft's capitalization style. Same length or shorter. Return ONLY the message.`,
+Deleting the unsupported parts left too little to answer them, so write the smallest honest reply instead. Keep every supported sentence of the draft word for word. Where a flagged part can be corrected from a FACT (the real time, what was actually sent), correct it with the FACT's own words; otherwise say once, plainly, the one thing you don't have ("I don't have the start time"), or what's actually true about something you did ("Honestly, that one didn't get passed to the team."). Never add a new recommendation or change which option the draft recommends, never add an event, person, place, number, date or link that isn't in the draft or the FACTS, and never add anything about how they're feeling or what they're going through. No promises, no "let me look" or "one sec"; if they want something found, you may offer it as a question ("Want me to look?"). Match the draft's capitalization style. Same length or shorter. Return ONLY the message.`,
   });
   const out = text.trim().replace(/^"|"$/g, "");
   return out || null;
@@ -739,6 +789,15 @@ async function recheck(draft: string, rewrite: string, failed: GateCheck[], rf: 
   return { checks: [...code, ...r.checks.filter((c) => c.name.startsWith("claim"))], modelOk: r.modelOk, ms: r.ms };
 }
 
+const CROWD = /\b(that'?s|those are|they'?re|it'?s|full of|room of|go find) (all )?(your|his|her|their) (crowd|people|tribe|kind of people)\b|\bgo find the [\w@.'’-]+ (people|folks|crowd)\b/i;
+export function crowdClaim(text: string): boolean {
+  return CROWD.test(text);
+}
+const CLASH = /\b(one or the other|can'?t (do|make|hit) both|have to pick one|pick one or|same (night|time)[^.!?]{0,40}\b(so|pick|choose|only one))\b/i;
+export function clashClaim(text: string): boolean {
+  return CLASH.test(text);
+}
+
 // Last resort: drop the sentences that carry an unsupported claim.
 export function stripUnsupported(draft: string, failed: GateCheck[]): string {
   const sentences = draft.match(/[^.!?\n]+[.!?]*\s*/g) ?? [draft];
@@ -753,6 +812,8 @@ export function stripUnsupported(draft: string, failed: GateCheck[]): string {
   const keep = sentences.filter((s) => {
     const ns = norm(s);
     if (failed.some((f) => f.name === "no_call_placed_claim") && /(calling|ringing|dialing) you|i'?m (calling|ringing|dialing)/i.test(s)) return false;
+    if (failed.some((f) => f.name === "no_crowd_claim") && crowdClaim(s)) return false;
+    if (failed.some((f) => f.name === "no_unknown_clash") && clashClaim(s)) return false;
     if (failed.some((f) => f.name === "no_emotion_label") && !checkNoEmotionLabel(s).pass) return false;
     if (failed.some((f) => f.name === "no_followup_promise") && followupPromiseMatch(s)) return false;
     if (failed.some((f) => f.name === "no_prediction") && predictionMatch(s)) return false;
@@ -772,9 +833,55 @@ export function stripUnsupported(draft: string, failed: GateCheck[]): string {
   return keep.join("").trim();
 }
 
+// A model rewrite is only kept if code confirms it adds nothing new
+// (2026-09-28, Royce: "Rewrites only remove"): a rewrite flipped Co's pick
+// from daytonaio to Grok and brought up his burnout. New sentences may only
+// say what's missing or correct from a FACT: no new recommendation, no
+// feelings, and no name, number, date, link or handle that isn't already in
+// the draft or the facts.
+const FEELING_WORDS = /\b(feel|feels|feeling|felt|burn(ed|t)? ?out|burnout|exhaust\w*|tired|stress\w*|overwhelm\w*|anxi\w*|lonely|sad|upset|frustrat\w*|struggl\w*|a break\b|taking a break|worth (is )?tied|hard (week|day|time)|leaning (toward|towards))\b/i;
+const RECOMMENDS = /\b(i'?d (pick|go with|choose|stick with|go for|lean)|go with|stick with|you should|i recommend|i'?d recommend|pick (this|that|the)|choose (this|that|the)|worth (going|it|a look|grabbing)|skip (this|that|it))\b/i;
+const MONTHS_DAYS = /\b(mon|tues|wednes|thurs|fri|satur|sun)day\b|\b(january|february|march|april|may|june|july|august|september|october|november|december)\b/gi;
+function specifics(sentence: string): string[] {
+  const out: string[] = [];
+  for (const m of sentence.match(/https?:\/\/\S+|@\w+|\d[\d:/.,]*/g) ?? []) out.push(m.toLowerCase().replace(/[.,]+$/, ""));
+  for (const m of sentence.match(MONTHS_DAYS) ?? []) out.push(m.toLowerCase());
+  // Capitalized words not starting the sentence: names of people, places, events.
+  const words = sentence.trim().split(/\s+/);
+  words.slice(1).forEach((w) => {
+    const clean = w.replace(/[^A-Za-z'’-]/g, "");
+    if (/^[A-Z][a-z]/.test(clean) && clean !== "I" && !/^I['’]/.test(clean)) out.push(clean.toLowerCase());
+  });
+  return out;
+}
+export function rewriteAddsNothing(draft: string, rewrite: string, allowed: string): { ok: boolean; why: string | null } {
+  const flat = (t: string) => ` ${t.toLowerCase().replace(/[’‘]/g, "'").replace(/[^a-z0-9' ]+/g, " ").replace(/\s+/g, " ").trim()} `;
+  // No longer than the draft, plus room for one short honest line when the
+  // draft was all claim ("Agreed, noted that too." -> "Honestly, that one
+  // didn't get passed to the team.").
+  if (rewrite.length > draft.length + 60) return { ok: false, why: "longer than the draft" };
+  if (!checkNoEmotionLabel(rewrite).pass) return { ok: false, why: "names their feelings" };
+  const whole = flat(draft);
+  const known = `${draft}\n${allowed}`.toLowerCase();
+  const fresh = (rewrite.match(/[^.!?\n]+[.!?]*/g) ?? []).map((x) => x.trim()).filter((x) => x && !whole.includes(flat(x)));
+  for (const sentence of fresh) {
+    if (FEELING_WORDS.test(sentence)) return { ok: false, why: `adds something about how they feel: "${sentence}"` };
+    if (RECOMMENDS.test(sentence)) return { ok: false, why: `adds or changes a recommendation: "${sentence}"` };
+    const added = specifics(sentence).filter((t) => !known.includes(t));
+    if (added.length) return { ok: false, why: `adds ${added.join(", ")} that isn't in the draft or the facts` };
+  }
+  return { ok: true, why: null };
+}
+
+// Enough left after cutting to still answer them.
+function enoughLeft(text: string): boolean {
+  return text.split(/\s+/).filter(Boolean).length >= 4;
+}
+
 export type GroundingResult = {
   final: string;
-  outcome: "as_drafted" | "redrafted" | "stripped" | "unchecked";
+  // cut: the unsupported sentences were deleted and the rest went out as drafted.
+  outcome: "as_drafted" | "cut" | "redrafted" | "stripped" | "unchecked";
   checks: GateCheck[];
   // Total grounding time for this message (checks + any redraft).
   latencyMs: number;
@@ -891,99 +998,45 @@ export async function groundReply(
   if (!effectiveFailed1.length) {
     result = { final: draft, outcome: "as_drafted", checks: first.checks, latencyMs: Date.now() - started, firstCheckMs, stages };
   } else {
-    let second: { checks: GateCheck[]; modelOk: boolean } | null = null;
-    let rewritten: string | null = null;
-    const t0 = Date.now();
-    try {
-      rewritten = await redraft(draft, effectiveFailed1, rf, src);
-      stages.redraftMs = Date.now() - t0;
-      if (rewritten) {
-        rewritten = cleanCoMessage(rewritten);
-        const t1 = Date.now();
-        // A rewrite that only cut words from the checked draft can't add a
-        // claim, so it skips the second model read (2026-09-26: re-checking
-        // "Still just Mahjong After Dark from what I sent earlier." after the
-        // redraft dropped a clause cost ~5s of a 15.7s check).
-        second = await recheck(draft, rewritten, effectiveFailed1, rf, src);
-        stages.secondCheckMs = Date.now() - t1;
-      }
-    } catch (err: any) {
-      console.error("replyGrounding: redraft failed (non-fatal, stripping instead):", err?.message ?? err);
-    }
-    const secondFailed = second
-      ? claimReadUnavailable(rewritten ?? "", second)
-        ? [...second.checks.filter((c) => !c.pass), CLAIM_READ_FAILED_CHECK]
-        : second.checks.filter((c) => !c.pass)
-      : null;
-    // One more try when the redraft failed too, with everything both checks
-    // caught (2026-09-26): stripping kept whichever version had more words
-    // left, and for "Look on X?" that was the side remark, with the answer
-    // cut. A rewrite that answers from the facts beats a stripped one.
-    let third: { text: string; checks: GateCheck[] } | null = null;
-    if (!(rewritten && second && secondFailed && !secondFailed.length) && secondFailed) {
-      const t2 = Date.now();
+    // 1. Delete what's unsupported (2026-09-28, remove-only). What's left was
+    // already checked, so it needs no second model read; code checks still run.
+    let cut = stripUnsupported(draft, effectiveFailed1);
+    const cutCode = codeChecks(cut, rf, src).filter((c) => !c.pass);
+    if (cutCode.length) cut = stripUnsupported(cut, cutCode);
+    const inviteCut = effectiveFailed1.some((c) => c.name === "no_invite_sent_claim") && !rf.facts.some((f) => /invites are used/i.test(f.text));
+    if (enoughLeft(cut) && !inviteCut) {
+      result = { final: cut, outcome: "cut", checks: first.checks, latencyMs: Date.now() - started, firstCheckMs, stages };
+    } else {
+      // 2. Too little left: one model rewrite, kept only if it adds nothing.
+      let kept: { text: string; checks: GateCheck[] } | null = null;
+      const t0 = Date.now();
       try {
-        const retry = await redraft(draft, [...effectiveFailed1, ...secondFailed], rf, src, rewritten);
-        if (retry) {
-          const cleaned = cleanCoMessage(retry);
-          const r3 = await recheck(draft, cleaned, [...effectiveFailed1, ...secondFailed], rf, src);
-          const failed3 = claimReadUnavailable(cleaned, r3) ? [...r3.checks.filter((c) => !c.pass), CLAIM_READ_FAILED_CHECK] : r3.checks.filter((c) => !c.pass);
-          if (!failed3.length) third = { text: cleaned, checks: r3.checks };
+        const rewrite = await redraft(draft, effectiveFailed1, rf, src);
+        stages.redraftMs = Date.now() - t0;
+        const cleaned = rewrite ? cleanCoMessage(rewrite) : null;
+        const allowed = rf.facts.filter((f) => f.kind !== "hint").map((f) => f.text).join("\n");
+        const guard = cleaned ? rewriteAddsNothing(draft, cleaned, allowed) : { ok: false, why: "no rewrite" };
+        if (cleaned && guard.ok) {
+          const t1 = Date.now();
+          const r = await recheck(draft, cleaned, effectiveFailed1, rf, src);
+          stages.secondCheckMs = Date.now() - t1;
+          const failed2 = claimReadUnavailable(cleaned, r) ? [...r.checks.filter((c) => !c.pass), CLAIM_READ_FAILED_CHECK] : r.checks.filter((c) => !c.pass);
+          if (!failed2.length) kept = { text: cleaned, checks: r.checks };
+        } else if (cleaned) {
+          console.error(`replyGrounding: rewrite rejected (${guard.why}), cutting instead`);
         }
       } catch (err: any) {
-        console.error("replyGrounding: second redraft failed (non-fatal, stripping instead):", err?.message ?? err);
+        console.error("replyGrounding: redraft failed (non-fatal, cutting instead):", err?.message ?? err);
       }
-      stages.retryMs = Date.now() - t2;
-    }
-    if (rewritten && second && secondFailed && !secondFailed.length) {
-      result = { final: rewritten, outcome: "redrafted", checks: [...first.checks, ...second.checks.map((c) => ({ ...c, name: `redraft.${c.name}` }))], latencyMs: Date.now() - started, firstCheckMs, stages };
-    } else if (third) {
-      result = { final: third.text, outcome: "redrafted", checks: [...first.checks, ...(second?.checks ?? []).map((c) => ({ ...c, name: `redraft.${c.name}` })), ...third.checks.map((c) => ({ ...c, name: `redraft2.${c.name}` }))], latencyMs: Date.now() - started, firstCheckMs, stages };
-    } else {
-      // The redraft can fail its OWN check too (2026-09-17 code review: a
-      // "checked already" past-action claim got redrafted into an
-      // unsupported "let me check... one sec" future promise instead of
-      // being fixed). That used to mean stripping only the redraft,
-      // discarding the original draft's other, still-good sentences
-      // entirely — a real, grounded detail sitting right there in the
-      // original never got a chance because the redraft replaced it with a
-      // single bad sentence that then stripped to nothing. Strip BOTH
-      // candidates and keep whichever actually has real content left; only
-      // the minimal fallback if neither does.
-      // Strip with what EITHER check caught (2026-09-23): the redraft's check
-      // flagged "Nothing's changed on my end that I'd call an upgrade", the
-      // first check had missed it, and the original draft still carried it,
-      // so stripping the original by the first check's failures alone sent
-      // it anyway. The two checks read the same kind of text; a claim one of
-      // them rejects is out of both.
-      const allFailed = [...effectiveFailed1, ...(secondFailed ?? [])];
-      const strippedOriginal = stripUnsupported(draft, allFailed);
-      const strippedRedraft = rewritten && second ? stripUnsupported(rewritten, allFailed) : "";
-      const originalWords = strippedOriginal.split(/\s+/).filter(Boolean).length;
-      const redraftWords = strippedRedraft.split(/\s+/).filter(Boolean).length;
-      // Prefer whichever survives with more real content; the original
-      // draft had the reply agent's full context, so ties favor it.
-      const stripped = redraftWords > originalWords ? strippedRedraft : strippedOriginal;
-      result = {
-        // The invite line only helps when the invite claim is what was cut
-        // from the text that actually survived — and never when they've just
-        // been told they have none left (2026-09-20 code review).
-        final: (() => {
-          const keptRedraft = redraftWords > originalWords;
-          const failedForKept = allFailed;
-          void keptRedraft;
-          const enough = stripped.split(/\s+/).filter(Boolean).length >= 3;
-          if (failedForKept.some((c) => c.name === "no_invite_sent_claim") && !rf.facts.some((f) => /invites are used/i.test(f.text))) {
-            return [enough && !/invite/i.test(stripped) ? stripped : "", INVITE_FALLBACK].filter(Boolean).join(" ");
-          }
-          return enough ? stripped : MINIMAL_FALLBACK;
-        })(),
-        outcome: "stripped",
-        checks: [...first.checks, ...(second?.checks ?? []).map((c) => ({ ...c, name: `redraft.${c.name}` }))],
-        latencyMs: Date.now() - started,
-        firstCheckMs,
-        stages,
-      };
+      if (kept) {
+        result = { final: kept.text, outcome: "redrafted", checks: [...first.checks, ...kept.checks.map((c) => ({ ...c, name: `redraft.${c.name}` }))], latencyMs: Date.now() - started, firstCheckMs, stages };
+      } else {
+        // 3. The cut, or the minimal honest line. The invite line only helps
+        // when an invite claim was what came out (2026-09-20 code review).
+        const enough = cut.split(/\s+/).filter(Boolean).length >= 3;
+        const final = inviteCut ? [enough && !/invite/i.test(cut) ? cut : "", INVITE_FALLBACK].filter(Boolean).join(" ") : enough ? cut : MINIMAL_FALLBACK;
+        result = { final, outcome: "stripped", checks: first.checks, latencyMs: Date.now() - started, firstCheckMs, stages };
+      }
     }
   }
 

@@ -31,7 +31,7 @@ export type Signal = {
 };
 
 export const SIGNALS: Signal[] = [
-  { key: "reply_redrafted", label: "Replies rewritten or stripped by the grounding check", bad: `decision = 'reply.grounding' AND action IN ('redrafted','stripped')`, total: `decision = 'reply.grounding'`, floor: 0.25, minCount: 5 },
+  { key: "reply_redrafted", label: "Replies cut, rewritten or stripped by the grounding check", bad: `decision = 'reply.grounding' AND action IN ('cut','redrafted','stripped')`, total: `decision = 'reply.grounding'`, floor: 0.25, minCount: 5 },
   { key: "reply_stripped", label: "Replies stripped to a minimal answer", bad: `decision = 'reply.grounding' AND action = 'stripped'`, total: `decision = 'reply.grounding'`, floor: 0.1, minCount: 3 },
   { key: "proactive_blocked", label: "Proactive drafts blocked by checks", bad: `decision = 'proactive.dailyPick' AND reason LIKE 'draft failed checks%'`, total: `decision = 'proactive.dailyPick' AND action IS NOT NULL`, floor: 0.3, minCount: 3 },
   { key: "search_timeout", label: "Searches that hit the time cap or found nothing", bad: `decision = 'recommendation.search' AND outcome = 'skip'`, total: `decision = 'recommendation.search'`, floor: 0.5, minCount: 3 },
@@ -205,7 +205,7 @@ export async function gatherWeekMoments(days = 7): Promise<ReviewMoment[]> {
   const { rows } = await pool.query(
     `SELECT user_id, created_at, decision, action, reason FROM harness_decisions
      WHERE created_at > NOW() - ($1 || ' days')::interval AND (
-       (decision = 'reply.grounding' AND action IN ('redrafted', 'stripped'))
+       (decision = 'reply.grounding' AND action IN ('cut', 'redrafted', 'stripped'))
        OR (decision = 'call.grounding' AND outcome = 'skip')
        OR (decision = 'router.decideActions' AND action LIKE 'clarify%')
        OR (decision = 'recommendation.search' AND outcome = 'skip')

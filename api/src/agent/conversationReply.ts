@@ -1,4 +1,5 @@
 import { anthropic, createAnthropic } from "@ai-sdk/anthropic";
+import type { TurnContext } from "../services/turnContext.js";
 import { generateText, stepCountIs } from "ai";
 import { createConversationTools, type SendCoReply } from "./conversationTools.js";
 import { writeMemory } from "../services/memory.js";
@@ -35,6 +36,8 @@ export type ConversationReplyInput = {
   replyOwed?: boolean;
   // Their message may mean they aren't safe (services/safety.ts).
   safetyConcern?: boolean;
+  // The one picture of this turn (services/turnContext.ts).
+  turn?: TurnContext | null;
   // Runs and sends a search the way the text route always has
   // (routes/sendblue.ts searchAndSend); Co's searchNow tool calls it.
   searchAndSend?: (what: string) => Promise<{ answered: boolean; sentCount: number; briefing: string }>;
@@ -234,6 +237,7 @@ export async function runConversationReplyAgent(
     searchAndSend: input.searchAndSend,
     replyOwed: input.replyOwed ?? false,
     safetyConcern: input.safetyConcern ?? false,
+    turn: input.turn ?? null,
     firstName: input.firstName ?? null,
     lastCoMessage: lastCoLine(input.recentConversation),
     sendCoReply: input.sendCoReply,

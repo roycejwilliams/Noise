@@ -225,7 +225,7 @@ export function logFlags(data: ReviewData): ReviewFlag[] {
     if (d.decision === "recommendation.lateResult" && typeof d.action === "string" && d.action.endsWith("_told_them")) {
       add(d, "came_up_empty_text", "medium", `texted "came up empty" for "${p.askText ?? "?"}"`, d.action.startsWith("none_fit") ? `results found but none fit: ${(p.found ?? []).slice(0, 3).join(", ")}` : "the search found nothing", true);
     }
-    if (d.decision === "reply.grounding" && (["redrafted", "stripped"].includes(d.action ?? "") || (p.draft && p.final && p.draft !== p.final))) {
+    if (d.decision === "reply.grounding" && (["cut", "redrafted", "stripped"].includes(d.action ?? "") || (p.draft && p.final && p.draft !== p.final))) {
       add(d, "reply_rewritten", d.action === "stripped" ? "high" : "low", `draft: "${clip(p.draft ?? "", 120)}" → sent: "${clip(p.final ?? "", 120)}"`, d.reason ?? `grounding ${d.action ?? "changed it"}`, !!d.reason);
     }
     if (d.decision === "router.decideActions" && p.confidence === "low") {

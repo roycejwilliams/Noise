@@ -297,6 +297,11 @@ const routerOutputSchema = z.object({
 
 export type RouterOutput = z.infer<typeof routerOutputSchema>;
 
+// The router's fields from a JSON object that may carry more (services/readTurn.ts adds its own).
+export function parseRouterOutput(obj: unknown): RouterOutput {
+  return routerOutputSchema.parse(obj);
+}
+
 export type RouteInput = {
   message: string;
   recentConversation: string;

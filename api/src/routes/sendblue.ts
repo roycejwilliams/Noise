@@ -31,9 +31,12 @@ import { handleTeamText } from "../services/extensions.js";
 import { firstSendTimes } from "../services/turnLatency.js";
 import { catchUpReaction } from "../services/reactionCatchup.js";
 import { gapDescription } from "../services/understanding.js";
+import { logJevShadow, startJevShadow } from "../services/jevShadow.js";
 import { CO_WHY } from "../services/coVoice.js";
-import { dotsInstruction, findDots, gatherDots, whyContext, type Dot } from "../services/connectDots.js";
-import { bareLink, inlineNote, repliedTo, repliedToFact, threadReason } from "../services/inlineReply.js";
+import { assembleContext, type TurnContext } from "../services/turnContext.js";
+import { feedbackInstruction, readTurn, readTurnEnabled, type TurnRead } from "../services/readTurn.js";
+import { dotsInstruction, momentInstruction, readMoment, saveLesson, whyContext, type Moment } from "../services/connectDots.js";
+import { bareLink, inlineNote, repliedTo, repliedToFact, sentMessageHandle, threadReason } from "../services/inlineReply.js";
 import { recordSafetyConcern, SAFETY_INSTRUCTION, soundsLikeCrisis } from "../services/safety.js";
 import { describeImage } from "../services/imageRead.js";
 import { CALL_OFFER, GATE_ASK, INVITE_JOINED, WELCOME, WELCOME_INVITED, WRONG_CODE, pickLine } from "../services/onboardingLines.js";
@@ -49,15 +52,7 @@ import {
   type IntakeProposal,
 } from "../harness/intake.js";
 import { isOptInKeyword, isOptOutKeyword } from "../services/optOut.js";
-import {
-  captureIntent,
-  captureIntentForTurn,
-  extractPlannedEventMention,
-  extractPsychographicProfile,
-  getCoverageNudge,
-  RAPPORT_TOPIC_DESCRIPTIONS,
-  storeProfile,
-} from "../services/profileExtraction.js";
+import { captureIntentForTurn, coverageNudgeFrom, coveragePriorContext, getCoverageNudge, RAPPORT_TOPIC_DESCRIPTIONS } from "../services/profileExtraction.js";
 import { generateRecommendation, recordRecommendationsSent } from "../services/recommendation.js";
 import { isBrowseAsk } from "../services/askWindow.js";
 import { recordOfferReaction, reactionFact, type OfferReaction } from "../services/offerReactions.js";
@@ -72,7 +67,7 @@ import { resolveNetworkTeaseReply, resolveNetworkIntroReply } from "../services/
 import { NO_ROUTE, decideActions, gatherOpenItems, routeMessage, type RouterOutput } from "../services/messageRouter.js";
 import { recordDecision } from "../harness/core.js";
 import { routerGateChecks } from "../harness/routerChecks.js";
-import { addEventFacts, addFact, addInstruction, addOngoingSearchFacts, countOf, FRESH_SEARCH_INSTRUCTION, gatherReplyFacts, recordSearchNote } from "../harness/replyGrounding.js";
+import { addEventFacts, addFact, addHint, addInstruction, addOngoingSearchFacts, countOf, FRESH_SEARCH_INSTRUCTION, gatherReplyFacts, recordSearchNote } from "../harness/replyGrounding.js";
 import { runConversationReplyAgent, filterRelevantMemories, CALL_OFFER_EXPIRY_DAYS } from "../agent/conversationReply.js";
 import { triggerCallForUser } from "../services/callTrigger.js";
 import sendblue, { blockSender, cleanCoMessage, markRead, sendReaction, webhookSecretMatches } from "../services/sendblue.js";
@@ -80,7 +75,7 @@ import { TURN_FAILED_NOTE, turnFailedNoteBlocked } from "../services/turnFailure
 import { arrivedByText } from "../services/eventPresence.js";
 import { lineInVoice } from "../services/voiceLine.js";
 import { privacyAlert } from "../services/privacyAlert.js";
-import { learnTextingStyle } from "../services/textingStyle.js";
+import { learnFromTextTurn } from "../services/turnLearning.js";
 import { scoreGuestListForEvent } from "../services/eventScoring.js";
 import { closingReaction, emojiFor, lastCoLine } from "../services/conversationClose.js";
 import { renderMatchLead, sourceOf } from "../services/messageFormat.js";
@@ -1141,14 +1136,25 @@ export function sendblueRouter(io: Server): Router {
         // Which text they replied to stays with their message, so later turns
         // still know what "I'm in" was about (services/inlineReply.ts).
         const inlineTarget = await repliedToP;
-        let dotsP: Promise<Dot[]> | null = null;
-        let knownP: ReturnType<typeof gatherDots> | null = null;
+        let dotsP: Promise<Moment | null> | null = null;
+        // The one picture of this turn (services/turnContext.ts): what Co sent
+        // with its details, open asks and threads, feelings, lessons from past
+        // pushback, the reply target and the record. Started once the recent
+        // conversation is read; everything below reads from it.
+        let turnP: Promise<TurnContext> | null = null;
+        let turn: TurnContext | null = null;
+        const askedAndDoing = async () => {
+          const t = turnP ? await turnP.catch(() => null) : null;
+          return t ? { asks: t.asks.map((a) => a.text), threads: t.threads } : { asks: [] as string[], threads: [] as { text: string; feeling: string | null }[] };
+        };
         // Reacting to something Co sent: the reply ties back to their why.
         let reactingToSent = !!inlineTarget?.fromCo && (!!inlineTarget.what || !!bareLink(inlineTarget.text));
         const inboundContent = isVoice
           ? `User sent a voice memo: ${resolvedContent}${inlineTarget ? ` ${inlineNote(inlineTarget)}` : ""}`
           : `User said: ${resolvedContent}${hasText && imageForVision ? ` [They also sent a photo${photoDescription ? `. It shows: ${photoDescription}` : ""}]` : ""}${inlineTarget ? ` ${inlineNote(inlineTarget)}` : ""}`;
 
+        // A link they texted is read in the background, kept to them (services/linkReader.ts).
+        if (hasText && /https?:\/\//.test(resolvedContent)) import("../services/linkReader.js").then((l) => l.readLinksLater(resolvedContent, { ownerUserId: user.id })).catch(() => {});
         const [inboundMemory, queryEmbedding] = await Promise.all([
           pool.query(
             `INSERT INTO co_memories (user_id, memory_type, content)
@@ -1273,6 +1279,13 @@ export function sendblueRouter(io: Server): Router {
         );
         const chronologicalRows = chronologicalResult.rows.reverse();
         const recentConversation = annotateConversationGaps(chronologicalRows);
+        if (hasText) {
+          turnP = assembleContext(user.id, resolvedContent, {
+            inlineTarget,
+            ledgerContext: `${inlineTarget ? `${inlineTarget.text}\n` : ""}${recentConversation.split("\n").filter((l) => l.startsWith("Co replied:")).slice(-3).join("\n")}`,
+          });
+          turnP.catch(() => {});
+        }
         const styleHint = deriveStyleHint(chronologicalRows);
 
         // Emotion loop (harness/emotion.ts): read how this message feels in
@@ -1283,7 +1296,11 @@ export function sendblueRouter(io: Server): Router {
         // Latency (2026-09-26): nothing before the router needs these reads,
         // so they run alongside it (and the context reads below) instead of
         // ahead of it; they're awaited once the router is done.
-        const seekingAndEmotion = hasText
+        // One read of the moment replaces these, the router's read, the
+        // coverage check, the moment read and the feedback filter
+        // (services/readTurn.ts); READ_TURN=off runs them separately as before.
+        const oneRead = hasText && readTurnEnabled();
+        const seekingAndEmotion = hasText && !oneRead
           ? Promise.all([
               detectSeekingMode(resolvedContent, recentConversation, "sendblue.detectSeekingMode"),
               readTextEmotion(resolvedContent, recentConversation, "sendblue.readTextEmotion"),
@@ -1375,36 +1392,61 @@ export function sendblueRouter(io: Server): Router {
           const candidates = memoriesResult.rows.map((m: any) => m.content).filter(Boolean);
           return candidates.length ? await filterRelevantMemories(resolvedContent, candidates) : "";
         })().catch(() => "");
-        const coverageP = getCoverageNudge(user.id, recentConversation, profile).catch(() => ({ missingTopic: null, refresh: null }));
+        const routeInput = {
+          // Which text they replied to, so "I'm in" under an offer resolves to it.
+          message: inlineTarget ? `${resolvedContent} ${inlineNote(inlineTarget)}` : resolvedContent,
+          recentConversation,
+          openItems,
+          declinedCallTopics: declinedTopicsResult.rows.map((r: any) => r.content),
+        };
+        const readP: Promise<TurnRead> | null =
+          oneRead && turnP
+            ? propagateAttributes({ userId: user.id, traceName: "sendblue.readTurn" }, () =>
+                turnP!.catch(() => null).then((t) => readTurn(routeInput, t, coveragePriorContext(profile))),
+              )
+            : null;
+        readP?.catch(() => {});
+        // Jev labels the same text in shadow, logged next to the read; never used for the reply (services/jevShadow.ts).
+        const jevShadowP = hasText && readP ? startJevShadow(resolvedContent, lastCoLine(recentConversation), !!inlineTarget?.fromCo) : null;
+        const coverageP = readP
+          ? readP.then((r) => coverageNudgeFrom(user.id, profile, r.coverage)).catch(() => ({ missingTopic: null, refresh: null }))
+          : getCoverageNudge(user.id, recentConversation, profile).catch(() => ({ missingTopic: null, refresh: null }));
+        let turnRead: TurnRead | null = null;
 
         let routerOutput: RouterOutput = NO_ROUTE;
         let routerFailed = false;
         let routerLatencyMs: number | null = null;
         try {
-          // Connecting the dots, alongside the router (services/connectDots.ts).
-          if (hasText && !dotsP) {
-            knownP = gatherDots(user.id);
-            dotsP = knownP.then((known) =>
-              findDots({ ...known, now: `They just texted Co: "${resolvedContent}"${inlineTarget ? ` ${inlineNote(inlineTarget)}` : ""}` }),
-            );
+          if (readP) {
+            turnRead = await readP;
+            logJevShadow(user.id, jevShadowP, turnRead);
+            routerOutput = turnRead.router;
+            routerLatencyMs = turnRead.latencyMs;
+            dotsP = Promise.resolve(turnRead.moment);
+          } else {
+            // Connecting the dots, alongside the router (services/connectDots.ts).
+            if (hasText && !dotsP && turnP) {
+              dotsP = turnP.then((t) =>
+                readMoment({
+                  asks: t.asks.map((a) => a.text),
+                  threads: t.threads,
+                  offersThisWeek: t.offersThisWeek,
+                  now: `They just texted Co: "${resolvedContent}"${inlineTarget ? ` ${inlineNote(inlineTarget)}` : ""}`,
+                  recent: recentConversation.split("\n").slice(-8).join("\n"),
+                }),
+              );
+            }
+            const routed = await propagateAttributes({ userId: user.id, traceName: "sendblue.router.route" }, () => routeMessage(routeInput));
+            routerOutput = routed.output;
+            routerLatencyMs = routed.latencyMs;
           }
-          const routeInput = {
-            // Which text they replied to, so "I'm in" under an offer resolves to it.
-            message: inlineTarget ? `${resolvedContent} ${inlineNote(inlineTarget)}` : resolvedContent,
-            recentConversation,
-            openItems,
-            declinedCallTopics: declinedTopicsResult.rows.map((r: any) => r.content),
-          };
-          const routed = await propagateAttributes({ userId: user.id, traceName: "sendblue.router.route" }, () => routeMessage(routeInput));
-          routerOutput = routed.output;
-          routerLatencyMs = routed.latencyMs;
         } catch (err: any) {
           routerFailed = true;
           // Fail safe: act on nothing rather than guess.
           console.error("sendblue: message router failed (non-fatal, taking no actions this turn):", err?.message ?? err);
         }
         const decision = decideActions(routerOutput, openItems, { message: resolvedContent, recentConversation });
-        const [seekingMode, textEmotion] = await seekingAndEmotion;
+        const [seekingMode, textEmotion] = oneRead ? [turnRead?.seeking ?? null, turnRead?.emotion ?? null] : await seekingAndEmotion;
         if (textEmotion) {
           await recordEmotionSignals(user.id, [{ source: "text", ...textEmotion, quote: resolvedContent.slice(0, 140), memoryId: inboundMemory.rows[0].id }]);
         }
@@ -1474,7 +1516,11 @@ export function sendblueRouter(io: Server): Router {
         if (inlineTarget) {
           recordDecision({ layer: 2, decision: "turn.inlineReply", userId: user.id, outcome: "act", action: inlineTarget.fromCo ? "to_co" : "to_self", proposal: { repliedTo: inlineTarget.text.slice(0, 200) } }).catch(() => {});
         }
+        turn = turnP ? await turnP.catch(() => null) : null;
+        // This message's feeling was just recorded; the context read the ones before it.
+        if (turn) turn.emotional = emotional;
         const replyFacts = await gatherReplyFacts(user.id, {
+          turn: turn ?? undefined,
           context: `${resolvedContent}\n${inlineTarget ? `${inlineTarget.text}\n` : ""}${recentConversation.split("\n").filter((l) => l.startsWith("Co replied:")).slice(-3).join("\n")}`,
           pendingDescriptions: openItems.filter((i) => i.id !== resolvedItem?.item.id).map((i) => i.description),
         });
@@ -1496,13 +1542,19 @@ export function sendblueRouter(io: Server): Router {
         const ownHandle = typeof req.body?.message_handle === "string" ? req.body.message_handle : null;
         let threadNextSend = true;
         const threadHandle = async (): Promise<string | null> => {
-          if (!ownHandle) return null;
           const latest = myInboundAt
             ? await pool.query(`SELECT last_inbound_at FROM phone_debounce WHERE phone = $1`, [number]).then((r) => r.rows[0]?.last_inbound_at ?? null).catch(() => null)
             : null;
-          const why = threadReason({ theyRepliedInline: !!inlineTarget, newerTextSince: !!latest && !!myInboundAt && new Date(latest).getTime() > new Date(myInboundAt).getTime() });
-          if (why) recordDecision({ layer: 7, decision: "reply.inline", userId: user.id, outcome: "act", action: why }).catch(() => {});
-          return why ? ownHandle : null;
+          // What this turn is about, from the one read: the message Co sent it in.
+          const about = turnRead?.aboutSent && turnP ? (await turnP.catch(() => null))?.sent.find((x) => x.name === turnRead!.aboutSent) ?? null : null;
+          const aboutSentHandle = about ? await sentMessageHandle(user.id, about).catch(() => null) : null;
+          const why = threadReason({
+            theyRepliedInline: !!inlineTarget && !!ownHandle,
+            newerTextSince: !!ownHandle && !!latest && !!myInboundAt && new Date(latest).getTime() > new Date(myInboundAt).getTime(),
+            aboutSentHandle,
+          });
+          if (why) recordDecision({ layer: 7, decision: "reply.inline", userId: user.id, outcome: "act", action: why, proposal: why === "about_sent" ? { about: about?.name } : undefined }).catch(() => {});
+          return why === "about_sent" ? aboutSentHandle : why ? ownHandle : null;
         };
         const threadedSend: typeof sendCoReply = async (p) => {
           if (!threadNextSend || p.asVoice) return sendCoReply(p);
@@ -1540,7 +1592,11 @@ export function sendblueRouter(io: Server): Router {
         }
         // A problem they're reporting about Co itself is saved for the team
         // (test only, services/issueReports.ts), and the reply can say so.
-        const reportedIssue = hasText ? await captureIssueReport(user.id, resolvedContent, recentConversation) : null;
+        // With the one read, feedback is flagged there and Co saves it with its
+        // tool (no word filter deciding for it); READ_TURN=off keeps the old capture.
+        const reportedIssue = hasText && !oneRead ? await captureIssueReport(user.id, resolvedContent, recentConversation) : null;
+        const feedbackNote = feedbackInstruction(turnRead?.feedback ?? []);
+        if (feedbackNote) addInstruction(replyFacts, feedbackNote);
         // What has really reached the team, so "is it noted to the team?" gets
         // a true answer (2026-09-18: Co said feedback "goes straight to the
         // team" when nothing had been saved).
@@ -1554,7 +1610,7 @@ export function sendblueRouter(io: Server): Router {
             "known",
             recentReports.length
               ? `Saved for the team in the last day: ${recentReports.map((s) => `"${s}"`).join("; ")}. Nothing new was saved this turn.`
-              : "Nothing they've said has been saved for the team in the last day, including this message. Don't say anything was noted for, passed to, or sent to the team; say you'll keep it in mind.",
+              : "Nothing they've said has been saved for the team in the last day, including this message. If this message is feedback for the team, save it with saveFeedbackForTeam; otherwise don't say anything was noted for, passed to, or sent to the team.",
           );
         }
         if (reportedIssue) {
@@ -1562,7 +1618,7 @@ export function sendblueRouter(io: Server): Router {
           addFact(replyFacts, "did_this_turn", `Saved what they reported about how Co works, for the team to look at: "${reportedIssue.summary}"`);
           addInstruction(
             replyFacts,
-            "They pointed out a problem with how you work. Acknowledge it plainly in a sentence, say you've passed it along to the team, and don't promise whether or when it gets fixed. Then respond to anything else they said.",
+            "They pointed out a problem with how you work. It's already saved for the team, so don't save it again. Acknowledge it plainly in a sentence, say you've passed it along to the team, and don't promise whether or when it gets fixed. If they gave other, separate feedback in the same message, save that with saveFeedbackForTeam. Then respond to anything else they said.",
           );
         }
         if (repeatContext) addInstruction(replyFacts, repeatContext);
@@ -2193,7 +2249,7 @@ Return ONLY valid JSON, no preamble: {"date": "YYYY-MM-DD or null", "time": "HH:
                   let description = `${m.name}. ${em.whyItFits ?? m.reason}`;
                   try {
                     // Their why, so the caption says where this could take it (services/coVoice.ts CO_WHY).
-                    const why = whyContext(await (knownP ?? gatherDots(user.id)).catch(() => ({ asks: [], threads: [] })));
+                    const why = whyContext(await askedAndDoing());
                     const askedDates = describeTimeFrame("scope" in recommendation ? recommendation.scope : null);
                     const dateRule = dateCaveatRule(askedDates);
                     const record = em.details ? renderEventDetails(em.name, em.details).join("\n") : em.opportunity ? `What the post says: ${em.opportunity.postText}` : "";
@@ -2387,11 +2443,9 @@ Return ONLY valid JSON, no preamble: {"date": "YYYY-MM-DD or null", "time": "HH:
                     if (descriptionSent) actuallySent.push(p);
                   }
                   for (const { m, description } of actuallySent) {
-                    addFact(
-                      replyFacts,
-                      "did_this_turn",
-                      `Sent "${m.name}", found through ${sourceOf(m)}${"url" in m && m.url ? ` (link ${m.url})` : " (no link)"}, just before this reply: "${description}"`,
-                    );
+                    // That it went out is a fact; what Co wrote about it is Co's own words, a hint.
+                    addFact(replyFacts, "did_this_turn", `Sent "${m.name}", found through ${sourceOf(m)}${"url" in m && m.url ? ` (link ${m.url})` : " (no link)"}, just before this reply.`);
+                    addHint(replyFacts, `What Co wrote about "${m.name}" when sending it: "${description}"`);
                   }
                   sentThisTurn = actuallySent.map((p) => p.m.name);
                   if (actuallySent.length) {
@@ -2713,10 +2767,18 @@ Return ONLY valid JSON, no preamble: {"date": "YYYY-MM-DD or null", "time": "HH:
           // How they like to be texted, learned from this message against
           // Co's last one (services/textingStyle.ts). In the background, so
           // it never slows the reply; the next reply reads it.
-          if (hasText) learnTextingStyle(user.id, lastCoLine(recentConversation), resolvedContent).catch(() => {});
-          const dots = dotsP ? await dotsP : [];
+          // How they like to be texted is learned after the reply, in the turn's one
+          // learning read (services/turnLearning.ts); the next reply reads it.
+          const moment = dotsP ? await dotsP : null;
+          const dots = moment?.dots ?? [];
+          const momentNote = momentInstruction(moment);
+          if (momentNote) addInstruction(replyFacts, momentNote);
+          const lessons = turn?.lessons ?? [];
+          if (lessons.length) addInstruction(replyFacts, `What you've learned about how to be with them, from times they corrected you: ${lessons.join(" / ")}`);
+          if (moment?.lesson) saveLesson(user.id, moment.lesson).catch(() => {});
+          if (moment) recordDecision({ layer: 3, decision: "reply.moment", userId: user.id, outcome: "act", action: moment.mode, proposal: { topic: moment.topic, pushback: moment.pushback, lesson: moment.lesson } }).catch(() => {});
           if (reactingToSent) {
-            const why = whyContext(await (knownP ?? gatherDots(user.id)));
+            const why = whyContext(await askedAndDoing());
             if (why) addInstruction(replyFacts, `They're reacting to something Co sent them. ${CO_WHY} ${why}`);
           }
           const dotsNote = dotsInstruction(dots);
@@ -2743,6 +2805,7 @@ Return ONLY valid JSON, no preamble: {"date": "YYYY-MM-DD or null", "time": "HH:
                 messageHandle: typeof req.body?.message_handle === "string" ? req.body.message_handle : null,
                 replyOwed: owesReply,
                 safetyConcern: crisisWording,
+                turn,
                 searchAndSend,
                 userId: user.id,
                 phoneNumber: user.phone_number,
@@ -2771,7 +2834,7 @@ Return ONLY valid JSON, no preamble: {"date": "YYYY-MM-DD or null", "time": "HH:
           );
           coReply = replyText;
           // A reaction Co didn't record, caught after the reply (services/reactionCatchup.ts).
-          if (hasText && !resultsAnsweredAsk) catchUpReaction(user.id, resolvedContent, toolsCalled ?? [], inlineTarget?.fromCo ? `${inlineTarget.text} ${inlineTarget.what ?? ""}`.trim() : null).catch(() => {});
+          if (hasText && !resultsAnsweredAsk) catchUpReaction(user.id, resolvedContent, toolsCalled ?? [], inlineTarget?.fromCo ? `${inlineTarget.text} ${inlineTarget.what ?? ""}`.trim() : null, turn?.sent).catch(() => {});
           const groundingMs = grounding.reduce((a, g) => a + g.latencyMs, 0);
           const replyMs = Date.now() - replyStarted - groundingMs;
           // Latency budget (2026-09-15: a 70s reply led to five resends).
@@ -2804,26 +2867,23 @@ Return ONLY valid JSON, no preamble: {"date": "YYYY-MM-DD or null", "time": "HH:
           }
         }
 
-        // Fire-and-forget, same real pipeline a call uses (extractPsychographicProfile
-        // + storeProfile + captureIntent), fed the accumulated text thread instead of
-        // a call transcript — matches production's post-call pipeline, ported here
-        // since this previously had only a thin 4-field patch (life_chapters/
-        // emotional_state/goals/blockers) that couldn't create a profile row at all
-        // and never touched intent, so a text-only user's stated ask never reached
-        // co_profiles.intent for matching to use.
-        const textTranscript = `${recentConversation}\nuser: ${resolvedContent}\nassistant: ${coReply}`.trim();
-        extractPsychographicProfile(textTranscript)
-          .then(({ extracted }) => storeProfile(user.id, extracted, textTranscript, { newWords: resolvedContent }))
-          .catch((err: any) => console.error("sendblue: text-based profile extraction failed (non-fatal):", err?.message ?? err));
+        // Fire-and-forget, the same writes a call's pipeline makes (profile,
+        // asks, planned events), so a text-only member's asks reach matching
+        // too. One read of the turn now (2026-09-28, services/turnLearning.ts):
+        // profile fields, resolved goals/asks, corrections, call cadence, the
+        // ask, a planned event and texting style, each through its own gate
+        // and write, instead of seven separate calls on the same transcript.
+        learnFromTextTurn({
+          userId: user.id,
+          recentConversation,
+          message: resolvedContent,
+          coReply,
+          coSaidBefore: hasText ? lastCoLine(recentConversation) : null,
+        }).catch((err: any) => console.error("sendblue: turn learning failed (non-fatal):", err?.message ?? err));
         // Keep the current picture of them fresh (harness/personSnapshot.ts);
-        // rebuilds only when they've said something new, at most every 10 min.
+        // rebuilds only when they've said something new, at most every 10 min,
+        // with their open threads in the same call.
         refreshPersonSnapshot(user.id).catch(() => {});
-        captureIntent(user.id, textTranscript).catch((err: any) =>
-          console.error("sendblue: text-based intent capture failed (non-fatal):", err?.message ?? err),
-        );
-        extractPlannedEventMention(user.id, textTranscript).catch((err: any) =>
-          console.error("sendblue: text-based event-mention capture failed (non-fatal):", err?.message ?? err),
-        );
 
         io.to(`user:${user.id}`).emit("co:message", { message: coReply });
 

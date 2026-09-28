@@ -56,6 +56,11 @@ const effortArg = arg("effort") ?? "low";
 const effort = effortArg === "none" ? null : (effortArg as "low" | "medium" | "high");
 const only = arg("only")?.split(",");
 const concurrency = Number(arg("concurrency") ?? 6);
+// --read-turn: route with the one turn read (services/readTurn.ts) instead of
+// the router alone, to check it decides the same (2026-09-28).
+const useReadTurn = args.includes("--read-turn");
+// --sample parity: every synthetic case plus every 8th real one.
+const sample = arg("sample");
 
 // $ per million tokens, input / output.
 const PRICING: Record<string, [number, number]> = {
@@ -173,6 +178,7 @@ const pct = (xs: number[], p: number) => {
 async function main() {
   let cases = loadCases();
   if (mode === "baseline") cases = cases.filter((c) => c.current);
+  if (sample === "parity") cases = cases.filter((c, i) => c.source === "synthetic" || i % 8 === 0);
 
   const results = await pool(cases, mode === "baseline" ? cases.length : concurrency, async (c) => {
     if (mode === "baseline") {
@@ -187,10 +193,17 @@ async function main() {
     let error: string | null = null;
     for (let attempt = 0; attempt < 2; attempt++) {
       try {
-        const r = await routeMessage({ message: c.message, recentConversation: c.recentConversation, openItems }, { model, effort });
-        ({ output, latencyMs } = r);
-        inTok = r.inputTokens;
-        outTok = r.outputTokens;
+        if (useReadTurn) {
+          const { readTurn } = await import("../../src/services/readTurn.js");
+          const t = await readTurn({ message: c.message, recentConversation: c.recentConversation, openItems }, null, null, { model });
+          output = t.router;
+          latencyMs = t.latencyMs;
+        } else {
+          const r = await routeMessage({ message: c.message, recentConversation: c.recentConversation, openItems }, { model, effort });
+          ({ output, latencyMs } = r);
+          inTok = r.inputTokens;
+          outTok = r.outputTokens;
+        }
         error = null;
         break;
       } catch (err: any) {
@@ -266,7 +279,7 @@ async function main() {
 
   const outDir = join(here, "results");
   mkdirSync(outDir, { recursive: true });
-  const outFile = join(outDir, `${mode === "baseline" ? "baseline" : `${model}-${effort ?? "none"}`}.local.json`);
+  const outFile = join(outDir, `${mode === "baseline" ? "baseline" : `${model}-${effort ?? "none"}${useReadTurn ? "-readturn" : ""}${sample ? `-${sample}` : ""}`}.local.json`);
   writeFileSync(outFile, JSON.stringify({ summary, results: results.map(({ c, ...r }) => ({ id: c.id, ...r })) }, null, 2));
   console.log(`\nwrote ${outFile}`);
 }

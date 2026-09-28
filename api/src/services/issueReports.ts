@@ -92,6 +92,20 @@ async function haikuIssue(message: string, recentConversation: string, abortSign
 
 // Returns the stored report, or null when this message isn't one (or capture
 // is off). Never throws: a failure here must not block the reply.
+// Co saving feedback itself (conversationTools.ts saveFeedbackForTeam,
+// 2026-09-28): "We should find time and date for any event we surface" never
+// reached the classifier, since the word filter above didn't see feedback in
+// it, and Co had to admit it hadn't passed it on. Same table, same switch.
+export async function saveFeedback(userId: string, message: string, summary: string, recentConversation: string): Promise<boolean> {
+  if (!captureEnabled()) return false;
+  await pool.query(
+    `INSERT INTO user_reported_issues (user_id, message, summary, category, severity, conversation) VALUES ($1, $2, $3, $4, $5, $6)`,
+    [userId, message.slice(0, 2000), summary.slice(0, 500), "feedback", "medium", recentConversation.slice(-3000)],
+  );
+  await recordDecision({ layer: 2, decision: "feedback.issueReport", userId, outcome: "act", action: "saved_by_co", proposal: { message: message.slice(0, 500), summary } }).catch(() => {});
+  return true;
+}
+
 export async function captureIssueReport(userId: string, message: string, recentConversation: string): Promise<IssueReport | null> {
   if (!captureEnabled() || !mayBeIssueReport(message)) return null;
   try {

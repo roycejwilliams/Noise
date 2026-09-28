@@ -86,10 +86,31 @@ export function inlineNote(r: RepliedTo): string {
   return r.fromCo ? `[Replying to Co's text: "${t}"${what}]` : `[Replying to their own earlier text: "${t}"]`;
 }
 
-// Whether Co's first text this turn should thread under theirs.
-export function threadReason(o: { theyRepliedInline: boolean; newerTextSince: boolean; isGroup?: boolean }): "mirror" | "newer_text" | null {
+// Whether Co's first text this turn should thread, and under what: their
+// message when they replied inline or texted again since; otherwise, when
+// this turn is about one thing Co sent (services/readTurn.ts about_sent), the
+// message Co sent it in (Royce, 2026-09-28: threading keeps context with the
+// thing it's about).
+export function threadReason(o: { theyRepliedInline: boolean; newerTextSince: boolean; aboutSentHandle?: string | null; isGroup?: boolean }): "mirror" | "newer_text" | "about_sent" | null {
   if (o.isGroup) return null;
   if (o.theyRepliedInline) return "mirror";
   if (o.newerTextSince) return "newer_text";
+  if (o.aboutSentHandle) return "about_sent";
   return null;
+}
+
+// The message Co sent a thing in: its link on its own when there was one,
+// else the text that named it. Only this member's messages.
+export async function sentMessageHandle(userId: string, item: { name: string; url: string | null }): Promise<string | null> {
+  const { default: pool } = await import("../db/db.js");
+  const { rows } = await pool
+    .query(
+      `SELECT message_handle FROM outbound_messages
+       WHERE user_id = $1 AND sent_at > NOW() - INTERVAL '45 days'
+         AND (($2::text IS NOT NULL AND content = $2) OR content ILIKE '%' || $3 || '%')
+       ORDER BY (($2::text IS NOT NULL AND content = $2)) DESC, sent_at DESC LIMIT 1`,
+      [userId, item.url, item.name.slice(0, 120)],
+    )
+    .catch(() => ({ rows: [] as any[] }));
+  return rows[0]?.message_handle ?? null;
 }

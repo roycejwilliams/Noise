@@ -331,18 +331,35 @@ export async function getCoverageNudge(
 
   if (RAPPORT_TOPICS.every((t) => topicsCovered[t])) return stale ? { missingTopic: stale.topic, refresh: stale } : { missingTopic: null };
 
-  const priorContextParts = [
+  const prior = coveragePriorContext(profile);
+  const coverage = await assessConversationCoverage(transcriptSoFar, prior ?? undefined).catch(() => null);
+  return coverageNudgeFrom(userId, profile, coverage);
+}
+
+// What's already known about them, for judging coverage (also read by services/readTurn.ts).
+export function coveragePriorContext(profile: CoverageNudgeProfile | null): string | null {
+  const parts = [
     profile?.life_chapters?.length ? `life chapter: ${profile.life_chapters.join(", ")}` : null,
     profile?.goals?.length ? `goals: ${profile.goals.join(", ")}` : null,
     profile?.blockers?.length ? `blockers: ${profile.blockers.join(", ")}` : null,
     profile?.long_term_direction ? `long-term direction: ${profile.long_term_direction}` : null,
     profile?.city ? `city: ${profile.city}` : null,
   ].filter((p): p is string => Boolean(p));
+  return parts.length ? parts.join("; ") : null;
+}
 
-  const coverage = await assessConversationCoverage(
-    transcriptSoFar,
-    priorContextParts.length ? priorContextParts.join("; ") : undefined,
-  ).catch(() => null);
+// From a coverage read (this function's own call, or the one turn read in
+// services/readTurn.ts): stamps what they said this conversation, then picks
+// the one topic worth being curious about, unknown before stale.
+export function coverageNudgeFrom(
+  userId: string,
+  profile: CoverageNudgeProfile | null,
+  coverage: CoverageAssessment | null,
+): { missingTopic: RapportTopic | null; refresh?: Gap | null } {
+  const topicsCovered = profile?.topics_covered ?? {};
+  const topicsAsked = profile?.topics_asked ?? {};
+  const stale = understandingGaps(topicsCovered, topicsAsked).find((g) => g.kind === "stale") ?? null;
+  if (RAPPORT_TOPICS.every((t) => topicsCovered[t])) return stale ? { missingTopic: stale.topic, refresh: stale } : { missingTopic: null };
   if (!coverage) return { missingTopic: null };
 
   persistCoveredTopics(userId, coverage);
@@ -385,7 +402,24 @@ async function assessResolvedItems(
       prompt: buildResolutionPrompt(transcript, existingGoals, existingBlockers, askListBlock),
       experimental_telemetry: { isEnabled: true, functionId: "profileExtraction.assessResolvedItems" },
     });
+    return await applyResolutionOutput(raw, transcript, existingGoals, existingBlockers, openAsks, userId);
+  } catch (err) {
+    console.error("assessResolvedItems failed (non-fatal):", err);
+    return { resolvedGoals: [], resolvedBlockers: [], resolvedAskIds: [] };
+  }
+}
 
+// The same gate and record, for model output produced elsewhere (the merged
+// turn read, services/turnLearning.ts).
+export async function applyResolutionOutput(
+  raw: string,
+  transcript: string,
+  existingGoals: string[],
+  existingBlockers: string[],
+  openAsks: { id: string; text: string }[],
+  userId: string | null,
+): Promise<{ resolvedGoals: string[]; resolvedBlockers: string[]; resolvedAskIds: string[] }> {
+  try {
     const gated = gateResolutionOutput(raw, transcript, existingGoals, existingBlockers, openAsks);
     if (gated.proposals.length) {
       await recordDecision({
@@ -491,19 +525,23 @@ Return ONLY valid JSON, no preamble: {"preference": "weekly" | "biweekly" | "non
 
     const clean = raw.trim();
     const parsed = parseModelJson(clean);
-    switch (parsed.preference) {
-      case "weekly":
-        return 7;
-      case "biweekly":
-        return 14;
-      case "none":
-        return 0;
-      default:
-        return null;
-    }
+    return cadenceDaysFor(parsed.preference);
   } catch (err) {
     console.error("extractCheckinCadencePreference failed (non-fatal):", err);
     return null;
+  }
+}
+
+export function cadenceDaysFor(preference: unknown): number | null {
+  switch (preference) {
+    case "weekly":
+      return 7;
+    case "biweekly":
+      return 14;
+    case "none":
+      return 0;
+    default:
+      return null;
   }
 }
 
@@ -729,6 +767,18 @@ export async function assessCorrections(onFile: OnFile, newWords: string, contex
       prompt: buildCorrectionPrompt(onFile, newWords, context.slice(-3000)),
       experimental_telemetry: { isEnabled: true, functionId: "profileExtraction.assessCorrections" },
     });
+    return await applyCorrectionOutput(raw, onFile, newWords, userId);
+  } catch (err) {
+    console.error("assessCorrections failed (non-fatal):", err);
+    return [];
+  }
+}
+
+// The same gate and record, for model output produced elsewhere
+// (services/turnLearning.ts). Every correction still has to quote their own
+// words from what they just said (gateCorrections).
+export async function applyCorrectionOutput(raw: string, onFile: OnFile, newWords: string, userId: string | null): Promise<Correction[]> {
+  try {
     const parsed = parseModelJson(raw.trim());
     const proposals: ProposedCorrection[] = (Array.isArray(parsed?.corrections) ? parsed.corrections : []).map((c: any) => ({
       field: String(c?.field ?? ""),
@@ -775,7 +825,14 @@ export async function storeProfile(
   transcript: string,
   // newWords: what's new in this transcript (the text they just sent). A
   // call transcript is new as a whole, so it defaults to the transcript.
-  opts: { emotions?: { name: string; score: number }[] | null; newWords?: string } = {},
+  opts: {
+    emotions?: { name: string; score: number }[] | null;
+    newWords?: string;
+    // The merged turn read's output (services/turnLearning.ts): the same
+    // judgments, already made, run through the same gates below instead of
+    // three more model calls. openAsks is the numbered list that read saw.
+    precomputed?: { resolutionRaw: string; openAsks: { id: string; text: string }[]; correctionsRaw: string; cadence: unknown };
+  } = {},
 ): Promise<{ safeChapters: string[]; safeStyle: string }> {
   const { rows: existingRows } = await pool.query(
     `SELECT life_chapters, social_energy, connection_style, activity_preferences,
@@ -797,7 +854,8 @@ export async function storeProfile(
     `SELECT ask_id, ask_text FROM ask_checkins WHERE user_id = $1 AND resolved_at IS NULL`,
     [user_id],
   );
-  const openAsks = openAskRows.map((r: any) => ({ id: r.ask_id as string, text: r.ask_text as string }));
+  const openAsks = opts.precomputed?.openAsks ?? openAskRows.map((r: any) => ({ id: r.ask_id as string, text: r.ask_text as string }));
+  const pre = opts.precomputed;
 
   const onFile: OnFile = {
     city: existing?.city ?? null,
@@ -809,8 +867,14 @@ export async function storeProfile(
     availability_pattern: existing?.availability_pattern ?? null,
   };
   const [{ resolvedGoals, resolvedBlockers, resolvedAskIds }, corrections, pastCorrections] = await Promise.all([
-    assessResolvedItems(transcript, existing?.goals ?? [], existing?.blockers ?? [], openAsks, user_id),
-    existing ? assessCorrections(onFile, opts.newWords ?? transcript, transcript, user_id) : Promise.resolve([] as Correction[]),
+    pre
+      ? applyResolutionOutput(pre.resolutionRaw, transcript, existing?.goals ?? [], existing?.blockers ?? [], openAsks, user_id)
+      : assessResolvedItems(transcript, existing?.goals ?? [], existing?.blockers ?? [], openAsks, user_id),
+    existing
+      ? pre
+        ? applyCorrectionOutput(pre.correctionsRaw, onFile, opts.newWords ?? transcript, user_id)
+        : assessCorrections(onFile, opts.newWords ?? transcript, transcript, user_id)
+      : Promise.resolve([] as Correction[]),
     recentlyCorrected(user_id),
   ]);
 
@@ -993,7 +1057,7 @@ export async function storeProfile(
   // must never silently reset an already-captured preference back to unset.
   // 0 (explicitly declined) is a real, distinct value from null (never
   // asked) — checked with !== null, not a truthy check.
-  const cadenceDays = await extractCheckinCadencePreference(transcript);
+  const cadenceDays = pre ? cadenceDaysFor(pre.cadence) : await extractCheckinCadencePreference(transcript);
   if (cadenceDays !== null) {
     await pool.query(`UPDATE co_profiles SET checkin_call_cadence_days = $2 WHERE user_id = $1`, [
       user_id,
@@ -1036,7 +1100,7 @@ export async function storeTranscriptMemory(
   return memoryId;
 }
 
-type CapturedIntentData = {
+export type CapturedIntentData = {
   // Many asks now (a whole call can legitimately state more than one).
   asks?: { text?: string; type?: "seeking" | "offering" }[] | null;
   // The pre-2026-09-20 single-ask shape, still read so a model reply that
@@ -1150,7 +1214,23 @@ export async function captureIntent(
     } catch {
       return null;
     }
+    return await persistIntentFrom(user_id, parsed, transcript, scope);
+  } catch (err: any) {
+    console.error("captureIntent failed (non-fatal):", err?.message ?? err);
+    return null;
+  }
+}
 
+// Everything captureIntent does after its model call: the same filters,
+// dedupe, writes and sweeps, for output produced elsewhere
+// (services/turnLearning.ts).
+export async function persistIntentFrom(
+  user_id: string,
+  parsed: CapturedIntentData | null,
+  transcript: string,
+  scope: IntentScope = "last_user_message",
+): Promise<ExtractedIntent | null> {
+  try {
     // Only what THEY said: an item that's Co's own line echoed back is
     // dropped (harness/profileWrite.ts echoesCoNotMember, 2026-09-23).
     const mine = (x: unknown) => typeof x === "string" && !echoesCoNotMember(x, transcript);
@@ -1434,7 +1514,7 @@ export async function captureIntentForTurn(
   return { ask: { text: intent.text, type: intent.type }, askId: intent.id, deduped: lastCaptureDeduped.get(intent.id) ?? false };
 }
 
-type CapturedEventMentionData = {
+export type CapturedEventMentionData = {
   event_name: string | null;
   event_date: string | null; // resolved ISO date (YYYY-MM-DD), or null
   event_location: string | null;
@@ -1480,6 +1560,16 @@ Transcript:
     } catch {
       return;
     }
+    await storePlannedEventMention(user_id, parsed);
+  } catch (err: any) {
+    console.error("extractPlannedEventMention failed (non-fatal):", err?.message ?? err);
+  }
+}
+
+// What extractPlannedEventMention does after its model call, for output
+// produced elsewhere (services/turnLearning.ts).
+export async function storePlannedEventMention(user_id: string, parsed: CapturedEventMentionData | null): Promise<void> {
+  try {
     if (!parsed?.event_name) return;
 
     const embeddingSource = [parsed.event_name, parsed.event_location].filter(Boolean).join(", ");

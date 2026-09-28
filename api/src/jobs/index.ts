@@ -169,6 +169,25 @@ export function registerJobs(io: Server) {
   // others (2026-09-21), so the offers of every tier could not go out together.
   cron.schedule("15,45 * * * *", runDispatch);
 
+  // Details that change (sold out, spots left, a moved time) are re-read
+  // before Co relies on them: pages of things sent in the last 3 days whose
+  // read is over 4 hours old (services/linkReader.ts). Luma reads are free;
+  // others about $0.007 each.
+  cron.schedule("40 * * * *", async () => {
+    try {
+      const { rows } = await pool.query(
+        `SELECT DISTINCT lr.url FROM link_reads lr
+         JOIN revealed_offers ro ON ro.url = lr.url AND ro.sent_at > NOW() - INTERVAL '3 days'
+         WHERE lr.owner_key = '' AND lr.status = 'ok' AND lr.fetched_at < NOW() - INTERVAL '4 hours'
+         LIMIT 20`,
+      );
+      const { readLink } = await import("../services/linkReader.js");
+      for (const r of rows) await readLink(r.url, { force: true }).catch(() => {});
+    } catch (err: any) {
+      console.error("link re-read cron error (non-fatal):", err?.message ?? err);
+    }
+  });
+
   // Every 10 min — queue the post-call text for recent calls (sent within
   // local hours by the harness, dropped if it would land >24h after the call).
   cron.schedule("*/10 * * * *", () => {

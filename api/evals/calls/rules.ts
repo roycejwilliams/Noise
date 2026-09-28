@@ -156,5 +156,41 @@ check(
   personAskedForThis(`user: can you look for a technical co-founder for me\nassistant: absolutely, I'll look for a technical co-founder`, "look for a technical co-founder"),
 );
 
+// ---------------------------------------------------------------- calls on the shared picture (2026-09-28)
+{
+  const { readFileSync } = await import("fs");
+  const src = (p: string) => readFileSync(new URL(`../../src/${p}`, import.meta.url), "utf8");
+  const CL = await import("../../src/services/callLearning.js");
+  const call = `assistant: Both are the same night, so it's one or the other.
+user: This has nothing to do with Oct 10th, I was just asking about Tuesday.
+assistant: Got it.
+user: I'm heading to the Grok night either way.`;
+  check("a lesson backed by their own words on the call is kept", CL.callLessonsFrom({ lessons: [{ lesson: "When he asks about logistics, answer the logistics.", quote: "this has nothing to do with Oct 10th" }] }, call).length === 1);
+  check("a lesson quoting Co, or quoting nothing, is dropped", CL.callLessonsFrom({ lessons: [{ lesson: "x", quote: "same night, so it's one or the other" }, { lesson: "y", quote: "" }] }, call).length === 0);
+  check("their lines are the user lines only", CL.theirLines(call).split("\n").length === 2 && !/one or the other/.test(CL.theirLines(call)));
+  const prompt = CL.callLearningPrompt({ transcript: call, today: "2026-09-28", onFile: null, openAsks: [] });
+  check("one call read covers profile, resolutions, corrections, cadence, planned event and lessons", ["\"profile\"", "\"resolved\"", "\"corrections\"", "\"cadence\"", "\"planned_event\"", "\"lessons\""].every((k) => prompt.includes(k)) && /The whole call is new: every "user" line counts/.test(prompt));
+  check("the call read writes about them as \"they\"", /never "he" or "she"/.test(prompt) && (() => { const n = CL.neutralLearning({ profile: { long_term_direction: "proving to himself he belongs", goals: ["help his cofounder"] } }).profile as any; return !/\b(he|him|himself|his)\b/i.test(`${n.long_term_direction} ${n.goals.join(" ")}`); })());
+  const cl = src("services/callLearning.ts");
+  check("a failed read still fails the call (retried), an unreadable one falls back to the old calls", !/generateText\(\{[\s\S]{0,40}\}\)\.catch/.test(cl) && /extractPsychographicProfile\(input\.transcript, input\.emotionalHighlights\)/.test(cl) && /await storeProfile\(input\.userId, learned\.profile as any, input\.transcript, \{\s*emotions: input\.emotions,/.test(cl));
+  check("lessons from calls use the same store and dedupe as texts, one member only", /memory_type = 'co_lesson'/.test(cl) && /WHERE user_id = \$1 AND memory_type = 'co_lesson'/.test(cl));
+  const co = src("routes/co.ts");
+  check("after a call: the merged read runs before the call is marked complete", co.indexOf("await learnFromCall({ userId: user_id") > 0 && co.indexOf("await learnFromCall({ userId: user_id") < co.indexOf("if (chat_id) await finishCallProcessing(chat_id, \"completed\");\n\n        // Profile is fully extracted"));
+  check("after a call: ask capture stays whole-call and separate", /captureIntent\(user_id, cleanTranscript, \{ scope: "whole_transcript" \}\)\s*\.then\(\(\) => surfaceNewAsksNow\(user_id\)\)/.test(co));
+  check("after a call: summary, snapshot, crisis backstop and follow-up text still run", /summarizeCallForTextContext\(user_id, cleanTranscript, emotionalHighlights\)\s*\.then\(\(\) => refreshPersonSnapshot\(user_id, \{ force: true \}\)\)/.test(co) && /if \(soundsLikeCrisis\(theirLines\)\)/.test(co) && /await scheduleFollowUpText\(user_id, cleanTranscript\);/.test(co));
+  check("the old separate calls stay one switch away", /process\.env\.CALL_LEARNING === "off"/.test(co));
+  check("a call opens with the shared picture", /buildCallContextSummary\(userId\)/.test(src("services/mediaStreamBridge.ts")));
+  const cc = src("services/callContext.ts");
+  check("the call picture: lessons and what Co sent (with what's on file) come first", cc.indexOf("How to be with them, from times they corrected you") < cc.indexOf("What you sent them lately") && /sentDetailLines\(\{ sent \}, 7\)/.test(cc) && /assembleContext\(userId, ""\)/.test(cc));
+  check("a call never waits on slow page reads", /CALL_CONTEXT_WAIT_MS = 3000/.test(cc));
+  const { callAuditPrompt } = await import("../../src/harness/callGrounding.js");
+  const ap = callAuditPrompt("assistant: hi", "Co sent them X.", "Who they are: a builder.");
+  check("the audit: facts and impressions are separate, and an impression is never proof", /What Co knew going into the call \(facts\):\nCo sent them X\./.test(ap) && /never as proof/.test(ap) && /Who they are: a builder\./.test(ap));
+  check("the audit still reads a plain summary the old way", !/impressions going in/.test(callAuditPrompt("assistant: hi", "known")));
+  check("the audit gets facts and impressions from the call picture", /auditCall\(user_id, cleanTranscript, knownBeforeCall\)/.test(co) && /buildCallKnowledge\(user_id\)/.test(co));
+  const prompt2 = readFileSync(new URL("../../prompts/co-system-prompt.md", import.meta.url), "utf8");
+  check("the call prompt: facts vs. impressions, in spoken terms", /WHAT YOU KNOW VS\. WHAT YOU THINK/.test(prompt2) && /If a detail isn't listed, you don't have it/.test(prompt2) && /Two events only clash if you have both start times and they overlap/.test(prompt2) && !/[—–]/.test(prompt2.slice(prompt2.indexOf("WHAT YOU KNOW VS."), prompt2.indexOf("WHAT CO NEVER DOES"))));
+}
+
 console.log(`call rules: ${total - failed}/${total} passed`);
 if (failed) process.exitCode = 1;

@@ -74,7 +74,8 @@ const pe = src("services/profileExtraction.ts");
 check("the profile write checks for corrections alongside resolutions", /assessCorrections\(onFile, opts\.newWords \?\? transcript, transcript, user_id\)/.test(pe));
 check("corrections are stored with their date", /INSERT INTO profile_corrections/.test(pe) && /corrected_at TIMESTAMPTZ NOT NULL DEFAULT NOW\(\)/.test(src("db/migrations.ts")));
 check("a corrected fact can't be put back by a later extraction", /wasCorrectedAway/.test(pe) && /recentlyCorrected\(user_id\)/.test(pe));
-check("texts pass only what they just said as new", /storeProfile\(user\.id, extracted, textTranscript, \{ newWords: resolvedContent \}\)/.test(src("routes/sendblue.ts")));
+// Through the turn's one learning read now (services/turnLearning.ts, 2026-09-28).
+check("texts pass only what they just said as new", /message: resolvedContent,/.test(src("routes/sendblue.ts")) && /storeProfile\(input\.userId, learned\.profile as any, transcript, \{\s*newWords: input\.message,/.test(src("services/turnLearning.ts")) && /mightBeCorrection\(input\.message\)/.test(src("services/turnLearning.ts")));
 check("Co sees corrections first, with the rule to never state the old one", /Things they've corrected .*never state the old one as true/.test(src("services/callContext.ts")));
 check("a correction is a Sonnet judgment, logged", /model: anthropic\(PROFILE_JUDGMENT_MODEL\),\n\s+prompt: buildCorrectionPrompt/.test(pe) && /decision: "profile\.correct"/.test(pe));
 

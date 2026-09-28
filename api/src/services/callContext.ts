@@ -150,6 +150,76 @@ export async function buildContextSummary(userId: string): Promise<string> {
   }
 }
 
+// What a call starts with (Royce, 2026-09-28, "On calls: what should carry
+// over"): the text side's one picture (services/turnContext.ts
+// assembleContext), so on a call Co also knows what it sent them with the
+// times and places on file, their open asks, what they're in the middle of,
+// and the lessons from times they corrected Co by text. Without it the Grok
+// Bot "no start time" answer could happen again by voice.
+//
+// Returns the spoken-context summary plus the same knowledge split for the
+// after-call audit: facts (what Co sent and what's on file, Co's own record,
+// their asks in their words) and impressions (summaries and read-outs Co's
+// models wrote), which never count as proof of a specific fact.
+export type CallKnowledge = { summary: string; facts: string; impressions: string };
+
+const CALL_CONTEXT_MAX = 4500;
+// A call can't wait on slow page reads: whatever details are on file by then are used.
+const CALL_CONTEXT_WAIT_MS = 3000;
+
+export async function buildCallKnowledge(userId: string): Promise<CallKnowledge> {
+  const { assembleContext, loadSentItems, sentDetailLines } = await import("./turnContext.js");
+  const [base, turn] = await Promise.all([
+    buildContextSummary(userId),
+    Promise.race([
+      assembleContext(userId, "").catch(() => null),
+      new Promise<null>((resolve) => setTimeout(() => resolve(null), CALL_CONTEXT_WAIT_MS)),
+    ]),
+  ]);
+  // Slow page reads: the sent list with whatever details were saved with it.
+  const sent = turn?.sent ?? (await loadSentItems(userId).catch(() => []));
+  const sentLines = sentDetailLines({ sent }, 7);
+  const lessons = turn?.lessons ?? [];
+  const threads = turn?.threads ?? [];
+  const asks = turn?.asks ?? [];
+  const ledger = turn?.ledger.lines ?? [];
+
+  const head = [
+    lessons.length
+      ? `How to be with them, from times they corrected you (keep to these):\n${lessons.map((l) => `- ${l}`).join("\n")}`
+      : null,
+    sentLines.length
+      ? `What you sent them lately and what's on file for each (these are the facts; if a time or place isn't listed here, you don't have it, so say so plainly):\n${sentLines.map((l) => `- ${l}`).join("\n")}`
+      : null,
+    threads.length ? `What they're in the middle of:\n${threads.slice(0, 5).map((t) => `- ${t.text}`).join("\n")}` : null,
+  ].filter((x): x is string => !!x);
+  // The call-only sections lead, so the length bound drops the oldest
+  // background from the text summary instead of these.
+  let summary = head.join("\n\n");
+  for (const part of base.split("\n\n")) {
+    const next = summary ? `${summary}\n\n${part}` : part;
+    if (next.length > CALL_CONTEXT_MAX) break;
+    summary = next;
+  }
+
+  const facts = [
+    ...sentLines,
+    ...ledger,
+    ...asks.slice(0, 8).map((a) => `They've asked Co for (their words): "${a.text}"`),
+  ].join("\n");
+  return { summary, facts, impressions: base };
+}
+
+// The summary a call opens with.
+export async function buildCallContextSummary(userId: string): Promise<string> {
+  try {
+    return (await buildCallKnowledge(userId)).summary;
+  } catch (err: any) {
+    console.error("callContext: buildCallContextSummary failed (non-fatal, using the plain summary):", err?.message ?? err);
+    return buildContextSummary(userId);
+  }
+}
+
 // The other direction of the same bridge — closes a real gap (Royce,
 // 2026-09-07: "anything overlapping that may cause confusion... between
 // voice and text?"): routes/sendblue.ts's recentConversation, read by every

@@ -301,12 +301,49 @@ export async function explainFit(match: EnrichedMatch, person: PersonForFit): Pr
 
 // Attach real details (and, with a person, a personal reason) to a match.
 // Safe to call on an already-enriched match; fetches only what's missing.
+// Links in a post (X shortens them to t.co), resolved to where they go.
+export function linksIn(text: string): string[] {
+  return Array.from(new Set(text.match(/https?:\/\/[^\s)"'<>]+/g) ?? [])).slice(0, 4);
+}
+
+export function isLumaLink(url: string): boolean {
+  return /^https?:\/\/(www\.)?(lu\.ma|luma\.com)\//i.test(url);
+}
+
+export async function resolveLink(url: string): Promise<string> {
+  if (!/^https?:\/\/t\.co\//i.test(url)) return url;
+  try {
+    const res = await fetch(url, { method: "GET", redirect: "follow", signal: AbortSignal.timeout(PAGE_TIMEOUT_MS), headers: { "User-Agent": "Mozilla/5.0" } });
+    return res.url || url;
+  } catch {
+    return url;
+  }
+}
+
+// An event posted on X with its Luma page linked: the time and place come
+// from Luma (Royce, 2026-09-28: "if a X post contains a Luma url, search and
+// gather all the details from luma... we must gather time and date").
+export async function lumaDetailsFromPost(postText: string): Promise<{ details: EventDetails; url: string } | null> {
+  for (const link of linksIn(postText)) {
+    const url = await resolveLink(link);
+    if (!isLumaLink(url)) continue;
+    const details = await fetchLumaEventDetails(url);
+    if (details) return { details, url };
+  }
+  return null;
+}
+
 export async function enrichMatch(match: TierMatch | EnrichedMatch, person?: PersonForFit): Promise<EnrichedMatch> {
   const m: EnrichedMatch = { ...match };
   if (m.kind !== "opportunity" && !m.details && "url" in m && m.url) {
     m.details = (await fetchLumaEventDetails(m.url)) ?? undefined;
   }
   if (m.kind === "opportunity" && !m.opportunity && m.evidence) m.opportunity = { postText: m.evidence };
+  // Any event Co surfaces gets its time: an X post with a Luma link reads it from Luma.
+  if (!m.details && m.opportunity?.postText) {
+    const found = await lumaDetailsFromPost(m.opportunity.postText).catch(() => null);
+    if (found) m.details = found.details;
+  }
   if (person && !m.whyItFits) {
     const fit = await explainFit(m, person);
     if (fit) {

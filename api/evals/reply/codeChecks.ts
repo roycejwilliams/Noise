@@ -126,6 +126,14 @@ const PARA = paragraphize(BLOCK);
 const replyPrompt = readFileSync(new URL("../../src/agent/conversationReply.ts", import.meta.url), "utf8");
 const groundingPrompt = readFileSync(new URL("../../src/harness/replyGrounding.ts", import.meta.url), "utf8");
 const sendblueRoute = readFileSync(new URL("../../src/routes/sendblue.ts", import.meta.url), "utf8");
+let total2 = 0;
+function check2(ok: boolean, label: string) {
+  total2++;
+  if (!ok) {
+    failed++;
+    console.log(`FAIL ${label}`);
+  }
+}
 const formatCases: [boolean, string][] = [
   // Readable paragraphs, walkthroughs, and pressure-tested advice (2026-09-22).
   [PARA.split("\n\n").length === 4 && PARA.split("\n\n")[1].startsWith("Arrival:") && PARA.split("\n\n")[3].startsWith("Close:"), "a long block splits into paragraphs, each labeled part on its own"],
@@ -135,9 +143,9 @@ const formatCases: [boolean, string][] = [
   [/challenge your own answer before you send it/.test(replyPrompt), "advice is pressure-tested against their specifics"],
   [/meet the feeling first, then gauge before you plan/.test(replyPrompt) && /never make them ask twice/.test(replyPrompt), "a feeling is met first, then gauged, then walked through"],
   [/each idea its own short paragraph with a blank line between them/.test(replyPrompt), "reply prompt asks for paragraphs"],
-  [/don't list general know-how and advice/.test(groundingPrompt), "the fact check doesn't strip ordinary advice as a prediction"],
+  [/Never claims \(don't list these\)/.test(groundingPrompt) && /Advice and possibilities: general know-how about how things usually go/.test(groundingPrompt), "the fact check doesn't strip ordinary advice as a prediction"],
   // A photo they send is written down once, for the record and the fact check (2026-09-22).
-  [/a conclusion reasoned from the sources is advice, not a prediction/.test(groundingPrompt), "reasoning from what's on file isn't cut as a prediction"],
+  [/a conclusion reasoned from the sources \("if Oct 10 is under 30 days out/.test(groundingPrompt), "reasoning from what's on file isn't cut as a prediction"],
   [/addFact\(rf, "known", `Today is \$\{DateTime\.now\(\)/.test(groundingPrompt), "the reply's facts include today's date"],
   [/photoDescription = await describeImage\(buffer, mediaType\)/.test(sendblueRoute), "an incoming photo is described once"],
   [/\[They also sent a photo\$\{photoDescription \? `\. It shows: \$\{photoDescription\}`/.test(sendblueRoute), "the conversation record keeps the photo, not just their words"],
@@ -422,7 +430,7 @@ onboardingCaseCases.push(
   [needsClaimCheck("Already ran that search, those two were the results."), "a spelled-out count of Co's own results gets checked (2026-09-25: went out unchecked when there were 4)"],
   [countOf(4, "result") === "4 results" && countOf(1, "thing") === "1 thing", "search notes lead with the count in words"],
   [/\$\{countOf\(preparedAll\.length, "result"\)\} came up; none fit, so nothing was sent/.test(readFileSync(new URL("../../src/routes/sendblue.ts", import.meta.url), "utf8")), "the no-fit search note says how many came up and that nothing was sent"],
-  [/A number must match the source exactly/.test(readFileSync(new URL("../../src/harness/replyGrounding.ts", import.meta.url), "utf8")), "the claim check compares numbers, not just topics"],
+  [/A number must match its source exactly/.test(readFileSync(new URL("../../src/harness/replyGrounding.ts", import.meta.url), "utf8")), "the claim check compares numbers, not just topics"],
   // 2026-09-26 quality fixes
   [/debounceWaitMs = Math\.max\(0, DEBOUNCE_MS - \(Date\.now\(\) - new Date\(myInboundAt\)\.getTime\(\)\)\)/.test(readFileSync(new URL("../../src/routes/sendblue.ts", import.meta.url), "utf8")), "latency: the debounce runs from when their text arrived, not after the router"],
   [(() => { const r = readFileSync(new URL("../../src/routes/sendblue.ts", import.meta.url), "utf8"); return r.indexOf("const seekingAndEmotion = hasText") < r.indexOf("routeMessage(routeInput)") && r.indexOf("await seekingAndEmotion") > r.indexOf("routeMessage(routeInput)"); })(), "latency: mood and seeking reads run alongside the router"],
@@ -436,7 +444,8 @@ onboardingCaseCases.push(
   [/"outsidePlace": true or false/.test(readFileSync(new URL("../../src/services/eventDetails.ts", import.meta.url), "utf8")) && /place: "scope" in recommendation \? \(recommendation\.scope\?\.city \?\? null\) : null,/.test(readFileSync(new URL("../../src/routes/sendblue.ts", import.meta.url), "utf8")), "search: a near-miss somewhere other than where they asked is named, never sent (2026-09-27: Bengaluru for an SF ask)"],
   [/including a yes or no to whether it did \("Still no", "Yep, I did"\)/.test(readFileSync(new URL("../../src/harness/replyGrounding.ts", import.meta.url), "utf8")), "grounding: a yes or no about what Co did is a claim"],
   [/What they're asking about is in Co's record as sent: \$\{ledger\.named\.join\(" "\)\} Answer from that record\./.test(readFileSync(new URL("../../src/harness/replyGrounding.ts", import.meta.url), "utf8")), "record: when they ask about something Co sent, the record answers, over earlier messages"],
-  [/const retry = await redraft\(draft, \[\.\.\.effectiveFailed1, \.\.\.secondFailed\], rf, src, rewritten\);/.test(readFileSync(new URL("../../src/harness/replyGrounding.ts", import.meta.url), "utf8")), "grounding: a second, answer-first rewrite before stripping"],
+  // Remove-only (2026-09-28): the unsupported sentences are cut first; one rewrite only when too little is left, kept only if it adds nothing.
+  [/let cut = stripUnsupported\(draft, effectiveFailed1\);/.test(readFileSync(new URL("../../src/harness/replyGrounding.ts", import.meta.url), "utf8")) && /if \(enoughLeft\(cut\) && !inviteCut\)/.test(readFileSync(new URL("../../src/harness/replyGrounding.ts", import.meta.url), "utf8")) && /const guard = cleaned \? rewriteAddsNothing\(draft, cleaned, allowed\)/.test(readFileSync(new URL("../../src/harness/replyGrounding.ts", import.meta.url), "utf8")), "grounding: cut first; a rewrite only when too little is left, and only if it adds nothing"],
   [(readFileSync(new URL("../../src/harness/replyGrounding.ts", import.meta.url), "utf8").match(/abortSignal: AbortSignal\.timeout\(GROUNDING_CALL_TIMEOUT_MS\)/g) ?? []).length === 2, "grounding: the check and the rewrite can't stall a reply"],
   [onlyCuts("Still just Mahjong After Dark from what I sent earlier, nothing new has turned up since.", "Still just Mahjong After Dark from what I sent earlier."), "grounding: a rewrite that only drops a clause skips the second read"],
   [!onlyCuts("I did not send it yet.", "I did send it."), "grounding: dropping a word from the middle of a sentence still gets re-checked"],
@@ -447,8 +456,8 @@ onboardingCaseCases.push(
   [sentencesToRecheck("I sent it Tuesday. It's casual.", "I sent it Tuesday. It's casual.", [{ name: "claim_past_action", pass: false, reason: 'past_action: "I sent it Tuesday"' }]).length === 1, "grounding: a kept sentence with a failed claim is re-read"],
   [isTimeout({ name: "TimeoutError" }) && isTimeout({ lastError: { cause: { name: "AbortError" } } }) && !isTimeout(new Error("rate limited")), "stalls: a timeout is recognized however it's wrapped"],
   [/if \(!isTimeout\(err\)\) throw err;/.test(readFileSync(new URL("../../src/agent/conversationReply.ts", import.meta.url), "utf8")) && /REPLY_CALL_TIMEOUT_MS = Number\(process\.env\.REPLY_CALL_TIMEOUT_MS \?\? 40_000\)/.test(readFileSync(new URL("../../src/agent/conversationReply.ts", import.meta.url), "utf8")), "stalls: each reply model call is capped at 40s and a timeout doesn't fail the turn"],
-  [/What Co did or didn't do before \(a past_action, including "I never sent that"\) is supported only by a FACT/.test(readFileSync(new URL("../../src/harness/replyGrounding.ts", import.meta.url), "utf8")), "grounding: what Co did needs a fact, not its own earlier words"],
-  [/This rewrite can't search or do anything, so never write "let me look"/.test(readFileSync(new URL("../../src/harness/replyGrounding.ts", import.meta.url), "utf8")), "grounding: a rewrite never promises a search it can't run"],
+  [/What Co did or didn't do \(past_action, including "I never sent that"\) needs a FACT/.test(readFileSync(new URL("../../src/harness/replyGrounding.ts", import.meta.url), "utf8")), "grounding: what Co did needs a fact, not its own earlier words"],
+  [/No promises, no "let me look" or "one sec"/.test(readFileSync(new URL("../../src/harness/replyGrounding.ts", import.meta.url), "utf8")), "grounding: a rewrite never promises a search it can't run"],
   [needsClaimCheck("That's on my radar now."), "'on my radar' gets checked"],
   [needsClaimCheck("I save everything you tell me."), "a present-tense claim about what Co does gets checked"],
   [!needsClaimCheck("That sounds hard. What's been the toughest part?"), "a plain conversational reply still skips the check"],
@@ -551,6 +560,29 @@ for (const [draft, expected, label] of ongoingCases) {
     console.log(`FAIL ${label}: "${draft}" -> ${failing.join(", ") || "(none)"}`);
   }
 }
-const total = cases.length + ongoingCases.length + closingCases.length + formatCases.length + windowCases.length + placeCases.length + onboardingCaseCases.length;
+// Remove-only fact check and hints (2026-09-28).
+{
+  const G = await import("../../src/harness/replyGrounding.js");
+  const facts = 'Details on file for "Grok Bot x Notion for Product Builders night (SF)", which Co sent them: starts Tuesday, September 29 at 5:00 PM (America/Los_Angeles).';
+  const removeOnly: [boolean, string][] = [
+    [!G.rewriteAddsNothing("Both on the same night though, so it's one or the other. Since you already called the daytonaio demo night your pick, I'd stick with that.", "Given you're leaning toward taking a break from building, I'd pick this one.", facts).ok, "a rewrite that flips the pick and names his burnout is rejected"],
+    [!G.rewriteAddsNothing("Still no, same as I said before.", "Yes, sent it Friday with the Luma link.", facts).ok, "a rewrite can't add a day or name that isn't in the draft or facts"],
+    [G.rewriteAddsNothing("Neither gave me a clock time.", "The Grok Bot night starts at 5:00 PM.", facts).ok, "a correction from the facts is kept"],
+    [G.rewriteAddsNothing("Agreed, noted that too.", "Honestly, that one didn't get passed to the team.", facts).ok, "saying plainly what's true is kept"],
+    [!G.rewriteAddsNothing("Good.", "Good, and honestly that's a lot of events for how stretched you've been this week.", facts).ok, "a rewrite can't add feelings, or run longer than the draft"],
+  ];
+  for (const [ok, label] of removeOnly) { total2++; if (!ok) { failed++; console.log(`FAIL grounding: ${label}`); } }
+  const rf = G.createReplyFacts();
+  G.addHint(rf, "Why it fits: this is their people");
+  check2(/YOUR READ, NOT A FACT/.test(G.renderReplyFacts(rf)), "grounding: hints are shown to Co as its read, not as facts");
+  const src2 = readFileSync(new URL("../../src/harness/replyGrounding.ts", import.meta.url), "utf8");
+  check2(/rf\.facts\.filter\(\(f\) => f\.kind !== "hint"\)\.map\(\(f\) => `\[\$\{f\.id\}\] \$\{f\.text\}`\)/.test(src2) && /that came from a model's read, which is a hint, not a source/.test(src2), "grounding: a hint is never listed or accepted as a source");
+  check2(/addHint\(rf, `Why "\$\{match\.name\}" may fit them/.test(src2), "grounding: a search's fit reason is a hint, not a fact");
+  check2(/const summaries = claimType && WORLD_CLAIMS\.has\(claimType\) \? \[\] :/.test(src2), "grounding: summaries never back a claim about an event, a count, a link or another person");
+  check2(G.crowdClaim("go find the llama_index people, that's your crowd") && G.crowdClaim("Room full of your people") && !G.crowdClaim("Could be a solid place to find the dependable builder people you're after") && !G.crowdClaim("demo nights tend to draw builders"), "grounding: 'your crowd' is caught; where it could lead isn't");
+  check2(G.clashClaim("Both on the same night though, so it's really one or the other.") && G.clashClaim("You can't do both") && !G.clashClaim("Both are Tuesday, one at 5 and one at 7, so you could make both"), "grounding: a clash is caught; making both isn't");
+  check2(/The member is never "another person"/.test(src2) && /Precedence, when a sentence fits both/.test(src2), "grounding: one rule list, with precedence; the member's own words are never another person");
+}
+const total = total2 + cases.length + ongoingCases.length + closingCases.length + formatCases.length + windowCases.length + placeCases.length + onboardingCaseCases.length;
 console.log(`codeChecks: ${total - failed}/${total} passed`);
 if (failed) process.exitCode = 1;

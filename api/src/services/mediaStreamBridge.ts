@@ -2,7 +2,7 @@ import { randomBytes } from "crypto";
 import { HumeClient } from "hume";
 import type WebSocket from "ws";
 import pool from "../db/db.js";
-import { buildContextSummary } from "./callContext.js";
+import { buildCallContextSummary } from "./callContext.js";
 import { decodeMulawBuffer, encodeMulawBuffer, parseWav, resampleLinear, toMono } from "./audioCodec.js";
 import { isRealUserUtterance } from "../harness/callGate.js";
 import { addLine, endLiveCall, noteChatId, startLiveCall } from "./liveCall.js";
@@ -206,7 +206,8 @@ function createHumeConnection(userId: string, callSid: string | null = null): Hu
       const [userResult, profileResult, contextSummary] = await Promise.all([
         pool.query(`SELECT first_name FROM users WHERE id = $1`, [userId]),
         pool.query(`SELECT hume_chat_group_id FROM co_profiles WHERE user_id = $1`, [userId]),
-        buildContextSummary(userId),
+        // The call-side picture: lessons and what Co sent, with times on file, first (callContext.ts).
+        buildCallContextSummary(userId),
       ]);
       if (handle.closed) return;
       // Shared with the coverage tool so it doesn't rebuild this mid-call.
