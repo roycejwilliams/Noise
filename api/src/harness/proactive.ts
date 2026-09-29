@@ -954,6 +954,9 @@ export async function sendExempt(opts: {
   messages: string[];
   timezone?: string | null;
   respectHours?: boolean;
+  // Thread the first message under this message of theirs (an inline reply);
+  // a refused one goes out plain (services/inlineReply.ts).
+  replyTo?: string | null;
 }): Promise<{ sent: boolean; reason?: string; delivered?: string[] }> {
   // Monitoring visibility (code review, 2026-09-17): send failures and
   // hours/opt-out blocks at send time had nothing writing a decision at
@@ -991,7 +994,12 @@ export async function sendExempt(opts: {
       await client.query("ROLLBACK");
       return { sent: false, reason: "already sent" }; // idempotent no-op, not worth a decision row
     }
-    await sendblue.messages.send({ number: opts.phoneNumber, content: opts.messages[0], from_number: process.env.SENDBLUE_PHONE_NUMBER! });
+    const first = { number: opts.phoneNumber, content: opts.messages[0], from_number: process.env.SENDBLUE_PHONE_NUMBER! };
+    if (opts.replyTo) {
+      await sendblue.messages.send({ ...first, reply_to: { message_handle: opts.replyTo } } as typeof first).catch(() => sendblue.messages.send(first));
+    } else {
+      await sendblue.messages.send(first);
+    }
     delivered.push(opts.messages[0]);
     await client.query("COMMIT");
     await recordProactiveText(opts.userId, opts.type, opts.messages[0], ins.rows[0].id);

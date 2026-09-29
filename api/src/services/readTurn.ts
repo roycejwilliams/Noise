@@ -24,6 +24,16 @@ import type { CoverageAssessment } from "./profileExtraction.js";
 import type { EmotionTarget, Intensity, TextEmotion, Valence } from "../harness/emotion.js";
 import type { TurnContext } from "./turnContext.js";
 
+// What Co's reaction says it is doing. Meanings, not scripts: the read picks
+// the one that fits, code sends only these.
+export const ACK_EMOJIS = ["👀", "✍️", "🫡", "🚀", "👍"] as const;
+
+export function parseAck(v: unknown): string | null {
+  const bare = (s: string) => s.replace(/\uFE0F/g, "").trim();
+  const s = typeof v === "string" ? bare(v) : "";
+  return ACK_EMOJIS.find((e) => bare(e) === s) ?? null;
+}
+
 export function readTurnEnabled(env: NodeJS.ProcessEnv = process.env): boolean {
   return env.READ_TURN !== "off";
 }
@@ -39,6 +49,9 @@ export type TurnRead = {
   feedback: string[];
   // The thing Co sent that this turn is about, by its name in the sent list.
   aboutSent: string | null;
+  // The emoji Co reacts to their message with right away, to show what it's
+  // about to do (Royce, 2026-09-29, from Instinct); null for most messages.
+  ack: string | null;
   coverage: CoverageAssessment | null;
 };
 
@@ -73,6 +86,7 @@ ${priorContext ? `What was already known about them before this conversation: ${
 "emotion": does the latest message carry a real feeling Co should respond to (stressed, anxious, discouraged, lonely, frustrated, excited, proud, relieved)? Use the conversation: "fine" after bad news isn't fine. Ignore plain logistics, greetings and tone you aren't confident about; most messages have none. If none, null; else {"emotion": "one or two words", "intensity": "low" | "medium" | "high", "valence": "negative" | "positive" | "mixed", "about": "what it's about, only from what they said", "target": "co" when it's about Co itself (what Co found or didn't, its suggestions, replies, speed or mistakes, like "you keep finding nothing" or "that's not what I asked"), else "life"}.
 "seeking": "solving" only if you're genuinely confident they want a real answer or help deciding right now, not just to be heard (weighing options out loud, stuck on a decision, clearly past venting); ordinary sharing, updates and venting are "none", far more often than not.
 "feedback": each distinct piece of feedback they're giving about how Co works or should work, or asking Co to pass to the team, as one clear sentence the team could act on; [] if none.
+"ack": whether Co should react to their message with an emoji right away to show what it is about to do. Only when the reply will take a moment, or they just gave Co something to do, or they confirmed something. "👀" when Co is about to look something up or read something they sent; "✍️" when Co is about to write something for them (a draft, a plan, a pitch, a walkthrough); "🫡" when they've asked Co to take something on; "🚀" when they've told Co to go ahead and send or do something it prepared; "👍" for a plain confirmation of something Co did or proposed. null for everything else, including ordinary conversation, feelings, thanks and sign-offs: most messages.
 "about_sent": if this message is about one specific thing in "Things Co sent them recently" (asking about it, reacting to it), its name exactly as listed; otherwise null.
 "covered_now": topic keys (from the list below) they addressed in this conversation itself, not just in what was known before; [] if none.
 "missing": topic keys not yet covered, counting what was already known.
@@ -118,6 +132,7 @@ export function parseTurnRead(obj: any, sentNames: string[]): Omit<TurnRead, "la
     },
     feedback: (Array.isArray(obj?.feedback) ? obj.feedback : []).filter((f: any) => typeof f === "string" && f.trim()).slice(0, 4).map((f: string) => f.trim().slice(0, 300)),
     aboutSent,
+    ack: mode === "small_talk" ? null : parseAck(obj?.ack),
     coverage: Array.isArray(obj?.missing) ? { missing_topics: topicList(obj.missing), fresh_topics: topicList(obj?.covered_now), ready_to_summarize: false } : null,
   };
 }

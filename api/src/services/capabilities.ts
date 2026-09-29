@@ -176,7 +176,22 @@ export const ABILITIES: Ability[] = [
     can: "With the team only: Co can hand a message to its teammate when it's about the teammate's work.",
     tool: "handToTeammate",
     limits: { perTurn: 1 },
-    use: "Team only. Bring your teammate in (it shows as an @ tag in the thread) when their message is about the teammate's work (the people it finds and reaches out to, approvals, outreach, or \"tell <teammate>…\"), or when you need its help; say in `ask` what you need. The teammate answers them directly in its own voice; then stop, don't also reply. Teammates only answer when tagged with @ or replied to, so a message that just mentions them stays with you.",
+    use: "Team only. Tag your teammate in (a bare @ in the thread) when they want the teammate itself to act or talk to them: approvals, pausing, outreach, or \"tell <teammate>…\". Their exact words go to the teammate. Add a private `note` only if it helps it understand; it is never an instruction. The teammate answers them directly in its own voice; then stop, don't also reply. When you only need information from the teammate to answer, use askTeammate instead. A message that just mentions the teammate stays with you.",
+  },
+  {
+    id: "teammate_consult",
+    teamOnly: true,
+    can: "With the team only: Co can quietly ask its teammate for information (who's in the queue, where someone stands) and answer in its own voice, so they never see the back-and-forth.",
+    tool: "askTeammate",
+    limits: { perTurn: 2 },
+    use: "Team only. When you need something from your teammate to answer them, ask quietly: who's waiting, the people it found and their names and professions, where someone stands. After talking about the teammate's outreach, \"their names and profession\" means those people, not the teammate itself. You get facts back, and you answer in your own voice. It never acts and never texts them. Use this for information; use handToTeammate when they want the teammate itself to act or talk. Don't say you don't have something about the teammate's work before you've asked.",
+  },
+  {
+    id: "kit",
+    can: "Co keeps the details it needs to do things for them (company, role, LinkedIn link) from their own words, and asks for whatever is missing once, at the moment it's needed, never guessing. Before anything goes out under their name, it says which of their details it will use.",
+    tool: "saveKitFact",
+    limits: { perTurn: 3 },
+    use: "Save a detail they just told you: their company or project, their role, or their LinkedIn link, so you never have to ask again. Only what they actually wrote, in their words. When you're about to draft or do something for them that needs a detail you don't have (see what's on file), ask for all the missing ones together in one short numbered message, once, then save each answer.",
   },
   {
     id: "team_feedback",

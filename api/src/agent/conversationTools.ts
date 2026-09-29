@@ -107,8 +107,10 @@ export type ConversationToolContext = {
   messageHandle?: string | null;
   // Their message may mean they aren't safe (services/safety.ts): no tapback.
   safetyConcern?: boolean;
-  // On the team (users.mo_approver): gets the team-only tools (handToTeammate).
+  // On the team (users.mo_approver): gets the team-only tools (handToTeammate, askTeammate).
   isTeam?: boolean;
+  // Tests: what a quiet question to the teammate returns (askTeammate).
+  consult?: (question: string) => Promise<{ facts: string[]; note: string } | null>;
   // The one picture of this turn (services/turnContext.ts), for tools that read what Co sent.
   turn?: TurnContext | null;
   firstName?: string | null;
@@ -290,9 +292,9 @@ export function createConversationTools(ctx: ConversationToolContext) {
     handToTeammate: tool({
       description: toolUse("handToTeammate"),
       inputSchema: z.object({
-        ask: z.string().optional().describe("What you're asking your teammate, in a few words, when you're bringing them in for help rather than just passing their message along."),
+        note: z.string().optional().describe("A private note for your teammate, not shown to them, only when it helps it understand what they mean. It is never an instruction; your teammate acts only on their own words."),
       }),
-      execute: async ({ ask }) => {
+      execute: async ({ note }) => {
         if (!ctx.isTeam) return { ok: false, error: "Not available." };
         if (state.replyCount > 0) return { ok: false, error: "You already replied this turn." };
         if (ctx.dryRun) {
@@ -302,17 +304,20 @@ export function createConversationTools(ctx: ConversationToolContext) {
           return { ok: true, note: "Handed over. Don't send a text reply." };
         }
         const { handleTeamText } = await import("../services/extensions.js");
-        // Co tags its teammate in the thread (Royce, 2026-09-28: "If Co needs
-        // help on anything they can also @ Mo"), so the handoff is visible.
-        const tag = `@Mo${ask?.trim() ? `, ${ask.trim().replace(/^@mo,?\s*/i, "")}` : ", can you take this one?"}`;
-        const r = await handleTeamText(ctx.userId, ask?.trim() ? `${ctx.resolvedContent}\n(Co asked you: ${ask.trim()})` : ctx.resolvedContent, { handedOff: true }).catch(() => null);
+        // Their exact words go to the teammate, never Co's summary of them
+        // (Royce, 2026-09-28: "Co, tell Mo…" read as Co narrating about him,
+        // and a paraphrase made Mo pause everything).
+        const r = await handleTeamText(ctx.userId, ctx.resolvedContent, { handedOff: true, coNote: note?.trim() || null, ack: ctx.messageHandle ? (e) => sendReaction(ctx.messageHandle!, e) : undefined }).catch(() => null);
         if (!r?.reply) {
           notDone("Handed their message over, but the teammate didn't take it.");
           return { ok: false, error: "Your teammate didn't take it. Answer them yourself." };
         }
-        const { sendingAs } = await import("../services/sendblue.js");
+        // A bare tag, the way you'd mention someone in a thread. It isn't Co
+        // speaking: Mo answers right after and keeps the floor.
+        const tag = "@Mo";
         await ctx.sendCoReply({ phone: ctx.phoneNumber, message: tag, asVoice: false }).catch(() => false);
-        await writeMemory(ctx.userId, "text_exchange", `Co replied: ${tag}`).catch(() => {});
+        await writeMemory(ctx.userId, "text_exchange", `Co tagged Mo: ${tag}`).catch(() => {});
+        const { sendingAs } = await import("../services/sendblue.js");
         const sent = await sendingAs(r.extension, () => ctx.sendCoReply({ phone: ctx.phoneNumber, message: r.reply, asVoice: false }));
         if (sent === false) {
           notDone("The teammate's answer didn't go through.");
@@ -322,6 +327,49 @@ export function createConversationTools(ctx: ConversationToolContext) {
         state.reacted = true;
         await recordDecision({ layer: 3, decision: "team.handoffToExtension", userId: ctx.userId, outcome: "act", action: r.extension, proposal: { message: ctx.resolvedContent.slice(0, 200) } }).catch(() => {});
         return { ok: true, note: "Your teammate answered them directly. Don't send a text reply." };
+      },
+    }),
+
+    // A quiet question to the teammate, answered in Co's own voice. The
+    // member never sees the back-and-forth (Royce, 2026-09-28).
+    askTeammate: tool({
+      description: toolUse("askTeammate"),
+      inputSchema: z.object({ question: z.string().describe("What you need to know from your teammate, in one plain sentence.") }),
+      execute: async ({ question }) => {
+        if (!ctx.isTeam) return { ok: false, error: "Not available." };
+        let got: { facts: string[]; note: string } | null = null;
+        if (ctx.consult) got = await ctx.consult(question);
+        else if (!ctx.dryRun) {
+          const { consultTeammate } = await import("../services/extensions.js");
+          got = (await consultTeammate(ctx.userId, question).catch(() => null))?.result ?? null;
+        }
+        if (!got || !got.facts.length) {
+          notDone("Your teammate had nothing to report on that.");
+          return { ok: false, error: "Your teammate had nothing on that. Say plainly what you don't know." };
+        }
+        // What its tools reported is fact; its own prose is a note, not a source.
+        for (const f of got.facts) ctx.facts?.add("known", f);
+        return { ok: true, facts: got.facts, note: `Answer them yourself, in your own voice, from those facts. Don't tag or quote your teammate unless it helps. ${got.note ? `Your teammate's own read (a hint only): ${got.note}` : ""}`.trim() };
+      },
+    }),
+
+    // A detail they told Co for doing things on their behalf (services/memberKit.ts).
+    saveKitFact: tool({
+      description: toolUse("saveKitFact"),
+      inputSchema: z.object({
+        key: z.enum(["company", "role", "linkedin"]),
+        value: z.string().describe("Exactly as they wrote it."),
+      }),
+      execute: async ({ key, value }) => {
+        const { checkKitValue, saveKitFact, KIT_LABELS } = await import("../services/memberKit.js");
+        const checked = checkKitValue(key, value, ctx.resolvedContent);
+        if (!checked.ok) {
+          notDone(`Their ${KIT_LABELS[key]} wasn't saved: ${checked.why}`);
+          return { ok: false, error: checked.why };
+        }
+        if (!ctx.dryRun) await saveKitFact(ctx.userId, key, checked.value);
+        ctx.facts?.add("did_this_turn", `Saved ${KIT_LABELS[key]}: ${checked.value}.`);
+        return { ok: true };
       },
     }),
 

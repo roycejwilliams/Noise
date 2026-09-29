@@ -8,11 +8,13 @@
 //
 // Every read here is scoped to one member (user_id = $1): nothing about
 // anyone else can enter a member's turn through it.
+import { loadMilestones, storyLines } from "./milestones.js";
 import pool from "../db/db.js";
 import { capabilitySheet } from "./capabilities.js";
 import { ledgerFacts } from "./coFacts.js";
 import { renderEventDetails, type EventDetails } from "./eventDetails.js";
 import { describeRead, readLinksLater, savedRead, type LinkRead } from "./linkReader.js";
+import { loadKit, type Kit } from "./memberKit.js";
 import type { RepliedTo } from "./inlineReply.js";
 import { getEmotionalContext, type EmotionalContext } from "../harness/emotion.js";
 import { getPersonSnapshot, type PersonSnapshot } from "../harness/personSnapshot.js";
@@ -52,6 +54,10 @@ export type TurnContext = {
   capabilities: string[];
   // Their own Google Calendar busy times and waiting emails, when connected (services/googleData.ts).
   google?: string[];
+  // The details Co has for doing things on their behalf (services/memberKit.ts).
+  kit?: Kit;
+  // Where they've been with Co, from the record (services/milestones.ts).
+  story?: string[];
 };
 
 const nameKey = (n: string) => `name:${n.toLowerCase()}`;
@@ -241,7 +247,11 @@ export async function assembleContext(
   ]);
   // Their Google, read from the cache in their own time zone (never fetched while they wait).
   const google = await loadGoogleFacts(userId, profile?.city ?? null).catch(() => [] as string[]);
-  return { userId, message, profile, snapshot, sent, asks, threads, offersThisWeek, emotional, lessons, inlineTarget, ledger, capabilities: capabilitySheet(), google };
+  const [kit, story] = await Promise.all([
+    loadKit(userId).catch(() => ({}) as Kit),
+    loadMilestones(userId).then((m) => storyLines(m, 4)).catch(() => [] as string[]),
+  ]);
+  return { userId, message, profile, snapshot, sent, asks, threads, offersThisWeek, emotional, lessons, inlineTarget, ledger, capabilities: capabilitySheet(), google, kit, story };
 }
 
 async function loadGoogleFacts(userId: string, city: string | null): Promise<string[]> {

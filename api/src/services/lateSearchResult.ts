@@ -13,7 +13,7 @@ import { recordRecommendationsSent, type RecommendationResult } from "./recommen
 import { triesInOrder } from "./searchRules.js";
 
 export async function sendLateSearchResult(
-  person: { userId: string; firstName: string | null; phoneNumber: string; city: string | null },
+  person: { userId: string; firstName: string | null; phoneNumber: string; city: string | null; askHandle?: string | null },
   askText: string,
   result: RecommendationResult,
 ): Promise<void> {
@@ -26,6 +26,7 @@ export async function sendLateSearchResult(
       type: "search_result",
       targetKey: `search_result:none:${Date.now()}`,
       messages: ["Came up empty on that one for now. I'll keep looking and send anything good your way."],
+      replyTo: person.askHandle ?? null,
     });
     await recordDecision({ layer: 5, decision: "recommendation.lateResult", userId: person.userId, outcome: "skip", action: `${action}${sent.sent ? "_told_them" : ""}`, proposal: { askText, ...extra } });
   };
@@ -48,6 +49,8 @@ export async function sendLateSearchResult(
       type: "search_result",
       targetKey: `search_result:${matchKey(match)}`,
       messages: draft.messages,
+      // Back under the ask they made, however long the search took.
+      replyTo: person.askHandle ?? null,
       // They just texted asking for this; it's an answer, not an outreach.
       timezone,
       respectHours: false,

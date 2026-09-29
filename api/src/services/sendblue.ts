@@ -144,7 +144,19 @@ function recordOutbound(handle: string, number: string, content: string): void {
          SELECT $1, (SELECT id FROM users WHERE right(regexp_replace(phone_number, '\\D', '', 'g'), 10) = right(regexp_replace($2, '\\D', '', 'g'), 10) LIMIT 1), $3, $4
          ON CONFLICT (message_handle) DO NOTHING`,
         [handle, number, content.slice(0, 2000), sender],
-      ),
+      ).then(async () => {
+        // Mo's texts join the thread Co reads, as "Mo replied:" (Royce,
+        // 2026-09-28: Co couldn't see Mo's side, so "Pause on it" was
+        // misread). Everyone reads one record; each line says who spoke.
+        if (sender === "mo") {
+          await pool.query(
+            `INSERT INTO co_memories (user_id, memory_type, content)
+             SELECT u.id, 'text_exchange', $2 FROM users u
+             WHERE right(regexp_replace(u.phone_number, '\\D', '', 'g'), 10) = right(regexp_replace($1, '\\D', '', 'g'), 10) LIMIT 1`,
+            [number, `Mo replied: ${content.slice(0, 2000)}`],
+          );
+        }
+      }),
     )
     .catch((err: any) => console.error("sendblue: outbound handle not recorded (non-fatal):", err?.message ?? err));
 }

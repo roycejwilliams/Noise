@@ -302,7 +302,7 @@ check(
   const ta = src("mo/teamAgent.ts");
 
   // 1. Same frame as Co
-  const tools = [...ta.matchAll(/^\s{4}(mo[A-Z]\w+): tool\(/gm)].map((m) => m[1]);
+  const tools = [...new Set([...ta.matchAll(/^\s{4}(mo[A-Z]\w+): tool\(/gm)].map((m) => m[1]))];
   check("every Mo tool has an entry in Mo's registry", tools.length === A.MO_ABILITIES.length && tools.every((t) => A.moAbilityForTool(t)));
   check("tool descriptions come from the registry", tools.every((t) => ta.includes(`moToolUse("${t}")`)));
   check("reaching out needs the approver's own yes", A.moAbilityForTool("moApprove")?.confirm === "affects_another_member");
@@ -335,7 +335,7 @@ check(
     check("reply: ...and the exact receipt goes out when its facts aren't", TA.finalReply("Sure thing!", [], "Royce", L).includes(pausedLine));
   }
   check("reply: no spaced hyphen used as a dash either", !TA.finalReply("I can't push more out today - it's capped.", [], null).includes(" - "));
-  check("Mo's replies are held to its facts, like Co's", /if \(reply\) reply = await holdToFacts\(reply, \[\.\.\.says, \.\.\.loose\.map\(\(l\) => l\.text\)\], input\);/.test(ta) && /for \(const c of moCapabilitySheet\(\)\) addFact\(rf, "capability", c\);/.test(ta));
+  check("Mo's replies are held to its facts, like Co's", /if \(reply && !onlyToolLines\(reply, \[\.\.\.says, \.\.\.loose\.map\(\(l\) => l\.text\)\]\)\) reply = await holdToFacts\(/.test(ta) && /for \(const c of moCapabilitySheet\(\)\) addFact\(rf, "capability", c\);/.test(ta));
   check("Mo's limits say it can't send faster or on demand", /I can't send faster, sooner, or on demand/.test(A.moCapabilitySheet().join(" ")));
   check("reply: no em dashes", !TA.finalReply("Paused — nothing new goes out.", [], null).includes("—"));
   const pl = TA.pendingLine({ kind: "review", p: { name: "Noor Haddad", source: "x", draft_dm: "Hi" } });
@@ -374,7 +374,7 @@ check(
   check("extension: Mo is registered with its abilities and voice", !!mo && mo.abilities === A.MO_ABILITIES && mo.voiceFile === "mo/moVoice.ts");
   const rt = mo ? await mo.load() : null;
   check("extension: Mo plugs in team texts, handoff and its jobs", !!rt?.teamText && !!rt?.handoff && (rt?.jobs ?? []).map((j) => j.name).join(",") === "mo find,mo digest,mo outreach,mo inbox");
-  check("wired: texts, reply facts and jobs go through the registry", /handleTeamText\(user\.id, content, repliedToExt \?/.test(src("routes/sendblue.ts")) && /extensionJobs\(\)/.test(src("jobs/index.ts")) && !/from "\.\.\/mo\//.test(src("jobs/index.ts") + src("routes/sendblue.ts")));
+  check("wired: texts, reply facts and jobs go through the registry", /handleTeamText\(user\.id, content, \{ \.\.\.\(repliedToExt \?/.test(src("routes/sendblue.ts")) && /extensionJobs\(\)/.test(src("jobs/index.ts")) && !/from "\.\.\/mo\//.test(src("jobs/index.ts") + src("routes/sendblue.ts")));
   check("monitor: each extension tool has a drift signal", /EXTENSIONS\.flatMap/.test(src("harness/monitor.ts")));
 }
 
@@ -399,8 +399,8 @@ check(
   check("a reply under Mo's own text goes to Mo, only for their own messages", /extensionForMessage\(user\.id, pressed\)/.test(src("routes/sendblue.ts")) && /WHERE message_handle = \$1 AND user_id = \$2/.test(src("services/extensions.ts")));
   const { awarenessLines } = await import("../../src/mo/teamAgent.js");
   const a = awarenessLines({ recent: "User said: hi", topic: "Harneet's outreach", pushback: "wrong person", lessons: ["answer the logistics"], repliedTo: "So on Harneet: go for it?", handedOff: true });
-  check("Mo sees the thread, the topic, pushback, its lessons, and what it's replying to", /The thread so far/.test(a) && /Harneet's outreach/.test(a) && /pushing back on what you said: wrong person/.test(a) && /answer the logistics/.test(a) && /pressed Reply on your own text/.test(a) && /Co handed this message to you/.test(a));
-  check("Mo's lessons are its own, and saved from pushback", /saveLesson\(userId, `\[Mo\] \$\{moment\.lesson\}`\)/.test(src("mo/teamAgent.ts")));
+  check("Mo sees the thread, the topic, pushback, its lessons, and what it's replying to", /The thread so far/.test(a) && /Harneet's outreach/.test(a) && /pushing back on what you said: wrong person/.test(a) && /answer the logistics/.test(a) && /pressed Reply on your own text/.test(a) && /Co tagged you in/.test(a));
+  check("Mo's lessons are its own, and saved from pushback with its own tool (no extra model read)", /saveLesson\(input\.userId, `\[Mo\] \$\{l\}`\)/.test(src("mo/teamAgent.ts")) && /noteLesson: tool\(/.test(src("mo/teamAgent.ts")) && !/readMoment\(/.test(src("mo/teamAgent.ts")));
 }
 
 // ------------------------------------------------------------ Mo's own voice (2026-09-28)
@@ -422,7 +422,25 @@ check(
   check("just mentioning Mo stays with Co", !callsMo("You have a partner named Mo that does that") && !callsMo("Mo already does that") && !callsMo("tell Mo to pause") && !callsMo("email me at x@mo.com") && !callsMo("@Moses"));
   const fs = await import("fs");
   const tools = fs.readFileSync(new URL("../../src/agent/conversationTools.ts", import.meta.url), "utf8");
-  check("when Co brings Mo in, it tags @Mo in the thread first", /const tag = `@Mo\$\{/.test(tools) && /message: tag, asVoice: false/.test(tools));
+  check("when Co brings Mo in, it tags a bare @Mo, and that isn't Co speaking", /const tag = "@Mo";/.test(tools) && /message: tag, asVoice: false/.test(tools) && /`Co tagged Mo: \$\{tag\}`/.test(tools));
+}
+{
+  // Co and Mo talking to each other (Royce, 2026-09-28).
+  const T = await import("../../src/mo/teamAgent.js");
+  const R = await import("../../src/mo/review.js");
+  const fs = await import("fs");
+  const src = (f: string) => fs.readFileSync(new URL(`../../src/${f}`, import.meta.url), "utf8");
+  check("an action needs a quote of their own words, not Co's note", T.quoteIsTheirs("Pause on it", "Pause on it") && T.quoteIsTheirs("pause all outreach", "Pause all outreach this week") && !T.quoteIsTheirs("stand down on that", "Pause on it") && !T.quoteIsTheirs("", "yes") && !T.quoteIsTheirs(undefined, "yes"));
+  check("every action Mo takes is held to their words when Co brought the message", ["moPause", "moResume", "moApprove", "moSkip", "moChangeDraft", "moSetFocus", "moSendAnswer"].every((n) => T.ACTS_ON_THEIR_WORD.includes(n)) && /needsTheirWords = viaCo && ACTS_ON_THEIR_WORD\.includes\(name\)/.test(src("mo/teamAgent.ts")));
+  const t0 = new Date("2026-09-28T19:23:00Z");
+  check("Mo keeps the floor while it spoke last; Co has it only after Co speaks", !R.coSpokeAfter({ sender: "mo", sentAt: new Date("2026-09-28T19:27:00Z") }, t0) && R.coSpokeAfter({ sender: "co", sentAt: new Date("2026-09-28T19:27:00Z") }, t0) && !R.coSpokeAfter({ sender: "co", sentAt: new Date("2026-09-28T19:20:00Z") }, t0) && !R.coSpokeAfter(null, t0));
+  const consultSrc = src("mo/teamAgent.ts").slice(src("mo/teamAgent.ts").indexOf("export async function runMoConsult"));
+  check("a quiet question is read-only: status only, never the next person, never an action", /deps\.status\(input\.approverFirst, true\)/.test(consultSrc) && !/deps\.(pause|approve|skip|change|answer|focus)/.test(consultSrc));
+  check("asking Mo quietly makes no model call at all", !/generateText\(/.test(consultSrc));
+  check("a reply that is only Mo's tool lines skips the extra fact check", T.onlyToolLines("Paused. Nothing new goes out.", ["Paused. Nothing new goes out."]) && !T.onlyToolLines("Paused. Also I found you three great people.", ["Paused."]) && !T.onlyToolLines("hi", []));
+  check("Mo's half of the thread is in the record Co reads, and messages to Mo are marked", /`Mo replied: \$\{content\.slice\(0, 2000\)\}`/.test(src("services/sendblue.ts")) && /\[to \$\{ext\.extension === "mo" \? "Mo" : ext\.extension\}\]/.test(src("routes/sendblue.ts")));
+  const caps = await import("../../src/services/capabilities.js");
+  check("asking Mo quietly is team-only, like the handoff", caps.teamOnlyTools().includes("askTeammate") && caps.teamOnlyTools().includes("handToTeammate") && !caps.capabilitySheet({ team: false } as any).join(" ").includes("quietly ask its teammate"));
 }
 console.log(`mo rules: ${total - failed}/${total} passed`);
 if (failed) process.exitCode = 1;

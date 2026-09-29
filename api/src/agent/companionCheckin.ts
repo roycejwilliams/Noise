@@ -29,7 +29,9 @@ export async function draftCompanionCheckin(
   thread?: CompanionThread | null,
   item?: CompanionItem | null,
   curious?: CompanionCurious | null,
+  story?: CompanionStory | null,
 ): Promise<{ text: string; rules: OutputRules } | null> {
+  if (story) return draftFromStory(firstName, story);
   if (thread) return draftFromThread(firstName, recap, thread, item ?? null);
   if (curious) return draftFromCuriosity(firstName, recap, curious);
   const text = await draftProactive({
@@ -45,6 +47,26 @@ One exception: if the recap shows Co barely knows them yet (little beyond joinin
   });
   if (!text) return null;
   return { text, rules: { maxSentences: 2, maxChars: 240 } };
+}
+
+// A moment worth marking (services/milestones.ts): said once, from the record
+// only, looking back at where they started when it has their own words.
+export type CompanionStory = { text: string; then: string | null; now: string | null };
+
+async function draftFromStory(firstName: string, story: CompanionStory): Promise<{ text: string; rules: OutputRules } | null> {
+  const text = await draftProactive({
+    functionId: "agent.companionCheckin",
+    firstName,
+    facts: {
+      what_happened: story.text,
+      ...(story.then ? { their_words_when_it_started: story.then.slice(0, 300) } : {}),
+      ...(story.now ? { their_words_when_it_landed: story.now.slice(0, 300) } : {}),
+    },
+    task: `Mark this moment like a friend who has been beside them the whole way. Say what happened in a few plain words, and if their_words_when_it_started is there, let the contrast with where they are now show, in their terms. Use only what_happened and their words; add nothing that isn't there (no numbers, names, or time words like today or tonight of your own). Warm, not gushing, no exclamation-mark pile. Offer nothing, ask at most one short question, and never promise anything Co will do later. Start with the thought itself, not a greeting like "Hey".`,
+    maxSentences: 3,
+  });
+  if (!text) return null;
+  return { text, rules: { maxSentences: 3, maxChars: 320 } };
 }
 
 // What Co is still figuring out about them, with their own recent words

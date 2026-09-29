@@ -753,6 +753,23 @@ export async function runMigrations(): Promise<void> {
       )`,
     )
     .catch((err: Error) => console.error("link_reads table init failed:", err));
+  // The page's own text, so Co can critique what they share (2026-09-29).
+  await pool
+    .query(`ALTER TABLE link_reads ADD COLUMN IF NOT EXISTS excerpt TEXT`)
+    .catch((err: Error) => console.error("link_reads.excerpt migration failed:", err));
+  // Details Co needs to do things for them that it must not guess (company,
+  // role, LinkedIn), in their words. Owner-scoped (services/memberKit.ts).
+  await pool
+    .query(
+      `CREATE TABLE IF NOT EXISTS member_kit (
+        user_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+        key TEXT NOT NULL,
+        value TEXT NOT NULL,
+        updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+        PRIMARY KEY (user_id, key)
+      )`,
+    )
+    .catch((err: Error) => console.error("member_kit table init failed:", err));
   await pool
     .query(`CREATE INDEX IF NOT EXISTS outbound_messages_user_sent ON outbound_messages (user_id, sent_at DESC)`)
     .catch((err: Error) => console.error("outbound_messages index failed:", err));
@@ -1889,6 +1906,22 @@ export async function runMigrations(): Promise<void> {
       )`,
     )
     .catch((err: Error) => console.error("person_snapshots table init failed:", err));
+  await pool
+    .query(
+      `CREATE TABLE IF NOT EXISTS member_milestones (
+        user_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+        key TEXT NOT NULL,
+        kind TEXT NOT NULL,
+        text TEXT NOT NULL,
+        then_quote TEXT,
+        now_quote TEXT,
+        happened_at TIMESTAMPTZ NOT NULL,
+        marked_at TIMESTAMPTZ,
+        created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+        PRIMARY KEY (user_id, key)
+      )`,
+    )
+    .catch((err: Error) => console.error("member_milestones table init failed:", err));
   await pool
     .query(
       `CREATE TABLE IF NOT EXISTS suggestion_outcomes (

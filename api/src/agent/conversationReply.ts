@@ -86,6 +86,8 @@ export type ConversationReplyInput = {
   sendCoReply: SendCoReply;
   // On the team (users.mo_approver). Looked up when not given.
   isTeam?: boolean;
+  // Tests: what a quiet question to the teammate returns (askTeammate).
+  consult?: (question: string) => Promise<{ facts: string[]; note: string } | null>;
 };
 
 // How long an unanswered call offer stays "open" before Co treats it as
@@ -240,6 +242,7 @@ export async function runConversationReplyAgent(
     stubSearch: opts.stubSearch ?? false,
     messageHandle: input.messageHandle ?? null,
     searchAndSend: input.searchAndSend,
+    consult: input.consult,
     replyOwed: input.replyOwed ?? false,
     safetyConcern: input.safetyConcern ?? false,
     turn: input.turn ?? null,

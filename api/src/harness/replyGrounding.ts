@@ -17,7 +17,9 @@
 //             sentences are dropped. The reply is never blocked.
 //   record  — recordDecision(layer 3, "reply.grounding")
 //   eval    — evals/reply/run.ts
+import { loadMilestones, storyLines } from "../services/milestones.js";
 import { ABILITIES, capabilitySheet } from "../services/capabilities.js";
+import { kitLines } from "../services/memberKit.js";
 import { sentDetailHints, sentDetailLines, type TurnContext } from "../services/turnContext.js";
 import { switchedOff } from "../services/abilitySwitches.js";
 import { textingStyleFor } from "../services/textingStyle.js";
@@ -222,6 +224,12 @@ export async function gatherReplyFacts(
   // What's on file for what Co recently sent: times and places, and what isn't
   // (services/turnContext.ts), before Co ever says it doesn't have them.
   if (opts.turn) for (const line of sentDetailLines(opts.turn)) addFact(rf, "known", line);
+  // What Co has for doing things on their behalf, and what it doesn't (services/memberKit.ts).
+  if (opts.turn?.kit) for (const line of kitLines(opts.turn.kit)) addFact(rf, "known", line);
+  // Where they've been with Co, from the record (services/milestones.ts): the
+  // arc Co can look back on, in their own words.
+  const story = opts.turn?.story ?? (opts.turn ? [] : await loadMilestones(userId).then((m) => storyLines(m, 4)).catch(() => [] as string[]));
+  for (const line of story) addFact(rf, "known", line);
   if (opts.turn) for (const hint of sentDetailHints(opts.turn)) addHint(rf, hint);
   for (const line of ledger.lines) addFact(rf, "did_before", line);
   // They're asking about something the record shows Co sent: the record

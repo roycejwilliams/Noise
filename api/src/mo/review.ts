@@ -175,7 +175,7 @@ export async function clearItem(no: number): Promise<void> {
 // (then it goes to Co as usual). Mo reads it and decides (mo/teamAgent.ts);
 // code only decides whether Mo should read it at all, so an approver's
 // everyday texts to Co don't wait on Mo.
-export async function handleMoReply(userId: string, content: string, opts: { repliedTo?: string | null; handedOff?: boolean } = {}): Promise<string | null> {
+export async function handleMoReply(userId: string, content: string, opts: { repliedTo?: string | null; handedOff?: boolean; coNote?: string | null; ack?: (emoji: string) => Promise<unknown> } = {}): Promise<string | null> {
   const { rows } = await pool.query(`SELECT mo_approver, first_name, mo_pending_no, mo_pending_kind, mo_pending_at FROM users WHERE id = $1`, [userId]).catch(() => ({ rows: [] as any[] }));
   const me = rows[0];
   if (!me?.mo_approver) return null;
@@ -216,7 +216,7 @@ export async function handleMoReply(userId: string, content: string, opts: { rep
 
   const { moAwareness } = await import("./teamAgent.js");
   const awareness = await moAwareness(userId, text, opts).catch(() => null);
-  const turn = await runMoTeamTurn({ userId, approverFirst: me.first_name ?? null, text, pending, coSpoke, awareness });
+  const turn = await runMoTeamTurn({ userId, approverFirst: me.first_name ?? null, text, pending, coSpoke, awareness, ack: opts.ack });
   // Handed over or replied to directly: Mo answers, never silently passes back.
   if (forMo && turn.reply === null) return opts.handedOff ? null : `That one's really for Co, I'll let Co take it.`;
   return turn.reply;
@@ -233,8 +233,19 @@ export function namesThisItem(text: string, p: { name: string | null; x_handle: 
   return callsMo(t) || (Boolean(first) && first.length >= 2 && new RegExp(`\\b${first.replace(/[^a-z0-9]/g, "")}\\b`).test(t)) || (Boolean(p.x_handle) && t.includes(`@${p.x_handle!.toLowerCase()}`));
 }
 
+// Who spoke last decides who a short reply is for (2026-09-28: "Pause on it",
+// sent right after Mo's own answer, went to Co because Co's tag had counted as
+// Co speaking). Mo keeps the floor while it was the last to text them.
+export function coSpokeAfter(last: { sender: string; sentAt: Date } | null, since: Date | null): boolean {
+  if (!since || !last) return false;
+  return last.sender !== "mo" && last.sentAt.getTime() > since.getTime();
+}
+
 async function coSpokeSince(userId: string, since: Date | null): Promise<boolean> {
   if (!since) return false;
+  const last = await lastOutboundTo(userId);
+  if (last) return coSpokeAfter(last, since);
+  // Texts sent before senders were recorded.
   const { rows } = await pool.query(
     `SELECT 1 FROM co_memories WHERE user_id = $1 AND memory_type = 'text_exchange' AND content LIKE 'Co replied:%' AND created_at > $2
      UNION ALL SELECT 1 FROM proactive_sends WHERE user_id = $1 AND sent_at > $2 LIMIT 1`,
@@ -307,4 +318,21 @@ export async function changeDraft(p: any, instruction: string): Promise<Done> {
 
 export async function recordApproval(userId: string, kind: PendingKind, no: number, reply: string): Promise<void> {
   await recordDecision({ layer: 5, decision: "mo.approval", userId, outcome: "act", action: kind, proposal: { no }, reason: reply.slice(0, 300) }).catch(() => {});
+}
+
+// A quiet question from Co (services/extensions.ts consultTeammate): Mo
+// looks things up and reports; it never acts and never texts the member.
+export async function consultMo(userId: string, question: string): Promise<{ facts: string[]; note: string } | null> {
+  const { rows } = await pool.query(`SELECT mo_approver, first_name, mo_pending_no, mo_pending_kind FROM users WHERE id = $1`, [userId]).catch(() => ({ rows: [] as any[] }));
+  const me = rows[0];
+  if (!me?.mo_approver || !question.trim()) return null;
+  let pending: TeamPending = null;
+  if (me.mo_pending_no) {
+    const { rows: pr } = await pool.query(`SELECT * FROM mo_prospects WHERE no = $1`, [me.mo_pending_no]).catch(() => ({ rows: [] as any[] }));
+    const p = pr[0];
+    const kind = me.mo_pending_kind as PendingKind;
+    if (p && ((kind === "review" && p.status === "shortlisted") || (kind === "question" && p.status === "question"))) pending = { kind: kind as "review" | "question", p };
+  }
+  const { runMoConsult } = await import("./teamAgent.js");
+  return runMoConsult({ userId, approverFirst: me.first_name ?? null, question, pending });
 }

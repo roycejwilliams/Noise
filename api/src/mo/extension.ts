@@ -1,7 +1,7 @@
 // Mo as an extension of Co (services/extensions.ts): how Mo plugs in.
 import type { ExtensionRuntime } from "../services/extensions.js";
 import { runMoFind } from "./find.js";
-import { handleMoReply, sendMoDigest } from "./review.js";
+import { consultMo, handleMoReply, sendMoDigest } from "./review.js";
 import { moEnabled, runMoInbox, runMoOutreach } from "./outreach.js";
 import { moHandoff } from "./handoff.js";
 
@@ -12,6 +12,7 @@ export const moRuntime: ExtensionRuntime = {
   // outreach email settings; without them it's shortlist-only.
   enabled: () => moEnabled(),
   teamText: (userId, text, opts) => handleMoReply(userId, text, opts),
+  consult: (userId, question) => consultMo(userId, question),
   handoff: moHandoff,
   jobs: [
     // Finds people weekly, Monday 9am Pacific.

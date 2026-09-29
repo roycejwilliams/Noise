@@ -18,7 +18,15 @@
 import type { Ability } from "./capabilities.js";
 import { MO_ABILITIES, MO_LIMITS } from "../mo/abilities.js";
 
-export type TeamTextOpts = { repliedTo?: string | null; handedOff?: boolean };
+// coNote: Co's private note when it tags the teammate in. Context only, never
+// an instruction; what the teammate does comes from the member's own words.
+// ack: reacts to their message with an emoji (a tapback) when the teammate acts.
+export type TeamTextOpts = { repliedTo?: string | null; handedOff?: boolean; coNote?: string | null; ack?: (emoji: string) => Promise<unknown> };
+
+// A quiet question from Co to a teammate (Royce, 2026-09-28): the teammate
+// looks things up, never acts and never texts the member; Co answers in its
+// own voice from the facts it gets back.
+export type ConsultResult = { facts: string[]; note: string };
 
 export type ExtensionJob = { name: string; cron: string; timezone?: string; run: () => Promise<unknown> };
 
@@ -32,6 +40,7 @@ export type ExtensionRuntime = {
   // `known`: plain facts Co may state; `instruction`: what Co may only ask
   // about, never state.
   handoff?: (userId: string) => Promise<{ known: string[]; instruction: string } | null>;
+  consult?: (userId: string, question: string) => Promise<ConsultResult | null>;
   jobs?: ExtensionJob[];
 };
 
@@ -79,6 +88,19 @@ export async function handleTeamText(userId: string, text: string, opts: TeamTex
 // What Co should know about a member an extension brought in: a few plain
 // facts it may state (how they got in), and an instruction for the rest,
 // which is never citable because none of it is something they told Co.
+export async function consultTeammate(userId: string, question: string): Promise<{ extension: string; result: ConsultResult } | null> {
+  for (const e of EXTENSIONS) {
+    const rt = await e.load().catch(() => null);
+    if (!rt?.consult) continue;
+    const result = await rt.consult(userId, question).catch((err: any) => {
+      console.error(`extensions: ${e.id} consult failed:`, err?.message ?? err);
+      return null;
+    });
+    if (result) return { extension: e.id, result };
+  }
+  return null;
+}
+
 export async function handoffFor(userId: string): Promise<{ known: string[]; instructions: string[] }> {
   const out = { known: [] as string[], instructions: [] as string[] };
   for (const e of EXTENSIONS) {
@@ -120,7 +142,7 @@ export function teamSheet(): string[] {
   return EXTENSIONS.flatMap((e) => [
     `${e.name} is Co's teammate, on this same number, known to the team only (never mention ${e.name} to anyone else). ${e.about} What ${e.name} does: ${e.abilities.map((a) => a.can).join(" ")}`,
     `${e.name}'s limits: ${e.limits.join(" ")}`,
-    `So with the team, don't pitch what ${e.name} already does as a new idea: say ${e.name} already does it. When they ask about ${e.name}'s work (the people it finds, outreach, approvals, "tell ${e.name}…"), hand it to ${e.name} with handToTeammate (that tags @${e.name} in the thread), and do the same when you need ${e.name}'s help. They can call ${e.name} in themselves by writing @${e.name}, or by replying to one of ${e.name}'s texts; just mentioning ${e.name} leaves it with you.`,
+    `So with the team, don't pitch what ${e.name} already does as a new idea: say ${e.name} already does it. Before you tell them you don't have something about ${e.name}'s work (the people it found, who's waiting, what it's doing), ask ${e.name} first: it usually has it. Two ways to work with ${e.name}. When you just need information from ${e.name} to answer them (who's in the queue, where someone stands), ask quietly with askTeammate and answer in your own voice; they never see the back-and-forth. When they want ${e.name} itself to act or talk to them (approvals, pausing, "tell ${e.name}…"), tag it in with handToTeammate: a bare @${e.name} in the thread, then ${e.name} answers them directly and you step back. They can call ${e.name} in themselves by writing @${e.name}, or by replying to one of ${e.name}'s texts; just mentioning ${e.name} leaves it with you.`,
   ]);
 }
 

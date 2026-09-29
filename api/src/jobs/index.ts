@@ -180,22 +180,16 @@ export function registerJobs(io: Server) {
     }
   });
 
-  // Details that change (sold out, spots left, a moved time) are re-read
-  // before Co relies on them: pages of things sent in the last 3 days whose
-  // read is over 4 hours old (services/linkReader.ts). Luma reads are free;
-  // others about $0.007 each.
+  // Things Co sent in the last 3 days are re-read every few hours
+  // (services/linkReader.ts); if one that someone was interested in sold out,
+  // moved or disappeared, they hear it once (services/staleWatch.ts). Luma
+  // reads are free; others about $0.007 each.
   cron.schedule("40 * * * *", async () => {
     try {
-      const { rows } = await pool.query(
-        `SELECT DISTINCT lr.url FROM link_reads lr
-         JOIN revealed_offers ro ON ro.url = lr.url AND ro.sent_at > NOW() - INTERVAL '3 days'
-         WHERE lr.owner_key = '' AND lr.status = 'ok' AND lr.fetched_at < NOW() - INTERVAL '4 hours'
-         LIMIT 20`,
-      );
-      const { readLink } = await import("../services/linkReader.js");
-      for (const r of rows) await readLink(r.url, { force: true }).catch(() => {});
+      const { watchSentPages } = await import("../services/staleWatch.js");
+      await watchSentPages();
     } catch (err: any) {
-      console.error("link re-read cron error (non-fatal):", err?.message ?? err);
+      console.error("stale watch cron error (non-fatal):", err?.message ?? err);
     }
   });
 

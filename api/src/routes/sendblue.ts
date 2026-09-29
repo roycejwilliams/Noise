@@ -68,6 +68,7 @@ import { resolveNetworkTeaseReply, resolveNetworkIntroReply } from "../services/
 import { NO_ROUTE, decideActions, gatherOpenItems, routeMessage, type RouterOutput } from "../services/messageRouter.js";
 import { recordDecision } from "../harness/core.js";
 import { routerGateChecks } from "../harness/routerChecks.js";
+import { linkForReply, type LinkRead } from "../services/linkReader.js";
 import { addEventFacts, addFact, addHint, addInstruction, addOngoingSearchFacts, countOf, FRESH_SEARCH_INSTRUCTION, gatherReplyFacts, recordSearchNote } from "../harness/replyGrounding.js";
 import { runConversationReplyAgent, filterRelevantMemories, CALL_OFFER_EXPIRY_DAYS } from "../agent/conversationReply.js";
 import { triggerCallForUser } from "../services/callTrigger.js";
@@ -150,6 +151,8 @@ const ONBOARDING_CALL_OFFER_PREFIX = "[onboarding]";
 // its own. Kept so older logged rows are still recognized.
 const HOLD_LINES = ["On it, give me a sec.", "Let me look, one sec.", "Looking now, give me a minute."];
 export const HOLD_PREFIX = "Co is looking:";
+// After a reaction, the looking text waits this long: a quick search needs none.
+const HOLD_AFTER_ACK_MS = 8_000;
 // Co's own hold line, used only when it's a short plain line with no link.
 export function holdLineFrom(line: string | null | undefined): string | null {
   const t = cleanCoMessage(String(line ?? "")).trim();
@@ -395,7 +398,7 @@ async function replyOwed(userId: string): Promise<boolean> {
   const prevUser = earlier.findIndex((r: any) => String(r.content).startsWith("User said:"));
   if (prevUser === -1) return false;
   const since = earlier.slice(0, prevUser);
-  return !since.some((r: any) => String(r.content).startsWith("Co replied:") && !HOLD_LINES.some((l) => String(r.content) === `Co replied: ${l}`));
+  return !since.some((r: any) => (String(r.content).startsWith("Co replied:") && !HOLD_LINES.some((l) => String(r.content) === `Co replied: ${l}`)) || String(r.content).startsWith("Mo replied:"));
 }
 
 // "You're in" for a good code: names the member who invited them when the
@@ -877,7 +880,9 @@ export function sendblueRouter(io: Server): Router {
           // (2026-09-28: Co answered it instead).
           const pressed = req.body?.thread_originator?.message_handle ?? req.body?.reply_to?.message_handle;
           const repliedToExt = pressed ? await extensionForMessage(user.id, pressed).catch(() => null) : null;
-          const ext = await handleTeamText(user.id, content, repliedToExt ? { repliedTo: repliedToExt.content, only: repliedToExt.id } : {}).catch((err: any) => {
+          const teamHandle = typeof req.body?.message_handle === "string" ? req.body.message_handle : null;
+          const teamAck = teamHandle ? (emoji: string) => sendReaction(teamHandle, emoji) : undefined;
+          const ext = await handleTeamText(user.id, content, { ...(repliedToExt ? { repliedTo: repliedToExt.content, only: repliedToExt.id } : {}), ack: teamAck }).catch((err: any) => {
             console.error("sendblue: extension reply failed:", err?.message ?? err);
             return null;
           });
@@ -885,6 +890,10 @@ export function sendblueRouter(io: Server): Router {
             recordDecision({ layer: 2, decision: "team.inlineToExtension", userId: user.id, outcome: ext ? "act" : "skip", action: repliedToExt.id }).catch(() => {});
           }
           if (ext !== null) {
+            // Their message to Mo goes in the thread too, marked as said to Mo,
+            // so Co can see the whole conversation (services/sendblue.ts
+            // logs Mo's replies).
+            if (hasText) await logTextExchange(user.id, `User said: ${content} [to ${ext.extension === "mo" ? "Mo" : ext.extension}]`).catch(() => {});
             if (ext.reply) {
               // Recorded as the extension's own text, so a reply under it comes back to it.
               await sendingAs(ext.extension, () => sendblue.messages.send({ number, content: ext.reply, from_number: process.env.SENDBLUE_PHONE_NUMBER! })).catch((err: any) =>
@@ -1173,6 +1182,11 @@ export function sendblueRouter(io: Server): Router {
           : `User said: ${resolvedContent}${hasText && imageForVision ? ` [They also sent a photo${photoDescription ? `. It shows: ${photoDescription}` : ""}]` : ""}${inlineTarget ? ` ${inlineNote(inlineTarget)}` : ""}`;
 
         // A link they texted is read in the background, kept to them (services/linkReader.ts).
+        // The first one is also read for this reply (raced below), so Co can react to what the page says.
+        const theirLink = hasText ? resolvedContent.match(/https?:\/\/[^\s)"'<>]+/)?.[0] ?? null : null;
+        const theirLinkP: Promise<LinkRead | null> | null = theirLink
+          ? import("../services/linkReader.js").then((l) => l.readLink(theirLink, { ownerUserId: user.id })).catch(() => null)
+          : null;
         if (hasText && /https?:\/\//.test(resolvedContent)) import("../services/linkReader.js").then((l) => l.readLinksLater(resolvedContent, { ownerUserId: user.id })).catch(() => {});
         const [inboundMemory, queryEmbedding] = await Promise.all([
           pool.query(
@@ -1431,6 +1445,9 @@ export function sendblueRouter(io: Server): Router {
           ? readP.then((r) => coverageNudgeFrom(user.id, profile, r.coverage)).catch(() => ({ missingTopic: null, refresh: null }))
           : getCoverageNudge(user.id, recentConversation, profile).catch(() => ({ missingTopic: null, refresh: null }));
         let turnRead: TurnRead | null = null;
+        // The reaction Co gave their message to show what it's doing (from the
+        // read), so a search knows whether it has already said "on it".
+        let ackP: Promise<boolean> = Promise.resolve(false);
 
         let routerOutput: RouterOutput = NO_ROUTE;
         let routerFailed = false;
@@ -1439,6 +1456,19 @@ export function sendblueRouter(io: Server): Router {
           if (readP) {
             turnRead = await readP;
             logJevShadow(user.id, jevShadowP, turnRead);
+            // A reaction right away, before any drafting, so they see Co is on it
+            // (Royce, 2026-09-29: Instinct reacts with what it's doing). Not awaited.
+            const ackHandle = typeof req.body?.message_handle === "string" ? req.body.message_handle : null;
+            if (hasText && turnRead.ack && ackHandle) {
+              const ackStarted = Date.now();
+              const ackEmoji = turnRead.ack;
+              ackP = sendReaction(ackHandle, ackEmoji)
+                .then((ok) => {
+                  recordDecision({ layer: 3, decision: "turn.ack", userId: user.id, outcome: ok ? "act" : "skip", action: ackEmoji, proposal: { ms: Date.now() - ackStarted } }).catch(() => {});
+                  return ok;
+                })
+                .catch(() => false);
+            }
             routerOutput = turnRead.router;
             routerLatencyMs = turnRead.latencyMs;
             dotsP = Promise.resolve(turnRead.moment);
@@ -1543,6 +1573,13 @@ export function sendblueRouter(io: Server): Router {
           context: `${resolvedContent}\n${inlineTarget ? `${inlineTarget.text}\n` : ""}${recentConversation.split("\n").filter((l) => l.startsWith("Co replied:")).slice(-3).join("\n")}`,
           pendingDescriptions: openItems.filter((i) => i.id !== resolvedItem?.item.id).map((i) => i.description),
         });
+        // What the link they shared says (waits up to 6s; the reply never depends on it).
+        if (theirLinkP && turnRead?.moment?.mode !== "small_talk") {
+          const shared = await linkForReply(theirLinkP);
+          shared.facts.forEach((f) => addFact(replyFacts, "known", f));
+          shared.hints.forEach((h) => addHint(replyFacts, h));
+          shared.instructions.forEach((i) => addInstruction(replyFacts, i));
+        }
         if (decision.wantsRecommendation && hasText) addInstruction(replyFacts, FRESH_SEARCH_INSTRUCTION);
         if (inlineTarget) addFact(replyFacts, "known", repliedToFact(inlineTarget));
         // Unmistakable crisis wording (services/safety.ts): Co gets the
@@ -1571,6 +1608,8 @@ export function sendblueRouter(io: Server): Router {
             theyRepliedInline: !!inlineTarget && !!ownHandle,
             newerTextSince: !!ownHandle && !!latest && !!myInboundAt && new Date(latest).getTime() > new Date(myInboundAt).getTime(),
             aboutSentHandle,
+            // How long they've waited for this answer.
+            slowMs: myInboundAt ? Date.now() - new Date(myInboundAt).getTime() : undefined,
           });
           if (why) recordDecision({ layer: 7, decision: "reply.inline", userId: user.id, outcome: "act", action: why, proposal: why === "about_sent" ? { about: about?.name } : undefined }).catch(() => {});
           return why === "about_sent" ? aboutSentHandle : why ? ownHandle : null;
@@ -2195,7 +2234,15 @@ Return ONLY valid JSON, no preamble: {"date": "YYYY-MM-DD or null", "time": "HH:
               // Co's own words for it when it wrote them (2026-09-28: the fixed
               // "Let me look, one sec" read as a script); the stock line otherwise.
               const holdLine = holdLineFrom(whileLooking) ?? HOLD_LINES[Math.floor(Math.random() * HOLD_LINES.length)];
-              if (await threadedSendAndLog(holdLine, false, true)) addFact(replyFacts, "did_this_turn", `Told them "${holdLine}" before searching.`);
+              // A reaction says "on it" first (👀 here if the read didn't give
+              // one); the looking text only goes out when the search runs long
+              // (2026-09-29). On SMS, where reactions don't exist, it goes at once as before.
+              let acked = await ackP;
+              if (!acked && ownHandle) acked = await sendReaction(ownHandle, "👀").catch(() => false);
+              let holdSent: Promise<boolean> | null = null;
+              const sendHold = () => (holdSent ??= threadedSendAndLog(holdLine, false, true));
+              const holdTimer = acked ? setTimeout(() => void sendHold(), HOLD_AFTER_ACK_MS) : null;
+              if (!acked) sendHold();
               const RECOMMENDATION_TIME_CAP_MS = 45_000;
               const searchStarted = Date.now();
               searchMsForTurn = 0;
@@ -2206,9 +2253,12 @@ Return ONLY valid JSON, no preamble: {"date": "YYYY-MM-DD or null", "time": "HH:
               // nothing, and its late write could still land after "found
               // nothing" went out).
               const recommendation = await searchWithTimeCap(user.id, what, RECOMMENDATION_TIME_CAP_MS, "sendblue.recommendation", (late) =>
-                sendLateSearchResult({ userId: user.id, firstName: user.first_name ?? null, phoneNumber: user.phone_number, city: profile?.city ?? null }, what, late),
+                sendLateSearchResult({ userId: user.id, firstName: user.first_name ?? null, phoneNumber: user.phone_number, city: profile?.city ?? null, askHandle: ownHandle }, what, late),
               );
               searchMsForTurn = Date.now() - searchStarted;
+              if (holdTimer) clearTimeout(holdTimer);
+              if (holdSent && (await holdSent)) addFact(replyFacts, "did_this_turn", `Told them "${holdLine}" before searching.`);
+              if (acked) addFact(replyFacts, "did_this_turn", "Reacted to their message with an emoji to show you were on it.");
               // What this search looked at and ruled out, so the reply never
               // recommends one of them because it was sent earlier (2026-09-16:
               // a search rejected the chess night as "not an AI engineer event"

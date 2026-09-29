@@ -91,11 +91,16 @@ export function inlineNote(r: RepliedTo): string {
 // this turn is about one thing Co sent (services/readTurn.ts about_sent), the
 // message Co sent it in (Royce, 2026-09-28: threading keeps context with the
 // thing it's about).
-export function threadReason(o: { theyRepliedInline: boolean; newerTextSince: boolean; aboutSentHandle?: string | null; isGroup?: boolean }): "mirror" | "newer_text" | "about_sent" | null {
+// After a wait this long, an answer comes back under the ask that started it
+// (Royce, 2026-09-29, from Instinct: long tasks return threaded under the request).
+export const SLOW_REPLY_MS = 20_000;
+
+export function threadReason(o: { theyRepliedInline: boolean; newerTextSince: boolean; aboutSentHandle?: string | null; slowMs?: number; isGroup?: boolean }): "mirror" | "newer_text" | "about_sent" | "slow" | null {
   if (o.isGroup) return null;
   if (o.theyRepliedInline) return "mirror";
   if (o.newerTextSince) return "newer_text";
   if (o.aboutSentHandle) return "about_sent";
+  if (o.slowMs !== undefined && o.slowMs >= SLOW_REPLY_MS) return "slow";
   return null;
 }
 

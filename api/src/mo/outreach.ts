@@ -19,6 +19,7 @@ import { clearStop, clearYes, nextOutreachStep, MO, suppressionKeys } from "./ru
 import { isDmClosed, likePost, recentDmEvents, replyToPost, sendDm, xWriteConfigured } from "./xApi.js";
 import { presentNext, suppressProspect, textApprovers } from "./review.js";
 import { readReplyWithJev } from "./jev.js";
+import { causeOf, getHealth, inBackoff, nextHealth, setHealth, type Cause } from "./health.js";
 import { moEmail } from "../services/emailDesign.js";
 
 export function moEnabled(env: NodeJS.ProcessEnv = process.env): boolean {
@@ -268,10 +269,16 @@ export async function runMoOutreach(now = new Date()): Promise<void> {
   const { tellTeamAboutJoins, isMoPaused } = await import("./team.js");
   await tellTeamAboutJoins(joined);
   if (await isMoPaused()) return;
+  // Failing run after run: hold off for a few hours instead of retrying and
+  // texting every hour (mo/health.ts).
+  const health = await getHealth("outreach_health");
+  if (inBackoff(health, now)) return;
   const { rows } = await pool.query(
     `SELECT * FROM mo_prospects WHERE status IN ('approved', 'warmed', 'contacted') ORDER BY approved_at NULLS LAST, no LIMIT 50`,
   );
   const report: string[] = [];
+  const failures: { cause: Cause; who: string }[] = [];
+  let sendsOk = 0;
   let warmedToday = await sentToday("warmed_at");
   let outboundToday = (await sentToday("contacted_at")) + (await sentToday("followed_up_at"));
   for (const p of rows) {
@@ -318,9 +325,10 @@ export async function runMoOutreach(now = new Date()): Promise<void> {
       email_not_configured: `couldn't reach ${who}: DMs closed and email isn't set up`,
     };
     if (line[action]) report.push(line[action][0].toUpperCase() + line[action].slice(1));
-    else if (action.startsWith("error")) report.push(`Couldn't reach ${who}: ${action.slice(7, 120)}`);
+    else if (action.startsWith("error")) failures.push({ cause: causeOf(action), who });
     if (action === "warmed") warmedToday++;
     if (["dm_sent", "email_sent", "followed_up"].includes(action)) outboundToday++;
+    if (["warmed", "dm_sent", "email_sent", "followed_up"].includes(action)) sendsOk++;
     await recordDecision({
       layer: 5,
       decision: "mo.outreach",
@@ -331,6 +339,11 @@ export async function runMoOutreach(now = new Date()): Promise<void> {
     });
   }
   // Only what was recorded as actually happening.
+  // Failures are told once, grouped by cause, and again when they clear
+  // (mo/health.ts); the rest of the run reads as before.
+  const outcome = nextHealth(health, { ok: sendsOk, failed: failures }, now, { kind: "sending" });
+  await setHealth("outreach_health", outcome.health);
+  if (outcome.message) report.push(outcome.message.replace(/\.$/, ""));
   if (report.length) await textApprovers(`Mo update:\n${report.join(".\n")}.`);
 }
 
@@ -353,10 +366,20 @@ export async function classifyReply(text: string): Promise<"yes" | "no" | "quest
 // Every 15 minutes: replies in Co's X DMs from people Mo contacted.
 export async function runMoInbox(): Promise<void> {
   if (!moEnabled() || !xWriteConfigured()) return;
+  let readFailure: string | null = null;
   const events = await recentDmEvents().catch((err: any) => {
     console.error("mo: reading DMs failed:", err?.message ?? err);
+    readFailure = String(err?.message ?? err);
     return [];
   });
+  // A reader that fails says so after two runs in a row (it used to say
+  // nothing), and says when it's back (mo/health.ts).
+  {
+    const inboxHealth = await getHealth("inbox_health");
+    const outcome = nextHealth(inboxHealth, readFailure ? { ok: 0, failed: [{ cause: causeOf(readFailure), who: "replies" }] } : { ok: 1, failed: [] }, new Date(), { kind: "replies", notifyAfterRuns: 2, backoffRuns: 99 });
+    if (outcome.health.cause !== inboxHealth.cause || outcome.health.runs !== inboxHealth.runs || outcome.health.notifiedAt !== inboxHealth.notifiedAt) await setHealth("inbox_health", outcome.health);
+    if (outcome.message) await textApprovers(outcome.message);
+  }
   const coId = process.env.X_MO_USER_ID;
   const inbound = events.filter((e) => e.senderId !== coId).sort((a, b) => (BigInt(a.id) < BigInt(b.id) ? -1 : 1));
   for (const e of inbound) {
