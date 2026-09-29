@@ -14,7 +14,7 @@ import { z } from "zod";
 import { MODELS } from "../models.js";
 import { recordDecision } from "../harness/core.js";
 import { guardTools } from "../agent/toolGuard.js";
-import { MO_VOICE, MO_RULES } from "./moVoice.js";
+import { MO_VOICE, introNeeded } from "./moVoice.js";
 import { moAbilityForTool, moCapabilitySheet, moToolUse } from "./abilities.js";
 
 export type TeamPending = { kind: "review" | "question"; p: any } | null;
@@ -28,6 +28,22 @@ export type TeamTurnInput = {
   coSpoke: boolean;
   // Tests: nothing is written or sent; each tool reports what it would do.
   dryRun?: boolean;
+  // The same social awareness Co has (Royce, 2026-09-28: "Co needs to be
+  // socially aware, Mo does too. It has the same scripts"): the thread so
+  // far, what this moment is about, pushback aimed at Mo, and what Mo has
+  // learned from past pushback. See moAwareness below.
+  awareness?: MoAwareness | null;
+};
+
+export type MoAwareness = {
+  recent: string;
+  topic: string | null;
+  pushback: string | null;
+  lessons: string[];
+  repliedTo: string | null;
+  handedOff: boolean;
+  // Whether it's obvious this text is from Mo (moVoice.ts introNeeded).
+  needsIntro?: boolean;
 };
 
 export type TeamTurn = { reply: string | null; passed: boolean; tools: string[]; notDone: string[] };
@@ -44,7 +60,65 @@ export function pendingLine(pending: TeamPending): string {
   return `You showed them ${name} (${p.source === "x" ? "on X" : "on LinkedIn"}) and asked "Want me to go for it? Yes, no, or tell me what to change." What you'd send: ${send}. A yes is moApprove, a no is moSkip, a change is moChangeDraft.`;
 }
 
-export function teamSystem(input: Pick<TeamTurnInput, "approverFirst" | "pending" | "coSpoke">): string {
+// Say it's Mo only when that isn't obvious; otherwise just talk.
+export function identityLine(a: MoAwareness | null | undefined): string {
+  return a?.needsIntro === false
+    ? "They can tell it's you from the thread, so don't announce yourself; just talk."
+    : "Co spoke last or it's been a while, so make it clear it's you, briefly and in your own words, woven into what you say rather than as a set greeting.";
+}
+
+export function awarenessLines(a: MoAwareness | null | undefined): string {
+  if (!a) return "";
+  const lines: string[] = [];
+  if (a.recent) lines.push(`The thread so far (oldest first):\n${a.recent}`);
+  if (a.repliedTo) lines.push(`They pressed Reply on your own text, so this message is for you and about it: "${a.repliedTo}"`);
+  if (a.handedOff) lines.push("Co handed this message to you because it's about your work. Answer it yourself; don't call notForMo.");
+  if (a.topic) lines.push(`Right now this is about: ${a.topic}. Stay on it.`);
+  if (a.pushback) lines.push(`They're pushing back on what you said: ${a.pushback}. Own it plainly in a few words, fix it, don't repeat it or defend it.`);
+  if (a.lessons.length) lines.push(`What you've learned about how to be with them, from times they corrected you: ${a.lessons.join(" / ")}`);
+  return lines.length ? `\n\n${lines.join("\n\n")}` : "";
+}
+
+// Built before each team turn: the recent thread (their texts, Co's and
+// Mo's), one cheap read of the moment (services/connectDots.ts readMoment),
+// and Mo's own lessons ("[Mo] " co_lesson notes). A new lesson from their
+// pushback is saved for next time.
+export async function moAwareness(userId: string, text: string, opts: { repliedTo?: string | null; handedOff?: boolean } = {}): Promise<MoAwareness> {
+  const { default: pool } = await import("../db/db.js");
+  const [convo, moSent, lessonRows] = await Promise.all([
+    pool
+      .query(`SELECT content, created_at FROM co_memories WHERE user_id = $1 AND memory_type = 'text_exchange' ORDER BY created_at DESC LIMIT 8`, [userId])
+      .then((r) => r.rows)
+      .catch(() => [] as any[]),
+    pool
+      .query(`SELECT content, sent_at AS created_at FROM outbound_messages WHERE user_id = $1 AND sender = 'mo' ORDER BY sent_at DESC LIMIT 4`, [userId])
+      .then((r) => r.rows.map((x: any) => ({ ...x, content: `Mo said: ${x.content}` })))
+      .catch(() => [] as any[]),
+    pool
+      .query(`SELECT content FROM co_memories WHERE user_id = $1 AND memory_type = 'co_lesson' AND content LIKE '[Mo] %' ORDER BY created_at DESC LIMIT 5`, [userId])
+      .then((r) => r.rows)
+      .catch(() => [] as any[]),
+  ]);
+  const recent = [...convo, ...moSent]
+    .sort((a: any, b: any) => new Date(a.created_at).getTime() - new Date(b.created_at).getTime())
+    .map((x: any) => String(x.content).slice(0, 300))
+    .join("\n")
+    .slice(-2000);
+  const { readMoment, saveLesson } = await import("../services/connectDots.js");
+  const moment = await readMoment({ now: `They just texted Mo: "${text.slice(0, 500)}"${opts.repliedTo ? ` [Replying to Mo's text: "${opts.repliedTo.slice(0, 300)}"]` : ""}`, recent, asks: [], threads: [], offersThisWeek: 0 }, { forReply: true }).catch(() => null);
+  if (moment?.lesson) await saveLesson(userId, `[Mo] ${moment.lesson}`).catch(() => {});
+  return {
+    recent,
+    topic: moment?.topic || null,
+    pushback: moment?.pushback ?? null,
+    lessons: lessonRows.map((r: any) => String(r.content).replace(/^\[Mo\] /, "")),
+    repliedTo: opts.repliedTo ?? null,
+    handedOff: Boolean(opts.handedOff),
+    needsIntro: await import("./review.js").then(async (r) => introNeeded(await r.lastOutboundTo(userId))).catch(() => true),
+  };
+}
+
+export function teamSystem(input: Pick<TeamTurnInput, "approverFirst" | "pending" | "coSpoke" | "awareness">): string {
   return `${MO_VOICE}
 
 You and Co share one phone number and one thread. ${input.approverFirst ?? "This person"} is on the team (they approve who you reach out to).
@@ -52,11 +126,11 @@ You and Co share one phone number and one thread. ${input.approverFirst ?? "This
 What you can do, and the lines you don't cross:
 ${moCapabilitySheet().map((c) => `- ${c}`).join("\n")}
 
-Right now: ${pendingLine(input.pending)}${input.coSpoke ? "\nCo has texted them since you asked, so a short yes or no is probably an answer to Co unless it names you or the person." : ""}
+Right now: ${pendingLine(input.pending)}${input.coSpoke ? "\nCo has texted them since you asked, so a short yes or no is probably an answer to Co unless it names you or the person." : ""}${awarenessLines(input.awareness)}
 
 First decide who the message is for. It's for Co, not you, unless it's about your work (the people you find and reach out to, your search, pausing you) or answers what you're waiting on. Anything about their own life, plans, feelings, events for themselves, calls, their invites or membership, or what Co can do is Co's ("call me", "how many invites do I have?", "what's on tonight?"). Then call notForMo and nothing else, and never answer for Co or say what Co can or can't do.
 
-Otherwise do what they asked with your tools, then write your reply. Your reply is only what your tools returned: when a tool gives \`say\`, include it word for word, and never claim something happened that a tool didn't report. If they ask what you can do, answer in two or three short sentences from the list above, never a list. Never offer something your tools can't do right now: you can't reach anyone the team hasn't approved, and you can't make outreach go out on demand or faster. Describe yourself the way your definition says: you extend invitations to Co. If you need something from them, ask one plain question. When your reply doesn't start with a tool's \`say\`, open with "${MO_RULES.opener(input.approverFirst)}". Short, plain, no em dashes.`;
+Otherwise do what they asked with your tools, then write your reply. Your reply is only what your tools returned: when a tool gives \`say\`, include it word for word, and never claim something happened that a tool didn't report. If they ask what you can do, answer in two or three short sentences from the list above, never a list. Never offer something your tools can't do right now: you can't reach anyone the team hasn't approved, and you can't make outreach go out on demand or faster. Describe yourself the way your definition says: you extend invitations to Co. If you need something from them, ask one plain question. ${identityLine(input.awareness)} Short, plain, no em dashes.`;
 }
 
 type Deps = {
@@ -111,6 +185,9 @@ function dryDeps(): Deps {
 export async function runMoTeamTurn(input: TeamTurnInput): Promise<TeamTurn> {
   const deps = input.dryRun ? dryDeps() : await liveDeps(input.userId);
   const says: string[] = [];
+  // Receipts Mo may put in its own words, as long as the facts that matter
+  // are still there (checked in finalReply); the exact line is the fallback.
+  const loose: LooseSay[] = [];
   const notDone: string[] = [];
   const used: string[] = [];
   let passed = false;
@@ -118,6 +195,10 @@ export async function runMoTeamTurn(input: TeamTurnInput): Promise<TeamTurn> {
   const say = (s: string) => {
     says.push(s);
     return { ok: true, say: s };
+  };
+  const sayLoose = (s: string, mustInclude: string[]) => {
+    loose.push({ text: s, mustInclude });
+    return { ok: true, happened: s, note: "Tell them this in your own words; keep what it says." };
   };
   const needs = (kind: "review" | "question") => (pending?.kind === kind ? null : { ok: false, error: `You aren't waiting on ${kind === "review" ? "a yes or no about anyone" : "an answer to anyone's question"} right now, so nothing was done.` });
   const done = (r: { ok: true; say: string } | { ok: false; error: string }) => (r.ok ? say(r.say) : { ok: false, error: r.error });
@@ -148,7 +229,7 @@ export async function runMoTeamTurn(input: TeamTurnInput): Promise<TeamTurn> {
         const k = kindOfPerson.trim().replace(/^(for|some|more)\s+/i, "");
         if (k.length < 3) return { ok: false, error: "Say what kind of person, in a few words." };
         await deps.focus(k);
-        return say(`Got it, I'll look for ${k} in my next search (Monday mornings).`);
+        return sayLoose(`Got it, I'll look for ${k} in my next search (Monday mornings).`, [k.split(/\s+/).slice(-1)[0], "monday"]);
       },
     }),
     moPause: tool({
@@ -156,7 +237,7 @@ export async function runMoTeamTurn(input: TeamTurnInput): Promise<TeamTurn> {
       inputSchema: z.object({}),
       execute: async () => {
         await deps.pause(true);
-        return say(`Paused. No new searches or outreach until you tell me to start again. If someone I already reached out to writes back, I'll still bring it to you.`);
+        return sayLoose(`Paused. No new searches or outreach until you tell me to start again. If someone I already reached out to writes back, I'll still bring it to you.`, ["paus", "write", "back"]);
       },
     }),
     moResume: tool({
@@ -164,7 +245,7 @@ export async function runMoTeamTurn(input: TeamTurnInput): Promise<TeamTurn> {
       inputSchema: z.object({}),
       execute: async () => {
         await deps.pause(false);
-        return say(`Back on. I'll pick up where I left off.`);
+        return sayLoose(`Back on. I'll pick up where I left off.`, ["back"]);
       },
     }),
     moApprove: tool({
@@ -211,7 +292,8 @@ export async function runMoTeamTurn(input: TeamTurnInput): Promise<TeamTurn> {
       providerOptions: { anthropic: { effort: "low" as const } },
       system: teamSystem(input),
       prompt: input.text.slice(0, 1500),
-      tools,
+      // Handed over or replied to directly: it's Mo's to answer.
+      tools: input.awareness?.handedOff || input.awareness?.repliedTo ? Object.fromEntries(Object.entries(tools).filter(([n]) => n !== "notForMo")) : tools,
       stopWhen: [stepCountIs(5), () => passed],
       experimental_telemetry: { isEnabled: true, functionId: "mo.teamTurn" },
     });
@@ -223,11 +305,11 @@ export async function runMoTeamTurn(input: TeamTurnInput): Promise<TeamTurn> {
     if (!says.length) return { reply: null, passed: true, tools: used, notDone };
   }
 
-  let reply = passed && !says.length ? null : finalReply(text, says, input.approverFirst);
+  let reply = passed && !says.length && !loose.length ? null : finalReply(text, says, input.approverFirst, loose);
   // Mo's own words are held to what Mo can do and what its tools just did,
   // the same claim check as Co's (2026-09-26: "I can still get today's 5
   // moving"). Unsupported sentences are cut; what the tools said stays.
-  if (reply) reply = await holdToFacts(reply, says, input);
+  if (reply) reply = await holdToFacts(reply, [...says, ...loose.map((l) => l.text)], input);
   if (!input.dryRun) {
     await recordDecision({
       layer: 5,
@@ -256,24 +338,24 @@ export async function holdToFacts(reply: string, says: string[], input: Pick<Tea
   if (!failed.length) return reply;
   const kept = stripUnsupported(reply, failed).trim();
   if (says.every((s) => kept.includes(s.trim())) && kept.split(/\s+/).length >= 3) return kept;
-  return says.length ? says.join("\n\n") : kept || `${MO_RULES.opener(input.approverFirst)} I can't do that one.`;
+  return says.length ? says.join("\n\n") : kept || `I can't do that one.`;
 }
 
 // Mo's words around what its tools reported. Every `say` has to be in the
 // reply as written; if the model paraphrased one away, the tools' own lines
 // are sent instead.
-export function finalReply(text: string, says: string[], approverFirst: string | null): string {
+export type LooseSay = { text: string; mustInclude: string[] };
+
+export function finalReply(text: string, says: string[], approverFirst: string | null, loose: LooseSay[] = []): string {
   const clean = (s: string) => s.replace(/\s*[—–]\s*/g, ", ").replace(/ - /g, ", ").trim();
-  // The opener once: some tools' lines already start with it.
-  const opener = MO_RULES.opener(approverFirst);
-  const once = (s: string) => {
-    let out = s;
-    while (out.includes(`${opener} ${opener}`)) out = out.replace(`${opener} ${opener}`, opener);
-    return out;
-  };
+  // A sentence said twice in a row (the model repeating a tool's line), once.
+  const once = (s: string) => s.replace(/(^|\n|[.!?]\s)([^.!?\n]{3,}[.!?])\s+\2/g, "$1$2");
   const t = once(clean(text));
   const carries = says.every((s) => t.includes(clean(s)));
-  if (t && carries) return t;
-  if (says.length) return once(says.map(clean).join("\n\n"));
-  return t || `${MO_RULES.opener(approverFirst)} I didn't catch that. Want where things stand?`;
+  // A loose receipt counts when its facts are there, in whatever words.
+  const carriesLoose = loose.every((l) => l.mustInclude.every((w) => t.toLowerCase().includes(w.toLowerCase())));
+  if (t && carries && carriesLoose) return t;
+  if (t && carries && !carriesLoose) return once([t, ...loose.filter((l) => !l.mustInclude.every((w) => t.toLowerCase().includes(w.toLowerCase()))).map((l) => clean(l.text))].join("\n\n"));
+  if (says.length || loose.length) return once([...says, ...loose.map((l) => l.text)].map(clean).join("\n\n"));
+  return t || `I didn't catch that. Want where things stand?`;
 }

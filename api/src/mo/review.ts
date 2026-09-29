@@ -16,7 +16,7 @@ import pool from "../db/db.js";
 import { recordDecision } from "../harness/core.js";
 import { plainDone, plainNo, plainYes, MO, suppressionKeys } from "./rules.js";
 import { sendMoEmailReply, sendingBlocked } from "./outreach.js";
-import { MO_RULES } from "./moVoice.js";
+import { introNeeded, MO_RULES } from "./moVoice.js";
 import { isMoPaused } from "./team.js";
 import { redraftOutreach } from "./draft.js";
 import { sendDm } from "./xApi.js";
@@ -33,9 +33,9 @@ export async function approvers(): Promise<Approver[]> {
 }
 
 async function textTo(phone: string, content: string): Promise<boolean> {
-  const { default: sendblue } = await import("../services/sendblue.js");
-  return sendblue.messages
-    .send({ number: phone, content, from_number: process.env.SENDBLUE_PHONE_NUMBER! })
+  const { default: sendblue, sendingAs } = await import("../services/sendblue.js");
+  // Recorded as Mo's, so a reply under it comes back to Mo.
+  return sendingAs("mo", () => sendblue.messages.send({ number: phone, content, from_number: process.env.SENDBLUE_PHONE_NUMBER! }))
     .then(() => true)
     .catch((err: any) => {
       console.error("mo: texting an approver failed:", err?.message ?? err);
@@ -58,7 +58,7 @@ export const firstName = (p: { name: string | null; x_handle: string | null }) =
 
 // The texts, in Mo's own voice (mo/moVoice.ts): first person, a teammate
 // with a view, their exact quote, and one plain question. Mo shares Co's
-// number and thread, so each one opens by saying it's Mo.
+// number and thread, so it says it's Mo when that isn't obvious (introNeeded).
 // One sentence of Mo's reason, so a review stays short (Royce, 2026-09-24:
 // "Mo explanations may be a little bit too long").
 export function firstSentence(text: string, max = 180): string {
@@ -71,7 +71,8 @@ export function firstSentence(text: string, max = 180): string {
 // same format of how we do the tiers"): the link alone first so it shows a
 // preview, then one short line on who and why, then what Mo would send, then
 // one question. Separate texts, in order.
-export function reviewMessages(p: any, left: number, approverFirst: string | null = null): string[] {
+// intro: who's texting, only when that isn't obvious (moVoice.ts introNeeded).
+export function reviewMessages(p: any, left: number, intro = ""): string[] {
   const where = p.source === "x" ? "on X" : "on LinkedIn";
   const link = p.post_url ?? p.linkedin_url ?? null;
   const send =
@@ -87,19 +88,27 @@ export function reviewMessages(p: any, left: number, approverFirst: string | nul
         ];
   return [
     link,
-    `${MO_RULES.opener(approverFirst)} ${who(p)} ${where}${left > 1 ? `, 1 of ${left}` : ""}. They wrote: "${p.evidence_quote}" ${firstSentence(p.reason)}`,
+    `${intro ? `${intro} ` : ""}${who(p)} ${where}${left > 1 ? `, 1 of ${left}` : ""}. They wrote: "${p.evidence_quote}" ${firstSentence(p.reason)}`,
     send.filter(Boolean).join("\n\n"),
     `Want me to go for it? Yes, no, or tell me what to change.`,
   ].filter((m): m is string => Boolean(m));
 }
 
 // The same review as one text (for replies like "here's the new version").
-export function reviewText(p: any, left: number, approverFirst: string | null = null): string {
-  return reviewMessages(p, left, approverFirst).join("\n\n");
+export function reviewText(p: any, left: number, intro = ""): string {
+  return reviewMessages(p, left, intro).join("\n\n");
 }
 
-export function questionText(p: any, approverFirst: string | null = null): string {
-  return `${MO_RULES.opener(approverFirst)} ${who(p)} wrote back: "${String(p.pending_question ?? "").slice(0, 400)}"\n\nWhat should I say? I'll send your answer word for word.`;
+export function questionText(p: any, intro = ""): string {
+  return `${intro ? `${intro} ` : ""}${who(p)} wrote back: "${String(p.pending_question ?? "").slice(0, 400)}"\n\nWhat should I say? I'll send your answer word for word.`;
+}
+
+// Mo's last text to them, and whether anything came after it.
+export async function lastOutboundTo(userId: string): Promise<{ sender: string; sentAt: Date } | null> {
+  const { rows } = await pool
+    .query(`SELECT sender, sent_at FROM outbound_messages WHERE user_id = $1 ORDER BY sent_at DESC LIMIT 1`, [userId])
+    .catch(() => ({ rows: [] as any[] }));
+  return rows[0] ? { sender: String(rows[0].sender ?? "co"), sentAt: new Date(rows[0].sent_at) } : null;
 }
 
 
@@ -122,8 +131,9 @@ async function shortlistedCount(): Promise<number> {
 
 async function present(a: Approver, item: { kind: PendingKind; p: any }): Promise<void> {
   let texts: string[];
-  if (item.kind === "review") texts = reviewMessages(item.p, await shortlistedCount(), a.firstName);
-  else if (item.kind === "question") texts = [questionText(item.p, a.firstName)];
+  const intro = MO_RULES.intro(introNeeded(await lastOutboundTo(a.id)));
+  if (item.kind === "review") texts = reviewMessages(item.p, await shortlistedCount(), intro);
+  else if (item.kind === "question") texts = [questionText(item.p, intro)];
   else return; // nothing is ever handed to the team to send (2026-09-24)
   // In order, stopping at the first failure so they never arrive half-shown.
   let ok = true;
@@ -165,7 +175,7 @@ export async function clearItem(no: number): Promise<void> {
 // (then it goes to Co as usual). Mo reads it and decides (mo/teamAgent.ts);
 // code only decides whether Mo should read it at all, so an approver's
 // everyday texts to Co don't wait on Mo.
-export async function handleMoReply(userId: string, content: string): Promise<string | null> {
+export async function handleMoReply(userId: string, content: string, opts: { repliedTo?: string | null; handedOff?: boolean } = {}): Promise<string | null> {
   const { rows } = await pool.query(`SELECT mo_approver, first_name, mo_pending_no, mo_pending_kind, mo_pending_at FROM users WHERE id = $1`, [userId]).catch(() => ({ rows: [] as any[] }));
   const me = rows[0];
   if (!me?.mo_approver) return null;
@@ -191,21 +201,36 @@ export async function handleMoReply(userId: string, content: string): Promise<st
     }
   }
 
-  const mentionsMo = /\bmo\b/i.test(text);
-  if (!pending && !mentionsMo) return null;
+  // They pressed Reply on Mo's own text, or Co handed it over: it's Mo's,
+  // whatever it says (2026-09-28: "What's the message?" under Mo's Harneet
+  // question went to Co).
+  const forMo = Boolean(opts.repliedTo) || Boolean(opts.handedOff);
+  // Called by name with @Mo (Royce, 2026-09-28: "I like @Mo"). Talking
+  // about Mo ("Mo already does that") stays with Co, which can hand off.
+  const mentionsMo = callsMo(text);
+  if (!forMo && !pending && !mentionsMo) return null;
   // Once Co has texted them since Mo asked, their next text is most likely
   // for Co; Mo still reads it when it names Mo or the person.
-  const coSpoke = pending ? await coSpokeSince(userId, me.mo_pending_at) : false;
-  if (pending && coSpoke && !namesThisItem(text, pending.p)) return null;
+  const coSpoke = pending && !forMo ? await coSpokeSince(userId, me.mo_pending_at) : false;
+  if (!forMo && pending && coSpoke && !namesThisItem(text, pending.p)) return null;
 
-  const turn = await runMoTeamTurn({ userId, approverFirst: me.first_name ?? null, text, pending, coSpoke });
+  const { moAwareness } = await import("./teamAgent.js");
+  const awareness = await moAwareness(userId, text, opts).catch(() => null);
+  const turn = await runMoTeamTurn({ userId, approverFirst: me.first_name ?? null, text, pending, coSpoke, awareness });
+  // Handed over or replied to directly: Mo answers, never silently passes back.
+  if (forMo && turn.reply === null) return opts.handedOff ? null : `That one's really for Co, I'll let Co take it.`;
   return turn.reply;
+}
+
+// "@Mo" anywhere in the text calls Mo in.
+export function callsMo(text: string): boolean {
+  return /(^|[^\w@])@mo\b/i.test(text);
 }
 
 export function namesThisItem(text: string, p: { name: string | null; x_handle: string | null }): boolean {
   const first = (p.name ?? "").trim().split(/\s+/)[0]?.toLowerCase();
   const t = text.toLowerCase();
-  return /\bmo\b/.test(t) || (Boolean(first) && first.length >= 2 && new RegExp(`\\b${first.replace(/[^a-z0-9]/g, "")}\\b`).test(t)) || (Boolean(p.x_handle) && t.includes(`@${p.x_handle!.toLowerCase()}`));
+  return callsMo(t) || (Boolean(first) && first.length >= 2 && new RegExp(`\\b${first.replace(/[^a-z0-9]/g, "")}\\b`).test(t)) || (Boolean(p.x_handle) && t.includes(`@${p.x_handle!.toLowerCase()}`));
 }
 
 async function coSpokeSince(userId: string, since: Date | null): Promise<boolean> {

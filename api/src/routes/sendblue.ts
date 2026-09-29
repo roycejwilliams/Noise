@@ -27,11 +27,12 @@ import { IDENTITY_RULE, stripUngroundedIdentity } from "../services/identityGuar
 import { claimJoinNotice, invitesLeftFor, inviterFirstName, releaseJoinNotice } from "../services/invites.js";
 import { decideInviteJoinedGate } from "../services/inviteJoinGate.js";
 import { handlePhoneChange } from "../services/phoneChange.js";
-import { handleTeamText } from "../services/extensions.js";
+import { extensionForMessage, handleTeamText } from "../services/extensions.js";
 import { firstSendTimes } from "../services/turnLatency.js";
 import { catchUpReaction } from "../services/reactionCatchup.js";
 import { gapDescription } from "../services/understanding.js";
 import { logJevShadow, startJevShadow } from "../services/jevShadow.js";
+import { relayFacts } from "../services/relay.js";
 import { CO_WHY } from "../services/coVoice.js";
 import { assembleContext, type TurnContext } from "../services/turnContext.js";
 import { feedbackInstruction, readTurn, readTurnEnabled, type TurnRead } from "../services/readTurn.js";
@@ -70,7 +71,7 @@ import { routerGateChecks } from "../harness/routerChecks.js";
 import { addEventFacts, addFact, addHint, addInstruction, addOngoingSearchFacts, countOf, FRESH_SEARCH_INSTRUCTION, gatherReplyFacts, recordSearchNote } from "../harness/replyGrounding.js";
 import { runConversationReplyAgent, filterRelevantMemories, CALL_OFFER_EXPIRY_DAYS } from "../agent/conversationReply.js";
 import { triggerCallForUser } from "../services/callTrigger.js";
-import sendblue, { blockSender, cleanCoMessage, markRead, sendReaction, webhookSecretMatches } from "../services/sendblue.js";
+import sendblue, { blockSender, cleanCoMessage, markRead, sendReaction, webhookSecretMatches, sendingAs } from "../services/sendblue.js";
 import { TURN_FAILED_NOTE, turnFailedNoteBlocked } from "../services/turnFailure.js";
 import { arrivedByText } from "../services/eventPresence.js";
 import { lineInVoice } from "../services/voiceLine.js";
@@ -145,7 +146,16 @@ const REPLY_BUDGET_SEARCH_MS = 60_000;
 // answer can be saved as their contact preference.
 const ONBOARDING_CALL_OFFER_PREFIX = "[onboarding]";
 
+// The fallback for the line sent while a search runs, when Co didn't write
+// its own. Kept so older logged rows are still recognized.
 const HOLD_LINES = ["On it, give me a sec.", "Let me look, one sec.", "Looking now, give me a minute."];
+export const HOLD_PREFIX = "Co is looking:";
+// Co's own hold line, used only when it's a short plain line with no link.
+export function holdLineFrom(line: string | null | undefined): string | null {
+  const t = cleanCoMessage(String(line ?? "")).trim();
+  if (!t || t.length > 140 || /https?:\/\/|www\./i.test(t)) return null;
+  return t;
+}
 
 function deriveStyleHint(chronological: { content: string }[]): string {
   const userLines = chronological
@@ -862,13 +872,22 @@ export function sendblueRouter(io: Server): Router {
         // reply. Not logged as conversation, so it never reaches their own
         // threads.
         if (hasText && user.identity_captured) {
-          const ext = await handleTeamText(user.id, content).catch((err: any) => {
+          // They pressed Reply on an extension's own text (Mo's "So on
+          // Harneet…"): it goes to that extension, whatever it says
+          // (2026-09-28: Co answered it instead).
+          const pressed = req.body?.thread_originator?.message_handle ?? req.body?.reply_to?.message_handle;
+          const repliedToExt = pressed ? await extensionForMessage(user.id, pressed).catch(() => null) : null;
+          const ext = await handleTeamText(user.id, content, repliedToExt ? { repliedTo: repliedToExt.content, only: repliedToExt.id } : {}).catch((err: any) => {
             console.error("sendblue: extension reply failed:", err?.message ?? err);
             return null;
           });
+          if (repliedToExt) {
+            recordDecision({ layer: 2, decision: "team.inlineToExtension", userId: user.id, outcome: ext ? "act" : "skip", action: repliedToExt.id }).catch(() => {});
+          }
           if (ext !== null) {
             if (ext.reply) {
-              await sendblue.messages.send({ number, content: ext.reply, from_number: process.env.SENDBLUE_PHONE_NUMBER! }).catch((err: any) =>
+              // Recorded as the extension's own text, so a reply under it comes back to it.
+              await sendingAs(ext.extension, () => sendblue.messages.send({ number, content: ext.reply, from_number: process.env.SENDBLUE_PHONE_NUMBER! })).catch((err: any) =>
                 console.error(`sendblue: ${ext.extension} reply send failed:`, err?.message ?? err),
               );
             }
@@ -1561,9 +1580,12 @@ export function sendblueRouter(io: Server): Router {
           threadNextSend = false;
           return sendCoReply({ ...p, replyTo: await threadHandle() });
         };
-        const threadedSendAndLog = async (message: string, asVoice = false): Promise<boolean> => {
+        // hold: the line sent while a search runs, logged as "Co is looking:"
+        // so it never counts as a real answer (the checks below exclude it by
+        // prefix now that Co writes its own, not by a fixed list).
+        const threadedSendAndLog = async (message: string, asVoice = false, hold = false): Promise<boolean> => {
           const sent = await threadedSend({ phone: user.phone_number, message, asVoice });
-          if (sent) await logTextExchange(user.id, `Co replied: ${cleanCoMessage(message)}`);
+          if (sent) await logTextExchange(user.id, `${hold ? HOLD_PREFIX : "Co replied:"} ${cleanCoMessage(message)}`);
           return sent;
         };
         const factsMs = Date.now() - factsStarted;
@@ -2152,7 +2174,7 @@ Return ONLY valid JSON, no preamble: {"date": "YYYY-MM-DD or null", "time": "HH:
         // results, the time-frame follow-up. What it learns goes into the
         // reply's facts and back to Co as the tool's result.
         let searchedThisTurn = false;
-        const searchAndSend = async (what: string): Promise<{ answered: boolean; sentCount: number; briefing: string }> => {
+        const searchAndSend = async (what: string, whileLooking: string | null = null): Promise<{ answered: boolean; sentCount: number; briefing: string }> => {
           const factsBefore = replyFacts.facts.length;
           const instructionsBefore = replyFacts.instructions.length;
           let answered = false;
@@ -2170,8 +2192,10 @@ Return ONLY valid JSON, no preamble: {"date": "YYYY-MM-DD or null", "time": "HH:
               // Searching all tiers can take a while: say so first, so the
               // person isn't left waiting and resending (2026-09-15: a 70s
               // wait led to the same message sent five times).
-              const holdLine = HOLD_LINES[Math.floor(Math.random() * HOLD_LINES.length)];
-              if (await threadedSendAndLog(holdLine)) addFact(replyFacts, "did_this_turn", `Told them "${holdLine}" before searching.`);
+              // Co's own words for it when it wrote them (2026-09-28: the fixed
+              // "Let me look, one sec" read as a script); the stock line otherwise.
+              const holdLine = holdLineFrom(whileLooking) ?? HOLD_LINES[Math.floor(Math.random() * HOLD_LINES.length)];
+              if (await threadedSendAndLog(holdLine, false, true)) addFact(replyFacts, "did_this_turn", `Told them "${holdLine}" before searching.`);
               const RECOMMENDATION_TIME_CAP_MS = 45_000;
               const searchStarted = Date.now();
               searchMsForTurn = 0;
@@ -2771,6 +2795,9 @@ Return ONLY valid JSON, no preamble: {"date": "YYYY-MM-DD or null", "time": "HH:
           // learning read (services/turnLearning.ts); the next reply reads it.
           const moment = dotsP ? await dotsP : null;
           const dots = moment?.dots ?? [];
+          // Messages passed between them and someone they're connected to: each
+          // side knows only what the other chose to send (services/relay.ts).
+          (await relayFacts(user.id).catch(() => [] as string[])).forEach((line) => addFact(replyFacts, "known", line));
           const momentNote = momentInstruction(moment);
           if (momentNote) addInstruction(replyFacts, momentNote);
           const lessons = turn?.lessons ?? [];
@@ -2846,10 +2873,11 @@ Return ONLY valid JSON, no preamble: {"date": "YYYY-MM-DD or null", "time": "HH:
             // results go out before the reply step (2026-09-27: search turns
             // logged no first-text time at all).
             const sentRows = await pool
-              .query(`SELECT content, created_at FROM co_memories WHERE user_id = $1 AND memory_type = 'text_exchange' AND content LIKE 'Co replied:%' AND created_at >= $2 ORDER BY created_at LIMIT 20`, [user.id, myInboundAt])
+              .query(`SELECT content, created_at FROM co_memories WHERE user_id = $1 AND memory_type = 'text_exchange' AND (content LIKE 'Co replied:%' OR content LIKE $3) AND created_at >= $2 ORDER BY created_at LIMIT 20`, [user.id, myInboundAt, `${HOLD_PREFIX}%`])
               .then((r) => r.rows)
               .catch(() => [] as any[]);
-            const firsts = firstSendTimes(sentRows.map((r: any) => ({ text: String(r.content).replace(/^Co replied:\s*/, ""), at: new Date(r.created_at) })), new Date(myInboundAt), HOLD_LINES);
+            const rowsAsSent = sentRows.map((r: any) => ({ text: String(r.content).replace(/^Co replied:\s*/, "").replace(new RegExp(`^${HOLD_PREFIX}\\s*`), ""), at: new Date(r.created_at), hold: String(r.content).startsWith(HOLD_PREFIX) }));
+            const firsts = firstSendTimes(rowsAsSent, new Date(myInboundAt), [...HOLD_LINES, ...rowsAsSent.filter((x: any) => x.hold).map((x: any) => x.text.trim())]);
             recordDecision({
               layer: 3,
               decision: "turn.latency",

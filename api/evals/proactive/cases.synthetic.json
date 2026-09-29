@@ -820,7 +820,7 @@
     },
     {
       "id": "d05",
-      "about": "greeting line",
+      "about": "a natural greeting is fine (2026-09-28: greetings are guidance, not a veto)",
       "text": "Hey Maya, how was the Climate Founders Mixer?",
       "rules": {
         "maxSentences": 2,
@@ -828,11 +828,11 @@
           "climate"
         ]
       },
-      "shouldPass": false
+      "shouldPass": true
     },
     {
       "id": "d06",
-      "about": "three sentences",
+      "about": "three questions stacked in a first text",
       "text": "How was the mixer. Did you meet anyone. Want to call this week?",
       "rules": {
         "maxSentences": 2

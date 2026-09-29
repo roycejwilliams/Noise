@@ -34,6 +34,7 @@ import { getAudioEntry } from "./services/voiceNote.js";
 import { configureSocket } from "./socket/index.js";
 import { buildCoVCard } from "./utils/vcard.js";
 import { createMoRouter } from "./routes/mo.js";
+import { createGoogleRouter } from "./routes/google.js";
 
 const app = express();
 app.set("trust proxy", 1);
@@ -114,6 +115,7 @@ app.use("/luma", createLumaRouter());
 app.use("/payments", stripeRouter(io, authenticateToken));
 app.use("/sendblue", sendblueRouter(io));
 app.use("/mo", createMoRouter());
+app.use("/google", createGoogleRouter());
 
 // Serve Co's vCard so Sendblue can attach it to the circle_placement iMessage.
 // Sendblue fetches media_url before sending — this endpoint must be publicly reachable

@@ -1,3 +1,4 @@
+import { AsyncLocalStorage } from "node:async_hooks";
 import { sendLimiter } from "./sendLimiter.js";
 import { createHash, timingSafeEqual } from "crypto";
 import { SendblueAPI } from "sendblue";
@@ -125,14 +126,24 @@ function reportSendBreaker(number: string, count: number, resumesAt: number, rea
     .catch((err: any) => console.error("sendblue: breaker follow-up failed (non-fatal):", err?.message ?? err));
 }
 
+// Who a send is from: Co, or an extension speaking on the same number (Mo).
+// Set around a send with sendingAs("mo", ...), read when the handle is saved,
+// so an inline reply to Mo's text goes back to Mo (2026-09-28: Royce replied
+// under Mo's "So on Harneet…" and Co answered instead).
+const senderContext = new AsyncLocalStorage<string>();
+export function sendingAs<T>(sender: string, fn: () => Promise<T>): Promise<T> {
+  return senderContext.run(sender, fn);
+}
+
 function recordOutbound(handle: string, number: string, content: string): void {
+  const sender = senderContext.getStore() ?? "co";
   import("../db/db.js")
     .then(({ default: pool }) =>
       pool.query(
-        `INSERT INTO outbound_messages (message_handle, user_id, content)
-         SELECT $1, (SELECT id FROM users WHERE right(regexp_replace(phone_number, '\\D', '', 'g'), 10) = right(regexp_replace($2, '\\D', '', 'g'), 10) LIMIT 1), $3
+        `INSERT INTO outbound_messages (message_handle, user_id, content, sender)
+         SELECT $1, (SELECT id FROM users WHERE right(regexp_replace(phone_number, '\\D', '', 'g'), 10) = right(regexp_replace($2, '\\D', '', 'g'), 10) LIMIT 1), $3, $4
          ON CONFLICT (message_handle) DO NOTHING`,
-        [handle, number, content.slice(0, 2000)],
+        [handle, number, content.slice(0, 2000), sender],
       ),
     )
     .catch((err: any) => console.error("sendblue: outbound handle not recorded (non-fatal):", err?.message ?? err));

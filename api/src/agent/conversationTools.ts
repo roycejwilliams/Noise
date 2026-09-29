@@ -1,6 +1,6 @@
 import { z } from "zod";
 import { tool } from "ai";
-import { toolUse } from "../services/capabilities.js";
+import { teamOnlyTools, toolUse } from "../services/capabilities.js";
 import { guardTools } from "./toolGuard.js";
 import { sendLimiter } from "../services/sendLimiter.js";
 import sendblue, { cleanCoMessage, sendReaction } from "../services/sendblue.js";
@@ -24,6 +24,7 @@ import { resolveNamedEventGuest, requestIntroToNamedGuest } from "../services/ev
 import { askEntries } from "../harness/profileWrite.js";
 import { getTimezoneForCity } from "../services/geocoding.js";
 import { DateTime } from "luxon";
+import { googleTools } from "../services/googleTools.js";
 
 // A date as the member would say it, in their own zone (2026-09-22 code
 // review: toDateString() used the server's zone, so a Pacific evening showed
@@ -101,11 +102,13 @@ export type ConversationToolContext = {
   // Tests only: searchNow returns a placeholder instead of searching the web.
   stubSearch?: boolean;
   // The text route's full search-and-send (see ConversationReplyInput).
-  searchAndSend?: (what: string) => Promise<{ answered: boolean; sentCount: number; briefing: string }>;
+  searchAndSend?: (what: string, whileLooking?: string | null) => Promise<{ answered: boolean; sentCount: number; briefing: string }>;
   // For reactInsteadOfReplying.
   messageHandle?: string | null;
   // Their message may mean they aren't safe (services/safety.ts): no tapback.
   safetyConcern?: boolean;
+  // On the team (users.mo_approver): gets the team-only tools (handToTeammate).
+  isTeam?: boolean;
   // The one picture of this turn (services/turnContext.ts), for tools that read what Co sent.
   turn?: TurnContext | null;
   firstName?: string | null;
@@ -280,6 +283,48 @@ export function createConversationTools(ctx: ConversationToolContext) {
     }),
 
     // Feedback for the team, saved by Co (services/issueReports.ts saveFeedback).
+    // Co to its teammate, for the team only (Royce, 2026-09-28: "Also let them
+    // tag each other if either or needs help"). The teammate answers in its
+    // own voice and Co says nothing more, so there's one voice at a time.
+    // Absent from the tool map for everyone else (teamOnlyTools, below).
+    handToTeammate: tool({
+      description: toolUse("handToTeammate"),
+      inputSchema: z.object({
+        ask: z.string().optional().describe("What you're asking your teammate, in a few words, when you're bringing them in for help rather than just passing their message along."),
+      }),
+      execute: async ({ ask }) => {
+        if (!ctx.isTeam) return { ok: false, error: "Not available." };
+        if (state.replyCount > 0) return { ok: false, error: "You already replied this turn." };
+        if (ctx.dryRun) {
+          console.log(`[conversationReply dryRun] would hand ${ctx.userId}'s message to the teammate`);
+          state.sent = true;
+          state.reacted = true;
+          return { ok: true, note: "Handed over. Don't send a text reply." };
+        }
+        const { handleTeamText } = await import("../services/extensions.js");
+        // Co tags its teammate in the thread (Royce, 2026-09-28: "If Co needs
+        // help on anything they can also @ Mo"), so the handoff is visible.
+        const tag = `@Mo${ask?.trim() ? `, ${ask.trim().replace(/^@mo,?\s*/i, "")}` : ", can you take this one?"}`;
+        const r = await handleTeamText(ctx.userId, ask?.trim() ? `${ctx.resolvedContent}\n(Co asked you: ${ask.trim()})` : ctx.resolvedContent, { handedOff: true }).catch(() => null);
+        if (!r?.reply) {
+          notDone("Handed their message over, but the teammate didn't take it.");
+          return { ok: false, error: "Your teammate didn't take it. Answer them yourself." };
+        }
+        const { sendingAs } = await import("../services/sendblue.js");
+        await ctx.sendCoReply({ phone: ctx.phoneNumber, message: tag, asVoice: false }).catch(() => false);
+        await writeMemory(ctx.userId, "text_exchange", `Co replied: ${tag}`).catch(() => {});
+        const sent = await sendingAs(r.extension, () => ctx.sendCoReply({ phone: ctx.phoneNumber, message: r.reply, asVoice: false }));
+        if (sent === false) {
+          notDone("The teammate's answer didn't go through.");
+          return { ok: false, error: "That didn't go through. Answer them yourself." };
+        }
+        state.sent = true;
+        state.reacted = true;
+        await recordDecision({ layer: 3, decision: "team.handoffToExtension", userId: ctx.userId, outcome: "act", action: r.extension, proposal: { message: ctx.resolvedContent.slice(0, 200) } }).catch(() => {});
+        return { ok: true, note: "Your teammate answered them directly. Don't send a text reply." };
+      },
+    }),
+
     saveFeedbackForTeam: tool({
       description: toolUse("saveFeedbackForTeam"),
       inputSchema: z.object({
@@ -656,8 +701,14 @@ export function createConversationTools(ctx: ConversationToolContext) {
     // Search right now when they ask and nothing was searched this turn.
     searchNow: tool({
       description: toolUse("searchNow"),
-      inputSchema: z.object({ what: z.string().describe("What to look for, one plain sentence.") }),
-      execute: async ({ what }) => {
+      inputSchema: z.object({
+        what: z.string().describe("What to look for, one plain sentence."),
+        whileLooking: z
+          .string()
+          .optional()
+          .describe("A short text in your own words, sent right away while the search runs, saying what you're looking for (the way you'd tell a friend you're on it). Fresh each time, not a stock phrase."),
+      }),
+      execute: async ({ what, whileLooking }) => {
         if (ctx.searchedThisTurn) {
           return { ok: true, found: [], note: "A search already ran this turn and what it found was already sent to them. Do not search again, and do not say nothing came up." };
         }
@@ -665,7 +716,7 @@ export function createConversationTools(ctx: ConversationToolContext) {
         // In a real turn: search and send the way Co always has, link then
         // caption for each thing that fits (routes/sendblue.ts searchAndSend).
         if (ctx.searchAndSend) {
-          const r = await ctx.searchAndSend(what);
+          const r = await ctx.searchAndSend(what, whileLooking ?? null);
           if (r.sentCount) {
             state.sent = true;
             state.sentMessages.push(`[sent ${r.sentCount} search result(s)]`);
@@ -801,7 +852,64 @@ export function createConversationTools(ctx: ConversationToolContext) {
         return { ok: true };
       },
     }),
+
+    // Passing their words to someone they're connected to, or a reminder to
+    // follow up (services/relay.ts). The guards live in relayMessage: off
+    // unless CO_RELAY=on, only their own words, only connected people, one a
+    // day per person, nothing about anyone else.
+    followUp: tool({
+      description: toolUse("followUp"),
+      inputSchema: z.object({
+        mode: z.enum(["relay", "remind_me"]),
+        person: z.string().describe("relay: the first name of the person they asked you to pass it to."),
+        message: z.string().describe("relay: their exact words to pass along, copied from what they texted. remind_me: what to remind them about."),
+        when: z.string().optional().describe("remind_me: the day and time they gave, as an ISO date-time in their local time, e.g. 2026-10-01T15:00."),
+      }),
+      execute: async ({ mode, person, message, when }) => {
+        const relay = await import("../services/relay.js");
+        if (mode === "remind_me") {
+          if (ctx.dryRun) {
+            ctx.facts?.add("did_this_turn", `Set a reminder for them: "${message.slice(0, 160)}"${when ? ` at ${when}` : ""}.`);
+            return { ok: true };
+          }
+          const { rows } = await pool.query(`SELECT city FROM co_profiles WHERE user_id = $1`, [ctx.userId]).catch(() => ({ rows: [] as any[] }));
+          const zone = rows[0]?.city ? await getTimezoneForCity(rows[0].city).catch(() => null) : null;
+          const r = await relay.addReminder(ctx.userId, message, when ?? "", zone);
+          if (!r.ok) {
+            notDone("No reminder was set.");
+            return { ok: false, error: r.error };
+          }
+          ctx.facts?.add("did_this_turn", `Set a reminder for them for ${r.at}: "${message.slice(0, 160)}".`);
+          return { ok: true, note: `Reminder set for ${r.at}.` };
+        }
+        if (ctx.dryRun) {
+          // Same guards as a real relay, minus the send.
+          if (!relay.relayEnabled()) return { ok: false, error: "Passing messages to other members isn't switched on yet. Say so plainly; don't offer it." };
+          if (!relay.isOwnWords(message, [ctx.resolvedContent])) return { ok: false, error: "Only their own words can be passed along. Ask them exactly what they want sent, then pass that." };
+          const found = relay.matchConnection(person, await relay.connectionsFor(ctx.userId).catch(() => []));
+          if (!found.ok) {
+            notDone("No message was passed along: Co can't reach that person.");
+            return { ok: false, error: relay.NOT_REACHABLE };
+          }
+          ctx.facts?.add("did_this_turn", `(dry run) Would pass their words to ${found.person.firstName}: "${message.slice(0, 160)}".`);
+          return { ok: true };
+        }
+        const r = await relay.relayMessage({ fromUserId: ctx.userId, fromFirstName: ctx.firstName ?? "A member", to: person, message, currentText: ctx.resolvedContent });
+        if (!r.ok) {
+          notDone(r.reason === "not_reachable" ? "No message was passed along: Co can't reach that person." : `No message was passed along (${r.reason}).`);
+          return { ok: false, error: r.error };
+        }
+        ctx.facts?.add("did_this_turn", `Passed their words to ${r.to}: "${message.slice(0, 200)}". ${r.note}`);
+        return { ok: true, note: `${r.note} Say it went through; don't promise ${r.to} will reply.` };
+      },
+    }),
   };
+
+  // Team-only tools never exist for anyone else (services/capabilities.ts teamOnly).
+  if (!ctx.isTeam) for (const name of teamOnlyTools()) delete (tools as Record<string, unknown>)[name];
+
+  // Google Calendar and Gmail, read-only (services/googleTools.ts).
+  Object.assign(tools, googleTools(ctx, notDone));
 
   // Switches, limits, their yes, receipts and the decision log (toolGuard.ts).
   guardTools(tools, { userId: ctx.userId, resolvedContent: ctx.resolvedContent, dryRun: ctx.dryRun, notDone });

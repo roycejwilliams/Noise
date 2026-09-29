@@ -287,6 +287,8 @@ async function sendIntroEmail(eventId: string, eventName: string, a: MatchNudgeC
   }
   await writeMemory(a.user_id, "event_intro_email_sent", `Sent an intro email connecting ${a.first_name} and ${b.first_name} ahead of "${eventName}".`);
   await writeMemory(b.user_id, "event_intro_email_sent", `Sent an intro email connecting ${a.first_name} and ${b.first_name} ahead of "${eventName}".`);
+  // Introduced after both said yes: the only people a relay can reach (services/relay.ts).
+  await import("./relay.js").then((r) => r.recordConnection(a.user_id, b.user_id, "event_intro")).catch(() => {});
   return true;
 }
 

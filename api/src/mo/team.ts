@@ -18,7 +18,6 @@ import pool from "../db/db.js";
 import { MODELS } from "../models.js";
 import { parseModelJson } from "../services/modelJson.js";
 import { recordDecision } from "../harness/core.js";
-import { MO_RULES } from "./moVoice.js";
 
 // Mo understands the team in plain words (mo/teamAgent.ts, 2026-09-26):
 // what it can do is mo/abilities.ts, and these are the pieces its tools use.
@@ -256,7 +255,7 @@ export async function moStatusText(approverFirst: string | null): Promise<string
   const { joinedOutcomes, outcomesLine } = await import("./learn.js");
   const outcomes = await joinedOutcomes().catch(() => []);
   const parts = [
-    `${MO_RULES.opener(approverFirst)} ${waiting ? `${waiting} ${waiting === 1 ? "person is" : "people are"} waiting on your yes` : "Nobody new waiting on you"}, ${moving} in progress, ${joined} joined so far.`,
+    `${waiting ? `${waiting} ${waiting === 1 ? "person is" : "people are"} waiting on your yes` : "Nobody new waiting on you"}, ${moving} in progress, ${joined} joined so far.`,
     styleLine(styles as StyleResult[]),
     outcomesLine(outcomes),
     room ? `For ${room.event}, the guests would most want to meet ${room.gaps.map((g) => g.gap).join(", ")}, so they come first.` : null,

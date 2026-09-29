@@ -331,7 +331,8 @@ check("no follow-up line has an em dash or exclamation", [...OFFER_FOLLOWUP_MANY
     const state2 = { ...state, sends: [sent(100, "companion"), sent(60, "companion"), sent(30, "debrief")] };
     check("check-ins don't use up the follow-ups' weekly room", P.evaluateCandidates({ ...state2, candidates: [cand("ask_checkin")] }).eligible.length === 1);
   }
-  check("\"Hey Sam,\" is named as a greeting", /no greeting \("Hey", "Hi", "Hey Sam,"\)/.test(P.PROACTIVE_RULES));
+  check("principles, not quoted phrasings, and a greeting is guidance, not a veto", !/"the event"|"someone cool"|"Hey Sam,"/.test(P.PROACTIVE_RULES) && /a greeting is fine when it's natural, never a formula/.test(P.PROACTIVE_RULES) && !P.checkDraft("Hey Maya, how was the Climate Founders Mixer?", { maxSentences: 2 }).some((c: any) => !c.pass));
+  check("stacked questions are still caught", P.checkDraft("How was the mixer. Did you meet anyone. Want to call this week?", { maxSentences: 2 }).some((c: any) => c.name === "draft_one_question" && !c.pass));
 }
 
 console.log(`proactive rules: ${total - failed}/${total} passed`);

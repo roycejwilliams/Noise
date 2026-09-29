@@ -11,7 +11,7 @@ export const moRuntime: ExtensionRuntime = {
   // Off unless MO_ENABLED=true. Sending also waits on Co's X keys and the
   // outreach email settings; without them it's shortlist-only.
   enabled: () => moEnabled(),
-  teamText: handleMoReply,
+  teamText: (userId, text, opts) => handleMoReply(userId, text, opts),
   handoff: moHandoff,
   jobs: [
     // Finds people weekly, Monday 9am Pacific.

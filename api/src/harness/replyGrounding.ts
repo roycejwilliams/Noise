@@ -17,12 +17,12 @@
 //             sentences are dropped. The reply is never blocked.
 //   record  — recordDecision(layer 3, "reply.grounding")
 //   eval    — evals/reply/run.ts
-import { capabilitySheet } from "../services/capabilities.js";
+import { ABILITIES, capabilitySheet } from "../services/capabilities.js";
 import { sentDetailHints, sentDetailLines, type TurnContext } from "../services/turnContext.js";
 import { switchedOff } from "../services/abilitySwitches.js";
 import { textingStyleFor } from "../services/textingStyle.js";
 import { tasteSummary } from "../services/outcomes.js";
-import { handoffFor } from "../services/extensions.js";
+import { handoffFor, isTeamMember, teamSheet } from "../services/extensions.js";
 import { ledgerFacts } from "../services/coFacts.js";
 import { DEFAULT_ZONE, dateNote, itemDays, localToday, readDates, type Days } from "../services/dateGuard.js";
 import { sourceOf } from "../services/messageFormat.js";
@@ -130,6 +130,13 @@ export async function gatherReplyFacts(
   const handoff = await handoffFor(userId).catch(() => ({ known: [] as string[], instructions: [] as string[] }));
   for (const k of handoff.known) addFact(rf, "known", k);
   for (const line of handoff.instructions) addInstruction(rf, line);
+  // The team only: Co's teammates and the team-only abilities, so Co never
+  // pitches Mo's work back as a new idea (services/extensions.ts teamSheet).
+  // Everyone else gets nothing about them.
+  if (await isTeamMember(userId).catch(() => false)) {
+    for (const line of teamSheet()) addFact(rf, "capability", line);
+    for (const a of ABILITIES.filter((x) => x.teamOnly)) addFact(rf, "capability", a.can);
+  }
   // Abilities switched off right now (services/abilitySwitches.ts).
   for (const id of (await switchedOff().catch(() => new Map<string, string>())).keys()) {
     addFact(rf, "capability", `Co's ${id.replace(/_/g, " ")} ability is switched off right now. If it comes up, say it isn't available at the moment.`);
@@ -527,7 +534,7 @@ export function codeChecks(draft: string, rf: ReplyFacts, src: GroundingSources)
   if (/\b((calling|ringing|dialing) you (right )?now|i'?m (calling|ringing|dialing) you|still (calling|ringing|dialing) you)\b/i.test(draft)) {
     checks.push({ name: "no_call_placed_claim", pass: false, reason: "says a call is happening, but this reply never places one" });
   }
-  if (/\bI\s*(can(no|')?t|can not|am unable to|'?m unable to|don'?t|do not)\s+(actually\s+)?(make|place|do)?\s*(a\s+|phone\s+)*calls?\b|\bthis is (just )?(a )?text\b/i.test(draft)) {
+  if (callDenial(draft)) {
     checks.push({ name: "no_capability_denial", pass: false, reason: "says Co can't call, which is false" });
   }
   // An invite said to be sent or on its way when this turn's invite step
@@ -794,6 +801,31 @@ export function crowdClaim(text: string): boolean {
   return CROWD.test(text);
 }
 const CLASH = /\b(one or the other|can'?t (do|make|hit) both|have to pick one|pick one or|same (night|time)[^.!?]{0,40}\b(so|pick|choose|only one))\b/i;
+// Co reads its facts labeled [F1], [F2]…; a label never reaches the member
+// (2026-09-28: "I actually do this more than that made it sound, F20 says so").
+export function stripFactIds(text: string): string {
+  return text
+    .replace(/,?\s*\b(?:per|see|as in|according to)\s+\[?F\d{1,3}\]?,?/gi, "")
+    .replace(/,?\s*\[?\bF\d{1,3}\]?\s+says so/g, "")
+    .replace(/\s*[\[(]F\d{1,3}[\])]/g, "")
+    .replace(/\s+([.,:;!?])/g, "$1")
+    .replace(/[ \t]{2,}/g, " ")
+    .replace(/^\s*,\s*/, "")
+    .trim()
+    .replace(/^([a-z])/, (c) => c.toUpperCase());
+}
+
+// Saying Co can't call, in any wording: "I can't call", "no calls", "no phone
+// calls", "can't make calls" (2026-09-28: "I can't act for you, no calls, no
+// bookings" got through). Calling other people for them is a real limit and
+// passes: "can't call people for you", "no calls to sponsors".
+export function callDenial(text: string): boolean {
+  const denies =
+    /\bI\s*(can(no|')?t|can not|am unable to|'?m unable to|don'?t|do not)\s+(actually\s+)?(make|place|do)?\s*(a\s+|phone\s+)*calls?\b|\bthis is (just )?(a )?text\b|\bno (phone |voice )?calls\b|\b(can(no|')?t|unable to) (make |place |do )?(phone )?calls\b/i;
+  const others = /\b(calls?|call)\s+(to |for |on behalf of )?(other people|others|people for|sponsors?|venues?|anyone (else|for you)|them for you|on your behalf|for you)\b/i;
+  return text.split(/(?<=[.!?\n])\s+/).some((s) => denies.test(s) && !others.test(s));
+}
+
 export function clashClaim(text: string): boolean {
   return CLASH.test(text);
 }
@@ -817,7 +849,7 @@ export function stripUnsupported(draft: string, failed: GateCheck[]): string {
     if (failed.some((f) => f.name === "no_emotion_label") && !checkNoEmotionLabel(s).pass) return false;
     if (failed.some((f) => f.name === "no_followup_promise") && followupPromiseMatch(s)) return false;
     if (failed.some((f) => f.name === "no_prediction") && predictionMatch(s)) return false;
-    if (failed.some((f) => f.name === "no_capability_denial") && /\b(can(no|')?t|unable to|this is (just )?text)\b/i.test(s)) return false;
+    if (failed.some((f) => f.name === "no_capability_denial") && (callDenial(s) || /\b(can(no|')?t|unable to|this is (just )?text)\b.{0,40}\bcalls?\b/i.test(s))) return false;
     if (failed.some((f) => f.name === "no_invite_sent_claim") && INVITE_ACTION_VERB.test(s)) return false;
     if (failed.some((f) => f.name === "no_group_chat_claim") && claimsGroupChat(s)) return false;
     if (failed.some((f) => f.name === "link_on_file") && /https?:\/\//i.test(s)) return false;
@@ -894,6 +926,18 @@ export type GroundingResult = {
 // Claims nothing, and reads like a person (2026-09-18: "I don't have that, so
 // I'd rather not guess." answered "is it noted to the team?").
 const MINIMAL_FALLBACK = "Honestly, I'm not sure on that one.";
+
+// The honest "I don't have that" in Co's own words, stating nothing else.
+async function honestNoAnswer(message: string): Promise<string | null> {
+  const { lineInVoice } = await import("../services/voiceLine.js");
+  const r = await lineInVoice({
+    purpose: "Say plainly, in one short line, that you don't have a solid answer to what they just asked, without guessing, apologizing at length, or promising to find out later.",
+    facts: [`They asked: "${message.slice(0, 200)}"`, "Co doesn't have a confirmed answer to it right now."],
+    examples: [],
+    fallback: MINIMAL_FALLBACK,
+  });
+  return r.written ? r.text : null;
+}
 // When an invite claim had to come out: what's true instead, so the reply
 // still helps (2026-09-19). Asking with "invite" and "friend" goes through
 // the invite step (services/invites.ts isInviteRequest).
@@ -984,7 +1028,7 @@ export async function groundReply(
   opts: { userId?: string | null; record?: boolean } = {},
 ): Promise<GroundingResult> {
   const started = Date.now();
-  const draft = cleanCoMessage(rawDraft);
+  const draft = cleanCoMessage(stripFactIds(rawDraft));
   const first = await check(draft, rf, src);
   const firstCheckMs = Date.now() - started;
   const stages: NonNullable<GroundingResult["stages"]> = {};
@@ -1034,7 +1078,10 @@ export async function groundReply(
         // 3. The cut, or the minimal honest line. The invite line only helps
         // when an invite claim was what came out (2026-09-20 code review).
         const enough = cut.split(/\s+/).filter(Boolean).length >= 3;
-        const final = inviteCut ? [enough && !/invite/i.test(cut) ? cut : "", INVITE_FALLBACK].filter(Boolean).join(" ") : enough ? cut : MINIMAL_FALLBACK;
+        // Co says it in its own words, claiming nothing (2026-09-28: the one
+        // fixed line read as a script); the fixed line is the fallback.
+        const honest = enough || inviteCut ? null : await honestNoAnswer(src.message).catch(() => null);
+        const final = inviteCut ? [enough && !/invite/i.test(cut) ? cut : "", INVITE_FALLBACK].filter(Boolean).join(" ") : enough ? cut : honest ?? MINIMAL_FALLBACK;
         result = { final, outcome: "stripped", checks: first.checks, latencyMs: Date.now() - started, firstCheckMs, stages };
       }
     }

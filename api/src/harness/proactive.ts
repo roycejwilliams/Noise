@@ -433,14 +433,16 @@ export function codePick(eligible: Candidate[]): Candidate | null {
 
 // ---------- drafting
 
+// Principles, not scripts (Royce, 2026-09-28: "I don't want the language to be
+// so strict"). No quoted phrasings: the model copies examples it's shown.
 export const PROACTIVE_RULES = `PROACTIVE RULES
 - One message, one reason. If you can't name the specific thing you're reaching out about, return SKIP.
-- Name the concrete thing (event name, person, what they said) whenever the task allows naming it. Never "the event" or "someone cool."
-- Never state what another person said, feels, or wants unless it's written in CONFIRMED_FACTS.
-- Never restate internal reasoning ("matches your stated goal", "fit score", "based on your profile").
+- Name the actual thing: the event by its name, the person, what they said.
+- Only say what another person said, feels, or wants when it's written in CONFIRMED_FACTS.
+- Talk like a person who noticed something, never like a system explaining why it matched them.
 - If you're asking for a decision, end with one yes/no question. Otherwise don't ask anything.
-- Max 2 sentences. Start with the thought itself: no greeting ("Hey", "Hi", "Hey Sam,"), no sign-off.
-- Normal capitalization: start with a capital letter. You're texting first, so there's no lowercase style to mirror.`;
+- Keep it short, a text or two, and get to what you're reaching out about. Say it your own way each time; a greeting is fine when it's natural, never a formula.
+- Start with a capital letter. You're texting first, so there's no lowercase style to mirror.`;
 
 export type Facts = Record<string, string | number | boolean | string[] | null | undefined>;
 
@@ -538,15 +540,23 @@ export function checkDraft(text: string, rules: OutputRules): GateCheck[] {
   // Proactive texts open with a capital letter: Co only mirrors lowercase
   // when replying to someone who texts that way, and here nobody just did.
   checks.push({ name: "draft_capitalized", pass: !/^[a-z]/.test(text.trim()), reason: "starts lowercase" });
+  // A sanity limit, not a style rule: well past the guidance before it blocks
+  // (2026-09-28: exact caps made every text the same shape).
   if (rules.maxSentences !== undefined) {
     const n = sentenceCount(text);
-    checks.push({ name: "draft_sentences", pass: n <= rules.maxSentences, reason: `${n} sentences (max ${rules.maxSentences})` });
+    const limit = rules.maxSentences + 2;
+    checks.push({ name: "draft_sentences", pass: n <= limit, reason: `${n} sentences (max ${limit})` });
+  }
+  // One question at most in a text Co sends first: stacked questions read
+  // like a form (counted by question marks or sentences that open like one).
+  {
+    const asks = text
+      .split(/(?<=[.?!])\s+/)
+      .filter((x) => /\?\s*$/.test(x) || /^(how|what|when|where|who|why|did|do|does|are|is|was|were|want|would|could|can|should|any)\b/i.test(x.trim())).length;
+    checks.push({ name: "draft_one_question", pass: asks <= 1, reason: `asks ${asks} questions in one text` });
   }
   if (!rules.allowUrl) {
     checks.push({ name: "draft_no_url", pass: !/(https?:\/\/|www\.|lu\.ma\/|\.com\/)/i.test(text), reason: "links go out as their own message" });
-  }
-  if (!rules.allowGreeting) {
-    checks.push({ name: "draft_no_greeting", pass: !/^(hey|hi|hello|good (morning|afternoon|evening))\b/i.test(text.trim()), reason: "opens with a greeting" });
   }
   if (rules.mustIncludeAny?.length) {
     const wanted = rules.mustIncludeAny.map((w) => w.toLowerCase()).filter(Boolean);
@@ -1250,7 +1260,19 @@ export async function dispatchForUser(registry: ProactiveRegistry, userId: strin
         console.error("proactive: sibling offer draft failed (non-fatal):", err?.message ?? err);
       }
     }
-    outgoing = [...draft.messages, ...extras.flatMap((e) => e.messages), offerFollowUp(1 + extras.length)];
+    // The closing question is Co's own, about what it just sent (2026-09-28:
+    // the fixed "Does anything here catch your eye?" read as a script). The
+    // old pool is the fallback when the written line is late or breaks a rule.
+    const sentNames = [c, ...extras.map((e) => e.candidate)].map((x) => String((x.payload as { match?: { name?: string } }).match?.name ?? "")).filter(Boolean);
+    const { lineInVoice } = await import("../services/voiceLine.js");
+    const stock = offerFollowUp(1 + extras.length);
+    const closing = await lineInVoice({
+      purpose: `End a run of ${sentNames.length === 1 ? "one thing" : `${sentNames.length} things`} you just texted them with one short, natural question asking whether ${sentNames.length === 1 ? "it" : "any of them"} interests them. Only the question, nothing else.`,
+      facts: [`Co just sent them: ${sentNames.join("; ")}.`],
+      examples: [],
+      fallback: stock,
+    }).catch(() => ({ text: stock, written: false }));
+    outgoing = [...draft.messages, ...extras.flatMap((e) => e.messages), /\?\s*$/.test(closing.text) ? closing.text : stock];
   }
 
   if (opts.dryRun) {

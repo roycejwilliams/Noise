@@ -53,9 +53,7 @@ Write one text message from Co.
 What it's for: ${ask.purpose}
 What's true (state nothing beyond this):
 ${ask.facts.map((f) => `- ${f}`).join("\n")}
-Lines in the spirit wanted (don't copy them word for word):
-${ask.examples.map((e) => `- ${e}`).join("\n")}
-Short, plain, grown. No dashes. Read it back once for grammar. Return only the message.`,
+${ask.examples.length ? `Lines in the spirit wanted (don't copy them word for word):\n${ask.examples.map((e) => `- ${e}`).join("\n")}\n` : ""}Say it your own way, fresh, the way a person would in the moment. Short, plain, grown. No dashes. Read it back once for grammar. Return only the message.`,
       }).then((r) => r.text),
       new Promise<null>((resolve) => setTimeout(() => resolve(null), TIMEOUT_MS)),
     ]);

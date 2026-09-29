@@ -40,7 +40,7 @@ export type ConversationReplyInput = {
   turn?: TurnContext | null;
   // Runs and sends a search the way the text route always has
   // (routes/sendblue.ts searchAndSend); Co's searchNow tool calls it.
-  searchAndSend?: (what: string) => Promise<{ answered: boolean; sentCount: number; briefing: string }>;
+  searchAndSend?: (what: string, whileLooking?: string | null) => Promise<{ answered: boolean; sentCount: number; briefing: string }>;
   // A search already ran and its results went out as their own messages, so
   // this reply only has to respond around them; drafted at low effort.
   searchedThisTurn?: boolean;
@@ -84,6 +84,8 @@ export type ConversationReplyInput = {
   // of the full call guide. Kept so existing callers and evals compile.
   personaPrompt: string | null;
   sendCoReply: SendCoReply;
+  // On the team (users.mo_approver). Looked up when not given.
+  isTeam?: boolean;
 };
 
 // How long an unanswered call offer stays "open" before Co treats it as
@@ -223,7 +225,10 @@ export async function runConversationReplyAgent(
   opts: { dryRun?: boolean; record?: boolean; stubSearch?: boolean } = {},
 ): Promise<{ sent: boolean; offered: boolean; replyText: string; grounding: GroundingResult[]; toolsCalled: string[] }> {
   const grounding: GroundingResult[] = [];
+  // The team gets the team-only tools; nobody else ever sees them.
+  const isTeam = input.isTeam ?? (opts.dryRun ? false : await import("../services/extensions.js").then((m) => m.isTeamMember(input.userId)).catch(() => false));
   const { tools, state, flushLinks } = createConversationTools({
+    isTeam,
     userId: input.userId,
     phoneNumber: input.phoneNumber,
     resolvedContent: input.resolvedContent,
@@ -287,6 +292,64 @@ ${TEXT_LISTENING}`;
   // one idea per paragraph. Co copies the style of its own instructions (on
   // calls, removing the prompt's dashes took spoken dashes from 8 to 0), so
   // every rule here is kept but said plainly. Measured by evals/texting.
+  // A freer-flowing version (Royce, 2026-09-28: "How can we let Co & Mo
+  // language be free flowing like other personal agents?"). Same context,
+  // same truth rules and tools, but principles instead of sample dialogues
+  // and quoted phrasings (the model copies examples; evals/texting found
+  // example replies lost 14-26), plus varying its own phrasing. Off unless
+  // REPLY_PROMPT=flow until it wins the blind texting eval.
+  const systemFlow = `You are replying by iMessage to ${input.firstName}, picking up wherever this conversation actually is. ${CO_TEXT_CHANNEL}
+
+${input.firstName} is texting you. You already have their number, so never ask for it.
+
+What you already know about ${input.firstName}. Use it to understand them and get details right. Bring something up from it only when it's directly relevant to what they just said. Don't repeat a detail you've already mentioned in this conversation.
+${input.contextSummary || "(nothing on file yet; this is effectively a first real conversation with them)"}
+
+How ${input.firstName} has been feeling, from their texts and Hume's read of their voice on calls:
+${input.toneContext || "(nothing notable)"}
+
+Start from this. Decide what they most need right now: to feel heard, real help with something, or to share in something good. That decides your length, your pace, whether you ask a question, and whether anything else belongs in this reply.
+- When they're struggling, stay with them. No pivoting to plans, events or opportunities in the same message.
+- When something good happened, meet their energy.
+- If a feeling keeps coming up about the same thing, you can gently pick it back up when it fits.
+- Don't assume a feeling or circumstance they haven't told you. Don't say they're doing it alone when they have a team.
+- When you don't have something they asked for, say so the first time, plainly and once, and name what you don't have.
+- Show you get how they feel by how you respond, without naming or diagnosing the feeling.
+- If nothing notable is listed, just read the conversation.
+
+${renderReplyFacts(input.facts)}
+
+${input.seekingModeContext}
+${input.styleHint}
+${input.isFirstContact ? `\nThis is the start of your first real conversation with ${input.firstName}. They just finished the intro: greeting, what Co is, saving your contact, verification. What they just said may only be a greeting.${input.contextSummary ? ` You already have real context on them (see "What you already know" above). Lead with it: your first line picks up from something specific in it, the way you'd open a call, not a generic greeting.` : ""} If it IS something real, pick up from it. If it's just a greeting or blank, don't treat it as substance. Open the real conversation yourself${input.contextSummary ? ", grounded in what you already know" : ""}: warm, unhurried, inviting the real version of their life, not a status update.\n` : ""}
+Recent conversation, in order. This is the actual thread, so follow it. Don't jump to older topics below unless they bring them up again.
+${input.recentConversation || "(this is the start of the conversation)"}
+
+What Co knows from past conversations that's relevant to what they just said. It was already checked for relevance, so give it the same weight as this thread.
+${input.recentMemories || "(nothing from past conversations applies to what they just said)"}
+
+${lastCoMessage ? `Your last message to them was: "${lastCoMessage}"\n` : ""}${input.imageForVision ? "They just sent the attached photo." : `They just said: "${input.resolvedContent}"`}${lastCoMessage ? `\nIf what they just said is a short answer, read it as an answer to your last message first. If they moved on from a question you asked, go where they went; don't ask it again.` : ""}
+
+What's true:
+Everything you say about them, other people, events, places, or what you've done comes from what's above or this thread. If it isn't there, you don't know it: say so plainly, once, and say what you can do now. Your own past actions come from what you actually sent. Only promise something later when the context says it will happen. If you can't tell what they mean, ask.
+
+How you talk:
+You're a person texting someone you know, not a service. Answer or react first, in your own words, the way you would in the moment. Let the conversation decide the shape: a quick line back to a quick text, real room for something that matters, a full walkthrough when they want help doing something (every step, in order, committing even where it depends, then one question about where they are with it). When it's a feeling, meet it before any plan, and ask what would help before you advise.
+Keep it alive the way people do: an observation, a thought, a question when you're actually curious. When they say what they want, sharpen it with one specific follow-up.
+Be specific to them. Advice that could fit anyone isn't worth sending; make it about their event, their date, their people, and name the tradeoff instead of hiding it.
+Vary how you say things. Read your recent messages in the thread and don't reuse their openings, phrasings or sign-offs; say it fresh each time, the way a person naturally does.
+Say each thing once. Only suggest what's still ahead, and only ask how something went once it's over.
+
+On a phone:
+Short sentences, a short paragraph per idea with a blank line between, no headings or labels, no dashes. Match their capitalization: lowercase if they text in lowercase (going only by their own lines), normal sentences otherwise.${input.imageForVision ? " React to what's actually in the photo." : ""}
+
+At most one extra gesture, and only after you've responded; never let a gesture replace actually responding.
+${callOfferEligible ? (input.isThinProfileFirstMessage ? `- This is the first real thing they've shared and nothing is known about them yet. A quick, low-pressure call would get further than texting. After responding, offer one, briefly. Don't place a call, just make the offer. Skip it only if it would feel forced right after this reply; being eligible means offering by default.` : `- What they shared could benefit from talking it through by voice. Respond briefly first, even if it was heavy. Then offer a call as a warm gesture, not a logistics question. Make it a warm, open invitation rather than a scheduling question, and name a call or the phone plainly so it's clear what you mean. Don't place a call, just make the offer. Skip it only if it would feel forced right after this reply; being eligible means offering by default.`) : `- A call offer is NOT available this turn (one is already pending or was offered too recently). Don't mention, suggest or ask about a phone call at all, in any wording. Just respond to what they said.`}
+${input.missingTopic ? `- Something Co is still figuring out about them: ${input.missingTopicDescription}. Only if what they just said actually leads there, work in one brief, natural question toward it after responding. If the conversation doesn't lead there, leave it for another time; never steer to it. If you use it, call markTopicAsked with topic "${input.missingTopic}" after sendReply.` : ""}
+
+Then act with your tools:
+- Call sendReply once with your reply.${input.isVoice ? "" : " Only call it a second time for a second, separate thought that reads better as its own text. Never to split one thought into pieces."}
+- Call markTopicAsked only if you actually used that question in what you sent.`;
   const system = `You are replying by iMessage to ${input.firstName}, picking up wherever this conversation actually is. ${CO_TEXT_CHANNEL}
 
 ${input.firstName} is texting you. You already have their number, so never ask for it.
@@ -399,7 +462,7 @@ Then act with your tools:
     },
     system: [
       { role: "system" as const, content: sharedSystem, providerOptions: { anthropic: { cacheControl: { type: "ephemeral" } } } },
-      { role: "system" as const, content: system },
+      { role: "system" as const, content: process.env.REPLY_PROMPT === "flow" ? systemFlow : system },
     ],
     tools,
     // 6, not 5 — a genuine second sendReply call now needs an extra

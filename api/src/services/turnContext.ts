@@ -50,6 +50,8 @@ export type TurnContext = {
   inlineTarget: RepliedTo | null;
   ledger: { lines: string[]; named: string[] };
   capabilities: string[];
+  // Their own Google Calendar busy times and waiting emails, when connected (services/googleData.ts).
+  google?: string[];
 };
 
 const nameKey = (n: string) => `name:${n.toLowerCase()}`;
@@ -166,8 +168,12 @@ export async function fillDetails(items: SentItem[], opts: { withinDays?: number
 
 // What's on file for each recent send, and what isn't, as facts: "I don't
 // have the start time" is then only ever true.
-export function sentDetailLines(ctx: Pick<TurnContext, "sent">, withinDays = 5): string[] {
+export function sentDetailLines(ctx: Pick<TurnContext, "sent"> & { google?: string[] }, withinDays = 5): string[] {
   const cutoff = Date.now() - withinDays * 86_400_000;
+  return [...sentLines(ctx, cutoff), ...(ctx.google ?? [])];
+}
+
+function sentLines(ctx: Pick<TurnContext, "sent">, cutoff: number): string[] {
   return ctx.sent
     .filter((s) => s.sentAt.getTime() > cutoff)
     .slice(0, 5)
@@ -233,5 +239,16 @@ export async function assembleContext(
     Promise.resolve(opts.inlineTarget ?? null).catch(() => null),
     ledgerFacts(userId, `${message}\n${opts.ledgerContext ?? ""}`).catch(() => ({ lines: [] as string[], named: [] as string[] })),
   ]);
-  return { userId, message, profile, snapshot, sent, asks, threads, offersThisWeek, emotional, lessons, inlineTarget, ledger, capabilities: capabilitySheet() };
+  // Their Google, read from the cache in their own time zone (never fetched while they wait).
+  const google = await loadGoogleFacts(userId, profile?.city ?? null).catch(() => [] as string[]);
+  return { userId, message, profile, snapshot, sent, asks, threads, offersThisWeek, emotional, lessons, inlineTarget, ledger, capabilities: capabilitySheet(), google };
+}
+
+async function loadGoogleFacts(userId: string, city: string | null): Promise<string[]> {
+  const { isConnected } = await import("./googleAuth.js");
+  if (!(await isConnected(userId)).connected) return [];
+  const { googleFactsFor } = await import("./googleData.js");
+  const { getTimezoneForCity } = await import("./geocoding.js");
+  const zone = city ? await getTimezoneForCity(city).catch(() => null) : null;
+  return googleFactsFor(userId, zone);
 }

@@ -169,6 +169,17 @@ export function registerJobs(io: Server) {
   // others (2026-09-21), so the offers of every tier could not go out together.
   cron.schedule("15,45 * * * *", runDispatch);
 
+  // Reminders members asked for ("remind me Thursday to follow up with…"),
+  // sent to them only (services/relay.ts). Every 5 minutes; nothing's due unless asked.
+  cron.schedule("*/5 * * * *", async () => {
+    try {
+      const { sendDueReminders } = await import("../services/relay.js");
+      await sendDueReminders();
+    } catch (err: any) {
+      console.error("reminder cron error (non-fatal):", err?.message ?? err);
+    }
+  });
+
   // Details that change (sold out, spots left, a moved time) are re-read
   // before Co relies on them: pages of things sent in the last 3 days whose
   // read is over 4 hours old (services/linkReader.ts). Luma reads are free;

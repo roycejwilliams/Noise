@@ -728,6 +728,11 @@ export async function runMigrations(): Promise<void> {
       )`,
     )
     .catch((err: Error) => console.error("outbound_messages table init failed:", err));
+  // Who sent it: "co", or an extension on the same number ("mo"), so a reply
+  // under Mo's text goes to Mo (services/sendblue.ts sendingAs).
+  await pool
+    .query(`ALTER TABLE outbound_messages ADD COLUMN IF NOT EXISTS sender TEXT NOT NULL DEFAULT 'co'`)
+    .catch((err: Error) => console.error("outbound_messages.sender migration failed:", err));
   // Every link, read once (services/linkReader.ts, 2026-09-28). owner_key is
   // '' for public pages Co sent and the member's id for a link they texted,
   // so a member's own links stay theirs.
@@ -2020,4 +2025,83 @@ export async function runMigrations(): Promise<void> {
   } catch (err) {
     console.error("users.phone_number unique index migration failed:", err);
   }
+
+  // Co passing messages between members, with consent both ways, and
+  // reminders to follow up (services/relay.ts, 2026-09-28). Off unless
+  // CO_RELAY=on. member_connections holds who's been introduced after both
+  // said yes, the only people a relay can reach.
+  await pool
+    .query(
+      `CREATE TABLE IF NOT EXISTS member_connections (
+        person_a UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+        person_b UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+        source TEXT NOT NULL,
+        created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+        PRIMARY KEY (person_a, person_b),
+        CHECK (person_a < person_b)
+      )`,
+    )
+    .catch((err: Error) => console.error("member_connections table init failed:", err));
+  await pool
+    .query(
+      `CREATE TABLE IF NOT EXISTS member_relays (
+        id BIGSERIAL PRIMARY KEY,
+        from_user UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+        to_user UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+        message TEXT NOT NULL,
+        status TEXT NOT NULL,
+        created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+      )`,
+    )
+    .catch((err: Error) => console.error("member_relays table init failed:", err));
+  await pool
+    .query(
+      `CREATE TABLE IF NOT EXISTS member_reminders (
+        id BIGSERIAL PRIMARY KEY,
+        user_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+        what TEXT NOT NULL,
+        due_at TIMESTAMPTZ NOT NULL,
+        sent_at TIMESTAMPTZ,
+        created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+      )`,
+    )
+    .catch((err: Error) => console.error("member_reminders table init failed:", err));
+
+  // Google Calendar and Gmail, read-only (services/googleAuth.ts, 2026-09-28).
+  // One connection per member; tokens AES-256-GCM encrypted; one-time connect
+  // links (state + PKCE verifier, 15 minutes, single use); a cached summary.
+  await pool
+    .query(
+      `CREATE TABLE IF NOT EXISTS google_connections (
+        user_id UUID PRIMARY KEY REFERENCES users(id) ON DELETE CASCADE,
+        refresh_token_enc TEXT,
+        access_token_enc TEXT,
+        access_expires_at TIMESTAMPTZ,
+        scopes TEXT,
+        connected_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+      )`,
+    )
+    .catch((err: Error) => console.error("google_connections table init failed:", err));
+  await pool
+    .query(
+      `CREATE TABLE IF NOT EXISTS google_oauth_states (
+        state TEXT PRIMARY KEY,
+        user_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+        code_verifier_enc TEXT NOT NULL,
+        expires_at TIMESTAMPTZ NOT NULL,
+        used_at TIMESTAMPTZ,
+        created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+      )`,
+    )
+    .catch((err: Error) => console.error("google_oauth_states table init failed:", err));
+  await pool
+    .query(
+      `CREATE TABLE IF NOT EXISTS google_snapshots (
+        user_id UUID PRIMARY KEY REFERENCES users(id) ON DELETE CASCADE,
+        busy JSONB,
+        waiting JSONB,
+        fetched_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+      )`,
+    )
+    .catch((err: Error) => console.error("google_snapshots table init failed:", err));
 }

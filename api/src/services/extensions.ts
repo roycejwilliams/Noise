@@ -18,13 +18,17 @@
 import type { Ability } from "./capabilities.js";
 import { MO_ABILITIES, MO_LIMITS } from "../mo/abilities.js";
 
+export type TeamTextOpts = { repliedTo?: string | null; handedOff?: boolean };
+
 export type ExtensionJob = { name: string; cron: string; timezone?: string; run: () => Promise<unknown> };
 
 export type ExtensionRuntime = {
   // Whether its scheduled work runs. Team texts and handoffs don't wait on
   // it: someone mid-conversation, or already brought in, is still looked after.
   enabled: () => boolean;
-  teamText?: (userId: string, text: string) => Promise<string | null>;
+  // opts.repliedTo: the extension's own text they pressed Reply on, so the
+  // text is theirs whatever it says. opts.handedOff: Co passed it over.
+  teamText?: (userId: string, text: string, opts?: TeamTextOpts) => Promise<string | null>;
   // `known`: plain facts Co may state; `instruction`: what Co may only ask
   // about, never state.
   handoff?: (userId: string) => Promise<{ known: string[]; instruction: string } | null>;
@@ -58,11 +62,12 @@ export const EXTENSIONS: CoExtension[] = [
 
 // A teammate's text, offered to each extension in turn. Null when none of
 // them take it, and Co answers as usual.
-export async function handleTeamText(userId: string, text: string): Promise<{ extension: string; reply: string } | null> {
+export async function handleTeamText(userId: string, text: string, opts: TeamTextOpts & { only?: string } = {}): Promise<{ extension: string; reply: string } | null> {
   for (const e of EXTENSIONS) {
+    if (opts.only && e.id !== opts.only) continue;
     const rt = await e.load().catch(() => null);
     if (!rt?.teamText) continue;
-    const reply = await rt.teamText(userId, text).catch((err: any) => {
+    const reply = await rt.teamText(userId, text, opts).catch((err: any) => {
       console.error(`extensions: ${e.id} team text failed:`, err?.message ?? err);
       return null;
     });
@@ -94,4 +99,49 @@ export async function extensionJobs(): Promise<(ExtensionJob & { extension: stri
     for (const j of rt.jobs ?? []) out.push({ ...j, extension: e.id });
   }
   return out;
+}
+
+// ------------------------------------------------------------ the team only
+// Members never hear an extension's name from Co. The team does (Royce,
+// 2026-09-28: Co pitched "I'll draft sponsor emails and you approve them" as
+// a new idea to Royce, when that's what Mo already does). Gated in code: only
+// for users.mo_approver.
+
+export async function isTeamMember(userId: string): Promise<boolean> {
+  const { default: pool } = await import("../db/db.js");
+  return pool
+    .query(`SELECT mo_approver FROM users WHERE id = $1`, [userId])
+    .then((r) => r.rows[0]?.mo_approver === true)
+    .catch(() => false);
+}
+
+// What Co knows about its teammates, as capability facts, for the team only.
+export function teamSheet(): string[] {
+  return EXTENSIONS.flatMap((e) => [
+    `${e.name} is Co's teammate, on this same number, known to the team only (never mention ${e.name} to anyone else). ${e.about} What ${e.name} does: ${e.abilities.map((a) => a.can).join(" ")}`,
+    `${e.name}'s limits: ${e.limits.join(" ")}`,
+    `So with the team, don't pitch what ${e.name} already does as a new idea: say ${e.name} already does it. When they ask about ${e.name}'s work (the people it finds, outreach, approvals, "tell ${e.name}…"), hand it to ${e.name} with handToTeammate (that tags @${e.name} in the thread), and do the same when you need ${e.name}'s help. They can call ${e.name} in themselves by writing @${e.name}, or by replying to one of ${e.name}'s texts; just mentioning ${e.name} leaves it with you.`,
+  ]);
+}
+
+// Which extension, if any, sent one of Co's outbound messages (by its
+// handle). Only this member's messages.
+export async function extensionForMessage(userId: string, handle: unknown): Promise<{ id: string; content: string } | null> {
+  if (typeof handle !== "string" || !handle) return null;
+  const { default: pool } = await import("../db/db.js");
+  const { rows } = await pool
+    .query(`SELECT sender, content FROM outbound_messages WHERE message_handle = $1 AND user_id = $2`, [handle, userId])
+    .catch(() => ({ rows: [] as any[] }));
+  const r = rows[0];
+  if (!r) return null;
+  if (r.sender && r.sender !== "co" && EXTENSIONS.some((e) => e.id === r.sender)) return { id: r.sender, content: String(r.content ?? "") };
+  const id = extensionByOpener(String(r.content ?? ""));
+  return id ? { id, content: String(r.content ?? "") } : null;
+}
+
+// Sent before senders were recorded: an extension's texts open with its name
+// ("Hey Royce, it's Mo.").
+export function extensionByOpener(content: string): string | null {
+  const e = EXTENSIONS.find((x) => new RegExp(`^hey [^,]{1,40}, it['’]?s ${x.name}\\b`, "i").test(content.trim()));
+  return e?.id ?? null;
 }

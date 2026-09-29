@@ -25,13 +25,18 @@ const { tools } = createConversationTools({ userId: "u", phoneNumber: "+10000000
 const toolNames = Object.keys(tools);
 const registered = ABILITIES.filter((a) => a.tool).map((a) => a.tool!);
 for (const t of toolNames) check(`tool ${t} has an entry in the registry`, registered.includes(t));
-for (const t of registered) check(`registry tool ${t} exists`, toolNames.includes(t));
+// Team-only tools exist only for the team (services/capabilities.ts teamOnly).
+const teamTools = Object.keys(createConversationTools({ userId: "u", phoneNumber: "+10000000000", resolvedContent: "", isVoice: false, hasPendingOffer: false, recentOfferBurstActive: false, dryRun: true, isTeam: true, sendCoReply: async () => true } as any).tools);
+for (const t of registered) {
+  const teamOnly = ABILITIES.find((a) => a.tool === t)?.teamOnly;
+  check(`registry tool ${t} exists${teamOnly ? " for the team only" : ""}`, teamOnly ? teamTools.includes(t) && !toolNames.includes(t) : toolNames.includes(t));
+}
 for (const t of toolNames) check(`tool ${t} takes its description from the registry`, (tools as any)[t].description === toolUse(t) || t === "sendReply");
 check("ability ids are unique", new Set(ABILITIES.map((a) => a.id)).size === ABILITIES.length);
 check("every ability says what Co can do", ABILITIES.every((a) => a.can.trim().length > 20));
 
 const facts = baseReplyFacts().facts.filter((f) => f.kind === "capability").map((f) => f.text);
-check("Co reads every ability and limit about itself", facts.length === ABILITIES.length + LIMITS.length && capabilitySheet().every((c) => facts.includes(c)));
+check("Co reads every ability and limit about itself (a member never reads the team-only ones)", facts.length === ABILITIES.filter((a) => !a.teamOnly).length + LIMITS.length && capabilitySheet().every((c) => facts.includes(c)) && !ABILITIES.filter((a) => a.teamOnly).some((a) => facts.includes(a.can)));
 check("Co knows it can send its card", facts.some((f) => /contact card/.test(f)));
 check("Co knows it can't start a group text", facts.some((f) => /never starts a group text/.test(f)));
 check("Co knows it never writes a phone number", facts.some((f) => /never writes a phone number/.test(f)));

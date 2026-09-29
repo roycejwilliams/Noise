@@ -34,6 +34,9 @@ export type Ability = {
   // Needs the member's own yes in this message before it runs: anything
   // that affects another member, costs money, or can't be undone.
   confirm?: "affects_another_member" | "costs_money" | "irreversible";
+  // Only for the team (users.mo_approver): left out of the sheet and the tool
+  // map for everyone else, so a member never hears of it (services/extensions.ts).
+  teamOnly?: boolean;
 };
 
 export const ABILITIES: Ability[] = [
@@ -133,7 +136,7 @@ export const ABILITIES: Ability[] = [
     use: "Send the latest list of what's new in Co (new features, changes), when they ask what's new with Co, what changed, or for updates on Co itself. Not for news about their own life or an event. It goes out verbatim as its own text.",
   },
   // Handled by their own steps for now.
-  { id: "calls", confirm: "irreversible", can: 'Co can call them right now when they ask ("call me"), and can schedule a call for a specific later time. Calling is real and working. They can also call Co from this same number.' },
+  { id: "calls", confirm: "irreversible", can: 'Co can call them right now when they ask ("call me"), and can schedule a call for a specific later time. Calling is real and working. They can also call Co from this same number. What Co can\'t do is call other people for them. So when listing what Co can\'t do, say "I can\'t call people for you", never "no calls" (2026-09-28: "no calls" went into a list of flaws).' },
   {
     id: "invites",
     can: "Members can invite friends to Co: 5 invites each, and one only counts once the friend joins. Co can text them an invite link to forward.",
@@ -150,7 +153,10 @@ export const ABILITIES: Ability[] = [
   },
   { id: "media", can: "Co can read photos and screenshots they send, and listens to voice memos." },
   { id: "corrections", can: 'When something Co has about them is wrong, they can just say so ("I moved to Oakland", "I\'m not a founder"). Co updates it and remembers what changed and when.' },
-  { id: "check_ins", can: "Co keeps track of what they're in the middle of and may check in about it, or about a plan they mentioned with a date." },
+  {
+    id: "check_ins",
+    can: 'Co texts first, not only when they text: a check-in every few days about what they\'re in the middle of (and something it\'s still getting to know about them, when their words lead there), "how did it go" after a plan with a date has happened, a debrief after an event they went to, and follow-ups on things it\'s looking for. So when they ask whether Co notices or checks in, the answer is yes, and Co can say how (2026-09-28: Co said it "mostly reacts", which undersold it).',
+  },
   {
     id: "co_events",
     can: 'At Co events: the day of, Co may ask them to share their location until the end of the day or text "I\'m here" when they arrive, then tells them who\'s worth meeting in the room. Sharing location is optional and only used to notice when they arrive and leave.',
@@ -164,6 +170,14 @@ export const ABILITIES: Ability[] = [
   },
   { id: "outside_events", can: "If they're going to an event Co doesn't run and another member is going too, Co may give them a heads-up without saying who, and names each person to the other only after both say yes to an intro." },
   { id: "introductions", can: "Introductions go out as one email to both people, and only after both have said yes. At Co events Co may point another guest toward them as someone worth meeting, with a short reason." },
+  {
+    id: "teammate_handoff",
+    teamOnly: true,
+    can: "With the team only: Co can hand a message to its teammate when it's about the teammate's work.",
+    tool: "handToTeammate",
+    limits: { perTurn: 1 },
+    use: "Team only. Bring your teammate in (it shows as an @ tag in the thread) when their message is about the teammate's work (the people it finds and reaches out to, approvals, outreach, or \"tell <teammate>…\"), or when you need its help; say in `ask` what you need. The teammate answers them directly in its own voice; then stop, don't also reply. Teammates only answer when tagged with @ or replied to, so a message that just mentions them stays with you.",
+  },
   {
     id: "team_feedback",
     can: "When they give feedback about how Co works, or ask Co to pass something to the team, Co can save it for the team.",
@@ -179,6 +193,33 @@ export const ABILITIES: Ability[] = [
     use: "Flag it when what they say may mean they're thinking about hurting or killing themselves, or aren't safe right now, however it's worded (including hints like wanting to disappear or everyone being better off without them). Not for ordinary stress, venting, or figures of speech (\"this week is killing me\"). It holds offers, lines up a gentle check-in tomorrow, and lets the team know. Then reply yourself with sendReply: stay with them, ask if they're safe, share 988 once.",
   },
   { id: "account", can: "They can change their phone number by texting Co, and can text STOP at any time to stop all texts." },
+  // Passing a message to someone they're connected to, and reminders to
+  // follow up (services/relay.ts, 2026-09-28). Off unless CO_RELAY=on, and
+  // what Co says it can do follows the switch.
+  {
+    id: "relay",
+    get can() {
+      return process.env.CO_RELAY === "on"
+        ? "Co can pass a message, in their own words, to someone they're already connected to through Co (introduced after both said yes), at most once a day per person. Anything that person sends back comes only if they ask Co to send it. Co can also remind them at a set time to follow up on something they promised someone. Co never contacts anyone on its own, can't reach people they aren't connected to, never says whether someone is a member, and never starts a group text."
+        : "Co can't pass messages to other people or other members yet; anything for someone else has to come from them. Co can remind them later to follow up on something.";
+    },
+    tool: "followUp",
+    limits: { perTurn: 1, perDay: 3 },
+    use: "Only when they ask you to pass something to a specific person, or to remind them later to follow up on something. relay: pass their exact words (copied from what they texted) to the person they named; never add anything about them or anyone else, and never relay unless they asked. From the other side, when someone who got a message from them asks you to send something back, relay that in their own words too. remind_me: a reminder to them at the day and time they gave. Then say plainly what happened, using the tool's note.",
+  },  // Google Calendar and Gmail, read-only (services/googleAuth.ts,
+  // services/googleData.ts, 2026-09-28). Off until the Google client exists,
+  // and what Co says it can do follows that.
+  {
+    id: "google",
+    get can() {
+      return process.env.GOOGLE_CLIENT_ID && process.env.GOOGLE_CLIENT_SECRET && process.env.GOOGLE_TOKEN_KEY
+        ? "If they connect Google (Co texts a one-time link), Co can see when they're busy over the next few days (busy or free only, never what the events are) and which emails they sent are still waiting on a reply (who, subject and date, never the message). Co never sends email, never changes their calendar, and never shows any of it to anyone else. They can text \"disconnect Google\" any time."
+        : "Co can't connect to their Google Calendar or Gmail yet.";
+    },
+    tool: "googleConnection",
+    limits: { perTurn: 1, perDay: 3 },
+    use: "connect: when they want Co to know their calendar or track their email outreach, or say yes when you offer it; sends a one-time link as its own text. disconnect: when they ask to disconnect or remove Google. status: when they ask whether it's connected. Then say plainly what happened, using the tool's note.",
+  },
 ];
 
 // The lines Co doesn't cross, whatever it's asked.
@@ -197,8 +238,13 @@ export const LIMITS: string[] = [
 ];
 
 // What Co reads about itself, as facts.
-export function capabilitySheet(): string[] {
-  return [...ABILITIES.map((a) => a.can), ...LIMITS];
+export function capabilitySheet(opts: { team?: boolean } = {}): string[] {
+  return [...ABILITIES.filter((a) => opts.team || !a.teamOnly).map((a) => a.can), ...LIMITS];
+}
+
+// Tools only the team gets (teamOnly abilities).
+export function teamOnlyTools(): string[] {
+  return ABILITIES.filter((a) => a.teamOnly && a.tool).map((a) => a.tool!);
 }
 
 // A tool's description, from its entry.

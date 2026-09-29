@@ -116,7 +116,7 @@ check("the shown reason is still their own stated ask", /shareReasonFromOwnAsk\(
   check("the pressed text and the event it was for reach Co and the router", /They pressed Reply on this earlier text from Co/.test(I.repliedToFact({ text: "https://lu.ma/g", fromCo: true, what: "Grok Bot x Notion night", alsoInThread: "Testing" })) && /Grok Bot x Notion night/.test(I.inlineNote({ text: "https://lu.ma/g", fromCo: true, what: "Grok Bot x Notion night" })) && /message: inlineTarget \? `\$\{resolvedContent\} \$\{inlineNote\(inlineTarget\)\}` : resolvedContent,/.test(sb));
   check("the replied-to text is kept with their message", I.inlineNote({ text: "Rooftop evening, Thursday", fromCo: true }) === '[Replying to Co\'s text: "Rooftop evening, Thursday"]' && /\$\{inlineTarget \? ` \$\{inlineNote\(inlineTarget\)\}` : ""\}`;/.test(sb));
   check("a long replied-to text is shortened in the record", I.inlineNote({ text: "x".repeat(300), fromCo: false }).length < 260);
-  check("the hold line and the first search result thread too", /await threadedSendAndLog\(holdLine\)/.test(sb) && /threadNextSend = true;\s*if \(prepared\.length > 1\)/.test(sb) && /await threadedSendAndLog\(m\.url\)/.test(sb));
+  check("the hold line and the first search result thread too", /await threadedSendAndLog\(holdLine, false, true\)/.test(sb) && /holdLineFrom\(whileLooking\) \?\? HOLD_LINES\[/.test(sb) && /\$\{hold \? HOLD_PREFIX : "Co replied:"\}/.test(sb) && /threadNextSend = true;\s*if \(prepared\.length > 1\)/.test(sb) && /await threadedSendAndLog\(m\.url\)/.test(sb));
 }
 
 // ------------------------------------------------ safety (2026-09-28)
