@@ -401,6 +401,22 @@ export function linksIn(text: string): string[] {
   return out;
 }
 
+// A link and its preview photo arrive as two texts and the reply answers the second
+// (2026-09-29). For a photo-only message with a link in their unanswered texts just
+// before it, the reply reads as if they'd sent the link with the photo. Pure.
+export function mergeEarlierLink(current: string, hasText: boolean, earlierRows: string[]): { link: string | null; merged: string; fromEarlier: boolean } {
+  const own = hasText ? linksIn(current)[0] ?? null : null;
+  if (own) return { link: own, merged: current, fromEarlier: false };
+  for (const row of earlierRows) {
+    if (/ \[to [A-Za-z]+\]\s*$/.test(row)) continue;
+    const link = linksIn(row)[0];
+    if (!link) continue;
+    const said = row.replace(/^User said:\s*/, "").replace(/\s*\[They also sent a photo[\s\S]*$/, "").trim();
+    return { link, merged: hasText ? current : `${said} ${current}`.trim(), fromEarlier: true };
+  }
+  return { link: null, merged: current, fromEarlier: false };
+}
+
 export function readLinksLater(text: string, opts: { ownerUserId?: string | null } = {}): void {
   const links = linksIn(text).slice(0, 4);
   for (const l of links) readLink(l, opts).catch(() => {});

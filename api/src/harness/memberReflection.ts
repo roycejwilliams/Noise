@@ -8,7 +8,7 @@
 //
 // It only ever reads one member's own rows, and what it queues goes only to
 // that member.
-import { dueAdvice, loadAdvice } from "../services/advice.js";
+import { dueAdvice, FOLLOW_UP_EXPIRES_DAYS, loadAdvice } from "../services/advice.js";
 import { syncMilestones, pickToMark } from "../services/milestones.js";
 import { anthropic } from "@ai-sdk/anthropic";
 import { generateText } from "ai";
@@ -166,7 +166,7 @@ export async function queueAdviceFollowUp(userId: string): Promise<boolean> {
       topicKey: "companion",
       summary: `Ask how it went: advice about ${a.topic.slice(0, 80)}`,
       payload: { recap: "", threadId: null, thread: null, item: null, advice: { id: a.id, topic: a.topic, gist: a.gist, daysAgo: Math.round((Date.now() - new Date(a.givenAt).getTime()) / 86_400_000) } },
-      expiresAt: new Date(Date.now() + 4 * 86400_000),
+      expiresAt: new Date(Date.now() + FOLLOW_UP_EXPIRES_DAYS * 86400_000),
     }).catch(() => ({ queued: false }));
     await recordDecision({ layer: 7, decision: "proactive.adviceFollowUp", userId, outcome: r.queued ? "act" : "skip", action: r.queued ? "queued" : "not_queued", proposal: { adviceId: a.id, topic: a.topic } }).catch(() => {});
     return r.queued;
@@ -192,7 +192,7 @@ export async function queueMilestone(userId: string): Promise<boolean> {
       topicKey: "companion",
       summary: `Mark a moment in their story: ${m.text.slice(0, 100)}`,
       payload: { recap: "", threadId: null, thread: null, item: null, story: { key: m.key, text: m.text, then: m.then, now: m.now } },
-      expiresAt: new Date(Date.now() + 4 * 86400_000),
+      expiresAt: new Date(Date.now() + FOLLOW_UP_EXPIRES_DAYS * 86400_000),
     }).catch(() => ({ queued: false }));
     await recordDecision({ layer: 7, decision: "proactive.milestone", userId, outcome: r.queued ? "act" : "skip", action: r.queued ? "queued" : "not_queued", proposal: { key: m.key, kind: m.kind } }).catch(() => {});
     return r.queued;

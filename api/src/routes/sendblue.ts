@@ -1,3 +1,4 @@
+import { notToTeammate } from "../services/teamLines.js";
 import { anthropic } from "@ai-sdk/anthropic";
 import { alreadySentNames, canSkipReplyAfterResults, isOnlyUpdatesAsk } from "../services/searchRules.js";
 import { capitalizeSentences } from "../services/textStyle.js";
@@ -68,7 +69,7 @@ import { resolveNetworkTeaseReply, resolveNetworkIntroReply } from "../services/
 import { NO_ROUTE, decideActions, gatherOpenItems, routeMessage, type RouterOutput } from "../services/messageRouter.js";
 import { recordDecision } from "../harness/core.js";
 import { routerGateChecks } from "../harness/routerChecks.js";
-import { linkForReply, linksIn, type LinkRead } from "../services/linkReader.js";
+import { linkForReply, linksIn, mergeEarlierLink, type LinkRead } from "../services/linkReader.js";
 import { addEventFacts, addFact, addHint, addInstruction, addOngoingSearchFacts, countOf, FRESH_SEARCH_INSTRUCTION, gatherReplyFacts, recordSearchNote } from "../harness/replyGrounding.js";
 import { runConversationReplyAgent, filterRelevantMemories, CALL_OFFER_EXPIRY_DAYS } from "../agent/conversationReply.js";
 import { triggerCallForUser } from "../services/callTrigger.js";
@@ -1193,15 +1194,18 @@ export function sendblueRouter(io: Server): Router {
           const earlier = await pool
             .query(
               `SELECT content FROM co_memories
-               WHERE user_id = $1 AND memory_type = 'text_exchange' AND content LIKE 'User said:%' AND created_at > NOW() - INTERVAL '3 minutes'
+               WHERE user_id = $1 AND memory_type = 'text_exchange' AND content LIKE 'User said:%' AND ${notToTeammate()} AND created_at > NOW() - INTERVAL '3 minutes'
                  AND created_at > COALESCE((SELECT MAX(created_at) FROM co_memories WHERE user_id = $1 AND memory_type = 'text_exchange' AND content LIKE 'Co replied:%'), 'epoch')
                ORDER BY created_at DESC LIMIT 4`,
               [user.id],
             )
             .then((r) => r.rows.map((x: any) => String(x.content)))
             .catch(() => [] as string[]);
-          theirLink = earlier.map((c) => linksIn(c)[0]).find(Boolean) ?? null;
-          linkFromEarlier = !!theirLink;
+          const m = mergeEarlierLink(resolvedContent, hasText, earlier);
+          theirLink = m.link;
+          linkFromEarlier = m.fromEarlier;
+          // The photo-only message now reads with its link, so the reply is about the page.
+          if (m.fromEarlier && !hasText) resolvedContent = m.merged;
         }
         const theirLinkP: Promise<LinkRead | null> | null = theirLink
           ? import("../services/linkReader.js").then((l) => l.readLink(theirLink, { ownerUserId: user.id })).catch(() => null)

@@ -116,7 +116,7 @@ check("a cut that loses the question isn't sent as a stub", (() => { const g = s
 check("Mo's pause text doesn't start with Paused (Co's own line says it)", !/return sayLoose\(`Paused\./.test(src("mo/teamAgent.ts")));
 check("drafts for them keep their own wording", /use only the names, titles, events and details they gave you/.test(src("agent/conversationReply.ts")));
 
-check("a link in their unanswered texts from the last minutes is read for the reply", (() => { const t = src("routes/sendblue.ts"); return /AND created_at > NOW\(\) - INTERVAL '3 minutes'/.test(t) && /content LIKE 'Co replied:%'/.test(t) && /linksIn\(c\)\[0\]/.test(t); })());
+check("the reply path reads a link from their unanswered texts through the tested merge helper (behavior: evals/guards)", (() => { const t = src("routes/sendblue.ts"); return /mergeEarlierLink\(resolvedContent, hasText, earlier\)/.test(t) && /INTERVAL '3 minutes'/.test(t) && /content LIKE 'Co replied:%'/.test(t); })());
 
 // 2026-09-29: cutting a sentence with a domain in it left "from-royce.If a recruiter…"
 const GR = await import("../../src/harness/replyGrounding.js");
@@ -147,7 +147,7 @@ check("the summary rebuild is told Mo is an AI agent, and drops an older 'cofoun
 // Real-thread replay (evals/companion/threadReplay.ts): with earlier wrong replies in the thread, Co copied them until told plainly
 check("the details-on-file instruction rides with the kit facts, and Mo is software for team members", (() => { const g = src("harness/replyGrounding.ts"); return /The details on file listed above are all you have for doing things on their behalf/.test(g) && /Mo is software that Co runs, not a person\. When they talk about their cofounder, equity, family, friends or their own life, never mention Mo/.test(g); })());
 
-check("a link from their earlier text is logged and the reply is told the photo is its preview", (() => { const t = src("routes/sendblue.ts"); return /linkFromEarlier = !!theirLink/.test(t) && /decision: "turn\.link"/.test(t) && /this message is likely its preview image/.test(t); })());
+check("a link from their earlier text is logged, and the reply is told the photo is its preview", (() => { const t = src("routes/sendblue.ts"); return /linkFromEarlier = m\.fromEarlier/.test(t) && /decision: "turn\.link"/.test(t) && /this message is likely its preview image/.test(t); })());
 
 console.log(`companion rules: ${total - failed}/${total} passed`);
 if (failed) process.exitCode = 1;

@@ -17,6 +17,7 @@
 //     step logged.
 //   - "Follow up on what I promised Sam" is a reminder to them at a set time;
 //     Co never contacts anyone on its own.
+import { notToTeammate } from "./teamLines.js";
 import { DateTime } from "luxon";
 import pool from "../db/db.js";
 import { recordDecision } from "../harness/core.js";
@@ -109,7 +110,7 @@ async function relaysToday(from: string, to: string): Promise<number> {
 async function ownRecentTexts(userId: string, current: string): Promise<string[]> {
   const { rows } = await pool
     .query(
-      `SELECT content FROM co_memories WHERE user_id = $1 AND memory_type = 'text_exchange' AND content LIKE 'User said:%' AND created_at > NOW() - INTERVAL '2 hours' ORDER BY created_at DESC LIMIT 6`,
+      `SELECT content FROM co_memories WHERE user_id = $1 AND memory_type = 'text_exchange' AND content LIKE 'User said:%' AND ${notToTeammate()} AND created_at > NOW() - INTERVAL '2 hours' ORDER BY created_at DESC LIMIT 6`,
       [userId],
     )
     .catch(() => ({ rows: [] as any[] }));

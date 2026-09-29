@@ -13,6 +13,11 @@ export type Advice = { id: number; topic: string; gist: string; givenAt: string;
 // Follow up after this long, and not after it has gone stale.
 export const FOLLOW_UP_AFTER_DAYS = 3;
 export const STALE_AFTER_DAYS = 21;
+// A follow-up or story text is a companion text, and companion texts wait 4 days
+// after the last one (harness/proactive.ts TYPE_POLICY). One queued right after a
+// check-in must outlive that wait, or it expires unsent (2026-09-29: queued for
+// 4 days, gap of 4 days: never sent). Used for advice follow-ups and story texts.
+export const FOLLOW_UP_EXPIRES_DAYS = 7;
 // A topic already noted this recently is the same advice, not new.
 export const SAME_TOPIC_DAYS = 7;
 
