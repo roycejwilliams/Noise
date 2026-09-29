@@ -280,7 +280,7 @@ export async function runMoTeamTurn(input: TeamTurnInput): Promise<TeamTurn> {
       inputSchema: z.object({}),
       execute: async () => {
         await deps.pause(true);
-        return sayLoose(`Paused. No new searches or outreach until you tell me to start again. If someone I already reached out to writes back, I'll still bring it to you.`, ["paus", "write", "back"]);
+        return sayLoose(`Nothing new goes out and I run no new searches until you tell me to start again. If someone I already reached out to writes back, I'll still bring it to you.`, ["paus", "write", "back"]);
       },
     }),
     moResume: tool({

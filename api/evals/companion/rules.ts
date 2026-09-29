@@ -82,7 +82,7 @@ check("a readable link brings the critique instruction", shared.instructions.som
 const bad = await L.linkForReply(Promise.resolve(read({ status: "login_required", why: "login wall" }) as any));
 check("an unreadable link says so and asks for the text", bad.instructions.some((i) => /couldn't read/.test(i)) && !bad.instructions.some((i) => /honest friend/.test(i)));
 const slow = await L.linkForReply(new Promise(() => {}), 50);
-check("a slow read never holds the reply", slow.facts.length === 0 && slow.instructions.length === 0);
+check("a slow read never holds the reply, and Co is told it hasn't read it", slow.facts.length === 0 && slow.instructions.length === 1);
 check("the reply path reads their first link in the same turn", /linkForReply\(theirLinkP\)/.test(src("routes/sendblue.ts")));
 
 // Fixes after review (2026-09-29)
@@ -107,6 +107,16 @@ check("replies know what Co advised lately, and drop old advice", A.adviceLines(
 check("advice is a tool Co chooses, capped at one per turn, and followed up daily", /noteAdvice/.test(src("services/capabilities.ts")) && /runAdviceFollowUps/.test(src("jobs/index.ts")) && /markFollowedUp\(c\.userId/.test(src("harness/proactiveRegistry.ts")));
 check("Co's voice keeps professionals in the loop on health, legal and money", (() => { const t = src("services/coVoice.ts"); return /a doctor for a symptom, a lawyer for a contract/.test(t) && /never tell them to buy, sell or invest/.test(t); })());
 check("advice uses their story and earlier advice", /what you advised before/.test(src("agent/conversationReply.ts")) && /opts\.turn\?\.advice/.test(src("harness/replyGrounding.ts")));
+
+// From the 09-29 test conversation
+check("bare domains count as links, with or without a path", JSON.stringify(L.linksIn("What do you think of this? www.from-royce.com")) === JSON.stringify(["https://www.from-royce.com"]) && L.linksIn("see from-royce.com/work, thanks")[0] === "https://from-royce.com/work" && L.linksIn("https://lu.ma/x?a=1 and https://x.com/a/status/1?s=20").length === 2);
+check("emails, numbers and plain words aren't links", L.linksIn("email me at sam@example.com or call 415.555.1212, e.g. tomorrow").length === 0);
+check("a link still being read tells Co not to say it read it", await (async () => { const r = await L.linkForReply(new Promise(() => {}), 30); return r.instructions.some((i) => /still being read/.test(i) && /Don't say you've read it/.test(i)); })());
+check("a cut that loses the question isn't sent as a stub", (() => { const g = src("harness/replyGrounding.ts"); return /draft\.includes\("\?"\) && !text\.includes\("\?"\) && words < 14/.test(g) && /enoughLeft\(cut, draft\)/.test(g); })());
+check("Mo's pause text doesn't start with Paused (Co's own line says it)", !/return sayLoose\(`Paused\./.test(src("mo/teamAgent.ts")));
+check("drafts for them keep their own wording", /use only the names, titles, events and details they gave you/.test(src("agent/conversationReply.ts")));
+
+check("a link in their unanswered texts from the last minutes is read for the reply", (() => { const t = src("routes/sendblue.ts"); return /AND created_at > NOW\(\) - INTERVAL '3 minutes'/.test(t) && /content LIKE 'Co replied:%'/.test(t) && /linksIn\(c\)\[0\]/.test(t); })());
 
 console.log(`companion rules: ${total - failed}/${total} passed`);
 if (failed) process.exitCode = 1;

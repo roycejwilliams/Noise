@@ -68,7 +68,7 @@ import { resolveNetworkTeaseReply, resolveNetworkIntroReply } from "../services/
 import { NO_ROUTE, decideActions, gatherOpenItems, routeMessage, type RouterOutput } from "../services/messageRouter.js";
 import { recordDecision } from "../harness/core.js";
 import { routerGateChecks } from "../harness/routerChecks.js";
-import { linkForReply, type LinkRead } from "../services/linkReader.js";
+import { linkForReply, linksIn, type LinkRead } from "../services/linkReader.js";
 import { addEventFacts, addFact, addHint, addInstruction, addOngoingSearchFacts, countOf, FRESH_SEARCH_INSTRUCTION, gatherReplyFacts, recordSearchNote } from "../harness/replyGrounding.js";
 import { runConversationReplyAgent, filterRelevantMemories, CALL_OFFER_EXPIRY_DAYS } from "../agent/conversationReply.js";
 import { triggerCallForUser } from "../services/callTrigger.js";
@@ -1183,11 +1183,28 @@ export function sendblueRouter(io: Server): Router {
 
         // A link they texted is read in the background, kept to them (services/linkReader.ts).
         // The first one is also read for this reply (raced below), so Co can react to what the page says.
-        const theirLink = hasText ? resolvedContent.match(/https?:\/\/[^\s)"'<>]+/)?.[0] ?? null : null;
+        // A link and its preview photo can arrive as two texts, with the reply
+        // answering the second (2026-09-29: Co described the photo and never
+        // used the X post it was read from). So a link in their unanswered
+        // texts from the last few minutes counts too.
+        let theirLink = hasText ? linksIn(resolvedContent)[0] ?? null : null;
+        if (!theirLink) {
+          const earlier = await pool
+            .query(
+              `SELECT content FROM co_memories
+               WHERE user_id = $1 AND memory_type = 'text_exchange' AND content LIKE 'User said:%' AND created_at > NOW() - INTERVAL '3 minutes'
+                 AND created_at > COALESCE((SELECT MAX(created_at) FROM co_memories WHERE user_id = $1 AND memory_type = 'text_exchange' AND content LIKE 'Co replied:%'), 'epoch')
+               ORDER BY created_at DESC LIMIT 4`,
+              [user.id],
+            )
+            .then((r) => r.rows.map((x: any) => String(x.content)))
+            .catch(() => [] as string[]);
+          theirLink = earlier.map((c) => linksIn(c)[0]).find(Boolean) ?? null;
+        }
         const theirLinkP: Promise<LinkRead | null> | null = theirLink
           ? import("../services/linkReader.js").then((l) => l.readLink(theirLink, { ownerUserId: user.id })).catch(() => null)
           : null;
-        if (hasText && /https?:\/\//.test(resolvedContent)) import("../services/linkReader.js").then((l) => l.readLinksLater(resolvedContent, { ownerUserId: user.id })).catch(() => {});
+        if (hasText && linksIn(resolvedContent).length) import("../services/linkReader.js").then((l) => l.readLinksLater(resolvedContent, { ownerUserId: user.id })).catch(() => {});
         const [inboundMemory, queryEmbedding] = await Promise.all([
           pool.query(
             `INSERT INTO co_memories (user_id, memory_type, content)

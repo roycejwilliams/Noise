@@ -916,8 +916,12 @@ export function rewriteAddsNothing(draft: string, rewrite: string, allowed: stri
 }
 
 // Enough left after cutting to still answer them.
-function enoughLeft(text: string): boolean {
-  return text.split(/\s+/).filter(Boolean).length >= 4;
+// A draft that asked something and lost its question to the cut is a stub
+// ("Got it, a job at X."), not an answer: it goes to the rewrite instead.
+function enoughLeft(text: string, draft = ""): boolean {
+  const words = text.split(/\s+/).filter(Boolean).length;
+  if (draft.includes("?") && !text.includes("?") && words < 14) return false;
+  return words >= 4;
 }
 
 export type GroundingResult = {
@@ -1058,7 +1062,7 @@ export async function groundReply(
     const cutCode = codeChecks(cut, rf, src).filter((c) => !c.pass);
     if (cutCode.length) cut = stripUnsupported(cut, cutCode);
     const inviteCut = effectiveFailed1.some((c) => c.name === "no_invite_sent_claim") && !rf.facts.some((f) => /invites are used/i.test(f.text));
-    if (enoughLeft(cut) && !inviteCut) {
+    if (enoughLeft(cut, draft) && !inviteCut) {
       result = { final: cut, outcome: "cut", checks: first.checks, latencyMs: Date.now() - started, firstCheckMs, stages };
     } else {
       // 2. Too little left: one model rewrite, kept only if it adds nothing.

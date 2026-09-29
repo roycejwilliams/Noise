@@ -386,8 +386,23 @@ export async function savedRead(url: string, ownerUserId: string | null = null):
 
 // Background: read what Co just sent or what they just texted. Never awaited
 // on the reply path.
+// Links in a text, as full URLs. "www.from-royce.com" and "from-royce.com/work"
+// count, not only ones that start with https:// (2026-09-29: a bare domain was
+// never read, and Co praised the "clean domain" without looking). A bare name
+// needs www. or a common ending, and an email address isn't a link.
+const LINK_RE = /(?<![@\w./-])(?:https?:\/\/[^\s)"'<>]+|(?:www\.)[a-z0-9-]+(?:\.[a-z0-9-]+)+(?:\/[^\s)"'<>]*)?|[a-z0-9-]+(?:\.[a-z0-9-]+)*\.(?:com|org|net|io|co|ai|app|dev|me|so|xyz|tech|studio|design|us|gg|fm|ly|page|site|world|club)(?:\/[^\s)"'<>]*)?)(?![\w@])/gi;
+export function linksIn(text: string): string[] {
+  const out: string[] = [];
+  for (const m of text.match(LINK_RE) ?? []) {
+    const clean = m.replace(/[.,;:!?)]+$/, "");
+    const url = /^https?:\/\//i.test(clean) ? clean : `https://${clean}`;
+    if (!out.includes(url)) out.push(url);
+  }
+  return out;
+}
+
 export function readLinksLater(text: string, opts: { ownerUserId?: string | null } = {}): void {
-  const links = Array.from(new Set(text.match(/https?:\/\/[^\s)"'<>]+/g) ?? [])).slice(0, 4);
+  const links = linksIn(text).slice(0, 4);
   for (const l of links) readLink(l, opts).catch(() => {});
 }
 
@@ -440,10 +455,14 @@ export function excerptFact(label: string, r: LinkRead): string | null {
 
 // The link they texted, as facts for this reply. Waits a few seconds at most;
 // the reply never depends on it.
-export async function linkForReply(read: Promise<LinkRead | null>, waitMs = 6_000): Promise<{ facts: string[]; hints: string[]; instructions: string[] }> {
+export async function linkForReply(read: Promise<LinkRead | null>, waitMs = 12_000): Promise<{ facts: string[]; hints: string[]; instructions: string[] }> {
   const got = await Promise.race([read, new Promise<null>((r) => setTimeout(() => r(null), waitMs))]);
   const out = { facts: [] as string[], hints: [] as string[], instructions: [] as string[] };
-  if (!got) return out;
+  if (!got) {
+    // Still being read: Co must not say it has read it or describe it.
+    out.instructions.push("The page they sent is still being read and you don't have its text yet. Don't say you've read it, and don't describe or judge it. Say you're reading it now, and answer what you can without it.");
+    return out;
+  }
   const label = "the link they sent";
   const d = describeRead(label, got);
   // "Doesn't state a start or venue" is noise on a page that isn't an event.
