@@ -1601,7 +1601,7 @@ export function sendblueRouter(io: Server): Router {
           const shared = await linkForReply(theirLinkP);
           // A link from their earlier text, answered on a later one (usually its preview photo):
           // the reply is about the page, not the picture.
-          if (linkFromEarlier && shared.facts.length) addInstruction(replyFacts, "The link they sent just before this message is what they want to talk about, and this message is likely its preview image. Answer about what the page says, using its text above.");
+          if (linkFromEarlier && shared.facts.length) addInstruction(replyFacts, "They sent a link just before this message, and this message may be its preview image or a separate photo. Answer about what the page says, using its text above, and about the photo too if it is something else. Do not answer only the photo.");
           recordDecision({ layer: 3, decision: "turn.link", userId: user.id, outcome: shared.facts.length ? "act" : "skip", action: `${linkFromEarlier ? "earlier_text" : "this_text"}:${shared.facts.length ? "read" : "not_read"}` }).catch(() => {});
           shared.facts.forEach((f) => addFact(replyFacts, "known", f));
           shared.hints.forEach((h) => addHint(replyFacts, h));
