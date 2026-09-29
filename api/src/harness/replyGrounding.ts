@@ -587,7 +587,7 @@ export function codeChecks(draft: string, rf: ReplyFacts, src: GroundingSources)
   // Per sentence, and Co has to be the one sending (2026-09-22: advice about
   // their own event, "have a few founders send invites", was read as Co
   // claiming a membership invite and the whole reply became invite copy).
-  const namesAnInvite = (draft.match(/[^.!?\n]+[.!?]*/g) ?? [draft]).some(
+  const namesAnInvite = (draft.match(SENTENCES) ?? [draft]).some(
     (s) =>
       INVITE_NOUN.test(s) &&
       INVITE_ACTION_VERB.test(s) &&
@@ -786,7 +786,7 @@ export function sentencesToRecheck(draft: string, rewrite: string, failed: GateC
   const flat = (t: string) => ` ${t.toLowerCase().replace(/[’‘]/g, "'").replace(/[^a-z0-9' ]+/g, " ").replace(/\s+/g, " ").trim()} `;
   const whole = flat(draft);
   const bad = failed.map((f) => flat((f.reason ?? "").replace(/^[a-z_]+: "|"(\s*\([^)]*\))?$/g, "")).trim()).filter((q) => q.length > 3);
-  return (rewrite.match(/[^.!?\n]+[.!?]*\s*/g) ?? [rewrite])
+  return (rewrite.match(SENTENCES_SP) ?? [rewrite])
     .map((x) => x.trim())
     .filter(Boolean)
     .filter((x) => !whole.includes(flat(x)) || bad.some((q) => flat(x).includes(` ${q} `) || flat(x).includes(q)));
@@ -840,9 +840,15 @@ export function clashClaim(text: string): boolean {
   return CLASH.test(text);
 }
 
+// Sentences, where a period inside a word is not an end: "from-royce.com",
+// "3.5", "e.g.com" (2026-09-29: the cut split at the dot in a domain and
+// joined the pieces back as "from-royce.If a recruiter…").
+const SENTENCES = /(?:[^.!?\n]|[.!?](?=[^\s.!?]))+[.!?]*/g;
+const SENTENCES_SP = /(?:[^.!?\n]|[.!?](?=[^\s.!?]))+[.!?]*\s*/g;
+
 // Last resort: drop the sentences that carry an unsupported claim.
 export function stripUnsupported(draft: string, failed: GateCheck[]): string {
-  const sentences = draft.match(/[^.!?\n]+[.!?]*\s*/g) ?? [draft];
+  const sentences = draft.match(SENTENCES_SP) ?? [draft];
   // Strips the leading `type: "` and the trailing `"`, plus ANY trailing
   // parenthetical claimChecks appended after it — not just literally
   // " (cited support not found)" (2026-09-17 code review: a future_promise
@@ -905,7 +911,7 @@ export function rewriteAddsNothing(draft: string, rewrite: string, allowed: stri
   if (!checkNoEmotionLabel(rewrite).pass) return { ok: false, why: "names their feelings" };
   const whole = flat(draft);
   const known = `${draft}\n${allowed}`.toLowerCase();
-  const fresh = (rewrite.match(/[^.!?\n]+[.!?]*/g) ?? []).map((x) => x.trim()).filter((x) => x && !whole.includes(flat(x)));
+  const fresh = (rewrite.match(SENTENCES) ?? []).map((x) => x.trim()).filter((x) => x && !whole.includes(flat(x)));
   for (const sentence of fresh) {
     if (FEELING_WORDS.test(sentence)) return { ok: false, why: `adds something about how they feel: "${sentence}"` };
     if (RECOMMENDS.test(sentence)) return { ok: false, why: `adds or changes a recommendation: "${sentence}"` };

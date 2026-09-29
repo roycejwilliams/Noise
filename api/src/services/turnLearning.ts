@@ -8,6 +8,7 @@
 // correction history; quoted resolutions and corrections; the ask dedupe
 // and same-ask judgment; the planned-event embedding and match; the style
 // notes merge). The call path (routes/co.ts) keeps its own pipeline.
+import { recordAdvice } from "./advice.js";
 import { anthropic } from "@ai-sdk/anthropic";
 import { generateText } from "ai";
 import pool from "../db/db.js";
@@ -100,6 +101,8 @@ ${o.styleNotes.length ? o.styleNotes.map((n) => `- ${n}`).join("\n") : "(none)"}
 Co's message right before theirs: "${(o.coSaidBefore ?? "").slice(0, 600)}"
 Only change the notes if what they just said makes clear how they want Co to text them: length, directness, detail, questions, tone, emoji, timing, what to lead with ("just tell me", "shorter please", "stop asking so many questions", "more detail", "that's not what I need, focus on X"). A normal reply is not a preference. Never note anything about their life or plans here, only how Co should text them. If something changes, return the full updated list (at most ${MAX_NOTES}, each a short instruction to Co, newest last; drop any older note the new one contradicts).
 
+8. advice: this one is about Co's own last message (the assistant line), not the person's. Did it give real advice or a plan on something specific in the person's life: a decision, a pitch, a hard conversation, a set of steps? Not for event picks, facts, small talk, a plain question, or a feeling met without advice. If yes: {"topic": "a few words", "gist": "what Co advised, in one sentence"}. Otherwise null.
+
 Return ONLY valid JSON, no preamble:
 {"profile": {"life_chapters": [], "social_energy": null, "connection_style": "", "activity_preferences": [], "goals": [], "blockers": [], "availability_pattern": "", "city": "", "emotional_state": "", "long_term_direction": ""},
  "resolved": {"resolved_goals": [{"item": "...", "quote": "..."}], "resolved_blockers": [{"item": "...", "quote": "..."}], "resolved_asks": [{"index": 0, "quote": "..."}]},
@@ -107,7 +110,8 @@ Return ONLY valid JSON, no preamble:
  "cadence": "weekly" | "biweekly" | "none" | "unstated",
  "intent": {"asks": [{"text": "...", "type": "seeking"}], "concrete_preferences": [], "wants": [], "availability": null},
  "planned_event": {"event_name": null, "event_date": null, "event_location": null},
- "style": {"changed": false} or {"changed": true, "notes": ["..."]}}`;
+ "style": {"changed": false} or {"changed": true, "notes": ["..."]},
+ "advice": null or {"topic": "...", "gist": "..."}}`;
 }
 
 export type TurnLearning = {
@@ -118,6 +122,8 @@ export type TurnLearning = {
   intent: CapturedIntentData | null;
   planned_event: CapturedEventMentionData | null;
   style: { changed?: boolean; notes?: unknown } | null;
+  // What Co advised in this reply, when it did (services/advice.ts).
+  advice: { topic: string; gist: string } | null;
 };
 
 export function parseTurnLearning(text: string): TurnLearning | null {
@@ -132,6 +138,7 @@ export function parseTurnLearning(text: string): TurnLearning | null {
       intent: p.intent && typeof p.intent === "object" ? p.intent : null,
       planned_event: p.planned_event && typeof p.planned_event === "object" ? p.planned_event : null,
       style: p.style && typeof p.style === "object" ? p.style : null,
+      advice: p.advice && typeof p.advice.topic === "string" && typeof p.advice.gist === "string" ? { topic: p.advice.topic, gist: p.advice.gist } : null,
     };
   } catch {
     return null;
@@ -210,6 +217,9 @@ export async function learnFromTextTurn(input: TurnLearningInput): Promise<TurnL
       input.coSaidBefore?.trim() && row
         ? applyStyleUpdate(input.userId, styleNotes, learned.style, input.message).catch(() => null)
         : Promise.resolve(null),
+      // The advice Co gave in this reply, so it can ask how it went later.
+      // Same note the noteAdvice tool writes; a repeat topic is skipped.
+      learned.advice ? recordAdvice(input.userId, learned.advice.topic, learned.advice.gist).catch(() => false) : Promise.resolve(false),
     ]);
     await recordDecision({
       layer: 4,

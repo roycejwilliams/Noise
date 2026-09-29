@@ -118,5 +118,17 @@ check("drafts for them keep their own wording", /use only the names, titles, eve
 
 check("a link in their unanswered texts from the last minutes is read for the reply", (() => { const t = src("routes/sendblue.ts"); return /AND created_at > NOW\(\) - INTERVAL '3 minutes'/.test(t) && /content LIKE 'Co replied:%'/.test(t) && /linksIn\(c\)\[0\]/.test(t); })());
 
+// 2026-09-29: cutting a sentence with a domain in it left "from-royce.If a recruiter…"
+const GR = await import("../../src/harness/replyGrounding.js");
+check("cutting a sentence with a domain in it doesn't leave a fragment", (() => {
+  const out = GR.stripUnsupported("For the portfolio, from-royce.com is a splash with an Enter button. If a recruiter clicks through, that undercuts the pitch. Costs 3.5 hours.", [{ name: "claim_capability", pass: false, reason: 'detail: "from-royce.com is a splash with an Enter button."' } as any]);
+  return out === "If a recruiter clicks through, that undercuts the pitch. Costs 3.5 hours." && !/royce\.If/.test(out);
+})());
+
+// 2026-09-29 live test: Co didn't call noteAdvice on a pitch answer, so nothing was noted. The learning call that already runs after every text now reports advice too (no extra call).
+const TL = await import("../../src/services/turnLearning.js");
+check("the learning call reads advice from Co's reply, and parses it", (() => { const p = TL.parseTurnLearning('{"profile":{},"advice":{"topic":"investor pitch","gist":"Say the ask early and stop talking."}}'); return p?.advice?.topic === "investor pitch" && TL.parseTurnLearning('{"profile":{},"advice":null}')?.advice === null && TL.parseTurnLearning('{"profile":{},"advice":{"topic":5}}')?.advice === null; })());
+check("advice from the learning call is recorded with the same guard as the tool", /recordAdvice\(input\.userId, learned\.advice\.topic/.test(src("services/turnLearning.ts")) && /8\. advice: this one is about Co's own last message/.test(src("services/turnLearning.ts")));
+
 console.log(`companion rules: ${total - failed}/${total} passed`);
 if (failed) process.exitCode = 1;
