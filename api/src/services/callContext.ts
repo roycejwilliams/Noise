@@ -1,3 +1,4 @@
+import { notToTeammate } from "./teamLines.js";
 import { renderCorrections } from "../harness/profileWrite.js";
 import { generateText } from "ai";
 import { anthropic } from "@ai-sdk/anthropic";
@@ -78,7 +79,7 @@ export async function buildContextSummary(userId: string): Promise<string> {
       // were still pre-seed, after he'd texted he's Series A with a $35M deal).
       pool.query(
         `SELECT content FROM co_memories
-         WHERE user_id = $1 AND memory_type = 'text_exchange' AND (content LIKE 'User said:%' OR content LIKE '[Call]%')
+         WHERE user_id = $1 AND memory_type = 'text_exchange' AND (content LIKE 'User said:%' OR content LIKE '[Call]%') AND ${notToTeammate()}
            AND created_at > NOW() - INTERVAL '48 hours'
          ORDER BY created_at DESC LIMIT 25`,
         [userId],

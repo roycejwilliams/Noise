@@ -8,6 +8,7 @@
 // correction history; quoted resolutions and corrections; the ask dedupe
 // and same-ask judgment; the planned-event embedding and match; the style
 // notes merge). The call path (routes/co.ts) keeps its own pipeline.
+import { withoutTeammateLines } from "./teamLines.js";
 import { recordAdvice } from "./advice.js";
 import { anthropic } from "@ai-sdk/anthropic";
 import { generateText } from "ai";
@@ -149,7 +150,7 @@ export function parseTurnLearning(text: string): TurnLearning | null {
 export async function learnFromTextTurn(input: TurnLearningInput): Promise<TurnLearning | null> {
   const started = Date.now();
   // The same transcript the separate calls read before.
-  const transcript = `${input.recentConversation}\nuser: ${input.message}\nassistant: ${input.coReply}`.trim();
+  const transcript = `${withoutTeammateLines(input.recentConversation)}\nuser: ${input.message}\nassistant: ${input.coReply}`.trim();
   try {
     const [{ rows: profileRows }, { rows: askRows }] = await Promise.all([
       pool.query(

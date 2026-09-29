@@ -137,5 +137,12 @@ check("Mo is described as an AI agent, never a cofounder or someone in a member'
 check("advice doesn't guess who is involved", /Don't guess who else is involved or what their role is/.test(src("services/coVoice.ts")));
 check("asked what Co has on them, Co answers from the details on file first", /answer from the details on file first/.test(src("services/capabilities.ts")));
 
+// 2026-09-29: the summary of Royce said he built Co "with cofounders Mo and Jacqueline", because his texts to Mo were read as facts about his life
+const TLn = await import("../../src/services/teamLines.js");
+check("talk with a teammate agent is dropped from what the learning reads see", TLn.withoutTeammateLines("User said: hi\nUser said: @Mo go [to Mo]\nMo replied: ok\nCo tagged Mo: @Mo\nCo replied: sure\nUser said: I go [to Bob] weekly") === "User said: hi\nCo replied: sure\nUser said: I go [to Bob] weekly");
+check("the SQL filter only matches a trailing [to Name]", /!~ ' \\\[to \[A-Za-z\]\+\\\]\$'/.test(TLn.notToTeammate()) || TLn.notToTeammate("m").startsWith("m.content"));
+check("every reader of the member's own lines skips their talk with a teammate", ["harness/personSnapshot.ts", "harness/memberThreads.ts", "services/callContext.ts", "services/searchBrief.ts", "services/recommendation.ts"].every((f) => /notToTeammate\(/.test(src(f))) && /withoutTeammateLines\(input\.recentConversation\)/.test(src("services/turnLearning.ts")));
+check("the summary rebuild is told Mo is an AI agent, and drops an older 'cofounder Mo'", /Mo is an AI agent that works alongside Co, not a person in their life/.test(src("harness/personSnapshot.ts")));
+
 console.log(`companion rules: ${total - failed}/${total} passed`);
 if (failed) process.exitCode = 1;

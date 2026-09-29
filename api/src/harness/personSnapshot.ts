@@ -13,6 +13,7 @@
 // statements replace older ones; nothing about Co's own performance. The
 // knowledge eval (evals/knowledge) checks a stale profile plus newer texts
 // produce the newer facts.
+import { notToTeammate } from "../services/teamLines.js";
 import { anthropic } from "@ai-sdk/anthropic";
 import { generateText } from "ai";
 import pool from "../db/db.js";
@@ -60,6 +61,7 @@ Rules:
 - Newer statements replace older ones. If they said they're Series A, they're not pre-seed anymore, whatever the old picture says.
 - Only what they actually said or what's listed above. No guesses about their feelings or circumstances.
 - Only about them. Never about Co, Co's mistakes, or complaints about Co.
+- Mo is an AI agent that works alongside Co, not a person in their life. Never list Mo as a cofounder, colleague or friend, even if an older picture did: drop it.
 - Refer to them by name or as "they". Never "he" or "she" unless they told Co their pronouns (2026-09-22: a picture called a member "he" from their name alone).
 - Keep every list short (at most 4 items), specific, and current. Drop anything resolved or contradicted.
 
@@ -131,7 +133,7 @@ async function gatherInputs(userId: string): Promise<SnapshotInputs | null> {
     pool.query(`SELECT first_name FROM users WHERE id = $1`, [userId]),
     pool.query(
       `SELECT created_at, content FROM co_memories
-       WHERE user_id = $1 AND memory_type = 'text_exchange' AND (content LIKE 'User said:%' OR content LIKE '[Call]%')
+       WHERE user_id = $1 AND memory_type = 'text_exchange' AND (content LIKE 'User said:%' OR content LIKE '[Call]%') AND ${notToTeammate()}
          AND created_at > NOW() - INTERVAL '21 days'
        ORDER BY created_at DESC LIMIT 60`,
       [userId],
@@ -240,7 +242,7 @@ export async function refreshPersonSnapshot(userId: string, opts: { force?: bool
     if (!opts.force) {
       const { rows } = await pool.query(
         `SELECT s.updated_at,
-                (SELECT MAX(created_at) FROM co_memories m WHERE m.user_id = $1 AND m.memory_type = 'text_exchange' AND (m.content LIKE 'User said:%' OR m.content LIKE '[Call]%')) AS newest
+                (SELECT MAX(created_at) FROM co_memories m WHERE m.user_id = $1 AND m.memory_type = 'text_exchange' AND (m.content LIKE 'User said:%' OR m.content LIKE '[Call]%') AND ${notToTeammate('m')}) AS newest
          FROM (SELECT $1::uuid AS user_id) u LEFT JOIN person_snapshots s ON s.user_id = u.user_id`,
         [userId],
       );

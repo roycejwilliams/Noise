@@ -1,3 +1,4 @@
+import { notToTeammate } from "./teamLines.js";
 import { generateText } from "ai";
 import { getPersonSnapshot, profileForSearch } from "../harness/personSnapshot.js";
 import { recordRevealedOffers } from "./offerReactions.js";
@@ -102,7 +103,7 @@ async function previousMemberText(userId: string, current: string): Promise<stri
   const { rows } = await pool
     .query(
       `SELECT content FROM co_memories
-       WHERE user_id = $1 AND memory_type = 'text_exchange' AND (content LIKE 'User said:%' OR content LIKE 'User sent a voice memo:%') AND created_at > NOW() - INTERVAL '15 minutes'
+       WHERE user_id = $1 AND memory_type = 'text_exchange' AND (content LIKE 'User said:%' OR content LIKE 'User sent a voice memo:%') AND ${notToTeammate()} AND created_at > NOW() - INTERVAL '15 minutes'
        ORDER BY created_at DESC LIMIT 3`,
       [userId],
     )

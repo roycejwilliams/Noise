@@ -17,6 +17,7 @@
 //     frame (services/askWindow.ts), never taken from the model;
 //   - staleness only ever moves a thread to "waiting", never closed.
 // Read only with the owner's user id; nothing here ever goes to another member.
+import { notToTeammate } from "../services/teamLines.js";
 import { anthropic } from "@ai-sdk/anthropic";
 import { generateText } from "ai";
 import { DateTime } from "luxon";
@@ -234,7 +235,7 @@ export async function ownLines(userId: string, days = LOOKBACK_DAYS): Promise<Ow
   const { rows } = await pool.query(
     `SELECT created_at, memory_type, content FROM co_memories
      WHERE user_id = $1 AND created_at > NOW() - make_interval(days => $2)
-       AND ((memory_type = 'text_exchange' AND content LIKE 'User said:%') OR memory_type = 'call_transcript')
+       AND ((memory_type = 'text_exchange' AND content LIKE 'User said:%' AND ${notToTeammate()}) OR memory_type = 'call_transcript')
      ORDER BY created_at LIMIT 200`,
     [userId, days],
   );

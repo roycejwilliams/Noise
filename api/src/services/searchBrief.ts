@@ -9,6 +9,7 @@
 // and how they've been feeling (harness/emotion.ts), so what comes back
 // fits the person right now (a small dinner over a 300-person mixer when
 // they're drained, founder support when fundraising keeps worrying them).
+import { notToTeammate } from "./teamLines.js";
 import { anthropic } from "@ai-sdk/anthropic";
 import { generateText } from "ai";
 import pool from "../db/db.js";
@@ -37,7 +38,7 @@ async function recentUserTexts(userId: string): Promise<string[]> {
   const { rows } = await pool
     .query(
       `SELECT content FROM co_memories
-       WHERE user_id = $1 AND memory_type = 'text_exchange' AND content LIKE 'User said:%' AND created_at > NOW() - INTERVAL '10 days'
+       WHERE user_id = $1 AND memory_type = 'text_exchange' AND content LIKE 'User said:%' AND ${notToTeammate()} AND created_at > NOW() - INTERVAL '10 days'
        ORDER BY created_at DESC LIMIT 12`,
       [userId],
     )
