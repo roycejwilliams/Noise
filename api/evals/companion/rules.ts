@@ -128,7 +128,14 @@ check("cutting a sentence with a domain in it doesn't leave a fragment", (() => 
 // 2026-09-29 live test: Co didn't call noteAdvice on a pitch answer, so nothing was noted. The learning call that already runs after every text now reports advice too (no extra call).
 const TL = await import("../../src/services/turnLearning.js");
 check("the learning call reads advice from Co's reply, and parses it", (() => { const p = TL.parseTurnLearning('{"profile":{},"advice":{"topic":"investor pitch","gist":"Say the ask early and stop talking."}}'); return p?.advice?.topic === "investor pitch" && TL.parseTurnLearning('{"profile":{},"advice":null}')?.advice === null && TL.parseTurnLearning('{"profile":{},"advice":{"topic":5}}')?.advice === null; })());
-check("advice from the learning call is recorded with the same guard as the tool", /recordAdvice\(input\.userId, learned\.advice\.topic/.test(src("services/turnLearning.ts")) && /8\. advice: this one is about Co's own last message/.test(src("services/turnLearning.ts")));
+check("advice from the learning call is recorded with the same guard as the tool", /recordAdvice\(input\.userId, learned\.advice\.topic/.test(src("services/turnLearning.ts")) && /8\. advice: this one is about Co's own LAST line/.test(src("services/turnLearning.ts")));
+
+// 2026-09-29 retest: half the learning reads were cut off at the token cap, Co made Mo a cofounder, and the kit question got a thread answer
+check("both learning reads leave room to finish: medium effort and a cap that fits the reasoning", (() => { const a = src("services/turnLearning.ts"); const b = src("services/callLearning.ts"); return /maxOutputTokens: 5000,\s*providerOptions: \{ anthropic: \{ effort: "medium" \} \}/.test(a) && /maxOutputTokens: 6000,\s*providerOptions: \{ anthropic: \{ effort: "medium" \} \}/.test(b); })());
+check("advice is judged on Co's last line only", /Co's own LAST line/.test(src("services/turnLearning.ts")));
+check("Mo is described as an AI agent, never a cofounder or someone in a member's life", (() => { const t = src("services/extensions.ts"); return /Mo is Co's teammate|\$\{e\.name\} is Co's teammate \(an AI agent that works alongside Co, not a person: never a cofounder/.test(t); })());
+check("advice doesn't guess who is involved", /Don't guess who else is involved or what their role is/.test(src("services/coVoice.ts")));
+check("asked what Co has on them, Co answers from the details on file first", /answer from the details on file first/.test(src("services/capabilities.ts")));
 
 console.log(`companion rules: ${total - failed}/${total} passed`);
 if (failed) process.exitCode = 1;

@@ -140,7 +140,7 @@ export async function isTeamMember(userId: string): Promise<boolean> {
 // What Co knows about its teammates, as capability facts, for the team only.
 export function teamSheet(): string[] {
   return EXTENSIONS.flatMap((e) => [
-    `${e.name} is Co's teammate, on this same number, known to the team only (never mention ${e.name} to anyone else). ${e.about} What ${e.name} does: ${e.abilities.map((a) => a.can).join(" ")}`,
+    `${e.name} is Co's teammate (an AI agent that works alongside Co, not a person: never a cofounder, and never someone in a member's own life), on this same number, known to the team only (never mention ${e.name} to anyone else). ${e.about} What ${e.name} does: ${e.abilities.map((a) => a.can).join(" ")}`,
     `${e.name}'s limits: ${e.limits.join(" ")}`,
     `So with the team, don't pitch what ${e.name} already does as a new idea: say ${e.name} already does it. Before you tell them you don't have something about ${e.name}'s work (the people it found, who's waiting, what it's doing), ask ${e.name} first: it usually has it. Two ways to work with ${e.name}. When you just need information from ${e.name} to answer them (who's in the queue, where someone stands), ask quietly with askTeammate and answer in your own voice; they never see the back-and-forth. When they want ${e.name} itself to act or talk to them (approvals, pausing, "tell ${e.name}…"), tag it in with handToTeammate: a bare @${e.name} in the thread, then ${e.name} answers them directly and you step back. They can call ${e.name} in themselves by writing @${e.name}, or by replying to one of ${e.name}'s texts; just mentioning ${e.name} leaves it with you.`,
   ]);

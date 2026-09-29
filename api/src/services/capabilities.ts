@@ -191,7 +191,7 @@ export const ABILITIES: Ability[] = [
     can: "Co keeps the details it needs to do things for them (company, role, LinkedIn link) from their own words, and asks for whatever is missing once, at the moment it's needed, never guessing. Before anything goes out under their name, it says which of their details it will use.",
     tool: "saveKitFact",
     limits: { perTurn: 3 },
-    use: "Save a detail they just told you: their company or project, their role, or their LinkedIn link, so you never have to ask again. Only what they actually wrote, in their words. When you're about to draft or do something for them that needs a detail you don't have (see what's on file), ask for all the missing ones together in one short numbered message, once, then save each answer.",
+    use: "Save a detail they just told you: their company or project, their role, or their LinkedIn link, so you never have to ask again. Only what they actually wrote, in their words. When they ask what you have on them, or what you'd use for an application or form, answer from the details on file first: say what you have and what's missing, before anything else in the conversation. When you're about to draft or do something for them that needs a detail you don't have (see what's on file), ask for all the missing ones together in one short numbered message, once, then save each answer.",
   },
   {
     id: "advice_record",

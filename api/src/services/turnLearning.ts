@@ -101,7 +101,7 @@ ${o.styleNotes.length ? o.styleNotes.map((n) => `- ${n}`).join("\n") : "(none)"}
 Co's message right before theirs: "${(o.coSaidBefore ?? "").slice(0, 600)}"
 Only change the notes if what they just said makes clear how they want Co to text them: length, directness, detail, questions, tone, emoji, timing, what to lead with ("just tell me", "shorter please", "stop asking so many questions", "more detail", "that's not what I need, focus on X"). A normal reply is not a preference. Never note anything about their life or plans here, only how Co should text them. If something changes, return the full updated list (at most ${MAX_NOTES}, each a short instruction to Co, newest last; drop any older note the new one contradicts).
 
-8. advice: this one is about Co's own last message (the assistant line), not the person's. Did it give real advice or a plan on something specific in the person's life: a decision, a pitch, a hard conversation, a set of steps? Not for event picks, facts, small talk, a plain question, or a feeling met without advice. If yes: {"topic": "a few words", "gist": "what Co advised, in one sentence"}. Otherwise null.
+8. advice: this one is about Co's own LAST line (the final "assistant" line), not the person's words and not earlier lines. Does that last line tell the person what to do about something specific in their life: how to handle a decision, a pitch, a hard conversation, or steps for a plan? Advice is any suggestion of an approach or a set of steps ("start by...", "I'd...", "bring a number", "say it early"), even when it ends with a question. It is not advice when the line only gives facts or event details, names events, answers a yes/no fact question, makes small talk, or only asks a question. If it is advice: {"topic": "a few words", "gist": "what Co advised, in one sentence"}. Otherwise null.
 
 Return ONLY valid JSON, no preamble:
 {"profile": {"life_chapters": [], "social_energy": null, "connection_style": "", "activity_preferences": [], "goals": [], "blockers": [], "availability_pattern": "", "city": "", "emotional_state": "", "long_term_direction": ""},
@@ -176,7 +176,13 @@ export async function learnFromTextTurn(input: TurnLearningInput): Promise<TurnL
 
     const { text } = await generateText({
       model: anthropic(PROFILE_JUDGMENT_MODEL),
-      maxOutputTokens: 2500,
+      // 2026-09-29: at the default effort the model spent up to 2500 tokens
+      // reasoning before writing, and about half of the reads on a real profile
+      // were cut off (finish=length) and dropped, taking 17 to 36 seconds.
+      // Medium finishes in about 9s and still finds the advice Co gave; low was
+      // fast but missed two of three.
+      maxOutputTokens: 5000,
+      providerOptions: { anthropic: { effort: "medium" } },
       experimental_telemetry: { isEnabled: true, functionId: "turnLearning.learn" },
       prompt: turnLearningPrompt({
         transcript,

@@ -191,7 +191,10 @@ export async function learnFromCall(input: {
   // No catch: a failed read fails the call's processing, which is retried.
   const { text } = await generateText({
     model: anthropic(PROFILE_JUDGMENT_MODEL),
-    maxOutputTokens: 3000,
+    // Same cap problem as turnLearning (2026-09-29): reasoning at the default
+    // effort used the budget before any JSON was written.
+    maxOutputTokens: 6000,
+    providerOptions: { anthropic: { effort: "medium" } },
     experimental_telemetry: { isEnabled: true, functionId: "callLearning.learn" },
     prompt: callLearningPrompt({
       transcript: input.transcript,
