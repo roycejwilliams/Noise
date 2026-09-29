@@ -147,5 +147,7 @@ check("the summary rebuild is told Mo is an AI agent, and drops an older 'cofoun
 // Real-thread replay (evals/companion/threadReplay.ts): with earlier wrong replies in the thread, Co copied them until told plainly
 check("the details-on-file instruction rides with the kit facts, and Mo is software for team members", (() => { const g = src("harness/replyGrounding.ts"); return /The details on file listed above are all you have for doing things on their behalf/.test(g) && /Mo is software that Co runs, not a person\. When they talk about their cofounder, equity, family, friends or their own life, never mention Mo/.test(g); })());
 
+check("a link from their earlier text is logged and the reply is told the photo is its preview", (() => { const t = src("routes/sendblue.ts"); return /linkFromEarlier = !!theirLink/.test(t) && /decision: "turn\.link"/.test(t) && /this message is likely its preview image/.test(t); })());
+
 console.log(`companion rules: ${total - failed}/${total} passed`);
 if (failed) process.exitCode = 1;

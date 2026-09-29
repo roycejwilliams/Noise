@@ -1188,6 +1188,7 @@ export function sendblueRouter(io: Server): Router {
         // used the X post it was read from). So a link in their unanswered
         // texts from the last few minutes counts too.
         let theirLink = hasText ? linksIn(resolvedContent)[0] ?? null : null;
+        let linkFromEarlier = false;
         if (!theirLink) {
           const earlier = await pool
             .query(
@@ -1200,6 +1201,7 @@ export function sendblueRouter(io: Server): Router {
             .then((r) => r.rows.map((x: any) => String(x.content)))
             .catch(() => [] as string[]);
           theirLink = earlier.map((c) => linksIn(c)[0]).find(Boolean) ?? null;
+          linkFromEarlier = !!theirLink;
         }
         const theirLinkP: Promise<LinkRead | null> | null = theirLink
           ? import("../services/linkReader.js").then((l) => l.readLink(theirLink, { ownerUserId: user.id })).catch(() => null)
@@ -1593,6 +1595,10 @@ export function sendblueRouter(io: Server): Router {
         // What the link they shared says (waits up to 6s; the reply never depends on it).
         if (theirLinkP && turnRead?.moment?.mode !== "small_talk") {
           const shared = await linkForReply(theirLinkP);
+          // A link from their earlier text, answered on a later one (usually its preview photo):
+          // the reply is about the page, not the picture.
+          if (linkFromEarlier && shared.facts.length) addInstruction(replyFacts, "The link they sent just before this message is what they want to talk about, and this message is likely its preview image. Answer about what the page says, using its text above.");
+          recordDecision({ layer: 3, decision: "turn.link", userId: user.id, outcome: shared.facts.length ? "act" : "skip", action: `${linkFromEarlier ? "earlier_text" : "this_text"}:${shared.facts.length ? "read" : "not_read"}` }).catch(() => {});
           shared.facts.forEach((f) => addFact(replyFacts, "known", f));
           shared.hints.forEach((h) => addHint(replyFacts, h));
           shared.instructions.forEach((i) => addInstruction(replyFacts, i));
