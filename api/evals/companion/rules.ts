@@ -144,5 +144,8 @@ check("the SQL filter only matches a trailing [to Name]", /!~ ' \\\[to \[A-Za-z\
 check("every reader of the member's own lines skips their talk with a teammate", ["harness/personSnapshot.ts", "harness/memberThreads.ts", "services/callContext.ts", "services/searchBrief.ts", "services/recommendation.ts"].every((f) => /notToTeammate\(/.test(src(f))) && /withoutTeammateLines\(input\.recentConversation\)/.test(src("services/turnLearning.ts")));
 check("the summary rebuild is told Mo is an AI agent, and drops an older 'cofounder Mo'", /Mo is an AI agent that works alongside Co, not a person in their life/.test(src("harness/personSnapshot.ts")));
 
+// Real-thread replay (evals/companion/threadReplay.ts): with earlier wrong replies in the thread, Co copied them until told plainly
+check("the details-on-file instruction rides with the kit facts, and Mo is software for team members", (() => { const g = src("harness/replyGrounding.ts"); return /The details on file listed above are all you have for doing things on their behalf/.test(g) && /Mo is software that Co runs, not a person\. When they talk about their cofounder, equity, family, friends or their own life, never mention Mo/.test(g); })());
+
 console.log(`companion rules: ${total - failed}/${total} passed`);
 if (failed) process.exitCode = 1;

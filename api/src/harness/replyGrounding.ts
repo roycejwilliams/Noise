@@ -137,6 +137,9 @@ export async function gatherReplyFacts(
   // Everyone else gets nothing about them.
   if (await isTeamMember(userId).catch(() => false)) {
     for (const line of teamSheet()) addFact(rf, "capability", line);
+    // 2026-09-29: with earlier replies in the thread naming Mo beside a cofounder,
+    // Co kept doing it (2 to 3 of 3 replays) until it was told plainly, per replay.
+    addInstruction(rf, "Mo is software that Co runs, not a person. When they talk about their cofounder, equity, family, friends or their own life, never mention Mo, whatever an earlier reply in this conversation said.");
     for (const a of ABILITIES.filter((x) => x.teamOnly)) addFact(rf, "capability", a.can);
   }
   // Abilities switched off right now (services/abilitySwitches.ts).
@@ -225,7 +228,12 @@ export async function gatherReplyFacts(
   // (services/turnContext.ts), before Co ever says it doesn't have them.
   if (opts.turn) for (const line of sentDetailLines(opts.turn)) addFact(rf, "known", line);
   // What Co has for doing things on their behalf, and what it doesn't (services/memberKit.ts).
-  if (opts.turn?.kit) for (const line of kitLines(opts.turn.kit)) addFact(rf, "known", line);
+  if (opts.turn?.kit) {
+    for (const line of kitLines(opts.turn.kit)) addFact(rf, "known", line);
+    // 2026-09-29: on a real thread Co repeated an earlier wrong answer ("just that you want help
+    // applying to X") 3 of 3 times instead of the details on file.
+    addInstruction(rf, "The details on file listed above are all you have for doing things on their behalf. If they ask what you have on them, answer from that list, even if an earlier reply in this conversation said otherwise, and say plainly if that earlier reply was wrong.");
+  }
   // Where they've been with Co, from the record (services/milestones.ts): the
   // arc Co can look back on, in their own words.
   const story = opts.turn?.story ?? (opts.turn ? [] : await loadMilestones(userId).then((m) => storyLines(m, 4)).catch(() => [] as string[]));
