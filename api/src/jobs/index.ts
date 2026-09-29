@@ -32,7 +32,7 @@ import { classifyOpenAsks, syncClosedAsks } from "../services/askKind.js";
 import { companionPayloadFor } from "../harness/memberThreads.js";
 import { gapDescription, lastLearned, QUIET_UNDERSTANDING_DAYS, understandingGaps } from "../services/understanding.js";
 import { recordDecision } from "../harness/core.js";
-import { runWeeklyReflections } from "../harness/memberReflection.js";
+import { runAdviceFollowUps, runWeeklyReflections } from "../harness/memberReflection.js";
 import { runMembershipLapse } from "../services/membershipLapse.js";
 import { extensionJobs } from "../services/extensions.js";
 
@@ -747,6 +747,11 @@ export function registerJobs(io: Server) {
   // Sunday evening Pacific, so a queued check-in can go out Monday.
   cron.schedule("0 18 * * 0", () => {
     runWeeklyReflections().catch((err: any) => console.error("weekly reflection cron error:", err?.message ?? err));
+  }, { timezone: "America/Los_Angeles" });
+
+  // Advice Co gave a few days ago, asked about once (services/advice.ts).
+  cron.schedule("30 17 * * *", () => {
+    runAdviceFollowUps().catch((err: any) => console.error("advice follow-up cron error:", err?.message ?? err));
   }, { timezone: "America/Los_Angeles" });
 
   // Extensions' schedules (services/extensions.ts), each only while that

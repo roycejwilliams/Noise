@@ -219,7 +219,7 @@ export const proactiveRegistry: ProactiveRegistry = {
 
   companion: {
     async draft(c, person) {
-      const r = await draftCompanionCheckin(person.firstName, c.payload.recap ?? "", c.payload.thread ?? null, c.payload.item ?? null, c.payload.curious ?? null, c.payload.story ?? null);
+      const r = await draftCompanionCheckin(person.firstName, c.payload.recap ?? "", c.payload.thread ?? null, c.payload.item ?? null, c.payload.curious ?? null, c.payload.story ?? null, c.payload.advice ?? null);
       return r ? { messages: [r.text], ...r } : skip("model chose SKIP: no specific open thread");
     },
     async onSent(c, _p, messages) {
@@ -229,6 +229,11 @@ export const proactiveRegistry: ProactiveRegistry = {
         await pool.query(`UPDATE member_threads SET last_touched_at = NOW() WHERE id = $1 AND user_id = $2`, [c.payload.threadId, c.userId]);
       }
       await writeMemory(c.userId, "companion_checkin", `Companion check-in: ${messages.join(" ")}`);
+      // Asked how the advice went: once.
+      if (c.payload.advice?.id) {
+        const { markFollowedUp } = await import("../services/advice.js");
+        await markFollowedUp(c.userId, c.payload.advice.id).catch(() => {});
+      }
       // A moment marked: once, and it becomes part of the story Co tells back.
       if (c.payload.story?.key) {
         const { markMilestone } = await import("../services/milestones.js");

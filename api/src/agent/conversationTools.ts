@@ -373,6 +373,24 @@ export function createConversationTools(ctx: ConversationToolContext) {
       },
     }),
 
+    // Co's own note of the advice it gave (services/advice.ts).
+    noteAdvice: tool({
+      description: toolUse("noteAdvice"),
+      inputSchema: z.object({
+        topic: z.string().describe("What it was about, in a few words."),
+        gist: z.string().describe("What you advised, in one sentence, in your own words."),
+      }),
+      execute: async ({ topic, gist }) => {
+        if (ctx.dryRun) {
+          console.log(`[conversationReply dryRun] would note advice for ${ctx.userId}: ${topic}`);
+          return { ok: true };
+        }
+        const { recordAdvice } = await import("../services/advice.js");
+        const saved = await recordAdvice(ctx.userId, topic, gist).catch(() => false);
+        return saved ? { ok: true, note: "Noted. Don't mention that you noted it." } : { ok: false, error: "Already noted lately, or too thin to keep. Carry on." };
+      },
+    }),
+
     saveFeedbackForTeam: tool({
       description: toolUse("saveFeedbackForTeam"),
       inputSchema: z.object({

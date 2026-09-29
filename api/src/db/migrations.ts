@@ -1908,6 +1908,19 @@ export async function runMigrations(): Promise<void> {
     .catch((err: Error) => console.error("person_snapshots table init failed:", err));
   await pool
     .query(
+      `CREATE TABLE IF NOT EXISTS member_advice (
+        id BIGSERIAL PRIMARY KEY,
+        user_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+        topic TEXT NOT NULL,
+        gist TEXT NOT NULL,
+        given_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+        followed_up_at TIMESTAMPTZ
+      )`,
+    )
+    .then(() => pool.query(`CREATE INDEX IF NOT EXISTS idx_member_advice_user ON member_advice (user_id, given_at DESC)`))
+    .catch((err: Error) => console.error("member_advice table init failed:", err));
+  await pool
+    .query(
       `CREATE TABLE IF NOT EXISTS member_milestones (
         user_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
         key TEXT NOT NULL,

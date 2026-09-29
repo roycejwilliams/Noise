@@ -230,6 +230,8 @@ export async function gatherReplyFacts(
   // arc Co can look back on, in their own words.
   const story = opts.turn?.story ?? (opts.turn ? [] : await loadMilestones(userId).then((m) => storyLines(m, 4)).catch(() => [] as string[]));
   for (const line of story) addFact(rf, "known", line);
+  // What Co told them lately, so it doesn't contradict itself and can ask how it went.
+  for (const line of opts.turn?.advice ?? []) addFact(rf, "did_before", line);
   if (opts.turn) for (const hint of sentDetailHints(opts.turn)) addHint(rf, hint);
   for (const line of ledger.lines) addFact(rf, "did_before", line);
   // They're asking about something the record shows Co sent: the record

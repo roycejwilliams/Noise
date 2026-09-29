@@ -94,5 +94,19 @@ check("milestones are inserted only when new, in one statement", /!have\.has\(m\
 // 2026-09-29: "...and tell me which one you'd pick" was read as not a request, so the search ran on the older Austin ask.
 check("the search rewrite never answers null once a search is decided", (() => { const t = src("services/recommendation.ts"); return /never null/.test(t) && !/\{"request": null\}/.test(t) && /Borrow only the topic, and never their overall ask's time frame/.test(t); })());
 
+// Advisor (2026-09-29)
+const A = await import("../../src/services/advice.js");
+const nowA = new Date("2026-09-29T12:00:00Z");
+const ago = (d: number) => new Date(nowA.getTime() - d * 86_400_000).toISOString();
+const adv = (id: number, d: number, extra: any = {}) => ({ id, topic: `topic ${id}`, gist: "g", givenAt: ago(d), followedUpAt: null, ...extra });
+check("advice is asked about after 3 days, not before", A.dueAdvice([adv(1, 1)], nowA) === null && A.dueAdvice([adv(1, 4)], nowA)?.id === 1);
+check("advice isn't asked about once stale or already asked", A.dueAdvice([adv(1, 30)], nowA) === null && A.dueAdvice([adv(1, 5, { followedUpAt: ago(1) })], nowA) === null);
+check("the newest due advice goes first", A.dueAdvice([adv(1, 10), adv(2, 5)], nowA)?.id === 2);
+check("the same topic within a week isn't noted twice", A.isRepeat("the pitch", [{ topic: "pitch on Friday", givenAt: ago(2) }], nowA) && !A.isRepeat("the pitch", [{ topic: "pitch on Friday", givenAt: ago(10) }], nowA) && !A.isRepeat("moving", [{ topic: "pitch on Friday", givenAt: ago(2) }], nowA));
+check("replies know what Co advised lately, and drop old advice", A.adviceLines([adv(1, 2), adv(2, 40)], nowA).length === 1 && /advised them on/.test(A.adviceLines([adv(1, 2)], nowA)[0]));
+check("advice is a tool Co chooses, capped at one per turn, and followed up daily", /noteAdvice/.test(src("services/capabilities.ts")) && /runAdviceFollowUps/.test(src("jobs/index.ts")) && /markFollowedUp\(c\.userId/.test(src("harness/proactiveRegistry.ts")));
+check("Co's voice keeps professionals in the loop on health, legal and money", (() => { const t = src("services/coVoice.ts"); return /a doctor for a symptom, a lawyer for a contract/.test(t) && /never tell them to buy, sell or invest/.test(t); })());
+check("advice uses their story and earlier advice", /what you advised before/.test(src("agent/conversationReply.ts")) && /opts\.turn\?\.advice/.test(src("harness/replyGrounding.ts")));
+
 console.log(`companion rules: ${total - failed}/${total} passed`);
 if (failed) process.exitCode = 1;

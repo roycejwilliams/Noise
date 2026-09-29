@@ -30,7 +30,9 @@ export async function draftCompanionCheckin(
   item?: CompanionItem | null,
   curious?: CompanionCurious | null,
   story?: CompanionStory | null,
+  advice?: CompanionAdvice | null,
 ): Promise<{ text: string; rules: OutputRules } | null> {
+  if (advice) return draftFromAdvice(firstName, advice);
   if (story) return draftFromStory(firstName, story);
   if (thread) return draftFromThread(firstName, recap, thread, item ?? null);
   if (curious) return draftFromCuriosity(firstName, recap, curious);
@@ -44,6 +46,21 @@ export async function draftCompanionCheckin(
     task: `Find ONE specific open thread in the recap: something they were in the middle of, deciding, or looking forward to, that they'd plausibly have news about now. Write a short text that names that exact thing and asks how it went or where it landed. No next steps, nothing operational. If the recap has no specific open thread like that, return SKIP; a generic "thinking of you" is never acceptable.
 
 One exception: if the recap shows Co barely knows them yet (little beyond joining and their name), don't SKIP. Write one short, warm, low-pressure text that picks up where things actually left off (the last thing Co asked, if the recap says) and invites them to share what's on their plate these days. No events, no offers, no pitch, no promise of anything Co will do.`,
+  });
+  if (!text) return null;
+  return { text, rules: { maxSentences: 2, maxChars: 240 } };
+}
+
+// Advice Co gave a few days ago (services/advice.ts): asks how it went, once.
+export type CompanionAdvice = { topic: string; gist: string; daysAgo: number };
+
+async function draftFromAdvice(firstName: string, advice: CompanionAdvice): Promise<{ text: string; rules: OutputRules } | null> {
+  const text = await draftProactive({
+    functionId: "agent.companionCheckin",
+    firstName,
+    facts: { what_you_advised_them_about: advice.topic, what_you_told_them: advice.gist, days_ago: String(advice.daysAgo) },
+    task: `Ask how it went since you talked about what_you_advised_them_about, like an advisor who remembered. Name the thing itself in a few plain words. One short question: did they try it, or where did it land. Use only the facts given; don't add new advice, details or promises, and don't repeat the whole advice. Start with the thought itself, not a greeting like "Hey".`,
+    maxSentences: 2,
   });
   if (!text) return null;
   return { text, rules: { maxSentences: 2, maxChars: 240 } };

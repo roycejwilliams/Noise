@@ -194,6 +194,13 @@ export const ABILITIES: Ability[] = [
     use: "Save a detail they just told you: their company or project, their role, or their LinkedIn link, so you never have to ask again. Only what they actually wrote, in their words. When you're about to draft or do something for them that needs a detail you don't have (see what's on file), ask for all the missing ones together in one short numbered message, once, then save each answer.",
   },
   {
+    id: "advice_record",
+    can: "When Co gives real advice or a plan for something in their life, it keeps a note of what it advised, so it can ask how it went a few days later and never contradicts itself.",
+    tool: "noteAdvice",
+    limits: { perTurn: 1 },
+    use: "After you give real advice or a plan for something specific in their life (a decision, a pitch, a conversation they're dreading), note it once: the topic in a few words and what you advised in one sentence, in your own words. Not for small talk, opinions on events, or answers to factual questions.",
+  },
+  {
     id: "team_feedback",
     can: "When they give feedback about how Co works, or ask Co to pass something to the team, Co can save it for the team.",
     tool: "saveFeedbackForTeam",
