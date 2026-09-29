@@ -91,5 +91,8 @@ check("the story is loaded once with the turn's context, not per reply", /story\
 check("small talk doesn't wait on a shared link", /mode !== "small_talk"/.test(src("routes/sendblue.ts")));
 check("milestones are inserted only when new, in one statement", /!have\.has\(m\.key\)/.test(src("services/milestones.ts")) && /unnest\(/.test(src("services/milestones.ts")));
 
+// 2026-09-29: "...and tell me which one you'd pick" was read as not a request, so the search ran on the older Austin ask.
+check("the search rewrite never answers null once a search is decided", (() => { const t = src("services/recommendation.ts"); return /never null/.test(t) && !/\{"request": null\}/.test(t) && /Borrow only the topic, and never their overall ask's time frame/.test(t); })());
+
 console.log(`companion rules: ${total - failed}/${total} passed`);
 if (failed) process.exitCode = 1;
