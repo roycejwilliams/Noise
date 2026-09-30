@@ -14,7 +14,11 @@
 //   - at most one text per task per 20 hours and two task texts per member a
 //     day, inside their hours; texts are drafted only from what the task found
 //   - an open task is a scheduled fact, so "I'll look again Thursday" is true
+//   - a deadline they gave ("by Friday") is stored; no check-in is scheduled past
+//     the morning of it, and that last check always tells them where it stands
+//   - when they reply to a task's text, the task wakes within minutes
 // Owner-scoped: every read and write uses the member's own id.
+import { DateTime } from "luxon";
 import pool from "../db/db.js";
 
 export type TaskStep = { text: string; done: boolean };
@@ -33,6 +37,11 @@ export type CoTask = {
   textsSent: number;
   lastTextedAt: string | null;
   createdAt: string;
+  deadline: string | null; // YYYY-MM-DD, their day
+  finalCheckAt: string | null; // the morning of the deadline, their time
+  finalTold: boolean;
+  awaitingReply: boolean;
+  theirReplyAt: string | null;
 };
 
 export const TASK_LIMITS = {
@@ -44,6 +53,9 @@ export const TASK_LIMITS = {
   textGapHours: 20,
   textsPerMemberPerDay: 2,
   maxSteps: 8,
+  maxDeadlineDays: 60,
+  finalCheckHour: 10,
+  wakeAfterReplyMinutes: 3,
 };
 
 const HOUR = 3_600_000;
@@ -72,13 +84,47 @@ export function cleanSteps(steps: unknown): TaskStep[] {
 }
 
 // A task past its wake-ups or its days is closed as expired, not left to run.
-export function isExhausted(t: Pick<CoTask, "wakes" | "createdAt">, now: Date): boolean {
-  return t.wakes >= TASK_LIMITS.maxWakes || now.getTime() - new Date(t.createdAt).getTime() > TASK_LIMITS.maxDays * 24 * HOUR;
+export function isExhausted(t: Pick<CoTask, "wakes" | "createdAt"> & Partial<Pick<CoTask, "finalCheckAt" | "finalTold">>, now: Date): boolean {
+  const pastDeadline = !!t.finalCheckAt && !!t.finalTold && now.getTime() - new Date(t.finalCheckAt).getTime() > 2 * 24 * HOUR;
+  return t.wakes >= TASK_LIMITS.maxWakes || now.getTime() - new Date(t.createdAt).getTime() > TASK_LIMITS.maxDays * 24 * HOUR || pastDeadline;
+}
+
+// A deadline they gave: a real date, in their words, not in the past, within 60 days.
+// The last check is the morning of it (10am their time), or an hour from now if that's passed.
+export function planDeadline(input: { date: unknown; words: unknown }, theirText: string, zone: string | null, now: Date): { ok: true; deadline: string; finalCheckAt: string } | { ok: false; why: string } {
+  const date = typeof input.date === "string" ? input.date.trim() : "";
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(date)) return { ok: false, why: "the deadline isn't a date" };
+  if (!wordsAreTheirs(input.words, theirText)) return { ok: false, why: "the deadline has to come from their own words" };
+  const z = zone && DateTime.now().setZone(zone).isValid ? zone : "America/Los_Angeles";
+  const today = DateTime.fromJSDate(now).setZone(z).startOf("day");
+  const day = DateTime.fromISO(date, { zone: z }).startOf("day");
+  if (!day.isValid) return { ok: false, why: "the deadline isn't a date" };
+  if (day < today) return { ok: false, why: "the deadline has already passed" };
+  if (day.diff(today, "days").days > TASK_LIMITS.maxDeadlineDays) return { ok: false, why: "the deadline is too far out" };
+  const morning = day.set({ hour: TASK_LIMITS.finalCheckHour });
+  const final = morning.toMillis() > now.getTime() + HOUR ? morning.toJSDate() : new Date(now.getTime() + HOUR);
+  return { ok: true, deadline: date, finalCheckAt: final.toISOString() };
+}
+
+// No check-in past the last one before the deadline.
+export function capToFinal(next: Date, t: Partial<Pick<CoTask, "finalCheckAt" | "finalTold">>): { at: Date; capped: boolean } {
+  if (!t.finalCheckAt || t.finalTold) return { at: next, capped: false };
+  const f = new Date(t.finalCheckAt);
+  return next.getTime() > f.getTime() ? { at: f, capped: true } : { at: next, capped: false };
+}
+
+// The last check before the deadline, not yet told.
+export function isFinalCheck(t: Partial<Pick<CoTask, "finalCheckAt" | "finalTold">>, now: Date): boolean {
+  return !!t.finalCheckAt && !t.finalTold && now.getTime() >= new Date(t.finalCheckAt).getTime() - 10 * 60_000;
 }
 
 // May a task text go out now? One per task per 20 hours, two task texts per member a day.
-export function mayText(t: Pick<CoTask, "lastTextedAt">, memberTaskTextsToday: number, now: Date): { ok: boolean; why: string | null } {
-  if (t.lastTextedAt && now.getTime() - new Date(t.lastTextedAt).getTime() < TASK_LIMITS.textGapHours * HOUR) return { ok: false, why: "already texted them about this task in the last 20 hours" };
+export function mayText(t: Pick<CoTask, "lastTextedAt"> & Partial<Pick<CoTask, "theirReplyAt" | "finalCheckAt" | "finalTold">>, memberTaskTextsToday: number, now: Date): { ok: boolean; why: string | null } {
+  // The last check before their deadline always gets to tell them where it stands.
+  if (isFinalCheck(t, now)) return { ok: true, why: null };
+  // They answered the last task text: it's a conversation, the 20-hour gap doesn't apply.
+  const theyReplied = !!t.theirReplyAt && (!t.lastTextedAt || new Date(t.theirReplyAt).getTime() > new Date(t.lastTextedAt).getTime());
+  if (!theyReplied && t.lastTextedAt && now.getTime() - new Date(t.lastTextedAt).getTime() < TASK_LIMITS.textGapHours * HOUR) return { ok: false, why: "already texted them about this task in the last 20 hours" };
   if (memberTaskTextsToday >= TASK_LIMITS.textsPerMemberPerDay) return { ok: false, why: "already sent them two task updates today" };
   return { ok: true, why: null };
 }
@@ -91,7 +137,7 @@ export function taskFactLines(tasks: CoTask[], fmt: (iso: string) => string = (x
       const done = t.steps.filter((s) => s.done).map((s) => s.text);
       const left = t.steps.filter((s) => !s.done).map((s) => s.text);
       const last = t.notes.slice(-2).map((n) => n.text);
-      return `Co is working on task #${t.id} for them: "${t.goal}" (their words: "${t.theirWords.slice(0, 160)}").${done.length ? ` Done: ${done.join("; ")}.` : ""}${left.length ? ` Still to do: ${left.join("; ")}.` : ""}${last.length ? ` Latest: ${last.join(" / ")}.` : ""}${t.nextCheckAt ? ` Co will work on it next around ${fmt(t.nextCheckAt)}${t.planNext ? `: ${t.planNext}` : ""}.` : ""}`;
+      return `Co is working on task #${t.id} for them: "${t.goal}" (their words: "${t.theirWords.slice(0, 160)}").${done.length ? ` Done: ${done.join("; ")}.` : ""}${left.length ? ` Still to do: ${left.join("; ")}.` : ""}${last.length ? ` Latest: ${last.join(" / ")}.` : ""}${t.deadline ? ` Their deadline: ${t.deadline}${t.finalCheckAt && !t.finalTold ? `; Co's last check before it, where it tells them where things stand, is around ${fmt(t.finalCheckAt)}` : ""}.` : ""}${t.nextCheckAt ? ` Co will work on it next around ${fmt(t.nextCheckAt)}${t.planNext ? `: ${t.planNext}` : ""}.` : ""}`;
     });
 }
 
@@ -110,6 +156,11 @@ function rowTo(r: any): CoTask {
     textsSent: r.texts_sent,
     lastTextedAt: r.last_texted_at ? new Date(r.last_texted_at).toISOString() : null,
     createdAt: new Date(r.created_at).toISOString(),
+    deadline: r.deadline ? DateTime.fromJSDate(new Date(r.deadline), { zone: "utc" }).toISODate() : null,
+    finalCheckAt: r.final_check_at ? new Date(r.final_check_at).toISOString() : null,
+    finalTold: !!r.final_told,
+    awaitingReply: !!r.awaiting_reply,
+    theirReplyAt: r.their_reply_at ? new Date(r.their_reply_at).toISOString() : null,
   };
 }
 
@@ -123,18 +174,19 @@ export async function getTask(userId: string, id: number): Promise<CoTask | null
   return rows[0] ? rowTo(rows[0]) : null;
 }
 
-export async function startTask(input: { userId: string; goal: string; theirWords: string; steps: unknown; firstPlan: string; inHours: unknown }): Promise<{ ok: true; task: CoTask } | { ok: false; why: string }> {
+export async function startTask(input: { userId: string; goal: string; theirWords: string; steps: unknown; firstPlan: string; inHours: unknown; deadline?: { deadline: string; finalCheckAt: string } | null }): Promise<{ ok: true; task: CoTask } | { ok: false; why: string }> {
   const open = await openTasks(input.userId);
   if (open.length >= TASK_LIMITS.maxOpen) return { ok: false, why: `already working on ${open.length} things for them; finish or drop one first` };
   const goal = input.goal.trim().slice(0, 200);
   if (goal.length < 4) return { ok: false, why: "the goal is too thin to work on" };
   if (open.some((t) => norm(t.goal) === norm(goal))) return { ok: false, why: "already working on that" };
   const steps = cleanSteps(input.steps);
-  const next = new Date(Date.now() + clampNextHours(input.inHours) * HOUR);
+  const dl = input.deadline ?? null;
+  const next = capToFinal(new Date(Date.now() + clampNextHours(input.inHours) * HOUR), { finalCheckAt: dl?.finalCheckAt ?? null, finalTold: false }).at;
   const { rows } = await pool.query(
-    `INSERT INTO co_tasks (user_id, goal, their_words, steps, plan_next, next_check_at, notes)
-     VALUES ($1, $2, $3, $4::jsonb, $5, $6, $7::jsonb) RETURNING *`,
-    [input.userId, goal, input.theirWords.trim().slice(0, 400), JSON.stringify(steps), input.firstPlan.trim().slice(0, 240), next, JSON.stringify([{ at: new Date().toISOString(), text: "Started." }])],
+    `INSERT INTO co_tasks (user_id, goal, their_words, steps, plan_next, next_check_at, notes, deadline, final_check_at)
+     VALUES ($1, $2, $3, $4::jsonb, $5, $6, $7::jsonb, $8, $9) RETURNING *`,
+    [input.userId, goal, input.theirWords.trim().slice(0, 400), JSON.stringify(steps), input.firstPlan.trim().slice(0, 240), next, JSON.stringify([{ at: new Date().toISOString(), text: "Started." }]), dl?.deadline ?? null, dl?.finalCheckAt ?? null],
   );
   return { ok: true, task: rowTo(rows[0]) };
 }
@@ -149,12 +201,31 @@ export async function noteOnTask(userId: string, id: number, note: string, doneS
 }
 
 export async function scheduleTask(userId: string, id: number, inHours: unknown, plan: string): Promise<CoTask | null> {
-  const next = new Date(Date.now() + clampNextHours(inHours) * HOUR);
+  const t = await getTask(userId, id);
+  if (!t || t.status !== "open") return null;
+  const c = capToFinal(new Date(Date.now() + clampNextHours(inHours) * HOUR), t);
+  const finalPlan = c.capped ? `Last check before their deadline (${t.deadline}): tell them plainly where it stands. Then: ${plan}` : plan;
   const { rows } = await pool.query(
     `UPDATE co_tasks SET next_check_at = $3, plan_next = $4, updated_at = NOW() WHERE user_id = $1 AND id = $2 AND status = 'open' RETURNING *`,
-    [userId, id, next, plan.trim().slice(0, 240)],
+    [userId, id, c.at, finalPlan.trim().slice(0, 320)],
   );
   return rows[0] ? rowTo(rows[0]) : null;
+}
+
+export async function markFinalTold(userId: string, id: number): Promise<void> {
+  await pool.query(`UPDATE co_tasks SET final_told = true, updated_at = NOW() WHERE user_id = $1 AND id = $2`, [userId, id]);
+}
+
+// They texted after a task texted them: that task wakes in a few minutes, after
+// the reply to their message has gone out (routes/sendblue.ts). Returns how many woke.
+export async function wakeOnReply(userId: string): Promise<number> {
+  const { rowCount } = await pool.query(
+    `UPDATE co_tasks SET awaiting_reply = false, their_reply_at = NOW(),
+       next_check_at = LEAST(COALESCE(next_check_at, NOW() + INTERVAL '${TASK_LIMITS.wakeAfterReplyMinutes} minutes'), NOW() + INTERVAL '${TASK_LIMITS.wakeAfterReplyMinutes} minutes'), updated_at = NOW()
+     WHERE user_id = $1 AND status = 'open' AND awaiting_reply`,
+    [userId],
+  );
+  return rowCount ?? 0;
 }
 
 export async function closeTask(userId: string, id: number, status: "done" | "dropped" | "expired", outcome: string): Promise<boolean> {
@@ -182,5 +253,5 @@ export async function taskTextsToday(userId: string): Promise<number> {
 }
 
 export async function markTexted(userId: string, id: number): Promise<void> {
-  await pool.query(`UPDATE co_tasks SET texts_sent = texts_sent + 1, last_texted_at = NOW() WHERE user_id = $1 AND id = $2`, [userId, id]);
+  await pool.query(`UPDATE co_tasks SET texts_sent = texts_sent + 1, last_texted_at = NOW(), awaiting_reply = true WHERE user_id = $1 AND id = $2`, [userId, id]);
 }

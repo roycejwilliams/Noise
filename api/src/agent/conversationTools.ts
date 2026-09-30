@@ -383,8 +383,12 @@ export function createConversationTools(ctx: ConversationToolContext) {
         steps: z.array(z.string()).max(8).describe("The steps you'll take, in order."),
         firstStep: z.string().describe("What you'll do first."),
         inHours: z.number().describe("When you'll work on it first, in hours from now (1 to 336)."),
+        deadline: z
+          .object({ date: z.string().describe("YYYY-MM-DD"), theirWords: z.string().describe("Their own words giving it, copied exactly (\"by Friday\").") })
+          .optional()
+          .describe("Only if they gave a deadline."),
       }),
-      execute: async ({ goal, theirWords, steps, firstStep, inHours }) => {
+      execute: async ({ goal, theirWords, steps, firstStep, inHours, deadline }) => {
         const T = await import("../services/coTasks.js");
         const recent = ctx.dryRun
           ? ""
@@ -396,16 +400,25 @@ export function createConversationTools(ctx: ConversationToolContext) {
           notDone("No task was started: the quote isn't in their words.");
           return { ok: false, error: "theirWords must be copied exactly from what they wrote. Don't start a task they didn't ask for." };
         }
-        if (ctx.dryRun) {
-          ctx.facts?.add("did_this_turn", `Started task: "${goal}". Co will work on it first in about ${T.clampNextHours(inHours)} hours: ${firstStep}.`);
-          return { ok: true };
+        // A deadline they gave, checked against their words and their time zone.
+        let dl: { deadline: string; finalCheckAt: string } | null = null;
+        if (deadline) {
+          const city = ctx.turn?.profile?.city ?? null;
+          const zone = city ? await import("../services/geocoding.js").then((g) => g.getTimezoneForCity(city)).catch(() => null) : null;
+          const d = T.planDeadline({ date: deadline.date, words: deadline.theirWords }, `${ctx.resolvedContent}\n${recent}`, zone, new Date());
+          if (d.ok) dl = { deadline: d.deadline, finalCheckAt: d.finalCheckAt };
+          else notDone(`The deadline wasn't kept on the task: ${d.why}.`);
         }
-        const r = await T.startTask({ userId: ctx.userId, goal, theirWords, steps, firstPlan: firstStep, inHours });
+        if (ctx.dryRun) {
+          ctx.facts?.add("did_this_turn", `Started task: "${goal}". Co will work on it first in about ${T.clampNextHours(inHours)} hours: ${firstStep}.${dl ? ` Their deadline: ${dl.deadline}; Co's last check before it is ${dl.finalCheckAt.slice(0, 16).replace("T", " ")} UTC.` : ""}`);
+          return { ok: true, deadline: dl };
+        }
+        const r = await T.startTask({ userId: ctx.userId, goal, theirWords, steps, firstPlan: firstStep, inHours, deadline: dl });
         if (!r.ok) {
           notDone(`No task was started: ${r.why}.`);
           return { ok: false, error: r.why };
         }
-        ctx.facts?.add("did_this_turn", `Started task #${r.task.id}: "${r.task.goal}". Co will work on it first around ${r.task.nextCheckAt?.slice(0, 16).replace("T", " ")} UTC: ${firstStep}.`);
+        ctx.facts?.add("did_this_turn", `Started task #${r.task.id}: "${r.task.goal}". Co will work on it first around ${r.task.nextCheckAt?.slice(0, 16).replace("T", " ")} UTC: ${firstStep}.${r.task.deadline ? ` Their deadline: ${r.task.deadline}; Co's last check before it, where it tells them where things stand, is around ${r.task.finalCheckAt?.slice(0, 16).replace("T", " ")} UTC.` : ""}`);
         return { ok: true, taskId: r.task.id, nextCheckAt: r.task.nextCheckAt };
       },
     }),

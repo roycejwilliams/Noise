@@ -1210,6 +1210,16 @@ export function sendblueRouter(io: Server): Router {
         const theirLinkP: Promise<LinkRead | null> | null = theirLink
           ? import("../services/linkReader.js").then((l) => l.readLink(theirLink, { ownerUserId: user.id })).catch(() => null)
           : null;
+        // They texted after one of Co's tasks texted them: that task wakes in a few
+        // minutes, once this reply is out, instead of at its next scheduled look
+        // (services/coTasks.ts wakeOnReply). The 15-minute job is the backstop.
+        if (hasText)
+          import("../services/coTasks.js")
+            .then(async (T) => {
+              const woke = await T.wakeOnReply(user.id);
+              if (woke) setTimeout(() => import("../services/taskTurn.js").then((t) => t.runDueTasks()).catch(() => {}), (T.TASK_LIMITS.wakeAfterReplyMinutes * 60 + 15) * 1000);
+            })
+            .catch(() => {});
         if (hasText && linksIn(resolvedContent).length) import("../services/linkReader.js").then((l) => l.readLinksLater(resolvedContent, { ownerUserId: user.id })).catch(() => {});
         const [inboundMemory, queryEmbedding] = await Promise.all([
           pool.query(

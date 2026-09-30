@@ -429,15 +429,18 @@ Return ONLY JSON: {"flags": [{"type": "...", "severity": "low" | "medium" | "hig
 export async function modelFlags(data: ReviewData): Promise<ReviewFlag[]> {
   if (!data.messages.some((m) => m.from === "co")) return [];
   try {
-    const { text } = await generateText({
+    const { text, finishReason } = await generateText({
       model: anthropic(MODELS.sonnet),
       // Room to think and still answer: at the default 4,096 the model spent
       // all of it thinking on a busy day and the review silently came back
-      // empty (2026-09-26).
+      // empty (2026-09-26). Even 16,000 ran out on 2026-09-30 (a day of live
+      // tests) with no effort set, so it's medium now, like the learning reads.
       maxOutputTokens: 16_000,
+      providerOptions: { anthropic: { effort: "medium" } },
       experimental_telemetry: { isEnabled: true, functionId: "devReview.modelFlags" },
       prompt: modelReviewPrompt(data),
     });
+    if (finishReason === "length") console.error(`devReview: model review ran out of room for ${data.userId}; its flags are missing today`);
     const parsed = parseModelJson<{ flags?: { type?: string; severity?: string; quotes?: string[]; why?: string }[] }>(text);
     const out: ReviewFlag[] = [];
     for (const f of parsed?.flags ?? []) {

@@ -107,12 +107,12 @@ for (const f of files) {
     if (/haiku/i.test(model)) return;
     // the setting itself (`effort: …` or `{ effort }`), not a comment that mentions the word
     if (/\beffort\s*[:},]/.test(body.replace(/\/\/.*$/gm, ""))) return;
-    if (Number(cap.replace(/_/g, "")) > 3000) return;
+    // Any cap: 16,000 ran out on 2026-09-30 too (devReview.modelFlags).
     if (MEASURED[rel(f)]) return;
     calls.push(`${rel(f)}:${idx + 1} (${model.trim() || "model?"}, cap ${cap})`);
   });
 }
-check("no Sonnet call has a small output cap without an effort setting", calls.length === 0, calls.join("; "));
+check("no Sonnet call has an output cap without an effort setting", calls.length === 0, calls.join("; "));
 
 // ------------------------------------------------------------------ 4. a link and its preview photo
 const rows = ["User said: https://x.com/a/status/1?s=20 [They also sent a photo. It shows: the X logo]"];

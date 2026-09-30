@@ -198,7 +198,7 @@ Return ONLY valid JSON: {"reason": "...", "deadline": "YYYY-MM-DD" or null}`,
 
 // One quick search for the program's own page, used when the result came
 // from a blog or listicle. Null when it can't find one.
-async function findOfficialPage(name: string, timeout: number): Promise<string | null> {
+export async function findOfficialPage(name: string, timeout: number): Promise<string | null> {
   try {
     const { text: raw } = await generateText({
       model: anthropic(WEB_SEARCH_MODEL),

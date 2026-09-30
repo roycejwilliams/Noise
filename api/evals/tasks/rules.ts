@@ -49,17 +49,38 @@ check("a follow-up promise is not cut when Co has an open task", /const tasked =
 
 // Wiring
 const tt = src("services/taskTurn.ts");
-check("a wake-up must end with Co's decision, or it looks again in a day", /stopWhen: \[stepCountIs\(8\), \(\) => decided !== null\]/.test(tt) && /if \(!decided\) await scheduleTask\(userId, task\.id, 24/.test(tt));
-check("a task text is drafted only from what the task found, and checked", /draftProactive\(/.test(tt) && /checkDraft\(text/.test(tt) && /mayText\(task, await taskTextsToday\(userId\)/.test(tt));
-check("a task text only sends links the task actually found", /const known = \(links \?\? \[\]\)\.filter\(\(l\) => found\.some/.test(tt));
-check("a task text goes out only inside their hours, never held in memory", /if \(!localHourOk\(new Date\(\), zone\)\) return/.test(tt) && /respectHours: true/.test(tt) && !/sendExemptWhenAllowed\(/.test(tt));
-check("web results are kept only when their page really reads", /reserveWebSearch\(userId, "sweep", what\)/.test(tt) && /r\.status !== "ok"/.test(tt));
+check("a wake-up must end with Co's decision, or it looks again in a day", /stopWhen: \[stepCountIs\(8\), \(\) => decided !== null\]/.test(tt) && /if \(!decided\) await deps\.schedule\(24,/.test(tt));
+check("a task text is drafted only from verified facts, and checked", /draftProactive\(/.test(tt) && /checkDraft\(text/.test(tt) && /mayText\(task, await deps\.textsToday\(\)/.test(tt));
+check("a task text only sends links from results that passed", /const known = \(links \?\? \[\]\)\.filter\(linkOk\)/.test(tt));
+check("a task text goes out only inside their hours, never held in memory", /if \(!localHourOk\(deps\.now\(\), deps\.zone\)\) return/.test(tt) && /respectHours: true/.test(tt) && !/sendExemptWhenAllowed\(/.test(tt));
+check("web searches reserve the shared budget and keep only results that prove themselves (evals/tasks/web.ts)", /reserveWebSearch\(userId, "sweep", what\)/.test(src("services/taskWeb.ts")) && /web: \(what\) => taskWebSearch\(/.test(tt));
 check("opted-out or archived members' tasks are dropped", /sms_opted_out \|\| person\.archived_at/.test(tt));
 check("due tasks are claimed so two runs never work one", /FOR UPDATE SKIP LOCKED/.test(src("services/coTasks.ts")) && /\*\/15 \* \* \* \*/.test(src("jobs/index.ts")));
 check("the tools are Co's, guarded like every other ability", ["startTask", "updateTask", "closeTask"].every((t) => new RegExp(`tool: "${t}"`).test(src("services/capabilities.ts")) && new RegExp(`${t}: tool\\(`).test(src("agent/conversationTools.ts"))));
 check("replies read open tasks as scheduled facts", /openTasks\(userId\)\.then\(\(t\) => taskFactLines\(t\)\)/.test(src("services/turnContext.ts")) && /opts\.turn\?\.tasks \?\? \[\]\) addFact\(rf, "scheduled"/.test(src("harness/replyGrounding.ts")));
 
 check("at most 3 web searches per wake-up", /filter\(\(d\) => d\.startsWith\("web:"\)\)\.length >= 3/.test(tt));
+
+// Deadlines and waking on their reply (2026-09-30)
+{
+  const now = new Date("2026-09-30T18:00:00Z"); // Wed 11am in San Francisco
+  const words = "I need a couple of options by Friday.";
+  const d = T.planDeadline({ date: "2026-10-02", words: "by Friday" }, words, "America/Los_Angeles", now);
+  check("a deadline in their words is kept, with the last check at 10am their time that day", d.ok && d.deadline === "2026-10-02" && d.finalCheckAt === "2026-10-02T17:00:00.000Z", JSON.stringify(d));
+  check("a deadline not in their words is refused", !T.planDeadline({ date: "2026-10-02", words: "by Thursday" }, words, "America/Los_Angeles", now).ok);
+  check("a past or far-off deadline is refused", !T.planDeadline({ date: "2026-09-28", words: "by Friday" }, words, "America/Los_Angeles", now).ok && !T.planDeadline({ date: "2027-01-02", words: "by Friday" }, words, "America/Los_Angeles", now).ok);
+  const today = T.planDeadline({ date: "2026-09-30", words: "by Friday" }, words, "America/Los_Angeles", now);
+  check("a deadline of today, already past 10am, gets its last check an hour from now", today.ok && today.finalCheckAt === new Date(now.getTime() + 3_600_000).toISOString());
+  const f = { finalCheckAt: "2026-10-02T17:00:00.000Z", finalTold: false };
+  check("no check-in is scheduled past the last one before the deadline", T.capToFinal(new Date("2026-10-05T17:00:00Z"), f).capped && T.capToFinal(new Date("2026-10-05T17:00:00Z"), f).at.toISOString() === f.finalCheckAt && !T.capToFinal(new Date("2026-10-01T17:00:00Z"), f).capped && !T.capToFinal(new Date("2026-10-05T17:00:00Z"), { ...f, finalTold: true }).capped);
+  check("the last check is recognized, and only once", T.isFinalCheck(f, new Date("2026-10-02T17:00:00Z")) && !T.isFinalCheck(f, new Date("2026-10-01T17:00:00Z")) && !T.isFinalCheck({ ...f, finalTold: true }, new Date("2026-10-02T17:00:00Z")));
+  check("the last check may always tell them, even within 20 hours of the last text", T.mayText({ lastTextedAt: "2026-10-02T15:00:00Z", ...f }, 5, new Date("2026-10-02T17:00:00Z")).ok);
+  check("after they reply, Co may text again within 20 hours; without a reply it may not", T.mayText({ lastTextedAt: "2026-09-30T16:00:00Z", theirReplyAt: "2026-09-30T17:00:00Z" }, 1, now).ok && !T.mayText({ lastTextedAt: "2026-09-30T16:00:00Z", theirReplyAt: "2026-09-30T15:00:00Z" }, 1, now).ok);
+  check("a task ends two days after its deadline was told", T.isExhausted({ wakes: 1, createdAt: now.toISOString(), finalCheckAt: "2026-09-27T17:00:00Z", finalTold: true }, now) && !T.isExhausted({ wakes: 1, createdAt: now.toISOString(), finalCheckAt: "2026-09-27T17:00:00Z", finalTold: false }, now));
+}
+check("their text wakes a task that texted them, and runs it once their reply is out", /const woke = await T\.wakeOnReply\(user\.id\)/.test(src("routes/sendblue.ts")) && /awaiting_reply = true/.test(src("services/coTasks.ts")));
+check("the last check never goes quiet: if Co didn't tell them, code does", /if \(final && !texts\.length\) \{/.test(tt) && /if \(final && texts\.length\) await deps\.markFinalTold\(\)/.test(tt));
+check("a deadline is checked against their words before it's kept", /T\.planDeadline\(\{ date: deadline\.date, words: deadline\.theirWords \}/.test(src("agent/conversationTools.ts")));
 
 console.log(`task rules: ${total - failed}/${total} passed`);
 if (failed) process.exitCode = 1;

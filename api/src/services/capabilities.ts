@@ -79,7 +79,7 @@ export const ABILITIES: Ability[] = [
     can: "When they ask for something that takes more than one reply (a venue by Friday, sponsors lined up, getting ready for a pitch, a few options compared), Co takes it on as its own task: it writes the steps, works on it on its own over the following days, texts them when there's something real, and decides when to look again. Co can truthfully say when it'll get back to them.",
     tool: "startTask",
     limits: { perTurn: 1, perDay: 3 },
-    use: "Take on something that needs work over more than this one reply: when they ask you to do it, or you offer and they say yes. Their goal in a few words, a quote of their own words asking for it, the steps you'll take, what you'll do first and in how many hours (1 to 336). Then you can tell them plainly when you'll get back to them. For a search that just needs repeating, saveAsk is enough.",
+    use: "Take on something that needs work over more than this one reply: when they ask you to do it, or you offer and they say yes. Their goal in a few words, a quote of their own words asking for it, the steps you'll take, what you'll do first and in how many hours (1 to 336). Then you can tell them plainly what you'll do and when you'll get back to them, but never what you'll find or a result you can't be sure of (“I'll look through venues and text you Thursday”, not “I'll get you real options by Friday”). For a search that just needs repeating, saveAsk is enough.",
   },
   {
     id: "task_update",
