@@ -21,7 +21,15 @@ import { parseModelJson } from "./modelJson.js";
 
 export type RawDetail = { label: string; value: string };
 export type RawResult = { name: string; url: string; details: RawDetail[]; date?: string | null; deadline?: string | null };
-export type VerifiedResult = { name: string; url: string; official: boolean; facts: string[]; date: string | null; deadline: string | null };
+// Marketplaces that block even a real browser (checked 2026-09-30). Searched,
+// but a result has to come back as the place's own page.
+// Peerspace and The Bash read in a real browser (services/browserRead.ts).
+export const CANT_CHECK_SITES = ["gigsalad.com", "yelp.com", "theknot.com"];
+export const cantCheck = (site: string) => CANT_CHECK_SITES.some((d) => site === d || site.endsWith(`.${d}`));
+
+// excerpts: for each fact, the passage of the page it was found in (for the
+// second reader, services/factCheck.ts).
+export type VerifiedResult = { name: string; url: string; official: boolean; facts: string[]; excerpts?: string[]; date: string | null; deadline: string | null };
 export type Dropped = { name: string; url: string; why: string };
 export type DroppedDetail = { name: string; detail: string; why: string };
 
@@ -63,6 +71,62 @@ export function detailWordsMissing(value: string, page: string, strict: boolean)
   return missing.length / Math.max(1, words.length) > 0.2 ? missing : [];
 }
 
+// A marketplace page for one listing (the whole page is about it).
+export const singleItemUrl = (url: string) => /\/pages\/listings\/|\/listings?\/[^/]+\/?$|\/profile\/|\/info\/[^/]+\/?$/i.test(url);
+
+// On a page that lists many things, a price or capacity only counts next to
+// this thing's name (2026-09-30: on a directory page, a detail can belong to
+// the venue listed beside it). The passage is kept for the second reader.
+export function nearName(name: string, value: string, pageText: string, needed: boolean): { ok: boolean; excerpt: string } {
+  const page = flat(pageText);
+  // Numbers and proper words, mixed case and acronyms included (2026-09-30:
+  // "SoMa, SF" had none, so the passage fell back to the site's menu).
+  const tokens = [...(value.match(/\d[\d,.]*/g) ?? []).map((n) => n.replace(/[,.]$/, "").replace(/,/g, "")), ...(value.match(/\b[A-Z][A-Za-z]{2,}\b|\b[A-Z][a-z]*[A-Z][A-Za-z]*\b/g) ?? []).map((w) => w.toLowerCase())].filter((t, i, a) => t && a.indexOf(t) === i && !flat(name).includes(` ${t} `));
+  // Where the fact is on the page, for the passage: its first number or proper
+  // word, else its longest plain word.
+  const anchor = tokens[0] ?? flat(value).trim().split(" ").filter((w) => w.length >= 4).sort((a, b) => b.length - a.length)[0] ?? null;
+  const pageNoCommas = page.replace(/(\d),(\d)/g, "$1$2");
+  const key = flat(name).trim();
+  const words = key.split(" ").filter((w) => w.length >= 5).sort((a, b) => b.length - a.length);
+  const spots: number[] = [];
+  for (const k of [key, ...words.slice(0, 1)]) {
+    for (let at = pageNoCommas.indexOf(k); at >= 0 && spots.length < 40; at = pageNoCommas.indexOf(k, at + 1)) spots.push(at);
+    if (spots.length) break;
+  }
+  // A listing card or a paragraph about it: a little before the name, more after.
+  // Two cards side by side are closer than this; that's the second reader's job.
+  const windowAt = (at: number) => pageNoCommas.slice(Math.max(0, at - 200), at + 900);
+  const has = (w: string, t: string) => w.includes(` ${t} `) || w.includes(` $${t} `) || w.includes(`$${t}`) || w.includes(` ${t}`);
+  // The passage for the second reader: the page as written (case, "$150/hr",
+  // line breaks between listings), starting at this thing's own name nearest
+  // the spot (2026-09-30: a passage centred by estimate started cards early and
+  // the reader couldn't tell whose price was whose).
+  const scale = pageText.length / Math.max(1, pageNoCommas.length);
+  const lowerPage = pageText.toLowerCase();
+  const nameHits: number[] = [];
+  for (const k of [name.toLowerCase().trim(), ...words.slice(0, 1)]) {
+    for (let at = lowerPage.indexOf(k); at >= 0 && nameHits.length < 40; at = lowerPage.indexOf(k, at + 1)) nameHits.push(at);
+    if (nameHits.length) break;
+  }
+  const original = (at: number) => {
+    const guess = at * scale;
+    const start = nameHits.length ? nameHits.reduce((a, b) => (Math.abs(b - guess) < Math.abs(a - guess) ? b : a)) : Math.floor(guess);
+    return pageText.slice(start, start + 800).replace(/[ \t]+/g, " ").replace(/\n{2,}/g, "\n").trim();
+  };
+  // Its own page or a single listing: the whole page is about it, so the
+  // passage is wherever the fact is (a price far below the name).
+  if (!needed) {
+    const esc = (t: string) => t.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+    const re = anchor ? new RegExp(/^\d+$/.test(anchor) ? anchor.split("").map(esc).join(",?") : `\\b${esc(anchor)}`, "i") : null;
+    const at = re ? pageText.search(re) : -1;
+    if (at >= 0) return { ok: true, excerpt: `(From ${name}'s own page) ${pageText.slice(Math.max(0, at - 400), at + 400).replace(/[ \t]+/g, " ").replace(/\n{2,}/g, "\n").trim()}` };
+  }
+  const fit = spots.find((at) => tokens.every((t) => has(windowAt(at), t)));
+  if (fit !== undefined) return { ok: true, excerpt: original(fit) };
+  const first = tokens.length ? Math.max(0, pageNoCommas.indexOf(tokens[0])) : spots[0] ?? 0;
+  return { ok: !needed || !tokens.length, excerpt: original(first) };
+}
+
 const placeLabel = (label: string) => /address|neighbou?rhood|location|area|street|where/i.test(label);
 const dateLabel = (label: string) => /date|when|deadline|due/i.test(label);
 
@@ -80,8 +144,10 @@ export function verifyResult(raw: RawResult, pageText: string, opts: { now: Date
   if (!timing.pass) return { kept: null, dropped: { ...base, why: timing.reason ?? "stale" }, droppedDetails: [] };
 
   const kept: string[] = [];
+  const excerpts: string[] = [];
   const droppedDetails: DroppedDetail[] = [];
   const page = flat(pageText);
+  const needNear = !opts.official && !singleItemUrl(raw.url);
   for (const d of raw.details ?? []) {
     const label = String(d?.label ?? "").trim().slice(0, 40);
     const value = String(d?.value ?? "").trim().slice(0, 160);
@@ -99,7 +165,13 @@ export function verifyResult(raw: RawResult, pageText: string, opts: { now: Date
       droppedDetails.push({ name: raw.name, detail: `${label}: ${value}`, why: `"${missing.join(" ")}" isn't on the page` });
       continue;
     }
+    const near = nearName(raw.name, value, pageText, needNear);
+    if (!near.ok) {
+      droppedDetails.push({ name: raw.name, detail: `${label}: ${value}`, why: "on the page, but not next to its name (another listing's?)" });
+      continue;
+    }
     kept.push(`${label}: ${value}`);
+    excerpts.push(near.excerpt);
   }
   // A date or deadline is only repeated when the page states it (the gate's deadline check).
   let keptDate = date;
@@ -112,7 +184,7 @@ export function verifyResult(raw: RawResult, pageText: string, opts: { now: Date
     droppedDetails.push({ name: raw.name, detail: `deadline: ${deadline}`, why: "the deadline isn't stated on the page" });
     keptDeadline = null;
   }
-  return { kept: { name: raw.name.slice(0, 120), url: raw.url, official: opts.official, facts: kept, date: keptDate, deadline: keptDeadline }, dropped: null, droppedDetails };
+  return { kept: { name: raw.name.slice(0, 120), url: raw.url, official: opts.official, facts: kept, excerpts, date: keptDate, deadline: keptDeadline }, dropped: null, droppedDetails };
 }
 
 // Which page a result is checked against: its own official page when the found
@@ -156,10 +228,10 @@ export type TaskWebResult = { kept: VerifiedResult[]; dropped: Dropped[]; droppe
 export async function taskWebSearch(
   userId: string,
   what: string,
-  opts: { city?: string | null; zone?: string | null; taskId?: number | null; skipBudget?: boolean; log?: boolean } = {},
+  opts: { city?: string | null; zone?: string | null; taskId?: number | null; skipBudget?: boolean; log?: boolean; sites?: string[]; source?: "sweep" | "request" } = {},
 ): Promise<TaskWebResult> {
   if (!opts.skipBudget) {
-    const budget = await reserveWebSearch(userId, "sweep", what);
+    const budget = await reserveWebSearch(userId, opts.source ?? "sweep", what);
     if (!budget.ok) return { kept: [], dropped: [], droppedDetails: [], note: `No web search right now: ${budget.reason}.` };
   }
   let raws: RawResult[] = [];
@@ -171,7 +243,7 @@ export async function taskWebSearch(
       tools: { web_search: anthropic.tools.webSearch_20250305({ maxUses: 2 }) },
       stopWhen: stepCountIs(3),
       timeout: 60_000,
-      prompt: `Find on the real web: ${what}${opts.city ? ` (they're in ${opts.city})` : ""}. Today: ${new Date().toISOString().slice(0, 10)}.
+      prompt: `Find on the real web: ${what}${opts.city ? ` (they're in ${opts.city})` : ""}. Today: ${new Date().toISOString().slice(0, 10)}.${opts.sites?.length ? ` Good places to look: ${opts.sites.join(", ")} (and the thing's own site).` : ""}${opts.sites?.some(cantCheck) ? ` Listings on ${opts.sites.filter(cantCheck).join(", ")} can't be opened to check, so for anything found there give the place's OWN website and its real name (a listing that hides the name, like "Modern loft in SoMa", can't be used).` : ""}
 Up to 3 real, specific options, each from a page you actually read, ideally the thing's own site. For each, the details that matter (capacity, price, dates, address or neighborhood, deadline), each copied from that page as it's written there.
 Return ONLY JSON: {"items": [{"name": "...", "url": "https://the page you read", "details": [{"label": "capacity", "value": "..."}], "date": "YYYY-MM-DD or null (when it happens, if it's an event)", "deadline": "YYYY-MM-DD or null"}]}. {"items": []} if nothing real.`,
     });
@@ -190,6 +262,12 @@ Return ONLY JSON: {"items": [{"name": "...", "url": "https://the page you read",
     }
     const v = verifyResult({ ...raw, url: page.url }, page.text, { now: new Date(), zone: opts.zone ?? null, official: page.official });
     droppedDetails.push(...v.droppedDetails);
+    // Found on a list page read in the browser: link its own listing instead.
+    if (v.kept && !page.official && !singleItemUrl(page.url)) {
+      const { ownLink } = await import("./browserRead.js");
+      const own = ownLink(page.url, raw.name);
+      if (own) v.kept.url = own;
+    }
     if (v.kept) kept.push(v.kept);
     else if (v.dropped) dropped.push(v.dropped);
   }
@@ -222,6 +300,21 @@ export function placesBacked(text: string, facts: string): { ok: boolean; missin
 
 // Co can't call, book, or contact anyone for them; a task text never offers to.
 export const OFFERS_WHAT_CO_CANT = /\b(want me to|should i|i can|i'?ll|let me)\s+(give them a |)(call|phone|ring|book|reserve|email|contact|reach out to|message|dm)\b/i;
+
+// Claims a page rarely makes and a text easily implies (2026-09-30): that it's
+// available on their date, confirmed, open or happy to host, or has done
+// something before. Only when the facts say so in those words; otherwise Co
+// says it's unconfirmed, the way a friend would.
+const CLAIMS = [
+  { re: /\b(is|are|it's|they're|looks?|should be)\s+(still\s+)?((available|free)\b(?!\s+(to book|for booking|for private))|open\b(?!\s+to\b))/i, backed: /\bavailab/i },
+  { re: /\b(confirmed|guaranteed|locked in|booked for you)\b/i, backed: /\bconfirm|guarantee/i },
+  { re: /\b(open to|happy to|willing to|down to|keen to)\s+(host|donate|sponsor|partner|co-?host|lend)/i, backed: /\b(donat|sponsor|partner|co-?host|free for|community use)/i },
+  { re: /\b(has|have|they've|it's)\s+(already\s+)?(hosted|done|run|thrown|put on)\b/i, backed: /\b(hosted|past events|previous events|has held|have held)\b/i },
+  { re: /\b(allows?|lets? you|permits?)\s+(a\s+|your own\s+)?(dj|music|alcohol|drinks|food|catering)/i, backed: /\b(allowed|permitted|welcome|bring your own|byo|outside (food|catering|vendors))/i },
+];
+export function unbackedClaims(text: string, facts: string): string[] {
+  return CLAIMS.filter((c) => c.re.test(text) && !c.backed.test(facts)).map((c) => text.match(c.re)![0]);
+}
 
 // A drafted text may only carry numbers that are in the facts it was given.
 export function numbersBacked(text: string, facts: string): { ok: boolean; missing: string[] } {

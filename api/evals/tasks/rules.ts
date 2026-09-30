@@ -53,7 +53,7 @@ check("a wake-up must end with Co's decision, or it looks again in a day", /stop
 check("a task text is drafted only from verified facts, and checked", /draftProactive\(/.test(tt) && /checkDraft\(text/.test(tt) && /mayText\(task, await deps\.textsToday\(\)/.test(tt));
 check("a task text only sends links from results that passed", /const known = \(links \?\? \[\]\)\.filter\(linkOk\)/.test(tt));
 check("a task text goes out only inside their hours, never held in memory", /if \(!localHourOk\(deps\.now\(\), deps\.zone\)\) return/.test(tt) && /respectHours: true/.test(tt) && !/sendExemptWhenAllowed\(/.test(tt));
-check("web searches reserve the shared budget and keep only results that prove themselves (evals/tasks/web.ts)", /reserveWebSearch\(userId, "sweep", what\)/.test(src("services/taskWeb.ts")) && /web: \(what\) => taskWebSearch\(/.test(tt));
+check("web searches reserve the shared budget and keep only results that prove themselves (evals/tasks/web.ts)", /reserveWebSearch\(userId, opts\.source \?\? "sweep", what\)/.test(src("services/taskWeb.ts")) && /web: \(what\) => taskWebSearch\(/.test(tt));
 check("opted-out or archived members' tasks are dropped", /sms_opted_out \|\| person\.archived_at/.test(tt));
 check("due tasks are claimed so two runs never work one", /FOR UPDATE SKIP LOCKED/.test(src("services/coTasks.ts")) && /\*\/15 \* \* \* \*/.test(src("jobs/index.ts")));
 check("the tools are Co's, guarded like every other ability", ["startTask", "updateTask", "closeTask"].every((t) => new RegExp(`tool: "${t}"`).test(src("services/capabilities.ts")) && new RegExp(`${t}: tool\\(`).test(src("agent/conversationTools.ts"))));

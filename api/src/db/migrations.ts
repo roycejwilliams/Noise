@@ -1947,6 +1947,17 @@ export async function runMigrations(): Promise<void> {
     .then(() => pool.query(`ALTER TABLE co_tasks ADD COLUMN IF NOT EXISTS kind TEXT NOT NULL DEFAULT 'work', ADD COLUMN IF NOT EXISTS followup JSONB, ADD COLUMN IF NOT EXISTS target_key TEXT`))
     .then(() => pool.query(`ALTER TABLE co_tasks ADD COLUMN IF NOT EXISTS deadline DATE, ADD COLUMN IF NOT EXISTS final_check_at TIMESTAMPTZ, ADD COLUMN IF NOT EXISTS final_told BOOLEAN NOT NULL DEFAULT false, ADD COLUMN IF NOT EXISTS awaiting_reply BOOLEAN NOT NULL DEFAULT false, ADD COLUMN IF NOT EXISTS their_reply_at TIMESTAMPTZ`))
     .catch((err: Error) => console.error("co_tasks table init failed:", err));
+  // The search brief Co keeps while it helps someone find something (Royce,
+  // 2026-09-30): "120 people" or a map pin refines the same search.
+  await pool
+    .query(
+      `CREATE TABLE IF NOT EXISTS search_briefs (
+        user_id UUID PRIMARY KEY REFERENCES users(id) ON DELETE CASCADE,
+        brief JSONB NOT NULL,
+        updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+      )`,
+    )
+    .catch((err: Error) => console.error("search_briefs table init failed:", err));
   await pool
     .query(
       `CREATE TABLE IF NOT EXISTS member_advice (

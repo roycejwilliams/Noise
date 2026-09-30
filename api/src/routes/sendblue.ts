@@ -68,6 +68,7 @@ import { handleMatchNudgeReply } from "../services/eventGuestMatchHandoff.js";
 import { resolveNetworkTeaseReply, resolveNetworkIntroReply } from "../services/networkIntroNudge.js";
 import { NO_ROUTE, decideActions, gatherOpenItems, routeMessage, type RouterOutput } from "../services/messageRouter.js";
 import { recordDecision } from "../harness/core.js";
+import { numbersBacked, placesBacked, unbackedClaims } from "../services/taskWeb.js";
 import { routerGateChecks } from "../harness/routerChecks.js";
 import { linkForReply, linksIn, mergeEarlierLink, type LinkRead } from "../services/linkReader.js";
 import { addEventFacts, addFact, addHint, addInstruction, addOngoingSearchFacts, countOf, FRESH_SEARCH_INSTRUCTION, gatherReplyFacts, recordSearchNote } from "../harness/replyGrounding.js";
@@ -2306,6 +2307,13 @@ Return ONLY valid JSON, no preamble: {"date": "YYYY-MM-DD or null", "time": "HH:
               // recommends one of them because it was sent earlier (2026-09-16:
               // a search rejected the chess night as "not an AI engineer event"
               // and the reply still called it "your real option").
+              // What Co understood and searched for, what it ruled out and the
+              // one thing worth asking, so the reply can say it the way a
+              // friend would ("dropped Workshop, too small for 120").
+              const briefScope = "scope" in recommendation ? recommendation.scope : null;
+              if (briefScope?.brief) addFact(replyFacts, "did_this_turn", `Searched for: ${briefScope.brief.line}${briefScope.webTried?.length ? ` (web searches: ${briefScope.webTried.map((q) => `"${q}"`).join(", ")})` : ""}.`);
+              if (briefScope?.webDropped?.length) addFact(replyFacts, "did_this_turn", `Looked at and ruled out: ${briefScope.webDropped.slice(0, 6).join("; ")}.`);
+              if (briefScope?.brief?.ask) addInstruction(replyFacts, `If it would sharpen the search, ask them this one thing at the end: ${briefScope.brief.ask}`);
               const ruledOut = ("scope" in recommendation ? recommendation.scope?.relevanceRejected : null) ?? [];
               if (ruledOut.length) {
                 addFact(replyFacts, "did_this_turn", `This search looked at and ruled out: ${ruledOut.map((r) => `"${r.name}" (${r.why})`).join("; ")}.`);
@@ -2351,7 +2359,9 @@ Return ONLY valid JSON, no preamble: {"date": "YYYY-MM-DD or null", "time": "HH:
                 // events passed, one went out, and Co said it was the only one).
                 // A time frame or a what's-on question gets up to three a tier.
                 const searchScope = "scope" in recommendation ? recommendation.scope : null;
-                const perTier = searchScope?.window || isBrowseAsk(resolvedContent) ? 3 : 1;
+                // Places, vendors and people from the web: a short ranked list,
+                // like a friend would give (2026-09-30).
+                const perTier = searchScope?.window || isBrowseAsk(resolvedContent) || searchScope?.brief?.route === "web" ? 3 : 1;
                 const matchCount = [...matchesByTier.values()].reduce((n, c) => n + Math.min(c.length, c[0]?.tier === 1 ? 1 : perTier), 0);
                 const prepStarted = Date.now();
 
@@ -2373,12 +2383,24 @@ Return ONLY valid JSON, no preamble: {"date": "YYYY-MM-DD or null", "time": "HH:
                     const { text: drafted } = await generateText({
                       model: anthropic(MODELS.sonnet),
                       experimental_telemetry: { isEnabled: true, functionId: "sendblue.recommendation.describe" },
-                      prompt: `${CO_VOICE}\n\n${CO_TEXT_CHANNEL} ${IDENTITY_RULE} You're telling ${user.first_name ?? "them"} about "${m.name}"${"url" in m && m.url ? ". Its link preview is already showing right above this message, so this message is the caption under it: say what it is directly, and don't mention the link, sending it, or \"the one above\"" : ""}${matchCount > 1 ? `. This is one of ${matchCount} you're sending together, so it reads as a bullet in a short list` : ""}.\n\n${stretch ? `It isn't an exact fit for what they asked: ${em.whyItFits ?? "not quite what they described"}. Say that honestly in a few words, then why it could still be worth a look.` : `Why it fits them: ${em.whyItFits ?? m.reason}`}\n${record ? `\nWhat's actually known about it:\n${record}\n` : ""}${why ? `\n${why}\n` : ""}${dateRule}\nWrite ${matchCount > 1 ? "one sentence" : "1-3 sentences"} naming it, the one or two details that matter most to them (when, where), and why it fits. ${CO_WHY}${matchCount > 1 ? " Keep that to a few words in a list." : ""} Only use what's written above. No link. Return ONLY the message.`,
+                      prompt: `${CO_VOICE}\n\n${CO_TEXT_CHANNEL} ${IDENTITY_RULE} You're telling ${user.first_name ?? "them"} about "${m.name}"${"url" in m && m.url ? ". Its link preview is already showing right above this message, so this message is the caption under it: say what it is directly, and don't mention the link, sending it, or \"the one above\"" : ""}${matchCount > 1 ? `. This is one of ${matchCount} you're sending together, so it reads as a bullet in a short list` : ""}.\n\n${stretch ? `It isn't an exact fit for what they asked: ${em.whyItFits ?? "not quite what they described"}. Say that honestly in a few words, then why it could still be worth a look.` : `Why it fits them: ${em.whyItFits ?? m.reason}`}\n${record ? `\nWhat's actually known about it:\n${record}\n` : ""}${why ? `\n${why}\n` : ""}${dateRule}\n${m.tier === 3 && m.source === "web" ? "Nothing about their date is confirmed: don't say it's available, free, open to hosting, or has done something before unless that's written above; if it matters, say it's unconfirmed. Use any estimate exactly as written.\n" : ""}Write ${matchCount > 1 ? "one sentence" : "1-3 sentences"} naming it, the one or two details that matter most to them (when, where), and why it fits. ${CO_WHY}${matchCount > 1 ? " Keep that to a few words in a list." : ""} Only use what's written above. No link. Return ONLY the message.`,
                     });
                     if (drafted.trim()) {
                       // No claim about who they are beyond their own words and profile (services/identityGuard.ts).
                       const grounded = stripUngroundedIdentity(cleanCoMessage(drafted.trim()), `${resolvedContent}\n${(profile?.goals ?? []).join(" ")}\n${profile?.city ?? ""}\n${em.whyItFits ?? ""}\n${why}`);
-                      if (grounded) description = grounded;
+                      // A web find's caption only says what its page does
+                      // (2026-09-30): numbers, places, and no availability,
+                      // "open to hosting" or "has done" it can't back. Else the
+                      // plain facts go out instead.
+                      const webFacts = m.tier === 3 && m.source === "web" ? `${m.name} ${m.evidence ?? m.reason}` : null;
+                      // Their own words and the brief (a date or headcount from earlier texts) count too.
+                      const theirs = `${resolvedContent} ${("scope" in recommendation ? recommendation.scope?.brief?.line : null) ?? ""} ${profile?.city ?? ""}`;
+                      const unbacked = grounded && webFacts ? [...numbersBacked(grounded, `${webFacts} ${theirs}`).missing, ...placesBacked(grounded, `${webFacts} ${theirs}`).missing, ...unbackedClaims(grounded, webFacts)] : [];
+                      if (grounded && !unbacked.length) description = grounded;
+                      else if (webFacts) {
+                        description = `${m.name}: ${m.reason.split("; ").slice(0, 3).join("; ")}`;
+                        await recordDecision({ layer: 5, decision: "search.captionChecked", userId: user.id, outcome: "skip", action: "sent the facts instead", proposal: { name: m.name, drafted: grounded, unbacked } }).catch(() => {});
+                      }
                     }
                   } catch (err: any) {
                     console.error("sendblue: recommendation description drafting failed (non-fatal, sending plain):", err?.message ?? err);

@@ -4,7 +4,8 @@ import { getPersonSnapshot, profileForSearch } from "../harness/personSnapshot.j
 import { recordRevealedOffers } from "./offerReactions.js";
 import { alreadyFoundOpenings, matchKey } from "./eventSurfacingSweep.js";
 import { rewriteKeepsAsk } from "./searchRules.js";
-import { carryTimeFrame, isBrowseAsk } from "./askWindow.js";
+import { carryTimeFrame, isBrowseAsk, resolveAskWindow } from "./askWindow.js";
+import { describeBrief, routeFor, saveBrief, understandAsk, webFind, type SearchIntent } from "./searchIntent.js";
 import { searchZone } from "./eventOrder.js";
 import { DateTime } from "luxon";
 import { getTimezoneForCity } from "./geocoding.js";
@@ -188,7 +189,19 @@ export async function generateRecommendation(userId: string, currentMessage?: st
       currentMessage ? previousMemberText(userId, currentMessage).catch(() => null) : Promise.resolve(null),
       getPersonSnapshot(userId).catch(() => null),
     ]);
-    if (currentMessage) {
+    // What they want, understood from the whole conversation and the brief Co
+    // is already working on (services/searchIntent.ts, 2026-09-30). The brief
+    // picks the tiers: events search Co's calendar and the public feed on a
+    // short line; spaces, vendors, people, places and programs go to a verified
+    // web search, fanned out over short queries.
+    let brief: SearchIntent | null = null;
+    if (currentMessage) brief = await understandAsk(userId, currentMessage, profile.city ?? null);
+    if (brief) {
+      await saveBrief(userId, brief);
+      askText = brief.summary || brief.what || askText;
+      rewrite = { original: currentMessage!, rewritten: askText ?? "", used: askText ?? "", rejectedBecause: null };
+    } else if (currentMessage) {
+      // Understanding failed: the old rewrite, kept to their words.
       const request = await toSearchRequest(userId, currentMessage, latestAsk?.text ?? null);
       if (request === null) {
         // Every caller has already decided a search should run (the router's
@@ -207,42 +220,68 @@ export async function generateRecommendation(userId: string, currentMessage?: st
         rewrite = { original: currentMessage, rewritten: request, used: askText, rejectedBecause: check.reason };
       }
     }
+    const briefScope = brief ? { kind: brief.kind, line: describeBrief(brief), route: routeFor(brief.kind), ask: brief.ask } : null;
+    if (brief && routeFor(brief.kind) === "web") {
+      const [, timezone] = await contextReady;
+      const zone = searchZone(timezone).zone;
+      const web = await webFind(userId, brief, { zone });
+      const matches = await dropAlreadyRecommended(userId, web.matches);
+      const scope: SearchScope = { city: brief.city, window: null, timezone: zone, searchText: askText ?? null, browse: false, tiers: matches.map((m) => m.tier), rewrite, brief: briefScope, webTried: web.tried, webDropped: web.dropped };
+      scopeForTurn = scope;
+      if (matches.length) {
+        return { available: true, match: matches.map((m) => `${m.name} (${m.url})`).join("; "), reason: matches.map((m) => m.reason).join(" "), matches, scope };
+      }
+      if (web.matches.length) return { available: false, reason: `already recommended ${web.matches.map((m) => m.name).join(", ")} recently`, scope, alreadyRecommended: web.matches };
+      return { available: false, reason: `searched the web for ${describeBrief(brief)} (${web.tried.map((q) => `"${q}"`).join(", ")}) and nothing held up on its own page${web.dropped.length ? `; ruled out ${web.dropped.slice(0, 5).join("; ")}` : ""}`, scope };
+    }
     if (askText) {
       const [feelings, timezone, previousText, snapshot] = await contextReady;
       // Openings the sweep already found don't depend on this search either.
       const openingsReady = alreadyFoundOpenings(userId).catch(() => [] as TierMatch[]);
       // "Anything happening?" right after "What's the vibes for Sunday?" is
       // about Sunday (services/askWindow.ts carryTimeFrame).
-      const forTimeFrame = currentMessage ? carryTimeFrame(currentMessage, previousText, DateTime.now().setZone(searchZone(timezone).zone)) : undefined;
+      const now = DateTime.now().setZone(searchZone(timezone).zone);
+      let forTimeFrame = currentMessage ? carryTimeFrame(currentMessage, previousText, now) : undefined;
+      // A date from earlier in the brief ("Oct 10") when this text names none.
+      if (brief?.when && !(forTimeFrame && resolveAskWindow(forTimeFrame, now).window)) forTimeFrame = `${forTimeFrame ?? ""} ${brief.when}`.trim();
+      const searchCity = brief?.city ?? profile.city ?? null;
       // The scope comes back with this search's own matches (2026-09-17: it
       // was read from module state after another await, so two people
       // searching at once could get each other's record).
-      const tiered = await getTieredRecommendation(
-        { text: askText, embedding: askText === latestAsk?.text ? latestAsk?.embedding : null },
-        profile.city ?? null,
-        // Repeats are handled below so the reply can say it was already shared.
-        {
-          userId,
-          checkRepeat: false,
-          rawMessage: forTimeFrame,
-          // No city or zone on file: getTieredRecommendation uses Co's home
-          // zone and records that it did (scope.timezoneDefaulted).
-          timezone,
-          // What Co knows they want right now orders what matches the ask.
-          profile: [profileForSearch(snapshot), feelings ? roomPreferenceFromFeelings(feelings) : null].filter(Boolean).join("\n") || null,
-          // Frustrated with what Co has found: look wider (2026-09-18).
-          widen: !!feelings?.withCo.frustrated,
-        },
-      ).catch((err: any) => {
-        console.error("generateRecommendation: getTieredRecommendation failed (non-fatal):", err?.message ?? err);
-        return null;
-      });
+      const searchTiers = (widen: boolean) =>
+        getTieredRecommendation(
+          { text: askText, embedding: askText === latestAsk?.text ? latestAsk?.embedding : null },
+          searchCity,
+          // Repeats are handled below so the reply can say it was already shared.
+          {
+            userId,
+            checkRepeat: false,
+            rawMessage: forTimeFrame,
+            // No city or zone on file: getTieredRecommendation uses Co's home
+            // zone and records that it did (scope.timezoneDefaulted).
+            timezone,
+            // What Co knows they want right now orders what matches the ask.
+            profile: [profileForSearch(snapshot), feelings ? roomPreferenceFromFeelings(feelings) : null].filter(Boolean).join("\n") || null,
+            // Frustrated with what Co has found: look wider (2026-09-18).
+            widen,
+          },
+        ).catch((err: any) => {
+          console.error("generateRecommendation: getTieredRecommendation failed (non-fatal):", err?.message ?? err);
+          return null;
+        });
+      let tiered = await searchTiers(!!feelings?.withCo.frustrated);
+      // Thin: one wider pass (further out, a lower bar) before saying nothing.
+      if (brief && tiered && !tiered.matches.length && !tiered.scope.gatedOut?.length && !tiered.scope.windowOutOfRange && !tiered.scope.widened) {
+        const wider = await searchTiers(true);
+        if (wider?.matches.length) tiered = wider;
+      }
       // Openings come from what the sweep already found, not a live web search
       // (services/tieredRecommendation.ts); the reply's fit check decides
       // whether one fits this question.
       const found: TierMatch[] = [...(tiered?.matches ?? []), ...(await openingsReady)];
       scopeForTurn = tiered?.scope ?? null;
       if (scopeForTurn && rewrite) scopeForTurn.rewrite = rewrite;
+      if (scopeForTurn) scopeForTurn.brief = briefScope;
       const scope = scopeForTurn;
       // A time frame past how far Co searches: say that, rather than answering
       // with the default window's events (2026-09-17).

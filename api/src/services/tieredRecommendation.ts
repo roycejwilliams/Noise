@@ -777,6 +777,11 @@ export type SearchScope = {
   // Their own message, the rewrite into a search, which one was searched, and
   // why the rewrite was set aside if it was.
   rewrite?: { original: string; rewritten: string; used: string; rejectedBecause: string | null } | null;
+  // What Co understood they want (services/searchIntent.ts), which tiers it
+  // searched, the web queries it fanned out and what it dropped and why.
+  brief?: { kind: string; line: string; route: "events" | "web"; ask: string | null } | null;
+  webTried?: string[];
+  webDropped?: string[];
   // Everything the relevance check turned down, with its reason.
   relevanceRejected?: { name: string; why: string; related?: boolean }[];
   // An X post that was found but kept out, and why.
