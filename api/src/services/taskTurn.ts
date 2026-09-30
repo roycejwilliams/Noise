@@ -21,7 +21,7 @@ import { describeRead, excerptFact, readLink } from "./linkReader.js";
 import { getTimezoneForCity } from "./geocoding.js";
 import { notToTeammate, withoutTeammateLines } from "./teamLines.js";
 import { recordSentItems } from "./coFacts.js";
-import { numbersBacked, taskWebSearch, verifiedFactLines, type TaskWebResult, type VerifiedResult } from "./taskWeb.js";
+import { numbersBacked, OFFERS_WHAT_CO_CANT, placesBacked, taskWebSearch, verifiedFactLines, type TaskWebResult, type VerifiedResult } from "./taskWeb.js";
 
 export const TASK_MODEL = MODELS.sonnet;
 
@@ -104,7 +104,7 @@ export async function runTaskTurnWith(task: CoTask, deps: TaskTurnDeps): Promise
           functionId: "taskTurn.tell",
           firstName: deps.person.first_name || "them",
           facts,
-          task: `Tell them where this stands, in your own voice. What to get across (a guide to your intent, not a source: state only what's in CONFIRMED_FACTS): ${what}. Don't put links in the text; they go right after it. No sign-off.`,
+          task: `Tell them where this stands, in your own voice. What to get across (a guide to your intent, not a source: state only what's in CONFIRMED_FACTS): ${what}. Don't put links in the text; they go right after it. Never offer to call, book, reserve or contact anyone for them: you can't. No sign-off.`,
           maxSentences: 4,
         }).catch(() => null);
         if (!text) return { ok: false, error: "Nothing worth sending came out of the verified facts. Note it and schedule the next look." };
@@ -112,6 +112,10 @@ export async function runTaskTurnWith(task: CoTask, deps: TaskTurnDeps): Promise
         if (failed.length) return { ok: false, error: `The draft broke a rule (${failed.map((f) => f.name).join(", ")}). Note it and schedule the next look.` };
         const nums = numbersBacked(text, Object.values(facts).join(" "));
         if (!nums.ok) return { ok: false, error: `The draft had numbers no verified fact backs (${nums.missing.join(", ")}). Tell them only verified facts.` };
+        const places = placesBacked(text, Object.values(facts).join(" "));
+        if (!places.ok) return { ok: false, error: `The draft named places no verified fact backs (${places.missing.join(", ")}). Tell them only verified facts.` };
+        const offer = text.match(OFFERS_WHAT_CO_CANT);
+        if (offer) return { ok: false, error: `The draft offered something Co can't do ("${offer[0]}"): Co can't call, book or contact anyone for them. Suggest they do it, or ask what they'd like next.` };
         const sent = await deps.send([text, ...known]);
         if (!sent.sent) return { ok: false, error: `Couldn't send: ${sent.reason ?? "unknown"}.` };
         await deps.markTexted();

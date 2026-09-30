@@ -83,5 +83,12 @@ check("the verified lines carry kept facts only", !W.verifiedFactLines([v.kept!]
 }
 void TT;
 
+check("a place the facts don't back is caught, a backed one passes", !W.placesBacked("Penny Roma in Bernal Heights holds 60.", "Penny Roma: address: 3000 20th Street San Francisco CA").ok && W.placesBacked("The Loft in Mission Bay holds 60.", "The Loft at Mission Bay: neighborhood: Mission Bay").ok);
+check("an offer to call, book or contact anyone is caught", ["Want me to call and check before Friday?", "I'll book it for you.", "Should I reach out to them?"].every((t) => W.OFFERS_WHAT_CO_CANT.test(t)) && !W.OFFERS_WHAT_CO_CANT.test("You could call them to confirm the date."));
+{
+  const tt2 = (await import("node:fs")).readFileSync(new URL("../../src/services/taskTurn.ts", import.meta.url), "utf8");
+  check("a task text is blocked for unbacked places or an offer Co can't keep", /placesBacked\(text, Object\.values\(facts\)\.join\(" "\)\)/.test(tt2) && /text\.match\(OFFERS_WHAT_CO_CANT\)/.test(tt2));
+}
+
 console.log(`task web rules: ${total - failed}/${total} passed`);
 if (failed) process.exitCode = 1;

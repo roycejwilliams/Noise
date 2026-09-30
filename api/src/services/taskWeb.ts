@@ -14,7 +14,7 @@ import { anthropic } from "@ai-sdk/anthropic";
 import { generateText, stepCountIs } from "ai";
 import { MODELS } from "../models.js";
 import { recordDecision } from "../harness/core.js";
-import { checkGrounding, checkTiming } from "../harness/matchGate.js";
+import { checkGrounding, checkTiming, placesClaimed } from "../harness/matchGate.js";
 import type { TierMatch } from "./tieredRecommendation.js";
 import { findOfficialPage, looksOfficial, readPageText, reserveWebSearch } from "./webOpportunitySearch.js";
 import { parseModelJson } from "./modelJson.js";
@@ -210,6 +210,18 @@ Return ONLY JSON: {"items": [{"name": "...", "url": "https://the page you read",
 export function verifiedFactLines(results: VerifiedResult[]): string[] {
   return results.map((r) => `${r.name} (${r.url})${r.facts.length ? `: ${r.facts.join("; ")}` : ""}${r.date ? `; a date its page mentions: ${r.date} (not proof it's available then)` : ""}${r.deadline ? `; deadline ${r.deadline}` : ""}`);
 }
+
+// A drafted text may only name places that are in the facts it was given
+// (2026-09-30: "Penny Roma … in Bernal Heights" when the verified address was on
+// 20th Street). Uses the grounding gate's own place detector.
+export function placesBacked(text: string, facts: string): { ok: boolean; missing: string[] } {
+  const have = facts.toLowerCase();
+  const missing = placesClaimed(text).filter((p) => !have.includes(p.toLowerCase()) && !["san francisco", "sf", "the city"].includes(p.toLowerCase()));
+  return { ok: missing.length === 0, missing };
+}
+
+// Co can't call, book, or contact anyone for them; a task text never offers to.
+export const OFFERS_WHAT_CO_CANT = /\b(want me to|should i|i can|i'?ll|let me)\s+(give them a |)(call|phone|ring|book|reserve|email|contact|reach out to|message|dm)\b/i;
 
 // A drafted text may only carry numbers that are in the facts it was given.
 export function numbersBacked(text: string, facts: string): { ok: boolean; missing: string[] } {
