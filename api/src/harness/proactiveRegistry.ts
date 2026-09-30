@@ -278,6 +278,52 @@ export const proactiveRegistry: ProactiveRegistry = {
     },
   },
 
+  // Before a Co event (services/preArrival.ts): logistics from the event's own
+  // fields, a count of who fits (never who), one opener or the "what do you want
+  // from it" question, then the location offer, added in code.
+  pre_arrival: {
+    async draft(c, person) {
+      const P = await import("../services/preArrival.js");
+      const p = c.payload;
+      const [ask, fits, members] = await Promise.all([
+        P.statedAsk(c.userId),
+        P.strongFits(p.eventId, c.userId),
+        import("../services/eventPresence.js").then((e) => e.eventMembers(p.eventId)).catch(() => [] as { first_name: string; user_id: string }[]),
+      ]);
+      const text = await draftProactive({
+        functionId: "agent.preArrival",
+        firstName: person.firstName,
+        facts: {
+          event: p.name,
+          starts_at_local_time: P.localStart(p.startAt, p.timezone),
+          ...(p.venue ? { venue: p.venue } : {}),
+          ...(p.address ? { address: p.address } : {}),
+          ...(fits >= P.PRE_ARRIVAL.minCrowd ? { people_coming_who_fit_their_ask: `${fits} (say only that a few people coming fit what they're after; never describe or name anyone)` } : {}),
+          ...(ask ? { what_they_are_looking_for: ask } : { what_they_want_from_this_event: "unknown: ask them, in one short question" }),
+        },
+        task: `They're going to ${p.name} later today. Text them before they head over: when it starts and where (only from the facts), ${fits >= P.PRE_ARRIVAL.minCrowd ? "that a few people coming fit what they're after (no descriptions, no names), " : ""}${ask ? "and one easy opener line they could use, tied to what they're looking for" : "and ask what they're hoping to get out of it tonight, in one short question"}. Warm and brief. Never promise anything, never name or describe another guest, and never offer to contact the host. No sign-off.`,
+        maxSentences: 3,
+      });
+      if (!text) return skip("model chose SKIP");
+      const named = P.namesAnyone(text, members.filter((m) => m.user_id !== c.userId).map((m) => m.first_name));
+      if (named) return skip(`named another guest (${named})`);
+      const row = await P.presenceRow(p.eventId, c.userId);
+      const offer = p.canUseLocation && !row?.location_yes_at ? [P.LOCATION_OFFER] : [];
+      return { messages: [text, ...offer], text, rules: { maxSentences: 3, maxChars: 420, mustIncludeAny: nameTokens(p.name) } };
+    },
+    async onSent(c) {
+      const p = c.payload;
+      await pool.query(
+        `INSERT INTO event_presence (event_api_id, user_id, asked_at, pre_arrival_sent_at) VALUES ($1, $2, NOW(), NOW())
+         ON CONFLICT (event_api_id, user_id) DO UPDATE SET asked_at = COALESCE(event_presence.asked_at, NOW()), pre_arrival_sent_at = NOW()`,
+        [p.eventId, c.userId],
+      );
+      // It asked what they want from the event when Co didn't know: that's the ask, not a second one later.
+      await pool.query(`INSERT INTO event_ask_solicitations (event_id, person_id, solicited_at) VALUES ($1, $2, NOW()) ON CONFLICT DO NOTHING`, [p.eventId, c.userId]).catch(() => {});
+      await writeMemory(c.userId, "event_pre_arrival", `Texted them before "${p.name}"`);
+    },
+  },
+
   debrief: {
     async draft(c, person) {
       return draftDebrief(c, person.firstName);

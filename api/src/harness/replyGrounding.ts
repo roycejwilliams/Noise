@@ -240,6 +240,12 @@ export async function gatherReplyFacts(
   for (const line of story) addFact(rf, "known", line);
   // What Co told them lately, so it doesn't contradict itself and can ask how it went.
   for (const line of opts.turn?.advice ?? []) addFact(rf, "did_before", line);
+  // On the way to a Co event today (services/preArrival.ts).
+  const today = await import("../services/eventPresence.js").then((e) => e.todayEventFor(userId)).catch(() => null);
+  if (today) {
+    addFact(rf, "known", `They're registered for Co's event "${today.name}" today, starting ${today.startAt}.`);
+    addInstruction(rf, `If they say they're running late, can't make it, or aren't sure about "${today.name}", answer them normally and warmly, record it with updateGoing, never pressure them to come, and never offer to contact the host.`);
+  }
   // Co's own open tasks: real scheduled work, so saying when it'll get back to them is true.
   for (const line of opts.turn?.tasks ?? []) addFact(rf, "scheduled", line);
   if (opts.turn) for (const hint of sentDetailHints(opts.turn)) addHint(rf, hint);

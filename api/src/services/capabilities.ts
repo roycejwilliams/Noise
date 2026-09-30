@@ -96,6 +96,20 @@ export const ABILITIES: Ability[] = [
     use: "Close one of your open tasks when it's done or they say they no longer need it. Then say so plainly.",
   },
   {
+    id: "location_share",
+    can: "On the day of a Co event they're going to, Co can use the location they share with it in Messages, only for that event, only to know when they've arrived so it can point them to the right people, and only after they say yes.",
+    tool: "shareLocationYes",
+    limits: { perTurn: 1 },
+    use: "They said yes to sharing their location for today's Co event (after you offered). Quote their yes from this message. It covers only today's event; if they say stop, it stops.",
+  },
+  {
+    id: "event_going",
+    can: "Co keeps track of whether they're still going to today's Co event, from what they tell it.",
+    tool: "updateGoing",
+    limits: { perTurn: 1 },
+    use: "They told you they can't make today's Co event, or that they're going after all. Quote their words. Answer them normally; never pressure them to come and never offer to contact the host.",
+  },
+  {
     id: "save_ask",
     can: "Co can save something they want found that its search can find (people doing something, events, a community, a posted program or opportunity) so its daily search keeps looking and texts them when something real fits. Finding sponsors, investors or funding themselves, and advice, are kept on file but not searched; events where investors or sponsors show up can be saved and searched. It can't dig up a missing detail about something already sent.",
     tool: "saveAsk",

@@ -1210,6 +1210,12 @@ export function sendblueRouter(io: Server): Router {
         const theirLinkP: Promise<LinkRead | null> | null = theirLink
           ? import("../services/linkReader.js").then((l) => l.readLink(theirLink, { ownerUserId: user.id })).catch(() => null)
           : null;
+        // "Stop sharing" ends location use for their events at once, before any reply
+        // (services/preArrival.ts). A bare STOP already opted them out of everything above.
+        if (hasText) {
+          const P = await import("../services/preArrival.js");
+          if (P.isStopSharing(resolvedContent)) await P.stopSharing(user.id).catch(() => 0);
+        }
         // They texted after one of Co's tasks texted them: that task wakes in a few
         // minutes, once this reply is out, instead of at its next scheduled look
         // (services/coTasks.ts wakeOnReply). The 15-minute job is the backstop.

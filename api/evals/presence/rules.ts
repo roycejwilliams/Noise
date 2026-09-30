@@ -100,8 +100,8 @@ check("privacy: event_presence stores times, never coordinates", table.length > 
 const svc = src("src/services/eventPresence.ts");
 check("privacy: no coordinates in any logged decision", !/proposal: \{[^}]*(lat|lng|fix|distance)/.test(svc));
 check("only approved, reachable members are asked", /approval_status === "approved"/.test(svc) && /sms_opted_out, false\) = false AND u\.archived_at IS NULL/.test(svc));
-check("each member is asked once per event (claimed before sending)", /asked_at = NOW\(\), ask_pending = true WHERE event_presence\.asked_at IS NULL/.test(svc));
-check("the ask is in the send ledger but not the in-room count", /recordInRoomSend\(m\.user_id, `arrival_ask:\$\{event\.api_id\}`/.test(svc));
+check("each member gets one pre-arrival text per event (its own target key, and not after it went out)", /targetKey: `pre_arrival:\$\{event\.api_id\}`/.test(svc) && /alreadySent: !!row\?\.pre_arrival_sent_at/.test(svc));
+check("the pre-arrival text goes through the daily pick (the send ledger and caps), not the in-room count", /type: "pre_arrival",/.test(svc) && !/recordInRoomSend\(m\.user_id, `arrival_ask/.test(svc));
 check("leaving early moves the end-of-night check-in up", /UPDATE event_checkin_followups SET send_at = LEAST\(send_at, NOW\(\) \+ INTERVAL '30 minutes'\)/.test(svc));
 const sc = src("src/services/eventScoring.ts");
 check("the in-room nudge waits for arrival", /arrivalWaitCheck\(await getPresence\(eventId, person\.user_id\), eventTiming\.start_at, new Date\(\)\)/.test(sc));

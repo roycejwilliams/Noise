@@ -461,6 +461,43 @@ export function createConversationTools(ctx: ConversationToolContext) {
       },
     }),
 
+    // Today's Co event (services/preArrival.ts): their yes to sharing location, and whether they're going.
+    shareLocationYes: tool({
+      description: toolUse("shareLocationYes"),
+      inputSchema: z.object({ theirYes: z.string().describe("Their yes, copied exactly from this message.") }),
+      execute: async ({ theirYes }) => {
+        const P = await import("../services/preArrival.js");
+        if (!P.yesToSharing(theirYes, ctx.resolvedContent)) {
+          notDone("Their location wasn't turned on: the yes isn't in their words.");
+          return { ok: false, error: "Only their own yes, from this message, turns it on." };
+        }
+        const today = await import("../services/eventPresence.js").then((e) => e.todayEventFor(ctx.userId)).catch(() => null);
+        if (!today) {
+          notDone("Their location wasn't turned on: they have no Co event today.");
+          return { ok: false, error: "They aren't going to a Co event today, so there's nothing to use it for." };
+        }
+        if (!ctx.dryRun) await P.recordLocationYes(today.eventApiId, ctx.userId, theirYes);
+        ctx.facts?.add("did_this_turn", `They said yes to sharing their location for "${today.name}" only. Co will use it just to know when they've arrived. They share it themselves in Messages (Share My Location with Co), and "stop sharing" ends it.`);
+        return { ok: true, event: today.name };
+      },
+    }),
+    updateGoing: tool({
+      description: toolUse("updateGoing"),
+      inputSchema: z.object({ going: z.boolean(), theirWords: z.string().describe("Their words, copied exactly.") }),
+      execute: async ({ going, theirWords }) => {
+        const T = await import("../services/coTasks.js");
+        if (!T.wordsAreTheirs(theirWords, ctx.resolvedContent) && theirWords.trim().length >= 6) {
+          notDone("Going wasn't updated: the quote isn't in their words.");
+          return { ok: false, error: "Quote their own words." };
+        }
+        const today = await import("../services/eventPresence.js").then((e) => e.todayEventFor(ctx.userId)).catch(() => null);
+        if (!today) return { ok: false, error: "No Co event of theirs today." };
+        if (!ctx.dryRun) await import("../services/preArrival.js").then((P) => P.setGoing(today.eventApiId, ctx.userId, going));
+        ctx.facts?.add("did_this_turn", going ? `Noted they're going to "${today.name}".` : `Noted they can't make "${today.name}"; Co won't send them anything more about it.`);
+        return { ok: true };
+      },
+    }),
+
     // Co's own note of the advice it gave (services/advice.ts).
     noteAdvice: tool({
       description: toolUse("noteAdvice"),

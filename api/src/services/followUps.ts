@@ -28,7 +28,7 @@ export function followUpsByCo(env: NodeJS.ProcessEnv = process.env): boolean {
 // The four handed over. Advice follow-ups are "companion" candidates with an
 // advice target; other companion check-ins stay on their schedule.
 export function handedToCo(input: Pick<EnqueueInput, "type" | "targetKey">): boolean {
-  if (input.type === "window_followup" || input.type === "ask_checkin" || input.type === "debrief") return true;
+  if (input.type === "window_followup" || input.type === "ask_checkin" || input.type === "debrief" || input.type === "pre_arrival") return true;
   return input.type === "companion" && input.targetKey.startsWith("companion:advice:");
 }
 
@@ -73,6 +73,19 @@ export async function startFollowUp(input: EnqueueInput): Promise<{ queued: bool
   return { queued: true };
 }
 
+// A follow-up with a hard window (the pre-arrival text: no later than an hour
+// before the start): Co picks the moment inside it, and at the end of it, it goes.
+export function boundedLater(now: Date, hours: number, until: string | null | undefined): { at: Date; lastCall: boolean } {
+  const h = Math.min(FOLLOWUP_LIMITS.maxHours, Math.max(0.25, Number(hours) || 24));
+  const want = new Date(now.getTime() + h * 3_600_000);
+  if (!until) return { at: want, lastCall: false };
+  const u = new Date(until);
+  return want.getTime() >= u.getTime() ? { at: u, lastCall: true } : { at: want, lastCall: false };
+}
+export function atWindowEnd(now: Date, until: string | null | undefined): boolean {
+  return !!until && now.getTime() >= new Date(until).getTime() - 10 * 60_000;
+}
+
 export type FollowUpDeps = {
   firstName: string;
   recent: string;
@@ -95,7 +108,7 @@ ${o.recent || "(none)"}
 What you've texted them first lately:
 ${o.recentSends || "(nothing)"}
 
-Decide with one tool:
+${o.task.followup?.payload?.until ? `It has to go out by ${o.task.followup.payload.until} (an hour before the event starts). Pick the best moment before then.\n` : ""}Decide with one tool:
 - checkInNow: it would land well now.
 - later: the timing is off (you just talked, they're in the middle of something, the date it's about hasn't happened yet, you've texted them first a lot lately). Pick when, in hours (${FOLLOWUP_LIMITS.minHours} to ${FOLLOWUP_LIMITS.maxHours}).
 - skip: it no longer makes sense (they already told you how it went, they asked for space, it's gone stale, or it would just be noise).
@@ -150,21 +163,34 @@ export async function runFollowUpTurn(task: CoTask): Promise<void> {
     return;
   }
   const f = task.followup as Stored;
+  const until: string | null = f?.payload?.until ?? null;
+  const checkIn = async () => {
+    const { enqueueCandidate } = await import("../harness/proactive.js");
+    const expires = f.expiresAt ? new Date(Math.max(new Date(f.expiresAt).getTime(), Date.now() + (until ? 0 : 2 * 86_400_000))) : new Date(Date.now() + 3 * 86_400_000);
+    const q = await enqueueCandidate({ userId, type: f.type as any, targetKey: f.targetKey, topicKey: f.topicKey, summary: f.summary, payload: f.payload, priority: f.priority, dueAt: new Date(), expiresAt: expires, fromCo: true });
+    await closeTask(userId, task.id, "done", q.queued ? "Checked in (queued through the daily pick)." : "Already sent before.");
+    return q.queued;
+  };
+  // The end of its window: it goes now (it's about something happening today).
+  if (atWindowEnd(new Date(), until)) {
+    const q = await checkIn();
+    await recordDecision({ layer: 7, decision: "task.followup", userId, outcome: "act", action: "now_window_end", reason: "last moment in its window", proposal: { taskId: task.id, type: f?.type, queued: q } }).catch(() => {});
+    return;
+  }
   const r = await runFollowUpTurnWith(task, {
     firstName: u[0].first_name || "them",
     recent: withoutTeammateLines(convo.map((x: any) => String(x.content)).reverse().join("\n")).slice(-2500),
     recentSends: sends.map((s: any) => `- ${new Date(s.sent_at).toISOString().slice(0, 16)} ${s.type}`).join("\n"),
     now: () => new Date(),
-    checkInNow: async () => {
-      const { enqueueCandidate } = await import("../harness/proactive.js");
-      const expires = f.expiresAt ? new Date(Math.max(new Date(f.expiresAt).getTime(), Date.now() + 2 * 86_400_000)) : new Date(Date.now() + 3 * 86_400_000);
-      const q = await enqueueCandidate({ userId, type: f.type as any, targetKey: f.targetKey, topicKey: f.topicKey, summary: f.summary, payload: f.payload, priority: f.priority, dueAt: new Date(), expiresAt: expires, fromCo: true });
-      await closeTask(userId, task.id, "done", q.queued ? "Checked in (queued through the daily pick)." : "Already sent before.");
-      return q.queued;
-    },
+    checkInNow: checkIn,
     later: async (hours, why) => {
-      const h = Math.min(FOLLOWUP_LIMITS.maxHours, Math.max(FOLLOWUP_LIMITS.minHours, Number(hours) || 24));
       await noteOnTask(userId, task.id, `Later: ${why}`);
+      if (until) {
+        const b = boundedLater(new Date(), hours, until);
+        await pool.query(`UPDATE co_tasks SET next_check_at = $3, plan_next = $4, updated_at = NOW() WHERE user_id = $1 AND id = $2`, [userId, task.id, b.at, why.slice(0, 240)]);
+        return;
+      }
+      const h = Math.min(FOLLOWUP_LIMITS.maxHours, Math.max(FOLLOWUP_LIMITS.minHours, Number(hours) || 24));
       await scheduleTask(userId, task.id, h, why);
     },
     skip: async (why) => {

@@ -99,7 +99,18 @@ export async function runMigrations(): Promise<void> {
         PRIMARY KEY (event_api_id, user_id)
       )`,
     )
+    // The pre-arrival text and opt-in location, per event (services/preArrival.ts, 2026-09-30).
+    .then(() => pool.query(`ALTER TABLE event_presence ADD COLUMN IF NOT EXISTS pre_arrival_sent_at TIMESTAMPTZ, ADD COLUMN IF NOT EXISTS location_yes_at TIMESTAMPTZ, ADD COLUMN IF NOT EXISTS location_yes_quote TEXT, ADD COLUMN IF NOT EXISTS location_stopped_at TIMESTAMPTZ, ADD COLUMN IF NOT EXISTS not_going_at TIMESTAMPTZ, ADD COLUMN IF NOT EXISTS far_note_sent_at TIMESTAMPTZ`))
     .catch((err: Error) => console.error("event_presence table init failed:", err));
+
+  // Test events and test locations for test members, co-test and local only
+  // (services/testNumbers.ts). Never on production.
+  await (async () => {
+    const { testNumbersEnabled } = await import("../services/testNumbers.js");
+    if (!testNumbersEnabled()) return;
+    await pool.query(`CREATE TABLE IF NOT EXISTS co_test_events (api_id TEXT PRIMARY KEY, name TEXT NOT NULL, start_at TIMESTAMPTZ NOT NULL, end_at TIMESTAMPTZ, timezone TEXT, venue TEXT, address TEXT, latitude DOUBLE PRECISION, longitude DOUBLE PRECISION, url TEXT, guest_user_ids UUID[] NOT NULL DEFAULT '{}')`);
+    await pool.query(`CREATE TABLE IF NOT EXISTS co_test_locations (user_id UUID PRIMARY KEY, latitude DOUBLE PRECISION NOT NULL, longitude DOUBLE PRECISION NOT NULL, accuracy DOUBLE PRECISION, at TIMESTAMPTZ NOT NULL DEFAULT NOW())`);
+  })().catch((err: Error) => console.error("test event tables init failed:", err));
 
   // True between claiming the day-of ask and it actually going out, so a
   // server killed in between leaves a marker that services/strandedClaims.ts
@@ -279,6 +290,8 @@ export async function runMigrations(): Promise<void> {
       "call_failure", "closest_miss_mentioned", "promise_result", "send_held", "followup_context",
       // What Co learned about how to be with them from their pushback (services/connectDots.ts).
       "co_lesson",
+      // The text before a Co event (services/preArrival.ts).
+      "event_pre_arrival",
     ];
     const { rows } = await pool.query(
       `SELECT pg_get_constraintdef(oid) AS def FROM pg_constraint

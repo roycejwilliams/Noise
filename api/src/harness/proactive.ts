@@ -85,7 +85,9 @@ export type ProactiveType =
   | "event_match_nudge"
   // Co doesn't know them yet and their membership will close unless they
   // reply (services/membershipLapse.ts, 2026-09-22).
-  | "membership_lapse";
+  | "membership_lapse"
+  // Before a Co event they're going to (services/preArrival.ts, 2026-09-30).
+  | "pre_arrival";
 
 // co_event: Co's own event, announced to nearby users on creation (services/coEventAnnouncement.ts).
 // direct_ask: a reply-triggered direct ask to a THIRD person who didn't just
@@ -131,6 +133,8 @@ export const TYPE_POLICY: Record<ProactiveType, TypePolicy> = {
   companion: { priority: 10, typeGapDays: 4 },
   // Weekly by design; the gap stops two in one week if one was delayed.
   membership_lapse: { priority: 25, typeGapDays: 6 },
+  // Time-bound: hours before the event, once per event (its own target key).
+  pre_arrival: { priority: 95 },
 };
 
 export const RULES = {
@@ -257,7 +261,7 @@ function unansweredSince(send: SendRecord, lastInboundAt: Date | null): boolean 
 // events for 72 hours. Openings had a lane of their own for a day; merged back
 // (Royce, 2026-09-18: "A third set of caps is guesswork at this volume").
 export type Lane = "room" | "other";
-const ROOM_LANE = new Set<string>(["event_offer", "event_match_nudge", "network_tease", "in_room"]);
+const ROOM_LANE = new Set<string>(["event_offer", "event_match_nudge", "network_tease", "in_room", "pre_arrival"]);
 export function laneOf(type: string): Lane {
   return ROOM_LANE.has(type) ? "room" : "other";
 }

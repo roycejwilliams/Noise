@@ -661,6 +661,24 @@ export function renderRejectedSample(items: RejectedEvent[], max = 6): string | 
   return `Events Co turned down as not fitting (${unique.length}). Skim for a good one it missed:\n${shown.join("\n")}${more}`;
 }
 
+// Before-the-event numbers for the morning report (services/preArrival.ts), the
+// last 7 days. Opening the App Clip and saying they met someone aren't recorded
+// anywhere yet (the App Clip isn't built; "met someone" has no structured signal),
+// so those two show as not tracked instead of as zero.
+export type PreArrivalStats = { sent: number; arrivedAfter: number; sharedLocation: number };
+export async function preArrivalStats(now = new Date()): Promise<PreArrivalStats> {
+  const { rows } = await pool
+    .query(
+      `SELECT count(*) FILTER (WHERE pre_arrival_sent_at IS NOT NULL)::int AS sent,
+              count(*) FILTER (WHERE pre_arrival_sent_at IS NOT NULL AND arrived_at > pre_arrival_sent_at)::int AS arrived_after,
+              count(*) FILTER (WHERE pre_arrival_sent_at IS NOT NULL AND location_yes_at IS NOT NULL)::int AS shared
+       FROM event_presence WHERE pre_arrival_sent_at > $1`,
+      [new Date(now.getTime() - 7 * 86_400_000)],
+    )
+    .catch(() => ({ rows: [] as any[] }));
+  return { sent: rows[0]?.sent ?? 0, arrivedAfter: rows[0]?.arrived_after ?? 0, sharedLocation: rows[0]?.shared ?? 0 };
+}
+
 // The morning report as an email (Royce, 2026-09-30: "It needs to be neater to
 // read ... Place the morning report into the emails and stop texting my phone").
 // Every flag type, most frequent first; each with what it means in plain words,
@@ -675,7 +693,7 @@ const SEVERITY_STYLE: Record<Severity, { bg: string; fg: string; label: string }
 export function renderDigestEmail(
   flags: ReviewFlag[],
   names: Record<string, string>,
-  opts: { date: Date; rejected?: RejectedEvent[] } ,
+  opts: { date: Date; rejected?: RejectedEvent[]; preArrival?: PreArrivalStats | null },
 ): { subject: string; html: string; text: string } {
   const groups = groupFlags(flags);
   const day = opts.date.toLocaleDateString("en-US", { timeZone: "America/Los_Angeles", weekday: "long", month: "long", day: "numeric" });
@@ -720,6 +738,10 @@ ${rejected.length ? `<tr><td style="padding:8px 0 12px 0"><table role="presentat
 <div style="font-size:15px;font-weight:600;color:#111827">Events Co turned down <span style="color:#6B7280;font-weight:400">× ${rejected.length}</span></div>
 <div style="font-size:13px;color:#6B7280;margin:4px 0 8px 0">Skim for a good one it missed.</div>
 ${rejected.map((r) => `<div style="font-size:14px;color:#1F2937;padding:5px 0;border-top:1px solid #F3F4F6"><b>${esc(clip(r.name, 70))}</b>${r.why ? `<br><span style="color:#6B7280;font-size:13px">${esc(clip(r.why, 120))}</span>` : ""}</div>`).join("")}
+</td></tr></table></td></tr>` : ""}
+${opts.preArrival ? `<tr><td style="padding:8px 0 12px 0"><table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="background:#FFFFFF;border:1px solid #E5E7EB;border-radius:10px"><tr><td style="padding:14px 18px">
+<div style="font-size:15px;font-weight:600;color:#111827">Before the event <span style="color:#6B7280;font-weight:400">last 7 days</span></div>
+<div style="font-size:14px;color:#1F2937;margin-top:8px;line-height:1.7">Pre-arrival texts sent: <b>${opts.preArrival.sent}</b><br>Checked in after the text: <b>${opts.preArrival.arrivedAfter}</b>${opts.preArrival.sent ? ` of ${opts.preArrival.sent}` : ""}<br>Shared their location: <b>${opts.preArrival.sharedLocation}</b><br>Opened the App Clip: <span style="color:#6B7280">not tracked yet (the App Clip isn't built)</span><br>Said they met someone: <span style="color:#6B7280">not tracked yet (no structured signal)</span></div>
 </td></tr></table></td></tr>` : ""}
 <tr><td style="padding:8px 4px;font-size:12px;color:#9CA3AF">Full detail with decision-log rows: ask Claude "what broke since 24h".</td></tr>
 </table></td></tr></table></body></html>`;
@@ -833,7 +855,7 @@ export async function runMorningReview(now = new Date()): Promise<void> {
     const { flags, names } = await reviewWindow(since, now);
     const stored = await storeFlags(flags);
     const rejected = await rejectedEvents(since, now).catch(() => [] as RejectedEvent[]);
-    const email = renderDigestEmail(flags, names, { date: now, rejected });
+    const email = renderDigestEmail(flags, names, { date: now, rejected, preArrival: await preArrivalStats(now).catch(() => null) });
     const { sendReportEmail } = await import("../services/reportEmail.js");
     const result = await sendReportEmail(email.subject, email.html, email.text);
     await recordDecision({

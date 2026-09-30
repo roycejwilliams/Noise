@@ -69,8 +69,10 @@ check("stranded means minutes old, not an in-flight send", STRANDED_AFTER_MINUTE
 
 // ---- wiring
 const presence = src("src/services/eventPresence.ts");
-check("arrival claim marks itself pending", /asked_at, ask_pending\) VALUES \(\$1, \$2, NOW\(\), true\)/.test(presence));
-check("arrival ask clears pending right after the send", /content: message[^\n]*\n[\s\S]{0,400}?SET asked_at = NULL, ask_pending = false[\s\S]{0,200}?continue;\n\s+\}\n\s+await pool\.query\(`UPDATE event_presence SET ask_pending = false/.test(presence));
+// The day-of ask became the pre-arrival text (2026-09-30), which goes through the
+// proactive queue: marked sent in the same transaction as the send, so a crash
+// can't leave it "done" with nothing delivered.
+check("the pre-arrival text goes through the queue, not a claim-then-send of its own", /type: "pre_arrival",/.test(presence) && !/sendblue\.messages\.send\(\{ number: m\.phone_number, content: message/.test(presence));
 const scoring = src("src/services/eventScoring.ts");
 check("nudge claim marks itself pending", /score, pending\)\s+VALUES \(\$1, \$2, \$3, \$4, true\)/.test(scoring));
 check("nudge clears pending after the send, before anything else", /return false;\n\s+\}\n\n\s+\/\/ Sent:[^\n]*\n\s+await pool\n\s+\.query\(`UPDATE event_guest_match_nudges SET pending = false/.test(scoring));

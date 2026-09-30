@@ -20,6 +20,7 @@ export const PROACTIVE_PURPOSE: Record<ProactiveType | ExemptType | "in_room", P
   event_match_nudge: "offer",
   calendar_follow: "offer",
   ask_solicitation: "offer",
+  pre_arrival: "offer",
   co_event: "offer",
   direct_ask: "offer",
   search_result: "offer",
