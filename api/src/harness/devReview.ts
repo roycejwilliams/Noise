@@ -658,6 +658,84 @@ export function renderRejectedSample(items: RejectedEvent[], max = 6): string | 
   return `Events Co turned down as not fitting (${unique.length}). Skim for a good one it missed:\n${shown.join("\n")}${more}`;
 }
 
+// The morning report as an email (Royce, 2026-09-30: "It needs to be neater to
+// read ... Place the morning report into the emails and stop texting my phone").
+// Every flag type, most frequent first; each with what it means in plain words,
+// the worst example and its likely cause. Then the events Co turned down.
+const esc = (s: string) => s.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;");
+const SEVERITY_STYLE: Record<Severity, { bg: string; fg: string; label: string }> = {
+  high: { bg: "#FDE8E8", fg: "#9B1C1C", label: "High" },
+  medium: { bg: "#FEF3C7", fg: "#92400E", label: "Medium" },
+  low: { bg: "#E5E7EB", fg: "#374151", label: "Low" },
+};
+
+export function renderDigestEmail(
+  flags: ReviewFlag[],
+  names: Record<string, string>,
+  opts: { date: Date; rejected?: RejectedEvent[] } ,
+): { subject: string; html: string; text: string } {
+  const groups = groupFlags(flags);
+  const day = opts.date.toLocaleDateString("en-US", { timeZone: "America/Los_Angeles", weekday: "long", month: "long", day: "numeric" });
+  const high = groups.filter((g) => g.worst === "high").length;
+  const subject = groups.length
+    ? `Co morning report, ${day}: ${flags.length} flag${flags.length === 1 ? "" : "s"}${high ? `, ${high} high` : ""}`
+    : `Co morning report, ${day}: nothing flagged`;
+  const seenRejected = new Set<string>();
+  const rejected = (opts.rejected ?? []).filter((i) => i.name && !seenRejected.has(i.name.toLowerCase()) && seenRejected.add(i.name.toLowerCase())).slice(0, 10);
+
+  const chip = (sev: Severity) => {
+    const s = SEVERITY_STYLE[sev];
+    return `<span style="display:inline-block;padding:2px 8px;border-radius:10px;background:${s.bg};color:${s.fg};font-size:12px;font-weight:600">${s.label}</span>`;
+  };
+  const card = (g: FlagGroup) => {
+    const ex = [...g.flags].sort((a, b) => SEVERITY_RANK[b.severity] - SEVERITY_RANK[a.severity])[0];
+    const cause = `${ex.cause}${ex.causeConfirmed ? "" : ex.cause.endsWith("(guess)") ? "" : " (likely)"}`;
+    return `<tr><td style="padding:0 0 12px 0"><table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="background:#FFFFFF;border:1px solid #E5E7EB;border-radius:10px"><tr><td style="padding:16px 18px">
+<div style="font-size:15px;font-weight:600;color:#111827">${esc(FLAG_LABELS[g.type])} <span style="color:#6B7280;font-weight:400">× ${g.count}</span> &nbsp;${chip(g.worst)}</div>
+<div style="margin-top:10px;font-size:13px;color:#6B7280">${esc(names[ex.userId] ?? "Someone")} · ${esc(pacific(ex.at))}</div>
+<div style="margin-top:4px;font-size:14px;color:#1F2937;line-height:1.5;border-left:3px solid #E5E7EB;padding-left:10px">${esc(clip(ex.snippet, 260))}</div>
+<div style="margin-top:8px;font-size:13px;color:#374151;line-height:1.5"><b>Cause:</b> ${esc(clip(cause, 220))}</div>
+</td></tr></table></td></tr>`;
+  };
+  const summaryRows = groups
+    .map((g) => `<tr><td style="padding:4px 0;font-size:14px;color:#1F2937">${esc(FLAG_LABELS[g.type])}</td><td style="padding:4px 0;font-size:14px;color:#1F2937;text-align:right;white-space:nowrap">${g.count} &nbsp;${chip(g.worst)}</td></tr>`)
+    .join("");
+  const html = `<!doctype html><html><body style="margin:0;padding:0;background:#F3F4F6">
+<table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="background:#F3F4F6"><tr><td align="center" style="padding:28px 12px">
+<table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="max-width:620px;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Helvetica,Arial,sans-serif">
+<tr><td style="padding:0 4px 18px 4px">
+<div style="font-size:12px;letter-spacing:.08em;text-transform:uppercase;color:#6B7280">Co morning report</div>
+<div style="font-size:22px;font-weight:700;color:#111827;margin-top:4px">${esc(day)}</div>
+<div style="font-size:14px;color:#4B5563;margin-top:6px">Last 24 hours on co-test: ${groups.length ? `${flags.length} flag${flags.length === 1 ? "" : "s"} in ${groups.length} type${groups.length === 1 ? "" : "s"}${high ? `, ${high} of them high` : ""}.` : "nothing flagged."}</div>
+</td></tr>
+${groups.length ? `<tr><td style="padding:0 0 16px 0"><table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="background:#FFFFFF;border:1px solid #E5E7EB;border-radius:10px"><tr><td style="padding:14px 18px">
+<div style="font-size:13px;font-weight:600;color:#6B7280;margin-bottom:6px">At a glance</div><table role="presentation" width="100%" cellpadding="0" cellspacing="0">${summaryRows}</table>
+</td></tr></table></td></tr>
+<tr><td style="padding:4px 4px 10px 4px;font-size:13px;font-weight:600;color:#6B7280">One example of each, worst first</td></tr>
+${groups.map(card).join("\n")}` : ""}
+${rejected.length ? `<tr><td style="padding:8px 0 12px 0"><table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="background:#FFFFFF;border:1px solid #E5E7EB;border-radius:10px"><tr><td style="padding:14px 18px">
+<div style="font-size:15px;font-weight:600;color:#111827">Events Co turned down <span style="color:#6B7280;font-weight:400">× ${rejected.length}</span></div>
+<div style="font-size:13px;color:#6B7280;margin:4px 0 8px 0">Skim for a good one it missed.</div>
+${rejected.map((r) => `<div style="font-size:14px;color:#1F2937;padding:5px 0;border-top:1px solid #F3F4F6"><b>${esc(clip(r.name, 70))}</b>${r.why ? `<br><span style="color:#6B7280;font-size:13px">${esc(clip(r.why, 120))}</span>` : ""}</div>`).join("")}
+</td></tr></table></td></tr>` : ""}
+<tr><td style="padding:8px 4px;font-size:12px;color:#9CA3AF">Full detail with decision-log rows: ask Claude "what broke since 24h".</td></tr>
+</table></td></tr></table></body></html>`;
+  const text = [
+    `Co morning report, ${day}`,
+    groups.length ? `${flags.length} flags in ${groups.length} types.` : "Nothing flagged.",
+    ...groups.map((g) => {
+      const ex = [...g.flags].sort((a, b) => SEVERITY_RANK[b.severity] - SEVERITY_RANK[a.severity])[0];
+      return `
+${FLAG_LABELS[g.type]} x${g.count} (${g.worst})
+  ${names[ex.userId] ?? "Someone"}, ${pacific(ex.at)}: ${clip(ex.snippet, 200)}
+  Cause: ${clip(ex.cause, 160)}`;
+    }),
+    ...(rejected.length ? [`
+Events Co turned down (${rejected.length}):`, ...rejected.map((r) => `- ${r.name}${r.why ? `: ${r.why}` : ""}`)] : []),
+  ].join("\n");
+  return { subject, html, text };
+}
+
 // The sweep records why each event was turned down (sweep.surface: the fit gate's rejections and
 // the personal-fit "doesn't fit" skips). Newest first, deduped by name.
 export async function rejectedEvents(since: Date, until: Date, limit = 40): Promise<RejectedEvent[]> {
@@ -712,18 +790,6 @@ export async function storeFlags(flags: ReviewFlag[]): Promise<number> {
   return stored;
 }
 
-// Texted from Co's number but not logged as a Co message (see the header).
-async function textDigest(userId: string, messages: string[]): Promise<void> {
-  const { rows } = await pool.query(`SELECT phone_number FROM users WHERE id = $1`, [userId]);
-  const number = rows[0]?.phone_number;
-  if (!number) throw new Error("no phone number for the digest recipient");
-  const { default: sendblue } = await import("../services/sendblue.js");
-  for (const content of messages) {
-    await sendblue.messages.send({ number, content, from_number: process.env.SENDBLUE_PHONE_NUMBER! });
-    await new Promise((r) => setTimeout(r, 1500));
-  }
-}
-
 // For a session ("what broke since X"): prints the full report or the digest.
 // On co-test, where the scripts folder isn't built:
 //   node --input-type=module -e "const m = await import('/app/co-test/dist/api/src/harness/devReview.js'); await m.printReview({ since: '24h' })"
@@ -755,27 +821,24 @@ export async function printReview(opts: { since?: string; until?: string; model?
   await pool.end();
 }
 
-// The morning job: the last 24 hours, stored, and texted to Royce.
+// The morning job: the last 24 hours, stored, and emailed to Royce only
+// (services/reportEmail.ts). No longer texted (Royce, 2026-09-30).
 export async function runMorningReview(now = new Date()): Promise<void> {
   if (!reviewEnabled()) return;
   try {
     const since = new Date(now.getTime() - 24 * 60 * 60 * 1000);
     const { flags, names } = await reviewWindow(since, now);
     const stored = await storeFlags(flags);
-    const digest = renderDigest(flags, names, "last 24h");
-    const recipient = await digestRecipient();
-    if (!recipient) {
-      await recordDecision({ layer: 3, decision: "devReview.digest", userId: null, outcome: "skip", action: "no_recipient", reason: `no account named ${process.env.DEV_REVIEW_DIGEST_NAME ?? "Royce"} yet`, proposal: { flags: flags.length, stored } });
-      return;
-    }
-    const rejected = renderRejectedSample(await rejectedEvents(since, now).catch(() => []));
-    await textDigest(recipient, rejected ? [...digest, rejected] : digest);
+    const rejected = await rejectedEvents(since, now).catch(() => [] as RejectedEvent[]);
+    const email = renderDigestEmail(flags, names, { date: now, rejected });
+    const { sendReportEmail } = await import("../services/reportEmail.js");
+    const result = await sendReportEmail(email.subject, email.html, email.text);
     await recordDecision({
       layer: 3,
       decision: "devReview.digest",
-      userId: recipient,
-      outcome: "act",
-      action: "texted",
+      userId: null,
+      outcome: result.sent ? "act" : "skip",
+      action: result.sent ? `emailed ${result.to}` : "email_not_sent",
       proposal: { since: since.toISOString(), until: now.toISOString(), flags: flags.length, stored, groups: groupFlags(flags).map((g) => ({ type: g.type, count: g.count, worst: g.worst })) },
     });
   } catch (err: any) {

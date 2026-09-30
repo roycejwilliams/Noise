@@ -5,19 +5,18 @@
 // Hourly: each signal's rate over the last 6 hours vs. the previous 7 days.
 // It alerts when the recent rate is both above its floor and at least double
 // the baseline, with enough volume to mean something. Each signal alerts at
-// most once every 12 hours. Alerts go to TEAM_ALERT_EMAIL and the log.
+// most once every 12 hours. Alerts go to Royce only (services/reportEmail.ts) and the log.
 //
 // Weekly (buildWeeklyReview): the week's bad moments with the conversation
 // around them, for turning into eval cases (scripts/weeklyReview.ts writes
 // them locally; the cron emails the summary).
+import { sendReportEmail } from "../services/reportEmail.js";
 import { ABILITIES } from "../services/capabilities.js";
 import { EXTENSIONS } from "../services/extensions.js";
 import { Resend } from "resend";
 import pool from "../db/db.js";
-import { ALLOW_REAL_SENDS } from "../otpActions.js";
 import { recordDecision } from "./core.js";
 import { computeMetrics, renderMetricsHtml } from "./metrics.js";
-import { CO_EMAIL_FROM } from "../services/emailFrom.js";
 
 export type Signal = {
   key: string;
@@ -133,16 +132,9 @@ export async function readSignals(): Promise<SignalReading[]> {
   return out;
 }
 
+// To Royce only, never the team inbox (services/reportEmail.ts, 2026-09-30).
 async function sendTeamEmail(subject: string, html: string): Promise<void> {
-  const to = process.env.TEAM_ALERT_EMAIL ?? "team@copatible.com";
-  if (!ALLOW_REAL_SENDS || !process.env.RESEND_API_KEY) {
-    console.log(`[monitor] ${subject}\n${html.replace(/<[^>]+>/g, " ")}`);
-    return;
-  }
-  // Resend reports failures in the result instead of throwing (2026-09-15:
-  // an unverified domain made every send fail while this said "sent").
-  const { error } = await new Resend(process.env.RESEND_API_KEY).emails.send({ from: CO_EMAIL_FROM, to: [to], subject, html });
-  if (error) throw new Error(`Resend: ${error.message}`);
+  await sendReportEmail(subject, html);
 }
 
 export async function runMonitor(): Promise<void> {
