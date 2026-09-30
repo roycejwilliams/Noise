@@ -43,6 +43,10 @@ export type CoTask = {
   finalTold: boolean;
   awaitingReply: boolean;
   theirReplyAt: string | null;
+  // "followup": a check-in Co decides the timing of (services/followUps.ts).
+  kind?: "work" | "followup";
+  followup?: any;
+  targetKey?: string | null;
 };
 
 export const TASK_LIMITS = {
@@ -176,11 +180,14 @@ function rowTo(r: any): CoTask {
     finalTold: !!r.final_told,
     awaitingReply: !!r.awaiting_reply,
     theirReplyAt: r.their_reply_at ? new Date(r.their_reply_at).toISOString() : null,
+    kind: r.kind === "followup" ? "followup" : "work",
+    followup: r.followup ?? null,
+    targetKey: r.target_key ?? null,
   };
 }
 
 export async function openTasks(userId: string): Promise<CoTask[]> {
-  const { rows } = await pool.query(`SELECT * FROM co_tasks WHERE user_id = $1 AND status = 'open' ORDER BY created_at DESC LIMIT ${TASK_LIMITS.maxOpen}`, [userId]);
+  const { rows } = await pool.query(`SELECT * FROM co_tasks WHERE user_id = $1 AND status = 'open' AND kind = 'work' ORDER BY created_at DESC LIMIT ${TASK_LIMITS.maxOpen}`, [userId]);
   return rows.map(rowTo);
 }
 
@@ -237,7 +244,7 @@ export async function wakeOnReply(userId: string): Promise<number> {
   const { rowCount } = await pool.query(
     `UPDATE co_tasks SET awaiting_reply = false, their_reply_at = NOW(),
        next_check_at = LEAST(COALESCE(next_check_at, NOW() + INTERVAL '${TASK_LIMITS.wakeAfterReplyMinutes} minutes'), NOW() + INTERVAL '${TASK_LIMITS.wakeAfterReplyMinutes} minutes'), updated_at = NOW()
-     WHERE user_id = $1 AND status = 'open' AND awaiting_reply`,
+     WHERE user_id = $1 AND status = 'open' AND awaiting_reply AND kind = 'work'`,
     [userId],
   );
   return rowCount ?? 0;

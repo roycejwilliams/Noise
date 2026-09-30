@@ -627,6 +627,8 @@ export type EnqueueInput = {
   // Combine with an already-pending candidate for the same target (e.g. a
   // debrief collecting both the outcome follow-up and the event check-in).
   merge?: (existing: any, incoming: any) => any;
+  // Set when Co itself decided to check in now (services/followUps.ts).
+  fromCo?: boolean;
 };
 
 // Producers call this instead of sending. Idempotent per (user, target): a
@@ -644,6 +646,12 @@ export function mergeExpiry(existing: Date | null, incoming: Date | null): Date 
 }
 
 export async function enqueueCandidate(input: EnqueueInput): Promise<{ queued: boolean }> {
+  // Advice follow-ups, time-frame follow-ups, ask check-ins and debriefs: Co
+  // decides when (services/followUps.ts). What it sends still comes back here.
+  if (!input.fromCo) {
+    const F = await import("../services/followUps.js");
+    if (F.followUpsByCo() && F.handedToCo(input)) return F.startFollowUp(input);
+  }
   const client = await pool.connect();
   try {
     await client.query("BEGIN");

@@ -323,5 +323,8 @@ export async function runTaskTurn(task: CoTask): Promise<{ action: string }> {
 
 export async function runDueTasks(): Promise<void> {
   const { claimDueTasks } = await import("./coTasks.js");
-  for (const t of await claimDueTasks()) await runTaskTurn(t);
+  for (const t of await claimDueTasks()) {
+    if (t.kind === "followup") await import("./followUps.js").then((f) => f.runFollowUpTurn(t));
+    else await runTaskTurn(t);
+  }
 }

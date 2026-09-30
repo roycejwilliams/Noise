@@ -1930,6 +1930,8 @@ export async function runMigrations(): Promise<void> {
     .then(() => pool.query(`CREATE INDEX IF NOT EXISTS idx_co_tasks_due ON co_tasks (next_check_at) WHERE status = 'open'`))
     .then(() => pool.query(`CREATE INDEX IF NOT EXISTS idx_co_tasks_user ON co_tasks (user_id, status)`))
     // Deadlines and waking on their reply (2026-09-30).
+    // Follow-ups handed to Co (2026-09-30): a follow-up task holds the check-in it may send.
+    .then(() => pool.query(`ALTER TABLE co_tasks ADD COLUMN IF NOT EXISTS kind TEXT NOT NULL DEFAULT 'work', ADD COLUMN IF NOT EXISTS followup JSONB, ADD COLUMN IF NOT EXISTS target_key TEXT`))
     .then(() => pool.query(`ALTER TABLE co_tasks ADD COLUMN IF NOT EXISTS deadline DATE, ADD COLUMN IF NOT EXISTS final_check_at TIMESTAMPTZ, ADD COLUMN IF NOT EXISTS final_told BOOLEAN NOT NULL DEFAULT false, ADD COLUMN IF NOT EXISTS awaiting_reply BOOLEAN NOT NULL DEFAULT false, ADD COLUMN IF NOT EXISTS their_reply_at TIMESTAMPTZ`))
     .catch((err: Error) => console.error("co_tasks table init failed:", err));
   await pool
