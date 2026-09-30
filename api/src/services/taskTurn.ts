@@ -11,7 +11,9 @@ import { z } from "zod";
 import pool from "../db/db.js";
 import { MODELS } from "../models.js";
 import { recordDecision } from "../harness/core.js";
-import { checkDraft, draftProactive, sendExemptWhenAllowed } from "../harness/proactive.js";
+import { checkDraft, draftProactive, localHourOk, sendExempt } from "../harness/proactive.js";
+import { reserveWebSearch } from "./webOpportunitySearch.js";
+import { parseModelJson } from "./modelJson.js";
 import { searchWithTimeCap } from "../agent/conversationTools.js";
 import { closeTask, isExhausted, markTexted, mayText, noteOnTask, scheduleTask, taskTextsToday, TASK_LIMITS, type CoTask } from "./coTasks.js";
 import { describeRead, excerptFact, readLink } from "./linkReader.js";
@@ -40,7 +42,7 @@ This is wake-up ${t.wakes} of at most ${TASK_LIMITS.maxWakes}. Now: ${o.now}${o.
 Your recent texts with them (oldest first):
 ${o.recent || "(none)"}
 
-Do the next real step with your tools (search, readPage), and write down what you learned with note. Then decide:
+Do the next real step with your tools (search for events and opportunities, webSearch for anything else such as venues, vendors or prices, readPage), and write down what you learned with note. Then decide:
 - Text them (tellThem) only when there's something real to tell or a question only they can answer. Not to say you're still working on it.
 - If they've said since that they don't need it anymore, or it's done, finish it.
 - Otherwise schedule your next look (scheduleNext): pick the time that makes sense for this (before a deadline, after a date they gave, a few days for things that change slowly), and write what you'll do then.
@@ -87,6 +89,45 @@ export async function runTaskTurn(task: CoTask): Promise<{ action: string }> {
         return { found: items };
       },
     }),
+    // The whole web, not just events (2026-09-30: asked for a venue, the event
+    // search only returned meetups). Shares the web search budget with the sweep;
+    // only pages that really read are kept.
+    webSearch: tool({
+      description: "Search the whole web for anything the task needs that isn't an event: venues, vendors, prices, people, how-tos, programs. One plain sentence of what to find.",
+      inputSchema: z.object({ what: z.string() }),
+      execute: async ({ what }) => {
+        did.push(`web: ${what}`);
+        const budget = await reserveWebSearch(userId, "sweep", what);
+        if (!budget.ok) return { found: [], note: `No web search right now: ${budget.reason}.` };
+        try {
+          const { text: raw } = await generateText({
+            model: anthropic(TASK_MODEL),
+            providerOptions: { anthropic: { effort: "low" } },
+            experimental_telemetry: { isEnabled: true, functionId: "taskTurn.webSearch", metadata: { userId } },
+            tools: { web_search: anthropic.tools.webSearch_20250305({ maxUses: 2 }) },
+            stopWhen: stepCountIs(3),
+            timeout: 60_000,
+            prompt: `Find on the real web: ${what}${person.city ? ` (they're in ${person.city})` : ""}. Today: ${new Date().toISOString().slice(0, 10)}.
+Up to 3 real, specific options, each from a page you actually read. Return ONLY JSON: {"items": [{"name": "...", "url": "the page you read", "about": "one line: what it is and the details that matter (capacity, price, dates) from that page"}]}. {"items": []} if nothing real.`,
+          });
+          const items = (parseModelJson<{ items?: { name?: string; url?: string; about?: string }[] }>(raw)?.items ?? []).filter((i) => i.name && i.url && /^https?:\/\//.test(i.url)).slice(0, 3);
+          const kept: Found[] = [];
+          for (const i of items) {
+            // Only what really reads: the page opens and names the thing.
+            const r = await readLink(i.url!, { ownerUserId: userId }).catch(() => null);
+            const word = String(i.name).toLowerCase().split(/\s+/).find((w) => w.length >= 4) ?? "";
+            if (!r || r.status !== "ok" || (word && !`${r.excerpt ?? ""} ${r.summary ?? ""}`.toLowerCase().includes(word))) continue;
+            const f = { name: String(i.name).slice(0, 120), url: i.url!, about: String(i.about ?? "").slice(0, 240) };
+            kept.push(f);
+            if (!found.some((x) => x.url === f.url)) found.push(f);
+            pages.push(`${f.name} (${f.url}): ${(r.excerpt ?? "").slice(0, 1200)}`);
+          }
+          return { found: kept, note: kept.length ? "Each of these pages was read." : "Nothing real came back that could be read." };
+        } catch (err: any) {
+          return { found: [], note: `Web search failed: ${err?.message ?? "error"}.` };
+        }
+      },
+    }),
     readPage: tool({
       description: "Read a web page (a link from the search, their words, or your notes) and get what it says.",
       inputSchema: z.object({ url: z.string() }),
@@ -114,6 +155,9 @@ export async function runTaskTurn(task: CoTask): Promise<{ action: string }> {
       description: "Text them what you found or ask what only they can answer. Say what it should get across; it's written in your voice from what your tools found.",
       inputSchema: z.object({ what: z.string().describe("What the text should say, plainly."), links: z.array(z.string()).max(2).optional().describe("Links from what you found to send with it.") }),
       execute: async ({ what, links }) => {
+        // Outside their hours nothing is held in memory to send later (2026-09-30: a
+        // queued update died with the process that queued it): Co waits for their morning.
+        if (!localHourOk(new Date(), zone)) return { ok: false, error: "It's outside their hours (9am to 8pm their time). Note what you'd tell them and schedule your next look for their morning." };
         const allowed = mayText(task, await taskTextsToday(userId), new Date());
         if (!allowed.ok) return { ok: false, error: `Not sent: ${allowed.why}. Note it and schedule the next look instead.` };
         const known = (links ?? []).filter((l) => found.some((f) => f.url === l) || pages.some((p) => p.includes(l)));
@@ -135,10 +179,11 @@ export async function runTaskTurn(task: CoTask): Promise<{ action: string }> {
         if (!text) return { ok: false, error: "Nothing worth sending came out. Note it and schedule the next look." };
         const failed = checkDraft(text, { maxSentences: 4, maxChars: 480 }).filter((c) => !c.pass);
         if (failed.length) return { ok: false, error: `The draft broke a rule (${failed.map((f) => f.name).join(", ")}). Note it and schedule the next look.` };
-        const sent = await sendExemptWhenAllowed({ userId, phoneNumber: person.phone_number, type: "task_update", targetKey: `task:${task.id}:${Date.now()}`, messages: [text, ...known], timezone: zone });
-        if (!sent.sent && !sent.queued) return { ok: false, error: `Couldn't send: ${sent.reason ?? "unknown"}.` };
+        const sent = await sendExempt({ userId, phoneNumber: person.phone_number, type: "task_update", targetKey: `task:${task.id}:${Date.now()}`, messages: [text, ...known], timezone: zone, respectHours: true });
+        if (!sent.sent) return { ok: false, error: `Couldn't send: ${sent.reason ?? "unknown"}.` };
         await markTexted(userId, task.id);
         if (known.length) await recordSentItems(userId, found.filter((f) => f.url && known.includes(f.url)).map((f) => ({ name: f.name, url: f.url })), "taskTurn").catch(() => {});
+        // Outside their hours it waits for the morning; the note says which.
         await noteOnTask(userId, task.id, `Texted them: ${text.slice(0, 200)}`);
         did.push("texted them");
         return { ok: true, sent: text };
