@@ -22,6 +22,7 @@ import { getTimezoneForCity } from "./geocoding.js";
 import { notToTeammate, withoutTeammateLines } from "./teamLines.js";
 import { recordSentItems } from "./coFacts.js";
 import { numbersBacked, OFFERS_WHAT_CO_CANT, placesBacked, taskWebSearch, verifiedFactLines, type TaskWebResult, type VerifiedResult } from "./taskWeb.js";
+import { assembleMessages, captionOk, draftTaskMessages, orderByTier, type SendItem } from "./taskMessages.js";
 
 export const TASK_MODEL = MODELS.sonnet;
 
@@ -38,7 +39,7 @@ export type TaskTurnDeps = {
   send: (messages: string[]) => Promise<{ sent: boolean; reason?: string }>;
   markTexted: () => Promise<void>;
   markFinalTold: () => Promise<void>;
-  search: (what: string) => Promise<{ name: string; url: string | null; date: string | null }[]>;
+  search: (what: string) => Promise<{ name: string; url: string | null; date: string | null; tier?: number }[]>;
   web: (what: string) => Promise<TaskWebResult>;
   readPage: (url: string) => Promise<{ ok: boolean; facts: string[]; text: string }>;
   now: () => Date;
@@ -73,7 +74,7 @@ Then decide:
 You must end with scheduleNext or finish. Never make up results: only what your tools returned.`;
 }
 
-type Found = { name: string; url: string | null; facts: string[] };
+type Found = { name: string; url: string | null; facts: string[]; tier: number };
 
 export async function runTaskTurnWith(task: CoTask, deps: TaskTurnDeps): Promise<{ action: string; did: string[]; texts: string[]; final: boolean }> {
   const final = isFinalCheck(task, deps.now());
@@ -100,6 +101,44 @@ export async function runTaskTurnWith(task: CoTask, deps: TaskTurnDeps): Promise
           events_found: events.map((e) => `${e.name}${e.url ? ` (${e.url})` : ""}${e.facts.length ? `: ${e.facts.join("; ")}` : ""}`).join(" | ") || "(none)",
           verified_page_facts: pageFacts.join(" | ") || "(none)",
         };
+        // Things to send: each link, then its own caption, in tier order, the way
+        // search results arrive (services/taskMessages.ts). A closing line last.
+        if (known.length) {
+          const items: SendItem[] = orderByTier(
+            known.map((url) => {
+              const ev = events.find((e) => e.url === url);
+              const v = verified.find((x) => x.url === url);
+              return ev
+                ? { url, name: ev.name, tier: ev.tier, facts: ev.facts }
+                : { url, name: v!.name, tier: 3, facts: [...v!.facts, ...(v!.date ? [`a date its page mentions: ${v!.date}`] : []), ...(v!.deadline ? [`deadline: ${v!.deadline}`] : [])] };
+            }),
+          );
+          const drafted = await draftTaskMessages({ firstName: deps.person.first_name || "them", goal: task.goal, items, what, context: [facts.verified_page_facts, `their deadline: ${task.deadline ?? "none"}`].join(" | ") }).catch(() => null);
+          if (!drafted) return { ok: false, error: "Couldn't write the captions. Note it and schedule the next look." };
+          const good: { url: string; caption: string }[] = [];
+          const droppedCaptions: string[] = [];
+          for (const it of items) {
+            const cap = drafted.captions.get(it.url);
+            const verdict = cap ? captionOk(cap, `${it.name} ${it.facts.join(" ")}`) : { ok: false, why: "no caption" };
+            if (cap && verdict.ok) good.push({ url: it.url, caption: cap });
+            else droppedCaptions.push(`${it.name}: ${verdict.why}`);
+          }
+          if (!good.length) return { ok: false, error: `No caption held up (${droppedCaptions.join("; ")}). Note it and schedule the next look.` };
+          let closing = drafted.closing;
+          if (closing) {
+            const allFacts = Object.values(facts).join(" ");
+            const bad = checkDraft(closing, { maxSentences: 2, maxChars: 280 }).some((c) => !c.pass) || !numbersBacked(closing, allFacts).ok || !placesBacked(closing, allFacts).ok || OFFERS_WHAT_CO_CANT.test(closing);
+            if (bad) closing = null;
+          }
+          const messages = assembleMessages(good, closing);
+          const sent = await deps.send(messages);
+          if (!sent.sent) return { ok: false, error: `Couldn't send: ${sent.reason ?? "unknown"}.` };
+          await deps.markTexted();
+          await deps.note(`Texted them ${good.length} thing(s): ${good.map((g) => items.find((i) => i.url === g.url)?.name).join(", ")}${closing ? `, then: ${closing.slice(0, 120)}` : ""}${droppedCaptions.length ? ` (left out: ${droppedCaptions.join("; ")})` : ""}`, null);
+          texts.push(...messages);
+          did.push(`texted them ${good.length} link(s), each with its caption`);
+          return { ok: true, sent: messages.join(" / ") };
+        }
         let text = await draftProactive({
           functionId: "taskTurn.tell",
           firstName: deps.person.first_name || "them",
@@ -127,11 +166,11 @@ export async function runTaskTurnWith(task: CoTask, deps: TaskTurnDeps): Promise
         if (!places.ok) return { ok: false, error: `The draft named places no verified fact backs (${places.missing.join(", ")}). Tell them only verified facts.` };
         const offer = text.match(OFFERS_WHAT_CO_CANT);
         if (offer) return { ok: false, error: `The draft offered something Co can't do ("${offer[0]}"): Co can't call, book or contact anyone for them. Suggest they do it, or ask what they'd like next.` };
-        const sent = await deps.send([text, ...known]);
+        const sent = await deps.send([text]);
         if (!sent.sent) return { ok: false, error: `Couldn't send: ${sent.reason ?? "unknown"}.` };
         await deps.markTexted();
         await deps.note(`Texted them: ${text.slice(0, 200)}`, null);
-        texts.push(text, ...known);
+        texts.push(text);
         did.push("texted them");
         return { ok: true, sent: text };
   };
@@ -143,7 +182,7 @@ export async function runTaskTurnWith(task: CoTask, deps: TaskTurnDeps): Promise
       execute: async ({ what }) => {
         did.push(`search: ${what}`);
         const items = await deps.search(what).catch(() => []);
-        for (const i of items) if (!events.some((e) => e.name === i.name)) events.push({ name: i.name, url: i.url, facts: i.date ? [`date: ${i.date}`] : [] });
+        for (const i of items) if (!events.some((e) => e.name === i.name)) events.push({ name: i.name, url: i.url, facts: i.date ? [`date: ${i.date}`] : [], tier: i.tier ?? 2 });
         return items.length ? { found: items } : { found: [], note: "Nothing real came up." };
       },
     }),
@@ -266,7 +305,7 @@ export async function runTaskTurn(task: CoTask): Promise<{ action: string }> {
     search: async (what) => {
       const r = await searchWithTimeCap(userId, what, 60_000, "taskTurn.search").catch(() => ({ available: false as const, reason: "search failed" }));
       if (!r.available || !("matches" in r) || !r.matches?.length) return [];
-      return r.matches.slice(0, 4).map((m: any) => ({ name: String(m.name), url: m.url ? String(m.url) : null, date: typeof m.event_date === "string" ? m.event_date.slice(0, 10) : null }));
+      return r.matches.slice(0, 4).map((m: any) => ({ name: String(m.name), url: m.url ? String(m.url) : null, date: typeof m.event_date === "string" ? m.event_date.slice(0, 10) : null, tier: typeof m.tier === "number" ? m.tier : 2 }));
     },
     web: (what) => taskWebSearch(userId, what, { city: person.city, zone, taskId: task.id }),
     readPage: async (url) => {
