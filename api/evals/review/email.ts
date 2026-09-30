@@ -48,8 +48,8 @@ const empty = D.renderDigestEmail([], {}, { date: now });
 check("a quiet day says nothing was flagged", /nothing flagged/.test(empty.subject) && /nothing flagged/.test(empty.html));
 
 {
-  const withStats = D.renderDigestEmail([], {}, { date: now, preArrival: { sent: 4, arrivedAfter: 3, sharedLocation: 2 } });
-  check("the report tracks the pre-arrival numbers, and says plainly what isn't tracked yet", /Checked in after the text: <b>3<\/b> of 4/.test(withStats.html) && /Opened the App Clip: <span[^>]*>not tracked yet/.test(withStats.html) && /Said they met someone: <span[^>]*>not tracked yet/.test(withStats.html));
+  const withStats = D.renderDigestEmail([], {}, { date: now, preArrival: { sent: 4, arrivedAfter: 3, sharedLocation: 2, metSomeone: 1 } });
+  check("the report tracks the pre-arrival numbers, and says plainly what isn't tracked yet", /Checked in after the text: <b>3<\/b> of 4/.test(withStats.html) && /Opened the App Clip: <span[^>]*>not tracked yet/.test(withStats.html) && /Said they met someone: <b>1<\/b> of 4/.test(withStats.html));
 }
 console.log(`review email rules: ${total - failed}/${total} passed`);
 if (failed) process.exitCode = 1;

@@ -229,13 +229,6 @@ export const ABILITIES: Ability[] = [
     use: "Save a detail they just told you: their company or project, their role, or their LinkedIn link, so you never have to ask again. Only what they actually wrote, in their words. When they ask what you have on them, or what you'd use for an application or form, answer from the details on file first: say what you have and what's missing, before anything else in the conversation. When you're about to draft or do something for them that needs a detail you don't have (see what's on file), ask for all the missing ones together in one short numbered message, once, then save each answer.",
   },
   {
-    id: "advice_record",
-    can: "When Co gives real advice or a plan for something in their life, it keeps a note of what it advised, so it can ask how it went a few days later and never contradicts itself.",
-    tool: "noteAdvice",
-    limits: { perTurn: 1 },
-    use: "After you give real advice or a plan for something specific in their life (a decision, a pitch, a conversation they're dreading), note it once: the topic in a few words and what you advised in one sentence, in your own words. Not for small talk, opinions on events, or answers to factual questions.",
-  },
-  {
     id: "team_feedback",
     can: "When they give feedback about how Co works, or ask Co to pass something to the team, Co can save it for the team.",
     tool: "saveFeedbackForTeam",
@@ -295,8 +288,23 @@ export const LIMITS: string[] = [
 ];
 
 // What Co reads about itself, as facts.
-export function capabilitySheet(opts: { team?: boolean } = {}): string[] {
-  return [...ABILITIES.filter((a) => opts.team || !a.teamOnly).map((a) => a.can), ...LIMITS];
+// Abilities that only matter in some turns (2026-09-30, trimming the ~1,950-token
+// sheet every reply carried): updating or closing a task only with an open task,
+// location and "going" only with a Co event today, the details kit only when
+// they've saved details or the message is about applying, a form, an intro or
+// their LinkedIn. Without a situation (tests, the review), everything is listed.
+export type Situation = { kit: boolean; tasks: boolean; eventToday: boolean };
+const SITUATIONAL: Record<string, keyof Situation> = { kit: "kit", task_update: "tasks", task_close: "tasks", location_share: "eventToday", event_going: "eventToday" };
+export function situationFor(o: { kitFields: number; message: string; openTasks: number; eventToday: boolean }): Situation {
+  return { kit: o.kitFields > 0 || /\b(apply|applying|application|form|linkedin|resume|cv|intro|introduce|submit|sign up|signup)\b/i.test(o.message), tasks: o.openTasks > 0, eventToday: o.eventToday };
+}
+export function capabilitySheet(opts: { team?: boolean; situation?: Situation } = {}): string[] {
+  const active = (a: Ability) => !opts.situation || !SITUATIONAL[a.id] || opts.situation[SITUATIONAL[a.id]];
+  return [...ABILITIES.filter((a) => (opts.team || !a.teamOnly) && active(a)).map((a) => a.can), ...LIMITS];
+}
+// The tools to leave out for a situation, so Co isn't offered what can't apply.
+export function toolsOutOfSituation(s: Situation): string[] {
+  return ABILITIES.filter((a) => a.tool && SITUATIONAL[a.id] && !s[SITUATIONAL[a.id]]).map((a) => a.tool!);
 }
 
 // Tools only the team gets (teamOnly abilities).

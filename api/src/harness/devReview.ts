@@ -662,21 +662,22 @@ export function renderRejectedSample(items: RejectedEvent[], max = 6): string | 
 }
 
 // Before-the-event numbers for the morning report (services/preArrival.ts), the
-// last 7 days. Opening the App Clip and saying they met someone aren't recorded
-// anywhere yet (the App Clip isn't built; "met someone" has no structured signal),
-// so those two show as not tracked instead of as zero.
-export type PreArrivalStats = { sent: number; arrivedAfter: number; sharedLocation: number };
+// last 7 days. "Met someone" comes from their own words after the event
+// (services/turnLearning.ts). Opening the App Clip isn't recorded anywhere yet
+// (the App Clip isn't built), so it shows as not tracked instead of as zero.
+export type PreArrivalStats = { sent: number; arrivedAfter: number; sharedLocation: number; metSomeone: number };
 export async function preArrivalStats(now = new Date()): Promise<PreArrivalStats> {
   const { rows } = await pool
     .query(
       `SELECT count(*) FILTER (WHERE pre_arrival_sent_at IS NOT NULL)::int AS sent,
               count(*) FILTER (WHERE pre_arrival_sent_at IS NOT NULL AND arrived_at > pre_arrival_sent_at)::int AS arrived_after,
-              count(*) FILTER (WHERE pre_arrival_sent_at IS NOT NULL AND location_yes_at IS NOT NULL)::int AS shared
+              count(*) FILTER (WHERE pre_arrival_sent_at IS NOT NULL AND location_yes_at IS NOT NULL)::int AS shared,
+              count(*) FILTER (WHERE pre_arrival_sent_at IS NOT NULL AND met_someone_at IS NOT NULL)::int AS met
        FROM event_presence WHERE pre_arrival_sent_at > $1`,
       [new Date(now.getTime() - 7 * 86_400_000)],
     )
     .catch(() => ({ rows: [] as any[] }));
-  return { sent: rows[0]?.sent ?? 0, arrivedAfter: rows[0]?.arrived_after ?? 0, sharedLocation: rows[0]?.shared ?? 0 };
+  return { sent: rows[0]?.sent ?? 0, arrivedAfter: rows[0]?.arrived_after ?? 0, sharedLocation: rows[0]?.shared ?? 0, metSomeone: rows[0]?.met ?? 0 };
 }
 
 // The morning report as an email (Royce, 2026-09-30: "It needs to be neater to
@@ -741,7 +742,7 @@ ${rejected.map((r) => `<div style="font-size:14px;color:#1F2937;padding:5px 0;bo
 </td></tr></table></td></tr>` : ""}
 ${opts.preArrival ? `<tr><td style="padding:8px 0 12px 0"><table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="background:#FFFFFF;border:1px solid #E5E7EB;border-radius:10px"><tr><td style="padding:14px 18px">
 <div style="font-size:15px;font-weight:600;color:#111827">Before the event <span style="color:#6B7280;font-weight:400">last 7 days</span></div>
-<div style="font-size:14px;color:#1F2937;margin-top:8px;line-height:1.7">Pre-arrival texts sent: <b>${opts.preArrival.sent}</b><br>Checked in after the text: <b>${opts.preArrival.arrivedAfter}</b>${opts.preArrival.sent ? ` of ${opts.preArrival.sent}` : ""}<br>Shared their location: <b>${opts.preArrival.sharedLocation}</b><br>Opened the App Clip: <span style="color:#6B7280">not tracked yet (the App Clip isn't built)</span><br>Said they met someone: <span style="color:#6B7280">not tracked yet (no structured signal)</span></div>
+<div style="font-size:14px;color:#1F2937;margin-top:8px;line-height:1.7">Pre-arrival texts sent: <b>${opts.preArrival.sent}</b><br>Checked in after the text: <b>${opts.preArrival.arrivedAfter}</b>${opts.preArrival.sent ? ` of ${opts.preArrival.sent}` : ""}<br>Shared their location: <b>${opts.preArrival.sharedLocation}</b><br>Opened the App Clip: <span style="color:#6B7280">not tracked yet (the App Clip isn't built)</span><br>Said they met someone: <b>${opts.preArrival.metSomeone}</b>${opts.preArrival.sent ? ` of ${opts.preArrival.sent}` : ""}</div>
 </td></tr></table></td></tr>` : ""}
 <tr><td style="padding:8px 4px;font-size:12px;color:#9CA3AF">Full detail with decision-log rows: ask Claude "what broke since 24h".</td></tr>
 </table></td></tr></table></body></html>`;

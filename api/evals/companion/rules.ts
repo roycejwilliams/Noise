@@ -104,7 +104,7 @@ check("advice isn't asked about once stale or already asked", A.dueAdvice([adv(1
 check("the newest due advice goes first", A.dueAdvice([adv(1, 10), adv(2, 5)], nowA)?.id === 2);
 check("the same topic within a week isn't noted twice", A.isRepeat("the pitch", [{ topic: "pitch on Friday", givenAt: ago(2) }], nowA) && !A.isRepeat("the pitch", [{ topic: "pitch on Friday", givenAt: ago(10) }], nowA) && !A.isRepeat("moving", [{ topic: "pitch on Friday", givenAt: ago(2) }], nowA));
 check("replies know what Co advised lately, and drop old advice", A.adviceLines([adv(1, 2), adv(2, 40)], nowA).length === 1 && /advised them on/.test(A.adviceLines([adv(1, 2)], nowA)[0]));
-check("advice is a tool Co chooses, capped at one per turn, and followed up daily", /noteAdvice/.test(src("services/capabilities.ts")) && /runAdviceFollowUps/.test(src("jobs/index.ts")) && /markFollowedUp\(c\.userId/.test(src("harness/proactiveRegistry.ts")));
+check("advice is recorded by the learning call only (the tool was removed) and followed up", !/noteAdvice/.test(src("services/capabilities.ts")) && !/noteAdvice: tool/.test(src("agent/conversationTools.ts")) && /runAdviceFollowUps/.test(src("jobs/index.ts")) && /markFollowedUp\(c\.userId/.test(src("harness/proactiveRegistry.ts")));
 check("Co's voice keeps professionals in the loop on health, legal and money", (() => { const t = src("services/coVoice.ts"); return /a doctor for a symptom, a lawyer for a contract/.test(t) && /never tell them to buy, sell or invest/.test(t); })());
 check("advice uses their story and earlier advice", /what you advised before/.test(src("agent/conversationReply.ts")) && /opts\.turn\?\.advice/.test(src("harness/replyGrounding.ts")));
 
@@ -145,9 +145,21 @@ check("every reader of the member's own lines skips their talk with a teammate",
 check("the summary rebuild is told Mo is an AI agent, and drops an older 'cofounder Mo'", /Mo is an AI agent that works alongside Co, not a person in their life/.test(src("harness/personSnapshot.ts")));
 
 // Real-thread replay (evals/companion/threadReplay.ts): with earlier wrong replies in the thread, Co copied them until told plainly
-check("the details-on-file instruction rides with the kit facts, and Mo is software for team members", (() => { const g = src("harness/replyGrounding.ts"); return /The details on file listed above are all you have for doing things on their behalf/.test(g) && /Mo is software that Co runs, not a person\. When they talk about their cofounder, equity, family, friends or their own life, never mention Mo/.test(g); })());
+check("Mo is software for team members; the one-incident kit instruction is gone (the replay showed it changed nothing)", (() => { const g = src("harness/replyGrounding.ts"); return !/The details on file listed above are all you have for doing things on their behalf/.test(g) && /Mo is software that Co runs, not a person\. When they talk about their cofounder, equity, family, friends or their own life, never mention Mo/.test(g); })());
+{
+  const C = await import("../../src/services/capabilities.js");
+  const full = C.capabilitySheet().join("\n").length;
+  const plain = C.capabilitySheet({ situation: C.situationFor({ kitFields: 0, message: "anything fun this weekend?", openTasks: 0, eventToday: false }) }).join("\n").length;
+  const busy = C.capabilitySheet({ situation: C.situationFor({ kitFields: 2, message: "hi", openTasks: 1, eventToday: true }) }).join("\n").length;
+  console.log(`  capability sheet: ${Math.round(full / 4)} tokens in full, ${Math.round(plain / 4)} on a plain turn`);
+  check("situational entries are left out of a plain turn and kept when they apply", plain < full && busy === full);
+  check("a plain turn isn't offered task, location, going or kit tools", JSON.stringify(C.toolsOutOfSituation({ kit: false, tasks: false, eventToday: false }).sort()) === JSON.stringify(["closeTask", "saveKitFact", "shareLocationYes", "updateGoing", "updateTask"]));
+  check("a message about applying brings the kit back even with nothing saved", C.situationFor({ kitFields: 0, message: "help me apply to this fellowship", openTasks: 0, eventToday: false }).kit);
+}
 
 check("a link from their earlier text is logged, and the reply is told the photo is its preview", (() => { const t = src("routes/sendblue.ts"); return /linkFromEarlier = m\.fromEarlier/.test(t) && /decision: "turn\.link"/.test(t) && /this message may be its preview image or a separate photo/.test(t); })());
+
+check("'met someone' is read from their own words and recorded on their recent Co event", (() => { const p = TL.parseTurnLearning('{"profile":{},"met_someone":"met a founder named Sam, great chat"}'); const t = src("services/turnLearning.ts"); return p?.metSomeone === "met a founder named Sam, great chat" && TL.parseTurnLearning('{"profile":{}}')?.metSomeone === null && TL.metQuoteIsTheirs("met a founder", "I met a founder there!") && !TL.metQuoteIsTheirs("met two investors", "I met a founder there!") && /learned\.metSomeone && metQuoteIsTheirs\(learned\.metSomeone, input\.message\)/.test(t); })());
 
 console.log(`companion rules: ${total - failed}/${total} passed`);
 if (failed) process.exitCode = 1;

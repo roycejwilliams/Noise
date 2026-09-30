@@ -20,6 +20,7 @@
 import { loadMilestones, storyLines } from "../services/milestones.js";
 import { ABILITIES, capabilitySheet } from "../services/capabilities.js";
 import { kitLines } from "../services/memberKit.js";
+import { situationFor, type Situation } from "../services/capabilities.js";
 import { sentDetailHints, sentDetailLines, type TurnContext } from "../services/turnContext.js";
 import { switchedOff } from "../services/abilitySwitches.js";
 import { textingStyleFor } from "../services/textingStyle.js";
@@ -101,9 +102,9 @@ export function addInstruction(rf: ReplyFacts, text: string): void {
 // (services/capabilities.ts), shared with the tools themselves.
 
 // Facts that are true for every reply, before anything about this person.
-export function baseReplyFacts(): ReplyFacts {
+export function baseReplyFacts(situation?: Situation): ReplyFacts {
   const rf = createReplyFacts();
-  for (const c of capabilitySheet()) addFact(rf, "capability", c);
+  for (const c of capabilitySheet({ situation })) addFact(rf, "capability", c);
   return rf;
 }
 
@@ -119,7 +120,8 @@ export async function gatherReplyFacts(
   // of separate loads.
   opts: { pendingDescriptions?: string[]; context?: string; turn?: TurnContext } = {},
 ): Promise<ReplyFacts> {
-  const rf = baseReplyFacts();
+  const t = opts.turn;
+  const rf = baseReplyFacts(t ? situationFor({ kitFields: Object.keys(t.kit ?? {}).length, message: t.message ?? "", openTasks: t.tasks?.length ?? 0, eventToday: !!t.todayEvent }) : undefined);
   for (const d of opts.pendingDescriptions ?? []) addFact(rf, "pending", `Waiting to hear back: ${d}`);
   // What's landed with them (services/outcomes.ts tasteSummary).
   const taste = await tasteSummary(userId).catch(() => null);
@@ -228,12 +230,9 @@ export async function gatherReplyFacts(
   // (services/turnContext.ts), before Co ever says it doesn't have them.
   if (opts.turn) for (const line of sentDetailLines(opts.turn)) addFact(rf, "known", line);
   // What Co has for doing things on their behalf, and what it doesn't (services/memberKit.ts).
-  if (opts.turn?.kit) {
-    for (const line of kitLines(opts.turn.kit)) addFact(rf, "known", line);
-    // 2026-09-29: on a real thread Co repeated an earlier wrong answer ("just that you want help
-    // applying to X") 3 of 3 times instead of the details on file.
-    addInstruction(rf, "The details on file listed above are all you have for doing things on their behalf. If they ask what you have on them, answer from that list, even if an earlier reply in this conversation said otherwise, and say plainly if that earlier reply was wrong.");
-  }
+  // (A "details on file" instruction added for one incident was removed 2026-09-30:
+  // the replay showed it changed nothing; the summary fix did the work.)
+  if (opts.turn?.kit) for (const line of kitLines(opts.turn.kit)) addFact(rf, "known", line);
   // Where they've been with Co, from the record (services/milestones.ts): the
   // arc Co can look back on, in their own words.
   const story = opts.turn?.story ?? (opts.turn ? [] : await loadMilestones(userId).then((m) => storyLines(m, 4)).catch(() => [] as string[]));
@@ -241,7 +240,7 @@ export async function gatherReplyFacts(
   // What Co told them lately, so it doesn't contradict itself and can ask how it went.
   for (const line of opts.turn?.advice ?? []) addFact(rf, "did_before", line);
   // On the way to a Co event today (services/preArrival.ts).
-  const today = await import("../services/eventPresence.js").then((e) => e.todayEventFor(userId)).catch(() => null);
+  const today = opts.turn ? opts.turn.todayEvent ?? null : await import("../services/eventPresence.js").then((e) => e.todayEventFor(userId)).catch(() => null);
   if (today) {
     addFact(rf, "known", `They're registered for Co's event "${today.name}" today, starting ${today.startAt}.`);
     addInstruction(rf, `If they say they're running late, can't make it, or aren't sure about "${today.name}", answer them normally and warmly, record it with updateGoing, never pressure them to come, and never offer to contact the host.`);
@@ -493,6 +492,17 @@ export function followupPromiseMatch(text: string): RegExpMatchArray | null {
 }
 
 // Phrasings that forecast whether something will turn up, sell out, or happen.
+// Promising a result Co can't guarantee, as opposed to an action it will take
+// (Royce, 2026-09-30: "I'll get you real options before Friday", said before any
+// search had found one). "I'll look at indoor spots and text you Thursday" is fine.
+export function resultPromiseMatch(text: string): RegExpMatchArray | null {
+  return (
+    text.match(/\b(?:i'?ll|i will|i'?m going to|going to)\b[^.!?\n]{0,60}?\b(?:get|have|find|land|line up|pull together|bring|hand|round up)\s+you\s+(?:[a-z]+\s+){0,5}?(?:options?|venues?|choices|picks|spots|caterers?|djs?|leads|matches|people|results|places)\b/i) ??
+    text.match(/\byou'?ll have (?:[a-z]+\s+){0,4}?(?:options?|venues?|choices|picks|spots|leads|matches)\b/i) ??
+    text.match(/\b(?:i'?ll|i will)\b[^.!?\n]{0,30}?\b(?:dig up|find|pull together|line up|round up|get)\s+(?:a couple of|some|two|three|a few)\s+(?:[a-z]+\s+){0,3}?(?:options|venues|choices|picks|spots|caterers|djs|leads)\b/i)
+  );
+}
+
 export function predictionMatch(text: string): RegExpMatchArray | null {
   return text.match(
     /\b(?:is|are)(?:n'?t| not) (?:going to|gonna|likely to) (?:materialize|turn up|show up|come up|pop up|happen|open up)\b|\bwon'?t (?:materialize|turn up|show up|come up|pop up|open up)\b|\b(?:probably|likely) (?:won'?t|will not|isn'?t going to|is going to|will) (?:be|turn up|show up|come up|pop up|sell out|fill up|happen|open)\b|\bi don'?t (?:think|expect|see) (?:a|another|any|anything|something|one|more|a separate)\b[^.?!]{0,40}\b(?:going to|gonna|will|turn up|show up|come up|pop up|materialize|happen)\b|\b(?:is|are) going to (?:sell out|fill up)\b|\b(?:probably|likely) (?:sell|fill) (?:out|up)\b|\b(?:it|this|that|they)'?ll (?:probably |likely )?(?:sell out|fill up)\b|\bnothing (?:else )?(?:is|'s) (?:going to|gonna) (?:come|turn|show|pop)\b/i,
@@ -621,6 +631,8 @@ export function codeChecks(draft: string, rf: ReplyFacts, src: GroundingSources)
   // Saturday"). Co says what it found and whether it's still looking instead.
   const prediction = predictionMatch(draft);
   if (prediction) checks.push({ name: "no_prediction", pass: false, reason: `predicts what will happen: "${prediction[0]}"` });
+  const promisedResult = resultPromiseMatch(draft);
+  if (promisedResult) checks.push({ name: "no_result_promise", pass: false, reason: `promises a result, not an action: "${promisedResult[0]}"` });
   // Follow-up promises nothing in the code keeps: no job texts them when a
   // link turns up or when the other person answers (an intro goes out by
   // email, not a text from Co).
@@ -884,6 +896,7 @@ export function stripUnsupported(draft: string, failed: GateCheck[]): string {
     if (failed.some((f) => f.name === "no_emotion_label") && !checkNoEmotionLabel(s).pass) return false;
     if (failed.some((f) => f.name === "no_followup_promise") && followupPromiseMatch(s)) return false;
     if (failed.some((f) => f.name === "no_prediction") && predictionMatch(s)) return false;
+    if (failed.some((f) => f.name === "no_result_promise") && resultPromiseMatch(s)) return false;
     if (failed.some((f) => f.name === "no_capability_denial") && (callDenial(s) || /\b(can(no|')?t|unable to|this is (just )?text)\b.{0,40}\bcalls?\b/i.test(s))) return false;
     if (failed.some((f) => f.name === "no_invite_sent_claim") && INVITE_ACTION_VERB.test(s)) return false;
     if (failed.some((f) => f.name === "no_group_chat_claim") && claimsGroupChat(s)) return false;

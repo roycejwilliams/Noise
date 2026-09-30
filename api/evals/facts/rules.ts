@@ -190,5 +190,13 @@ check("every unprompted text goes on the record", (src("harness/proactive.ts").m
 check("Co's replies read the record, including older things they name", /const ledger = opts\.turn\?\.ledger \?\? \(await ledgerFacts\(userId, opts\.context \?\? ""\)/.test(src("harness/replyGrounding.ts")) && /ledgerFacts\(userId, `\$\{message\}\\n\$\{opts\.ledgerContext \?\? ""\}`\)/.test(src("services/turnContext.ts")) && /turnP = assembleContext\(user\.id, resolvedContent, \{\s*inlineTarget,\s*ledgerContext:/.test(src("routes/sendblue.ts")) && /turn: turn \?\? undefined,/.test(src("routes/sendblue.ts")));
 check("the record starts filled from what was already logged", /backfillCoActions\(\)/.test(src("db/migrations.ts")));
 
+// 2026-09-30: replies promised results ("I'll get you real options before Friday") that no search had found.
+{
+  const RG = await import("../../src/harness/replyGrounding.js");
+  const bad = ["I'll keep digging and get you a couple of real options before Friday.", "On it, I'll dig up a couple of real caterer options for 60 people and get back to you before Friday.", "I'll find you one more indoor option so you've got a real choice by Friday.", "You'll have options by Thursday."];
+  const good = ["I'll look at indoor spots and text you Thursday.", "I'll send you the link.", "I'll check again before Friday.", "Want me to find a couple more options?", "I'll get back to you once I've looked."];
+  check("a promised result is caught; a promised action isn't", bad.every((t) => !!RG.resultPromiseMatch(t)) && good.every((t) => !RG.resultPromiseMatch(t)));
+  check("a promised result is cut, the rest of the reply kept", RG.stripUnsupported("Indoor it is. I'll get you a couple of real options before Friday.", [{ name: "no_result_promise", pass: false }] as any) === "Indoor it is.");
+}
 console.log(`facts rules: ${total - failed}/${total} passed`);
 if (failed) process.exitCode = 1;

@@ -104,6 +104,8 @@ Only change the notes if what they just said makes clear how they want Co to tex
 
 8. advice: this one is about Co's own LAST line (the final "assistant" line), not the person's words and not earlier lines. Does that last line tell the person what to do about something specific in their life: how to handle a decision, a pitch, a hard conversation, or steps for a plan? Advice is any suggestion of an approach or a set of steps ("start by...", "I'd...", "bring a number", "say it early"), even when it ends with a question. It is not advice when the line only gives facts or event details, names events, answers a yes/no fact question, makes small talk, or only asks a question. If it is advice: {"topic": "a few words", "gist": "what Co advised, in one sentence"}. Otherwise null.
 
+9. met_someone: did the person say, in their own words in their LAST message, that they met someone at an event (a person they talked to, got a contact from, hit it off with)? If yes, a short quote of exactly their words saying it. Otherwise null. Not for people they already knew, and not for plans to meet someone.
+
 Return ONLY valid JSON, no preamble:
 {"profile": {"life_chapters": [], "social_energy": null, "connection_style": "", "activity_preferences": [], "goals": [], "blockers": [], "availability_pattern": "", "city": "", "emotional_state": "", "long_term_direction": ""},
  "resolved": {"resolved_goals": [{"item": "...", "quote": "..."}], "resolved_blockers": [{"item": "...", "quote": "..."}], "resolved_asks": [{"index": 0, "quote": "..."}]},
@@ -112,7 +114,8 @@ Return ONLY valid JSON, no preamble:
  "intent": {"asks": [{"text": "...", "type": "seeking"}], "concrete_preferences": [], "wants": [], "availability": null},
  "planned_event": {"event_name": null, "event_date": null, "event_location": null},
  "style": {"changed": false} or {"changed": true, "notes": ["..."]},
- "advice": null or {"topic": "...", "gist": "..."}}`;
+ "advice": null or {"topic": "...", "gist": "..."},
+ "met_someone": null or "their exact words"}`;
 }
 
 export type TurnLearning = {
@@ -125,6 +128,8 @@ export type TurnLearning = {
   style: { changed?: boolean; notes?: unknown } | null;
   // What Co advised in this reply, when it did (services/advice.ts).
   advice: { topic: string; gist: string } | null;
+  // Their words saying they met someone at an event (the morning report counts it).
+  metSomeone: string | null;
 };
 
 export function parseTurnLearning(text: string): TurnLearning | null {
@@ -140,6 +145,7 @@ export function parseTurnLearning(text: string): TurnLearning | null {
       planned_event: p.planned_event && typeof p.planned_event === "object" ? p.planned_event : null,
       style: p.style && typeof p.style === "object" ? p.style : null,
       advice: p.advice && typeof p.advice.topic === "string" && typeof p.advice.gist === "string" ? { topic: p.advice.topic, gist: p.advice.gist } : null,
+      metSomeone: typeof p.met_someone === "string" && p.met_someone.trim() ? p.met_someone.trim().slice(0, 200) : null,
     };
   } catch {
     return null;
@@ -225,8 +231,10 @@ export async function learnFromTextTurn(input: TurnLearningInput): Promise<TurnL
         ? applyStyleUpdate(input.userId, styleNotes, learned.style, input.message).catch(() => null)
         : Promise.resolve(null),
       // The advice Co gave in this reply, so it can ask how it went later.
-      // Same note the noteAdvice tool writes; a repeat topic is skipped.
+      // The only place advice is recorded (the noteAdvice tool fired 1 time in 8 and was removed, 2026-09-30); a repeat topic is skipped.
       learned.advice ? recordAdvice(input.userId, learned.advice.topic, learned.advice.gist).catch(() => false) : Promise.resolve(false),
+      // They said they met someone: on their most recent Co event, only if the quote is theirs.
+      learned.metSomeone && metQuoteIsTheirs(learned.metSomeone, input.message) ? recordMetSomeone(input.userId, learned.metSomeone).catch(() => null) : Promise.resolve(null),
     ]);
     await recordDecision({
       layer: 4,
@@ -241,4 +249,27 @@ export async function learnFromTextTurn(input: TurnLearningInput): Promise<TurnL
     console.error("turnLearning failed (non-fatal):", err?.message ?? err);
     return null;
   }
+}
+
+export function metQuoteIsTheirs(quote: string, message: string): boolean {
+  const norm = (t: string) => t.toLowerCase().replace(/[’‘]/g, "'").replace(/[^a-z0-9' ]+/g, " ").replace(/\s+/g, " ").trim();
+  const q = norm(quote);
+  return q.length >= 4 && norm(message).includes(q);
+}
+
+// The Co event they were at in the last two days (asked about, texted before, or arrived).
+export async function recordMetSomeone(userId: string, quote: string): Promise<string | null> {
+  const { rows } = await pool.query(
+    `UPDATE event_presence SET met_someone_at = NOW(), met_quote = $2
+     WHERE (event_api_id, user_id) = (
+       SELECT event_api_id, user_id FROM event_presence
+       WHERE user_id = $1 AND met_someone_at IS NULL
+         AND GREATEST(COALESCE(arrived_at, 'epoch'), COALESCE(pre_arrival_sent_at, 'epoch'), COALESCE(asked_at, 'epoch')) > NOW() - INTERVAL '48 hours'
+       ORDER BY GREATEST(COALESCE(arrived_at, 'epoch'), COALESCE(pre_arrival_sent_at, 'epoch'), COALESCE(asked_at, 'epoch')) DESC LIMIT 1)
+     RETURNING event_api_id`,
+    [userId, quote.slice(0, 200)],
+  );
+  const eventId = rows[0]?.event_api_id ?? null;
+  await recordDecision({ layer: 6, decision: "event.met_someone", userId, outcome: eventId ? "act" : "skip", action: eventId ? "recorded" : "no_recent_event", proposal: { eventId } }).catch(() => {});
+  return eventId;
 }

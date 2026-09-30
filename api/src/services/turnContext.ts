@@ -64,6 +64,8 @@ export type TurnContext = {
   advice?: string[];
   // Co's open tasks for them (services/coTasks.ts), as scheduled facts.
   tasks?: string[];
+  // The Co event they're registered for today, if any (services/eventPresence.ts).
+  todayEvent?: { eventApiId: string; name: string; startAt: string; timezone: string | null } | null;
 };
 
 const nameKey = (n: string) => `name:${n.toLowerCase()}`;
@@ -253,13 +255,14 @@ export async function assembleContext(
   ]);
   // Their Google, read from the cache in their own time zone (never fetched while they wait).
   const google = await loadGoogleFacts(userId, profile?.city ?? null).catch(() => [] as string[]);
-  const [kit, story, advice, tasks] = await Promise.all([
+  const [kit, story, advice, tasks, todayEvent] = await Promise.all([
     loadKit(userId).catch(() => ({}) as Kit),
     loadMilestones(userId).then((m) => storyLines(m, 4)).catch(() => [] as string[]),
     loadAdvice(userId).then((a) => adviceLines(a)).catch(() => [] as string[]),
     openTasks(userId).then((t) => taskFactLines(t)).catch(() => [] as string[]),
+    import("./eventPresence.js").then((e) => e.todayEventFor(userId)).catch(() => null),
   ]);
-  return { userId, message, profile, snapshot, sent, asks, threads, offersThisWeek, emotional, lessons, inlineTarget, ledger, capabilities: capabilitySheet(), google, kit, story, advice, tasks };
+  return { userId, message, profile, snapshot, sent, asks, threads, offersThisWeek, emotional, lessons, inlineTarget, ledger, capabilities: capabilitySheet(), google, kit, story, advice, tasks, todayEvent };
 }
 
 async function loadGoogleFacts(userId: string, city: string | null): Promise<string[]> {

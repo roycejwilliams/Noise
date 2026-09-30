@@ -1,7 +1,7 @@
 import { notToTeammate } from "../services/teamLines.js";
 import { z } from "zod";
 import { tool } from "ai";
-import { teamOnlyTools, toolUse } from "../services/capabilities.js";
+import { situationFor, teamOnlyTools, toolsOutOfSituation, toolUse } from "../services/capabilities.js";
 import { guardTools } from "./toolGuard.js";
 import { sendLimiter } from "../services/sendLimiter.js";
 import sendblue, { cleanCoMessage, sendReaction } from "../services/sendblue.js";
@@ -495,24 +495,6 @@ export function createConversationTools(ctx: ConversationToolContext) {
         if (!ctx.dryRun) await import("../services/preArrival.js").then((P) => P.setGoing(today.eventApiId, ctx.userId, going));
         ctx.facts?.add("did_this_turn", going ? `Noted they're going to "${today.name}".` : `Noted they can't make "${today.name}"; Co won't send them anything more about it.`);
         return { ok: true };
-      },
-    }),
-
-    // Co's own note of the advice it gave (services/advice.ts).
-    noteAdvice: tool({
-      description: toolUse("noteAdvice"),
-      inputSchema: z.object({
-        topic: z.string().describe("What it was about, in a few words."),
-        gist: z.string().describe("What you advised, in one sentence, in your own words."),
-      }),
-      execute: async ({ topic, gist }) => {
-        if (ctx.dryRun) {
-          console.log(`[conversationReply dryRun] would note advice for ${ctx.userId}: ${topic}`);
-          return { ok: true };
-        }
-        const { recordAdvice } = await import("../services/advice.js");
-        const saved = await recordAdvice(ctx.userId, topic, gist).catch(() => false);
-        return saved ? { ok: true, note: "Noted. Don't mention that you noted it." } : { ok: false, error: "Already noted lately, or too thin to keep. Carry on." };
       },
     }),
 
@@ -1098,6 +1080,12 @@ export function createConversationTools(ctx: ConversationToolContext) {
 
   // Team-only tools never exist for anyone else (services/capabilities.ts teamOnly).
   if (!ctx.isTeam) for (const name of teamOnlyTools()) delete (tools as Record<string, unknown>)[name];
+  // Tools that can't apply this turn aren't offered (capabilities.ts situations).
+  if (ctx.turn) {
+    const t = ctx.turn;
+    const s = situationFor({ kitFields: Object.keys(t.kit ?? {}).length, message: ctx.resolvedContent, openTasks: t.tasks?.length ?? 0, eventToday: !!t.todayEvent });
+    for (const name of toolsOutOfSituation(s)) delete (tools as Record<string, unknown>)[name];
+  }
 
   // Google Calendar and Gmail, read-only (services/googleTools.ts).
   Object.assign(tools, googleTools(ctx, notDone));

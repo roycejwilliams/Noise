@@ -100,7 +100,7 @@ export async function runMigrations(): Promise<void> {
       )`,
     )
     // The pre-arrival text and opt-in location, per event (services/preArrival.ts, 2026-09-30).
-    .then(() => pool.query(`ALTER TABLE event_presence ADD COLUMN IF NOT EXISTS pre_arrival_sent_at TIMESTAMPTZ, ADD COLUMN IF NOT EXISTS location_yes_at TIMESTAMPTZ, ADD COLUMN IF NOT EXISTS location_yes_quote TEXT, ADD COLUMN IF NOT EXISTS location_stopped_at TIMESTAMPTZ, ADD COLUMN IF NOT EXISTS not_going_at TIMESTAMPTZ, ADD COLUMN IF NOT EXISTS far_note_sent_at TIMESTAMPTZ`))
+    .then(() => pool.query(`ALTER TABLE event_presence ADD COLUMN IF NOT EXISTS pre_arrival_sent_at TIMESTAMPTZ, ADD COLUMN IF NOT EXISTS location_yes_at TIMESTAMPTZ, ADD COLUMN IF NOT EXISTS location_yes_quote TEXT, ADD COLUMN IF NOT EXISTS location_stopped_at TIMESTAMPTZ, ADD COLUMN IF NOT EXISTS not_going_at TIMESTAMPTZ, ADD COLUMN IF NOT EXISTS far_note_sent_at TIMESTAMPTZ, ADD COLUMN IF NOT EXISTS met_someone_at TIMESTAMPTZ, ADD COLUMN IF NOT EXISTS met_quote TEXT`))
     .catch((err: Error) => console.error("event_presence table init failed:", err));
 
   // Test events and test locations for test members, co-test and local only
