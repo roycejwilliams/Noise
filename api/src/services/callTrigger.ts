@@ -1,3 +1,4 @@
+import { isTestNumber } from "./testNumbers.js";
 import twilio from "twilio";
 import type { Server as IOServer } from "socket.io";
 import pool from "../db/db.js";
@@ -43,6 +44,8 @@ export async function triggerCallForUser(
   );
   const user = userResult.rows[0];
   if (!user) return { success: false, error: "User not found." };
+  // A test member's number is fictional (services/testNumbers.ts): never dial it.
+  if (isTestNumber(user.phone_number)) return { success: false, error: "Test member: calls aren't placed." };
 
   const callState = await gatherCallState(userId, user, auth);
   const gateResult = decideCall(callState, auth, new Date());

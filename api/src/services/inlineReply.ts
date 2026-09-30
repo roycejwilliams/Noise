@@ -1,3 +1,4 @@
+import { isTestHandle } from "./testNumbers.js";
 // iMessage inline replies (Royce, 2026-09-28: "I think we should do inline
 // replies", after Instinct answered a text threaded under it). Two sides:
 //
@@ -46,6 +47,15 @@ export async function repliedTo(body: any, memberPhone: string): Promise<Replied
 
 async function lookUp(handle: unknown, memberPhone: string): Promise<RepliedTo | null> {
   if (typeof handle !== "string" || !handle) return null;
+  // A test member's messages never went through Sendblue (services/testNumbers.ts):
+  // Co's own send log has them.
+  if (isTestHandle(handle)) {
+    const { default: pool } = await import("../db/db.js");
+    const { rows } = await pool
+      .query(`SELECT ob.content FROM outbound_messages ob JOIN users u ON u.id = ob.user_id WHERE ob.message_handle = $1 AND u.phone_number = $2`, [handle, memberPhone])
+      .catch(() => ({ rows: [] as any[] }));
+    return rows[0] ? targetFromMessage({ content: rows[0].content, is_outbound: true, number: memberPhone }, memberPhone) : null;
+  }
   if (!process.env.SENDBLUE_API_KEY || !process.env.SENDBLUE_SECRET_KEY) return null;
   // Straight to the API: services/sendblue.ts's wrapper only carries send.
   try {

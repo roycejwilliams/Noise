@@ -1,3 +1,4 @@
+import { isTestHandle, isTestNumber, testHandle } from "./testNumbers.js";
 import { AsyncLocalStorage } from "node:async_hooks";
 import { sendLimiter } from "./sendLimiter.js";
 import { createHash, timingSafeEqual } from "crypto";
@@ -183,7 +184,11 @@ const sendblue = {
           new Error(`sendblue: send breaker open for ...${String(to ?? "").slice(-4)}, refusing to send (${limit.reason === "unprompted" ? `${limit.count} texts with no reply` : `${limit.count} texts in 10 minutes`})`),
         );
       }
-      return client.messages.send({ ...body, content }, options).then((res: any) => {
+      // A test member (services/testNumbers.ts): logged like a real send, never sent.
+      const sent: Promise<any> = isTestNumber(to)
+        ? Promise.resolve({ message_handle: testHandle(), status: "SENT", test: true })
+        : client.messages.send({ ...body, content }, options);
+      return sent.then((res: any) => {
         // Every message Co sends, kept by its handle so a later reply can
         // thread under it (services/inlineReply.ts sentMessageHandle).
         if (res?.message_handle) recordOutbound(String(res.message_handle), to ?? "", content ?? "");
@@ -205,6 +210,7 @@ export default sendblue;
 // sender sees it was read, even while the reply is still being worked on.
 // Sendblue sends these only for iMessage/RCS, best effort; never blocks.
 export async function markRead(number: string): Promise<void> {
+  if (isTestNumber(number)) return;
   const from = process.env.SENDBLUE_PHONE_NUMBER;
   if (!from || !process.env.SENDBLUE_API_KEY || !process.env.SENDBLUE_SECRET_KEY) return;
   try {
@@ -228,6 +234,8 @@ export async function markRead(number: string): Promise<void> {
 // Apple only delivers these on iMessage, so the caller falls back to a plain
 // emoji text when this returns false.
 export async function sendReaction(messageHandle: string, reaction: string): Promise<boolean> {
+  // A test member's message: the tapback counts as given, nothing is sent.
+  if (isTestHandle(messageHandle)) return true;
   const from = process.env.SENDBLUE_PHONE_NUMBER;
   if (!from || !process.env.SENDBLUE_API_KEY || !process.env.SENDBLUE_SECRET_KEY) return false;
   try {
