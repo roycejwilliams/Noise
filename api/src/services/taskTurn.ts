@@ -14,7 +14,7 @@ import { z } from "zod";
 import pool from "../db/db.js";
 import { MODELS } from "../models.js";
 import { recordDecision } from "../harness/core.js";
-import { checkDraft, draftProactive, localHourOk, sendExempt } from "../harness/proactive.js";
+import { checkDraft, draftAgain, draftProactive, localHourOk, sendExempt } from "../harness/proactive.js";
 import { searchWithTimeCap } from "../agent/conversationTools.js";
 import { closeTask, isExhausted, isFinalCheck, markFinalTold, markTexted, mayText, noteOnTask, scheduleTask, taskTextsToday, TASK_LIMITS, clampNextHours, type CoTask } from "./coTasks.js";
 import { describeRead, excerptFact, readLink } from "./linkReader.js";
@@ -100,7 +100,7 @@ export async function runTaskTurnWith(task: CoTask, deps: TaskTurnDeps): Promise
           events_found: events.map((e) => `${e.name}${e.url ? ` (${e.url})` : ""}${e.facts.length ? `: ${e.facts.join("; ")}` : ""}`).join(" | ") || "(none)",
           verified_page_facts: pageFacts.join(" | ") || "(none)",
         };
-        const text = await draftProactive({
+        let text = await draftProactive({
           functionId: "taskTurn.tell",
           firstName: deps.person.first_name || "them",
           facts,
@@ -108,7 +108,18 @@ export async function runTaskTurnWith(task: CoTask, deps: TaskTurnDeps): Promise
           maxSentences: 4,
         }).catch(() => null);
         if (!text) return { ok: false, error: "Nothing worth sending came out of the verified facts. Note it and schedule the next look." };
-        const failed = checkDraft(text, { maxSentences: 4, maxChars: 480 }).filter((c) => !c.pass);
+        let failed = checkDraft(text, { maxSentences: 4, maxChars: 480 }).filter((c) => !c.pass);
+        // One redraft with what broke, in code, so a long first draft doesn't use up
+        // Co's steps (2026-09-30: three verified caterers found, nothing sent).
+        if (failed.length) {
+          const again = await draftAgain({ draft: text, failed: failed.map((f) => f.reason ?? f.name).join("; ") }, () =>
+            draftProactive({ functionId: "taskTurn.tell", firstName: deps.person.first_name || "them", facts, task: `Tell them where this stands in at most 3 short sentences. What to get across (a guide, not a source: state only what's in CONFIRMED_FACTS): ${what}. No links in the text. Never offer to call, book, reserve or contact anyone for them. No sign-off.`, maxSentences: 3 }),
+          ).catch(() => null);
+          if (again) {
+            text = again;
+            failed = checkDraft(text, { maxSentences: 4, maxChars: 480 }).filter((c) => !c.pass);
+          }
+        }
         if (failed.length) return { ok: false, error: `The draft broke a rule (${failed.map((f) => f.name).join(", ")}). Note it and schedule the next look.` };
         const nums = numbersBacked(text, Object.values(facts).join(" "));
         if (!nums.ok) return { ok: false, error: `The draft had numbers no verified fact backs (${nums.missing.join(", ")}). Tell them only verified facts.` };
@@ -200,7 +211,7 @@ export async function runTaskTurnWith(task: CoTask, deps: TaskTurnDeps): Promise
       providerOptions: { anthropic: { effort: "medium" } },
       experimental_telemetry: { isEnabled: true, functionId: "taskTurn.run" },
       tools,
-      stopWhen: [stepCountIs(8), () => decided !== null],
+      stopWhen: [stepCountIs(12), () => decided !== null],
       prompt: taskTurnPrompt({ task, firstName: deps.person.first_name || "them", now: deps.now().toISOString().slice(0, 16), zone: deps.zone, recent: deps.recent, final }),
     });
   } catch (err: any) {

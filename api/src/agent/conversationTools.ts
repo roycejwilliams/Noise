@@ -402,10 +402,12 @@ export function createConversationTools(ctx: ConversationToolContext) {
         }
         // A deadline they gave, checked against their words and their time zone.
         let dl: { deadline: string; finalCheckAt: string } | null = null;
-        if (deadline) {
-          const city = ctx.turn?.profile?.city ?? null;
-          const zone = city ? await import("../services/geocoding.js").then((g) => g.getTimezoneForCity(city)).catch(() => null) : null;
-          const d = T.planDeadline({ date: deadline.date, words: deadline.theirWords }, `${ctx.resolvedContent}\n${recent}`, zone, new Date());
+        const city = ctx.turn?.profile?.city ?? null;
+        const zone = city ? await import("../services/geocoding.js").then((g) => g.getTimezoneForCity(city)).catch(() => null) : null;
+        // Co left off a deadline they gave: code finds it in their words.
+        const given = deadline ? { date: deadline.date, theirWords: deadline.theirWords } : (() => { const f = T.deadlineFromWords(ctx.resolvedContent, zone, new Date()); return f ? { date: f.date, theirWords: f.words } : null; })();
+        if (given) {
+          const d = T.planDeadline({ date: given.date, words: given.theirWords }, `${ctx.resolvedContent}\n${recent}`, zone, new Date());
           if (d.ok) dl = { deadline: d.deadline, finalCheckAt: d.finalCheckAt };
           else notDone(`The deadline wasn't kept on the task: ${d.why}.`);
         }

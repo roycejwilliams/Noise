@@ -49,7 +49,7 @@ check("a follow-up promise is not cut when Co has an open task", /const tasked =
 
 // Wiring
 const tt = src("services/taskTurn.ts");
-check("a wake-up must end with Co's decision, or it looks again in a day", /stopWhen: \[stepCountIs\(8\), \(\) => decided !== null\]/.test(tt) && /if \(!decided\) await deps\.schedule\(24,/.test(tt));
+check("a wake-up must end with Co's decision, or it looks again in a day", /stopWhen: \[stepCountIs\(12\), \(\) => decided !== null\]/.test(tt) && /if \(!decided\) await deps\.schedule\(24,/.test(tt));
 check("a task text is drafted only from verified facts, and checked", /draftProactive\(/.test(tt) && /checkDraft\(text/.test(tt) && /mayText\(task, await deps\.textsToday\(\)/.test(tt));
 check("a task text only sends links from results that passed", /const known = \(links \?\? \[\]\)\.filter\(linkOk\)/.test(tt));
 check("a task text goes out only inside their hours, never held in memory", /if \(!localHourOk\(deps\.now\(\), deps\.zone\)\) return/.test(tt) && /respectHours: true/.test(tt) && !/sendExemptWhenAllowed\(/.test(tt));
@@ -80,7 +80,15 @@ check("at most 3 web searches per wake-up", /filter\(\(d\) => d\.startsWith\("we
 }
 check("their text wakes a task that texted them, and runs it once their reply is out", /const woke = await T\.wakeOnReply\(user\.id\)/.test(src("routes/sendblue.ts")) && /awaiting_reply = true/.test(src("services/coTasks.ts")));
 check("the last check never goes quiet: if Co didn't tell them, code does", /if \(final && !texts\.length\) \{/.test(tt) && /if \(final && texts\.length\) await deps\.markFinalTold\(\)/.test(tt));
-check("a deadline is checked against their words before it's kept", /T\.planDeadline\(\{ date: deadline\.date, words: deadline\.theirWords \}/.test(src("agent/conversationTools.ts")));
+check("a deadline is checked against their words before it's kept", /T\.planDeadline\(\{ date: given\.date, words: given\.theirWords \}/.test(src("agent/conversationTools.ts")));
+
+{
+  const now = new Date("2026-09-30T18:00:00Z");
+  check("a deadline in their words is found when Co leaves it off", JSON.stringify(T.deadlineFromWords("I need a couple of options by Friday.", "America/Los_Angeles", now)) === JSON.stringify({ date: "2026-10-02", words: "by Friday" }));
+  check("an event's own date is never read as a deadline", T.deadlineFromWords("a caterer for my Oct 10 party", "America/Los_Angeles", now) === null);
+  check("other deadline wordings work", T.deadlineFromWords("before next Tuesday", "America/Los_Angeles", now)?.date === "2026-10-06" && T.deadlineFromWords("no later than Oct 5", "America/Los_Angeles", now)?.date === "2026-10-05");
+}
+check("a draft that breaks a rule is redrafted once in code", /const again = await draftAgain\(/.test(tt) && /stepCountIs\(12\)/.test(tt));
 
 console.log(`task rules: ${total - failed}/${total} passed`);
 if (failed) process.exitCode = 1;

@@ -19,6 +19,7 @@
 //   - when they reply to a task's text, the task wakes within minutes
 // Owner-scoped: every read and write uses the member's own id.
 import { DateTime } from "luxon";
+import { parseAskWindow } from "./askWindow.js";
 import pool from "../db/db.js";
 
 export type TaskStep = { text: string; done: boolean };
@@ -104,6 +105,20 @@ export function planDeadline(input: { date: unknown; words: unknown }, theirText
   const morning = day.set({ hour: TASK_LIMITS.finalCheckHour });
   const final = morning.toMillis() > now.getTime() + HOUR ? morning.toJSDate() : new Date(now.getTime() + HOUR);
   return { ok: true, deadline: date, finalCheckAt: final.toISOString() };
+}
+
+// A deadline in their own words that Co left off the task ("I need options by
+// Friday", 2026-09-30). Only after "by", "before", "no later than" or "due", so an
+// event's own date ("my Oct 10 party") is never read as a deadline.
+export function deadlineFromWords(theirText: string, zone: string | null, now: Date): { date: string; words: string } | null {
+  const z = zone && DateTime.now().setZone(zone).isValid ? zone : "America/Los_Angeles";
+  for (const m of theirText.matchAll(/\b(by|before|no later than|due)\s+([^.,;!?\n]{2,30})/gi)) {
+    const w = parseAskWindow(m[2], DateTime.fromJSDate(now).setZone(z));
+    if (!w) continue;
+    const date = w.end.toISODate();
+    if (date) return { date, words: m[0].trim() };
+  }
+  return null;
 }
 
 // No check-in past the last one before the deadline.
