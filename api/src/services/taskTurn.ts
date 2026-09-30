@@ -96,6 +96,8 @@ export async function runTaskTurn(task: CoTask): Promise<{ action: string }> {
       description: "Search the whole web for anything the task needs that isn't an event: venues, vendors, prices, people, how-tos, programs. One plain sentence of what to find.",
       inputSchema: z.object({ what: z.string() }),
       execute: async ({ what }) => {
+        // At most 3 web searches per wake-up; the budget is shared with the sweep.
+        if (did.filter((d) => d.startsWith("web:")).length >= 3) return { found: [], note: "That's the web searches for this wake-up. Work with what you have, note it, and schedule the next look." };
         did.push(`web: ${what}`);
         const budget = await reserveWebSearch(userId, "sweep", what);
         if (!budget.ok) return { found: [], note: `No web search right now: ${budget.reason}.` };

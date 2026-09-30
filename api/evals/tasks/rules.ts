@@ -59,5 +59,7 @@ check("due tasks are claimed so two runs never work one", /FOR UPDATE SKIP LOCKE
 check("the tools are Co's, guarded like every other ability", ["startTask", "updateTask", "closeTask"].every((t) => new RegExp(`tool: "${t}"`).test(src("services/capabilities.ts")) && new RegExp(`${t}: tool\\(`).test(src("agent/conversationTools.ts"))));
 check("replies read open tasks as scheduled facts", /openTasks\(userId\)\.then\(\(t\) => taskFactLines\(t\)\)/.test(src("services/turnContext.ts")) && /opts\.turn\?\.tasks \?\? \[\]\) addFact\(rf, "scheduled"/.test(src("harness/replyGrounding.ts")));
 
+check("at most 3 web searches per wake-up", /filter\(\(d\) => d\.startsWith\("web:"\)\)\.length >= 3/.test(tt));
+
 console.log(`task rules: ${total - failed}/${total} passed`);
 if (failed) process.exitCode = 1;
