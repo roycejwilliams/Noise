@@ -75,6 +75,27 @@ export const ABILITIES: Ability[] = [
     use: "Share the link (or links) for what you're about to tell them about. Each one is sent as its own message so it previews, and they go out BEFORE your reply, in the order you list them, so call this first and then describe them with sendReply. If you mention two things, share both links. Only links that appear in the facts you were given.",
   },
   {
+    id: "task_start",
+    can: "When they ask for something that takes more than one reply (a venue by Friday, sponsors lined up, getting ready for a pitch, a few options compared), Co takes it on as its own task: it writes the steps, works on it on its own over the following days, texts them when there's something real, and decides when to look again. Co can truthfully say when it'll get back to them.",
+    tool: "startTask",
+    limits: { perTurn: 1, perDay: 3 },
+    use: "Take on something that needs work over more than this one reply: when they ask you to do it, or you offer and they say yes. Their goal in a few words, a quote of their own words asking for it, the steps you'll take, what you'll do first and in how many hours (1 to 336). Then you can tell them plainly when you'll get back to them. For a search that just needs repeating, saveAsk is enough.",
+  },
+  {
+    id: "task_update",
+    can: "Co keeps its tasks current as they tell it things: a step done, a new detail, a change of plan or timing.",
+    tool: "updateTask",
+    limits: { perTurn: 2 },
+    use: "When they tell you something about one of your open tasks (a detail, a decision, 'push it to next week', 'I found one myself'), write it on the task and, if it changes when you should look next, set that.",
+  },
+  {
+    id: "task_close",
+    can: "Co closes a task when it's done or they don't need it anymore.",
+    tool: "closeTask",
+    limits: { perTurn: 2 },
+    use: "Close one of your open tasks when it's done or they say they no longer need it. Then say so plainly.",
+  },
+  {
     id: "save_ask",
     can: "Co can save something they want found that its search can find (people doing something, events, a community, a posted program or opportunity) so its daily search keeps looking and texts them when something real fits. Finding sponsors, investors or funding themselves, and advice, are kept on file but not searched; events where investors or sponsors show up can be saved and searched. It can't dig up a missing detail about something already sent.",
     tool: "saveAsk",

@@ -1,3 +1,4 @@
+import { notToTeammate } from "../services/teamLines.js";
 import { z } from "zod";
 import { tool } from "ai";
 import { teamOnlyTools, toolUse } from "../services/capabilities.js";
@@ -369,6 +370,78 @@ export function createConversationTools(ctx: ConversationToolContext) {
         }
         if (!ctx.dryRun) await saveKitFact(ctx.userId, key, checked.value);
         ctx.facts?.add("did_this_turn", `Saved ${KIT_LABELS[key]}: ${checked.value}.`);
+        return { ok: true };
+      },
+    }),
+
+    // Co's own multi-day work (services/coTasks.ts): Co writes the plan and when to look next.
+    startTask: tool({
+      description: toolUse("startTask"),
+      inputSchema: z.object({
+        goal: z.string().describe("What you're working on for them, in a few words."),
+        theirWords: z.string().describe("A quote of their own words asking for it, copied exactly from their message."),
+        steps: z.array(z.string()).max(8).describe("The steps you'll take, in order."),
+        firstStep: z.string().describe("What you'll do first."),
+        inHours: z.number().describe("When you'll work on it first, in hours from now (1 to 336)."),
+      }),
+      execute: async ({ goal, theirWords, steps, firstStep, inHours }) => {
+        const T = await import("../services/coTasks.js");
+        const recent = ctx.dryRun
+          ? ""
+          : await pool
+              .query(`SELECT content FROM co_memories WHERE user_id = $1 AND memory_type = 'text_exchange' AND content LIKE 'User said:%' AND ${notToTeammate()} ORDER BY created_at DESC LIMIT 6`, [ctx.userId])
+              .then((r) => r.rows.map((x: any) => String(x.content)).join("\n"))
+              .catch(() => "");
+        if (!T.wordsAreTheirs(theirWords, `${ctx.resolvedContent}\n${recent}`)) {
+          notDone("No task was started: the quote isn't in their words.");
+          return { ok: false, error: "theirWords must be copied exactly from what they wrote. Don't start a task they didn't ask for." };
+        }
+        if (ctx.dryRun) {
+          ctx.facts?.add("did_this_turn", `Started task: "${goal}". Co will work on it first in about ${T.clampNextHours(inHours)} hours: ${firstStep}.`);
+          return { ok: true };
+        }
+        const r = await T.startTask({ userId: ctx.userId, goal, theirWords, steps, firstPlan: firstStep, inHours });
+        if (!r.ok) {
+          notDone(`No task was started: ${r.why}.`);
+          return { ok: false, error: r.why };
+        }
+        ctx.facts?.add("did_this_turn", `Started task #${r.task.id}: "${r.task.goal}". Co will work on it first around ${r.task.nextCheckAt?.slice(0, 16).replace("T", " ")} UTC: ${firstStep}.`);
+        return { ok: true, taskId: r.task.id, nextCheckAt: r.task.nextCheckAt };
+      },
+    }),
+    updateTask: tool({
+      description: toolUse("updateTask"),
+      inputSchema: z.object({
+        taskId: z.number(),
+        note: z.string().describe("What they told you or what changed, in one plain sentence."),
+        stepDone: z.string().optional(),
+        nextInHours: z.number().optional().describe("Only if it changes when you should look next."),
+        nextPlan: z.string().optional(),
+      }),
+      execute: async ({ taskId, note, stepDone, nextInHours, nextPlan }) => {
+        if (ctx.dryRun) return { ok: true };
+        const T = await import("../services/coTasks.js");
+        const t = await T.noteOnTask(ctx.userId, taskId, note, stepDone ?? null);
+        if (!t) {
+          notDone(`Task #${taskId} wasn't updated: it isn't one of their open tasks.`);
+          return { ok: false, error: "No open task with that id." };
+        }
+        if (nextInHours !== undefined) await T.scheduleTask(ctx.userId, taskId, nextInHours, nextPlan ?? t.planNext ?? "");
+        ctx.facts?.add("did_this_turn", `Updated task #${taskId}: ${note}`);
+        return { ok: true };
+      },
+    }),
+    closeTask: tool({
+      description: toolUse("closeTask"),
+      inputSchema: z.object({ taskId: z.number(), status: z.enum(["done", "dropped"]), outcome: z.string() }),
+      execute: async ({ taskId, status, outcome }) => {
+        if (ctx.dryRun) return { ok: true };
+        const T = await import("../services/coTasks.js");
+        if (!(await T.closeTask(ctx.userId, taskId, status, outcome))) {
+          notDone(`Task #${taskId} wasn't closed: it isn't one of their open tasks.`);
+          return { ok: false, error: "No open task with that id." };
+        }
+        ctx.facts?.add("did_this_turn", `Closed task #${taskId} (${status}): ${outcome}`);
         return { ok: true };
       },
     }),

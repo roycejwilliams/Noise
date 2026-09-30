@@ -1908,6 +1908,30 @@ export async function runMigrations(): Promise<void> {
     .catch((err: Error) => console.error("person_snapshots table init failed:", err));
   await pool
     .query(
+      `CREATE TABLE IF NOT EXISTS co_tasks (
+        id BIGSERIAL PRIMARY KEY,
+        user_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+        goal TEXT NOT NULL,
+        their_words TEXT NOT NULL,
+        steps JSONB NOT NULL DEFAULT '[]'::jsonb,
+        plan_next TEXT,
+        next_check_at TIMESTAMPTZ,
+        status TEXT NOT NULL DEFAULT 'open',
+        wakes INT NOT NULL DEFAULT 0,
+        notes JSONB NOT NULL DEFAULT '[]'::jsonb,
+        texts_sent INT NOT NULL DEFAULT 0,
+        last_texted_at TIMESTAMPTZ,
+        outcome TEXT,
+        created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+        updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+        closed_at TIMESTAMPTZ
+      )`,
+    )
+    .then(() => pool.query(`CREATE INDEX IF NOT EXISTS idx_co_tasks_due ON co_tasks (next_check_at) WHERE status = 'open'`))
+    .then(() => pool.query(`CREATE INDEX IF NOT EXISTS idx_co_tasks_user ON co_tasks (user_id, status)`))
+    .catch((err: Error) => console.error("co_tasks table init failed:", err));
+  await pool
+    .query(
       `CREATE TABLE IF NOT EXISTS member_advice (
         id BIGSERIAL PRIMARY KEY,
         user_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,

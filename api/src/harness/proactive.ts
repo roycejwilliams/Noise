@@ -94,7 +94,8 @@ export type ProactiveType =
 // sendExemptWhenAllowed below.
 // search_result: the answer to a texted search that ran past the reply's time
 // cap, sent when it lands (services/lateSearchResult.ts).
-export type ExemptType = "event_change" | "call_reminder" | "missed_call" | "co_event" | "direct_ask" | "search_result";
+// task_update: Co's own report on work it is doing for them over days (services/taskTurn.ts).
+export type ExemptType = "event_change" | "call_reminder" | "missed_call" | "co_event" | "direct_ask" | "search_result" | "task_update";
 
 // What each proactive message is for (companion / offer / ops) lives in
 // ./proactivePurpose.ts, dependency-free so model-free checks can read it.

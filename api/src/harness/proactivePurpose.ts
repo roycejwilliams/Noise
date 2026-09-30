@@ -23,6 +23,8 @@ export const PROACTIVE_PURPOSE: Record<ProactiveType | ExemptType | "in_room", P
   co_event: "offer",
   direct_ask: "offer",
   search_result: "offer",
+  // Work they asked Co to do for them (services/coTasks.ts).
+  task_update: "companion",
   in_room: "offer",
   product_update: "ops",
   membership_lapse: "ops",

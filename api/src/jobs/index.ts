@@ -184,6 +184,16 @@ export function registerJobs(io: Server) {
   // (services/linkReader.ts); if one that someone was interested in sold out,
   // moved or disappeared, they hear it once (services/staleWatch.ts). Luma
   // reads are free; others about $0.007 each.
+  // Co's own tasks (services/coTasks.ts): each wakes when Co said it would.
+  cron.schedule("*/15 * * * *", async () => {
+    try {
+      const { runDueTasks } = await import("../services/taskTurn.js");
+      await runDueTasks();
+    } catch (err: any) {
+      console.error("task wake cron error:", err?.message ?? err);
+    }
+  });
+
   cron.schedule("40 * * * *", async () => {
     try {
       const { watchSentPages } = await import("../services/staleWatch.js");

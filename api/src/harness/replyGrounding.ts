@@ -240,6 +240,8 @@ export async function gatherReplyFacts(
   for (const line of story) addFact(rf, "known", line);
   // What Co told them lately, so it doesn't contradict itself and can ask how it went.
   for (const line of opts.turn?.advice ?? []) addFact(rf, "did_before", line);
+  // Co's own open tasks: real scheduled work, so saying when it'll get back to them is true.
+  for (const line of opts.turn?.tasks ?? []) addFact(rf, "scheduled", line);
   if (opts.turn) for (const hint of sentDetailHints(opts.turn)) addHint(rf, hint);
   for (const line of ledger.lines) addFact(rf, "did_before", line);
   // They're asking about something the record shows Co sent: the record
@@ -622,7 +624,10 @@ export function codeChecks(draft: string, rf: ReplyFacts, src: GroundingSources)
   const ongoing = rf.facts.some((f) => f.kind === "ongoing");
   const timingCommitment = /\b(the second|the moment|right when|as soon as|right away|immediately|tonight|tomorrow|today|this week)\b/i.test(draft);
   const lookingOnly = found && /keep (looking|watching|an eye|my eyes|eyes)|on the lookout|watch(ing)? for|if (something|anything|one) (real )?(turns up|comes up|fits|shows up)/i.test(found[0] + " " + draft);
-  if (found && !(ongoing && lookingOnly && !timingCommitment)) {
+  // Co's own task is real scheduled work (services/coTasks.ts): a follow-up it
+  // describes is kept, and the claim check still needs it to cite that task.
+  const tasked = rf.facts.some((f) => (f.kind === "scheduled" && /^Co is working on task #/.test(f.text)) || (f.kind === "did_this_turn" && /^Started task/.test(f.text)));
+  if (found && !tasked && !(ongoing && lookingOnly && !timingCommitment)) {
     checks.push({ name: "no_followup_promise", pass: false, reason: `promises a follow-up nothing will do: "${found[0]}"` });
   }
   if (!emotionLabel.pass) checks.push(emotionLabel);

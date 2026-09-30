@@ -8,6 +8,7 @@
 //
 // Every read here is scoped to one member (user_id = $1): nothing about
 // anyone else can enter a member's turn through it.
+import { openTasks, taskFactLines } from "./coTasks.js";
 import { adviceLines, loadAdvice } from "./advice.js";
 import { loadMilestones, storyLines } from "./milestones.js";
 import pool from "../db/db.js";
@@ -61,6 +62,8 @@ export type TurnContext = {
   story?: string[];
   // What Co advised them lately (services/advice.ts).
   advice?: string[];
+  // Co's open tasks for them (services/coTasks.ts), as scheduled facts.
+  tasks?: string[];
 };
 
 const nameKey = (n: string) => `name:${n.toLowerCase()}`;
@@ -250,12 +253,13 @@ export async function assembleContext(
   ]);
   // Their Google, read from the cache in their own time zone (never fetched while they wait).
   const google = await loadGoogleFacts(userId, profile?.city ?? null).catch(() => [] as string[]);
-  const [kit, story, advice] = await Promise.all([
+  const [kit, story, advice, tasks] = await Promise.all([
     loadKit(userId).catch(() => ({}) as Kit),
     loadMilestones(userId).then((m) => storyLines(m, 4)).catch(() => [] as string[]),
     loadAdvice(userId).then((a) => adviceLines(a)).catch(() => [] as string[]),
+    openTasks(userId).then((t) => taskFactLines(t)).catch(() => [] as string[]),
   ]);
-  return { userId, message, profile, snapshot, sent, asks, threads, offersThisWeek, emotional, lessons, inlineTarget, ledger, capabilities: capabilitySheet(), google, kit, story, advice };
+  return { userId, message, profile, snapshot, sent, asks, threads, offersThisWeek, emotional, lessons, inlineTarget, ledger, capabilities: capabilitySheet(), google, kit, story, advice, tasks };
 }
 
 async function loadGoogleFacts(userId: string, city: string | null): Promise<string[]> {
