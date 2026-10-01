@@ -116,8 +116,8 @@ export const CASES: ReplayCase[] = [
     recent: "",
     facts: [],
     message: "What is Co? Give me a full description",
-    must: [/\b(room|event)/i],
-    mustNot: [/moat|being here means something|real work happens between|compound/i],
+    // Moat line is internal framing, never copy (Royce, 2026-10-01).
+    mustNot: [/moat|being here means something|real work happens between|compound/i, /the way a (person|friend|human) would|\b(get|gets|getting) to know you\b|then acts? on it/i],
     why: 'Pitched itself and said its moat was "not event facilitation".',
   },
   {
