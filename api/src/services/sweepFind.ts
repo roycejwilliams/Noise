@@ -24,7 +24,8 @@ export function sweepPrompt(c: SweepCandidate, o: { today: string; picture: stri
 
 ${c.fromProfile ? "They haven't asked for something specific; this is what they've shared they want" : "What they asked Co to keep an eye out for"}: "${c.askText}"
 Where they are: ${c.city ?? "unknown"}. Today: ${o.today}.
-Who they are: ${o.picture || "(little known yet)"}${o.feeling ? `\nHow they've been: ${o.feeling} (this shapes how Co says it, never whether they hear about something)` : ""}
+What you know about them:
+${o.picture || "(little known yet)"}${o.feeling ? `\nHow they've been: ${o.feeling} (this shapes how Co says it, never whether they hear about something)` : ""}
 Already sent to them recently (don't keep these again): ${o.shown.length ? o.shown.slice(0, 15).join("; ") : "(nothing)"}
 
 Search only for this one ask. Other things they're working on (in who they are) are context for judging fit, not things to look for in this sweep, because each ask gets its own sweep (2026-10-01: a founder-events sweep kept a venue from another ask).
@@ -38,7 +39,8 @@ export async function sweepFind(c: SweepCandidate, opts: { timezone?: string | n
   let webQueries = 0;
   let xSearches = 0;
   let reads = 0;
-  const picture = renderSnapshot(await getPersonSnapshot(c.userId).catch(() => null));
+  // The one model of them (services/personModel.ts).
+  const picture = await import("./personModel.js").then((m) => m.personModel(c.userId, { maxDid: 5 })).catch(() => renderSnapshot(null));
   const tools = {
     searchEvents: tool({
       description: "Co's own events, the public event feed, and openings Co already found, in the days you name. Put `when` in plain words (\"next two weeks\", \"this weekend\").",

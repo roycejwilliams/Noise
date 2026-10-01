@@ -26,7 +26,7 @@ const check = (label: string, ok: boolean) => {
 
 // 1. Tapback acknowledgment
 check("ack accepts the club set, with or without the variation selector", ["👀", "✍️", "✍", "🤝", "👍", "❤️", "❤", "😂", "🥂"].every((e) => R.parseAck(e) !== null));
-check("ack rejects anything else, including the startup-cute ones (salute, rocket, raised hands)", [null, undefined, "", "🔥", "🫡", "🚀", "🙌", "hello", 5].every((e) => R.parseAck(e as any) === null));
+check("ack takes one fitting emoji (a plane for a landing), never words, several, or the startup-cute ones", ["✈️", "🥟", "🫂", "👍🏽"].every((e) => R.parseAck(e) !== null) && [null, undefined, "", "🔥", "🫡", "🚀", "🙌", "🎉", "hello", "👀👀", "✈️ nice", 5].every((e) => R.parseAck(e as any) === null) && R.parseAck("✈️") === "✈️");
 
 // Tapbacks spaced out and varied (services/tapbacks.ts, 2026-10-01).
 {
@@ -43,7 +43,7 @@ check("ack rejects anything else, including the startup-cute ones (salute, rocke
   check("searches no longer add a 👀 of their own", !/sendReaction\(ownHandle, "👀"\)/.test(sb) && /HOLD_NO_ACK_MS/.test(sb));
   check("the read sees its recent reactions, and the backstop checks the same history before sending", /readTurn\(routeInput, t, coveragePriorContext\(profile\), \{ reactions: h \? describeTapbacks\(h\) : null \}\)/.test(sb) && /ackAllowed\(ackEmoji, h\)/.test(sb) && /sendReaction\(ackHandle, reactionFor\(ackEmoji\)\)/.test(sb));
   const rt = fs.readFileSync(new URL("../../src/services/readTurn.ts", import.meta.url), "utf8");
-  check("the read is told reactions are rare and follow-ups get none", /Rare: most messages get null/.test(rt) && /a follow-up to something they just asked/.test(rt));
+  check("the read is told reactions are communication: most get none, follow-ups get none, register first, never a heart on bad news, vary", /most messages get null/.test(rt) && /a follow-up to something they just asked/.test(rt) && /Read the emotional register first/.test(rt) && /never "❤️" or "😂"/.test(rt) && /Vary it/.test(rt));
 }
 check("Mo's actions ack by kind", /moApprove: "🚀"/.test(src("mo/teamAgent.ts")) && /moSkip: "👍"/.test(src("mo/teamAgent.ts")) && /moChangeDraft: "✍️"/.test(src("mo/teamAgent.ts")));
 check("the reply path reacts after the read, never blocking the reply", /turn\.ack/.test(src("routes/sendblue.ts")));

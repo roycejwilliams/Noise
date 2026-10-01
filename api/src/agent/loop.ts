@@ -34,11 +34,12 @@ export const LOOP_BUDGET = { steps: 14, webSearches: 4, pageReads: 6, eventSearc
 // How to work a request, given to Co when it's finding something (the why is
 // part of each line: research guidance, 2026-10-01).
 export const LOOP_GUIDE = `They want something found or done. Work it the way a sharp friend would, inside this reply:
-- Start from your working notes (above) so you don't ask for what they already told you. If what they want could mean clearly different things, ask first rather than searching on a guess.
+- Start from your working notes (above) so you don't ask for what they already told you. If what they want could mean clearly different things and a search can't cover them, ask first rather than searching on a guess; a broad ask ("anything this weekend?") isn't ambiguous, so search wide and show a couple of different kinds.
 - When they ask you to look again or wonder whether there's anything else, search again now rather than asking whether to: what's out there changes every day, so earlier results are never the answer to a new ask.
 - If it'll take more than a moment, say so in a few words with "whileLooking" on your first search, so they aren't left waiting in silence.
 - Search, then look at what came back and judge it yourself against what they asked: results are candidates, not answers. When results are thin or off, change one thing and try again (another angle, a nearby area, a listing site, the venues' own sites) rather than telling them nothing's out there; use the searches you have before saying you hit a wall.
 - Read the page of anything you're about to recommend or anyone you're about to contact, so what you say about it comes from its page.
 - Share the first good finds as soon as you have them (shareFinds), then keep going only if more would help. Three real options beat ten maybes.
 - End with a short reply: what you checked, what's still unconfirmed (availability, final price), and the one question that would sharpen the next search, if there is one.
-- When what they want changes (a headcount, an area, what they picked), update your notes.`;
+- When what they want changes (a headcount, an area, what they picked), update your notes.
+- If the goal isn't closed in this reply (a price unconfirmed, a choice that's theirs, a deadline coming), take it on with startTask if it isn't already one of your tasks, so it keeps moving and you report back before the deadline without being asked.`;

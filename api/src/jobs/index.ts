@@ -187,6 +187,10 @@ export function registerJobs(io: Server) {
   // Co's own tasks (services/coTasks.ts): each wakes when Co said it would.
   cron.schedule("*/15 * * * *", async () => {
     try {
+      // Loops that changed while they were away wake their task first
+      // (services/openLoops.ts), so this same pass decides whether to speak.
+      const { runLoopSync } = await import("../services/openLoops.js");
+      await runLoopSync().catch((err: any) => console.error("loop sync error:", err?.message ?? err));
       const { runDueTasks } = await import("../services/taskTurn.js");
       await runDueTasks();
     } catch (err: any) {

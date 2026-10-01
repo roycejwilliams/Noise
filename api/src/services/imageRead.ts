@@ -14,6 +14,39 @@ import { MODELS } from "../models.js";
 // The model's own per-image limit is 5MB; stay under it.
 const MAX_BYTES = 4_800_000;
 
+// The image's format from its first bytes, when it's one the model reads;
+// null otherwise (HEIC, a broken file, something that isn't an image).
+export function imageTypeOf(b: Buffer): "image/jpeg" | "image/png" | "image/gif" | "image/webp" | null {
+  if (b.length < 12) return null;
+  if (b[0] === 0xff && b[1] === 0xd8 && b[2] === 0xff) return "image/jpeg";
+  if (b[0] === 0x89 && b[1] === 0x50 && b[2] === 0x4e && b[3] === 0x47) return "image/png";
+  if (b.toString("ascii", 0, 3) === "GIF") return "image/gif";
+  if (b.toString("ascii", 0, 4) === "RIFF" && b.toString("ascii", 8, 12) === "WEBP") return "image/webp";
+  return null;
+}
+
+// HEIC (the iPhone default) by its own bytes: "ftyp" then heic/heix/mif1/msf1/heif.
+export function isHeic(b: Buffer): boolean {
+  return b.length >= 12 && b.toString("ascii", 4, 8) === "ftyp" && /^(heic|heix|hevc|hevx|mif1|msf1|heif)$/.test(b.toString("ascii", 8, 12));
+}
+
+// A photo in a form the model reads: as is when it already is, HEIC converted
+// to JPEG (2026-10-01: an iPhone screenshot arrived as HEIC and neither the
+// description nor the reply could open it), null when it can't be read at all.
+export async function readableImage(b: Buffer): Promise<{ data: Buffer; mediaType: "image/jpeg" | "image/png" | "image/gif" | "image/webp" } | null> {
+  const type = imageTypeOf(b);
+  if (type) return { data: b, mediaType: type };
+  if (!isHeic(b)) return null;
+  try {
+    const { default: convert } = await import("heic-convert");
+    const out = Buffer.from(await convert({ buffer: b, format: "JPEG", quality: 0.85 }));
+    return imageTypeOf(out) === "image/jpeg" ? { data: out, mediaType: "image/jpeg" } : null;
+  } catch (err: any) {
+    console.error("imageRead: HEIC conversion failed (non-fatal):", err?.message ?? err);
+    return null;
+  }
+}
+
 export async function describeImage(data: Buffer, mediaType: string): Promise<string | null> {
   if (data.length > MAX_BYTES) return null;
   try {

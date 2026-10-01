@@ -25,7 +25,7 @@ const sentences = prompt.replace(/\$\{[^}]*\}/g, "X").split(/(?<=[.!?])\s+|\n+/)
 check("no dashes in the reply prompt (Co copies its instructions' style)", !/[—–]/.test(prompt));
 check("the reply prompt is written in short sentences", sentences.filter((s) => s.split(/\s+/).length > 45).length === 0);
 check("no quoted bad openers for Co to copy", !/"That's a big call\."|"That \[noun phrase\]/.test(prompt));
-check("texts get how Co listens, not the full call guide", /const sharedSystem = `\$\{CO_VOICE\}\n\n\$\{TEXT_LISTENING\}`;/.test(reply) && !/\$\{input\.personaPrompt\}/.test(reply));
+check("texts get how Co listens, not the full call guide", /const sharedSystem = `\$\{CO_VOICE\}\n\n\$\{MOVES_GUIDE\}\n\n\$\{TEXT_LISTENING\}`;/.test(reply) && !/\$\{input\.personaPrompt\}/.test(reply));
 check("the call guide isn't fetched from Hume on every text", !/renderCoPersonaPrompt\(/.test(src("routes/sendblue.ts")));
 check("the length rule is concrete", /under about 15 words and doesn't ask for a plan or detail, reply in one or two sentences/.test(reply));
 check("say each thing once", /Say each thing once\. Don't repeat a point, an offer or a question from your last message\./.test(reply));

@@ -24,7 +24,7 @@ check("no switch left behind", !/CO_LOOP|loopOn|loopMode/.test(src("agent/loop.t
 check("the capability sheet describes the loop's tools", C.capabilitySheet().some((l) => /look up events itself/.test(l)) && !C.capabilitySheet().some((l) => /search right now for events/.test(l)));
 
 // Lab guidance in the tool descriptions: the why, no over-broad triggers.
-for (const t of ["searchEvents", "webSearch", "searchPosts", "readPage", "shareFinds", "draftEmail", "updateNotes"]) {
+for (const t of ["searchEvents", "webSearch", "searchPosts", "readPage", "shareFinds", "draftEmail", "updateNotes", "updateLoop"]) {
   const use = C.toolUse(t);
   check(`${t}: says why, no "whenever/however/if in doubt/MUST"`, /\b(because|so (they|the|you|what)|so that)\b/i.test(use) && !/\bwhenever\b|however it'?s worded|if in doubt|\bMUST\b|\bCRITICAL\b/.test(use), use.slice(0, 160));
 }
@@ -45,6 +45,7 @@ check("Tier 3 in the loop: X posts through the shared daily X budget, plus the w
 check("a sold-out event can't be shared (its own page says so)", /details\?\.soldOut === true \? "sold out" : null/.test(lt));
 check("a spent web search budget is said plainly, never as 'nothing found'", /Web search is used up for today\. Tell them plainly/.test(lt));
 check("no model gate between the feed and Co", !/isGenuinelyRelevant|explainFit|relevanceGate/.test(src("services/tieredRecommendation.ts").split("for Co's own loop")[1] ?? "x"));
+check("every search leaves a receipt, empty or not, so 'nothing turned up' is backed", (lt.match(/receipt\(`/g) ?? []).length >= 4);
 check("code saves the basics on every search (Co forgetting the notes)", (lt.match(/await remember\(\{/g) ?? []).length >= 3);
 check("web queries run in parallel and the budget counts queries, not calls", /queries: z\.array\(z\.string\(\)\)\.min\(1\)\.max\(3\)/.test(lt) && /Promise\.all\(run\.map\(\(q\) => taskWebSearch/.test(lt) && /loop\.webQueries \+= run\.length/.test(lt));
 check("each search checks its results' pages at the same time", /const pages = await Promise\.all\(raws\.map\(\(raw\) => pickPage/.test(src("services/taskWeb.ts")));
@@ -52,7 +53,7 @@ check("tools stop at the time budget and say to answer with what's there", /Out 
 check("the reply's step limit is the loop's budget", /stepCountIs\(LOOP_BUDGET\.steps\)/.test(src("agent/conversationReply.ts")));
 check("the first search can send a short 'on it' text, once", /if \(!line\?\.trim\(\) \|\| loop\.holdSent \|\| state\.sent\) return;/.test(lt));
 const sb = src("routes/sendblue.ts");
-check("the reply gets the guide when they want something found, and the working notes", /if \(decision\.wantsRecommendation && hasText\) addInstruction\(replyFacts, LOOP_GUIDE\);/.test(sb) && /if \(hasText\) \{\s*const notes = describeNotes/.test(sb));
+check("the reply gets the guide when they want something found, and the working notes", /if \(decision\.wantsRecommendation && hasText\) addInstruction\(replyFacts, LOOP_GUIDE\);/.test(sb) && /loadBrief\(user\.id\)\.then\(describeNotes\)/.test(sb) && /if \(timeline\) addFact\(replyFacts, "known", timeline\.fact\)/.test(sb) && /if \(notes\) addFact\(replyFacts, "ongoing", notes\)/.test(sb));
 
 // Tasks, voice and the sweep find things with the same tools (2026-10-01).
 {
@@ -73,6 +74,65 @@ check("the reply gets the guide when they want something found, and the working 
   const p = SF.sweepPrompt({ userId: "u", firstName: "Jordan", askText: "AI founder dinners", city: "San Francisco" }, { today: "2026-10-01", picture: "", feeling: "stressed", shown: ["Rooftop evening"] });
   check("the sweep's brief: their ask, what was already sent, feelings never decide", p.includes("AI founder dinners") && p.includes("Rooftop evening") && p.includes("never whether they hear about something") && p.includes("Search only for this one ask"));
   check("the old pipeline's entry points are gone", !/export async function (generateRecommendation|getTieredRecommendation)/.test(src("services/recommendation.ts") + src("services/tieredRecommendation.ts")) && !/searchWithTimeCap/.test(src("agent/conversationTools.ts")));
+}
+
+// Beats, bursts and the timeline (2026-10-01).
+{
+  const B = await import("../../src/services/beats.js");
+  check("each paragraph is its own text, at most three", JSON.stringify(B.toBeats("Got it.\n\nThe loft holds 60.\n\nWant me to ask about price?")) === JSON.stringify(["Got it.", "The loft holds 60.", "Want me to ask about price?"]) && B.toBeats("a\n\nb\n\nc\n\nd").length === 3 && B.toBeats("one line").length === 1);
+  check("a text that looks unfinished waits longer for the rest of the burst", B.burstWaitMs("so") === B.BURST_WAIT_UNFINISHED_MS && B.burstWaitMs("I was thinking...") === B.BURST_WAIT_UNFINISHED_MS && B.burstWaitMs("also,") === B.BURST_WAIT_UNFINISHED_MS && B.burstWaitMs("Can you find me a venue for Oct 10?") === B.BURST_WAIT_MS);
+  const ct = src("agent/conversationTools.ts");
+  check("sendReply sends each beat after the fact check, paced, and logs each", /const beats = ctx\.isVoice \? \[message\] : toBeats\(message\)/.test(ct) && /BEAT_GAP_MS/.test(ct) && /writeMemory\(ctx\.userId, "text_exchange", `Co replied: \$\{cleanCoMessage\(beat\)\}`\)/.test(ct));
+  check("the burst window comes from their text", /burstWaitMs\(resolvedContent \?\? ""\)/.test(src("routes/sendblue.ts")));
+  const T = await import("../../src/services/timeline.js");
+  const { DateTime } = await import("luxon");
+  const now = DateTime.fromISO("2026-10-01T01:40:00", { zone: "America/Los_Angeles" });
+  const line = T.renderTimeline(now, [
+    { at: "2026-10-01T08:00:00-07:00", allDay: false, what: "busy on their calendar" },
+    { at: "2026-10-02", allDay: true, what: "the deadline they gave for venue options" },
+    { at: "2026-09-29", allDay: true, what: "something already past" },
+  ]);
+  check("the timeline gives their local time, part of day, and what's ahead in order", line.startsWith("Right now it's 1:40 AM on Thursday, October 1 where they are (late at night).") && /in 6h \(Thu 8:00 AM\): busy on their calendar; tomorrow: the deadline they gave/.test(line) && !/already past/.test(line), line);
+  const items = [{ at: "2026-10-01T08:00:00-07:00", allDay: false, what: "busy on their calendar" }];
+  check("late at night with something early ahead, Co gets a note; not at noon, not when nothing's soon", /they have something at 8:00 AM \(in 6h: busy on their calendar\)/.test(T.lateNightNote(now, items) ?? "") && T.lateNightNote(now.set({ hour: 12 }), items) === null && T.lateNightNote(now, []) === null);
+  check("every text turn gets the timeline", /timelineFor\(user\.id, profile\?\.city \?\? null\)/.test(src("routes/sendblue.ts")));
+  check("Co is told to weave it in, never recite it", /Never recite their schedule back as a list/.test(src("services/coVoice.ts")) && /say it once, warmly, and let it go/.test(src("services/coVoice.ts")));
+  check("a reaction that says it all can end the turn, only after one went out", /if \(!ctx\.ackSent\) delete \(tools as Record<string, unknown>\)\.leaveItAtReaction/.test(ct));
+  check("photos: format from their bytes, HEIC converted, a failed photo retries without it", /readableImage\(Buffer\.from\(await imageRes\.arrayBuffer\(\)\)\)/.test(src("routes/sendblue.ts")) && /heic-convert/.test(src("services/imageRead.ts")) && /agentRun = await runAgent\(false\)/.test(src("agent/conversationReply.ts")));
+}
+
+// The three principles (Royce, 2026-10-01): one person model, open loops as
+// first-class state, one move per turn.
+{
+  const O = await import("../../src/services/openLoops.js");
+  const P = await import("../../src/services/personModel.js");
+  const M = await import("../../src/services/moves.js");
+  const loops = O.deriveLoops({
+    tasks: [
+      { id: 7, goal: "Find a venue for Oct 10", deadline: "2026-10-10", awaitingReply: true, latest: "Asked whether they want Wave or SOMA Loft." },
+      { id: 8, goal: "Find a DJ", deadline: null, awaitingReply: false, latest: "Wave's price is unconfirmed." },
+    ],
+    notes: { what: "bookable space", when: "Oct 10", shortlist: [{ name: "Wave", note: "price unconfirmed" }, { name: "SOMA Loft" }], picked: null, next: "they pick one" },
+    asks: [{ askId: "a1", text: "a run club" }],
+    offers: [{ key: "event:1", name: "Founders Dinner" }],
+  });
+  check("a task waiting on them is waiting_on_reply, an unconfirmed price is unconfirmed", loops[0].status === "waiting_on_reply" && loops[0].taskId === 7 && loops[0].dueDate === "2026-10-10" && loops[1].status === "unconfirmed", JSON.stringify(loops.slice(0, 2)));
+  check("notes with a choice left to them are decision_needed; asks are open; a sent offer waits on how it landed", loops[2].source === "notes" && loops[2].status === "decision_needed" && /shortlist: Wave, SOMA Loft/.test(loops[2].detail ?? "") && loops[3].status === "open" && loops[4].status === "waiting_on_reply", JSON.stringify(loops.slice(2)));
+  check("notes with a pick whose price isn't confirmed are unconfirmed", O.deriveLoops({ tasks: [], notes: { what: "space", when: null, shortlist: [{ name: "Wave", note: "price unconfirmed" }], picked: "Wave", next: null }, asks: [], offers: [] })[0].status === "unconfirmed");
+  const said = O.describeLoops(loops.map((l) => ({ ...l })));
+  check("the loops read as where each stands, closed ones left out", !!said && /Find a venue for Oct 10: waiting on a reply/.test(said) && /a decision that's theirs/.test(said) && O.describeLoops([{ title: "x", status: "done", detail: null, dueDate: null, source: "task" }]) === null, said ?? "");
+  const t0 = new Date("2026-10-01T12:00:00Z");
+  const base = { taskId: 7, status: "unconfirmed" as const, changedAt: new Date(t0.getTime() - 60_000) };
+  check("a changed loop wakes its task once, at most every 6 hours, and only task-backed open loops", O.shouldWake({ ...base, wokeAt: null }, t0) && !O.shouldWake({ ...base, wokeAt: new Date(t0.getTime() - 30_000) }, t0) && !O.shouldWake({ ...base, wokeAt: new Date(t0.getTime() - 3_600_000) }, t0) && !O.shouldWake({ ...base, taskId: null, wokeAt: null }, t0) && !O.shouldWake({ ...base, status: "done" as any, wokeAt: null }, t0));
+  check("every text turn syncs the loops and reads them as ongoing", /o\.describeLoops\(\(await o\.syncOpenLoops\(user\.id\)\)\.rows\)/.test(src("routes/sendblue.ts")) && /if \(loops\) addFact\(replyFacts, "ongoing", loops\)/.test(src("routes/sendblue.ts")));
+  check("the 15-minute pass syncs loops before waking tasks", /runLoopSync\(\)[\s\S]{0,200}runDueTasks\(\)/.test(src("jobs/index.ts")));
+  check("the open_loops table exists, one row per source", /CREATE TABLE IF NOT EXISTS open_loops[\s\S]*UNIQUE \(user_id, source, source_ref\)/.test(src("db/migrations.ts")));
+  check("Co can set a loop's status, and its word wins until the source closes", /updateLoop: tool\(/.test(lt) && /status_by === "co" \? ex\.status : d\.status/.test(src("services/openLoops.ts")));
+  const model = P.renderPersonModel({ who: "Work: founder", threads: "- venue hunt (open)", did: ["Sent them Wave"], loops: said });
+  check("one person model: who, threads, what Co did, what it carries, in order", /^Who they are:\nWork: founder\n\nWhat's going on in their life[\s\S]*What you've done for them lately:\n- Sent them Wave\n\nWhat you're carrying/.test(model) && P.renderPersonModel({ who: "", threads: "", did: [], loops: null }) === "", model);
+  check("the task, the sweep and the call all read the person model", /personModel\(userId/.test(src("services/taskTurn.ts")) && /personModel\(c\.userId/.test(src("services/sweepFind.ts")) && /personModelParts\(userId\)/.test(src("services/callContext.ts")));
+  check("moves: a reaction alone is quiet, a search is act, a task is watch, words are reply", M.moveOf({ toolsCalled: ["leaveItAtReaction"], sent: false }) === "quiet" && M.moveOf({ toolsCalled: ["webSearch", "sendReply"], sent: true }) === "act" && M.moveOf({ toolsCalled: ["startTask", "sendReply"], sent: true }) === "watch" && M.moveOf({ toolsCalled: ["sendReply"], sent: true }) === "reply");
+  check("Co is told each turn is one move and quiet is a real answer, and every turn logs it", /Quiet is a real answer/.test(M.MOVES_GUIDE) && /\$\{MOVES_GUIDE\}/.test(src("agent/conversationReply.ts")) && /decision: "turn\.move"/.test(src("agent/conversationReply.ts")));
 }
 
 // Notes.

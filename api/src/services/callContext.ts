@@ -85,7 +85,9 @@ export async function buildContextSummary(userId: string): Promise<string> {
         [userId],
       ),
       pool.query(`SELECT ask_text FROM ask_checkins WHERE user_id = $1 AND resolved_at IS NULL ORDER BY created_at DESC LIMIT 4`, [userId]),
-      getPersonSnapshot(userId),
+      // The one model of them (services/personModel.ts); Co's action record
+      // is added separately on calls (buildCallKnowledge), so it's left out here.
+      import("./personModel.js").then((m) => m.personModelParts(userId)).catch(() => null),
       // Their dated corrections (harness/profileWrite.ts), newest first.
       pool
         .query(
@@ -110,13 +112,13 @@ export async function buildContextSummary(userId: string): Promise<string> {
 
     const ownWords = ownWordsResult.rows.map((r: any) => String(r.content).replace(/^User said: /, "- ")).reverse();
     const openAsks = openAsksResult.rows.map((r: any) => `- ${r.ask_text}`);
-    const picture = renderSnapshot(snapshot);
+    const picture = snapshot ? (await import("./personModel.js")).renderPersonModel({ ...snapshot, did: [] }) : renderSnapshot(null);
     const corrections = renderCorrections(correctionsResult.rows);
     const lines = [
       corrections
         ? `Things they've corrected (the corrected version wins over anything below; never state the old one as true, and if they ask what you had or when it changed, say it plainly with the date):\n${corrections}`
         : null,
-      picture ? `Who they are right now:\n${picture}` : null,
+      picture ? `What you know about them right now:\n${picture}` : null,
       ownWords.length ? `What they've told you in the last two days (newest facts win over anything below):\n${ownWords.join("\n")}` : null,
       openAsks.length ? `What they're looking for right now:\n${openAsks.join("\n")}` : null,
       recapResult.rows[0]?.content ? `Ongoing summary: ${recapResult.rows[0].content}` : null,

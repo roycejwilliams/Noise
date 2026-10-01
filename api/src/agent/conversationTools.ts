@@ -24,6 +24,7 @@ import { getTimezoneForCity } from "../services/geocoding.js";
 import { DateTime } from "luxon";
 import { googleTools } from "../services/googleTools.js";
 import { loopTools, newLoopState } from "./loopTools.js";
+import { BEAT_GAP_MS, toBeats } from "../services/beats.js";
 
 // A date as the member would say it, in their own zone (2026-09-22 code
 // review: toDateString() used the server's zone, so a Pacific evening showed
@@ -61,6 +62,9 @@ export type ConversationToolContext = {
   // Tests only: the loop's searches and page reads return a placeholder
   // instead of spending on the web (agent/loopTools.ts).
   stubSearch?: boolean;
+  // The reaction already put on their text this turn (routes/sendblue.ts ack),
+  // so Co can leave it at that (leaveItAtReaction).
+  ackSent?: string | null;
   // For reactInsteadOfReplying.
   messageHandle?: string | null;
   // Their message may mean they aren't safe (services/safety.ts): no tapback.
@@ -133,11 +137,41 @@ export function createConversationTools(ctx: ConversationToolContext) {
         ? "Send your voice-note reply to the user and log it. Call this exactly once, with your full response — always respond to what they actually said before any secondary gesture."
         : toolUse("sendReply"),
       inputSchema: z.object({
-        message: z.string().describe("One complete reply, no em dashes. Usually a sentence or two; a walkthrough they asked for can be longer. Separate ideas or steps into short paragraphs with a blank line between them."),
+        message: z.string().describe("Your reply, no em dashes. Each distinct thought (the reaction, the answer, the question, the offer) is its own short paragraph with a blank line between, and each paragraph goes out as its own text, so never stack several thoughts in one. Most replies are one to three short beats."),
       }),
       execute: async ({ message: draft }) => {
         const message = ctx.gate ? await ctx.gate(draft, [...state.sentMessages]) : draft;
         if (state.replyCount > 0) await new Promise((resolve) => setTimeout(resolve, 2000));
+        // Texted in beats: each paragraph its own message (services/beats.ts).
+        // A voice note stays one clip.
+        const beats = ctx.isVoice ? [message] : toBeats(message);
+        if (!ctx.dryRun && beats.length > 1) {
+          const sentBeats: string[] = [];
+          for (const [i, beat] of beats.entries()) {
+            if (i > 0) await new Promise((resolve) => setTimeout(resolve, BEAT_GAP_MS));
+            const ok = await ctx.sendCoReply({ phone: ctx.phoneNumber, message: beat, asVoice: false });
+            if (ok === false) {
+              state.failedSends += 1;
+              if (!sentBeats.length) {
+                if (sendLimiter.blocked(ctx.phoneNumber) || state.failedSends >= 2) {
+                  state.sendStopped = true;
+                  return { ok: false, error: "Texts to them can't go out right now. Stop here; don't call any more tools." };
+                }
+                return { ok: false, error: "That message didn't go out. Rewrite it as a plain, direct text to them and call sendReply again." };
+              }
+              notDone(`Only part of the reply went out: "${beat.slice(0, 120)}" didn't send.`);
+              break;
+            }
+            await writeMemory(ctx.userId, "text_exchange", `Co replied: ${cleanCoMessage(beat)}`);
+            sentBeats.push(beat);
+          }
+          const sentText = sentBeats.join("\n\n");
+          state.sentMessages.push(sentText);
+          state.lastReplyText = state.lastReplyText ? `${state.lastReplyText} ${sentText}` : sentText;
+          state.sent = true;
+          state.replyCount += 1;
+          return { ok: true };
+        }
         if (!ctx.dryRun) {
           const sent = await ctx.sendCoReply({ phone: ctx.phoneNumber, message, asVoice: ctx.isVoice });
           // Refused or failed: nothing is logged or counted as sent, so the
@@ -470,6 +504,19 @@ export function createConversationTools(ctx: ConversationToolContext) {
     // Co's call now, not a pattern's). Hard lines kept from before: never
     // when Co still owes them an answer, and never right after Co asked them
     // something, since then their short reply is an answer.
+    leaveItAtReaction: tool({
+      description: toolUse("leaveItAtReaction"),
+      inputSchema: z.object({}),
+      execute: async () => {
+        if (state.replyCount > 0) return { ok: false, error: "You already replied this turn." };
+        if (ctx.safetyConcern || ctx.replyOwed || coAskedQuestion(ctx.lastCoMessage)) return { ok: false, error: "They need words this time. Reply properly." };
+        state.sent = true;
+        state.reacted = true;
+        if (!ctx.dryRun) await recordDecision({ layer: 3, decision: "turn.closing", userId: ctx.userId, outcome: "act", action: `left at ${ctx.ackSent}`, proposal: { message: ctx.resolvedContent } }).catch(() => {});
+        return { ok: true, note: "Done. Don't send a text." };
+      },
+    }),
+
     reactInsteadOfReplying: tool({
       description: toolUse("reactInsteadOfReplying"),
       inputSchema: z.object({
@@ -564,9 +611,11 @@ export function createConversationTools(ctx: ConversationToolContext) {
         const { rows } = ctx.dryRun
           ? { rows: [{ content: "• (dry run) latest updates" }] }
           : await pool.query(`SELECT content FROM product_updates ORDER BY created_at DESC LIMIT 1`).catch(() => ({ rows: [] as any[] }));
+        // Nothing posted: a receipt, so Co can't say it sent a rundown (2026-10-01:
+        // "sent you the rundown" with an empty list, then "where is it?").
         if (!rows[0]) {
-          ctx.facts?.add("known", "There are no product updates posted.");
-          return { ok: true, note: "Nothing new is posted. Say so honestly and briefly; don't invent anything." };
+          notDone("No update list was sent: nothing new is posted.");
+          return { ok: false, error: "Nothing new is posted, so nothing was sent. Say so in a few words; don't say you sent anything." };
         }
         const message = `Here's what's new:\n\n${rows[0].content}`;
         if (!ctx.dryRun) {
@@ -951,6 +1000,8 @@ export function createConversationTools(ctx: ConversationToolContext) {
     }),
   };
 
+  // Leaving it at the reaction needs a reaction to have gone out this turn.
+  if (!ctx.ackSent) delete (tools as Record<string, unknown>).leaveItAtReaction;
   // Team-only tools never exist for anyone else (services/capabilities.ts teamOnly).
   if (!ctx.isTeam) for (const name of teamOnlyTools()) delete (tools as Record<string, unknown>)[name];
   // Tools that can't apply this turn aren't offered (capabilities.ts situations).

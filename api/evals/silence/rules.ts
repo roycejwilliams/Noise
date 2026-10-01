@@ -32,7 +32,7 @@ check("one note per outage, not a string of apologies", turnFailedNoteBlocked({ 
 check("a later failure gets a fresh note", turnFailedNoteBlocked({ ...base, lastNoteAt: new Date(now.getTime() - TURN_FAILED_NOTE_COOLDOWN_MS - 1000) }) === null);
 check("a text from hours ago isn't answered out of nowhere", turnFailedNoteBlocked({ ...base, receivedAt: new Date(now.getTime() - 3 * 3600_000) }) === "too_old");
 
-check("the note is honest: asks them to resend, promises no retry", /send it again/.test(TURN_FAILED_NOTE) && !/\b(I'll|I will|retry|trying again|give me a)\b/i.test(TURN_FAILED_NOTE));
+check("the note owns the miss without asking them to redo anything, and promises no retry", !/send it again|resend/i.test(TURN_FAILED_NOTE) && !/\b(I'll|I will|retry|trying again|give me a)\b/i.test(TURN_FAILED_NOTE));
 check("the note survives Co's send cleanup unchanged (so the cooldown can find it)", cleanCoMessage(TURN_FAILED_NOTE) === TURN_FAILED_NOTE);
 check("no em dashes", !/[—–]/.test(TURN_FAILED_NOTE));
 

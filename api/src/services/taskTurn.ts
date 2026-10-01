@@ -32,6 +32,8 @@ export const TASK_MODEL = MODELS.sonnet;
 export type TaskTurnDeps = {
   person: { first_name: string | null; phone_number: string; city: string | null };
   recent: string;
+  // The one model of them (services/personModel.ts).
+  personModel?: string;
   zone: string | null;
   note: (text: string, stepDone: string | null) => Promise<void>;
   schedule: (inHours: number, plan: string) => Promise<string | null>;
@@ -46,7 +48,7 @@ export type TaskTurnDeps = {
   now: () => Date;
 };
 
-export function taskTurnPrompt(o: { task: CoTask; firstName: string; now: string; zone: string | null; recent: string; final?: boolean }): string {
+export function taskTurnPrompt(o: { task: CoTask; firstName: string; now: string; zone: string | null; recent: string; final?: boolean; person?: string }): string {
   const t = o.task;
   const deadlineLine = t.deadline ? `\nTheir deadline: ${t.deadline}.` : "";
   const finalLine = o.final
@@ -64,7 +66,7 @@ Your notes so far (oldest first):
 ${t.notes.map((n) => `- [${n.at.slice(0, 16)}] ${n.text}`).join("\n") || "- (none)"}
 This is wake-up ${t.wakes} of at most ${TASK_LIMITS.maxWakes}. Now: ${o.now}${o.zone ? ` (their time zone: ${o.zone})` : ""}.
 
-Your recent texts with them (oldest first; read their newest messages first, they may have answered you or changed their mind):
+${o.person ? `What you know about them (who they are, what's going on, what you've done, everything you're carrying for them):\n${o.person}\n\n` : ""}Your recent texts with them (oldest first; read their newest messages first, they may have answered you or changed their mind):
 ${o.recent || "(none)"}
 
 Do the next real step with your tools (search for events and opportunities, webSearch for anything else such as venues, vendors, people or prices, readPage), and write down what you learned with note. When you finish a step, call note with stepDone set to that step's exact text. Only mark a step done when you actually did it; closing a task doesn't finish its steps.
@@ -253,7 +255,7 @@ export async function runTaskTurnWith(task: CoTask, deps: TaskTurnDeps): Promise
       experimental_telemetry: { isEnabled: true, functionId: "taskTurn.run" },
       tools,
       stopWhen: [stepCountIs(12), () => decided !== null],
-      prompt: taskTurnPrompt({ task, firstName: deps.person.first_name || "them", now: deps.now().toISOString().slice(0, 16), zone: deps.zone, recent: deps.recent, final }),
+      prompt: taskTurnPrompt({ task, firstName: deps.person.first_name || "them", now: deps.now().toISOString().slice(0, 16), zone: deps.zone, recent: deps.recent, final, person: deps.personModel }),
     });
   } catch (err: any) {
     console.error("taskTurn failed (non-fatal):", err?.message ?? err);
@@ -292,6 +294,7 @@ export async function runTaskTurn(task: CoTask): Promise<{ action: string }> {
     person,
     zone,
     recent: withoutTeammateLines(convo.map((r: any) => String(r.content)).reverse().join("\n")).slice(-3000),
+    personModel: await import("./personModel.js").then((m) => m.personModel(userId, { maxDid: 6 })).catch(() => undefined),
     note: async (text, stepDone) => void (await noteOnTask(userId, task.id, text, stepDone)),
     schedule: async (h, plan) => (await scheduleTask(userId, task.id, h, plan))?.nextCheckAt ?? null,
     close: async (status, outcome) => void (await closeTask(userId, task.id, status, outcome)),

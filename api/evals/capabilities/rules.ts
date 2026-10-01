@@ -27,8 +27,14 @@ const registered = ABILITIES.filter((a) => a.tool).map((a) => a.tool!);
 for (const t of toolNames) check(`tool ${t} has an entry in the registry`, registered.includes(t));
 // Team-only tools exist only for the team (services/capabilities.ts teamOnly).
 const teamTools = Object.keys(createConversationTools({ userId: "u", phoneNumber: "+10000000000", resolvedContent: "", isVoice: false, hasPendingOffer: false, recentOfferBurstActive: false, dryRun: true, isTeam: true, sendCoReply: async () => true } as any).tools);
+// Leaving it at the reaction exists only once a reaction went out this turn.
+const ackedTools = Object.keys(createConversationTools({ userId: "u", phoneNumber: "+10000000000", resolvedContent: "", isVoice: false, hasPendingOffer: false, recentOfferBurstActive: false, dryRun: true, ackSent: "✈️", sendCoReply: async () => true } as any).tools);
 for (const t of registered) {
   const teamOnly = ABILITIES.find((a) => a.tool === t)?.teamOnly;
+  if (t === "leaveItAtReaction") {
+    check("registry tool leaveItAtReaction exists only after a reaction went out", ackedTools.includes(t) && !toolNames.includes(t));
+    continue;
+  }
   check(`registry tool ${t} exists${teamOnly ? " for the team only" : ""}`, teamOnly ? teamTools.includes(t) && !toolNames.includes(t) : toolNames.includes(t));
 }
 check("Co finds things with its own loop's tools, and the old searchNow is gone", ["searchEvents", "webSearch", "searchPosts", "readPage", "shareFinds", "draftEmail", "updateNotes"].every((t) => toolNames.includes(t)) && !toolNames.includes("searchNow"));

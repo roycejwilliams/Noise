@@ -34,7 +34,7 @@ import { ABOUT_CO_INSTRUCTION, feedbackInstruction, readTurn, readTurnEnabled, t
 import { dotsInstruction, momentInstruction, readMoment, saveLesson, whyContext, type Moment } from "../services/connectDots.js";
 import { bareLink, inlineNote, repliedTo, repliedToFact, sentMessageHandle, threadReason } from "../services/inlineReply.js";
 import { recordSafetyConcern, SAFETY_INSTRUCTION, soundsLikeCrisis } from "../services/safety.js";
-import { describeImage } from "../services/imageRead.js";
+import { describeImage, readableImage } from "../services/imageRead.js";
 import { CALL_OFFER, GATE_ASK, INVITE_JOINED, WELCOME, WELCOME_INVITED, WRONG_CODE, pickLine } from "../services/onboardingLines.js";
 import { claimTextLogin } from "../services/textLogin.js";
 import {
@@ -59,6 +59,7 @@ import { NO_ROUTE, decideActions, gatherOpenItems, routeMessage, type RouterOutp
 import { recordDecision } from "../harness/core.js";
 import { ackAllowed, describeTapbacks, reactionFor, tapbackHistory } from "../services/tapbacks.js";
 import { LOOP_GUIDE } from "../agent/loop.js";
+import { burstWaitMs } from "../services/beats.js";
 import { describeNotes } from "../agent/loopTools.js";
 import { loadBrief } from "../services/searchIntent.js";
 import { routerGateChecks } from "../harness/routerChecks.js";
@@ -96,14 +97,7 @@ function withPhoneLock<T>(phone: string, fn: () => Promise<T>): Promise<T> {
   return withAdvisoryLock(`phone:${phone}`, fn);
 }
 
-// How long to hold off Co's free-form reply after an inbound message, in
-// case the same person is mid-thought and about to send a follow-up.
-// Started at 5s; bumped to 8s after checking a real conversation's actual
-// gaps between related messages (16s in one case) — 5s was catching only
-// the fastest bursts. Not pushed further toward 16s itself: that would
-// make every single-message reply feel sluggish for the common case just
-// to fully cover one slower outlier.
-const DEBOUNCE_MS = 4000;
+// How long to wait for the rest of a burst: services/beats.ts (burstWaitMs).
 
 // Heuristic-only (no LLM call — this is directly observable, not something
 // to infer) read of how the user themselves texts, from their own lines in
@@ -1136,8 +1130,12 @@ export function sendblueRouter(io: Server): Router {
             try {
               const imageRes = await fetch(media_url, { signal: AbortSignal.timeout(10000) });
               if (!imageRes.ok) throw new Error(`Image fetch failed: ${imageRes.status}`);
-              const mediaType = imageRes.headers.get("content-type")?.split(";")[0].trim() ?? "image/jpeg";
-              const buffer = Buffer.from(await imageRes.arrayBuffer());
+              // The format from the file's own bytes (links often say
+              // "application/octet-stream"), HEIC converted to JPEG; only what
+              // the model reads goes to it (services/imageRead.ts, 2026-10-01).
+              const readable = await readableImage(Buffer.from(await imageRes.arrayBuffer()));
+              if (!readable) throw new Error(`unreadable image format (${imageRes.headers.get("content-type") ?? "no type"})`);
+              const { data: buffer, mediaType } = readable;
               imageForVision = { data: buffer, mediaType };
               // Written down once, for the record and the reply's fact check
               // (services/imageRead.ts, 2026-09-22).
@@ -1617,8 +1615,18 @@ export function sendblueRouter(io: Server): Router {
         // they want something found, and its working notes from earlier texts.
         if (decision.wantsRecommendation && hasText) addInstruction(replyFacts, LOOP_GUIDE);
         if (hasText) {
-          const notes = describeNotes(await loadBrief(user.id).catch(() => null));
-          if (notes) addFact(replyFacts, "known", notes);
+          const [notes, loops, timeline] = await Promise.all([
+            loadBrief(user.id).then(describeNotes).catch(() => null),
+            // Every open loop and where it stands (services/openLoops.ts).
+            import("../services/openLoops.js").then(async (o): Promise<string | null> => o.describeLoops((await o.syncOpenLoops(user.id)).rows)).catch((): string | null => null),
+            // Their local time and what's ahead, every turn (services/timeline.ts).
+            import("../services/timeline.js").then((t) => t.timelineFor(user.id, profile?.city ?? null)).catch(() => null),
+          ]);
+          // Co's live work for them: ongoing, so its next step can be said (replyGrounding future_promise).
+          if (notes) addFact(replyFacts, "ongoing", notes);
+          if (loops) addFact(replyFacts, "ongoing", loops);
+          if (timeline) addFact(replyFacts, "known", timeline.fact);
+          if (timeline?.note) addInstruction(replyFacts, timeline.note);
         }
         if (inlineTarget) addFact(replyFacts, "known", repliedToFact(inlineTarget));
         // Unmistakable crisis wording (services/safety.ts): Co gets the
@@ -2277,10 +2285,11 @@ Return ONLY valid JSON, no preamble: {"date": "YYYY-MM-DD or null", "time": "HH:
         // The wait runs from when their text arrived, not from here
         // (2026-09-26): it used to start after the router and prep, so every
         // reply paid those seconds and then 4 more. A text that lands within
-        // DEBOUNCE_MS of this one still takes over the turn.
+        // the burst window (services/beats.ts) of this one still takes over the turn.
         let debounceWaitMs = 0;
         if (myInboundAt && !turnDidWork) {
-          debounceWaitMs = Math.max(0, DEBOUNCE_MS - (Date.now() - new Date(myInboundAt).getTime()));
+          // Longer when their text looks like more is coming (services/beats.ts).
+          debounceWaitMs = Math.max(0, burstWaitMs(resolvedContent ?? "") - (Date.now() - new Date(myInboundAt).getTime()));
           if (debounceWaitMs > 0) await new Promise((resolve) => setTimeout(resolve, debounceWaitMs));
           const latestStampResult = await pool.query(
             `SELECT last_inbound_at FROM phone_debounce WHERE phone = $1`,
@@ -2368,10 +2377,13 @@ Return ONLY valid JSON, no preamble: {"date": "YYYY-MM-DD or null", "time": "HH:
             addInstruction(replyFacts, dotsNote);
             recordDecision({ layer: 3, decision: "reply.dots", userId: user.id, outcome: "act", action: `dots:${dots.length}`, proposal: { dots } }).catch(() => {});
           }
+          // The reaction that went out on their text, so Co can leave it at that.
+          const ackSent = (await ackP.catch(() => false)) ? (turnRead?.ack ?? null) : null;
           const { replyText, grounding, toolsCalled } = await propagateAttributes(
             { userId: user.id, traceName: "sendblue.generateReply" },
             () =>
               runConversationReplyAgent({
+                ackSent,
                 messageHandle: typeof req.body?.message_handle === "string" ? req.body.message_handle : null,
                 replyOwed: owesReply,
                 safetyConcern: crisisWording,

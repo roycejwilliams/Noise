@@ -6,6 +6,7 @@ import { createConversationTools, type SendCoReply } from "./conversationTools.j
 import { writeMemory } from "../services/memory.js";
 import pool from "../db/db.js";
 import { CO_VOICE, CO_TEXT_CHANNEL } from "../services/coVoice.js";
+import { MOVES_GUIDE, moveOf, type Move } from "../services/moves.js";
 import { groundReply, LAYER3_MODELS, renderReplyFacts, type GroundingResult, type ReplyFacts, addFact } from "../harness/replyGrounding.js";
 import { capitalizeSentences, dropRepeatedQuestion, looksLikeMetaReply } from "../services/textStyle.js";
 import { lastCoLine } from "../services/conversationClose.js";
@@ -30,6 +31,8 @@ export const TEXT_LISTENING = `How you listen, the same as on a call:
 - Real warmth, and real humor when something is actually funny.`;
 
 export type ConversationReplyInput = {
+  // The reaction already put on their text this turn, if any.
+  ackSent?: string | null;
   // Thread the next text under theirs (routes/sendblue.ts threadedSend).
   threadNext?: () => void;
   // For a tapback instead of a reply (conversationTools.ts
@@ -222,7 +225,7 @@ Return ONLY the numbers of the memories that are genuinely relevant to what the 
 export async function runConversationReplyAgent(
   input: ConversationReplyInput,
   opts: { dryRun?: boolean; record?: boolean; stubSearch?: boolean } = {},
-): Promise<{ sent: boolean; offered: boolean; replyText: string; grounding: GroundingResult[]; toolsCalled: string[] }> {
+): Promise<{ sent: boolean; offered: boolean; replyText: string; grounding: GroundingResult[]; toolsCalled: string[]; move: Move }> {
   const grounding: GroundingResult[] = [];
   // The team gets the team-only tools; nobody else ever sees them.
   const isTeam = input.isTeam ?? (opts.dryRun ? false : await import("../services/extensions.js").then((m) => m.isTeamMember(input.userId)).catch(() => false));
@@ -245,6 +248,7 @@ export async function runConversationReplyAgent(
     lastCoMessage: lastCoLine(input.recentConversation),
     sendCoReply: input.sendCoReply,
     threadNext: input.threadNext,
+    ackSent: input.ackSent ?? null,
     facts: {
       add: (kind, text) => addFact(input.facts, kind, text),
       text: () => renderReplyFacts(input.facts),
@@ -285,6 +289,8 @@ export async function runConversationReplyAgent(
   // and reflective lines were being copied into texts). Calls keep the full
   // guide on Hume. Same for every member, so it caches across them.
   const sharedSystem = `${CO_VOICE}
+
+${MOVES_GUIDE}
 
 ${TEXT_LISTENING}`;
   // Written the way Co should text (2026-09-24): short sentences, no dashes,
@@ -435,8 +441,11 @@ Then act with your tools:
   // test). A timeout after a text already went out ends the turn with what
   // was sent; with nothing sent, the fallback line below goes out.
   let agentRun: { steps: any[]; text: string; finishReason: string } | null = null;
-  try {
-  agentRun = await generateText({
+  // A photo the model can't open (2026-10-01: two screenshots in a row failed
+  // the whole turn, and Co asked them to send it again) retries once without
+  // it, from their words and what's known about the photo.
+  const runAgent = (withImage: boolean) =>
+    generateText({
     // Sonnet, not Haiku — dry-run testing showed Haiku missing the
     // offerCall follow-up call ~2/5 times even when the reply text clearly
     // gestured toward a call, which breaks call_offer_pending tracking (a
@@ -470,7 +479,7 @@ Then act with your tools:
     // retrying can't get through and each step is a paid call.
     stopWhen: [stepCountIs(LOOP_BUDGET.steps), () => state.sendStopped, () => state.reacted],
     experimental_telemetry: { isEnabled: true, functionId: "agent.conversationReply" },
-    ...(input.imageForVision
+    ...(withImage && input.imageForVision
       ? {
           messages: [
             {
@@ -482,8 +491,16 @@ Then act with your tools:
             },
           ],
         }
-      : { prompt: userText }),
+      : { prompt: withImage || !input.imageForVision ? userText : `${userText}\n\nTheir photo couldn't be opened on your side. Work from what they said and anything already known about it; don't ask them to send it again. If you need one detail from it, ask for just that.` }),
   });
+  try {
+    try {
+      agentRun = await runAgent(true);
+    } catch (err: any) {
+      if (!input.imageForVision || isTimeout(err) || state.sent) throw err;
+      console.error(`conversationReply: the reply with their photo failed for ${input.userId} (${err?.constructor?.name ?? "error"}), retrying without it`);
+      agentRun = await runAgent(false);
+    }
   } catch (err: any) {
     if (!isTimeout(err)) throw err;
     console.error(`conversationReply: a model call timed out for ${input.userId} (${state.sent ? "after a text went out; ending with what was sent" : "before anything went out; sending the fallback"})`);
@@ -551,5 +568,11 @@ Then act with your tools:
 
   // Which tools Co chose, in order (evals/capabilities/probe.ts reads this).
   const toolsCalled = (agentRun?.steps ?? []).flatMap((st: any) => st.toolCalls.map((t: any) => t.toolName));
-  return { sent: state.sent, offered, replyText: state.lastReplyText, grounding, toolsCalled };
+  // The one move this turn made (services/moves.ts), logged every turn.
+  const move = moveOf({ toolsCalled, sent: state.sent });
+  if (!opts.dryRun) {
+    const { recordDecision } = await import("../harness/core.js");
+    await recordDecision({ layer: 3, decision: "turn.move", userId: input.userId, outcome: move === "quiet" ? "skip" : "act", action: move, proposal: { tools: toolsCalled } }).catch(() => {});
+  }
+  return { sent: state.sent, offered, replyText: state.lastReplyText, grounding, toolsCalled, move };
 }

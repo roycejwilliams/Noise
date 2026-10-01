@@ -32,10 +32,19 @@ import type { TurnContext } from "./turnContext.js";
 // handshake, the native heart and haha; no salutes, rockets or raised hands.
 export const ACK_EMOJIS = ["👀", "✍️", "🤝", "👍", "❤️", "😂", "🥂"] as const;
 
+// Any single emoji that matches the moment (2026-10-01: "a plane for landing, a
+// dumpling for dumplings"), except the startup-cute ones that don't fit a
+// grown club; the core set above is Co's usual language.
+export const ACK_NOT_CLUB = ["🫡", "🚀", "🙌", "🔥", "💯", "😎", "🤪", "🤑", "💪", "🎉"];
 export function parseAck(v: unknown): string | null {
   const bare = (s: string) => s.replace(/\uFE0F/g, "").trim();
   const s = typeof v === "string" ? bare(v) : "";
-  return ACK_EMOJIS.find((e) => bare(e) === s) ?? null;
+  if (!s) return null;
+  const core = ACK_EMOJIS.find((e) => bare(e) === s);
+  if (core) return core;
+  // Exactly one emoji (with skin tone or joined parts), not words or several.
+  if (!/^\p{Extended_Pictographic}[\u{1F3FB}-\u{1F3FF}]?(\u200D\p{Extended_Pictographic}[\u{1F3FB}-\u{1F3FF}]?)*$/u.test(s)) return null;
+  return ACK_NOT_CLUB.some((e) => bare(e) === s) ? null : (v as string).trim();
 }
 
 export function readTurnEnabled(env: NodeJS.ProcessEnv = process.env): boolean {
@@ -100,8 +109,8 @@ ${priorContext ? `What was already known about them before this conversation: ${
 "emotion": does the latest message carry a real feeling Co should respond to (stressed, anxious, discouraged, lonely, frustrated, excited, proud, relieved)? Use the conversation: "fine" after bad news isn't fine. Ignore plain logistics, greetings and tone you aren't confident about; most messages have none. If none, null; else {"emotion": "one or two words", "intensity": "low" | "medium" | "high", "valence": "negative" | "positive" | "mixed", "about": "what it's about, only from what they said", "target": "co" when it's about Co itself (what Co found or didn't, its suggestions, replies, speed or mistakes, like "you keep finding nothing" or "that's not what I asked"), else "life"}.
 "seeking": "solving" only if you're genuinely confident they want a real answer or help deciding right now, not just to be heard (weighing options out loud, stuck on a decision, clearly past venting); ordinary sharing, updates and venting are "none", far more often than not.
 "feedback": each distinct piece of feedback about how Co works or should work in general, the kind of thing the team would change (how it searches, what it sends, how it texts), or anything they ask Co to pass to the team, as one clear sentence the team could act on. Not a correction or disagreement about something Co said in this conversation (a fact, a person, an opinion, how Co described itself): Co just gets that right in its reply, and filing it would turn an ordinary correction into a complaint. [] if none.
-"ack": whether Co should react to their message with an emoji before replying, the way a friend sometimes does. Rare: most messages get null, and a follow-up to something they just asked (a correction, "well a couple", "go ahead", "anything else?") gets null. Co is the host of a private social club, so its reactions are grown and understated. When one fits, pick the one that says the most: "🥂" when they got something done, won something or have news worth celebrating; "❤️" when they share something personal that clearly matters to them; "😂" only when they're genuinely being funny; "👀" when they sent something to look at (a link, photos, a doc) or a new thing to find; "✍️" when they asked Co to write something (a draft, a plan, a note); "🤝" when they've handed Co something to take on, agreed to something, or told Co to go ahead; "👍" for a plain confirmation of something Co proposed.
-"about_co": true if they're asking what Co is, what Co does, or how to describe Co (to them, a friend, an investor); otherwise false.
+"ack": whether Co should react to their message with an emoji before replying, the way a friend sometimes does. A reaction is communication: it says something about their specific message, so most messages get null, and a follow-up to something they just asked ("well a couple", "go ahead", "anything else?") gets null. Read the emotional register first: sad, frustrated, relieved and celebrating each call for something different, and on bad news or something sad, react only if it says you're with them, never "❤️" or "😂", which read as liking it. Then match the moment: an emoji about what they said beats a generic one (✈️ when they've landed, 🥟 for the dumplings they're eating). Co's usual language, so they learn what it means: "🥂" good news or a win; "❤️" something personal and good that matters to them; "😂" when they're genuinely funny; "👀" something to look at or find; "✍️" something to write; "🤝" something agreed or handed to Co; "👍" a plain okay. Vary it: the same one down the whole thread reads as a machine. Grown and understated, Co is the host of a private club: never salutes, rockets, raised hands, fire or confetti.
+"about_co": true if they're asking what Co is, what Co does or can do for them, how proactive Co is, or how to describe Co (to them, a friend, an investor); otherwise false.
 "about_sent": if this message is about one specific thing in "Things Co sent them recently" (asking about it, reacting to it), its name exactly as listed; otherwise null.
 "covered_now": topic keys (from the list below) they addressed in this conversation itself, not just in what was known before; [] if none.
 "missing": topic keys not yet covered, counting what was already known.
@@ -177,7 +186,7 @@ export async function readTurn(
 // earlier reply said (2026-10-01: after Co called its moat "not event
 // facilitation", it kept saying so). The bad reply isn't quoted; quoted bad
 // examples get copied.
-export const ABOUT_CO_INSTRUCTION = "They're asking what you are. Answer from who you are, warmly and in your own words. The room is the point: at Co events you know who's there and tell each member who's worth meeting and why. Getting to know them between events is what makes the room work, not the other way around. If an earlier reply in this conversation put it differently, that reply was wrong; don't repeat it.";
+export const ABOUT_CO_INSTRUCTION = "They're asking what you are or what you'll do for them. If they have something open with you (a search, a task, a goal in your notes), your first words are where it stands: what you've found, what's unconfirmed, and your next move. Start with the goal by name, the way \"Your venue search: ...\" does, not with a rating of yourself; the state is the proof. Otherwise answer from who you are, warmly and in your own words: the room is the point; at Co events you know who's there and tell each member who's worth meeting and why, and getting to know them between events is what makes the room work, not the other way around. If an earlier reply in this conversation put it differently, that reply was wrong; don't repeat it.";
 
 // Their feedback, as a reminder for Co to save each piece (the tool decides; nothing is vetoed).
 export function feedbackInstruction(feedback: string[]): string | null {

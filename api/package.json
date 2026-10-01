@@ -25,7 +25,8 @@
     "prepare": "git config core.hooksPath .githooks 2>/dev/null || true",
     "issues": "tsx src/scripts/listIssues.ts",
     "broke": "tsx src/scripts/whatBroke.ts",
-    "metrics": "tsx src/scripts/metrics.ts"
+    "metrics": "tsx src/scripts/metrics.ts",
+    "evals:replay": "tsx evals/replay/run.ts"
   },
   "keywords": [],
   "author": "",
@@ -47,6 +48,7 @@
     "express": "^5.2.1",
     "express-rate-limit": "^8.3.2",
     "geo-tz": "^8.1.8",
+    "heic-convert": "^2.1.0",
     "helmet": "^8.1.0",
     "hume": "^0.15.17",
     "jsonwebtoken": "^9.0.3",

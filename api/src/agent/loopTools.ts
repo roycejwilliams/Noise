@@ -76,6 +76,9 @@ export function loopTools(
   const theirWords = () => `${ctx.resolvedContent} ${ctx.turn?.message ?? ""}`;
   // Probes and dry runs never spend on searches (ctx.stubSearch).
   const STUB = { ok: true, note: "Test run: nothing was searched. Say you looked and nothing solid came up yet." };
+  // A receipt for every search, empty or not, so "I looked and nothing turned
+  // up" is backed (2026-10-01: with no record, the fact check cut it).
+  const receipt = (what: string) => ctx.facts?.add("did_this_turn", what);
 
   return {
     searchEvents: tool({
@@ -87,7 +90,10 @@ export function loopTools(
         whileLooking: z.string().optional().describe("Only on your first search, if it'll take a moment: a few words to them, in your own voice."),
       }),
       execute: async ({ what, when, city, whileLooking }) => {
-        if (ctx.stubSearch) return { ...STUB, events: [] };
+        if (ctx.stubSearch) {
+          receipt(`Looked up events for "${what}"${when ? `, ${when}` : ""} just now: nothing came back.`);
+          return { ...STUB, events: [] };
+        }
         if (outOfTime()) return OUT_OF_TIME;
         await hold(whileLooking);
         const [r, earlier] = await Promise.all([
@@ -107,6 +113,7 @@ export function loopTools(
         });
         for (const g of r.turnedAway) if (g.url) loop.found.set(g.url, { name: g.name, url: g.url, facts: "", match: null, blocked: g.reasons.join(", ") });
         for (const e of events) ctx.facts?.add("known", `Found just now: "${e.name}"${e.link ? `, link ${e.link}` : ""}. ${e.details.join(" ")}`);
+        receipt(`Looked up events for "${what}"${when ? `, ${when}` : ""} just now: ${events.length} came back${r.turnedAway.length ? `, ${r.turnedAway.length} turned away (${r.turnedAway.map((g) => `${g.name}: ${g.reasons.join(", ")}`).join("; ").slice(0, 200)})` : ""}.`);
         const openings = earlier.filter((m) => "url" in m && m.url).slice(0, 4).map((m) => {
           const facts = `${m.reason} ${(m as any).evidence ?? ""}`.trim().slice(0, 600);
           loop.found.set((m as any).url, { name: m.name, url: (m as any).url, facts, match: m, blocked: null });
@@ -132,7 +139,10 @@ export function loopTools(
         whileLooking: z.string().optional().describe("Only on your first search, if it'll take a moment: a few words to them, in your own voice."),
       }),
       execute: async ({ queries, sites, whileLooking }) => {
-        if (ctx.stubSearch) return { ...STUB, results: [] };
+        if (ctx.stubSearch) {
+          receipt(`Searched the web just now (${queries.map((q) => `"${q}"`).join(", ")}): nothing held up on its own page.`);
+          return { ...STUB, results: [] };
+        }
         if (outOfTime()) return OUT_OF_TIME;
         const left = LOOP_BUDGET.webSearches - loop.webQueries;
         if (left <= 0) return { ok: false, error: "No web searches left this turn: work with what you have, or read a page you already found." };
@@ -176,6 +186,7 @@ export function loopTools(
             ...(blocked.length ? [{ name: `${blocked.join(", ")} listings`, url: "", why: "those sites block reading, so their listings can't be checked; look for places' own pages" }] : []),
           ],
           note: all.map((x) => x.note).find((n) => /checked/.test(n)) ?? all[0]?.note ?? "" };
+        receipt(`Searched the web just now (${run.map((q) => `"${q}"`).join(", ")}): ${r.kept.length} held up on their own pages${r.dropped.length ? `, ${r.dropped.length} didn't` : ""}.`);
         for (const k of r.kept) {
           const facts = [...k.facts, ...(k.date ? [`date: ${k.date}`] : [])].join("; ");
           const match = { tier: 3, kind: "opportunity", source: "web", name: k.name, url: k.url, reason: facts || k.name, evidence: `${k.name}. ${facts}`, ...(k.date ? { statedDates: { start: k.date } } : {}) } as unknown as TierMatch;
@@ -346,6 +357,23 @@ export function loopTools(
       execute: async (patch) => {
         await remember(patch as Partial<SearchIntent>);
         return { ok: true };
+      },
+    }),
+
+    // Where one of their open loops stands (services/openLoops.ts): Co's word
+    // wins over what code derives, until the loop's source closes.
+    updateLoop: tool({
+      description: toolUse("updateLoop"),
+      inputSchema: z.object({
+        loop: z.string().describe("The loop, by the name it has in what you're carrying for them, or a new one in a few words."),
+        status: z.enum(["open", "waiting_on_reply", "unconfirmed", "decision_needed", "done", "dropped"]),
+        detail: z.string().optional().describe("What it's waiting on or what's unconfirmed, in a few words."),
+      }),
+      execute: async ({ loop, status, detail }) => {
+        if (ctx.dryRun) return { ok: true, note: "Recorded (test run)." };
+        const { setLoopStatus } = await import("../services/openLoops.js");
+        const r = await setLoopStatus(ctx.userId, loop, status, detail?.trim().slice(0, 240) ?? null).catch(() => ({ ok: false, title: loop }));
+        return r.ok ? { ok: true, note: `"${r.title}" is now ${status.replace(/_/g, " ")}.` } : { ok: false, error: "Couldn't record that. Don't say you did." };
       },
     }),
   };

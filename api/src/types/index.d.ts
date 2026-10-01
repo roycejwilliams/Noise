@@ -94,3 +94,8 @@ interface HumeWebhookPayload {
   duration_seconds: number;
   recording_url?: string;
 }
+
+// heic-convert ships no types (services/imageRead.ts).
+declare module "heic-convert" {
+  export default function convert(opts: { buffer: Buffer | Uint8Array; format: "JPEG" | "PNG"; quality?: number }): Promise<Uint8Array>;
+}

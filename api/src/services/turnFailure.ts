@@ -3,9 +3,10 @@
 // search blowing up, a restart mid-turn), the member sees "Read" and nothing
 // else. Instinct's Sep 21-22 outage did exactly this and a user called it
 // "worse than an error message". This is the one honest line Co sends
-// instead. It asks them to resend rather than promising a retry, because
-// nothing retries the turn on its own.
-export const TURN_FAILED_NOTE = "Sorry, something went wrong on my end and I missed that last one. Could you send it again?";
+// instead. It owns the miss without asking them to redo anything (2026-10-01:
+// "never make the user redo work because you dropped something"), and promises
+// no retry, because nothing retries the turn on its own yet.
+export const TURN_FAILED_NOTE = "Sorry, something broke on my end on that last one.";
 
 // At most one of these per member in this window, so an outage that fails
 // every turn doesn't turn into a string of apologies.

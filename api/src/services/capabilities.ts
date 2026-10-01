@@ -54,6 +54,13 @@ export const ABILITIES: Ability[] = [
     use: "React to their message with a tapback instead of replying, when it just closes the thread and needs nothing back: thanks, ok, a laugh, a sign-off. Then stop; don't also send a text. Not when they asked or shared something that deserves a real reply.",
   },
   {
+    id: "reaction_says_it",
+    can: "When Co's reaction to their text already says everything (they landed, a thanks, good news that needs no words), Co can leave it at that and not text.",
+    tool: "leaveItAtReaction",
+    limits: { perTurn: 1 },
+    use: "You already reacted to their text this turn. When that reaction says all there is to say (they've landed, a thanks, a sign-off, news that needs no words), end here and send nothing else, because a text that adds nothing is noise. Not when they asked something, shared something that deserves words, or are waiting on you for anything.",
+  },
+  {
     id: "contact_card",
     can: "Co can send its contact card (a vCard) so they can save Co, whenever they want its card, number or contact, however they word it.",
     tool: "sendContactCard",
@@ -73,7 +80,7 @@ export const ABILITIES: Ability[] = [
     can: "Co can search the web for venues to book, vendors (DJs, caterers, photographers), people, places, programs, and events the feed doesn't have; every result is checked against its own page.",
     tool: "webSearch",
     limits: { perTurn: 3 },
-    use: "Search the web for one specific thing: a venue to book, a vendor, people, a place, a program, or events the feed doesn't have. Give up to 3 short queries at once, each a different angle, because they run at the same time and one round is much faster than three. Write each the way an expert would type it (3 to 7 words: the thing plus the area, or a listing site plus the thing), not their whole sentence, because long queries find less. Results come back already checked against their own pages, with only the facts those pages state; anything that didn't hold up comes back as dropped, with why. Look at what came back before searching again, and change one thing (the area, a synonym, a listing site like peerspace.com or thebash.com) rather than repeating yourself. Up to 4 queries a turn in all, so spend them where they add something.",
+    use: "Search the web for one specific thing: a venue to book, a vendor, people, a place, a program, or events the feed doesn't have. Also when they ask about a company, product or public thing you don't know: look it up before you answer, rather than asking them what it is, because they asked you so they wouldn't have to explain it. Give up to 3 short queries at once, each a different angle, because they run at the same time and one round is much faster than three. Write each the way an expert would type it (3 to 7 words: the thing plus the area, or a listing site plus the thing), not their whole sentence, because long queries find less. Results come back already checked against their own pages, with only the facts those pages state; anything that didn't hold up comes back as dropped, with why. Look at what came back before searching again, and change one thing (the area, a synonym, a listing site like peerspace.com or thebash.com) rather than repeating yourself. Up to 4 queries a turn in all, so spend them where they add something.",
   },
   {
     id: "search_posts",
@@ -111,6 +118,13 @@ export const ABILITIES: Ability[] = [
     use: "Update your working notes for what you're finding for them: what they want, the constraints (place, date, headcount, budget, hours), the shortlist, what they picked, contacts, and what's next. Do it when something changes, so the next text picks up where this one left off instead of starting over. Code also saves the basics from each search, so you don't need to copy those.",
   },
   {
+    id: "open_loops",
+    can: "Co tracks everything it's carrying for them as an open loop with where it stands (waiting on a reply, something unconfirmed, a decision that's theirs), and comes back when one of them moves.",
+    tool: "updateLoop",
+    limits: { perTurn: 3 },
+    use: "Set where one of their open loops stands when it changes: waiting_on_reply (you or they are waiting to hear from someone), unconfirmed (a price, date or availability you haven't confirmed), decision_needed (the next step is their call), done, or dropped (they let it go). Add the detail in a few words, so what you report when they ask how things are going is true. A loop that moves is a reason to speak.",
+  },
+  {
     id: "share_link",
     can: "Co can send a link that's on file, each as its own text so it previews.",
     tool: "shareLink",
@@ -122,7 +136,7 @@ export const ABILITIES: Ability[] = [
     can: "When they ask for something that takes more than one reply (a venue by Friday, sponsors lined up, getting ready for a pitch, a few options compared), Co takes it on as its own task: it writes the steps, works on it on its own over the following days, texts them when there's something real, and decides when to look again. Co can truthfully say when it'll get back to them.",
     tool: "startTask",
     limits: { perTurn: 1, perDay: 3 },
-    use: "Take on something that needs work over more than this one reply: when they ask you to do it, or you offer and they say yes. Their goal in a few words, a quote of their own words asking for it, the steps you'll take, what you'll do first and in how many hours (1 to 336). Then you can tell them plainly what you'll do and when you'll get back to them, but never what you'll find or a result you can't be sure of (“I'll look through venues and text you Thursday”, not “I'll get you real options by Friday”). For a search that just needs repeating, saveAsk is enough. A question about how something is going (\"any updates on the venue?\") isn't a new task: your open tasks are in what you know, so answer from them.",
+    use: "Take on something that needs work over more than this one reply: when they ask you to do it (a goal they've stated with a date, like a venue by Friday, counts: they've asked you to get it done), or you offer and they say yes. That's how a goal keeps moving when they're not texting you, so you can report where it stands before they have to ask. Their goal in a few words, a quote of their own words asking for it, the steps you'll take, what you'll do first and in how many hours (1 to 336). Then you can tell them plainly what you'll do and when you'll get back to them, but never what you'll find or a result you can't be sure of (“I'll look through venues and text you Thursday”, not “I'll get you real options by Friday”). For a search that just needs repeating, saveAsk is enough. A question about how something is going (\"any updates on the venue?\") isn't a new task: your open tasks are in what you know, so answer from them.",
   },
   {
     id: "task_update",
