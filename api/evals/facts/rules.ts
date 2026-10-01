@@ -231,10 +231,36 @@ check("the record starts filled from what was already logged", /backfillCoAction
   check("a denial the reader found false is still cut", !falseDenial.pass);
   const denial = [{ name: "claim_member_life", pass: false, reason: 'member_life: "I don\'t have a mentor or startup name saved for you"' }] as any;
   check("a false 'nothing on file' about their life goes to the redraft, not a bare cut", RG2.deniesWhatTheyToldCo(denial, s) && !RG2.deniesWhatTheyToldCo(denial, { ...s, recentMemories: "" }) && !RG2.deniesWhatTheyToldCo([{ name: "claim_time", pass: false, reason: 'time: "I don\'t have the start time"' }] as any, s));
-  check("the redraft may use their memories, and its recheck still holds each detail to a source", /src\.recentMemories \?\? "", src\.contextSummary \?\? ""\]\.join/.test(src("harness/replyGrounding.ts")) && /!deniesWhatTheyToldCo\(effectiveFailed1, src\)/.test(src("harness/replyGrounding.ts")));
+  check("the redraft may use their own words from memories, and its recheck still holds each detail to a source", /text\), theirOwnWords\(src\.recentMemories\)\]\.join/.test(src("harness/replyGrounding.ts")) && /!deniesWhatTheyToldCo\(effectiveFailed1, src\)/.test(src("harness/replyGrounding.ts")));
   const g = src("harness/replyGrounding.ts");
-  check("the claim reader sees their memories and knows member_life", /What they've told Co before \(older memories, theirs only\)/.test(g) && /- member_life: something about the member's own life/.test(g) && /nothing they've told Co before, gives X/.test(g));
-  check("the redraft sees their memories and may not deny what they hold", /What they've told you before \(about their own life; true for them\)/.test(g) && /never say you don't have something that what they've told you before gives/.test(g));
+  check("the claim reader sees their own words from memories and knows member_life", /What they've told Co before \(their own words from older conversations\)/.test(g) && /- member_life: something about the member's own life/.test(g) && /nothing they've told Co before, gives X/.test(g) && /someone who's another member of Co is never part of their own life/.test(g));
+  check("the redraft sees their own words and may not deny what they hold", /What they've told you before \(their own words about their own life\)/.test(g) && /never say you don't have something that what they've told you before gives/.test(g));
+
+  // #49 review, 2026-10-01: the exact cases found.
+  // 1. A Co-written memory about another member never backs a claim, whatever its label.
+  const intro = "Co introduced them to Maya, another member, who is building grid storage software and wants to meet them.";
+  const mayaQuote = "Maya, another member, who is building grid storage software";
+  for (const type of ["member_life", "detail", "other_person"]) {
+    const [r] = RG2.claimChecks([claim(type, "Maya's building grid storage software", mayaQuote)], rf, { ...s, recentMemories: intro });
+    check(`review #1: another member's details from a Co-written memory don't pass as ${type}`, !r.pass);
+  }
+  check("review #1: only the member's own lines of a memory count", RG2.theirOwnWords(`${intro}\nUser said: My friend Maya builds grid storage.\nCo replied: Nice.`) === "My friend Maya builds grid storage.");
+  const [friend] = RG2.claimChecks([claim("member_life", "your friend Maya builds grid storage", "My friend Maya builds grid storage")], rf, { ...s, recentMemories: `${intro}\nUser said: My friend Maya builds grid storage.` });
+  check("review #1: what they said themselves about someone in their life still backs it", friend.pass);
+  // 2. Only Co's own negated, first-person denial skips a citation.
+  for (const t of ["The organizers don't have a start time posted yet", "Your mentor Lena is on file", "It's their first time hosting, so expect a small crowd"]) {
+    const [r] = RG2.claimChecks([claim("detail", t, null)], rf, { ...s, recentMemories: "" });
+    check(`review #2: uncited "${t}" still needs a source`, !r.pass);
+  }
+  for (const t of ["I don't have either of those on file yet", "Nothing saved about a mentor yet", "This is the first I'm hearing of it"]) {
+    const [r] = RG2.claimChecks([claim("detail", t, null)], rf, { ...s, recentMemories: "" });
+    check(`review #2: Co's own true denial "${t}" needs no citation`, r.pass);
+  }
+  // 3. Everyday companion lines don't buy the paid claim read; Co's denials do.
+  for (const t of ["I don't know, what do you think?", "First time at one of these?", "Honestly I don't know how that feels, tell me more."])
+    check(`review #3: "${t}" skips the claim read`, !RG2.needsClaimCheck(t));
+  for (const t of ["I don't actually have anything like that on file for you, no mentor or startup name saved. Want to tell me about it?", "Honestly, this is the first I'm hearing of it.", "Your mentor Lena is on file."])
+    check(`review #3: "${t.slice(0, 40)}…" gets the claim read`, RG2.needsClaimCheck(t));
 }
 console.log(`facts rules: ${total - failed}/${total} passed`);
 if (failed) process.exitCode = 1;

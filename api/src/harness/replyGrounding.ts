@@ -456,12 +456,28 @@ const norm = (s: string) =>
 // Co remembered was cut and Co said "I don't have that on file"
 // (evals/memory/semanticLive.ts, relationship and cross-user).
 export const WORLD_CLAIMS = new Set(["time", "place", "link", "count", "offer", "followup", "prediction", "other_person"]);
+
+// Only the member's own words from their memories and the thread: the
+// "User said:" lines. Memories also hold what Co wrote (intros, matches,
+// recommendations), which can carry another member's details, so those never
+// back anything (2026-10-01 review of #49: "Maya's building grid storage",
+// quoted from a Co-written intro memory, passed as member_life).
+export function theirOwnWords(text: string | undefined): string {
+  return (text ?? "")
+    .split("\n")
+    .map((l) => l.match(/\bUser(?: said)?:\s*(.+)$/i)?.[1]?.trim() ?? "")
+    .filter(Boolean)
+    .join("\n");
+}
+
 export function sourceText(rf: ReplyFacts, src: GroundingSources, claimType?: string): string {
   const realFacts = rf.facts.filter((f) => f.kind !== "hint").map((f) => f.text).join("\n");
-  const summaries = claimType && WORLD_CLAIMS.has(claimType) ? [] : [src.contextSummary ?? "", src.recentMemories ?? ""];
-  // Their life is backed by what they told Co, never by what Co said this turn.
-  const ownWords = claimType === "member_life" ? [] : (src.sentThisTurn ?? []);
-  return norm([realFacts, src.recentConversation, ...summaries, src.message, ...ownWords].join("\n"));
+  const memories = theirOwnWords(src.recentMemories);
+  // Their life is backed by what they themselves said (facts, their texts,
+  // their own lines in memories), never by Co's summary or Co's words.
+  if (claimType === "member_life") return norm([realFacts, theirOwnWords(src.recentConversation), memories, src.message].join("\n"));
+  const summaries = claimType && WORLD_CLAIMS.has(claimType) ? [] : [src.contextSummary ?? "", memories];
+  return norm([realFacts, src.recentConversation, ...summaries, src.message, ...(src.sentThisTurn ?? [])].join("\n"));
 }
 
 // "2pm", "2:00 PM", "14:00" -> "14:00"
@@ -697,14 +713,14 @@ Never claims (don't list these):
 
 Precedence, when a sentence fits both: a named venue, event, person, date, price, number, rule, fee or deadline that isn't in the sources is a claim even inside advice. Saying specific people will be there, or that they're the member's people, is other_person even when phrased loosely. A person the member told Co about, said back as who they are to the member ("your mentor Lena reviews your pitch on Fridays", if they said so), is member_life; what that person thinks, says, wants or will do now is other_person. A possibility about the kind of person or outcome the member wants is advice.
 
-Support: a claim is supported only if a FACT below states it, or the real texts in the conversation show it. What Co did or didn't do (past_action, including "I never sent that") needs a FACT: Co's own earlier words aren't evidence of what it did, and if a FACT shows Co sent it, "never sent" is unsupported; passing something to the team needs a FACT that it was saved. A future_promise needs a FACT that it will actually happen (a scheduled call, a pending item, an open task, or the next step in Co's working notes for them); an open task Co is working on for them supports promising to keep working that goal (keep looking, chase a price or a quote, report back before its deadline). A capability needs a capability FACT covering that exact thing. A prediction needs a FACT stating that outcome; guessing from what was or wasn't found is never support. "I don't have X" is supported only when no FACT, and nothing they've told Co before, gives X; when nothing does, mark it supported with no factId or quote, since an absence has nothing to cite. Them having just mentioned X in this message doesn't make "I don't have anything on file about X" false. A clash needs FACTS giving both start times, overlapping. Dates decide offers and follow-ups: an offer needs a FACT showing it's still ahead or today, never one marked "already over" or "outside the dates they asked about"; a followup needs a FACT showing it's already over, never one marked "coming up". A number must match its source exactly. What Co knows about them and what they've told Co before (both below, and only ever about this member) can support member_life and a detail about the member themself, never a claim about an event, a count, a link, or another person outside their own life. Never count something as supported because it's plausible.
+Support: a claim is supported only if a FACT below states it, or the real texts in the conversation show it. What Co did or didn't do (past_action, including "I never sent that") needs a FACT: Co's own earlier words aren't evidence of what it did, and if a FACT shows Co sent it, "never sent" is unsupported; passing something to the team needs a FACT that it was saved. A future_promise needs a FACT that it will actually happen (a scheduled call, a pending item, an open task, or the next step in Co's working notes for them); an open task Co is working on for them supports promising to keep working that goal (keep looking, chase a price or a quote, report back before its deadline). A capability needs a capability FACT covering that exact thing. A prediction needs a FACT stating that outcome; guessing from what was or wasn't found is never support. "I don't have X" is supported only when no FACT, and nothing they've told Co before, gives X; when nothing does, mark it supported with no factId or quote, since an absence has nothing to cite. Them having just mentioned X in this message doesn't make "I don't have anything on file about X" false. A clash needs FACTS giving both start times, overlapping. Dates decide offers and follow-ups: an offer needs a FACT showing it's still ahead or today, never one marked "already over" or "outside the dates they asked about"; a followup needs a FACT showing it's already over, never one marked "coming up". A number must match its source exactly. What they've told Co before (their own words, below) can support member_life; what Co knows about them can support a detail about the member themself; neither supports a claim about an event, a count, a link, or another person outside their own life, and someone who's another member of Co is never part of their own life. Never count something as supported because it's plausible.
 
 FACTS:
 ${facts}
 
 Conversation so far:
 ${src.recentConversation || "(none)"}
-${src.sentThisTurn?.length ? `\nCo already sent this turn:\n${src.sentThisTurn.join("\n")}\n` : ""}${src.contextSummary ? `\nWhat Co knows about them:\n${src.contextSummary}\n` : ""}${src.recentMemories ? `\nWhat they've told Co before (older memories, theirs only):\n${src.recentMemories}\n` : ""}
+${src.sentThisTurn?.length ? `\nCo already sent this turn:\n${src.sentThisTurn.join("\n")}\n` : ""}${src.contextSummary ? `\nWhat Co knows about them:\n${src.contextSummary}\n` : ""}${theirOwnWords(src.recentMemories) ? `\nWhat they've told Co before (their own words from older conversations):\n${theirOwnWords(src.recentMemories)}\n` : ""}
 They just said: "${src.message}"
 
 Message Co is about to send:
@@ -761,7 +777,7 @@ export function claimChecks(claims: Claim[], rf: ReplyFacts, src: GroundingSourc
     // A true "I don't have that" has nothing to cite: the reader saw every
     // source and found nothing (2026-10-01: once denials were checked, true
     // ones were cut for "cited support not found").
-    const absence = (c.type === "detail" || c.type === "member_life") && DENIES_HAVING.test(c.text);
+    const absence = (c.type === "detail" || c.type === "member_life") && CO_DENIES_HAVING.test(c.text);
     if (pass && !absence) {
       const factOk = !!c.factId && factIds.has(c.factId);
       const quoteOk = !!c.quote && norm(c.quote).length >= 6 && sources.includes(norm(c.quote));
@@ -790,7 +806,7 @@ ${renderReplyFacts(rf)}
 
 Recent conversation:
 ${tail || "(none)"}
-${src.sentThisTurn?.length ? `\nYou already sent this turn:\n${src.sentThisTurn.join("\n")}\n` : ""}${src.recentMemories ? `\nWhat they've told you before (about their own life; true for them):\n${src.recentMemories}\n` : ""}
+${src.sentThisTurn?.length ? `\nYou already sent this turn:\n${src.sentThisTurn.join("\n")}\n` : ""}${theirOwnWords(src.recentMemories) ? `\nWhat they've told you before (their own words about their own life):\n${theirOwnWords(src.recentMemories)}\n` : ""}
 They just said: "${src.message}"
 
 Your draft reply:
@@ -1010,15 +1026,24 @@ const INVITE_FALLBACK = "Invites go through me. Ask me for an invite for your fr
 // could carry a checkable claim still gets read: numbers, times and dates,
 // links or contact details, a proper name mid-sentence, Co describing its own
 // actions or plans, or someone else's words or intent.
-// Co saying it doesn't have or know something about them.
-export const DENIES_HAVING = /\b(on file|don'?t (have|know)|do not (have|know)|no record|nothing (saved|stored|on)|haven'?t (got|saved|heard)|first (i'?m )?hear(ing|d)|first (real )?(conversation|time))\b/i;
+// Co itself saying it doesn't have something ("I don't have that on file",
+// "nothing saved", "first I'm hearing of it"). First person and negated only:
+// "the organizers don't have a time", "Lena is on file" and "their first time
+// hosting" are claims about the world that still need a source (2026-10-01
+// review of #49).
+export const CO_DENIES_HAVING = /\b(?:i|we)\s+(?:do not|don'?t|haven'?t|have not|never)\s+(?:have|got|saved|heard)\b|\bnothing (?:saved|stored|on file)\b|\bnot on file\b|\bno record\b|\bfirst (?:i'?m hearing|i(?:'ve| have)? heard)\b/i;
+// What sends a reply to the claim read: a denial, or anything about "on file".
+// Not "don't know" or "first time", which are everyday companion lines
+// ("I don't know, what do you think?") with nothing to verify.
+const CLAIMS_ON_FILE = /\bon file\b/i;
 
-// A false "I don't have that" about their own life can't just be cut: what's
+// A false "I don't have that" can't just be cut: what's
 // left ("Want to fill me in?") still doesn't answer them. It goes to the
-// redraft, which sees what they've told Co and says the true thing
-// (2026-10-01, semanticLive cross-user).
+// redraft, which sees their own words and the facts and says the true thing
+// (2026-10-01, semanticLive cross-user). That includes a wrong "I don't have
+// the start time" when a FACT gives it.
 export function deniesWhatTheyToldCo(failed: GateCheck[], src: GroundingSources): boolean {
-  return !!(src.recentMemories?.trim() || src.contextSummary?.trim()) && failed.some((c) => /^claim_(detail|member_life)$/.test(c.name) && DENIES_HAVING.test(c.reason ?? ""));
+  return !!(src.recentMemories?.trim() || src.contextSummary?.trim()) && failed.some((c) => /^claim_(detail|member_life)$/.test(c.name) && CO_DENIES_HAVING.test(c.reason ?? ""));
 }
 
 const CLAIM_SHAPED = [
@@ -1051,7 +1076,8 @@ const CLAIM_SHAPED = [
   // Saying Co doesn't have something (2026-10-01, evals/memory/semanticLive.ts
   // cross-user: "I don't have anything like that on file, no mentor or
   // startup name saved" went out unchecked while their memories named both).
-  DENIES_HAVING,
+  CO_DENIES_HAVING,
+  CLAIMS_ON_FILE,
 ];
 
 export function needsClaimCheck(draft: string): boolean {
@@ -1134,9 +1160,9 @@ export async function groundReply(
         const rewrite = await redraft(draft, effectiveFailed1, rf, src);
         stages.redraftMs = Date.now() - t0;
         const cleaned = rewrite ? cleanCoMessage(rewrite) : null;
-        // Their own life (memories, summary) may come into the rewrite; the
-        // recheck still holds each detail to its source.
-        const allowed = [...rf.facts.filter((f) => f.kind !== "hint").map((f) => f.text), src.recentMemories ?? "", src.contextSummary ?? ""].join("\n");
+        // Their own words from memories may come into the rewrite (never
+        // Co-written memories); the recheck still holds each detail to its source.
+        const allowed = [...rf.facts.filter((f) => f.kind !== "hint").map((f) => f.text), theirOwnWords(src.recentMemories)].join("\n");
         const guard = cleaned ? rewriteAddsNothing(draft, cleaned, allowed) : { ok: false, why: "no rewrite" };
         if (cleaned && guard.ok) {
           const t1 = Date.now();
