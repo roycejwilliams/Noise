@@ -5,6 +5,7 @@
 // ANTHROPIC_API_KEY, OPENAI_API_KEY and a dev DATABASE_URL. About $1-2.
 //
 //   cd api && npx tsx evals/memory/semanticLive.ts > semantic-memory-results.local.log 2>&1
+//   ONLY=relationship,cross-user RUNS=3 npx tsx ...   (some cases, more runs each)
 //
 // Fixes from the brief's draft (2026-10-01 review):
 //  1. correction: the stale Austin memory ('old') is a reject, so selecting it fails the case.
@@ -104,7 +105,8 @@ try {
   await c.query('INSERT INTO pg_temp.co_memories (user_id,memory_type,content,content_embedding,created_at) VALUES ($1,$2,$3,$4::vector,NOW())',[f[1],f[2],f[3],`[${vectors[i].join(',')}]`]);
  }
  out('SEM_SETUP '+JSON.stringify({fixtures:fixtures.length,dimensions:1536,temp:true,productionSqlVerified:true}));
- for(const t of cases) for(let run=1;run<=2;run++){
+ const only=(process.env.ONLY||'').split(',').map(s=>s.trim()).filter(Boolean);const runs=Number(process.env.RUNS)||2;
+ for(const t of cases.filter(x=>!only.length||only.includes(x.id))) for(let run=1;run<=runs;run++){
   const q=await generateEmbedding(t.message);
   const rows=await c.query(sql,[t.user,`[${q.join(',')}]`]);
   const candidates=rows.rows.map(x=>x.content);
@@ -125,7 +127,7 @@ try {
   const replyMiss=[t.must&&!t.must.test(text)?'missing expected detail':null,t.must2&&!t.must2.test(text)?'missing expected marker':null,t.not?.test(text)?'forbidden detail':null,!text?'empty reply':null].filter(Boolean);
   const ok=!retrievalMiss.length&&!retrievalLeaks.length&&!selectionMiss.length&&!selectionLeaks.length&&!replyMiss.length;
   if(!ok) failures++; count++;
-  out('SEM_CASE '+JSON.stringify({id:t.id,run,ok,candidates:ids,selected:selectedIds,retrievalMiss,retrievalLeaks,selectionMiss,selectionLeaks,replyMiss,text,tools:r.toolsCalled,blockedWritesSoFar:blockedWrites,grounding:r.grounding.map((g:any)=>({outcome:g.outcome,failed:(g.checks||[]).filter((x:any)=>!x.pass).map((x:any)=>x.name)}))}));
+  out('SEM_CASE '+JSON.stringify({id:t.id,run,ok,candidates:ids,selected:selectedIds,retrievalMiss,retrievalLeaks,selectionMiss,selectionLeaks,replyMiss,text,tools:r.toolsCalled,blockedWritesSoFar:blockedWrites,grounding:r.grounding.map((g:any)=>({outcome:g.outcome,failed:(g.checks||[]).filter((x:any)=>!x.pass).map((x:any)=>x.name),reasons:(g.checks||[]).filter((x:any)=>!x.pass).map((x:any)=>String(x.reason||'').slice(0,200))}))}));
  }
 } catch(e:any) { failures++;out('SEM_ERROR '+JSON.stringify({name:e?.name||'Error',code:/^[A-Z0-9_]{1,20}$/.test(e?.code||'')?e.code:undefined,status:e?.status,stage:'test failed; no secret details logged'})); }
 finally {

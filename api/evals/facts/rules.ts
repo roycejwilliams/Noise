@@ -201,5 +201,40 @@ check("the record starts filled from what was already logged", /backfillCoAction
   check("a promised result is caught; a promised action isn't", bad.every((t) => !!RG.resultPromiseMatch(t)) && good.every((t) => !RG.resultPromiseMatch(t)));
   check("a promised result is cut, the rest of the reply kept", RG.stripUnsupported("Indoor it is. I'll get you a couple of real options before Friday.", [{ name: "no_result_promise", pass: false }] as any) === "Indoor it is.");
 }
+// ------------------------------------------------ the member's own life backs a reply
+// Royce, 2026-10-01: memories about the member's own life (their people,
+// preferences, history) are valid backing; the world-claim rule is only for
+// people and facts outside it. Live proof: evals/memory/semanticLive.ts
+// relationship and cross-user (Co had cut "Lena" and said nothing was on file).
+{
+  const RG2 = await import("../../src/harness/replyGrounding.js");
+  const rf = RG2.baseReplyFacts();
+  const mem = "User said: My mentor Lena reviews my hardware startup pitch every Friday. She is the person I call when I get stuck.";
+  const s = { message: "Who do I usually turn to when my pitch has me stuck?", recentConversation: "", contextSummary: "", recentMemories: mem };
+  const claim = (type: string, text: string, quote: string | null) => ({ text, type, supported: true, factId: null, quote }) as any;
+  const [life] = RG2.claimChecks([claim("member_life", "your mentor Lena", "My mentor Lena reviews my hardware startup pitch")], rf, s);
+  check("their own mentor, from their memories, backs the reply", life.pass);
+  const [other] = RG2.claimChecks([claim("other_person", "Lena would love to help this week", "My mentor Lena reviews my hardware startup pitch")], rf, s);
+  check("what that person wants or will do is still a world claim memories can't back", !other.pass);
+  check("member_life isn't a world claim; other_person still is", !RG2.WORLD_CLAIMS.has("member_life") && RG2.WORLD_CLAIMS.has("other_person"));
+  const [own] = RG2.claimChecks([claim("member_life", "your mentor Lena", "your mentor Lena")], rf, { ...s, recentMemories: "", sentThisTurn: ["Sounds like your mentor Lena is the one."] });
+  check("their life can't be backed by Co's own words this turn", !own.pass);
+  const [made] = RG2.claimChecks([claim("member_life", "your mentor Priya", "My mentor Priya")], rf, s);
+  check("a person they never mentioned isn't backed", !made.pass);
+  const [startup] = RG2.claimChecks([claim("member_life", "your startup ZEBRA-VAULT-941", "my confidential startup is called ZEBRA-VAULT-941")], rf, { ...s, recentMemories: "User said: My mentor is Ravi and my confidential startup is called ZEBRA-VAULT-941. I live in Miami." });
+  check("their own startup's name, from their memories, backs the reply", startup.pass);
+  check("saying nothing's on file gets the claim check; a plain reply still skips it", RG2.needsClaimCheck("I don't actually have anything like that on file for you, no mentor or startup name saved. Want to tell me about it?") && RG2.needsClaimCheck("Honestly, this is the first I'm hearing of it.") && !RG2.needsClaimCheck("That sounds hard. What's been the toughest part?"));
+  check("the reply is told their memories are theirs to answer from", /It's theirs: when they ask about their own people, plans or history, answer from it\./.test(src("agent/conversationReply.ts")));
+  const [absent] = RG2.claimChecks([claim("detail", "I don't have either of those on file yet", null)], rf, { ...s, recentMemories: "" });
+  check("a true 'nothing on file' needs no citation", absent.pass);
+  const [falseDenial] = RG2.claimChecks([{ ...claim("member_life", "I don't have a mentor on file for you", null), supported: false }], rf, s);
+  check("a denial the reader found false is still cut", !falseDenial.pass);
+  const denial = [{ name: "claim_member_life", pass: false, reason: 'member_life: "I don\'t have a mentor or startup name saved for you"' }] as any;
+  check("a false 'nothing on file' about their life goes to the redraft, not a bare cut", RG2.deniesWhatTheyToldCo(denial, s) && !RG2.deniesWhatTheyToldCo(denial, { ...s, recentMemories: "" }) && !RG2.deniesWhatTheyToldCo([{ name: "claim_time", pass: false, reason: 'time: "I don\'t have the start time"' }] as any, s));
+  check("the redraft may use their memories, and its recheck still holds each detail to a source", /src\.recentMemories \?\? "", src\.contextSummary \?\? ""\]\.join/.test(src("harness/replyGrounding.ts")) && /!deniesWhatTheyToldCo\(effectiveFailed1, src\)/.test(src("harness/replyGrounding.ts")));
+  const g = src("harness/replyGrounding.ts");
+  check("the claim reader sees their memories and knows member_life", /What they've told Co before \(older memories, theirs only\)/.test(g) && /- member_life: something about the member's own life/.test(g) && /nothing they've told Co before, gives X/.test(g));
+  check("the redraft sees their memories and may not deny what they hold", /What they've told you before \(about their own life; true for them\)/.test(g) && /never say you don't have something that what they've told you before gives/.test(g));
+}
 console.log(`facts rules: ${total - failed}/${total} passed`);
 if (failed) process.exitCode = 1;

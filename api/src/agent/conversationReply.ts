@@ -363,7 +363,7 @@ ${input.isFirstContact ? `\nThis is the start of your first real conversation wi
 Recent conversation, in order. This is the actual thread, so follow it. Don't jump to older topics below unless they bring them up again.
 ${input.recentConversation || "(this is the start of the conversation)"}
 
-What Co knows from past conversations that's relevant to what they just said. It was already checked for relevance, so give it the same weight as this thread.
+What Co knows from past conversations that's relevant to what they just said. It was already checked for relevance, so give it the same weight as this thread. It's theirs: when they ask about their own people, plans or history, answer from it.
 ${input.recentMemories || "(nothing from past conversations applies to what they just said)"}
 
 ${lastCoMessage ? `Your last message to them was: "${lastCoMessage}"\n` : ""}${input.imageForVision ? "They just sent the attached photo." : `They just said: "${input.resolvedContent}"`}${lastCoMessage ? `\nIf what they just said is a short answer, read it as an answer to your last message first. If they moved on from a question you asked, go where they went; don't ask it again.` : ""}
@@ -415,7 +415,7 @@ ${input.isFirstContact ? `\nThis is the start of your first real conversation wi
 Recent conversation, in order. This is the actual thread, so follow it. Don't jump to older topics below unless they bring them up again.
 ${input.recentConversation || "(this is the start of the conversation)"}
 
-What Co knows from past conversations that's relevant to what they just said. It was already checked for relevance, so give it the same weight as this thread.
+What Co knows from past conversations that's relevant to what they just said. It was already checked for relevance, so give it the same weight as this thread. It's theirs: when they ask about their own people, plans or history, answer from it.
 ${input.recentMemories || "(nothing from past conversations applies to what they just said)"}
 
 ${lastCoMessage ? `Your last message to them was: "${lastCoMessage}"\n` : ""}${input.imageForVision ? "They just sent the attached photo." : `They just said: "${input.resolvedContent}"`}${lastCoMessage ? `\nIf what they just said is a short answer, read it as an answer to your last message first. If they moved on from a question you asked, go where they went; don't ask it again.` : ""}
