@@ -51,7 +51,7 @@ export const ABILITIES: Ability[] = [
     can: "When a thread is winding down (\"cool\", \"thanks!\", \"haha\"), Co can react to their message with a tapback instead of writing a reply that keeps it going.",
     tool: "reactInsteadOfReplying",
     limits: { perTurn: 1 },
-    use: "React to their message with a tapback instead of replying, when it just closes the thread and needs nothing back: thanks, ok, a laugh, a sign-off. Then stop; don't also send a text. Not when they asked or shared something that deserves a real reply.",
+    use: "React to their message with a tapback instead of replying, when it just closes the thread and needs nothing back: thanks, ok, a laugh, a sign-off. A reaction is a reply: pick the one emoji that fits this exact message, never a generic one when a specific one fits, never the same as your last reaction. If none fits, send a short text instead. Then stop; don't also send a text. Not when they asked or shared something that deserves a real reply.",
   },
   {
     id: "reaction_says_it",
