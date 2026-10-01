@@ -23,7 +23,9 @@ const src = (p: string) => readFileSync(new URL(`../../src/${p}`, import.meta.ur
 
 // ------------------------------------------------ Co's actions
 check("a shared link is a send, with its url", JSON.stringify(F.toolAction("shareLink", { urls: ["https://lu.ma/x"] })) === JSON.stringify([{ relation: "sent", label: "the link https://lu.ma/x", url: "https://lu.ma/x" }]));
-check("a search is recorded as what was looked for", F.toolAction("searchNow", { what: "run clubs in Oakland" })?.[0].label === "run clubs in Oakland");
+check("a search is recorded as what was looked for", F.toolAction("searchEvents", { what: "run clubs in Oakland", when: "this weekend" })?.[0].label === "run clubs in Oakland, this weekend" && F.toolAction("webSearch", { queries: ["DJ for hire SF", "thebash DJ San Francisco"] })?.length === 2);
+check("what the loop shares is recorded as sent, with its link", F.toolAction("shareFinds", { items: [{ link: "https://x.example/a", caption: "A loft in SoMa" }] })?.[0].url === "https://x.example/a" && F.toolAction("shareFinds", { items: [{ link: "https://x.example/a", caption: "A loft in SoMa" }] })?.[0].relation === "sent");
+check("a drafted email is recorded as drafted, never as sent", /drafted an email to events@wave\.sf/.test(F.toolAction("draftEmail", { to: "events@wave.sf", subject: "Oct 10?" })?.[0].label ?? "") && F.toolAction("draftEmail", { to: "a@b.co", subject: "x" })?.[0].relation === "did");
 check("saving an ask is recorded in their words", F.toolAction("saveAsk", { what: "a hardware cofounder" })?.[0].label === "saved an ask to keep looking for: a hardware cofounder");
 check("an intro names who it was with", /with Sam$/.test(F.toolAction("requestEventIntro", { personName: "Sam" })?.[0].label ?? ""));
 check("tools that only read aren't actions", F.toolAction("listOpenAsks", {}) === null && F.toolAction("checkInvitesLeft", {}) === null && F.toolAction("sendReply", { message: "hi" }) === null);
@@ -80,7 +82,8 @@ check("the shown reason is still their own stated ask", /shareReasonFromOwnAsk\(
   const both = ongoingFactsFor([{ text: "a run club in Oakland", kind: "find" }, { text: "Find sponsors", kind: "help" }]);
   check("a find ask is, and only it", both.some((f) => f.kind === "ongoing" && /run club/.test(f.text) && !/sponsors/.test(f.text)));
   const sheet = capabilitySheet().join(" ");
-  check("search says what it can't find, and what it can instead", /It can't find sponsors, investors, or funders themselves, but it can find events where they show up/.test(sheet));
+  // (2026-10-01) The old event-only search couldn't find sponsors or investors; Co's web search can find sponsor programs and funds, checked on their own pages.
+  check("Co knows its web search covers venues, vendors, people and programs", /search the web for venues to book, vendors \(DJs, caterers, photographers\), people, places, programs/.test(sheet));
   check("saving an ask says what isn't searched", /Finding sponsors, investors or funding themselves, and advice, are kept on file but not searched/.test(sheet));
   const rg = src("harness/replyGrounding.ts");
   check("every 'I can' is a capability claim, held to that exact thing", (/every "I can…" is one/.test(rg) && /A capability needs a capability FACT covering that exact thing/.test(rg)));
@@ -116,7 +119,7 @@ check("the shown reason is still their own stated ask", /shareReasonFromOwnAsk\(
   check("the pressed text and the event it was for reach Co and the router", /They pressed Reply on this earlier text from Co/.test(I.repliedToFact({ text: "https://lu.ma/g", fromCo: true, what: "Grok Bot x Notion night", alsoInThread: "Testing" })) && /Grok Bot x Notion night/.test(I.inlineNote({ text: "https://lu.ma/g", fromCo: true, what: "Grok Bot x Notion night" })) && /message: inlineTarget \? `\$\{resolvedContent\} \$\{inlineNote\(inlineTarget\)\}` : resolvedContent,/.test(sb));
   check("the replied-to text is kept with their message", I.inlineNote({ text: "Rooftop evening, Thursday", fromCo: true }) === '[Replying to Co\'s text: "Rooftop evening, Thursday"]' && /\$\{inlineTarget \? ` \$\{inlineNote\(inlineTarget\)\}` : ""\}`;/.test(sb));
   check("a long replied-to text is shortened in the record", I.inlineNote({ text: "x".repeat(300), fromCo: false }).length < 260);
-  check("the hold line and the first search result thread too", /threadedSendAndLog\(holdLine, false, true\)/.test(sb) && /holdLineFrom\(whileLooking\) \?\? HOLD_LINES\[/.test(sb) && /\$\{hold \? HOLD_PREFIX : "Co replied:"\}/.test(sb) && /threadNextSend = true;\s*if \(prepared\.length > 1\)/.test(sb) && /await threadedSendAndLog\(m\.url\)/.test(sb));
+  check("the 'looking' line and the first find thread too", /if \(!sent\.length && loop\.holdSent\) ctx\.threadNext\?\.\(\);/.test(src("agent/loopTools.ts")) && /threadNext: \(\) => \{\s*threadNextSend = true;/.test(sb) && /sendCoReply: threadedSend,/.test(sb));
 }
 
 // ------------------------------------------------ safety (2026-09-28)
@@ -162,7 +165,7 @@ check("the shown reason is still their own stated ask", /shareReasonFromOwnAsk\(
   check("their why reads as their asks and what they're in the middle of", D.whyContext({ asks: ["a builder community"], threads: [{ text: "deciding on accelerators", feeling: null }] }) === 'What they\'ve asked Co for: "a builder community". What they\'re in the middle of: deciding on accelerators.' && D.whyContext({ asks: [], threads: [] }) === "");
   const sb = src("routes/sendblue.ts");
   check("reacting to a link or an offer ties the reply back to their why", /reactingToSent = true;/.test(sb) && /if \(reactingToSent\) \{/.test(sb) && /They're reacting to something Co sent them\. \$\{CO_WHY\}/.test(sb));
-  check("search captions and first offers carry the why, and it isn't stripped as an identity claim", /\$\{CO_WHY\}\$\{matchCount > 1/.test(sb) && /\\n\$\{em\.whyItFits \?\? ""\}\\n\$\{why\}`\)/.test(sb) && /their_why: why/.test(src("agent/eventDiscoverySurfacing.ts")));
+  check("captions carry the why, and never say who they are beyond what they told Co", /tied to what they told you they want and the reason behind it/.test(src("services/capabilities.ts")) && /stripUngroundedIdentity\(it\.caption, known\)/.test(src("agent/loopTools.ts")) && /their_why: why/.test(src("agent/eventDiscoverySurfacing.ts")));
   check("what kind of people events draw is advice; who specifically is there is a claim", (/what kind of people events like this tend to draw/.test(src("harness/replyGrounding.ts")) && /Saying specific people will be there, or that they're the member's people, is other_person/.test(src("harness/replyGrounding.ts"))));
 }
 

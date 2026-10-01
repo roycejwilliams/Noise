@@ -5,7 +5,7 @@ import { recordRevealedOffers } from "./offerReactions.js";
 import { alreadyFoundOpenings, matchKey } from "./eventSurfacingSweep.js";
 import { rewriteKeepsAsk } from "./searchRules.js";
 import { carryTimeFrame, isBrowseAsk, resolveAskWindow } from "./askWindow.js";
-import { describeBrief, routeFor, saveBrief, understandAsk, webFind, type SearchIntent } from "./searchIntent.js";
+import { datedInWindow, describeBrief, routeFor, saveBrief, understandAsk, webFind, whenForWindow, type SearchIntent } from "./searchIntent.js";
 import { searchZone } from "./eventOrder.js";
 import { DateTime } from "luxon";
 import { getTimezoneForCity } from "./geocoding.js";
@@ -243,7 +243,8 @@ export async function generateRecommendation(userId: string, currentMessage?: st
       const now = DateTime.now().setZone(searchZone(timezone).zone);
       let forTimeFrame = currentMessage ? carryTimeFrame(currentMessage, previousText, now) : undefined;
       // A date from earlier in the brief ("Oct 10") when this text names none.
-      if (brief?.when && !(forTimeFrame && resolveAskWindow(forTimeFrame, now).window)) forTimeFrame = `${forTimeFrame ?? ""} ${brief.when}`.trim();
+      const briefWhen = whenForWindow(brief?.when);
+      if (briefWhen && !(forTimeFrame && resolveAskWindow(forTimeFrame, now).window)) forTimeFrame = `${forTimeFrame ?? ""} ${briefWhen}`.trim();
       const searchCity = brief?.city ?? profile.city ?? null;
       // The scope comes back with this search's own matches (2026-09-17: it
       // was read from module state after another await, so two people
@@ -264,6 +265,8 @@ export async function generateRecommendation(userId: string, currentMessage?: st
             profile: [profileForSearch(snapshot), feelings ? roomPreferenceFromFeelings(feelings) : null].filter(Boolean).join("\n") || null,
             // Frustrated with what Co has found: look wider (2026-09-18).
             widen,
+            // One city in the brief: no separate model call to work it out.
+            cities: brief?.city && !/\b(or|and)\b|\+|\//i.test(brief.city) ? [brief.city] : undefined,
           },
         ).catch((err: any) => {
           console.error("generateRecommendation: getTieredRecommendation failed (non-fatal):", err?.message ?? err);
@@ -274,6 +277,19 @@ export async function generateRecommendation(userId: string, currentMessage?: st
       if (brief && tiered && !tiered.matches.length && !tiered.scope.gatedOut?.length && !tiered.scope.windowOutOfRange && !tiered.scope.widened) {
         const wider = await searchTiers(true);
         if (wider?.matches.length) tiered = wider;
+      }
+      // Still thin: the public event feed is a short curated list (about 60
+      // San Francisco events over five weeks, none on Oct 10 in Tech Week;
+      // checked 2026-10-01), so look on the web too, keeping only events whose
+      // own page dates them inside the window (services/searchIntent.ts webFind).
+      if (brief && tiered && tiered.matches.length < 2 && !tiered.scope.windowOutOfRange) {
+        const web = await webFind(userId, brief, { zone: searchZone(timezone).zone }).catch(() => null);
+        const inWindow = (web?.matches ?? []).filter((m) => datedInWindow(m as any, tiered!.scope.windowStart, tiered!.scope.windowEnd));
+        if (web) {
+          tiered.scope.webTried = web.tried;
+          tiered.scope.webDropped = [...web.dropped, ...(web.matches ?? []).filter((m) => !inWindow.includes(m)).map((m) => `${m.name}: not dated inside ${tiered!.scope.window ?? "the time asked"}`)];
+        }
+        if (inWindow.length) tiered = { ...tiered, matches: [...tiered.matches, ...inWindow] };
       }
       // Openings come from what the sweep already found, not a live web search
       // (services/tieredRecommendation.ts); the reply's fit check decides

@@ -81,12 +81,27 @@ const rec = src("services/recommendation.ts");
 check("the search understands the ask before searching, and saves the brief", /brief = await understandAsk\(userId, currentMessage/.test(rec) && /await saveBrief\(userId, brief\)/.test(rec));
 check("non-event asks skip the event tiers for the verified web search", /routeFor\(brief\.kind\) === "web"[\s\S]{0,200}webFind\(userId, brief/.test(rec));
 check("the event tiers search the short summary in the brief's city", /askText = brief\.summary/.test(rec) && /const searchCity = brief\?\.city \?\? profile\.city/.test(rec));
-check("a date from earlier in the brief scopes the event search", /brief\?\.when && !\(forTimeFrame && resolveAskWindow/.test(rec));
+{
+  const A = await import("../../src/services/askWindow.js");
+  const { DateTime } = await import("luxon");
+  const now = DateTime.fromISO("2026-09-30T22:13:00", { zone: "America/Los_Angeles" });
+  const span = (t: string | null) => {
+    const w = t ? A.resolveAskWindow(t, now).window : null;
+    return w ? `${w.start.toISODate()}..${w.end.toISODate()}` : null;
+  };
+  // 2026-09-30: "this weekend" became "Saturday Oct 3 - Sunday Oct 4, 2026" and was searched as Saturday only.
+  check("a brief's weekend written as dates with weekday names is read as both days", span(S.whenForWindow("Saturday Oct 3 - Sunday Oct 4, 2026")) === "2026-10-03..2026-10-04", String(span(S.whenForWindow("Saturday Oct 3 - Sunday Oct 4, 2026"))));
+  check("their own words are left alone", S.whenForWindow("this weekend") === "this weekend" && S.whenForWindow("Friday night") === "Friday night" && S.whenForWindow(null) === null);
+  check("the brief keeps the time in their own words", /the time in their own words, as they said it/.test(src("services/searchIntent.ts")) && /whenForWindow\(brief\?\.when\)/.test(src("services/recommendation.ts")));
+}
+check("a date from earlier in the brief scopes the event search", /briefWhen && !\(forTimeFrame && resolveAskWindow/.test(rec));
 check("thin event results get one wider pass", /const wider = await searchTiers\(true\)/.test(rec));
 check("understanding failing falls back to the old rewrite", /else if \(currentMessage\) \{[\s\S]{0,120}toSearchRequest/.test(rec));
 const sb = src("routes/sendblue.ts");
-check("the reply sees what was searched, what was ruled out and the one question", /Searched for: \$\{briefScope\.brief\.line\}/.test(sb) && /Looked at and ruled out:/.test(sb) && /ask them this one thing at the end/.test(sb));
-check("web picks go out as a short list, up to three", /searchScope\?\.brief\?\.route === "web" \? 3 : 1/.test(sb));
+// (2026-10-01) Replies find things in Co's own loop: it sees every result itself,
+// shares up to three at a time, and a caption that says more than its facts is
+// refused so Co rewrites it (agent/loopTools.ts shareFinds).
+check("finds go out as a short list, up to three, each caption held to its own facts", /\.min\(1\)\s*\.max\(3\)/.test(src("agent/loopTools.ts")) && /caption says more than its facts/.test(src("agent/loopTools.ts")));
 const tw = src("services/taskWeb.ts");
 check("web search budget is the live-request pool for replies", /source: "request"/.test(src("services/searchIntent.ts")) && /reserveWebSearch\(userId, opts\.source \?\? "sweep", what\)/.test(tw));
 
@@ -109,6 +124,10 @@ check("BROWSER_READ=off turns it off", !B.browserReadEnabled({ BROWSER_READ: "of
 const wos = src("services/webOpportunitySearch.ts");
 check("the browser is only a fallback: a readable fetch is used as is, a 404 isn't retried", /if \(text\.length >= MIN_FETCHED_TEXT\) return/.test(wos) && /res\.status === 404 \|\| res\.status === 410\)\)\s*return null/.test(wos) && /browserPageText\(u\.toString\(\)\)/.test(wos));
 const docker = fs.readFileSync(new URL("../../../co-test/Dockerfile", import.meta.url), "utf8") + fs.readFileSync(new URL("../../Dockerfile", import.meta.url), "utf8");
+// co-test runs api code compiled into its own folder, so packages resolve from
+// co-test's node_modules (2026-10-01: playwright-core was only in api's, and the
+// browser fallback quietly never ran on co-test).
+check("co-test can load playwright-core itself", /"playwright-core"/.test(fs.readFileSync(new URL("../../../co-test/package.json", import.meta.url), "utf8")));
 check("both images install Chromium", (docker.match(/apk add --no-cache chromium/g) ?? []).length === 2 && /CHROMIUM_PATH=\/usr\/bin\/chromium-browser/.test(docker));
 
 // A fact next to its own name on a list page.
@@ -139,7 +158,6 @@ check("'open to hosting' and 'has done DJ nights' need the page", TW.unbackedCla
 check("'confirmed' is never said from a page that doesn't", TW.unbackedClaims("Confirmed for 120.", facts).length === 1);
 check("'allows your own DJ' needs the page", TW.unbackedClaims("It allows your own DJ.", facts).length === 1 && TW.unbackedClaims("It allows your own DJ.", "rules: outside DJs allowed").length === 0);
 check("plain facts pass", TW.unbackedClaims("Wave in Lower Haight holds 120 standing, about $720 for four hours.", facts).length === 0);
-check("the caption falls back to plain facts when it says more than the page", /unbackedClaims\(grounded, webFacts\)/.test(sb) && /description = `\$\{m\.name\}: \$\{m\.reason/.test(sb) && /Nothing about their date is confirmed/.test(sb));
 
 // The second reader (services/factCheck.ts).
 const F = await import("../../src/services/factCheck.js");

@@ -7,7 +7,7 @@ import { listCalendarEvents, resolveCoEventPlace } from "./luma.js";
 import { DEFAULT_FEED_DAYS, fetchPublicEvents } from "./lumaDiscovery.js";
 import { rankEventsByDescription, type Closest } from "./eventRanking.js";
 import { localDate, localToday, searchZone } from "./eventOrder.js";
-import { fetchLumaEventDetails, type EventDetails, type OpportunityDetails } from "./eventDetails.js";
+import { fetchLumaEventDetails, renderEventDetails as renderEventDetailsLines, type EventDetails, type OpportunityDetails } from "./eventDetails.js";
 import { getTier3CategoryBias } from "./recommendationOutcome.js";
 import { searchRecentPosts } from "./xSearch.js";
 import { reserveWebSearch, searchWebForOpportunity } from "./webOpportunitySearch.js";
@@ -873,9 +873,9 @@ export function mergeCityResults(results: TieredResult[]): TieredResult {
 export async function getTieredRecommendation(
   ask: StatedIntent,
   profileCity: string | null,
-  opts: Parameters<typeof getTieredRecommendationFor>[2] = {},
+  opts: Parameters<typeof getTieredRecommendationFor>[2] & { cities?: string[] } = {},
 ): Promise<TieredResult> {
-  const cities = await resolveSearchCities(ask.text, profileCity);
+  const cities = opts.cities?.length ? opts.cities : await resolveSearchCities(ask.text, profileCity);
   if (cities.length < 2) return getTieredRecommendationFor(ask, cities[0] ?? null, opts);
   const results = await Promise.all(cities.map((c, i) => getTieredRecommendationFor(ask, c, { ...opts, skipTier3: i > 0 })));
   return mergeCityResults(results);
@@ -1081,3 +1081,55 @@ async function getTieredRecommendationFor(
 
 // For evals.
 export { isGenuinelyRelevant };
+
+// ---------------------------------------------------------------- for Co's own loop
+// The raw candidates for an event search, for Co to judge itself (agent/
+// loopTools.ts searchEvents, 2026-10-01: "Co runs fixed pipelines outside its
+// own reasoning"). Co's calendar and the public feed, inside the window and
+// nearby, ranked by how close each description is to what was asked, with each
+// page's details. No model gates here: fit is Co's call. Only facts are
+// checked, by the same gate as before (sold out, already sent, already over,
+// too far), and what it turns away comes back with the reason.
+export type EventCandidate = { match: TierMatch; lines: string[] };
+export async function eventCandidates(
+  what: string,
+  city: string | null,
+  opts: { when?: string | null; userId?: string | null; timezone?: string | null; limit?: number } = {},
+): Promise<{ candidates: EventCandidate[]; turnedAway: GatedOut[]; window: string | null; feedSize: number; inWindow: number; outOfRange: string | null }> {
+  const { zone } = searchZone(opts.timezone ?? null);
+  const now = DateTime.now().setZone(zone);
+  const resolution = opts.when ? resolveAskWindow(opts.when, now) : { window: null, outOfRange: null };
+  if (resolution.outOfRange) return { candidates: [], turnedAway: [], window: null, feedSize: 0, inWindow: 0, outOfRange: `${resolution.outOfRange.label} is more than ${MAX_ASK_DAYS_AHEAD} days out` };
+  const window = resolution.window;
+  const until = window ? window.end.toJSDate() : new Date(Date.now() + DEFAULT_FEED_DAYS * 24 * 60 * 60 * 1000);
+  const inRange = (startAt: string) => (window ? withinWindow(startAt, window) : isWithinLookaheadWindow(startAt, DEFAULT_FEED_DAYS));
+  const [feed, coEvents] = await Promise.all([cachedPublicEvents(city, until).catch(() => []), cachedCalendarEvents().catch(() => [] as CoCalendarEvent[])]);
+  const coIds = new Set(coEvents.map((e) => e.api_id).filter(Boolean));
+  const ours = await filterByRadius(coEvents.filter((e) => inRange(e.start_at)), city);
+  const theirs = await filterByRadius(feed.filter((e) => !coIds.has(e.api_id) && inRange(e.start_at)), city);
+  const ranking = await rankEventsByDescription(theirs, what, { limit: opts.limit ?? 8, bar: 0, zone, browse: false }).catch(() => ({ ranked: theirs.slice(0, opts.limit ?? 8).map((e) => ({ ...e, details: undefined as EventDetails | undefined })) }));
+  const asMatch = (e: any, tier: 1 | 2): TierMatch => ({
+    tier,
+    kind: tier === 1 ? "co_event" : "public_event",
+    event_api_id: e.api_id,
+    event_date: localDate(e.start_at, zone),
+    name: e.name,
+    url: e.url,
+    reason: tier === 1 ? "A Co event." : "A public event.",
+    city: e.city ?? null,
+    ...(e.online ? { online: true } : {}),
+  }) as TierMatch;
+  const raw: TierMatch[] = [...ours.slice(0, 2).map((e) => asMatch(e, 1)), ...ranking.ranked.map((e: any) => asMatch(e, 2))];
+  const turnedAway: GatedOut[] = [];
+  const gated = await gateMatches(raw, { userId: opts.userId ?? null, searchCity: city, checkRepeat: true, gatedOut: turnedAway, askedUntil: window ? window.end.toISODate() : null, lookaheadDays: null, zone });
+  const candidates = await Promise.all(
+    gated.map(async (m) => {
+      const details = "url" in m && m.url ? ((await fetchLumaEventDetails(m.url).catch(() => null)) ?? undefined) : undefined;
+      const withDetails = { ...m, details } as TierMatch;
+      const e = m as { name: string; event_date?: string; city?: string | null };
+      const lines = details ? renderEventDetailsLines(m.name, details) : [`${e.name}, ${e.event_date ?? ""}${e.city ? `, ${e.city}` : ""}`];
+      return { match: withDetails, lines };
+    }),
+  );
+  return { candidates, turnedAway, window: window?.label ?? null, feedSize: feed.length, inWindow: theirs.length + ours.length, outOfRange: null };
+}

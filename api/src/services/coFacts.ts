@@ -63,8 +63,17 @@ export function toolAction(tool: string, input: any): { relation: string; label:
       return [{ relation: "sent", label: "an invite link to forward to a friend" }];
     case "sendProductUpdates":
       return [{ relation: "sent", label: "the list of what's new in Co" }];
-    case "searchNow":
-      return s(input?.what) ? [{ relation: "searched", label: s(input.what) }] : null;
+    // Co's own loop (agent/loop.ts): what it looked for, read and sent.
+    case "searchEvents":
+      return s(input?.what) ? [{ relation: "searched", label: `${s(input.what)}${s(input?.when) ? `, ${s(input.when)}` : ""}` }] : null;
+    case "searchPosts":
+      return s(input?.query) ? [{ relation: "searched", label: `X posts: ${s(input.query)}` }] : null;
+    case "webSearch":
+      return Array.isArray(input?.queries) && input.queries.length ? input.queries.map((q: unknown) => ({ relation: "searched", label: s(q) })).filter((x: any) => x.label) : null;
+    case "shareFinds":
+      return Array.isArray(input?.items) ? input.items.map((i: any) => ({ relation: "sent", label: s(i?.caption).slice(0, 120) || s(i?.link), url: s(i?.link) })).filter((x: any) => x.url) : null;
+    case "draftEmail":
+      return [{ relation: "did", label: `drafted an email${s(input?.to) ? ` to ${s(input.to)}` : ""} for them to send: ${s(input?.subject)}` }];
     case "saveAsk":
       return [{ relation: "did", label: s(input?.what) ? `saved an ask to keep looking for: ${s(input.what)}` : "saved an ask" }];
     case "closeAsk":

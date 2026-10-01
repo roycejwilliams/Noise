@@ -254,8 +254,11 @@ Return ONLY JSON: {"items": [{"name": "...", "url": "https://the page you read",
   const kept: VerifiedResult[] = [];
   const dropped: Dropped[] = [];
   const droppedDetails: DroppedDetail[] = [];
-  for (const raw of raws) {
-    const page = await pickPage(raw, { read: (u) => readPageText(u), official: (n) => findOfficialPage(n, 20_000) });
+  // Every result's page is found and read at once, then checked in order
+  // (2026-10-01: one after another was most of a ~35s search).
+  const pages = await Promise.all(raws.map((raw) => pickPage(raw, { read: (u) => readPageText(u), official: (n) => findOfficialPage(n, 20_000) }).catch(() => ({ url: raw.url, text: null, official: false, swapped: false }))));
+  for (const [i, raw] of raws.entries()) {
+    const page = pages[i];
     if (!page.text) {
       dropped.push({ name: raw.name, url: raw.url, why: "its page couldn't be read" });
       continue;

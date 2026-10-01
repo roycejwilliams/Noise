@@ -308,15 +308,7 @@ for (const [ok, label] of cases) {
   c(win("the week of Oct 5th")?.label === "week of Oct 5", "the label says it is a week");
 }
 
-// The reply agent must not search a second time in a turn the pipeline already searched
-// (2026-09-21: it re-ran, found only what had just been sent, and told the member "nothing
-// solid came up" right after "two that fit, sending both now").
-{
-  const tools = readFileSync(new URL("../../src/agent/conversationTools.ts", import.meta.url), "utf8");
-  const reply = readFileSync(new URL("../../src/agent/conversationReply.ts", import.meta.url), "utf8");
-  c(/if \(ctx\.searchedThisTurn\) \{\s*return \{ ok: true, found: \[\]/.test(tools), "searchNow refuses to run when a search already ran this turn");
-  c(reply.includes("searchedThisTurn: input.searchedThisTurn"), "the reply agent tells its tools a search already ran");
-}
+// (2026-10-01) The pipeline that searched before the reply is gone; Co searches in its own loop, capped per turn (evals/loop/rules.ts).
 
 // "A companion you can ask 'what are you working on for me' is more trustworthy than one
 // that only surfaces results when it feels like it" (Royce, 2026-09-22) — listOpenAsks

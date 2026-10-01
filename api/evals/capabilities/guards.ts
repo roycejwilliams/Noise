@@ -69,7 +69,7 @@ check("their yes has to be in their message", yesIsTheirs("Yes please!", "yes pl
 {
   const { tools } = make("");
   const shape = (n: string) => Object.keys(tools[n].inputSchema.shape ?? {});
-  check("every guarded tool asks why", ["sendContactCard", "searchNow", "shareLink", "saveAsk", "steerAwayFrom", "listSentOffers", "listOpenAsks", "requestEventIntro"].every((n) => shape(n).includes("why")));
+  check("every guarded tool asks why", ["sendContactCard", "searchEvents", "webSearch", "readPage", "shareFinds", "draftEmail", "shareLink", "saveAsk", "steerAwayFrom", "listSentOffers", "listOpenAsks", "requestEventIntro"].every((n) => shape(n).includes("why")));
   check("the intro tool needs their yes", shape("requestEventIntro").includes("theirYes"));
   check("the card can be resent when it didn't arrive", shape("sendContactCard").includes("resendBecauseMissing"));
   check("replies aren't wrapped", !shape("sendReply").includes("why"));
@@ -77,7 +77,7 @@ check("their yes has to be in their message", yesIsTheirs("Yes please!", "yes pl
 
 // Registry: hard limits and confirmation are declared, not implied
 check("the card is limited to one a day, plus a resend if missing", JSON.stringify(ABILITIES.find((a) => a.id === "contact_card")!.limits) === JSON.stringify({ perTurn: 1, perDay: 1, resendIfMissing: true }));
-check("searches are capped per turn", ABILITIES.find((a) => a.id === "search_now")!.limits!.perTurn === 1);
+check("searches are capped per turn (Co's own loop: agent/loop.ts LOOP_BUDGET)", ABILITIES.find((a) => a.id === "web_search")!.limits!.perTurn === 3 && ABILITIES.find((a) => a.id === "search_events")!.limits!.perTurn === 3 && ABILITIES.find((a) => a.id === "read_page")!.limits!.perTurn === 6);
 check("intros: never twice for the same person, and need a yes", !!ABILITIES.find((a) => a.id === "event_intro")!.limits!.oncePerPerson && ABILITIES.find((a) => a.id === "event_intro")!.confirm === "affects_another_member");
 check("Co knows the confirm-first rule", LIMITS.some((l) => /needs their clear yes first/.test(l)));
 

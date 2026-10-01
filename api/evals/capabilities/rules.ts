@@ -31,6 +31,7 @@ for (const t of registered) {
   const teamOnly = ABILITIES.find((a) => a.tool === t)?.teamOnly;
   check(`registry tool ${t} exists${teamOnly ? " for the team only" : ""}`, teamOnly ? teamTools.includes(t) && !toolNames.includes(t) : toolNames.includes(t));
 }
+check("Co finds things with its own loop's tools, and the old searchNow is gone", ["searchEvents", "webSearch", "searchPosts", "readPage", "shareFinds", "draftEmail", "updateNotes"].every((t) => toolNames.includes(t)) && !toolNames.includes("searchNow"));
 for (const t of toolNames) check(`tool ${t} takes its description from the registry`, (tools as any)[t].description === toolUse(t) || t === "sendReply");
 check("ability ids are unique", new Set(ABILITIES.map((a) => a.id)).size === ABILITIES.length);
 check("every ability says what Co can do", ABILITIES.every((a) => a.can.trim().length > 20));

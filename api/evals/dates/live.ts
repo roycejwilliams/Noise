@@ -8,7 +8,8 @@ process.env.SENDBLUE_API_API_SECRET ||= "unused-in-tests";
 const { setSwitchesForTest } = await import("../../src/services/abilitySwitches.js");
 setSwitchesForTest({});
 const { runConversationReplyAgent } = await import("../../src/agent/conversationReply.js");
-const { addFact, addInstruction, baseReplyFacts, groundReply, searchNoteLine, FRESH_SEARCH_INSTRUCTION } = await import("../../src/harness/replyGrounding.js");
+const { addFact, addInstruction, baseReplyFacts, groundReply, searchNoteLine } = await import("../../src/harness/replyGrounding.js");
+const { LOOP_GUIDE } = await import("../../src/agent/loop.js");
 const { ledgerLine } = await import("../../src/services/coFacts.js");
 
 type Scenario = { name: string; today: string; todayIso: string; message: string; recent: string; before: string[]; after: string[]; wantsSearch?: boolean; bad: (reply: string, tools: string[]) => string | null };
@@ -43,7 +44,7 @@ const S: Scenario[] = [
     before: [`On 2026-09-24 Co sent them "Mahjong After Dark" (https://lu.ma/mahjongafterdark).`, oldNote],
     after: [ledgerLine(mahjongSend as any, "2026-09-26"), searchNoteLine(`[search] ${oldNote}`, new Date("2026-09-24T23:00:00Z"), "2026-09-26")],
     wantsSearch: true,
-    bad: (_r, tools) => (tools.includes("searchNow") ? null : "answered from the earlier search without searching"),
+    bad: (_r, tools) => (tools.includes("searchEvents") || tools.includes("webSearch") ? null : "answered from the earlier search without searching"),
   },
 ];
 const runs = Number(process.argv[2] ?? 3);
@@ -56,7 +57,7 @@ for (const sc of S) {
       addFact(rf, "known", `Today is ${sc.today} (Pacific time).`);
       addFact(rf, "known", "They live in San Francisco.");
       for (const f of sc[phase]) addFact(rf, "did_before", f);
-      if (sc.wantsSearch) addInstruction(rf, FRESH_SEARCH_INSTRUCTION);
+      if (sc.wantsSearch) addInstruction(rf, LOOP_GUIDE);
       const r: any = await runConversationReplyAgent({ userId: "00000000-0000-0000-0000-000000000000", phoneNumber: "+10000000000", firstName: "Royce", resolvedContent: sc.message, isVoice: false, imageForVision: null, hasPendingOffer: false, recentOfferBurstActive: false, callAction: "none", isThinProfileFirstMessage: false, isFirstContact: false, missingTopic: null, missingTopicDescription: null, facts: rf, toneContext: "", seekingModeContext: "", styleHint: "", recentConversation: sc.recent, recentMemories: "", contextSummary: "", personaPrompt: null, sendCoReply: async () => true } as any, { dryRun: true, record: false, stubSearch: true }).catch((e: any) => ({ replyText: `ERROR ${e?.message}`, toolsCalled: [] }));
       const g: any = await groundReply(String(r.replyText ?? ""), rf, { message: sc.message, recentConversation: sc.recent }, { record: false }).catch(() => ({ final: r.replyText }));
       const problem = sc.bad(String(g.final), r.toolsCalled ?? []);

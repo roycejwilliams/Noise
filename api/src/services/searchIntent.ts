@@ -44,6 +44,12 @@ export type SearchIntent = {
   queries: string[]; // 2 to 4 short search queries
   sites: string[]; // where this kind of thing is listed
   ask: string | null; // the one question to ask when something essential is missing
+  // Co's own loop keeps its working notes here too (agent/loopTools.ts).
+  shortlist?: { name: string; url: string; note?: string }[];
+  picked?: string | null;
+  contacts?: { name: string; email: string }[];
+  next?: string | null;
+  tried?: string[];
 };
 
 export const SEARCH_LIMITS = { maxQueryChars: 70, maxQueries: 4, keep: 3, briefHours: 72 };
@@ -106,6 +112,26 @@ export function parseIntent(raw: string, fallbackCity: string | null): SearchInt
   } catch {
     return null;
   }
+}
+
+// The brief's time, ready for the date reader (askWindow.ts). A range written
+// with weekday names ("Saturday Oct 3 - Sunday Oct 4") read as its first day
+// only, so "this weekend" was searched as Saturday (2026-09-30). Weekday names
+// are dropped when the text also has real dates.
+export function whenForWindow(when: string | null | undefined): string | null {
+  if (!when?.trim()) return null;
+  const hasDate = /\b(jan|feb|mar|apr|may|jun|jul|aug|sep|oct|nov|dec)[a-z]*\.?\s+\d{1,2}\b|\b\d{1,2}\/\d{1,2}\b/i.test(when);
+  return hasDate ? when.replace(/\b(mon|tues|wednes|thurs|fri|satur|sun)day,?\s*/gi, "").replace(/\s+/g, " ").trim() : when.trim();
+}
+
+// An event found on the web counts only when its own page dates it inside the
+// window they asked about (an event with no date on its page isn't sent for a
+// time-bound ask).
+export function datedInWindow(m: { statedDates?: { start: string } | null }, windowStart: string | null | undefined, windowEnd: string | null | undefined): boolean {
+  if (!windowStart || !windowEnd) return true;
+  const d = m.statedDates?.start;
+  if (!d) return false;
+  return d >= windowStart.slice(0, 10) && d <= windowEnd.slice(0, 10);
 }
 
 // Wider queries for a second round when the first came back thin: the
@@ -205,7 +231,7 @@ A photo they sent appears as "[sent a photo showing: ...]": a map means the area
 Return ONLY JSON:
 {"kind": "event" (something happening at a time they'd attend) | "program" (an accelerator, grant, fellowship, application) | "venue" (a space to book or use) | "vendor" (a service or person to hire: DJ, caterer, photographer) | "person" (people to meet or reach, like founders with space) | "place" (a restaurant, bar, spot to go) | "info" (a fact or how-to),
  "what": "the thing in a few words, their terms",
- "city": "..." or null, "area": "neighborhood or area" or null, "nearby": ["up to 4 neighborhoods right next to that area, only when an area is set"], "when": "their words for the date or window" or null,
+ "city": "..." or null, "area": "neighborhood or area" or null, "nearby": ["up to 4 neighborhoods right next to that area, only when an area is set"], "when": "the time in their own words, as they said it (\"this weekend\", \"Friday night\", \"Oct 10\"), not turned into dates; Co works the dates out from their words" or null,
  "budget": top of their budget in dollars or null, "headcount": number or null, "hours": how many hours they need it (from their times, e.g. 8pm to midnight is 4) or null, "vibe": "a few words" or null,
  "summary": "one short line describing the whole ask",
  "queries": ["2 to 4 SHORT web search queries, 3 to 7 words each, the way an expert would type them, each a different angle: the thing plus the area, the thing on the site where it's listed, a synonym"],
@@ -257,7 +283,7 @@ export async function webFind(
   // Said plainly, so the reply can explain it (they asked for Peerspace).
   const blocked = intent.sites.filter(cantCheck);
   if (blocked.length) dropped.push(`${blocked.join(", ")} listings: they hide the venue or block checking, so Co looked for places with their own pages`);
-  const kept = new Map<string, { name: string; url: string; facts: string[]; excerpts: string[]; official: boolean; tight: string | null }>();
+  const kept = new Map<string, { name: string; url: string; facts: string[]; excerpts: string[]; official: boolean; tight: string | null; date: string | null }>();
   const round = async (queries: string[]) => {
     const results = await Promise.all(
       queries.map((q) => {
@@ -280,7 +306,7 @@ export async function webFind(
           dropped.push(`${k.name}: ${fit.why}`);
           continue;
         }
-        if (!kept.has(k.url)) kept.set(k.url, { name: k.name, url: k.url, facts: k.facts, excerpts: k.excerpts ?? [], official: k.official, tight: fit.tight ?? null });
+        if (!kept.has(k.url)) kept.set(k.url, { name: k.name, url: k.url, facts: k.facts, excerpts: k.excerpts ?? [], official: k.official, tight: fit.tight ?? null, date: k.date ?? null });
       }
     }
   };
@@ -319,7 +345,7 @@ export async function webFind(
   const matches: TierMatch[] = ranked.map((r) => {
     const estimate = priceEstimate(r.facts, intent.hours);
     const facts = [...r.facts, ...(estimate ? [estimate] : []), ...(r.tight ? [r.tight] : [])].join("; ");
-    return { tier: 3, kind: "opportunity", source: "web", name: r.name, url: r.url, reason: facts || r.name, evidence: `${r.name}. ${facts}`, opportunity: { postText: `${r.name}. ${facts}` } } as unknown as TierMatch;
+    return { tier: 3, kind: "opportunity", source: "web", name: r.name, url: r.url, reason: facts || r.name, evidence: `${r.name}. ${facts}`, opportunity: { postText: `${r.name}. ${facts}` }, ...(r.date ? { statedDates: { start: r.date } } : {}) } as unknown as TierMatch;
   });
   await recordDecision({ layer: 5, decision: "search.web", userId, outcome: matches.length ? "act" : "skip", action: `kept ${matches.length}`, proposal: { intent, tried, kept: ranked.map((r) => ({ name: r.name, url: r.url })), dropped: dropped.slice(0, 20), factCheck: { mode, checks: factChecks } } }).catch(() => {});
   return { matches, tried, dropped, factChecks };

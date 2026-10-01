@@ -18,14 +18,13 @@ import pool from "../db/db.js";
 import { recordDecision } from "../harness/core.js";
 import { markTopicAsked as persistTopicAsked, RAPPORT_TOPICS } from "../services/profileExtraction.js";
 import { captureIntentForTurn } from "../services/profileExtraction.js";
-import { generateRecommendation, recordRecommendationsSent, type RecommendationResult } from "../services/recommendation.js";
-import type { TierMatch } from "../services/tieredRecommendation.js";
-import { enrichMatch, renderEventDetails } from "../services/eventDetails.js";
+import { generateRecommendation, type RecommendationResult } from "../services/recommendation.js";
 import { resolveNamedEventGuest, requestIntroToNamedGuest } from "../services/eventGuestMatchHandoff.js";
 import { askEntries } from "../harness/profileWrite.js";
 import { getTimezoneForCity } from "../services/geocoding.js";
 import { DateTime } from "luxon";
 import { googleTools } from "../services/googleTools.js";
+import { loopTools, newLoopState } from "./loopTools.js";
 
 // A date as the member would say it, in their own zone (2026-09-22 code
 // review: toDateString() used the server's zone, so a Pacific evening showed
@@ -91,19 +90,14 @@ export type ConversationToolContext = {
   isVoice: boolean;
   hasPendingOffer: boolean;
   recentOfferBurstActive: boolean;
-  // The main pipeline already searched and sent results this turn, so searchNow must not
-  // run again (2026-09-21: it re-ran, found only what was just sent, and the reply then said
-  // "nothing solid came up" right after "two that fit, sending both now").
-  searchedThisTurn?: boolean;
   dryRun: boolean;
   sendCoReply: SendCoReply;
   // Layer 3 grounding gate (harness/replyGrounding.ts): runs on each drafted
   // message before it's sent or logged, and returns what actually goes out.
   gate?: (draft: string, sentThisTurn: string[]) => Promise<string>;
-  // Tests only: searchNow returns a placeholder instead of searching the web.
+  // Tests only: the loop's searches and page reads return a placeholder
+  // instead of spending on the web (agent/loopTools.ts).
   stubSearch?: boolean;
-  // The text route's full search-and-send (see ConversationReplyInput).
-  searchAndSend?: (what: string, whileLooking?: string | null) => Promise<{ answered: boolean; sentCount: number; briefing: string }>;
   // For reactInsteadOfReplying.
   messageHandle?: string | null;
   // Their message may mean they aren't safe (services/safety.ts): no tapback.
@@ -120,6 +114,9 @@ export type ConversationToolContext = {
   // Facts for this reply (replyGrounding). Tools add what they actually did
   // so the grounding check accepts it, and shareLink only sends links on file.
   facts?: { add: (kind: "did_this_turn" | "known" | "ongoing" | "not_done", text: string) => void; text: () => string };
+  // Thread the next text under theirs too (routes/sendblue.ts): the first find
+  // after a "looking" line, the way the first search result always was.
+  threadNext?: () => void;
 };
 
 // Side-effecting tools are bound to server-known context (userId,
@@ -143,34 +140,6 @@ export function createConversationTools(ctx: ConversationToolContext) {
   // Receipts (2026-09-25): anything tried this turn that didn't happen
   // becomes a fact Co writes from, so it can't say it did.
   const notDone = (what: string) => ctx.facts?.add("not_done", what);
-  // What searchNow found, by link, so the matches are recorded as sent only
-  // once their link actually goes out (services/recommendation.ts
-  // recordRecommendationsSent, 2026-09-17).
-  const foundByUrl = new Map<string, TierMatch>();
-  const foundWithoutLink: TierMatch[] = [];
-
-  // A link goes out ahead of the message about it (Royce, 2026-09-16: "I
-  // want the link first then description"), so the preview lands and the
-  // reply reads as its caption. shareLink sends immediately; the queue and
-  // the flush at the end of the turn only catch anything left over.
-  const markSent = async (matches: TierMatch[]) => {
-    if (!matches.length || ctx.dryRun) return;
-    await recordRecommendationsSent(ctx.userId, matches).catch((err: any) =>
-      console.error("conversationTools: recordRecommendationsSent failed (non-fatal):", err?.message ?? err),
-    );
-  };
-  // A found match counts as sent once its link went out or the sent reply
-  // names it.
-  const markNamedInReply = async (message: string) => {
-    const lower = message.toLowerCase();
-    const named: TierMatch[] = [];
-    for (const [url, m] of foundByUrl) if (m.name && lower.includes(m.name.toLowerCase())) (named.push(m), foundByUrl.delete(url));
-    for (let i = foundWithoutLink.length - 1; i >= 0; i--) {
-      if (foundWithoutLink[i].name && lower.includes(foundWithoutLink[i].name.toLowerCase())) named.push(...foundWithoutLink.splice(i, 1));
-    }
-    await markSent(named);
-  };
-
   const flushLinks = async () => {
     const queued = state.pendingLinks.splice(0, state.pendingLinks.length);
     // Never the same link twice in one turn, however often it's asked for.
@@ -186,11 +155,6 @@ export function createConversationTools(ctx: ConversationToolContext) {
           continue;
         }
         await writeMemory(ctx.userId, "text_exchange", `Co replied: ${url}`);
-        const m = foundByUrl.get(url);
-        if (m) {
-          foundByUrl.delete(url);
-          await markSent([m]);
-        }
       }
       state.sentMessages.push(url);
     }
@@ -244,7 +208,6 @@ export function createConversationTools(ctx: ConversationToolContext) {
           // match what was actually delivered (an em dash the user never
           // saw, since it was rewritten to a comma before sending).
           await writeMemory(ctx.userId, "text_exchange", `Co replied: ${cleanCoMessage(message)}`);
-          await markNamedInReply(message);
         }
         state.sent = true;
         state.replyCount += 1;
@@ -872,59 +835,6 @@ export function createConversationTools(ctx: ConversationToolContext) {
     }),
 
     // Search right now when they ask and nothing was searched this turn.
-    searchNow: tool({
-      description: toolUse("searchNow"),
-      inputSchema: z.object({
-        what: z.string().describe("What to look for, one plain sentence."),
-        whileLooking: z
-          .string()
-          .optional()
-          .describe("A short text in your own words, sent right away while the search runs, saying what you're looking for (the way you'd tell a friend you're on it). Fresh each time, not a stock phrase."),
-      }),
-      execute: async ({ what, whileLooking }) => {
-        if (ctx.searchedThisTurn) {
-          return { ok: true, found: [], note: "A search already ran this turn and what it found was already sent to them. Do not search again, and do not say nothing came up." };
-        }
-        if (ctx.stubSearch) return { ok: true, found: [], note: `Test run: the search for "${what}" was skipped. Say you looked and nothing solid came up yet.` };
-        // In a real turn: search and send the way Co always has, link then
-        // caption for each thing that fits (routes/sendblue.ts searchAndSend).
-        if (ctx.searchAndSend) {
-          const r = await ctx.searchAndSend(what, whileLooking ?? null);
-          if (r.sentCount) {
-            state.sent = true;
-            state.sentMessages.push(`[sent ${r.sentCount} search result(s)]`);
-          }
-          return {
-            ok: true,
-            sent: r.sentCount,
-            note: `${r.briefing}${r.answered ? "\nWhat went out answers their ask. If that was all they asked, stop here: don't send another text." : ""}`,
-          };
-        }
-        const result = await searchWithTimeCap(ctx.userId, what, 40_000, "conversationTools.searchNow").catch(() => ({ available: false as const, reason: "search failed" }));
-        if (!result.available || !("matches" in result) || !result.matches?.length) {
-          ctx.facts?.add("did_this_turn", `Searched just now for "${what}" and found nothing real that fits yet.`);
-          if (!ctx.dryRun) await recordDecision({ layer: 3, decision: "reply.searchNow", userId: ctx.userId, outcome: "skip", action: "nothing_found", proposal: { what } });
-          return { ok: true, found: [], note: "Nothing real found. Say so plainly. You can offer saveAsk so Co keeps looking." };
-        }
-        const found = [];
-        for (const m of result.matches.slice(0, 2)) {
-          const em = await enrichMatch(m, { userId: ctx.userId, firstName: "them", askText: what });
-          if (em.fits === false) continue;
-          if ("url" in m && m.url) foundByUrl.set(m.url, m);
-          else foundWithoutLink.push(m);
-          const lines = em.details ? renderEventDetails(em.name, em.details) : em.opportunity ? [`What the post says: ${em.opportunity.postText}`] : [];
-          ctx.facts?.add("known", `Found just now: "${em.name}"${"url" in em && em.url ? `, link ${em.url}` : ""}. ${lines.join(" ")}${em.whyItFits ? ` Why it fits: ${em.whyItFits}` : ""}`);
-          found.push({ name: em.name, link: "url" in em ? em.url ?? null : null, details: lines, whyItFits: em.whyItFits ?? m.reason });
-        }
-        if (!found.length) {
-          ctx.facts?.add("did_this_turn", `Searched just now for "${what}"; what came up didn't fit what they asked.`);
-          return { ok: true, found: [], note: "Nothing that fits. Say so plainly. You can offer saveAsk so Co keeps looking." };
-        }
-        if (!ctx.dryRun) await recordDecision({ layer: 3, decision: "reply.searchNow", userId: ctx.userId, outcome: "act", action: "found", proposal: { what, found: found.map((f) => f.name) } });
-        return { ok: true, found };
-      },
-    }),
-
     // Send a link as its own message, only if it's actually on file.
     shareLink: tool({
       description: toolUse("shareLink"),
@@ -1086,6 +996,9 @@ export function createConversationTools(ctx: ConversationToolContext) {
     const s = situationFor({ kitFields: Object.keys(t.kit ?? {}).length, message: ctx.resolvedContent, openTasks: t.tasks?.length ?? 0, eventToday: !!t.todayEvent });
     for (const name of toolsOutOfSituation(s)) delete (tools as Record<string, unknown>)[name];
   }
+
+  // Finding things: Co's own loop (agent/loop.ts), general tools it chains itself.
+  Object.assign(tools, loopTools(ctx, state, newLoopState(), notDone));
 
   // Google Calendar and Gmail, read-only (services/googleTools.ts).
   Object.assign(tools, googleTools(ctx, notDone));

@@ -249,7 +249,7 @@ check(
     ["calls", /call them right now/], ["photos and voice memos", /read photos and screenshots.*voice memos/], ["corrections", /Co updates it and remembers what changed and when/],
     ["follow-ups", /check-in every few days about what they\'re in the middle of/], ["event arrival", /share their location until the end of the day or text "I'm here"/],
     ["outside-event intros", /heads-up without saying who/], ["privacy", /never shares what they've told it with other members/], ["phone change and STOP", /change their phone number by texting Co.*STOP/],
-    ["invites", /invite friends to Co/], ["search", /search right now/],
+    ["invites", /invite friends to Co/], ["search", /look up events itself/], ["web search", /search the web for venues to book/],
   ] as const) check(`Co knows it can: ${label}`, re.test(facts));
   check("Co's facts never mention Mo", !/\bMo\b/.test(facts));
   const { MO_VOICE } = await import("../../src/mo/moVoice.js");
@@ -390,7 +390,8 @@ check(
   const tools = src("agent/conversationTools.ts");
   check("team-only tools are removed from the tool map for everyone else", /if \(!ctx\.isTeam\) for \(const name of teamOnlyTools\(\)\) delete/.test(tools) && C.teamOnlyTools().includes("handToTeammate"));
   check("team facts are added only for team members", /if \(await isTeamMember\(userId\)\.catch\(\(\) => false\)\) \{\s*for \(const line of teamSheet\(\)\)/.test(src("harness/replyGrounding.ts")));
-  check("Co knows it texts first, and it's never 'no calls'", /Co texts first, not only when they text/.test(memberSheet) && /never "no calls"/.test(memberSheet));
+  // The limit is said as what's true (it can't call other people), without quoting the old wrong phrase: quoted bad examples get copied.
+  check("Co knows it texts first, and that it calls them but not other people", /Co texts first, not only when they text/.test(memberSheet) && /can't call other people for them; calling them is something it does/.test(memberSheet) && !/no calls/.test(memberSheet));
   check("any way of saying Co can't call is caught", ["And I can't act for you, no calls, no bookings.", "I can't make calls.", "No phone calls on my end.", "This is just text."].every((t) => G.callDenial(t)));
   check("...but the real limit, calling others for them, passes", ["I can't call people for you, but I can call you.", "No calls to sponsors from me, that has to be you.", "I can call you anytime."].every((t) => !G.callDenial(t)));
   check("Mo's texts are known by their opener, from before senders were saved", X.extensionByOpener("Hey Royce, it’s Mo. So on Harneet: want me to go for it?") === "mo" && X.extensionByOpener("Hey Royce, it's Mo.") === "mo" && X.extensionByOpener("Good pick. Tuesday at WorkOS.") === null);

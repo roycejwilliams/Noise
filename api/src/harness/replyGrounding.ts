@@ -283,12 +283,6 @@ export async function recordSearchNote(userId: string, note: string): Promise<vo
     .catch((err: any) => console.error("recordSearchNote failed (non-fatal):", err?.message ?? err));
 }
 
-// The router's read that they want something found, passed to Co as
-// guidance (2026-09-26: "Anything happening this weekend?" was read right by
-// the router, and Co answered from results two days old). Co still decides.
-export const FRESH_SEARCH_INSTRUCTION =
-  "They're asking you to find something. Run a fresh search with searchNow, even if you sent something similar before, unless they're only asking about something specific you already sent.";
-
 // Counts in words at the front of a search note (2026-09-26): Co read a
 // note listing four misfits and said "those two were the results", and the
 // claim check passed it because the note never said how many there were.

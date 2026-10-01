@@ -1,6 +1,7 @@
 import { anthropic, createAnthropic } from "@ai-sdk/anthropic";
 import type { TurnContext } from "../services/turnContext.js";
 import { generateText, stepCountIs } from "ai";
+import { LOOP_BUDGET } from "./loop.js";
 import { createConversationTools, type SendCoReply } from "./conversationTools.js";
 import { writeMemory } from "../services/memory.js";
 import pool from "../db/db.js";
@@ -29,6 +30,8 @@ export const TEXT_LISTENING = `How you listen, the same as on a call:
 - Real warmth, and real humor when something is actually funny.`;
 
 export type ConversationReplyInput = {
+  // Thread the next text under theirs (routes/sendblue.ts threadedSend).
+  threadNext?: () => void;
   // For a tapback instead of a reply (conversationTools.ts
   // reactInsteadOfReplying): their message's handle, and whether Co still
   // owes them an answer from before.
@@ -38,12 +41,6 @@ export type ConversationReplyInput = {
   safetyConcern?: boolean;
   // The one picture of this turn (services/turnContext.ts).
   turn?: TurnContext | null;
-  // Runs and sends a search the way the text route always has
-  // (routes/sendblue.ts searchAndSend); Co's searchNow tool calls it.
-  searchAndSend?: (what: string, whileLooking?: string | null) => Promise<{ answered: boolean; sentCount: number; briefing: string }>;
-  // A search already ran and its results went out as their own messages, so
-  // this reply only has to respond around them; drafted at low effort.
-  searchedThisTurn?: boolean;
   userId: string;
   phoneNumber: string;
   firstName: string;
@@ -237,11 +234,9 @@ export async function runConversationReplyAgent(
     isVoice: input.isVoice,
     hasPendingOffer: input.hasPendingOffer,
     recentOfferBurstActive: input.recentOfferBurstActive,
-    searchedThisTurn: input.searchedThisTurn,
     dryRun: opts.dryRun ?? false,
     stubSearch: opts.stubSearch ?? false,
     messageHandle: input.messageHandle ?? null,
-    searchAndSend: input.searchAndSend,
     consult: input.consult,
     replyOwed: input.replyOwed ?? false,
     safetyConcern: input.safetyConcern ?? false,
@@ -249,6 +244,7 @@ export async function runConversationReplyAgent(
     firstName: input.firstName ?? null,
     lastCoMessage: lastCoLine(input.recentConversation),
     sendCoReply: input.sendCoReply,
+    threadNext: input.threadNext,
     facts: {
       add: (kind, text) => addFact(input.facts, kind, text),
       text: () => renderReplyFacts(input.facts),
@@ -449,10 +445,6 @@ Then act with your tools:
     // the latency/cost tradeoff.
     model: replyProvider()(LAYER3_MODELS.reply),
     maxRetries: 1,
-    // After a search the content is already written (link, description, or
-    // what was found and why not); the reply around it doesn't need full
-    // reasoning (2026-09-16: drafting was 7-10s of a 46s search turn).
-    //
     // Caching: the unchanging part gets its own breakpoint (reused by any
     // member's text within 5 minutes), and the request-level cacheControl caches
     // everything up to the latest message, so each step of this tool loop
@@ -461,7 +453,7 @@ Then act with your tools:
     providerOptions: {
       anthropic: {
         cacheControl: { type: "ephemeral" },
-        effort: input.searchedThisTurn ? ("low" as const) : REPLY_EFFORT,
+        effort: REPLY_EFFORT,
       },
     },
     system: [
@@ -476,7 +468,7 @@ Then act with your tools:
     // instead, so this reverted back to 6.)
     // Also stops the moment a send is held (conversationTools.ts sendReply):
     // retrying can't get through and each step is a paid call.
-    stopWhen: [stepCountIs(8), () => state.sendStopped, () => state.reacted],
+    stopWhen: [stepCountIs(LOOP_BUDGET.steps), () => state.sendStopped, () => state.reacted],
     experimental_telemetry: { isEnabled: true, functionId: "agent.conversationReply" },
     ...(input.imageForVision
       ? {

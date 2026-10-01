@@ -1,11 +1,6 @@
 import { notToTeammate } from "../services/teamLines.js";
 import { anthropic } from "@ai-sdk/anthropic";
-import { alreadySentNames, canSkipReplyAfterResults, isOnlyUpdatesAsk } from "../services/searchRules.js";
-import { capitalizeSentences } from "../services/textStyle.js";
 import { captureIssueReport } from "../services/issueReports.js";
-import { enqueueCandidate, nextLocalHour } from "../harness/proactive.js";
-import { getTimezoneForCity } from "../services/geocoding.js";
-import type { WindowFollowUpPayload } from "../agent/windowFollowUp.js";
 import { generateText } from "ai";
 import { propagateAttributes } from "@langfuse/tracing";
 import { randomInt } from "crypto";
@@ -21,10 +16,9 @@ import { generateEmbedding } from "../services/embeddings.js";
 import { detectSeekingMode } from "../services/emotionalTone.js";
 import { getEmotionalContext, readTextEmotion, recordEmotionSignals, renderEmotionalContext } from "../harness/emotion.js";
 import { buildContextSummary } from "../services/callContext.js";
-import { findOrCreateUserByPhone, hasPendingEmail, splitFullName } from "../services/identity.js";
+import { findOrCreateUserByPhone, splitFullName } from "../services/identity.js";
 import { redeemInviteCodeIn } from "../services/inviteCodes.js";
 import { countRecentGateReplies, decideGateReply } from "../services/gateGuard.js";
-import { IDENTITY_RULE, stripUngroundedIdentity } from "../services/identityGuard.js";
 import { claimJoinNotice, invitesLeftFor, inviterFirstName, releaseJoinNotice } from "../services/invites.js";
 import { decideInviteJoinedGate } from "../services/inviteJoinGate.js";
 import { handlePhoneChange } from "../services/phoneChange.js";
@@ -36,7 +30,7 @@ import { logJevShadow, startJevShadow } from "../services/jevShadow.js";
 import { relayFacts } from "../services/relay.js";
 import { CO_WHY } from "../services/coVoice.js";
 import { assembleContext, type TurnContext } from "../services/turnContext.js";
-import { feedbackInstruction, readTurn, readTurnEnabled, type TurnRead } from "../services/readTurn.js";
+import { ABOUT_CO_INSTRUCTION, feedbackInstruction, readTurn, readTurnEnabled, type TurnRead } from "../services/readTurn.js";
 import { dotsInstruction, momentInstruction, readMoment, saveLesson, whyContext, type Moment } from "../services/connectDots.js";
 import { bareLink, inlineNote, repliedTo, repliedToFact, sentMessageHandle, threadReason } from "../services/inlineReply.js";
 import { recordSafetyConcern, SAFETY_INSTRUCTION, soundsLikeCrisis } from "../services/safety.js";
@@ -54,43 +48,36 @@ import {
   type IntakeProposal,
 } from "../harness/intake.js";
 import { isOptInKeyword, isOptOutKeyword } from "../services/optOut.js";
-import { captureIntentForTurn, coverageNudgeFrom, coveragePriorContext, getCoverageNudge, RAPPORT_TOPIC_DESCRIPTIONS } from "../services/profileExtraction.js";
-import { generateRecommendation, recordRecommendationsSent } from "../services/recommendation.js";
-import { isBrowseAsk } from "../services/askWindow.js";
+import { coverageNudgeFrom, coveragePriorContext, getCoverageNudge, RAPPORT_TOPIC_DESCRIPTIONS } from "../services/profileExtraction.js";
 import { recordOfferReaction, reactionFact, type OfferReaction } from "../services/offerReactions.js";
-import { searchWithTimeCap } from "../agent/conversationTools.js";
-import type { TierMatch } from "../services/tieredRecommendation.js";
-import { lookupNamedEvent } from "../services/namedEventLookup.js";
 import { detectCheckinPhrase, recordCheckin, hasActiveAsk, recordWalkinAsk } from "../services/eventWalkinCheckin.js";
-import { scheduleOutcomeFollowUp, recordOutcome, wasClosestMissRecentlyMentioned, recordClosestMissMentioned } from "../services/recommendationOutcome.js";
+import { scheduleOutcomeFollowUp, recordOutcome } from "../services/recommendationOutcome.js";
 import { recordEventCheckinOutcome } from "../services/eventCheckinFollowUp.js";
 import { handleMatchNudgeReply } from "../services/eventGuestMatchHandoff.js";
 import { resolveNetworkTeaseReply, resolveNetworkIntroReply } from "../services/networkIntroNudge.js";
 import { NO_ROUTE, decideActions, gatherOpenItems, routeMessage, type RouterOutput } from "../services/messageRouter.js";
 import { recordDecision } from "../harness/core.js";
-import { numbersBacked, placesBacked, unbackedClaims } from "../services/taskWeb.js";
+import { ackAllowed, describeTapbacks, reactionFor, tapbackHistory } from "../services/tapbacks.js";
+import { LOOP_GUIDE } from "../agent/loop.js";
+import { describeNotes } from "../agent/loopTools.js";
+import { loadBrief } from "../services/searchIntent.js";
 import { routerGateChecks } from "../harness/routerChecks.js";
 import { linkForReply, linksIn, mergeEarlierLink, type LinkRead } from "../services/linkReader.js";
-import { addEventFacts, addFact, addHint, addInstruction, addOngoingSearchFacts, countOf, FRESH_SEARCH_INSTRUCTION, gatherReplyFacts, recordSearchNote } from "../harness/replyGrounding.js";
+import { addEventFacts, addFact, addHint, addInstruction, gatherReplyFacts } from "../harness/replyGrounding.js";
 import { runConversationReplyAgent, filterRelevantMemories, CALL_OFFER_EXPIRY_DAYS } from "../agent/conversationReply.js";
 import { triggerCallForUser } from "../services/callTrigger.js";
 import sendblue, { blockSender, cleanCoMessage, markRead, sendReaction, webhookSecretMatches, sendingAs } from "../services/sendblue.js";
 import { TURN_FAILED_NOTE, turnFailedNoteBlocked } from "../services/turnFailure.js";
-import { arrivedByText } from "../services/eventPresence.js";
 import { lineInVoice } from "../services/voiceLine.js";
 import { privacyAlert } from "../services/privacyAlert.js";
 import { learnFromTextTurn } from "../services/turnLearning.js";
-import { scoreGuestListForEvent } from "../services/eventScoring.js";
-import { closingReaction, emojiFor, lastCoLine } from "../services/conversationClose.js";
-import { renderMatchLead, sourceOf } from "../services/messageFormat.js";
-import { CO_VOICE, CO_TEXT_CHANNEL } from "../services/coVoice.js";
+import { lastCoLine } from "../services/conversationClose.js";
 import { generateVoiceNote } from "../services/voiceNote.js";
 import { MODELS } from "../models.js";
 import { parseModelJson } from "../services/modelJson.js";
-import { enrichMatch, renderEventDetails } from "../services/eventDetails.js";
+import { enrichMatch } from "../services/eventDetails.js";
 import { refreshPersonSnapshot } from "../harness/personSnapshot.js";
 import { recordSuggestionOutcome, resultFromNamedOutcome } from "../services/outcomes.js";
-import { sendLateSearchResult } from "../services/lateSearchResult.js";
 import { track } from "../services/shutdown.js";
 import { sendLimiter } from "../services/sendLimiter.js";
 
@@ -155,6 +142,7 @@ const HOLD_LINES = ["On it, give me a sec.", "Let me look, one sec.", "Looking n
 export const HOLD_PREFIX = "Co is looking:";
 // After a reaction, the looking text waits this long: a quick search needs none.
 const HOLD_AFTER_ACK_MS = 8_000;
+const HOLD_NO_ACK_MS = 5_000;
 // Co's own hold line, used only when it's a short plain line with no link.
 export function holdLineFrom(line: string | null | undefined): string | null {
   const t = cleanCoMessage(String(line ?? "")).trim();
@@ -1472,10 +1460,13 @@ export function sendblueRouter(io: Server): Router {
           openItems,
           declinedCallTopics: declinedTopicsResult.rows.map((r: any) => r.content),
         };
+        // Co's recent reactions, read once: shown to the read so it decides
+        // whether and which, then checked against the backstop (services/tapbacks.ts).
+        const tapbacksP = hasText ? tapbackHistory(user.id).catch(() => null) : Promise.resolve(null);
         const readP: Promise<TurnRead> | null =
           oneRead && turnP
             ? propagateAttributes({ userId: user.id, traceName: "sendblue.readTurn" }, () =>
-                turnP!.catch(() => null).then((t) => readTurn(routeInput, t, coveragePriorContext(profile))),
+                Promise.all([turnP!.catch(() => null), tapbacksP]).then(([t, h]) => readTurn(routeInput, t, coveragePriorContext(profile), { reactions: h ? describeTapbacks(h) : null })),
               )
             : null;
         readP?.catch(() => {});
@@ -1502,10 +1493,18 @@ export function sendblueRouter(io: Server): Router {
             if (hasText && turnRead.ack && ackHandle) {
               const ackStarted = Date.now();
               const ackEmoji = turnRead.ack;
-              ackP = sendReaction(ackHandle, ackEmoji)
-                .then((ok) => {
-                  recordDecision({ layer: 3, decision: "turn.ack", userId: user.id, outcome: ok ? "act" : "skip", action: ackEmoji, proposal: { ms: Date.now() - ackStarted } }).catch(() => {});
-                  return ok;
+              // Spaced out and varied (services/tapbacks.ts, 2026-10-01).
+              ackP = tapbacksP
+                .then((h) => {
+                  const allowed = h ? ackAllowed(ackEmoji, h) : { ok: true, why: null };
+                  if (!allowed.ok) {
+                    recordDecision({ layer: 3, decision: "turn.ack", userId: user.id, outcome: "skip", action: ackEmoji, proposal: { why: allowed.why } }).catch(() => {});
+                    return false;
+                  }
+                  return sendReaction(ackHandle, reactionFor(ackEmoji)).then((ok) => {
+                    recordDecision({ layer: 3, decision: "turn.ack", userId: user.id, outcome: ok ? "act" : "skip", action: ackEmoji, proposal: { ms: Date.now() - ackStarted } }).catch(() => {});
+                    return ok;
+                  });
                 })
                 .catch(() => false);
             }
@@ -1583,16 +1582,6 @@ export function sendblueRouter(io: Server): Router {
         // Invites are Co's own choice now (conversationTools.ts sendInvite,
         // 2026-09-25): no pattern or router flag decides it.
 
-        // How long the search took, and preparing what it found (fit check
-        // and description per match), for the latency record below.
-        let searchMsForTurn = 0;
-        let prepMsForTurn = 0;
-        // Set to the last caption sent when the results fully answered a
-        // message that was only a search ask; the reply agent is skipped.
-        let resultsAnsweredAsk: string | null = null;
-        // Names of the results that actually went out this turn.
-        let sentThisTurn: string[] = [];
-
         // Whether to react instead of replying is Co's call now
         // (conversationTools.ts reactInsteadOfReplying, 2026-09-25). What stays
         // hard: never when Co still owes them an answer.
@@ -1624,7 +1613,13 @@ export function sendblueRouter(io: Server): Router {
           shared.hints.forEach((h) => addHint(replyFacts, h));
           shared.instructions.forEach((i) => addInstruction(replyFacts, i));
         }
-        if (decision.wantsRecommendation && hasText) addInstruction(replyFacts, FRESH_SEARCH_INSTRUCTION);
+        // Finding things happens in Co's own loop (agent/loop.ts): the guide when
+        // they want something found, and its working notes from earlier texts.
+        if (decision.wantsRecommendation && hasText) addInstruction(replyFacts, LOOP_GUIDE);
+        if (hasText) {
+          const notes = describeNotes(await loadBrief(user.id).catch(() => null));
+          if (notes) addFact(replyFacts, "known", notes);
+        }
         if (inlineTarget) addFact(replyFacts, "known", repliedToFact(inlineTarget));
         // Unmistakable crisis wording (services/safety.ts): Co gets the
         // guidance and the team hears about it even if Co misses it. Co's own
@@ -1702,6 +1697,7 @@ export function sendblueRouter(io: Server): Router {
         const reportedIssue = hasText && !oneRead ? await captureIssueReport(user.id, resolvedContent, recentConversation) : null;
         const feedbackNote = feedbackInstruction(turnRead?.feedback ?? []);
         if (feedbackNote) addInstruction(replyFacts, feedbackNote);
+        if (turnRead?.aboutCo) addInstruction(replyFacts, ABOUT_CO_INSTRUCTION);
         // What has really reached the team, so "is it noted to the team?" gets
         // a true answer (2026-09-18: Co said feedback "goes straight to the
         // team" when nothing had been saved).
@@ -2244,562 +2240,6 @@ Return ONLY valid JSON, no preamble: {"date": "YYYY-MM-DD or null", "time": "HH:
         // agent/conversationReply.ts.
         const isThinProfileFirstMessage = !hasProfile && isFirstRealMessage && callAction === "none";
 
-        // Real action-triggering — mirrors the surface_recommendation Hume
-        // tool on the voice path, but iMessage has no tool_call plane to
-        // invoke it through, so this is a direct call to the same shared
-        // generateRecommendation() gated by the router's wantsRecommendation
-        // instead. Folded into the one reply below (never sent as a second
-        // message).
-        // Co decides whether and what to search (conversationTools.ts
-        // searchNow, 2026-09-25: its call, not the router's flag). This is how
-        // a search it asks for runs and is sent, unchanged: the hold line, the
-        // fit check, link then caption, the ask saved when nothing fits, late
-        // results, the time-frame follow-up. What it learns goes into the
-        // reply's facts and back to Co as the tool's result.
-        let searchedThisTurn = false;
-        const searchAndSend = async (what: string, whileLooking: string | null = null): Promise<{ answered: boolean; sentCount: number; briefing: string }> => {
-          const factsBefore = replyFacts.facts.length;
-          const instructionsBefore = replyFacts.instructions.length;
-          let answered = false;
-          searchedThisTurn = true;
-          try {
-            // A struggling person who asks for something still gets it (Royce,
-            // 2026-09-18: "we can't isolate them"). Co acknowledges how they're
-            // doing in the same reply.
-            if (emotional.needsCare) {
-              addInstruction(replyFacts, "They've had a hard day. Acknowledge it briefly and warmly, in your own words, then share what you found.");
-            }
-              // A search is about to actually run: whatever happens, this turn
-              // has now done real work and must see it through to a reply.
-              turnDidWork = true;
-              // Searching all tiers can take a while: say so first, so the
-              // person isn't left waiting and resending (2026-09-15: a 70s
-              // wait led to the same message sent five times).
-              // Co's own words for it when it wrote them (2026-09-28: the fixed
-              // "Let me look, one sec" read as a script); the stock line otherwise.
-              const holdLine = holdLineFrom(whileLooking) ?? HOLD_LINES[Math.floor(Math.random() * HOLD_LINES.length)];
-              // A reaction says "on it" first (👀 here if the read didn't give
-              // one); the looking text only goes out when the search runs long
-              // (2026-09-29). On SMS, where reactions don't exist, it goes at once as before.
-              let acked = await ackP;
-              if (!acked && ownHandle) acked = await sendReaction(ownHandle, "👀").catch(() => false);
-              let holdSent: Promise<boolean> | null = null;
-              const sendHold = () => (holdSent ??= threadedSendAndLog(holdLine, false, true));
-              const holdTimer = acked ? setTimeout(() => void sendHold(), HOLD_AFTER_ACK_MS) : null;
-              if (!acked) sendHold();
-              const RECOMMENDATION_TIME_CAP_MS = 45_000;
-              const searchStarted = Date.now();
-              searchMsForTurn = 0;
-              // A capped search whose result lands after the cap is discarded
-              // by the helper itself (agent/conversationTools.ts), not just
-              // raced here (2026-09-17 code review: generateRecommendation kept
-              // running and writing after Co had already said it found
-              // nothing, and its late write could still land after "found
-              // nothing" went out).
-              const recommendation = await searchWithTimeCap(user.id, what, RECOMMENDATION_TIME_CAP_MS, "sendblue.recommendation", (late) =>
-                sendLateSearchResult({ userId: user.id, firstName: user.first_name ?? null, phoneNumber: user.phone_number, city: profile?.city ?? null, askHandle: ownHandle }, what, late),
-              );
-              searchMsForTurn = Date.now() - searchStarted;
-              if (holdTimer) clearTimeout(holdTimer);
-              if (holdSent && (await holdSent)) addFact(replyFacts, "did_this_turn", `Told them "${holdLine}" before searching.`);
-              if (acked) addFact(replyFacts, "did_this_turn", "Reacted to their message with an emoji to show you were on it.");
-              // What this search looked at and ruled out, so the reply never
-              // recommends one of them because it was sent earlier (2026-09-16:
-              // a search rejected the chess night as "not an AI engineer event"
-              // and the reply still called it "your real option").
-              // What Co understood and searched for, what it ruled out and the
-              // one thing worth asking, so the reply can say it the way a
-              // friend would ("dropped Workshop, too small for 120").
-              const briefScope = "scope" in recommendation ? recommendation.scope : null;
-              if (briefScope?.brief) addFact(replyFacts, "did_this_turn", `Searched for: ${briefScope.brief.line}${briefScope.webTried?.length ? ` (web searches: ${briefScope.webTried.map((q) => `"${q}"`).join(", ")})` : ""}.`);
-              if (briefScope?.webDropped?.length) addFact(replyFacts, "did_this_turn", `Looked at and ruled out: ${briefScope.webDropped.slice(0, 6).join("; ")}.`);
-              if (briefScope?.brief?.ask) addInstruction(replyFacts, `If it would sharpen the search, ask them this one thing at the end: ${briefScope.brief.ask}`);
-              const ruledOut = ("scope" in recommendation ? recommendation.scope?.relevanceRejected : null) ?? [];
-              if (ruledOut.length) {
-                addFact(replyFacts, "did_this_turn", `This search looked at and ruled out: ${ruledOut.map((r) => `"${r.name}" (${r.why})`).join("; ")}.`);
-                addInstruction(replyFacts, "Don't recommend or endorse anything this search ruled out, even if you sent it before. If they already have one of those from earlier, say plainly it isn't really what they asked for.");
-              }
-              if (recommendation.available && recommendation.matches?.length) {
-                // Sent DETERMINISTICALLY, not via agent tool-calling (Royce,
-                // 2026-09-02, confirmed live) — the previous version asked the
-                // conversational agent to execute a multi-step sendReply
-                // sequence (link, then description, per match) via prose
-                // instructions in its system prompt. Real failure: with two
-                // matches AND another context block (updatesContext) active in
-                // the same turn, the model correctly sent the first match's
-                // link, then gave up on the sequence and crammed the second
-                // match's description, its MISSING link, and the unrelated
-                // updates content into one giant paragraph — "too wordy and
-                // it didn't even send the link for the accelerator." Relying
-                // on an LLM to perfectly execute 4+ sequential tool calls
-                // while also juggling other simultaneous context isn't
-                // reliable enough for something this mechanical. Sending the
-                // link and description directly here removes that failure
-                // mode entirely — same sendCoReply/logTextExchange helpers
-                // and 2s pacing convention conversationTools.ts's sendReply
-                // already uses for a real second message.
-                // Details, the personal reason, and the text for every match
-                // are prepared, then sent in order. Each tier walks its own
-                // candidates in small parallel batches, in order, until one
-                // fits or they run out (2026-09-17 code review: Tier 2 can
-                // return up to 6, and capping this at the first 2 per tier
-                // meant a bad first pair discarded the rest, and Co said
-                // nothing fit when a later candidate would have). Only the
-                // winning candidate per tier gets the sonnet description draft
-                // — misfits only need the (cheaper) fit check itself.
-                const FIT_CHECK_BATCH = 2;
-                const matchesByTier = new Map<number, TierMatch[]>();
-                for (const m of recommendation.matches) {
-                  const arr = matchesByTier.get(m.tier) ?? [];
-                  arr.push(m);
-                  matchesByTier.set(m.tier, arr);
-                }
-                // "What does SF tech week look like? Oct 5th - Oct 11th?" asks
-                // what's on, so one per tier undersold it (2026-09-18: five real
-                // events passed, one went out, and Co said it was the only one).
-                // A time frame or a what's-on question gets up to three a tier.
-                const searchScope = "scope" in recommendation ? recommendation.scope : null;
-                // Places, vendors and people from the web: a short ranked list,
-                // like a friend would give (2026-09-30).
-                const perTier = searchScope?.window || isBrowseAsk(resolvedContent) || searchScope?.brief?.route === "web" ? 3 : 1;
-                const matchCount = [...matchesByTier.values()].reduce((n, c) => n + Math.min(c.length, c[0]?.tier === 1 ? 1 : perTier), 0);
-                const prepStarted = Date.now();
-
-                type PreparedMatch = { m: TierMatch; description: string; fits?: boolean; why?: string; em?: Awaited<ReturnType<typeof enrichMatch>> };
-
-                // Drafted in Co's voice from the real record and a personal
-                // reason, not the matching engine's raw "name — reason" line.
-                // stretch: the fit check said it doesn't quite fit, but it's the
-                // closest real thing found, so it goes out with an honest caveat
-                // instead of "nothing" (2026-09-18).
-                const draftDescription = async (m: TierMatch, em: Awaited<ReturnType<typeof enrichMatch>>, stretch = false): Promise<string> => {
-                  let description = `${m.name}. ${em.whyItFits ?? m.reason}`;
-                  try {
-                    // Their why, so the caption says where this could take it (services/coVoice.ts CO_WHY).
-                    const why = whyContext(await askedAndDoing());
-                    const askedDates = describeTimeFrame("scope" in recommendation ? recommendation.scope : null);
-                    const dateRule = dateCaveatRule(askedDates);
-                    const record = em.details ? renderEventDetails(em.name, em.details).join("\n") : em.opportunity ? `What the post says: ${em.opportunity.postText}` : "";
-                    const { text: drafted } = await generateText({
-                      model: anthropic(MODELS.sonnet),
-                      experimental_telemetry: { isEnabled: true, functionId: "sendblue.recommendation.describe" },
-                      prompt: `${CO_VOICE}\n\n${CO_TEXT_CHANNEL} ${IDENTITY_RULE} You're telling ${user.first_name ?? "them"} about "${m.name}"${"url" in m && m.url ? ". Its link preview is already showing right above this message, so this message is the caption under it: say what it is directly, and don't mention the link, sending it, or \"the one above\"" : ""}${matchCount > 1 ? `. This is one of ${matchCount} you're sending together, so it reads as a bullet in a short list` : ""}.\n\n${stretch ? `It isn't an exact fit for what they asked: ${em.whyItFits ?? "not quite what they described"}. Say that honestly in a few words, then why it could still be worth a look.` : `Why it fits them: ${em.whyItFits ?? m.reason}`}\n${record ? `\nWhat's actually known about it:\n${record}\n` : ""}${why ? `\n${why}\n` : ""}${dateRule}\n${m.tier === 3 && m.source === "web" ? "Nothing about their date is confirmed: don't say it's available, free, open to hosting, or has done something before unless that's written above; if it matters, say it's unconfirmed. Use any estimate exactly as written.\n" : ""}Write ${matchCount > 1 ? "one sentence" : "1-3 sentences"} naming it, the one or two details that matter most to them (when, where), and why it fits. ${CO_WHY}${matchCount > 1 ? " Keep that to a few words in a list." : ""} Only use what's written above. No link. Return ONLY the message.`,
-                    });
-                    if (drafted.trim()) {
-                      // No claim about who they are beyond their own words and profile (services/identityGuard.ts).
-                      const grounded = stripUngroundedIdentity(cleanCoMessage(drafted.trim()), `${resolvedContent}\n${(profile?.goals ?? []).join(" ")}\n${profile?.city ?? ""}\n${em.whyItFits ?? ""}\n${why}`);
-                      // A web find's caption only says what its page does
-                      // (2026-09-30): numbers, places, and no availability,
-                      // "open to hosting" or "has done" it can't back. Else the
-                      // plain facts go out instead.
-                      const webFacts = m.tier === 3 && m.source === "web" ? `${m.name} ${m.evidence ?? m.reason}` : null;
-                      // Their own words and the brief (a date or headcount from earlier texts) count too.
-                      const theirs = `${resolvedContent} ${("scope" in recommendation ? recommendation.scope?.brief?.line : null) ?? ""} ${profile?.city ?? ""}`;
-                      const unbacked = grounded && webFacts ? [...numbersBacked(grounded, `${webFacts} ${theirs}`).missing, ...placesBacked(grounded, `${webFacts} ${theirs}`).missing, ...unbackedClaims(grounded, webFacts)] : [];
-                      if (grounded && !unbacked.length) description = grounded;
-                      else if (webFacts) {
-                        description = `${m.name}: ${m.reason.split("; ").slice(0, 3).join("; ")}`;
-                        await recordDecision({ layer: 5, decision: "search.captionChecked", userId: user.id, outcome: "skip", action: "sent the facts instead", proposal: { name: m.name, drafted: grounded, unbacked } }).catch(() => {});
-                      }
-                    }
-                  } catch (err: any) {
-                    console.error("sendblue: recommendation description drafting failed (non-fatal, sending plain):", err?.message ?? err);
-                  }
-                  return description;
-                };
-
-                const enrichOne = async (m: TierMatch) => {
-                  const em = await enrichMatch(m, {
-                    userId: user.id,
-                    firstName: user.first_name,
-                    askText: resolvedContent,
-                    timeFrame: describeTimeFrame("scope" in recommendation ? recommendation.scope : null),
-                    goals: profile?.goals ?? null,
-                    city: profile?.city ?? null,
-                    place: "scope" in recommendation ? (recommendation.scope?.city ?? null) : null,
-                    feeling: renderEmotionalContext(emotional),
-                  });
-                  return { m, em };
-                };
-
-                const preparedAll: PreparedMatch[] = [];
-                const tierWinners = await Promise.all(
-                  [...matchesByTier.values()].map(async (candidates): Promise<PreparedMatch[]> => {
-                    const tier = candidates[0]?.tier;
-                    if (tier === 1) {
-                      // Co's own events are always kept, no fit check.
-                      const first = candidates[0];
-                      if (!first) return [];
-                      const { em } = await enrichOne(first);
-                      const p: PreparedMatch = { m: first, description: await draftDescription(first, em), fits: em.fits, why: em.whyItFits };
-                      preparedAll.push(p);
-                      return [p];
-                    }
-                    const winners: PreparedMatch[] = [];
-                    for (let i = 0; i < candidates.length && winners.length < perTier; i += FIT_CHECK_BATCH) {
-                      const batch = candidates.slice(i, i + FIT_CHECK_BATCH);
-                      const results = await Promise.all(batch.map(enrichOne));
-                      for (const { m, em } of results) {
-                        const attempted: PreparedMatch = { m, description: "", fits: em.fits, why: em.whyItFits, em };
-                        preparedAll.push(attempted);
-                        // Only the personal read says fits what they asked
-                        // (services/eventDetails.ts fitPrompt); the first in order
-                        // that fit win their tier.
-                        if (winners.length < perTier && em.fits !== false) {
-                          attempted.description = await draftDescription(m, em);
-                          winners.push(attempted);
-                        }
-                      }
-                    }
-                    return winners;
-                  }),
-                );
-                prepMsForTurn = Date.now() - prepStarted;
-                // Best-fitting first, in the order tiers were returned.
-                const prepared = tierWinners.flat();
-                // What passed every check but didn't go out this turn, so the
-                // reply never calls what it sent the only one (2026-09-18).
-                const notSent = recommendation.matches.filter((m) => !prepared.some((p) => p.m === m) && !preparedAll.some((p) => p.m === m && p.fits === false));
-                if (prepared.length && notSent.length) {
-                  addFact(
-                    replyFacts,
-                    "known",
-                    `The search also turned up ${notSent.length} more real one${notSent.length > 1 ? "s" : ""} you didn't send: ${notSent.map((m) => `"${m.name}"`).join(", ")}. Never say what you sent is the only one; if it helps, offer to send more.`,
-                  );
-                }
-                // Nothing passed the fit check, but real things were found: send
-                // the closest one with an honest caveat rather than "nothing"
-                // (2026-09-18: a real event near Sep 24 was found and dropped,
-                // and the member heard nothing). Only something that's the right
-                // kind of thing for what they asked, off on a detail: a funding
-                // story went out for "Anyone hiring a design engineer?"
-                // (2026-09-18).
-                // Never something outside the dates they asked about
-                // (2026-09-25: "Anything good this weekend?" got Tech Week,
-                // Oct 5-11, as the closest thing). That one is only named in
-                // a sentence, without its link, below.
-                // Nor somewhere other than where they asked (2026-09-27: "What
-                // about in San Francisco?" got a Bengaluru post, undated, so
-                // the date rule let it through).
-                const offTarget = (p: PreparedMatch) => !!(p.em?.outsideTimeFrame || p.em?.outsidePlace);
-                const closest = !prepared.length ? preparedAll.find((p) => p.em?.rightKind === true && !offTarget(p)) : undefined;
-                const offWindow = !prepared.length && !closest ? preparedAll.find((p) => p.em?.rightKind === true && offTarget(p)) : undefined;
-                if (offWindow) {
-                  const what = offWindow.em?.outsidePlace ? "somewhere other than where they asked" : "outside the dates they asked about";
-                  addFact(replyFacts, "known", `The closest real one was "${offWindow.m.name}", but it's ${what} (${offWindow.why ?? "a different time or place"}). It was NOT sent.`);
-                  addInstruction(replyFacts, "Nothing fits the dates and place they asked about. Say that plainly. You may name the closest one in a short sentence with its dates and place as written in the facts, so they can decide; don't send its link unless they ask.");
-                }
-                if (closest?.em) {
-                  closest.description = await draftDescription(closest.m, closest.em, true);
-                  prepared.push(closest);
-                  addInstruction(
-                    replyFacts,
-                    "Nothing you found matched exactly, so you sent the closest real thing with a caveat. Don't apologize for it or call it a fail; if it helps, say what you'll keep looking for.",
-                  );
-                }
-                // Nothing survived the real fit check, but the ask might name one specific event
-                // ("What's happening at AfroTech?") that tier 2's own coarse relevance gate let
-                // unrelated candidates through for (2026-09-21: 8 SF Tech Week events passed that
-                // gate, then all failed here). A live reply's web search is otherwise off
-                // (services/namedEventLookup.ts); this is its only path to a real answer, tried
-                // once, only as the true last resort.
-                if (!prepared.length) {
-                  // The first place when the search covered several ("Sacramento + San Francisco").
-                  const scopeCity = "scope" in recommendation ? (recommendation.scope?.city?.split(" + ")[0] ?? null) : null;
-                  const scopeZone = ("scope" in recommendation && recommendation.scope?.timezone) || "America/Los_Angeles";
-                  const named = await lookupNamedEvent(resolvedContent, scopeCity ?? profile?.city ?? null, DateTime.now().setZone(scopeZone).toISODate() ?? DateTime.now().toISODate()!, {
-                    userId: user.id,
-                    source: "request",
-                  }).catch((err: any) => {
-                    console.error("sendblue: named event lookup failed (non-fatal):", err?.message ?? err);
-                    return { match: null, name: null, blocked: null, rejected: null };
-                  });
-                  if (named.match) {
-                    const { em } = await enrichOne(named.match);
-                    const attempted: PreparedMatch = { m: named.match, description: "", fits: em.fits, why: em.whyItFits, em };
-                    preparedAll.push(attempted);
-                    attempted.description = await draftDescription(named.match, em, em.fits === false);
-                    prepared.push(attempted);
-                    addInstruction(
-                      replyFacts,
-                      em.fits === false
-                        ? "Nothing else fit, so you looked up the named event itself and sent what its own page actually says, with an honest caveat about what's off. Don't apologize or call it a fail."
-                        : "Nothing else fit, so you looked up the named event itself and sent what its own page actually says.",
-                    );
-                  }
-                }
-                if (!prepared.length) {
-                  addFact(
-                    replyFacts,
-                    "did_this_turn",
-                    `Searched just now. ${countOf(preparedAll.length, "result")} came up and none fit what they asked, so nothing was sent: ${preparedAll.map((p) => `"${p.m.name}" (${p.why ?? "not a fit"})`).join("; ")}.`,
-                  );
-                  addInstruction(replyFacts, "You searched and nothing that came up fits what they asked. Say that plainly and briefly. Don't send or describe the misfits unless they ask.");
-                  // Save the ask before the reply, as the nothing-found branch
-                  // already does (2026-09-22). It used to be saved only after
-                  // the reply, by Layer 4, so the grounding check saw no open
-                  // search and stripped every "I'll keep an eye out" as a false
-                  // promise (5 rewrites in one day, each a wasted draft).
-                  const turnAsk = await captureIntentForTurn(user.id, `${recentConversation}\nuser: ${resolvedContent}`, { timeoutMs: 4000 }).catch(() => null);
-                  if (turnAsk?.ask?.text) {
-                    replyFacts.facts = replyFacts.facts.filter((fact) => fact.kind !== "ongoing" && !/isn't searching for anything/.test(fact.text));
-                    await addOngoingSearchFacts(replyFacts, user.id);
-                  }
-                  await recordSearchNote(
-                    user.id,
-                    `Co searched for "${resolvedContent.slice(0, 120)}" and ${countOf(preparedAll.length, "result")} came up; none fit, so nothing was sent: ${preparedAll.map((p) => `"${p.m.name}" from ${sourceOf(p.m)}${"url" in p.m && p.m.url ? `, link ${p.m.url}` : ""} (${p.why ?? "not a fit"})`).join("; ")}.`,
-                  );
-                }
-                // What they are always comes before its link (Royce,
-                // 2026-09-16: Co sent a link, then a message pointing back at
-                // it). One thing: a sentence, then the link. Several: one
-                // bulleted message the way the product updates read, then each
-                // link on its own so every one of them previews.
-                // Only what actually went out counts as sent (2026-09-17 code
-                // review) — a refused or failed send used to still get logged
-                // and recorded, so the reply and recommendation_offered claimed
-                // something the person never received.
-                const actuallySent: typeof prepared = [];
-                if (prepared.length) {
-                  // The results thread under their ask too, not just the hold line.
-                  threadNextSend = true;
-                  if (prepared.length > 1) {
-                    const lead = renderMatchLead(prepared.length);
-                    await threadedSendAndLog(lead, isVoice);
-                    await new Promise((resolve) => setTimeout(resolve, 1500));
-                  }
-                  // Link first, then what it is (Royce, 2026-09-16: "I want the
-                  // link first then description"), so the preview lands and the
-                  // description reads as the caption under it.
-                  for (const p of prepared) {
-                    const { m, description } = p;
-                    if ("url" in m && m.url) {
-                      await threadedSendAndLog(m.url);
-                      await new Promise((resolve) => setTimeout(resolve, 1500));
-                    }
-                    const descriptionSent = await threadedSendAndLog(description, isVoice);
-                    await new Promise((resolve) => setTimeout(resolve, 1500));
-                    if (descriptionSent) actuallySent.push(p);
-                  }
-                  for (const { m, description } of actuallySent) {
-                    // That it went out is a fact; what Co wrote about it is Co's own words, a hint.
-                    addFact(replyFacts, "did_this_turn", `Sent "${m.name}", found through ${sourceOf(m)}${"url" in m && m.url ? ` (link ${m.url})` : " (no link)"}, just before this reply.`);
-                    addHint(replyFacts, `What Co wrote about "${m.name}" when sending it: "${description}"`);
-                  }
-                  sentThisTurn = actuallySent.map((p) => p.m.name);
-                  if (actuallySent.length) {
-                    await recordSearchNote(
-                      user.id,
-                      `Co searched for "${resolvedContent.slice(0, 120)}" and sent ${countOf(actuallySent.length, "thing")}: ${actuallySent.map((p) => `"${p.m.name}" from ${sourceOf(p.m)}`).join("; ")}.`,
-                    );
-                    // recordRecommendationsSent (services/recommendation.ts)
-                    // writes recommendation_offered/recommendation for exactly
-                    // the matches that really went out, not everything the
-                    // search found (2026-09-17 code review: generateRecommendation
-                    // no longer writes these itself).
-                    await recordRecommendationsSent(user.id, actuallySent.map((p) => p.m)).catch((err: any) =>
-                      console.error("sendblue: recordRecommendationsSent failed (non-fatal):", err?.message ?? err),
-                    );
-                  }
-                }
-                // The agent still runs after this (see below) to genuinely
-                // respond to what they said — this just tells it the
-                // recommendation itself already went out, so it doesn't
-                // repeat the details or the link.
-                await recordDecision({
-                  layer: 5,
-                  decision: "recommendation.search",
-                  userId: user.id,
-                  outcome: actuallySent.length ? "act" : "skip",
-                  action: actuallySent.length ? "sent_matches" : prepared.length ? "send_failed" : "nothing_fit",
-                  proposal: { message: resolvedContent, holdLine, ms: Date.now() - searchStarted, scope: "scope" in recommendation ? recommendation.scope : null, matches: preparedAll.map((p) => ({ name: p.m.name, tier: p.m.tier, fits: p.fits ?? null, why: p.why ?? null, soldOut: p.m.details?.soldOut ?? null })) },
-                });
-                // Their message was only the ask: the link and caption answered
-                // it, so no third message repeating them. Never when this search
-                // ruled out something (the correction only goes out in the
-                // reply), and never on their first real message (opening the
-                // conversation and the first-contact call offer live in the
-                // reply) (code review, 2026-09-16). Gated on what actually sent
-                // (2026-09-17 code review), not what was merely prepared — a
-                // failed send must not be treated as having answered the ask.
-                const rw = "scope" in recommendation ? recommendation.scope?.rewrite : null;
-                if (
-                  actuallySent.length &&
-                  canSkipReplyAfterResults({
-                    sentResults: actuallySent.length,
-                    original: rw?.original ?? null,
-                    rewritten: rw?.rewritten ?? null,
-                    ruledOut: ruledOut.length,
-                    firstRealMessage: isFirstRealMessage || isThinProfileFirstMessage,
-                    beyondAsk: decision.beyondAsk,
-                  })
-                ) {
-                  answered = true;
-                }
-                if (actuallySent.length)
-                  addInstruction(
-                    replyFacts,
-                    `You already sent them ${actuallySent.length > 1 ? "a few real things" : "something real"} for what they asked, separately from this reply; that answered the ask. Don't repeat the name, link, or details, and don't point back at it ("check it above", "just sent you one", "already sent you"). Respond only to the rest of their message${decision.beyondAsk ? `: ${decision.beyondAsk}` : ""}.`,
-                  );
-                else if (prepared.length) addInstruction(replyFacts, "You found something real to tell them about, but sending it just failed. Say plainly that something went wrong sending it and you'll need them to ask again in a moment, without naming what it was.");
-              } else {
-                // Nothing real found right now. Save what they asked for as an
-                // ask so the daily search really keeps looking; that's what
-                // makes "I'll keep looking" true (replyGrounding's ongoing fact).
-                const turnAsk = await captureIntentForTurn(user.id, `${recentConversation}\nuser: ${resolvedContent}`, { timeoutMs: 4000 }).catch(() => null);
-                // Ran past the reply's time cap: the search is still going and
-                // its result gets sent when it lands (services/lateSearchResult.ts).
-                const stillSearching = !recommendation.available && recommendation.reason === "search took too long";
-                if (stillSearching) {
-                  addFact(replyFacts, "did_this_turn", "Started a search for what they asked for. It's still running and what it finds gets sent to them as soon as it lands.");
-                  addInstruction(replyFacts, "Your search is still running. Say you're still looking and will send what turns up shortly. Don't say you found nothing.");
-                } else {
-                  // What fits may already have been sent: say so instead of "nothing came up".
-                  const sentBefore = alreadySentNames("scope" in recommendation ? recommendation.scope?.gatedOut : null);
-                  if (sentBefore.length) {
-                    addFact(replyFacts, "did_this_turn", `Searched just now for what they asked for. What fits is what you already sent them earlier: ${sentBefore.join("; ")}. Nothing new has turned up since.`);
-                    addInstruction(replyFacts, "Tell them plainly that the ones that fit are the ones you already sent (name one or two) and nothing new has come up since. Don't say nothing came up, and don't send them again.");
-                  } else addFact(replyFacts, "did_this_turn", `Searched just now for what they asked for and found nothing real that fits yet${recommendation.reason ? ` (${recommendation.reason})` : ""}.`);
-                }
-                await recordSearchNote(user.id, `Co searched for "${resolvedContent.slice(0, 120)}" and found nothing new${recommendation.reason ? ` (${recommendation.reason})` : ""}.`);
-                if (turnAsk?.ask?.text) {
-                  replyFacts.facts = replyFacts.facts.filter((fact) => fact.kind !== "ongoing" && !/isn't searching for anything/.test(fact.text));
-                  await addOngoingSearchFacts(replyFacts, user.id);
-                }
-                await recordDecision({
-                  layer: 5,
-                  decision: "recommendation.search",
-                  userId: user.id,
-                  outcome: "skip",
-                  action: turnAsk?.ask?.text ? "nothing_found_ask_saved" : "nothing_found",
-                  checks: [
-                    { name: "found_something_real", pass: false, reason: recommendation.reason },
-                    { name: "ask_saved_for_daily_search", pass: !!turnAsk?.ask?.text, reason: turnAsk?.ask?.text ?? "no ask captured" },
-                  ],
-                  proposal: { message: resolvedContent, holdLine, ms: Date.now() - searchStarted, scope: "scope" in recommendation ? recommendation.scope : null },
-                });
-                const alreadyRecommended = ("alreadyRecommended" in recommendation ? recommendation.alreadyRecommended : null) ?? [];
-                const gatedOut = ("scope" in recommendation ? recommendation.scope?.gatedOut : null) ?? [];
-                if (alreadyRecommended.length) {
-                  // Include the actual date, not just the name (2026-09-17
-                  // code review: without it, the reply had nothing to confirm
-                  // the match against and hedged into a factually wrong "but
-                  // that's not [the date they asked about]" for an event that
-                  // genuinely was on that date).
-                  addFact(
-                    replyFacts,
-                    "did_this_turn",
-                    `Searched again — the only real match is "${alreadyRecommended.map((m) => `${m.name}"${"event_date" in m && m.event_date ? ` on ${dayLabel(m.event_date)}` : ""}`).join(', "')}, which you already told them about earlier.`,
-                  );
-                  addInstruction(
-                    replyFacts,
-                    "You already told them about this earlier — don't say you found nothing. Say plainly that what you already mentioned is still the real answer for what they're asking now (name it by name, naturally, not as if it's new, and confirm the date matches what they asked using the date in the facts — don't guess or hedge on whether it's the same date). Don't resend its link or re-describe it in full unless they ask for the details again.",
-                  );
-                } else if (gatedOut.length) {
-                  addFact(
-                    replyFacts,
-                    "did_this_turn",
-                    `Found real ones but couldn't offer them: ${gatedOut.map((g) => `"${g.name}"${g.date ? ` on ${dayLabel(g.date)}` : ""}${g.url ? `, link ${g.url}` : ""} (${g.reasons.join(", ")})`).join("; ")}.`,
-                  );
-                  addInstruction(
-                    replyFacts,
-                    "You did find real things, but none you can offer as asked (for example sold out, or just outside the dates they gave). In one or two short sentences: name what you found, say the day it's on exactly as written in the facts (like \"Saturday, September 19\"), and the plain reason it didn't make the cut (for example \"it's already sold out\"). Don't blur the reason into something vaguer, and don't suggest a generic type of thing instead. If one is close, like just past their dates, say so briefly so they can ask for it if their plans change. Don't send its link unless they ask.",
-                  );
-                } else if (("scope" in recommendation ? recommendation.scope?.closest : null)) {
-                  const closest = ("scope" in recommendation ? recommendation.scope?.closest : null)!;
-                  addFact(
-                    replyFacts,
-                    "did_this_turn",
-                    `The closest real event was "${closest.name}"${closest.date ? ` on ${dayLabel(closest.date)}` : ""}${closest.url ? `, link ${closest.url}` : ""}, but ${closest.why}.`,
-                  );
-                  // Presenting the SAME near-miss fresh every time a daily
-                  // sweep re-runs the same ask reads like Co forgot it already
-                  // said this (2026-09-17). Told once, referenced as already
-                  // known after that, not represented as new each day.
-                  const alreadyMentioned = await wasClosestMissRecentlyMentioned(user.id, closest.name).catch(() => false);
-                  addInstruction(
-                    replyFacts,
-                    alreadyMentioned
-                      ? "You searched again and nothing new fits what they asked. The closest real one is the same one you already told them about before — say plainly nothing new turned up, and only briefly note it's still the same option from before if it's natural, don't re-explain it from scratch like it's new."
-                      : "You searched and nothing real fits what they asked. Say that plainly, then name the closest real one in a short sentence: what it is, the day it's on exactly as written in the facts (like \"Sunday, September 20\"), and why it isn't quite it, so they can decide. Don't send its link unless they ask, and don't make up anything else.",
-                  );
-                  if (!alreadyMentioned) {
-                    recordClosestMissMentioned(user.id, closest.name, resolvedContent.slice(0, 160)).catch(() => {});
-                  }
-                } else {
-                  addInstruction(replyFacts, "You searched and found nothing real yet. Say that plainly. Don't make up a suggestion.");
-                }
-              }
-
-              // They named a time frame: once it's passed, check in on how it
-              // went for them (agent/windowFollowUp.ts). Queued through the
-              // proactive harness, so the daily and weekly caps and the
-              // unanswered back-off all still apply.
-              const scope = "scope" in recommendation ? recommendation.scope : null;
-              // Optional color on the search pattern, not a directive
-              // (2026-09-17, "make the outcome-learning visible, not just
-              // silent"): only ever a soft fact the reply agent may weave in
-              // if it actually fits this reply — never forced, never its own
-              // sentence just to mention it. Only "flopped" categories are
-              // worth surfacing at all; a "worked" pattern already just shows
-              // up as a better search, it doesn't need narrating.
-              if (scope?.categoryInsight?.flopped.length) {
-                addFact(
-                  replyFacts,
-                  "known",
-                  `${scope.categoryInsight.flopped.join(", ")}-type opportunities haven't gone anywhere for them before, based on what they've said in past follow-ups — only mention this if it genuinely fits the reply naturally (e.g. explaining why you searched wider this time), never as its own sentence.`,
-                );
-              }
-              if (scope?.window && scope.windowEnd) {
-                const timezone = profile?.city ? await getTimezoneForCity(profile.city).catch(() => null) : null;
-                const dueAt = nextLocalHour(new Date(scope.windowEnd), timezone, 11);
-                const payload: WindowFollowUpPayload = {
-                  label: scope.window,
-                  asked: resolvedContent.slice(0, 200),
-                  // What they actually got, not everything the search found
-                  // (2026-09-18: five were recorded, one was sent).
-                  sent: sentThisTurn,
-                  dates: describeTimeFrame(scope) ?? undefined,
-                };
-                const targetKey = `window_followup:${scope.windowEnd.slice(0, 10)}`;
-                const queued = await enqueueCandidate({
-                  userId: user.id,
-                  type: "window_followup",
-                  targetKey,
-                  topicKey: targetKey,
-                  summary: `Ask how ${scope.window} went for them (they asked Co to look for "${resolvedContent.slice(0, 80)}")`,
-                  payload,
-                  dueAt,
-                  expiresAt: new Date(dueAt.getTime() + 3 * 24 * 60 * 60 * 1000),
-                }).catch((err: any) => {
-                  console.error("sendblue: window follow-up enqueue failed (non-fatal):", err?.message ?? err);
-                  return { queued: false, error: String(err?.message ?? err) };
-                });
-                // Which searches produced a follow-up, and when it's due, so one
-                // that never sends can be told apart from one never queued.
-                await recordDecision({
-                  layer: 6,
-                  decision: "proactive.windowFollowUp",
-                  userId: user.id,
-                  outcome: queued.queued ? "act" : "skip",
-                  action: queued.queued ? "queued" : "error" in queued ? "enqueue_failed" : "not_queued",
-                  proposal: { targetKey, window: scope.window, windowEnd: scope.windowEnd, dueAt: dueAt.toISOString(), sent: payload.sent },
-                  checks: [{ name: "queued", pass: queued.queued, reason: queued.queued ? `due ${dueAt.toISOString()}` : "error" in queued ? queued.error : "already sent or no longer pending for this time frame" }],
-                }).catch(() => {});
-              }
-          } catch (err: any) {
-            console.error("sendblue: recommendation failed (non-fatal):", err?.message ?? err);
-            addFact(replyFacts, "not_done", "The search didn't finish (something went wrong).");
-          }
-          const newFacts = replyFacts.facts.slice(factsBefore).map((f) => `${f.kind === "not_done" ? "NOT DONE: " : ""}${f.text}`);
-          const newInstructions = replyFacts.instructions.slice(instructionsBefore);
-          return {
-            answered,
-            sentCount: sentThisTurn.length,
-            briefing: [...newFacts, ...newInstructions.map((x) => `For this reply: ${x}`)].join("\n"),
-          };
-        };
-
         // Step 4.7 — Debounce the free-form reply only. Every deterministic
         // branch above this point (identity intake, OTP, call-trigger) has
         // already returned by now — those are typically single-word confirmations
@@ -2928,19 +2368,7 @@ Return ONLY valid JSON, no preamble: {"date": "YYYY-MM-DD or null", "time": "HH:
             addInstruction(replyFacts, dotsNote);
             recordDecision({ layer: 3, decision: "reply.dots", userId: user.id, outcome: "act", action: `dots:${dots.length}`, proposal: { dots } }).catch(() => {});
           }
-          const { replyText, grounding, toolsCalled } = resultsAnsweredAsk
-            ? await recordDecision({
-                layer: 3,
-                decision: "reply.skipped",
-                userId: user.id,
-                outcome: "skip",
-                action: "results_answered_the_ask",
-                proposal: { message: resolvedContent },
-                checks: [{ name: "message_was_only_the_ask", pass: true }],
-              })
-                .catch(() => {})
-                .then(() => ({ replyText: resultsAnsweredAsk!, grounding: [] as { latencyMs: number }[], toolsCalled: [] as string[] }))
-            : await propagateAttributes(
+          const { replyText, grounding, toolsCalled } = await propagateAttributes(
             { userId: user.id, traceName: "sendblue.generateReply" },
             () =>
               runConversationReplyAgent({
@@ -2948,7 +2376,6 @@ Return ONLY valid JSON, no preamble: {"date": "YYYY-MM-DD or null", "time": "HH:
                 replyOwed: owesReply,
                 safetyConcern: crisisWording,
                 turn,
-                searchAndSend,
                 userId: user.id,
                 phoneNumber: user.phone_number,
                 firstName: user.first_name,
@@ -2972,17 +2399,21 @@ Return ONLY valid JSON, no preamble: {"date": "YYYY-MM-DD or null", "time": "HH:
                 contextSummary,
                 personaPrompt,
                 sendCoReply: threadedSend,
+                threadNext: () => {
+                  threadNextSend = true;
+                },
               }),
           );
           coReply = replyText;
           // A reaction Co didn't record, caught after the reply (services/reactionCatchup.ts).
-          if (hasText && !resultsAnsweredAsk) catchUpReaction(user.id, resolvedContent, toolsCalled ?? [], inlineTarget?.fromCo ? `${inlineTarget.text} ${inlineTarget.what ?? ""}`.trim() : null, turn?.sent).catch(() => {});
+          if (hasText) catchUpReaction(user.id, resolvedContent, toolsCalled ?? [], inlineTarget?.fromCo ? `${inlineTarget.text} ${inlineTarget.what ?? ""}`.trim() : null, turn?.sent).catch(() => {});
           const groundingMs = grounding.reduce((a, g) => a + g.latencyMs, 0);
           const replyMs = Date.now() - replyStarted - groundingMs;
           // Latency budget (2026-09-15: a 70s reply led to five resends).
           // Measured from when the text reached Co to the reply going out.
           if (myInboundAt) {
             const turnMs = Date.now() - new Date(myInboundAt).getTime();
+            const searchedThisTurn = (toolsCalled ?? []).some((t) => t === "searchEvents" || t === "webSearch");
             // What they actually waited, from what was logged as sent this
             // turn, whichever path sent it: the search's hold line and
             // results go out before the reply step (2026-09-27: search turns
@@ -3005,7 +2436,7 @@ Return ONLY valid JSON, no preamble: {"date": "YYYY-MM-DD or null", "time": "HH:
               // firstSentMs: their text to Co's first text of any kind (a hold
               // line counts); firstAnswerMs: to the first real answer. ms runs
               // to the end of the turn, including steps after the reply went out.
-              proposal: { ms: turnMs, firstSentMs: firsts.firstSentMs, firstAnswerMs: firsts.firstAnswerMs, routerMs: routerLatencyMs, factsMs, searchMs: searchMsForTurn, prepMs: prepMsForTurn, replyMs, groundingMs, debounceMs: debounceWaitMs, contextSinceStartMs: replyContextWaitMs },
+              proposal: { ms: turnMs, firstSentMs: firsts.firstSentMs, firstAnswerMs: firsts.firstAnswerMs, routerMs: routerLatencyMs, factsMs, replyMs, groundingMs, debounceMs: debounceWaitMs, contextSinceStartMs: replyContextWaitMs },
             }).catch(() => {});
           }
         }

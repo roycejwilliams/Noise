@@ -26,7 +26,11 @@ import type { TurnContext } from "./turnContext.js";
 
 // What Co's reaction says it is doing. Meanings, not scripts: the read picks
 // the one that fits, code sends only these.
-export const ACK_EMOJIS = ["👀", "✍️", "🫡", "🚀", "👍"] as const;
+// What Co is about to do, plus a few that answer how they feel (2026-10-01:
+// five work emojis, mostly 👀, read as the same reaction every time). Grown
+// and professional, the private-club feel (Royce, same day): a toast, a
+// handshake, the native heart and haha; no salutes, rockets or raised hands.
+export const ACK_EMOJIS = ["👀", "✍️", "🤝", "👍", "❤️", "😂", "🥂"] as const;
 
 export function parseAck(v: unknown): string | null {
   const bare = (s: string) => s.replace(/\uFE0F/g, "").trim();
@@ -49,6 +53,8 @@ export type TurnRead = {
   feedback: string[];
   // The thing Co sent that this turn is about, by its name in the sent list.
   aboutSent: string | null;
+  // They're asking what Co is, what it does, or how to describe it (2026-10-01).
+  aboutCo: boolean;
   // The emoji Co reacts to their message with right away, to show what it's
   // about to do (Royce, 2026-09-29, from Instinct); null for most messages.
   ack: string | null;
@@ -58,6 +64,14 @@ export type TurnRead = {
 const MODES: Mode[] = ["sharing", "reacting", "asking", "logistics", "feedback", "planning", "small_talk"];
 
 // The part added to the router's prompt.
+// Co's own recent reactions, so it chooses "ack" the way a friend would: not on
+// every text, not the same one each time (2026-10-01).
+export function reactionsLine(reactions: string | null): string {
+  return reactions
+    ? `\n\nYour recent reactions to their texts (newest first): ${reactions}. A friend reacts now and then, not to every text, and not with the same one each time; let this shape "ack".`
+    : "";
+}
+
 export function turnReadAddendum(ctx: Pick<TurnContext, "asks" | "threads" | "offersThisWeek" | "sent"> | null, priorContext: string | null): string {
   const asks = ctx?.asks.map((a) => `- ${a.text}`).join("\n") || "- (nothing open)";
   const threads = ctx?.threads.map((t) => `- ${t.text}${t.feeling ? ` (feeling: ${t.feeling})` : ""}`).join("\n") || "- (nothing open)";
@@ -85,8 +99,9 @@ ${priorContext ? `What was already known about them before this conversation: ${
 "dots": at most two connections what's happening now clearly leads to, only when they're sharing or reacting: {"kind": "mention" (one thing serving two of their asks or bearing on a decision they're stuck on) | "shape" (how they're doing should change how Co responds right now, not something to say), "link": "one short plain sentence", "why": "which ask or thread it ties to"}. Only real, specific links from what's written above; never invent facts. Otherwise [].
 "emotion": does the latest message carry a real feeling Co should respond to (stressed, anxious, discouraged, lonely, frustrated, excited, proud, relieved)? Use the conversation: "fine" after bad news isn't fine. Ignore plain logistics, greetings and tone you aren't confident about; most messages have none. If none, null; else {"emotion": "one or two words", "intensity": "low" | "medium" | "high", "valence": "negative" | "positive" | "mixed", "about": "what it's about, only from what they said", "target": "co" when it's about Co itself (what Co found or didn't, its suggestions, replies, speed or mistakes, like "you keep finding nothing" or "that's not what I asked"), else "life"}.
 "seeking": "solving" only if you're genuinely confident they want a real answer or help deciding right now, not just to be heard (weighing options out loud, stuck on a decision, clearly past venting); ordinary sharing, updates and venting are "none", far more often than not.
-"feedback": each distinct piece of feedback they're giving about how Co works or should work, or asking Co to pass to the team, as one clear sentence the team could act on; [] if none.
-"ack": whether Co should react to their message with an emoji right away to show what it is about to do. Only when the reply will take a moment, or they just gave Co something to do, or they confirmed something. "👀" when Co is about to look something up or read something they sent; "✍️" when Co is about to write something for them (a draft, a plan, a pitch, a walkthrough); "🫡" when they've asked Co to take something on; "🚀" when they've told Co to go ahead and send or do something it prepared; "👍" for a plain confirmation of something Co did or proposed. null for everything else, including ordinary conversation, feelings, thanks and sign-offs: most messages.
+"feedback": each distinct piece of feedback about how Co works or should work in general, the kind of thing the team would change (how it searches, what it sends, how it texts), or anything they ask Co to pass to the team, as one clear sentence the team could act on. Not a correction or disagreement about something Co said in this conversation (a fact, a person, an opinion, how Co described itself): Co just gets that right in its reply, and filing it would turn an ordinary correction into a complaint. [] if none.
+"ack": whether Co should react to their message with an emoji before replying, the way a friend sometimes does. Rare: most messages get null, and a follow-up to something they just asked (a correction, "well a couple", "go ahead", "anything else?") gets null. Co is the host of a private social club, so its reactions are grown and understated. When one fits, pick the one that says the most: "🥂" when they got something done, won something or have news worth celebrating; "❤️" when they share something personal that clearly matters to them; "😂" only when they're genuinely being funny; "👀" when they sent something to look at (a link, photos, a doc) or a new thing to find; "✍️" when they asked Co to write something (a draft, a plan, a note); "🤝" when they've handed Co something to take on, agreed to something, or told Co to go ahead; "👍" for a plain confirmation of something Co proposed.
+"about_co": true if they're asking what Co is, what Co does, or how to describe Co (to them, a friend, an investor); otherwise false.
 "about_sent": if this message is about one specific thing in "Things Co sent them recently" (asking about it, reacting to it), its name exactly as listed; otherwise null.
 "covered_now": topic keys (from the list below) they addressed in this conversation itself, not just in what was known before; [] if none.
 "missing": topic keys not yet covered, counting what was already known.
@@ -132,6 +147,7 @@ export function parseTurnRead(obj: any, sentNames: string[]): Omit<TurnRead, "la
     },
     feedback: (Array.isArray(obj?.feedback) ? obj.feedback : []).filter((f: any) => typeof f === "string" && f.trim()).slice(0, 4).map((f: string) => f.trim().slice(0, 300)),
     aboutSent,
+    aboutCo: obj?.about_co === true,
     ack: mode === "small_talk" ? null : parseAck(obj?.ack),
     coverage: Array.isArray(obj?.missing) ? { missing_topics: topicList(obj.missing), fresh_topics: topicList(obj?.covered_now), ready_to_summarize: false } : null,
   };
@@ -141,7 +157,7 @@ export async function readTurn(
   routeInput: RouteInput,
   ctx: Pick<TurnContext, "asks" | "threads" | "offersThisWeek" | "sent"> | null,
   priorContext: string | null,
-  opts: { model?: string } = {},
+  opts: { model?: string; reactions?: string | null } = {},
 ): Promise<TurnRead> {
   const model = opts.model ?? ROUTER_MODEL;
   const started = Date.now();
@@ -150,12 +166,18 @@ export async function readTurn(
     maxOutputTokens: 4000,
     providerOptions: !model.startsWith("claude-haiku") ? { anthropic: { effort: "low" } } : undefined,
     experimental_telemetry: { isEnabled: true, functionId: "readTurn" },
-    prompt: buildRouterPrompt(routeInput) + turnReadAddendum(ctx, priorContext),
+    prompt: buildRouterPrompt(routeInput) + turnReadAddendum(ctx, priorContext) + reactionsLine(opts.reactions ?? null),
   });
   const json = extractFirstJsonObject(text.replace(/```(?:json)?/g, ""));
   if (!json) throw new Error(`readTurn returned no JSON: ${text.slice(0, 200)}`);
   return { ...parseTurnRead(JSON.parse(json), (ctx?.sent ?? []).map((s) => s.name)), latencyMs: Date.now() - started };
 }
+
+// When they ask what Co is: its own description is what's true, whatever an
+// earlier reply said (2026-10-01: after Co called its moat "not event
+// facilitation", it kept saying so). The bad reply isn't quoted; quoted bad
+// examples get copied.
+export const ABOUT_CO_INSTRUCTION = "They're asking what you are. Answer from who you are, warmly and in your own words. The room is the point: at Co events you know who's there and tell each member who's worth meeting and why. Getting to know them between events is what makes the room work, not the other way around. If an earlier reply in this conversation put it differently, that reply was wrong; don't repeat it.";
 
 // Their feedback, as a reminder for Co to save each piece (the tool decides; nothing is vetoed).
 export function feedbackInstruction(feedback: string[]): string | null {
