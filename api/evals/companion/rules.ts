@@ -25,8 +25,8 @@ const check = (label: string, ok: boolean) => {
 };
 
 // 1. Tapback acknowledgment
-check("ack accepts the club set, with or without the variation selector", ["👀", "✍️", "✍", "🤝", "👍", "❤️", "❤", "😂", "🥂"].every((e) => R.parseAck(e) !== null));
-check("ack takes one fitting emoji (a plane for a landing), never words, several, or the startup-cute ones", ["✈️", "🥟", "🫂", "👍🏽"].every((e) => R.parseAck(e) !== null) && [null, undefined, "", "🔥", "🫡", "🚀", "🙌", "🎉", "hello", "👀👀", "✈️ nice", 5].every((e) => R.parseAck(e as any) === null) && R.parseAck("✈️") === "✈️");
+check("ack accepts the club set, with or without the variation selector", ["👀", "✍️", "✍", "🤝", "👍", "❤️", "❤", "😂", "🥂", "🫡", "🔥"].every((e) => R.parseAck(e) !== null));
+check("ack takes one fitting emoji (a plane for a landing), never words, several, or the startup-cute ones", ["✈️", "🥟", "🫂", "👍🏽"].every((e) => R.parseAck(e) !== null) && [null, undefined, "", "🚀", "🙌", "🎉", "hello", "👀👀", "✈️ nice", 5].every((e) => R.parseAck(e as any) === null) && R.parseAck("✈️") === "✈️");
 
 // Tapbacks spaced out and varied (services/tapbacks.ts, 2026-10-01).
 {
@@ -35,11 +35,15 @@ check("ack takes one fitting emoji (a plane for a landing), never words, several
   const ago = (min: number) => new Date(now.getTime() - min * 60_000);
   check("the first reaction in a while is allowed", T.ackAllowed("👀", { recent: [], textsSinceLast: null }, now).ok);
   check("no reaction on the text right after one Co reacted to (last night: 👀 on five in a row)", !T.ackAllowed("✍️", { recent: [{ emoji: "👀", at: ago(1) }], textsSinceLast: 0 }, now).ok);
-  check("one text later Co decides (the backstop doesn't pick for it)", T.ackAllowed("👀", { recent: [{ emoji: "👀", at: ago(5) }], textsSinceLast: 1 }, now).ok);
+  check("one text later Co decides (the backstop doesn't pick for it)", T.ackAllowed("✍️", { recent: [{ emoji: "👀", at: ago(5) }], textsSinceLast: 1 }, now).ok);
+  check("never the same reaction twice in a row (Royce, 2026-10-01 decisions)", !T.ackAllowed("👀", { recent: [{ emoji: "👀", at: ago(60) }], textsSinceLast: 4 }, now).ok && !T.ackAllowed("❤", { recent: [{ emoji: "❤️", at: ago(60) }], textsSinceLast: 4 }, now).ok && T.ackAllowed("👀", { recent: [{ emoji: "🥂", at: ago(60) }, { emoji: "👀", at: ago(200) }], textsSinceLast: 4 }, now).ok);
   check("no more than 3 in two hours", !T.ackAllowed("🥂", { recent: [{ emoji: "❤️", at: ago(20) }, { emoji: "✍️", at: ago(50) }, { emoji: "👍", at: ago(100) }], textsSinceLast: 5 }, now).ok && T.ackAllowed("🥂", { recent: [{ emoji: "❤️", at: ago(20) }, { emoji: "✍️", at: ago(50) }, { emoji: "👍", at: ago(150) }], textsSinceLast: 5 }, now).ok);
   check("Co sees its recent reactions before it decides", T.describeTapbacks({ recent: [{ emoji: "👀", at: ago(3) }, { emoji: "✍️", at: ago(90) }], textsSinceLast: 2 }, now) === "👀 3 min ago (2 of their texts since), ✍️ 2h ago" && R.reactionsLine("👀 3 min ago").includes("not with the same one each time") && R.reactionsLine(null) === "");
-  check("❤️ and 😂 go as the native tapbacks", T.reactionFor("❤️") === "love" && T.reactionFor("❤") === "love" && T.reactionFor("😂") === "laugh" && T.reactionFor("👀") === "👀");
+  check("❤️ and 😂 go as the native tapbacks", T.reactionFor("❤️") === "love" && T.reactionFor("❤") === "love" && T.reactionFor("😂") === "laugh" && T.reactionFor("👍") === "like" && T.reactionFor("👀") === "👀");
+  const ct = fs.readFileSync(new URL("../../src/agent/conversationTools.ts", import.meta.url), "utf8");
+  check("the closing tapback is any single emoji under the ack's rules, never the last one again", /reaction: z\.string\(\)/.test(ct) && /parseAck\(picked\)/.test(ct) && /sameReaction\(ctx\.lastReaction, reaction\)/.test(ct) && /sendReaction\(ctx\.messageHandle, reactionFor\(reaction\)\)/.test(ct));
   const sb = fs.readFileSync(new URL("../../src/routes/sendblue.ts", import.meta.url), "utf8");
+  check("the reply knows Co's last reaction (this turn's ack first)", /const lastReaction = ackSent \?\? \(await tapbacksP/.test(sb) && /\blastReaction,/.test(sb));
   check("searches no longer add a 👀 of their own", !/sendReaction\(ownHandle, "👀"\)/.test(sb) && /HOLD_NO_ACK_MS/.test(sb));
   check("the read sees its recent reactions, and the backstop checks the same history before sending", /readTurn\(routeInput, t, coveragePriorContext\(profile\), \{ reactions: h \? describeTapbacks\(h\) : null \}\)/.test(sb) && /ackAllowed\(ackEmoji, h\)/.test(sb) && /sendReaction\(ackHandle, reactionFor\(ackEmoji\)\)/.test(sb));
   const rt = fs.readFileSync(new URL("../../src/services/readTurn.ts", import.meta.url), "utf8");

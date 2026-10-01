@@ -2419,12 +2419,15 @@ Return ONLY valid JSON, no preamble: {"date": "YYYY-MM-DD or null", "time": "HH:
           }
           // The reaction that went out on their text, so Co can leave it at that.
           const ackSent = (await ackP.catch(() => false)) ? (turnRead?.ack ?? null) : null;
+          // Co's last reaction to them, so a closing tapback never repeats it.
+          const lastReaction = ackSent ?? (await tapbacksP.catch(() => null))?.recent[0]?.emoji ?? null;
           const { replyText, grounding, toolsCalled } = await propagateAttributes(
             { userId: user.id, traceName: "sendblue.generateReply" },
             () =>
               runConversationReplyAgent({
                 ackSent,
                 messageHandle: typeof req.body?.message_handle === "string" ? req.body.message_handle : null,
+                lastReaction,
                 replyOwed: owesReply,
                 safetyConcern: crisisWording,
                 turn,

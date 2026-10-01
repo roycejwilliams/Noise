@@ -11,14 +11,9 @@
 // closing acknowledgment is directly observable. Anything with a question, a
 // new subject, or more than a few words gets a real reply.
 
-// Reaction values Sendblue accepts (services/sendblue.ts sendReaction).
+// The closing reaction this rule picks (evals/closing). Co's own closing
+// tapback can be any single emoji (agent/conversationTools.ts).
 export type Tapback = "like" | "love" | "laugh";
-
-const EMOJI_FOR: Record<Tapback, string> = { like: "👍", love: "❤️", laugh: "😂" };
-
-export function emojiFor(reaction: Tapback): string {
-  return EMOJI_FOR[reaction];
-}
 
 // Acknowledgments that close a thread, by the reaction they deserve.
 const CLOSINGS: { re: RegExp; reaction: Tapback }[] = [

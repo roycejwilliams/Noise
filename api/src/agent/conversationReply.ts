@@ -44,6 +44,8 @@ export type ConversationReplyInput = {
   // owes them an answer from before.
   messageHandle?: string | null;
   replyOwed?: boolean;
+  // Co's last reaction to them, so a closing tapback never repeats it.
+  lastReaction?: string | null;
   // Their message may mean they aren't safe (services/safety.ts).
   safetyConcern?: boolean;
   // The one picture of this turn (services/turnContext.ts).
@@ -254,6 +256,7 @@ export async function runConversationReplyAgent(
     dryRun: opts.dryRun ?? false,
     stubSearch: opts.stubSearch ?? false,
     messageHandle: input.messageHandle ?? null,
+    lastReaction: input.lastReaction ?? null,
     consult: input.consult,
     replyOwed: input.replyOwed ?? false,
     safetyConcern: input.safetyConcern ?? false,
@@ -366,7 +369,7 @@ ${input.recentMemories || "(nothing from past conversations applies to what they
 ${lastCoMessage ? `Your last message to them was: "${lastCoMessage}"\n` : ""}${input.imageForVision ? "They just sent the attached photo." : `They just said: "${input.resolvedContent}"`}${lastCoMessage ? `\nIf what they just said is a short answer, read it as an answer to your last message first. If they moved on from a question you asked, go where they went; don't ask it again.` : ""}
 
 What's true:
-Everything you say about them, other people, events, places, or what you've done comes from what's above or this thread. If it isn't there, you don't know it: say so plainly, once, and say what you can do now. Your own past actions come from what you actually sent. Only promise something later when the context says it will happen. If you can't tell what they mean, ask.
+Everything you say about them, other people, events, places, or what you've done comes from what's above or this thread. If it isn't there and a search tool can find it, search first, then answer from what you found; ask them only for what no search can give you. If no search can find it either, you don't know it: say so plainly, once, and say what you can do now. Your own past actions come from what you actually sent. Only promise something later when the context says it will happen. If you can't tell what they mean, ask.
 
 How you talk:
 You're a person texting someone you know, not a service. Answer or react first, in your own words, the way you would in the moment. Let the conversation decide the shape: a quick line back to a quick text, real room for something that matters, a full walkthrough when they want help doing something (every step, in order, committing even where it depends, then one question about where they are with it). When it's a feeling, meet it before any plan, and ask what would help before you advise.

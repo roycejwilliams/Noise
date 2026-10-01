@@ -25,6 +25,8 @@ const bare = (s: string) => s.replace(/️/g, "").trim();
 
 export function ackAllowed(emoji: string, h: TapbackHistory, now: Date = new Date()): { ok: boolean; why: string | null } {
   const hours = (d: Date) => (now.getTime() - d.getTime()) / 3_600_000;
+  // Never the same one twice in a row (Royce, 2026-10-01 decisions).
+  if (h.recent.length && sameReaction(h.recent[0].emoji, emoji)) return { ok: false, why: `same as the last reaction (${h.recent[0].emoji})` };
   if (h.recent.length && h.textsSinceLast !== null && h.textsSinceLast < TAPBACK_LIMITS.textsBetween) return { ok: false, why: "reacted to their last text" };
   const inWindow = h.recent.filter((t) => hours(t.at) < TAPBACK_LIMITS.windowHours).length;
   if (inWindow >= TAPBACK_LIMITS.maxInWindow) return { ok: false, why: `${inWindow} reactions in the last ${TAPBACK_LIMITS.windowHours} hours` };
@@ -42,11 +44,18 @@ export function describeTapbacks(h: TapbackHistory, now: Date = new Date()): str
   return lines.join(", ");
 }
 
+export function sameReaction(a: string, b: string): boolean {
+  return bare(a) === bare(b);
+}
+
 // The standard iMessage tapbacks go by name so they look native; the rest as emoji.
 export function reactionFor(emoji: string): string {
   const e = bare(emoji);
-  return e === bare("❤️") ? "love" : e === "😂" ? "laugh" : emoji;
+  return e === bare("❤️") ? "love" : e === "😂" ? "laugh" : e === "👍" ? "like" : emoji;
 }
+
+// Closing tapbacks were logged by name before they could be any emoji.
+const LEGACY_TAPBACK: Record<string, string> = { like: "👍", love: "❤️", laugh: "😂" };
 
 // Every reaction Co gave them recently (the "on it" read and the closing
 // tapback alike: to them it's the same thing), newest first, and how many of
@@ -60,7 +69,10 @@ export async function tapbackHistory(userId: string): Promise<TapbackHistory> {
      ORDER BY created_at DESC LIMIT 6`,
     [userId],
   );
-  const recent: RecentTapback[] = rows.map((r: any) => ({ emoji: String(r.action).replace(/^tapback:/, ""), at: new Date(r.created_at) }));
+  const recent: RecentTapback[] = rows.map((r: any) => {
+    const emoji = String(r.action).replace(/^tapback:/, "");
+    return { emoji: LEGACY_TAPBACK[emoji] ?? emoji, at: new Date(r.created_at) };
+  });
   if (!recent.length) return { recent, textsSinceLast: null };
   const { rows: c } = await pool.query(
     `SELECT count(*)::int AS n FROM co_memories

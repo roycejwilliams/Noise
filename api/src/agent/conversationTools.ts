@@ -5,7 +5,9 @@ import { situationFor, teamOnlyTools, toolsOutOfSituation, toolUse } from "../se
 import { guardTools } from "./toolGuard.js";
 import { sendLimiter } from "../services/sendLimiter.js";
 import sendblue, { cleanCoMessage, sendReaction } from "../services/sendblue.js";
-import { coAskedQuestion, emojiFor } from "../services/conversationClose.js";
+import { coAskedQuestion } from "../services/conversationClose.js";
+import { parseAck } from "../services/readTurn.js";
+import { reactionFor, sameReaction } from "../services/tapbacks.js";
 import { writeMemory } from "../services/memory.js";
 import { getMemberInvite, inviteLink, invitesLeftFor } from "../services/invites.js";
 import { recordTextArrival } from "../services/eventPresence.js";
@@ -69,6 +71,9 @@ export type ConversationToolContext = {
   ackSent?: string | null;
   // For reactInsteadOfReplying.
   messageHandle?: string | null;
+  // Co's last reaction to them (this turn's ack, or the latest before it), so
+  // the closing tapback is never the same one twice in a row.
+  lastReaction?: string | null;
   // Their message may mean they aren't safe (services/safety.ts): no tapback.
   safetyConcern?: boolean;
   // On the team (users.mo_approver): gets the team-only tools (handToTeammate, askTeammate).
@@ -525,12 +530,19 @@ export function createConversationTools(ctx: ConversationToolContext) {
     }),
 
     reactInsteadOfReplying: tool({
-      description: toolUse("reactInsteadOfReplying"),
+      // Any single emoji chosen for this exact message (Royce, 2026-10-01
+      // decisions), same rules as the ack (readTurn.ts parseAck).
+      description: `${toolUse("reactInsteadOfReplying")}${ctx.lastReaction ? ` Your last reaction to them was ${ctx.lastReaction}; use a different one.` : ""}`,
       inputSchema: z.object({
-        reaction: z.enum(["like", "love", "laugh"]).describe("like for thanks or ok, love for warmth, laugh for a joke."),
+        reaction: z.string().describe('Exactly one emoji that says something about this message: "🥂" a plan locked in or a win, "🫡" a correction or instruction taken, "🔥" real news, "😂" when they\'re genuinely funny, "❤️" something personal and good, "👍" a plain okay (never on bad news, and never a heart on a complaint or burnout). Any other single emoji that fits the moment beats a generic one.'),
       }),
-      execute: async ({ reaction }) => {
+      execute: async ({ reaction: picked }) => {
         if (state.replyCount > 0) return { ok: false, error: "You already replied this turn." };
+        const reaction = parseAck(picked);
+        if (!reaction) return { ok: false, error: "A reaction is exactly one emoji, and not a startup-cute one (rocket, raised hands, confetti). Pick one that fits this message, or reply." };
+        if (ctx.lastReaction && sameReaction(ctx.lastReaction, reaction)) {
+          return { ok: false, error: `Your last reaction to them was ${ctx.lastReaction}. Pick a different one that fits this message, or reply with a short text.` };
+        }
         if (ctx.safetyConcern || state.safetyFlagged) {
           notDone("No tapback: they may not be safe, so Co has to reply.");
           return { ok: false, error: "They may not be safe. Reply to them properly." };
@@ -545,15 +557,15 @@ export function createConversationTools(ctx: ConversationToolContext) {
         }
         let how = "dry_run";
         if (!ctx.dryRun) {
-          const tapped = ctx.messageHandle ? await sendReaction(ctx.messageHandle, reaction) : false;
+          const tapped = ctx.messageHandle ? await sendReaction(ctx.messageHandle, reactionFor(reaction)) : false;
           if (!tapped) {
-            // No tapback (SMS, or an old message): one emoji says the same.
-            const sent = await ctx.sendCoReply({ phone: ctx.phoneNumber, message: emojiFor(reaction), asVoice: false });
+            // No tapback (SMS, an old message, or Sendblue refused it): the same emoji as a text says the same.
+            const sent = await ctx.sendCoReply({ phone: ctx.phoneNumber, message: reaction, asVoice: false });
             if (sent === false) {
               notDone("The reaction didn't go through.");
               return { ok: false, error: "That didn't go through. Reply with a short text instead." };
             }
-            await logDelivered(`Co replied: ${emojiFor(reaction)}`);
+            await logDelivered(`Co replied: ${reaction}`);
           }
           how = tapped ? `tapback:${reaction}` : `emoji:${reaction}`;
           await recordDecision({ layer: 3, decision: "turn.closing", userId: ctx.userId, outcome: "act", action: how, proposal: { message: ctx.resolvedContent } }).catch(() => {});
