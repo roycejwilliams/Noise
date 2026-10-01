@@ -805,6 +805,12 @@ export async function runMigrations(): Promise<void> {
   await pool
     .query(`ALTER TABLE inbound_webhook_handles ADD COLUMN IF NOT EXISTS payload JSONB, ADD COLUMN IF NOT EXISTS finished_at TIMESTAMPTZ`)
     .catch((err: Error) => console.error("inbound_webhook_handles payload/finished_at migration failed:", err));
+  // A retry owed for a text (a crashed turn, or an empty reply) and who took
+  // it, so it runs once even across a restart (routes/sendblue.ts
+  // replayOwedTurn, 2026-10-01 code review).
+  await pool
+    .query(`ALTER TABLE inbound_webhook_handles ADD COLUMN IF NOT EXISTS retry_due_at TIMESTAMPTZ, ADD COLUMN IF NOT EXISTS retry_claimed_at TIMESTAMPTZ`)
+    .catch((err: Error) => console.error("inbound_webhook_handles retry columns migration failed:", err));
 
   // Proactive check-in call cadence — user-set preference (7 or 14 days,
   // captured post-call via extractCheckinCadencePreference in
@@ -1973,6 +1979,12 @@ export async function runMigrations(): Promise<void> {
       )`,
     )
     .then(() => pool.query(`CREATE INDEX IF NOT EXISTS idx_open_loops_user ON open_loops (user_id) WHERE closed_at IS NULL`))
+    // seen_at: changes up to here have been handled (a wake, or Co made them
+    // itself); changed_at past it is pending. closed_reason: who closed it
+    // and why ('co' is a tombstone the sync never reopens; 'stale' isn't done).
+    // 2026-10-01 code review.
+    .then(() => pool.query(`ALTER TABLE open_loops ADD COLUMN IF NOT EXISTS seen_at TIMESTAMPTZ, ADD COLUMN IF NOT EXISTS closed_reason TEXT`))
+    .then(() => pool.query(`UPDATE open_loops SET seen_at = COALESCE(woke_at, changed_at) WHERE seen_at IS NULL`))
     .catch((err: Error) => console.error("open_loops table init failed:", err));
   // The search brief Co keeps while it helps someone find something (Royce,
   // 2026-09-30): "120 people" or a map pin refines the same search.

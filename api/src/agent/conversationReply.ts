@@ -10,6 +10,7 @@ import { MOVES_GUIDE, moveOf, type Move } from "../services/moves.js";
 import { groundReply, LAYER3_MODELS, renderReplyFacts, type GroundingResult, type ReplyFacts, addFact } from "../harness/replyGrounding.js";
 import { capitalizeSentences, dropRepeatedQuestion, looksLikeMetaReply } from "../services/textStyle.js";
 import { lastCoLine } from "../services/conversationClose.js";
+import { REPLY_DELAYED_NOTE, REPLY_GAVE_UP_NOTE, REPLY_NO_RETRY_NOTE } from "../services/turnFailure.js";
 
 // How Co listens, the part of the call guide that carries over to text,
 // written the way Co should text (2026-09-24). The full guide is 18,600
@@ -31,6 +32,9 @@ export const TEXT_LISTENING = `How you listen, the same as on a call:
 - Real warmth, and real humor when something is actually funny.`;
 
 export type ConversationReplyInput = {
+  // When their text arrived. The reply's one deadline runs from here, so the
+  // turn's prep counts against it (2026-10-01 code review).
+  turnStartedAt?: Date;
   // The reaction already put on their text this turn, if any.
   ackSent?: string | null;
   // Thread the next text under theirs (routes/sendblue.ts threadedSend).
@@ -88,6 +92,11 @@ export type ConversationReplyInput = {
   isTeam?: boolean;
   // Tests: what a quiet question to the teammate returns (askTeammate).
   consult?: (question: string) => Promise<{ facts: string[]; note: string } | null>;
+  // Runs a retry of this same reply later, guarded by the caller (phone lock,
+  // nothing newer from them, nothing answered since). When given, an empty
+  // reply says "give me a minute" and retries once from their message instead
+  // of making them say it again (services/turnFailure.ts).
+  resumeLater?: (retry: () => Promise<void>) => void;
 };
 
 // How long an unanswered call offer stays "open" before Co treats it as
@@ -160,6 +169,8 @@ Return ONLY "yes" or "no".`,
 // the failure mode this exists to prevent.
 // Per model call, not per reply: a search inside the reply can take up to
 // 45s on its own, while a drafting call normally takes under 20s.
+// Seconds past the loop's budget for Co to write its answer before the reply stops.
+export const TURN_GRACE_S = 30;
 export const REPLY_CALL_TIMEOUT_MS = Number(process.env.REPLY_CALL_TIMEOUT_MS ?? 40_000);
 
 // A fresh provider per reply whose fetch gives up on a stalled call.
@@ -224,12 +235,15 @@ Return ONLY the numbers of the memories that are genuinely relevant to what the 
 // on explicit classifier output) — only the secondary gesture + reply.
 export async function runConversationReplyAgent(
   input: ConversationReplyInput,
-  opts: { dryRun?: boolean; record?: boolean; stubSearch?: boolean } = {},
+  opts: { dryRun?: boolean; record?: boolean; stubSearch?: boolean; attempt?: number } = {},
 ): Promise<{ sent: boolean; offered: boolean; replyText: string; grounding: GroundingResult[]; toolsCalled: string[]; move: Move }> {
   const grounding: GroundingResult[] = [];
   // The team gets the team-only tools; nobody else ever sees them.
   const isTeam = input.isTeam ?? (opts.dryRun ? false : await import("../services/extensions.js").then((m) => m.isTeamMember(input.userId)).catch(() => false));
+  // A retry is its own attempt, with its own clock.
+  const turnStart = (opts.attempt ?? 1) === 1 && input.turnStartedAt ? input.turnStartedAt.getTime() : Date.now();
   const { tools, state, flushLinks } = createConversationTools({
+    turnStartedAt: turnStart,
     isTeam,
     userId: input.userId,
     phoneNumber: input.phoneNumber,
@@ -272,6 +286,22 @@ export async function runConversationReplyAgent(
       return capitalizeSentences(dropRepeatedQuestion(result.final, input.recentConversation));
     },
   });
+
+  // What Co tried and what worked, recorded as each tool runs, so they're
+  // known even when a model call times out mid-turn and the move counts only
+  // what really happened (services/moves.ts).
+  const tried: string[] = [];
+  const worked: string[] = [];
+  for (const [name, t] of Object.entries(tools as Record<string, any>)) {
+    if (typeof t?.execute !== "function") continue;
+    const run = t.execute.bind(t);
+    t.execute = async (...args: any[]) => {
+      tried.push(name);
+      const out = await run(...args);
+      if (out?.ok !== false) worked.push(name);
+      return out;
+    };
+  }
 
   const callOfferEligible =
     !input.hasPendingOffer &&
@@ -346,7 +376,7 @@ Vary how you say things. Read your recent messages in the thread and don't reuse
 Say each thing once. Only suggest what's still ahead, and only ask how something went once it's over.
 
 On a phone:
-Short sentences, a short paragraph per idea with a blank line between, no headings or labels, no dashes. Match their capitalization: lowercase if they text in lowercase (going only by their own lines), normal sentences otherwise.${input.imageForVision ? " React to what's actually in the photo." : ""}
+Short sentences, a short paragraph per idea with a blank line between, no headings or labels, no dashes. Normal capitalized sentences, however they text.${input.imageForVision ? " React to what's actually in the photo." : ""}
 
 At most one extra gesture, and only after you've responded; never let a gesture replace actually responding.
 ${callOfferEligible ? (input.isThinProfileFirstMessage ? `- This is the first real thing they've shared and nothing is known about them yet. A quick, low-pressure call would get further than texting. After responding, offer one, briefly. Don't place a call, just make the offer. Skip it only if it would feel forced right after this reply; being eligible means offering by default.` : `- What they shared could benefit from talking it through by voice. Respond briefly first, even if it was heavy. Then offer a call as a warm gesture, not a logistics question. Make it a warm, open invitation rather than a scheduling question, and name a call or the phone plainly so it's clear what you mean. Don't place a call, just make the offer. Skip it only if it would feel forced right after this reply; being eligible means offering by default.`) : `- A call offer is NOT available this turn (one is already pending or was offered too recently). Don't mention, suggest or ask about a phone call at all, in any wording. Just respond to what they said.`}
@@ -414,7 +444,7 @@ How it looks on a phone:
 - When a reply has more than one idea, give each idea its own short paragraph with a blank line between them, never one long block. Each step starts its own paragraph and reads the way you'd say it to them across a table. Write plain sentences that open with the thing itself ("Start with two tiers." "Then give each sponsor a table in the room."). Never a heading or a label with a colon.
 - Your first words are your answer or your own reaction, never their words handed back. They: "should I raise now or wait?" You: "I'd wait until Monday. You'll have the numbers."
 - Short sentences. No dashes of any kind.
-- Match their capitalization. All lowercase gets relaxed lowercase back; normal sentences get normal sentences. Go only by their "User said:" lines, never your own past replies, which may be wrong. If their style is mixed or unclear, use normal capitalized sentences.${input.imageForVision ? "\n- React to what's actually in the photo." : ""}
+- Normal capitalized sentences, however they text.${input.imageForVision ? "\n- React to what's actually in the photo." : ""}
 
 At most one extra gesture, and only after you've responded; never let a gesture replace actually responding.
 ${callOfferEligible ? (input.isThinProfileFirstMessage ? `- This is the first real thing they've shared and nothing is known about them yet. A quick, low-pressure call would get further than texting. After responding, offer one, briefly. Don't place a call, just make the offer. Skip it only if it would feel forced right after this reply; being eligible means offering by default.` : `- What they shared could benefit from talking it through by voice. Respond briefly first, even if it was heavy. Then offer a call as a warm gesture, not a logistics question. Say "I'm here if you'd ever want to hop on a call and actually talk it through," not "are you free today or tomorrow." The offer has to name a call or the phone; "I'm here if you want to talk" isn't clear enough. Don't place a call, just make the offer. Skip it only if it would feel forced right after this reply; being eligible means offering by default.`) : `- A call offer is NOT available this turn (one is already pending or was offered too recently). Don't mention, suggest or ask about a phone call at all, in any wording. Just respond to what they said.`}
@@ -436,6 +466,7 @@ Then act with your tools:
   // the default 22-16 and drafted faster (median 8.0s vs 9.3s, slowest tenth
   // 16.8s vs 30.9s); low lost 17-21. REPLY_EVAL_EFFORT only exists so
   // evals/texting can compare levels.
+  const replyDeadline = turnStart + (LOOP_BUDGET.seconds + TURN_GRACE_S) * 1000;
   const REPLY_EFFORT = (["low", "medium", "high"] as const).find((e) => e === process.env.REPLY_EVAL_EFFORT) ?? "medium";
   // Each model call is capped (2026-09-26: a call stalled for 318s in a
   // test). A timeout after a text already went out ends the turn with what
@@ -477,7 +508,11 @@ Then act with your tools:
     // instead, so this reverted back to 6.)
     // Also stops the moment a send is held (conversationTools.ts sendReply):
     // retrying can't get through and each step is a paid call.
-    stopWhen: [stepCountIs(LOOP_BUDGET.steps), () => state.sendStopped, () => state.reacted],
+    // One deadline for the whole reply (2026-10-01 code review: 14 steps of
+    // up to 40s each could run far past the loop's 75s). Past LOOP_BUDGET the
+    // tools answer "out of time" so Co writes what it has; this stops the
+    // loop between steps, never mid-tool, TURN_GRACE_S after that.
+    stopWhen: [stepCountIs(LOOP_BUDGET.steps), () => state.sendStopped, () => state.reacted, () => Date.now() > replyDeadline],
     experimental_telemetry: { isEnabled: true, functionId: "agent.conversationReply" },
     ...(withImage && input.imageForVision
       ? {
@@ -541,7 +576,15 @@ Then act with your tools:
     }
   }
   if (!state.sent && !state.sendStopped) {
-    const fallback = "Hey, sorry, got a bit tangled up on my end. What's on your mind?";
+    // Nothing usable came out. Never ask them to say it again (2026-10-01 code
+    // review): Co still has their message, so the first time it says it needs
+    // a minute and retries once from it; a retry that also comes out empty
+    // says so. Their message stays owed either way (OWED_AFTER), so their
+    // next text gets it answered too. A retry only runs when this run sent
+    // nothing at all, so nothing goes out twice.
+    const attempt = opts.attempt ?? 1;
+    const retrying = attempt === 1 && !!input.resumeLater && !opts.dryRun && state.sentMessages.length === 0;
+    const fallback = retrying ? REPLY_DELAYED_NOTE : attempt > 1 ? REPLY_GAVE_UP_NOTE : REPLY_NO_RETRY_NOTE;
     if (opts.dryRun) {
       console.log(`[conversationReply dryRun] fallback would send to ${input.userId}: "${fallback}"`);
       state.sent = true;
@@ -551,12 +594,21 @@ Then act with your tools:
       // refused send used to be marked sent, so nobody noticed the silence).
       const sent = await input.sendCoReply({ phone: input.phoneNumber, message: fallback, asVoice: input.isVoice });
       if (sent !== false) {
-        await writeMemory(input.userId, "text_exchange", `Co replied: ${fallback}`);
         state.sent = true;
         state.lastReplyText = fallback;
+        await writeMemory(input.userId, "text_exchange", `Co replied: ${fallback}`).catch((err: any) => console.error("conversationReply: logging the fallback failed (it did send):", err?.message ?? err));
       } else {
         console.error(`conversationReply: fallback reply also failed to send for user ${input.userId}`);
       }
+    }
+    if (retrying) {
+      const toldThem = state.sent;
+      input.resumeLater!(async () => {
+        if (toldThem) addFact(input.facts, "did_this_turn", `A minute ago you told them "${REPLY_DELAYED_NOTE}" because your first try at this reply came out empty. This is that answer: answer what they said, and don't apologize again.`);
+        const again = await runConversationReplyAgent(input, { ...opts, attempt: attempt + 1 });
+        const { recordDecision } = await import("../harness/core.js");
+        await recordDecision({ layer: 3, decision: "reply.resume", userId: input.userId, outcome: again.sent && again.replyText !== REPLY_GAVE_UP_NOTE ? "act" : "skip", action: again.replyText === REPLY_GAVE_UP_NOTE ? "empty_again" : again.sent ? "answered" : "not_sent", proposal: { message: input.resolvedContent.slice(0, 200) } }).catch(() => {});
+      });
     }
   }
 
@@ -568,11 +620,12 @@ Then act with your tools:
 
   // Which tools Co chose, in order (evals/capabilities/probe.ts reads this).
   const toolsCalled = (agentRun?.steps ?? []).flatMap((st: any) => st.toolCalls.map((t: any) => t.toolName));
-  // The one move this turn made (services/moves.ts), logged every turn.
-  const move = moveOf({ toolsCalled, sent: state.sent });
+  // The one move this turn made (services/moves.ts), logged every turn, from
+  // what worked rather than what was tried.
+  const move = moveOf({ toolsCalled: tried, toolsDone: worked, sent: state.sent });
   if (!opts.dryRun) {
     const { recordDecision } = await import("../harness/core.js");
-    await recordDecision({ layer: 3, decision: "turn.move", userId: input.userId, outcome: move === "quiet" ? "skip" : "act", action: move, proposal: { tools: toolsCalled } }).catch(() => {});
+    await recordDecision({ layer: 3, decision: "turn.move", userId: input.userId, outcome: move === "quiet" ? "skip" : "act", action: move, proposal: { tools: toolsCalled, tried, worked } }).catch(() => {});
   }
   return { sent: state.sent, offered, replyText: state.lastReplyText, grounding, toolsCalled, move };
 }

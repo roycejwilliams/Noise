@@ -169,6 +169,18 @@ export function registerJobs(io: Server) {
   // others (2026-09-21), so the offers of every tier could not go out together.
   cron.schedule("15,45 * * * *", runDispatch);
 
+  // Texts whose turn never finished, or whose retry a restart cut off, run
+  // again from their saved copy when it's safe (routes/sendblue.ts
+  // reportUnfinishedTurns). Also run once at startup (server.ts).
+  cron.schedule("*/2 * * * *", async () => {
+    try {
+      const { reportUnfinishedTurns } = await import("../routes/sendblue.js");
+      await reportUnfinishedTurns();
+    } catch (err: any) {
+      console.error("unfinished turn cron error (non-fatal):", err?.message ?? err);
+    }
+  });
+
   // Reminders members asked for ("remind me Thursday to follow up with…"),
   // sent to them only (services/relay.ts). Every 5 minutes; nothing's due unless asked.
   cron.schedule("*/5 * * * *", async () => {

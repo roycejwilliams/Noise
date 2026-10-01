@@ -11,9 +11,17 @@ const ACT_TOOLS = new Set(["searchEvents", "webSearch", "searchPosts", "readPage
 // Keeping a loop open to come back to.
 const WATCH_TOOLS = new Set(["startTask", "updateTask", "updateNotes", "updateLoop", "saveAsk", "scheduleCall"]);
 
-export function moveOf(t: { toolsCalled: string[]; sent: boolean }): Move {
-  const used = new Set(t.toolsCalled);
-  if (used.has("leaveItAtReaction") || !t.sent) return "quiet";
+// A reaction in place of words, either kind.
+const REACTION_TOOLS = ["leaveItAtReaction", "reactInsteadOfReplying"];
+
+// From the tools that worked (toolsDone), not just the ones tried: a refused
+// search isn't an act (2026-10-01 code review). toolsCalled is the fallback
+// for callers that only know what was tried.
+export function moveOf(t: { toolsCalled: string[]; toolsDone?: string[]; sent: boolean }): Move {
+  const used = new Set(t.toolsDone ?? t.toolsCalled);
+  if (!t.sent) return "quiet";
+  // Words went out too: it's whatever else the turn did, not quiet.
+  if (REACTION_TOOLS.some((x) => used.has(x)) && !used.has("sendReply")) return "quiet";
   if ([...used].some((x) => ACT_TOOLS.has(x))) return "act";
   if ([...used].some((x) => WATCH_TOOLS.has(x))) return "watch";
   return "reply";

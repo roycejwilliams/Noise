@@ -20,8 +20,10 @@ import type { ConversationToolContext } from "./conversationTools.js";
 type Found = { name: string; url: string; facts: string; match: TierMatch | null; blocked: string | null };
 export type LoopState = { started: number; found: Map<string, Found>; pages: Map<string, string>; holdSent: boolean; shared: string[]; webQueries: number };
 
-export function newLoopState(): LoopState {
-  return { started: Date.now(), found: new Map(), pages: new Map(), holdSent: false, shared: [], webQueries: 0 };
+// started: when their text arrived, so the time budget counts the turn's prep
+// too (2026-10-01 code review); now when not known.
+export function newLoopState(started = Date.now()): LoopState {
+  return { started, found: new Map(), pages: new Map(), holdSent: false, shared: [], webQueries: 0 };
 }
 
 const HOLD_PREFIX = "Co is looking:"; // the same record line routes/sendblue.ts writes for a hold text
@@ -56,8 +58,9 @@ export function loopTools(
     }
     const ok = await ctx.sendCoReply({ phone: ctx.phoneNumber, message: text, asVoice: false });
     if (ok === false) return false;
-    await writeMemory(ctx.userId, "text_exchange", record);
+    // Delivered is delivered: the log write failing doesn't unsend it (2026-10-01 code review).
     state.sentMessages.push(text);
+    await writeMemory(ctx.userId, "text_exchange", record).catch((err: any) => console.error("loopTools: logging a sent text failed (it did send):", err?.message ?? err));
     return true;
   };
   const hold = async (line?: string) => {
@@ -262,6 +265,7 @@ export function loopTools(
         const notes = await loadBrief(ctx.userId).catch(() => null);
         const sent: string[] = [];
         const refused: string[] = [];
+        const uncaptioned: string[] = [];
         for (const it of items) {
           const f = loop.found.get(it.link) ?? (notes?.shortlist ?? []).map((s) => ({ name: s.name, url: s.url, facts: s.note ?? "", match: null, blocked: null }) as Found).find((s) => s.url === it.link);
           if (!f) {
@@ -290,18 +294,40 @@ export function loopTools(
             notDone(`The link ${it.link} didn't send.`);
             continue;
           }
-          await new Promise((r) => setTimeout(r, ctx.dryRun ? 0 : 1500));
-          await say(it.caption.trim(), `Co replied: ${it.caption.trim()}`);
+          // The link went out, so it's shared whatever happens to its caption.
           loop.shared.push(it.link);
           sent.push(f.name);
           state.sent = true;
-          ctx.facts?.add("did_this_turn", `Sent "${f.name}" (${it.link}) with the caption: "${it.caption.trim()}"`);
+          await new Promise((r) => setTimeout(r, ctx.dryRun ? 0 : 1500));
+          // The caption is its own receipt (2026-10-01 code review: a failed
+          // caption was recorded as sent). One retry of just the caption; if it
+          // still fails, the fact says the link went alone, so Co's reply can
+          // carry what the caption would have.
+          const caption = it.caption.trim();
+          const captioned = (await say(caption, `Co replied: ${caption}`)) || (await say(caption, `Co replied: ${caption}`));
+          if (captioned) {
+            ctx.facts?.add("did_this_turn", `Sent "${f.name}" (${it.link}) with the caption: "${caption}"`);
+          } else {
+            uncaptioned.push(f.name);
+            ctx.facts?.add("did_this_turn", `Sent the link for "${f.name}" (${it.link}), but its caption didn't send`);
+            notDone(`The caption for ${f.name} didn't send; only its link went.`);
+          }
           if (f.match && !ctx.dryRun) await recordRecommendationsSent(ctx.userId, [f.match]).catch(() => {});
         }
         if (sent.length) await remember({ shortlist: [...(notes?.shortlist ?? []), ...items.filter((i) => loop.shared.includes(i.link)).map((i) => ({ name: loop.found.get(i.link)?.name ?? i.link, url: i.link, note: i.caption.slice(0, 200) }))].slice(-8) });
         if (!ctx.dryRun) await recordDecision({ layer: 3, decision: "loop.shareFinds", userId: ctx.userId, outcome: sent.length ? "act" : "skip", action: `sent ${sent.length}`, proposal: { sent, refused, seconds: Math.round((Date.now() - loop.started) / 1000) } }).catch(() => {});
         if (refused.length) notDone(`Not sent: ${refused.join(" | ")}`);
-        return { ok: sent.length > 0, sent, refused, note: sent.length ? "Sent, each link then its caption. Don't repeat them in your reply; add only what's left to say." : "Nothing sent." };
+        return {
+          ok: sent.length > 0,
+          sent,
+          refused,
+          ...(uncaptioned.length ? { uncaptioned } : {}),
+          note: !sent.length
+            ? "Nothing sent."
+            : uncaptioned.length
+              ? `Sent. The caption didn't go out for ${uncaptioned.join(", ")}: only the link did, so say what it is in your reply. The rest went with their captions; don't repeat those.`
+              : "Sent, each link then its caption. Don't repeat them in your reply; add only what's left to say.",
+        };
       },
     }),
 
@@ -361,19 +387,21 @@ export function loopTools(
     }),
 
     // Where one of their open loops stands (services/openLoops.ts): Co's word
-    // wins over what code derives, until the loop's source closes.
+    // wins over what code derives, and a loop Co closes stays closed. Named by
+    // its id; a title only lands when exactly one loop fits it.
     updateLoop: tool({
       description: toolUse("updateLoop"),
       inputSchema: z.object({
-        loop: z.string().describe("The loop, by the name it has in what you're carrying for them, or a new one in a few words."),
+        loopId: z.number().int().optional().describe("The loop's id, the N in [loop N] in what you're carrying for them. Leave it out only for a new loop."),
+        loop: z.string().describe("The loop's name as you're carrying it, or a new one in a few words."),
         status: z.enum(["open", "waiting_on_reply", "unconfirmed", "decision_needed", "done", "dropped"]),
         detail: z.string().optional().describe("What it's waiting on or what's unconfirmed, in a few words."),
       }),
-      execute: async ({ loop, status, detail }) => {
+      execute: async ({ loopId, loop, status, detail }) => {
         if (ctx.dryRun) return { ok: true, note: "Recorded (test run)." };
         const { setLoopStatus } = await import("../services/openLoops.js");
-        const r = await setLoopStatus(ctx.userId, loop, status, detail?.trim().slice(0, 240) ?? null).catch(() => ({ ok: false, title: loop }));
-        return r.ok ? { ok: true, note: `"${r.title}" is now ${status.replace(/_/g, " ")}.` } : { ok: false, error: "Couldn't record that. Don't say you did." };
+        const r = await setLoopStatus(ctx.userId, { id: loopId ?? null, title: loop }, status, detail?.trim().slice(0, 240) ?? null).catch(() => ({ ok: false as const, error: "Couldn't record that. Don't say you did." }));
+        return r.ok ? { ok: true, note: `"${r.title}" is now ${status.replace(/_/g, " ")}.` } : { ok: false, error: r.error };
       },
     }),
   };

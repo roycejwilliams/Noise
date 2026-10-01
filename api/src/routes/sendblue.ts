@@ -68,7 +68,7 @@ import { addEventFacts, addFact, addHint, addInstruction, gatherReplyFacts } fro
 import { runConversationReplyAgent, filterRelevantMemories, CALL_OFFER_EXPIRY_DAYS } from "../agent/conversationReply.js";
 import { triggerCallForUser } from "../services/callTrigger.js";
 import sendblue, { blockSender, cleanCoMessage, markRead, sendReaction, webhookSecretMatches, sendingAs } from "../services/sendblue.js";
-import { TURN_FAILED_NOTE, turnFailedNoteBlocked } from "../services/turnFailure.js";
+import { OWED_AFTER, RESUME_AFTER_MS, TURN_FAILED_NOTE, turnFailedNoteBlocked, turnReplayBlocked } from "../services/turnFailure.js";
 import { lineInVoice } from "../services/voiceLine.js";
 import { privacyAlert } from "../services/privacyAlert.js";
 import { learnFromTextTurn } from "../services/turnLearning.js";
@@ -79,7 +79,7 @@ import { parseModelJson } from "../services/modelJson.js";
 import { enrichMatch } from "../services/eventDetails.js";
 import { refreshPersonSnapshot } from "../harness/personSnapshot.js";
 import { recordSuggestionOutcome, resultFromNamedOutcome } from "../services/outcomes.js";
-import { track } from "../services/shutdown.js";
+import { isShuttingDown, track } from "../services/shutdown.js";
 import { sendLimiter } from "../services/sendLimiter.js";
 
 // Serializes webhook processing per phone number. Without this, two
@@ -330,7 +330,7 @@ async function sendCoReply(params: {
 // Sends a message and logs it only if it actually went out.
 async function sendAndLog(userId: string, phone: string, message: string, asVoice = false): Promise<boolean> {
   const sent = await sendCoReply({ phone, message, asVoice });
-  if (sent) await logTextExchange(userId, `Co replied: ${cleanCoMessage(message)}`);
+  if (sent) await logTextExchangeRow(userId, `Co replied: ${cleanCoMessage(message)}`);
   return sent;
 }
 
@@ -368,7 +368,11 @@ function dayLabel(isoDate: string): string {
   return d.isValid ? d.toFormat("cccc, LLLL d") : isoDate;
 }
 
-async function replyOwed(userId: string): Promise<boolean> {
+// Their previous message, when Co never really answered it: nothing since, or
+// only a hold line or a "something broke" line (services/turnFailure.ts
+// OWED_AFTER). An answer stays owed until a real one lands (2026-10-01 code
+// review). null when nothing's owed.
+async function owedAnswer(userId: string): Promise<{ text: string; afterFailure: boolean } | null> {
   const { rows } = await pool
     .query(
       `SELECT content FROM co_memories
@@ -380,9 +384,15 @@ async function replyOwed(userId: string): Promise<boolean> {
   // rows[0] is the message being handled now; look for their previous one.
   const earlier = rows.slice(1);
   const prevUser = earlier.findIndex((r: any) => String(r.content).startsWith("User said:"));
-  if (prevUser === -1) return false;
+  if (prevUser === -1) return null;
   const since = earlier.slice(0, prevUser);
-  return !since.some((r: any) => (String(r.content).startsWith("Co replied:") && !HOLD_LINES.some((l) => String(r.content) === `Co replied: ${l}`)) || String(r.content).startsWith("Mo replied:"));
+  const notAnAnswer = [...HOLD_LINES, ...OWED_AFTER].map((l) => `Co replied: ${l}`);
+  const answered = since.some((r: any) => (String(r.content).startsWith("Co replied:") && !notAnAnswer.includes(String(r.content))) || String(r.content).startsWith("Mo replied:"));
+  if (answered) return null;
+  // Co told them something broke: answering it is now this reply's job. (Without
+  // that, the earlier message may just be mid-reply in its own turn.)
+  const afterFailure = since.some((r: any) => OWED_AFTER.some((l) => String(r.content) === `Co replied: ${l}`));
+  return { text: String(earlier[prevUser].content).replace(/^User said:\s*/, ""), afterFailure };
 }
 
 // "You're in" for a good code: names the member who invited them when the
@@ -485,7 +495,17 @@ async function tellInviterTheyJoined(newUser: { id: string; first_name?: string 
   if (!sent) await releaseJoinNotice(newUser.id);
 }
 
-async function logTextExchange(userId: string, content: string): Promise<void> {
+// Once per turn's text: a replayed turn's "User said" line is already logged
+// if its first run got that far. Co's lines always log.
+async function logTextExchangeOnce(userId: string, content: string, since: Date): Promise<void> {
+  if (content.startsWith("User said:")) {
+    const { rows } = await pool.query(`SELECT 1 FROM co_memories WHERE user_id = $1 AND memory_type = 'text_exchange' AND content = $2 AND created_at >= $3 LIMIT 1`, [userId, content, since]);
+    if (rows.length) return;
+  }
+  await logTextExchangeRow(userId, content);
+}
+
+async function logTextExchangeRow(userId: string, content: string): Promise<void> {
   const inserted = await pool.query(
     `INSERT INTO co_memories (user_id, memory_type, content) VALUES ($1, 'text_exchange', $2) RETURNING id`,
     [userId, content],
@@ -505,16 +525,22 @@ export function sendblueRouter(io: Server): Router {
 
   // POST /sendblue/webhook
   // Handles: inbound messages (text + voice memos), outbound delivery status, typing indicators
-  router.post(
-    "/webhook",
-    async (req: Request, webhookRes: Response, next: NextFunction) => {
+  // replay: re-running a text whose turn crashed or whose retry was lost to a
+  // restart (replayOwedTurn, below). The text was already checked, acked,
+  // de-duplicated, saved and marked read, and its "User said" line may
+  // already be logged, so none of that happens twice.
+  const handleWebhook = async (req: Request, webhookRes: Response, next: NextFunction, replay: { receivedAt: Date } | null = null) => {
+      // The member's message is logged once, however many times its turn runs.
+      const logTextExchange = replay ? (userId: string, content: string) => logTextExchangeOnce(userId, content, replay.receivedAt) : logTextExchangeRow;
       // Only Sendblue can post here (2026-09-17 code review: with no check,
       // anyone with the URL could fake an inbound text from any number and
       // opt someone out, plant memories, trigger texts or calls, or claim a
       // test-site login code). Sendblue sends the webhook secret set in its
       // dashboard back in the sb-signing-secret header.
       const expectedSecret = process.env.SENDBLUE_WEBHOOK_SECRET;
-      if (!expectedSecret) {
+      if (replay) {
+        // Checked when it first arrived.
+      } else if (!expectedSecret) {
         // Fail closed in production specifically, per Royce's instruction —
         // co-test (RAILWAY_ENVIRONMENT_NAME === "dev") and local dev still
         // get through unverified, but log loudly either way so a missing
@@ -542,7 +568,7 @@ export function sendblueRouter(io: Server): Router {
 
       // One inbound text is handled once, however many times it's delivered.
       const handle: unknown = req.body?.message_handle;
-      if (typeof handle === "string" && handle && !req.body?.is_outbound && req.body?.type !== "typing") {
+      if (!replay && typeof handle === "string" && handle && !req.body?.is_outbound && req.body?.type !== "typing") {
         const fresh = await pool
           .query(`INSERT INTO inbound_webhook_handles (handle) VALUES ($1) ON CONFLICT (handle) DO NOTHING RETURNING handle`, [handle])
           .then((r) => r.rows.length > 0)
@@ -579,7 +605,7 @@ export function sendblueRouter(io: Server): Router {
       const turnStartedAt = new Date();
       let myInboundAt: string | null = null;
       const bodyForStamp = req.body ?? {};
-      if (lockKey && !bodyForStamp.is_outbound && typeof bodyForStamp.content === "string") {
+      if (!replay && lockKey && !bodyForStamp.is_outbound && typeof bodyForStamp.content === "string") {
         bodyForStamp.content = await claimTextLogin(lockKey, bodyForStamp.content);
       }
       const isGenuineInbound =
@@ -590,7 +616,7 @@ export function sendblueRouter(io: Server): Router {
       // Read receipt right away for a real 1:1 inbound text (not groups, not
       // Co's own delivery updates), before debounce or reply work.
       if (lockKey && isGenuineInbound && bodyForStamp.message_type !== "group" && !bodyForStamp.group_id) {
-        markRead(lockKey).catch(() => {});
+        if (!replay) markRead(lockKey).catch(() => {});
         // They texted: Co's run of unprompted texts starts over (sendLimiter.ts).
         sendLimiter.noteInbound(lockKey);
       }
@@ -1215,10 +1241,20 @@ export function sendblueRouter(io: Server): Router {
             .catch(() => {});
         if (hasText && linksIn(resolvedContent).length) import("../services/linkReader.js").then((l) => l.readLinksLater(resolvedContent, { ownerUserId: user.id })).catch(() => {});
         const [inboundMemory, queryEmbedding] = await Promise.all([
-          pool.query(
-            `INSERT INTO co_memories (user_id, memory_type, content)
-             VALUES ($1, 'text_exchange', $2) RETURNING id`,
-            [user.id, inboundContent],
+          // A replayed turn reuses the line its first run logged.
+          (replay
+            ? pool
+                .query(`SELECT id FROM co_memories WHERE user_id = $1 AND memory_type = 'text_exchange' AND content = $2 AND created_at >= $3 ORDER BY created_at LIMIT 1`, [user.id, inboundContent, replay.receivedAt])
+                .then((r) => (r.rows.length ? r : null))
+            : Promise.resolve(null)
+          ).then(
+            (found) =>
+              found ??
+              pool.query(
+                `INSERT INTO co_memories (user_id, memory_type, content)
+                 VALUES ($1, 'text_exchange', $2) RETURNING id`,
+                [user.id, inboundContent],
+              ),
           ),
           generateEmbedding(inboundContent).catch((err) => {
             console.error("Inbound embedding failed (non-fatal):", err);
@@ -1583,7 +1619,8 @@ export function sendblueRouter(io: Server): Router {
         // Whether to react instead of replying is Co's call now
         // (conversationTools.ts reactInsteadOfReplying, 2026-09-25). What stays
         // hard: never when Co still owes them an answer.
-        const owesReply = hasText ? await replyOwed(user.id) : false;
+        const owed = hasText ? await owedAnswer(user.id) : null;
+        const owesReply = owed !== null;
 
         // Layer 3 harness facts: what's actually true this turn. Branches
         // below add what they did (a link sent, a call that failed) as they
@@ -1600,6 +1637,9 @@ export function sendblueRouter(io: Server): Router {
           context: `${resolvedContent}\n${inlineTarget ? `${inlineTarget.text}\n` : ""}${recentConversation.split("\n").filter((l) => l.startsWith("Co replied:")).slice(-3).join("\n")}`,
           pendingDescriptions: openItems.filter((i) => i.id !== resolvedItem?.item.id).map((i) => i.description),
         });
+        if (owed?.afterFailure) {
+          addInstruction(replyFacts, `Their message before this one ("${owed.text.slice(0, 400)}") never got a real answer: something broke on your side. Answer it in this reply along with what they just said. Don't make them repeat it, and don't apologize again beyond a word.`);
+        }
         // What the link they shared says (waits up to 6s; the reply never depends on it).
         if (theirLinkP && turnRead?.moment?.mode !== "small_talk") {
           const shared = await linkForReply(theirLinkP);
@@ -1618,7 +1658,7 @@ export function sendblueRouter(io: Server): Router {
           const [notes, loops, timeline] = await Promise.all([
             loadBrief(user.id).then(describeNotes).catch(() => null),
             // Every open loop and where it stands (services/openLoops.ts).
-            import("../services/openLoops.js").then(async (o): Promise<string | null> => o.describeLoops((await o.syncOpenLoops(user.id)).rows)).catch((): string | null => null),
+            import("../services/openLoops.js").then(async (o): Promise<string | null> => o.describeLoops((await o.syncOpenLoops(user.id)).rows, { withIds: true })).catch((): string | null => null),
             // Their local time and what's ahead, every turn (services/timeline.ts).
             import("../services/timeline.js").then((t) => t.timelineFor(user.id, profile?.city ?? null)).catch(() => null),
           ]);
@@ -2414,6 +2454,8 @@ Return ONLY valid JSON, no preamble: {"date": "YYYY-MM-DD or null", "time": "HH:
                 threadNext: () => {
                   threadNextSend = true;
                 },
+                turnStartedAt,
+                resumeLater: replay ? undefined : (retry) => scheduleReplyResume(typeof handle === "string" ? handle : null, user.phone_number, user.id, myInboundAt, turnStartedAt, retry),
               }),
           );
           coReply = replyText;
@@ -2484,7 +2526,11 @@ Return ONLY valid JSON, no preamble: {"date": "YYYY-MM-DD or null", "time": "HH:
           console.error("sendblue: error after early webhook ack (non-fatal, already ack'd):", (error as any)?.message ?? error);
           // They already see "Read"; don't leave them with nothing.
           if (lockKey && isGenuineInbound && !isGroupMessage) {
-            await tellMemberTurnFailed(lockKey, turnStartedAt, "turn_error", (error as any)?.constructor?.name ?? "Error");
+            await tellMemberTurnFailed(lockKey, replay?.receivedAt ?? turnStartedAt, "turn_error", (error as any)?.constructor?.name ?? "Error");
+            // Then the turn runs once more from their saved text, unless this
+            // was already that second run (2026-10-01 code review: nothing
+            // retried a crashed turn).
+            if (!replay && typeof handle === "string" && handle) scheduleTurnReplay(handle, TURN_REPLAY_AFTER_MS);
           }
           return;
         }
@@ -2500,10 +2546,118 @@ Return ONLY valid JSON, no preamble: {"date": "YYYY-MM-DD or null", "time": "HH:
           pool.query(`UPDATE inbound_webhook_handles SET finished_at = NOW() WHERE handle = $1`, [handle]).catch(() => {});
         }
       }
-    },
-  );
+  };
+
+  router.post("/webhook", (req: Request, res: Response, next: NextFunction) => handleWebhook(req, res, next));
+  replayHandler = async (payload: any, receivedAt: Date) => {
+    const noop: any = { headersSent: true, status: () => noop, send: () => noop, json: () => noop, sendStatus: () => noop };
+    await handleWebhook({ body: payload, get: () => undefined, ip: "replay" } as any, noop, (err?: any) => err && console.error("sendblue: replayed turn failed:", err?.message ?? err), { receivedAt });
+  };
 
   return router;
+}
+
+// Set once the router exists; runs a saved text's turn again (replayOwedTurn).
+let replayHandler: ((payload: any, receivedAt: Date) => Promise<void>) | null = null;
+
+// A reply that came out empty gets one more try a minute later, from the
+// message Co already has (agent/conversationReply.ts resumeLater). Under the
+// phone's lock, and only if they haven't texted since (that turn answers it,
+// see owedAnswer) and nothing answered them in the meantime. The retry is owed
+// in the database (retry_due_at) and claimed once (retry_claimed_at), so if
+// this process restarts first, the next pass replays the turn instead
+// (reportUnfinishedTurns).
+function scheduleReplyResume(handle: string | null, phone: string, userId: string, inboundAt: string | null, turnStartedAt: Date, retry: () => Promise<void>): void {
+  if (handle) pool.query(`UPDATE inbound_webhook_handles SET retry_due_at = NOW() + make_interval(secs => $2) WHERE handle = $1 AND retry_claimed_at IS NULL`, [handle, RESUME_AFTER_MS / 1000]).catch(() => {});
+  const timer = setTimeout(() => {
+    if (isShuttingDown()) return;
+    track(
+      withPhoneLock(phone, async () => {
+        if (handle && !(await claimRetry(handle))) return;
+        const latest = inboundAt
+          ? await pool.query(`SELECT last_inbound_at FROM phone_debounce WHERE phone = $1`, [phone]).then((r) => r.rows[0]?.last_inbound_at ?? null)
+          : null;
+        if (latest && inboundAt && new Date(latest).getTime() > new Date(inboundAt).getTime()) {
+          await recordDecision({ layer: 3, decision: "reply.resume", userId, outcome: "skip", action: "newer_text" }).catch(() => {});
+          return;
+        }
+        const { rows } = await pool.query(
+          `SELECT 1 FROM co_memories WHERE user_id = $1 AND memory_type = 'text_exchange' AND created_at > $2
+             AND (content LIKE 'Co replied:%' OR content LIKE 'Mo replied:%') AND content <> ALL($3::text[]) LIMIT 1`,
+          [userId, turnStartedAt, [...HOLD_LINES, ...OWED_AFTER].map((l) => `Co replied: ${l}`)],
+        );
+        if (rows.length) {
+          await recordDecision({ layer: 3, decision: "reply.resume", userId, outcome: "skip", action: "already_answered" }).catch(() => {});
+          return;
+        }
+        await retry();
+      }),
+    ).catch((err: any) => console.error("sendblue: resuming an empty reply failed:", err?.message ?? err));
+  }, RESUME_AFTER_MS);
+  timer.unref?.();
+}
+
+// One retry per text, whoever gets there first (this process's timer or the
+// pass after a restart).
+async function claimRetry(handle: string): Promise<{ payload: any; receivedAt: Date } | null> {
+  const { rows } = await pool
+    .query(`UPDATE inbound_webhook_handles SET retry_claimed_at = NOW() WHERE handle = $1 AND retry_claimed_at IS NULL RETURNING payload, received_at`, [handle])
+    .catch((err: any) => {
+      console.error("sendblue: claiming a turn retry failed:", err?.message ?? err);
+      return { rows: [] as any[] };
+    });
+  return rows[0] ? { payload: rows[0].payload, receivedAt: new Date(rows[0].received_at) } : null;
+}
+
+// A crashed turn runs once more from their saved text, shortly after.
+export const TURN_REPLAY_AFTER_MS = 10_000;
+function scheduleTurnReplay(handle: string, afterMs: number): void {
+  pool.query(`UPDATE inbound_webhook_handles SET retry_due_at = NOW() + make_interval(secs => $2) WHERE handle = $1 AND retry_claimed_at IS NULL`, [handle, afterMs / 1000]).catch(() => {});
+  const timer = setTimeout(() => {
+    if (isShuttingDown()) return;
+    track(replayOwedTurn(handle)).catch((err: any) => console.error("sendblue: replaying a crashed turn failed:", err?.message ?? err));
+  }, afterMs);
+  timer.unref?.();
+}
+
+// Runs a saved text's whole turn again (a crash, or a retry a restart lost),
+// once, and only when it's safe: Co hasn't answered since, they haven't texted
+// again, no call went out, and it's under an hour old (turnReplayBlocked).
+// Returns whether it ran.
+export async function replayOwedTurn(handle: string): Promise<boolean> {
+  const claim = await claimRetry(handle);
+  if (!claim?.payload || !replayHandler) return false;
+  const { payload, receivedAt } = claim;
+  const phone = payload.number;
+  const isGroup = payload.message_type === "group" || !!payload.group_id;
+  if (typeof phone !== "string" || !phone || isGroup || payload.is_outbound) return false;
+  const { rows } = await pool
+    .query(
+      `SELECT u.id, u.sms_opted_out, u.archived_at,
+         EXISTS (
+           SELECT 1 FROM co_memories r
+           WHERE r.user_id = u.id AND r.memory_type = 'text_exchange' AND (r.content LIKE 'Co replied:%' OR r.content LIKE 'Mo replied:%')
+             AND r.created_at > $2 AND r.content <> ALL($3::text[])
+         ) AS replied,
+         (SELECT d.last_inbound_at FROM phone_debounce d WHERE d.phone = $1) AS last_inbound_at,
+         u.call_status_updated_at
+       FROM users u WHERE u.phone_number = $1 LIMIT 1`,
+      [phone, receivedAt, [...HOLD_LINES, ...OWED_AFTER].map((l) => `Co replied: ${l}`)],
+    )
+    .catch(() => ({ rows: [] as any[] }));
+  const row = rows[0];
+  const blocked = turnReplayBlocked({
+    member: row ? { optedOut: !!row.sms_opted_out, archived: !!row.archived_at } : null,
+    coRepliedSince: !!row?.replied,
+    lastInboundAt: row?.last_inbound_at ? new Date(row.last_inbound_at) : null,
+    callAt: row?.call_status_updated_at ? new Date(row.call_status_updated_at) : null,
+    receivedAt,
+    now: new Date(),
+  });
+  await recordDecision({ layer: 2, decision: "turn.replay", userId: row?.id ?? null, outcome: blocked ? "skip" : "act", action: blocked ?? "replayed", proposal: { handle, message: String(payload.content ?? "").slice(0, 200) } }).catch(() => {});
+  if (blocked) return false;
+  await replayHandler(payload, receivedAt);
+  return true;
 }
 
 // A turn died after the text was marked read: send the one honest line
@@ -2521,7 +2675,7 @@ export async function tellMemberTurnFailed(phone: string, receivedAt: Date, sour
          (SELECT MAX(n.created_at) FROM co_memories n
            WHERE n.user_id = u.id AND n.memory_type = 'text_exchange' AND n.content = $4) AS last_note_at
        FROM users u WHERE u.phone_number = $1 LIMIT 1`,
-      [phone, receivedAt, HOLD_LINES.map((l) => `Co replied: ${l}`), `Co replied: ${TURN_FAILED_NOTE}`],
+      [phone, receivedAt, [...HOLD_LINES, ...OWED_AFTER].map((l) => `Co replied: ${l}`), `Co replied: ${TURN_FAILED_NOTE}`],
     );
     const row = rows[0];
     const blocked = turnFailedNoteBlocked({
@@ -2550,10 +2704,11 @@ export async function tellMemberTurnFailed(phone: string, receivedAt: Date, sour
 
 // Inbound texts whose turn never finished (the process restarted or crashed
 // mid-turn) and that never got a Co reply afterwards, so they're not lost
-// silently (2026-09-17 code review). Meant to run once on startup. It never
-// replays the turn (that could double-send); for a text from the last hour
-// it sends the one honest "please resend" line instead (2026-09-23). Quietly
-// does nothing until the payload and finished_at columns exist.
+// silently (2026-09-17 code review). Runs on startup and every few minutes
+// (jobs/index.ts). Each such text is claimed once, then replayed from its
+// saved copy when that's safe (replayOwedTurn, 2026-10-01 code review); when
+// it isn't, the one honest line goes out instead. Retries a restart cut off
+// (retry_due_at passed, never claimed) are replayed the same way.
 export async function reportUnfinishedTurns(): Promise<number> {
   try {
     const { rows } = await pool.query(
@@ -2568,9 +2723,12 @@ export async function reportUnfinishedTurns(): Promise<number> {
              AND r.created_at > h.received_at AND r.content <> ALL($1::text[])
          )
        LIMIT 50`,
-      [HOLD_LINES.map((l) => `Co replied: ${l}`)],
+      [[...HOLD_LINES, ...OWED_AFTER].map((l) => `Co replied: ${l}`)],
     );
     for (const row of rows) {
+      // Claimed once, so the next pass (or another server) doesn't take it too.
+      const claimed = await pool.query(`UPDATE inbound_webhook_handles SET finished_at = NOW() WHERE handle = $1 AND finished_at IS NULL RETURNING handle`, [row.handle]).then((r) => r.rows.length > 0).catch(() => false);
+      if (!claimed) continue;
       console.error(`sendblue: inbound text ${row.handle} never finished its turn and got no reply (user ${row.user_id ?? "unknown"})`);
       await recordDecision({
         layer: 2,
@@ -2584,9 +2742,22 @@ export async function reportUnfinishedTurns(): Promise<number> {
       const phone = row.payload?.number;
       const isGroup = row.payload?.message_type === "group" || !!row.payload?.group_id;
       if (typeof phone === "string" && phone && !isGroup) {
-        await tellMemberTurnFailed(phone, new Date(row.received_at), "restart", "Restart");
+        const replayed = await replayOwedTurn(row.handle).catch((err: any) => {
+          console.error("sendblue: replaying an unfinished turn failed:", err?.message ?? err);
+          return false;
+        });
+        if (!replayed) await tellMemberTurnFailed(phone, new Date(row.received_at), "restart", "Restart");
       }
     }
+    const { rows: lost } = await pool
+      .query(
+        `SELECT handle FROM inbound_webhook_handles
+         WHERE retry_due_at IS NOT NULL AND retry_claimed_at IS NULL AND retry_due_at < NOW() - INTERVAL '3 minutes'
+           AND received_at > NOW() - INTERVAL '1 hour' AND payload IS NOT NULL
+         LIMIT 20`,
+      )
+      .catch(() => ({ rows: [] as any[] }));
+    for (const l of lost) await replayOwedTurn(l.handle).catch((err: any) => console.error("sendblue: replaying a lost retry failed:", err?.message ?? err));
     // The saved copy of each text is only for this check: drop it after two
     // days so members' messages don't pile up here.
     await pool

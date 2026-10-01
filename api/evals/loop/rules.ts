@@ -19,7 +19,7 @@ const src = (f: string) => fs.readFileSync(new URL(`../../src/${f}`, import.meta
 
 // Replies find things only through the loop (2026-10-01: the old path is gone).
 const ct = src("agent/conversationTools.ts");
-check("the loop's tools are always there, and searchNow is gone", /Object\.assign\(tools, loopTools\(ctx, state, newLoopState\(\), notDone\)\);/.test(ct) && !/searchNow: tool\(/.test(ct));
+check("the loop's tools are always there, and searchNow is gone", /Object\.assign\(tools, loopTools\(ctx, state, newLoopState\(ctx\.turnStartedAt\), notDone\)\);/.test(ct) && !/searchNow: tool\(/.test(ct));
 check("no switch left behind", !/CO_LOOP|loopOn|loopMode/.test(src("agent/loop.ts") + src("routes/sendblue.ts") + ct));
 check("the capability sheet describes the loop's tools", C.capabilitySheet().some((l) => /look up events itself/.test(l)) && !C.capabilitySheet().some((l) => /search right now for events/.test(l)));
 
@@ -82,7 +82,7 @@ check("the reply gets the guide when they want something found, and the working 
   check("each paragraph is its own text, at most three", JSON.stringify(B.toBeats("Got it.\n\nThe loft holds 60.\n\nWant me to ask about price?")) === JSON.stringify(["Got it.", "The loft holds 60.", "Want me to ask about price?"]) && B.toBeats("a\n\nb\n\nc\n\nd").length === 3 && B.toBeats("one line").length === 1);
   check("a text that looks unfinished waits longer for the rest of the burst", B.burstWaitMs("so") === B.BURST_WAIT_UNFINISHED_MS && B.burstWaitMs("I was thinking...") === B.BURST_WAIT_UNFINISHED_MS && B.burstWaitMs("also,") === B.BURST_WAIT_UNFINISHED_MS && B.burstWaitMs("Can you find me a venue for Oct 10?") === B.BURST_WAIT_MS);
   const ct = src("agent/conversationTools.ts");
-  check("sendReply sends each beat after the fact check, paced, and logs each", /const beats = ctx\.isVoice \? \[message\] : toBeats\(message\)/.test(ct) && /BEAT_GAP_MS/.test(ct) && /writeMemory\(ctx\.userId, "text_exchange", `Co replied: \$\{cleanCoMessage\(beat\)\}`\)/.test(ct));
+  check("sendReply sends each beat after the fact check, paced, and logs each", /const beats = ctx\.isVoice \? \[message\] : toBeats\(message\)/.test(ct) && /BEAT_GAP_MS/.test(ct) && /logDelivered\(`Co replied: \$\{cleanCoMessage\(beat\)\}`\)/.test(ct));
   check("the burst window comes from their text", /burstWaitMs\(resolvedContent \?\? ""\)/.test(src("routes/sendblue.ts")));
   const T = await import("../../src/services/timeline.js");
   const { DateTime } = await import("luxon");
@@ -122,17 +122,73 @@ check("the reply gets the guide when they want something found, and the working 
   const said = O.describeLoops(loops.map((l) => ({ ...l })));
   check("the loops read as where each stands, closed ones left out", !!said && /Find a venue for Oct 10: waiting on a reply/.test(said) && /a decision that's theirs/.test(said) && O.describeLoops([{ title: "x", status: "done", detail: null, dueDate: null, source: "task" }]) === null, said ?? "");
   const t0 = new Date("2026-10-01T12:00:00Z");
-  const base = { taskId: 7, status: "unconfirmed" as const, changedAt: new Date(t0.getTime() - 60_000) };
-  check("a changed loop wakes its task once, at most every 6 hours, and only task-backed open loops", O.shouldWake({ ...base, wokeAt: null }, t0) && !O.shouldWake({ ...base, wokeAt: new Date(t0.getTime() - 30_000) }, t0) && !O.shouldWake({ ...base, wokeAt: new Date(t0.getTime() - 3_600_000) }, t0) && !O.shouldWake({ ...base, taskId: null, wokeAt: null }, t0) && !O.shouldWake({ ...base, status: "done" as any, wokeAt: null }, t0));
-  check("every text turn syncs the loops and reads them as ongoing", /o\.describeLoops\(\(await o\.syncOpenLoops\(user\.id\)\)\.rows\)/.test(src("routes/sendblue.ts")) && /if \(loops\) addFact\(replyFacts, "ongoing", loops\)/.test(src("routes/sendblue.ts")));
+  const ago = (ms: number) => new Date(t0.getTime() - ms);
+  const base = { taskId: 7, status: "unconfirmed" as const, changedAt: ago(60_000), seenAt: ago(120_000), wokeAt: null as Date | null, dueDate: null as string | null };
+  check("a pending change wakes its task; a handled one doesn't; only task-backed open loops", O.shouldWake(base, t0) && !O.shouldWake({ ...base, seenAt: ago(30_000) }, t0) && !O.shouldWake({ ...base, taskId: null }, t0) && !O.shouldWake({ ...base, status: "done" as any }, t0));
+  check("the 6-hour cooldown holds a change pending (not lost), and it wakes once the cooldown passes", !O.shouldWake({ ...base, wokeAt: ago(3_600_000) }, t0) && O.shouldWake({ ...base, wokeAt: ago(3_600_000) }, new Date(t0.getTime() + 5 * 3_600_000 + 60_000)));
+  check("a loop due within 2 days skips the cooldown", O.shouldWake({ ...base, wokeAt: ago(3_600_000), dueDate: "2026-10-02" }, t0) && !O.shouldWake({ ...base, wokeAt: ago(3_600_000), dueDate: "2026-10-09" }, t0));
+  const os = src("services/openLoops.ts");
+  check("the wake pass scans every pending change, not just this pass's", /changed_at > seen_at/.test(os) && /pending\.map\(toRow\)\.filter\(\(x\) => shouldWake\(x, now\)\)/.test(os));
+  check("a loop counts as woken only if its task really was (one statement)", /WITH t AS \(UPDATE co_tasks[\s\S]{0,200}EXISTS \(SELECT 1 FROM t\)/.test(os));
+  // Reads: a failed or capped read never closes anything.
+  check("a failed source read is incomplete, and incomplete sources close nothing", /catch\(\(err: any\) => \{[\s\S]{0,120}return \{ complete: false, rows: \[\] \}/.test(os) && /if \(!src\.complete\[gone\.source/.test(os));
+  check("a read that hits its cap is incomplete", /complete: r\.rows\.length < SOURCE_READ_CAP/.test(os));
+  check("closing needs a direct read of the source row: failed read keeps it open", O.closeVerdict("task", undefined) === null && O.closeVerdict("task", { status: "open" }) === null && O.closeVerdict("task", { status: "done" })?.status === "done" && O.closeVerdict("task", { status: "expired" })?.status === "dropped" && O.closeVerdict("task", null)?.reason === "source_dropped");
+  check("an unresolved ask stays open; a resolved one is done", O.closeVerdict("ask", { resolved_at: null }) === null && O.closeVerdict("ask", { resolved_at: new Date() })?.status === "done");
+  check("an offer or notes that aged out are stale, not done", O.closeVerdict("offer", { status: "sent" })?.reason === "stale" && O.closeVerdict("offer", { status: "sent" })?.status === null && O.closeVerdict("notes", { brief: { what: "x" } }, { briefStale: true })?.reason === "stale" && O.closeVerdict("offer", { status: "accepted" })?.status === "done");
+  // Closed loops stay closed.
+  const dTask = loops[0];
+  const closedByCo = { source: "task", source_ref: "7", status: "done", status_by: "co", closed_at: ago(60_000), closed_reason: "co" };
+  check("a loop Co closed stays closed while its task is still listed (tombstone)", O.planLoop(dTask, closedByCo, null).kind === "keep_closed");
+  const dNotes = loops[2];
+  check("closed notes reopen only for newer notes", O.planLoop(dNotes, { ...closedByCo, source: "notes", source_ref: "brief" }, ago(120_000)).kind === "keep_closed" && O.planLoop(dNotes, { ...closedByCo, source: "notes", source_ref: "brief" }, t0).kind === "upsert");
+  const openCo = { source: "task", source_ref: "7", status: "decision_needed", status_by: "co", detail: "their pick", closed_at: null };
+  const p1 = O.planLoop(dTask, openCo, null);
+  check("on an open loop Co's status wins over code's", p1.kind === "upsert" && p1.status === "decision_needed" && p1.detail === "their pick" && !p1.moved);
+  const p2 = O.planLoop(dTask, undefined, null);
+  check("a new loop is new (not a change that wakes)", p2.kind === "upsert" && p2.isNew && /VALUES \(\$1, \$2, \$3, \$4, \$5, \$6, \$7, \$8, NOW\(\), NOW\(\)\)/.test(os));
+  check("finishing a loop finishes its task or ask", /closeTask\(userId, row\.taskId/.test(os) && /UPDATE ask_checkins SET resolved_at = COALESCE\(resolved_at, NOW\(\)\)/.test(os));
+  check("Co's own loop change never wakes the task", (os.match(/seen_at = NOW\(\)/g) ?? []).length >= 3);
+  check("syncs for one member never interleave", /pg_advisory_xact_lock\(hashtext\('open_loops:'/.test(os));
+  // Which loop.
+  const two = [{ id: 1, title: "Find a venue for Oct 10" }, { id: 2, title: "Find a venue for the offsite" }];
+  check("a title that fits two loops is refused, with their ids", O.pickLoop(two, { title: "venue" }).kind === "ambiguous");
+  check("an id picks its loop; an unknown id is refused", JSON.stringify(O.pickLoop(two, { id: 2, title: "venue" })) === JSON.stringify({ kind: "loop", id: 2 }) && O.pickLoop(two, { id: 9, title: "x" }).kind === "unknown_id");
+  check("an exact or clearly best title picks one; no match is a new loop", JSON.stringify(O.pickLoop(two, { title: "find a venue for the offsite" })) === JSON.stringify({ kind: "loop", id: 2 }) && JSON.stringify(O.pickLoop(two, { title: "offsite venue" })) === JSON.stringify({ kind: "loop", id: 2 }) && O.pickLoop(two, { title: "DJ" }).kind === "new");
+  check("Co reads each loop with its id, and updateLoop takes it", /\[loop 7\] Find a venue/.test(O.describeLoops([{ id: 7, title: "Find a venue", status: "open", detail: null, dueDate: null, source: "task" }], { withIds: true }) ?? "") && !/\[loop/.test(O.describeLoops([{ id: 7, title: "Find a venue", status: "open", detail: null, dueDate: null, source: "task" }]) ?? "") && /loopId: z\.number\(\)\.int\(\)\.optional\(\)/.test(lt));
+  check("every text turn syncs the loops and reads them as ongoing", /o\.describeLoops\(\(await o\.syncOpenLoops\(user\.id\)\)\.rows, \{ withIds: true \}\)/.test(src("routes/sendblue.ts")) && /if \(loops\) addFact\(replyFacts, "ongoing", loops\)/.test(src("routes/sendblue.ts")));
   check("the 15-minute pass syncs loops before waking tasks", /runLoopSync\(\)[\s\S]{0,200}runDueTasks\(\)/.test(src("jobs/index.ts")));
   check("the open_loops table exists, one row per source", /CREATE TABLE IF NOT EXISTS open_loops[\s\S]*UNIQUE \(user_id, source, source_ref\)/.test(src("db/migrations.ts")));
   check("Co can set a loop's status, and its word wins until the source closes", /updateLoop: tool\(/.test(lt) && /status_by === "co" \? ex\.status : d\.status/.test(src("services/openLoops.ts")));
+  check("a caption that didn't send isn't recorded as sent: the link goes alone, said so", /if \(captioned\) \{\s*ctx\.facts\?\.add\("did_this_turn", `Sent "\$\{f\.name\}"/.test(lt) && /but its caption didn't send/.test(lt));
+  check("a delivered text's log failing doesn't unsend it", /state\.sentMessages\.push\(text\);\s*\/\/?[^\n]*\n?\s*await writeMemory\([^)]*\)\.catch/.test(lt) || /state\.sentMessages\.push\(text\);\s*await writeMemory\(ctx\.userId, "text_exchange", record\)\.catch/.test(lt));
+  check("conversation tools log delivered texts without throwing", !/await writeMemory\(ctx\.userId, "text_exchange", `Co replied/.test(src("agent/conversationTools.ts")) && /const logDelivered = /.test(src("agent/conversationTools.ts")));
   const model = P.renderPersonModel({ who: "Work: founder", threads: "- venue hunt (open)", did: ["Sent them Wave"], loops: said });
   check("one person model: who, threads, what Co did, what it carries, in order", /^Who they are:\nWork: founder\n\nWhat's going on in their life[\s\S]*What you've done for them lately:\n- Sent them Wave\n\nWhat you're carrying/.test(model) && P.renderPersonModel({ who: "", threads: "", did: [], loops: null }) === "", model);
   check("the task, the sweep and the call all read the person model", /personModel\(userId/.test(src("services/taskTurn.ts")) && /personModel\(c\.userId/.test(src("services/sweepFind.ts")) && /personModelParts\(userId\)/.test(src("services/callContext.ts")));
-  check("moves: a reaction alone is quiet, a search is act, a task is watch, words are reply", M.moveOf({ toolsCalled: ["leaveItAtReaction"], sent: false }) === "quiet" && M.moveOf({ toolsCalled: ["webSearch", "sendReply"], sent: true }) === "act" && M.moveOf({ toolsCalled: ["startTask", "sendReply"], sent: true }) === "watch" && M.moveOf({ toolsCalled: ["sendReply"], sent: true }) === "reply");
+  check("moves: a reaction alone is quiet, a search is act, a task is watch, words are reply", M.moveOf({ toolsCalled: ["leaveItAtReaction"], sent: false }) === "quiet" && M.moveOf({ toolsCalled: ["leaveItAtReaction"], sent: true }) === "quiet" && M.moveOf({ toolsCalled: ["webSearch", "sendReply"], sent: true }) === "act" && M.moveOf({ toolsCalled: ["startTask", "sendReply"], sent: true }) === "watch" && M.moveOf({ toolsCalled: ["sendReply"], sent: true }) === "reply");
+  check("moves: a tapback alone is quiet too", M.moveOf({ toolsCalled: ["reactInsteadOfReplying"], toolsDone: ["reactInsteadOfReplying"], sent: true }) === "quiet");
+  check("moves: a refused search isn't an act", M.moveOf({ toolsCalled: ["webSearch", "sendReply"], toolsDone: ["sendReply"], sent: true }) === "reply" && /toolsDone: worked/.test(src("agent/conversationReply.ts")));
   check("Co is told each turn is one move and quiet is a real answer, and every turn logs it", /Quiet is a real answer/.test(M.MOVES_GUIDE) && /\$\{MOVES_GUIDE\}/.test(src("agent/conversationReply.ts")) && /decision: "turn\.move"/.test(src("agent/conversationReply.ts")));
+}
+
+// Recovery (2026-10-01 code review): an empty reply never asks them to say it
+// again; it retries once from their message, and their message stays owed.
+{
+  const cr = src("agent/conversationReply.ts");
+  const sb2 = src("routes/sendblue.ts");
+  const TF = await import("../../src/services/turnFailure.js");
+  check("no fallback line asks them to say it again", !/What's on your mind/.test(cr) && TF.OWED_AFTER.every((l) => !/\?$/.test(l) && !/resend|send it again|what's on your mind/i.test(l)));
+  check("an empty reply retries once, only when nothing went out, and the retry knows what it already said", /const retrying = attempt === 1 && !!input\.resumeLater && !opts\.dryRun && state\.sentMessages\.length === 0/.test(cr) && /attempt: attempt \+ 1/.test(cr) && /This is that answer/.test(cr));
+  check("the retry runs under the phone lock, skips when they've texted since or were answered", /withPhoneLock\(phone, async \(\) => \{/.test(sb2) && /action: "newer_text"/.test(sb2) && /action: "already_answered"/.test(sb2) && /resumeLater: replay \? undefined : \(retry\) => scheduleReplyResume\(/.test(sb2));
+  check("a 'something broke' line doesn't count as an answer, so the next reply answers what was owed", /\[\.\.\.HOLD_LINES, \.\.\.OWED_AFTER\]/.test(sb2) && /never got a real answer: something broke on your side/.test(sb2) && TF.OWED_AFTER.includes(TF.TURN_FAILED_NOTE));
+  check("one deadline for the whole reply, checked between steps", /\(\) => Date\.now\(\) > replyDeadline\]/.test(cr) && /LOOP_BUDGET\.seconds \+ TURN_GRACE_S/.test(cr));
+  check("capitalization has one owner: the prompt doesn't ask to match theirs", !/Match their capitalization/i.test(cr) && /capitalizeSentences\(/.test(cr));
+  const T = await import("../../src/services/timeline.js");
+  const { DateTime } = await import("luxon");
+  const at = DateTime.fromISO("2026-10-01T15:00:00", { zone: "America/Los_Angeles" });
+  check("an unknown time zone is said as Pacific, not passed off as theirs", /Pacific time\. Their time zone isn't known/.test(T.renderTimeline(at, [], false)) && /where they are/.test(T.renderTimeline(at, [])));
+  check("only a fresh calendar read counts as what's ahead", /s\.fetched_at > NOW\(\) - make_interval/.test(src("services/timeline.ts")));
 }
 
 // Notes.

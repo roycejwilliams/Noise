@@ -48,6 +48,8 @@ async function memberDate(userId: string): Promise<(iso: string | Date | null | 
 export type SendCoReply = (params: { phone: string; message: string; asVoice: boolean }) => Promise<boolean | void>;
 
 export type ConversationToolContext = {
+  // When their text arrived; the loop's time budget runs from here.
+  turnStartedAt?: number;
   userId: string;
   phoneNumber: string;
   resolvedContent: string;
@@ -107,6 +109,11 @@ export function createConversationTools(ctx: ConversationToolContext) {
   // Receipts (2026-09-25): anything tried this turn that didn't happen
   // becomes a fact Co writes from, so it can't say it did.
   const notDone = (what: string) => ctx.facts?.add("not_done", what);
+  // The log of a text that already went out. Its failure is logged, never
+  // thrown, so a database error can't make a delivered text look unsent and
+  // set off a second reply (2026-10-01 code review).
+  const logDelivered = (content: string) =>
+    writeMemory(ctx.userId, "text_exchange", content).catch((err: any) => console.error("conversationTools: logging a sent text failed (it did send):", err?.message ?? err));
   const flushLinks = async () => {
     const queued = state.pendingLinks.splice(0, state.pendingLinks.length);
     // Never the same link twice in one turn, however often it's asked for.
@@ -121,7 +128,7 @@ export function createConversationTools(ctx: ConversationToolContext) {
           notDone(`The link ${url} was not sent (the send failed).`);
           continue;
         }
-        await writeMemory(ctx.userId, "text_exchange", `Co replied: ${url}`);
+        await logDelivered(`Co replied: ${url}`);
       }
       state.sentMessages.push(url);
     }
@@ -162,7 +169,7 @@ export function createConversationTools(ctx: ConversationToolContext) {
               notDone(`Only part of the reply went out: "${beat.slice(0, 120)}" didn't send.`);
               break;
             }
-            await writeMemory(ctx.userId, "text_exchange", `Co replied: ${cleanCoMessage(beat)}`);
+            await logDelivered(`Co replied: ${cleanCoMessage(beat)}`);
             sentBeats.push(beat);
           }
           const sentText = sentBeats.join("\n\n");
@@ -204,7 +211,7 @@ export function createConversationTools(ctx: ConversationToolContext) {
           // recentConversation's own record of what Co said didn't always
           // match what was actually delivered (an em dash the user never
           // saw, since it was rewritten to a comma before sending).
-          await writeMemory(ctx.userId, "text_exchange", `Co replied: ${cleanCoMessage(message)}`);
+          await logDelivered(`Co replied: ${cleanCoMessage(message)}`);
         }
         state.sent = true;
         state.replyCount += 1;
@@ -237,7 +244,7 @@ export function createConversationTools(ctx: ConversationToolContext) {
             notDone("Co's contact card was not sent (the send failed).");
             return { ok: false, error: "The card did NOT go through. Tell them plainly." };
           }
-          await writeMemory(ctx.userId, "text_exchange", "Co replied: [sent Co's contact card]");
+          await logDelivered("Co replied: [sent Co's contact card]");
         }
         state.sentMessages.push("[sent Co's contact card]");
         ctx.facts?.add("did_this_turn", "Sent Co's contact card as its own message just before this reply.");
@@ -546,7 +553,7 @@ export function createConversationTools(ctx: ConversationToolContext) {
               notDone("The reaction didn't go through.");
               return { ok: false, error: "That didn't go through. Reply with a short text instead." };
             }
-            await writeMemory(ctx.userId, "text_exchange", `Co replied: ${emojiFor(reaction)}`);
+            await logDelivered(`Co replied: ${emojiFor(reaction)}`);
           }
           how = tapped ? `tapback:${reaction}` : `emoji:${reaction}`;
           await recordDecision({ layer: 3, decision: "turn.closing", userId: ctx.userId, outcome: "act", action: how, proposal: { message: ctx.resolvedContent } }).catch(() => {});
@@ -624,7 +631,7 @@ export function createConversationTools(ctx: ConversationToolContext) {
             notDone("The update list was not sent (the send failed).");
             return { ok: false, error: "The update list didn't go through. Tell them plainly." };
           }
-          await writeMemory(ctx.userId, "text_exchange", `Co replied: ${message}`);
+          await logDelivered(`Co replied: ${message}`);
         }
         state.sent = true;
         state.sentMessages.push(message);
@@ -666,7 +673,7 @@ export function createConversationTools(ctx: ConversationToolContext) {
           notDone("The invite link for their friend was not sent (the send failed).");
           return { ok: false, error: "The invite didn't go through. Tell them plainly." };
         }
-        await writeMemory(ctx.userId, "text_exchange", `Co replied: ${message}`);
+        await logDelivered(`Co replied: ${message}`);
         state.sentMessages.push(link ?? message);
         await record("act", invite.reused ? "resent_open_code" : "made_code", { left: invite.left, link: Boolean(link), sent: true });
         ctx.facts?.add("did_this_turn", `Co just texted them an invite link for a friend, as its own message before this reply. They have ${invite.left} left; one only counts once someone joins.`);
@@ -1012,7 +1019,7 @@ export function createConversationTools(ctx: ConversationToolContext) {
   }
 
   // Finding things: Co's own loop (agent/loop.ts), general tools it chains itself.
-  Object.assign(tools, loopTools(ctx, state, newLoopState(), notDone));
+  Object.assign(tools, loopTools(ctx, state, newLoopState(ctx.turnStartedAt), notDone));
 
   // Google Calendar and Gmail, read-only (services/googleTools.ts).
   Object.assign(tools, googleTools(ctx, notDone));

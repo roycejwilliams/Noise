@@ -9,6 +9,7 @@
 import { DateTime } from "luxon";
 import pool from "../db/db.js";
 import { getTimezoneForCity } from "./geocoding.js";
+import { SNAPSHOT_MAX_AGE_MS } from "./googleData.js";
 import { loadBrief } from "./searchIntent.js";
 import { resolveAskWindow, whenForWindow } from "./askWindow.js";
 
@@ -30,10 +31,14 @@ export function lateNightNote(now: DateTime, items: TimelineItem[]): string | nu
   return `It's ${now.toFormat("h:mm a")} for them and they have something at ${soon.dt.toFormat("h:mm a")} (in ${hours}h: ${soon.what}). If they're asking for more work or keeping the conversation going tonight, say so once in this reply, warmly and in a few words (that it's late and the ${soon.dt.toFormat("h a")} is coming), then do what they asked; don't bring it up again after this. A friend who remembers would notice, and it's what they'll care about in the morning.`;
 }
 
-export function renderTimeline(now: DateTime, items: TimelineItem[]): string {
+// zoneKnown false: their city isn't known, so the time shown is Pacific and
+// says so, rather than passing for their local time (2026-10-01 code review).
+export function renderTimeline(now: DateTime, items: TimelineItem[], zoneKnown = true): string {
   const h = now.hour;
   const part = h < 5 ? "late at night" : h < 12 ? "morning" : h < 17 ? "afternoon" : h < 21 ? "evening" : "night";
-  const head = `Right now it's ${now.toFormat("h:mm a")} on ${now.toFormat("cccc, LLLL d")} where they are (${part}).`;
+  const head = zoneKnown
+    ? `Right now it's ${now.toFormat("h:mm a")} on ${now.toFormat("cccc, LLLL d")} where they are (${part}).`
+    : `Right now it's ${now.toFormat("h:mm a")} on ${now.toFormat("cccc, LLLL d")} Pacific time. Their time zone isn't known, so don't assume that's their local time.`;
   const ahead = items
     .map((i) => ({ ...i, dt: DateTime.fromISO(i.at, { zone: now.zone }) }))
     .filter((i) => i.dt.isValid && (i.allDay ? i.dt.endOf("day") >= now : i.dt >= now))
@@ -53,13 +58,16 @@ export function renderTimeline(now: DateTime, items: TimelineItem[]): string {
 }
 
 export async function timelineFor(userId: string, city: string | null, now: Date = new Date()): Promise<{ fact: string; note: string | null }> {
-  const zone = (city ? await getTimezoneForCity(city).catch(() => null) : null) ?? "America/Los_Angeles";
+  const found = city ? await getTimezoneForCity(city).catch(() => null) : null;
+  const zone = found ?? "America/Los_Angeles";
   const local = DateTime.fromJSDate(now).setZone(zone);
   const q = (sql: string, args: unknown[]) => pool.query(sql, args).then((r) => r.rows).catch(() => [] as any[]);
   const [calls, tasks, busy, plans, brief] = await Promise.all([
     q(`SELECT scheduled_for FROM scheduled_calls WHERE user_id = $1 AND status = 'pending' AND scheduled_for > NOW() AND scheduled_for < NOW() + interval '3 days' ORDER BY scheduled_for LIMIT 2`, [userId]),
     q(`SELECT goal, deadline FROM co_tasks WHERE user_id = $1 AND status = 'open' AND deadline IS NOT NULL AND deadline >= CURRENT_DATE - 1 AND deadline < CURRENT_DATE + 14 ORDER BY deadline LIMIT 3`, [userId]),
-    q(`SELECT s.busy FROM google_snapshots s JOIN google_connections c ON c.user_id = s.user_id WHERE s.user_id = $1`, [userId]),
+    // Only a fresh calendar read counts as what's ahead: an old snapshot can
+    // miss what they added or cancelled since (2026-10-01 code review).
+    q(`SELECT s.busy FROM google_snapshots s JOIN google_connections c ON c.user_id = s.user_id WHERE s.user_id = $1 AND s.fetched_at > NOW() - make_interval(secs => $2)`, [userId, SNAPSHOT_MAX_AGE_MS / 1000]),
     q(`SELECT event_name_raw, event_date FROM planned_event_mentions WHERE user_id = $1 AND event_date >= CURRENT_DATE AND event_date < CURRENT_DATE + 14 ORDER BY event_date LIMIT 3`, [userId]),
     loadBrief(userId).catch(() => null),
   ]);
@@ -75,5 +83,6 @@ export async function timelineFor(userId: string, city: string | null, now: Date
   const when = whenForWindow(brief?.when);
   const w = when ? resolveAskWindow(when, local).window : null;
   if (brief?.what && w) items.push({ at: w.start.toISODate()!, allDay: true, what: `${brief.what.slice(0, 80)} (what you're finding for them)` });
-  return { fact: renderTimeline(local, items), note: lateNightNote(local, items) };
+  // The late-night note needs their real clock.
+  return { fact: renderTimeline(local, items, !!found), note: found ? lateNightNote(local, items) : null };
 }
