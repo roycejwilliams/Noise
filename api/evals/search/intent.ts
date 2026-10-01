@@ -16,44 +16,6 @@ const check = (label: string, ok: boolean, detail = "") => {
 };
 const src = (f: string) => fs.readFileSync(new URL(`../../src/${f}`, import.meta.url), "utf8");
 
-// Routing: only events use Tiers 1 and 2.
-check("events go to the event tiers", S.routeFor("event") === "events");
-check("spaces, vendors, people, places, programs and facts go to the web tier", (["venue", "vendor", "person", "place", "program", "info"] as const).every((k) => S.routeFor(k) === "web"));
-
-// Parsing and query shape.
-const raw = JSON.stringify({
-  kind: "venue",
-  what: "bookable event space",
-  city: "San Francisco",
-  area: "NoPa / Western Addition",
-  when: "Oct 10",
-  budget: "$1,000",
-  headcount: 120,
-  vibe: "DJ set",
-  summary: "a bookable space in NoPa for a 120-person DJ night on Oct 10, under $1000",
-  queries: ["event space NoPa San Francisco", "\"peerspace\" party venue Western Addition 120 guests DJ allowed under 1000 dollars on October 10th", "event space NoPa San Francisco", "x"],
-  sites: ["peerspace.com", "tagvenue.com", "not a domain"],
-  ask: null,
-});
-const i = S.parseIntent(raw, "Oakland")!;
-check("a budget in words becomes a number", i.budget === 1000, String(i.budget));
-check("queries are short, deduped, and junk is dropped", i.queries.length === 2 && i.queries.every((q) => q.length <= S.SEARCH_LIMITS.maxQueryChars) && !i.queries.some((q) => q.includes('"')), JSON.stringify(i.queries));
-check("only real domains are kept as sites", i.sites.join() === "peerspace.com,tagvenue.com");
-check("an unknown kind is refused", S.parseIntent(JSON.stringify({ kind: "vibes" }), null) === null);
-check("no queries: one is built from what, area and city", S.parseIntent(JSON.stringify({ kind: "vendor", what: "DJ for a party" }), "San Francisco")!.queries[0] === "DJ for a party San Francisco");
-check("their city on file fills in a missing city", S.parseIntent(JSON.stringify({ kind: "place", what: "quiet bar" }), "Oakland")!.city === "Oakland");
-
-// Broadening drops the neighborhood and vibe.
-const wide = S.broaden(i);
-check("with no neighbors known, a wider round drops the neighborhood and vibe, keeps size and city", wide[0] === "bookable event space San Francisco 120 people" && !wide.join(" ").includes("NoPa"), JSON.stringify(wide));
-{
-  const pin = { ...i, nearby: ["Lower Haight", "Alamo Square", "Hayes Valley"] };
-  const w = S.broaden(pin);
-  check("the wider round tries the neighborhoods next door before the whole city", w[0] === "bookable event space Lower Haight or Alamo Square San Francisco" && w[1] === "bookable event space San Francisco 120 people", JSON.stringify(w));
-  check("in their area ranks above next door, above elsewhere", S.areaScore(["neighborhood: NoPa"], pin) === 2 && S.areaScore(["address: 663 Haight St, Lower Haight"], pin) === 1 && S.areaScore(["neighborhood: Chinatown"], pin) === 0);
-  check("nearby neighborhoods are parsed, at most 4", S.parseIntent(JSON.stringify({ kind: "venue", what: "space", area: "NoPa", nearby: ["Lower Haight", "Alamo Square", "Panhandle", "Hayes Valley", "Western Addition", 5] }), null)!.nearby!.length === 4);
-}
-
 // Budget and headcount in code (Instinct, 2026-09-30: "$180/hr on Saturdays. Four hours is about $720").
 const fit = (facts: string[]) => S.fitsConstraints(facts, { budget: 1000, headcount: 120 });
 check("an hourly rate is judged over a 4-hour evening", fit(["Price: $180/hr on Saturdays", "Capacity: 120 standing"]).ok && !fit(["Price: $400 per hour"]).ok);
@@ -63,24 +25,11 @@ check("a space a bit small is kept and said to be tight", fit(["Capacity: 100 gu
 check("no price or capacity on the page: kept (the reply says it's unknown)", fit(["Address: 663 Haight St"]).ok);
 check("square footage isn't read as capacity", fit(["space: Approximately 40,000 square feet of flexible event space, multiple rooms; capacity: events of 500 guests"]).ok, JSON.stringify(fit(["space: Approximately 40,000 square feet of flexible event space; capacity: events of 500 guests"])));
 check("an address in a capacity line isn't read as capacity", fit(["capacity: 150 standing at 151 Powell St"]).ok && !fit(["capacity: 60 guests at 995 Market St"]).ok);
-check("a tight fit is ranked after full fits and the reply sees it", /Number\(!b\.tight\) - Number\(!a\.tight\) \|\| areaScore/.test(src("services/searchIntent.ts")) && /\.\.\.\(r\.tight \? \[r\.tight\] : \[\]\)/.test(src("services/searchIntent.ts")));
-check("results in the area they named go first", S.inArea(["neighborhood: Lower Haight, San Francisco"], "NoPa/Western Addition near Divisadero & Haight St") && !S.inArea(["neighborhood: Chinatown"], "NoPa/Western Addition near Divisadero") && !S.inArea(["x"], null));
 check("a street number isn't read as capacity", fit(["Address: 151 Powell St"]).ok);
 
-// The brief line the reply sees.
-check("the brief reads as one line", S.describeBrief(i) === "bookable event space, NoPa / Western Addition, Oct 10, 120 people, under $1000, DJ set", S.describeBrief(i));
-
-// The prompt carries the conversation, the brief and map photos.
-const prompt = S.intentPrompt({ message: "120 people", recent: "Member: find me a space for Oct 10", city: "San Francisco", known: "", today: "2026-09-30", brief: i });
-check("the prompt carries the brief to update, not restart", prompt.includes("already working on") && prompt.includes('"headcount":120') && prompt.includes("keep everything they didn't change"));
-check("the prompt reads a map photo as an area", prompt.includes("a map means the area around the pin"));
 check("photo descriptions name the area around a map pin", /if it's a map, name the neighborhood and the streets around any pin/.test(src("services/imageRead.ts")));
 
-// Wiring.
-const rec = src("services/recommendation.ts");
-check("the search understands the ask before searching, and saves the brief", /brief = await understandAsk\(userId, currentMessage/.test(rec) && /await saveBrief\(userId, brief\)/.test(rec));
-check("non-event asks skip the event tiers for the verified web search", /routeFor\(brief\.kind\) === "web"[\s\S]{0,200}webFind\(userId, brief/.test(rec));
-check("the event tiers search the short summary in the brief's city", /askText = brief\.summary/.test(rec) && /const searchCity = brief\?\.city \?\? profile\.city/.test(rec));
+// The weekend reads as both days wherever a time is resolved (askWindow.ts).
 {
   const A = await import("../../src/services/askWindow.js");
   const { DateTime } = await import("luxon");
@@ -90,27 +39,24 @@ check("the event tiers search the short summary in the brief's city", /askText =
     return w ? `${w.start.toISODate()}..${w.end.toISODate()}` : null;
   };
   // 2026-09-30: "this weekend" became "Saturday Oct 3 - Sunday Oct 4, 2026" and was searched as Saturday only.
-  check("a brief's weekend written as dates with weekday names is read as both days", span(S.whenForWindow("Saturday Oct 3 - Sunday Oct 4, 2026")) === "2026-10-03..2026-10-04", String(span(S.whenForWindow("Saturday Oct 3 - Sunday Oct 4, 2026"))));
-  check("their own words are left alone", S.whenForWindow("this weekend") === "this weekend" && S.whenForWindow("Friday night") === "Friday night" && S.whenForWindow(null) === null);
-  check("the brief keeps the time in their own words", /the time in their own words, as they said it/.test(src("services/searchIntent.ts")) && /whenForWindow\(brief\?\.when\)/.test(src("services/recommendation.ts")));
+  check("a weekend written as dates with weekday names is read as both days", span(A.whenForWindow("Saturday Oct 3 - Sunday Oct 4, 2026")) === "2026-10-03..2026-10-04", String(span(A.whenForWindow("Saturday Oct 3 - Sunday Oct 4, 2026"))));
+  check("their own words are left alone", A.whenForWindow("this weekend") === "this weekend" && A.whenForWindow("Friday night") === "Friday night" && A.whenForWindow(null) === null);
+  check("every event search reads its time this way", /const when = whenForWindow\(opts\.when\);/.test(src("services/tieredRecommendation.ts")));
 }
-check("a date from earlier in the brief scopes the event search", /briefWhen && !\(forTimeFrame && resolveAskWindow/.test(rec));
-check("thin event results get one wider pass", /const wider = await searchTiers\(true\)/.test(rec));
-check("understanding failing falls back to the old rewrite", /else if \(currentMessage\) \{[\s\S]{0,120}toSearchRequest/.test(rec));
 const sb = src("routes/sendblue.ts");
 // (2026-10-01) Replies find things in Co's own loop: it sees every result itself,
 // shares up to three at a time, and a caption that says more than its facts is
 // refused so Co rewrites it (agent/loopTools.ts shareFinds).
 check("finds go out as a short list, up to three, each caption held to its own facts", /\.min\(1\)\s*\.max\(3\)/.test(src("agent/loopTools.ts")) && /caption says more than its facts/.test(src("agent/loopTools.ts")));
 const tw = src("services/taskWeb.ts");
-check("web search budget is the live-request pool for replies", /source: "request"/.test(src("services/searchIntent.ts")) && /reserveWebSearch\(userId, opts\.source \?\? "sweep", what\)/.test(tw));
+check("web search budget is the live-request pool for replies", /source: "request"/.test(src("agent/loopTools.ts")) && /reserveWebSearch\(userId, opts\.source \?\? "sweep", what\)/.test(tw));
 
 // Marketplaces that block reading.
 const TW = await import("../../src/services/taskWeb.js");
 check("GigSalad, Yelp and The Knot are known unreadable; Peerspace and The Bash read in a browser", ["gigsalad.com", "www.yelp.com", "theknot.com"].every(TW.cantCheck) && !["peerspace.com", "thebash.com", "giggster.com"].some(TW.cantCheck));
 check("a search naming an unreadable marketplace asks for the place's own site", /can't be opened to check, so for anything found there give the place's OWN website/.test(tw));
-check("a result with nothing on its page isn't sent", /nothing about it on its page/.test(src("services/searchIntent.ts")));
-check("the reply is told why Peerspace listings weren't used", /hide the venue or block checking/.test(src("services/searchIntent.ts")));
+check("a result with nothing on its page isn't a find", /nothing about it on its page/.test(src("agent/loopTools.ts")) && /read\.kept\.filter\(\(k\) => k\.facts\.length\)/.test(src("agent/loopTools.ts")));
+check("Co is told why listings on sites that block reading weren't used", /those sites block reading, so their listings can't be checked/.test(src("agent/loopTools.ts")));
 
 // A real browser when a fetch is turned away (services/browserRead.ts).
 const B = await import("../../src/services/browserRead.js");
@@ -177,7 +123,7 @@ check("Jev's probabilities become yes / no / unclear", F.verdictFrom(0.9) === "y
   check("facts go in batches of 12 (the gateway's rate limit)", calls === 3);
 }
 const si = src("services/searchIntent.ts");
-check("only an 'on' fact check drops facts or tells the reply", /if \(mode === "on"\) factChecks\.forEach/.test(si) && /if \(mode === "on"\) \{\s*for \(const r of top\)/.test(si));
+check("only an 'on' fact check drops facts", /if \(mode !== "on"\) return \{ kept, droppedFacts: \[\] \};/.test(src("services/factCheck.ts")) && /checkVerified\(/.test(src("agent/loopTools.ts")) && /checkVerified\(/.test(src("services/sweepFind.ts")));
 
 console.log(`\nsearch intent rules: ${total - failed}/${total} passed`);
 if (failed) process.exit(1);

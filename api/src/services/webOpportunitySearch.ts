@@ -32,8 +32,11 @@ import { checkGrounding } from "../harness/matchGate.js";
 // as the relevance judge: Sonnet 5, not Haiku.
 const WEB_SEARCH_MODEL = MODELS.sonnet;
 
-const WEB_SEARCH_DAILY_CAP = Number(process.env.WEB_SEARCH_DAILY_CAP ?? 60);
-const WEB_SEARCH_REQUEST_RESERVE = Number(process.env.WEB_SEARCH_REQUEST_RESERVE ?? 15);
+// 150 a day, half kept for live asks (2026-10-01): Co's own loop uses up to 4
+// queries a search turn, and one day of testing used the old 60. At ~$0.06 a
+// search that's at most ~$9 a day; the sweep can never take the live half.
+const WEB_SEARCH_DAILY_CAP = Number(process.env.WEB_SEARCH_DAILY_CAP ?? 150);
+const WEB_SEARCH_REQUEST_RESERVE = Number(process.env.WEB_SEARCH_REQUEST_RESERVE ?? 75);
 
 // Same count-then-insert-under-one-advisory-lock pattern as reserveXSearch
 // in tieredRecommendation.ts, against its own table so the two budgets never

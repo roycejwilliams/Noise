@@ -81,3 +81,27 @@ export async function checkFacts(
   const out = await Promise.all(batches.map((b) => checkBatch(b, { jev: deps.jev ?? askJevZdr, haiku: deps.haiku ?? haikuDefault })));
   return { verdicts: out.flatMap((o) => o.verdicts), by: out.map((o) => o.by) };
 }
+
+// Verified web results with each fact read against its passage; a "no" drops
+// the fact when the check is on, and a result left with no facts is dropped
+// (shared by Co's reply loop and the sweep: agent/loopTools.ts, sweepFind.ts).
+export async function checkVerified<T extends { name: string; facts: string[]; excerpts?: string[] }>(
+  kept: T[],
+  deps: { check?: typeof checkFacts } = {},
+): Promise<{ kept: T[]; droppedFacts: string[] }> {
+  const mode = factCheckMode();
+  const items = kept.flatMap((r) => r.facts.map((fact, j) => ({ r, fact, passage: r.excerpts?.[j] ?? "" }))).filter((x) => x.passage);
+  if (mode === "off" || !items.length) return { kept, droppedFacts: [] };
+  const { verdicts } = await (deps.check ?? checkFacts)(items.map((x) => ({ thing: x.r.name, fact: x.fact, passage: x.passage })));
+  const no = items.filter((_, i) => verdicts[i] === "no");
+  const droppedFacts = no.map((x) => `${x.r.name}: "${x.fact}" isn't what its page says`);
+  if (mode !== "on") return { kept, droppedFacts: [] };
+  const out = kept
+    .map((r) => {
+      const bad = new Set(no.filter((x) => x.r === r).map((x) => x.fact));
+      const keep = r.facts.map((f, j) => ({ f, e: r.excerpts?.[j] })).filter((x) => !bad.has(x.f));
+      return { ...r, facts: keep.map((x) => x.f), excerpts: keep.map((x) => x.e ?? "") };
+    })
+    .filter((r) => r.facts.length);
+  return { kept: out, droppedFacts };
+}

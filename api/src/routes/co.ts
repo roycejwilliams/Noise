@@ -20,7 +20,7 @@ import {
   storeProfile,
   storeTranscriptMemory,
 } from "../services/profileExtraction.js";
-import { generateRecommendation } from "../services/recommendation.js";
+import { voiceFinds } from "../services/voiceFinds.js";
 import { buildCallContextSummary, buildCallKnowledge, summarizeCallForTextContext } from "../services/callContext.js";
 import { learnFromCall } from "../services/callLearning.js";
 import { writeMemory } from "../services/memory.js";
@@ -735,9 +735,8 @@ async function handleToolCall(
 
   if (toolCallMessage.name === "surface_recommendation") {
     try {
-      const result = userId
-        ? await generateRecommendation(userId)
-        : { available: false as const, reason: "no user resolved for this call" };
+      // No model on a live call: raw candidates and Co's notes (services/voiceFinds.ts).
+      const result = userId ? await voiceFinds(userId) : { available: false as const, reason: "no user resolved for this call" };
       await sendHumeToolResponse(chatId, toolCallMessage.tool_call_id, JSON.stringify(result));
     } catch (err: any) {
       console.error("co/webhook: surface_recommendation failed:", err?.message ?? err);

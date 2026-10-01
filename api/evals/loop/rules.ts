@@ -54,6 +54,27 @@ check("the first search can send a short 'on it' text, once", /if \(!line\?\.tri
 const sb = src("routes/sendblue.ts");
 check("the reply gets the guide when they want something found, and the working notes", /if \(decision\.wantsRecommendation && hasText\) addInstruction\(replyFacts, LOOP_GUIDE\);/.test(sb) && /if \(hasText\) \{\s*const notes = describeNotes/.test(sb));
 
+// Tasks, voice and the sweep find things with the same tools (2026-10-01).
+{
+  const tt = src("services/taskTurn.ts");
+  check("Co's tasks search with the loop's event candidates and the sweep's openings, not the old pipeline", /eventCandidates\(what, person\.city/.test(tt) && /alreadyFoundOpenings\(userId\)/.test(tt) && !/searchWithTimeCap|generateRecommendation/.test(tt));
+  const co = src("routes/co.ts");
+  check("a call's lookup uses no model: raw candidates and Co's notes", /await voiceFinds\(userId\)/.test(co) && !/generateRecommendation/.test(co) && !/generateText/.test(src("services/voiceFinds.ts")));
+  const V = await import("../../src/services/voiceFinds.js");
+  check("on a call, Co mentions only what fits and offers to text the link", /mention only the one or two that genuinely fit/.test(V.VOICE_NOTE) && /offer to text them the link/.test(V.VOICE_NOTE));
+  const sw = src("services/eventSurfacingSweep.ts");
+  const sf = src("services/sweepFind.ts");
+  check("the sweep finds with Co's own loop, not the old search brief and tiers", /await sweepFind\(/.test(sw) && !/getTieredRecommendation|buildSearchBrief/.test(sw));
+  check("the sweep queues Co's own judgment, with no second fit read", /if \(!item\.match\.whyItFits\) \{/.test(sw) && /const match = await enrichMatch\(item\.match\);/.test(sw));
+  check("the sweep's tools: events, web (checked by the second reader), X posts, pages, keep", ["searchEvents: tool(", "webSearch: tool(", "searchPosts: tool(", "readPage: tool(", "keep: tool("].every((t) => sf.includes(t)) && /checkVerified\(/.test(sf));
+  check("the sweep uses the sweep's share of the web and X budgets", /source: "sweep"/.test(sf) && /reserveXSearch\(c\.userId, "sweep", query\)/.test(sf));
+  check("what the sweep keeps still goes through the fact gate", /gateMatches\(kept, \{ userId: c\.userId/.test(sf));
+  const SF = await import("../../src/services/sweepFind.js");
+  const p = SF.sweepPrompt({ userId: "u", firstName: "Jordan", askText: "AI founder dinners", city: "San Francisco" }, { today: "2026-10-01", picture: "", feeling: "stressed", shown: ["Rooftop evening"] });
+  check("the sweep's brief: their ask, what was already sent, feelings never decide", p.includes("AI founder dinners") && p.includes("Rooftop evening") && p.includes("never whether they hear about something") && p.includes("Search only for this one ask"));
+  check("the old pipeline's entry points are gone", !/export async function (generateRecommendation|getTieredRecommendation)/.test(src("services/recommendation.ts") + src("services/tieredRecommendation.ts")) && !/searchWithTimeCap/.test(src("agent/conversationTools.ts")));
+}
+
 // Notes.
 check("notes read back as one line", LT.describeNotes({ kind: "venue", what: "bookable space", city: "San Francisco", area: "NoPa", when: "Oct 10", budget: 1000, headcount: 120, vibe: null, summary: "", queries: [], sites: [], ask: null, picked: "Wave" } as any) === "Your working notes for what you're finding for them (from earlier texts): looking for: bookable space. where: NoPa, San Francisco. when: Oct 10. headcount: 120. budget: under $1000. they picked: Wave.");
 

@@ -151,7 +151,31 @@ export function loopTools(
         }
         await remember({ tried: run.map((q) => `web: ${q}`) });
         const seenUrls = new Set<string>();
-        const r = { kept: all.flatMap((x) => x.kept).filter((k) => !seenUrls.has(k.url) && seenUrls.add(k.url)), dropped: all.flatMap((x) => x.dropped), note: all.map((x) => x.note).find((n) => /checked/.test(n)) ?? all[0]?.note ?? "" };
+        // Jev reads each fact against its passage (services/factCheck.ts); a "no" is dropped.
+        const { checkVerified } = await import("../services/factCheck.js");
+        const read = await checkVerified(all.flatMap((x) => x.kept).filter((k) => !seenUrls.has(k.url) && seenUrls.add(k.url))).catch(() => ({ kept: all.flatMap((x) => x.kept), droppedFacts: [] as string[] }));
+        // Budget and headcount from the notes, and the total for their night, worked out in code.
+        const notes = await loadBrief(ctx.userId).catch(() => null);
+        const { fitsConstraints, priceEstimate } = await import("../services/searchIntent.js");
+        // A name alone isn't something to send (2026-09-30: "DJ Busy B" with nothing about it).
+        const empty = read.kept.filter((k) => !k.facts.length);
+        // Listings on sites that block reading can't be checked, so they never come back as finds.
+        const { cantCheck } = await import("../services/taskWeb.js");
+        const blocked = siteList.filter(cantCheck);
+        const withNotes = read.kept.filter((k) => k.facts.length).map((k) => {
+          const fit = notes ? fitsConstraints(k.facts, { budget: notes.budget ?? null, headcount: notes.headcount ?? null, hours: notes.hours ?? null }) : { ok: true, why: null };
+          const estimate = priceEstimate(k.facts, notes?.hours ?? null);
+          return { ...k, facts: [...k.facts, ...(estimate ? [estimate] : []), ...(fit.tight ? [fit.tight] : []), ...(!fit.ok && fit.why ? [`note: ${fit.why}`] : [])] };
+        });
+        const r = {
+          kept: withNotes,
+          dropped: [
+            ...all.flatMap((x) => x.dropped),
+            ...read.droppedFacts.map((d) => ({ name: d, url: "", why: "the second reader said its page doesn't say that" })),
+            ...empty.map((k) => ({ name: k.name, url: k.url, why: "nothing about it on its page" })),
+            ...(blocked.length ? [{ name: `${blocked.join(", ")} listings`, url: "", why: "those sites block reading, so their listings can't be checked; look for places' own pages" }] : []),
+          ],
+          note: all.map((x) => x.note).find((n) => /checked/.test(n)) ?? all[0]?.note ?? "" };
         for (const k of r.kept) {
           const facts = [...k.facts, ...(k.date ? [`date: ${k.date}`] : [])].join("; ");
           const match = { tier: 3, kind: "opportunity", source: "web", name: k.name, url: k.url, reason: facts || k.name, evidence: `${k.name}. ${facts}`, ...(k.date ? { statedDates: { start: k.date } } : {}) } as unknown as TierMatch;

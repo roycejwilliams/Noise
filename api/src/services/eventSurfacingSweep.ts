@@ -1,13 +1,12 @@
 import pool from "../db/db.js";
-import { getPersonSnapshot, profileForSearch } from "../harness/personSnapshot.js";
 import { getTimezoneForCity } from "./geocoding.js";
-import { getTieredRecommendation, type TierMatch } from "./tieredRecommendation.js";
+import type { TierMatch } from "./tieredRecommendation.js";
 import { enqueueCandidate } from "../harness/proactive.js";
 import { generateEmbedding } from "./embeddings.js";
 import { scheduleOutcomeFollowUp, getTierBias } from "./recommendationOutcome.js";
 import { enrichMatch } from "./eventDetails.js";
 import { getEmotionalContext, renderEmotionalContext, roomPreferenceFromFeelings } from "../harness/emotion.js";
-import { buildSearchBrief } from "./searchBrief.js";
+import { sweepFind } from "./sweepFind.js";
 import { recordDecision } from "../harness/core.js";
 import { recordRevealedOffers } from "./offerReactions.js";
 import { offerHistory, repeatInput, repeatRule, type RepeatAction } from "../harness/matchGate.js";
@@ -328,34 +327,29 @@ type SweepSearchTrace = {
   // Shown over a month ago with no reply, and coming back once.
   resurfaced: string[];
   scope: Record<string, unknown> | null;
+  // What Co's sweep loop looked at (services/sweepFind.ts).
+  did?: string[];
 };
 
 async function findFreshPending(candidate: SurfacingCandidate): Promise<{ items: BacklogItem[]; trace: SweepSearchTrace }> {
-  // What to search for comes from the whole person (ask, goals, recent
-  // texts, feelings), not the ask's words alone (services/searchBrief.ts).
-  const brief = await buildSearchBrief({
-    userId: candidate.userId,
-    askText: candidate.askText,
-    fromProfile: candidate.fromProfile ?? false,
-    goals: candidate.goals,
-    activityPreferences: candidate.activityPreferences,
-  });
   // Their time zone, so event dates are their local calendar dates.
   const timezone = candidate.city ? await getTimezoneForCity(candidate.city).catch(() => null) : null;
-  // Feelings steer the search, never stop it (2026-09-18): frustration with
-  // what Co has found widens it; how their life has been shapes which rooms
-  // rank first.
+  // Feelings shape how Co says it, never whether they hear about something
+  // (2026-09-18); frustration with what Co has found sends the real thing
+  // instead of a tease (attemptEventSurfacing, revealNow).
   const feelings = await getEmotionalContext(candidate.userId).catch(() => null);
   const widen = !!feelings?.withCo.frustrated;
   const roomPreference = feelings ? roomPreferenceFromFeelings(feelings) : null;
-  const focus = profileForSearch(await getPersonSnapshot(candidate.userId).catch(() => null)) || null;
-  const profile = [focus, roomPreference].filter(Boolean).join("\n") || null;
-  // No zone for their city: the engine uses Co's home zone and says so.
-  const result = await getTieredRecommendation({ text: brief.searchText }, candidate.city, { userId: candidate.userId, source: "sweep", timezone, profile, widen, checkRepeat: false, coreAsk: candidate.askText })
-    .catch((err: any) => {
-      console.error("attemptEventSurfacing: getTieredRecommendation failed (non-fatal):", err?.message ?? err);
-      return null;
-    });
+  // Co finds and judges in its own loop, with the whole person in view
+  // (services/sweepFind.ts, 2026-10-01): no search brief, no model gates.
+  const shown = await import("./reactionCatchup.js").then((m) => m.sentItems(candidate.userId)).then((s) => s.map((x) => x.name)).catch(() => [] as string[]);
+  const result = await sweepFind(
+    { userId: candidate.userId, firstName: candidate.firstName, askText: candidate.askText, fromProfile: candidate.fromProfile ?? false, city: candidate.city, goals: candidate.goals },
+    { timezone, feeling: [roomPreference, feelings ? renderEmotionalContext(feelings) : null].filter(Boolean).join(" ") || null, shown },
+  ).catch((err: any) => {
+    console.error("attemptEventSurfacing: sweepFind failed (non-fatal):", err?.message ?? err);
+    return null;
+  });
   const matches: TierMatch[] = result?.matches ?? [];
   // Tier order as the mention priority (Tier 1 first by default) — same
   // "route people into Co's own events first" reasoning the old
@@ -383,30 +377,17 @@ async function findFreshPending(candidate: SurfacingCandidate): Promise<{ items:
       return { askText: candidate.askText, match, source, ...(again.has(match) ? { again: true } : {}) };
     })
     .concat(reminders.map((match) => ({ askText: candidate.askText, match, source: "urgent" as const, reminder: true })));
-  const sc = result?.scope;
   return {
     items,
     trace: {
-      searchText: brief.searchText,
+      searchText: candidate.askText,
       widened: widen,
       roomPreference,
       found: matches.map((m) => ({ name: m.name, tier: m.tier, date: relevantDate(m) })),
       staleOrRepeat: matches.flatMap((m, i) => (repeats[i].action === "blocked" ? [`${m.name}: ${repeats[i].reason}`] : [])),
       resurfaced: [...again].map((m) => m.name),
-      scope: sc
-        ? {
-            city: sc.city,
-            tiers: sc.tiers,
-            tier2Nearby: sc.tier2Nearby,
-            relevanceRejected: sc.relevanceRejected,
-            gatedOut: sc.gatedOut,
-            xQuery: sc.xQuery,
-            xBlocked: sc.xBlocked,
-            webBlocked: sc.webBlocked,
-            fetchedThrough: sc.fetchedThrough,
-            cached: sc.cached,
-          }
-        : null,
+      scope: null,
+      did: result?.did ?? [],
     },
   };
 }
@@ -602,21 +583,16 @@ export async function attemptEventSurfacing(candidate: SurfacingCandidate): Prom
     // Real details plus a personal reason, computed once when it's queued, so
     // the tease, the reveal, and any "tell me more" all work from the same
     // record (services/eventDetails.ts).
-    const match = await enrichMatch(item.match, {
-      userId: candidate.userId,
-      firstName: candidate.firstName,
-      askText: candidate.fromProfile ? null : item.askText,
-      goals: candidate.goals,
-      city: candidate.city,
-      feeling: renderEmotionalContext(await getEmotionalContext(candidate.userId)),
-    });
-    // The personal read says it doesn't fit what they asked: drop it and try
-    // the next one.
-    if (match.fits === false) {
+    // Co judged it when it kept it (services/sweepFind.ts): its reason rides
+    // along, and only the real details are added here. Something found before
+    // the sweep moved into Co's loop has no judgment, so it's dropped and the
+    // next sweep looks again (2026-10-01).
+    if (!item.match.whyItFits) {
       await removeFromBacklog(candidate.userId, candidate.askId, item.match);
-      skipped.push({ name: item.match.name, why: `doesn't fit: ${match.whyItFits ?? "no reason given"}`.slice(0, 200) });
+      skipped.push({ name: item.match.name, why: "found before Co judged sweeps; the next sweep looks again" });
       continue;
     }
+    const match = await enrichMatch(item.match);
     const payload: EventOfferPayload = {
       askId: candidate.askId,
       askText: item.askText,

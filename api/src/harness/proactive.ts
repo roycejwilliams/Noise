@@ -94,8 +94,9 @@ export type ProactiveType =
 // text (eventGuestMatchHandoff.ts's maybeAskCandidateDirectly/
 // networkIntroNudge.ts's askCandidateDirectly) — see
 // sendExemptWhenAllowed below.
-// search_result: the answer to a texted search that ran past the reply's time
-// cap, sent when it lands (services/lateSearchResult.ts).
+// search_result: the answer to a texted search that ran past the old reply
+// search's time cap (removed 2026-10-01: Co's own loop shares finds as it goes);
+// kept so older records still read.
 // task_update: Co's own report on work it is doing for them over days (services/taskTurn.ts).
 export type ExemptType = "event_change" | "call_reminder" | "missed_call" | "co_event" | "direct_ask" | "search_result" | "task_update";
 

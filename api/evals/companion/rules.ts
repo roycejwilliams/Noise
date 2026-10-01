@@ -52,7 +52,8 @@ check("the reply path reacts after the read, never blocking the reply", /turn\.a
 check("a slow answer threads under their text", I.threadReason({ theyRepliedInline: false, newerTextSince: false, slowMs: 25_000 }) === "slow");
 check("a quick answer doesn't", I.threadReason({ theyRepliedInline: false, newerTextSince: false, slowMs: 3_000 }) === null);
 check("a reply to a specific message still mirrors first", I.threadReason({ theyRepliedInline: true, newerTextSince: false, slowMs: 60_000 }) === "mirror");
-check("late search results carry the ask's handle", /askHandle/.test(src("services/lateSearchResult.ts")) && /replyTo/.test(src("harness/proactive.ts")));
+// (2026-10-01) Late search results are gone with the old reply search: Co's loop shares finds as it goes.
+check("threaded sends still carry their reply handle", /replyTo/.test(src("harness/proactive.ts")));
 
 // 3. No silent outcomes
 check("causes are grouped by kind", H.causeOf("HTTP 403 Forbidden") === "auth" && H.causeOf("429 Too Many Requests") === "rate_limit" && H.causeOf("ETIMEDOUT") === "network" && H.causeOf("weird") === "other");
@@ -110,7 +111,7 @@ check("small talk doesn't wait on a shared link", /mode !== "small_talk"/.test(s
 check("milestones are inserted only when new, in one statement", /!have\.has\(m\.key\)/.test(src("services/milestones.ts")) && /unnest\(/.test(src("services/milestones.ts")));
 
 // 2026-09-29: "...and tell me which one you'd pick" was read as not a request, so the search ran on the older Austin ask.
-check("the search rewrite never answers null once a search is decided", (() => { const t = src("services/recommendation.ts"); return /never null/.test(t) && !/\{"request": null\}/.test(t) && /Borrow only the topic, and never their overall ask's time frame/.test(t); })());
+// (2026-10-01) The old search rewrite is gone; Co understands the ask in its own loop.
 
 // Advisor (2026-09-29)
 const A = await import("../../src/services/advice.js");
@@ -159,7 +160,7 @@ check("asked what Co has on them, Co answers from the details on file first", /a
 const TLn = await import("../../src/services/teamLines.js");
 check("talk with a teammate agent is dropped from what the learning reads see", TLn.withoutTeammateLines("User said: hi\nUser said: @Mo go [to Mo]\nMo replied: ok\nCo tagged Mo: @Mo\nCo replied: sure\nUser said: I go [to Bob] weekly") === "User said: hi\nCo replied: sure\nUser said: I go [to Bob] weekly");
 check("the SQL filter only matches a trailing [to Name]", /!~ ' \\\[to \[A-Za-z\]\+\\\]\$'/.test(TLn.notToTeammate()) || TLn.notToTeammate("m").startsWith("m.content"));
-check("every reader of the member's own lines skips their talk with a teammate", ["harness/personSnapshot.ts", "harness/memberThreads.ts", "services/callContext.ts", "services/searchBrief.ts", "services/recommendation.ts"].every((f) => /notToTeammate\(/.test(src(f))) && /withoutTeammateLines\(input\.recentConversation\)/.test(src("services/turnLearning.ts")));
+check("every reader of the member's own lines skips their talk with a teammate", ["harness/personSnapshot.ts", "harness/memberThreads.ts", "services/callContext.ts"].every((f) => /notToTeammate\(/.test(src(f))) && /withoutTeammateLines\(input\.recentConversation\)/.test(src("services/turnLearning.ts")));
 check("the summary rebuild is told Mo is an AI agent, and drops an older 'cofounder Mo'", /Mo is an AI agent that works alongside Co, not a person in their life/.test(src("harness/personSnapshot.ts")));
 
 // Real-thread replay (evals/companion/threadReplay.ts): with earlier wrong replies in the thread, Co copied them until told plainly

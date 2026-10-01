@@ -15,7 +15,8 @@ import pool from "../db/db.js";
 import { MODELS } from "../models.js";
 import { recordDecision } from "../harness/core.js";
 import { checkDraft, draftAgain, draftProactive, localHourOk, sendExempt } from "../harness/proactive.js";
-import { searchWithTimeCap } from "../agent/conversationTools.js";
+import { eventCandidates } from "./tieredRecommendation.js";
+import { alreadyFoundOpenings } from "./eventSurfacingSweep.js";
 import { closeTask, isExhausted, isFinalCheck, markFinalTold, markTexted, mayText, noteOnTask, scheduleTask, taskTextsToday, TASK_LIMITS, clampNextHours, type CoTask } from "./coTasks.js";
 import { describeRead, excerptFact, readLink } from "./linkReader.js";
 import { getTimezoneForCity } from "./geocoding.js";
@@ -39,7 +40,7 @@ export type TaskTurnDeps = {
   send: (messages: string[]) => Promise<{ sent: boolean; reason?: string }>;
   markTexted: () => Promise<void>;
   markFinalTold: () => Promise<void>;
-  search: (what: string) => Promise<{ name: string; url: string | null; date: string | null; tier?: number }[]>;
+  search: (what: string, when?: string | null) => Promise<{ name: string; url: string | null; date: string | null; tier?: number; details?: string[] }[]>;
   web: (what: string) => Promise<TaskWebResult>;
   readPage: (url: string) => Promise<{ ok: boolean; facts: string[]; text: string }>;
   now: () => Date;
@@ -177,12 +178,13 @@ export async function runTaskTurnWith(task: CoTask, deps: TaskTurnDeps): Promise
 
   const tools = {
     search: tool({
-      description: "Search for events, communities, programs or opportunities for this task. One plain sentence of what to look for.",
-      inputSchema: z.object({ what: z.string() }),
-      execute: async ({ what }) => {
-        did.push(`search: ${what}`);
-        const items = await deps.search(what).catch(() => []);
-        for (const i of items) if (!events.some((e) => e.name === i.name)) events.push({ name: i.name, url: i.url, facts: i.date ? [`date: ${i.date}`] : [], tier: i.tier ?? 2 });
+      description:
+        "Look up events for this task: Co's own events and the public feed, in the days you name, plus openings Co's daily search already found. You get real events with their details, closest to what you asked first, and you judge which fit, because they're candidates, not answers. Put `when` in their words (\"this weekend\", \"Oct 10\") so the dates come out right. The feed is short (a few events a day), so when it's thin, use webSearch for the same thing.",
+      inputSchema: z.object({ what: z.string(), when: z.string().optional() }),
+      execute: async ({ what, when }) => {
+        did.push(`search: ${what}${when ? `, ${when}` : ""}`);
+        const items = await deps.search(what, when ?? null).catch(() => []);
+        for (const i of items) if (!events.some((e) => e.name === i.name)) events.push({ name: i.name, url: i.url, facts: [...(i.date ? [`date: ${i.date}`] : []), ...(i.details ?? []).slice(0, 4)], tier: i.tier ?? 2 });
         return items.length ? { found: items } : { found: [], note: "Nothing real came up." };
       },
     }),
@@ -302,10 +304,16 @@ export async function runTaskTurn(task: CoTask): Promise<{ action: string }> {
     },
     markTexted: () => markTexted(userId, task.id),
     markFinalTold: () => markFinalTold(userId, task.id),
-    search: async (what) => {
-      const r = await searchWithTimeCap(userId, what, 60_000, "taskTurn.search").catch(() => ({ available: false as const, reason: "search failed" }));
-      if (!r.available || !("matches" in r) || !r.matches?.length) return [];
-      return r.matches.slice(0, 4).map((m: any) => ({ name: String(m.name), url: m.url ? String(m.url) : null, date: typeof m.event_date === "string" ? m.event_date.slice(0, 10) : null, tier: typeof m.tier === "number" ? m.tier : 2 }));
+    // The same raw candidates Co's reply loop gets (agent/loopTools.ts), judged
+    // by the task's own model, not the old pipeline's gates (2026-10-01).
+    search: async (what, when) => {
+      const [r, openings] = await Promise.all([
+        eventCandidates(what, person.city ?? null, { when: when ?? null, userId, timezone: zone, limit: 6 }),
+        alreadyFoundOpenings(userId).catch(() => []),
+      ]);
+      const events = r.candidates.map(({ match, lines }) => ({ name: match.name, url: "url" in match ? (match.url ?? null) : null, date: (match as any).event_date ? String((match as any).event_date).slice(0, 10) : null, tier: match.tier, details: lines }));
+      const found = openings.filter((m) => "url" in m && m.url).slice(0, 3).map((m) => ({ name: m.name, url: (m as any).url as string, date: null, tier: 3, details: [m.reason] }));
+      return [...events, ...found];
     },
     web: (what) => taskWebSearch(userId, what, { city: person.city, zone, taskId: task.id }),
     readPage: async (url) => {

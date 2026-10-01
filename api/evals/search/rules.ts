@@ -6,6 +6,7 @@
 // dates (matchGate.ts checkTiming), search cache key differences
 // (searchRules.ts searchCacheKey), and online Co event handling
 // (luma.ts resolveCoEventPlace).
+import "../testEnv.js";
 import { DateTime } from "luxon";
 import { readFileSync } from "fs";
 import { checkTiming, checkLocation, type MatchFacts } from "../../src/harness/matchGate.js";
@@ -438,22 +439,9 @@ for (const [ok, label] of cases) {
 }
 
 // Several places in one ask (2026-09-27: "this weekend in Sacramento or SF"
-// became an SF-only search while Royce was in Sacramento).
-{
-  const { parseCities, mergeCityResults } = await import("../../src/services/tieredRecommendation.js");
-  c(JSON.stringify(parseCities({ cities: ["Sacramento, California", "San Francisco, California"] })) === JSON.stringify(["Sacramento, California", "San Francisco, California"]), "every named city is kept, in order");
-  c(parseCities({ cities: ["A", "B", "C"] }).length === 2 && parseCities({ cities: ["A", "A"] }).length === 1 && parseCities({ cities: [] }).length === 0 && parseCities({ city: "Fargo, North Dakota" })[0] === "Fargo, North Dakota", "at most two, no repeats, none when none named");
-  const m = (name: string, url: string) => ({ tier: 2, kind: "public_event", name, url, event_date: "2026-09-27", event_api_id: name, reason: "" }) as any;
-  const merged = mergeCityResults([
-    { matches: [m("Sac Founders Brunch", "https://lu.ma/a"), m("Shared Online Talk", "https://lu.ma/b")], scope: { city: "Sacramento, California" } as any },
-    { matches: [m("Shared Online Talk", "https://lu.ma/b"), m("SF Rooftop", "https://lu.ma/c")], scope: { city: "San Francisco, California" } as any },
-  ]);
-  c(merged.matches.map((x) => x.name).join("|") === "Sac Founders Brunch|Shared Online Talk|SF Rooftop", "the first city's finds first, each thing once");
-  c(merged.scope.city === "Sacramento, California + San Francisco, California", "the scope names both places");
-  const tr = readFileSync(new URL("../../src/services/tieredRecommendation.ts", import.meta.url), "utf8");
-  c(/getTieredRecommendationFor\(ask, c, \{ \.\.\.opts, skipTier3: i > 0 \}\)/.test(tr) && /if \(opts\.skipTier3\) return null;/.test(tr), "the X search runs once, not once per city");
-  c(/recommendation\.scope\?\.city\?\.split\(" \+ "\)\[0\]/.test(readFileSync(new URL("../../src/routes/sendblue.ts", import.meta.url), "utf8")), "a named-event lookup uses the first place");
-}
+// became an SF-only search). In Co's own loop (2026-10-01) each event search
+// names its city, so Co searches each place it was asked about.
+c(/city: z\.string\(\)\.optional\(\)\.describe\("The city, when they named one/.test(readFileSync(new URL("../../src/agent/loopTools.ts", import.meta.url), "utf8")), "Co's event search takes a city per search, so each place gets its own");
 
 console.log(`search rules: ${cases.length - failed}/${cases.length} passed`);
 if (failed) process.exitCode = 1;

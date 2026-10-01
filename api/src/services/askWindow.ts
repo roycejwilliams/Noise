@@ -251,3 +251,14 @@ export function mentionsUnknownDay(text: string, dates: string): boolean {
   const known = new Set([...dates.matchAll(/\b(\d{1,2})\b/g)].map((m) => Number(m[1])));
   return [...text.matchAll(/\b(\d{1,2})(?:st|nd|rd|th)\b/gi)].some((m) => !known.has(Number(m[1])));
 }
+
+
+// A time written with weekday names ("Saturday Oct 3 - Sunday Oct 4") read as
+// its first day only, so "this weekend" was searched as Saturday (2026-09-30).
+// Weekday names are dropped when the text also has real dates; their own words
+// ("this weekend", "Friday night") are left alone.
+export function whenForWindow(when: string | null | undefined): string | null {
+  if (!when?.trim()) return null;
+  const hasDate = /\b(jan|feb|mar|apr|may|jun|jul|aug|sep|oct|nov|dec)[a-z]*\.?\s+\d{1,2}\b|\b\d{1,2}\/\d{1,2}\b/i.test(when);
+  return hasDate ? when.replace(/\b(mon|tues|wednes|thurs|fri|satur|sun)day,?\s*/gi, "").replace(/\s+/g, " ").trim() : when.trim();
+}
