@@ -56,16 +56,19 @@ export function safeMemory(type: string | null, content: string, linkedNames: st
     .map((line) => {
       if (OWN_WORDS.test(line) || !named.test(line)) return line;
       const seen = new Set<string>();
+      const strip = (s: string) => {
+        const m = s.match(named);
+        if (!m) return s;
+        const h = historyLine(s, m[1]);
+        if (seen.has(h)) return "";
+        seen.add(h);
+        return h;
+      };
+      // List items ("Wants right now: a cofounder; …") are stripped one by one,
+      // so their own items on the same line stay.
       return line
         .split(/(?<=[.!?])\s+/)
-        .map((s) => {
-          const m = s.match(named);
-          if (!m) return s;
-          const h = historyLine(s, m[1]);
-          if (seen.has(h)) return "";
-          seen.add(h);
-          return h;
-        })
+        .map((sentence) => (sentence.includes("; ") && named.test(sentence) ? sentence.split("; ").map(strip).filter(Boolean).join("; ") : strip(sentence)))
         .filter(Boolean)
         .join(" ");
     })

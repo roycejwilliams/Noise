@@ -449,8 +449,9 @@ const norm = (s: string) =>
 // follow-up, a prediction, or another person (2026-09-28).
 // The member's own life is not the world (Royce, 2026-10-01): the people they
 // told Co about, as they described them ("your mentor Lena"), their
-// preferences and their history are member_life, which their own summary and
-// memories can back. Both are read for this member only. other_person stays a
+// preferences and their history are member_life, which only facts and their
+// own words (their texts, their "User said:" lines in memories) can back, never
+// Co's summary or Co-written memories (#49 review). other_person stays a
 // world claim: people outside their own life, and what anyone says, wants,
 // feels, did or will do beyond what the member told Co. Before this, a mentor
 // Co remembered was cut and Co said "I don't have that on file"
@@ -465,7 +466,9 @@ export const WORLD_CLAIMS = new Set(["time", "place", "link", "count", "offer", 
 export function theirOwnWords(text: string | undefined): string {
   return (text ?? "")
     .split("\n")
-    .map((l) => l.match(/\bUser(?: said)?:\s*(.+)$/i)?.[1]?.trim() ?? "")
+    // "User said:", a voice memo's transcript ("User sent a voice memo:"), and a
+    // dated form ("User said on September 29, 2026:").
+    .map((l) => l.match(/\bUser(?: said| sent a voice memo)?(?: on [^:]{1,40})?:\s*(.+)$/i)?.[1]?.trim() ?? "")
     .filter(Boolean)
     .join("\n");
 }

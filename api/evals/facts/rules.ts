@@ -244,6 +244,7 @@ check("the record starts filled from what was already logged", /backfillCoAction
     const [r] = RG2.claimChecks([claim(type, "Maya's building grid storage software", mayaQuote)], rf, { ...s, recentMemories: intro });
     check(`review #1: another member's details from a Co-written memory don't pass as ${type}`, !r.pass);
   }
+  check("their own words include voice memos and dated lines", RG2.theirOwnWords("User sent a voice memo: we moved to Portland\nUser said on September 29, 2026: Portland is home now\nCo replied: noted") === "we moved to Portland\nPortland is home now");
   check("review #1: only the member's own lines of a memory count", RG2.theirOwnWords(`${intro}\nUser said: My friend Maya builds grid storage.\nCo replied: Nice.`) === "My friend Maya builds grid storage.");
   const [friend] = RG2.claimChecks([claim("member_life", "your friend Maya builds grid storage", "My friend Maya builds grid storage")], rf, { ...s, recentMemories: `${intro}\nUser said: My friend Maya builds grid storage.` });
   check("review #1: what they said themselves about someone in their life still backs it", friend.pass);
@@ -293,7 +294,17 @@ check("the record starts filled from what was already logged", /backfillCoAction
   const sb = src("routes/sendblue.ts");
   check("reply retrieval strips before the relevance filter ever sees it", /SELECT content, memory_type FROM co_memories\s+WHERE user_id = \$1 AND content_embedding IS NOT NULL/.test(sb) && /const candidates = await memberSafe\(user\.id, memoriesResult\.rows/.test(sb) && /filterRelevantMemories\(resolvedContent, candidates\)/.test(sb) && (sb.match(/SELECT content, memory_type FROM co_memories WHERE user_id = \$1 AND memory_type != 'intent' ORDER BY created_at DESC LIMIT 5/g) ?? []).length === 2);
   check("intro records reach the fact check as what Co did", /introRecordFacts\.forEach\(\(f\) => addFact\(replyFacts, "did_before", f\)\)/.test(sb));
+  // Call summaries and the person model (#49 review items 1 and 2).
+  const call = MS.safeMemory("text_exchange", "[Call] Avery said they met Maya at the mixer. Maya is leaving Tesla and raising for her grid storage startup. Avery wants a technical cofounder.", ["Maya"]) ?? "";
+  check("a call summary describing another member is stripped, the member's own part kept", !MAYA.test(call) && /Co introduced them to Maya, another member\.|Maya, another member/.test(call) && /Avery wants a technical cofounder\./.test(call), call as any);
+  const PM = await import("../../src/services/personModel.js");
+  const block = PM.renderPersonModel({ who: "Work: climate founder\nPeople: Maya (another member) is building grid storage and leaving Tesla", threads: "- the intro with Maya: she wants to raise soon", did: [], loops: null });
+  const safeBlock = MS.safeMemory("person_model", block, ["Maya"]) ?? "";
+  check("person-model content naming another member's details is stripped", !MAYA.test(safeBlock) && !/raise soon/.test(safeBlock) && /Work: climate founder/.test(safeBlock) && /Maya, another member/.test(safeBlock), safeBlock as any);
+  const list = MS.safeMemory("person_model", "Wants right now: a technical cofounder; Maya is leaving Tesla to build grid storage", ["Maya"]) ?? "";
+  check("in a list line, only the item naming another member is stripped", /^Wants right now: a technical cofounder; /.test(list) && !MAYA.test(list), list as any);
   const cc = src("services/callContext.ts");
+  check("call summaries ([Call] lines) and the person model go through the strip; one import", /memberSafe\(userId, ownWordsResult\.rows, names\)/.test(cc) && /const ownWords = safeOwnWords\.map/.test(cc) && /memberSafe\(userId, \[\{ content: rawPicture, memory_type: "person_model" \}\], names\)/.test(cc) && (cc.match(/import\("\.\/memberSafeMemories\.js"\)/g) ?? []).length === 1);
   check("the context summary's recap, last suggestion and recent texts are stripped too", /safeRecap\[0\] \? `Ongoing summary: \$\{safeRecap\[0\]\}`/.test(cc) && /safeRecommendation\[0\] \? `Most recent thing Co suggested/.test(cc) && /Recent texts: \$\{\[\.\.\.safeTexts\]\.reverse\(\)/.test(cc) && !/recapResult\.rows\[0\]\?\.content/.test(cc));
 }
 console.log(`facts rules: ${total - failed}/${total} passed`);

@@ -78,7 +78,7 @@ export async function buildContextSummary(userId: string): Promise<string> {
       // facts beat an older recap or profile (2026-09-15 call opened as if he
       // were still pre-seed, after he'd texted he's Series A with a $35M deal).
       pool.query(
-        `SELECT content FROM co_memories
+        `SELECT content, memory_type FROM co_memories
          WHERE user_id = $1 AND memory_type = 'text_exchange' AND (content LIKE 'User said:%' OR content LIKE '[Call]%') AND ${notToTeammate()}
            AND created_at > NOW() - INTERVAL '48 hours'
          ORDER BY created_at DESC LIMIT 25`,
@@ -102,12 +102,13 @@ export async function buildContextSummary(userId: string): Promise<string> {
 
     // Another member's details never reach this summary; intro history stays
     // (services/memberSafeMemories.ts).
-    const { memberSafe, linkedMemberNames } = await import("./memberSafeMemories.js");
+    const { memberSafe, linkedMemberNames, namesInRecords } = await import("./memberSafeMemories.js");
     const linked = await linkedMemberNames(userId);
     // A Tier 0 pick names someone their recap or texts may describe too.
-    const { namesInRecords } = await import("./memberSafeMemories.js");
     const names = [...linked, ...namesInRecords(recentRecommendationResult.rows)];
-    const [safeRecap, safeRecommendation, safeTexts] = await Promise.all([memberSafe(userId, recapResult.rows, names), memberSafe(userId, recentRecommendationResult.rows, names), memberSafe(userId, recentTextResult.rows, names)]);
+    // Their call summaries ([Call] lines, which Co writes) too; their own
+    // "User said:" lines pass through unchanged.
+    const [safeRecap, safeRecommendation, safeTexts, safeOwnWords] = await Promise.all([memberSafe(userId, recapResult.rows, names), memberSafe(userId, recentRecommendationResult.rows, names), memberSafe(userId, recentTextResult.rows, names), memberSafe(userId, ownWordsResult.rows, names)]);
     const profile = profileResult.rows[0] ?? null;
     // The stated ask comes from the newest entry that actually has ask text;
     // wants come from the newest entry of any kind, because a call that found
@@ -118,9 +119,12 @@ export async function buildContextSummary(userId: string): Promise<string> {
       ? profile.intent[profile.intent.length - 1]
       : null;
 
-    const ownWords = ownWordsResult.rows.map((r: any) => String(r.content).replace(/^User said: /, "- ")).reverse();
+    const ownWords = safeOwnWords.map((c) => String(c).replace(/^User said: /, "- ")).reverse();
     const openAsks = openAsksResult.rows.map((r: any) => `- ${r.ask_text}`);
-    const picture = snapshot ? (await import("./personModel.js")).renderPersonModel({ ...snapshot, did: [] }) : renderSnapshot(null);
+    // The person model is model-written (snapshot, threads, loops): it gets the
+    // same strip, so another member's details never reach a call or reply.
+    const rawPicture = snapshot ? (await import("./personModel.js")).renderPersonModel({ ...snapshot, did: [] }) : renderSnapshot(null);
+    const picture = rawPicture ? ((await memberSafe(userId, [{ content: rawPicture, memory_type: "person_model" }], names))[0] ?? "") : rawPicture;
     const corrections = renderCorrections(correctionsResult.rows);
     const lines = [
       corrections
