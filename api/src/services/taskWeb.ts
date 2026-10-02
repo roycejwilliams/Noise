@@ -284,7 +284,14 @@ Return ONLY JSON: {"items": [{"name": "...", "url": "https://the page you read",
       proposal: { taskId: opts.taskId ?? null, query: what, kept: kept.map((k) => ({ name: k.name, url: k.url, official: k.official, facts: k.facts, date: k.date, deadline: k.deadline })), dropped, droppedDetails },
     }).catch(() => {});
   }
-  return { kept, dropped, droppedDetails, note: kept.length ? "Each kept result was checked against its own page; only the listed facts are verified." : "Nothing came back that proved itself on its page." };
+  // A name with nothing verified about it isn't a find (2026-10-01 next-live run kept "Brderless" with no facts).
+  const withFacts = withVerifiedFacts(kept);
+  dropped.push(...withFacts.dropped);
+  return { kept: withFacts.kept, dropped, droppedDetails, note: withFacts.kept.length ? "Each kept result was checked against its own page; only the listed facts are verified." : "Nothing came back that proved itself on its page." };
+}
+
+export function withVerifiedFacts(kept: VerifiedResult[]): { kept: VerifiedResult[]; dropped: Dropped[] } {
+  return { kept: kept.filter((k) => k.facts.length > 0), dropped: kept.filter((k) => !k.facts.length).map((k) => ({ name: k.name, url: k.url, why: "nothing about it was verified on its page" })) };
 }
 
 // The facts a task text may use from web results: verified fields only.
@@ -317,6 +324,8 @@ const CLAIMS = [
   { re: /\b(open to|happy to|willing to|down to|keen to)\s+(host|donate|sponsor|partner|co-?host|lend)/i, backed: /\b(donat|sponsor|partner|co-?host|free for|community use)/i },
   { re: /\b(has|have|they've|it's)\s+(already\s+)?(hosted|done|run|thrown|put on)\b/i, backed: /\b(hosted|past events|previous events|has held|have held)\b/i },
   { re: /\b(allows?|lets? you|permits?)\s+(a\s+|your own\s+)?(dj|music|alcohol|drinks|food|catering)/i, backed: /\b(allowed|permitted|welcome|bring your own|byo|outside (food|catering|vendors))/i },
+  // Who'll be in the room, matched to them (2026-10-01 next-live run: "exactly the room you're asking about").
+  { re: /\b(exactly|precisely|just)\s+(the|your)\s+(room|crowd|people|kind of people)\b|\broom full of\b|\b(who|the people) you'?re (asking about|looking for|after)\b|\b(your|their) (crowd|people|tribe)\b/i, backed: /\b(attendee list|guest list|who'?s (going|attending)|confirmed (guests|speakers))\b/i },
 ];
 export function unbackedClaims(text: string, facts: string): string[] {
   return CLAIMS.filter((c) => c.re.test(text) && !c.backed.test(facts)).map((c) => text.match(c.re)![0]);

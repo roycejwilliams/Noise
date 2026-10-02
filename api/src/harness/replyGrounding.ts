@@ -865,7 +865,7 @@ async function recheck(draft: string, rewrite: string, failed: GateCheck[], rf: 
   return { checks: [...code, ...r.checks.filter((c) => c.name.startsWith("claim"))], modelOk: r.modelOk, ms: r.ms };
 }
 
-const CROWD = /\b(that'?s|those are|they'?re|it'?s|full of|room of|go find) (all )?(your|his|her|their) (crowd|people|tribe|kind of people)\b|\bgo find the [\w@.'’-]+ (people|folks|crowd)\b/i;
+const CROWD = /\b(that'?s|those are|they'?re|it'?s|full of|room of|go find) (all )?(your|his|her|their) (crowd|people|tribe|kind of people)\b|\bgo find the [\w@.'’-]+ (people|folks|crowd)\b|\b(exactly|precisely) (the|your) (room|crowd|people)\b|\broom full of (exactly )?(who|the people) you\b/i;
 export function crowdClaim(text: string): boolean {
   return CROWD.test(text);
 }

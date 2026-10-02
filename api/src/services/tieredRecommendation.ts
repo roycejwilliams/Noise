@@ -194,6 +194,14 @@ export async function reserveXSearch(userId: string | null, source: "sweep" | "r
 // checked, by the same gate as before (sold out, already sent, already over,
 // too far), and what it turns away comes back with the reason.
 export type EventCandidate = { match: TierMatch; lines: string[] };
+
+// The weekday is worked out from the date here, never left to the model
+// (2026-10-01 next-live run: Co called Oct 2 "Thursday"; it's a Friday).
+export function eventLine(name: string, date: string | null, city: string | null): string {
+  const d = date ? DateTime.fromISO(String(date).slice(0, 10)) : null;
+  const when = d?.isValid ? `${d.toFormat("cccc, LLLL d")} (${d.toISODate()})` : (date ?? "");
+  return `${name}, ${when}${city ? `, ${city}` : ""}`;
+}
 export async function eventCandidates(
   what: string,
   city: string | null,
@@ -231,7 +239,7 @@ export async function eventCandidates(
       const details = "url" in m && m.url ? ((await fetchLumaEventDetails(m.url).catch(() => null)) ?? undefined) : undefined;
       const withDetails = { ...m, details } as TierMatch;
       const e = m as { name: string; event_date?: string; city?: string | null };
-      const lines = details ? renderEventDetailsLines(m.name, details) : [`${e.name}, ${e.event_date ?? ""}${e.city ? `, ${e.city}` : ""}`];
+      const lines = details ? renderEventDetailsLines(m.name, details) : [eventLine(e.name, e.event_date ?? null, e.city ?? null)];
       return { match: withDetails, lines };
     }),
   );
