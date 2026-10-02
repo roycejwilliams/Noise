@@ -1031,7 +1031,7 @@ const INVITE_FALLBACK = "Invites go through me. Ask me for an invite for your fr
 // "the organizers don't have a time", "Lena is on file" and "their first time
 // hosting" are claims about the world that still need a source (2026-10-01
 // review of #49).
-export const CO_DENIES_HAVING = /\b(?:i|we)\s+(?:do not|don'?t|haven'?t|have not|never)\s+(?:have|got|saved|heard)\b|\bnothing (?:saved|stored|on file)\b|\bnot on file\b|\bno record\b|\bfirst (?:i'?m hearing|i(?:'ve| have)? heard)\b/i;
+export const CO_DENIES_HAVING = /\b(?:i|we)\s+(?:do not|don'?t|haven'?t|have not|never)\s+(?:(?:actually|really|currently|even|yet)\s+)?(?:have|got|saved|heard)\b|\bnothing (?:saved|stored|on file)\b|\bnot on file\b|\bno record\b|\bfirst (?:i'?m hearing|i(?:'ve| have)? heard)\b/i;
 // What sends a reply to the claim read: a denial, or anything about "on file".
 // Not "don't know" or "first time", which are everyday companion lines
 // ("I don't know, what do you think?") with nothing to verify.
