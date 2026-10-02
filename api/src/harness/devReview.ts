@@ -639,7 +639,10 @@ export function heldBackFlags(r: { userId: string; now: Date; held: HeldItem[]; 
   let unpicked = 0;
   const bump = (k: string) => blockers.set(k, (blockers.get(k) ?? 0) + 1);
   for (const h of held) {
-    const pick = recent.find((p) => p.candidates.some((c) => String(c.id) === h.id));
+    // The newest pick that wasn't blocked at the person level: a night-time
+    // pick (local hours) would otherwise hide the real cause from the day.
+    const mentions = recent.filter((p) => p.candidates.some((c) => String(c.id) === h.id));
+    const pick = mentions.find((p) => !p.personBlocked?.length) ?? mentions[0];
     if (!pick) continue;
     const seen = pick.candidates.find((c) => String(c.id) === h.id)!;
     if (pick.personBlocked?.length) pick.personBlocked.forEach(bump);
