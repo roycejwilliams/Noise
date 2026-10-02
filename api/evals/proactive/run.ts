@@ -35,6 +35,7 @@ import {
   checkDraft,
   codePick,
   evaluateCandidates,
+  isAnswering,
   type Candidate,
   type OutputRules,
   type ProactiveType,
@@ -93,7 +94,7 @@ type Scenario = {
   historicalSends?: { at: string; type: string; target: string; topic?: string }[];
 };
 
-type SimSend = { at: Date; type: ProactiveType; target: string; topic: string };
+type SimSend = { at: Date; type: ProactiveType; target: string; topic: string; answer?: boolean };
 
 function simulate(sc: Scenario): SimSend[] {
   const start = new Date(sc.start).getTime();
@@ -141,8 +142,9 @@ function simulate(sc: Scenario): SimSend[] {
     const ev = evaluateCandidates({ now, timezone: sc.timezone, optedOut: false, candidates: [...pending.values()], sends: ledger, lastInboundAt, needsCare: sc.needsCare });
     const pick = codePick(ev.eligible);
     if (!pick) continue;
-    sends.push({ at: now, type: pick.type, target: pick.targetKey, topic: pick.topicKey });
-    ledger.push({ type: pick.type, targetKey: pick.targetKey, topicKey: pick.topicKey, sentAt: now, exempt: false });
+    const answer = isAnswering(pick);
+    sends.push({ at: now, type: pick.type, target: pick.targetKey, topic: pick.topicKey, answer });
+    ledger.push({ type: pick.type, targetKey: pick.targetKey, topicKey: pick.topicKey, sentAt: now, exempt: answer });
     decided.add(pick.targetKey);
   }
   return sends;
@@ -150,7 +152,9 @@ function simulate(sc: Scenario): SimSend[] {
 
 // Independent rule check: written separately from the gate code so a bug in
 // one shows up as a disagreement here.
-function violations(sends: { at: Date; type: string; target: string; topic?: string }[], timezone: string | null, inboundTimes: number[]): string[] {
+// Answers (2026-10-02) have no quota and no unanswered pause; they keep 3h
+// from any text. Caps and the pause count only the other (discovery) sends.
+function violations(sends: { at: Date; type: string; target: string; topic?: string; answer?: boolean }[], timezone: string | null, inboundTimes: number[]): string[] {
   const out: string[] = [];
   const sorted = [...sends].sort((a, b) => a.at.getTime() - b.at.getTime());
   const zone = timezone ?? "America/Los_Angeles";
@@ -165,8 +169,13 @@ function violations(sends: { at: Date; type: string; target: string; topic?: str
     }
     if (seenTargets.has(s.target)) out.push(`duplicate ${s.target} at ${s.at.toISOString()}`);
     seenTargets.add(s.target);
+    if (s.answer) {
+      const prevAny = sorted[i - 1];
+      if (prevAny && s.at.getTime() - prevAny.at.getTime() < RULES.minHoursBetweenTexts * 3600000) out.push(`${s.type} answer at ${s.at.toISOString()} under ${RULES.minHoursBetweenTexts}h after ${prevAny.type}`);
+      return;
+    }
     const lane = laneOf(s.type);
-    const inLane = (o: (typeof sorted)[number]) => laneOf(o.type) === lane;
+    const inLane = (o: (typeof sorted)[number]) => laneOf(o.type) === lane && !o.answer;
     const dayCap = lane === "room" ? RULES.roomMaxPerLocalDay : RULES.maxPerLocalDay;
     const weekCap = lane === "room" ? RULES.roomMaxPer7Days : RULES.maxPer7Days;
     const sameDay = sorted.filter((o, j) => j < i && inLane(o) && DateTime.fromJSDate(o.at).setZone(zone).hasSame(local, "day"));

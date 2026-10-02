@@ -71,7 +71,7 @@
     },
     {
       "id": "s04",
-      "about": "throttle storm: 20 surfacing attempts in 7 minutes, nobody replies: one offer, then each lane waits on its own unanswered text (24h after one, 72h after two in a row). The ask check-in still goes, 3h after the offer, not 15 minutes (2026-09-22: an ignored offer no longer pauses a check-in)",
+      "about": "throttle storm: 20 surfacing attempts in 7 minutes, nobody replies: one offer, then each lane waits on its own unanswered text (24h after one, 72h after two in a row). The ask check-in still goes, 3h after the offer, not 15 minutes (2026-09-22: an ignored offer no longer pauses a check-in). Since 2026-10-02 the ask check-in and both network teases are answers to an open ask: no quota or unanswered pause, 3h apart from any text; the profile offers still wait on the room lane.",
       "timezone": "America/Los_Angeles",
       "start": "2026-09-08T15:45:00Z",
       "end": "2026-09-15T06:00:00Z",
@@ -179,7 +179,7 @@
         }
       ],
       "expect": {
-        "sends": 3,
+        "sends": 5,
         "noSendBefore": "2026-09-08T16:00:00Z"
       }
     },
@@ -285,7 +285,7 @@
     },
     {
       "id": "s08",
-      "about": "the time-bound debrief wins over the no-reason companion check-in",
+      "about": "the time-bound debrief goes first; since 2026-10-02 it's an answer and doesn't use the day's slot, so the companion check-in still goes 3h later",
       "timezone": "America/Los_Angeles",
       "start": "2026-09-15T15:45:00Z",
       "end": "2026-09-15T20:00:00Z",
@@ -303,7 +303,7 @@
         }
       ],
       "expect": {
-        "sends": 1,
+        "sends": 2,
         "firstType": "debrief"
       }
     },
@@ -454,15 +454,16 @@
     },
     {
       "id": "s15",
-      "about": "post-call text that can't go out within 24h is dropped, not sent late",
+      "about": "post-call text that can't go out within 24h is dropped, not sent late (another post-call took the day's slot; a debrief no longer does, 2026-10-02)",
       "timezone": "America/Los_Angeles",
       "start": "2026-09-15T15:45:00Z",
       "end": "2026-09-20T06:00:00Z",
       "arrivals": [
         {
           "at": "2026-09-15T16:00:00Z",
-          "type": "debrief",
-          "target": "debrief:evt-1"
+          "type": "post_call",
+          "target": "post_call:c8",
+          "priority": 81
         },
         {
           "at": "2026-09-15T16:00:00Z",
@@ -473,9 +474,7 @@
       ],
       "expect": {
         "sends": 1,
-        "neverTypes": [
-          "post_call"
-        ]
+        "firstType": "post_call"
       }
     },
     {

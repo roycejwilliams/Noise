@@ -327,9 +327,44 @@ check("no follow-up line has an em dash or exclamation", [...OFFER_FOLLOWUP_MANY
     const state = { now: now2, timezone: "America/Los_Angeles", optedOut: false, lastInboundAt: now2, sends: [sent(100, "debrief"), sent(60, "post_call"), sent(30, "window_followup")], candidates: [cand("companion"), cand("ask_checkin")] } as any;
     const ev = P.evaluateCandidates(state);
     check("a full week of follow-ups doesn't block a companion check-in", ev.eligible.some((c: Candidate) => c.type === "companion"));
-    check("...but still blocks a fourth follow-up", !ev.eligible.some((c: Candidate) => c.type === "ask_checkin"));
+    // An ask check-in answers their ask (2026-10-02): no longer behind the weekly cap.
+    check("...and a check-in on their own ask isn't held by it either", ev.eligible.some((c: Candidate) => c.type === "ask_checkin"));
     const state2 = { ...state, sends: [sent(100, "companion"), sent(60, "companion"), sent(30, "debrief")] };
     check("check-ins don't use up the follow-ups' weekly room", P.evaluateCandidates({ ...state2, candidates: [cand("ask_checkin")] }).eligible.length === 1);
+  }
+  {
+    // Replies vs. broadcasts (Royce, 2026-10-02).
+    const now3 = new Date("2026-10-02T19:00:00Z"); // noon Pacific
+    const sent = (h: number, type: string, exempt = false) => ({ type, targetKey: `${type}:${h}`, topicKey: `${type}:${h}`, sentAt: new Date(now3.getTime() - h * 3_600_000), exempt }) as SendRecord;
+    const offer = (id: string, payload: any) => ({ id, type: "event_offer", targetKey: `event_offer:${id}`, topicKey: `event_offer:${id}`, priority: 60, dueAt: now3, createdAt: now3, expiresAt: null, payload, attempts: 0, summary: id }) as unknown as Candidate;
+    const asked = offer("asked", { askId: "ask-1", match: { tier: 1 } });
+    const discovery = offer("discovery", { askId: "profile", fromProfile: true, match: { tier: 1 } });
+    const reminder = offer("reminder", { askId: "profile", fromProfile: true, reminder: true });
+    // Four room-lane discovery texts this week, the last one an hour ago and unanswered.
+    const full = { now: now3, timezone: "America/Los_Angeles", optedOut: false, lastInboundAt: new Date(now3.getTime() - 100 * 3_600_000), sends: [sent(90, "event_offer"), sent(60, "event_offer"), sent(30, "event_offer"), sent(1, "event_offer")] } as any;
+    const ev = P.evaluateCandidates({ ...full, candidates: [asked, discovery, reminder] });
+    const ok = (id: string) => ev.eligible.some((c: Candidate) => c.id === id);
+    check("an answer still keeps 3h spacing: a text an hour ago holds it", !ok("asked") && !ok("reminder") && ev.perCandidate.find((p: any) => p.candidate.id === "asked").checks.filter((k: any) => !k.pass).map((k: any) => k.name).join() === "spacing");
+    // Same full week, the last text 4h ago and still unanswered.
+    const spaced = { ...full, sends: [sent(90, "event_offer"), sent(60, "event_offer"), sent(30, "event_offer"), sent(4, "event_offer")] };
+    const ev2 = P.evaluateCandidates({ ...spaced, candidates: [asked, discovery, reminder] });
+    const ok2 = (id: string) => ev2.eligible.some((c: Candidate) => c.id === id);
+    check("answering an explicit ask sends past a full week, today's cap and the unanswered pause", ok2("asked"));
+    check("a deadline reminder sends past the quota too", ok2("reminder"));
+    check("an answer's spacing counts other answers (exempt texts); discovery's doesn't", !P.evaluateCandidates({ ...spaced, sends: [sent(1, "network_tease", true)], candidates: [asked] }).eligible.length && P.evaluateCandidates({ ...spaced, lastInboundAt: now3, sends: [sent(1, "network_tease", true)], candidates: [discovery] }).eligible.length === 1);
+    const aged = (h: number, c: Candidate) => ({ ...c, createdAt: new Date(now3.getTime() - h * 3_600_000) }) as Candidate;
+    check("an answer waiting over a day is re-checked before it goes; a fresh one or discovery isn't", P.needsRelevanceCheck(aged(25, asked), now3) && !P.needsRelevanceCheck(aged(23, asked), now3) && !P.needsRelevanceCheck(aged(72, discovery), now3));
+    check("Co's relevance answer is read; anything else holds it (null), never sends or archives", P.readRelevance('{"relevant": false, "why": "Oct 1 has passed"}')?.relevant === false && P.readRelevance('```json\n{"relevant": true, "why": "still open"}\n```')?.relevant === true && P.readRelevance("not sure") === null && P.readRelevance('{"relevant": "maybe"}') === null);
+    check("unsolicited discovery stays held at the weekly cap", !ok("discovery") && ev.perCandidate.find((p: any) => p.candidate.id === "discovery").checks.some((k: any) => k.name === "weekly_cap" && !k.pass));
+    check("a network tease (always for an open ask) and a debrief are answers; a profile offer and a guest-match nudge are discovery", P.isAnswering({ type: "network_tease", payload: { askId: "a" } } as any) && P.isAnswering({ type: "debrief", payload: {} } as any) && !P.isAnswering(discovery) && !P.isAnswering({ type: "event_match_nudge", payload: {} } as any) && !P.isAnswering({ type: "companion", payload: {} } as any));
+    check("an offer with no ask behind it is discovery", !P.isAnswering(offer("x", {})));
+    check("answers never use up discovery's room: three exempt answers leave the week open", P.evaluateCandidates({ ...full, lastInboundAt: now3, sends: [sent(90, "event_offer", true), sent(60, "network_tease", true), sent(30, "event_offer", true)], candidates: [discovery] }).eligible.length === 1);
+    check("opt-out and local hours still hold an answer", P.evaluateCandidates({ ...spaced, optedOut: true, candidates: [asked] }).eligible.length === 0 && P.evaluateCandidates({ ...spaced, now: new Date("2026-10-02T11:00:00Z"), candidates: [{ ...asked, dueAt: new Date("2026-10-02T11:00:00Z") }] }).eligible.length === 0);
+    check("an answer still never goes twice", !P.evaluateCandidates({ ...full, sends: [...full.sends, { ...sent(5, "event_offer", true), targetKey: asked.targetKey }], candidates: [asked] }).eligible.length);
+    check("one text counts once: a batch of answers is exempt; a discovery offer in it makes it one counted send", P.sendIsExempt(asked, [reminder]) && !P.sendIsExempt(asked, [discovery]) && !P.sendIsExempt(discovery, [asked]) && P.sendIsExempt(discovery, [], true));
+    const pr2 = readFileSync(new URL("../../src/harness/proactive.ts", import.meta.url), "utf8");
+    check("the send re-checks with the same rule and ledgers extras exempt", /ignorePacing: opts\.ignorePacing \|\| answering/.test(pr2) && /sendIsExempt\(c, extras\.map\(\(e\) => e\.candidate\), opts\.ignorePacing === true\)/.test(pr2) && /VALUES \(\$1, \$2, \$3, \$4, \$5, \$6, true\) ON CONFLICT/.test(pr2) && /answering && !opts\.ignorePacing \? \[spacingCheck\(\{ now, sends \}, true\)\]/.test(pr2));
+    check("a stale answer is archived silently (no text), the pick and every sibling re-checked", /if \(!r\.relevant\) \{\s*if \(!opts\.dryRun\) await dropCandidate\(registry, c, "skipped", `stale: \$\{r\.why\}`\);[\s\S]{0,400}return;/.test(pr2) && /needsRelevanceCheck\(sib, state\.now\)/.test(pr2));
   }
   check("principles, not quoted phrasings, and a greeting is guidance, not a veto", !/"the event"|"someone cool"|"Hey Sam,"/.test(P.PROACTIVE_RULES) && /a greeting is fine when it's natural, never a formula/.test(P.PROACTIVE_RULES) && !P.checkDraft("Hey Maya, how was the Climate Founders Mixer?", { maxSentences: 2 }).some((c: any) => !c.pass));
   check("stacked questions are still caught", P.checkDraft("How was the mixer. Did you meet anyone. Want to call this week?", { maxSentences: 2 }).some((c: any) => c.name === "draft_one_question" && !c.pass));
