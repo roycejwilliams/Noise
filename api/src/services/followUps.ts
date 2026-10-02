@@ -155,7 +155,7 @@ export async function runFollowUpTurn(task: CoTask): Promise<void> {
   }
   const [{ rows: u }, { rows: convo }, { rows: sends }] = await Promise.all([
     pool.query(`SELECT first_name, sms_opted_out, archived_at FROM users WHERE id = $1`, [userId]),
-    pool.query(`SELECT content FROM co_memories WHERE user_id = $1 AND memory_type = 'text_exchange' AND ${notToTeammate()} ORDER BY created_at DESC LIMIT 14`, [userId]),
+    pool.query(`SELECT content, memory_type FROM co_memories WHERE user_id = $1 AND memory_type = 'text_exchange' AND ${notToTeammate()} ORDER BY created_at DESC LIMIT 14`, [userId]),
     pool.query(`SELECT type, sent_at FROM proactive_sends WHERE user_id = $1 AND sent_at > NOW() - INTERVAL '7 days' ORDER BY sent_at DESC LIMIT 6`, [userId]),
   ]);
   if (!u[0] || u[0].sms_opted_out || u[0].archived_at) {
@@ -179,7 +179,8 @@ export async function runFollowUpTurn(task: CoTask): Promise<void> {
   }
   const r = await runFollowUpTurnWith(task, {
     firstName: u[0].first_name || "them",
-    recent: withoutTeammateLines(convo.map((x: any) => String(x.content)).reverse().join("\n")).slice(-2500),
+    // Another member's details stripped, as in the reply (memberSafeMemories.ts).
+    recent: withoutTeammateLines((await import("./memberSafeMemories.js").then((m) => m.memberSafe(userId, convo))).reverse().join("\n")).slice(-2500),
     recentSends: sends.map((s: any) => `- ${new Date(s.sent_at).toISOString().slice(0, 16)} ${s.type}`).join("\n"),
     now: () => new Date(),
     checkInNow: checkIn,

@@ -282,7 +282,7 @@ export async function runTaskTurn(task: CoTask): Promise<{ action: string }> {
   }
   const [{ rows: u }, { rows: convo }] = await Promise.all([
     pool.query(`SELECT u.first_name, u.phone_number, u.sms_opted_out, u.archived_at, cp.city FROM users u LEFT JOIN co_profiles cp ON cp.user_id = u.id WHERE u.id = $1`, [userId]),
-    pool.query(`SELECT content FROM co_memories WHERE user_id = $1 AND memory_type = 'text_exchange' AND ${notToTeammate()} ORDER BY created_at DESC LIMIT 14`, [userId]),
+    pool.query(`SELECT content, memory_type FROM co_memories WHERE user_id = $1 AND memory_type = 'text_exchange' AND ${notToTeammate()} ORDER BY created_at DESC LIMIT 14`, [userId]),
   ]);
   const person = u[0];
   if (!person || person.sms_opted_out || person.archived_at) {
@@ -293,7 +293,8 @@ export async function runTaskTurn(task: CoTask): Promise<{ action: string }> {
   const deps: TaskTurnDeps = {
     person,
     zone,
-    recent: withoutTeammateLines(convo.map((r: any) => String(r.content)).reverse().join("\n")).slice(-3000),
+    // Another member's details stripped, as in the reply (memberSafeMemories.ts).
+    recent: withoutTeammateLines((await import("./memberSafeMemories.js").then((m) => m.memberSafe(userId, convo))).reverse().join("\n")).slice(-3000),
     personModel: await import("./personModel.js").then((m) => m.personModel(userId, { maxDid: 6 })).catch(() => undefined),
     note: async (text, stepDone) => void (await noteOnTask(userId, task.id, text, stepDone)),
     schedule: async (h, plan) => (await scheduleTask(userId, task.id, h, plan))?.nextCheckAt ?? null,
