@@ -42,6 +42,13 @@ export async function personModelParts(userId: string): Promise<PersonModelParts
   return { who: renderSnapshot(snap), threads: renderThreads(threads.slice(0, 6)), did: ledger.lines, loops: describeLoops(loops) };
 }
 
+// Background prompts (the sweep, which writes member-facing offers, and Co's
+// tasks) read this directly, so another member's details are stripped here,
+// the same way as the reply's memories and the call context
+// (services/memberSafeMemories.ts, #49 follow-up).
 export async function personModel(userId: string, opts: { maxDid?: number } = {}): Promise<string> {
-  return renderPersonModel(await personModelParts(userId), opts);
+  const text = renderPersonModel(await personModelParts(userId), opts);
+  if (!text) return text;
+  const { memberSafe } = await import("./memberSafeMemories.js");
+  return (await memberSafe(userId, [{ content: text, memory_type: "person_model" }]))[0] ?? "";
 }
