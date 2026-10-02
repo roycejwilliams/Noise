@@ -860,6 +860,436 @@
         "sends": 6
       },
       "replyAfterMinutes": 60
+    },
+    {
+      "id": "s29",
+      "about": "heavy user (2026-10-02): five asks over two weeks, each bringing two offers, a network tease, a time-frame follow-up and a check-in, plus a profile find every day and a companion check-in every four days; they reply within two hours. The ready queue stays bounded and discovery still gets its turns every week. Under the old caps 10 answers expired unsent here; now none do",
+      "timezone": "America/Los_Angeles",
+      "start": "2026-10-05T15:45:00Z",
+      "end": "2026-10-19T15:45:00Z",
+      "replyAfterMinutes": 120,
+      "arrivals": [
+        {
+          "at": "2026-10-05T16:30:00Z",
+          "type": "event_offer",
+          "target": "event_offer:profile:0",
+          "payload": {
+            "askId": "profile",
+            "fromProfile": true
+          }
+        },
+        {
+          "at": "2026-10-05T16:30:00Z",
+          "type": "companion",
+          "target": "companion:0",
+          "topic": "companion"
+        },
+        {
+          "at": "2026-10-05T17:00:00Z",
+          "type": "event_offer",
+          "target": "event_offer:ask1:e1",
+          "payload": {
+            "askId": "ask1",
+            "match": {
+              "tier": 1
+            }
+          }
+        },
+        {
+          "at": "2026-10-05T17:00:00Z",
+          "type": "event_offer",
+          "target": "event_offer:ask1:e2",
+          "payload": {
+            "askId": "ask1",
+            "match": {
+              "tier": 2
+            }
+          }
+        },
+        {
+          "at": "2026-10-05T17:00:00Z",
+          "type": "window_followup",
+          "target": "window_followup:ask1",
+          "topic": "ask:ask1",
+          "payload": {
+            "askId": "ask1"
+          },
+          "dueInMinutes": 2880,
+          "expiresInHours": 120
+        },
+        {
+          "at": "2026-10-05T17:00:00Z",
+          "type": "ask_checkin",
+          "target": "ask_checkin:ask1:1",
+          "topic": "ask:ask1",
+          "payload": {
+            "askId": "ask1"
+          },
+          "dueInMinutes": 4320,
+          "expiresInHours": 240
+        },
+        {
+          "at": "2026-10-06T16:30:00Z",
+          "type": "event_offer",
+          "target": "event_offer:profile:1",
+          "payload": {
+            "askId": "profile",
+            "fromProfile": true
+          }
+        },
+        {
+          "at": "2026-10-06T17:00:00Z",
+          "type": "network_tease",
+          "target": "network_tease:ask1",
+          "payload": {
+            "askId": "ask1"
+          },
+          "expiresInHours": 336
+        },
+        {
+          "at": "2026-10-07T16:30:00Z",
+          "type": "event_offer",
+          "target": "event_offer:profile:2",
+          "payload": {
+            "askId": "profile",
+            "fromProfile": true
+          }
+        },
+        {
+          "at": "2026-10-07T17:00:00Z",
+          "type": "event_offer",
+          "target": "event_offer:ask2:e1",
+          "payload": {
+            "askId": "ask2",
+            "match": {
+              "tier": 1
+            }
+          }
+        },
+        {
+          "at": "2026-10-07T17:00:00Z",
+          "type": "event_offer",
+          "target": "event_offer:ask2:e2",
+          "payload": {
+            "askId": "ask2",
+            "match": {
+              "tier": 2
+            }
+          }
+        },
+        {
+          "at": "2026-10-07T17:00:00Z",
+          "type": "window_followup",
+          "target": "window_followup:ask2",
+          "topic": "ask:ask2",
+          "payload": {
+            "askId": "ask2"
+          },
+          "dueInMinutes": 2880,
+          "expiresInHours": 120
+        },
+        {
+          "at": "2026-10-07T17:00:00Z",
+          "type": "ask_checkin",
+          "target": "ask_checkin:ask2:1",
+          "topic": "ask:ask2",
+          "payload": {
+            "askId": "ask2"
+          },
+          "dueInMinutes": 4320,
+          "expiresInHours": 240
+        },
+        {
+          "at": "2026-10-08T16:30:00Z",
+          "type": "event_offer",
+          "target": "event_offer:profile:3",
+          "payload": {
+            "askId": "profile",
+            "fromProfile": true
+          }
+        },
+        {
+          "at": "2026-10-08T17:00:00Z",
+          "type": "network_tease",
+          "target": "network_tease:ask2",
+          "payload": {
+            "askId": "ask2"
+          },
+          "expiresInHours": 336
+        },
+        {
+          "at": "2026-10-09T16:30:00Z",
+          "type": "event_offer",
+          "target": "event_offer:profile:4",
+          "payload": {
+            "askId": "profile",
+            "fromProfile": true
+          }
+        },
+        {
+          "at": "2026-10-09T16:30:00Z",
+          "type": "companion",
+          "target": "companion:4",
+          "topic": "companion"
+        },
+        {
+          "at": "2026-10-09T17:00:00Z",
+          "type": "event_offer",
+          "target": "event_offer:ask3:e1",
+          "payload": {
+            "askId": "ask3",
+            "match": {
+              "tier": 1
+            }
+          }
+        },
+        {
+          "at": "2026-10-09T17:00:00Z",
+          "type": "event_offer",
+          "target": "event_offer:ask3:e2",
+          "payload": {
+            "askId": "ask3",
+            "match": {
+              "tier": 2
+            }
+          }
+        },
+        {
+          "at": "2026-10-09T17:00:00Z",
+          "type": "window_followup",
+          "target": "window_followup:ask3",
+          "topic": "ask:ask3",
+          "payload": {
+            "askId": "ask3"
+          },
+          "dueInMinutes": 2880,
+          "expiresInHours": 120
+        },
+        {
+          "at": "2026-10-09T17:00:00Z",
+          "type": "ask_checkin",
+          "target": "ask_checkin:ask3:1",
+          "topic": "ask:ask3",
+          "payload": {
+            "askId": "ask3"
+          },
+          "dueInMinutes": 4320,
+          "expiresInHours": 240
+        },
+        {
+          "at": "2026-10-10T16:30:00Z",
+          "type": "event_offer",
+          "target": "event_offer:profile:5",
+          "payload": {
+            "askId": "profile",
+            "fromProfile": true
+          }
+        },
+        {
+          "at": "2026-10-10T17:00:00Z",
+          "type": "network_tease",
+          "target": "network_tease:ask3",
+          "payload": {
+            "askId": "ask3"
+          },
+          "expiresInHours": 336
+        },
+        {
+          "at": "2026-10-11T16:30:00Z",
+          "type": "event_offer",
+          "target": "event_offer:profile:6",
+          "payload": {
+            "askId": "profile",
+            "fromProfile": true
+          }
+        },
+        {
+          "at": "2026-10-12T16:30:00Z",
+          "type": "event_offer",
+          "target": "event_offer:profile:7",
+          "payload": {
+            "askId": "profile",
+            "fromProfile": true
+          }
+        },
+        {
+          "at": "2026-10-12T17:00:00Z",
+          "type": "event_offer",
+          "target": "event_offer:ask4:e1",
+          "payload": {
+            "askId": "ask4",
+            "match": {
+              "tier": 1
+            }
+          }
+        },
+        {
+          "at": "2026-10-12T17:00:00Z",
+          "type": "event_offer",
+          "target": "event_offer:ask4:e2",
+          "payload": {
+            "askId": "ask4",
+            "match": {
+              "tier": 2
+            }
+          }
+        },
+        {
+          "at": "2026-10-12T17:00:00Z",
+          "type": "window_followup",
+          "target": "window_followup:ask4",
+          "topic": "ask:ask4",
+          "payload": {
+            "askId": "ask4"
+          },
+          "dueInMinutes": 2880,
+          "expiresInHours": 120
+        },
+        {
+          "at": "2026-10-12T17:00:00Z",
+          "type": "ask_checkin",
+          "target": "ask_checkin:ask4:1",
+          "topic": "ask:ask4",
+          "payload": {
+            "askId": "ask4"
+          },
+          "dueInMinutes": 4320,
+          "expiresInHours": 240
+        },
+        {
+          "at": "2026-10-13T16:30:00Z",
+          "type": "event_offer",
+          "target": "event_offer:profile:8",
+          "payload": {
+            "askId": "profile",
+            "fromProfile": true
+          }
+        },
+        {
+          "at": "2026-10-13T16:30:00Z",
+          "type": "companion",
+          "target": "companion:8",
+          "topic": "companion"
+        },
+        {
+          "at": "2026-10-13T17:00:00Z",
+          "type": "network_tease",
+          "target": "network_tease:ask4",
+          "payload": {
+            "askId": "ask4"
+          },
+          "expiresInHours": 336
+        },
+        {
+          "at": "2026-10-14T16:30:00Z",
+          "type": "event_offer",
+          "target": "event_offer:profile:9",
+          "payload": {
+            "askId": "profile",
+            "fromProfile": true
+          }
+        },
+        {
+          "at": "2026-10-14T17:00:00Z",
+          "type": "event_offer",
+          "target": "event_offer:ask5:e1",
+          "payload": {
+            "askId": "ask5",
+            "match": {
+              "tier": 1
+            }
+          }
+        },
+        {
+          "at": "2026-10-14T17:00:00Z",
+          "type": "event_offer",
+          "target": "event_offer:ask5:e2",
+          "payload": {
+            "askId": "ask5",
+            "match": {
+              "tier": 2
+            }
+          }
+        },
+        {
+          "at": "2026-10-14T17:00:00Z",
+          "type": "window_followup",
+          "target": "window_followup:ask5",
+          "topic": "ask:ask5",
+          "payload": {
+            "askId": "ask5"
+          },
+          "dueInMinutes": 2880,
+          "expiresInHours": 120
+        },
+        {
+          "at": "2026-10-14T17:00:00Z",
+          "type": "ask_checkin",
+          "target": "ask_checkin:ask5:1",
+          "topic": "ask:ask5",
+          "payload": {
+            "askId": "ask5"
+          },
+          "dueInMinutes": 4320,
+          "expiresInHours": 240
+        },
+        {
+          "at": "2026-10-15T16:30:00Z",
+          "type": "event_offer",
+          "target": "event_offer:profile:10",
+          "payload": {
+            "askId": "profile",
+            "fromProfile": true
+          }
+        },
+        {
+          "at": "2026-10-15T17:00:00Z",
+          "type": "network_tease",
+          "target": "network_tease:ask5",
+          "payload": {
+            "askId": "ask5"
+          },
+          "expiresInHours": 336
+        },
+        {
+          "at": "2026-10-16T16:30:00Z",
+          "type": "event_offer",
+          "target": "event_offer:profile:11",
+          "payload": {
+            "askId": "profile",
+            "fromProfile": true
+          }
+        },
+        {
+          "at": "2026-10-17T16:30:00Z",
+          "type": "event_offer",
+          "target": "event_offer:profile:12",
+          "payload": {
+            "askId": "profile",
+            "fromProfile": true
+          }
+        },
+        {
+          "at": "2026-10-17T16:30:00Z",
+          "type": "companion",
+          "target": "companion:12",
+          "topic": "companion"
+        },
+        {
+          "at": "2026-10-18T16:30:00Z",
+          "type": "event_offer",
+          "target": "event_offer:profile:13",
+          "payload": {
+            "askId": "profile",
+            "fromProfile": true
+          }
+        }
+      ],
+      "expect": {
+        "maxPending": 12,
+        "discoveryAtLeast": 4,
+        "maxExpiredAnswers": 1
+      }
     }
   ],
   "drafts": [

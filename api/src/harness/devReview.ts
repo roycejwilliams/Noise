@@ -82,7 +82,8 @@ export type FlagType =
   | "member_frustrated_with_co"
   | "member_reported_issue"
   | "member_called_out_miss"
-  | "questionable_tool_choice";
+  | "questionable_tool_choice"
+  | "held_back";
 
 export const FLAG_LABELS: Record<FlagType, string> = {
   slow_reply: "Slow reply (over the latency budget)",
@@ -104,6 +105,7 @@ export const FLAG_LABELS: Record<FlagType, string> = {
   member_reported_issue: "Member reported an issue",
   member_called_out_miss: "Member called out a miss",
   questionable_tool_choice: "Questionable tool choice (Jev's read of Co's judgment)",
+  held_back: "Ready texts held 2+ days with nothing sent",
 };
 
 export type Severity = "low" | "medium" | "high";
@@ -609,6 +611,85 @@ export async function judgmentFlags(data: ReviewData): Promise<ReviewFlag[]> {
   return flags;
 }
 
+// ---------------------------------------------------------------------------
+// Held back (Royce, 2026-10-02): a member with texts ready to go (pending,
+// due, not expired, queued 2+ days ago) and nothing sent in 2+ days, naming
+// the checks that held them. Starvation was silent: the weekly cap held every
+// pick from 10/1 and it surfaced only when Royce noticed. Read from the queue
+// and the pick log as of the end of the window, not from the window itself.
+
+export const HELD_DAYS = 2;
+export type HeldItem = { id: string; type: string; createdAt: string; summary: string };
+export type HeldPick = { at: string; candidates: { id: string; failed: string[] }[] };
+
+// Pure: the flag, from the queue and the pick log (tests replay real rows).
+export function heldBackFlags(r: { userId: string; now: Date; held: HeldItem[]; lastSendAt: string | null; picks: HeldPick[] }): ReviewFlag[] {
+  const cutoff = r.now.getTime() - HELD_DAYS * 86_400_000;
+  const held = r.held.filter((h) => ms(h.createdAt) <= cutoff);
+  if (!held.length || (r.lastSendAt && ms(r.lastSendAt) > cutoff)) return [];
+  const quietDays = r.lastSendAt ? Math.floor((r.now.getTime() - ms(r.lastSendAt)) / 86_400_000) : null;
+  // What held each item the last time the pick looked at it.
+  const recent = r.picks.filter((p) => ms(p.at) > cutoff).sort((a, b) => ms(b.at) - ms(a.at));
+  const blockers = new Map<string, number>();
+  let unpicked = 0;
+  for (const h of held) {
+    const seen = recent.map((p) => p.candidates.find((c) => String(c.id) === h.id)).find(Boolean);
+    if (!seen) continue;
+    if (!seen.failed.length) unpicked++;
+    for (const f of seen.failed) blockers.set(f, (blockers.get(f) ?? 0) + 1);
+  }
+  const named = [...blockers.entries()].sort((a, b) => b[1] - a[1]).map(([k, n]) => `${k} ×${n}`);
+  const cause = !recent.length
+    ? `no daily pick ran for them in ${HELD_DAYS} days`
+    : named.length
+      ? `held by ${named.join(", ")}${unpicked ? `; ${unpicked} eligible but never picked` : ""}`
+      : unpicked
+        ? `${unpicked} eligible but never picked`
+        : "the pick never looked at these items";
+  const types = [...held.reduce((m, h) => m.set(h.type, (m.get(h.type) ?? 0) + 1), new Map<string, number>()).entries()].map(([t, n]) => `${t}×${n}`).join(", ");
+  const oldest = held.reduce((a, h) => (ms(h.createdAt) < ms(a.createdAt) ? h : a));
+  return [
+    {
+      userId: r.userId,
+      at: oldest.createdAt,
+      type: "held_back",
+      severity: held.length >= 5 || quietDays === null || quietDays >= 4 ? "high" : "medium",
+      snippet: clip(`${held.length} ready text${held.length === 1 ? "" : "s"} held, nothing sent ${quietDays === null ? "ever" : `in ${quietDays} days`} (${types}); oldest: "${oldest.summary}"`),
+      decisionIds: [],
+      cause,
+      causeConfirmed: recent.length > 0,
+      source: "log",
+    },
+  ];
+}
+
+export async function loadHeldBack(userId: string, now: Date): Promise<{ userId: string; now: Date; held: HeldItem[]; lastSendAt: string | null; picks: HeldPick[] }> {
+  const [held, last, picks] = await Promise.all([
+    pool.query(
+      `SELECT id, type, created_at, summary FROM proactive_candidates
+       WHERE user_id = $1 AND status = 'pending' AND due_at <= $2 AND (expires_at IS NULL OR expires_at > $2)`,
+      [userId, now.toISOString()],
+    ),
+    pool.query(`SELECT MAX(sent_at) AS at FROM proactive_sends WHERE user_id = $1 AND sent_at <= $2`, [userId, now.toISOString()]),
+    pool.query(
+      `SELECT created_at, proposal FROM harness_decisions
+       WHERE user_id = $1 AND decision = 'proactive.dailyPick' AND created_at <= $2 AND created_at > $2::timestamptz - make_interval(days => $3)
+       ORDER BY created_at DESC LIMIT 50`,
+      [userId, now.toISOString(), HELD_DAYS],
+    ),
+  ]);
+  return {
+    userId,
+    now,
+    held: held.rows.map((h: any) => ({ id: String(h.id), type: h.type, createdAt: new Date(h.created_at).toISOString(), summary: String(h.summary ?? "").slice(0, 100) })),
+    lastSendAt: last.rows[0]?.at ? new Date(last.rows[0].at).toISOString() : null,
+    picks: picks.rows.map((p: any) => ({
+      at: new Date(p.created_at).toISOString(),
+      candidates: (p.proposal?.candidates ?? []).map((c: any) => ({ id: String(c.id), failed: Array.isArray(c.failed) ? c.failed.map(String) : [] })),
+    })),
+  };
+}
+
 export async function reviewWindow(since: Date, until: Date, opts: { model?: boolean; userIds?: string[] } = {}): Promise<{ flags: ReviewFlag[]; names: Record<string, string> }> {
   const flags: ReviewFlag[] = [];
   const names: Record<string, string> = {};
@@ -616,6 +697,7 @@ export async function reviewWindow(since: Date, until: Date, opts: { model?: boo
     const data = await loadReviewData(userId, since, until);
     names[userId] = data.firstName;
     flags.push(...logFlags(data), ...conversationFlags(data), ...reactionFlags(data));
+    flags.push(...heldBackFlags(await loadHeldBack(userId, until).catch(() => ({ userId, now: until, held: [], lastSendAt: null, picks: [] }))));
     if (opts.model !== false) flags.push(...(await modelFlags(data)), ...(await judgmentFlags(data).catch(() => [])));
   }
   return { flags: flags.sort((a, b) => ms(a.at) - ms(b.at)), names };

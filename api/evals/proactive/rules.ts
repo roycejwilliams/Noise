@@ -377,6 +377,16 @@ check("no follow-up line has an em dash or exclamation", [...OFFER_FOLLOWUP_MANY
     check("the send re-checks with the same rule and ledgers extras exempt", (pr2.match(/!\(answering && QUOTA_CHECKS\.has\(k\.name\)\)/g) ?? []).length === 2 && /sendIsExempt\(c, extras\.map\(\(e\) => e\.candidate\), opts\.ignorePacing === true\)/.test(pr2) && /VALUES \(\$1, \$2, \$3, \$4, \$5, \$6, true\) ON CONFLICT/.test(pr2));
     check("a stale answer is archived silently (no text), the pick and every sibling re-checked", /if \(!r\.relevant\) \{\s*if \(!opts\.dryRun\) await dropCandidate\(registry, c, "skipped", `stale: \$\{r\.why\}`\);[\s\S]{0,400}return;/.test(pr2) && /needsRelevanceCheck\(sib, state\.now\)/.test(pr2) && (pr2.match(/await settleRelevance\((c|sib), r\)/g) ?? []).length === 2);
   }
+  {
+    // One open follow-up per ask (2026-10-02).
+    const ci = { type: "ask_checkin", payload: { askId: "a1" } };
+    check("a check-in or time-frame follow-up with an ask is keyed to it; other types and the profile aren't", P.followUpAskId(ci) === "a1" && P.followUpAskId({ type: "window_followup", payload: { askId: "a1" } }) === "a1" && P.followUpAskId({ type: "event_offer", payload: { askId: "a1" } }) === null && P.followUpAskId({ type: "ask_checkin", payload: { askId: "profile" } }) === null && P.followUpAskId({ type: "window_followup", payload: {} }) === null);
+    const merged = P.mergeIntoFollowUp({ label: "this week", asked: "3 founder events" }, { type: "window_followup", summary: "Ask how the week went" });
+    check("merging keeps the open follow-up as it was and notes what the new one was about, once", merged.label === "this week" && merged.also?.length === 1 && P.mergeIntoFollowUp(merged, { type: "window_followup", summary: "Ask how the week went" }).also.length === 1);
+    const pr3 = readFileSync(new URL("../../src/harness/proactive.ts", import.meta.url), "utf8");
+    const fu = readFileSync(new URL("../../src/services/followUps.ts", import.meta.url), "utf8");
+    check("both paths merge by ask: the queue and Co's follow-up tasks", /const askId = followUpAskId\(input\);[\s\S]{0,600}payload->>'askId' = \$3 AND target_key <> \$4/.test(pr3) && /followUpAskId\(input\)[\s\S]{0,500}followup->'payload'->>'askId' = \$3 AND target_key <> \$4/.test(fu));
+  }
   check("principles, not quoted phrasings, and a greeting is guidance, not a veto", !/"the event"|"someone cool"|"Hey Sam,"/.test(P.PROACTIVE_RULES) && /a greeting is fine when it's natural, never a formula/.test(P.PROACTIVE_RULES) && !P.checkDraft("Hey Maya, how was the Climate Founders Mixer?", { maxSentences: 2 }).some((c: any) => !c.pass));
   check("stacked questions are still caught", P.checkDraft("How was the mixer. Did you meet anyone. Want to call this week?", { maxSentences: 2 }).some((c: any) => c.name === "draft_one_question" && !c.pass));
 }
