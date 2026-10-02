@@ -91,6 +91,11 @@ type Scenario = {
     firstType?: ProactiveType;
     noSendBefore?: string;
     neverTypes?: ProactiveType[];
+    // Heavy use (2026-10-02): the queue stays bounded and discovery still gets turns.
+    maxPending?: number;
+    discoveryAtLeast?: number;
+    // Answers (by this file's own rule) that expired without ever going out.
+    maxExpiredAnswers?: number;
   };
   // history only: what actually went out before the harness
   historicalSends?: { at: string; type: string; target: string; topic?: string }[];
@@ -98,7 +103,11 @@ type Scenario = {
 
 type SimSend = { at: Date; type: ProactiveType; target: string; topic: string; payload?: Record<string, unknown> };
 
+// Queue size over the run, for maxPending.
+const queueStats = new Map<string, { max: number; end: number; expiredAnswers: number }>();
+
 function simulate(sc: Scenario): SimSend[] {
+  queueStats.delete(sc.id);
   const start = new Date(sc.start).getTime();
   const end = new Date(sc.end).getTime();
   const sends: SimSend[] = [];
@@ -137,10 +146,17 @@ function simulate(sc: Scenario): SimSend[] {
     }
     for (const c of pending.values()) {
       if (c.expiresAt && c.expiresAt.getTime() <= t) {
+        if (answersThem(c)) {
+          const q = queueStats.get(sc.id) ?? { max: 0, end: 0, expiredAnswers: 0 };
+          queueStats.set(sc.id, { ...q, expiredAnswers: q.expiredAnswers + 1 });
+        }
         decided.add(c.targetKey);
         pending.delete(c.targetKey);
       }
     }
+    const due = [...pending.values()].filter((c) => c.dueAt.getTime() <= t).length;
+    const q = queueStats.get(sc.id) ?? { max: 0, end: 0, expiredAnswers: 0 };
+    queueStats.set(sc.id, { ...q, max: Math.max(q.max, due), end: due });
     const ev = evaluateCandidates({ now, timezone: sc.timezone, optedOut: false, candidates: [...pending.values()], sends: ledger, lastInboundAt, needsCare: sc.needsCare });
     const pick = codePick(ev.eligible);
     if (!pick) continue;
@@ -218,6 +234,11 @@ function scoreScenario(sc: Scenario, sends: SimSend[]): CaseScore {
   if (e.firstType && sends[0]?.type !== e.firstType) hard.push(`expected first send ${e.firstType}, got ${sends[0]?.type ?? "none"}`);
   if (e.noSendBefore && sends.some((s) => s.at < new Date(e.noSendBefore!))) hard.push(`sent before ${e.noSendBefore}`);
   for (const t of e.neverTypes ?? []) if (sends.some((s) => s.type === t)) hard.push(`sent ${t}, which should have been blocked`);
+  const q = queueStats.get(sc.id);
+  if (e.maxPending !== undefined && q && q.max > e.maxPending) hard.push(`queue grew to ${q.max} ready items (limit ${e.maxPending}; ${q.end} at the end)`);
+  if (e.maxExpiredAnswers !== undefined && q && q.expiredAnswers > e.maxExpiredAnswers) hard.push(`${q.expiredAnswers} answer(s) expired without going out (limit ${e.maxExpiredAnswers})`);
+  const discovery = sends.filter((s) => !answersThem(s)).length;
+  if (e.discoveryAtLeast !== undefined && discovery < e.discoveryAtLeast) hard.push(`discovery got ${discovery} turn(s), expected at least ${e.discoveryAtLeast}`);
   const soft = e.minSends !== undefined ? [{ name: "delivers_expected_minimum", ok: sends.length >= e.minSends }] : [];
   return { hard, soft };
 }

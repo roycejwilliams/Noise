@@ -377,6 +377,25 @@ check("no follow-up line has an em dash or exclamation", [...OFFER_FOLLOWUP_MANY
     check("the send re-checks with the same rule and ledgers extras exempt", (pr2.match(/!\(answering && QUOTA_CHECKS\.has\(k\.name\)\)/g) ?? []).length === 2 && /sendIsExempt\(c, extras\.map\(\(e\) => e\.candidate\), opts\.ignorePacing === true\)/.test(pr2) && /VALUES \(\$1, \$2, \$3, \$4, \$5, \$6, true\) ON CONFLICT/.test(pr2));
     check("a stale answer is archived silently (no text), the pick and every sibling re-checked", /if \(!r\.relevant\) \{\s*if \(!opts\.dryRun\) await dropCandidate\(registry, c, "skipped", `stale: \$\{r\.why\}`\);[\s\S]{0,400}return;/.test(pr2) && /needsRelevanceCheck\(sib, state\.now\)/.test(pr2) && (pr2.match(/await settleRelevance\((c|sib), r\)/g) ?? []).length === 2);
   }
+  {
+    // One open follow-up per ask (Royce, 2026-10-02). Producers already hold
+    // it, so this pins them rather than merging after the fact (review of
+    // #56: a merge here would be dead code that could lose a follow-up).
+    // A new producer of either type fails here until it's keyed the same way.
+    const { readdirSync, statSync } = await import("fs");
+    const { join } = await import("path");
+    const root = new URL("../../src", import.meta.url).pathname;
+    const walk = (d: string): string[] => readdirSync(d).flatMap((f) => (statSync(join(d, f)).isDirectory() ? walk(join(d, f)) : f.endsWith(".ts") ? [join(d, f)] : []));
+    const producers = walk(root)
+      .filter((f) => /type: "(ask_checkin|window_followup)"/.test(readFileSync(f, "utf8")))
+      .map((f) => f.slice(root.length + 1))
+      .sort();
+    check("follow-ups about an ask come from exactly two producers (ask check-in cron, commitment threads)", producers.join() === "harness/memberThreads.ts,jobs/index.ts");
+    const jobs = readFileSync(join(root, "jobs/index.ts"), "utf8");
+    const threads = readFileSync(join(root, "harness/memberThreads.ts"), "utf8");
+    check("an ask check-in is keyed to its ask, and a new one only queues once the last was sent or dropped", /targetKey: `ask_checkin:\$\{row\.ask_id\}:\$\{row\.checkin_count \+ 1\}`/.test(jobs) && /COALESCE\(ac\.last_checked_at, ac\.created_at\) <= NOW\(\) - INTERVAL '7 days'/.test(jobs));
+    check("a commitment follow-up is keyed to its thread, one per thread", /type: "window_followup",\s*targetKey: `thread:\$\{threadId\}`/.test(threads));
+  }
   check("principles, not quoted phrasings, and a greeting is guidance, not a veto", !/"the event"|"someone cool"|"Hey Sam,"/.test(P.PROACTIVE_RULES) && /a greeting is fine when it's natural, never a formula/.test(P.PROACTIVE_RULES) && !P.checkDraft("Hey Maya, how was the Climate Founders Mixer?", { maxSentences: 2 }).some((c: any) => !c.pass));
   check("stacked questions are still caught", P.checkDraft("How was the mixer. Did you meet anyone. Want to call this week?", { maxSentences: 2 }).some((c: any) => c.name === "draft_one_question" && !c.pass));
 }
