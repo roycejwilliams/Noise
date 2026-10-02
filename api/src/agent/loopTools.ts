@@ -140,8 +140,16 @@ export function loopTools(
         queries: z.array(z.string()).min(1).max(3).describe("1 to 3 short searches, 3 to 7 words each, each a different angle; they run at the same time."),
         sites: z.array(z.string()).optional().describe("Sites where this kind of thing is listed, e.g. peerspace.com, thebash.com, lu.ma."),
         whileLooking: z.string().optional().describe("Only on your first search, if it'll take a moment: a few words to them, in your own voice."),
+        theirs: z
+          .object({ what: z.string().optional(), city: z.string().optional(), area: z.string().optional(), when: z.string().optional(), headcount: z.number().optional(), budget: z.number().optional(), hours: z.number().optional() })
+          .optional()
+          .describe("What they've asked for so far (what, place, date, headcount, budget in dollars, hours): saved to your working notes, so the next text picks up from here."),
       }),
-      execute: async ({ queries, sites, whileLooking }) => {
+      execute: async ({ queries, sites, whileLooking, theirs }) => {
+        // Their constraints go into the notes with the search (2026-10-01 next-live run:
+        // turn one's 120 people, $3k and 4 hours were lost in 2 of 4 runs when no updateNotes followed).
+        const saved = Object.fromEntries(Object.entries(theirs ?? {}).filter(([, v]) => v !== undefined && v !== null && v !== ""));
+        if (Object.keys(saved).length && !ctx.stubSearch) await remember(saved as Partial<SearchIntent>);
         if (ctx.stubSearch) {
           receipt(`Searched the web just now (${queries.map((q) => `"${q}"`).join(", ")}): nothing held up on its own page.`);
           return { ...STUB, results: [] };

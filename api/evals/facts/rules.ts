@@ -336,5 +336,27 @@ check("the record starts filled from what was already logged", /backfillCoAction
   const ni = src("services/networkIntroNudge.ts");
   check("5: 'introduced' and 'declined' survive a repeated yes; only the call that marks it introduced sends", /WHEN network_introductions\.status IN \('introduced', 'declined'\) THEN network_introductions\.status/.test(ni) && /AND status <> 'introduced' RETURNING 1/.test(ni) && /if \(claimed === false\) return/.test(ni) && /if \(rows\[0\]\?\.status === "introduced"\)/.test(ni));
 }
+// ------------------------------------------------ second pass (2026-10-01)
+{
+  const I = await import("../../src/harness/intake.js");
+  const TW = await import("../../src/services/taskWeb.js");
+  const TR = await import("../../src/services/tieredRecommendation.js");
+  const RG4 = await import("../../src/harness/replyGrounding.js");
+  // A. The known name is first + last, so the email turn keeps "Rivera".
+  check("A: a saved first + last name reads back whole", I.knownNameOf({ first_name: "Sam", last_name: "Rivera" }) === "Sam Rivera" && I.knownNameOf({ first_name: "Sam", last_name: "" }) === "Sam" && I.knownNameOf({ first_name: "", last_name: "" }) === null);
+  const d = I.decideIntake({ userId: "u", knownName: I.knownNameOf({ first_name: "Sam", last_name: "Rivera" }), knownEmail: null, partialEmail: null, retries: 0, lastCoLine: null } as any, { full_name: null, email: "sam.rivera@co.invalid" } as any, { emailTakenByOtherAccount: false, replyText: "sam.rivera@co.invalid" });
+  check("A: name then email captures the full name", d.action === "capture" && d.name === "Sam Rivera", d as any);
+  // B. A web search carries their constraints into the notes.
+  const lt = src("agent/loopTools.ts");
+  check("B: webSearch takes what they asked for and saves it with the search", /theirs: z\s*\.object\(\{ what: z\.string\(\)\.optional\(\), city/.test(lt) && /if \(Object\.keys\(saved\)\.length && !ctx\.stubSearch\) await remember\(saved/.test(lt));
+  // C. A name with nothing verified isn't a find.
+  const r = TW.withVerifiedFacts([{ name: "Brderless", url: "https://x.invalid", official: true, facts: [], date: null, deadline: null }, { name: "Founder Feast", url: "https://y.invalid", official: true, facts: ["5 founders, Thursdays"], date: null, deadline: null }] as any);
+  check("C: zero-facts results are dropped with a reason, facts kept", r.kept.length === 1 && r.kept[0].name === "Founder Feast" && r.dropped.length === 1 && /nothing about it was verified/.test(r.dropped[0].why), r as any);
+  // D. The weekday comes from the date.
+  check("D: an event line carries the real weekday for its date", TR.eventLine("Co Founders Supper", "2026-10-02", "San Francisco") === "Co Founders Supper, Friday, October 2 (2026-10-02), San Francisco" && TR.eventLine("X", null, null) === "X, ");
+  // E. Crowd claims about who'll be there.
+  for (const t of ["Climate Founders Dinner on Oct 3, which is exactly the room you're asking about.", "A room full of exactly who you're asking about.", "That's your crowd."]) check(`E: crowd claim caught: "${t.slice(0, 40)}…"`, TW.unbackedClaims(t, "Climate Founders Dinner, Friday, October 3, San Francisco").length > 0 || RG4.crowdClaim(t));
+  check("E: an honest caption isn't caught", TW.unbackedClaims("Climate Founders Dinner, Oct 3 in SF, small and seated.", "Climate Founders Dinner, Friday, October 3, San Francisco").length === 0 && !RG4.crowdClaim("Climate Founders Dinner, Oct 3 in SF, small and seated."));
+}
 console.log(`facts rules: ${total - failed}/${total} passed`);
 if (failed) process.exitCode = 1;
