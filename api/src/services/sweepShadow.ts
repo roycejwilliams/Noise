@@ -53,8 +53,9 @@ export function buildShadowPool(raw: RawCandidate[], today: string, askNumber: M
 const dateOf = (m: any): string | null => (m?.event_date ? String(m.event_date).slice(0, 10) : m?.deadline ? String(m.deadline).slice(0, 10) : null);
 
 // Pure: what the thing's own record says, for the prompt. Events carry a
-// structured EventDetails (venue, time, hosts, price, sold out, description);
-// openings carry the source post's text (eventDetails.ts). The finder's own
+// structured EventDetails in `details` (venue, time, hosts, price, sold out,
+// description); openings carry the source post's text in `opportunity`
+// (tieredRecommendation.ts MatchExtras, eventDetails.ts). The finder's own
 // "why it fits" is left out on purpose: Co judges fresh. (Review of #57: only
 // plain-string fields were read, so events reached the model as a name.)
 export function describeMatch(m: any): string | null {
@@ -71,10 +72,13 @@ export function describeMatch(m: any): string | null {
     if (Array.isArray(d.hosts) && d.hosts.length) parts.push(`hosted by ${d.hosts.slice(0, 3).join(", ")}`);
     if (d.price) parts.push(String(d.price));
     if (typeof d.guestCount === "number") parts.push(`${d.guestCount} going`);
-    if (d.postText) parts.push(String(d.postText));
     if (d.description) parts.push(String(d.description));
   } else if (typeof m?.details === "string") parts.push(m.details);
-  for (const k of ["evidence", "category"]) if (typeof m?.[k] === "string" && m[k].trim()) parts.push(m[k]);
+  const post = typeof m?.opportunity?.postText === "string" ? m.opportunity.postText.trim() : "";
+  if (post) parts.push(post);
+  // evidence is often the same text the post was filled from; don't say it twice.
+  if (typeof m?.evidence === "string" && m.evidence.trim() && m.evidence.trim() !== post) parts.push(m.evidence);
+  if (typeof m?.category === "string" && m.category.trim()) parts.push(m.category);
   if (!d?.city && typeof m?.city === "string") parts.push(m.city);
   if (m?.url) parts.push(`(${String(m.url).replace(/^https?:\/\//, "").split("/")[0]})`);
   return parts.length ? parts.join("; ").replace(/\s+/g, " ").slice(0, 500) : null;

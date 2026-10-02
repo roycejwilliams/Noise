@@ -135,15 +135,19 @@ export function jsonBlocks(text: string): string[] {
 // list, so a note before or after it (even one with braces) can't lose the
 // day (review of #57: a greedy match did).
 export function parseVerdicts(text: string): Verdict[] | null {
+  // From each opening brace in turn, so a stray "{" before the JSON (which
+  // never closes) can't hide it.
   let j: any = null;
-  for (const block of jsonBlocks(text)) {
-    try {
-      const parsed = JSON.parse(block);
-      if (Array.isArray(parsed?.verdicts)) {
-        j = parsed;
-        break;
-      }
-    } catch {}
+  for (let at = text.indexOf("{"); at !== -1 && !j; at = text.indexOf("{", at + 1)) {
+    for (const block of jsonBlocks(text.slice(at))) {
+      try {
+        const parsed = JSON.parse(block);
+        if (Array.isArray(parsed?.verdicts)) {
+          j = parsed;
+          break;
+        }
+      } catch {}
+    }
   }
   if (!j) return null;
   const out: Verdict[] = [];
