@@ -72,6 +72,7 @@ ${o.recent || "(none)"}
 Do the next real step with your tools (search for events and opportunities, webSearch for anything else such as venues, vendors, people or prices, readPage), and write down what you learned with note. When you finish a step, call note with stepDone set to that step's exact text. Only mark a step done when you actually did it; closing a task doesn't finish its steps.
 Then decide:
 - If they've said they don't need it anymore, found it themselves, or it's done: finish it (and tellThem only if a short close-out helps).
+- Text only about this goal. Their other goals have their own tasks, so never start, promise or report work on another goal here.
 - Text them (tellThem) only when there's something real to tell or a question only they can answer, never just to say you're still working on it. Only verified results can be told.
 - Otherwise schedule your next look (scheduleNext): pick the time that makes sense for this (before a deadline, after a date they gave, a few days for things that change slowly), and write what you'll do then.
 You must end with scheduleNext or finish. Never make up results: only what your tools returned.`;
@@ -79,8 +80,43 @@ You must end with scheduleNext or finish. Never make up results: only what your 
 
 type Found = { name: string; url: string | null; facts: string[]; tier: number };
 
+// Their newest lines in the thread ("User said: …"), oldest first.
+export function newestMemberLines(recent: string, n = 3): string[] {
+  return recent.split("\n").map((l) => l.match(/^\s*User said:\s*(.+)$/i)?.[1]?.trim() ?? "").filter(Boolean).slice(-n);
+}
+
+// Did they say this goal is done (booked it, found it themselves, no longer
+// need it)? A model read, held to their actual words: the quote must be in
+// what they said (2026-10-01 next-live run: "we booked Wave" left the venue
+// task open 3 of 4 times, and it texted about a different goal).
+export function quoteIsTheirs(quote: string | null | undefined, lines: string[]): boolean {
+  const q = (quote ?? "").trim().toLowerCase();
+  return q.length >= 3 && lines.some((l) => l.toLowerCase().includes(q));
+}
+export async function memberSaysGoalDone(goal: string, recent: string): Promise<{ done: boolean; quote: string | null }> {
+  const lines = newestMemberLines(recent);
+  if (!lines.length) return { done: false, quote: null };
+  const { text } = await generateText({
+    model: anthropic(MODELS.haiku),
+    maxOutputTokens: 200,
+    experimental_telemetry: { isEnabled: true, functionId: "taskTurn.goalDone" },
+    prompt: `Co is working on this for a member: "${goal}".\nTheir newest messages, oldest first:\n${lines.map((l) => `- ${l}`).join("\n")}\n\nDid they say THIS goal is done, handled themselves (booked it, found it, sorted it), or no longer wanted? Only this goal: a different goal they mention doesn't count. Return ONLY JSON: {"done": true|false, "quote": "their exact words that say so, or null"}.`,
+  });
+  const m = text.match(/\{[\s\S]*\}/);
+  let j: any = null;
+  try { j = m ? JSON.parse(m[0]) : null; } catch {}
+  const done = j?.done === true && quoteIsTheirs(j?.quote, lines);
+  return { done, quote: done ? String(j.quote) : null };
+}
+
 export async function runTaskTurnWith(task: CoTask, deps: TaskTurnDeps): Promise<{ action: string; did: string[]; texts: string[]; final: boolean }> {
   const final = isFinalCheck(task, deps.now());
+  // They already said it's done: close it before any work or text.
+  const doneByThem = await memberSaysGoalDone(task.goal, deps.recent).catch(() => ({ done: false, quote: null as string | null }));
+  if (doneByThem.done) {
+    await deps.close("done", `They said so: "${(doneByThem.quote ?? "").slice(0, 200)}"`);
+    return { action: "finished", did: [`closed: they said "${(doneByThem.quote ?? "").slice(0, 120)}"`], texts: [], final };
+  }
   const verified: VerifiedResult[] = [];
   const events: Found[] = [];
   const pageFacts: string[] = [];

@@ -153,6 +153,8 @@ export function createConversationTools(ctx: ConversationToolContext) {
       }),
       execute: async ({ message: draft }) => {
         const message = ctx.gate ? await ctx.gate(draft, [...state.sentMessages]) : draft;
+        // The fact check left nothing to add after what already went out this turn.
+        if (!message.trim() && state.sentMessages.length) return { ok: true, note: "What you already sent this turn is the answer; nothing more went out. Don't add a closing line." };
         if (state.replyCount > 0) await new Promise((resolve) => setTimeout(resolve, 2000));
         // Texted in beats: each paragraph its own message (services/beats.ts).
         // A voice note stays one clip.

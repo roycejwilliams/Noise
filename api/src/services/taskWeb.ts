@@ -297,7 +297,10 @@ export function verifiedFactLines(results: VerifiedResult[]): string[] {
 // 20th Street). Uses the grounding gate's own place detector.
 export function placesBacked(text: string, facts: string): { ok: boolean; missing: string[] } {
   const have = facts.toLowerCase();
-  const missing = placesClaimed(text).filter((p) => !have.includes(p.toLowerCase()) && !["san francisco", "sf", "the city"].includes(p.toLowerCase()));
+  // A place that ends a sentence keeps its full stop in the match ("SF."); compare without it.
+  const missing = placesClaimed(text)
+    .map((p) => p.replace(/[.,;:!?)"'\u2019]+$/, ""))
+    .filter((p) => p && !have.includes(p.toLowerCase()) && !["san francisco", "sf", "the city"].includes(p.toLowerCase()));
   return { ok: missing.length === 0, missing };
 }
 
