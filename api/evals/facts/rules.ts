@@ -307,5 +307,31 @@ check("the record starts filled from what was already logged", /backfillCoAction
   check("call summaries ([Call] lines) and the person model go through the strip; one import", /memberSafe\(userId, ownWordsResult\.rows, names\)/.test(cc) && /const ownWords = safeOwnWords\.map/.test(cc) && /memberSafe\(userId, \[\{ content: rawPicture, memory_type: "person_model" \}\], names\)/.test(cc) && (cc.match(/import\("\.\/memberSafeMemories\.js"\)/g) ?? []).length === 1);
   check("the context summary's recap, last suggestion and recent texts are stripped too", /safeRecap\[0\] \? `Ongoing summary: \$\{safeRecap\[0\]\}`/.test(cc) && /safeRecommendation\[0\] \? `Most recent thing Co suggested/.test(cc) && /Recent texts: \$\{\[\.\.\.safeTexts\]\.reverse\(\)/.test(cc) && !/recapResult\.rows\[0\]\?\.content/.test(cc));
 }
+// ------------------------------------------------ next-live findings (2026-10-01)
+{
+  const RG3 = await import("../../src/harness/replyGrounding.js");
+  const TW = await import("../../src/services/taskWeb.js");
+  const S = await import("../../src/services/sendblue.js");
+  const TT = await import("../../src/services/taskTurn.js");
+  // 1. No "nothing confirmed" after a confirmed send.
+  check("1: stripped to nothing after a send this turn: add nothing, don't deny", RG3.afterStrip({ enough: false, inviteCut: false, sentThisTurn: ["Small Founder Dinner, Oct 3 in SF."] }) === "nothing");
+  check("1: stripped with nothing sent yet: the honest no-answer line", RG3.afterStrip({ enough: false, inviteCut: false, sentThisTurn: [] }) === "honest" && RG3.afterStrip({ enough: true, inviteCut: false, sentThisTurn: ["x"] }) === "cut" && RG3.afterStrip({ enough: false, inviteCut: true, sentThisTurn: ["x"] }) === "invite");
+  check("1: an empty reply after a send goes out as nothing", /if \(!message\.trim\(\) && state\.sentMessages\.length\) return \{ ok: true/.test(src("agent/conversationTools.ts")));
+  // 2. Their "we booked it" closes the task first, held to their words.
+  const recent = "Co replied: Wave and SOMA Loft are the two venues worth a look.\nUser said: found a venue myself, we booked Wave. still need a DJ though";
+  check("2: their newest lines are read", JSON.stringify(TT.newestMemberLines(recent)) === JSON.stringify(["found a venue myself, we booked Wave. still need a DJ though"]));
+  check("2: the closing quote must be their words", TT.quoteIsTheirs("we booked Wave", TT.newestMemberLines(recent)) && !TT.quoteIsTheirs("we cancelled the dinner", TT.newestMemberLines(recent)) && !TT.quoteIsTheirs("", TT.newestMemberLines(recent)));
+  const tt = src("services/taskTurn.ts");
+  check("2: the task turn closes on their word before any work, and texts only about its own goal", tt.indexOf("memberSaysGoalDone(task.goal, deps.recent)") > 0 && tt.indexOf("memberSaysGoalDone(task.goal, deps.recent)") < tt.indexOf("const tell = async") && /Text only about this goal/.test(tt));
+  // 3. Narrating its own sending never goes out.
+  for (const t of ["(already sent the reply above)", "Already sent the reply above.", "(reply sent above)", "[no reply needed]", "I already sent that message above."]) check(`3: blocked as meta: "${t}"`, S.isLeakedMetaCommentary(t));
+  for (const t of ["Sent you the link above, it's Friday at 7.", "No reply needed if you're slammed, just wanted you to have it.", "Two worth a look (both this week): Wave and SOMA Loft."]) check(`3: an honest line still goes out: "${t.slice(0, 40)}…"`, !S.isLeakedMetaCommentary(t));
+  // 4. A place ending a sentence is still that place.
+  check("4: 'SF.' and 'San Francisco.' at a sentence end are backed by the city", TW.placesBacked("Co's own Founders Supper, Oct 2 in SF.", "Co Founders Supper, 2026-10-02, San Francisco").ok && TW.placesBacked("Oct 2 in San Francisco.", "Co Founders Supper, 2026-10-02, San Francisco").ok);
+  check("4: a place the facts don't have is still caught", !TW.placesBacked("It's in Oakland.", "Co Founders Supper, 2026-10-02, San Francisco").ok);
+  // 5. One intro per pair.
+  const ni = src("services/networkIntroNudge.ts");
+  check("5: 'introduced' and 'declined' survive a repeated yes; only the call that marks it introduced sends", /WHEN network_introductions\.status IN \('introduced', 'declined'\) THEN network_introductions\.status/.test(ni) && /AND status <> 'introduced' RETURNING 1/.test(ni) && /if \(claimed === false\) return/.test(ni) && /if \(rows\[0\]\?\.status === "introduced"\)/.test(ni));
+}
 console.log(`facts rules: ${total - failed}/${total} passed`);
 if (failed) process.exitCode = 1;

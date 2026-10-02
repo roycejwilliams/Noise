@@ -75,8 +75,13 @@ export function cleanCoMessage(text: string): string {
 const LEAKED_METACOMMENTARY =
   /\{\{|context_summary|\bsystem prompt\b|\bi don'?t have (any )?(access to|a record of|any record of|context (on|about|for)|information (on|about)) (the |this |our |your |my |any )?(context|conversation history|chat history|message history|previous (conversations?|messages?|chats?)|prior (conversations?|messages?|chats?)|past (conversations?|messages?|chats?)|earlier (conversations?|messages?)|this (person|user|conversation)|the user|who (this|they) (is|are)|memory|memories|tools?|instructions)\b|\bi can'?t (actually )?(send|text) (you )?(a |any )?(texts?|text messages?|sms|imessages?|messages)\b|\bas an ai\b[^.?!]{0,30}\b(can'?t|cannot|don'?t|do not|am unable|'?m unable)\b|\b(a|an) (ai )?language model\b|\bi can only (take|make) calls?\b/i;
 
+// Co narrating its own sending instead of texting (2026-10-01 next-live run:
+// "(already sent the reply above)" came back as a reply). A whole message in
+// brackets or parentheses is a stage direction, never a text.
+const SENDING_NARRATION = /\b(already )?sent (the|my|a|that) (reply|message|response|answer|text)s? (above|earlier|already)\b|\b(the|my) (reply|message|response) above\b|^\s*[([][^()[\]]{0,120}[)\]]\s*$/i;
+
 export function isLeakedMetaCommentary(content: string): boolean {
-  return LEAKED_METACOMMENTARY.test(content) || looksLikeMetaReply(content);
+  return LEAKED_METACOMMENTARY.test(content) || looksLikeMetaReply(content) || SENDING_NARRATION.test(content);
 }
 
 // Sendblue's webhook secret (dashboard: Webhooks, secret; sent back verbatim

@@ -458,17 +458,26 @@ export async function resolveNetworkIntroReply(
     `INSERT INTO network_introductions (person_a_id, person_b_id, status, match_reason, ask_id, ${interestedCol})
      VALUES ($1, $2, $3, $4, $5, NOW())
      ON CONFLICT (person_a_id, person_b_id) DO UPDATE SET
-       ${interestedCol} = NOW(),
-       status = CASE WHEN network_introductions.${otherInterestedCol} IS NOT NULL THEN 'both_interested' ELSE $3 END
+       ${interestedCol} = COALESCE(network_introductions.${interestedCol}, NOW()),
+       status = CASE WHEN network_introductions.status IN ('introduced', 'declined') THEN network_introductions.status
+                     WHEN network_introductions.${otherInterestedCol} IS NOT NULL THEN 'both_interested' ELSE $3 END
      RETURNING status, ${otherInterestedCol} IS NOT NULL AS both_interested`,
     [aId, bId, initialStatus, pending.candidate.match_reason, pending.askId],
   );
   const bothInterested = rows[0]?.both_interested === true;
+  // Already introduced (a repeated reply, a retried turn): no second intro.
+  if (rows[0]?.status === "introduced") {
+    return `\nThey said yes to ${pending.candidate.first_name} again; the two of them were already introduced by email. Acknowledge briefly, don't send or promise another intro.`;
+  }
 
   if (bothInterested) {
-    await pool
-      .query(`UPDATE network_introductions SET status = 'introduced', introduced_at = NOW() WHERE person_a_id = $1 AND person_b_id = $2`, [aId, bId])
-      .catch((err: any) => console.error("resolveNetworkIntroReply: introduced-mark failed (non-fatal):", err?.message ?? err));
+    // Only the call that marks it introduced sends the email (2026-10-01 next-live run: two calls sent two).
+    const claimed = await pool
+      .query(`UPDATE network_introductions SET status = 'introduced', introduced_at = NOW() WHERE person_a_id = $1 AND person_b_id = $2 AND status <> 'introduced' RETURNING 1`, [aId, bId])
+      .then((r) => r.rows.length > 0)
+      // A failed mark keeps the old behaviour (send); only a confirmed "already introduced" stops it.
+      .catch((err: any) => { console.error("resolveNetworkIntroReply: introduced-mark failed (non-fatal):", err?.message ?? err); return null; });
+    if (claimed === false) return `\nThey said yes to ${pending.candidate.first_name}; that intro has already gone out. Acknowledge briefly, don't send or promise another.`;
     const candidateInfo: MatchNudgeCandidate = {
       user_id: pending.candidate.candidate_id,
       first_name: pending.candidate.first_name,

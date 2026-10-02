@@ -1008,6 +1008,13 @@ export type GroundingResult = {
 const MINIMAL_FALLBACK = "Honestly, I'm not sure on that one.";
 
 // The honest "I don't have that" in Co's own words, stating nothing else.
+// What replaces a reply stripped down to almost nothing.
+export function afterStrip(o: { enough: boolean; inviteCut: boolean; sentThisTurn: string[] }): "invite" | "cut" | "nothing" | "honest" {
+  if (o.inviteCut) return "invite";
+  if (o.enough) return "cut";
+  return o.sentThisTurn.some((m) => m.trim()) ? "nothing" : "honest";
+}
+
 async function honestNoAnswer(message: string): Promise<string | null> {
   const { lineInVoice } = await import("../services/voiceLine.js");
   const r = await lineInVoice({
@@ -1185,10 +1192,15 @@ export async function groundReply(
         // 3. The cut, or the minimal honest line. The invite line only helps
         // when an invite claim was what came out (2026-09-20 code review).
         const enough = cut.split(/\s+/).filter(Boolean).length >= 3;
+        // Something already went out this turn (finds, a link): what's left of
+        // the closing line is dropped rather than replaced with "I don't have
+        // an answer", which contradicted the finds just sent (2026-10-01
+        // next-live run: a find went out, then "Nothing confirmed on that yet").
+        const after = afterStrip({ enough, inviteCut, sentThisTurn: src.sentThisTurn ?? [] });
         // Co says it in its own words, claiming nothing (2026-09-28: the one
         // fixed line read as a script); the fixed line is the fallback.
-        const honest = enough || inviteCut ? null : await honestNoAnswer(src.message).catch(() => null);
-        const final = inviteCut ? [enough && !/invite/i.test(cut) ? cut : "", INVITE_FALLBACK].filter(Boolean).join(" ") : enough ? cut : honest ?? MINIMAL_FALLBACK;
+        const honest = after === "honest" ? await honestNoAnswer(src.message).catch(() => null) : null;
+        const final = after === "invite" ? [enough && !/invite/i.test(cut) ? cut : "", INVITE_FALLBACK].filter(Boolean).join(" ") : after === "cut" ? cut : after === "nothing" ? "" : honest ?? MINIMAL_FALLBACK;
         result = { final, outcome: "stripped", checks: first.checks, latencyMs: Date.now() - started, firstCheckMs, stages };
       }
     }
