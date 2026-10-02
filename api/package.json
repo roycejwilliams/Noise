@@ -25,6 +25,7 @@
     "prepare": "git config core.hooksPath .githooks 2>/dev/null || true",
     "issues": "tsx src/scripts/listIssues.ts",
     "broke": "tsx src/scripts/whatBroke.ts",
+    "shadow": "tsx src/scripts/shadowReport.ts",
     "metrics": "tsx src/scripts/metrics.ts",
     "evals:replay": "tsx evals/replay/run.ts"
   },

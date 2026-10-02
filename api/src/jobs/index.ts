@@ -758,6 +758,14 @@ export function registerJobs(io: Server) {
     cron.schedule("0 8 * * *", () => {
       runMorningReview().catch((err: any) => console.error("dev review cron error:", err?.message ?? err));
     }, { timezone: "America/Los_Angeles" });
+    // The shadow week (services/sweepShadow.ts): Co's sweep selection on
+    // Royce's real candidates, after the 9am sweep, sending nothing. Read with
+    // `npm run shadow`.
+    cron.schedule("0 10 * * *", () => {
+      import("../services/sweepShadow.js")
+        .then((m) => m.runSweepShadowAll())
+        .catch((err: any) => console.error("sweep shadow cron error:", err?.message ?? err));
+    }, { timezone: "America/Los_Angeles" });
   }
 
   if (process.env.MONITORING_ENABLED === "true") {
