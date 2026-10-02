@@ -307,7 +307,7 @@ check("the record starts filled from what was already logged", /backfillCoAction
   const pm = src("services/personModel.ts"), tt = src("services/taskTurn.ts"), fu = src("services/followUps.ts");
   check("the sweep's and tasks' person model and the task/follow-up recent texts go through the strip", /memberSafe\(userId, \[\{ content: text, memory_type: "person_model" \}\]\)/.test(pm) && /m\.memberSafe\(userId, convo\)/.test(tt) && /m\.memberSafe\(userId, convo\)/.test(fu) && /m\.personModel\(c\.userId/.test(src("services/sweepFind.ts")) && /m\.personModel\(userId/.test(tt));
   const cc = src("services/callContext.ts");
-  check("call summaries ([Call] lines) and the person model go through the strip; one import", /memberSafe\(userId, ownWordsResult\.rows, names\)/.test(cc) && /const ownWords = safeOwnWords\.map/.test(cc) && /memberSafe\(userId, \[\{ content: rawPicture, memory_type: "person_model" \}\], names\)/.test(cc) && (cc.match(/import\("\.\/memberSafeMemories\.js"\)/g) ?? []).length === 1);
+  check("call summaries ([Call] lines) and the person model go through the strip; one import", /memberSafe\(userId, ownWordsResult\.rows, names\)/.test(cc) && /const ownWords = safeOwnWords\.map/.test(cc) && /memberSafe\(userId, \[\{ content: rawPicture, memory_type: "person_model" \}\], names\)/.test(cc) && (cc.match(/memberSafeMemories\.js/g) ?? []).length === 1);
   check("the context summary's recap, last suggestion and recent texts are stripped too", /safeRecap\[0\] \? `Ongoing summary: \$\{safeRecap\[0\]\}`/.test(cc) && /safeRecommendation\[0\] \? `Most recent thing Co suggested/.test(cc) && /Recent texts: \$\{\[\.\.\.safeTexts\]\.reverse\(\)/.test(cc) && !/recapResult\.rows\[0\]\?\.content/.test(cc));
 }
 // ------------------------------------------------ next-live findings (2026-10-01)
@@ -335,6 +335,31 @@ check("the record starts filled from what was already logged", /backfillCoAction
   // 5. One intro per pair.
   const ni = src("services/networkIntroNudge.ts");
   check("5: 'introduced' and 'declined' survive a repeated yes; only the call that marks it introduced sends", /WHEN network_introductions\.status IN \('introduced', 'declined'\) THEN network_introductions\.status/.test(ni) && /AND status <> 'introduced' RETURNING 1/.test(ni) && /if \(claimed === false\) return/.test(ni) && /if \(rows\[0\]\?\.status === "introduced"\)/.test(ni));
+}
+// ------------------------------------------------ calls and claims (2026-10-01 conversation review)
+{
+  const SB = await import("../../src/services/callReasons.js");
+  const CG = await import("../../src/harness/callGate.js");
+  const CAP = await import("../../src/services/capabilities.js");
+  const LT2 = await import("../../src/agent/loopTools.js");
+  const RG5 = await import("../../src/harness/replyGrounding.js");
+  const r = SB.callNotPlacedReason("Call blocked: Co called 1 min ago (needs 2)");
+  check("calls: a blocked call says it wasn't placed and why, with when it can call", /called them 1 minute ago/.test(r) && /about 1 minute/.test(r), r);
+  check("calls: other reasons are named, never a made-up one", /in progress/.test(SB.callNotPlacedReason("A call is already in progress for this user.")) && /9am to 8pm/.test(SB.callNotPlacedReason("Call blocked: outside 9am-8pm their time")) && /isn't clear/.test(SB.callNotPlacedReason("weird")));
+  const sb = src("routes/sendblue.ts");
+  check("calls: a failed trigger is a not_done fact, never 'Tried to call them'", /for \(const f of callNotPlacedFacts\(callResult\.error\)\) addFact\(replyFacts, f\.kind, f\.text\)/.test(sb) && SB.callNotPlacedFacts("Call blocked: Co called 1 min ago (needs 2)").some((f) => f.kind === "did_before" && /called them 1 minute ago/.test(f.text)) && !/Tried to call them just now/.test(sb));
+  check("calls: Co's \"tried again\" / \"didn't go through\" gets the claim check", RG5.needsClaimCheck("Tried again just now and it didn't go through on my end.") && RG5.needsClaimCheck("Still not going through on my end."));
+  check("calls: a caller's bare \"hello?\" counts as a person for the voicemail decision; a greeting doesn't", CG.isCallerVoice("hello?") && CG.isCallerVoice("yeah who's this") && !CG.isCallerVoice("You've reached Royce, leave a message after the tone") && !CG.isCallerVoice("  "));
+  check("calls: the live AMD check uses any caller voice", /return !!h && \(h\.receivedUserMessage \|\| !!h\.heardCallerVoice\)/.test(src("services/mediaStreamBridge.ts")) && /if \(isCallerVoice\(text\)\) handle\.heardCallerVoice = true/.test(src("services/mediaStreamBridge.ts")));
+  const prevTw = process.env.TWILIO_PHONE_NUMBER;
+  process.env.TWILIO_PHONE_NUMBER = "+14155550176";
+  check("calls: Co gives the real calling number, never 'this same number'", CAP.formatUsNumber("+14155550176") === "(415) 555-0176" && /\(415\) 555-0176/.test(CAP.callLine()) && !/this same number/.test(src("services/capabilities.ts")) && !/from this exact number/.test(sb));
+  process.env.TWILIO_PHONE_NUMBER = "";
+  check("calls: with no number on file Co says so instead of inventing one", /don't make one up/.test(CAP.callLine()));
+  if (prevTw === undefined) delete process.env.TWILIO_PHONE_NUMBER; else process.env.TWILIO_PHONE_NUMBER = prevTw;
+  check("calls: dial attempts don't count as a call in lapse or compaction", /m\.content NOT LIKE 'Co initiated call%'/.test(src("services/membershipLapse.ts")) && (src("services/memoryCompaction.ts").match(/content NOT LIKE 'Co initiated call%'/g) ?? []).length === 2);
+  check("calls: the call context's lessons, threads and sent lines go through the strip", /const sentLines = await strip\(sentDetailLines/.test(src("services/callContext.ts")) && /const lessons = await strip\(/.test(src("services/callContext.ts")) && /const threads = \(await strip\(/.test(src("services/callContext.ts")));
+  check("captions: 'you already looked at…' needs their own words", LT2.captionProblems("Rolling applications, and you already looked at their Member Residency.", "South Park Commons, rolling applications", "can you find me a couple").some((p) => /told you they did/.test(p)) && LT2.captionProblems("Rolling applications, and you already looked at their residency.", "South Park Commons", "I looked at their residency last week").length === 0);
 }
 console.log(`facts rules: ${total - failed}/${total} passed`);
 if (failed) process.exitCode = 1;

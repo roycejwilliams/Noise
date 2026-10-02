@@ -330,6 +330,12 @@ export function isVoicemailGreeting(text: string): boolean {
   return VOICEMAIL_GREETING.test(text);
 }
 
+// A person on the line (any words, "hello?" included), not a recording.
+export function isCallerVoice(text: string): boolean {
+  const t = text.trim();
+  return /[a-z]/i.test(t) && !VOICEMAIL_GREETING.test(t);
+}
+
 function isSubstantiveUserLine(text: string): boolean {
   const t = text.trim();
   return t.length > 0 && !VOICEMAIL_GREETING.test(t) && !FILLER_ONLY.test(t);

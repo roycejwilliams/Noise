@@ -39,6 +39,20 @@ export type Ability = {
   teamOnly?: boolean;
 };
 
+// Co's calling line is a different number from the one it texts from
+// (Twilio vs Sendblue). Members are told the real calling number, never
+// the number they text (2026-10-01 call review).
+export function formatUsNumber(e164: string | null | undefined): string | null {
+  const d = String(e164 ?? "").replace(/\D/g, "").replace(/^1(?=\d{10}$)/, "");
+  return d.length === 10 ? `(${d.slice(0, 3)}) ${d.slice(3, 6)}-${d.slice(6)}` : null;
+}
+export function callLine(): string {
+  const n = formatUsNumber(process.env.TWILIO_PHONE_NUMBER);
+  return n
+    ? `they call Co at ${n}, which is Co's calling line, a different number from the one Co texts them from (calling the texting number doesn't reach Co). Give that number when they ask how to call.`
+    : "they can call Co's calling line, which is a different number from the one Co texts from; Co doesn't have that number to hand right now, so don't make one up.";
+}
+
 export const ABILITIES: Ability[] = [
   {
     id: "reply",
@@ -228,7 +242,7 @@ export const ABILITIES: Ability[] = [
     use: "Send the latest list of what's new in Co (new features, changes), when they ask what's new with Co, what changed, or for updates on Co itself. The list changes as the team ships, so you can't know what's on it without sending it: check it rather than saying nothing's new. Not for news about their own life or an event. It goes out verbatim as its own text.",
   },
   // Handled by their own steps for now.
-  { id: "calls", confirm: "irreversible", can: 'Co can call them right now when they ask ("call me"), and can schedule a call for a specific later time. Calling is real and working. They can also call Co from this same number. What Co can\'t do is call other people for them. So when listing what Co can\'t do, say it can\'t call other people for them; calling them is something it does.' },
+  { id: "calls", confirm: "irreversible", can: `Co can call them right now when they ask ("call me"), and can schedule a call for a specific later time. Calling is real and working. They can also call Co: ${callLine()} What Co can't do is call other people for them. So when listing what Co can't do, say it can't call other people for them; calling them is something it does.` },
   {
     id: "invites",
     can: "Members can invite friends to Co: 5 invites each, and one only counts once the friend joins. Co can text them an invite link to forward.",

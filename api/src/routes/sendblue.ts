@@ -66,6 +66,8 @@ import { routerGateChecks } from "../harness/routerChecks.js";
 import { linkForReply, linksIn, mergeEarlierLink, type LinkRead } from "../services/linkReader.js";
 import { addEventFacts, addFact, addHint, addInstruction, gatherReplyFacts } from "../harness/replyGrounding.js";
 import { runConversationReplyAgent, filterRelevantMemories, CALL_OFFER_EXPIRY_DAYS } from "../agent/conversationReply.js";
+import { callLine } from "../services/capabilities.js";
+import { callNotPlacedReason, callNotPlacedFacts } from "../services/callReasons.js";
 import { memberSafe, introFacts } from "../services/memberSafeMemories.js";
 import { triggerCallForUser } from "../services/callTrigger.js";
 import sendblue, { blockSender, cleanCoMessage, markRead, sendReaction, webhookSecretMatches, sendingAs } from "../services/sendblue.js";
@@ -2220,7 +2222,7 @@ Return ONLY valid JSON, no preamble: {"date": "YYYY-MM-DD or null", "time": "HH:
         // misread as explicit_request would place real outbound Twilio
         // calls to people who were just asking how the feature works.
         if (callAction === "asks_about_calling") {
-          addInstruction(replyFacts, `They just asked a plain question about how calling works — answer it directly and honestly, don't place a call, and don't say or imply a call is happening. The true answer: Co can call them — by text right now ("call me") or scheduled for later — and that's real and live. They can also call Co directly anytime, from this exact number — that connects to a real, live conversation with Co. Refer to it only as "this number" or "this exact number," never write out or guess actual digits — you are not given the real number here, and a specific-looking one you invent will be wrong and won't work. Only mention this second part if it's actually what they're asking about; don't volunteer it unprompted.`);
+          addInstruction(replyFacts, `They just asked a plain question about how calling works — answer it directly and honestly, don't place a call, and don't say or imply a call is happening. The true answer: Co can call them — by text right now ("call me") or scheduled for later — and that's real and live. They can also call Co directly anytime: ${callLine()} Never write out any other digits. Only mention this second part if it's actually what they're asking about; don't volunteer it unprompted.`);
         }
 
         // Burst limiter — separate from, and in addition to, the topic-aware
@@ -2265,19 +2267,15 @@ Return ONLY valid JSON, no preamble: {"date": "YYYY-MM-DD or null", "time": "HH:
           console.error(`sendblue: call trigger failed for user ${user.id} (non-fatal, falling through to normal reply):`, callResult.error);
           // Falls through to the normal reply flow below on failure — a
           // failed dial attempt should never leave the conversation silent.
-          const alreadyInProgress = callResult.error === "A call is already in progress for this user.";
-          addFact(
-            replyFacts,
-            "did_this_turn",
-            alreadyInProgress
-              ? "Tried to call them just now; it didn't go through because a call already shows as in progress for them."
-              : "Tried to call them just now; the call attempt failed. The reason isn't known.",
-          );
+          // Every failure here is a call that was never placed: the gate or a
+          // precondition stopped it before dialing. Co says that, with the
+          // real reason (2026-10-01: blocked as "called 1 min ago", Co said
+          // "Tried again just now and it didn't go through").
+          const why = callNotPlacedReason(callResult.error);
+          for (const f of callNotPlacedFacts(callResult.error)) addFact(replyFacts, f.kind, f.text);
           addInstruction(
             replyFacts,
-            alreadyInProgress
-              ? `They just asked you to call them, and Co genuinely can (this is real and live) — but a call attempt just failed because a call is already showing as in progress for them. Be honest that something's not letting the call go through right now and you're not sure why, rather than saying calling isn't possible at all. Don't place a call, and don't say "calling you now."`
-              : `They just asked you to call them, and Co genuinely can (this is real and live) — but the call attempt just failed. Be honest that something went wrong placing it, without inventing a specific reason you don't actually have, and never claim calling isn't possible. Don't place a call, and don't say "calling you now."`,
+            `They just asked you to call them. Co genuinely can call (this is real and live), but no call went out this time: ${why} Say plainly that you didn't call and why, in a line, and what they can do (text "call me" again once it's allowed). Never say you tried or that it didn't go through, don't promise to call back on your own, and don't say "calling you now."`,
           );
         }
 
