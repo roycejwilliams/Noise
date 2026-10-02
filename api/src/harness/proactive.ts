@@ -300,10 +300,7 @@ export function userLevelChecks(state: Omit<PickState, "candidates">, opts: { sk
     state.now.getTime() - lastCounted.sentAt.getTime() < unansweredPauseFor(unansweredCount) * HOUR &&
     unansweredSince(lastCounted, state.lastInboundAt);
 
-  const lastAny = state.sends
-    .filter((s) => !s.exempt && s.sentAt <= state.now)
-    .sort((a, b) => b.sentAt.getTime() - a.sentAt.getTime())[0];
-  const spacedOk = !lastAny || state.now.getTime() - lastAny.sentAt.getTime() >= RULES.minHoursBetweenTexts * HOUR;
+  const spacing = spacingCheck(state);
   const checks: GateCheck[] = [{ name: "not_opted_out", pass: !state.optedOut, reason: "they opted out of texts" }];
   if (!opts.skipHours) {
     checks.push({
@@ -316,11 +313,7 @@ export function userLevelChecks(state: Omit<PickState, "candidates">, opts: { sk
     checks.push(
       { name: "daily_cap", pass: today < maxDay, reason: `${today} ${lane}-lane proactive text(s) already today` },
       { name: "weekly_cap", pass: week < maxWeek, reason: `${week} ${lane}-lane proactive texts in the last 7 days` },
-      {
-        name: "spacing",
-        pass: spacedOk,
-        reason: lastAny ? `a ${lastAny.type} went out less than ${RULES.minHoursBetweenTexts}h ago` : undefined,
-      },
+      spacing,
       {
         name: "unanswered_pause",
         pass: !pauseActive,
@@ -331,7 +324,30 @@ export function userLevelChecks(state: Omit<PickState, "candidates">, opts: { sk
   return checks;
 }
 
-export function candidateChecks(c: Candidate, state: Pick<PickState, "now" | "sends" | "lastInboundAt" | "needsCare" | "safetyHold">): GateCheck[] {
+// Spacing between any two texts Co sends first, whatever their lane, answers
+// included even though they don't count against the caps (Royce, 2026-10-02:
+// "uncapped = no weekly quota, not no pacing"). Counting only capped texts let
+// a profile offer land 15 minutes after a debrief (review of #55). Notices
+// (an event change, a reminder they set, a task update) still don't space:
+// they're ledgered exempt and aren't answer types. An exempt event offer is an
+// answer or rode along in a counted text, so it spaces either way.
+function spaces(s: SendRecord): boolean {
+  return !s.exempt || ANSWERING_TYPES.has(s.type) || s.type === "event_offer";
+}
+export function spacingCheck(state: Pick<PickState, "now" | "sends">): GateCheck {
+  const lastAny = state.sends
+    .filter((s) => spaces(s) && s.sentAt <= state.now)
+    .sort((a, b) => b.sentAt.getTime() - a.sentAt.getTime())[0];
+  return {
+    name: "spacing",
+    pass: !lastAny || state.now.getTime() - lastAny.sentAt.getTime() >= RULES.minHoursBetweenTexts * HOUR,
+    reason: lastAny ? `a ${lastAny.type} went out less than ${RULES.minHoursBetweenTexts}h ago` : undefined,
+  };
+}
+
+// answering: a reply (isAnswering) doesn't wait on the last text of its type
+// (two time frames they named are two replies); the same topic still waits.
+export function candidateChecks(c: Candidate, state: Pick<PickState, "now" | "sends" | "lastInboundAt" | "needsCare" | "safetyHold">, opts: { answering?: boolean } = {}): GateCheck[] {
   const policy = TYPE_POLICY[c.type];
   const sameTarget = state.sends.find((s) => s.targetKey === c.targetKey);
   const unansweredTopic = state.sends.find((s) => s.topicKey && s.topicKey === c.topicKey && unansweredSince(s, state.lastInboundAt));
@@ -352,7 +368,7 @@ export function candidateChecks(c: Candidate, state: Pick<PickState, "now" | "se
       reason: unansweredTopic ? `already asked about ${c.topicKey} and they never replied` : undefined,
     },
   ];
-  if (policy.typeGapDays !== undefined) {
+  if (policy.typeGapDays !== undefined && !opts.answering) {
     checks.push({
       name: "type_gap",
       // The day-after check-in following a safety concern never waits on the last check-in.
@@ -367,6 +383,10 @@ export function candidateChecks(c: Candidate, state: Pick<PickState, "now" | "se
       reason: `${c.topicKey} came up within ${policy.topicGapDays} days`,
     });
   }
+  const tried = Date.parse(String((c.payload as { relevanceTriedAt?: string })?.relevanceTriedAt ?? ""));
+  if (tried && state.now.getTime() - tried < RELEVANCE_RETRY_HOURS * HOUR) {
+    checks.push({ name: "relevance_retry", pass: false, reason: "Co couldn't say if it's still relevant; trying again shortly" });
+  }
   if (state.safetyHold && PROACTIVE_PURPOSE_MAP[c.type] === "offer") {
     checks.push({ name: "safety_hold", pass: false, reason: "they may not have been safe in the last few days; no offers" });
   }
@@ -377,6 +397,33 @@ export function candidateChecks(c: Candidate, state: Pick<PickState, "now" | "se
 }
 
 const PERSON_CHECKS = new Set(["not_opted_out", "local_hours"]);
+// The quota an answer skips. Spacing is not in it: every text keeps it.
+const QUOTA_CHECKS = new Set(["daily_cap", "weekly_cap", "unanswered_pause"]);
+
+// Replies, not broadcasts (Royce, 2026-10-02): anything answering a member's
+// explicit ask, a conversation they're in, or a deadline they care about goes
+// out whenever it's ready: no daily or weekly quota, no unanswered pause, and
+// it isn't counted against the caps. It still keeps 3h spacing from any text
+// Co sent. Only unsolicited discovery ("saw this and thought of you") has a
+// quota. Opt-out, local hours, never-twice, safety and the struggling hold
+// still apply. An answer that's waited over a day is re-checked first
+// (stillRelevant).
+//   - An event offer for an open ask (not from their profile), including a
+//     reminder about one. A reminder or a 30-day resurface of a profile offer
+//     is still discovery: they never asked, and may have ignored it.
+//   - A network tease: always for an open ask (networkIntroNudge.ts).
+//   - Follow-ups on what they said or did: an ask check-in, a time frame they
+//     named, a debrief on an event they went to, a pre-arrival text, the text
+//     after a call they were on.
+// Discovery: profile offers, guest-match nudges. Companion check-ins (advice
+// follow-ups too) keep their own 4-day rhythm and the daily cap, as before.
+const ANSWERING_TYPES = new Set<string>(["network_tease", "ask_checkin", "window_followup", "debrief", "pre_arrival", "post_call"]);
+export function isAnswering(c: Pick<Candidate, "type" | "payload">): boolean {
+  const p = (c.payload ?? {}) as { askId?: string | null; fromProfile?: boolean; again?: boolean };
+  if (ANSWERING_TYPES.has(c.type)) return true;
+  if (c.type === "event_offer") return !!p.askId && p.askId !== "profile" && p.fromProfile !== true && p.again !== true;
+  return false;
+}
 
 export function evaluateCandidates(state: PickState, opts: { ignorePacing?: boolean } = {}): Evaluation {
   // Opt-out and local hours apply to the person; caps and the unanswered
@@ -388,12 +435,23 @@ export function evaluateCandidates(state: PickState, opts: { ignorePacing?: bool
   const userChecks = byLane.other.filter((k) => PERSON_CHECKS.has(k.name));
   const userOk = gate(userChecks).ok;
   const perCandidate = state.candidates.map((candidate) => {
-    const laneChecks = byLane[laneOf(candidate.type)].filter((k) => !PERSON_CHECKS.has(k.name) && !(candidate.type === "companion" && k.name === "weekly_cap"));
-    const checks = [...laneChecks, ...candidateChecks(candidate, state)];
+    const answering = isAnswering(candidate);
+    const laneChecks = byLane[laneOf(candidate.type)].filter(
+      (k) => !PERSON_CHECKS.has(k.name) && !(answering && QUOTA_CHECKS.has(k.name)) && !(candidate.type === "companion" && k.name === "weekly_cap"),
+    );
+    const checks = [...laneChecks, ...candidateChecks(candidate, state, { answering })];
     return { candidate, checks, ok: gate(checks).ok };
   });
   const eligible = userOk ? perCandidate.filter((p) => p.ok).map((p) => p.candidate) : [];
   return { userChecks, userOk, perCandidate, eligible };
+}
+
+// Whether a text stays off the caps. One text counts once however many offers
+// ride in it (the extras are always exempt); it counts at all only when
+// something in it is discovery, so a profile offer riding along with an
+// answer still uses one of the week's discovery sends.
+export function sendIsExempt(primary: Candidate, extras: Candidate[], ignorePacing = false): boolean {
+  return ignorePacing || [primary, ...extras].every(isAnswering);
 }
 
 // Every tier that has something goes out together (2026-09-21): the picked
@@ -671,7 +729,10 @@ export async function enqueueCandidate(input: EnqueueInput): Promise<{ queued: b
         await client.query("ROLLBACK");
         return { queued: false };
       }
-      const payload = input.merge ? input.merge(existing.rows[0].payload, input.payload) : input.payload;
+      const merged = input.merge ? input.merge(existing.rows[0].payload, input.payload) : input.payload;
+      // Co's relevance verdict survives a re-enqueue, so it isn't paid for again.
+      const { relevantAt, relevanceTriedAt } = (existing.rows[0].payload ?? {}) as { relevantAt?: string; relevanceTriedAt?: string };
+      const payload = { ...merged, ...(relevantAt ? { relevantAt } : {}), ...(relevanceTriedAt ? { relevanceTriedAt } : {}) };
       const expiresAt = mergeExpiry(existing.rows[0].expires_at ? new Date(existing.rows[0].expires_at) : null, input.expiresAt ?? null);
       await client.query(
         `UPDATE proactive_candidates
@@ -846,6 +907,79 @@ Return ONLY JSON: {"id": "<one id from the list>", "why": "one short line"}`,
   return { ...fallback, reason: `${fallback.reason} (Co's pick unavailable)` };
 }
 
+// An answer that has waited more than a day is re-read before it goes
+// (Royce, 2026-10-02): if what it answers has passed or been settled, it's
+// archived silently instead of sent late.
+// Waiting is counted from when it was queued. due_at moves (a re-enqueue, a
+// draft that defers), so measuring from it let a long-waiting answer skip the
+// check (re-review of #55). Something queued days ahead of its morning is
+// checked once when it comes due: one extra call, never a missed check. A
+// "still relevant" answer is kept on the candidate for a day, so a draft that
+// skips or defers doesn't pay for it again.
+export const RELEVANCE_RECHECK_HOURS = 24;
+export function needsRelevanceCheck(c: Candidate, now: Date): boolean {
+  if (!isAnswering(c) || now.getTime() - c.createdAt.getTime() <= RELEVANCE_RECHECK_HOURS * HOUR) return false;
+  const checked = Date.parse(String((c.payload as { relevantAt?: string })?.relevantAt ?? ""));
+  return !(checked && now.getTime() - checked < RELEVANCE_RECHECK_HOURS * HOUR);
+}
+// When Co can't say, it sits out this long (relevance_retry) and the next item
+// gets its turn; then it's checked again, never sent unchecked.
+export const RELEVANCE_RETRY_HOURS = 2;
+
+// Records Co's answer on the candidate: relevant is remembered for a day; no
+// answer is stamped so the item sits out without moving its clock.
+async function settleRelevance(c: Candidate, r: { relevant: boolean } | null): Promise<void> {
+  if (r && !r.relevant) return; // dropped by the caller
+  const key = r ? "relevantAt" : "relevanceTriedAt";
+  await pool.query(`UPDATE proactive_candidates SET payload = payload || jsonb_build_object($2::text, NOW()::text), updated_at = NOW() WHERE id = $1`, [c.id, key]).catch(() => {});
+}
+
+export function readRelevance(text: string): { relevant: boolean; why: string } | null {
+  const m = text.match(/\{[\s\S]*\}/);
+  if (!m) return null;
+  try {
+    const j = JSON.parse(m[0]);
+    if (typeof j?.relevant !== "boolean") return null;
+    return { relevant: j.relevant, why: String(j.why ?? "").slice(0, 200) };
+  } catch {
+    return null;
+  }
+}
+
+// Co reads it against the conversation since. null when Co couldn't answer:
+// the caller holds it for the next tick, neither sending nor archiving.
+export async function stillRelevant(c: Candidate, about: { recentConversation: string; now: Date; timezone: string | null }): Promise<{ relevant: boolean; why: string } | null> {
+  const day = (d: Date) => DateTime.fromJSDate(d).setZone(about.timezone ?? "America/Los_Angeles").toFormat("cccc LLL d, h:mm a");
+  try {
+    const { text } = await Promise.race([
+      generateText({
+        model: anthropic(DRAFT_MODEL),
+        maxOutputTokens: 300,
+        experimental_telemetry: { isEnabled: true, functionId: "proactive.stillRelevant" },
+        prompt: `A text Co was going to send this member has been waiting since ${day(c.createdAt)}. It's now ${day(about.now)}.
+
+What it was going to do: [${c.type}] ${c.summary}
+
+Their recent texts with Co (oldest first):
+${about.recentConversation.slice(-2500) || "(none)"}
+
+Is it still relevant? It's stale only if one of these is true:
+- what it's about is over and asking now would read as late (an event or window that ended days ago, a "morning-after" question days after)
+- the conversation since already covered or settled it
+- they said they no longer want it
+Anything else is relevant. Whether now is a good moment, or that they're talking about something else, is decided elsewhere and is never a reason. A date that hasn't come yet is not stale.
+
+Return ONLY JSON: {"relevant": true|false, "why": "one short line"}`,
+      }),
+      new Promise<never>((_, reject) => setTimeout(() => reject(new Error("relevance check timed out")), 15_000)),
+    ]);
+    return readRelevance(text);
+  } catch (err: any) {
+    console.error("proactive: relevance check failed (non-fatal, held):", err?.message ?? err);
+    return null;
+  }
+}
+
 // ---------- sending
 
 // Re-checks everything that could have changed since the gather, holds a
@@ -882,9 +1016,12 @@ async function sendWithLedger(
     const sends = await loadSends(client, person.userId);
     const lastInboundAt = await loadLastInbound(client, person.userId);
     const now = new Date();
+    const answering = isAnswering(c);
     const checks = [
-      ...userLevelChecks({ now, timezone: person.timezone, optedOut: optedOutNow, sends, lastInboundAt }, { lane: laneOf(c.type), ignorePacing: opts.ignorePacing }),
-      ...candidateChecks(c, { now, sends, lastInboundAt }),
+      ...userLevelChecks({ now, timezone: person.timezone, optedOut: optedOutNow, sends, lastInboundAt }, { lane: laneOf(c.type), ignorePacing: opts.ignorePacing }).filter(
+        (k) => !(answering && QUOTA_CHECKS.has(k.name)),
+      ),
+      ...candidateChecks(c, { now, sends, lastInboundAt }, { answering }),
     ];
     const g = gate(checks);
     if (!g.ok) {
@@ -895,7 +1032,7 @@ async function sendWithLedger(
       `INSERT INTO proactive_sends (user_id, type, target_key, topic_key, candidate_id, message, exempt)
        VALUES ($1, $2, $3, $4, $5, $6, $7)
        ON CONFLICT (user_id, target_key) DO NOTHING RETURNING id`,
-      [person.userId, c.type, c.targetKey, c.topicKey, c.id, messages.join("\n\n"), opts.ignorePacing === true],
+      [person.userId, c.type, c.targetKey, c.topicKey, c.id, messages.join("\n\n"), sendIsExempt(c, extras.map((e) => e.candidate), opts.ignorePacing === true)],
     );
     if (!ins.rows[0]) {
       await client.query("ROLLBACK");
@@ -1122,7 +1259,7 @@ export async function recordInRoomSend(userId: string, targetKey: string, messag
 
 // ---------- dispatch
 
-async function dropCandidate(registry: ProactiveRegistry, c: Candidate, status: "skipped" | "expired", reason: string): Promise<void> {
+export async function dropCandidate(registry: ProactiveRegistry, c: Candidate, status: "skipped" | "expired", reason: string): Promise<void> {
   await pool.query(
     `UPDATE proactive_candidates SET status = $2, skip_reason = $3, decided_at = NOW(), updated_at = NOW() WHERE id = $1 AND status = 'pending'`,
     [c.id, status, reason],
@@ -1213,6 +1350,20 @@ export async function dispatchForUser(registry: ProactiveRegistry, userId: strin
   const c = picked.pick;
   const pickChecks = ev.perCandidate.find((p) => p.candidate.id === c.id)?.checks ?? [];
 
+  if (needsRelevanceCheck(c, state.now)) {
+    const r = await stillRelevant(c, { recentConversation: recent, now: state.now, timezone: person.timezone });
+    if (!opts.dryRun) await settleRelevance(c, r);
+    if (!r) {
+      await recordDecision({ layer: 7, decision: "proactive.dailyPick", userId, outcome: "skip", action: `recheck:${c.type}`, proposal: { ...proposal, picked: c.id }, checks: [...ev.userChecks, ...pickChecks], reason: `relevance check unanswered; held ${RELEVANCE_RETRY_HOURS}h` });
+      return;
+    }
+    if (!r.relevant) {
+      if (!opts.dryRun) await dropCandidate(registry, c, "skipped", `stale: ${r.why}`);
+      await recordDecision({ layer: 7, decision: "proactive.dailyPick", userId, outcome: "skip", action: `archive:${c.type}`, proposal: { ...proposal, picked: c.id }, checks: [...ev.userChecks, ...pickChecks], reason: `no longer relevant: ${r.why}` });
+      return;
+    }
+  }
+
   let draft: DraftResult;
   try {
     draft = await feelingForDraft.run(renderEmotionalContext(emotional), () => registry[c.type].draft(c, person));
@@ -1273,6 +1424,15 @@ export async function dispatchForUser(registry: ProactiveRegistry, userId: strin
   if (c.type === "event_offer" && !(c.payload as { reminder?: boolean }).reminder) {
     for (const sib of pickSiblingOffers(c, ev.eligible)) {
       try {
+        if (needsRelevanceCheck(sib, state.now)) {
+          const r = await stillRelevant(sib, { recentConversation: recent, now: state.now, timezone: person.timezone });
+          if (!opts.dryRun) await settleRelevance(sib, r);
+          if (!r) continue;
+          if (!r.relevant) {
+            if (!opts.dryRun) await dropCandidate(registry, sib, "skipped", `stale: ${r.why}`);
+            continue;
+          }
+        }
         const d = await feelingForDraft.run(renderEmotionalContext(emotional), () => registry.event_offer.draft(sib, person));
         if ("skip" in d || "defer" in d) continue;
         const msgs = d.messages.map(capitalizeSentences);

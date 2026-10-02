@@ -71,7 +71,7 @@
     },
     {
       "id": "s04",
-      "about": "throttle storm: 20 surfacing attempts in 7 minutes, nobody replies: one offer, then each lane waits on its own unanswered text (24h after one, 72h after two in a row). The ask check-in still goes, 3h after the offer, not 15 minutes (2026-09-22: an ignored offer no longer pauses a check-in)",
+      "about": "throttle storm: 20 surfacing attempts in 7 minutes, nobody replies: one offer, then each lane waits on its own unanswered text (24h after one, 72h after two in a row). The ask check-in still goes, 3h after the offer, not 15 minutes (2026-09-22: an ignored offer no longer pauses a check-in). Since 2026-10-02 the ask check-in and both network teases are answers to an open ask: no quota or unanswered pause, 3h apart from any text; the profile offers still wait on the room lane.",
       "timezone": "America/Los_Angeles",
       "start": "2026-09-08T15:45:00Z",
       "end": "2026-09-15T06:00:00Z",
@@ -179,7 +179,7 @@
         }
       ],
       "expect": {
-        "sends": 3,
+        "sends": 5,
         "noSendBefore": "2026-09-08T16:00:00Z"
       }
     },
@@ -285,7 +285,7 @@
     },
     {
       "id": "s08",
-      "about": "the time-bound debrief wins over the no-reason companion check-in",
+      "about": "the time-bound debrief goes first; since 2026-10-02 it's an answer and doesn't use the day's slot, so the companion check-in goes too, no sooner than 3h after it",
       "timezone": "America/Los_Angeles",
       "start": "2026-09-15T15:45:00Z",
       "end": "2026-09-15T20:00:00Z",
@@ -303,7 +303,7 @@
         }
       ],
       "expect": {
-        "sends": 1,
+        "sends": 2,
         "firstType": "debrief"
       }
     },
@@ -454,21 +454,21 @@
     },
     {
       "id": "s15",
-      "about": "post-call text that can't go out within 24h is dropped, not sent late",
+      "about": "post-call text that can't go out within its window is dropped, not sent late: it arrives after hours with 12h to live and expires before 9am",
       "timezone": "America/Los_Angeles",
-      "start": "2026-09-15T15:45:00Z",
+      "start": "2026-09-15T03:15:00Z",
       "end": "2026-09-20T06:00:00Z",
       "arrivals": [
         {
-          "at": "2026-09-15T16:00:00Z",
+          "at": "2026-09-15T03:30:00Z",
           "type": "debrief",
           "target": "debrief:evt-1"
         },
         {
-          "at": "2026-09-15T16:00:00Z",
+          "at": "2026-09-15T03:30:00Z",
           "type": "post_call",
           "target": "post_call:c9",
-          "expiresInHours": 24
+          "expiresInHours": 12
         }
       ],
       "expect": {
@@ -769,6 +769,97 @@
         "sends": 3,
         "firstType": "companion"
       }
+    },
+    {
+      "id": "s28",
+      "about": "replies vs. broadcasts (2026-10-02): four profile offers use the room lane's week (each answered). Two offers for an ask they made still go after that, 3h apart; a reminder and a 30-day resurface wait at the cap like any discovery",
+      "timezone": "America/Los_Angeles",
+      "start": "2026-09-28T15:45:00Z",
+      "end": "2026-10-03T03:00:00Z",
+      "exemptSends": [],
+      "arrivals": [
+        {
+          "at": "2026-09-28T17:00:00Z",
+          "type": "event_offer",
+          "target": "event_offer:p1",
+          "payload": {
+            "askId": "profile",
+            "fromProfile": true
+          }
+        },
+        {
+          "at": "2026-09-29T17:00:00Z",
+          "type": "event_offer",
+          "target": "event_offer:p2",
+          "payload": {
+            "askId": "profile",
+            "fromProfile": true
+          }
+        },
+        {
+          "at": "2026-09-30T17:00:00Z",
+          "type": "event_offer",
+          "target": "event_offer:p3",
+          "payload": {
+            "askId": "profile",
+            "fromProfile": true
+          }
+        },
+        {
+          "at": "2026-10-01T17:00:00Z",
+          "type": "event_offer",
+          "target": "event_offer:p4",
+          "payload": {
+            "askId": "profile",
+            "fromProfile": true
+          }
+        },
+        {
+          "at": "2026-10-02T16:00:00Z",
+          "type": "event_offer",
+          "target": "event_offer:a1",
+          "payload": {
+            "askId": "ask-1",
+            "match": {
+              "tier": 1
+            }
+          }
+        },
+        {
+          "at": "2026-10-02T16:00:00Z",
+          "type": "event_offer",
+          "target": "event_offer:a2",
+          "payload": {
+            "askId": "ask-1",
+            "match": {
+              "tier": 1
+            }
+          }
+        },
+        {
+          "at": "2026-10-02T16:00:00Z",
+          "type": "event_offer",
+          "target": "event_offer:reminder:p9",
+          "payload": {
+            "askId": "profile",
+            "fromProfile": true,
+            "reminder": true
+          }
+        },
+        {
+          "at": "2026-10-02T16:00:00Z",
+          "type": "event_offer",
+          "target": "event_offer:again:p8",
+          "payload": {
+            "askId": "ask-1",
+            "again": true
+          }
+        }
+      ],
+      "expect": {
+        "sends": 6
+      },
+      "replyAfterMinutes": 60
     }
   ],
   "drafts": [
