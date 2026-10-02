@@ -708,23 +708,6 @@ export function mergeExpiry(existing: Date | null, incoming: Date | null): Date 
   return existing.getTime() <= incoming.getTime() ? existing : incoming;
 }
 
-// One open follow-up per ask (Royce, 2026-10-02): a new follow-up about an
-// ask that already has one open (a check-in, a time-frame follow-up) merges
-// into it instead of queuing a second. On 10/2 one ask, "3 founder events this
-// week", had both a check-in and a time-frame follow-up waiting. The open one
-// keeps its type and timing; what the new one was about is added to it.
-export const ASK_FOLLOW_UP_TYPES = ["ask_checkin", "window_followup"];
-export function followUpAskId(input: { type: string; payload: any }): string | null {
-  if (!ASK_FOLLOW_UP_TYPES.includes(input.type)) return null;
-  const id = input.payload?.askId;
-  return typeof id === "string" && id && id !== "profile" ? id : null;
-}
-export function mergeIntoFollowUp(existing: any, incoming: { type: string; summary: string }): any {
-  const also: string[] = Array.isArray(existing?.also) ? existing.also : [];
-  const line = `${incoming.type}: ${incoming.summary.slice(0, 160)}`;
-  return also.includes(line) ? existing : { ...existing, also: [...also, line].slice(-5) };
-}
-
 export async function enqueueCandidate(input: EnqueueInput): Promise<{ queued: boolean }> {
   // Advice follow-ups, time-frame follow-ups, ask check-ins and debriefs: Co
   // decides when (services/followUps.ts). What it sends still comes back here.
@@ -767,20 +750,6 @@ export async function enqueueCandidate(input: EnqueueInput): Promise<{ queued: b
     if (alreadySent.rows[0]) {
       await client.query("ROLLBACK");
       return { queued: false };
-    }
-    const askId = followUpAskId(input);
-    if (askId) {
-      const open = await client.query(
-        `SELECT id, payload FROM proactive_candidates
-         WHERE user_id = $1 AND status = 'pending' AND type = ANY($2::text[]) AND payload->>'askId' = $3 AND target_key <> $4
-         ORDER BY created_at LIMIT 1 FOR UPDATE`,
-        [input.userId, ASK_FOLLOW_UP_TYPES, askId, input.targetKey],
-      );
-      if (open.rows[0]) {
-        await client.query(`UPDATE proactive_candidates SET payload = $2, updated_at = NOW() WHERE id = $1`, [open.rows[0].id, JSON.stringify(mergeIntoFollowUp(open.rows[0].payload, input))]);
-        await client.query("COMMIT");
-        return { queued: true };
-      }
     }
     const inserted = await client.query(
       `INSERT INTO proactive_candidates (user_id, type, target_key, topic_key, summary, payload, due_at, expires_at, priority)

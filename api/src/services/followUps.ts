@@ -45,24 +45,6 @@ type Stored = { type: string; targetKey: string; topicKey?: string; summary: str
 
 // Called by enqueueCandidate for the four handed-over types.
 export async function startFollowUp(input: EnqueueInput): Promise<{ queued: boolean }> {
-  // One open follow-up per ask (harness/proactive.ts followUpAskId): a second
-  // one about the same ask is added to the open task, not started beside it.
-  const { followUpAskId, mergeIntoFollowUp, ASK_FOLLOW_UP_TYPES } = await import("../harness/proactive.js");
-  const askId = followUpAskId(input);
-  if (askId) {
-    const { rows: same } = await pool.query(
-      `SELECT id, followup FROM co_tasks WHERE user_id = $1 AND kind = 'followup' AND status = 'open'
-         AND followup->>'type' = ANY($2::text[]) AND followup->'payload'->>'askId' = $3 AND target_key <> $4
-       ORDER BY created_at LIMIT 1`,
-      [input.userId, ASK_FOLLOW_UP_TYPES, askId, input.targetKey],
-    );
-    if (same[0]) {
-      const f = same[0].followup ?? {};
-      await pool.query(`UPDATE co_tasks SET followup = $2::jsonb, updated_at = NOW() WHERE id = $1`, [same[0].id, JSON.stringify({ ...f, payload: mergeIntoFollowUp(f.payload, input) })]);
-      await recordDecision({ layer: 7, decision: "task.followup", userId: input.userId, outcome: "skip", action: "merged_same_ask", proposal: { type: input.type, targetKey: input.targetKey, into: same[0].id, askId } }).catch(() => {});
-      return { queued: true };
-    }
-  }
   const { rows } = await pool.query(`SELECT id, status, closed_at, followup FROM co_tasks WHERE user_id = $1 AND kind = 'followup' AND target_key = $2 ORDER BY created_at DESC LIMIT 1`, [input.userId, input.targetKey]);
   const ex = rows[0] ?? null;
   const action = followUpAction(ex ? { status: ex.status, closedAt: ex.closed_at ? new Date(ex.closed_at) : null } : null, new Date());

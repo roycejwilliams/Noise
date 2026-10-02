@@ -15,9 +15,6 @@ export type WindowFollowUpPayload = {
   label: string;
   // What they asked Co to look for.
   asked: string;
-  // The ask it follows up on, when known: one open follow-up per ask
-  // (harness/proactive.ts followUpAskId).
-  askId?: string;
   // What Co actually sent them for it, if anything.
   sent: string[];
   // The real dates behind the label ("Saturday (Saturday, September 19)"), so

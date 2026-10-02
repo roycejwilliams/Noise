@@ -107,6 +107,7 @@ type SimSend = { at: Date; type: ProactiveType; target: string; topic: string; p
 const queueStats = new Map<string, { max: number; end: number; expiredAnswers: number }>();
 
 function simulate(sc: Scenario): SimSend[] {
+  queueStats.delete(sc.id);
   const start = new Date(sc.start).getTime();
   const end = new Date(sc.end).getTime();
   const sends: SimSend[] = [];
