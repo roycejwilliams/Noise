@@ -48,13 +48,13 @@ export async function buildContextSummary(userId: string): Promise<string> {
         [userId],
       ),
       pool.query(
-        `SELECT content FROM co_memories
+        `SELECT content, memory_type FROM co_memories
          WHERE user_id = $1 AND memory_type = 'text_exchange'
          ORDER BY created_at DESC LIMIT 20`,
         [userId],
       ),
       pool.query(
-        `SELECT content FROM co_memories
+        `SELECT content, memory_type FROM co_memories
          WHERE user_id = $1 AND memory_type = 'recap'
          ORDER BY created_at DESC LIMIT 1`,
         [userId],
@@ -66,7 +66,7 @@ export async function buildContextSummary(userId: string): Promise<string> {
       // sendblue.ts owns for text) covers the common "did I miss what you
       // found me" case without growing every call's opening context.
       pool.query(
-        `SELECT content FROM co_memories
+        `SELECT content, memory_type FROM co_memories
          WHERE user_id = $1 AND memory_type = 'recommendation' AND created_at > NOW() - INTERVAL '3 days'
          ORDER BY created_at DESC LIMIT 1`,
         [userId],
@@ -78,7 +78,7 @@ export async function buildContextSummary(userId: string): Promise<string> {
       // facts beat an older recap or profile (2026-09-15 call opened as if he
       // were still pre-seed, after he'd texted he's Series A with a $35M deal).
       pool.query(
-        `SELECT content FROM co_memories
+        `SELECT content, memory_type FROM co_memories
          WHERE user_id = $1 AND memory_type = 'text_exchange' AND (content LIKE 'User said:%' OR content LIKE '[Call]%') AND ${notToTeammate()}
            AND created_at > NOW() - INTERVAL '48 hours'
          ORDER BY created_at DESC LIMIT 25`,
@@ -100,6 +100,15 @@ export async function buildContextSummary(userId: string): Promise<string> {
     ]);
     const emotionalLine = renderEmotionalContext(emotional);
 
+    // Another member's details never reach this summary; intro history stays
+    // (services/memberSafeMemories.ts).
+    const { memberSafe, linkedMemberNames, namesInRecords } = await import("./memberSafeMemories.js");
+    const linked = await linkedMemberNames(userId);
+    // A Tier 0 pick names someone their recap or texts may describe too.
+    const names = [...linked, ...namesInRecords(recentRecommendationResult.rows)];
+    // Their call summaries ([Call] lines, which Co writes) too; their own
+    // "User said:" lines pass through unchanged.
+    const [safeRecap, safeRecommendation, safeTexts, safeOwnWords] = await Promise.all([memberSafe(userId, recapResult.rows, names), memberSafe(userId, recentRecommendationResult.rows, names), memberSafe(userId, recentTextResult.rows, names), memberSafe(userId, ownWordsResult.rows, names)]);
     const profile = profileResult.rows[0] ?? null;
     // The stated ask comes from the newest entry that actually has ask text;
     // wants come from the newest entry of any kind, because a call that found
@@ -110,9 +119,12 @@ export async function buildContextSummary(userId: string): Promise<string> {
       ? profile.intent[profile.intent.length - 1]
       : null;
 
-    const ownWords = ownWordsResult.rows.map((r: any) => String(r.content).replace(/^User said: /, "- ")).reverse();
+    const ownWords = safeOwnWords.map((c) => String(c).replace(/^User said: /, "- ")).reverse();
     const openAsks = openAsksResult.rows.map((r: any) => `- ${r.ask_text}`);
-    const picture = snapshot ? (await import("./personModel.js")).renderPersonModel({ ...snapshot, did: [] }) : renderSnapshot(null);
+    // The person model is model-written (snapshot, threads, loops): it gets the
+    // same strip, so another member's details never reach a call or reply.
+    const rawPicture = snapshot ? (await import("./personModel.js")).renderPersonModel({ ...snapshot, did: [] }) : renderSnapshot(null);
+    const picture = rawPicture ? ((await memberSafe(userId, [{ content: rawPicture, memory_type: "person_model" }], names))[0] ?? "") : rawPicture;
     const corrections = renderCorrections(correctionsResult.rows);
     const lines = [
       corrections
@@ -121,7 +133,7 @@ export async function buildContextSummary(userId: string): Promise<string> {
       picture ? `What you know about them right now:\n${picture}` : null,
       ownWords.length ? `What they've told you in the last two days (newest facts win over anything below):\n${ownWords.join("\n")}` : null,
       openAsks.length ? `What they're looking for right now:\n${openAsks.join("\n")}` : null,
-      recapResult.rows[0]?.content ? `Ongoing summary: ${recapResult.rows[0].content}` : null,
+      safeRecap[0] ? `Ongoing summary: ${safeRecap[0]}` : null,
       profile?.life_chapters?.length ? `Life chapter: ${profile.life_chapters.join(", ")}` : null,
       profile?.city ? `City: ${profile.city}` : null,
       emotionalLine ? `How they've been feeling:\n${emotionalLine}` : null,
@@ -129,11 +141,11 @@ export async function buildContextSummary(userId: string): Promise<string> {
       profile?.blockers?.length ? `Blockers: ${profile.blockers.slice(0, 2).join("; ")}` : null,
       !openAsks.length && latestAsk?.text ? `Stated ask: ${latestAsk.text}` : null,
       latestIntent?.wants?.length ? `Wants: ${latestIntent.wants.slice(0, 2).join(", ")}` : null,
-      recentRecommendationResult.rows[0]?.content ? `Most recent thing Co suggested: ${recentRecommendationResult.rows[0].content}` : null,
+      safeRecommendation[0] ? `Most recent thing Co suggested: ${safeRecommendation[0]}` : null,
     ].filter(Boolean);
 
-    const recentTextLine = recentTextResult.rows.length
-      ? `Recent texts: ${recentTextResult.rows.map((r: any) => r.content).reverse().join(" / ")}`
+    const recentTextLine = safeTexts.length
+      ? `Recent texts: ${[...safeTexts].reverse().join(" / ")}`
       : null;
     if (recentTextLine) lines.push(recentTextLine);
 

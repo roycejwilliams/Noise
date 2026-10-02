@@ -201,5 +201,111 @@ check("the record starts filled from what was already logged", /backfillCoAction
   check("a promised result is caught; a promised action isn't", bad.every((t) => !!RG.resultPromiseMatch(t)) && good.every((t) => !RG.resultPromiseMatch(t)));
   check("a promised result is cut, the rest of the reply kept", RG.stripUnsupported("Indoor it is. I'll get you a couple of real options before Friday.", [{ name: "no_result_promise", pass: false }] as any) === "Indoor it is.");
 }
+// ------------------------------------------------ the member's own life backs a reply
+// Royce, 2026-10-01: memories about the member's own life (their people,
+// preferences, history) are valid backing; the world-claim rule is only for
+// people and facts outside it. Live proof: evals/memory/semanticLive.ts
+// relationship and cross-user (Co had cut "Lena" and said nothing was on file).
+{
+  const RG2 = await import("../../src/harness/replyGrounding.js");
+  const rf = RG2.baseReplyFacts();
+  const mem = "User said: My mentor Lena reviews my hardware startup pitch every Friday. She is the person I call when I get stuck.";
+  const s = { message: "Who do I usually turn to when my pitch has me stuck?", recentConversation: "", contextSummary: "", recentMemories: mem };
+  const claim = (type: string, text: string, quote: string | null) => ({ text, type, supported: true, factId: null, quote }) as any;
+  const [life] = RG2.claimChecks([claim("member_life", "your mentor Lena", "My mentor Lena reviews my hardware startup pitch")], rf, s);
+  check("their own mentor, from their memories, backs the reply", life.pass);
+  const [other] = RG2.claimChecks([claim("other_person", "Lena would love to help this week", "My mentor Lena reviews my hardware startup pitch")], rf, s);
+  check("what that person wants or will do is still a world claim memories can't back", !other.pass);
+  check("member_life isn't a world claim; other_person still is", !RG2.WORLD_CLAIMS.has("member_life") && RG2.WORLD_CLAIMS.has("other_person"));
+  const [own] = RG2.claimChecks([claim("member_life", "your mentor Lena", "your mentor Lena")], rf, { ...s, recentMemories: "", sentThisTurn: ["Sounds like your mentor Lena is the one."] });
+  check("their life can't be backed by Co's own words this turn", !own.pass);
+  const [made] = RG2.claimChecks([claim("member_life", "your mentor Priya", "My mentor Priya")], rf, s);
+  check("a person they never mentioned isn't backed", !made.pass);
+  const [startup] = RG2.claimChecks([claim("member_life", "your startup ZEBRA-VAULT-941", "my confidential startup is called ZEBRA-VAULT-941")], rf, { ...s, recentMemories: "User said: My mentor is Ravi and my confidential startup is called ZEBRA-VAULT-941. I live in Miami." });
+  check("their own startup's name, from their memories, backs the reply", startup.pass);
+  check("saying nothing's on file gets the claim check; a plain reply still skips it", RG2.needsClaimCheck("I don't actually have anything like that on file for you, no mentor or startup name saved. Want to tell me about it?") && RG2.needsClaimCheck("Honestly, this is the first I'm hearing of it.") && !RG2.needsClaimCheck("That sounds hard. What's been the toughest part?"));
+  check("the reply is told their memories are theirs to answer from", /It's theirs: when they ask about their own people, plans or history, answer from it\./.test(src("agent/conversationReply.ts")));
+  const [absent] = RG2.claimChecks([claim("detail", "I don't have either of those on file yet", null)], rf, { ...s, recentMemories: "" });
+  check("a true 'nothing on file' needs no citation", absent.pass);
+  const [falseDenial] = RG2.claimChecks([{ ...claim("member_life", "I don't have a mentor on file for you", null), supported: false }], rf, s);
+  check("a denial the reader found false is still cut", !falseDenial.pass);
+  const denial = [{ name: "claim_member_life", pass: false, reason: 'member_life: "I don\'t have a mentor or startup name saved for you"' }] as any;
+  check("a false 'nothing on file' about their life goes to the redraft, not a bare cut", RG2.deniesWhatTheyToldCo(denial, s) && !RG2.deniesWhatTheyToldCo(denial, { ...s, recentMemories: "" }) && !RG2.deniesWhatTheyToldCo([{ name: "claim_time", pass: false, reason: 'time: "I don\'t have the start time"' }] as any, s));
+  check("the redraft may use their own words from memories, and its recheck still holds each detail to a source", /text\), theirOwnWords\(src\.recentMemories\)\]\.join/.test(src("harness/replyGrounding.ts")) && /!deniesWhatTheyToldCo\(effectiveFailed1, src\)/.test(src("harness/replyGrounding.ts")));
+  const g = src("harness/replyGrounding.ts");
+  check("the claim reader sees their own words from memories and knows member_life", /What they've told Co before \(their own words from older conversations\)/.test(g) && /- member_life: something about the member's own life/.test(g) && /nothing they've told Co before, gives X/.test(g) && /someone who's another member of Co is never part of their own life/.test(g));
+  check("the redraft sees their own words and may not deny what they hold", /What they've told you before \(their own words about their own life\)/.test(g) && /never say you don't have something that what they've told you before gives/.test(g));
+
+  // #49 review, 2026-10-01: the exact cases found.
+  // 1. A Co-written memory about another member never backs a claim, whatever its label.
+  const intro = "Co introduced them to Maya, another member, who is building grid storage software and wants to meet them.";
+  const mayaQuote = "Maya, another member, who is building grid storage software";
+  for (const type of ["member_life", "detail", "other_person"]) {
+    const [r] = RG2.claimChecks([claim(type, "Maya's building grid storage software", mayaQuote)], rf, { ...s, recentMemories: intro });
+    check(`review #1: another member's details from a Co-written memory don't pass as ${type}`, !r.pass);
+  }
+  check("their own words include voice memos and dated lines", RG2.theirOwnWords("User sent a voice memo: we moved to Portland\nUser said on September 29, 2026: Portland is home now\nCo replied: noted") === "we moved to Portland\nPortland is home now");
+  check("review #1: only the member's own lines of a memory count", RG2.theirOwnWords(`${intro}\nUser said: My friend Maya builds grid storage.\nCo replied: Nice.`) === "My friend Maya builds grid storage.");
+  const [friend] = RG2.claimChecks([claim("member_life", "your friend Maya builds grid storage", "My friend Maya builds grid storage")], rf, { ...s, recentMemories: `${intro}\nUser said: My friend Maya builds grid storage.` });
+  check("review #1: what they said themselves about someone in their life still backs it", friend.pass);
+  // 2. Only Co's own negated, first-person denial skips a citation.
+  for (const t of ["The organizers don't have a start time posted yet", "Your mentor Lena is on file", "It's their first time hosting, so expect a small crowd"]) {
+    const [r] = RG2.claimChecks([claim("detail", t, null)], rf, { ...s, recentMemories: "" });
+    check(`review #2: uncited "${t}" still needs a source`, !r.pass);
+  }
+  for (const t of ["I don't have either of those on file yet", "Nothing saved about a mentor yet", "This is the first I'm hearing of it", "I don't actually have details on what she's building"]) {
+    const [r] = RG2.claimChecks([claim("detail", t, null)], rf, { ...s, recentMemories: "" });
+    check(`review #2: Co's own true denial "${t}" needs no citation`, r.pass);
+  }
+  // 3. Everyday companion lines don't buy the paid claim read; Co's denials do.
+  for (const t of ["I don't know, what do you think?", "First time at one of these?", "Honestly I don't know how that feels, tell me more."])
+    check(`review #3: "${t}" skips the claim read`, !RG2.needsClaimCheck(t));
+  for (const t of ["I don't actually have anything like that on file for you, no mentor or startup name saved. Want to tell me about it?", "Honestly, this is the first I'm hearing of it.", "Your mentor Lena is on file."])
+    check(`review #3: "${t.slice(0, 40)}…" gets the claim read`, RG2.needsClaimCheck(t));
+}
+// ------------------------------------------------ another member's details never reach the context
+// Royce, 2026-10-01 (#49): strip at retrieval, not in the prompt. "Co
+// introduced you to Maya" is their own history and stays; "Maya is building
+// grid storage and left Tesla" is Maya's and goes.
+{
+  const MS = await import("../../src/services/memberSafeMemories.js");
+  const MAYA = /grid storage|Tesla|leaving|her job/i;
+  const rec = "Co surfaced 2 tiered recommendation(s) — [Tier 0] Maya: another member, building grid storage software and privately said she is leaving her job at Tesla | [Tier 1] Mahjong Night: Thursday 7pm in the Mission";
+  const safeRec = MS.safeMemory("recommendation", rec, []) ?? "";
+  check("a Tier 0 pick keeps who and drops the other member's details", /\[Tier 0\] Maya, another member \(Co suggested meeting them\)/.test(safeRec) && !MAYA.test(safeRec));
+  check("the rest of a recommendation (events) is kept as written", /\[Tier 1\] Mahjong Night: Thursday 7pm in the Mission/.test(safeRec));
+  const intro = 'Sent an intro email connecting Casey and Maya ahead of "Climate Founders Mixer".';
+  check("an intro record stays whole: it's their own history", MS.safeMemory("event_intro_email_sent", intro, ["Maya"]) === intro);
+  check("an opt-in and a nudge record stay whole", MS.safeMemory("event_guest_match_optin", "Casey said yes to being introduced to Maya.", ["Maya"]) === "Casey said yes to being introduced to Maya." && MS.safeMemory("event_guest_match_nudge", "Nudged them that Maya is also going to the same thing and worth meeting (score 82)", ["Maya"])!.includes("Maya"));
+  const offer = JSON.stringify({ askId: "a1", candidate: { candidate_id: "u2", first_name: "Celine", bio: "Building grid storage at a stealth startup, leaving Tesla", ask: "seed investors" } });
+  const safeOffer = MS.safeMemory("network_intro_offer_pending", offer, []) ?? "";
+  check("a revealed intro offer keeps the name, drops the profile", safeOffer === "Co offered to introduce them to Celine, another member." && !MAYA.test(safeOffer) && !/seed|stealth|bio/i.test(safeOffer));
+  check("a tease that never named them stays unnamed", MS.safeMemory("network_offer_pending", offer, []) === "Co mentioned that another member could be worth meeting, without naming them.");
+  check("a broken intro-offer record is dropped, not passed raw", MS.safeMemory("network_intro_offer_pending", "{not json", []) === null);
+  const recap = "Co introduced them to Maya at the Climate Founders Mixer. Maya is building grid storage and left Tesla. They want a technical cofounder by spring.";
+  const safeRecap = MS.safeMemory("recap", recap, ["Maya"]) ?? "";
+  check("in Co's own lines, the intro survives as history and Maya's details go", safeRecap.startsWith("Co introduced them to Maya, another member.") && !MAYA.test(safeRecap), safeRecap as any);
+  check("the rest of their recap is untouched", /They want a technical cofounder by spring\./.test(safeRecap));
+  check("Co's earlier reply carrying her details is stripped too", !MAYA.test(MS.safeMemory("text_exchange", "Co replied: Maya's building grid storage and just left Tesla, worth meeting.", ["Maya"]) ?? ""));
+  check("their own words are theirs and stay as they are", MS.safeMemory("text_exchange", "User said: Maya told me she's leaving Tesla.", ["Maya"]) === "User said: Maya told me she's leaving Tesla.");
+  check("a name they're not linked with is left alone (their mentor Lena)", MS.safeMemory("recap", "Their mentor Lena reviews the pitch on Fridays.", ["Maya"]) === "Their mentor Lena reviews the pitch on Fridays.");
+  check("the names to strip come from their matches and Co's own records", JSON.stringify(MS.namesInRecords([{ content: rec, memory_type: "recommendation" }, { content: offer, memory_type: "network_intro_offer_pending" }]).sort()) === JSON.stringify(["Celine", "Maya"]));
+  check("Co's intro records and Tier 0 picks become facts, details-free, so it can say what it did", JSON.stringify(MS.introFacts([{ content: intro, memory_type: "event_intro_email_sent" }, { content: rec, memory_type: "recommendation" }])) === JSON.stringify([`Co's record: ${intro}`, "Co's record: Co suggested Maya, another member, to them as someone worth meeting."]));
+  const sb = src("routes/sendblue.ts");
+  check("reply retrieval strips before the relevance filter ever sees it", /SELECT content, memory_type FROM co_memories\s+WHERE user_id = \$1 AND content_embedding IS NOT NULL/.test(sb) && /const candidates = await memberSafe\(user\.id, memoriesResult\.rows/.test(sb) && /filterRelevantMemories\(resolvedContent, candidates\)/.test(sb) && (sb.match(/SELECT content, memory_type FROM co_memories WHERE user_id = \$1 AND memory_type != 'intent' ORDER BY created_at DESC LIMIT 5/g) ?? []).length === 2);
+  check("intro records reach the fact check as what Co did", /introRecordFacts\.forEach\(\(f\) => addFact\(replyFacts, "did_before", f\)\)/.test(sb));
+  // Call summaries and the person model (#49 review items 1 and 2).
+  const call = MS.safeMemory("text_exchange", "[Call] Avery said they met Maya at the mixer. Maya is leaving Tesla and raising for her grid storage startup. Avery wants a technical cofounder.", ["Maya"]) ?? "";
+  check("a call summary describing another member is stripped, the member's own part kept", !MAYA.test(call) && /Co introduced them to Maya, another member\.|Maya, another member/.test(call) && /Avery wants a technical cofounder\./.test(call), call as any);
+  const PM = await import("../../src/services/personModel.js");
+  const block = PM.renderPersonModel({ who: "Work: climate founder\nPeople: Maya (another member) is building grid storage and leaving Tesla", threads: "- the intro with Maya: she wants to raise soon", did: [], loops: null });
+  const safeBlock = MS.safeMemory("person_model", block, ["Maya"]) ?? "";
+  check("person-model content naming another member's details is stripped", !MAYA.test(safeBlock) && !/raise soon/.test(safeBlock) && /Work: climate founder/.test(safeBlock) && /Maya, another member/.test(safeBlock), safeBlock as any);
+  const list = MS.safeMemory("person_model", "Wants right now: a technical cofounder; Maya is leaving Tesla to build grid storage", ["Maya"]) ?? "";
+  check("in a list line, only the item naming another member is stripped", /^Wants right now: a technical cofounder; /.test(list) && !MAYA.test(list), list as any);
+  const cc = src("services/callContext.ts");
+  check("call summaries ([Call] lines) and the person model go through the strip; one import", /memberSafe\(userId, ownWordsResult\.rows, names\)/.test(cc) && /const ownWords = safeOwnWords\.map/.test(cc) && /memberSafe\(userId, \[\{ content: rawPicture, memory_type: "person_model" \}\], names\)/.test(cc) && (cc.match(/import\("\.\/memberSafeMemories\.js"\)/g) ?? []).length === 1);
+  check("the context summary's recap, last suggestion and recent texts are stripped too", /safeRecap\[0\] \? `Ongoing summary: \$\{safeRecap\[0\]\}`/.test(cc) && /safeRecommendation\[0\] \? `Most recent thing Co suggested/.test(cc) && /Recent texts: \$\{\[\.\.\.safeTexts\]\.reverse\(\)/.test(cc) && !/recapResult\.rows\[0\]\?\.content/.test(cc));
+}
 console.log(`facts rules: ${total - failed}/${total} passed`);
 if (failed) process.exitCode = 1;

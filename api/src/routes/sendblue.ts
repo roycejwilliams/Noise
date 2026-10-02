@@ -66,6 +66,7 @@ import { routerGateChecks } from "../harness/routerChecks.js";
 import { linkForReply, linksIn, mergeEarlierLink, type LinkRead } from "../services/linkReader.js";
 import { addEventFacts, addFact, addHint, addInstruction, gatherReplyFacts } from "../harness/replyGrounding.js";
 import { runConversationReplyAgent, filterRelevantMemories, CALL_OFFER_EXPIRY_DAYS } from "../agent/conversationReply.js";
+import { memberSafe, introFacts } from "../services/memberSafeMemories.js";
 import { triggerCallForUser } from "../services/callTrigger.js";
 import sendblue, { blockSender, cleanCoMessage, markRead, sendReaction, webhookSecretMatches, sendingAs } from "../services/sendblue.js";
 import { OWED_AFTER, RESUME_AFTER_MS, TURN_FAILED_NOTE, turnFailedNoteBlocked, turnReplayBlocked } from "../services/turnFailure.js";
@@ -1466,11 +1467,12 @@ export function sendblueRouter(io: Server): Router {
         // instead of running one after another after the debounce
         // (2026-09-26: ~3.7s of every reply was these, in series).
         const replyContextStarted = Date.now();
+        let introRecordFacts: string[] = [];
         const recentMemoriesP = (async () => {
           const memoriesResult = queryEmbedding
             ? await pool
                 .query(
-                  `SELECT content FROM co_memories
+                  `SELECT content, memory_type FROM co_memories
                WHERE user_id = $1 AND content_embedding IS NOT NULL AND memory_type != 'intent'
                ORDER BY content_embedding <=> $2::vector
                LIMIT 5`,
@@ -1478,13 +1480,16 @@ export function sendblueRouter(io: Server): Router {
                 )
                 .catch((vecErr: any) => {
                   console.error("Vector search failed, falling back to recency:", vecErr);
-                  return pool.query(`SELECT content FROM co_memories WHERE user_id = $1 AND memory_type != 'intent' ORDER BY created_at DESC LIMIT 5`, [user.id]);
+                  return pool.query(`SELECT content, memory_type FROM co_memories WHERE user_id = $1 AND memory_type != 'intent' ORDER BY created_at DESC LIMIT 5`, [user.id]);
                 })
-            : await pool.query(`SELECT content FROM co_memories WHERE user_id = $1 AND memory_type != 'intent' ORDER BY created_at DESC LIMIT 5`, [user.id]);
+            : await pool.query(`SELECT content, memory_type FROM co_memories WHERE user_id = $1 AND memory_type != 'intent' ORDER BY created_at DESC LIMIT 5`, [user.id]);
           // Filtered for genuine relevance to what they just said before the
           // reply agent ever sees it (filterRelevantMemories in
           // conversationReply.ts): similarity alone isn't a relevance signal.
-          const candidates = memoriesResult.rows.map((m: any) => m.content).filter(Boolean);
+          // Another member's details are stripped here, before anything reads
+          // them; their intro history stays (services/memberSafeMemories.ts).
+          const candidates = await memberSafe(user.id, memoriesResult.rows.filter((m: any) => m.content));
+          introRecordFacts = introFacts(memoriesResult.rows);
           return candidates.length ? await filterRelevantMemories(resolvedContent, candidates) : "";
         })().catch(() => "");
         const routeInput = {
@@ -2358,6 +2363,8 @@ Return ONLY valid JSON, no preamble: {"date": "YYYY-MM-DD or null", "time": "HH:
         // coverageP); the context summary reads state this turn may have
         // changed, so it's read now, alongside them.
         const [recentMemories, { missingTopic, refresh: staleTopic }, contextSummary] = await Promise.all([recentMemoriesP, coverageP, buildContextSummary(user.id)]);
+        // Intros Co made, from its own records (not co_facts): what it did.
+        introRecordFacts.forEach((f) => addFact(replyFacts, "did_before", f));
         const replyContextWaitMs = Date.now() - replyContextStarted;
 
         const toneContext = renderEmotionalContext(emotional);
