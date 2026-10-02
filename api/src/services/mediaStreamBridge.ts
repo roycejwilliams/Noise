@@ -69,6 +69,9 @@ type HumeConnectionHandle = {
   coHasSpoken: boolean;
   // Caller audio (mulaw) arriving before humeSocket is open.
   pendingInbound: Buffer[];
+  // Per-call audio counters, logged once when the call closes (observability
+  // only; nothing reads them to decide anything). See logAudioStats.
+  audioStats?: AudioStats;
   // Co's own audio (mulaw) arriving before a Twilio stream is attached to
   // forward it to — only a real path once prewarming lets Hume start
   // talking (its opening line) while the phone is still ringing.
@@ -140,19 +143,73 @@ function consumeStreamAuthToken(token: string | undefined): string | null {
 }
 
 
+// ---- per-call audio stats (2026-10-02, observability only) ------------------
+// Where a caller's audio stops: never arriving from Twilio, held before Hume's
+// socket opened, dropped at the buffer cap, or sent to Hume but never heard as
+// words. Times are ms since the handle was created (prewarm or attach).
+export type AudioStats = {
+  createdAt: number;
+  streamAttachedMs: number | null;
+  humeOpenMs: number | null;
+  coFirstAudioMs: number | null;
+  twilioFrames: number;
+  firstTwilioAudioMs: number | null;
+  voicedFrames: number; // frames with speech-level energy, not line silence
+  firstVoicedMs: number | null;
+  bufferedBeforeHume: number;
+  droppedAtCap: number;
+  sentToHume: number;
+  firstSentToHumeMs: number | null;
+  humeUserMessages: number;
+  firstHumeUserMessageMs: number | null;
+  humeInterruptions: number;
+  closedBy: string | null;
+};
+export function newAudioStats(now = Date.now()): AudioStats {
+  return { createdAt: now, streamAttachedMs: null, humeOpenMs: null, coFirstAudioMs: null, twilioFrames: 0, firstTwilioAudioMs: null, voicedFrames: 0, firstVoicedMs: null, bufferedBeforeHume: 0, droppedAtCap: 0, sentToHume: 0, firstSentToHumeMs: null, humeUserMessages: 0, firstHumeUserMessageMs: null, humeInterruptions: 0, closedBy: null };
+}
+// RMS of a decoded 8kHz frame; ~500 separates speech from line hiss.
+export const VOICED_RMS = 500;
+export function frameRms(pcm: Int16Array): number {
+  if (!pcm.length) return 0;
+  let sum = 0;
+  for (let i = 0; i < pcm.length; i++) sum += pcm[i] * pcm[i];
+  return Math.sqrt(sum / pcm.length);
+}
+function statsOf(handle: HumeConnectionHandle): AudioStats {
+  return (handle.audioStats ??= newAudioStats());
+}
+function since(s: AudioStats): number {
+  return Date.now() - s.createdAt;
+}
+export function audioStatsLine(callSid: string | null, userId: string, s: AudioStats): string {
+  const { createdAt, ...rest } = s;
+  void createdAt;
+  return `mediaStreamBridge: call audio stats ${JSON.stringify({ callSid, user: userId.slice(0, 8), totalMs: Date.now() - s.createdAt, ...rest })}`;
+}
+
 function forwardCallerAudio(handle: HumeConnectionHandle, mulawBuf: Buffer) {
+  const s = statsOf(handle);
   if (!handle.humeSocket || handle.humeSocket.readyState !== 1 /* WebSocket.OPEN */) {
-    if (handle.pendingInbound.length < PENDING_AUDIO_FRAME_CAP) handle.pendingInbound.push(mulawBuf);
+    if (handle.pendingInbound.length < PENDING_AUDIO_FRAME_CAP) {
+      handle.pendingInbound.push(mulawBuf);
+      s.bufferedBeforeHume++;
+    } else s.droppedAtCap++;
     return;
   }
   const pcm = decodeMulawBuffer(mulawBuf);
   const pcmBuf = Buffer.from(pcm.buffer, pcm.byteOffset, pcm.byteLength);
   handle.humeSocket.sendAudioInput({ data: pcmBuf.toString("base64") });
+  s.sentToHume++;
+  s.firstSentToHumeMs ??= since(s);
 }
 
-function closeHandle(handle: HumeConnectionHandle) {
+function closeHandle(handle: HumeConnectionHandle, closedBy = "unknown") {
   if (handle.closed) return;
   handle.closed = true;
+  const s = statsOf(handle);
+  s.closedBy = closedBy;
+  console.log(audioStatsLine(handle.callSid ?? null, handle.userId, s));
   endLiveCall(handle.userId);
   if (handle.evictionTimer) clearTimeout(handle.evictionTimer);
   if (handle.callSid && pendingConnections.get(handle.callSid) === handle) pendingConnections.delete(handle.callSid);
@@ -206,6 +263,7 @@ function createHumeConnection(userId: string, callSid: string | null = null): Hu
     coHasSpoken: false,
     pendingInbound: [],
     pendingOutbound: [],
+    audioStats: newAudioStats(),
     evictionTimer: null,
   };
 
@@ -245,6 +303,7 @@ function createHumeConnection(userId: string, callSid: string | null = null): Hu
       humeSocket.on("message", (m: any) => {
         if (m.type === "audio_output") {
           handle.coHasSpoken = true;
+          statsOf(handle).coFirstAudioMs ??= since(statsOf(handle));
           try {
             const wavBuf = Buffer.from(m.data, "base64");
             const { sampleRate, channels, samples } = parseWav(wavBuf);
@@ -283,6 +342,11 @@ function createHumeConnection(userId: string, callSid: string | null = null): Hu
           // flip, not a transcript hook: the real extraction/tool-call
           // pipeline stays on /webhook.
           const text = typeof m.message?.content === "string" ? m.message.content : "";
+          if (!(m as any).interim) {
+            const us = statsOf(handle);
+            us.humeUserMessages++;
+            us.firstHumeUserMessageMs ??= since(us);
+          }
           if (isRealUserUtterance(text, handle.coHasSpoken)) {
             handle.receivedUserMessage = true;
           }
@@ -297,6 +361,7 @@ function createHumeConnection(userId: string, callSid: string | null = null): Hu
           const chatId = (m as any).chatId ?? (m as any).chat_id;
           if (typeof chatId === "string") noteChatId(handle.userId, chatId);
         } else if (m.type === "user_interruption") {
+          statsOf(handle).humeInterruptions++;
           // Fixed 2026-09-17: nothing handled Hume's own interruption event,
           // so Twilio kept playing whatever of Co's audio was already queued
           // even after the person started talking over her — Co kept
@@ -320,6 +385,7 @@ function createHumeConnection(userId: string, callSid: string | null = null): Hu
       });
 
       humeSocket.on("open", () => {
+        statsOf(handle).humeOpenMs ??= since(statsOf(handle));
         while (handle.pendingInbound.length) {
           forwardCallerAudio(handle, handle.pendingInbound.shift()!);
         }
@@ -327,10 +393,10 @@ function createHumeConnection(userId: string, callSid: string | null = null): Hu
       humeSocket.on("error", (err: unknown) => {
         console.error("mediaStreamBridge: Hume socket error:", err);
       });
-      humeSocket.on("close", () => closeHandle(handle));
+      humeSocket.on("close", () => closeHandle(handle, "hume_closed"));
     } catch (err: any) {
       console.error("mediaStreamBridge: failed to open Hume connection:", err?.message ?? err);
-      closeHandle(handle);
+      closeHandle(handle, "hume_open_failed");
     }
   })();
 
@@ -346,7 +412,7 @@ function createHumeConnection(userId: string, callSid: string | null = null): Hu
 export function prewarmHumeConnection(userId: string, callSid: string): void {
   if (pendingConnections.has(callSid)) return;
   const handle = createHumeConnection(userId, callSid);
-  handle.evictionTimer = setTimeout(() => closeHandle(handle), PREWARM_CLAIM_TIMEOUT_MS);
+  handle.evictionTimer = setTimeout(() => closeHandle(handle, "prewarm_unclaimed"), PREWARM_CLAIM_TIMEOUT_MS);
   pendingConnections.set(callSid, handle);
 }
 
@@ -382,6 +448,7 @@ export function bridgeTwilioMediaStream(twilioWs: WebSocket): void {
     }
     handle.twilioWs = twilioWs;
     handle.streamSid = streamSid;
+    statsOf(handle).streamAttachedMs ??= since(statsOf(handle));
     if (callSid) {
       handle.callSid = callSid;
       callsBySid.set(callSid, handle);
@@ -443,21 +510,28 @@ export function bridgeTwilioMediaStream(twilioWs: WebSocket): void {
       case "media": {
         const mulawBuf = Buffer.from(msg.media.payload, "base64");
         if (!handle) return; // "start" hasn't arrived yet — shouldn't happen, Twilio always sends it first
+        const s = statsOf(handle);
+        s.twilioFrames++;
+        s.firstTwilioAudioMs ??= since(s);
+        if (frameRms(decodeMulawBuffer(mulawBuf)) >= VOICED_RMS) {
+          s.voicedFrames++;
+          s.firstVoicedMs ??= since(s);
+        }
         forwardCallerAudio(handle, mulawBuf);
         break;
       }
 
       case "stop":
-        if (handle) closeHandle(handle);
+        if (handle) closeHandle(handle, "twilio_stop");
         break;
     }
   });
 
   twilioWs.on("close", () => {
-    if (handle) closeHandle(handle);
+    if (handle) closeHandle(handle, "twilio_closed");
   });
   twilioWs.on("error", (err: unknown) => {
     console.error("mediaStreamBridge: Twilio socket error:", err);
-    if (handle) closeHandle(handle);
+    if (handle) closeHandle(handle, "twilio_error");
   });
 }
