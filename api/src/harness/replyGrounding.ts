@@ -1070,6 +1070,9 @@ const CLAIM_SHAPED = [
   // again, should come through as a separate contact card" went out
   // unchecked — a real action claim with none of the words above in it).
   /\b(trying again|try again|resend(ing)?|re-send(ing)?|should (come through|arrive|land)|sending (it|that|this) again)\b/i,
+  // "Tried again just now and it didn't go through" (2026-10-01: a blocked
+  // call that was never placed, unchecked because "tried" wasn't caught).
+  /\b(tried|attempted|(didn'?t|not|isn'?t|wasn'?t|won'?t) (go|going|get|getting) through|couldn'?t (reach|get through|connect))\b/i,
   // Passing something along (2026-09-18: "feedback like that goes straight to
   // the team" went out unchecked when nothing had been saved).
   /\b(the team|noted|logged|forwarded|flagged|passed (it|that|this) (on|along)|pass(es|ing)? (it|that|this) (on|along)|goes (straight )?to)\b/i,

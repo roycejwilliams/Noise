@@ -63,7 +63,7 @@ export function lapseText(firstName: string, closeDate: string, final: boolean):
 // "Missing a profile": nothing beyond intake. No call, no open ask, no open
 // thread, and a person snapshot with nothing about their work or wants.
 const BARELY_KNOWN = `
-  NOT EXISTS (SELECT 1 FROM co_memories m WHERE m.user_id = u.id AND m.memory_type = 'call_transcript')
+  NOT EXISTS (SELECT 1 FROM co_memories m WHERE m.user_id = u.id AND m.memory_type = 'call_transcript' AND m.content NOT LIKE 'Co initiated call%')
   AND NOT EXISTS (SELECT 1 FROM ask_checkins a WHERE a.user_id = u.id AND a.resolved_at IS NULL)
   AND NOT EXISTS (SELECT 1 FROM member_threads t WHERE t.user_id = u.id AND t.status IN ('open', 'waiting'))
   AND NOT EXISTS (SELECT 1 FROM person_snapshots s WHERE s.user_id = u.id

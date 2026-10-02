@@ -30,11 +30,23 @@ const HOLD_PREFIX = "Co is looking:"; // the same record line routes/sendblue.ts
 const emailsIn = (text: string) => [...new Set((text.match(/[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}/gi) ?? []).map((e) => e.toLowerCase()))];
 
 // A caption may only carry numbers, places and claims its own facts back.
+// What the member did ("you already looked at their residency") comes from
+// their own words, never from Co having sent it (2026-10-01: Co sent it, asked
+// if they'd looked, and later told them they had).
+const THEY_DID = /\byou(?:'ve| have)?\s+(?:already\s+)?(looked (?:at|into)|checked (?:out|it)|applied|signed up|registered|went|been to|visited|seen|read)\b/i;
+export function theyDidUnbacked(caption: string, theirs: string): string | null {
+  const m = caption.match(THEY_DID);
+  if (!m) return null;
+  const root = m[1].split(" ")[0].replace(/ed$|en$/, "").replace(/^went$/, "go");
+  return new RegExp(`\\bI(?:'ve| have)?\\s+(?:already\\s+)?\\w*\\s*${root}`, "i").test(theirs) ? null : m[0];
+}
 export function captionProblems(caption: string, facts: string, theirs: string): string[] {
+  const did = theyDidUnbacked(caption, theirs);
   return [
     ...numbersBacked(caption, `${facts} ${theirs}`).missing.map((n) => `"${n}" isn't in its facts`),
     ...placesBacked(caption, `${facts} ${theirs}`).missing.map((p) => `"${p}" isn't in its facts`),
     ...unbackedClaims(caption, facts).map((c) => `"${c}" isn't something its page says`),
+    ...(did ? [`"${did}" isn't something they told you they did`] : []),
   ];
 }
 

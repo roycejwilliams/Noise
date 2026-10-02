@@ -48,6 +48,7 @@ export async function buildRecap(userId: string): Promise<void> {
   const { rows: newExchanges } = await pool.query(
     `SELECT content FROM co_memories
      WHERE user_id = $1 AND memory_type IN ('text_exchange', 'call_transcript')
+       AND content NOT LIKE 'Co initiated call%'
        AND created_at > $2
      ORDER BY created_at ASC`,
     [userId, lastRecap?.created_at ?? new Date(0)],
@@ -127,6 +128,7 @@ export async function findUsersDueForRecap(): Promise<string[]> {
         SELECT 1 FROM co_memories m
         WHERE m.user_id = u.id
           AND m.memory_type IN ('text_exchange', 'call_transcript')
+          AND m.content NOT LIKE 'Co initiated call%'
           AND m.created_at > COALESCE(cp.last_recap_at, '-infinity'::timestamptz)
       )
   `);

@@ -1,4 +1,5 @@
 import { notToTeammate } from "./teamLines.js";
+import * as memberSafeModule from "./memberSafeMemories.js";
 import { renderCorrections } from "../harness/profileWrite.js";
 import { generateText } from "ai";
 import { anthropic } from "@ai-sdk/anthropic";
@@ -102,7 +103,7 @@ export async function buildContextSummary(userId: string): Promise<string> {
 
     // Another member's details never reach this summary; intro history stays
     // (services/memberSafeMemories.ts).
-    const { memberSafe, linkedMemberNames, namesInRecords } = await import("./memberSafeMemories.js");
+    const { memberSafe, linkedMemberNames, namesInRecords } = memberSafeModule;
     const linked = await linkedMemberNames(userId);
     // A Tier 0 pick names someone their recap or texts may describe too.
     const names = [...linked, ...namesInRecords(recentRecommendationResult.rows)];
@@ -193,9 +194,13 @@ export async function buildCallKnowledge(userId: string): Promise<CallKnowledge>
   ]);
   // Slow page reads: the sent list with whatever details were saved with it.
   const sent = turn?.sent ?? (await loadSentItems(userId).catch(() => []));
-  const sentLines = sentDetailLines({ sent }, 7);
-  const lessons = turn?.lessons ?? [];
-  const threads = turn?.threads ?? [];
+  // Another member's details stripped from every call-only part too
+  // (memberSafeMemories.ts; 2026-10-01 call review: these bypassed it).
+  const { memberSafe } = memberSafeModule;
+  const strip = async (xs: string[]) => (xs.length ? memberSafe(userId, xs.map((content) => ({ content, memory_type: "call_context" }))) : []);
+  const sentLines = await strip(sentDetailLines({ sent }, 7));
+  const lessons = await strip(turn?.lessons ?? []);
+  const threads = (await strip((turn?.threads ?? []).map((t: any) => String(t.text ?? "")))).map((text) => ({ text }));
   const asks = turn?.asks ?? [];
   const ledger = turn?.ledger.lines ?? [];
 

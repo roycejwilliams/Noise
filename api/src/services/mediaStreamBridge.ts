@@ -4,7 +4,7 @@ import type WebSocket from "ws";
 import pool from "../db/db.js";
 import { buildCallContextSummary } from "./callContext.js";
 import { decodeMulawBuffer, encodeMulawBuffer, parseWav, resampleLinear, toMono } from "./audioCodec.js";
-import { isRealUserUtterance } from "../harness/callGate.js";
+import { isRealUserUtterance, isCallerVoice } from "../harness/callGate.js";
 import { addLine, endLiveCall, noteChatId, startLiveCall } from "./liveCall.js";
 
 // Replaces the simple server-to-server /v0/evi/twilio bridge — that endpoint
@@ -57,6 +57,12 @@ type HumeConnectionHandle = {
   // greeting/carrier-message/bare filler (isRealUserUtterance, shared with
   // callGate.ts's post-call version of the same test).
   receivedUserMessage: boolean;
+  // Any words from the caller that aren't a voicemail/carrier message, even a
+  // bare "hello?" or one said before Co's line (2026-10-01: the prewarm makes
+  // coHasSpoken true during ringing, and "hello?" is filler for the profile
+  // test, so a live "hello?" never overrode a wrong AMD "machine"). Only used
+  // to keep a live call from being cut to the voicemail line.
+  heardCallerVoice?: boolean;
   // True once any audio_output has actually gone out on this call — the
   // signal that Co has started talking, which receivedUserMessage needs
   // before it will count the caller's reply as real (see above).
@@ -94,7 +100,8 @@ const pendingConnections = new Map<string, HumeConnectionHandle>();
 const callsBySid = new Map<string, HumeConnectionHandle>();
 
 export function hasReceivedRealSpeech(callSid: string): boolean {
-  return callsBySid.get(callSid)?.receivedUserMessage ?? false;
+  const h = callsBySid.get(callSid);
+  return !!h && (h.receivedUserMessage || !!h.heardCallerVoice);
 }
 
 // ---- media-stream auth ---------------------------------------------------
@@ -195,6 +202,7 @@ function createHumeConnection(userId: string, callSid: string | null = null): Hu
     streamSid: null,
     callSid,
     receivedUserMessage: false,
+    heardCallerVoice: false,
     coHasSpoken: false,
     pendingInbound: [],
     pendingOutbound: [],
@@ -278,6 +286,7 @@ function createHumeConnection(userId: string, callSid: string | null = null): Hu
           if (isRealUserUtterance(text, handle.coHasSpoken)) {
             handle.receivedUserMessage = true;
           }
+          if (isCallerVoice(text)) handle.heardCallerVoice = true;
           // The live transcript the coverage tool reads (services/liveCall.ts);
           // interim partials would duplicate the final line.
           if (!(m as any).interim) addLine(handle.userId, "user", text);
