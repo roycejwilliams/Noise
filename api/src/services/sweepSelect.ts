@@ -107,17 +107,45 @@ export function selectPrompt(c: SelectContext): string {
   return lines.join("\n");
 }
 
-// Pure: the model's verdicts, read even when wrapped in a code fence.
-export function parseVerdicts(text: string): Verdict[] | null {
-  const m = text.match(/\{[\s\S]*\}/);
-  if (!m) return null;
-  let j: any;
-  try {
-    j = JSON.parse(m[0]);
-  } catch {
-    return null;
+// Pure: every top-level {...} block in the text, braces inside strings ignored.
+export function jsonBlocks(text: string): string[] {
+  const out: string[] = [];
+  let depth = 0, start = -1, inStr = false, esc = false;
+  for (let i = 0; i < text.length; i++) {
+    const ch = text[i];
+    if (inStr) {
+      if (esc) esc = false;
+      else if (ch === "\\") esc = true;
+      else if (ch === '"') inStr = false;
+      continue;
+    }
+    if (ch === '"' && depth > 0) inStr = true;
+    else if (ch === "{") {
+      if (depth === 0) start = i;
+      depth++;
+    } else if (ch === "}" && depth > 0) {
+      depth--;
+      if (depth === 0) out.push(text.slice(start, i + 1));
+    }
   }
-  if (!Array.isArray(j?.verdicts)) return null;
+  return out;
+}
+
+// Pure: the model's verdicts: the first block that parses and has a verdicts
+// list, so a note before or after it (even one with braces) can't lose the
+// day (review of #57: a greedy match did).
+export function parseVerdicts(text: string): Verdict[] | null {
+  let j: any = null;
+  for (const block of jsonBlocks(text)) {
+    try {
+      const parsed = JSON.parse(block);
+      if (Array.isArray(parsed?.verdicts)) {
+        j = parsed;
+        break;
+      }
+    } catch {}
+  }
+  if (!j) return null;
   const out: Verdict[] = [];
   for (const v of j.verdicts) {
     const id = String(v?.id ?? "");
@@ -169,6 +197,13 @@ export function guardVerdicts(c: SelectContext, verdicts: Verdict[]): Judgment[]
 // days, changes the signature, so nothing held waits forever on a quiet day.
 export function daysBetween(a: string, b: string): number {
   return Math.round((Date.parse(`${b}T00:00:00Z`) - Date.parse(`${a}T00:00:00Z`)) / 86_400_000);
+}
+// When each hold from a run comes due: its own date, or two days after the run
+// when Co gave none (review of #57: an undated hold never came back).
+export const UNDATED_HOLD_DAYS = 2;
+export function holdDueDates(judgments: { verdict: string; until?: string | null }[], runDay: string): string[] {
+  const plus = (d: string, n: number) => new Date(Date.parse(`${d}T00:00:00Z`) + n * 86_400_000).toISOString().slice(0, 10);
+  return judgments.filter((j) => j.verdict === "hold").map((j) => j.until ?? plus(runDay, UNDATED_HOLD_DAYS));
 }
 export function selectSignature(c: SelectContext, holdsUntil: (string | null)[] = []): string {
   const soon = c.pool.filter((p) => p.date && daysBetween(c.today, p.date) <= 3).map((p) => `soon:${p.key}`);

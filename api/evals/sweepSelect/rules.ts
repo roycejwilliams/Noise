@@ -1,10 +1,11 @@
+import { readFileSync } from "fs";
 // Model-free checks for Co's sweep selection (services/sweepSelect.ts) and
 // its replay scoring. No API calls, no database:
 //   npx tsx evals/sweepSelect/rules.ts
-import { guardVerdicts, parseVerdicts, selectPrompt, selectSignature, SELECT_SYSTEM, type SelectContext } from "../../src/services/sweepSelect.js";
+import { guardVerdicts, holdDueDates, parseVerdicts, selectPrompt, selectSignature, SELECT_SYSTEM, type SelectContext } from "../../src/services/sweepSelect.js";
 import { score } from "./score.js";
 import { newSideFor } from "./grading.js";
-import { buildShadowPool, renderShadowReport } from "../../src/services/sweepShadow.js";
+import { buildShadowPool, describeMatch, renderShadowReport } from "../../src/services/sweepShadow.js";
 
 let total = 0;
 let failed = 0;
@@ -98,6 +99,21 @@ check("a quiet day where they'd have wanted something fails that part of the bar
   const rep = renderShadowReport([{ name: "Jordan", day: "2026-10-02", skipped: null, oldQueued: ["Demo Night"], oldTexted: ["Found one: Demo Night"], pool: [{ id: "C1", name: "Pitch Night", date: "2026-10-03" }], judgments: [{ id: "C1", key: "k", name: "Pitch Night", kind: "answer", verdict: "send", reason: "clears_bar", why: "they asked for founder events", cites: ["A1"], whyNow: "tomorrow" }, { id: "C2", key: "k2", name: "Street Fair", kind: "discovery", verdict: "reject", reason: "weak_fit", why: "generic" }] }]);
   check("the report shows old queued and texted beside Co's sends with why-them and why-now, and rejects with reasons", /Old rules queued: Demo Night/.test(rep) && /Old rules texted: "Found one: Demo Night"/.test(rep) && /\+ Pitch Night \(2026-10-03\)\n\s+why them: they asked for founder events \[A1\]\n\s+why now: tomorrow/.test(rep) && /- Street Fair \[weak_fit\]: generic/.test(rep));
   check("a skipped day says why", /Co: skipped \(nothing changed since the last run\)/.test(renderShadowReport([{ name: "J", day: "d", skipped: "nothing changed since the last run", oldQueued: [], oldTexted: [], pool: [], judgments: [] }])));
+}
+
+// Review of #57 fixes.
+{
+  const body = '{"verdicts":[{"id":"C1","verdict":"reject","reason":"weak_fit","why":"uses {braces} in a string"}]}';
+  check("verdicts survive notes with braces before or after the JSON", parseVerdicts(`{draft} thinking first\n${body}\nNote: {see above}`)?.length === 1 && parseVerdicts(`${body} and {"other": 1}`)?.[0].id === "C1");
+  check("the first block with a verdicts list wins, not the first block", parseVerdicts(`{"plan": "x"}\n${body}`)?.length === 1);
+  check("an undated hold comes due two days after the run; a dated one on its date", holdDueDates([{ verdict: "hold", until: null }, { verdict: "hold", until: "2026-10-15" }, { verdict: "send" }], "2026-10-02").join() === "2026-10-04,2026-10-15");
+  const ev = describeMatch({ name: "Pitch Night", url: "https://lu.ma/x", details: { startAt: "2026-10-02T17:30:00-07:00", endAt: "2026-10-02T20:30:00-07:00", timezone: null, online: false, venue: "Mission Robotics", address: "1 Main St", city: "San Francisco", hosts: ["Tech Makers"], price: "Free", spotsRemaining: null, requiresApproval: true, soldOut: true, guestCount: 120, description: "Launch and pitch night." } });
+  check("an event's own record reaches the prompt: sold out, time, venue, hosts, price, approval, description", !!ev && /^SOLD OUT/.test(ev) && /starts 2026-10-02 17:30, ends 20:30/.test(ev) && /Mission Robotics, 1 Main St, San Francisco/.test(ev) && /hosted by Tech Makers/.test(ev) && /Free/.test(ev) && /needs host approval/.test(ev) && /Launch and pitch night/.test(ev) && /\(lu\.ma\)/.test(ev));
+  check("an opening's post text reaches it too; the finder's own why-it-fits doesn't", /Grants up to \$5k/.test(describeMatch({ details: { postText: "Grants up to $5k" }, whyItFits: "fits them" }) ?? "") && !/fits them/.test(describeMatch({ details: { postText: "x" }, whyItFits: "fits them" }) ?? ""));
+  const again = buildShadowPool([{ name: "Demo Night", date: "2026-10-05", tier: 2, askId: null, fromProfile: true, reminder: false, again: true, details: null }], "2026-10-02", new Map(), new Set(["demo night"]));
+  check("a month-later resurface of a sent thing stays, as in the live sweep", again.length === 1);
+  const sh = readFileSync(new URL("../../src/services/sweepShadow.ts", import.meta.url), "utf8");
+  check("a failed selection is logged as an error, never as the run tomorrow compares against", /if \(r\.error\) \{\s*if \(!opts\.dryRun\) await recordDecision\(\{[^}]*outcome: "skip", action: "error"/.test(sh) && /outcome = 'act' ORDER BY created_at DESC LIMIT 1/.test(sh) && /action IS DISTINCT FROM 'error'/.test(sh));
 }
 
 console.log(`sweep select rules: ${total - failed}/${total} passed`);

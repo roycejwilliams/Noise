@@ -14,7 +14,7 @@ import pool from "../db/db.js";
 import { DateTime } from "luxon";
 import { recordDecision } from "../harness/core.js";
 import { digestRecipient, reviewEnabled } from "../harness/devReview.js";
-import { selectForMember, selectSignature, SELECT_MODEL, type Judgment, type PoolItem, type SelectContext } from "./sweepSelect.js";
+import { holdDueDates, selectForMember, selectSignature, SELECT_MODEL, type Judgment, type PoolItem, type SelectContext } from "./sweepSelect.js";
 import { dayOf, loadAsks, loadMemberContext, type Q } from "./sweepSelectContext.js";
 
 const norm = (s: string) => s.toLowerCase().replace(/[^a-z0-9]+/g, " ").trim();
@@ -27,16 +27,17 @@ export async function shadowUserIds(env: NodeJS.ProcessEnv = process.env): Promi
   return me ? [me] : [];
 }
 
-type RawCandidate = { name: string; date: string | null; tier: number; askId: string | null; fromProfile: boolean; reminder: boolean; details: string | null };
+type RawCandidate = { name: string; date: string | null; tier: number; askId: string | null; fromProfile: boolean; reminder: boolean; again?: boolean; details: string | null };
 
 // Pure: the pool from what's waiting (the event backlogs and the queued
 // offers): deduped by name + date, past ones and things already sent dropped
-// (a reminder about a sent thing stays), each tagged with the asks it serves.
+// (a reminder, or a month-later resurface, of a sent thing stays, as in the
+// live sweep), each tagged with the asks it serves.
 export function buildShadowPool(raw: RawCandidate[], today: string, askNumber: Map<string, string>, sentNames: Set<string>): PoolItem[] {
   const items = new Map<string, PoolItem>();
   for (const r of raw) {
     if (!r.name || (r.date && r.date < today)) continue;
-    if (sentNames.has(norm(r.name)) && !r.reminder) continue;
+    if (sentNames.has(norm(r.name)) && !r.reminder && !r.again) continue;
     const key = shadowKey(r.name, r.date);
     const it = items.get(key) ?? { id: "", key, name: r.name, date: r.date, tier: r.tier, kind: "discovery" as const, asks: [] as string[], shortNotice: !!r.date && DateTime.fromISO(r.date).diff(DateTime.fromISO(today), "days").days <= 2, details: r.details };
     const a = !r.fromProfile && r.askId ? askNumber.get(r.askId) : undefined;
@@ -51,19 +52,42 @@ export function buildShadowPool(raw: RawCandidate[], today: string, askNumber: M
 // The date that matters: the event's, or an opening's deadline (eventSurfacingSweep relevantDate).
 const dateOf = (m: any): string | null => (m?.event_date ? String(m.event_date).slice(0, 10) : m?.deadline ? String(m.deadline).slice(0, 10) : null);
 
-const detailsOf = (m: any): string | null => {
-  const parts = [m?.details, m?.evidence, m?.category, m?.city, m?.url ? `(${String(m.url).replace(/^https?:\/\//, "").split("/")[0]})` : null].filter((x) => typeof x === "string" && x.trim());
-  return parts.length ? parts.join("; ").replace(/\s+/g, " ").slice(0, 300) : null;
-};
+// Pure: what the thing's own record says, for the prompt. Events carry a
+// structured EventDetails (venue, time, hosts, price, sold out, description);
+// openings carry the source post's text (eventDetails.ts). The finder's own
+// "why it fits" is left out on purpose: Co judges fresh. (Review of #57: only
+// plain-string fields were read, so events reached the model as a name.)
+export function describeMatch(m: any): string | null {
+  const d = m?.details && typeof m.details === "object" ? m.details : null;
+  const parts: string[] = [];
+  if (d) {
+    if (d.soldOut) parts.push("SOLD OUT");
+    if (typeof d.spotsRemaining === "number") parts.push(`${d.spotsRemaining} spots left`);
+    if (d.requiresApproval) parts.push("needs host approval");
+    if (d.startAt) parts.push(`starts ${String(d.startAt).replace("T", " ").slice(0, 16)}${d.endAt ? `, ends ${String(d.endAt).replace("T", " ").slice(11, 16)}` : ""}`);
+    if (d.online) parts.push("online");
+    const where = [d.venue, d.address, d.city].filter(Boolean).join(", ");
+    if (where) parts.push(where);
+    if (Array.isArray(d.hosts) && d.hosts.length) parts.push(`hosted by ${d.hosts.slice(0, 3).join(", ")}`);
+    if (d.price) parts.push(String(d.price));
+    if (typeof d.guestCount === "number") parts.push(`${d.guestCount} going`);
+    if (d.postText) parts.push(String(d.postText));
+    if (d.description) parts.push(String(d.description));
+  } else if (typeof m?.details === "string") parts.push(m.details);
+  for (const k of ["evidence", "category"]) if (typeof m?.[k] === "string" && m[k].trim()) parts.push(m[k]);
+  if (!d?.city && typeof m?.city === "string") parts.push(m.city);
+  if (m?.url) parts.push(`(${String(m.url).replace(/^https?:\/\//, "").split("/")[0]})`);
+  return parts.length ? parts.join("; ").replace(/\s+/g, " ").slice(0, 500) : null;
+}
 
-export type ShadowRun = { day: string; signature: string; skipped: boolean; judgments: Judgment[]; pool: PoolItem[] };
+export type ShadowRun = { day: string; signature: string; skipped: boolean; judgments: Judgment[]; pool: PoolItem[]; error?: string };
 
 // dryRun: decide and return, but write nothing (a local check).
 export async function runSweepShadow(userId: string, now = new Date(), opts: { dryRun?: boolean } = {}): Promise<ShadowRun | null> {
   const q: Q = async (sql, args = []) => (await pool.query(sql, args as any[])).rows;
   const { today, weekday } = dayOf(now);
   // Once a day.
-  const done = await q(`SELECT 1 FROM harness_decisions WHERE decision = 'sweep.select.shadow' AND user_id = $1 AND proposal->>'day' = $2 LIMIT 1`, [userId, today]);
+  const done = await q(`SELECT 1 FROM harness_decisions WHERE decision = 'sweep.select.shadow' AND user_id = $1 AND proposal->>'day' = $2 AND action IS DISTINCT FROM 'error' LIMIT 1`, [userId, today]);
   if (done.length && !opts.dryRun) return null;
 
   const backlogs = await q(`SELECT ask_id, items FROM event_backlogs WHERE user_id = $1`, [userId]);
@@ -77,13 +101,14 @@ export async function runSweepShadow(userId: string, now = new Date(), opts: { d
         askId: b.ask_id && b.ask_id !== "profile" ? String(b.ask_id) : null,
         fromProfile: b.ask_id === "profile",
         reminder: !!it?.reminder,
-        details: detailsOf(it?.match),
+        details: describeMatch(it?.match),
+        again: !!it?.again,
       })),
     ),
     ...queued.map((c: any) => {
       const p = c.payload ?? {};
       const m = p.match ?? {};
-      return { name: String(m.name ?? ""), date: dateOf(m), tier: Number(m.tier ?? 0), askId: p.askId && p.askId !== "profile" ? String(p.askId) : null, fromProfile: p.fromProfile === true, reminder: !!p.reminder, details: detailsOf(m) };
+      return { name: String(m.name ?? ""), date: dateOf(m), tier: Number(m.tier ?? 0), askId: p.askId && p.askId !== "profile" ? String(p.askId) : null, fromProfile: p.fromProfile === true, reminder: !!p.reminder, again: !!p.again, details: describeMatch(m) };
     }),
   ];
   const askIds = [...new Set(raw.map((r) => r.askId).filter((x): x is string => !!x))];
@@ -95,7 +120,7 @@ export async function runSweepShadow(userId: string, now = new Date(), opts: { d
 
   // Skip unchanged days: same signature as the last run (holds that came due count as a change).
   const [last] = await q(`SELECT proposal FROM harness_decisions WHERE decision = 'sweep.select.shadow' AND user_id = $1 AND outcome = 'act' ORDER BY created_at DESC LIMIT 1`, [userId]);
-  const holds = ((last?.proposal?.judgments ?? []) as Judgment[]).filter((j) => j.verdict === "hold").map((j) => j.until ?? null);
+  const holds = holdDueDates((last?.proposal?.judgments ?? []) as Judgment[], String(last?.proposal?.day ?? today));
   const signature = selectSignature(ctx, holds);
   if (!ctx.pool.length || (last?.proposal?.signature === signature && !opts.dryRun)) {
     if (!opts.dryRun) await recordDecision({ layer: 5, decision: "sweep.select.shadow", userId, outcome: "skip", action: ctx.pool.length ? "unchanged" : "empty_pool", proposal: { day: today, signature, poolSize: ctx.pool.length } });
@@ -103,6 +128,13 @@ export async function runSweepShadow(userId: string, now = new Date(), opts: { d
   }
 
   const r = await selectForMember(ctx, { model: process.env.SWEEP_SELECT_MODEL || SELECT_MODEL, userId });
+  // A failed selection is logged as an error, never as a run: it isn't the
+  // "last run" tomorrow's unchanged check compares against, so it can't be
+  // silently skipped (review of #57).
+  if (r.error) {
+    if (!opts.dryRun) await recordDecision({ layer: 5, decision: "sweep.select.shadow", userId, outcome: "skip", action: "error", reason: r.error, proposal: { day: today, model: r.model, usage: r.usage, raw: r.raw.slice(0, 20_000), poolSize: ctx.pool.length } });
+    return { day: today, signature, skipped: true, judgments: r.judgments, pool: ctx.pool, error: r.error };
+  }
   const count = (v: string) => r.judgments.filter((j) => j.verdict === v).length;
   if (!opts.dryRun) await recordDecision({
     layer: 5,
@@ -110,7 +142,6 @@ export async function runSweepShadow(userId: string, now = new Date(), opts: { d
     userId,
     outcome: "act",
     action: `${count("send")} send, ${count("hold")} hold, ${count("reject")} reject`,
-    reason: r.error ?? undefined,
     proposal: {
       day: today,
       signature,
@@ -147,7 +178,7 @@ export type ShadowSection = {
 export async function shadowSections(day: string, userIds?: string[]): Promise<ShadowSection[]> {
   const out: ShadowSection[] = [];
   for (const userId of userIds ?? (await shadowUserIds())) {
-    const [run] = (await pool.query(`SELECT outcome, action, proposal FROM harness_decisions WHERE decision = 'sweep.select.shadow' AND user_id = $1 AND proposal->>'day' = $2 ORDER BY created_at DESC LIMIT 1`, [userId, day])).rows;
+    const [run] = (await pool.query(`SELECT outcome, action, reason, proposal FROM harness_decisions WHERE decision = 'sweep.select.shadow' AND user_id = $1 AND proposal->>'day' = $2 ORDER BY created_at DESC LIMIT 1`, [userId, day])).rows;
     const [u] = (await pool.query(`SELECT first_name FROM users WHERE id = $1`, [userId])).rows;
     const start = DateTime.fromISO(day, { zone: "America/Los_Angeles" }).startOf("day").toJSDate();
     const end = DateTime.fromISO(day, { zone: "America/Los_Angeles" }).endOf("day").toJSDate();
@@ -156,7 +187,7 @@ export async function shadowSections(day: string, userIds?: string[]): Promise<S
     out.push({
       name: u?.first_name ?? "Member",
       day,
-      skipped: !run ? "didn't run" : run.outcome === "skip" ? (run.action === "unchanged" ? "nothing changed since the last run" : "nothing in the pool") : null,
+      skipped: !run ? "didn't run" : run.outcome === "skip" ? (run.action === "unchanged" ? "nothing changed since the last run" : run.action === "error" ? `the selection failed: ${String(run.reason ?? "unknown").slice(0, 160)}` : "nothing in the pool") : null,
       oldQueued: queued,
       oldTexted: texted,
       judgments: run?.outcome === "act" ? (run.proposal?.judgments ?? []) : [],
