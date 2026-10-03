@@ -3,16 +3,15 @@ import twilio from "twilio";
 import type { Server as IOServer } from "socket.io";
 import pool from "../db/db.js";
 import { generateEmbedding } from "./embeddings.js";
-import { issueStreamAuthToken, prewarmHumeConnection } from "./mediaStreamBridge.js";
+import { issueCallToken, prebuildCallContext } from "./elevenLabsCalls.js";
+import { buildCallContextSummary } from "./callContext.js";
 import { recordDecision } from "../harness/core.js";
 import { decideCall, gatherCallState, type CallAuthorization } from "../harness/callGate.js";
 
 // Extracted from co.ts's POST /call/:user_id so a second call site (Co
 // triggering a call from within a texting conversation, see sendblue.ts's
-// call-offer handling) can reuse the exact same Twilio-dial-and-bridge logic
-// — AMD/voicemail handling included — instead of a slimmer, divergent copy
-// that could regress call quality (e.g. Co talking into a voicemail box with
-// no AMD). jobs/index.ts's proactive/scheduled/auto-intake cron jobs also
+// call-offer handling) can reuse the exact same Twilio dial, instead of a
+// slimmer, divergent copy that could regress call quality. jobs/index.ts's proactive/scheduled/auto-intake cron jobs also
 // call this directly now, rather than each keeping its own copy of the dial
 // logic.
 const twilioClient = twilio(
@@ -65,62 +64,30 @@ export async function triggerCallForUser(
 
   const statusCallbackUrl = `${process.env.API_URL}/co/call-status`;
 
-  // Routes the call's audio through our own media-stream WebSocket (see
-  // server.ts + services/mediaStreamBridge.ts) instead of Hume's built-in
-  // /v0/evi/twilio server-to-server bridge. That endpoint only accepts
-  // config_id/api_key as query params — confirmed against Hume's docs — so
-  // first_name/context_summary passed alongside it were always silently
-  // dropped. Dynamic variables only work via a session_settings message on a
-  // live WebSocket connection, which requires something to actually hold
-  // that connection; mediaStreamBridge.ts is that something, on our side.
-  //
-  // user_id travels as a <Parameter>, NOT a query string on the Stream url —
-  // confirmed live and via Twilio's own docs that Twilio strips query
-  // parameters from Media Stream URLs entirely. <Parameter> values arrive in
-  // the WebSocket's own "start" event as start.customParameters instead (see
-  // mediaStreamBridge.ts), which is the only place this is actually reachable.
-  const mediaStreamUrl = `${process.env.API_URL!.replace(/^http/, "ws")}/media-stream`;
-  const twiml = new twilio.twiml.VoiceResponse();
-  const stream = twiml.connect().stream({ url: mediaStreamUrl });
-  stream.parameter({ name: "user_id", value: userId });
-  // Security fix, 2026-09-17: the bridge no longer trusts user_id above on
-  // its own — see mediaStreamBridge.ts's "media-stream auth" section. The
-  // call's real CallSid doesn't exist yet at this point (Twilio only
-  // assigns it once twilioClient.calls.create() below returns), so this
-  // can't be bound to a callSid the way the inbound path can; a single-use,
-  // short-lived opaque token tied only to userId is enough — it's never
-  // derivable by anyone who isn't this server or the real Twilio media
-  // stream for this exact call.
-  stream.parameter({ name: "auth", value: issueStreamAuthToken(userId) });
-
+  // Calls run on Co's ElevenLabs agent (services/elevenLabsCalls.ts): Twilio
+  // fetches the TwiML from us once the call connects, and we register it with
+  // the agent then. No Twilio machine detection: the agent's own voicemail
+  // tool leaves the message, and the post-call webhook sends the missed-call text.
+  // Context built while it rings, ready the moment they answer.
+  prebuildCallContext(userId, buildCallContextSummary);
   const call = await twilioClient.calls.create({
     to: user.phone_number,
     from: process.env.TWILIO_PHONE_NUMBER!,
-    twiml: twiml.toString(),
+    url: `${process.env.API_URL}/co/el/outbound-twiml?u=${encodeURIComponent(userId)}&t=${encodeURIComponent(issueCallToken(userId))}`,
+    method: "POST",
     statusCallback: statusCallbackUrl,
     statusCallbackEvent: ["ringing", "answered", "completed"],
     statusCallbackMethod: "POST",
     timeout: 20,
-    // Without this, a voicemail pickup was indistinguishable from a human
-    // answering — Hume just kept having its normal live conversation into
-    // the answering machine instead of leaving a deliberate line and hanging
-    // up. asyncAmd connects Hume immediately so a real human faces no delay;
-    // the async result arrives as its own callback to /co/call-status,
-    // handled there.
-    machineDetection: "DetectMessageEnd",
-    machineDetectionTimeout: 10,
-    asyncAmd: "true",
-    asyncAmdStatusCallback: statusCallbackUrl,
-    asyncAmdStatusCallbackMethod: "POST",
   });
+  await recordCallPlaced(userId, user.first_name, call.sid, io);
+  return { success: true, call_sid: call.sid };
+}
 
-  // Start the Hume handshake now, during ring time, instead of waiting for
-  // the Twilio media stream's "start" event after pickup — see
-  // mediaStreamBridge.ts's prewarmHumeConnection for why that pause existed.
-  // Passes this call's real CallSid so two overlapping calls to the same
-  // user each get their own prewarmed connection instead of colliding.
-  prewarmHumeConnection(userId, call.sid);
-
+// The call record, live status and app event, the same for either provider.
+async function recordCallPlaced(userId: string, firstName: string, callSid: string, io: IOServer | null): Promise<void> {
+  const call = { sid: callSid };
+  const user = { first_name: firstName };
   const attemptContent = `Co initiated call to ${user.first_name} — call_sid: ${call.sid}`;
   const attemptMem = await pool.query(
     `INSERT INTO co_memories (user_id, memory_type, content) VALUES ($1, 'call_transcript', $2) RETURNING id`,
@@ -142,5 +109,4 @@ export async function triggerCallForUser(
 
   io?.to(`user:${userId}`).emit("co:call_initiated", { call_sid: call.sid });
 
-  return { success: true, call_sid: call.sid };
 }

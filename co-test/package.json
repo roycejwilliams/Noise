@@ -5,7 +5,7 @@
   "type": "module",
   "scripts": {
     "build": "tsc && npm run build:client",
-    "build:client": "esbuild src/client/call.ts src/client/results.ts src/client/prompt.ts src/client/phone.ts src/client/checklist.ts src/client/login.ts --bundle --outdir=public --platform=browser --format=iife --target=es2020",
+    "build:client": "esbuild src/client/results.ts src/client/prompt.ts src/client/phone.ts src/client/checklist.ts src/client/login.ts --bundle --outdir=public --platform=browser --format=iife --target=es2020",
     "dev": "tsx watch src/server.ts",
     "start": "node dist/co-test/src/server.js"
   },
@@ -25,7 +25,6 @@
     "express": "^5.2.1",
     "geo-tz": "^8.1.8",
     "heic-convert": "^2.1.0",
-    "hume": "^0.15.17",
     "libphonenumber-js": "^1.13.7",
     "luxon": "^3.7.2",
     "node-cron": "^4.6.0",

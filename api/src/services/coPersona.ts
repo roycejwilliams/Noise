@@ -1,3 +1,6 @@
+import { existsSync, readFileSync } from "fs";
+import { resolve } from "path";
+import { fileURLToPath } from "url";
 // The text channel used a separate, thinner persona ("You are Co, an
 // exclusive life concierge") than the real Hume EVI call does — this fetches
 // the actual system prompt Co's voice config uses, so a text conversation is
@@ -9,11 +12,10 @@
 // message — this avoids adding a Hume round-trip to the latency of every
 // text reply.
 let cachedPrompt: string | null = null;
-let fetchPromise: Promise<string | null> | null = null;
 
 // The raw prompt returned by getCoPersonaPrompt() below still contains
-// {{first_name}}/{{context_summary}} template tokens — Hume substitutes
-// those itself at call time (see mediaStreamBridge.ts's `variables`), but
+// {{first_name}}/{{context_summary}} template tokens — the call agent fills
+// those itself at call time (services/elevenLabsCalls.ts's variables), but
 // nothing does that for this text-channel reuse. Left unfilled, the model is
 // literally told "here's the context_summary: {{context_summary}}" and,
 // correctly, reports it doesn't have one instead of writing real output —
@@ -31,29 +33,41 @@ export async function renderCoPersonaPrompt(
     .replace(/\{\{context_summary\}\}/g, contextSummary);
 }
 
+// The call prompt file (api/prompts/co-system-prompt.md) is the source of
+// truth (scripts/pushElevenLabsAgent.ts pushes it to the call agent),
+// so read it directly (2026-10-03): Hume, which this used to fetch from,
+// ends on 2026-11-13. co-test's image copies api/prompts (co-test/Dockerfile);
+// a few places are tried since the process runs from api/ or co-test/.
+export function promptFileCandidates(cwd = process.cwd(), here = fileURLToPath(new URL(".", import.meta.url))): string[] {
+  return [
+    resolve(cwd, "prompts/co-system-prompt.md"),
+    resolve(cwd, "api/prompts/co-system-prompt.md"),
+    resolve(cwd, "../api/prompts/co-system-prompt.md"),
+    resolve(here, "../../prompts/co-system-prompt.md"),
+    resolve(here, "../../../prompts/co-system-prompt.md"),
+    resolve(here, "../../../../api/prompts/co-system-prompt.md"),
+  ];
+}
+
+function readPromptFile(): string | null {
+  for (const p of promptFileCandidates()) {
+    try {
+      if (existsSync(p)) {
+        const text = readFileSync(p, "utf-8");
+        if (text.trim()) return text;
+      }
+    } catch {}
+  }
+  return null;
+}
+
 export async function getCoPersonaPrompt(): Promise<string | null> {
   if (cachedPrompt) return cachedPrompt;
-  if (!fetchPromise) {
-    fetchPromise = (async () => {
-      try {
-        const res = await fetch(
-          `https://api.hume.ai/v0/evi/configs/${process.env.HUME_CONFIG_ID}?restrict_to_most_recent=true`,
-          { headers: { "X-Hume-Api-Key": process.env.HUME_API_KEY! } },
-        );
-        if (!res.ok) throw new Error(`Hume config fetch failed: ${res.status}`);
-        const data: any = await res.json();
-        const text = data.configs_page?.[0]?.prompt?.text;
-        if (typeof text !== "string" || !text) throw new Error("Hume config response had no prompt text");
-        cachedPrompt = text;
-        return text;
-      } catch (err: any) {
-        console.error(
-          "coPersona: failed to fetch Hume EVI persona prompt for text channel (non-fatal, falling back to a thinner default):",
-          err?.message ?? err,
-        );
-        return null;
-      }
-    })();
+  const fromFile = readPromptFile();
+  if (fromFile) {
+    cachedPrompt = fromFile;
+    return fromFile;
   }
-  return fetchPromise;
+  console.error("coPersona: prompts/co-system-prompt.md not found (non-fatal, falling back to a thinner default)");
+  return null;
 }

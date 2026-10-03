@@ -26,8 +26,8 @@ const SUMMARY_MODEL = MODELS.haiku;
 // last 6 raw text_exchange rows (3 conversational turns), justified by a
 // comment claiming the result "gets passed as a URL query param on the
 // Twilio bridge connect URL." That mechanism doesn't exist anywhere in the
-// current code — every actual caller (mediaStreamBridge.ts's Hume
-// sessionSettings.variables, postCallFollowUp.ts and sendblue.ts's LLM
+// current code — every actual caller (the call agent's variables in
+// services/elevenLabsCalls.ts, postCallFollowUp.ts and sendblue.ts's LLM
 // prompt interpolation) treats this as plain in-process text with no URL
 // involved. The cap was real, it just wasn't protecting anything anymore —
 // it was silently discarding real context on every call and every text

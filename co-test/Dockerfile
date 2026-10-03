@@ -30,6 +30,8 @@ COPY api/package*.json ./api/
 RUN npm --prefix api install
 
 COPY api/src ./api/src
+# The call prompt, read by the text persona too (api/src/services/coPersona.ts).
+COPY api/prompts ./api/prompts
 COPY co-test ./co-test
 
 WORKDIR /app/co-test

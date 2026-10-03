@@ -26,7 +26,10 @@ export async function generateVoiceNote(text: string): Promise<string> {
     process.env.ELEVENLABS_VOICE_ID!,
     {
       text,
-      modelId: "eleven_turbo_v2_5",
+      // Eleven v4 (2026-10-03): #1 on quality, and a voice note isn't live, so
+      // its speed doesn't matter. Same ELEVENLABS_VOICE_ID as Co's call agent,
+      // so Co sounds the same on a call and in a note. eleven_turbo_v2_5 was deprecated.
+      modelId: process.env.VOICE_NOTE_MODEL || "eleven_v4",
       outputFormat: "mp3_44100_128",
     },
   );
@@ -42,10 +45,7 @@ export function getAudioEntry(id: string): AudioEntry | undefined {
   return audioCache.get(id);
 }
 
-// Shared by both generateVoiceNote (ElevenLabs, above) and
-// generateHumeVoiceLine (below) — same cache, same eviction, same /audio/:id
-// route serves either. Pulled out since the caching logic has nothing to do
-// with which TTS provider produced the bytes.
+// The cache /audio/:id serves from (voice notes, above).
 function cacheAudioBuffer(buffer: Buffer): string {
   if (audioCache.size >= MAX_CACHE_ENTRIES) {
     const oldestKey = audioCache.keys().next().value;
@@ -57,30 +57,4 @@ function cacheAudioBuffer(buffer: Buffer): string {
     ? `https://${process.env.RAILWAY_PUBLIC_DOMAIN}`
     : process.env.API_URL!;
   return `${baseUrl}/audio/${id}`;
-}
-
-// Synthesizes one line using Co's own attached Hume voice (HUME_VOICE_ID —
-// the exact voice_id on whichever HUME_CONFIG_ID this environment points
-// at, not a separate voice system). Needed specifically for TwiML said
-// while a call is still live but Hume itself is no longer on the line (the
-// AMD-misfire voicemail redirect in webhooks.ts/co.ts) — Twilio's <Say> only
-// offers its own built-in voices, which don't match Co's real voice at all.
-// Hume's /v0/tts is a standalone synthesis endpoint, separate from live EVI
-// chat, but accepts the same voice_id.
-export async function generateHumeVoiceLine(text: string): Promise<string> {
-  const res = await fetch("https://api.hume.ai/v0/tts", {
-    method: "POST",
-    headers: {
-      "X-Hume-Api-Key": process.env.HUME_API_KEY!,
-      "Content-Type": "application/json",
-    },
-    body: JSON.stringify({
-      utterances: [{ text, voice: { id: process.env.HUME_VOICE_ID!, provider: "HUME_AI" } }],
-    }),
-  });
-  if (!res.ok) throw new Error(`Hume TTS failed: ${res.status} ${await res.text()}`);
-  const data: any = await res.json();
-  const base64Audio = data.generations?.[0]?.audio;
-  if (!base64Audio) throw new Error("Hume TTS returned no audio");
-  return cacheAudioBuffer(Buffer.from(base64Audio, "base64"));
 }
