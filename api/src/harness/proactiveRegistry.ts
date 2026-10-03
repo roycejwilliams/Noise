@@ -18,6 +18,7 @@ import { itemDays, localToday, offerable, readDates } from "../services/dateGuar
 import { markMatchNudgeSent, type EventMatchNudgePayload } from "../services/eventScoring.js";
 import { lapseCloseDate, lapseText } from "../services/membershipLapse.js";
 import { getTimezoneForCity } from "../services/geocoding.js";
+import { prepareReveal } from "../services/networkIntroNudge.js";
 
 function skip(reason: string): DraftResult {
   return { skip: reason };
@@ -173,14 +174,20 @@ export const proactiveRegistry: ProactiveRegistry = {
         task: "Say someone in the network came to mind for them, without naming or describing the person, and ask one yes/no question: do they want to hear who. Don't say the other person wants to meet them.",
       });
       if (!text) return skip("model chose SKIP");
+      // Never ask "want to hear who?" without the answer in hand: the reveal is
+      // checked and drafted now, and stored with the tease (onSent), so a yes
+      // delivers it. If it couldn't go out, neither does the tease.
+      const prepared = await prepareReveal(c.userId, person.firstName, candidate);
+      if ("why" in prepared) return skip(`no tease: ${prepared.why}`);
+      c.payload.preparedReveal = prepared.message;
       return { messages: [text], text, rules: { maxSentences: 2, maxChars: 200, mustNotInclude: [candidate.first_name] } };
     },
     async onSent(c) {
-      const { askId, candidate } = c.payload;
+      const { askId, candidate, preparedReveal } = c.payload;
       await removeNetworkBacklogItem(c.userId, askId, candidate.candidate_id);
       await pool.query(`INSERT INTO co_memories (user_id, memory_type, content) VALUES ($1, 'network_offer_pending', $2)`, [
         c.userId,
-        JSON.stringify({ askId, candidate }),
+        JSON.stringify({ askId, candidate, ...(preparedReveal ? { reveal: preparedReveal } : {}) }),
       ]);
     },
     async onDropped(c) {

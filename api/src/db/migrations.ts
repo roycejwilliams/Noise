@@ -292,6 +292,9 @@ export async function runMigrations(): Promise<void> {
       "co_lesson",
       // The text before a Co event (services/preArrival.ts).
       "event_pre_arrival",
+      // What a web search kept, with its link, so "send it" works on a later turn
+      // (services/researchFinds.ts, 2026-10-03).
+      "research_find",
     ];
     const { rows } = await pool.query(
       `SELECT pg_get_constraintdef(oid) AS def FROM pg_constraint

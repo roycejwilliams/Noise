@@ -82,3 +82,33 @@ export async function tapbackHistory(userId: string): Promise<TapbackHistory> {
   );
   return { recent, textsSinceLast: c[0]?.n ?? 0 };
 }
+
+// One reaction per message (Royce, 2026-10-03: a duplicate tapback landed on
+// one of his messages). Three paths can react to the same incoming text: the
+// early "on it" read, the closing tapback tool, and a teammate's acknowledgement.
+// Each could pass its own checks, and the closing tool only had to differ from
+// the last emoji, so ack-then-closing put two on one message. Every send goes
+// through this ledger, keyed by the message's handle.
+const reacted = new Map<string, number>();
+export const REACTION_LEDGER_MS = 24 * 3_600_000;
+export const REACTION_LEDGER_MAX = 500;
+
+// True the first time a message is claimed; false if Co already reacted to it.
+export function claimReaction(handle: string, now: number = Date.now()): boolean {
+  for (const [h, at] of reacted) if (now - at > REACTION_LEDGER_MS) reacted.delete(h);
+  if (reacted.has(handle)) return false;
+  if (reacted.size >= REACTION_LEDGER_MAX) reacted.delete(reacted.keys().next().value as string);
+  reacted.set(handle, now);
+  return true;
+}
+// A send that didn't go through frees the message for a retry.
+export function releaseReaction(handle: string): void {
+  reacted.delete(handle);
+}
+export function reactedTo(handle: string | null | undefined, now: number = Date.now()): boolean {
+  const at = handle ? reacted.get(handle) : undefined;
+  return at !== undefined && now - at <= REACTION_LEDGER_MS;
+}
+export function resetReactionLedger(): void {
+  reacted.clear();
+}

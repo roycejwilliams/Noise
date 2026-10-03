@@ -1,6 +1,7 @@
 import { isTestHandle, isTestNumber, testHandle } from "./testNumbers.js";
 import { AsyncLocalStorage } from "node:async_hooks";
 import { sendLimiter } from "./sendLimiter.js";
+import { claimReaction, releaseReaction } from "./tapbacks.js";
 import { createHash, timingSafeEqual } from "crypto";
 import { SendblueAPI } from "sendblue";
 import { capitalizeSentences, looksLikeMetaReply, paragraphize } from "./textStyle.js";
@@ -239,10 +240,19 @@ export async function markRead(number: string): Promise<void> {
 // Apple only delivers these on iMessage, so the caller falls back to a plain
 // emoji text when this returns false.
 export async function sendReaction(messageHandle: string, reaction: string): Promise<boolean> {
+  // A message gets one reaction from Co, whichever path asks (services/tapbacks.ts).
+  // The message already has one, so there's nothing more to send.
+  if (!claimReaction(messageHandle)) {
+    console.warn(`sendReaction: already reacted to message …${messageHandle.slice(-8)}; not sending ${reaction}`);
+    return true;
+  }
   // A test member's message: the tapback counts as given, nothing is sent.
   if (isTestHandle(messageHandle)) return true;
   const from = process.env.SENDBLUE_PHONE_NUMBER;
-  if (!from || !process.env.SENDBLUE_API_KEY || !process.env.SENDBLUE_SECRET_KEY) return false;
+  if (!from || !process.env.SENDBLUE_API_KEY || !process.env.SENDBLUE_SECRET_KEY) {
+    releaseReaction(messageHandle);
+    return false;
+  }
   try {
     const res = await fetch("https://api.sendblue.com/api/send-reaction", {
       method: "POST",
@@ -255,11 +265,13 @@ export async function sendReaction(messageHandle: string, reaction: string): Pro
     });
     if (!res.ok) {
       console.error(`sendReaction: ${res.status} (non-fatal)`);
+      releaseReaction(messageHandle);
       return false;
     }
     return true;
   } catch (err: any) {
     console.error("sendReaction failed (non-fatal):", err?.message ?? err);
+    releaseReaction(messageHandle);
     return false;
   }
 }

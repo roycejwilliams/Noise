@@ -39,6 +39,7 @@ import { capitalizeSentences } from "../services/textStyle.js";
 import { offerFollowUp } from "../services/offerFollowUp.js";
 import { AsyncLocalStorage } from "node:async_hooks";
 import { safetyHoldActive } from "../services/safety.js";
+import { repeatQuestionCheck } from "./repeatAsk.js";
 import { getEmotionalContext, renderEmotionalContext } from "./emotion.js";
 
 // The person's emotional context for whatever draft runs inside dispatch,
@@ -197,6 +198,9 @@ export type PickState = {
   lastInboundAt: Date | null;
   // Emotion loop: struggling in the last day (harness/emotion.ts).
   needsCare?: boolean;
+  // They said yes to "want to hear who?" and no reveal followed
+  // (networkIntroNudge.lastTeaseUndelivered): no new tease until it clears.
+  undeliveredYes?: boolean;
   // A safety concern in the last three days (services/safety.ts).
   safetyHold?: boolean;
 };
@@ -347,7 +351,7 @@ export function spacingCheck(state: Pick<PickState, "now" | "sends">): GateCheck
 
 // answering: a reply (isAnswering) doesn't wait on the last text of its type
 // (two time frames they named are two replies); the same topic still waits.
-export function candidateChecks(c: Candidate, state: Pick<PickState, "now" | "sends" | "lastInboundAt" | "needsCare" | "safetyHold">, opts: { answering?: boolean } = {}): GateCheck[] {
+export function candidateChecks(c: Candidate, state: Pick<PickState, "now" | "sends" | "lastInboundAt" | "needsCare" | "safetyHold" | "undeliveredYes">, opts: { answering?: boolean } = {}): GateCheck[] {
   const policy = TYPE_POLICY[c.type];
   const sameTarget = state.sends.find((s) => s.targetKey === c.targetKey);
   const unansweredTopic = state.sends.find((s) => s.topicKey && s.topicKey === c.topicKey && unansweredSince(s, state.lastInboundAt));
@@ -386,6 +390,12 @@ export function candidateChecks(c: Candidate, state: Pick<PickState, "now" | "se
   const tried = Date.parse(String((c.payload as { relevanceTriedAt?: string })?.relevanceTriedAt ?? ""));
   if (tried && state.now.getTime() - tried < RELEVANCE_RETRY_HOURS * HOUR) {
     checks.push({ name: "relevance_retry", pass: false, reason: "Co couldn't say if it's still relevant; trying again shortly" });
+  }
+  // "Asked, got yes, delivered nothing, asked again" (2026-10-03): a tease is a
+  // question whose answer is a reveal; while an earlier yes is still owed its
+  // answer, asking another one just repeats the loop.
+  if (c.type === "network_tease" && state.undeliveredYes) {
+    checks.push({ name: "no_undelivered_yes", pass: false, reason: "they said yes to hearing who and nothing was delivered; no new tease until that clears" });
   }
   if (state.safetyHold && PROACTIVE_PURPOSE_MAP[c.type] === "offer") {
     checks.push({ name: "safety_hold", pass: false, reason: "they may not have been safe in the last few days; no offers" });
@@ -1306,6 +1316,7 @@ export async function dispatchForUser(registry: ProactiveRegistry, userId: strin
   const emotional = await getEmotionalContext(userId);
   state.needsCare = emotional.needsCare;
   state.safetyHold = await safetyHoldActive(userId);
+  state.undeliveredYes = await import("../services/networkIntroNudge.js").then((m) => m.lastTeaseUndelivered(userId)).catch(() => false);
   const ev = evaluateCandidates(state, opts);
   const proposal = {
     candidates: ev.perCandidate.map((p) => ({
@@ -1391,7 +1402,13 @@ export async function dispatchForUser(registry: ProactiveRegistry, userId: strin
 
   // Co texts first here, so there's no lowercase style to mirror.
   draft = { ...draft, text: capitalizeSentences(draft.text), messages: draft.messages.map(capitalizeSentences) };
-  let draftChecks = checkDraft(draft.text, draft.rules);
+  // The draft's own rules plus: never a question Co already asked after which
+  // they wrote back (harness/repeatAsk.ts).
+  const withRepeat = (checks: GateCheck[], text: string): GateCheck[] => {
+    const again = repeatQuestionCheck(text, recent);
+    return again.pass ? checks : [...checks, again as GateCheck];
+  };
+  let draftChecks = withRepeat(checkDraft(draft.text, draft.rules), draft.text);
   let dg = gate(draftChecks);
   // One rewrite, told what to fix, before the day's text is given up.
   if (!dg.ok) {
@@ -1401,7 +1418,7 @@ export async function dispatchForUser(registry: ProactiveRegistry, userId: strin
       .catch(() => null);
     if (second && "messages" in second) {
       const fixed = { ...second, text: capitalizeSentences(second.text), messages: second.messages.map(capitalizeSentences) };
-      const fixedChecks = checkDraft(fixed.text, fixed.rules);
+      const fixedChecks = withRepeat(checkDraft(fixed.text, fixed.rules), fixed.text);
       const fg = gate(fixedChecks);
       await recordDecision({ layer: 7, decision: "proactive.redraft", userId, outcome: fg.ok ? "act" : "skip", action: `send:${c.type}`, proposal: { picked: c.id, first: first.draft, second: fixed.text }, checks: fixedChecks, reason: `first draft broke: ${first.failed}` }).catch(() => {});
       if (fg.ok) {

@@ -1543,7 +1543,7 @@ export function sendblueRouter(io: Server): Router {
                     return false;
                   }
                   return sendReaction(ackHandle, reactionFor(ackEmoji)).then((ok) => {
-                    recordDecision({ layer: 3, decision: "turn.ack", userId: user.id, outcome: ok ? "act" : "skip", action: ackEmoji, proposal: { ms: Date.now() - ackStarted } }).catch(() => {});
+                    recordDecision({ layer: 3, decision: "turn.ack", userId: user.id, outcome: ok ? "act" : "skip", action: ackEmoji, proposal: { ms: Date.now() - ackStarted, handle: ackHandle.slice(-8) } }).catch(() => {});
                     return ok;
                   });
                 })
