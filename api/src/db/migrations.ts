@@ -1884,6 +1884,47 @@ export async function runMigrations(): Promise<void> {
     .then(() => pool.query(`ALTER TABLE emotion_signals ADD COLUMN IF NOT EXISTS target TEXT`))
     .catch((err: Error) => console.error("emotion_signals table init failed:", err));
 
+  // Voice flags (2026-10-03) — see src/services/voiceFlags.ts. One run per
+  // call (claimed by conversation id, so a retried webhook doesn't run it
+  // twice) and every flag it raised, kept or dropped with why, for the audit.
+  await pool
+    .query(
+      `CREATE TABLE IF NOT EXISTS voice_flag_runs (
+        conversation_id TEXT PRIMARY KEY,
+        user_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+        status TEXT NOT NULL,
+        model TEXT,
+        audio_bytes INT,
+        flags INT,
+        kept INT,
+        ms INT,
+        error TEXT,
+        created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+        finished_at TIMESTAMPTZ
+      )`,
+    )
+    .then(() =>
+      pool.query(
+        `CREATE TABLE IF NOT EXISTS voice_flags (
+          id BIGSERIAL PRIMARY KEY,
+          conversation_id TEXT NOT NULL,
+          user_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+          at_secs REAL,
+          quote TEXT,
+          cue TEXT,
+          feeling TEXT,
+          valence TEXT,
+          reading TEXT,
+          confidence REAL,
+          kept BOOLEAN NOT NULL,
+          drop_reason TEXT,
+          created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+        )`,
+      ),
+    )
+    .then(() => pool.query(`CREATE INDEX IF NOT EXISTS idx_voice_flags_user ON voice_flags (user_id, created_at DESC)`))
+    .catch((err: Error) => console.error("voice_flags table init failed:", err));
+
   // Tier 3 (paid X search) budget log (2026-09-15) — tieredRecommendation.ts.
   await pool
     .query(

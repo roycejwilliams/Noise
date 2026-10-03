@@ -41,6 +41,7 @@ import { surfaceNewAsksNow } from "../services/eventSurfacingSweep.js";
 import { refreshPersonSnapshot } from "../harness/personSnapshot.js";
 import { auditCall } from "../harness/callGrounding.js";
 import { callEmotionMoments, recordEmotionSignals } from "../harness/emotion.js";
+import { flagVoiceMoments } from "../services/voiceFlags.js";
 import { CANT_CONNECT_LINE, COVERAGE_TRANSCRIPT_CHARS, chooseOpening, conversationLink, hitVoicemail, memberNumberOf, missedKind, voicemailLeft, noteCallFailure, takeCallContext, voicemailVerdict, registerElevenLabsCall, transcriptFromHistory, transcriptFromTurns, verifyCallToken, verifyPostCallWebhook } from "../services/elevenLabsCalls.js";
 
 // One-line drafts (missed-call text, voicemail line): narrow work, Haiku.
@@ -508,6 +509,9 @@ router.post("/el/post-call", async (req: Request, res: Response, next: NextFunct
       // No per-line voice scores on ElevenLabs: text emotion carries the call.
       load: async () => ({ transcript: transcriptFromTurns(turns), recordingUrl: conversationLink(conversationId) }),
     });
+    // Moments where their voice said more than their words, beside the text
+    // read (services/voiceFlags.ts). Test members only for now; never fails the call.
+    if (u[0]) flagVoiceMoments({ userId, phone: u[0].phone_number, conversationId, turns }).catch(() => {});
     return res.status(ended.status).send(ended.body);
   } catch (err) {
     next(err);
