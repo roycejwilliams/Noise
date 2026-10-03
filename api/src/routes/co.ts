@@ -40,6 +40,7 @@ import { MODELS } from "../models.js";
 import { surfaceNewAsksNow } from "../services/eventSurfacingSweep.js";
 import { refreshPersonSnapshot } from "../harness/personSnapshot.js";
 import { auditCall } from "../harness/callGrounding.js";
+import { callEmotionMoments, recordEmotionSignals } from "../harness/emotion.js";
 import { CANT_CONNECT_LINE, COVERAGE_TRANSCRIPT_CHARS, chooseOpening, conversationLink, hitVoicemail, memberNumberOf, missedKind, voicemailLeft, noteCallFailure, takeCallContext, voicemailVerdict, registerElevenLabsCall, transcriptFromHistory, transcriptFromTurns, verifyCallToken, verifyPostCallWebhook } from "../services/elevenLabsCalls.js";
 
 // One-line drafts (missed-call text, voicemail line): narrow work, Haiku.
@@ -780,6 +781,19 @@ async function processEndedCall(o: {
       // become corrections for the next text (harness/callGrounding.ts).
       auditCall(user_id, cleanTranscript, knownBeforeCall).catch(() => {});
 
+      // Emotion loop: the feelings in what they said on the call, read with the
+      // text path's own read (harness/emotion.ts callEmotionMoments), once per
+      // call (not again on a retried delivery). Overlaps the profile read below
+      // and can never fail the call.
+      const emotionDone = (async () => {
+        if (existingTranscriptMem.rows[0]) {
+          const had = await pool.query(`SELECT 1 FROM emotion_signals WHERE memory_id = $1 LIMIT 1`, [transcriptMemoryId]);
+          if (had.rows.length) return;
+        }
+        const moments = await callEmotionMoments(cleanTranscript);
+        await recordEmotionSignals(user_id, moments.map((m) => ({ ...m, memoryId: transcriptMemoryId })));
+      })().catch((err: any) => console.error("post-call: reading the call's feelings failed (non-fatal):", err?.message ?? err));
+
       // Steps 2-5 — Extract psychographic data via Anthropic, sanitize against
       // DB CHECK constraints, generate goal embeddings, and upsert co_profiles.
       // Shared with the typed-intake fallback and the text channel — see
@@ -795,6 +809,8 @@ async function processEndedCall(o: {
       } else {
         await learnFromCall({ userId: user_id, transcript: cleanTranscript });
       }
+
+      await emotionDone;
 
       // Step 7 — Ambient intent capture (non-blocking — runs in background)
       // A real ask from the call is searched right away (paced by the

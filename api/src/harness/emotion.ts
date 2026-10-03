@@ -110,6 +110,71 @@ Return ONLY JSON: {"emotion": "one or two words" or null, "intensity": "low" | "
 }
 
 // ---------------------------------------------------------------------------
+// Capture: calls (read from what they said)
+//
+// Calls used to bring Hume's voice scores. ElevenLabs sends none, so a call's
+// feelings are read from the member's own lines with the same read the text
+// path uses (readTextEmotion: same labels, same intensity, same target), each
+// with the lines before it for context. Words only: tone isn't heard (the
+// voice-layer pilot is looking at that). Only longer lines are read (a short
+// "yeah" has no feeling to name, and each read is a model call), the strongest
+// few are kept, at most one per emotion so one feeling doesn't crowd out the
+// rest, and they're recorded as source "call" so the loop treats them as it
+// treated Hume's moments.
+export const CALL_EMOTION_MIN_WORDS = 3;
+export const CALL_EMOTION_MAX_READS = 30;
+export const CALL_EMOTION_MAX_MOMENTS = 3;
+
+type CallLine = { index: number; text: string; context: string };
+
+// Pure: the member's lines worth reading, longest first (capped), each with the
+// few lines before it.
+export function callLinesToRead(transcript: string, max = CALL_EMOTION_MAX_READS): CallLine[] {
+  const lines = transcript
+    .split("\n")
+    .map((l) => l.trim())
+    .filter(Boolean)
+    .map((l) => (/^user:/i.test(l) ? { who: "Them", text: l.replace(/^user:\s*/i, "") } : { who: "Co", text: l.replace(/^assistant:\s*/i, "") }));
+  const out: CallLine[] = [];
+  lines.forEach((l, i) => {
+    if (l.who !== "Them" || l.text.split(/\s+/).filter(Boolean).length < CALL_EMOTION_MIN_WORDS) return;
+    out.push({ index: i, text: l.text, context: lines.slice(Math.max(0, i - 6), i).map((c) => `${c.who}: ${c.text}`).join("\n") });
+  });
+  return out
+    .sort((a, b) => b.text.length - a.text.length)
+    .slice(0, max)
+    .sort((a, b) => a.index - b.index);
+}
+
+// The call's feeling moments, strongest first. read is injectable for tests.
+export async function callEmotionMoments(
+  transcript: string,
+  read: (message: string, recentConversation: string, functionId: string) => Promise<TextEmotion> = readTextEmotion,
+  opts: { max?: number; concurrency?: number } = {},
+): Promise<Omit<EmotionSignal, "at">[]> {
+  const todo = callLinesToRead(transcript);
+  const found: { sig: Omit<EmotionSignal, "at">; order: number }[] = [];
+  let next = 0;
+  const worker = async () => {
+    while (next < todo.length) {
+      const l = todo[next++];
+      const e = await read(l.text, l.context, "call.readTextEmotion").catch(() => null);
+      if (e) found.push({ order: l.index, sig: { source: "call", emotion: e.emotion, intensity: e.intensity, valence: e.valence, about: e.about, target: e.target, quote: l.text.slice(0, 140) } });
+    }
+  };
+  await Promise.all(Array.from({ length: Math.min(opts.concurrency ?? 5, todo.length) }, worker));
+  const seen = new Set<string>();
+  const out: Omit<EmotionSignal, "at">[] = [];
+  for (const f of found.sort((a, b) => rank(b.sig.intensity) - rank(a.sig.intensity) || a.order - b.order)) {
+    if (seen.has(f.sig.emotion)) continue;
+    seen.add(f.sig.emotion);
+    out.push(f.sig);
+    if (out.length >= (opts.max ?? CALL_EMOTION_MAX_MOMENTS)) break;
+  }
+  return out;
+}
+
+// ---------------------------------------------------------------------------
 // Store
 
 export async function recordEmotionSignals(
