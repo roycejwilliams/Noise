@@ -324,7 +324,7 @@ check("the record starts filled from what was already logged", /backfillCoAction
   check("calls: a failed trigger is a not_done fact, never 'Tried to call them'", /for \(const f of callNotPlacedFacts\(callResult\.error\)\) addFact\(replyFacts, f\.kind, f\.text\)/.test(sb) && SB.callNotPlacedFacts("Call blocked: Co called 1 min ago (needs 2)").some((f) => f.kind === "did_before" && /called them 1 minute ago/.test(f.text)) && !/Tried to call them just now/.test(sb));
   check("calls: Co's \"tried again\" / \"didn't go through\" gets the claim check", RG5.needsClaimCheck("Tried again just now and it didn't go through on my end.") && RG5.needsClaimCheck("Still not going through on my end."));
   check("calls: a caller's bare \"hello?\" counts as a person for the voicemail decision; a greeting doesn't", CG.isCallerVoice("hello?") && CG.isCallerVoice("yeah who's this") && !CG.isCallerVoice("You've reached Royce, leave a message after the tone") && !CG.isCallerVoice("  "));
-  check("calls: the live AMD check uses any caller voice", /return !!h && \(h\.receivedUserMessage \|\| !!h\.heardCallerVoice\)/.test(src("services/mediaStreamBridge.ts")) && /if \(isCallerVoice\(text\)\) handle\.heardCallerVoice = true/.test(src("services/mediaStreamBridge.ts")));
+  check("calls: no Twilio machine detection; the call agent leaves the voicemail itself", !/machineDetection/.test(src("services/callTrigger.ts")) && /voicemail_detection/.test(src("services/elevenLabsCalls.ts")));
   const prevTw = process.env.TWILIO_PHONE_NUMBER;
   process.env.TWILIO_PHONE_NUMBER = "+14155550176";
   check("calls: Co gives the real calling number, never 'this same number'", CAP.formatUsNumber("+14155550176") === "(415) 555-0176" && /\(415\) 555-0176/.test(CAP.callLine()) && !/this same number/.test(src("services/capabilities.ts")) && !/from this exact number/.test(sb));
@@ -334,18 +334,6 @@ check("the record starts filled from what was already logged", /backfillCoAction
   check("calls: dial attempts don't count as a call in lapse or compaction", /m\.content NOT LIKE 'Co initiated call%'/.test(src("services/membershipLapse.ts")) && (src("services/memoryCompaction.ts").match(/content NOT LIKE 'Co initiated call%'/g) ?? []).length === 2);
   check("calls: the call context's lessons, threads and sent lines go through the strip", /const sentLines = await strip\(sentDetailLines/.test(src("services/callContext.ts")) && /const lessons = await strip\(/.test(src("services/callContext.ts")) && /const threads = \(await strip\(/.test(src("services/callContext.ts")));
   check("captions: 'you already looked at…' needs their own words", LT2.captionProblems("Rolling applications, and you already looked at their Member Residency.", "South Park Commons, rolling applications", "can you find me a couple").some((p) => /told you they did/.test(p)) && LT2.captionProblems("Rolling applications, and you already looked at their residency.", "South Park Commons", "I looked at their residency last week").length === 0);
-}
-// ------------------------------------------------ call audio stats (2026-10-02, observability only)
-{
-  const MB = await import("../../src/services/mediaStreamBridge.js");
-  const silence = new Int16Array(160), speech = new Int16Array(160).map((_, i) => (i % 2 ? 4000 : -4000));
-  check("audio stats: line silence isn't voiced, speech is", MB.frameRms(silence) < MB.VOICED_RMS && MB.frameRms(speech) >= MB.VOICED_RMS);
-  const st = MB.newAudioStats(Date.now() - 1000);
-  st.twilioFrames = 50; st.sentToHume = 48; st.bufferedBeforeHume = 2;
-  const line = MB.audioStatsLine("CAtest", "c0000000-0000-4000-8000-0000000000a1", st);
-  check("audio stats: one log line with the counts, a short user id, no phone number", /^mediaStreamBridge: call audio stats \{/.test(line) && /"twilioFrames":50/.test(line) && /"sentToHume":48/.test(line) && /"user":"c0000000"/.test(line) && !/\+1\d{10}/.test(line));
-  const mb = src("services/mediaStreamBridge.ts");
-  check("audio stats: forwarding is unchanged (same buffer cap, same send)", /if \(handle\.pendingInbound\.length < PENDING_AUDIO_FRAME_CAP\) \{\s*handle\.pendingInbound\.push\(mulawBuf\);/.test(mb) && /handle\.humeSocket\.sendAudioInput\(\{ data: pcmBuf\.toString\("base64"\) \}\);/.test(mb) && /forwardCallerAudio\(handle, mulawBuf\);/.test(mb));
 }
 // ------------------------------------------------ next-live findings (2026-10-01)
 {

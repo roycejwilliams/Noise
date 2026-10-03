@@ -29,7 +29,6 @@ const ICONS = {
 
 const NAV_ITEMS: NavItem[] = [
   { key: "dashboard", href: "/checklist", label: "Dashboard", icon: ICONS.dashboard },
-  { key: "call", href: "/call", label: "Browser call", icon: ICONS.call },
   { key: "phone", href: "/phone", label: "Phone test", icon: ICONS.phone },
   { key: "results", href: "#", label: "Results", icon: ICONS.results },
   { key: "prompt", href: "/prompt", label: "Prompt", icon: ICONS.prompt },
