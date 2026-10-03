@@ -1031,7 +1031,7 @@ async function sendWithLedger(
       ...userLevelChecks({ now, timezone: person.timezone, optedOut: optedOutNow, sends, lastInboundAt }, { lane: laneOf(c.type), ignorePacing: opts.ignorePacing }).filter(
         (k) => !(answering && QUOTA_CHECKS.has(k.name)),
       ),
-      ...candidateChecks(c, { now, sends, lastInboundAt }, { answering }),
+      ...candidateChecks(c, { now, sends, lastInboundAt, undeliveredYes: c.type === "network_tease" ? await import("../services/networkIntroNudge.js").then((m) => m.lastTeaseUndelivered(person.userId)).catch(() => false) : false }, { answering }),
     ];
     const g = gate(checks);
     if (!g.ok) {

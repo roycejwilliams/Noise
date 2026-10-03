@@ -10,16 +10,37 @@ import pool from "../db/db.js";
 export type ResearchFind = { name: string; url: string; facts: string; at: string };
 
 export const RESEARCH_FIND_DAYS = 14;
-export const RESEARCH_FIND_MAX = 8;
+// Stored and fetched: plenty, so one big search can't push out the one they're asking about.
+export const RESEARCH_FIND_MAX = 20;
+// Shown to a reply: only the ones that matter to this message.
+export const RESEARCH_FIND_SHOWN = 3;
 
 // Pure: the finds as fact lines for a reply.
 export function findLines(finds: ResearchFind[]): string[] {
   return finds.map((f) => `You researched "${f.name}" and have its link: ${f.url}${f.facts ? `. What its page says: ${f.facts}` : ""}. If they ask for it, send this link.`);
 }
 
-// Pure: whether a message is asking for a link or site.
+// Pure: whether a message is asking for a link or site. A link word they use
+// as a noun ("the link", "their website"), or a bare imperative to send it
+// ("send it", "nah just send it"). Not "I'll send it to my boss" or "on site".
 export function asksForLink(message: string): boolean {
-  return /\b(link|url|website|web ?site|site)\b/i.test(message) || /\b(send|share|text|drop)\s+(it|that|them|this)\b/i.test(message);
+  const m = message.trim();
+  if (/\b(?:the|that|their|its|a|your|this|his|her)\s+(?:link|url|website|web ?site|site)\b/i.test(m) || /\b(?:link|url)\b/i.test(m) && !/\bon[- ]?site\b/i.test(m)) return true;
+  return /^(?:(?:ok(?:ay)?|nah|no|yeah|yes|well|so|just|pls|please|can you|could you)[,.!]?\s+)*(?:send|share|text|drop)\s+(?:it|that|them|this)\b/i.test(m);
+}
+
+const NAME_STOP = new Set(["the", "and", "for", "with", "inc", "llc", "com", "www"]);
+const nameWords = (name: string): string[] => name.toLowerCase().replace(/[^a-z0-9 ]+/g, " ").split(/\s+/).filter((w) => w.length >= 3 && !NAME_STOP.has(w));
+
+// Pure: the finds worth showing a reply: any whose name they (or the last lines)
+// mention, then, if they're asking for a link, the newest. Newest first, at most
+// RESEARCH_FIND_SHOWN. With neither, nothing: finds don't ride along every reply.
+export function relevantFinds(finds: ResearchFind[], message: string, recent: string, linkAsk: boolean): ResearchFind[] {
+  const said = `${message}\n${recent}`.toLowerCase();
+  const named = finds.filter((f) => nameWords(f.name).some((w) => said.includes(w)));
+  const picks = [...named, ...(linkAsk ? finds : [])];
+  const seen = new Set<string>();
+  return picks.filter((f) => !seen.has(f.url) && seen.add(f.url)).slice(0, RESEARCH_FIND_SHOWN);
 }
 
 // Pure: what to tell Co when they ask for a link. With one on file, send it;

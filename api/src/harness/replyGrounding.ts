@@ -44,7 +44,7 @@ import { checkNoEmotionLabel } from "./emotion.js";
 import { enrichMatch, missingEventDetails, renderEventDetails, type EventDetails, type OpportunityDetails } from "../services/eventDetails.js";
 import { recentCallCorrections } from "./callGrounding.js";
 import { repeatQuestionCheck, sameQuestion } from "./repeatAsk.js";
-import { findLines, linkRequestInstruction, recentResearchFinds } from "../services/researchFinds.js";
+import { asksForLink, findLines, linkRequestInstruction, recentResearchFinds, relevantFinds } from "../services/researchFinds.js";
 
 // Model policy (Royce, 2026-09-14): Sonnet 5 for anything with judgment or
 // side effects; Haiku only for narrow, code-checked reads.
@@ -151,9 +151,11 @@ export async function gatherReplyFacts(
     addFact(rf, "capability", `Co's ${id.replace(/_/g, " ")} ability is switched off right now. If it comes up, say it isn't available at the moment.`);
   }
   // What Co researched, with its links, for "send it" (services/researchFinds.ts).
-  const finds = await recentResearchFinds(userId).catch(() => []);
+  const allFinds = await recentResearchFinds(userId).catch(() => []);
+  const message = t?.message ?? "";
+  const finds = relevantFinds(allFinds, message, (opts.context ?? "").slice(-600), asksForLink(message));
   for (const line of findLines(finds)) addFact(rf, "known", line);
-  const linkAsk = linkRequestInstruction(t?.message ?? "", finds.length > 0 || /https?:\/\//.test(opts.context ?? ""));
+  const linkAsk = linkRequestInstruction(message, finds.length > 0 || /https?:\/\//.test(opts.context ?? ""));
   if (linkAsk) addInstruction(rf, linkAsk);
   // Every source is a separate read, so they run together: in series this
   // was six round trips before the reply could even start drafting.
@@ -572,6 +574,8 @@ export function claimsHandingOver(draft: string): boolean {
 // the thread, what it already sent.
 export const LINK_OFFER = /\b(?:want|like)\s+(?:me\s+to|the|a)\s+(?:send|share|text|drop)\b[^.?!]{0,30}\b(?:link|site|website|page)\b|\b(?:i(?:'|\u2019)ll|i\s+will|i\s+can|let\s+me)\s+(?:send|share|text|drop)\s+(?:you\s+)?(?:the|a|their|its)\s+(?:link|site|website|page)\b/i;
 export function offersLinkWithoutOne(draft: string, available: string): string | null {
+  // Co makes invite links itself (the invite tool), so offering one needs no link on file.
+  if (/\binvite\b/i.test(draft)) return null;
   const m = draft.match(LINK_OFFER);
   return m && !/https?:\/\//i.test(`${available}\n${draft}`) ? m[0] : null;
 }

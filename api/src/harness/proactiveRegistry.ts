@@ -178,16 +178,18 @@ export const proactiveRegistry: ProactiveRegistry = {
       // checked and drafted now, and stored with the tease (onSent), so a yes
       // delivers it. If it couldn't go out, neither does the tease.
       const prepared = await prepareReveal(c.userId, person.firstName, candidate);
-      if ("why" in prepared) return skip(`no tease: ${prepared.why}`);
+      // A draft that failed is tried again in an hour; a gate that said no is final.
+      if ("why" in prepared) return prepared.retry ? { defer: new Date(Date.now() + 3_600_000), reason: `no tease yet: ${prepared.why}` } : skip(`no tease: ${prepared.why}`);
       c.payload.preparedReveal = prepared.message;
+      c.payload.preparedRevealOptedIn = prepared.optedIn;
       return { messages: [text], text, rules: { maxSentences: 2, maxChars: 200, mustNotInclude: [candidate.first_name] } };
     },
     async onSent(c) {
-      const { askId, candidate, preparedReveal } = c.payload;
+      const { askId, candidate, preparedReveal, preparedRevealOptedIn } = c.payload;
       await removeNetworkBacklogItem(c.userId, askId, candidate.candidate_id);
       await pool.query(`INSERT INTO co_memories (user_id, memory_type, content) VALUES ($1, 'network_offer_pending', $2)`, [
         c.userId,
-        JSON.stringify({ askId, candidate, ...(preparedReveal ? { reveal: preparedReveal } : {}) }),
+        JSON.stringify({ askId, candidate, ...(preparedReveal ? { reveal: preparedReveal, revealOptedIn: preparedRevealOptedIn === true } : {}) }),
       ]);
     },
     async onDropped(c) {

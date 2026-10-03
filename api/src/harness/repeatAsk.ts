@@ -73,6 +73,10 @@ export function sameQuestion(a: string, b: string, afterYes = false): boolean {
   const A = wordsOf(a);
   const B = wordsOf(b);
   const short = Math.min(A.size, B.size) <= SAME_QUESTION.shortWords;
+  // A short question ("Want to hear who?", "How are you holding up?") only counts
+  // as asked-again when they said yes to it: without a yes, asking it again is
+  // an ordinary check-in, not the loop (review of #59).
+  if (short && !afterYes) return false;
   const subj = (w: Set<string>) => (short ? w : new Set([...w].filter((x) => !FRAME.has(x))));
   const SA = subj(A);
   const SB = subj(B);
@@ -83,6 +87,10 @@ export function sameQuestion(a: string, b: string, afterYes = false): boolean {
   return both / Math.min(SA.size, SB.size) >= need;
 }
 
+// Questions that may always be asked again: safety, consent, and call offers.
+// Re-asking "are you safe right now?" after a deflection is care, not a loop.
+export const ALWAYS_ASKABLE = /\b(safe|safety|hurt(?:ing)? (?:yourself|your ?self)|harm|suicid\w*|kill\w*|end (?:your|it all)|in danger|crisis|ok(?:ay)? if i|is it ok|is that ok|mind if|permission|consent|opt(?:ed)? out|stop (?:texting|messaging)|call|phone|ring you|hop on|jump on)\b/i;
+
 export const LOOKBACK_TURNS = 14;
 
 // A question in the draft that Co already asked in the last turns, after which
@@ -90,6 +98,7 @@ export const LOOKBACK_TURNS = 14;
 export function repeatedQuestion(draft: string, turns: Turn[]): { question: string; earlier: string } | null {
   const recent = turns.slice(-LOOKBACK_TURNS);
   for (const q of questionsIn(draft)) {
+    if (ALWAYS_ASKABLE.test(q)) continue;
     for (let i = 0; i < recent.length; i++) {
       if (recent[i].from !== "co") continue;
       const theirs = recent.slice(i + 1).filter((t) => t.from === "them" && t.text.trim().length > 0);

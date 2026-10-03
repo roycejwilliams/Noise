@@ -1,7 +1,7 @@
 import { isTestHandle, isTestNumber, testHandle } from "./testNumbers.js";
 import { AsyncLocalStorage } from "node:async_hooks";
 import { sendLimiter } from "./sendLimiter.js";
-import { claimReaction, releaseReaction } from "./tapbacks.js";
+import { claimReaction, confirmReaction, releaseReaction } from "./tapbacks.js";
 import { createHash, timingSafeEqual } from "crypto";
 import { SendblueAPI } from "sendblue";
 import { capitalizeSentences, looksLikeMetaReply, paragraphize } from "./textStyle.js";
@@ -247,7 +247,10 @@ export async function sendReaction(messageHandle: string, reaction: string): Pro
     return true;
   }
   // A test member's message: the tapback counts as given, nothing is sent.
-  if (isTestHandle(messageHandle)) return true;
+  if (isTestHandle(messageHandle)) {
+    confirmReaction(messageHandle);
+    return true;
+  }
   const from = process.env.SENDBLUE_PHONE_NUMBER;
   if (!from || !process.env.SENDBLUE_API_KEY || !process.env.SENDBLUE_SECRET_KEY) {
     releaseReaction(messageHandle);
@@ -268,6 +271,7 @@ export async function sendReaction(messageHandle: string, reaction: string): Pro
       releaseReaction(messageHandle);
       return false;
     }
+    confirmReaction(messageHandle);
     return true;
   } catch (err: any) {
     console.error("sendReaction failed (non-fatal):", err?.message ?? err);

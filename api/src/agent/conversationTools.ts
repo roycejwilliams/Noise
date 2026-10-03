@@ -559,7 +559,7 @@ export function createConversationTools(ctx: ConversationToolContext) {
         }
         // One reaction per message (services/tapbacks.ts): the early "on it" read may
         // already have reacted to this very text; a second would be a double.
-        if (!ctx.dryRun && reactedTo(ctx.messageHandle)) {
+        if (!ctx.dryRun && (await reactedTo(ctx.messageHandle))) {
           state.sent = true;
           state.reacted = true;
           return { ok: true, note: "They already have a reaction from you on this message. Nothing more to send; don't reply." };

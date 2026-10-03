@@ -171,7 +171,7 @@ export async function attemptNetworkSurfacing(
 
 // reveal: the message that answers "yes", drafted and checked before the tease
 // went out (prepareReveal), so a yes always has something to deliver.
-export type PendingNetworkTease = { askId: string; candidate: NetworkCandidate; reveal?: string };
+export type PendingNetworkTease = { askId: string; candidate: NetworkCandidate; reveal?: string; revealOptedIn?: boolean };
 
 export async function findPendingNetworkTease(userId: string): Promise<PendingNetworkTease | null> {
   const { rows } = await pool.query(
@@ -237,10 +237,13 @@ async function draftReveal(userId: string, firstName: string, candidate: Network
 // and the reveal itself drafted. A tease that couldn't be answered used to go
 // out anyway and a "Sure" got "Sorry for the false start." (2026-10-03, then a
 // second tease at 1pm). why says what stopped it.
-export async function prepareReveal(userId: string, firstName: string, candidate: NetworkCandidate): Promise<{ message: string } | { why: string }> {
-  if (!(await gateNetworkCandidate(userId, candidate.candidate_id, candidate.match_reason, "reveal"))) return { why: "the privacy check on the reveal wouldn't pass" };
+// retry: a draft that failed is worth trying again later; a gate that said no
+// won't change its mind (review of #59: a flaky draft used to drop the match for good).
+export async function prepareReveal(userId: string, firstName: string, candidate: NetworkCandidate): Promise<{ message: string; optedIn: boolean } | { why: string; retry: boolean }> {
+  if (!(await gateNetworkCandidate(userId, candidate.candidate_id, candidate.match_reason, "reveal"))) return { why: "the privacy check on the reveal wouldn't pass", retry: false };
+  const optedIn = await networkOptedIn(candidate.candidate_id, userId);
   const message = await draftReveal(userId, firstName, candidate);
-  return message ? { message } : { why: "the reveal couldn't be drafted" };
+  return message ? { message, optedIn } : { why: "the reveal couldn't be drafted", retry: true };
 }
 
 // They said yes to hearing who, and no reveal followed: the reveal stashes
@@ -307,7 +310,11 @@ export async function resolveNetworkTeaseReply(
   const cantReveal = `\nThey said yes to hearing who it was, but that introduction isn't available anymore. Say so briefly and honestly, don't name or describe anyone, and don't promise another one.`;
   if (!(await gateNetworkCandidate(userId, candidateId, pending.candidate.match_reason, "reveal"))) return cantReveal;
 
-  const message = pending.reveal ?? (await draftReveal(userId, firstName, pending.candidate));
+  // The stored reveal was drafted under the other person's consent at the time;
+  // if that changed since the tease, it's drafted again (the gate above covers
+  // activity and privacy).
+  const stillConsented = pending.reveal && pending.revealOptedIn !== undefined ? (await networkOptedIn(candidateId, userId)) === pending.revealOptedIn : false;
+  const message = pending.reveal && stillConsented ? pending.reveal : await draftReveal(userId, firstName, pending.candidate);
   if (!message) return cantReveal;
 
   try {
