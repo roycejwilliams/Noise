@@ -102,10 +102,9 @@ router.post("/:user_id/tag", async (req: Request, res: Response, next: NextFunct
 
 // POST /api/phone/:user_id/call — real-call trigger (Part 1, item 3). Same
 // pattern as production's POST /co/call/:user_id (api/src/routes/co.ts):
-// Twilio dials out, `url` hands the leg to Hume's own Twilio bridge using
-// this service's dev HUME_CONFIG_ID, and the dev config's own webhook (see
-// the repoint noted in webhooks.ts) delivers chat_started/tool_call/
-// chat_ended back to THIS service, writing to co-test's own DB. Gated on
+// Twilio dials out through api/src/services/callTrigger.ts, the leg is
+// registered with Co's ElevenLabs agent, and its tools and post-call webhook
+// come back to THIS service, writing to co-test's own DB. Gated on
 // identity_captured — text-in-first, then name/email, only then a real call
 // unlocks (no separate OTP step anymore, matching production).
 router.post("/:user_id/call", async (req: Request, res: Response, next: NextFunction) => {

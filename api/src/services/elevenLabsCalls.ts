@@ -77,6 +77,7 @@ export async function registerElevenLabsCall(o: {
         call_token: issueCallToken(o.userId),
         first_name: o.firstName,
         context_summary: o.contextSummary,
+        direction: o.direction,
       },
     },
   } as any) as unknown as Promise<string>;
@@ -147,6 +148,10 @@ export function promptForElevenLabs(prompt: string): string {
   return `${prompt.replace(/\bhang_up\b/g, "end_call")}\n\n${OPENING_NOTE}`;
 }
 
+// The coverage check reads the newest part of the call (~6k tokens is plenty
+// to see which Rapport topics came up recently).
+export const COVERAGE_TRANSCRIPT_CHARS = 24_000;
+
 export const VOICEMAIL_MESSAGE = "Hey {{first_name}}, it's Co. Sorry I missed you. I'll send you a text.";
 
 export const AGENT_DEFAULTS = {
@@ -190,6 +195,8 @@ export function buildAgentConfig(o: {
           // The conversation so far, so the coverage check needs no fetch
           // (the 9-19s check on Hume was mostly re-fetching the transcript).
           conversation_history: { type: "string", dynamic_variable: "system__conversation_history" },
+          // The summary built at call start rides along (no rebuild per check).
+          context_summary: { type: "string", dynamic_variable: "context_summary" },
           ...extra,
         },
         required: ["user_id", "call_token"],
@@ -217,7 +224,7 @@ export function buildAgentConfig(o: {
         first_message: OPENING_LINE,
         language: "en",
         max_conversation_duration_message: "I need to wrap up for now. This was really good, I'll be in touch soon.",
-        dynamic_variables: { dynamic_variable_placeholders: { first_name: "there", context_summary: "", user_id: "", call_token: "" } },
+        dynamic_variables: { dynamic_variable_placeholders: { first_name: "there", context_summary: "", user_id: "", call_token: "", direction: "" } },
         prompt: {
           prompt: promptForElevenLabs(o.prompt),
           llm: o.llm ?? AGENT_DEFAULTS.llm,
@@ -311,8 +318,19 @@ export function pickOpening(o: OpeningSituation & { firstName: string; last: str
   return { template: t.text, line: t.text.replace(/\{name\}/g, o.firstName || "there") };
 }
 
+// Pure-ish: a promise or, after ms, the fallback. The answer path must never
+// wait on an opener (a geocode on a cache miss has no timeout of its own).
+export function withTimeout<T>(p: Promise<T>, ms: number, fallback: T): Promise<T> {
+  return Promise.race([p, new Promise<T>((resolve) => setTimeout(() => resolve(fallback), ms))]);
+}
+export const OPENING_BUDGET_MS = 600;
+
 // What this member's call looks like, and which opening they heard last.
-export async function chooseOpening(userId: string, firstName: string, direction: "inbound" | "outbound"): Promise<string> {
+// Always answers within OPENING_BUDGET_MS: the fixed greeting if anything is slow.
+export function chooseOpening(userId: string, firstName: string, direction: "inbound" | "outbound"): Promise<string> {
+  return withTimeout(chooseOpeningUnbounded(userId, firstName, direction), OPENING_BUDGET_MS, OPENING_LINE.replace("{{first_name}}", firstName || "there"));
+}
+async function chooseOpeningUnbounded(userId: string, firstName: string, direction: "inbound" | "outbound"): Promise<string> {
   try {
     const [{ rows: calls }, { rows: last }, { rows: prof }] = await Promise.all([
       pool.query(`SELECT 1 FROM co_memories WHERE user_id = $1 AND memory_type = 'call_transcript' AND content NOT LIKE 'Co initiated call%' LIMIT 1`, [userId]),
@@ -356,6 +374,22 @@ export async function takeCallContext(userId: string, build: (userId: string) =>
 export function voicemailVerdict(toolFired: boolean, personTalked: boolean): "voicemail" | "conversation" | "misfire" {
   if (!toolFired) return "conversation";
   return personTalked ? "misfire" : "voicemail";
+}
+
+// Whether a finished call is a missed call (gets the gated missed-call text)
+// and which kind: a voicemail the agent detected, or a call Co placed where
+// nobody ever spoke (a machine the agent didn't recognise, or a pickup and a
+// hangup; with Twilio's detector gone this is the only net for it). A call
+// they placed to Co that stayed silent is not a missed call.
+export function missedKind(verdict: "voicemail" | "conversation" | "misfire", personTalked: boolean, direction: string | undefined): "voicemail" | "silent" | null {
+  if (verdict === "voicemail") return "voicemail";
+  if (verdict === "conversation" && !personTalked && direction === "outbound") return "silent";
+  return null;
+}
+
+// What Co said into the voicemail box, with their name in it.
+export function voicemailLeft(firstName: string): string {
+  return VOICEMAIL_MESSAGE.replace(/\{\{first_name\}\}/g, firstName || "there");
 }
 
 // Where the call lives on ElevenLabs (audio and transcript), kept with the

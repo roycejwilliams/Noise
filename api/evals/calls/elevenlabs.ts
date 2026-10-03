@@ -8,6 +8,10 @@ import {
   hitVoicemail,
   OPENING_LINE,
   OPENINGS,
+  COVERAGE_TRANSCRIPT_CHARS,
+  missedKind,
+  voicemailLeft,
+  withTimeout,
   pickOpening,
   conversationLink,
   memberNumberOf,
@@ -118,7 +122,33 @@ check("each call links to its ElevenLabs conversation", conversationLink("conv_1
 }
 const trig = readFileSync(new URL("../../src/services/callTrigger.ts", import.meta.url), "utf8");
 check("the context is started before Twilio dials", trig.indexOf("prebuildCallContext(userId, buildCallContextSummary)") > 0 && trig.indexOf("prebuildCallContext(userId, buildCallContextSummary)") < trig.indexOf("twilioClient.calls.create("));
-check("a misfired voicemail goes through as a conversation, logged; inbound statuses never send a missed-call text", /if \(verdict === "voicemail"\)/.test(coSrc) && /decision: "call\.voicemail"/.test(coSrc) && /if \(inbound \|\| !\["no-answer"/.test(coSrc));
+check("a misfired voicemail goes through as a conversation, logged; inbound statuses never send a missed-call text", /const kind = missedKind\(verdict, personTalked/.test(coSrc) && /decision: "call\.voicemail"/.test(coSrc) && /if \(inbound \|\| !\["no-answer"/.test(coSrc));
+
+// PR #58 review fixes (2026-10-03), one check each.
+{
+  // 1. Voicemail gate.
+  check("1 which finished calls are missed calls: a detected voicemail, or a call Co placed where nobody spoke; never a silent call they placed to Co or a misfire", missedKind("voicemail", false, "outbound") === "voicemail" && missedKind("conversation", false, "outbound") === "silent" && missedKind("conversation", false, "inbound") === null && missedKind("misfire", true, "outbound") === null && missedKind("conversation", true, "outbound") === null);
+  check("1 what Co left is recorded with their name", voicemailLeft("Jordan") === "Hey Jordan, it's Co. Sorry I missed you. I'll send you a text.");
+  const handler = coSrc.slice(coSrc.indexOf("async function handleMissedVoiceCall("), coSrc.indexOf("// After a call ends (ElevenLabs"));
+  check("1 both kinds claim the call once, run the old gate (once per call, none queued, none recent) and log it, and release the claim if the send fails", /INSERT INTO voicemail_calls/.test(handler) && /decideMissedCallFollowUp\(await gatherMissedCallState\(user\.id, callSid\)/.test(handler) && /action: `missed_call_followup:\$\{kind\}`/.test(handler) && /DELETE FROM voicemail_calls WHERE call_sid = \$1/.test(handler) && /Co left this voicemail/.test(handler));
+  check("1 the post-call route uses it, and never the member's latest call_sid", /handleMissedVoiceCall\(u\[0\], callSid, kind, conversationId\)/.test(coSrc) && /vars\.system__call_sid \?\? `el:\$\{conversationId\}`/.test(coSrc) && !/u\[0\]\?\.call_sid/.test(coSrc) && /direction: o\.direction,/.test(readFileSync(new URL("../../src/services/elevenLabsCalls.ts", import.meta.url), "utf8")));
+  // 2. Failed registration frees the call.
+  check("2 a call that can't register resets its live status (both paths, scoped to the call's sid)", (coSrc.match(/await releaseFailedCall\(userId,/g) ?? []).length === 2 && /call_status = 'failed'[^`]*call_sid = \$2/.test(coSrc));
+  // 3. Coverage tool is light and its request fits.
+  const tl = (cfg as any).conversation_config.agent.prompt.tools.find((t: any) => t.name === "assess_conversation_coverage");
+  check("3 the coverage tool is given the call's summary instead of rebuilding it, and reads only the newest part of a long call", tl.api_schema.request_body_schema.properties.context_summary.dynamic_variable === "context_summary" && /typeof b\.context_summary === "string" \? b\.context_summary : await buildCallContextSummary/.test(coSrc) && /\.slice\(-COVERAGE_TRANSCRIPT_CHARS\)/.test(coSrc) && COVERAGE_TRANSCRIPT_CHARS === 24_000);
+  check("3 the tools' requests may be 2mb (the default 100kb would reject a long call before the route), set before the global parser in both servers", ["../../src/server.ts", "../../../co-test/src/server.ts"].every((p) => { const t = readFileSync(new URL(p, import.meta.url), "utf8"); const i = t.indexOf('app.use("/co/el/tool", express.json({ limit: "2mb" }))'); return i > 0 && i < t.search(/app\.use\(express\.json\(/); }));
+  // 4. The opener can't hold up the answer.
+  const slow = await withTimeout(new Promise<string>((r) => setTimeout(() => r("late"), 300)), 20, "fallback");
+  const fast = await withTimeout(Promise.resolve("on time"), 20, "fallback");
+  check("4 a slow opener lookup gives the fixed greeting after its budget; a fast one is used", slow === "fallback" && fast === "on time" && /withTimeout\(chooseOpeningUnbounded\(/.test(readFileSync(new URL("../../src/services/elevenLabsCalls.ts", import.meta.url), "utf8")));
+  // 5. Dead voice-emotion plumbing and stale references are gone.
+  const srcOf = (p: string) => readFileSync(new URL(`../../src/${p}`, import.meta.url), "utf8");
+  check("5 no call path carries voice-emotion data any more", !/humeMoments|renderHumeMoments|HumeUtterance|emotionalHighlights/.test(srcOf("routes/co.ts") + srcOf("harness/emotion.ts") + srcOf("services/callLearning.ts") + srcOf("services/callContext.ts") + srcOf("services/profileExtraction.ts")));
+  const results = readFileSync(new URL("../../../co-test/public/results.html", import.meta.url), "utf8");
+  const ci = readFileSync(new URL("../../../.github/workflows/co-evals.yml", import.meta.url), "utf8");
+  check("5 the dashboard's 'Start a call' goes to a page that exists, and CI no longer sets a Hume key", /href="\/phone"[^>]*>Start a call/.test(results) && !/HUME/.test(ci));
+}
 
 console.log(`elevenlabs call rules: ${total - failed}/${total} passed`);
 if (failed) process.exitCode = 1;

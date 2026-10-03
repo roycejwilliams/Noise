@@ -36,7 +36,7 @@ jobs:
       OPENAI_API_KEY: ci
       GOOGLE_PLACES_API_KEY: ci
       RESEND_API_KEY: re_ci
-      HUME_API_KEY: ci
+      ELEVENLABS_API_KEY: ci
       DATABASE_URL: postgres://ci:ci@127.0.0.1:1/ci
     steps:
       - uses: actions/checkout@v4
@@ -60,7 +60,7 @@ jobs:
       OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
       GOOGLE_PLACES_API_KEY: ci
       RESEND_API_KEY: re_ci
-      HUME_API_KEY: ci
+      ELEVENLABS_API_KEY: ci
       DATABASE_URL: postgres://ci:ci@127.0.0.1:1/ci
     steps:
       - uses: actions/checkout@v4

@@ -59,6 +59,8 @@ app.use("/payments/webhook", express.raw({ type: "application/json" }));
 // ElevenLabs signs the post-call webhook over the exact raw body (services/
 // elevenLabsCalls.ts), same reasoning as Stripe's above.
 app.use("/co/el/post-call", express.raw({ type: "application/json", limit: "5mb" }));
+// The agent sends the whole conversation to its tools; the default 100kb JSON limit would reject a long call before the route runs.
+app.use("/co/el/tool", express.json({ limit: "2mb" }));
 // Luma's webhook signature is the same "HMAC over the raw body" shape as the
 // two above — see validateLumaWebhook in routes/luma.ts for the exact scheme.
 app.use("/luma/webhook", express.raw({ type: "application/json" }));

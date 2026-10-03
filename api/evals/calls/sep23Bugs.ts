@@ -84,8 +84,8 @@ user: Honestly, just a friend. somebody they can kinda go through battles with a
   check("#3 the close ends with a spoken goodbye", /End the closing line with a plain, warm goodbye in words \("Talk soon, \{\{first_name\}\}\."\)/.test(prompt));
   check("#3 every name placeholder is one Hume fills in", !/(?<!\{)\{first_name\}(?!\})/.test(prompt));
   const { callSummaryPrompt } = await import("../../src/services/callContext.js");
-  const sp = callSummaryPrompt("user: hi", "- sounded disappointed at the end");
-  check("#3 how the call ended comes from their words, not a voice reading", /How the call ended comes only from what they said at the end, never from a voice reading/.test(sp) && /never what they wanted or meant/.test(sp));
+  const sp = callSummaryPrompt("user: hi");
+  check("#3 how the call ended comes from their words, not a voice reading", /How the call ended comes only from what they said at the end, never from a voice reading/.test(sp) && !/voice analysis/i.test(sp));
   check("#5 named companies, people, dates and plans come first", /Lead with the concrete facts they gave/.test(sp) && /Keep every named company and person they mentioned/.test(sp));
   check("#5 spelled-out names are written as names", /"l y t h e dot a i" is lythe\.ai/.test(sp));
   const { neutralPronouns } = await import("../../src/mo/rules.js");

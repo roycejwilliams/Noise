@@ -37,11 +37,10 @@ import {
   stripVoicemailGreetingLines,
 } from "../harness/callGate.js";
 import { MODELS } from "../models.js";
-import { humeMoments, recordEmotionSignals, renderHumeMoments, type HumeUtterance } from "../harness/emotion.js";
 import { surfaceNewAsksNow } from "../services/eventSurfacingSweep.js";
 import { refreshPersonSnapshot } from "../harness/personSnapshot.js";
 import { auditCall } from "../harness/callGrounding.js";
-import { CANT_CONNECT_LINE, chooseOpening, conversationLink, hitVoicemail, memberNumberOf, noteCallFailure, takeCallContext, voicemailVerdict, registerElevenLabsCall, transcriptFromHistory, transcriptFromTurns, verifyCallToken, verifyPostCallWebhook } from "../services/elevenLabsCalls.js";
+import { CANT_CONNECT_LINE, COVERAGE_TRANSCRIPT_CHARS, chooseOpening, conversationLink, hitVoicemail, memberNumberOf, missedKind, voicemailLeft, noteCallFailure, takeCallContext, voicemailVerdict, registerElevenLabsCall, transcriptFromHistory, transcriptFromTurns, verifyCallToken, verifyPostCallWebhook } from "../services/elevenLabsCalls.js";
 
 // One-line drafts (missed-call text, voicemail line): narrow work, Haiku.
 const DRAFT_MODEL = MODELS.haiku;
@@ -373,6 +372,7 @@ router.post(
       } catch (regErr: any) {
         console.error("incoming-call: ElevenLabs registration failed:", regErr?.message ?? regErr);
         noteCallFailure(userId, "registration");
+        await releaseFailedCall(userId, callSid);
         twiml.say(CANT_CONNECT_LINE);
         twiml.hangup();
         return res.type("text/xml").send(twiml.toString());
@@ -414,6 +414,7 @@ router.post("/el/outbound-twiml", async (req: Request, res: Response, next: Next
     } catch (regErr: any) {
       console.error("el/outbound-twiml: ElevenLabs registration failed:", regErr?.message ?? regErr);
       noteCallFailure(userId, "registration");
+      await releaseFailedCall(userId, req.body.CallSid as string | undefined);
       const fallback = new twilio.twiml.VoiceResponse();
       fallback.say(CANT_CONNECT_LINE);
       fallback.hangup();
@@ -438,13 +439,16 @@ router.post("/el/tool/:name", async (req: Request, res: Response) => {
     }
     if (name === "assess_conversation_coverage") {
       const t0 = Date.now();
-      const transcript = transcriptFromHistory(typeof b.conversation_history === "string" ? b.conversation_history : JSON.stringify(b.conversation_history ?? ""));
-      const priorContext = await buildCallContextSummary(userId).catch(() => "");
+      // The newest part of the conversation (the whole history is bound into the
+      // request; the check only needs enough of it), and the summary the call
+      // already carries as a variable instead of rebuilding it on every check.
+      const transcript = transcriptFromHistory(typeof b.conversation_history === "string" ? b.conversation_history : JSON.stringify(b.conversation_history ?? "")).slice(-COVERAGE_TRANSCRIPT_CHARS);
+      const priorContext = typeof b.context_summary === "string" ? b.context_summary : await buildCallContextSummary(userId).catch(() => "");
       const t1 = Date.now();
       const assessment = await assessConversationCoverage(transcript, priorContext);
       persistCoveredTopics(userId, assessment);
       const secs = Number(b.call_duration_secs);
-      recordDecision({ layer: 8, decision: "call.coverage", userId, outcome: "act", action: "elevenlabs", proposal: { prepMs: t1 - t0, modelMs: Date.now() - t1, totalMs: Date.now() - t0, turns: transcript ? transcript.split("\n").length : 0 } }).catch(() => {});
+      recordDecision({ layer: 8, decision: "call.coverage", userId, outcome: "act", action: "elevenlabs", proposal: { reusedSummary: typeof b.context_summary === "string", prepMs: t1 - t0, modelMs: Date.now() - t1, totalMs: Date.now() - t0, turns: transcript ? transcript.split("\n").length : 0 } }).catch(() => {});
       return res.json({ ...assessment, ...(Number.isFinite(secs) && secs > 0 ? { elapsed_minutes: Math.round((secs / 60) * 10) / 10 } : {}) });
     }
     return res.status(404).json({ error: `unknown tool ${name}` });
@@ -483,26 +487,25 @@ router.post("/el/post-call", async (req: Request, res: Response, next: NextFunct
     const conversationId = String(data.conversation_id ?? "");
     const turns = Array.isArray(data.transcript) ? data.transcript : [];
     const { rows: u } = await pool.query(`SELECT id, first_name, phone_number, call_sid FROM users WHERE id = $1`, [userId]);
-    const callSid: string | null = data.metadata?.phone_call?.call_sid ?? vars.system__call_sid ?? u[0]?.call_sid ?? null;
-    const verdict = voicemailVerdict(hitVoicemail(turns, data.metadata?.termination_reason), hasRealUserTurn(transcriptFromTurns(turns)));
+    // The call's own sid: ElevenLabs sends it on Twilio calls. Never the member's
+    // latest call_sid (it can belong to a later call); without one, key on the conversation.
+    const callSid: string = data.metadata?.phone_call?.call_sid ?? vars.system__call_sid ?? `el:${conversationId}`;
+    const personTalked = hasRealUserTurn(transcriptFromTurns(turns));
+    const verdict = voicemailVerdict(hitVoicemail(turns, data.metadata?.termination_reason), personTalked);
+    const kind = missedKind(verdict, personTalked, typeof vars.direction === "string" ? vars.direction : undefined);
     if (verdict !== "conversation") {
       recordDecision({ layer: 8, decision: "call.voicemail", userId, outcome: verdict === "voicemail" ? "act" : "skip", action: verdict, proposal: { conversationId: data.conversation_id, termination: data.metadata?.termination_reason ?? null } }).catch(() => {});
     }
-    if (verdict === "voicemail") {
-      // Flags the call so nothing treats it as a conversation, and claims it once.
-      const claim = callSid ? await pool.query(`INSERT INTO voicemail_calls (call_sid) VALUES ($1) ON CONFLICT DO NOTHING RETURNING call_sid`, [callSid]) : { rows: [{}] };
-      await pool.query(`UPDATE users SET call_status = 'completed', call_status_updated_at = NOW() WHERE id = $1`, [userId]).catch(() => {});
-      if (claim.rows[0] && u[0] && callSid) {
-        await sendMissedCallFollowUp(u[0], callSid, "voicemail", `You just tried to call ${u[0].first_name} and reached voicemail.`);
-      }
-      return res.status(200).send({ success: true, voicemail: true });
+    if (kind && u[0]) {
+      const r = await handleMissedVoiceCall(u[0], callSid, kind, conversationId);
+      return res.status(200).send({ success: true, missed: kind, ...r });
     }
     const ended = await processEndedCall({
       userId,
       callKey: `el:${conversationId}`,
       twilioMetadata: callSid ? { call_sid: callSid } : null,
       // No per-line voice scores on ElevenLabs: text emotion carries the call.
-      load: async () => ({ transcript: transcriptFromTurns(turns), emotions: null, utterances: [], recordingUrl: conversationLink(conversationId) }),
+      load: async () => ({ transcript: transcriptFromTurns(turns), recordingUrl: conversationLink(conversationId) }),
     });
     return res.status(ended.status).send(ended.body);
   } catch (err) {
@@ -567,6 +570,51 @@ async function finishCallProcessing(chatId: string, status: "completed" | "faile
     .catch((err: any) => console.error("finishCallProcessing failed (non-fatal):", err?.message ?? err));
 }
 
+// The call never reached the agent (registration failed): no post-call webhook
+// will come to clear the live status, and "call me" would stay blocked until
+// the 30-minute reclaim. Scoped to this call's sid.
+async function releaseFailedCall(userId: string, callSid: string | undefined): Promise<void> {
+  await pool
+    .query(`UPDATE users SET call_status = 'failed', call_status_updated_at = NOW() WHERE id = $1 AND ($2::text IS NULL OR call_sid = $2)`, [userId, callSid ?? null])
+    .catch((err: any) => console.error("releaseFailedCall failed (non-fatal):", err?.message ?? err));
+}
+
+// A call Co placed that never became a conversation: a voicemail, or nobody
+// spoke. Claimed once per call (voicemail_calls also keeps processEndedCall
+// from treating it as a conversation), then the same gate the old machine-
+// detection path used (once per call, none queued, none in the last day),
+// and a note of what Co left so it knows later. If the send fails the claim
+// is released, so ElevenLabs' retry can send it instead of finding it taken.
+async function handleMissedVoiceCall(
+  user: { id: string; first_name: string; phone_number: string },
+  callSid: string,
+  kind: "voicemail" | "silent",
+  conversationId: string,
+): Promise<{ sent: boolean; gate: string }> {
+  const claim = await pool.query(`INSERT INTO voicemail_calls (call_sid) VALUES ($1) ON CONFLICT DO NOTHING RETURNING call_sid`, [callSid]);
+  if (!claim.rows[0]) return { sent: false, gate: "already_claimed" };
+  _io?.to(`user:${user.id}`).emit("co:call_completed", { call_sid: callSid, status: kind === "voicemail" ? "voicemail" : "no_answer" });
+  await pool.query(`UPDATE users SET call_status = 'completed', call_status_updated_at = NOW() WHERE id = $1`, [user.id]).catch(() => {});
+  try {
+    const note = kind === "voicemail" ? `Co left this voicemail: "${voicemailLeft(user.first_name)}"` : `Co called ${user.first_name} but there was no real conversation (chat el:${conversationId}).`;
+    const seen = await pool.query(`SELECT 1 FROM co_memories WHERE user_id = $1 AND memory_type = 'system' AND content = $2 LIMIT 1`, [user.id, note]);
+    if (!seen.rows[0]) await writeMemory(user.id, "system", note).catch((err: any) => console.error("post-call: failed to log the missed call (non-fatal):", err?.message ?? err));
+    const missed = decideMissedCallFollowUp(await gatherMissedCallState(user.id, callSid), new Date());
+    await recordDecision({ layer: 8, decision: "call.gate", userId: user.id, outcome: missed.send ? "act" : "skip", action: `missed_call_followup:${kind}`, checks: missed.checks });
+    if (!missed.send) return { sent: false, gate: "gate_closed" };
+    await sendMissedCallFollowUp(
+      user,
+      callSid,
+      "voicemail",
+      kind === "voicemail" ? `You just tried to call ${user.first_name} and reached voicemail.` : `You just tried to call ${user.first_name}. The line connected but nobody spoke, so you don't know if they heard you.`,
+    );
+    return { sent: true, gate: "sent" };
+  } catch (err) {
+    await pool.query(`DELETE FROM voicemail_calls WHERE call_sid = $1`, [callSid]).catch(() => {});
+    throw err;
+  }
+}
+
 // After a call ends (ElevenLabs, /co/el/post-call): voicemail skip, the per-call
 // and per-user claims, transcript, audit, emotion, learning, intents, safety,
 // the text-side summary and the follow-up. Moved here unchanged from the
@@ -574,8 +622,6 @@ async function finishCallProcessing(chatId: string, status: "completed" | "faile
 // the transcript comes from changed (o.load).
 type EndedCallData = {
   transcript: string;
-  emotions: { name: string; score: number }[] | null;
-  utterances: HumeUtterance[];
   recordingUrl: string | null;
 };
 async function processEndedCall(o: {
@@ -656,7 +702,7 @@ async function processEndedCall(o: {
       // Let the app know the call ended and Co is now extracting the profile
       _io?.to(`user:${user_id}`).emit("co:processing");
 
-      const { transcript, emotions, utterances, recordingUrl: recording_url } = await o.load();
+      const { transcript, recordingUrl: recording_url } = await o.load();
 
       if (!transcript) {
         console.error(`post-call: empty transcript for chat ${chat_id} (user ${user_id})`);
@@ -724,31 +770,15 @@ async function processEndedCall(o: {
         [user_id, transcript],
       );
       let transcriptMemoryId: string;
-      let transcriptAlreadyStored = false;
       if (existingTranscriptMem.rows[0]) {
         transcriptMemoryId = existingTranscriptMem.rows[0].id;
-        transcriptAlreadyStored = true;
       } else {
-        transcriptMemoryId = await storeTranscriptMemory(user_id, transcript, {
-          emotionalContext: emotions,
-          audioUrl: recording_url,
-        });
+        transcriptMemoryId = await storeTranscriptMemory(user_id, transcript, { audioUrl: recording_url });
       }
       // Calls can't be gated live (Hume speaks as it generates), so every
       // call is audited right after: keepable promises are kept, the rest
       // become corrections for the next text (harness/callGrounding.ts).
       auditCall(user_id, cleanTranscript, knownBeforeCall).catch(() => {});
-
-      // Emotion loop: the strongest voice moments, with what they said,
-      // recorded for every layer to read and fed into extraction below.
-      const moments = humeMoments(utterances);
-      const emotionalHighlights = moments.length ? renderHumeMoments(moments) : undefined;
-      const existingSignal = transcriptAlreadyStored
-        ? await pool.query(`SELECT 1 FROM emotion_signals WHERE memory_id = $1 LIMIT 1`, [transcriptMemoryId])
-        : { rows: [] as unknown[] };
-      if (!existingSignal.rows.length) {
-        await recordEmotionSignals(user_id, moments.map((m) => ({ ...m, about: null, memoryId: transcriptMemoryId })));
-      }
 
       // Steps 2-5 — Extract psychographic data via Anthropic, sanitize against
       // DB CHECK constraints, generate goal embeddings, and upsert co_profiles.
@@ -759,11 +789,11 @@ async function processEndedCall(o: {
       // through the same gates and writes. Awaited, so a failure still marks
       // the call failed and it's retried. CALL_LEARNING=off: the old calls.
       if (process.env.CALL_LEARNING === "off") {
-        const { extracted } = await extractPsychographicProfile(cleanTranscript, emotionalHighlights);
-        await storeProfile(user_id, extracted, cleanTranscript, { emotions });
+        const { extracted } = await extractPsychographicProfile(cleanTranscript);
+        await storeProfile(user_id, extracted, cleanTranscript);
         extractPlannedEventMention(user_id, cleanTranscript).catch(() => {});
       } else {
-        await learnFromCall({ userId: user_id, transcript: cleanTranscript, emotions, emotionalHighlights });
+        await learnFromCall({ userId: user_id, transcript: cleanTranscript });
       }
 
       // Step 7 — Ambient intent capture (non-blocking — runs in background)
@@ -789,7 +819,7 @@ async function processEndedCall(o: {
       // Bridges this call into the text side's own conversation log (Royce,
       // 2026-09-07) — see summarizeCallForTextContext for the gap this closes.
       // Call summary first (it feeds the picture), then rebuild the picture.
-      summarizeCallForTextContext(user_id, cleanTranscript, emotionalHighlights)
+      summarizeCallForTextContext(user_id, cleanTranscript)
         .then(() => refreshPersonSnapshot(user_id, { force: true }))
         .catch(() => {});
 

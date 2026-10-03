@@ -45,7 +45,6 @@ export function callLearningPrompt(o: {
   today: string;
   onFile: OnFile | null;
   openAsks: { id: string; text: string }[];
-  emotionalHighlights?: string;
 }): string {
   const fileLines = o.onFile
     ? Object.entries(o.onFile)
@@ -57,7 +56,6 @@ export function callLearningPrompt(o: {
 
 Transcript (oldest first):
 "${o.transcript}"
-${o.emotionalHighlights ? `\nHume's own voice-emotion analysis flagged these as the most emotionally loaded moments in the call (use this to weight blockers and emotional_state toward what actually carried real feeling, not just what was mentioned most often):\n${o.emotionalHighlights}\n` : ""}
 Today's date: ${o.today}
 
 What Co already has on file about them:
@@ -162,8 +160,6 @@ export type CallLearning = TurnLearning & { lessons: string[] };
 export async function learnFromCall(input: {
   userId: string;
   transcript: string; // the cleaned transcript (voicemail lines stripped)
-  emotions?: { name: string; score: number }[] | null;
-  emotionalHighlights?: string;
 }): Promise<CallLearning | null> {
   const started = Date.now();
   const [{ rows: profileRows }, { rows: askRows }] = await Promise.all([
@@ -201,7 +197,6 @@ export async function learnFromCall(input: {
       today: new Date().toISOString().slice(0, 10),
       onFile,
       openAsks,
-      emotionalHighlights: input.emotionalHighlights,
     }),
   });
   const parsed = parseTurnLearning(text);
@@ -209,8 +204,8 @@ export async function learnFromCall(input: {
   if (!learned) {
     // Unreadable: the old separate path, so the call is never lost.
     console.error("callLearning: couldn't read the model's output, using the separate calls (non-fatal)");
-    const { extracted } = await extractPsychographicProfile(input.transcript, input.emotionalHighlights);
-    await storeProfile(input.userId, extracted, input.transcript, { emotions: input.emotions });
+    const { extracted } = await extractPsychographicProfile(input.transcript);
+    await storeProfile(input.userId, extracted, input.transcript);
     await recordDecision({ layer: 4, decision: "profile.callLearning", userId: input.userId, outcome: "skip", action: "fell_back", proposal: { ms: Date.now() - started } }).catch(() => {});
     return null;
   }
@@ -224,7 +219,6 @@ export async function learnFromCall(input: {
   // their words could be one (mightBeCorrection, as assessCorrections checks).
   const correctionsRaw = JSON.stringify({ corrections: mightBeCorrection(theirLines(input.transcript)) ? learned.corrections : [] });
   await storeProfile(input.userId, learned.profile as any, input.transcript, {
-    emotions: input.emotions,
     precomputed: {
       // Nothing on file to retire: the old check had nothing to judge then either.
       resolutionRaw: onFile?.goals.length || onFile?.blockers.length || openAsks.length ? JSON.stringify(learned.resolved ?? {}) : "{}",

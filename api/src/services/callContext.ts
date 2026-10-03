@@ -255,7 +255,7 @@ export async function buildCallContextSummary(userId: string): Promise<string> {
 // Exported for evals (2026-09-23): a real summary dropped both partnerships
 // the member named (Lythe.ai, Sangria) and read a voice score as "may have
 // wanted to continue" when their last words were "we can close out good".
-export function callSummaryPrompt(transcript: string, emotionalHighlights?: string): string {
+export function callSummaryPrompt(transcript: string): string {
   return `Summarize what was actually discussed in this phone call transcript, in 2-3 plain sentences, third person, as if briefing someone on what just happened. Ground it only in what's actually in the transcript — no invented detail, no therapy-speak. Refer to them by name or as "they", never "he" or "she" unless they said their pronouns in the call (2026-09-22: summaries were calling a member "he" from their name alone).
 
 Lead with the concrete facts they gave: the names of companies, people, places, dates, and plans, spelled as they said them. Speech-to-text often spells names out letter by letter ("l y t h e dot a i" is lythe.ai); write the name, not the letters. Keep every named company and person they mentioned.
@@ -264,16 +264,15 @@ How the call ended comes only from what they said at the end, never from a voice
 
 Transcript:
 "${transcript}"
-${emotionalHighlights ? `\nHume's voice analysis of how they sounded (measured, not guessed):\n${emotionalHighlights}\n\nAdd one short sentence on how they came across and about what, using only those moments. Describe it plainly ("sounded anxious talking about the raise"), not clinically. It describes how they sounded, never what they wanted or meant.\n` : ""}
 Return ONLY the summary, no preamble.`;
 }
 
-export async function summarizeCallForTextContext(userId: string, transcript: string, emotionalHighlights?: string): Promise<void> {
+export async function summarizeCallForTextContext(userId: string, transcript: string): Promise<void> {
   try {
     const { text: raw } = await generateText({
       model: anthropic(SUMMARY_MODEL),
       experimental_telemetry: { isEnabled: true, functionId: "callContext.summarizeCallForText" },
-      prompt: callSummaryPrompt(transcript, emotionalHighlights),
+      prompt: callSummaryPrompt(transcript),
     });
     // The prompt already says "they"; the model still wrote "he" on all
     // three runs of a real call (2026-09-23), so it's enforced in code.

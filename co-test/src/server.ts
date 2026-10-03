@@ -56,6 +56,8 @@ async function main() {
   // (api/src/services/elevenLabsCalls.ts): a parsed-then-stringified body isn't
   // byte-identical. Must run before express.json() below; mirrors api/src/server.ts.
   app.use("/co/el/post-call", express.raw({ type: "application/json", limit: "5mb" }));
+  // The agent sends the whole conversation to its tools; the default 100kb JSON limit would reject a long call before the route runs.
+  app.use("/co/el/tool", express.json({ limit: "2mb" }));
   // Luma's webhook signature is the same "HMAC over the raw body" shape as
   // ElevenLabs' above — see validateLumaWebhook in api/src/routes/luma.ts. This
   // route was never mounted at all in co-test (confirmed live, 2026-09-02:

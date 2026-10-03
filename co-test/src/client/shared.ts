@@ -139,7 +139,7 @@ export function topicLabel(topic: string): string {
 // and phone.ts (real Twilio-bridged calls, now relayed live via Socket.IO —
 // see webhooks.ts's pushLiveEvent) so both render an in-progress coverage
 // check identically. covered_topics/call_count/latency_ms are sandbox-only
-// observability — never part of what's sent back to Hume as the tool
+// observability — never part of what's sent back to the agent as the tool
 // response (that stays exactly {missing_topics, ready_to_summarize}).
 export function renderCoveragePanel(
   container: HTMLElement,
