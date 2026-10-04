@@ -10,9 +10,27 @@ import "dotenv/config";
 import { readFileSync, writeFileSync } from "fs";
 import WebSocket from "ws";
 import { issueCallToken } from "../../src/services/elevenLabsCalls.js";
+import pool from "../../src/db/db.js";
+import { isTestNumber } from "../../src/services/testNumbers.js";
 
 const [userId, ...callNames] = process.argv.slice(2);
 if (!userId || !callNames.length) throw new Error("usage: live.ts <test member user id> <call name>...");
+const member = (await pool.query(`SELECT phone_number FROM users WHERE id = $1`, [userId])).rows[0];
+if (!member || !isTestNumber(member.phone_number)) throw new Error("live.ts only runs as a test member (555-01xx)");
+
+// A real call marks the member's call 'initiated' when it starts (callTrigger.ts
+// outbound, /co/incoming-call inbound); post-call processing claims the member
+// only from there. This drive skips Twilio, so it does the same, and waits for
+// the previous call to finish processing first, as a real next call would.
+async function startLikeARealCall(): Promise<void> {
+  const until = Date.now() + 10 * 60_000;
+  while (Date.now() < until) {
+    const r = (await pool.query(`SELECT call_status FROM users WHERE id = $1`, [userId])).rows[0];
+    if (!r?.call_status || !["processing", "initiated", "in-progress"].includes(r.call_status)) break;
+    await sleep(5000);
+  }
+  await pool.query(`UPDATE users SET call_status = 'initiated', call_status_updated_at = NOW() WHERE id = $1`, [userId]);
+}
 const dir = new URL("../voice-emotion-pilot/synthetic/data2/", import.meta.url);
 
 // 16 kHz 16-bit mono WAV -> 8 kHz mu-law (the agent's input, as on a phone line).
@@ -42,6 +60,7 @@ const SILENCE = Buffer.alloc(CHUNK, 0xff);
 async function runCall(name: string): Promise<{ name: string; conversationId: string | null; heard: string[] }> {
   const { expect } = JSON.parse(readFileSync(new URL(`calls/${name}.json`, dir), "utf8"));
   const clips: Buffer[] = expect.map((e: any) => toUlaw8k(new URL(`audio/${e.id}.wav`, dir)));
+  await startLikeARealCall();
   const r = await fetch(`https://api.elevenlabs.io/v1/convai/conversation/get-signed-url?agent_id=${process.env.ELEVENLABS_AGENT_ID}`, { headers: { "xi-api-key": process.env.ELEVENLABS_API_KEY ?? "" } });
   const { signed_url } = (await r.json()) as any;
   const ws = new WebSocket(signed_url);
@@ -119,4 +138,5 @@ try {
   prior = JSON.parse(readFileSync(out, "utf8"));
 } catch {}
 writeFileSync(out, JSON.stringify([...prior, ...results.map((r) => ({ ...r, userId, at: new Date().toISOString() }))], null, 1));
+await pool.end();
 console.log("\nconversations:", results.map((r) => `${r.name}=${r.conversationId}`).join(", "));

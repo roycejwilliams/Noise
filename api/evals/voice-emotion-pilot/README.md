@@ -51,3 +51,26 @@ Probe (evals/voiceFlags/probe.ts, real Gemini on 8 pretend calls stitched from t
 5 caller moments each): 15/24 voice-only moments caught, sarcasm 4/4, forced cheer 4/4, sighs 4-5/8, laughs 2-3/8;
 0/16 false flags where the words already said it or the voice was calm, 0 flags on anything else (two runs, same).
 The first prompt ("most calls have none or one") caught 12/24 with the same 0 false flags.
+
+## Live test on co-test (2026-10-04): voice flags vs the text read, same calls
+
+8 real ElevenLabs conversations as the clean test member (evals/voiceFlags/live.ts), caller turns played from the acted
+clips; co-test processed every call (text read) and ran the flag pass (voice). 24 moments where the feeling was only in
+the voice, 16 where it wasn't (words already said it, or a calm voice). Scored strictly: a read counts only if it points
+the right way (negative for sad/angry/anxious, positive for happy).
+
+| | count |
+|---|---|
+| both caught | 6 |
+| only the voice caught | 4 |
+| only the text read caught | 3 |
+| neither | 11 |
+| voice false flags (16 non-moments) | 1 |
+| text read reading feeling into calm-acted lines | 4 |
+
+Voice-only catches: sighs on "It's okay, it worked out" (the text read called it relieved: backwards) and "Yeah, I'm
+fine"; sarcasm on "Oh, perfect" in two calls where the text read missed it. Text-only catches are the words' default
+reading landing on the acted tone ("relieved" on a laughed line; it gives the same answer whatever the voice). Sarcasm
+and forced cheer 8/8 live; sighs 2/8 and laughs 0/8 once mixed with Co's voice through the phone codec.
+Gemini: 8-32 s per call after it ends, off the call's path. Round 1 (driver skipped the call-start status, so co-test
+skipped 7 calls as duplicates) is kept in data2/live-runs.round1.json; voice-only numbers there matched.

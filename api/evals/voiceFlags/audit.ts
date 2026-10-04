@@ -26,14 +26,19 @@ const byCue: Record<string, [number, number]> = {};
 for (const r of runs.filter((x) => x.conversationId)) {
   const { expect } = JSON.parse(readFileSync(new URL(`calls/${r.name}.json`, dir), "utf8"));
   const run = (await client.query(`SELECT status, flags, kept, ms, audio_bytes, error, created_at < NOW() - INTERVAL '15 minutes' AS stale FROM voice_flag_runs WHERE conversation_id = $1`, [r.conversationId])).rows[0];
-  const runAt = (await client.query(`SELECT created_at, user_id FROM voice_flag_runs WHERE conversation_id = $1`, [r.conversationId])).rows[0];
-  const textRead = runAt
-    ? (await client.query(`SELECT emotion, intensity, quote FROM emotion_signals WHERE user_id = $1 AND source = 'call' AND created_at BETWEEN $2::timestamptz - INTERVAL '10 minutes' AND $2::timestamptz + INTERVAL '10 minutes'`, [runAt.user_id, runAt.created_at])).rows
-    : [];
-  for (const t of textRead) console.log(`  text read: ${t.emotion} (${t.intensity}) "${String(t.quote).slice(0, 70)}"`);
+  // This call's own text read: the signals recorded with its transcript, which
+  // keeps the call's ElevenLabs link (audio_url ends in the conversation id).
+  const textRead = (
+    await client.query(
+      `SELECT es.emotion, es.intensity, es.quote FROM emotion_signals es JOIN co_memories m ON m.id = es.memory_id
+       WHERE m.memory_type = 'call_transcript' AND m.audio_url LIKE '%' || $1`,
+      [r.conversationId],
+    )
+  ).rows;
   const flags = (await client.query(`SELECT at_secs, quote, cue, feeling, reading, confidence, kept, drop_reason FROM voice_flags WHERE conversation_id = $1 ORDER BY at_secs`, [r.conversationId])).rows;
   if (run?.status === "running" && run.stale) run.status = "ABANDONED (still running after 15 min)";
   console.log(`\n${r.name} (${r.conversationId}): ${run ? `${run.status}, ${run.flags ?? 0} raised, ${run.kept ?? 0} kept, ${run.ms} ms${run.error ? `, error: ${run.error}` : ""}` : "NO RUN LOGGED"}`);
+  for (const t of textRead) console.log(`  text read: ${t.emotion} (${t.intensity}) "${String(t.quote).slice(0, 70)}"`);
   for (const f of flags) console.log(`  ${f.kept ? "KEPT" : "drop"} ${f.cue} @${Math.round(f.at_secs ?? -1)}s conf ${f.confidence} "${f.quote}" (${f.feeling}: ${f.reading})${f.drop_reason ? ` — ${f.drop_reason}` : ""}`);
   dropped += flags.filter((f: any) => !f.kept).length;
   for (const e of expect) {
