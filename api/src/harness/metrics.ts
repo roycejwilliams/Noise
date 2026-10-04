@@ -149,7 +149,7 @@ export async function computeMetrics(days = 30): Promise<Metrics> {
     // about their life (not about Co) read from their own texts or calls.
     one(
       `SELECT count(DISTINCT es.user_id) AS shared FROM emotion_signals es JOIN users u ON u.id = es.user_id
-       WHERE es.target = 'life' AND es.created_at > NOW() - INTERVAL '14 days' AND ${MEMBER}`,
+       WHERE es.target = 'life' AND es.basis IS NULL AND es.created_at > NOW() - INTERVAL '14 days' AND ${MEMBER}`,
       [],
     ),
   ]);

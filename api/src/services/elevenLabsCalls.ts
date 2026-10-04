@@ -392,6 +392,24 @@ export function voicemailLeft(firstName: string): string {
   return VOICEMAIL_MESSAGE.replace(/\{\{first_name\}\}/g, firstName || "there");
 }
 
+// The conversation's turns as ElevenLabs keeps them (with its per-turn
+// analysis), for when the post-call webhook's turns don't carry the scores.
+// Null on any failure; never throws.
+export async function fetchConversationTurns(conversationId: string, timeoutMs = 10_000): Promise<unknown[] | null> {
+  if (!conversationId) return null;
+  try {
+    const r = await fetch(`https://api.elevenlabs.io/v1/convai/conversations/${encodeURIComponent(conversationId)}`, {
+      headers: { "xi-api-key": process.env.ELEVENLABS_API_KEY ?? "" },
+      signal: AbortSignal.timeout(timeoutMs),
+    });
+    if (!r.ok) return null;
+    const j: any = await r.json();
+    return Array.isArray(j?.transcript) ? j.transcript : null;
+  } catch {
+    return null;
+  }
+}
+
 // Where the call lives on ElevenLabs (audio and transcript), kept with the
 // transcript since we don't store recordings ourselves.
 export function conversationLink(conversationId: string): string | null {

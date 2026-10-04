@@ -49,6 +49,10 @@ export type EmotionSignal = {
   at: Date;
   // Absent on signals recorded before the target existed; see signalTarget.
   target?: EmotionTarget | null;
+  // Where a signal came from when it isn't a model's read of what they said:
+  // "frustration_score" is ElevenLabs' per-line score (frustrationMoments).
+  // Absent on everything else.
+  basis?: "frustration_score" | null;
 };
 
 // Signals from before target was recorded are classified from what they
@@ -176,6 +180,46 @@ export async function callEmotionMoments(
 }
 
 // ---------------------------------------------------------------------------
+// Capture: calls (ElevenLabs' frustration score)
+//
+// ElevenLabs scores each thing the caller says for frustration (Royce,
+// 2026-10-04: "catching 'that's just perfect' at 0.4-0.6 is exactly the signal
+// that matters"). It reads the words too (the same words acted sad or happy
+// scored the same, evals/voice-emotion-pilot), but it catches frustration the
+// text read misses on a line, e.g. sarcasm. Kept beside the text read, never in
+// place of it: a line the text read already found a negative feeling on isn't
+// counted twice. Free: it comes with the call.
+export const CALL_FRUSTRATION = { min: 0.4, high: 0.6, maxMoments: 2 };
+export type ScoredLine = { text: string; frustration: number };
+
+// Pure: the caller's lines with ElevenLabs' frustration score.
+export function frustrationScores(turns: unknown): ScoredLine[] {
+  if (!Array.isArray(turns)) return [];
+  return turns
+    .filter((t: any) => t?.role === "user" && typeof t?.message === "string" && t.message.trim() && typeof t?.analysis?.user_frustration_score === "number")
+    .map((t: any) => ({ text: t.message.trim(), frustration: t.analysis.user_frustration_score as number }));
+}
+
+const lineWords = (s: string) => s.toLowerCase().replace(/[^a-z0-9 ]+/g, " ").split(/\s+/).filter((w) => w.length > 2);
+function sameLine(a: string, b: string): boolean {
+  const A = lineWords(a);
+  const B = new Set(lineWords(b));
+  if (!A.length || !B.size) return false;
+  return A.filter((w) => B.has(w)).length / Math.min(A.length, B.size) >= 0.6;
+}
+
+// Pure: the frustrated moments to add beside the text read's: sure enough,
+// not a line the text read already called negative, strongest first.
+export function frustrationMoments(scored: ScoredLine[], textRead: Pick<EmotionSignal, "valence" | "quote">[]): Omit<EmotionSignal, "at">[] {
+  return scored
+    .filter((l) => l.frustration >= CALL_FRUSTRATION.min)
+    .filter((l) => !textRead.some((m) => m.valence === "negative" && m.quote && sameLine(m.quote, l.text)))
+    .sort((a, b) => b.frustration - a.frustration)
+    .slice(0, CALL_FRUSTRATION.maxMoments)
+    .map((l) => ({ source: "call" as const, emotion: "frustrated", intensity: l.frustration >= CALL_FRUSTRATION.high ? ("high" as const) : ("medium" as const), valence: "negative" as const, about: null, quote: l.text.slice(0, 140), basis: "frustration_score" as const }));
+}
+
+// ---------------------------------------------------------------------------
 // Store
 
 export async function recordEmotionSignals(
@@ -185,13 +229,13 @@ export async function recordEmotionSignals(
   if (!signals.length) return;
   await pool
     .query(
-      `INSERT INTO emotion_signals (user_id, source, emotion, intensity, valence, about, quote, memory_id, target)
-       SELECT $1, x.source, x.emotion, x.intensity, x.valence, x.about, x.quote, x.memory_id, x.target
-       FROM jsonb_to_recordset($2::jsonb) AS x(source text, emotion text, intensity text, valence text, about text, quote text, memory_id uuid, target text)`,
+      `INSERT INTO emotion_signals (user_id, source, emotion, intensity, valence, about, quote, memory_id, target, basis)
+       SELECT $1, x.source, x.emotion, x.intensity, x.valence, x.about, x.quote, x.memory_id, x.target, x.basis
+       FROM jsonb_to_recordset($2::jsonb) AS x(source text, emotion text, intensity text, valence text, about text, quote text, memory_id uuid, target text, basis text)`,
       [
         userId,
         JSON.stringify(
-          signals.map((s) => ({ source: s.source, emotion: s.emotion, intensity: s.intensity, valence: s.valence, about: s.about, quote: s.quote, memory_id: s.memoryId ?? null, target: signalTarget(s) })),
+          signals.map((s) => ({ source: s.source, emotion: s.emotion, intensity: s.intensity, valence: s.valence, about: s.about, quote: s.quote, memory_id: s.memoryId ?? null, target: signalTarget(s), basis: s.basis ?? null })),
         ),
       ],
     )
@@ -236,7 +280,10 @@ export function summarizeSignals(allSignals: EmotionSignal[], now: Date): Emotio
   const strongestCall = [...lastCallMoments].sort((a, b) => rank(b.intensity) - rank(a.intensity))[0] ?? null;
   const current = latestText ?? (strongestCall && age(strongestCall) <= 48 * HOUR ? strongestCall : null);
 
-  const recentNeg = sorted.find((s) => s.valence === "negative" && s.intensity !== "low" && age(s) <= 24 * HOUR);
+  // A frustration score alone doesn't mark a hard day: it can't tell frustration
+  // with Co from frustration with life, and needsCare holds some check-ins
+  // (review of #61). Co still sees it as a call moment, with their words.
+  const recentNeg = sorted.find((s) => s.valence === "negative" && s.intensity !== "low" && s.basis !== "frustration_score" && age(s) <= 24 * HOUR);
   const positiveAfter = recentNeg ? sorted.some((s) => s.valence === "positive" && s.at > recentNeg.at) : false;
 
   const byTopic = new Map<string, { about: string; emotions: Set<string>; count: number }>();
@@ -295,14 +342,14 @@ export async function getEmotionalContext(userId: string, now = new Date()): Pro
   const voice = recentVoiceFlags(userId).catch(() => null);
   const { rows } = await pool
     .query(
-      `SELECT source, emotion, intensity, valence, about, quote, created_at, target FROM emotion_signals
+      `SELECT source, emotion, intensity, valence, about, quote, created_at, target, basis FROM emotion_signals
        WHERE user_id = $1 AND created_at > NOW() - INTERVAL '14 days' ORDER BY created_at DESC LIMIT 100`,
       [userId],
     )
     .catch(() => ({ rows: [] as any[] }));
   return {
     ...summarizeSignals(
-      rows.map((r: any) => ({ source: r.source, emotion: r.emotion, intensity: r.intensity, valence: r.valence, about: r.about, quote: r.quote, at: new Date(r.created_at), target: r.target ?? null })),
+      rows.map((r: any) => ({ source: r.source, emotion: r.emotion, intensity: r.intensity, valence: r.valence, about: r.about, quote: r.quote, at: new Date(r.created_at), target: r.target ?? null, basis: r.basis ?? null })),
       now,
     ),
     voice: await voice,

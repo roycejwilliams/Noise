@@ -3,7 +3,7 @@
 // text path's (readTextEmotion), faked here. No API calls, no database:
 //   npx tsx evals/emotion/callRules.ts
 import { readFileSync } from "fs";
-import { callEmotionMoments, callLinesToRead, CALL_EMOTION_MAX_MOMENTS, CALL_EMOTION_MAX_READS, summarizeSignals, type EmotionSignal, type TextEmotion } from "../../src/harness/emotion.js";
+import { callEmotionMoments, callLinesToRead, CALL_EMOTION_MAX_MOMENTS, CALL_EMOTION_MAX_READS, CALL_FRUSTRATION, frustrationMoments, frustrationScores, summarizeSignals, type EmotionSignal, type TextEmotion } from "../../src/harness/emotion.js";
 
 let total = 0;
 let failed = 0;
@@ -66,6 +66,47 @@ check("a frustration with Co on a call counts as frustration with Co", summarize
 const co = readFileSync(new URL("../../src/routes/co.ts", import.meta.url), "utf8");
 check("the call's feelings are read alongside profile learning, recorded with the transcript's id, and awaited before the call is finished", co.indexOf("const emotionDone = (async () => {") > 0 && co.indexOf("const emotionDone") < co.indexOf("await learnFromCall(") && co.indexOf("await emotionDone;") > co.indexOf("await learnFromCall(") && co.indexOf("await emotionDone;") < co.indexOf("captureIntent(user_id") && /memoryId: transcriptMemoryId/.test(co));
 check("a retried delivery doesn't record them twice, and a failure can't fail the call", /SELECT 1 FROM emotion_signals WHERE memory_id = \$1 LIMIT 1/.test(co) && /reading the call's feelings failed \(non-fatal\)/.test(co));
+
+// ElevenLabs' frustration score, beside the text read (2026-10-04). Shapes from a real co-test call.
+const elTurns = [
+  { role: "agent", message: "Hey Jordan, it's Co.", analysis: null },
+  { role: "user", message: "It's been a hard week.", analysis: { user_sentiment_score: -0.5, user_frustration_score: 0.1 } },
+  { role: "user", message: "Oh, perfect. That's just perfect.", analysis: { user_sentiment_score: -0.6, user_frustration_score: 0.5 } },
+  { role: "user", message: "I'm so done with this. My co-founder pushed the release again.", analysis: { user_sentiment_score: -0.8, user_frustration_score: 0.7 } },
+  { role: "user", message: "No, it's great, really. Everything's great.", analysis: { user_sentiment_score: -0.4, user_frustration_score: 0.4 } },
+  { role: "user", message: "Yeah, I'm fine.", analysis: { user_sentiment_score: -0.2, user_frustration_score: 0.3 } },
+  { role: "user", message: "no score here" },
+];
+const scored = frustrationScores(elTurns);
+check("only the caller's scored lines are read", scored.length === 5 && !scored.some((l) => /Jordan, it's Co/.test(l.text)));
+check("frustrationScores tolerates a missing or odd transcript", frustrationScores(null).length === 0 && frustrationScores({}).length === 0);
+const textRead = [{ valence: "negative" as const, quote: "I'm so done with this. My co-founder pushed the release again." }];
+const fr = frustrationMoments(scored, textRead);
+check(`a line scored ${CALL_FRUSTRATION.min}+ the text read missed becomes a frustrated moment ("that's just perfect")`, fr.some((m) => /just perfect/.test(m.quote ?? "") && m.emotion === "frustrated" && m.valence === "negative" && m.source === "call"));
+check("a line the text read already called negative isn't counted twice", !fr.some((m) => /so done with this/.test(m.quote ?? "")));
+check(`below ${CALL_FRUSTRATION.min} isn't a moment ("Yeah, I'm fine" at 0.3)`, !fr.some((m) => /I'm fine/.test(m.quote ?? "")));
+check(`at most ${CALL_FRUSTRATION.maxMoments}, strongest first, and ${CALL_FRUSTRATION.high}+ is high`, fr.length <= CALL_FRUSTRATION.maxMoments && fr[0].quote!.includes("just perfect") && fr[0].intensity === "medium" && frustrationMoments([{ text: "ugh this again", frustration: 0.7 }], [])[0].intensity === "high");
+check(`a line alone below ${CALL_FRUSTRATION.min} is never a moment`, frustrationMoments([{ text: "Yeah, I'm fine.", frustration: 0.39 }], []).length === 0 && frustrationMoments([{ text: "Yeah, I'm fine.", frustration: 0.4 }], []).length === 1);
+check(`never more than ${CALL_FRUSTRATION.maxMoments} a call, the strongest kept`, (() => { const m = frustrationMoments([0.45, 0.9, 0.5, 0.8].map((f, i) => ({ text: `line number ${i} about the release again`, frustration: f })), []); return m.length === CALL_FRUSTRATION.maxMoments && m[0].quote!.includes("number 1") && m[1].quote!.includes("number 3"); })());
+check("a positive text-read line doesn't block it", frustrationMoments([{ text: "Oh, perfect. That's just perfect.", frustration: 0.5 }], [{ valence: "positive", quote: "Oh, perfect. That's just perfect." }]).length === 1);
+check("recorded with the text read's moments, same transcript id, inside the non-fatal block", /const frustrated = frustrationMoments\(scored, moments\);/.test(co) && /recordEmotionSignals\(user_id, \[\.\.\.moments, \.\.\.frustrated\]/.test(co) && co.indexOf("frustrationMoments(scored, moments)") > co.indexOf("const emotionDone = (async () => {") && co.indexOf("frustrationMoments(scored, moments)") < co.indexOf("reading the call's feelings failed (non-fatal)"));
+check("the scores come from the webhook's turns, else the conversation fetched once (never fails the call)", /const here = frustrationScores\(turns\);[\s\S]*fetchConversationTurns\(conversationId\)/.test(co) && /frustration\(\)\.catch\(\(\) => \[\]/.test(co));
+// Review of #61: a score can't tell frustration with Co from frustration with
+// life, so alone it never marks a hard day (needsCare holds some check-ins).
+check("score moments are tagged frustration_score", fr.every((m) => (m as any).basis === "frustration_score"));
+const nowT = new Date("2026-10-04T20:00:00Z");
+const scoreRow = { source: "call" as const, emotion: "frustrated", intensity: "high" as const, valence: "negative" as const, about: null, quote: "Oh, perfect.", at: new Date("2026-10-04T19:00:00Z") };
+check("a frustration score alone never sets needsCare", summarizeSignals([{ ...scoreRow, basis: "frustration_score" as const }], nowT).needsCare === false);
+check("the same feeling from the text read still does", summarizeSignals([scoreRow], nowT).needsCare === true);
+check("Co still sees the score moment from the call", summarizeSignals([{ ...scoreRow, basis: "frustration_score" as const }], nowT).lastCall?.moments.length === 1);
+const emo = readFileSync(new URL("../../src/harness/emotion.ts", import.meta.url), "utf8");
+const migs = readFileSync(new URL("../../src/db/migrations.ts", import.meta.url), "utf8");
+const metr = readFileSync(new URL("../../src/harness/metrics.ts", import.meta.url), "utf8");
+check("the tag is stored and read back, and the column exists", /INSERT INTO emotion_signals \([^)]*basis\)/.test(emo) && /basis: s\.basis \?\? null/.test(emo) && /target, basis FROM emotion_signals/.test(emo) && /ALTER TABLE emotion_signals ADD COLUMN IF NOT EXISTS basis TEXT/.test(migs));
+check("the 'shared how life is going' metric doesn't count scores", /es\.target = 'life' AND es\.basis IS NULL/.test(metr));
+check("the scores are fetched alongside the text read, and which path supplied them is logged", co.indexOf("const scoring = frustration") < co.indexOf("const moments = await callEmotionMoments(cleanTranscript);") && /frustration scores for \$\{conversationId\} from/.test(co));
+const elc = readFileSync(new URL("../../src/services/elevenLabsCalls.ts", import.meta.url), "utf8");
+check("the fetch has a timeout and returns null on any failure", /export async function fetchConversationTurns[\s\S]*AbortSignal\.timeout\(timeoutMs\)[\s\S]*catch \{\s*return null;/.test(elc));
 
 console.log(`call emotion rules: ${total - failed}/${total} passed`);
 if (failed) process.exitCode = 1;
