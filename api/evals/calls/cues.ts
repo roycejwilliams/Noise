@@ -31,6 +31,15 @@ check("cues are found in order", JSON.stringify(cuesIn("[softly] That sounds lik
 check("a cue comes out cleanly, spacing and punctuation tidy", stripCues("[softly] That sounds like a lot.") === "That sounds like a lot." && stripCues("Okay [laughs] , fair.") === "Okay, fair.");
 check("a cue outside the set is stripped too, up to three words", stripCues("[sighs] Yeah.") === "Yeah." && stripCues("[low steady voice] Okay.") === "Okay.");
 check("capitalized brackets (an event name) are left alone", stripCues("Tickets for [SOLD OUT] Gala") === "Tickets for [SOLD OUT] Gala");
+// Review of #62: a text only loses known cues, standing as their own word.
+// Kept through the real send path (cleanCoMessage), bracket and all.
+const keeps = (x: string, part: string) => cleanCoMessage(x).includes(part) && stripCues(x, "known") === x;
+check("a link's query brackets are never touched", keeps("https://lu.ma/e?filter[city]=sf&page[size]=10", "filter[city]=sf&page[size]=10"));
+check("a markdown-style link is never touched", keeps("RSVP [here](https://lu.ma/abc)", "[here](https://lu.ma/abc)"));
+check("a lowercase event tag or placeholder in a text is never touched", keeps("Dinner [members only] Friday", "[members only]") && keeps("Tickets: [sold out] Gala", "[sold out]") && keeps("Hi [name], welcome.", "[name]"));
+check("quoted text keeps its brackets", keeps('She said "[laughs] no way" and left.', '"[laughs] no way"'));
+check("no tidy when nothing was removed (spacing and numbers untouched)", stripCues("Pay 4 .5 now.  Two spaces stay.", "known") === "Pay 4 .5 now.  Two spaces stay." && stripCues("a[warmly]b", "known") === "a[warmly]b");
+check("a known stray cue is still stripped from a text", cleanCoMessage("[sighs] Okay, talk soon.") === "Okay, talk soon.");
 
 // Never in a transcript Co stores, never in a text.
 const turns = [
@@ -48,6 +57,10 @@ check("a text never carries a cue (cleanCoMessage, every send)", cleanCoMessage(
 
 // The guide reaches the call prompt only.
 check("the call prompt carries the cue guide", promptForElevenLabs("You are Co.").includes(CUE_GUIDE));
+const realPrompt = readFileSync(new URL("../../prompts/co-system-prompt.md", import.meta.url), "utf8");
+const callPrompt = promptForElevenLabs(realPrompt);
+check("in the real call prompt the guide sits in How you sound, with the spoken-aloud exception, before the opening note", callPrompt.includes("Everything you write is spoken aloud, except a cue in square brackets (below).") && callPrompt.indexOf(CUE_GUIDE) > callPrompt.indexOf("HOW YOU SOUND ON THE PHONE") && callPrompt.indexOf(CUE_GUIDE) < callPrompt.indexOf("WHAT YOU KNOW VS. WHAT YOU THINK") && callPrompt.trimEnd().endsWith("go straight to your first real question."));
+check("the shared prompt file itself never mentions cues (texts read it)", !/square brackets|CUE|\[warmly\]/.test(realPrompt));
 check("the guide names exactly the allowed cues, at most one, most replies none", VOICE_CUES.every((c) => CUE_GUIDE.includes(`[${c}]`)) && /Most replies have no cue\. Never more than one in a reply\./.test(CUE_GUIDE));
 check("the guide keeps Co's voice and the no-label rule", /never theatrical, never flirtatious/.test(CUE_GUIDE) && /never name it/.test(CUE_GUIDE) && /never said aloud/.test(CUE_GUIDE) && /mirror/.test(CUE_GUIDE));
 const persona = readFileSync(new URL("../../src/services/coPersona.ts", import.meta.url), "utf8");

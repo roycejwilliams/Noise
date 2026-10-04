@@ -54,7 +54,7 @@ export function cleanCoMessage(text: string): string {
   // through before it's sent and logged.
   // A voice cue ("[softly]") is for calls only: never in a text, even one
   // drafted from a call transcript (services/voiceCues.ts).
-  cleaned = stripCues(cleaned).trim();
+  cleaned = stripCues(cleaned, "known").trim();
   return paragraphize(capitalizeSentences(cleaned));
 }
 

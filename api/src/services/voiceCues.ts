@@ -10,6 +10,10 @@
 // transcript of what Co said, so it's stripped from every transcript Co stores
 // and from every text it sends (services/sendblue.ts cleanCoMessage).
 //
+// Going live: the guide reaches an agent only through buildAgentConfig, so run
+// src/scripts/pushElevenLabsAgent.ts after a change, once per environment
+// (dev, then prod's own agent).
+//
 // Co's speech goes from ElevenLabs' model straight to its voice, so code can't
 // edit a reply mid-call: the allowed set and one-per-reply live in the call
 // prompt (CUE_GUIDE), and every call is audited after (cueAudit) so a cue
@@ -22,19 +26,35 @@
 export const VOICE_CUES = ["warmly", "softly", "thoughtful", "laughs"] as const;
 export const MAX_CUES_PER_REPLY = 1;
 
-// A bracketed cue: one to three lowercase words. Lowercase only, so a capitalized
-// bracket in an event name ("[SOLD OUT]") is left alone.
-const CUE = /\[([a-z]+(?:[ -][a-z]+){0,2})\]/g;
+// A bracketed cue standing as its own word: one to three lowercase words, after
+// a space or the start and before a space, punctuation or the end, so a link
+// ("?filter[city]=sf"), a markdown link ("[here](...)"), quoted text or a
+// capitalized event tag ("[SOLD OUT]") never matches.
+const CUE = /(^|[\s(])\[([a-z]+(?:[ -][a-z]+){0,2})\](?=$|[\s,.!?;:)])/g;
+
+// Cues a text could carry by mistake: the allowed ones, ElevenLabs' other
+// common tags, and the strays a model reaches for. A text only loses these
+// (review of #62: stripping any lowercase bracket rewrote "Dinner [members
+// only] Friday" and "Hi [name]"); a transcript of Co's call lines loses any cue.
+export const KNOWN_CUES = new Set<string>([...VOICE_CUES, "sighs", "sigh", "laugh", "laughing", "chuckles", "chuckle", "whispers", "whisper", "excited", "slow", "pause", "softer", "gently", "warm", "soft", "calmly", "smiles", "smiling", "thoughtfully", "warmer"]);
 
 // Pure: the cues in a line, in order.
 export function cuesIn(text: string): string[] {
-  return [...String(text ?? "").matchAll(CUE)].map((m) => m[1]);
+  return [...String(text ?? "").matchAll(CUE)].map((m) => m[2]);
 }
 
-// Pure: the line without its cues, spacing tidied.
-export function stripCues(text: string): string {
-  return String(text ?? "")
-    .replace(CUE, "")
+// Pure: the line without its cues (any cue, or only known ones for a text),
+// spacing tidied only where one was removed.
+export function stripCues(text: string, which: "any" | "known" = "any"): string {
+  const src = String(text ?? "");
+  let removed = false;
+  const out = src.replace(CUE, (whole, before: string, cue: string) => {
+    if (which === "known" && !KNOWN_CUES.has(cue)) return whole;
+    removed = true;
+    return before;
+  });
+  if (!removed) return src;
+  return out
     .replace(/[ \t]{2,}/g, " ")
     .replace(/[ \t]+([,.!?])/g, "$1")
     .replace(/^[ \t]+|[ \t]+$/gm, "");

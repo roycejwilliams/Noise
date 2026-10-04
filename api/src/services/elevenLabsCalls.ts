@@ -148,8 +148,16 @@ export async function verifyPostCallWebhook(rawBody: string, signature: string |
 // only the fallback; registration overrides it per call.
 export const OPENING_LINE = "Hey {{first_name}}, it's Co.";
 export const OPENING_NOTE = "You've already opened the call with a short greeting in your own voice. Don't greet them again; go straight to your first real question.";
+// The cue guide goes in the call prompt's own "how you sound" section (where
+// "everything you write is spoken aloud" now carries its one exception), not
+// trailing at the end (review of #62). Texts never get it.
+export const SPOKEN_ALOUD = "Everything you write is spoken aloud.";
 export function promptForElevenLabs(prompt: string): string {
-  return `${prompt.replace(/\bhang_up\b/g, "end_call")}\n\n${OPENING_NOTE}\n\n${CUE_GUIDE}`;
+  const base = prompt.replace(/\bhang_up\b/g, "end_call");
+  const withCues = base.includes(SPOKEN_ALOUD)
+    ? base.replace(SPOKEN_ALOUD, `Everything you write is spoken aloud, except a cue in square brackets (below).\n${CUE_GUIDE}\n`)
+    : `${base}\n\n${CUE_GUIDE}`;
+  return `${withCues}\n\n${OPENING_NOTE}`;
 }
 
 // The coverage check reads the newest part of the call (~6k tokens is plenty
