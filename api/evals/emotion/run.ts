@@ -18,12 +18,10 @@ import { generateText } from "ai";
 import { loadCases, runEval, type CaseScore, type EvalCase } from "../lib.js";
 import {
   checkNoEmotionLabel,
-  humeMoments,
   readTextEmotion,
   roomPreferenceFromFeelings,
   summarizeSignals,
   type EmotionSignal,
-  type HumeUtterance,
 } from "../../src/harness/emotion.js";
 import { candidateChecks, type Candidate } from "../../src/harness/proactive.js";
 import { MODELS } from "../../src/models.js";
@@ -42,8 +40,6 @@ function signals(rows: any[]): EmotionSignal[] {
 
 async function run(c: Case): Promise<any> {
   switch (c.kind) {
-    case "hume":
-      return humeMoments(c.utterances as HumeUtterance[]);
     case "context":
       return summarizeSignals(signals(c.signals), NOW);
     case "label":

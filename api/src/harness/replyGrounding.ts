@@ -180,7 +180,7 @@ export async function gatherReplyFacts(
       .catch(() => ({ rows: [] as any[] })),
     // Whether they said they'd rather text or talk (asked at onboarding).
     pool.query(`SELECT contact_preference FROM users WHERE id = $1`, [userId]).then((r) => r.rows[0]?.contact_preference ?? null).catch(() => null),
-    // Why a recent call failed (services/mediaStreamBridge.ts noteCallFailure).
+    // Why a recent call failed (services/elevenLabsCalls.ts noteCallFailure).
     pool
       .query(
         `SELECT content FROM co_memories WHERE user_id = $1 AND memory_type = 'call_failure' AND created_at > NOW() - INTERVAL '2 hours' ORDER BY created_at DESC LIMIT 1`,

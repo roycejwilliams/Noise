@@ -28,6 +28,7 @@ import { MODELS } from "../models.js";
 import { parseModelJson } from "../services/modelJson.js";
 import type { GateCheck } from "./core.js";
 import { JEV_SURE, noteRaceOutcome, raceWithJev, readTextSignals } from "../services/jevGateway.js";
+import { recentVoiceFlags, renderVoiceFlags, type ShownVoiceFlags } from "../services/voiceFlags.js";
 
 export type Valence = "negative" | "positive" | "mixed";
 export type Intensity = "low" | "medium" | "high";
@@ -57,74 +58,6 @@ export function signalTarget(s: Pick<EmotionSignal, "source" | "about" | "target
   if (s.target === "co" || s.target === "life") return s.target;
   if (s.source === "call") return "life";
   return s.about && ABOUT_CO.test(s.about) ? "co" : "life";
-}
-
-// ---------------------------------------------------------------------------
-// Capture: calls (Hume prosody)
-
-// Hume's prosody model names. States that don't call for a different
-// response (focus, calm, interest) aren't emotional moments.
-const HUME_NEUTRAL = new Set([
-  "Calmness", "Concentration", "Contemplation", "Interest", "Realization", "Boredom", "Determination", "Satisfaction",
-]);
-const HUME_NEGATIVE = new Set([
-  "Anger", "Anxiety", "Awkwardness", "Contempt", "Confusion", "Disappointment", "Disapproval", "Disgust", "Distress",
-  "Doubt", "Embarrassment", "Empathic Pain", "Envy", "Fear", "Guilt", "Horror", "Pain", "Sadness", "Shame", "Tiredness",
-]);
-const HUME_POSITIVE = new Set([
-  "Admiration", "Adoration", "Aesthetic Appreciation", "Amusement", "Awe", "Craving", "Ecstasy", "Enthusiasm",
-  "Entrancement", "Excitement", "Joy", "Love", "Pride", "Relief", "Romance", "Triumph", "Sympathy", "Nostalgia",
-]);
-
-// Prosody scores run 0-1 and rarely pass 0.6; below this a "top" emotion is
-// noise.
-export const HUME_MOMENT_MIN_SCORE = 0.3;
-
-export type HumeUtterance = { text: string; scores: Record<string, number> };
-
-function humeValence(name: string): Valence | null {
-  if (HUME_NEUTRAL.has(name)) return null;
-  if (HUME_NEGATIVE.has(name)) return "negative";
-  if (HUME_POSITIVE.has(name)) return "positive";
-  return "mixed";
-}
-
-function humeIntensity(score: number): Intensity {
-  return score >= 0.55 ? "high" : score >= 0.4 ? "medium" : "low";
-}
-
-// The few most emotionally loaded things they said on the call: for each
-// utterance its strongest non-neutral emotion, then the top moments overall,
-// at most one per emotion so one feeling doesn't crowd out the rest.
-export function humeMoments(utterances: HumeUtterance[], max = 3): Omit<EmotionSignal, "at" | "about">[] {
-  const candidates = utterances
-    .map((u) => {
-      const top = Object.entries(u.scores)
-        .filter(([name]) => humeValence(name) !== null)
-        .sort((a, b) => b[1] - a[1])[0];
-      return top && top[1] >= HUME_MOMENT_MIN_SCORE && u.text.trim().split(/\s+/).length >= 3 ? { u, name: top[0], score: top[1] } : null;
-    })
-    .filter((x): x is NonNullable<typeof x> => !!x)
-    .sort((a, b) => b.score - a.score);
-  const seen = new Set<string>();
-  const out: Omit<EmotionSignal, "at" | "about">[] = [];
-  for (const c of candidates) {
-    if (seen.has(c.name)) continue;
-    seen.add(c.name);
-    out.push({
-      source: "call",
-      emotion: c.name.toLowerCase(),
-      intensity: humeIntensity(c.score),
-      valence: humeValence(c.name)!,
-      quote: c.u.text.trim().slice(0, 140),
-    });
-    if (out.length >= max) break;
-  }
-  return out;
-}
-
-export function renderHumeMoments(moments: Omit<EmotionSignal, "at" | "about">[]): string {
-  return moments.map((m) => `${m.emotion} (${m.intensity}) when they said: "${m.quote}"`).join("\n");
 }
 
 // ---------------------------------------------------------------------------
@@ -178,6 +111,71 @@ Return ONLY JSON: {"emotion": "one or two words" or null, "intensity": "low" | "
 }
 
 // ---------------------------------------------------------------------------
+// Capture: calls (read from what they said)
+//
+// Calls used to bring Hume's voice scores. ElevenLabs sends none, so a call's
+// feelings are read from the member's own lines with the same read the text
+// path uses (readTextEmotion: same labels, same intensity, same target), each
+// with the lines before it for context. Words only: tone isn't heard (the
+// voice-layer pilot is looking at that). Only longer lines are read (a short
+// "yeah" has no feeling to name, and each read is a model call), the strongest
+// few are kept, at most one per emotion so one feeling doesn't crowd out the
+// rest, and they're recorded as source "call" so the loop treats them as it
+// treated Hume's moments.
+export const CALL_EMOTION_MIN_WORDS = 3;
+export const CALL_EMOTION_MAX_READS = 30;
+export const CALL_EMOTION_MAX_MOMENTS = 3;
+
+type CallLine = { index: number; text: string; context: string };
+
+// Pure: the member's lines worth reading, longest first (capped), each with the
+// few lines before it.
+export function callLinesToRead(transcript: string, max = CALL_EMOTION_MAX_READS): CallLine[] {
+  const lines = transcript
+    .split("\n")
+    .map((l) => l.trim())
+    .filter(Boolean)
+    .map((l) => (/^user:/i.test(l) ? { who: "Them", text: l.replace(/^user:\s*/i, "") } : { who: "Co", text: l.replace(/^assistant:\s*/i, "") }));
+  const out: CallLine[] = [];
+  lines.forEach((l, i) => {
+    if (l.who !== "Them" || l.text.split(/\s+/).filter(Boolean).length < CALL_EMOTION_MIN_WORDS) return;
+    out.push({ index: i, text: l.text, context: lines.slice(Math.max(0, i - 6), i).map((c) => `${c.who}: ${c.text}`).join("\n") });
+  });
+  return out
+    .sort((a, b) => b.text.length - a.text.length)
+    .slice(0, max)
+    .sort((a, b) => a.index - b.index);
+}
+
+// The call's feeling moments, strongest first. read is injectable for tests.
+export async function callEmotionMoments(
+  transcript: string,
+  read: (message: string, recentConversation: string, functionId: string) => Promise<TextEmotion> = readTextEmotion,
+  opts: { max?: number; concurrency?: number } = {},
+): Promise<Omit<EmotionSignal, "at">[]> {
+  const todo = callLinesToRead(transcript);
+  const found: { sig: Omit<EmotionSignal, "at">; order: number }[] = [];
+  let next = 0;
+  const worker = async () => {
+    while (next < todo.length) {
+      const l = todo[next++];
+      const e = await read(l.text, l.context, "call.readTextEmotion").catch(() => null);
+      if (e) found.push({ order: l.index, sig: { source: "call", emotion: e.emotion, intensity: e.intensity, valence: e.valence, about: e.about, target: e.target, quote: l.text.slice(0, 140) } });
+    }
+  };
+  await Promise.all(Array.from({ length: Math.min(opts.concurrency ?? 5, todo.length) }, worker));
+  const seen = new Set<string>();
+  const out: Omit<EmotionSignal, "at">[] = [];
+  for (const f of found.sort((a, b) => rank(b.sig.intensity) - rank(a.sig.intensity) || a.order - b.order)) {
+    if (seen.has(f.sig.emotion)) continue;
+    seen.add(f.sig.emotion);
+    out.push(f.sig);
+    if (out.length >= (opts.max ?? CALL_EMOTION_MAX_MOMENTS)) break;
+  }
+  return out;
+}
+
+// ---------------------------------------------------------------------------
 // Store
 
 export async function recordEmotionSignals(
@@ -217,6 +215,10 @@ export type EmotionalContext = {
   // Frustrated with Co itself in the last 48 hours (what it has or hasn't
   // found, its replies). Makes Co search wider and try harder; not a hard day.
   withCo: { frustrated: boolean; about: string | null; count: number };
+  // Moments on their latest call where their voice said more than their words
+  // (services/voiceFlags.ts). Beside the call's text read, never in it: only
+  // the render shows them, nothing above is computed from them.
+  voice?: ShownVoiceFlags | null;
 };
 
 const HOUR = 3600_000;
@@ -290,6 +292,7 @@ function rank(i: Intensity): number {
 }
 
 export async function getEmotionalContext(userId: string, now = new Date()): Promise<EmotionalContext> {
+  const voice = recentVoiceFlags(userId).catch(() => null);
   const { rows } = await pool
     .query(
       `SELECT source, emotion, intensity, valence, about, quote, created_at, target FROM emotion_signals
@@ -297,10 +300,13 @@ export async function getEmotionalContext(userId: string, now = new Date()): Pro
       [userId],
     )
     .catch(() => ({ rows: [] as any[] }));
-  return summarizeSignals(
-    rows.map((r: any) => ({ source: r.source, emotion: r.emotion, intensity: r.intensity, valence: r.valence, about: r.about, quote: r.quote, at: new Date(r.created_at), target: r.target ?? null })),
-    now,
-  );
+  return {
+    ...summarizeSignals(
+      rows.map((r: any) => ({ source: r.source, emotion: r.emotion, intensity: r.intensity, valence: r.valence, about: r.about, quote: r.quote, at: new Date(r.created_at), target: r.target ?? null })),
+      now,
+    ),
+    voice: await voice,
+  };
 }
 
 function ago(at: Date, now: Date): string {
@@ -328,6 +334,8 @@ export function renderEmotionalContext(ctx: EmotionalContext, now = new Date()):
         .join("; ")}.`,
     );
   }
+  const voiceLine = ctx.voice ? renderVoiceFlags(ctx.voice, ago(ctx.voice.at, now)) : null;
+  if (voiceLine) lines.push(voiceLine);
   for (const r of ctx.recurring) lines.push(`Keeps coming up: ${r.emotions.join(", ")} about ${r.about} (${r.count} times in two weeks).`);
   if (ctx.needsCare) lines.push("They've been struggling in the last day.");
   if (ctx.withCo?.frustrated) {

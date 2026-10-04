@@ -120,19 +120,7 @@ const COVERAGE_FALLBACK: CoverageAssessment = {
 // (co-test's raw-output panel) don't have to re-derive it.
 export async function extractPsychographicProfile(
   transcript: string,
-  emotionalHighlights?: string,
 ): Promise<{ raw: string; extracted: ExtractedProfile }> {
-  // Voice calls only — Hume's own prosody analysis on the user's real audio
-  // (not available for text). Without this, "blockers"/emotional_state are
-  // inferred from wording alone, so a topic mentioned calmly and one that
-  // actually made someone anxious read identically to the model. This
-  // grounds the extraction in what Hume's voice analysis flagged as the
-  // most emotionally loaded moments, so those get weighted appropriately
-  // rather than just whatever was mentioned most.
-  const emotionalContext = emotionalHighlights
-    ? `\n\nHume's own voice-emotion analysis flagged these as the most emotionally loaded moments in the call (use this to weight blockers/emotional_state toward what actually carried real feeling, not just what was mentioned most often):\n${emotionalHighlights}`
-    : "";
-
   const { text: rawExtraction } = await generateText({
     model: anthropic(PROFILE_EXTRACT_MODEL),
     prompt: `You are extracting psychographic profile data from a conversation transcript between Co (an assistant, "assistant" lines) and a person ("user" lines).
@@ -155,7 +143,7 @@ export async function extractPsychographicProfile(
         }
 
         Transcript:
-        "${transcript}"${emotionalContext}`,
+        "${transcript}"`,
     experimental_telemetry: { isEnabled: true, functionId: "profileExtraction.extractPsychographicProfile" },
   });
 
@@ -826,7 +814,6 @@ export async function storeProfile(
   // newWords: what's new in this transcript (the text they just sent). A
   // call transcript is new as a whole, so it defaults to the transcript.
   opts: {
-    emotions?: { name: string; score: number }[] | null;
     newWords?: string;
     // The merged turn read's output (services/turnLearning.ts): the same
     // judgments, already made, run through the same gates below instead of

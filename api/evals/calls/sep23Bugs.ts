@@ -43,8 +43,8 @@ const rg = src("harness/replyGrounding.ts");
 // code flags on the cut; a rewrite is only kept when its own check finds nothing.
 check("#4 nothing either check flagged goes out", /let cut = stripUnsupported\(draft, effectiveFailed1\);/.test(rg) && /if \(cutCode\.length\) cut = stripUnsupported\(cut, cutCode\);/.test(rg) && /if \(!failed2\.length\) kept = \{ text: cleaned, checks: r\.checks \};/.test(rg));
 check("#4 a failed call's real reason reaches the reply", /memory_type = 'call_failure'/.test(rg) && /the problem is on your side, not their phone/.test(rg));
-const bridge = src("services/mediaStreamBridge.ts");
-check("#4 a Hume error on a call is noted in plain words, once per 10 min", /noteCallFailure\(handle\.userId/.test(bridge) && /a problem with Co's own voice setup/.test(bridge) && /INTERVAL '10 minutes'/.test(bridge));
+const calls = src("services/elevenLabsCalls.ts");
+check("#4 a call that can't connect is noted in plain words, once per 10 min", /noteCallFailure\(userId, "registration"\)/.test(src("routes/co.ts")) && /a problem with Co's own voice setup/.test(calls) && /INTERVAL '10 minutes'/.test(calls));
 check("#4 the reply is told to follow where they went", /If they moved on from a question you asked, go where they went; don't ask it again\./.test(src("agent/conversationReply.ts")));
 
 // ---------------------------------------------------------------- #2 Co's words aren't their wants
@@ -84,8 +84,8 @@ user: Honestly, just a friend. somebody they can kinda go through battles with a
   check("#3 the close ends with a spoken goodbye", /End the closing line with a plain, warm goodbye in words \("Talk soon, \{\{first_name\}\}\."\)/.test(prompt));
   check("#3 every name placeholder is one Hume fills in", !/(?<!\{)\{first_name\}(?!\})/.test(prompt));
   const { callSummaryPrompt } = await import("../../src/services/callContext.js");
-  const sp = callSummaryPrompt("user: hi", "- sounded disappointed at the end");
-  check("#3 how the call ended comes from their words, not a voice reading", /How the call ended comes only from what they said at the end, never from a voice reading/.test(sp) && /never what they wanted or meant/.test(sp));
+  const sp = callSummaryPrompt("user: hi");
+  check("#3 how the call ended comes from their words, not a voice reading", /How the call ended comes only from what they said at the end, never from a voice reading/.test(sp) && !/voice analysis/i.test(sp));
   check("#5 named companies, people, dates and plans come first", /Lead with the concrete facts they gave/.test(sp) && /Keep every named company and person they mentioned/.test(sp));
   check("#5 spelled-out names are written as names", /"l y t h e dot a i" is lythe\.ai/.test(sp));
   const { neutralPronouns } = await import("../../src/mo/rules.js");
