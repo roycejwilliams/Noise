@@ -74,3 +74,11 @@ reading landing on the acted tone ("relieved" on a laughed line; it gives the sa
 and forced cheer 8/8 live; sighs 2/8 and laughs 0/8 once mixed with Co's voice through the phone codec.
 Gemini: 8-32 s per call after it ends, off the call's path. Round 1 (driver skipped the call-start status, so co-test
 skipped 7 calls as duplicates) is kept in data2/live-runs.round1.json; voice-only numbers there matched.
+
+## Off-boarded 2026-10-04
+
+Voice flags are off. The live results were weak: on the same 8 calls the voice caught 4 moments the text read missed and
+missed 3 it caught, half the voice-only moments went uncaught by both, and sighs and laughs barely survived the phone line.
+The text read does most of the work and stays Co's only emotion signal. VOICE_FLAGS and CO_GEMINI_KEY are removed from
+co-test (and the key from local api/.env); the code from #60 stays in place, dormant (off without VOICE_FLAGS=test), and
+the voice_flag_runs / voice_flags tables are left as they are. This branch and README are the record.
