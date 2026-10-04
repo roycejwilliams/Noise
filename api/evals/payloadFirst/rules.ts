@@ -71,7 +71,10 @@ check("every hand-off and hold is recorded", (block.match(/decision: "proactive\
 const pf = readFileSync(new URL("../../src/harness/payloadFirst.ts", import.meta.url), "utf8");
 check("the task is made due now, so the next task wake (15 min) does it", /SET next_check_at = NOW\(\)/.test(pf));
 check("only handed off when a task text could go out (20h gap, daily task-text limit)", /const can = mayText\(/.test(pf) && /if \(!can\.ok\) return \{ ok: false/.test(pf));
-check("a woken task keeps its plan (the hand-off is added, not swapped in)", /plan_next \|\| ' Also, now: '/.test(pf));
+check("a woken task keeps its whole plan, after the hand-off, never cut off", /'Now: ' \|\| \$3 \|\| COALESCE\(' Then: ' \|\| plan_next, ''\)/.test(pf) && !/LEFT\(CASE/.test(pf));
+check("a same-goal task woken from 'already working on that' gets the 20h check too", /const sameCan = mayText\(same, today/.test(pf) && /if \(!sameCan\.ok\) return \{ ok: false/.test(pf));
+const reg = readFileSync(new URL("../../src/harness/proactiveRegistry.ts", import.meta.url), "utf8");
+check("a payload-first drop moves the check-in count on, so that ask's check-ins come back", /async onDropped\(c, _status, reason\) \{\s*const next = \/\^payload first\/\.test\(reason \?\? ""\);[\s\S]*checkin_count = checkin_count \+ 1/.test(reg));
 const mig = readFileSync(new URL("../../src/db/migrations.ts", import.meta.url), "utf8");
 check("the spacing column exists", /ALTER TABLE proactive_user_state ADD COLUMN IF NOT EXISTS space_until TIMESTAMPTZ/.test(mig));
 check("a read that fails sends the text as written (never blocks Co)", /catch \(err: any\) \{\s*console\.error\("payloadFirst read failed/.test(pf) && /\.catch\(\(\) => null\)/.test(block));

@@ -210,8 +210,13 @@ export const proactiveRegistry: ProactiveRegistry = {
       );
       await writeMemory(c.userId, "check_in", `Checked in on: ${p.askText}`);
     },
-    async onDropped(c) {
-      await pool.query(`UPDATE ask_checkins SET last_checked_at = NOW() WHERE id = $1`, [(c.payload as AskCheckinPayload).askCheckinId]);
+    // A payload-first drop (the work went to a task, or couldn't be delivered
+    // yet) moves the check-in count on, so the next check-in gets a new target
+    // and comes back on schedule; otherwise it reused the dropped one and that
+    // ask's check-ins stopped for good (re-review of #59).
+    async onDropped(c, _status, reason) {
+      const next = /^payload first/.test(reason ?? "");
+      await pool.query(`UPDATE ask_checkins SET last_checked_at = NOW()${next ? ", checkin_count = checkin_count + 1" : ""} WHERE id = $1`, [(c.payload as AskCheckinPayload).askCheckinId]);
     },
   },
 

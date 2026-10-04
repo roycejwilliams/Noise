@@ -101,7 +101,7 @@ export function payloadFirstPrompt(o: { draft: string; recent: string; theirAsk?
 
 Their recent texts with Co, oldest first:
 ${o.recent.slice(-2500) || "(none)"}
-${o.theirAsk ? `\nWhat they asked Co for, in their words: "${o.theirAsk}"\n` : ""}
+${o.theirAsk ? `\nWhat they asked Co for, as Co noted it: "${o.theirAsk}"\n` : ""}
 Things Co is already working on for them:
 ${o.tasks.map((t) => `- [${t.id}] ${t.goal}`).join("\n") || "(none)"}
 
@@ -169,16 +169,20 @@ export async function handOffWork(userId: string, d: Extract<PayloadDecision, { 
       // Already on it under the same goal: wake that one.
       const same = s.why === "already working on that" ? (await openTasks(userId)).find((t) => norm(t.goal) === norm(d.work)) : undefined;
       if (!same) return { ok: false, why: s.why };
+      const sameCan = mayText(same, today, new Date());
+      if (!sameCan.ok) return { ok: false, why: `the result couldn't go out yet: ${sameCan.why}` };
       taskId = same.id;
     } else {
       taskId = s.task.id;
       started = true;
     }
   }
-  // Added to the task's plan, not in place of it (a deadline's last-check plan stays).
+  // The hand-off goes first and the task's own plan follows it whole (a
+  // deadline's last-check plan stays). Not capped: a long plan used to cut the
+  // hand-off off entirely (re-review of #59).
   const { rowCount } = await pool.query(
     `UPDATE co_tasks SET next_check_at = NOW(),
-       plan_next = LEFT(CASE WHEN $4 THEN $3 ELSE COALESCE(plan_next || ' Also, now: ', 'Now: ') || $3 END, 240), updated_at = NOW()
+       plan_next = CASE WHEN $4 THEN $3 ELSE 'Now: ' || $3 || COALESCE(' Then: ' || plan_next, '') END, updated_at = NOW()
      WHERE user_id = $1 AND id = $2 AND status = 'open'`,
     [userId, taskId, `do it and send them the result, instead of asking: ${d.work}`, started],
   );
@@ -188,7 +192,7 @@ export async function handOffWork(userId: string, d: Extract<PayloadDecision, { 
 
 export type PayloadFirstResult = { handedTo: number; started: boolean; why: string } | { wouldHandOff: string } | { hold: string } | { kept: string } | null;
 
-// The ask a candidate is about, in their words, when it carries one.
+// The ask a candidate is about, as Co noted it, when it carries one (context for the read; never their words).
 export function theirAskOf(payload: unknown): string | null {
   const p = (payload ?? {}) as { askText?: unknown; asked?: unknown };
   const a = typeof p.askText === "string" ? p.askText : typeof p.asked === "string" ? p.asked : null;
