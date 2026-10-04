@@ -1,4 +1,5 @@
 import { isTestHandle, isTestNumber, testHandle } from "./testNumbers.js";
+import { stripCues } from "./voiceCues.js";
 import { AsyncLocalStorage } from "node:async_hooks";
 import { sendLimiter } from "./sendLimiter.js";
 import { claimReaction, confirmReaction, releaseReaction } from "./tapbacks.js";
@@ -51,6 +52,9 @@ export function cleanCoMessage(text: string): string {
   // who text in lowercase while check-ins and onboarding didn't, and several
   // senders skipped it entirely). This is the one place every message passes
   // through before it's sent and logged.
+  // A voice cue ("[softly]") is for calls only: never in a text, even one
+  // drafted from a call transcript (services/voiceCues.ts).
+  cleaned = stripCues(cleaned).trim();
   return paragraphize(capitalizeSentences(cleaned));
 }
 
