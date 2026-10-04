@@ -84,7 +84,7 @@ export async function registerElevenLabsCall(o: {
 }
 
 // ---------- after the call
-export type ElevenLabsTurn = { role?: string; message?: string | null; tool_calls?: { tool_name?: string; name?: string }[] | null };
+export type ElevenLabsTurn = { role?: string; message?: string | null; time_in_call_secs?: number | null; tool_calls?: { tool_name?: string; name?: string }[] | null };
 
 // Pure: the transcript in the shape the rest of Co reads ("user: ..." /
 // "assistant: ..." lines, as Hume's was), turns with no words left out.

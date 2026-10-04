@@ -28,6 +28,7 @@ import { MODELS } from "../models.js";
 import { parseModelJson } from "../services/modelJson.js";
 import type { GateCheck } from "./core.js";
 import { JEV_SURE, noteRaceOutcome, raceWithJev, readTextSignals } from "../services/jevGateway.js";
+import { recentVoiceFlags, renderVoiceFlags, type ShownVoiceFlags } from "../services/voiceFlags.js";
 
 export type Valence = "negative" | "positive" | "mixed";
 export type Intensity = "low" | "medium" | "high";
@@ -214,6 +215,10 @@ export type EmotionalContext = {
   // Frustrated with Co itself in the last 48 hours (what it has or hasn't
   // found, its replies). Makes Co search wider and try harder; not a hard day.
   withCo: { frustrated: boolean; about: string | null; count: number };
+  // Moments on their latest call where their voice said more than their words
+  // (services/voiceFlags.ts). Beside the call's text read, never in it: only
+  // the render shows them, nothing above is computed from them.
+  voice?: ShownVoiceFlags | null;
 };
 
 const HOUR = 3600_000;
@@ -287,6 +292,7 @@ function rank(i: Intensity): number {
 }
 
 export async function getEmotionalContext(userId: string, now = new Date()): Promise<EmotionalContext> {
+  const voice = recentVoiceFlags(userId).catch(() => null);
   const { rows } = await pool
     .query(
       `SELECT source, emotion, intensity, valence, about, quote, created_at, target FROM emotion_signals
@@ -294,10 +300,13 @@ export async function getEmotionalContext(userId: string, now = new Date()): Pro
       [userId],
     )
     .catch(() => ({ rows: [] as any[] }));
-  return summarizeSignals(
-    rows.map((r: any) => ({ source: r.source, emotion: r.emotion, intensity: r.intensity, valence: r.valence, about: r.about, quote: r.quote, at: new Date(r.created_at), target: r.target ?? null })),
-    now,
-  );
+  return {
+    ...summarizeSignals(
+      rows.map((r: any) => ({ source: r.source, emotion: r.emotion, intensity: r.intensity, valence: r.valence, about: r.about, quote: r.quote, at: new Date(r.created_at), target: r.target ?? null })),
+      now,
+    ),
+    voice: await voice,
+  };
 }
 
 function ago(at: Date, now: Date): string {
@@ -325,6 +334,8 @@ export function renderEmotionalContext(ctx: EmotionalContext, now = new Date()):
         .join("; ")}.`,
     );
   }
+  const voiceLine = ctx.voice ? renderVoiceFlags(ctx.voice, ago(ctx.voice.at, now)) : null;
+  if (voiceLine) lines.push(voiceLine);
   for (const r of ctx.recurring) lines.push(`Keeps coming up: ${r.emotions.join(", ")} about ${r.about} (${r.count} times in two weeks).`);
   if (ctx.needsCare) lines.push("They've been struggling in the last day.");
   if (ctx.withCo?.frustrated) {
