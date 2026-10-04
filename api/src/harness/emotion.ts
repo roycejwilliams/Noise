@@ -379,7 +379,8 @@ export function renderEmotionalContext(ctx: EmotionalContext, now = new Date()):
     lines.push(
       `On your call ${ago(ctx.lastCall.at, now)}, their voice showed: ${ctx.lastCall.moments
         .filter((m) => m.intensity !== "low")
-        .map((m) => `${m.emotion} (${m.intensity})${m.quote ? ` when they said "${m.quote}"` : ""}`)
+        // A sound is what they did, not a feeling with a strength (services/callSounds.ts).
+        .map((m) => (m.basis === "sound_tag" ? `they ${m.emotion}${m.quote ? ` when they said "${m.quote}"` : ""}` : `${m.emotion} (${m.intensity})${m.quote ? ` when they said "${m.quote}"` : ""}`))
         .join("; ")}.`,
     );
   }

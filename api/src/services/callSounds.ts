@@ -23,8 +23,6 @@ import type { ElevenLabsTurn } from "./elevenLabsCalls.js";
 export const CALL_SOUNDS = {
   model: "scribe_v2",
   maxMoments: 3,
-  match: 0.6,
-  window: 6,
   maxAudioBytes: 45 * 60 * 16_000, // ~45 minutes at ElevenLabs' 128 kbps mono
   audioTries: 4,
   audioWaitMs: 15_000,
@@ -48,46 +46,77 @@ export function soundOf(tag: string): Sound | null {
 
 const norm = (s: string) => s.toLowerCase().replace(/[’']/g, "").replace(/[^a-z0-9 ]+/g, " ").split(/\s+/).filter(Boolean);
 
-// Pure: which line a run of Scribe's words belongs to: the share of the run's
-// words found in the line, best line first. Co's lines compete with the
-// caller's, so words that are Co's never land on the caller.
-function bestLine(words: string[], lines: { who: "caller" | "co"; text: string }[]): { who: "caller" | "co"; text: string; score: number } | null {
-  const run = norm(words.join(" "));
-  if (run.length < 2) return null;
-  let best: { who: "caller" | "co"; text: string; score: number } | null = null;
-  for (const l of lines) {
-    const set = new Set(norm(l.text));
-    const score = run.filter((w) => set.has(w)).length / run.length;
-    if (!best || score > best.score) best = { ...l, score };
-  }
-  return best;
+// Pure: which turn each of Scribe's spoken words belongs to, walking the call
+// in order. Each turn's words are used up as they're heard, so a turn already
+// spoken in full stops attracting words that merely look like it. Each word
+// goes to whichever of the current turn and the next two still holds it and
+// the few words after it best; a tie stays put. -1 before any word matches.
+export function alignWords(spoken: string[], turnWords: string[][], ahead = 4): number[] {
+  const left = turnWords.map((ws) => {
+    const m = new Map<string, number>();
+    for (const w of ws) m.set(w, (m.get(w) ?? 0) + 1);
+    return m;
+  });
+  const has = (k: number, w: string) => (left[k].get(w) ?? 0) > 0;
+  const ws = spoken.map((raw) => norm(raw)[0] ?? "");
+  let t = -1;
+  return ws.map((w, j) => {
+    if (!w) return t;
+    const run = ws.slice(j, j + ahead).filter(Boolean);
+    let best = t;
+    let bestScore = t >= 0 && has(t, w) ? run.filter((x) => has(t, x)).length : -1;
+    for (const k of [t + 1, t + 2]) {
+      if (k < 0 || k >= left.length || !has(k, w)) continue;
+      const score = run.filter((x) => has(k, x)).length;
+      if (score > bestScore) {
+        best = k;
+        bestScore = score;
+      }
+    }
+    t = best;
+    if (t >= 0 && has(t, w)) left[t].set(w, left[t].get(w)! - 1);
+    return t;
+  });
 }
 
+const LAUGH_CUE = /\[(?:laughs?|laughing|chuckles?)\]/i;
+
 // Pure: the sighs and laughs on a call, each with the caller line it came
-// with: the words right after the tag, or right before it for a tag at the end
-// of a line. Dropped when those words are Co's or match nothing. At most
+// with. Each of Scribe's words is placed in its turn along the call
+// (alignWords). A sound belongs to the line it opens or sits inside: a tag
+// inside a caller's turn is theirs; a tag between turns belongs to the next
+// turn, so it counts only when that's the caller's. Co's cues open its own
+// lines (services/voiceCues.ts), so Co's laugh is never handed to the caller;
+// a sound at the very end of a caller's line, right before Co speaks, can't be
+// told from Co opening with one, so it's dropped (review of #63: a
+// nearest-words match handed Co's laugh to the caller). At most
 // CALL_SOUNDS.maxMoments, one per line and sound.
 export function soundMoments(words: ScribeWord[], turns: ElevenLabsTurn[], opts = CALL_SOUNDS): SoundMoment[] {
   const lines = turns
     .filter((t) => typeof t.message === "string" && t.message.trim())
     .map((t) => ({ who: (t.role === "user" ? "caller" : "co") as "caller" | "co", text: t.message!.trim() }));
   if (!lines.some((l) => l.who === "caller")) return [];
-  const spoken = words.map((w, i) => ({ w, i })).filter((x) => x.w.type === "word");
+  const idx = words.map((w, i) => ({ w, i })).filter((x) => x.w.type === "word");
+  const at = alignWords(idx.map((x) => x.w.text), lines.map((l) => norm(l.text)));
+  const turnOf = new Map<number, number>(idx.map((x, j) => [x.i, at[j]]));
   const out: SoundMoment[] = [];
   const seen = new Set<string>();
   words.forEach((w, i) => {
     if (w.type !== "audio_event" || out.length >= opts.maxMoments) return;
     const sound = soundOf(w.text);
     if (!sound) return;
-    const after = spoken.filter((x) => x.i > i).slice(0, opts.window).map((x) => x.w.text);
-    const before = spoken.filter((x) => x.i < i).slice(-opts.window).map((x) => x.w.text);
-    let hit = bestLine(after, lines);
-    if (!hit || hit.score < opts.match) hit = bestLine(before, lines);
-    if (!hit || hit.score < opts.match || hit.who !== "caller") return;
-    const key = `${sound}:${hit.text}`;
+    const prev = idx.filter((x) => x.i < i).map((x) => turnOf.get(x.i) ?? -1).pop() ?? -1;
+    const next = idx.filter((x) => x.i > i).map((x) => turnOf.get(x.i) ?? -1).find((t) => t >= 0) ?? -1;
+    const turn = prev >= 0 && prev === next ? prev : next;
+    if (turn < 0 || lines[turn].who !== "caller") return;
+    // Right after a Co line where Co itself laughed (its [laughs] cue is in the
+    // transcript), a laugh is Co's.
+    if (sound === "laughed" && prev >= 0 && prev !== turn && lines[prev].who === "co" && LAUGH_CUE.test(lines[prev].text)) return;
+    const line = lines[turn].text;
+    const key = `${sound}:${line}`;
     if (seen.has(key)) return;
     seen.add(key);
-    out.push({ sound, line: hit.text });
+    out.push({ sound, line });
   });
   return out;
 }

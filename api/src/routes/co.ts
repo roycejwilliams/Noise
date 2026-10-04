@@ -525,8 +525,12 @@ router.post("/el/post-call", async (req: Request, res: Response, next: NextFunct
     // Moments where their voice said more than their words, beside the text
     // read (services/voiceFlags.ts). Test members only for now; never fails the call.
     if (u[0]) flagVoiceMoments({ userId, phone: u[0].phone_number, conversationId, turns }).catch(() => {});
-    // Sighs and laughs from the recording, beside the text read (services/callSounds.ts).
-    recordCallSounds({ userId, conversationId, turns }).catch(() => {});
+    // Sighs and laughs from the recording, beside the text read
+    // (services/callSounds.ts). Only on the delivery that processed the call:
+    // a duplicate, voicemail or empty call returns something besides
+    // { success: true }, so a retried webhook can't pay for Scribe twice.
+    const processed = ended.status === 200 && JSON.stringify(ended.body) === JSON.stringify({ success: true });
+    if (processed) recordCallSounds({ userId, conversationId, turns }).catch(() => {});
     return res.status(ended.status).send(ended.body);
   } catch (err) {
     next(err);
@@ -809,7 +813,7 @@ async function processEndedCall(o: {
       // and can never fail the call.
       const emotionDone = (async () => {
         if (existingTranscriptMem.rows[0]) {
-          const had = await pool.query(`SELECT 1 FROM emotion_signals WHERE memory_id = $1 LIMIT 1`, [transcriptMemoryId]);
+          const had = await pool.query(`SELECT 1 FROM emotion_signals WHERE memory_id = $1 AND basis IS DISTINCT FROM 'sound_tag' LIMIT 1`, [transcriptMemoryId]);
           if (had.rows.length) return;
         }
         // Beside the text read: ElevenLabs' frustration score on lines it didn't

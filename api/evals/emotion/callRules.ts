@@ -65,7 +65,7 @@ check("a frustration with Co on a call counts as frustration with Co", summarize
 // Wiring.
 const co = readFileSync(new URL("../../src/routes/co.ts", import.meta.url), "utf8");
 check("the call's feelings are read alongside profile learning, recorded with the transcript's id, and awaited before the call is finished", co.indexOf("const emotionDone = (async () => {") > 0 && co.indexOf("const emotionDone") < co.indexOf("await learnFromCall(") && co.indexOf("await emotionDone;") > co.indexOf("await learnFromCall(") && co.indexOf("await emotionDone;") < co.indexOf("captureIntent(user_id") && /memoryId: transcriptMemoryId/.test(co));
-check("a retried delivery doesn't record them twice, and a failure can't fail the call", /SELECT 1 FROM emotion_signals WHERE memory_id = \$1 LIMIT 1/.test(co) && /reading the call's feelings failed \(non-fatal\)/.test(co));
+check("a retried delivery doesn't record them twice, and a failure can't fail the call", /SELECT 1 FROM emotion_signals WHERE memory_id = \$1 AND basis IS DISTINCT FROM 'sound_tag' LIMIT 1/.test(co) && /reading the call's feelings failed \(non-fatal\)/.test(co));
 
 // ElevenLabs' frustration score, beside the text read (2026-10-04). Shapes from a real co-test call.
 const elTurns = [
