@@ -405,8 +405,19 @@ const LABEL_RE = new RegExp(
   "i",
 );
 
+// The noun form, telling them what Co hears or notices in them (Royce,
+// 2026-10-04: a call said "I'm hearing frustration there"; Co never tells
+// members what they feel): "I'm hearing frustration", "I hear a lot of stress",
+// "I can sense some sadness", "there's frustration in your voice".
+const EMOTION_NOUNS =
+  "frustration|stress|anxiety|sadness|anger|tension|hurt|disappointment|exhaustion|worry|nervousness|fear|loneliness|grief|excitement|resentment|irritation|annoyance|defeat|overwhelm|pain|heaviness|sarcasm|bitterness";
+const NOUN_LABEL_RE = new RegExp(
+  `\\b(?:(?:i'?m|i am) (?:hearing|sensing|picking up|noticing|detecting)|i (?:hear|sense|notice|detect)|i can (?:hear|sense|feel))\\s+(?:some |a lot of |real |a little |a bit of |so much |the |that |a |an )?(?:${EMOTION_NOUNS})\\b|\\b(?:there's|there is) (?:some |a lot of |real |a little |so much )?(?:${EMOTION_NOUNS}) in your (?:voice|tone)\\b`,
+  "i",
+);
+
 export function checkNoEmotionLabel(draft: string): GateCheck {
-  const m = draft.match(LABEL_RE);
+  const m = draft.match(LABEL_RE) ?? draft.match(NOUN_LABEL_RE);
   return m
     ? { name: "no_emotion_label", pass: false, reason: `names their feeling back at them: "${m[0]}"` }
     : { name: "no_emotion_label", pass: true };

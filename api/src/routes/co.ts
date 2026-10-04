@@ -40,7 +40,7 @@ import { MODELS } from "../models.js";
 import { surfaceNewAsksNow } from "../services/eventSurfacingSweep.js";
 import { refreshPersonSnapshot } from "../harness/personSnapshot.js";
 import { auditCall } from "../harness/callGrounding.js";
-import { callEmotionMoments, frustrationMoments, frustrationScores, recordEmotionSignals, type ScoredLine } from "../harness/emotion.js";
+import { callEmotionMoments, checkNoEmotionLabel, frustrationMoments, frustrationScores, recordEmotionSignals, type ScoredLine } from "../harness/emotion.js";
 import { flagVoiceMoments } from "../services/voiceFlags.js";
 import { CANT_CONNECT_LINE, COVERAGE_TRANSCRIPT_CHARS, chooseOpening, conversationLink, fetchConversationTurns, hitVoicemail, memberNumberOf, missedKind, voicemailLeft, noteCallFailure, takeCallContext, voicemailVerdict, registerElevenLabsCall, transcriptFromHistory, transcriptFromTurns, verifyCallToken, verifyPostCallWebhook } from "../services/elevenLabsCalls.js";
 
@@ -524,6 +524,11 @@ router.post("/el/post-call", async (req: Request, res: Response, next: NextFunct
     // Moments where their voice said more than their words, beside the text
     // read (services/voiceFlags.ts). Test members only for now; never fails the call.
     if (u[0]) flagVoiceMoments({ userId, phone: u[0].phone_number, conversationId, turns }).catch(() => {});
+    // Co never tells a member what they feel. Speech can't be filtered mid-call
+    // (ElevenLabs speaks its model's reply directly), so every call is checked
+    // after: a line that names their feeling is logged for the review.
+    const labelled = turns.filter((t: any) => t?.role !== "user" && typeof t?.message === "string").map((t: any) => t.message as string).filter((m: string) => !checkNoEmotionLabel(m).pass);
+    if (labelled.length) recordDecision({ layer: 8, decision: "call.emotion_label", userId, outcome: "skip", action: "named_their_feeling", proposal: { conversationId, lines: labelled.slice(0, 5) }, reason: checkNoEmotionLabel(labelled[0]).reason ?? null }).catch(() => {});
     return res.status(ended.status).send(ended.body);
   } catch (err) {
     next(err);
