@@ -11,9 +11,12 @@
 // on Co; Gemini caught 0 and 2. The recording already sits with ElevenLabs, so
 // no new party sees audio. About $0.22 an hour of audio (~1 cent a 3-minute call).
 //
-// Matching uses Scribe's own words around a tag, not ElevenLabs' turn times
-// (they don't line up), and a tag next to Co's words is dropped, so Co's own
-// [laughs] cue (services/voiceCues.ts) is never read as the member laughing.
+// Matching walks Scribe's words along the call's turns in order (ElevenLabs'
+// turn times don't line up with Scribe's), and precision comes first: a sound
+// next to anything of Co's that could be its own laugh is dropped (services/
+// voiceCues.ts gives Co a [laughs] cue, and it can laugh in text too), as is
+// anything after the alignment stops being trustworthy. A missed sound costs
+// nothing; Co's laugh credited to a member would.
 // On unless SCRIBE_TAGS=off. Once per call; never fails or slows the call.
 import pool from "../db/db.js";
 import { recordDecision } from "../harness/core.js";
@@ -44,13 +47,19 @@ export function soundOf(tag: string): Sound | null {
   return null;
 }
 
-const norm = (s: string) => s.toLowerCase().replace(/[’']/g, "").replace(/[^a-z0-9 ]+/g, " ").split(/\s+/).filter(Boolean);
+// Scribe and ElevenLabs spell the same small sounds differently ("OK" and
+// "Okay", "Mhm" and "Mm-hmm"); both sides are compared in one spelling so a
+// run of fillers can't leave the alignment behind.
+const SAME_WORD: Record<string, string> = { ok: "okay", mhm: "mm", mmhmm: "mm", mmhm: "mm", mhmm: "mm", hmm: "mm", uhhuh: "mm", yep: "yeah", yup: "yeah" };
+const norm = (s: string) => s.toLowerCase().replace(/[’']/g, "").replace(/[^a-z0-9 ]+/g, " ").split(/\s+/).filter(Boolean).map((w) => SAME_WORD[w] ?? w);
 
 // Pure: which turn each of Scribe's spoken words belongs to, walking the call
 // in order. Each turn's words are used up as they're heard, so a turn already
 // spoken in full stops attracting words that merely look like it. Each word
 // goes to whichever of the current turn and the next two still holds it and
 // the few words after it best; a tie stays put. -1 before any word matches.
+// (A longer reach was tried and measured worse on real recordings: common words
+// in a caller's line pulled the alignment forward onto Co's long last reply.)
 export function alignWords(spoken: string[], turnWords: string[][], ahead = 4): number[] {
   const left = turnWords.map((ws) => {
     const m = new Map<string, number>();
@@ -79,7 +88,16 @@ export function alignWords(spoken: string[], turnWords: string[][], ahead = 4): 
   });
 }
 
-const LAUGH_CUE = /\[(?:laughs?|laughing|chuckles?)\]/i;
+// Co laughing in its own line: its cue, or laughter written out.
+const CO_LAUGH = /\[(?:laughs?|laughing|chuckles?)\]|\b(?:ha(?:ha)+|ha+h?|he(?:he)+|lol|lmao)\b/i;
+
+// How many of Scribe's words a turn was given against how many it has: far more
+// means the alignment has run on past where it should have stopped.
+function firstOverfilled(at: number[], turnWordCounts: number[]): number {
+  const given = new Array<number>(turnWordCounts.length).fill(0);
+  for (const t of at) if (t >= 0) given[t]++;
+  return given.findIndex((g, t) => g > turnWordCounts[t] * 1.5 + 3);
+}
 
 // Pure: the sighs and laughs on a call, each with the caller line it came
 // with. Each of Scribe's words is placed in its turn along the call
@@ -97,7 +115,10 @@ export function soundMoments(words: ScribeWord[], turns: ElevenLabsTurn[], opts 
     .map((t) => ({ who: (t.role === "user" ? "caller" : "co") as "caller" | "co", text: t.message!.trim() }));
   if (!lines.some((l) => l.who === "caller")) return [];
   const idx = words.map((w, i) => ({ w, i })).filter((x) => x.w.type === "word");
-  const at = alignWords(idx.map((x) => x.w.text), lines.map((l) => norm(l.text)));
+  const turnWords = lines.map((l) => norm(l.text));
+  const at = alignWords(idx.map((x) => x.w.text), turnWords);
+  // From the first turn that got far more words than it has, nothing is placed.
+  const lost = firstOverfilled(at, turnWords.map((w) => w.length));
   const turnOf = new Map<number, number>(idx.map((x, j) => [x.i, at[j]]));
   const out: SoundMoment[] = [];
   const seen = new Set<string>();
@@ -109,9 +130,17 @@ export function soundMoments(words: ScribeWord[], turns: ElevenLabsTurn[], opts 
     const next = idx.filter((x) => x.i > i).map((x) => turnOf.get(x.i) ?? -1).find((t) => t >= 0) ?? -1;
     const turn = prev >= 0 && prev === next ? prev : next;
     if (turn < 0 || lines[turn].who !== "caller") return;
-    // Right after a Co line where Co itself laughed (its [laughs] cue is in the
-    // transcript), a laugh is Co's.
-    if (sound === "laughed" && prev >= 0 && prev !== turn && lines[prev].who === "co" && LAUGH_CUE.test(lines[prev].text)) return;
+    if (lost >= 0 && (prev >= lost || next >= lost || turn >= lost)) return;
+    // Before any word was placed: every earlier turn is unheard, so a Co turn
+    // among them could own the sound.
+    if (prev < 0) for (let k = 0; k < turn; k++) if (lines[k].who === "co") return;
+    if (prev >= 0 && prev !== turn) {
+      // Between turns. A Co turn Scribe heard nothing of (a bare [laughs], a
+      // "Ha.") sits between the two sides: the sound could be its own.
+      for (let k = prev + 1; k < turn; k++) if (lines[k].who === "co") return;
+      // Right after a Co line that laughed (cue or written out), a laugh is Co's.
+      if (sound === "laughed" && lines[prev].who === "co" && CO_LAUGH.test(lines[prev].text)) return;
+    }
     const line = lines[turn].text;
     const key = `${sound}:${line}`;
     if (seen.has(key)) return;

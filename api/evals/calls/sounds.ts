@@ -6,7 +6,7 @@
 import { readFileSync } from "fs";
 process.env.OPENAI_API_KEY ||= "unused-in-tests";
 process.env.ANTHROPIC_API_KEY ||= "unused-in-tests";
-const { CALL_SOUNDS, callSoundsOn, soundMoments, soundOf, soundSignals } = await import("../../src/services/callSounds.js");
+const { CALL_SOUNDS, alignWords, callSoundsOn, soundMoments, soundOf, soundSignals } = await import("../../src/services/callSounds.js");
 const { summarizeSignals } = await import("../../src/harness/emotion.js");
 
 let total = 0;
@@ -80,6 +80,28 @@ const opening = soundMoments(
   [{ role: "agent", message: "How did the week go?" }, { role: "user", message: "I moved into the new place and it's been a lot" }],
 );
 check("a sigh opening the caller's line is theirs, even when their first word is common", opening.length === 1 && opening[0].sound === "sighed");
+
+// Re-review of #63: precision first, in the cases the second probe found.
+const U = (message: string) => ({ role: "user", message });
+const A = (message: string) => ({ role: "agent", message });
+const stuckTurns = [A("How was the weekend?"), U("Good, we went hiking up north."), A("Okay."), U("Mm-hmm."), A("So what's next for you this month?"), U("Work mostly, a big launch."), A("That sounds exciting. [laughs] Big month."), U("Yeah, kind of nervous.")];
+const stuckWords = [...w("How was the weekend"), ...w("Good we went hiking up north"), ...w("OK"), ...w("Mhm"), ...w("So whats next for you this month"), ...w("Work mostly a big launch"), ...w("That sounds exciting"), tag("[laughs]"), ...w("Big month"), ...w("Yeah kind of nervous")];
+check("Co's laugh four turns after OK/Mhm spellings never lands on an earlier caller line", soundMoments(stuckWords, stuckTurns).length === 0);
+check("OK and Okay, Mhm and Mm-hmm count as the same word, so the alignment keeps up", alignWords(["OK", "Mhm", "so", "whats", "next"], [["okay"], ["mm", "hmm"], ["so", "whats", "next"]]).join() === "0,1,2,2,2");
+check("the same call with a real caller laugh opening 'Work mostly' is still theirs", soundMoments([...stuckWords.slice(0, 20), tag("[laughs]"), ...stuckWords.slice(20, 26)], stuckTurns.slice(0, 6)).some((m) => m.sound === "laughed" && /Work mostly/.test(m.line)));
+const between = (coTurn: string, heard: ReturnType<typeof w>) =>
+  soundMoments([...w("and then the dog ate it"), ...heard, tag("[laughs]"), ...w("anyway so the move went fine")], [U("and then the dog ate it"), A(coTurn), U("anyway so the move went fine")]);
+check("a bare [laughs] Co turn Scribe heard nothing of is not the next caller line's laugh", between("[laughs]", []).length === 0);
+check("a 'Ha.' Co turn Scribe dropped is not the caller's laugh", between("Ha.", []).length === 0);
+check("an empty Co turn between callers is not a reason to credit the laugh to the caller", soundMoments([...w("hi"), tag("[laughs]"), ...w("hey")], [A(""), U(" "), A("[laughs]"), U("hey")]).length === 0);
+const written = soundMoments([...w("Oh no haha"), tag("[laughs]"), ...w("so what did you do")], [A("Oh no, haha."), U("so what did you do")]);
+check("a laugh right after Co wrote 'haha' is Co's", written.length === 0);
+check("short Co turn that is only laughter ('Ha.') heard by Scribe: still Co's", soundMoments([...w("Ha"), tag("[laughs]"), ...w("so what did you do")], [A("Ha."), U("so what did you do")]).length === 0);
+check("a plain Co sentence before the tag doesn't stop a caller's laugh from counting", soundMoments([...w("How did the week go"), tag("[laughs]"), ...w("honestly it was a lot of work")], [A("How did the week go?"), U("honestly it was a lot of work")]).some((m) => m.sound === "laughed"));
+// A turn that was given far more words than it has means the alignment is lost.
+const lostWords = [...w("it was fine"), ...w("it was fine it was fine it was fine it was fine it was fine it was fine it was fine it was fine"), tag("[laughs]"), ...w("it was fine")];
+check("when a turn is given far more words than it has, a sound in it is not placed", soundMoments(lostWords, [U("it was fine"), A("Good to hear that"), U("tell me more")]).length === 0);
+check("a sound in a turn given about the words it has is placed", soundMoments([...w("it was"), tag("[laughs]"), ...w("fine")], [U("it was fine"), A("Good to hear that")]).length === 1);
 
 // Recorded as a sound, never a feeling.
 const sigs = soundSignals([{ sound: "sighed", line: "It's okay, it worked out." }]);
