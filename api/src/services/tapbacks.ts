@@ -82,3 +82,56 @@ export async function tapbackHistory(userId: string): Promise<TapbackHistory> {
   );
   return { recent, textsSinceLast: c[0]?.n ?? 0 };
 }
+
+// One reaction per message (Royce, 2026-10-03: a duplicate tapback landed on
+// one of his messages). Three paths can react to the same incoming text: the
+// early "on it" read, the closing tapback tool, and a teammate's acknowledgement.
+// Each could pass its own checks, and the closing tool only had to differ from
+// the last emoji, so ack-then-closing put two on one message. Every send goes
+// through this ledger, keyed by the message's handle.
+//
+// A reaction is claimed (pending) when it starts and confirmed when Sendblue
+// accepts it. Only a confirmed one counts as "already reacted", and the closing
+// tool waits for a pending one to settle: if the early reaction fails, the
+// closing tool still reacts or replies instead of assuming it went (review of #59).
+type Entry = { at: number; state: "pending" | "sent"; settled: Promise<boolean>; settle: (ok: boolean) => void };
+const reacted = new Map<string, Entry>();
+export const REACTION_LEDGER_MS = 24 * 3_600_000;
+export const REACTION_LEDGER_MAX = 500;
+export const REACTION_WAIT_MS = 4000;
+
+// True the first time a message is claimed; false if Co has reacted, or is reacting, to it.
+export function claimReaction(handle: string, now: number = Date.now()): boolean {
+  for (const [h, e] of reacted) if (now - e.at > REACTION_LEDGER_MS) reacted.delete(h);
+  if (reacted.has(handle)) return false;
+  if (reacted.size >= REACTION_LEDGER_MAX) reacted.delete(reacted.keys().next().value as string);
+  let settle: (ok: boolean) => void = () => {};
+  const settled = new Promise<boolean>((resolve) => (settle = resolve));
+  reacted.set(handle, { at: now, state: "pending", settled, settle });
+  return true;
+}
+// Sendblue accepted it: the message now has Co's reaction.
+export function confirmReaction(handle: string): void {
+  const e = reacted.get(handle);
+  if (!e) return;
+  e.state = "sent";
+  e.settle(true);
+}
+// A send that didn't go through frees the message for another try.
+export function releaseReaction(handle: string): void {
+  const e = reacted.get(handle);
+  reacted.delete(handle);
+  e?.settle(false);
+}
+// Whether the message has a reaction from Co. A pending one is waited for (up
+// to ms) and counts only if it lands.
+export async function reactedTo(handle: string | null | undefined, now: number = Date.now(), ms: number = REACTION_WAIT_MS): Promise<boolean> {
+  const e = handle ? reacted.get(handle) : undefined;
+  if (!e || now - e.at > REACTION_LEDGER_MS) return false;
+  if (e.state === "sent") return true;
+  return Promise.race([e.settled, new Promise<boolean>((resolve) => setTimeout(() => resolve(false), ms))]);
+}
+export function resetReactionLedger(): void {
+  for (const e of reacted.values()) e.settle(false);
+  reacted.clear();
+}

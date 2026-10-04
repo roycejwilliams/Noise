@@ -7,7 +7,7 @@ import { sendLimiter } from "../services/sendLimiter.js";
 import sendblue, { cleanCoMessage, sendReaction } from "../services/sendblue.js";
 import { coAskedQuestion } from "../services/conversationClose.js";
 import { parseAck } from "../services/readTurn.js";
-import { reactionFor, sameReaction } from "../services/tapbacks.js";
+import { reactedTo, reactionFor, sameReaction } from "../services/tapbacks.js";
 import { writeMemory } from "../services/memory.js";
 import { getMemberInvite, inviteLink, invitesLeftFor } from "../services/invites.js";
 import { recordTextArrival } from "../services/eventPresence.js";
@@ -557,6 +557,13 @@ export function createConversationTools(ctx: ConversationToolContext) {
           notDone("No tapback: Co had just asked them something, so their message is an answer.");
           return { ok: false, error: "You just asked them something, so this is their answer. Reply properly." };
         }
+        // One reaction per message (services/tapbacks.ts): the early "on it" read may
+        // already have reacted to this very text; a second would be a double.
+        if (!ctx.dryRun && (await reactedTo(ctx.messageHandle))) {
+          state.sent = true;
+          state.reacted = true;
+          return { ok: true, note: "They already have a reaction from you on this message. Nothing more to send; don't reply." };
+        }
         let how = "dry_run";
         if (!ctx.dryRun) {
           const tapped = ctx.messageHandle ? await sendReaction(ctx.messageHandle, reactionFor(reaction)) : false;
@@ -570,7 +577,7 @@ export function createConversationTools(ctx: ConversationToolContext) {
             await logDelivered(`Co replied: ${reaction}`);
           }
           how = tapped ? `tapback:${reaction}` : `emoji:${reaction}`;
-          await recordDecision({ layer: 3, decision: "turn.closing", userId: ctx.userId, outcome: "act", action: how, proposal: { message: ctx.resolvedContent } }).catch(() => {});
+          await recordDecision({ layer: 3, decision: "turn.closing", userId: ctx.userId, outcome: "act", action: how, proposal: { message: ctx.resolvedContent, handle: ctx.messageHandle ? ctx.messageHandle.slice(-8) : null } }).catch(() => {});
         }
         state.sent = true;
         state.reacted = true;

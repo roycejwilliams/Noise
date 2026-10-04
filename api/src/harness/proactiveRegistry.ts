@@ -18,6 +18,7 @@ import { itemDays, localToday, offerable, readDates } from "../services/dateGuar
 import { markMatchNudgeSent, type EventMatchNudgePayload } from "../services/eventScoring.js";
 import { lapseCloseDate, lapseText } from "../services/membershipLapse.js";
 import { getTimezoneForCity } from "../services/geocoding.js";
+import { prepareReveal } from "../services/networkIntroNudge.js";
 
 function skip(reason: string): DraftResult {
   return { skip: reason };
@@ -173,14 +174,22 @@ export const proactiveRegistry: ProactiveRegistry = {
         task: "Say someone in the network came to mind for them, without naming or describing the person, and ask one yes/no question: do they want to hear who. Don't say the other person wants to meet them.",
       });
       if (!text) return skip("model chose SKIP");
+      // Never ask "want to hear who?" without the answer in hand: the reveal is
+      // checked and drafted now, and stored with the tease (onSent), so a yes
+      // delivers it. If it couldn't go out, neither does the tease.
+      const prepared = await prepareReveal(c.userId, person.firstName, candidate);
+      // A draft that failed is tried again in an hour; a gate that said no is final.
+      if ("why" in prepared) return prepared.retry ? { defer: new Date(Date.now() + 3_600_000), reason: `no tease yet: ${prepared.why}` } : skip(`no tease: ${prepared.why}`);
+      c.payload.preparedReveal = prepared.message;
+      c.payload.preparedRevealOptedIn = prepared.optedIn;
       return { messages: [text], text, rules: { maxSentences: 2, maxChars: 200, mustNotInclude: [candidate.first_name] } };
     },
     async onSent(c) {
-      const { askId, candidate } = c.payload;
+      const { askId, candidate, preparedReveal, preparedRevealOptedIn } = c.payload;
       await removeNetworkBacklogItem(c.userId, askId, candidate.candidate_id);
       await pool.query(`INSERT INTO co_memories (user_id, memory_type, content) VALUES ($1, 'network_offer_pending', $2)`, [
         c.userId,
-        JSON.stringify({ askId, candidate }),
+        JSON.stringify({ askId, candidate, ...(preparedReveal ? { reveal: preparedReveal, revealOptedIn: preparedRevealOptedIn === true } : {}) }),
       ]);
     },
     async onDropped(c) {
@@ -201,8 +210,13 @@ export const proactiveRegistry: ProactiveRegistry = {
       );
       await writeMemory(c.userId, "check_in", `Checked in on: ${p.askText}`);
     },
-    async onDropped(c) {
-      await pool.query(`UPDATE ask_checkins SET last_checked_at = NOW() WHERE id = $1`, [(c.payload as AskCheckinPayload).askCheckinId]);
+    // A payload-first drop (the work went to a task, or couldn't be delivered
+    // yet) moves the check-in count on, so the next check-in gets a new target
+    // and comes back on schedule; otherwise it reused the dropped one and that
+    // ask's check-ins stopped for good (re-review of #59).
+    async onDropped(c, _status, reason) {
+      const next = /^payload first/.test(reason ?? "");
+      await pool.query(`UPDATE ask_checkins SET last_checked_at = NOW()${next ? ", checkin_count = checkin_count + 1" : ""} WHERE id = $1`, [(c.payload as AskCheckinPayload).askCheckinId]);
     },
   },
 

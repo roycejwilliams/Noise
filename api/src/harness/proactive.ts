@@ -39,6 +39,8 @@ import { capitalizeSentences } from "../services/textStyle.js";
 import { offerFollowUp } from "../services/offerFollowUp.js";
 import { AsyncLocalStorage } from "node:async_hooks";
 import { safetyHoldActive } from "../services/safety.js";
+import { repeatQuestionCheck } from "./repeatAsk.js";
+import { payloadFirst, theirAskOf } from "./payloadFirst.js";
 import { getEmotionalContext, renderEmotionalContext } from "./emotion.js";
 
 // The person's emotional context for whatever draft runs inside dispatch,
@@ -197,6 +199,9 @@ export type PickState = {
   lastInboundAt: Date | null;
   // Emotion loop: struggling in the last day (harness/emotion.ts).
   needsCare?: boolean;
+  // They said yes to "want to hear who?" and no reveal followed
+  // (networkIntroNudge.lastTeaseUndelivered): no new tease until it clears.
+  undeliveredYes?: boolean;
   // A safety concern in the last three days (services/safety.ts).
   safetyHold?: boolean;
 };
@@ -347,7 +352,7 @@ export function spacingCheck(state: Pick<PickState, "now" | "sends">): GateCheck
 
 // answering: a reply (isAnswering) doesn't wait on the last text of its type
 // (two time frames they named are two replies); the same topic still waits.
-export function candidateChecks(c: Candidate, state: Pick<PickState, "now" | "sends" | "lastInboundAt" | "needsCare" | "safetyHold">, opts: { answering?: boolean } = {}): GateCheck[] {
+export function candidateChecks(c: Candidate, state: Pick<PickState, "now" | "sends" | "lastInboundAt" | "needsCare" | "safetyHold" | "undeliveredYes">, opts: { answering?: boolean } = {}): GateCheck[] {
   const policy = TYPE_POLICY[c.type];
   const sameTarget = state.sends.find((s) => s.targetKey === c.targetKey);
   const unansweredTopic = state.sends.find((s) => s.topicKey && s.topicKey === c.topicKey && unansweredSince(s, state.lastInboundAt));
@@ -386,6 +391,12 @@ export function candidateChecks(c: Candidate, state: Pick<PickState, "now" | "se
   const tried = Date.parse(String((c.payload as { relevanceTriedAt?: string })?.relevanceTriedAt ?? ""));
   if (tried && state.now.getTime() - tried < RELEVANCE_RETRY_HOURS * HOUR) {
     checks.push({ name: "relevance_retry", pass: false, reason: "Co couldn't say if it's still relevant; trying again shortly" });
+  }
+  // "Asked, got yes, delivered nothing, asked again" (2026-10-03): a tease is a
+  // question whose answer is a reveal; while an earlier yes is still owed its
+  // answer, asking another one just repeats the loop.
+  if (c.type === "network_tease" && state.undeliveredYes) {
+    checks.push({ name: "no_undelivered_yes", pass: false, reason: "they said yes to hearing who and nothing was delivered; no new tease until that clears" });
   }
   if (state.safetyHold && PROACTIVE_PURPOSE_MAP[c.type] === "offer") {
     checks.push({ name: "safety_hold", pass: false, reason: "they may not have been safe in the last few days; no offers" });
@@ -1021,7 +1032,7 @@ async function sendWithLedger(
       ...userLevelChecks({ now, timezone: person.timezone, optedOut: optedOutNow, sends, lastInboundAt }, { lane: laneOf(c.type), ignorePacing: opts.ignorePacing }).filter(
         (k) => !(answering && QUOTA_CHECKS.has(k.name)),
       ),
-      ...candidateChecks(c, { now, sends, lastInboundAt }, { answering }),
+      ...candidateChecks(c, { now, sends, lastInboundAt, undeliveredYes: c.type === "network_tease" ? await import("../services/networkIntroNudge.js").then((m) => m.lastTeaseUndelivered(person.userId)).catch(() => false) : false }, { answering }),
     ];
     const g = gate(checks);
     if (!g.ok) {
@@ -1288,8 +1299,11 @@ export async function dispatchForUser(registry: ProactiveRegistry, userId: strin
   const person = await loadPerson(userId);
   if (!person) return;
 
-  const hold = await pool.query(`SELECT hold_until FROM proactive_user_state WHERE user_id = $1`, [userId]);
+  const hold = await pool.query(`SELECT hold_until, space_until FROM proactive_user_state WHERE user_id = $1`, [userId]);
   if (hold.rows[0]?.hold_until && new Date(hold.rows[0].hold_until) > new Date()) return;
+  // Spacing after work was handed to a task (harness/payloadFirst.ts). Unlike
+  // hold_until, new candidates don't clear it.
+  if (hold.rows[0]?.space_until && new Date(hold.rows[0].space_until) > new Date()) return;
 
   const { rows: candRows } = await pool.query(
     `SELECT * FROM proactive_candidates WHERE user_id = $1 AND status = 'pending'`,
@@ -1306,6 +1320,7 @@ export async function dispatchForUser(registry: ProactiveRegistry, userId: strin
   const emotional = await getEmotionalContext(userId);
   state.needsCare = emotional.needsCare;
   state.safetyHold = await safetyHoldActive(userId);
+  state.undeliveredYes = await import("../services/networkIntroNudge.js").then((m) => m.lastTeaseUndelivered(userId)).catch(() => false);
   const ev = evaluateCandidates(state, opts);
   const proposal = {
     candidates: ev.perCandidate.map((p) => ({
@@ -1391,7 +1406,13 @@ export async function dispatchForUser(registry: ProactiveRegistry, userId: strin
 
   // Co texts first here, so there's no lowercase style to mirror.
   draft = { ...draft, text: capitalizeSentences(draft.text), messages: draft.messages.map(capitalizeSentences) };
-  let draftChecks = checkDraft(draft.text, draft.rules);
+  // The draft's own rules plus: never a question Co already asked after which
+  // they wrote back (harness/repeatAsk.ts).
+  const withRepeat = (checks: GateCheck[], text: string): GateCheck[] => {
+    const again = repeatQuestionCheck(text, recent);
+    return again.pass ? checks : [...checks, again as GateCheck];
+  };
+  let draftChecks = withRepeat(checkDraft(draft.text, draft.rules), draft.text);
   let dg = gate(draftChecks);
   // One rewrite, told what to fix, before the day's text is given up.
   if (!dg.ok) {
@@ -1401,7 +1422,7 @@ export async function dispatchForUser(registry: ProactiveRegistry, userId: strin
       .catch(() => null);
     if (second && "messages" in second) {
       const fixed = { ...second, text: capitalizeSentences(second.text), messages: second.messages.map(capitalizeSentences) };
-      const fixedChecks = checkDraft(fixed.text, fixed.rules);
+      const fixedChecks = withRepeat(checkDraft(fixed.text, fixed.rules), fixed.text);
       const fg = gate(fixedChecks);
       await recordDecision({ layer: 7, decision: "proactive.redraft", userId, outcome: fg.ok ? "act" : "skip", action: `send:${c.type}`, proposal: { picked: c.id, first: first.draft, second: fixed.text }, checks: fixedChecks, reason: `first draft broke: ${first.failed}` }).catch(() => {});
       if (fg.ok) {
@@ -1415,6 +1436,35 @@ export async function dispatchForUser(registry: ProactiveRegistry, userId: strin
     await pool.query(`UPDATE proactive_candidates SET attempts = attempts + 1, updated_at = NOW() WHERE id = $1`, [c.id]);
     if (c.attempts + 1 >= RULES.maxDraftAttempts) await dropCandidate(registry, c, "skipped", `draft failed checks: ${describeFailed(dg.failed)}`);
     await recordDecision({ layer: 7, decision: "proactive.dailyPick", userId, outcome: "skip", action: `send:${c.type}`, proposal: { ...proposal, picked: c.id, draft: draft.text }, checks: [...ev.userChecks, ...pickChecks, ...draftChecks], reason: `draft failed checks: ${describeFailed(dg.failed)}` });
+    return;
+  }
+
+  // Payload first (harness/payloadFirst.ts, 2026-10-04): a text asking whether
+  // Co should do something it could just do goes to one of its tasks instead,
+  // which does the work and sends the result. Questions stay for what the
+  // member owns and for steps that are irreversible or seen by others.
+  const pf = await payloadFirst({ userId, kind: c.type, draft: draft.messages.join("\n"), recent, theirAsk: theirAskOf(c.payload), dryRun: opts.dryRun }).catch(() => null);
+  if (pf && "wouldHandOff" in pf) {
+    console.log(`[dispatch dryRun] payload first: would do the work instead of sending "${draft.text}" (${pf.wouldHandOff})`);
+    return;
+  }
+  if (pf && "handedTo" in pf) {
+    await dropCandidate(registry, c, "skipped", `payload first: handed to task ${pf.handedTo}`);
+    // The task's result lands within 15 minutes: nothing else goes out first,
+    // the same spacing as between any two texts (review of #59).
+    await pool.query(
+      `INSERT INTO proactive_user_state (user_id, space_until) VALUES ($1, NOW() + ($2 || ' hours')::interval)
+       ON CONFLICT (user_id) DO UPDATE SET space_until = GREATEST(COALESCE(proactive_user_state.space_until, NOW()), EXCLUDED.space_until)`,
+      [userId, RULES.minHoursBetweenTexts],
+    );
+    await recordDecision({ layer: 7, decision: "proactive.payloadFirst", userId, outcome: "act", action: `task:${pf.handedTo}`, proposal: { ...proposal, picked: c.id, instead_of: draft.text, started: pf.started }, checks: [...ev.userChecks, ...pickChecks, ...draftChecks], reason: pf.why });
+    return;
+  }
+  if (pf && "hold" in pf) {
+    // Not asked instead: dropped, and its source asks again on its own schedule
+    // (a re-queued target is a no-op once dropped, so this can't loop hourly).
+    await dropCandidate(registry, c, "skipped", `payload first: ${pf.hold}`);
+    await recordSkipOnce(userId, `payload_first_hold:${c.type}`, { layer: 7, decision: "proactive.payloadFirst", userId, outcome: "skip", action: `hold:${c.type}`, proposal: { ...proposal, picked: c.id, instead_of: draft.text }, checks: [...ev.userChecks, ...pickChecks, ...draftChecks], reason: pf.hold });
     return;
   }
 

@@ -1475,16 +1475,16 @@ export function sendblueRouter(io: Server): Router {
             ? await pool
                 .query(
                   `SELECT content, memory_type FROM co_memories
-               WHERE user_id = $1 AND content_embedding IS NOT NULL AND memory_type != 'intent'
+               WHERE user_id = $1 AND content_embedding IS NOT NULL AND memory_type NOT IN ('intent', 'research_find')
                ORDER BY content_embedding <=> $2::vector
                LIMIT 5`,
                   [user.id, `[${queryEmbedding.join(",")}]`],
                 )
                 .catch((vecErr: any) => {
                   console.error("Vector search failed, falling back to recency:", vecErr);
-                  return pool.query(`SELECT content, memory_type FROM co_memories WHERE user_id = $1 AND memory_type != 'intent' ORDER BY created_at DESC LIMIT 5`, [user.id]);
+                  return pool.query(`SELECT content, memory_type FROM co_memories WHERE user_id = $1 AND memory_type NOT IN ('intent', 'research_find') ORDER BY created_at DESC LIMIT 5`, [user.id]);
                 })
-            : await pool.query(`SELECT content, memory_type FROM co_memories WHERE user_id = $1 AND memory_type != 'intent' ORDER BY created_at DESC LIMIT 5`, [user.id]);
+            : await pool.query(`SELECT content, memory_type FROM co_memories WHERE user_id = $1 AND memory_type NOT IN ('intent', 'research_find') ORDER BY created_at DESC LIMIT 5`, [user.id]);
           // Filtered for genuine relevance to what they just said before the
           // reply agent ever sees it (filterRelevantMemories in
           // conversationReply.ts): similarity alone isn't a relevance signal.
@@ -1543,7 +1543,7 @@ export function sendblueRouter(io: Server): Router {
                     return false;
                   }
                   return sendReaction(ackHandle, reactionFor(ackEmoji)).then((ok) => {
-                    recordDecision({ layer: 3, decision: "turn.ack", userId: user.id, outcome: ok ? "act" : "skip", action: ackEmoji, proposal: { ms: Date.now() - ackStarted } }).catch(() => {});
+                    recordDecision({ layer: 3, decision: "turn.ack", userId: user.id, outcome: ok ? "act" : "skip", action: ackEmoji, proposal: { ms: Date.now() - ackStarted, handle: ackHandle.slice(-8) } }).catch(() => {});
                     return ok;
                   });
                 })

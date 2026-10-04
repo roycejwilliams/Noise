@@ -43,6 +43,8 @@ import { parseModelJson } from "../services/modelJson.js";
 import { checkNoEmotionLabel } from "./emotion.js";
 import { enrichMatch, missingEventDetails, renderEventDetails, type EventDetails, type OpportunityDetails } from "../services/eventDetails.js";
 import { recentCallCorrections } from "./callGrounding.js";
+import { repeatQuestionCheck, sameQuestion } from "./repeatAsk.js";
+import { asksForLink, findLines, linkRequestInstruction, recentResearchFinds, relevantFinds } from "../services/researchFinds.js";
 
 // Model policy (Royce, 2026-09-14): Sonnet 5 for anything with judgment or
 // side effects; Haiku only for narrow, code-checked reads.
@@ -148,6 +150,13 @@ export async function gatherReplyFacts(
   for (const id of (await switchedOff().catch(() => new Map<string, string>())).keys()) {
     addFact(rf, "capability", `Co's ${id.replace(/_/g, " ")} ability is switched off right now. If it comes up, say it isn't available at the moment.`);
   }
+  // What Co researched, with its links, for "send it" (services/researchFinds.ts).
+  const allFinds = await recentResearchFinds(userId).catch(() => []);
+  const message = t?.message ?? "";
+  const finds = relevantFinds(allFinds, message, (opts.context ?? "").slice(-600), asksForLink(message));
+  for (const line of findLines(finds)) addFact(rf, "known", line);
+  const linkAsk = linkRequestInstruction(message, finds.length > 0 || /https?:\/\//.test(opts.context ?? ""));
+  if (linkAsk) addInstruction(rf, linkAsk);
   // Every source is a separate read, so they run together: in series this
   // was six round trips before the reply could even start drafting.
   const [corrections, snapshot, sent, notes, scheduled, reveal, preference, callFailure, sendHeld] = await Promise.all([
@@ -560,6 +569,17 @@ export function claimsHandingOver(draft: string): boolean {
   return /\b(here you go|there you go|here it is|here'?s (my|the|your) (card|contact|number|link|info)|just sent (it|that|you|over)|sending (it|that) (now|over)|attached)\b/i.test(draft);
 }
 
+// Co offering to send a link (2026-10-03: "send it" twice and nothing to send).
+// An offer needs a link on file somewhere in what Co has this turn: its facts,
+// the thread, what it already sent.
+export const LINK_OFFER = /\b(?:want|like)\s+(?:me\s+to|the|a)\s+(?:send|share|text|drop)\b[^.?!]{0,30}\b(?:link|site|website|page)\b|\b(?:i(?:'|\u2019)ll|i\s+will|i\s+can|let\s+me)\s+(?:send|share|text|drop)\s+(?:you\s+)?(?:the|a|their|its)\s+(?:link|site|website|page)\b/i;
+export function offersLinkWithoutOne(draft: string, available: string): string | null {
+  // Co makes invite links itself (the invite tool), so offering one needs no link on file.
+  if (/\binvite\b/i.test(draft)) return null;
+  const m = draft.match(LINK_OFFER);
+  return m && !/https?:\/\//i.test(`${available}\n${draft}`) ? m[0] : null;
+}
+
 export function codeChecks(draft: string, rf: ReplyFacts, src: GroundingSources): GateCheck[] {
   const emotionLabel = checkNoEmotionLabel(draft);
   const checks: GateCheck[] = [];
@@ -572,6 +592,10 @@ export function codeChecks(draft: string, rf: ReplyFacts, src: GroundingSources)
     const u = url.replace(/[.,!?]+$/, "");
     checks.push({ name: "link_on_file", pass: sources.includes(norm(u)), reason: `link ${u}` });
   }
+  const dangling = offersLinkWithoutOne(draft, rawSources);
+  if (dangling) checks.push({ name: "no_link_offer_without_link", pass: false, reason: `offers a link Co doesn't have: "${dangling}"` });
+  const again = repeatQuestionCheck(draft, src.recentConversation);
+  if (!again.pass) checks.push(again as GateCheck);
   for (const phone of draft.match(/\(?\b\d{3}\)?[\s.-]?\d{3}[\s.-]?\d{4}\b/g) ?? []) {
     const digits = phone.replace(/\D/g, "");
     checks.push({ name: "phone_on_file", pass: phoneSources.replace(/\D/g, "").includes(digits), reason: `phone number ${phone}` });
@@ -929,6 +953,8 @@ export function stripUnsupported(draft: string, failed: GateCheck[]): string {
     if (failed.some((f) => f.name === "no_invite_sent_claim") && INVITE_ACTION_VERB.test(s)) return false;
     if (failed.some((f) => f.name === "no_group_chat_claim") && claimsGroupChat(s)) return false;
     if (failed.some((f) => f.name === "link_on_file") && /https?:\/\//i.test(s)) return false;
+    if (failed.some((f) => f.name === "no_link_offer_without_link") && LINK_OFFER.test(s)) return false;
+    if (failed.some((f) => f.name === "no_repeat_question" && sameQuestion(s, f.reason?.match(/"(.+)"$/)?.[1] ?? ""))) return false;
     if (failed.some((f) => f.name === "phone_on_file") && /\d{3}[\s.-]?\d{4}/.test(s)) return false;
     if (failed.some((f) => f.name === "time_on_file") && clockTimes(s).length) return false;
     // The claim read itself never came back (2026-09-17 code review): drop

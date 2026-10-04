@@ -216,6 +216,12 @@ export function loopTools(
           loop.found.set(k.url, { name: k.name, url: k.url, facts, match, blocked: null });
           ctx.facts?.add("known", `Found just now on the web: "${k.name}", link ${k.url}. ${facts}`);
         }
+        // On file at research time, not only for this turn: the next turn's "send
+        // it" needs the link (services/researchFinds.ts; 2026-10-03, Pitch Protocol).
+        if (!ctx.dryRun && r.kept.length) {
+          const { recordResearchFinds } = await import("../services/researchFinds.js");
+          await recordResearchFinds(ctx.userId, r.kept.map((k) => ({ name: k.name, url: k.url, facts: k.facts.slice(0, 4).join("; ") }))).catch(() => 0);
+        }
         return {
           ok: true,
           results: r.kept.map((k) => ({ name: k.name, link: k.url, facts: k.facts, date: k.date, ownSite: k.official })),

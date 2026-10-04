@@ -169,7 +169,9 @@ export async function attemptNetworkSurfacing(
   return { queued };
 }
 
-export type PendingNetworkTease = { askId: string; candidate: NetworkCandidate };
+// reveal: the message that answers "yes", drafted and checked before the tease
+// went out (prepareReveal), so a yes always has something to deliver.
+export type PendingNetworkTease = { askId: string; candidate: NetworkCandidate; reveal?: string; revealOptedIn?: boolean };
 
 export async function findPendingNetworkTease(userId: string): Promise<PendingNetworkTease | null> {
   const { rows } = await pool.query(
@@ -198,6 +200,72 @@ async function stashIntroOfferPending(personId: string, candidate: NetworkCandid
       JSON.stringify({ askId, candidate }),
     ])
     .catch((err: any) => console.error("stashIntroOfferPending: write failed (non-fatal):", err?.message ?? err));
+}
+
+// The reveal text for a candidate: consent-checked and in Co's voice. null when
+// the draft can't go out.
+async function draftReveal(userId: string, firstName: string, candidate: NetworkCandidate): Promise<string | null> {
+  const candidateId = candidate.candidate_id;
+  return draftWithConsent(
+    {
+      decision: "networkIntroNudge.reveal",
+      recipientId: userId,
+      otherUserIds: [candidateId],
+      facts: {
+        otherFirstName: candidate.first_name,
+        otherOptedIn: await networkOptedIn(candidateId, userId),
+        recipientOptedIn: false,
+        recipientFirstName: firstName,
+        otherStatedAsks: await statedAsksFor(candidateId),
+        otherPhone: candidate.phone_number,
+        otherEmail: candidate.email,
+      },
+    },
+    async (feedback) => {
+      const { text } = await generateText({
+        model: anthropic(NAMING_DRAFT_MODEL),
+        experimental_telemetry: { isEnabled: true, functionId: "networkIntroNudge.reveal.draft" },
+        prompt: networkRevealPrompt({ recipientFirstName: firstName, otherFirstName: candidate.first_name, shareReason: candidate.match_reason, feedback }),
+      });
+      return cleanCoMessage(text.trim());
+    },
+  );
+}
+
+// Before a tease goes out ("someone came to mind, want to hear who?"), the
+// answer to "yes" is made and checked: the same privacy gate the reveal runs,
+// and the reveal itself drafted. A tease that couldn't be answered used to go
+// out anyway and a "Sure" got "Sorry for the false start." (2026-10-03, then a
+// second tease at 1pm). why says what stopped it.
+// retry: a draft that failed is worth trying again later; a gate that said no
+// won't change its mind (review of #59: a flaky draft used to drop the match for good).
+export async function prepareReveal(userId: string, firstName: string, candidate: NetworkCandidate): Promise<{ message: string; optedIn: boolean } | { why: string; retry: boolean }> {
+  if (!(await gateNetworkCandidate(userId, candidate.candidate_id, candidate.match_reason, "reveal"))) return { why: "the privacy check on the reveal wouldn't pass", retry: false };
+  const optedIn = await networkOptedIn(candidate.candidate_id, userId);
+  const message = await draftReveal(userId, firstName, candidate);
+  return message ? { message, optedIn } : { why: "the reveal couldn't be drafted", retry: true };
+}
+
+// They said yes to hearing who, and no reveal followed: the reveal stashes
+// network_intro_offer_pending when it goes out. While that's true no new tease
+// is sent ("asked, got yes, delivered nothing, asked again"). Clears itself
+// after 3 days.
+export const UNDELIVERED_YES_DAYS = 3;
+export async function lastTeaseUndelivered(userId: string): Promise<boolean> {
+  const { rows } = await pool
+    .query(
+      `SELECT 1 FROM co_memories r
+       WHERE r.user_id = $1 AND r.memory_type = 'network_offer_resolved' AND r.content = 'interested'
+         AND r.created_at > NOW() - ($2 || ' days')::interval
+         AND NOT EXISTS (
+           SELECT 1 FROM co_memories s
+           WHERE s.user_id = $1 AND s.memory_type = 'network_intro_offer_pending' AND s.created_at > r.created_at
+         )
+       LIMIT 1`,
+      [userId, UNDELIVERED_YES_DAYS],
+    )
+    .catch(() => ({ rows: [] as unknown[] }));
+  return rows.length > 0;
 }
 
 // Resolves a reply to the tease — called from routes/sendblue.ts. On
@@ -242,30 +310,11 @@ export async function resolveNetworkTeaseReply(
   const cantReveal = `\nThey said yes to hearing who it was, but that introduction isn't available anymore. Say so briefly and honestly, don't name or describe anyone, and don't promise another one.`;
   if (!(await gateNetworkCandidate(userId, candidateId, pending.candidate.match_reason, "reveal"))) return cantReveal;
 
-  const message = await draftWithConsent(
-    {
-      decision: "networkIntroNudge.reveal",
-      recipientId: userId,
-      otherUserIds: [candidateId],
-      facts: {
-        otherFirstName: pending.candidate.first_name,
-        otherOptedIn: await networkOptedIn(candidateId, userId),
-        recipientOptedIn: false,
-        recipientFirstName: firstName,
-        otherStatedAsks: await statedAsksFor(candidateId),
-        otherPhone: pending.candidate.phone_number,
-        otherEmail: pending.candidate.email,
-      },
-    },
-    async (feedback) => {
-      const { text } = await generateText({
-        model: anthropic(NAMING_DRAFT_MODEL),
-        experimental_telemetry: { isEnabled: true, functionId: "networkIntroNudge.reveal.draft" },
-        prompt: networkRevealPrompt({ recipientFirstName: firstName, otherFirstName: pending.candidate.first_name, shareReason: pending.candidate.match_reason, feedback }),
-      });
-      return cleanCoMessage(text.trim());
-    },
-  );
+  // The stored reveal was drafted under the other person's consent at the time;
+  // if that changed since the tease, it's drafted again (the gate above covers
+  // activity and privacy).
+  const stillConsented = pending.reveal && pending.revealOptedIn !== undefined ? (await networkOptedIn(candidateId, userId)) === pending.revealOptedIn : false;
+  const message = pending.reveal && stillConsented ? pending.reveal : await draftReveal(userId, firstName, pending.candidate);
   if (!message) return cantReveal;
 
   try {

@@ -292,6 +292,9 @@ export async function runMigrations(): Promise<void> {
       "co_lesson",
       // The text before a Co event (services/preArrival.ts).
       "event_pre_arrival",
+      // What a web search kept, with its link, so "send it" works on a later turn
+      // (services/researchFinds.ts, 2026-10-03).
+      "research_find",
     ];
     const { rows } = await pool.query(
       `SELECT pg_get_constraintdef(oid) AS def FROM pg_constraint
@@ -1817,6 +1820,9 @@ export async function runMigrations(): Promise<void> {
         )`,
       ),
     )
+    // Spacing after payload first handed work to a task (harness/payloadFirst.ts);
+    // unlike hold_until, a new candidate doesn't clear it.
+    .then(() => pool.query(`ALTER TABLE proactive_user_state ADD COLUMN IF NOT EXISTS space_until TIMESTAMPTZ`))
     .catch((err: Error) => console.error("proactive harness tables init failed:", err));
 
   // Layer 7 (2026-09-14): which source rows have been handed to the proactive
