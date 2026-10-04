@@ -24,17 +24,23 @@ import { generateText } from "ai";
 import pool from "../db/db.js";
 import { MODELS } from "../models.js";
 import { parseModelJson } from "../services/modelJson.js";
-import { openTasks, startTask, wordsAreTheirs, type CoTask } from "../services/coTasks.js";
+import { mayText, openTasks, startTask, taskTextsToday, wordsAreTheirs, type CoTask } from "../services/coTasks.js";
+import { notToTeammate } from "../services/teamLines.js";
 
 // Kinds whose question is by design one Co must ask, or whose text already is
 // the payload: an event offer carries the event itself; a network tease leads
 // to an intro (seen by another person); an in-room match nudge is an intro; a
-// lapse notice is about paying.
-export const PAYLOAD_FIRST_EXEMPT = new Set(["event_offer", "network_tease", "event_match_nudge", "membership_lapse"]);
+// lapse notice is about paying. A companion check-in is the companion touch
+// itself (companion first): swapping it for a task update would lose it.
+export const PAYLOAD_FIRST_EXEMPT = new Set(["event_offer", "network_tease", "event_match_nudge", "membership_lapse", "companion"]);
 
-// Work Co can do on its own and undo by saying nothing.
-export const DOABLE = ["research", "gather_options", "draft", "shortlist"] as const;
-export const KEEP_ASKING = ["member_action", "irreversible_or_visible", "only_they_know", "none"] as const;
+// Work Co can do on its own and undo by saying nothing, and that a task turn
+// can deliver: it texts only verified results (taskTurn.ts). Drafting and
+// shortlisting stay questions until a live task test shows a task delivers
+// them (review of #59: no tool writes a draft, and options they already have
+// aren't verified facts, so the question would turn into silence).
+export const DOABLE = ["research", "gather_options"] as const;
+export const KEEP_ASKING = ["draft", "shortlist", "member_action", "irreversible_or_visible", "only_they_know", "none"] as const;
 type WorkKind = (typeof DOABLE)[number] | (typeof KEEP_ASKING)[number];
 
 export type OfferRead = {
@@ -51,11 +57,29 @@ export type PayloadDecision =
 
 const norm = (s: string) => s.toLowerCase().replace(/[’‘]/g, "'").replace(/[^a-z0-9' ]+/g, " ").replace(/\s+/g, " ").trim();
 
-// Pure: only what the member wrote: their lines in the thread ("User said: …")
-// and the ask the text is about, in their words.
-export function theirText(recent: string, theirAsk: string | null | undefined): string {
-  const lines = recent.split("\n").map((l) => l.match(/^\s*User said:\s*(.+)$/i)?.[1]?.trim() ?? "").filter(Boolean);
-  return [...lines, ...(theirAsk ? [theirAsk] : [])].join("\n");
+// Pure: only what the member wrote, their own lines ("User said: …"). The ask a
+// check-in is about is Co's restatement of it, so it never counts as their
+// words (review of #59); their older lines are read from the thread instead.
+export function theirText(recent: string): string {
+  return recent
+    .split("\n")
+    .map((l) => l.match(/^\s*User said:\s*(.+)$/i)?.[1]?.trim() ?? "")
+    .filter(Boolean)
+    .join("\n");
+}
+
+// Their own texts to Co from the last month (not their talk with a teammate),
+// oldest first, so an ask from days ago can still be grounded in what they said.
+export const THEIR_WORDS_DAYS = 30;
+export async function theirLines(userId: string): Promise<string> {
+  const { rows } = await pool
+    .query(
+      `SELECT content FROM co_memories WHERE user_id = $1 AND memory_type = 'text_exchange' AND content LIKE 'User said:%'
+       AND ${notToTeammate()} AND created_at > NOW() - ($2 || ' days')::interval ORDER BY created_at DESC LIMIT 300`,
+      [userId, THEIR_WORDS_DAYS],
+    )
+    .catch(() => ({ rows: [] as any[] }));
+  return rows.map((r: any) => String(r.content)).reverse().join("\n");
 }
 
 // Pure: what Co's read means, held to facts. "theirs" is only the member's own text.
@@ -93,7 +117,7 @@ Classify the work the question offers:
 - only_they_know: asking how they are, how something went, what they want
 - none: the text asks no question like this
 
-Return ONLY JSON: {"question": "the exact question from the text, or null", "kind": one of the kinds above, "work": "what Co would do, as a short goal (e.g. find three caterers for 60 people by Friday), or null", "theirWords": "the member's own words this work is for, copied exactly from what they wrote (their texts or what they asked for), or null", "sameAsTask": the [id] of the matching thing Co is already working on, or null}`;
+Return ONLY JSON: {"question": "the exact question from the text, or null", "kind": one of the kinds above, "work": "what Co would do, as a short goal (e.g. find three caterers for 60 people by Friday), or null", "theirWords": "the member's own words this work is for, copied exactly from one of their texts (a "User said:" line), or null", "sameAsTask": the [id] of the matching thing Co is already working on, or null}`;
 }
 
 export async function readOffer(draft: string, recent: string, tasks: Pick<CoTask, "id" | "goal">[], theirAsk: string | null = null): Promise<OfferRead | null> {
@@ -126,6 +150,12 @@ export async function readOffer(draft: string, recent: string, tasks: Pick<CoTas
 export async function handOffWork(userId: string, d: Extract<PayloadDecision, { handOff: true }>): Promise<{ ok: true; taskId: number; started: boolean } | { ok: false; why: string }> {
   let taskId = d.taskId;
   let started = false;
+  // Only hand it off if the result could go out: a task that texted in the last
+  // 20 hours, or a member at today's task-text limit, would sit on it (review of #59).
+  const today = await taskTextsToday(userId).catch(() => 0);
+  const existing = taskId !== null ? (await openTasks(userId)).find((t) => t.id === taskId) : undefined;
+  const can = mayText(existing ?? { lastTextedAt: null }, today, new Date());
+  if (!can.ok) return { ok: false, why: `the result couldn't go out yet: ${can.why}` };
   if (taskId === null) {
     const s = await startTask({
       userId,
@@ -145,9 +175,12 @@ export async function handOffWork(userId: string, d: Extract<PayloadDecision, { 
       started = true;
     }
   }
+  // Added to the task's plan, not in place of it (a deadline's last-check plan stays).
   const { rowCount } = await pool.query(
-    `UPDATE co_tasks SET next_check_at = NOW(), plan_next = $3, updated_at = NOW() WHERE user_id = $1 AND id = $2 AND status = 'open'`,
-    [userId, taskId, `Do it now and send them the result, instead of asking: ${d.work}`.slice(0, 240)],
+    `UPDATE co_tasks SET next_check_at = NOW(),
+       plan_next = LEFT(CASE WHEN $4 THEN $3 ELSE COALESCE(plan_next || ' Also, now: ', 'Now: ') || $3 END, 240), updated_at = NOW()
+     WHERE user_id = $1 AND id = $2 AND status = 'open'`,
+    [userId, taskId, `do it and send them the result, instead of asking: ${d.work}`, started],
   );
   if (!rowCount) return { ok: false, why: "that task isn't open anymore" };
   return { ok: true, taskId, started };
@@ -164,12 +197,15 @@ export function theirAskOf(payload: unknown): string | null {
 
 // The whole step: null or { kept } when the text goes out as written; { handedTo }
 // when the work went to a task instead; { hold } when Co could do it but can't
-// take it on right now (at its limit), so the question waits rather than going out.
+// deliver it now (at its task limit, or a task text would be blocked), so the
+// question doesn't go out: the candidate is dropped and its source asks again on
+// its own schedule (a 24h hold was re-queued every hour; review of #59).
 export async function payloadFirst(o: { userId: string; kind: string; draft: string; recent: string; theirAsk?: string | null; dryRun?: boolean }): Promise<PayloadFirstResult> {
   if (PAYLOAD_FIRST_EXEMPT.has(o.kind)) return null;
   if (!/\?/.test(o.draft)) return null;
   const tasks = await openTasks(o.userId).catch(() => [] as CoTask[]);
-  const d = decidePayloadFirst(await readOffer(o.draft, o.recent, tasks, o.theirAsk ?? null), o.draft, theirText(o.recent, o.theirAsk), tasks);
+  const theirs = theirText(`${await theirLines(o.userId)}\n${o.recent}`);
+  const d = decidePayloadFirst(await readOffer(o.draft, o.recent, tasks, o.theirAsk ?? null), o.draft, theirs, tasks);
   if (!d.handOff) return { kept: d.why };
   if (o.dryRun) return { wouldHandOff: d.why };
   const h = await handOffWork(o.userId, d);

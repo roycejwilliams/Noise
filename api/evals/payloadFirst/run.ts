@@ -14,9 +14,10 @@ const cases: Case[] = [
   { name: "caterer options", draft: "Hey Jordan! Still want those caterer options for Friday?", recent: [U("I need a caterer for 60 people by Friday, something casual"), C("On it. Any budget?"), U("under 40 a head")], doIt: true },
   { name: "dig into a fit", draft: "Want me to dig into whether Pitch Protocol would fit as an accelerator or VC lead instead?", recent: [U("can you look into Pitch Protocol for me, we're raising a pre-seed"), C("Pitch Protocol runs demo nights for early founders.")], doIt: true },
   { name: "pull venues", draft: "Should I pull a few venues in SoMa that hold 60 for the launch?", recent: [U("we're doing a launch party in SoMa, about 60 people, late October")], doIt: true },
-  { name: "draft the outreach", draft: "Want me to put together a draft of the note to the venue so you can look it over?", recent: [U("I need to reach out to the Midway about hosting our event but I hate writing these")], doIt: true },
-  { name: "older ask, check-in", draft: "Still looking for a photographer for the launch, or did you find one?", recent: [C("Good luck with the board meeting today!")], ask: "find me a photographer for the launch party", doIt: true },
-  { name: "shortlist", draft: "Want me to narrow those five coworking spots down to the two that fit best?", recent: [U("here are the coworking spaces I'm looking at: Canopy, WeWork Mission, Covo, Shack15, The Laundry"), U("I want somewhere quiet near BART")], doIt: true },
+  { name: "older ask, check-in", draft: "Still looking for a photographer for the launch, or did you find one?", recent: [U("can you find me a photographer for the launch party"), C("On it."), C("Good luck with the board meeting today!")], ask: "a photographer for the launch party", doIt: true },
+  // Drafting and shortlisting stay questions until a task is shown to deliver them.
+  { name: "draft the outreach (stays a question for now)", draft: "Want me to put together a draft of the note to the venue so you can look it over?", recent: [U("I need to reach out to the Midway about hosting our event but I hate writing these")], doIt: false },
+  { name: "shortlist (stays a question for now)", draft: "Want me to narrow those five coworking spots down to the two that fit best?", recent: [U("here are the coworking spaces I'm looking at: Canopy, WeWork Mission, Covo, Shack15, The Laundry"), U("I want somewhere quiet near BART")], doIt: false },
   // Questions that stay questions.
   { name: "pitch practice (theirs)", draft: "Did you get a chance to run through your pitch out loud yet?", recent: [U("I should practice my pitch before Thursday")], doIt: false },
   { name: "intro (visible)", draft: "Want me to introduce you to Maya? She's raising too.", recent: [U("I want to meet other founders raising right now")], doIt: false },
@@ -33,7 +34,7 @@ const wrong: string[] = [];
 for (const c of cases) {
   const recent = c.recent.join("\n");
   const read = await readOffer(c.draft, recent, [], c.ask ?? null);
-  const d = decidePayloadFirst(read, c.draft, theirText(recent, c.ask), []);
+  const d = decidePayloadFirst(read, c.draft, theirText(recent), []);
   const ok = d.handOff === c.doIt;
   if (ok) right++;
   else wrong.push(`${c.name}: wanted ${c.doIt ? "do it" : "ask"}, got ${d.handOff ? "do it" : "ask"} (${d.why}; read ${read?.kind}, words "${read?.theirWords ?? ""}")`);

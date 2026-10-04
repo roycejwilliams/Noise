@@ -1299,8 +1299,11 @@ export async function dispatchForUser(registry: ProactiveRegistry, userId: strin
   const person = await loadPerson(userId);
   if (!person) return;
 
-  const hold = await pool.query(`SELECT hold_until FROM proactive_user_state WHERE user_id = $1`, [userId]);
+  const hold = await pool.query(`SELECT hold_until, space_until FROM proactive_user_state WHERE user_id = $1`, [userId]);
   if (hold.rows[0]?.hold_until && new Date(hold.rows[0].hold_until) > new Date()) return;
+  // Spacing after work was handed to a task (harness/payloadFirst.ts). Unlike
+  // hold_until, new candidates don't clear it.
+  if (hold.rows[0]?.space_until && new Date(hold.rows[0].space_until) > new Date()) return;
 
   const { rows: candRows } = await pool.query(
     `SELECT * FROM proactive_candidates WHERE user_id = $1 AND status = 'pending'`,
@@ -1447,13 +1450,21 @@ export async function dispatchForUser(registry: ProactiveRegistry, userId: strin
   }
   if (pf && "handedTo" in pf) {
     await dropCandidate(registry, c, "skipped", `payload first: handed to task ${pf.handedTo}`);
+    // The task's result lands within 15 minutes: nothing else goes out first,
+    // the same spacing as between any two texts (review of #59).
+    await pool.query(
+      `INSERT INTO proactive_user_state (user_id, space_until) VALUES ($1, NOW() + ($2 || ' hours')::interval)
+       ON CONFLICT (user_id) DO UPDATE SET space_until = GREATEST(COALESCE(proactive_user_state.space_until, NOW()), EXCLUDED.space_until)`,
+      [userId, RULES.minHoursBetweenTexts],
+    );
     await recordDecision({ layer: 7, decision: "proactive.payloadFirst", userId, outcome: "act", action: `task:${pf.handedTo}`, proposal: { ...proposal, picked: c.id, instead_of: draft.text, started: pf.started }, checks: [...ev.userChecks, ...pickChecks, ...draftChecks], reason: pf.why });
     return;
   }
   if (pf && "hold" in pf) {
-    const until = new Date(Date.now() + 24 * 3_600_000);
-    await pool.query(`UPDATE proactive_candidates SET due_at = $2, updated_at = NOW() WHERE id = $1 AND status = 'pending'`, [c.id, until]);
-    await recordDecision({ layer: 7, decision: "proactive.payloadFirst", userId, outcome: "skip", action: `hold:${c.type}`, proposal: { ...proposal, picked: c.id, instead_of: draft.text }, checks: [...ev.userChecks, ...pickChecks, ...draftChecks], reason: pf.hold });
+    // Not asked instead: dropped, and its source asks again on its own schedule
+    // (a re-queued target is a no-op once dropped, so this can't loop hourly).
+    await dropCandidate(registry, c, "skipped", `payload first: ${pf.hold}`);
+    await recordSkipOnce(userId, `payload_first_hold:${c.type}`, { layer: 7, decision: "proactive.payloadFirst", userId, outcome: "skip", action: `hold:${c.type}`, proposal: { ...proposal, picked: c.id, instead_of: draft.text }, checks: [...ev.userChecks, ...pickChecks, ...draftChecks], reason: pf.hold });
     return;
   }
 

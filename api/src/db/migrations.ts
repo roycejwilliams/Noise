@@ -1820,6 +1820,9 @@ export async function runMigrations(): Promise<void> {
         )`,
       ),
     )
+    // Spacing after payload first handed work to a task (harness/payloadFirst.ts);
+    // unlike hold_until, a new candidate doesn't clear it.
+    .then(() => pool.query(`ALTER TABLE proactive_user_state ADD COLUMN IF NOT EXISTS space_until TIMESTAMPTZ`))
     .catch((err: Error) => console.error("proactive harness tables init failed:", err));
 
   // Layer 7 (2026-09-14): which source rows have been handed to the proactive
