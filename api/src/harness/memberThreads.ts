@@ -249,12 +249,13 @@ export async function ownLines(userId: string, days = LOOKBACK_DAYS): Promise<Ow
 }
 
 // The feeling they had when they said it: the life emotion signal nearest the
-// quote (within two hours), never one about Co.
+// quote (within two hours), never one about Co, and never a sound (a sigh or a
+// laugh isn't a feeling; services/callSounds.ts).
 async function feelingAt(userId: string, at: string): Promise<string | null> {
   const { rows } = await pool
     .query(
       `SELECT emotion, intensity FROM emotion_signals
-       WHERE user_id = $1 AND COALESCE(target, 'life') = 'life'
+       WHERE user_id = $1 AND COALESCE(target, 'life') = 'life' AND basis IS DISTINCT FROM 'sound_tag'
          AND created_at BETWEEN $2::timestamptz - INTERVAL '2 hours' AND $2::timestamptz + INTERVAL '2 hours'
        ORDER BY abs(extract(epoch FROM created_at - $2::timestamptz)) LIMIT 1`,
       [userId, at + ":00Z"],

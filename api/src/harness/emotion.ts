@@ -52,7 +52,7 @@ export type EmotionSignal = {
   // Where a signal came from when it isn't a model's read of what they said:
   // "frustration_score" is ElevenLabs' per-line score (frustrationMoments).
   // Absent on everything else.
-  basis?: "frustration_score" | null;
+  basis?: "frustration_score" | "sound_tag" | null;
 };
 
 // Signals from before target was recorded are classified from what they
@@ -283,7 +283,9 @@ export function summarizeSignals(allSignals: EmotionSignal[], now: Date): Emotio
   // A frustration score alone doesn't mark a hard day: it can't tell frustration
   // with Co from frustration with life, and needsCare holds some check-ins
   // (review of #61). Co still sees it as a call moment, with their words.
-  const recentNeg = sorted.find((s) => s.valence === "negative" && s.intensity !== "low" && s.basis !== "frustration_score" && age(s) <= 24 * HOUR);
+  // Only a read of what they said marks a hard day: a score or a sound (a
+  // sigh, a laugh) can't tell what it means (services/callSounds.ts).
+  const recentNeg = sorted.find((s) => s.valence === "negative" && s.intensity !== "low" && !s.basis && age(s) <= 24 * HOUR);
   const positiveAfter = recentNeg ? sorted.some((s) => s.valence === "positive" && s.at > recentNeg.at) : false;
 
   const byTopic = new Map<string, { about: string; emotions: Set<string>; count: number }>();

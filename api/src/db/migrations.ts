@@ -1889,7 +1889,8 @@ export async function runMigrations(): Promise<void> {
     // classified from "about" at read time (harness/emotion.ts signalTarget).
     .then(() => pool.query(`ALTER TABLE emotion_signals ADD COLUMN IF NOT EXISTS target TEXT`))
     // Where a signal came from when it isn't a read of what they said:
-    // 'frustration_score' is ElevenLabs' per-line score (2026-10-04,
+    // 'frustration_score' is ElevenLabs' per-line score, 'sound_tag' a sigh or
+    // laugh Scribe heard (services/callSounds.ts) (2026-10-04,
     // harness/emotion.ts frustrationMoments). NULL for everything else.
     .then(() => pool.query(`ALTER TABLE emotion_signals ADD COLUMN IF NOT EXISTS basis TEXT`))
     .catch((err: Error) => console.error("emotion_signals table init failed:", err));
