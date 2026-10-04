@@ -91,6 +91,20 @@ check(`never more than ${CALL_FRUSTRATION.maxMoments} a call, the strongest kept
 check("a positive text-read line doesn't block it", frustrationMoments([{ text: "Oh, perfect. That's just perfect.", frustration: 0.5 }], [{ valence: "positive", quote: "Oh, perfect. That's just perfect." }]).length === 1);
 check("recorded with the text read's moments, same transcript id, inside the non-fatal block", /const frustrated = frustrationMoments\(scored, moments\);/.test(co) && /recordEmotionSignals\(user_id, \[\.\.\.moments, \.\.\.frustrated\]/.test(co) && co.indexOf("frustrationMoments(scored, moments)") > co.indexOf("const emotionDone = (async () => {") && co.indexOf("frustrationMoments(scored, moments)") < co.indexOf("reading the call's feelings failed (non-fatal)"));
 check("the scores come from the webhook's turns, else the conversation fetched once (never fails the call)", /const here = frustrationScores\(turns\);[\s\S]*fetchConversationTurns\(conversationId\)/.test(co) && /frustration\(\)\.catch\(\(\) => \[\]/.test(co));
+// Review of #61: a score can't tell frustration with Co from frustration with
+// life, so alone it never marks a hard day (needsCare holds some check-ins).
+check("score moments are tagged frustration_score", fr.every((m) => (m as any).basis === "frustration_score"));
+const nowT = new Date("2026-10-04T20:00:00Z");
+const scoreRow = { source: "call" as const, emotion: "frustrated", intensity: "high" as const, valence: "negative" as const, about: null, quote: "Oh, perfect.", at: new Date("2026-10-04T19:00:00Z") };
+check("a frustration score alone never sets needsCare", summarizeSignals([{ ...scoreRow, basis: "frustration_score" as const }], nowT).needsCare === false);
+check("the same feeling from the text read still does", summarizeSignals([scoreRow], nowT).needsCare === true);
+check("Co still sees the score moment from the call", summarizeSignals([{ ...scoreRow, basis: "frustration_score" as const }], nowT).lastCall?.moments.length === 1);
+const emo = readFileSync(new URL("../../src/harness/emotion.ts", import.meta.url), "utf8");
+const migs = readFileSync(new URL("../../src/db/migrations.ts", import.meta.url), "utf8");
+const metr = readFileSync(new URL("../../src/harness/metrics.ts", import.meta.url), "utf8");
+check("the tag is stored and read back, and the column exists", /INSERT INTO emotion_signals \([^)]*basis\)/.test(emo) && /basis: s\.basis \?\? null/.test(emo) && /target, basis FROM emotion_signals/.test(emo) && /ALTER TABLE emotion_signals ADD COLUMN IF NOT EXISTS basis TEXT/.test(migs));
+check("the 'shared how life is going' metric doesn't count scores", /es\.target = 'life' AND es\.basis IS NULL/.test(metr));
+check("the scores are fetched alongside the text read, and which path supplied them is logged", co.indexOf("const scoring = frustration") < co.indexOf("const moments = await callEmotionMoments(cleanTranscript);") && /frustration scores for \$\{conversationId\} from/.test(co));
 const elc = readFileSync(new URL("../../src/services/elevenLabsCalls.ts", import.meta.url), "utf8");
 check("the fetch has a timeout and returns null on any failure", /export async function fetchConversationTurns[\s\S]*AbortSignal\.timeout\(timeoutMs\)[\s\S]*catch \{\s*return null;/.test(elc));
 

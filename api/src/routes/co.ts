@@ -506,14 +506,18 @@ router.post("/el/post-call", async (req: Request, res: Response, next: NextFunct
       userId,
       callKey: `el:${conversationId}`,
       twilioMetadata: callSid ? { call_sid: callSid } : null,
-      // No per-line voice scores on ElevenLabs: text emotion carries the call.
+      // Feelings come from the text read over what they said, plus ElevenLabs'
+      // per-line frustration score (harness/emotion.ts frustrationMoments).
       load: async () => ({
         transcript: transcriptFromTurns(turns),
         recordingUrl: conversationLink(conversationId),
         // The webhook's own turns when they carry the scores, else the conversation fetched once.
         frustration: async () => {
           const here = frustrationScores(turns);
-          return here.length ? here : frustrationScores(await fetchConversationTurns(conversationId));
+          const scored = here.length ? here : frustrationScores(await fetchConversationTurns(conversationId));
+          // Which path supplied the scores, so the webhook's shape is known (review of #61).
+          console.log(`post-call: ${scored.length} frustration scores for ${conversationId} from ${here.length ? "the webhook" : "the conversation fetch"}`);
+          return scored;
         },
       }),
     });
@@ -805,9 +809,11 @@ async function processEndedCall(o: {
           const had = await pool.query(`SELECT 1 FROM emotion_signals WHERE memory_id = $1 LIMIT 1`, [transcriptMemoryId]);
           if (had.rows.length) return;
         }
+        // Beside the text read: ElevenLabs' frustration score on lines it didn't
+        // already call negative. Fetched alongside the read, not after it.
+        const scoring = frustration ? frustration().catch(() => [] as ScoredLine[]) : Promise.resolve([] as ScoredLine[]);
         const moments = await callEmotionMoments(cleanTranscript);
-        // Beside the text read: ElevenLabs' frustration score on lines it didn't already call negative.
-        const scored = frustration ? await frustration().catch(() => [] as ScoredLine[]) : [];
+        const scored = await scoring;
         const frustrated = frustrationMoments(scored, moments);
         await recordEmotionSignals(user_id, [...moments, ...frustrated].map((m) => ({ ...m, memoryId: transcriptMemoryId })));
       })().catch((err: any) => console.error("post-call: reading the call's feelings failed (non-fatal):", err?.message ?? err));
