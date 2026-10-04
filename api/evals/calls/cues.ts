@@ -40,6 +40,8 @@ check("a lowercase event tag or placeholder in a text is never touched", keeps("
 check("quoted text keeps its brackets", keeps('She said "[laughs] no way" and left.', '"[laughs] no way"'));
 check("no tidy when nothing was removed (spacing and numbers untouched)", stripCues("Pay 4 .5 now.  Two spaces stay.", "known") === "Pay 4 .5 now.  Two spaces stay." && stripCues("a[warmly]b", "known") === "a[warmly]b");
 check("a known stray cue is still stripped from a text", cleanCoMessage("[sighs] Okay, talk soon.") === "Okay, talk soon.");
+check("only a line that lost a cue is tidied (an indented list keeps its indent)", stripCues("  - item one\n[softly] ok", "known") === "  - item one\nok");
+check("the prompt line after the guide starts its own paragraph", /\n\nShort sentences, one thought each/.test(promptForElevenLabs(readFileSync(new URL("../../prompts/co-system-prompt.md", import.meta.url), "utf8"))));
 
 // Never in a transcript Co stores, never in a text.
 const turns = [

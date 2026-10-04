@@ -155,7 +155,7 @@ export const SPOKEN_ALOUD = "Everything you write is spoken aloud.";
 export function promptForElevenLabs(prompt: string): string {
   const base = prompt.replace(/\bhang_up\b/g, "end_call");
   const withCues = base.includes(SPOKEN_ALOUD)
-    ? base.replace(SPOKEN_ALOUD, `Everything you write is spoken aloud, except a cue in square brackets (below).\n${CUE_GUIDE}\n`)
+    ? base.replace(new RegExp(`${SPOKEN_ALOUD.replace(/[.]/g, "\\.")} ?`), `Everything you write is spoken aloud, except a cue in square brackets (below).\n${CUE_GUIDE}\n\n`)
     : `${base}\n\n${CUE_GUIDE}`;
   return `${withCues}\n\n${OPENING_NOTE}`;
 }

@@ -46,18 +46,20 @@ export function cuesIn(text: string): string[] {
 // Pure: the line without its cues (any cue, or only known ones for a text),
 // spacing tidied only where one was removed.
 export function stripCues(text: string, which: "any" | "known" = "any"): string {
-  const src = String(text ?? "");
-  let removed = false;
-  const out = src.replace(CUE, (whole, before: string, cue: string) => {
-    if (which === "known" && !KNOWN_CUES.has(cue)) return whole;
-    removed = true;
-    return before;
-  });
-  if (!removed) return src;
-  return out
-    .replace(/[ \t]{2,}/g, " ")
-    .replace(/[ \t]+([,.!?])/g, "$1")
-    .replace(/^[ \t]+|[ \t]+$/gm, "");
+  // Line by line, so only a line that lost a cue is tidied (an indented list
+  // elsewhere in the same text keeps its indent; re-review of #62).
+  return String(text ?? "")
+    .split("\n")
+    .map((line) => {
+      let removed = false;
+      const out = line.replace(CUE, (whole, before: string, cue: string) => {
+        if (which === "known" && !KNOWN_CUES.has(cue)) return whole;
+        removed = true;
+        return before;
+      });
+      return removed ? out.replace(/[ \t]{2,}/g, " ").replace(/[ \t]+([,.!?])/g, "$1").trim() : line;
+    })
+    .join("\n");
 }
 
 export type CueAudit = { replies: number; cued: number; cues: Record<string, number>; outside: string[]; overOne: number };
