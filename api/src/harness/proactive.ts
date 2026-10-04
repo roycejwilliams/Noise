@@ -40,6 +40,7 @@ import { offerFollowUp } from "../services/offerFollowUp.js";
 import { AsyncLocalStorage } from "node:async_hooks";
 import { safetyHoldActive } from "../services/safety.js";
 import { repeatQuestionCheck } from "./repeatAsk.js";
+import { payloadFirst, theirAskOf } from "./payloadFirst.js";
 import { getEmotionalContext, renderEmotionalContext } from "./emotion.js";
 
 // The person's emotional context for whatever draft runs inside dispatch,
@@ -1432,6 +1433,27 @@ export async function dispatchForUser(registry: ProactiveRegistry, userId: strin
     await pool.query(`UPDATE proactive_candidates SET attempts = attempts + 1, updated_at = NOW() WHERE id = $1`, [c.id]);
     if (c.attempts + 1 >= RULES.maxDraftAttempts) await dropCandidate(registry, c, "skipped", `draft failed checks: ${describeFailed(dg.failed)}`);
     await recordDecision({ layer: 7, decision: "proactive.dailyPick", userId, outcome: "skip", action: `send:${c.type}`, proposal: { ...proposal, picked: c.id, draft: draft.text }, checks: [...ev.userChecks, ...pickChecks, ...draftChecks], reason: `draft failed checks: ${describeFailed(dg.failed)}` });
+    return;
+  }
+
+  // Payload first (harness/payloadFirst.ts, 2026-10-04): a text asking whether
+  // Co should do something it could just do goes to one of its tasks instead,
+  // which does the work and sends the result. Questions stay for what the
+  // member owns and for steps that are irreversible or seen by others.
+  const pf = await payloadFirst({ userId, kind: c.type, draft: draft.messages.join("\n"), recent, theirAsk: theirAskOf(c.payload), dryRun: opts.dryRun }).catch(() => null);
+  if (pf && "wouldHandOff" in pf) {
+    console.log(`[dispatch dryRun] payload first: would do the work instead of sending "${draft.text}" (${pf.wouldHandOff})`);
+    return;
+  }
+  if (pf && "handedTo" in pf) {
+    await dropCandidate(registry, c, "skipped", `payload first: handed to task ${pf.handedTo}`);
+    await recordDecision({ layer: 7, decision: "proactive.payloadFirst", userId, outcome: "act", action: `task:${pf.handedTo}`, proposal: { ...proposal, picked: c.id, instead_of: draft.text, started: pf.started }, checks: [...ev.userChecks, ...pickChecks, ...draftChecks], reason: pf.why });
+    return;
+  }
+  if (pf && "hold" in pf) {
+    const until = new Date(Date.now() + 24 * 3_600_000);
+    await pool.query(`UPDATE proactive_candidates SET due_at = $2, updated_at = NOW() WHERE id = $1 AND status = 'pending'`, [c.id, until]);
+    await recordDecision({ layer: 7, decision: "proactive.payloadFirst", userId, outcome: "skip", action: `hold:${c.type}`, proposal: { ...proposal, picked: c.id, instead_of: draft.text }, checks: [...ev.userChecks, ...pickChecks, ...draftChecks], reason: pf.hold });
     return;
   }
 
