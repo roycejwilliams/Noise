@@ -176,6 +176,46 @@ export async function callEmotionMoments(
 }
 
 // ---------------------------------------------------------------------------
+// Capture: calls (ElevenLabs' frustration score)
+//
+// ElevenLabs scores each thing the caller says for frustration (Royce,
+// 2026-10-04: "catching 'that's just perfect' at 0.4-0.6 is exactly the signal
+// that matters"). It reads the words too (the same words acted sad or happy
+// scored the same, evals/voice-emotion-pilot), but it catches frustration the
+// text read misses on a line, e.g. sarcasm. Kept beside the text read, never in
+// place of it: a line the text read already found a negative feeling on isn't
+// counted twice. Free: it comes with the call.
+export const CALL_FRUSTRATION = { min: 0.4, high: 0.6, maxMoments: 2 };
+export type ScoredLine = { text: string; frustration: number };
+
+// Pure: the caller's lines with ElevenLabs' frustration score.
+export function frustrationScores(turns: unknown): ScoredLine[] {
+  if (!Array.isArray(turns)) return [];
+  return turns
+    .filter((t: any) => t?.role === "user" && typeof t?.message === "string" && t.message.trim() && typeof t?.analysis?.user_frustration_score === "number")
+    .map((t: any) => ({ text: t.message.trim(), frustration: t.analysis.user_frustration_score as number }));
+}
+
+const lineWords = (s: string) => s.toLowerCase().replace(/[^a-z0-9 ]+/g, " ").split(/\s+/).filter((w) => w.length > 2);
+function sameLine(a: string, b: string): boolean {
+  const A = lineWords(a);
+  const B = new Set(lineWords(b));
+  if (!A.length || !B.size) return false;
+  return A.filter((w) => B.has(w)).length / Math.min(A.length, B.size) >= 0.6;
+}
+
+// Pure: the frustrated moments to add beside the text read's: sure enough,
+// not a line the text read already called negative, strongest first.
+export function frustrationMoments(scored: ScoredLine[], textRead: Pick<EmotionSignal, "valence" | "quote">[]): Omit<EmotionSignal, "at">[] {
+  return scored
+    .filter((l) => l.frustration >= CALL_FRUSTRATION.min)
+    .filter((l) => !textRead.some((m) => m.valence === "negative" && m.quote && sameLine(m.quote, l.text)))
+    .sort((a, b) => b.frustration - a.frustration)
+    .slice(0, CALL_FRUSTRATION.maxMoments)
+    .map((l) => ({ source: "call" as const, emotion: "frustrated", intensity: l.frustration >= CALL_FRUSTRATION.high ? ("high" as const) : ("medium" as const), valence: "negative" as const, about: null, quote: l.text.slice(0, 140) }));
+}
+
+// ---------------------------------------------------------------------------
 // Store
 
 export async function recordEmotionSignals(

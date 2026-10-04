@@ -40,9 +40,9 @@ import { MODELS } from "../models.js";
 import { surfaceNewAsksNow } from "../services/eventSurfacingSweep.js";
 import { refreshPersonSnapshot } from "../harness/personSnapshot.js";
 import { auditCall } from "../harness/callGrounding.js";
-import { callEmotionMoments, recordEmotionSignals } from "../harness/emotion.js";
+import { callEmotionMoments, frustrationMoments, frustrationScores, recordEmotionSignals, type ScoredLine } from "../harness/emotion.js";
 import { flagVoiceMoments } from "../services/voiceFlags.js";
-import { CANT_CONNECT_LINE, COVERAGE_TRANSCRIPT_CHARS, chooseOpening, conversationLink, hitVoicemail, memberNumberOf, missedKind, voicemailLeft, noteCallFailure, takeCallContext, voicemailVerdict, registerElevenLabsCall, transcriptFromHistory, transcriptFromTurns, verifyCallToken, verifyPostCallWebhook } from "../services/elevenLabsCalls.js";
+import { CANT_CONNECT_LINE, COVERAGE_TRANSCRIPT_CHARS, chooseOpening, conversationLink, fetchConversationTurns, hitVoicemail, memberNumberOf, missedKind, voicemailLeft, noteCallFailure, takeCallContext, voicemailVerdict, registerElevenLabsCall, transcriptFromHistory, transcriptFromTurns, verifyCallToken, verifyPostCallWebhook } from "../services/elevenLabsCalls.js";
 
 // One-line drafts (missed-call text, voicemail line): narrow work, Haiku.
 const DRAFT_MODEL = MODELS.haiku;
@@ -507,7 +507,15 @@ router.post("/el/post-call", async (req: Request, res: Response, next: NextFunct
       callKey: `el:${conversationId}`,
       twilioMetadata: callSid ? { call_sid: callSid } : null,
       // No per-line voice scores on ElevenLabs: text emotion carries the call.
-      load: async () => ({ transcript: transcriptFromTurns(turns), recordingUrl: conversationLink(conversationId) }),
+      load: async () => ({
+        transcript: transcriptFromTurns(turns),
+        recordingUrl: conversationLink(conversationId),
+        // The webhook's own turns when they carry the scores, else the conversation fetched once.
+        frustration: async () => {
+          const here = frustrationScores(turns);
+          return here.length ? here : frustrationScores(await fetchConversationTurns(conversationId));
+        },
+      }),
     });
     // Moments where their voice said more than their words, beside the text
     // read (services/voiceFlags.ts). Test members only for now; never fails the call.
@@ -628,6 +636,9 @@ async function handleMissedVoiceCall(
 type EndedCallData = {
   transcript: string;
   recordingUrl: string | null;
+  // ElevenLabs' per-line frustration scores for the caller (harness/emotion.ts
+  // frustrationMoments), read when the call's feelings are recorded.
+  frustration?: () => Promise<ScoredLine[]>;
 };
 async function processEndedCall(o: {
   userId: string;
@@ -707,7 +718,7 @@ async function processEndedCall(o: {
       // Let the app know the call ended and Co is now extracting the profile
       _io?.to(`user:${user_id}`).emit("co:processing");
 
-      const { transcript, recordingUrl: recording_url } = await o.load();
+      const { transcript, recordingUrl: recording_url, frustration } = await o.load();
 
       if (!transcript) {
         console.error(`post-call: empty transcript for chat ${chat_id} (user ${user_id})`);
@@ -795,7 +806,10 @@ async function processEndedCall(o: {
           if (had.rows.length) return;
         }
         const moments = await callEmotionMoments(cleanTranscript);
-        await recordEmotionSignals(user_id, moments.map((m) => ({ ...m, memoryId: transcriptMemoryId })));
+        // Beside the text read: ElevenLabs' frustration score on lines it didn't already call negative.
+        const scored = frustration ? await frustration().catch(() => [] as ScoredLine[]) : [];
+        const frustrated = frustrationMoments(scored, moments);
+        await recordEmotionSignals(user_id, [...moments, ...frustrated].map((m) => ({ ...m, memoryId: transcriptMemoryId })));
       })().catch((err: any) => console.error("post-call: reading the call's feelings failed (non-fatal):", err?.message ?? err));
 
       // Steps 2-5 — Extract psychographic data via Anthropic, sanitize against
