@@ -7,7 +7,7 @@
 import "dotenv/config";
 import { readFileSync, writeFileSync } from "fs";
 import { buildAgentConfig } from "../../src/services/elevenLabsCalls.js";
-import { checkNoEmotionLabel } from "../../src/harness/emotion.js";
+import { checkNoEmotionLabelOnCall } from "../../src/harness/emotion.js";
 
 const [beforePath, afterPath, nArg] = process.argv.slice(2);
 if (!beforePath || !afterPath) throw new Error("usage: labelSim.ts <prompt before> <prompt after> [sims per prompt]");
@@ -50,7 +50,7 @@ try {
       }).catch((e) => ({ error: String(e) }));
       const turns: any[] = (out as any).simulated_conversation ?? [];
       const coLines = turns.filter((t) => t.role === "agent" && typeof t.message === "string").map((t) => t.message as string);
-      const labelled = coLines.filter((l) => !checkNoEmotionLabel(l).pass);
+      const labelled = coLines.filter((l) => !checkNoEmotionLabelOnCall(l).pass);
       runs.push({ prompt: which, sim: i, coLines, labelled });
       console.log(`${which} #${i + 1}: ${coLines.length} Co lines, ${labelled.length} labelled${(out as any).error ? ` (error: ${(out as any).error.slice(0, 400)})` : ""}${labelled.length ? ` | ${labelled.map((l) => `"${l.slice(0, 90)}"`).join(" ; ")}` : ""}`);
     }
@@ -58,7 +58,7 @@ try {
 } finally {
   for (const id of Object.values(agents)) await api(`/convai/agents/${id}`, { method: "DELETE" }).then(() => console.log(`deleted ${id}`)).catch((e) => console.log(`DELETE FAILED ${id}: ${e}`));
 }
-writeFileSync("/Users/roycewilliams/cue-run/label-sim.json", JSON.stringify(runs, null, 1));
+if (process.env.LABEL_SIM_OUT) writeFileSync(process.env.LABEL_SIM_OUT, JSON.stringify(runs, null, 1));
 for (const which of ["before", "after"]) {
   const r = runs.filter((x) => x.prompt === which);
   const lines = r.reduce((a, x) => a + x.coLines.length, 0);
