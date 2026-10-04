@@ -399,14 +399,45 @@ export function renderEmotionalContext(ctx: EmotionalContext, now = new Date()):
 // Naming or diagnosing the feeling back at them reads as clinical, not as
 // someone who knows them. Show it in how you respond instead.
 const EMOTION_WORDS =
-  "stressed|anxious|upset|frustrated|overwhelmed|sad|angry|nervous|down|worried|exhausted|hurt|lonely|scared|discouraged|burnt out|burned out|depressed|defeated|disappointed";
+  "stressed|anxious|upset|frustrated|overwhelmed|sad|angry|nervous|down|worried|exhausted|hurt|lonely|scared|discouraged|burnt out|burned out|depressed|defeated|disappointed|annoyed|irritated|tired|drained|furious|miserable";
 const LABEL_RE = new RegExp(
-  `\\b(you (sound|seem|must be|feel like you're)|you're (clearly|obviously)|i can (tell|sense|hear)( that)? you('re| are)?|it sounds like you('re| are)( feeling)?)\\s+(so |really |pretty |a bit |a little |kind of |very )?(${EMOTION_WORDS})\\b`,
+  `\\b(you (sound|seem|must be|feel like you're)|you're (clearly|obviously)|i can (tell|sense|hear)( that)? you('re| are)?|(?:it )?sounds like you('re| are)( feeling)?|i (?:hear|notice|sense) (?:that )?you('re| are)( feeling)?)\\s+(so |really |pretty |a bit |a little |kind of |very )?(${EMOTION_WORDS})\\b`,
   "i",
 );
 
+// The noun form, telling them what Co hears or notices in them (Royce,
+// 2026-10-04: a call said "I'm hearing frustration there"; Co never tells
+// members what they feel).
+//
+// Two strengths, because they do different jobs. The text gate drops a whole
+// sentence, and "I hear" is also hearsay ("I hear the excitement around
+// Friday's show is real", "I hear grief groups meet Tuesdays", review of #64),
+// so it only takes the forms that are about the person: "I'm hearing
+// frustration", "I can hear/sense/feel some sadness", "there's tension in your
+// voice", with the noun standing alone (not followed by about/around/for/is...).
+// The call audit and the simulation only log, so they also take the plain "I
+// hear / sense / notice the exhaustion underneath that".
+const EMOTION_NOUNS =
+  "frustration|stress|anxiety|sadness|anger|tension|hurt|disappointment|exhaustion|worry|nervousness|fear|loneliness|grief|excitement|resentment|irritation|annoyance|defeat|overwhelm|pain|heaviness|sarcasm|bitterness|weariness|tiredness|discouragement|dread";
+const QUAL = "(?:(?:some|a lot of|real|a little|a bit of|so much|quite a bit of|a ton of) )*";
+const NOT_ABOUT = "(?!\\s+(?:about|around|between|for|of|from|among|over|at|points|is|are|was|were|in the|in this|in that (?:room|plan|schedule|crowd)))";
+const NOUN_LABEL_RE = new RegExp(
+  `\\b(?:(?:i'?m|i am) (?:hearing|sensing|picking up(?: on)?|noticing|detecting)|i can (?:hear|sense|feel))\\s+${QUAL}(?:${EMOTION_NOUNS})\\b${NOT_ABOUT}|\\b(?:there's|there is) ${QUAL}(?:${EMOTION_NOUNS}) in your (?:voice|tone|words)\\b(?! (?:note|memo|message|text|email|reply))`,
+  "i",
+);
+const CALL_NOUN_LABEL_RE = new RegExp(`\\bi (?:can )?(?:hear|sense|notice|detect|feel)\\s+(?:the |that |a |an )?${QUAL}(?:${EMOTION_NOUNS})\\b|\\bthere's ${QUAL}(?:${EMOTION_NOUNS}) there\\b`, "i");
+
 export function checkNoEmotionLabel(draft: string): GateCheck {
-  const m = draft.match(LABEL_RE);
+  const m = draft.match(LABEL_RE) ?? draft.match(NOUN_LABEL_RE);
+  return m
+    ? { name: "no_emotion_label", pass: false, reason: `names their feeling back at them: "${m[0]}"` }
+    : { name: "no_emotion_label", pass: true };
+}
+
+// The same check for what Co says on a call, which is only logged: it also
+// takes the plain "I hear the exhaustion underneath that".
+export function checkNoEmotionLabelOnCall(line: string): GateCheck {
+  const m = line.match(LABEL_RE) ?? line.match(NOUN_LABEL_RE) ?? line.match(CALL_NOUN_LABEL_RE);
   return m
     ? { name: "no_emotion_label", pass: false, reason: `names their feeling back at them: "${m[0]}"` }
     : { name: "no_emotion_label", pass: true };
