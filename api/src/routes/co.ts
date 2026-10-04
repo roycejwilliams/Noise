@@ -1,4 +1,5 @@
 import { anthropic } from "@ai-sdk/anthropic";
+import { cueAudit } from "../services/voiceCues.js";
 import { recordSafetyConcern, soundsLikeCrisis } from "../services/safety.js";
 import { generateText } from "ai";
 import { propagateAttributes } from "@langfuse/tracing";
@@ -529,6 +530,11 @@ router.post("/el/post-call", async (req: Request, res: Response, next: NextFunct
     // after: a line that names their feeling is logged for the review.
     const labelled = turns.filter((t: any) => t?.role !== "user" && typeof t?.message === "string").map((t: any) => t.message as string).filter((m: string) => !checkNoEmotionLabelOnCall(m).pass);
     if (labelled.length) recordDecision({ layer: 8, decision: "call.emotion_label", userId, outcome: "skip", action: "named_their_feeling", proposal: { conversationId, lines: labelled.slice(0, 5) }, reason: checkNoEmotionLabelOnCall(labelled[0]).reason ?? null }).catch(() => {});
+    // Co's voice cues can't be filtered mid-call (ElevenLabs speaks its model's
+    // reply directly), so every call is audited: a cue outside the allowed set,
+    // or two in one reply, shows up in the review (services/voiceCues.ts).
+    const cueUse = cueAudit(turns.filter((t: any) => t?.role !== "user").map((t: any) => String(t?.message ?? "")));
+    if (cueUse.cued) recordDecision({ layer: 8, decision: "call.cues", userId, outcome: cueUse.outside.length || cueUse.overOne ? "skip" : "act", action: cueUse.outside.length || cueUse.overOne ? "cue_rules_broken" : "cues_ok", proposal: { conversationId, ...cueUse } }).catch(() => {});
     return res.status(ended.status).send(ended.body);
   } catch (err) {
     next(err);

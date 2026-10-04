@@ -14,6 +14,8 @@ import { buildAgentConfig } from "../services/elevenLabsCalls.js";
 // base) and, optionally, ELEVENLABS_AGENT_ID, ELEVENLABS_LLM,
 // ELEVENLABS_TTS_MODEL, ELEVENLABS_TURN_EAGERNESS. Pushes to whichever
 // environment those point at (dev locally; prod via `railway run`).
+// Code-side parts of the call prompt (the voice-cue guide, services/voiceCues.ts)
+// only reach the agent when this runs: push after any change, per environment.
 // The post-call webhook (API_URL/co/el/post-call) and its secret
 // (ELEVENLABS_WEBHOOK_SECRET) are set once in ElevenLabs' workspace settings.
 const dryRun = process.argv.includes("--dry-run");
