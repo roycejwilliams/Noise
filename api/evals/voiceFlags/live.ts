@@ -47,13 +47,25 @@ async function runCall(name: string): Promise<{ name: string; conversationId: st
   const ws = new WebSocket(signed_url);
   let conversationId: string | null = null;
   let lastAgentAudio = 0;
+  // Co's audio arrives faster than it plays, so its turn ends when the audio
+  // received would have finished playing (8000 bytes a second), not when it stops arriving.
+  let turnAudioStart = 0;
+  let turnAudioBytes = 0;
   let agentTurns = 0;
   const heard: string[] = [];
   ws.on("message", (raw) => {
     const m = JSON.parse(raw.toString());
     if (m.type === "ping") ws.send(JSON.stringify({ type: "pong", event_id: m.ping_event?.event_id }));
     else if (m.type === "conversation_initiation_metadata") conversationId = m.conversation_initiation_metadata_event?.conversation_id ?? null;
-    else if (m.type === "audio") lastAgentAudio = Date.now();
+    else if (m.type === "audio") {
+      const b64 = m.audio_event?.audio_base_64 ?? "";
+      if (Date.now() - lastAgentAudio > 3000) {
+        turnAudioStart = Date.now();
+        turnAudioBytes = 0;
+      }
+      turnAudioBytes += Math.floor((b64.length * 3) / 4);
+      lastAgentAudio = Date.now();
+    } else if (m.type === "interruption") turnAudioBytes = 0;
     else if (m.type === "agent_response") {
       agentTurns++;
       console.log(`  Co: ${m.agent_response_event?.agent_response}`);
@@ -75,7 +87,8 @@ async function runCall(name: string): Promise<{ name: string; conversationId: st
   );
   const agentDone = async (turn: number) => {
     const until = Date.now() + 45_000;
-    while (Date.now() < until && (agentTurns < turn || Date.now() - lastAgentAudio < 1500)) await sleep(100);
+    const playing = () => Date.now() < turnAudioStart + (turnAudioBytes / 8000) * 1000 + 800;
+    while (Date.now() < until && (agentTurns < turn || Date.now() - lastAgentAudio < 1500 || playing())) await sleep(100);
   };
   for (let i = 0; i < clips.length; i++) {
     await agentDone(i + 1);
