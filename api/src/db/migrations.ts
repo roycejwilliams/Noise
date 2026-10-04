@@ -1923,6 +1923,8 @@ export async function runMigrations(): Promise<void> {
       ),
     )
     .then(() => pool.query(`CREATE INDEX IF NOT EXISTS idx_voice_flags_user ON voice_flags (user_id, created_at DESC)`))
+    // Gemini's raw answer, so a failed flag insert loses nothing (review of #60).
+    .then(() => pool.query(`ALTER TABLE voice_flag_runs ADD COLUMN IF NOT EXISTS raw JSONB`))
     .catch((err: Error) => console.error("voice_flags table init failed:", err));
 
   // Tier 3 (paid X search) budget log (2026-09-15) — tieredRecommendation.ts.

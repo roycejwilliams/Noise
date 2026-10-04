@@ -43,6 +43,10 @@ export const VOICE_FLAG = {
   maxAudioBytes: 14_000_000,
   audioTries: 4,
   audioWaitMs: 15_000,
+  audioTimeoutMs: 30_000,
+  // A run still 'running' after this was cut off (a crash or redeploy): a
+  // retried webhook may take it over, and the audit calls it abandoned.
+  staleRunMinutes: 15,
   listenTimeoutMs: 120_000,
   // How long a call's kept flags stay in Co's context.
   showDays: 7,
@@ -109,21 +113,42 @@ const SCHEMA = {
   required: ["flags"],
 };
 
-const words = (s: string) => s.toLowerCase().replace(/[’']/g, "").replace(/[^a-z0-9 ]+/g, " ").split(/\s+/).filter(Boolean);
+const norm = (w: string) => w.toLowerCase().replace(/[’']/g, "").replace(/[^a-z0-9]+/g, "");
+const words = (s: string) => s.split(/\s+/).map(norm).filter(Boolean);
 
-// Pure: whether a quote is something the caller actually said: inside one of
-// their lines, or most of its words in one (Gemini trims and re-punctuates).
-export function quoteFromCaller(quote: string, lines: CallerLine[]): CallerLine | null {
+// Pure: the caller's own words that a quote points at, or null. Gemini trims
+// and re-punctuates, so the quote may differ slightly, but its words must be
+// whole words of one caller line, in order: at least 80% of them (all of them
+// for one or two words), close together. What comes back is the caller's span,
+// never Gemini's wording, so a reworded quote can't put words in their mouth
+// ("I'm not fine" against "I'm fine, not bad" doesn't match; review of #60).
+export function quoteFromCaller(quote: string, lines: CallerLine[]): { line: CallerLine; said: string } | null {
   const q = words(quote);
   if (!q.length) return null;
-  const joined = q.join(" ");
+  const need = q.length <= 2 ? q.length : Math.ceil(q.length * 0.8);
+  let best: { line: CallerLine; said: string; hit: number } | null = null;
   for (const l of lines) {
-    const w = words(l.text);
-    if (w.join(" ").includes(joined)) return l;
-    const set = new Set(w);
-    if (q.length >= 3 && q.filter((x) => set.has(x)).length / q.length >= 0.8) return l;
+    const raw = l.text.split(/\s+/).filter((t) => norm(t));
+    const w = raw.map(norm);
+    // Longest in-order common subsequence, remembering where it sits in the line.
+    const dp = Array.from({ length: q.length + 1 }, () => new Array<number>(w.length + 1).fill(0));
+    for (let i = 1; i <= q.length; i++) for (let j = 1; j <= w.length; j++) dp[i][j] = q[i - 1] === w[j - 1] ? dp[i - 1][j - 1] + 1 : Math.max(dp[i - 1][j], dp[i][j - 1]);
+    const hit = dp[q.length][w.length];
+    if (hit < need) continue;
+    const at: number[] = [];
+    for (let i = q.length, j = w.length; i > 0 && j > 0; ) {
+      if (q[i - 1] === w[j - 1]) {
+        at.unshift(j - 1);
+        i--;
+        j--;
+      } else if (dp[i - 1][j] >= dp[i][j - 1]) i--;
+      else j--;
+    }
+    const span = at[at.length - 1] - at[0] + 1;
+    if (span > Math.ceil(q.length * 1.5) + 2) continue;
+    if (!best || hit > best.hit) best = { line: l, said: raw.slice(at[0], at[at.length - 1] + 1).join(" "), hit };
   }
-  return null;
+  return best ? { line: best.line, said: best.said } : null;
 }
 
 // Pure: Gemini's answer checked against the call. A flag is kept only when its
@@ -144,14 +169,26 @@ export function checkFlags(raw: unknown, lines: CallerLine[], opts = VOICE_FLAG)
       confidence,
     };
     let dropReason: string | null = null;
+    const said = base.quote ? quoteFromCaller(base.quote, lines) : null;
+    // Kept with the caller's own words; Gemini's wording goes to the audit only when dropped.
+    if (said) base.quote = said.said;
     if (!VOICE_CUES.includes(base.cue)) dropReason = "not one of the four cues";
-    else if (!base.quote || !quoteFromCaller(base.quote, lines)) dropReason = "quote isn't something the caller said";
+    else if (!said) dropReason = "quote isn't something the caller said";
     else if (!base.feeling) dropReason = "no feeling named";
     else if (confidence < opts.minConfidence) dropReason = `confidence ${confidence} below ${opts.minConfidence}`;
     return { ...base, kept: !dropReason, dropReason };
   });
   const keep = checked.filter((f) => f.kept).sort((a, b) => b.confidence - a.confidence);
-  for (const f of keep.slice(opts.maxKept)) {
+  const seen = new Set<string>();
+  for (const f of keep) {
+    const k = words(f.quote).join(" ");
+    if (seen.has(k)) {
+      f.kept = false;
+      f.dropReason = "same words as a surer flag";
+    }
+    seen.add(k);
+  }
+  for (const f of keep.filter((x) => x.kept).slice(opts.maxKept)) {
     f.kept = false;
     f.dropReason = `beyond the ${opts.maxKept} surest`;
   }
@@ -162,11 +199,12 @@ async function fetchCallAudio(conversationId: string): Promise<{ bytes: Buffer; 
   for (let i = 0; i < VOICE_FLAG.audioTries; i++) {
     const r = await fetch(`https://api.elevenlabs.io/v1/convai/conversations/${encodeURIComponent(conversationId)}/audio`, {
       headers: { "xi-api-key": process.env.ELEVENLABS_API_KEY ?? "" },
+      signal: AbortSignal.timeout(VOICE_FLAG.audioTimeoutMs),
     });
     if (r.ok) return { bytes: Buffer.from(await r.arrayBuffer()), mime: r.headers.get("content-type")?.split(";")[0] || "audio/mpeg" };
     // The recording can lag the post-call webhook; anything else is final.
     if (r.status !== 404 && r.status !== 425 && r.status < 500) throw new Error(`audio ${r.status}`);
-    await new Promise((res) => setTimeout(res, VOICE_FLAG.audioWaitMs));
+    if (i < VOICE_FLAG.audioTries - 1) await new Promise((res) => setTimeout(res, VOICE_FLAG.audioWaitMs));
   }
   return null;
 }
@@ -185,6 +223,7 @@ export async function listenForFlags(audio: { bytes: Buffer; mime: string }, tra
   if (!r.ok) throw new Error(`gemini ${r.status}: ${(await r.text()).slice(0, 200)}`);
   const j: any = await r.json();
   const text = j?.candidates?.[0]?.content?.parts?.map((p: any) => p.text ?? "").join("") ?? "";
+  if (!text.trim()) throw new Error(`gemini gave no answer (finish: ${j?.candidates?.[0]?.finishReason ?? "none"}, block: ${j?.promptFeedback?.blockReason ?? "none"})`);
   return JSON.parse(text);
 }
 
@@ -195,13 +234,17 @@ export async function flagVoiceMoments(o: { userId: string; phone: unknown; conv
   const lines = callerLines(o.turns);
   if (!lines.length) return;
   const claimed = await pool.query(
-    `INSERT INTO voice_flag_runs (conversation_id, user_id, status, model) VALUES ($1, $2, 'running', $3) ON CONFLICT (conversation_id) DO NOTHING RETURNING conversation_id`,
-    [o.conversationId, o.userId, VOICE_FLAG.model],
+    `INSERT INTO voice_flag_runs (conversation_id, user_id, status, model) VALUES ($1, $2, 'running', $3)
+     ON CONFLICT (conversation_id) DO UPDATE SET status = 'running', created_at = NOW(), error = 'retried after an abandoned run'
+       WHERE voice_flag_runs.status = 'running' AND voice_flag_runs.created_at < NOW() - ($4 || ' minutes')::interval
+     RETURNING conversation_id`,
+    [o.conversationId, o.userId, VOICE_FLAG.model, VOICE_FLAG.staleRunMinutes],
   );
   if (!claimed.rows.length) return;
   const started = Date.now();
+  let raw: unknown = null;
   const finish = (status: string, extra: { audioBytes?: number; flags?: number; kept?: number; error?: string } = {}) =>
-    pool.query(`UPDATE voice_flag_runs SET status = $2, audio_bytes = $3, flags = $4, kept = $5, error = $6, ms = $7, finished_at = NOW() WHERE conversation_id = $1`, [
+    pool.query(`UPDATE voice_flag_runs SET status = $2, audio_bytes = $3, flags = $4, kept = $5, error = $6, ms = $7, raw = $8::jsonb, finished_at = NOW() WHERE conversation_id = $1`, [
       o.conversationId,
       status,
       extra.audioBytes ?? null,
@@ -209,12 +252,14 @@ export async function flagVoiceMoments(o: { userId: string; phone: unknown; conv
       extra.kept ?? null,
       extra.error?.slice(0, 300) ?? null,
       Date.now() - started,
+      raw === null ? null : JSON.stringify(raw),
     ]);
   try {
     const audio = await fetchCallAudio(o.conversationId);
     if (!audio) return void (await finish("no_audio"));
     if (audio.bytes.length > VOICE_FLAG.maxAudioBytes) return void (await finish("too_long", { audioBytes: audio.bytes.length }));
-    const flags = checkFlags(await listenForFlags(audio, transcriptForListening(o.turns)), lines);
+    raw = await listenForFlags(audio, transcriptForListening(o.turns));
+    const flags = checkFlags(raw, lines);
     if (flags.length) {
       await pool.query(
         `INSERT INTO voice_flags (conversation_id, user_id, at_secs, quote, cue, feeling, valence, reading, confidence, kept, drop_reason)
@@ -229,6 +274,7 @@ export async function flagVoiceMoments(o: { userId: string; phone: unknown; conv
     }
     await finish("done", { audioBytes: audio.bytes.length, flags: flags.length, kept: flags.filter((f) => f.kept).length });
   } catch (err: any) {
+    // Gemini's answer (if it came) is kept on the run, so a failed insert loses nothing.
     await finish("failed", { error: String(err?.message ?? err) }).catch(() => {});
     console.error("voice flags failed (non-fatal):", err?.message ?? err);
   }
