@@ -1,4 +1,5 @@
 import { anthropic } from "@ai-sdk/anthropic";
+import { cueAudit } from "../services/voiceCues.js";
 import { recordSafetyConcern, soundsLikeCrisis } from "../services/safety.js";
 import { generateText } from "ai";
 import { propagateAttributes } from "@langfuse/tracing";
@@ -524,6 +525,11 @@ router.post("/el/post-call", async (req: Request, res: Response, next: NextFunct
     // Moments where their voice said more than their words, beside the text
     // read (services/voiceFlags.ts). Test members only for now; never fails the call.
     if (u[0]) flagVoiceMoments({ userId, phone: u[0].phone_number, conversationId, turns }).catch(() => {});
+    // Co's voice cues can't be filtered mid-call (ElevenLabs speaks its model's
+    // reply directly), so every call is audited: a cue outside the allowed set,
+    // or two in one reply, shows up in the review (services/voiceCues.ts).
+    const cueUse = cueAudit(turns.filter((t: any) => t?.role !== "user").map((t: any) => String(t?.message ?? "")));
+    if (cueUse.cued) recordDecision({ layer: 8, decision: "call.cues", userId, outcome: cueUse.outside.length || cueUse.overOne ? "skip" : "act", action: cueUse.outside.length || cueUse.overOne ? "cue_rules_broken" : "cues_ok", proposal: { conversationId, ...cueUse } }).catch(() => {});
     return res.status(ended.status).send(ended.body);
   } catch (err) {
     next(err);

@@ -10,6 +10,7 @@
 //
 // Hume is gone (Royce, 2026-10-03: "remove Hume, no reason to use it if
 // it's going to be deprecated"); every call runs here.
+import { CUE_GUIDE, stripCues } from "./voiceCues.js";
 import { createHmac, timingSafeEqual } from "crypto";
 import { ElevenLabsClient } from "@elevenlabs/elevenlabs-js";
 import pool from "../db/db.js";
@@ -88,8 +89,11 @@ export type ElevenLabsTurn = { role?: string; message?: string | null; time_in_c
 
 // Pure: the transcript in the shape the rest of Co reads ("user: ..." /
 // "assistant: ..." lines, as Hume's was), turns with no words left out.
+// Co's voice cues ("[softly]") are for its voice only: stripped from its lines
+// here, so no transcript Co stores or reads carries them (services/voiceCues.ts).
 export function transcriptFromTurns(turns: ElevenLabsTurn[] | null | undefined): string {
   return (turns ?? [])
+    .map((t) => (t.role === "user" || typeof t.message !== "string" ? t : { ...t, message: stripCues(t.message) }))
     .filter((t) => typeof t.message === "string" && t.message.trim())
     .map((t) => `${t.role === "user" ? "user" : "assistant"}: ${t.message!.trim()}`)
     .join("\n");
@@ -144,8 +148,16 @@ export async function verifyPostCallWebhook(rawBody: string, signature: string |
 // only the fallback; registration overrides it per call.
 export const OPENING_LINE = "Hey {{first_name}}, it's Co.";
 export const OPENING_NOTE = "You've already opened the call with a short greeting in your own voice. Don't greet them again; go straight to your first real question.";
+// The cue guide goes in the call prompt's own "how you sound" section (where
+// "everything you write is spoken aloud" now carries its one exception), not
+// trailing at the end (review of #62). Texts never get it.
+export const SPOKEN_ALOUD = "Everything you write is spoken aloud.";
 export function promptForElevenLabs(prompt: string): string {
-  return `${prompt.replace(/\bhang_up\b/g, "end_call")}\n\n${OPENING_NOTE}`;
+  const base = prompt.replace(/\bhang_up\b/g, "end_call");
+  const withCues = base.includes(SPOKEN_ALOUD)
+    ? base.replace(new RegExp(`${SPOKEN_ALOUD.replace(/[.]/g, "\\.")} ?`), `Everything you write is spoken aloud, except a cue in square brackets (below).\n${CUE_GUIDE}\n\n`)
+    : `${base}\n\n${CUE_GUIDE}`;
+  return `${withCues}\n\n${OPENING_NOTE}`;
 }
 
 // The coverage check reads the newest part of the call (~6k tokens is plenty
