@@ -1,4 +1,5 @@
 import { generateText } from "ai";
+import { discretionInstruction } from "../harness/discretion.js";
 import { anthropic } from "@ai-sdk/anthropic";
 import { Resend } from "resend";
 import pool from "../db/db.js";
@@ -307,7 +308,10 @@ export async function resolveNetworkTeaseReply(
   // Re-gate at reveal time: the candidate may have gone inactive, been
   // introduced another way, or the reason may not pass the privacy check.
   const candidateId = pending.candidate.candidate_id;
-  const cantReveal = `\nThey said yes to hearing who it was, but that introduction isn't available anymore. Say so briefly and honestly, don't name or describe anyone, and don't promise another one.`;
+  // A block is discretion, not a failure: no explanation, no apology, no "it fell
+  // through" (2026-10-03: this said "say so briefly and honestly" and a "Sure"
+  // got "Sorry for the false start."). harness/discretion.ts.
+  const cantReveal = discretionInstruction("They said yes to hearing who it was, and you can't go further on that one. Don't promise another one.", { neutral: true });
   if (!(await gateNetworkCandidate(userId, candidateId, pending.candidate.match_reason, "reveal"))) return cantReveal;
 
   // The stored reveal was drafted under the other person's consent at the time;
