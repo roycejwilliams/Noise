@@ -2004,6 +2004,8 @@ export async function runMigrations(): Promise<void> {
     // Deadlines and waking on their reply (2026-09-30).
     // Follow-ups handed to Co (2026-09-30): a follow-up task holds the check-in it may send.
     .then(() => pool.query(`ALTER TABLE co_tasks ADD COLUMN IF NOT EXISTS kind TEXT NOT NULL DEFAULT 'work', ADD COLUMN IF NOT EXISTS followup JSONB, ADD COLUMN IF NOT EXISTS target_key TEXT`))
+    // Where a task came from (2026-10-04): 'promise' for one Co opened to keep a promise it made in a reply (services/promises.ts).
+    .then(() => pool.query(`ALTER TABLE co_tasks ADD COLUMN IF NOT EXISTS source TEXT NOT NULL DEFAULT 'ask'`))
     .then(() => pool.query(`ALTER TABLE co_tasks ADD COLUMN IF NOT EXISTS deadline DATE, ADD COLUMN IF NOT EXISTS final_check_at TIMESTAMPTZ, ADD COLUMN IF NOT EXISTS final_told BOOLEAN NOT NULL DEFAULT false, ADD COLUMN IF NOT EXISTS awaiting_reply BOOLEAN NOT NULL DEFAULT false, ADD COLUMN IF NOT EXISTS their_reply_at TIMESTAMPTZ`))
     .catch((err: Error) => console.error("co_tasks table init failed:", err));
   // Open loops (Royce, 2026-10-01: "Open loops are first-class state. Every
