@@ -151,7 +151,8 @@ check("the reply is told not to push after a pass", /no pressure/.test(reactionF
 // The pause after unanswered texts: a day after one, three days after two in a
 // row (2026-09-21: one quiet text must not silence events for 72 hours).
 check("one unanswered text pauses for 24 hours", unansweredPauseFor(1) === 24 && RULES.unansweredPauseHours === 24);
-check("two unanswered texts in a row pause for 72 hours", unansweredPauseFor(2) === 72 && unansweredPauseFor(5) === 72);
+check("two unanswered texts in a row pause for 72 hours", unansweredPauseFor(2) === 72);
+check("three pause a week, four or more two weeks (brand fix 3)", unansweredPauseFor(3) === 168 && unansweredPauseFor(4) === 336 && unansweredPauseFor(9) === 336);
 {
   const now = new Date("2026-09-21T16:00:00Z");
   const hoursAgo = (h: number) => new Date(now.getTime() - h * 3600000);
