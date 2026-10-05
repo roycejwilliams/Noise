@@ -10,7 +10,7 @@ process.env.SENDBLUE_API_API_SECRET ||= "unused-in-tests";
 const { VARIETY_GUIDE, stockLine, repeatedOpeners, stockReport, coLinesOf } = await import("../../src/harness/stockLines.js");
 const { assembleCallSummary, CALL_CONTEXT_MAX, CALL_SENT_MAX } = await import("../../src/services/callContext.js");
 const { OPENING_WRITER, openingProblems, openingPrompt, prebuildOpening, takeOpening } = await import("../../src/services/callOpening.js");
-const { AGENT_DEFAULTS, OPENING_NOTE, buildAgentConfig, prebuildCallContext, promptForElevenLabs, withoutExampleOpeners } = await import("../../src/services/elevenLabsCalls.js");
+const { guardrailsLast, AGENT_DEFAULTS, OPENING_NOTE, buildAgentConfig, prebuildCallContext, promptForElevenLabs, withoutExampleOpeners } = await import("../../src/services/elevenLabsCalls.js");
 
 let total = 0;
 let failed = 0;
@@ -157,6 +157,23 @@ check("the call prompt's first-call pointer is not left dangling", !promptForEle
 check("the prompt no longer says temperature 0.7", !/Set to 0\.7/.test(read("prompts/co-system-prompt.md")));
 
 check("no stock line survives anywhere in the built call prompt", stockLine(promptForElevenLabs(read("prompts/co-system-prompt.md"))) === null && !promptForElevenLabs(read("prompts/co-system-prompt.md")).split("\n").some((l) => stockLine(l) !== null));
+
+
+// ---- platform review fixes (2026-10-04)
+{
+  const cfg: any = buildAgentConfig({ name: "t", prompt: read("prompts/co-system-prompt.md"), voiceId: "v", apiUrl: "https://x.test" });
+  const built: string = cfg.conversation_config.agent.prompt.prompt;
+  check("ElevenLabs reads numbers and dates as words", cfg.conversation_config.tts.text_normalisation_type === "elevenlabs");
+  check("the opening can't be cut off by a hello", cfg.conversation_config.agent.disable_first_message_interruptions === true);
+  check("the backup model is the same family, pinned", cfg.conversation_config.agent.prompt.backup_llm_config.preference === "override" && cfg.conversation_config.agent.prompt.backup_llm_config.order[0] === AGENT_DEFAULTS.backupLlm && /^claude-sonnet/.test(AGENT_DEFAULTS.backupLlm));
+  check("the suggested audio tags are the allowed cues", cfg.conversation_config.tts.suggested_audio_tags.map((x: any) => x.tag).join() === "warmly,softly,thoughtful,laughs");
+  check("safety and the never list sit under a Guardrails heading near the end", built.includes("# Guardrails") && built.indexOf("# Guardrails") > built.indexOf("THE FOUR PHASES") && built.indexOf("# Guardrails") < built.indexOf("Discretion: you never speak for another member") && built.indexOf("Are you safe right now?") > built.indexOf("# Guardrails") && built.indexOf("Never apologizes for being AI") > built.indexOf("# Guardrails"));
+  check("they are moved, not copied", built.split("Are you safe right now?").length === 2 && built.split("Never apologizes for being AI").length === 2);
+  check("the call prompt gives no timed silence lines", !/past \d seconds|Still there\?/.test(built));
+  check("no leftover temperature section", !/TEMPERATURE|Set to 0\./.test(built));
+  check("the safety script no longer scripts a stock line", !/glad they told you/.test(built));
+  check("a prompt without the sections is left alone", guardrailsLast("hello").guardrails === "");
+}
 
 console.log(`call opening rules: ${total - failed}/${total} passed`);
 if (failed) process.exitCode = 1;

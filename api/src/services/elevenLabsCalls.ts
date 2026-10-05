@@ -17,7 +17,7 @@
 // it's going to be deprecated"); every call runs here.
 import { DISCRETION_GUIDE } from "../harness/discretion.js";
 import { VARIETY_GUIDE } from "../harness/stockLines.js";
-import { CUE_GUIDE, stripCues } from "./voiceCues.js";
+import { CUE_GUIDE, VOICE_CUES, stripCues } from "./voiceCues.js";
 import { createHmac, timingSafeEqual } from "crypto";
 import { ElevenLabsClient } from "@elevenlabs/elevenlabs-js";
 import pool from "../db/db.js";
@@ -170,8 +170,22 @@ export const SPOKEN_ALOUD = "Everything you write is spoken aloud.";
 export function withoutExampleOpeners(prompt: string): string {
   return prompt.replace(/Some ways this might sound:\n(?:"[^\n]*"\n)+Use your own words if none of these feel right in the moment[^\n]*\n/, "");
 }
+// ElevenLabs' models give a "# Guardrails" heading extra weight, so the safety
+// section and the never-do list move to the end of the call copy under it, with
+// the discretion lines, and the first of them is said once more as the last rule.
+// The text path reads the same file untouched.
+const SAFETY_RE = /─── IF THEY MAY NOT BE SAFE ─+\n([\s\S]*?)(?=\n─── )/;
+const NEVER_RE = /─── WHAT CO NEVER DOES ─+\n([\s\S]*?)(?=\n─── )/;
+export function guardrailsLast(prompt: string): { rest: string; guardrails: string } {
+  const safety = prompt.match(SAFETY_RE)?.[1]?.trim();
+  const never = prompt.match(NEVER_RE)?.[1]?.trim();
+  if (!safety || !never) return { rest: prompt, guardrails: "" };
+  const rest = prompt.replace(SAFETY_RE, "").replace(NEVER_RE, "");
+  return { rest, guardrails: `# Guardrails\nIf they may not be safe:\n${safety}\n\nNever:\n${never}\n\nSafety comes before everything else on the call. This is important.` };
+}
 export function promptForElevenLabs(prompt: string): string {
-  const base = withoutExampleOpeners(prompt)
+  const split = guardrailsLast(withoutExampleOpeners(prompt));
+  const base = split.rest
     .replace("open as below instead.", "your first question is about what they're working on or what brought them to Co, in fresh words each time.")
     .replace(/\bhang_up\b/g, "end_call");
   const withCues = base.includes(SPOKEN_ALOUD)
@@ -179,7 +193,7 @@ export function promptForElevenLabs(prompt: string): string {
     : `${base}\n\n${CUE_GUIDE}`;
   // How Co keeps a confidence on a call (harness/discretion.ts): speech can't be
   // edited, so the model has to choose a discreet line itself.
-  return `${withCues}\n\n${DISCRETION_GUIDE}\n\n${VARIETY_GUIDE}\n\n${OPENING_NOTE}`;
+  return `${withCues}\n\n${VARIETY_GUIDE}\n\n${split.guardrails ? `${split.guardrails}\n\n` : ""}${DISCRETION_GUIDE}\n\n${OPENING_NOTE}`;
 }
 
 // The coverage check reads the newest part of the call (~6k tokens is plenty
@@ -190,6 +204,7 @@ export const VOICEMAIL_MESSAGE = "Hey {{first_name}}, it's Co. Sorry I missed yo
 
 export const AGENT_DEFAULTS = {
   llm: "claude-sonnet-4-6",
+  backupLlm: "claude-sonnet-4-5",
   // Hume ran Co at temperature 1. The agent was left at ElevenLabs' default of 0,
   // where the model repeats the prompt's own example lines almost word for word
   // (2026-10-04: "sounds scripted"). 0.8 keeps it varied; the rules the prompt
@@ -254,6 +269,10 @@ export function buildAgentConfig(o: {
         model_id: o.ttsModel ?? AGENT_DEFAULTS.ttsModel,
         voice_id: o.voiceId,
         agent_output_audio_format: "ulaw_8000",
+        // The model writes plain text; ElevenLabs reads numbers and dates as words ("Oct 10" as "October tenth").
+        // Our tools take only dynamic variables, so no spoken value ever reaches one.
+        text_normalisation_type: "elevenlabs",
+        suggested_audio_tags: VOICE_CUES.map((tag) => ({ tag })),
       },
       turn: {
         turn_eagerness: o.turnEagerness ?? AGENT_DEFAULTS.turnEagerness,
@@ -262,6 +281,8 @@ export function buildAgentConfig(o: {
       conversation: { max_duration_seconds: AGENT_DEFAULTS.maxDurationSecs },
       agent: {
         first_message: OPENING_LINE,
+        // The opening is a whole personal line; "hello?" from whoever picks up must not cut it off.
+        disable_first_message_interruptions: true,
         language: "en",
         max_conversation_duration_message: "I need to wrap up for now. This was really good, I'll be in touch soon.",
         dynamic_variables: { dynamic_variable_placeholders: { first_name: "there", context_summary: "", user_id: "", call_token: "", direction: "" } },
@@ -269,6 +290,8 @@ export function buildAgentConfig(o: {
           prompt: promptForElevenLabs(o.prompt),
           llm: o.llm ?? AGENT_DEFAULTS.llm,
           temperature: o.temperature ?? AGENT_DEFAULTS.temperature,
+          // If the main model is slow to start (4s), ElevenLabs falls to another; pin it to the same family so the voice and style don't shift mid-call.
+          backup_llm_config: { preference: "override", order: [AGENT_DEFAULTS.backupLlm] },
           tools: [
             tool(
               "assess_conversation_coverage",
