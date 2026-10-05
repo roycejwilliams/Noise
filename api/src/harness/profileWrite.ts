@@ -23,6 +23,7 @@
 // for this turn. Don't also call captureIntent separately for the same text.
 import type { GateCheck } from "./core.js";
 import { MODELS } from "../models.js";
+import { coAskedQuestion } from "../services/conversationClose.js";
 
 // Local copy so this file (and its eval) doesn't pull in a DB-backed module.
 export function cosineSimilarity(a: number[], b: number[]): number {
@@ -426,12 +427,54 @@ const ECHO_STOPWORDS = new Set(["with", "that", "this", "what", "your", "have", 
 function itemWords(s: string): string[] {
   return [...new Set((s.toLowerCase().match(/[a-z]{4,}/g) ?? []).filter((w) => !ECHO_STOPWORDS.has(w)))];
 }
+// A plain yes to what Co just asked or offered. Code review, 2026-09-24: "Want
+// me to look for founder communities in SF?" / "Yes please" was dropped as
+// Co's echo, so an ask they agreed to was never saved or searched.
+const AGREES = /^\s*(user said:|user:|user sent a voice memo:)\s*(yes|yeah|yep|yup|sure|please|definitely|absolutely|for sure|of course|that would be|that'?d be|sounds (good|great)|i'?d (like|love) that|let'?s do (it|that))\b/i;
+// A yes that's taken back isn't one (second review, 2026-09-24): "of course
+// not", "yes, I mean no, forget that". "No worries" / "no problem" are
+// still agreement.
+// Only an explicit taking-back: "sure, why not" and "I don't mind" are still yes; "of course not", "yes, I mean no" aren't.
+const TAKES_IT_BACK = /\b(of course not|absolutely not|definitely not|certainly not|not really|not right now|not this|not now|but not|nah|nope|never mind|nevermind|no wait|wait,? no|no thanks|no thank you)\b|\bno(?!\s+(worries|problem|rush|pressure|need))\b(?!\s*(,|\.|!)?\s*(i mean|just kidding))|forget (it|that)|changed my mind|i mean no/i;
+export function agreesWith(line: string): boolean {
+  return AGREES.test(line) && !TAKES_IT_BACK.test(line.replace(/^\s*(user said:|user:|user sent a voice memo:)/i, ""));
+}
+// The one thing a yes answers: Co's last question or offer, not the whole
+// message (second review, 2026-09-24: a yes to "How was your weekend?"
+// claimed the plan Co had stated two lines earlier).
+export function lastAskedSentence(coMessage: string): string | null {
+  const body = coMessage.replace(/^\s*(co replied:|assistant:|co:)\s*/i, "");
+  const sentences = body.match(/[^.!?\n]+[.!?]*/g) ?? [];
+  // Only an offer or an ask of theirs, not a check-in question ("did it go well?"): a yes to that is not a want.
+  for (let i = sentences.length - 1; i >= 0; i--) if (coAskedQuestion(sentences[i]) && OFFER.test(sentences[i])) return sentences[i].trim();
+  return null;
+}
+const OFFER = /\b(want me to|should i|shall i|would you like|do you want|can i|could i|if you want|let me|i can|i could|i'?ll|how about|interested in|keen to)\b/i;
 export function splitSpeakers(transcript: string): { theirs: string; cos: string } {
   const theirs: string[] = [];
   const cos: string[] = [];
+  let lastCo: string | null = null;
   for (const line of transcript.split("\n")) {
-    if (/^\s*(co replied:|assistant:|co:)/i.test(line)) cos.push(line);
-    else if (/^\s*(user said:|user:)/i.test(line)) theirs.push(line);
+    if (/^\s*(co replied:|assistant:|co:)/i.test(line)) {
+      cos.push(line);
+      // Co's reply is several texts, one 'Co replied:' line each (a link last, often): with no member line
+      // between them they are one message, and the offer it ends on is what a yes answers.
+      lastCo = lastCo ? `${lastCo} ${line.replace(/^\s*(co replied:|assistant:|co:)\s*/i, "")}` : line;
+    } else if (/^\s*(user said:|user:|user sent a voice memo:)/i.test(line)) {
+      theirs.push(line);
+      // The question or offer they said yes to is theirs too; only that one.
+      const asked = lastCo ? lastAskedSentence(lastCo) : null;
+      if (asked && agreesWith(line)) theirs.push(asked);
+      lastCo = null;
+    } else if (/^\s*(user (said|sent)\b|co (replied|called)\b|\[)/i.test(line)) {
+      // Any other labeled line ("User sent a photo...", "Co called...",
+      // "[Call] ...", a gap marker) ends Co's message.
+      lastCo = null;
+    } else if (lastCo && line.trim()) {
+      // A text's later paragraphs are part of the same Co message.
+      cos.push(line);
+      lastCo += ` ${line}`;
+    }
   }
   return { theirs: theirs.join(" ").toLowerCase(), cos: cos.join(" ").toLowerCase() };
 }

@@ -78,11 +78,23 @@ export function paragraphize(text: string): string {
 // calls working). Drops the repeated question sentence; keeps the text as is
 // if that would leave almost nothing.
 export function dropRepeatedQuestion(draft: string, recentConversation: string): string {
-  const coLines = recentConversation
-    .split("\n")
-    .filter((l) => /^\s*co replied:/i.test(l))
-    .slice(-2)
-    .map((l) => l.replace(/^\s*co replied:\s*/i, ""));
+  // A text's later paragraphs belong to the same Co message (code review,
+  // 2026-09-24: reading only the first line missed questions in the last
+  // paragraph, which is where Co usually asks them).
+  const coMessages: string[] = [];
+  let inCo = false;
+  for (const l of recentConversation.split("\n")) {
+    if (/^\s*co replied:/i.test(l)) {
+      const text = l.replace(/^\s*co replied:\s*/i, "");
+      // Co's reply is several texts, one line each: with no member line between them they are one message,
+      // so "the last two messages" is two turns, not two beats.
+      if (inCo && coMessages.length) coMessages[coMessages.length - 1] += `\n${text}`;
+      else coMessages.push(text);
+      inCo = true;
+    } else if (/^\s*(user (said|sent)\b|co (replied|called)\b|user:|assistant:|\[)/i.test(l)) inCo = false;
+    else if (inCo) coMessages[coMessages.length - 1] += `\n${l}`;
+  }
+  const coLines = coMessages.slice(-2);
   const words = (s: string) => new Set((s.toLowerCase().match(/[a-z']{4,}/g) ?? []).filter((w) => !REPEAT_STOPWORDS.has(w)));
   const asked = coLines.flatMap((l) => l.match(/[^.!?\n]+\?/g) ?? []).map(words).filter((w) => w.size >= 3);
   if (!asked.length) return draft;
@@ -92,7 +104,10 @@ export function dropRepeatedQuestion(draft: string, recentConversation: string):
     return asked.some((a) => {
       let shared = 0;
       for (const x of w) if (a.has(x)) shared++;
-      return shared / Math.min(w.size, a.size) >= 0.6;
+      // Share of THIS question already asked: a new question that only
+      // contains an earlier short one ("How's the permit going, and did the
+      // venue get back about Saturday?") isn't a repeat.
+      return shared / w.size >= 0.6;
     });
   };
   const kept = draft.replace(/[^.!?\n]*\?/g, (q) => (repeats(q) ? "" : q)).replace(/[ \t]+\n/g, "\n").replace(/\n{3,}/g, "\n\n").trim();

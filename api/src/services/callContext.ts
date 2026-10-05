@@ -9,7 +9,6 @@ import { MODELS } from "../models.js";
 import { getEmotionalContext, renderEmotionalContext } from "../harness/emotion.js";
 import { getPersonSnapshot, renderSnapshot } from "../harness/personSnapshot.js";
 import { latestAskEntry } from "../harness/profileWrite.js";
-import { neutralPronouns } from "../mo/rules.js";
 
 // A 1-2 sentence call summary: narrow work, Haiku.
 const SUMMARY_MODEL = MODELS.haiku;
@@ -285,7 +284,7 @@ export async function buildCallContextSummary(userId: string): Promise<string> {
 // the member named (Lythe.ai, Sangria) and read a voice score as "may have
 // wanted to continue" when their last words were "we can close out good".
 export function callSummaryPrompt(transcript: string): string {
-  return `Summarize what was actually discussed in this phone call transcript, in 2-3 plain sentences, third person, as if briefing someone on what just happened. Ground it only in what's actually in the transcript — no invented detail, no therapy-speak. Refer to them by name or as "they", never "he" or "she" unless they said their pronouns in the call (2026-09-22: summaries were calling a member "he" from their name alone).
+  return `Summarize what was actually discussed in this phone call transcript, in 2-3 plain sentences, third person, as if briefing someone on what just happened. Ground it only in what's actually in the transcript — no invented detail, no therapy-speak. Write the person on the call as {M} every time, never a pronoun for them (no he, she, they, his, her, their): "{M} is building...", "{M}'s cofounder". We fill in their name. Refer to anyone else by that person's own name (2026-09-22: summaries were calling a member "he" from their name alone).
 
 Lead with the concrete facts they gave: the names of companies, people, places, dates, and plans, spelled as they said them. Speech-to-text often spells names out letter by letter ("l y t h e dot a i" is lythe.ai); write the name, not the letters. Keep every named company and person they mentioned.
 
@@ -294,6 +293,97 @@ How the call ended comes only from what they said at the end, never from a voice
 Transcript:
 "${transcript}"
 Return ONLY the summary, no preamble.`;
+}
+
+// "They" for the member only, never for anyone else (code review,
+// 2026-09-24, twice). Blanket neutralizing turned "Royce talked about Maya.
+// She is leaving the company." into "They are leaving", pinning Maya's news
+// on the member; a first fix guessed people from capital letters and
+// keywords and got it wrong the other way. Now it follows who the summary is
+// talking about, in order: the member (by name, and at the start), another
+// named person, or a singular relation ("his cofounder", "her mom"). A
+// gendered pronoun is rewritten only when the last person mentioned before
+// it is the member; when unsure it's left alone, because a stray "he" about
+// the member is a smaller harm than someone else's news said about them.
+const NOT_A_NAME = new Set(
+  "co hume i the a an they their them he she his her it its this that these those we you our and but so then also overall monday tuesday wednesday thursday friday saturday sunday january february march april may june july august september october november december".split(" "),
+);
+const RELATION_ONE = /^(co-?founder|partner|wife|husband|girlfriend|boyfriend|fianc[eé]e?|mom|mother|dad|father|sister|brother|friend|boss|manager|colleague|coworker|son|daughter|roommate|investor|ceo|cto|founder|mentor|client|cousin|aunt|uncle)$/i;
+// "her" before one of these is the object ("give her a call", "told her about it"), not "their".
+const OBJECT_NEXT = /^\s+(a|an|the|to|for|in|on|at|about|up|out|back|some|any|one|this|that|it|with|from|into|over|and|or|but|so|if|when|how|what|why)\b/i;
+// Common verbs a he/she took an -s on: "he loves it" becomes "they love it", not "they loves it".
+const S_VERBS = "loves|likes|wants|needs|thinks|says|works|runs|plans|hopes|feels|sounds|starts|knows|believes|mentioned|builds|leads|helps|asks|tells|seems|looks|lives|gets|takes|makes|goes|wishes|prefers|enjoys|expects|worries|runs|owns|hosts|joins";
+const SINGULAR_VERB = new RegExp(`\\b(they)\\s+(${S_VERBS})\\b`, "gi");
+const PRONOUN = /\b(he|she)\s+(is|was|has)\b|\b(he|she)'s\b|\b(himself|herself)\b|\b(his|hers)\b|\bher(?=\s+[a-z])|\b(him|her)\b|\b(he|she)\b/gi;
+function neutralOne(m: string): string {
+  const out = m
+    .replace(/^(he|she)\s+is$/i, "they are")
+    .replace(/^(he|she)\s+was$/i, "they were")
+    .replace(/^(he|she)\s+has$/i, "they have")
+    .replace(/^(he|she)'s$/i, "they're")
+    .replace(/^(himself|herself)$/i, "themself")
+    .replace(/^(his|hers)$/i, "their")
+    .replace(/^(him)$/i, "them")
+    .replace(/^(he|she)$/i, "they");
+  return m[0] === m[0].toUpperCase() ? out[0].toUpperCase() + out.slice(1) : out;
+}
+export function neutralMemberPronouns(text: string, memberFirstName: string | null): string {
+  const memberParts = (memberFirstName ?? "").split(/\s+/).filter(Boolean).map((n) => n.toLowerCase());
+  // Only a capitalised word names the member: "will" and "may" are verbs, not a member called Will or May.
+  const isMember = (w: string) => /^[A-Z]/.test(w) && memberParts.includes(w.toLowerCase().replace(/'s$/, ""));
+  // A capitalized word at the start of a sentence is only a person if it's
+  // also capitalized somewhere mid-sentence ("Mentioned his startup..." isn't).
+  const midSentenceCaps = new Set(
+    [...text.matchAll(/(?<![.!?]\s*|^\s*)\b([A-Z][A-Za-z'-]*[a-z])\b/g)].map((m) => m[1].toLowerCase().replace(/'s$/, "")),
+  );
+  type Ref = { at: number; member: boolean };
+  const refs: Ref[] = [];
+  for (const m of text.matchAll(/\b[A-Za-z][A-Za-z'.-]*[A-Za-z]\b/g)) {
+    const word = m[0];
+    const bare = word.toLowerCase().replace(/'s$/, "");
+    if (isMember(word)) refs.push({ at: m.index!, member: true });
+    else if (RELATION_ONE.test(bare)) refs.push({ at: m.index!, member: false });
+    else if (/^[A-Z]/.test(word) && !NOT_A_NAME.has(bare) && !/\./.test(word)) {
+      const before = text.slice(0, m.index!);
+      const atSentenceStart = /(^|[.!?]\s+)$/.test(before);
+      // "at Sangria", "in San Francisco", "from Austin": places and companies.
+      // Not "about/for/to/with", where people's names go.
+      const placeOrCompany = /\b(at|in|from|near|into)\s+(the\s+)?([A-Z][\w'&-]*\s+)*$/.test(before);
+      if ((!atSentenceStart || midSentenceCaps.has(bare)) && !placeOrCompany) refs.push({ at: m.index!, member: false });
+    }
+  }
+  const aboutMemberAt = (i: number) => {
+    let last: Ref | null = null;
+    for (const r of refs) if (r.at < i) last = r;
+    return last ? last.member : true; // a summary starts out about the member
+  };
+  return text.replace(PRONOUN, (m, ...args) => {
+    const at = args[args.length - 2] as number;
+    const full = args[args.length - 1] as string;
+    if (!aboutMemberAt(at)) return m;
+    if (/^her$/i.test(m)) {
+      const next = full.slice(at + 3);
+      const possessive = /^\s+[a-z]/.test(next) && !OBJECT_NEXT.test(next);
+      const word = possessive ? "their" : "them";
+      return m[0] === "H" ? word[0].toUpperCase() + word.slice(1) : word;
+    }
+    return neutralOne(m);
+  }).replace(SINGULAR_VERB, (_m, they, verb) => `${they} ${verb.replace(/ies$/i, "y").replace(/(ches|shes|sses|xes|oes)$/i, (x: string) => x.slice(0, -2)).replace(/s$/i, "")}`);
+}
+
+// The member is written as {M} (second review, 2026-09-24: the model used
+// "he" for the member despite being told not to, and no rule can reliably
+// tell whose "he" it is once someone else is mentioned). With {M} for the
+// member, a leftover he/she can only be someone else; the pronoun rule
+// above stays as a backup for a summary that slipped.
+export function fillMemberName(text: string, memberFirstName: string | null): string {
+  // With no name on file, "The member" keeps the grammar ("The member is building...", "The member's cofounder"),
+  // where a bare "They" gave "They is building".
+  const name = memberFirstName?.trim() || "The member";
+  const M = /\{\s*M\s*\}/gi;
+  // "{M}self" came back as "Royceself" in testing; that one is "themself".
+  const filled = text.replace(/\{\s*M\s*\}self\b/gi, "themself").replace(new RegExp(M.source + "('s)?", "gi"), (_m, poss) => (poss ? `${name}'s` : name));
+  return neutralMemberPronouns(filled, memberFirstName);
 }
 
 export async function summarizeCallForTextContext(userId: string, transcript: string): Promise<void> {
@@ -305,7 +395,11 @@ export async function summarizeCallForTextContext(userId: string, transcript: st
     });
     // The prompt already says "they"; the model still wrote "he" on all
     // three runs of a real call (2026-09-23), so it's enforced in code.
-    const summary = neutralPronouns(raw.trim());
+    const firstName = await pool
+      .query(`SELECT first_name FROM users WHERE id = $1`, [userId])
+      .then((r) => (r.rows[0]?.first_name as string | undefined) ?? null)
+      .catch(() => null);
+    const summary = fillMemberName(raw.trim(), firstName);
     if (!summary) return;
     await writeMemory(userId, "text_exchange", `[Call] ${summary}`);
   } catch (err: any) {

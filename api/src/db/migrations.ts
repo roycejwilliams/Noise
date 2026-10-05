@@ -103,6 +103,24 @@ export async function runMigrations(): Promise<void> {
     .then(() => pool.query(`ALTER TABLE event_presence ADD COLUMN IF NOT EXISTS pre_arrival_sent_at TIMESTAMPTZ, ADD COLUMN IF NOT EXISTS location_yes_at TIMESTAMPTZ, ADD COLUMN IF NOT EXISTS location_yes_quote TEXT, ADD COLUMN IF NOT EXISTS location_stopped_at TIMESTAMPTZ, ADD COLUMN IF NOT EXISTS not_going_at TIMESTAMPTZ, ADD COLUMN IF NOT EXISTS far_note_sent_at TIMESTAMPTZ, ADD COLUMN IF NOT EXISTS met_someone_at TIMESTAMPTZ, ADD COLUMN IF NOT EXISTS met_quote TEXT`))
     .catch((err: Error) => console.error("event_presence table init failed:", err));
 
+  // What came of each promise Co made on a call, tied to that call by a
+  // transcript fingerprint (services/callKey.ts), so the after-call text for
+  // that call is the one that reports it (2026-09-24).
+  await pool
+    .query(
+      `CREATE TABLE IF NOT EXISTS call_promise_results (
+        id BIGSERIAL PRIMARY KEY,
+        user_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+        call_key TEXT NOT NULL,
+        content TEXT NOT NULL,
+        created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+      )`,
+    )
+    .then(() => pool.query(`CREATE INDEX IF NOT EXISTS idx_call_promise_results_call ON call_promise_results (user_id, call_key)`))
+    // A redelivered end-of-call must not list the same result twice.
+    .then(() => pool.query(`CREATE UNIQUE INDEX IF NOT EXISTS uq_call_promise_results ON call_promise_results (user_id, call_key, md5(content))`))
+    .catch((err: Error) => console.error("call_promise_results table init failed:", err));
+
   // Test events and test locations for test members, co-test and local only
   // (services/testNumbers.ts). Never on production.
   await (async () => {
