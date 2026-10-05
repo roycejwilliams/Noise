@@ -29,13 +29,15 @@ export const HEAVY = {
   quietDaysAfterSend: 3,
   // Medium readings need company to count as more than an everyday complaint.
   mediumsNeeded: 2,
-  priority: 50,
+  // Below the safety follow-up (10) so it can never push that out.
+  priority: 5,
 };
 
 export type HeavySignal = Pick<EmotionSignal, "source" | "emotion" | "intensity" | "valence" | "about" | "quote" | "target" | "basis"> & { at: Date };
 
 export type HeavyEpisode = {
   key: string;
+  startedAt: Date;
   endedAt: Date;
   dueAt: Date;
   expiresAt: Date;
@@ -48,11 +50,12 @@ export type HeavyEpisode = {
 
 // Anything about hurting themselves is for the conversation, never an
 // automated text: no check-in is drafted from it.
-const SELF_HARM = /\b(?:suicid\w*|kill (?:my|him|her)self|end(?:ing)? (?:it all|my life)|hurt(?:ing)? myself|self[- ]?harm|disappear|better off without me|don'?t want to (?:be here|wake up|live))\b/i;
+const SELF_HARM = /\b(?:suicid\w*|kill(?:ing)? (?:my|him|her|them)self|end(?:ing)? (?:it all|my life)|take my own life|hurt(?:ing)? myself|cut(?:ting)? myself|overdos\w+|self[- ]?harm|disappear|better off without me|(?:want|wanted|wanna) (?:to )?die|(?:can'?t|cannot) go on|no (?:point|reason) (?:in )?(?:living|going on|being here)|don'?t want to (?:be here|wake up|live|exist))\b/i;
+export const plain = (t: string) => t.replace(/[’‘]/g, "'");
 
 // Frustration that is really about Co (its calls, search, replies) is not a hard
 // moment in their life, whatever the read's target says.
-const ABOUT_CO_TOO = /\bco\b|\bcalls?\b.*\b(?:connect|drop|fail|break|work)|not connecting|\bthe app\b|take (?:the )?lead|take ownership|plan out the event|\bsearch(?:es|ing)?\b|\bresults?\b|\b(?:your|its) (?:reply|replies|response|text|texts)\b|you (?:didn'?t|aren'?t|never|keep)/i;
+const ABOUT_CO_TOO = /\bco\b(?!-)|not connecting|\bcalls? (?:not|aren'?t|won'?t|keep|never|kept) (?:connect|work|go|drop|fail)|\bthe app\b|take (?:the )?lead|take ownership|plan out the event/i;
 
 // Pure: the episode worth one check-in, or null. `signals` are one member's,
 // any order; `now` and `timezone` decide the day it is due.
@@ -72,7 +75,9 @@ export function pickEpisode(signals: HeavySignal[], now: Date, timezone: string 
   const highs = episode.filter((s) => s.intensity === "high");
   const mediums = episode.filter((s) => s.intensity === "medium");
   if (!highs.length && mediums.length < HEAVY.mediumsNeeded) return null;
-  if (episode.some((s) => SELF_HARM.test(`${s.about ?? ""} ${s.quote ?? ""}`))) return null;
+  // Nothing specific to ask about: nothing to check on.
+  if (!episode.some((s) => (s.about ?? "").trim() || (s.quote ?? "").trim())) return null;
+  if (episode.some((s) => SELF_HARM.test(plain(`${s.about ?? ""} ${s.quote ?? ""}`)))) return null;
   const endedAt = episode[episode.length - 1].at;
   // They have since had a good moment: it already passed.
   if (life.some((s) => s.valence === "positive" && s.at > endedAt)) return null;
@@ -81,7 +86,9 @@ export function pickEpisode(signals: HeavySignal[], now: Date, timezone: string 
   const due = local.plus({ days: 1 }).set({ hour: HEAVY.dueHour, minute: 0, second: 0, millisecond: 0 });
   const lead = (highs.length ? highs : mediums).slice(-1)[0];
   return {
-    key: local.toFormat("yyyy-MM-dd"),
+    // The episode's first reading, so one that crosses midnight keeps one key.
+    key: DateTime.fromJSDate(episode[0].at).setZone(zone).toFormat("yyyy-MM-dd"),
+    startedAt: episode[0].at,
     endedAt,
     dueAt: due.toJSDate(),
     expiresAt: due.plus({ hours: HEAVY.expiresAfterHours }).toJSDate(),
@@ -100,13 +107,17 @@ export const HEAVY_KEY_PREFIX = "companion:heavy:";
 // sent or expired one is never queued again.
 export async function queueHeavyCheckins(now = new Date()): Promise<number> {
   const { rows } = await pool.query(
-    `SELECT u.id AS user_id, u.city
+    `SELECT u.id AS user_id, cp.city
      FROM users u
+     JOIN co_profiles cp ON cp.user_id = u.id
      WHERE u.sms_opted_out = false AND u.archived_at IS NULL AND u.identity_captured = true
+       -- A safety hold means a person, not a text, is the response.
+       AND (cp.safety_hold_until IS NULL OR cp.safety_hold_until <= NOW())
        AND EXISTS (SELECT 1 FROM emotion_signals e WHERE e.user_id = u.id AND e.valence = 'negative' AND e.created_at > $1)
        AND NOT EXISTS (SELECT 1 FROM proactive_sends ps WHERE ps.user_id = u.id AND ps.target_key LIKE $2 AND ps.sent_at > $3)
-       -- One waiting at a time: a hard stretch over several days is one episode's worth of care, not a text a day.
-       AND NOT EXISTS (SELECT 1 FROM proactive_candidates pc WHERE pc.user_id = u.id AND pc.target_key LIKE $2 AND pc.status = 'pending')
+       -- One per stretch: none queued (pending, sent, expired or dropped) in the last days, so a hard week is one text of care, not a text a day.
+       AND NOT EXISTS (SELECT 1 FROM proactive_candidates pc WHERE pc.user_id = u.id AND pc.target_key LIKE $2 AND pc.created_at > $3)
+     ORDER BY u.id
      LIMIT 100`,
     [new Date(now.getTime() - HEAVY.lookbackHours * 3_600_000), `${HEAVY_KEY_PREFIX}%`, new Date(now.getTime() - HEAVY.quietDaysAfterSend * 86_400_000)],
   );
@@ -119,20 +130,38 @@ export async function queueHeavyCheckins(now = new Date()): Promise<number> {
     );
     const tz = u.city ? await getTimezoneForCity(u.city).catch(() => null) : null;
     const ep = pickEpisode(sig.map((s: any) => ({ ...s, at: new Date(s.at) })), now, tz);
-    if (!ep) continue;
+    if (!ep || ep.expiresAt <= now) continue;
     const { queued: ok } = await enqueueCandidate({
       userId: u.user_id,
       type: "companion",
       targetKey: `${HEAVY_KEY_PREFIX}${ep.key}`,
       topicKey: "companion",
       summary: "One quiet check-in the day after something hard they shared (skip if it wouldn't read as natural)",
-      payload: { recap: "", heavy: { about: ep.about, quote: ep.quote, emotion: ep.emotion, when: ep.when } },
+      payload: { recap: "", heavy: { about: ep.about, quote: ep.quote, emotion: ep.emotion, when: ep.when, endedAt: ep.endedAt.toISOString() } },
       priority: HEAVY.priority,
       dueAt: ep.dueAt,
       expiresAt: ep.expiresAt,
     }).catch(() => ({ queued: false }));
-    await recordDecision({ layer: 7, decision: "proactive.heavyEpisode", userId: u.user_id, outcome: ok ? "act" : "skip", action: ep.key, proposal: { dueAt: ep.dueAt, emotion: ep.emotion } }).catch(() => {});
+    if (ok) await recordDecision({ layer: 7, decision: "proactive.heavyEpisode", userId: u.user_id, outcome: "act", action: ep.key, proposal: { dueAt: ep.dueAt, emotion: ep.emotion } }).catch(() => {});
     if (ok) queued++;
   }
   return queued;
+}
+
+// At send time, once more: still the right moment? Not if they have been
+// talking in the last hours (it would land on top of the conversation), or had
+// a good moment since. Pure on what it is given.
+export function heavyStillFits(o: { endedAt: Date; lastInboundAt: Date | null; positiveSince: boolean; now: Date }): { ok: true } | { ok: false; why: string } {
+  if (o.positiveSince) return { ok: false, why: "they have had a good moment since" };
+  if (o.lastInboundAt && o.now.getTime() - o.lastInboundAt.getTime() < 3 * 3_600_000 && o.lastInboundAt > o.endedAt) return { ok: false, why: "they were talking just now" };
+  return { ok: true };
+}
+
+export async function heavyFitsNow(userId: string, endedAt: Date, now = new Date()): Promise<{ ok: true } | { ok: false; why: string }> {
+  const { rows } = await pool.query(
+    `SELECT (SELECT MAX(created_at) FROM co_memories WHERE user_id = $1 AND memory_type = 'text_exchange' AND content LIKE 'User %') AS last_in,
+            EXISTS (SELECT 1 FROM emotion_signals WHERE user_id = $1 AND valence = 'positive' AND created_at > $2) AS positive`,
+    [userId, endedAt],
+  );
+  return heavyStillFits({ endedAt, lastInboundAt: rows[0]?.last_in ? new Date(rows[0].last_in) : null, positiveSince: Boolean(rows[0]?.positive), now });
 }

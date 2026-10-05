@@ -56,7 +56,7 @@ One exception: if the recap shows Co barely knows them yet (little beyond joinin
 // Something hard they shared yesterday (services/heavyMoment.ts): one quiet
 // check-in the next day. Described, not quoted, so it isn't parroted; the
 // reading of what they shared is theirs alone.
-export type CompanionHeavy = { about: string | null; quote: string | null; emotion: string; when: "yesterday" };
+export type CompanionHeavy = { about: string | null; quote: string | null; emotion: string; when: "yesterday"; endedAt?: string };
 
 async function draftFromHeavy(firstName: string, heavy: CompanionHeavy): Promise<{ text: string; rules: OutputRules } | null> {
   const text = await draftProactive({
@@ -64,7 +64,7 @@ async function draftFromHeavy(firstName: string, heavy: CompanionHeavy): Promise
     firstName,
     facts: {
       what_they_went_through: heavy.about,
-      their_own_words: heavy.quote?.slice(0, 300),
+      their_own_words_for_context_only_never_quote_them_back: heavy.quote?.slice(0, 300),
       when_they_told_you: heavy.when,
       how_it_sat_with_them: heavy.emotion,
     },

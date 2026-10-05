@@ -7,7 +7,7 @@ process.env.OPENAI_API_KEY ||= "unused-in-tests";
 process.env.ANTHROPIC_API_KEY ||= "unused-in-tests";
 process.env.SENDBLUE_API_API_KEY ||= "unused-in-tests";
 process.env.SENDBLUE_API_API_SECRET ||= "unused-in-tests";
-const { pickEpisode, HEAVY, HEAVY_KEY_PREFIX } = await import("../../src/services/heavyMoment.js");
+const { pickEpisode, heavyStillFits, HEAVY, HEAVY_KEY_PREFIX } = await import("../../src/services/heavyMoment.js");
 const { TYPE_POLICY, RULES } = await import("../../src/harness/proactive.js");
 
 let total = 0;
@@ -45,7 +45,32 @@ for (const w of ["I want to kill myself", "everyone is better off without me", "
 check("frustration about Co\'s calls is not their life", pickEpisode([sig({ about: "phone calls not connecting, wasted time", quote: "What\'s breaking?", emotion: "frustrated" })], night, TZ) === null);
 check("asking Co to take the lead is not a hard moment", pickEpisode([sig({ about: "needing someone to take ownership and execute", quote: "plan out the event and take lead" })], night, TZ) === null);
 check("a real one about money still counts", pickEpisode([sig({ about: "lack of funding and bootstrapping constraints", quote: "we\'re unfunded" })], night, TZ) !== null);
-check("only one heavy check-in waits at a time", /pc\.status = 'pending'/.test(read("src/services/heavyMoment.ts")));
+check("only one heavy check-in waits at a time", /pc\.target_key LIKE \$2 AND pc\.created_at > \$3/.test(read("src/services/heavyMoment.ts")));
+
+for (const w of ["my co-founder quit on me", "the biopsy results came back", "been job searching for six months with nothing", "got a call from the hospital while I was at work", "my cofounder said you never know"]) {
+  check(`a real hard moment is not mistaken for talk about Co: ${w}`, pickEpisode([sig({ about: w, quote: w })], night, TZ) !== null);
+}
+for (const w of ["I wanna die", "I don’t want to wake up", "I can’t go on", "no point living", "I keep cutting myself", "thinking about killing myself"]) {
+  check(`self-harm (wider, curly quotes): ${w}`, pickEpisode([sig({ quote: w })], night, TZ) === null);
+}
+check("with nothing specific there is nothing to check on", pickEpisode([sig({ about: null, quote: null })], night, TZ) === null);
+check("an episode that crosses midnight keeps one key", (() => {
+  const t = new Date("2026-10-07T08:30:00Z"); // 1:30am Pacific
+  const e1 = pickEpisode([sig({ at: new Date("2026-10-07T06:30:00Z") }), sig({ at: t })], t, TZ)!;
+  const e2 = pickEpisode([sig({ at: new Date("2026-10-07T06:30:00Z") })], t, TZ)!;
+  return e1.key === e2.key;
+})());
+check("it can never push out the safety follow-up", HEAVY.priority < 10);
+check("not when they were just talking", (() => {
+  const endedAt = hoursBefore(20);
+  const r = heavyStillFits({ endedAt, lastInboundAt: hoursBefore(1), positiveSince: false, now: night });
+  return !r.ok;
+})());
+check("not after a good moment since", !heavyStillFits({ endedAt: hoursBefore(20), lastInboundAt: null, positiveSince: true, now: night }).ok);
+check("fine when they have been quiet", heavyStillFits({ endedAt: hoursBefore(20), lastInboundAt: hoursBefore(19), positiveSince: false, now: night }).ok);
+check("the queue skips a member under a safety hold and reads city from co_profiles", /safety_hold_until/.test(read("src/services/heavyMoment.ts")) && /SELECT u\.id AS user_id, cp\.city/.test(read("src/services/heavyMoment.ts")) && /JOIN co_profiles cp ON cp\.user_id = u\.id/.test(read("src/services/heavyMoment.ts")));
+check("a dropped or expired heavy check-in leaves the regular check-in's date alone", /if \(c\.payload\.heavy\) return;/.test(read("src/harness/proactiveRegistry.ts")));
+check("the registry rechecks the moment before drafting", /heavyFitsNow/.test(read("src/harness/proactiveRegistry.ts")));
 
 // ---- when it is due
 const ep = pickEpisode([sig()], night, TZ)!;
