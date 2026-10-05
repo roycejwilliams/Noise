@@ -9,7 +9,7 @@ process.env.ANTHROPIC_API_KEY ||= "unused-in-tests";
 process.env.SENDBLUE_API_API_KEY ||= "unused-in-tests";
 process.env.SENDBLUE_API_API_SECRET ||= "unused-in-tests";
 const D = await import("../../src/harness/discretion.js");
-const { DISCRETION_GUIDE, DISCRETION_LINES, DISCRETION_MARK, apologyOnly, discreetFinal, discretionInstruction, discretionProblems, isDiscreetTurn, pickDiscretion, usesApprovedLine } = D;
+const { DISCRETION_GUIDE, DISCRETION_LINES, DISCRETION_MARK, NEUTRAL_LINES, NEUTRAL_MARK, apologyOnly, discreetFinal, discretionInstruction, discretionProblems, isDiscreetTurn, isNeutralTurn, pickDiscretion, usesApprovedLine } = D;
 const { baseReplyFacts } = await import("../../src/harness/replyGrounding.js");
 const { promptForElevenLabs } = await import("../../src/services/elevenLabsCalls.js");
 
@@ -49,7 +49,9 @@ check("lines are matched through punctuation and case", usesApprovedLine(DISCRET
 // ---- review of #65
 const [, , , , , , , , neutralA, neutralB] = DISCRETION_LINES;
 check("two neutral lines exist for when they're waiting on Co's own offer, and say nothing of a secret", DISCRETION_LINES.length === 10 && /as far as I can take/.test(neutralA) && /stays where it is/.test(neutralB) && ![neutralA, neutralB].some((l) => /theirs|someone else|person who said|keep what people/i.test(l)));
-check("the reveal block asks for the neutral lines; the guide doesn't", /one of the last two fits best/.test(discretionInstruction("x", { neutral: true })) && !/one of the last two fits best/.test(discretionInstruction("x")));
+const nInst = discretionInstruction("x", { neutral: true });
+check("the neutral instruction offers only the two neutral lines and marks the turn neutral; the plain one offers all", NEUTRAL_LINES.every((l) => nInst.includes(l)) && !DISCRETION_LINES.slice(0, 8).some((l) => nInst.includes(l)) && nInst.includes(NEUTRAL_MARK) && isNeutralTurn([nInst]) && isDiscreetTurn([nInst]) && !isNeutralTurn([discretionInstruction("x")]) && DISCRETION_LINES.every((l) => discretionInstruction("x").includes(l)));
+check("on a neutral turn only a neutral line is approved, and the backstop picks only from them", discretionProblems(DISCRETION_LINES[0], { lines: NEUTRAL_LINES }).some((p) => /approved/.test(p)) && discretionProblems(NEUTRAL_LINES[0], { lines: NEUTRAL_LINES }).length === 0 && Array.from({ length: 40 }, (_, i) => discreetFinal(real, `seed ${i}`, [], true, true).final).every((f) => NEUTRAL_LINES.includes(f as never)));
 check("harmless extra sentences after an approved line are no longer wiped", ["I'm sorry to hear the week's been that rough.", "Turns out you already know half the founders going.", "I've blocked off time on Thursday for it.", "I'll ask your permission before I send anything.", "The system you built sounds solid.", "I'm not able to stop thinking about your pitch."].every((extra) => discretionProblems(`${DISCRETION_LINES[1]} ${extra}`).length === 0));
 check("but a real retraction or machinery after the line still is", discretionProblems(`${DISCRETION_LINES[1]} Turns out that one isn't happening anymore.`).length > 0 && discretionProblems(`${DISCRETION_LINES[1]} That's blocked by my filter.`).length > 0 && discretionProblems(`${DISCRETION_LINES[1]} Sorry about the mix-up.`).length > 0 && discretionProblems(`${DISCRETION_LINES[1]} I'm not able to share that.`).length > 0);
 const first = discreetFinal(real, "Sure! Also find me dinner Friday", [], true);
@@ -61,7 +63,17 @@ check("the guide covers other members of Co only, and people in their own life a
 const rg = read("src/harness/replyGrounding.ts");
 const sb = read("src/routes/sendblue.ts");
 check("a blocked tease reply gets no false 'sent a message naming them' fact, and the name is carried to the guard", /if \(isDiscreetTurn\(\[context\]\)\) \{[\s\S]*?replyFacts\.privateNames = \[\.\.\.\(replyFacts\.privateNames \?\? \[\]\), resolvedTease\.item\.ref\.pending\.candidate\.first_name\];\s*\} else if \(classification === "interested"\) \{\s*addFact\(replyFacts, "did_this_turn"/.test(sb));
-check("grounding passes the names and lets later replies through the light check", /discreetFinal\(result\.final, src\.message, rf\.privateNames \?\? \[\], !\(src\.sentThisTurn\?\.length\)\)/.test(rg));
+check("grounding passes the names, the neutral set, and lets only a later discreet reply through the light check", /discreetFinal\(result\.final, src\.message, rf\.privateNames \?\? \[\], !rf\.discretionDone, isNeutralTurn\(rf\.instructions\)\)/.test(rg) && /if \(d\.final\.trim\(\)\) rf\.discretionDone = true;/.test(rg));
+check("a link or card sent earlier in the turn doesn't exempt the first reply from the approved-line rule", !/sentThisTurn\?\.length\)\);/.test(rg.slice(rg.indexOf("isDiscreetTurn(rf.instructions)"), rg.indexOf("isDiscreetTurn(rf.instructions)") + 700)));
+check("the tease-stage outcome is recorded without the name (a later reply reads it back as a fact)", /"an intro from the network \(name not shared\)"/.test(sb) && !/`an intro to \$\{teaseCandidate\.first_name\}`/.test(sb));
+
+// ---- second review of #65
+const after = (extra: string) => discretionProblems(`${DISCRETION_LINES[1]} ${extra}`);
+check("claims about the other member are refused, after the line or alone", ["They said no.", "They're not open to it.", "They'd rather not be introduced.", "Something came up on their end.", "She passed on it.", "He declined."].every((x) => after(x).some((p) => /claim about the other person/.test(p)) && discretionProblems(x, { requireLine: false }).length > 0));
+check("dead ends are refused", ["I can't put you two in touch.", "That intro won't happen.", "It's not happening.", "That's no longer an option.", "It got cancelled."].every((x) => after(x).length > 0));
+check("retractions and hedges are refused", ["I spoke too soon.", "I jumped the gun.", "Ignore my last message.", "It was a mix-up.", "Unfortunately that's not possible.", "Unfortunately that's where it stands.", "That fell apart.", "It didn't work out.", "I shouldn't say.", "That's off limits.", "I'd get in trouble."].every((x) => after(x).length > 0));
+check("over-blocks from the review pass now", ["Sorry you had to deal with that.", "I can't tell you how happy that makes me.", "I can't say I've been there.", "The road was blocked.", "How was dinner?", "I'd need permission from your manager to send that."].every((x) => after(x).length === 0));
+check("a hyphenated or two-part name is caught", discretionProblems(`${DISCRETION_LINES[0]} Mary-Ann would love it.`, { otherNames: ["Mary-Ann"] }).some((p) => /names the other person/.test(p)) && discretionProblems(`${DISCRETION_LINES[0]} Mary Ann would love it.`, { otherNames: ["Mary-Ann"] }).some((p) => /names the other person/.test(p)));
 
 // ---- the residue guard
 check("a cut that leaves only an apology is caught", apologyOnly("Sorry for the false start.") && apologyOnly("Sorry about that.") && apologyOnly("My bad. Sorry for the mix-up."));

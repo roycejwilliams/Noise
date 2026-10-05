@@ -2072,7 +2072,8 @@ export function sendblueRouter(io: Server): Router {
           try {
             const classification = resolvedTease.value === "yes" ? "interested" : "not_interested";
             const teaseCandidate = resolvedTease.item.ref.pending.candidate;
-            await recordSuggestionOutcome(user.id, "intro", `intro:${teaseCandidate.candidate_id}`, `an intro to ${teaseCandidate.first_name}`, classification === "interested" ? "interested" : "declined");
+            // Nameless: they haven't been told who (the reveal may yet be blocked), and a later reply reads this back as a fact.
+            await recordSuggestionOutcome(user.id, "intro", `intro:${teaseCandidate.candidate_id}`, "an intro from the network (name not shared)", classification === "interested" ? "interested" : "declined");
             const context = await resolveNetworkTeaseReply(user.id, user.first_name, user.phone_number, resolvedTease.item.ref.pending, classification);
             if (context) {
               addInstruction(replyFacts, context);

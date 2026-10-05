@@ -45,7 +45,7 @@ import { enrichMatch, missingEventDetails, renderEventDetails, type EventDetails
 import { recentCallCorrections } from "./callGrounding.js";
 import { repeatQuestionCheck, sameQuestion } from "./repeatAsk.js";
 import { asksForLink, findLines, linkRequestInstruction, recentResearchFinds, relevantFinds } from "../services/researchFinds.js";
-import { DISCRETION_GUIDE, apologyOnly, discreetFinal, isDiscreetTurn } from "./discretion.js";
+import { DISCRETION_GUIDE, apologyOnly, discreetFinal, isDiscreetTurn, isNeutralTurn } from "./discretion.js";
 
 // Model policy (Royce, 2026-09-14): Sonnet 5 for anything with judgment or
 // side effects; Haiku only for narrow, code-checked reads.
@@ -81,7 +81,7 @@ export type Fact = { id: string; kind: FactKind; text: string };
 
 // privateNames: the other member(s) a blocked turn is about, so a reply can't name them
 // (harness/discretion.ts).
-export type ReplyFacts = { facts: Fact[]; instructions: string[]; privateNames?: string[] };
+export type ReplyFacts = { facts: Fact[]; instructions: string[]; privateNames?: string[]; discretionDone?: boolean };
 
 export function createReplyFacts(): ReplyFacts {
   return { facts: [], instructions: [] };
@@ -1248,8 +1248,10 @@ export async function groundReply(
   // out instead. Never an apology for nothing, a false start, a fragment or the
   // machinery's words (harness/discretion.ts).
   if (isDiscreetTurn(rf.instructions)) {
-    // The first reply must be an approved line; a later reply on the same turn only has to be free of the rest.
-    const d = discreetFinal(result.final, src.message, rf.privateNames ?? [], !(src.sentThisTurn?.length));
+    // The first reply must be an approved line (links or a card sent earlier in the turn don't
+    // count as a reply); a later reply on the same turn only has to be free of the rest.
+    const d = discreetFinal(result.final, src.message, rf.privateNames ?? [], !rf.discretionDone, isNeutralTurn(rf.instructions));
+    if (d.final.trim()) rf.discretionDone = true;
     if (d.replaced) {
       result = {
         ...result,
