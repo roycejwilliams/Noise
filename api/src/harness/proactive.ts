@@ -634,6 +634,8 @@ export type OutputRules = {
   allowGreeting?: boolean;
   // At least one of these must appear (case-insensitive), e.g. the event name.
   mustIncludeAny?: string[];
+  // A second set that must also appear (e.g. who an event is for, next to its name).
+  mustAlsoIncludeAny?: { words: string[]; reason: string; ignoring?: string };
   // None of these may appear, e.g. the event name in a tease.
   mustNotInclude?: string[];
   forbidden?: { pattern: RegExp; reason: string }[];
@@ -704,6 +706,13 @@ export function checkDraft(text: string, rules: OutputRules): GateCheck[] {
       pass: !wanted.length || wanted.some((w) => lower.includes(w)),
       reason: `doesn't mention any of: ${wanted.join(", ")}`,
     });
+  }
+  if (rules.mustAlsoIncludeAny?.words.length) {
+    const wanted = rules.mustAlsoIncludeAny.words.map((w) => w.toLowerCase()).filter(Boolean);
+    // The event's own name doesn't count: "HOT GIRL HIKE" contains the word without saying who it's for.
+    const ignoring = rules.mustAlsoIncludeAny.ignoring?.toLowerCase();
+    const rest = ignoring ? lower.split(ignoring).join(" ") : lower;
+    checks.push({ name: "draft_says_who_it_is_for", pass: wanted.some((w) => rest.includes(w)), reason: `${rules.mustAlsoIncludeAny.reason} (one of: ${wanted.join(", ")})` });
   }
   for (const banned of rules.mustNotInclude ?? []) {
     if (!banned) continue;
