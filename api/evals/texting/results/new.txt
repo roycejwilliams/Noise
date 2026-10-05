@@ -1,0 +1,9 @@
+graded 40 replies (new-prompt.local.json)
+  specific                  93%  (37/40)
+  length_fit                73%  (29/40)
+  one_idea_per_paragraph    98%  (39/40)
+  one_question              75%  (30/40)
+  no_restating_opener       83%  (33/40)
+  real_position             93%  (27/29)
+  honest                    80%  (32/40)
+  overall                   84%   median 63 words

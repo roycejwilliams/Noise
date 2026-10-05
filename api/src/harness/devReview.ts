@@ -32,6 +32,7 @@ import { anthropic } from "@ai-sdk/anthropic";
 import { generateText } from "ai";
 import { createHash } from "crypto";
 import pool from "../db/db.js";
+import { capabilitySheet } from "../services/capabilities.js";
 import { MODELS } from "../models.js";
 import { CO_VOICE } from "../services/coVoice.js";
 import { parseModelJson } from "../services/modelJson.js";
@@ -80,7 +81,9 @@ export type FlagType =
   | "promise_without_ask"
   | "member_frustrated_with_co"
   | "member_reported_issue"
-  | "member_called_out_miss";
+  | "member_called_out_miss"
+  | "questionable_tool_choice"
+  | "held_back";
 
 export const FLAG_LABELS: Record<FlagType, string> = {
   slow_reply: "Slow reply (over the latency budget)",
@@ -101,6 +104,8 @@ export const FLAG_LABELS: Record<FlagType, string> = {
   member_frustrated_with_co: "Member frustrated with Co",
   member_reported_issue: "Member reported an issue",
   member_called_out_miss: "Member called out a miss",
+  questionable_tool_choice: "Questionable tool choice (Jev's read of Co's judgment)",
+  held_back: "Ready texts held 2+ days with nothing sent",
 };
 
 export type Severity = "low" | "medium" | "high";
@@ -126,7 +131,13 @@ export type ReviewIssue = { at: string; message: string; summary: string; catego
 // looking is backed by any of them, not only asks saved that day (2026-09-18:
 // "Still watching though." was flagged though the ask was days old).
 export type ReviewAsk = { text: string; savedAt: string };
-export type ReviewData = { userId: string; firstName: string; messages: ReviewMessage[]; decisions: ReviewDecision[]; emotions: ReviewEmotion[]; issues: ReviewIssue[]; openAsks?: ReviewAsk[] };
+// The week before the window (2026-09-26): what Co sent them and what they
+// told Co. Co's texts can rightly refer back to it ("the rooftop mixer
+// yesterday", "you're weighing accelerators vs VCs"); with only the day's
+// log, the review flagged both as invented when Co had sent the one and
+// Royce had said the other the day before.
+export type ReviewEarlier = { sent: string[]; theySaid: string[]; coSaid?: string[] };
+export type ReviewData = { userId: string; firstName: string; messages: ReviewMessage[]; decisions: ReviewDecision[]; emotions: ReviewEmotion[]; issues: ReviewIssue[]; openAsks?: ReviewAsk[]; earlier?: ReviewEarlier };
 
 const ms = (iso: string) => new Date(iso).getTime();
 const clip = (s: string, n = 220) => (s.length > n ? `${s.slice(0, n - 1)}…` : s);
@@ -216,7 +227,7 @@ export function logFlags(data: ReviewData): ReviewFlag[] {
     if (d.decision === "recommendation.lateResult" && typeof d.action === "string" && d.action.endsWith("_told_them")) {
       add(d, "came_up_empty_text", "medium", `texted "came up empty" for "${p.askText ?? "?"}"`, d.action.startsWith("none_fit") ? `results found but none fit: ${(p.found ?? []).slice(0, 3).join(", ")}` : "the search found nothing", true);
     }
-    if (d.decision === "reply.grounding" && (["redrafted", "stripped"].includes(d.action ?? "") || (p.draft && p.final && p.draft !== p.final))) {
+    if (d.decision === "reply.grounding" && (["cut", "redrafted", "stripped"].includes(d.action ?? "") || (p.draft && p.final && p.draft !== p.final))) {
       add(d, "reply_rewritten", d.action === "stripped" ? "high" : "low", `draft: "${clip(p.draft ?? "", 120)}" → sent: "${clip(p.final ?? "", 120)}"`, d.reason ?? `grounding ${d.action ?? "changed it"}`, !!d.reason);
     }
     if (d.decision === "router.decideActions" && p.confidence === "low") {
@@ -376,13 +387,31 @@ export function loggedActions(data: ReviewData): string {
   return lines.join("\n") || "(nothing logged)";
 }
 
+export const EARLIER_DAYS = 7;
+
+export function earlierRecord(data: ReviewData): string {
+  const e = data.earlier;
+  if (!e || (!e.sent.length && !e.theySaid.length)) return "(nothing earlier)";
+  return [
+    e.sent.length ? `What Co sent them:\n${e.sent.join("\n")}` : null,
+    e.theySaid.length ? `What ${data.firstName} told Co:\n${e.theySaid.join("\n")}` : null,
+    e.coSaid?.length ? `What Co texted them (how it described what it sent):\n${e.coSaid.join("\n")}` : null,
+  ].filter(Boolean).join("\n\n");
+}
+
 export function modelReviewPrompt(data: ReviewData): string {
   return `${CO_VOICE}
 
 You're reviewing a day of texts between Co (above) and ${data.firstName}, a test user, to find Co's bad responses so a developer can fix them. Flag only what the conversation itself shows. Never infer a problem you can't point to.
 
-What Co's decision log says it did today (the only record of its actions):
+What Co can do and its standing rules (true; Co may state these):
+${capabilitySheet().map((c) => `- ${c}`).join("\n")}
+
+What Co's decision log says it did today:
 ${loggedActions(data)}
+
+The ${EARLIER_DAYS} days before today (also real, from the record; Co can rightly refer back to any of it):
+${earlierRecord(data)}
 
 The conversation (times UTC):
 ${transcriptFor(data)}
@@ -390,7 +419,7 @@ ${transcriptFor(data)}
 Flag these, and only these:
 - repeat_question: Co asks something it already asked today, or something the conversation already answered.
 - answer_missed_question: Co's reply doesn't answer what ${data.firstName} just asked (answers a different question, or ignores part of it).
-- contradiction_or_unbacked_claim: Co contradicts itself, or claims something about its own actions ("I sent you", "I found", "I checked", "I saved") that the decision log above doesn't back up.
+- contradiction_or_unbacked_claim: Co contradicts itself; or claims something about its own actions ("I sent you", "I found", "I checked", "I saved") that neither today's decision log nor the earlier record backs up; or says something about ${data.firstName} that they never said, today or in the earlier record, and that isn't one of their open asks. Co naming or describing something it sent in its own words (as it did in the earlier record) is backed; a loose "yesterday" for something sent in the last few days is not worth flagging.
 - off_voice: a reply that's robotic, templated, or breaks Co's voice described at the top (reads like a system, points at its own messages, lists, hype, filler).
 - promise_without_ask: Co promises to keep looking or text later, but nothing in the log above (an open ask, whenever it was saved, or an ask saved that day before the promise) covers that topic.
 
@@ -402,11 +431,18 @@ Return ONLY JSON: {"flags": [{"type": "...", "severity": "low" | "medium" | "hig
 export async function modelFlags(data: ReviewData): Promise<ReviewFlag[]> {
   if (!data.messages.some((m) => m.from === "co")) return [];
   try {
-    const { text } = await generateText({
+    const { text, finishReason } = await generateText({
       model: anthropic(MODELS.sonnet),
+      // Room to think and still answer: at the default 4,096 the model spent
+      // all of it thinking on a busy day and the review silently came back
+      // empty (2026-09-26). Even 16,000 ran out on 2026-09-30 (a day of live
+      // tests) with no effort set, so it's medium now, like the learning reads.
+      maxOutputTokens: 16_000,
+      providerOptions: { anthropic: { effort: "medium" } },
       experimental_telemetry: { isEnabled: true, functionId: "devReview.modelFlags" },
       prompt: modelReviewPrompt(data),
     });
+    if (finishReason === "length") console.error(`devReview: model review ran out of room for ${data.userId}; its flags are missing today`);
     const parsed = parseModelJson<{ flags?: { type?: string; severity?: string; quotes?: string[]; why?: string }[] }>(text);
     const out: ReviewFlag[] = [];
     for (const f of parsed?.flags ?? []) {
@@ -461,19 +497,214 @@ export async function loadReviewData(userId: string, since: Date, until: Date): 
       .query(`SELECT ask_text, created_at FROM ask_checkins WHERE user_id = $1 AND created_at < $2 AND (resolved_at IS NULL OR resolved_at >= $2) ORDER BY created_at`, [userId, until.toISOString()])
       .catch(() => ({ rows: [] as any[] })),
   ]);
-  const iso = (d: any) => new Date(d).toISOString();
-  return {
+  // The week before: what Co sent (offers, search results, proactive
+  // texts) and what they said, newest kept when it's long.
+  const [earlierMem, earlierSends] = await Promise.all([
+    pool
+      .query(
+        `SELECT created_at, memory_type, content FROM co_memories
+         WHERE user_id = $1 AND created_at >= $2::timestamptz - make_interval(days => $3) AND created_at < $2
+           AND (memory_type = 'text_exchange' OR memory_type = 'recommendation_offered' OR (memory_type = 'system' AND content LIKE '[search]%'))
+         ORDER BY created_at DESC LIMIT 200`,
+        [userId, since.toISOString(), EARLIER_DAYS],
+      )
+      .catch(() => ({ rows: [] as any[] })),
+    pool
+      .query(
+        `SELECT sent_at, type, message FROM proactive_sends WHERE user_id = $1 AND sent_at >= $2::timestamptz - make_interval(days => $3) AND sent_at < $2 AND message IS NOT NULL ORDER BY sent_at DESC LIMIT 30`,
+        [userId, since.toISOString(), EARLIER_DAYS],
+      )
+      .catch(() => ({ rows: [] as any[] })),
+  ]);
+  return reviewDataFromRows({
     userId,
     firstName: user.rows[0]?.first_name ?? "Member",
-    messages: msgs.rows.map((r: any) => {
+    msgs: msgs.rows,
+    decisions: decisions.rows,
+    emotions: emotions.rows,
+    issues: issues.rows,
+    asks: asks.rows,
+    earlierMem: earlierMem.rows,
+    earlierSends: earlierSends.rows,
+  });
+}
+
+// Pure: the rows the review reads, shaped for it (tests replay real rows).
+export function reviewDataFromRows(r: { userId: string; firstName: string; msgs: any[]; decisions: any[]; emotions: any[]; issues: any[]; asks: any[]; earlierMem: any[]; earlierSends: any[] }): ReviewData {
+  const { userId } = r;
+  const iso = (d: any) => new Date(d).toISOString();
+  const day = (d: any) => new Date(d).toISOString().slice(0, 10);
+  const sent: string[] = [];
+  const theySaid: string[] = [];
+  const coSaid: string[] = [];
+  for (const m of r.earlierMem) {
+    const c = String(m.content).replace(/\s+/g, " ").trim();
+    if (m.memory_type === "text_exchange" && c.startsWith("User said:")) theySaid.push(`[${day(m.created_at)}] "${clip(c.replace(/^User said:\s*/, ""), 200)}"`);
+    else if (m.memory_type === "text_exchange") coSaid.push(`[${day(m.created_at)}] "${clip(c.replace(/^Co replied:\s*/, ""), 200)}"`);
+    else if (m.memory_type === "recommendation_offered") {
+      const name = (() => { try { return JSON.parse(c).name; } catch { return null; } })();
+      if (name) sent.push(`[${day(m.created_at)}] recommended "${clip(String(name), 120)}"`);
+    } else sent.push(`[${day(m.created_at)}] ${clip(c.replace(/^\[search\]\s*/, ""), 240)}`);
+  }
+  for (const x of r.earlierSends) sent.push(`[${day(x.sent_at)}] texted them unprompted (${x.type}): "${clip(String(x.message).replace(/\s+/g, " "), 160)}"`);
+  return {
+    userId,
+    firstName: r.firstName,
+    messages: r.msgs.map((r: any) => {
       const c = String(r.content);
       const from = c.startsWith("User said:") ? "member" : c.startsWith("Co replied:") ? "co" : "call";
       return { id: String(r.id), at: iso(r.created_at), from, text: c.replace(/^(User said|Co replied):\s*/, "").trim() } as ReviewMessage;
     }),
-    decisions: decisions.rows.map((r: any) => ({ id: Number(r.id), at: iso(r.created_at), decision: r.decision, outcome: r.outcome, action: r.action, reason: r.reason, proposal: r.proposal, checks: r.checks })),
-    emotions: emotions.rows.map((r: any) => ({ at: iso(r.created_at), source: r.source, emotion: r.emotion, intensity: r.intensity, about: r.about, quote: r.quote, target: r.target })),
-    issues: issues.rows.map((r: any) => ({ at: iso(r.created_at), message: r.message, summary: r.summary, category: r.category, severity: r.severity })),
-    openAsks: asks.rows.map((r: any) => ({ text: String(r.ask_text), savedAt: iso(r.created_at) })),
+    decisions: r.decisions.map((r: any) => ({ id: Number(r.id), at: iso(r.created_at), decision: r.decision, outcome: r.outcome, action: r.action, reason: r.reason, proposal: r.proposal, checks: r.checks })),
+    emotions: r.emotions.map((r: any) => ({ at: iso(r.created_at), source: r.source, emotion: r.emotion, intensity: r.intensity, about: r.about, quote: r.quote, target: r.target })),
+    issues: r.issues.map((r: any) => ({ at: iso(r.created_at), message: r.message, summary: r.summary, category: r.category, severity: r.severity })),
+    openAsks: r.asks.map((r: any) => ({ text: String(r.ask_text), savedAt: iso(r.created_at) })),
+    earlier: { sent: sent.slice(0, 50).reverse(), theySaid: theySaid.slice(0, 60).reverse(), coSaid: coSaid.slice(0, 60).reverse() },
+  };
+}
+
+// Co's own judgment (2026-09-25): every tool Co chose, with the member's
+// message and Co's stated reason, read by Jev in one request per member.
+// Only clear mismatches are flagged ("a contact card when they wanted a
+// link", "a search when they only wanted to talk"), always as a guess for a
+// person to check. Member text goes to Jev only through the zero-retention
+// gateway, and only where JEV_MEMBER=on (services/jevGateway.ts).
+export const JUDGMENT_FLAG_BELOW = 0.3;
+export async function judgmentFlags(data: ReviewData): Promise<ReviewFlag[]> {
+  const calls = data.decisions.filter((d) => d.decision.startsWith("tool.") && d.outcome === "act");
+  if (!calls.length) return [];
+  const { askJevZdr, jevForMemberText } = await import("../services/jevGateway.js");
+  if (!jevForMemberText()) return [];
+  const { abilityForTool } = await import("../services/capabilities.js");
+  const listed: Record<string, unknown> = {};
+  const questions: Record<string, { type: "boolean"; instructions: string }> = {};
+  calls.slice(0, 40).forEach((d, i) => {
+    const tool = d.decision.slice(5);
+    listed[`k${i}`] = {
+      member_said: String(d.proposal?.message ?? "").slice(0, 300),
+      co_chose: abilityForTool(tool)?.can ?? tool,
+      co_reason: d.reason ?? "",
+    };
+    questions[`k${i}`] = {
+      type: "boolean",
+      instructions: `For calls.k${i}: was what co_chose a sensible response to what member_said? Yes if it fits what they asked for or clearly helps them. No only if it's a clear mismatch, like sending a contact card when they wanted a link, or searching when they only wanted to talk.`,
+    };
+  });
+  const r = await askJevZdr({ calls: listed }, questions, 10_000).catch(() => null);
+  if (!r) return [];
+  const flags: ReviewFlag[] = [];
+  calls.slice(0, 40).forEach((d, i) => {
+    const p = r[`k${i}`];
+    if (typeof p !== "number" || p >= JUDGMENT_FLAG_BELOW) return;
+    flags.push({
+      userId: data.userId,
+      at: d.at,
+      type: "questionable_tool_choice",
+      severity: p < 0.1 ? "high" : "medium",
+      snippet: `"${String(d.proposal?.message ?? "").slice(0, 120)}" → ${d.decision.slice(5)}`,
+      decisionIds: [d.id],
+      cause: `Jev thinks this was a mismatch (${Math.round(p * 100)}% sensible). Co's reason: ${d.reason || "none given"}`,
+      causeConfirmed: false,
+      source: "model",
+    });
+  });
+  return flags;
+}
+
+// ---------------------------------------------------------------------------
+// Held back (Royce, 2026-10-02): a member with texts ready to go (pending,
+// due, not expired, queued 2+ days ago) and nothing sent in 2+ days, naming
+// the checks that held them. Starvation was silent: the weekly cap held every
+// pick from 10/1 and it surfaced only when Royce noticed. Read from the queue
+// and the pick log as of the end of the window, not from the window itself.
+
+export const HELD_DAYS = 2;
+export type HeldItem = { id: string; type: string; createdAt: string; summary: string };
+// personBlocked: person-level checks that failed (opt-out, local hours); the
+// pick strips those from each candidate's list, so they're read from checks.
+// picked/action: the item the pick chose and what happened to it after.
+export type HeldPick = { at: string; candidates: { id: string; failed: string[] }[]; personBlocked?: string[]; picked?: string | null; action?: string | null };
+const PERSON_CHECK_NAMES = new Set(["not_opted_out", "local_hours"]);
+const AFTER_PICK: Record<string, string> = { send: "picked, then not sent", defer: "picked, then put off", recheck: "picked, relevance check unanswered", archive: "picked, then archived as stale" };
+
+// Pure: the flag, from the queue and the pick log (tests replay real rows).
+export function heldBackFlags(r: { userId: string; now: Date; held: HeldItem[]; lastSendAt: string | null; picks: HeldPick[] }): ReviewFlag[] {
+  const cutoff = r.now.getTime() - HELD_DAYS * 86_400_000;
+  const held = r.held.filter((h) => ms(h.createdAt) <= cutoff);
+  if (!held.length || (r.lastSendAt && ms(r.lastSendAt) > cutoff)) return [];
+  const quietDays = r.lastSendAt ? Math.floor((r.now.getTime() - ms(r.lastSendAt)) / 86_400_000) : null;
+  // What held each item the last time the pick looked at it.
+  const recent = r.picks.filter((p) => ms(p.at) > cutoff).sort((a, b) => ms(b.at) - ms(a.at));
+  const blockers = new Map<string, number>();
+  let unpicked = 0;
+  const bump = (k: string) => blockers.set(k, (blockers.get(k) ?? 0) + 1);
+  for (const h of held) {
+    // The newest pick that wasn't blocked at the person level: a night-time
+    // pick (local hours) would otherwise hide the real cause from the day.
+    const mentions = recent.filter((p) => p.candidates.some((c) => String(c.id) === h.id));
+    const pick = mentions.find((p) => !p.personBlocked?.length) ?? mentions[0];
+    if (!pick) continue;
+    const seen = pick.candidates.find((c) => String(c.id) === h.id)!;
+    if (pick.personBlocked?.length) pick.personBlocked.forEach(bump);
+    else if (pick.picked != null && String(pick.picked) === h.id && pick.action) bump(AFTER_PICK[pick.action.split(":")[0]] ?? `picked, then ${pick.action}`);
+    else if (seen.failed.length) seen.failed.forEach(bump);
+    else unpicked++;
+  }
+  const named = [...blockers.entries()].sort((a, b) => b[1] - a[1]).map(([k, n]) => `${k} ×${n}`);
+  const cause = !recent.length
+    ? `no daily pick ran for them in ${HELD_DAYS} days`
+    : named.length
+      ? `held by ${named.join(", ")}${unpicked ? `; ${unpicked} eligible but never picked` : ""}`
+      : unpicked
+        ? `${unpicked} eligible but never picked`
+        : "the pick never looked at these items";
+  const types = [...held.reduce((m, h) => m.set(h.type, (m.get(h.type) ?? 0) + 1), new Map<string, number>()).entries()].map(([t, n]) => `${t}×${n}`).join(", ");
+  const oldest = held.reduce((a, h) => (ms(h.createdAt) < ms(a.createdAt) ? h : a));
+  return [
+    {
+      userId: r.userId,
+      at: oldest.createdAt,
+      type: "held_back",
+      // Never sent anything (a new member) is medium unless the queue is big.
+      severity: held.length >= 5 || (quietDays !== null && quietDays >= 4) ? "high" : "medium",
+      snippet: clip(`${held.length} ready text${held.length === 1 ? "" : "s"} held, nothing sent ${quietDays === null ? "ever" : `in ${quietDays} days`} (${types}); oldest: "${oldest.summary}"`),
+      decisionIds: [],
+      cause,
+      causeConfirmed: recent.length > 0,
+      source: "log",
+    },
+  ];
+}
+
+export async function loadHeldBack(userId: string, now: Date): Promise<{ userId: string; now: Date; held: HeldItem[]; lastSendAt: string | null; picks: HeldPick[] }> {
+  // Opted out or archived: holding everything is right, not starvation.
+  const [held, last, picks] = await Promise.all([
+    pool.query(
+      `SELECT c.id, c.type, c.created_at, c.summary FROM proactive_candidates c JOIN users u ON u.id = c.user_id
+       WHERE c.user_id = $1 AND c.status = 'pending' AND c.due_at <= $2 AND (c.expires_at IS NULL OR c.expires_at > $2)
+         AND COALESCE(u.sms_opted_out, false) = false AND u.archived_at IS NULL`,
+      [userId, now.toISOString()],
+    ),
+    pool.query(`SELECT MAX(sent_at) AS at FROM proactive_sends WHERE user_id = $1 AND sent_at <= $2`, [userId, now.toISOString()]),
+    pool.query(
+      `SELECT created_at, proposal, checks, action FROM harness_decisions
+       WHERE user_id = $1 AND decision = 'proactive.dailyPick' AND created_at <= $2 AND created_at > $2::timestamptz - make_interval(days => $3)
+       ORDER BY created_at DESC LIMIT 50`,
+      [userId, now.toISOString(), HELD_DAYS],
+    ),
+  ]);
+  return {
+    userId,
+    now,
+    held: held.rows.map((h: any) => ({ id: String(h.id), type: h.type, createdAt: new Date(h.created_at).toISOString(), summary: String(h.summary ?? "").slice(0, 100) })),
+    lastSendAt: last.rows[0]?.at ? new Date(last.rows[0].at).toISOString() : null,
+    picks: picks.rows.map((p: any) => ({
+      at: new Date(p.created_at).toISOString(),
+      candidates: (p.proposal?.candidates ?? []).map((c: any) => ({ id: String(c.id), failed: Array.isArray(c.failed) ? c.failed.map(String) : [] })),
+      personBlocked: (Array.isArray(p.checks) ? p.checks : []).filter((k: any) => k?.pass === false && PERSON_CHECK_NAMES.has(k.name)).map((k: any) => String(k.name)),
+      picked: p.proposal?.picked != null ? String(p.proposal.picked) : null,
+      action: p.action ?? null,
+    })),
   };
 }
 
@@ -484,7 +715,8 @@ export async function reviewWindow(since: Date, until: Date, opts: { model?: boo
     const data = await loadReviewData(userId, since, until);
     names[userId] = data.firstName;
     flags.push(...logFlags(data), ...conversationFlags(data), ...reactionFlags(data));
-    if (opts.model !== false) flags.push(...(await modelFlags(data)));
+    flags.push(...heldBackFlags(await loadHeldBack(userId, until).catch(() => ({ userId, now: until, held: [], lastSendAt: null, picks: [] }))));
+    if (opts.model !== false) flags.push(...(await modelFlags(data)), ...(await judgmentFlags(data).catch(() => [])));
   }
   return { flags: flags.sort((a, b) => ms(a.at) - ms(b.at)), names };
 }
@@ -527,6 +759,107 @@ export function renderRejectedSample(items: RejectedEvent[], max = 6): string | 
   const shown = unique.slice(0, max).map((i) => `• ${clip(i.name, 60)}${i.why ? `: ${clip(i.why, 80)}` : ""}`);
   const more = unique.length > max ? `\nPlus ${unique.length - max} more.` : "";
   return `Events Co turned down as not fitting (${unique.length}). Skim for a good one it missed:\n${shown.join("\n")}${more}`;
+}
+
+// Before-the-event numbers for the morning report (services/preArrival.ts), the
+// last 7 days. "Met someone" comes from their own words after the event
+// (services/turnLearning.ts). Opening the App Clip isn't recorded anywhere yet
+// (the App Clip isn't built), so it shows as not tracked instead of as zero.
+export type PreArrivalStats = { sent: number; arrivedAfter: number; sharedLocation: number; metSomeone: number };
+export async function preArrivalStats(now = new Date()): Promise<PreArrivalStats> {
+  const { rows } = await pool
+    .query(
+      `SELECT count(*) FILTER (WHERE pre_arrival_sent_at IS NOT NULL)::int AS sent,
+              count(*) FILTER (WHERE pre_arrival_sent_at IS NOT NULL AND arrived_at > pre_arrival_sent_at)::int AS arrived_after,
+              count(*) FILTER (WHERE pre_arrival_sent_at IS NOT NULL AND location_yes_at IS NOT NULL)::int AS shared,
+              count(*) FILTER (WHERE pre_arrival_sent_at IS NOT NULL AND met_someone_at IS NOT NULL)::int AS met
+       FROM event_presence WHERE pre_arrival_sent_at > $1`,
+      [new Date(now.getTime() - 7 * 86_400_000)],
+    )
+    .catch(() => ({ rows: [] as any[] }));
+  return { sent: rows[0]?.sent ?? 0, arrivedAfter: rows[0]?.arrived_after ?? 0, sharedLocation: rows[0]?.shared ?? 0, metSomeone: rows[0]?.met ?? 0 };
+}
+
+// The morning report as an email (Royce, 2026-09-30: "It needs to be neater to
+// read ... Place the morning report into the emails and stop texting my phone").
+// Every flag type, most frequent first; each with what it means in plain words,
+// the worst example and its likely cause. Then the events Co turned down.
+const esc = (s: string) => s.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;");
+const SEVERITY_STYLE: Record<Severity, { bg: string; fg: string; label: string }> = {
+  high: { bg: "#FDE8E8", fg: "#9B1C1C", label: "High" },
+  medium: { bg: "#FEF3C7", fg: "#92400E", label: "Medium" },
+  low: { bg: "#E5E7EB", fg: "#374151", label: "Low" },
+};
+
+export function renderDigestEmail(
+  flags: ReviewFlag[],
+  names: Record<string, string>,
+  opts: { date: Date; rejected?: RejectedEvent[]; preArrival?: PreArrivalStats | null },
+): { subject: string; html: string; text: string } {
+  const groups = groupFlags(flags);
+  const day = opts.date.toLocaleDateString("en-US", { timeZone: "America/Los_Angeles", weekday: "long", month: "long", day: "numeric" });
+  const high = groups.filter((g) => g.worst === "high").length;
+  const subject = groups.length
+    ? `Co morning report, ${day}: ${flags.length} flag${flags.length === 1 ? "" : "s"}${high ? `, ${high} high` : ""}`
+    : `Co morning report, ${day}: nothing flagged`;
+  const seenRejected = new Set<string>();
+  const rejected = (opts.rejected ?? []).filter((i) => i.name && !seenRejected.has(i.name.toLowerCase()) && seenRejected.add(i.name.toLowerCase())).slice(0, 10);
+
+  const chip = (sev: Severity) => {
+    const s = SEVERITY_STYLE[sev];
+    return `<span style="display:inline-block;padding:2px 8px;border-radius:10px;background:${s.bg};color:${s.fg};font-size:12px;font-weight:600">${s.label}</span>`;
+  };
+  const card = (g: FlagGroup) => {
+    const ex = [...g.flags].sort((a, b) => SEVERITY_RANK[b.severity] - SEVERITY_RANK[a.severity])[0];
+    const cause = `${ex.cause}${ex.causeConfirmed ? "" : ex.cause.endsWith("(guess)") ? "" : " (likely)"}`;
+    return `<tr><td style="padding:0 0 12px 0"><table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="background:#FFFFFF;border:1px solid #E5E7EB;border-radius:10px"><tr><td style="padding:16px 18px">
+<div style="font-size:15px;font-weight:600;color:#111827">${esc(FLAG_LABELS[g.type])} <span style="color:#6B7280;font-weight:400">× ${g.count}</span> &nbsp;${chip(g.worst)}</div>
+<div style="margin-top:10px;font-size:13px;color:#6B7280">${esc(names[ex.userId] ?? "Someone")} · ${esc(pacific(ex.at))}</div>
+<div style="margin-top:4px;font-size:14px;color:#1F2937;line-height:1.5;border-left:3px solid #E5E7EB;padding-left:10px">${esc(clip(ex.snippet, 260))}</div>
+<div style="margin-top:8px;font-size:13px;color:#374151;line-height:1.5"><b>Cause:</b> ${esc(clip(cause, 220))}</div>
+</td></tr></table></td></tr>`;
+  };
+  const summaryRows = groups
+    .map((g) => `<tr><td style="padding:4px 0;font-size:14px;color:#1F2937">${esc(FLAG_LABELS[g.type])}</td><td style="padding:4px 0;font-size:14px;color:#1F2937;text-align:right;white-space:nowrap">${g.count} &nbsp;${chip(g.worst)}</td></tr>`)
+    .join("");
+  const html = `<!doctype html><html><body style="margin:0;padding:0;background:#F3F4F6">
+<table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="background:#F3F4F6"><tr><td align="center" style="padding:28px 12px">
+<table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="max-width:620px;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Helvetica,Arial,sans-serif">
+<tr><td style="padding:0 4px 18px 4px">
+<div style="font-size:12px;letter-spacing:.08em;text-transform:uppercase;color:#6B7280">Co morning report</div>
+<div style="font-size:22px;font-weight:700;color:#111827;margin-top:4px">${esc(day)}</div>
+<div style="font-size:14px;color:#4B5563;margin-top:6px">Last 24 hours on co-test: ${groups.length ? `${flags.length} flag${flags.length === 1 ? "" : "s"} in ${groups.length} type${groups.length === 1 ? "" : "s"}${high ? `, ${high} of them high` : ""}.` : "nothing flagged."}</div>
+</td></tr>
+${groups.length ? `<tr><td style="padding:0 0 16px 0"><table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="background:#FFFFFF;border:1px solid #E5E7EB;border-radius:10px"><tr><td style="padding:14px 18px">
+<div style="font-size:13px;font-weight:600;color:#6B7280;margin-bottom:6px">At a glance</div><table role="presentation" width="100%" cellpadding="0" cellspacing="0">${summaryRows}</table>
+</td></tr></table></td></tr>
+<tr><td style="padding:4px 4px 10px 4px;font-size:13px;font-weight:600;color:#6B7280">One example of each, worst first</td></tr>
+${groups.map(card).join("\n")}` : ""}
+${rejected.length ? `<tr><td style="padding:8px 0 12px 0"><table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="background:#FFFFFF;border:1px solid #E5E7EB;border-radius:10px"><tr><td style="padding:14px 18px">
+<div style="font-size:15px;font-weight:600;color:#111827">Events Co turned down <span style="color:#6B7280;font-weight:400">× ${rejected.length}</span></div>
+<div style="font-size:13px;color:#6B7280;margin:4px 0 8px 0">Skim for a good one it missed.</div>
+${rejected.map((r) => `<div style="font-size:14px;color:#1F2937;padding:5px 0;border-top:1px solid #F3F4F6"><b>${esc(clip(r.name, 70))}</b>${r.why ? `<br><span style="color:#6B7280;font-size:13px">${esc(clip(r.why, 120))}</span>` : ""}</div>`).join("")}
+</td></tr></table></td></tr>` : ""}
+${opts.preArrival ? `<tr><td style="padding:8px 0 12px 0"><table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="background:#FFFFFF;border:1px solid #E5E7EB;border-radius:10px"><tr><td style="padding:14px 18px">
+<div style="font-size:15px;font-weight:600;color:#111827">Before the event <span style="color:#6B7280;font-weight:400">last 7 days</span></div>
+<div style="font-size:14px;color:#1F2937;margin-top:8px;line-height:1.7">Pre-arrival texts sent: <b>${opts.preArrival.sent}</b><br>Checked in after the text: <b>${opts.preArrival.arrivedAfter}</b>${opts.preArrival.sent ? ` of ${opts.preArrival.sent}` : ""}<br>Shared their location: <b>${opts.preArrival.sharedLocation}</b><br>Opened the App Clip: <span style="color:#6B7280">not tracked yet (the App Clip isn't built)</span><br>Said they met someone: <b>${opts.preArrival.metSomeone}</b>${opts.preArrival.sent ? ` of ${opts.preArrival.sent}` : ""}</div>
+</td></tr></table></td></tr>` : ""}
+<tr><td style="padding:8px 4px;font-size:12px;color:#9CA3AF">Full detail with decision-log rows: ask Claude "what broke since 24h".</td></tr>
+</table></td></tr></table></body></html>`;
+  const text = [
+    `Co morning report, ${day}`,
+    groups.length ? `${flags.length} flags in ${groups.length} types.` : "Nothing flagged.",
+    ...groups.map((g) => {
+      const ex = [...g.flags].sort((a, b) => SEVERITY_RANK[b.severity] - SEVERITY_RANK[a.severity])[0];
+      return `
+${FLAG_LABELS[g.type]} x${g.count} (${g.worst})
+  ${names[ex.userId] ?? "Someone"}, ${pacific(ex.at)}: ${clip(ex.snippet, 200)}
+  Cause: ${clip(ex.cause, 160)}`;
+    }),
+    ...(rejected.length ? [`
+Events Co turned down (${rejected.length}):`, ...rejected.map((r) => `- ${r.name}${r.why ? `: ${r.why}` : ""}`)] : []),
+  ].join("\n");
+  return { subject, html, text };
 }
 
 // The sweep records why each event was turned down (sweep.surface: the fit gate's rejections and
@@ -583,18 +916,6 @@ export async function storeFlags(flags: ReviewFlag[]): Promise<number> {
   return stored;
 }
 
-// Texted from Co's number but not logged as a Co message (see the header).
-async function textDigest(userId: string, messages: string[]): Promise<void> {
-  const { rows } = await pool.query(`SELECT phone_number FROM users WHERE id = $1`, [userId]);
-  const number = rows[0]?.phone_number;
-  if (!number) throw new Error("no phone number for the digest recipient");
-  const { default: sendblue } = await import("../services/sendblue.js");
-  for (const content of messages) {
-    await sendblue.messages.send({ number, content, from_number: process.env.SENDBLUE_PHONE_NUMBER! });
-    await new Promise((r) => setTimeout(r, 1500));
-  }
-}
-
 // For a session ("what broke since X"): prints the full report or the digest.
 // On co-test, where the scripts folder isn't built:
 //   node --input-type=module -e "const m = await import('/app/co-test/dist/api/src/harness/devReview.js'); await m.printReview({ since: '24h' })"
@@ -626,27 +947,24 @@ export async function printReview(opts: { since?: string; until?: string; model?
   await pool.end();
 }
 
-// The morning job: the last 24 hours, stored, and texted to Royce.
+// The morning job: the last 24 hours, stored, and emailed to Royce only
+// (services/reportEmail.ts). No longer texted (Royce, 2026-09-30).
 export async function runMorningReview(now = new Date()): Promise<void> {
   if (!reviewEnabled()) return;
   try {
     const since = new Date(now.getTime() - 24 * 60 * 60 * 1000);
     const { flags, names } = await reviewWindow(since, now);
     const stored = await storeFlags(flags);
-    const digest = renderDigest(flags, names, "last 24h");
-    const recipient = await digestRecipient();
-    if (!recipient) {
-      await recordDecision({ layer: 3, decision: "devReview.digest", userId: null, outcome: "skip", action: "no_recipient", reason: `no account named ${process.env.DEV_REVIEW_DIGEST_NAME ?? "Royce"} yet`, proposal: { flags: flags.length, stored } });
-      return;
-    }
-    const rejected = renderRejectedSample(await rejectedEvents(since, now).catch(() => []));
-    await textDigest(recipient, rejected ? [...digest, rejected] : digest);
+    const rejected = await rejectedEvents(since, now).catch(() => [] as RejectedEvent[]);
+    const email = renderDigestEmail(flags, names, { date: now, rejected, preArrival: await preArrivalStats(now).catch(() => null) });
+    const { sendReportEmail } = await import("../services/reportEmail.js");
+    const result = await sendReportEmail(email.subject, email.html, email.text);
     await recordDecision({
       layer: 3,
       decision: "devReview.digest",
-      userId: recipient,
-      outcome: "act",
-      action: "texted",
+      userId: null,
+      outcome: result.sent ? "act" : "skip",
+      action: result.sent ? `emailed ${result.to}` : "email_not_sent",
       proposal: { since: since.toISOString(), until: now.toISOString(), flags: flags.length, stored, groups: groupFlags(flags).map((g) => ({ type: g.type, count: g.count, worst: g.worst })) },
     });
   } catch (err: any) {

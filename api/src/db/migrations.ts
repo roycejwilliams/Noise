@@ -99,6 +99,8 @@ export async function runMigrations(): Promise<void> {
         PRIMARY KEY (event_api_id, user_id)
       )`,
     )
+    // The pre-arrival text and opt-in location, per event (services/preArrival.ts, 2026-09-30).
+    .then(() => pool.query(`ALTER TABLE event_presence ADD COLUMN IF NOT EXISTS pre_arrival_sent_at TIMESTAMPTZ, ADD COLUMN IF NOT EXISTS location_yes_at TIMESTAMPTZ, ADD COLUMN IF NOT EXISTS location_yes_quote TEXT, ADD COLUMN IF NOT EXISTS location_stopped_at TIMESTAMPTZ, ADD COLUMN IF NOT EXISTS not_going_at TIMESTAMPTZ, ADD COLUMN IF NOT EXISTS far_note_sent_at TIMESTAMPTZ, ADD COLUMN IF NOT EXISTS met_someone_at TIMESTAMPTZ, ADD COLUMN IF NOT EXISTS met_quote TEXT`))
     .catch((err: Error) => console.error("event_presence table init failed:", err));
 
   // What came of each promise Co made on a call, tied to that call by a
@@ -116,6 +118,22 @@ export async function runMigrations(): Promise<void> {
     )
     .then(() => pool.query(`CREATE INDEX IF NOT EXISTS idx_call_promise_results_call ON call_promise_results (user_id, call_key)`))
     .catch((err: Error) => console.error("call_promise_results table init failed:", err));
+
+  // Test events and test locations for test members, co-test and local only
+  // (services/testNumbers.ts). Never on production.
+  await (async () => {
+    const { testNumbersEnabled } = await import("../services/testNumbers.js");
+    if (!testNumbersEnabled()) return;
+    await pool.query(`CREATE TABLE IF NOT EXISTS co_test_events (api_id TEXT PRIMARY KEY, name TEXT NOT NULL, start_at TIMESTAMPTZ NOT NULL, end_at TIMESTAMPTZ, timezone TEXT, venue TEXT, address TEXT, latitude DOUBLE PRECISION, longitude DOUBLE PRECISION, url TEXT, guest_user_ids UUID[] NOT NULL DEFAULT '{}')`);
+    await pool.query(`CREATE TABLE IF NOT EXISTS co_test_locations (user_id UUID PRIMARY KEY, latitude DOUBLE PRECISION NOT NULL, longitude DOUBLE PRECISION NOT NULL, accuracy DOUBLE PRECISION, at TIMESTAMPTZ NOT NULL DEFAULT NOW())`);
+  })().catch((err: Error) => console.error("test event tables init failed:", err));
+
+  // True between claiming the day-of ask and it actually going out, so a
+  // server killed in between leaves a marker that services/strandedClaims.ts
+  // clears for a retry (2026-09-24). Old rows default to false: already sent.
+  await pool
+    .query(`ALTER TABLE event_presence ADD COLUMN IF NOT EXISTS ask_pending BOOLEAN NOT NULL DEFAULT false`)
+    .catch((err: Error) => console.error("event_presence.ask_pending migration failed:", err));
 
   // A heads-up about an event Co doesn't run names no one until both people
   // say yes (2026-09-23): marks those nudges so replies never name the other
@@ -281,6 +299,18 @@ export async function runMigrations(): Promise<void> {
       "event_guest_match_nudge", "event_guest_match_optin", "event_intro_group_created",
       "event_intro_email_sent", "network_offer_pending", "network_offer_resolved",
       "network_intro_offer_pending", "recommendation_offered", "call_correction",
+      // Written by code but missing here, so every write failed quietly
+      // (found 2026-09-26): why a call failed, the closest miss Co
+      // mentioned, whether a promise was kept, a held send, and what a
+      // follow-up was about.
+      "call_failure", "closest_miss_mentioned", "promise_result", "send_held", "followup_context",
+      // What Co learned about how to be with them from their pushback (services/connectDots.ts).
+      "co_lesson",
+      // The text before a Co event (services/preArrival.ts).
+      "event_pre_arrival",
+      // What a web search kept, with its link, so "send it" works on a later turn
+      // (services/researchFinds.ts, 2026-10-03).
+      "research_find",
     ];
     const { rows } = await pool.query(
       `SELECT pg_get_constraintdef(oid) AS def FROM pg_constraint
@@ -717,6 +747,65 @@ export async function runMigrations(): Promise<void> {
       .catch((err: Error) => console.error("review_flags table init failed:", err));
   }
 
+  // Co's own sent messages, by Sendblue handle (2026-09-28), so a reply can
+  // thread under the thing being discussed (routes/sendblue.ts threadHandle).
+  // user_id is matched from the number at send time; owner-scoped lookups only.
+  await pool
+    .query(
+      `CREATE TABLE IF NOT EXISTS outbound_messages (
+        message_handle TEXT PRIMARY KEY,
+        user_id UUID,
+        content TEXT,
+        sent_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+      )`,
+    )
+    .catch((err: Error) => console.error("outbound_messages table init failed:", err));
+  // Who sent it: "co", or an extension on the same number ("mo"), so a reply
+  // under Mo's text goes to Mo (services/sendblue.ts sendingAs).
+  await pool
+    .query(`ALTER TABLE outbound_messages ADD COLUMN IF NOT EXISTS sender TEXT NOT NULL DEFAULT 'co'`)
+    .catch((err: Error) => console.error("outbound_messages.sender migration failed:", err));
+  // Every link, read once (services/linkReader.ts, 2026-09-28). owner_key is
+  // '' for public pages Co sent and the member's id for a link they texted,
+  // so a member's own links stay theirs.
+  await pool
+    .query(
+      `CREATE TABLE IF NOT EXISTS link_reads (
+        url TEXT NOT NULL,
+        owner_key TEXT NOT NULL DEFAULT '',
+        owner_user_id UUID,
+        final_url TEXT,
+        status TEXT NOT NULL,
+        why TEXT,
+        fields JSONB NOT NULL DEFAULT '{}'::jsonb,
+        summary TEXT,
+        source TEXT,
+        fetched_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+        PRIMARY KEY (url, owner_key)
+      )`,
+    )
+    .catch((err: Error) => console.error("link_reads table init failed:", err));
+  // The page's own text, so Co can critique what they share (2026-09-29).
+  await pool
+    .query(`ALTER TABLE link_reads ADD COLUMN IF NOT EXISTS excerpt TEXT`)
+    .catch((err: Error) => console.error("link_reads.excerpt migration failed:", err));
+  // Details Co needs to do things for them that it must not guess (company,
+  // role, LinkedIn), in their words. Owner-scoped (services/memberKit.ts).
+  await pool
+    .query(
+      `CREATE TABLE IF NOT EXISTS member_kit (
+        user_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+        key TEXT NOT NULL,
+        value TEXT NOT NULL,
+        updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+        PRIMARY KEY (user_id, key)
+      )`,
+    )
+    .catch((err: Error) => console.error("member_kit table init failed:", err));
+  await pool
+    .query(`CREATE INDEX IF NOT EXISTS outbound_messages_user_sent ON outbound_messages (user_id, sent_at DESC)`)
+    .catch((err: Error) => console.error("outbound_messages index failed:", err));
+
   // Sendblue delivery retries (2026-09-15): one inbound text is processed
   // once, keyed by Sendblue's message_handle, however many times the webhook
   // is delivered.
@@ -735,6 +824,12 @@ export async function runMigrations(): Promise<void> {
   await pool
     .query(`ALTER TABLE inbound_webhook_handles ADD COLUMN IF NOT EXISTS payload JSONB, ADD COLUMN IF NOT EXISTS finished_at TIMESTAMPTZ`)
     .catch((err: Error) => console.error("inbound_webhook_handles payload/finished_at migration failed:", err));
+  // A retry owed for a text (a crashed turn, or an empty reply) and who took
+  // it, so it runs once even across a restart (routes/sendblue.ts
+  // replayOwedTurn, 2026-10-01 code review).
+  await pool
+    .query(`ALTER TABLE inbound_webhook_handles ADD COLUMN IF NOT EXISTS retry_due_at TIMESTAMPTZ, ADD COLUMN IF NOT EXISTS retry_claimed_at TIMESTAMPTZ`)
+    .catch((err: Error) => console.error("inbound_webhook_handles retry columns migration failed:", err));
 
   // Proactive check-in call cadence — user-set preference (7 or 14 days,
   // captured post-call via extractCheckinCadencePreference in
@@ -776,6 +871,10 @@ export async function runMigrations(): Promise<void> {
   await pool
     .query(`ALTER TABLE co_profiles ADD COLUMN IF NOT EXISTS last_companion_checkin_at TIMESTAMPTZ`)
     .catch((err: Error) => console.error("co_profiles.last_companion_checkin_at migration failed:", err));
+  // Offers held for a few days after a safety concern (services/safety.ts).
+  await pool
+    .query(`ALTER TABLE co_profiles ADD COLUMN IF NOT EXISTS safety_hold_until TIMESTAMPTZ`)
+    .catch((err: Error) => console.error("co_profiles.safety_hold_until migration failed:", err));
 
   // Real source of truth for a call's SID/status once calls are placed via
   // the media-stream bridge (services/mediaStreamBridge.ts) rather than
@@ -916,6 +1015,12 @@ export async function runMigrations(): Promise<void> {
       )`,
     )
     .catch((err: Error) => console.error("event_guest_match_nudges table init failed:", err));
+
+  // Same idea for the in-room match nudge claim (2026-09-24): true from the
+  // claim until the text is sent.
+  await pool
+    .query(`ALTER TABLE event_guest_match_nudges ADD COLUMN IF NOT EXISTS pending BOOLEAN NOT NULL DEFAULT false`)
+    .catch((err: Error) => console.error("event_guest_match_nudges.pending migration failed:", err));
 
   // Double opt-in handoff (Royce, 2026-09-07: "should Co make a group chat
   // once they've been opted in" + "not replying until it's asked a
@@ -1448,6 +1553,130 @@ export async function runMigrations(): Promise<void> {
     )
     .catch((err: Error) => console.error("mo tables init failed:", err));
 
+  // Mo reaching out as itself, two DM styles tested side by side (Jacqueline,
+  // 2026-09-24), and Mo's team state: pause, what the team asked it to look
+  // for, and the network's gaps as Co reports them (mo/team.ts).
+  await pool
+    .query(
+      `ALTER TABLE mo_prospects ADD COLUMN IF NOT EXISTS dm_style TEXT, ADD COLUMN IF NOT EXISTS draft_why TEXT, ADD COLUMN IF NOT EXISTS joined_at TIMESTAMPTZ`,
+    )
+    .then(() =>
+      pool.query(`CREATE TABLE IF NOT EXISTS mo_settings (key TEXT PRIMARY KEY, value JSONB NOT NULL, updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW())`),
+    )
+    .then(() =>
+      pool.query(
+        `CREATE TABLE IF NOT EXISTS mo_focus (
+          id BIGSERIAL PRIMARY KEY,
+          text TEXT NOT NULL,
+          asked_by UUID REFERENCES users(id) ON DELETE SET NULL,
+          created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+        )`,
+      ),
+    )
+    .catch((err: Error) => console.error("mo team tables init failed:", err));
+
+  // Living asks (services/askKind.ts, 2026-09-26): whether a search can find
+  // it, and when they last brought it up, so what matters now is searched first.
+  await pool
+    .query(
+      `ALTER TABLE ask_checkins ADD COLUMN IF NOT EXISTS kind TEXT NOT NULL DEFAULT 'find',
+         ADD COLUMN IF NOT EXISTS kind_checked_at TIMESTAMPTZ,
+         ADD COLUMN IF NOT EXISTS last_mentioned_at TIMESTAMPTZ`,
+    )
+    .catch((err: Error) => console.error("ask_checkins living-asks migration failed:", err));
+  // How each member likes to be texted (services/textingStyle.ts, 2026-09-26).
+  await pool
+    .query(`ALTER TABLE co_profiles ADD COLUMN IF NOT EXISTS texting_style TEXT[] NOT NULL DEFAULT '{}'`)
+    .catch((err: Error) => console.error("co_profiles.texting_style migration failed:", err));
+
+  // A switch per ability (services/abilitySwitches.ts, 2026-09-25): turn
+  // any one of Co's abilities off without a deploy.
+  await pool
+    .query(
+      `CREATE TABLE IF NOT EXISTS ability_switches (
+        ability_id TEXT PRIMARY KEY,
+        off BOOLEAN NOT NULL DEFAULT false,
+        reason TEXT,
+        updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+      )`,
+    )
+    .catch((err: Error) => console.error("ability_switches table init failed:", err));
+
+  // What Co knows, as connected facts (services/coFacts.ts, 2026-09-26): Co's
+  // own actions for each member, and what members want and offer, each with
+  // an owner and who may see it. Filled from past records on every start
+  // (idempotent), then written as things happen.
+  await pool
+    .query(
+      `CREATE TABLE IF NOT EXISTS co_facts (
+        id BIGSERIAL PRIMARY KEY,
+        owner_user_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+        subject TEXT NOT NULL CHECK (subject IN ('co', 'member')),
+        relation TEXT NOT NULL,
+        object_label TEXT NOT NULL,
+        object_key TEXT NOT NULL,
+        url TEXT,
+        visibility TEXT NOT NULL CHECK (visibility IN ('owner', 'room', 'team')),
+        source TEXT NOT NULL,
+        happened_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+        meta JSONB NOT NULL DEFAULT '{}',
+        embedding vector(1536),
+        retired_at TIMESTAMPTZ,
+        created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+        UNIQUE (owner_user_id, relation, object_key, happened_at)
+      )`,
+    )
+    .then(() => pool.query(`CREATE INDEX IF NOT EXISTS idx_co_facts_owner ON co_facts (owner_user_id, subject, happened_at DESC)`))
+    .then(async () => {
+      const { backfillCoActions } = await import("../services/coFacts.js");
+      const n = await backfillCoActions();
+      if (n.texted || n.sent || n.tools) console.log(`co_facts backfill: ${n.texted} texted, ${n.sent} sent, ${n.tools} tool actions`);
+    })
+    .catch((err: Error) => console.error("co_facts init failed:", err));
+
+  // Replies to Mo's emails (mo/emailReplies.ts, 2026-09-25): the thread to
+  // answer in, and each received email handled once however often Resend
+  // retries the post.
+  // Which opening Mo used (mo/draft.ts OPENERS, 2026-09-25), to see which lands.
+  await pool
+    .query(`ALTER TABLE mo_prospects ADD COLUMN IF NOT EXISTS opener TEXT`)
+    .catch((err: Error) => console.error("mo_prospects.opener migration failed:", err));
+  // Mo as an extension of Co (2026-09-26): who a prospect became once they
+  // joined, what they said to Mo before joining (their own words), and the
+  // event they were invited for, so Co's first conversations don't start
+  // cold (services/extensions.ts handoff).
+  await pool
+    .query(
+      `ALTER TABLE mo_prospects ADD COLUMN IF NOT EXISTS joined_user_id UUID REFERENCES users(id) ON DELETE SET NULL,
+         ADD COLUMN IF NOT EXISTS their_words JSONB NOT NULL DEFAULT '[]',
+         ADD COLUMN IF NOT EXISTS invited_for TEXT`,
+    )
+    .then(() =>
+      pool.query(
+        `UPDATE mo_prospects sp SET joined_user_id = ic.used_by FROM invite_codes ic
+         WHERE sp.invite_code = ic.code AND sp.joined_user_id IS NULL AND ic.used_by IS NOT NULL`,
+      ),
+    )
+    .catch((err: Error) => console.error("mo_prospects handoff migration failed:", err));
+  await pool
+    .query(`ALTER TABLE mo_prospects ADD COLUMN IF NOT EXISTS last_email_message_id TEXT`)
+    .catch((err: Error) => console.error("mo_prospects.last_email_message_id migration failed:", err));
+  await pool
+    .query(
+      `CREATE TABLE IF NOT EXISTS mo_email_inbound (
+        email_id TEXT PRIMARY KEY,
+        prospect_id UUID REFERENCES mo_prospects(id) ON DELETE SET NULL,
+        received_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+      )`,
+    )
+    .catch((err: Error) => console.error("mo_email_inbound table init failed:", err));
+  // The team never sends anything by hand (Royce, 2026-09-24): anyone left
+  // waiting on an approver to post a LinkedIn note goes back into Mo's own
+  // outreach (an email from Co if there's a public address).
+  await pool
+    .query(`UPDATE mo_prospects SET status = 'approved', channel = NULL, updated_at = NOW() WHERE status = 'manual_pending'`)
+    .catch((err: Error) => console.error("mo manual_pending cleanup failed:", err));
+
   // Kinds of things a member told Co to stop suggesting ("no more
   // hackathons", 2026-09-22). Turning down one event only ever blocked that
   // one event; this is the lasting version, read by the personal fit check
@@ -1607,6 +1836,9 @@ export async function runMigrations(): Promise<void> {
         )`,
       ),
     )
+    // Spacing after payload first handed work to a task (harness/payloadFirst.ts);
+    // unlike hold_until, a new candidate doesn't clear it.
+    .then(() => pool.query(`ALTER TABLE proactive_user_state ADD COLUMN IF NOT EXISTS space_until TIMESTAMPTZ`))
     .catch((err: Error) => console.error("proactive harness tables init failed:", err));
 
   // Layer 7 (2026-09-14): which source rows have been handed to the proactive
@@ -1672,7 +1904,54 @@ export async function runMigrations(): Promise<void> {
     // Who the feeling is about: 'co' (Co itself) or 'life'. NULL on older rows,
     // classified from "about" at read time (harness/emotion.ts signalTarget).
     .then(() => pool.query(`ALTER TABLE emotion_signals ADD COLUMN IF NOT EXISTS target TEXT`))
+    // Where a signal came from when it isn't a read of what they said:
+    // 'frustration_score' is ElevenLabs' per-line score (2026-10-04,
+    // harness/emotion.ts frustrationMoments). NULL for everything else.
+    .then(() => pool.query(`ALTER TABLE emotion_signals ADD COLUMN IF NOT EXISTS basis TEXT`))
     .catch((err: Error) => console.error("emotion_signals table init failed:", err));
+
+  // Voice flags (2026-10-03) — see src/services/voiceFlags.ts. One run per
+  // call (claimed by conversation id, so a retried webhook doesn't run it
+  // twice) and every flag it raised, kept or dropped with why, for the audit.
+  await pool
+    .query(
+      `CREATE TABLE IF NOT EXISTS voice_flag_runs (
+        conversation_id TEXT PRIMARY KEY,
+        user_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+        status TEXT NOT NULL,
+        model TEXT,
+        audio_bytes INT,
+        flags INT,
+        kept INT,
+        ms INT,
+        error TEXT,
+        created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+        finished_at TIMESTAMPTZ
+      )`,
+    )
+    .then(() =>
+      pool.query(
+        `CREATE TABLE IF NOT EXISTS voice_flags (
+          id BIGSERIAL PRIMARY KEY,
+          conversation_id TEXT NOT NULL,
+          user_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+          at_secs REAL,
+          quote TEXT,
+          cue TEXT,
+          feeling TEXT,
+          valence TEXT,
+          reading TEXT,
+          confidence REAL,
+          kept BOOLEAN NOT NULL,
+          drop_reason TEXT,
+          created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+        )`,
+      ),
+    )
+    .then(() => pool.query(`CREATE INDEX IF NOT EXISTS idx_voice_flags_user ON voice_flags (user_id, created_at DESC)`))
+    // Gemini's raw answer, so a failed flag insert loses nothing (review of #60).
+    .then(() => pool.query(`ALTER TABLE voice_flag_runs ADD COLUMN IF NOT EXISTS raw JSONB`))
+    .catch((err: Error) => console.error("voice_flags table init failed:", err));
 
   // Tier 3 (paid X search) budget log (2026-09-15) — tieredRecommendation.ts.
   await pool
@@ -1715,6 +1994,109 @@ export async function runMigrations(): Promise<void> {
       )`,
     )
     .catch((err: Error) => console.error("person_snapshots table init failed:", err));
+  await pool
+    .query(
+      `CREATE TABLE IF NOT EXISTS co_tasks (
+        id BIGSERIAL PRIMARY KEY,
+        user_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+        goal TEXT NOT NULL,
+        their_words TEXT NOT NULL,
+        steps JSONB NOT NULL DEFAULT '[]'::jsonb,
+        plan_next TEXT,
+        next_check_at TIMESTAMPTZ,
+        status TEXT NOT NULL DEFAULT 'open',
+        wakes INT NOT NULL DEFAULT 0,
+        notes JSONB NOT NULL DEFAULT '[]'::jsonb,
+        texts_sent INT NOT NULL DEFAULT 0,
+        last_texted_at TIMESTAMPTZ,
+        outcome TEXT,
+        created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+        updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+        closed_at TIMESTAMPTZ
+      )`,
+    )
+    .then(() => pool.query(`CREATE INDEX IF NOT EXISTS idx_co_tasks_due ON co_tasks (next_check_at) WHERE status = 'open'`))
+    .then(() => pool.query(`CREATE INDEX IF NOT EXISTS idx_co_tasks_user ON co_tasks (user_id, status)`))
+    // Deadlines and waking on their reply (2026-09-30).
+    // Follow-ups handed to Co (2026-09-30): a follow-up task holds the check-in it may send.
+    .then(() => pool.query(`ALTER TABLE co_tasks ADD COLUMN IF NOT EXISTS kind TEXT NOT NULL DEFAULT 'work', ADD COLUMN IF NOT EXISTS followup JSONB, ADD COLUMN IF NOT EXISTS target_key TEXT`))
+    // Where a task came from (2026-10-04): 'promise' for one Co opened to keep a promise it made in a reply (services/promises.ts).
+    .then(() => pool.query(`ALTER TABLE co_tasks ADD COLUMN IF NOT EXISTS source TEXT NOT NULL DEFAULT 'ask'`))
+    .then(() => pool.query(`ALTER TABLE co_tasks ADD COLUMN IF NOT EXISTS deadline DATE, ADD COLUMN IF NOT EXISTS final_check_at TIMESTAMPTZ, ADD COLUMN IF NOT EXISTS final_told BOOLEAN NOT NULL DEFAULT false, ADD COLUMN IF NOT EXISTS awaiting_reply BOOLEAN NOT NULL DEFAULT false, ADD COLUMN IF NOT EXISTS their_reply_at TIMESTAMPTZ`))
+    .catch((err: Error) => console.error("co_tasks table init failed:", err));
+  // Open loops (Royce, 2026-10-01: "Open loops are first-class state. Every
+  // stated ask becomes a tracked outcome with a status"): one row per thing Co
+  // is carrying for them, synced from tasks, working notes, asks and offers
+  // (services/openLoops.ts). status_by says whether Co set the status itself.
+  await pool
+    .query(
+      `CREATE TABLE IF NOT EXISTS open_loops (
+        id BIGSERIAL PRIMARY KEY,
+        user_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+        source TEXT NOT NULL,
+        source_ref TEXT NOT NULL,
+        title TEXT NOT NULL,
+        status TEXT NOT NULL DEFAULT 'open',
+        status_by TEXT NOT NULL DEFAULT 'code',
+        detail TEXT,
+        due_date DATE,
+        task_id BIGINT,
+        created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+        updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+        changed_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+        woke_at TIMESTAMPTZ,
+        closed_at TIMESTAMPTZ,
+        UNIQUE (user_id, source, source_ref)
+      )`,
+    )
+    .then(() => pool.query(`CREATE INDEX IF NOT EXISTS idx_open_loops_user ON open_loops (user_id) WHERE closed_at IS NULL`))
+    // seen_at: changes up to here have been handled (a wake, or Co made them
+    // itself); changed_at past it is pending. closed_reason: who closed it
+    // and why ('co' is a tombstone the sync never reopens; 'stale' isn't done).
+    // 2026-10-01 code review.
+    .then(() => pool.query(`ALTER TABLE open_loops ADD COLUMN IF NOT EXISTS seen_at TIMESTAMPTZ, ADD COLUMN IF NOT EXISTS closed_reason TEXT`))
+    .then(() => pool.query(`UPDATE open_loops SET seen_at = COALESCE(woke_at, changed_at) WHERE seen_at IS NULL`))
+    .catch((err: Error) => console.error("open_loops table init failed:", err));
+  // The search brief Co keeps while it helps someone find something (Royce,
+  // 2026-09-30): "120 people" or a map pin refines the same search.
+  await pool
+    .query(
+      `CREATE TABLE IF NOT EXISTS search_briefs (
+        user_id UUID PRIMARY KEY REFERENCES users(id) ON DELETE CASCADE,
+        brief JSONB NOT NULL,
+        updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+      )`,
+    )
+    .catch((err: Error) => console.error("search_briefs table init failed:", err));
+  await pool
+    .query(
+      `CREATE TABLE IF NOT EXISTS member_advice (
+        id BIGSERIAL PRIMARY KEY,
+        user_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+        topic TEXT NOT NULL,
+        gist TEXT NOT NULL,
+        given_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+        followed_up_at TIMESTAMPTZ
+      )`,
+    )
+    .then(() => pool.query(`CREATE INDEX IF NOT EXISTS idx_member_advice_user ON member_advice (user_id, given_at DESC)`))
+    .catch((err: Error) => console.error("member_advice table init failed:", err));
+  await pool
+    .query(
+      `CREATE TABLE IF NOT EXISTS member_milestones (
+        user_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+        key TEXT NOT NULL,
+        kind TEXT NOT NULL,
+        text TEXT NOT NULL,
+        then_quote TEXT,
+        now_quote TEXT,
+        happened_at TIMESTAMPTZ NOT NULL,
+        marked_at TIMESTAMPTZ,
+        created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+        PRIMARY KEY (user_id, key)
+      )`,
+    )
+    .catch((err: Error) => console.error("member_milestones table init failed:", err));
   await pool
     .query(
       `CREATE TABLE IF NOT EXISTS suggestion_outcomes (
@@ -1851,4 +2233,83 @@ export async function runMigrations(): Promise<void> {
   } catch (err) {
     console.error("users.phone_number unique index migration failed:", err);
   }
+
+  // Co passing messages between members, with consent both ways, and
+  // reminders to follow up (services/relay.ts, 2026-09-28). Off unless
+  // CO_RELAY=on. member_connections holds who's been introduced after both
+  // said yes, the only people a relay can reach.
+  await pool
+    .query(
+      `CREATE TABLE IF NOT EXISTS member_connections (
+        person_a UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+        person_b UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+        source TEXT NOT NULL,
+        created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+        PRIMARY KEY (person_a, person_b),
+        CHECK (person_a < person_b)
+      )`,
+    )
+    .catch((err: Error) => console.error("member_connections table init failed:", err));
+  await pool
+    .query(
+      `CREATE TABLE IF NOT EXISTS member_relays (
+        id BIGSERIAL PRIMARY KEY,
+        from_user UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+        to_user UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+        message TEXT NOT NULL,
+        status TEXT NOT NULL,
+        created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+      )`,
+    )
+    .catch((err: Error) => console.error("member_relays table init failed:", err));
+  await pool
+    .query(
+      `CREATE TABLE IF NOT EXISTS member_reminders (
+        id BIGSERIAL PRIMARY KEY,
+        user_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+        what TEXT NOT NULL,
+        due_at TIMESTAMPTZ NOT NULL,
+        sent_at TIMESTAMPTZ,
+        created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+      )`,
+    )
+    .catch((err: Error) => console.error("member_reminders table init failed:", err));
+
+  // Google Calendar and Gmail, read-only (services/googleAuth.ts, 2026-09-28).
+  // One connection per member; tokens AES-256-GCM encrypted; one-time connect
+  // links (state + PKCE verifier, 15 minutes, single use); a cached summary.
+  await pool
+    .query(
+      `CREATE TABLE IF NOT EXISTS google_connections (
+        user_id UUID PRIMARY KEY REFERENCES users(id) ON DELETE CASCADE,
+        refresh_token_enc TEXT,
+        access_token_enc TEXT,
+        access_expires_at TIMESTAMPTZ,
+        scopes TEXT,
+        connected_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+      )`,
+    )
+    .catch((err: Error) => console.error("google_connections table init failed:", err));
+  await pool
+    .query(
+      `CREATE TABLE IF NOT EXISTS google_oauth_states (
+        state TEXT PRIMARY KEY,
+        user_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+        code_verifier_enc TEXT NOT NULL,
+        expires_at TIMESTAMPTZ NOT NULL,
+        used_at TIMESTAMPTZ,
+        created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+      )`,
+    )
+    .catch((err: Error) => console.error("google_oauth_states table init failed:", err));
+  await pool
+    .query(
+      `CREATE TABLE IF NOT EXISTS google_snapshots (
+        user_id UUID PRIMARY KEY REFERENCES users(id) ON DELETE CASCADE,
+        busy JSONB,
+        waiting JSONB,
+        fetched_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+      )`,
+    )
+    .catch((err: Error) => console.error("google_snapshots table init failed:", err));
 }

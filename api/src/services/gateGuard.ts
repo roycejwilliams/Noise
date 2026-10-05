@@ -15,7 +15,11 @@
 import pool from "../db/db.js";
 import { GATE_ASK, WRONG_CODE } from "./onboardingLines.js";
 
-export const GATE_REPLY_BUDGET = { max: 5, windowHours: 24 };
+// 2 (was 5): the greeting plus one retry. 2026-09-24, a clinic's marketing
+// bot got three replies before it stopped; Royce: "I don't want our model to
+// respond to them at all. It wastes our money." A real person who mistypes
+// twice can text again tomorrow.
+export const GATE_REPLY_BUDGET = { max: 2, windowHours: 24 };
 
 const AUTOMATED: RegExp[] = [
   /^\s*(?:stop|stopall|unsubscribe|cancel|end|quit)\s*[.!]?\s*$/i,
@@ -32,6 +36,13 @@ const AUTOMATED: RegExp[] = [
   /\bout\s+of\s+(?:the\s+)?office\b/i,
   /\b(?:verification|security|login|one[-\s]?time|confirmation)\s+code\s*(?:is|:)\s*\d{4,8}\b/i,
   /\b\d{4,8}\s+is\s+your\b/i,
+  // 2026-09-24, a clinic's marketing bot: "...Want us to call you to
+  // schedule? Reply YES or call us at 813-...", then "We are sorry, we did
+  // not understand your response. Please reply using YES or NO." twice.
+  /\breply\s+(?:with\s+|using\s+)?["'“]?(?:yes|y)["'”]?(?:\s+(?:or|\/)\s+["'“]?(?:no|n)["'”]?)?(?:\s+(?:to|or|if)\b|\s*[.!,]|\s*$)/i,
+  /\bwe\s+(?:are\s+sorry,?\s+we\s+)?(?:did\s+not|didn['’]t|could\s+not|couldn['’]t)\s+understand\s+your\s+(?:response|reply|message)/i,
+  /\bcall\s+us\s+(?:at|on|today)\b/i,
+  /\b(?:invalid|unrecognized)\s+(?:response|reply|keyword|input|command)\b/i,
 ];
 
 export function looksAutomated(text: string): boolean {

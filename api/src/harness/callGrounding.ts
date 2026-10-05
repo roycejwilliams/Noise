@@ -36,15 +36,22 @@ export type CallClaim = {
 export const CALL_CAPABILITIES = `Co can: look for events, communities, opportunities, and people after a call and text them if something real fits (never a guaranteed result or time); call them back if they ask; text them.
 Co can't: book, buy, register them for events, email or call other people for them, promise when something will be found, or know details (times, places, people's intentions) it wasn't given.`;
 
-export function callAuditPrompt(transcript: string, knownBefore: string): string {
+// impressions (2026-09-28, the facts-vs-hints rule on the text side,
+// replyGrounding.ts addHint): summaries and read-outs Co's own models wrote
+// going into the call. They help read the call, but they're never proof of a
+// specific time, place, count, or what another person said, wants or did.
+export function callAuditPrompt(transcript: string, knownBefore: string, impressions?: string): string {
   return `Audit what Co said on a phone call. Co can only claim things it actually knew and only promise things it can actually do.
 
 What Co can and can't do:
 ${CALL_CAPABILITIES}
 
-What Co knew going into the call:
+What Co knew going into the call (facts):
 ${knownBefore || "(nothing)"}
-
+${impressions?.trim() ? `
+Co's own impressions going in (summaries its models wrote). Use these to understand the call, never as proof: a specific time, place, count, link, or what another person said, wants or did that only an impression backs is "invented_fact". What the person themself said in these recent texts is fine to rely on.
+${impressions.slice(0, 6000)}
+` : ""}
 Call transcript ("assistant" is Co):
 ${transcript.slice(-12000)}
 
@@ -53,7 +60,7 @@ List every statement by Co ("assistant" lines only) that is a promise of a futur
 - "promise_unkeepable": any other promise (a time, a guaranteed result, booking, contacting someone for them).
 - "invented_fact": a specific fact not in what Co knew or what the person said on the call.
 - "capability": a wrong claim about what Co can or can't do.
-- "ok": supported by what Co knew, what the person said, or the capabilities.
+- "ok": supported by the facts Co knew, what the person said, or the capabilities.
 
 Return ONLY JSON: {"claims": [{"quote": "Co's exact words", "type": "...", "what": "..."}]}`;
 }
@@ -139,13 +146,15 @@ export async function keepCallPromise(userId: string, what: string, transcript?:
   return queued ? "queued" : "nothing";
 }
 
-export async function auditCall(userId: string, transcript: string, knownBefore: string): Promise<void> {
+export async function auditCall(userId: string, transcript: string, knownBefore: string | { facts: string; impressions: string }): Promise<void> {
+  const facts = typeof knownBefore === "string" ? knownBefore : knownBefore.facts;
+  const impressions = typeof knownBefore === "string" ? undefined : knownBefore.impressions;
   try {
     const { text } = await generateText({
       model: anthropic(MODELS.sonnet),
       providerOptions: { anthropic: { effort: "low" } },
       experimental_telemetry: { isEnabled: true, functionId: "call.grounding.audit" },
-      prompt: callAuditPrompt(transcript, knownBefore),
+      prompt: callAuditPrompt(transcript, facts, impressions),
     });
     const claims = (parseModelJson<{ claims?: CallClaim[] }>(text).claims ?? []).filter((c) => c && typeof c.quote === "string");
     const checks = callAuditChecks(claims);

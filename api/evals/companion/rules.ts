@@ -1,0 +1,188 @@
+// Model-free checks for the Instinct-inspired companion work (2026-09-29):
+// tapback acknowledgment, threaded late results, no silent outcomes, stale
+// heads-up, member details kit, and critique of shared links.
+//
+//   npx tsx evals/companion/rules.ts
+process.env.SENDBLUE_API_API_KEY ||= "unused-in-tests";
+process.env.SENDBLUE_API_API_SECRET ||= "unused-in-tests";
+import fs from "node:fs";
+const src = (p: string) => fs.readFileSync(new URL(`../../src/${p}`, import.meta.url), "utf8");
+const R = await import("../../src/services/readTurn.js");
+const I = await import("../../src/services/inlineReply.js");
+const H = await import("../../src/mo/health.js");
+const S = await import("../../src/services/staleWatch.js");
+const K = await import("../../src/services/memberKit.js");
+const L = await import("../../src/services/linkReader.js");
+
+let total = 0;
+let failed = 0;
+const check = (label: string, ok: boolean) => {
+  total++;
+  if (!ok) {
+    failed++;
+    console.log(`FAIL ${label}`);
+  }
+};
+
+// 1. Tapback acknowledgment
+check("ack accepts the club set, with or without the variation selector", ["👀", "✍️", "✍", "🤝", "👍", "❤️", "❤", "😂", "🥂", "🫡", "🔥"].every((e) => R.parseAck(e) !== null));
+check("ack takes one fitting emoji (a plane for a landing), never words, several, or the startup-cute ones", ["✈️", "🥟", "🫂", "👍🏽"].every((e) => R.parseAck(e) !== null) && [null, undefined, "", "🚀", "🙌", "🎉", "hello", "👀👀", "✈️ nice", 5].every((e) => R.parseAck(e as any) === null) && R.parseAck("✈️") === "✈️");
+
+// Tapbacks spaced out and varied (services/tapbacks.ts, 2026-10-01).
+{
+  const T = await import("../../src/services/tapbacks.js");
+  const now = new Date("2026-10-01T05:00:00Z");
+  const ago = (min: number) => new Date(now.getTime() - min * 60_000);
+  check("the first reaction in a while is allowed", T.ackAllowed("👀", { recent: [], textsSinceLast: null }, now).ok);
+  check("no reaction on the text right after one Co reacted to (last night: 👀 on five in a row)", !T.ackAllowed("✍️", { recent: [{ emoji: "👀", at: ago(1) }], textsSinceLast: 0 }, now).ok);
+  check("one text later Co decides (the backstop doesn't pick for it)", T.ackAllowed("✍️", { recent: [{ emoji: "👀", at: ago(5) }], textsSinceLast: 1 }, now).ok);
+  check("never the same reaction twice in a row (Royce, 2026-10-01 decisions)", !T.ackAllowed("👀", { recent: [{ emoji: "👀", at: ago(60) }], textsSinceLast: 4 }, now).ok && !T.ackAllowed("❤", { recent: [{ emoji: "❤️", at: ago(60) }], textsSinceLast: 4 }, now).ok && T.ackAllowed("👀", { recent: [{ emoji: "🥂", at: ago(60) }, { emoji: "👀", at: ago(200) }], textsSinceLast: 4 }, now).ok);
+  check("no more than 3 in two hours", !T.ackAllowed("🥂", { recent: [{ emoji: "❤️", at: ago(20) }, { emoji: "✍️", at: ago(50) }, { emoji: "👍", at: ago(100) }], textsSinceLast: 5 }, now).ok && T.ackAllowed("🥂", { recent: [{ emoji: "❤️", at: ago(20) }, { emoji: "✍️", at: ago(50) }, { emoji: "👍", at: ago(150) }], textsSinceLast: 5 }, now).ok);
+  check("Co sees its recent reactions before it decides", T.describeTapbacks({ recent: [{ emoji: "👀", at: ago(3) }, { emoji: "✍️", at: ago(90) }], textsSinceLast: 2 }, now) === "👀 3 min ago (2 of their texts since), ✍️ 2h ago" && R.reactionsLine("👀 3 min ago").includes("not with the same one each time") && R.reactionsLine(null) === "");
+  check("❤️ and 😂 go as the native tapbacks", T.reactionFor("❤️") === "love" && T.reactionFor("❤") === "love" && T.reactionFor("😂") === "laugh" && T.reactionFor("👍") === "like" && T.reactionFor("👀") === "👀");
+  const ct = fs.readFileSync(new URL("../../src/agent/conversationTools.ts", import.meta.url), "utf8");
+  check("the closing tapback is any single emoji under the ack's rules, never the last one again", /reaction: z\.string\(\)/.test(ct) && /parseAck\(picked\)/.test(ct) && /sameReaction\(ctx\.lastReaction, reaction\)/.test(ct) && /sendReaction\(ctx\.messageHandle, reactionFor\(reaction\)\)/.test(ct));
+  const sb = fs.readFileSync(new URL("../../src/routes/sendblue.ts", import.meta.url), "utf8");
+  check("the reply knows Co's last reaction (this turn's ack first)", /const lastReaction = ackSent \?\? \(await tapbacksP/.test(sb) && /\blastReaction,/.test(sb));
+  check("searches no longer add a 👀 of their own", !/sendReaction\(ownHandle, "👀"\)/.test(sb) && /HOLD_NO_ACK_MS/.test(sb));
+  check("the read sees its recent reactions, and the backstop checks the same history before sending", /readTurn\(routeInput, t, coveragePriorContext\(profile\), \{ reactions: h \? describeTapbacks\(h\) : null \}\)/.test(sb) && /ackAllowed\(ackEmoji, h\)/.test(sb) && /sendReaction\(ackHandle, reactionFor\(ackEmoji\)\)/.test(sb));
+  const rt = fs.readFileSync(new URL("../../src/services/readTurn.ts", import.meta.url), "utf8");
+  check("the read is told reactions are communication: most get none, follow-ups get none, register first, never a heart on bad news, vary", /most messages get null/.test(rt) && /a follow-up to something they just asked/.test(rt) && /Read the emotional register first/.test(rt) && /never "❤️" or "😂"/.test(rt) && /Vary it/.test(rt));
+}
+check("Mo's actions ack by kind", /moApprove: "🚀"/.test(src("mo/teamAgent.ts")) && /moSkip: "👍"/.test(src("mo/teamAgent.ts")) && /moChangeDraft: "✍️"/.test(src("mo/teamAgent.ts")));
+check("the reply path reacts after the read, never blocking the reply", /turn\.ack/.test(src("routes/sendblue.ts")));
+
+// 2. Late results thread under the ask
+check("a slow answer threads under their text", I.threadReason({ theyRepliedInline: false, newerTextSince: false, slowMs: 25_000 }) === "slow");
+check("a quick answer doesn't", I.threadReason({ theyRepliedInline: false, newerTextSince: false, slowMs: 3_000 }) === null);
+check("a reply to a specific message still mirrors first", I.threadReason({ theyRepliedInline: true, newerTextSince: false, slowMs: 60_000 }) === "mirror");
+// (2026-10-01) Late search results are gone with the old reply search: Co's loop shares finds as it goes.
+check("threaded sends still carry their reply handle", /replyTo/.test(src("harness/proactive.ts")));
+
+// 3. No silent outcomes
+check("causes are grouped by kind", H.causeOf("HTTP 403 Forbidden") === "auth" && H.causeOf("429 Too Many Requests") === "rate_limit" && H.causeOf("ETIMEDOUT") === "network" && H.causeOf("weird") === "other");
+const t0 = new Date("2026-09-29T12:00:00Z");
+const fail = (n: number) => ({ ok: 0, failed: Array.from({ length: n }, (_, i) => ({ cause: "auth" as const, who: `p${i}` })) });
+const r1 = H.nextHealth(H.EMPTY_HEALTH, fail(4), t0, { kind: "sending" });
+check("four failures make one message, not four", !!r1.message && /4 people/.test(r1.message) && r1.message.split("\n").length === 1);
+const r2 = H.nextHealth(r1.health, fail(4), new Date(t0.getTime() + 3_600_000), { kind: "sending" });
+check("the same cause isn't repeated an hour later", r2.message === null);
+const r3 = H.nextHealth(H.nextHealth(r2.health, fail(4), new Date(t0.getTime() + 2 * 3_600_000), { kind: "sending" }).health, { ok: 2, failed: [] }, new Date(t0.getTime() + 3 * 3_600_000), { kind: "sending" });
+check("it says so when it clears", !!r3.message && /^Back on/.test(r3.message) && r3.health.cause === null);
+const r4 = H.nextHealth(H.EMPTY_HEALTH, fail(1), t0, { kind: "replies", notifyAfterRuns: 2 });
+check("a reply-reader blip stays quiet for one run", r4.message === null && H.nextHealth(r4.health, fail(1), new Date(t0.getTime() + 3_600_000), { kind: "replies", notifyAfterRuns: 2 }).message !== null);
+const r5 = H.nextHealth({ ...H.EMPTY_HEALTH, cause: "auth", runs: 2, since: t0.toISOString(), notifiedAt: t0.toISOString() }, fail(1), new Date(t0.getTime() + 3_600_000), { kind: "sending" });
+check("three failing runs back off retries", H.inBackoff(r5.health, new Date(t0.getTime() + 3_600_000 + 60_000)) && !H.inBackoff(r5.health, new Date(t0.getTime() + 10 * 3_600_000)));
+
+// 4. Stale heads-up
+const read = (o: any) => ({ url: "u", finalUrl: "u", status: "ok", why: null, fields: {}, summary: null, source: "model", fetchedAt: t0, ...o });
+const f = (value: string, verified = true) => ({ value, quote: value, verified });
+check("no earlier read, no change", S.staleChange(null, read({})) === null);
+check("sold out is caught", S.staleChange(read({ fields: { sold_out: f("no") } }), read({ fields: { sold_out: f("yes") } }))?.kind === "sold_out");
+check("a time moved 2 hours is caught", S.staleChange(read({ fields: { start: f("2026-10-01T18:00:00Z") } }), read({ fields: { start: f("2026-10-01T20:00:00Z") } }))?.kind === "moved");
+check("a 5-minute wobble isn't", S.staleChange(read({ fields: { start: f("2026-10-01T18:00:00Z") } }), read({ fields: { start: f("2026-10-01T18:05:00Z") } })) === null);
+check("an unverified value proves nothing", S.staleChange(read({ fields: { sold_out: f("no") } }), read({ fields: { sold_out: f("yes", false) } })) === null);
+check("a page that's gone (404) is caught, one that's just unreadable isn't", S.staleChange(read({}), read({ status: "failed", why: "HTTP 404" }))?.kind === "gone" && S.staleChange(read({}), read({ status: "failed", why: "timeout" })) === null);
+check("only people who said they were interested are told", /result IN \('interested', 'acted'\)/.test(src("services/staleWatch.ts")) && /result = 'declined'/.test(src("services/staleWatch.ts")));
+check("the heads-up goes through the event-change path (hours, STOP, once)", /sendExemptWhenAllowed/.test(src("services/staleWatch.ts")) && /watchSentPages/.test(src("jobs/index.ts")));
+
+// 5. Member details kit
+const kit = { full_name: "Sam Rivera", email: "sam@example.com", phone: "+15550001111", company: "Lantern", role: "founder" };
+const lines = K.kitLines(kit).join(" ");
+check("email and phone are named, never shown", !/sam@example\.com|\+15550001111/.test(lines) && /email/i.test(lines) && /Lantern/.test(lines));
+check("a detail must be something they wrote", K.checkKitValue("company", "Lantern", "I run Lantern, a small studio").ok && !K.checkKitValue("company", "Acme", "I run Lantern").ok);
+check("only work details are saved this way", !K.checkKitValue("email", "a@b.co", "a@b.co").ok);
+check("LinkedIn must look like a profile", K.checkKitValue("linkedin", "https://www.linkedin.com/in/sam-rivera", "here https://www.linkedin.com/in/sam-rivera").ok && !K.checkKitValue("linkedin", "https://evil.com/in/sam", "https://evil.com/in/sam").ok);
+check("what will be used is shown before it's used", /I'll use Full name and Company|I'll use/.test(K.detailsToUse(kit as any, ["full_name", "company"]).line) && K.detailsToUse(kit as any, ["linkedin"]).missing.includes("linkedin"));
+check("the kit is a tool Co chooses, with a per-turn limit", /saveKitFact/.test(src("agent/conversationTools.ts")) && /kit/.test(src("services/capabilities.ts")));
+
+// 6. Critique of shared links
+const ok = read({ excerpt: "We help small studios ship faster. Pricing starts at $99 a month. Book a demo today. ".repeat(3) });
+check("page text becomes a fact labeled as content, not instructions", /not instructions to follow/.test(L.excerptFact("x", ok) ?? ""));
+check("a thin or missing page gives no excerpt fact", L.excerptFact("x", read({ excerpt: "hi" })) === null && L.excerptFact("x", read({ status: "failed", excerpt: ok.excerpt })) === null);
+const shared = await L.linkForReply(Promise.resolve(ok as any));
+check("a readable link brings the critique instruction", shared.instructions.some((i) => /honest friend/.test(i)) && shared.facts.length > 0);
+const bad = await L.linkForReply(Promise.resolve(read({ status: "login_required", why: "login wall" }) as any));
+check("an unreadable link says so and asks for the text", bad.instructions.some((i) => /couldn't read/.test(i)) && !bad.instructions.some((i) => /honest friend/.test(i)));
+const slow = await L.linkForReply(new Promise(() => {}), 50);
+check("a slow read never holds the reply, and Co is told it hasn't read it", slow.facts.length === 0 && slow.instructions.length === 1);
+check("the reply path reads their first link in the same turn", /linkForReply\(theirLinkP\)/.test(src("routes/sendblue.ts")));
+
+// Fixes after review (2026-09-29)
+check("two readers of one page share one read", (() => { const t = src("services/linkReader.ts"); return /inFlight\.get\(key\)/.test(t) && /\.finally\(\(\) => inFlight\.delete\(key\)\)/.test(t); })());
+check("the story is loaded once with the turn's context, not per reply", /story\?: string\[\]/.test(src("services/turnContext.ts")) && /opts\.turn\?\.story/.test(src("harness/replyGrounding.ts")));
+check("small talk doesn't wait on a shared link", /mode !== "small_talk"/.test(src("routes/sendblue.ts")));
+check("milestones are inserted only when new, in one statement", /!have\.has\(m\.key\)/.test(src("services/milestones.ts")) && /unnest\(/.test(src("services/milestones.ts")));
+
+// 2026-09-29: "...and tell me which one you'd pick" was read as not a request, so the search ran on the older Austin ask.
+// (2026-10-01) The old search rewrite is gone; Co understands the ask in its own loop.
+
+// Advisor (2026-09-29)
+const A = await import("../../src/services/advice.js");
+const nowA = new Date("2026-09-29T12:00:00Z");
+const ago = (d: number) => new Date(nowA.getTime() - d * 86_400_000).toISOString();
+const adv = (id: number, d: number, extra: any = {}) => ({ id, topic: `topic ${id}`, gist: "g", givenAt: ago(d), followedUpAt: null, ...extra });
+check("advice is asked about after 3 days, not before", A.dueAdvice([adv(1, 1)], nowA) === null && A.dueAdvice([adv(1, 4)], nowA)?.id === 1);
+check("advice isn't asked about once stale or already asked", A.dueAdvice([adv(1, 30)], nowA) === null && A.dueAdvice([adv(1, 5, { followedUpAt: ago(1) })], nowA) === null);
+check("the newest due advice goes first", A.dueAdvice([adv(1, 10), adv(2, 5)], nowA)?.id === 2);
+check("the same topic within a week isn't noted twice", A.isRepeat("the pitch", [{ topic: "pitch on Friday", givenAt: ago(2) }], nowA) && !A.isRepeat("the pitch", [{ topic: "pitch on Friday", givenAt: ago(10) }], nowA) && !A.isRepeat("moving", [{ topic: "pitch on Friday", givenAt: ago(2) }], nowA));
+check("replies know what Co advised lately, and drop old advice", A.adviceLines([adv(1, 2), adv(2, 40)], nowA).length === 1 && /advised them on/.test(A.adviceLines([adv(1, 2)], nowA)[0]));
+check("advice is recorded by the learning call only (the tool was removed) and followed up", !/noteAdvice/.test(src("services/capabilities.ts")) && !/noteAdvice: tool/.test(src("agent/conversationTools.ts")) && /runAdviceFollowUps/.test(src("jobs/index.ts")) && /markFollowedUp\(c\.userId/.test(src("harness/proactiveRegistry.ts")));
+check("Co's voice keeps professionals in the loop on health, legal and money", (() => { const t = src("services/coVoice.ts"); return /a doctor for a symptom, a lawyer for a contract/.test(t) && /never tell them to buy, sell or invest/.test(t); })());
+check("advice uses their story and earlier advice", /what you advised before/.test(src("agent/conversationReply.ts")) && /opts\.turn\?\.advice/.test(src("harness/replyGrounding.ts")));
+
+// From the 09-29 test conversation
+check("bare domains count as links, with or without a path", JSON.stringify(L.linksIn("What do you think of this? www.from-royce.com")) === JSON.stringify(["https://www.from-royce.com"]) && L.linksIn("see from-royce.com/work, thanks")[0] === "https://from-royce.com/work" && L.linksIn("https://lu.ma/x?a=1 and https://x.com/a/status/1?s=20").length === 2);
+check("emails, numbers and plain words aren't links", L.linksIn("email me at sam@example.com or call 415.555.1212, e.g. tomorrow").length === 0);
+check("a link still being read tells Co not to say it read it", await (async () => { const r = await L.linkForReply(new Promise(() => {}), 30); return r.instructions.some((i) => /still being read/.test(i) && /Don't say you've read it/.test(i)); })());
+check("a cut that loses the question isn't sent as a stub", (() => { const g = src("harness/replyGrounding.ts"); return /draft\.includes\("\?"\) && !text\.includes\("\?"\) && words < 14/.test(g) && /enoughLeft\(cut, draft\)/.test(g); })());
+check("Mo's pause text doesn't start with Paused (Co's own line says it)", !/return sayLoose\(`Paused\./.test(src("mo/teamAgent.ts")));
+check("drafts for them keep their own wording", /use only the names, titles, events and details they gave you/.test(src("agent/conversationReply.ts")));
+
+check("the reply path reads a link from their unanswered texts through the tested merge helper (behavior: evals/guards)", (() => { const t = src("routes/sendblue.ts"); return /mergeEarlierLink\(resolvedContent, hasText, earlier\)/.test(t) && /INTERVAL '3 minutes'/.test(t) && /content LIKE 'Co replied:%'/.test(t); })());
+
+// 2026-09-29: cutting a sentence with a domain in it left "from-royce.If a recruiter…"
+const GR = await import("../../src/harness/replyGrounding.js");
+check("cutting a sentence with a domain in it doesn't leave a fragment", (() => {
+  const out = GR.stripUnsupported("For the portfolio, from-royce.com is a splash with an Enter button. If a recruiter clicks through, that undercuts the pitch. Costs 3.5 hours.", [{ name: "claim_capability", pass: false, reason: 'detail: "from-royce.com is a splash with an Enter button."' } as any]);
+  return out === "If a recruiter clicks through, that undercuts the pitch. Costs 3.5 hours." && !/royce\.If/.test(out);
+})());
+
+// 2026-09-29 live test: Co didn't call noteAdvice on a pitch answer, so nothing was noted. The learning call that already runs after every text now reports advice too (no extra call).
+const TL = await import("../../src/services/turnLearning.js");
+check("the learning call reads advice from Co's reply, and parses it", (() => { const p = TL.parseTurnLearning('{"profile":{},"advice":{"topic":"investor pitch","gist":"Say the ask early and stop talking."}}'); return p?.advice?.topic === "investor pitch" && TL.parseTurnLearning('{"profile":{},"advice":null}')?.advice === null && TL.parseTurnLearning('{"profile":{},"advice":{"topic":5}}')?.advice === null; })());
+check("advice from the learning call is recorded with the same guard as the tool", /recordAdvice\(input\.userId, learned\.advice\.topic/.test(src("services/turnLearning.ts")) && /8\. advice: this one is about Co's own LAST line/.test(src("services/turnLearning.ts")));
+
+// 2026-09-29 retest: half the learning reads were cut off at the token cap, Co made Mo a cofounder, and the kit question got a thread answer
+check("both learning reads leave room to finish: medium effort and a cap that fits the reasoning", (() => { const a = src("services/turnLearning.ts"); const b = src("services/callLearning.ts"); return /maxOutputTokens: 5000,\s*providerOptions: \{ anthropic: \{ effort: "medium" \} \}/.test(a) && /maxOutputTokens: 6000,\s*providerOptions: \{ anthropic: \{ effort: "medium" \} \}/.test(b); })());
+check("advice is judged on Co's last line only", /Co's own LAST line/.test(src("services/turnLearning.ts")));
+check("Mo is described as an AI agent, never a cofounder or someone in a member's life", (() => { const t = src("services/extensions.ts"); return /Mo is Co's teammate|\$\{e\.name\} is Co's teammate \(an AI agent that works alongside Co, not a person: never a cofounder/.test(t); })());
+check("advice doesn't guess who is involved", /Don't guess who else is involved or what their role is/.test(src("services/coVoice.ts")));
+check("asked what Co has on them, Co answers from the details on file first", /answer from the details on file first/.test(src("services/capabilities.ts")));
+
+// 2026-09-29: the summary of Royce said he built Co "with cofounders Mo and Jacqueline", because his texts to Mo were read as facts about his life
+const TLn = await import("../../src/services/teamLines.js");
+check("talk with a teammate agent is dropped from what the learning reads see", TLn.withoutTeammateLines("User said: hi\nUser said: @Mo go [to Mo]\nMo replied: ok\nCo tagged Mo: @Mo\nCo replied: sure\nUser said: I go [to Bob] weekly") === "User said: hi\nCo replied: sure\nUser said: I go [to Bob] weekly");
+check("the SQL filter only matches a trailing [to Name]", /!~ ' \\\[to \[A-Za-z\]\+\\\]\$'/.test(TLn.notToTeammate()) || TLn.notToTeammate("m").startsWith("m.content"));
+check("every reader of the member's own lines skips their talk with a teammate", ["harness/personSnapshot.ts", "harness/memberThreads.ts", "services/callContext.ts"].every((f) => /notToTeammate\(/.test(src(f))) && /withoutTeammateLines\(input\.recentConversation\)/.test(src("services/turnLearning.ts")));
+check("the summary rebuild is told Mo is an AI agent, and drops an older 'cofounder Mo'", /Mo is an AI agent that works alongside Co, not a person in their life/.test(src("harness/personSnapshot.ts")));
+
+// Real-thread replay (evals/companion/threadReplay.ts): with earlier wrong replies in the thread, Co copied them until told plainly
+check("Mo is software for team members; the one-incident kit instruction is gone (the replay showed it changed nothing)", (() => { const g = src("harness/replyGrounding.ts"); return !/The details on file listed above are all you have for doing things on their behalf/.test(g) && /Mo is software that Co runs, not a person\. When they talk about their cofounder, equity, family, friends or their own life, never mention Mo/.test(g); })());
+{
+  const C = await import("../../src/services/capabilities.js");
+  const full = C.capabilitySheet().join("\n").length;
+  const plain = C.capabilitySheet({ situation: C.situationFor({ kitFields: 0, message: "anything fun this weekend?", openTasks: 0, eventToday: false }) }).join("\n").length;
+  const busy = C.capabilitySheet({ situation: C.situationFor({ kitFields: 2, message: "hi", openTasks: 1, eventToday: true }) }).join("\n").length;
+  console.log(`  capability sheet: ${Math.round(full / 4)} tokens in full, ${Math.round(plain / 4)} on a plain turn`);
+  check("situational entries are left out of a plain turn and kept when they apply", plain < full && busy === full);
+  check("a plain turn isn't offered task, location, going or kit tools", JSON.stringify(C.toolsOutOfSituation({ kit: false, tasks: false, eventToday: false }).sort()) === JSON.stringify(["closeTask", "saveKitFact", "shareLocationYes", "updateGoing", "updateTask"]));
+  check("a message about applying brings the kit back even with nothing saved", C.situationFor({ kitFields: 0, message: "help me apply to this fellowship", openTasks: 0, eventToday: false }).kit);
+}
+
+check("a link from their earlier text is logged, and the reply is told the photo is its preview", (() => { const t = src("routes/sendblue.ts"); return /linkFromEarlier = m\.fromEarlier/.test(t) && /decision: "turn\.link"/.test(t) && /this message may be its preview image or a separate photo/.test(t); })());
+
+check("'met someone' is read from their own words and recorded on their recent Co event", (() => { const p = TL.parseTurnLearning('{"profile":{},"met_someone":"met a founder named Sam, great chat"}'); const t = src("services/turnLearning.ts"); return p?.metSomeone === "met a founder named Sam, great chat" && TL.parseTurnLearning('{"profile":{}}')?.metSomeone === null && TL.metQuoteIsTheirs("met a founder", "I met a founder there!") && !TL.metQuoteIsTheirs("met two investors", "I met a founder there!") && /learned\.metSomeone && metQuoteIsTheirs\(learned\.metSomeone, input\.message\)/.test(t); })());
+
+console.log(`companion rules: ${total - failed}/${total} passed`);
+if (failed) process.exitCode = 1;

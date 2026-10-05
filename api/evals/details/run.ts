@@ -1,4 +1,4 @@
-// Event details + search brief eval (services/eventDetails.ts, searchBrief.ts).
+// Event details eval (services/eventDetails.ts).
 //
 //   npx tsx evals/details/run.ts          code-only: page parsing, rendering, gaps
 //   npx tsx evals/details/run.ts --live   also: real Luma pages, replies to "tell

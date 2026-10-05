@@ -11,14 +11,9 @@
 // closing acknowledgment is directly observable. Anything with a question, a
 // new subject, or more than a few words gets a real reply.
 
-// Reaction values Sendblue accepts (services/sendblue.ts sendReaction).
+// The closing reaction this rule picks (evals/closing). Co's own closing
+// tapback can be any single emoji (agent/conversationTools.ts).
 export type Tapback = "like" | "love" | "laugh";
-
-const EMOJI_FOR: Record<Tapback, string> = { like: "👍", love: "❤️", laugh: "😂" };
-
-export function emojiFor(reaction: Tapback): string {
-  return EMOJI_FOR[reaction];
-}
 
 // Acknowledgments that close a thread, by the reaction they deserve.
 const CLOSINGS: { re: RegExp; reaction: Tapback }[] = [
@@ -91,27 +86,4 @@ export function closingReaction(rawText: string, lastCoMessage?: string | null):
   const stripped = text.replace(FILLER, " ").replace(/[^\p{L}\p{N}]+/gu, "").trim();
   FILLER.lastIndex = 0;
   return !stripped && /[a-z]/.test(text) ? "like" : null;
-}
-
-// A real request for Co's own contact details, not for something else Co
-// should send (2026-09-16: "You send it over", meaning a link, produced the
-// contact card).
-export function asksForContactCard(text: string): boolean {
-  const t = text.toLowerCase();
-  if (!/\b(your|you'?re|co'?s|ur)\b/.test(t) && !/\bcontact card\b/.test(t)) return false;
-  return /\bcontact card\b|\bvcard\b|\bcontact info\b|\bcontact details\b|\byour (number|contact|info|details|card)\b|\bsave (you|your number|your contact|co)\b|\badd you to my contacts\b/.test(t);
-}
-
-// A real, live incident (2026-09-17): Jacqueline asked for the contact
-// card, it (apparently) didn't arrive, and "I dont see it" — a plain
-// non-receipt report, not a fresh ask — failed asksForContactCard's own
-// current-message-only check. The tool correctly declined to resend, but
-// the reply agent then claimed "trying again" anyway, a false claim that
-// slipped past grounding too (see replyGrounding.ts's CLAIM_SHAPED fix).
-// The actual fix is upstream of both: recognize this shape of follow-up so
-// a genuine resend happens for real, instead of either silently doing
-// nothing or lying about doing something.
-export function reportsCardNotReceived(text: string): boolean {
-  const t = text.toLowerCase().trim();
-  return /\b(i )?(don'?t|do not|didn'?t|did not|never|still (don'?t|didn'?t)) (see|get|got|receive[d]?|have)\b.*\b(it|that|card|contact)\b|\b(it|that|card)\b.*\b(didn'?t|did not|never|hasn'?t|has n[o']?t) (come|arrive|show(ed)? up|land(ed)?)\b|\bnothing (came|showed up|landed)\b|\bnot (there|showing|coming through)\b/.test(t);
 }

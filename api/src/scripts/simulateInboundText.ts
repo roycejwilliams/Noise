@@ -36,7 +36,7 @@ async function main() {
   });
   console.log(`[simulateInboundText] webhook responded ${res.status}`);
 
-  // Co's real reply is debounced ~8s (routes/sendblue.ts's DEBOUNCE_MS) plus
+  // Co's real reply waits out the burst window (services/beats.ts burstWaitMs) plus
   // however long generation takes — poll co_memories rather than guessing a
   // fixed sleep.
   for (let i = 0; i < 20; i++) {

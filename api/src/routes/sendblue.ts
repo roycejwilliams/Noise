@@ -1,10 +1,7 @@
+import { notToTeammate } from "../services/teamLines.js";
+import { isDiscreetTurn } from "../harness/discretion.js";
 import { anthropic } from "@ai-sdk/anthropic";
-import { alreadySentNames, canSkipReplyAfterResults, isOnlyUpdatesAsk } from "../services/searchRules.js";
-import { capitalizeSentences } from "../services/textStyle.js";
 import { captureIssueReport } from "../services/issueReports.js";
-import { enqueueCandidate, nextLocalHour } from "../harness/proactive.js";
-import { getTimezoneForCity } from "../services/geocoding.js";
-import type { WindowFollowUpPayload } from "../agent/windowFollowUp.js";
 import { generateText } from "ai";
 import { propagateAttributes } from "@langfuse/tracing";
 import { randomInt } from "crypto";
@@ -15,22 +12,31 @@ import type { Server } from "socket.io";
 import pool from "../db/db.js";
 import { withAdvisoryLock } from "../db/advisoryLock.js";
 import { sendSMS } from "../otpActions.js";
-import { renderCoPersonaPrompt } from "../services/coPersona.js";
 import elevenlabs from "../services/elevenlabs.js";
 import { generateEmbedding } from "../services/embeddings.js";
 import { detectSeekingMode } from "../services/emotionalTone.js";
 import { getEmotionalContext, readTextEmotion, recordEmotionSignals, renderEmotionalContext } from "../harness/emotion.js";
 import { buildContextSummary } from "../services/callContext.js";
-import { findOrCreateUserByPhone, hasPendingEmail, splitFullName } from "../services/identity.js";
+import { findOrCreateUserByPhone, splitFullName } from "../services/identity.js";
 import { redeemInviteCodeIn } from "../services/inviteCodes.js";
 import { countRecentGateReplies, decideGateReply } from "../services/gateGuard.js";
-import { IDENTITY_RULE, stripUngroundedIdentity } from "../services/identityGuard.js";
-import { claimJoinNotice, getMemberInvite, inviteLink, invitesLeftFor, inviterFirstName, isInviteCountQuestion, isInviteRequest, releaseJoinNotice } from "../services/invites.js";
+import { claimJoinNotice, invitesLeftFor, inviterFirstName, releaseJoinNotice } from "../services/invites.js";
 import { decideInviteJoinedGate } from "../services/inviteJoinGate.js";
 import { handlePhoneChange } from "../services/phoneChange.js";
-import { handleMoReply } from "../mo/review.js";
-import { describeImage } from "../services/imageRead.js";
-import { CALL_OFFER, GATE_ASK, INVITE_JOINED, INVITE_READY, NO_INVITES_LEFT, WELCOME, WELCOME_INVITED, WRONG_CODE, pickLine } from "../services/onboardingLines.js";
+import { extensionForMessage, handleTeamText } from "../services/extensions.js";
+import { firstSendTimes } from "../services/turnLatency.js";
+import { catchUpReaction } from "../services/reactionCatchup.js";
+import { gapDescription } from "../services/understanding.js";
+import { logJevShadow, startJevShadow } from "../services/jevShadow.js";
+import { relayFacts } from "../services/relay.js";
+import { CO_WHY } from "../services/coVoice.js";
+import { assembleContext, type TurnContext } from "../services/turnContext.js";
+import { ABOUT_CO_INSTRUCTION, feedbackInstruction, readTurn, readTurnEnabled, type TurnRead } from "../services/readTurn.js";
+import { dotsInstruction, momentInstruction, readMoment, saveLesson, whyContext, type Moment } from "../services/connectDots.js";
+import { bareLink, inlineNote, repliedTo, repliedToFact, sentMessageHandle, threadReason } from "../services/inlineReply.js";
+import { recordSafetyConcern, SAFETY_INSTRUCTION, soundsLikeCrisis } from "../services/safety.js";
+import { describeImage, readableImage } from "../services/imageRead.js";
+import { CALL_OFFER, GATE_ASK, INVITE_JOINED, WELCOME, WELCOME_INVITED, WRONG_CODE, pickLine } from "../services/onboardingLines.js";
 import { claimTextLogin } from "../services/textLogin.js";
 import {
   INTAKE_EXTRACT_MODEL,
@@ -43,46 +49,42 @@ import {
   type IntakeProposal,
 } from "../harness/intake.js";
 import { isOptInKeyword, isOptOutKeyword } from "../services/optOut.js";
-import {
-  captureIntent,
-  captureIntentForTurn,
-  extractPlannedEventMention,
-  extractPsychographicProfile,
-  getCoverageNudge,
-  RAPPORT_TOPIC_DESCRIPTIONS,
-  storeProfile,
-} from "../services/profileExtraction.js";
-import { generateRecommendation, recordRecommendationsSent } from "../services/recommendation.js";
-import { isBrowseAsk } from "../services/askWindow.js";
+import { coverageNudgeFrom, coveragePriorContext, getCoverageNudge, RAPPORT_TOPIC_DESCRIPTIONS } from "../services/profileExtraction.js";
 import { recordOfferReaction, reactionFact, type OfferReaction } from "../services/offerReactions.js";
-import { searchWithTimeCap } from "../agent/conversationTools.js";
-import type { TierMatch } from "../services/tieredRecommendation.js";
-import { lookupNamedEvent } from "../services/namedEventLookup.js";
 import { detectCheckinPhrase, recordCheckin, hasActiveAsk, recordWalkinAsk } from "../services/eventWalkinCheckin.js";
-import { scheduleOutcomeFollowUp, recordOutcome, wasClosestMissRecentlyMentioned, recordClosestMissMentioned } from "../services/recommendationOutcome.js";
+import { scheduleOutcomeFollowUp, recordOutcome } from "../services/recommendationOutcome.js";
 import { recordEventCheckinOutcome } from "../services/eventCheckinFollowUp.js";
 import { handleMatchNudgeReply } from "../services/eventGuestMatchHandoff.js";
 import { resolveNetworkTeaseReply, resolveNetworkIntroReply } from "../services/networkIntroNudge.js";
 import { NO_ROUTE, decideActions, gatherOpenItems, routeMessage, type RouterOutput } from "../services/messageRouter.js";
 import { recordDecision } from "../harness/core.js";
+import { ackAllowed, describeTapbacks, reactionFor, tapbackHistory } from "../services/tapbacks.js";
+import { LOOP_GUIDE } from "../agent/loop.js";
+import { burstWaitMs } from "../services/beats.js";
+import { describeNotes } from "../agent/loopTools.js";
+import { loadBrief } from "../services/searchIntent.js";
 import { routerGateChecks } from "../harness/routerChecks.js";
-import { addEventFacts, addFact, addInstruction, addOngoingSearchFacts, gatherReplyFacts, recordSearchNote } from "../harness/replyGrounding.js";
+import { linkForReply, linksIn, mergeEarlierLink, type LinkRead } from "../services/linkReader.js";
+import { addEventFacts, addFact, addHint, addInstruction, gatherReplyFacts } from "../harness/replyGrounding.js";
 import { runConversationReplyAgent, filterRelevantMemories, CALL_OFFER_EXPIRY_DAYS } from "../agent/conversationReply.js";
+import { callLine } from "../services/capabilities.js";
+import { callNotPlacedReason, callNotPlacedFacts } from "../services/callReasons.js";
+import { memberSafe, introFacts } from "../services/memberSafeMemories.js";
 import { triggerCallForUser } from "../services/callTrigger.js";
-import sendblue, { cleanCoMessage, markRead, sendReaction, webhookSecretMatches } from "../services/sendblue.js";
-import { TURN_FAILED_NOTE, turnFailedNoteBlocked } from "../services/turnFailure.js";
-import { arrivedByText } from "../services/eventPresence.js";
-import { scoreGuestListForEvent } from "../services/eventScoring.js";
-import { closingReaction, emojiFor, lastCoLine } from "../services/conversationClose.js";
-import { renderMatchLead, sourceOf } from "../services/messageFormat.js";
-import { CO_VOICE, CO_TEXT_CHANNEL } from "../services/coVoice.js";
+import sendblue, { blockSender, cleanCoMessage, markRead, sendReaction, webhookSecretMatches, sendingAs } from "../services/sendblue.js";
+import { OWED_AFTER, RESUME_AFTER_MS, TURN_FAILED_NOTE, turnFailedNoteBlocked, turnReplayBlocked } from "../services/turnFailure.js";
+import { lineInVoice } from "../services/voiceLine.js";
+import { privacyAlert } from "../services/privacyAlert.js";
+import { learnFromTextTurn } from "../services/turnLearning.js";
+import { lastCoLine } from "../services/conversationClose.js";
 import { generateVoiceNote } from "../services/voiceNote.js";
 import { MODELS } from "../models.js";
 import { parseModelJson } from "../services/modelJson.js";
-import { enrichMatch, renderEventDetails } from "../services/eventDetails.js";
+import { enrichMatch } from "../services/eventDetails.js";
 import { refreshPersonSnapshot } from "../harness/personSnapshot.js";
 import { recordSuggestionOutcome, resultFromNamedOutcome } from "../services/outcomes.js";
-import { sendLateSearchResult } from "../services/lateSearchResult.js";
+import { isShuttingDown, track } from "../services/shutdown.js";
+import { sendLimiter } from "../services/sendLimiter.js";
 
 // Serializes webhook processing per phone number. Without this, two
 // messages sent seconds apart from the same person can be handled
@@ -99,14 +101,7 @@ function withPhoneLock<T>(phone: string, fn: () => Promise<T>): Promise<T> {
   return withAdvisoryLock(`phone:${phone}`, fn);
 }
 
-// How long to hold off Co's free-form reply after an inbound message, in
-// case the same person is mid-thought and about to send a follow-up.
-// Started at 5s; bumped to 8s after checking a real conversation's actual
-// gaps between related messages (16s in one case) — 5s was catching only
-// the fastest bursts. Not pushed further toward 16s itself: that would
-// make every single-message reply feel sluggish for the common case just
-// to fully cover one slower outlier.
-const DEBOUNCE_MS = 4000;
+// How long to wait for the rest of a burst: services/beats.ts (burstWaitMs).
 
 // Heuristic-only (no LLM call — this is directly observable, not something
 // to infer) read of how the user themselves texts, from their own lines in
@@ -139,7 +134,19 @@ const REPLY_BUDGET_SEARCH_MS = 60_000;
 // answer can be saved as their contact preference.
 const ONBOARDING_CALL_OFFER_PREFIX = "[onboarding]";
 
+// The fallback for the line sent while a search runs, when Co didn't write
+// its own. Kept so older logged rows are still recognized.
 const HOLD_LINES = ["On it, give me a sec.", "Let me look, one sec.", "Looking now, give me a minute."];
+export const HOLD_PREFIX = "Co is looking:";
+// After a reaction, the looking text waits this long: a quick search needs none.
+const HOLD_AFTER_ACK_MS = 8_000;
+const HOLD_NO_ACK_MS = 5_000;
+// Co's own hold line, used only when it's a short plain line with no link.
+export function holdLineFrom(line: string | null | undefined): string | null {
+  const t = cleanCoMessage(String(line ?? "")).trim();
+  if (!t || t.length > 140 || /https?:\/\/|www\./i.test(t)) return null;
+  return t;
+}
 
 function deriveStyleHint(chronological: { content: string }[]): string {
   const userLines = chronological
@@ -254,11 +261,17 @@ async function transcribeVoiceMemo(audioUrl: string): Promise<string> {
   return (result as { text: string }).text ?? "";
 }
 
+// Numbers Sendblue refused an inline reply to (SMS, or a line without it);
+// Co stops trying for them until the next restart.
+const inlineRefused = new Set<string>();
+
 // Send Co's reply — voice note if user sent audio, text if they sent text
 async function sendCoReply(params: {
   phone: string;
   message: string;
   asVoice: boolean;
+  // Thread this text under one of theirs (services/inlineReply.ts).
+  replyTo?: string | null;
 }): Promise<boolean> {
   const { phone, asVoice } = params;
   // Confirmed live, 2026-09-08 sweep: this, the actual send function behind
@@ -280,13 +293,30 @@ async function sendCoReply(params: {
     }
   }
 
+  const body = {
+    number: phone,
+    content: audioUrl ? "" : message,
+    ...(audioUrl ? { media_url: audioUrl } : {}),
+    from_number: process.env.SENDBLUE_PHONE_NUMBER!,
+  };
+  // An inline reply Sendblue refuses (not a V2 line, SMS, an old message) is
+  // never sent at all, so it goes again as a plain text.
+  if (params.replyTo && !audioUrl && !inlineRefused.has(phone)) {
+    try {
+      await sendblue.messages.send({ ...body, reply_to: { message_handle: params.replyTo } } as typeof body);
+      return true;
+    } catch (err: any) {
+      if (/send breaker|meta-commentary/.test(String(err?.message))) {
+        console.error(`sendCoReply failed for ${phone}:`, err?.message ?? err);
+        return false;
+      }
+      console.error("sendCoReply: inline reply refused, sending it plain (non-fatal):", err?.status ?? "", err?.message ?? err);
+      inlineRefused.add(phone);
+      recordDecision({ layer: 7, decision: "reply.inline", userId: null, outcome: "skip", action: "refused", reason: String(err?.message ?? err).slice(0, 200) }).catch(() => {});
+    }
+  }
   try {
-    await sendblue.messages.send({
-      number: phone,
-      content: audioUrl ? "" : message,
-      ...(audioUrl ? { media_url: audioUrl } : {}),
-      from_number: process.env.SENDBLUE_PHONE_NUMBER!,
-    });
+    await sendblue.messages.send(body);
   } catch (err: any) {
     // A real delivery failure (e.g. recipient hasn't texted in first) must
     // never crash the whole request — the reply was already generated and
@@ -304,7 +334,7 @@ async function sendCoReply(params: {
 // Sends a message and logs it only if it actually went out.
 async function sendAndLog(userId: string, phone: string, message: string, asVoice = false): Promise<boolean> {
   const sent = await sendCoReply({ phone, message, asVoice });
-  if (sent) await logTextExchange(userId, `Co replied: ${cleanCoMessage(message)}`);
+  if (sent) await logTextExchangeRow(userId, `Co replied: ${cleanCoMessage(message)}`);
   return sent;
 }
 
@@ -342,7 +372,11 @@ function dayLabel(isoDate: string): string {
   return d.isValid ? d.toFormat("cccc, LLLL d") : isoDate;
 }
 
-async function replyOwed(userId: string): Promise<boolean> {
+// Their previous message, when Co never really answered it: nothing since, or
+// only a hold line or a "something broke" line (services/turnFailure.ts
+// OWED_AFTER). An answer stays owed until a real one lands (2026-10-01 code
+// review). null when nothing's owed.
+async function owedAnswer(userId: string): Promise<{ text: string; afterFailure: boolean } | null> {
   const { rows } = await pool
     .query(
       `SELECT content FROM co_memories
@@ -354,9 +388,15 @@ async function replyOwed(userId: string): Promise<boolean> {
   // rows[0] is the message being handled now; look for their previous one.
   const earlier = rows.slice(1);
   const prevUser = earlier.findIndex((r: any) => String(r.content).startsWith("User said:"));
-  if (prevUser === -1) return false;
+  if (prevUser === -1) return null;
   const since = earlier.slice(0, prevUser);
-  return !since.some((r: any) => String(r.content).startsWith("Co replied:") && !HOLD_LINES.some((l) => String(r.content) === `Co replied: ${l}`));
+  const notAnAnswer = [...HOLD_LINES, ...OWED_AFTER].map((l) => `Co replied: ${l}`);
+  const answered = since.some((r: any) => (String(r.content).startsWith("Co replied:") && !notAnAnswer.includes(String(r.content))) || String(r.content).startsWith("Mo replied:"));
+  if (answered) return null;
+  // Co told them something broke: answering it is now this reply's job. (Without
+  // that, the earlier message may just be mid-reply in its own turn.)
+  const afterFailure = since.some((r: any) => OWED_AFTER.some((l) => String(r.content) === `Co replied: ${l}`));
+  return { text: String(earlier[prevUser].content).replace(/^User said:\s*/, ""), afterFailure };
 }
 
 // "You're in" for a good code: names the member who invited them when the
@@ -367,7 +407,15 @@ async function welcomeLineFor(userId: string, phone: string, invitedBy: string |
   const inviter = await inviterFirstName(invitedBy).catch(() => null);
   // pickLine returns "" when a line's variable is missing; the plain welcome
   // needs no variables, so it's always a safe fallback.
-  const line = (inviter ? pickLine(WELCOME_INVITED, { inviter }) : "") || pickLine(WELCOME);
+  const stock = (inviter ? pickLine(WELCOME_INVITED, { inviter }) : "") || pickLine(WELCOME);
+  // Co writes it (services/voiceLine.ts); the stock line is the fallback.
+  const { text: line, written } = await lineInVoice({
+    purpose: "Welcome someone who just got into Co with a good invite code.",
+    facts: inviter ? [`${inviter}, a member, invited them.`, "They're in."] : ["They're in. Someone invited them."],
+    examples: inviter ? WELCOME_INVITED.map((l) => l.replace("{inviter}", inviter)) : WELCOME,
+    mustInclude: inviter ? [inviter] : [],
+    fallback: stock,
+  });
   const sent = await sendAndLog(userId, phone, line);
   await recordDecision({
     layer: 3,
@@ -375,47 +423,9 @@ async function welcomeLineFor(userId: string, phone: string, invitedBy: string |
     userId,
     outcome: sent ? "act" : "skip",
     action: inviter ? "named_inviter" : "no_inviter",
-    proposal: inviter ? { inviter } : {},
+    proposal: { ...(inviter ? { inviter } : {}), written },
   }).catch(() => {});
   return sent;
-}
-
-// A member asked for an invite: the line, then the link in its own text so
-// it shows as a tappable card. Returns the action for the webhook response.
-async function handleInviteRequest(user: { id: string }, phone: string, countOnly = false): Promise<string> {
-  // "How many invites do I have left?" is a question, not a reason to mint a
-  // code (2026-09-20 code review: it used to burn a slot to answer).
-  if (countOnly) {
-    const left = await invitesLeftFor(user.id);
-    const line = left > 0 ? `You have ${left} invite${left === 1 ? "" : "s"} left. One only counts once someone joins.` : pickLine(NO_INVITES_LEFT);
-    const sent = await sendAndLog(user.id, phone, line);
-    await recordDecision({ layer: 3, decision: "account.invite", userId: user.id, outcome: sent ? "act" : "skip", action: "count_only", proposal: { left } }).catch(() => {});
-    return sent ? "invite_count" : "invite_failed";
-  }
-  const invite = await getMemberInvite(user.id);
-  const record = (action: string, extra: Record<string, unknown> = {}) =>
-    recordDecision({ layer: 3, decision: "account.invite", userId: user.id, outcome: invite.ok ? "act" : "skip", action, proposal: extra }).catch(() => {});
-  if (!invite.ok) {
-    await sendAndLog(user.id, phone, pickLine(NO_INVITES_LEFT));
-    await record("none_left");
-    return "invite_none_left";
-  }
-  const link = inviteLink(invite.code);
-  const count = `You have ${invite.left} left. One only counts once someone joins.`;
-  // Sends can be refused (sendCoReply returns false rather than throwing), and
-  // a refused send used to still report "invite_sent" — so the reply agent was
-  // told a link went out when nothing did (2026-09-20 code review).
-  let sent: boolean;
-  if (link) {
-    const intro = await sendAndLog(user.id, phone, `${pickLine(INVITE_READY)} ${count}`);
-    const linkSent = await sendAndLog(user.id, phone, link);
-    sent = intro && linkSent;
-  } else {
-    // No public URL configured: the bare code, texted to Co.
-    sent = await sendAndLog(user.id, phone, `Here's an invite code: ${invite.code}. They text it to me at ${process.env.SENDBLUE_PHONE_NUMBER ?? "this number"} to get in. ${count}`);
-  }
-  await record(sent ? (invite.reused ? "resent_open_code" : "made_code") : "send_failed", { left: invite.left, link: Boolean(link), sent });
-  return sent ? "invite_sent" : "invite_failed";
 }
 
 // Once someone who came in on a member's invite finishes onboarding, Co
@@ -472,7 +482,16 @@ async function tellInviterTheyJoined(newUser: { id: string; first_name?: string 
   }
 
   const left = await invitesLeftFor(gate.userId);
-  const line = pickLine(INVITE_JOINED, { name: inviterName, friend: gate.friend, left });
+  const stock = pickLine(INVITE_JOINED, { name: inviterName, friend: gate.friend, left });
+  const { text: line } = stock
+    ? await lineInVoice({
+        purpose: `Tell ${inviterName ?? "a member"} that the friend they invited just joined Co.`,
+        facts: [`${gate.friend} joined Co on their invite.`, `They have ${left} invite${left === 1 ? "" : "s"} left; one only counts once someone joins.`],
+        examples: INVITE_JOINED.map((l) => l.replace("{friend}", gate.friend ?? "").replace("{name}", inviterName ?? "").replace("{left}", String(left))),
+        mustInclude: gate.friend ? [gate.friend] : [],
+        fallback: stock,
+      })
+    : { text: "" };
   const sent = line ? await sendAndLog(gate.userId, inviterPhone!, line) : false;
   await record(sent ? "sent" : "send_failed", sent ? "act" : "skip", gate.userId, { friend: gate.friend, left });
   // The claim was already stamped, so an unsent note would be lost forever
@@ -480,7 +499,17 @@ async function tellInviterTheyJoined(newUser: { id: string; first_name?: string 
   if (!sent) await releaseJoinNotice(newUser.id);
 }
 
-async function logTextExchange(userId: string, content: string): Promise<void> {
+// Once per turn's text: a replayed turn's "User said" line is already logged
+// if its first run got that far. Co's lines always log.
+async function logTextExchangeOnce(userId: string, content: string, since: Date): Promise<void> {
+  if (content.startsWith("User said:")) {
+    const { rows } = await pool.query(`SELECT 1 FROM co_memories WHERE user_id = $1 AND memory_type = 'text_exchange' AND content = $2 AND created_at >= $3 LIMIT 1`, [userId, content, since]);
+    if (rows.length) return;
+  }
+  await logTextExchangeRow(userId, content);
+}
+
+async function logTextExchangeRow(userId: string, content: string): Promise<void> {
   const inserted = await pool.query(
     `INSERT INTO co_memories (user_id, memory_type, content) VALUES ($1, 'text_exchange', $2) RETURNING id`,
     [userId, content],
@@ -500,16 +529,22 @@ export function sendblueRouter(io: Server): Router {
 
   // POST /sendblue/webhook
   // Handles: inbound messages (text + voice memos), outbound delivery status, typing indicators
-  router.post(
-    "/webhook",
-    async (req: Request, webhookRes: Response, next: NextFunction) => {
+  // replay: re-running a text whose turn crashed or whose retry was lost to a
+  // restart (replayOwedTurn, below). The text was already checked, acked,
+  // de-duplicated, saved and marked read, and its "User said" line may
+  // already be logged, so none of that happens twice.
+  const handleWebhook = async (req: Request, webhookRes: Response, next: NextFunction, replay: { receivedAt: Date } | null = null) => {
+      // The member's message is logged once, however many times its turn runs.
+      const logTextExchange = replay ? (userId: string, content: string) => logTextExchangeOnce(userId, content, replay.receivedAt) : logTextExchangeRow;
       // Only Sendblue can post here (2026-09-17 code review: with no check,
       // anyone with the URL could fake an inbound text from any number and
       // opt someone out, plant memories, trigger texts or calls, or claim a
       // test-site login code). Sendblue sends the webhook secret set in its
       // dashboard back in the sb-signing-secret header.
       const expectedSecret = process.env.SENDBLUE_WEBHOOK_SECRET;
-      if (!expectedSecret) {
+      if (replay) {
+        // Checked when it first arrived.
+      } else if (!expectedSecret) {
         // Fail closed in production specifically, per Royce's instruction —
         // co-test (RAILWAY_ENVIRONMENT_NAME === "dev") and local dev still
         // get through unverified, but log loudly either way so a missing
@@ -537,7 +572,7 @@ export function sendblueRouter(io: Server): Router {
 
       // One inbound text is handled once, however many times it's delivered.
       const handle: unknown = req.body?.message_handle;
-      if (typeof handle === "string" && handle && !req.body?.is_outbound && req.body?.type !== "typing") {
+      if (!replay && typeof handle === "string" && handle && !req.body?.is_outbound && req.body?.type !== "typing") {
         const fresh = await pool
           .query(`INSERT INTO inbound_webhook_handles (handle) VALUES ($1) ON CONFLICT (handle) DO NOTHING RETURNING handle`, [handle])
           .then((r) => r.rows.length > 0)
@@ -574,7 +609,7 @@ export function sendblueRouter(io: Server): Router {
       const turnStartedAt = new Date();
       let myInboundAt: string | null = null;
       const bodyForStamp = req.body ?? {};
-      if (lockKey && !bodyForStamp.is_outbound && typeof bodyForStamp.content === "string") {
+      if (!replay && lockKey && !bodyForStamp.is_outbound && typeof bodyForStamp.content === "string") {
         bodyForStamp.content = await claimTextLogin(lockKey, bodyForStamp.content);
       }
       const isGenuineInbound =
@@ -585,7 +620,9 @@ export function sendblueRouter(io: Server): Router {
       // Read receipt right away for a real 1:1 inbound text (not groups, not
       // Co's own delivery updates), before debounce or reply work.
       if (lockKey && isGenuineInbound && bodyForStamp.message_type !== "group" && !bodyForStamp.group_id) {
-        markRead(lockKey).catch(() => {});
+        if (!replay) markRead(lockKey).catch(() => {});
+        // They texted: Co's run of unprompted texts starts over (sendLimiter.ts).
+        sendLimiter.noteInbound(lockKey);
       }
       // Group messages never stamp the 1:1 debounce (2026-09-17 code review:
       // a group text from someone mid-turn in their 1:1 thread cancelled
@@ -757,7 +794,6 @@ export function sendblueRouter(io: Server): Router {
         // capture has happened yet. Fire-and-forget on the write; never let
         // this block or fail the real reply below.
         let walkinCheckinEventName: string | null = null;
-        let arrivedAtEvent: { eventApiId: string; eventName: string; isNew: boolean } | null = null;
         if (hasText) {
           const checkin = await detectCheckinPhrase(content).catch((err: any) => {
             console.error("sendblue: detectCheckinPhrase failed (non-fatal):", err?.message ?? err);
@@ -768,20 +804,9 @@ export function sendblueRouter(io: Server): Router {
               console.error("sendblue: recordCheckin failed (non-fatal):", err?.message ?? err),
             );
             walkinCheckinEventName = checkin.eventName;
-          } else if (user.identity_captured) {
-            // "I'm here" from a member registered for an event that's on now
-            // (services/eventPresence.ts): counts as arriving, and their
-            // in-room nudge goes out now if one was waiting on them.
-            arrivedAtEvent = await arrivedByText(user.id, content).catch((err: any) => {
-              console.error("sendblue: arrivedByText failed (non-fatal):", err?.message ?? err);
-              return null;
-            });
-            if (arrivedAtEvent?.isNew) {
-              scoreGuestListForEvent(arrivedAtEvent.eventApiId, arrivedAtEvent.eventName).catch((err: any) =>
-                console.error("sendblue: arrival re-score failed (non-fatal):", err?.message ?? err),
-              );
-            }
           }
+          // A member saying they've arrived is Co's call now
+          // (conversationTools.ts markArrived, 2026-09-25).
         }
 
         // Step 1.1 — Invite code gate for a brand-new contact. Co is
@@ -821,7 +846,10 @@ export function sendblueRouter(io: Server): Router {
           const gateDecision = decideGateReply({ text: hasText ? content : "", recentGateReplies: await countRecentGateReplies(user.id) });
           if (gateDecision !== "send") {
             if (hasText) await logTextExchange(user.id, `User said: ${content}`);
-            await recordDecision({ layer: 2, decision: "gate.silent", userId: user.id, outcome: "skip", action: gateDecision, proposal: { message: hasText ? content.slice(0, 200) : null } });
+            // An automated sender is blocked in Sendblue so it can't come back
+            // (2026-09-24). Only ever before a number is verified.
+            const blocked = gateDecision === "silent_automated" ? await blockSender(number) : false;
+            await recordDecision({ layer: 2, decision: "gate.silent", userId: user.id, outcome: "skip", action: gateDecision, proposal: { message: hasText ? content.slice(0, 200) : null, blocked } });
             return res.status(200).send({ received: true, action: gateDecision });
           }
           if (!user.invite_asked) {
@@ -855,22 +883,38 @@ export function sendblueRouter(io: Server): Router {
           }
         }
 
-        // Mo approvals, in plain words (src/mo/review.ts): only for
-        // approvers, and only when the text answers what Mo asked them.
-        // Anything else falls through to a normal reply. Not logged as
-        // conversation, so it never reaches their own threads.
+        // Texts for an extension (services/extensions.ts), like Mo's team
+        // (src/mo/): only from teammates, and only when the extension reads
+        // the text as meant for it. Anything else falls through to a normal
+        // reply. Not logged as conversation, so it never reaches their own
+        // threads.
         if (hasText && user.identity_captured) {
-          const moReply = await handleMoReply(user.id, content).catch((err: any) => {
-            console.error("sendblue: mo reply failed:", err?.message ?? err);
+          // They pressed Reply on an extension's own text (Mo's "So on
+          // Harneet…"): it goes to that extension, whatever it says
+          // (2026-09-28: Co answered it instead).
+          const pressed = req.body?.thread_originator?.message_handle ?? req.body?.reply_to?.message_handle;
+          const repliedToExt = pressed ? await extensionForMessage(user.id, pressed).catch(() => null) : null;
+          const teamHandle = typeof req.body?.message_handle === "string" ? req.body.message_handle : null;
+          const teamAck = teamHandle ? (emoji: string) => sendReaction(teamHandle, emoji) : undefined;
+          const ext = await handleTeamText(user.id, content, { ...(repliedToExt ? { repliedTo: repliedToExt.content, only: repliedToExt.id } : {}), ack: teamAck }).catch((err: any) => {
+            console.error("sendblue: extension reply failed:", err?.message ?? err);
             return null;
           });
-          if (moReply !== null) {
-            if (moReply) {
-              await sendblue.messages.send({ number, content: moReply, from_number: process.env.SENDBLUE_PHONE_NUMBER! }).catch((err: any) =>
-                console.error("sendblue: mo reply send failed:", err?.message ?? err),
+          if (repliedToExt) {
+            recordDecision({ layer: 2, decision: "team.inlineToExtension", userId: user.id, outcome: ext ? "act" : "skip", action: repliedToExt.id }).catch(() => {});
+          }
+          if (ext !== null) {
+            // Their message to Mo goes in the thread too, marked as said to Mo,
+            // so Co can see the whole conversation (services/sendblue.ts
+            // logs Mo's replies).
+            if (hasText) await logTextExchange(user.id, `User said: ${content} [to ${ext.extension === "mo" ? "Mo" : ext.extension}]`).catch(() => {});
+            if (ext.reply) {
+              // Recorded as the extension's own text, so a reply under it comes back to it.
+              await sendingAs(ext.extension, () => sendblue.messages.send({ number, content: ext.reply, from_number: process.env.SENDBLUE_PHONE_NUMBER! })).catch((err: any) =>
+                console.error(`sendblue: ${ext.extension} reply send failed:`, err?.message ?? err),
               );
             }
-            return res.status(200).send({ received: true, action: "mo_reply" });
+            return res.status(200).send({ received: true, action: `${ext.extension}_reply` });
           }
         }
 
@@ -889,19 +933,6 @@ export function sendblueRouter(io: Server): Router {
             await sendAndLog(user.id, number, phoneChangeReply);
             return res.status(200).send({ received: true, action: "phone_change" });
           }
-        }
-
-        // A member asking for an invite (services/invites.ts): handled here,
-        // start to finish, like a phone change.
-        if (hasText && user.identity_captured && isInviteRequest(content)) {
-          await logTextExchange(user.id, `User said: ${content}`);
-          const action = await handleInviteRequest(user, number, isInviteCountQuestion(content)).catch((err: any) => {
-            console.error("sendblue: invite request failed:", err?.message ?? err);
-            return null;
-          });
-          if (action) return res.status(200).send({ received: true, action });
-          await sendAndLog(user.id, number, "I couldn't make that invite just now. Try me again in a minute.");
-          return res.status(200).send({ received: true, action: "invite_failed" });
         }
 
         // Step 1.2 — Name/email intake for a brand-new contact. Gated on
@@ -1019,7 +1050,19 @@ export function sendblueRouter(io: Server): Router {
             // Recorded as a pending call offer only once it really went out
             // (2026-09-17 code review: a refused send still recorded it, so a
             // later "yeah" could accept a call they were never offered).
-            const kickoffMsg = pickLine(CALL_OFFER, { name: first_name });
+            const kickoffMsg = (
+              await lineInVoice({
+                purpose: "Right after they gave their name and email: offer a quick five-minute call to get to know them, now or at a time they pick, and make clear texting is fine too.",
+                facts: [
+                  `Their first name is ${first_name ?? "unknown"}.`,
+                  "A quick 5-minute call helps Co know who to introduce them to when they're in the room at Co events.",
+                  "They can take the call now, pick a time, or keep texting.",
+                ],
+                examples: CALL_OFFER.map((l) => l.replace("{name}", first_name ?? "there")),
+                mustInclude: first_name ? [first_name] : [],
+                fallback: pickLine(CALL_OFFER, { name: first_name }),
+              })
+            ).text;
             let askedKickoff: string | null = null;
             if (await sendAndLog(user.id, number, kickoffMsg)) askedKickoff = kickoffMsg;
             if (askedKickoff) {
@@ -1087,6 +1130,17 @@ export function sendblueRouter(io: Server): Router {
         // If it's an image, download it for the vision-enabled reply below.
         // Co matches energy: voice in → voice out, text in → text out
         let resolvedContent = content ?? "";
+        // Which text they long-pressed and replied to, if any (services/inlineReply.ts).
+        // A bare event link is described as the event, from Co's action record.
+        const repliedToP = repliedTo(req.body, number).then(async (r) => {
+          const link = r?.fromCo ? bareLink(r.text) : null;
+          if (!r || !link) return r;
+          const { rows } = await pool
+            .query(`SELECT object_label FROM co_facts WHERE owner_user_id = (SELECT id FROM users WHERE phone_number = $1 LIMIT 1) AND (url = $2 OR object_label LIKE $2 || '%') ORDER BY happened_at DESC LIMIT 1`, [number, link])
+            .catch(() => ({ rows: [] as any[] }));
+          const label = String(rows[0]?.object_label ?? "").replace(link, "").trim();
+          return label ? { ...r, what: label } : r;
+        });
         let isVoice = false;
         let imageForVision: { data: Buffer; mediaType: string } | null = null;
         let photoDescription: string | null = null;
@@ -1106,8 +1160,12 @@ export function sendblueRouter(io: Server): Router {
             try {
               const imageRes = await fetch(media_url, { signal: AbortSignal.timeout(10000) });
               if (!imageRes.ok) throw new Error(`Image fetch failed: ${imageRes.status}`);
-              const mediaType = imageRes.headers.get("content-type")?.split(";")[0].trim() ?? "image/jpeg";
-              const buffer = Buffer.from(await imageRes.arrayBuffer());
+              // The format from the file's own bytes (links often say
+              // "application/octet-stream"), HEIC converted to JPEG; only what
+              // the model reads goes to it (services/imageRead.ts, 2026-10-01).
+              const readable = await readableImage(Buffer.from(await imageRes.arrayBuffer()));
+              if (!readable) throw new Error(`unreadable image format (${imageRes.headers.get("content-type") ?? "no type"})`);
+              const { data: buffer, mediaType } = readable;
               imageForVision = { data: buffer, mediaType };
               // Written down once, for the record and the reply's fact check
               // (services/imageRead.ts, 2026-09-22).
@@ -1121,15 +1179,86 @@ export function sendblueRouter(io: Server): Router {
         }
 
         // Step 3 — Store inbound message, generate embedding (in parallel)
+        // Which text they replied to stays with their message, so later turns
+        // still know what "I'm in" was about (services/inlineReply.ts).
+        const inlineTarget = await repliedToP;
+        let dotsP: Promise<Moment | null> | null = null;
+        // The one picture of this turn (services/turnContext.ts): what Co sent
+        // with its details, open asks and threads, feelings, lessons from past
+        // pushback, the reply target and the record. Started once the recent
+        // conversation is read; everything below reads from it.
+        let turnP: Promise<TurnContext> | null = null;
+        let turn: TurnContext | null = null;
+        const askedAndDoing = async () => {
+          const t = turnP ? await turnP.catch(() => null) : null;
+          return t ? { asks: t.asks.map((a) => a.text), threads: t.threads } : { asks: [] as string[], threads: [] as { text: string; feeling: string | null }[] };
+        };
+        // Reacting to something Co sent: the reply ties back to their why.
+        let reactingToSent = !!inlineTarget?.fromCo && (!!inlineTarget.what || !!bareLink(inlineTarget.text));
         const inboundContent = isVoice
-          ? `User sent a voice memo: ${resolvedContent}`
-          : `User said: ${resolvedContent}${hasText && imageForVision ? ` [They also sent a photo${photoDescription ? `. It shows: ${photoDescription}` : ""}]` : ""}`;
+          ? `User sent a voice memo: ${resolvedContent}${inlineTarget ? ` ${inlineNote(inlineTarget)}` : ""}`
+          : `User said: ${resolvedContent}${hasText && imageForVision ? ` [They also sent a photo${photoDescription ? `. It shows: ${photoDescription}` : ""}]` : ""}${inlineTarget ? ` ${inlineNote(inlineTarget)}` : ""}`;
 
+        // A link they texted is read in the background, kept to them (services/linkReader.ts).
+        // The first one is also read for this reply (raced below), so Co can react to what the page says.
+        // A link and its preview photo can arrive as two texts, with the reply
+        // answering the second (2026-09-29: Co described the photo and never
+        // used the X post it was read from). So a link in their unanswered
+        // texts from the last few minutes counts too.
+        let theirLink = hasText ? linksIn(resolvedContent)[0] ?? null : null;
+        let linkFromEarlier = false;
+        if (!theirLink) {
+          const earlier = await pool
+            .query(
+              `SELECT content FROM co_memories
+               WHERE user_id = $1 AND memory_type = 'text_exchange' AND content LIKE 'User said:%' AND ${notToTeammate()} AND created_at > NOW() - INTERVAL '3 minutes'
+                 AND created_at > COALESCE((SELECT MAX(created_at) FROM co_memories WHERE user_id = $1 AND memory_type = 'text_exchange' AND content LIKE 'Co replied:%'), 'epoch')
+               ORDER BY created_at DESC LIMIT 4`,
+              [user.id],
+            )
+            .then((r) => r.rows.map((x: any) => String(x.content)))
+            .catch(() => [] as string[]);
+          const m = mergeEarlierLink(resolvedContent, hasText, earlier);
+          theirLink = m.link;
+          linkFromEarlier = m.fromEarlier;
+          // The photo-only message now reads with its link, so the reply is about the page.
+          if (m.fromEarlier && !hasText) resolvedContent = m.merged;
+        }
+        const theirLinkP: Promise<LinkRead | null> | null = theirLink
+          ? import("../services/linkReader.js").then((l) => l.readLink(theirLink, { ownerUserId: user.id })).catch(() => null)
+          : null;
+        // "Stop sharing" ends location use for their events at once, before any reply
+        // (services/preArrival.ts). A bare STOP already opted them out of everything above.
+        if (hasText) {
+          const P = await import("../services/preArrival.js");
+          if (P.isStopSharing(resolvedContent)) await P.stopSharing(user.id).catch(() => 0);
+        }
+        // They texted after one of Co's tasks texted them: that task wakes in a few
+        // minutes, once this reply is out, instead of at its next scheduled look
+        // (services/coTasks.ts wakeOnReply). The 15-minute job is the backstop.
+        if (hasText)
+          import("../services/coTasks.js")
+            .then(async (T) => {
+              const woke = await T.wakeOnReply(user.id);
+              if (woke) setTimeout(() => import("../services/taskTurn.js").then((t) => t.runDueTasks()).catch(() => {}), (T.TASK_LIMITS.wakeAfterReplyMinutes * 60 + 15) * 1000);
+            })
+            .catch(() => {});
+        if (hasText && linksIn(resolvedContent).length) import("../services/linkReader.js").then((l) => l.readLinksLater(resolvedContent, { ownerUserId: user.id })).catch(() => {});
         const [inboundMemory, queryEmbedding] = await Promise.all([
-          pool.query(
-            `INSERT INTO co_memories (user_id, memory_type, content)
-             VALUES ($1, 'text_exchange', $2) RETURNING id`,
-            [user.id, inboundContent],
+          // A replayed turn reuses the line its first run logged.
+          (replay
+            ? pool
+                .query(`SELECT id FROM co_memories WHERE user_id = $1 AND memory_type = 'text_exchange' AND content = $2 AND created_at >= $3 ORDER BY created_at LIMIT 1`, [user.id, inboundContent, replay.receivedAt])
+                .then((r) => (r.rows.length ? r : null))
+            : Promise.resolve(null)
+          ).then(
+            (found) =>
+              found ??
+              pool.query(
+                `INSERT INTO co_memories (user_id, memory_type, content)
+                 VALUES ($1, 'text_exchange', $2) RETURNING id`,
+                [user.id, inboundContent],
+              ),
           ),
           generateEmbedding(inboundContent).catch((err) => {
             console.error("Inbound embedding failed (non-fatal):", err);
@@ -1214,14 +1343,10 @@ export function sendblueRouter(io: Server): Router {
         // "thinks" — the Claude call below can take a few seconds, and a bare
         // gap before the reply lands reads as broken rather than considered.
         // Non-fatal: a failed typing indicator should never block the reply.
-        try {
-          await sendblue.typingIndicators.send({
-            number: user.phone_number,
-            from_number: process.env.SENDBLUE_PHONE_NUMBER!,
-          });
-        } catch (typingErr: any) {
-          console.error("Typing indicator failed (non-fatal):", typingErr?.message ?? typingErr);
-        }
+        // Not awaited: the dots are a courtesy, not a step the reply waits on.
+        sendblue.typingIndicators
+          .send({ number: user.phone_number, from_number: process.env.SENDBLUE_PHONE_NUMBER! })
+          .catch((typingErr: any) => console.error("Typing indicator failed (non-fatal):", typingErr?.message ?? typingErr));
 
         // Step 4.6 — Call-trigger detection. Two cases, per explicit product
         // decision: an explicit ask ("call me") triggers immediately;
@@ -1253,6 +1378,13 @@ export function sendblueRouter(io: Server): Router {
         );
         const chronologicalRows = chronologicalResult.rows.reverse();
         const recentConversation = annotateConversationGaps(chronologicalRows);
+        if (hasText) {
+          turnP = assembleContext(user.id, resolvedContent, {
+            inlineTarget,
+            ledgerContext: `${inlineTarget ? `${inlineTarget.text}\n` : ""}${recentConversation.split("\n").filter((l) => l.startsWith("Co replied:")).slice(-3).join("\n")}`,
+          });
+          turnP.catch(() => {});
+        }
         const styleHint = deriveStyleHint(chronologicalRows);
 
         // Emotion loop (harness/emotion.ts): read how this message feels in
@@ -1260,19 +1392,24 @@ export function sendblueRouter(io: Server): Router {
         // picture (this text, recent calls, what keeps coming up) that the
         // reply reasons from. Alongside: whether they want to be heard or
         // helped toward an answer.
-        const [seekingMode, textEmotion] = hasText
-          ? await Promise.all([
+        // Latency (2026-09-26): nothing before the router needs these reads,
+        // so they run alongside it (and the context reads below) instead of
+        // ahead of it; they're awaited once the router is done.
+        // One read of the moment replaces these, the router's read, the
+        // coverage check, the moment read and the feedback filter
+        // (services/readTurn.ts); READ_TURN=off runs them separately as before.
+        const oneRead = hasText && readTurnEnabled();
+        const seekingAndEmotion = hasText && !oneRead
+          ? Promise.all([
               detectSeekingMode(resolvedContent, recentConversation, "sendblue.detectSeekingMode"),
               readTextEmotion(resolvedContent, recentConversation, "sendblue.readTextEmotion"),
             ])
-          : [null, null];
-        if (textEmotion) {
-          await recordEmotionSignals(user.id, [{ source: "text", ...textEmotion, quote: resolvedContent.slice(0, 140), memoryId: inboundMemory.rows[0].id }]);
-        }
-        const emotional = await getEmotionalContext(user.id);
+          : Promise.resolve([null, null] as const);
 
-        const pendingOfferResult = await pool.query(
-          `SELECT p.id, p.content, p.created_at FROM co_memories p
+        // These reads don't depend on each other, so they run together.
+        const [pendingOfferResult, pendingWalkinCheckinResult, [profileResult, activityCountResult], declinedTopicsResult, openItems] = await Promise.all([
+          pool.query(
+            `SELECT p.id, p.content, p.created_at FROM co_memories p
            WHERE p.user_id = $1 AND p.memory_type = 'call_offer_pending'
            AND p.created_at > NOW() - ($2 || ' days')::interval
            AND NOT EXISTS (
@@ -1280,37 +1417,41 @@ export function sendblueRouter(io: Server): Router {
              WHERE r.user_id = $1 AND r.memory_type = 'call_offer_resolved' AND r.created_at > p.created_at
            )
            ORDER BY p.created_at DESC LIMIT 1`,
-          [user.id, CALL_OFFER_EXPIRY_DAYS],
-        );
-        const pendingOffer = pendingOfferResult.rows[0] ?? null;
-        const hasPendingOffer = !!pendingOffer;
-
-        // Real event fields for follow-up questions ("what time does it
-        // start?") now come from gatherReplyFacts (harness/replyGrounding.ts),
-        // along with the details Co explicitly doesn't have. Confirmed live
-        // 2026-09-09: without them the reply invented a start time, a
-        // neighborhood, and a headcount.
-
-        // Day-of QR check-in — the ask-question step. Looked up independently
-        // of walkinCheckinEventName above (which only reflects THIS turn's
-        // message) since a brand-new contact's check-in text is entirely
-        // consumed by the intake-start branch above, which returns early —
-        // the ask can only happen once identity capture completes, on a
-        // later turn, once event_walkin_checkins already has the row but no
-        // ask_text yet.
-        const pendingWalkinCheckinResult = await pool.query(
-          `SELECT event_api_id FROM event_walkin_checkins
+            [user.id, CALL_OFFER_EXPIRY_DAYS],
+          ),
+          pool.query(
+            `SELECT event_api_id FROM event_walkin_checkins
            WHERE person_id = $1 AND ask_text IS NULL
              AND checked_in_at > NOW() - INTERVAL '1 day'
            ORDER BY checked_in_at DESC LIMIT 1`,
-          [user.id],
-        );
+            [user.id],
+          ),
+          Promise.all([
+            pool.query(
+              `SELECT life_chapters, goals, blockers, long_term_direction, city, topics_covered, topics_asked
+             FROM co_profiles WHERE user_id = $1`,
+              [user.id],
+            ),
+            pool.query(
+              `SELECT count(*) FROM co_memories WHERE user_id = $1 AND memory_type IN ('text_exchange', 'call_transcript')`,
+              [user.id],
+            ),
+          ]),
+          pool.query(
+            `SELECT content FROM co_memories WHERE user_id = $1 AND memory_type = 'call_offer_declined_topic' ORDER BY created_at DESC LIMIT 20`,
+            [user.id],
+          ),
+          gatherOpenItems(user.id, { skipWalkinAsk: !!walkinCheckinEventName }).catch((err: any) => {
+            console.error("sendblue: gatherOpenItems failed (non-fatal, routing with no open items):", err?.message ?? err);
+            return [];
+          }),
+        ]);
+        const pendingOffer = pendingOfferResult.rows[0] ?? null;
+        const hasPendingOffer = !!pendingOffer;
+
         const pendingWalkinCheckin = pendingWalkinCheckinResult.rows[0] ?? null;
         let walkinAskInstruction = "";
         if (pendingWalkinCheckin && walkinCheckinEventName) {
-          // This turn's message IS the fresh check-in trigger itself (set
-          // above) — nothing to capture as an answer yet, so decide whether
-          // to ask based on whatever's already on file.
           const alreadyHasAsk = await hasActiveAsk(user.id).catch((err: any) => {
             console.error("sendblue: hasActiveAsk failed (non-fatal):", err?.message ?? err);
             return true; // fail toward not re-asking rather than risk a duplicate ask on error
@@ -1319,81 +1460,127 @@ export function sendblueRouter(io: Server): Router {
             walkinAskInstruction = `They just checked in at "${walkinCheckinEventName}" and don't have a stated ask on file yet. Ask them directly, once, in their own words: "what are you hoping to find here / who'd be good to meet?" Keep it to that one question this turn, don't pad it with anything else.`;
           }
         }
-        // Not a fresh check-in this turn and the row is still missing
-        // ask_text: the walkin_ask open item below lets the router decide
-        // whether this message actually answers it (recorded after routing).
 
-        // Feeds the thin-profile first-message call offer below. Count-based
-        // rather than existence-based on purpose — unlike co-test's version
-        // of this same check, this message's own text_exchange row was
-        // already written above (Step 3), before this point, so "any prior
-        // activity exists" would always be true even for a genuine first
-        // message. count <= 1 means the only row on file is this message's
-        // own.
-        const [profileResult, activityCountResult] = await Promise.all([
-          pool.query(
-            `SELECT life_chapters, goals, blockers, long_term_direction, city, topics_covered, topics_asked
-             FROM co_profiles WHERE user_id = $1`,
-            [user.id],
-          ),
-          pool.query(
-            `SELECT count(*) FROM co_memories WHERE user_id = $1 AND memory_type IN ('text_exchange', 'call_transcript')`,
-            [user.id],
-          ),
-        ]);
         const profile = profileResult.rows[0];
         const hasProfile = !!profile?.life_chapters?.length;
         const isFirstRealMessage = parseInt(activityCountResult.rows[0].count, 10) <= 1;
 
-        // Topic-aware, not a permanent opt-out and not a blanket timer either
-        // — per explicit product decision, Co should stay free to offer a
-        // call about a genuinely new situation at any time, but never
-        // re-offer about something already declined. Each declined offer's
-        // own text is stored (see the call_offer_pending write near the end
-        // of this handler — it captures what the USER described, not just
-        // Co's own offer text, since Co's gesture is often deliberately
-        // generic and makes a weak fingerprint on its own), and the router
-        // is given that list directly so the SAME call decides both "would
-        // voice help" and "haven't we already asked about this" in one pass.
-        const declinedTopicsResult = await pool.query(
-          `SELECT content FROM co_memories WHERE user_id = $1 AND memory_type = 'call_offer_declined_topic' ORDER BY created_at DESC LIMIT 20`,
-          [user.id],
-        );
+        // Context the reply needs (relevant memories, the rapport topic to
+        // raise), started now so it's ready by the time the reply drafts
+        // instead of running one after another after the debounce
+        // (2026-09-26: ~3.7s of every reply was these, in series).
+        const replyContextStarted = Date.now();
+        let introRecordFacts: string[] = [];
+        const recentMemoriesP = (async () => {
+          const memoriesResult = queryEmbedding
+            ? await pool
+                .query(
+                  `SELECT content, memory_type FROM co_memories
+               WHERE user_id = $1 AND content_embedding IS NOT NULL AND memory_type NOT IN ('intent', 'research_find')
+               ORDER BY content_embedding <=> $2::vector
+               LIMIT 5`,
+                  [user.id, `[${queryEmbedding.join(",")}]`],
+                )
+                .catch((vecErr: any) => {
+                  console.error("Vector search failed, falling back to recency:", vecErr);
+                  return pool.query(`SELECT content, memory_type FROM co_memories WHERE user_id = $1 AND memory_type NOT IN ('intent', 'research_find') ORDER BY created_at DESC LIMIT 5`, [user.id]);
+                })
+            : await pool.query(`SELECT content, memory_type FROM co_memories WHERE user_id = $1 AND memory_type NOT IN ('intent', 'research_find') ORDER BY created_at DESC LIMIT 5`, [user.id]);
+          // Filtered for genuine relevance to what they just said before the
+          // reply agent ever sees it (filterRelevantMemories in
+          // conversationReply.ts): similarity alone isn't a relevance signal.
+          // Another member's details are stripped here, before anything reads
+          // them; their intro history stays (services/memberSafeMemories.ts).
+          const candidates = await memberSafe(user.id, memoriesResult.rows.filter((m: any) => m.content));
+          introRecordFacts = introFacts(memoriesResult.rows);
+          return candidates.length ? await filterRelevantMemories(resolvedContent, candidates) : "";
+        })().catch(() => "");
+        const routeInput = {
+          // Which text they replied to, so "I'm in" under an offer resolves to it.
+          message: inlineTarget ? `${resolvedContent} ${inlineNote(inlineTarget)}` : resolvedContent,
+          recentConversation,
+          openItems,
+          declinedCallTopics: declinedTopicsResult.rows.map((r: any) => r.content),
+        };
+        // Co's recent reactions, read once: shown to the read so it decides
+        // whether and which, then checked against the backstop (services/tapbacks.ts).
+        const tapbacksP = hasText ? tapbackHistory(user.id).catch(() => null) : Promise.resolve(null);
+        const readP: Promise<TurnRead> | null =
+          oneRead && turnP
+            ? propagateAttributes({ userId: user.id, traceName: "sendblue.readTurn" }, () =>
+                Promise.all([turnP!.catch(() => null), tapbacksP]).then(([t, h]) => readTurn(routeInput, t, coveragePriorContext(profile), { reactions: h ? describeTapbacks(h) : null })),
+              )
+            : null;
+        readP?.catch(() => {});
+        // Jev labels the same text in shadow, logged next to the read; never used for the reply (services/jevShadow.ts).
+        const jevShadowP = hasText && readP ? startJevShadow(resolvedContent, lastCoLine(recentConversation), !!inlineTarget?.fromCo) : null;
+        const coverageP = readP
+          ? readP.then((r) => coverageNudgeFrom(user.id, profile, r.coverage)).catch(() => ({ missingTopic: null, refresh: null }))
+          : getCoverageNudge(user.id, recentConversation, profile).catch(() => ({ missingTopic: null, refresh: null }));
+        let turnRead: TurnRead | null = null;
+        // The reaction Co gave their message to show what it's doing (from the
+        // read), so a search knows whether it has already said "on it".
+        let ackP: Promise<boolean> = Promise.resolve(false);
 
-        // Layer 2 router (Royce, 2026-09-14). Replaces the separate call-offer,
-        // event-tease, outcome, check-in, match-nudge, network, method-choice,
-        // updates and recommendation classifiers, which each decided on
-        // their own whether this message was "theirs" — one "yes" could accept
-        // a stale call offer AND opt into an intro. Now one call sees every
-        // open item, and decideActions (plain code) decides what runs: at most
-        // one item resolved, and irreversible actions (placing a call, opting
-        // into an intro, a connection method) only on a clear, high-confidence
-        // read of something Co actually just asked. Otherwise nothing resolves
-        // and clarifyContext has the reply ask which they meant. Any change to
-        // the router must pass evals/router/run.ts first.
-        const openItems = await gatherOpenItems(user.id, { skipWalkinAsk: !!walkinCheckinEventName }).catch((err: any) => {
-          console.error("sendblue: gatherOpenItems failed (non-fatal, routing with no open items):", err?.message ?? err);
-          return [];
-        });
         let routerOutput: RouterOutput = NO_ROUTE;
         let routerFailed = false;
         let routerLatencyMs: number | null = null;
         try {
-          const routeInput = {
-            message: resolvedContent,
-            recentConversation,
-            openItems,
-            declinedCallTopics: declinedTopicsResult.rows.map((r: any) => r.content),
-          };
-          const routed = await propagateAttributes({ userId: user.id, traceName: "sendblue.router.route" }, () => routeMessage(routeInput));
-          routerOutput = routed.output;
-          routerLatencyMs = routed.latencyMs;
+          if (readP) {
+            turnRead = await readP;
+            logJevShadow(user.id, jevShadowP, turnRead);
+            // A reaction right away, before any drafting, so they see Co is on it
+            // (Royce, 2026-09-29: Instinct reacts with what it's doing). Not awaited.
+            const ackHandle = typeof req.body?.message_handle === "string" ? req.body.message_handle : null;
+            if (hasText && turnRead.ack && ackHandle) {
+              const ackStarted = Date.now();
+              const ackEmoji = turnRead.ack;
+              // Spaced out and varied (services/tapbacks.ts, 2026-10-01).
+              ackP = tapbacksP
+                .then((h) => {
+                  const allowed = h ? ackAllowed(ackEmoji, h) : { ok: true, why: null };
+                  if (!allowed.ok) {
+                    recordDecision({ layer: 3, decision: "turn.ack", userId: user.id, outcome: "skip", action: ackEmoji, proposal: { why: allowed.why } }).catch(() => {});
+                    return false;
+                  }
+                  return sendReaction(ackHandle, reactionFor(ackEmoji)).then((ok) => {
+                    recordDecision({ layer: 3, decision: "turn.ack", userId: user.id, outcome: ok ? "act" : "skip", action: ackEmoji, proposal: { ms: Date.now() - ackStarted, handle: ackHandle.slice(-8) } }).catch(() => {});
+                    return ok;
+                  });
+                })
+                .catch(() => false);
+            }
+            routerOutput = turnRead.router;
+            routerLatencyMs = turnRead.latencyMs;
+            dotsP = Promise.resolve(turnRead.moment);
+          } else {
+            // Connecting the dots, alongside the router (services/connectDots.ts).
+            if (hasText && !dotsP && turnP) {
+              dotsP = turnP.then((t) =>
+                readMoment({
+                  asks: t.asks.map((a) => a.text),
+                  threads: t.threads,
+                  offersThisWeek: t.offersThisWeek,
+                  now: `They just texted Co: "${resolvedContent}"${inlineTarget ? ` ${inlineNote(inlineTarget)}` : ""}`,
+                  recent: recentConversation.split("\n").slice(-8).join("\n"),
+                }),
+              );
+            }
+            const routed = await propagateAttributes({ userId: user.id, traceName: "sendblue.router.route" }, () => routeMessage(routeInput));
+            routerOutput = routed.output;
+            routerLatencyMs = routed.latencyMs;
+          }
         } catch (err: any) {
           routerFailed = true;
           // Fail safe: act on nothing rather than guess.
           console.error("sendblue: message router failed (non-fatal, taking no actions this turn):", err?.message ?? err);
         }
         const decision = decideActions(routerOutput, openItems, { message: resolvedContent, recentConversation });
+        const [seekingMode, textEmotion] = oneRead ? [turnRead?.seeking ?? null, turnRead?.emotion ?? null] : await seekingAndEmotion;
+        if (textEmotion) {
+          await recordEmotionSignals(user.id, [{ source: "text", ...textEmotion, quote: resolvedContent.slice(0, 140), memoryId: inboundMemory.rows[0].id }]);
+        }
+        const emotional = await getEmotionalContext(user.id);
         // Items other than a call offer only ever resolved on real text, same
         // as the classifiers this replaces.
         const resolvedItem = decision.resolve && (hasText || decision.resolve.item.kind === "call_offer") ? decision.resolve : null;
@@ -1419,8 +1606,6 @@ export function sendblueRouter(io: Server): Router {
             decision.scheduleCall ? "schedule_call" : null,
             decision.cancelCall ? "cancel_call" : null,
             decision.wantsRecommendation ? "recommendation" : null,
-            decision.asksForUpdates ? "updates" : null,
-            decision.wantsInvite ? "invite" : null,
           ].filter(Boolean);
           routerActed = acted.length > 0 || !!decision.clarifyContext || !!decision.clarifyAbout;
           recordDecision({
@@ -1436,94 +1621,120 @@ export function sendblueRouter(io: Server): Router {
           });
         }
 
-        // Asking for an invite in words the invite pattern missed ("can my
-        // friend Sam join?", "send my friend a code"): same invite step. On its
-        // own it's the whole turn; alongside anything else, the reply still
-        // runs and knows what went out (2026-09-19: Co told all six of those
-        // phrasings it had no way to invite anyone).
-        let inviteNote: string | null = null;
-        if (hasText && user.identity_captured && decision.wantsInvite) {
-          const inviteAction = await handleInviteRequest(user, number, isInviteCountQuestion(resolvedContent)).catch((err: any) => {
-            console.error("sendblue: invite request (router) failed:", err?.message ?? err);
-            return null;
-          });
-          if (inviteAction) {
-            turnDidWork = true;
-            const onlyInvite =
-              !resolvedItem && !decision.placeCall && !decision.scheduleCall && !decision.cancelCall && !decision.answerCallingQuestion &&
-              !decision.wantsRecommendation && !decision.asksForUpdates && !decision.clarifyContext;
-            if (onlyInvite) return res.status(200).send({ received: true, action: inviteAction });
-            inviteNote =
-              inviteAction === "invite_sent"
-                ? "Co just texted them an invite link for a friend, in its own messages this turn. Don't send or describe another one."
-                : inviteAction === "invite_count"
-                  ? "Co just told them how many invites they have left. No invite link was sent."
-                  : inviteAction === "invite_none_left"
-                    ? "Co just told them all 5 of their invites are used."
-                    : "Co tried to send an invite and the message didn't go through.";
-          }
-        }
+        // Invites are Co's own choice now (conversationTools.ts sendInvite,
+        // 2026-09-25): no pattern or router flag decides it.
 
-        // How long the search took, and preparing what it found (fit check
-        // and description per match), for the latency record below.
-        let searchMsForTurn = 0;
-        let prepMsForTurn = 0;
-        // Set to the last caption sent when the results fully answered a
-        // message that was only a search ask; the reply agent is skipped.
-        let resultsAnsweredAsk: string | null = null;
-        // Names of the results that actually went out this turn.
-        let sentThisTurn: string[] = [];
-
-        // The thread just ended ("cool", "thanks 🙏"): react to their
-        // message instead of writing a sentence that keeps it going
-        // (services/conversationClose.ts). Only when the router found nothing
-        // to act on, so a real answer is never swallowed.
-        // Never after Co asked them something: "sounds good" is then an
-        // answer that needs a reply (2026-09-17 code review).
-        const closing = hasText && !routerActed && !resolvedItem ? closingReaction(resolvedContent, lastCoLine(recentConversation)) : null;
-        // A tapback is never an answer. If Co hasn't replied since their
-        // previous message, it still owes one (2026-09-16: a search was
-        // dropped mid-turn and the next "Ok, thanks!" got a thumbs up, so
-        // the question was never answered).
-        const owesReply = closing ? await replyOwed(user.id) : false;
-        if (closing && owesReply) {
-          await recordDecision({
-            layer: 3,
-            decision: "turn.closing",
-            userId: user.id,
-            outcome: "skip",
-            action: "reply_owed",
-            proposal: { message: resolvedContent },
-            checks: [{ name: "co_answered_their_last_message", pass: false, reason: "Co still owes an answer, so a reaction would drop it" }],
-          });
-        }
-        if (closing && !owesReply) {
-          const handle = typeof req.body?.message_handle === "string" ? req.body.message_handle : null;
-          const tapped = handle ? await sendReaction(handle, closing) : false;
-          // No tapback (SMS, or an old message): a single emoji says the same
-          // thing without restarting the conversation.
-          if (!tapped) await sendAndLog(user.id, user.phone_number, emojiFor(closing));
-          await recordDecision({
-            layer: 3,
-            decision: "turn.closing",
-            userId: user.id,
-            outcome: "act",
-            action: tapped ? `tapback:${closing}` : `emoji:${closing}`,
-            proposal: { message: resolvedContent },
-            checks: [{ name: "router_found_nothing_to_do", pass: true }],
-          });
-          return;
-        }
+        // Whether to react instead of replying is Co's call now
+        // (conversationTools.ts reactInsteadOfReplying, 2026-09-25). What stays
+        // hard: never when Co still owes them an answer.
+        const owed = hasText ? await owedAnswer(user.id) : null;
+        const owesReply = owed !== null;
 
         // Layer 3 harness facts: what's actually true this turn. Branches
         // below add what they did (a link sent, a call that failed) as they
         // act; the reply can only claim what ends up here.
         const factsStarted = Date.now();
+        if (inlineTarget) {
+          recordDecision({ layer: 2, decision: "turn.inlineReply", userId: user.id, outcome: "act", action: inlineTarget.fromCo ? "to_co" : "to_self", proposal: { repliedTo: inlineTarget.text.slice(0, 200) } }).catch(() => {});
+        }
+        turn = turnP ? await turnP.catch(() => null) : null;
+        // This message's feeling was just recorded; the context read the ones before it.
+        if (turn) turn.emotional = emotional;
         const replyFacts = await gatherReplyFacts(user.id, {
+          turn: turn ?? undefined,
+          context: `${resolvedContent}\n${inlineTarget ? `${inlineTarget.text}\n` : ""}${recentConversation.split("\n").filter((l) => l.startsWith("Co replied:")).slice(-3).join("\n")}`,
           pendingDescriptions: openItems.filter((i) => i.id !== resolvedItem?.item.id).map((i) => i.description),
         });
+        if (owed?.afterFailure) {
+          addInstruction(replyFacts, `Their message before this one ("${owed.text.slice(0, 400)}") never got a real answer: something broke on your side. Answer it in this reply along with what they just said. Don't make them repeat it, and don't apologize again beyond a word.`);
+        }
+        // What the link they shared says (waits up to 6s; the reply never depends on it).
+        if (theirLinkP && turnRead?.moment?.mode !== "small_talk") {
+          const shared = await linkForReply(theirLinkP);
+          // A link from their earlier text, answered on a later one (usually its preview photo):
+          // the reply is about the page, not the picture.
+          if (linkFromEarlier && shared.facts.length) addInstruction(replyFacts, "They sent a link just before this message, and this message may be its preview image or a separate photo. Answer about what the page says, using its text above, and about the photo too if it is something else. Do not answer only the photo.");
+          recordDecision({ layer: 3, decision: "turn.link", userId: user.id, outcome: shared.facts.length ? "act" : "skip", action: `${linkFromEarlier ? "earlier_text" : "this_text"}:${shared.facts.length ? "read" : "not_read"}` }).catch(() => {});
+          shared.facts.forEach((f) => addFact(replyFacts, "known", f));
+          shared.hints.forEach((h) => addHint(replyFacts, h));
+          shared.instructions.forEach((i) => addInstruction(replyFacts, i));
+        }
+        // Finding things happens in Co's own loop (agent/loop.ts): the guide when
+        // they want something found, and its working notes from earlier texts.
+        if (decision.wantsRecommendation && hasText) addInstruction(replyFacts, LOOP_GUIDE);
+        if (hasText) {
+          const [notes, loops, timeline] = await Promise.all([
+            loadBrief(user.id).then(describeNotes).catch(() => null),
+            // Every open loop and where it stands (services/openLoops.ts).
+            import("../services/openLoops.js").then(async (o): Promise<string | null> => o.describeLoops((await o.syncOpenLoops(user.id)).rows, { withIds: true })).catch((): string | null => null),
+            // Their local time and what's ahead, every turn (services/timeline.ts).
+            import("../services/timeline.js").then((t) => t.timelineFor(user.id, profile?.city ?? null)).catch(() => null),
+          ]);
+          // Co's live work for them: ongoing, so its next step can be said (replyGrounding future_promise).
+          if (notes) addFact(replyFacts, "ongoing", notes);
+          if (loops) addFact(replyFacts, "ongoing", loops);
+          if (timeline) addFact(replyFacts, "known", timeline.fact);
+          if (timeline?.note) addInstruction(replyFacts, timeline.note);
+        }
+        if (inlineTarget) addFact(replyFacts, "known", repliedToFact(inlineTarget));
+        // Unmistakable crisis wording (services/safety.ts): Co gets the
+        // guidance and the team hears about it even if Co misses it. Co's own
+        // flagSafetyConcern covers everything this list doesn't.
+        const crisisWording = hasText && soundsLikeCrisis(resolvedContent);
+        if (crisisWording) {
+          addInstruction(replyFacts, SAFETY_INSTRUCTION);
+          recordSafetyConcern(user.id, user.first_name ?? null, "phrase", "their message used crisis wording").catch(() => {});
+        }
+
+        // Threading Co's texts under theirs this turn (services/inlineReply.ts):
+        // the first text Co sends, and the first text of search results.
+        // "They've texted since" is re-read each time, since a search can
+        // take long enough for them to text again.
+        const ownHandle = typeof req.body?.message_handle === "string" ? req.body.message_handle : null;
+        let threadNextSend = true;
+        const threadHandle = async (): Promise<string | null> => {
+          const latest = myInboundAt
+            ? await pool.query(`SELECT last_inbound_at FROM phone_debounce WHERE phone = $1`, [number]).then((r) => r.rows[0]?.last_inbound_at ?? null).catch(() => null)
+            : null;
+          // What this turn is about, from the one read: the message Co sent it in.
+          const about = turnRead?.aboutSent && turnP ? (await turnP.catch(() => null))?.sent.find((x) => x.name === turnRead!.aboutSent) ?? null : null;
+          const aboutSentHandle = about ? await sentMessageHandle(user.id, about).catch(() => null) : null;
+          const why = threadReason({
+            theyRepliedInline: !!inlineTarget && !!ownHandle,
+            newerTextSince: !!ownHandle && !!latest && !!myInboundAt && new Date(latest).getTime() > new Date(myInboundAt).getTime(),
+            aboutSentHandle,
+            // How long they've waited for this answer.
+            slowMs: myInboundAt ? Date.now() - new Date(myInboundAt).getTime() : undefined,
+          });
+          if (why) recordDecision({ layer: 7, decision: "reply.inline", userId: user.id, outcome: "act", action: why, proposal: why === "about_sent" ? { about: about?.name } : undefined }).catch(() => {});
+          return why === "about_sent" ? aboutSentHandle : why ? ownHandle : null;
+        };
+        const threadedSend: typeof sendCoReply = async (p) => {
+          if (!threadNextSend || p.asVoice) return sendCoReply(p);
+          threadNextSend = false;
+          return sendCoReply({ ...p, replyTo: await threadHandle() });
+        };
+        // hold: the line sent while a search runs, logged as "Co is looking:"
+        // so it never counts as a real answer (the checks below exclude it by
+        // prefix now that Co writes its own, not by a fixed list).
+        const threadedSendAndLog = async (message: string, asVoice = false, hold = false): Promise<boolean> => {
+          const sent = await threadedSend({ phone: user.phone_number, message, asVoice });
+          if (sent) await logTextExchange(user.id, `${hold ? HOLD_PREFIX : "Co replied:"} ${cleanCoMessage(message)}`);
+          return sent;
+        };
         const factsMs = Date.now() - factsStarted;
-        if (inviteNote) addFact(replyFacts, "known", inviteNote);
+        // Early warning (2026-09-25): a fast Jev read of whether they're
+        // asking about another person's private details or asking Co to
+        // contact someone for them. It only puts Co on alert; the privacy
+        // lines themselves are hard rules either way. Member text goes to Jev
+        // only through the zero-retention gateway where JEV_MEMBER=on.
+        if (hasText) {
+          const alert = await privacyAlert(resolvedContent).catch(() => null);
+          if (alert) {
+            addInstruction(replyFacts, alert.instruction);
+            recordDecision({ layer: 3, decision: "jev.privacy", userId: user.id, outcome: "act", action: alert.kind, proposal: { p: alert.p } }).catch(() => {});
+          }
+        }
         // What their photo shows, so details Co takes from it count as on file
         // in the reply's fact check (2026-09-22, services/imageRead.ts).
         if (imageForVision) {
@@ -1537,7 +1748,12 @@ export function sendblueRouter(io: Server): Router {
         }
         // A problem they're reporting about Co itself is saved for the team
         // (test only, services/issueReports.ts), and the reply can say so.
-        const reportedIssue = hasText ? await captureIssueReport(user.id, resolvedContent, recentConversation) : null;
+        // With the one read, feedback is flagged there and Co saves it with its
+        // tool (no word filter deciding for it); READ_TURN=off keeps the old capture.
+        const reportedIssue = hasText && !oneRead ? await captureIssueReport(user.id, resolvedContent, recentConversation) : null;
+        const feedbackNote = feedbackInstruction(turnRead?.feedback ?? []);
+        if (feedbackNote) addInstruction(replyFacts, feedbackNote);
+        if (turnRead?.aboutCo) addInstruction(replyFacts, ABOUT_CO_INSTRUCTION);
         // What has really reached the team, so "is it noted to the team?" gets
         // a true answer (2026-09-18: Co said feedback "goes straight to the
         // team" when nothing had been saved).
@@ -1551,7 +1767,7 @@ export function sendblueRouter(io: Server): Router {
             "known",
             recentReports.length
               ? `Saved for the team in the last day: ${recentReports.map((s) => `"${s}"`).join("; ")}. Nothing new was saved this turn.`
-              : "Nothing they've said has been saved for the team in the last day, including this message. Don't say anything was noted for, passed to, or sent to the team; say you'll keep it in mind.",
+              : "Nothing they've said has been saved for the team in the last day, including this message. If this message is feedback for the team, save it with saveFeedbackForTeam; otherwise don't say anything was noted for, passed to, or sent to the team.",
           );
         }
         if (reportedIssue) {
@@ -1559,17 +1775,11 @@ export function sendblueRouter(io: Server): Router {
           addFact(replyFacts, "did_this_turn", `Saved what they reported about how Co works, for the team to look at: "${reportedIssue.summary}"`);
           addInstruction(
             replyFacts,
-            "They pointed out a problem with how you work. Acknowledge it plainly in a sentence, say you've passed it along to the team, and don't promise whether or when it gets fixed. Then respond to anything else they said.",
+            "They pointed out a problem with how you work. It's already saved for the team, so don't save it again. Acknowledge it plainly in a sentence, say you've passed it along to the team, and don't promise whether or when it gets fixed. If they gave other, separate feedback in the same message, save that with saveFeedbackForTeam. Then respond to anything else they said.",
           );
         }
         if (repeatContext) addInstruction(replyFacts, repeatContext);
         if (walkinAskInstruction) addInstruction(replyFacts, walkinAskInstruction);
-        if (arrivedAtEvent) {
-          addInstruction(
-            replyFacts,
-            `They just told you they've arrived at "${arrivedAtEvent.eventName}". Welcome them in a line. If there's someone for them to meet, that comes in its own text, so don't name anyone or promise a person here.`,
-          );
-        }
         if (decision.clarifyContext) addInstruction(replyFacts, decision.clarifyContext);
 
         // Same strings downstream code (and the reply agent) already key on.
@@ -1646,6 +1856,7 @@ export function sendblueRouter(io: Server): Router {
           try {
             await recordOfferReaction(user.id, offerReaction.item.ref.pending, reaction, content);
             addFact(replyFacts, "known", reactionFact(offerReaction.item.ref.pending, reaction));
+            reactingToSent = true;
             await recordDecision({ layer: 6, decision: "offer.reaction", userId: user.id, outcome: "act", action: reaction, proposal: { item: offerReaction.item.ref.pending.itemName, key: offerReaction.item.ref.pending.itemKey, message: content.slice(0, 200) } });
           } catch (err: any) {
             console.error("sendblue: offer reaction handling failed (non-fatal):", err?.message ?? err);
@@ -1861,11 +2072,16 @@ export function sendblueRouter(io: Server): Router {
           try {
             const classification = resolvedTease.value === "yes" ? "interested" : "not_interested";
             const teaseCandidate = resolvedTease.item.ref.pending.candidate;
-            await recordSuggestionOutcome(user.id, "intro", `intro:${teaseCandidate.candidate_id}`, `an intro to ${teaseCandidate.first_name}`, classification === "interested" ? "interested" : "declined");
+            // Nameless: they haven't been told who (the reveal may yet be blocked), and a later reply reads this back as a fact.
+            await recordSuggestionOutcome(user.id, "intro", `intro:${teaseCandidate.candidate_id}`, "an intro from the network (name not shared)", classification === "interested" ? "interested" : "declined");
             const context = await resolveNetworkTeaseReply(user.id, user.first_name, user.phone_number, resolvedTease.item.ref.pending, classification);
             if (context) {
               addInstruction(replyFacts, context);
-              if (classification === "interested") {
+              if (isDiscreetTurn([context])) {
+                // Nothing was revealed: no "sent a message naming them" fact (it was false,
+                // and carried the name), and the reply may not name them (harness/discretion.ts).
+                replyFacts.privateNames = [...(replyFacts.privateNames ?? []), resolvedTease.item.ref.pending.candidate.first_name];
+              } else if (classification === "interested") {
                 addFact(replyFacts, "did_this_turn", `Sent a separate message just before this reply naming ${resolvedTease.item.ref.pending.candidate.first_name} and asking if they want an intro.`);
               }
             }
@@ -1897,47 +2113,9 @@ export function sendblueRouter(io: Server): Router {
           }
         }
 
-        // "Any updates?" reactive reply (Royce, 2026-08-31: "once someone
-        // joins the test copatible account, if they ask 'any updates' or
-        // something similar just send them that" — and, if nothing's been
-        // posted yet, "make sure ... just say that" rather than leaving the
-        // question unanswered). Decided by the router on every message with
-        // text — it can't be gated on an update already existing, since "nothing new
-        // right now" is itself a valid, honest answer this needs to give.
-        // product_updates is written by scripts/notifyTesters.ts every
-        // time a real update goes out, independent of who was on that
-        // broadcast — this works for ANY co-test user, not just the named
-        // testers the script itself texts.
-        if (hasText && decision.asksForUpdates) {
-          try {
-            const latestUpdateResult = await pool.query(`SELECT content FROM product_updates ORDER BY created_at DESC LIMIT 1`);
-            const latestUpdate = latestUpdateResult.rows[0];
-            if (latestUpdate) {
-              // Sent deterministically, not via agent tool-calling (Royce,
-              // 2026-09-07, confirmed live) — asking the agent to relay
-              // this "as part of your reply" let it paraphrase the bullets
-              // despite being told not to, and blend in an unrelated past
-              // recommendation from contextSummary as if it were part of
-              // the same update. Sending the real content verbatim here
-              // removes both failure modes; the agent only has to
-              // acknowledge it, same pattern as recommendationContext/
-              // eventOfferContext above.
-              const updateMessage = `Here's what's new:\n\n${latestUpdate.content}`;
-              if (!(await sendAndLog(user.id, user.phone_number, updateMessage))) throw new Error("the update list didn't send");
-              addFact(replyFacts, "did_this_turn", "Sent the latest product update list as its own message just before this reply.");
-              addInstruction(replyFacts, "They just asked what's new, and the real update list already went out separately, verbatim. Don't repeat, paraphrase, or re-list it, don't point back at it (\"just sent you the latest above\"), and don't blend in anything else (like a past recommendation) as if it were part of that list. Respond only to whatever else they said. Keep this reply short.");
-              // "Updates?" and nothing else: the list is the answer, no second
-              // message pointing at it (2026-09-18: "Just sent you the latest
-              // above." followed the list).
-              if (!decision.wantsRecommendation && isOnlyUpdatesAsk(resolvedContent)) resultsAnsweredAsk = updateMessage;
-            } else {
-              addFact(replyFacts, "known", "There are no product updates posted.");
-              addInstruction(replyFacts, "They're asking what's new, but there's genuinely nothing posted yet. Let them know honestly, briefly, that there's nothing new to report right now. Don't invent something or brush past the question.");
-            }
-          } catch (err: any) {
-            console.error("sendblue: asks-for-updates reply failed (non-fatal):", err?.message ?? err);
-          }
-        }
+        // "What's new?" is Co's call now (conversationTools.ts
+        // sendProductUpdates, 2026-09-25); the list itself still goes out
+        // verbatim.
 
         const shouldTriggerCall = decision.placeCall;
 
@@ -2050,7 +2228,7 @@ Return ONLY valid JSON, no preamble: {"date": "YYYY-MM-DD or null", "time": "HH:
         // misread as explicit_request would place real outbound Twilio
         // calls to people who were just asking how the feature works.
         if (callAction === "asks_about_calling") {
-          addInstruction(replyFacts, `They just asked a plain question about how calling works — answer it directly and honestly, don't place a call, and don't say or imply a call is happening. The true answer: Co can call them — by text right now ("call me") or scheduled for later — and that's real and live. They can also call Co directly anytime, from this exact number — that connects to a real, live conversation with Co. Refer to it only as "this number" or "this exact number," never write out or guess actual digits — you are not given the real number here, and a specific-looking one you invent will be wrong and won't work. Only mention this second part if it's actually what they're asking about; don't volunteer it unprompted.`);
+          addInstruction(replyFacts, `They just asked a plain question about how calling works — answer it directly and honestly, don't place a call, and don't say or imply a call is happening. The true answer: Co can call them — by text right now ("call me") or scheduled for later — and that's real and live. They can also call Co directly anytime: ${callLine()} Never write out any other digits. Only mention this second part if it's actually what they're asking about; don't volunteer it unprompted.`);
         }
 
         // Burst limiter — separate from, and in addition to, the topic-aware
@@ -2095,19 +2273,15 @@ Return ONLY valid JSON, no preamble: {"date": "YYYY-MM-DD or null", "time": "HH:
           console.error(`sendblue: call trigger failed for user ${user.id} (non-fatal, falling through to normal reply):`, callResult.error);
           // Falls through to the normal reply flow below on failure — a
           // failed dial attempt should never leave the conversation silent.
-          const alreadyInProgress = callResult.error === "A call is already in progress for this user.";
-          addFact(
-            replyFacts,
-            "did_this_turn",
-            alreadyInProgress
-              ? "Tried to call them just now; it didn't go through because a call already shows as in progress for them."
-              : "Tried to call them just now; the call attempt failed. The reason isn't known.",
-          );
+          // Every failure here is a call that was never placed: the gate or a
+          // precondition stopped it before dialing. Co says that, with the
+          // real reason (2026-10-01: blocked as "called 1 min ago", Co said
+          // "Tried again just now and it didn't go through").
+          const why = callNotPlacedReason(callResult.error);
+          for (const f of callNotPlacedFacts(callResult.error)) addFact(replyFacts, f.kind, f.text);
           addInstruction(
             replyFacts,
-            alreadyInProgress
-              ? `They just asked you to call them, and Co genuinely can (this is real and live) — but a call attempt just failed because a call is already showing as in progress for them. Be honest that something's not letting the call go through right now and you're not sure why, rather than saying calling isn't possible at all. Don't place a call, and don't say "calling you now."`
-              : `They just asked you to call them, and Co genuinely can (this is real and live) — but the call attempt just failed. Be honest that something went wrong placing it, without inventing a specific reason you don't actually have, and never claim calling isn't possible. Don't place a call, and don't say "calling you now."`,
+            `They just asked you to call them. Co genuinely can call (this is real and live), but no call went out this time: ${why} Say plainly that you didn't call and why, in a line, and what they can do (text "call me" again once it's allowed). Never say you tried or that it didn't go through, don't promise to call back on your own, and don't say "calling you now."`,
           );
         }
 
@@ -2122,492 +2296,6 @@ Return ONLY valid JSON, no preamble: {"date": "YYYY-MM-DD or null", "time": "HH:
         // weighed by the reply agent below, not pre-decided here — see
         // agent/conversationReply.ts.
         const isThinProfileFirstMessage = !hasProfile && isFirstRealMessage && callAction === "none";
-
-        // Real action-triggering — mirrors the surface_recommendation Hume
-        // tool on the voice path, but iMessage has no tool_call plane to
-        // invoke it through, so this is a direct call to the same shared
-        // generateRecommendation() gated by the router's wantsRecommendation
-        // instead. Folded into the one reply below (never sent as a second
-        // message).
-        try {
-          // A struggling person who asks for something still gets it (Royce,
-          // 2026-09-18: "we can't isolate them"). Holding the search here left
-          // members frustrated about getting nothing with nothing again; Co
-          // acknowledges how they're doing in the same reply instead.
-          if (emotional.needsCare && decision.wantsRecommendation) {
-            addInstruction(replyFacts, "They've had a hard day. Acknowledge it briefly and warmly, in your own words, then share what you found.");
-          }
-          if (decision.wantsRecommendation) {
-            // A search is about to actually run: whatever happens, this turn
-            // has now done real work and must see it through to a reply.
-            turnDidWork = true;
-            // Searching all tiers can take a while: say so first, so the
-            // person isn't left waiting and resending (2026-09-15: a 70s
-            // wait led to the same message sent five times).
-            const holdLine = HOLD_LINES[Math.floor(Math.random() * HOLD_LINES.length)];
-            if (await sendAndLog(user.id, user.phone_number, holdLine)) addFact(replyFacts, "did_this_turn", `Told them "${holdLine}" before searching.`);
-            const RECOMMENDATION_TIME_CAP_MS = 45_000;
-            const searchStarted = Date.now();
-            searchMsForTurn = 0;
-            // A capped search whose result lands after the cap is discarded
-            // by the helper itself (agent/conversationTools.ts), not just
-            // raced here (2026-09-17 code review: generateRecommendation kept
-            // running and writing after Co had already said it found
-            // nothing, and its late write could still land after "found
-            // nothing" went out).
-            const recommendation = await searchWithTimeCap(user.id, resolvedContent, RECOMMENDATION_TIME_CAP_MS, "sendblue.recommendation", (late) =>
-              sendLateSearchResult({ userId: user.id, firstName: user.first_name ?? null, phoneNumber: user.phone_number, city: profile?.city ?? null }, resolvedContent, late),
-            );
-            searchMsForTurn = Date.now() - searchStarted;
-            // What this search looked at and ruled out, so the reply never
-            // recommends one of them because it was sent earlier (2026-09-16:
-            // a search rejected the chess night as "not an AI engineer event"
-            // and the reply still called it "your real option").
-            const ruledOut = ("scope" in recommendation ? recommendation.scope?.relevanceRejected : null) ?? [];
-            if (ruledOut.length) {
-              addFact(replyFacts, "did_this_turn", `This search looked at and ruled out: ${ruledOut.map((r) => `"${r.name}" (${r.why})`).join("; ")}.`);
-              addInstruction(replyFacts, "Don't recommend or endorse anything this search ruled out, even if you sent it before. If they already have one of those from earlier, say plainly it isn't really what they asked for.");
-            }
-            if (recommendation.available && recommendation.matches?.length) {
-              // Sent DETERMINISTICALLY, not via agent tool-calling (Royce,
-              // 2026-09-02, confirmed live) — the previous version asked the
-              // conversational agent to execute a multi-step sendReply
-              // sequence (link, then description, per match) via prose
-              // instructions in its system prompt. Real failure: with two
-              // matches AND another context block (updatesContext) active in
-              // the same turn, the model correctly sent the first match's
-              // link, then gave up on the sequence and crammed the second
-              // match's description, its MISSING link, and the unrelated
-              // updates content into one giant paragraph — "too wordy and
-              // it didn't even send the link for the accelerator." Relying
-              // on an LLM to perfectly execute 4+ sequential tool calls
-              // while also juggling other simultaneous context isn't
-              // reliable enough for something this mechanical. Sending the
-              // link and description directly here removes that failure
-              // mode entirely — same sendCoReply/logTextExchange helpers
-              // and 2s pacing convention conversationTools.ts's sendReply
-              // already uses for a real second message.
-              // Details, the personal reason, and the text for every match
-              // are prepared, then sent in order. Each tier walks its own
-              // candidates in small parallel batches, in order, until one
-              // fits or they run out (2026-09-17 code review: Tier 2 can
-              // return up to 6, and capping this at the first 2 per tier
-              // meant a bad first pair discarded the rest, and Co said
-              // nothing fit when a later candidate would have). Only the
-              // winning candidate per tier gets the sonnet description draft
-              // — misfits only need the (cheaper) fit check itself.
-              const FIT_CHECK_BATCH = 2;
-              const matchesByTier = new Map<number, TierMatch[]>();
-              for (const m of recommendation.matches) {
-                const arr = matchesByTier.get(m.tier) ?? [];
-                arr.push(m);
-                matchesByTier.set(m.tier, arr);
-              }
-              // "What does SF tech week look like? Oct 5th - Oct 11th?" asks
-              // what's on, so one per tier undersold it (2026-09-18: five real
-              // events passed, one went out, and Co said it was the only one).
-              // A time frame or a what's-on question gets up to three a tier.
-              const searchScope = "scope" in recommendation ? recommendation.scope : null;
-              const perTier = searchScope?.window || isBrowseAsk(resolvedContent) ? 3 : 1;
-              const matchCount = [...matchesByTier.values()].reduce((n, c) => n + Math.min(c.length, c[0]?.tier === 1 ? 1 : perTier), 0);
-              const prepStarted = Date.now();
-
-              type PreparedMatch = { m: TierMatch; description: string; fits?: boolean; why?: string; em?: Awaited<ReturnType<typeof enrichMatch>> };
-
-              // Drafted in Co's voice from the real record and a personal
-              // reason, not the matching engine's raw "name — reason" line.
-              // stretch: the fit check said it doesn't quite fit, but it's the
-              // closest real thing found, so it goes out with an honest caveat
-              // instead of "nothing" (2026-09-18).
-              const draftDescription = async (m: TierMatch, em: Awaited<ReturnType<typeof enrichMatch>>, stretch = false): Promise<string> => {
-                let description = `${m.name}. ${em.whyItFits ?? m.reason}`;
-                try {
-                  const askedDates = describeTimeFrame("scope" in recommendation ? recommendation.scope : null);
-                  const dateRule = dateCaveatRule(askedDates);
-                  const record = em.details ? renderEventDetails(em.name, em.details).join("\n") : em.opportunity ? `What the post says: ${em.opportunity.postText}` : "";
-                  const { text: drafted } = await generateText({
-                    model: anthropic(MODELS.sonnet),
-                    experimental_telemetry: { isEnabled: true, functionId: "sendblue.recommendation.describe" },
-                    prompt: `${CO_VOICE}\n\n${CO_TEXT_CHANNEL} ${IDENTITY_RULE} You're telling ${user.first_name ?? "them"} about "${m.name}"${"url" in m && m.url ? ". Its link preview is already showing right above this message, so this message is the caption under it: say what it is directly, and don't mention the link, sending it, or \"the one above\"" : ""}${matchCount > 1 ? `. This is one of ${matchCount} you're sending together, so it reads as a bullet in a short list` : ""}.\n\n${stretch ? `It isn't an exact fit for what they asked: ${em.whyItFits ?? "not quite what they described"}. Say that honestly in a few words, then why it could still be worth a look.` : `Why it fits them: ${em.whyItFits ?? m.reason}`}\n${record ? `\nWhat's actually known about it:\n${record}\n` : ""}${dateRule}\nWrite ${matchCount > 1 ? "one sentence" : "1-3 sentences"} naming it, the one or two details that matter most to them (when, where, who), and why it fits, in your own words. Only use what's written above. No link. Return ONLY the message.`,
-                  });
-                  if (drafted.trim()) {
-                    // No claim about who they are beyond their own words and profile (services/identityGuard.ts).
-                    const grounded = stripUngroundedIdentity(cleanCoMessage(drafted.trim()), `${resolvedContent}\n${(profile?.goals ?? []).join(" ")}\n${profile?.city ?? ""}\n${em.whyItFits ?? ""}`);
-                    if (grounded) description = grounded;
-                  }
-                } catch (err: any) {
-                  console.error("sendblue: recommendation description drafting failed (non-fatal, sending plain):", err?.message ?? err);
-                }
-                return description;
-              };
-
-              const enrichOne = async (m: TierMatch) => {
-                const em = await enrichMatch(m, {
-                  userId: user.id,
-                  firstName: user.first_name,
-                  askText: resolvedContent,
-                  timeFrame: describeTimeFrame("scope" in recommendation ? recommendation.scope : null),
-                  goals: profile?.goals ?? null,
-                  city: profile?.city ?? null,
-                  feeling: renderEmotionalContext(emotional),
-                });
-                return { m, em };
-              };
-
-              const preparedAll: PreparedMatch[] = [];
-              const tierWinners = await Promise.all(
-                [...matchesByTier.values()].map(async (candidates): Promise<PreparedMatch[]> => {
-                  const tier = candidates[0]?.tier;
-                  if (tier === 1) {
-                    // Co's own events are always kept, no fit check.
-                    const first = candidates[0];
-                    if (!first) return [];
-                    const { em } = await enrichOne(first);
-                    const p: PreparedMatch = { m: first, description: await draftDescription(first, em), fits: em.fits, why: em.whyItFits };
-                    preparedAll.push(p);
-                    return [p];
-                  }
-                  const winners: PreparedMatch[] = [];
-                  for (let i = 0; i < candidates.length && winners.length < perTier; i += FIT_CHECK_BATCH) {
-                    const batch = candidates.slice(i, i + FIT_CHECK_BATCH);
-                    const results = await Promise.all(batch.map(enrichOne));
-                    for (const { m, em } of results) {
-                      const attempted: PreparedMatch = { m, description: "", fits: em.fits, why: em.whyItFits, em };
-                      preparedAll.push(attempted);
-                      // Only the personal read says fits what they asked
-                      // (services/eventDetails.ts fitPrompt); the first in order
-                      // that fit win their tier.
-                      if (winners.length < perTier && em.fits !== false) {
-                        attempted.description = await draftDescription(m, em);
-                        winners.push(attempted);
-                      }
-                    }
-                  }
-                  return winners;
-                }),
-              );
-              prepMsForTurn = Date.now() - prepStarted;
-              // Best-fitting first, in the order tiers were returned.
-              const prepared = tierWinners.flat();
-              // What passed every check but didn't go out this turn, so the
-              // reply never calls what it sent the only one (2026-09-18).
-              const notSent = recommendation.matches.filter((m) => !prepared.some((p) => p.m === m) && !preparedAll.some((p) => p.m === m && p.fits === false));
-              if (prepared.length && notSent.length) {
-                addFact(
-                  replyFacts,
-                  "known",
-                  `The search also turned up ${notSent.length} more real one${notSent.length > 1 ? "s" : ""} you didn't send: ${notSent.map((m) => `"${m.name}"`).join(", ")}. Never say what you sent is the only one; if it helps, offer to send more.`,
-                );
-              }
-              // Nothing passed the fit check, but real things were found: send
-              // the closest one with an honest caveat rather than "nothing"
-              // (2026-09-18: a real event near Sep 24 was found and dropped,
-              // and the member heard nothing). Only something that's the right
-              // kind of thing for what they asked, off on a detail: a funding
-              // story went out for "Anyone hiring a design engineer?"
-              // (2026-09-18).
-              const closest = !prepared.length ? preparedAll.find((p) => p.em?.rightKind === true) : undefined;
-              if (closest?.em) {
-                closest.description = await draftDescription(closest.m, closest.em, true);
-                prepared.push(closest);
-                addInstruction(
-                  replyFacts,
-                  "Nothing you found matched exactly, so you sent the closest real thing with a caveat. Don't apologize for it or call it a fail; if it helps, say what you'll keep looking for.",
-                );
-              }
-              // Nothing survived the real fit check, but the ask might name one specific event
-              // ("What's happening at AfroTech?") that tier 2's own coarse relevance gate let
-              // unrelated candidates through for (2026-09-21: 8 SF Tech Week events passed that
-              // gate, then all failed here). A live reply's web search is otherwise off
-              // (services/namedEventLookup.ts); this is its only path to a real answer, tried
-              // once, only as the true last resort.
-              if (!prepared.length) {
-                const scopeCity = "scope" in recommendation ? (recommendation.scope?.city ?? null) : null;
-                const scopeZone = ("scope" in recommendation && recommendation.scope?.timezone) || "America/Los_Angeles";
-                const named = await lookupNamedEvent(resolvedContent, scopeCity ?? profile?.city ?? null, DateTime.now().setZone(scopeZone).toISODate() ?? DateTime.now().toISODate()!, {
-                  userId: user.id,
-                  source: "request",
-                }).catch((err: any) => {
-                  console.error("sendblue: named event lookup failed (non-fatal):", err?.message ?? err);
-                  return { match: null, name: null, blocked: null, rejected: null };
-                });
-                if (named.match) {
-                  const { em } = await enrichOne(named.match);
-                  const attempted: PreparedMatch = { m: named.match, description: "", fits: em.fits, why: em.whyItFits, em };
-                  preparedAll.push(attempted);
-                  attempted.description = await draftDescription(named.match, em, em.fits === false);
-                  prepared.push(attempted);
-                  addInstruction(
-                    replyFacts,
-                    em.fits === false
-                      ? "Nothing else fit, so you looked up the named event itself and sent what its own page actually says, with an honest caveat about what's off. Don't apologize or call it a fail."
-                      : "Nothing else fit, so you looked up the named event itself and sent what its own page actually says.",
-                  );
-                }
-              }
-              if (!prepared.length) {
-                addFact(
-                  replyFacts,
-                  "did_this_turn",
-                  `Searched just now. What came up didn't fit what they asked: ${preparedAll.map((p) => `"${p.m.name}" (${p.why ?? "not a fit"})`).join("; ")}.`,
-                );
-                addInstruction(replyFacts, "You searched and nothing that came up fits what they asked. Say that plainly and briefly. Don't send or describe the misfits unless they ask.");
-                // Save the ask before the reply, as the nothing-found branch
-                // already does (2026-09-22). It used to be saved only after
-                // the reply, by Layer 4, so the grounding check saw no open
-                // search and stripped every "I'll keep an eye out" as a false
-                // promise (5 rewrites in one day, each a wasted draft).
-                const turnAsk = await captureIntentForTurn(user.id, `${recentConversation}\nuser: ${resolvedContent}`, { timeoutMs: 4000 }).catch(() => null);
-                if (turnAsk?.ask?.text) {
-                  replyFacts.facts = replyFacts.facts.filter((fact) => fact.kind !== "ongoing" && !/isn't searching for anything/.test(fact.text));
-                  await addOngoingSearchFacts(replyFacts, user.id);
-                }
-                await recordSearchNote(
-                  user.id,
-                  `Co searched for "${resolvedContent.slice(0, 120)}" and what came up didn't fit: ${preparedAll.map((p) => `"${p.m.name}" from ${sourceOf(p.m)}${"url" in p.m && p.m.url ? `, link ${p.m.url}` : ""} (${p.why ?? "not a fit"})`).join("; ")}.`,
-                );
-              }
-              // What they are always comes before its link (Royce,
-              // 2026-09-16: Co sent a link, then a message pointing back at
-              // it). One thing: a sentence, then the link. Several: one
-              // bulleted message the way the product updates read, then each
-              // link on its own so every one of them previews.
-              // Only what actually went out counts as sent (2026-09-17 code
-              // review) — a refused or failed send used to still get logged
-              // and recorded, so the reply and recommendation_offered claimed
-              // something the person never received.
-              const actuallySent: typeof prepared = [];
-              if (prepared.length) {
-                if (prepared.length > 1) {
-                  const lead = renderMatchLead(prepared.length);
-                  await sendAndLog(user.id, user.phone_number, lead, isVoice);
-                  await new Promise((resolve) => setTimeout(resolve, 1500));
-                }
-                // Link first, then what it is (Royce, 2026-09-16: "I want the
-                // link first then description"), so the preview lands and the
-                // description reads as the caption under it.
-                for (const p of prepared) {
-                  const { m, description } = p;
-                  if ("url" in m && m.url) {
-                    await sendAndLog(user.id, user.phone_number, m.url);
-                    await new Promise((resolve) => setTimeout(resolve, 1500));
-                  }
-                  const descriptionSent = await sendAndLog(user.id, user.phone_number, description, isVoice);
-                  await new Promise((resolve) => setTimeout(resolve, 1500));
-                  if (descriptionSent) actuallySent.push(p);
-                }
-                for (const { m, description } of actuallySent) {
-                  addFact(
-                    replyFacts,
-                    "did_this_turn",
-                    `Sent "${m.name}", found through ${sourceOf(m)}${"url" in m && m.url ? ` (link ${m.url})` : " (no link)"}, just before this reply: "${description}"`,
-                  );
-                }
-                sentThisTurn = actuallySent.map((p) => p.m.name);
-                if (actuallySent.length) {
-                  await recordSearchNote(
-                    user.id,
-                    `Co searched for "${resolvedContent.slice(0, 120)}" and sent: ${actuallySent.map((p) => `"${p.m.name}" from ${sourceOf(p.m)}`).join("; ")}.`,
-                  );
-                  // recordRecommendationsSent (services/recommendation.ts)
-                  // writes recommendation_offered/recommendation for exactly
-                  // the matches that really went out, not everything the
-                  // search found (2026-09-17 code review: generateRecommendation
-                  // no longer writes these itself).
-                  await recordRecommendationsSent(user.id, actuallySent.map((p) => p.m)).catch((err: any) =>
-                    console.error("sendblue: recordRecommendationsSent failed (non-fatal):", err?.message ?? err),
-                  );
-                }
-              }
-              // The agent still runs after this (see below) to genuinely
-              // respond to what they said — this just tells it the
-              // recommendation itself already went out, so it doesn't
-              // repeat the details or the link.
-              await recordDecision({
-                layer: 5,
-                decision: "recommendation.search",
-                userId: user.id,
-                outcome: actuallySent.length ? "act" : "skip",
-                action: actuallySent.length ? "sent_matches" : prepared.length ? "send_failed" : "nothing_fit",
-                proposal: { message: resolvedContent, holdLine, ms: Date.now() - searchStarted, scope: "scope" in recommendation ? recommendation.scope : null, matches: preparedAll.map((p) => ({ name: p.m.name, tier: p.m.tier, fits: p.fits ?? null, why: p.why ?? null, soldOut: p.m.details?.soldOut ?? null })) },
-              });
-              // Their message was only the ask: the link and caption answered
-              // it, so no third message repeating them. Never when this search
-              // ruled out something (the correction only goes out in the
-              // reply), and never on their first real message (opening the
-              // conversation and the first-contact call offer live in the
-              // reply) (code review, 2026-09-16). Gated on what actually sent
-              // (2026-09-17 code review), not what was merely prepared — a
-              // failed send must not be treated as having answered the ask.
-              const rw = "scope" in recommendation ? recommendation.scope?.rewrite : null;
-              if (
-                actuallySent.length &&
-                canSkipReplyAfterResults({
-                  sentResults: actuallySent.length,
-                  original: rw?.original ?? null,
-                  rewritten: rw?.rewritten ?? null,
-                  ruledOut: ruledOut.length,
-                  firstRealMessage: isFirstRealMessage || isThinProfileFirstMessage,
-                  beyondAsk: decision.beyondAsk,
-                })
-              ) {
-                resultsAnsweredAsk = actuallySent[actuallySent.length - 1].description;
-              }
-              if (actuallySent.length)
-                addInstruction(
-                  replyFacts,
-                  `You already sent them ${actuallySent.length > 1 ? "a few real things" : "something real"} for what they asked, separately from this reply; that answered the ask. Don't repeat the name, link, or details, and don't point back at it ("check it above", "just sent you one", "already sent you"). Respond only to the rest of their message${decision.beyondAsk ? `: ${decision.beyondAsk}` : ""}.`,
-                );
-              else if (prepared.length) addInstruction(replyFacts, "You found something real to tell them about, but sending it just failed. Say plainly that something went wrong sending it and you'll need them to ask again in a moment, without naming what it was.");
-            } else {
-              // Nothing real found right now. Save what they asked for as an
-              // ask so the daily search really keeps looking; that's what
-              // makes "I'll keep looking" true (replyGrounding's ongoing fact).
-              const turnAsk = await captureIntentForTurn(user.id, `${recentConversation}\nuser: ${resolvedContent}`, { timeoutMs: 4000 }).catch(() => null);
-              // Ran past the reply's time cap: the search is still going and
-              // its result gets sent when it lands (services/lateSearchResult.ts).
-              const stillSearching = !recommendation.available && recommendation.reason === "search took too long";
-              if (stillSearching) {
-                addFact(replyFacts, "did_this_turn", "Started a search for what they asked for. It's still running and what it finds gets sent to them as soon as it lands.");
-                addInstruction(replyFacts, "Your search is still running. Say you're still looking and will send what turns up shortly. Don't say you found nothing.");
-              } else {
-                // What fits may already have been sent: say so instead of "nothing came up".
-                const sentBefore = alreadySentNames("scope" in recommendation ? recommendation.scope?.gatedOut : null);
-                if (sentBefore.length) {
-                  addFact(replyFacts, "did_this_turn", `Searched just now for what they asked for. What fits is what you already sent them earlier: ${sentBefore.join("; ")}. Nothing new has turned up since.`);
-                  addInstruction(replyFacts, "Tell them plainly that the ones that fit are the ones you already sent (name one or two) and nothing new has come up since. Don't say nothing came up, and don't send them again.");
-                } else addFact(replyFacts, "did_this_turn", `Searched just now for what they asked for and found nothing real that fits yet${recommendation.reason ? ` (${recommendation.reason})` : ""}.`);
-              }
-              await recordSearchNote(user.id, `Co searched for "${resolvedContent.slice(0, 120)}" and found nothing new${recommendation.reason ? ` (${recommendation.reason})` : ""}.`);
-              if (turnAsk?.ask?.text) {
-                replyFacts.facts = replyFacts.facts.filter((fact) => fact.kind !== "ongoing" && !/isn't searching for anything/.test(fact.text));
-                await addOngoingSearchFacts(replyFacts, user.id);
-              }
-              await recordDecision({
-                layer: 5,
-                decision: "recommendation.search",
-                userId: user.id,
-                outcome: "skip",
-                action: turnAsk?.ask?.text ? "nothing_found_ask_saved" : "nothing_found",
-                checks: [
-                  { name: "found_something_real", pass: false, reason: recommendation.reason },
-                  { name: "ask_saved_for_daily_search", pass: !!turnAsk?.ask?.text, reason: turnAsk?.ask?.text ?? "no ask captured" },
-                ],
-                proposal: { message: resolvedContent, holdLine, ms: Date.now() - searchStarted, scope: "scope" in recommendation ? recommendation.scope : null },
-              });
-              const alreadyRecommended = ("alreadyRecommended" in recommendation ? recommendation.alreadyRecommended : null) ?? [];
-              const gatedOut = ("scope" in recommendation ? recommendation.scope?.gatedOut : null) ?? [];
-              if (alreadyRecommended.length) {
-                // Include the actual date, not just the name (2026-09-17
-                // code review: without it, the reply had nothing to confirm
-                // the match against and hedged into a factually wrong "but
-                // that's not [the date they asked about]" for an event that
-                // genuinely was on that date).
-                addFact(
-                  replyFacts,
-                  "did_this_turn",
-                  `Searched again — the only real match is "${alreadyRecommended.map((m) => `${m.name}"${"event_date" in m && m.event_date ? ` on ${dayLabel(m.event_date)}` : ""}`).join(', "')}, which you already told them about earlier.`,
-                );
-                addInstruction(
-                  replyFacts,
-                  "You already told them about this earlier — don't say you found nothing. Say plainly that what you already mentioned is still the real answer for what they're asking now (name it by name, naturally, not as if it's new, and confirm the date matches what they asked using the date in the facts — don't guess or hedge on whether it's the same date). Don't resend its link or re-describe it in full unless they ask for the details again.",
-                );
-              } else if (gatedOut.length) {
-                addFact(
-                  replyFacts,
-                  "did_this_turn",
-                  `Found real ones but couldn't offer them: ${gatedOut.map((g) => `"${g.name}"${g.date ? ` on ${dayLabel(g.date)}` : ""}${g.url ? `, link ${g.url}` : ""} (${g.reasons.join(", ")})`).join("; ")}.`,
-                );
-                addInstruction(
-                  replyFacts,
-                  "You did find real things, but none you can offer as asked (for example sold out, or just outside the dates they gave). In one or two short sentences: name what you found, say the day it's on exactly as written in the facts (like \"Saturday, September 19\"), and the plain reason it didn't make the cut (for example \"it's already sold out\"). Don't blur the reason into something vaguer, and don't suggest a generic type of thing instead. If one is close, like just past their dates, say so briefly so they can ask for it if their plans change. Don't send its link unless they ask.",
-                );
-              } else if (("scope" in recommendation ? recommendation.scope?.closest : null)) {
-                const closest = ("scope" in recommendation ? recommendation.scope?.closest : null)!;
-                addFact(
-                  replyFacts,
-                  "did_this_turn",
-                  `The closest real event was "${closest.name}"${closest.date ? ` on ${dayLabel(closest.date)}` : ""}${closest.url ? `, link ${closest.url}` : ""}, but ${closest.why}.`,
-                );
-                // Presenting the SAME near-miss fresh every time a daily
-                // sweep re-runs the same ask reads like Co forgot it already
-                // said this (2026-09-17). Told once, referenced as already
-                // known after that, not represented as new each day.
-                const alreadyMentioned = await wasClosestMissRecentlyMentioned(user.id, closest.name).catch(() => false);
-                addInstruction(
-                  replyFacts,
-                  alreadyMentioned
-                    ? "You searched again and nothing new fits what they asked. The closest real one is the same one you already told them about before — say plainly nothing new turned up, and only briefly note it's still the same option from before if it's natural, don't re-explain it from scratch like it's new."
-                    : "You searched and nothing real fits what they asked. Say that plainly, then name the closest real one in a short sentence: what it is, the day it's on exactly as written in the facts (like \"Sunday, September 20\"), and why it isn't quite it, so they can decide. Don't send its link unless they ask, and don't make up anything else.",
-                );
-                if (!alreadyMentioned) {
-                  recordClosestMissMentioned(user.id, closest.name, resolvedContent.slice(0, 160)).catch(() => {});
-                }
-              } else {
-                addInstruction(replyFacts, "You searched and found nothing real yet. Say that plainly. Don't make up a suggestion.");
-              }
-            }
-
-            // They named a time frame: once it's passed, check in on how it
-            // went for them (agent/windowFollowUp.ts). Queued through the
-            // proactive harness, so the daily and weekly caps and the
-            // unanswered back-off all still apply.
-            const scope = "scope" in recommendation ? recommendation.scope : null;
-            // Optional color on the search pattern, not a directive
-            // (2026-09-17, "make the outcome-learning visible, not just
-            // silent"): only ever a soft fact the reply agent may weave in
-            // if it actually fits this reply — never forced, never its own
-            // sentence just to mention it. Only "flopped" categories are
-            // worth surfacing at all; a "worked" pattern already just shows
-            // up as a better search, it doesn't need narrating.
-            if (scope?.categoryInsight?.flopped.length) {
-              addFact(
-                replyFacts,
-                "known",
-                `${scope.categoryInsight.flopped.join(", ")}-type opportunities haven't gone anywhere for them before, based on what they've said in past follow-ups — only mention this if it genuinely fits the reply naturally (e.g. explaining why you searched wider this time), never as its own sentence.`,
-              );
-            }
-            if (scope?.window && scope.windowEnd) {
-              const timezone = profile?.city ? await getTimezoneForCity(profile.city).catch(() => null) : null;
-              const dueAt = nextLocalHour(new Date(scope.windowEnd), timezone, 11);
-              const payload: WindowFollowUpPayload = {
-                label: scope.window,
-                asked: resolvedContent.slice(0, 200),
-                // What they actually got, not everything the search found
-                // (2026-09-18: five were recorded, one was sent).
-                sent: sentThisTurn,
-                dates: describeTimeFrame(scope) ?? undefined,
-              };
-              const targetKey = `window_followup:${scope.windowEnd.slice(0, 10)}`;
-              const queued = await enqueueCandidate({
-                userId: user.id,
-                type: "window_followup",
-                targetKey,
-                topicKey: targetKey,
-                summary: `Ask how ${scope.window} went for them (they asked Co to look for "${resolvedContent.slice(0, 80)}")`,
-                payload,
-                dueAt,
-                expiresAt: new Date(dueAt.getTime() + 3 * 24 * 60 * 60 * 1000),
-              }).catch((err: any) => {
-                console.error("sendblue: window follow-up enqueue failed (non-fatal):", err?.message ?? err);
-                return { queued: false, error: String(err?.message ?? err) };
-              });
-              // Which searches produced a follow-up, and when it's due, so one
-              // that never sends can be told apart from one never queued.
-              await recordDecision({
-                layer: 6,
-                decision: "proactive.windowFollowUp",
-                userId: user.id,
-                outcome: queued.queued ? "act" : "skip",
-                action: queued.queued ? "queued" : "error" in queued ? "enqueue_failed" : "not_queued",
-                proposal: { targetKey, window: scope.window, windowEnd: scope.windowEnd, dueAt: dueAt.toISOString(), sent: payload.sent },
-                checks: [{ name: "queued", pass: queued.queued, reason: queued.queued ? `due ${dueAt.toISOString()}` : "error" in queued ? queued.error : "already sent or no longer pending for this time frame" }],
-              }).catch(() => {});
-            }
-          }
-        } catch (err: any) {
-          console.error("sendblue: recommendation failed (non-fatal):", err?.message ?? err);
-        }
 
         // Step 4.7 — Debounce the free-form reply only. Every deterministic
         // branch above this point (identity intake, OTP, call-trigger) has
@@ -2643,8 +2331,15 @@ Return ONLY valid JSON, no preamble: {"date": "YYYY-MM-DD or null", "time": "HH:
         // that never got drafted in the first place. Skipping the wait too
         // means the person isn't kept waiting on top of whatever the search
         // itself already took.
+        // The wait runs from when their text arrived, not from here
+        // (2026-09-26): it used to start after the router and prep, so every
+        // reply paid those seconds and then 4 more. A text that lands within
+        // the burst window (services/beats.ts) of this one still takes over the turn.
+        let debounceWaitMs = 0;
         if (myInboundAt && !turnDidWork) {
-          await new Promise((resolve) => setTimeout(resolve, DEBOUNCE_MS));
+          // Longer when their text looks like more is coming (services/beats.ts).
+          debounceWaitMs = Math.max(0, burstWaitMs(resolvedContent ?? "") - (Date.now() - new Date(myInboundAt).getTime()));
+          if (debounceWaitMs > 0) await new Promise((resolve) => setTimeout(resolve, debounceWaitMs));
           const latestStampResult = await pool.query(
             `SELECT last_inbound_at FROM phone_debounce WHERE phone = $1`,
             [number],
@@ -2666,62 +2361,16 @@ Return ONLY valid JSON, no preamble: {"date": "YYYY-MM-DD or null", "time": "HH:
         // Step 5 — Two separate context sources, since they answer different
         // questions. Topical similarity search answers "what's relevant to
         // what they just said" but has no sense of recency or conversation
-        // flow — on its own it can just as easily surface something said
-        // weeks ago in an unrelated exchange as it can the actual last thing
-        // discussed (confirmed: this produced a reply referencing an
-        // unrelated "3pm" proposal from a different circle entirely). The
-        // chronological block below answers "what did we just say," in
-        // order, so the model can actually follow the thread.
-        let memoriesResult;
-        if (queryEmbedding) {
-          try {
-            memoriesResult = await pool.query(
-              `SELECT content FROM co_memories
-               WHERE user_id = $1 AND content_embedding IS NOT NULL AND memory_type != 'intent'
-               ORDER BY content_embedding <=> $2::vector
-               LIMIT 5`,
-              [user.id, `[${queryEmbedding.join(",")}]`],
-            );
-          } catch (vecErr) {
-            console.error("Vector search failed, falling back to recency:", vecErr);
-            memoriesResult = await pool.query(
-              `SELECT content FROM co_memories WHERE user_id = $1 AND memory_type != 'intent' ORDER BY created_at DESC LIMIT 5`,
-              [user.id],
-            );
-          }
-        } else {
-          memoriesResult = await pool.query(
-            `SELECT content FROM co_memories WHERE user_id = $1 AND memory_type != 'intent' ORDER BY created_at DESC LIMIT 5`,
-            [user.id],
-          );
-        }
-        // Filtered for genuine relevance to what they just said before the
-        // reply agent ever sees it — see filterRelevantMemories in
-        // conversationReply.ts. Vector similarity alone isn't enough of a
-        // relevance signal to hand this to the model as foreground context;
-        // this is what makes it safe to do so.
-        const rawMemoryCandidates = memoriesResult.rows.map((m: any) => m.content).filter(Boolean);
-        const recentMemories = rawMemoryCandidates.length
-          ? await filterRelevantMemories(resolvedContent, rawMemoryCandidates)
-          : "";
+        // flow (confirmed: it once surfaced an unrelated "3pm" proposal). The
+        // chronological block (recentConversation) answers "what did we just
+        // say." Both were started before the router (recentMemoriesP,
+        // coverageP); the context summary reads state this turn may have
+        // changed, so it's read now, alongside them.
+        const [recentMemories, { missingTopic, refresh: staleTopic }, contextSummary] = await Promise.all([recentMemoriesP, coverageP, buildContextSummary(user.id)]);
+        // Intros Co made, from its own records (not co_facts): what it did.
+        introRecordFacts.forEach((f) => addFact(replyFacts, "did_before", f));
+        const replyContextWaitMs = Date.now() - replyContextStarted;
 
-        // Co Loop Stage 1 — same coverage-nudge logic the Stage 5 check-in
-        // cron uses (jobs/index.ts), shared via profileExtraction.ts's
-        // getCoverageNudge so a text-only relationship also works toward
-        // RAPPORT_TOPICS instead of only ever reactively answering whatever
-        // comes up — matches co-test/src/routes/webhooks.ts's already-proven
-        // approach for this. Persisted topics_covered/topics_asked (read as
-        // part of `profile` above) mean a topic answered on a prior call or
-        // text doesn't get re-judged or re-asked here.
-        const { missingTopic } = await getCoverageNudge(user.id, recentConversation, profile);
-
-
-        // Not gated like the reply-agent's secondary gestures above — this
-        // isn't a competing "extra ask" for the reply's one secondary slot,
-        // it's an instruction about HOW to say whatever Co was already going
-        // to say. Advisory only (see harness/emotion.ts) and never named back to
-        // the user — a good friend responds differently to someone who's
-        // upset, they don't announce "you sound upset."
         const toneContext = renderEmotionalContext(emotional);
 
         // Advisory only, same reasoning as toneContext above — reading a
@@ -2739,9 +2388,10 @@ Return ONLY valid JSON, no preamble: {"date": "YYYY-MM-DD or null", "time": "HH:
           // same "what Co knows about this person" builder the call channel
           // uses for its own {{context_summary}} fill), so both channels
           // stay genuinely in sync rather than each maintaining their own
-          // summary of the same underlying profile.
-          const contextSummary = await buildContextSummary(user.id);
-          const personaPrompt = await renderCoPersonaPrompt(user.first_name, contextSummary);
+          // summary of the same underlying profile. (Read in Step 5 above.)
+          // Texts no longer carry the call guide (agent/conversationReply.ts,
+          // 2026-09-24), so it isn't fetched from Hume on every text.
+          const personaPrompt = null;
 
           // Step 6 — Decide + send Co's reply via the conversation-reply
           // agent (agent/conversationReply.ts). Replaces the old fixed
@@ -2753,23 +2403,45 @@ Return ONLY valid JSON, no preamble: {"date": "YYYY-MM-DD or null", "time": "HH:
           // second LLM call inferring after the fact whether the drafted
           // text happened to include one.
           const replyStarted = Date.now();
-          const { replyText, grounding } = resultsAnsweredAsk
-            ? await recordDecision({
-                layer: 3,
-                decision: "reply.skipped",
-                userId: user.id,
-                outcome: "skip",
-                action: "results_answered_the_ask",
-                proposal: { message: resolvedContent },
-                checks: [{ name: "message_was_only_the_ask", pass: true }],
-              })
-                .catch(() => {})
-                .then(() => ({ replyText: resultsAnsweredAsk!, grounding: [] as { latencyMs: number }[] }))
-            : await propagateAttributes(
+          // How they like to be texted, learned from this message against
+          // Co's last one (services/textingStyle.ts). In the background, so
+          // it never slows the reply; the next reply reads it.
+          // How they like to be texted is learned after the reply, in the turn's one
+          // learning read (services/turnLearning.ts); the next reply reads it.
+          const moment = dotsP ? await dotsP : null;
+          const dots = moment?.dots ?? [];
+          // Messages passed between them and someone they're connected to: each
+          // side knows only what the other chose to send (services/relay.ts).
+          (await relayFacts(user.id).catch(() => [] as string[])).forEach((line) => addFact(replyFacts, "known", line));
+          const momentNote = momentInstruction(moment);
+          if (momentNote) addInstruction(replyFacts, momentNote);
+          const lessons = turn?.lessons ?? [];
+          if (lessons.length) addInstruction(replyFacts, `What you've learned about how to be with them, from times they corrected you: ${lessons.join(" / ")}`);
+          if (moment?.lesson) saveLesson(user.id, moment.lesson).catch(() => {});
+          if (moment) recordDecision({ layer: 3, decision: "reply.moment", userId: user.id, outcome: "act", action: moment.mode, proposal: { topic: moment.topic, pushback: moment.pushback, lesson: moment.lesson } }).catch(() => {});
+          if (reactingToSent) {
+            const why = whyContext(await askedAndDoing());
+            if (why) addInstruction(replyFacts, `They're reacting to something Co sent them. ${CO_WHY} ${why}`);
+          }
+          const dotsNote = dotsInstruction(dots);
+          if (dotsNote) {
+            addInstruction(replyFacts, dotsNote);
+            recordDecision({ layer: 3, decision: "reply.dots", userId: user.id, outcome: "act", action: `dots:${dots.length}`, proposal: { dots } }).catch(() => {});
+          }
+          // The reaction that went out on their text, so Co can leave it at that.
+          const ackSent = (await ackP.catch(() => false)) ? (turnRead?.ack ?? null) : null;
+          // Co's last reaction to them, so a closing tapback never repeats it.
+          const lastReaction = ackSent ?? (await tapbacksP.catch(() => null))?.recent[0]?.emoji ?? null;
+          const { replyText, grounding, toolsCalled } = await propagateAttributes(
             { userId: user.id, traceName: "sendblue.generateReply" },
             () =>
               runConversationReplyAgent({
-                searchedThisTurn: !!decision.wantsRecommendation,
+                ackSent,
+                messageHandle: typeof req.body?.message_handle === "string" ? req.body.message_handle : null,
+                lastReaction,
+                replyOwed: owesReply,
+                safetyConcern: crisisWording,
+                turn,
                 userId: user.id,
                 phoneNumber: user.phone_number,
                 firstName: user.first_name,
@@ -2782,7 +2454,8 @@ Return ONLY valid JSON, no preamble: {"date": "YYYY-MM-DD or null", "time": "HH:
                 isThinProfileFirstMessage,
                 isFirstContact: isFirstRealMessage,
                 missingTopic,
-                missingTopicDescription: missingTopic ? RAPPORT_TOPIC_DESCRIPTIONS[missingTopic] : null,
+                // A stale topic reads as catching up on what's changed (services/understanding.ts).
+                missingTopicDescription: staleTopic ? gapDescription(staleTopic) : missingTopic ? RAPPORT_TOPIC_DESCRIPTIONS[missingTopic] : null,
                 facts: replyFacts,
                 toneContext,
                 seekingModeContext,
@@ -2791,50 +2464,68 @@ Return ONLY valid JSON, no preamble: {"date": "YYYY-MM-DD or null", "time": "HH:
                 recentMemories,
                 contextSummary,
                 personaPrompt,
-                sendCoReply,
+                sendCoReply: threadedSend,
+                threadNext: () => {
+                  threadNextSend = true;
+                },
+                turnStartedAt,
+                resumeLater: replay ? undefined : (retry) => scheduleReplyResume(typeof handle === "string" ? handle : null, user.phone_number, user.id, myInboundAt, turnStartedAt, retry),
               }),
           );
           coReply = replyText;
+          // A reaction Co didn't record, caught after the reply (services/reactionCatchup.ts).
+          if (hasText) catchUpReaction(user.id, resolvedContent, toolsCalled ?? [], inlineTarget?.fromCo ? `${inlineTarget.text} ${inlineTarget.what ?? ""}`.trim() : null, turn?.sent).catch(() => {});
           const groundingMs = grounding.reduce((a, g) => a + g.latencyMs, 0);
           const replyMs = Date.now() - replyStarted - groundingMs;
           // Latency budget (2026-09-15: a 70s reply led to five resends).
           // Measured from when the text reached Co to the reply going out.
           if (myInboundAt) {
             const turnMs = Date.now() - new Date(myInboundAt).getTime();
+            const searchedThisTurn = (toolsCalled ?? []).some((t) => t === "searchEvents" || t === "webSearch");
+            // What they actually waited, from what was logged as sent this
+            // turn, whichever path sent it: the search's hold line and
+            // results go out before the reply step (2026-09-27: search turns
+            // logged no first-text time at all).
+            const sentRows = await pool
+              .query(`SELECT content, created_at FROM co_memories WHERE user_id = $1 AND memory_type = 'text_exchange' AND (content LIKE 'Co replied:%' OR content LIKE $3) AND created_at >= $2 ORDER BY created_at LIMIT 20`, [user.id, myInboundAt, `${HOLD_PREFIX}%`])
+              .then((r) => r.rows)
+              .catch(() => [] as any[]);
+            const rowsAsSent = sentRows.map((r: any) => ({ text: String(r.content).replace(/^Co replied:\s*/, "").replace(new RegExp(`^${HOLD_PREFIX}\\s*`), ""), at: new Date(r.created_at), hold: String(r.content).startsWith(HOLD_PREFIX) }));
+            const firsts = firstSendTimes(rowsAsSent, new Date(myInboundAt), [...HOLD_LINES, ...rowsAsSent.filter((x: any) => x.hold).map((x: any) => x.text.trim())]);
             recordDecision({
               layer: 3,
               decision: "turn.latency",
               userId: user.id,
               outcome: "act",
-              action: decision.wantsRecommendation ? "reply_with_search" : "reply",
-              checks: [{ name: "within_budget", pass: turnMs <= (decision.wantsRecommendation ? REPLY_BUDGET_SEARCH_MS : REPLY_BUDGET_MS), reason: `${Math.round(turnMs / 1000)}s` }],
+              action: searchedThisTurn ? "reply_with_search" : "reply",
+              checks: [{ name: "within_budget", pass: turnMs <= (searchedThisTurn ? REPLY_BUDGET_SEARCH_MS : REPLY_BUDGET_MS), reason: `${Math.round(turnMs / 1000)}s` }],
               // Where the time went, so slow turns can be read without
               // guessing (Royce, 2026-09-16: 36s replies).
-              proposal: { ms: turnMs, routerMs: routerLatencyMs, factsMs, searchMs: searchMsForTurn, prepMs: prepMsForTurn, replyMs, groundingMs, debounceMs: DEBOUNCE_MS },
+              // firstSentMs: their text to Co's first text of any kind (a hold
+              // line counts); firstAnswerMs: to the first real answer. ms runs
+              // to the end of the turn, including steps after the reply went out.
+              proposal: { ms: turnMs, firstSentMs: firsts.firstSentMs, firstAnswerMs: firsts.firstAnswerMs, routerMs: routerLatencyMs, factsMs, replyMs, groundingMs, debounceMs: debounceWaitMs, contextSinceStartMs: replyContextWaitMs },
             }).catch(() => {});
           }
         }
 
-        // Fire-and-forget, same real pipeline a call uses (extractPsychographicProfile
-        // + storeProfile + captureIntent), fed the accumulated text thread instead of
-        // a call transcript — matches production's post-call pipeline, ported here
-        // since this previously had only a thin 4-field patch (life_chapters/
-        // emotional_state/goals/blockers) that couldn't create a profile row at all
-        // and never touched intent, so a text-only user's stated ask never reached
-        // co_profiles.intent for matching to use.
-        const textTranscript = `${recentConversation}\nuser: ${resolvedContent}\nassistant: ${coReply}`.trim();
-        extractPsychographicProfile(textTranscript)
-          .then(({ extracted }) => storeProfile(user.id, extracted, textTranscript, { newWords: resolvedContent }))
-          .catch((err: any) => console.error("sendblue: text-based profile extraction failed (non-fatal):", err?.message ?? err));
+        // Fire-and-forget, the same writes a call's pipeline makes (profile,
+        // asks, planned events), so a text-only member's asks reach matching
+        // too. One read of the turn now (2026-09-28, services/turnLearning.ts):
+        // profile fields, resolved goals/asks, corrections, call cadence, the
+        // ask, a planned event and texting style, each through its own gate
+        // and write, instead of seven separate calls on the same transcript.
+        learnFromTextTurn({
+          userId: user.id,
+          recentConversation,
+          message: resolvedContent,
+          coReply,
+          coSaidBefore: hasText ? lastCoLine(recentConversation) : null,
+        }).catch((err: any) => console.error("sendblue: turn learning failed (non-fatal):", err?.message ?? err));
         // Keep the current picture of them fresh (harness/personSnapshot.ts);
-        // rebuilds only when they've said something new, at most every 10 min.
+        // rebuilds only when they've said something new, at most every 10 min,
+        // with their open threads in the same call.
         refreshPersonSnapshot(user.id).catch(() => {});
-        captureIntent(user.id, textTranscript).catch((err: any) =>
-          console.error("sendblue: text-based intent capture failed (non-fatal):", err?.message ?? err),
-        );
-        extractPlannedEventMention(user.id, textTranscript).catch((err: any) =>
-          console.error("sendblue: text-based event-mention capture failed (non-fatal):", err?.message ?? err),
-        );
 
         io.to(`user:${user.id}`).emit("co:message", { message: coReply });
 
@@ -2849,7 +2540,11 @@ Return ONLY valid JSON, no preamble: {"date": "YYYY-MM-DD or null", "time": "HH:
           console.error("sendblue: error after early webhook ack (non-fatal, already ack'd):", (error as any)?.message ?? error);
           // They already see "Read"; don't leave them with nothing.
           if (lockKey && isGenuineInbound && !isGroupMessage) {
-            await tellMemberTurnFailed(lockKey, turnStartedAt, "turn_error", (error as any)?.constructor?.name ?? "Error");
+            await tellMemberTurnFailed(lockKey, replay?.receivedAt ?? turnStartedAt, "turn_error", (error as any)?.constructor?.name ?? "Error");
+            // Then the turn runs once more from their saved text, unless this
+            // was already that second run (2026-10-01 code review: nothing
+            // retried a crashed turn).
+            if (!replay && typeof handle === "string" && handle) scheduleTurnReplay(handle, TURN_REPLAY_AFTER_MS);
           }
           return;
         }
@@ -2858,20 +2553,125 @@ Return ONLY valid JSON, no preamble: {"date": "YYYY-MM-DD or null", "time": "HH:
       };
 
       try {
-        if (lockKey) {
-          await withPhoneLock(lockKey, run);
-        } else {
-          await run();
-        }
+        // Tracked so a restart waits for a reply mid-draft (services/shutdown.ts).
+        await track(lockKey ? withPhoneLock(lockKey, run) : run());
       } finally {
         if (typeof handle === "string" && handle && !req.body?.is_outbound && req.body?.type !== "typing") {
           pool.query(`UPDATE inbound_webhook_handles SET finished_at = NOW() WHERE handle = $1`, [handle]).catch(() => {});
         }
       }
-    },
-  );
+  };
+
+  router.post("/webhook", (req: Request, res: Response, next: NextFunction) => handleWebhook(req, res, next));
+  replayHandler = async (payload: any, receivedAt: Date) => {
+    const noop: any = { headersSent: true, status: () => noop, send: () => noop, json: () => noop, sendStatus: () => noop };
+    await handleWebhook({ body: payload, get: () => undefined, ip: "replay" } as any, noop, (err?: any) => err && console.error("sendblue: replayed turn failed:", err?.message ?? err), { receivedAt });
+  };
 
   return router;
+}
+
+// Set once the router exists; runs a saved text's turn again (replayOwedTurn).
+let replayHandler: ((payload: any, receivedAt: Date) => Promise<void>) | null = null;
+
+// A reply that came out empty gets one more try a minute later, from the
+// message Co already has (agent/conversationReply.ts resumeLater). Under the
+// phone's lock, and only if they haven't texted since (that turn answers it,
+// see owedAnswer) and nothing answered them in the meantime. The retry is owed
+// in the database (retry_due_at) and claimed once (retry_claimed_at), so if
+// this process restarts first, the next pass replays the turn instead
+// (reportUnfinishedTurns).
+function scheduleReplyResume(handle: string | null, phone: string, userId: string, inboundAt: string | null, turnStartedAt: Date, retry: () => Promise<void>): void {
+  if (handle) pool.query(`UPDATE inbound_webhook_handles SET retry_due_at = NOW() + make_interval(secs => $2) WHERE handle = $1 AND retry_claimed_at IS NULL`, [handle, RESUME_AFTER_MS / 1000]).catch(() => {});
+  const timer = setTimeout(() => {
+    if (isShuttingDown()) return;
+    track(
+      withPhoneLock(phone, async () => {
+        if (handle && !(await claimRetry(handle))) return;
+        const latest = inboundAt
+          ? await pool.query(`SELECT last_inbound_at FROM phone_debounce WHERE phone = $1`, [phone]).then((r) => r.rows[0]?.last_inbound_at ?? null)
+          : null;
+        if (latest && inboundAt && new Date(latest).getTime() > new Date(inboundAt).getTime()) {
+          await recordDecision({ layer: 3, decision: "reply.resume", userId, outcome: "skip", action: "newer_text" }).catch(() => {});
+          return;
+        }
+        const { rows } = await pool.query(
+          `SELECT 1 FROM co_memories WHERE user_id = $1 AND memory_type = 'text_exchange' AND created_at > $2
+             AND (content LIKE 'Co replied:%' OR content LIKE 'Mo replied:%') AND content <> ALL($3::text[]) LIMIT 1`,
+          [userId, turnStartedAt, [...HOLD_LINES, ...OWED_AFTER].map((l) => `Co replied: ${l}`)],
+        );
+        if (rows.length) {
+          await recordDecision({ layer: 3, decision: "reply.resume", userId, outcome: "skip", action: "already_answered" }).catch(() => {});
+          return;
+        }
+        await retry();
+      }),
+    ).catch((err: any) => console.error("sendblue: resuming an empty reply failed:", err?.message ?? err));
+  }, RESUME_AFTER_MS);
+  timer.unref?.();
+}
+
+// One retry per text, whoever gets there first (this process's timer or the
+// pass after a restart).
+async function claimRetry(handle: string): Promise<{ payload: any; receivedAt: Date } | null> {
+  const { rows } = await pool
+    .query(`UPDATE inbound_webhook_handles SET retry_claimed_at = NOW() WHERE handle = $1 AND retry_claimed_at IS NULL RETURNING payload, received_at`, [handle])
+    .catch((err: any) => {
+      console.error("sendblue: claiming a turn retry failed:", err?.message ?? err);
+      return { rows: [] as any[] };
+    });
+  return rows[0] ? { payload: rows[0].payload, receivedAt: new Date(rows[0].received_at) } : null;
+}
+
+// A crashed turn runs once more from their saved text, shortly after.
+export const TURN_REPLAY_AFTER_MS = 10_000;
+function scheduleTurnReplay(handle: string, afterMs: number): void {
+  pool.query(`UPDATE inbound_webhook_handles SET retry_due_at = NOW() + make_interval(secs => $2) WHERE handle = $1 AND retry_claimed_at IS NULL`, [handle, afterMs / 1000]).catch(() => {});
+  const timer = setTimeout(() => {
+    if (isShuttingDown()) return;
+    track(replayOwedTurn(handle)).catch((err: any) => console.error("sendblue: replaying a crashed turn failed:", err?.message ?? err));
+  }, afterMs);
+  timer.unref?.();
+}
+
+// Runs a saved text's whole turn again (a crash, or a retry a restart lost),
+// once, and only when it's safe: Co hasn't answered since, they haven't texted
+// again, no call went out, and it's under an hour old (turnReplayBlocked).
+// Returns whether it ran.
+export async function replayOwedTurn(handle: string): Promise<boolean> {
+  const claim = await claimRetry(handle);
+  if (!claim?.payload || !replayHandler) return false;
+  const { payload, receivedAt } = claim;
+  const phone = payload.number;
+  const isGroup = payload.message_type === "group" || !!payload.group_id;
+  if (typeof phone !== "string" || !phone || isGroup || payload.is_outbound) return false;
+  const { rows } = await pool
+    .query(
+      `SELECT u.id, u.sms_opted_out, u.archived_at,
+         EXISTS (
+           SELECT 1 FROM co_memories r
+           WHERE r.user_id = u.id AND r.memory_type = 'text_exchange' AND (r.content LIKE 'Co replied:%' OR r.content LIKE 'Mo replied:%')
+             AND r.created_at > $2 AND r.content <> ALL($3::text[])
+         ) AS replied,
+         (SELECT d.last_inbound_at FROM phone_debounce d WHERE d.phone = $1) AS last_inbound_at,
+         u.call_status_updated_at
+       FROM users u WHERE u.phone_number = $1 LIMIT 1`,
+      [phone, receivedAt, [...HOLD_LINES, ...OWED_AFTER].map((l) => `Co replied: ${l}`)],
+    )
+    .catch(() => ({ rows: [] as any[] }));
+  const row = rows[0];
+  const blocked = turnReplayBlocked({
+    member: row ? { optedOut: !!row.sms_opted_out, archived: !!row.archived_at } : null,
+    coRepliedSince: !!row?.replied,
+    lastInboundAt: row?.last_inbound_at ? new Date(row.last_inbound_at) : null,
+    callAt: row?.call_status_updated_at ? new Date(row.call_status_updated_at) : null,
+    receivedAt,
+    now: new Date(),
+  });
+  await recordDecision({ layer: 2, decision: "turn.replay", userId: row?.id ?? null, outcome: blocked ? "skip" : "act", action: blocked ?? "replayed", proposal: { handle, message: String(payload.content ?? "").slice(0, 200) } }).catch(() => {});
+  if (blocked) return false;
+  await replayHandler(payload, receivedAt);
+  return true;
 }
 
 // A turn died after the text was marked read: send the one honest line
@@ -2889,7 +2689,7 @@ export async function tellMemberTurnFailed(phone: string, receivedAt: Date, sour
          (SELECT MAX(n.created_at) FROM co_memories n
            WHERE n.user_id = u.id AND n.memory_type = 'text_exchange' AND n.content = $4) AS last_note_at
        FROM users u WHERE u.phone_number = $1 LIMIT 1`,
-      [phone, receivedAt, HOLD_LINES.map((l) => `Co replied: ${l}`), `Co replied: ${TURN_FAILED_NOTE}`],
+      [phone, receivedAt, [...HOLD_LINES, ...OWED_AFTER].map((l) => `Co replied: ${l}`), `Co replied: ${TURN_FAILED_NOTE}`],
     );
     const row = rows[0];
     const blocked = turnFailedNoteBlocked({
@@ -2918,10 +2718,11 @@ export async function tellMemberTurnFailed(phone: string, receivedAt: Date, sour
 
 // Inbound texts whose turn never finished (the process restarted or crashed
 // mid-turn) and that never got a Co reply afterwards, so they're not lost
-// silently (2026-09-17 code review). Meant to run once on startup. It never
-// replays the turn (that could double-send); for a text from the last hour
-// it sends the one honest "please resend" line instead (2026-09-23). Quietly
-// does nothing until the payload and finished_at columns exist.
+// silently (2026-09-17 code review). Runs on startup and every few minutes
+// (jobs/index.ts). Each such text is claimed once, then replayed from its
+// saved copy when that's safe (replayOwedTurn, 2026-10-01 code review); when
+// it isn't, the one honest line goes out instead. Retries a restart cut off
+// (retry_due_at passed, never claimed) are replayed the same way.
 export async function reportUnfinishedTurns(): Promise<number> {
   try {
     const { rows } = await pool.query(
@@ -2936,9 +2737,12 @@ export async function reportUnfinishedTurns(): Promise<number> {
              AND r.created_at > h.received_at AND r.content <> ALL($1::text[])
          )
        LIMIT 50`,
-      [HOLD_LINES.map((l) => `Co replied: ${l}`)],
+      [[...HOLD_LINES, ...OWED_AFTER].map((l) => `Co replied: ${l}`)],
     );
     for (const row of rows) {
+      // Claimed once, so the next pass (or another server) doesn't take it too.
+      const claimed = await pool.query(`UPDATE inbound_webhook_handles SET finished_at = NOW() WHERE handle = $1 AND finished_at IS NULL RETURNING handle`, [row.handle]).then((r) => r.rows.length > 0).catch(() => false);
+      if (!claimed) continue;
       console.error(`sendblue: inbound text ${row.handle} never finished its turn and got no reply (user ${row.user_id ?? "unknown"})`);
       await recordDecision({
         layer: 2,
@@ -2952,9 +2756,22 @@ export async function reportUnfinishedTurns(): Promise<number> {
       const phone = row.payload?.number;
       const isGroup = row.payload?.message_type === "group" || !!row.payload?.group_id;
       if (typeof phone === "string" && phone && !isGroup) {
-        await tellMemberTurnFailed(phone, new Date(row.received_at), "restart", "Restart");
+        const replayed = await replayOwedTurn(row.handle).catch((err: any) => {
+          console.error("sendblue: replaying an unfinished turn failed:", err?.message ?? err);
+          return false;
+        });
+        if (!replayed) await tellMemberTurnFailed(phone, new Date(row.received_at), "restart", "Restart");
       }
     }
+    const { rows: lost } = await pool
+      .query(
+        `SELECT handle FROM inbound_webhook_handles
+         WHERE retry_due_at IS NOT NULL AND retry_claimed_at IS NULL AND retry_due_at < NOW() - INTERVAL '3 minutes'
+           AND received_at > NOW() - INTERVAL '1 hour' AND payload IS NOT NULL
+         LIMIT 20`,
+      )
+      .catch(() => ({ rows: [] as any[] }));
+    for (const l of lost) await replayOwedTurn(l.handle).catch((err: any) => console.error("sendblue: replaying a lost retry failed:", err?.message ?? err));
     // The saved copy of each text is only for this check: drop it after two
     // days so members' messages don't pile up here.
     await pool

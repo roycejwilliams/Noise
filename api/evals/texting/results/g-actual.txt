@@ -1,0 +1,9 @@
+graded 40 replies (baseline: Co's actual replies)
+  specific                  85%  (34/40)
+  length_fit                75%  (30/40)
+  one_idea_per_paragraph    90%  (36/40)
+  one_question              78%  (31/40)
+  no_restating_opener       88%  (35/40)
+  real_position             83%  (25/30)
+  honest                    93%  (37/40)
+  overall                   84%   median 58 words

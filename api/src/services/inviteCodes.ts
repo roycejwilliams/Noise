@@ -105,7 +105,13 @@ export async function redeemInviteCodeIn(text: string, userId: string): Promise<
   let result: RedeemResult = { ok: false, reason: "not_found" };
   for (const candidate of inviteCodeCandidates(text)) {
     const r = await redeemInviteCode(candidate, userId);
-    if (r.ok) return r;
+    if (r.ok) {
+      // Someone Mo found just joined: Mo tells the team (mo/team.ts).
+      import("../mo/team.js")
+        .then((m) => m.noteProspectJoined(candidate, userId))
+        .catch((err: any) => console.error("inviteCodes: Mo join note failed (non-fatal):", err?.message ?? err));
+      return r;
+    }
     if (r.reason === "already_used") result = r;
   }
   return result;

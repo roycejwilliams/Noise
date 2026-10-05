@@ -3,6 +3,7 @@ import { generateText } from "ai";
 import { propagateAttributes } from "@langfuse/tracing";
 import crypto from "crypto";
 import pool from "../db/db.js";
+import { classifyAsk, markIntentResolved } from "./askKind.js";
 import { generateEmbedding, generateGoalEmbedding } from "./embeddings.js";
 import { sweepAskAgainstNetwork, sweepOfferingAgainstNetwork } from "./relevance.js";
 import { recordDecision } from "../harness/core.js";
@@ -96,41 +97,15 @@ export type ExtractedIntent = {
 // (assessConversationCoverage's own prompt, built from RAPPORT_TOPICS
 // directly) picks this up correctly regardless. Confirm/update the Hume-side
 // schema before relying on this topic surfacing on calls.
-export const RAPPORT_TOPICS = [
-  "current_situation",
-  "major_transition",
-  "goals_challenges",
-  "looking_for",
-  "people_to_meet",
-  "ways_to_help",
-  "personality",
-  "location_availability",
-  "boundaries_preferences",
-  "long_term_direction",
-] as const;
-
-export type RapportTopic = (typeof RAPPORT_TOPICS)[number];
-
-// Single source of truth for what each topic actually means — used both to
-// build assessConversationCoverage's prompt below and, for the text channel
-// (webhooks.ts), to tell the reply-generation model in plain language what a
-// missing_topics key is actually asking about.
-export const RAPPORT_TOPIC_DESCRIPTIONS: Record<RapportTopic, string> = {
-  current_situation: "what's going on in their life right now",
-  major_transition: "the bigger context or change they're in the middle of",
-  goals_challenges: "what they're working toward or struggling with",
-  looking_for: "what kind of connection or outcome they want from this",
-  people_to_meet: "the kind of people they'd want to be introduced to",
-  ways_to_help: "what they could offer or help others with",
-  personality: "some sense of their personality or how they come across",
-  location_availability: "where they are and when they're free",
-  boundaries_preferences: "any stated boundaries or preferences",
-  long_term_direction:
-    "their longer-horizon personal and career direction — where they want to be in a few years, distinct from what's urgent right now",
-};
+export { RAPPORT_TOPICS, RAPPORT_TOPIC_DESCRIPTIONS, type RapportTopic } from "./profileTopics.js";
+import { RAPPORT_TOPICS, RAPPORT_TOPIC_DESCRIPTIONS, type RapportTopic } from "./profileTopics.js";
+import { understandingGaps, type Gap } from "./understanding.js";
 
 export type CoverageAssessment = {
   missing_topics: RapportTopic[];
+  // Addressed in this conversation itself, not just known from before. Only
+  // these count as freshly heard (services/understanding.ts staleness).
+  fresh_topics?: RapportTopic[];
   ready_to_summarize: boolean;
 };
 
@@ -145,19 +120,7 @@ const COVERAGE_FALLBACK: CoverageAssessment = {
 // (co-test's raw-output panel) don't have to re-derive it.
 export async function extractPsychographicProfile(
   transcript: string,
-  emotionalHighlights?: string,
 ): Promise<{ raw: string; extracted: ExtractedProfile }> {
-  // Voice calls only — Hume's own prosody analysis on the user's real audio
-  // (not available for text). Without this, "blockers"/emotional_state are
-  // inferred from wording alone, so a topic mentioned calmly and one that
-  // actually made someone anxious read identically to the model. This
-  // grounds the extraction in what Hume's voice analysis flagged as the
-  // most emotionally loaded moments, so those get weighted appropriately
-  // rather than just whatever was mentioned most.
-  const emotionalContext = emotionalHighlights
-    ? `\n\nHume's own voice-emotion analysis flagged these as the most emotionally loaded moments in the call (use this to weight blockers/emotional_state toward what actually carried real feeling, not just what was mentioned most often):\n${emotionalHighlights}`
-    : "";
-
   const { text: rawExtraction } = await generateText({
     model: anthropic(PROFILE_EXTRACT_MODEL),
     prompt: `You are extracting psychographic profile data from a conversation transcript between Co (an assistant, "assistant" lines) and a person ("user" lines).
@@ -180,7 +143,7 @@ export async function extractPsychographicProfile(
         }
 
         Transcript:
-        "${transcript}"${emotionalContext}`,
+        "${transcript}"`,
     experimental_telemetry: { isEnabled: true, functionId: "profileExtraction.extractPsychographicProfile" },
   });
 
@@ -240,7 +203,7 @@ Which of these topics has the person substantively addressed — either in what'
 ${topicList}
 
 Return ONLY valid JSON, no preamble or markdown:
-{"missing_topics": [...topic keys not yet covered...], "ready_to_summarize": true|false}
+{"missing_topics": [...topic keys not yet covered...], "fresh_topics": [...topic keys the person addressed in THIS conversation itself, not just in what was known before...], "ready_to_summarize": true|false}
 
 ready_to_summarize is true only if at most one or two minor topics remain missing, AND this conversation itself (not just prior context) has substantively happened — never mark it true based on prior context alone with nothing yet said in this conversation.`,
       experimental_telemetry: { isEnabled: true, functionId: "profileExtraction.assessConversationCoverage" },
@@ -254,7 +217,10 @@ ready_to_summarize is true only if at most one or two minor topics remain missin
         )
       : [...RAPPORT_TOPICS];
 
-    return { missing_topics: missing, ready_to_summarize: Boolean(parsed.ready_to_summarize) };
+    const fresh = Array.isArray(parsed.fresh_topics)
+      ? parsed.fresh_topics.filter((t: unknown): t is RapportTopic => RAPPORT_TOPICS.includes(t as RapportTopic))
+      : [];
+    return { missing_topics: missing, fresh_topics: fresh, ready_to_summarize: Boolean(parsed.ready_to_summarize) };
   } catch (err) {
     console.error("assessConversationCoverage failed, falling back to nothing-covered:", err);
     return COVERAGE_FALLBACK;
@@ -289,9 +255,12 @@ const RAPPORT_TOPIC_PRIORITY: RapportTopic[] = [
 // way around. jsonb `||` merge (not a full read-modify-write) so concurrent
 // callers can't clobber each other. Fire-and-forget/non-fatal, same as every
 // other best-effort profile write in this file.
+// Stamps only what they said in this conversation (2026-09-28): stamping
+// everything "known from before" re-dated old knowledge on every text, so
+// nothing could ever go stale.
 export function persistCoveredTopics(userId: string, coverage: CoverageAssessment): void {
   const missing = new Set(coverage.missing_topics);
-  const covered = RAPPORT_TOPICS.filter((t) => !missing.has(t));
+  const covered = (coverage.fresh_topics ?? []).filter((t) => !missing.has(t));
   if (!covered.length) return;
   const patch: Partial<Record<RapportTopic, string>> = {};
   const now = new Date().toISOString();
@@ -342,24 +311,43 @@ export async function getCoverageNudge(
   userId: string,
   transcriptSoFar: string,
   profile: CoverageNudgeProfile | null,
-): Promise<{ missingTopic: RapportTopic | null }> {
+): Promise<{ missingTopic: RapportTopic | null; refresh?: Gap | null }> {
   const topicsCovered = profile?.topics_covered ?? {};
   const topicsAsked = profile?.topics_asked ?? {};
+  // Known, but long enough ago that it may have changed (services/understanding.ts).
+  const stale = understandingGaps(topicsCovered, topicsAsked).find((g) => g.kind === "stale") ?? null;
 
-  if (RAPPORT_TOPICS.every((t) => topicsCovered[t])) return { missingTopic: null };
+  if (RAPPORT_TOPICS.every((t) => topicsCovered[t])) return stale ? { missingTopic: stale.topic, refresh: stale } : { missingTopic: null };
 
-  const priorContextParts = [
+  const prior = coveragePriorContext(profile);
+  const coverage = await assessConversationCoverage(transcriptSoFar, prior ?? undefined).catch(() => null);
+  return coverageNudgeFrom(userId, profile, coverage);
+}
+
+// What's already known about them, for judging coverage (also read by services/readTurn.ts).
+export function coveragePriorContext(profile: CoverageNudgeProfile | null): string | null {
+  const parts = [
     profile?.life_chapters?.length ? `life chapter: ${profile.life_chapters.join(", ")}` : null,
     profile?.goals?.length ? `goals: ${profile.goals.join(", ")}` : null,
     profile?.blockers?.length ? `blockers: ${profile.blockers.join(", ")}` : null,
     profile?.long_term_direction ? `long-term direction: ${profile.long_term_direction}` : null,
     profile?.city ? `city: ${profile.city}` : null,
   ].filter((p): p is string => Boolean(p));
+  return parts.length ? parts.join("; ") : null;
+}
 
-  const coverage = await assessConversationCoverage(
-    transcriptSoFar,
-    priorContextParts.length ? priorContextParts.join("; ") : undefined,
-  ).catch(() => null);
+// From a coverage read (this function's own call, or the one turn read in
+// services/readTurn.ts): stamps what they said this conversation, then picks
+// the one topic worth being curious about, unknown before stale.
+export function coverageNudgeFrom(
+  userId: string,
+  profile: CoverageNudgeProfile | null,
+  coverage: CoverageAssessment | null,
+): { missingTopic: RapportTopic | null; refresh?: Gap | null } {
+  const topicsCovered = profile?.topics_covered ?? {};
+  const topicsAsked = profile?.topics_asked ?? {};
+  const stale = understandingGaps(topicsCovered, topicsAsked).find((g) => g.kind === "stale") ?? null;
+  if (RAPPORT_TOPICS.every((t) => topicsCovered[t])) return stale ? { missingTopic: stale.topic, refresh: stale } : { missingTopic: null };
   if (!coverage) return { missingTopic: null };
 
   persistCoveredTopics(userId, coverage);
@@ -371,6 +359,7 @@ export async function getCoverageNudge(
   });
 
   const missingTopic = RAPPORT_TOPIC_PRIORITY.find((t) => candidates.includes(t)) ?? null;
+  if (!missingTopic && stale) return { missingTopic: stale.topic, refresh: stale };
   return { missingTopic };
 }
 
@@ -401,7 +390,24 @@ async function assessResolvedItems(
       prompt: buildResolutionPrompt(transcript, existingGoals, existingBlockers, askListBlock),
       experimental_telemetry: { isEnabled: true, functionId: "profileExtraction.assessResolvedItems" },
     });
+    return await applyResolutionOutput(raw, transcript, existingGoals, existingBlockers, openAsks, userId);
+  } catch (err) {
+    console.error("assessResolvedItems failed (non-fatal):", err);
+    return { resolvedGoals: [], resolvedBlockers: [], resolvedAskIds: [] };
+  }
+}
 
+// The same gate and record, for model output produced elsewhere (the merged
+// turn read, services/turnLearning.ts).
+export async function applyResolutionOutput(
+  raw: string,
+  transcript: string,
+  existingGoals: string[],
+  existingBlockers: string[],
+  openAsks: { id: string; text: string }[],
+  userId: string | null,
+): Promise<{ resolvedGoals: string[]; resolvedBlockers: string[]; resolvedAskIds: string[] }> {
+  try {
     const gated = gateResolutionOutput(raw, transcript, existingGoals, existingBlockers, openAsks);
     if (gated.proposals.length) {
       await recordDecision({
@@ -507,19 +513,23 @@ Return ONLY valid JSON, no preamble: {"preference": "weekly" | "biweekly" | "non
 
     const clean = raw.trim();
     const parsed = parseModelJson(clean);
-    switch (parsed.preference) {
-      case "weekly":
-        return 7;
-      case "biweekly":
-        return 14;
-      case "none":
-        return 0;
-      default:
-        return null;
-    }
+    return cadenceDaysFor(parsed.preference);
   } catch (err) {
     console.error("extractCheckinCadencePreference failed (non-fatal):", err);
     return null;
+  }
+}
+
+export function cadenceDaysFor(preference: unknown): number | null {
+  switch (preference) {
+    case "weekly":
+      return 7;
+    case "biweekly":
+      return 14;
+    case "none":
+      return 0;
+    default:
+      return null;
   }
 }
 
@@ -745,6 +755,18 @@ export async function assessCorrections(onFile: OnFile, newWords: string, contex
       prompt: buildCorrectionPrompt(onFile, newWords, context.slice(-3000)),
       experimental_telemetry: { isEnabled: true, functionId: "profileExtraction.assessCorrections" },
     });
+    return await applyCorrectionOutput(raw, onFile, newWords, userId);
+  } catch (err) {
+    console.error("assessCorrections failed (non-fatal):", err);
+    return [];
+  }
+}
+
+// The same gate and record, for model output produced elsewhere
+// (services/turnLearning.ts). Every correction still has to quote their own
+// words from what they just said (gateCorrections).
+export async function applyCorrectionOutput(raw: string, onFile: OnFile, newWords: string, userId: string | null): Promise<Correction[]> {
+  try {
     const parsed = parseModelJson(raw.trim());
     const proposals: ProposedCorrection[] = (Array.isArray(parsed?.corrections) ? parsed.corrections : []).map((c: any) => ({
       field: String(c?.field ?? ""),
@@ -791,7 +813,13 @@ export async function storeProfile(
   transcript: string,
   // newWords: what's new in this transcript (the text they just sent). A
   // call transcript is new as a whole, so it defaults to the transcript.
-  opts: { emotions?: { name: string; score: number }[] | null; newWords?: string } = {},
+  opts: {
+    newWords?: string;
+    // The merged turn read's output (services/turnLearning.ts): the same
+    // judgments, already made, run through the same gates below instead of
+    // three more model calls. openAsks is the numbered list that read saw.
+    precomputed?: { resolutionRaw: string; openAsks: { id: string; text: string }[]; correctionsRaw: string; cadence: unknown };
+  } = {},
 ): Promise<{ safeChapters: string[]; safeStyle: string }> {
   const { rows: existingRows } = await pool.query(
     `SELECT life_chapters, social_energy, connection_style, activity_preferences,
@@ -813,7 +841,8 @@ export async function storeProfile(
     `SELECT ask_id, ask_text FROM ask_checkins WHERE user_id = $1 AND resolved_at IS NULL`,
     [user_id],
   );
-  const openAsks = openAskRows.map((r: any) => ({ id: r.ask_id as string, text: r.ask_text as string }));
+  const openAsks = opts.precomputed?.openAsks ?? openAskRows.map((r: any) => ({ id: r.ask_id as string, text: r.ask_text as string }));
+  const pre = opts.precomputed;
 
   const onFile: OnFile = {
     city: existing?.city ?? null,
@@ -825,8 +854,14 @@ export async function storeProfile(
     availability_pattern: existing?.availability_pattern ?? null,
   };
   const [{ resolvedGoals, resolvedBlockers, resolvedAskIds }, corrections, pastCorrections] = await Promise.all([
-    assessResolvedItems(transcript, existing?.goals ?? [], existing?.blockers ?? [], openAsks, user_id),
-    existing ? assessCorrections(onFile, opts.newWords ?? transcript, transcript, user_id) : Promise.resolve([] as Correction[]),
+    pre
+      ? applyResolutionOutput(pre.resolutionRaw, transcript, existing?.goals ?? [], existing?.blockers ?? [], openAsks, user_id)
+      : assessResolvedItems(transcript, existing?.goals ?? [], existing?.blockers ?? [], openAsks, user_id),
+    existing
+      ? pre
+        ? applyCorrectionOutput(pre.correctionsRaw, onFile, opts.newWords ?? transcript, user_id)
+        : assessCorrections(onFile, opts.newWords ?? transcript, transcript, user_id)
+      : Promise.resolve([] as Correction[]),
     recentlyCorrected(user_id),
   ]);
 
@@ -994,6 +1029,8 @@ export async function storeProfile(
       `UPDATE ask_checkins SET resolved_at = NOW() WHERE user_id = $1 AND ask_id = ANY($2::text[])`,
       [user_id, resolvedAskIds],
     );
+    // And in the profile, so it stops being listed as open (askKind.ts).
+    await markIntentResolved(user_id, resolvedAskIds).catch(() => {});
     await pool.query(
       `UPDATE relevance_edges SET status = 'retired', retired_at = NOW(),
         retired_reason = 'ask resolved independently, no intro made'
@@ -1007,7 +1044,7 @@ export async function storeProfile(
   // must never silently reset an already-captured preference back to unset.
   // 0 (explicitly declined) is a real, distinct value from null (never
   // asked) — checked with !== null, not a truthy check.
-  const cadenceDays = await extractCheckinCadencePreference(transcript);
+  const cadenceDays = pre ? cadenceDaysFor(pre.cadence) : await extractCheckinCadencePreference(transcript);
   if (cadenceDays !== null) {
     await pool.query(`UPDATE co_profiles SET checkin_call_cadence_days = $2 WHERE user_id = $1`, [
       user_id,
@@ -1050,7 +1087,7 @@ export async function storeTranscriptMemory(
   return memoryId;
 }
 
-type CapturedIntentData = {
+export type CapturedIntentData = {
   // Many asks now (a whole call can legitimately state more than one).
   asks?: { text?: string; type?: "seeking" | "offering" }[] | null;
   // The pre-2026-09-20 single-ask shape, still read so a model reply that
@@ -1135,7 +1172,7 @@ export function normalizeCapturedAsks(parsed: CapturedIntentData | null, scope: 
   return scope === "last_user_message" ? out.slice(0, 1) : out.slice(0, MAX_ASKS_PER_CAPTURE);
 }
 
-type IntentExtras = { concrete_preferences: string[]; wants: string[]; availability: string | null };
+export type IntentExtras = { concrete_preferences: string[]; wants: string[]; availability: string | null };
 const NO_EXTRAS: IntentExtras = { concrete_preferences: [], wants: [], availability: null };
 
 export async function captureIntent(
@@ -1164,7 +1201,23 @@ export async function captureIntent(
     } catch {
       return null;
     }
+    return await persistIntentFrom(user_id, parsed, transcript, scope);
+  } catch (err: any) {
+    console.error("captureIntent failed (non-fatal):", err?.message ?? err);
+    return null;
+  }
+}
 
+// Everything captureIntent does after its model call: the same filters,
+// dedupe, writes and sweeps, for output produced elsewhere
+// (services/turnLearning.ts).
+export async function persistIntentFrom(
+  user_id: string,
+  parsed: CapturedIntentData | null,
+  transcript: string,
+  scope: IntentScope = "last_user_message",
+): Promise<ExtractedIntent | null> {
+  try {
     // Only what THEY said: an item that's Co's own line echoed back is
     // dropped (harness/profileWrite.ts echoesCoNotMember, 2026-09-23).
     const mine = (x: unknown) => typeof x === "string" && !echoesCoNotMember(x, transcript);
@@ -1173,15 +1226,20 @@ export async function captureIntent(
     const wants = (Array.isArray(parsed?.wants) ? parsed!.wants : []).filter(mine);
     const availability = typeof parsed?.availability === "string" ? parsed!.availability : null;
 
+    // Only what's new: each text turn re-reads the recent conversation, so a
+    // line they said once ("I'm balancing a 9-5") came back every turn and
+    // was saved 5 times in a row (2026-09-24).
+    const { rows: onFile } = await pool.query(`SELECT intent FROM co_profiles WHERE user_id = $1`, [user_id]).catch(() => ({ rows: [] as any[] }));
+    const extras: IntentExtras = dropKnownExtras({ concrete_preferences, wants, availability }, Array.isArray(onFile[0]?.intent) ? onFile[0].intent : []);
+
     // Nothing real came out of this pass at all — don't write an empty
     // record just to have one.
-    if (!asks.length && !concrete_preferences.length && !wants.length && !availability) return null;
+    if (!asks.length && !extras.concrete_preferences.length && !extras.wants.length && !extras.availability) return null;
 
     // One write path for both channels: a text turn is just the N<=1 case of
     // the loop a call runs. Sequential on purpose — each ask dedupes against
     // what's on file INCLUDING the one written an iteration ago, so a call
     // that circles back to the same request twice still lands one ask row.
-    const extras: IntentExtras = { concrete_preferences, wants, availability };
     const written: ExtractedIntent[] = [];
     if (!asks.length) {
       written.push(await persistCapturedIntent(user_id, null, extras));
@@ -1226,6 +1284,23 @@ export async function captureIntent(
     console.error("captureIntent failed (non-fatal):", err?.message ?? err);
     return null;
   }
+}
+
+// Drops preferences, wants and availability already on file (any earlier
+// intent record), compared ignoring case, spacing and punctuation.
+export function dropKnownExtras(extras: IntentExtras, existing: any[]): IntentExtras {
+  const norm = (x: unknown) => String(x ?? "").toLowerCase().replace(/[^a-z0-9]+/g, " ").trim();
+  const known = new Set<string>();
+  for (const i of existing) {
+    for (const p of [...(i?.concrete_preferences ?? []), ...(i?.wants ?? [])]) known.add(norm(p));
+    if (i?.availability) known.add(norm(i.availability));
+  }
+  const fresh = (x: string) => !known.has(norm(x));
+  return {
+    concrete_preferences: extras.concrete_preferences.filter(fresh),
+    wants: extras.wants.filter(fresh),
+    availability: extras.availability && fresh(extras.availability) ? extras.availability : null,
+  };
 }
 
 // Writes one captured ask (or the ask-less preferences/wants/availability
@@ -1318,7 +1393,7 @@ async function persistCapturedIntent(
     // Restating an ask renews its time limit (services/askExpiry.ts).
     const renewedUntil = await askExpiresAtForUser(user_id, ask!.text).catch(() => null);
     await pool.query(
-      `UPDATE ask_checkins SET ask_text = $3, expires_at = COALESCE($4::timestamptz, expires_at) WHERE user_id = $1 AND ask_id = $2`,
+      `UPDATE ask_checkins SET ask_text = $3, expires_at = COALESCE($4::timestamptz, expires_at), last_mentioned_at = NOW() WHERE user_id = $1 AND ask_id = $2`,
       [user_id, intentId, ask!.text, renewedUntil],
     );
   } else {
@@ -1361,17 +1436,17 @@ async function persistCapturedIntent(
   // jobs/index.ts). The NOT EXISTS guard stays as a backstop for two
   // captures of the same text racing each other.
   if (ask && !deduped) {
-    const expiresAt = await askExpiresAtForUser(user_id, ask.text).catch(() => null);
+    const [expiresAt, kind] = await Promise.all([askExpiresAtForUser(user_id, ask.text).catch(() => null), classifyAsk(ask.text)]);
     await pool
       .query(
-        `INSERT INTO ask_checkins (user_id, ask_id, ask_text, expires_at)
-         SELECT $1::uuid, $2::text, $3::text, $4::timestamptz
+        `INSERT INTO ask_checkins (user_id, ask_id, ask_text, expires_at, kind, kind_checked_at, last_mentioned_at)
+         SELECT $1::uuid, $2::text, $3::text, $4::timestamptz, $5::text, NOW(), NOW()
          WHERE NOT EXISTS (
            SELECT 1 FROM ask_checkins
            WHERE user_id = $1 AND resolved_at IS NULL AND lower(trim(ask_text)) = lower(trim($3))
          )
          ON CONFLICT (user_id, ask_id) DO NOTHING`,
-        [user_id, intentId, ask.text, expiresAt],
+        [user_id, intentId, ask.text, expiresAt, kind],
       )
       .catch((err) => console.error("ask_checkins insert failed (non-fatal):", err));
   }
@@ -1426,7 +1501,7 @@ export async function captureIntentForTurn(
   return { ask: { text: intent.text, type: intent.type }, askId: intent.id, deduped: lastCaptureDeduped.get(intent.id) ?? false };
 }
 
-type CapturedEventMentionData = {
+export type CapturedEventMentionData = {
   event_name: string | null;
   event_date: string | null; // resolved ISO date (YYYY-MM-DD), or null
   event_location: string | null;
@@ -1472,6 +1547,16 @@ Transcript:
     } catch {
       return;
     }
+    await storePlannedEventMention(user_id, parsed);
+  } catch (err: any) {
+    console.error("extractPlannedEventMention failed (non-fatal):", err?.message ?? err);
+  }
+}
+
+// What extractPlannedEventMention does after its model call, for output
+// produced elsewhere (services/turnLearning.ts).
+export async function storePlannedEventMention(user_id: string, parsed: CapturedEventMentionData | null): Promise<void> {
+  try {
     if (!parsed?.event_name) return;
 
     const embeddingSource = [parsed.event_name, parsed.event_location].filter(Boolean).join(", ");

@@ -32,13 +32,13 @@ check("one note per outage, not a string of apologies", turnFailedNoteBlocked({ 
 check("a later failure gets a fresh note", turnFailedNoteBlocked({ ...base, lastNoteAt: new Date(now.getTime() - TURN_FAILED_NOTE_COOLDOWN_MS - 1000) }) === null);
 check("a text from hours ago isn't answered out of nowhere", turnFailedNoteBlocked({ ...base, receivedAt: new Date(now.getTime() - 3 * 3600_000) }) === "too_old");
 
-check("the note is honest: asks them to resend, promises no retry", /send it again/.test(TURN_FAILED_NOTE) && !/\b(I'll|I will|retry|trying again|give me a)\b/i.test(TURN_FAILED_NOTE));
+check("the note owns the miss without asking them to redo anything, and promises no retry", !/send it again|resend/i.test(TURN_FAILED_NOTE) && !/\b(I'll|I will|retry|trying again|give me a)\b/i.test(TURN_FAILED_NOTE));
 check("the note survives Co's send cleanup unchanged (so the cooldown can find it)", cleanCoMessage(TURN_FAILED_NOTE) === TURN_FAILED_NOTE);
 check("no em dashes", !/[—–]/.test(TURN_FAILED_NOTE));
 
 const sb = src("src/routes/sendblue.ts");
-check("a turn that crashes after the text was read tells the member", /if \(lockKey && isGenuineInbound && !isGroupMessage\) \{\n\s+await tellMemberTurnFailed\(lockKey, turnStartedAt, "turn_error"/.test(sb));
-check("hold lines ('one sec') don't count as having answered", /r\.content <> ALL\(\$3::text\[\]\)/.test(sb) && /HOLD_LINES\.map\(\(l\) => `Co replied: \$\{l\}`\), `Co replied: \$\{TURN_FAILED_NOTE\}`/.test(sb));
+check("a turn that crashes after the text was read tells the member", /if \(lockKey && isGenuineInbound && !isGroupMessage\) \{\n\s+await tellMemberTurnFailed\(lockKey, replay\?\.receivedAt \?\? turnStartedAt, "turn_error"/.test(sb));
+check("hold lines ('one sec') don't count as having answered", /r\.content <> ALL\(\$3::text\[\]\)/.test(sb) && /\[\.\.\.HOLD_LINES, \.\.\.OWED_AFTER\]\.map\(\(l\) => `Co replied: \$\{l\}`\), `Co replied: \$\{TURN_FAILED_NOTE\}`/.test(sb));
 check("a restart mid-turn tells the member too (1:1 texts only)", /await tellMemberTurnFailed\(phone, new Date\(row\.received_at\), "restart"/.test(sb) && /!isGroup\)/.test(sb));
 check("every outcome is logged as turn.failed", /decision: "turn\.failed"/.test(sb));
 check("the columns the restart check reads actually exist", /ALTER TABLE inbound_webhook_handles ADD COLUMN IF NOT EXISTS payload JSONB, ADD COLUMN IF NOT EXISTS finished_at TIMESTAMPTZ/.test(src("src/db/migrations.ts")));

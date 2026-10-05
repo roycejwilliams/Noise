@@ -1,4 +1,4 @@
-import cron from "node-cron";
+import cron from "./cron.js";
 import { sendDueCoEventAnnouncements } from "../services/coEventAnnouncement.js";
 import { DateTime } from "luxon";
 import type { Server } from "socket.io";
@@ -10,6 +10,7 @@ import { attemptEventSurfacing, PROFILE_ASK_ID } from "../services/eventSurfacin
 import { attemptNetworkSurfacing } from "../services/networkIntroNudge.js";
 import { scoreGuestListForEvent } from "../services/eventScoring.js";
 import { runArrivalAsks, runPresencePoll } from "../services/eventPresence.js";
+import { releaseStrandedClaims } from "../services/strandedClaims.js";
 import { listCalendarEvents, getEventDetails } from "../services/luma.js";
 import { triggerCallForUser } from "../services/callTrigger.js";
 import { enqueueDuePostCallFollowUps } from "./postCallFollowUp.js";
@@ -27,13 +28,14 @@ import { runMonitor, runWeeklyReview } from "../harness/monitor.js";
 import { typesWithPurpose } from "../harness/proactivePurpose.js";
 import { reviewEnabled, runMorningReview } from "../harness/devReview.js";
 import { expireStaleAsks } from "../services/askExpiry.js";
+import { classifyOpenAsks, syncClosedAsks } from "../services/askKind.js";
 import { companionPayloadFor } from "../harness/memberThreads.js";
+import { queueHeavyCheckins } from "../services/heavyMoment.js";
+import { gapDescription, lastLearned, QUIET_UNDERSTANDING_DAYS, understandingGaps } from "../services/understanding.js";
 import { recordDecision } from "../harness/core.js";
-import { runWeeklyReflections } from "../harness/memberReflection.js";
+import { runAdviceFollowUps, runWeeklyReflections } from "../harness/memberReflection.js";
 import { runMembershipLapse } from "../services/membershipLapse.js";
-import { runMoFind } from "../mo/find.js";
-import { sendMoDigest } from "../mo/review.js";
-import { runMoInbox, runMoOutreach, moEnabled } from "../mo/outreach.js";
+import { extensionJobs } from "../services/extensions.js";
 
 // Bounded-concurrency worker pool (Royce, 2026-08-30) — the event surfacing
 // sweep now runs for every open ask daily (see below), and a plain
@@ -167,6 +169,56 @@ export function registerJobs(io: Server) {
   // minute sent one tier's offer three seconds before the sweep had queued the
   // others (2026-09-21), so the offers of every tier could not go out together.
   cron.schedule("15,45 * * * *", runDispatch);
+
+  // Texts whose turn never finished, or whose retry a restart cut off, run
+  // again from their saved copy when it's safe (routes/sendblue.ts
+  // reportUnfinishedTurns). Also run once at startup (server.ts).
+  cron.schedule("*/2 * * * *", async () => {
+    try {
+      const { reportUnfinishedTurns } = await import("../routes/sendblue.js");
+      await reportUnfinishedTurns();
+    } catch (err: any) {
+      console.error("unfinished turn cron error (non-fatal):", err?.message ?? err);
+    }
+  });
+
+  // Reminders members asked for ("remind me Thursday to follow up with…"),
+  // sent to them only (services/relay.ts). Every 5 minutes; nothing's due unless asked.
+  cron.schedule("*/5 * * * *", async () => {
+    try {
+      const { sendDueReminders } = await import("../services/relay.js");
+      await sendDueReminders();
+    } catch (err: any) {
+      console.error("reminder cron error (non-fatal):", err?.message ?? err);
+    }
+  });
+
+  // Things Co sent in the last 3 days are re-read every few hours
+  // (services/linkReader.ts); if one that someone was interested in sold out,
+  // moved or disappeared, they hear it once (services/staleWatch.ts). Luma
+  // reads are free; others about $0.007 each.
+  // Co's own tasks (services/coTasks.ts): each wakes when Co said it would.
+  cron.schedule("*/15 * * * *", async () => {
+    try {
+      // Loops that changed while they were away wake their task first
+      // (services/openLoops.ts), so this same pass decides whether to speak.
+      const { runLoopSync } = await import("../services/openLoops.js");
+      await runLoopSync().catch((err: any) => console.error("loop sync error:", err?.message ?? err));
+      const { runDueTasks } = await import("../services/taskTurn.js");
+      await runDueTasks();
+    } catch (err: any) {
+      console.error("task wake cron error:", err?.message ?? err);
+    }
+  });
+
+  cron.schedule("40 * * * *", async () => {
+    try {
+      const { watchSentPages } = await import("../services/staleWatch.js");
+      await watchSentPages();
+    } catch (err: any) {
+      console.error("stale watch cron error (non-fatal):", err?.message ?? err);
+    }
+  });
 
   // Every 10 min — queue the post-call text for recent calls (sent within
   // local hours by the harness, dropped if it would land >24h after the call).
@@ -374,7 +426,11 @@ export function registerJobs(io: Server) {
         return null;
       });
       if (expiry?.expired) console.log(`Ask expiry: closed ${expiry.expired} ask(s) past their time limit`);
-      // Oldest-surfaced ask first, so one ask can't win every day.
+      // Living asks (services/askKind.ts, 2026-09-26): only asks a search can
+      // find are searched; what they brought up in the last few days goes
+      // first, then the rest by oldest-searched, so one ask can't win every day.
+      await classifyOpenAsks().catch((err: any) => console.error("Ask kinds: classify failed (non-fatal):", err?.message ?? err));
+      await syncClosedAsks().catch((err: any) => console.error("Ask sync failed (non-fatal):", err?.message ?? err));
       const due = await pool.query(
         `SELECT ac.id, ac.ask_id, ac.ask_text, ac.last_attempted_at, u.id AS user_id, u.first_name, u.phone_number, cp.city,
                 cp.goals, cp.activity_preferences,
@@ -382,8 +438,9 @@ export function registerJobs(io: Server) {
          FROM ask_checkins ac
          JOIN users u ON u.id = ac.user_id
          LEFT JOIN co_profiles cp ON cp.user_id = ac.user_id
-         WHERE ac.resolved_at IS NULL
-         ORDER BY ac.last_attempted_at ASC NULLS FIRST, ac.last_surfaced_at ASC NULLS FIRST`,
+         WHERE ac.resolved_at IS NULL AND ac.kind = 'find'
+         ORDER BY (COALESCE(ac.last_mentioned_at, ac.created_at) > NOW() - INTERVAL '3 days') DESC,
+                  ac.last_attempted_at ASC NULLS FIRST, ac.last_surfaced_at ASC NULLS FIRST`,
       );
 
       // Grouped by user, not run flat (Royce, 2026-08-30) — attemptEventSurfacing's
@@ -551,6 +608,13 @@ export function registerJobs(io: Server) {
     }
   });
 
+  // Frees arrival asks and match nudges a restart or crash marked as sent
+  // without sending (services/strandedClaims.ts), so the runs above and
+  // below retry them.
+  cron.schedule("*/5 * * * *", async () => {
+    await releaseStrandedClaims();
+  });
+
   // Day-of arrival ask (services/eventPresence.ts, 2026-09-23): from 10am
   // local on the event day, each registered member is asked once to share
   // their location or text "I'm here" when they arrive.
@@ -695,6 +759,14 @@ export function registerJobs(io: Server) {
     cron.schedule("0 8 * * *", () => {
       runMorningReview().catch((err: any) => console.error("dev review cron error:", err?.message ?? err));
     }, { timezone: "America/Los_Angeles" });
+    // The shadow week (services/sweepShadow.ts): Co's sweep selection on
+    // Royce's real candidates, after the 9am sweep, sending nothing. Read with
+    // `npm run shadow`.
+    cron.schedule("0 10 * * *", () => {
+      import("../services/sweepShadow.js")
+        .then((m) => m.runSweepShadowAll())
+        .catch((err: any) => console.error("sweep shadow cron error:", err?.message ?? err));
+    }, { timezone: "America/Los_Angeles" });
   }
 
   if (process.env.MONITORING_ENABLED === "true") {
@@ -712,25 +784,24 @@ export function registerJobs(io: Server) {
     runWeeklyReflections().catch((err: any) => console.error("weekly reflection cron error:", err?.message ?? err));
   }, { timezone: "America/Los_Angeles" });
 
-  // Mo (2026-09-22, src/mo/). Off unless MO_ENABLED=true. Finds
-  // people weekly (Monday 9am Pacific), texts approvers the new ones daily,
-  // and only acts on approved prospects (hourly, daytime) and on replies in
-  // Co's X DMs (every 15 minutes). Sending waits on Co's X keys and the
-  // outreach email settings; without them it's shortlist-only.
-  if (moEnabled()) {
-    cron.schedule("0 9 * * 1", () => {
-      runMoFind().catch((err: any) => console.error("mo find cron error:", err?.message ?? err));
-    }, { timezone: "America/Los_Angeles" });
-    cron.schedule("30 9 * * *", () => {
-      sendMoDigest().catch((err: any) => console.error("mo digest cron error:", err?.message ?? err));
-    }, { timezone: "America/Los_Angeles" });
-    cron.schedule("20 * * * *", () => {
-      runMoOutreach().catch((err: any) => console.error("mo outreach cron error:", err?.message ?? err));
-    });
-    cron.schedule("7,22,37,52 * * * *", () => {
-      runMoInbox().catch((err: any) => console.error("mo inbox cron error:", err?.message ?? err));
-    });
-  }
+  // Advice Co gave a few days ago, asked about once (services/advice.ts).
+  cron.schedule("30 17 * * *", () => {
+    runAdviceFollowUps().catch((err: any) => console.error("advice follow-up cron error:", err?.message ?? err));
+  }, { timezone: "America/Los_Angeles" });
+
+  // Extensions' schedules (services/extensions.ts), each only while that
+  // extension is enabled. Mo (src/mo/, off unless MO_ENABLED=true) finds
+  // people weekly, brings approvers the next person daily, and acts on
+  // approved prospects and replies in Co's X DMs.
+  extensionJobs()
+    .then((jobs) => {
+      for (const job of jobs) {
+        cron.schedule(job.cron, () => {
+          job.run().catch((err: any) => console.error(`${job.name} cron error:`, err?.message ?? err));
+        }, job.timezone ? { timezone: job.timezone } : undefined);
+      }
+    })
+    .catch((err: any) => console.error("extension jobs failed to register:", err?.message ?? err));
 
   // Members Co knows nothing about (2026-09-22, services/membershipLapse.ts):
   // once a day; each step still waits for the proactive harness to send it.
@@ -780,6 +851,12 @@ export function registerJobs(io: Server) {
     processDueUnmatchedFollowUps().catch((err: any) => console.error("eventUnmatchedFollowUp: process failed:", err?.message ?? err));
   });
 
+  // The next-day check-in after something hard (services/heavyMoment.ts):
+  // queued here, sent by the proactive harness under its usual caps.
+  cron.schedule("30 * * * *", () => {
+    queueHeavyCheckins().catch((err: any) => console.error("heavy check-in queue failed:", err?.message ?? err));
+  });
+
   // Companion check-in (Royce, 2026-09-03: "how can we make it a companion
   // with what we have now" — every other proactive text has a reason
   // attached (an ask, an event, an outcome); this is the one that
@@ -809,7 +886,8 @@ export function registerJobs(io: Server) {
                  ORDER BY cm.created_at DESC LIMIT 1) AS recap_id,
                 (SELECT content FROM co_memories cm
                  WHERE cm.user_id = u.id AND cm.memory_type = 'recap'
-                 ORDER BY cm.created_at DESC LIMIT 1) AS recap
+                 ORDER BY cm.created_at DESC LIMIT 1) AS recap,
+                cp.topics_covered, cp.topics_asked
          FROM users u
          JOIN co_profiles cp ON cp.user_id = u.id
          WHERE u.sms_opted_out = false
@@ -817,7 +895,7 @@ export function registerJobs(io: Server) {
            AND u.identity_captured = true
            AND cp.last_recap_at IS NOT NULL
            AND (
-             (cp.last_companion_checkin_at IS NULL OR cp.last_companion_checkin_at <= NOW() - INTERVAL '14 days')
+             (cp.last_companion_checkin_at IS NULL OR cp.last_companion_checkin_at <= NOW() - INTERVAL '4 days')
              -- A stretch of offers with nothing about them: 3+ days with an
              -- offer and no companion message in the last 7 (2026-09-22).
              OR (
@@ -845,6 +923,28 @@ export function registerJobs(io: Server) {
         // One open thread and at most one useful thing for it (2026-09-22,
         // harness/memberThreads.ts); the recap alone when nothing's open.
         const parts = await companionPayloadFor(row.user_id).catch(() => null);
+        // Nothing open to ask about: the one thing Co is still figuring out
+        // about them, with their own recent words, so the check-in only asks
+        // where the conversation leads (services/understanding.ts).
+        const gaps = understandingGaps(row.topics_covered, row.topics_asked);
+        const learned = lastLearned(row.topics_covered);
+        await recordDecision({
+          layer: 7,
+          decision: "understanding.check",
+          userId: row.user_id,
+          outcome: learned && Date.now() - new Date(learned).getTime() < QUIET_UNDERSTANDING_DAYS * 86_400_000 ? "act" : "skip",
+          action: gaps.length ? `gaps:${gaps.length}` : "no_gaps",
+          proposal: { lastLearned: learned, gaps: gaps.slice(0, 4).map((g) => `${g.kind}:${g.topic}`) },
+        }).catch(() => {});
+        let curious: { topic: string; about: string; theirWords: string } | null = null;
+        if (!parts?.thread && gaps.length) {
+          const { rows: said } = await pool.query(
+            `SELECT content FROM co_memories WHERE user_id = $1 AND memory_type = 'text_exchange' ORDER BY created_at DESC LIMIT 14`,
+            [row.user_id],
+          );
+          const convo = said.reverse().map((r: any) => String(r.content)).join("\n").slice(-2000);
+          if (convo.includes("User said:")) curious = { topic: gaps[0].topic, about: gapDescription(gaps[0]), theirWords: convo };
+        }
         await recordDecision({
           layer: 7,
           decision: "proactive.companionPayload",
@@ -861,8 +961,10 @@ export function registerJobs(io: Server) {
           topicKey: "companion",
           summary: parts?.thread
             ? `Check in on "${parts.thread.text.slice(0, 80)}"${parts.item ? " with one thing found for it" : ""}`
-            : "No-reason check-in about one specific open thread from their recent recap (skip if there isn't one)",
-          payload: { recap: row.recap, threadId: parts?.threadId ?? null, thread: parts?.thread ?? null, item: parts?.item ?? null },
+            : curious
+              ? `Pick up something they said that leads to ${curious.about.slice(0, 80)}, or one way Co could help (skip if nothing they said leads there)`
+              : "No-reason check-in about one specific open thread from their recent recap (skip if there isn't one)",
+          payload: { recap: row.recap, threadId: parts?.threadId ?? null, thread: parts?.thread ?? null, item: parts?.item ?? null, curious },
           expiresAt: new Date(Date.now() + 3 * 24 * 60 * 60 * 1000),
         }).catch((err: any) => console.error(`Companion check-in enqueue failed for ${row.user_id}:`, err?.message ?? err));
       }

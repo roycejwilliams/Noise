@@ -42,8 +42,6 @@ type Acted = {
   clarifiedCall?: boolean;
   call: "place_call" | "schedule" | "cancel" | "answer_calling_question" | "nothing";
   rec: boolean;
-  upd: boolean;
-  inv: boolean;
 };
 
 const here = dirname(fileURLToPath(import.meta.url));
@@ -58,6 +56,11 @@ const effortArg = arg("effort") ?? "low";
 const effort = effortArg === "none" ? null : (effortArg as "low" | "medium" | "high");
 const only = arg("only")?.split(",");
 const concurrency = Number(arg("concurrency") ?? 6);
+// --read-turn: route with the one turn read (services/readTurn.ts) instead of
+// the router alone, to check it decides the same (2026-09-28).
+const useReadTurn = args.includes("--read-turn");
+// --sample parity: every synthetic case plus every 8th real one.
+const sample = arg("sample");
 
 // $ per million tokens, input / output.
 const PRICING: Record<string, [number, number]> = {
@@ -110,8 +113,6 @@ function baselineActions(c: Case): Acted {
     clarified: false,
     call,
     rec: (cur.wantsRecommendation ?? "").trim().toLowerCase().replace(/^[`"']+|[`"']+$/g, "") === "wants_something_concrete",
-    upd: (cur.asksForUpdates ?? "").trim().toLowerCase().startsWith("yes"),
-    inv: false,
   };
 }
 
@@ -122,8 +123,6 @@ function routerActions(d: Decision): Acted {
     clarifiedCall: d.clarifyAbout === "call",
     call: d.placeCall ? "place_call" : d.scheduleCall ? "schedule" : d.cancelCall ? "cancel" : d.answerCallingQuestion ? "answer_calling_question" : "nothing",
     rec: d.wantsRecommendation,
-    upd: d.asksForUpdates,
-    inv: d.wantsInvite,
   };
 }
 
@@ -152,9 +151,7 @@ function score(c: Case, a: Acted) {
       : c.label.ans.includes("none");
   soft.call = c.label.call.includes(a.call);
   soft.rec = c.label.rec === null ? null : a.rec === c.label.rec;
-  soft.upd = c.label.upd === null ? null : a.upd === c.label.upd;
   // Invite asks (2026-09-19); cases without the label don't score it.
-  soft.inv = c.label.inv === undefined || c.label.inv === null ? null : a.inv === c.label.inv;
   return { hard, soft };
 }
 
@@ -181,6 +178,7 @@ const pct = (xs: number[], p: number) => {
 async function main() {
   let cases = loadCases();
   if (mode === "baseline") cases = cases.filter((c) => c.current);
+  if (sample === "parity") cases = cases.filter((c, i) => c.source === "synthetic" || i % 8 === 0);
 
   const results = await pool(cases, mode === "baseline" ? cases.length : concurrency, async (c) => {
     if (mode === "baseline") {
@@ -195,10 +193,17 @@ async function main() {
     let error: string | null = null;
     for (let attempt = 0; attempt < 2; attempt++) {
       try {
-        const r = await routeMessage({ message: c.message, recentConversation: c.recentConversation, openItems }, { model, effort });
-        ({ output, latencyMs } = r);
-        inTok = r.inputTokens;
-        outTok = r.outputTokens;
+        if (useReadTurn) {
+          const { readTurn } = await import("../../src/services/readTurn.js");
+          const t = await readTurn({ message: c.message, recentConversation: c.recentConversation, openItems }, null, null, { model });
+          output = t.router;
+          latencyMs = t.latencyMs;
+        } else {
+          const r = await routeMessage({ message: c.message, recentConversation: c.recentConversation, openItems }, { model, effort });
+          ({ output, latencyMs } = r);
+          inTok = r.inputTokens;
+          outTok = r.outputTokens;
+        }
         error = null;
         break;
       } catch (err: any) {
@@ -213,7 +218,7 @@ async function main() {
   console.log(`\n=== ${label} — ${results.length} cases ===\n`);
 
   const hardCases = results.filter((r) => r.hard.length);
-  const fields = ["ans", "call", "rec", "upd", "inv"] as const;
+  const fields = ["ans", "call", "rec"] as const; // updates and invites are Co's own tools now
   const acc: Record<string, string> = {};
   let softRight = 0;
   let softTotal = 0;
@@ -274,7 +279,7 @@ async function main() {
 
   const outDir = join(here, "results");
   mkdirSync(outDir, { recursive: true });
-  const outFile = join(outDir, `${mode === "baseline" ? "baseline" : `${model}-${effort ?? "none"}`}.local.json`);
+  const outFile = join(outDir, `${mode === "baseline" ? "baseline" : `${model}-${effort ?? "none"}${useReadTurn ? "-readturn" : ""}${sample ? `-${sample}` : ""}`}.local.json`);
   writeFileSync(outFile, JSON.stringify({ summary, results: results.map(({ c, ...r }) => ({ id: c.id, ...r })) }, null, 2));
   console.log(`\nwrote ${outFile}`);
 }

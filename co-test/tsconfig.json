@@ -17,7 +17,8 @@
     "../api/src/utils/phone.ts",
     "../api/src/otpActions.ts",
     "../api/src/types/index.d.ts",
-    "../api/src/services/places.ts"
+    "../api/src/services/places.ts",
+    "../api/src/scripts/testMember.ts"
   ],
   "exclude": ["node_modules", "dist", "src/client/**/*", "src/_archive/**/*"]
 }

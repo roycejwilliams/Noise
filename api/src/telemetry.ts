@@ -1,6 +1,7 @@
 import { NodeSDK } from "@opentelemetry/sdk-node";
 import { LangfuseSpanProcessor } from "@langfuse/otel";
 import { LlmUsageSpanProcessor } from "./services/llmUsage.js";
+import { onShutdown } from "./services/shutdown.js";
 
 // Traces every Claude call the Vercel AI SDK makes (generateText across
 // profileExtraction/matching/circleInvite/circleApproval/booking/scheduling/
@@ -32,5 +33,8 @@ export function initTelemetry(): void {
       }),
     );
   }
-  new NodeSDK({ spanProcessors }).start();
+  const sdk = new NodeSDK({ spanProcessors });
+  sdk.start();
+  // On a restart, send the last buffered cost rows and traces before exit.
+  onShutdown(() => sdk.shutdown());
 }

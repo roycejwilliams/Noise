@@ -8,6 +8,8 @@
 //
 // It only ever reads one member's own rows, and what it queues goes only to
 // that member.
+import { dueAdvice, FOLLOW_UP_EXPIRES_DAYS, loadAdvice } from "../services/advice.js";
+import { syncMilestones, pickToMark } from "../services/milestones.js";
 import { anthropic } from "@ai-sdk/anthropic";
 import { generateText } from "ai";
 import pool from "../db/db.js";
@@ -149,13 +151,81 @@ export async function reflectOnMember(userId: string): Promise<ReflectionMove | 
   }
 }
 
+// Advice Co gave a few days ago, asked about once (services/advice.ts). One
+// companion text per member at a time, so this and a milestone don't stack.
+export async function queueAdviceFollowUp(userId: string): Promise<boolean> {
+  try {
+    const a = dueAdvice(await loadAdvice(userId), new Date());
+    if (!a) return false;
+    const pending = await pool.query(`SELECT 1 FROM proactive_candidates WHERE user_id = $1 AND type = 'companion' AND status = 'pending' LIMIT 1`, [userId]);
+    if (pending.rows[0]) return false;
+    const r = await enqueueCandidate({
+      userId,
+      type: "companion",
+      targetKey: `companion:advice:${a.id}`,
+      topicKey: "companion",
+      summary: `Ask how it went: advice about ${a.topic.slice(0, 80)}`,
+      payload: { recap: "", threadId: null, thread: null, item: null, advice: { id: a.id, topic: a.topic, gist: a.gist, daysAgo: Math.round((Date.now() - new Date(a.givenAt).getTime()) / 86_400_000) } },
+      expiresAt: new Date(Date.now() + FOLLOW_UP_EXPIRES_DAYS * 86400_000),
+    }).catch(() => ({ queued: false }));
+    await recordDecision({ layer: 7, decision: "proactive.adviceFollowUp", userId, outcome: r.queued ? "act" : "skip", action: r.queued ? "queued" : "not_queued", proposal: { adviceId: a.id, topic: a.topic } }).catch(() => {});
+    return r.queued;
+  } catch (err: any) {
+    console.error("queueAdviceFollowUp failed (non-fatal):", err?.message ?? err);
+    return false;
+  }
+}
+
+// A moment worth marking comes before a check-in (services/milestones.ts):
+// one, at most every 7 days, from the record. Returns true when one is queued.
+export async function queueMilestone(userId: string): Promise<boolean> {
+  try {
+    const all = await syncMilestones(userId);
+    const m = pickToMark(all, new Date());
+    if (!m) return false;
+    const pending = await pool.query(`SELECT 1 FROM proactive_candidates WHERE user_id = $1 AND type = 'companion' AND status = 'pending' LIMIT 1`, [userId]);
+    if (pending.rows[0]) return false;
+    const r = await enqueueCandidate({
+      userId,
+      type: "companion",
+      targetKey: `companion:milestone:${m.key}`,
+      topicKey: "companion",
+      summary: `Mark a moment in their story: ${m.text.slice(0, 100)}`,
+      payload: { recap: "", threadId: null, thread: null, item: null, story: { key: m.key, text: m.text, then: m.then, now: m.now } },
+      expiresAt: new Date(Date.now() + FOLLOW_UP_EXPIRES_DAYS * 86400_000),
+    }).catch(() => ({ queued: false }));
+    await recordDecision({ layer: 7, decision: "proactive.milestone", userId, outcome: r.queued ? "act" : "skip", action: r.queued ? "queued" : "not_queued", proposal: { key: m.key, kind: m.kind } }).catch(() => {});
+    return r.queued;
+  } catch (err: any) {
+    console.error("queueMilestone failed (non-fatal):", err?.message ?? err);
+    return false;
+  }
+}
+
+// Daily: only members Co advised in the last three weeks and hasn't asked
+// about yet, so the follow-up lands a few days after the advice, not a week.
+export async function runAdviceFollowUps(): Promise<void> {
+  const { rows } = await pool.query(
+    `SELECT DISTINCT a.user_id AS id FROM member_advice a
+     JOIN users u ON u.id = a.user_id AND u.archived_at IS NULL AND u.sms_opted_out = false
+     WHERE a.followed_up_at IS NULL AND a.given_at < NOW() - INTERVAL '3 days' AND a.given_at > NOW() - INTERVAL '21 days'
+     LIMIT 200`,
+  );
+  for (const r of rows) await queueAdviceFollowUp(r.id);
+}
+
 // Weekly: members who talked to Co or heard from it in the last two weeks.
 export async function runWeeklyReflections(): Promise<void> {
+  const active = await pool.query(
+    `SELECT u.id FROM users u WHERE u.archived_at IS NULL AND u.sms_opted_out = false AND u.identity_captured = true LIMIT 500`,
+  );
+  const marked = new Set<string>();
+  for (const r of active.rows) if ((await queueAdviceFollowUp(r.id)) || (await queueMilestone(r.id))) marked.add(r.id);
   const { rows } = await pool.query(
     `SELECT u.id FROM users u
      WHERE u.archived_at IS NULL AND u.sms_opted_out = false AND u.identity_captured = true
        AND EXISTS (SELECT 1 FROM member_threads t WHERE t.user_id = u.id AND t.status IN ('open', 'waiting'))
      LIMIT 200`,
   );
-  for (const r of rows) await reflectOnMember(r.id);
+  for (const r of rows) if (!marked.has(r.id)) await reflectOnMember(r.id);
 }

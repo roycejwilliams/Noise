@@ -32,8 +32,11 @@ import { checkGrounding } from "../harness/matchGate.js";
 // as the relevance judge: Sonnet 5, not Haiku.
 const WEB_SEARCH_MODEL = MODELS.sonnet;
 
-const WEB_SEARCH_DAILY_CAP = Number(process.env.WEB_SEARCH_DAILY_CAP ?? 60);
-const WEB_SEARCH_REQUEST_RESERVE = Number(process.env.WEB_SEARCH_REQUEST_RESERVE ?? 15);
+// 150 a day, half kept for live asks (2026-10-01): Co's own loop uses up to 4
+// queries a search turn, and one day of testing used the old 60. At ~$0.06 a
+// search that's at most ~$9 a day; the sweep can never take the live half.
+const WEB_SEARCH_DAILY_CAP = Number(process.env.WEB_SEARCH_DAILY_CAP ?? 150);
+const WEB_SEARCH_REQUEST_RESERVE = Number(process.env.WEB_SEARCH_REQUEST_RESERVE ?? 75);
 
 // Same count-then-insert-under-one-advisory-lock pattern as reserveXSearch
 // in tieredRecommendation.ts, against its own table so the two budgets never
@@ -72,6 +75,8 @@ export type WebOpportunityResult = (TierMatch & { tier: 3 }) | null;
 // cut, below a list of past grantees, and the result was rejected); Co's
 // drafting prompts get a short excerpt around what the result claims.
 const PAGE_TEXT_LIMIT = 60_000;
+// Less than this from a plain fetch is a script-rendered shell or a block page.
+const MIN_FETCHED_TEXT = 400;
 const EXCERPT_LIMIT = 2500;
 
 // Readable sentences a page keeps in its script data rather than its HTML
@@ -112,10 +117,16 @@ export async function readPageText(url: string): Promise<string | null> {
     const u = new URL(url);
     // Public https pages only; never a local or bare-IP address.
     if (u.protocol !== "https:" || u.hostname === "localhost" || /^[\d.]+$|:/.test(u.hostname)) return null;
-    const res = await fetch(u, { headers: { "user-agent": "Mozilla/5.0 (compatible; Co)" }, redirect: "follow", signal: AbortSignal.timeout(10_000) });
-    if (!res.ok || !/text\/(html|plain)/.test(res.headers.get("content-type") ?? "")) return null;
-    const text = htmlToText(await res.text());
-    return text ? text.slice(0, PAGE_TEXT_LIMIT) : null;
+    const res = await fetch(u, { headers: { "user-agent": "Mozilla/5.0 (compatible; Co)" }, redirect: "follow", signal: AbortSignal.timeout(10_000) }).catch(() => null);
+    const html = res?.ok && /text\/(html|plain)/.test(res.headers.get("content-type") ?? "");
+    const text = html ? htmlToText(await res!.text()) : "";
+    // Turned away (403, 429) or a page that loads its content by script: read
+    // it in a real browser (services/browserRead.ts, 2026-09-30).
+    if (text.length >= MIN_FETCHED_TEXT) return text.slice(0, PAGE_TEXT_LIMIT);
+    if (res && (res.status === 404 || res.status === 410)) return null;
+    const { browserPageText } = await import("./browserRead.js");
+    const seen = await browserPageText(u.toString());
+    return seen ? seen.slice(0, PAGE_TEXT_LIMIT) : text || null;
   } catch {
     return null;
   }
@@ -198,7 +209,7 @@ Return ONLY valid JSON: {"reason": "...", "deadline": "YYYY-MM-DD" or null}`,
 
 // One quick search for the program's own page, used when the result came
 // from a blog or listicle. Null when it can't find one.
-async function findOfficialPage(name: string, timeout: number): Promise<string | null> {
+export async function findOfficialPage(name: string, timeout: number): Promise<string | null> {
   try {
     const { text: raw } = await generateText({
       model: anthropic(WEB_SEARCH_MODEL),

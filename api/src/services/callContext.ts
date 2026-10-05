@@ -1,3 +1,5 @@
+import { notToTeammate } from "./teamLines.js";
+import * as memberSafeModule from "./memberSafeMemories.js";
 import { renderCorrections } from "../harness/profileWrite.js";
 import { generateText } from "ai";
 import { anthropic } from "@ai-sdk/anthropic";
@@ -7,7 +9,6 @@ import { MODELS } from "../models.js";
 import { getEmotionalContext, renderEmotionalContext } from "../harness/emotion.js";
 import { getPersonSnapshot, renderSnapshot } from "../harness/personSnapshot.js";
 import { latestAskEntry } from "../harness/profileWrite.js";
-import { neutralPronouns } from "../mo/rules.js";
 
 // A 1-2 sentence call summary: narrow work, Haiku.
 const SUMMARY_MODEL = MODELS.haiku;
@@ -24,8 +25,8 @@ const SUMMARY_MODEL = MODELS.haiku;
 // last 6 raw text_exchange rows (3 conversational turns), justified by a
 // comment claiming the result "gets passed as a URL query param on the
 // Twilio bridge connect URL." That mechanism doesn't exist anywhere in the
-// current code — every actual caller (mediaStreamBridge.ts's Hume
-// sessionSettings.variables, postCallFollowUp.ts and sendblue.ts's LLM
+// current code — every actual caller (the call agent's variables in
+// services/elevenLabsCalls.ts, postCallFollowUp.ts and sendblue.ts's LLM
 // prompt interpolation) treats this as plain in-process text with no URL
 // involved. The cap was real, it just wasn't protecting anything anymore —
 // it was silently discarding real context on every call and every text
@@ -47,13 +48,13 @@ export async function buildContextSummary(userId: string): Promise<string> {
         [userId],
       ),
       pool.query(
-        `SELECT content FROM co_memories
+        `SELECT content, memory_type FROM co_memories
          WHERE user_id = $1 AND memory_type = 'text_exchange'
          ORDER BY created_at DESC LIMIT 20`,
         [userId],
       ),
       pool.query(
-        `SELECT content FROM co_memories
+        `SELECT content, memory_type FROM co_memories
          WHERE user_id = $1 AND memory_type = 'recap'
          ORDER BY created_at DESC LIMIT 1`,
         [userId],
@@ -65,7 +66,7 @@ export async function buildContextSummary(userId: string): Promise<string> {
       // sendblue.ts owns for text) covers the common "did I miss what you
       // found me" case without growing every call's opening context.
       pool.query(
-        `SELECT content FROM co_memories
+        `SELECT content, memory_type FROM co_memories
          WHERE user_id = $1 AND memory_type = 'recommendation' AND created_at > NOW() - INTERVAL '3 days'
          ORDER BY created_at DESC LIMIT 1`,
         [userId],
@@ -77,14 +78,16 @@ export async function buildContextSummary(userId: string): Promise<string> {
       // facts beat an older recap or profile (2026-09-15 call opened as if he
       // were still pre-seed, after he'd texted he's Series A with a $35M deal).
       pool.query(
-        `SELECT content FROM co_memories
-         WHERE user_id = $1 AND memory_type = 'text_exchange' AND (content LIKE 'User said:%' OR content LIKE '[Call]%')
+        `SELECT content, memory_type FROM co_memories
+         WHERE user_id = $1 AND memory_type = 'text_exchange' AND (content LIKE 'User said:%' OR content LIKE '[Call]%') AND ${notToTeammate()}
            AND created_at > NOW() - INTERVAL '48 hours'
          ORDER BY created_at DESC LIMIT 25`,
         [userId],
       ),
       pool.query(`SELECT ask_text FROM ask_checkins WHERE user_id = $1 AND resolved_at IS NULL ORDER BY created_at DESC LIMIT 4`, [userId]),
-      getPersonSnapshot(userId),
+      // The one model of them (services/personModel.ts); Co's action record
+      // is added separately on calls (buildCallKnowledge), so it's left out here.
+      import("./personModel.js").then((m) => m.personModelParts(userId)).catch(() => null),
       // Their dated corrections (harness/profileWrite.ts), newest first.
       pool
         .query(
@@ -97,6 +100,15 @@ export async function buildContextSummary(userId: string): Promise<string> {
     ]);
     const emotionalLine = renderEmotionalContext(emotional);
 
+    // Another member's details never reach this summary; intro history stays
+    // (services/memberSafeMemories.ts).
+    const { memberSafe, linkedMemberNames, namesInRecords } = memberSafeModule;
+    const linked = await linkedMemberNames(userId);
+    // A Tier 0 pick names someone their recap or texts may describe too.
+    const names = [...linked, ...namesInRecords(recentRecommendationResult.rows)];
+    // Their call summaries ([Call] lines, which Co writes) too; their own
+    // "User said:" lines pass through unchanged.
+    const [safeRecap, safeRecommendation, safeTexts, safeOwnWords] = await Promise.all([memberSafe(userId, recapResult.rows, names), memberSafe(userId, recentRecommendationResult.rows, names), memberSafe(userId, recentTextResult.rows, names), memberSafe(userId, ownWordsResult.rows, names)]);
     const profile = profileResult.rows[0] ?? null;
     // The stated ask comes from the newest entry that actually has ask text;
     // wants come from the newest entry of any kind, because a call that found
@@ -107,18 +119,21 @@ export async function buildContextSummary(userId: string): Promise<string> {
       ? profile.intent[profile.intent.length - 1]
       : null;
 
-    const ownWords = ownWordsResult.rows.map((r: any) => String(r.content).replace(/^User said: /, "- ")).reverse();
+    const ownWords = safeOwnWords.map((c) => String(c).replace(/^User said: /, "- ")).reverse();
     const openAsks = openAsksResult.rows.map((r: any) => `- ${r.ask_text}`);
-    const picture = renderSnapshot(snapshot);
+    // The person model is model-written (snapshot, threads, loops): it gets the
+    // same strip, so another member's details never reach a call or reply.
+    const rawPicture = snapshot ? (await import("./personModel.js")).renderPersonModel({ ...snapshot, did: [] }) : renderSnapshot(null);
+    const picture = rawPicture ? ((await memberSafe(userId, [{ content: rawPicture, memory_type: "person_model" }], names))[0] ?? "") : rawPicture;
     const corrections = renderCorrections(correctionsResult.rows);
     const lines = [
       corrections
         ? `Things they've corrected (the corrected version wins over anything below; never state the old one as true, and if they ask what you had or when it changed, say it plainly with the date):\n${corrections}`
         : null,
-      picture ? `Who they are right now:\n${picture}` : null,
+      picture ? `What you know about them right now:\n${picture}` : null,
       ownWords.length ? `What they've told you in the last two days (newest facts win over anything below):\n${ownWords.join("\n")}` : null,
       openAsks.length ? `What they're looking for right now:\n${openAsks.join("\n")}` : null,
-      recapResult.rows[0]?.content ? `Ongoing summary: ${recapResult.rows[0].content}` : null,
+      safeRecap[0] ? `Ongoing summary: ${safeRecap[0]}` : null,
       profile?.life_chapters?.length ? `Life chapter: ${profile.life_chapters.join(", ")}` : null,
       profile?.city ? `City: ${profile.city}` : null,
       emotionalLine ? `How they've been feeling:\n${emotionalLine}` : null,
@@ -126,11 +141,11 @@ export async function buildContextSummary(userId: string): Promise<string> {
       profile?.blockers?.length ? `Blockers: ${profile.blockers.slice(0, 2).join("; ")}` : null,
       !openAsks.length && latestAsk?.text ? `Stated ask: ${latestAsk.text}` : null,
       latestIntent?.wants?.length ? `Wants: ${latestIntent.wants.slice(0, 2).join(", ")}` : null,
-      recentRecommendationResult.rows[0]?.content ? `Most recent thing Co suggested: ${recentRecommendationResult.rows[0].content}` : null,
+      safeRecommendation[0] ? `Most recent thing Co suggested: ${safeRecommendation[0]}` : null,
     ].filter(Boolean);
 
-    const recentTextLine = recentTextResult.rows.length
-      ? `Recent texts: ${recentTextResult.rows.map((r: any) => r.content).reverse().join(" / ")}`
+    const recentTextLine = safeTexts.length
+      ? `Recent texts: ${[...safeTexts].reverse().join(" / ")}`
       : null;
     if (recentTextLine) lines.push(recentTextLine);
 
@@ -150,6 +165,109 @@ export async function buildContextSummary(userId: string): Promise<string> {
   }
 }
 
+// What a call starts with (Royce, 2026-09-28, "On calls: what should carry
+// over"): the text side's one picture (services/turnContext.ts
+// assembleContext), so on a call Co also knows what it sent them with the
+// times and places on file, their open asks, what they're in the middle of,
+// and the lessons from times they corrected Co by text. Without it the Grok
+// Bot "no start time" answer could happen again by voice.
+//
+// Returns the spoken-context summary plus the same knowledge split for the
+// after-call audit: facts (what Co sent and what's on file, Co's own record,
+// their asks in their words) and impressions (summaries and read-outs Co's
+// models wrote), which never count as proof of a specific fact.
+export type CallKnowledge = { summary: string; facts: string; impressions: string };
+
+// Room for the whole picture (about 2,000 tokens): 4,500 was spent mostly on the sent events, and the
+// build stopped at the first section that didn't fit, so the background that
+// lets Co pick up where they left off (what they told it lately, the ongoing
+// recap, recent texts, how they've been feeling) was cut (2026-10-04: a call
+// opened with "what's happening these days?" while holding a 4,227-character
+// summary that ended after the first of those sections).
+export const CALL_CONTEXT_MAX = 8000;
+// What was sent lately matters for facts (times, places on file), but it is the
+// longest block and the least about them: whole lines, capped.
+export const CALL_SENT_MAX = 1800;
+
+// Pure: the call's context from its parts, most important first, within `max`.
+//   1. how to be with them (corrections to Co's manner; short)
+//   2. what they're in the middle of
+//   3. the normal summary's sections in their own order (what they told Co
+//      lately, open asks, the ongoing recap, how they've been feeling, recent
+//      texts, ...)
+//   4. what was sent lately, last and bounded, with the facts on file
+// A section that doesn't fit is skipped, not the end of the build, so a long
+// one can't take every later short one with it.
+export function assembleCallSummary(o: { lessons: string[]; sentLines: string[]; threads: { text: string }[]; base: string; max?: number; sentMax?: number }): string {
+  const max = o.max ?? CALL_CONTEXT_MAX;
+  const sentMax = o.sentMax ?? CALL_SENT_MAX;
+  const lessons = o.lessons.length ? `How to be with them, from times they corrected you (keep to these):\n${o.lessons.map((l) => `- ${l}`).join("\n")}` : null;
+  const threads = o.threads.length ? `What they're in the middle of:\n${o.threads.slice(0, 5).map((t) => `- ${t.text}`).join("\n")}` : null;
+  const header = "What you sent them lately and what's on file for each (these are the facts; if a time or place isn't listed here, you don't have it, so say so plainly):\n";
+  const kept: string[] = [];
+  let used = header.length;
+  for (const l of o.sentLines) {
+    const line = `- ${l}`;
+    if (used + line.length + 1 > sentMax && kept.length) break;
+    if (used + line.length + 1 > sentMax) continue;
+    kept.push(line);
+    used += line.length + 1;
+  }
+  const sent = kept.length ? `${header}${kept.join("\n")}` : null;
+  const reserve = sent ? sent.length + 2 : 0;
+  const parts = [lessons, threads, ...o.base.split("\n\n")].filter((x): x is string => !!x);
+  let summary = "";
+  for (const part of parts) {
+    const next = summary ? `${summary}\n\n${part}` : part;
+    if (next.length + reserve > max) continue;
+    summary = next;
+  }
+  return sent ? (summary ? `${summary}\n\n${sent}` : sent) : summary;
+}
+// A call can't wait on slow page reads: whatever details are on file by then are used.
+const CALL_CONTEXT_WAIT_MS = 3000;
+
+export async function buildCallKnowledge(userId: string): Promise<CallKnowledge> {
+  const { assembleContext, loadSentItems, sentDetailLines } = await import("./turnContext.js");
+  const [base, turn] = await Promise.all([
+    buildContextSummary(userId),
+    Promise.race([
+      assembleContext(userId, "").catch(() => null),
+      new Promise<null>((resolve) => setTimeout(() => resolve(null), CALL_CONTEXT_WAIT_MS)),
+    ]),
+  ]);
+  // Slow page reads: the sent list with whatever details were saved with it.
+  const sent = turn?.sent ?? (await loadSentItems(userId).catch(() => []));
+  // Another member's details stripped from every call-only part too
+  // (memberSafeMemories.ts; 2026-10-01 call review: these bypassed it).
+  const { memberSafe } = memberSafeModule;
+  const strip = async (xs: string[]) => (xs.length ? memberSafe(userId, xs.map((content) => ({ content, memory_type: "call_context" }))) : []);
+  const sentLines = await strip(sentDetailLines({ sent }, 7));
+  const lessons = await strip(turn?.lessons ?? []);
+  const threads = (await strip((turn?.threads ?? []).map((t: any) => String(t.text ?? "")))).map((text) => ({ text }));
+  const asks = turn?.asks ?? [];
+  const ledger = turn?.ledger.lines ?? [];
+
+  const summary = assembleCallSummary({ lessons, sentLines, threads, base });
+
+  const facts = [
+    ...sentLines,
+    ...ledger,
+    ...asks.slice(0, 8).map((a) => `They've asked Co for (their words): "${a.text}"`),
+  ].join("\n");
+  return { summary, facts, impressions: base };
+}
+
+// The summary a call opens with.
+export async function buildCallContextSummary(userId: string): Promise<string> {
+  try {
+    return (await buildCallKnowledge(userId)).summary;
+  } catch (err: any) {
+    console.error("callContext: buildCallContextSummary failed (non-fatal, using the plain summary):", err?.message ?? err);
+    return buildContextSummary(userId);
+  }
+}
+
 // The other direction of the same bridge — closes a real gap (Royce,
 // 2026-09-07: "anything overlapping that may cause confusion... between
 // voice and text?"): routes/sendblue.ts's recentConversation, read by every
@@ -165,7 +283,7 @@ export async function buildContextSummary(userId: string): Promise<string> {
 // Exported for evals (2026-09-23): a real summary dropped both partnerships
 // the member named (Lythe.ai, Sangria) and read a voice score as "may have
 // wanted to continue" when their last words were "we can close out good".
-export function callSummaryPrompt(transcript: string, emotionalHighlights?: string): string {
+export function callSummaryPrompt(transcript: string): string {
   return `Summarize what was actually discussed in this phone call transcript, in 2-3 plain sentences, third person, as if briefing someone on what just happened. Ground it only in what's actually in the transcript — no invented detail, no therapy-speak. Write the person on the call as {M} every time, never a pronoun for them (no he, she, they, his, her, their): "{M} is building...", "{M}'s cofounder". We fill in their name. Refer to anyone else by that person's own name (2026-09-22: summaries were calling a member "he" from their name alone).
 
 Lead with the concrete facts they gave: the names of companies, people, places, dates, and plans, spelled as they said them. Speech-to-text often spells names out letter by letter ("l y t h e dot a i" is lythe.ai); write the name, not the letters. Keep every named company and person they mentioned.
@@ -174,7 +292,6 @@ How the call ended comes only from what they said at the end, never from a voice
 
 Transcript:
 "${transcript}"
-${emotionalHighlights ? `\nHume's voice analysis of how they sounded (measured, not guessed):\n${emotionalHighlights}\n\nAdd one short sentence on how they came across and about what, using only those moments. Describe it plainly ("sounded anxious talking about the raise"), not clinically. It describes how they sounded, never what they wanted or meant.\n` : ""}
 Return ONLY the summary, no preamble.`;
 }
 
@@ -259,12 +376,12 @@ export function fillMemberName(text: string, memberFirstName: string | null): st
   return neutralMemberPronouns(filled, memberFirstName);
 }
 
-export async function summarizeCallForTextContext(userId: string, transcript: string, emotionalHighlights?: string): Promise<void> {
+export async function summarizeCallForTextContext(userId: string, transcript: string): Promise<void> {
   try {
     const { text: raw } = await generateText({
       model: anthropic(SUMMARY_MODEL),
       experimental_telemetry: { isEnabled: true, functionId: "callContext.summarizeCallForText" },
-      prompt: callSummaryPrompt(transcript, emotionalHighlights),
+      prompt: callSummaryPrompt(transcript),
     });
     // The prompt already says "they"; the model still wrote "he" on all
     // three runs of a real call (2026-09-23), so it's enforced in code.

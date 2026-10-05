@@ -6,6 +6,7 @@
 // dates (matchGate.ts checkTiming), search cache key differences
 // (searchRules.ts searchCacheKey), and online Co event handling
 // (luma.ts resolveCoEventPlace).
+import "../testEnv.js";
 import { DateTime } from "luxon";
 import { readFileSync } from "fs";
 import { checkTiming, checkLocation, type MatchFacts } from "../../src/harness/matchGate.js";
@@ -308,15 +309,7 @@ for (const [ok, label] of cases) {
   c(win("the week of Oct 5th")?.label === "week of Oct 5", "the label says it is a week");
 }
 
-// The reply agent must not search a second time in a turn the pipeline already searched
-// (2026-09-21: it re-ran, found only what had just been sent, and told the member "nothing
-// solid came up" right after "two that fit, sending both now").
-{
-  const tools = readFileSync(new URL("../../src/agent/conversationTools.ts", import.meta.url), "utf8");
-  const reply = readFileSync(new URL("../../src/agent/conversationReply.ts", import.meta.url), "utf8");
-  c(/if \(ctx\.searchedThisTurn\) \{\s*return \{ ok: true, found: \[\]/.test(tools), "searchNow refuses to run when a search already ran this turn");
-  c(reply.includes("searchedThisTurn: input.searchedThisTurn"), "the reply agent tells its tools a search already ran");
-}
+// (2026-10-01) The pipeline that searched before the reply is gone; Co searches in its own loop, capped per turn (evals/loop/rules.ts).
 
 // "A companion you can ask 'what are you working on for me' is more trustworthy than one
 // that only surfaces results when it feels like it" (Royce, 2026-09-22) — listOpenAsks
@@ -444,6 +437,11 @@ for (const [ok, label] of cases) {
   c(/prefer the upcoming edition in or nearest/.test(nel), "a named event prefers the edition nearest the member");
   c(/If the only upcoming edition is somewhere else, still return it, and say plainly in "reason" where it is/.test(nel), "an edition elsewhere is still returned, labeled with where it is");
 }
+
+// Several places in one ask (2026-09-27: "this weekend in Sacramento or SF"
+// became an SF-only search). In Co's own loop (2026-10-01) each event search
+// names its city, so Co searches each place it was asked about.
+c(/city: z\.string\(\)\.optional\(\)\.describe\("The city, when they named one/.test(readFileSync(new URL("../../src/agent/loopTools.ts", import.meta.url), "utf8")), "Co's event search takes a city per search, so each place gets its own");
 
 console.log(`search rules: ${cases.length - failed}/${cases.length} passed`);
 if (failed) process.exitCode = 1;

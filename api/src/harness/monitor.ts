@@ -5,14 +5,16 @@
 // Hourly: each signal's rate over the last 6 hours vs. the previous 7 days.
 // It alerts when the recent rate is both above its floor and at least double
 // the baseline, with enough volume to mean something. Each signal alerts at
-// most once every 12 hours. Alerts go to TEAM_ALERT_EMAIL and the log.
+// most once every 12 hours. Alerts go to Royce only (services/reportEmail.ts) and the log.
 //
 // Weekly (buildWeeklyReview): the week's bad moments with the conversation
 // around them, for turning into eval cases (scripts/weeklyReview.ts writes
 // them locally; the cron emails the summary).
+import { sendReportEmail } from "../services/reportEmail.js";
+import { ABILITIES } from "../services/capabilities.js";
+import { EXTENSIONS } from "../services/extensions.js";
 import { Resend } from "resend";
 import pool from "../db/db.js";
-import { ALLOW_REAL_SENDS } from "../otpActions.js";
 import { recordDecision } from "./core.js";
 import { computeMetrics, renderMetricsHtml } from "./metrics.js";
 
@@ -28,7 +30,7 @@ export type Signal = {
 };
 
 export const SIGNALS: Signal[] = [
-  { key: "reply_redrafted", label: "Replies rewritten or stripped by the grounding check", bad: `decision = 'reply.grounding' AND action IN ('redrafted','stripped')`, total: `decision = 'reply.grounding'`, floor: 0.25, minCount: 5 },
+  { key: "reply_redrafted", label: "Replies cut, rewritten or stripped by the grounding check", bad: `decision = 'reply.grounding' AND action IN ('cut','redrafted','stripped')`, total: `decision = 'reply.grounding'`, floor: 0.25, minCount: 5 },
   { key: "reply_stripped", label: "Replies stripped to a minimal answer", bad: `decision = 'reply.grounding' AND action = 'stripped'`, total: `decision = 'reply.grounding'`, floor: 0.1, minCount: 3 },
   { key: "proactive_blocked", label: "Proactive drafts blocked by checks", bad: `decision = 'proactive.dailyPick' AND reason LIKE 'draft failed checks%'`, total: `decision = 'proactive.dailyPick' AND action IS NOT NULL`, floor: 0.3, minCount: 3 },
   { key: "search_timeout", label: "Searches that hit the time cap or found nothing", bad: `decision = 'recommendation.search' AND outcome = 'skip'`, total: `decision = 'recommendation.search'`, floor: 0.5, minCount: 3 },
@@ -36,8 +38,10 @@ export const SIGNALS: Signal[] = [
   { key: "call_ungrounded", label: "Calls with unsupported promises or facts", bad: `decision = 'call.grounding' AND outcome = 'skip'`, total: `decision = 'call.grounding'`, floor: 0.3, minCount: 2 },
   { key: "snapshot_problems", label: "Person summaries that contradict recent messages", bad: `decision = 'profile.snapshotCheck' AND outcome = 'skip'`, total: `decision = 'profile.snapshotCheck'`, floor: 0.3, minCount: 3 },
   { key: "city_overwritten", label: "Profile city changes blocked (extraction drifting)", bad: `decision = 'profile.city' AND outcome = 'skip'`, total: `decision = 'profile.city'`, floor: 0.5, minCount: 3 },
-  { key: "card_misfire", label: "Contact card asked for when they wanted something else", bad: `decision = 'reply.contactCard' AND outcome = 'skip'`, total: `decision = 'reply.contactCard'`, floor: 0.3, minCount: 2 },
-  { key: "reaction_withheld", label: "Reactions held back because a reply was still owed", bad: `decision = 'turn.closing' AND outcome = 'skip'`, total: `decision = 'turn.closing'`, floor: 0.4, minCount: 3 },
+  // Co still paying attention (2026-09-28, services/understanding.ts): members
+  // it hasn't learned anything new about in three weeks.
+  { key: "understanding_quiet", label: "Members Co hasn't learned anything new about in 3 weeks", bad: `decision = 'understanding.check' AND outcome = 'skip'`, total: `decision = 'understanding.check'`, floor: 0.5, minCount: 2 },
+  { key: "reaction_withheld", label: "Tapbacks Co chose but had to withhold (a reply was still owed)", bad: `decision = 'tool.reactInsteadOfReplying' AND action = 'not_done'`, total: `decision = 'tool.reactInsteadOfReplying'`, floor: 0.4, minCount: 3 },
   // Real events found, none offerable (sold out, already sent, out of range):
   // the answer they get is "nothing", even though the search worked.
   { key: "found_but_unofferable", label: "Searches that found real events but could offer none", bad: `decision = 'recommendation.search' AND action <> 'sent_matches' AND jsonb_array_length(COALESCE(proposal->'scope'->'gatedOut', '[]'::jsonb)) > 0`, total: `decision = 'recommendation.search'`, floor: 0.4, minCount: 3 },
@@ -69,6 +73,31 @@ export const SIGNALS: Signal[] = [
   // floor set high on purpose so this only fires on a real jump, not on
   // Tier 3's normal baseline scarcity.
   { key: "tier3_searched_found_nothing", label: "Tier 3 (X) was searched but nothing ended up offered", bad: `decision = 'recommendation.search' AND proposal->'scope'->>'xQuery' IS NOT NULL AND (outcome = 'skip' OR NOT EXISTS (SELECT 1 FROM jsonb_array_elements(COALESCE(proposal->'matches', '[]'::jsonb)) e WHERE e->>'tier' = '3'))`, total: `decision = 'recommendation.search' AND proposal->'scope'->>'xQuery' IS NOT NULL`, floor: 0.6, minCount: 3 },
+  // Drift in Co's own choices (2026-09-25, toolGuard.ts): how often a tool
+  // it chose didn't actually happen, and how often it hit a hard limit.
+  { key: "tool_not_done", label: "Tools Co (or an extension) chose that didn't go through", bad: `decision LIKE 'tool.%' AND action = 'not_done'`, total: `decision LIKE 'tool.%'`, floor: 0.2, minCount: 3 },
+  { key: "tool_limited", label: "Tool calls refused by a limit or missing yes", bad: `decision LIKE 'tool.%' AND action IN ('limited', 'needs_yes')`, total: `decision LIKE 'tool.%'`, floor: 0.25, minCount: 3 },
+  // How often each tool is used per reply, so a sudden jump in any one shows.
+  ...ABILITIES.filter((a) => a.tool && !["sendReply", "markTopicAsked"].includes(a.tool)).map((a) => ({
+    key: `tool_use_${a.tool}`,
+    label: `Replies where Co used ${a.tool}`,
+    bad: `decision = 'tool.${a.tool}'`,
+    total: `decision = 'turn.latency'`,
+    floor: 0.35,
+    minCount: 3,
+  })),
+  // The same for each extension's tools (services/extensions.ts), per turn
+  // it took with the team (logged as <id>.teamTurn).
+  ...EXTENSIONS.flatMap((e) =>
+    e.abilities.filter((a) => a.tool).map((a) => ({
+      key: `tool_use_${a.tool}`,
+      label: `${e.name} turns that used ${a.tool}`,
+      bad: `decision = 'tool.${a.tool}'`,
+      total: `decision = '${e.id}.teamTurn'`,
+      floor: 0.5,
+      minCount: 3,
+    })),
+  ),
 ];
 
 export type SignalReading = { signal: Signal; recentBad: number; recentTotal: number; recentRate: number; baselineRate: number };
@@ -103,16 +132,9 @@ export async function readSignals(): Promise<SignalReading[]> {
   return out;
 }
 
+// To Royce only, never the team inbox (services/reportEmail.ts, 2026-09-30).
 async function sendTeamEmail(subject: string, html: string): Promise<void> {
-  const to = process.env.TEAM_ALERT_EMAIL ?? "team@copatible.com";
-  if (!ALLOW_REAL_SENDS || !process.env.RESEND_API_KEY) {
-    console.log(`[monitor] ${subject}\n${html.replace(/<[^>]+>/g, " ")}`);
-    return;
-  }
-  // Resend reports failures in the result instead of throwing (2026-09-15:
-  // an unverified domain made every send fail while this said "sent").
-  const { error } = await new Resend(process.env.RESEND_API_KEY).emails.send({ from: "Co <hello@copatible.com>", to: [to], subject, html });
-  if (error) throw new Error(`Resend: ${error.message}`);
+  await sendReportEmail(subject, html);
 }
 
 export async function runMonitor(): Promise<void> {
@@ -138,6 +160,20 @@ export async function runMonitor(): Promise<void> {
   }
 }
 
+// An alert that can't wait for the hourly signal check (the send breaker,
+// 2026-09-24). One email per key per hour at most.
+export async function alertTeamNow(key: string, subject: string, detail: string): Promise<void> {
+  const claimed = await pool.query(
+    `INSERT INTO harness_alerts (signal_key, sent_at) VALUES ($1, NOW())
+     ON CONFLICT (signal_key) DO UPDATE SET sent_at = NOW() WHERE harness_alerts.sent_at < NOW() - INTERVAL '1 hour'
+     RETURNING signal_key`,
+    [key],
+  );
+  if (!claimed.rows[0]) return;
+  await sendTeamEmail(subject, `<p>${detail}</p>`).catch((err: any) => console.error("monitor: alert email failed (non-fatal):", err?.message ?? err));
+  await recordDecision({ layer: 3, decision: "monitor.alert", userId: null, outcome: "act", action: key, reason: detail }).catch(() => {});
+}
+
 // Proves the alert path end to end (Resend, the address, the log) without
 // waiting for a real spike.
 export async function sendTestAlert(): Promise<void> {
@@ -161,7 +197,7 @@ export async function gatherWeekMoments(days = 7): Promise<ReviewMoment[]> {
   const { rows } = await pool.query(
     `SELECT user_id, created_at, decision, action, reason FROM harness_decisions
      WHERE created_at > NOW() - ($1 || ' days')::interval AND (
-       (decision = 'reply.grounding' AND action IN ('redrafted', 'stripped'))
+       (decision = 'reply.grounding' AND action IN ('cut', 'redrafted', 'stripped'))
        OR (decision = 'call.grounding' AND outcome = 'skip')
        OR (decision = 'router.decideActions' AND action LIKE 'clarify%')
        OR (decision = 'recommendation.search' AND outcome = 'skip')

@@ -8,7 +8,6 @@ import fs from "fs";
 import { createServer } from "http";
 import path from "path";
 import { Server } from "socket.io";
-import { WebSocketServer } from "ws";
 import pool from "../../api/src/db/db.js";
 import { runMigrations } from "../../api/src/db/migrations.js";
 import { buildCoVCard } from "../../api/src/utils/vcard.js";
@@ -20,12 +19,13 @@ import checklistRouter from "./routes/checklist.js";
 import loginRouter from "./routes/login.js";
 import phoneRouter from "./routes/phone.js";
 import { requireTesterLoginApi, requireTesterLoginPage } from "./middleware/requireTesterLogin.js";
-import { bridgeTwilioMediaStream } from "../../api/src/services/mediaStreamBridge.js";
 import { createCoRouter } from "../../api/src/routes/co.js";
 import { reportUnfinishedTurns, sendblueRouter } from "../../api/src/routes/sendblue.js";
 import { serveInvitePage } from "../../api/src/routes/invitePage.js";
 import { createLumaRouter } from "../../api/src/routes/luma.js";
+import { createMoRouter } from "../../api/src/routes/mo.js";
 import { registerJobs } from "../../api/src/jobs/index.js";
+import { installGracefulShutdown, trackRequests } from "../../api/src/services/shutdown.js";
 
 // A fresh Railway Postgres has none of brew_dev's tables yet — runMigrations()
 // (imported unchanged from api/) only ever does ALTER TABLE / CREATE TABLE IF
@@ -51,13 +51,15 @@ async function main() {
   runTestMigrations();
 
   const app = express();
-  // Hume's webhook signature is an HMAC over the exact raw body string — a
-  // re-serialized/parsed-then-stringified body isn't guaranteed byte-identical
-  // to what Hume actually signed. Must run before express.json() below.
-  // Mirrors api/src/server.ts's identical setup for the same route.
-  app.use("/co/webhook", express.raw({ type: "application/json" }));
+  app.use(trackRequests); // a restart waits for requests mid-flight (services/shutdown.ts)
+  // ElevenLabs signs the post-call webhook over the exact raw body
+  // (api/src/services/elevenLabsCalls.ts): a parsed-then-stringified body isn't
+  // byte-identical. Must run before express.json() below; mirrors api/src/server.ts.
+  app.use("/co/el/post-call", express.raw({ type: "application/json", limit: "5mb" }));
+  // The agent sends the whole conversation to its tools; the default 100kb JSON limit would reject a long call before the route runs.
+  app.use("/co/el/tool", express.json({ limit: "2mb" }));
   // Luma's webhook signature is the same "HMAC over the raw body" shape as
-  // Hume's above — see validateLumaWebhook in api/src/routes/luma.ts. This
+  // ElevenLabs' above — see validateLumaWebhook in api/src/routes/luma.ts. This
   // route was never mounted at all in co-test (confirmed live, 2026-09-02:
   // LUMA_WEBHOOK_SECRET/LUMA_API_KEY/LUMA_WEBHOOKS are all already set here,
   // so this was meant to be live), meaning every real Luma delivery — guest
@@ -65,6 +67,8 @@ async function main() {
   // has been 404ing silently since co-test became the only running server
   // for this environment.
   app.use("/luma/webhook", express.raw({ type: "application/json" }));
+  // Resend signs the raw body of Mo's inbound email posts (routes/mo.ts).
+  app.use("/mo/email/inbound", express.raw({ type: "application/json" }));
   app.use(express.json({ limit: "2mb" }));
   app.use(express.urlencoded({ extended: false })); // Twilio status callbacks are form-encoded
   app.use(cookieParser());
@@ -78,27 +82,6 @@ async function main() {
   const io = new Server(httpServer);
   configureCoTestSocket(io);
 
-  // Twilio's <Connect><Stream> (see callTrigger.ts) connects here directly —
-  // a raw `ws` server, not socket.io, since Twilio Media Streams speaks its
-  // own plain WebSocket JSON protocol. noServer mode + a manual "upgrade"
-  // listener so this coexists with socket.io's own upgrade handling on the
-  // same httpServer without either intercepting the other's path.
-  const mediaStreamWss = new WebSocketServer({ noServer: true });
-  httpServer.on("upgrade", (req, socket, head) => {
-    const { pathname } = new URL(req.url ?? "", `http://${req.headers.host}`);
-    if (pathname !== "/media-stream") return; // socket.io's own listener handles /socket.io/
-    mediaStreamWss.handleUpgrade(req, socket, head, (ws) => {
-      mediaStreamWss.emit("connection", ws, req);
-    });
-  });
-  // user_id is NOT available yet at upgrade time — Twilio strips query
-  // parameters from Stream URLs entirely (confirmed live and via Twilio's
-  // docs), so it travels as a <Parameter> instead (see callTrigger.ts) and
-  // only arrives once the socket sends its own "start" event. bridgeTwilioMediaStream
-  // resolves it from there itself.
-  mediaStreamWss.on("connection", (ws) => {
-    bridgeTwilioMediaStream(ws);
-  });
 
   app.get("/health", (_req, res) => res.status(200).send("ok"));
 
@@ -121,8 +104,7 @@ async function main() {
   // api/src/server.ts (api/src/routes/invitePage.ts).
   app.get("/i/:code", serveInvitePage);
 
-  // Serves generated voice-line audio (ElevenLabs SMS voice notes, and now
-  // Hume-voiced TwiML lines for the AMD-misfire redirect) — mirrors
+  // Serves generated voice-note audio (ElevenLabs) — mirrors
   // production's identical route in api/src/server.ts. Needed here since
   // Twilio's <Play> requires a fetchable URL, not inline audio data.
   app.get("/audio/:id", (req, res) => {
@@ -133,7 +115,7 @@ async function main() {
     return res.send(entry.buffer);
   });
 
-  // The actual product routes (Hume call webhook, Twilio call-status,
+  // The actual product routes (ElevenLabs call webhooks, Twilio call-status,
   // inbound-call TwiML, and the Sendblue text-conversation webhook) —
   // these used to be co-test's own separate implementation
   // (routes/webhooks.ts, deleted); that logic now lives in api/src and this
@@ -143,6 +125,9 @@ async function main() {
   app.use("/co", createCoRouter(io));
   app.use("/sendblue", sendblueRouter(io));
   app.use("/luma", createLumaRouter());
+  // Mo's email opt-out link and inbound email replies (2026-09-25: Mo runs
+  // here, so these have to be served here too).
+  app.use("/mo", createMoRouter());
 
   // Tool-access login (phone + OTP) — see services/testerAuth.ts. Public by
   // definition, it's the thing that grants access to everything below.
@@ -161,7 +146,6 @@ async function main() {
   // returning tester.
   app.get("/", (_req, res) => res.sendFile(path.join(publicDir, "login.html")));
 
-  app.get("/call", requireTesterLoginPage, (_req, res) => res.sendFile(path.join(publicDir, "call.html")));
   app.get("/call/:sessionId/results", requireTesterLoginPage, (_req, res) =>
     res.sendFile(path.join(publicDir, "results.html")),
   );
@@ -194,6 +178,7 @@ async function main() {
 
   const port = process.env.PORT ? Number(process.env.PORT) : 3000;
   httpServer.listen(port, () => console.log(`co-test listening on ${port}`));
+  installGracefulShutdown(httpServer);
 }
 
 main().catch((err) => {

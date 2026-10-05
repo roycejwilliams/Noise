@@ -173,7 +173,22 @@ async function cached<T>(key: string, ms: number, load: () => Promise<T>): Promi
   cache.set(key, { at: Date.now(), value });
   return value;
 }
-const events = () => cached("events", 5 * 60_000, () => listCalendarEvents());
+// Co's calendar, plus test events for test members on co-test (services/testNumbers.ts).
+const events = () =>
+  cached("events", 5 * 60_000, async () => {
+    const real = await listCalendarEvents();
+    const { testNumbersEnabled } = await import("./testNumbers.js");
+    if (!testNumbersEnabled()) return real;
+    const { rows } = await pool.query(`SELECT * FROM co_test_events`).catch(() => ({ rows: [] as any[] }));
+    return [
+      ...real,
+      ...rows.map((r: any): LumaEvent => ({ api_id: r.api_id, name: r.name, start_at: new Date(r.start_at).toISOString(), end_at: r.end_at ? new Date(r.end_at).toISOString() : null, city: "San Francisco", url: r.url, latitude: r.latitude, longitude: r.longitude, timezone: r.timezone, venue: r.venue, address: r.address })),
+    ];
+  });
+export const presenceEvents = events;
+export function clearPresenceCache(): void {
+  cache.clear();
+}
 
 // Where the venue is: Luma's coordinates when it has them (its API has
 // returned none so far), else a street-level lookup of the address. Null for
@@ -187,6 +202,14 @@ export async function venueFor(event: LumaEvent): Promise<GeoPoint | null> {
 // Registered (approved) Co members for an event.
 export async function eventMembers(eventId: string): Promise<{ user_id: string; first_name: string; phone_number: string }[]> {
   return cached(`members:${eventId}`, 10 * 60_000, async () => {
+    if (eventId.startsWith("test-")) {
+      const { rows } = await pool.query(
+        `SELECT u.id AS user_id, u.first_name, u.phone_number FROM co_test_events e JOIN users u ON u.id = ANY(e.guest_user_ids)
+         WHERE e.api_id = $1 AND u.archived_at IS NULL AND coalesce(u.sms_opted_out, false) = false`,
+        [eventId],
+      );
+      return rows;
+    }
     const guests = (await getEventGuestList(eventId)).filter((g) => g.approval_status === "approved");
     const phones = guests.map((g) => g.phone).filter((p): p is string => Boolean(p));
     const emails = guests.map((g) => g.email?.toLowerCase()).filter((e): e is string => Boolean(e));
@@ -210,9 +233,18 @@ export async function fetchSharedLocations(): Promise<{ sharing: Set<string>; fi
   const res = await fetch(`https://api.sendblue.co/api/location?from_number=${encodeURIComponent(from ?? "")}`, {
     headers: { "sb-api-key-id": process.env.SENDBLUE_API_KEY ?? "", "sb-api-secret-key": process.env.SENDBLUE_SECRET_KEY ?? "" },
   });
-  if (!res.ok) throw new Error(`sendblue location: ${res.status}`);
-  const data: any = await res.json();
-  return parseSharedLocations(data, new Date());
+  const out = res.ok ? parseSharedLocations(await res.json(), new Date()) : { sharing: new Set<string>(), fixes: new Map<string, SharedFix>() };
+  // Test members' locations come from a test table, never Find My (co-test only).
+  const { testNumbersEnabled } = await import("./testNumbers.js");
+  if (testNumbersEnabled()) {
+    const { rows } = await pool.query(`SELECT u.phone_number, l.latitude, l.longitude, l.accuracy, l.at FROM co_test_locations l JOIN users u ON u.id = l.user_id`).catch(() => ({ rows: [] as any[] }));
+    for (const r of rows) {
+      out.sharing.add(r.phone_number);
+      out.fixes.set(r.phone_number, { lat: r.latitude, lng: r.longitude, accuracy: r.accuracy, at: new Date(r.at) });
+    }
+  }
+  if (!res.ok && !out.sharing.size) throw new Error(`sendblue location: ${res.status}`);
+  return out;
 }
 
 // Pure, for the checks in evals/presence.
@@ -235,39 +267,35 @@ export function parseSharedLocations(data: any, now: Date): { sharing: Set<strin
 
 // ---------------------------------------------------------------- the day-of ask
 
+// The pre-arrival text replaced this day-of ask (services/preArrival.ts,
+// 2026-09-30): same people, one text per event, timed by Co 1 to 3 hours before
+// the start and sent through the daily pick. This queues it.
 export async function runArrivalAsks(now = new Date()): Promise<number> {
-  let sent = 0;
+  const { preArrivalWindow, preArrivalEligible, presenceRow } = await import("./preArrival.js");
+  const { enqueueCandidate } = await import("../harness/proactive.js");
+  let queued = 0;
   for (const event of await events()) {
-    if (!askWindowOpen(event, now)) continue;
+    const w = preArrivalWindow(event.start_at);
+    if (now < w.from || now > w.until) continue;
     const canUseLocation = (await venueFor(event)) !== null;
-    const message = cleanCoMessage(arrivalAskText(event, canUseLocation));
     for (const m of await eventMembers(event.api_id)) {
-      // Claim first, so two runs never both ask.
-      const { rows } = await pool.query(
-        `INSERT INTO event_presence (event_api_id, user_id, asked_at) VALUES ($1, $2, NOW())
-         ON CONFLICT (event_api_id, user_id) DO UPDATE SET asked_at = NOW() WHERE event_presence.asked_at IS NULL
-         RETURNING user_id`,
-        [event.api_id, m.user_id],
-      );
-      if (!rows.length) continue;
-      try {
-        await sendblue.messages.send({ number: m.phone_number, content: message, from_number: process.env.SENDBLUE_PHONE_NUMBER! });
-      } catch (err: any) {
-        console.error(`eventPresence: arrival ask failed for ${m.user_id} (non-fatal):`, err?.message ?? err);
-        await pool.query(`UPDATE event_presence SET asked_at = NULL WHERE event_api_id = $1 AND user_id = $2`, [event.api_id, m.user_id]).catch(() => {});
-        continue;
-      }
-      sent++;
-      // In the ledger so the daily caps and spacing see it; its key keeps it
-      // out of the per-event in-room count (the nudges still get all three).
-      await recordInRoomSend(m.user_id, `arrival_ask:${event.api_id}`, message);
-      await pool
-        .query(`INSERT INTO co_memories (user_id, memory_type, content) VALUES ($1, 'text_exchange', $2)`, [m.user_id, `Co replied: ${message}`])
-        .catch(() => {});
-      await recordDecision({ layer: 6, decision: "event.arrival_ask", userId: m.user_id, outcome: "act", action: canUseLocation ? "location_or_text" : "text_only", proposal: { eventId: event.api_id } }).catch(() => {});
+      const row = await presenceRow(event.api_id, m.user_id);
+      const ok = preArrivalEligible({ registered: true, notGoing: !!row?.not_going_at, alreadySent: !!row?.pre_arrival_sent_at, eventListed: true });
+      if (!ok.ok) continue;
+      const r = await enqueueCandidate({
+        userId: m.user_id,
+        type: "pre_arrival",
+        targetKey: `pre_arrival:${event.api_id}`,
+        topicKey: `event:${event.api_id}`,
+        summary: `Before "${event.name}" (starts ${event.start_at}): logistics, who's worth finding, an opener, and the location offer`,
+        payload: { eventId: event.api_id, name: event.name, startAt: event.start_at, timezone: event.timezone ?? null, venue: event.venue ?? null, address: event.address ?? null, url: event.url ?? null, canUseLocation, until: w.until.toISOString() },
+        dueAt: now,
+        expiresAt: new Date(new Date(event.start_at).getTime() - 30 * 60_000),
+      }).catch(() => ({ queued: false }));
+      if (r.queued) queued++;
     }
   }
-  return sent;
+  return queued;
 }
 
 // ---------------------------------------------------------------- the poll
@@ -287,8 +315,12 @@ export async function runPresencePoll(now = new Date(), tickMs = 2 * 60_000): Pr
     if (now.getTime() >= waitEnds && now.getTime() - waitEnds < tickMs) rescore.add(event.api_id);
     const venue = await venueFor(event);
 
+    const { mayReadLocation, farNoteDue, presenceRow } = await import("./preArrival.js");
     for (const m of members) {
       if (!sharing.has(m.phone_number)) continue;
+      // Only with their yes for this event, quoted from their own message; never otherwise.
+      const row = await presenceRow(event.api_id, m.user_id);
+      if (!mayReadLocation(row ? { event_api_id: event.api_id, location_yes_at: row.location_yes_at, location_stopped_at: row.location_stopped_at } : null, event.api_id, true)) continue;
       await pool.query(
         `INSERT INTO event_presence (event_api_id, user_id, sharing_seen_at) VALUES ($1, $2, NOW())
          ON CONFLICT (event_api_id, user_id) DO UPDATE SET sharing_seen_at = COALESCE(event_presence.sharing_seen_at, NOW())`,
@@ -296,7 +328,16 @@ export async function runPresencePoll(now = new Date(), tickMs = 2 * 60_000): Pr
       );
       const fix = fixes.get(m.phone_number);
       if (!venue || !fix) continue;
-      const near = isNearVenue(distanceMeters(venue, fix), fix.accuracy);
+      const dist = distanceMeters(venue, fix);
+      const near = isNearVenue(dist, fix.accuracy);
+      // At most one no-pressure note if they're clearly still far away at the start.
+      if (farNoteDue({ startAt: event.start_at, now, arrived: !!row?.arrived_at, noteSent: !!row?.far_note_sent_at, distanceM: dist })) {
+        const claimed = await pool.query(`UPDATE event_presence SET far_note_sent_at = NOW() WHERE event_api_id = $1 AND user_id = $2 AND far_note_sent_at IS NULL RETURNING 1`, [event.api_id, m.user_id]);
+        if (claimed.rows.length) {
+          const { sendExempt } = await import("../harness/proactive.js");
+          await sendExempt({ userId: m.user_id, phoneNumber: m.phone_number, type: "co_event", targetKey: `far_note:${event.api_id}`, messages: ["No rush, it's just getting going. I'll point you to people when you're there."], timezone: event.timezone ?? null, respectHours: true }).catch(() => {});
+        }
+      }
       const { rows } = await pool.query(
         `SELECT near_since, arrived_at, away_since, left_at FROM event_presence WHERE event_api_id = $1 AND user_id = $2`,
         [event.api_id, m.user_id],
@@ -337,6 +378,13 @@ export async function runPresencePoll(now = new Date(), tickMs = 2 * 60_000): Pr
 // more than one.
 export async function arrivedByText(userId: string, message: string, now = new Date()): Promise<{ eventApiId: string; eventName: string; isNew: boolean } | null> {
   if (!isImHere(message)) return null;
+  return recordTextArrival(userId, now);
+}
+
+// They told Co they've arrived (Co's judgment, conversationTools.ts
+// markArrived, 2026-09-25): records it for the one Co event of theirs that's
+// on now, or null when there isn't exactly one.
+export async function recordTextArrival(userId: string, now = new Date()): Promise<{ eventApiId: string; eventName: string; isNew: boolean } | null> {
   const open = (await events()).filter((e) => {
     const start = new Date(e.start_at).getTime();
     const end = e.end_at ? new Date(e.end_at).getTime() : start + 6 * 3_600_000;
@@ -353,4 +401,17 @@ export async function arrivedByText(userId: string, message: string, now = new D
   if (theirs.length !== 1) return null;
   const isNew = await markArrived(theirs[0].api_id, userId, "text");
   return { eventApiId: theirs[0].api_id, eventName: theirs[0].name, isNew };
+}
+
+// The Co event they're registered for that's on today (from 6 hours before the
+// start to the end), for replies on the way there. Null when none or several.
+export async function todayEventFor(userId: string, now = new Date()): Promise<{ eventApiId: string; name: string; startAt: string; timezone: string | null } | null> {
+  const on = (await events()).filter((e) => {
+    const start = new Date(e.start_at).getTime();
+    const end = e.end_at ? new Date(e.end_at).getTime() : start + 6 * 3_600_000;
+    return now.getTime() >= start - 6 * 3_600_000 && now.getTime() <= end;
+  });
+  const theirs: LumaEvent[] = [];
+  for (const e of on) if ((await eventMembers(e.api_id)).some((m) => m.user_id === userId)) theirs.push(e);
+  return theirs.length === 1 ? { eventApiId: theirs[0].api_id, name: theirs[0].name, startAt: theirs[0].start_at, timezone: theirs[0].timezone ?? null } : null;
 }

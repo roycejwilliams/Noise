@@ -18,6 +18,10 @@
 # equivalent production capability.
 FROM node:20-alpine
 WORKDIR /app
+# Chromium for reading pages a plain fetch is turned away from
+# (api/src/services/browserRead.ts, 2026-09-30).
+RUN apk add --no-cache chromium nss freetype harfbuzz ca-certificates ttf-freefont
+ENV CHROMIUM_PATH=/usr/bin/chromium-browser
 
 COPY co-test/package*.json ./co-test/
 RUN npm --prefix co-test install
@@ -26,6 +30,8 @@ COPY api/package*.json ./api/
 RUN npm --prefix api install
 
 COPY api/src ./api/src
+# The call prompt, read by the text persona too (api/src/services/coPersona.ts).
+COPY api/prompts ./api/prompts
 COPY co-test ./co-test
 
 WORKDIR /app/co-test

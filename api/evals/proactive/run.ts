@@ -35,6 +35,7 @@ import {
   checkDraft,
   codePick,
   evaluateCandidates,
+  sendIsExempt,
   type Candidate,
   type OutputRules,
   type ProactiveType,
@@ -64,6 +65,8 @@ type Arrival = {
   expiresInHours?: number;
   // A raised priority, e.g. an offer boosted to 85 because the member seemed frustrated.
   priority?: number;
+  // What the producer puts on it, e.g. { askId } for an offer answering an ask.
+  payload?: Record<string, unknown>;
 };
 
 type Scenario = {
@@ -88,14 +91,23 @@ type Scenario = {
     firstType?: ProactiveType;
     noSendBefore?: string;
     neverTypes?: ProactiveType[];
+    // Heavy use (2026-10-02): the queue stays bounded and discovery still gets turns.
+    maxPending?: number;
+    discoveryAtLeast?: number;
+    // Answers (by this file's own rule) that expired without ever going out.
+    maxExpiredAnswers?: number;
   };
   // history only: what actually went out before the harness
   historicalSends?: { at: string; type: string; target: string; topic?: string }[];
 };
 
-type SimSend = { at: Date; type: ProactiveType; target: string; topic: string };
+type SimSend = { at: Date; type: ProactiveType; target: string; topic: string; payload?: Record<string, unknown> };
+
+// Queue size over the run, for maxPending.
+const queueStats = new Map<string, { max: number; end: number; expiredAnswers: number }>();
 
 function simulate(sc: Scenario): SimSend[] {
+  queueStats.delete(sc.id);
   const start = new Date(sc.start).getTime();
   const end = new Date(sc.end).getTime();
   const sends: SimSend[] = [];
@@ -127,22 +139,30 @@ function simulate(sc: Scenario): SimSend[] {
         priority: a.priority ?? TYPE_POLICY[a.type].priority,
         dueAt: due,
         expiresAt,
-        payload: {},
+        payload: a.payload ?? {},
         attempts: 0,
         createdAt: new Date(a.atMs),
       });
     }
     for (const c of pending.values()) {
       if (c.expiresAt && c.expiresAt.getTime() <= t) {
+        if (answersThem(c)) {
+          const q = queueStats.get(sc.id) ?? { max: 0, end: 0, expiredAnswers: 0 };
+          queueStats.set(sc.id, { ...q, expiredAnswers: q.expiredAnswers + 1 });
+        }
         decided.add(c.targetKey);
         pending.delete(c.targetKey);
       }
     }
+    const due = [...pending.values()].filter((c) => c.dueAt.getTime() <= t).length;
+    const q = queueStats.get(sc.id) ?? { max: 0, end: 0, expiredAnswers: 0 };
+    queueStats.set(sc.id, { ...q, max: Math.max(q.max, due), end: due });
     const ev = evaluateCandidates({ now, timezone: sc.timezone, optedOut: false, candidates: [...pending.values()], sends: ledger, lastInboundAt, needsCare: sc.needsCare });
     const pick = codePick(ev.eligible);
     if (!pick) continue;
-    sends.push({ at: now, type: pick.type, target: pick.targetKey, topic: pick.topicKey });
-    ledger.push({ type: pick.type, targetKey: pick.targetKey, topicKey: pick.topicKey, sentAt: now, exempt: false });
+    sends.push({ at: now, type: pick.type, target: pick.targetKey, topic: pick.topicKey, payload: pick.payload });
+    // Ledgered the way sendWithLedger does.
+    ledger.push({ type: pick.type, targetKey: pick.targetKey, topicKey: pick.topicKey, sentAt: now, exempt: sendIsExempt(pick, []) });
     decided.add(pick.targetKey);
   }
   return sends;
@@ -150,7 +170,20 @@ function simulate(sc: Scenario): SimSend[] {
 
 // Independent rule check: written separately from the gate code so a bug in
 // one shows up as a disagreement here.
-function violations(sends: { at: Date; type: string; target: string; topic?: string }[], timezone: string | null, inboundTimes: number[]): string[] {
+// Which texts answer the member (Royce, 2026-10-02), written out here from the
+// policy, not imported, so a misclassification in proactive.ts shows up as a
+// disagreement: an offer for an ask they made (not their profile, not a
+// 30-day resurface), a network tease, and follow-ups on what they said or did.
+const ANSWER_TYPES_BY_POLICY = ["network_tease", "ask_checkin", "window_followup", "debrief", "pre_arrival", "post_call"];
+function answersThem(s: { type: string; payload?: Record<string, unknown> }): boolean {
+  if (ANSWER_TYPES_BY_POLICY.includes(s.type)) return true;
+  const p = s.payload ?? {};
+  return s.type === "event_offer" && typeof p.askId === "string" && p.askId !== "profile" && p.fromProfile !== true && p.again !== true;
+}
+
+// Answers have no quota and no unanswered pause; caps and the pause count only
+// the other (discovery) sends. Every two texts are 3h apart, answers included.
+function violations(sends: { at: Date; type: string; target: string; topic?: string; payload?: Record<string, unknown> }[], timezone: string | null, inboundTimes: number[]): string[] {
   const out: string[] = [];
   const sorted = [...sends].sort((a, b) => a.at.getTime() - b.at.getTime());
   const zone = timezone ?? "America/Los_Angeles";
@@ -165,8 +198,11 @@ function violations(sends: { at: Date; type: string; target: string; topic?: str
     }
     if (seenTargets.has(s.target)) out.push(`duplicate ${s.target} at ${s.at.toISOString()}`);
     seenTargets.add(s.target);
+    const prevAny = sorted[i - 1];
+    if (prevAny && s.at.getTime() - prevAny.at.getTime() < RULES.minHoursBetweenTexts * 3600000) out.push(`${s.type} at ${s.at.toISOString()} under ${RULES.minHoursBetweenTexts}h after ${prevAny.type}`);
+    if (answersThem(s)) return;
     const lane = laneOf(s.type);
-    const inLane = (o: (typeof sorted)[number]) => laneOf(o.type) === lane;
+    const inLane = (o: (typeof sorted)[number]) => laneOf(o.type) === lane && !answersThem(o);
     const dayCap = lane === "room" ? RULES.roomMaxPerLocalDay : RULES.maxPerLocalDay;
     const weekCap = lane === "room" ? RULES.roomMaxPer7Days : RULES.maxPer7Days;
     const sameDay = sorted.filter((o, j) => j < i && inLane(o) && DateTime.fromJSDate(o.at).setZone(zone).hasSame(local, "day"));
@@ -198,6 +234,11 @@ function scoreScenario(sc: Scenario, sends: SimSend[]): CaseScore {
   if (e.firstType && sends[0]?.type !== e.firstType) hard.push(`expected first send ${e.firstType}, got ${sends[0]?.type ?? "none"}`);
   if (e.noSendBefore && sends.some((s) => s.at < new Date(e.noSendBefore!))) hard.push(`sent before ${e.noSendBefore}`);
   for (const t of e.neverTypes ?? []) if (sends.some((s) => s.type === t)) hard.push(`sent ${t}, which should have been blocked`);
+  const q = queueStats.get(sc.id);
+  if (e.maxPending !== undefined && q && q.max > e.maxPending) hard.push(`queue grew to ${q.max} ready items (limit ${e.maxPending}; ${q.end} at the end)`);
+  if (e.maxExpiredAnswers !== undefined && q && q.expiredAnswers > e.maxExpiredAnswers) hard.push(`${q.expiredAnswers} answer(s) expired without going out (limit ${e.maxExpiredAnswers})`);
+  const discovery = sends.filter((s) => !answersThem(s)).length;
+  if (e.discoveryAtLeast !== undefined && discovery < e.discoveryAtLeast) hard.push(`discovery got ${discovery} turn(s), expected at least ${e.discoveryAtLeast}`);
   const soft = e.minSends !== undefined ? [{ name: "delivers_expected_minimum", ok: sends.length >= e.minSends }] : [];
   return { hard, soft };
 }

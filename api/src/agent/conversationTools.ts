@@ -1,19 +1,33 @@
+import { notToTeammate } from "../services/teamLines.js";
+import { brandSafe } from "../services/brandGuard.js";
 import { z } from "zod";
-import { asksForContactCard, reportsCardNotReceived } from "../services/conversationClose.js";
 import { tool } from "ai";
-import sendblue, { cleanCoMessage } from "../services/sendblue.js";
+import { situationFor, teamOnlyTools, toolsOutOfSituation, toolUse } from "../services/capabilities.js";
+import { guardTools } from "./toolGuard.js";
+import { sendLimiter } from "../services/sendLimiter.js";
+import sendblue, { cleanCoMessage, sendReaction } from "../services/sendblue.js";
+import { coAskedQuestion } from "../services/conversationClose.js";
+import { parseAck } from "../services/readTurn.js";
+import { reactedTo, reactionFor, sameReaction } from "../services/tapbacks.js";
 import { writeMemory } from "../services/memory.js";
+import { getMemberInvite, inviteLink, invitesLeftFor } from "../services/invites.js";
+import { recordTextArrival } from "../services/eventPresence.js";
+import { closeAsk } from "../services/askKind.js";
+import { recordSuggestionOutcome } from "../services/outcomes.js";
+import { REACTION_RESULT, sentItems } from "../services/reactionCatchup.js";
+import { findSent, type TurnContext } from "../services/turnContext.js";
+import { scoreGuestListForEvent } from "../services/eventScoring.js";
 import pool from "../db/db.js";
 import { recordDecision } from "../harness/core.js";
 import { markTopicAsked as persistTopicAsked, RAPPORT_TOPICS } from "../services/profileExtraction.js";
 import { captureIntentForTurn } from "../services/profileExtraction.js";
-import { generateRecommendation, recordRecommendationsSent, type RecommendationResult } from "../services/recommendation.js";
-import type { TierMatch } from "../services/tieredRecommendation.js";
-import { enrichMatch, renderEventDetails } from "../services/eventDetails.js";
 import { resolveNamedEventGuest, requestIntroToNamedGuest } from "../services/eventGuestMatchHandoff.js";
 import { askEntries } from "../harness/profileWrite.js";
 import { getTimezoneForCity } from "../services/geocoding.js";
 import { DateTime } from "luxon";
+import { googleTools } from "../services/googleTools.js";
+import { loopTools, newLoopState } from "./loopTools.js";
+import { BEAT_GAP_MS, toBeats } from "../services/beats.js";
 
 // A date as the member would say it, in their own zone (2026-09-22 code
 // review: toDateString() used the server's zone, so a Pacific evening showed
@@ -36,61 +50,48 @@ async function memberDate(userId: string): Promise<(iso: string | Date | null | 
 // so callers only log and count what was really sent (2026-09-17 code review).
 export type SendCoReply = (params: { phone: string; message: string; asVoice: boolean }) => Promise<boolean | void>;
 
-// A search capped at capMs. Promise.race alone left the search running after
-// Co had already said it found nothing (2026-09-17 code review). A result that
-// lands after the cap goes to onLate when given (the caller sends it as the
-// answer, services/lateSearchResult.ts), otherwise it's dropped; callers only
-// record what they actually sent.
-export async function searchWithTimeCap(
-  userId: string,
-  ask: string,
-  capMs: number,
-  label: string,
-  onLate?: (r: RecommendationResult) => Promise<void>,
-): Promise<RecommendationResult> {
-  let timer: ReturnType<typeof setTimeout> | undefined;
-  let settled = false;
-  const search = generateRecommendation(userId, ask).then((r) => {
-    if (settled) {
-      if (onLate) {
-        onLate(r).catch((err: any) => console.error(`${label}: late result handling failed for ${userId} (non-fatal):`, err?.message ?? err));
-      } else {
-        console.log(`${label}: search for ${userId} finished after the ${capMs}ms cap, result discarded`);
-      }
-    }
-    return r;
-  });
-  const cap = new Promise<RecommendationResult>((resolve) => {
-    timer = setTimeout(() => resolve({ available: false, reason: "search took too long" }), capMs);
-  });
-  try {
-    return await Promise.race([search, cap]);
-  } finally {
-    settled = true;
-    clearTimeout(timer);
-    search.catch(() => {});
-  }
-}
-
 export type ConversationToolContext = {
+  // When their text arrived; the loop's time budget runs from here.
+  turnStartedAt?: number;
   userId: string;
   phoneNumber: string;
   resolvedContent: string;
   isVoice: boolean;
   hasPendingOffer: boolean;
   recentOfferBurstActive: boolean;
-  // The main pipeline already searched and sent results this turn, so searchNow must not
-  // run again (2026-09-21: it re-ran, found only what was just sent, and the reply then said
-  // "nothing solid came up" right after "two that fit, sending both now").
-  searchedThisTurn?: boolean;
   dryRun: boolean;
   sendCoReply: SendCoReply;
   // Layer 3 grounding gate (harness/replyGrounding.ts): runs on each drafted
   // message before it's sent or logged, and returns what actually goes out.
   gate?: (draft: string, sentThisTurn: string[]) => Promise<string>;
+  // Tests only: the loop's searches and page reads return a placeholder
+  // instead of spending on the web (agent/loopTools.ts).
+  stubSearch?: boolean;
+  // The reaction already put on their text this turn (routes/sendblue.ts ack),
+  // so Co can leave it at that (leaveItAtReaction).
+  ackSent?: string | null;
+  // For reactInsteadOfReplying.
+  messageHandle?: string | null;
+  // Co's last reaction to them (this turn's ack, or the latest before it), so
+  // the closing tapback is never the same one twice in a row.
+  lastReaction?: string | null;
+  // Their message may mean they aren't safe (services/safety.ts): no tapback.
+  safetyConcern?: boolean;
+  // On the team (users.mo_approver): gets the team-only tools (handToTeammate, askTeammate).
+  isTeam?: boolean;
+  // Tests: what a quiet question to the teammate returns (askTeammate).
+  consult?: (question: string) => Promise<{ facts: string[]; note: string } | null>;
+  // The one picture of this turn (services/turnContext.ts), for tools that read what Co sent.
+  turn?: TurnContext | null;
+  firstName?: string | null;
+  replyOwed?: boolean;
+  lastCoMessage?: string | null;
   // Facts for this reply (replyGrounding). Tools add what they actually did
   // so the grounding check accepts it, and shareLink only sends links on file.
-  facts?: { add: (kind: "did_this_turn" | "known" | "ongoing", text: string) => void; text: () => string };
+  facts?: { add: (kind: "did_this_turn" | "known" | "ongoing" | "not_done", text: string) => void; text: () => string };
+  // Thread the next text under theirs too (routes/sendblue.ts): the first find
+  // after a "looking" line, the way the first search result always was.
+  threadNext?: () => void;
 };
 
 // Side-effecting tools are bound to server-known context (userId,
@@ -110,35 +111,15 @@ export function createConversationTools(ctx: ConversationToolContext) {
   // sent is an out-of-band signal for the caller (sendblue.ts), same
   // reasoning as askCheckin.ts's state.sent — generateText's return value
   // doesn't cleanly expose which tools actually executed.
-  const state = { sent: false, replyCount: 0, lastReplyText: "", sentMessages: [] as string[], pendingLinks: [] as string[] };
-  // What searchNow found, by link, so the matches are recorded as sent only
-  // once their link actually goes out (services/recommendation.ts
-  // recordRecommendationsSent, 2026-09-17).
-  const foundByUrl = new Map<string, TierMatch>();
-  const foundWithoutLink: TierMatch[] = [];
-
-  // A link goes out ahead of the message about it (Royce, 2026-09-16: "I
-  // want the link first then description"), so the preview lands and the
-  // reply reads as its caption. shareLink sends immediately; the queue and
-  // the flush at the end of the turn only catch anything left over.
-  const markSent = async (matches: TierMatch[]) => {
-    if (!matches.length || ctx.dryRun) return;
-    await recordRecommendationsSent(ctx.userId, matches).catch((err: any) =>
-      console.error("conversationTools: recordRecommendationsSent failed (non-fatal):", err?.message ?? err),
-    );
-  };
-  // A found match counts as sent once its link went out or the sent reply
-  // names it.
-  const markNamedInReply = async (message: string) => {
-    const lower = message.toLowerCase();
-    const named: TierMatch[] = [];
-    for (const [url, m] of foundByUrl) if (m.name && lower.includes(m.name.toLowerCase())) (named.push(m), foundByUrl.delete(url));
-    for (let i = foundWithoutLink.length - 1; i >= 0; i--) {
-      if (foundWithoutLink[i].name && lower.includes(foundWithoutLink[i].name.toLowerCase())) named.push(...foundWithoutLink.splice(i, 1));
-    }
-    await markSent(named);
-  };
-
+  const state = { safetyFlagged: false, sent: false, reacted: false, replyCount: 0, failedSends: 0, sendStopped: false, lastReplyText: "", sentMessages: [] as string[], pendingLinks: [] as string[] };
+  // Receipts (2026-09-25): anything tried this turn that didn't happen
+  // becomes a fact Co writes from, so it can't say it did.
+  const notDone = (what: string) => ctx.facts?.add("not_done", what);
+  // The log of a text that already went out. Its failure is logged, never
+  // thrown, so a database error can't make a delivered text look unsent and
+  // set off a second reply (2026-10-01 code review).
+  const logDelivered = (content: string) =>
+    writeMemory(ctx.userId, "text_exchange", content).catch((err: any) => console.error("conversationTools: logging a sent text failed (it did send):", err?.message ?? err));
   const flushLinks = async () => {
     const queued = state.pendingLinks.splice(0, state.pendingLinks.length);
     // Never the same link twice in one turn, however often it's asked for.
@@ -149,13 +130,11 @@ export function createConversationTools(ctx: ConversationToolContext) {
         console.log(`[conversationReply dryRun] would share link ${url} with ${ctx.userId}`);
       } else {
         const sent = await ctx.sendCoReply({ phone: ctx.phoneNumber, message: url, asVoice: false });
-        if (sent === false) continue;
-        await writeMemory(ctx.userId, "text_exchange", `Co replied: ${url}`);
-        const m = foundByUrl.get(url);
-        if (m) {
-          foundByUrl.delete(url);
-          await markSent([m]);
+        if (sent === false) {
+          notDone(`The link ${url} was not sent (the send failed).`);
+          continue;
         }
+        await logDelivered(`Co replied: ${url}`);
       }
       state.sentMessages.push(url);
     }
@@ -169,19 +148,60 @@ export function createConversationTools(ctx: ConversationToolContext) {
     sendReply: tool({
       description: ctx.isVoice
         ? "Send your voice-note reply to the user and log it. Call this exactly once, with your full response — always respond to what they actually said before any secondary gesture."
-        : "Send one text message to the user, and log it. Call this once for your reply. If you genuinely have two distinct thoughts that would read more naturally as two separate texts sent one after another — the way a person might send a quick reaction, then a follow-up — you may call it a second time. Most replies are a single call; never call it twice just to split one continuous thought into shorter pieces.",
+        : toolUse("sendReply"),
       inputSchema: z.object({
-        message: z.string().describe("One complete reply, no em dashes. Usually a sentence or two; a walkthrough they asked for can be longer. Separate ideas or steps into short paragraphs with a blank line between them."),
+        message: z.string().describe("Your reply, no em dashes. Each distinct thought (the reaction, the answer, the advice, the question, the offer) is its own short paragraph with a blank line between, and each paragraph goes out as its own text, so never stack several thoughts in one. A question to them is always its own last paragraph. When you've given them lines to say before a moment that's coming (a conversation, a pitch, a result), the last paragraph is the offer to check in after it, not another question. Most replies are one to three short beats, up to five when each earns its place."),
       }),
       execute: async ({ message: draft }) => {
-        const message = ctx.gate ? await ctx.gate(draft, [...state.sentMessages]) : draft;
+        const message = brandSafe(ctx.gate ? await ctx.gate(draft, [...state.sentMessages]) : draft, ctx.resolvedContent);
+        // The fact check left nothing to add after what already went out this turn.
+        if (!message.trim() && state.sentMessages.length) return { ok: true, note: "What you already sent this turn is the answer; nothing more went out. Don't add a closing line." };
         if (state.replyCount > 0) await new Promise((resolve) => setTimeout(resolve, 2000));
+        // Texted in beats: each paragraph its own message (services/beats.ts).
+        // A voice note stays one clip.
+        const beats = ctx.isVoice ? [message] : toBeats(message);
+        if (!ctx.dryRun && beats.length > 1) {
+          const sentBeats: string[] = [];
+          for (const [i, beat] of beats.entries()) {
+            if (i > 0) await new Promise((resolve) => setTimeout(resolve, BEAT_GAP_MS));
+            const ok = await ctx.sendCoReply({ phone: ctx.phoneNumber, message: beat, asVoice: false });
+            if (ok === false) {
+              state.failedSends += 1;
+              if (!sentBeats.length) {
+                if (sendLimiter.blocked(ctx.phoneNumber) || state.failedSends >= 2) {
+                  state.sendStopped = true;
+                  return { ok: false, error: "Texts to them can't go out right now. Stop here; don't call any more tools." };
+                }
+                return { ok: false, error: "That message didn't go out. Rewrite it as a plain, direct text to them and call sendReply again." };
+              }
+              notDone(`Only part of the reply went out: "${beat.slice(0, 120)}" didn't send.`);
+              break;
+            }
+            await logDelivered(`Co replied: ${cleanCoMessage(beat)}`);
+            sentBeats.push(beat);
+          }
+          const sentText = sentBeats.join("\n\n");
+          state.sentMessages.push(sentText);
+          state.lastReplyText = state.lastReplyText ? `${state.lastReplyText} ${sentText}` : sentText;
+          state.sent = true;
+          state.replyCount += 1;
+          return { ok: true };
+        }
         if (!ctx.dryRun) {
           const sent = await ctx.sendCoReply({ phone: ctx.phoneNumber, message, asVoice: ctx.isVoice });
           // Refused or failed: nothing is logged or counted as sent, so the
           // model can try again and the fallback still runs (2026-09-17 code
           // review: a refused line was marked sent and the person got nothing).
           if (sent === false) {
+            // Held by the send breaker, or failed twice: another try can't
+            // go through and each one is a paid model call (2026-09-24: 8
+            // sendReply calls in a row against a closed breaker). The agent
+            // loop stops on state.sendStopped.
+            state.failedSends += 1;
+            if (sendLimiter.blocked(ctx.phoneNumber) || state.failedSends >= 2) {
+              state.sendStopped = true;
+              return { ok: false, error: "Texts to them can't go out right now. Stop here; don't call any more tools." };
+            }
             return { ok: false, error: "That message didn't go out. Rewrite it as a plain, direct text to them and call sendReply again." };
           }
         }
@@ -199,8 +219,7 @@ export function createConversationTools(ctx: ConversationToolContext) {
           // recentConversation's own record of what Co said didn't always
           // match what was actually delivered (an em dash the user never
           // saw, since it was rewritten to a comma before sending).
-          await writeMemory(ctx.userId, "text_exchange", `Co replied: ${cleanCoMessage(message)}`);
-          await markNamedInReply(message);
+          await logDelivered(`Co replied: ${cleanCoMessage(message)}`);
         }
         state.sent = true;
         state.replyCount += 1;
@@ -208,76 +227,497 @@ export function createConversationTools(ctx: ConversationToolContext) {
       },
     }),
 
-    // Real action behind "can you send your contact card": the same vCard
-    // intake sends, so they can save Co.
+    // Co's contact card (vCard). Co decides when they want it (2026-09-25,
+    // Royce: "me having to code it to send a vcard is something that it
+    // should already know how to do"). A hand-written check used to veto
+    // the model and missed "v card"; now the model's judgment stands and
+    // the receipt keeps it honest.
     sendContactCard: tool({
-      description:
-        "Send Co's contact card (vCard), only when they ask for YOUR contact details: \"send your contact card\", \"what's your number\", \"how do I save you\". Never for anything else they ask you to send, like a link or an event. Still send a short reply with sendReply.",
+      description: toolUse("sendContactCard"),
       inputSchema: z.object({
-        theirWords: z.string().describe("The exact words where they asked for your contact card or number."),
+        theirWords: z.string().describe("Their words that asked for it."),
       }),
       execute: async ({ theirWords }) => {
-        if (!process.env.CO_VCARD_URL) return { ok: false, error: "no contact card configured" };
-        // They have to have actually asked for Co's contact (2026-09-16:
-        // "You send it over", about a link, got the contact card). A plain
-        // non-receipt report ("I dont see it") isn't a fresh ask either, but
-        // it IS a legitimate continuation of one — checked against whether a
-        // card was actually sent recently, not guessed from wording alone
-        // (2026-09-17, real incident: Jacqueline said "I dont see it" after
-        // asking earlier, the tool correctly declined since that alone
-        // isn't a request, and the reply agent then falsely claimed
-        // "trying again" without this tool ever running a real resend).
-        const askedNow = asksForContactCard(theirWords) || asksForContactCard(ctx.resolvedContent);
-        let followUpToRealSend = false;
-        if (!askedNow && reportsCardNotReceived(ctx.resolvedContent)) {
-          const recent = await pool
-            .query(
-              `SELECT 1 FROM co_memories WHERE user_id = $1 AND memory_type = 'text_exchange'
-               AND content = 'Co replied: [sent Co''s contact card]' AND created_at > NOW() - INTERVAL '2 hours' LIMIT 1`,
-              [ctx.userId],
-            )
-            .then((r) => r.rows.length > 0)
-            .catch(() => false);
-          followUpToRealSend = recent;
-        }
-        if (!askedNow && !followUpToRealSend) {
-          if (!ctx.dryRun) {
-            await recordDecision({
-              layer: 3,
-              decision: "reply.contactCard",
-              userId: ctx.userId,
-              outcome: "skip",
-              action: "not_asked_for",
-              proposal: { theirWords, message: ctx.resolvedContent },
-              checks: [{ name: "asked_for_cos_contact", pass: false, reason: "they asked for something else" }],
-            }).catch(() => {});
-          }
-          return { ok: false, error: "they didn't ask for your contact card, so it wasn't sent. Send what they actually asked for." };
+        if (state.sentMessages.includes("[sent Co's contact card]")) return { ok: true, note: "Already sent this turn." };
+        if (!process.env.CO_VCARD_URL) {
+          notDone("Co's contact card was not sent (it isn't available right now).");
+          return { ok: false, error: "The card isn't available right now, so it was NOT sent. Tell them plainly." };
         }
         if (ctx.dryRun) {
           console.log(`[conversationReply dryRun] would send contact card to ${ctx.userId}`);
         } else {
-          await sendblue.messages.send({ number: ctx.phoneNumber, content: "Here's my card.", media_url: process.env.CO_VCARD_URL, from_number: process.env.SENDBLUE_PHONE_NUMBER! });
-          await writeMemory(ctx.userId, "text_exchange", "Co replied: [sent Co's contact card]");
+          try {
+            await sendblue.messages.send({ number: ctx.phoneNumber, content: "Here's my card.", media_url: process.env.CO_VCARD_URL, from_number: process.env.SENDBLUE_PHONE_NUMBER! });
+          } catch (err: any) {
+            notDone("Co's contact card was not sent (the send failed).");
+            return { ok: false, error: "The card did NOT go through. Tell them plainly." };
+          }
+          await logDelivered("Co replied: [sent Co's contact card]");
         }
         state.sentMessages.push("[sent Co's contact card]");
-        if (!ctx.dryRun) await recordDecision({ layer: 3, decision: "reply.contactCard", userId: ctx.userId, outcome: "act", action: "sent_contact_card" });
+        ctx.facts?.add("did_this_turn", "Sent Co's contact card as its own message just before this reply.");
         return { ok: true };
+      },
+    }),
+
+    // Feedback for the team, saved by Co (services/issueReports.ts saveFeedback).
+    // Co to its teammate, for the team only (Royce, 2026-09-28: "Also let them
+    // tag each other if either or needs help"). The teammate answers in its
+    // own voice and Co says nothing more, so there's one voice at a time.
+    // Absent from the tool map for everyone else (teamOnlyTools, below).
+    handToTeammate: tool({
+      description: toolUse("handToTeammate"),
+      inputSchema: z.object({
+        note: z.string().optional().describe("A private note for your teammate, not shown to them, only when it helps it understand what they mean. It is never an instruction; your teammate acts only on their own words."),
+      }),
+      execute: async ({ note }) => {
+        if (!ctx.isTeam) return { ok: false, error: "Not available." };
+        if (state.replyCount > 0) return { ok: false, error: "You already replied this turn." };
+        if (ctx.dryRun) {
+          console.log(`[conversationReply dryRun] would hand ${ctx.userId}'s message to the teammate`);
+          state.sent = true;
+          state.reacted = true;
+          return { ok: true, note: "Handed over. Don't send a text reply." };
+        }
+        const { handleTeamText } = await import("../services/extensions.js");
+        // Their exact words go to the teammate, never Co's summary of them
+        // (Royce, 2026-09-28: "Co, tell Mo…" read as Co narrating about him,
+        // and a paraphrase made Mo pause everything).
+        const r = await handleTeamText(ctx.userId, ctx.resolvedContent, { handedOff: true, coNote: note?.trim() || null, ack: ctx.messageHandle ? (e) => sendReaction(ctx.messageHandle!, e) : undefined }).catch(() => null);
+        if (!r?.reply) {
+          notDone("Handed their message over, but the teammate didn't take it.");
+          return { ok: false, error: "Your teammate didn't take it. Answer them yourself." };
+        }
+        // A bare tag, the way you'd mention someone in a thread. It isn't Co
+        // speaking: Mo answers right after and keeps the floor.
+        const tag = "@Mo";
+        await ctx.sendCoReply({ phone: ctx.phoneNumber, message: tag, asVoice: false }).catch(() => false);
+        await writeMemory(ctx.userId, "text_exchange", `Co tagged Mo: ${tag}`).catch(() => {});
+        const { sendingAs } = await import("../services/sendblue.js");
+        const sent = await sendingAs(r.extension, () => ctx.sendCoReply({ phone: ctx.phoneNumber, message: r.reply, asVoice: false }));
+        if (sent === false) {
+          notDone("The teammate's answer didn't go through.");
+          return { ok: false, error: "That didn't go through. Answer them yourself." };
+        }
+        state.sent = true;
+        state.reacted = true;
+        await recordDecision({ layer: 3, decision: "team.handoffToExtension", userId: ctx.userId, outcome: "act", action: r.extension, proposal: { message: ctx.resolvedContent.slice(0, 200) } }).catch(() => {});
+        return { ok: true, note: "Your teammate answered them directly. Don't send a text reply." };
+      },
+    }),
+
+    // A quiet question to the teammate, answered in Co's own voice. The
+    // member never sees the back-and-forth (Royce, 2026-09-28).
+    askTeammate: tool({
+      description: toolUse("askTeammate"),
+      inputSchema: z.object({ question: z.string().describe("What you need to know from your teammate, in one plain sentence.") }),
+      execute: async ({ question }) => {
+        if (!ctx.isTeam) return { ok: false, error: "Not available." };
+        let got: { facts: string[]; note: string } | null = null;
+        if (ctx.consult) got = await ctx.consult(question);
+        else if (!ctx.dryRun) {
+          const { consultTeammate } = await import("../services/extensions.js");
+          got = (await consultTeammate(ctx.userId, question).catch(() => null))?.result ?? null;
+        }
+        if (!got || !got.facts.length) {
+          notDone("Your teammate had nothing to report on that.");
+          return { ok: false, error: "Your teammate had nothing on that. Say plainly what you don't know." };
+        }
+        // What its tools reported is fact; its own prose is a note, not a source.
+        for (const f of got.facts) ctx.facts?.add("known", f);
+        return { ok: true, facts: got.facts, note: `Answer them yourself, in your own voice, from those facts. Don't tag or quote your teammate unless it helps. ${got.note ? `Your teammate's own read (a hint only): ${got.note}` : ""}`.trim() };
+      },
+    }),
+
+    // A detail they told Co for doing things on their behalf (services/memberKit.ts).
+    saveKitFact: tool({
+      description: toolUse("saveKitFact"),
+      inputSchema: z.object({
+        key: z.enum(["company", "role", "linkedin"]),
+        value: z.string().describe("Exactly as they wrote it."),
+      }),
+      execute: async ({ key, value }) => {
+        const { checkKitValue, saveKitFact, KIT_LABELS } = await import("../services/memberKit.js");
+        const checked = checkKitValue(key, value, ctx.resolvedContent);
+        if (!checked.ok) {
+          notDone(`Their ${KIT_LABELS[key]} wasn't saved: ${checked.why}`);
+          return { ok: false, error: checked.why };
+        }
+        if (!ctx.dryRun) await saveKitFact(ctx.userId, key, checked.value);
+        ctx.facts?.add("did_this_turn", `Saved ${KIT_LABELS[key]}: ${checked.value}.`);
+        return { ok: true };
+      },
+    }),
+
+    // Co's own multi-day work (services/coTasks.ts): Co writes the plan and when to look next.
+    startTask: tool({
+      description: toolUse("startTask"),
+      inputSchema: z.object({
+        goal: z.string().describe("What you're working on for them, in a few words."),
+        theirWords: z.string().describe("A quote of their own words asking for it, copied exactly from their message."),
+        steps: z.array(z.string()).max(8).describe("The steps you'll take, in order."),
+        firstStep: z.string().describe("What you'll do first."),
+        inHours: z.number().describe("When you'll work on it first, in hours from now (1 to 336)."),
+        deadline: z
+          .object({ date: z.string().describe("YYYY-MM-DD"), theirWords: z.string().describe("Their own words giving it, copied exactly (\"by Friday\").") })
+          .optional()
+          .describe("Only if they gave a deadline."),
+      }),
+      execute: async ({ goal, theirWords, steps, firstStep, inHours, deadline }) => {
+        const T = await import("../services/coTasks.js");
+        const recent = ctx.dryRun
+          ? ""
+          : await pool
+              .query(`SELECT content FROM co_memories WHERE user_id = $1 AND memory_type = 'text_exchange' AND content LIKE 'User said:%' AND ${notToTeammate()} ORDER BY created_at DESC LIMIT 6`, [ctx.userId])
+              .then((r) => r.rows.map((x: any) => String(x.content)).join("\n"))
+              .catch(() => "");
+        const yesToOffer = T.isYesToOffer(ctx.resolvedContent, ctx.lastCoMessage);
+        if (!yesToOffer && !T.wordsAreTheirs(theirWords, `${ctx.resolvedContent}\n${recent}`)) {
+          notDone("No task was started: the quote isn't in their words.");
+          return { ok: false, error: "theirWords must be copied exactly from what they wrote. Don't start a task they didn't ask for." };
+        }
+        // A deadline they gave, checked against their words and their time zone.
+        let dl: { deadline: string; finalCheckAt: string } | null = null;
+        const city = ctx.turn?.profile?.city ?? null;
+        const zone = city ? await import("../services/geocoding.js").then((g) => g.getTimezoneForCity(city)).catch(() => null) : null;
+        // Co left off a deadline they gave: code finds it in their words.
+        const given = deadline ? { date: deadline.date, theirWords: deadline.theirWords } : (() => { const f = T.deadlineFromWords(ctx.resolvedContent, zone, new Date()); return f ? { date: f.date, theirWords: f.words } : null; })();
+        if (given) {
+          const d = T.planDeadline({ date: given.date, words: given.theirWords }, `${ctx.resolvedContent}\n${recent}`, zone, new Date());
+          if (d.ok) dl = { deadline: d.deadline, finalCheckAt: d.finalCheckAt };
+          else notDone(`The deadline wasn't kept on the task: ${d.why}.`);
+        }
+        if (ctx.dryRun) {
+          ctx.facts?.add("did_this_turn", `Started task: "${goal}". Co will work on it first in about ${T.clampNextHours(inHours)} hours: ${firstStep}.${dl ? ` Their deadline: ${dl.deadline}; Co's last check before it is ${dl.finalCheckAt.slice(0, 16).replace("T", " ")} UTC.` : ""}`);
+          return { ok: true, deadline: dl };
+        }
+        const r = await T.startTask({ userId: ctx.userId, goal, theirWords: yesToOffer ? `${ctx.resolvedContent.trim()} (to Co's offer: ${String(ctx.lastCoMessage ?? "").slice(0, 160)})` : theirWords, steps, firstPlan: firstStep, inHours, deadline: dl });
+        if (!r.ok) {
+          notDone(`No task was started: ${r.why}.`);
+          return { ok: false, error: r.why };
+        }
+        ctx.facts?.add("did_this_turn", `Started task #${r.task.id}: "${r.task.goal}". Co will work on it first around ${r.task.nextCheckAt?.slice(0, 16).replace("T", " ")} UTC: ${firstStep}.${r.task.deadline ? ` Their deadline: ${r.task.deadline}; Co's last check before it, where it tells them where things stand, is around ${r.task.finalCheckAt?.slice(0, 16).replace("T", " ")} UTC.` : ""}`);
+        return { ok: true, taskId: r.task.id, nextCheckAt: r.task.nextCheckAt };
+      },
+    }),
+    updateTask: tool({
+      description: toolUse("updateTask"),
+      inputSchema: z.object({
+        taskId: z.number(),
+        note: z.string().describe("What they told you or what changed, in one plain sentence."),
+        stepDone: z.string().optional(),
+        nextInHours: z.number().optional().describe("Only if it changes when you should look next."),
+        nextPlan: z.string().optional(),
+      }),
+      execute: async ({ taskId, note, stepDone, nextInHours, nextPlan }) => {
+        if (ctx.dryRun) return { ok: true };
+        const T = await import("../services/coTasks.js");
+        const t = await T.noteOnTask(ctx.userId, taskId, note, stepDone ?? null);
+        if (!t) {
+          notDone(`Task #${taskId} wasn't updated: it isn't one of their open tasks.`);
+          return { ok: false, error: "No open task with that id." };
+        }
+        if (nextInHours !== undefined) await T.scheduleTask(ctx.userId, taskId, nextInHours, nextPlan ?? t.planNext ?? "");
+        ctx.facts?.add("did_this_turn", `Updated task #${taskId}: ${note}`);
+        return { ok: true };
+      },
+    }),
+    closeTask: tool({
+      description: toolUse("closeTask"),
+      inputSchema: z.object({ taskId: z.number(), status: z.enum(["done", "dropped"]), outcome: z.string() }),
+      execute: async ({ taskId, status, outcome }) => {
+        if (ctx.dryRun) return { ok: true };
+        const T = await import("../services/coTasks.js");
+        if (!(await T.closeTask(ctx.userId, taskId, status, outcome))) {
+          notDone(`Task #${taskId} wasn't closed: it isn't one of their open tasks.`);
+          return { ok: false, error: "No open task with that id." };
+        }
+        ctx.facts?.add("did_this_turn", `Closed task #${taskId} (${status}): ${outcome}`);
+        return { ok: true };
+      },
+    }),
+
+    // Today's Co event (services/preArrival.ts): their yes to sharing location, and whether they're going.
+    shareLocationYes: tool({
+      description: toolUse("shareLocationYes"),
+      inputSchema: z.object({ theirYes: z.string().describe("Their yes, copied exactly from this message.") }),
+      execute: async ({ theirYes }) => {
+        const P = await import("../services/preArrival.js");
+        if (!P.yesToSharing(theirYes, ctx.resolvedContent)) {
+          notDone("Their location wasn't turned on: the yes isn't in their words.");
+          return { ok: false, error: "Only their own yes, from this message, turns it on." };
+        }
+        const today = await import("../services/eventPresence.js").then((e) => e.todayEventFor(ctx.userId)).catch(() => null);
+        if (!today) {
+          notDone("Their location wasn't turned on: they have no Co event today.");
+          return { ok: false, error: "They aren't going to a Co event today, so there's nothing to use it for." };
+        }
+        if (!ctx.dryRun) await P.recordLocationYes(today.eventApiId, ctx.userId, theirYes);
+        ctx.facts?.add("did_this_turn", `They said yes to sharing their location for "${today.name}" only. Co will use it just to know when they've arrived. They share it themselves in Messages (Share My Location with Co), and "stop sharing" ends it.`);
+        return { ok: true, event: today.name };
+      },
+    }),
+    updateGoing: tool({
+      description: toolUse("updateGoing"),
+      inputSchema: z.object({ going: z.boolean(), theirWords: z.string().describe("Their words, copied exactly.") }),
+      execute: async ({ going, theirWords }) => {
+        const T = await import("../services/coTasks.js");
+        if (!T.wordsAreTheirs(theirWords, ctx.resolvedContent) && theirWords.trim().length >= 6) {
+          notDone("Going wasn't updated: the quote isn't in their words.");
+          return { ok: false, error: "Quote their own words." };
+        }
+        const today = await import("../services/eventPresence.js").then((e) => e.todayEventFor(ctx.userId)).catch(() => null);
+        if (!today) return { ok: false, error: "No Co event of theirs today." };
+        if (!ctx.dryRun) await import("../services/preArrival.js").then((P) => P.setGoing(today.eventApiId, ctx.userId, going));
+        ctx.facts?.add("did_this_turn", going ? `Noted they're going to "${today.name}".` : `Noted they can't make "${today.name}"; Co won't send them anything more about it.`);
+        return { ok: true };
+      },
+    }),
+
+    saveFeedbackForTeam: tool({
+      description: toolUse("saveFeedbackForTeam"),
+      inputSchema: z.object({
+        feedback: z.string().describe("The feedback, as one clear sentence the team can act on."),
+      }),
+      execute: async ({ feedback }) => {
+        if (ctx.dryRun) {
+          console.log(`[conversationReply dryRun] would save feedback for ${ctx.userId}: ${feedback}`);
+          ctx.facts?.add("did_this_turn", `Saved for the team: "${feedback.slice(0, 200)}"`);
+          return { ok: true };
+        }
+        const { saveFeedback } = await import("../services/issueReports.js");
+        const saved = await saveFeedback(ctx.userId, ctx.resolvedContent, feedback, ctx.facts?.text() ?? "").catch(() => false);
+        if (!saved) {
+          notDone(`Their feedback wasn't saved for the team: "${feedback.slice(0, 120)}".`);
+          return { ok: false, error: "Couldn't save that for the team. Don't say it was passed along." };
+        }
+        ctx.facts?.add("did_this_turn", `Saved for the team: "${feedback.slice(0, 200)}"`);
+        return { ok: true, note: "Saved. You can say it's been passed to the team; don't promise when or whether it changes." };
+      },
+    }),
+
+    // Someone who may not be safe (services/safety.ts). Co's call, however
+    // it's worded; the phrase list in sendblue.ts is only a backstop.
+    flagSafetyConcern: tool({
+      description: toolUse("flagSafetyConcern"),
+      inputSchema: z.object({
+        what: z.string().describe("In a few words, what they said that worried you. Not a quote of anything private beyond that."),
+      }),
+      execute: async ({ what }) => {
+        state.safetyFlagged = true;
+        if (ctx.dryRun) {
+          console.log(`[conversationReply dryRun] would flag a safety concern for ${ctx.userId}: ${what}`);
+        } else {
+          const { recordSafetyConcern } = await import("../services/safety.js");
+          await recordSafetyConcern(ctx.userId, ctx.firstName ?? null, "co", what);
+        }
+        ctx.facts?.add("did_this_turn", "Flagged that they may not be safe: offers are on hold, and Co may check in on them tomorrow.");
+        return { ok: true, note: "Flagged. Now reply with sendReply: stay with them, ask plainly if they're safe right now, and share 988 once." };
+      },
+    }),
+
+    // A tapback instead of a reply when the thread is winding down (2026-09-25:
+    // Co's call now, not a pattern's). Hard lines kept from before: never
+    // when Co still owes them an answer, and never right after Co asked them
+    // something, since then their short reply is an answer.
+    leaveItAtReaction: tool({
+      description: toolUse("leaveItAtReaction"),
+      inputSchema: z.object({}),
+      execute: async () => {
+        if (state.replyCount > 0) return { ok: false, error: "You already replied this turn." };
+        if (ctx.safetyConcern || ctx.replyOwed || coAskedQuestion(ctx.lastCoMessage)) return { ok: false, error: "They need words this time. Reply properly." };
+        state.sent = true;
+        state.reacted = true;
+        if (!ctx.dryRun) await recordDecision({ layer: 3, decision: "turn.closing", userId: ctx.userId, outcome: "act", action: `left at ${ctx.ackSent}`, proposal: { message: ctx.resolvedContent } }).catch(() => {});
+        return { ok: true, note: "Done. Don't send a text." };
+      },
+    }),
+
+    reactInsteadOfReplying: tool({
+      // Any single emoji chosen for this exact message (Royce, 2026-10-01
+      // decisions), same rules as the ack (readTurn.ts parseAck).
+      description: `${toolUse("reactInsteadOfReplying")}${ctx.lastReaction ? ` Your last reaction to them was ${ctx.lastReaction}; use a different one.` : ""}`,
+      inputSchema: z.object({
+        reaction: z.string().describe('Exactly one emoji that says something about this message: "🥂" a plan locked in or a win, "🫡" a correction or instruction taken, "🔥" real news, "😂" when they\'re genuinely funny, "❤️" something personal and good, "👍" a plain okay (never on bad news, and never a heart on a complaint or burnout). Any other single emoji that fits the moment beats a generic one.'),
+      }),
+      execute: async ({ reaction: picked }) => {
+        if (state.replyCount > 0) return { ok: false, error: "You already replied this turn." };
+        const reaction = parseAck(picked);
+        if (!reaction) return { ok: false, error: "A reaction is exactly one emoji, and not a startup-cute one (rocket, raised hands, confetti). Pick one that fits this message, or reply." };
+        if (ctx.lastReaction && sameReaction(ctx.lastReaction, reaction)) {
+          return { ok: false, error: `Your last reaction to them was ${ctx.lastReaction}. Pick a different one that fits this message, or reply with a short text.` };
+        }
+        if (ctx.safetyConcern || state.safetyFlagged) {
+          notDone("No tapback: they may not be safe, so Co has to reply.");
+          return { ok: false, error: "They may not be safe. Reply to them properly." };
+        }
+        if (ctx.replyOwed) {
+          notDone("No tapback: Co still owes them an answer from before, so it has to reply.");
+          return { ok: false, error: "You still owe them an answer from before. Reply properly instead." };
+        }
+        if (coAskedQuestion(ctx.lastCoMessage)) {
+          notDone("No tapback: Co had just asked them something, so their message is an answer.");
+          return { ok: false, error: "You just asked them something, so this is their answer. Reply properly." };
+        }
+        // One reaction per message (services/tapbacks.ts): the early "on it" read may
+        // already have reacted to this very text; a second would be a double.
+        if (!ctx.dryRun && (await reactedTo(ctx.messageHandle))) {
+          state.sent = true;
+          state.reacted = true;
+          return { ok: true, note: "They already have a reaction from you on this message. Nothing more to send; don't reply." };
+        }
+        let how = "dry_run";
+        if (!ctx.dryRun) {
+          const tapped = ctx.messageHandle ? await sendReaction(ctx.messageHandle, reactionFor(reaction)) : false;
+          if (!tapped) {
+            // No tapback (SMS, an old message, or Sendblue refused it): the same emoji as a text says the same.
+            const sent = await ctx.sendCoReply({ phone: ctx.phoneNumber, message: reaction, asVoice: false });
+            if (sent === false) {
+              notDone("The reaction didn't go through.");
+              return { ok: false, error: "That didn't go through. Reply with a short text instead." };
+            }
+            await logDelivered(`Co replied: ${reaction}`);
+          }
+          how = tapped ? `tapback:${reaction}` : `emoji:${reaction}`;
+          await recordDecision({ layer: 3, decision: "turn.closing", userId: ctx.userId, outcome: "act", action: how, proposal: { message: ctx.resolvedContent, handle: ctx.messageHandle ? ctx.messageHandle.slice(-8) : null } }).catch(() => {});
+        }
+        state.sent = true;
+        state.reacted = true;
+        return { ok: true, note: "Done. Don't send a text reply." };
+      },
+    }),
+
+    // How many invites they have left: a lookup, its own tool (2026-09-26:
+    // tucked into sendInvite as an option, Co skipped it and made up "Still
+    // 5, none used yet").
+    checkInvitesLeft: tool({
+      description: toolUse("checkInvitesLeft"),
+      inputSchema: z.object({}),
+      execute: async () => {
+        const left = ctx.dryRun ? 5 : await invitesLeftFor(ctx.userId);
+        ctx.facts?.add("known", left > 0 ? `They have ${left} invite${left === 1 ? "" : "s"} left. One only counts once someone joins. (Co told them how many invites they have left; no invite link was sent.)` : "All 5 of their invites are used.");
+        return { ok: true, left, note: left > 0 ? `They have ${left} left; one only counts once someone joins.` : "All 5 are used." };
+      },
+    }),
+
+    // They've arrived at a Co event (2026-09-25: Co's judgment, not an
+    // "I'm here" pattern). Which event, and whether it's on, stays hard in
+    // services/eventPresence.ts; their in-room nudge goes out if one was
+    // waiting on them.
+    markArrived: tool({
+      description: toolUse("markArrived"),
+      inputSchema: z.object({ theirWords: z.string().describe("Their words saying they've arrived.") }),
+      execute: async () => {
+        if (ctx.dryRun) {
+          console.log(`[conversationReply dryRun] would record arrival for ${ctx.userId}`);
+          return { ok: true, note: "dry run" };
+        }
+        const arrived = await recordTextArrival(ctx.userId);
+        if (!arrived) {
+          notDone("No arrival was recorded: there's no Co event of theirs on right now.");
+          return { ok: false, error: "There's no Co event of theirs on right now, so nothing was recorded. Don't welcome them to an event." };
+        }
+        if (arrived.isNew) {
+          scoreGuestListForEvent(arrived.eventApiId, arrived.eventName).catch((err: any) =>
+            console.error("markArrived: arrival re-score failed (non-fatal):", err?.message ?? err),
+          );
+        }
+        ctx.facts?.add("did_this_turn", `They've arrived at "${arrived.eventName}" and Co recorded it.`);
+        return {
+          ok: true,
+          note: `Recorded. Welcome them to "${arrived.eventName}" in a line. If there's someone for them to meet, that comes in its own text, so don't name anyone or promise a person here.`,
+        };
+      },
+    }),
+
+    // What's new in Co (2026-09-25: Co's call, not a router flag). The list
+    // still goes out verbatim in its own text (Royce, 2026-09-07: asked to
+    // relay it, the model paraphrased the bullets and blended in unrelated
+    // things). product_updates is written by scripts/notifyTesters.ts.
+    sendProductUpdates: tool({
+      description: toolUse("sendProductUpdates"),
+      inputSchema: z.object({}),
+      execute: async () => {
+        const { rows } = ctx.dryRun
+          ? { rows: [{ content: "• (dry run) latest updates" }] }
+          : await pool.query(`SELECT content FROM product_updates ORDER BY created_at DESC LIMIT 1`).catch(() => ({ rows: [] as any[] }));
+        // Nothing posted: a receipt, so Co can't say it sent a rundown (2026-10-01:
+        // "sent you the rundown" with an empty list, then "where is it?").
+        if (!rows[0]) {
+          notDone("No update list was sent: nothing new is posted.");
+          return { ok: false, error: "Nothing new is posted, so nothing was sent. Say so in a few words; don't say you sent anything." };
+        }
+        const message = `Here's what's new:\n\n${rows[0].content}`;
+        if (!ctx.dryRun) {
+          const sent = await ctx.sendCoReply({ phone: ctx.phoneNumber, message, asVoice: false });
+          if (sent === false) {
+            notDone("The update list was not sent (the send failed).");
+            return { ok: false, error: "The update list didn't go through. Tell them plainly." };
+          }
+          await logDelivered(`Co replied: ${message}`);
+        }
+        state.sent = true;
+        state.sentMessages.push(message);
+        ctx.facts?.add("did_this_turn", "Sent the latest product update list as its own message just before this reply.");
+        return {
+          ok: true,
+          note: "The list went out verbatim. If that was all they asked, stop here: no second text pointing at it. Otherwise reply only to whatever else they said, without repeating, paraphrasing or re-listing it.",
+        };
+      },
+    }),
+
+    // An invite for a friend (2026-09-25: Co decides when, instead of an
+    // invite pattern and a router flag deciding for it). Quotas, codes and
+    // the link stay in services/invites.ts; the link goes in its own text so
+    // it previews, and Co writes the words around it.
+    sendInvite: tool({
+      description: toolUse("sendInvite"),
+      inputSchema: z.object({}),
+      execute: async () => {
+        const record = (outcome: "act" | "skip", action: string, extra: Record<string, unknown> = {}) =>
+          ctx.dryRun ? Promise.resolve() : recordDecision({ layer: 3, decision: "account.invite", userId: ctx.userId, outcome, action, proposal: extra }).catch(() => {});
+        if (ctx.dryRun) {
+          console.log(`[conversationReply dryRun] would send an invite link to ${ctx.userId}`);
+          state.sentMessages.push("https://example.com/i/DRYRUN");
+          ctx.facts?.add("did_this_turn", "Co just texted them an invite link for a friend, as its own message before this reply. They have 4 left; one only counts once someone joins.");
+          return { ok: true };
+        }
+        const invite = await getMemberInvite(ctx.userId);
+        if (!invite.ok) {
+          await record("skip", "none_left");
+          ctx.facts?.add("known", "All 5 of their invites are used, so no invite was sent.");
+          return { ok: true, noneLeft: true };
+        }
+        const link = inviteLink(invite.code);
+        const message = link ?? `Here's an invite code: ${invite.code}. They text it to me at ${process.env.SENDBLUE_PHONE_NUMBER ?? "this number"} to get in.`;
+        const sent = await ctx.sendCoReply({ phone: ctx.phoneNumber, message, asVoice: false });
+        if (sent === false) {
+          await record("skip", "send_failed", { left: invite.left });
+          notDone("The invite link for their friend was not sent (the send failed).");
+          return { ok: false, error: "The invite didn't go through. Tell them plainly." };
+        }
+        await logDelivered(`Co replied: ${message}`);
+        state.sentMessages.push(link ?? message);
+        await record("act", invite.reused ? "resent_open_code" : "made_code", { left: invite.left, link: Boolean(link), sent: true });
+        ctx.facts?.add("did_this_turn", `Co just texted them an invite link for a friend, as its own message before this reply. They have ${invite.left} left; one only counts once someone joins.`);
+        return { ok: true, left: invite.left };
       },
     }),
 
     // Save what they want so the daily search keeps looking. This is what
     // makes "I'll keep looking" true.
     saveAsk: tool({
-      description:
-        "Save something they want Co to look for (people, events, a community, an opportunity) so Co's daily search keeps looking and can text them when something real fits. Use when they ask for something and nothing fits right now, or they want Co to keep an eye out.",
+      description: toolUse("saveAsk"),
       inputSchema: z.object({ what: z.string().describe("What they're looking for, in one plain sentence, in their words.") }),
       execute: async ({ what }) => {
         if (ctx.dryRun) {
           console.log(`[conversationReply dryRun] would save ask for ${ctx.userId}: "${what}"`);
         } else {
           const saved = await captureIntentForTurn(ctx.userId, `user: ${what}`, { timeoutMs: 6000 }).catch(() => null);
-          if (!saved?.ask?.text) return { ok: false, error: "couldn't save that as something to look for" };
+          if (!saved?.ask?.text) {
+            notDone(`Saving "${what.slice(0, 120)}" for the daily search didn't work, so Co is NOT looking for it.`);
+            return { ok: false, error: "couldn't save that as something to look for" };
+          }
           await recordDecision({ layer: 3, decision: "reply.saveAsk", userId: ctx.userId, outcome: "act", action: saved.deduped ? "updated_ask" : "saved_ask", proposal: { what, saved: saved.ask.text } });
         }
         ctx.facts?.add("ongoing", `Co's daily search is now looking for: "${what}". If something real fits, Co may text them (at most one text a day). Co can't promise it will find anything, or when.`);
@@ -291,9 +731,70 @@ export function createConversationTools(ctx: ConversationToolContext) {
     // exactly these stated asks (getActiveAsks/askEntries) — this just
     // answers honestly from the same real list instead of the model
     // guessing from conversation memory, which can drift or go stale.
+    // How something Co sent landed (2026-09-26: outcome learning). Co records
+    // it when they react to an event or opportunity it sent: interested,
+    // going, went and liked it, went and didn't, or not for them. Searches
+    // and Co's own choices lean on these (services/outcomes.ts tasteSummary).
+    noteReaction: tool({
+      description: toolUse("noteReaction"),
+      inputSchema: z.object({
+        item: z.string().describe("The name of the event or opportunity Co sent them."),
+        reaction: z.enum(["interested", "going", "went_liked", "went_disliked", "not_for_me"]),
+        note: z.string().optional().describe("Their words, briefly, if they said why."),
+      }),
+      execute: async ({ item, reaction, note }) => {
+        const norm = (t: string) => t.toLowerCase().replace(/[^a-z0-9 ]+/g, " ").replace(/\s+/g, " ").trim();
+        const want = norm(item);
+        // The turn's one list of what Co sent (services/turnContext.ts): search results and first offers.
+        const sent = ctx.dryRun ? [] : (ctx.turn?.sent ?? (await sentItems(ctx.userId)));
+        const match = findSent(sent, item);
+        if (!ctx.dryRun && !match) {
+          notDone(`No reaction was recorded: "${item.slice(0, 80)}" isn't something Co sent them recently.`);
+          return { ok: false, error: "That isn't something Co sent them recently (check listSentOffers)." };
+        }
+        const result = REACTION_RESULT[reaction];
+        if (ctx.dryRun) {
+          console.log(`[conversationReply dryRun] would record ${result} for "${item}" (${ctx.userId})`);
+          return { ok: true };
+        }
+        if (!match) return { ok: false, error: "That isn't something Co sent them recently." };
+        await recordSuggestionOutcome(ctx.userId, match.kind, match.key, match.name, result, note ?? null);
+        ctx.facts?.add("did_this_turn", `Noted how "${match.name}" landed with them (${reaction.replace(/_/g, " ")}), so Co leans that way next time.`);
+        return { ok: true };
+      },
+    }),
+
+    // Living asks (2026-09-26): Co closes an ask when they say it's done,
+    // found, no longer wanted, or replaced by a newer one. Closed in both
+    // places it lives (services/askKind.ts closeAsk), with a receipt.
+    closeAsk: tool({
+      description: toolUse("closeAsk"),
+      inputSchema: z.object({
+        ask: z.string().describe("The ask to close, as it appears in what Co has on file for them (listOpenAsks)."),
+        reason: z.string().describe("Why, in a few words: done, found it, no longer wanted, replaced by a newer ask."),
+      }),
+      execute: async ({ ask, reason }) => {
+        const norm = (t: string) => t.toLowerCase().replace(/[^a-z0-9 ]+/g, " ").replace(/\s+/g, " ").trim();
+        const want = norm(ask);
+        if (ctx.dryRun) {
+          console.log(`[conversationReply dryRun] would close ask "${ask}" for ${ctx.userId} (${reason})`);
+          return { ok: true, closed: ask };
+        }
+        const { rows } = await pool.query(`SELECT intent FROM co_profiles WHERE user_id = $1`, [ctx.userId]);
+        const open = askEntries(rows[0]?.intent ?? null).filter((e) => e.text);
+        const hits = open.filter((e) => norm(e.text as string) === want || norm(e.text as string).includes(want) || want.includes(norm(e.text as string)));
+        if (hits.length !== 1) {
+          notDone(`No ask was closed: "${ask.slice(0, 80)}" didn't match exactly one open ask.`);
+          return { ok: false, error: hits.length ? "That matches more than one open ask. Check listOpenAsks and use the exact one." : "That isn't one of their open asks. Check listOpenAsks first." };
+        }
+        await closeAsk(ctx.userId, hits[0].id as string, `closed by Co: ${reason}`);
+        ctx.facts?.add("did_this_turn", `Closed their ask "${hits[0].text}" (${reason.slice(0, 80)}). Co stops looking for it.`);
+        return { ok: true, closed: hits[0].text };
+      },
+    }),
+
     listOpenAsks: tool({
-      description:
-        "When they ask what you're keeping an eye out for them, what you're tracking or watching for, or what's still open/pending on their asks — call this and answer from the real list. Never guess or reconstruct this from the conversation alone; asks can be older than what's visible in recent messages, or already resolved.",
+      description: toolUse("listOpenAsks"),
       inputSchema: z.object({}),
       execute: async () => {
         if (ctx.dryRun) return { ok: true, asks: [] };
@@ -325,8 +826,7 @@ export function createConversationTools(ctx: ConversationToolContext) {
     // search and sweep (co_profiles.avoid, read by eventDetails.ts's
     // explainFit), until they say they're open to it again.
     steerAwayFrom: tool({
-      description:
-        "When they say they don't want a KIND of thing anymore (\"no more hackathons\", \"stop sending me crypto stuff\", \"I'm not into big conferences\"), save it so Co stops suggesting that kind of thing everywhere. Also use it with undo=true when they say they're open to that kind of thing again. Not for turning down one specific event.",
+      description: toolUse("steerAwayFrom"),
       inputSchema: z.object({
         kind: z.string().describe("The kind of thing, short and plain, in their words: \"hackathons\", \"crypto events\"."),
         undo: z.boolean().optional().describe("true when they're open to it again."),
@@ -353,23 +853,19 @@ export function createConversationTools(ctx: ConversationToolContext) {
     // reconstructed from the last 20 texts, which could miss something older
     // or answer differently depending on how it was asked.
     listSentOffers: tool({
-      description:
-        "When they ask what you've sent them, what you recommended, or want a recap of the events/opportunities you shared — call this and answer from the real list. Never reconstruct it from the conversation alone. You can share a link from it again with shareLink.",
+      description: toolUse("listSentOffers"),
       inputSchema: z.object({}),
       execute: async () => {
         if (ctx.dryRun) return { ok: true, sent: [] };
-        const { rows } = await pool.query(
-          `SELECT item_name, kind, url, sent_at, reaction FROM revealed_offers
-           WHERE user_id = $1 AND sent_at > NOW() - INTERVAL '30 days'
-           ORDER BY sent_at DESC LIMIT 15`,
-          [ctx.userId],
-        );
-        if (!rows.length) {
+        // The turn's one list (services/turnContext.ts), last 30 days.
+        const cutoff = Date.now() - 30 * 86_400_000;
+        const items = (ctx.turn?.sent ?? (await sentItems(ctx.userId))).filter((x) => x.sentAt.getTime() > cutoff).slice(0, 15);
+        if (!items.length) {
           ctx.facts?.add("known", "Co hasn't sent them any events or opportunities in the last 30 days.");
           return { ok: true, sent: [] };
         }
         const fmt = await memberDate(ctx.userId);
-        const sent = rows.map((r: any) => ({ name: r.item_name as string, kind: r.kind as string, link: (r.url as string | null) ?? null, sentOn: fmt(r.sent_at), reaction: (r.reaction as string | null) ?? null }));
+        const sent = items.map((r) => ({ name: r.name, kind: r.kind, link: r.url, sentOn: fmt(r.sentAt), reaction: r.reaction }));
         ctx.facts?.add(
           "known",
           `What Co actually sent them in the last 30 days, newest first, the real complete list: ${sent
@@ -381,48 +877,17 @@ export function createConversationTools(ctx: ConversationToolContext) {
     }),
 
     // Search right now when they ask and nothing was searched this turn.
-    searchNow: tool({
-      description:
-        "Search right now for events, communities, or opportunities they're asking for, when no search already ran this turn. Returns real results with details; tell them about the best one with sendReply and share its link with shareLink.",
-      inputSchema: z.object({ what: z.string().describe("What to look for, one plain sentence.") }),
-      execute: async ({ what }) => {
-        if (ctx.searchedThisTurn) {
-          return { ok: true, found: [], note: "A search already ran this turn and what it found was already sent to them. Do not search again, and do not say nothing came up." };
-        }
-        const result = await searchWithTimeCap(ctx.userId, what, 40_000, "conversationTools.searchNow").catch(() => ({ available: false as const, reason: "search failed" }));
-        if (!result.available || !("matches" in result) || !result.matches?.length) {
-          ctx.facts?.add("did_this_turn", `Searched just now for "${what}" and found nothing real that fits yet.`);
-          if (!ctx.dryRun) await recordDecision({ layer: 3, decision: "reply.searchNow", userId: ctx.userId, outcome: "skip", action: "nothing_found", proposal: { what } });
-          return { ok: true, found: [], note: "Nothing real found. Say so plainly. You can offer saveAsk so Co keeps looking." };
-        }
-        const found = [];
-        for (const m of result.matches.slice(0, 2)) {
-          const em = await enrichMatch(m, { userId: ctx.userId, firstName: "them", askText: what });
-          if (em.fits === false) continue;
-          if ("url" in m && m.url) foundByUrl.set(m.url, m);
-          else foundWithoutLink.push(m);
-          const lines = em.details ? renderEventDetails(em.name, em.details) : em.opportunity ? [`What the post says: ${em.opportunity.postText}`] : [];
-          ctx.facts?.add("known", `Found just now: "${em.name}"${"url" in em && em.url ? `, link ${em.url}` : ""}. ${lines.join(" ")}${em.whyItFits ? ` Why it fits: ${em.whyItFits}` : ""}`);
-          found.push({ name: em.name, link: "url" in em ? em.url ?? null : null, details: lines, whyItFits: em.whyItFits ?? m.reason });
-        }
-        if (!found.length) {
-          ctx.facts?.add("did_this_turn", `Searched just now for "${what}"; what came up didn't fit what they asked.`);
-          return { ok: true, found: [], note: "Nothing that fits. Say so plainly. You can offer saveAsk so Co keeps looking." };
-        }
-        if (!ctx.dryRun) await recordDecision({ layer: 3, decision: "reply.searchNow", userId: ctx.userId, outcome: "act", action: "found", proposal: { what, found: found.map((f) => f.name) } });
-        return { ok: true, found };
-      },
-    }),
-
     // Send a link as its own message, only if it's actually on file.
     shareLink: tool({
-      description:
-        "Share the link (or links) for what you're about to tell them about. Each one is sent as its own message so it previews, and they go out BEFORE your reply, in the order you list them, so call this first and then describe them with sendReply. If you mention two things, share both links. Only links that appear in the facts you were given.",
+      description: toolUse("shareLink"),
       inputSchema: z.object({ urls: z.array(z.string()).min(1).max(3).describe("Every link for what you named, in the same order you named them.") }),
       execute: async ({ urls }) => {
         const known = urls.filter((u) => ctx.facts?.text().includes(u));
         const unknown = urls.filter((u) => !known.includes(u));
-        if (!known.length) return { ok: false, error: "none of those links are on file, so they can't be sent" };
+        if (!known.length) {
+          notDone("A link was not sent: it isn't on file.");
+          return { ok: false, error: "none of those links are on file, so they can't be sent" };
+        }
         state.pendingLinks.push(...known);
         for (const url of known) ctx.facts?.add("did_this_turn", `Sent the link ${url} as its own message.`);
         await flushLinks();
@@ -435,8 +900,7 @@ export function createConversationTools(ctx: ConversationToolContext) {
     // from a real Co event — resolveNamedEventGuest looks them up on that
     // event's actual guest list, never invents someone.
     requestEventIntro: tool({
-      description:
-        "When they say they met someone specific at a Co event who Co never nudged them about, and they want to be connected — look that person up on the real guest list and start the same double opt-in intro Co uses for its own matches. Only for a real person from a real Co event they actually attended, never a stranger with no shared event.",
+      description: toolUse("requestEventIntro"),
       inputSchema: z.object({
         personName: z.string().describe("The first name (or full name) they used for the person they met."),
       }),
@@ -472,7 +936,10 @@ export function createConversationTools(ctx: ConversationToolContext) {
         }
         const { rows } = await pool.query(`SELECT first_name, phone_number, email FROM users WHERE id = $1`, [ctx.userId]);
         const requester = rows[0];
-        if (!requester) return { ok: false, error: "couldn't look up their own contact details" };
+        if (!requester) {
+          notDone(`The intro request for ${personName} was not made.`);
+          return { ok: false, error: "couldn't look up their own contact details" };
+        }
         await requestIntroToNamedGuest(
           resolved.eventId,
           resolved.eventName,
@@ -501,8 +968,7 @@ export function createConversationTools(ctx: ConversationToolContext) {
     }),
 
     markTopicAsked: tool({
-      description:
-        "Record that you actually asked about a rapport topic in the reply you sent. Only call this if you used the suggested topic in the message you sent via sendReply.",
+      description: toolUse("markTopicAsked"),
       inputSchema: z.object({
         topic: z.enum(RAPPORT_TOPICS),
       }),
@@ -511,7 +977,77 @@ export function createConversationTools(ctx: ConversationToolContext) {
         return { ok: true };
       },
     }),
+
+    // Passing their words to someone they're connected to, or a reminder to
+    // follow up (services/relay.ts). The guards live in relayMessage: off
+    // unless CO_RELAY=on, only their own words, only connected people, one a
+    // day per person, nothing about anyone else.
+    followUp: tool({
+      description: toolUse("followUp"),
+      inputSchema: z.object({
+        mode: z.enum(["relay", "remind_me"]),
+        person: z.string().describe("relay: the first name of the person they asked you to pass it to."),
+        message: z.string().describe("relay: their exact words to pass along, copied from what they texted. remind_me: what to remind them about."),
+        when: z.string().optional().describe("remind_me: the day and time they gave, as an ISO date-time in their local time, e.g. 2026-10-01T15:00."),
+      }),
+      execute: async ({ mode, person, message, when }) => {
+        const relay = await import("../services/relay.js");
+        if (mode === "remind_me") {
+          if (ctx.dryRun) {
+            ctx.facts?.add("did_this_turn", `Set a reminder for them: "${message.slice(0, 160)}"${when ? ` at ${when}` : ""}.`);
+            return { ok: true };
+          }
+          const { rows } = await pool.query(`SELECT city FROM co_profiles WHERE user_id = $1`, [ctx.userId]).catch(() => ({ rows: [] as any[] }));
+          const zone = rows[0]?.city ? await getTimezoneForCity(rows[0].city).catch(() => null) : null;
+          const r = await relay.addReminder(ctx.userId, message, when ?? "", zone);
+          if (!r.ok) {
+            notDone("No reminder was set.");
+            return { ok: false, error: r.error };
+          }
+          ctx.facts?.add("did_this_turn", `Set a reminder for them for ${r.at}: "${message.slice(0, 160)}".`);
+          return { ok: true, note: `Reminder set for ${r.at}.` };
+        }
+        if (ctx.dryRun) {
+          // Same guards as a real relay, minus the send.
+          if (!relay.relayEnabled()) return { ok: false, error: "Passing messages to other members isn't switched on yet. Say so plainly; don't offer it." };
+          if (!relay.isOwnWords(message, [ctx.resolvedContent])) return { ok: false, error: "Only their own words can be passed along. Ask them exactly what they want sent, then pass that." };
+          const found = relay.matchConnection(person, await relay.connectionsFor(ctx.userId).catch(() => []));
+          if (!found.ok) {
+            notDone("No message was passed along: Co can't reach that person.");
+            return { ok: false, error: relay.NOT_REACHABLE };
+          }
+          ctx.facts?.add("did_this_turn", `(dry run) Would pass their words to ${found.person.firstName}: "${message.slice(0, 160)}".`);
+          return { ok: true };
+        }
+        const r = await relay.relayMessage({ fromUserId: ctx.userId, fromFirstName: ctx.firstName ?? "A member", to: person, message, currentText: ctx.resolvedContent });
+        if (!r.ok) {
+          notDone(r.reason === "not_reachable" ? "No message was passed along: Co can't reach that person." : `No message was passed along (${r.reason}).`);
+          return { ok: false, error: r.error };
+        }
+        ctx.facts?.add("did_this_turn", `Passed their words to ${r.to}: "${message.slice(0, 200)}". ${r.note}`);
+        return { ok: true, note: `${r.note} Say it went through; don't promise ${r.to} will reply.` };
+      },
+    }),
   };
 
+  // Leaving it at the reaction needs a reaction to have gone out this turn.
+  if (!ctx.ackSent) delete (tools as Record<string, unknown>).leaveItAtReaction;
+  // Team-only tools never exist for anyone else (services/capabilities.ts teamOnly).
+  if (!ctx.isTeam) for (const name of teamOnlyTools()) delete (tools as Record<string, unknown>)[name];
+  // Tools that can't apply this turn aren't offered (capabilities.ts situations).
+  if (ctx.turn) {
+    const t = ctx.turn;
+    const s = situationFor({ kitFields: Object.keys(t.kit ?? {}).length, message: ctx.resolvedContent, openTasks: t.tasks?.length ?? 0, eventToday: !!t.todayEvent });
+    for (const name of toolsOutOfSituation(s)) delete (tools as Record<string, unknown>)[name];
+  }
+
+  // Finding things: Co's own loop (agent/loop.ts), general tools it chains itself.
+  Object.assign(tools, loopTools(ctx, state, newLoopState(ctx.turnStartedAt), notDone));
+
+  // Google Calendar and Gmail, read-only (services/googleTools.ts).
+  Object.assign(tools, googleTools(ctx, notDone));
+
+  // Switches, limits, their yes, receipts and the decision log (toolGuard.ts).
+  guardTools(tools, { userId: ctx.userId, resolvedContent: ctx.resolvedContent, dryRun: ctx.dryRun, notDone });
   return { tools, state, flushLinks };
 }

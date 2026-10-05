@@ -17,6 +17,7 @@
 //     frame (services/askWindow.ts), never taken from the model;
 //   - staleness only ever moves a thread to "waiting", never closed.
 // Read only with the owner's user id; nothing here ever goes to another member.
+import { notToTeammate } from "../services/teamLines.js";
 import { anthropic } from "@ai-sdk/anthropic";
 import { generateText } from "ai";
 import { DateTime } from "luxon";
@@ -234,7 +235,7 @@ export async function ownLines(userId: string, days = LOOKBACK_DAYS): Promise<Ow
   const { rows } = await pool.query(
     `SELECT created_at, memory_type, content FROM co_memories
      WHERE user_id = $1 AND created_at > NOW() - make_interval(days => $2)
-       AND ((memory_type = 'text_exchange' AND content LIKE 'User said:%') OR memory_type = 'call_transcript')
+       AND ((memory_type = 'text_exchange' AND content LIKE 'User said:%' AND ${notToTeammate()}) OR memory_type = 'call_transcript')
      ORDER BY created_at LIMIT 200`,
     [userId, days],
   );
@@ -310,7 +311,30 @@ export async function updateMemberThreads(userId: string): Promise<void> {
       experimental_telemetry: { isEnabled: true, functionId: "memberThreads.update" },
       prompt: threadsPrompt(firstName, onFile, lines.slice(-80)),
     });
-    const parsed = parseModelJson<{ open?: ProposedOpen[]; close?: ProposedClose[] }>(text);
+    await applyThreadProposal(userId, parseModelJson<{ open?: ProposedOpen[]; close?: ProposedClose[] }>(text), onFile, lines);
+  } catch (err: any) {
+    console.error("updateMemberThreads failed (non-fatal):", err?.message ?? err);
+  }
+}
+
+// What the threads read needs, loaded once (the snapshot rebuild folds the
+// threads read into its own call: harness/personSnapshot.ts).
+export async function threadInputs(userId: string): Promise<{ lines: OwnLine[]; onFile: MemberThread[] }> {
+  const [lines, onFile] = await Promise.all([ownLines(userId), listThreads(userId)]);
+  return { lines, onFile };
+}
+
+// Everything updateMemberThreads does after its model call: the same gates
+// (quotes of their own words, their own dates) and writes.
+export async function applyThreadProposal(
+  userId: string,
+  parsed: { open?: ProposedOpen[]; close?: ProposedClose[] } | null | undefined,
+  onFile: MemberThread[],
+  lines: OwnLine[],
+): Promise<void> {
+  try {
+    if (!lines.length) return;
+    parsed = parsed ?? {};
     const zone = await zoneFor(userId);
     const { opened, closed, checks } = gateThreadChanges(parsed.open ?? [], parsed.close ?? [], onFile, lines, zone);
 

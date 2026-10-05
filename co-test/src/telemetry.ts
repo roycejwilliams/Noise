@@ -1,6 +1,7 @@
 import { NodeSDK } from "@opentelemetry/sdk-node";
 import { LangfuseSpanProcessor } from "@langfuse/otel";
 import { LlmUsageSpanProcessor } from "../../api/src/services/llmUsage.js";
+import { onShutdown } from "../../api/src/services/shutdown.js";
 
 // Same wiring as api/src/telemetry.ts — separate call because co-test is its
 // own Node process with its own entry point, so api/'s initTelemetry() never
@@ -26,5 +27,8 @@ export function initTelemetry(): void {
       }),
     );
   }
-  new NodeSDK({ spanProcessors }).start();
+  const sdk = new NodeSDK({ spanProcessors });
+  sdk.start();
+  // On a restart, send the last buffered cost rows and traces before exit.
+  onShutdown(() => sdk.shutdown());
 }

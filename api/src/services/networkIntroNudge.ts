@@ -1,4 +1,5 @@
 import { generateText } from "ai";
+import { discretionInstruction } from "../harness/discretion.js";
 import { anthropic } from "@ai-sdk/anthropic";
 import { Resend } from "resend";
 import pool from "../db/db.js";
@@ -13,6 +14,8 @@ import { checkBothYes, draftWithConsent, gateIntroAction, networkOptedIn } from 
 import { getActiveAsks } from "./matching.js";
 import { getTimezoneForCity } from "./geocoding.js";
 import { MODELS } from "../models.js";
+import { CO_EMAIL_FROM } from "./emailFrom.js";
+import { galleryEmail } from "./emailDesign.js";
 
 // Model policy (Royce, 2026-09-14): Haiku for the yes/no reply reads (code
 // acts on them only through the consent checks); Sonnet 5 for drafts that
@@ -167,7 +170,9 @@ export async function attemptNetworkSurfacing(
   return { queued };
 }
 
-export type PendingNetworkTease = { askId: string; candidate: NetworkCandidate };
+// reveal: the message that answers "yes", drafted and checked before the tease
+// went out (prepareReveal), so a yes always has something to deliver.
+export type PendingNetworkTease = { askId: string; candidate: NetworkCandidate; reveal?: string; revealOptedIn?: boolean };
 
 export async function findPendingNetworkTease(userId: string): Promise<PendingNetworkTease | null> {
   const { rows } = await pool.query(
@@ -196,6 +201,72 @@ async function stashIntroOfferPending(personId: string, candidate: NetworkCandid
       JSON.stringify({ askId, candidate }),
     ])
     .catch((err: any) => console.error("stashIntroOfferPending: write failed (non-fatal):", err?.message ?? err));
+}
+
+// The reveal text for a candidate: consent-checked and in Co's voice. null when
+// the draft can't go out.
+async function draftReveal(userId: string, firstName: string, candidate: NetworkCandidate): Promise<string | null> {
+  const candidateId = candidate.candidate_id;
+  return draftWithConsent(
+    {
+      decision: "networkIntroNudge.reveal",
+      recipientId: userId,
+      otherUserIds: [candidateId],
+      facts: {
+        otherFirstName: candidate.first_name,
+        otherOptedIn: await networkOptedIn(candidateId, userId),
+        recipientOptedIn: false,
+        recipientFirstName: firstName,
+        otherStatedAsks: await statedAsksFor(candidateId),
+        otherPhone: candidate.phone_number,
+        otherEmail: candidate.email,
+      },
+    },
+    async (feedback) => {
+      const { text } = await generateText({
+        model: anthropic(NAMING_DRAFT_MODEL),
+        experimental_telemetry: { isEnabled: true, functionId: "networkIntroNudge.reveal.draft" },
+        prompt: networkRevealPrompt({ recipientFirstName: firstName, otherFirstName: candidate.first_name, shareReason: candidate.match_reason, feedback }),
+      });
+      return cleanCoMessage(text.trim());
+    },
+  );
+}
+
+// Before a tease goes out ("someone came to mind, want to hear who?"), the
+// answer to "yes" is made and checked: the same privacy gate the reveal runs,
+// and the reveal itself drafted. A tease that couldn't be answered used to go
+// out anyway and a "Sure" got "Sorry for the false start." (2026-10-03, then a
+// second tease at 1pm). why says what stopped it.
+// retry: a draft that failed is worth trying again later; a gate that said no
+// won't change its mind (review of #59: a flaky draft used to drop the match for good).
+export async function prepareReveal(userId: string, firstName: string, candidate: NetworkCandidate): Promise<{ message: string; optedIn: boolean } | { why: string; retry: boolean }> {
+  if (!(await gateNetworkCandidate(userId, candidate.candidate_id, candidate.match_reason, "reveal"))) return { why: "the privacy check on the reveal wouldn't pass", retry: false };
+  const optedIn = await networkOptedIn(candidate.candidate_id, userId);
+  const message = await draftReveal(userId, firstName, candidate);
+  return message ? { message, optedIn } : { why: "the reveal couldn't be drafted", retry: true };
+}
+
+// They said yes to hearing who, and no reveal followed: the reveal stashes
+// network_intro_offer_pending when it goes out. While that's true no new tease
+// is sent ("asked, got yes, delivered nothing, asked again"). Clears itself
+// after 3 days.
+export const UNDELIVERED_YES_DAYS = 3;
+export async function lastTeaseUndelivered(userId: string): Promise<boolean> {
+  const { rows } = await pool
+    .query(
+      `SELECT 1 FROM co_memories r
+       WHERE r.user_id = $1 AND r.memory_type = 'network_offer_resolved' AND r.content = 'interested'
+         AND r.created_at > NOW() - ($2 || ' days')::interval
+         AND NOT EXISTS (
+           SELECT 1 FROM co_memories s
+           WHERE s.user_id = $1 AND s.memory_type = 'network_intro_offer_pending' AND s.created_at > r.created_at
+         )
+       LIMIT 1`,
+      [userId, UNDELIVERED_YES_DAYS],
+    )
+    .catch(() => ({ rows: [] as unknown[] }));
+  return rows.length > 0;
 }
 
 // Resolves a reply to the tease — called from routes/sendblue.ts. On
@@ -237,32 +308,17 @@ export async function resolveNetworkTeaseReply(
   // Re-gate at reveal time: the candidate may have gone inactive, been
   // introduced another way, or the reason may not pass the privacy check.
   const candidateId = pending.candidate.candidate_id;
-  const cantReveal = `\nThey said yes to hearing who it was, but that introduction isn't available anymore. Say so briefly and honestly, don't name or describe anyone, and don't promise another one.`;
+  // A block is discretion, not a failure: no explanation, no apology, no "it fell
+  // through" (2026-10-03: this said "say so briefly and honestly" and a "Sure"
+  // got "Sorry for the false start."). harness/discretion.ts.
+  const cantReveal = discretionInstruction("They said yes to hearing who it was, and you can't go further on that one. Don't promise another one.", { neutral: true });
   if (!(await gateNetworkCandidate(userId, candidateId, pending.candidate.match_reason, "reveal"))) return cantReveal;
 
-  const message = await draftWithConsent(
-    {
-      decision: "networkIntroNudge.reveal",
-      recipientId: userId,
-      facts: {
-        otherFirstName: pending.candidate.first_name,
-        otherOptedIn: await networkOptedIn(candidateId, userId),
-        recipientOptedIn: false,
-        recipientFirstName: firstName,
-        otherStatedAsks: await statedAsksFor(candidateId),
-        otherPhone: pending.candidate.phone_number,
-        otherEmail: pending.candidate.email,
-      },
-    },
-    async (feedback) => {
-      const { text } = await generateText({
-        model: anthropic(NAMING_DRAFT_MODEL),
-        experimental_telemetry: { isEnabled: true, functionId: "networkIntroNudge.reveal.draft" },
-        prompt: networkRevealPrompt({ recipientFirstName: firstName, otherFirstName: pending.candidate.first_name, shareReason: pending.candidate.match_reason, feedback }),
-      });
-      return cleanCoMessage(text.trim());
-    },
-  );
+  // The stored reveal was drafted under the other person's consent at the time;
+  // if that changed since the tease, it's drafted again (the gate above covers
+  // activity and privacy).
+  const stillConsented = pending.reveal && pending.revealOptedIn !== undefined ? (await networkOptedIn(candidateId, userId)) === pending.revealOptedIn : false;
+  const message = pending.reveal && stillConsented ? pending.reveal : await draftReveal(userId, firstName, pending.candidate);
   if (!message) return cantReveal;
 
   try {
@@ -323,7 +379,13 @@ async function sendNetworkIntroEmail(a: MatchNudgeCandidate, b: MatchNudgeCandid
   const [aYes, bYes] = await Promise.all([networkOptedIn(a.user_id, b.user_id), networkOptedIn(b.user_id, a.user_id)]);
   if (!(await gateIntroAction(a.user_id, "networkIntroNudge.introEmail", [checkBothYes(aYes, bYes)], { b: b.user_id }))) return false;
   const subject = `Introducing ${a.first_name} and ${b.first_name}`;
-  const html = `<p>Hi both,</p><p>${matchReason}</p><p>Figured you two should actually meet — consider this your intro, take it from here.</p><p>— Co</p>`;
+  const html = galleryEmail({
+    preview: `Co thinks you two should meet.`,
+    eyebrow: "An introduction",
+    headline: `${a.first_name}, meet ${b.first_name}.`,
+    body: [matchReason, "Co figured you two should actually meet. Consider this your introduction."],
+    close: "You both said yes. Take it from here.",
+  });
   if (!ALLOW_REAL_SENDS) {
     console.log(`[sendNetworkIntroEmail stub, ${process.env.NODE_ENV ?? "no NODE_ENV"}] to ${a.email}, ${b.email}: ${subject}`);
   } else {
@@ -336,7 +398,7 @@ async function sendNetworkIntroEmail(a: MatchNudgeCandidate, b: MatchNudgeCandid
       // and email has no natural "@-mention" convention the way a group
       // chat does, so Co doesn't act on anything that comes back here; the
       // real outcome signal stays the existing proactive SMS check-in.
-      const { error } = await resend.emails.send({ from: "Co <hello@copatible.com>", to: [a.email, b.email], cc: ["hello@copatible.com"], subject, html });
+      const { error } = await resend.emails.send({ from: CO_EMAIL_FROM, to: [a.email, b.email], cc: ["hello@copatible.com"], subject, html });
       if (error) throw new Error(error.message);
     } catch (err: any) {
       console.error("sendNetworkIntroEmail: send failed (non-fatal):", err?.message ?? err);
@@ -344,6 +406,8 @@ async function sendNetworkIntroEmail(a: MatchNudgeCandidate, b: MatchNudgeCandid
     }
   }
   await writeMemory(a.user_id, "event_intro_email_sent", `Sent a network intro email connecting ${a.first_name} and ${b.first_name}: ${matchReason}`);
+  // Introduced after both said yes: the only people a relay can reach (services/relay.ts).
+  await import("./relay.js").then((r) => r.recordConnection(a.user_id, b.user_id, "network_intro")).catch(() => {});
   return true;
 }
 
@@ -355,6 +419,7 @@ async function askCandidateDirectly(candidate: MatchNudgeCandidate, asker: Match
     {
       decision: "networkIntroNudge.directAsk",
       recipientId: candidate.user_id,
+      otherUserIds: [asker.user_id],
       preChecks: [
         askerOptedIn
           ? { name: "asker_opted_in", pass: true }
@@ -446,17 +511,26 @@ export async function resolveNetworkIntroReply(
     `INSERT INTO network_introductions (person_a_id, person_b_id, status, match_reason, ask_id, ${interestedCol})
      VALUES ($1, $2, $3, $4, $5, NOW())
      ON CONFLICT (person_a_id, person_b_id) DO UPDATE SET
-       ${interestedCol} = NOW(),
-       status = CASE WHEN network_introductions.${otherInterestedCol} IS NOT NULL THEN 'both_interested' ELSE $3 END
+       ${interestedCol} = COALESCE(network_introductions.${interestedCol}, NOW()),
+       status = CASE WHEN network_introductions.status IN ('introduced', 'declined') THEN network_introductions.status
+                     WHEN network_introductions.${otherInterestedCol} IS NOT NULL THEN 'both_interested' ELSE $3 END
      RETURNING status, ${otherInterestedCol} IS NOT NULL AS both_interested`,
     [aId, bId, initialStatus, pending.candidate.match_reason, pending.askId],
   );
   const bothInterested = rows[0]?.both_interested === true;
+  // Already introduced (a repeated reply, a retried turn): no second intro.
+  if (rows[0]?.status === "introduced") {
+    return `\nThey said yes to ${pending.candidate.first_name} again; the two of them were already introduced by email. Acknowledge briefly, don't send or promise another intro.`;
+  }
 
   if (bothInterested) {
-    await pool
-      .query(`UPDATE network_introductions SET status = 'introduced', introduced_at = NOW() WHERE person_a_id = $1 AND person_b_id = $2`, [aId, bId])
-      .catch((err: any) => console.error("resolveNetworkIntroReply: introduced-mark failed (non-fatal):", err?.message ?? err));
+    // Only the call that marks it introduced sends the email (2026-10-01 next-live run: two calls sent two).
+    const claimed = await pool
+      .query(`UPDATE network_introductions SET status = 'introduced', introduced_at = NOW() WHERE person_a_id = $1 AND person_b_id = $2 AND status <> 'introduced' RETURNING 1`, [aId, bId])
+      .then((r) => r.rows.length > 0)
+      // A failed mark keeps the old behaviour (send); only a confirmed "already introduced" stops it.
+      .catch((err: any) => { console.error("resolveNetworkIntroReply: introduced-mark failed (non-fatal):", err?.message ?? err); return null; });
+    if (claimed === false) return `\nThey said yes to ${pending.candidate.first_name}; that intro has already gone out. Acknowledge briefly, don't send or promise another.`;
     const candidateInfo: MatchNudgeCandidate = {
       user_id: pending.candidate.candidate_id,
       first_name: pending.candidate.first_name,

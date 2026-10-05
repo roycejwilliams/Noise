@@ -13,6 +13,7 @@
 // statements replace older ones; nothing about Co's own performance. The
 // knowledge eval (evals/knowledge) checks a stale profile plus newer texts
 // produce the newer facts.
+import { notToTeammate } from "../services/teamLines.js";
 import { anthropic } from "@ai-sdk/anthropic";
 import { generateText } from "ai";
 import pool from "../db/db.js";
@@ -60,6 +61,7 @@ Rules:
 - Newer statements replace older ones. If they said they're Series A, they're not pre-seed anymore, whatever the old picture says.
 - Only what they actually said or what's listed above. No guesses about their feelings or circumstances.
 - Only about them. Never about Co, Co's mistakes, or complaints about Co.
+- Mo is an AI agent that works alongside Co, not a person in their life. Never list Mo as a cofounder, colleague or friend, even if an older picture did: drop it.
 - Refer to them by name or as "they". Never "he" or "she" unless they told Co their pronouns (2026-09-22: a picture called a member "he" from their name alone).
 - Keep every list short (at most 4 items), specific, and current. Drop anything resolved or contradicted.
 
@@ -131,7 +133,7 @@ async function gatherInputs(userId: string): Promise<SnapshotInputs | null> {
     pool.query(`SELECT first_name FROM users WHERE id = $1`, [userId]),
     pool.query(
       `SELECT created_at, content FROM co_memories
-       WHERE user_id = $1 AND memory_type = 'text_exchange' AND (content LIKE 'User said:%' OR content LIKE '[Call]%')
+       WHERE user_id = $1 AND memory_type = 'text_exchange' AND (content LIKE 'User said:%' OR content LIKE '[Call]%') AND ${notToTeammate()}
          AND created_at > NOW() - INTERVAL '21 days'
        ORDER BY created_at DESC LIMIT 60`,
       [userId],
@@ -210,13 +212,37 @@ async function checkSnapshot(userId: string, snapshot: PersonSnapshot, recent: {
   }
 }
 
+// The snapshot rebuild and the open-threads read used to be two calls on the
+// same beat over the same words (2026-09-28, reply-path restructure phase 4).
+// The first build now does both, with each prompt's own wording; the
+// snapshot's check and one fix-up rebuild are unchanged, and the threads
+// proposal goes through the same gates (harness/memberThreads.ts).
+function promptBody(prompt: string): { body: string; shape: string } {
+  const i = prompt.lastIndexOf("Return ONLY JSON:");
+  return i < 0 ? { body: prompt, shape: "{}" } : { body: prompt.slice(0, i).trim(), shape: prompt.slice(i + "Return ONLY JSON:".length).trim() };
+}
+
+export function snapshotAndThreadsPrompt(snapshotPromptText: string, threadsPromptText: string): string {
+  const a = promptBody(snapshotPromptText);
+  const b = promptBody(threadsPromptText);
+  return `Two tasks about the same person, from the same words. Do both.
+
+TASK 1: THE PICTURE
+${a.body}
+
+TASK 2: OPEN THREADS
+${b.body}
+
+Return ONLY JSON: {"snapshot": ${a.shape}, "threads": ${b.shape}}`;
+}
+
 // Non-blocking callers: fire and forget. Returns whether it rebuilt.
 export async function refreshPersonSnapshot(userId: string, opts: { force?: boolean } = {}): Promise<boolean> {
   try {
     if (!opts.force) {
       const { rows } = await pool.query(
         `SELECT s.updated_at,
-                (SELECT MAX(created_at) FROM co_memories m WHERE m.user_id = $1 AND m.memory_type = 'text_exchange' AND (m.content LIKE 'User said:%' OR m.content LIKE '[Call]%')) AS newest
+                (SELECT MAX(created_at) FROM co_memories m WHERE m.user_id = $1 AND m.memory_type = 'text_exchange' AND (m.content LIKE 'User said:%' OR m.content LIKE '[Call]%') AND ${notToTeammate('m')}) AS newest
          FROM (SELECT $1::uuid AS user_id) u LEFT JOIN person_snapshots s ON s.user_id = u.user_id`,
         [userId],
       );
@@ -226,6 +252,9 @@ export async function refreshPersonSnapshot(userId: string, opts: { force?: bool
     }
     const input = await gatherInputs(userId);
     if (!input || (!input.recentStatements.length && !input.openAsks.length)) return false;
+    // Loaded here so the many light importers of this file don't pull in the send path.
+    const threads = await import("./memberThreads.js");
+    const { lines, onFile } = await threads.threadInputs(userId);
     const build = async (feedback: string | null) => {
       const { text } = await generateText({
         model: anthropic(MODELS.sonnet),
@@ -235,7 +264,25 @@ export async function refreshPersonSnapshot(userId: string, opts: { force?: bool
       });
       return parseSnapshot(text);
     };
-    let snapshot = await build(null);
+    // First build: the picture and the threads in one call.
+    let threadProposal: { open?: any[]; close?: any[] } | null = null;
+    let snapshot: PersonSnapshot | null;
+    if (lines.length) {
+      const { text } = await generateText({
+        model: anthropic(MODELS.sonnet),
+        providerOptions: { anthropic: { effort: "low" } },
+        experimental_telemetry: { isEnabled: true, functionId: "personSnapshot.rebuildWithThreads" },
+        prompt: snapshotAndThreadsPrompt(snapshotPrompt(input), threads.threadsPrompt(input.firstName, onFile, lines.slice(-80))),
+      });
+      let both: any = null;
+      try {
+        both = parseModelJson<any>(text);
+      } catch {}
+      snapshot = both?.snapshot ? parseSnapshot(JSON.stringify(both.snapshot)) : null;
+      threadProposal = both?.threads && typeof both.threads === "object" ? both.threads : null;
+    } else {
+      snapshot = await build(null);
+    }
     if (!snapshot) return false;
     // Check against the last 48 hours; one rebuild with the problems named.
     const cutoff = new Date(Date.now() - 48 * 3600_000).toISOString().slice(0, 16);
@@ -272,10 +319,8 @@ export async function refreshPersonSnapshot(userId: string, opts: { force?: bool
     );
     await recordDecision({ layer: 4, decision: "profile.snapshot", userId, outcome: "act", action: "rebuilt", proposal: { previous: input.previous, snapshot } });
     // Their open threads move on the same beat: after they've said something
-    // new (2026-09-22, harness/memberThreads.ts). Loaded here so the many
-    // light importers of this file don't pull in the send path.
-    const { updateMemberThreads } = await import("./memberThreads.js");
-    await updateMemberThreads(userId);
+    // new (2026-09-22, harness/memberThreads.ts), from the same first call.
+    if (lines.length) await threads.applyThreadProposal(userId, threadProposal, onFile, lines);
     return true;
   } catch (err: any) {
     console.error("refreshPersonSnapshot failed (non-fatal):", err?.message ?? err);

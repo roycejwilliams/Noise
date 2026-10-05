@@ -1,3 +1,4 @@
+import { reportRecipient } from "../services/reportEmail.js";
 import { randomInt, randomUUID } from "crypto";
 import { Router } from "express"; // isolated, modular instance of routes and middleware
 import jwt from "jsonwebtoken";
@@ -14,6 +15,7 @@ import {
   decideOtpVerify,
   otpLockMinutes,
 } from "./accountRules.js";
+import { CO_EMAIL_FROM } from "../services/emailFrom.js";
 
 function generateOTP() {
   return randomInt(100000, 1000000);
@@ -26,14 +28,14 @@ async function alertTeamAccountLocked(userId: string, lockMinutes: number): Prom
   try {
     const { rows } = await pool.query(`SELECT first_name, email, phone_number FROM users WHERE id = $1`, [userId]);
     const u = rows[0];
-    const to = process.env.TEAM_ALERT_EMAIL ?? "team@copatible.com";
+    const to = reportRecipient();
     const subject = `Co account locked: ${u?.first_name ?? "unknown"} (${u?.phone_number ?? userId})`;
     const html = `<p>An account hit 5 wrong verification codes and is locked for ${lockMinutes} minutes. It unlocks on its own after that.</p><p>Name: ${u?.first_name ?? "—"}<br>Email: ${u?.email ?? "—"}<br>Phone: ${u?.phone_number ?? "—"}<br>User id: ${userId}</p>`;
     if (!ALLOW_REAL_SENDS) {
       console.log(`[alertTeamAccountLocked stub] to ${to}: ${subject}`);
       return;
     }
-    const { error } = await new Resend(process.env.RESEND_API_KEY).emails.send({ from: "Co <hello@copatible.com>", to: [to], subject, html });
+    const { error } = await new Resend(process.env.RESEND_API_KEY).emails.send({ from: CO_EMAIL_FROM, to: [to], subject, html });
     if (error) throw new Error(error.message);
   } catch (err: any) {
     console.error("auth: account-locked team alert failed (non-fatal):", err?.message ?? err);

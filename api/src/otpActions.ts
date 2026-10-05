@@ -2,6 +2,8 @@ import { Resend } from "resend";
 import "dotenv/config";
 import sendblue from "./services/sendblue.js";
 import { CARD, HOW_IT_WORKS, NAME_EMAIL, WELCOME, pickLine } from "./services/onboardingLines.js";
+import { CO_EMAIL_FROM } from "./services/emailFrom.js";
+import { letterpressEmail, quietEmail, spacedCode } from "./services/emailDesign.js";
 
 // Real sends are on by default in production, and everywhere else only
 // with an explicit opt-in — co-test sets ALLOW_REAL_SMS=true because its
@@ -40,47 +42,6 @@ interface MessageProp {
   welcome?: boolean;
   welcome_back?: boolean;
 }
-
-const EMAIL_STYLES = `
-  body,.body-bg{background:#000000!important;}
-  .wrapper{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;max-width:480px;margin:0 auto;padding:48px 32px;background:#000000;}
-  .brand{font-size:11px;letter-spacing:4px;text-transform:uppercase;color:#444444;margin:0 0 48px 0;}
-  .h1{font-size:28px;font-weight:600;letter-spacing:-0.5px;margin:0 0 16px 0;color:#ffffff;}
-  .p{font-size:15px;color:#666666;line-height:1.6;margin:0 0 24px 0;}
-  .otp-box{border:1px solid #222222;border-radius:4px;padding:28px;text-align:center;letter-spacing:12px;font-size:28px;font-weight:700;color:#ffffff;margin:0 0 24px 0;}
-  .footer-text{font-size:11px;letter-spacing:2px;text-transform:uppercase;color:#333333;margin-top:32px;}
-  .muted-sm{font-size:11px;letter-spacing:2px;text-transform:uppercase;color:#333333;margin-top:32px;}
-  .cta-btn{display:inline-block;padding:14px 32px;background:#ffffff;color:#000000;text-decoration:none;font-size:14px;font-weight:600;letter-spacing:-0.1px;border-radius:6px;margin:0 auto;}
-  .cta-wrap{text-align:center;margin:8px 0 24px 0;}
-  @media(prefers-color-scheme:light){
-    body,.body-bg{background:#f2f2f2!important;}
-    .wrapper{background:#ffffff!important;}
-    .brand{color:#aaaaaa!important;}
-    .h1{color:#0a0a0a!important;}
-    .p{color:#555555!important;}
-    .otp-box{border-color:#e0e0e0!important;color:#0a0a0a!important;}
-    .footer-text{color:#aaaaaa!important;}
-    .muted-sm{color:#aaaaaa!important;}
-    .cta-btn{background:#0a0a0a!important;color:#ffffff!important;}
-  }
-`;
-
-const BRAND = `<p class="brand" style="font-size:11px;letter-spacing:4px;text-transform:uppercase;color:#444444;margin:0 0 48px 0;">Co</p>`;
-const FOOTER = `<p class="footer-text" style="font-size:11px;letter-spacing:2px;text-transform:uppercase;color:#333333;margin-top:32px;">Co is intentional. So is this.</p>`;
-const OTP_BOX = (code: string) =>
-  `<div class="otp-box" style="border:1px solid #222222;border-radius:4px;padding:28px;text-align:center;letter-spacing:12px;font-size:28px;font-weight:700;color:#ffffff;margin:0 0 24px 0;">${code}</div>`;
-
-const emailTemplate = (body: string) =>
-  `<!DOCTYPE html><html lang="en"><head><meta charset="UTF-8"><meta name="viewport" content="width=device-width,initial-scale=1.0"><meta name="color-scheme" content="light dark"><meta name="supported-color-schemes" content="light dark"><style>${EMAIL_STYLES}</style></head><body class="body-bg" style="margin:0;padding:0;background:#000000;"><div class="wrapper" style="font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;max-width:480px;margin:0 auto;padding:48px 32px;background:#000000;">${BRAND}${body}${FOOTER}</div></body></html>`;
-
-const h1 = (text: string) =>
-  `<h1 class="h1" style="font-size:28px;font-weight:600;letter-spacing:-0.5px;margin:0 0 16px 0;color:#ffffff;">${text}</h1>`;
-
-const p = (text: string) =>
-  `<p class="p" style="font-size:15px;color:#666666;line-height:1.6;margin:0 0 24px 0;">${text}</p>`;
-
-const ctaButton = (label: string, href: string) =>
-  `<div class="cta-wrap" style="text-align:center;margin:8px 0 24px 0;"><a href="${href}" class="cta-btn" style="display:inline-block;padding:14px 32px;background:#ffffff;color:#000000;text-decoration:none;font-size:14px;font-weight:600;letter-spacing:-0.1px;border-radius:6px;">${label}</a></div>`;
 
 export const sendSMS = async ({
   phone_number,
@@ -195,127 +156,92 @@ export const sendEmail = async ({
   try {
     if (!email) return;
 
+    // Design: services/emailDesign.ts (Figma "Email Campaigns", 2026-09-24).
+    // Codes and account notes use Quiet; the welcome uses Letterpress.
+    const send = (subject: string, html: string) => resend.emails.send({ from: CO_EMAIL_FROM, to: email, subject, html });
+
     if (appsubmit) {
-      await resend.emails.send({
-        from: "Co <hello@copatible.com>",
-        to: email,
-        subject: `New Request — ${applicant?.first_name} ${applicant?.last_name}`,
-        html: emailTemplate(
-          h1("Someone's at the door.") +
-            p(`${applicant?.first_name} ${applicant?.last_name} wants in.`) +
-            p(`${applicant?.email}`) +
-            `<p class="muted-sm" style="font-size:11px;letter-spacing:2px;text-transform:uppercase;color:#333333;margin-top:32px;">Let them in or leave them waiting.</p>`,
-        ),
-      });
+      const name = `${applicant?.first_name ?? ""} ${applicant?.last_name ?? ""}`.trim();
+      await send(
+        `New request: ${name}`,
+        quietEmail({ preview: `${name} wants in.`, headline: "Someone's at the door.", lines: [`${name} wants in.`, applicant?.email ?? ""].filter(Boolean), note: "Let them in or leave them waiting.", signOff: false }),
+      );
     }
 
     if (status === "accepted") {
-      await resend.emails.send({
-        from: "Co <hello@copatible.com>",
-        to: email,
-        subject: `Welcome to Co.`,
-        html: emailTemplate(
-          h1("You were chosen.") +
-            p(
-              "Your access code is waiting. Use it to step in — it expires in 5 minutes.",
-            ) +
-            OTP_BOX(otp_code!) +
-            `<p class="muted-sm" style="font-size:11px;letter-spacing:2px;text-transform:uppercase;color:#333333;margin-top:32px;">Do not share this code.</p>`,
-        ),
-      });
+      await send(
+        `Welcome to Co.`,
+        quietEmail({ preview: "Your access code. It expires in five minutes.", headline: "You were chosen.", code: otp_code!, lines: ["Use this code to step in. It expires in five minutes."], note: "Don't share this code." }),
+      );
     }
 
     if (status === "rejected") {
-      await resend.emails.send({
-        from: "Co <hello@copatible.com>",
-        to: email,
-        subject: `Your Co application.`,
-        html: emailTemplate(
-          h1("Not this time.") +
-            p(
-              "Your application wasn't accepted. You're welcome to update and resubmit for another review.",
-            ),
-        ),
-      });
+      await send(
+        `Your Co application.`,
+        quietEmail({ preview: "An update on your application.", headline: "Not this time.", lines: ["Your application wasn't accepted. You're welcome to update it and ask for another look."] }),
+      );
     }
 
     if (resent) {
-      await resend.emails.send({
-        from: "Co <hello@copatible.com>",
-        to: email,
-        subject: `Your new Co verification code.`,
-        html: emailTemplate(
-          h1("New code. Same you.") +
-            p(
-              "You requested a new verification code. Use it below to get into Co.",
-            ) +
-            OTP_BOX(otp_code!) +
-            `<p class="muted-sm" style="font-size:11px;letter-spacing:2px;text-transform:uppercase;color:#333333;margin-top:32px;">This code expires in 5 minutes.</p>`,
-        ),
-      });
+      await send(
+        `Your new Co code.`,
+        quietEmail({ preview: `${spacedCode(otp_code!)}. It expires in five minutes.`, headline: "A new code.", code: otp_code!, lines: ["It expires in five minutes. If you didn't ask for it, ignore this and nothing changes."] }),
+      );
     }
 
     if (phoneChange) {
-      await resend.emails.send({
-        from: "Co <hello@copatible.com>",
-        to: email,
-        subject: `Confirm your new number.`,
-        html: emailTemplate(
-          h1("Changing your number.") +
-            p(`Text this code to Co from your current number to switch your account to the number ending in ${phoneChange.newNumberLast4}. It expires in 5 minutes.`) +
-            OTP_BOX(otp_code!) +
-            `<p class="muted-sm" style="font-size:11px;letter-spacing:2px;text-transform:uppercase;color:#333333;margin-top:32px;">If you didn't ask for this, ignore it and email team@copatible.com.</p>`,
-        ),
-      });
+      await send(
+        `Confirm your new number.`,
+        quietEmail({
+          preview: "Text this code to Co to switch your number.",
+          headline: "Changing your number.",
+          code: otp_code!,
+          lines: [`Text this code to Co from your current number to move your account to the number ending in ${phoneChange.newNumberLast4}. It expires in five minutes.`],
+          note: "If you didn't ask for this, ignore it and email team@copatible.com.",
+        }),
+      );
     }
 
     if (login) {
-      await resend.emails.send({
-        from: "Co <hello@copatible.com>",
-        to: email,
-        subject: `Your Co login code.`,
-        html: emailTemplate(
-          h1("Welcome back.") +
-            p("Use the code below to sign in. It expires in 5 minutes.") +
-            OTP_BOX(otp_code!) +
-            `<p class="muted-sm" style="font-size:11px;letter-spacing:2px;text-transform:uppercase;color:#333333;margin-top:32px;">Do not share this code.</p>`,
-        ),
-      });
+      await send(
+        `Your Co code.`,
+        quietEmail({ preview: `${spacedCode(otp_code!)}. It expires in five minutes.`, headline: "Your code.", code: otp_code!, lines: ["It expires in five minutes. If you didn't ask for it, ignore this and nothing changes."] }),
+      );
     }
 
     if (welcome) {
-      await resend.emails.send({
-        from: "Co <hello@copatible.com>",
-        to: email,
-        subject: `Welcome to Co.`,
-        html: emailTemplate(
-          h1("You're in.") +
-            p("Co is invite-only. You're getting early access. Co is still getting to know people.") +
-            p("More comes later.") +
-            ctaButton("Open Co", "https://app.copatible.com"),
-        ),
-      });
+      // Co is text and calls now, so the button opens a text to Co rather
+      // than an app (there's no app).
+      const coNumber = process.env.SENDBLUE_PHONE_NUMBER;
+      await send(
+        `You're in.`,
+        letterpressEmail({
+          preview: "Someone vouched for you. Here's what happens next.",
+          headline: "You're in.",
+          lead: "Membership is by referral. Someone who knows you vouched for you, and that's the only way through the door.",
+          steps: [
+            "Co will text you. Answer the way you'd talk to a friend who remembers everything.",
+            "Tell it what this chapter of your life is about. It listens for what you don't say, too.",
+            "When there's a room worth your evening, Co will tell you who in it to meet.",
+          ],
+          cta: coNumber ? { label: "Text Co", href: `sms:${coNumber}` } : undefined,
+        }),
+      );
     }
 
     // Email fallback for a calendar-follow signal with no phone channel
-    // (Royce, 2026-08-30) — routes/luma.ts's calendar.person_subscribed
-    // handler only reaches runCalendarFollowReachOutAgent (an SMS) when the
-    // follower's email already matches an existing Co user. Someone who
-    // followed the calendar but was never a match at all still gave Luma
-    // their email (that's the join key the webhook provides) — this reaches
-    // them there instead of silently doing nothing, same warm/not-pushy
-    // register as the SMS version.
+    // (Royce, 2026-08-30): someone who followed the Co Presents calendar but
+    // isn't a Co user yet only gave Luma their email, so this reaches them
+    // there, in the same unhurried register as the text version.
     if (calendarFollow) {
-      await resend.emails.send({
-        from: "Co <hello@copatible.com>",
-        to: email,
-        subject: `Co noticed you.`,
-        html: emailTemplate(
-          h1(firstName ? `Hey ${firstName}.` : "Hey there.") +
-            p("Co noticed you followed the Co Presents calendar — Co is invite-only, not just an events page.") +
-            p("Reply and tell Co a little about what you're hoping to find, and it'll keep you in mind for what's next."),
-        ),
-      });
+      await send(
+        `Co noticed you.`,
+        quietEmail({
+          preview: "Co is invite-only, not just an events page.",
+          headline: firstName ? `Hello, ${firstName}.` : "Hello.",
+          lines: ["You followed the Co Presents calendar. Co is invite-only, not just an events page.", "Reply with a little about what you're hoping to find, and Co will keep you in mind for what's next."],
+        }),
+      );
     }
   } catch (error) {
     console.error("Cannot process email at this time", error);

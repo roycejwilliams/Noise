@@ -14,6 +14,8 @@ export const MO = {
   closeAfterFollowUpDays: 7,
   maxReplyChars: 200,
   maxDmChars: 280,
+  // Jacqueline's full intro (who Mo is, where, what Co is, fit, ask) is ~320.
+  maxIntroDmChars: 420,
 };
 
 export function squash(s: string): string {
@@ -92,7 +94,7 @@ export function namesAMember(text: string, members: { first: string; last: strin
 
 export type DraftCheck = { name: string; pass: boolean; reason?: string };
 
-export function checkMoDraft(kind: "reply" | "dm" | "email", text: string): DraftCheck[] {
+export function checkMoDraft(kind: "reply" | "dm" | "email" | "why", text: string, opts: { dmMax?: number } = {}): DraftCheck[] {
   const checks: DraftCheck[] = [
     { name: `${kind}_not_empty`, pass: text.trim().length > 0 },
     { name: `${kind}_no_em_dash`, pass: !/[—–]/.test(text) },
@@ -105,15 +107,24 @@ export function checkMoDraft(kind: "reply" | "dm" | "email", text: string): Draf
     checks.push({ name: "reply_no_pitch", pass: !/\b(invite|invitation|club|member|join|dm me|check your dms)\b/i.test(text) });
   }
   if (kind === "dm") {
-    checks.push({ name: "dm_length", pass: text.length <= MO.maxDmChars, reason: `${text.length} chars` });
+    checks.push({ name: "dm_length", pass: text.length <= (opts.dmMax ?? MO.maxDmChars), reason: `${text.length} chars` });
     checks.push({ name: "dm_no_link", pass: !/https?:\/\/|www\./i.test(text) });
     // The code only goes out after they say yes.
     checks.push({ name: "dm_no_code", pass: !/\b[A-HJ-NP-Z2-9]{8}\b/.test(text) });
     checks.push({ name: "dm_asks", pass: /\?\s*$/.test(text.trim()), reason: "ends by asking if they'd like an invite" });
+    // Mo reaches out as itself (2026-09-24).
+    checks.push({ name: "dm_says_its_mo", pass: /\bI['’]?m Mo\b/.test(text), reason: "introduces itself as Mo" });
+  }
+  if (kind === "why") {
+    checks.push({ name: "why_length", pass: text.length <= 260, reason: `${text.length} chars` });
+    checks.push({ name: "why_no_link", pass: !/https?:\/\/|www\./i.test(text) });
+    checks.push({ name: "why_no_code", pass: !/\b[A-HJ-NP-Z2-9]{8}\b/.test(text) });
   }
   if (kind === "email") {
     checks.push({ name: "email_has_code_slot", pass: text.includes("{{CODE}}") });
-    checks.push({ name: "email_has_phone_slot", pass: text.includes("{{PHONE}}") });
+    // The button texts Co; the email never asks them to text a number
+    // (Royce, 2026-09-25).
+    checks.push({ name: "email_no_number", pass: !text.includes("{{PHONE}}") && !/\btext it to co at\b/i.test(text) && !/\(?\b\d{3}\)?[\s.-]?\d{3}[\s.-]?\d{4}\b/.test(text) });
     // Their post goes into the draft prompt, so a planted link could come
     // back out; the only link an invite email carries is the opt-out we add.
     checks.push({ name: "email_no_link", pass: !/https?:\/\/|www\./i.test(text) });
@@ -145,6 +156,9 @@ export function clearYes(text: string): boolean {
 
 export type ProspectClock = {
   status: string;
+  // No post to reply to (LinkedIn): skip the warm-up and go straight to
+  // reaching out.
+  hasPost?: boolean;
   channel: string | null;
   warmedAt: Date | null;
   contactedAt: Date | null;
@@ -157,7 +171,7 @@ export type NextStep = "warm" | "contact" | "follow_up" | "close_silent" | null;
 
 export function nextOutreachStep(p: ProspectClock, now: Date): NextStep {
   const days = (d: Date | null) => (d ? (now.getTime() - d.getTime()) / 86400_000 : Infinity);
-  if (p.status === "approved" && !p.warmedAt) return "warm";
+  if (p.status === "approved" && !p.warmedAt) return p.hasPost === false ? "contact" : "warm";
   if (p.status === "warmed" && days(p.warmedAt) >= MO.warmToDmDays) return "contact";
   if (p.status === "contacted" && p.channel !== "manual" && !p.followedUpAt && !p.lastInboundAt && days(p.contactedAt) >= MO.followUpAfterDays) return "follow_up";
   if (p.status === "contacted" && p.followedUpAt && !p.lastInboundAt && days(p.followedUpAt) >= MO.closeAfterFollowUpDays) return "close_silent";

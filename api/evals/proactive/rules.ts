@@ -151,7 +151,8 @@ check("the reply is told not to push after a pass", /no pressure/.test(reactionF
 // The pause after unanswered texts: a day after one, three days after two in a
 // row (2026-09-21: one quiet text must not silence events for 72 hours).
 check("one unanswered text pauses for 24 hours", unansweredPauseFor(1) === 24 && RULES.unansweredPauseHours === 24);
-check("two unanswered texts in a row pause for 72 hours", unansweredPauseFor(2) === 72 && unansweredPauseFor(5) === 72);
+check("two unanswered texts in a row pause for 72 hours", unansweredPauseFor(2) === 72);
+check("three pause a week, four or more two weeks (brand fix 3)", unansweredPauseFor(3) === 168 && unansweredPauseFor(4) === 336 && unansweredPauseFor(9) === 336);
 {
   const now = new Date("2026-09-21T16:00:00Z");
   const hoursAgo = (h: number) => new Date(now.getTime() - h * 3600000);
@@ -187,7 +188,7 @@ check("two unanswered texts in a row pause for 72 hours", unansweredPauseFor(2) 
   check("an exempt send (event change, reminder) doesn't count toward spacing", !failed(st([{ ...send(1, "event_change"), exempt: true } as SendRecord]), "other").includes("spacing"));
   check("caps are unchanged: 1 room text a day, 4 a week", RULES.roomMaxPerLocalDay === 1 && RULES.roomMaxPer7Days === 4);
   check("ask check-ins wait 7 days, not 14", TYPE_POLICY.ask_checkin.topicGapDays === 7);
-  check("the 'thinking about you' rhythm is unchanged at 14 days", TYPE_POLICY.companion.typeGapDays === 14);
+  check("the 'thinking about you' rhythm is every ~4 days (Royce, 2026-09-28)", TYPE_POLICY.companion.typeGapDays === 4 && /INTERVAL '4 days'/.test(readFileSync(new URL("../../src/jobs/index.ts", import.meta.url), "utf8")));
 
   const jobs = readFileSync(new URL("../../src/jobs/index.ts", import.meta.url), "utf8");
   const companionCron = jobs.slice(jobs.indexOf("// No paid subscription needed"), jobs.indexOf("Companion check-in cron error"));
@@ -246,6 +247,158 @@ check("no follow-up line has an em dash or exclamation", [...OFFER_FOLLOWUP_MANY
   const jobs = readFileSync(new URL("../../src/jobs/index.ts", import.meta.url), "utf8");
   check("the dispatch cron is not on the sweep minutes", jobs.includes('cron.schedule("15,45 * * * *", runDispatch)') && !/cron\.schedule\("\*\/15 \* \* \* \*", async \(\) => \{\s*if \(dispatchRunning\)/.test(jobs));
   check("each surfacing sweep dispatches when it finishes queueing", (jobs.match(/await runDispatch\(\);/g) ?? []).length === 2);
+}
+
+// Follow-ups about something Co sent (2026-09-26: "Did anything come of
+// AgentFi demo day?" on Sep 26 for an Oct 7 event; then Co agreed it had
+// never sent it).
+{
+  const { followUpDate } = await import("../../src/services/recommendationOutcome.js");
+  check("follow-up date: a post's stated date counts", followUpDate({ statedDates: { start: "2026-10-07", end: null } }) === "2026-10-07");
+  check("follow-up date: the last day when it spans", followUpDate({ statedDates: { start: "2026-10-05", end: "2026-10-11" } }) === "2026-10-11");
+  check("follow-up date: a real event date wins", followUpDate({ event_date: "2026-10-10", statedDates: { start: "2026-10-01", end: null } }) === "2026-10-10");
+  check("follow-up date: none is none", followUpDate({}) === null && followUpDate({ statedDates: { start: "soon" } }) === null);
+  const ro = readFileSync(new URL("../../src/services/recommendationOutcome.ts", import.meta.url), "utf8");
+  check("scheduling and queueing both use it", /const eventDate = followUpDate\(match\);/.test(ro) && /const eventDate: string \| undefined = followUpDate\(match\) \?\? undefined;/.test(ro));
+  const reg = readFileSync(new URL("../../src/harness/proactiveRegistry.ts", import.meta.url), "utf8");
+  check("a follow-up before its day is deferred, not sent or dropped", /if \(end\.getTime\(\) > Date\.now\(\)\) return \{ defer: nextLocalHour\(end, tz, 10\)/.test(reg));
+  check("no record of sending it, no follow-up about it", /if \(onlyAboutASend && !sent\) return skip\("no record of Co sending it to them"\);/.test(reg));
+  check("the draft knows when Co sent it and what it said", /co_sent_it_on: sent\?\.date/.test(reg) && /what_co_said_when_it_sent_it/.test(reg) && !/"a few days ago"/.test(reg));
+  check("the send is remembered for Co's next replies", /writeMemory\(c\.userId, "followup_context"/.test(reg) && /memory_type = 'followup_context'/.test(readFileSync(new URL("../../src/harness/replyGrounding.ts", import.meta.url), "utf8")));
+  const pr = readFileSync(new URL("../../src/harness/proactive.ts", import.meta.url), "utf8");
+  check("a deferred candidate moves, it isn't dropped", /if \("defer" in draft\) \{\s*await pool\.query\(\s*`UPDATE proactive_candidates SET due_at = \$2/.test(pr));
+}
+
+// Every memory type code writes must be allowed by the table (2026-09-26:
+// five weren't, so those writes all failed quietly, one of them for weeks).
+{
+  const { readdirSync, statSync } = await import("fs");
+  const { join } = await import("path");
+  const root = new URL("../../src/", import.meta.url).pathname;
+  const files: string[] = [];
+  const walk = (d: string) => { for (const f of readdirSync(d)) { const p = join(d, f); if (statSync(p).isDirectory()) walk(p); else if (p.endsWith(".ts")) files.push(p); } };
+  walk(root);
+  const written = new Set<string>();
+  for (const f of files) {
+    const t = readFileSync(f, "utf8");
+    for (const m of t.matchAll(/writeMemory\([^,]+,\s*"([a-z_]+)"/g)) written.add(m[1]);
+    for (const m of t.matchAll(/INTO co_memories \(user_id, memory_type, content\)\s*(?:VALUES \(\$1, |SELECT \$1, )'([a-z_]+)'/g)) written.add(m[1]);
+  }
+  const mig = readFileSync(new URL("../../src/db/migrations.ts", import.meta.url), "utf8");
+  const list = mig.slice(mig.indexOf("const memoryTypes = ["), mig.indexOf("];", mig.indexOf("const memoryTypes = [")));
+  const allowed = new Set(Array.from(list.matchAll(/"([a-z_]+)"/g)).map((m) => m[1]));
+  const missing = [...written].filter((w) => !allowed.has(w));
+  check(`every memory type code writes is allowed by the table${missing.length ? ` (missing: ${missing.join(", ")})` : ""}`, written.size > 5 && missing.length === 0);
+}
+
+// Smarter first texts (2026-09-28): Co's pick is read even when cut off, and a
+// draft that breaks a check gets one rewrite told what to fix.
+{
+  const P = await import("../../src/harness/proactive.js");
+  check("a whole pick is read", P.readPick('{"id": "4", "why": "stressed about the deck"}')?.id === "4");
+  check("a pick cut off mid-reason still counts", P.readPick('{"id": "4", "why": "They\'re stuck on sponsors for the 10th, so checking in on the deck meets them wh')?.id === "4");
+  check("no id is no pick", P.readPick("") === null && P.readPick("I think the companion one") === null);
+  const pr = readFileSync(new URL("../../src/harness/proactive.ts", import.meta.url), "utf8");
+  check("the pick has room to answer, and time", /maxOutputTokens: 1000,\s*experimental_telemetry: \{ isEnabled: true, functionId: "proactive.choosePick" \}/.test(pr) && /"pick timed out"\)\), 15_000\)/.test(pr));
+  check("a failed draft gets one rewrite, told what it broke", /draftAgain\(first, \(\) => registry\[c\.type\]\.draft\(c, person\)\)/.test(pr) && /It broke: \$\{redo\.failed\}/.test(pr));
+  const reg = readFileSync(new URL("../../src/harness/proactiveRegistry.ts", import.meta.url), "utf8");
+  check("only Co's own skip holds check-ins for 14 days; a failed draft retries in about 2", /const coChoseSkip = \/\^model chose SKIP\//.test(reg) && /coChoseSkip \? "0" : "12"/.test(reg) && /onDropped\?\.\(c, status, reason\)/.test(pr) && /skip\("model chose SKIP/.test(reg));
+  const U = await import("../../src/services/understanding.js");
+  const now = new Date("2026-09-28T12:00:00Z");
+  const daysAgo = (n: number) => new Date(now.getTime() - n * 86_400_000).toISOString();
+  const all = (d: number) => Object.fromEntries(U.RAPPORT_TOPICS.map((t) => [t, daysAgo(d)]));
+  check("a new member: everything is still to figure out, what's going on first", U.understandingGaps({}, {}, now)[0]?.topic === "current_situation" && U.understandingGaps({}, {}, now).length === U.RAPPORT_TOPICS.length);
+  check("recently heard: nothing to catch up on", U.understandingGaps(all(3), {}, now).length === 0);
+  check("what's going on goes stale after five weeks; who they are lasts longer", (() => { const g = U.understandingGaps(all(40), {}, now); return g.some((x) => x.topic === "current_situation" && x.kind === "stale") && !g.some((x) => x.topic === "personality"); })());
+  check("never asks the same thing twice in two weeks", U.understandingGaps({}, { current_situation: daysAgo(3) }, now)[0]?.topic !== "current_situation");
+  check("unknown comes before stale", (() => { const c = all(40); delete (c as any).people_to_meet; return U.understandingGaps(c, {}, now)[0]?.kind === "unknown"; })());
+  check("a stale topic reads as what's changed, with when Co last heard", /^what's changed with .*last heard about it on 2026-08-19/.test(U.gapDescription({ topic: "goals_challenges", kind: "stale", lastHeard: "2026-08-19" })));
+  check("last learned is the newest stamp", U.lastLearned({ a: "2026-09-01T00:00:00Z", b: "2026-09-20T00:00:00Z" }) === "2026-09-20T00:00:00Z" && U.lastLearned({}) === null);
+  check("companion texts can come every ~4 days, not 14", TYPE_POLICY.companion.typeGapDays === 4);
+  const pe = readFileSync(new URL("../../src/services/profileExtraction.ts", import.meta.url), "utf8");
+  check("only what they said in this conversation counts as freshly heard", /const covered = \(coverage\.fresh_topics \?\? \[\]\)/.test(pe) && /"fresh_topics": \[/.test(pe));
+  const cr = readFileSync(new URL("../../src/agent/conversationReply.ts", import.meta.url), "utf8");
+  const cc = readFileSync(new URL("../../src/agent/companionCheckin.ts", import.meta.url), "utf8");
+  check("curiosity only where the conversation leads, in replies and check-ins", /Only if what they just said actually leads there/.test(cr) && /never steer to it/.test(cr) && /If nothing they said leads there, return SKIP/.test(cc) && /what_co_cannot_do: "find sponsors, investors or funders themselves/.test(cc));
+  {
+    // Three other-lane texts this week: a check-in still goes; a fourth follow-up doesn't.
+    const now2 = new Date("2026-09-28T19:30:00Z");
+    const sent = (h: number, type: string) => ({ type, sentAt: new Date(now2.getTime() - h * 3_600_000), exempt: false }) as SendRecord;
+    const cand = (type: string) => ({ id: type, type, targetKey: type, topicKey: type, priority: TYPE_POLICY[type as keyof typeof TYPE_POLICY].priority, dueAt: now2, createdAt: now2, expiresAt: null, payload: {}, attempts: 0, summary: type }) as unknown as Candidate;
+    const state = { now: now2, timezone: "America/Los_Angeles", optedOut: false, lastInboundAt: now2, sends: [sent(100, "debrief"), sent(60, "post_call"), sent(30, "window_followup")], candidates: [cand("companion"), cand("ask_checkin")] } as any;
+    const ev = P.evaluateCandidates(state);
+    check("a full week of follow-ups doesn't block a companion check-in", ev.eligible.some((c: Candidate) => c.type === "companion"));
+    // An ask check-in answers their ask (2026-10-02): no longer behind the weekly cap.
+    check("...and a check-in on their own ask isn't held by it either", ev.eligible.some((c: Candidate) => c.type === "ask_checkin"));
+    const state2 = { ...state, sends: [sent(100, "companion"), sent(60, "companion"), sent(30, "debrief")] };
+    check("check-ins don't use up the follow-ups' weekly room", P.evaluateCandidates({ ...state2, candidates: [cand("ask_checkin")] }).eligible.length === 1);
+  }
+  {
+    // Replies vs. broadcasts (Royce, 2026-10-02).
+    const now3 = new Date("2026-10-02T19:00:00Z"); // noon Pacific
+    const sent = (h: number, type: string, exempt = false) => ({ type, targetKey: `${type}:${h}`, topicKey: `${type}:${h}`, sentAt: new Date(now3.getTime() - h * 3_600_000), exempt }) as SendRecord;
+    const offer = (id: string, payload: any) => ({ id, type: "event_offer", targetKey: `event_offer:${id}`, topicKey: `event_offer:${id}`, priority: 60, dueAt: now3, createdAt: now3, expiresAt: null, payload, attempts: 0, summary: id }) as unknown as Candidate;
+    const asked = offer("asked", { askId: "ask-1", match: { tier: 1 } });
+    const discovery = offer("discovery", { askId: "profile", fromProfile: true, match: { tier: 1 } });
+    const reminder = offer("reminder", { askId: "ask-1", reminder: true });
+    const profileReminder = offer("profileReminder", { askId: "profile", fromProfile: true, reminder: true });
+    const resurfaced = offer("resurfaced", { askId: "ask-1", again: true });
+    // Four room-lane discovery texts this week, the last one an hour ago and unanswered.
+    const full = { now: now3, timezone: "America/Los_Angeles", optedOut: false, lastInboundAt: new Date(now3.getTime() - 100 * 3_600_000), sends: [sent(90, "event_offer"), sent(60, "event_offer"), sent(30, "event_offer"), sent(1, "event_offer")] } as any;
+    const ev = P.evaluateCandidates({ ...full, candidates: [asked, discovery, reminder] });
+    const ok = (id: string) => ev.eligible.some((c: Candidate) => c.id === id);
+    check("an answer still keeps 3h spacing: a text an hour ago holds it", !ok("asked") && !ok("reminder") && ev.perCandidate.find((p: any) => p.candidate.id === "asked").checks.filter((k: any) => !k.pass).map((k: any) => k.name).join() === "spacing");
+    // Same full week, the last text 4h ago and still unanswered.
+    const spaced = { ...full, sends: [sent(90, "event_offer"), sent(60, "event_offer"), sent(30, "event_offer"), sent(4, "event_offer")] };
+    const ev2 = P.evaluateCandidates({ ...spaced, candidates: [asked, discovery, reminder] });
+    const ok2 = (id: string) => ev2.eligible.some((c: Candidate) => c.id === id);
+    check("answering an explicit ask sends past a full week, today's cap and the unanswered pause", ok2("asked"));
+    check("a reminder about something they asked for sends past the quota too", ok2("reminder"));
+    check("a reminder or 30-day resurface of something they never asked for is discovery, held at the cap", !P.isAnswering(profileReminder) && !P.isAnswering(resurfaced) && !P.evaluateCandidates({ ...spaced, candidates: [profileReminder, resurfaced] }).eligible.length);
+    // Review of #55: spacing counts every text, so nothing lands 15 minutes after an answer.
+    const afterAnswer = { ...spaced, lastInboundAt: now3, sends: [sent(0.25, "debrief", true)] };
+    check("15 minutes after an answer, nothing goes: not an answer, not discovery, not a companion check-in", !P.evaluateCandidates({ ...afterAnswer, candidates: [asked, discovery, { ...discovery, id: "c", type: "companion", targetKey: "companion:x", topicKey: "companion" }] }).eligible.length);
+    check("3h after an answer, discovery goes again", P.evaluateCandidates({ ...afterAnswer, sends: [sent(3, "debrief", true)], candidates: [discovery] }).eligible.length === 1);
+    // Queued h hours ago; due_at moved to now (a re-enqueue or a defer), as in the re-review's failure case.
+    const aged = (h: number, c: Candidate, payload: any = c.payload) => ({ ...c, dueAt: now3, createdAt: new Date(now3.getTime() - h * 3_600_000), payload }) as Candidate;
+    check("an answer queued over a day ago is re-checked before it goes, even if its due time moved; a fresh one or discovery isn't", P.needsRelevanceCheck(aged(25, asked), now3) && !P.needsRelevanceCheck(aged(23, asked), now3) && !P.needsRelevanceCheck(aged(72, discovery), now3));
+    const triedAgo = (h: number) => aged(48, asked, { ...asked.payload, relevanceTriedAt: new Date(now3.getTime() - h * 3_600_000).toISOString() });
+    check("when Co couldn't say, the item sits out 2h (others go), then is checked again, never sent unchecked", !P.evaluateCandidates({ ...spaced, candidates: [triedAgo(1)] }).eligible.length && P.evaluateCandidates({ ...spaced, candidates: [triedAgo(3)] }).eligible.length === 1 && P.needsRelevanceCheck(triedAgo(3), now3) && P.evaluateCandidates({ ...spaced, candidates: [triedAgo(1), reminder] }).eligible.length === 1);
+    check("a 'still relevant' answer is remembered for a day, so it isn't paid for twice", !P.needsRelevanceCheck(aged(30, asked, { ...asked.payload, relevantAt: new Date(now3.getTime() - 2 * 3_600_000).toISOString() }), now3) && P.needsRelevanceCheck(aged(30, asked, { ...asked.payload, relevantAt: new Date(now3.getTime() - 25 * 3_600_000).toISOString() }), now3));
+    check("Co's relevance answer is read; anything else holds it (null), never sends or archives", P.readRelevance('{"relevant": false, "why": "Oct 1 has passed"}')?.relevant === false && P.readRelevance('```json\n{"relevant": true, "why": "still open"}\n```')?.relevant === true && P.readRelevance("not sure") === null && P.readRelevance('{"relevant": "maybe"}') === null);
+    check("unsolicited discovery stays held at the weekly cap", !ok("discovery") && ev.perCandidate.find((p: any) => p.candidate.id === "discovery").checks.some((k: any) => k.name === "weekly_cap" && !k.pass));
+    check("the text after a call they were on is an answer", P.isAnswering({ type: "post_call", payload: {} } as any));
+    check("a network tease (always for an open ask) and a debrief are answers; a profile offer and a guest-match nudge are discovery", P.isAnswering({ type: "network_tease", payload: { askId: "a" } } as any) && P.isAnswering({ type: "debrief", payload: {} } as any) && !P.isAnswering(discovery) && !P.isAnswering({ type: "event_match_nudge", payload: {} } as any) && !P.isAnswering({ type: "companion", payload: {} } as any));
+    check("an offer with no ask behind it is discovery", !P.isAnswering(offer("x", {})));
+    check("answers never use up discovery's room: three exempt answers leave the week open", P.evaluateCandidates({ ...full, lastInboundAt: now3, sends: [sent(90, "event_offer", true), sent(60, "network_tease", true), sent(30, "event_offer", true)], candidates: [discovery] }).eligible.length === 1);
+    check("opt-out and local hours still hold an answer", P.evaluateCandidates({ ...spaced, optedOut: true, candidates: [asked] }).eligible.length === 0 && P.evaluateCandidates({ ...spaced, now: new Date("2026-10-02T11:00:00Z"), candidates: [{ ...asked, dueAt: new Date("2026-10-02T11:00:00Z") }] }).eligible.length === 0);
+    check("an answer still never goes twice", !P.evaluateCandidates({ ...full, sends: [...full.sends, { ...sent(5, "event_offer", true), targetKey: asked.targetKey }], candidates: [asked] }).eligible.length);
+    check("one text counts once: a batch of answers is exempt; a discovery offer in it makes it one counted send", P.sendIsExempt(asked, [reminder]) && !P.sendIsExempt(asked, [discovery]) && !P.sendIsExempt(discovery, [asked]) && P.sendIsExempt(discovery, [], true));
+    const pr2 = readFileSync(new URL("../../src/harness/proactive.ts", import.meta.url), "utf8");
+    check("the send re-checks with the same rule and ledgers extras exempt", (pr2.match(/!\(answering && QUOTA_CHECKS\.has\(k\.name\)\)/g) ?? []).length === 2 && /sendIsExempt\(c, extras\.map\(\(e\) => e\.candidate\), opts\.ignorePacing === true\)/.test(pr2) && /VALUES \(\$1, \$2, \$3, \$4, \$5, \$6, true\) ON CONFLICT/.test(pr2));
+    check("a stale answer is archived silently (no text), the pick and every sibling re-checked", /if \(!r\.relevant\) \{\s*if \(!opts\.dryRun\) await dropCandidate\(registry, c, "skipped", `stale: \$\{r\.why\}`\);[\s\S]{0,400}return;/.test(pr2) && /needsRelevanceCheck\(sib, state\.now\)/.test(pr2) && (pr2.match(/await settleRelevance\((c|sib), r\)/g) ?? []).length === 2);
+  }
+  {
+    // One open follow-up per ask (Royce, 2026-10-02). Producers already hold
+    // it, so this pins them rather than merging after the fact (review of
+    // #56: a merge here would be dead code that could lose a follow-up).
+    // A new producer of either type fails here until it's keyed the same way.
+    const { readdirSync, statSync } = await import("fs");
+    const { join } = await import("path");
+    const root = new URL("../../src", import.meta.url).pathname;
+    const walk = (d: string): string[] => readdirSync(d).flatMap((f) => (statSync(join(d, f)).isDirectory() ? walk(join(d, f)) : f.endsWith(".ts") ? [join(d, f)] : []));
+    const producers = walk(root)
+      .filter((f) => /type: "(ask_checkin|window_followup)"/.test(readFileSync(f, "utf8")))
+      .map((f) => f.slice(root.length + 1))
+      .sort();
+    check("follow-ups about an ask come from exactly two producers (ask check-in cron, commitment threads)", producers.join() === "harness/memberThreads.ts,jobs/index.ts");
+    const jobs = readFileSync(join(root, "jobs/index.ts"), "utf8");
+    const threads = readFileSync(join(root, "harness/memberThreads.ts"), "utf8");
+    check("an ask check-in is keyed to its ask, and a new one only queues once the last was sent or dropped", /targetKey: `ask_checkin:\$\{row\.ask_id\}:\$\{row\.checkin_count \+ 1\}`/.test(jobs) && /COALESCE\(ac\.last_checked_at, ac\.created_at\) <= NOW\(\) - INTERVAL '7 days'/.test(jobs));
+    check("a commitment follow-up is keyed to its thread, one per thread", /type: "window_followup",\s*targetKey: `thread:\$\{threadId\}`/.test(threads));
+  }
+  check("principles, not quoted phrasings, and a greeting is guidance, not a veto", !/"the event"|"someone cool"|"Hey Sam,"/.test(P.PROACTIVE_RULES) && /a greeting is fine when it's natural, never a formula/.test(P.PROACTIVE_RULES) && !P.checkDraft("Hey Maya, how was the Climate Founders Mixer?", { maxSentences: 2 }).some((c: any) => !c.pass));
+  check("stacked questions are still caught", P.checkDraft("How was the mixer. Did you meet anyone. Want to call this week?", { maxSentences: 2 }).some((c: any) => c.name === "draft_one_question" && !c.pass));
 }
 
 console.log(`proactive rules: ${total - failed}/${total} passed`);

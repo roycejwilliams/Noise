@@ -1,6 +1,6 @@
 import { isTestCase, TEST_CASES } from "../testCases.js";
+import { getCoPersonaPrompt } from "../../../api/src/services/coPersona.js";
 import crypto from "node:crypto";
-import { fetchAccessToken } from "hume";
 import express, { Request, Response, NextFunction } from "express";
 import pool from "../../../api/src/db/db.js";
 import {
@@ -44,25 +44,6 @@ router.post("/session", async (_req: Request, res: Response, next: NextFunction)
   }
 });
 
-// POST /api/hume-token — mints a short-lived EVI access token server-side so
-// HUME_API_KEY/HUME_SECRET_KEY never reach the browser. Same HUME_CONFIG_ID
-// production calls use, just connected to directly instead of via Twilio.
-router.post("/hume-token", async (_req: Request, res: Response, next: NextFunction) => {
-  try {
-    const accessToken = await fetchAccessToken({
-      apiKey: process.env.HUME_API_KEY!,
-      secretKey: process.env.HUME_SECRET_KEY!,
-    });
-    return res.status(200).json({
-      success: true,
-      accessToken,
-      configId: process.env.HUME_CONFIG_ID,
-    });
-  } catch (error) {
-    next(error);
-  }
-});
-
 // POST /api/session/:sessionId/tag — tags a session with which of the two
 // agreed test cases it belongs to (Part 2, item 5). Shared shape with
 // phone.ts's /api/phone/:user_id/tag — same users.test_case column, works
@@ -81,34 +62,13 @@ router.post("/session/:sessionId/tag", async (req: Request, res: Response, next:
   }
 });
 
-// GET /api/prompt — reads (never writes) the live system prompt straight off
-// the real HUME_CONFIG_ID's most recent config version. This is a read-only
-// GET against Hume's Configs API — nothing in this route, or anywhere else in
-// co-test, ever calls Hume's config create/update/delete endpoints. Editing
-// on the Prompt page only ever produces a session_settings override sent at
-// connect time (see call.ts), which Hume documents as temporary and scoped
-// to that one chat session — it cannot mutate the saved config.
+// GET /api/prompt: Co's call prompt, read from api/prompts/co-system-prompt.md
+// (the source of truth for the ElevenLabs agent and the text persona).
 router.get("/prompt", async (_req: Request, res: Response, next: NextFunction) => {
   try {
-    const configId = process.env.HUME_CONFIG_ID!;
-    const humeRes = await fetch(
-      `https://api.hume.ai/v0/evi/configs/${configId}?restrict_to_most_recent=true`,
-      { headers: { "X-Hume-Api-Key": process.env.HUME_API_KEY! } },
-    );
-    if (!humeRes.ok) {
-      throw new Error(`Hume config fetch failed: ${humeRes.status}`);
-    }
-    const data: any = await humeRes.json();
-    const config = data.configs_page?.[0];
-    if (!config?.prompt?.text) {
-      return res.status(200).json({ success: false, error: "No prompt found on this config." });
-    }
-    return res.status(200).json({
-      success: true,
-      prompt: config.prompt.text,
-      configName: config.name,
-      version: config.version,
-    });
+    const prompt = await getCoPersonaPrompt();
+    if (!prompt) return res.status(200).json({ success: false, error: "prompts/co-system-prompt.md not found" });
+    return res.status(200).json({ success: true, prompt, source: "prompts/co-system-prompt.md" });
   } catch (error) {
     next(error);
   }

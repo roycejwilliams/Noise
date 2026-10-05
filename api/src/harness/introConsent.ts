@@ -260,7 +260,27 @@ export type ConsentContext = {
   // Non-draft checks already computed (timing, one-per-event, both-yes).
   preChecks?: GateCheck[];
   extraDraftChecks?: (draft: string) => GateCheck[];
+  // The other member(s) the draft is about: it may not carry anything only
+  // they may see (services/coFacts.ts privateFactLeak).
+  otherUserIds?: string[];
 };
+
+async function privateFactCheck(draft: string, otherUserIds: string[] | undefined): Promise<GateCheck | null> {
+  if (!otherUserIds?.length) return null;
+  const { privateFactLeak } = await import("../services/coFacts.js");
+  for (const id of otherUserIds) {
+    const hit = await privateFactLeak(draft, id).catch(() => null);
+    if (hit) return { name: "private_fact_leak", pass: false, reason: `carries something only the other member may see ("${hit.slice(0, 60)}")` };
+  }
+  return { name: "private_fact_leak", pass: true };
+}
+
+async function checkWithPrivacy(draft: string, ctx: ConsentContext): Promise<{ ok: boolean; checks: GateCheck[] }> {
+  const priv = await privateFactCheck(draft, ctx.otherUserIds);
+  if (priv && !priv.pass) return { ok: false, checks: [priv] };
+  const r = await checkDraftFull(draft, ctx.facts, ctx.extraDraftChecks);
+  return priv ? { ok: r.ok, checks: [priv, ...r.checks] } : r;
+}
 
 // Drafts, checks, redrafts once with the failures named, then gives up.
 // Returns the approved text or null (send nothing). Always logs.
@@ -281,7 +301,7 @@ export async function draftWithConsent(
     console.error(`${ctx.decision}: draft failed (non-fatal):`, err?.message ?? err);
     return null;
   }
-  let result = await checkDraftFull(text, ctx.facts, ctx.extraDraftChecks);
+  let result = await checkWithPrivacy(text, ctx);
   let attempts = 1;
   if (!result.ok) {
     const feedback = result.checks
@@ -293,7 +313,7 @@ export async function draftWithConsent(
         `Your last draft was rejected: ${feedback}. Rewrite it so it doesn't say or imply what ${ctx.facts.otherFirstName || "anyone else"} wants, feels, or said, names no one it shouldn't, and includes no phone number or email.`,
       );
       attempts = 2;
-      const retryResult = await checkDraftFull(retry, ctx.facts, ctx.extraDraftChecks);
+      const retryResult = await checkWithPrivacy(retry, ctx);
       if (retryResult.ok) {
         text = retry;
       }

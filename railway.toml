@@ -15,3 +15,6 @@ startCommand = "node dist/co-test/src/server.js"
 healthcheckPath = "/health"
 healthcheckTimeout = 30
 restartPolicyType = "on_failure"
+# Railway waits this long between SIGTERM and killing the old server, so
+# running jobs and replies can finish (api/src/services/shutdown.ts).
+drainingSeconds = 30

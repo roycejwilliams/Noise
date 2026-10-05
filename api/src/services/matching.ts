@@ -126,16 +126,19 @@ type ScorableCandidate = {
 async function buildCandidateDigest<T extends ScorableCandidate>(
   candidates: T[],
   askEmbedding?: number[] | null,
+  hints?: Map<string, string>,
 ): Promise<string> {
   const memoryByUser =
     askEmbedding && askEmbedding.length
       ? await fetchTopMemoryPerCandidate(candidates.map((c) => c.user_id), askEmbedding)
       : new Map<string, string[]>();
-  return formatCandidateDigest(candidates, memoryByUser);
+  return formatCandidateDigest(candidates, memoryByUser, hints);
 }
 
 // Pure half of buildCandidateDigest, exported for evals/matching.
-export function formatCandidateDigest<T extends ScorableCandidate>(candidates: T[], memoryByUser: Map<string, string[]>): string {
+// hints: the people graph's internal read of an overlap (peopleGraph.ts
+// edgeHint), for the scorer only.
+export function formatCandidateDigest<T extends ScorableCandidate>(candidates: T[], memoryByUser: Map<string, string[]>, hints?: Map<string, string>): string {
   return candidates
     .map((c, i) => {
       const facts = [...(c.goals ?? []), ...(c.blockers ?? []), ...(c.activity_preferences ?? [])];
@@ -145,6 +148,7 @@ export function formatCandidateDigest<T extends ScorableCandidate>(candidates: T
         facts.length ? facts.join("; ") : null,
         memories.length ? `mentioned: ${memories.map((m) => `"${m}"`).join(" / ")}` : null,
         ownAsk?.text ? `their own stated ${ownAsk.type ?? "ask"}: "${ownAsk.text}"` : null,
+        hints?.get(c.user_id) ?? null,
       ].filter(Boolean);
       return `${i}. ${parts.length ? parts.join(" | ") : "(nothing on file)"}`;
     })
@@ -212,11 +216,43 @@ export async function scoreAgainstStatedAsk<T extends ScorableCandidate>(
   ask: StatedIntent,
   candidates: T[],
   askerContext?: string,
+  hints?: Map<string, string>,
 ): Promise<AskScore<T>[]> {
   if (!candidates.length || !ask.text) return [];
 
-  const digest = await buildCandidateDigest(candidates, ask.embedding);
-  return runAskScoring("matching.scoreAgainstStatedAsk", buildStatedAskPrompt(ask.text, digest, askerContext), candidates);
+  // A big room: Jev rules out the clear no's first and Claude scores who is
+  // left (services/jevMatching.ts). Dropped candidates score 0, as Claude
+  // gives "nothing on file supports it". Any Jev problem keeps everyone.
+  let toScore = candidates;
+  let dropped: T[] = [];
+  const { PRUNE_MIN_CANDIDATES, pruneEnabled } = await import("./jevMatching.js");
+  if (candidates.length >= PRUNE_MIN_CANDIDATES && pruneEnabled()) {
+    try {
+      const started = Date.now();
+      const { jevMatchScores, keepAfterPrune } = await import("./jevMatching.js");
+      const ps = await jevMatchScores(ask.text, candidates);
+      const keep = new Set(keepAfterPrune(ps));
+      toScore = candidates.filter((_, i) => keep.has(i));
+      dropped = candidates.filter((_, i) => !keep.has(i));
+      const { recordDecision } = await import("../harness/core.js");
+      void recordDecision({
+        layer: 5,
+        decision: "jev.prune.matching",
+        userId: null,
+        outcome: "act",
+        action: `kept ${toScore.length} of ${candidates.length}`,
+        proposal: { candidates: candidates.length, keptForClaude: toScore.length, unread: ps.filter((p) => p === null).length, ms: Date.now() - started },
+      }).catch(() => {});
+    } catch (err: any) {
+      console.error("matching: Jev prune failed, scoring everyone (non-fatal):", err?.message ?? err);
+      toScore = candidates;
+      dropped = [];
+    }
+  }
+  if (!toScore.length) return dropped.map((c) => ({ candidate: c, score: 0, reason: "", shareReason: "", mutual: false }) as AskScore<T>);
+  const digest = await buildCandidateDigest(toScore, ask.embedding, hints);
+  const scored = await runAskScoring("matching.scoreAgainstStatedAsk", buildStatedAskPrompt(ask.text, digest, askerContext), toScore);
+  return [...scored, ...dropped.map((c) => ({ candidate: c, score: 0, reason: "", shareReason: "", mutual: false }) as AskScore<T>)];
 }
 
 export function buildStatedAskPrompt(askText: string, digest: string, askerContext?: string): string {

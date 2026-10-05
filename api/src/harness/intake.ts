@@ -209,9 +209,16 @@ export function parseIntakeProposal(raw: string): IntakeProposal {
   };
 }
 
+// Both parts: a name saved as "Sam" + "Rivera" is "Sam Rivera" (2026-10-01
+// next-live run: the email turn re-read it as "Sam" and blanked the last name).
+export function knownNameOf(u: { first_name?: string | null; last_name?: string | null }): string | null {
+  return [u.first_name, u.last_name].map((x) => x?.trim()).filter(Boolean).join(" ") || null;
+}
+
 export async function gatherIntakeState(user: {
   id: string;
   first_name: string | null;
+  last_name?: string | null;
   email: string;
   intake_partial_email?: string | null;
   intake_retries?: number | null;
@@ -224,7 +231,7 @@ export async function gatherIntakeState(user: {
     .catch(() => ({ rows: [] as { content: string }[] }));
   return {
     userId: user.id,
-    knownName: user.first_name?.trim() || null,
+    knownName: knownNameOf(user),
     knownEmail: user.email && !hasPendingEmail(user.email) ? user.email : null,
     partialEmail: user.intake_partial_email ?? null,
     retries: user.intake_retries ?? 0,

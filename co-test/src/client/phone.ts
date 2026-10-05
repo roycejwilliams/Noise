@@ -32,7 +32,7 @@ let socketToken: string | null = null;
 let statusPollInterval: number | null = null;
 
 // Live view for a real Twilio-bridged call — the browser never holds the
-// Hume socket directly here (the backend does, via webhook events), so this
+// call's audio connection (ElevenLabs does), so this
 // relays over the same Socket.IO room pattern production already uses for
 // other real-time push, joined per user_id. Same data/rendering call.ts
 // already shows live for browser-simulated calls (see shared.ts).

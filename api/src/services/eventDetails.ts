@@ -14,6 +14,7 @@
 //   headcount, description).
 //   Tier 3 (X opportunities): the source post's own text, which is the only
 //   real record there is.
+import { audienceLine } from "./eventAudience.js";
 import pool from "../db/db.js";
 import { parseModelJson } from "./modelJson.js";
 import { anthropic } from "@ai-sdk/anthropic";
@@ -156,6 +157,8 @@ export function renderEventDetails(name: string, d: EventDetails): string[] {
   if (d.requiresApproval) lines.push("Registration needs host approval.");
   if (d.guestCount) lines.push(`${d.guestCount} ${d.guestCount === 1 ? "person has" : "people have"} registered so far.`);
   if (d.description) lines.push(`What the event page says: ${d.description.replace(/\n+/g, " ")}`);
+  const audience = audienceLine(name, d.description);
+  if (audience) lines.push(audience);
   return lines;
 }
 
@@ -176,10 +179,16 @@ export function missingEventDetails(name: string, d: EventDetails | undefined): 
 export type PersonForFit = {
   userId?: string;
   firstName: string;
+  // The search Co ran (the brief), which is what a candidate is judged against.
   askText: string | null;
+  // Their latest text, as context only.
+  latestText?: string | null;
   timeFrame?: string | null;
   goals?: string[] | null;
   city?: string | null;
+  // Where this search looked ("San Francisco, California", or several joined
+  // with " + "): what they asked about, which can differ from their profile.
+  place?: string | null;
   feeling?: string;
   avoid?: string[] | null;
   availability?: string | null;
@@ -192,33 +201,35 @@ export type PersonForFit = {
 // hypothetical direction (2026-09-15: "accelerators that could help me if I
 // decide to build something else" got a pre-seed accelerator called a
 // mismatch because the person's current company is Series A).
-export function fitPrompt(match: EnrichedMatch, person: PersonForFit, picture: string): string {
-  const avoidList = (person.avoid ?? []).filter((a) => a && a.trim());
-  const detailLines =
-    match.details ? renderEventDetails(match.name, match.details) : match.opportunity ? [`What the post says: ${match.opportunity.postText}`] : [];
-  return `Decide whether "${match.name}" fits ${person.firstName}, and explain why in one or two plain sentences, to Co's own notes.
+// What's known about one candidate, for the fit read.
+function detailLinesFor(match: EnrichedMatch): string[] {
+  return match.details ? renderEventDetails(match.name, match.details) : match.opportunity ? [`What the post says: ${match.opportunity.postText}`] : [];
+}
 
-What ${person.firstName} is asking for right now, in their words:
-${person.askText ?? "(no specific ask)"}
+// The person and the tests, shared by the single and the batched read.
+// The ask is the search Co actually ran (the brief), not their latest text:
+// judged against "Well a couple" or "Hello?", real matches were turned away
+// as the wrong kind, place or week in 22 of 30 searches (2026-09-24 to 30).
+function fitContext(person: PersonForFit, picture: string): { intro: string; rules: string } {
+  const avoidList = (person.avoid ?? []).filter((a) => a && a.trim());
+  const latest = person.latestText && person.latestText.trim() && person.latestText.trim() !== (person.askText ?? "").trim() ? person.latestText.trim() : null;
+  const intro = `What ${person.firstName} asked Co to find (the search Co just ran for them):
+${person.askText ?? "(no specific ask)"}${latest ? `\nTheir latest text, for context: "${latest.slice(0, 300)}"` : ""}
 
 Background on them:
 ${picture ? picture : person.goals?.length ? `Goals: ${person.goals.slice(0, 4).join("; ")}` : "(none)"}
 ${person.city ? `Based in: ${person.city}` : ""}
-${person.feeling ? `How they've been feeling: ${person.feeling}` : ""}
-
-What's actually known about "${match.name}":
-${detailLines.join("\n") || "(only the name)"}
-
-Rules:
+${person.feeling ? `How they've been feeling: ${person.feeling}` : ""}`;
+  const rules = `Rules:
 - ${IDENTITY_RULE}
-- Two tests, both must pass (Royce, 2026-09-16: "give them things that match their profile"):
-  1. It's the kind of thing they're asking for right now. Their ask decides: if they asked for a pottery class, a founder event doesn't fit however good it is for them.
+- Two tests, both must pass:
+  1. It's the kind of thing they asked Co to find. The search decides: if they asked for a pottery class, a founder event doesn't fit however good it is for them. Older asks in the background are context, not this search.
   2. It's worth their time given who they are right now: their work and stage, what they want, what matters to them in people, and what has or hasn't worked before. Something clearly aimed at a different audience or stage (a beginner coding workshop for an experienced technical founder, a job fair for someone not looking) doesn't fit. When the background says nothing either way, this test passes.
 - Judge the event by its own main activity. Who attends, hosts, or sponsors never changes what kind of event it is: a chess night full of AI researchers is a chess night, not an AI meetup.
 - If they're asking about a new or possible direction ("if I start something new", "if I decide to build something else"), judge it for that new thing. A new company starts from zero, so pre-seed and seed programs fit it. Their current company's stage, funding, or other asks never make it a misfit.
-- Say it doesn't fit when it fails either test: the wrong kind of thing, the wrong place or time, or clearly not worth their time for who they are now.
+- Say it doesn't fit when it fails either test: the wrong kind of thing, the wrong place or time, or clearly not worth their time for who they are now. Your answer and your explanation must agree: if your explanation says it matches what they asked, it fits unless you name the test it fails.
 - ${person.timeFrame ? `They asked about ${person.timeFrame}. Something clearly happening outside that time frame doesn't fit, however good it is otherwise.` : "They didn't name a time frame."}
-- How they've been feeling never makes something a misfit (2026-09-18): it changes how Co brings it up, not whether they hear about it.
+- How they've been feeling never makes something a misfit: it changes how Co brings it up, not whether they hear about it.
 ${
     // Only present when there's something to apply (2026-09-22): an
     // always-present "avoided" field made the model mark ordinary matches
@@ -227,12 +238,29 @@ ${
     avoidList.length
       ? `- They told Co to stop suggesting these kinds of things: ${avoidList.map((a) => `"${a}"`).join(", ")}. If it is clearly one of those kinds (judged by its main activity, the same way as above), it does not fit, it is not the right kind, and "avoided" is true, however good it is otherwise. Anything else is not avoided.\n`
       : ""
-  }${person.availability ? `- When they've said they're usually free: "${person.availability}". Check the day of the week and the time it starts, from the details above, against that. If it's on a day or at a time outside what they said (a Saturday for "weeknights only", a weekday afternoon for "evenings"), it doesn't fit, though it can still be the right kind. When the event's time isn't known, this test passes.\n` : ""}
-- Connect a specific thing about them (their ask, or who they are right now) to a specific real detail above. Use only what's written here.
+  }${person.availability ? `- When they've said they're usually free: "${person.availability}". Check the day of the week and the time it starts, from the details above, against that. If it's on a day or at a time outside what they said (a Saturday for "weeknights only", a weekday afternoon for "evenings"), it doesn't fit, though it can still be the right kind. When the event's time isn't known, this test passes.\n` : ""}- Connect a specific thing about them (their ask, or who they are right now) to a specific real detail above. Use only what's written here.
 
 Also say whether it's the right kind of thing for what they asked (test 1 alone), even when it fails on something else like the date or their stage: a founder mixer for someone asking for founder events is the right kind; a funding story for someone asking about hiring is not.
+${person.timeFrame ? `\nAlso say whether it clearly happens outside ${person.timeFrame} ("outsideTimeFrame": true), from its own dates above. When its dates aren't known, false.\n` : ""}${person.place ? `\nThey're looking in or near ${person.place.split(" + ").join(" or ")}. Also say whether it's clearly somewhere else and not online ("outsidePlace": true), from where it is above. When its place isn't known, false.\n` : ""}`;
+  return { intro, rules };
+}
 
-Return ONLY JSON: {"fits": true or false, "rightKind": true or false,${avoidList.length ? ' "avoided": true or false,' : ""} "why": "the explanation"}`;
+function fitFields(person: PersonForFit): string {
+  const avoidList = (person.avoid ?? []).filter((a) => a && a.trim());
+  return `"fits": true or false, "rightKind": true or false,${person.timeFrame ? ' "outsideTimeFrame": true or false,' : ""}${person.place ? ' "outsidePlace": true or false,' : ""}${avoidList.length ? ' "avoided": true or false,' : ""} "why": "the explanation"`;
+}
+
+export function fitPrompt(match: EnrichedMatch, person: PersonForFit, picture: string): string {
+  const { intro, rules } = fitContext(person, picture);
+  return `Decide whether "${match.name}" fits ${person.firstName}, and explain why in one or two plain sentences, to Co's own notes.
+
+${intro}
+
+What's actually known about "${match.name}":
+${detailLinesFor(match).join("\n") || "(only the name)"}
+
+${rules}
+Return ONLY JSON: {${fitFields(person)}}`;
 }
 
 // What they've ruled out, and when they're usually free, straight from
@@ -249,12 +277,9 @@ async function loadFitPreferences(userId: string): Promise<{ avoid: string[]; av
   return { avoid: Array.isArray(r.avoid) ? r.avoid.filter((a: unknown) => typeof a === "string" && a.trim()) : [], availability };
 }
 
-export async function explainFit(match: EnrichedMatch, person: PersonForFit): Promise<{ fits: boolean; rightKind: boolean; why: string } | null> {
+export async function explainFit(match: EnrichedMatch, person: PersonForFit): Promise<FitResult | null> {
   const picture = person.userId ? renderSnapshot(await getPersonSnapshot(person.userId)) : "";
-  if (person.userId && (person.avoid === undefined || person.availability === undefined)) {
-    const prefs = await loadFitPreferences(person.userId);
-    person = { ...person, avoid: person.avoid ?? prefs.avoid, availability: person.availability ?? prefs.availability };
-  }
+  person = await withPreferences(person);
   try {
     const { text } = await generateText({
       model: anthropic(MODELS.sonnet),
@@ -262,47 +287,104 @@ export async function explainFit(match: EnrichedMatch, person: PersonForFit): Pr
       experimental_telemetry: { isEnabled: true, functionId: "eventDetails.explainFit" },
       prompt: fitPrompt(match, person, picture),
     });
-    const p = parseModelJson<{ fits?: boolean; rightKind?: boolean; avoided?: boolean; why?: string }>(text);
-    if (typeof p.why !== "string" || !p.why.trim()) return null;
-    // Never claim who they are beyond what Co was given about them (services/identityGuard.ts).
-    const cleanWhy = stripUngroundedIdentity(p.why, `${picture}\n${person.askText ?? ""}\n${(person.goals ?? []).join(" ")}\n${person.city ?? ""}`);
-    if (!cleanWhy) return null;
-    p.why = cleanWhy;
-    // A kind they ruled out is enforced here, not left to the model's other
-    // two answers: it must never fit, and never go out as a "closest thing"
-    // stretch either (routes/sendblue.ts sends a rightKind misfit with a
-    // caveat when nothing fits).
-    if (p.avoided === true && person.avoid?.length) return { fits: false, rightKind: false, why: p.why.trim() };
-    // Day and time checked in code (services/availability.ts): a clear
-    // conflict is a misfit however the model read it. Still the right kind,
-    // so it can go out as a caveated "closest thing" when nothing else fits,
-    // and the caveat names the day and time.
-    const conflict = availabilityConflict(person.availability, match.details?.startAt ?? null, match.details?.timezone ?? null);
-    if (conflict) return { fits: false, rightKind: p.rightKind !== false, why: `${p.why.trim()} ${conflict}` };
-    const fits = p.fits !== false;
-    // Anything that fits is the right kind; a misfit is only the right kind
-    // when the model said so outright.
-    return { fits, rightKind: fits || p.rightKind === true, why: p.why.trim() };
+    return finishFit(parseModelJson<RawFit>(text), match, person, picture);
   } catch (err: any) {
     console.error("eventDetails: explainFit failed (non-fatal):", err?.message ?? err);
     return null;
   }
 }
 
+type RawFit = { fits?: boolean; rightKind?: boolean; outsideTimeFrame?: boolean; outsidePlace?: boolean; avoided?: boolean; why?: string };
+export type FitResult = { fits: boolean; rightKind: boolean; outsideTimeFrame?: boolean; outsidePlace?: boolean; why: string };
+
+// The checks code makes on any read, single or batched.
+function finishFit(p: RawFit, match: EnrichedMatch, person: PersonForFit, picture: string): FitResult | null {
+  const outsideTimeFrame = !!person.timeFrame && p.outsideTimeFrame === true;
+  const outsidePlace = !!person.place && p.outsidePlace === true && !match.online;
+  if (typeof p.why !== "string" || !p.why.trim()) return null;
+  // Never claim who they are beyond what Co was given about them (services/identityGuard.ts).
+  const cleanWhy = stripUngroundedIdentity(p.why, `${picture}\n${person.askText ?? ""}\n${person.latestText ?? ""}\n${(person.goals ?? []).join(" ")}\n${person.city ?? ""}`);
+  if (!cleanWhy) return null;
+  const why = cleanWhy.trim();
+  // A kind they ruled out is enforced here, not left to the model's other
+  // two answers: it must never fit, and never go out as a "closest thing"
+  // stretch either (routes/sendblue.ts sends a rightKind misfit with a
+  // caveat when nothing fits).
+  if (p.avoided === true && person.avoid?.length) return { fits: false, rightKind: false, why };
+  // Day and time checked in code (services/availability.ts): a clear
+  // conflict is a misfit however the model read it. Still the right kind,
+  // so it can go out as a caveated "closest thing" when nothing else fits,
+  // and the caveat names the day and time.
+  const conflict = availabilityConflict(person.availability, match.details?.startAt ?? null, match.details?.timezone ?? null);
+  if (conflict) return { fits: false, rightKind: p.rightKind !== false, outsideTimeFrame, outsidePlace, why: `${why} ${conflict}` };
+  // Outside the dates or the place they asked about never fits.
+  const fits = p.fits !== false && !outsideTimeFrame && !outsidePlace;
+  // Anything that fits is the right kind; a misfit is only the right kind
+  // when the model said so outright.
+  return { fits, rightKind: fits || p.rightKind === true, outsideTimeFrame, outsidePlace, why };
+}
+
+async function withPreferences(person: PersonForFit): Promise<PersonForFit> {
+  if (person.userId && (person.avoid === undefined || person.availability === undefined)) {
+    const prefs = await loadFitPreferences(person.userId);
+    return { ...person, avoid: person.avoid ?? prefs.avoid, availability: person.availability ?? prefs.availability };
+  }
+  return person;
+}
+
 // Attach real details (and, with a person, a personal reason) to a match.
 // Safe to call on an already-enriched match; fetches only what's missing.
+// Links in a post (X shortens them to t.co), resolved to where they go.
+export function linksIn(text: string): string[] {
+  return Array.from(new Set(text.match(/https?:\/\/[^\s)"'<>]+/g) ?? [])).slice(0, 4);
+}
+
+export function isLumaLink(url: string): boolean {
+  return /^https?:\/\/(www\.)?(lu\.ma|luma\.com)\//i.test(url);
+}
+
+export async function resolveLink(url: string): Promise<string> {
+  if (!/^https?:\/\/t\.co\//i.test(url)) return url;
+  try {
+    const res = await fetch(url, { method: "GET", redirect: "follow", signal: AbortSignal.timeout(PAGE_TIMEOUT_MS), headers: { "User-Agent": "Mozilla/5.0" } });
+    return res.url || url;
+  } catch {
+    return url;
+  }
+}
+
+// An event posted on X with its Luma page linked: the time and place come
+// from Luma (Royce, 2026-09-28: "if a X post contains a Luma url, search and
+// gather all the details from luma... we must gather time and date").
+export async function lumaDetailsFromPost(postText: string): Promise<{ details: EventDetails; url: string } | null> {
+  for (const link of linksIn(postText)) {
+    const url = await resolveLink(link);
+    if (!isLumaLink(url)) continue;
+    const details = await fetchLumaEventDetails(url);
+    if (details) return { details, url };
+  }
+  return null;
+}
+
 export async function enrichMatch(match: TierMatch | EnrichedMatch, person?: PersonForFit): Promise<EnrichedMatch> {
   const m: EnrichedMatch = { ...match };
   if (m.kind !== "opportunity" && !m.details && "url" in m && m.url) {
     m.details = (await fetchLumaEventDetails(m.url)) ?? undefined;
   }
   if (m.kind === "opportunity" && !m.opportunity && m.evidence) m.opportunity = { postText: m.evidence };
+  // Any event Co surfaces gets its time: an X post with a Luma link reads it from Luma.
+  if (!m.details && m.opportunity?.postText) {
+    const found = await lumaDetailsFromPost(m.opportunity.postText).catch(() => null);
+    if (found) m.details = found.details;
+  }
   if (person && !m.whyItFits) {
     const fit = await explainFit(m, person);
     if (fit) {
       m.whyItFits = fit.why;
       m.fits = fit.fits;
       m.rightKind = fit.rightKind;
+      m.outsideTimeFrame = fit.outsideTimeFrame;
+      m.outsidePlace = fit.outsidePlace;
     }
   }
   return m;

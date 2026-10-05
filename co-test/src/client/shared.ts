@@ -5,26 +5,6 @@ export type TranscriptMessage = {
   kind?: "start" | "end" | "tool";
 };
 
-// sessionStorage (not localStorage) is deliberate — scoped to this one
-// browser tab, cleared when it closes, so a forgotten test override can
-// never quietly bleed into a later, unrelated session. Read/written from
-// both the prompt page and the call page, so it's the single source of
-// truth for "which prompt is the next call actually going to use."
-const PROMPT_OVERRIDE_KEY = "co_test_prompt_override";
-
-export function getPromptOverride(): string | null {
-  const value = sessionStorage.getItem(PROMPT_OVERRIDE_KEY);
-  return value && value.trim() ? value : null;
-}
-
-export function setPromptOverride(text: string): void {
-  sessionStorage.setItem(PROMPT_OVERRIDE_KEY, text);
-}
-
-export function clearPromptOverride(): void {
-  sessionStorage.removeItem(PROMPT_OVERRIDE_KEY);
-}
-
 export function formatClock(date: Date): string {
   return date.toLocaleTimeString("en-US", {
     hour: "2-digit",
@@ -159,7 +139,7 @@ export function topicLabel(topic: string): string {
 // and phone.ts (real Twilio-bridged calls, now relayed live via Socket.IO —
 // see webhooks.ts's pushLiveEvent) so both render an in-progress coverage
 // check identically. covered_topics/call_count/latency_ms are sandbox-only
-// observability — never part of what's sent back to Hume as the tool
+// observability — never part of what's sent back to the agent as the tool
 // response (that stays exactly {missing_topics, ready_to_summarize}).
 export function renderCoveragePanel(
   container: HTMLElement,

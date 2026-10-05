@@ -1,4 +1,5 @@
 import "dotenv/config";
+import { getPlanFile } from "./services/planFile.js";
 import { initTelemetry } from "./telemetry.js";
 initTelemetry();
 
@@ -8,9 +9,9 @@ import express from "express";
 import helmut from "helmet";
 import { createServer } from "http";
 import { Server } from "socket.io";
-import { WebSocketServer } from "ws";
 import { runMigrations } from "./db/migrations.js";
 import { registerJobs } from "./jobs/index.js";
+import { installGracefulShutdown, trackRequests } from "./services/shutdown.js";
 import { authenticateToken } from "./middleware/auth.js";
 import { corsOptions } from "./middleware/cors.js";
 import { errorHandler } from "./middleware/errorHandler.js";
@@ -28,14 +29,15 @@ import { createReferralsRouter } from "./routes/referrals.js";
 import { reportUnfinishedTurns, sendblueRouter } from "./routes/sendblue.js";
 import { stripeRouter } from "./routes/stripe.js";
 import { createUsersRouter } from "./routes/users.js";
-import { bridgeTwilioMediaStream } from "./services/mediaStreamBridge.js";
 import { getAudioEntry } from "./services/voiceNote.js";
 import { configureSocket } from "./socket/index.js";
 import { buildCoVCard } from "./utils/vcard.js";
 import { createMoRouter } from "./routes/mo.js";
+import { createGoogleRouter } from "./routes/google.js";
 
 const app = express();
 app.set("trust proxy", 1);
+app.use(trackRequests); // a restart waits for requests mid-flight (services/shutdown.ts)
 const port = process.env.PORT ?? "8080";
 
 const httpServer = createServer(app);
@@ -44,32 +46,6 @@ const io = new Server(httpServer, { cors: corsOptions });
 //Web socket config
 configureSocket(io);
 
-// Twilio's <Connect><Stream> (see services/callTrigger.ts) connects here
-// directly — a raw `ws` server, not socket.io, since Twilio Media Streams
-// speaks its own plain WebSocket JSON protocol. noServer mode + a manual
-// "upgrade" listener so this coexists with socket.io's own upgrade handling
-// on the same httpServer without either intercepting the other's path.
-const mediaStreamWss = new WebSocketServer({ noServer: true });
-httpServer.on("upgrade", (req, socket, head) => {
-  const { pathname } = new URL(req.url ?? "", `http://${req.headers.host}`);
-  if (pathname !== "/media-stream") return; // socket.io's own listener handles /socket.io/
-  mediaStreamWss.handleUpgrade(req, socket, head, (ws) => {
-    mediaStreamWss.emit("connection", ws, req);
-  });
-});
-// user_id is NOT available yet at upgrade time — Twilio strips query
-// parameters from Stream URLs entirely (confirmed live and via Twilio's
-// docs), so it travels as a <Parameter> instead (see callTrigger.ts) and
-// only arrives once the socket sends its own "start" event.
-// bridgeTwilioMediaStream resolves it from there itself — and, since
-// 2026-09-17, only trusts it once it's proven by a single-use signed token
-// in that same "start" event (see mediaStreamBridge.ts's "media-stream
-// auth" section); this upgrade handler stays auth-agnostic on purpose, the
-// same way it was before, since the real proof travels inside the socket's
-// own protocol, not the upgrade request.
-mediaStreamWss.on("connection", (ws) => {
-  bridgeTwilioMediaStream(ws);
-});
 //Security check to make sure the right tables/columns
 // are there when the server starts. Fixed 2026-09-17: runMigrations()
 // became async/awaitable (auth/payments) but this call was still fired
@@ -81,13 +57,16 @@ mediaStreamWss.on("connection", (ws) => {
 const migrationsReady = runMigrations();
 // Stripe webhook needs raw body for signature verification — must run before express.json()
 app.use("/payments/webhook", express.raw({ type: "application/json" }));
-// Hume's webhook signature is an HMAC over the exact raw body string, same
-// reasoning as Stripe's above — a re-serialized/parsed-then-stringified body
-// isn't guaranteed byte-identical to what Hume actually signed.
-app.use("/co/webhook", express.raw({ type: "application/json" }));
+// ElevenLabs signs the post-call webhook over the exact raw body (services/
+// elevenLabsCalls.ts), same reasoning as Stripe's above.
+app.use("/co/el/post-call", express.raw({ type: "application/json", limit: "5mb" }));
+// The agent sends the whole conversation to its tools; the default 100kb JSON limit would reject a long call before the route runs.
+app.use("/co/el/tool", express.json({ limit: "2mb" }));
 // Luma's webhook signature is the same "HMAC over the raw body" shape as the
 // two above — see validateLumaWebhook in routes/luma.ts for the exact scheme.
 app.use("/luma/webhook", express.raw({ type: "application/json" }));
+// Resend signs the raw body of Mo's inbound email posts (routes/mo.ts).
+app.use("/mo/email/inbound", express.raw({ type: "application/json" }));
 
 app.use(express.json());
 app.use(express.urlencoded({ extended: false })); // Twilio status callbacks send form-encoded bodies
@@ -110,6 +89,7 @@ app.use("/luma", createLumaRouter());
 app.use("/payments", stripeRouter(io, authenticateToken));
 app.use("/sendblue", sendblueRouter(io));
 app.use("/mo", createMoRouter());
+app.use("/google", createGoogleRouter());
 
 // Serve Co's vCard so Sendblue can attach it to the circle_placement iMessage.
 // Sendblue fetches media_url before sending — this endpoint must be publicly reachable
@@ -137,6 +117,16 @@ app.get("/audio/:id", (req, res) => {
   return res.send(entry.buffer);
 });
 
+// A plan's PDF for Sendblue to attach to a text: random id, short-lived, never listed (services/planFile.ts).
+app.get("/plan-file/:id.pdf", (req, res) => {
+  const file = /^[a-f0-9]{48}$/.test(req.params.id) ? getPlanFile(req.params.id) : null;
+  if (!file) return res.status(404).send("Not found.");
+  res.setHeader("Content-Type", "application/pdf");
+  res.setHeader("Content-Disposition", "inline; filename=plan.pdf");
+  res.setHeader("Cache-Control", "no-store");
+  return res.send(file);
+});
+
 app.use(errorHandler);
 
 migrationsReady
@@ -155,6 +145,7 @@ migrationsReady
     httpServer.listen(port, () => {
       console.log(`Listening on port: ${port}`);
     });
+    installGracefulShutdown(httpServer);
   })
   .catch((err) => {
     console.error("Migrations failed — server not starting:", err);

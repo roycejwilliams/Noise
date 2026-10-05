@@ -1,6 +1,8 @@
 // Model-free checks for alert thresholds (harness/monitor.ts) and the call
 // audit's rules (harness/callGrounding.ts).
 //   npx tsx evals/monitor/run.ts
+import { ABILITIES } from "../../src/services/capabilities.js";
+import { EXTENSIONS } from "../../src/services/extensions.js";
 import "dotenv/config";
 import { SIGNALS, shouldAlert, type SignalReading } from "../../src/harness/monitor.js";
 import { callAuditChecks } from "../../src/harness/callGrounding.js";
@@ -38,11 +40,20 @@ check("ok claims not listed", checks.length === 3);
 // records for the city guard, the contact card and held-back reactions).
 const WRITTEN_DECISIONS = [
   "reply.grounding", "proactive.dailyPick", "recommendation.search", "turn.latency", "call.grounding",
-  "profile.snapshotCheck", "profile.city", "reply.contactCard", "turn.closing", "router.decideActions",
+  "profile.snapshotCheck", "profile.city", "turn.closing", "router.decideActions",
   "proactive.windowFollowUp", "proactive.exemptSend", "tier1.announce", "call.gate",
+  // Written by the companion cron (jobs/index.ts, services/understanding.ts).
+  "understanding.check",
+  // Every tool Co chooses writes tool.<name> (agent/toolGuard.ts, 2026-09-25).
+  "tool.%", ...ABILITIES.filter((a) => a.tool).map((a) => `tool.${a.tool}`),
+  // Extensions' tools write the same, per team turn (services/extensions.ts).
+  ...EXTENSIONS.flatMap((e) => [`${e.id}.teamTurn`, ...e.abilities.filter((a) => a.tool).map((a) => `tool.${a.tool}`)]),
 ];
 for (const signal of SIGNALS) {
   const named = WRITTEN_DECISIONS.find((d) => signal.bad.includes(`'${d}'`));
+  // How often each tool is used is measured per reply on purpose.
+  if (named && signal.key.startsWith("tool_use_") && signal.total.includes("'turn.latency'")) continue;
+  if (named && signal.key.startsWith("tool_use_") && EXTENSIONS.some((e) => signal.total.includes(`'${e.id}.teamTurn'`))) continue;
   if (!named) {
     failed++;
     console.log(`FAIL signal ${signal.key}: watches a decision nothing writes`);

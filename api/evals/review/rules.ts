@@ -1,3 +1,4 @@
+import { readFileSync } from "fs";
 // Model-free checks for the dev-only "what broke" review (harness/devReview.ts),
 // built from real co-test turns on 2026-09-18. No API calls, no database:
 //   npx tsx evals/review/rules.ts
@@ -5,6 +6,7 @@ import {
   conversationFlags,
   findQuoted,
   groupFlags,
+  heldBackFlags,
   loggedActions,
   logFlags,
   reactionFlags,
@@ -190,6 +192,49 @@ check("on co-test with the flag", reviewEnabled({ RAILWAY_ENVIRONMENT_NAME: "dev
   check("retention with nobody old enough says so", lines.some((l) => l.includes("Still active after two weeks") && l.includes("none yet")));
   const html = renderMetricsHtml(m);
   check("the relationship comes first in the Monday email", html.indexOf("The relationship") < html.indexOf("Growth, offers and intros"));
+}
+
+// The week before (2026-09-26): true references to earlier sends and to what
+// they said earlier aren't flagged as invented.
+{
+  const { reviewDataFromRows, modelReviewPrompt, earlierRecord } = await import("../../src/harness/devReview.js");
+  const d = reviewDataFromRows({
+    userId: "u", firstName: "Royce", msgs: [], decisions: [], emotions: [], issues: [], asks: [],
+    earlierMem: [
+      { created_at: "2026-09-24T22:26:00Z", memory_type: "text_exchange", content: "Co replied: Thursday rooftop mixer in SF, Sui's pulling together founders." },
+      { created_at: "2026-09-24T22:26:00Z", memory_type: "recommendation_offered", content: JSON.stringify({ name: "SVVR #102: Meta Connect Meetup + Party" }) },
+      { created_at: "2026-09-24T22:17:00Z", memory_type: "text_exchange", content: "User said: maybe it's time to figure out how to get into an accelerator or in touch with VCs" },
+    ],
+    earlierSends: [{ sent_at: "2026-09-23T17:00:00Z", type: "event_offer", message: "https://lu.ma/x  A dinner" }],
+  });
+  const rec = earlierRecord(d);
+  check("earlier: what Co sent, in its own words", /recommended "SVVR #102: Meta Connect Meetup \+ Party"/.test(rec) && /Thursday rooftop mixer/.test(rec) && /texted them unprompted \(event_offer\)/.test(rec));
+  check("earlier: what they told Co", /accelerator or in touch with VCs/.test(rec));
+  const pr = modelReviewPrompt(d);
+  check("prompt: the week before is in, and counts as backing", /The 7 days before today/.test(pr) && /neither today's decision log nor the earlier record backs up/.test(pr));
+  check("prompt: Co's own rules are in, so stating them isn't flagged", /What Co can do and its standing rules/.test(pr) && /5 invites each/.test(pr));
+  check("review has room to answer after thinking", /maxOutputTokens: 16_000/.test(readFileSync(new URL("../../src/harness/devReview.ts", import.meta.url), "utf8")));
+}
+
+{
+  // Held back (2026-10-02), shaped like Royce's queue on 10/2: ask check-ins
+  // queued days ago, nothing sent since 9/30, every pick blocked on the weekly cap.
+  const now = new Date("2026-10-02T20:00:00Z");
+  const ago = (d: number) => new Date(now.getTime() - d * 86_400_000).toISOString();
+  const held = [1, 2, 3, 4, 5].map((i) => ({ id: String(50 + i), type: "ask_checkin", createdAt: ago(3), summary: `ask ${i}` })).concat([{ id: "71", type: "companion", createdAt: ago(2.5), summary: "advice" }]);
+  const picks = [{ at: ago(0.2), candidates: [...held.slice(0, 5).map((h) => ({ id: h.id, failed: ["weekly_cap"] })), { id: "71", failed: ["type_gap"] }] }];
+  const f = heldBackFlags({ userId: "u", now, held, lastSendAt: ago(2.1), picks });
+  check("held 2+ days with nothing sent: flagged, high with 5+ items", f.length === 1 && f[0].type === "held_back" && f[0].severity === "high");
+  check("...naming the checks that held them, most first", f[0]?.cause === "held by weekly_cap ×5, type_gap ×1" && f[0].causeConfirmed);
+  check("a text in the last 2 days: no flag", heldBackFlags({ userId: "u", now, held, lastSendAt: ago(1), picks }).length === 0);
+  check("items queued under 2 days ago don't count", heldBackFlags({ userId: "u", now, held: held.map((h) => ({ ...h, createdAt: ago(1) })), lastSendAt: ago(5), picks }).length === 0);
+  check("no pick at all in 2 days is named as the cause", heldBackFlags({ userId: "u", now, held, lastSendAt: ago(3), picks: [] })[0]?.cause === "no daily pick ran for them in 2 days");
+  check("eligible but never picked is named too", /2 eligible but never picked/.test(heldBackFlags({ userId: "u", now, held: held.slice(0, 2), lastSendAt: ago(3), picks: [{ at: ago(0.5), candidates: held.slice(0, 2).map((h) => ({ id: h.id, failed: [] })) }] })[0]?.cause ?? ""));
+  check("opt-out or local hours holding the person is named, not 'eligible but never picked'", heldBackFlags({ userId: "u", now, held: held.slice(0, 2), lastSendAt: ago(3), picks: [{ at: ago(0.5), personBlocked: ["not_opted_out"], candidates: held.slice(0, 2).map((h) => ({ id: h.id, failed: [] })) }] })[0]?.cause === "held by not_opted_out ×2");
+  check("a night-time pick (local hours) doesn't hide the daytime cause", heldBackFlags({ userId: "u", now, held: held.slice(0, 2), lastSendAt: ago(3), picks: [{ at: ago(0.1), personBlocked: ["local_hours"], candidates: held.slice(0, 2).map((h) => ({ id: h.id, failed: [] })) }, { at: ago(0.6), candidates: held.slice(0, 2).map((h) => ({ id: h.id, failed: ["weekly_cap"] })) }] })[0]?.cause === "held by weekly_cap ×2");
+  check("an item picked and then put off is named as that", /picked, then put off ×1/.test(heldBackFlags({ userId: "u", now, held: held.slice(0, 1), lastSendAt: ago(3), picks: [{ at: ago(0.5), picked: held[0].id, action: "defer:ask_checkin", candidates: [{ id: held[0].id, failed: [] }] }] })[0]?.cause ?? ""));
+  check("a member never sent anything, small queue: medium, not high", heldBackFlags({ userId: "u", now, held: held.slice(0, 2), lastSendAt: null, picks })[0]?.severity === "medium");
+  check("one held item, quiet 2 days: medium", heldBackFlags({ userId: "u", now, held: held.slice(0, 1), lastSendAt: ago(2.5), picks })[0]?.severity === "medium");
 }
 
 console.log(`review rules: ${total - failed}/${total} passed`);

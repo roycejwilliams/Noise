@@ -13,6 +13,8 @@ import { MODELS } from "../models.js";
 import { getEventGuestList } from "./luma.js";
 import { matchGuestsToUsers, dedupeByUserId } from "./eventScoring.js";
 import { mergeWalkinsIntoGuestPool } from "./eventWalkinCheckin.js";
+import { CO_EMAIL_FROM } from "./emailFrom.js";
+import { galleryEmail } from "./emailDesign.js";
 
 // This person's timezone, for the hours check on a reply-triggered direct
 // ask (code review, 2026-09-17 — see sendExemptWhenAllowed).
@@ -180,6 +182,7 @@ async function maybeAskCandidateDirectly(
     {
       decision: "eventGuestMatchHandoff.directAsk",
       recipientId: candidate.user_id,
+      otherUserIds: [asker.user_id],
       preChecks: [
         askerOptedIn
           ? { name: "asker_opted_in", pass: true }
@@ -261,7 +264,13 @@ async function sendIntroEmail(eventId: string, eventName: string, a: MatchNudgeC
   if (!(await gateIntroAction(a.user_id, "eventGuestMatchHandoff.introEmail", [checkBothYes(aYes, bYes)], { eventId, b: b.user_id }))) return false;
 
   const subject = `Introducing ${a.first_name} and ${b.first_name}`;
-  const html = `<p>Hi both,</p><p>Figured you two should actually meet before ${eventName} — you're both on my radar for it, so consider this your intro. Take it from here!</p><p>— Co</p>`;
+  const html = galleryEmail({
+    preview: `Before ${eventName}: Co thinks you two should meet.`,
+    eyebrow: "An introduction",
+    headline: `${a.first_name}, meet ${b.first_name}.`,
+    body: [`You're both going to ${eventName}, and Co figured you two should actually meet before it. Consider this your introduction.`],
+    close: "You both said yes. Take it from here.",
+  });
   if (!ALLOW_REAL_SENDS) {
     console.log(`[sendIntroEmail stub, ${process.env.NODE_ENV ?? "no NODE_ENV"}] to ${a.email}, ${b.email}: ${subject}`);
   } else {
@@ -269,7 +278,7 @@ async function sendIntroEmail(eventId: string, eventName: string, a: MatchNudgeC
       const resend = new Resend(process.env.RESEND_API_KEY);
       // Co cc'd (Royce, 2026-09-07: "Co would need to be the driver of the
       // email") — visibly present so a reply-all naturally includes it.
-      const { error } = await resend.emails.send({ from: "Co <hello@copatible.com>", to: [a.email, b.email], cc: ["hello@copatible.com"], subject, html });
+      const { error } = await resend.emails.send({ from: CO_EMAIL_FROM, to: [a.email, b.email], cc: ["hello@copatible.com"], subject, html });
       if (error) throw new Error(error.message);
     } catch (err: any) {
       console.error("sendIntroEmail: send failed (non-fatal):", err?.message ?? err);
@@ -278,6 +287,8 @@ async function sendIntroEmail(eventId: string, eventName: string, a: MatchNudgeC
   }
   await writeMemory(a.user_id, "event_intro_email_sent", `Sent an intro email connecting ${a.first_name} and ${b.first_name} ahead of "${eventName}".`);
   await writeMemory(b.user_id, "event_intro_email_sent", `Sent an intro email connecting ${a.first_name} and ${b.first_name} ahead of "${eventName}".`);
+  // Introduced after both said yes: the only people a relay can reach (services/relay.ts).
+  await import("./relay.js").then((r) => r.recordConnection(a.user_id, b.user_id, "event_intro")).catch(() => {});
   return true;
 }
 
