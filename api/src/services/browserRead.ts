@@ -166,10 +166,12 @@ export async function renderPdf(html: string): Promise<Buffer | null> {
       return host === "fonts.googleapis.com" || host === "fonts.gstatic.com" || route.request().url().startsWith("data:") ? route.continue() : route.abort();
     });
     const page = await context.newPage();
-    await page.setContent(html, { waitUntil: "networkidle", timeout: BROWSER_LIMITS.pageMs });
-    // Give the web font a moment; without it the serif falls back and the sheet still reads.
-    await page.evaluate(() => (document as any).fonts?.ready).catch(() => {});
-    const pdf = await page.pdf({ format: "Letter", printBackground: true, margin: { top: "0", right: "0", bottom: "0", left: "0" }, pageRanges: "1" });
+    await page.setContent(html, { waitUntil: "load", timeout: BROWSER_LIMITS.pageMs });
+    // Give the web font a few seconds; without it the serif falls back and the sheet still reads. A slow
+    // font host never fails the send.
+    await Promise.race([page.evaluate(() => (document as any).fonts?.ready), new Promise((r) => setTimeout(r, 4000))]).catch(() => {});
+    // No page range: a long plan flows onto a second page rather than losing steps the calendar still has.
+    const pdf = await page.pdf({ format: "Letter", printBackground: true, margin: { top: "0", right: "0", bottom: "0", left: "0" } });
     return pdf.length > 1_000 ? Buffer.from(pdf) : null;
   } catch (err: any) {
     if (/Executable doesn't exist|Failed to launch|ENOENT/i.test(err?.message ?? "")) failedAt = Date.now();

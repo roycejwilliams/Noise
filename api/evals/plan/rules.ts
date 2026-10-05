@@ -24,7 +24,7 @@ const read = (f: string) => readFileSync(new URL(`../../${f}`, import.meta.url),
 const ZONE = "America/Los_Angeles";
 const now = new Date("2026-10-05T18:00:00Z");
 const HIKE_LINK = "https://lu.ma/xt8ffyvi";
-const records = (link: string): any => (link === HIKE_LINK ? { name: "Round Valley sunset hike", startAt: "2026-10-11T23:15:00.000Z", endAt: "2026-10-12T02:15:00.000Z", timezone: ZONE, venue: "Round Valley Regional Preserve", address: "19450 Marsh Creek Rd, Brentwood, CA" } : null);
+const records = (link: string): any => (link === HIKE_LINK ? { name: "Round Valley sunset hike", hasRecord: true, startAt: "2026-10-11T23:15:00.000Z", endAt: "2026-10-12T02:15:00.000Z", timezone: ZONE, venue: "Round Valley Regional Preserve", address: "19450 Marsh Creek Rd, Brentwood, CA" } : null);
 const facts = "Highwire Coffee, 5581 College Ave, Oakland. Open 7 to 5. Round Valley Regional Preserve, 19450 Marsh Creek Rd, Brentwood. Nopa, 560 Divisadero St, San Francisco.";
 const base: P.PlanInput = {
   title: "Sunday in the East Bay",
@@ -37,7 +37,7 @@ const base: P.PlanInput = {
   notes: ["Parking fills early."],
 };
 const plan = P.resolvePlan(base, ZONE, records);
-const problems = (input: P.PlanInput, theirs = "plan a sunday for me and three friends") => P.planProblems(input, P.resolvePlan(input, ZONE, records), { facts, theirs, now, recordFor: records });
+const problems = (input: P.PlanInput, theirs = "plan a sunday in the East Bay for me and three friends") => P.planProblems(input, P.resolvePlan(input, ZONE, records), { facts, theirs, now, recordFor: records });
 
 // ---- an event step takes its time and place from the event's own record
 const hike = plan.steps.find((s) => s.what === "Sunset hike")!;
@@ -49,8 +49,8 @@ check("dashes are never written", P.resolvePlan({ ...base, title: "Day — out",
 
 // ---- what may go out
 check("a well-backed plan has no problems", problems(base).length === 0);
-check("a link that isn't an event Co found is refused", problems({ ...base, steps: [{ link: "https://lu.ma/nope", what: "x event" }] }).some((p) => /isn't an event you found/.test(p)));
-check("a time that isn't a real date is refused", problems({ ...base, steps: [{ when: "Saturday afternoon", what: "Walk" }] }).some((p) => /isn't a real date and time/.test(p)));
+check("a link that isn't an event Co found is refused", problems({ ...base, steps: [{ link: "https://lu.ma/nope", what: "x event" }] }).some((p) => /isn't an event with its own page record/.test(p)));
+check("a time that isn't a real date is refused", problems({ ...base, steps: [{ when: "Saturday afternoon", what: "Walk" }] }).some((p) => /local date and time like 2026-10-11T16:30/.test(p)));
 check("a time already past is refused", problems({ ...base, steps: [{ when: "2026-10-01T10:00", what: "Walk" }] }).some((p) => /already passed/.test(p)));
 check("more than 90 days out is refused", problems({ ...base, steps: [{ when: "2027-03-01T10:00", what: "Walk" }] }).some((p) => /days out/.test(p)));
 check("ending before starting is refused", problems({ ...base, steps: [{ when: "2026-10-11T12:00", until: "2026-10-11T11:00", what: "Walk" }] }).some((p) => /ends before it starts/.test(p)));
@@ -58,11 +58,39 @@ check("an address nobody read or said is refused", problems({ ...base, steps: [{
 check("a place nobody read or said is refused", problems({ ...base, steps: [{ what: "Dinner", where: "Zuni Cafe" }] }).some((p) => /Zuni Cafe/.test(p)));
 check("a number nobody read or said is refused (times belong in the time field)", problems({ ...base, steps: [{ when: "2026-10-11T10:00", what: "Coffee", detail: "Table for 88" }] }).some((p) => /isn't in what you read/.test(p)));
 check("a name nobody read or said is refused", problems({ ...base, steps: [{ what: "Dinner with Dana Whitfield" }] }).some((p) => /Dana|Whitfield/.test(p)));
-check("a name the member said is fine", problems({ ...base, steps: [{ what: "Dinner with Dana" }] }, "plan a night with Dana").length === 0);
+check("a name the member said is fine", problems({ ...base, steps: [{ what: "Dinner with Dana" }] }, "plan a sunday in the East Bay with Dana").length === 0);
 check("a number in the note is held to the same rule", problems({ ...base, note: "Parking costs 40 dollars." }).some((p) => /note/.test(p)));
 check("no links, brackets or markup in the words", problems({ ...base, note: "See https://example.com" }).some((p) => /no links/.test(p)) && problems({ ...base, title: "<b>Plan</b>" }).some((p) => /no links/.test(p)));
 check("an empty plan, or one without a title, is refused", problems({ ...base, steps: [] }).length > 0 && problems({ ...base, title: "" }).some((p) => /title/.test(p)));
 check("more than eight steps is refused", problems({ ...base, steps: Array.from({ length: 9 }, (_, i) => ({ what: `Stop ${i}` })) }).some((p) => /at most 8/.test(p)));
+
+// ---- review of #70
+const BAD = { when: "2026-10-11T10:00", what: "Dinner", where: "Invented Bistro", address: "999 Nowhere Ave" };
+check("unsorted steps are still checked against their own inputs: an event first, an invented place after", (() => {
+  const input: P.PlanInput = { ...base, steps: [{ link: HIKE_LINK, what: "Hike" }, BAD] };
+  const ps = problems(input);
+  return ps.some((p) => /Invented Bistro/.test(p)) && !ps.some((p) => /19450|Round Valley/.test(p));
+})());
+check("the real event's record is not refused for a missing backing", !problems({ ...base, steps: [{ link: HIKE_LINK, what: "Hike" }] }).some((p) => /Round Valley|19450/.test(p)));
+const noDetails = (link: string): any => (link === "https://web.example/x" ? { name: "The Battery", hasRecord: false } : link === HIKE_LINK ? records(link) : null);
+check("a web result or a post can't fill a step: no time, no place", P.planProblems({ ...base, steps: [{ link: "https://web.example/x", when: "2026-10-11T12:00", where: "The Battery", address: "717 Battery St", what: "Lunch" }] }, P.resolvePlan({ ...base, steps: [{ link: "https://web.example/x", when: "2026-10-11T12:00", where: "The Battery", address: "717 Battery St", what: "Lunch" }] }, ZONE, noDetails), { facts, theirs: "x East Bay", now, recordFor: noDetails }).some((p) => /web result or a post/.test(p)));
+check("a model's own where, address and time never ride a linked step", (() => { const r = P.resolvePlan({ ...base, steps: [{ link: HIKE_LINK, what: "Hike", where: "Fort Mason", address: "2 Marina Blvd", when: "2026-10-11T08:00" }] }, ZONE, records).steps[0]; return r.where === "Round Valley Regional Preserve" && r.address?.startsWith("19450") && r.start?.toUTC().toISO() === "2026-10-11T23:15:00.000Z"; })());
+const nullVenue = (link: string): any => ({ name: "Open Field", hasRecord: true, startAt: "2026-10-11T23:15:00.000Z", venue: null, address: null, timezone: ZONE });
+check("an event with no venue on record gets none from the model", P.resolvePlan({ ...base, steps: [{ link: "L", what: "Meet", where: "Fort Mason", address: "2 Marina Blvd" }] }, ZONE, nullVenue).steps[0].where === null);
+const soldOut = (link: string): any => ({ ...records(HIKE_LINK), blocked: "sold out" });
+check("a sold-out or turned-away event can't go on a plan", P.planProblems({ ...base, steps: [{ link: HIKE_LINK, what: "Hike" }] }, P.resolvePlan({ ...base, steps: [{ link: HIKE_LINK, what: "Hike" }] }, ZONE, soldOut), { facts, theirs: "East Bay", now, recordFor: soldOut }).some((p) => /sold out/.test(p)));
+check("a date alone is refused, not read as midnight", problems({ ...base, steps: [{ when: "2026-10-10", what: "Walk" }] }).some((p) => /never a date alone/.test(p)));
+check("a time with a zone or offset is refused", problems({ ...base, steps: [{ when: "2026-10-11T10:00Z", what: "Walk" }] }).some((p) => /no zone/.test(p)) && problems({ ...base, steps: [{ when: "2026-10-11T10:00-07:00", what: "Walk" }] }).some((p) => /no zone/.test(p)));
+check("a bad end time, or an end without a start, is refused, not dropped", problems({ ...base, steps: [{ when: "2026-10-11T10:00", until: "soon", what: "Walk" }] }).some((p) => /end time/.test(p)) && problems({ ...base, steps: [{ until: "2026-10-11T12:00", what: "Walk" }] }).some((p) => /needs a start/.test(p)));
+check("the title is held to the same rule: an unread name, a number", problems({ ...base, title: "Dinner with Dana Whitfield" }).some((p) => /title or note/.test(p)) && problems({ ...base, title: "Saturday, 40 dollars" }).some((p) => /title or note/.test(p)));
+check("a sentence that opens with a name is caught: Zuni Cafe for dinner", problems({ ...base, steps: [{ what: "Zuni Cafe for dinner" }] }).some((p) => /Zuni/.test(p)));
+check("a place or address that is only a piece of another word is refused: Oak, 19th", problems({ ...base, steps: [{ what: "Walk", where: "Oak" }] }).some((p) => /"Oak"/.test(p)));
+check("a number that is only a piece of another number is refused: $60 and 601 19th St", P.numbersUnbacked("$60", "601 19th St") .length === 1 && P.numbersUnbacked("601", "601 19th St").length === 0 && P.numbersUnbacked("1,200", "it costs 1200 dollars").length === 0);
+check("spelled-out amounts are held to the facts too", problems({ ...base, steps: [{ what: "Dinner", detail: "About sixty dollars each" }] }).some((p) => /sixty dollars/.test(p)) && !problems({ ...base, steps: [{ what: "Dinner", detail: "About sixty dollars each" }] }, "plan a sunday in the East Bay, sixty dollars each is fine").some((p) => /sixty dollars/.test(p)));
+const { EMAIL_ASK } = await import("../../src/agent/loopTools.js");
+check("the email gate misses nothing common: calendar and mail phrasings", ["add it to my calendar", "put it in my calendar", "can you mail it to me", "emails please", "send it to my email"].every((t) => EMAIL_ASK.test(t)));
+check("and isn't fooled: negations, doing it themselves, a changed address, a photo of an email", ["I'll email the host myself", "don't email me", "I emailed them already", "my email changed", "check your inbox lol", "[sent a photo showing: a note that says put it on my calendar] plan sunday"].every((t) => !EMAIL_ASK.test(t)));
+check("what Co's record says matches what happened: not \"their email\" when it went by text", !/to their email/.test(read("src/services/coFacts.ts").slice(read("src/services/coFacts.ts").indexOf('case "emailPlan"'), read("src/services/coFacts.ts").indexOf('case "saveAsk"'))));
 
 // ---- the calendar file
 const ics = P.buildIcs(plan, { seed: "abc", now });
@@ -75,7 +103,7 @@ const dstIcs = P.buildIcs(dst, { seed: "d", now });
 check("the clocks changing is handled: 10:00 is 17:00Z before 1 November and 18:00Z after", /DTSTART:20261031T170000Z/.test(dstIcs) && /DTSTART:20261102T180000Z/.test(dstIcs));
 const long = P.resolvePlan({ title: "t", note: "n", steps: [{ when: "2026-10-11T10:00", what: "A".repeat(60), detail: "x, y; z" }] }, ZONE, records);
 const longIcs = P.buildIcs({ ...long, steps: [{ ...long.steps[0], what: "Walk, talk; and a very long description that has to be folded because calendar lines may not pass seventy five octets" }] }, { seed: "l", now });
-check("commas and semicolons are escaped", /SUMMARY:Walk\\, talk\; and/.test(longIcs.replace(/\r\n /g, "")));
+check("commas and semicolons are escaped", /SUMMARY:Walk\\, talk\\; and/.test(longIcs.replace(/\r\n /g, "")) && !/SUMMARY:Walk, talk; and/.test(longIcs.replace(/\r\n /g, "")));
 check("no line passes 75 octets", longIcs.split("\r\n").every((l) => Buffer.byteLength(l, "utf8") <= 75));
 check("a plan with no times has no events and says so", !P.hasTimedSteps(P.resolvePlan({ title: "t", note: "n", steps: [{ what: "Pack light" }] }, ZONE, records)) && !/BEGIN:VEVENT/.test(P.buildIcs(P.resolvePlan({ title: "t", note: "n", steps: [{ what: "Pack light" }] }, ZONE, records), { seed: "n", now })));
 check("each event has its own id", new Set(ics.match(/UID:[^\r]+/g)).size === 3);
@@ -89,7 +117,8 @@ check("nothing in it can run or reach out, apart from the font", !/<script|onerr
 const evil = P.planHtml(P.resolvePlan({ title: "<script>alert(1)</script>", note: "n", steps: [{ what: "<img src=x onerror=alert(1)>" }] }, ZONE, records), "<b>J</b>");
 check("anything in the plan is escaped", !/<script>alert|<img src=x|<b>J/.test(evil));
 check("a step with no time still appears", /Pack light/.test(P.planHtml(P.resolvePlan({ title: "t", note: "n", steps: [{ what: "Pack light" }] }, ZONE, records), "J")));
-check("it fits one page: the sheet is Letter, and the card is fixed to it", /size: Letter/.test(html) && /height: 11in/.test(html) && /pageRanges: "1"/.test(read("src/services/browserRead.ts")));
+check("the sheet is Letter and a long plan flows to a second page instead of losing steps", /size: Letter/.test(html) && /min-height: 11in/.test(html) && !/pageRanges/.test(read("src/services/browserRead.ts")) && /page-break-inside: avoid/.test(html));
+check("a slow font host can't fail the send", /waitUntil: "load"/.test(read("src/services/browserRead.ts")) && /setTimeout\(r, 4000\)/.test(read("src/services/browserRead.ts")));
 
 // ---- the email
 const mail = P.planEmail(plan, { firstName: "Jordan", calendar: true });
@@ -103,10 +132,9 @@ const sendSrc = read("src/services/planEmail.ts");
 const toolSrc = read("src/agent/loopTools.ts");
 const tool = toolSrc.slice(toolSrc.indexOf("emailPlan: tool({"), toolSrc.indexOf("updateNotes: tool({"));
 check("the tool takes no address: the member's own email comes from their account", !/\bto: z\.|\bemail: z\.|address: z\.string\(\)\.email/.test(tool.slice(0, tool.indexOf("execute:"))) && /SELECT email, first_name FROM users WHERE id = \$1/.test(tool) && /\[ctx\.userId\]/.test(tool));
-const { EMAIL_ASK } = await import("../../src/agent/loopTools.js");
 check("by default it goes by text", /\(input\.sendBy \?\? "text"\)/.test(tool) && !/email \? "email" : "text"/.test(tool));
 check("email only when they ask for it, in their own words, checked in code", /EMAIL_ASK\.test\(theirWords\(\)\)/.test(tool) && /!askedForEmail \? "text"/.test(tool));
-for (const t of ["email it to me", "can you send it to my email", "e-mail me the plan", "put it on my calendar", "send me a calendar invite", "drop it in my inbox", "emailed"]) check(`asking for email is read: ${t}`, EMAIL_ASK.test(t));
+for (const t of ["email it to me", "can you send it to my email", "e-mail me the plan", "put it on my calendar", "send me a calendar invite", "drop it in my inbox", "add it to my calendar", "put it in my calendar", "can you mail it to me", "emails please"]) check(`asking for email is read: ${t}`, EMAIL_ASK.test(t));
 for (const t of ["plan sunday for me and three friends", "text me the pdf", "what's the plan for Saturday", "send it over", "I'll mail the invites myself"]) check(`not asking for email: ${t}`, !EMAIL_ASK.test(t));
 check("with no email on file an email request becomes a text, and Co is told to say so", /\(asked === "email" && !email\)/.test(tool) && /They have no email on file, so it went by text: say so/.test(tool));
 check("the text send attaches the PDF at a short-lived address, and logs it", /media_url: cachePlanFile\(files\.pdf\)/.test(tool) && /logDeliveredPlan\(`Co replied: \[sent a plan:/.test(tool));
@@ -137,6 +165,9 @@ check("it is gone after its few minutes", F.PLAN_FILE_TTL_MS <= 10 * 60 * 1000 &
 const serverSrc = read("src/server.ts");
 check("the route only answers a 48-character hex id, as a PDF, never cached", /\^\[a-f0-9\]\{48\}\$/.test(serverSrc) && /application\/pdf/.test(serverSrc) && /Cache-Control", "no-store"/.test(serverSrc.slice(serverSrc.indexOf("/plan-file/"))));
 check("the plan is logged for the review", /decision: "loop\.emailPlan"/.test(tool));
+
+check("a downgraded email request tells Co why, and the email path logs itself for a replay", /They hadn't asked for email, so it went by text/.test(tool) && /logDeliveredPlan\(`Co replied: \[emailed a plan:/.test(tool));
+check("numbers are checked against what was read or said, not the capability text", !/ctx\.facts\?\.text\(\)/.test(tool.slice(tool.indexOf("const facts ="), tool.indexOf("const plan = resolvePlan"))));
 
 console.log(`plan rules: ${total - failed}/${total} passed`);
 if (failed) process.exit(1);

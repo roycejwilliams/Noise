@@ -53,8 +53,16 @@ export function captionProblems(caption: string, facts: string, theirs: string):
   ];
 }
 
-// They asked for it by email, in their own words: "email it", "send it to my email", "put it on my calendar", "in my inbox".
-export const EMAIL_ASK = /\be-?mail(?:ed|ing)?\b|\binbox\b|\bon my calendar\b|\bcalendar (?:invite|hold|event)s?\b|\bsend (?:it )?to my (?:mail|gmail|outlook|icloud)\b/i;
+// They asked for it by email, in their own words: "email it to me", "send it to my email", "put it on my
+// calendar", "in my inbox". Not "I'll email the host", "don't email me", "my email changed", or the caption of
+// a photo of an email.
+const EMAIL_REQUEST = /\be-?mail (?:it|this|that|me|the plan|the pdf|the sheet)\b|\bmail (?:it|this|that|me the|the plan|the pdf) (?:to me|over)?\b|\bsend (?:it|this|that|me the plan|the plan|the pdf)(?: over)? (?:to|by|via|through) (?:my )?(?:e-?mail|inbox|gmail|outlook|icloud)\b|\b(?:to|in|into|on|at) my (?:e-?mail|inbox|gmail|outlook|icloud)\b|\b(?:add|put|drop|send)(?: it| this| the plan| these| them)? (?:to|on|in|into) my calendar\b|\bon my calendar\b|\bcalendar (?:invites?|holds?|events?)\b|\bby e-?mail\b|\bvia e-?mail\b|\be-?mails? please\b/i;
+const EMAIL_REFUSAL = /\b(?:don'?t|do not|no need to|never|please don'?t|stop) (?:e-?mail|mail)\b|\bI(?:'ll| will)? e-?mail (?:the|them|him|her|my)\b|\bI(?:'ve)? e-?mailed\b|\bmy e-?mail (?:changed|is|was|address)\b/i;
+export function EMAIL_ASK_TEST(text: string): boolean {
+  const own = text.replace(/\[[^\]]*\]/g, " ");
+  return EMAIL_REQUEST.test(own) && !EMAIL_REFUSAL.test(own);
+}
+export const EMAIL_ASK = { test: EMAIL_ASK_TEST };
 
 export function mailtoLink(to: string, subject: string, body: string): string {
   return `mailto:${to}?subject=${encodeURIComponent(subject)}&body=${encodeURIComponent(body)}`;
@@ -407,7 +415,7 @@ export function loopTools(
     emailPlan: tool({
       description: toolUse("emailPlan"),
       inputSchema: z.object({
-        title: z.string().describe("A short title for the plan, in Co's voice (\"Sunday in the East Bay\")."),
+        title: z.string().describe("A short title for the plan, in Co's voice, using only words they said or you read: no place, name or number you didn't read."),
         note: z.string().describe("One or two plain sentences for the top of the sheet and the email, in your voice."),
         steps: z
           .array(
@@ -438,15 +446,18 @@ export function loopTools(
         const byEmail = (asked === "email" || asked === "both") && !!email;
         const byText = asked === "text" || asked === "both" || (asked === "email" && !email);
         const noEmailFallback = (asked === "email" || asked === "both") && !email;
+        const downgraded = (input.sendBy === "email" || input.sendBy === "both") && !askedForEmail;
         const city = ctx.turn?.profile?.city ?? null;
         const zone = (city ? await import("../services/geocoding.js").then((g) => g.getTimezoneForCity(city)).catch(() => null) : null) ?? "America/Los_Angeles";
         const recordFor = (link: string): EventRecord | null => {
           const f = loop.found.get(link);
-          const d = f?.match && "details" in f.match ? (f.match as any).details : null;
-          return f && d ? { name: f.match!.name, startAt: d.startAt ?? null, endAt: d.endAt ?? null, timezone: d.timezone ?? null, venue: d.venue ?? null, address: d.address ?? null } : f ? { name: f.name } : null;
+          if (!f) return null;
+          const d = f.match && "details" in f.match ? (f.match as any).details : null;
+          // Only an event with its own page record can fill a step; a web result or a post can't.
+          return { name: f.match?.name ?? f.name, hasRecord: !!d, blocked: f.blocked ?? null, startAt: d?.startAt ?? null, endAt: d?.endAt ?? null, timezone: d?.timezone ?? null, venue: d?.venue ?? null, address: d?.address ?? null };
         };
         const brief = await loadBrief(ctx.userId).catch(() => null);
-        const facts = [...loop.pages.values(), ...[...loop.found.values()].map((f) => `${f.name} ${f.facts}`), brief ? JSON.stringify(brief) : "", ctx.facts?.text() ?? ""].join("\n");
+        const facts = [...loop.pages.values(), ...[...loop.found.values()].map((f) => `${f.name} ${f.facts}`), brief ? JSON.stringify(brief) : ""].join("\n");
         const plan = resolvePlan(input, zone, recordFor);
         const problems = planProblems(input, plan, { facts, theirs: theirWords(), now: new Date(), recordFor });
         if (problems.length) {
@@ -468,7 +479,11 @@ export function loopTools(
         const went: string[] = [];
         if (byEmail) {
           const sent = await sendPlanEmail({ to: email, files });
-          if (sent.ok) went.push("email");
+          if (sent.ok) {
+            went.push("email");
+            // Logged like a text, so a replayed turn sees it went out and doesn't send it twice.
+            await logDeliveredPlan(`Co replied: [emailed a plan: ${plan.title}]`);
+          }
           else notDone(`The plan email didn't go out: ${sent.why}.`);
         }
         if (byText) {
@@ -490,7 +505,7 @@ export function loopTools(
         return {
           ok: true,
           via: went,
-          note: `${went.includes("text") ? "The PDF is in this conversation. " : ""}${went.includes("email") ? `It's in their email${files.calendar ? ", with a calendar hold for each time" : ""}. ` : ""}${noEmailFallback ? "They have no email on file, so it went by text: say so, in a few words. " : ""}${went.length < (byEmail && byText ? 2 : 1) ? "One of the two didn't go out: say which. " : ""}Say in one line where it is; don't list the steps again.`,
+          note: `${went.includes("text") ? "The PDF is in this conversation. " : ""}${went.includes("email") ? `It's in their email${files.calendar ? ", with a calendar hold for each time" : ""}. ` : ""}${noEmailFallback ? "They have no email on file, so it went by text: say so, in a few words. " : ""}${downgraded ? "They hadn't asked for email, so it went by text; if they want it by email too, they can say so. " : ""}${went.length < (byEmail && byText ? 2 : 1) ? "One of the two didn't go out: say which. " : ""}Say in one line where it is; don't list the steps again.`,
         };
       },
     }),

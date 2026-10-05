@@ -9,7 +9,7 @@
 // Pure: validation, the calendar file and the page. Sending is planEmail.ts.
 import { DateTime } from "luxon";
 import { EMAIL_COLORS as C, escapeHtml, quietEmail } from "./emailDesign.js";
-import { numbersBacked, placesBacked } from "./taskWeb.js";
+import { placesBacked } from "./taskWeb.js";
 
 export const PLAN_LIMITS = { maxSteps: 8, maxNotes: 4, titleChars: 60, noteChars: 220, textChars: 160, daysAhead: 90, perDay: 2 };
 
@@ -26,32 +26,38 @@ export type PlanStepInput = {
 };
 export type PlanInput = { title: string; note: string; steps: PlanStepInput[]; notes?: string[] };
 
-export type PlanStep = { start: DateTime | null; end: DateTime | null; what: string; where: string | null; address: string | null; detail: string | null };
+// src is the step as the model gave it, kept with the resolved step so checks pair the right one after sorting.
+export type PlanStep = { start: DateTime | null; end: DateTime | null; what: string; where: string | null; address: string | null; detail: string | null; src: PlanStepInput };
 export type Plan = { title: string; note: string; steps: PlanStep[]; notes: string[]; zone: string };
 
 // What an event's own record gives a step: filled by code, never by the model.
-export type EventRecord = { name: string; startAt?: string | null; endAt?: string | null; timezone?: string | null; venue?: string | null; address?: string | null };
+// blocked: why it can't go on a plan (sold out, turned away). hasRecord: it has a real event page record (not a web result or a post).
+export type EventRecord = { name: string; startAt?: string | null; endAt?: string | null; timezone?: string | null; venue?: string | null; address?: string | null; blocked?: string | null; hasRecord?: boolean };
 
 const clean = (s: unknown, max: number) => String(s ?? "").replace(/\s*[—–]\s*/g, ", ").replace(/\s+/g, " ").trim().slice(0, max);
 
 // Pure: the plan as it will be shown, times resolved in the member's zone, event steps filled
 // from their records. Never throws; planProblems says what's wrong.
 export function resolvePlan(input: PlanInput, zone: string, records: (link: string) => EventRecord | null): Plan {
-  const steps: PlanStep[] = (input.steps ?? []).slice(0, PLAN_LIMITS.maxSteps).map((s) => {
-    const rec = s.link ? records(s.link) : null;
-    const at = (iso?: string | null, z = zone) => (iso ? DateTime.fromISO(iso, { zone: z }) : null);
-    const startRaw = rec?.startAt ?? s.when ?? null;
-    const endRaw = rec?.endAt ?? s.until ?? null;
-    const z = rec?.startAt ? (rec.timezone || zone) : zone;
-    const start = startRaw ? at(startRaw, z) : null;
-    const end = endRaw ? at(endRaw, z) : null;
+  const steps: PlanStep[] = (input.steps ?? []).slice(0, PLAN_LIMITS.maxSteps).map((src) => {
+    const rec = src.link ? records(src.link) : null;
+    // A step tied to an event takes its time, place and address from that event's record, and nothing
+    // from the model's own where, address or time; a free step takes what it was given (planProblems backs it).
+    const linked = !!src.link;
+    const z = linked ? (rec?.timezone || zone) : zone;
+    const startRaw = linked ? rec?.startAt ?? null : src.when ?? null;
+    const endRaw = linked ? rec?.endAt ?? null : src.until ?? null;
+    const at = (iso: string | null) => (iso ? DateTime.fromISO(iso, { zone: z }) : null);
+    const start = at(startRaw);
+    const end = at(endRaw);
     return {
       start: start?.isValid ? start.setZone(zone) : null,
       end: end?.isValid ? end.setZone(zone) : null,
-      what: clean(s.what || rec?.name, PLAN_LIMITS.textChars),
-      where: clean(rec?.venue ?? s.where, PLAN_LIMITS.textChars) || null,
-      address: clean(rec?.address ?? s.address, PLAN_LIMITS.textChars) || null,
-      detail: clean(s.detail, PLAN_LIMITS.textChars) || null,
+      what: clean(src.what || rec?.name, PLAN_LIMITS.textChars),
+      where: clean(linked ? rec?.venue : src.where, PLAN_LIMITS.textChars) || null,
+      address: clean(linked ? rec?.address : src.address, PLAN_LIMITS.textChars) || null,
+      detail: clean(src.detail, PLAN_LIMITS.textChars) || null,
+      src,
     };
   });
   steps.sort((a, b) => (a.start?.toMillis() ?? Infinity) - (b.start?.toMillis() ?? Infinity));
@@ -66,58 +72,88 @@ export function resolvePlan(input: PlanInput, zone: string, records: (link: stri
 
 const NOT_NAMES = new Set(["i", "i'm", "i'll", "i've", "co", "the", "a", "an", "and", "or", "but", "to", "for", "at", "on", "in", "if", "it", "it's", "we", "you", "your", "monday", "tuesday", "wednesday", "thursday", "friday", "saturday", "sunday", "january", "february", "march", "april", "may", "june", "july", "august", "september", "october", "november", "december", "am", "pm"]);
 
-// Pure: capitalised words (names, places) not at the start of a sentence, for the backing check.
+// Pure: capitalised words (names, places) in the text: any not at the start of a sentence, and the first
+// word of a sentence when a capitalised word follows it ("Zuni Cafe for dinner"). A lone sentence-opening
+// word is left alone; lowercase names can't be told from words.
 export function namedThings(text: string): string[] {
   const out: string[] = [];
+  const clean1 = (w: string) => w.replace(/[^A-Za-z0-9'’&-]/g, "").replace(/['’]s$/i, "");
+  const isName = (w: string) => w.length >= 2 && /^[A-Z]/.test(w) && !NOT_NAMES.has(w.toLowerCase());
   for (const sentence of text.split(/(?<=[.!?])\s+|\n/)) {
-    const words = sentence.split(/\s+/);
-    for (let i = 1; i < words.length; i++) {
-      const w = words[i].replace(/[^A-Za-z0-9'’&-]/g, "").replace(/['’]s$/i, "");
-      if (w.length >= 2 && /^[A-Z]/.test(w) && !NOT_NAMES.has(w.toLowerCase())) out.push(w);
+    const words = sentence.split(/\s+/).map(clean1);
+    for (let i = 0; i < words.length; i++) {
+      if (!isName(words[i])) continue;
+      if (i > 0 || (words[1] && /^[A-Z]/.test(words[1]))) out.push(words[i]);
     }
   }
   return [...new Set(out)];
 }
 
+const wordRe = (w: string) => new RegExp(`(?<![\\p{L}\\p{N}])${w.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}(?![\\p{L}\\p{N}])`, "iu");
+// A whole word or phrase in what was read or said, never a piece of another word ("Oak" in "Oakland").
+export const backed = (thing: string, have: string) => wordRe(thing).test(have);
+// A number as a whole figure ("60" is not in "601 19th St"). Commas in the facts don't matter.
+const NUMBER = /\$?\d[\d,]*(?:\.\d+)?/g;
+export function numbersUnbacked(text: string, have: string): string[] {
+  const h = have.replace(/(?<=\d),(?=\d)/g, "");
+  return (text.match(NUMBER) ?? []).map((n) => n.replace(/^\$/, "").replace(/,/g, "").replace(/\.$/, "")).filter((n) => n && !new RegExp(`(?<![\\d.])${n.replace(/\./g, "\\.")}(?![\\d]|\\.\\d)`).test(h));
+}
+// "sixty dollars", "twelve people": spelled-out amounts say as much as digits.
+const WORD_AMOUNT = /\b(?:(?:zero|one|two|three|four|five|six|seven|eight|nine|ten|eleven|twelve|thirteen|fourteen|fifteen|sixteen|seventeen|eighteen|nineteen|twenty|thirty|forty|fifty|sixty|seventy|eighty|ninety|hundred|thousand|couple of|few)(?:[ -](?:one|two|three|four|five|six|seven|eight|nine|hundred|thousand))?) (?:dollars|bucks|people|guests|friends|minutes|hours|miles|blocks|stops|seats|spots)\b/gi;
+export const wordAmounts = (text: string) => text.match(WORD_AMOUNT) ?? [];
+
 // Pure: why the plan can't go out, or []. `facts` is what Co has really seen this turn (pages, event
-// records, the member's notes); `theirs` is what the member said. Times are not checked: they are the
-// plan's own, except those taken from an event's record, which code filled.
+// records, what the member's notes hold); `theirs` is what the member said. Times are not checked as facts:
+// they are the plan's own, except those taken from an event's record, which code filled.
 export function planProblems(input: PlanInput, plan: Plan, o: { facts: string; theirs: string; now: Date; recordFor: (link: string) => EventRecord | null }): string[] {
   const out: string[] = [];
   if (!plan.title) out.push("a plan needs a title");
   if (!input.steps?.length) out.push("a plan needs at least one step");
   if ((input.steps?.length ?? 0) > PLAN_LIMITS.maxSteps) out.push(`at most ${PLAN_LIMITS.maxSteps} steps`);
   if (/[\[\]{}<>]|https?:\/\//.test(`${plan.title} ${plan.note} ${plan.notes.join(" ")}`)) out.push("no links, brackets or markup in the title, note or notes");
-  const have = `${o.facts} ${o.theirs}`;
+  const have = `${o.facts}\n${o.theirs}`;
   const horizon = DateTime.fromJSDate(o.now).plus({ days: PLAN_LIMITS.daysAhead });
+  const LOCAL = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}(?::\d{2})?$/;
   plan.steps.forEach((s, i) => {
-    const raw = input.steps[i];
+    const raw = s.src;
     const label = `step ${i + 1}`;
     if (!s.what) out.push(`${label} needs to say what it is`);
-    if (raw?.link && !o.recordFor(raw.link)) out.push(`${label}: that link isn't an event you found this turn`);
-    const hadTime = raw?.when || (raw?.link && o.recordFor(raw.link)?.startAt);
-    if (hadTime && !s.start) out.push(`${label}: the time isn't a real date and time (use 2026-10-11T16:30)`);
+    if (raw.link) {
+      const rec = o.recordFor(raw.link);
+      if (!rec || !rec.hasRecord) out.push(`${label}: that link isn't an event with its own page record from this turn (a web result or a post has no time or place to fill in)`);
+      else {
+        if (rec.blocked) out.push(`${label}: that event can't go on a plan (${rec.blocked})`);
+        if (!rec.startAt) out.push(`${label}: that event's record has no start time`);
+      }
+    } else {
+      if (raw.when && !LOCAL.test(raw.when)) out.push(`${label}: the time must be their local date and time like 2026-10-11T16:30, with no zone and never a date alone`);
+      if (raw.until && !LOCAL.test(raw.until)) out.push(`${label}: the end time must be like 2026-10-11T18:00`);
+      if (raw.until && !raw.when) out.push(`${label}: an end time needs a start time`);
+      if (raw.when && LOCAL.test(raw.when) && !s.start) out.push(`${label}: the time isn't a real date and time`);
+      if (raw.until && LOCAL.test(raw.until) && !s.end) out.push(`${label}: the end time isn't a real date and time`);
+      // What a free step states has to be something read or said.
+      for (const field of [s.where, s.address]) if (field && !backed(field, have)) out.push(`${label}: "${field}" isn't something a page you read or the member said`);
+    }
     if (s.start && s.start.toMillis() < o.now.getTime() - 3_600_000) out.push(`${label}: that time has already passed`);
     if (s.start && s.start > horizon) out.push(`${label}: more than ${PLAN_LIMITS.daysAhead} days out`);
     if (s.start && s.end && s.end < s.start) out.push(`${label}: it ends before it starts`);
-    // Event steps are filled from the record; the rest back what they state.
-    if (!raw?.link) {
-      for (const field of [s.where, s.address]) if (field && !have.toLowerCase().includes(field.toLowerCase())) out.push(`${label}: "${field}" isn't something a page you read or the member said`);
-    }
     const text = [s.what, s.detail].filter(Boolean).join("\n");
-    for (const n of numbersBacked(text, have).missing) out.push(`${label}: "${n}" isn't in what you read or what they said (put times in the time field)`);
+    for (const n of numbersUnbacked(text, have)) out.push(`${label}: "${n}" isn't in what you read or what they said (put times in the time field)`);
+    for (const w of wordAmounts(text)) if (!backed(w, have)) out.push(`${label}: "${w}" isn't in what you read or what they said`);
     for (const p of placesBacked(text, have).missing) out.push(`${label}: "${p}" isn't in what you read or what they said`);
-    for (const w of namedThings(text)) if (!have.toLowerCase().includes(w.toLowerCase())) out.push(`${label}: "${w}" isn't a name you read or the member said`);
+    for (const w of namedThings(text)) if (!backed(w, have)) out.push(`${label}: "${w}" isn't a name you read or the member said`);
   });
-  const rest = [plan.note, ...plan.notes].join("\n");
-  for (const n of numbersBacked(rest, have).missing) out.push(`"${n}" in the note isn't in what you read or what they said`);
-  for (const w of namedThings(rest)) if (!have.toLowerCase().includes(w.toLowerCase())) out.push(`"${w}" in the note isn't a name you read or the member said`);
+  // The title, note and notes are held to the same rule: the title is also the text and the email subject.
+  const rest = [plan.title, plan.note, ...plan.notes].join("\n");
+  for (const n of numbersUnbacked(rest, have)) out.push(`"${n}" in the title or note isn't in what you read or what they said`);
+  for (const w of wordAmounts(rest)) if (!backed(w, have)) out.push(`"${w}" in the title or note isn't in what you read or what they said`);
+  for (const w of namedThings(rest)) if (!backed(w, have)) out.push(`"${w}" in the title or note isn't a name you read or the member said`);
   return out;
 }
 
 // ---------- the calendar file
 
-const esc = (s: string) => s.replace(/\\/g, "\\\\").replace(/;/g, "\;").replace(/,/g, "\\,").replace(/\r?\n/g, "\\n");
+const esc = (s: string) => s.replace(/\\/g, "\\\\").replace(/;/g, "\\;").replace(/,/g, "\\,").replace(/\r?\n/g, "\\n");
 // Lines are folded at 75 octets, continuation lines start with a space (RFC 5545).
 function fold(line: string): string {
   const bytes = Buffer.from(line, "utf8");
@@ -194,7 +230,7 @@ export function planHtml(plan: Plan, firstName: string): string {
 * { box-sizing: border-box; }
 html, body { margin: 0; padding: 0; }
 body { background: ${C.cream}; color: ${C.body}; font-family: ${SANS}; font-size: 12.5px; line-height: 1.55; -webkit-print-color-adjust: exact; print-color-adjust: exact; }
-.page { width: 8.5in; height: 11in; padding: 0.9in 1in 0.8in 1in; display: flex; flex-direction: column; }
+.page { width: 8.5in; min-height: 11in; padding: 0.9in 1in 0.8in 1in; display: flex; flex-direction: column; }
 .card { flex: 1; border: 1px solid ${C.gold}; padding: 0.55in 0.6in 0.5in 0.6in; background: ${C.white}; display: flex; flex-direction: column; }
 .eyebrow { font-family: ${SANS}; font-size: 10px; font-weight: 500; letter-spacing: 2px; text-transform: uppercase; color: ${C.gold}; }
 h1 { font-family: ${SERIF}; font-weight: 300; font-size: 34px; line-height: 1.12; color: ${C.ink}; margin: 10px 0 6px 0; letter-spacing: -0.2px; }
