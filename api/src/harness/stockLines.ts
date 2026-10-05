@@ -5,20 +5,23 @@
 // the member was not listened to. Pure detection, shared by the post-call audit
 // (logged as call.stock_lines) and the simulated-call evals.
 
+const END = String.raw`\s*(?:[.,!;?]|$|and\b|but\b)`;
+const re = (src: string) => new RegExp(src, "i");
 const STOCK: RegExp[] = [
-  /\bi hear (?:you|that)\b/i,
-  /\bi(?:'m| am) (?:so )?glad you (?:told|shared with) me\b/i,
-  /\bthank(?:s| you) for (?:sharing|telling me|opening up|trusting me)/i,
-  /\bthat takes (?:real )?(?:courage|strength|bravery)\b/i,
-  /\bthat sounds like it changed a lot of things\b/i,
-  /\bthat'?s a lot happening at once\b/i,
-  /\bthat'?s a real shift\b/i,
-  /\bthat(?:'s| is) a lot to (?:carry|hold|sit with|process)\b/i,
-  /\bi can only imagine\b/i,
-  /\bthat must be (?:so |really |incredibly )?(?:hard|tough|difficult|exhausting|heavy)\b/i,
-  /\bnot the polished version\b/i,
-  /\bwhat'?s actually (?:going on|happening)\b/i,
-  /\bwhere you'?re at right now\b/i,
+  re(String.raw`\bi hear (?:you|that)` + END),
+  re(String.raw`\bi(?:'m| am) (?:so )?glad you (?:told|shared with) me\b`),
+  re(String.raw`\bthank(?:s| you) for (?:sharing|opening up|trusting me)\b`),
+  re(String.raw`\bthank(?:s| you) for telling me` + END),
+  re(String.raw`\bthat takes (?:real )?(?:courage|strength|bravery)\b`),
+  re(String.raw`\bthat sounds like it changed a lot of things\b`),
+  re(String.raw`\bthat'?s a lot happening at once\b`),
+  re(String.raw`\bthat'?s a real shift\b`),
+  re(String.raw`\bthat(?:'s| is) a lot to (?:carry|hold|sit with|process)\b`),
+  re(String.raw`\bi can only imagine\b`),
+  re(String.raw`\bthat must be (?:so |really |incredibly )?(?:hard|tough|difficult|exhausting|heavy)` + END),
+  re(String.raw`\bnot the polished version\b`),
+  re(String.raw`\bwhat'?s actually (?:going on|happening)(?: (?:right now|with you|for you))?\s*[?.!]`),
+  re(String.raw`\bwhere you'?re at right now` + END),
 ];
 
 const norm = (s: string) => s.replace(/[’‘]/g, "'");
@@ -51,10 +54,20 @@ export function stockReport(lines: string[]): { stock: { line: string; phrase: s
 }
 
 // Pure: Co's lines from a stored transcript ("assistant: ..." / "Co: ...").
+// A line with no speaker label continues the turn before it.
 export function coLinesOf(transcript: string): string[] {
-  return transcript.split("\n").map((l) => l.match(/^(?:assistant|co):\s*(.+)$/i)?.[1]?.trim() ?? "").filter(Boolean);
+  const out: string[] = [];
+  let inCo = false;
+  for (const l of transcript.split("\n")) {
+    const m = l.match(/^(\w+):\s*(.*)$/);
+    if (m && /^(?:assistant|co|user|caller|member|human)$/i.test(m[1])) {
+      inCo = /^(?:assistant|co)$/i.test(m[1]);
+      if (inCo && m[2].trim()) out.push(m[2].trim());
+    } else if (inCo && l.trim()) out[out.length - 1] = `${out[out.length - 1] ?? ""} ${l.trim()}`.trim();
+  }
+  return out;
 }
 
 // What the call prompt carries. Described, never quoted: a quoted bad example gets
 // parroted (the texting eval, 2026-10-02).
-export const VARIETY_GUIDE = `Never sound scripted. Answer what this person just said, in words that could only follow it. A sentence that would fit after any answer is a stock sentence: comfort that sums up how heavy things are, gratitude for their opening up, praise for their honesty, a claim that you can only guess, a line that names the size of what happened. Don't say those. Instead say something specific back (a detail they gave, a name, a number, what it changes for them) or ask the one question that follows from it. Don't open two replies in a row the same way, and don't reuse a phrase you already said earlier in this call.`;
+export const VARIETY_GUIDE = `Never sound scripted. Answer what this person just said, in words that could only follow it. A sentence that would fit after any answer is a stock sentence: comfort that sums up how heavy things are, gratitude for their opening up, praise for their honesty, a claim that you can only guess, a line that names the size of what happened. Don't say those. Instead say something specific back (a detail they gave, a name, a number, what it changes for them) or ask the one question that follows from it. Don't open two replies in a row the same way, and don't reuse a phrase you already said earlier in this call (the discretion lines above are the one exception).`;

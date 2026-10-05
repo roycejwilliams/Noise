@@ -130,5 +130,31 @@ check("the post-call audit logs call.stock_lines", /call\.stock_lines/.test(read
 check("the call prompt carries the variety guide, once", promptForElevenLabs("Hello. Everything you write is spoken aloud.").split(VARIETY_GUIDE).length === 2);
 check("the variety guide quotes no stock line", stockLine(VARIETY_GUIDE) === null);
 
+
+// ---- review fixes on #66
+const CTX = "Royce is a founder. The Civic Joy Fund fell through for the Oct 10 event. He is sorting sponsors and the venue in Berkeley; budget 2014 dollars. ".repeat(3);
+const bad = (line: string) => openingProblems(line, CTX, "Royce") !== null;
+check("a sensitive topic is refused", bad("Hey Royce, it's Co. Last we talked the biopsy results were pending."));
+check("a sentence-start name not in the context is refused", bad("Hey Royce, it's Co. Noor said yes to meeting you."));
+check("speaking for another member is refused", bad("Hey Royce, it's Co. Want the intro?"));
+check("a number only inside a bigger number is refused", bad("Hey Royce, it's Co. Did the 201 sponsors reply?"));
+check("a relative time not in the context is refused", bad("Hey Royce, it's Co. Is tomorrow's event still on?"));
+check("a plain feeling word is refused", bad("Hey Royce, it's Co. Still stressed about the sponsors?"));
+check("a short first name does not match inside another word", bad("Hey there, it's Co. Any luck with the Fund?") && openingProblems("Hey Roy, it's Co. Any luck with the Fund?", CTX, "Roy") === null);
+check("a grounded line still passes", openingProblems("Hey Royce, it's Co. Last we talked the Civic Joy Fund fell through, any luck finding another sponsor?", CTX, "Royce") === null);
+check("inbound waits at most 700ms for the writer", OPENING_WRITER.inboundBudgetMs <= 700);
+check("the writer reads as much context as a call gets", OPENING_WRITER.maxContext >= CALL_CONTEXT_MAX);
+check("a first call writes no opening", (await (await import("../../src/services/callOpening.js")).writeOpening({ firstName: "Sam", direction: "outbound", summary: "short" })).line === null);
+{
+  prebuildOpening("u-take", "Sam", "outbound", Promise.resolve(""));
+  await takeOpening("u-take");
+  check("taking an opening removes it, so a second call can't reuse it", (await takeOpening("u-take")).why === "none prepared");
+}
+check("ordinary speech is not a stock line", ["I hear you're moving to Austin.", "I hear that the venue fell through, is that right?", "Thanks for telling me the date.", "That must be hard to schedule around.", "So what's actually going on with the lease?", "Where you're at right now with the budget is what I'd like to hear."].every((l) => stockLine(l) === null));
+check("a stock line still caught after the tightening", ["I hear you.", "I hear you, and that's a lot to carry.", "That must be so hard.", "Thank you for telling me."].every((l) => stockLine(l) !== null));
+check("a Co turn continued on the next line is one line", coLinesOf("assistant: First part.\nSecond part.\nuser: ok").length === 1 && coLinesOf("assistant: First part.\nSecond part.\nuser: ok")[0].includes("Second"));
+check("the call prompt's first-call pointer is not left dangling", !promptForElevenLabs(read("prompts/co-system-prompt.md")).includes("open as below instead"));
+check("the prompt no longer says temperature 0.7", !/Set to 0\.7/.test(read("prompts/co-system-prompt.md")));
+
 console.log(`call opening rules: ${total - failed}/${total} passed`);
 if (failed) process.exitCode = 1;

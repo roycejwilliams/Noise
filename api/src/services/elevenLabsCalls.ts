@@ -171,7 +171,9 @@ export function withoutExampleOpeners(prompt: string): string {
   return prompt.replace(/Some ways this might sound:\n(?:"[^\n]*"\n)+Use your own words if none of these feel right in the moment[^\n]*\n/, "");
 }
 export function promptForElevenLabs(prompt: string): string {
-  const base = withoutExampleOpeners(prompt).replace(/\bhang_up\b/g, "end_call");
+  const base = withoutExampleOpeners(prompt)
+    .replace("open as below instead.", "your first question is about what they're working on or what brought them to Co, in fresh words each time.")
+    .replace(/\bhang_up\b/g, "end_call");
   const withCues = base.includes(SPOKEN_ALOUD)
     ? base.replace(new RegExp(`${SPOKEN_ALOUD.replace(/[.]/g, "\\.")} ?`), `Everything you write is spoken aloud, except a cue in square brackets (below).\n${CUE_GUIDE}\n\n`)
     : `${base}\n\n${CUE_GUIDE}`;
