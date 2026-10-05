@@ -47,12 +47,15 @@ function matchFacts(askText: string, fromProfile: boolean, match: TierMatch): Fa
   };
 }
 
-// An event aimed at a group says so in the text, in plain words, unless the member's own
-// words show they belong (then it's just offered). Never a guess about who they are.
-export const AUDIENCE_RULE = `If who_it_is_for is given, say plainly in a few words who it's for, as a fact about the event ("it's a women's hike club"), so they can tell whether it's for them. Never assume or say what they are; don't ask. If their own words in the facts show they belong to that group, just offer it without the note.`;
+// An event aimed at a group says so, in plain words, always. Never a guess about who they are, and
+// never a claim that it is or isn't for them.
+export const AUDIENCE_RULE = `If who_it_is_for is given, or the event's details say its page speaks to a particular group ("Who it's for"), say plainly in a few words who it's for, as a fact about the event ("it's a women's hike club"), so they can tell whether it's for them. Never say or imply what they are: no "perfect for you", no "which you are", no "as a woman". Don't ask them. Every time, even if their ask uses that group's words: using a word is not being in the group.`;
 // No "thinking about you" opener and no invented bridge to the rest of their life.
 export const OFFER_HONESTY = `Never say you were thinking about them or about this. Connect it to something else in their life only when the event's own page says it is about that; an event is never "a way into" a community unless its page says so.`;
-const OFFER_FORBIDDEN = { pattern: /\b(?:thinking|thought) (?:about|of)\b|\bon my mind\b|\bcrossed my mind\b/i, reason: "a claim about what Co was doing, and a line that fits anyone" };
+// Co as the subject, with them or this as the object: the member's own "thinking about getting outside" stays.
+export const OFFER_FORBIDDEN = { pattern: /\b(?:thinking|thought) (?:about|of) (?:you|it|that|this)\b|\bon my mind\b|\bcrossed my mind\b/i, reason: "a claim about what Co was doing, and a line that fits anyone" };
+// Implying they are, or aren't, in the group the event is for.
+export const IMPLIES_IDENTITY = { pattern: /\b(?:women|girls|ladies|men|guys|moms|dads|group)\b[^.]{0,50}\b(?:perfect|ideal|made|built|just) for you\b|\bwhich you are\b|\bsince you(?:'re| are) a\b|\bas a (?:woman|man|girl|guy|mom|dad)\b/i, reason: "implies who they are" };
 
 // The reveal can use the real record; the tease can't (it names nothing).
 function revealFacts(askText: string, fromProfile: boolean, match: TierMatch): Facts {
@@ -132,20 +135,19 @@ export async function draftEventReveal(
       maxSentences: 2,
       maxChars: 300,
       mustIncludeAny: tokens.length ? tokens : [match.name],
-      forbidden: [OFFER_FORBIDDEN],
-      ...whoItIsFor(match, `${askText}\n${dots.join("\n")}\n${why}`),
+      forbidden: [OFFER_FORBIDDEN, IMPLIES_IDENTITY],
+      ...whoItIsFor(match),
     },
   };
 }
 
-// When the event is aimed at a group, the text has to say so, unless the member's own words
-// (their ask, what Co knows they've said) already use that group's words, which shows they belong.
-export function whoItIsFor(match: TierMatch, theirWords: string): { mustAlsoIncludeAny?: { words: string[]; reason: string; ignoring?: string } } {
-  const description = match.details?.description ?? null;
-  const words = audienceTokens(match.audience, match.name, description);
+// When Co judged the event aimed at a group (the sweep's audience field), the text has to say so, always:
+// whether a page's words mean a group is Co's call, and the member's own words never switch it off
+// (a man who says "women" in his ask is not in a women's group).
+export function whoItIsFor(match: TierMatch): { mustAlsoIncludeAny?: { words: string[]; reason: string; ignoring?: string[] } } {
+  if (!isGroupAimed(match.audience)) return {};
+  const words = audienceTokens(match.audience);
   if (!words.length) return {};
-  const sayings = audienceSayings(words);
-  const said = theirWords.toLowerCase();
-  if (sayings.some((w) => new RegExp(`\\b${w.replace(/'/g, "'?")}\\b`).test(said))) return {};
-  return { mustAlsoIncludeAny: { words: sayings, reason: "the event is aimed at a group; the text should say who it's for", ignoring: match.name.replace(/[^\p{L}\p{N}\s'’-]/gu, "").replace(/\s+/g, " ").trim() } };
+  const name = match.name;
+  return { mustAlsoIncludeAny: { words: audienceSayings(words), reason: "the event is aimed at a group; the text should say who it's for", ignoring: [name, name.split(/[:|\u2014\u2013-]/)[0]] } };
 }

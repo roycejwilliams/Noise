@@ -401,7 +401,7 @@ export function ongoingFactsFor(asks: { text: string; kind: "find" | "help" }[])
 // itself grounded.
 export function addEventFacts(
   rf: ReplyFacts,
-  match: { name: string; event_date?: string; deadline?: string; url?: string; kind?: string; details?: EventDetails; opportunity?: OpportunityDetails; whyItFits?: string; statedDates?: { start: string; end?: string | null } },
+  match: { name: string; event_date?: string; deadline?: string; url?: string; kind?: string; details?: EventDetails; opportunity?: OpportunityDetails; whyItFits?: string; audience?: string; statedDates?: { start: string; end?: string | null } },
   asked?: Days | null,
 ): void {
   const label = match.kind === "opportunity" ? "Opportunity" : "Event";
@@ -414,6 +414,7 @@ export function addEventFacts(
   if (match.details) for (const line of renderEventDetails(match.name, match.details)) addFact(rf, "known", line);
   addFact(rf, "known", `Co found "${match.name}" through ${sourceOf(match)}. If they ask where it came from, say that.`);
   if (match.opportunity) addFact(rf, "known", `What the source post for "${match.name}" says: ${match.opportunity.postText}`);
+  if (match.audience) addFact(rf, "known", `Who "${match.name}" is for, as Co judged it when it found it: ${match.audience}. If you describe the event, say that plainly; never say or imply what they are.`);
   if (match.whyItFits) addHint(rf, `Why "${match.name}" may fit them (a search's read, not a fact): ${match.whyItFits}`);
   if (match.kind !== "opportunity") {
     const missing = missingEventDetails(match.name, match.details);

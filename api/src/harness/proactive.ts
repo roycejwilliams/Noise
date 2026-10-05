@@ -635,7 +635,7 @@ export type OutputRules = {
   // At least one of these must appear (case-insensitive), e.g. the event name.
   mustIncludeAny?: string[];
   // A second set that must also appear (e.g. who an event is for, next to its name).
-  mustAlsoIncludeAny?: { words: string[]; reason: string; ignoring?: string };
+  mustAlsoIncludeAny?: { words: string[]; reason: string; ignoring?: string[] };
   // None of these may appear, e.g. the event name in a tease.
   mustNotInclude?: string[];
   forbidden?: { pattern: RegExp; reason: string }[];
@@ -709,10 +709,23 @@ export function checkDraft(text: string, rules: OutputRules): GateCheck[] {
   }
   if (rules.mustAlsoIncludeAny?.words.length) {
     const wanted = rules.mustAlsoIncludeAny.words.map((w) => w.toLowerCase()).filter(Boolean);
-    // The event's own name doesn't count: "HOT GIRL HIKE" contains the word without saying who it's for.
-    const ignoring = rules.mustAlsoIncludeAny.ignoring?.toLowerCase();
-    const rest = ignoring ? lower.split(ignoring).join(" ") : lower;
-    checks.push({ name: "draft_says_who_it_is_for", pass: wanted.some((w) => rest.includes(w)), reason: `${rules.mustAlsoIncludeAny.reason} (one of: ${wanted.join(", ")})` });
+    // The event's own name doesn't count ("HOT GIRL HIKE CLUB: SESSION 6" contains the word without saying who
+    // it's for), however the draft punctuates it. Whole words only: "men" is not in "moment".
+    const norm = (t: string) => ` ${t.toLowerCase().replace(/[^\p{L}\p{N}'\u2019]+/gu, " ").replace(/\u2019/g, "'").replace(/\s+/g, " ").trim()} `;
+    let rest = norm(text);
+    // Any stretch of the name that carries an audience word, longest first: Co shortens "Hot Girl Hike Club: Session 6"
+    // to "Hot Girl Hike" and the shorter form must not count either.
+    const wantedSet = new Set(wanted.map((w) => w.replace(/\u2019/g, "'")));
+    for (const name of rules.mustAlsoIncludeAny.ignoring ?? []) {
+      const nw = norm(name).trim().split(" ").filter(Boolean);
+      for (let len = nw.length; len >= 1; len--) {
+        for (let i = 0; i + len <= nw.length; i++) {
+          const piece = nw.slice(i, i + len);
+          if (piece.some((w) => wantedSet.has(w))) rest = rest.split(` ${piece.join(" ")} `).join(" ");
+        }
+      }
+    }
+    checks.push({ name: "draft_says_who_it_is_for", pass: wanted.some((w) => rest.includes(` ${w.replace(/\u2019/g, "'")} `)), reason: `${rules.mustAlsoIncludeAny.reason} (one of: ${wanted.join(", ")})` });
   }
   for (const banned of rules.mustNotInclude ?? []) {
     if (!banned) continue;

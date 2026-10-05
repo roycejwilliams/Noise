@@ -24,20 +24,22 @@ export function addressedAs(name: string, description: string | null | undefined
   return out;
 }
 
-// Pure: the line Co reads with the event, or null when the page names no group.
-export function audienceLine(name: string, description: string | null | undefined): string | null {
-  const words = addressedAs(name, description);
+// Pure: the line Co reads with the event, or null when the page's text names no group. Only the
+// description counts, never the title (a title can say "Gone Girl" or "Men in Black"). It is a fact for
+// Co to judge, never a verdict: "Hey guys!" and "men and women welcome" also show up, and Co reads them
+// as what they are.
+export function audienceLine(_name: string, description: string | null | undefined): string | null {
+  const words = addressedAs("", description);
   if (!words.length) return null;
-  return `Who it's for: the page speaks to its guests as "${words.join('", "')}". That may mean it is meant for a particular group. Co does not know whether this member is in it unless they have said so in their own words, and never guesses from a name, a voice or anything else.`;
+  return `Who it's for: the page's text uses the word${words.length > 1 ? "s" : ""} "${words.join('", "')}" for its guests. Read it yourself: it may mean the event is meant for a particular group, or it may be nothing (a title, a greeting, "all welcome"). Co does not know whether this member is in any group unless they have said so in their own words, and never guesses from a name, a voice or anything else.`;
 }
 
 // Pure: words a text should use to say who an event is for, from Co's judgment of
 // the audience (a short phrase like "women") or the words the page uses.
-// Co's own judgment, plus the words the page's description addresses its guests with (the
-// name alone never forces a note: a title can say "girl" or "men" and be for everyone).
-export function audienceTokens(audience: string | null | undefined, _name: string, description: string | null | undefined): string[] {
-  const own = (audience ?? "").toLowerCase().split(/[^a-z']+/).map((w) => w.replace(/'s$/, "")).filter((w) => w.length >= 3 && !["for", "the", "and", "only", "who", "open", "all"].includes(w));
-  return [...new Set([...own, ...addressedAs("", description)])];
+// The words from Co's own judgment of who an event is for (the sweep's audience field). Page words alone
+// never force anything: whether a page's "guys" or "women" means a group is Co's call, not a regex's.
+export function audienceTokens(audience: string | null | undefined): string[] {
+  return (audience ?? "").toLowerCase().split(/[^a-z']+/).map((w) => w.replace(/'s$/, "")).filter((w) => w.length >= 3 && !["for", "the", "and", "only", "who", "open", "all"].includes(w));
 }
 
 // Co's judgment of the audience: anything but open to everyone.
