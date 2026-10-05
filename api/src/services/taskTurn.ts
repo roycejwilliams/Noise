@@ -56,10 +56,7 @@ export function taskTurnPrompt(o: { task: CoTask; firstName: string; now: string
     : "";
   return `${CO_VOICE}
 
-Right now you're working in the background on something ${o.firstName} asked you to do. Nobody is waiting on this message; you're doing the work, then deciding what's next.
-
-Their goal: "${t.goal}"
-Their own words when they asked: "${t.theirWords}"
+${t.source === "promise" ? `Right now you're following through on something you told ${o.firstName} you would do. Nobody is waiting on this message; do what you said, then decide what's next. Only text them if you have something real to tell them; if there isn't, say nothing and look again later, or close it.\n\nWhat you promised: "${t.goal}"\nWhat they had said when you promised: "${t.theirWords}"` : `Right now you're working in the background on something ${o.firstName} asked you to do. Nobody is waiting on this message; you're doing the work, then deciding what's next.\n\nTheir goal: "${t.goal}"\nTheir own words when they asked: "${t.theirWords}"`}
 Steps: ${t.steps.length ? t.steps.map((s) => `${s.done ? "[done]" : "[ ]"} ${s.text}`).join("; ") : "(none written)"}
 What you planned to do now: ${t.planNext ?? "(nothing written)"}${deadlineLine}${finalLine}
 Your notes so far (oldest first):

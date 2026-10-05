@@ -102,7 +102,7 @@ check("the reveal block asks for the neutral lines (nothing suggests a secret wh
 check("both ways the reveal can be blocked use it (privacy check, and a reveal that couldn't be drafted)", (nudge.match(/return cantReveal;/g) ?? []).length === 2);
 
 // ---- grounding
-check("a blocked turn is held to the discretion checks before the reply is recorded", rg.indexOf("isDiscreetTurn(rf.instructions)") > rg.indexOf("const final = after ===") && rg.indexOf("isDiscreetTurn(rf.instructions)") < rg.indexOf('decision: "reply.grounding"') && /d\.replaced/.test(rg));
+check("a blocked turn is held to the discretion checks before the reply is recorded", rg.indexOf("if (isDiscreetTurn(rf.instructions)) {") > rg.indexOf("const final = after ===") && rg.indexOf("if (isDiscreetTurn(rf.instructions)) {") < rg.indexOf('decision: "reply.grounding"') && /d\.replaced/.test(rg));
 check("a cut that leaves only an apology is not shipped (it goes to the rewrite)", /enoughLeft\(cut, draft\) && !apologyOnly\(cut\)/.test(rg));
 check("every text reply knows the lines (baseReplyFacts)", baseReplyFacts().instructions.some((i) => i === DISCRETION_GUIDE.trim()));
 check("and so does every call", promptForElevenLabs("x").includes(DISCRETION_GUIDE));

@@ -46,7 +46,7 @@ import { recentCallCorrections } from "./callGrounding.js";
 import { repeatQuestionCheck, sameQuestion } from "./repeatAsk.js";
 import { asksForLink, findLines, linkRequestInstruction, recentResearchFinds, relevantFinds } from "../services/researchFinds.js";
 import { DISCRETION_GUIDE, apologyOnly, discreetFinal, isDiscreetTurn, isNeutralTurn } from "./discretion.js";
-import { PROMISE_RE, promiseFact, promiseSentence, trackPromise } from "../services/promises.js";
+import { PROMISE_RE, dropPromise, promiseFact, promiseSentence, promiseStays, trackPromise } from "../services/promises.js";
 
 // Model policy (Royce, 2026-09-14): Sonnet 5 for anything with judgment or
 // side effects; Haiku only for narrow, code-checked reads.
@@ -1189,9 +1189,13 @@ export async function groundReply(
   const draft = cleanCoMessage(stripFactIds(rawDraft));
   // A concrete promise with nothing behind it becomes a task Co owns, so it is
   // true and gets kept (services/promises.ts). Only on a real send, never in an eval.
+  let promiseTaskId: number | null = null;
   if (opts.userId && opts.record !== false && unbackedFollowup(draft, rf)) {
-    const tracked = await trackPromise({ userId: opts.userId, reply: draft, theirMessage: src.message }).catch((err: any) => ({ ok: false as const, why: String(err?.message ?? err).slice(0, 120) }));
-    if (tracked.ok) addFact(rf, "did_this_turn", promiseFact(tracked.task));
+    const tracked = await trackPromise({ userId: opts.userId, reply: draft, theirMessage: src.message, privateNames: rf.privateNames, discreet: isDiscreetTurn(rf.instructions) }).catch((err: any) => ({ ok: false as const, why: String(err?.message ?? err).slice(0, 120) }));
+    if (tracked.ok) {
+      addFact(rf, "did_this_turn", promiseFact(tracked.task));
+      promiseTaskId = tracked.task.id;
+    }
     recordDecision({ layer: 3, decision: "promise.tracked", userId: opts.userId, outcome: tracked.ok ? "act" : "skip", action: tracked.ok ? `task:${tracked.task.id}` : tracked.why, proposal: { sentence: tracked.ok ? tracked.sentence : promiseSentence(draft) } }).catch(() => {});
   }
   const first = await check(draft, rf, src);
@@ -1278,6 +1282,13 @@ export async function groundReply(
         checks: [...result.checks, { name: "discretion", pass: false, reason: `the reply to a privacy block ${d.problems.join("; ")}; an approved line was used` }],
       };
     }
+  }
+
+  // The promise that opened a task has to be in the text that actually goes out
+  // (cut, redrafted, or swapped for a discreet line means it was never made).
+  if (promiseTaskId !== null && opts.userId && !promiseStays(result.final)) {
+    await dropPromise(opts.userId, promiseTaskId);
+    recordDecision({ layer: 3, decision: "promise.dropped", userId: opts.userId, outcome: "skip", action: `task:${promiseTaskId}`, reason: "the promise was not in the final text" }).catch(() => {});
   }
 
   if (opts.record !== false) {

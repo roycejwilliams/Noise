@@ -47,8 +47,8 @@ export type CoTask = {
   kind?: "work" | "followup";
   followup?: any;
   targetKey?: string | null;
-  // Who owes it. 'co': a promise or work Co took on.
-  owner?: "co";
+  // Where it came from: what they asked for, or a promise Co made in a reply (services/promises.ts).
+  source?: "ask" | "promise";
 };
 
 export const TASK_LIMITS = {
@@ -185,7 +185,7 @@ function rowTo(r: any): CoTask {
     kind: r.kind === "followup" ? "followup" : "work",
     followup: r.followup ?? null,
     targetKey: r.target_key ?? null,
-    owner: "co",
+    source: r.source === "promise" ? "promise" : "ask",
   };
 }
 
@@ -199,7 +199,7 @@ export async function getTask(userId: string, id: number): Promise<CoTask | null
   return rows[0] ? rowTo(rows[0]) : null;
 }
 
-export async function startTask(input: { userId: string; goal: string; theirWords: string; steps: unknown; firstPlan: string; inHours: unknown; deadline?: { deadline: string; finalCheckAt: string } | null; owner?: "co" }): Promise<{ ok: true; task: CoTask } | { ok: false; why: string }> {
+export async function startTask(input: { userId: string; goal: string; theirWords: string; steps: unknown; firstPlan: string; inHours: unknown; deadline?: { deadline: string; finalCheckAt: string } | null; source?: "ask" | "promise" }): Promise<{ ok: true; task: CoTask } | { ok: false; why: string }> {
   const open = await openTasks(input.userId);
   if (open.length >= TASK_LIMITS.maxOpen) return { ok: false, why: `already working on ${open.length} things for them; finish or drop one first` };
   const goal = input.goal.trim().slice(0, 200);
@@ -209,9 +209,9 @@ export async function startTask(input: { userId: string; goal: string; theirWord
   const dl = input.deadline ?? null;
   const next = capToFinal(new Date(Date.now() + clampNextHours(input.inHours) * HOUR), { finalCheckAt: dl?.finalCheckAt ?? null, finalTold: false }).at;
   const { rows } = await pool.query(
-    `INSERT INTO co_tasks (user_id, goal, their_words, steps, plan_next, next_check_at, notes, deadline, final_check_at, owner)
+    `INSERT INTO co_tasks (user_id, goal, their_words, steps, plan_next, next_check_at, notes, deadline, final_check_at, source)
      VALUES ($1, $2, $3, $4::jsonb, $5, $6, $7::jsonb, $8, $9, $10) RETURNING *`,
-    [input.userId, goal, input.theirWords.trim().slice(0, 400), JSON.stringify(steps), input.firstPlan.trim().slice(0, 240), next, JSON.stringify([{ at: new Date().toISOString(), text: "Started." }]), dl?.deadline ?? null, dl?.finalCheckAt ?? null, input.owner ?? "co"],
+    [input.userId, goal, input.theirWords.trim().slice(0, 400), JSON.stringify(steps), input.firstPlan.trim().slice(0, 240), next, JSON.stringify([{ at: new Date().toISOString(), text: "Started." }]), dl?.deadline ?? null, dl?.finalCheckAt ?? null, input.source ?? "ask"],
   );
   return { ok: true, task: rowTo(rows[0]) };
 }
