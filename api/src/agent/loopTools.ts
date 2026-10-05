@@ -14,6 +14,9 @@ import { numbersBacked, placesBacked, unbackedClaims } from "../services/taskWeb
 import { LOOP_BUDGET } from "./loop.js";
 import { stripUngroundedIdentity } from "../services/identityGuard.js";
 import type { ConversationToolContext } from "./conversationTools.js";
+import pool from "../db/db.js";
+import sendblue from "../services/sendblue.js";
+import { resolvePlan, planProblems, type EventRecord } from "../services/planSheet.js";
 
 // What the loop has seen this turn: every link a tool returned, with the facts
 // that came with it, and every page it read.
@@ -49,6 +52,9 @@ export function captionProblems(caption: string, facts: string, theirs: string):
     ...(did ? [`"${did}" isn't something they told you they did`] : []),
   ];
 }
+
+// They asked for it by email, in their own words: "email it", "send it to my email", "put it on my calendar", "in my inbox".
+export const EMAIL_ASK = /\be-?mail(?:ed|ing)?\b|\binbox\b|\bon my calendar\b|\bcalendar (?:invite|hold|event)s?\b|\bsend (?:it )?to my (?:mail|gmail|outlook|icloud)\b/i;
 
 export function mailtoLink(to: string, subject: string, body: string): string {
   return `mailto:${to}?subject=${encodeURIComponent(subject)}&body=${encodeURIComponent(body)}`;
@@ -88,6 +94,8 @@ export function loopTools(
     const tried = [...new Set([...(prev.tried ?? []), ...(patch.tried ?? [])])].slice(-12);
     await saveBrief(ctx.userId, { ...prev, ...Object.fromEntries(Object.entries(patch).filter(([, v]) => v !== undefined && v !== null && v !== "")), tried } as SearchIntent);
   };
+  // The log of a text that already went out; its failure never makes a delivered text look unsent.
+  const logDeliveredPlan = (content: string) => writeMemory(ctx.userId, "text_exchange", content).catch((err: any) => console.error("loopTools: logging a sent plan failed (it did send):", err?.message ?? err));
   const theirWords = () => `${ctx.resolvedContent} ${ctx.turn?.message ?? ""}`;
   // Probes and dry runs never spend on searches (ctx.stubSearch).
   const STUB = { ok: true, note: "Test run: nothing was searched. Say you looked and nothing solid came up yet." };
@@ -390,6 +398,100 @@ export function loopTools(
         ctx.facts?.add("did_this_turn", `Sent them a draft email to ${addr} ("${subject.trim()}") and a tap-to-send link that opens it in their own mail app. Nothing was sent to ${addr}.`);
         await remember({ contacts: [...(notes?.contacts ?? []).filter((c) => c.email !== addr), { name: addr.split("@")[1] ?? addr, email: addr }].slice(-6), next: `email drafted to ${addr}; waiting for them to send it` });
         return { ok: true, note: "The draft and its tap-to-send link went out as their own texts. Say in a line that tapping the link opens it in their mail app ready to send; don't repeat the draft." };
+      },
+    }),
+
+    // A plan, emailed (services/planSheet.ts, planEmail.ts): a one-page sheet and calendar holds, to
+    // the member's own email on their account. Co writes the plan; code fills event steps from their own
+    // records and holds everything else to what was read this turn or said, and the address is never Co's to choose.
+    emailPlan: tool({
+      description: toolUse("emailPlan"),
+      inputSchema: z.object({
+        title: z.string().describe("A short title for the plan, in Co's voice (\"Sunday in the East Bay\")."),
+        note: z.string().describe("One or two plain sentences for the top of the sheet and the email, in your voice."),
+        steps: z
+          .array(
+            z.object({
+              link: z.string().optional().describe("The link of an event you found this turn; its time, place and address come from its own record."),
+              when: z.string().optional().describe("Their local time, 2026-10-11T16:30."),
+              until: z.string().optional(),
+              what: z.string(),
+              where: z.string().optional(),
+              address: z.string().optional(),
+              detail: z.string().optional(),
+            }),
+          )
+          .min(1)
+          .max(8),
+        notes: z.array(z.string()).max(4).optional().describe("Things worth knowing, one short line each."),
+        sendBy: z.enum(["text", "email", "both"]).optional().describe("Leave this out: the PDF goes in this conversation, by text. Only when they ask for it by email (or both) in their own words do you set email or both; the email also carries a calendar hold for each time."),
+      }),
+      execute: async (input) => {
+        const { rows } = await pool.query(`SELECT email, first_name FROM users WHERE id = $1`, [ctx.userId]).catch(() => ({ rows: [] as any[] }));
+        const raw = String(rows[0]?.email ?? "").trim();
+        const email = /^[^\s@]+@[^\s@]+\.[a-z]{2,}$/i.test(raw) ? raw : "";
+        // By default the plan is a text: the PDF in this conversation. It goes to their email only when they
+        // ask for that in their own words this turn (code checks the words, not Co's say-so); with no email on
+        // file, an email request becomes a text and Co says so.
+        const askedForEmail = EMAIL_ASK.test(theirWords());
+        const asked = (input.sendBy === "email" || input.sendBy === "both") && !askedForEmail ? "text" : (input.sendBy ?? "text");
+        const byEmail = (asked === "email" || asked === "both") && !!email;
+        const byText = asked === "text" || asked === "both" || (asked === "email" && !email);
+        const noEmailFallback = (asked === "email" || asked === "both") && !email;
+        const city = ctx.turn?.profile?.city ?? null;
+        const zone = (city ? await import("../services/geocoding.js").then((g) => g.getTimezoneForCity(city)).catch(() => null) : null) ?? "America/Los_Angeles";
+        const recordFor = (link: string): EventRecord | null => {
+          const f = loop.found.get(link);
+          const d = f?.match && "details" in f.match ? (f.match as any).details : null;
+          return f && d ? { name: f.match!.name, startAt: d.startAt ?? null, endAt: d.endAt ?? null, timezone: d.timezone ?? null, venue: d.venue ?? null, address: d.address ?? null } : f ? { name: f.name } : null;
+        };
+        const brief = await loadBrief(ctx.userId).catch(() => null);
+        const facts = [...loop.pages.values(), ...[...loop.found.values()].map((f) => `${f.name} ${f.facts}`), brief ? JSON.stringify(brief) : "", ctx.facts?.text() ?? ""].join("\n");
+        const plan = resolvePlan(input, zone, recordFor);
+        const problems = planProblems(input, plan, { facts, theirs: theirWords(), now: new Date(), recordFor });
+        if (problems.length) {
+          notDone(`No plan emailed: ${problems.slice(0, 3).join("; ")}.`);
+          return { ok: false, error: `Not sent: ${problems.slice(0, 5).join(" | ")}. Fix these and try again, or say what you couldn't confirm.` };
+        }
+        const way = byEmail && byText ? "by email and by text" : byEmail ? "by email" : "by text";
+        if (ctx.dryRun) {
+          ctx.facts?.add("did_this_turn", `Sent them a plan, "${plan.title}", as a one-page sheet ${way}.`);
+          return { ok: true, note: "Test run: nothing was sent." };
+        }
+        const { buildPlanFiles, sendPlanEmail } = await import("../services/planEmail.js");
+        const firstName = String(rows[0]?.first_name ?? ctx.firstName ?? "");
+        const files = await buildPlanFiles(plan, { firstName, seed: `${ctx.userId.slice(0, 8)}-${Date.now().toString(36)}` });
+        if (!files) {
+          notDone("No plan sent: the sheet couldn't be made right now.");
+          return { ok: false, error: "The sheet couldn't be made right now. Say so plainly and give them the plan in a text instead." };
+        }
+        const went: string[] = [];
+        if (byEmail) {
+          const sent = await sendPlanEmail({ to: email, files });
+          if (sent.ok) went.push("email");
+          else notDone(`The plan email didn't go out: ${sent.why}.`);
+        }
+        if (byText) {
+          const { cachePlanFile } = await import("../services/planFile.js");
+          try {
+            await sendblue.messages.send({ number: ctx.phoneNumber, content: plan.title, media_url: cachePlanFile(files.pdf), from_number: process.env.SENDBLUE_PHONE_NUMBER! });
+            await logDeliveredPlan(`Co replied: [sent a plan: ${plan.title}]`);
+            state.sentMessages.push(`[sent a plan: ${plan.title}]`);
+            went.push("text");
+          } catch (err: any) {
+            notDone("The plan PDF didn't send by text.");
+          }
+        }
+        if (!went.length) return { ok: false, error: "The plan didn't go out. Say so plainly and offer the plan as a text message instead." };
+        await recordDecision({ layer: 3, decision: "loop.emailPlan", userId: ctx.userId, outcome: "act", action: plan.title, proposal: { steps: plan.steps.length, via: went, calendar: went.includes("email") && files.calendar } }).catch(() => {});
+        const gone = went.length === 2 ? "by email and by text" : went[0] === "email" ? "by email" : "by text";
+        ctx.facts?.add("did_this_turn", `Sent them a plan, "${plan.title}", as a one-page sheet ${gone}${went.includes("email") && files.calendar ? ", with a calendar hold for each time in the email" : ""}.`);
+        await remember({ next: `plan sent: ${plan.title}` });
+        return {
+          ok: true,
+          via: went,
+          note: `${went.includes("text") ? "The PDF is in this conversation. " : ""}${went.includes("email") ? `It's in their email${files.calendar ? ", with a calendar hold for each time" : ""}. ` : ""}${noEmailFallback ? "They have no email on file, so it went by text: say so, in a few words. " : ""}${went.length < (byEmail && byText ? 2 : 1) ? "One of the two didn't go out: say which. " : ""}Say in one line where it is; don't list the steps again.`,
+        };
       },
     }),
 

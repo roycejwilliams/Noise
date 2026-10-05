@@ -74,6 +74,8 @@ export function toolAction(tool: string, input: any): { relation: string; label:
       return Array.isArray(input?.items) ? input.items.map((i: any) => ({ relation: "sent", label: s(i?.caption).slice(0, 120) || s(i?.link), url: s(i?.link) })).filter((x: any) => x.url) : null;
     case "draftEmail":
       return [{ relation: "did", label: `drafted an email${s(input?.to) ? ` to ${s(input.to)}` : ""} for them to send: ${s(input?.subject)}` }];
+    case "emailPlan":
+      return [{ relation: "sent", label: `a one-page plan to their email: ${s(input?.title)}` }];
     case "saveAsk":
       return [{ relation: "did", label: s(input?.what) ? `saved an ask to keep looking for: ${s(input.what)}` : "saved an ask" }];
     case "closeAsk":
