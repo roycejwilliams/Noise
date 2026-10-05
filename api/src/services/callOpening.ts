@@ -22,6 +22,7 @@ import { generateText } from "ai";
 import { checkNoEmotionLabelOnCall } from "../harness/emotion.js";
 import { recordDecision } from "../harness/core.js";
 import { MODELS } from "../models.js";
+import { stockLine } from "../harness/stockLines.js";
 import { cuesIn } from "./voiceCues.js";
 
 export const OPENING_WRITER = {
@@ -69,7 +70,7 @@ export function openingProblems(raw: string, summary: string, firstName: string)
   if (firstName && !line.toLowerCase().includes(firstName.toLowerCase())) return "doesn't use their name";
   // The call-strength check: this is spoken, and a hearsay exemption ("I hear X about the plan") has no place in a greeting.
   if (!checkNoEmotionLabelOnCall(line).pass) return "names a feeling";
-  if (/\bhow are you\b|good to hear your voice|i remember|thinking about you/i.test(line)) return "a stock line";
+  if (/\bhow are you\b|good to hear your voice|i remember|thinking about you/i.test(line) || stockLine(line)) return "a stock line";
   // Every name, place and number in it has to be in what it was written from.
   const hay = summary.toLowerCase().replace(/’/g, "'");
   for (const sentence of line.split(/(?<=[.!?])\s+/)) {

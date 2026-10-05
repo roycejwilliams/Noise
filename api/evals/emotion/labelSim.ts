@@ -8,6 +8,8 @@ import "dotenv/config";
 import { readFileSync, writeFileSync } from "fs";
 import { buildAgentConfig } from "../../src/services/elevenLabsCalls.js";
 import { checkNoEmotionLabelOnCall } from "../../src/harness/emotion.js";
+import { stockReport } from "../../src/harness/stockLines.js";
+import { cuesIn } from "../../src/services/voiceCues.js";
 
 const [beforePath, afterPath, nArg] = process.argv.slice(2);
 if (!beforePath || !afterPath) throw new Error("usage: labelSim.ts <prompt before> <prompt after> [sims per prompt]");
@@ -51,8 +53,10 @@ try {
       const turns: any[] = (out as any).simulated_conversation ?? [];
       const coLines = turns.filter((t) => t.role === "agent" && typeof t.message === "string").map((t) => t.message as string);
       const labelled = coLines.filter((l) => !checkNoEmotionLabelOnCall(l).pass);
-      runs.push({ prompt: which, sim: i, coLines, labelled });
-      console.log(`${which} #${i + 1}: ${coLines.length} Co lines, ${labelled.length} labelled${(out as any).error ? ` (error: ${(out as any).error.slice(0, 400)})` : ""}${labelled.length ? ` | ${labelled.map((l) => `"${l.slice(0, 90)}"`).join(" ; ")}` : ""}`);
+      const sr = stockReport(coLines);
+      const cueLines = coLines.filter((l) => cuesIn(l).length > 1);
+      runs.push({ prompt: which, sim: i, coLines, labelled, stock: sr.stock, repeated: sr.repeated, cueLines });
+      console.log(`${which} #${i + 1}: ${coLines.length} Co lines, ${labelled.length} labelled, ${sr.stock.length} stock, ${sr.repeated.length} repeated openers, ${cueLines.length} multi-cue${(out as any).error ? ` (error: ${(out as any).error.slice(0, 400)})` : ""}${labelled.length ? ` | ${labelled.map((l) => `"${l.slice(0, 90)}"`).join(" ; ")}` : ""}`);
     }
   }
 } finally {
@@ -63,5 +67,5 @@ for (const which of ["before", "after"]) {
   const r = runs.filter((x) => x.prompt === which);
   const lines = r.reduce((a, x) => a + x.coLines.length, 0);
   const lab = r.reduce((a, x) => a + x.labelled.length, 0);
-  console.log(`${which}: ${lab} labelled of ${lines} Co lines across ${r.length} calls; calls with any label: ${r.filter((x) => x.labelled.length).length}/${r.length}`);
+  console.log(`${which}: ${lab} labelled of ${lines} Co lines across ${r.length} calls; calls with any label: ${r.filter((x) => x.labelled.length).length}/${r.length}; stock lines: ${r.reduce((a, x) => a + x.stock.length, 0)} (calls with any: ${r.filter((x) => x.stock.length).length}); calls with a repeated opener: ${r.filter((x) => x.repeated.length).length}; multi-cue lines: ${r.reduce((a, x) => a + x.cueLines.length, 0)}`);
 }

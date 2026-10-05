@@ -1,3 +1,4 @@
+import { stockReport, coLinesOf } from "../harness/stockLines.js";
 import { anthropic } from "@ai-sdk/anthropic";
 import { cueAudit } from "../services/voiceCues.js";
 import { recordSafetyConcern, soundsLikeCrisis } from "../services/safety.js";
@@ -823,6 +824,13 @@ async function processEndedCall(o: {
       // call is audited right after: keepable promises are kept, the rest
       // become corrections for the next text (harness/callGrounding.ts).
       auditCall(user_id, cleanTranscript, knownBeforeCall).catch(() => {});
+      // How scripted it sounded: stock comfort lines and repeated openers, logged for the morning review.
+      {
+        const r = stockReport(coLinesOf(cleanTranscript));
+        if (r.stock.length || r.repeated.length) {
+          recordDecision({ layer: 8, decision: "call.stock_lines", userId: user_id, outcome: "skip", action: "audit", proposal: { stock: r.stock.slice(0, 6), repeated: r.repeated } }).catch(() => {});
+        }
+      }
 
       // Emotion loop: the feelings in what they said on the call, read with the
       // text path's own read (harness/emotion.ts callEmotionMoments), once per

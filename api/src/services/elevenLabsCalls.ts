@@ -1,7 +1,12 @@
 // Calls on ElevenLabs Agents (2026-10-03): Hume ends EVI and TTS on
 // 2026-11-13, so Co's calls move here. Royce chose ElevenLabs Agents with
-// the Eleven v4 Turbo voice, Claude Haiku 4.5 as the fast live voice and
-// Claude Sonnet behind the tools (the tool webhooks run Co's own code).
+// the Eleven v4 Turbo voice and Claude behind the tools (the tool webhooks run
+// Co's own code). The live voice started on Haiku 4.5 for speed; on 2026-10-04
+// Royce chose Claude Sonnet 4.6 (what Hume ran) after the comparison: Haiku
+// still said stock empathy lines ("I hear you", "I hear that") and opened its
+// first question from the prompt's examples, Sonnet did neither, at about 0.7 s
+// more per reply (median ~1.9 s against ~1.2 s). ELEVENLABS_LLM overrides it,
+// so going back to Haiku is one variable.
 //
 // The call still goes out and comes in through Co's own Twilio number:
 // Twilio asks us for TwiML, we register the call with ElevenLabs
@@ -11,6 +16,7 @@
 // Hume is gone (Royce, 2026-10-03: "remove Hume, no reason to use it if
 // it's going to be deprecated"); every call runs here.
 import { DISCRETION_GUIDE } from "../harness/discretion.js";
+import { VARIETY_GUIDE } from "../harness/stockLines.js";
 import { CUE_GUIDE, stripCues } from "./voiceCues.js";
 import { createHmac, timingSafeEqual } from "crypto";
 import { ElevenLabsClient } from "@elevenlabs/elevenlabs-js";
@@ -171,7 +177,7 @@ export function promptForElevenLabs(prompt: string): string {
     : `${base}\n\n${CUE_GUIDE}`;
   // How Co keeps a confidence on a call (harness/discretion.ts): speech can't be
   // edited, so the model has to choose a discreet line itself.
-  return `${withCues}\n\n${DISCRETION_GUIDE}\n\n${OPENING_NOTE}`;
+  return `${withCues}\n\n${DISCRETION_GUIDE}\n\n${VARIETY_GUIDE}\n\n${OPENING_NOTE}`;
 }
 
 // The coverage check reads the newest part of the call (~6k tokens is plenty
@@ -181,7 +187,7 @@ export const COVERAGE_TRANSCRIPT_CHARS = 24_000;
 export const VOICEMAIL_MESSAGE = "Hey {{first_name}}, it's Co. Sorry I missed you. I'll send you a text.";
 
 export const AGENT_DEFAULTS = {
-  llm: "claude-haiku-4-5",
+  llm: "claude-sonnet-4-6",
   // Hume ran Co at temperature 1. The agent was left at ElevenLabs' default of 0,
   // where the model repeats the prompt's own example lines almost word for word
   // (2026-10-04: "sounds scripted"). 0.8 keeps it varied; the rules the prompt

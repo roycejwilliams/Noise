@@ -67,7 +67,8 @@ check("the real prompt has no hang_up left in the agent's copy, and keeps its va
 const cfg: any = buildAgentConfig({ name: "Co (test)", prompt: "P {{first_name}}", voiceId: "voice-1", apiUrl: "https://test.copatible.com" });
 const cc = cfg.conversation_config;
 check("phone audio is mu-law 8kHz both ways (register-call needs it)", cc.asr.user_input_audio_format === "ulaw_8000" && cc.tts.agent_output_audio_format === "ulaw_8000");
-check("Royce's picks: Eleven v4 Turbo voice, Haiku 4.5 live, eager turn-taking", cc.tts.model_id === "eleven_v4_turbo" && cc.agent.prompt.llm === "claude-haiku-4-5" && cc.turn.turn_eagerness === "eager" && AGENT_DEFAULTS.ttsModel === "eleven_v4_turbo");
+// Royce chose Sonnet 4.6 for the live voice on 2026-10-04, after the comparison with Haiku 4.5.
+check("Royce's picks: Eleven v4 Turbo voice, Sonnet 4.6 live, eager turn-taking", cc.tts.model_id === "eleven_v4_turbo" && cc.agent.prompt.llm === "claude-sonnet-4-6" && cc.turn.turn_eagerness === "eager" && AGENT_DEFAULTS.ttsModel === "eleven_v4_turbo");
 check("overrides from the env reach the config", (buildAgentConfig({ name: "x", prompt: "p", voiceId: "v", apiUrl: "https://a.b", llm: "claude-sonnet-5", ttsModel: "eleven_flash_v2_5", turnEagerness: "normal" }) as any).conversation_config.agent.prompt.llm === "claude-sonnet-5");
 const tools = (cc.agent.prompt.tools as any[]).filter((t) => t.type === "webhook");
 check("both of Co's call tools are webhooks to our routes", tools.map((t) => t.name).join() === "assess_conversation_coverage,surface_recommendation" && tools.every((t) => t.type === "webhook" && t.api_schema.url === `https://test.copatible.com/co/el/tool/${t.name}`));
