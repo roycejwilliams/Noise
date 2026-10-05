@@ -1,4 +1,5 @@
 import { notToTeammate } from "../services/teamLines.js";
+import { isDiscreetTurn } from "../harness/discretion.js";
 import { anthropic } from "@ai-sdk/anthropic";
 import { captureIssueReport } from "../services/issueReports.js";
 import { generateText } from "ai";
@@ -2071,11 +2072,16 @@ export function sendblueRouter(io: Server): Router {
           try {
             const classification = resolvedTease.value === "yes" ? "interested" : "not_interested";
             const teaseCandidate = resolvedTease.item.ref.pending.candidate;
-            await recordSuggestionOutcome(user.id, "intro", `intro:${teaseCandidate.candidate_id}`, `an intro to ${teaseCandidate.first_name}`, classification === "interested" ? "interested" : "declined");
+            // Nameless: they haven't been told who (the reveal may yet be blocked), and a later reply reads this back as a fact.
+            await recordSuggestionOutcome(user.id, "intro", `intro:${teaseCandidate.candidate_id}`, "an intro from the network (name not shared)", classification === "interested" ? "interested" : "declined");
             const context = await resolveNetworkTeaseReply(user.id, user.first_name, user.phone_number, resolvedTease.item.ref.pending, classification);
             if (context) {
               addInstruction(replyFacts, context);
-              if (classification === "interested") {
+              if (isDiscreetTurn([context])) {
+                // Nothing was revealed: no "sent a message naming them" fact (it was false,
+                // and carried the name), and the reply may not name them (harness/discretion.ts).
+                replyFacts.privateNames = [...(replyFacts.privateNames ?? []), resolvedTease.item.ref.pending.candidate.first_name];
+              } else if (classification === "interested") {
                 addFact(replyFacts, "did_this_turn", `Sent a separate message just before this reply naming ${resolvedTease.item.ref.pending.candidate.first_name} and asking if they want an intro.`);
               }
             }

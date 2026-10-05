@@ -10,6 +10,7 @@
 //
 // Hume is gone (Royce, 2026-10-03: "remove Hume, no reason to use it if
 // it's going to be deprecated"); every call runs here.
+import { DISCRETION_GUIDE } from "../harness/discretion.js";
 import { CUE_GUIDE, stripCues } from "./voiceCues.js";
 import { createHmac, timingSafeEqual } from "crypto";
 import { ElevenLabsClient } from "@elevenlabs/elevenlabs-js";
@@ -157,7 +158,9 @@ export function promptForElevenLabs(prompt: string): string {
   const withCues = base.includes(SPOKEN_ALOUD)
     ? base.replace(new RegExp(`${SPOKEN_ALOUD.replace(/[.]/g, "\\.")} ?`), `Everything you write is spoken aloud, except a cue in square brackets (below).\n${CUE_GUIDE}\n\n`)
     : `${base}\n\n${CUE_GUIDE}`;
-  return `${withCues}\n\n${OPENING_NOTE}`;
+  // How Co keeps a confidence on a call (harness/discretion.ts): speech can't be
+  // edited, so the model has to choose a discreet line itself.
+  return `${withCues}\n\n${DISCRETION_GUIDE}\n\n${OPENING_NOTE}`;
 }
 
 // The coverage check reads the newest part of the call (~6k tokens is plenty
