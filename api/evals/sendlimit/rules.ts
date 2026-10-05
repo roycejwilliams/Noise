@@ -19,7 +19,7 @@ const min = (n: number) => n * 60 * 1000;
 const sec = (n: number) => n * 1000;
 const N = "+14155550100";
 
-check("defaults: 30 in 10 minutes, 12 with no reply, 30 minute cooldown", SEND_LIMIT.max === 30 && SEND_LIMIT.unprompted === 12 && SEND_LIMIT.windowMs === min(10) && SEND_LIMIT.cooldownMs === min(30));
+check("defaults: 40 in 10 minutes, 18 with no reply (replies are up to five messages now), 30 minute cooldown", SEND_LIMIT.max === 40 && SEND_LIMIT.unprompted === 18 && SEND_LIMIT.windowMs === min(10) && SEND_LIMIT.cooldownMs === min(30));
 
 {
   // Royce's chat, 2026-09-24 3:18 to 3:28 PM: nine quick exchanges, then a

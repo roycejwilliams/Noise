@@ -79,7 +79,7 @@ check("the reply gets the guide when they want something found, and the working 
 // Beats, bursts and the timeline (2026-10-01).
 {
   const B = await import("../../src/services/beats.js");
-  check("each paragraph is its own text, at most three", JSON.stringify(B.toBeats("Got it.\n\nThe loft holds 60.\n\nWant me to ask about price?")) === JSON.stringify(["Got it.", "The loft holds 60.", "Want me to ask about price?"]) && B.toBeats("a\n\nb\n\nc\n\nd").length === 3 && B.toBeats("one line").length === 1);
+  check("each paragraph is its own text, up to five", JSON.stringify(B.toBeats("Got it.\n\nThe loft holds 60.\n\nWant me to ask about price?")) === JSON.stringify(["Got it.", "The loft holds 60.", "Want me to ask about price?"]) && B.toBeats("a\n\nb\n\nc\n\nd").length === 4 && B.toBeats("one line").length === 1);
   check("a text that looks unfinished waits longer for the rest of the burst", B.burstWaitMs("so") === B.BURST_WAIT_UNFINISHED_MS && B.burstWaitMs("I was thinking...") === B.BURST_WAIT_UNFINISHED_MS && B.burstWaitMs("also,") === B.BURST_WAIT_UNFINISHED_MS && B.burstWaitMs("Can you find me a venue for Oct 10?") === B.BURST_WAIT_MS);
   const ct = src("agent/conversationTools.ts");
   check("sendReply sends each beat after the fact check, paced, and logs each", /const beats = ctx\.isVoice \? \[message\] : toBeats\(message\)/.test(ct) && /BEAT_GAP_MS/.test(ct) && /logDelivered\(`Co replied: \$\{cleanCoMessage\(beat\)\}`\)/.test(ct));

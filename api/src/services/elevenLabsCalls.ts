@@ -17,6 +17,7 @@
 // it's going to be deprecated"); every call runs here.
 import { DISCRETION_GUIDE } from "../harness/discretion.js";
 import { VARIETY_GUIDE } from "../harness/stockLines.js";
+import { BRAND, CALL_COACHING } from "./textRhythm.js";
 import { CUE_GUIDE, VOICE_CUES, stripCues } from "./voiceCues.js";
 import { createHmac, timingSafeEqual } from "crypto";
 import { ElevenLabsClient } from "@elevenlabs/elevenlabs-js";
@@ -193,7 +194,7 @@ export function promptForElevenLabs(prompt: string): string {
     : `${base}\n\n${CUE_GUIDE}`;
   // How Co keeps a confidence on a call (harness/discretion.ts): speech can't be
   // edited, so the model has to choose a discreet line itself.
-  return `${withCues}\n\n${VARIETY_GUIDE}\n\n${split.guardrails ? `${split.guardrails}\n\n` : ""}${DISCRETION_GUIDE}\n\n${OPENING_NOTE}`;
+  return `${withCues}\n\n${VARIETY_GUIDE}\n\n${CALL_COACHING}\n\n${BRAND}\n\n${split.guardrails ? `${split.guardrails}\n\n` : ""}${DISCRETION_GUIDE}\n\n${OPENING_NOTE}`;
 }
 
 // The coverage check reads the newest part of the call (~6k tokens is plenty

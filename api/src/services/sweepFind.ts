@@ -29,6 +29,8 @@ ${o.picture || "(little known yet)"}${o.feeling ? `\nHow they've been: ${o.feeli
 Already sent to them recently (don't keep these again): ${o.shown.length ? o.shown.slice(0, 15).join("; ") : "(nothing)"}
 
 Search only for this one ask. Other things they're working on (in who they are) are context for judging fit, not things to look for in this sweep, because each ask gets its own sweep (2026-10-01: a founder-events sweep kept a venue from another ask).
+Who a thing is for matters. Read each one for the group it speaks to (a hike club for women, a men's group, a moms' brunch) and say it in the audience field of keep. Never hold something back for who you assume they are: you only know what they have said in their own words, never from a name or a voice. A group-aimed thing fits them when what you know says they belong; when you don't know, you may still keep it if it fits strongly, and Co will say plainly who it's for so they can tell. Prefer an open event when two fit about equally.
+
 Look with the tools: events first when it's something to go to, the web for programs, places and people, X for something just announced. Judge each result yourself against what they asked and who they are; results are candidates, not answers. Keep at most ${SWEEP_BUDGET.keep} with keep(), each with one plain sentence on why it fits them. Keeping nothing is fine when nothing fits. Stop when you're done.`;
 }
 
@@ -110,12 +112,12 @@ export async function sweepFind(c: SweepCandidate, opts: { timezone?: string | n
     }),
     keep: tool({
       description: "Keep one thing for the queue: its link (from a result), the name of the thing as its record states it, and one plain sentence on why it fits them.",
-      inputSchema: z.object({ link: z.string(), name: z.string().optional(), why: z.string() }),
-      execute: async ({ link, name, why }) => {
+      inputSchema: z.object({ link: z.string(), name: z.string().optional(), why: z.string(), audience: z.string().optional().describe("Only if the thing is aimed at a particular group (women, men, moms, a community): who, in a few words. Leave out when it is open to everyone.") }),
+      execute: async ({ link, name, why, audience }) => {
         const m = found.get(link);
         if (!m) return { ok: false, error: "That link isn't one of your results." };
         if (kept.length >= SWEEP_BUDGET.keep) return { ok: false, error: "That's enough for this sweep." };
-        kept.push({ ...m, ...(name && m.tier === 3 ? { name } : {}), whyItFits: why.trim(), fits: true, rightKind: true } as TierMatch);
+        kept.push({ ...m, ...(name && m.tier === 3 ? { name } : {}), whyItFits: why.trim(), fits: true, rightKind: true, ...(audience && audience.trim() ? { audience: audience.trim().slice(0, 60) } : {}) } as TierMatch);
         return { ok: true };
       },
     }),
