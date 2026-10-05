@@ -43,7 +43,8 @@ import { refreshPersonSnapshot } from "../harness/personSnapshot.js";
 import { auditCall } from "../harness/callGrounding.js";
 import { callEmotionMoments, checkNoEmotionLabelOnCall, frustrationMoments, frustrationScores, recordEmotionSignals, type ScoredLine } from "../harness/emotion.js";
 import { flagVoiceMoments } from "../services/voiceFlags.js";
-import { CANT_CONNECT_LINE, COVERAGE_TRANSCRIPT_CHARS, chooseOpening, conversationLink, fetchConversationTurns, hitVoicemail, memberNumberOf, missedKind, voicemailLeft, noteCallFailure, takeCallContext, voicemailVerdict, registerElevenLabsCall, transcriptFromHistory, transcriptFromTurns, verifyCallToken, verifyPostCallWebhook } from "../services/elevenLabsCalls.js";
+import { CANT_CONNECT_LINE, COVERAGE_TRANSCRIPT_CHARS, chooseOpening, conversationLink, withTimeout, fetchConversationTurns, hitVoicemail, memberNumberOf, missedKind, voicemailLeft, noteCallFailure, takeCallContext, voicemailVerdict, registerElevenLabsCall, transcriptFromHistory, transcriptFromTurns, verifyCallToken, verifyPostCallWebhook } from "../services/elevenLabsCalls.js";
+import { OPENING_WRITER, recordOpening, takeOpening, writeOpening } from "../services/callOpening.js";
 
 // One-line drafts (missed-call text, voicemail line): narrow work, Haiku.
 const DRAFT_MODEL = MODELS.haiku;
@@ -365,7 +366,7 @@ router.post(
         const elTwiml = await registerElevenLabsCall({
           userId,
           firstName: u[0]?.first_name ?? "",
-          opening: await chooseOpening(userId, u[0]?.first_name ?? "", "inbound"),
+          opening: await openingForCall(userId, u[0]?.first_name ?? "", "inbound", contextSummary),
           contextSummary,
           from: from!,
           to: (req.body.To as string | undefined) ?? process.env.TWILIO_PHONE_NUMBER!,
@@ -388,6 +389,18 @@ router.post(
 
 // ---------- ElevenLabs calls (services/elevenLabsCalls.ts)
 
+// The opening line: written from what Co knows (services/callOpening.ts), the
+// pool's greeting if it can't be. Outbound it was written while the phone rang;
+// inbound it gets a short wait, since the caller is already on the line.
+async function openingForCall(userId: string, firstName: string, direction: "inbound" | "outbound", contextSummary: string): Promise<string> {
+  const written =
+    direction === "outbound"
+      ? await takeOpening(userId)
+      : await withTimeout(writeOpening({ firstName, direction, summary: contextSummary, timeoutMs: OPENING_WRITER.inboundBudgetMs }), OPENING_WRITER.inboundBudgetMs, { line: null, why: "not ready in time" });
+  recordOpening(userId, direction, written);
+  return written.line ?? (await chooseOpening(userId, firstName, direction));
+}
+
 // Outbound: Twilio fetches this once the call connects (callTrigger.ts
 // dials with this url); we register the call with ElevenLabs and return its
 // TwiML. The user id rides in the url with a short-lived token, and the
@@ -407,7 +420,7 @@ router.post("/el/outbound-twiml", async (req: Request, res: Response, next: Next
       const twiml = await registerElevenLabsCall({
         userId,
         firstName: u[0].first_name ?? "",
-        opening: await chooseOpening(userId, u[0].first_name ?? "", "outbound"),
+        opening: await openingForCall(userId, u[0].first_name ?? "", "outbound", contextSummary),
         contextSummary,
         from: (req.body.From as string | undefined) ?? process.env.TWILIO_PHONE_NUMBER!,
         to: (req.body.To as string | undefined) ?? u[0].phone_number,

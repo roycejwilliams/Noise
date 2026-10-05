@@ -74,6 +74,7 @@ for (const s of [
 
 // The call audit only logs, so it also takes the plain "I hear the X" Co used
 // on real calls, and still doesn't flag hearsay about a thing.
+check("call audit flags the 'about' form the text gate leaves alone: \"I'm hearing frustration about the sponsors.\"", !checkNoEmotionLabelOnCall("I'm hearing frustration about the sponsors.").pass && checkNoEmotionLabel("I'm hearing frustration about the sponsors.").pass);
 for (const s of ["I hear the exhaustion underneath that.", "I hear the frustration. What's the reason?", "I hear a lot of stress in that.", "I can hear the tension.", "I notice some tension there."]) check(`call audit flags: "${s}"`, !checkNoEmotionLabelOnCall(s).pass);
 check("the text gate leaves the plain 'I hear the X' alone (hearsay), the call audit doesn't", flags("I hear the exhaustion underneath that.") === false);
 check("the call audit doesn't flag hearsay about a thing", checkNoEmotionLabelOnCall("I hear the launch got pushed").pass && checkNoEmotionLabelOnCall("I hear good things about it").pass);

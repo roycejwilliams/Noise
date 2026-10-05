@@ -4,6 +4,10 @@
 // every reply from the end of the caller's line to Co's first audio, with
 // whether that reply carried a cue. No real voices.
 //   npx tsx evals/calls/cuesLive.ts <agent id> <test member user id> <clips dir> <call name>...
+// Optional environment, for comparing setups on a real context and opening:
+//   CONTEXT_FILE=path   the call's context_summary (default: empty, a fresh member)
+//   OPENING="..."       the opening line to set for the call (default: the agent's own)
+//   RUN_TAG=name        results go to <clips dir>cue-runs-<name>.json (default cue-runs.json)
 // The clips dir holds audio/<id>.wav and calls/<name>.json (calls.py in the pilot).
 import "dotenv/config";
 import { readFileSync, writeFileSync } from "fs";
@@ -92,7 +96,14 @@ async function runCall(name: string): Promise<{ name: string; conversationId: st
     ws.once("open", () => res());
     ws.once("error", rej);
   });
-  ws.send(JSON.stringify({ type: "conversation_initiation_client_data", dynamic_variables: { user_id: userId, call_token: issueCallToken(userId), first_name: "Jordan", context_summary: "", direction: "outbound" } }));
+  const context = process.env.CONTEXT_FILE ? readFileSync(process.env.CONTEXT_FILE, "utf8") : "";
+  ws.send(
+    JSON.stringify({
+      type: "conversation_initiation_client_data",
+      dynamic_variables: { user_id: userId, call_token: issueCallToken(userId), first_name: process.env.CONTEXT_FILE ? "Royce" : "Jordan", context_summary: context, direction: "outbound" },
+      ...(process.env.OPENING ? { conversation_config_override: { agent: { first_message: process.env.OPENING } } } : {}),
+    }),
+  );
   const agentDone = async (turn: number) => {
     const until = Date.now() + 45_000;
     const playing = () => Date.now() < turnStart + (turnBytes / 8000) * 1000 + 800;
@@ -126,7 +137,7 @@ for (const name of callNames) {
   results.push(await runCall(name));
 }
 await pool.end();
-writeFileSync(`${dir}cue-runs.json`, JSON.stringify(results, null, 1));
+writeFileSync(`${dir}cue-runs${process.env.RUN_TAG ? `-${process.env.RUN_TAG}` : ""}.json`, JSON.stringify(results, null, 1));
 const all = results.flatMap((r) => r.replies);
 const timed = (rs: Reply[]) => rs.map((r) => r.latencyMs).filter((x): x is number => x !== null).sort((a, b) => a - b);
 const med = (xs: number[]) => (xs.length ? xs[Math.floor(xs.length / 2)] : null);

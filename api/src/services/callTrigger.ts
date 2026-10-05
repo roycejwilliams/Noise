@@ -4,6 +4,7 @@ import type { Server as IOServer } from "socket.io";
 import pool from "../db/db.js";
 import { generateEmbedding } from "./embeddings.js";
 import { issueCallToken, prebuildCallContext } from "./elevenLabsCalls.js";
+import { prebuildOpening } from "./callOpening.js";
 import { buildCallContextSummary } from "./callContext.js";
 import { recordDecision } from "../harness/core.js";
 import { decideCall, gatherCallState, type CallAuthorization } from "../harness/callGate.js";
@@ -69,7 +70,9 @@ export async function triggerCallForUser(
   // the agent then. No Twilio machine detection: the agent's own voicemail
   // tool leaves the message, and the post-call webhook sends the missed-call text.
   // Context built while it rings, ready the moment they answer.
-  prebuildCallContext(userId, buildCallContextSummary);
+  const summary = prebuildCallContext(userId, buildCallContextSummary);
+  // And the opening line, written from that context while it rings (services/callOpening.ts).
+  prebuildOpening(userId, user.first_name ?? "", "outbound", summary);
   const call = await twilioClient.calls.create({
     to: user.phone_number,
     from: process.env.TWILIO_PHONE_NUMBER!,

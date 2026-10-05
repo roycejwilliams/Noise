@@ -147,13 +147,24 @@ export async function verifyPostCallWebhook(rawBody: string, signature: string |
 // used on that member's last call (pickOpening). The agent's stored line is
 // only the fallback; registration overrides it per call.
 export const OPENING_LINE = "Hey {{first_name}}, it's Co.";
-export const OPENING_NOTE = "You've already opened the call with a short greeting in your own voice. Don't greet them again; go straight to your first real question.";
+// Said after the opening line, which is already spoken when the model's first turn comes
+// (services/callOpening.ts writes it from what Co knows; the pool is the fallback).
+// The old note sent the model to "your first real question", and it reached for the
+// prompt's example openers (2026-10-04: "what's actually happening with you these days?").
+export const OPENING_NOTE = "Your opening line has already been said, as the first thing in this conversation. Don't greet them again or repeat it. Carry on from it: stay with what it picked up, or, if it only said hello, pick up from something specific you know about them. Never fall back on a general \"how are things\" question when you know what they've been working on.";
 // The cue guide goes in the call prompt's own "how you sound" section (where
 // "everything you write is spoken aloud" now carries its one exception), not
 // trailing at the end (review of #62). Texts never get it.
 export const SPOKEN_ALOUD = "Everything you write is spoken aloud.";
+// The shared prompt's example openers ("Hey {{first_name}}. Good to finally talk. I want
+// to hear about where you are right now...") serve a first call. A model at temperature 0
+// copies them word for word even when it knows the person, so a call's prompt leaves
+// them out; texts, which read the same file, keep them.
+export function withoutExampleOpeners(prompt: string): string {
+  return prompt.replace(/Some ways this might sound:\n(?:"[^\n]*"\n)+Use your own words if none of these feel right in the moment[^\n]*\n/, "");
+}
 export function promptForElevenLabs(prompt: string): string {
-  const base = prompt.replace(/\bhang_up\b/g, "end_call");
+  const base = withoutExampleOpeners(prompt).replace(/\bhang_up\b/g, "end_call");
   const withCues = base.includes(SPOKEN_ALOUD)
     ? base.replace(new RegExp(`${SPOKEN_ALOUD.replace(/[.]/g, "\\.")} ?`), `Everything you write is spoken aloud, except a cue in square brackets (below).\n${CUE_GUIDE}\n\n`)
     : `${base}\n\n${CUE_GUIDE}`;
@@ -168,6 +179,11 @@ export const VOICEMAIL_MESSAGE = "Hey {{first_name}}, it's Co. Sorry I missed yo
 
 export const AGENT_DEFAULTS = {
   llm: "claude-haiku-4-5",
+  // Hume ran Co at temperature 1. The agent was left at ElevenLabs' default of 0,
+  // where the model repeats the prompt's own example lines almost word for word
+  // (2026-10-04: "sounds scripted"). 0.8 keeps it varied; the rules the prompt
+  // sets (one cue, no feeling labels) are re-measured at this temperature.
+  temperature: 0.8,
   ttsModel: "eleven_v4_turbo",
   turnEagerness: "eager",
   maxDurationSecs: 1800,
@@ -186,6 +202,7 @@ export function buildAgentConfig(o: {
   llm?: string;
   ttsModel?: string;
   turnEagerness?: string;
+  temperature?: number;
 }): Record<string, unknown> {
   const tool = (name: string, description: string, extra: Record<string, unknown> = {}) => ({
     type: "webhook",
@@ -240,6 +257,7 @@ export function buildAgentConfig(o: {
         prompt: {
           prompt: promptForElevenLabs(o.prompt),
           llm: o.llm ?? AGENT_DEFAULTS.llm,
+          temperature: o.temperature ?? AGENT_DEFAULTS.temperature,
           tools: [
             tool(
               "assess_conversation_coverage",
@@ -368,8 +386,10 @@ async function chooseOpeningUnbounded(userId: string, firstName: string, directi
 // per member; the answer webhook falls back to building it if it's missing.
 const PREBUILT_TTL_MS = 5 * 60 * 1000;
 const prebuilt = new Map<string, { at: number; summary: Promise<string> }>();
-export function prebuildCallContext(userId: string, build: (userId: string) => Promise<string>, now = Date.now()): void {
-  prebuilt.set(userId, { at: now, summary: build(userId).catch(() => "") });
+export function prebuildCallContext(userId: string, build: (userId: string) => Promise<string>, now = Date.now()): Promise<string> {
+  const summary = build(userId).catch(() => "");
+  prebuilt.set(userId, { at: now, summary });
+  return summary;
 }
 export async function takeCallContext(userId: string, build: (userId: string) => Promise<string>, now = Date.now()): Promise<{ summary: string; prebuilt: boolean }> {
   const hit = prebuilt.get(userId);
