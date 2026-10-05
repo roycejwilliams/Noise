@@ -46,6 +46,7 @@ import { recentCallCorrections } from "./callGrounding.js";
 import { repeatQuestionCheck, sameQuestion } from "./repeatAsk.js";
 import { asksForLink, findLines, linkRequestInstruction, recentResearchFinds, relevantFinds } from "../services/researchFinds.js";
 import { DISCRETION_GUIDE, apologyOnly, discreetFinal, isDiscreetTurn, isNeutralTurn } from "./discretion.js";
+import { PROMISE_RE, promiseFact, promiseSentence, trackPromise } from "../services/promises.js";
 
 // Model policy (Royce, 2026-09-14): Sonnet 5 for anything with judgment or
 // side effects; Haiku only for narrow, code-checked reads.
@@ -509,6 +510,21 @@ function clockTimes(s: string): string[] {
   return out;
 }
 
+// A follow-up promise with nothing behind it, or null. A promise to keep
+// looking is only true while an ask is open (the sweep really does search it),
+// and never with a timing commitment. Co's own task is real scheduled work
+// (services/coTasks.ts): a follow-up it describes is kept, and the claim check
+// still needs it to cite that task.
+export function unbackedFollowup(draft: string, rf: ReplyFacts): RegExpMatchArray | null {
+  const found = followupPromiseMatch(draft);
+  if (!found) return null;
+  const ongoing = rf.facts.some((f) => f.kind === "ongoing");
+  const timingCommitment = /\b(the second|the moment|right when|as soon as|right away|immediately|tonight|tomorrow|today|this week)\b/i.test(draft);
+  const lookingOnly = /keep (looking|watching|an eye|my eyes|eyes)|on the lookout|watch(ing)? for|if (something|anything|one) (real )?(turns up|comes up|fits|shows up)/i.test(found[0] + " " + draft);
+  const tasked = rf.facts.some((f) => (f.kind === "scheduled" && /^Co is working on task #/.test(f.text)) || (f.kind === "did_this_turn" && /^Started task/.test(f.text)));
+  return !tasked && !(ongoing && lookingOnly && !timingCommitment) ? found : null;
+}
+
 // Deterministic checks that don't need a model.
 // Promises of a later action Co makes on its own. Offers to use a real tool
 // ("I can save it if you want", "want me to look?") aren't promises.
@@ -520,6 +536,9 @@ export function followupPromiseMatch(text: string): RegExpMatchArray | null {
   if (promise) return promise;
   const later = text.match(/\b(i'?ll|i will)\b[^.?!]{0,60}\b(let you know|get back to you|follow up|circle back|report back|keep you posted|update you)\b/i);
   if (later) return later;
+  // Phrasings the lists above missed (2026-10-03: "I'll flag the second someone turns up", "I'll come back the moment"; services/promises.ts).
+  const concrete = text.match(PROMISE_RE);
+  if (concrete) return concrete;
   const lookout = text.match(/\b(keep (my|an|our) eyes? (open|out|peeled)|keep (watching|looking|an eye out)|be on the lookout|watch(ing)? for (one|it|something|that)|text you (the second|the moment|right when|as soon as))\b/i);
   if (lookout) {
     const sentence = text.split(/(?<=[.!?])\s+/).find((x) => x.includes(lookout[0])) ?? "";
@@ -689,16 +708,8 @@ export function codeChecks(draft: string, rf: ReplyFacts, src: GroundingSources)
   // Follow-up promises nothing in the code keeps: no job texts them when a
   // link turns up or when the other person answers (an intro goes out by
   // email, not a text from Co).
-  const found = followupPromiseMatch(draft);
-  // A promise to keep looking is only true while an ask is open (the sweep
-  // really does search it), and never with a timing commitment.
-  const ongoing = rf.facts.some((f) => f.kind === "ongoing");
-  const timingCommitment = /\b(the second|the moment|right when|as soon as|right away|immediately|tonight|tomorrow|today|this week)\b/i.test(draft);
-  const lookingOnly = found && /keep (looking|watching|an eye|my eyes|eyes)|on the lookout|watch(ing)? for|if (something|anything|one) (real )?(turns up|comes up|fits|shows up)/i.test(found[0] + " " + draft);
-  // Co's own task is real scheduled work (services/coTasks.ts): a follow-up it
-  // describes is kept, and the claim check still needs it to cite that task.
-  const tasked = rf.facts.some((f) => (f.kind === "scheduled" && /^Co is working on task #/.test(f.text)) || (f.kind === "did_this_turn" && /^Started task/.test(f.text)));
-  if (found && !tasked && !(ongoing && lookingOnly && !timingCommitment)) {
+  const found = unbackedFollowup(draft, rf);
+  if (found) {
     checks.push({ name: "no_followup_promise", pass: false, reason: `promises a follow-up nothing will do: "${found[0]}"` });
   }
   if (!emotionLabel.pass) checks.push(emotionLabel);
@@ -1176,6 +1187,13 @@ export async function groundReply(
 ): Promise<GroundingResult> {
   const started = Date.now();
   const draft = cleanCoMessage(stripFactIds(rawDraft));
+  // A concrete promise with nothing behind it becomes a task Co owns, so it is
+  // true and gets kept (services/promises.ts). Only on a real send, never in an eval.
+  if (opts.userId && opts.record !== false && unbackedFollowup(draft, rf)) {
+    const tracked = await trackPromise({ userId: opts.userId, reply: draft, theirMessage: src.message }).catch((err: any) => ({ ok: false as const, why: String(err?.message ?? err).slice(0, 120) }));
+    if (tracked.ok) addFact(rf, "did_this_turn", promiseFact(tracked.task));
+    recordDecision({ layer: 3, decision: "promise.tracked", userId: opts.userId, outcome: tracked.ok ? "act" : "skip", action: tracked.ok ? `task:${tracked.task.id}` : tracked.why, proposal: { sentence: tracked.ok ? tracked.sentence : promiseSentence(draft) } }).catch(() => {});
+  }
   const first = await check(draft, rf, src);
   const firstCheckMs = Date.now() - started;
   const stages: NonNullable<GroundingResult["stages"]> = {};

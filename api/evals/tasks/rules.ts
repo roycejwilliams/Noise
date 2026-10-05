@@ -45,7 +45,7 @@ check("open tasks become one fact each, with what's done, what's next and when",
 // Promises backed by a task are kept
 const rf = G.baseReplyFacts();
 G.addFact(rf, "scheduled", line);
-check("a follow-up promise is not cut when Co has an open task", /const tasked = rf\.facts\.some/.test(src("harness/replyGrounding.ts")) && /if \(found && !tasked &&/.test(src("harness/replyGrounding.ts")));
+check("a follow-up promise is not cut when Co has an open task", G.unbackedFollowup("I'll circle back on that tomorrow.", rf) === null && G.unbackedFollowup("I'll circle back on that tomorrow.", G.baseReplyFacts()) !== null);
 
 // Wiring
 const tt = src("services/taskTurn.ts");
