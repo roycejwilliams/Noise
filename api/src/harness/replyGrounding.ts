@@ -45,6 +45,7 @@ import { enrichMatch, missingEventDetails, renderEventDetails, type EventDetails
 import { recentCallCorrections } from "./callGrounding.js";
 import { repeatQuestionCheck, sameQuestion } from "./repeatAsk.js";
 import { asksForLink, findLines, linkRequestInstruction, recentResearchFinds, relevantFinds } from "../services/researchFinds.js";
+import { DISCRETION_GUIDE, apologyOnly, discreetFinal, isDiscreetTurn } from "./discretion.js";
 
 // Model policy (Royce, 2026-09-14): Sonnet 5 for anything with judgment or
 // side effects; Haiku only for narrow, code-checked reads.
@@ -107,6 +108,9 @@ export function addInstruction(rf: ReplyFacts, text: string): void {
 export function baseReplyFacts(situation?: Situation): ReplyFacts {
   const rf = createReplyFacts();
   for (const c of capabilitySheet({ situation })) addFact(rf, "capability", c);
+  // How Co keeps a confidence, so the model chooses a discreet line itself when
+  // asked to speak for another member (harness/discretion.ts).
+  addInstruction(rf, DISCRETION_GUIDE);
   return rf;
 }
 
@@ -1189,7 +1193,9 @@ export async function groundReply(
     const cutCode = codeChecks(cut, rf, src).filter((c) => !c.pass);
     if (cutCode.length) cut = stripUnsupported(cut, cutCode);
     const inviteCut = effectiveFailed1.some((c) => c.name === "no_invite_sent_claim") && !rf.facts.some((f) => /invites are used/i.test(f.text));
-    if (enoughLeft(cut, draft) && !inviteCut && !deniesWhatTheyToldCo(effectiveFailed1, src)) {
+    // What's left must not be only an apology (2026-10-03: "Sorry for the false
+    // start." was all that remained of a reply about someone else).
+    if (enoughLeft(cut, draft) && !apologyOnly(cut) && !inviteCut && !deniesWhatTheyToldCo(effectiveFailed1, src)) {
       result = { final: cut, outcome: "cut", checks: first.checks, latencyMs: Date.now() - started, firstCheckMs, stages };
     } else {
       // 2. Too little left: one model rewrite, kept only if it adds nothing.
@@ -1232,6 +1238,22 @@ export async function groundReply(
         const final = after === "invite" ? [enough && !/invite/i.test(cut) ? cut : "", INVITE_FALLBACK].filter(Boolean).join(" ") : after === "cut" ? cut : after === "nothing" ? "" : honest ?? MINIMAL_FALLBACK;
         result = { final, outcome: "stripped", checks: first.checks, latencyMs: Date.now() - started, firstCheckMs, stages };
       }
+    }
+  }
+
+  // A turn where a privacy or consent block tripped (the gate says so in its
+  // instruction): whatever Co wrote must be discreet, or an approved line goes
+  // out instead. Never an apology for nothing, a false start, a fragment or the
+  // machinery's words (harness/discretion.ts).
+  if (isDiscreetTurn(rf.instructions)) {
+    const d = discreetFinal(result.final, src.message);
+    if (d.replaced) {
+      result = {
+        ...result,
+        final: d.final,
+        outcome: "stripped",
+        checks: [...result.checks, { name: "discretion", pass: false, reason: `the reply to a privacy block ${d.problems.join("; ")}; an approved line was used` }],
+      };
     }
   }
 
