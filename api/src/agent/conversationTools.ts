@@ -149,7 +149,7 @@ export function createConversationTools(ctx: ConversationToolContext) {
         ? "Send your voice-note reply to the user and log it. Call this exactly once, with your full response — always respond to what they actually said before any secondary gesture."
         : toolUse("sendReply"),
       inputSchema: z.object({
-        message: z.string().describe("Your reply, no em dashes. Each distinct thought (the reaction, the answer, the question, the offer) is its own short paragraph with a blank line between, and each paragraph goes out as its own text, so never stack several thoughts in one. Most replies are one to three short beats."),
+        message: z.string().describe("Your reply, no em dashes. Each distinct thought (the reaction, the answer, the advice, the question, the offer) is its own short paragraph with a blank line between, and each paragraph goes out as its own text, so never stack several thoughts in one. A question to them is always its own last paragraph. When you've given them lines to say before a moment that's coming (a conversation, a pitch, a result), the last paragraph is the offer to check in after it, not another question. Most replies are one to three short beats, up to five when each earns its place."),
       }),
       execute: async ({ message: draft }) => {
         const message = ctx.gate ? await ctx.gate(draft, [...state.sentMessages]) : draft;

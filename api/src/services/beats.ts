@@ -3,13 +3,20 @@
 // Read bursts as one message ... a few seconds of quiet, or a text that clearly
 // closes the thought."
 
-// A reply's paragraphs, each its own text, at most three: past that the rest
-// stays together in the last one, so a long walkthrough doesn't become a flood.
-export const MAX_BEATS = 3;
+// A reply's paragraphs, each its own text, at most five (Royce, 2026-10-05: never stack four or more
+// paragraphs into one message). Past that the middle stays together, and a closing question always goes
+// alone, never buried at the bottom of a wall.
+export const MAX_BEATS = 5;
 export function toBeats(message: string): string[] {
   const parts = message.split(/\n\s*\n/).map((p) => p.trim()).filter(Boolean);
   if (parts.length <= MAX_BEATS) return parts.length ? parts : [message.trim()];
-  return [...parts.slice(0, MAX_BEATS - 1), parts.slice(MAX_BEATS - 1).join("\n\n")];
+  const last = parts[parts.length - 1];
+  const keepLast = /\?["')\]]*$/.test(last);
+  const body = keepLast ? parts.slice(0, -1) : parts;
+  const room = keepLast ? MAX_BEATS - 1 : MAX_BEATS;
+  const head = body.slice(0, room - 1);
+  const tail = body.slice(room - 1).join("\n\n");
+  return [...head, tail, ...(keepLast ? [last] : [])];
 }
 // The gap between beats, like someone typing the next one.
 export const BEAT_GAP_MS = 1200;
