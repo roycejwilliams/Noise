@@ -434,7 +434,8 @@ const AGREES = /^\s*(user said:|user:|user sent a voice memo:)\s*(yes|yeah|yep|y
 // A yes that's taken back isn't one (second review, 2026-09-24): "of course
 // not", "yes, I mean no, forget that". "No worries" / "no problem" are
 // still agreement.
-const TAKES_IT_BACK = /\b(not|nah|nope|never|don'?t|no(?!\s+(worries|problem|rush|pressure)))\b|forget (it|that)|changed my mind|i mean no/i;
+// Only an explicit taking-back: "sure, why not" and "I don't mind" are still yes; "of course not", "yes, I mean no" aren't.
+const TAKES_IT_BACK = /\b(of course not|absolutely not|definitely not|certainly not|not really|not right now|not this|not now|but not|nah|nope|never mind|nevermind|no wait|wait,? no|no thanks|no thank you)\b|\bno(?!\s+(worries|problem|rush|pressure|need))\b(?!\s*(,|\.|!)?\s*(i mean|just kidding))|forget (it|that)|changed my mind|i mean no/i;
 export function agreesWith(line: string): boolean {
   return AGREES.test(line) && !TAKES_IT_BACK.test(line.replace(/^\s*(user said:|user:|user sent a voice memo:)/i, ""));
 }
@@ -444,9 +445,11 @@ export function agreesWith(line: string): boolean {
 export function lastAskedSentence(coMessage: string): string | null {
   const body = coMessage.replace(/^\s*(co replied:|assistant:|co:)\s*/i, "");
   const sentences = body.match(/[^.!?\n]+[.!?]*/g) ?? [];
-  for (let i = sentences.length - 1; i >= 0; i--) if (coAskedQuestion(sentences[i])) return sentences[i].trim();
+  // Only an offer or an ask of theirs, not a check-in question ("did it go well?"): a yes to that is not a want.
+  for (let i = sentences.length - 1; i >= 0; i--) if (coAskedQuestion(sentences[i]) && OFFER.test(sentences[i])) return sentences[i].trim();
   return null;
 }
+const OFFER = /\b(want me to|should i|shall i|would you like|do you want|can i|could i|if you want|let me|i can|i could|i'?ll|how about|interested in|keen to)\b/i;
 export function splitSpeakers(transcript: string): { theirs: string; cos: string } {
   const theirs: string[] = [];
   const cos: string[] = [];
@@ -454,7 +457,9 @@ export function splitSpeakers(transcript: string): { theirs: string; cos: string
   for (const line of transcript.split("\n")) {
     if (/^\s*(co replied:|assistant:|co:)/i.test(line)) {
       cos.push(line);
-      lastCo = line;
+      // Co's reply is several texts, one 'Co replied:' line each (a link last, often): with no member line
+      // between them they are one message, and the offer it ends on is what a yes answers.
+      lastCo = lastCo ? `${lastCo} ${line.replace(/^\s*(co replied:|assistant:|co:)\s*/i, "")}` : line;
     } else if (/^\s*(user said:|user:|user sent a voice memo:)/i.test(line)) {
       theirs.push(line);
       // The question or offer they said yes to is theirs too; only that one.

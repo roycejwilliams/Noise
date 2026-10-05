@@ -140,8 +140,10 @@ export async function keepCallPromise(userId: string, what: string, transcript?:
   // reports it (services/callKey.ts).
   if (transcript) {
     await pool
-      .query(`INSERT INTO call_promise_results (user_id, call_key, content) VALUES ($1, $2, $3)`, [userId, callKey(transcript), result])
+      .query(`INSERT INTO call_promise_results (user_id, call_key, content) VALUES ($1, $2, $3) ON CONFLICT DO NOTHING`, [userId, callKey(transcript), result])
       .catch((err: any) => console.error("callGrounding: promise result write failed (non-fatal):", err?.message ?? err));
+    // Only the after-call text reads these, within two days: older rows go.
+    pool.query(`DELETE FROM call_promise_results WHERE created_at < NOW() - INTERVAL '14 days'`).catch(() => {});
   }
   return queued ? "queued" : "nothing";
 }

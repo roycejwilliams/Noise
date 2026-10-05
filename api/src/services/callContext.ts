@@ -309,6 +309,11 @@ const NOT_A_NAME = new Set(
   "co hume i the a an they their them he she his her it its this that these those we you our and but so then also overall monday tuesday wednesday thursday friday saturday sunday january february march april may june july august september october november december".split(" "),
 );
 const RELATION_ONE = /^(co-?founder|partner|wife|husband|girlfriend|boyfriend|fianc[eé]e?|mom|mother|dad|father|sister|brother|friend|boss|manager|colleague|coworker|son|daughter|roommate|investor|ceo|cto|founder|mentor|client|cousin|aunt|uncle)$/i;
+// "her" before one of these is the object ("give her a call", "told her about it"), not "their".
+const OBJECT_NEXT = /^\s+(a|an|the|to|for|in|on|at|about|up|out|back|some|any|one|this|that|it|with|from|into|over|and|or|but|so|if|when|how|what|why)\b/i;
+// Common verbs a he/she took an -s on: "he loves it" becomes "they love it", not "they loves it".
+const S_VERBS = "loves|likes|wants|needs|thinks|says|works|runs|plans|hopes|feels|sounds|starts|knows|believes|mentioned|builds|leads|helps|asks|tells|seems|looks|lives|gets|takes|makes|goes|wishes|prefers|enjoys|expects|worries|runs|owns|hosts|joins";
+const SINGULAR_VERB = new RegExp(`\\b(they)\\s+(${S_VERBS})\\b`, "gi");
 const PRONOUN = /\b(he|she)\s+(is|was|has)\b|\b(he|she)'s\b|\b(himself|herself)\b|\b(his|hers)\b|\bher(?=\s+[a-z])|\b(him|her)\b|\b(he|she)\b/gi;
 function neutralOne(m: string): string {
   const out = m
@@ -324,7 +329,8 @@ function neutralOne(m: string): string {
 }
 export function neutralMemberPronouns(text: string, memberFirstName: string | null): string {
   const memberParts = (memberFirstName ?? "").split(/\s+/).filter(Boolean).map((n) => n.toLowerCase());
-  const isMember = (w: string) => memberParts.includes(w.toLowerCase().replace(/'s$/, ""));
+  // Only a capitalised word names the member: "will" and "may" are verbs, not a member called Will or May.
+  const isMember = (w: string) => /^[A-Z]/.test(w) && memberParts.includes(w.toLowerCase().replace(/'s$/, ""));
   // A capitalized word at the start of a sentence is only a person if it's
   // also capitalized somewhere mid-sentence ("Mentioned his startup..." isn't).
   const midSentenceCaps = new Set(
@@ -356,12 +362,13 @@ export function neutralMemberPronouns(text: string, memberFirstName: string | nu
     const full = args[args.length - 1] as string;
     if (!aboutMemberAt(at)) return m;
     if (/^her$/i.test(m)) {
-      const possessive = /^\s+[a-z]/.test(full.slice(at + 3));
+      const next = full.slice(at + 3);
+      const possessive = /^\s+[a-z]/.test(next) && !OBJECT_NEXT.test(next);
       const word = possessive ? "their" : "them";
       return m[0] === "H" ? word[0].toUpperCase() + word.slice(1) : word;
     }
     return neutralOne(m);
-  });
+  }).replace(SINGULAR_VERB, (_m, they, verb) => `${they} ${verb.replace(/ies$/i, "y").replace(/(ches|shes|sses|xes|oes)$/i, (x: string) => x.slice(0, -2)).replace(/s$/i, "")}`);
 }
 
 // The member is written as {M} (second review, 2026-09-24: the model used
@@ -370,9 +377,12 @@ export function neutralMemberPronouns(text: string, memberFirstName: string | nu
 // member, a leftover he/she can only be someone else; the pronoun rule
 // above stays as a backup for a summary that slipped.
 export function fillMemberName(text: string, memberFirstName: string | null): string {
-  const name = memberFirstName?.trim() || "They";
+  // With no name on file, "The member" keeps the grammar ("The member is building...", "The member's cofounder"),
+  // where a bare "They" gave "They is building".
+  const name = memberFirstName?.trim() || "The member";
+  const M = /\{\s*M\s*\}/gi;
   // "{M}self" came back as "Royceself" in testing; that one is "themself".
-  const filled = text.replace(/\{M\}self\b/g, "themself").replace(/\{M\}('s)?/g, (_m, poss) => (poss ? `${name}'s` : name));
+  const filled = text.replace(/\{\s*M\s*\}self\b/gi, "themself").replace(new RegExp(M.source + "('s)?", "gi"), (_m, poss) => (poss ? `${name}'s` : name));
   return neutralMemberPronouns(filled, memberFirstName);
 }
 

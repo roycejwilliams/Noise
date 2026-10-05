@@ -85,7 +85,11 @@ export function dropRepeatedQuestion(draft: string, recentConversation: string):
   let inCo = false;
   for (const l of recentConversation.split("\n")) {
     if (/^\s*co replied:/i.test(l)) {
-      coMessages.push(l.replace(/^\s*co replied:\s*/i, ""));
+      const text = l.replace(/^\s*co replied:\s*/i, "");
+      // Co's reply is several texts, one line each: with no member line between them they are one message,
+      // so "the last two messages" is two turns, not two beats.
+      if (inCo && coMessages.length) coMessages[coMessages.length - 1] += `\n${text}`;
+      else coMessages.push(text);
       inCo = true;
     } else if (/^\s*(user (said|sent)\b|co (replied|called)\b|user:|assistant:|\[)/i.test(l)) inCo = false;
     else if (inCo) coMessages[coMessages.length - 1] += `\n${l}`;

@@ -117,6 +117,8 @@ export async function runMigrations(): Promise<void> {
       )`,
     )
     .then(() => pool.query(`CREATE INDEX IF NOT EXISTS idx_call_promise_results_call ON call_promise_results (user_id, call_key)`))
+    // A redelivered end-of-call must not list the same result twice.
+    .then(() => pool.query(`CREATE UNIQUE INDEX IF NOT EXISTS uq_call_promise_results ON call_promise_results (user_id, call_key, md5(content))`))
     .catch((err: Error) => console.error("call_promise_results table init failed:", err));
 
   // Test events and test locations for test members, co-test and local only
