@@ -1,5 +1,5 @@
 import "dotenv/config";
-import { getPlanFile } from "./services/planFile.js";
+import { servePlanFile } from "./services/planFile.js";
 import { initTelemetry } from "./telemetry.js";
 initTelemetry();
 
@@ -118,14 +118,7 @@ app.get("/audio/:id", (req, res) => {
 });
 
 // A plan's PDF for Sendblue to attach to a text: random id, short-lived, never listed (services/planFile.ts).
-app.get("/plan-file/:id.pdf", (req, res) => {
-  const file = /^[a-f0-9]{48}$/.test(req.params.id) ? getPlanFile(req.params.id) : null;
-  if (!file) return res.status(404).send("Not found.");
-  res.setHeader("Content-Type", "application/pdf");
-  res.setHeader("Content-Disposition", "inline; filename=plan.pdf");
-  res.setHeader("Cache-Control", "no-store");
-  return res.send(file);
-});
+app.get("/plan-file/:id.pdf", servePlanFile);
 
 app.use(errorHandler);
 
