@@ -74,6 +74,13 @@ export function wordsAreTheirs(quote: unknown, theirText: string): boolean {
   return q.length >= 6 && norm(theirText).includes(q);
 }
 
+// A short yes to Co's own offer ("want me to check in after?" / "yes") is the member asking: the quote
+// check needs six characters, which "yes" and "sure" never have.
+const YES = /^(?:yes|yeah|yep|yup|sure|ok|okay|please|do it|sounds good|that would be great|yes please|go ahead|definitely|absolutely)[.!]*$/i;
+export function isYesToOffer(message: string, lastCoMessage: string | null | undefined): boolean {
+  return YES.test(message.trim()) && /\b(?:check in|check on|follow up|how it went|ping you|text you)\b/i.test(lastCoMessage ?? "") && /\?\s*$/.test((lastCoMessage ?? "").trim());
+}
+
 // Co picks when; code keeps it between an hour and two weeks.
 export function clampNextHours(hours: unknown): number {
   const h = Number(hours);

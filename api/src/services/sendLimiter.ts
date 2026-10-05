@@ -18,8 +18,10 @@
 // In memory on purpose: a loop is fast, and a restart clearing it is fine.
 // Pure apart from the clock, so tests can drive it.
 export const SEND_LIMIT = {
-  max: Number(process.env.SEND_LIMIT_MAX) > 0 ? Number(process.env.SEND_LIMIT_MAX) : 30,
-  unprompted: 12,
+  max: Number(process.env.SEND_LIMIT_MAX) > 0 ? Number(process.env.SEND_LIMIT_MAX) : 40,
+  // 18, not 12 (2026-10-05): a reply is now up to five messages, so one normal search turn (a "looking" line,
+  // three links, a reply and a second reply) can reach fourteen.
+  unprompted: 18,
   windowMs: 10 * 60 * 1000,
   cooldownMs: 30 * 60 * 1000,
 };
