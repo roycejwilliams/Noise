@@ -14,6 +14,10 @@ export type SuggestionKind = "event" | "opportunity" | "intro";
 // Co sent, services/offerReactions.ts).
 export type SuggestionResult = "interested" | "declined" | "acted" | "helped" | "didnt_help" | "no_signal";
 
+// A tease-stage outcome is recorded without the name ("... (name not shared)",
+// routes/sendblue.ts): they hadn't been told who. When the reveal is sent and
+// they answer, the same item records again and the named label replaces it;
+// otherwise the first row stands (DO NOTHING before, and still for all else).
 export async function recordSuggestionOutcome(
   userId: string,
   kind: SuggestionKind,
@@ -25,7 +29,8 @@ export async function recordSuggestionOutcome(
   await pool
     .query(
       `INSERT INTO suggestion_outcomes (user_id, kind, item_key, item_name, result, note) VALUES ($1, $2, $3, $4, $5, $6)
-       ON CONFLICT (user_id, item_key, result) DO NOTHING`,
+       ON CONFLICT (user_id, item_key, result) DO UPDATE SET item_name = EXCLUDED.item_name
+         WHERE suggestion_outcomes.item_name LIKE '%(name not shared)'`,
       [userId, kind, itemKey, itemName, result, note ?? null],
     )
     .catch((err: any) => console.error("recordSuggestionOutcome failed (non-fatal):", err?.message ?? err));

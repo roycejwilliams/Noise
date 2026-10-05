@@ -67,11 +67,11 @@ This is only about members of Co. People in their own life (their boss, a date, 
 const APOLOGY = /\b(?:sorry(?! to hear| for your| you'?re| you had| that you| about your)|apolog\w*|my bad|oops|my mistake|my error|false start|scratch that|never ?mind (?:that|my last|what i said)|forgive me|excuse me|i misspoke|i shouldn'?t have|spoke too soon|jumped the gun|ignore (?:my|that|the) last|mix-?up|i was wrong|unfortunately|let me (?:redo|rephrase|start over|try that again)|(?:that|this) was a mistake|turns out[^.!?]*\b(?:not|isn'?t|aren'?t|won'?t|can'?t|couldn'?t|no longer|anymore|fell|wrong|mistake)\b)/i;
 // The machinery: why something was held back, in the system's words.
 const MACHINERY =
-  /\b(?:privacy|policy|policies|consent|guardrails?|safeguards?|compliance|confidential|not available|isn'?t available|no longer available|fell through|fell apart|didn'?t go through|couldn'?t go through|didn'?t work out|didn'?t pan out|(?:it'?s|that'?s|this is|got|been) blocked|blocked (?:by|that|this|it)|my filter|the filter|(?:got |was |is )filtered|restricted|restriction|(?:not|n'?t) allowed|(?:can'?t|cannot|unable to|not able to|won'?t be able to) (?:share|reveal|disclose|go (?:further|there)|(?:say|tell|give)(?: you)? (?:that|this|who|what|anything|more|much|any|about))|my system|the system (?:won'?t|doesn'?t|can'?t|blocked|says|flagged|prevents)|my rules|programmed|off limits|not possible|i shouldn'?t say|i'?d get in trouble|(?:no|without|lack(?:ing)?|don'?t have|waiting on) (?:the )?permission)\b/i;
+  /\b(?:privacy|policy|policies|consent|guardrails?|safeguards?|compliance|confidential|not available|isn'?t available|no longer available|fell through|fell apart|didn'?t go through|couldn'?t go through|didn'?t work out|didn'?t pan out|(?:it'?s|that'?s|this is|got|been) blocked|blocked (?:by|that|this|it)|my filter|the filter|(?:got |was |is )filtered|restricted|restriction|(?:not|n'?t) allowed|(?:can'?t|cannot|unable to|not able to|won'?t be able to) (?:share|reveal|disclose|go (?:further|there)|(?:say|tell|give)(?: you)? (?:that|this|who|what|anything|more|much|any|about))|my system|the system (?:won'?t|doesn'?t|can'?t|blocked|says|flagged|prevents)|my rules|programmed|off limits|that'?s not possible|i shouldn'?t say|i'?d get in trouble|(?:no|without|lack(?:ing)?|don'?t have|waiting on) (?:the )?permission)\b/i;
 // The flat dead end the grounding falls to.
-const DEAD_END = /not sure on that one|don'?t have an answer|nothing confirmed|i can'?t help with that|i can'?t do that|(?:can'?t|cannot|won'?t|not going to) (?:put|connect|introduce|set)[^.!?]*\b(?:you|two)\b|that (?:intro|introduction) (?:won'?t|isn'?t|is not|can'?t)|it'?s not happening|no longer an option|(?:got|was|been) cancel+ed/i;
+const DEAD_END = /not sure on that one|don'?t have an answer|nothing confirmed|i can'?t help with that one|(?:can'?t|cannot|won'?t|not going to) (?:put you(?: two)? in touch|put you two|introduce you|connect you(?: two)?)|that (?:intro|introduction) (?:won'?t|isn'?t|is not|can'?t)|it'?s not happening|no longer an option|(?:got|was|been) cancel+ed/i;
 // Claims about the other member: what they said, decided or feel. Never Co's to make.
-const CLAIMS_OTHER = /\b(?:they|he|she)(?:'d|'re|'s)?\s+(?:said|decided|passed|declined|turned (?:it|you|this|that) down|isn'?t|aren'?t|wasn'?t|weren'?t|are not|is not|would rather|rather|prefer|don'?t want|doesn'?t want|not\b|no longer)|something came up on (?:their|his|her) (?:end|side)/i;
+const CLAIMS_OTHER = /\b(?:they|he|she)(?:'d|'re|'s)?\s+(?:said no|decided (?:not|against)|passed(?: on)?\b|declined|turned (?:it|you|this|that) down|(?:would )?rather(?: not)?|prefer(?:s)? not|(?:don'?t|doesn'?t) want to (?:meet|be introduced|connect|talk)|(?:isn'?t|aren'?t|wasn'?t|weren'?t|is not|are not|not) (?:open|interested|keen|up for|ready)(?= to| in| for| about|\.|,|$)|no longer (?:interested|open|available|keen))|something came up on (?:their|his|her) (?:end|side)/i;
 
 const norm = (s: string) => s.toLowerCase().replace(/[’']/g, "'").replace(/[^a-z0-9' ]+/g, " ").replace(/\s+/g, " ").trim();
 const sentences = (s: string) => (s.match(/[^.!?\n]+[.!?]*/g) ?? []).map((x) => x.trim()).filter((x) => x.length > 0);
@@ -86,7 +86,8 @@ export function usesApprovedLine(text: string, lines: readonly string[] = DISCRE
 // reply (the member asked something else too) only has to be free of the rest.
 export function discretionProblems(text: string, opts: { otherNames?: string[]; requireLine?: boolean; lines?: readonly string[] } = {}): string[] {
   const out: string[] = [];
-  const t = text.trim();
+  // Curly apostrophes read the same as straight ones (the patterns are written with straight).
+  const t = text.trim().replace(/[’‘]/g, "'");
   if (!t) return ["empty"];
   const requireLine = opts.requireLine ?? true;
   if (requireLine && t.split(/\s+/).length < 6) out.push("a fragment");
