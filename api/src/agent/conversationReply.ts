@@ -7,6 +7,7 @@ import { writeMemory } from "../services/memory.js";
 import pool from "../db/db.js";
 import { CO_VOICE, CO_TEXT_CHANNEL } from "../services/coVoice.js";
 import { MOVES_GUIDE, moveOf, type Move } from "../services/moves.js";
+import { COACHING, MESSAGE_RHYTHM } from "../services/textRhythm.js";
 import { groundReply, LAYER3_MODELS, renderReplyFacts, type GroundingResult, type ReplyFacts, addFact } from "../harness/replyGrounding.js";
 import { capitalizeSentences, dropRepeatedQuestion, looksLikeMetaReply } from "../services/textStyle.js";
 import { lastCoLine } from "../services/conversationClose.js";
@@ -325,7 +326,11 @@ export async function runConversationReplyAgent(
 
 ${MOVES_GUIDE}
 
-${TEXT_LISTENING}`;
+${TEXT_LISTENING}
+
+${MESSAGE_RHYTHM}
+
+${COACHING}`;
   // Written the way Co should text (2026-09-24): short sentences, no dashes,
   // one idea per paragraph. Co copies the style of its own instructions (on
   // calls, removing the prompt's dashes took spoken dashes from 8 to 0), so

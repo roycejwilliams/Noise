@@ -118,7 +118,7 @@ check("the draft is forbidden from claiming it was thinking about them", /thinki
 check("yesterday is only when they told Co, never when the thing happens", /when_they_told_you/.test(draft) && /not when the thing itself happens/.test(draft));
 check("a draft about Co itself is skipped", /frustration with Co itself/.test(draft));
 const prompt = read("prompts/co-system-prompt.md");
-check("the prompt tells Co never to promise a later check-in", /Never tell them you'll check in on them later/.test(prompt));
+check("the prompt tells Co never to announce a check-in it decides on alone", /Never announce a check-in you decide to make on your own/.test(prompt));
 
 console.log(`next-day check-in rules: ${total - failed}/${total} passed`);
 if (failed) process.exit(1);
