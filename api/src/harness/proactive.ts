@@ -321,7 +321,7 @@ export const LANE_CAPS: Record<Lane, { perDay: number; per7Days: number }> = {
 
 // ignorePacing skips the daily cap, weekly cap and unanswered pause. Only a hand-run
 // dispatch sets it (scripts/forceDispatch.ts); the cron never does.
-export function userLevelChecks(state: Omit<PickState, "candidates">, opts: { skipHours?: boolean; lane?: Lane; ignorePacing?: boolean } = {}): GateCheck[] {
+export function userLevelChecks(state: Omit<PickState, "candidates">, opts: { skipHours?: boolean; lane?: Lane; ignorePacing?: boolean; legacyPace?: boolean } = {}): GateCheck[] {
   const lane = opts.lane ?? "other";
   const maxDay = LANE_CAPS[lane].perDay;
   const maxWeek = LANE_CAPS[lane].per7Days;
@@ -344,13 +344,18 @@ export function userLevelChecks(state: Omit<PickState, "candidates">, opts: { sk
   const unansweredCount = pauseSource.filter((s) => s.sentAt <= state.now && unansweredSince(s, state.lastInboundAt)).length;
   // Pace follows engagement within the caps: a quiet member hears less, a
   // dormant one far less, and one text from them restores the full pace.
-  const tier = engagementTier(state.now, state.lastInboundAt, unansweredCount);
+  // In-room nudges are sent to people who are busy in the room: their silence
+  // says nothing about engagement, so they never push the tier or the long pauses.
+  const unansweredOutsideRoom = pauseSource.filter((s) => s.type !== "in_room" && s.sentAt <= state.now && unansweredSince(s, state.lastInboundAt)).length;
+  // legacyPace: the pace as it was before engagement scaling, for what must never be
+  // slowed by it (a safety follow-up, an ask to an event guest).
+  const tier = opts.legacyPace ? "active" : engagementTier(state.now, state.lastInboundAt, unansweredOutsideRoom);
   const cadence = CADENCE[tier];
   const effectiveWeek = cadence.weeklyCap === null ? maxWeek : Math.min(maxWeek, cadence.weeklyCap);
   const sinceLast = lastCounted ? (state.now.getTime() - lastCounted.sentAt.getTime()) / HOUR : Infinity;
   const pauseActive =
     !!lastCounted &&
-    state.now.getTime() - lastCounted.sentAt.getTime() < unansweredPauseFor(unansweredCount) * HOUR &&
+    state.now.getTime() - lastCounted.sentAt.getTime() < (opts.legacyPace ? unansweredPauseFor(Math.min(unansweredCount, 2)) : Math.max(unansweredPauseFor(Math.min(unansweredCount, 2)), unansweredPauseFor(unansweredOutsideRoom))) * HOUR &&
     unansweredSince(lastCounted, state.lastInboundAt);
 
   const spacing = spacingCheck(state);
@@ -485,6 +490,12 @@ export function isAnswering(c: Pick<Candidate, "type" | "payload">): boolean {
   return false;
 }
 
+// What the engagement pace never holds: a safety follow-up, and the ask sent to an
+// event guest who hasn't stated one (never held, so they aren't left out of the room).
+export function pacedByEngagement(c: Pick<Candidate, "type" | "payload">): boolean {
+  return !(c.type === "ask_solicitation" || (c.payload as { safetyFollowUp?: boolean } | null)?.safetyFollowUp === true);
+}
+
 export function evaluateCandidates(state: PickState, opts: { ignorePacing?: boolean } = {}): Evaluation {
   // Opt-out and local hours apply to the person; caps and the unanswered
   // pause apply per lane, so each candidate is checked against its own lane.
@@ -492,11 +503,15 @@ export function evaluateCandidates(state: PickState, opts: { ignorePacing?: bool
     room: userLevelChecks(state, { lane: "room", ignorePacing: opts.ignorePacing }),
     other: userLevelChecks(state, { lane: "other", ignorePacing: opts.ignorePacing }),
   };
+  const legacyByLane: Record<Lane, GateCheck[]> = {
+    room: userLevelChecks(state, { lane: "room", ignorePacing: opts.ignorePacing, legacyPace: true }),
+    other: userLevelChecks(state, { lane: "other", ignorePacing: opts.ignorePacing, legacyPace: true }),
+  };
   const userChecks = byLane.other.filter((k) => PERSON_CHECKS.has(k.name));
   const userOk = gate(userChecks).ok;
   const perCandidate = state.candidates.map((candidate) => {
     const answering = isAnswering(candidate);
-    const laneChecks = byLane[laneOf(candidate.type)].filter(
+    const laneChecks = (pacedByEngagement(candidate) ? byLane : legacyByLane)[laneOf(candidate.type)].filter(
       (k) => !PERSON_CHECKS.has(k.name) && !(answering && QUOTA_CHECKS.has(k.name)) && !(candidate.type === "companion" && k.name === "weekly_cap"),
     );
     const checks = [...laneChecks, ...candidateChecks(candidate, state, { answering })];
@@ -869,7 +884,7 @@ async function loadSends(db: Queryable, userId: string): Promise<SendRecord[]> {
 async function loadLastInbound(db: Queryable, userId: string): Promise<Date | null> {
   const { rows } = await db.query(
     `SELECT MAX(created_at) AS at FROM co_memories
-     WHERE user_id = $1 AND memory_type = 'text_exchange' AND content LIKE 'User %'`,
+     WHERE user_id = $1 AND memory_type = 'text_exchange' AND (content LIKE 'User %' OR content LIKE '[Call]%')`,
     [userId],
   );
   return rows[0]?.at ? new Date(rows[0].at) : null;
@@ -1078,8 +1093,8 @@ async function sendWithLedger(
     const now = new Date();
     const answering = isAnswering(c);
     const checks = [
-      ...userLevelChecks({ now, timezone: person.timezone, optedOut: optedOutNow, sends, lastInboundAt }, { lane: laneOf(c.type), ignorePacing: opts.ignorePacing }).filter(
-        (k) => !(answering && QUOTA_CHECKS.has(k.name)),
+      ...userLevelChecks({ now, timezone: person.timezone, optedOut: optedOutNow, sends, lastInboundAt }, { lane: laneOf(c.type), ignorePacing: opts.ignorePacing, legacyPace: !pacedByEngagement(c) }).filter(
+        (k) => !(answering && QUOTA_CHECKS.has(k.name)) && !(c.type === "companion" && k.name === "weekly_cap"),
       ),
       ...candidateChecks(c, { now, sends, lastInboundAt, undeliveredYes: c.type === "network_tease" ? await import("../services/networkIntroNudge.js").then((m) => m.lastTeaseUndelivered(person.userId)).catch(() => false) : false }, { answering }),
     ];

@@ -7,7 +7,7 @@ process.env.ANTHROPIC_API_KEY ||= "unused-in-tests";
 process.env.SENDBLUE_API_API_KEY ||= "unused-in-tests";
 process.env.SENDBLUE_API_API_SECRET ||= "unused-in-tests";
 const P = await import("../../src/harness/proactive.js");
-const { userLevelChecks, engagementTier, unansweredPauseFor, CADENCE, ENGAGEMENT, RULES } = P;
+const { userLevelChecks, evaluateCandidates, pacedByEngagement, engagementTier, unansweredPauseFor, CADENCE, ENGAGEMENT, RULES } = P;
 import { readFileSync } from "fs";
 
 let total = 0;
@@ -62,6 +62,33 @@ check("the pace only falls as engagement falls", CADENCE.quiet.minGapHours <= CA
 const src = readFileSync(new URL("../../src/harness/proactive.ts", import.meta.url), "utf8");
 check("answering something they asked for is exempt from the pace, like the other quotas", /const QUOTA_CHECKS = new Set\(\[[^\]]*"engagement_pace"/.test(src));
 check("the dormant gap is a week and the gone gap two", CADENCE.dormant.minGapHours === 168 && CADENCE.gone.minGapHours === 336 && ENGAGEMENT.dormantDays === 30);
+
+
+// ---- review of #68: what the pace must never hold
+const cand = (type: string, payload: any = {}, id = type): any => ({ id, userId: "u", type, targetKey: `${type}:${id}`, topicKey: `${type}:${id}`, summary: "", priority: 10, dueAt: now, expiresAt: null, payload, attempts: 0, createdAt: now });
+const evalFor = (state: any, c: any) => evaluateCandidates({ ...state, candidates: [c] }).perCandidate[0];
+const failedOf = (state: any, c: any) => evalFor(state, c).checks.filter((k: any) => !k.pass).map((k: any) => k.name);
+// A member who stopped texting 20 days ago, with two unanswered texts since (dormant, pause 72h+).
+const dormant = st([send(100, "event_offer"), send(80, "post_call")], days(20));
+check("a safety follow-up is not held by the engagement pace or the longer pause", !failedOf(dormant, cand("companion", { safetyFollowUp: true })).some((n: string) => ["engagement_pace", "weekly_cap"].includes(n)));
+check("the same dormant member's ordinary check-in is held by the pace", failedOf(dormant, cand("companion")).includes("engagement_pace"));
+check("an ask to an event guest is not held by the pace", !failedOf(dormant, cand("ask_solicitation")).includes("engagement_pace"));
+check("only those two are exempt", pacedByEngagement(cand("companion")) === true && pacedByEngagement(cand("event_offer", { askId: "profile", fromProfile: true })) === true && pacedByEngagement(cand("ask_solicitation")) === false && pacedByEngagement(cand("companion", { safetyFollowUp: true })) === false);
+check("the safety follow-up keeps the OLD pause (72h at most), not a week", (() => {
+  const state = st([send(100, "post_call"), send(90, "post_call"), send(80, "post_call"), send(75, "post_call")], days(40));
+  return !failedOf(state, cand("companion", { safetyFollowUp: true })).includes("unanswered_pause") && failedOf(state, cand("companion")).includes("unanswered_pause");
+})());
+check("answers still go to a dormant member", !failedOf(dormant, cand("event_offer", { askId: "ask-1" })).some((n: string) => ["engagement_pace", "weekly_cap", "unanswered_pause"].includes(n)));
+
+// ---- in-room nudges say nothing about engagement
+const room = st([send(100, "in_room"), send(90, "in_room"), send(80, "in_room"), send(75, "in_room")], hrs(60));
+check("four in-room nudges don't make someone dormant", !failedNames(room, "room").includes("engagement_pace"));
+check("nor stretch the pause past the old one", unansweredPauseFor(2) === 72 && !failedNames(st([send(100, "in_room"), send(90, "in_room"), send(80, "in_room")], hrs(120)), "room").includes("unanswered_pause"));
+
+// ---- calls are engagement
+const src2 = readFileSync(new URL("../../src/harness/proactive.ts", import.meta.url), "utf8");
+check("a call counts as hearing from them", /async function loadLastInbound[\s\S]{0,400}\[Call\]%/.test(src2));
+check("send time applies the same exemptions as the pick", /legacyPace: !pacedByEngagement\(c\)/.test(src2) && /c\.type === "companion" && k\.name === "weekly_cap"\),\n      \),/.test(src2));
 
 console.log(`cadence rules: ${total - failed}/${total} passed`);
 if (failed) process.exit(1);
