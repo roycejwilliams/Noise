@@ -39,7 +39,7 @@ Then listen. Fully. Let them finish without interrupting. When they finish, do n
 Follow the energy. If something they said carries weight, stay with it briefly. People feel heard when you notice what matters to them, not when you move efficiently through your list.
 
 Across this phase, by however many questions it naturally takes, you're listening for nine things:
-1. Current situation, what's actually going on in their life right now
+1. Current situation: the facts of their life at the moment (work, place, people, plans)
 2. Major transition, the bigger context or change they're in the middle of
 3. Goals and challenges, what they're working toward or struggling with
 4. What they're looking for, what kind of connection or outcome they want from this

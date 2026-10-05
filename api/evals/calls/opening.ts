@@ -156,5 +156,7 @@ check("a Co turn continued on the next line is one line", coLinesOf("assistant: 
 check("the call prompt's first-call pointer is not left dangling", !promptForElevenLabs(read("prompts/co-system-prompt.md")).includes("open as below instead"));
 check("the prompt no longer says temperature 0.7", !/Set to 0\.7/.test(read("prompts/co-system-prompt.md")));
 
+check("no stock line survives anywhere in the built call prompt", stockLine(promptForElevenLabs(read("prompts/co-system-prompt.md"))) === null && !promptForElevenLabs(read("prompts/co-system-prompt.md")).split("\n").some((l) => stockLine(l) !== null));
+
 console.log(`call opening rules: ${total - failed}/${total} passed`);
 if (failed) process.exitCode = 1;
