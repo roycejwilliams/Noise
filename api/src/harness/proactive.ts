@@ -23,6 +23,7 @@
 // still enforces the idempotency key and, where asked, local hours. Layer 6
 // in-room nudges during a live event are owned by eventScoring.ts and stay
 // outside this harness.
+import { brandSafe } from "../services/brandGuard.js";
 import { generateText } from "ai";
 import { anthropic } from "@ai-sdk/anthropic";
 import { DateTime } from "luxon";
@@ -624,7 +625,7 @@ Return ONLY the message text, or exactly SKIP.`,
   });
   const trimmed = text.trim().replace(/^["']|["']$/g, "").trim();
   if (!trimmed || /^skip\b[.!]?$/i.test(trimmed)) return null;
-  return cleanCoMessage(trimmed);
+  return brandSafe(cleanCoMessage(trimmed));
 }
 
 export type OutputRules = {

@@ -7,16 +7,26 @@
 // paragraphs into one message). Past that the middle stays together, and a closing question always goes
 // alone, never buried at the bottom of a wall.
 export const MAX_BEATS = 5;
+// A closing paragraph that asks them something, in any form: a straight or curly quote, an emoji or a
+// short line after the question mark.
+export const asksThem = (p: string) => /\?/.test(p);
 export function toBeats(message: string): string[] {
   const parts = message.split(/\n\s*\n/).map((p) => p.trim()).filter(Boolean);
   if (parts.length <= MAX_BEATS) return parts.length ? parts : [message.trim()];
   const last = parts[parts.length - 1];
-  const keepLast = /\?["')\]]*$/.test(last);
+  const keepLast = asksThem(last);
   const body = keepLast ? parts.slice(0, -1) : parts;
   const room = keepLast ? MAX_BEATS - 1 : MAX_BEATS;
-  const head = body.slice(0, room - 1);
-  const tail = body.slice(room - 1).join("\n\n");
-  return [...head, tail, ...(keepLast ? [last] : [])];
+  // The paragraphs spread as evenly as they can across the messages, so no message takes the whole overflow
+  // (nine paragraphs are three, two, two, two, not four alone and five in the last).
+  const out: string[] = [];
+  let at = 0;
+  for (let i = 0; i < room; i++) {
+    const size = Math.ceil((body.length - at) / (room - i));
+    out.push(body.slice(at, at + size).join("\n\n"));
+    at += size;
+  }
+  return [...out, ...(keepLast ? [last] : [])];
 }
 // The gap between beats, like someone typing the next one.
 export const BEAT_GAP_MS = 1200;

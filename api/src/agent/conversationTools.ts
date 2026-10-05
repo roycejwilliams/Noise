@@ -1,4 +1,5 @@
 import { notToTeammate } from "../services/teamLines.js";
+import { brandSafe } from "../services/brandGuard.js";
 import { z } from "zod";
 import { tool } from "ai";
 import { situationFor, teamOnlyTools, toolsOutOfSituation, toolUse } from "../services/capabilities.js";
@@ -152,7 +153,7 @@ export function createConversationTools(ctx: ConversationToolContext) {
         message: z.string().describe("Your reply, no em dashes. Each distinct thought (the reaction, the answer, the advice, the question, the offer) is its own short paragraph with a blank line between, and each paragraph goes out as its own text, so never stack several thoughts in one. A question to them is always its own last paragraph. When you've given them lines to say before a moment that's coming (a conversation, a pitch, a result), the last paragraph is the offer to check in after it, not another question. Most replies are one to three short beats, up to five when each earns its place."),
       }),
       execute: async ({ message: draft }) => {
-        const message = ctx.gate ? await ctx.gate(draft, [...state.sentMessages]) : draft;
+        const message = brandSafe(ctx.gate ? await ctx.gate(draft, [...state.sentMessages]) : draft, ctx.resolvedContent);
         // The fact check left nothing to add after what already went out this turn.
         if (!message.trim() && state.sentMessages.length) return { ok: true, note: "What you already sent this turn is the answer; nothing more went out. Don't add a closing line." };
         if (state.replyCount > 0) await new Promise((resolve) => setTimeout(resolve, 2000));
@@ -370,7 +371,8 @@ export function createConversationTools(ctx: ConversationToolContext) {
               .query(`SELECT content FROM co_memories WHERE user_id = $1 AND memory_type = 'text_exchange' AND content LIKE 'User said:%' AND ${notToTeammate()} ORDER BY created_at DESC LIMIT 6`, [ctx.userId])
               .then((r) => r.rows.map((x: any) => String(x.content)).join("\n"))
               .catch(() => "");
-        if (!T.wordsAreTheirs(theirWords, `${ctx.resolvedContent}\n${recent}`)) {
+        const yesToOffer = T.isYesToOffer(ctx.resolvedContent, ctx.lastCoMessage);
+        if (!yesToOffer && !T.wordsAreTheirs(theirWords, `${ctx.resolvedContent}\n${recent}`)) {
           notDone("No task was started: the quote isn't in their words.");
           return { ok: false, error: "theirWords must be copied exactly from what they wrote. Don't start a task they didn't ask for." };
         }
@@ -389,7 +391,7 @@ export function createConversationTools(ctx: ConversationToolContext) {
           ctx.facts?.add("did_this_turn", `Started task: "${goal}". Co will work on it first in about ${T.clampNextHours(inHours)} hours: ${firstStep}.${dl ? ` Their deadline: ${dl.deadline}; Co's last check before it is ${dl.finalCheckAt.slice(0, 16).replace("T", " ")} UTC.` : ""}`);
           return { ok: true, deadline: dl };
         }
-        const r = await T.startTask({ userId: ctx.userId, goal, theirWords, steps, firstPlan: firstStep, inHours, deadline: dl });
+        const r = await T.startTask({ userId: ctx.userId, goal, theirWords: yesToOffer ? `${ctx.resolvedContent.trim()} (to Co's offer: ${String(ctx.lastCoMessage ?? "").slice(0, 160)})` : theirWords, steps, firstPlan: firstStep, inHours, deadline: dl });
         if (!r.ok) {
           notDone(`No task was started: ${r.why}.`);
           return { ok: false, error: r.why };
