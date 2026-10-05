@@ -30,6 +30,7 @@ import { reviewEnabled, runMorningReview } from "../harness/devReview.js";
 import { expireStaleAsks } from "../services/askExpiry.js";
 import { classifyOpenAsks, syncClosedAsks } from "../services/askKind.js";
 import { companionPayloadFor } from "../harness/memberThreads.js";
+import { queueHeavyCheckins } from "../services/heavyMoment.js";
 import { gapDescription, lastLearned, QUIET_UNDERSTANDING_DAYS, understandingGaps } from "../services/understanding.js";
 import { recordDecision } from "../harness/core.js";
 import { runAdviceFollowUps, runWeeklyReflections } from "../harness/memberReflection.js";
@@ -848,6 +849,12 @@ export function registerJobs(io: Server) {
   // read as "at the event."
   cron.schedule("*/15 * * * *", () => {
     processDueUnmatchedFollowUps().catch((err: any) => console.error("eventUnmatchedFollowUp: process failed:", err?.message ?? err));
+  });
+
+  // The next-day check-in after something hard (services/heavyMoment.ts):
+  // queued here, sent by the proactive harness under its usual caps.
+  cron.schedule("30 * * * *", () => {
+    queueHeavyCheckins().catch((err: any) => console.error("heavy check-in queue failed:", err?.message ?? err));
   });
 
   // Companion check-in (Royce, 2026-09-03: "how can we make it a companion
