@@ -155,6 +155,8 @@ export const RULES = {
   // quiet text must not silence events for 72 hours (2026-09-21).
   unansweredPauseHours: 24,
   unansweredPauseHoursAfterTwo: 72,
+  unansweredPauseHoursAfterThree: 7 * 24,
+  unansweredPauseHoursAfterFour: 14 * 24,
   // Any two unprompted texts are at least this far apart, whatever their lane
   // (2026-09-22): lanes now pause separately, so without this a check-in could
   // land 15 minutes after an unanswered offer.
@@ -236,8 +238,48 @@ const DAY = 24 * HOUR;
 // hours when every continental US zone is inside 9am-8pm (16:00-24:00 UTC)
 // count. This used to fail open, which is how unknown-city users got texts
 // at any hour.
+// The pause grows with every text in a row that went unanswered (2026-10-04,
+// Royce, brand fix 3): a day after one, three after two, a week after three, two
+// weeks after four or more. Before, it stopped at three days, so a member who
+// had gone quiet still heard from Co twice a week indefinitely.
 export function unansweredPauseFor(unansweredCount: number): number {
+  if (unansweredCount >= 4) return RULES.unansweredPauseHoursAfterFour;
+  if (unansweredCount >= 3) return RULES.unansweredPauseHoursAfterThree;
   return unansweredCount >= 2 ? RULES.unansweredPauseHoursAfterTwo : RULES.unansweredPauseHours;
+}
+
+// How engaged someone is, from the one thing the pick state carries: when they
+// last texted Co, and how many of Co's texts since went unanswered. The caps
+// stay the ceiling (1 a day, 3 a week, 4 for the room lane); this only brings
+// the pace down for someone who has gone quiet, and a text from them restores
+// it at once.
+export type EngagementTier = "engaged" | "active" | "quiet" | "dormant" | "gone";
+export const ENGAGEMENT = {
+  engagedDays: 3,
+  activeDays: 7,
+  quietDays: 14,
+  dormantDays: 30,
+  // Four texts in a row with no reply is dormant whatever the calendar says.
+  unansweredForDormant: 4,
+};
+export const CADENCE: Record<EngagementTier, { weeklyCap: number | null; minGapHours: number }> = {
+  engaged: { weeklyCap: null, minGapHours: 0 },
+  active: { weeklyCap: null, minGapHours: 0 },
+  // Quiet for a week or two: at most two a week.
+  quiet: { weeklyCap: 2, minGapHours: 0 },
+  // Two to four weeks: one a week at most.
+  dormant: { weeklyCap: 1, minGapHours: 7 * 24 },
+  // Over a month, or no reply to four in a row: one every two weeks.
+  gone: { weeklyCap: 1, minGapHours: 14 * 24 },
+};
+export function engagementTier(now: Date, lastInboundAt: Date | null, unansweredCount: number): EngagementTier {
+  if (unansweredCount >= ENGAGEMENT.unansweredForDormant) return lastInboundAt && now.getTime() - lastInboundAt.getTime() <= ENGAGEMENT.quietDays * DAY ? "dormant" : "gone";
+  if (!lastInboundAt) return unansweredCount >= 2 ? "quiet" : "active";
+  const days = (now.getTime() - lastInboundAt.getTime()) / DAY;
+  if (days <= ENGAGEMENT.engagedDays) return "engaged";
+  if (days <= ENGAGEMENT.activeDays) return "active";
+  if (days <= ENGAGEMENT.quietDays) return "quiet";
+  return days <= ENGAGEMENT.dormantDays ? "dormant" : "gone";
 }
 
 export function localHourOk(now: Date, timezone: string | null): boolean {
@@ -279,7 +321,7 @@ export const LANE_CAPS: Record<Lane, { perDay: number; per7Days: number }> = {
 
 // ignorePacing skips the daily cap, weekly cap and unanswered pause. Only a hand-run
 // dispatch sets it (scripts/forceDispatch.ts); the cron never does.
-export function userLevelChecks(state: Omit<PickState, "candidates">, opts: { skipHours?: boolean; lane?: Lane; ignorePacing?: boolean } = {}): GateCheck[] {
+export function userLevelChecks(state: Omit<PickState, "candidates">, opts: { skipHours?: boolean; lane?: Lane; ignorePacing?: boolean; legacyPace?: boolean } = {}): GateCheck[] {
   const lane = opts.lane ?? "other";
   const maxDay = LANE_CAPS[lane].perDay;
   const maxWeek = LANE_CAPS[lane].per7Days;
@@ -300,9 +342,20 @@ export function userLevelChecks(state: Omit<PickState, "candidates">, opts: { sk
   const pauseSource = counted;
   const lastCounted = pauseSource.filter((s) => s.sentAt <= state.now).sort((a, b) => b.sentAt.getTime() - a.sentAt.getTime())[0];
   const unansweredCount = pauseSource.filter((s) => s.sentAt <= state.now && unansweredSince(s, state.lastInboundAt)).length;
+  // Pace follows engagement within the caps: a quiet member hears less, a
+  // dormant one far less, and one text from them restores the full pace.
+  // In-room nudges are sent to people who are busy in the room: their silence
+  // says nothing about engagement, so they never push the tier or the long pauses.
+  const unansweredOutsideRoom = pauseSource.filter((s) => s.type !== "in_room" && s.sentAt <= state.now && unansweredSince(s, state.lastInboundAt)).length;
+  // legacyPace: the pace as it was before engagement scaling, for what must never be
+  // slowed by it (a safety follow-up, an ask to an event guest).
+  const tier = opts.legacyPace ? "active" : engagementTier(state.now, state.lastInboundAt, unansweredOutsideRoom);
+  const cadence = CADENCE[tier];
+  const effectiveWeek = cadence.weeklyCap === null ? maxWeek : Math.min(maxWeek, cadence.weeklyCap);
+  const sinceLast = lastCounted ? (state.now.getTime() - lastCounted.sentAt.getTime()) / HOUR : Infinity;
   const pauseActive =
     !!lastCounted &&
-    state.now.getTime() - lastCounted.sentAt.getTime() < unansweredPauseFor(unansweredCount) * HOUR &&
+    state.now.getTime() - lastCounted.sentAt.getTime() < (opts.legacyPace ? unansweredPauseFor(Math.min(unansweredCount, 2)) : Math.max(unansweredPauseFor(Math.min(unansweredCount, 2)), unansweredPauseFor(unansweredOutsideRoom))) * HOUR &&
     unansweredSince(lastCounted, state.lastInboundAt);
 
   const spacing = spacingCheck(state);
@@ -317,7 +370,8 @@ export function userLevelChecks(state: Omit<PickState, "candidates">, opts: { sk
   if (!opts.ignorePacing) {
     checks.push(
       { name: "daily_cap", pass: today < maxDay, reason: `${today} ${lane}-lane proactive text(s) already today` },
-      { name: "weekly_cap", pass: week < maxWeek, reason: `${week} ${lane}-lane proactive texts in the last 7 days` },
+      { name: "weekly_cap", pass: week < effectiveWeek, reason: `${week} ${lane}-lane proactive texts in the last 7 days${effectiveWeek < maxWeek ? ` (${tier}: ${effectiveWeek} a week)` : ""}` },
+      { name: "engagement_pace", pass: sinceLast >= cadence.minGapHours, reason: `${tier}: at least ${Math.round(cadence.minGapHours / 24)} days between texts; the last was ${Math.round(sinceLast)}h ago` },
       spacing,
       {
         name: "unanswered_pause",
@@ -409,7 +463,7 @@ export function candidateChecks(c: Candidate, state: Pick<PickState, "now" | "se
 
 const PERSON_CHECKS = new Set(["not_opted_out", "local_hours"]);
 // The quota an answer skips. Spacing is not in it: every text keeps it.
-const QUOTA_CHECKS = new Set(["daily_cap", "weekly_cap", "unanswered_pause"]);
+const QUOTA_CHECKS = new Set(["daily_cap", "weekly_cap", "unanswered_pause", "engagement_pace"]);
 
 // Replies, not broadcasts (Royce, 2026-10-02): anything answering a member's
 // explicit ask, a conversation they're in, or a deadline they care about goes
@@ -436,6 +490,12 @@ export function isAnswering(c: Pick<Candidate, "type" | "payload">): boolean {
   return false;
 }
 
+// What the engagement pace never holds: a safety follow-up, and the ask sent to an
+// event guest who hasn't stated one (never held, so they aren't left out of the room).
+export function pacedByEngagement(c: Pick<Candidate, "type" | "payload">): boolean {
+  return !(c.type === "ask_solicitation" || (c.payload as { safetyFollowUp?: boolean } | null)?.safetyFollowUp === true);
+}
+
 export function evaluateCandidates(state: PickState, opts: { ignorePacing?: boolean } = {}): Evaluation {
   // Opt-out and local hours apply to the person; caps and the unanswered
   // pause apply per lane, so each candidate is checked against its own lane.
@@ -443,11 +503,15 @@ export function evaluateCandidates(state: PickState, opts: { ignorePacing?: bool
     room: userLevelChecks(state, { lane: "room", ignorePacing: opts.ignorePacing }),
     other: userLevelChecks(state, { lane: "other", ignorePacing: opts.ignorePacing }),
   };
+  const legacyByLane: Record<Lane, GateCheck[]> = {
+    room: userLevelChecks(state, { lane: "room", ignorePacing: opts.ignorePacing, legacyPace: true }),
+    other: userLevelChecks(state, { lane: "other", ignorePacing: opts.ignorePacing, legacyPace: true }),
+  };
   const userChecks = byLane.other.filter((k) => PERSON_CHECKS.has(k.name));
   const userOk = gate(userChecks).ok;
   const perCandidate = state.candidates.map((candidate) => {
     const answering = isAnswering(candidate);
-    const laneChecks = byLane[laneOf(candidate.type)].filter(
+    const laneChecks = (pacedByEngagement(candidate) ? byLane : legacyByLane)[laneOf(candidate.type)].filter(
       (k) => !PERSON_CHECKS.has(k.name) && !(answering && QUOTA_CHECKS.has(k.name)) && !(candidate.type === "companion" && k.name === "weekly_cap"),
     );
     const checks = [...laneChecks, ...candidateChecks(candidate, state, { answering })];
@@ -820,7 +884,7 @@ async function loadSends(db: Queryable, userId: string): Promise<SendRecord[]> {
 async function loadLastInbound(db: Queryable, userId: string): Promise<Date | null> {
   const { rows } = await db.query(
     `SELECT MAX(created_at) AS at FROM co_memories
-     WHERE user_id = $1 AND memory_type = 'text_exchange' AND content LIKE 'User %'`,
+     WHERE user_id = $1 AND memory_type = 'text_exchange' AND (content LIKE 'User %' OR content LIKE '[Call]%')`,
     [userId],
   );
   return rows[0]?.at ? new Date(rows[0].at) : null;
@@ -1029,8 +1093,8 @@ async function sendWithLedger(
     const now = new Date();
     const answering = isAnswering(c);
     const checks = [
-      ...userLevelChecks({ now, timezone: person.timezone, optedOut: optedOutNow, sends, lastInboundAt }, { lane: laneOf(c.type), ignorePacing: opts.ignorePacing }).filter(
-        (k) => !(answering && QUOTA_CHECKS.has(k.name)),
+      ...userLevelChecks({ now, timezone: person.timezone, optedOut: optedOutNow, sends, lastInboundAt }, { lane: laneOf(c.type), ignorePacing: opts.ignorePacing, legacyPace: !pacedByEngagement(c) }).filter(
+        (k) => !(answering && QUOTA_CHECKS.has(k.name)) && !(c.type === "companion" && k.name === "weekly_cap"),
       ),
       ...candidateChecks(c, { now, sends, lastInboundAt, undeliveredYes: c.type === "network_tease" ? await import("../services/networkIntroNudge.js").then((m) => m.lastTeaseUndelivered(person.userId)).catch(() => false) : false }, { answering }),
     ];
