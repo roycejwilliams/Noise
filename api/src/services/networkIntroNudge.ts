@@ -311,7 +311,7 @@ export async function resolveNetworkTeaseReply(
   // A block is discretion, not a failure: no explanation, no apology, no "it fell
   // through" (2026-10-03: this said "say so briefly and honestly" and a "Sure"
   // got "Sorry for the false start."). harness/discretion.ts.
-  const cantReveal = discretionInstruction("They said yes to hearing who it was, and you can't go further on that one. Don't promise another one.");
+  const cantReveal = discretionInstruction("They said yes to hearing who it was, and you can't go further on that one. Don't promise another one.", { neutral: true });
   if (!(await gateNetworkCandidate(userId, candidateId, pending.candidate.match_reason, "reveal"))) return cantReveal;
 
   // The stored reveal was drafted under the other person's consent at the time;

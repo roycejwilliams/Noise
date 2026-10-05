@@ -11,7 +11,7 @@ import { capitalizeSentences } from "../../src/services/textStyle.js";
 import { discretionInstruction, discretionProblems } from "../../src/harness/discretion.js";
 
 const OLD = `\nThey said yes to hearing who it was, but that introduction isn't available anymore. Say so briefly and honestly, don't name or describe anyone, and don't promise another one.`;
-const NEW = discretionInstruction("They said yes to hearing who it was, and you can't go further on that one. Don't promise another one.");
+const NEW = discretionInstruction("They said yes to hearing who it was, and you can't go further on that one. Don't promise another one.", { neutral: true });
 const messages = ["Yes!", "Sure", "go ahead", "who is it?", "yeah tell me who", "yes please", "ok who", "definitely"];
 
 async function reply(message: string, instruction: string) {

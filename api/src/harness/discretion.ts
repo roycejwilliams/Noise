@@ -33,6 +33,9 @@ export const DISCRETION_LINES = [
   "That's theirs to share when they choose. From my side, I can tell you what I know about you and what I can do next.",
   "I'd rather let them speak for themselves. What I can do is go from what you've told me.",
   "Some things stay with the person who said them. I can tell you what I know about you.",
+  // Neutral, for when they're waiting on Co's own offer and a confidence would hint at a secret.
+  "That's as far as I can take that one. What I can do is go from what you've told me.",
+  "That one stays where it is. I can tell you what I know about you and what I can do next.",
 ] as const;
 
 // Marks a turn where a block tripped, so the reply grounding knows to hold the
@@ -42,26 +45,26 @@ export const DISCRETION_MARK = "[discretion]";
 const list = () => DISCRETION_LINES.map((l) => `- ${l}`).join("\n");
 
 // Handed to the reply model when a gate has tripped this turn (texts).
-export function discretionInstruction(situation: string): string {
+export function discretionInstruction(situation: string, opts: { neutral?: boolean } = {}): string {
   return `\n${DISCRETION_MARK} ${situation}
 This is a matter of discretion, and Co has done nothing wrong, so there is nothing to apologize for. Reply with exactly ONE of these lines, word for word, and nothing about why:
-${list()}
+${list()}${opts.neutral ? "\nThey're waiting on something you offered, so one of the last two fits best: they don't suggest anyone is keeping a secret." : ""}
 You may add one short sentence after it, only from what you know about them or what you can actually do next. Never apologize, never say anything fell through, isn't available, was a mistake or a false start, never explain or hint at a reason, never mention privacy, rules, permission or a check, and never name, describe or guess anything about the other person.`;
 }
 
 // What the reply model reads on every text, and the call prompt carries, for
 // when someone asks Co to speak for another member.
-export const DISCRETION_GUIDE = `Discretion: you never speak for another member. If they ask what someone else thinks, wants, said or feels, whether someone is interested in them, or who someone is beyond what you've been told to share, answer with one of these lines, word for word, then say what you do know about them:
+export const DISCRETION_GUIDE = `Discretion: you never speak for another member of Co. If they ask what another member thinks, wants, said or feels, whether a member you know through Co is interested in them, or who a member is beyond what you've been told to share, answer with one of these lines, word for word, then say what you do know about them:
 ${list()}
-Never apologize for keeping a confidence, never say you aren't allowed or that something is blocked, restricted or private, and never explain why. Discretion is just how you are, not a rule you're following.`;
+This is only about members of Co. People in their own life (their boss, a date, family, a friend you've never matched them with) you talk about freely. Never apologize for keeping a confidence, never say you aren't allowed or that something is blocked, restricted or private, and never explain why. Discretion is just how you are, not a rule you're following.`;
 
 // ---------- checks
 
 // An apology, or a retraction of what was just said. A block calls for neither.
-const APOLOGY = /\b(?:sorry|apolog\w*|my bad|oops|my mistake|false start|scratch that|never ?mind that|forgive me|excuse me|i misspoke|i shouldn'?t have|let me (?:redo|rephrase|start over|try that again)|(?:that|this) was a mistake|turns out)\b/i;
+const APOLOGY = /\b(?:sorry(?! to hear| for your| you'?re| that you| about your)|apolog\w*|my bad|oops|my mistake|false start|scratch that|never ?mind that|forgive me|excuse me|i misspoke|i shouldn'?t have|let me (?:redo|rephrase|start over|try that again)|(?:that|this) was a mistake|turns out[^.!?]*\b(?:not|isn'?t|aren'?t|won'?t|can'?t|couldn'?t|no longer|anymore|fell|wrong|mistake)\b)/i;
 // The machinery: why something was held back, in the system's words.
 const MACHINERY =
-  /\b(?:privacy|policy|policies|permission|consent|filter(?:ed)?|blocked?|gate|guardrails?|restrict(?:ed|ion|ions)?|not allowed|aren'?t allowed|isn'?t allowed|can'?t share|cannot share|unable to|not able to|my system|the system|my rules|programmed|safeguards?|compliance|confidential|not available|isn'?t available|no longer available|fell through|didn'?t go through|couldn'?t go through)\b/i;
+  /\b(?:privacy|policy|policies|consent|guardrails?|safeguards?|compliance|confidential|not available|isn'?t available|no longer available|fell through|didn'?t go through|couldn'?t go through|(?:is|was|got|been|being|it'?s|that'?s|this is) blocked|blocked (?:by|that|this|it)|my filter|the filter|(?:got |was |is )filtered|restricted|restriction|(?:not|n'?t) allowed|(?:can'?t|cannot|unable to|not able to|won'?t be able to) (?:share|say|tell|reveal|disclose|give|go (?:further|there))|my system|the system (?:won'?t|doesn'?t|can'?t|blocked|says|flagged|prevents)|my rules|programmed|(?:no|without|lack(?:ing)?|don'?t have|need(?:s)?|requires?|waiting on) (?:the )?permission)\b/i;
 // The flat dead end the grounding falls to.
 const DEAD_END = /not sure on that one|don'?t have an answer|nothing confirmed|i can'?t help with that|i can'?t do that/i;
 
@@ -74,18 +77,21 @@ export function usesApprovedLine(text: string): boolean {
 }
 
 // Pure: why a reply to a tripped block can't be sent, or [] when it's discreet.
-export function discretionProblems(text: string, opts: { otherNames?: string[] } = {}): string[] {
+// requireLine: the first reply on a blocked turn must be an approved line; a later
+// reply (the member asked something else too) only has to be free of the rest.
+export function discretionProblems(text: string, opts: { otherNames?: string[]; requireLine?: boolean } = {}): string[] {
   const out: string[] = [];
   const t = text.trim();
   if (!t) return ["empty"];
-  if (t.split(/\s+/).length < 6) out.push("a fragment");
+  const requireLine = opts.requireLine ?? true;
+  if (requireLine && t.split(/\s+/).length < 6) out.push("a fragment");
   const apology = t.match(APOLOGY);
   if (apology) out.push(`an apology or a retraction ("${apology[0]}")`);
   const machine = t.match(MACHINERY);
   if (machine) out.push(`the machinery's words ("${machine[0]}")`);
   if (DEAD_END.test(t)) out.push("a dead end");
   for (const n of opts.otherNames ?? []) if (n && new RegExp(`\\b${n.replace(/[^\w]/g, "")}\\b`, "i").test(t)) out.push(`names the other person (${n})`);
-  if (!usesApprovedLine(t)) out.push("not one of the approved lines");
+  if (requireLine && !usesApprovedLine(t)) out.push("not one of the approved lines");
   return out;
 }
 
@@ -112,7 +118,9 @@ export function isDiscreetTurn(instructions: string[]): boolean {
 
 // Pure: on a blocked turn, what actually goes out: the model's reply if it is
 // discreet, else an approved line. `replaced` says which, and why.
-export function discreetFinal(final: string, seed: string, otherNames: string[] = []): { final: string; replaced: boolean; problems: string[] } {
-  const problems = discretionProblems(final, { otherNames });
+export function discreetFinal(final: string, seed: string, otherNames: string[] = [], requireLine = true): { final: string; replaced: boolean; problems: string[] } {
+  const problems = discretionProblems(final, { otherNames, requireLine });
+  // A later reply on the same turn that fails is dropped, not repeated as the same line.
+  if (problems.length && !requireLine) return { final: "", replaced: true, problems };
   return problems.length ? { final: pickDiscretion(seed), replaced: true, problems } : { final, replaced: false, problems };
 }

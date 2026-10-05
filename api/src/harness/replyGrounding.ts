@@ -79,7 +79,9 @@ export type FactKind =
 
 export type Fact = { id: string; kind: FactKind; text: string };
 
-export type ReplyFacts = { facts: Fact[]; instructions: string[] };
+// privateNames: the other member(s) a blocked turn is about, so a reply can't name them
+// (harness/discretion.ts).
+export type ReplyFacts = { facts: Fact[]; instructions: string[]; privateNames?: string[] };
 
 export function createReplyFacts(): ReplyFacts {
   return { facts: [], instructions: [] };
@@ -1246,7 +1248,8 @@ export async function groundReply(
   // out instead. Never an apology for nothing, a false start, a fragment or the
   // machinery's words (harness/discretion.ts).
   if (isDiscreetTurn(rf.instructions)) {
-    const d = discreetFinal(result.final, src.message);
+    // The first reply must be an approved line; a later reply on the same turn only has to be free of the rest.
+    const d = discreetFinal(result.final, src.message, rf.privateNames ?? [], !(src.sentThisTurn?.length));
     if (d.replaced) {
       result = {
         ...result,

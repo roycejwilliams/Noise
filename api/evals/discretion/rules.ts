@@ -46,6 +46,23 @@ check("a reply that isn't one of the approved lines is refused, even if polite",
 check("an approved line, with one more short sentence of its own, passes", discretionProblems(`${DISCRETION_LINES[1]} Want to tell me more about what you're after?`).length === 0);
 check("lines are matched through punctuation and case", usesApprovedLine(DISCRETION_LINES[2].toUpperCase().replace(/'/g, "’")));
 
+// ---- review of #65
+const [, , , , , , , , neutralA, neutralB] = DISCRETION_LINES;
+check("two neutral lines exist for when they're waiting on Co's own offer, and say nothing of a secret", DISCRETION_LINES.length === 10 && /as far as I can take/.test(neutralA) && /stays where it is/.test(neutralB) && ![neutralA, neutralB].some((l) => /theirs|someone else|person who said|keep what people/i.test(l)));
+check("the reveal block asks for the neutral lines; the guide doesn't", /one of the last two fits best/.test(discretionInstruction("x", { neutral: true })) && !/one of the last two fits best/.test(discretionInstruction("x")));
+check("harmless extra sentences after an approved line are no longer wiped", ["I'm sorry to hear the week's been that rough.", "Turns out you already know half the founders going.", "I've blocked off time on Thursday for it.", "I'll ask your permission before I send anything.", "The system you built sounds solid.", "I'm not able to stop thinking about your pitch."].every((extra) => discretionProblems(`${DISCRETION_LINES[1]} ${extra}`).length === 0));
+check("but a real retraction or machinery after the line still is", discretionProblems(`${DISCRETION_LINES[1]} Turns out that one isn't happening anymore.`).length > 0 && discretionProblems(`${DISCRETION_LINES[1]} That's blocked by my filter.`).length > 0 && discretionProblems(`${DISCRETION_LINES[1]} Sorry about the mix-up.`).length > 0 && discretionProblems(`${DISCRETION_LINES[1]} I'm not able to share that.`).length > 0);
+const first = discreetFinal(real, "Sure! Also find me dinner Friday", [], true);
+const later = discreetFinal("Want me to look at Friday dinner spots?", "Sure! Also find me dinner Friday", [], false);
+check("on a turn with two replies, the first must be an approved line, a later real question is kept", first.replaced && usesApprovedLine(first.final) && !later.replaced && later.final === "Want me to look at Friday dinner spots?");
+check("a later reply that apologizes or uses the machinery is dropped, not turned into the same line again", discreetFinal("Sorry about that, it fell through.", "x", [], false).final === "" && discreetFinal("Sorry about that, it fell through.", "x", [], false).replaced);
+check("the other person's name is refused when the turn carries it", discretionProblems(`${DISCRETION_LINES[0]} Celine would love it.`, { otherNames: ["Celine"] }).some((p) => /names the other person/.test(p)) && discreetFinal(`${DISCRETION_LINES[0]} Celine would love it.`, "x", ["Celine"]).replaced);
+check("the guide covers other members of Co only, and people in their own life are talked about freely", /another member of Co/.test(DISCRETION_GUIDE) && /only about members of Co/.test(DISCRETION_GUIDE) && /their boss, a date, family/.test(DISCRETION_GUIDE) && /freely/.test(DISCRETION_GUIDE));
+const rg = read("src/harness/replyGrounding.ts");
+const sb = read("src/routes/sendblue.ts");
+check("a blocked tease reply gets no false 'sent a message naming them' fact, and the name is carried to the guard", /if \(isDiscreetTurn\(\[context\]\)\) \{[\s\S]*?replyFacts\.privateNames = \[\.\.\.\(replyFacts\.privateNames \?\? \[\]\), resolvedTease\.item\.ref\.pending\.candidate\.first_name\];\s*\} else if \(classification === "interested"\) \{\s*addFact\(replyFacts, "did_this_turn"/.test(sb));
+check("grounding passes the names and lets later replies through the light check", /discreetFinal\(result\.final, src\.message, rf\.privateNames \?\? \[\], !\(src\.sentThisTurn\?\.length\)\)/.test(rg));
+
 // ---- the residue guard
 check("a cut that leaves only an apology is caught", apologyOnly("Sorry for the false start.") && apologyOnly("Sorry about that.") && apologyOnly("My bad. Sorry for the mix-up."));
 check("a real reply that also apologizes is not 'only an apology'", !apologyOnly("Sorry about that. Here's the link: https://lu.ma/abc and the start time is 6pm.") && !apologyOnly("") && !apologyOnly("Here's the link."));
@@ -66,10 +83,10 @@ check("it forbids apologies, 'fell through', reasons, machinery and naming", /Ne
 check("it tells the model there is nothing to apologize for", /nothing to apologize for/.test(inst));
 const nudge = read("src/services/networkIntroNudge.ts");
 check("the reveal gate's block now uses it (no 'say so briefly and honestly', no 'isn't available anymore')", /const cantReveal = discretionInstruction\(/.test(nudge) && !/Say so briefly/.test(nudge) && !/isn't available anymore/.test(nudge));
+check("the reveal block asks for the neutral lines (nothing suggests a secret when they're waiting on Co's own offer)", /discretionInstruction\([^;]*\{ neutral: true \}\);/.test(nudge));
 check("both ways the reveal can be blocked use it (privacy check, and a reveal that couldn't be drafted)", (nudge.match(/return cantReveal;/g) ?? []).length === 2);
 
 // ---- grounding
-const rg = read("src/harness/replyGrounding.ts");
 check("a blocked turn is held to the discretion checks before the reply is recorded", rg.indexOf("isDiscreetTurn(rf.instructions)") > rg.indexOf("const final = after ===") && rg.indexOf("isDiscreetTurn(rf.instructions)") < rg.indexOf('decision: "reply.grounding"') && /d\.replaced/.test(rg));
 check("a cut that leaves only an apology is not shipped (it goes to the rewrite)", /enoughLeft\(cut, draft\) && !apologyOnly\(cut\)/.test(rg));
 check("every text reply knows the lines (baseReplyFacts)", baseReplyFacts().instructions.some((i) => i === DISCRETION_GUIDE.trim()));
