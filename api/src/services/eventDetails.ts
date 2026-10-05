@@ -14,6 +14,7 @@
 //   headcount, description).
 //   Tier 3 (X opportunities): the source post's own text, which is the only
 //   real record there is.
+import { audienceLine } from "./eventAudience.js";
 import pool from "../db/db.js";
 import { parseModelJson } from "./modelJson.js";
 import { anthropic } from "@ai-sdk/anthropic";
@@ -156,6 +157,8 @@ export function renderEventDetails(name: string, d: EventDetails): string[] {
   if (d.requiresApproval) lines.push("Registration needs host approval.");
   if (d.guestCount) lines.push(`${d.guestCount} ${d.guestCount === 1 ? "person has" : "people have"} registered so far.`);
   if (d.description) lines.push(`What the event page says: ${d.description.replace(/\n+/g, " ")}`);
+  const audience = audienceLine(name, d.description);
+  if (audience) lines.push(audience);
   return lines;
 }
 

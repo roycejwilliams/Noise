@@ -5,6 +5,7 @@ import { renderEventDetails } from "../services/eventDetails.js";
 import { stripClosingQuestion } from "../services/offerFollowUp.js";
 import { IDENTITY_RULE, stripUngroundedIdentity } from "../services/identityGuard.js";
 import { isShortNotice } from "../services/eventSurfacingSweep.js";
+import { audienceSayings, audienceTokens, isGroupAimed } from "../services/eventAudience.js";
 
 export type EventDiscoverySurfacingPerson = {
   userId: string;
@@ -42,8 +43,19 @@ function matchFacts(askText: string, fromProfile: boolean, match: TierMatch): Fa
     date: "event_date" in match ? match.event_date : null,
     application_deadline: "deadline" in match ? (match.deadline ?? null) : null,
     why_it_fits: match.whyItFits ?? match.reason,
+    ...(isGroupAimed(match.audience) ? { who_it_is_for: match.audience } : {}),
   };
 }
+
+// An event aimed at a group says so, in plain words, always. Never a guess about who they are, and
+// never a claim that it is or isn't for them.
+export const AUDIENCE_RULE = `If who_it_is_for is given, or the event's details say its page speaks to a particular group ("Who it's for"), say plainly in a few words who it's for, as a fact about the event ("it's a women's hike club"), so they can tell whether it's for them. Never say or imply what they are: no "perfect for you", no "which you are", no "as a woman". Don't ask them. Every time, even if their ask uses that group's words: using a word is not being in the group.`;
+// No "thinking about you" opener and no invented bridge to the rest of their life.
+export const OFFER_HONESTY = `Never say you were thinking about them or about this. Connect it to something else in their life only when the event's own page says it is about that; an event is never "a way into" a community unless its page says so.`;
+// Co as the subject, with them or this as the object: the member's own "thinking about getting outside" stays.
+export const OFFER_FORBIDDEN = { pattern: /\b(?:thinking|thought) (?:about|of) (?:you|it|that|this)\b|\bon my mind\b|\bcrossed my mind\b/i, reason: "a claim about what Co was doing, and a line that fits anyone" };
+// Implying they are, or aren't, in the group the event is for.
+export const IMPLIES_IDENTITY = { pattern: /\b(?:women|girls|ladies|men|guys|moms|dads|group)\b[^.]{0,50}\b(?:perfect|ideal|made|built|just) for you\b|\bwhich you are\b|\bsince you(?:'re| are) a\b|\bas a (?:woman|man|girl|guy|mom|dad)\b/i, reason: "implies who they are" };
 
 // The reveal can use the real record; the tease can't (it names nothing).
 function revealFacts(askText: string, fromProfile: boolean, match: TierMatch): Facts {
@@ -103,7 +115,7 @@ export async function draftEventReveal(
     facts: { ...revealFacts(askText, fromProfile, match), ...(dots.length ? { how_this_connects_to_the_rest_of_their_life: dots.join(" / ") } : {}), ...(why ? { their_why: why } : {}) },
     // Every event offer goes out with its details now (2026-09-18), so "short
     // notice" is only said when it's true.
-    task: `${IDENTITY_RULE} Do not end with a question or an offer ("want me to grab you a spot?", "want this on your radar?"); a separate text after this one asks if it interests them. ` + (opts.reminder
+    task: `${IDENTITY_RULE} ${AUDIENCE_RULE} ${OFFER_HONESTY} Do not end with a question or an offer ("want me to grab you a spot?", "want this on your radar?"); a separate text after this one asks if it interests them. ` + (opts.reminder
       ? match.kind === "opportunity"
         ? `They were interested in this one when you mentioned it. This is a short heads-up that the deadline is coming up: name it and the deadline, in one or two sentences. Don't present it as new or re-explain it.${url ? " The link goes out as its own message right before yours; don't mention a link." : ""} If it doesn't fit anymore, return SKIP.`
         : `They already heard about this one from you. This is a short heads-up that it's coming up: name it and when it is, in one or two sentences. Don't present it as new or re-explain it.${url ? " The link goes out as its own message right before yours; don't mention a link." : ""} If it doesn't fit anymore, return SKIP.`
@@ -119,6 +131,23 @@ export async function draftEventReveal(
   return {
     messages: url ? [url, body] : [body],
     text: body,
-    rules: { maxSentences: 2, maxChars: 300, mustIncludeAny: tokens.length ? tokens : [match.name] },
+    rules: {
+      maxSentences: 2,
+      maxChars: 300,
+      mustIncludeAny: tokens.length ? tokens : [match.name],
+      forbidden: [OFFER_FORBIDDEN, IMPLIES_IDENTITY],
+      ...whoItIsFor(match),
+    },
   };
+}
+
+// When Co judged the event aimed at a group (the sweep's audience field), the text has to say so, always:
+// whether a page's words mean a group is Co's call, and the member's own words never switch it off
+// (a man who says "women" in his ask is not in a women's group).
+export function whoItIsFor(match: TierMatch): { mustAlsoIncludeAny?: { words: string[]; reason: string; ignoring?: string[] } } {
+  if (!isGroupAimed(match.audience)) return {};
+  const words = audienceTokens(match.audience);
+  if (!words.length) return {};
+  const name = match.name;
+  return { mustAlsoIncludeAny: { words: audienceSayings(words), reason: "the event is aimed at a group; the text should say who it's for", ignoring: [name, name.split(/[:|\u2014\u2013-]/)[0]] } };
 }
