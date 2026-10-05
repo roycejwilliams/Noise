@@ -179,7 +179,52 @@ export async function buildContextSummary(userId: string): Promise<string> {
 // models wrote), which never count as proof of a specific fact.
 export type CallKnowledge = { summary: string; facts: string; impressions: string };
 
-const CALL_CONTEXT_MAX = 4500;
+// Room for the whole picture (about 2,000 tokens): 4,500 was spent mostly on the sent events, and the
+// build stopped at the first section that didn't fit, so the background that
+// lets Co pick up where they left off (what they told it lately, the ongoing
+// recap, recent texts, how they've been feeling) was cut (2026-10-04: a call
+// opened with "what's happening these days?" while holding a 4,227-character
+// summary that ended after the first of those sections).
+export const CALL_CONTEXT_MAX = 8000;
+// What was sent lately matters for facts (times, places on file), but it is the
+// longest block and the least about them: whole lines, capped.
+export const CALL_SENT_MAX = 1800;
+
+// Pure: the call's context from its parts, most important first, within `max`.
+//   1. how to be with them (corrections to Co's manner; short)
+//   2. what they're in the middle of
+//   3. the normal summary's sections in their own order (what they told Co
+//      lately, open asks, the ongoing recap, how they've been feeling, recent
+//      texts, ...)
+//   4. what was sent lately, last and bounded, with the facts on file
+// A section that doesn't fit is skipped, not the end of the build, so a long
+// one can't take every later short one with it.
+export function assembleCallSummary(o: { lessons: string[]; sentLines: string[]; threads: { text: string }[]; base: string; max?: number; sentMax?: number }): string {
+  const max = o.max ?? CALL_CONTEXT_MAX;
+  const sentMax = o.sentMax ?? CALL_SENT_MAX;
+  const lessons = o.lessons.length ? `How to be with them, from times they corrected you (keep to these):\n${o.lessons.map((l) => `- ${l}`).join("\n")}` : null;
+  const threads = o.threads.length ? `What they're in the middle of:\n${o.threads.slice(0, 5).map((t) => `- ${t.text}`).join("\n")}` : null;
+  const header = "What you sent them lately and what's on file for each (these are the facts; if a time or place isn't listed here, you don't have it, so say so plainly):\n";
+  const kept: string[] = [];
+  let used = header.length;
+  for (const l of o.sentLines) {
+    const line = `- ${l}`;
+    if (used + line.length + 1 > sentMax && kept.length) break;
+    if (used + line.length + 1 > sentMax) continue;
+    kept.push(line);
+    used += line.length + 1;
+  }
+  const sent = kept.length ? `${header}${kept.join("\n")}` : null;
+  const reserve = sent ? sent.length + 2 : 0;
+  const parts = [lessons, threads, ...o.base.split("\n\n")].filter((x): x is string => !!x);
+  let summary = "";
+  for (const part of parts) {
+    const next = summary ? `${summary}\n\n${part}` : part;
+    if (next.length + reserve > max) continue;
+    summary = next;
+  }
+  return sent ? (summary ? `${summary}\n\n${sent}` : sent) : summary;
+}
 // A call can't wait on slow page reads: whatever details are on file by then are used.
 const CALL_CONTEXT_WAIT_MS = 3000;
 
@@ -204,23 +249,7 @@ export async function buildCallKnowledge(userId: string): Promise<CallKnowledge>
   const asks = turn?.asks ?? [];
   const ledger = turn?.ledger.lines ?? [];
 
-  const head = [
-    lessons.length
-      ? `How to be with them, from times they corrected you (keep to these):\n${lessons.map((l) => `- ${l}`).join("\n")}`
-      : null,
-    sentLines.length
-      ? `What you sent them lately and what's on file for each (these are the facts; if a time or place isn't listed here, you don't have it, so say so plainly):\n${sentLines.map((l) => `- ${l}`).join("\n")}`
-      : null,
-    threads.length ? `What they're in the middle of:\n${threads.slice(0, 5).map((t) => `- ${t.text}`).join("\n")}` : null,
-  ].filter((x): x is string => !!x);
-  // The call-only sections lead, so the length bound drops the oldest
-  // background from the text summary instead of these.
-  let summary = head.join("\n\n");
-  for (const part of base.split("\n\n")) {
-    const next = summary ? `${summary}\n\n${part}` : part;
-    if (next.length > CALL_CONTEXT_MAX) break;
-    summary = next;
-  }
+  const summary = assembleCallSummary({ lessons, sentLines, threads, base });
 
   const facts = [
     ...sentLines,

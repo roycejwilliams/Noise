@@ -233,7 +233,13 @@ export const proactiveRegistry: ProactiveRegistry = {
 
   companion: {
     async draft(c, person) {
-      const r = await draftCompanionCheckin(person.firstName, c.payload.recap ?? "", c.payload.thread ?? null, c.payload.item ?? null, c.payload.curious ?? null, c.payload.story ?? null, c.payload.advice ?? null);
+      // The next-day check-in is looked at once more now: not on top of a conversation, not after a good moment.
+      if (c.payload.heavy) {
+        const { heavyFitsNow } = await import("../services/heavyMoment.js");
+        const fit = await heavyFitsNow(c.userId, new Date(c.payload.heavy.endedAt ?? 0));
+        if (!fit.ok) return skip(`not the moment: ${fit.why}`);
+      }
+      const r = await draftCompanionCheckin(person.firstName, c.payload.recap ?? "", c.payload.thread ?? null, c.payload.item ?? null, c.payload.curious ?? null, c.payload.story ?? null, c.payload.advice ?? null, c.payload.heavy ?? null);
       return r ? { messages: [r.text], ...r } : skip("model chose SKIP: no specific open thread");
     },
     async onSent(c, _p, messages) {
@@ -264,6 +270,8 @@ export const proactiveRegistry: ProactiveRegistry = {
     // back in about two days (2026-09-28: two failed drafts to Jacqueline on
     // 09-23 held off every check-in until 10-07).
     async onDropped(c, _status, reason) {
+      // The next-day check-in never changes when the regular check-in is due.
+      if (c.payload.heavy) return;
       const coChoseSkip = /^model chose SKIP/.test(reason ?? "");
       await pool.query(
         `UPDATE co_profiles SET last_companion_checkin_at = NOW() - ($2 || ' days')::interval WHERE user_id = $1`,

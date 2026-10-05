@@ -1,7 +1,12 @@
 // Calls on ElevenLabs Agents (2026-10-03): Hume ends EVI and TTS on
 // 2026-11-13, so Co's calls move here. Royce chose ElevenLabs Agents with
-// the Eleven v4 Turbo voice, Claude Haiku 4.5 as the fast live voice and
-// Claude Sonnet behind the tools (the tool webhooks run Co's own code).
+// the Eleven v4 Turbo voice and Claude behind the tools (the tool webhooks run
+// Co's own code). The live voice started on Haiku 4.5 for speed; on 2026-10-04
+// Royce chose Claude Sonnet 4.6 (what Hume ran) after the comparison: Haiku
+// still said stock empathy lines ("I hear you", "I hear that") and opened its
+// first question from the prompt's examples, Sonnet did neither, at about 0.7 s
+// more per reply (median ~1.9 s against ~1.2 s). ELEVENLABS_LLM overrides it,
+// so going back to Haiku is one variable.
 //
 // The call still goes out and comes in through Co's own Twilio number:
 // Twilio asks us for TwiML, we register the call with ElevenLabs
@@ -11,7 +16,8 @@
 // Hume is gone (Royce, 2026-10-03: "remove Hume, no reason to use it if
 // it's going to be deprecated"); every call runs here.
 import { DISCRETION_GUIDE } from "../harness/discretion.js";
-import { CUE_GUIDE, stripCues } from "./voiceCues.js";
+import { VARIETY_GUIDE } from "../harness/stockLines.js";
+import { CUE_GUIDE, VOICE_CUES, stripCues } from "./voiceCues.js";
 import { createHmac, timingSafeEqual } from "crypto";
 import { ElevenLabsClient } from "@elevenlabs/elevenlabs-js";
 import pool from "../db/db.js";
@@ -148,19 +154,46 @@ export async function verifyPostCallWebhook(rawBody: string, signature: string |
 // used on that member's last call (pickOpening). The agent's stored line is
 // only the fallback; registration overrides it per call.
 export const OPENING_LINE = "Hey {{first_name}}, it's Co.";
-export const OPENING_NOTE = "You've already opened the call with a short greeting in your own voice. Don't greet them again; go straight to your first real question.";
+// Said after the opening line, which is already spoken when the model's first turn comes
+// (services/callOpening.ts writes it from what Co knows; the pool is the fallback).
+// The old note sent the model to "your first real question", and it reached for the
+// prompt's example openers (2026-10-04: "what's actually happening with you these days?").
+export const OPENING_NOTE = "Your opening line has already been said, as the first thing in this conversation. Don't greet them again or repeat it. Carry on from it: stay with what it picked up, or, if it only said hello, pick up from something specific you know about them. Never fall back on a general \"how are things\" question when you know what they've been working on.";
 // The cue guide goes in the call prompt's own "how you sound" section (where
 // "everything you write is spoken aloud" now carries its one exception), not
 // trailing at the end (review of #62). Texts never get it.
 export const SPOKEN_ALOUD = "Everything you write is spoken aloud.";
+// The shared prompt's example openers ("Hey {{first_name}}. Good to finally talk. I want
+// to hear about where you are right now...") serve a first call. A model at temperature 0
+// copies them word for word even when it knows the person, so a call's prompt leaves
+// them out; texts, which read the same file, keep them.
+export function withoutExampleOpeners(prompt: string): string {
+  return prompt.replace(/Some ways this might sound:\n(?:"[^\n]*"\n)+Use your own words if none of these feel right in the moment[^\n]*\n/, "");
+}
+// ElevenLabs' models give a "# Guardrails" heading extra weight, so the safety
+// section and the never-do list move to the end of the call copy under it, with
+// the discretion lines, and the first of them is said once more as the last rule.
+// The text path reads the same file untouched.
+const SAFETY_RE = /─── IF THEY MAY NOT BE SAFE ─+\n([\s\S]*?)(?=\n─── )/;
+const NEVER_RE = /─── WHAT CO NEVER DOES ─+\n([\s\S]*?)(?=\n─── )/;
+export function guardrailsLast(prompt: string): { rest: string; guardrails: string } {
+  const safety = prompt.match(SAFETY_RE)?.[1]?.trim();
+  const never = prompt.match(NEVER_RE)?.[1]?.trim();
+  if (!safety || !never) return { rest: prompt, guardrails: "" };
+  const rest = prompt.replace(SAFETY_RE, "").replace(NEVER_RE, "");
+  return { rest, guardrails: `# Guardrails\nIf they may not be safe:\n${safety}\n\nNever:\n${never}\n\nSafety comes before everything else on the call. This is important.` };
+}
 export function promptForElevenLabs(prompt: string): string {
-  const base = prompt.replace(/\bhang_up\b/g, "end_call");
+  const split = guardrailsLast(withoutExampleOpeners(prompt));
+  const base = split.rest
+    .replace("open as below instead.", "your first question is about what they're working on or what brought them to Co, in fresh words each time.")
+    .replace(/\bhang_up\b/g, "end_call");
   const withCues = base.includes(SPOKEN_ALOUD)
     ? base.replace(new RegExp(`${SPOKEN_ALOUD.replace(/[.]/g, "\\.")} ?`), `Everything you write is spoken aloud, except a cue in square brackets (below).\n${CUE_GUIDE}\n\n`)
     : `${base}\n\n${CUE_GUIDE}`;
   // How Co keeps a confidence on a call (harness/discretion.ts): speech can't be
   // edited, so the model has to choose a discreet line itself.
-  return `${withCues}\n\n${DISCRETION_GUIDE}\n\n${OPENING_NOTE}`;
+  return `${withCues}\n\n${VARIETY_GUIDE}\n\n${split.guardrails ? `${split.guardrails}\n\n` : ""}${DISCRETION_GUIDE}\n\n${OPENING_NOTE}`;
 }
 
 // The coverage check reads the newest part of the call (~6k tokens is plenty
@@ -170,7 +203,13 @@ export const COVERAGE_TRANSCRIPT_CHARS = 24_000;
 export const VOICEMAIL_MESSAGE = "Hey {{first_name}}, it's Co. Sorry I missed you. I'll send you a text.";
 
 export const AGENT_DEFAULTS = {
-  llm: "claude-haiku-4-5",
+  llm: "claude-sonnet-4-6",
+  backupLlm: "claude-sonnet-4-5",
+  // Hume ran Co at temperature 1. The agent was left at ElevenLabs' default of 0,
+  // where the model repeats the prompt's own example lines almost word for word
+  // (2026-10-04: "sounds scripted"). 0.8 keeps it varied; the rules the prompt
+  // sets (one cue, no feeling labels) are re-measured at this temperature.
+  temperature: 0.8,
   ttsModel: "eleven_v4_turbo",
   turnEagerness: "eager",
   maxDurationSecs: 1800,
@@ -189,6 +228,7 @@ export function buildAgentConfig(o: {
   llm?: string;
   ttsModel?: string;
   turnEagerness?: string;
+  temperature?: number;
 }): Record<string, unknown> {
   const tool = (name: string, description: string, extra: Record<string, unknown> = {}) => ({
     type: "webhook",
@@ -229,6 +269,10 @@ export function buildAgentConfig(o: {
         model_id: o.ttsModel ?? AGENT_DEFAULTS.ttsModel,
         voice_id: o.voiceId,
         agent_output_audio_format: "ulaw_8000",
+        // The model writes plain text; ElevenLabs reads numbers and dates as words ("Oct 10" as "October tenth").
+        // Our tools take only dynamic variables, so no spoken value ever reaches one.
+        text_normalisation_type: "elevenlabs",
+        suggested_audio_tags: VOICE_CUES.map((tag) => ({ tag })),
       },
       turn: {
         turn_eagerness: o.turnEagerness ?? AGENT_DEFAULTS.turnEagerness,
@@ -237,12 +281,17 @@ export function buildAgentConfig(o: {
       conversation: { max_duration_seconds: AGENT_DEFAULTS.maxDurationSecs },
       agent: {
         first_message: OPENING_LINE,
+        // The opening is a whole personal line; "hello?" from whoever picks up must not cut it off.
+        disable_first_message_interruptions: true,
         language: "en",
         max_conversation_duration_message: "I need to wrap up for now. This was really good, I'll be in touch soon.",
         dynamic_variables: { dynamic_variable_placeholders: { first_name: "there", context_summary: "", user_id: "", call_token: "", direction: "" } },
         prompt: {
           prompt: promptForElevenLabs(o.prompt),
           llm: o.llm ?? AGENT_DEFAULTS.llm,
+          temperature: o.temperature ?? AGENT_DEFAULTS.temperature,
+          // If the main model is slow to start (4s), ElevenLabs falls to another; pin it to the same family so the voice and style don't shift mid-call.
+          backup_llm_config: { preference: "override", order: [AGENT_DEFAULTS.backupLlm] },
           tools: [
             tool(
               "assess_conversation_coverage",
@@ -371,8 +420,10 @@ async function chooseOpeningUnbounded(userId: string, firstName: string, directi
 // per member; the answer webhook falls back to building it if it's missing.
 const PREBUILT_TTL_MS = 5 * 60 * 1000;
 const prebuilt = new Map<string, { at: number; summary: Promise<string> }>();
-export function prebuildCallContext(userId: string, build: (userId: string) => Promise<string>, now = Date.now()): void {
-  prebuilt.set(userId, { at: now, summary: build(userId).catch(() => "") });
+export function prebuildCallContext(userId: string, build: (userId: string) => Promise<string>, now = Date.now()): Promise<string> {
+  const summary = build(userId).catch(() => "");
+  prebuilt.set(userId, { at: now, summary });
+  return summary;
 }
 export async function takeCallContext(userId: string, build: (userId: string) => Promise<string>, now = Date.now()): Promise<{ summary: string; prebuilt: boolean }> {
   const hit = prebuilt.get(userId);

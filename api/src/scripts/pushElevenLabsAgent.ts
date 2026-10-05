@@ -12,7 +12,7 @@ import { buildAgentConfig } from "../services/elevenLabsCalls.js";
 //
 // Reads ELEVENLABS_API_KEY, ELEVENLABS_VOICE_ID, API_URL (the tools' webhook
 // base) and, optionally, ELEVENLABS_AGENT_ID, ELEVENLABS_LLM,
-// ELEVENLABS_TTS_MODEL, ELEVENLABS_TURN_EAGERNESS. Pushes to whichever
+// ELEVENLABS_TTS_MODEL, ELEVENLABS_TURN_EAGERNESS, ELEVENLABS_TEMPERATURE. Pushes to whichever
 // environment those point at (dev locally; prod via `railway run`).
 // Code-side parts of the call prompt (the voice-cue guide, services/voiceCues.ts)
 // only reach the agent when this runs: push after any change, per environment.
@@ -33,6 +33,7 @@ async function main() {
     llm: process.env.ELEVENLABS_LLM || undefined,
     ttsModel: process.env.ELEVENLABS_TTS_MODEL || undefined,
     turnEagerness: process.env.ELEVENLABS_TURN_EAGERNESS || undefined,
+    temperature: process.env.ELEVENLABS_TEMPERATURE ? Number(process.env.ELEVENLABS_TEMPERATURE) : undefined,
   });
   if (dryRun) {
     const shown = JSON.parse(JSON.stringify(config));

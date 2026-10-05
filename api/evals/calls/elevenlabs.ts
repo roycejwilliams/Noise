@@ -60,14 +60,15 @@ check("the transcript reads the way Hume's did: user/assistant lines, empty turn
 check("the live history (JSON) becomes the same transcript, in its common shapes", transcriptFromHistory(JSON.stringify([{ role: "user", message: "hi" }, { role: "agent", message: "hey" }])) === "user: hi\nassistant: hey" && transcriptFromHistory(JSON.stringify({ messages: [{ role: "user", content: "yo" }] })) === "user: yo" && transcriptFromHistory("not json") === "" && transcriptFromHistory("") === "");
 check("a voicemail is told apart: the voicemail tool fired, or the call ended on it", hitVoicemail([{ role: "agent", message: null, tool_calls: [{ tool_name: "voicemail_detection" }] }]) && hitVoicemail([], "voicemail detected") && !hitVoicemail(turns, "end_call tool was called"));
 
-check("the agent's copy of the prompt says end_call, not hang_up, and knows it already said hello", promptForElevenLabs("call the hang_up tool; hang_up only after").startsWith("call the end_call tool; end_call only after") && /already opened the call with a short greeting in your own voice\. Don't greet them again/.test(promptForElevenLabs("x")));
+check("the agent's copy of the prompt says end_call, not hang_up, and knows it already said hello", promptForElevenLabs("call the hang_up tool; hang_up only after").startsWith("call the end_call tool; end_call only after") && /opening line has already been said[^.]*\. Don't greet them again or repeat it\./.test(promptForElevenLabs("x")));
 const prompt = readFileSync(new URL("../../prompts/co-system-prompt.md", import.meta.url), "utf8");
 check("the real prompt has no hang_up left in the agent's copy, and keeps its variables", !/\bhang_up\b/.test(promptForElevenLabs(prompt)) && /\{\{first_name\}\}/.test(prompt) && /\{\{context_summary\}\}/.test(prompt));
 
 const cfg: any = buildAgentConfig({ name: "Co (test)", prompt: "P {{first_name}}", voiceId: "voice-1", apiUrl: "https://test.copatible.com" });
 const cc = cfg.conversation_config;
 check("phone audio is mu-law 8kHz both ways (register-call needs it)", cc.asr.user_input_audio_format === "ulaw_8000" && cc.tts.agent_output_audio_format === "ulaw_8000");
-check("Royce's picks: Eleven v4 Turbo voice, Haiku 4.5 live, eager turn-taking", cc.tts.model_id === "eleven_v4_turbo" && cc.agent.prompt.llm === "claude-haiku-4-5" && cc.turn.turn_eagerness === "eager" && AGENT_DEFAULTS.ttsModel === "eleven_v4_turbo");
+// Royce chose Sonnet 4.6 for the live voice on 2026-10-04, after the comparison with Haiku 4.5.
+check("Royce's picks: Eleven v4 Turbo voice, Sonnet 4.6 live, eager turn-taking", cc.tts.model_id === "eleven_v4_turbo" && cc.agent.prompt.llm === "claude-sonnet-4-6" && cc.turn.turn_eagerness === "eager" && AGENT_DEFAULTS.ttsModel === "eleven_v4_turbo");
 check("overrides from the env reach the config", (buildAgentConfig({ name: "x", prompt: "p", voiceId: "v", apiUrl: "https://a.b", llm: "claude-sonnet-5", ttsModel: "eleven_flash_v2_5", turnEagerness: "normal" }) as any).conversation_config.agent.prompt.llm === "claude-sonnet-5");
 const tools = (cc.agent.prompt.tools as any[]).filter((t) => t.type === "webhook");
 check("both of Co's call tools are webhooks to our routes", tools.map((t) => t.name).join() === "assess_conversation_coverage,surface_recommendation" && tools.every((t) => t.type === "webhook" && t.api_schema.url === `https://test.copatible.com/co/el/tool/${t.name}`));
@@ -88,7 +89,7 @@ check("tools refuse a call without a valid token", /if \(!verifyCallToken\(userI
 
 // Voice-layer review fixes (2026-10-03).
 check("Co opens the call itself, so nobody waits in silence (the stored line is the fallback)", cc.agent.first_message === OPENING_LINE && OPENING_LINE === "Hey {{first_name}}, it's Co.");
-check("the opening can be set per call: the agent allows the override and registration sends it", (cfg as any).platform_settings.overrides.conversation_config_override.agent.first_message === true && /conversationConfigOverride: \{ agent: \{ firstMessage: o\.opening \}/.test(readFileSync(new URL("../../src/services/elevenLabsCalls.ts", import.meta.url), "utf8")) && (coSrc.match(/opening: await chooseOpening\(/g) ?? []).length === 2);
+check("the opening can be set per call: the agent allows the override and registration sends it", (cfg as any).platform_settings.overrides.conversation_config_override.agent.first_message === true && /conversationConfigOverride: \{ agent: \{ firstMessage: o\.opening \}/.test(readFileSync(new URL("../../src/services/elevenLabsCalls.ts", import.meta.url), "utf8")) && (coSrc.match(/opening: await openingForCall\(/g) ?? []).length === 2 && /chooseOpening\(userId, firstName, direction\)/.test(coSrc));
 {
   const seen = new Set<string>();
   for (let i = 0; i < 200; i++) seen.add(pickOpening({ direction: "outbound", firstCall: false, hour: 14, firstName: "Jordan", last: null, rand: () => i / 200 }).template);

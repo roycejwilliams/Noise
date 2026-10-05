@@ -31,7 +31,9 @@ export async function draftCompanionCheckin(
   curious?: CompanionCurious | null,
   story?: CompanionStory | null,
   advice?: CompanionAdvice | null,
+  heavy?: CompanionHeavy | null,
 ): Promise<{ text: string; rules: OutputRules } | null> {
+  if (heavy) return draftFromHeavy(firstName, heavy);
   if (advice) return draftFromAdvice(firstName, advice);
   if (story) return draftFromStory(firstName, story);
   if (thread) return draftFromThread(firstName, recap, thread, item ?? null);
@@ -49,6 +51,29 @@ One exception: if the recap shows Co barely knows them yet (little beyond joinin
   });
   if (!text) return null;
   return { text, rules: { maxSentences: 2, maxChars: 240 } };
+}
+
+// Something hard they shared yesterday (services/heavyMoment.ts): one quiet
+// check-in the next day. Described, not quoted, so it isn't parroted; the
+// reading of what they shared is theirs alone.
+export type CompanionHeavy = { about: string | null; quote: string | null; emotion: string; when: "yesterday"; endedAt?: string };
+
+async function draftFromHeavy(firstName: string, heavy: CompanionHeavy): Promise<{ text: string; rules: OutputRules } | null> {
+  const text = await draftProactive({
+    functionId: "agent.companionCheckin",
+    firstName,
+    facts: {
+      what_they_went_through: heavy.about,
+      their_own_words_for_context_only_never_quote_them_back: heavy.quote?.slice(0, 300),
+      when_they_told_you: heavy.when,
+      how_it_sat_with_them: heavy.emotion,
+    },
+    task: `They went through something hard (what_they_went_through) and you are checking on them the day after, the way a person from a close circle would who simply remembered. Write one short text tied to that specific thing, in their terms: ask how they are doing with it now, or how it sat overnight, in a few plain words. Let how_it_sat_with_them shape the tone only (gentler, lower pressure); never name the feeling or say what they must be feeling.
+Do not list or recap what they vented about, do not analyze it, give advice, or offer anything (no events, links, suggestions or introductions). Make no promise. Never hint that you scheduled this, remembered on purpose, keep notes, or are checking in on a schedule; it should read as a thought you had. Do not mention any other person. when_they_told_you is when they told you about it, not when the thing itself happens or happened: never say when the thing itself was, will be, or took place (it may be an upcoming event), and use no time words except "yesterday" for the conversation itself. Never say you have been thinking about them or about it, and never open with a line that would fit any person; start with the specific thing, not a greeting like "Hey". Not a wellness app: a club checking on one of its own, plain and warm. If what they went through involves hurting themselves, or was frustration with Co itself (its calls, search, results or replies) and not something in their life, return SKIP.`,
+    maxSentences: 2,
+  });
+  if (!text) return null;
+  return { text, rules: { maxSentences: 2, maxChars: 220, forbidden: [{ pattern: /\b(?:thinking|thought) (?:about|of)\b|\bon my mind\b|\bcrossed my mind\b/i, reason: "a claim about what Co was doing, and a line that fits anyone" }] } };
 }
 
 // Advice Co gave a few days ago (services/advice.ts): asks how it went, once.

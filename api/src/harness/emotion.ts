@@ -425,7 +425,7 @@ const NOUN_LABEL_RE = new RegExp(
   `\\b(?:(?:i'?m|i am) (?:hearing|sensing|picking up(?: on)?|noticing|detecting)|i can (?:hear|sense|feel))\\s+${QUAL}(?:${EMOTION_NOUNS})\\b${NOT_ABOUT}|\\b(?:there's|there is) ${QUAL}(?:${EMOTION_NOUNS}) in your (?:voice|tone|words)\\b(?! (?:note|memo|message|text|email|reply))`,
   "i",
 );
-const CALL_NOUN_LABEL_RE = new RegExp(`\\bi (?:can )?(?:hear|sense|notice|detect|feel)\\s+(?:the |that |a |an )?${QUAL}(?:${EMOTION_NOUNS})\\b|\\bthere's ${QUAL}(?:${EMOTION_NOUNS}) there\\b`, "i");
+const CALL_NOUN_LABEL_RE = new RegExp(`\\b(?:i'?m|i am) (?:hearing|sensing|picking up(?: on)?|noticing|detecting)\\s+(?:the |that |a |an )?${QUAL}(?:${EMOTION_NOUNS})\\b|\\bi (?:can )?(?:hear|sense|notice|detect|feel)\\s+(?:the |that |a |an )?${QUAL}(?:${EMOTION_NOUNS})\\b|\\bthere's ${QUAL}(?:${EMOTION_NOUNS}) there\\b`, "i");
 
 export function checkNoEmotionLabel(draft: string): GateCheck {
   const m = draft.match(LABEL_RE) ?? draft.match(NOUN_LABEL_RE);

@@ -83,7 +83,7 @@ export function cueAudit(coLines: string[]): CueAudit {
 
 // The call prompt's section on cues (voice only; texts never get it).
 export const CUE_GUIDE = `How you sound: on a call you may put one cue in square brackets right before a phrase, when it truly fits the moment. It shapes the next few words of your voice; it is never said aloud. The only cues you may use: ${VOICE_CUES.map((c) => `[${c}]`).join(", ")}.
-- Most replies have no cue. Never more than one in a reply.
+- Most replies have no cue, fewer than half. Never more than one in a reply: if you've used one, the rest of the reply is plain.
 - [softly] for something heavy they've shared; [warmly] when you're glad for them or welcoming them; [thoughtful] before a considered question or reflection; [laughs] only when something is genuinely funny and they're laughing too, never at them and never to soften hard news.
 - Stay composed and warm: never theatrical, never flirtatious.
 - Never act out or mirror their feeling back at them (no sighing because they sighed), and never name it ("you sound stressed").`;
