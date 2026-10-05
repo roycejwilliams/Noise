@@ -125,6 +125,13 @@ export const ABILITIES: Ability[] = [
     use: "Write an email for them to send when they ask you to reach out to someone or email a place: to, subject and body, in their voice and first person, short and specific. You can't send email yourself; the draft goes to them as its own text, with a tap-to-send link that opens their own mail app filled in, and nothing goes anywhere unless they send it. The address must be one you read on a page this turn, one they gave you, or one in your notes, because a guessed address reaches the wrong person: when you don't have one, read the place's own page for it first. A listing on a marketplace (Tagvenue, Peerspace, The Bash) is reached through its own contact form, so draft without an address and they'll paste it there. When they ask you to email someone, write the draft in this turn rather than asking whether to.",
   },
   {
+    id: "email_plan",
+    can: "When they ask Co to plan something with more than one step or time (a day out, a night, a trip, a few stops), Co can send them the plan as a one-page sheet (a PDF), by text in this conversation, or by email with a calendar hold for each time when they ask for email, to the email they gave Co. It goes only to them, never to anyone else; Co can't send things to other people for them.",
+    tool: "emailPlan",
+    limits: { perTurn: 1, perDay: 2 },
+    use: "Send them a plan as a one-page sheet when they ask you to plan something with more than one step or time. By default it goes by text, the PDF in this conversation: leave sendBy out. Set it to email, or both, only when they ask for it by email or on their calendar in their own words; never on your own. Build it from what you found or read this turn and what they said: for a step that is an event you found, give its link and leave the time and place to its own record; for any other step give what, where, address and a short detail, and the time as when (2026-10-11T16:30, their time). Put times only in when. The title, note and every step use only places, names and numbers you read this turn or they said, so title it from their words (not a region or a venue you made up). No links. Write the note as one or two plain sentences, in your voice. Don't use it for a single suggestion (answer by text), and don't offer it as a menu: when they asked for a plan, send it. Afterwards, say in a line where it is (in this conversation, or in their email with a calendar hold for each time); don't list the steps again.",
+  },
+  {
     id: "working_notes",
     can: "Co keeps working notes for what it's finding for them across texts, so a new detail picks up where the last text left off.",
     tool: "updateNotes",
