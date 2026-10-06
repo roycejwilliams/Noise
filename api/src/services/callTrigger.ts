@@ -4,6 +4,7 @@ import type { Server as IOServer } from "socket.io";
 import pool from "../db/db.js";
 import { generateEmbedding } from "./embeddings.js";
 import { issueCallToken, prebuildCallContext } from "./elevenLabsCalls.js";
+import { prebuildCallBriefing } from "./callBriefing.js";
 import { prebuildOpening } from "./callOpening.js";
 import { buildCallContextSummary } from "./callContext.js";
 import { recordDecision } from "../harness/core.js";
@@ -73,6 +74,8 @@ export async function triggerCallForUser(
   const summary = prebuildCallContext(userId, buildCallContextSummary);
   // And the opening line, written from that context while it rings (services/callOpening.ts).
   prebuildOpening(userId, user.first_name ?? "", "outbound", summary);
+  // And the clock and what Co has found for them, so the call never waits on a lookup (services/callBriefing.ts).
+  prebuildCallBriefing(userId);
   const call = await twilioClient.calls.create({
     to: user.phone_number,
     from: process.env.TWILIO_PHONE_NUMBER!,
