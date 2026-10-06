@@ -91,6 +91,7 @@
     "evals/calls/callEvals.ts",
     "evals/proactive/pause.ts",
     "evals/testmember/simGuard.ts",
-    "evals/asks/lifecycle.ts"
+    "evals/asks/lifecycle.ts",
+    "evals/asks/split.ts"
   ]
 }

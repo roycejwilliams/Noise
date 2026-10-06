@@ -10,6 +10,7 @@
 //   - Anything about who talked to whom. "Which matches landed" is a count, never a pair.
 // It has NO send path: sending it to the event host is paused (Royce, 2026-10-05). It is built on request and shown
 // first, by src/scripts/partnerReadout.ts, which only previews.
+import { isOpenAsk } from "../harness/profileWrite.js";
 import pool from "../db/db.js";
 import { escapeHtml, quietEmail } from "./emailDesign.js";
 
@@ -147,7 +148,7 @@ export async function gatherStats(eventId: string, eventName: string, classify: 
     const { rows } = await pool.query(`SELECT intent FROM co_profiles WHERE user_id = ANY($1::uuid[])`, [ids]);
     for (const r of rows) {
       const intent = Array.isArray(r.intent) ? r.intent : [];
-      const open = intent.filter((i: any) => i?.type === "seeking" && typeof i?.text === "string" && !i?.resolved_at && i?.status !== "resolved");
+      const open = intent.filter((i: any) => isOpenAsk(i) && i?.type === "seeking"); // an ask, never a goal
       if (open.length) asks.push(String(open[open.length - 1].text));
     }
   }

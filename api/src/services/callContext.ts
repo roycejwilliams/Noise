@@ -8,7 +8,7 @@ import { writeMemory } from "./memory.js";
 import { MODELS } from "../models.js";
 import { getEmotionalContext, renderEmotionalContext } from "../harness/emotion.js";
 import { getPersonSnapshot, renderSnapshot } from "../harness/personSnapshot.js";
-import { latestAskEntry } from "../harness/profileWrite.js";
+import { latestAskEntry, goalEntries } from "../harness/profileWrite.js";
 
 // A 1-2 sentence call summary: narrow work, Haiku.
 const SUMMARY_MODEL = MODELS.haiku;
@@ -137,7 +137,8 @@ export async function buildContextSummary(userId: string): Promise<string> {
       profile?.life_chapters?.length ? `Life chapter: ${profile.life_chapters.join(", ")}` : null,
       profile?.city ? `City: ${profile.city}` : null,
       emotionalLine ? `How they've been feeling:\n${emotionalLine}` : null,
-      profile?.goals?.length ? `Goals: ${profile.goals.slice(0, 3).join("; ")}` : null,
+      // Direction, not errands: profile goals plus the goal-typed entries (never an ask).
+      [...(profile?.goals ?? []), ...goalEntries(profile?.intent).map((g) => String(g.text))].length ? `Goals: ${[...(profile?.goals ?? []), ...goalEntries(profile?.intent).map((g) => String(g.text))].slice(0, 4).join("; ")}` : null,
       profile?.blockers?.length ? `Blockers: ${profile.blockers.slice(0, 2).join("; ")}` : null,
       !openAsks.length && latestAsk?.text ? `Stated ask: ${latestAsk.text}` : null,
       latestIntent?.wants?.length ? `Wants: ${latestIntent.wants.slice(0, 2).join(", ")}` : null,

@@ -1,3 +1,4 @@
+import { runGoalSweep } from "../services/goalSweep.js";
 import cron from "./cron.js";
 import { sendDueCoEventAnnouncements } from "../services/coEventAnnouncement.js";
 import { DateTime } from "luxon";
@@ -519,64 +520,18 @@ export function registerJobs(io: Server) {
     }
   });
 
-  // Active search for people with NO open stated ask (Royce, 2026-09-14: "it
-  // should be actively searching for all 3 tiers"). Search text is built
-  // from what they've shared (goals, interests, direction, wants), the
-  // drafts say so instead of claiming they asked, and there's no network
-  // surfacing (that needs a real ask). Same daily/3-day pacing as the ask
-  // sweep, kept per person in profile_surfacing_state.
+  // Goal-based discovery (Royce, 2026-09-14: "it should be actively searching for all 3 tiers"; 2026-10-06: split from asks).
+  // Search text comes from where they are headed (goals, interests, direction), never from an ask; the drafts say so instead of
+  // claiming they asked, and there is no network surfacing (that needs a real ask). Every member with a direction has their own budget
+  // (one attempt per 20 hours, one find per 3 days, services/goalSweep.ts), whether or not they have open asks.
   cron.schedule("30 * * * *", async () => {
     try {
-      const { rows } = await pool.query(
-        `SELECT u.id AS user_id, u.first_name, u.phone_number, cp.city, cp.goals, cp.activity_preferences,
-                cp.long_term_direction, cp.intent, pss.last_attempted_at,
-                (pss.last_surfaced_at IS NULL OR pss.last_surfaced_at <= NOW() - INTERVAL '3 days') AS cooldown_cleared
-         FROM users u
-         JOIN co_profiles cp ON cp.user_id = u.id
-         LEFT JOIN profile_surfacing_state pss ON pss.user_id = u.id
-         WHERE u.sms_opted_out = false AND u.phone_number IS NOT NULL
-           AND NOT EXISTS (SELECT 1 FROM ask_checkins ac WHERE ac.user_id = u.id AND ac.resolved_at IS NULL)
-           AND (array_length(cp.goals, 1) > 0 OR array_length(cp.activity_preferences, 1) > 0
-                OR COALESCE(cp.long_term_direction, '') <> '' OR jsonb_array_length(COALESCE(cp.intent, '[]'::jsonb)) > 0)
-           AND (pss.last_attempted_at IS NULL OR pss.last_attempted_at <= NOW() - INTERVAL '20 hours')
-         LIMIT 50`,
-      );
-      await runWithConcurrency(rows, 3, async (row: any) => {
-        const intents = Array.isArray(row.intent) ? row.intent : [];
-        const latest = intents[intents.length - 1] ?? {};
-        const parts = [
-          row.goals?.length ? `goals: ${row.goals.join("; ")}` : null,
-          row.activity_preferences?.length ? `enjoys: ${row.activity_preferences.join(", ")}` : null,
-          row.long_term_direction ? `direction: ${row.long_term_direction}` : null,
-          latest.wants?.length ? `wants: ${latest.wants.join(", ")}` : null,
-          latest.concrete_preferences?.length ? `specifics: ${latest.concrete_preferences.join(", ")}` : null,
-        ].filter(Boolean);
-        if (!parts.length) return;
-        await pool.query(
-          `INSERT INTO profile_surfacing_state (user_id, last_attempted_at) VALUES ($1, NOW())
-           ON CONFLICT (user_id) DO UPDATE SET last_attempted_at = NOW()`,
-          [row.user_id],
-        );
-        try {
-          await attemptEventSurfacing({
-            askId: PROFILE_ASK_ID,
-            userId: row.user_id,
-            firstName: row.first_name,
-            phoneNumber: row.phone_number,
-            askText: parts.join(". ").slice(0, 600),
-            fromProfile: true,
-            city: row.city ?? null,
-            goals: row.goals ?? null,
-            activityPreferences: row.activity_preferences ?? null,
-            cooldownCleared: row.cooldown_cleared,
-          });
-        } catch (err: any) {
-          console.error(`Profile surfacing sweep failed for ${row.user_id}:`, err?.message ?? err);
-        }
-      });
+      // Goal-based discovery (services/goalSweep.ts): every member with a direction has their own budget; open asks neither block it
+      // nor boost it (2026-10-06: it used to run only for members with NO open ask, so engaged members got less discovery).
+      await runGoalSweep(runWithConcurrency);
       await runDispatch();
     } catch (error) {
-      console.error("Profile surfacing sweep cron error:", error);
+      console.error("Goal sweep cron error:", error);
     }
   });
 

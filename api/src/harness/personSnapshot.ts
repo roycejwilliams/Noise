@@ -13,6 +13,7 @@
 // statements replace older ones; nothing about Co's own performance. The
 // knowledge eval (evals/knowledge) checks a stale profile plus newer texts
 // produce the newer facts.
+import { goalEntries } from "./profileWrite.js";
 import { notToTeammate } from "../services/teamLines.js";
 import { anthropic } from "@ai-sdk/anthropic";
 import { generateText } from "ai";
@@ -37,6 +38,8 @@ export type SnapshotInputs = {
   previous: PersonSnapshot | null;
   recentStatements: { at: string; text: string }[]; // their own words, oldest first
   openAsks: string[];
+  // Where they say they are headed: goal-typed entries only, never an ask. Orientation, not a search.
+  goals?: string[];
   outcomes: string[];
 };
 
@@ -51,8 +54,11 @@ ${input.previous ? `Your previous picture (may be out of date):\n${JSON.stringif
 What ${input.firstName} has said recently, oldest first (their own words and call summaries):
 ${input.recentStatements.map((s) => `- [${s.at}] ${s.text}`).join("\n") || "(nothing recent)"}
 
-What they're asking Co to look for right now:
+What they're asking Co to look for right now (errands, not who they are):
 ${input.openAsks.map((a) => `- ${a}`).join("\n") || "(nothing open)"}
+
+Where they say they are headed (direction):
+${(input.goals ?? []).map((g) => `- ${g}`).join("\n") || "(nothing stated)"}
 
 How past suggestions went:
 ${input.outcomes.map((o) => `- ${o}`).join("\n") || "(no results yet)"}
@@ -129,7 +135,7 @@ export async function getPersonSnapshot(userId: string): Promise<PersonSnapshot 
 }
 
 async function gatherInputs(userId: string): Promise<SnapshotInputs | null> {
-  const [user, statements, asks, outcomes, previous] = await Promise.all([
+  const [user, statements, asks, outcomes, previous, intentRow] = await Promise.all([
     pool.query(`SELECT first_name FROM users WHERE id = $1`, [userId]),
     pool.query(
       `SELECT created_at, content FROM co_memories
@@ -141,6 +147,7 @@ async function gatherInputs(userId: string): Promise<SnapshotInputs | null> {
     pool.query(`SELECT ask_text FROM ask_checkins WHERE user_id = $1 AND resolved_at IS NULL ORDER BY created_at DESC LIMIT 5`, [userId]),
     loadOutcomeLines(userId),
     getPersonSnapshot(userId),
+    pool.query(`SELECT intent FROM co_profiles WHERE user_id = $1`, [userId]).catch(() => ({ rows: [] as any[] })),
   ]);
   if (!user.rows[0]) return null;
   return {
@@ -150,6 +157,7 @@ async function gatherInputs(userId: string): Promise<SnapshotInputs | null> {
       .reverse()
       .map((r: any) => ({ at: new Date(r.created_at).toISOString().slice(0, 16), text: String(r.content).replace(/^User said: /, "").slice(0, 400) })),
     openAsks: asks.rows.map((r: any) => r.ask_text),
+    goals: goalEntries(intentRow.rows[0]?.intent).map((g) => String(g.text)).slice(0, 6),
     outcomes,
   };
 }
