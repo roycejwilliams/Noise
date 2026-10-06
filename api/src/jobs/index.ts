@@ -10,6 +10,7 @@ import { attemptEventSurfacing, PROFILE_ASK_ID } from "../services/eventSurfacin
 import { attemptNetworkSurfacing } from "../services/networkIntroNudge.js";
 import { scoreGuestListForEvent } from "../services/eventScoring.js";
 import { runArrivalAsks, runPresencePoll } from "../services/eventPresence.js";
+import { runEventBriefs } from "../services/eventBrief.js";
 import { releaseStrandedClaims } from "../services/strandedClaims.js";
 import { listCalendarEvents, getEventDetails } from "../services/luma.js";
 import { triggerCallForUser } from "../services/callTrigger.js";
@@ -624,6 +625,17 @@ export function registerJobs(io: Server) {
       if (sent) console.log(`eventPresence: sent ${sent} arrival ask(s)`);
     } catch (error: any) {
       console.error("Arrival ask cron error:", error?.message ?? error);
+    }
+  });
+
+  // The member brief (services/eventBrief.ts, 2026-10-05): the one RSVP question that lets it name them, and the
+  // brief itself the day before. Both only queue; the daily pick sends within their hours and caps.
+  cron.schedule("*/15 * * * *", async () => {
+    try {
+      const r = await runEventBriefs();
+      if (r.asks || r.briefs) console.log(`eventBrief: queued ${r.asks} name question(s), ${r.briefs} brief(s)`);
+    } catch (error: any) {
+      console.error("Event brief cron error:", error?.message ?? error);
     }
   });
 

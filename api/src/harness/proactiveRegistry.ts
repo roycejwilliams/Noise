@@ -4,6 +4,7 @@
 // and what to record once it actually went out, or was dropped.
 import pool from "../db/db.js";
 import { writeMemory } from "../services/memory.js";
+import { MODELS } from "../models.js";
 import { draftProactive, nameTokens, nextLocalHour, type Candidate, type DraftResult, type ProactiveRegistry } from "./proactive.js";
 import { draftEventReveal } from "../agent/eventDiscoverySurfacing.js";
 import { draftAskCheckin, type AskCheckinPayload } from "../agent/askCheckin.js";
@@ -343,6 +344,131 @@ export const proactiveRegistry: ProactiveRegistry = {
       // It asked what they want from the event when Co didn't know: that's the ask, not a second one later.
       await pool.query(`INSERT INTO event_ask_solicitations (event_id, person_id, solicited_at) VALUES ($1, $2, NOW()) ON CONFLICT DO NOTHING`, [p.eventId, c.userId]).catch(() => {});
       await writeMemory(c.userId, "event_pre_arrival", `Texted them before "${p.name}"`);
+    },
+  },
+
+  // After they tell Co who they met at a Co event: what stood out, in their words, and a note for each person worth
+  // keeping, for them to send. Built from their own message only (services/eventFollowThrough.ts).
+  event_followthrough: {
+    async draft(c, person) {
+      const F = await import("../services/eventFollowThrough.js");
+      const p = c.payload;
+      const r = await F.buildFollowThrough({ userId: c.userId, firstName: person.firstName, eventId: p.eventId, eventName: p.name, theirMessage: String(p.theirMessage ?? "") });
+      if ("skip" in r) return skip(r.skip);
+      c.payload.people = r.people;
+      // The harness's text rules (one question, sentence count) are for what Co says: that is the recap. The notes are the
+      // member's own words to send; they are checked line by line in services/eventFollowThrough.ts (noteProblem).
+      return { messages: r.messages, text: r.messages[0], rules: { maxSentences: 6, maxChars: 900, mustIncludeAny: nameTokens(p.name).length ? nameTokens(p.name) : [p.name] } };
+    },
+    async onSent(c) {
+      const F = await import("../services/eventFollowThrough.js");
+      await F.recordFollowThrough(c.userId, c.payload.eventId, Number(c.payload.people) || 0);
+      await writeMemory(c.userId, "event_follow_through", `Sent them notes to follow up with people they met at "${c.payload.name}"`);
+    },
+  },
+
+  // The one question at RSVP that lets the member brief name them (services/eventBrief.ts). The words are fixed
+  // in code: a yes or a no is all it takes, and no answer means no name.
+  brief_name_ask: {
+    async draft(c) {
+      const B = await import("../services/eventBrief.js");
+      const p = c.payload;
+      const f = await B.presenceFlags(p.eventId, c.userId);
+      if (f.asked || f.notGoing) return skip("already asked, or not going");
+      const messages = B.nameAskMessages(p.name);
+      return { messages, text: messages.join(" "), rules: { maxSentences: 4, maxChars: 320, mustIncludeAny: nameTokens(p.name).length ? nameTokens(p.name) : [p.name] } };
+    },
+    async onSent(c) {
+      await pool.query(
+        `INSERT INTO event_presence (event_api_id, user_id, name_asked_at, name_ask_until) VALUES ($1, $2, NOW(), $3)
+         ON CONFLICT (event_api_id, user_id) DO UPDATE SET name_asked_at = COALESCE(event_presence.name_asked_at, NOW()), name_ask_until = $3`,
+        [c.payload.eventId, c.userId, c.payload.startAt],
+      );
+      await writeMemory(c.userId, "event_brief_ask", `Asked if Co may name them in the member brief for "${c.payload.name}"`);
+    },
+  },
+
+  // The day before a Co event: how many are coming and the two or three worth finding, by name only when they
+  // said yes at RSVP, each with a reason from their own stated ask (services/eventBrief.ts).
+  event_brief: {
+    async draft(c, person) {
+      const B = await import("../services/eventBrief.js");
+      const { eventMembers } = await import("../services/eventPresence.js");
+      const { gateShareReason } = await import("./matchGate.js");
+      const { checkDraftFull } = await import("./introConsent.js");
+      const { privateFactLeak } = await import("../services/coFacts.js");
+      const p = c.payload;
+      const f = await B.presenceFlags(p.eventId, c.userId);
+      if (f.briefSent || f.notGoing) return skip("already sent, or not going");
+      const fetched = await eventMembers(p.eventId).catch(() => null);
+      // A guest-list outage is not "no longer registered": try again shortly instead of dropping their brief for good.
+      if (!fetched) return { defer: new Date(Date.now() + 30 * 60_000), reason: "couldn't read the guest list just now" };
+      const members = fetched;
+      if (!members.some((m) => m.user_id === c.userId)) return skip("no longer registered");
+      const others = members.filter((m) => m.user_id !== c.userId);
+      const [flags, ranked] = await Promise.all([B.namedYes(p.eventId, others.map((m) => m.user_id)), B.rankingFor(p.eventId, c.userId)]);
+      const chosen = B.pickNamed({ ranked, recipientId: c.userId, members: others, nameOk: flags.yes, notGoing: flags.notGoing });
+      // The same privacy check the in-room nudge uses, per person named: a reason that fails it is dropped, and the person with it.
+      const picks: typeof chosen.picks = [];
+      let unnamedFits = chosen.unnamedFits;
+      for (const pk of chosen.picks) {
+        if (await gateShareReason(c.userId, pk.id, pk.reason, "event_brief")) picks.push(pk);
+        else unnamedFits++;
+      }
+      if (!B.worthSending(picks, unnamedFits)) return skip("nobody to name and too few fit: the pre-arrival text covers it");
+      const allowed = new Set(picks.map((x) => x.id));
+      const zone = p.timezone ?? null;
+      const { DateTime } = await import("luxon");
+      const z = zone && DateTime.now().setZone(zone).isValid ? zone : "America/Los_Angeles";
+      const start = DateTime.fromISO(p.startAt, { zone: z });
+      const when = `${start.hasSame(DateTime.now().setZone(z), "day") ? "today" : "tomorrow"} at ${start.toFormat("h:mm a")}`;
+      const guestFacts = picks.map((x) => `${x.firstName}: ${x.reason}`).join(" | ");
+      const run = async (feedback: string | null) =>
+        draftProactive({
+          functionId: "agent.eventBrief",
+          firstName: person.firstName,
+          model: MODELS.sonnet,
+          maxSentences: 6,
+          facts: {
+            event: p.name,
+            when,
+            ...(p.venue ? { venue: p.venue } : {}),
+            members_confirmed: `${members.length}`,
+            ...(picks.length ? { people_to_find_each_said_yes_to_being_named: guestFacts } : {}),
+            ...(unnamedFits >= B.BRIEF.minCountToMention ? { others_who_fit_their_ask_no_names: `${unnamedFits} (a count only: never describe or name them)` } : {}),
+          },
+          task: `${when.startsWith("today") ? "It's today" : "The day before"}: they're going to ${p.name}. Write the member brief in 3 to 4 short paragraphs separated by a blank line, each one a message bubble. First: how many members are confirmed and when it starts. ${picks.length ? `Then, for each person in people_to_find (name, then why in one line, using only the words given after their name as what they're looking for; say it as what that person is looking for, in your own words, never with "said", "told" or "wants to meet", and never that they want to meet the reader). ` : ""}${unnamedFits >= B.BRIEF.minCountToMention ? "Then one line that a few more who fit what they're after will be there, without saying who or what they do. " : ""}Warm and brief, no sign-off. Never name anyone not listed, never promise an introduction, never give a phone number or email.${feedback ? ` Your last draft was rejected: ${feedback}. Fix that.` : ""}`,
+        });
+      const verify = async (text: string): Promise<string | null> => {
+        const outsider = B.namesOutsiders(text, members, allowed, c.userId);
+        if (outsider) return `it names ${outsider}, who didn't say yes to being named`;
+        if (B.briefBubbles(text).length > B.BRIEF.maxBubbles) return `too many bubbles (max ${B.BRIEF.maxBubbles})`;
+        for (const pk of picks) {
+          const r = await checkDraftFull(text, { otherFirstName: pk.firstName, otherOptedIn: false, recipientOptedIn: false, recipientFirstName: person.firstName, otherStatedAsks: [pk.reason] });
+          if (!r.ok) return r.checks.filter((k) => !k.pass).map((k) => k.reason).join("; ") || "breaks the consent rules";
+          const leak = await privateFactLeak(text, pk.id).catch(() => null);
+          if (leak) return `carries something only ${pk.firstName} may see`;
+        }
+        return null;
+      };
+      let text = await run(null);
+      if (!text) return skip("model chose SKIP");
+      let why = await verify(text);
+      if (why) {
+        const again = await run(why);
+        const whyAgain = again ? await verify(again) : "no redraft";
+        if (!again || whyAgain) return skip(`brief broke a rule after one redraft (${whyAgain ?? why})`);
+        text = again;
+      }
+      const messages = B.briefBubbles(text);
+      c.payload.namedIds = picks.map((x) => x.id);
+      c.payload.confirmed = members.length;
+      return { messages, text, rules: { maxSentences: 7, maxChars: 760, mustIncludeAny: nameTokens(p.name).length ? nameTokens(p.name) : [p.name] } };
+    },
+    async onSent(c) {
+      const B = await import("../services/eventBrief.js");
+      await B.recordBriefSent(c.payload.eventId, c.userId, Array.isArray(c.payload.namedIds) ? c.payload.namedIds : [], Number(c.payload.confirmed) || 0);
+      await writeMemory(c.userId, "event_brief", `Sent them the member brief for "${c.payload.name}"`);
     },
   },
 

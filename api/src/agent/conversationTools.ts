@@ -457,6 +457,29 @@ export function createConversationTools(ctx: ConversationToolContext) {
         return { ok: true, event: today.name };
       },
     }),
+    answerBriefName: tool({
+      description: toolUse("answerBriefName"),
+      inputSchema: z.object({ answer: z.enum(["yes", "no"]), theirWords: z.string().describe("Their yes or no, copied exactly from this message.") }),
+      execute: async ({ answer, theirWords }) => {
+        const B = await import("../services/eventBrief.js");
+        if (B.readNameAnswer(theirWords, ctx.resolvedContent) !== answer) {
+          notDone("Their answer about being named wasn't recorded: it isn't a clear yes or no in their words.");
+          return { ok: false, error: "Only their own clear yes or no, from this message, counts. If it was unclear, ask once more." };
+        }
+        if (ctx.dryRun) return { ok: true, note: "dry run" };
+        const done = await B.recordNameAnswer(ctx.userId, answer, theirWords);
+        if (done && "ambiguous" in done) {
+          notDone("Their answer about being named wasn't recorded: there is more than one event question open.");
+          return { ok: false, error: "More than one event question is open. Ask which event they mean, then record it." };
+        }
+        if (!done) {
+          notDone("Their answer about being named wasn't recorded: there's no brief question open for them.");
+          return { ok: false, error: "There's no open question about the member brief for them." };
+        }
+        ctx.facts?.add("did_this_turn", answer === "yes" ? "They said yes: Co may mention them by name in the member brief for that event, with only what they're looking for as the reason. They can change that any time." : "They said no: Co won't name them in the member brief for that event.");
+        return { ok: true, answer };
+      },
+    }),
     updateGoing: tool({
       description: toolUse("updateGoing"),
       inputSchema: z.object({ going: z.boolean(), theirWords: z.string().describe("Their words, copied exactly.") }),
