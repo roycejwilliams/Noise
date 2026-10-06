@@ -2,6 +2,7 @@ import { anthropic } from "@ai-sdk/anthropic";
 import { generateText } from "ai";
 import { MODELS } from "../models.js";
 import { JEV_SURE, noteRaceOutcome, raceWithJev, readTextSignals } from "./jevGateway.js";
+import { sealedTelemetry } from "./privateTurn.js";
 
 // Jev through Vercel's gateway with zero data retention races Haiku
 // (services/jevGateway.ts raceWithJev): Jev decides when it's sure, Haiku
@@ -32,7 +33,7 @@ async function haikuSeekingMode(message: string, recentConversation: string, fun
     const { text } = await generateText({
       model: anthropic(MODELS.haiku),
       abortSignal,
-      experimental_telemetry: { isEnabled: true, functionId },
+      experimental_telemetry: { ...sealedTelemetry(), isEnabled: true, functionId },
       prompt: `Read this text conversation with Co, and their latest message.
 
 Recent conversation, in order:

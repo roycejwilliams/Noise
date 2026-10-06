@@ -8,6 +8,7 @@ import { anthropic } from "@ai-sdk/anthropic";
 import { generateText } from "ai";
 import pool from "../db/db.js";
 import { MODELS } from "../models.js";
+import { sealedTelemetry } from "./privateTurn.js";
 
 export type AskKind = "find" | "help";
 
@@ -17,7 +18,7 @@ export async function classifyAsk(text: string): Promise<AskKind> {
       generateText({
         model: anthropic(MODELS.haiku),
         maxOutputTokens: 10,
-        experimental_telemetry: { isEnabled: true, functionId: "askKind.classify" },
+        experimental_telemetry: { ...sealedTelemetry(), isEnabled: true, functionId: "askKind.classify" },
         prompt: `Someone asked Co for this: "${text.slice(0, 300)}"
 
 Answer "find" if Co could meet it by finding something out in the world: an event, a group or community (including researching which ones exist), people to meet or befriend (even when it's worded as wanting to connect with a kind of person), a program or an opportunity.

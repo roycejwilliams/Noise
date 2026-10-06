@@ -6,6 +6,7 @@ import { triggerCallForUser } from "../services/callTrigger.js";
 import { sendExempt } from "../harness/proactive.js";
 import { CO_VOICE, CO_TEXT_CHANNEL } from "../services/coVoice.js";
 import { MODELS } from "../models.js";
+import { sealedTelemetry } from "../services/privateTurn.js";
 
 // One-line heads-up draft checked by length; narrow work, so Haiku.
 const REMINDER_MODEL = MODELS.haiku;
@@ -96,7 +97,7 @@ export async function sendDueReminders(): Promise<void> {
     try {
       const { text: variedReminder } = await generateText({
         model: anthropic(REMINDER_MODEL),
-        experimental_telemetry: {
+        experimental_telemetry: { ...sealedTelemetry(),
           isEnabled: true,
           functionId: "jobs.scheduledCallReminder",
         },

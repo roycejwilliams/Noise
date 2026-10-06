@@ -10,6 +10,7 @@ import { generateText } from "ai";
 import { MODELS } from "../models.js";
 import { CO_VOICE } from "./coVoice.js";
 import { cleanCoMessage } from "./sendblue.js";
+import { sealedTelemetry } from "./privateTurn.js";
 
 export type LineAsk = {
   // What the line is for, plainly.
@@ -46,7 +47,7 @@ export async function lineInVoice(ask: LineAsk): Promise<{ text: string; written
       generateText({
         model: anthropic(MODELS.sonnet),
         maxOutputTokens: 200,
-        experimental_telemetry: { isEnabled: true, functionId: "voiceLine" },
+        experimental_telemetry: { ...sealedTelemetry(), isEnabled: true, functionId: "voiceLine" },
         prompt: `${CO_VOICE}
 
 Write one text message from Co.

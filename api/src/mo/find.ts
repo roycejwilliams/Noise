@@ -20,6 +20,7 @@ import { searchPostsWithAuthors, type MoPost } from "./xApi.js";
 import { MO, inCity, locationInCity, neutralPronouns, placeOk, quoteIsTheirs, suppressionKeys } from "./rules.js";
 import { draftOutreach, OPENER_IDS, type DmStyle, type OpenerId } from "./draft.js";
 import { screenPosts } from "./jev.js";
+import { sealedTelemetry } from "../services/privateTurn.js";
 
 type Wants = { wants: string[]; event: string | null };
 
@@ -80,7 +81,7 @@ async function planQueries(w: Wants): Promise<Queries> {
   ]);
   const { text } = await generateText({
     model: anthropic(MODELS.haiku),
-    experimental_telemetry: { isEnabled: true, functionId: "mo.planQueries" },
+    experimental_telemetry: { ...sealedTelemetry(), isEnabled: true, functionId: "mo.planQueries" },
     prompt: `Co is a private, invite-only club for founders and builders in ${MO.city}. Plan searches for people worth inviting.
 
 What the network is short on right now (from Co, general terms):
@@ -129,7 +130,7 @@ export async function judge(posts: MoPost[], themes: string[], event: string | n
   const { text } = await generateText({
     model: anthropic(MODELS.sonnet),
     providerOptions: { anthropic: { effort: "low" } },
-    experimental_telemetry: { isEnabled: true, functionId: "mo.judge" },
+    experimental_telemetry: { ...sealedTelemetry(), isEnabled: true, functionId: "mo.judge" },
     prompt: `Co is a private, invite-only club in ${MO.city} for people who build things and show up for others. You're deciding who is genuinely worth a personal invitation.
 
 What the club is looking for: ${themes.join("; ") || "founders, designers, engineers building early products"}
@@ -165,7 +166,7 @@ async function linkedinCandidates(query: string, themes: string[]): Promise<Link
     tools: { web_search: anthropic.tools.webSearch_20250305({ maxUses: 2 }) },
     stopWhen: stepCountIs(3),
     timeout: 60_000,
-    experimental_telemetry: { isEnabled: true, functionId: "mo.linkedin" },
+    experimental_telemetry: { ...sealedTelemetry(), isEnabled: true, functionId: "mo.linkedin" },
     prompt: `Run this web search: ${query}
 
 From the search results only (don't open or log into LinkedIn), list up to 4 people in ${MO.city} whose headline or snippet shows they fit: ${themes.join("; ")}. For each: "name", "headline" (as shown), "snippet" (the result's text as shown, copied exactly), "location" (as shown, or ""), "url" (their linkedin.com/in/ link as shown), "reason" (one plain sentence; their name or "they", never "he" or "she"), and "quote" (4 to 20 words copied exactly from the headline or snippet).

@@ -29,6 +29,7 @@ import { getTimezoneForCity } from "../services/geocoding.js";
 import { recordDecision, type GateCheck } from "./core.js";
 import { enqueueCandidate, nextLocalHour } from "./proactive.js";
 import type { WindowFollowUpPayload } from "../agent/windowFollowUp.js";
+import { sealedTelemetry } from "../services/privateTurn.js";
 
 export type ThreadStatus = "open" | "waiting" | "resolved" | "changed";
 export type NextStep = "check_in" | "look_up" | "remember" | "suggest_someone";
@@ -308,7 +309,7 @@ export async function updateMemberThreads(userId: string): Promise<void> {
     const { text } = await generateText({
       model: anthropic(MODELS.sonnet),
       providerOptions: { anthropic: { effort: "low" } },
-      experimental_telemetry: { isEnabled: true, functionId: "memberThreads.update" },
+      experimental_telemetry: { ...sealedTelemetry(), isEnabled: true, functionId: "memberThreads.update" },
       prompt: threadsPrompt(firstName, onFile, lines.slice(-80)),
     });
     await applyThreadProposal(userId, parseModelJson<{ open?: ProposedOpen[]; close?: ProposedClose[] }>(text), onFile, lines);

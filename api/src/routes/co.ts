@@ -46,6 +46,7 @@ import { callEmotionMoments, checkNoEmotionLabelOnCall, frustrationMoments, frus
 import { flagVoiceMoments } from "../services/voiceFlags.js";
 import { CANT_CONNECT_LINE, COVERAGE_TRANSCRIPT_CHARS, chooseOpening, conversationLink, withTimeout, fetchConversationTurns, hitVoicemail, memberNumberOf, missedKind, voicemailLeft, noteCallFailure, takeCallContext, voicemailVerdict, registerElevenLabsCall, transcriptFromHistory, transcriptFromTurns, verifyCallToken, verifyPostCallWebhook } from "../services/elevenLabsCalls.js";
 import { OPENING_WRITER, recordOpening, takeOpening, writeOpening } from "../services/callOpening.js";
+import { sealedTelemetry } from "../services/privateTurn.js";
 
 // One-line drafts (missed-call text, voicemail line): narrow work, Haiku.
 const DRAFT_MODEL = MODELS.haiku;
@@ -116,7 +117,7 @@ async function sendMissedCallFollowUp(
       () =>
         generateText({
           model: anthropic(DRAFT_MODEL),
-          experimental_telemetry: { isEnabled: true, functionId: "co.sendMissedCallFollowUp" },
+          experimental_telemetry: { ...sealedTelemetry(), isEnabled: true, functionId: "co.sendMissedCallFollowUp" },
           prompt: `${CO_VOICE}\n\n${CO_TEXT_CHANNEL} ${situationPrompt} Send a short iMessage letting ${user.first_name} know, and that they can reply here whenever they're ready or expect another call soon. Tone: calm, unhurried, like a private members club. No em dashes. 2 sentences max.`,
         }),
     );

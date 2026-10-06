@@ -16,6 +16,7 @@ import { getTimezoneForCity } from "./geocoding.js";
 import { MODELS } from "../models.js";
 import { CO_EMAIL_FROM } from "./emailFrom.js";
 import { galleryEmail } from "./emailDesign.js";
+import { sealedTelemetry } from "./privateTurn.js";
 
 // Model policy (Royce, 2026-09-14): Haiku for the yes/no reply reads (code
 // acts on them only through the consent checks); Sonnet 5 for drafts that
@@ -225,7 +226,7 @@ async function draftReveal(userId: string, firstName: string, candidate: Network
     async (feedback) => {
       const { text } = await generateText({
         model: anthropic(NAMING_DRAFT_MODEL),
-        experimental_telemetry: { isEnabled: true, functionId: "networkIntroNudge.reveal.draft" },
+        experimental_telemetry: { ...sealedTelemetry(), isEnabled: true, functionId: "networkIntroNudge.reveal.draft" },
         prompt: networkRevealPrompt({ recipientFirstName: firstName, otherFirstName: candidate.first_name, shareReason: candidate.match_reason, feedback }),
       });
       return cleanCoMessage(text.trim());
@@ -437,7 +438,7 @@ async function askCandidateDirectly(candidate: MatchNudgeCandidate, asker: Match
     async (feedback) => {
       const { text } = await generateText({
         model: anthropic(NAMING_DRAFT_MODEL),
-        experimental_telemetry: { isEnabled: true, functionId: "networkIntroNudge.directAsk.draft" },
+        experimental_telemetry: { ...sealedTelemetry(), isEnabled: true, functionId: "networkIntroNudge.directAsk.draft" },
         prompt: networkDirectAskPrompt({ recipientFirstName: candidate.first_name, askerFirstName: asker.first_name, feedback }),
       });
       return cleanCoMessage(text.trim());

@@ -26,6 +26,7 @@ import { parseModelJson } from "./modelJson.js";
 import { MODELS } from "../models.js";
 import type { TierMatch } from "./tieredRecommendation.js";
 import { checkGrounding } from "../harness/matchGate.js";
+import { sealedTelemetry } from "./privateTurn.js";
 
 // Judgment call (does this real, current thing actually fit, or is it just
 // a real thing that exists), not narrow extraction — same policy reasoning
@@ -186,7 +187,7 @@ async function rewriteFromPage(match: TierMatch & { tier: 3 }, timeout: number):
   try {
     const { text: raw } = await generateText({
       model: anthropic(MODELS.haiku),
-      experimental_telemetry: { isEnabled: true, functionId: "webOpportunitySearch.rewriteFromPage" },
+      experimental_telemetry: { ...sealedTelemetry(), isEnabled: true, functionId: "webOpportunitySearch.rewriteFromPage" },
       timeout,
       prompt: `Here is the text of the page for "${match.name}":
 
@@ -213,7 +214,7 @@ export async function findOfficialPage(name: string, timeout: number): Promise<s
   try {
     const { text: raw } = await generateText({
       model: anthropic(WEB_SEARCH_MODEL),
-      experimental_telemetry: { isEnabled: true, functionId: "webOpportunitySearch.findOfficialPage" },
+      experimental_telemetry: { ...sealedTelemetry(), isEnabled: true, functionId: "webOpportunitySearch.findOfficialPage" },
       tools: { web_search: anthropic.tools.webSearch_20250305({ maxUses: 1 }) },
       stopWhen: stepCountIs(2),
       timeout,
@@ -247,7 +248,7 @@ export async function searchWebForOpportunity(
   try {
     const { text: raw } = await generateText({
       model: anthropic(WEB_SEARCH_MODEL),
-      experimental_telemetry: { isEnabled: true, functionId: "webOpportunitySearch.searchWebForOpportunity" },
+      experimental_telemetry: { ...sealedTelemetry(), isEnabled: true, functionId: "webOpportunitySearch.searchWebForOpportunity" },
       // webSearch_20250305, not _20260209: the newer version never returned
       // (every call hung until the timeout, 2026-09-18); this one answers in
       // seconds.

@@ -21,6 +21,7 @@ import { presentNext, suppressProspect, textApprovers } from "./review.js";
 import { readReplyWithJev } from "./jev.js";
 import { causeOf, getHealth, inBackoff, nextHealth, setHealth, type Cause } from "./health.js";
 import { moEmail } from "../services/emailDesign.js";
+import { sealedTelemetry } from "../services/privateTurn.js";
 
 export function moEnabled(env: NodeJS.ProcessEnv = process.env): boolean {
   return env.MO_ENABLED === "true";
@@ -112,7 +113,7 @@ async function findEmail(p: any): Promise<string | null> {
     tools: { web_search: anthropic.tools.webSearch_20250305({ maxUses: 2 }) },
     stopWhen: stepCountIs(3),
     timeout: 60_000,
-    experimental_telemetry: { isEnabled: true, functionId: "mo.findEmail" },
+    experimental_telemetry: { ...sealedTelemetry(), isEnabled: true, functionId: "mo.findEmail" },
     prompt: `Find a public work email for ${p.name ?? ""}${p.x_handle ? ` (@${p.x_handle} on X)` : ""}${p.bio ? `, bio: "${String(p.bio).slice(0, 160)}"` : ""}, published on their own website or their company's site (not a data broker or directory). Return ONLY JSON: {"email": "..." or null, "url": "the page it's on" or null}`,
   });
   const r = parseModelJson<{ email?: string | null; url?: string | null }>(text);
@@ -356,7 +357,7 @@ export async function classifyReply(text: string): Promise<"yes" | "no" | "quest
   if (jev.verdict) return jev.verdict;
   const { text: out } = await generateText({
     model: anthropic(MODELS.haiku),
-    experimental_telemetry: { isEnabled: true, functionId: "mo.classifyReply" },
+    experimental_telemetry: { ...sealedTelemetry(), isEnabled: true, functionId: "mo.classifyReply" },
     prompt: `Co invited someone to a private club by DM and asked if they'd like an invite. Their reply: "${text.slice(0, 500)}"\n\nAnswer with one word: yes (they want the invite), no (they don't, or want to be left alone), or question (anything else, including questions).`,
   });
   const w = out.trim().toLowerCase();

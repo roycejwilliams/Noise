@@ -24,6 +24,7 @@ import { recordDecision } from "../harness/core.js";
 import { MODELS } from "../models.js";
 import { stockLine } from "../harness/stockLines.js";
 import { cuesIn } from "./voiceCues.js";
+import { sealedTelemetry } from "./privateTurn.js";
 
 export const OPENING_WRITER = {
   minContext: 300,
@@ -116,7 +117,7 @@ export async function writeOpening(o: { firstName: string; direction: "inbound" 
       // Haiku takes no effort setting (and needs none).
       ...(o.direction === "outbound" ? { providerOptions: { anthropic: { effort: "low" as const } } } : {}),
       abortSignal: AbortSignal.timeout(o.timeoutMs ?? 20_000),
-      experimental_telemetry: { isEnabled: true, functionId: "call.writeOpening" },
+      experimental_telemetry: { ...sealedTelemetry(), isEnabled: true, functionId: "call.writeOpening" },
       prompt: openingPrompt(o),
     });
     const v = openingVerdict(text, o.summary, o.firstName);

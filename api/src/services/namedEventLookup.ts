@@ -15,6 +15,7 @@ import { eventLookupFromModel, isTicketingHost, namedEventFromModel } from "./se
 import { looksOfficial, pageExcerpt, readPageText, reserveWebSearch } from "./webOpportunitySearch.js";
 import { checkGrounding } from "../harness/matchGate.js";
 import type { TierMatch } from "./tieredRecommendation.js";
+import { sealedTelemetry } from "./privateTurn.js";
 
 const LOOKUP_TIMEOUT_MS = 15_000;
 
@@ -26,7 +27,7 @@ async function extractNamedEvent(askText: string): Promise<string | null> {
   try {
     const { text } = await generateText({
       model: anthropic(MODELS.haiku),
-      experimental_telemetry: { isEnabled: true, functionId: "namedEventLookup.extract" },
+      experimental_telemetry: { ...sealedTelemetry(), isEnabled: true, functionId: "namedEventLookup.extract" },
       timeout: 6_000,
       prompt: `Does this message ask about ONE specific, named event, conference, festival or week (for example "AfroTech", "Figma Config", "SXSW", "SF Tech Week")? A kind of event ("a founder mixer", "hackathons", "a fireside chat") is not a named event.
 
@@ -53,7 +54,7 @@ export async function lookupNamedEvent(
   try {
     const { text: raw } = await generateText({
       model: anthropic(MODELS.sonnet),
-      experimental_telemetry: { isEnabled: true, functionId: "namedEventLookup.search" },
+      experimental_telemetry: { ...sealedTelemetry(), isEnabled: true, functionId: "namedEventLookup.search" },
       // Same tool version the opportunity search uses; the newer one hung (2026-09-18).
       tools: { web_search: anthropic.tools.webSearch_20250305({ maxUses: 2 }) },
       stopWhen: stepCountIs(3),

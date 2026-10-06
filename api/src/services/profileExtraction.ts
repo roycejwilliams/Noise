@@ -100,6 +100,7 @@ export type ExtractedIntent = {
 export { RAPPORT_TOPICS, RAPPORT_TOPIC_DESCRIPTIONS, type RapportTopic } from "./profileTopics.js";
 import { RAPPORT_TOPICS, RAPPORT_TOPIC_DESCRIPTIONS, type RapportTopic } from "./profileTopics.js";
 import { understandingGaps, type Gap } from "./understanding.js";
+import { sealedTelemetry } from "./privateTurn.js";
 
 export type CoverageAssessment = {
   missing_topics: RapportTopic[];
@@ -144,7 +145,7 @@ export async function extractPsychographicProfile(
 
         Transcript:
         "${transcript}"`,
-    experimental_telemetry: { isEnabled: true, functionId: "profileExtraction.extractPsychographicProfile" },
+    experimental_telemetry: { ...sealedTelemetry(), isEnabled: true, functionId: "profileExtraction.extractPsychographicProfile" },
   });
 
   let extracted: ExtractedProfile = {};
@@ -206,7 +207,7 @@ Return ONLY valid JSON, no preamble or markdown:
 {"missing_topics": [...topic keys not yet covered...], "fresh_topics": [...topic keys the person addressed in THIS conversation itself, not just in what was known before...], "ready_to_summarize": true|false}
 
 ready_to_summarize is true only if at most one or two minor topics remain missing, AND this conversation itself (not just prior context) has substantively happened — never mark it true based on prior context alone with nothing yet said in this conversation.`,
-      experimental_telemetry: { isEnabled: true, functionId: "profileExtraction.assessConversationCoverage" },
+      experimental_telemetry: { ...sealedTelemetry(), isEnabled: true, functionId: "profileExtraction.assessConversationCoverage" },
     });
 
     const clean = raw.trim();
@@ -388,7 +389,7 @@ async function assessResolvedItems(
     const { text: raw } = await generateText({
       model: anthropic(PROFILE_JUDGMENT_MODEL),
       prompt: buildResolutionPrompt(transcript, existingGoals, existingBlockers, askListBlock),
-      experimental_telemetry: { isEnabled: true, functionId: "profileExtraction.assessResolvedItems" },
+      experimental_telemetry: { ...sealedTelemetry(), isEnabled: true, functionId: "profileExtraction.assessResolvedItems" },
     });
     return await applyResolutionOutput(raw, transcript, existingGoals, existingBlockers, openAsks, userId);
   } catch (err) {
@@ -508,7 +509,7 @@ Did the caller state a preference for how often Co should proactively call them?
 - "unstated" — the topic never came up, or they didn't give a clear answer
 
 Return ONLY valid JSON, no preamble: {"preference": "weekly" | "biweekly" | "none" | "unstated"}`,
-      experimental_telemetry: { isEnabled: true, functionId: "profileExtraction.extractCheckinCadencePreference" },
+      experimental_telemetry: { ...sealedTelemetry(), isEnabled: true, functionId: "profileExtraction.extractCheckinCadencePreference" },
     });
 
     const clean = raw.trim();
@@ -753,7 +754,7 @@ export async function assessCorrections(onFile: OnFile, newWords: string, contex
     const { text: raw } = await generateText({
       model: anthropic(PROFILE_JUDGMENT_MODEL),
       prompt: buildCorrectionPrompt(onFile, newWords, context.slice(-3000)),
-      experimental_telemetry: { isEnabled: true, functionId: "profileExtraction.assessCorrections" },
+      experimental_telemetry: { ...sealedTelemetry(), isEnabled: true, functionId: "profileExtraction.assessCorrections" },
     });
     return await applyCorrectionOutput(raw, onFile, newWords, userId);
   } catch (err) {
@@ -1187,7 +1188,7 @@ export async function captureIntent(
       () =>
         generateText({
           model: anthropic(NARROW_MODEL),
-          experimental_telemetry: { isEnabled: true, functionId: "profileExtraction.captureIntent" },
+          experimental_telemetry: { ...sealedTelemetry(), isEnabled: true, functionId: "profileExtraction.captureIntent" },
           prompt: captureIntentPrompt(transcript, scope),
         }),
     );
@@ -1463,7 +1464,7 @@ export async function judgeSameAsk(userId: string | null, newText: string, openT
   try {
     const { text } = await generateText({
       model: anthropic(PROFILE_JUDGMENT_MODEL),
-      experimental_telemetry: { isEnabled: true, functionId: "profileExtraction.judgeSameAsk", metadata: { userId: userId ?? "" } },
+      experimental_telemetry: { ...sealedTelemetry(), isEnabled: true, functionId: "profileExtraction.judgeSameAsk", metadata: { userId: userId ?? "" } },
       prompt: sameAskPrompt(newText, openText),
     });
     const same = /"same"\s*:\s*true/.test(text);
@@ -1522,7 +1523,7 @@ export async function extractPlannedEventMention(user_id: string, transcript: st
       () =>
         generateText({
           model: anthropic(NARROW_MODEL),
-          experimental_telemetry: { isEnabled: true, functionId: "profileExtraction.extractPlannedEventMention" },
+          experimental_telemetry: { ...sealedTelemetry(), isEnabled: true, functionId: "profileExtraction.extractPlannedEventMention" },
           prompt: `Read this transcript. Only include what the user (the "user:" lines) actually stated — never guess or infer, never treat something Co said as if the user said it.
 
 Did the user mention a specific real-world event they're planning to attend (a conference, meetup, party, gathering — not a vague "I should get out more")? If so extract:

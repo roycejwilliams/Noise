@@ -109,7 +109,7 @@ const grounding = read("src/harness/replyGrounding.ts");
 const tasks = read("src/services/coTasks.ts");
 const migrations = read("src/db/migrations.ts");
 const taskTurn = read("src/services/taskTurn.ts");
-check("tracking only runs on a real send with a member", /opts\.userId && opts\.record !== false && unbackedFollowup\(draft, rf\)/.test(grounding));
+check("tracking only runs on a real send with a member", /opts\.userId && opts\.record !== false && !isPrivateTurn\(opts\.userId\) && unbackedFollowup\(draft, rf\)/.test(grounding));
 check("it is told when the turn kept a confidence and who the block is about", /privateNames: rf\.privateNames, discreet: isDiscreetTurn\(rf\.instructions\)/.test(grounding));
 check("the task is dropped when the final text lacks the promise", /!promiseStays\(result\.final\)/.test(grounding) && /dropPromise\(opts\.userId, promiseTaskId\)/.test(grounding));
 check("a tracked or failed promise is logged for the review", /decision: "promise\.tracked"/.test(grounding) && /decision: "promise\.dropped"/.test(grounding));

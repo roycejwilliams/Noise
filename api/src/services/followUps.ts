@@ -18,6 +18,7 @@ import { CO_VOICE } from "./coVoice.js";
 import { notToTeammate, withoutTeammateLines } from "./teamLines.js";
 import type { EnqueueInput } from "../harness/proactive.js";
 import type { CoTask } from "./coTasks.js";
+import { sealedTelemetry } from "./privateTurn.js";
 
 export const FOLLOWUP_LIMITS = { minHours: 2, maxHours: 7 * 24, maxWakes: 5, maxDays: 14, quietAfterClosedDays: 14 };
 
@@ -129,7 +130,7 @@ export async function runFollowUpTurnWith(task: CoTask, deps: FollowUpDeps): Pro
       model: anthropic(MODELS.sonnet),
       maxOutputTokens: 2000,
       providerOptions: { anthropic: { effort: "low" } },
-      experimental_telemetry: { isEnabled: true, functionId: "followUp.decide" },
+      experimental_telemetry: { ...sealedTelemetry(), isEnabled: true, functionId: "followUp.decide" },
       tools,
       stopWhen: [stepCountIs(3), () => action !== null],
       prompt: followUpPrompt({ task, firstName: deps.firstName, recent: deps.recent, recentSends: deps.recentSends, now: deps.now().toISOString().slice(0, 16) }),

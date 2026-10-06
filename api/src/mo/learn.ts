@@ -12,6 +12,7 @@ import { generateText } from "ai";
 import pool from "../db/db.js";
 import { MODELS } from "../models.js";
 import { parseModelJson } from "../services/modelJson.js";
+import { sealedTelemetry } from "../services/privateTurn.js";
 
 export type Took = "active" | "quiet" | "early";
 export type JoinedOutcome = { no: number; took: Took; reason: string; quote: string; opener: string | null };
@@ -67,7 +68,7 @@ export async function moLessons(opts: { refresh?: boolean } = {}): Promise<strin
     try {
       const { text } = await generateText({
         model: anthropic(MODELS.haiku),
-        experimental_telemetry: { isEnabled: true, functionId: "mo.lessons" },
+        experimental_telemetry: { ...sealedTelemetry(), isEnabled: true, functionId: "mo.lessons" },
         prompt: `You invite people to a private social club. Here's why you invited each person, and whether they took to the club after joining.
 
 Took to it:

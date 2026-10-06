@@ -5,6 +5,7 @@
 // for them on file" to "send it" twice. Now every result a web search keeps is
 // stored as a research_find, and every later reply sees them as facts it can
 // hand over (a link in a draft is only allowed when it's on file).
+import { isPrivateTurn } from "./privateTurn.js";
 import pool from "../db/db.js";
 
 export type ResearchFind = { name: string; url: string; facts: string; at: string };
@@ -57,6 +58,8 @@ const key = (url: string) => JSON.stringify(url.trim());
 // Stores what a search kept. One row per link per fortnight. Never throws.
 export async function recordResearchFinds(userId: string, finds: { name: string; url: string; facts?: string }[]): Promise<number> {
   let stored = 0;
+  // Not while a document is open (services/privateTurn.ts).
+  if (isPrivateTurn(userId)) return 0;
   for (const f of finds) {
     if (!f.name || !/^https?:\/\//i.test(f.url)) continue;
     try {

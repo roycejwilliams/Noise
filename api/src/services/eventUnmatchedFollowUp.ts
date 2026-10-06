@@ -11,6 +11,7 @@ import { inRoomSendAllowed, recordInRoomSend } from "../harness/proactive.js";
 import { draftWithConsent } from "../harness/introConsent.js";
 import { MATCH_NUDGE_END_CUTOFF_MINUTES } from "../harness/introConsent.js";
 import { matchGuestsToUsers, dedupeByUserId, wasAlreadyNudgedForMatch, scoreMatchedGroup, type ScorableGuest } from "./eventScoring.js";
+import { sealedTelemetry } from "./privateTurn.js";
 
 // "No one should feel left out" (Royce, 2026-09-22). Two things, both
 // scoped to people the real scoring pass (eventScoring.ts's
@@ -90,7 +91,7 @@ async function sendSoloAcknowledgment(eventId: string, eventName: string, person
     async (feedback) => {
       const { text } = await generateText({
         model: anthropic(MODELS.haiku),
-        experimental_telemetry: { isEnabled: true, functionId: "eventUnmatchedFollowUp.soloAck.draft" },
+        experimental_telemetry: { ...sealedTelemetry(), isEnabled: true, functionId: "eventUnmatchedFollowUp.soloAck.draft" },
         prompt: `${CO_VOICE}\n\n${CO_TEXT_CHANNEL} You're texting ${person.first_name} near the end of "${eventName}." Nothing came up as a strong match for them tonight — no one specific worth introducing them to.
 
 Draft a short, honest, warm text (1-2 sentences, no em dashes, normal sentence capitalization) telling them plainly that nothing stood out as a strong pull tonight. Don't apologize, don't over-explain, don't invent a reason or promise anything specific — just honest and warm, still glad they came. Return ONLY the message text.${feedback ? `\n\n${feedback}` : ""}`,

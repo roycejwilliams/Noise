@@ -26,6 +26,7 @@ import pool from "../db/db.js";
 import { MODELS } from "../models.js";
 import { parseModelJson } from "../services/modelJson.js";
 import { gate, recordDecision, type GateCheck } from "./core.js";
+import { sealedTelemetry } from "../services/privateTurn.js";
 
 const CONSENT_READ_MODEL = MODELS.sonnet;
 
@@ -230,7 +231,7 @@ export async function consentRead(message: string, f: ConsentFacts): Promise<Gat
   try {
     const { text } = await generateText({
       model: anthropic(CONSENT_READ_MODEL),
-      experimental_telemetry: { isEnabled: true, functionId: "introConsent.read" },
+      experimental_telemetry: { ...sealedTelemetry(), isEnabled: true, functionId: "introConsent.read" },
       prompt: consentRubric(message, f),
     });
     const parsed = parseModelJson<{ violation: boolean; why?: string }>(text);

@@ -26,6 +26,7 @@ import type { TierMatch } from "./tieredRecommendation.js";
 import { getPersonSnapshot, renderSnapshot } from "../harness/personSnapshot.js";
 import { latestAskEntry } from "../harness/profileWrite.js";
 import { availabilityConflict } from "./availability.js";
+import { sealedTelemetry } from "./privateTurn.js";
 
 export type EventDetails = {
   startAt: string | null;
@@ -284,7 +285,7 @@ export async function explainFit(match: EnrichedMatch, person: PersonForFit): Pr
     const { text } = await generateText({
       model: anthropic(MODELS.sonnet),
       providerOptions: { anthropic: { effort: "low" } },
-      experimental_telemetry: { isEnabled: true, functionId: "eventDetails.explainFit" },
+      experimental_telemetry: { ...sealedTelemetry(), isEnabled: true, functionId: "eventDetails.explainFit" },
       prompt: fitPrompt(match, person, picture),
     });
     return finishFit(parseModelJson<RawFit>(text), match, person, picture);

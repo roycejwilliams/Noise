@@ -16,6 +16,7 @@ import { generateText } from "ai";
 import pool from "../db/db.js";
 import { MODELS } from "../models.js";
 import { parseModelJson } from "./modelJson.js";
+import { sealedTelemetry } from "./privateTurn.js";
 
 // mention: worth pointing out. shape: changes how Co shows up (pacing, tone,
 // what it offers), not something to say.
@@ -69,7 +70,7 @@ export async function readMoment(input: DotsInput, opts: { forReply?: boolean; t
       model: anthropic(MODELS.haiku),
       maxOutputTokens: 600,
       abortSignal: AbortSignal.timeout(opts.timeoutMs ?? 6000),
-      experimental_telemetry: { isEnabled: true, functionId: "connectDots" },
+      experimental_telemetry: { ...sealedTelemetry(), isEnabled: true, functionId: "connectDots" },
       prompt: `You help Co, a companion who texts with one member, stay aware of the moment, the way a friend who's been paying attention would.
 ${input.recent ? `\nThe last few texts (oldest first):\n${input.recent.slice(-1500)}\n` : ""}
 What's happening now:

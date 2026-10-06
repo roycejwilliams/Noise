@@ -16,6 +16,7 @@ import { checkEventWindow, checkNamesWithheld, checkOneNudgePerEvent, draftWithC
 import { gateShareReason } from "../harness/matchGate.js";
 import { arrivalWaitCheck, getPresence } from "./eventPresence.js";
 import { MODELS } from "../models.js";
+import { sealedTelemetry } from "./privateTurn.js";
 
 // Model policy (Royce, 2026-09-14): a draft that names another person is
 // Sonnet 5; the additive offer names no one (checked in code) and stays Haiku.
@@ -357,7 +358,7 @@ async function maybeSendMatchNudge(
   const draftFn = async (feedback: string | null) => {
     const { text } = await generateText({
       model: anthropic(NAMING_DRAFT_MODEL),
-      experimental_telemetry: { isEnabled: true, functionId: opts.honestLowConfidence ? "eventScoring.unmatchedPair.draft" : "eventScoring.matchNudge.draft" },
+      experimental_telemetry: { ...sealedTelemetry(), isEnabled: true, functionId: opts.honestLowConfidence ? "eventScoring.unmatchedPair.draft" : "eventScoring.matchNudge.draft" },
       prompt: (opts.honestLowConfidence ? unmatchedPairPrompt : matchNudgePrompt)({
         recipientFirstName: person.first_name,
         otherFirstName: candidate.first_name,
@@ -477,7 +478,7 @@ async function maybeSendMatchNudge(
     async (feedback) => {
       const { text } = await generateText({
         model: anthropic(NAMING_DRAFT_MODEL),
-        experimental_telemetry: { isEnabled: true, functionId: "eventScoring.anonymousHeadsUp.draft" },
+        experimental_telemetry: { ...sealedTelemetry(), isEnabled: true, functionId: "eventScoring.anonymousHeadsUp.draft" },
         prompt: anonymousHeadsUpPrompt({ recipientFirstName: person.first_name, eventName, shareReason: top.shareReason!, feedback }),
       });
       return cleanCoMessage(text.trim());
@@ -566,7 +567,7 @@ async function maybeSendAdditiveOffer(
     async (feedback) => {
       const { text } = await generateText({
         model: anthropic(PLAIN_DRAFT_MODEL),
-        experimental_telemetry: { isEnabled: true, functionId: "eventScoring.additiveOffer.draft" },
+        experimental_telemetry: { ...sealedTelemetry(), isEnabled: true, functionId: "eventScoring.additiveOffer.draft" },
         prompt: `${CO_VOICE}\n\n${CO_TEXT_CHANNEL} You're texting ${person.first_name} about "${eventName}," an event they're already going to and already have a match at. Since then, ${newCandidates.length} more ${newCandidates.length === 1 ? "person has" : "people have"} checked in who could also be worth ${person.first_name} meeting.
 
 Draft a short, warm, low-pressure text (1-2 sentences, no em dashes, normal sentence capitalization) letting them know you found ${newCandidates.length === 1 ? "someone else" : `${newCandidates.length} more people`} who just checked in that could be good for them, and ask if they want to hear who. Do NOT name anyone yet or mention their existing match. Don't say what anyone wants or said. This is just the offer to see more, nothing more. Return ONLY the message text.${feedback ? `\n\n${feedback}` : ""}`,

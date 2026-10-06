@@ -23,6 +23,7 @@ import { RAPPORT_TOPICS, RAPPORT_TOPIC_DESCRIPTIONS, type RapportTopic } from ".
 import type { CoverageAssessment } from "./profileExtraction.js";
 import type { EmotionTarget, Intensity, TextEmotion, Valence } from "../harness/emotion.js";
 import type { TurnContext } from "./turnContext.js";
+import { sealedTelemetry } from "./privateTurn.js";
 
 // What Co's reaction says it is doing. Meanings, not scripts: the read picks
 // the one that fits, code sends only these.
@@ -175,7 +176,7 @@ export async function readTurn(
     model: anthropic(model),
     maxOutputTokens: 4000,
     providerOptions: !model.startsWith("claude-haiku") ? { anthropic: { effort: "low" } } : undefined,
-    experimental_telemetry: { isEnabled: true, functionId: "readTurn" },
+    experimental_telemetry: { ...sealedTelemetry(), isEnabled: true, functionId: "readTurn" },
     prompt: buildRouterPrompt(routeInput) + turnReadAddendum(ctx, priorContext) + reactionsLine(opts.reactions ?? null),
   });
   const json = extractFirstJsonObject(text.replace(/```(?:json)?/g, ""));

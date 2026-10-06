@@ -19,6 +19,7 @@ import { MODELS } from "../models.js";
 import { MO_VOICE } from "./moVoice.js";
 import { parseModelJson } from "../services/modelJson.js";
 import { checkMoDraft, namesAMember, MO } from "./rules.js";
+import { sealedTelemetry } from "../services/privateTurn.js";
 
 export type DmStyle = "intro" | "curious";
 export const DM_STYLES: DmStyle[] = ["intro", "curious"];
@@ -80,7 +81,7 @@ Return ONLY JSON: {"reply": "..." or null, "dm": "...", "why": "..." or null, "e
 export async function draftOutreach(i: DraftInput): Promise<Drafts> {
   const { text } = await generateText({
     model: anthropic(MODELS.sonnet),
-    experimental_telemetry: { isEnabled: true, functionId: "mo.draft" },
+    experimental_telemetry: { ...sealedTelemetry(), isEnabled: true, functionId: "mo.draft" },
     prompt: draftPrompt(i),
   });
   const p = parseModelJson<{ reply?: string | null; dm?: string; why?: string | null; emailSubject?: string; emailBody?: string }>(text);
@@ -117,7 +118,7 @@ export async function checkDraftsAgainstPost(postText: string, drafts: string[],
     const { text } = await generateText({
       model: anthropic(MODELS.sonnet),
       providerOptions: { anthropic: { effort: "low" } },
-      experimental_telemetry: { isEnabled: true, functionId: "mo.draftCheck" },
+      experimental_telemetry: { ...sealedTelemetry(), isEnabled: true, functionId: "mo.draftCheck" },
       prompt: `A post, and messages written to its author based on it.
 
 Post: "${postText.slice(0, 700)}"
@@ -144,7 +145,7 @@ export async function redraftOutreach(p: any, instruction: string): Promise<{ ok
   const input: DraftInput = { name: p.name, handle: p.x_handle, postText: p.post_text ?? p.headline ?? "", reason: p.reason, event: null, source: p.source, style: p.dm_style ?? "intro", opener: p.opener && p.opener in OPENERS ? p.opener : "warm" };
   const { text } = await generateText({
     model: anthropic(MODELS.sonnet),
-    experimental_telemetry: { isEnabled: true, functionId: "mo.redraft" },
+    experimental_telemetry: { ...sealedTelemetry(), isEnabled: true, functionId: "mo.redraft" },
     prompt: `${draftPrompt(input)}
 
 The current drafts:

@@ -23,6 +23,7 @@ import { MODELS } from "../models.js";
 import { parseModelJson } from "./modelJson.js";
 import { recordDecision } from "../harness/core.js";
 import { JEV_SURE, noteRaceOutcome, raceWithJev, readTextSignals } from "./jevGateway.js";
+import { sealedTelemetry } from "./privateTurn.js";
 
 export const ISSUE_CATEGORIES = ["bug", "wrong_info", "behavior", "speed", "feature_request", "other"] as const;
 export type IssueCategory = (typeof ISSUE_CATEGORIES)[number];
@@ -80,7 +81,7 @@ async function haikuIssue(message: string, recentConversation: string, abortSign
   const { text } = await generateText({
     model: anthropic(MODELS.haiku),
     abortSignal,
-    experimental_telemetry: { isEnabled: true, functionId: "issueReports.classify" },
+    experimental_telemetry: { ...sealedTelemetry(), isEnabled: true, functionId: "issueReports.classify" },
     prompt: issuePrompt(message, recentConversation),
   });
   const p = parseModelJson<{ isIssue?: boolean; summary?: string | null; category?: string; severity?: string }>(text);

@@ -14,6 +14,7 @@ import { recordDecision } from "../harness/core.js";
 import { getPersonSnapshot, renderSnapshot } from "../harness/personSnapshot.js";
 import { gateMatches } from "../harness/matchGate.js";
 import { eventCandidates, reserveXSearch, type TierMatch } from "./tieredRecommendation.js";
+import { sealedTelemetry } from "./privateTurn.js";
 
 export const SWEEP_BUDGET = { steps: 7, webQueries: 2, xSearches: 1, pageReads: 3, keep: 3 };
 
@@ -129,7 +130,7 @@ export async function sweepFind(c: SweepCandidate, opts: { timezone?: string | n
       providerOptions: { anthropic: { effort: "low" } },
       tools,
       stopWhen: stepCountIs(SWEEP_BUDGET.steps),
-      experimental_telemetry: { isEnabled: true, functionId: "sweep.find", metadata: { userId: c.userId } },
+      experimental_telemetry: { ...sealedTelemetry(), isEnabled: true, functionId: "sweep.find", metadata: { userId: c.userId } },
       prompt: sweepPrompt(c, { today: new Date().toISOString().slice(0, 10), picture, feeling: opts.feeling ?? null, shown: opts.shown ?? [] }),
     });
   } catch (err: any) {

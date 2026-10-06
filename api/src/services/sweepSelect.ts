@@ -18,6 +18,7 @@ import { createHash } from "crypto";
 import { generateText } from "ai";
 import { anthropic } from "@ai-sdk/anthropic";
 import { MODELS } from "../models.js";
+import { sealedTelemetry } from "./privateTurn.js";
 
 export const SELECT_MODEL = MODELS.sonnet;
 export const SELECT_LIMITS = { maxPool: 40, maxSends: 3, texts: 40, sent: 20 };
@@ -229,7 +230,7 @@ export async function selectForMember(c: SelectContext, opts: { model?: string; 
       // review's judgment call (harness/devReview.ts).
       maxOutputTokens: 16_000,
       providerOptions: { anthropic: { effort: opts.effort ?? "medium" } },
-      experimental_telemetry: { isEnabled: true, functionId: "sweep.select", metadata: { userId: opts.userId ?? "" } },
+      experimental_telemetry: { ...sealedTelemetry(), isEnabled: true, functionId: "sweep.select", metadata: { userId: opts.userId ?? "" } },
       // The instructions are the same for every member: cached across a sweep batch.
       system: [{ role: "system" as const, content: SELECT_SYSTEM, providerOptions: { anthropic: { cacheControl: { type: "ephemeral" } } } }],
       prompt: selectPrompt(c),

@@ -24,6 +24,7 @@ import { captureIntentForTurn } from "../services/profileExtraction.js";
 import { writeMemory } from "../services/memory.js";
 import { recordDecision, type GateCheck } from "./core.js";
 import { callKey } from "../services/callKey.js";
+import { sealedTelemetry } from "../services/privateTurn.js";
 
 export type CallClaim = {
   quote: string;
@@ -155,7 +156,7 @@ export async function auditCall(userId: string, transcript: string, knownBefore:
     const { text } = await generateText({
       model: anthropic(MODELS.sonnet),
       providerOptions: { anthropic: { effort: "low" } },
-      experimental_telemetry: { isEnabled: true, functionId: "call.grounding.audit" },
+      experimental_telemetry: { ...sealedTelemetry(), isEnabled: true, functionId: "call.grounding.audit" },
       prompt: callAuditPrompt(transcript, facts, impressions),
     });
     const claims = (parseModelJson<{ claims?: CallClaim[] }>(text).claims ?? []).filter((c) => c && typeof c.quote === "string");

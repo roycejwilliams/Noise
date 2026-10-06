@@ -299,7 +299,7 @@ check("no follow-up line has an em dash or exclamation", [...OFFER_FOLLOWUP_MANY
   check("a pick cut off mid-reason still counts", P.readPick('{"id": "4", "why": "They\'re stuck on sponsors for the 10th, so checking in on the deck meets them wh')?.id === "4");
   check("no id is no pick", P.readPick("") === null && P.readPick("I think the companion one") === null);
   const pr = readFileSync(new URL("../../src/harness/proactive.ts", import.meta.url), "utf8");
-  check("the pick has room to answer, and time", /maxOutputTokens: 1000,\s*experimental_telemetry: \{ isEnabled: true, functionId: "proactive.choosePick" \}/.test(pr) && /"pick timed out"\)\), 15_000\)/.test(pr));
+  check("the pick has room to answer, and time", /maxOutputTokens: 1000,\s*experimental_telemetry: \{ \.\.\.sealedTelemetry\(\), isEnabled: true, functionId: "proactive.choosePick" \}/.test(pr) && /"pick timed out"\)\), 15_000\)/.test(pr));
   check("a failed draft gets one rewrite, told what it broke", /draftAgain\(first, \(\) => registry\[c\.type\]\.draft\(c, person\)\)/.test(pr) && /It broke: \$\{redo\.failed\}/.test(pr));
   const reg = readFileSync(new URL("../../src/harness/proactiveRegistry.ts", import.meta.url), "utf8");
   check("only Co's own skip holds check-ins for 14 days; a failed draft retries in about 2", /const coChoseSkip = \/\^model chose SKIP\//.test(reg) && /coChoseSkip \? "0" : "12"/.test(reg) && /onDropped\?\.\(c, status, reason\)/.test(pr) && /skip\("model chose SKIP/.test(reg));

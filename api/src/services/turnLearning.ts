@@ -24,6 +24,7 @@ import {
   type CapturedIntentData,
 } from "./profileExtraction.js";
 import { applyStyleUpdate, MAX_NOTES } from "./textingStyle.js";
+import { sealedTelemetry } from "./privateTurn.js";
 
 export type TurnLearningInput = {
   userId: string;
@@ -190,7 +191,7 @@ export async function learnFromTextTurn(input: TurnLearningInput): Promise<TurnL
       // fast but missed two of three.
       maxOutputTokens: 5000,
       providerOptions: { anthropic: { effort: "medium" } },
-      experimental_telemetry: { isEnabled: true, functionId: "turnLearning.learn" },
+      experimental_telemetry: { ...sealedTelemetry(), isEnabled: true, functionId: "turnLearning.learn" },
       prompt: turnLearningPrompt({
         transcript,
         message: input.message,

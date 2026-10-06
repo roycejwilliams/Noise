@@ -26,6 +26,7 @@ import { MODELS } from "../models.js";
 import { parseModelJson } from "../services/modelJson.js";
 import { mayText, openTasks, startTask, taskTextsToday, wordsAreTheirs, type CoTask } from "../services/coTasks.js";
 import { notToTeammate } from "../services/teamLines.js";
+import { sealedTelemetry } from "../services/privateTurn.js";
 
 // Kinds whose question is by design one Co must ask, or whose text already is
 // the payload: an event offer carries the event itself; a network tease leads
@@ -127,7 +128,7 @@ export async function readOffer(draft: string, recent: string, tasks: Pick<CoTas
       maxOutputTokens: 400,
       // A short classification: low effort, so thinking can't eat the cap (evals/guards).
       providerOptions: { anthropic: { effort: "low" } },
-      experimental_telemetry: { isEnabled: true, functionId: "proactive.payloadFirst" },
+      experimental_telemetry: { ...sealedTelemetry(), isEnabled: true, functionId: "proactive.payloadFirst" },
       prompt: payloadFirstPrompt({ draft, recent, theirAsk, tasks }),
     });
     const j = parseModelJson<Partial<OfferRead>>(text);

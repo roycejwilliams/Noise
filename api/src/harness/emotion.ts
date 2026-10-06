@@ -29,6 +29,7 @@ import { parseModelJson } from "../services/modelJson.js";
 import type { GateCheck } from "./core.js";
 import { JEV_SURE, noteRaceOutcome, raceWithJev, readTextSignals } from "../services/jevGateway.js";
 import { recentVoiceFlags, renderVoiceFlags, type ShownVoiceFlags } from "../services/voiceFlags.js";
+import { sealedTelemetry } from "../services/privateTurn.js";
 
 export type Valence = "negative" | "positive" | "mixed";
 export type Intensity = "low" | "medium" | "high";
@@ -87,7 +88,7 @@ async function haikuTextEmotion(message: string, recentConversation: string, fun
     const { text } = await generateText({
       model: anthropic(MODELS.haiku),
       abortSignal,
-      experimental_telemetry: { isEnabled: true, functionId },
+      experimental_telemetry: { ...sealedTelemetry(), isEnabled: true, functionId },
       prompt: `Read the latest text someone sent Co, with the conversation before it for context.
 
 Recent conversation, in order:

@@ -10,6 +10,7 @@
 import { anthropic } from "@ai-sdk/anthropic";
 import { generateText } from "ai";
 import { MODELS } from "../models.js";
+import { sealedTelemetry } from "./privateTurn.js";
 
 // The model's own per-image limit is 5MB; stay under it.
 const MAX_BYTES = 4_800_000;
@@ -53,7 +54,7 @@ export async function describeImage(data: Buffer, mediaType: string): Promise<st
     const { text } = await generateText({
       model: anthropic(MODELS.sonnet),
       providerOptions: { anthropic: { effort: "low" } },
-      experimental_telemetry: { isEnabled: true, functionId: "sendblue.describeImage" },
+      experimental_telemetry: { ...sealedTelemetry(), isEnabled: true, functionId: "sendblue.describeImage" },
       messages: [
         {
           role: "user",

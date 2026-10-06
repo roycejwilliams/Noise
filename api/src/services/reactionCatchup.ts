@@ -12,6 +12,7 @@ import pool from "../db/db.js";
 import { MODELS } from "../models.js";
 import { parseModelJson } from "./modelJson.js";
 import { recordSuggestionOutcome } from "./outcomes.js";
+import { sealedTelemetry } from "./privateTurn.js";
 
 export type Reaction = "interested" | "going" | "went_liked" | "went_disliked" | "not_for_me";
 // How each reaction is stored (shared with conversationTools.ts noteReaction).
@@ -44,7 +45,7 @@ export async function readReaction<T extends { name: string }>(message: string, 
   try {
     const { text } = await generateText({
       model: anthropic(MODELS.haiku),
-      experimental_telemetry: { isEnabled: true, functionId: "reactionCatchup" },
+      experimental_telemetry: { ...sealedTelemetry(), isEnabled: true, functionId: "reactionCatchup" },
       prompt: `A member texted: "${message.slice(0, 400)}"${repliedToCo ? `\n(They sent it as a reply to this text from Co: "${repliedToCo.slice(0, 400)}")` : ""}
 
 Things Co sent them earlier:

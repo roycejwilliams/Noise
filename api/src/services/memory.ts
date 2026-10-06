@@ -18,11 +18,11 @@ export async function writeMemory(
 ): Promise<void> {
   // Written during a turn that touched a document: private, and never embedded (services/privateTurn.ts).
   const isPrivate = opts.private ?? isPrivateTurn(userId);
-  const mem = await pool.query(
-    `INSERT INTO co_memories (user_id, memory_type, content, private) VALUES ($1, $2, $3, $4) RETURNING id`,
-    [userId, memoryType, content, isPrivate],
-  );
-  if (isPrivate) return;
+  if (isPrivate) {
+    await pool.query(`INSERT INTO co_private_memories (user_id, memory_type, content) VALUES ($1, $2, $3)`, [userId, memoryType, content]);
+    return;
+  }
+  const mem = await pool.query(`INSERT INTO co_memories (user_id, memory_type, content) VALUES ($1, $2, $3) RETURNING id`, [userId, memoryType, content]);
   embedder.generate(content)
     .then((emb) =>
       pool.query(

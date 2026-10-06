@@ -9,6 +9,7 @@
 //
 // The model is allowed to be wrong. The gate is what keeps a wrong proposal
 // from turning into a call, a text, an intro, or a false claim.
+import { isPrivateTurn } from "../services/privateTurn.js";
 import pool from "../db/db.js";
 
 export type Layer = 1 | 2 | 3 | 4 | 5 | 6 | 7 | 8;
@@ -48,6 +49,12 @@ export function describeFailed(failed: GateCheck[]): string {
 
 // Non-fatal: a logging failure never changes what happens to the person.
 export async function recordDecision(d: HarnessDecision): Promise<void> {
+  // A decision made while a document is open is recorded as that and nothing else: its proposal, reason, action and
+  // check reasons can carry what the document says (a query, a caption, a plan title), and this log is read by the
+  // team and by Co's own record of what it did (services/privateTurn.ts).
+  if (d.userId && isPrivateTurn(d.userId)) {
+    d = { ...d, action: d.action ? "sealed" : d.action, proposal: d.proposal === undefined ? undefined : { sealed: true }, reason: d.reason ? "sealed" : d.reason, checks: (d.checks ?? []).map((c) => ({ name: c.name, pass: c.pass })) };
+  }
   await pool
     .query(
       `INSERT INTO harness_decisions (layer, decision, user_id, outcome, action, proposal, checks, confidence, reason)

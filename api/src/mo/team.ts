@@ -18,6 +18,7 @@ import pool from "../db/db.js";
 import { MODELS } from "../models.js";
 import { parseModelJson } from "../services/modelJson.js";
 import { recordDecision } from "../harness/core.js";
+import { sealedTelemetry } from "../services/privateTurn.js";
 
 // Mo understands the team in plain words (mo/teamAgent.ts, 2026-09-26):
 // what it can do is mo/abilities.ts, and these are the pieces its tools use.
@@ -199,7 +200,7 @@ async function groupIntoGaps(lines: string[], intro: string, ask: string, functi
   try {
     const { text } = await generateText({
       model: anthropic(MODELS.haiku),
-      experimental_telemetry: { isEnabled: true, functionId },
+      experimental_telemetry: { ...sealedTelemetry(), isEnabled: true, functionId },
       prompt: `${intro}
 ${lines.map((a) => `- ${a}`).join("\n")}
 

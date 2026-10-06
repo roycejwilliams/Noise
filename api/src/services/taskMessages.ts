@@ -12,6 +12,7 @@ import { renderMatchLead } from "./messageFormat.js";
 import { checkDraft } from "../harness/proactive.js";
 import { parseModelJson } from "./modelJson.js";
 import { numbersBacked, OFFERS_WHAT_CO_CANT, placesBacked } from "./taskWeb.js";
+import { sealedTelemetry } from "./privateTurn.js";
 
 export type SendItem = { url: string; name: string; tier: number; facts: string[] };
 
@@ -46,7 +47,7 @@ export async function draftTaskMessages(o: { firstName: string; goal: string; it
     model: anthropic(MODELS.sonnet),
     maxOutputTokens: 3000,
     providerOptions: { anthropic: { effort: "low" } },
-    experimental_telemetry: { isEnabled: true, functionId: "taskTurn.captions" },
+    experimental_telemetry: { ...sealedTelemetry(), isEnabled: true, functionId: "taskTurn.captions" },
     prompt: `${CO_VOICE}
 
 You're texting ${o.firstName} about what they asked you to do: "${o.goal}". Each thing below goes out as its link, then a short caption under it. Write the captions, then one short closing line.

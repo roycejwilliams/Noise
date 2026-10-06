@@ -107,6 +107,7 @@ export type ExemptType = "event_change" | "call_reminder" | "missed_call" | "co_
 // ./proactivePurpose.ts, dependency-free so model-free checks can read it.
 export { PROACTIVE_PURPOSE, typesWithPurpose, type ProactivePurpose } from "./proactivePurpose.js";
 import { PROACTIVE_PURPOSE as PROACTIVE_PURPOSE_MAP } from "./proactivePurpose.js";
+import { sealedTelemetry } from "../services/privateTurn.js";
 
 export type TypePolicy = {
   priority: number;
@@ -607,7 +608,7 @@ export async function draftProactive(opts: {
   const redo = redraftFor.getStore();
   const { text } = await generateText({
     model: anthropic(opts.model ?? DRAFT_MODEL),
-    experimental_telemetry: { isEnabled: true, functionId: opts.functionId },
+    experimental_telemetry: { ...sealedTelemetry(), isEnabled: true, functionId: opts.functionId },
     prompt: `${CO_VOICE}
 
 ${CO_TEXT_CHANNEL} You're texting ${opts.firstName}. Co is reaching out first; they didn't just text you.
@@ -977,7 +978,7 @@ export async function choosePick(
         // 200 cut Co's answer off mid-sentence (2026-09-28: half its picks
         // were thrown away and code priority chose instead).
         maxOutputTokens: 1000,
-        experimental_telemetry: { isEnabled: true, functionId: "proactive.choosePick" },
+        experimental_telemetry: { ...sealedTelemetry(), isEnabled: true, functionId: "proactive.choosePick" },
         prompt: `${CO_VOICE}
 
 You're about to text this member first. Several things are ready to go; pick the ONE that fits them best right now, the way a friend who knows them would. Staying close to what's going on in their life comes before offers.
@@ -1053,7 +1054,7 @@ export async function stillRelevant(c: Candidate, about: { recentConversation: s
       generateText({
         model: anthropic(DRAFT_MODEL),
         maxOutputTokens: 300,
-        experimental_telemetry: { isEnabled: true, functionId: "proactive.stillRelevant" },
+        experimental_telemetry: { ...sealedTelemetry(), isEnabled: true, functionId: "proactive.stillRelevant" },
         prompt: `A text Co was going to send this member has been waiting since ${day(c.createdAt)}. It's now ${day(about.now)}.
 
 What it was going to do: [${c.type}] ${c.summary}

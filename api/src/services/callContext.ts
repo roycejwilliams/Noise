@@ -9,6 +9,7 @@ import { MODELS } from "../models.js";
 import { getEmotionalContext, renderEmotionalContext } from "../harness/emotion.js";
 import { getPersonSnapshot, renderSnapshot } from "../harness/personSnapshot.js";
 import { latestAskEntry } from "../harness/profileWrite.js";
+import { sealedTelemetry } from "./privateTurn.js";
 
 // A 1-2 sentence call summary: narrow work, Haiku.
 const SUMMARY_MODEL = MODELS.haiku;
@@ -390,7 +391,7 @@ export async function summarizeCallForTextContext(userId: string, transcript: st
   try {
     const { text: raw } = await generateText({
       model: anthropic(SUMMARY_MODEL),
-      experimental_telemetry: { isEnabled: true, functionId: "callContext.summarizeCallForText" },
+      experimental_telemetry: { ...sealedTelemetry(), isEnabled: true, functionId: "callContext.summarizeCallForText" },
       prompt: callSummaryPrompt(transcript),
     });
     // The prompt already says "they"; the model still wrote "he" on all

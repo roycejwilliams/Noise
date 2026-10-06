@@ -16,6 +16,7 @@ import {
 } from "./networkIntroNudge.js";
 import { MODELS } from "../models.js";
 import { extractFirstJsonObject, parseModelJson } from "./modelJson.js";
+import { sealedTelemetry } from "./privateTurn.js";
 
 // Layer 2 router (Royce, 2026-09-14). Replaces ~10 independent classifiers
 // that each decided, without seeing the others, whether a message answered
@@ -387,7 +388,7 @@ export async function routeMessage(input: RouteInput, opts: { model?: string; ef
     model: anthropic(model),
     maxOutputTokens: 4000,
     providerOptions: effort && !model.startsWith("claude-haiku") ? { anthropic: { effort } } : undefined,
-    experimental_telemetry: { isEnabled: true, functionId: "router.route" },
+    experimental_telemetry: { ...sealedTelemetry(), isEnabled: true, functionId: "router.route" },
     prompt: buildRouterPrompt(input),
   });
   const json = extractFirstJsonObject(text.replace(/```(?:json)?/g, ""));

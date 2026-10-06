@@ -18,6 +18,7 @@ import { parseModelJson } from "./modelJson.js";
 import { generateEmbeddings } from "./embeddings.js";
 import { getPersonSnapshot } from "../harness/personSnapshot.js";
 import { askEntries } from "../harness/profileWrite.js";
+import { sealedTelemetry } from "./privateTurn.js";
 
 export const PEOPLE_FACTS_MAX_AGE_HOURS = 72;
 export const EDGE_MIN_SIMILARITY = 0.45;
@@ -59,7 +60,7 @@ export async function readWantsOffers(input: PeopleInput): Promise<WantsOffers |
   try {
     const { text } = await generateText({
       model: anthropic(MODELS.haiku),
-      experimental_telemetry: { isEnabled: true, functionId: "peopleGraph.facts" },
+      experimental_telemetry: { ...sealedTelemetry(), isEnabled: true, functionId: "peopleGraph.facts" },
       prompt: peopleFactsPrompt(input),
     });
     const r = parseModelJson<{ wants?: unknown; offers?: unknown }>(text);

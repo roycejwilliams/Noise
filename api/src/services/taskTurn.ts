@@ -24,6 +24,7 @@ import { notToTeammate, withoutTeammateLines } from "./teamLines.js";
 import { recordSentItems } from "./coFacts.js";
 import { numbersBacked, OFFERS_WHAT_CO_CANT, placesBacked, taskWebSearch, verifiedFactLines, type TaskWebResult, type VerifiedResult } from "./taskWeb.js";
 import { assembleMessages, captionOk, draftTaskMessages, orderByTier, type SendItem } from "./taskMessages.js";
+import { sealedTelemetry } from "./privateTurn.js";
 
 export const TASK_MODEL = MODELS.sonnet;
 
@@ -96,7 +97,7 @@ export async function memberSaysGoalDone(goal: string, recent: string): Promise<
   const { text } = await generateText({
     model: anthropic(MODELS.haiku),
     maxOutputTokens: 200,
-    experimental_telemetry: { isEnabled: true, functionId: "taskTurn.goalDone" },
+    experimental_telemetry: { ...sealedTelemetry(), isEnabled: true, functionId: "taskTurn.goalDone" },
     prompt: `Co is working on this for a member: "${goal}".\nTheir newest messages, oldest first:\n${lines.map((l) => `- ${l}`).join("\n")}\n\nDid they say THIS goal is done, handled themselves (booked it, found it, sorted it), or no longer wanted? Only this goal: a different goal they mention doesn't count. Return ONLY JSON: {"done": true|false, "quote": "their exact words that say so, or null"}.`,
   });
   const m = text.match(/\{[\s\S]*\}/);
@@ -285,7 +286,7 @@ export async function runTaskTurnWith(task: CoTask, deps: TaskTurnDeps): Promise
       model: anthropic(TASK_MODEL),
       maxOutputTokens: 6000,
       providerOptions: { anthropic: { effort: "medium" } },
-      experimental_telemetry: { isEnabled: true, functionId: "taskTurn.run" },
+      experimental_telemetry: { ...sealedTelemetry(), isEnabled: true, functionId: "taskTurn.run" },
       tools,
       stopWhen: [stepCountIs(12), () => decided !== null],
       prompt: taskTurnPrompt({ task, firstName: deps.person.first_name || "them", now: deps.now().toISOString().slice(0, 16), zone: deps.zone, recent: deps.recent, final, person: deps.personModel }),

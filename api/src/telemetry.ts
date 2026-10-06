@@ -2,12 +2,13 @@ import { NodeSDK } from "@opentelemetry/sdk-node";
 import { LangfuseSpanProcessor } from "@langfuse/otel";
 import { LlmUsageSpanProcessor } from "./services/llmUsage.js";
 import { onShutdown } from "./services/shutdown.js";
+import { sealedTelemetry } from "./services/privateTurn.js";
 
 // Traces every Claude call the Vercel AI SDK makes (generateText across
 // profileExtraction/matching/circleInvite/circleApproval/booking/scheduling/
 // places/co/sendblue/ai) into Langfuse. LangfuseSpanProcessor recognizes the
 // AI SDK's own OTEL Gen AI spans directly — every call site just needs
-// `experimental_telemetry: { isEnabled: true, functionId: "..." }` to start
+// `experimental_telemetry: { ...sealedTelemetry(), isEnabled: true, functionId: "..." }` to start
 // showing up here; nothing else has to change for that baseline. Call sites
 // that also have a user_id in scope wrap the call in propagateAttributes
 // (see e.g. profileExtraction.ts) to attach userId/traceName so traces are

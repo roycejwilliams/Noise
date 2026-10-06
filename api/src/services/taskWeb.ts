@@ -18,6 +18,7 @@ import { checkGrounding, checkTiming, placesClaimed } from "../harness/matchGate
 import type { TierMatch } from "./tieredRecommendation.js";
 import { findOfficialPage, looksOfficial, readPageText, reserveWebSearch } from "./webOpportunitySearch.js";
 import { parseModelJson } from "./modelJson.js";
+import { sealedTelemetry } from "./privateTurn.js";
 
 export type RawDetail = { label: string; value: string };
 export type RawResult = { name: string; url: string; details: RawDetail[]; date?: string | null; deadline?: string | null };
@@ -239,7 +240,7 @@ export async function taskWebSearch(
     const { text } = await generateText({
       model: anthropic(MODELS.sonnet),
       providerOptions: { anthropic: { effort: "low" } },
-      experimental_telemetry: { isEnabled: true, functionId: "taskWeb.search", metadata: { userId } },
+      experimental_telemetry: { ...sealedTelemetry(), isEnabled: true, functionId: "taskWeb.search", metadata: { userId } },
       tools: { web_search: anthropic.tools.webSearch_20250305({ maxUses: 2 }) },
       stopWhen: stepCountIs(3),
       timeout: 60_000,

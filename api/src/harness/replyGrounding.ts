@@ -46,7 +46,9 @@ import { recentCallCorrections } from "./callGrounding.js";
 import { repeatQuestionCheck, sameQuestion } from "./repeatAsk.js";
 import { asksForLink, findLines, linkRequestInstruction, recentResearchFinds, relevantFinds } from "../services/researchFinds.js";
 import { DISCRETION_GUIDE, apologyOnly, discreetFinal, isDiscreetTurn, isNeutralTurn } from "./discretion.js";
+import { isPrivateTurn } from "../services/privateTurn.js";
 import { PROMISE_RE, dropPromise, promiseFact, promiseSentence, promiseStays, trackPromise } from "../services/promises.js";
+import { sealedTelemetry } from "../services/privateTurn.js";
 
 // Model policy (Royce, 2026-09-14): Sonnet 5 for anything with judgment or
 // side effects; Haiku only for narrow, code-checked reads.
@@ -294,6 +296,8 @@ export async function gatherReplyFacts(
 // honestly (2026-09-16: a search was dropped mid-turn when a newer message
 // arrived, and the answer was lost with it).
 export async function recordSearchNote(userId: string, note: string): Promise<void> {
+  // Not while a document is open: the note carries the query (services/privateTurn.ts).
+  if (isPrivateTurn(userId)) return;
   await pool
     .query(`INSERT INTO co_memories (user_id, memory_type, content) VALUES ($1, 'system', $2)`, [userId, `[search] ${note}`])
     .catch((err: any) => console.error("recordSearchNote failed (non-fatal):", err?.message ?? err));
@@ -736,7 +740,7 @@ async function extractClaims(draft: string, rf: ReplyFacts, src: GroundingSource
     // A stalled call held one check for 318s in a test (2026-09-26); past
     // this the check counts as unavailable and the usual fallback runs.
     abortSignal: AbortSignal.timeout(GROUNDING_CALL_TIMEOUT_MS),
-    experimental_telemetry: { isEnabled: true, functionId: "reply.grounding.check" },
+    experimental_telemetry: { ...sealedTelemetry(), isEnabled: true, functionId: "reply.grounding.check" },
     prompt: `You check a text message Co is about to send, before it goes out. Find every claim in it that could be false, and say whether the sources below support it.
 
 Claims to find (one type each):
@@ -842,7 +846,7 @@ async function redraft(draft: string, failed: GateCheck[], rf: ReplyFacts, src: 
     maxOutputTokens: 1000,
     providerOptions: { anthropic: { effort: GROUNDING_EFFORT } },
     abortSignal: AbortSignal.timeout(GROUNDING_CALL_TIMEOUT_MS),
-    experimental_telemetry: { isEnabled: true, functionId: "reply.grounding.redraft" },
+    experimental_telemetry: { ...sealedTelemetry(), isEnabled: true, functionId: "reply.grounding.redraft" },
     prompt: `${CO_VOICE}
 
 ${CO_TEXT_CHANNEL}
@@ -1191,7 +1195,7 @@ export async function groundReply(
   // A concrete promise with nothing behind it becomes a task Co owns, so it is
   // true and gets kept (services/promises.ts). Only on a real send, never in an eval.
   let promiseTaskId: number | null = null;
-  if (opts.userId && opts.record !== false && unbackedFollowup(draft, rf)) {
+  if (opts.userId && opts.record !== false && !isPrivateTurn(opts.userId) && unbackedFollowup(draft, rf)) {
     const tracked = await trackPromise({ userId: opts.userId, reply: draft, theirMessage: src.message, privateNames: rf.privateNames, discreet: isDiscreetTurn(rf.instructions) }).catch((err: any) => ({ ok: false as const, why: String(err?.message ?? err).slice(0, 120) }));
     if (tracked.ok) {
       addFact(rf, "did_this_turn", promiseFact(tracked.task));
@@ -1299,7 +1303,7 @@ export async function groundReply(
       userId: opts.userId ?? null,
       outcome: "act",
       action: result.outcome,
-      proposal: { draft, final: result.final },
+      proposal: opts.userId && isPrivateTurn(opts.userId) ? { sealed: true } : { draft, final: result.final },
       checks: result.checks,
       confidence: result.outcome === "unchecked" ? "low" : null,
       reason: result.checks.filter((c) => !c.pass).map((c) => c.reason ?? c.name).join("; ") || null,

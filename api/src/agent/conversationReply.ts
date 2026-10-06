@@ -12,6 +12,7 @@ import { groundReply, LAYER3_MODELS, renderReplyFacts, type GroundingResult, typ
 import { capitalizeSentences, dropRepeatedQuestion, looksLikeMetaReply } from "../services/textStyle.js";
 import { lastCoLine } from "../services/conversationClose.js";
 import { REPLY_DELAYED_NOTE, REPLY_GAVE_UP_NOTE, REPLY_NO_RETRY_NOTE } from "../services/turnFailure.js";
+import { sealedTelemetry } from "../services/privateTurn.js";
 
 // How Co listens, the part of the call guide that carries over to text,
 // written the way Co should text (2026-09-24). The full guide is 18,600
@@ -134,7 +135,7 @@ async function verifyAndRecordCallOffer(
   try {
     const { text: rawCheck } = await generateText({
       model: anthropic(LAYER3_MODELS.narrow),
-      experimental_telemetry: { isEnabled: true, functionId: "agent.conversationReply.callOfferCheck" },
+      experimental_telemetry: { ...sealedTelemetry(), isEnabled: true, functionId: "agent.conversationReply.callOfferCheck" },
       prompt: `Does this text message actually offer that CO will call THEM — Co proposing to place an outbound call to the person, not just telling them how they can call Co themselves — in any wording, even indirectly (e.g. "I'm here if you want to talk this through")? Not just related to talking or listening in general — specifically Co offering to call them.
 
 Message: "${replyText}"
@@ -205,7 +206,7 @@ export async function filterRelevantMemories(resolvedContent: string, candidates
   try {
     const { text } = await generateText({
       model: anthropic(LAYER3_MODELS.narrow),
-      experimental_telemetry: { isEnabled: true, functionId: "agent.conversationReply.filterRelevantMemories" },
+      experimental_telemetry: { ...sealedTelemetry(), isEnabled: true, functionId: "agent.conversationReply.filterRelevantMemories" },
       prompt: `A user just said: "${resolvedContent}"
 
 Here are memories retrieved by topic similarity — they may or may not actually be about what the user just said (similarity search has no sense of recency or real relevance):
@@ -521,7 +522,7 @@ Then act with your tools:
     // tools answer "out of time" so Co writes what it has; this stops the
     // loop between steps, never mid-tool, TURN_GRACE_S after that.
     stopWhen: [stepCountIs(LOOP_BUDGET.steps), () => state.sendStopped, () => state.reacted, () => Date.now() > replyDeadline],
-    experimental_telemetry: { isEnabled: true, functionId: "agent.conversationReply" },
+    experimental_telemetry: { ...sealedTelemetry(), isEnabled: true, functionId: "agent.conversationReply" },
     ...(withImage && input.imageForVision
       ? {
           messages: [

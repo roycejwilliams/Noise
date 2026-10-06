@@ -42,6 +42,7 @@ export type LinkRead = {
 };
 
 import { CO_CRITIQUE } from "./coVoice.js";
+import { sealedTelemetry } from "./privateTurn.js";
 export const EXCERPT_MAX = 3500;
 
 const MAX_BYTES = 1_500_000;
@@ -234,7 +235,7 @@ export async function modelRead(url: string, text: string): Promise<{ fields: Pa
     model: anthropic(MODELS.haiku),
     maxOutputTokens: 800,
     abortSignal: AbortSignal.timeout(15_000),
-    experimental_telemetry: { isEnabled: true, functionId: "linkReader.read" },
+    experimental_telemetry: { ...sealedTelemetry(), isEnabled: true, functionId: "linkReader.read" },
     prompt: readPrompt(url, text),
   });
   const p = parseModelJson(raw) ?? {};

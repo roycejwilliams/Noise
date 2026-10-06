@@ -121,11 +121,22 @@ export async function runMigrations(): Promise<void> {
     .then(() => pool.query(`CREATE UNIQUE INDEX IF NOT EXISTS uq_call_promise_results ON call_promise_results (user_id, call_key, md5(content))`))
     .catch((err: Error) => console.error("call_promise_results table init failed:", err));
 
-  // Private memories (2026-10-05, services/privateTurn.ts): everything written during a turn that touched a member's
-  // document. No embedding; every reader that serves another member or builds anything shared skips them.
+  // Private memories (2026-10-05, services/privateTurn.ts): what is written for a member during a turn that touched one of
+  // their documents lives HERE, not in co_memories. Nothing that reads co_memories (matching, profiles, recaps, snapshots,
+  // tasks, proactive texts, calls, reports) can see these rows; only the member's own live reply context reads this table
+  // (and the match gate's deny list, which must know them). No embedding column: nothing semantic can find them.
   await pool
-    .query(`ALTER TABLE co_memories ADD COLUMN IF NOT EXISTS private BOOLEAN NOT NULL DEFAULT false`)
-    .catch((err: Error) => console.error("co_memories.private migration failed:", err));
+    .query(
+      `CREATE TABLE IF NOT EXISTS co_private_memories (
+        id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+        user_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+        memory_type TEXT NOT NULL,
+        content TEXT NOT NULL,
+        created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+      )`,
+    )
+    .then(() => pool.query(`CREATE INDEX IF NOT EXISTS idx_co_private_memories_user ON co_private_memories (user_id, created_at DESC)`))
+    .catch((err: Error) => console.error("co_private_memories table init failed:", err));
 
   // Documents a member sends Co (2026-10-05, services/documents.ts): the file itself, what it says, kept for that
   // member only. One row per distinct file per member.
@@ -134,6 +145,8 @@ export async function runMigrations(): Promise<void> {
       `CREATE TABLE IF NOT EXISTS member_documents (
         id BIGSERIAL PRIMARY KEY,
         user_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+        -- The number the member and Co use ("#2"): theirs alone, so it never hints at how many others have sent documents.
+        n INT NOT NULL,
         kind TEXT NOT NULL,
         name TEXT,
         media_type TEXT,
@@ -147,7 +160,8 @@ export async function runMigrations(): Promise<void> {
         text_content TEXT,
         created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
         last_used_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-        UNIQUE (user_id, sha256)
+        UNIQUE (user_id, sha256),
+        UNIQUE (user_id, n)
       )`,
     )
     .then(() => pool.query(`CREATE INDEX IF NOT EXISTS idx_member_documents_user ON member_documents (user_id, created_at DESC)`))

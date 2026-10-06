@@ -18,6 +18,7 @@ import { generateText } from "ai";
 import { MODELS } from "../models.js";
 import { askJevZdr, gatewayConfigured, JEV_SURE, type JevBool } from "./jevGateway.js";
 import { parseModelJson } from "./modelJson.js";
+import { sealedTelemetry } from "./privateTurn.js";
 
 export type FactItem = { thing: string; fact: string; passage: string };
 export type Verdict = "yes" | "no" | "unclear";
@@ -70,7 +71,7 @@ async function checkBatch(items: FactItem[], deps: { jev: typeof askJevZdr; haik
 }
 
 const haikuDefault = async (prompt: string) =>
-  (await generateText({ model: anthropic(MODELS.haiku), maxOutputTokens: 400, experimental_telemetry: { isEnabled: true, functionId: "search.factCheck" }, prompt })).text;
+  (await generateText({ model: anthropic(MODELS.haiku), maxOutputTokens: 400, experimental_telemetry: { ...sealedTelemetry(), isEnabled: true, functionId: "search.factCheck" }, prompt })).text;
 
 export async function checkFacts(
   items: FactItem[],

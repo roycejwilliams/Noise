@@ -37,6 +37,7 @@ import { cleanCoMessage } from "../services/sendblue.js";
 import { enqueueCandidate } from "../harness/proactive.js";
 import { CO_VOICE, CO_TEXT_CHANNEL } from "../services/coVoice.js";
 import { MODELS } from "../models.js";
+import { sealedTelemetry } from "../services/privateTurn.js";
 
 // Shared intro/closing, not regenerated per person, and neither one ever
 // contains a greeting or the person's name — the code owns "Hey {name},"
@@ -52,7 +53,7 @@ async function draftLine(instruction: string, fallback: string): Promise<string>
   try {
     const { text } = await generateText({
       model: anthropic(LINE_MODEL),
-      experimental_telemetry: { isEnabled: true, functionId: "notifyTesters.draftLine" },
+      experimental_telemetry: { ...sealedTelemetry(), isEnabled: true, functionId: "notifyTesters.draftLine" },
       prompt: `${CO_VOICE}\n\n${CO_TEXT_CHANNEL} You're texting someone who's helping test Co before launch. ${instruction} No greeting, no "Hey", no using their name — that's handled separately. No em dashes. Return ONLY that one short line, nothing else.`,
     });
     const trimmed = text.trim();

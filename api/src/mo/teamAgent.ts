@@ -16,6 +16,7 @@ import { recordDecision } from "../harness/core.js";
 import { guardTools } from "../agent/toolGuard.js";
 import { MO_VOICE, introNeeded } from "./moVoice.js";
 import { moAbilityForTool, moCapabilitySheet, moToolUse } from "./abilities.js";
+import { sealedTelemetry } from "../services/privateTurn.js";
 
 export type TeamPending = { kind: "review" | "question"; p: any } | null;
 
@@ -349,7 +350,7 @@ export async function runMoTeamTurn(input: TeamTurnInput): Promise<TeamTurn> {
       // Handed over or replied to directly: it's Mo's to answer.
       tools: input.awareness?.handedOff || input.awareness?.repliedTo ? Object.fromEntries(Object.entries(tools).filter(([n]) => n !== "notForMo")) : tools,
       stopWhen: [stepCountIs(5), () => passed],
-      experimental_telemetry: { isEnabled: true, functionId: "mo.teamTurn" },
+      experimental_telemetry: { ...sealedTelemetry(), isEnabled: true, functionId: "mo.teamTurn" },
     });
     text = r.text.trim();
   } catch (err: any) {

@@ -4,6 +4,7 @@ import pool from "../db/db.js";
 import { MODELS } from "../models.js";
 import { isOpenAsk } from "../harness/profileWrite.js";
 import { parseModelJson } from "./modelJson.js";
+import { sealedTelemetry } from "./privateTurn.js";
 
 // Model policy (Royce, 2026-09-14): scoring decides who gets introduced to
 // whom, so it runs on Sonnet 5.
@@ -75,7 +76,7 @@ async function fetchTopMemoryPerCandidate(
        SELECT user_id, content,
               ROW_NUMBER() OVER (PARTITION BY user_id ORDER BY content_embedding <=> $2::vector) AS rn
        FROM co_memories
-       WHERE user_id = ANY($1::uuid[]) AND content_embedding IS NOT NULL AND NOT private
+       WHERE user_id = ANY($1::uuid[]) AND content_embedding IS NOT NULL
      ) ranked
      WHERE rn <= 3
      ORDER BY user_id, rn`,
@@ -172,7 +173,7 @@ async function runAskScoring<T extends ScorableCandidate>(
   try {
     const { text: raw } = await generateText({
       model: anthropic(SCORING_MODEL),
-      experimental_telemetry: { isEnabled: true, functionId },
+      experimental_telemetry: { ...sealedTelemetry(), isEnabled: true, functionId },
       prompt,
     });
 

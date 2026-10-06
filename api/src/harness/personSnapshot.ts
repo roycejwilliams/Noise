@@ -20,6 +20,7 @@ import pool from "../db/db.js";
 import { MODELS } from "../models.js";
 import { parseModelJson } from "../services/modelJson.js";
 import { recordDecision } from "./core.js";
+import { sealedTelemetry } from "../services/privateTurn.js";
 
 export type PersonSnapshot = {
   work: string | null; // what they do and at what stage
@@ -202,7 +203,7 @@ async function checkSnapshot(userId: string, snapshot: PersonSnapshot, recent: {
     const { text } = await generateText({
       model: anthropic(MODELS.sonnet),
       providerOptions: { anthropic: { effort: "low" } },
-      experimental_telemetry: { isEnabled: true, functionId: "personSnapshot.check" },
+      experimental_telemetry: { ...sealedTelemetry(), isEnabled: true, functionId: "personSnapshot.check" },
       prompt: snapshotCheckPrompt(snapshot, recent),
     });
     return (parseModelJson<{ problems?: SnapshotProblem[] }>(text).problems ?? []).filter((p) => p && p.kind);
@@ -259,7 +260,7 @@ export async function refreshPersonSnapshot(userId: string, opts: { force?: bool
       const { text } = await generateText({
         model: anthropic(MODELS.sonnet),
         providerOptions: { anthropic: { effort: "low" } },
-        experimental_telemetry: { isEnabled: true, functionId: "personSnapshot.rebuild" },
+        experimental_telemetry: { ...sealedTelemetry(), isEnabled: true, functionId: "personSnapshot.rebuild" },
         prompt: snapshotPrompt(input) + (feedback ? `\n\nYour last picture had these problems; fix them:\n${feedback}` : ""),
       });
       return parseSnapshot(text);
@@ -271,7 +272,7 @@ export async function refreshPersonSnapshot(userId: string, opts: { force?: bool
       const { text } = await generateText({
         model: anthropic(MODELS.sonnet),
         providerOptions: { anthropic: { effort: "low" } },
-        experimental_telemetry: { isEnabled: true, functionId: "personSnapshot.rebuildWithThreads" },
+        experimental_telemetry: { ...sealedTelemetry(), isEnabled: true, functionId: "personSnapshot.rebuildWithThreads" },
         prompt: snapshotAndThreadsPrompt(snapshotPrompt(input), threads.threadsPrompt(input.firstName, onFile, lines.slice(-80))),
       });
       let both: any = null;

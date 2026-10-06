@@ -19,6 +19,7 @@ import { recordDecision, type GateCheck } from "./core.js";
 import { enqueueCandidate } from "./proactive.js";
 import { PROACTIVE_PURPOSE } from "./proactivePurpose.js";
 import { listThreads, renderThreads, type MemberThread } from "./memberThreads.js";
+import { sealedTelemetry } from "../services/privateTurn.js";
 
 export type WeekFacts = {
   sends: { type: string; purpose: string; at: string; message: string }[];
@@ -105,7 +106,7 @@ export async function reflectOnMember(userId: string): Promise<ReflectionMove | 
     const { text } = await generateText({
       model: anthropic(MODELS.sonnet),
       providerOptions: { anthropic: { effort: "low" } },
-      experimental_telemetry: { isEnabled: true, functionId: "proactive.reflection" },
+      experimental_telemetry: { ...sealedTelemetry(), isEnabled: true, functionId: "proactive.reflection" },
       prompt: reflectionPrompt(rows[0]?.first_name || "them", facts),
     });
     const { move, checks } = gateReflection(parseModelJson<Partial<ReflectionMove>>(text), facts);

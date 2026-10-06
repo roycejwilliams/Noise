@@ -3,6 +3,7 @@ import { generateText } from "ai";
 import pool from "../db/db.js";
 import { writeMemory } from "./memory.js";
 import { MODELS } from "../models.js";
+import { sealedTelemetry } from "./privateTurn.js";
 
 // The recap decides what's stale and what to drop from Co's running picture
 // of someone, so it's a judgment call: Sonnet 5 (Royce's model policy).
@@ -49,7 +50,6 @@ export async function buildRecap(userId: string): Promise<void> {
     `SELECT content FROM co_memories
      WHERE user_id = $1 AND memory_type IN ('text_exchange', 'call_transcript')
        AND content NOT LIKE 'Co initiated call%'
-       AND NOT private
        AND created_at > $2
      ORDER BY created_at ASC`,
     [userId, lastRecap?.created_at ?? new Date(0)],
@@ -72,7 +72,7 @@ export async function buildRecap(userId: string): Promise<void> {
   try {
     const { text: raw } = await generateText({
       model: anthropic(RECAP_MODEL),
-      experimental_telemetry: { isEnabled: true, functionId: "memoryCompaction.buildRecap" },
+      experimental_telemetry: { ...sealedTelemetry(), isEnabled: true, functionId: "memoryCompaction.buildRecap" },
       prompt: `You maintain Co's running understanding of one specific person, across many conversations over time.
 
 ${lastRecap ? `Your previous recap of them:\n${lastRecap.content}` : "You have no previous recap of them yet — this is the first one."}
