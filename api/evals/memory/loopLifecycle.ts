@@ -72,9 +72,38 @@ check("draftableLoops: only the open, recently confirmed one", OL.draftableLoops
 const forDraft = OL.describeLoops(rows as any, { now: NOW, today: TODAY, draftOnly: true })!;
 check("a draft's loops hold the advisor and nothing about the pitch or the waiting one", /advisor/.test(forDraft) && !/Pitch|Friday|investor|Venue/.test(forDraft) && !/not confirmed lately/.test(forDraft));
 const forReply = OL.describeLoops(rows as any, { now: NOW, today: TODAY })!;
-check("a reply can see the rest as background, marked not confirmed lately", /Pitch investors Friday[^;]*\[not confirmed lately: background only/.test(forReply));
+check("a reply can see the rest as background, marked not confirmed lately", /Pitch investors Friday[^;]*\[not confirmed lately: check before saying it is current\]/.test(forReply));
 check("the advisor line is not marked stale", !/advisor[^;]*not confirmed lately/.test(forReply));
 check("nothing draftable -> no loops block at all", OL.describeLoops([rows[0]] as any, { now: NOW, today: TODAY, draftOnly: true }) === null);
+
+// ---- the member's own text confirms a loop they are talking about
+const lp = [
+  { id: 1, title: "Find a venue for dinner Oct 10", detail: "shortlist: Lola's, Marlow" },
+  { id: 2, title: "Find an advisor", detail: null },
+  { id: 3, title: "Pitch investors", detail: null },
+];
+check("talking about the loop confirms it (two content words in common)", OL.loopsMentioned(lp, "Did you hear back from Lola's about the dinner venue?").join() === "1");
+check("a short title is confirmed by all of its words", OL.loopsMentioned(lp, "any luck with the advisor?").join() === "2");
+check("an unrelated text confirms nothing (so a check-in cannot be kept alive by 'ok thanks')", OL.loopsMentioned(lp, "ok thanks!").length === 0 && OL.loopsMentioned(lp, "how is the weather").length === 0);
+check("one shared word in a longer title is not enough", OL.loopsMentioned(lp, "dinner sounds great").length === 0);
+let updated: any[] = [];
+const dbq = (await import("../../src/db/db.js")).default as any;
+dbq.query = async (sql: string, a: any[]) => { updated.push([sql, a]); return { rows: [] }; };
+const rowsIn = [{ ...lp[1], lastConfirmedAt: day("2026-09-20") }, { ...lp[2], lastConfirmedAt: day("2026-09-20") }];
+const after = await OL.confirmMentioned("u1", rowsIn, "any luck with the advisor?");
+check("confirmMentioned writes last_confirmed_at for that loop only, and returns it fresh to the same turn's reply", updated.length === 1 && /SET last_confirmed_at = NOW\(\)/.test(updated[0][0]) && updated[0][1][1].join() === "2" && /user_id = \$1 AND id = ANY\(\$2::bigint\[\]\) AND closed_at IS NULL/.test(updated[0][0]) && +after[0].lastConfirmedAt! > +NOW - 86_400_000 * 2 && +after[1].lastConfirmedAt! === +day("2026-09-20"));
+updated = [];
+await OL.confirmMentioned("u1", rowsIn, "ok thanks");
+check("nothing mentioned, no write", updated.length === 0);
+check("a confirmed loop is draftable again, and the decay clock restarts (an ask made before it no longer counts)", LC.isDraftable(row({ lastConfirmedAt: NOW }), NOW, TODAY) && LC.decayAction(row({ lastConfirmedAt: NOW, decayAskedAt: day("2026-09-25") }), NOW, TODAY).kind === "none");
+check("the reply path confirms what the member's text is about before it describes the loops", /o\.confirmMentioned\(user\.id, \(await o\.syncOpenLoops\(user\.id\)\)\.rows, content\)/.test(src("routes/sendblue.ts")));
+
+// ---- a reply doesn't hedge on work that is in motion
+const mo = [{ id: 9, title: "Find a venue for dinner", status: "open", detail: null, dueDate: null, source: "task", lastConfirmedAt: day("2026-09-10"), inMotion: true }, { id: 10, title: "Old idea about a podcast", status: "open", detail: null, dueDate: null, source: "task", lastConfirmedAt: day("2026-09-10"), inMotion: false }];
+const rep = OL.describeLoops(mo as any, { now: NOW, today: TODAY, withIds: true })!;
+check("a reply: work Co has scheduled is described plainly even if no one confirmed it lately; the idle one is tagged", !/venue for dinner[^;]*not confirmed lately/.test(rep) && /podcast[^;]*not confirmed lately/.test(rep));
+check("but a draft never uses it unless it is open and recently confirmed, in motion or not", !/venue/.test(OL.describeLoops(mo as any, { now: NOW, today: TODAY, draftOnly: true }) ?? ""));
+check("the reply's loops carry whether Co has them in motion", /AS in_motion FROM open_loops o LEFT JOIN co_tasks/.test(src("services/openLoops.ts")));
 
 // ---- wiring
 const ol = src("services/openLoops.ts"), pm = src("services/personModel.ts"), mig = src("db/migrations.ts");

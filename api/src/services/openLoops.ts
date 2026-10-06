@@ -19,7 +19,7 @@ const localDay = (d: Date) => DateTime.fromJSDate(d).setZone(LOOP_ZONE).toISODat
 export const LOOP_STATUSES = ["open", "waiting_on_reply", "unconfirmed", "decision_needed", "done", "dropped"] as const;
 export type LoopStatus = (typeof LOOP_STATUSES)[number];
 export type DerivedLoop = { source: "task" | "notes" | "ask" | "offer"; sourceRef: string; title: string; status: LoopStatus; detail: string | null; dueDate: string | null; taskId: number | null; signalAt?: Date | null };
-export type LoopRow = DerivedLoop & { id: number; statusBy: "code" | "co"; changedAt: Date; seenAt: Date | null; wokeAt: Date | null; closedAt: Date | null; closedReason: string | null; lastConfirmedAt: Date | null; decayAskedAt: Date | null };
+export type LoopRow = DerivedLoop & { id: number; statusBy: "code" | "co"; changedAt: Date; seenAt: Date | null; wokeAt: Date | null; closedAt: Date | null; closedReason: string | null; lastConfirmedAt: Date | null; decayAskedAt: Date | null; inMotion?: boolean };
 
 const STATUS_WORDS: Record<LoopStatus, string> = {
   open: "in progress",
@@ -57,18 +57,18 @@ export function deriveLoops(src: {
 // Pure: what the reply reads each turn. withIds (text replies, which have
 // updateLoop) gives each loop the id updateLoop names it by; calls, tasks and
 // the sweep read it without, since nothing there takes an id.
-export function describeLoops(rows: (Pick<LoopRow, "title" | "status" | "detail" | "dueDate" | "source"> & { id?: number; lastConfirmedAt?: Date | null; closedAt?: Date | null; closedReason?: string | null; decayAskedAt?: Date | null })[], opts: { withIds?: boolean; now?: Date; today?: string; draftOnly?: boolean } = {}): string | null {
+export function describeLoops(rows: (Pick<LoopRow, "title" | "status" | "detail" | "dueDate" | "source"> & { id?: number; inMotion?: boolean; lastConfirmedAt?: Date | null; closedAt?: Date | null; closedReason?: string | null; decayAskedAt?: Date | null })[], opts: { withIds?: boolean; now?: Date; today?: string; draftOnly?: boolean } = {}): string | null {
   const now = opts.now ?? new Date();
   const today = opts.today ?? localDay(now);
   const live = rows.filter((r) => r.status !== "done" && r.status !== "dropped" && !r.closedAt);
   // A row with no confirmation date predates the lifecycle: unconfirmed, never stated as current.
-  const draftable = (r: (typeof rows)[number]) => isDraftable({ status: r.status, closedAt: r.closedAt ?? null, closedReason: r.closedReason ?? null, dueDate: r.dueDate, lastConfirmedAt: r.lastConfirmedAt ?? null, decayAskedAt: r.decayAskedAt ?? null }, now, today);
+  const draftable = (r: (typeof rows)[number]) => !!r.inMotion && !opts.draftOnly ? true : isDraftable({ status: r.status, closedAt: r.closedAt ?? null, closedReason: r.closedReason ?? null, dueDate: r.dueDate, lastConfirmedAt: r.lastConfirmedAt ?? null, decayAskedAt: r.decayAskedAt ?? null }, now, today);
   const open = (opts.draftOnly ? live.filter(draftable) : live).slice(0, 8);
   if (!open.length) return null;
   const ids = !!opts.withIds;
   const lines = open.map((r) => {
     const fresh = draftable(r);
-    return `${ids && r.id != null ? `[loop ${r.id}] ` : ""}${r.title}: ${STATUS_WORDS[r.status]}${r.detail ? ` (${r.detail})` : ""}${r.dueDate ? `, due ${r.dueDate}` : ""}${fresh ? "" : " [not confirmed lately: background only, ask before treating it as current]"}`;
+    return `${ids && r.id != null ? `[loop ${r.id}] ` : ""}${r.title}: ${STATUS_WORDS[r.status]}${r.detail ? ` (${r.detail})` : ""}${r.dueDate ? `, due ${r.dueDate}` : ""}${fresh ? "" : " [not confirmed lately: check before saying it is current]"}`;
   });
   return `What you're carrying for them right now, and where each stands (this is what to report when they ask what you're doing or how it's going, and what to move forward${ids ? "; the [loop N] ids are for updateLoop, never for your texts" : ""}): ${lines.join("; ")}.`;
 }
@@ -213,8 +213,13 @@ export async function syncOpenLoops(userId: string, now = new Date()): Promise<{
   } finally {
     client.release();
   }
-  const { rows: open } = await pool.query(`SELECT * FROM open_loops WHERE user_id = $1 AND closed_at IS NULL ORDER BY due_date NULLS LAST, changed_at DESC`, [userId]).catch(() => ({ rows: [] as any[] }));
-  return { rows: open.map(toRow), changed };
+  const { rows: open } = await pool
+    .query(
+      `SELECT o.*, (t.status = 'open' AND t.next_check_at IS NOT NULL AND t.next_check_at > NOW()) AS in_motion FROM open_loops o LEFT JOIN co_tasks t ON t.id = o.task_id WHERE o.user_id = $1 AND o.closed_at IS NULL ORDER BY o.due_date NULLS LAST, o.changed_at DESC`,
+      [userId],
+    )
+    .catch(() => ({ rows: [] as any[] }));
+  return { rows: open.map((x: any) => ({ ...toRow(x), inMotion: !!x.in_motion })), changed };
 }
 
 function toRow(r: any): LoopRow {
@@ -414,3 +419,29 @@ export function draftableLoops<T extends Pick<LoopRow, "status" | "closedAt" | "
   return rows.filter((r) => isDraftable(r, now, today));
 }
 export { stateOf };
+
+// The member's own text can confirm a loop: when what they just wrote is about it, it is confirmed now (so a loop they keep talking about
+// never decays, and one they have gone quiet on does). Pure word overlap on what the loop is about: no model, no guess about intent.
+const LOOP_STOP = new Set(["that", "this", "with", "from", "about", "have", "will", "would", "could", "should", "what", "when", "then", "there", "their", "them", "your", "just", "some", "find", "look", "looking", "want", "need", "help", "thing", "things", "something", "anything", "still", "also", "into", "over", "very", "much", "like", "know", "think", "going", "been", "they", "were", "does", "really", "maybe", "today", "tomorrow", "week", "next", "good", "great"]);
+const loopWords = (s: string): string[] => [...new Set((String(s).toLowerCase().match(/[a-z][a-z'-]{3,}/g) ?? []).filter((w) => !LOOP_STOP.has(w)).map((w) => w.replace(/(?:ing|ed|es|s)$/, "").slice(0, 5)))];
+export function loopsMentioned(rows: { id: number; title: string; detail: string | null }[], text: string): number[] {
+  const said = new Set(loopWords(text));
+  if (!said.size) return [];
+  return rows
+    .filter((r) => {
+      const title = loopWords(r.title);
+      const all = new Set([...title, ...loopWords(r.detail ?? "")]);
+      const shared = [...all].filter((w) => said.has(w));
+      const sharedTitle = title.filter((w) => said.has(w));
+      // Two content words in common, or the whole of a short title.
+      return shared.length >= 2 || (title.length > 0 && title.length <= 2 && sharedTitle.length === title.length);
+    })
+    .map((r) => r.id);
+}
+export async function confirmMentioned<T extends { id: number; title: string; detail: string | null; lastConfirmedAt: Date | null }>(userId: string, rows: T[], text: string): Promise<T[]> {
+  const ids = loopsMentioned(rows, text);
+  if (!ids.length) return rows;
+  await pool.query(`UPDATE open_loops SET last_confirmed_at = NOW() WHERE user_id = $1 AND id = ANY($2::bigint[]) AND closed_at IS NULL`, [userId, ids]).catch((err: any) => console.error("openLoops: confirming mentioned loops failed:", err?.message ?? err));
+  const now = new Date();
+  return rows.map((r) => (ids.includes(r.id) ? { ...r, lastConfirmedAt: now } : r));
+}
