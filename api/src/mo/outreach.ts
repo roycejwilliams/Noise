@@ -227,6 +227,14 @@ async function warm(p: any): Promise<string> {
 }
 
 async function contact(p: any): Promise<string> {
+  // A member's Mo (mo/memberFlow.ts) reached this person in the last 30 days: the club contacts a stranger once per 30 days.
+  if (p.x_user_id) {
+    const { rows } = await pool.query(`SELECT 1 FROM mo_member_candidates WHERE x_user_id = $1 AND contacted_at > NOW() - INTERVAL '30 days' LIMIT 1`, [p.x_user_id]).catch(() => ({ rows: [] as any[] }));
+    if (rows.length) {
+      await pool.query(`UPDATE mo_prospects SET status = 'closed', updated_at = NOW() WHERE id = $1`, [p.id]);
+      return "recently_contacted_by_a_member";
+    }
+  }
   if (p.x_user_id && xWriteConfigured()) {
     try {
       await sendDm(p.x_user_id, p.draft_dm);
@@ -282,7 +290,9 @@ export async function runMoOutreach(now = new Date()): Promise<void> {
   const failures: { cause: Cause; who: string }[] = [];
   let sendsOk = 0;
   let warmedToday = await sentToday("warmed_at");
-  let outboundToday = (await sentToday("contacted_at")) + (await sentToday("followed_up_at"));
+  // One daily count for the whole club: the team's sends plus every member's (mo/memberFlow.ts receipts).
+  const memberSentToday = await pool.query(`SELECT COUNT(*)::int AS n FROM mo_contact_receipts WHERE outcome IN ('sent', 'pending') AND kind IN ('approach', 'follow_up') AND created_at > NOW() - INTERVAL '24 hours'`).then((r) => r.rows[0]?.n ?? 0).catch(() => 0);
+  let outboundToday = (await sentToday("contacted_at")) + (await sentToday("followed_up_at")) + memberSentToday;
   for (const p of rows) {
     const step = nextOutreachStep(
       {
@@ -390,7 +400,13 @@ export async function runMoInbox(): Promise<void> {
       [e.senderId],
     );
     const p = rows[0];
-    if (!p || (p.last_dm_event_id && BigInt(p.last_dm_event_id) >= BigInt(e.id))) continue;
+    // Not one of the team's own prospects: maybe one of a member's people (mo/memberJobs.ts, the front desk).
+    if (!p) {
+      const { handleMemberDm } = await import("./memberJobs.js");
+      await handleMemberDm(e).catch((err: any) => console.error("mo: member reply failed (non-fatal):", err?.message ?? err));
+      continue;
+    }
+    if (p.last_dm_event_id && BigInt(p.last_dm_event_id) >= BigInt(e.id)) continue;
     await pool.query(`UPDATE mo_prospects SET last_dm_event_id = $2, last_inbound_at = NOW(), updated_at = NOW() WHERE id = $1`, [p.id, e.id]);
     const action = await handleProspectReply(p, e.text, (msg) => sendDm(p.x_user_id, msg));
     await recordDecision({ layer: 5, decision: "mo.reply", userId: null, outcome: action.startsWith("error") ? "skip" : "act", action, proposal: { no: p.no, channel: "dm", text: e.text.slice(0, 300) } });

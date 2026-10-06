@@ -82,6 +82,8 @@
     "evals/presence/readout.ts",
     "evals/lib/rules.ts",
     "evals/sweepSelect/rules.ts",
+    "evals/mo/memberRules.ts",
+    "evals/mo/memberFlow.ts",
     "evals/proactive/specifics.ts",
     "evals/memory/claims.ts",
     "evals/memory/loopLifecycle.ts",

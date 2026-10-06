@@ -110,6 +110,83 @@ export async function runMigrations(): Promise<void> {
         sent_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
         PRIMARY KEY (user_id, event_id)
       )`))
+    // Member-facing Mo (mo/memberFlow.ts): a member's opt-in and approved voice, their batches, the people in them, and a
+    // receipt for every contact. Separate from mo_prospects: the team's queue never reaches a member, and a member only
+    // ever reads their own rows.
+    .then(() => pool.query(`CREATE TABLE IF NOT EXISTS mo_member_optin (
+        user_id UUID PRIMARY KEY REFERENCES users(id) ON DELETE CASCADE,
+        status TEXT CHECK (status IN ('yes','no')),
+        asked_at TIMESTAMPTZ,
+        answered_at TIMESTAMPTZ,
+        quote TEXT,
+        voice_text TEXT,
+        voice_named BOOLEAN NOT NULL DEFAULT false,
+        voice_approved_at TIMESTAMPTZ,
+        voice_quote TEXT,
+        paused_at TIMESTAMPTZ,
+        hunt_last_at TIMESTAMPTZ,
+        offer_checked_at TIMESTAMPTZ
+      )`))
+    .then(() => pool.query(`ALTER TABLE invite_codes ADD COLUMN IF NOT EXISTS vouched_by UUID REFERENCES users(id) ON DELETE SET NULL`))
+    .then(() => pool.query(`CREATE TABLE IF NOT EXISTS mo_member_batches (
+        id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+        user_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+        ask_text TEXT NOT NULL,
+        need_text TEXT NOT NULL,
+        status TEXT NOT NULL DEFAULT 'open' CHECK (status IN ('open','approved','expired','cancelled')),
+        created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+        presented_at TIMESTAMPTZ,
+        approved_at TIMESTAMPTZ,
+        expires_at TIMESTAMPTZ NOT NULL
+      )`))
+    .then(() => pool.query(`CREATE TABLE IF NOT EXISTS mo_member_candidates (
+        id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+        batch_id UUID NOT NULL REFERENCES mo_member_batches(id) ON DELETE CASCADE,
+        user_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+        n INT NOT NULL,
+        x_user_id TEXT,
+        x_handle TEXT,
+        name TEXT,
+        email TEXT,
+        source TEXT NOT NULL DEFAULT 'x',
+        post_text TEXT,
+        evidence_quote TEXT NOT NULL,
+        why TEXT NOT NULL,
+        status TEXT NOT NULL DEFAULT 'pending' CHECK (status IN ('pending','approved','sending','skipped','contacted','replied','declined','invited','joined','closed','blocked')),
+        approved_text TEXT,
+        intro_seeded_at TIMESTAMPTZ,
+        approved_at TIMESTAMPTZ,
+        approved_quote TEXT,
+        contacted_at TIMESTAMPTZ,
+        channel TEXT,
+        followed_up_at TIMESTAMPTZ,
+        replied_at TIMESTAMPTZ,
+        invite_code TEXT,
+        joined_user_id UUID REFERENCES users(id) ON DELETE SET NULL,
+        joined_at TIMESTAMPTZ,
+        intro_quote TEXT,
+        intro_at TIMESTAMPTZ,
+        last_dm_event_id TEXT,
+        created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+        UNIQUE (batch_id, n)
+      )`))
+    .then(() => pool.query(`CREATE INDEX IF NOT EXISTS idx_mo_member_candidates_x ON mo_member_candidates (x_user_id)`))
+    .then(() => pool.query(`CREATE TABLE IF NOT EXISTS mo_contact_receipts (
+        id BIGSERIAL PRIMARY KEY,
+        user_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+        batch_id UUID,
+        candidate_id UUID,
+        kind TEXT NOT NULL CHECK (kind IN ('approach','follow_up','reply','intro')),
+        channel TEXT,
+        to_key TEXT,
+        text TEXT NOT NULL DEFAULT '',
+        member_yes_quote TEXT,
+        caps JSONB NOT NULL DEFAULT '{}'::jsonb,
+        outcome TEXT NOT NULL CHECK (outcome IN ('pending','sent','failed','blocked')),
+        reason TEXT,
+        created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+      )`))
+    .then(() => pool.query(`CREATE INDEX IF NOT EXISTS idx_mo_contact_receipts_user ON mo_contact_receipts (user_id, created_at DESC)`))
     // What Co holds about a member, each claim labelled (user_said / co_inferred) with a lifetime (services/claims.ts).
     .then(() => pool.query(`CREATE TABLE IF NOT EXISTS member_claims (
         id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
@@ -344,7 +421,7 @@ export async function runMigrations(): Promise<void> {
       // The text before a Co event (services/preArrival.ts).
       "event_pre_arrival",
       // The member brief and the question that lets it name them (services/eventBrief.ts).
-      "event_brief", "event_brief_ask", "event_follow_through",
+      "event_brief", "event_brief_ask", "event_follow_through", "mo_member", "mo_member_offer",
       // What a web search kept, with its link, so "send it" works on a later turn
       // (services/researchFinds.ts, 2026-10-03).
       "research_find",

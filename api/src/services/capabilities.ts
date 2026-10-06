@@ -188,6 +188,52 @@ export const ABILITIES: Ability[] = [
     use: "They answered Co's question about being named in the member brief (\"can I mention you by name in the member brief?\"). Quote their yes or no from this message. Only an explicit yes allows it; if they hedge, ask once more plainly and record nothing. A later \"actually, don't\" is a no.",
   },
   {
+    id: "mo_member_optin",
+    can: "Co has a partner, Mo, who can look outside the club for people who could help with something they asked for, only once they say yes. They see every person and every word first, and nothing goes out without their yes.",
+    tool: "answerMoOptIn",
+    confirm: "affects_another_member",
+    limits: { perTurn: 1 },
+    use: "They answered whether Mo may look outside the club for someone (after you offered). Pass answer yes or no, and quote their own words. Only a plain yes counts; if they hedge, ask once more and record nothing.",
+  },
+  {
+    id: "mo_member_voice",
+    can: "Co shows them exactly how Mo introduces itself to a stranger, and Mo uses that wording only once they say yes. It calls them \"a member of the club\" unless they tell it to use their name.",
+    tool: "approveMoVoice",
+    confirm: "affects_another_member",
+    limits: { perTurn: 1 },
+    use: "They said yes to how Mo would introduce itself (you showed them the message). Quote their yes. Set useMyName true ONLY if they said to use their name; the default is false. If they asked to change the wording, don't call this: tell them you'll pass it on and ask what to change.",
+  },
+  {
+    id: "mo_member_people",
+    can: "Co shows them each person Mo found, with what Mo would send, and Mo contacts only the ones they pick by number.",
+    tool: "approveMoPeople",
+    // No quote guard: their choice is read from their message by code (a lone "2" is a complete answer), and a choice that isn't clean is refused.
+    limits: { perTurn: 1 },
+    use: "They picked who Mo should reach out to from the list you showed (by number, or all, or none). Quote their words. Code reads the numbers from their message, so don't guess them: if the choice is unclear, ask which numbers.",
+  },
+  {
+    id: "mo_member_intro",
+    can: "When someone Mo found writes back and wants an invite, Co asks whether they'd like to be introduced if the person joins. They are never told that someone joined; the introduction is one email to both people, and only goes out when both say yes.",
+    tool: "approveMoIntro",
+    confirm: "affects_another_member",
+    limits: { perTurn: 1 },
+    use: "They said yes to being introduced to someone who wrote back to Mo, if that person joins. Quote their yes. If more than one person is waiting on this, pass who (their name or number) so it is the right one.",
+  },
+  {
+    id: "mo_member_stop",
+    can: "They can tell Co to stop Mo at any time. Nothing more goes out and anything not yet sent is cancelled.",
+    tool: "stopMo",
+    limits: { perTurn: 1 },
+    use: "They told you to stop, pause or cancel Mo reaching out for them. Do it at once, without asking them to confirm.",
+  },
+  {
+    id: "mo_member_contacts",
+    can: "Co can tell them exactly who Mo contacted for them, what was sent, and what came back.",
+    tool: "myMoContacts",
+    limits: { perTurn: 1 },
+    use: "They asked who Mo has contacted for them or what happened. Answer only from what this returns.",
+  },
+  {
     id: "event_going",
     can: "Co keeps track of whether they're still going to today's Co event, from what they tell it.",
     tool: "updateGoing",
@@ -389,8 +435,16 @@ const SITUATIONAL: Record<string, keyof Situation> = {
 export function situationFor(o: { kitFields: number; message: string; openTasks: number; eventToday: boolean }): Situation {
   return { kit: o.kitFields > 0 || /\b(apply|applying|application|form|linkedin|resume|cv|intro|introduce|submit|sign up|signup)\b/i.test(o.message), tasks: o.openTasks > 0, eventToday: o.eventToday };
 }
+// Member-facing Mo (mo/memberFlow.ts) is off unless both switches are on: until then members are never told it exists.
+export function memberMoOn(env: NodeJS.ProcessEnv = process.env): boolean {
+  return env.MO_MEMBER_ENABLED === "true" && env.MO_ENABLED === "true";
+}
+export const isMemberMoAbility = (a: { id: string }) => a.id.startsWith("mo_member_");
+export function memberMoTools(): string[] {
+  return ABILITIES.filter(isMemberMoAbility).map((a) => a.tool!).filter(Boolean);
+}
 export function capabilitySheet(opts: { team?: boolean; situation?: Situation } = {}): string[] {
-  const active = (a: Ability) => !opts.situation || !SITUATIONAL[a.id] || opts.situation[SITUATIONAL[a.id]];
+  const active = (a: Ability) => (!opts.situation || !SITUATIONAL[a.id] || opts.situation[SITUATIONAL[a.id]]) && (!isMemberMoAbility(a) || memberMoOn());
   return [...ABILITIES.filter((a) => (opts.team || !a.teamOnly) && active(a)).map((a) => a.can), ...LIMITS];
 }
 // The tools to leave out for a situation, so Co isn't offered what can't apply.

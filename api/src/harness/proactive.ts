@@ -98,6 +98,11 @@ export type ProactiveType =
   | "brief_name_ask"
   // After the member tells Co who they met: what stood out, and a note per person for them to send (services/eventFollowThrough.ts).
   | "event_followthrough"
+  // Member-facing Mo (mo/memberFlow.ts): the one offer, the voice to approve, the people to pick, and what came back.
+  | "mo_member_offer"
+  | "mo_member_voice"
+  | "mo_member_batch"
+  | "mo_member_update"
   // The one "still on your plate?" ask for a loop nobody has signalled on for a week (services/loopLifecycle.ts, 2026-10-06).
   | "loop_check"
   // Rare, seasonal check-in on a goal (services/goalJourney.ts): never on the 7-day ask clock.
@@ -156,6 +161,10 @@ export const TYPE_POLICY: Record<ProactiveType, TypePolicy> = {
   event_brief: { priority: 90 },
   brief_name_ask: { priority: 92 },
   event_followthrough: { priority: 93 },
+  mo_member_offer: { priority: 40 },
+  mo_member_voice: { priority: 86 },
+  mo_member_batch: { priority: 87 },
+  mo_member_update: { priority: 88 },
   // Once per loop (its own target key); it is a question, so it is the lowest of the companion kind.
   loop_check: { priority: 12, typeGapDays: 3 },
   // Seasonal: one in eight weeks at most (also enforced where it is queued); the closing moment is a reply to what they said.
@@ -506,7 +515,7 @@ const QUOTA_CHECKS = new Set(["daily_cap", "weekly_cap", "unanswered_pause", "en
 //     after a call they were on.
 // Discovery: profile offers, guest-match nudges. Companion check-ins (advice
 // follow-ups too) keep their own 4-day rhythm and the daily cap, as before.
-const ANSWERING_TYPES = new Set<string>(["network_tease", "ask_checkin", "window_followup", "debrief", "pre_arrival", "post_call", "event_followthrough", "goal_closed"]);
+const ANSWERING_TYPES = new Set<string>(["network_tease", "ask_checkin", "window_followup", "debrief", "pre_arrival", "post_call", "event_followthrough", "mo_member_voice", "mo_member_batch", "mo_member_update", "goal_closed"]);
 export function isAnswering(c: Pick<Candidate, "type" | "payload">): boolean {
   const p = (c.payload ?? {}) as { askId?: string | null; fromProfile?: boolean; again?: boolean };
   if (ANSWERING_TYPES.has(c.type)) return true;

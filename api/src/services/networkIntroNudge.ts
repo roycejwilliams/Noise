@@ -411,7 +411,7 @@ async function sendNetworkIntroEmail(a: MatchNudgeCandidate, b: MatchNudgeCandid
   return true;
 }
 
-async function askCandidateDirectly(candidate: MatchNudgeCandidate, asker: MatchNudgeCandidate, matchReason: string, askId: string | null): Promise<void> {
+export async function askCandidateDirectly(candidate: MatchNudgeCandidate, asker: MatchNudgeCandidate, matchReason: string, askId: string | null): Promise<void> {
   // The message tells the candidate the asker wants an intro, so that has
   // to be on record first.
   const askerOptedIn = await networkOptedIn(asker.user_id, candidate.user_id);
