@@ -93,6 +93,21 @@ check("the post-call text marks the call that just ended as fresh and its backgr
 check("the companion check-ins keep their recap as background only", (src("agent/companionCheckin.ts").match(/recap_for_background_only|recap_of_what_you_know_about_them/g) ?? []).length >= 3);
 check("the pre-arrival text gives its date as a date, so today and tonight are backed and nothing else is", /the_event_date: P\.localDate/.test(src("harness/proactiveRegistry.ts")) && S.unbackedSpecifics("It starts tonight at 7pm.", { starts_at_local_time: "7:00 PM", the_event_date: "2026-10-06" }, { now: new Date("2026-10-06T20:00:00Z") }).length === 0 && S.unbackedSpecifics("It starts Thursday at 7pm.", { starts_at_local_time: "7:00 PM", the_event_date: "2026-10-06" }, { now: new Date("2026-10-06T20:00:00Z") }).length === 1);
 
+// ---- the reviewer's cases (2026-10-06)
+check("an evening event stored as a UTC timestamp backs its LOCAL weekday (7pm PT Friday is Saturday in UTC)", U("See you Friday.", { event_start: "2026-10-10T02:00:00Z" }).length === 0 && U("See you Saturday.", { event_start: "2026-10-10T02:00:00Z" }).includes("saturday"));
+{
+  const { splitRecap } = await import("../../src/services/claims.js");
+  const live = "Who they are (they said):\n- They are building Co.\n\nWhat is going on right now (they said it, and it is still inside its lifetime):\n- They are weighing an investor meeting. (they said, Oct 5, until Oct 12)\n\nCo's read (inference: orientation only, never state it back as something they told you):\n- They seem to be raising.";
+  const sp = splitRecap(live);
+  check("a rebuilt recap splits into what they said and what Co read into it", /investor meeting/.test(sp.theySaid) && /building Co/.test(sp.theySaid) && !/raising/.test(sp.theySaid) && /raising/.test(sp.coRead) && !/investor meeting/.test(sp.coRead));
+  const facts = (r: { theySaid: string; coRead: string }) => ({ live_things_they_said_about_themselves: r.theySaid || null, recap_of_what_you_know_about_them: r.coRead || null });
+  check("a live thing they said backs the event in a companion check-in ('how did the investor meeting go?')", U("How did the investor meeting go?", facts(sp)).length === 0);
+  check("what only Co read into it does not back one (('how is the raising going?')", U("How is the raising going?", facts(sp)).length > 0);
+  const old = splitRecap("Preparing to pitch investors Friday and working through the ask.");
+  check("an old unlabelled prose recap is all background: it backs no event", old.theySaid === "" && U("How did the pitch go?", facts(old)).includes("pitch"));
+  check("the companion check-in hands the recap over split", /splitRecap\(recap\.slice\(0, 3000\)\)/.test(fs.readFileSync(new URL("../../src/agent/companionCheckin.ts", import.meta.url), "utf8")));
+  check("the event brief carries its date as a date fact (so tonight and the weekday are backed)", /the_event_date: \(await import\("\.\.\/services\/preArrival\.js"\)\)\.localDate\(p\.startAt/.test(fs.readFileSync(new URL("../../src/harness/proactiveRegistry.ts", import.meta.url), "utf8")));
+}
 P.setProactiveModelForTests(null);
 console.log(`proactive specifics: ${total - failed}/${total} passed`);
 if (failed) process.exitCode = 1;

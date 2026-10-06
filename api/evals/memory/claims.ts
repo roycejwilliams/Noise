@@ -72,24 +72,97 @@ check("enduring claims stay however old", /building Co/.test(C.renderRecap(claim
 // ---- the nightly refresh, with a fake database and a fake model
 const rows: any[] = [];
 const memories: any[] = [];
-(pool as any).query = async (sql: string, p: any[] = []) => {
-  if (/SELECT MAX\(created_at\)/.test(sql)) return { rows: [{ at: null }] };
-  if (/FROM co_memories WHERE user_id = \$1 AND memory_type IN \('text_exchange', 'call_transcript'\)/.test(sql)) return { rows: memories };
-  if (/FROM member_claims WHERE user_id/.test(sql) && /^\s*SELECT/.test(sql)) return { rows: rows.map((r, i) => ({ id: String(i), ...r })) };
+let state: Date | null = null;
+const tx: string[] = [];
+let failHeldRead = false, failInsertAt = -1, inserts = 0, lastSince: any = null;
+const handle = async (sql: string, p: any[] = []) => {
+  if (/^\s*(BEGIN|COMMIT|ROLLBACK)/.test(sql)) { tx.push(sql.trim().split(/\s/)[0]); return { rows: [] }; }
+  if (/pg_advisory_xact_lock/.test(sql)) { tx.push("LOCK"); return { rows: [] }; }
+  if (/FROM member_claims_state/.test(sql)) return { rows: state ? [{ refreshed_at: state }] : [] };
+  if (/INSERT INTO member_claims_state/.test(sql)) { state = p[1]; return { rows: [] }; }
+  if (/FROM co_memories WHERE user_id = \$1 AND memory_type IN \('text_exchange', 'call_transcript'\)/.test(sql)) { lastSince = p[1]; return { rows: memories }; }
+  if (/FROM member_claims WHERE user_id/.test(sql) && /^\s*SELECT/.test(sql)) { if (failHeldRead) throw new Error("connection reset"); return { rows: rows.map((r, i) => ({ id: String(i), ...r })) }; }
   if (/DELETE FROM member_claims/.test(sql)) { rows.length = 0; return { rows: [] }; }
-  if (/INSERT INTO member_claims/.test(sql)) { rows.push({ text: p[1], provenance: p[2], kind: p[3], quote: p[4], said_on: p[5], confirmed_on: p[6], expires_on: p[7] }); return { rows: [] }; }
+  if (/INSERT INTO member_claims/.test(sql)) { if (inserts++ === failInsertAt) throw new Error("insert failed"); rows.push({ text: p[1], provenance: p[2], kind: p[3], quote: p[4], said_on: p[5], confirmed_on: p[6], expires_on: p[7] }); return { rows: [] }; }
   return { rows: [] };
 };
+(pool as any).query = handle;
+(pool as any).connect = async () => ({ query: handle, release: () => {} });
 memories.push({ content: `User said: ${NOTE}`, created_at: new Date("2026-09-29T19:52:11Z") });
 const fakeModel = (give: any[]) => async () => give;
 let live = await C.refreshClaims("u1", at("2026-10-01"), { propose: fakeModel([{ text: "They are pitching investors Friday.", provenance: "user_said", kind: "deadline", quote: "I am pitching investors Friday" }]) });
 check("on 10/1 the refresh keeps the 9/29 note, live, labelled user_said", live.length === 1 && live[0].provenance === "user_said" && rows.length === 1);
+check("the rewrite is one transaction under a per-member lock", tx.join() === "BEGIN,LOCK,COMMIT");
+check("a first run reads back FIRST_RUN_DAYS (120), not 14, so what they said long ago is not lost", Math.round((at("2026-10-01").getTime() - new Date(lastSince).getTime()) / 86400_000) === C.FIRST_RUN_DAYS && C.FIRST_RUN_DAYS >= 90);
+check("the next run reads from where the last one stopped", await (async () => { memories.length = 0; await C.refreshClaims("u1", at("2026-10-02"), { propose: fakeModel([]) }); return +new Date(lastSince) === +at("2026-10-01"); })());
+// a failed read of what is held must never wipe it
+tx.length = 0; failHeldRead = true;
+const before = rows.length;
+let threw = false;
+try { await C.refreshClaims("u1", at("2026-10-03"), { propose: fakeModel([]) }); } catch { threw = true; }
+failHeldRead = false;
+check("a failed read of the held claims aborts the refresh (rolled back), and nothing is deleted", threw && rows.length === before && tx.includes("ROLLBACK") && !tx.includes("COMMIT"));
+// a failed model call must not move the marker or touch the claims
+state = at("2026-10-03"); memories.push({ content: "User said: I want a new advisor soon, equity not cash", created_at: new Date("2026-10-04T10:00:00Z") });
+tx.length = 0; threw = false;
+try { await C.refreshClaims("u1", at("2026-10-05"), { propose: async () => { throw new Error("model down"); } }); } catch { threw = true; }
+check("a failed model call rolls back and leaves the marker where it was (the same words are read again tomorrow)", threw && +state! === +at("2026-10-03") && tx.includes("ROLLBACK") && rows.length === before);
+// a failure partway through the inserts rolls the delete back too
+rows.push({ text: "They are building Co.", provenance: "user_said", kind: "building", quote: "I am building Co", said_on: "2026-09-20", confirmed_on: "2026-09-20", expires_on: null });
+tx.length = 0; inserts = 0; failInsertAt = 0; threw = false;
+try { await C.refreshClaims("u1", at("2026-10-05"), { propose: fakeModel([]) }); } catch { threw = true; }
+failInsertAt = -1;
+check("an insert failing partway rolls the whole rewrite back", threw && tx.includes("ROLLBACK") && !tx.includes("COMMIT"));
+rows.length = 0;
 memories.length = 0;
 memories.push({ content: "[Call] Royce wants an advisor with equity.\nassistant: hi\nuser: I want to bring on an advisor with equity instead of just picking their brain.", created_at: new Date("2026-10-06T15:50:00Z") });
 live = await C.refreshClaims("u1", at("2026-10-06"), { propose: fakeModel([{ text: "They want an advisor paid in equity.", provenance: "user_said", kind: "plan", quote: "advisor with equity instead of just picking their brain" }]) });
 check("on 10/6 the refresh lets the 9/29 pitch go (it expired 10/3) and keeps what they said this morning", live.length === 1 && /advisor/.test(live[0].text) && !rows.some((r) => /pitch/i.test(r.text)));
 check("nothing about Co's own lines in a call is taken as what they said", C.theirWordsOf(memories).every((s) => !/hi$/.test(s.text)) && C.theirWordsOf(memories).length === 1);
+check("a call that is only their lines still counts", C.theirWordsOf([{ content: "user: I moved to Austin last month and I am building Co.", created_at: new Date() }]).length === 1);
 check("their talk with a teammate is never a source", C.theirWordsOf([{ content: "User said: pitching Friday [to Mo]", created_at: new Date() }]).length === 0);
+check("a claim Co inferred is dated by the latest words it came from, not today and not the model's word", C.finishClaims([{ text: "They seem to be weighing a raise.", provenance: "co_inferred", kind: "exploring", said_on: "2099-01-01" }], [{ at: "2026-09-29", text: NOTE }], "2026-10-06")[0].saidOn === "2026-09-29");
+
+// ---- dates the parser should and should not find
+check("'decide 2 hires' and 'marketing 3 channels' are not dates", L.resolveDate("we need to decide 2 hires", "2026-10-06") === null && L.resolveDate("testing marketing 3 channels", "2026-10-06") === null);
+check("real months still parse: 'Oct 9', 'October 9th', 'Dec 2', 'sept 30'", L.resolveDate("Oct 9", "2026-10-06") === "2026-10-09" && L.resolveDate("October 9th", "2026-10-06") === "2026-10-09" && L.resolveDate("Dec 2", "2026-10-06") === "2026-12-02" && L.resolveDate("sept 30", "2026-09-01") === "2026-09-30");
+check("a date months behind stays in the past (so the claim ends, not lives a year); a near January date said in December is next year", L.resolveDate("I pitched on Mar 3", "2026-10-06") === "2026-03-03" && L.resolveDate("flying out Jan 5", "2026-12-20") === "2027-01-05");
+check("so a plan that mentions a long-past date is not live", !L.isLive({ expiresOn: L.expiresOn({ kind: "plan", provenance: "user_said", text: "Redo the Mar 3 deck", quote: null, saidOn: "2026-10-06", confirmedOn: "2026-10-06" }) }, at("2026-10-06")));
+
+// ---- recaps stop carrying what has expired (even for a member with nothing live), and a recap is never wiped before it is rebuilt
+const { EMPTY_RECAP, expireRecaps } = await import("../../src/services/memoryCompaction.js");
+let recapRows: Record<string, string> = { u1: "- They are preparing to pitch investors Friday.", u2: "Old prose recap: they live in Austin and build Co." };
+let stateRows: Record<string, boolean> = { u1: true, u2: false };
+let heldRows: Record<string, any[]> = { u1: [{ text: "They are pitching investors Friday.", provenance: "user_said", kind: "deadline", quote: "I am pitching investors Friday", said_on: "2026-09-29", confirmed_on: "2026-09-29", expires_on: "2026-10-03" }], u2: [] };
+const writes: Record<string, string> = {};
+const handle2 = async (sql: string, p: any[] = []) => {
+  if (/^\s*(BEGIN|COMMIT|ROLLBACK)/.test(sql) || /pg_advisory_xact_lock/.test(sql)) return { rows: [] };
+  if (/SELECT DISTINCT user_id FROM co_memories WHERE memory_type = 'recap'/.test(sql)) return { rows: [{ user_id: "u1" }, { user_id: "u2" }] };
+  if (/FROM member_claims_state/.test(sql)) return { rows: stateRows[p[0]] ? [{ refreshed_at: new Date("2026-10-05") }] : [] };
+  if (/INSERT INTO member_claims_state/.test(sql)) { stateRows[p[0]] = true; return { rows: [] }; }
+  if (/memory_type IN \('text_exchange', 'call_transcript'\)/.test(sql)) return { rows: [{ content: "User said: I live in Austin and I am building Co, a private social club.", created_at: new Date("2026-09-20T18:00:00Z") }] };
+  if (/FROM member_claims WHERE user_id/.test(sql) && /^\s*SELECT/.test(sql)) return { rows: heldRows[p[0]].map((r, i) => ({ id: String(i), ...r })) };
+  if (/DELETE FROM member_claims/.test(sql)) { heldRows[p[0]] = []; return { rows: [] }; }
+  if (/INSERT INTO member_claims/.test(sql)) { heldRows[p[0]].push({ text: p[1], provenance: p[2], kind: p[3], quote: p[4], said_on: p[5], confirmed_on: p[6], expires_on: p[7] }); return { rows: [] }; }
+  if (/memory_type = 'recap' ORDER BY created_at DESC LIMIT 1/.test(sql)) return { rows: [{ content: writes[p[0]] ?? recapRows[p[0]] ?? "" }] };
+  if (/INSERT INTO co_memories/.test(sql)) { writes[p[0]] = String(p[2] ?? p[1]); return { rows: [{ id: "m" }] }; }
+  return { rows: [] };
+};
+(pool as any).query = handle2;
+(pool as any).connect = async () => ({ query: handle2, release: () => {} });
+const rebuild = (id: string, now: Date) => C.refreshClaims(id, now, { propose: fakeModel([{ text: "They live in Austin and are building Co, a private social club.", provenance: "user_said", kind: "building", quote: "I live in Austin and I am building Co" }]) });
+const changed = await expireRecaps(at("2026-10-06"), { refresh: rebuild });
+check("expired claims leave the recap with no new talk (no model call); the pitch is gone", /^Nothing current is on record/.test(writes.u1 ?? "") && !/pitch|Friday/i.test(writes.u1 ?? ""));
+check("a member whose claims all expired gets a neutral recap written, not the old one left in place", writes.u1 === EMPTY_RECAP);
+check("a member never refreshed (first run after this ships) is rebuilt from what they said, not wiped: city and what they are building survive", changed === 2 && /Austin/.test(writes.u2 ?? "") && /building Co/.test(writes.u2 ?? "") && /Who they are \(they said\)/.test(writes.u2 ?? ""));
+// when the rebuild fails, their recap stays exactly as it was
+for (const k of Object.keys(writes)) delete writes[k];
+stateRows = { u1: true, u2: false }; heldRows = { u1: [], u2: [] };
+console.log = ((orig) => (...a: any[]) => { if (!/expireRecaps skipped/.test(String(a[0]))) orig(...a); })(console.log);
+const errOrig = console.error; console.error = () => {};
+const changed2 = await expireRecaps(at("2026-10-06"), { refresh: async () => { throw new Error("model down"); } });
+console.error = errOrig;
+check("a failed rebuild leaves that member's recap untouched (the other member is still expired)", writes.u2 === undefined && writes.u1 === EMPTY_RECAP && changed2 === 1);
 
 // ---- the stale line, in the draft: replay this morning's post-call text with the rebuilt facts
 const P = await import("../../src/harness/proactive.js");
@@ -113,21 +186,6 @@ check("'you told me you're prepping the investor ask' is caught", unb("You told 
 check("what they did say can be stated back: 'you said you want an advisor with equity'", unb("You said you want an advisor with equity.").length === 0);
 check("the same inference asked about is fine", unb("Are you weighing a raise right now?").length === 0 && unb("Is a raise something you're weighing?").length === 0);
 check("an ordinary line with no attribution is untouched", unb("The advisor idea sounds like a real structure.").length === 0);
-
-// ---- recaps stop carrying what has expired
-const recapRows: Record<string, string> = { u1: "- They are preparing to pitch investors Friday." };
-const writes: string[] = [];
-(pool as any).query = async (sql: string, p: any[] = []) => {
-  if (/SELECT DISTINCT user_id FROM co_memories WHERE memory_type = 'recap'/.test(sql)) return { rows: [{ user_id: "u1" }, { user_id: "u2" }] };
-  if (/FROM member_claims WHERE user_id/.test(sql)) return { rows: p[0] === "u1" ? [{ id: "1", text: "They are pitching investors Friday.", provenance: "user_said", kind: "deadline", quote: NOTE.slice(0, 30), said_on: "2026-09-29", confirmed_on: "2026-09-29", expires_on: "2026-10-03" }, { id: "2", text: "They are building Co.", provenance: "user_said", kind: "building", quote: "I am building Co", said_on: "2026-09-20", confirmed_on: "2026-09-20", expires_on: null }] : [] };
-  if (/memory_type = 'recap' ORDER BY created_at DESC LIMIT 1/.test(sql)) return { rows: [{ content: recapRows[p[0]] ?? "" }] };
-  if (/INSERT INTO co_memories/.test(sql)) { writes.push(String(p[2] ?? p[1])); return { rows: [{ id: "m" }] }; }
-  return { rows: [] };
-};
-const { expireRecaps } = await import("../../src/services/memoryCompaction.js");
-const changed = await expireRecaps(at("2026-10-06"));
-check("with no new talk at all, an expired claim still leaves the recap (no model call)", changed === 1 && writes.length >= 1 && !writes.some((w) => /pitch/i.test(w)));
-check("a member with no claims is left alone", changed === 1);
 
 // ---- wiring
 const mc = src("services/memoryCompaction.ts");

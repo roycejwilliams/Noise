@@ -45,14 +45,22 @@ const loops: L[] = [
   { id: 4, title: "Old thing", ...row({ lastConfirmedAt: day("2026-09-15"), decayAskedAt: day("2026-09-30") }) },
 ];
 const log: string[] = [];
-const deps = { live: async () => loops, close: async (id: number) => { log.push(`close ${id}`); }, expire: async (id: number) => { log.push(`expire ${id}`); }, ask: async (l: L) => { log.push(`ask ${l.id}`); return true; }, markAsked: async (id: number) => { log.push(`asked ${id}`); } };
+const deps = { live: async () => loops, close: async (id: number) => { log.push(`close ${id}`); }, expire: async (id: number) => { log.push(`expire ${id}`); }, ask: async (l: L) => { log.push(`ask ${l.id}`); return true; } };
 const out = await OL.runLoopDecay(NOW, deps as any);
-check("the pass closes the 9/29 pitch on evidence, asks once about the dinner, leaves the fresh one, expires the one asked and ignored", out.closed === 1 && out.asked === 1 && out.expired === 1 && log.join() === "close 1,ask 2,asked 2,expire 4");
-const log2 = log.length; await OL.runLoopDecay(NOW, { ...deps, live: async () => [{ ...loops[1], decayAskedAt: NOW }] } as any);
-check("a loop already asked is not asked again by a second pass", log.length === log2);
+check("the pass closes the 9/29 pitch on evidence, asks once about the dinner, leaves the fresh one, expires the one asked and ignored", out.closed === 1 && out.asked === 1 && out.expired === 1 && log.join() === "close 1,ask 2,expire 4");
 let queued = 0;
-await OL.runLoopDecay(NOW, { ...deps, live: async () => [loops[1]], ask: async () => { queued++; return false; }, markAsked: async () => { throw new Error("marked asked though the ask never queued"); } } as any);
-check("an ask that failed to queue is not marked asked (it is tried again)", queued === 1);
+await OL.runLoopDecay(NOW, { ...deps, live: async () => [loops[1]], ask: async () => { queued++; return false; } } as any);
+const none = await OL.runLoopDecay(NOW, { ...deps, live: async () => [loops[1]], ask: async () => false } as any);
+check("an ask that was not queued is not counted, and is simply tried again next pass", queued === 1 && none.asked === 0);
+check("a pass asks at most MAX_ASKS_PER_PASS members", await (async () => { let n = 0; const many = Array.from({ length: 25 }, (_, k) => ({ id: 100 + k, title: "t", ...row({ lastConfirmedAt: day("2026-09-20") }) })); await OL.runLoopDecay(NOW, { ...deps, live: async () => many, ask: async () => { n++; return true; } } as any); return n === OL.MAX_ASKS_PER_PASS; })());
+
+// ---- the reviewer's cases (2026-10-06)
+check("work Co has scheduled (in motion) is never asked about or expired, even long after anyone confirmed it", LC.decayAction(row({ lastConfirmedAt: day("2026-08-01"), inMotion: true }), NOW, TODAY).kind === "none" && LC.decayAction(row({ lastConfirmedAt: day("2026-09-01"), dueDate: "2026-10-01", inMotion: true }), NOW, TODAY).kind === "none");
+check("a loop waiting on someone else's reply is not asked about; the hard limit ends it", LC.decayAction(row({ status: "waiting_on_reply", lastConfirmedAt: day("2026-09-20") }), NOW, TODAY).kind === "none" && LC.decayAction(row({ status: "waiting_on_reply", lastConfirmedAt: day("2026-09-01") }), NOW, TODAY).kind === "expire");
+check("30 days with no signal expires it even if the ask never went out", LC.decayAction(row({ lastConfirmedAt: day("2026-09-05") }), NOW, TODAY).kind === "expire" && LC.decayAction(row({ lastConfirmedAt: day("2026-09-07") }), NOW, TODAY).kind === "ask");
+check("asked means SENT: the ask sets decay_asked_at in onSent, not at queueing", /async onSent\(c\) \{\s*await pool\.query\(`UPDATE open_loops SET decay_asked_at = NOW\(\)/.test(src("harness/proactiveRegistry.ts")) && !/decay_asked_at = NOW\(\)/.test(src("services/openLoops.ts").replace(/closed_reason[^\n]*/g, "")));
+check("an unsent ask is re-queued on a later day (the key carries the day) and never stacks while one is pending", /targetKey: `loop_check:\$\{l\.id\}:\$\{localDay\(new Date\(\)\)\}`/.test(src("services/openLoops.ts")) && /type = 'loop_check' AND status = 'pending'/.test(src("services/openLoops.ts")));
+check("archived and opted-out members get no loop asks", /u\.archived_at IS NULL AND u\.sms_opted_out = false/.test(src("services/openLoops.ts")));
 
 // ---- what drafting reads
 const rows = [
@@ -75,7 +83,7 @@ check("an expired or date-passed loop is a tombstone the sync never reopens (unl
 check("what Co does at their word confirms a loop; a sync alone doesn't", /updated_at = NOW\(\), last_confirmed_at = NOW\(\)/.test(ol) && !/changed_at = NOW\(\)" : ""\}[^`]*last_confirmed_at = NOW/.test(ol));
 check("the columns exist and old rows start from their last touch", /ADD COLUMN IF NOT EXISTS last_confirmed_at TIMESTAMPTZ, ADD COLUMN IF NOT EXISTS decay_asked_at/.test(mig) && /SET last_confirmed_at = COALESCE\(updated_at, changed_at, created_at\)/.test(mig));
 check("the decay pass runs with the loop sync", /runLoopDecay\(\)/.test(src("jobs/index.ts")));
-check("the ask is a registered proactive type, a question, once per loop", /loop_check: \{/.test(src("harness/proactiveRegistry.ts")) && /targetKey: `loop_check:\$\{l\.id\}`/.test(ol) && /loop_check: "companion"/.test(src("harness/proactivePurpose.ts")) && /loop_check: \{ priority/.test(src("harness/proactive.ts")));
+check("the ask is a registered proactive type, a question, once per loop", /loop_check: \{/.test(src("harness/proactiveRegistry.ts")) && /targetKey: `loop_check:\$\{l\.id\}:/.test(ol) && /loop_check: "companion"/.test(src("harness/proactivePurpose.ts")) && /loop_check: \{ priority/.test(src("harness/proactive.ts")));
 
 console.log(`loop lifecycle: ${total - failed}/${total} passed`);
 if (failed) process.exitCode = 1;

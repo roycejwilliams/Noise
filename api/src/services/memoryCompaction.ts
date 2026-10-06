@@ -22,6 +22,9 @@ import { writeMemory } from "./memory.js";
 // to drop or correct anything now stale rather than let the summary only
 // ever grow. Grounded strictly in what was actually said, same "never
 // invent" discipline as every other synthesis step in this codebase.
+// What the recap says when no claim is live. Written (not skipped) so an old recap that carried something now expired cannot linger.
+export const EMPTY_RECAP = "Nothing current is on record about them: whatever they said before has expired or was never theirs to state.";
+
 export async function buildRecap(userId: string): Promise<void> {
   const lastRecapResult = await pool.query(`SELECT content, created_at FROM co_memories WHERE user_id = $1 AND memory_type = 'recap' ORDER BY created_at DESC LIMIT 1`, [userId]);
   const lastRecap = lastRecapResult.rows[0] ?? null;
@@ -31,8 +34,8 @@ export async function buildRecap(userId: string): Promise<void> {
     // expires on its own unless they say it again. A claim that has gone is simply not in the next recap.
     const { refreshClaims, renderRecap } = await import("./claims.js");
     const live = await refreshClaims(userId);
-    const recap = renderRecap(live, new Date());
-    if (recap && recap !== lastRecap?.content) await writeMemory(userId, "recap", recap);
+    const recap = renderRecap(live, new Date()) || EMPTY_RECAP;
+    if (recap !== lastRecap?.content) await writeMemory(userId, "recap", recap);
     // Upsert, not update: a member with no profile row yet still gets their
     // recap recorded (storeProfile and captureIntent both upsert this row too).
     await pool.query(
@@ -51,16 +54,21 @@ export async function buildRecap(userId: string): Promise<void> {
 
 // Daily, with no model call: a claim that has reached the end of its lifetime leaves the recap even when the member has said
 // nothing new. (The old recap only changed when there was new talk, so a stale plan stayed in it for as long as they were quiet.)
-export async function expireRecaps(now = new Date()): Promise<number> {
-  const { heldClaims, renderRecap } = await import("./claims.js");
+export async function expireRecaps(now = new Date(), deps: { refresh?: (userId: string, now: Date) => Promise<import("./factLabels.js").Claim[]> } = {}): Promise<number> {
+  const { heldClaimsStrict, refreshClaims, renderRecap } = await import("./claims.js");
   const { rows } = await pool.query(`SELECT DISTINCT user_id FROM co_memories WHERE memory_type = 'recap' AND created_at > NOW() - INTERVAL '30 days'`);
   let changed = 0;
   for (const r of rows) {
-    const claims = await heldClaims(r.user_id);
-    if (!claims.length) continue;
-    const recap = renderRecap(claims, now);
-    const { rows: last } = await pool.query(`SELECT content FROM co_memories WHERE user_id = $1 AND memory_type = 'recap' ORDER BY created_at DESC LIMIT 1`, [r.user_id]);
-    if (recap && recap !== last[0]?.content) { await writeMemory(r.user_id, "recap", recap); changed++; }
+    try {
+      const { rows: st } = await pool.query(`SELECT 1 FROM member_claims_state WHERE user_id = $1`, [r.user_id]);
+      // Never refreshed (first run after this shipped): read what they said once, so their recap is rebuilt from it instead of wiped.
+      const claims = st[0] ? await heldClaimsStrict(r.user_id) : await (deps.refresh ?? ((id, n) => refreshClaims(id, n)))(r.user_id, now);
+      const recap = renderRecap(claims, now) || EMPTY_RECAP;
+      const { rows: last } = await pool.query(`SELECT content FROM co_memories WHERE user_id = $1 AND memory_type = 'recap' ORDER BY created_at DESC LIMIT 1`, [r.user_id]);
+      if (recap !== last[0]?.content) { await writeMemory(r.user_id, "recap", recap); changed++; }
+    } catch (err: any) {
+      console.error(`memoryCompaction: expireRecaps skipped ${r.user_id} (recap left as it was):`, err?.message ?? err);
+    }
   }
   return changed;
 }

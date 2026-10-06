@@ -124,6 +124,8 @@ export async function runMigrations(): Promise<void> {
         created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
       )`))
     .then(() => pool.query(`CREATE INDEX IF NOT EXISTS idx_member_claims_user ON member_claims (user_id, expires_on)`))
+    // When a member's claims were last refreshed: the window for the next read starts here, and a member whose claims all expired is not re-read every night.
+    .then(() => pool.query(`CREATE TABLE IF NOT EXISTS member_claims_state (user_id UUID PRIMARY KEY REFERENCES users(id) ON DELETE CASCADE, refreshed_at TIMESTAMPTZ NOT NULL)`))
     .then(() => pool.query(`CREATE TABLE IF NOT EXISTS event_briefs (
         id BIGSERIAL PRIMARY KEY,
         event_id TEXT NOT NULL,

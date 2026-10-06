@@ -351,13 +351,15 @@ export async function runLoopSync(): Promise<void> {
 
 // The daily pass: evidence and decay (services/loopLifecycle.ts). A passed date closes a loop; a loop nobody has signalled on for
 // ASK_AFTER_DAYS gets one "still on your plate?" ask; asked and still nothing after EXPIRE_AFTER_ASK_DAYS, it expires quietly.
+// A loop counts as ASKED when the ask is actually sent (loop_check onSent sets decay_asked_at), not when it is queued: an ask held by
+// quiet hours or caps, or one that expired unsent, never starts the expiry clock.
 // `deps` lets a test run it without a database; the real ones are below.
+export const MAX_ASKS_PER_PASS = 10;
 export type DecayDeps = {
   live: () => Promise<LoopRow[]>;
   close: (id: number, reason: "date_passed") => Promise<void>;
   expire: (id: number) => Promise<void>;
-  ask: (l: LoopRow) => Promise<boolean>; // true once the ask is queued
-  markAsked: (id: number) => Promise<void>;
+  ask: (l: LoopRow) => Promise<boolean>; // true when an ask is queued (or already pending)
 };
 export async function runLoopDecay(now = new Date(), deps: DecayDeps = realDecayDeps()): Promise<{ closed: number; asked: number; expired: number }> {
   const today = localDay(now);
@@ -366,23 +368,35 @@ export async function runLoopDecay(now = new Date(), deps: DecayDeps = realDecay
     const a = decayAction(l as LifecycleRow, now, today);
     if (a.kind === "close_date_passed") { await deps.close(l.id, "date_passed"); out.closed++; }
     else if (a.kind === "expire") { await deps.expire(l.id); out.expired++; }
-    else if (a.kind === "ask") { if (await deps.ask(l)) { await deps.markAsked(l.id); out.asked++; } }
+    else if (a.kind === "ask" && out.asked < MAX_ASKS_PER_PASS) { if (await deps.ask(l)) out.asked++; }
   }
   return out;
 }
 
 function realDecayDeps(): DecayDeps {
   return {
-    live: () => pool.query(`SELECT * FROM open_loops WHERE closed_at IS NULL AND status NOT IN ('done', 'dropped')`).then((r) => r.rows.map(toRow)),
+    // Live members only: archived or opted-out members get no loop asks (and no candidates created for them).
+    live: () =>
+      pool
+        .query(
+          `SELECT o.*, (t.status = 'open' AND t.next_check_at IS NOT NULL AND t.next_check_at > NOW()) AS in_motion
+           FROM open_loops o JOIN users u ON u.id = o.user_id LEFT JOIN co_tasks t ON t.id = o.task_id
+           WHERE o.closed_at IS NULL AND o.status NOT IN ('done', 'dropped') AND u.archived_at IS NULL AND u.sms_opted_out = false`,
+        )
+        .then((r) => r.rows.map((x: any) => ({ ...toRow(x), inMotion: !!x.in_motion, userId: x.user_id }))),
     close: async (id, reason) => { await pool.query(`UPDATE open_loops SET status = 'dropped', status_by = 'code', closed_reason = $2, closed_at = NOW(), updated_at = NOW() WHERE id = $1 AND closed_at IS NULL`, [id, reason]); },
     expire: async (id) => { await pool.query(`UPDATE open_loops SET status = 'dropped', status_by = 'code', closed_reason = 'expired', closed_at = NOW(), updated_at = NOW() WHERE id = $1 AND closed_at IS NULL`, [id]); },
-    markAsked: async (id) => { await pool.query(`UPDATE open_loops SET decay_asked_at = NOW() WHERE id = $1`, [id]); },
     ask: async (l) => {
+      const userId = (l as LoopRow & { userId?: string }).userId;
+      if (!userId) return false;
       const { enqueueCandidate } = await import("../harness/proactive.js");
+      // One pending ask per loop; a new day's key only after the last one went unsent (its candidate expires in 3 days).
+      const { rows: pending } = await pool.query(`SELECT 1 FROM proactive_candidates WHERE user_id = $1 AND type = 'loop_check' AND status = 'pending' AND (payload->>'loopId')::bigint = $2 LIMIT 1`, [userId, l.id]);
+      if (pending.length) return true;
       const r = await enqueueCandidate({
-        userId: await pool.query(`SELECT user_id FROM open_loops WHERE id = $1`, [l.id]).then((x) => x.rows[0]?.user_id),
+        userId,
         type: "loop_check",
-        targetKey: `loop_check:${l.id}`,
+        targetKey: `loop_check:${l.id}:${localDay(new Date())}`,
         topicKey: `loop:${l.id}`,
         summary: `Ask once whether "${l.title.slice(0, 60)}" is still on their plate`,
         payload: { loopId: l.id, title: l.title, lastConfirmedOn: l.lastConfirmedAt ? localDay(l.lastConfirmedAt) : null },

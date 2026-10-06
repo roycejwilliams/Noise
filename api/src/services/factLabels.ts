@@ -68,11 +68,16 @@ export function resolveDate(words: string, saidOn: string, zone = "America/Los_A
   const t = words.toLowerCase();
   const iso = t.match(/\b(\d{4})-(\d{2})-(\d{2})\b/);
   if (iso) return iso[0];
-  const md = t.match(new RegExp(`\\b(${MONTHS.map((m) => m.slice(0, 3)).join("|")})[a-z]*\\.?\\s+(\\d{1,2})\\b`));
+  // Real month names only ("decide 2 hires" and "marketing 3 channels" are not December 2 and March 3).
+  const md = t.match(/\b(jan(?:uary)?|feb(?:ruary)?|mar(?:ch)?|apr(?:il)?|may|jun(?:e)?|jul(?:y)?|aug(?:ust)?|sep(?:t(?:ember)?)?|oct(?:ober)?|nov(?:ember)?|dec(?:ember)?)\b\.?\s+(\d{1,2})(?:st|nd|rd|th)?\b/);
   if (md) {
-    const month = MONTHS.findIndex((m) => m.startsWith(md[1])) + 1;
+    const month = MONTHS.findIndex((m) => m.startsWith(md[1].slice(0, 3))) + 1;
     let d = DateTime.fromObject({ year: said.year, month, day: Number(md[2]) }, { zone });
-    if (d.isValid && d < said.minus({ days: 1 })) d = d.plus({ years: 1 });
+    // A date already behind them is next year's only when it is close ("Jan 5", said in December); a date months back is simply past.
+    if (d.isValid && d < said.minus({ days: 1 })) {
+      const next = d.plus({ years: 1 });
+      if (+next - +said <= 120 * 86_400_000) d = next;
+    }
     if (d.isValid) return d.toISODate();
   }
   if (/\btomorrow\b/.test(t)) return said.plus({ days: 1 }).toISODate();

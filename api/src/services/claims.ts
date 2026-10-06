@@ -30,7 +30,7 @@ export function theirWordsOf(rows: { content: string; created_at: Date | string 
     if (/ \[to [A-Za-z]+\]\s*$/.test(c)) continue; // their talk with a teammate is not about them
     const said = c.match(/^User said:\s*([\s\S]*)$/i);
     if (said) { out.push({ at, text: said[1].trim() }); continue; }
-    if (/^assistant:|\nuser:/i.test(c)) for (const l of c.split("\n")) { const m = l.match(/^\s*user\s*:\s*(.*)$/i); if (m && m[1].trim()) out.push({ at, text: m[1].trim() }); }
+    if (/^\s*(?:assistant|user):|\nuser:/i.test(c)) for (const l of c.split("\n")) { const m = l.match(/^\s*user\s*:\s*(.*)$/i); if (m && m[1].trim()) out.push({ at, text: m[1].trim() }); }
   }
   return out;
 }
@@ -47,7 +47,9 @@ export function finishClaims(proposed: Proposed[], sources: Source[], today: str
     const checked = checkProvenance(wanted, typeof p.quote === "string" ? p.quote : null, all);
     // When it was said: the day of the message that holds the quote (not the model's word for it).
     const src = checked.quote ? sources.find((s) => s.text.toLowerCase().includes(checked.quote!.toLowerCase())) : null;
-    const saidOn = src?.at ?? (typeof p.said_on === "string" && /^\d{4}-\d{2}-\d{2}$/.test(p.said_on) ? p.said_on : today);
+    // No quote (Co's inference): dated by the latest words it was drawn from, never by the model's word and never "today".
+    const latest = sources.reduce((m, s) => (s.at > m ? s.at : m), "");
+    const saidOn = src?.at ?? (latest || today);
     const base = { text, provenance: checked.provenance, kind, quote: checked.quote, saidOn, confirmedOn: saidOn };
     out.push({ ...base, expiresOn: expiresOn(base) });
   }
@@ -75,10 +77,16 @@ type Row = { id: string; text: string; provenance: Provenance; kind: Kind; quote
 const iso = (d: Date | string | null): string | null => (d === null ? null : typeof d === "string" ? d.slice(0, 10) : DateTime.fromJSDate(d).toISODate());
 const toClaim = (r: Row): Claim => ({ text: r.text, provenance: r.provenance, kind: r.kind, quote: r.quote, saidOn: iso(r.said_on)!, confirmedOn: iso(r.confirmed_on)!, expiresOn: iso(r.expires_on) });
 
-export async function heldClaims(userId: string): Promise<Claim[]> {
-  const { rows } = await pool.query(`SELECT id, text, provenance, kind, quote, said_on, confirmed_on, expires_on FROM member_claims WHERE user_id = $1 ORDER BY said_on`, [userId]).catch(() => ({ rows: [] as Row[] }));
-  return rows.map(toClaim);
+// A failed read throws: callers that rewrite the table must never mistake "couldn't read" for "nothing held".
+export async function heldClaimsStrict(userId: string, q: { query: (sql: string, args: unknown[]) => Promise<{ rows: any[] }> } = pool): Promise<Claim[]> {
+  const { rows } = await q.query(`SELECT id, text, provenance, kind, quote, said_on, confirmed_on, expires_on FROM member_claims WHERE user_id = $1 ORDER BY said_on`, [userId]);
+  return (rows as Row[]).map(toClaim);
 }
+export async function heldClaims(userId: string): Promise<Claim[]> {
+  return heldClaimsStrict(userId).catch((err) => { console.error("claims: read failed (treated as none for display only):", err?.message ?? err); return [] as Claim[]; });
+}
+// First run for a member reads this far back, so what they said long ago (their city, what they are building) is not lost.
+export const FIRST_RUN_DAYS = 120;
 
 export async function liveClaims(userId: string, now = new Date()): Promise<Claim[]> {
   return (await heldClaims(userId)).filter((c) => isLive(c, now, ZONE));
@@ -105,7 +113,7 @@ What is already held (do not repeat it; say it again only if they said it again)
 ${held.map((c) => `- ${c.text}`).join("\n") || "(nothing)"}
 
 Today is ${today}. Their words:
-${sources.map((s) => `[${s.at}] ${s.text}`).join("\n").slice(0, 14000)}
+${sources.map((s) => `[${s.at}] ${s.text}`).join("\n").slice(-14000)}
 
 Return ONLY JSON: {"claims": [{"text": "...", "provenance": "user_said", "kind": "plan", "quote": "...", "said_on": "YYYY-MM-DD"}]}`,
   });
@@ -113,28 +121,51 @@ Return ONLY JSON: {"claims": [{"text": "...", "provenance": "user_said", "kind":
 }
 
 // Nightly: read what is new, merge it in, and let what has expired go. Returns the live claims.
-export async function refreshClaims(userId: string, now = new Date(), deps: { propose?: typeof proposeClaims } = {}): Promise<Claim[]> {
+// Atomic: the member's claims are rewritten in one transaction under a per-member lock, from a read that must have succeeded, and
+// nothing is rewritten when the model call failed (the held claims stay as they were and the marker does not move).
+export async function refreshClaims(userId: string, now = new Date(), deps: { propose?: typeof proposeClaims; db?: { connect: () => Promise<any> } } = {}): Promise<Claim[]> {
   const today = DateTime.fromJSDate(now).setZone(ZONE).toISODate()!;
-  const { rows: last } = await pool.query(`SELECT MAX(created_at) AS at FROM member_claims WHERE user_id = $1`, [userId]).catch(() => ({ rows: [{ at: null }] }));
-  const since = last[0]?.at ?? new Date(now.getTime() - 14 * 86400_000);
-  const { rows: exchanges } = await pool.query(
-    `SELECT content, created_at FROM co_memories WHERE user_id = $1 AND memory_type IN ('text_exchange', 'call_transcript') AND content NOT LIKE 'Co initiated call%' AND created_at > $2 ORDER BY created_at ASC`,
-    [userId, since],
-  );
-  const held = await heldClaims(userId);
-  const sources = theirWordsOf(exchanges);
-  const proposed = sources.length ? await (deps.propose ?? proposeClaims)(sources, held, today) : [];
-  const merged = mergeClaims(held, finishClaims(proposed, sources, today));
-  await pool.query(`DELETE FROM member_claims WHERE user_id = $1`, [userId]);
-  for (const c of merged) {
-    // What has expired is dropped here, not carried: the table holds only claims still inside their lifetime.
-    if (!isLive(c, now, ZONE)) continue;
-    await pool.query(
-      `INSERT INTO member_claims (user_id, text, provenance, kind, quote, said_on, confirmed_on, expires_on) VALUES ($1,$2,$3,$4,$5,$6,$7,$8)`,
-      [userId, c.text, c.provenance, c.kind, c.quote, c.saidOn, c.confirmedOn, c.expiresOn],
+  const client = await (deps.db ?? pool).connect();
+  try {
+    await client.query("BEGIN");
+    await client.query(`SELECT pg_advisory_xact_lock(hashtext('member_claims:' || $1))`, [userId]);
+    const { rows: st } = await client.query(`SELECT refreshed_at FROM member_claims_state WHERE user_id = $1`, [userId]);
+    const since = st[0]?.refreshed_at ?? new Date(now.getTime() - FIRST_RUN_DAYS * 86400_000);
+    const { rows: exchanges } = await client.query(
+      `SELECT content, created_at FROM co_memories WHERE user_id = $1 AND memory_type IN ('text_exchange', 'call_transcript') AND content NOT LIKE 'Co initiated call%' AND created_at > $2 ORDER BY created_at ASC`,
+      [userId, since],
     );
+    const held = await heldClaimsStrict(userId, client);
+    const sources = theirWordsOf(exchanges);
+    const proposed = sources.length ? await (deps.propose ?? proposeClaims)(sources, held, today) : [];
+    const merged = mergeClaims(held, finishClaims(proposed, sources, today));
+    await client.query(`DELETE FROM member_claims WHERE user_id = $1`, [userId]);
+    for (const c of merged) {
+      // What has expired is dropped here, not carried: the table holds only claims still inside their lifetime.
+      if (!isLive(c, now, ZONE)) continue;
+      await client.query(
+        `INSERT INTO member_claims (user_id, text, provenance, kind, quote, said_on, confirmed_on, expires_on) VALUES ($1,$2,$3,$4,$5,$6,$7,$8)`,
+        [userId, c.text, c.provenance, c.kind, c.quote, c.saidOn, c.confirmedOn, c.expiresOn],
+      );
+    }
+    await client.query(`INSERT INTO member_claims_state (user_id, refreshed_at) VALUES ($1, $2) ON CONFLICT (user_id) DO UPDATE SET refreshed_at = EXCLUDED.refreshed_at`, [userId, now]);
+    await client.query("COMMIT");
+    return merged.filter((c) => isLive(c, now, ZONE));
+  } catch (err) {
+    await client.query("ROLLBACK").catch(() => {});
+    throw err;
+  } finally {
+    client.release();
   }
-  return merged.filter((c) => isLive(c, now, ZONE));
+}
+
+// A recap read back into what they said and what Co read into it. A recap from before the claims rebuild (prose, unlabelled) is
+// all background: it can't back a date, an event or a commitment.
+export function splitRecap(recap: string): { theySaid: string; coRead: string } {
+  if (!/^(Who they are|What is going on right now|Co's read)/m.test(recap)) return { theySaid: "", coRead: recap };
+  const sections = recap.split(/\n\n(?=[A-Z])/);
+  const coRead = sections.filter((s) => s.startsWith("Co's read")).join("\n\n");
+  return { theySaid: sections.filter((s) => !s.startsWith("Co's read")).join("\n\n"), coRead };
 }
 
 // The recap: only live claims, each labelled; what they said apart from what Co read into it.

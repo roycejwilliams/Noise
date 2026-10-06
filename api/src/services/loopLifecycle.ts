@@ -25,6 +25,7 @@ export type LoopState = (typeof LOOP_STATES)[number];
 export const FRESH_DAYS = 7; // confirmed within this many days = recent enough to be stated as current
 export const ASK_AFTER_DAYS = 7; // no signal this long: ask once
 export const EXPIRE_AFTER_ASK_DAYS = 5; // asked and still nothing: expire
+export const HARD_EXPIRE_DAYS = 30; // no signal this long: expires even if the ask could never be sent
 
 // What the lifecycle reads of a row. closedReason: 'co' | 'source_done' | 'source_dropped' | 'stale' | 'date_passed' | 'expired'.
 export type LifecycleRow = {
@@ -34,6 +35,8 @@ export type LifecycleRow = {
   dueDate: string | null;
   lastConfirmedAt: Date | null;
   decayAskedAt: Date | null;
+  // Co has the work scheduled right now (an open task with a check coming): it is in motion, not abandoned, so it is never asked about.
+  inMotion?: boolean;
 };
 
 const DAY = 86_400_000;
@@ -64,7 +67,13 @@ export type DecayAction = { kind: "none" } | { kind: "close_date_passed" } | { k
 export function decayAction(r: LifecycleRow, now: Date, today: string): DecayAction {
   const s = stateOf(r);
   if (s === "closed" || s === "expired") return { kind: "none" };
+  // Co has it scheduled right now: in motion, not abandoned. Its own deadline is the task's business, not a reason to drop the loop.
+  if (r.inMotion) return { kind: "none" };
   if (datePassed(r.dueDate, today)) return { kind: "close_date_passed" };
+  // Nothing at all for a month: it goes, whether or not an ask ever made it out.
+  if (daysSince(r.lastConfirmedAt, now) >= HARD_EXPIRE_DAYS) return { kind: "expire" };
+  // Waiting on someone else's reply: asking the member "still on your plate?" is the wrong question; evidence or the hard limit ends it.
+  if (s === "waiting") return { kind: "none" };
   // Asked once already: the clock for the answer runs from the ask. A signal after the ask (they replied) restarts everything.
   if (r.decayAskedAt && (!r.lastConfirmedAt || r.decayAskedAt >= r.lastConfirmedAt)) {
     return daysSince(r.decayAskedAt, now) >= EXPIRE_AFTER_ASK_DAYS ? { kind: "expire" } : { kind: "none" };

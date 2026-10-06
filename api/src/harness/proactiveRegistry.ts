@@ -404,6 +404,10 @@ export const proactiveRegistry: ProactiveRegistry = {
       });
       return text ? { messages: [text], text, rules: { maxSentences: 2, maxChars: 220 } } : skip("model chose SKIP");
     },
+    // Asked means SENT: this starts the 5-day expiry clock (services/loopLifecycle.ts).
+    async onSent(c) {
+      await pool.query(`UPDATE open_loops SET decay_asked_at = NOW() WHERE id = $1 AND user_id = $2`, [c.payload.loopId, c.userId]);
+    },
   },
 
   // The day before a Co event: how many are coming and the two or three worth finding, by name only when they
@@ -450,6 +454,7 @@ export const proactiveRegistry: ProactiveRegistry = {
           facts: {
             event: p.name,
             when,
+            the_event_date: (await import("../services/preArrival.js")).localDate(p.startAt, p.timezone ?? null),
             ...(p.venue ? { venue: p.venue } : {}),
             members_confirmed: `${members.length}`,
             ...(picks.length ? { people_to_find_each_said_yes_to_being_named: guestFacts } : {}),

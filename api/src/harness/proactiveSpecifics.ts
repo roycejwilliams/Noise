@@ -99,7 +99,7 @@ const tokensIn = (text: string): Set<string> => new Set(temporalHits(text).map((
 export function datesBacked(structured: string, now: Date, zone = "America/Los_Angeles"): Set<string> {
   const out = new Set<string>();
   const today = DateTime.fromJSDate(now).setZone(zone).startOf("day");
-  for (const m of structured.matchAll(/\b(\d{4})-(\d{2})-(\d{2})\b/g)) {
+  for (const m of structured.matchAll(/\b\d{4}-\d{2}-\d{2}(?:T[\d:.]+(?:Z|[+-]\d{2}:?\d{2})?)?/g)) {
     const d = DateTime.fromISO(m[0], { zone }).startOf("day");
     if (!d.isValid || d < today) continue;
     out.add(WEEKDAYS[d.weekday % 7]);
