@@ -90,7 +90,12 @@ export type ProactiveType =
   // reply (services/membershipLapse.ts, 2026-09-22).
   | "membership_lapse"
   // Before a Co event they're going to (services/preArrival.ts, 2026-09-30).
-  | "pre_arrival";
+  | "pre_arrival"
+  // The member brief, the day before a Co event, and the one question at RSVP that lets it name them (services/eventBrief.ts, 2026-10-05).
+  | "event_brief"
+  | "brief_name_ask"
+  // After the member tells Co who they met: what stood out, and a note per person for them to send (services/eventFollowThrough.ts).
+  | "event_followthrough";
 
 // co_event: Co's own event, announced to nearby users on creation (services/coEventAnnouncement.ts).
 // direct_ask: a reply-triggered direct ask to a THIRD person who didn't just
@@ -139,6 +144,10 @@ export const TYPE_POLICY: Record<ProactiveType, TypePolicy> = {
   membership_lapse: { priority: 25, typeGapDays: 6 },
   // Time-bound: hours before the event, once per event (its own target key).
   pre_arrival: { priority: 95 },
+  // Once per event each, timed to the day before and to the RSVP.
+  event_brief: { priority: 90 },
+  brief_name_ask: { priority: 92 },
+  event_followthrough: { priority: 93 },
 };
 
 export const RULES = {
@@ -310,7 +319,7 @@ function unansweredSince(send: SendRecord, lastInboundAt: Date | null): boolean 
 // events for 72 hours. Openings had a lane of their own for a day; merged back
 // (Royce, 2026-09-18: "A third set of caps is guesswork at this volume").
 export type Lane = "room" | "other";
-const ROOM_LANE = new Set<string>(["event_offer", "event_match_nudge", "network_tease", "in_room", "pre_arrival"]);
+const ROOM_LANE = new Set<string>(["event_offer", "event_match_nudge", "network_tease", "in_room", "pre_arrival", "event_brief", "brief_name_ask", "event_followthrough"]);
 export function laneOf(type: string): Lane {
   return ROOM_LANE.has(type) ? "room" : "other";
 }
@@ -483,7 +492,7 @@ const QUOTA_CHECKS = new Set(["daily_cap", "weekly_cap", "unanswered_pause", "en
 //     after a call they were on.
 // Discovery: profile offers, guest-match nudges. Companion check-ins (advice
 // follow-ups too) keep their own 4-day rhythm and the daily cap, as before.
-const ANSWERING_TYPES = new Set<string>(["network_tease", "ask_checkin", "window_followup", "debrief", "pre_arrival", "post_call"]);
+const ANSWERING_TYPES = new Set<string>(["network_tease", "ask_checkin", "window_followup", "debrief", "pre_arrival", "post_call", "event_followthrough"]);
 export function isAnswering(c: Pick<Candidate, "type" | "payload">): boolean {
   const p = (c.payload ?? {}) as { askId?: string | null; fromProfile?: boolean; again?: boolean };
   if (ANSWERING_TYPES.has(c.type)) return true;

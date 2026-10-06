@@ -181,6 +181,13 @@ export const ABILITIES: Ability[] = [
     use: "They said yes to sharing their location for today's Co event (after you offered). Quote their yes from this message. It covers only today's event; if they say stop, it stops.",
   },
   {
+    id: "brief_name",
+    can: "Before a Co event they're going to, Co asks once whether it may mention them by name in the member brief the day before. Co records their yes or no. No answer means no name, and a no or a later change of mind is honored at once.",
+    tool: "answerBriefName",
+    limits: { perTurn: 1 },
+    use: "They answered Co's question about being named in the member brief (\"can I mention you by name in the member brief?\"). Quote their yes or no from this message. Only an explicit yes allows it; if they hedge, ask once more plainly and record nothing. A later \"actually, don't\" is a no.",
+  },
+  {
     id: "event_going",
     can: "Co keeps track of whether they're still going to today's Co event, from what they tell it.",
     tool: "updateGoing",

@@ -17,7 +17,7 @@ check("nothing for an event no longer on the calendar", !P.preArrivalEligible({ 
 const w = P.preArrivalWindow(start);
 check("the window is 3 hours to 1 hour before the start", w.from.toISOString() === "2026-10-09T23:00:00.000Z" && w.until.toISOString() === "2026-10-10T01:00:00.000Z");
 check("Co's 'later' can't pass the end of the window, and at the end it goes", F.boundedLater(new Date("2026-10-09T23:30:00Z"), 5, w.until.toISOString()).lastCall && F.boundedLater(new Date("2026-10-09T23:30:00Z"), 5, w.until.toISOString()).at.toISOString() === w.until.toISOString() && F.atWindowEnd(new Date("2026-10-10T00:55:00Z"), w.until.toISOString()) && !F.atWindowEnd(new Date("2026-10-10T00:00:00Z"), w.until.toISOString()));
-check("its timing is Co's, and it goes through the daily pick (hours, caps)", F.handedToCo({ type: "pre_arrival", targetKey: "pre_arrival:x" } as any) && /pre_arrival: \{ priority: 95 \}/.test(src("harness/proactive.ts")) && /"in_room", "pre_arrival"\]/.test(src("harness/proactive.ts")));
+check("its timing is Co's, and it goes through the daily pick (hours, caps)", F.handedToCo({ type: "pre_arrival", targetKey: "pre_arrival:x" } as any) && /pre_arrival: \{ priority: 95 \}/.test(src("harness/proactive.ts")) && /"in_room", "pre_arrival"[,\]]/.test(src("harness/proactive.ts")));
 check("it never goes out after the event starts", /expiresAt: new Date\(new Date\(event\.start_at\)\.getTime\(\) - 30 \* 60_000\)/.test(src("services/eventPresence.ts")));
 
 // What it says

@@ -2001,6 +2001,21 @@ export function sendblueRouter(io: Server): Router {
             await recordEventCheckinOutcome(user.id, pendingCheckin.id, pendingCheckin.event_api_id, outcome);
             await recordSuggestionOutcome(user.id, "event", `event:${pendingCheckin.event_api_id}`, pendingCheckin.event_name, resultFromNamedOutcome(outcome), resolvedContent.slice(0, 160));
             addFact(replyFacts, "did_this_turn", `Recorded what they said about "${pendingCheckin.event_name}".`);
+            // They named someone they met: Co follows through with notes they can send (services/eventFollowThrough.ts).
+            // Built from this message only, sent to them alone, a little after this reply.
+            if (outcome === "named_positive") {
+              const { enqueueCandidate } = await import("../harness/proactive.js");
+              await enqueueCandidate({
+                userId: user.id,
+                type: "event_followthrough",
+                targetKey: `event_followthrough:${pendingCheckin.event_api_id}`,
+                topicKey: `event:${pendingCheckin.event_api_id}`,
+                summary: `They told Co who they met at "${pendingCheckin.event_name}": send notes they can use`,
+                payload: { eventId: pendingCheckin.event_api_id, name: pendingCheckin.event_name, theirMessage: resolvedContent.slice(0, 1200) },
+                dueAt: new Date(Date.now() + 10 * 60_000),
+                expiresAt: new Date(Date.now() + 3 * 86_400_000),
+              }).catch((err: any) => console.error("sendblue: follow-through not queued (non-fatal):", err?.message ?? err));
+            }
             // Same stay-scoped fix as the outcome follow-up above — a
             // name/detail from a different, already-resolved follow-up
             // could otherwise blend into this reply.

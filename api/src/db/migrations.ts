@@ -101,6 +101,23 @@ export async function runMigrations(): Promise<void> {
     )
     // The pre-arrival text and opt-in location, per event (services/preArrival.ts, 2026-09-30).
     .then(() => pool.query(`ALTER TABLE event_presence ADD COLUMN IF NOT EXISTS pre_arrival_sent_at TIMESTAMPTZ, ADD COLUMN IF NOT EXISTS location_yes_at TIMESTAMPTZ, ADD COLUMN IF NOT EXISTS location_yes_quote TEXT, ADD COLUMN IF NOT EXISTS location_stopped_at TIMESTAMPTZ, ADD COLUMN IF NOT EXISTS not_going_at TIMESTAMPTZ, ADD COLUMN IF NOT EXISTS far_note_sent_at TIMESTAMPTZ, ADD COLUMN IF NOT EXISTS met_someone_at TIMESTAMPTZ, ADD COLUMN IF NOT EXISTS met_quote TEXT`))
+    // The member brief (services/eventBrief.ts): their yes or no to being named in it, asked once when they RSVP.
+    .then(() => pool.query(`ALTER TABLE event_presence ADD COLUMN IF NOT EXISTS name_asked_at TIMESTAMPTZ, ADD COLUMN IF NOT EXISTS name_ok BOOLEAN, ADD COLUMN IF NOT EXISTS name_ok_at TIMESTAMPTZ, ADD COLUMN IF NOT EXISTS name_ok_quote TEXT, ADD COLUMN IF NOT EXISTS brief_sent_at TIMESTAMPTZ`))
+    .then(() => pool.query(`CREATE TABLE IF NOT EXISTS event_follow_throughs (
+        user_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+        event_id TEXT NOT NULL,
+        people_count INT NOT NULL DEFAULT 0,
+        sent_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+        PRIMARY KEY (user_id, event_id)
+      )`))
+    .then(() => pool.query(`CREATE TABLE IF NOT EXISTS event_briefs (
+        id BIGSERIAL PRIMARY KEY,
+        event_id TEXT NOT NULL,
+        person_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+        named_ids JSONB NOT NULL DEFAULT '[]'::jsonb,
+        confirmed_count INT NOT NULL DEFAULT 0,
+        sent_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+      )`))
     .catch((err: Error) => console.error("event_presence table init failed:", err));
 
   // What came of each promise Co made on a call, tied to that call by a
@@ -310,6 +327,8 @@ export async function runMigrations(): Promise<void> {
       "co_lesson",
       // The text before a Co event (services/preArrival.ts).
       "event_pre_arrival",
+      // The member brief and the question that lets it name them (services/eventBrief.ts).
+      "event_brief", "event_brief_ask", "event_follow_through",
       // What a web search kept, with its link, so "send it" works on a later turn
       // (services/researchFinds.ts, 2026-10-03).
       "research_find",
