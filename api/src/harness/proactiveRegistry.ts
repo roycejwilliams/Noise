@@ -356,7 +356,9 @@ export const proactiveRegistry: ProactiveRegistry = {
       const r = await F.buildFollowThrough({ userId: c.userId, firstName: person.firstName, eventId: p.eventId, eventName: p.name, theirMessage: String(p.theirMessage ?? "") });
       if ("skip" in r) return skip(r.skip);
       c.payload.people = r.people;
-      return { messages: r.messages, text: r.messages.join("\n\n"), rules: { maxSentences: 12, maxChars: 1400, mustIncludeAny: nameTokens(p.name).length ? nameTokens(p.name) : [p.name] } };
+      // The harness's text rules (one question, sentence count) are for what Co says: that is the recap. The notes are the
+      // member's own words to send; they are checked line by line in services/eventFollowThrough.ts (noteProblem).
+      return { messages: r.messages, text: r.messages[0], rules: { maxSentences: 6, maxChars: 900, mustIncludeAny: nameTokens(p.name).length ? nameTokens(p.name) : [p.name] } };
     },
     async onSent(c) {
       const F = await import("../services/eventFollowThrough.js");
@@ -378,9 +380,9 @@ export const proactiveRegistry: ProactiveRegistry = {
     },
     async onSent(c) {
       await pool.query(
-        `INSERT INTO event_presence (event_api_id, user_id, name_asked_at) VALUES ($1, $2, NOW())
-         ON CONFLICT (event_api_id, user_id) DO UPDATE SET name_asked_at = COALESCE(event_presence.name_asked_at, NOW())`,
-        [c.payload.eventId, c.userId],
+        `INSERT INTO event_presence (event_api_id, user_id, name_asked_at, name_ask_until) VALUES ($1, $2, NOW(), $3)
+         ON CONFLICT (event_api_id, user_id) DO UPDATE SET name_asked_at = COALESCE(event_presence.name_asked_at, NOW()), name_ask_until = $3`,
+        [c.payload.eventId, c.userId, c.payload.startAt],
       );
       await writeMemory(c.userId, "event_brief_ask", `Asked if Co may name them in the member brief for "${c.payload.name}"`);
     },
@@ -398,7 +400,10 @@ export const proactiveRegistry: ProactiveRegistry = {
       const p = c.payload;
       const f = await B.presenceFlags(p.eventId, c.userId);
       if (f.briefSent || f.notGoing) return skip("already sent, or not going");
-      const members = await eventMembers(p.eventId).catch(() => [] as { user_id: string; first_name: string; phone_number: string }[]);
+      const fetched = await eventMembers(p.eventId).catch(() => null);
+      // A guest-list outage is not "no longer registered": try again shortly instead of dropping their brief for good.
+      if (!fetched) return { defer: new Date(Date.now() + 30 * 60_000), reason: "couldn't read the guest list just now" };
+      const members = fetched;
       if (!members.some((m) => m.user_id === c.userId)) return skip("no longer registered");
       const others = members.filter((m) => m.user_id !== c.userId);
       const [flags, ranked] = await Promise.all([B.namedYes(p.eventId, others.map((m) => m.user_id)), B.rankingFor(p.eventId, c.userId)]);
@@ -430,9 +435,9 @@ export const proactiveRegistry: ProactiveRegistry = {
             ...(p.venue ? { venue: p.venue } : {}),
             members_confirmed: `${members.length}`,
             ...(picks.length ? { people_to_find_each_said_yes_to_being_named: guestFacts } : {}),
-            ...(unnamedFits >= B.BRIEF.minCountToMention || (picks.length && unnamedFits) ? { others_who_fit_their_ask_no_names: `${unnamedFits} (a count only: never describe or name them)` } : {}),
+            ...(unnamedFits >= B.BRIEF.minCountToMention ? { others_who_fit_their_ask_no_names: `${unnamedFits} (a count only: never describe or name them)` } : {}),
           },
-          task: `${when === "today" ? "They're going" : "The day before"}: they're going to ${p.name}. Write the member brief in 3 to 4 short paragraphs separated by a blank line, each one a message bubble. First: how many members are confirmed and when it starts. ${picks.length ? `Then, for each person in people_to_find (name, then why in one line, using only the words given after their name as what they're looking for; say it as what that person is looking for, never that they want to meet the reader). ` : ""}${unnamedFits ? "Then one line that a few more who fit what they're after will be there, without saying who or what they do. " : ""}Warm and brief, no sign-off. Never name anyone not listed, never promise an introduction, never give a phone number or email.${feedback ? ` Your last draft was rejected: ${feedback}. Fix that.` : ""}`,
+          task: `${when.startsWith("today") ? "It's today" : "The day before"}: they're going to ${p.name}. Write the member brief in 3 to 4 short paragraphs separated by a blank line, each one a message bubble. First: how many members are confirmed and when it starts. ${picks.length ? `Then, for each person in people_to_find (name, then why in one line, using only the words given after their name as what they're looking for; say it as what that person is looking for, in your own words, never with "said", "told" or "wants to meet", and never that they want to meet the reader). ` : ""}${unnamedFits >= B.BRIEF.minCountToMention ? "Then one line that a few more who fit what they're after will be there, without saying who or what they do. " : ""}Warm and brief, no sign-off. Never name anyone not listed, never promise an introduction, never give a phone number or email.${feedback ? ` Your last draft was rejected: ${feedback}. Fix that.` : ""}`,
         });
       const verify = async (text: string): Promise<string | null> => {
         const outsider = B.namesOutsiders(text, members, allowed, c.userId);

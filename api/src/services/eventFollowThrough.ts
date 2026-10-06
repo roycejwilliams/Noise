@@ -29,42 +29,53 @@ export function nameIsTheirs(name: string, theirMessage: string): boolean {
   return n.length >= 2 && norm(theirMessage).includes(` ${n} `);
 }
 
-// Who gets a note: named by them, in their own words, and not someone they were critical of.
+// Who gets a note: named by them, in their own words, and someone they were positive about (a neutral or critical
+// mention is not a connection worth keeping).
 export function worthKeeping(met: Met[], theirMessage: string): Met[] {
   const seen = new Set<string>();
   const out: Met[] = [];
   for (const m of met) {
     const key = norm(m.name).trim();
-    if (!key || seen.has(key) || m.tone === "critical" || !nameIsTheirs(m.name, theirMessage)) continue;
+    if (!key || seen.has(key) || m.tone !== "positive" || !nameIsTheirs(m.name, theirMessage)) continue;
     seen.add(key);
-    out.push(m);
+    // The note is shown back as "what you told me", so it has to be their words: anything else is blanked.
+    out.push({ ...m, note: m.note.trim() && norm(theirMessage).includes(norm(m.note)) ? m.note.trim() : "" });
     if (out.length >= FOLLOW_THROUGH.maxPeople) break;
   }
   return out;
 }
 
-// Anything in the draft that wasn't given to it: a capitalized word in the middle of a sentence (a name, a company) or
-// a number that is not in the member's own words, their ask, the event, or the two first names. Returns the first one.
-// A word that only starts a sentence is not checked (it can't be told from an ordinary capital), so the draft prompt
-// also forbids new names; this is the code backstop for the ones that land mid-sentence.
+// Anything in the draft that wasn't given to it: a capitalized word in the middle of a sentence (a name, a company), a
+// word with a digit or currency sign (40k, $5, 2nd, 40%), or a number, that is not in the sources. The sources for ONE
+// note are only what the member said about THAT person, their ask, the event and the two first names: never the rest of
+// their message (it may hold a third party) and never their earlier texts. A word that only starts a sentence is not
+// checked (it can't be told from an ordinary capital); the draft prompt also forbids new names.
 export function groundedIn(draft: string, sources: string[], allowed: string[]): string | null {
   const known = norm([...sources, ...allowed].join(" "));
-  for (const sentence of draft.split(/(?<=[.!?\n:])\s+/)) {
+  for (const sentence of draft.split(/(?<=[.!?\n])\s+/)) {
     const words = sentence.trim().split(/\s+/);
     for (let i = 0; i < words.length; i++) {
-      const w = words[i].replace(/^[("'“‘]+|[)"'”’.,;:!?]+$/g, "").replace(/['’]s$/i, "");
+      const w = words[i].replace(/^[("'“‘#@]+|[)"'”’.,;:!?]+$/g, "").replace(/['’]s$/i, "");
       if (!w) continue;
-      const isNumber = /^\d[\d,.]*$/.test(w);
-      const isName = i > 0 && /^[A-Z][a-zA-Z]{2,}$/.test(w);
-      if (!isNumber && !isName) continue;
-      if (!known.includes(` ${w.toLowerCase()} `)) return w;
+      const hasDigit = /[\d$%]/.test(w);
+      const isName = i > 0 && /^\p{Lu}[\p{L}'’-]{1,}$/u.test(w) && w.length >= 2;
+      if (/^I['’]/.test(w)) continue;
+      if (!hasDigit && !isName) continue;
+      const bare = w.replace(/[$%]/g, "").toLowerCase();
+      if (!known.includes(` ${bare} `)) return w;
     }
   }
   return null;
 }
 
 export function noContactOrLinks(draft: string): boolean {
-  return !/(@[a-z0-9._-]+\.[a-z]{2,}|https?:\/\/|www\.|\b\d{3}[ .-]?\d{3}[ .-]?\d{4}\b|\blu\.ma\/)/i.test(draft);
+  return !(
+    /@[a-z0-9._-]+/i.test(draft) ||
+    /https?:\/\/|www\.|\blu\.ma\//i.test(draft) ||
+    /\b[a-z0-9-]+\.(?:com|io|co|ai|org|net|app|dev|me|xyz)\b/i.test(draft) ||
+    /\b[a-z0-9._-]+\s+(?:at|\(at\))\s+[a-z0-9-]+\s+(?:dot|\(dot\))\s+[a-z]{2,}\b/i.test(draft) ||
+    /(?:\+?\d[\s().-]*){10,}/.test(draft)
+  );
 }
 
 // A note that promises something Co will do, or claims what the other person felt or said.
@@ -77,14 +88,15 @@ export function sentenceCount(text: string): number {
 }
 
 // Whether a note passes every code check, with the first failure named.
-export function noteProblem(draft: string, o: { theirMessage: string; theirAsk: string | null; eventName: string; theirFirstName: string; otherName: string; theirVoiceSample: string[] }): string | null {
+export function noteProblem(draft: string, o: { theirNote: string; theirAsk: string | null; eventName: string; theirFirstName: string; otherName: string }): string | null {
   const t = draft.trim();
   if (!t) return "empty";
   if (!noContactOrLinks(t)) return "carries a link, email or number";
   if (claimsOthersWords(t)) return "claims what the other person said or promises something Co will do";
+  if (/[—–]|!/.test(t)) return "has an em dash or an exclamation point";
   if (t.length > FOLLOW_THROUGH.maxNoteChars) return `too long (${t.length} chars)`;
   if (sentenceCount(t) > FOLLOW_THROUGH.maxSentencesPerNote + 1) return "too many sentences";
-  const ungrounded = groundedIn(t, [o.theirMessage, o.theirAsk ?? "", ...o.theirVoiceSample], [o.eventName, o.theirFirstName, o.otherName]);
+  const ungrounded = groundedIn(t, [o.theirNote, o.theirAsk ?? ""], [o.eventName, o.theirFirstName, o.otherName]);
   if (ungrounded) return `says "${ungrounded}", which they didn't give`;
   return null;
 }
@@ -96,7 +108,17 @@ export async function theirVoice(userId: string): Promise<string[]> {
   const { rows } = await pool
     .query(`SELECT content FROM co_memories WHERE user_id = $1 AND memory_type = 'text_exchange' AND content LIKE 'User said:%' AND ${notToTeammate()} ORDER BY created_at DESC LIMIT $2`, [userId, FOLLOW_THROUGH.voiceMessages])
     .catch(() => ({ rows: [] as any[] }));
-  return rows.map((r: any) => String(r.content).replace(/^User said:\s*/i, "").slice(0, 240)).filter(Boolean);
+  // A line can carry Co's own earlier text they replied to, or a description of a photo: neither is their voice.
+  return rows
+    .map((r: any) =>
+      String(r.content)
+        .replace(/^User said:\s*/i, "")
+        .replace(/\s*\[(?:Replying to|They also sent a photo)[^\]]*\]/gi, "")
+        .replace(/\[sent a photo[^\]]*\]/gi, "")
+        .trim()
+        .slice(0, 240),
+    )
+    .filter(Boolean);
 }
 
 export async function theirAsk(userId: string): Promise<string | null> {
@@ -106,6 +128,11 @@ export async function theirAsk(userId: string): Promise<string | null> {
 
 export async function alreadySent(userId: string, eventId: string): Promise<boolean> {
   const { rows } = await pool.query(`SELECT 1 FROM event_follow_throughs WHERE user_id = $1 AND event_id = $2`, [userId, eventId]).catch(() => ({ rows: [] as any[] }));
+  return rows.length > 0;
+}
+
+export async function notGoing(userId: string, eventId: string): Promise<boolean> {
+  const { rows } = await pool.query(`SELECT 1 FROM event_presence WHERE user_id = $1 AND event_api_id = $2 AND not_going_at IS NOT NULL`, [userId, eventId]).catch(() => ({ rows: [] as any[] }));
   return rows.length > 0;
 }
 
@@ -159,22 +186,24 @@ Return ONLY the note.`,
 
 // What landed, in their own words (copied, so nothing here is Co's claim), and what the next bubbles are.
 export function recapLine(eventName: string, met: Met[]): string {
-  const landed = met.map((m) => (m.note.trim() ? `${m.name} (${m.note.trim().replace(/[.!]+$/, "")})` : m.name)).join(", ");
+  const clean = (t: string) => t.replace(/\s*[—–]\s*/g, ", ").replace(/!+/g, ".").replace(/[.]{2,}/g, ".").trim().replace(/[.]+$/, "");
+  const landed = met.map((m) => (m.note.trim() ? `${m.name} (${clean(m.note)})` : m.name)).join(", ");
   return `What stood out from ${eventName}, from what you told me: ${landed}. Below ${met.length === 1 ? "is a note" : "are notes"} you can send, or change. I won't send ${met.length === 1 ? "it" : "them"} for you.`;
 }
 
 // The whole message set for one member: what landed, then one bubble per note. Null when there is nothing to send.
-export type Steps = { alreadySent: typeof alreadySent; extractMet: typeof extractMet; theirVoice: typeof theirVoice; theirAsk: typeof theirAsk; draftNote: typeof draftNote };
-const REAL: Steps = { alreadySent, extractMet, theirVoice, theirAsk, draftNote };
+export type Steps = { alreadySent: typeof alreadySent; notGoing: typeof notGoing; extractMet: typeof extractMet; theirVoice: typeof theirVoice; theirAsk: typeof theirAsk; draftNote: typeof draftNote };
+const REAL: Steps = { alreadySent, notGoing, extractMet, theirVoice, theirAsk, draftNote };
 
 export async function buildFollowThrough(o: { userId: string; firstName: string; eventId: string; eventName: string; theirMessage: string }, steps: Steps = REAL): Promise<{ messages: string[]; people: number } | { skip: string }> {
   if (await steps.alreadySent(o.userId, o.eventId)) return { skip: "already sent for this event" };
+  if (await steps.notGoing(o.userId, o.eventId)) return { skip: "they told Co they weren't going" };
   const met = worthKeeping(await steps.extractMet(o.theirMessage, o.firstName).catch(() => []), o.theirMessage);
   if (!met.length) return { skip: "they didn't name anyone worth a note" };
   const [voice, ask] = await Promise.all([steps.theirVoice(o.userId), steps.theirAsk(o.userId)]);
   const notes: { name: string; text: string; met: Met }[] = [];
   for (const m of met) {
-    const check = (t: string) => noteProblem(t, { theirMessage: o.theirMessage, theirAsk: ask, eventName: o.eventName, theirFirstName: o.firstName, otherName: m.name, theirVoiceSample: voice });
+    const check = (t: string) => noteProblem(t, { theirNote: m.note, theirAsk: ask, eventName: o.eventName, theirFirstName: o.firstName, otherName: m.name });
     let draft = await steps.draftNote({ firstName: o.firstName, other: m, eventName: o.eventName, ask, voice, feedback: null }).catch(() => null);
     let why = draft ? check(draft) : "no draft";
     if (why) {

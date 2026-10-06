@@ -26,7 +26,7 @@ export const BRIEF = {
   minCountToMention: 2,
   maxBubbles: 4,
   // The question goes out once someone is registered and the brief is still ahead of them.
-  askUntilBeforeStartMs: 6 * 3_600_000,
+  askUntilBeforeStartMs: 10 * 3_600_000,
 };
 
 export const NAME_QUESTION = "Can Co mention you by name in the member brief?";
@@ -62,15 +62,18 @@ export function nameAskMessages(eventName: string): string[] {
   return [`You're on the list for ${eventName}.`, `One question: ${NAME_QUESTION.replace("Can Co mention you", "can I mention you")} Yes or no. If I don't hear, I won't.`];
 }
 
-// Their answer, from their own words in this message: a short yes or no is enough. Anything else is no answer.
-const YES = /^(?:yes|yeah|yep|yup|sure|ok|okay|please|go ahead|definitely|absolutely|that'?s fine|fine by me|you can|yes please)\b/i;
+// Their answer, from their own words in this message: a short, plain yes or no. Only the quote is not enough: the
+// WHOLE message is read, so "yes I'm coming but don't name me" is never a yes. Anything else is no answer.
+const YES = /^(?:yes|yeah|yep|yup|sure|go ahead|definitely|absolutely|that'?s fine|fine by me|you can)\b/i;
 const NO = /^(?:no|nope|nah|please don'?t|don'?t|rather not|i'?d rather not|not really|no thanks)\b/i;
+const EXCLUDES = /\b(?:no|not|don'?t|do not|never|leave|out|can'?t|cannot|skip|without|rather|except|but|only)\b/i;
 export function readNameAnswer(quote: unknown, message: string): "yes" | "no" | null {
   const norm = (s: unknown) => String(s ?? "").toLowerCase().replace(/[’‘]/g, "'").replace(/[^a-z0-9' ]+/g, " ").replace(/\s+/g, " ").trim();
   const q = norm(quote);
-  if (q.length < 2 || !norm(message).includes(q)) return null;
+  const m = norm(message);
+  if (q.length < 2 || !m.includes(q)) return null;
   if (NO.test(q)) return "no";
-  if (YES.test(q) && !/\b(no|not|don'?t|never)\b/.test(q)) return "yes";
+  if (YES.test(q) && !EXCLUDES.test(m) && m.split(" ").length <= 30) return "yes";
   return null;
 }
 
@@ -108,14 +111,17 @@ export function worthSending(picks: Pick[], unnamedFits: number): boolean {
 }
 
 // No guest who didn't say yes is named; every one who did may be.
+const fold = (s: string) => ` ${s.normalize("NFD").replace(/[\u0300-\u036f]/g, "").toLowerCase().replace(/[’‘]/g, "'").replace(/[^a-z' ]+/g, " ").replace(/\s+/g, " ").trim()} `;
 export function namesOutsiders(text: string, members: { user_id: string; first_name: string }[], allowedIds: Set<string>, recipientId: string): string | null {
-  const t = ` ${text.toLowerCase().replace(/[^a-z' ]+/g, " ")} `;
-  const allowed = new Set(members.filter((m) => allowedIds.has(m.user_id)).map((m) => m.first_name.trim().toLowerCase()));
+  const t = fold(text);
+  const allowed = new Set(members.filter((m) => allowedIds.has(m.user_id)).map((m) => fold(m.first_name).trim()));
   for (const m of members) {
     if (m.user_id === recipientId) continue;
-    const n = m.first_name.trim().toLowerCase();
-    if (n.length < 3 || allowed.has(n)) continue;
+    const n = fold(m.first_name).trim();
+    if (n.length < 2 || allowed.has(n)) continue;
     if (t.includes(` ${n} `)) return m.first_name;
+    // a compound name (Anne-Marie) is also caught by either half on its own
+    for (const part of n.split(" ")) if (part.length >= 4 && t.includes(` ${part} `)) return m.first_name;
   }
   return null;
 }
@@ -152,16 +158,30 @@ export async function rankingFor(eventId: string, personId: string): Promise<Ran
   return Array.isArray(rows[0]?.ranked_candidates) ? rows[0].ranked_candidates : [];
 }
 
-// Their answer to the question, for the event they were most recently asked about (an upcoming one).
-export async function recordNameAnswer(userId: string, answer: "yes" | "no", quote: string): Promise<{ eventApiId: string } | null> {
+// Their answer to the question.
+//   no  : always honored, for every event they were asked about, whatever was sent (a change of mind after their own
+//         brief counts: other members' briefs are drafted later).
+//   yes : only for ONE open question about an event still ahead. With two open questions it is ambiguous, so nothing is
+//         recorded and Co asks which one.
+export type NameAnswerResult = { eventApiId: string } | { ambiguous: true } | null;
+export async function recordNameAnswer(userId: string, answer: "yes" | "no", quote: string): Promise<NameAnswerResult> {
+  const { recordDecision } = await import("../harness/core.js");
+  if (answer === "no") {
+    const { rows } = await pool
+      .query(`UPDATE event_presence SET name_ok = false, name_ok_at = NOW(), name_ok_quote = $2 WHERE user_id = $1 AND name_asked_at IS NOT NULL AND name_ok IS DISTINCT FROM false RETURNING event_api_id`, [userId, quote.slice(0, 200)])
+      .catch(() => ({ rows: [] as any[] }));
+    if (!rows.length) return null;
+    await recordDecision({ layer: 6, decision: "event.brief_name", userId, outcome: "act", action: "no", proposal: { events: rows.length } }).catch(() => {});
+    return { eventApiId: String(rows[0].event_api_id) };
+  }
   const { rows } = await pool
-    .query(`SELECT event_api_id FROM event_presence WHERE user_id = $1 AND name_asked_at IS NOT NULL AND brief_sent_at IS NULL ORDER BY name_asked_at DESC LIMIT 1`, [userId])
+    .query(`SELECT event_api_id FROM event_presence WHERE user_id = $1 AND name_asked_at IS NOT NULL AND name_ok IS NULL AND not_going_at IS NULL AND name_ask_until > NOW() ORDER BY name_asked_at DESC`, [userId])
     .catch(() => ({ rows: [] as any[] }));
+  if (rows.length > 1) return { ambiguous: true };
   const eventApiId = rows[0]?.event_api_id as string | undefined;
   if (!eventApiId) return null;
-  await pool.query(`UPDATE event_presence SET name_ok = $3, name_ok_at = NOW(), name_ok_quote = $4 WHERE event_api_id = $1 AND user_id = $2`, [eventApiId, userId, answer === "yes", quote.slice(0, 200)]);
-  const { recordDecision } = await import("../harness/core.js");
-  await recordDecision({ layer: 6, decision: "event.brief_name", userId, outcome: "act", action: answer, proposal: { eventId: eventApiId } }).catch(() => {});
+  await pool.query(`UPDATE event_presence SET name_ok = true, name_ok_at = NOW(), name_ok_quote = $3 WHERE event_api_id = $1 AND user_id = $2`, [eventApiId, userId, quote.slice(0, 200)]);
+  await recordDecision({ layer: 6, decision: "event.brief_name", userId, outcome: "act", action: "yes", proposal: { eventId: eventApiId } }).catch(() => {});
   return { eventApiId };
 }
 
@@ -183,7 +203,11 @@ export async function runEventBriefs(now = new Date()): Promise<{ asks: number; 
   let briefs = 0;
   for (const event of await presenceEvents()) {
     if (new Date(event.start_at).getTime() <= now.getTime()) continue;
-    const members = await eventMembers(event.api_id);
+    // One event's failure (Luma down for it) never stops the others.
+    const members = await eventMembers(event.api_id).catch((err: any) => {
+      console.error(`eventBrief: couldn't read the guests of ${event.api_id} (non-fatal):`, err?.message ?? err);
+      return [] as { user_id: string; first_name: string; phone_number: string }[];
+    });
     if (!members.length) continue;
     const w = briefWindow(event.start_at, event.timezone ?? null);
     for (const m of members) {
@@ -194,7 +218,7 @@ export async function runEventBriefs(now = new Date()): Promise<{ asks: number; 
           userId: m.user_id,
           type: "brief_name_ask",
           targetKey: `brief_name_ask:${event.api_id}`,
-          topicKey: `event:${event.api_id}`,
+          topicKey: `event_brief_ask:${event.api_id}`,
           summary: `They're on the list for "${event.name}": ask once if Co may name them in the member brief`,
           payload: { eventId: event.api_id, name: event.name, startAt: event.start_at },
           dueAt: now,
@@ -209,7 +233,7 @@ export async function runEventBriefs(now = new Date()): Promise<{ asks: number; 
         userId: m.user_id,
         type: "event_brief",
         targetKey: `event_brief:${event.api_id}`,
-        topicKey: `event:${event.api_id}`,
+        topicKey: `event_brief:${event.api_id}`,
         summary: `The day before "${event.name}": who's coming and the few worth finding`,
         payload: { eventId: event.api_id, name: event.name, startAt: event.start_at, timezone: event.timezone ?? null, venue: event.venue ?? null, until: w.until.toISOString() },
         dueAt: now,

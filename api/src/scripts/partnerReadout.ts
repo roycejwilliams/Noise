@@ -1,5 +1,7 @@
 import "dotenv/config";
 import { writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { gatherStats, renderHtml, renderText } from "../services/partnerReadout.js";
 import pool from "../db/db.js";
 
@@ -17,7 +19,7 @@ async function main() {
   const stats = await gatherStats(eventId, eventName);
   const html = renderHtml(stats);
   console.log(renderText(stats));
-  const file = `partner-readout-${eventId.replace(/[^a-z0-9]+/gi, "-")}.preview.html`;
+  const file = join(tmpdir(), `partner-readout-${eventId.replace(/[^a-z0-9]+/gi, "-")}.preview.html`);
   writeFileSync(file, html);
   console.log(`\nPreview saved to ${file}. Nothing was sent.`);
   await pool.end();

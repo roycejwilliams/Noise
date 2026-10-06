@@ -468,6 +468,10 @@ export function createConversationTools(ctx: ConversationToolContext) {
         }
         if (ctx.dryRun) return { ok: true, note: "dry run" };
         const done = await B.recordNameAnswer(ctx.userId, answer, theirWords);
+        if (done && "ambiguous" in done) {
+          notDone("Their answer about being named wasn't recorded: there is more than one event question open.");
+          return { ok: false, error: "More than one event question is open. Ask which event they mean, then record it." };
+        }
         if (!done) {
           notDone("Their answer about being named wasn't recorded: there's no brief question open for them.");
           return { ok: false, error: "There's no open question about the member brief for them." };

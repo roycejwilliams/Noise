@@ -102,7 +102,7 @@ export async function runMigrations(): Promise<void> {
     // The pre-arrival text and opt-in location, per event (services/preArrival.ts, 2026-09-30).
     .then(() => pool.query(`ALTER TABLE event_presence ADD COLUMN IF NOT EXISTS pre_arrival_sent_at TIMESTAMPTZ, ADD COLUMN IF NOT EXISTS location_yes_at TIMESTAMPTZ, ADD COLUMN IF NOT EXISTS location_yes_quote TEXT, ADD COLUMN IF NOT EXISTS location_stopped_at TIMESTAMPTZ, ADD COLUMN IF NOT EXISTS not_going_at TIMESTAMPTZ, ADD COLUMN IF NOT EXISTS far_note_sent_at TIMESTAMPTZ, ADD COLUMN IF NOT EXISTS met_someone_at TIMESTAMPTZ, ADD COLUMN IF NOT EXISTS met_quote TEXT`))
     // The member brief (services/eventBrief.ts): their yes or no to being named in it, asked once when they RSVP.
-    .then(() => pool.query(`ALTER TABLE event_presence ADD COLUMN IF NOT EXISTS name_asked_at TIMESTAMPTZ, ADD COLUMN IF NOT EXISTS name_ok BOOLEAN, ADD COLUMN IF NOT EXISTS name_ok_at TIMESTAMPTZ, ADD COLUMN IF NOT EXISTS name_ok_quote TEXT, ADD COLUMN IF NOT EXISTS brief_sent_at TIMESTAMPTZ`))
+    .then(() => pool.query(`ALTER TABLE event_presence ADD COLUMN IF NOT EXISTS name_asked_at TIMESTAMPTZ, ADD COLUMN IF NOT EXISTS name_ok BOOLEAN, ADD COLUMN IF NOT EXISTS name_ok_at TIMESTAMPTZ, ADD COLUMN IF NOT EXISTS name_ok_quote TEXT, ADD COLUMN IF NOT EXISTS brief_sent_at TIMESTAMPTZ, ADD COLUMN IF NOT EXISTS name_ask_until TIMESTAMPTZ`))
     .then(() => pool.query(`CREATE TABLE IF NOT EXISTS event_follow_throughs (
         user_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
         event_id TEXT NOT NULL,
