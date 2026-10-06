@@ -6,7 +6,7 @@ import { readFileSync } from "fs";
 
 process.env.SENDBLUE_API_API_KEY ||= "unused-in-tests";
 process.env.SENDBLUE_API_API_SECRET ||= "unused-in-tests";
-const { ABILITIES, LIMITS, capabilitySheet, toolUse } = await import("../../src/services/capabilities.js");
+const { ABILITIES, LIMITS, capabilitySheet, toolUse, isMemberMoAbility, memberMoTools } = await import("../../src/services/capabilities.js");
 const { createConversationTools } = await import("../../src/agent/conversationTools.js");
 const { baseReplyFacts } = await import("../../src/harness/replyGrounding.js");
 
@@ -29,8 +29,24 @@ for (const t of toolNames) check(`tool ${t} has an entry in the registry`, regis
 const teamTools = Object.keys(createConversationTools({ userId: "u", phoneNumber: "+10000000000", resolvedContent: "", isVoice: false, hasPendingOffer: false, recentOfferBurstActive: false, dryRun: true, isTeam: true, sendCoReply: async () => true } as any).tools);
 // Leaving it at the reaction exists only once a reaction went out this turn.
 const ackedTools = Object.keys(createConversationTools({ userId: "u", phoneNumber: "+10000000000", resolvedContent: "", isVoice: false, hasPendingOffer: false, recentOfferBurstActive: false, dryRun: true, ackSent: "✈️", sendCoReply: async () => true } as any).tools);
+// Member-facing Mo's tools exist only while its switches are on (services/capabilities.ts memberMoOn).
+const moOnTools = (() => {
+  const was = [process.env.MO_MEMBER_ENABLED, process.env.MO_ENABLED];
+  process.env.MO_MEMBER_ENABLED = "true";
+  process.env.MO_ENABLED = "true";
+  try {
+    return Object.keys(createConversationTools({ userId: "u", phoneNumber: "+10000000000", resolvedContent: "", isVoice: false, hasPendingOffer: false, recentOfferBurstActive: false, dryRun: true, sendCoReply: async () => true } as any).tools);
+  } finally {
+    if (was[0] === undefined) delete process.env.MO_MEMBER_ENABLED; else process.env.MO_MEMBER_ENABLED = was[0];
+    if (was[1] === undefined) delete process.env.MO_ENABLED; else process.env.MO_ENABLED = was[1];
+  }
+})();
 for (const t of registered) {
   const teamOnly = ABILITIES.find((a) => a.tool === t)?.teamOnly;
+  if (memberMoTools().includes(t)) {
+    check(`registry tool ${t} exists only while member Mo is switched on`, moOnTools.includes(t) && !toolNames.includes(t));
+    continue;
+  }
   if (t === "leaveItAtReaction") {
     check("registry tool leaveItAtReaction exists only after a reaction went out", ackedTools.includes(t) && !toolNames.includes(t));
     continue;
@@ -43,7 +59,7 @@ check("ability ids are unique", new Set(ABILITIES.map((a) => a.id)).size === ABI
 check("every ability says what Co can do", ABILITIES.every((a) => a.can.trim().length > 20));
 
 const facts = baseReplyFacts().facts.filter((f) => f.kind === "capability").map((f) => f.text);
-check("Co reads every ability and limit about itself (a member never reads the team-only ones)", facts.length === ABILITIES.filter((a) => !a.teamOnly).length + LIMITS.length && capabilitySheet().every((c) => facts.includes(c)) && !ABILITIES.filter((a) => a.teamOnly).some((a) => facts.includes(a.can)));
+check("Co reads every ability and limit about itself (a member never reads the team-only ones)", facts.length === ABILITIES.filter((a) => !a.teamOnly && !isMemberMoAbility(a)).length + LIMITS.length && capabilitySheet().every((c) => facts.includes(c)) && !ABILITIES.filter((a) => a.teamOnly).some((a) => facts.includes(a.can)));
 check("Co knows it can send its card", facts.some((f) => /contact card/.test(f)));
 check("Co knows it can't start a group text", facts.some((f) => /never starts a group text/.test(f)));
 check("Co knows it never writes a phone number", facts.some((f) => /never writes a phone number/.test(f)));

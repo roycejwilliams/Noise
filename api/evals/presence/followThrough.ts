@@ -92,12 +92,12 @@ check("nothing when the model finds no one", "skip" in ((await F.buildFollowThro
 // Structure: it can only ever reach the member, and reads nothing about anyone else
 const s = src("services/eventFollowThrough.ts").replace(/\/\/.*$/gm, "");
 check("the harness is handed the recap as the text to check, not the notes", /text: r\.messages\[0\], rules: \{ maxSentences: 6, maxChars: 900/.test(src("harness/proactiveRegistry.ts")));
-check("the follow-through is not held for payload-first and not for a not-going member", /"event_followthrough"\]\)/.test(src("harness/payloadFirst.ts")) && /steps\.notGoing\(o\.userId, o\.eventId\)/.test(src("services/eventFollowThrough.ts")));
+check("the follow-through is not held for payload-first and not for a not-going member", /"event_followthrough"[,\]]/.test(src("harness/payloadFirst.ts")) && /steps\.notGoing\(o\.userId, o\.eventId\)/.test(src("services/eventFollowThrough.ts")));
 check("it has no way to text or email anyone", !/sendblue|Resend|resend|sendEmail|sendMessage|sendText/i.test(s));
 check("it reads nothing about other people (no profiles, rankings, graph or matching)", !/co_profiles|event_guest_rankings|peopleGraph|matching\.js|eventScoring|event_guest_match|users WHERE|FROM users/i.test(s));
 check("every read is of the member's own messages and ask", (s.match(/FROM co_memories WHERE user_id = \$1/g) ?? []).length === 1 && /statedAsk\(userId\)/.test(s));
 check("what it keeps is a count, never a name", /people_count INT/.test(src("db/migrations.ts")) && !/names?\s+(TEXT|JSONB)/.test(src("db/migrations.ts").slice(src("db/migrations.ts").indexOf("event_follow_throughs"), src("db/migrations.ts").indexOf("event_follow_throughs") + 300)));
-check("it is queued only when they named someone good, and is an answer to them (not a new ask)", /if \(outcome === "named_positive"\) \{\s*const \{ enqueueCandidate \}/.test(src("routes/sendblue.ts")) && /"post_call", "event_followthrough"\]/.test(src("harness/proactive.ts")));
+check("it is queued only when they named someone good, and is an answer to them (not a new ask)", /if \(outcome === "named_positive"\) \{\s*const \{ enqueueCandidate \}/.test(src("routes/sendblue.ts")) && /"post_call", "event_followthrough"[,\]]/.test(src("harness/proactive.ts")));
 check("its model calls keep prompts out of the trace store", (src("services/eventFollowThrough.ts").match(/recordInputs: false, recordOutputs: false/g) ?? []).length === 2);
 check("the model drafts in the member's register but is told not to say what the other person said", /Do not say what \$\{o\.other\.name\} said, felt or wants/.test(src("services/eventFollowThrough.ts")));
 

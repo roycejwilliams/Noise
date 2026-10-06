@@ -347,6 +347,79 @@ export const proactiveRegistry: ProactiveRegistry = {
     },
   },
 
+  // Member-facing Mo (mo/memberFlow.ts). The words are built in code from the stored rows, so what the member approves is
+  // exactly what is sent and nothing here is the model's wording.
+  mo_member_offer: {
+    async draft(c) {
+      const M = await import("../mo/memberFlow.js");
+      const row = await M.optInRow(c.userId);
+      if (row?.asked_at) return skip("already asked");
+      const need = String(c.payload.need ?? "").trim();
+      if (!need) return skip("nothing to look for");
+      const messages = [`I can look outside the club for ${need}.`, "Want me to? You'd see every person and every word before anything goes out. A yes or a no is fine, and if I don't hear, I won't."];
+      return { messages, text: messages.join(" "), rules: { maxSentences: 5, maxChars: 420 } };
+    },
+    async onSent(c) {
+      const M = await import("../mo/memberFlow.js");
+      await M.noteOptInAsked(c.userId);
+      await writeMemory(c.userId, "mo_member_offer", "Asked if Mo may look outside the club for someone");
+    },
+  },
+  mo_member_voice: {
+    async draft(c, person) {
+      const M = await import("../mo/memberFlow.js");
+      const [row, batch] = await Promise.all([M.optInRow(c.userId), M.openBatch(c.userId)]);
+      if (row?.status !== "yes" || row?.paused_at || !batch || row?.voice_approved_at) return skip("nothing to approve");
+      const voice = row?.voice_text ?? M.DEFAULT_VOICE;
+      c.payload.voice = voice;
+      const example = M.composeApproach(voice, { named: false, memberFirstName: person.firstName, need: batch.need_text, why: "You wrote about work like this, which is why I'm writing" });
+      const messages = ["Before I reach out to anyone, this is how I'd introduce myself:", example, `Say yes if that sounds right. I'll say "a member of the club" rather than your name, unless you tell me to use your name.`];
+      return { messages, text: messages.join("\n\n"), rules: { maxSentences: 12, maxChars: 900 } };
+    },
+    async onSent(c) {
+      const M = await import("../mo/memberFlow.js");
+      await M.saveVoice(c.userId, String(c.payload.voice ?? M.DEFAULT_VOICE), false);
+    },
+  },
+  mo_member_batch: {
+    async draft(c) {
+      const M = await import("../mo/memberFlow.js");
+      const { composeApproach } = M;
+      const [row, batch] = await Promise.all([M.optInRow(c.userId), M.openBatch(c.userId)]);
+      if (row?.status !== "yes" || row?.paused_at || !row?.voice_approved_at || !batch || batch.status !== "open") return skip("nothing to pick from");
+      const { rows: u } = await pool.query(`SELECT first_name FROM users WHERE id = $1`, [c.userId]);
+      const people = (await M.candidatesOf(batch.id, c.userId)).filter((p) => p.status === "pending").map((p) => ({
+        n: p.n, label: M.personLabel(p), why: p.why, quote: p.evidence_quote,
+        text: composeApproach(row.voice_text ?? M.DEFAULT_VOICE, { named: !!row.voice_named, memberFirstName: u[0]?.first_name ?? "", need: batch.need_text, why: p.why }),
+      }));
+      if (!people.length) return skip("no one left in the batch");
+      const messages = M.batchMessages({ need: batch.need_text, people });
+      return { messages, text: messages[0], rules: { maxSentences: 4, maxChars: 400 } };
+    },
+    async onSent(c) {
+      await pool.query(`UPDATE mo_member_batches SET presented_at = COALESCE(presented_at, NOW()) WHERE user_id = $1 AND status = 'open'`, [c.userId]);
+    },
+  },
+  mo_member_update: {
+    async draft(c) {
+      const M = await import("../mo/memberFlow.js");
+      const { rows } = await pool.query(`SELECT * FROM mo_member_candidates WHERE id = $1 AND user_id = $2`, [c.payload.candidateId, c.userId]);
+      const p = rows[0];
+      if (!p) return skip("no such person for this member");
+      const who = M.personLabel(p);
+      const text: Record<string, string> = {
+        replied: `${who} wrote back and wants the invite. I've sent it. Once they're in, I'll ask whether you'd like the introduction.`,
+        declined: `${who} said no thanks, so I won't contact them again.`,
+        question: `${who} replied with a question. I've held it: I won't discuss you or the club until they've joined.`,
+        joined: `${who} is in. Want me to introduce you? A yes or a no is fine.`,
+      };
+      const t = text[String(c.payload.kind)];
+      if (!t) return skip("unknown update");
+      c.payload.who = who;
+      return { messages: [t], text: t, rules: { maxSentences: 4, maxChars: 260 } };
+    },
+  },
+
   // After they tell Co who they met at a Co event: what stood out, in their words, and a note for each person worth
   // keeping, for them to send. Built from their own message only (services/eventFollowThrough.ts).
   event_followthrough: {

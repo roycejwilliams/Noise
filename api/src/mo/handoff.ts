@@ -50,5 +50,15 @@ export async function moHandoff(userId: string): Promise<{ known: string[]; inst
     )
     .catch(() => ({ rows: [] as any[] }));
   const instruction = rows[0] ? handoffLine(rows[0]) : null;
-  return instruction ? { known: [HANDOFF_FACT], instruction } : null;
+  if (instruction) return { known: [HANDOFF_FACT], instruction };
+  // Someone a member asked Mo to find (mo/memberFlow.ts): Co asks about what they do and what they want from the club.
+  // It never says a member asked, never names the member, and never says anyone reached out.
+  const { rows: m } = await pool
+    .query(`SELECT evidence_quote FROM mo_member_candidates WHERE joined_user_id = $1 AND joined_at > NOW() - make_interval(days => $2) ORDER BY joined_at DESC LIMIT 1`, [userId, HANDOFF_DAYS])
+    .catch(() => ({ rows: [] as any[] }));
+  if (!m[0]) return null;
+  return {
+    known: [HANDOFF_FACT],
+    instruction: `They came in on an invitation from the club's own outreach, because of something they posted publicly: "${String(m[0].evidence_quote).slice(0, 160)}". You may ask about that work and what they hope to get from the club. Never say a member asked for them, never name or hint at any member, never say anyone reached out, and don't offer an introduction: that only happens if both people say yes.`,
+  };
 }

@@ -373,7 +373,7 @@ check(
   const mo = E.EXTENSIONS.find((e) => e.id === "mo");
   check("extension: Mo is registered with its abilities and voice", !!mo && mo.abilities === A.MO_ABILITIES && mo.voiceFile === "mo/moVoice.ts");
   const rt = mo ? await mo.load() : null;
-  check("extension: Mo plugs in team texts, handoff and its jobs", !!rt?.teamText && !!rt?.handoff && (rt?.jobs ?? []).map((j) => j.name).join(",") === "mo find,mo digest,mo outreach,mo inbox");
+  check("extension: Mo plugs in team texts, handoff and its jobs (the team's four, then member Mo's three, each a no-op unless MO_MEMBER_ENABLED)", !!rt?.teamText && !!rt?.handoff && (rt?.jobs ?? []).map((j) => j.name).join(",") === "mo find,mo digest,mo outreach,mo inbox,mo member offers,mo member hunts,mo member outreach");
   check("wired: texts, reply facts and jobs go through the registry", /handleTeamText\(user\.id, content, \{ \.\.\.\(repliedToExt \?/.test(src("routes/sendblue.ts")) && /extensionJobs\(\)/.test(src("jobs/index.ts")) && !/from "\.\.\/mo\//.test(src("jobs/index.ts") + src("routes/sendblue.ts")));
   check("monitor: each extension tool has a drift signal", /EXTENSIONS\.flatMap/.test(src("harness/monitor.ts")));
 }
@@ -385,7 +385,13 @@ check(
   const G = await import("../../src/harness/replyGrounding.js");
   const memberSheet = C.capabilitySheet().join("\n");
   const teamSheetAll = [...C.capabilitySheet({ team: true }), ...X.teamSheet()].join("\n");
-  check("a member's capability facts never include team-only abilities or Mo", !/\bMo\b|teammate/i.test(memberSheet) && !C.ABILITIES.filter((a: any) => a.teamOnly).some((a: any) => memberSheet.includes(a.can)));
+  check("a member's capability facts never include team-only abilities or Mo while member Mo is off", !/\bMo\b|teammate/i.test(memberSheet) && !C.ABILITIES.filter((a: any) => a.teamOnly).some((a: any) => memberSheet.includes(a.can)));
+  {
+    // With member Mo on, a member hears about it (and only its member-facing abilities), never the team's.
+    const onSheet = (() => { const was = [process.env.MO_MEMBER_ENABLED, process.env.MO_ENABLED]; process.env.MO_MEMBER_ENABLED = "true"; process.env.MO_ENABLED = "true"; try { return C.capabilitySheet().join("\n"); } finally { process.env.MO_MEMBER_ENABLED = was[0]; process.env.MO_ENABLED = was[1]; if (was[0] === undefined) delete process.env.MO_MEMBER_ENABLED; if (was[1] === undefined) delete process.env.MO_ENABLED; } })();
+    check("with member Mo on, a member's facts include its member-facing abilities and still no team-only ones", C.ABILITIES.filter((a: any) => a.id.startsWith("mo_member_")).every((a: any) => onSheet.includes(a.can)) && !C.ABILITIES.filter((a: any) => a.teamOnly).some((a: any) => onSheet.includes(a.can)) && !/teammate/i.test(onSheet));
+    check("member Mo's tools are removed from the tool map while it is off", /if \(!memberMoOn\(\)\) for \(const name of memberMoTools\(\)\) delete/.test(src("agent/conversationTools.ts")) && C.memberMoTools().length === 6);
+  }
   check("the team's facts say what Mo does, and not to pitch it as new", /Mo is Co's teammate/.test(teamSheetAll) && /don't pitch what Mo already does as a new idea/.test(teamSheetAll) && /never mention Mo to anyone else/.test(teamSheetAll));
   const tools = src("agent/conversationTools.ts");
   check("team-only tools are removed from the tool map for everyone else", /if \(!ctx\.isTeam\) for \(const name of teamOnlyTools\(\)\) delete/.test(tools) && C.teamOnlyTools().includes("handToTeammate"));
