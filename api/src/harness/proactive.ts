@@ -23,6 +23,7 @@
 // still enforces the idempotency key and, where asked, local hours. Layer 6
 // in-room nudges during a live event are owned by eventScoring.ts and stay
 // outside this harness.
+import { proactivePaused } from "../services/proactivePause.js";
 import { brandSafe } from "../services/brandGuard.js";
 import { feedbackFor, unbackedSpecifics } from "./proactiveSpecifics.js";
 import { generateText } from "ai";
@@ -1683,12 +1684,7 @@ export async function dispatchForUser(registry: ProactiveRegistry, userId: strin
   });
 }
 
-// Co goes quiet: reactive only, no unprompted outreach (Royce, 2026-10-06, after a 7-day check-in about "chest tightness" from a
-// 9/29 test message). Set PROACTIVE_PAUSED=true to stop every proactive send at the two doors a message leaves by. Pending
-// candidates just wait (nothing is dropped); replies to people who text Co are not touched.
-export function proactivePaused(env: NodeJS.ProcessEnv = process.env): boolean {
-  return env.PROACTIVE_PAUSED === "true";
-}
+export { proactivePaused } from "../services/proactivePause.js";
 
 export async function runProactiveDispatch(registry: ProactiveRegistry): Promise<void> {
   if (proactivePaused()) return;
