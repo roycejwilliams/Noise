@@ -83,4 +83,8 @@ jobs:
       - if: steps.changed.outputs.run == 'true'
         run: npm ci
       - if: steps.changed.outputs.run == 'true'
-        run: npm run -s evals:nightly -- ${{ inputs.only && format('--only {0}', inputs.only) || '' }}
+        # The input goes through the environment, never into the command line (no shell injection from a dispatch input).
+        env:
+          ONLY: ${{ inputs.only }}
+        run: |
+          if [ -n "$ONLY" ]; then npm run -s evals:nightly -- --only "$ONLY"; else npm run -s evals:nightly; fi

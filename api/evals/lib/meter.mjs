@@ -128,8 +128,11 @@ globalThis.fetch = async function meteredFetch(input, init) {
     body.tools = body.tools.filter((t) => !/web_search/.test(String(t?.type ?? "")));
     if (!body.tools.length) { delete body.tools; delete body.tool_choice; }
   }
+  // A call may not ask for more than 4,096 output tokens: the reservation below is then exact, so the cap cannot be overshot by a
+  // call that asks for 64,000 and the run stops at the cap, not past it.
+  body.max_tokens = Math.min(Number(body.max_tokens ?? 1024), 4096);
   const estIn = Math.ceil(JSON.stringify(body).length / 3.5);
-  const reserveOut = Math.min(Number(body.max_tokens ?? 1024), 4096);
+  const reserveOut = body.max_tokens;
   const reserveTokens = estIn + reserveOut;
   const reserveUsd = usd(kind, { input: estIn, output: reserveOut });
   if (before.tokens + reserveTokens > CAP_TOKENS) refuse(`this call could pass the token cap ${CAP_TOKENS.toLocaleString()} (${Math.round(before.tokens).toLocaleString()} used, up to ${reserveTokens.toLocaleString()} more)`);

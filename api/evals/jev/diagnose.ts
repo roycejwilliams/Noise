@@ -1,3 +1,4 @@
+import "../lib/requireMeter.js";
 // Diagnoses a failing Jev gateway call: prints the error's status, type and
 // message (never the key). One tiny request, with and without zero data retention.
 import { experimental_evaluate as evaluate } from "ai7";

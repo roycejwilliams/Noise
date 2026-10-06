@@ -188,7 +188,7 @@ async function partMoReplies() {
   let cases: { text: string; label: string }[] = existsSync(lf) ? JSON.parse(readFileSync(lf, "utf8")) : [];
   if (!cases.length) {
     const { text } = await generateText({
-      model: JUDGE, headers: GRADER_HEADERS,
+      model: JUDGE, // generating test replies is not grading: no grader header, so the meter runs it on Haiku
       prompt: `For a test, write 45 realistic, varied X DM replies from strangers to this message from Co: "Saw your post about the dinners you host. Co runs a small invite-only club in SF for people like that. Want an invite?" 15 that mean yes, 15 that mean no (including polite, blunt, and "maybe later"), 15 that ask a question or are unclear. Mix lengths, slang, typos, sarcasm, emoji. Return ONLY JSON: {"replies": [{"text": "...", "label": "yes"|"no"|"question"}]}`,
     });
     const gen = parseModelJson<{ replies?: { text: string; label: string }[] }>(text).replies ?? [];

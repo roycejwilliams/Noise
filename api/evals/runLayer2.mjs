@@ -29,9 +29,9 @@ for (const s of suites) {
   const t0 = Date.now();
   const env = { ...process.env, EVAL_LAYER2: "1", EVAL_SAMPLE: String(sampleOverride ?? s.sample), EVAL_LEDGER: ledger, EVAL_QUIET: "1", EVAL_TOKEN_CAP: String(capTokens), EVAL_COST_CAP_USD: String(capUsd), DATABASE_URL: process.env.DATABASE_URL ?? "postgres://ci:ci@127.0.0.1:1/ci" };
   const out = await new Promise((resolve) => {
-    const p = spawn("npx", ["tsx", "--import", "./evals/lib/meter.mjs", ...s.args], { cwd: root, env, stdio: ["ignore", "pipe", "pipe"] });
+    const p = spawn("npx", ["tsx", "--import", "./evals/lib/meter.mjs", ...s.args], { cwd: root, env, stdio: ["ignore", "pipe", "pipe"], detached: true });
     let buf = "";
-    const timer = setTimeout(() => p.kill("SIGKILL"), 600_000);
+    const timer = setTimeout(() => { try { process.kill(-p.pid, "SIGKILL"); } catch { p.kill("SIGKILL"); } }, 600_000);
     p.stdout.on("data", (d) => (buf += d));
     p.stderr.on("data", (d) => (buf += d));
     p.on("close", (code) => { clearTimeout(timer); resolve({ code, buf }); });

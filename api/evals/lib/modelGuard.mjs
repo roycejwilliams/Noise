@@ -1,8 +1,9 @@
 // LAYER 1 (logic tests): the model is fully stubbed. Preloaded into every logic test with `node --import`.
 //
 // A logic test must spend zero tokens. This replaces the network for model hosts with canned, deterministic answers
-// (a one-word "stub" reply; a zero vector for embeddings) and refuses every other outside call. Nothing here ever
-// reaches a real API, so a layer 1 run costs nothing, whatever the code under test does. Each stubbed call is counted
+// (a one-word "stub" reply; a zero vector for embeddings) and refuses every other outside fetch. Nothing here ever
+// reaches a real API through fetch, so a layer 1 run costs nothing. It covers fetch only: node http, sockets and pg are not
+// intercepted, which is why the runner gives every client a placeholder key and a dead database, and sets DOTENV_CONFIG_PATH to /dev/null. Each stubbed call is counted
 // (MODEL_GUARD_LOG) so the runner can show which tests lean on the stub: a test whose result depends on what a model
 // says belongs in layer 2 or must inject its own fake, not read the canned answer.
 import { appendFileSync } from "node:fs";

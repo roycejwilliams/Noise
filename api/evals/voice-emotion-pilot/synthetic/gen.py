@@ -1,3 +1,6 @@
+import os as _guard_os, sys as _guard_sys
+if _guard_os.environ.get("EVAL_ALLOW_UNMETERED") != "1":
+    _guard_sys.exit("This legacy pilot script calls Anthropic/ElevenLabs directly, outside the meter (api/evals/README.md). It spends real money with no cap. Set EVAL_ALLOW_UNMETERED=1 if you mean to.")
 import os as _o
 D='data' if _o.environ.get('ROUND','1')=='1' else 'data'+_o.environ['ROUND']
 import json,os,urllib.request,ssl,wave,concurrent.futures as cf

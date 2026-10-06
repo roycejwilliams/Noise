@@ -20,15 +20,17 @@ const env = {
   SENDBLUE_API_API_KEY: "ci", SENDBLUE_API_API_SECRET: "ci", SENDBLUE_API_KEY: "ci", SENDBLUE_SECRET_KEY: "ci",
   ANTHROPIC_API_KEY: "ci", OPENAI_API_KEY: "ci", GOOGLE_PLACES_API_KEY: "ci", RESEND_API_KEY: "re_ci", ELEVENLABS_API_KEY: "ci",
   DATABASE_URL: "postgres://ci:ci@127.0.0.1:1/ci", MODEL_GUARD_LOG: log,
+  // dotenv must not fill anything from the real api/.env (Twilio, Stripe, Langfuse... use node http, which the guard cannot see).
+  DOTENV_CONFIG_PATH: "/dev/null",
 };
 delete env.EVAL_LAYER2; delete env.EVAL_SAMPLE;
 
 const run = (cmd, args, extra = {}) =>
   new Promise((resolve) => {
     const t0 = Date.now();
-    const p = spawn(cmd, args, { cwd: root, env: { ...env, ...extra }, stdio: ["ignore", "pipe", "pipe"] });
+    const p = spawn(cmd, args, { cwd: root, env: { ...env, ...extra }, stdio: ["ignore", "pipe", "pipe"], detached: true });
     let out = "";
-    const timer = setTimeout(() => p.kill("SIGKILL"), 180_000);
+    const timer = setTimeout(() => { try { process.kill(-p.pid, "SIGKILL"); } catch { p.kill("SIGKILL"); } }, 180_000);
     p.stdout.on("data", (d) => (out += d));
     p.stderr.on("data", (d) => (out += d));
     p.on("close", (code) => { clearTimeout(timer); resolve({ code, out, ms: Date.now() - t0 }); });

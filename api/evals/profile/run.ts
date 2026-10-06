@@ -22,6 +22,8 @@ import {
 } from "../../src/harness/profileWrite.js";
 import { buildResolutionPrompt, gateResolutionOutput, sameAskPrompt } from "../../src/services/profileExtraction.js";
 import { generateEmbedding } from "../../src/services/embeddings.js";
+// --live makes real model calls: only through the meter (evals/README.md).
+if (process.argv.includes("--live")) await import("../lib/requireMeter.js");
 
 type AskCase = EvalCase & { kind: "ask"; newAsk: string; openAsks: string[]; expect: { same: boolean; asAsk?: string } };
 type ResolveCase = EvalCase & {

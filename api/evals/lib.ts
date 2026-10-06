@@ -31,7 +31,8 @@ export function sampleCases<T extends { id: string }>(cases: T[], dir: string, n
   try {
     const rdir = join(dir, "results");
     if (existsSync(rdir)) {
-      const latest = readdirSync(rdir).filter((f) => f.endsWith(".local.json")).sort().pop();
+      // Only live runs count as history: a logic-mode run in the same folder has different case ids.
+      const latest = readdirSync(rdir).filter((f) => f.endsWith(".live.local.json")).sort().pop();
       if (latest) {
         const rows = JSON.parse(readFileSync(join(rdir, latest), "utf8")).rows ?? [];
         for (const r of rows) {
@@ -88,7 +89,7 @@ export async function runEval<T extends EvalCase, R>(opts: {
 
   mkdirSync(join(opts.dir, "results"), { recursive: true });
   writeFileSync(
-    join(opts.dir, "results", `${new Date().toISOString().replace(/[:.]/g, "-")}.local.json`),
+    join(opts.dir, "results", `${new Date().toISOString().replace(/[:.]/g, "-")}${process.env.EVAL_LAYER2 || process.argv.includes("--live") ? ".live" : ""}.local.json`),
     JSON.stringify({ hard: hardRows.length, softPct, rows }, null, 2),
   );
   if (hardRows.length) process.exitCode = 1;

@@ -18,14 +18,21 @@ const layer1: string[] = JSON.parse(read("evals/layer1.json")).files;
 const live: { suites: { args: string[] }[]; caps: { tokens: number; usd: number } } = JSON.parse(read("evals/live.json"));
 const walk = (d: string): string[] => readdirSync(join(root, d)).flatMap((n) => { const p = `${d}/${n}`; return statSync(join(root, p)).isDirectory() ? (n === "node_modules" || n === "results" ? [] : walk(p)) : p.endsWith(".ts") ? [p] : []; });
 const harness: string[] = JSON.parse(read("evals/lib/harness.json"));
+const walkAll = (d: string): string[] => readdirSync(join(root, d)).flatMap((n) => { const p = `${d}/${n}`; return statSync(join(root, p)).isDirectory() ? (n === "node_modules" || n === "results" ? [] : walkAll(p)) : [p]; });
 const evalFiles = walk("evals").filter((f) => !f.startsWith("evals/lib/") && f !== "evals/lib.ts");
 // Structural, not a text search: a script can reach a model through a service it imports (readTurn, the router...), so
 // the rule is that every entrypoint outside layer 1 refuses to run unmetered. Only listed harness/data modules are exempt.
 const outside = evalFiles.filter((f) => !layer1.includes(f) && !harness.includes(f));
-const unguarded = outside.filter((f) => !/requireMeter/.test(read(f)));
+const gated = (f: string) => /^\s*import\s+["'][^"']*requireMeter[^"']*["']|import\(["'][^"']*requireMeter/m.test(read(f).replace(/\/\/.*$/gm, ""));
+const unguarded = outside.filter((f) => !gated(f));
 check("every eval script outside layer 1 refuses to run without the meter (no unmetered live call anywhere)", unguarded.length === 0 && (unguarded.length ? (console.log(unguarded.join("\n")), false) : true));
 const liveCapable = evalFiles.filter((f) => /generateText|generateObject|streamText|anthropic\(|runConversationReplyAgent|embed\(/.test(read(f)));
-check("a harness or data module never calls a model itself", harness.every((f) => !/generateText|generateObject|streamText|anthropic\(/.test(read(f).replace(/\/\/.*$/gm, ""))));
+check("a harness or data module never reaches a model or the network itself", harness.every((f) => !/generateText|generateObject|streamText|anthropic\(|evaluate\(|createGateway/.test(read(f).replace(/\/\/.*$/gm, ""))));
+// A layer 1 file that has a --live mode must gate it, or `--live` run by hand is unmetered (the guard only stubs).
+const liveModes = layer1.filter((f) => f !== "evals/lib/rules.ts" && /includes\("--live"\)|argv.*--live/.test(read(f)));
+check("every layer 1 file with a --live mode gates it behind the meter", liveModes.length >= 7 && liveModes.every((f) => /includes\("--live"\)\)\s*await import\([^)]*requireMeter/.test(read(f))));
+const pyCallers = walkAll("evals").filter((f) => f.endsWith(".py") && /anthropic|elevenlabs|api\.openai/i.test(read(f)));
+check("a Python script that calls a model or voice API directly refuses to run unless told it is unmetered", pyCallers.length >= 2 && pyCallers.every((f) => /EVAL_ALLOW_UNMETERED/.test(read(f))));
 const inLayer1AndAlwaysLive = layer1.filter((f) => /^import ".*requireMeter/m.test(read(f)));
 check("no file in layer 1 imports the meter at the top (those would refuse to run): live paths there are behind --live only", inLayer1AndAlwaysLive.length === 0);
 check("layer 1 lists only files that exist", layer1.every((f) => existsSync(join(root, f))));
@@ -37,11 +44,14 @@ check("the nightly default cap is at most 500,000 tokens and $1.00", live.caps.t
 // ---- what runs on a commit
 const pkg = JSON.parse(read("package.json")).scripts as Record<string, string>;
 check("test, evals:code and the hook run layer 1 only", pkg.test === "node evals/runLayer1.mjs" && pkg["evals:code"] === pkg.test);
+check("layer 1 does not read the real api/.env (dotenv is pointed at nothing)", /DOTENV_CONFIG_PATH: "\/dev\/null"/.test(read("evals/runLayer1.mjs")));
+check("a timed-out test is killed with its whole process group", /detached: true/.test(read("evals/runLayer1.mjs")) && /process\.kill\(-p\.pid/.test(read("evals/runLayer1.mjs")));
 check("no per-change script runs a live eval", !/runLayer2|runLive|--live/.test(pkg.test + pkg["evals:code"]));
 const hook = read("../.githooks/pre-push");
 check("the pre-push hook runs layer 1 and never a live eval", /evals:code/.test(hook) && !/evals:live|evals:nightly|eval:live/.test(hook.replace(/^#.*$/gm, "")));
 const wf = read("../.github/workflows/co-evals.yml");
-const pushJob = wf.slice(wf.indexOf("\njobs:"), wf.indexOf("\n  live:"));
+const wfAll = wf;
+check("the workflow never puts a dispatch input into a shell command", !/run:[^\n]*\$\{\{\s*inputs\./.test(wfAll) && /ONLY: \$\{\{ inputs\.only \}\}/.test(wfAll)); const pushJob = wf.slice(wf.indexOf("\njobs:"), wf.indexOf("\n  live:"));
 check("CI on a push or pull request runs layer 1 only", /evals:code/.test(pushJob) && !/evals:nightly|evals:live|eval:live|secrets\./.test(pushJob));
 check("the live job runs only on the nightly schedule or a manual dispatch, and runs the capped nightly set", /github\.event_name == 'schedule'/.test(wf) && /workflow_dispatch/.test(wf) && /npm run -s evals:nightly/.test(wf));
 
@@ -68,6 +78,7 @@ check("the live job runs only on the nightly schedule or a manual dispatch, and 
   const probe = JSON.parse((r.stdout.match(/PROBE (.*)/) ?? [])[1] ?? "{}");
   const seen = readFileSync(join(dir, "seen.jsonl"), "utf8").split("\n").filter(Boolean).map((l) => JSON.parse(l));
   check("a worker call is rewritten to Haiku, even when it asked for Sonnet or Opus", seen[0].model === "claude-haiku-4-5-20251001" && seen[1].model === "claude-haiku-4-5-20251001");
+  check("a call may not ask for more than 4,096 output tokens, so the cap is exact and not overshot by a 64,000-token request", seen[1].body.max_tokens === 4096);
   check("the effort option Haiku refuses is stripped", !JSON.stringify(seen[0].body).includes("effort"));
   check("only a call marked as the grader runs as Sonnet, and the marker never leaves", seen[2].model === "claude-sonnet-5" && seen[3].model === "claude-sonnet-5" && !("x-eval-role" in seen[2].headers) && !("x-eval-role" in seen[3].headers));
   check("a paid web search tool is removed before the call", !JSON.stringify(seen[4].body).includes("web_search"));
@@ -108,11 +119,12 @@ check("the live job runs only on the nightly schedule or a manual dispatch, and 
 
 // ---- graders are Sonnet and say so
 check("no grader or judge names Opus (the price table in the router eval is the only mention)", !evalFiles.some((f) => /claude-opus/.test(read(f).replace(/\/\/.*$/gm, "")) && !/PRICING/.test(read(f))) && !/claude-opus/.test(read("src/models.ts")));
+check("generating test data is not grading: the Jev honest generator call has no grader marker", !/model: JUDGE, headers: GRADER_HEADERS,\s*\n\s*prompt: `For a test, write 45/.test(read("evals/jev/honest.ts")));
 check("every grader call carries the grader marker", ["evals/matching/run.ts", "evals/intro/run.ts", "evals/texting/grade.ts", "evals/texting/pairwise.ts", "evals/texting/tagShort.ts", "evals/grounding/falseFlags.ts", "evals/jev/honest.ts"].every((f) => /headers: GRADER_HEADERS/.test(read(f))));
 
 // ---- the morning email is gone
 const jobs = read("src/jobs/index.ts");
-check("no morning email: the 8am review cron is not scheduled", !/runMorningReview\(\)/.test(jobs.replace(/\/\/.*$/gm, "")));
+check("no morning email: the 8am review cron is not scheduled", !/runMorningReview\(/.test(jobs.replace(/\/\/.*$/gm, "")));
 check("the morning review never sends an email unless asked to by hand", /opts\.force/.test(read("src/harness/devReview.ts")));
 
 console.log(`test setup rules: ${total - failed}/${total} passed`);

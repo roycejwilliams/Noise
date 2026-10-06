@@ -7,7 +7,7 @@ const call = async (model, headers = {}, extra = {}) => {
 };
 const out = {};
 out.sonnetAsWorker = await call("claude-sonnet-5", {}, { output_config: { effort: "low" } });
-out.opusAsWorker = await call("claude-opus-5");
+out.opusAsWorker = await call("claude-opus-5", {}, { max_tokens: 64000 });
 out.sonnetAsGrader = await call("claude-sonnet-5", { "x-eval-role": "grader" });
 out.opusAsGrader = await call("claude-opus-5", { "X-Eval-Role": "grader" });
 out.webSearch = await call("claude-sonnet-5", {}, { tools: [{ type: "web_search_20250305", name: "web_search" }] });
