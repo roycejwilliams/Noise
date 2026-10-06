@@ -81,6 +81,7 @@
     "evals/presence/followThrough.ts",
     "evals/presence/readout.ts",
     "evals/lib/rules.ts",
-    "evals/sweepSelect/rules.ts"
+    "evals/sweepSelect/rules.ts",
+    "evals/proactive/specifics.ts"
   ]
 }

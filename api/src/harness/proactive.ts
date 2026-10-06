@@ -24,6 +24,7 @@
 // in-room nudges during a live event are owned by eventScoring.ts and stay
 // outside this harness.
 import { brandSafe } from "../services/brandGuard.js";
+import { feedbackFor, unbackedSpecifics } from "./proactiveSpecifics.js";
 import { generateText } from "ai";
 import { anthropic } from "@ai-sdk/anthropic";
 import { DateTime } from "luxon";
@@ -588,6 +589,7 @@ export const PROACTIVE_RULES = `PROACTIVE RULES
 - One message, one reason. If you can't name the specific thing you're reaching out about, return SKIP.
 - Name the actual thing: the event by its name, the person, what they said.
 - Only say what another person said, feels, or wants when it's written in CONFIRMED_FACTS.
+- Days, dates, times, events, deadlines and commitments: state one only if it is in CONFIRMED_FACTS as a date or something they said just now. Background facts tell you who they are; they are never a source for a date, an event or what they are preparing for. If you don't have one, ask instead of stating (a question about what is coming up this week invents nothing).
 - Talk like a person who noticed something, never like a system explaining why it matched them.
 - If you're asking for a decision, end with one yes/no question. Otherwise don't ask anything.
 - Keep it short, a text or two, and get to what you're reaching out about. Say it your own way each time; a greeting is fine when it's natural, never a formula.
@@ -602,7 +604,14 @@ export function renderFacts(facts: Facts): string {
   return lines.length ? lines.join("\n") : "- (nothing beyond what's described below)";
 }
 
-// Returns the cleaned message, or null when the model chose SKIP.
+// A test seam: a fake model for draftProactive, so the guard below can be exercised with zero tokens.
+let testModel: ((prompt: string) => Promise<string>) | null = null;
+export function setProactiveModelForTests(fn: typeof testModel): void {
+  testModel = fn;
+}
+
+// Returns the cleaned message, or null when the model chose SKIP, or when the draft states a day, event or commitment that
+// nothing real backs (harness/proactiveSpecifics.ts): it is redrafted once with the problem named, and then not sent.
 export async function draftProactive(opts: {
   functionId: string;
   firstName: string;
@@ -611,13 +620,13 @@ export async function draftProactive(opts: {
   model?: string;
   // Most types are one or two sentences; a few (post-call reflection) need room.
   maxSentences?: number;
+  // Fact keys whose words are current (the call that just ended): a day they said there backs a day in the message. Anything
+  // else that was said earlier, or is only background, cannot back a date.
+  freshKeys?: string[];
 }): Promise<string | null> {
   const feeling = feelingForDraft.getStore();
   const redo = redraftFor.getStore();
-  const { text } = await generateText({
-    model: anthropic(opts.model ?? DRAFT_MODEL),
-    experimental_telemetry: { isEnabled: true, functionId: opts.functionId },
-    prompt: `${CO_VOICE}
+  const build = (own: string | null) => `${CO_VOICE}
 
 ${CO_TEXT_CHANNEL} You're texting ${opts.firstName}. Co is reaching out first; they didn't just text you.
 
@@ -629,12 +638,25 @@ ${feeling ? `\nHOW THEY'VE BEEN FEELING (let it shape how you say this, never wh
 
 TASK
 ${opts.task}
-${redo ? `\nYOUR LAST DRAFT (not sent)\n"${redo.draft}"\nIt broke: ${redo.failed}. Write it again with that fixed, keeping what it said.\n` : ""}
-Return ONLY the message text, or exactly SKIP.`,
-  });
-  const trimmed = text.trim().replace(/^["']|["']$/g, "").trim();
-  if (!trimmed || /^skip\b[.!]?$/i.test(trimmed)) return null;
-  return brandSafe(cleanCoMessage(trimmed));
+${redo ? `\nYOUR LAST DRAFT (not sent)\n"${redo.draft}"\nIt broke: ${redo.failed}. Write it again with that fixed, keeping what it said.\n` : ""}${own ? `\nYOUR LAST DRAFT (not sent)\n"${own}"\nIt broke: ${feedbackFor(unbackedSpecifics(own, opts.facts, { freshKeys: opts.freshKeys }))}\n` : ""}
+Return ONLY the message text, or exactly SKIP.`;
+  const generate = async (own: string | null): Promise<string | null> => {
+    const prompt = build(own);
+    const raw = testModel ? await testModel(prompt) : (await generateText({ model: anthropic(opts.model ?? DRAFT_MODEL), experimental_telemetry: { isEnabled: true, functionId: opts.functionId }, prompt })).text;
+    const trimmed = raw.trim().replace(/^["']|["']$/g, "").trim();
+    if (!trimmed || /^skip\b[.!]?$/i.test(trimmed)) return null;
+    return brandSafe(cleanCoMessage(trimmed));
+  };
+  const first = await generate(null);
+  if (!first) return null;
+  if (!unbackedSpecifics(first, opts.facts, { freshKeys: opts.freshKeys }).length) return first;
+  // A day, event or commitment nothing real backs: once more, told exactly what to cut or turn into a question.
+  const second = await generate(first);
+  if (!second) return null;
+  const left = unbackedSpecifics(second, opts.facts, { freshKeys: opts.freshKeys });
+  if (!left.length) return second;
+  console.log(`proactive: ${opts.functionId} not sent: it still states ${left.map((l) => `"${l.text}"`).join(", ")} that nothing real backs`);
+  return null;
 }
 
 export type OutputRules = {

@@ -319,6 +319,8 @@ export const proactiveRegistry: ProactiveRegistry = {
         facts: {
           event: p.name,
           starts_at_local_time: P.localStart(p.startAt, p.timezone),
+          // The date as a date (not a word), so "today", "tonight" and the weekday are backed by it and nothing else can be.
+          the_event_date: P.localDate(p.startAt, p.timezone),
           ...(p.venue ? { venue: p.venue } : {}),
           ...(p.address ? { address: p.address } : {}),
           ...(fits >= P.PRE_ARRIVAL.minCrowd ? { people_coming_who_fit_their_ask: `${fits} (say only that a few people coming fit what they're after; never describe or name anyone)` } : {}),
