@@ -1,4 +1,5 @@
 import { recordRevealedOffers } from "./offerReactions.js";
+import { isPrivateTurn } from "./privateTurn.js";
 import { matchKey } from "./eventSurfacingSweep.js";
 import pool from "../db/db.js";
 import type { TierMatch } from "./tieredRecommendation.js";
@@ -15,6 +16,9 @@ import { generateEmbedding } from "./embeddings.js";
 //                           event is caught as a certain match (eventMatching.ts)
 export async function recordRecommendationsSent(userId: string, matches: TierMatch[]): Promise<void> {
   if (!matches.length) return;
+  // Not while a document is open: the finds can be shaped by it, and this writes embedded memories, people-graph facts
+  // and offer records that other members' matches and later turns read (services/privateTurn.ts).
+  if (isPrivateTurn(userId)) return;
   // Sent in a reply: the same thing queued as an offer doesn't go out again.
   await pool
     .query(

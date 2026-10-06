@@ -1,5 +1,5 @@
 import { notToTeammate } from "../services/teamLines.js";
-import { beginTurn, isPrivateTurn, liveRows, markPrivateTurn } from "../services/privateTurn.js";
+import { beginTurn, isPrivateTurn, joinWindow, liveRows, markPrivateTurn } from "../services/privateTurn.js";
 import { isDiscreetTurn } from "../harness/discretion.js";
 import { anthropic } from "@ai-sdk/anthropic";
 import { captureIssueReport } from "../services/issueReports.js";
@@ -1151,6 +1151,7 @@ export function sendblueRouter(io: Server): Router {
           return label ? { ...r, what: label } : r;
         });
         let isVoice = false;
+        joinWindow(user.id); // inside the window after a document: this turn is sealed from the start (services/privateTurn.ts)
         let imageForVision: { data: Buffer; mediaType: string } | null = null;
         let photoDescription: string | null = null;
         // A PDF, Word or PowerPoint file they sent (services/documents.ts): read once, kept for them.
@@ -1303,11 +1304,18 @@ export function sendblueRouter(io: Server): Router {
                     [user.id, inboundContent],
                   ),
           ),
-          generateEmbedding(inboundContent).catch((err) => {
+          (isPrivateTurn(user.id) ? Promise.resolve(null) : generateEmbedding(inboundContent)).catch((err) => {
             console.error("Inbound embedding failed (non-fatal):", err);
             return null;
           }),
         ]);
+
+        // A turn that touched a document leaves a public trace of its own: that they wrote, and nothing else. The
+        // checks that count a member as recently active (the match gate, membership, metrics) read co_memories alone,
+        // so without this a member who only sends documents would look inactive (services/privateTurn.ts).
+        if (isPrivateTurn(user.id) && !replay) {
+          pool.query(`INSERT INTO co_memories (user_id, memory_type, content) VALUES ($1, 'text_exchange', 'User said: [a message]')`, [user.id]).catch(() => {});
+        }
 
         // Same text sent again within a couple of minutes (confirmed live:
         // people resend when a reply is slow). The reply agent is told so it
@@ -1562,7 +1570,7 @@ export function sendblueRouter(io: Server): Router {
             : null;
         readP?.catch(() => {});
         // Jev labels the same text in shadow, logged next to the read; never used for the reply (services/jevShadow.ts).
-        const jevShadowP = hasText && readP ? startJevShadow(resolvedContent, lastCoLine(recentConversation), !!inlineTarget?.fromCo) : null;
+        const jevShadowP = hasText && readP && !isPrivateTurn(user.id) ? startJevShadow(resolvedContent, lastCoLine(recentConversation), !!inlineTarget?.fromCo) : null;
         const coverageP = readP
           ? readP.then((r) => coverageNudgeFrom(user.id, profile, r.coverage)).catch(() => ({ missingTopic: null, refresh: null }))
           : getCoverageNudge(user.id, recentConversation, profile).catch(() => ({ missingTopic: null, refresh: null }));
@@ -1715,7 +1723,7 @@ export function sendblueRouter(io: Server): Router {
           const [notes, loops, timeline] = await Promise.all([
             loadBrief(user.id).then(describeNotes).catch(() => null),
             // Every open loop and where it stands (services/openLoops.ts).
-            import("../services/openLoops.js").then(async (o): Promise<string | null> => o.describeLoops((await o.syncOpenLoops(user.id)).rows, { withIds: true })).catch((): string | null => null),
+            isPrivateTurn(user.id) ? Promise.resolve<string | null>(null) : import("../services/openLoops.js").then(async (o): Promise<string | null> => o.describeLoops((await o.syncOpenLoops(user.id)).rows, { withIds: true })).catch((): string | null => null),
             // Their local time and what's ahead, every turn (services/timeline.ts).
             import("../services/timeline.js").then((t) => t.timelineFor(user.id, profile?.city ?? null)).catch(() => null),
           ]);
@@ -1777,7 +1785,7 @@ export function sendblueRouter(io: Server): Router {
         // contact someone for them. It only puts Co on alert; the privacy
         // lines themselves are hard rules either way. Member text goes to Jev
         // only through the zero-retention gateway where JEV_MEMBER=on.
-        if (hasText) {
+        if (hasText && !isPrivateTurn(user.id)) {
           const alert = await privacyAlert(resolvedContent).catch(() => null);
           if (alert) {
             addInstruction(replyFacts, alert.instruction);
@@ -2480,7 +2488,7 @@ Return ONLY valid JSON, no preamble: {"date": "YYYY-MM-DD or null", "time": "HH:
           if (momentNote) addInstruction(replyFacts, momentNote);
           const lessons = turn?.lessons ?? [];
           if (lessons.length) addInstruction(replyFacts, `What you've learned about how to be with them, from times they corrected you: ${lessons.join(" / ")}`);
-          if (moment?.lesson) saveLesson(user.id, moment.lesson).catch(() => {});
+          if (moment?.lesson && !isPrivateTurn(user.id)) saveLesson(user.id, moment.lesson).catch(() => {});
           if (moment) recordDecision({ layer: 3, decision: "reply.moment", userId: user.id, outcome: "act", action: moment.mode, proposal: { topic: moment.topic, pushback: moment.pushback, lesson: moment.lesson } }).catch(() => {});
           if (reactingToSent) {
             const why = whyContext(await askedAndDoing());

@@ -35,6 +35,11 @@ export function markPrivateTurn(userId?: string, now = Date.now()): void {
   }
   if (userId) recent.set(userId, now + PRIVATE_WINDOW_MS);
 }
+// At the start of a member's turn, once we know whose it is: if they are inside the window, this turn is sealed from its
+// first step, so everything that asks without a member id (the trace settings) sees it too.
+export function joinWindow(userId: string, now = Date.now()): void {
+  if (isPrivateTurn(userId, now)) markPrivateTurn(userId, now);
+}
 export function isPrivateTurn(userId?: string, now = Date.now()): boolean {
   const s = als.getStore();
   if (s?.private === true && (!s.userId || !userId || s.userId === userId)) return true;

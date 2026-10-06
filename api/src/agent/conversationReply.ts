@@ -1,4 +1,5 @@
 import { anthropic, createAnthropic } from "@ai-sdk/anthropic";
+import { isPrivateTurn } from "../services/privateTurn.js";
 import type { TurnContext } from "../services/turnContext.js";
 import { generateText, stepCountIs } from "ai";
 import { LOOP_BUDGET } from "./loop.js";
@@ -155,7 +156,8 @@ Return ONLY "yes" or "no".`,
   await pool
     .query(`INSERT INTO co_memories (user_id, memory_type, content) VALUES ($1, 'call_offer_pending', $2)`, [
       input.userId,
-      `User described: ${input.resolvedContent} | Co offered: ${replyText}`,
+      // While a document is open the record says only that a call was offered (services/privateTurn.ts).
+      isPrivateTurn(input.userId) ? "User described: [about a document they sent] | Co offered: a call" : `User described: ${input.resolvedContent} | Co offered: ${replyText}`,
     ])
     .catch((err: any) => console.error("conversationReply: call_offer_pending memory write failed (non-fatal):", err?.message ?? err));
   return true;

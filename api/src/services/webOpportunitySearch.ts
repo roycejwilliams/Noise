@@ -17,6 +17,7 @@
 // doesn't double the cost of every single Tier 3 search. Separate budget
 // from X's (web_search_log, its own daily cap) since it's a different API
 // with its own cost.
+import { isPrivateTurn } from "./privateTurn.js";
 import { generateText, stepCountIs } from "ai";
 import { anthropic } from "@ai-sdk/anthropic";
 import pool from "../db/db.js";
@@ -55,7 +56,8 @@ export async function reserveWebSearch(userId: string | null, source: "sweep" | 
       await client.query("ROLLBACK");
       return decision;
     }
-    await client.query(`INSERT INTO web_search_log (user_id, source, query) VALUES ($1, $2, $3)`, [userId, source, query]);
+    // While a document is open the log keeps that a search ran, never what for (services/privateTurn.ts).
+    await client.query(`INSERT INTO web_search_log (user_id, source, query) VALUES ($1, $2, $3)`, [userId, source, isPrivateTurn() ? "[sealed]" : query]);
     await client.query("COMMIT");
     return decision;
   } catch (err: any) {

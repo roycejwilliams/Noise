@@ -1,4 +1,5 @@
 import { xSearchBudget } from "./searchRules.js";
+import { isPrivateTurn } from "./privateTurn.js";
 import { DateTime } from "luxon";
 import { MAX_ASK_DAYS_AHEAD, resolveAskWindow, whenForWindow, withinWindow } from "./askWindow.js";
 import { listCalendarEvents, resolveCoEventPlace } from "./luma.js";
@@ -174,7 +175,7 @@ export async function reserveXSearch(userId: string | null, source: "sweep" | "r
       await client.query("ROLLBACK");
       return decision;
     }
-    await client.query(`INSERT INTO x_search_log (user_id, source, query) VALUES ($1, $2, $3)`, [userId, source, query]);
+    await client.query(`INSERT INTO x_search_log (user_id, source, query) VALUES ($1, $2, $3)`, [userId, source, isPrivateTurn() ? "[sealed]" : query]);
     await client.query("COMMIT");
     return decision;
   } catch (err: any) {

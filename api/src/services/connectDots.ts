@@ -11,6 +11,7 @@
 // middle of, how they've been feeling, and how much Co has been pitching. At
 // most two real connections, handed to Co to use only if they fit. Their own
 // information only, never another member's.
+import { isPrivateTurn } from "./privateTurn.js";
 import { anthropic } from "@ai-sdk/anthropic";
 import { generateText } from "ai";
 import pool from "../db/db.js";
@@ -131,6 +132,8 @@ export function momentInstruction(m: Moment | null): string | null {
 
 // Lessons from their pushback, kept for next time (co_lesson memories).
 export async function saveLesson(userId: string, lesson: string): Promise<void> {
+  // Not while a document is open: a lesson from their pushback can paraphrase it (services/privateTurn.ts).
+  if (isPrivateTurn(userId)) return;
   const { rows } = await pool
     .query(`SELECT content FROM co_memories WHERE user_id = $1 AND memory_type = 'co_lesson' ORDER BY created_at DESC LIMIT 20`, [userId])
     .catch(() => ({ rows: [] as any[] }));

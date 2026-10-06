@@ -16,6 +16,7 @@ import { stripUngroundedIdentity } from "../services/identityGuard.js";
 import type { ConversationToolContext } from "./conversationTools.js";
 import pool from "../db/db.js";
 import sendblue from "../services/sendblue.js";
+import { isPrivateTurn } from "../services/privateTurn.js";
 import { resolvePlan, planProblems, type EventRecord } from "../services/planSheet.js";
 
 // What the loop has seen this turn: every link a tool returned, with the facts
@@ -97,7 +98,8 @@ export function loopTools(
   // Code saves the basics whenever a search runs, so the next text picks up
   // even if Co never updates its notes (Royce, 2026-10-01).
   const remember = async (patch: Partial<SearchIntent>) => {
-    if (ctx.dryRun) return;
+    // Not while a document is open: the notes carry the queries and captions, and are read back unsealed later (services/privateTurn.ts).
+    if (ctx.dryRun || isPrivateTurn(ctx.userId)) return;
     const prev = (await loadBrief(ctx.userId).catch(() => null)) ?? ({ kind: "event", what: "", city: null, area: null, when: null, budget: null, headcount: null, vibe: null, summary: "", queries: [], sites: [], ask: null } as SearchIntent);
     const tried = [...new Set([...(prev.tried ?? []), ...(patch.tried ?? [])])].slice(-12);
     await saveBrief(ctx.userId, { ...prev, ...Object.fromEntries(Object.entries(patch).filter(([, v]) => v !== undefined && v !== null && v !== "")), tried } as SearchIntent);

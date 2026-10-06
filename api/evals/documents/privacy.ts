@@ -113,6 +113,56 @@ try {
   embedder.generate = realEmbed;
 }
 
+// ---------- 3b. the other writers a second review found, each run for real
+{
+  const realQ = poolMod.query;
+  const rec = await import("../../src/services/recommendation.js");
+  const dots = await import("../../src/services/connectDots.js");
+  const writes: string[] = [];
+  poolMod.query = async (q: string) => {
+    writes.push(q);
+    return { rows: [], rowCount: 0 };
+  };
+  try {
+    P.markPrivateTurn("A", Date.now());
+    const match: any = { tier: 3, kind: "opportunity", name: "Biotech Seed Fund Office Hours", url: "https://example.com/x", reason: "fits their raise" };
+    await rec.recordRecommendationsSent("A", [match]);
+    check("finds shared while a document is open leave no recommendation, no people-graph fact, no offer record", writes.length === 0);
+    await dots.saveLesson("A", "Don't open with the $2.5M figure from the deck");
+    check("a lesson from their pushback is not kept while a document is open", writes.length === 0);
+    writes.length = 0;
+    await rec.recordRecommendationsSent("B", [match]);
+    check("another member's finds are recorded as always", writes.some((w) => /INSERT INTO co_memories/.test(w)));
+  } finally {
+    poolMod.query = realQ;
+  }
+}
+{
+  // The window is carried into the turn, so every no-argument check (the trace settings, the search log) sees it too.
+  P.runPrivate(() => {}, false);
+  const now = Date.now();
+  P.markPrivateTurn("W", now);
+  const seen = P.runPrivate(() => {
+    P.beginTurn();
+    const before = P.isPrivateTurn();
+    P.joinWindow("W", now + 1000);
+    return { before, after: P.isPrivateTurn(), telemetry: P.sealedTelemetry() };
+  }, false);
+  check("a later message inside the window starts public until the member is known, then is sealed from its first step, trace settings included", seen.before === false && seen.after === true && seen.telemetry.recordInputs === false);
+  const other = P.runPrivate(() => (P.beginTurn(), P.joinWindow("not-in-window", now + 1000), P.isPrivateTurn()), false);
+  check("a member outside the window is not sealed by joining", other === false);
+}
+{
+  const tool = read("src/agent/loopTools.ts");
+  check("the search notes (queries, captions, shortlists, contacts) are not kept while a document is open", /if \(ctx\.dryRun \|\| isPrivateTurn\(ctx\.userId\)\) return;/.test(tool));
+  const reply = read("src/agent/conversationReply.ts");
+  check("the call offer is recorded without the document-informed reply while a document is open", /isPrivateTurn\(input\.userId\) \? "User described: \[about a document they sent\] \| Co offered: a call"/.test(reply));
+  const sb = read("src/routes/sendblue.ts");
+  check("the open-loop sync, the lesson, the message embedding and the privacy classifier all stand down on a sealed turn", /isPrivateTurn\(user\.id\) \? Promise\.resolve<string \| null>\(null\) : import\("\.\.\/services\/openLoops\.js"\)/.test(sb) && /moment\?\.lesson && !isPrivateTurn\(user\.id\)/.test(sb) && /isPrivateTurn\(user\.id\) \? Promise\.resolve\(null\) : generateEmbedding\(inboundContent\)/.test(sb) && /hasText && !isPrivateTurn\(user\.id\)\) \{\s*const alert = await privacyAlert/.test(sb) && /hasText && readP && !isPrivateTurn\(user\.id\) \? startJevShadow/.test(sb));
+  check("the search logs keep that a search ran, never what for, while a document is open", /isPrivateTurn\(\) \? "\[sealed\]" : query/.test(read("src/services/webOpportunitySearch.ts")) && /isPrivateTurn\(\) \? "\[sealed\]" : query/.test(read("src/services/tieredRecommendation.ts")));
+  check("a document turn leaves a public trace that they wrote, and nothing else, so 'recently active' gates still see them", /'text_exchange', 'User said: \[a message\]'/.test(sb) && /isPrivateTurn\(user\.id\) && !replay/.test(sb));
+}
+
 // ---------- 4. the member's own live reading, and what is seen once the conversation has gone quiet
 const rows = [
   { content: "User said: hello", private: false },
