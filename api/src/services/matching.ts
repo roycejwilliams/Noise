@@ -2,7 +2,7 @@ import { anthropic } from "@ai-sdk/anthropic";
 import { generateText } from "ai";
 import pool from "../db/db.js";
 import { MODELS } from "../models.js";
-import { isOpenAsk } from "../harness/profileWrite.js";
+import { goalEntries, isOpenAsk } from "../harness/profileWrite.js";
 import { parseModelJson } from "./modelJson.js";
 
 // Model policy (Royce, 2026-09-14): scoring decides who gets introduced to
@@ -319,4 +319,11 @@ function getOpenAsksOfType(intent: unknown, type: "seeking" | "offering"): State
   return (intent as StatedIntent[]).filter((i) => isOpenAsk(i) && i?.type === type);
 }
 
-export { getActiveAsk, getActiveAsks, getActiveSeekingAsk, getActiveOfferingAsk, getOpenAsksOfType };
+// When someone has no open ask, who is worth meeting is judged against where they are headed instead: the newest active goal is the frame
+// (services/goalJourney.ts). A goal is only ever judged against here, never searched: it is never written to an ask list.
+function getGoalFrame(intent: unknown): StatedIntent | null {
+  const g = goalEntries(intent);
+  return g.length ? ({ ...g[g.length - 1], type: "seeking" } as StatedIntent) : null;
+}
+
+export { getActiveAsk, getActiveAsks, getActiveSeekingAsk, getActiveOfferingAsk, getOpenAsksOfType, getGoalFrame };

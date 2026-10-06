@@ -47,6 +47,9 @@ export async function loadMemberContext(q: Q, userId: string, now: Date): Promis
     note: o.note ? String(o.note) : null,
   }));
   const feel = await q(`SELECT emotion, intensity, about FROM emotion_signals WHERE user_id = $1 AND created_at < $2 AND created_at >= $2::timestamptz - INTERVAL '3 days' AND COALESCE(target, 'life') = 'life' ORDER BY created_at DESC LIMIT 4`, [userId, now]).catch(() => [] as any[]);
+  // Where they are headed: the lens every candidate is judged against alongside their asks (services/goalJourney.ts).
+  const [prof] = await q(`SELECT goals, intent FROM co_profiles WHERE user_id = $1`, [userId]);
+  const goals = (await import("./goalJourney.js")).goalTexts(prof?.intent, prof?.goals).slice(0, 6);
   const [{ n: discoverySent }] = await q(
     `SELECT COUNT(*)::int n FROM proactive_sends s JOIN proactive_candidates c ON c.id = s.candidate_id
      WHERE s.user_id = $1 AND s.sent_at < $2 AND s.sent_at >= $2::timestamptz - INTERVAL '7 days' AND (c.payload->>'fromProfile' = 'true' OR s.type = 'event_match_nudge')`,
@@ -55,6 +58,7 @@ export async function loadMemberContext(q: Q, userId: string, now: Date): Promis
   return {
     firstName: me?.first_name ?? "them",
     city: me?.city ?? null,
+    goals,
     texts,
     sent,
     outcomes,

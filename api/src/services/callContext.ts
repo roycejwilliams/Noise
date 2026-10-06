@@ -1,3 +1,4 @@
+import { arcLine } from "./goalJourney.js";
 import { notToTeammate } from "./teamLines.js";
 import * as memberSafeModule from "./memberSafeMemories.js";
 import { renderCorrections } from "../harness/profileWrite.js";
@@ -141,6 +142,8 @@ export async function buildContextSummary(userId: string): Promise<string> {
       [...(profile?.goals ?? []), ...goalEntries(profile?.intent).map((g) => String(g.text))].length ? `Goals: ${[...(profile?.goals ?? []), ...goalEntries(profile?.intent).map((g) => String(g.text))].slice(0, 4).join("; ")}` : null,
       profile?.blockers?.length ? `Blockers: ${profile.blockers.slice(0, 2).join("; ")}` : null,
       !openAsks.length && latestAsk?.text ? `Stated ask: ${latestAsk.text}` : null,
+      // Their arc: goals they have closed. A lens for the call, not something to recite.
+      arcLine(profile?.intent),
       latestIntent?.wants?.length ? `Wants: ${latestIntent.wants.slice(0, 2).join(", ")}` : null,
       safeRecommendation[0] ? `Most recent thing Co suggested: ${safeRecommendation[0]}` : null,
     ].filter(Boolean);

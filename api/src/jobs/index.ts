@@ -1,3 +1,4 @@
+import { goalTexts } from "../services/goalJourney.js";
 import { runGoalSweep } from "../services/goalSweep.js";
 import cron from "./cron.js";
 import { sendDueCoEventAnnouncements } from "../services/coEventAnnouncement.js";
@@ -356,6 +357,15 @@ export function registerJobs(io: Server) {
     }
   });
 
+  // Goal check-ins: rare and seasonal, never on the 7-day ask clock (services/goalJourney.ts). Daily is only how often it LOOKS.
+  cron.schedule("0 11 * * *", async () => {
+    try {
+      await (await import("../services/goalJourney.js")).runGoalCheckins();
+    } catch (error) {
+      console.error("Goal check-in cron error:", error);
+    }
+  }, { timezone: "America/Los_Angeles" });
+
   // Co Loop Stage 5 check-in on an open ask. Layer 7 (2026-09-14): queues an
   // "ask_checkin" candidate only when there's movement (a new possible match
   // logged for this ask since the last check-in, at least 3 days on) or 7
@@ -439,7 +449,7 @@ export function registerJobs(io: Server) {
       await syncClosedAsks().catch((err: any) => console.error("Ask sync failed (non-fatal):", err?.message ?? err));
       const due = await pool.query(
         `SELECT ac.id, ac.ask_id, ac.ask_text, ac.last_attempted_at, u.id AS user_id, u.first_name, u.phone_number, cp.city,
-                cp.goals, cp.activity_preferences,
+                cp.goals, cp.intent, cp.activity_preferences,
                 (ac.last_surfaced_at IS NULL OR ac.last_surfaced_at <= NOW() - INTERVAL '3 days') AS cooldown_cleared
          FROM ask_checkins ac
          JOIN users u ON u.id = ac.user_id
@@ -491,7 +501,8 @@ export function registerJobs(io: Server) {
               phoneNumber: row.phone_number,
               askText: row.ask_text,
               city: row.city ?? null,
-              goals: row.goals ?? null,
+              // Offers are judged against the ask AND where they are headed: profile goals plus goal-typed entries (services/goalJourney.ts).
+              goals: goalTexts(row.intent, row.goals).length ? goalTexts(row.intent, row.goals) : null,
               activityPreferences: row.activity_preferences ?? null,
               cooldownCleared: row.cooldown_cleared,
             });

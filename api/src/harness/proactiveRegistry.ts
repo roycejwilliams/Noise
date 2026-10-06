@@ -416,6 +416,44 @@ export const proactiveRegistry: ProactiveRegistry = {
     },
   },
 
+  // A goal is asked about rarely and seasonally (services/goalJourney.ts): one light question, in their words, never on the 7-day ask
+  // clock. Sending it resets the goal's clock, so it comes back in about eight weeks at the earliest.
+  goal_checkin: {
+    async draft(c, person) {
+      const { rows } = await pool.query(`SELECT intent FROM co_profiles WHERE user_id = $1`, [c.userId]);
+      const still = (Array.isArray(rows[0]?.intent) ? rows[0].intent : []).some((e: any) => e?.id === c.payload.goalId && e?.kind === "goal" && e?.status === "active");
+      if (!still) return skip("that goal is not open any more");
+      const text = await draftProactive({
+        functionId: "goalJourney.checkin.draft",
+        firstName: person.firstName,
+        facts: { the_direction_they_named_to_you: c.payload.text },
+        task: "Ask one light question about whether this direction still holds, naming it in their own plain words and making it easy to say it has shifted. The shape: \"Still chasing the pre-seed, or has that shifted?\". One sentence, two at most. Say nothing about how long ago it was, no date, no advice, no offer, no pressure.",
+      });
+      return text ? { messages: [text], text, rules: { maxSentences: 2, maxChars: 200 } } : skip("model chose SKIP");
+    },
+    async onSent(c) {
+      const { markGoalCheckedIn } = await import("../services/goalJourney.js");
+      await markGoalCheckedIn(c.userId, c.payload.goalId);
+      await writeMemory(c.userId, "check_in", `Asked, as a seasonal check-in, whether this still holds: ${c.payload.text}`);
+    },
+  },
+
+  // A goal they closed at their word: a companion moment that acknowledges the arc.
+  goal_closed: {
+    async draft(c, person) {
+      const text = await draftProactive({
+        functionId: "goalJourney.closed.draft",
+        firstName: person.firstName,
+        facts: { the_goal_they_just_closed: c.payload.text, started_in: c.payload.startedIn ?? null, closed_in: c.payload.closedIn ?? null, ...(c.payload.quote ? { their_own_words_about_it: c.payload.quote } : {}) },
+        task: "They just told you this goal is done or over. Make it a moment between friends, not a status change: acknowledge the arc in a sentence, using only the months given (\"you were chasing this back in October, and you did it\" when they finished it; gently when they let it go). Warmth, not hype. At most one more short line. No question, no offer, no next step, no advice.",
+      });
+      return text ? { messages: [text], text, rules: { maxSentences: 3, maxChars: 260 } } : skip("model chose SKIP");
+    },
+    async onSent(c) {
+      await writeMemory(c.userId, "check_in", `Acknowledged a closed goal: ${c.payload.text}`);
+    },
+  },
+
   // The day before a Co event: how many are coming and the two or three worth finding, by name only when they
   // said yes at RSVP, each with a reason from their own stated ask (services/eventBrief.ts).
   event_brief: {
@@ -451,6 +489,13 @@ export const proactiveRegistry: ProactiveRegistry = {
       const start = DateTime.fromISO(p.startAt, { zone: z });
       const when = `${start.hasSame(DateTime.now().setZone(z), "day") ? "today" : "tomorrow"} at ${start.toFormat("h:mm a")}`;
       const guestFacts = picks.map((x) => `${x.firstName}: ${x.reason}`).join(" | ");
+      // The brief is goals as FRAME, asks as BULLETS (services/goalJourney.ts): where they say they are headed frames the room in one line
+      // (never recited), and the bullets carry the specific reasons, which come from asks.
+      const lens = await pool.query(`SELECT intent, goals FROM co_profiles WHERE user_id = $1`, [c.userId]).then(async (r) => {
+        const g = await import("../services/goalJourney.js");
+        const { latestAskEntry } = await import("./profileWrite.js");
+        return { goals: g.goalTexts(r.rows[0]?.intent, r.rows[0]?.goals).slice(0, 4), ask: latestAskEntry(r.rows[0]?.intent)?.text ?? null };
+      }).catch(() => ({ goals: [] as string[], ask: null as string | null }));
       const run = async (feedback: string | null) =>
         draftProactive({
           functionId: "agent.eventBrief",
@@ -463,10 +508,12 @@ export const proactiveRegistry: ProactiveRegistry = {
             the_event_date: (await import("../services/preArrival.js")).localDate(p.startAt, p.timezone ?? null),
             ...(p.venue ? { venue: p.venue } : {}),
             members_confirmed: `${members.length}`,
+            ...(lens.goals.length ? { where_they_say_they_are_headed_the_frame_only: lens.goals.join("; ") } : {}),
+            ...(lens.ask ? { what_they_asked_for_now: lens.ask } : {}),
             ...(picks.length ? { people_to_find_each_said_yes_to_being_named: guestFacts } : {}),
             ...(unnamedFits >= B.BRIEF.minCountToMention ? { others_who_fit_their_ask_no_names: `${unnamedFits} (a count only: never describe or name them)` } : {}),
           },
-          task: `${when.startsWith("today") ? "It's today" : "The day before"}: they're going to ${p.name}. Write the member brief in 3 to 4 short paragraphs separated by a blank line, each one a message bubble. First: how many members are confirmed and when it starts. ${picks.length ? `Then, for each person in people_to_find (name, then why in one line, using only the words given after their name as what they're looking for; say it as what that person is looking for, in your own words, never with "said", "told" or "wants to meet", and never that they want to meet the reader). ` : ""}${unnamedFits >= B.BRIEF.minCountToMention ? "Then one line that a few more who fit what they're after will be there, without saying who or what they do. " : ""}Warm and brief, no sign-off. Never name anyone not listed, never promise an introduction, never give a phone number or email.${feedback ? ` Your last draft was rejected: ${feedback}. Fix that.` : ""}`,
+          task: `${when.startsWith("today") ? "It's today" : "The day before"}: they're going to ${p.name}. Write the member brief in 3 to 4 short paragraphs separated by a blank line, each one a message bubble. First: how many members are confirmed and when it starts. ${picks.length ? `Then, for each person in people_to_find (name, then why in one line, using only the words given after their name as what they're looking for; say it as what that person is looking for, in your own words, never with "said", "told" or "wants to meet", and never that they want to meet the reader). ` : ""}${unnamedFits >= B.BRIEF.minCountToMention ? "Then one line that a few more who fit what they're after will be there, without saying who or what they do. " : ""}${lens.goals.length ? "Frame the room in one line against where they are headed (where_they_say_they_are_headed_the_frame_only), in your own words, without reciting it or quoting it back; the people then follow as short lines, each with its specific reason. " : ""}Warm and brief, no sign-off. Never name anyone not listed, never promise an introduction, never give a phone number or email.${feedback ? ` Your last draft was rejected: ${feedback}. Fix that.` : ""}`,
         });
       const verify = async (text: string): Promise<string | null> => {
         const outsider = B.namesOutsiders(text, members, allowed, c.userId);
