@@ -3,6 +3,7 @@
 // nothing is sent, nothing is written).
 //
 //   npx tsx evals/texting/generate.ts <out.local.json>
+import "../lib/requireMeter.js";
 import "dotenv/config";
 import { readFileSync, writeFileSync } from "fs";
 

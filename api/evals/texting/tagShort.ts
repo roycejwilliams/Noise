@@ -4,12 +4,14 @@
 // saved into cases.local.json as wantsShort.
 //
 //   npx tsx evals/texting/tagShort.ts
+import "../lib/requireMeter.js";
 import "dotenv/config";
 import { readFileSync, writeFileSync } from "fs";
 import { generateText } from "ai";
 import { anthropic } from "@ai-sdk/anthropic";
 import { parseModelJson } from "../../src/services/modelJson.js";
 import { GRADER_MODEL } from "./grade.js";
+import { GRADER_HEADERS } from "../../src/models.js";
 
 const path = new URL("./cases.local.json", import.meta.url).pathname;
 const data = JSON.parse(readFileSync(path, "utf8"));
@@ -20,6 +22,7 @@ await Promise.all(
       const c = data.cases[next++];
       const { text } = await generateText({
         model: anthropic(GRADER_MODEL),
+        headers: GRADER_HEADERS,
         prompt: `A member is texting Co, an AI companion. Decide what length of reply their latest text calls for, given the conversation.
 
 "short": a quick reply of one or two sentences is right (a reaction, a quick question, small talk, a confirmation, a correction, logistics).

@@ -42,6 +42,8 @@ import {
   type SendRecord,
 } from "../../src/harness/proactive.js";
 import { gate } from "../../src/harness/core.js";
+// --live makes real model calls: only through the meter (evals/README.md).
+if (process.argv.includes("--live")) await import("../lib/requireMeter.js");
 
 const here = dirname(fileURLToPath(import.meta.url));
 const args = process.argv.slice(2);

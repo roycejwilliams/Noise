@@ -8,6 +8,7 @@
 //
 //   railway run --service co-test --environment dev -- npx tsx evals/mo/jevLive.ts
 // (needs TYPESAFE_API_KEY on co-test; the Claude half runs without it)
+import "../lib/requireMeter.js";
 import "dotenv/config";
 import { anthropic } from "@ai-sdk/anthropic";
 import { generateText } from "ai";

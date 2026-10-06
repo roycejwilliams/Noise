@@ -6,6 +6,7 @@
 //
 // Measures: recall of true matches after pruning (must be 100%: a dropped match is lost),
 // how many candidates Claude no longer has to read, and time for each stage.
+import "../lib/requireMeter.js";
 import "dotenv/config";
 import { scoreAgainstStatedAsk } from "../../src/services/matching.js";
 import { jevMatchScores, keepAfterPrune } from "../../src/services/jevMatching.js";

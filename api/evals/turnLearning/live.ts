@@ -3,6 +3,7 @@
 // Runs only the model call and parse; writes nothing.
 //
 //   npx tsx evals/turnLearning/live.ts <file>
+import "../lib/requireMeter.js";
 import { readFileSync } from "fs";
 import { anthropic } from "@ai-sdk/anthropic";
 import { generateText } from "ai";

@@ -12,6 +12,7 @@
 // --live drafts with the exact production prompts (Sonnet 5), runs the same
 // draft -> check -> one redraft loop as draftWithConsent, and has a Sonnet 5
 // judge read whatever would have been sent.
+import { GRADER_HEADERS, GRADER_MODEL as GRADER } from "../../src/models.js";
 import "dotenv/config";
 import { dirname } from "path";
 import { fileURLToPath } from "url";
@@ -32,9 +33,11 @@ import { isCheckinOpen } from "../../src/services/eventWalkinCheckin.js";
 import { matchNudgePrompt } from "../../src/services/eventScoring.js";
 import { networkDirectAskPrompt, networkRevealPrompt } from "../../src/services/networkIntroNudge.js";
 import { cleanCoMessage } from "../../src/services/sendblue.js";
+// --live makes real model calls: only through the meter (evals/README.md).
+if (process.argv.includes("--live")) await import("../lib/requireMeter.js");
 
 const DRAFT_MODEL = "claude-sonnet-5"; // matches NAMING_DRAFT_MODEL in the services
-const JUDGE_MODEL = "claude-sonnet-5";
+const JUDGE_MODEL = GRADER; // final grading: Sonnet (evals/README.md)
 
 type Expect = "pass" | "reject";
 type Case = EvalCase & { kind: string; expect?: Expect; violation?: string } & Record<string, any>;
@@ -81,6 +84,7 @@ async function draftLoop(c: Case, facts: ConsentFacts) {
 async function judge(message: string, c: Case): Promise<{ violation: boolean; why: string }> {
   const { text } = await generateText({
     model: anthropic(JUDGE_MODEL),
+    headers: GRADER_HEADERS,
     prompt: consentRubric(message, {
       otherFirstName: c.otherFirstName,
       otherOptedIn: !!c.otherOptedIn,

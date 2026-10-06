@@ -6,6 +6,7 @@
 // reaches co-test, which reads the call and (VOICE_FLAGS=test) runs the flag
 // pass. Audit afterwards with evals/voiceFlags/audit.ts.
 //   npx tsx evals/voiceFlags/live.ts <test member user id> <call name, e.g. roger_A> [more calls...]
+import "../lib/requireMeter.js";
 import "dotenv/config";
 import { readFileSync, writeFileSync } from "fs";
 import WebSocket from "ws";

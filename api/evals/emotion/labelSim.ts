@@ -4,6 +4,7 @@
 // before the rule and one after. Counts Co's lines that name the caller's
 // feeling (checkNoEmotionLabel). Both agents are deleted at the end.
 //   npx tsx evals/emotion/labelSim.ts <prompt before> <prompt after> [sims per prompt]
+import "../lib/requireMeter.js";
 import "dotenv/config";
 import { readFileSync, writeFileSync } from "fs";
 import { buildAgentConfig } from "../../src/services/elevenLabsCalls.js";

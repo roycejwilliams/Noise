@@ -1,7 +1,9 @@
-# Co evals on every push and PR that touches api/ (Royce, 2026-09-15: "Wire
-# them into CI... so a model or prompt change can't slip through").
-# code: typecheck, voice check, and every model-free eval (no secrets needed).
-# live: model evals, on demand only (they cost money); needs ANTHROPIC_API_KEY.
+# Two layers (api/evals/README.md; Royce, 2026-10-06: cut the API spend).
+# code  = LAYER 1, every push and PR that touches api/: typecheck, the voice check and every logic test with the model
+#         fully stubbed. Zero tokens, no secrets needed.
+# live  = LAYER 2, nightly or when asked, NEVER on a push or PR: a small sample of the highest-signal cases, Haiku for
+#         everything and Sonnet only for grading, a hard token/dollar cap, and the run's cost printed at the end.
+#         Needs ANTHROPIC_API_KEY.
 name: co-evals
 # co-test's Railway service has "Wait for CI" on, so a failing run here
 # blocks the co-test deploy (co-test builds from both api/ and co-test/).
@@ -10,16 +12,19 @@ on:
     paths: ["api/**", "co-test/**", ".github/workflows/co-evals.yml"]
   pull_request:
     paths: ["api/**", "co-test/**"]
-  # Nightly live model evals, only when api/ changed in the last day (they
-  # cost a few dollars a run).
+  # Nightly live evals (layer 2), only when api/ changed in the last day, capped (evals/live.json).
   schedule:
     - cron: "17 10 * * *"
   workflow_dispatch:
     inputs:
       live:
-        description: "Also run the live model evals"
+        description: "Run the capped live evals (layer 2). Real, paid calls: Haiku, a hard cap, cost printed."
         type: boolean
         default: false
+      only:
+        description: "Only these suites (comma-separated, e.g. router,intro). Blank = the nightly set."
+        type: string
+        default: ""
 jobs:
   code:
     if: github.event_name != 'schedule'
@@ -78,4 +83,4 @@ jobs:
       - if: steps.changed.outputs.run == 'true'
         run: npm ci
       - if: steps.changed.outputs.run == 'true'
-        run: npm run -s evals:live
+        run: npm run -s evals:nightly -- ${{ inputs.only && format('--only {0}', inputs.only) || '' }}

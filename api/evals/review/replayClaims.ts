@@ -4,6 +4,7 @@
 // saw the day's log). The dump is loadReviewData's queries as JSON.
 //
 //   railway run --service co-test --environment dev -- npx tsx evals/review/replayClaims.ts <dump.json> [runs]
+import "../lib/requireMeter.js";
 import { readFileSync } from "fs";
 
 const { reviewDataFromRows, modelFlags } = await import("../../src/harness/devReview.js");

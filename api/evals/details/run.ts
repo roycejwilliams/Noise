@@ -17,6 +17,8 @@ import { fitPrompt, missingEventDetails, parseLumaEventPage, renderEventDetails,
 import { addEventFacts, baseReplyFacts, codeChecks } from "../../src/harness/replyGrounding.js";
 import { runConversationReplyAgent } from "../../src/agent/conversationReply.js";
 import { MODELS } from "../../src/models.js";
+// --live makes real model calls: only through the meter (evals/README.md).
+if (process.argv.includes("--live")) await import("../lib/requireMeter.js");
 
 type Case = EvalCase & Record<string, any>;
 const here = dirname(fileURLToPath(import.meta.url));
@@ -143,7 +145,7 @@ const fitCases: Case[] = [
 ];
 
 const cases = [...loadCases<Case>(here), ...syntheticCases, ...briefCases, ...fitCases, { id: "live_pages", kind: "livePage" } as Case].filter((c) =>
-  live ? ["reply", "brief", "livePage", "fit"].includes(c.kind) : c.kind === "parse",
+  live ? ["reply", "brief", ...(process.env.EVAL_LAYER2 ? [] : ["livePage"]), "fit"].includes(c.kind) : c.kind === "parse",
 );
 await runEval<Case, any>({
   name: live ? "details (live)" : "details (code)",

@@ -2,6 +2,7 @@
 // Real model, no DB: reactions must be read, look-alikes must not.
 //
 //   npx tsx evals/reactions/live.ts [runs]
+import "../lib/requireMeter.js";
 const { readReaction, sentNamedIn } = await import("../../src/services/reactionCatchup.js");
 const sent = [{ name: "Rooftop evening" }, { name: "Mahjong After Dark" }, { name: "AgentFi demo day at The Avalon" }];
 const cases: [string, string | null][] = [

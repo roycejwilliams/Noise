@@ -1,4 +1,5 @@
 // Co writes the question after offers it sent first (harness/proactive.ts), 3 runs each.
+import "../lib/requireMeter.js";
 const { lineInVoice } = await import("../../src/services/voiceLine.js");
 for (const names of [["Grok Bot x Notion for Product Builders night (SF)"], ["daytonaio AI Builders Demo Night", "Founder Dinner (Filipino Tech Startups)"]]) {
   for (let i = 0; i < 3; i++) {

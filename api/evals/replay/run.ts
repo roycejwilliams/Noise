@@ -6,6 +6,7 @@
 //
 //   railway run npx tsx evals/replay/run.ts          # all cases
 //   ONLY=proactive railway run npx tsx evals/replay/run.ts
+import "../lib/requireMeter.js";
 import "dotenv/config";
 import "../testEnv.js";
 import { writeFileSync } from "node:fs";

@@ -1,4 +1,5 @@
 // Without a separate moment read, Mo still keeps a lesson when corrected (noteLesson). Dry run.
+import "../lib/requireMeter.js";
 process.env.SENDBLUE_API_API_KEY ||= "x"; process.env.SENDBLUE_API_API_SECRET ||= "x";
 const { runMoTeamTurn } = await import("../../src/mo/teamAgent.js");
 const recent = "Mo replied: 6 people are waiting on your yes, 0 in progress, 0 joined so far.\nUser said: what's their names and profession [to Mo]\nMo replied: It's Mo, I extend invitations to Co.";

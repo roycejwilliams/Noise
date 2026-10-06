@@ -6,6 +6,7 @@
 //
 //   railway run npx tsx evals/companion/threadReplay.ts        # current code
 //   EXTRA=1 railway run npx tsx evals/companion/threadReplay.ts  # with extra instructions
+import "../lib/requireMeter.js";
 import "dotenv/config";
 import { readFileSync } from "fs";
 process.env.SENDBLUE_API_API_KEY ||= "x";

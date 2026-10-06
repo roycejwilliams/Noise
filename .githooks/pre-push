@@ -1,15 +1,16 @@
 #!/bin/sh
-# Blocks a push when Co's code-only evals fail (Royce, 2026-09-15: "Nothing
-# blocks a push that breaks them"). Runs typecheck, the voice check, and every
-# eval that needs no model or database, in about 10 seconds.
-# Live model evals: npm --prefix api run evals:live (costs money; run before
-# changing a prompt or model).
+# Blocks a push when Co's logic tests fail (Royce, 2026-09-15: "Nothing
+# blocks a push that breaks them"). This is LAYER 1: typecheck, the voice check
+# and every logic test with the model fully stubbed. Zero tokens, about 30 seconds.
+# It never runs a live eval. Live evals (layer 2) cost money and run nightly or
+# when asked: npm --prefix api run evals:nightly, or one script, metered:
+# npm --prefix api run eval:live -- evals/<suite>/<file>.ts
 # Enable once per clone: git config core.hooksPath .githooks
 # Skip in an emergency: git push --no-verify
 if git diff --quiet HEAD @{push} -- api 2>/dev/null; then
   exit 0
 fi
-echo "pre-push: running Co's code-only evals..."
+echo "pre-push: running layer 1 (logic tests, model stubbed, zero tokens)..."
 if ! npm --prefix api run -s evals:code > /tmp/co-evals-prepush.txt 2>&1; then
   grep -aE "FAIL|HARD|error|Error" /tmp/co-evals-prepush.txt | head -20
   echo "pre-push: evals failed; push blocked. Full output: /tmp/co-evals-prepush.txt"

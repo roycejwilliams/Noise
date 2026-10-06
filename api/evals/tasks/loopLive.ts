@@ -7,6 +7,7 @@
 //   E. a first reply names what Co will do and when, never a promised result
 //
 //   railway run npx tsx evals/tasks/loopLive.ts
+import "../lib/requireMeter.js";
 import "dotenv/config";
 process.env.SENDBLUE_API_API_KEY ||= "x";
 process.env.SENDBLUE_API_API_SECRET ||= "x";

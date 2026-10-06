@@ -1,6 +1,7 @@
 // Replays Royce's 09-28 turns for Co and Mo's social awareness (Agent 1).
 // Dry runs: nothing written or sent. About $0.60.
 //   railway run --service co-test --environment dev -- npx tsx evals/mo/socialReplay.ts
+import "../lib/requireMeter.js";
 process.env.SENDBLUE_API_API_KEY ||= "unused-in-tests";
 process.env.SENDBLUE_API_API_SECRET ||= "unused-in-tests";
 const { runConversationReplyAgent } = await import("../../src/agent/conversationReply.js");

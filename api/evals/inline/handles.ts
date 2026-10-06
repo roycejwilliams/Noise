@@ -1,4 +1,5 @@
 // Read-only: what each handle in an inline reply points to (debugging).
+import "../lib/requireMeter.js";
 const H = { "sb-api-key-id": process.env.SENDBLUE_API_KEY!, "sb-api-secret-key": process.env.SENDBLUE_SECRET_KEY! };
 const get = async (h: string) => { const r = await fetch(`https://api.sendblue.co/api/v2/messages/${h}`, { headers: H }); const j: any = await r.json(); return j.data ?? j; };
 for (const h of process.argv.slice(2)) {

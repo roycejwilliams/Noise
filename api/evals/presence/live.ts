@@ -4,6 +4,7 @@
 // numbers or coordinates.
 //
 //   railway run --service co-test --environment dev -- npx tsx evals/presence/live.ts
+import "../lib/requireMeter.js";
 import "dotenv/config";
 import { listCalendarEvents, getEventGuestList } from "../../src/services/luma.js";
 import { fetchSharedLocations, venueFor } from "../../src/services/eventPresence.js";

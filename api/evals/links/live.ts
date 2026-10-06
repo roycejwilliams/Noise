@@ -3,6 +3,7 @@
 // Reads only; nothing saved, nothing sent. About $0.01 per non-Luma page.
 //
 //   railway run --service co-test --environment dev -- npx tsx evals/links/live.ts
+import "../lib/requireMeter.js";
 const { readPage, modelRead, safeFetch, describeRead } = await import("../../src/services/linkReader.js");
 
 async function firstLink(listing: string, re: RegExp): Promise<string | null> {

@@ -2,6 +2,7 @@
 // every flag co-test logged for those calls, kept or dropped, scored against
 // what each acted moment should (or shouldn't) raise. Read only.
 //   npx tsx evals/voiceFlags/audit.ts
+import "../lib/requireMeter.js";
 import "dotenv/config";
 import { readFileSync } from "fs";
 import pool from "../../src/db/db.js";

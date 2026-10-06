@@ -18,6 +18,8 @@
 // written out for a person to judge.
 //
 //   railway run --service co-test --environment dev -- env HONEST_DIR=<dir> npx tsx evals/jev/honest.ts
+import { GRADER_HEADERS, GRADER_MODEL as GRADER } from "../../src/models.js";
+import "../lib/requireMeter.js";
 import "dotenv/config";
 import { readFileSync, writeFileSync, existsSync } from "fs";
 import { anthropic } from "@ai-sdk/anthropic";
@@ -32,7 +34,7 @@ import { screenPosts, readReplyWithJev } from "../../src/mo/jev.js";
 import { parseModelJson } from "../../src/services/modelJson.js";
 
 const DIR = process.env.HONEST_DIR!;
-const JUDGE = anthropic("claude-opus-5-5");
+const JUDGE = anthropic(GRADER); // was Opus; final grading is Sonnet (evals/README.md)
 const out: string[] = [];
 const say = (s: string) => { out.push(s); console.log(s); };
 
@@ -60,7 +62,7 @@ type CoLabel = { solving: boolean; issue: boolean; feeling: boolean };
 async function labelCo(t: Txt): Promise<CoLabel | null> {
   const msg = t.content.replace(/^User said:\s*/, "");
   const { text } = await generateText({
-    model: JUDGE,
+    model: JUDGE, headers: GRADER_HEADERS,
     prompt: `You're labelling one text a member sent to Co, an AI texting companion, for a test. Read it with the conversation before it.
 
 Conversation before it, oldest first:
@@ -154,7 +156,7 @@ async function partMoScreen() {
   for (const p of posts) {
     if (labels[p.id]) continue;
     const { text } = await generateText({
-      model: JUDGE,
+      model: JUDGE, headers: GRADER_HEADERS,
       prompt: `Label one X post for a test. Co is a private club in San Francisco for people who build things and show up for others. Is the author a PERSON who says they are doing something specific themselves right now (building a product or company, hosting or organizing a gathering, or looking for people to build with)? Promoters, recruiters, job ads, companies or brands, news, engagement bait, generic advice, and posts about nothing they're doing are "bad".
 
 Author: ${p.author.name} (@${p.author.username}); bio: ${(p.author.description ?? "").slice(0, 200)}
@@ -186,12 +188,12 @@ async function partMoReplies() {
   let cases: { text: string; label: string }[] = existsSync(lf) ? JSON.parse(readFileSync(lf, "utf8")) : [];
   if (!cases.length) {
     const { text } = await generateText({
-      model: JUDGE,
+      model: JUDGE, headers: GRADER_HEADERS,
       prompt: `For a test, write 45 realistic, varied X DM replies from strangers to this message from Co: "Saw your post about the dinners you host. Co runs a small invite-only club in SF for people like that. Want an invite?" 15 that mean yes, 15 that mean no (including polite, blunt, and "maybe later"), 15 that ask a question or are unclear. Mix lengths, slang, typos, sarcasm, emoji. Return ONLY JSON: {"replies": [{"text": "...", "label": "yes"|"no"|"question"}]}`,
     });
     const gen = parseModelJson<{ replies?: { text: string; label: string }[] }>(text).replies ?? [];
     for (const g of gen) {
-      const { text: v } = await generateText({ model: JUDGE, prompt: `Co asked a stranger by DM whether they'd like an invite to a private club. Their reply: "${g.text}". Is this yes (wants the invite), no (doesn't, or wants to be left alone, including "not now"), or question (asks something or is unclear)? One word.` });
+      const { text: v } = await generateText({ model: JUDGE, headers: GRADER_HEADERS, prompt: `Co asked a stranger by DM whether they'd like an invite to a private club. Their reply: "${g.text}". Is this yes (wants the invite), no (doesn't, or wants to be left alone, including "not now"), or question (asks something or is unclear)? One word.` });
       const w = v.trim().toLowerCase();
       const relabel = w.startsWith("yes") ? "yes" : w.startsWith("no") ? "no" : "question";
       if (relabel === g.label) cases.push(g); // keep only where two blind reads agree

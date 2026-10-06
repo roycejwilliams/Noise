@@ -5,6 +5,7 @@
 // reply goes through the real grounding check. Dry run: nothing is sent.
 //
 //   railway run --service co-test --environment dev -- npx tsx evals/mo/handoffLive.ts
+import "../lib/requireMeter.js";
 process.env.SENDBLUE_API_API_KEY ||= "unused-in-tests";
 process.env.SENDBLUE_API_API_SECRET ||= "unused-in-tests";
 const { setSwitchesForTest } = await import("../../src/services/abilitySwitches.js");

@@ -1,4 +1,5 @@
 // Jev's shadow labels on today's real texts (services/jevShadow.ts). Fractions of a cent.
+import "../lib/requireMeter.js";
 const { startJevShadow } = await import("../../src/services/jevShadow.js");
 process.env.JEV_MEMBER = "on";
 const cases: [string, string, boolean, string][] = [

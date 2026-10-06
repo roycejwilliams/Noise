@@ -2,6 +2,7 @@
 // data retention) vs Haiku only (JEV_MEMBER=off), on the 32 labelled texts.
 //
 //   railway run --service co-test --environment dev -- npx tsx evals/jev/gatewayLive.ts
+import "../lib/requireMeter.js";
 import "dotenv/config";
 import { CASES, type Feel } from "./cases.js";
 import { detectSeekingMode } from "../../src/services/emotionalTone.js";

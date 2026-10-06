@@ -17,6 +17,7 @@
 // confabulated draft caught; e2e mode, the reply still answers what they said.
 //
 // cases.local.json holds real user messages and is gitignored; never commit it.
+import "../lib/requireMeter.js";
 import "dotenv/config";
 import { dirname } from "path";
 import { fileURLToPath } from "url";

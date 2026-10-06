@@ -2,6 +2,7 @@
 // choosePick), and how often it falls back to plain priority.
 //
 //   npx tsx evals/proactive/pickTiming.ts [runs]
+import "../lib/requireMeter.js";
 const { choosePick } = await import("../../src/harness/proactive.js");
 const now = new Date();
 const c = (id: string, type: string, summary: string, priority: number) => ({ id, type, summary, priority, dueAt: now, createdAt: now, expiresAt: null, targetKey: `${type}:${id}`, payload: {}, attempts: 0 }) as any;

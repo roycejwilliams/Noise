@@ -16,6 +16,7 @@
 //     to suggestions, feelings in the 3 days before
 // Writes results.json, grading.html (A/B blind, shuffled) and key.json to
 // ~/copatible-live-logs/sweep-replay/<run>/. Score with evals/sweepSelect/score.ts.
+import "../lib/requireMeter.js";
 import pool from "../../src/db/db.js";
 import { mkdirSync, writeFileSync } from "fs";
 import { homedir } from "os";

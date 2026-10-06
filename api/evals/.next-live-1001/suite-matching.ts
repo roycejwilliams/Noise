@@ -2,6 +2,7 @@
 // gate, consent-drafting, resolver and opt-in functions on TEMP state.
 // Classification of a member's reply (interested / not / unrelated) is a
 // route-level model call; here each resolver gets the classification directly.
+import "../lib/requireMeter.js";
 import { H } from "./boot.js";
 import { settle } from "./db.js";
 import { member, memory, rows, ck, intent, PHONE, ID, NAME, type Case, type Check } from "./fixtures.js";

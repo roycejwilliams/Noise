@@ -1,6 +1,7 @@
 // Does Co take on a task when the ask needs days, and not otherwise? Dry: nothing
 // is sent or written. 8 replies (~$0.25).
 //   railway run npx tsx evals/tasks/choiceLive.ts
+import "../lib/requireMeter.js";
 import "dotenv/config";
 process.env.SENDBLUE_API_API_KEY ||= "x";
 process.env.SENDBLUE_API_API_SECRET ||= "x";
