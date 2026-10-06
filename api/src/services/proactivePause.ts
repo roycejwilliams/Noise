@@ -5,3 +5,8 @@
 export function proactivePaused(env: NodeJS.ProcessEnv = process.env): boolean {
   return env.PROACTIVE_PAUSED === "true";
 }
+
+// Types held while the rest flows (PROACTIVE_PAUSED_TYPES=ask_checkin,window_followup). Candidates of these types wait.
+export function pausedTypes(env: NodeJS.ProcessEnv = process.env): string[] {
+  return (env.PROACTIVE_PAUSED_TYPES ?? "").split(",").map((t) => t.trim()).filter(Boolean);
+}

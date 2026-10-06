@@ -34,7 +34,7 @@ const STATUS_WORDS: Record<LoopStatus, string> = {
 export function deriveLoops(src: {
   tasks: { id: number; goal: string; deadline: string | null; awaitingReply: boolean; latest: string | null; theirReplyAt?: Date | null }[];
   notes: { what: string; when: string | null; shortlist: { name: string; note?: string }[]; picked: string | null; next: string | null } | null;
-  asks: { askId: string; text: string }[];
+  asks: { askId: string; text: string; waiting?: boolean; lastMentionedAt?: Date | null }[];
   offers: { key: string; name: string }[];
 }): DerivedLoop[] {
   const out: DerivedLoop[] = [];
@@ -49,7 +49,8 @@ export function deriveLoops(src: {
     const detail = [n.shortlist.length ? `shortlist: ${n.shortlist.map((s) => s.name).join(", ")}` : null, n.picked ? `they picked ${n.picked}` : null, n.next ? `next: ${n.next}` : null].filter(Boolean).join("; ");
     out.push({ source: "notes", sourceRef: "brief", title: `${n.what}${n.when ? ` (${n.when})` : ""}`.slice(0, 120), status, detail: detail || null, dueDate: null, taskId: null });
   }
-  for (const a of src.asks) out.push({ source: "ask", sourceRef: a.askId, title: a.text.slice(0, 120), status: "open", detail: null, dueDate: null, taskId: null });
+  // An ask is dated by the last time they said it, and is waiting once a check-in went out (services/askLifecycle.ts).
+  for (const a of src.asks) out.push({ source: "ask", sourceRef: a.askId, title: a.text.slice(0, 120), status: a.waiting ? "waiting_on_reply" : "open", detail: null, dueDate: null, taskId: null, signalAt: a.lastMentionedAt ?? null });
   for (const o of src.offers) out.push({ source: "offer", sourceRef: o.key, title: `Sent them ${o.name}`.slice(0, 120), status: "waiting_on_reply", detail: "waiting on how it landed", dueDate: null, taskId: null });
   return out;
 }
@@ -92,7 +93,7 @@ async function sources(userId: string, now: Date): Promise<LoopSources> {
   const [tasks, brief, asks, offers] = await Promise.all([
     q(`SELECT id, goal, deadline, awaiting_reply, their_reply_at, notes FROM co_tasks WHERE user_id = $1 AND status = 'open' AND kind = 'work' ORDER BY created_at DESC LIMIT ${SOURCE_READ_CAP}`, [userId]),
     q(`SELECT brief, updated_at FROM search_briefs WHERE user_id = $1`, [userId]),
-    q(`SELECT ask_id, ask_text FROM ask_checkins WHERE user_id = $1 AND resolved_at IS NULL ORDER BY created_at DESC LIMIT ${SOURCE_READ_CAP}`, [userId]),
+    q(`SELECT ask_id, ask_text, awaiting_response_since, last_mentioned_at FROM ask_checkins WHERE user_id = $1 AND resolved_at IS NULL ORDER BY created_at DESC LIMIT ${SOURCE_READ_CAP}`, [userId]),
     q(`SELECT target_key, payload->'match'->>'name' AS name FROM proactive_candidates WHERE user_id = $1 AND type = 'event_offer' AND status = 'sent' AND decided_at > NOW() - interval '2 days' ORDER BY decided_at DESC LIMIT ${SOURCE_READ_CAP}`, [userId]),
   ]);
   const briefRow = brief.rows[0] ?? null;
@@ -102,7 +103,7 @@ async function sources(userId: string, now: Date): Promise<LoopSources> {
   return {
     tasks: tasks.rows.map((t: any) => ({ id: Number(t.id), goal: String(t.goal), deadline: t.deadline ? String(t.deadline instanceof Date ? t.deadline.toISOString() : t.deadline).slice(0, 10) : null, awaitingReply: !!t.awaiting_reply, theirReplyAt: t.their_reply_at ? new Date(t.their_reply_at) : null, latest: Array.isArray(t.notes) && t.notes.length ? String(t.notes[t.notes.length - 1]?.text ?? "") : null })),
     notes: b ? { what: String(b.what ?? b.summary ?? ""), when: b.when ?? null, shortlist: Array.isArray(b.shortlist) ? b.shortlist : [], picked: b.picked ?? null, next: b.next ?? null } : null,
-    asks: asks.rows.map((a: any) => ({ askId: String(a.ask_id), text: String(a.ask_text) })),
+    asks: asks.rows.map((a: any) => ({ askId: String(a.ask_id), text: String(a.ask_text), waiting: !!a.awaiting_response_since, lastMentionedAt: a.last_mentioned_at ? new Date(a.last_mentioned_at) : null })),
     offers: offers.rows.filter((o: any) => o.name).map((o: any) => ({ key: String(o.target_key), name: String(o.name) })),
     complete: { task: tasks.complete, notes: brief.complete, ask: asks.complete, offer: offers.complete },
     briefUpdatedAt,
@@ -295,7 +296,7 @@ export async function setLoopStatus(
       const { closeTask } = await import("./coTasks.js");
       await closeTask(userId, row.taskId, status as "done" | "dropped", detail ?? `Co marked it ${status}`).catch((err: any) => console.error("openLoops: closing the loop's task failed:", err?.message ?? err));
     } else if (row.source === "ask") {
-      await pool.query(`UPDATE ask_checkins SET resolved_at = COALESCE(resolved_at, NOW()) WHERE user_id = $1 AND ask_id = $2`, [userId, row.sourceRef]).catch((err: any) => console.error("openLoops: resolving the loop's ask failed:", err?.message ?? err));
+      await pool.query(`UPDATE ask_checkins SET resolved_at = COALESCE(resolved_at, NOW()), closed_reason = COALESCE(closed_reason, 'co') WHERE user_id = $1 AND ask_id = $2`, [userId, row.sourceRef]).catch((err: any) => console.error("openLoops: resolving the loop's ask failed:", err?.message ?? err));
     }
   }
   return { ok: true, title: row.title };
@@ -386,7 +387,7 @@ function realDecayDeps(): DecayDeps {
         .query(
           `SELECT o.*, (t.status = 'open' AND t.next_check_at IS NOT NULL AND t.next_check_at > NOW()) AS in_motion
            FROM open_loops o JOIN users u ON u.id = o.user_id LEFT JOIN co_tasks t ON t.id = o.task_id
-           WHERE o.closed_at IS NULL AND o.status NOT IN ('done', 'dropped') AND u.archived_at IS NULL AND u.sms_opted_out = false`,
+           WHERE o.closed_at IS NULL AND o.source <> 'ask' AND o.status NOT IN ('done', 'dropped') AND u.archived_at IS NULL AND u.sms_opted_out = false`,
         )
         .then((r) => r.rows.map((x: any) => ({ ...toRow(x), inMotion: !!x.in_motion, userId: x.user_id }))),
     close: async (id, reason) => { await pool.query(`UPDATE open_loops SET status = 'dropped', status_by = 'code', closed_reason = $2, closed_at = NOW(), updated_at = NOW() WHERE id = $1 AND closed_at IS NULL`, [id, reason]); },

@@ -432,6 +432,8 @@ export function registerJobs(io: Server) {
       // Living asks (services/askKind.ts, 2026-09-26): only asks a search can
       // find are searched; what they brought up in the last few days goes
       // first, then the rest by oldest-searched, so one ask can't win every day.
+      // Asks Co has answered or delivered close here, on evidence (services/askLifecycle.ts), before anything searches them.
+      await import("../services/askLifecycle.js").then((m) => m.closeAnsweredAsksAll()).catch((err: any) => console.error("Ask lifecycle: closing answered asks failed (non-fatal):", err?.message ?? err));
       await classifyOpenAsks().catch((err: any) => console.error("Ask kinds: classify failed (non-fatal):", err?.message ?? err));
       await syncClosedAsks().catch((err: any) => console.error("Ask sync failed (non-fatal):", err?.message ?? err));
       const due = await pool.query(

@@ -683,6 +683,9 @@ export async function runMigrations(): Promise<void> {
     .query(`ALTER TABLE ask_checkins ADD COLUMN IF NOT EXISTS expires_at TIMESTAMPTZ`)
     .catch((err: Error) => console.error("ask_checkins.expires_at migration failed:", err));
   await pool
+    .query(`ALTER TABLE ask_checkins ADD COLUMN IF NOT EXISTS closed_reason TEXT, ADD COLUMN IF NOT EXISTS closed_evidence TEXT, ADD COLUMN IF NOT EXISTS answered_checked_at TIMESTAMPTZ`)
+    .catch((err: Error) => console.error("ask_checkins lifecycle columns migration failed:", err));
+  await pool
     .query(`ALTER TABLE ask_checkins ADD COLUMN IF NOT EXISTS expired_at TIMESTAMPTZ`)
     .catch((err: Error) => console.error("ask_checkins.expired_at migration failed:", err));
 
