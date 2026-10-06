@@ -319,6 +319,8 @@ export const proactiveRegistry: ProactiveRegistry = {
         facts: {
           event: p.name,
           starts_at_local_time: P.localStart(p.startAt, p.timezone),
+          // The date as a date (not a word), so "today", "tonight" and the weekday are backed by it and nothing else can be.
+          the_event_date: P.localDate(p.startAt, p.timezone),
           ...(p.venue ? { venue: p.venue } : {}),
           ...(p.address ? { address: p.address } : {}),
           ...(fits >= P.PRE_ARRIVAL.minCrowd ? { people_coming_who_fit_their_ask: `${fits} (say only that a few people coming fit what they're after; never describe or name anyone)` } : {}),
@@ -388,6 +390,26 @@ export const proactiveRegistry: ProactiveRegistry = {
     },
   },
 
+  // A loop nobody has signalled on for a week: ask once whether it is still on their plate, then let it expire if they don't say.
+  // A question only; the loop may not be stated as current (services/loopLifecycle.ts).
+  loop_check: {
+    async draft(c, person) {
+      const { rows } = await pool.query(`SELECT closed_at, last_confirmed_at FROM open_loops WHERE id = $1 AND user_id = $2`, [c.payload.loopId, c.userId]);
+      if (!rows[0] || rows[0].closed_at) return skip("the loop has closed since");
+      const text = await draftProactive({
+        functionId: "loopLifecycle.check.draft",
+        firstName: person.firstName,
+        facts: { the_thing_they_asked_about: c.payload.title },
+        task: "Ask one short, light question: is this still on their plate, or should you let it go? Don't say when it was mentioned, don't say what happened with it, don't promise anything.",
+      });
+      return text ? { messages: [text], text, rules: { maxSentences: 2, maxChars: 220 } } : skip("model chose SKIP");
+    },
+    // Asked means SENT: this starts the 5-day expiry clock (services/loopLifecycle.ts).
+    async onSent(c) {
+      await pool.query(`UPDATE open_loops SET decay_asked_at = NOW() WHERE id = $1 AND user_id = $2`, [c.payload.loopId, c.userId]);
+    },
+  },
+
   // The day before a Co event: how many are coming and the two or three worth finding, by name only when they
   // said yes at RSVP, each with a reason from their own stated ask (services/eventBrief.ts).
   event_brief: {
@@ -432,6 +454,7 @@ export const proactiveRegistry: ProactiveRegistry = {
           facts: {
             event: p.name,
             when,
+            the_event_date: (await import("../services/preArrival.js")).localDate(p.startAt, p.timezone ?? null),
             ...(p.venue ? { venue: p.venue } : {}),
             members_confirmed: `${members.length}`,
             ...(picks.length ? { people_to_find_each_said_yes_to_being_named: guestFacts } : {}),

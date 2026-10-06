@@ -1666,7 +1666,7 @@ export function sendblueRouter(io: Server): Router {
           const [notes, loops, timeline] = await Promise.all([
             loadBrief(user.id).then(describeNotes).catch(() => null),
             // Every open loop and where it stands (services/openLoops.ts).
-            import("../services/openLoops.js").then(async (o): Promise<string | null> => o.describeLoops((await o.syncOpenLoops(user.id)).rows, { withIds: true })).catch((): string | null => null),
+            import("../services/openLoops.js").then(async (o): Promise<string | null> => o.describeLoops(await o.confirmMentioned(user.id, (await o.syncOpenLoops(user.id)).rows, content), { withIds: true })).catch((): string | null => null),
             // Their local time and what's ahead, every turn (services/timeline.ts).
             import("../services/timeline.js").then((t) => t.timelineFor(user.id, profile?.city ?? null)).catch(() => null),
           ]);

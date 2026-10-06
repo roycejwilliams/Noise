@@ -72,6 +72,11 @@ export function farNoteDue(p: { startAt: string; now: Date; arrived: boolean; no
 
 export const LOCATION_OFFER = "If you want, share your location with me in Messages while you head over (until the end of the day works). I'll know when you've arrived and can point you to the right people then.";
 
+export function localDate(startAt: string, zone: string | null): string {
+  const z = zone && DateTime.now().setZone(zone).isValid ? zone : "America/Los_Angeles";
+  return DateTime.fromISO(startAt, { zone: z }).toISODate() ?? "";
+}
+
 export function localStart(startAt: string, zone: string | null): string {
   const z = zone && DateTime.now().setZone(zone).isValid ? zone : "America/Los_Angeles";
   return DateTime.fromISO(startAt, { zone: z }).toFormat("h:mm a");

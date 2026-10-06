@@ -1,4 +1,5 @@
 import { draftProactive, type OutputRules } from "../harness/proactive.js";
+import { splitRecap } from "../services/claims.js";
 
 export type CompanionCheckinPerson = {
   userId: string;
@@ -41,7 +42,7 @@ export async function draftCompanionCheckin(
   const text = await draftProactive({
     functionId: "agent.companionCheckin",
     firstName,
-    facts: { recap_of_what_you_know_about_them: recap.slice(0, 3000) },
+    facts: (() => { const r = splitRecap(recap.slice(0, 3000)); return { live_things_they_said_about_themselves: r.theySaid || null, recap_of_what_you_know_about_them: r.coRead || null }; })(),
     // The "barely knows them" case (2026-09-22): a member who stopped after
     // giving their name and email has no open thread, so this always
     // returned SKIP and they never heard from Co again.
