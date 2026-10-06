@@ -37,7 +37,7 @@ let arrivedParams: any[] | null = null;
 (pool as any).query = async (q: string, p: any[]) => {
   sqls.push(q);
   if (/FROM event_presence WHERE event_api_id/.test(q)) arrivedParams = p;
-  if (/FROM co_profiles/.test(q)) return { rows: ["seed investors for my robotics startup Acme", "a designer", "an engineer", "angels", "VCs", "a lawyer", "a founding engineer", "investors", "a co-founder"].map((text) => ({ intent: [{ type: "seeking", text }] })).concat([{ intent: [] }]).slice(0, (p?.[0] ?? []).length) };
+  if (/FROM co_profiles/.test(q)) return { rows: ["seed investors for my robotics startup Acme", "a designer", "an engineer", "angels", "VCs", "a lawyer", "a founding engineer", "investors", "a co-founder"].map((text) => ({ intent: [{ type: "seeking", status: "active", text }] })).concat([{ intent: [] }]).slice(0, (p?.[0] ?? []).length) };
   return { rows: [{ n: 5 }] };
 };
 const pe = await import("../../src/services/eventPresence.js");

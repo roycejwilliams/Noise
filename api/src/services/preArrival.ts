@@ -18,6 +18,7 @@
 //   - used only to know they've arrived (to time the first nudge) and for at
 //     most one no-pressure note if they're clearly still far away at the start
 //   - never stored (only times are), never used for offers, never told to anyone
+import { isOpenAsk } from "../harness/profileWrite.js";
 import { DateTime } from "luxon";
 import pool from "../db/db.js";
 import { recordDecision } from "../harness/core.js";
@@ -88,7 +89,7 @@ export function localStart(startAt: string, zone: string | null): string {
 export async function statedAsk(userId: string): Promise<string | null> {
   const { rows } = await pool.query(`SELECT intent FROM co_profiles WHERE user_id = $1`, [userId]).catch(() => ({ rows: [] as any[] }));
   const intent = Array.isArray(rows[0]?.intent) ? rows[0].intent : [];
-  const open = intent.filter((i: any) => i?.type === "seeking" && typeof i?.text === "string" && !i?.resolved_at && i?.status !== "resolved");
+  const open = intent.filter((i: any) => isOpenAsk(i) && i?.type === "seeking"); // an ask, never a goal (harness/profileWrite.ts)
   return open.length ? String(open[open.length - 1].text) : null;
 }
 

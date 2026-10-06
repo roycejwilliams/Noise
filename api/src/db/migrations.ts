@@ -683,6 +683,10 @@ export async function runMigrations(): Promise<void> {
     .query(`ALTER TABLE ask_checkins ADD COLUMN IF NOT EXISTS expires_at TIMESTAMPTZ`)
     .catch((err: Error) => console.error("ask_checkins.expires_at migration failed:", err));
   await pool
+    // An ask can name the goal it serves (the intent entry id of a goal). Stored only: no goal-progress reasoning yet (parked behind November).
+    .query(`ALTER TABLE ask_checkins ADD COLUMN IF NOT EXISTS serves_goal_id TEXT`)
+    .catch((err: Error) => console.error("ask_checkins.serves_goal_id migration failed:", err));
+  await pool
     .query(`ALTER TABLE ask_checkins ADD COLUMN IF NOT EXISTS closed_reason TEXT, ADD COLUMN IF NOT EXISTS closed_evidence TEXT, ADD COLUMN IF NOT EXISTS answered_checked_at TIMESTAMPTZ`)
     .catch((err: Error) => console.error("ask_checkins lifecycle columns migration failed:", err));
   await pool

@@ -4,6 +4,7 @@ import { propagateAttributes } from "@langfuse/tracing";
 import crypto from "crypto";
 import pool from "../db/db.js";
 import { classifyAsk, markIntentResolved } from "./askKind.js";
+import { classifyEntryKind } from "./entryKind.js";
 import { generateEmbedding, generateGoalEmbedding } from "./embeddings.js";
 import { sweepAskAgainstNetwork, sweepOfferingAgainstNetwork } from "./relevance.js";
 import { recordDecision } from "../harness/core.js";
@@ -67,6 +68,8 @@ export type ExtractedIntent = {
   // signal without ever stating one clear ask (previously this whole
   // record simply didn't exist in that case).
   text?: string;
+  // The hard type (harness/profileWrite.ts EntryKind): an ask is an errand with a lifecycle; a goal is direction and has none.
+  kind?: "ask" | "goal";
   type?: "seeking" | "offering";
   // Named, concrete things mentioned — a specific gym, a coffee style, a
   // venue type — not a vague vibe. Recommendation/Event both need this
@@ -1307,7 +1310,7 @@ export function dropKnownExtras(extras: IntentExtras, existing: any[]): IntentEx
 // record) to co_profiles.intent + co_memories + ask_checkins. Split out of
 // captureIntent so a call transcript's several asks and a text turn's single
 // ask go through exactly the same storage and dedupe code.
-async function persistCapturedIntent(
+export async function persistCapturedIntent(
   user_id: string,
   ask: CapturedAsk | null,
   extras: IntentExtras,
@@ -1326,17 +1329,21 @@ async function persistCapturedIntent(
   let intentId: string = crypto.randomUUID();
   let deduped = false;
   let existingIntent: any[] = [];
+  // Errand or direction, decided before anything lands (services/entryKind.ts). An ask goes on to the ask lifecycle; a goal never gets an
+  // ask_checkins row, so nothing that searches or checks in can ever reach it.
+  const kind: "ask" | "goal" | null = ask ? await classifyEntryKind(ask.text) : null;
   if (ask) {
     const [{ rows: openRows }, { rows: profileRows }] = await Promise.all([
       pool.query(`SELECT ask_id, ask_text FROM ask_checkins WHERE user_id = $1 AND resolved_at IS NULL`, [user_id]),
       pool.query(`SELECT intent FROM co_profiles WHERE user_id = $1`, [user_id]),
     ]);
     existingIntent = Array.isArray(profileRows[0]?.intent) ? profileRows[0].intent : [];
-    const openAsks: OpenAsk[] = openRows.map((r: any) => ({
-      askId: r.ask_id,
-      text: r.ask_text,
-      embedding: existingIntent.find((i: any) => i?.id === r.ask_id)?.embedding ?? null,
-    }));
+    // A restated ask updates the open ask it repeats; a restated goal updates the goal it repeats (never an ask, never the other way).
+    const sameStore: OpenAsk[] =
+      kind === "goal"
+        ? existingIntent.filter((i: any) => i?.kind === "goal" && i?.status === "active" && typeof i?.text === "string").map((i: any) => ({ askId: i.id, text: i.text, embedding: i.embedding ?? null }))
+        : openRows.map((r: any) => ({ askId: r.ask_id, text: r.ask_text, embedding: existingIntent.find((i: any) => i?.id === r.ask_id)?.embedding ?? null }));
+    const openAsks: OpenAsk[] = sameStore;
     let decision = decideAskWrite({ text: ask.text, embedding }, openAsks);
     let judged: boolean | null = null;
     if (decision.action === "needs_judgment") {
@@ -1364,7 +1371,7 @@ async function persistCapturedIntent(
 
   const newIntent: ExtractedIntent = {
     id: intentId,
-    ...(ask ? { text: ask.text, type: ask.type } : {}),
+    ...(ask ? { text: ask.text, type: ask.type, kind: kind! } : {}),
     concrete_preferences,
     wants,
     availability,
@@ -1390,12 +1397,14 @@ async function persistCapturedIntent(
       user_id,
       JSON.stringify([...rest, merged]),
     ]);
-    // Restating an ask renews its time limit (services/askExpiry.ts).
-    const renewedUntil = await askExpiresAtForUser(user_id, ask!.text).catch(() => null);
-    await pool.query(
-      `UPDATE ask_checkins SET ask_text = $3, expires_at = COALESCE($4::timestamptz, expires_at), last_mentioned_at = NOW() WHERE user_id = $1 AND ask_id = $2`,
-      [user_id, intentId, ask!.text, renewedUntil],
-    );
+    // Restating an ask renews its time limit (services/askExpiry.ts). A goal has no time limit and no ask_checkins row.
+    if (kind === "ask") {
+      const renewedUntil = await askExpiresAtForUser(user_id, ask!.text).catch(() => null);
+      await pool.query(
+        `UPDATE ask_checkins SET ask_text = $3, expires_at = COALESCE($4::timestamptz, expires_at), last_mentioned_at = NOW() WHERE user_id = $1 AND ask_id = $2`,
+        [user_id, intentId, ask!.text, renewedUntil],
+      );
+    }
   } else {
     // Upsert, not a plain UPDATE — the call/typed-intake path is the only
     // other place a co_profiles row gets created (storeProfile), so a
@@ -1412,7 +1421,7 @@ async function persistCapturedIntent(
   }
 
   const memParts = [
-    ask ? `${ask.type}: ${ask.text}` : null,
+    ask ? `${ask.type}${kind === "goal" ? " (goal)" : ""}: ${ask.text}` : null,
     concrete_preferences.length ? `preferences: ${concrete_preferences.join(", ")}` : null,
     wants.length ? `wants: ${wants.join(", ")}` : null,
     availability ? `availability: ${availability}` : null,
@@ -1435,8 +1444,8 @@ async function persistCapturedIntent(
   // (see ask_checkins in migrations.ts and the check-in cron in
   // jobs/index.ts). The NOT EXISTS guard stays as a backstop for two
   // captures of the same text racing each other.
-  if (ask && !deduped) {
-    const [expiresAt, kind] = await Promise.all([askExpiresAtForUser(user_id, ask.text).catch(() => null), classifyAsk(ask.text)]);
+  if (ask && !deduped && kind === "ask") {
+    const [expiresAt, askKind] = await Promise.all([askExpiresAtForUser(user_id, ask.text).catch(() => null), classifyAsk(ask.text)]);
     await pool
       .query(
         `INSERT INTO ask_checkins (user_id, ask_id, ask_text, expires_at, kind, kind_checked_at, last_mentioned_at)
@@ -1446,7 +1455,7 @@ async function persistCapturedIntent(
            WHERE user_id = $1 AND resolved_at IS NULL AND lower(trim(ask_text)) = lower(trim($3))
          )
          ON CONFLICT (user_id, ask_id) DO NOTHING`,
-        [user_id, intentId, ask.text, expiresAt, kind],
+        [user_id, intentId, ask.text, expiresAt, askKind],
       )
       .catch((err) => console.error("ask_checkins insert failed (non-fatal):", err));
   }
