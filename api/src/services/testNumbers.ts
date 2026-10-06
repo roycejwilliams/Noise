@@ -19,6 +19,14 @@ export function isTestNumber(number: unknown, env: NodeJS.ProcessEnv = process.e
   return /^1?\d{3}55501\d{2}$/.test(digits);
 }
 
+// The simulation tool sends a REAL inbound through the real webhook, and Co's reply is really texted. It may only ever be pointed at a
+// test member (2026-10-06: a 9/29 run through Royce's own number left 16 test messages, their asks, tasks and a week-later chest-tightness
+// check-in in his real account). Returns why a number is refused, or null when it may be used.
+export function simulationBlockedReason(number: unknown, env: NodeJS.ProcessEnv = process.env): string | null {
+  if (isTestNumber(number, env)) return null;
+  return `${typeof number === "string" ? number.slice(0, 5) + "…" : "that number"} is not a test member (a 555-01xx number, on co-test or locally only). The simulation tool sends a real inbound and a real reply, so it never runs against a real member. Create a test member with: node dist/api/src/scripts/testMember.js reset`;
+}
+
 // Handles for messages sent to (or received from) a test member.
 export const TEST_HANDLE_PREFIX = "test-";
 export const isTestHandle = (handle: unknown): boolean => typeof handle === "string" && handle.startsWith(TEST_HANDLE_PREFIX);

@@ -1,5 +1,6 @@
 import "dotenv/config";
 import pool from "../db/db.js";
+import { simulationBlockedReason } from "../services/testNumbers.js";
 
 // Reusable test-guest simulation tool (Royce, 2026-09-05) — sends a real
 // inbound message through the actual POST /sendblue/webhook route, exactly
@@ -18,6 +19,13 @@ async function main() {
   const message = rest.join(" ");
   if (!phone || !message) {
     console.error('Usage: tsx src/scripts/simulateInboundText.ts <phone_e164> "<message text>"');
+    process.exit(1);
+  }
+
+  // Test members only (services/testNumbers.ts): this sends a real inbound and a real reply, and once ran against a real member's number.
+  const blocked = simulationBlockedReason(phone);
+  if (blocked) {
+    console.error(`Refused: ${blocked}`);
     process.exit(1);
   }
 
