@@ -98,7 +98,7 @@ check("the reply gets the guide when they want something found, and the working 
   check("every text turn gets the timeline", /timelineFor\(user\.id, profile\?\.city \?\? null\)/.test(src("routes/sendblue.ts")));
   check("Co is told to weave it in, never recite it", /Never recite their schedule back as a list/.test(src("services/coVoice.ts")) && /say it once, warmly, and let it go/.test(src("services/coVoice.ts")));
   check("a reaction that says it all can end the turn, only after one went out", /if \(!ctx\.ackSent\) delete \(tools as Record<string, unknown>\)\.leaveItAtReaction/.test(ct));
-  check("photos: format from their bytes, HEIC converted, a failed photo retries without it", /readableImage\(Buffer\.from\(await imageRes\.arrayBuffer\(\)\)\)/.test(src("routes/sendblue.ts")) && /heic-convert/.test(src("services/imageRead.ts")) && /agentRun = await runAgent\(false\)/.test(src("agent/conversationReply.ts")));
+  check("photos: format from their bytes, HEIC converted, a failed photo retries without it", /readableImage\(fileBytes\)/.test(src("routes/sendblue.ts")) && /fileBytes = Buffer\.from\(await imageRes\.arrayBuffer\(\)\)/.test(src("routes/sendblue.ts")) && /heic-convert/.test(src("services/imageRead.ts")) && /agentRun = await runAgent\(false\)/.test(src("agent/conversationReply.ts")));
 }
 
 // The three principles (Royce, 2026-10-01): one person model, open loops as

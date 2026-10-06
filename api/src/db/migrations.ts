@@ -121,6 +121,38 @@ export async function runMigrations(): Promise<void> {
     .then(() => pool.query(`CREATE UNIQUE INDEX IF NOT EXISTS uq_call_promise_results ON call_promise_results (user_id, call_key, md5(content))`))
     .catch((err: Error) => console.error("call_promise_results table init failed:", err));
 
+  // Private memories (2026-10-05, services/privateTurn.ts): everything written during a turn that touched a member's
+  // document. No embedding; every reader that serves another member or builds anything shared skips them.
+  await pool
+    .query(`ALTER TABLE co_memories ADD COLUMN IF NOT EXISTS private BOOLEAN NOT NULL DEFAULT false`)
+    .catch((err: Error) => console.error("co_memories.private migration failed:", err));
+
+  // Documents a member sends Co (2026-10-05, services/documents.ts): the file itself, what it says, kept for that
+  // member only. One row per distinct file per member.
+  await pool
+    .query(
+      `CREATE TABLE IF NOT EXISTS member_documents (
+        id BIGSERIAL PRIMARY KEY,
+        user_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+        kind TEXT NOT NULL,
+        name TEXT,
+        media_type TEXT,
+        bytes BYTEA NOT NULL,
+        size INT NOT NULL,
+        sha256 TEXT NOT NULL,
+        title TEXT,
+        doc_type TEXT,
+        summary TEXT,
+        key_points JSONB NOT NULL DEFAULT '[]'::jsonb,
+        text_content TEXT,
+        created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+        last_used_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+        UNIQUE (user_id, sha256)
+      )`,
+    )
+    .then(() => pool.query(`CREATE INDEX IF NOT EXISTS idx_member_documents_user ON member_documents (user_id, created_at DESC)`))
+    .catch((err: Error) => console.error("member_documents table init failed:", err));
+
   // Test events and test locations for test members, co-test and local only
   // (services/testNumbers.ts). Never on production.
   await (async () => {

@@ -555,7 +555,7 @@ export async function gatherNetworkFacts(
   const [profile, memories, suggested, active, graphFacts] = await Promise.all([
     pool.query(`SELECT goals, blockers, activity_preferences, long_term_direction, intent FROM co_profiles WHERE user_id = $1`, [candidateId]),
     pool.query(
-      `SELECT content FROM co_memories WHERE user_id = $1 AND memory_type <> 'intent' ORDER BY created_at DESC LIMIT 300`,
+      `SELECT content FROM co_memories WHERE user_id = $1 AND memory_type <> 'intent' AND NOT private ORDER BY created_at DESC LIMIT 300`,
       [candidateId],
     ),
     pool.query(`SELECT 1 FROM network_introductions WHERE person_a_id = $1 AND person_b_id = $2`, [a, b]),

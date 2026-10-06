@@ -7,7 +7,7 @@ export const MOVES = ["reply", "act", "watch", "quiet"] as const;
 export type Move = (typeof MOVES)[number];
 
 // Doing something for them this turn: finding, sharing, drafting.
-const ACT_TOOLS = new Set(["searchEvents", "webSearch", "searchPosts", "readPage", "shareFinds", "draftEmail", "emailPlan", "shareLink", "sendContactCard"]);
+const ACT_TOOLS = new Set(["searchEvents", "webSearch", "searchPosts", "readPage", "shareFinds", "draftEmail", "emailPlan", "readDocument", "shareLink", "sendContactCard"]);
 // Keeping a loop open to come back to.
 const WATCH_TOOLS = new Set(["startTask", "updateTask", "updateNotes", "updateLoop", "saveAsk", "scheduleCall"]);
 

@@ -75,7 +75,7 @@ async function fetchTopMemoryPerCandidate(
        SELECT user_id, content,
               ROW_NUMBER() OVER (PARTITION BY user_id ORDER BY content_embedding <=> $2::vector) AS rn
        FROM co_memories
-       WHERE user_id = ANY($1::uuid[]) AND content_embedding IS NOT NULL
+       WHERE user_id = ANY($1::uuid[]) AND content_embedding IS NOT NULL AND NOT private
      ) ranked
      WHERE rn <= 3
      ORDER BY user_id, rn`,
