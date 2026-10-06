@@ -85,6 +85,7 @@
     "evals/proactive/specifics.ts",
     "evals/memory/claims.ts",
     "evals/memory/loopLifecycle.ts",
-    "evals/reply/doubleDown.ts"
+    "evals/reply/doubleDown.ts",
+    "evals/calls/callConfig.ts"
   ]
 }

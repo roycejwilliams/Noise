@@ -68,10 +68,10 @@ const cfg: any = buildAgentConfig({ name: "Co (test)", prompt: "P {{first_name}}
 const cc = cfg.conversation_config;
 check("phone audio is mu-law 8kHz both ways (register-call needs it)", cc.asr.user_input_audio_format === "ulaw_8000" && cc.tts.agent_output_audio_format === "ulaw_8000");
 // Royce chose Sonnet 4.6 for the live voice on 2026-10-04, after the comparison with Haiku 4.5.
-check("Royce's picks: Eleven v4 Turbo voice, Sonnet 4.6 live, eager turn-taking", cc.tts.model_id === "eleven_v4_turbo" && cc.agent.prompt.llm === "claude-sonnet-4-6" && cc.turn.turn_eagerness === "eager" && AGENT_DEFAULTS.ttsModel === "eleven_v4_turbo");
+check("Royce's picks: Eleven v4 Turbo voice, Haiku 4.5 live (2026-10-06: voice is a speed game), eager turn-taking", cc.tts.model_id === "eleven_v4_turbo" && cc.agent.prompt.llm === "claude-haiku-4-5" && cc.turn.turn_eagerness === "eager" && AGENT_DEFAULTS.ttsModel === "eleven_v4_turbo");
 check("overrides from the env reach the config", (buildAgentConfig({ name: "x", prompt: "p", voiceId: "v", apiUrl: "https://a.b", llm: "claude-sonnet-5", ttsModel: "eleven_flash_v2_5", turnEagerness: "normal" }) as any).conversation_config.agent.prompt.llm === "claude-sonnet-5");
 const tools = (cc.agent.prompt.tools as any[]).filter((t) => t.type === "webhook");
-check("both of Co's call tools are webhooks to our routes", tools.map((t) => t.name).join() === "assess_conversation_coverage,surface_recommendation" && tools.every((t) => t.type === "webhook" && t.api_schema.url === `https://test.copatible.com/co/el/tool/${t.name}`));
+check("Co's one call tool (the coverage check; finds are prefetched into the prompt) is a webhook to our routes", tools.map((t) => t.name).join() === "assess_conversation_coverage" && tools.every((t) => t.type === "webhook" && t.api_schema.url === `https://test.copatible.com/co/el/tool/${t.name}`));
 check("every tool call carries the member's id, its token, and the live conversation and duration", tools.every((t) => t.api_schema.request_body_schema.properties.user_id.dynamic_variable === "user_id" && t.api_schema.request_body_schema.properties.call_token.dynamic_variable === "call_token" && t.api_schema.request_body_schema.properties.conversation_history.dynamic_variable === "system__conversation_history" && t.api_schema.request_body_schema.properties.call_duration_secs.dynamic_variable === "system__call_duration_secs"));
 const sys = (cc.agent.prompt.tools as any[]).filter((t) => t.type === "system");
 const sysTools = sys;

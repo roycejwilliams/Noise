@@ -286,6 +286,8 @@ export async function buildCallContextSummary(userId: string): Promise<string> {
 export function callSummaryPrompt(transcript: string): string {
   return `Summarize what was actually discussed in this phone call transcript, in 2-3 plain sentences, third person, as if briefing someone on what just happened. Ground it only in what's actually in the transcript — no invented detail, no therapy-speak. Write the person on the call as {M} every time, never a pronoun for them (no he, she, they, his, her, their): "{M} is building...", "{M}'s cofounder". We fill in their name. Refer to anyone else by that person's own name (2026-09-22: summaries were calling a member "he" from their name alone).
 
+Names of companies and people come from what THEY said (the "user:" lines), never from the assistant's lines: when the assistant says a different name than the member did ("Bumble" for the member's "Boardy"), the member's wins, because the assistant can mishear. A name the member said and speech-to-text garbled ("Boredy") is written as the real company when it is plain which one.
+
 Lead with the concrete facts they gave: the names of companies, people, places, dates, and plans, spelled as they said them. Speech-to-text often spells names out letter by letter ("l y t h e dot a i" is lythe.ai); write the name, not the letters. Keep every named company and person they mentioned.
 
 How the call ended comes only from what they said at the end, never from a voice reading. Don't say they wanted to keep talking unless they said so.
