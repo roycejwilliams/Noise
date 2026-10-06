@@ -12,7 +12,7 @@ check("on production even a test-shaped number is refused", T.simulationBlockedR
 check("the refusal never prints the whole number", !String(T.simulationBlockedReason("+15045799728", dev)).includes("15045799728"));
 const s = fs.readFileSync(new URL("../../src/scripts/simulateInboundText.ts", import.meta.url), "utf8");
 check("the tool checks the number before it sends anything", /simulationBlockedReason\(phone\)/.test(s) && s.indexOf("simulationBlockedReason(phone)") < s.indexOf("await fetch("));
-check("and exits non-zero when refused", /process\.exit\(1\)/.test(s.slice(s.indexOf("simulationBlockedReason(phone)"), s.indexOf("await fetch("))));
+check("and exits non-zero when refused (an if on the refusal, then exit 1, before the fetch)", /if \(blocked\) \{\s*console\.error\([^;]*;\s*process\.exit\(1\);\s*\}/.test(s.slice(s.indexOf("simulationBlockedReason(phone)"), s.indexOf("await fetch("))));
 console.log(`simulation guard: ${total - failed}/${total} passed`);
 if (failed) process.exitCode = 1;
 process.exit(failed ? 1 : 0);
