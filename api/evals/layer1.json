@@ -87,6 +87,7 @@
     "evals/memory/loopLifecycle.ts",
     "evals/reply/doubleDown.ts",
     "evals/calls/callConfig.ts",
-    "evals/calls/callTasks.ts"
+    "evals/calls/callTasks.ts",
+    "evals/calls/callEvals.ts"
   ]
 }
