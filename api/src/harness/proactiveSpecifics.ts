@@ -127,7 +127,12 @@ function attributions(text: string, facts: FactsLike, freshKeys: string[]): Unba
     if (/\?\s*$/.test(sentence.trim())) continue; // asking is how it is meant to be done
     for (const re of ATTRIBUTION) {
       for (const m of sentence.matchAll(new RegExp(re.source, re.flags))) {
-        const words = (m[1].toLowerCase().match(/[a-z][a-z'-]{3,}/g) ?? []).filter((w) => !FILLER.has(w));
+        // What is being attributed: the clause after the verb (up to a comma or "so/but/because"), and, when nothing follows it
+        // ("the investor pitch you've been prepping."), the few words before it.
+        const after = m[1].split(/[,;]|\b(?:so|but|because)\b/i)[0];
+        const before = sentence.slice(0, m.index ?? 0).trim().split(/\s+/).slice(-5).join(" ");
+        const object = /[a-z]{4}/i.test(after) ? after : before;
+        const words = (object.toLowerCase().match(/[a-z][a-z'-]{3,}/g) ?? []).filter((w) => !FILLER.has(w) && !/^(?:you|let|that|here|there|what|it)'(?:re|ve|s|ll|d)$/.test(w));
         if (!words.length) continue;
         const backed = words.filter((w) => theirs.includes(w.replace(/(?:ing|ed|es|s)$/, "").slice(0, 5)));
         if (backed.length / words.length < 0.5) out.push({ text: m[0].trim().slice(0, 60), why: "something only Co inferred (or read in the background), stated back as theirs" });
@@ -135,6 +140,14 @@ function attributions(text: string, facts: FactsLike, freshKeys: string[]): Unba
     }
   }
   return out;
+}
+
+// For a REPLY (not an unprompted message): "you've been prepping X", "you told me X" stated back as theirs, where X is in nothing
+// they said recently and nothing on file. The words to check against are the member's own (this message and the recent thread, their
+// lines only) plus the facts the reply was given; Co's own earlier texts never back it (2026-10-06: asked "What's Friday?", Co defended
+// its own earlier text instead of owning that it had no source).
+export function attributedWithoutSource(text: string, facts: FactsLike): Unbacked[] {
+  return attributions(text, facts, []);
 }
 
 // Every specific in an outgoing message that nothing real backs.
