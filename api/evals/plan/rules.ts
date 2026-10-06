@@ -163,7 +163,13 @@ check("an unknown id gets nothing", F.getPlanFile("0".repeat(48)) === null);
 check("two files never share an address", F.cachePlanFile(Buffer.from("a")) !== F.cachePlanFile(Buffer.from("a")));
 check("it is gone after its few minutes", F.PLAN_FILE_TTL_MS <= 10 * 60 * 1000 && /expiresAt < Date\.now\(\)/.test(read("src/services/planFile.ts")));
 const serverSrc = read("src/server.ts");
-check("the route only answers a 48-character hex id, as a PDF, never cached", /\^\[a-f0-9\]\{48\}\$/.test(serverSrc) && /application\/pdf/.test(serverSrc) && /Cache-Control", "no-store"/.test(serverSrc.slice(serverSrc.indexOf("/plan-file/"))));
+const coTestServer = read("../co-test/src/server.ts");
+check("both servers mount the plan-file route: co-test keeps its own copies of the media routes and a route on only one 404s on the other", /app\.get\("\/plan-file\/:id\.pdf", servePlanFile\)/.test(serverSrc) && /app\.get\("\/plan-file\/:id\.pdf", servePlanFile\)/.test(coTestServer) && /import \{ servePlanFile \} from "\.\.\/\.\.\/api\/src\/services\/planFile\.js"/.test(coTestServer));
+check("the handler answers a real id as a PDF, never cached; unknown and malformed ids get 'Not found.'", (() => {
+  const mk = (id: string) => { const out: any = { headers: {} as Record<string, string>, code: 200, body: "" }; const res: any = { status: (n: number) => { out.code = n; return { send: (b: any) => { out.body = String(b); } }; }, setHeader: (k: string, v: string) => { out.headers[k] = v; }, send: (b: any) => { out.body = Buffer.isBuffer(b) ? "PDF" : String(b); } }; F.servePlanFile({ params: { id } } as any, res); return out; };
+  const real = mk(id), unknown = mk("0".repeat(48)), traversal = mk("../../etc/passwd"), short = mk("abc");
+  return real.code === 200 && real.headers["Content-Type"] === "application/pdf" && real.headers["Cache-Control"] === "no-store" && [unknown, traversal, short].every((x) => x.code === 404 && x.body === "Not found.");
+})());
 check("the plan is logged for the review", /decision: "loop\.emailPlan"/.test(tool));
 
 check("a downgraded email request tells Co why, and the email path logs itself for a replay", /They hadn't asked for email, so it went by text/.test(tool) && /logDeliveredPlan\(`Co replied: \[emailed a plan:/.test(tool));
