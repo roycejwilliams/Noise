@@ -1,3 +1,5 @@
+import { goalTexts } from "../services/goalJourney.js";
+import { runGoalSweep } from "../services/goalSweep.js";
 import cron from "./cron.js";
 import { sendDueCoEventAnnouncements } from "../services/coEventAnnouncement.js";
 import { DateTime } from "luxon";
@@ -17,7 +19,7 @@ import { triggerCallForUser } from "../services/callTrigger.js";
 import { enqueueDuePostCallFollowUps } from "./postCallFollowUp.js";
 import { placeDueCalls, sendDueReminders } from "./scheduledCall.js";
 import { placeDueProactiveCalls } from "./proactiveCheckinCall.js";
-import { buildRecap, findUsersDueForRecap } from "../services/memoryCompaction.js";
+import { buildRecap, expireRecaps, findUsersDueForRecap } from "../services/memoryCompaction.js";
 import { enqueueDebrief, enqueueDueOutcomeFollowUps } from "../services/recommendationOutcome.js";
 import { enqueueDueEventCheckinFollowUps } from "../services/eventCheckinFollowUp.js";
 import { processDueUnmatchedFollowUps } from "../services/eventUnmatchedFollowUp.js";
@@ -207,6 +209,8 @@ export function registerJobs(io: Server) {
       await runLoopSync().catch((err: any) => console.error("loop sync error:", err?.message ?? err));
       const { runDueTasks } = await import("../services/taskTurn.js");
       await runDueTasks();
+      const { runLoopDecay } = await import("../services/openLoops.js");
+      await runLoopDecay().catch((err: any) => console.error("loop decay error:", err?.message ?? err));
     } catch (err: any) {
       console.error("task wake cron error:", err?.message ?? err);
     }
@@ -353,6 +357,15 @@ export function registerJobs(io: Server) {
     }
   });
 
+  // Goal check-ins: rare and seasonal, never on the 7-day ask clock (services/goalJourney.ts). Daily is only how often it LOOKS.
+  cron.schedule("0 11 * * *", async () => {
+    try {
+      await (await import("../services/goalJourney.js")).runGoalCheckins();
+    } catch (error) {
+      console.error("Goal check-in cron error:", error);
+    }
+  }, { timezone: "America/Los_Angeles" });
+
   // Co Loop Stage 5 check-in on an open ask. Layer 7 (2026-09-14): queues an
   // "ask_checkin" candidate only when there's movement (a new possible match
   // logged for this ask since the last check-in, at least 3 days on) or 7
@@ -430,11 +443,13 @@ export function registerJobs(io: Server) {
       // Living asks (services/askKind.ts, 2026-09-26): only asks a search can
       // find are searched; what they brought up in the last few days goes
       // first, then the rest by oldest-searched, so one ask can't win every day.
+      // Asks Co has answered or delivered close here, on evidence (services/askLifecycle.ts), before anything searches them.
+      await import("../services/askLifecycle.js").then((m) => m.closeAnsweredAsksAll()).catch((err: any) => console.error("Ask lifecycle: closing answered asks failed (non-fatal):", err?.message ?? err));
       await classifyOpenAsks().catch((err: any) => console.error("Ask kinds: classify failed (non-fatal):", err?.message ?? err));
       await syncClosedAsks().catch((err: any) => console.error("Ask sync failed (non-fatal):", err?.message ?? err));
       const due = await pool.query(
         `SELECT ac.id, ac.ask_id, ac.ask_text, ac.last_attempted_at, u.id AS user_id, u.first_name, u.phone_number, cp.city,
-                cp.goals, cp.activity_preferences,
+                cp.goals, cp.intent, cp.activity_preferences,
                 (ac.last_surfaced_at IS NULL OR ac.last_surfaced_at <= NOW() - INTERVAL '3 days') AS cooldown_cleared
          FROM ask_checkins ac
          JOIN users u ON u.id = ac.user_id
@@ -486,7 +501,8 @@ export function registerJobs(io: Server) {
               phoneNumber: row.phone_number,
               askText: row.ask_text,
               city: row.city ?? null,
-              goals: row.goals ?? null,
+              // Offers are judged against the ask AND where they are headed: profile goals plus goal-typed entries (services/goalJourney.ts).
+              goals: goalTexts(row.intent, row.goals).length ? goalTexts(row.intent, row.goals) : null,
               activityPreferences: row.activity_preferences ?? null,
               cooldownCleared: row.cooldown_cleared,
             });
@@ -515,64 +531,18 @@ export function registerJobs(io: Server) {
     }
   });
 
-  // Active search for people with NO open stated ask (Royce, 2026-09-14: "it
-  // should be actively searching for all 3 tiers"). Search text is built
-  // from what they've shared (goals, interests, direction, wants), the
-  // drafts say so instead of claiming they asked, and there's no network
-  // surfacing (that needs a real ask). Same daily/3-day pacing as the ask
-  // sweep, kept per person in profile_surfacing_state.
+  // Goal-based discovery (Royce, 2026-09-14: "it should be actively searching for all 3 tiers"; 2026-10-06: split from asks).
+  // Search text comes from where they are headed (goals, interests, direction), never from an ask; the drafts say so instead of
+  // claiming they asked, and there is no network surfacing (that needs a real ask). Every member with a direction has their own budget
+  // (one attempt per 20 hours, one find per 3 days, services/goalSweep.ts), whether or not they have open asks.
   cron.schedule("30 * * * *", async () => {
     try {
-      const { rows } = await pool.query(
-        `SELECT u.id AS user_id, u.first_name, u.phone_number, cp.city, cp.goals, cp.activity_preferences,
-                cp.long_term_direction, cp.intent, pss.last_attempted_at,
-                (pss.last_surfaced_at IS NULL OR pss.last_surfaced_at <= NOW() - INTERVAL '3 days') AS cooldown_cleared
-         FROM users u
-         JOIN co_profiles cp ON cp.user_id = u.id
-         LEFT JOIN profile_surfacing_state pss ON pss.user_id = u.id
-         WHERE u.sms_opted_out = false AND u.phone_number IS NOT NULL
-           AND NOT EXISTS (SELECT 1 FROM ask_checkins ac WHERE ac.user_id = u.id AND ac.resolved_at IS NULL)
-           AND (array_length(cp.goals, 1) > 0 OR array_length(cp.activity_preferences, 1) > 0
-                OR COALESCE(cp.long_term_direction, '') <> '' OR jsonb_array_length(COALESCE(cp.intent, '[]'::jsonb)) > 0)
-           AND (pss.last_attempted_at IS NULL OR pss.last_attempted_at <= NOW() - INTERVAL '20 hours')
-         LIMIT 50`,
-      );
-      await runWithConcurrency(rows, 3, async (row: any) => {
-        const intents = Array.isArray(row.intent) ? row.intent : [];
-        const latest = intents[intents.length - 1] ?? {};
-        const parts = [
-          row.goals?.length ? `goals: ${row.goals.join("; ")}` : null,
-          row.activity_preferences?.length ? `enjoys: ${row.activity_preferences.join(", ")}` : null,
-          row.long_term_direction ? `direction: ${row.long_term_direction}` : null,
-          latest.wants?.length ? `wants: ${latest.wants.join(", ")}` : null,
-          latest.concrete_preferences?.length ? `specifics: ${latest.concrete_preferences.join(", ")}` : null,
-        ].filter(Boolean);
-        if (!parts.length) return;
-        await pool.query(
-          `INSERT INTO profile_surfacing_state (user_id, last_attempted_at) VALUES ($1, NOW())
-           ON CONFLICT (user_id) DO UPDATE SET last_attempted_at = NOW()`,
-          [row.user_id],
-        );
-        try {
-          await attemptEventSurfacing({
-            askId: PROFILE_ASK_ID,
-            userId: row.user_id,
-            firstName: row.first_name,
-            phoneNumber: row.phone_number,
-            askText: parts.join(". ").slice(0, 600),
-            fromProfile: true,
-            city: row.city ?? null,
-            goals: row.goals ?? null,
-            activityPreferences: row.activity_preferences ?? null,
-            cooldownCleared: row.cooldown_cleared,
-          });
-        } catch (err: any) {
-          console.error(`Profile surfacing sweep failed for ${row.user_id}:`, err?.message ?? err);
-        }
-      });
+      // Goal-based discovery (services/goalSweep.ts): every member with a direction has their own budget; open asks neither block it
+      // nor boost it (2026-10-06: it used to run only for members with NO open ask, so engaged members got less discovery).
+      await runGoalSweep(runWithConcurrency);
       await runDispatch();
     } catch (error) {
-      console.error("Profile surfacing sweep cron error:", error);
+      console.error("Goal sweep cron error:", error);
     }
   });
 
@@ -757,6 +727,8 @@ export function registerJobs(io: Server) {
           console.error(`Memory compaction failed for ${userId}:`, err?.message ?? err);
         }
       });
+      // And, with no model call, what has expired leaves every recap whether or not they said anything new (services/claims.ts).
+      await expireRecaps();
     } catch (error) {
       console.error("Memory compaction cron error:", error);
     }

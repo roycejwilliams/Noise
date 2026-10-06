@@ -331,7 +331,7 @@ check("the record starts filled from what was already logged", /backfillCoAction
   process.env.TWILIO_PHONE_NUMBER = "";
   check("calls: with no number on file Co says so instead of inventing one", /don't make one up/.test(CAP.callLine()));
   if (prevTw === undefined) delete process.env.TWILIO_PHONE_NUMBER; else process.env.TWILIO_PHONE_NUMBER = prevTw;
-  check("calls: dial attempts don't count as a call in lapse or compaction", /m\.content NOT LIKE 'Co initiated call%'/.test(src("services/membershipLapse.ts")) && (src("services/memoryCompaction.ts").match(/content NOT LIKE 'Co initiated call%'/g) ?? []).length === 2);
+  check("calls: dial attempts don't count as a call in lapse or compaction", /m\.content NOT LIKE 'Co initiated call%'/.test(src("services/membershipLapse.ts")) && (src("services/memoryCompaction.ts").match(/content NOT LIKE 'Co initiated call%'/g) ?? []).length === 1 && /content NOT LIKE 'Co initiated call%'/.test(src("services/claims.ts")));
   check("calls: the call context's lessons, threads and sent lines go through the strip", /const sentLines = await strip\(sentDetailLines/.test(src("services/callContext.ts")) && /const lessons = await strip\(/.test(src("services/callContext.ts")) && /const threads = \(await strip\(/.test(src("services/callContext.ts")));
   check("captions: 'you already looked at…' needs their own words", LT2.captionProblems("Rolling applications, and you already looked at their Member Residency.", "South Park Commons, rolling applications", "can you find me a couple").some((p) => /told you they did/.test(p)) && LT2.captionProblems("Rolling applications, and you already looked at their residency.", "South Park Commons", "I looked at their residency last week").length === 0);
 }

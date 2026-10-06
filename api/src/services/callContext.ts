@@ -1,3 +1,4 @@
+import { arcLine } from "./goalJourney.js";
 import { notToTeammate } from "./teamLines.js";
 import * as memberSafeModule from "./memberSafeMemories.js";
 import { renderCorrections } from "../harness/profileWrite.js";
@@ -8,7 +9,7 @@ import { writeMemory } from "./memory.js";
 import { MODELS } from "../models.js";
 import { getEmotionalContext, renderEmotionalContext } from "../harness/emotion.js";
 import { getPersonSnapshot, renderSnapshot } from "../harness/personSnapshot.js";
-import { latestAskEntry } from "../harness/profileWrite.js";
+import { latestAskEntry, goalEntries } from "../harness/profileWrite.js";
 
 // A 1-2 sentence call summary: narrow work, Haiku.
 const SUMMARY_MODEL = MODELS.haiku;
@@ -137,9 +138,12 @@ export async function buildContextSummary(userId: string): Promise<string> {
       profile?.life_chapters?.length ? `Life chapter: ${profile.life_chapters.join(", ")}` : null,
       profile?.city ? `City: ${profile.city}` : null,
       emotionalLine ? `How they've been feeling:\n${emotionalLine}` : null,
-      profile?.goals?.length ? `Goals: ${profile.goals.slice(0, 3).join("; ")}` : null,
+      // Direction, not errands: profile goals plus the goal-typed entries (never an ask).
+      [...(profile?.goals ?? []), ...goalEntries(profile?.intent).map((g) => String(g.text))].length ? `Goals: ${[...(profile?.goals ?? []), ...goalEntries(profile?.intent).map((g) => String(g.text))].slice(0, 4).join("; ")}` : null,
       profile?.blockers?.length ? `Blockers: ${profile.blockers.slice(0, 2).join("; ")}` : null,
       !openAsks.length && latestAsk?.text ? `Stated ask: ${latestAsk.text}` : null,
+      // Their arc: goals they have closed. A lens for the call, not something to recite.
+      arcLine(profile?.intent),
       latestIntent?.wants?.length ? `Wants: ${latestIntent.wants.slice(0, 2).join(", ")}` : null,
       safeRecommendation[0] ? `Most recent thing Co suggested: ${safeRecommendation[0]}` : null,
     ].filter(Boolean);
@@ -285,6 +289,8 @@ export async function buildCallContextSummary(userId: string): Promise<string> {
 // wanted to continue" when their last words were "we can close out good".
 export function callSummaryPrompt(transcript: string): string {
   return `Summarize what was actually discussed in this phone call transcript, in 2-3 plain sentences, third person, as if briefing someone on what just happened. Ground it only in what's actually in the transcript — no invented detail, no therapy-speak. Write the person on the call as {M} every time, never a pronoun for them (no he, she, they, his, her, their): "{M} is building...", "{M}'s cofounder". We fill in their name. Refer to anyone else by that person's own name (2026-09-22: summaries were calling a member "he" from their name alone).
+
+Names of companies and people come from what THEY said (the "user:" lines), never from the assistant's lines: when the assistant says a different name than the member did ("Bumble" for the member's "Boardy"), the member's wins, because the assistant can mishear. A name the member said and speech-to-text garbled ("Boredy") is written as the real company when it is plain which one.
 
 Lead with the concrete facts they gave: the names of companies, people, places, dates, and plans, spelled as they said them. Speech-to-text often spells names out letter by letter ("l y t h e dot a i" is lythe.ai); write the name, not the letters. Keep every named company and person they mentioned.
 

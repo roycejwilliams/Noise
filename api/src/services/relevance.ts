@@ -45,7 +45,7 @@ type RelevanceCandidate = {
 const OPEN_ASK_EMBEDDINGS = `
   SELECT (e->'embedding')::text::vector AS emb
   FROM jsonb_array_elements(CASE WHEN jsonb_typeof(cp.intent) = 'array' THEN cp.intent ELSE '[]'::jsonb END) AS e
-  WHERE e->>'status' = 'active' AND COALESCE(btrim(e->>'text'), '') <> '' AND jsonb_typeof(e->'embedding') = 'array'`;
+  WHERE e->>'status' = 'active' AND COALESCE(e->>'kind', 'ask') = 'ask' AND COALESCE(btrim(e->>'text'), '') <> '' AND jsonb_typeof(e->'embedding') = 'array'`;
 
 async function prefilterCandidates(personId: string, askEmbedding: number[]): Promise<RelevanceCandidate[]> {
   const { rows } = await pool.query(

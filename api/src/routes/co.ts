@@ -22,6 +22,7 @@ import {
   storeTranscriptMemory,
 } from "../services/profileExtraction.js";
 import { voiceFinds } from "../services/voiceFinds.js";
+import { takeCallBriefing } from "../services/callBriefing.js";
 import { buildCallContextSummary, buildCallKnowledge, summarizeCallForTextContext } from "../services/callContext.js";
 import { learnFromCall } from "../services/callLearning.js";
 import { writeMemory } from "../services/memory.js";
@@ -359,9 +360,10 @@ router.post(
 
       // Register the call with Co's ElevenLabs agent and hand Twilio the
       // TwiML that connects it (services/elevenLabsCalls.ts).
-      const [{ rows: u }, contextSummary] = await Promise.all([
+      const [{ rows: u }, contextSummary, briefing] = await Promise.all([
         pool.query(`SELECT first_name, phone_number FROM users WHERE id = $1`, [userId]),
         buildCallContextSummary(userId).catch(() => ""),
+        takeCallBriefing(userId),
       ]);
       try {
         const elTwiml = await registerElevenLabsCall({
@@ -369,6 +371,8 @@ router.post(
           firstName: u[0]?.first_name ?? "",
           opening: await openingForCall(userId, u[0]?.first_name ?? "", "inbound", contextSummary),
           contextSummary,
+          rightNow: briefing.rightNow,
+          findsNow: briefing.findsNow,
           from: from!,
           to: (req.body.To as string | undefined) ?? process.env.TWILIO_PHONE_NUMBER!,
           direction: "inbound",
@@ -411,9 +415,10 @@ router.post("/el/outbound-twiml", async (req: Request, res: Response, next: Next
     if (!validateTwilioSignature(req, req.originalUrl)) return res.status(401).send("Invalid Twilio signature.");
     const userId = String(req.query.u ?? "");
     if (!verifyCallToken(userId, String(req.query.t ?? ""))) return res.status(401).send("Invalid call token.");
-    const [{ rows: u }, ctx] = await Promise.all([
+    const [{ rows: u }, ctx, briefing] = await Promise.all([
       pool.query(`SELECT first_name, phone_number FROM users WHERE id = $1`, [userId]),
       takeCallContext(userId, buildCallContextSummary),
+      takeCallBriefing(userId),
     ]);
     const contextSummary = ctx.summary;
     if (!u[0]) return res.status(404).send("Unknown user.");
@@ -423,6 +428,8 @@ router.post("/el/outbound-twiml", async (req: Request, res: Response, next: Next
         firstName: u[0].first_name ?? "",
         opening: await openingForCall(userId, u[0].first_name ?? "", "outbound", contextSummary),
         contextSummary,
+        rightNow: briefing.rightNow,
+        findsNow: briefing.findsNow,
         from: (req.body.From as string | undefined) ?? process.env.TWILIO_PHONE_NUMBER!,
         to: (req.body.To as string | undefined) ?? u[0].phone_number,
         direction: "outbound",
@@ -502,6 +509,8 @@ router.post("/el/post-call", async (req: Request, res: Response, next: NextFunct
       return res.status(200).send({ success: false, reason: "unknown user" });
     }
     const conversationId = String(data.conversation_id ?? "");
+    // ElevenLabs graded the call against our criteria (services/callEvals.ts); the failures go where the morning review reads.
+    import("../services/callEvals.js").then((m) => m.recordCallEvaluation(userId, conversationId, data.analysis)).catch(() => {});
     const turns = Array.isArray(data.transcript) ? data.transcript : [];
     const { rows: u } = await pool.query(`SELECT id, first_name, phone_number, call_sid FROM users WHERE id = $1`, [userId]);
     // The call's own sid: ElevenLabs sends it on Twilio calls. Never the member's
@@ -520,6 +529,7 @@ router.post("/el/post-call", async (req: Request, res: Response, next: NextFunct
     const ended = await processEndedCall({
       userId,
       callKey: `el:${conversationId}`,
+      offered: typeof vars.finds_now === "string" ? vars.finds_now : undefined,
       twilioMetadata: callSid ? { call_sid: callSid } : null,
       // Feelings come from the text read over what they said, plus ElevenLabs'
       // per-line frustration score (harness/emotion.ts frustrationMoments).
@@ -674,6 +684,8 @@ async function processEndedCall(o: {
   callKey: string;
   twilioMetadata?: { call_sid?: string } | null;
   load: () => Promise<EndedCallData>;
+  // What Co had found for them going in (the call's finds_now): an event offered from it is on file, not invented (2026-10-05: the audit flagged a real offer as an invented fact).
+  offered?: string;
 }): Promise<{ status: number; body: unknown }> {
   const user_id = o.userId;
   const chat_id = o.callKey;
@@ -809,7 +821,8 @@ async function processEndedCall(o: {
       // rows below — every time it reclaimed a 'failed' call_status.
       // What Co had going in, split into facts and Co's own impressions, so
       // the audit never takes a summary as proof (callContext.ts).
-      const knownBeforeCall = await buildCallKnowledge(user_id).catch(() => ({ summary: "", facts: "", impressions: "" }));
+      const knownBeforeCall0 = await buildCallKnowledge(user_id).catch(() => ({ summary: "", facts: "", impressions: "" }));
+      const knownBeforeCall = o.offered ? { ...knownBeforeCall0, facts: `${knownBeforeCall0.facts}\n\nWhat Co had found for them before the call (anything offered from this list is on file):\n${o.offered}` } : knownBeforeCall0;
       const existingTranscriptMem = await pool.query(
         `SELECT id FROM co_memories WHERE user_id = $1 AND memory_type = 'call_transcript' AND content = $2 LIMIT 1`,
         [user_id, transcript],
@@ -824,6 +837,8 @@ async function processEndedCall(o: {
       // call is audited right after: keepable promises are kept, the rest
       // become corrections for the next text (harness/callGrounding.ts).
       auditCall(user_id, cleanTranscript, knownBeforeCall).catch(() => {});
+      // Ongoing help they asked for on the call becomes a task, same as a text would (services/callTasks.ts).
+      import("../services/callTasks.js").then((m) => m.tasksFromCall(user_id, cleanTranscript)).catch(() => {});
       // How scripted it sounded: stock comfort lines and repeated openers, logged for the morning review.
       {
         const r = stockReport(coLinesOf(cleanTranscript));

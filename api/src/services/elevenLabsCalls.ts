@@ -15,6 +15,8 @@
 //
 // Hume is gone (Royce, 2026-10-03: "remove Hume, no reason to use it if
 // it's going to be deprecated"); every call runs here.
+import { CALL_PLATFORM_SETTINGS } from "./callEvals.js";
+import { CAPABILITY_SHEET } from "./callBriefing.js";
 import { DISCRETION_GUIDE } from "../harness/discretion.js";
 import { VARIETY_GUIDE } from "../harness/stockLines.js";
 import { BRAND, CALL_COACHING } from "./textRhythm.js";
@@ -71,6 +73,8 @@ export async function registerElevenLabsCall(o: {
   to: string;
   direction: "inbound" | "outbound";
   opening?: string;
+  rightNow?: string;
+  findsNow?: string;
 }): Promise<string> {
   const agentId = process.env.ELEVENLABS_AGENT_ID;
   if (!agentId) throw new Error("ELEVENLABS_AGENT_ID is not set");
@@ -87,6 +91,8 @@ export async function registerElevenLabsCall(o: {
         first_name: o.firstName,
         context_summary: o.contextSummary,
         direction: o.direction,
+        right_now: o.rightNow ?? "",
+        finds_now: o.findsNow ?? "Nothing to offer right now. Don't offer an event.",
       },
     },
   } as any) as unknown as Promise<string>;
@@ -184,28 +190,56 @@ export function guardrailsLast(prompt: string): { rest: string; guardrails: stri
   const rest = prompt.replace(SAFETY_RE, "").replace(NEVER_RE, "");
   return { rest, guardrails: `# Guardrails\nIf they may not be safe:\n${safety}\n\nNever:\n${never}\n\nSafety comes before everything else on the call. This is important.` };
 }
+// Voice is a speed game: the first words of a reply are spoken as soon as the first sentence is done, so a short one starts the
+// voice sooner (2026-10-05: ~1.0s to the first full sentence).
+export const SPEED_GUIDE = `# Speed and length
+Start every reply with a short first sentence, under ten words, that acknowledges or answers ("That makes sense." "Good, that helps."), then carry on. A long first sentence delays your voice.
+Speech can't be skimmed: say one thought in two to four short sentences, about 60 words at most, with at most one question, then stop. Never three paragraphs, never a list, never a recap of what they just said. Never open with "I appreciate", "I want to be straight with you" or "Let me be honest": just say the thing.
+When they ask about you (what would make you better, how it feels), answer plainly from Co's side of the work in a sentence or two ("from where I sit..."). No disclaimers about being an AI or about what you can't feel.
+When they want help over days (memos, resources, prep, options), never say it isn't how you work: say yes, that you'll set it up when you hang up and text what you find. Don't promise what it will find or when.`;
+
+// Filled per call (services/callBriefing.ts): their clock, and what Co has found for them, fetched while the phone rang.
+export const CALL_NOW = `# Right now
+{{right_now}}
+
+# What Co has found for them
+{{finds_now}}`;
+
 export function promptForElevenLabs(prompt: string): string {
   const split = guardrailsLast(withoutExampleOpeners(prompt));
   const base = split.rest
     .replace("open as below instead.", "your first question is about what they're working on or what brought them to Co, in fresh words each time.")
-    .replace(/\bhang_up\b/g, "end_call");
+    .replace(/\bhang_up\b/g, "end_call")
+    // What Co found is in the prompt (prefetched), not behind a tool: no pause mid-conversation.
+    .replace(/The same rule applies to anything YOU fetched with surface_recommendation[^\n]*/, 'The same rule applies to anything under "What Co has found for them" that you decided to offer: if you meant to tell them about one and haven\'t yet, say it before you close, never after.')
+    // The coverage check runs between turns, never part-way through speech (a mid-sentence tool call split Co's speech in two).
+    .replace("silently check your own coverage using the assess_conversation_coverage tool.", "silently check your own coverage using the assess_conversation_coverage tool, as the very first thing you do in a turn, before you say a word, never part-way through what you are saying.");
   const withCues = base.includes(SPOKEN_ALOUD)
     ? base.replace(new RegExp(`${SPOKEN_ALOUD.replace(/[.]/g, "\\.")} ?`), `Everything you write is spoken aloud, except a cue in square brackets (below).\n${CUE_GUIDE}\n\n`)
     : `${base}\n\n${CUE_GUIDE}`;
   // How Co keeps a confidence on a call (harness/discretion.ts): speech can't be
   // edited, so the model has to choose a discreet line itself.
-  return `${withCues}\n\n${VARIETY_GUIDE}\n\n${CALL_COACHING}\n\n${BRAND}\n\n${split.guardrails ? `${split.guardrails}\n\n` : ""}${DISCRETION_GUIDE}\n\n${OPENING_NOTE}`;
+  return `${withCues}\n\n${VARIETY_GUIDE}\n\n${CALL_COACHING}\n\n${BRAND}\n\n${SPEED_GUIDE}\n\n${CAPABILITY_SHEET}\n\n${CALL_NOW}\n\n${split.guardrails ? `${split.guardrails}\n\n` : ""}${DISCRETION_GUIDE}\n\n${OPENING_NOTE}`;
 }
 
 // The coverage check reads the newest part of the call (~6k tokens is plenty
 // to see which Rapport topics came up recently).
 export const COVERAGE_TRANSCRIPT_CHARS = 24_000;
 
+// Words the speech recognizer is told to expect (2026-10-05: "Co" was heard as "you" and "Coach", "Boardy" as "Boredy"). Names a
+// member says about Co's world, not about the member: their own names come through the call's context.
+export const CALL_KEYWORDS = ["Co", "CoPatible", "Boardy", "Instinct", "Muse", "Luma", "House of AI", "Heavybit", "SF Tech Week"];
+
 export const VOICEMAIL_MESSAGE = "Hey {{first_name}}, it's Co. Sorry I missed you. I'll send you a text.";
 
 export const AGENT_DEFAULTS = {
-  llm: "claude-sonnet-4-6",
-  backupLlm: "claude-sonnet-4-5",
+  // Voice is a speed game (Royce, 2026-10-06): the call brain is Haiku 4.5 and never a bigger model, because a bigger model adds wait
+  // time on every turn. Sonnet stays where nobody is waiting (post-call processing, recaps, grading). The first call ran Sonnet 4.6:
+  // 0.67s to first token, ~1.0s to the first full sentence, $0.55 of the call's model cost.
+  llm: "claude-haiku-4-5",
+  // If Haiku is slow to start, ElevenLabs falls to the same model by its dated id (another route), never to a slower one.
+  backupLlm: "claude-haiku-4-5@20251001",
+  cascadeTimeoutSecs: 3,
   // Hume ran Co at temperature 1. The agent was left at ElevenLabs' default of 0,
   // where the model repeats the prompt's own example lines almost word for word
   // (2026-10-04: "sounds scripted"). 0.8 keeps it varied; the rules the prompt
@@ -213,6 +247,10 @@ export const AGENT_DEFAULTS = {
   temperature: 0.8,
   ttsModel: "eleven_v4_turbo",
   turnEagerness: "eager",
+  // Already the fastest the platform offers (2026-10-06 read of the live agent): eager endpointing, and the model starts generating
+  // while the turn is still being confirmed. Pinned here so a config push can't drift back to the slower defaults.
+  speculativeTurn: true,
+  turnModel: "turn_v3",
   maxDurationSecs: 1800,
   silenceEndCallSecs: 120,
 } as const;
@@ -231,13 +269,16 @@ export function buildAgentConfig(o: {
   turnEagerness?: string;
   temperature?: number;
 }): Record<string, unknown> {
-  const tool = (name: string, description: string, extra: Record<string, unknown> = {}) => ({
+  const tool = (name: string, description: string, extra: Record<string, unknown> = {}, mode: "immediate" | "async" = "immediate") => ({
     type: "webhook",
     name,
     description,
     response_timeout_secs: 20,
     disable_interruptions: false,
     force_pre_tool_speech: false,
+    // No filler before a tool, and (for the coverage check) no waiting on it: async runs it in the background while Co keeps talking.
+    pre_tool_speech: "off",
+    execution_mode: mode,
     api_schema: {
       url: `${o.apiUrl}/co/el/tool/${name}`,
       method: "POST",
@@ -263,9 +304,9 @@ export function buildAgentConfig(o: {
     name: o.name,
     // Each call picks its own opening line (pickOpening), so the first message
     // must be overridable per call.
-    platform_settings: { overrides: { conversation_config_override: { agent: { first_message: true } } } },
+    platform_settings: { overrides: { conversation_config_override: { agent: { first_message: true } } }, ...CALL_PLATFORM_SETTINGS },
     conversation_config: {
-      asr: { user_input_audio_format: "ulaw_8000" },
+      asr: { user_input_audio_format: "ulaw_8000", keywords: CALL_KEYWORDS },
       tts: {
         model_id: o.ttsModel ?? AGENT_DEFAULTS.ttsModel,
         voice_id: o.voiceId,
@@ -277,6 +318,8 @@ export function buildAgentConfig(o: {
       },
       turn: {
         turn_eagerness: o.turnEagerness ?? AGENT_DEFAULTS.turnEagerness,
+        speculative_turn: AGENT_DEFAULTS.speculativeTurn,
+        turn_model: AGENT_DEFAULTS.turnModel,
         silence_end_call_timeout: AGENT_DEFAULTS.silenceEndCallSecs,
       },
       conversation: { max_duration_seconds: AGENT_DEFAULTS.maxDurationSecs },
@@ -286,21 +329,20 @@ export function buildAgentConfig(o: {
         disable_first_message_interruptions: true,
         language: "en",
         max_conversation_duration_message: "I need to wrap up for now. This was really good, I'll be in touch soon.",
-        dynamic_variables: { dynamic_variable_placeholders: { first_name: "there", context_summary: "", user_id: "", call_token: "", direction: "" } },
+        dynamic_variables: { dynamic_variable_placeholders: { first_name: "there", context_summary: "", user_id: "", call_token: "", direction: "", right_now: "", finds_now: "" } },
         prompt: {
           prompt: promptForElevenLabs(o.prompt),
           llm: o.llm ?? AGENT_DEFAULTS.llm,
           temperature: o.temperature ?? AGENT_DEFAULTS.temperature,
-          // If the main model is slow to start (4s), ElevenLabs falls to another; pin it to the same family so the voice and style don't shift mid-call.
+          // If the main model is slow to start, ElevenLabs falls to another; pin it to the same model so the voice and style don't shift mid-call.
           backup_llm_config: { preference: "override", order: [AGENT_DEFAULTS.backupLlm] },
+          cascade_timeout_seconds: AGENT_DEFAULTS.cascadeTimeoutSecs,
           tools: [
             tool(
               "assess_conversation_coverage",
               "Silently check your own progress through the Rapport phase. Returns which required topics are still uncovered so you can decide what to ask next and whether you have enough to move into Confirm Understanding. Never mention that you are checking anything or calling a tool - just let the result quietly guide your next question.",
-            ),
-            tool(
-              "surface_recommendation",
-              "Call this when you have a real, specific, stated preference or want from this person and a genuine moment to offer something concrete, not during early rapport-building. Returns one grounded recommendation with a reason, or not-yet-available if there is not enough real signal. Never mention checking or calling a tool. Offer any result naturally as your own suggestion.",
+              {},
+              "async",
             ),
             // ElevenLabs' own system tools ride in the same list (type "system");
             // the separate built_in_tools field silently stored nothing (2026-10-03).

@@ -30,7 +30,7 @@ check("a new ask is classified and marked mentioned", /INSERT INTO ask_checkins 
 check("restating an ask marks it mentioned again", /expires_at = COALESCE\(\$4::timestamptz, expires_at\), last_mentioned_at = NOW\(\)/.test(pe));
 check("an ask resolved from what they said closes in the profile too", /markIntentResolved\(user_id, resolvedAskIds\)/.test(pe));
 const ak = src("src/services/askKind.ts");
-check("closing an ask updates both places and retires its matches", /UPDATE ask_checkins SET resolved_at[\s\S]{0,200}markIntentResolved\(userId, \[askId\]\)[\s\S]{0,300}UPDATE relevance_edges SET status = 'retired'/.test(ak));
+check("closing an ask updates both places and retires its matches", /UPDATE ask_checkins SET resolved_at[\s\S]{0,500}markIntentResolved\(userId, \[askId\]\)[\s\S]{0,300}UPDATE relevance_edges SET status = 'retired'/.test(ak));
 check("unsure asks keep being searched", /return "find";\s*\}\s*\}/.test(ak));
 check("instant searches of a new ask only for find asks", /ac\.last_attempted_at IS NULL AND ac\.kind = 'find'/.test(src("src/services/eventSurfacingSweep.ts")));
 const tools = src("src/agent/conversationTools.ts");

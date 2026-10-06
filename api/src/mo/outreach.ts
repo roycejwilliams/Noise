@@ -3,6 +3,7 @@
 // note sent by hand), one follow-up, reading their replies, the code on a
 // yes, and the do-not-contact list on a no. Only ever for approved prospects,
 // under a daily cap, during daytime hours.
+import { proactivePaused } from "../services/proactivePause.js";
 import { anthropic } from "@ai-sdk/anthropic";
 import { generateText, stepCountIs } from "ai";
 import { createHmac, timingSafeEqual } from "crypto";
@@ -38,6 +39,7 @@ export function emailRepliesConfigured(env: NodeJS.ProcessEnv = process.env): bo
 // Why nothing can go out yet, in plain words, or null when it can.
 export function sendingBlocked(env: NodeJS.ProcessEnv = process.env): string | null {
   if (!moEnabled(env)) return "Mo is switched off, so nothing goes out yet.";
+  if (proactivePaused(env)) return "Outreach is paused, so nothing goes out until it is lifted.";
   if (!xWriteConfigured(env)) return "Co's X account isn't connected yet, so nothing goes out until it is.";
   return null;
 }
@@ -267,7 +269,7 @@ async function followUp(p: any): Promise<string> {
 
 // Hourly, daytime only.
 export async function runMoOutreach(now = new Date()): Promise<void> {
-  if (!moEnabled() || !moHours(now)) return;
+  if (!moEnabled() || proactivePaused() || !moHours(now)) return;
   // Joined: their code was used. Usually caught the moment it's redeemed
   // (services/inviteCodes.ts); this is the backup. Either way the team hears.
   const { rows: joined } = await pool.query(

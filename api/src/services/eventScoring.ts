@@ -4,7 +4,8 @@ import { edgeHint, refreshRoom, roomEdges, type Edge } from "./peopleGraph.js";
 import pool from "../db/db.js";
 import { runEventAskSolicitationAgent } from "../agent/eventAskSolicitation.js";
 import { getEventDetails, getEventGuestList, listCalendarEvents, type LumaGuest, type LumaEventDetail } from "./luma.js";
-import { getActiveAsks, getActiveSeekingAsk, scoreAgainstStatedAsk } from "./matching.js";
+import { getActiveAsks, getActiveSeekingAsk, getGoalFrame, scoreAgainstStatedAsk } from "./matching.js";
+import { goalTexts } from "./goalJourney.js";
 import { detectAndScheduleCheckins } from "./eventCheckinFollowUp.js";
 import { scheduleUnmatchedFollowUp } from "./eventUnmatchedFollowUp.js";
 import sendblue, { cleanCoMessage } from "./sendblue.js";
@@ -638,7 +639,9 @@ export async function scoreMatchedGroup(
   if (!opts.dryRun) await refreshRoom(matched.map((m) => m.user_id)).catch(() => {});
   for (const person of matched) {
     const others = matched.filter((m) => m.user_id !== person.user_id);
-    const ask = getActiveSeekingAsk(person.intent);
+    // Goals are the frame for who is worth meeting; asks write the specific reason (a candidate's own ask is the share reason). Someone with only
+    // goals is scored against them instead of being asked what they want from the room.
+    const ask = getActiveSeekingAsk(person.intent) ?? getGoalFrame(person.intent);
 
     if (!ask?.text) {
       if (await wasRecentlySolicited(eventId, person.user_id)) {
@@ -665,7 +668,7 @@ export async function scoreMatchedGroup(
     }
 
     const askerContextParts = [
-      person.goals?.length ? `goals: ${person.goals.join(", ")}` : null,
+      goalTexts(person.intent, person.goals).length ? `goals: ${goalTexts(person.intent, person.goals).join(", ")}` : null,
       person.blockers?.length ? `blockers: ${person.blockers.join(", ")}` : null,
     ].filter((p): p is string => Boolean(p));
     const edges = await roomEdges(person.user_id, others.map((o) => o.user_id)).catch(() => new Map<string, Edge>());

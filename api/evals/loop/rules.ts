@@ -146,7 +146,7 @@ check("the reply gets the guide when they want something found, and the working 
   const p1 = O.planLoop(dTask, openCo, null);
   check("on an open loop Co's status wins over code's", p1.kind === "upsert" && p1.status === "decision_needed" && p1.detail === "their pick" && !p1.moved);
   const p2 = O.planLoop(dTask, undefined, null);
-  check("a new loop is new (not a change that wakes)", p2.kind === "upsert" && p2.isNew && /VALUES \(\$1, \$2, \$3, \$4, \$5, \$6, \$7, \$8, NOW\(\), NOW\(\)\)/.test(os));
+  check("a new loop is new (not a change that wakes)", p2.kind === "upsert" && p2.isNew && /VALUES \(\$1, \$2, \$3, \$4, \$5, \$6, \$7, \$8, NOW\(\), NOW\(\), NOW\(\)\)/.test(os));
   check("finishing a loop finishes its task or ask", /closeTask\(userId, row\.taskId/.test(os) && /UPDATE ask_checkins SET resolved_at = COALESCE\(resolved_at, NOW\(\)\)/.test(os));
   check("Co's own loop change never wakes the task", (os.match(/seen_at = NOW\(\)/g) ?? []).length >= 3);
   check("syncs for one member never interleave", /pg_advisory_xact_lock\(hashtext\('open_loops:'/.test(os));
@@ -156,7 +156,7 @@ check("the reply gets the guide when they want something found, and the working 
   check("an id picks its loop; an unknown id is refused", JSON.stringify(O.pickLoop(two, { id: 2, title: "venue" })) === JSON.stringify({ kind: "loop", id: 2 }) && O.pickLoop(two, { id: 9, title: "x" }).kind === "unknown_id");
   check("an exact or clearly best title picks one; no match is a new loop", JSON.stringify(O.pickLoop(two, { title: "find a venue for the offsite" })) === JSON.stringify({ kind: "loop", id: 2 }) && JSON.stringify(O.pickLoop(two, { title: "offsite venue" })) === JSON.stringify({ kind: "loop", id: 2 }) && O.pickLoop(two, { title: "DJ" }).kind === "new");
   check("Co reads each loop with its id, and updateLoop takes it", /\[loop 7\] Find a venue/.test(O.describeLoops([{ id: 7, title: "Find a venue", status: "open", detail: null, dueDate: null, source: "task" }], { withIds: true }) ?? "") && !/\[loop/.test(O.describeLoops([{ id: 7, title: "Find a venue", status: "open", detail: null, dueDate: null, source: "task" }]) ?? "") && /loopId: z\.number\(\)\.int\(\)\.optional\(\)/.test(lt));
-  check("every text turn syncs the loops and reads them as ongoing", /o\.describeLoops\(\(await o\.syncOpenLoops\(user\.id\)\)\.rows, \{ withIds: true \}\)/.test(src("routes/sendblue.ts")) && /if \(loops\) addFact\(replyFacts, "ongoing", loops\)/.test(src("routes/sendblue.ts")));
+  check("every text turn syncs the loops and reads them as ongoing", /o\.describeLoops\(await o\.confirmMentioned\(user\.id, \(await o\.syncOpenLoops\(user\.id\)\)\.rows, content\), \{ withIds: true \}\)/.test(src("routes/sendblue.ts")) && /if \(loops\) addFact\(replyFacts, "ongoing", loops\)/.test(src("routes/sendblue.ts")));
   check("the 15-minute pass syncs loops before waking tasks", /runLoopSync\(\)[\s\S]{0,200}runDueTasks\(\)/.test(src("jobs/index.ts")));
   check("the open_loops table exists, one row per source", /CREATE TABLE IF NOT EXISTS open_loops[\s\S]*UNIQUE \(user_id, source, source_ref\)/.test(src("db/migrations.ts")));
   check("Co can set a loop's status, and its word wins until the source closes", /updateLoop: tool\(/.test(lt) && /status_by === "co" \? ex\.status : d\.status/.test(src("services/openLoops.ts")));

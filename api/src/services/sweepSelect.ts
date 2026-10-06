@@ -39,6 +39,7 @@ export type SelectContext = {
   city: string | null;
   today: string; // YYYY-MM-DD local
   weekday: string;
+  goals?: string[]; // where they are headed: the lens, judged against alongside the asks, never recited
   asks: { id: string; text: string; since: string }[]; // A#
   texts: { id: string; at: string; from: "member" | "co"; text: string }[]; // T#
   sent: { id: string; at: string; what: string; reaction: string | null }[]; // S#
@@ -89,6 +90,7 @@ export function selectPrompt(c: SelectContext): string {
   if (c.feeling) lines.push(`How they've been: ${c.feeling}`);
   lines.push(`\nWhat they've asked Co for (open):`);
   lines.push(c.asks.length ? c.asks.map((a) => `${a.id} (since ${a.since}): ${clip(a.text, 220)}`).join("\n") : "(none)");
+  if (c.goals?.length) lines.push("", "Where they say they are headed (the LENS: judge every candidate against this as well as the asks; never cite it as the reason, the reason is an ask, a text, or what they did):", c.goals.map((g) => `- ${clip(g, 200)}`).join("\n"));
   lines.push(`\nTheir recent texts with Co (oldest first):`);
   lines.push(c.texts.length ? c.texts.slice(-SELECT_LIMITS.texts).map((t) => `${t.id} ${t.at} ${t.from === "member" ? "They" : "Co"}: ${clip(t.text, 280)}`).join("\n") : "(none)");
   lines.push(`\nWhat Co sent them first, last 30 days, and what happened:`);

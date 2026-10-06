@@ -41,7 +41,7 @@ export async function expireStaleAsks(): Promise<{ backfilled: number; expired: 
     await pool.query(`UPDATE ask_checkins SET expires_at = $2 WHERE id = $1`, [row.id, expiresAt]);
   }
   const { rowCount } = await pool.query(
-    `UPDATE ask_checkins SET resolved_at = NOW(), expired_at = NOW()
+    `UPDATE ask_checkins SET resolved_at = NOW(), expired_at = NOW(), closed_reason = COALESCE(closed_reason, 'expired')
      WHERE resolved_at IS NULL AND expires_at IS NOT NULL AND expires_at <= NOW()`,
   );
   return { backfilled: missing.length, expired: rowCount ?? 0 };

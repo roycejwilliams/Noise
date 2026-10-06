@@ -164,7 +164,7 @@ export async function learnFromTextTurn(input: TurnLearningInput): Promise<TurnL
          FROM co_profiles WHERE user_id = $1`,
         [input.userId],
       ),
-      pool.query(`SELECT ask_id, ask_text FROM ask_checkins WHERE user_id = $1 AND resolved_at IS NULL`, [input.userId]),
+      import("./goalJourney.js").then((m) => m.openErrandsAndGoals(input.userId)).then((rows) => ({ rows })),
     ]);
     const row = profileRows[0] ?? null;
     const onFile: OnFileProfile | null = row

@@ -1,6 +1,7 @@
 // Member-facing Mo: the scheduled work and the front desk's inbox. Every job is a no-op unless MO_ENABLED (the team's
 // switch) AND MO_MEMBER_ENABLED are both "true": member-facing Mo is off by default, and real sends also wait on Co's X
 // keys. Nothing here decides who may be contacted; mo/memberFlow.ts and mo/memberRules.ts do, at the moment of sending.
+import { proactivePaused } from "../services/proactivePause.js";
 import pool from "../db/db.js";
 import { recordDecision } from "../harness/core.js";
 import { MO } from "./rules.js";
@@ -14,7 +15,8 @@ export function memberMoEnabled(env: NodeJS.ProcessEnv = process.env): boolean {
 }
 // Real sends need Co's X account too (email isn't wired for member Mo yet).
 export function memberMoCanSend(env: NodeJS.ProcessEnv = process.env): boolean {
-  return memberMoEnabled(env) && xWriteConfigured(env);
+  // Paused (services/proactivePause.ts): no member-Mo contact goes out; replies to someone who answered still do.
+  return memberMoEnabled(env) && !proactivePaused(env) && xWriteConfigured(env);
 }
 
 async function clubPaused(): Promise<boolean> {
@@ -53,7 +55,7 @@ export { queuePresentation };
 
 // Weekly: for each member who said yes to Mo and has no open batch, hunt from what Co remembers.
 export async function runMemberHunts(): Promise<{ hunted: number; stored: number }> {
-  if (!memberMoEnabled() || (await clubPaused())) return { hunted: 0, stored: 0 };
+  if (!memberMoEnabled() || proactivePaused() || (await clubPaused())) return { hunted: 0, stored: 0 };
   const { rows } = await pool.query(
     `SELECT o.user_id, o.voice_approved_at FROM mo_member_optin o JOIN users u ON u.id = o.user_id
      WHERE o.status = 'yes' AND o.paused_at IS NULL AND u.archived_at IS NULL AND (o.hunt_last_at IS NULL OR o.hunt_last_at < NOW() - INTERVAL '7 days')
@@ -76,7 +78,7 @@ export async function runMemberHunts(): Promise<{ hunted: number; stored: number
 
 // Daily: members who haven't been asked yet and have an ask a person could answer get the one offer.
 export async function runMemberOffers(): Promise<number> {
-  if (!memberMoEnabled() || (await clubPaused())) return 0;
+  if (!memberMoEnabled() || proactivePaused() || (await clubPaused())) return 0;
   const { enqueueCandidate } = await import("../harness/proactive.js");
   const { rows } = await pool.query(
     `SELECT u.id FROM users u LEFT JOIN mo_member_optin o ON o.user_id = u.id

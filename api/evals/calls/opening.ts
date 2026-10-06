@@ -112,7 +112,7 @@ check("the note is last in the call prompt", promptForElevenLabs(shared).trimEnd
 // ---- the agent's settings
 const cfg: any = buildAgentConfig({ name: "t", prompt: "p", voiceId: "v", apiUrl: "https://x.test" });
 check("the agent is no longer at temperature 0 (Hume ran at 1)", AGENT_DEFAULTS.temperature > 0.5 && AGENT_DEFAULTS.temperature <= 1 && cfg.conversation_config.agent.prompt.temperature === AGENT_DEFAULTS.temperature);
-check("the live voice defaults to Sonnet 4.6 and the override still wins (one variable back to Haiku)", AGENT_DEFAULTS.llm === "claude-sonnet-4-6" && cfg.conversation_config.agent.prompt.llm === "claude-sonnet-4-6" && (buildAgentConfig({ name: "t", prompt: "p", voiceId: "v", apiUrl: "https://x.test", llm: "claude-haiku-4-5" }) as any).conversation_config.agent.prompt.llm === "claude-haiku-4-5" && /ELEVENLABS_LLM/.test(read("src/scripts/pushElevenLabsAgent.ts")));
+check("the live voice defaults to Haiku 4.5 and the override still wins (one variable to try another model)", AGENT_DEFAULTS.llm === "claude-haiku-4-5" && cfg.conversation_config.agent.prompt.llm === "claude-haiku-4-5" && (buildAgentConfig({ name: "t", prompt: "p", voiceId: "v", apiUrl: "https://x.test", llm: "claude-sonnet-4-6" }) as any).conversation_config.agent.prompt.llm === "claude-sonnet-4-6" && /ELEVENLABS_LLM/.test(read("src/scripts/pushElevenLabsAgent.ts")));
 check("it can be set without code (ELEVENLABS_TEMPERATURE) and per build", /ELEVENLABS_TEMPERATURE/.test(read("src/scripts/pushElevenLabsAgent.ts")) && buildAgentConfig({ name: "t", prompt: "p", voiceId: "v", apiUrl: "https://x.test", temperature: 0.3 }).conversation_config.agent.prompt.temperature === 0.3);
 
 
@@ -165,7 +165,7 @@ check("no stock line survives anywhere in the built call prompt", stockLine(prom
   const built: string = cfg.conversation_config.agent.prompt.prompt;
   check("ElevenLabs reads numbers and dates as words", cfg.conversation_config.tts.text_normalisation_type === "elevenlabs");
   check("the opening can't be cut off by a hello", cfg.conversation_config.agent.disable_first_message_interruptions === true);
-  check("the backup model is the same family, pinned", cfg.conversation_config.agent.prompt.backup_llm_config.preference === "override" && cfg.conversation_config.agent.prompt.backup_llm_config.order[0] === AGENT_DEFAULTS.backupLlm && /^claude-sonnet/.test(AGENT_DEFAULTS.backupLlm));
+  check("the backup model is the same model by its dated id, pinned (never a slower one)", cfg.conversation_config.agent.prompt.backup_llm_config.preference === "override" && cfg.conversation_config.agent.prompt.backup_llm_config.order[0] === AGENT_DEFAULTS.backupLlm && /^claude-haiku-4-5/.test(AGENT_DEFAULTS.backupLlm));
   check("the suggested audio tags are the allowed cues", cfg.conversation_config.tts.suggested_audio_tags.map((x: any) => x.tag).join() === "warmly,softly,thoughtful,laughs");
   check("safety and the never list sit under a Guardrails heading near the end", built.includes("# Guardrails") && built.indexOf("# Guardrails") > built.indexOf("THE FOUR PHASES") && built.indexOf("# Guardrails") < built.indexOf("Discretion: you never speak for another member") && built.indexOf("Are you safe right now?") > built.indexOf("# Guardrails") && built.indexOf("Never apologizes for being AI") > built.indexOf("# Guardrails"));
   check("they are moved, not copied", built.split("Are you safe right now?").length === 2 && built.split("Never apologizes for being AI").length === 2);

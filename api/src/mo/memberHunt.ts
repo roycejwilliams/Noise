@@ -6,6 +6,7 @@
 // Leak rules (standing, and the same ones the team Mo keeps): a search query never carries a run of five words from
 // any member's ask, and never a member's name (queryLeaks); a person is kept only if the quote is theirs (quoteIsTheirs);
 // the member's name and ask reach a stranger only in the message the member approves later.
+import { isOpenAsk } from "../harness/profileWrite.js";
 import { anthropic } from "@ai-sdk/anthropic";
 import { generateText } from "ai";
 import pool from "../db/db.js";
@@ -84,7 +85,7 @@ export async function realOpenAsks(userId: string): Promise<string[]> {
   const { rows } = await pool.query(`SELECT intent FROM co_profiles WHERE user_id = $1`, [userId]).catch(() => ({ rows: [] as any[] }));
   const intent = Array.isArray(rows[0]?.intent) ? rows[0].intent : [];
   return intent
-    .filter((i: any) => i?.type === "seeking" && typeof i?.text === "string" && !i?.resolved_at && i?.status !== "resolved")
+    .filter((i: any) => isOpenAsk(i) && i?.type === "seeking") // an ask, never a goal (harness/profileWrite.ts)
     .map((i: any) => String(i.text))
     .reverse();
 }

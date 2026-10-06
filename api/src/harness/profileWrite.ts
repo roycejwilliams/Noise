@@ -62,8 +62,17 @@ export type OpenAsk = { askId: string; text: string; embedding: number[] | null 
 // co_profiles.intent for asks goes through these predicates so "is this an
 // ask" means one thing everywhere.
 
+// The hard type of every entry (Royce, 2026-10-06: "Split goals and asks - right now they're combined and it's causing the bugs").
+//   ask   an errand: something to find, answer or do. It feeds search, offers and check-ins, and lives under the ask lifecycle
+//         (services/askLifecycle.ts: states, expiry, evidence closes). It has an ask_checkins row.
+//   goal  direction: where they are headed. It feeds orientation and judgment only; it has NO ask_checkins row, so nothing that searches
+//         or checks in can reach it; it never expires and only changes when they change it.
+// An entry written before the split has no kind and reads as an ask (what it always was) until the reclassify pass types it.
+export type EntryKind = "ask" | "goal";
+
 export type IntentEntry = {
   id?: string;
+  kind?: EntryKind | null;
   text?: string | null;
   type?: string | null;
   status?: string | null;
@@ -81,8 +90,21 @@ export function hasAskText(entry: unknown): boolean {
   return typeof text === "string" && text.trim().length > 0;
 }
 
+export function entryKind(entry: unknown): EntryKind {
+  return (entry as IntentEntry | null)?.kind === "goal" ? "goal" : "ask";
+}
+
+// An open ASK: the one predicate every search, offer, match and check-in reads. A goal is never one.
 export function isOpenAsk(entry: unknown): boolean {
-  return hasAskText(entry) && (entry as IntentEntry).status === "active";
+  return hasAskText(entry) && (entry as IntentEntry).status === "active" && entryKind(entry) === "ask";
+}
+
+// An active GOAL: what orients and judges, read only by things that orient (never by anything that searches or checks in).
+export function isActiveGoal(entry: unknown): boolean {
+  return hasAskText(entry) && (entry as IntentEntry).status === "active" && entryKind(entry) === "goal";
+}
+export function goalEntries(intent: unknown): IntentEntry[] {
+  return Array.isArray(intent) ? (intent as IntentEntry[]).filter(isActiveGoal) : [];
 }
 
 export function askEntries(intent: unknown): IntentEntry[] {
