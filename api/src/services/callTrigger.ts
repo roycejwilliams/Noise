@@ -1,3 +1,4 @@
+import { proactivePaused } from "./proactivePause.js";
 import { isTestNumber } from "./testNumbers.js";
 import twilio from "twilio";
 import type { Server as IOServer } from "socket.io";
@@ -37,6 +38,8 @@ export async function triggerCallForUser(
   io: IOServer | null,
   auth: CallAuthorization | null = null,
 ): Promise<TriggerCallResult> {
+  // Paused: no call Co starts on its own (auto intake, check-in cadence). A call they asked for is not paused.
+  if (proactivePaused() && (auth?.kind === "auto_intake" || auth?.kind === "checkin_cadence")) return { success: false, error: "Proactive outreach is paused." };
   const userResult = await pool.query(
     `SELECT u.first_name, u.phone_number, u.subscription_status, u.call_status, u.call_status_updated_at
      FROM users u

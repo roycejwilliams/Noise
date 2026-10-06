@@ -22,6 +22,33 @@ touched = 0;
 await P.runProactiveDispatch({} as any).catch(() => {});
 check("not paused: the dispatcher reads its queue as before", touched > 0);
 check("the switch sits at the top of both doors, before any lock or insert", /export async function runProactiveDispatch\(registry: ProactiveRegistry\): Promise<void> \{\n  if \(proactivePaused\(\)\) return;/.test(src) && /if \(proactivePaused\(\)\) return \{ sent: false, reason: "proactive outreach is paused" \};\n  \/\/ Monitoring visibility/.test(src));
+// ---- automatic calls and Mo
+{
+  const { triggerCallForUser } = await import("../../src/services/callTrigger.js");
+  process.env.PROACTIVE_PAUSED = "true";
+  touched = 0;
+  const unprompted = await Promise.all([triggerCallForUser("u", null, { kind: "auto_intake" } as any), triggerCallForUser("u", null, { kind: "checkin_cadence" } as any)]);
+  check("paused: the automatic intake call and the check-in cadence call are not placed, and nothing is even read", unprompted.every((r: any) => r.success === false && /paused/.test(r.error)) && touched === 0);
+  for (const kind of ["user_initiated", "scheduled_call", "router_decision"]) {
+    touched = 0;
+    await triggerCallForUser("u", null, { kind } as any).catch(() => {});
+    check(`paused: a call they asked for (${kind}) is NOT paused: it still goes through the gate`, touched > 0);
+  }
+  const M = await import("../../src/mo/outreach.js");
+  process.env.MO_ENABLED = "true";
+  touched = 0;
+  await M.runMoOutreach(new Date("2026-10-06T19:00:00Z"));
+  check("paused: Mo's outbound outreach does nothing (no query, no send)", touched === 0);
+  check("paused: Mo's send tools refuse in plain words, so a team 'send now' can't go around it", /paused/.test(String(M.sendingBlocked({ ...process.env, MO_ENABLED: "true", PROACTIVE_PAUSED: "true" } as any))));
+  check("not paused: the same tools are unchanged", !/paused/.test(String(M.sendingBlocked({ MO_ENABLED: "true" } as any))));
+  delete process.env.MO_ENABLED;
+  const co = fs.readFileSync(new URL("../../src/mo/outreach.ts", import.meta.url), "utf8");
+  check("replies are not paused: the Mo inbox and everything a member or prospect sent is untouched", !/runMoInbox\(\): Promise<void> \{\s*if \([^)]*proactivePaused/.test(co));
+  delete process.env.PROACTIVE_PAUSED;
+}
+const ct = fs.readFileSync(new URL("../../src/services/callTrigger.ts", import.meta.url), "utf8");
+check("the call door checks the pause before anything else, for exactly these two kinds", /proactivePaused\(\) && \(auth\?\.kind === "auto_intake" \|\| auth\?\.kind === "checkin_cadence"\)/.test(ct) && ct.indexOf("proactivePaused()") < ct.indexOf("pool.query"));
+check("one definition of the switch, shared (services/proactivePause.ts)", /export function proactivePaused/.test(fs.readFileSync(new URL("../../src/services/proactivePause.ts", import.meta.url), "utf8")) && /export \{ proactivePaused \} from "..\/services\/proactivePause.js"/.test(src));
 console.log(`proactive pause: ${total - failed}/${total} passed`);
 if (failed) process.exitCode = 1;
 process.exit(failed ? 1 : 0);
