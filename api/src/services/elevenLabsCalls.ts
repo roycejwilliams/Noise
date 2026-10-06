@@ -15,6 +15,7 @@
 //
 // Hume is gone (Royce, 2026-10-03: "remove Hume, no reason to use it if
 // it's going to be deprecated"); every call runs here.
+import { CALL_PLATFORM_SETTINGS } from "./callEvals.js";
 import { CAPABILITY_SHEET } from "./callBriefing.js";
 import { DISCRETION_GUIDE } from "../harness/discretion.js";
 import { VARIETY_GUIDE } from "../harness/stockLines.js";
@@ -303,7 +304,7 @@ export function buildAgentConfig(o: {
     name: o.name,
     // Each call picks its own opening line (pickOpening), so the first message
     // must be overridable per call.
-    platform_settings: { overrides: { conversation_config_override: { agent: { first_message: true } } } },
+    platform_settings: { overrides: { conversation_config_override: { agent: { first_message: true } } }, ...CALL_PLATFORM_SETTINGS },
     conversation_config: {
       asr: { user_input_audio_format: "ulaw_8000", keywords: CALL_KEYWORDS },
       tts: {

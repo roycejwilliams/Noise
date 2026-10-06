@@ -509,6 +509,8 @@ router.post("/el/post-call", async (req: Request, res: Response, next: NextFunct
       return res.status(200).send({ success: false, reason: "unknown user" });
     }
     const conversationId = String(data.conversation_id ?? "");
+    // ElevenLabs graded the call against our criteria (services/callEvals.ts); the failures go where the morning review reads.
+    import("../services/callEvals.js").then((m) => m.recordCallEvaluation(userId, conversationId, data.analysis)).catch(() => {});
     const turns = Array.isArray(data.transcript) ? data.transcript : [];
     const { rows: u } = await pool.query(`SELECT id, first_name, phone_number, call_sid FROM users WHERE id = $1`, [userId]);
     // The call's own sid: ElevenLabs sends it on Twilio calls. Never the member's
