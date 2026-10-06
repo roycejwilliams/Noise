@@ -1242,6 +1242,7 @@ export async function sendExempt(opts: {
   // a refused one goes out plain (services/inlineReply.ts).
   replyTo?: string | null;
 }): Promise<{ sent: boolean; reason?: string; delivered?: string[] }> {
+  if (proactivePaused()) return { sent: false, reason: "proactive outreach is paused" };
   // Monitoring visibility (code review, 2026-09-17): send failures and
   // hours/opt-out blocks at send time had nothing writing a decision at
   // all, so harness/monitor.ts had no signal that could ever see them.
@@ -1682,7 +1683,15 @@ export async function dispatchForUser(registry: ProactiveRegistry, userId: strin
   });
 }
 
+// Co goes quiet: reactive only, no unprompted outreach (Royce, 2026-10-06, after a 7-day check-in about "chest tightness" from a
+// 9/29 test message). Set PROACTIVE_PAUSED=true to stop every proactive send at the two doors a message leaves by. Pending
+// candidates just wait (nothing is dropped); replies to people who text Co are not touched.
+export function proactivePaused(env: NodeJS.ProcessEnv = process.env): boolean {
+  return env.PROACTIVE_PAUSED === "true";
+}
+
 export async function runProactiveDispatch(registry: ProactiveRegistry): Promise<void> {
+  if (proactivePaused()) return;
   const expired = await pool.query(
     `UPDATE proactive_candidates SET status = 'expired', skip_reason = 'expired', decided_at = NOW(), updated_at = NOW()
      WHERE status = 'pending' AND expires_at IS NOT NULL AND expires_at <= NOW()
