@@ -17,6 +17,7 @@
 //             sentences are dropped. The reply is never blocked.
 //   record  — recordDecision(layer 3, "reply.grounding")
 //   eval    — evals/reply/run.ts
+import { attributedWithoutSource } from "./proactiveSpecifics.js";
 import { loadMilestones, storyLines } from "../services/milestones.js";
 import { ABILITIES, capabilitySheet } from "../services/capabilities.js";
 import { kitLines } from "../services/memberKit.js";
@@ -642,6 +643,16 @@ export function codeChecks(draft: string, rf: ReplyFacts, src: GroundingSources)
   }
   if (/\b((calling|ringing|dialing) you (right )?now|i'?m (calling|ringing|dialing) you|still (calling|ringing|dialing) you)\b/i.test(draft)) {
     checks.push({ name: "no_call_placed_claim", pass: false, reason: "says a call is happening, but this reply never places one" });
+  }
+  // "You've been prepping X" / "you told me X" must trace to something THEY said recently (this message, the recent thread's user lines,
+  // a live claim they made) or a fact this reply was given: never to Co's own earlier texts, and never to an old memory whose moment
+  // has passed (2026-10-06, "What's Friday?": Co defended "the pitch you've been prepping" from its own earlier message).
+  {
+    const theirs = [theirOwnWords(src.recentConversation), src.message].filter(Boolean).join("\n");
+    // Capability notes describe what Co can do ("can't find investors"), not what the member said: they back nothing here.
+    const given = rf.facts.filter((f) => f.kind !== "hint" && f.kind !== "capability").map((f) => f.text).join("\n");
+    const bad = attributedWithoutSource(draft, { their_own_words_recently: theirs, facts_given: given });
+    if (bad.length) checks.push({ name: "no_unsourced_attribution", pass: false, reason: `states back as theirs something they did not say lately: "${bad[0].text}". If they ask what you meant, say where it came from (what they said, and when) or that you have nothing from them on it; never defend your own earlier text as the source` });
   }
   if (callDenial(draft)) {
     checks.push({ name: "no_capability_denial", pass: false, reason: "says Co can't call, which is false" });
