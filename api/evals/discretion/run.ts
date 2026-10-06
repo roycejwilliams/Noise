@@ -4,6 +4,7 @@
 // briefly and honestly) and the one it gives now, and every reply is held to
 // the discretion checks. About $2 a run (16 reply-agent calls); nothing sent.
 //   npx tsx evals/discretion/run.ts
+import "../lib/requireMeter.js";
 import "dotenv/config";
 import { addFact, baseReplyFacts, addInstruction } from "../../src/harness/replyGrounding.js";
 import { runConversationReplyAgent } from "../../src/agent/conversationReply.js";

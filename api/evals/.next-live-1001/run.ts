@@ -2,6 +2,7 @@
 //   SUITE=delivery ONLY=all RUNS=1 npx --no-install tsx evals/.next-live-1001/run.ts > <fresh log> 2>&1
 //   PREFLIGHT_ONLY=1 npx --no-install tsx evals/.next-live-1001/run.ts
 // SUITE: matching|events|loops|onboarding|delivery|search|tiers|all. ONLY: case ids, or "all".
+import "../lib/requireMeter.js";
 import { H, secretsPresent, dbEndpoint, pg } from "./boot.js";
 import { execSync } from "node:child_process";
 

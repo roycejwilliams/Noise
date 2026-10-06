@@ -2,6 +2,7 @@
 // 2 public event, 3 opening) and outcome feedback. Tier 0 is only the intro
 // discriminator in follow-ups, never a recommendation tier. No membership-tier
 // ladder exists in the inspected code, so none is claimed.
+import "../lib/requireMeter.js";
 import { H } from "./boot.js";
 import { member, rows, ck, ID, PHONE, NAME, type Case } from "./fixtures.js";
 

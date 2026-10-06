@@ -6,6 +6,7 @@
 // lets it go out unread, so misses matter most; skips are saved time.
 //
 //   railway run --service co-test --environment dev -- npx tsx evals/grounding/switch.ts <replies.json>
+import "../lib/requireMeter.js";
 import { readFileSync } from "fs";
 
 process.env.SENDBLUE_API_API_KEY ||= "unused-in-tests";

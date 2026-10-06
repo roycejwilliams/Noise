@@ -3,6 +3,7 @@
 // Real model, no DB, nothing sent.
 //
 //   npx tsx evals/proactive/redraft.ts [runs]
+import "../lib/requireMeter.js";
 const { draftAgain, checkDraft } = await import("../../src/harness/proactive.js");
 const { draftCompanionCheckin } = await import("../../src/agent/companionCheckin.js");
 const recap = "Joined Co recently. Gave her name and email. Co asked what she's into and what keeps her busy; she hasn't said yet.";

@@ -7,6 +7,7 @@
 // Hard: the snapshot keeps a contradicted older fact, drops a newer one,
 // stores something about Co, or invents a feeling; the call audit misses an
 // invented fact or an unkeepable promise.
+import "../lib/requireMeter.js";
 import "dotenv/config";
 import { dirname } from "path";
 import { fileURLToPath } from "url";

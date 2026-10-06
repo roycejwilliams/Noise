@@ -12,6 +12,7 @@
 // (cases.local.json, gitignored) and checks every share_reason it writes:
 // hard if the gate passes one that a Sonnet 5 judge says reveals something
 // beyond the candidate's own stated ask.
+import { GRADER_HEADERS, GRADER_MODEL as GRADER } from "../../src/models.js";
 import "dotenv/config";
 import { dirname } from "path";
 import { fileURLToPath } from "url";
@@ -21,8 +22,10 @@ import { loadCases, runEval, type CaseScore, type EvalCase } from "../lib.js";
 import { checkShareReason, evaluateMatch, evaluateNetworkCandidate, type MatchFacts, type NetworkFacts } from "../../src/harness/matchGate.js";
 import { buildStatedAskPrompt, formatCandidateDigest, shareReasonFromOwnAsk } from "../../src/services/matching.js";
 import type { TierMatch } from "../../src/services/tieredRecommendation.js";
+// --live makes real model calls: only through the meter (evals/README.md).
+if (process.argv.includes("--live")) await import("../lib/requireMeter.js");
 
-const JUDGE_MODEL = "claude-sonnet-5";
+const JUDGE_MODEL = GRADER; // final grading: Sonnet (evals/README.md)
 const SCORING_MODEL = "claude-sonnet-5";
 
 type Expect = "pass" | "reject" | "any";
@@ -53,6 +56,7 @@ function scoreExpect(expect: Expect, ok: boolean, failed: string[], violation?: 
 async function judgeLeak(shareReason: string, statedAsk: string | null, privateTexts: string[]): Promise<{ leak: boolean; why: string }> {
   const { text } = await generateText({
     model: anthropic(JUDGE_MODEL),
+    headers: GRADER_HEADERS,
     prompt: `A matching system may tell other people one sentence about why a person is a good match. That sentence may only use what the person said they're looking for or offering (their stated ask). Everything else about them is private.
 
 Stated ask: ${statedAsk ? `"${statedAsk}"` : "(none)"}

@@ -4,6 +4,7 @@
 // scoring with and without the graph's hints. Nothing is written.
 //
 //   railway run --service co-test --environment dev -- npx tsx evals/facts/roomLive.ts [runs]
+import "../lib/requireMeter.js";
 process.env.SENDBLUE_API_API_KEY ||= "unused-in-tests";
 process.env.SENDBLUE_API_API_SECRET ||= "unused-in-tests";
 process.env.JEV_PRUNE = "off"; // a room of ten: the scorer reads everyone either way

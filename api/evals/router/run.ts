@@ -10,10 +10,12 @@
 // hit yet. Baseline mode scores the `current` outputs the old independent
 // classifiers actually produced, mapped the way routes/sendblue.ts acted on
 // them; synthetic cases have no baseline and are skipped there.
+import "../lib/requireMeter.js";
 import "dotenv/config";
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "fs";
 import { dirname, join } from "path";
 import { fileURLToPath } from "url";
+import { sampleCases } from "../lib.js";
 import {
   NO_ROUTE,
   ROUTER_MODEL,
@@ -179,6 +181,7 @@ async function main() {
   let cases = loadCases();
   if (mode === "baseline") cases = cases.filter((c) => c.current);
   if (sample === "parity") cases = cases.filter((c, i) => c.source === "synthetic" || i % 8 === 0);
+  cases = sampleCases(cases, here);
 
   const results = await pool(cases, mode === "baseline" ? cases.length : concurrency, async (c) => {
     if (mode === "baseline") {

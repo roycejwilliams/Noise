@@ -9,6 +9,7 @@
 //   OPENING="..."       the opening line to set for the call (default: the agent's own)
 //   RUN_TAG=name        results go to <clips dir>cue-runs-<name>.json (default cue-runs.json)
 // The clips dir holds audio/<id>.wav and calls/<name>.json (calls.py in the pilot).
+import "../lib/requireMeter.js";
 import "dotenv/config";
 import { readFileSync, writeFileSync } from "fs";
 import WebSocket from "ws";

@@ -949,8 +949,10 @@ export async function printReview(opts: { since?: string; until?: string; model?
 
 // The morning job: the last 24 hours, stored, and emailed to Royce only
 // (services/reportEmail.ts). No longer texted (Royce, 2026-09-30).
-export async function runMorningReview(now = new Date()): Promise<void> {
-  if (!reviewEnabled()) return;
+// Never scheduled any more (Royce, 2026-10-06: "No more morning emails"). Sends the digest email only when called by hand
+// with { force: true }; the daily cron that used to call it is gone.
+export async function runMorningReview(now = new Date(), opts: { force?: boolean } = {}): Promise<void> {
+  if (!reviewEnabled() || !opts.force) return;
   try {
     const since = new Date(now.getTime() - 24 * 60 * 60 * 1000);
     const { flags, names } = await reviewWindow(since, now);

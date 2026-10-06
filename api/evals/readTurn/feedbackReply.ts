@@ -1,4 +1,5 @@
 // Does the read's feedback reminder get Co to save it with its tool? Dry run.
+import "../lib/requireMeter.js";
 process.env.SENDBLUE_API_API_KEY ||= "unused-in-tests";
 process.env.SENDBLUE_API_API_SECRET ||= "unused-in-tests";
 const { runConversationReplyAgent } = await import("../../src/agent/conversationReply.js");

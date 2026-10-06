@@ -10,3 +10,10 @@ export const MODELS = {
   sonnet: "claude-sonnet-5",
   haiku: "claude-haiku-4-5-20251001",
 } as const;
+
+// Layer 2 evals (api/evals/README.md): every model call is run on Haiku to keep the spend small, except the final
+// grading of an output, which is Sonnet. A grader marks its call with GRADER_HEADERS; the meter
+// (evals/lib/meter.mjs) lets only those through as Sonnet and rewrites everything else to Haiku. In production this
+// has no effect: the header is ignored by the API.
+export const GRADER_MODEL = MODELS.sonnet;
+export const GRADER_HEADERS = { "x-eval-role": "grader" } as const;

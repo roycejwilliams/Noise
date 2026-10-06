@@ -27,6 +27,8 @@ import { candidateChecks, type Candidate } from "../../src/harness/proactive.js"
 import { MODELS } from "../../src/models.js";
 import { runConversationReplyAgent } from "../../src/agent/conversationReply.js";
 import { baseReplyFacts } from "../../src/harness/replyGrounding.js";
+// --live makes real model calls: only through the meter (evals/README.md).
+if (process.argv.includes("--live")) await import("../lib/requireMeter.js");
 
 type Case = EvalCase & Record<string, any>;
 const here = dirname(fileURLToPath(import.meta.url));

@@ -10,6 +10,8 @@
 //
 //   railway run --service co-test --environment dev -- npx tsx evals/grounding/falseFlags.ts <dump.json> judge <judged.json>
 //   railway run --service co-test --environment dev -- npx tsx evals/grounding/falseFlags.ts <dump.json> replay <judged.json>
+import { GRADER_HEADERS } from "../../src/models.js";
+import "../lib/requireMeter.js";
 import { readFileSync, writeFileSync } from "fs";
 import { anthropic } from "@ai-sdk/anthropic";
 import { generateText } from "ai";
@@ -95,7 +97,7 @@ For each: "true" if the context shows it was accurate, "false" if the context sh
 
 Return ONLY JSON: {"verdicts": [{"i": 0, "verdict": "true" | "false" | "unclear", "backedBy": "record" | "conversation" | "capability" | "asks_or_searches" | "other" | null, "why": "one short line"}]}`;
         try {
-          const { text } = await generateText({ model: anthropic(GRADER_MODEL), maxOutputTokens: 4000, prompt });
+          const { text } = await generateText({ model: anthropic(GRADER_MODEL), headers: GRADER_HEADERS, maxOutputTokens: 4000, prompt });
           const v = parseModelJson<{ verdicts?: any[] }>(text).verdicts ?? [];
           flagged.forEach((f, i) => {
             const x = v.find((y) => y.i === i) ?? {};

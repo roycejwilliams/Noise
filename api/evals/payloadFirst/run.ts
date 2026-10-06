@@ -2,6 +2,7 @@
 // drafts, each with whether Co should do the work instead of asking. Uses the
 // Anthropic key (about $0.05 a run); no database, nothing sent.
 //   npx tsx evals/payloadFirst/run.ts
+import "../lib/requireMeter.js";
 import "dotenv/config";
 import { decidePayloadFirst, readOffer, theirText } from "../../src/harness/payloadFirst.js";
 

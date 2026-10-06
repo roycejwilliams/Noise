@@ -1,3 +1,4 @@
+import "../lib/requireMeter.js";
 import "dotenv/config";
 import { readFileSync } from "fs";
 process.env.SENDBLUE_API_API_KEY ||= "x"; process.env.SENDBLUE_API_API_SECRET ||= "x";

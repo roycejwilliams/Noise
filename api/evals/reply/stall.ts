@@ -5,6 +5,7 @@
 //
 //   REPLY_TEST_STALL_CALL=1,2 REPLY_CALL_TIMEOUT_MS=15000 railway run --service co-test --environment dev -- npx tsx evals/reply/stall.ts
 //   REPLY_TEST_STALL_CALL=2,3 REPLY_CALL_TIMEOUT_MS=15000 railway run --service co-test --environment dev -- npx tsx evals/reply/stall.ts
+import "../lib/requireMeter.js";
 process.env.SENDBLUE_API_API_KEY ||= "x"; process.env.SENDBLUE_API_API_SECRET ||= "x";
 const keepAlive = setInterval(() => {}, 1000);
 const { setSwitchesForTest } = await import("../../src/services/abilitySwitches.js"); setSwitchesForTest({});

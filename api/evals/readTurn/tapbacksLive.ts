@@ -5,6 +5,7 @@
 // Real model, no DB, nothing sent. About $0.40.
 //
 //   railway run npx tsx evals/readTurn/tapbacksLive.ts
+import "../lib/requireMeter.js";
 import "dotenv/config";
 process.env.SENDBLUE_API_API_KEY ||= "x";
 process.env.SENDBLUE_API_API_SECRET ||= "x";

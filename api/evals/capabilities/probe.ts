@@ -7,6 +7,7 @@
 // Co's tools, only `handled` below changes, so the scores stay comparable.
 //
 //   railway run --service co-test --environment dev -- npx tsx evals/capabilities/probe.ts [out.local.json]
+import "../lib/requireMeter.js";
 import { writeFileSync } from "fs";
 
 process.env.SENDBLUE_API_API_KEY ||= "unused-in-tests";

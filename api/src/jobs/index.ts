@@ -27,7 +27,7 @@ import { enqueueCandidate, runProactiveDispatch, sendExempt } from "../harness/p
 import { proactiveRegistry } from "../harness/proactiveRegistry.js";
 import { runMonitor, runWeeklyReview } from "../harness/monitor.js";
 import { typesWithPurpose } from "../harness/proactivePurpose.js";
-import { reviewEnabled, runMorningReview } from "../harness/devReview.js";
+import { reviewEnabled } from "../harness/devReview.js";
 import { expireStaleAsks } from "../services/askExpiry.js";
 import { classifyOpenAsks, syncClosedAsks } from "../services/askKind.js";
 import { companionPayloadFor } from "../harness/memberThreads.js";
@@ -765,12 +765,9 @@ export function registerJobs(io: Server) {
   // Decision log monitoring: hourly spike alerts, weekly review email
   // (harness/monitor.ts). Paused (Royce, 2026-09-15: "Pause 4 for now");
   // set MONITORING_ENABLED=true to turn it back on.
-  // The dev-only morning "what broke" review, texted to Royce at 8am Pacific
-  // (harness/devReview.ts). Independent of the paused spike alerts below.
+  // The morning "what broke" email is OFF (Royce, 2026-10-06: "No more morning emails"): no 8am run, no email, and no
+  // daily model spend on it. Read the same digest on demand with `npm run broke` (prints, never sends).
   if (reviewEnabled()) {
-    cron.schedule("0 8 * * *", () => {
-      runMorningReview().catch((err: any) => console.error("dev review cron error:", err?.message ?? err));
-    }, { timezone: "America/Los_Angeles" });
     // The shadow week (services/sweepShadow.ts): Co's sweep selection on
     // Royce's real candidates, after the 9am sweep, sending nothing. Read with
     // `npm run shadow`.

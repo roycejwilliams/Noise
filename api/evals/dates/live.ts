@@ -3,6 +3,7 @@
 // through the real reply and claim check. Dry run.
 //
 //   railway run --service co-test --environment dev -- npx tsx evals/dates/live.ts [runs]
+import "../lib/requireMeter.js";
 process.env.SENDBLUE_API_API_KEY ||= "unused-in-tests";
 process.env.SENDBLUE_API_API_SECRET ||= "unused-in-tests";
 const { setSwitchesForTest } = await import("../../src/services/abilitySwitches.js");

@@ -2,6 +2,7 @@
 // asks (Sonnet 5, a few cents). Nothing is sent.
 //
 //   railway run --service co-test --environment dev -- npx tsx evals/outsideEvents/live.ts
+import "../lib/requireMeter.js";
 import "dotenv/config";
 import { generateText } from "ai";
 import { anthropic } from "@ai-sdk/anthropic";

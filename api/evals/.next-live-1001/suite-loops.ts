@@ -3,6 +3,7 @@
 // TEMP shadows, so it can only ever see fixture members.
 // Time: NOW() is fixed within a case. Where a scenario needs time to pass
 // between two syncs, the fixture backdates seen_at/woke_at; each case says so.
+import "../lib/requireMeter.js";
 import { DBC, settle } from "./db.js";
 import { member, rows, ck, PHONE, ID, NAME, type Case } from "./fixtures.js";
 
