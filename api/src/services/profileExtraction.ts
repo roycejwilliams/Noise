@@ -70,6 +70,8 @@ export type ExtractedIntent = {
   text?: string;
   // The hard type (harness/profileWrite.ts EntryKind): an ask is an errand with a lifecycle; a goal is direction and has none.
   kind?: "ask" | "goal";
+  // A goal is dated by when it was set or last confirmed (services/goalJourney.ts): its seasonal check-in clock.
+  confirmed_at?: string;
   type?: "seeking" | "offering";
   // Named, concrete things mentioned — a specific gym, a coffee style, a
   // venue type — not a vague vibe. Recommendation/Event both need this
@@ -840,10 +842,8 @@ export async function storeProfile(
   // so the same resolution pass that clears a stale goal/blocker can also
   // retire a relevance_edges row and stop further check-ins on an ask that's
   // already resolved.
-  const { rows: openAskRows } = await pool.query(
-    `SELECT ask_id, ask_text FROM ask_checkins WHERE user_id = $1 AND resolved_at IS NULL`,
-    [user_id],
-  );
+  // Errands AND goals, so a goal can close at their word (services/goalJourney.ts); only the member's own quoted words close either.
+  const openAskRows = await (await import("./goalJourney.js")).openErrandsAndGoals(user_id);
   const openAsks = opts.precomputed?.openAsks ?? openAskRows.map((r: any) => ({ id: r.ask_id as string, text: r.ask_text as string }));
   const pre = opts.precomputed;
 
@@ -856,7 +856,7 @@ export async function storeProfile(
     long_term_direction: existing?.long_term_direction ?? null,
     availability_pattern: existing?.availability_pattern ?? null,
   };
-  const [{ resolvedGoals, resolvedBlockers, resolvedAskIds }, corrections, pastCorrections] = await Promise.all([
+  let [{ resolvedGoals, resolvedBlockers, resolvedAskIds }, corrections, pastCorrections] = await Promise.all([
     pre
       ? applyResolutionOutput(pre.resolutionRaw, transcript, existing?.goals ?? [], existing?.blockers ?? [], openAsks, user_id)
       : assessResolvedItems(transcript, existing?.goals ?? [], existing?.blockers ?? [], openAsks, user_id),
@@ -1028,6 +1028,14 @@ export async function storeProfile(
   // retires its relevance_edges rows (proof that Stage 3's call didn't need
   // to be acted on to be right) and stops further Stage 5 check-ins on it.
   if (resolvedAskIds.length) {
+    // A goal closes only at their word, and when it does it is a companion moment, not a status flip (services/goalJourney.ts).
+    const { rows: prof } = await pool.query(`SELECT intent FROM co_profiles WHERE user_id = $1`, [user_id]);
+    const goalIds = new Set<string>((Array.isArray(prof[0]?.intent) ? prof[0].intent : []).filter((e: any) => e?.kind === "goal" && e?.status === "active").map((e: any) => String(e.id)));
+    const closedGoals = resolvedAskIds.filter((id) => goalIds.has(id));
+    for (const id of closedGoals) await (await import("./goalJourney.js")).closeGoal(user_id, id, null);
+    resolvedAskIds = resolvedAskIds.filter((id) => !goalIds.has(id));
+  }
+  if (resolvedAskIds.length) {
     await pool.query(
       `UPDATE ask_checkins SET resolved_at = NOW(), closed_reason = COALESCE(closed_reason, 'member') WHERE user_id = $1 AND ask_id = ANY($2::text[])`,
       [user_id, resolvedAskIds],
@@ -1125,7 +1133,7 @@ export type IntentScope = "last_user_message" | "whole_transcript";
 // A whole call yielding more than a handful of distinct asks means the pass
 // went wrong (every answer read as a new request), not that the member made
 // six requests. Cap rather than write the mess.
-const MAX_ASKS_PER_CAPTURE = 5;
+const MAX_ASKS_PER_CAPTURE = 8;
 
 // Ambient intent capture — one Haiku pass, extended (not duplicated) to
 // also pull named concrete preferences, things mentioned as missed/wanted,
@@ -1144,7 +1152,7 @@ export function captureIntentPrompt(transcript: string, scope: IntentScope = "la
       : `Take it from the LAST user message, using the earlier conversation only to understand it — anything they asked for before that is context they already said, not a new ask. Return at most one ask, and none at all when that last message isn't asking for or offering something.`;
   return `Read this transcript and extract four things. Only include what's actually stated by the user (the "user:" lines) — never guess or infer beyond what's said, and never treat something Co (the "assistant:" lines) said as if the user said it. A question Co asked that the user never answered is not an ask.
 
-1. asks — specific things they are actively seeking or could offer to others (a connection, an introduction, a resource, expertise, a kind of event or community). Each one is a single clear sentence, classified as 'seeking' or 'offering'. ${askScope} None of these is ever an ask: small talk, thanks, feedback about Co, questions about Co itself ("how can you improve?", "anything you need to ask me?"), logistics, or answers to Co's questions about them.
+1. asks — specific things they are actively seeking or could offer to others (a connection, an introduction, a resource, expertise, a kind of event or community). Each one is a single clear sentence, classified as 'seeking' or 'offering'. ${askScope} None of these is ever an ask: small talk, thanks, feedback about Co, questions about Co itself ("how can you improve?", "anything you need to ask me?"), logistics, or answers to Co's questions about them. ALSO include, as their own entries, the DIRECTION they said they are moving toward over the next few months (for example "get Co in front of users", "raise a pre-seed round"): those are goals, and they are typed when they are stored. If Co played back what it is carrying for them in this conversation and they corrected it, the CORRECTED version is the final list: extract from the correction, not from the first version.
 2. concrete_preferences — named, specific things they mentioned liking or wanting, not vague vibes. A specific gym or workout style, a coffee/drink preference, a type of venue or neighborhood, a specific activity. "SoulCycle", "oat milk lattes", "speakeasy-style bars" — not "fitness" or "good coffee".
 3. wants — things they said they miss or want to find (a running group, a book club, a version of something from a previous city).
 4. availability — their stated GENERAL, RECURRING availability pattern, in their own words (e.g. "weekday evenings", "usually free on weekends"). A one-off request for a specific call or meeting at a specific time ("call me at 2pm today", "can we talk Thursday morning") is NOT a recurring availability pattern — leave this null for those, even if a specific time or day appears in the transcript. Only fill this in when they're describing when they're generally free, not when they want THIS ONE call to happen.
@@ -1372,6 +1380,7 @@ export async function persistCapturedIntent(
   const newIntent: ExtractedIntent = {
     id: intentId,
     ...(ask ? { text: ask.text, type: ask.type, kind: kind! } : {}),
+    ...(kind === "goal" ? { confirmed_at: new Date().toISOString() } : {}),
     concrete_preferences,
     wants,
     availability,

@@ -93,7 +93,7 @@ check("the same ask twice in one pass is one ask", normalizeCapturedAsks(dupes, 
 
 // A runaway pass (every answer read as a request) gets capped, not written.
 const many = { asks: Array.from({ length: 12 }, (_, i) => ({ text: `ask number ${i}`, type: "seeking" as const })), concrete_preferences: [], wants: [], availability: null };
-check("a runaway call capture is capped", normalizeCapturedAsks(many, "whole_transcript").length <= 5);
+check("a runaway call capture is capped (8: a discovery call can carry goals and asks)", normalizeCapturedAsks(many, "whole_transcript").length === 8);
 
 // The pre-2026-09-20 single-ask JSON shape still parses, so a model reply
 // that falls back to the old key isn't silently dropped.

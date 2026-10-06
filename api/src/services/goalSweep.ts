@@ -28,6 +28,11 @@ export const GOAL_SWEEP_SQL = `SELECT u.id AS user_id, u.first_name, u.phone_num
    AND (pss.last_attempted_at IS NULL OR pss.last_attempted_at <= NOW() - INTERVAL '${GOAL_SWEEP_EVERY_HOURS} hours')
  LIMIT ${GOAL_SWEEP_BATCH}`;
 
+export function goalSweepGoals(row: { goals?: string[] | null; intent?: unknown }): string[] | null {
+  const g = [...new Set([...(row.goals ?? []), ...goalEntries(row.intent).map((e) => String(e.text).trim())].filter(Boolean))];
+  return g.length ? g : null;
+}
+
 // What the search is told about where they are headed. Goal entries and profile direction only: never an ask's text.
 export function goalSweepContext(row: { goals?: string[] | null; activity_preferences?: string[] | null; long_term_direction?: string | null; intent?: unknown }): string | null {
   const intents = Array.isArray(row.intent) ? (row.intent as any[]) : [];
@@ -58,7 +63,7 @@ const realDeps: GoalSweepDeps = {
   rows: async () => (await pool.query(GOAL_SWEEP_SQL)).rows,
   mark: async (userId) => { await pool.query(`INSERT INTO profile_surfacing_state (user_id, last_attempted_at) VALUES ($1, NOW()) ON CONFLICT (user_id) DO UPDATE SET last_attempted_at = NOW()`, [userId]); },
   surface: async (row, context) => {
-    await attemptEventSurfacing({ askId: PROFILE_ASK_ID, userId: row.user_id, firstName: row.first_name, phoneNumber: row.phone_number, askText: context, fromProfile: true, city: row.city ?? null, goals: row.goals ?? null, activityPreferences: row.activity_preferences ?? null, cooldownCleared: row.cooldown_cleared });
+    await attemptEventSurfacing({ askId: PROFILE_ASK_ID, userId: row.user_id, firstName: row.first_name, phoneNumber: row.phone_number, askText: context, fromProfile: true, city: row.city ?? null, goals: goalSweepGoals(row), activityPreferences: row.activity_preferences ?? null, cooldownCleared: row.cooldown_cleared });
   },
 };
 

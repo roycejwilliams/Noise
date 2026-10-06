@@ -99,7 +99,11 @@ export type ProactiveType =
   // After the member tells Co who they met: what stood out, and a note per person for them to send (services/eventFollowThrough.ts).
   | "event_followthrough"
   // The one "still on your plate?" ask for a loop nobody has signalled on for a week (services/loopLifecycle.ts, 2026-10-06).
-  | "loop_check";
+  | "loop_check"
+  // Rare, seasonal check-in on a goal (services/goalJourney.ts): never on the 7-day ask clock.
+  | "goal_checkin"
+  // A goal closed at their word: a companion moment that acknowledges the arc, not a status flip.
+  | "goal_closed";
 
 // co_event: Co's own event, announced to nearby users on creation (services/coEventAnnouncement.ts).
 // direct_ask: a reply-triggered direct ask to a THIRD person who didn't just
@@ -154,6 +158,9 @@ export const TYPE_POLICY: Record<ProactiveType, TypePolicy> = {
   event_followthrough: { priority: 93 },
   // Once per loop (its own target key); it is a question, so it is the lowest of the companion kind.
   loop_check: { priority: 12, typeGapDays: 3 },
+  // Seasonal: one in eight weeks at most (also enforced where it is queued); the closing moment is a reply to what they said.
+  goal_checkin: { priority: 9, typeGapDays: 56 },
+  goal_closed: { priority: 86 },
 };
 
 export const RULES = {
@@ -234,6 +241,7 @@ export type PickState = {
 // holding it would isolate them from the room.
 export const HOLD_WHILE_STRUGGLING = new Set<ProactiveType>([
   "ask_checkin",
+  "goal_checkin",
   "product_update",
   "calendar_follow",
 ]);
@@ -498,7 +506,7 @@ const QUOTA_CHECKS = new Set(["daily_cap", "weekly_cap", "unanswered_pause", "en
 //     after a call they were on.
 // Discovery: profile offers, guest-match nudges. Companion check-ins (advice
 // follow-ups too) keep their own 4-day rhythm and the daily cap, as before.
-const ANSWERING_TYPES = new Set<string>(["network_tease", "ask_checkin", "window_followup", "debrief", "pre_arrival", "post_call", "event_followthrough"]);
+const ANSWERING_TYPES = new Set<string>(["network_tease", "ask_checkin", "window_followup", "debrief", "pre_arrival", "post_call", "event_followthrough", "goal_closed"]);
 export function isAnswering(c: Pick<Candidate, "type" | "payload">): boolean {
   const p = (c.payload ?? {}) as { askId?: string | null; fromProfile?: boolean; again?: boolean };
   if (ANSWERING_TYPES.has(c.type)) return true;

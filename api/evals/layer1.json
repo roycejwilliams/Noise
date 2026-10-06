@@ -92,6 +92,7 @@
     "evals/proactive/pause.ts",
     "evals/testmember/simGuard.ts",
     "evals/asks/lifecycle.ts",
-    "evals/asks/split.ts"
+    "evals/asks/split.ts",
+    "evals/asks/journey.ts"
   ]
 }

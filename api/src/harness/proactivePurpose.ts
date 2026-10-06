@@ -25,6 +25,8 @@ export const PROACTIVE_PURPOSE: Record<ProactiveType | ExemptType | "in_room", P
   brief_name_ask: "offer",
   event_followthrough: "companion",
   loop_check: "companion",
+  goal_checkin: "companion",
+  goal_closed: "companion",
   co_event: "offer",
   direct_ask: "offer",
   search_result: "offer",
