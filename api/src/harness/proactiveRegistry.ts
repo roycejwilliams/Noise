@@ -168,6 +168,8 @@ export const proactiveRegistry: ProactiveRegistry = {
   network_tease: {
     async draft(c, person) {
       const candidate = c.payload.candidate;
+      // A closed ask makes no offers (services/askLifecycle.ts).
+      if (!(await (await import("../services/askLifecycle.js")).askIsOpenRef(c.userId, c.payload.askId))) return skip("their ask has since closed");
       const text = await draftProactive({
         functionId: "networkIntroNudge.tease.draft",
         firstName: person.firstName,
@@ -200,6 +202,10 @@ export const proactiveRegistry: ProactiveRegistry = {
 
   ask_checkin: {
     async draft(c, person) {
+      // A closed ask produces nothing, and an ask Co has already answered or delivered closes here, before any text is written
+      // (services/askLifecycle.ts): the check-in is re-checked at send time, not only when it was queued.
+      const gate = await (await import("../services/askLifecycle.js")).checkinGate(c.userId, (c.payload as AskCheckinPayload).askCheckinId);
+      if (!gate.ok) return skip(gate.why);
       const r = await draftAskCheckin(person.firstName, c.payload as AskCheckinPayload);
       return r ? { messages: [r.text], ...r } : skip("model chose SKIP");
     },

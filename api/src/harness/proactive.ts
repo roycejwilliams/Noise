@@ -23,7 +23,7 @@
 // still enforces the idempotency key and, where asked, local hours. Layer 6
 // in-room nudges during a live event are owned by eventScoring.ts and stay
 // outside this harness.
-import { proactivePaused } from "../services/proactivePause.js";
+import { proactivePaused, pausedTypes } from "../services/proactivePause.js";
 import { brandSafe } from "../services/brandGuard.js";
 import { feedbackFor, unbackedSpecifics } from "./proactiveSpecifics.js";
 import { generateText } from "ai";
@@ -1430,8 +1430,8 @@ export async function dispatchForUser(registry: ProactiveRegistry, userId: strin
   if (hold.rows[0]?.space_until && new Date(hold.rows[0].space_until) > new Date()) return;
 
   const { rows: candRows } = await pool.query(
-    `SELECT * FROM proactive_candidates WHERE user_id = $1 AND status = 'pending'`,
-    [userId],
+    `SELECT * FROM proactive_candidates WHERE user_id = $1 AND status = 'pending' AND NOT (type = ANY($2::text[]))`,
+    [userId, pausedTypes()],
   );
   const state: PickState = {
     now: new Date(),

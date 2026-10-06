@@ -51,10 +51,11 @@ export async function classifyOpenAsks(limit = 25): Promise<number> {
 // active; "what are you looking out for me" and live searches kept using
 // them). Closes the check-in row, marks the intent entry resolved, and
 // retires any open matches for it.
-export async function closeAsk(userId: string, askId: string, reason: string): Promise<boolean> {
+export async function closeAsk(userId: string, askId: string, reason: string, evidence: string | null = null): Promise<boolean> {
+  // Why it closed, and the proof (services/askLifecycle.ts): member | answered | delivered | moved_on | co | archived. The first reason stays.
   const { rowCount } = await pool.query(
-    `UPDATE ask_checkins SET resolved_at = COALESCE(resolved_at, NOW()) WHERE user_id = $1 AND ask_id = $2`,
-    [userId, askId],
+    `UPDATE ask_checkins SET resolved_at = COALESCE(resolved_at, NOW()), closed_reason = COALESCE(closed_reason, $3), closed_evidence = COALESCE(closed_evidence, $4) WHERE user_id = $1 AND ask_id = $2`,
+    [userId, askId, reason.slice(0, 40), evidence],
   );
   await markIntentResolved(userId, [askId]);
   await pool

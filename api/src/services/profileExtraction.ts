@@ -1026,7 +1026,7 @@ export async function storeProfile(
   // to be acted on to be right) and stops further Stage 5 check-ins on it.
   if (resolvedAskIds.length) {
     await pool.query(
-      `UPDATE ask_checkins SET resolved_at = NOW() WHERE user_id = $1 AND ask_id = ANY($2::text[])`,
+      `UPDATE ask_checkins SET resolved_at = NOW(), closed_reason = COALESCE(closed_reason, 'member') WHERE user_id = $1 AND ask_id = ANY($2::text[])`,
       [user_id, resolvedAskIds],
     );
     // And in the profile, so it stops being listed as open (askKind.ts).

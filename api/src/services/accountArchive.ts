@@ -32,7 +32,7 @@ export async function archiveAccount(userId: string): Promise<{ archived: boolea
       await client.query("ROLLBACK");
       return { archived: false };
     }
-    await client.query(`UPDATE ask_checkins SET resolved_at = NOW() WHERE user_id = $1 AND resolved_at IS NULL`, [userId]);
+    await client.query(`UPDATE ask_checkins SET resolved_at = NOW(), closed_reason = COALESCE(closed_reason, 'archived') WHERE user_id = $1 AND resolved_at IS NULL`, [userId]);
     await client.query(
       `UPDATE proactive_candidates SET status = 'skipped', skip_reason = 'account archived', decided_at = NOW(), updated_at = NOW()
        WHERE user_id = $1 AND status = 'pending'`,
