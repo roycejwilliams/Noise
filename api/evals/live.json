@@ -1,0 +1,66 @@
+{
+  "_": "Layer 2: live evals. Run nightly or on request by `npm run evals:nightly`, under the meter (evals/lib/meter.mjs): Haiku for everything, Sonnet only for grading, a hard token/cost cap, the cost printed. `sample` = cases per suite, highest-signal first (evals/lib.ts sampleCases).",
+  "caps": {
+    "tokens": 500000,
+    "usd": 1.0
+  },
+  "suites": [
+    {
+      "name": "router",
+      "args": [
+        "evals/router/run.ts",
+        "--mode",
+        "router"
+      ],
+      "sample": 6
+    },
+    {
+      "name": "reply gate",
+      "args": [
+        "evals/reply/run.ts",
+        "--mode",
+        "gate"
+      ],
+      "sample": 6
+    },
+    {
+      "name": "capture",
+      "args": [
+        "evals/capture/run.ts"
+      ],
+      "sample": 6
+    },
+    {
+      "name": "emotion",
+      "args": [
+        "evals/emotion/run.ts",
+        "--live"
+      ],
+      "sample": 6
+    },
+    {
+      "name": "intro",
+      "args": [
+        "evals/intro/run.ts",
+        "--live"
+      ],
+      "sample": 4
+    },
+    {
+      "name": "details",
+      "args": [
+        "evals/details/run.ts",
+        "--live"
+      ],
+      "sample": 4
+    },
+    {
+      "name": "proactive",
+      "args": [
+        "evals/proactive/run.ts",
+        "--live"
+      ],
+      "sample": 4
+    }
+  ]
+}

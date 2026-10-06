@@ -10,6 +10,8 @@ import { dirname } from "path";
 import { fileURLToPath } from "url";
 import { captureEnabled, classifyIssue, mayBeIssueReport } from "../../src/services/issueReports.js";
 import { runEval, type CaseScore, type EvalCase } from "../lib.js";
+// --live makes real model calls: only through the meter (evals/README.md).
+if (process.argv.includes("--live")) await import("../lib/requireMeter.js");
 
 type Case = EvalCase & { message: string; recentConversation?: string; isIssue: boolean; category?: string };
 

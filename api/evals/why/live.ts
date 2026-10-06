@@ -3,6 +3,7 @@
 // asks and threads. Real models, no DB, nothing sent.
 //
 //   railway run --service co-test --environment dev -- npx tsx evals/why/live.ts [runs]
+import "../lib/requireMeter.js";
 process.env.SENDBLUE_API_API_KEY ||= "unused-in-tests";
 process.env.SENDBLUE_API_API_SECRET ||= "unused-in-tests";
 const { runConversationReplyAgent } = await import("../../src/agent/conversationReply.js");

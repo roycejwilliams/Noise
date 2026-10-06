@@ -1,4 +1,5 @@
 // Live check, 8 replies (about $0.30). Run: railway run npx tsx evals/companion/adviceLive.ts
+import "../lib/requireMeter.js";
 import "dotenv/config";
 process.env.SENDBLUE_API_API_KEY ||= "unused-in-tests";
 const { runConversationReplyAgent } = await import("../../src/agent/conversationReply.js");

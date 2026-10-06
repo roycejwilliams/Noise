@@ -5,6 +5,7 @@
 // reachable from a laptop). About $1.25.
 //
 //   railway run npx tsx evals/tasks/webLive.ts
+import "../lib/requireMeter.js";
 import "dotenv/config";
 process.env.SENDBLUE_API_API_KEY ||= "x";
 process.env.SENDBLUE_API_API_SECRET ||= "x";

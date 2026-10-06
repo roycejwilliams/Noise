@@ -7,7 +7,7 @@
 // A case's score has hard failures (an action that must never happen: a
 // wrong text, call, intro, or false claim) and soft checks (quality). Any
 // hard failure exits 1, which is the ship gate.
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from "fs";
+import { existsSync, mkdirSync, readdirSync, readFileSync, writeFileSync } from "fs";
 import { join } from "path";
 
 export type EvalCase = { id: string; source?: "real" | "synthetic" } & Record<string, unknown>;
@@ -22,6 +22,36 @@ export function loadCases<T extends EvalCase>(dir: string): T[] {
   ];
 }
 
+// Layer 2 runs a small sample of each suite (EVAL_SAMPLE=n), the highest-signal cases first: the ones that missed in the
+// last recorded run of this suite (the likeliest to catch a regression), then an even spread of the rest, in a fixed order
+// so a night's result can be compared with the last. Without EVAL_SAMPLE every case runs, which only happens on request.
+export function sampleCases<T extends { id: string }>(cases: T[], dir: string, n = Number(process.env.EVAL_SAMPLE ?? 0)): T[] {
+  if (!n || cases.length <= n) return cases;
+  const weak = new Map<string, number>();
+  try {
+    const rdir = join(dir, "results");
+    if (existsSync(rdir)) {
+      // Only live runs count as history: a logic-mode run in the same folder has different case ids.
+      const latest = readdirSync(rdir).filter((f) => f.endsWith(".live.local.json")).sort().pop();
+      if (latest) {
+        const rows = JSON.parse(readFileSync(join(rdir, latest), "utf8")).rows ?? [];
+        for (const r of rows) {
+          const misses = (r.score?.hard?.length ?? 0) * 10 + (r.score?.soft ?? []).filter((x: { ok: boolean }) => !x.ok).length;
+          if (misses > 0) weak.set(String(r.id), misses);
+        }
+      }
+    }
+  } catch {}
+  const byId = [...cases].sort((a, b) => a.id.localeCompare(b.id));
+  const first = byId.filter((c) => weak.has(c.id)).sort((a, b) => weak.get(b.id)! - weak.get(a.id)!).slice(0, Math.ceil(n / 2));
+  const chosen = new Set(first.map((c) => c.id));
+  const rest = byId.filter((c) => !chosen.has(c.id));
+  const need = n - first.length;
+  const picked: T[] = [];
+  for (let i = 0; i < need && rest.length; i++) picked.push(rest[Math.floor((i * rest.length) / need)]);
+  return [...first, ...picked];
+}
+
 export async function runEval<T extends EvalCase, R>(opts: {
   name: string;
   dir: string;
@@ -31,7 +61,7 @@ export async function runEval<T extends EvalCase, R>(opts: {
   concurrency?: number;
   only?: string[];
 }): Promise<{ hard: number; softPct: number }> {
-  const cases = opts.only?.length ? opts.cases.filter((c) => opts.only!.includes(c.id)) : opts.cases;
+  const cases = sampleCases(opts.only?.length ? opts.cases.filter((c) => opts.only!.includes(c.id)) : opts.cases, opts.dir);
   const rows: { id: string; result?: R; error?: string; score: CaseScore }[] = [];
   let next = 0;
   const worker = async () => {
@@ -59,7 +89,7 @@ export async function runEval<T extends EvalCase, R>(opts: {
 
   mkdirSync(join(opts.dir, "results"), { recursive: true });
   writeFileSync(
-    join(opts.dir, "results", `${new Date().toISOString().replace(/[:.]/g, "-")}.local.json`),
+    join(opts.dir, "results", `${new Date().toISOString().replace(/[:.]/g, "-")}${process.env.EVAL_LAYER2 || process.argv.includes("--live") ? ".live" : ""}.local.json`),
     JSON.stringify({ hard: hardRows.length, softPct, rows }, null, 2),
   );
   if (hardRows.length) process.exitCode = 1;

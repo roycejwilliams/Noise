@@ -7,6 +7,7 @@
 // About $0.55.
 //
 //   railway run npx tsx evals/capabilities/judgmentLive.ts
+import "../lib/requireMeter.js";
 import "dotenv/config";
 process.env.SENDBLUE_API_API_KEY ||= "x";
 process.env.SENDBLUE_API_API_SECRET ||= "x";

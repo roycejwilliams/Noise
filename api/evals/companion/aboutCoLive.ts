@@ -6,6 +6,7 @@
 // wrong answers (Co copies its own earlier replies). Dry. About $0.60.
 //
 //   railway run npx tsx evals/companion/aboutCoLive.ts
+import "../lib/requireMeter.js";
 import "dotenv/config";
 process.env.SENDBLUE_API_API_KEY ||= "x";
 process.env.SENDBLUE_API_API_SECRET ||= "x";

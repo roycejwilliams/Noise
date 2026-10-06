@@ -6,6 +6,7 @@
 // the same time?" answers from the details. Nothing is sent.
 //
 //   CONTEXT_SENT=/path/sent.json railway run --service co-test --environment dev -- npx tsx evals/context/live.ts [runs]
+import "../lib/requireMeter.js";
 import { readFileSync } from "fs";
 process.env.SENDBLUE_API_API_KEY ||= "unused-in-tests";
 process.env.SENDBLUE_API_API_SECRET ||= "unused-in-tests";

@@ -3,6 +3,7 @@
 // calls.py), each moment with the flag it should or shouldn't raise. Uses
 // CO_GEMINI_KEY; no member audio, no database.
 //   npx tsx evals/voiceFlags/probe.ts
+import "../lib/requireMeter.js";
 import { readFileSync, readdirSync, writeFileSync } from "fs";
 import "dotenv/config";
 import { callerLines, checkFlags, listenForFlags, quoteFromCaller, transcriptForListening } from "../../src/services/voiceFlags.js";

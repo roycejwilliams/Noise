@@ -4,6 +4,7 @@
 // said in this conversation as freshly heard. Real models, no DB, nothing sent.
 //
 //   railway run --service co-test --environment dev -- npx tsx evals/understanding/live.ts [runs]
+import "../lib/requireMeter.js";
 const { draftCompanionCheckin } = await import("../../src/agent/companionCheckin.js");
 const { assessConversationCoverage } = await import("../../src/services/profileExtraction.js");
 const runs = Number(process.argv[2] ?? 2);

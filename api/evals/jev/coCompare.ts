@@ -9,6 +9,7 @@
 // Test only: nothing in Co's live path changes.
 //
 //   railway run --service co-test --environment dev -- npx tsx evals/jev/coCompare.ts
+import "../lib/requireMeter.js";
 import "dotenv/config";
 import { detectSeekingMode } from "../../src/services/emotionalTone.js";
 import { classifyIssue } from "../../src/services/issueReports.js";

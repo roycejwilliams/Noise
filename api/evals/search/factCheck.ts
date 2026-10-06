@@ -8,6 +8,7 @@
 // facts and drops almost no true ones. Under $0.10.
 //
 //   railway run npx tsx evals/search/factCheck.ts
+import "../lib/requireMeter.js";
 import "dotenv/config";
 process.env.SENDBLUE_API_API_KEY ||= "x";
 process.env.SENDBLUE_API_API_SECRET ||= "x";

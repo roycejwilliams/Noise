@@ -7,13 +7,15 @@
 //   npx tsx evals/texting/grade.ts baseline          grades Co's actual replies
 //   npx tsx evals/texting/grade.ts file <path>        grades a {id, reply}[] file
 // Results go to evals/texting/results/*.local.json.
+import { GRADER_HEADERS, GRADER_MODEL as GRADER } from "../../src/models.js";
+import "../lib/requireMeter.js";
 import "dotenv/config";
 import { readFileSync, writeFileSync, mkdirSync } from "fs";
 import { generateText } from "ai";
 import { anthropic } from "@ai-sdk/anthropic";
 import { parseModelJson } from "../../src/services/modelJson.js";
 
-export const GRADER_MODEL = "claude-opus-5";
+export const GRADER_MODEL = GRADER; // was Opus; final grading is Sonnet (evals/README.md)
 
 export const CRITERIA = {
   specific: "Specific to this person and this conversation, not a line that could be sent to anyone.",
@@ -56,7 +58,7 @@ Return ONLY JSON: {${Object.keys(CRITERIA).map((k) => `"${k}": "pass"|"fail"${k 
 export async function grade(c: Pick<TextCase, "message" | "recentConversation"> & { contextSummary?: string }, reply: string): Promise<Grade> {
   for (let attempt = 0; attempt < 2; attempt++) {
     try {
-      const { text } = await generateText({ model: anthropic(GRADER_MODEL), prompt: gradePrompt(c, reply) });
+      const { text } = await generateText({ model: anthropic(GRADER_MODEL), headers: GRADER_HEADERS, prompt: gradePrompt(c, reply) });
       const g = parseModelJson<Grade>(text);
       if (Object.keys(CRITERIA).every((k) => ["pass", "fail", "na"].includes((g as any)[k]))) return g;
     } catch {}

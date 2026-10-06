@@ -2,6 +2,7 @@
 // candidates (tieredRecommendation.eventCandidates). Luma calendar and discover
 // feed are fixtures at the HTTP boundary in fixture-live cases. Module caches
 // (calendar, discover) have no reset, so run each search case in its own process.
+import "../lib/requireMeter.js";
 import { H } from "./boot.js";
 import { DateTime } from "luxon";
 import { DBC, settle } from "./db.js";

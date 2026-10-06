@@ -2,6 +2,7 @@
 // Made-up member; nothing is written.
 //
 //   railway run --service co-test --environment dev -- npx tsx evals/corrections/live.ts
+import "../lib/requireMeter.js";
 import "dotenv/config";
 import { generateText } from "ai";
 import { anthropic } from "@ai-sdk/anthropic";

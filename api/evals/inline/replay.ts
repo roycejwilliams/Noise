@@ -1,6 +1,7 @@
 // Replays Royce's 09-28 "I'm in" (pressed Reply on the Grok Bot link; the
 // webhook's reply_to was a later text in the same thread) through the
 // lookup and the router. Read-only; nothing is sent.
+import "../lib/requireMeter.js";
 const { repliedTo, bareLink, inlineNote } = await import("../../src/services/inlineReply.js");
 const { routeMessage } = await import("../../src/services/messageRouter.js");
 const body = { reply_to: { message_handle: "eeb65dde-c3d9-469b-b327-ef773d70900a" }, thread_originator: { message_handle: "92943ec6-b917-48fa-b029-11d44c8f4679" } };

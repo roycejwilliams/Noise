@@ -26,6 +26,8 @@ import {
   type IntakeState,
   type OtpDecision,
 } from "../../src/harness/intake.js";
+// --live makes real model calls: only through the meter (evals/README.md).
+if (process.argv.includes("--live")) await import("../lib/requireMeter.js");
 
 type IntakeCase = EvalCase & {
   kind: "intake";

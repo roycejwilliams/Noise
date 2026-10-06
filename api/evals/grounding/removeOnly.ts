@@ -3,6 +3,7 @@
 // before/after (needs src/harness/replyGroundingOld.ts). Nothing is sent.
 //
 //   railway run --service co-test --environment dev -- npx tsx evals/grounding/removeOnly.ts
+import "../lib/requireMeter.js";
 const G: any = process.env.OLD ? await import("../../src/harness/replyGroundingOld.js") : await import("../../src/harness/replyGrounding.js");
 const grok = 'Details on file for "Grok Bot x Notion for Product Builders night (SF)", which Co sent them: "Grok Bot x Notion for Product Builders night (SF)" starts Tuesday, September 29 at 5:00 PM (America/Los_Angeles).';
 const dayt = 'Co sent them "daytonaio AI Builders Demo Night" (https://x.com/i/status/2102773693290336381); Co has no start time or address for it beyond what that post says: "Excited for next Tuesday, Sept 29, and our monthly @daytonaio AI Builders Demo Night in SF! We\'re hosting at @WorkOS SF Office in partnership with @llama_index."';

@@ -4,6 +4,7 @@
 // the model call and the thread gate only; writes nothing.
 //
 //   npx tsx evals/turnLearning/snapshotLive.ts <file>
+import "../lib/requireMeter.js";
 import { readFileSync } from "fs";
 import { anthropic } from "@ai-sdk/anthropic";
 import { generateText } from "ai";

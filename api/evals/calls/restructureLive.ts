@@ -5,6 +5,7 @@
 // Writes nothing.
 //
 //   npx tsx evals/calls/restructureLive.ts <dump.json> <call.json>
+import "../lib/requireMeter.js";
 import { readFileSync } from "fs";
 
 process.env.SENDBLUE_API_API_KEY ||= "unused-in-tests";

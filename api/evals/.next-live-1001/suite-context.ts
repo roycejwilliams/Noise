@@ -1,6 +1,7 @@
 // PR #49 items 1 and 2, end to end: the real buildContextSummary on TEMP
 // fixtures. Maya (D) is linked to A by a match nudge; A's call summary and
 // person model describe her. Her details must not reach the summary.
+import "../lib/requireMeter.js";
 import { member, memory, rows, ck, ID, type Case } from "./fixtures.js";
 
 const MAYA = /grid storage|Tesla|leaving|raise soon|raising/i;

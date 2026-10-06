@@ -3,6 +3,7 @@
 // Real models; dry run, nothing is sent or changed.
 //
 //   railway run --service co-test --environment dev -- npx tsx evals/mo/commsReplay.ts
+import "../lib/requireMeter.js";
 process.env.SENDBLUE_API_API_KEY ||= "unused-in-tests";
 process.env.SENDBLUE_API_API_SECRET ||= "unused-in-tests";
 const { runMoTeamTurn } = await import("../../src/mo/teamAgent.js");

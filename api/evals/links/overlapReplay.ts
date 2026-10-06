@@ -1,5 +1,6 @@
 // Replays Royce's 09-28 "Are they around the same time?" with both events'
 // real page reads as facts (services/linkReader.ts). Nothing is sent.
+import "../lib/requireMeter.js";
 process.env.SENDBLUE_API_API_KEY ||= "unused-in-tests";
 process.env.SENDBLUE_API_API_SECRET ||= "unused-in-tests";
 const { readPage, describeRead } = await import("../../src/services/linkReader.js");

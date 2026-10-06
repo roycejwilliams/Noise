@@ -1,4 +1,5 @@
 // Does Co write its own line while it searches? The search is faked; nothing is sent.
+import "../lib/requireMeter.js";
 process.env.SENDBLUE_API_API_KEY ||= "unused-in-tests";
 process.env.SENDBLUE_API_API_SECRET ||= "unused-in-tests";
 const { runConversationReplyAgent } = await import("../../src/agent/conversationReply.js");

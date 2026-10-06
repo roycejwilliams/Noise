@@ -4,6 +4,7 @@
 // back-and-forth. Prints one line per request to Claude.
 //
 //   railway run --service co-test --environment dev -- npx tsx evals/llmUsage/live.ts
+import "../lib/requireMeter.js";
 import "dotenv/config";
 import { NodeSDK } from "@opentelemetry/sdk-node";
 import type { ReadableSpan } from "@opentelemetry/sdk-trace-base";

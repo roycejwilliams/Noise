@@ -1,5 +1,6 @@
 // Prints embedding similarity for every ask case, to set SAME_ASK_HIGH/LOW.
 //   npx tsx evals/profile/sims.ts
+import "../lib/requireMeter.js";
 import "dotenv/config";
 import { dirname } from "path";
 import { fileURLToPath } from "url";

@@ -14,6 +14,7 @@
 //     control, and counts every blocked write (SEM_CLEANUP blockedWrites) instead of declaring 0.
 //  4. Facts carry today's date and the current time, worded as production adds them
 //     (replyGrounding.gatherReplyFacts, timeline.renderTimeline with an unknown time zone).
+import "../lib/requireMeter.js";
 import '../testEnv.js';
 import { readFileSync } from 'node:fs';
 import { Pool } from 'pg';

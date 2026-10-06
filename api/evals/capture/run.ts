@@ -14,6 +14,7 @@
 //
 // Hard: an ask captured from something that isn't one, a real ask missed,
 // a text turn yielding more than one ask, or an ask attributed to Co.
+import "../lib/requireMeter.js";
 import "dotenv/config";
 import { dirname } from "path";
 import { fileURLToPath } from "url";

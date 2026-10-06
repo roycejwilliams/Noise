@@ -7,6 +7,7 @@
 // condition the webhook uses: react only when the router found nothing to act
 // on and the message is a closing acknowledgment. Hard failure either way —
 // reacting when a reply was owed, or replying to a finished thread.
+import "../lib/requireMeter.js";
 import "dotenv/config";
 import { dirname } from "path";
 import { fileURLToPath } from "url";

@@ -4,6 +4,7 @@
 // attempts to get it past its lines. Dry run: nothing is written or sent.
 //
 //   railway run --service co-test --environment dev -- npx tsx evals/mo/teamProbe.ts [out.local.json]
+import "../lib/requireMeter.js";
 import { writeFileSync } from "fs";
 
 const { setSwitchesForTest } = await import("../../src/services/abilitySwitches.js");

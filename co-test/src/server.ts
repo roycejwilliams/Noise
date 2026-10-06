@@ -12,6 +12,7 @@ import pool from "../../api/src/db/db.js";
 import { runMigrations } from "../../api/src/db/migrations.js";
 import { buildCoVCard } from "../../api/src/utils/vcard.js";
 import { getAudioEntry } from "../../api/src/services/voiceNote.js";
+import { servePlanFile } from "../../api/src/services/planFile.js";
 import { runTestMigrations } from "./db/testMigrations.js";
 import { configureCoTestSocket } from "./socket/index.js";
 import apiRouter from "./routes/api.js";
@@ -114,6 +115,10 @@ async function main() {
     res.setHeader("Cache-Control", "no-store");
     return res.send(entry.buffer);
   });
+
+  // A plan's PDF for Sendblue to attach to a text (services/planFile.ts): the same route api/src/server.ts mounts.
+  // co-test keeps its own copies of the media routes, so it has to be added here too.
+  app.get("/plan-file/:id.pdf", servePlanFile);
 
   // The actual product routes (ElevenLabs call webhooks, Twilio call-status,
   // inbound-call TwiML, and the Sendblue text-conversation webhook) —

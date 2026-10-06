@@ -1,0 +1,21 @@
+[
+  "evals/.next-live-1001/boot.ts",
+  "evals/.next-live-1001/db.ts",
+  "evals/.next-live-1001/fixtures.ts",
+  "evals/.next-live-1001/router.ts",
+  "evals/.next-live-1001/suite-context.ts",
+  "evals/.next-live-1001/suite-delivery.ts",
+  "evals/.next-live-1001/suite-events.ts",
+  "evals/.next-live-1001/suite-loops.ts",
+  "evals/.next-live-1001/suite-matching.ts",
+  "evals/.next-live-1001/suite-onboarding.ts",
+  "evals/.next-live-1001/suite-search.ts",
+  "evals/.next-live-1001/suite-tiers.ts",
+  "evals/.next-live-1001/suites.ts",
+  "evals/companion/_thread.ts",
+  "evals/jev/cases.ts",
+  "evals/replay/cases.ts",
+  "evals/sweepSelect/grading.ts",
+  "evals/sweepSelect/score.ts",
+  "evals/testEnv.ts"
+]
