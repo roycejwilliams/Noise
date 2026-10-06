@@ -390,6 +390,22 @@ export const proactiveRegistry: ProactiveRegistry = {
     },
   },
 
+  // A loop nobody has signalled on for a week: ask once whether it is still on their plate, then let it expire if they don't say.
+  // A question only; the loop may not be stated as current (services/loopLifecycle.ts).
+  loop_check: {
+    async draft(c, person) {
+      const { rows } = await pool.query(`SELECT closed_at, last_confirmed_at FROM open_loops WHERE id = $1 AND user_id = $2`, [c.payload.loopId, c.userId]);
+      if (!rows[0] || rows[0].closed_at) return skip("the loop has closed since");
+      const text = await draftProactive({
+        functionId: "loopLifecycle.check.draft",
+        firstName: person.firstName,
+        facts: { the_thing_they_asked_about: c.payload.title },
+        task: "Ask one short, light question: is this still on their plate, or should you let it go? Don't say when it was mentioned, don't say what happened with it, don't promise anything.",
+      });
+      return text ? { messages: [text], text, rules: { maxSentences: 2, maxChars: 220 } } : skip("model chose SKIP");
+    },
+  },
+
   // The day before a Co event: how many are coming and the two or three worth finding, by name only when they
   // said yes at RSVP, each with a reason from their own stated ask (services/eventBrief.ts).
   event_brief: {

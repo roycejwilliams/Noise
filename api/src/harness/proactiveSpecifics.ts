@@ -112,6 +112,31 @@ export function datesBacked(structured: string, now: Date, zone = "America/Los_A
 
 export type Unbacked = { text: string; why: string };
 
+// "You told me...", "you've been prepping...", "you're weighing...": stating something back AS THEIRS. That is only honest when what
+// follows is in something they said (or a structured field). If Co only inferred it, the message has to ask, not assert.
+const ATTRIBUTION = [
+  /\byou(?:'ve| have)?\s+(?:told|said|mentioned|shared|been telling)\b([^.?!]*)/gi,
+  /\byou(?:'re| are| were|'ve been| have been)\s+(?:prepping|preparing|weighing|considering|worried|worrying|planning|pitching|raising|working on|thinking about|dealing with|stressed|nervous|exploring|trying|deciding|building toward|gearing up)\b([^.?!]*)/gi,
+];
+const FILLER = new Set(["that", "this", "with", "from", "about", "your", "have", "been", "they", "what", "when", "then", "there", "their", "them", "more", "just", "some", "still", "also", "into", "over", "very", "much", "only", "even", "ever", "back", "last", "week", "today", "really", "feel", "feels", "like", "kind", "sort"]);
+function attributions(text: string, facts: FactsLike, freshKeys: string[]): Unbacked[] {
+  const ev = evidenceOf(facts, freshKeys);
+  const theirs = `${ev.structured}\n${ev.spoken}\n${ev.fresh}`.toLowerCase();
+  const out: Unbacked[] = [];
+  for (const sentence of text.split(/(?<=[.!?])\s+/)) {
+    if (/\?\s*$/.test(sentence.trim())) continue; // asking is how it is meant to be done
+    for (const re of ATTRIBUTION) {
+      for (const m of sentence.matchAll(new RegExp(re.source, re.flags))) {
+        const words = (m[1].toLowerCase().match(/[a-z][a-z'-]{3,}/g) ?? []).filter((w) => !FILLER.has(w));
+        if (!words.length) continue;
+        const backed = words.filter((w) => theirs.includes(w.replace(/(?:ing|ed|es|s)$/, "").slice(0, 5)));
+        if (backed.length / words.length < 0.5) out.push({ text: m[0].trim().slice(0, 60), why: "something only Co inferred (or read in the background), stated back as theirs" });
+      }
+    }
+  }
+  return out;
+}
+
 // Every specific in an outgoing message that nothing real backs.
 export function unbackedSpecifics(text: string, facts: FactsLike, o: { freshKeys?: string[]; now?: Date; zone?: string } = {}): Unbacked[] {
   const ev = evidenceOf(facts, o.freshKeys);
@@ -129,6 +154,7 @@ export function unbackedSpecifics(text: string, facts: FactsLike, o: { freshKeys
     seen.add(c);
     out.push({ text: h.text, why: h.kind === "day" || h.kind === "date" ? "a day or date nothing they said just now, and no date on file, backs" : "a time nothing real backs" });
   }
+  out.push(...attributions(text, facts, o.freshKeys ?? []));
   for (const m of text.matchAll(new RegExp(EVENT_NOUN.source, EVENT_NOUN.flags))) {
     const stem = m[0].toLowerCase().replace(/(?:es|ing|ed|s)$/, "").slice(0, 5);
     if (seen.has(stem) || eventBacked.includes(stem)) continue;
@@ -140,5 +166,5 @@ export function unbackedSpecifics(text: string, facts: FactsLike, o: { freshKeys
 
 // The words handed back to the model when a draft has an unbacked specific.
 export function feedbackFor(bad: Unbacked[]): string {
-  return `it states ${bad.map((b) => `"${b.text}"`).join(", ")}: ${bad[0].why}. Cut it, or ask instead of stating (a question about a generic window, like what is coming up this week, is fine). Never take a day, an event or a commitment from the background.`;
+  return `it states ${bad.map((b) => `"${b.text}"`).join(", ")}: ${bad[0].why}. Cut it, or ask instead of stating (a question about a generic window, like what is coming up this week, is fine). Never take a day, an event or a commitment from the background, and never say "you told me" or "you've been prepping/weighing/worried" about anything they did not say themselves.`;
 }

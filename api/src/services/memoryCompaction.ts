@@ -1,12 +1,6 @@
-import { anthropic } from "@ai-sdk/anthropic";
-import { generateText } from "ai";
 import pool from "../db/db.js";
 import { writeMemory } from "./memory.js";
-import { MODELS } from "../models.js";
 
-// The recap decides what's stale and what to drop from Co's running picture
-// of someone, so it's a judgment call: Sonnet 5 (Royce's model policy).
-const RECAP_MODEL = MODELS.sonnet;
 
 // Memory compaction (Royce, 2026-09-01: "go ahead and have that built") —
 // Co's own suggestion, made live while diagnosing a real memory-continuity
@@ -29,67 +23,16 @@ const RECAP_MODEL = MODELS.sonnet;
 // ever grow. Grounded strictly in what was actually said, same "never
 // invent" discipline as every other synthesis step in this codebase.
 export async function buildRecap(userId: string): Promise<void> {
-  const [profileResult, lastRecapResult] = await Promise.all([
-    pool.query(
-      `SELECT life_chapters, goals, blockers, long_term_direction, city, emotional_state
-       FROM co_profiles WHERE user_id = $1`,
-      [userId],
-    ),
-    pool.query(
-      `SELECT content, created_at FROM co_memories
-       WHERE user_id = $1 AND memory_type = 'recap'
-       ORDER BY created_at DESC LIMIT 1`,
-      [userId],
-    ),
-  ]);
-  const profile = profileResult.rows[0] ?? null;
+  const lastRecapResult = await pool.query(`SELECT content, created_at FROM co_memories WHERE user_id = $1 AND memory_type = 'recap' ORDER BY created_at DESC LIMIT 1`, [userId]);
   const lastRecap = lastRecapResult.rows[0] ?? null;
-
-  const { rows: newExchanges } = await pool.query(
-    `SELECT content FROM co_memories
-     WHERE user_id = $1 AND memory_type IN ('text_exchange', 'call_transcript')
-       AND content NOT LIKE 'Co initiated call%'
-       AND created_at > $2
-     ORDER BY created_at ASC`,
-    [userId, lastRecap?.created_at ?? new Date(0)],
-  );
-  // Nothing genuinely new since the last recap — re-running would just
-  // reproduce the same summary at real LLM cost for no benefit.
-  if (!newExchanges.length) return;
-
-  const profileLines = [
-    profile?.life_chapters?.length ? `Life chapter: ${profile.life_chapters.join(", ")}` : null,
-    profile?.city ? `City: ${profile.city}` : null,
-    profile?.goals?.length ? `Current goals: ${profile.goals.join("; ")}` : null,
-    profile?.blockers?.length ? `Current blockers: ${profile.blockers.join("; ")}` : null,
-    profile?.long_term_direction ? `Long-term direction: ${profile.long_term_direction}` : null,
-    profile?.emotional_state ? `Last known emotional state: ${profile.emotional_state}` : null,
-  ]
-    .filter(Boolean)
-    .join("\n");
-
   try {
-    const { text: raw } = await generateText({
-      model: anthropic(RECAP_MODEL),
-      experimental_telemetry: { isEnabled: true, functionId: "memoryCompaction.buildRecap" },
-      prompt: `You maintain Co's running understanding of one specific person, across many conversations over time.
-
-${lastRecap ? `Your previous recap of them:\n${lastRecap.content}` : "You have no previous recap of them yet — this is the first one."}
-
-Their current structured profile fields (separately maintained, always up to date):
-${profileLines || "(nothing on file yet)"}
-
-New raw exchanges since your last recap, in order:
-${newExchanges.map((e: any) => e.content).join("\n")}
-
-Write an UPDATED recap: a compact, accurate running narrative of who this person is and what's actually going on with them, weighted toward what's recent. If something from your previous recap is now stale, resolved, or contradicted by what's happened since, drop or correct it — don't just append to a list that only ever grows. Ground every claim strictly in what's actually in the profile fields or was actually said in the exchanges above; never invent or assume a detail that isn't there. When something newer contradicts something older (their company stage, city, team, what they're looking for), the newer one wins and the older one goes. This is only about them: never record how Co performed, Co's mistakes, trust in Co, or complaints about Co. Write it as prose, not a bulleted list. 4-8 sentences.
-
-Return ONLY the recap text, nothing else — no preamble, no labels.`,
-    });
-    const recap = raw.trim();
-    if (!recap) return;
-
-    await writeMemory(userId, "recap", recap);
+    // The recap is a rendering of the member's LIVE claims (services/claims.ts), not a model's revision of its own last recap:
+    // each claim says whether they said it or Co inferred it, and an ephemeral one (a plan, a deadline, a mood, a worry)
+    // expires on its own unless they say it again. A claim that has gone is simply not in the next recap.
+    const { refreshClaims, renderRecap } = await import("./claims.js");
+    const live = await refreshClaims(userId);
+    const recap = renderRecap(live, new Date());
+    if (recap && recap !== lastRecap?.content) await writeMemory(userId, "recap", recap);
     // Upsert, not update: a member with no profile row yet still gets their
     // recap recorded (storeProfile and captureIntent both upsert this row too).
     await pool.query(
@@ -104,6 +47,22 @@ Return ONLY the recap text, nothing else — no preamble, no labels.`,
   } catch (err: any) {
     console.error(`memoryCompaction: buildRecap failed for ${userId} (non-fatal):`, err?.message ?? err);
   }
+}
+
+// Daily, with no model call: a claim that has reached the end of its lifetime leaves the recap even when the member has said
+// nothing new. (The old recap only changed when there was new talk, so a stale plan stayed in it for as long as they were quiet.)
+export async function expireRecaps(now = new Date()): Promise<number> {
+  const { heldClaims, renderRecap } = await import("./claims.js");
+  const { rows } = await pool.query(`SELECT DISTINCT user_id FROM co_memories WHERE memory_type = 'recap' AND created_at > NOW() - INTERVAL '30 days'`);
+  let changed = 0;
+  for (const r of rows) {
+    const claims = await heldClaims(r.user_id);
+    if (!claims.length) continue;
+    const recap = renderRecap(claims, now);
+    const { rows: last } = await pool.query(`SELECT content FROM co_memories WHERE user_id = $1 AND memory_type = 'recap' ORDER BY created_at DESC LIMIT 1`, [r.user_id]);
+    if (recap && recap !== last[0]?.content) { await writeMemory(r.user_id, "recap", recap); changed++; }
+  }
+  return changed;
 }
 
 // Cadence gate for the cron (jobs/index.ts) — 3 days, same cadence pattern

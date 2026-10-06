@@ -65,7 +65,11 @@ export async function draftPostCall(userId: string, firstName: string, followUpI
       [userId, callKey(transcript)],
     )
     .catch(() => ({ rows: [] as any[] }));
-  return draftPostCallText(firstName, transcript, contextSummary, promised.map((r: any) => String(r.content)));
+  // What Co holds about them that is still inside its lifetime (services/claims.ts), apart by label: what THEY said, and Co's read.
+  const { liveClaims } = await import("../services/claims.js");
+  const { renderLive } = await import("../services/factLabels.js");
+  const labelled = renderLive(await liveClaims(userId).catch(() => []), new Date());
+  return draftPostCallText(firstName, transcript, contextSummary, promised.map((r: any) => String(r.content)), { theySaid: [...labelled.enduring, ...labelled.theySaid], coInferred: labelled.coInferred });
 }
 
 export async function draftPostCallText(
@@ -73,6 +77,7 @@ export async function draftPostCallText(
   transcript: string,
   contextSummary: string,
   promiseResults: string[] = [],
+  claims: { theySaid: string[]; coInferred: string[] } = { theySaid: [], coInferred: [] },
 ): Promise<{ text: string; rules: OutputRules } | null> {
   const text = await draftProactive({
     functionId: "jobs.postCallFollowUp",
@@ -80,6 +85,9 @@ export async function draftPostCallText(
     facts: {
       call_transcript: transcript.slice(-6000),
       background_you_already_knew: contextSummary ? contextSummary.slice(0, 1500) : null,
+      // Labelled: only what they said, and still live, can be stated back; Co's read is orientation only.
+      live_things_they_said: claims.theySaid.length ? claims.theySaid : null,
+      background_co_read_orientation_only_never_say_you_told_me: claims.coInferred.length ? claims.coInferred : null,
       what_co_said_it_would_look_into: promiseResults.length ? promiseResults.join("\n") : null,
     },
     maxSentences: 3,

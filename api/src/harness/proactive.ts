@@ -96,7 +96,9 @@ export type ProactiveType =
   | "event_brief"
   | "brief_name_ask"
   // After the member tells Co who they met: what stood out, and a note per person for them to send (services/eventFollowThrough.ts).
-  | "event_followthrough";
+  | "event_followthrough"
+  // The one "still on your plate?" ask for a loop nobody has signalled on for a week (services/loopLifecycle.ts, 2026-10-06).
+  | "loop_check";
 
 // co_event: Co's own event, announced to nearby users on creation (services/coEventAnnouncement.ts).
 // direct_ask: a reply-triggered direct ask to a THIRD person who didn't just
@@ -149,6 +151,8 @@ export const TYPE_POLICY: Record<ProactiveType, TypePolicy> = {
   event_brief: { priority: 90 },
   brief_name_ask: { priority: 92 },
   event_followthrough: { priority: 93 },
+  // Once per loop (its own target key); it is a question, so it is the lowest of the companion kind.
+  loop_check: { priority: 12, typeGapDays: 3 },
 };
 
 export const RULES = {

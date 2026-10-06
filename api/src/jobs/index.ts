@@ -17,7 +17,7 @@ import { triggerCallForUser } from "../services/callTrigger.js";
 import { enqueueDuePostCallFollowUps } from "./postCallFollowUp.js";
 import { placeDueCalls, sendDueReminders } from "./scheduledCall.js";
 import { placeDueProactiveCalls } from "./proactiveCheckinCall.js";
-import { buildRecap, findUsersDueForRecap } from "../services/memoryCompaction.js";
+import { buildRecap, expireRecaps, findUsersDueForRecap } from "../services/memoryCompaction.js";
 import { enqueueDebrief, enqueueDueOutcomeFollowUps } from "../services/recommendationOutcome.js";
 import { enqueueDueEventCheckinFollowUps } from "../services/eventCheckinFollowUp.js";
 import { processDueUnmatchedFollowUps } from "../services/eventUnmatchedFollowUp.js";
@@ -207,6 +207,8 @@ export function registerJobs(io: Server) {
       await runLoopSync().catch((err: any) => console.error("loop sync error:", err?.message ?? err));
       const { runDueTasks } = await import("../services/taskTurn.js");
       await runDueTasks();
+      const { runLoopDecay } = await import("../services/openLoops.js");
+      await runLoopDecay().catch((err: any) => console.error("loop decay error:", err?.message ?? err));
     } catch (err: any) {
       console.error("task wake cron error:", err?.message ?? err);
     }
@@ -757,6 +759,8 @@ export function registerJobs(io: Server) {
           console.error(`Memory compaction failed for ${userId}:`, err?.message ?? err);
         }
       });
+      // And, with no model call, what has expired leaves every recap whether or not they said anything new (services/claims.ts).
+      await expireRecaps();
     } catch (error) {
       console.error("Memory compaction cron error:", error);
     }

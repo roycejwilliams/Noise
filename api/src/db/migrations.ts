@@ -110,6 +110,20 @@ export async function runMigrations(): Promise<void> {
         sent_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
         PRIMARY KEY (user_id, event_id)
       )`))
+    // What Co holds about a member, each claim labelled (user_said / co_inferred) with a lifetime (services/claims.ts).
+    .then(() => pool.query(`CREATE TABLE IF NOT EXISTS member_claims (
+        id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+        user_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+        text TEXT NOT NULL,
+        provenance TEXT NOT NULL CHECK (provenance IN ('user_said','co_inferred')),
+        kind TEXT NOT NULL,
+        quote TEXT,
+        said_on DATE NOT NULL,
+        confirmed_on DATE NOT NULL,
+        expires_on DATE,
+        created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+      )`))
+    .then(() => pool.query(`CREATE INDEX IF NOT EXISTS idx_member_claims_user ON member_claims (user_id, expires_on)`))
     .then(() => pool.query(`CREATE TABLE IF NOT EXISTS event_briefs (
         id BIGSERIAL PRIMARY KEY,
         event_id TEXT NOT NULL,
@@ -2077,6 +2091,11 @@ export async function runMigrations(): Promise<void> {
     // 2026-10-01 code review.
     .then(() => pool.query(`ALTER TABLE open_loops ADD COLUMN IF NOT EXISTS seen_at TIMESTAMPTZ, ADD COLUMN IF NOT EXISTS closed_reason TEXT`))
     .then(() => pool.query(`UPDATE open_loops SET seen_at = COALESCE(woke_at, changed_at) WHERE seen_at IS NULL`))
+    // The loop lifecycle (services/loopLifecycle.ts, 2026-10-06): last_confirmed_at is the last time the member said or did something about
+    // it; decay_asked_at is the one "still on your plate?" ask. Rows from before this get their last touch as their confirmation, so the old
+    // ones age out instead of looking fresh.
+    .then(() => pool.query(`ALTER TABLE open_loops ADD COLUMN IF NOT EXISTS last_confirmed_at TIMESTAMPTZ, ADD COLUMN IF NOT EXISTS decay_asked_at TIMESTAMPTZ`))
+    .then(() => pool.query(`UPDATE open_loops SET last_confirmed_at = COALESCE(updated_at, changed_at, created_at) WHERE last_confirmed_at IS NULL`))
     .catch((err: Error) => console.error("open_loops table init failed:", err));
   // The search brief Co keeps while it helps someone find something (Royce,
   // 2026-09-30): "120 people" or a map pin refines the same search.
