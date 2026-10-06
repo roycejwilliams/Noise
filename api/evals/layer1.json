@@ -88,6 +88,7 @@
     "evals/reply/doubleDown.ts",
     "evals/calls/callConfig.ts",
     "evals/calls/callTasks.ts",
-    "evals/calls/callEvals.ts"
+    "evals/calls/callEvals.ts",
+    "evals/proactive/pause.ts"
   ]
 }
