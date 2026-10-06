@@ -835,6 +835,8 @@ async function processEndedCall(o: {
       // call is audited right after: keepable promises are kept, the rest
       // become corrections for the next text (harness/callGrounding.ts).
       auditCall(user_id, cleanTranscript, knownBeforeCall).catch(() => {});
+      // Ongoing help they asked for on the call becomes a task, same as a text would (services/callTasks.ts).
+      import("../services/callTasks.js").then((m) => m.tasksFromCall(user_id, cleanTranscript)).catch(() => {});
       // How scripted it sounded: stock comfort lines and repeated openers, logged for the morning review.
       {
         const r = stockReport(coLinesOf(cleanTranscript));

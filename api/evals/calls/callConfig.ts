@@ -34,7 +34,7 @@ check("end_call and voicemail detection are still there", tools.some((t) => t.na
 check("the prompt tells Co to run the coverage check first in a turn, before any words", /as the very first thing you do in a turn, before you say a word, never part-way through what you are saying/.test(ap.prompt));
 check("and to open every reply with a short first sentence (the voice starts when the first sentence is done)", /Start every reply with a short first sentence, under ten words/.test(ap.prompt));
 
-check("Haiku's habits are named in the prompt: short speech, no 'I appreciate' opener, no AI disclaimer, never 'not how I work' for multi-day help", /about 60 words at most/.test(ap.prompt) && /Never open with "I appreciate"/.test(ap.prompt) && /No disclaimers about being an AI/.test(ap.prompt) && /never say it isn't how you work: tell them to text what they want and by when/.test(ap.prompt));
+check("Haiku's habits are named in the prompt: short speech, no 'I appreciate' opener, no AI disclaimer, never 'not how I work' for multi-day help", /about 60 words at most/.test(ap.prompt) && /Never open with "I appreciate"/.test(ap.prompt) && /No disclaimers about being an AI/.test(ap.prompt) && /never say it isn't how you work: say yes, that you'll set it up when you hang up/.test(ap.prompt));
 
 // ---- 5. keywords
 const kw: string[] = c.asr.keywords;
@@ -43,7 +43,7 @@ check("the recognizer is told the names it got wrong: Co, Boardy, and the others
 // ---- 7. capability sheet and member context
 const sheet = B.CAPABILITY_SHEET;
 check("the sheet is in the call prompt", ap.prompt.includes("# What Co can do today"));
-check("it says Co does multi-day work and how to ask for it by text, and bans 'not how I work'", /works on it over the following days \(up to 30\)/.test(sheet) && /Text me what you want and by when/.test(sheet) && /Never say this is "not how I work"/.test(sheet));
+check("it says Co does multi-day work and how to ask for it by text, and bans 'not how I work'", /works on it over the following days \(up to 30\)/.test(sheet) && /Right after you hang up, Co sets up what they asked for as a task/.test(sheet) && /Never say this is "not how I work"/.test(sheet) && !/A call can't start a task live/.test(sheet));
 check("it does not promise what Co can't: no finding investors or a particular advisor, no group texts, no daily messages", /Co can't find investors, sponsors or funders on demand/.test(sheet) && /never starts a group text/.test(sheet) && /can't promise a daily message/.test(sheet));
 check("it says a call keeps its promise to look into something after the call", /After a call, Co does look into what you said you'd look into/.test(sheet));
 check("it stops the questions it has answers to: say what you have and ask if it's still right", /Never ask for something you already know/.test(sheet) && /You told me weekends, is that still true\?/.test(sheet));
