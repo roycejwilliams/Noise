@@ -207,17 +207,17 @@ export const ABILITIES: Ability[] = [
     id: "mo_member_people",
     can: "Co shows them each person Mo found, with what Mo would send, and Mo contacts only the ones they pick by number.",
     tool: "approveMoPeople",
-    confirm: "affects_another_member",
+    // No quote guard: their choice is read from their message by code (a lone "2" is a complete answer), and a choice that isn't clean is refused.
     limits: { perTurn: 1 },
     use: "They picked who Mo should reach out to from the list you showed (by number, or all, or none). Quote their words. Code reads the numbers from their message, so don't guess them: if the choice is unclear, ask which numbers.",
   },
   {
     id: "mo_member_intro",
-    can: "When someone Mo found has joined, Co asks whether they want an introduction; the introduction is one email to both people, and only goes out when both say yes.",
+    can: "When someone Mo found writes back and wants an invite, Co asks whether they'd like to be introduced if the person joins. They are never told that someone joined; the introduction is one email to both people, and only goes out when both say yes.",
     tool: "approveMoIntro",
     confirm: "affects_another_member",
     limits: { perTurn: 1 },
-    use: "They said yes to being introduced to someone who joined through Mo. Quote their yes. If more than one person has joined, pass who (their name or number) so it is the right one.",
+    use: "They said yes to being introduced to someone who wrote back to Mo, if that person joins. Quote their yes. If more than one person is waiting on this, pass who (their name or number) so it is the right one.",
   },
   {
     id: "mo_member_stop",

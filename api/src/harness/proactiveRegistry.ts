@@ -5,6 +5,7 @@
 import pool from "../db/db.js";
 import { writeMemory } from "../services/memory.js";
 import { MODELS } from "../models.js";
+import { memberMoOn } from "../services/capabilities.js";
 import { draftProactive, nameTokens, nextLocalHour, type Candidate, type DraftResult, type ProactiveRegistry } from "./proactive.js";
 import { draftEventReveal } from "../agent/eventDiscoverySurfacing.js";
 import { draftAskCheckin, type AskCheckinPayload } from "../agent/askCheckin.js";
@@ -351,6 +352,7 @@ export const proactiveRegistry: ProactiveRegistry = {
   // exactly what is sent and nothing here is the model's wording.
   mo_member_offer: {
     async draft(c) {
+      if (!memberMoOn()) return skip("member Mo is off");
       const M = await import("../mo/memberFlow.js");
       const row = await M.optInRow(c.userId);
       if (row?.asked_at) return skip("already asked");
@@ -367,6 +369,7 @@ export const proactiveRegistry: ProactiveRegistry = {
   },
   mo_member_voice: {
     async draft(c, person) {
+      if (!memberMoOn()) return skip("member Mo is off");
       const M = await import("../mo/memberFlow.js");
       const [row, batch] = await Promise.all([M.optInRow(c.userId), M.openBatch(c.userId)]);
       if (row?.status !== "yes" || row?.paused_at || !batch || row?.voice_approved_at) return skip("nothing to approve");
@@ -383,6 +386,7 @@ export const proactiveRegistry: ProactiveRegistry = {
   },
   mo_member_batch: {
     async draft(c) {
+      if (!memberMoOn()) return skip("member Mo is off");
       const M = await import("../mo/memberFlow.js");
       const { composeApproach } = M;
       const [row, batch] = await Promise.all([M.optInRow(c.userId), M.openBatch(c.userId)]);
@@ -402,16 +406,16 @@ export const proactiveRegistry: ProactiveRegistry = {
   },
   mo_member_update: {
     async draft(c) {
+      if (!memberMoOn()) return skip("member Mo is off");
       const M = await import("../mo/memberFlow.js");
       const { rows } = await pool.query(`SELECT * FROM mo_member_candidates WHERE id = $1 AND user_id = $2`, [c.payload.candidateId, c.userId]);
       const p = rows[0];
       if (!p) return skip("no such person for this member");
       const who = M.personLabel(p);
       const text: Record<string, string> = {
-        replied: `${who} wrote back and wants the invite. I've sent it. Once they're in, I'll ask whether you'd like the introduction.`,
+        replied: `${who} wrote back and wants the invite. I've sent it. If they join, would you like me to introduce you? A yes or a no is fine. If they never join, nothing happens.`,
         declined: `${who} said no thanks, so I won't contact them again.`,
         question: `${who} replied with a question. I've held it: I won't discuss you or the club until they've joined.`,
-        joined: `${who} is in. Want me to introduce you? A yes or a no is fine.`,
       };
       const t = text[String(c.payload.kind)];
       if (!t) return skip("unknown update");

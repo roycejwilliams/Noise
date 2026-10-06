@@ -52,7 +52,8 @@ export async function huntForMember(userId: string, deps: HuntDeps): Promise<Hun
   if (!ask) return { status: "skipped", why: "no open ask a person could answer" };
 
   const person = await deps.personModel(userId).catch(() => "");
-  const plan = await deps.plan(ask, person);
+  // The plan (and so every search query) is made from the ask alone: nothing from the person model can reach X's search.
+  const plan = await deps.plan(ask, "");
   const [names, asks] = await Promise.all([deps.memberNames(), deps.allAsks()]);
   const queries = plan.queries.filter((q) => q.length < 400 && !queryLeaks(q, asks, names)).slice(0, 3);
   if (!queries.length || !plan.need.trim()) return { status: "none", why: "no safe search to run" };

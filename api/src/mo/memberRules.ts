@@ -29,40 +29,62 @@ export const MEMBER_MO = {
 
 // ---------------------------------------------------------------- consent (the member's own words, whole message)
 
-// The member's yes or no to a question, with the quote the model picked. The whole message is read: "yes but not
-// them" is never a yes. No answer is no.
-export const readConsent = readNameAnswer;
-
-// Which people in the open batch they chose. Replies are numbers ("1 and 3"), "all", or "none"; a number after
-// skip/not/except/no is left out; anything unclear is null, and Co asks again.
+// Which people in the open batch they chose, read STRICTLY: only a clean choice counts, anything else is null and Co asks
+// again. A wrong yes here contacts a stranger the member turned down, so the grammar is small on purpose:
+//   "1 and 3" / "1, 3" / "just 2" / "the first and the third"      -> those numbers
+//   "all" / "everyone" / "all of them" / "all three"                -> everyone in the batch
+//   "all but 2" / "everyone except 1"                               -> everyone else
+//   "none" / "nobody" / "no one"                                    -> no one
+// Any other word, any negation ("not", "don't", "no" with a number), a question mark, or a number beyond the list is null.
+const FILLER = new Set(["yes", "ok", "okay", "sure", "please", "just", "only", "and", "the", "reach", "out", "to", "go", "ahead", "with", "for", "on", "them", "those", "these", "people", "person", "of", "me", "number", "numbers"]);
+const ORDINAL: Record<string, number> = { first: 1, second: 2, third: 3, "1st": 1, "2nd": 2, "3rd": 3 };
 export function readPicks(message: string, count: number): number[] | null {
-  const m = ` ${message.toLowerCase().replace(/[’‘]/g, "'").replace(/[^a-z0-9' ]+/g, " ").replace(/\s+/g, " ").trim()} `;
-  if (/\b(none|nobody|no one|nothing|none of them|skip all|skip them all|not any)\b/.test(m)) return [];
+  if (/\?/.test(message)) return null;
+  const m = message.toLowerCase().replace(/[’‘]/g, "'");
+  if (/n't|\bnot\b|\bnever\b|\bwithout\b|\bskip\b|\bdrop\b|\bexclude\b|\bminus\b/.test(m)) return null;
+  const tokens = m.replace(/[^a-z0-9' ]+/g, " ").split(/\s+/).filter(Boolean);
   const all = Array.from({ length: count }, (_, i) => i + 1);
-  const hasAll = /\b(all|all of them|everyone|all three|all of these|each)\b/.test(m);
-  const words: Record<string, number> = { one: 1, two: 2, three: 3, first: 1, second: 2, third: 3 };
-  const tokens = m.trim().split(" ");
-  const picked = new Set<number>();
-  const out = new Set<number>();
-  let negate = false;
-  for (const t of tokens) {
-    if (/^(skip|not|except|without|no|drop|exclude|but|minus)$/.test(t)) {
-      negate = true;
-      continue;
-    }
-    const n = /^\d+$/.test(t) ? Number(t) : words[t];
-    if (n && n >= 1 && n <= count) (negate ? out : picked).add(n);
-    else if (!/^(and|the|then|a|me|please|on|of|with|just|only|yes|ok|okay|sure|reach|out|to|them|number|numbers|people|person|go|ahead|for|same|as|that|this|those|these|one|two|three|first|second|third)$/.test(t)) {
-      // a word that isn't about the choice: still fine (names), it just doesn't pick anyone
-    }
-    if (n) negate = false;
+  const joined = ` ${tokens.join(" ")} `;
+  if (/^ (?:(?:yes|ok|okay|sure|please|just) )*(?:none|nobody|no one|none of them|nothing) (?:(?:for|now|thanks|thank|you) )*$/.test(joined)) return [];
+  // all but N
+  const butM = joined.match(/^ (?:(?:yes|ok|okay|sure|please) )*(?:all|everyone|all of them) (?:but|except) (?:number |numbers )?((?:\d+|first|second|third)(?: (?:and )?(?:\d+|first|second|third))*) $/);
+  if (butM) {
+    const out = new Set(butM[1].split(/ (?:and )?/).map((t) => (/^\d+$/.test(t) ? Number(t) : ORDINAL[t])));
+    if ([...out].some((n) => !n || n < 1 || n > count)) return null;
+    return all.filter((n) => !out.has(n));
   }
-  const base = hasAll ? new Set(all) : picked;
-  const result = [...base].filter((n) => !out.has(n)).sort((a, b) => a - b);
-  if (!hasAll && picked.size === 0 && out.size === 0) return null;
-  if (!hasAll && picked.size === 0 && out.size > 0) return null; // "skip 2" alone is not a choice of who to reach
-  return result;
+  if (tokens.includes("but") || tokens.includes("except")) return null;
+  const hasAll = tokens.some((t) => ["all", "everyone"].includes(t));
+  const nums: number[] = [];
+  for (const t of tokens) {
+    if (/^\d+$/.test(t)) nums.push(Number(t));
+    else if (ORDINAL[t]) nums.push(ORDINAL[t]);
+    else if (t === "all" || t === "everyone" || t === "three" || t === "all") continue;
+    else if (!FILLER.has(t)) return null;
+  }
+  if (hasAll) {
+    // "all", "all of them", "all three": nothing else but fillers (so no numbers beside it)
+    if (nums.length) return null;
+    if (tokens.includes("three") && count !== 3) return null;
+    return all;
+  }
+  if (tokens.includes("three")) return null;
+  if (!nums.length) return null;
+  if (nums.some((n) => n < 1 || n > count)) return null;
+  return [...new Set(nums)].sort((a, b) => a - b);
 }
+
+// A yes to Mo or to its voice: the member brief's whole-message reader, plus the short phrases people actually use.
+export function readMoConsent(quote: unknown, message: string): "yes" | "no" | null {
+  const base = readNameAnswer(quote, message);
+  if (base) return base;
+  const m = String(message).toLowerCase().replace(/[’‘]/g, "'").replace(/[^a-z0-9' ]+/g, " ").replace(/\s+/g, " ").trim();
+  const q = String(quote ?? "").toLowerCase().replace(/[’‘]/g, "'").replace(/[^a-z0-9' ]+/g, " ").replace(/\s+/g, " ").trim();
+  if (q.length < 2 || !m.includes(q)) return null;
+  if (m.split(" ").length <= 12 && /^(?:ok|okay|looks good|perfect|sounds good|go ahead|do it|that works)\b/.test(q) && !/\b(no|not|don't|never|leave|out|can't|skip|without|but|only|except)\b/.test(m)) return "yes";
+  return null;
+}
+export const readConsent = readMoConsent;
 
 // ---------------------------------------------------------------- the message that goes to a stranger
 
@@ -105,6 +127,9 @@ export type ContactState = {
   followedUpAt: Date | null;
   repliedAt: Date | null;
   approachTextOk: boolean;
+  // The exact words the member approved, and what would be sent now: they must be the same.
+  approvedText: string | null;
+  textNow: string;
 };
 
 export function localHourOk(now: Date, zoneHour: number): boolean {
@@ -121,11 +146,16 @@ export function contactVerdict(s: ContactState & { localHour: number }): { ok: b
   if (s.memberPaused) return no("the member told Mo to stop");
   if (s.autoPaused) return no("paused after too many contacts went badly");
   if (!s.voiceApproved) return no("the member hasn't approved the voice");
-  if (s.batchStatus !== "approved") return no(`the batch is ${s.batchStatus}, not approved`);
-  if (!s.batchExpiresAt || s.batchExpiresAt <= s.now) return no("the batch has expired");
+  // A first contact needs a live yes: an approved batch inside its window. A follow-up is the same yes carried on, one week later.
+  if (s.step === "approach") {
+    if (s.batchStatus !== "approved") return no(`the batch is ${s.batchStatus}, not approved`);
+    if (!s.batchExpiresAt || s.batchExpiresAt <= s.now) return no("the batch has expired");
+  }
   if (s.suppressed) return no("this person is on the do-not-contact list");
   if (!s.approvedAt) return no("the member didn't approve this person");
   if (!s.approachTextOk) return no("the message doesn't pass the message check");
+  if (s.step === "approach" && s.approvedText !== null && s.approvedText !== s.textNow) return no("what would be sent is not the text the member approved");
+  if (s.step === "approach" && s.approvedText === null) return no("no approved text on file for this person");
   if (!localHourOk(s.now, s.localHour)) return no("outside sending hours");
   if (s.memberSentThisWeek >= MEMBER_MO.perMemberPerWeek) return no(`already ${MEMBER_MO.perMemberPerWeek} contacts for this member this week`);
   if (s.clubSentToday >= Math.min(MEMBER_MO.clubPerDay, s.teamDailyCap)) return no("the club's daily limit is reached");

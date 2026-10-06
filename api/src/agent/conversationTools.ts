@@ -561,26 +561,22 @@ export function createConversationTools(ctx: ConversationToolContext) {
         const R = await import("../mo/memberRules.js");
         const F = await import("../mo/memberFlow.js");
         if (R.readConsent(input.theirYes, ctx.resolvedContent) !== "yes") {
-          notDone("The introduction wasn't started: it isn't a clear yes in their words.");
+          notDone("The introduction wasn't set up: it isn't a clear yes in their words.");
           return { ok: false, error: "Only their own clear yes counts." };
         }
-        const { rows } = await pool.query(`SELECT * FROM mo_member_candidates WHERE user_id = $1 AND status = 'joined' AND joined_user_id IS NOT NULL AND intro_at IS NULL ORDER BY joined_at DESC`, [ctx.userId]);
+        const { rows } = await pool.query(`SELECT * FROM mo_member_candidates WHERE user_id = $1 AND status IN ('replied', 'invited', 'joined') AND intro_at IS NULL ORDER BY created_at DESC`, [ctx.userId]);
         const want = String(input.who ?? "").trim().toLowerCase();
         const matches = want ? rows.filter((r: any) => String(r.name ?? "").toLowerCase().includes(want) || String(r.x_handle ?? "").toLowerCase() === want.replace(/^@/, "") || String(r.n) === want) : rows;
         if (matches.length !== 1) {
-          notDone(matches.length ? "The introduction wasn't started: more than one person has joined." : "The introduction wasn't started: no one they asked about has joined yet.");
-          return { ok: false, error: matches.length ? "More than one person has joined. Ask which one." : "No one has joined yet." };
+          notDone(matches.length ? "The introduction wasn't set up: more than one person is waiting on this." : "The introduction wasn't set up: no one is waiting on it.");
+          return { ok: false, error: matches.length ? "More than one person is waiting on this. Ask which one." : "No one is waiting on an introduction." };
         }
         if (ctx.dryRun) return { ok: true, note: "dry run" };
-        const c = matches[0];
-        const done = await F.recordIntroYes(ctx.userId, c.id, String(input.theirYes));
+        const done = await F.recordIntroYes(ctx.userId, matches[0].id, String(input.theirYes));
         if (!done.ok) return { ok: false, error: done.why ?? "Not possible." };
-        // The other person is asked on their own, through the existing network intro: the email goes out only when they say yes too.
-        const { rows: u } = await pool.query(`SELECT id AS user_id, first_name, phone_number, email FROM users WHERE id = ANY($1::uuid[])`, [[ctx.userId, c.joined_user_id]]);
-        const me = u.find((x: any) => x.user_id === ctx.userId);
-        const them = u.find((x: any) => x.user_id === c.joined_user_id);
-        if (me && them) await (await import("../services/networkIntroNudge.js")).askCandidateDirectly(them, me, String(c.why).slice(0, 240), null).catch(() => {});
-        ctx.facts?.add("did_this_turn", "They said yes to the introduction. The other person is being asked now. The introduction email goes to both of them only if they say yes too; don't promise it.");
+        // Their side is only recorded. If the person joins, the other side is asked on their own (mo/memberJobs.ts) and the email
+        // goes out only when both say yes. The member is never told whether or when someone joined.
+        ctx.facts?.add("did_this_turn", "They said yes to being introduced if this person joins. Nothing else happens unless the person joins and also says yes; you will not be told if they join, so never say or imply that they have.");
         return { ok: true };
       },
     }),
@@ -588,10 +584,7 @@ export function createConversationTools(ctx: ConversationToolContext) {
       description: toolUse("stopMo"),
       inputSchema: z.object({}),
       execute: async () => {
-        if (!/\b(stop|pause|cancel|no more|hold off|don'?t (reach|contact|message|send)|turn (it|mo) off|shut)\b/i.test(ctx.resolvedContent)) {
-          notDone("Mo wasn't stopped: they didn't ask for that.");
-          return { ok: false, error: "They didn't ask to stop Mo." };
-        }
+        // Stopping is always safe, so the model's call is enough: it only ever cancels what hasn't been sent.
         if (ctx.dryRun) return { ok: true, note: "dry run" };
         await (await import("../mo/memberFlow.js")).stopMo(ctx.userId, ctx.resolvedContent.slice(0, 200));
         ctx.facts?.add("did_this_turn", "Mo is stopped for them: nothing more goes out and anything not yet sent is cancelled. They can ask you to start it again.");

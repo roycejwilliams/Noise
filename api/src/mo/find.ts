@@ -147,11 +147,13 @@ Return ONLY JSON: {"people": [{"index": 0, "fit": true, "reason": "...", "quote"
 }
 
 async function alreadyKnown(keys: string[], xUserId: string | null, linkedinUrl: string | null): Promise<boolean> {
-  const [supp, prospect] = await Promise.all([
+  const [supp, prospect, memberHas] = await Promise.all([
     keys.length ? pool.query(`SELECT 1 FROM mo_suppression WHERE key = ANY($1::text[]) LIMIT 1`, [keys]) : Promise.resolve({ rows: [] as any[] }),
     pool.query(`SELECT 1 FROM mo_prospects WHERE (x_user_id IS NOT NULL AND x_user_id = $1) OR (linkedin_url IS NOT NULL AND linkedin_url = $2) LIMIT 1`, [xUserId, linkedinUrl]),
+    // Someone a member's Mo already has (mo/memberFlow.ts) is not found again for the team.
+    xUserId ? pool.query(`SELECT 1 FROM mo_member_candidates WHERE x_user_id = $1 LIMIT 1`, [xUserId]).catch(() => ({ rows: [] as any[] })) : Promise.resolve({ rows: [] as any[] }),
   ]);
-  return Boolean(supp.rows[0] || prospect.rows[0]);
+  return Boolean(supp.rows[0] || prospect.rows[0] || memberHas.rows[0]);
 }
 
 // LinkedIn through web search only: what the results page shows. No login,

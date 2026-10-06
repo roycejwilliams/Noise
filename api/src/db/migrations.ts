@@ -124,8 +124,10 @@ export async function runMigrations(): Promise<void> {
         voice_approved_at TIMESTAMPTZ,
         voice_quote TEXT,
         paused_at TIMESTAMPTZ,
-        hunt_last_at TIMESTAMPTZ
+        hunt_last_at TIMESTAMPTZ,
+        offer_checked_at TIMESTAMPTZ
       )`))
+    .then(() => pool.query(`ALTER TABLE invite_codes ADD COLUMN IF NOT EXISTS vouched_by UUID REFERENCES users(id) ON DELETE SET NULL`))
     .then(() => pool.query(`CREATE TABLE IF NOT EXISTS mo_member_batches (
         id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
         user_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
@@ -150,7 +152,9 @@ export async function runMigrations(): Promise<void> {
         post_text TEXT,
         evidence_quote TEXT NOT NULL,
         why TEXT NOT NULL,
-        status TEXT NOT NULL DEFAULT 'pending' CHECK (status IN ('pending','approved','skipped','contacted','replied','declined','invited','joined','closed','blocked')),
+        status TEXT NOT NULL DEFAULT 'pending' CHECK (status IN ('pending','approved','sending','skipped','contacted','replied','declined','invited','joined','closed','blocked')),
+        approved_text TEXT,
+        intro_seeded_at TIMESTAMPTZ,
         approved_at TIMESTAMPTZ,
         approved_quote TEXT,
         contacted_at TIMESTAMPTZ,
