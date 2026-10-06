@@ -48,7 +48,7 @@ for (const f of files) {
   for (const m of readFileSync(f, "utf8").matchAll(/(?:from|import)\s*\(?\s*["'](\.{1,2}\/[^"']+)["']/g)) deps.add(rel(resolve(dirname(f), m[1].replace(/\.js$/, ".ts"))));
   graph.set(rel(f), deps);
 }
-check("only the reply route and the reply tools import the document service", [...graph.entries()].filter(([, d]) => d.has(DOCS)).map(([f]) => f).sort().join() === ["src/agent/loopTools.ts", "src/routes/sendblue.ts"].join());
+check("only the reply route and the reply tools import the document service", [...graph.entries()].filter(([, d]) => d.has(DOCS)).map(([f]) => f).sort().join() === ["src/agent/conversationReply.ts", "src/agent/loopTools.ts", "src/routes/sendblue.ts"].join());
 
 // ---------- 2. DEFAULT-DENY: the private table has exactly the readers that must have it
 const PRIVATE_TABLE = mention(/co_private_memories/);
@@ -125,6 +125,7 @@ try {
   };
   try {
     P.markPrivateTurn("A", Date.now());
+    writes.length = 0; // the stored window itself
     const match: any = { tier: 3, kind: "opportunity", name: "Biotech Seed Fund Office Hours", url: "https://example.com/x", reason: "fits their raise" };
     await rec.recordRecommendationsSent("A", [match]);
     check("finds shared while a document is open leave no recommendation, no people-graph fact, no offer record", writes.length === 0);
@@ -189,7 +190,7 @@ check("no standing list of documents is in every turn's facts", !/documentsOnFil
 
 // ---------- 6. the tools: read, discuss and draft, never anything lasting or on anyone else's behalf
 const G = await import("../../src/agent/toolGuard.js");
-const lasting = ["startTask", "saveAsk", "closeAsk", "updateNotes", "updateLoop", "followUp", "requestEventIntro", "sendInvite", "steerAwayFrom", "noteReaction", "handToTeammate", "askTeammate", "markArrived", "sendProductUpdates", "googleConnection", "saveFeedback"];
+const lasting = ["startTask", "saveAsk", "closeAsk", "updateNotes", "updateLoop", "followUp", "requestEventIntro", "sendInvite", "steerAwayFrom", "noteReaction", "handToTeammate", "askTeammate", "sendProductUpdates", "googleConnection", "saveFeedback"];
 check("every lasting tool is refused on a sealed turn", lasting.every((t) => !G.SEALED_ALLOWED.has(t)));
 check("what is allowed is reading, searching, sharing and drafting", ["readDocument", "searchEvents", "webSearch", "readPage", "shareFinds", "shareLink", "draftEmail", "emailPlan", "sendReply"].every((t) => G.SEALED_ALLOWED.has(t)));
 P.markPrivateTurn("A", Date.now());
@@ -202,8 +203,55 @@ P.markPrivateTurn("A", Date.now());
   const r2: any = await guarded.saveAsk.execute({ what: "investors" }, {});
   check("a lasting tool does not run on a sealed turn, and Co is told how to answer", ran === 0 && r1.ok === false && r2.ok === false && /ask again in a few minutes/.test(String(r1.error)) && notDone.length === 2);
 }
+{
+  // N1 (third review): the first readDocument of a turn seals it mid-tool; no fact about it may be written after.
+  const realQ = poolMod.query;
+  const seen: string[] = [];
+  poolMod.query = async (q: string) => {
+    seen.push(q);
+    return { rows: [], rowCount: 0 };
+  };
+  try {
+    await P.runPrivate(async () => {
+      const tools: any = { readDocument: { inputSchema: undefined, execute: async () => { P.markPrivateTurn("Z", Date.now()); return { ok: true }; } } };
+      const g = G.guardTools(tools, { userId: "Z", resolvedContent: "what does my deck say", notDone: () => {} });
+      await g.readDocument.execute({ document: "1" }, {});
+    }, false);
+  } finally {
+    poolMod.query = realQ;
+  }
+  check("the first readDocument of a turn leaves no fact of having read it", !seen.some((q) => /co_facts/.test(q)));
+}
+{
+  // Third review: outcome notes carry the member's words into matching; and the window must survive a restart.
+  const realQ = poolMod.query;
+  const calls: { q: string; p: any[] }[] = [];
+  let stored: Date | null = null;
+  poolMod.query = async (q: string, p: any[]) => {
+    calls.push({ q, p });
+    if (/SELECT private_until/.test(q)) return { rows: [{ private_until: stored }] };
+    return { rows: [], rowCount: 0 };
+  };
+  const { recordSuggestionOutcome } = await import("../../src/services/outcomes.js");
+  try {
+    await P.runPrivate(async () => {
+      P.markPrivateTurn("N", Date.now());
+      calls.length = 0;
+      await recordSuggestionOutcome("N", "event", "event:1", "An event", "helped", "the deck says we raise 2M");
+    }, false);
+    check("an outcome noted while a document is open keeps none of the member's words", calls.length === 1 && calls[0].p[5] === null);
+    calls.length = 0;
+    await recordSuggestionOutcome("M", "event", "event:2", "An event", "helped", "loved it");
+    check("another member's outcome note is kept as always", calls[0]?.p[5] === "loved it");
+    stored = new Date(Date.now() + 5 * 60 * 1000);
+    await P.loadWindow("R");
+    check("after a restart the stored window seals the member again (a replayed turn stays private)", P.isPrivateTurn("R") === true && P.isPrivateTurn("S") === false);
+  } finally {
+    poolMod.query = realQ;
+  }
+}
 const guardSrc = read("src/agent/toolGuard.ts");
-check("the log of a sealed turn names the tool and what happened, never what was said or asked", /sealed: true/.test(guardSrc) && /: sealed\s*\?\s*recordDecision/.test(guardSrc) && /!ctx\.abilityFor && !sealed\) await recordToolAction/.test(guardSrc));
+check("the log of a sealed turn names the tool and what happened, never what was said or asked", /sealed: true/.test(guardSrc) && /: sealed\s*\?\s*recordDecision/.test(guardSrc) && /!ctx\.abilityFor && !sealed && !isPrivateTurn\(ctx\.userId\)\) await recordToolAction/.test(guardSrc));
 check("the grounding log keeps no draft or reply on a sealed turn", /isPrivateTurn\(opts\.userId\) \? \{ sealed: true \}/.test(read("src/harness/replyGrounding.ts")));
 
 // ---------- 6b. the decision log, central, says only that a decision was made while a document was open
@@ -219,6 +267,7 @@ check("a decision recorded while a document is open keeps no proposal, reason, a
   const { recordDecision } = await import("../../src/harness/core.js");
   try {
     P.markPrivateTurn("A", Date.now());
+    captured.length = 0; // the stored window itself
     await recordDecision({ layer: 3, decision: "tool.emailPlan", userId: "A", outcome: "act", action: "Series A at a 12M cap", proposal: { query: "robotics investors 2M seed" }, reason: "their deck", checks: [{ name: "c", pass: true, reason: "the deck says 2.5M" } as any] });
     await recordDecision({ layer: 3, decision: "tool.emailPlan", userId: "B", outcome: "act", action: "a plan for B", proposal: { q: "x" }, reason: "r" });
   } finally {
@@ -232,7 +281,7 @@ check("a decision recorded while a document is open keeps no proposal, reason, a
 
 // ---------- 7. nothing a document says goes to the trace store
 const tele = files.filter((f) => !/services\/(documents|privateTurn)\.ts$/.test(f)).flatMap((f) => [...readFileSync(f, "utf8").matchAll(/experimental_telemetry: \{([^}]{0,40})/g)].map((m) => ({ f: rel(f), head: m[1] })));
-check(`every model call's telemetry setting in the app keeps the prompts out of the trace on a sealed turn (${tele.length} sites)`, tele.length > 50 && tele.every((t) => /\.\.\.sealedTelemetry\(\)/.test(t.head)));
+check(`every model call's telemetry setting in the app keeps the prompts out of the trace on a sealed turn (${tele.length} sites)`, tele.length > 50 && tele.every((t) => /\.\.\.sealedTelemetry\(/.test(t.head)));
 check("the document service's own reads never record input or output", /recordInputs: false, recordOutputs: false/.test(read(DOCS)));
 check("sealedTelemetry turns recording off on a sealed turn and does nothing otherwise", (() => {
   const sealed = P.runPrivate(() => (P.markPrivateTurn(), P.sealedTelemetry()), false);

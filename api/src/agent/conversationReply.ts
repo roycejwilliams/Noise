@@ -486,6 +486,8 @@ Then act with your tools:
   // A photo the model can't open (2026-10-01: two screenshots in a row failed
   // the whole turn, and Co asked them to send it again) retries once without
   // it, from their words and what's known about the photo.
+  // A member with a document on file: the loop can read it mid-turn, after its trace setting is fixed, so its trace keeps no content.
+  const hasDocuments = await import("../services/documents.js").then((d) => d.hasDocuments(input.userId));
   const runAgent = (withImage: boolean) =>
     generateText({
     // Sonnet, not Haiku — dry-run testing showed Haiku missing the
@@ -524,7 +526,7 @@ Then act with your tools:
     // tools answer "out of time" so Co writes what it has; this stops the
     // loop between steps, never mid-tool, TURN_GRACE_S after that.
     stopWhen: [stepCountIs(LOOP_BUDGET.steps), () => state.sendStopped, () => state.reacted, () => Date.now() > replyDeadline],
-    experimental_telemetry: { ...sealedTelemetry(), isEnabled: true, functionId: "agent.conversationReply" },
+    experimental_telemetry: { ...sealedTelemetry(hasDocuments), isEnabled: true, functionId: "agent.conversationReply" },
     ...(withImage && input.imageForVision
       ? {
           messages: [

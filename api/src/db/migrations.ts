@@ -138,6 +138,8 @@ export async function runMigrations(): Promise<void> {
     .then(() => pool.query(`CREATE INDEX IF NOT EXISTS idx_co_private_memories_user ON co_private_memories (user_id, created_at DESC)`))
     .catch((err: Error) => console.error("co_private_memories table init failed:", err));
 
+  // Where the private window ends, so a restart (which replays unfinished turns) doesn't lose it.
+  await pool.query(`ALTER TABLE users ADD COLUMN IF NOT EXISTS private_until TIMESTAMPTZ`).catch(() => {});
   // Documents a member sends Co (2026-10-05, services/documents.ts): the file itself, what it says, kept for that
   // member only. One row per distinct file per member.
   await pool

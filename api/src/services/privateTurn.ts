@@ -12,6 +12,7 @@
 // Per turn, carried by the async context, so every write on the turn is covered without threading a flag through
 // each call (the reply path, its tools, the logging of what was sent).
 import { AsyncLocalStorage } from "node:async_hooks";
+import pool from "../db/db.js";
 
 // userId: whose turn this is. A write for any other member in the same turn is never made private by it.
 type Store = { private: boolean; userId?: string };
@@ -33,7 +34,17 @@ export function markPrivateTurn(userId?: string, now = Date.now()): void {
     s.private = true;
     if (userId) s.userId = userId;
   }
-  if (userId) recent.set(userId, now + PRIVATE_WINDOW_MS);
+  if (userId) {
+    recent.set(userId, now + PRIVATE_WINDOW_MS);
+    // Kept in the database too: a restart replays unfinished turns, and a replay must still be sealed.
+    pool.query(`UPDATE users SET private_until = to_timestamp($2 / 1000.0) WHERE id = $1`, [userId, now + PRIVATE_WINDOW_MS]).catch(() => {});
+  }
+}
+// Before joinWindow: bring the stored window back into this process (after a restart, or from another instance).
+export async function loadWindow(userId: string, now = Date.now()): Promise<void> {
+  const { rows } = await pool.query(`SELECT private_until FROM users WHERE id = $1`, [userId]).catch(() => ({ rows: [] as any[] }));
+  const until = rows[0]?.private_until ? new Date(rows[0].private_until).getTime() : 0;
+  if (until > now && (recent.get(userId) ?? 0) < until) recent.set(userId, until);
 }
 // At the start of a member's turn, once we know whose it is: if they are inside the window, this turn is sealed from its
 // first step, so everything that asks without a member id (the trace settings) sees it too.
@@ -85,6 +96,6 @@ export function liveRows<T extends { content: string; private?: boolean }>(rows:
 
 // Model calls made during a sealed turn keep their prompts and answers out of the trace store: they carry what a
 // document says. Spread into any `experimental_telemetry` setting.
-export function sealedTelemetry(): { recordInputs?: false; recordOutputs?: false } {
-  return isPrivateTurn() ? { recordInputs: false, recordOutputs: false } : {};
+export function sealedTelemetry(always = false): { recordInputs?: false; recordOutputs?: false } {
+  return always || isPrivateTurn() ? { recordInputs: false, recordOutputs: false } : {};
 }

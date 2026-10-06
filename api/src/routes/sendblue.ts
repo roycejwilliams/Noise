@@ -1,5 +1,5 @@
 import { notToTeammate } from "../services/teamLines.js";
-import { beginTurn, isPrivateTurn, joinWindow, liveRows, markPrivateTurn } from "../services/privateTurn.js";
+import { beginTurn, isPrivateTurn, joinWindow, loadWindow, liveRows, markPrivateTurn } from "../services/privateTurn.js";
 import { isDiscreetTurn } from "../harness/discretion.js";
 import { anthropic } from "@ai-sdk/anthropic";
 import { captureIssueReport } from "../services/issueReports.js";
@@ -1151,6 +1151,7 @@ export function sendblueRouter(io: Server): Router {
           return label ? { ...r, what: label } : r;
         });
         let isVoice = false;
+        await loadWindow(user.id);
         joinWindow(user.id); // inside the window after a document: this turn is sealed from the start (services/privateTurn.ts)
         let imageForVision: { data: Buffer; mediaType: string } | null = null;
         let photoDescription: string | null = null;
@@ -1206,6 +1207,7 @@ export function sendblueRouter(io: Server): Router {
                 imageForVision = { data: buffer, mediaType };
                 // Written down once, for the record and the reply's fact check
                 // (services/imageRead.ts, 2026-09-22).
+                markPrivateTurn(user.id); // before the model sees the image: its trace must not keep it
                 photoDescription = await describeImage(buffer, mediaType);
                 if (!resolvedContent) resolvedContent = photoDescription ? `[sent a photo showing: ${photoDescription}]` : "[sent a photo]";
                 // An image is kept like a document, for them alone, so "that screenshot I sent" can be read again.
@@ -1913,7 +1915,7 @@ export function sendblueRouter(io: Server): Router {
         // so hasActiveAsk would still read false for this exact message and
         // Co would ask the same question a second time.
         const walkinAnswer = resolvedAs("walkin_ask");
-        if (walkinAnswer?.item.ref?.kind === "walkin_ask") {
+        if (walkinAnswer?.item.ref?.kind === "walkin_ask" && !isPrivateTurn(user.id)) {
           await recordWalkinAsk(walkinAnswer.item.ref.eventApiId, user.id, content).catch((err: any) =>
             console.error("sendblue: recordWalkinAsk failed (non-fatal):", err?.message ?? err),
           );
@@ -2038,7 +2040,7 @@ export function sendblueRouter(io: Server): Router {
             const pendingOutcomeFollowUp = resolvedOutcome.item.ref.pending;
             const outcome = resolvedOutcome.value as "named_positive" | "named_critical" | "not_mentioned";
             await recordOutcome(user.id, pendingOutcomeFollowUp.id, pendingOutcomeFollowUp.tier, outcome);
-            await recordSuggestionOutcome(user.id, pendingOutcomeFollowUp.tier === 0 ? "intro" : pendingOutcomeFollowUp.tier === 3 ? "opportunity" : "event", `followup:${pendingOutcomeFollowUp.id}`, pendingOutcomeFollowUp.match_name, resultFromNamedOutcome(outcome), resolvedContent.slice(0, 160));
+            await recordSuggestionOutcome(user.id, pendingOutcomeFollowUp.tier === 0 ? "intro" : pendingOutcomeFollowUp.tier === 3 ? "opportunity" : "event", `followup:${pendingOutcomeFollowUp.id}`, pendingOutcomeFollowUp.match_name, resultFromNamedOutcome(outcome), isPrivateTurn(user.id) ? null : resolvedContent.slice(0, 160));
             addFact(replyFacts, "did_this_turn", `Recorded what they said about how "${pendingOutcomeFollowUp.match_name}" went.`);
             // Stay-scoped clause (Royce, 2026-09-07, confirmed live) —
             // without this, a name or detail from a DIFFERENT,
@@ -2070,7 +2072,7 @@ export function sendblueRouter(io: Server): Router {
             const pendingCheckin = resolvedCheckin.item.ref.pending;
             const outcome = resolvedCheckin.value as "named_positive" | "named_critical" | "not_mentioned";
             await recordEventCheckinOutcome(user.id, pendingCheckin.id, pendingCheckin.event_api_id, outcome);
-            await recordSuggestionOutcome(user.id, "event", `event:${pendingCheckin.event_api_id}`, pendingCheckin.event_name, resultFromNamedOutcome(outcome), resolvedContent.slice(0, 160));
+            await recordSuggestionOutcome(user.id, "event", `event:${pendingCheckin.event_api_id}`, pendingCheckin.event_name, resultFromNamedOutcome(outcome), isPrivateTurn(user.id) ? null : resolvedContent.slice(0, 160));
             addFact(replyFacts, "did_this_turn", `Recorded what they said about "${pendingCheckin.event_name}".`);
             // Same stay-scoped fix as the outcome follow-up above — a
             // name/detail from a different, already-resolved follow-up
@@ -2237,7 +2239,7 @@ Return ONLY valid JSON, no preamble: {"date": "YYYY-MM-DD or null", "time": "HH:
                 );
                 await pool.query(
                   `INSERT INTO scheduled_calls (user_id, requested_text, timezone, scheduled_for) VALUES ($1, $2, $3, $4)`,
-                  [user.id, resolvedContent, parsed.timezone, local.toUTC().toISO()],
+                  [user.id, isPrivateTurn(user.id) ? "[a call, asked for while a document was open]" : resolvedContent, parsed.timezone, local.toUTC().toISO()],
                 );
                 const formattedTime = local.toFormat("cccc, LLLL d 'at' h:mm a");
                 addFact(

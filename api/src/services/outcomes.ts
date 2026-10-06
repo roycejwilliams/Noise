@@ -8,6 +8,7 @@
 // and away from what didn't. Tier weighting (getTierBias) still reads its
 // own co_memories rows.
 import pool from "../db/db.js";
+import { isPrivateTurn } from "./privateTurn.js";
 
 export type SuggestionKind = "event" | "opportunity" | "intro";
 // acted: they said they signed up, applied, or went (a reaction to something
@@ -31,7 +32,7 @@ export async function recordSuggestionOutcome(
       `INSERT INTO suggestion_outcomes (user_id, kind, item_key, item_name, result, note) VALUES ($1, $2, $3, $4, $5, $6)
        ON CONFLICT (user_id, item_key, result) DO UPDATE SET item_name = EXCLUDED.item_name
          WHERE suggestion_outcomes.item_name LIKE '%(name not shared)'`,
-      [userId, kind, itemKey, itemName, result, note ?? null],
+      [userId, kind, itemKey, itemName, result, isPrivateTurn(userId) ? null : note ?? null],
     )
     .catch((err: any) => console.error("recordSuggestionOutcome failed (non-fatal):", err?.message ?? err));
 }

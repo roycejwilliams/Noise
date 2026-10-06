@@ -27,7 +27,7 @@ const UNGUARDED = new Set(["sendReply", "markTopicAsked"]);
 // discuss, search, share what it finds and draft. It may not create anything that lasts or that acts on anyone else's
 // behalf: an ask, a task, notes, a loop, a follow-up, an introduction, an invite, anything for the team. Those carry text
 // into stores that other members' matches are built from; the member can ask again once the conversation has gone quiet.
-export const SEALED_ALLOWED = new Set(["sendReply", "reactInsteadOfReplying", "readDocument", "searchEvents", "webSearch", "searchPosts", "readPage", "shareFinds", "shareLink", "sendContactCard", "draftEmail", "emailPlan", "checkInvitesLeft", "listOpenAsks", "listSent"]);
+export const SEALED_ALLOWED = new Set(["sendReply", "reactInsteadOfReplying", "readDocument", "searchEvents", "webSearch", "searchPosts", "readPage", "shareFinds", "shareLink", "sendContactCard", "draftEmail", "emailPlan", "checkInvitesLeft", "listOpenAsks", "listSentOffers", "flagSafetyConcern", "markArrived"]);
 
 const norm = (s: unknown) => String(s ?? "").toLowerCase().replace(/[’‘]/g, "'").replace(/[^a-z0-9' ]+/g, " ").replace(/\s+/g, " ").trim();
 
@@ -125,7 +125,7 @@ export function guardTools<T extends Record<string, any>>(tools: T, ctx: GuardCt
       await log(failed ? "not_done" : "done", failed ? { error: String(result.error ?? "").slice(0, 200) } : {});
       // Co's record of what it did for them (services/coFacts.ts). Only
       // Co's own tools: an extension's team tools act for the team.
-      if (!failed && !ctx.dryRun && !ctx.abilityFor && !sealed) await recordToolAction(ctx.userId, name, input);
+      if (!failed && !ctx.dryRun && !ctx.abilityFor && !sealed && !isPrivateTurn(ctx.userId)) await recordToolAction(ctx.userId, name, input);
       return result;
     };
   }

@@ -44,6 +44,11 @@ export type MemberDoc = {
 };
 
 // Pure: a PDF by its own bytes (links and content types lie).
+// Whether the member has any document on file (a cheap check; nothing of it is returned).
+export async function hasDocuments(userId: string): Promise<boolean> {
+  return pool.query(`SELECT 1 FROM member_documents WHERE user_id = $1 LIMIT 1`, [userId]).then((r) => r.rows.length > 0, () => false);
+}
+
 export function isPdf(b: Buffer): boolean {
   return b.length > 8 && b.toString("latin1", 0, 5) === "%PDF-";
 }
