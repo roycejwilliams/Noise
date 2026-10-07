@@ -25,8 +25,8 @@ const auth = src("services/googleAuth.ts");
 const data = src("services/googleData.ts");
 
 // ------------------------------------------------ scopes: read-only, minimal
-check("only two scopes: calendar free/busy and Gmail metadata", JSON.stringify(A.GOOGLE_SCOPES) === JSON.stringify(["https://www.googleapis.com/auth/calendar.freebusy", "https://www.googleapis.com/auth/gmail.metadata"]));
-check("no send, compose, modify, insert or full-access scope anywhere", !/gmail\.(send|compose|modify|insert|readonly)|mail\.google\.com|auth\/calendar(\.events)?["'\s]|calendar\.events|auth\/drive/.test(auth + data));
+check("only three scopes: calendar free/busy, Gmail metadata, and drive.file (files Co creates, 2026-10-08)", JSON.stringify(A.GOOGLE_SCOPES) === JSON.stringify(["https://www.googleapis.com/auth/calendar.freebusy", "https://www.googleapis.com/auth/gmail.metadata", "https://www.googleapis.com/auth/drive.file"]));
+check("no send, compose, modify, insert or full-access scope anywhere (drive.file, files Co creates, is the only Drive scope)", !/gmail\.(send|compose|modify|insert|readonly)|mail\.google\.com|auth\/calendar(\.events)?["'\s]|calendar\.events|auth\/drive(?!\.file)/.test(auth + data));
 check("granted scopes must be a subset of what Co asked for", A.scopesAllowed("https://www.googleapis.com/auth/calendar.freebusy https://www.googleapis.com/auth/gmail.metadata") && A.scopesAllowed("https://www.googleapis.com/auth/calendar.freebusy"));
 check("anything wider is refused", !A.scopesAllowed("https://www.googleapis.com/auth/gmail.metadata https://www.googleapis.com/auth/gmail.send") && !A.scopesAllowed("") && !A.scopesAllowed("https://mail.google.com/"));
 check("wider scopes are revoked, not kept", /if \(!scopesAllowed\(tokens\.scope \?\? ""\)\) \{\s*\/\/[^\n]*\n\s*await revokeToken\(/.test(auth));

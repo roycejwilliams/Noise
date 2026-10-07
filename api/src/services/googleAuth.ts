@@ -1,22 +1,24 @@
-// Google Calendar and Gmail, read-only (Royce, 2026-09-28: "Gmail for tracking
+// Google Calendar and Gmail, read-only, and (2026-10-08) creating a Google Doc in their Drive when they ask (Royce, 2026-09-28: "Gmail for tracking
 // sponsor outreach, Calendar so I actually know when you're free instead of
 // guessing"). Off until the Google OAuth client exists (GOOGLE_CLIENT_ID,
 // GOOGLE_CLIENT_SECRET, GOOGLE_TOKEN_KEY on the service).
 //
 // The member connects by text: Co sends a one-time link bound to them
 // (15 minutes, single use), which starts Google's consent screen with a
-// random state and PKCE. Only two read scopes are ever asked for: free/busy
-// on their calendars, and Gmail metadata (who, subject, when; never a
-// message body). Tokens are encrypted at rest with AES-256-GCM, kept to that
+// random state and PKCE. Three scopes are ever asked for: free/busy on their
+// calendars, Gmail metadata (who, subject, when; never a message body), and
+// drive.file (only files Co creates for them; never the rest of their Drive). Tokens are encrypted at rest with AES-256-GCM, kept to that
 // member only, and "disconnect Google" deletes and revokes them.
 import { createCipheriv, createDecipheriv, createHash, randomBytes } from "node:crypto";
 import pool from "../db/db.js";
 import { recordDecision } from "../harness/core.js";
 
-// The only scopes Co ever asks for, and the only ones it accepts back.
+// The only scopes Co ever asks for, and the only ones it accepts back. drive.file (2026-10-08): Co can create a Google Doc in their Drive
+// when they ask, and can see only the files it created; never anything else in their Drive (services/googleDocs.ts).
 export const GOOGLE_SCOPES = [
   "https://www.googleapis.com/auth/calendar.freebusy",
   "https://www.googleapis.com/auth/gmail.metadata",
+  "https://www.googleapis.com/auth/drive.file",
 ] as const;
 
 const AUTH_URL = "https://accounts.google.com/o/oauth2/v2/auth";
@@ -166,6 +168,9 @@ export async function finishConnect(state: string, code: string, fetchImpl: type
 }
 
 // ------------------------------------------------------------ using and ending it
+
+// Whether they let Co create Docs (drive.file is one tick on Google's consent screen; they can leave it off).
+export const canCreateDocs = (scopes: string[]) => scopes.includes("https://www.googleapis.com/auth/drive.file");
 
 export async function isConnected(userId: string): Promise<{ connected: boolean; scopes: string[] }> {
   const { rows } = await pool.query(`SELECT scopes FROM google_connections WHERE user_id = $1`, [userId]).catch(() => ({ rows: [] as any[] }));

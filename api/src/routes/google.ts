@@ -27,7 +27,7 @@ export function createGoogleRouter(): Router {
     }
     const r = await finishConnect(state, code).catch(() => ({ ok: false }));
     if (!r.ok) return res.status(400).send(page("Not connected", "That didn't work, so nothing was connected. Text Co for a new link."));
-    res.send(page("Connected", "Co can now see when you're busy (not what the events are) and which emails you sent are still waiting on a reply. It never sends email or changes your calendar. Text Co \"disconnect Google\" any time."));
+    res.send(page("Connected", "Co can now see when you're busy (not what the events are) and which emails you sent are still waiting on a reply, and, if you allowed it, save a document you ask for as a Google Doc in your Drive (Co sees only the files it creates). It never sends email or changes your calendar. Text Co \"disconnect Google\" any time."));
   });
 
   return router;

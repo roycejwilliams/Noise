@@ -99,6 +99,7 @@
     "evals/calls/speakable.ts",
     "evals/calls/llmProxy.ts",
     "evals/calls/provenance.ts",
-    "evals/docs/document.ts"
+    "evals/docs/document.ts",
+    "evals/docs/googleDocs.ts"
   ]
 }

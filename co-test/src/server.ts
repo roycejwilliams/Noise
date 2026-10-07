@@ -26,6 +26,7 @@ import { reportUnfinishedTurns, sendblueRouter } from "../../api/src/routes/send
 import { serveInvitePage } from "../../api/src/routes/invitePage.js";
 import { createLumaRouter } from "../../api/src/routes/luma.js";
 import { createMoRouter } from "../../api/src/routes/mo.js";
+import { createGoogleRouter } from "../../api/src/routes/google.js";
 import { registerJobs } from "../../api/src/jobs/index.js";
 import { installGracefulShutdown, trackRequests } from "../../api/src/services/shutdown.js";
 
@@ -132,6 +133,8 @@ async function main() {
   // process runs api/src/server.ts on this branch/environment. Same
   // factory functions, same io instance pattern api's own server uses.
   app.use("/co", createCoRouter(io));
+  // Google connect pages (api/src/routes/google.ts): never mounted on co-test before, so the connect link 404ed here. Mirrors api/src/server.ts.
+  app.use("/google", createGoogleRouter());
   app.use("/sendblue", sendblueRouter(io));
   app.use("/luma", createLumaRouter());
   // Mo's email opt-out link and inbound email replies (2026-09-25: Mo runs
