@@ -98,6 +98,7 @@
     "evals/asks/journey.ts",
     "evals/calls/speakable.ts",
     "evals/calls/llmProxy.ts",
-    "evals/calls/provenance.ts"
+    "evals/calls/provenance.ts",
+    "evals/docs/document.ts"
   ]
 }

@@ -33,7 +33,8 @@ export type Ability = {
   };
   // Needs the member's own yes in this message before it runs: anything
   // that affects another member, costs money, or can't be undone.
-  confirm?: "affects_another_member" | "costs_money" | "irreversible";
+  // "their_yes": they asked for it, or said yes to Co's offer, in this message (a document is only written on a yes).
+  confirm?: "affects_another_member" | "costs_money" | "irreversible" | "their_yes";
   // Only for the team (users.mo_approver): left out of the sheet and the tool
   // map for everyone else, so a member never hears of it (services/extensions.ts).
   teamOnly?: boolean;
@@ -130,6 +131,21 @@ export const ABILITIES: Ability[] = [
     tool: "emailPlan",
     limits: { perTurn: 1, perDay: 2 },
     use: "Send them a plan as a one-page sheet when they ask you to plan something with more than one step or time. By default it goes by text, the PDF in this conversation: leave sendBy out. Set it to email, or both, only when they ask for it by email or on their calendar in their own words; never on your own. Build it from what you found or read this turn and what they said: for a step that is an event you found, give its link and leave the time and place to its own record; for any other step give what, where, address and a short detail, and the time as when (2026-10-11T16:30, their time). Put times only in when. The title, note and every step use only places, names and numbers you read this turn or they said, so title it from their words (not a region or a venue you made up). No links. Write the note as one or two plain sentences, in your voice. Don't use it for a single suggestion (answer by text), and don't offer it as a menu: when they asked for a plan, send it. Afterwards, say in a line where it is (in this conversation, or in their email with a calendar hold for each time); don't list the steps again.",
+  },
+  {
+    id: "write_document",
+    can: "Co can write them a document, a titled page with headings, paragraphs and bullets (where they and a cofounder are landing, a summary of a conversation, a plan for a goal), and send it as a PDF in this conversation. It only writes it when they ask or say yes to Co's offer, and it goes only to them. Co can't make spreadsheets, slides or Google Docs yet, and can't send it to anyone else for them.",
+    tool: "writeDocument",
+    limits: { perTurn: 1, perDay: 3 },
+    confirm: "their_yes",
+    use: "Write them a document when they ask for one (a doc, a PDF, a write-up, a summary on paper) or say yes to your offer to put something together. Build it from what THEY said (their texts and calls) and what you read this turn, in plain words: a short title, one line under it, then sections each with a heading and paragraphs and/or bullets. Say what was decided, what is still open, and the next step, only from what they told you. Don't invent a place, name, number, date or event they never gave you; a document is read cold, by them and maybe by someone else, so leave out what you can't back. No dashes, no markdown. It comes as a PDF in this conversation: after it sends, say in one line what it covers and offer to change it. If the tool refuses, fix what it names and try again once, or tell them plainly what you couldn't back and give them the points in a text.",
+  },
+  {
+    id: "offer_document",
+    can: "When someone is stuck, vague or circling on their team or a goal, Co can offer, once, to put it together as a document for them.",
+    tool: "offerDocument",
+    limits: { perTurn: 1, perDay: 1 },
+    use: "Call this when you are about to offer to write something up as a document for them (they seem stuck, vague or circling on their team or a goal, and you were given the moment). It checks the moment is allowed and records that you offered, so you never offer twice. Then make the offer yourself, in your own words, as one light line that fits what they just said (something like asking if they'd want you to put it together in a doc for them); don't use a stock phrase, and don't write the document until they say yes. If it says not now, don't offer.",
   },
   {
     id: "working_notes",

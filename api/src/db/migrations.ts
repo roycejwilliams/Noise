@@ -1612,6 +1612,22 @@ export async function runMigrations(): Promise<void> {
     .then(() => pool.query(`CREATE INDEX IF NOT EXISTS idx_member_threads_user ON member_threads (user_id, status)`))
     .catch((err: Error) => console.error("member_threads table init failed:", err));
 
+  // Offers to write something up as a document, and the documents written (services/documentOffer.ts, 2026-10-07).
+  await pool
+    .query(
+      `CREATE TABLE IF NOT EXISTS document_offers (
+        id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+        user_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+        topic TEXT NOT NULL,
+        source TEXT NOT NULL DEFAULT 'offered' CHECK (source IN ('offered', 'asked')),
+        status TEXT NOT NULL DEFAULT 'offered' CHECK (status IN ('offered', 'accepted')),
+        offered_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+        accepted_at TIMESTAMPTZ
+      )`,
+    )
+    .then(() => pool.query(`CREATE INDEX IF NOT EXISTS idx_document_offers_user ON document_offers (user_id, offered_at DESC)`))
+    .catch((err: Error) => console.error("document_offers table init failed:", err));
+
   // Mo (2026-09-22) — see src/mo/. People worth inviting, found on
   // X and through web search, contacted only after a person approves.
   await pool
