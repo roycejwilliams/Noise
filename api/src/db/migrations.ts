@@ -126,7 +126,7 @@ export async function runMigrations(): Promise<void> {
         UNIQUE (user_id, n)
       )`))
     // The partner readout, once built (services/partnerReadoutSend.ts): frozen counts and the page, the team's yes, the host's
-    // address the team gave, and the read-only link (only its hash is kept). One per event.
+    // email the team gave, and the read-only link (only its hash is kept). One per event.
     .then(() => pool.query(`CREATE TABLE IF NOT EXISTS partner_readouts (
         id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
         event_id TEXT NOT NULL UNIQUE,

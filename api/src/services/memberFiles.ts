@@ -130,6 +130,7 @@ export async function draftFromFile(o: { fileText: string; theirWords: string; k
     const { text } = await generateText({
       model: anthropic(MODELS.sonnet),
       maxOutputTokens: 3000,
+      providerOptions: { anthropic: { effort: "low" } },
       abortSignal: AbortSignal.timeout(FILE_LIMITS.draftMs),
       experimental_telemetry: PRIVATE_TELEMETRY("memberFiles.draft"),
       prompt: `You write a short working document for a member of a private club, from a file they sent and what they said. ${DATA_NOT_ORDERS}
