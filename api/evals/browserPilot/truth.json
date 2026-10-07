@@ -1,0 +1,11 @@
+{
+  "_": "Hand-checked 2026-10-07 in a real browser, on each listing's own booking panel for Thursday Oct 22 2026 from 6pm. hourlyPrice is what the panel charges per hour for that slot (a flat block shown as its hourly equivalent; null when there is no rental charge, only a drink minimum). available: whether a 6pm start that day can be chosen.",
+  "615e376842724c000deea509": { "name": "Dream SF Events & Lounge", "hourlyPrice": 175, "minimumHours": 5, "capacity": 150, "available": "yes", "note": "$175.00 x 5 hours on a Thursday ($250/hr on Saturdays)" },
+  "61e25864bdb172000d385c27": { "name": "Columbus Cafe", "hourlyPrice": 75, "minimumHours": 4, "capacity": 45, "available": "yes", "note": "Private room for 4 hours $300.00 + $1,000 drink minimum; the '$50 an hour' in the description is not what's charged" },
+  "6998dc5c33b8f9fb272749fe": { "name": "Gold Studios", "hourlyPrice": 55, "minimumHours": 1, "capacity": 50, "available": "yes", "note": "$55.00 x 4 hours (1-10 people)" },
+  "635c585bab68cd000ef3585b": { "name": "Artist's Sky Loft", "hourlyPrice": 300, "minimumHours": 5, "capacity": 25, "available": "yes", "note": "$300.00 x 5 hours on a Thursday (listing shows a $285-$300 range)" },
+  "636c4558d6990c0022346e9d": { "name": "Shaws San Francisco", "hourlyPrice": 125, "minimumHours": 1, "capacity": 50, "available": "yes", "note": "$125.00 x 5 hours" },
+  "63c85e112f9455000e76cc3c": { "name": "The Academy SF", "hourlyPrice": 516.67, "minimumHours": 3, "capacity": 100, "available": "yes", "note": "Private room for 3 hours $1,550.00 + $1,500 drink minimum" },
+  "689a2670cd5da24a64d09a00": { "name": "Rick & Roxy's", "hourlyPrice": null, "minimumHours": 3, "capacity": 75, "available": "yes", "note": "Reserved area for 3 hours, no rental line; $1,300 drink minimum" },
+  "5e82bf6794920c000dd14859": { "name": "826 Valencia Mission Bay", "hourlyPrice": 200, "minimumHours": 2, "capacity": 50, "available": "no", "note": "'This space is unavailable from Thu, Oct 22, 2026 6:00 AM - 6:30 PM': a 6pm start can't be booked" }
+}

@@ -38,6 +38,7 @@
   "dependencies": {
     "@ai-sdk/anthropic": "^3.0.79",
     "@ai-sdk/gateway": "^4.0.90",
+    "@anthropic-ai/sdk": "^0.132.0",
     "@elevenlabs/elevenlabs-js": "^2.70.0",
     "@googlemaps/google-maps-services-js": "^3.4.2",
     "@langfuse/otel": "^5.10.0",

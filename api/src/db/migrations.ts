@@ -2512,4 +2512,29 @@ export async function runMigrations(): Promise<void> {
       )`,
     )
     .catch((err: Error) => console.error("google_snapshots table init failed:", err));
+  // Search quality (2026-10-07, services/researchQuality.ts): every find shown, its fixed fields with check times, and what the
+  // member did with it (yes, no, ignored, not_like_that). The outcomes rank the next finds.
+  await pool
+    .query(
+      `CREATE TABLE IF NOT EXISTS research_finds (
+        id SERIAL PRIMARY KEY,
+        user_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+        task_id INTEGER,
+        find_type TEXT NOT NULL,
+        name TEXT NOT NULL,
+        url TEXT NOT NULL,
+        reader TEXT NOT NULL,
+        fields JSONB NOT NULL DEFAULT '[]'::jsonb,
+        features JSONB NOT NULL DEFAULT '[]'::jsonb,
+        checked_at TIMESTAMPTZ NOT NULL,
+        shown_at TIMESTAMPTZ,
+        outcome TEXT CHECK (outcome IN ('yes','no','ignored','not_like_that')),
+        outcome_note TEXT,
+        outcome_at TIMESTAMPTZ,
+        created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+      )`,
+    )
+    .then(() => pool.query(`CREATE INDEX IF NOT EXISTS research_finds_user_shown ON research_finds (user_id, shown_at DESC)`))
+    .then(() => pool.query(`CREATE INDEX IF NOT EXISTS research_finds_pending ON research_finds (shown_at) WHERE outcome IS NULL`))
+    .catch((err: Error) => console.error("research_finds table init failed:", err));
 }

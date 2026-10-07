@@ -93,6 +93,10 @@ function getBrowser(): Promise<Browser> {
   return browser;
 }
 
+// The same shared browser and page slots, for the SDK venue reader (services/sdkBrowserReader.ts, pilot 2026-10-07).
+export const sharedBrowser = (): Promise<Browser> => getBrowser();
+export const browserSlot = (): Promise<() => void> => slot();
+
 export async function closeBrowser(): Promise<void> {
   const b = browser;
   browser = null;

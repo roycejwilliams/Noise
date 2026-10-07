@@ -1,0 +1,244 @@
+// Research briefs (Royce, 2026-10-07): the document tool's second kind, fed by the research pipeline. A member asks for something
+// research-shaped ("find venues for my launch"); a background task runs the find and the result goes out as a document (PDF,
+// or a Google Doc link when the shared-artifact gates hold: services/documentDelivery.ts).
+//
+// Grounding, the part that matters:
+//   - Researched sections are exempt from the member-words rule (their source is verified research, not conversation), but
+//     every line in them comes from one find, and the section carries that find's link and the time it was checked. No source,
+//     no line. Code writes every researched line from the find's fixed fields: no model writes, infers or interpolates them.
+//   - "unknown" is an allowed answer and is shown as "unknown".
+//   - Sections are marked: what's researched (with sources) and what's from the member (held to their own words, as today).
+// Search quality (services/researchQuality.ts) runs through it: the query is built from member state (a missing load-bearing
+// fact is a question back, asked by the tool before this starts), every read is the find type's fixed fields, a re-sent brief
+// re-reads anything past its freshness window, and the options are ordered by what this member (or everyone) said yes and no to.
+// Sources: the scripted Peerspace reader, and since round 2 passed (evals/browserPilot/round2.ts: 39 right, 11 unknown, 0
+// wrong on 12 sites with no script) the general reader (services/sdkGeneralReader.ts) for a venue's own pages.
+import type { Doc, DocSection, ResearchSource } from "./documentSheet.js";
+import { schemaFields, type FieldValue, type FindField, type FindType, type StoredFind } from "./researchQuality.js";
+
+export const SDK_FINDS_ALLOWED = true;
+export const BRIEF_LIMITS = { maxOptions: 6, maxContext: 6, maxReads: 8 };
+
+export type { FindField };
+export type ResearchFind = { name: string; url: string; checkedAt: string; reader: "scripted" | "sdk"; fields: FindField[] };
+export type BriefInput = { title: string; asked: string; finds: ResearchFind[]; memberContext: string[]; zone?: string | null };
+
+export const UNKNOWN = "unknown";
+const fmtChecked = (iso: string, zone?: string | null) => {
+  const d = new Date(iso);
+  if (Number.isNaN(d.getTime())) return "";
+  return d.toLocaleString("en-US", { timeZone: zone || "America/Los_Angeles", month: "short", day: "numeric", hour: "numeric", minute: "2-digit", timeZoneName: "short" });
+};
+// The oldest field's check time: the section says no more than its stalest line can back.
+export const findCheckedAt = (fields: FindField[], fallback: string) => fields.map((x) => x.checkedAt).filter(Boolean).sort()[0] ?? fallback;
+
+// Pure: one find, one researched section. Each field is a line "Label: value" (or "Label: unknown"); the last line is the source.
+export function findSection(f: ResearchFind, zone?: string | null, n?: number): DocSection {
+  const bullets = f.fields.map((x) => `${x.label}: ${x.value && x.value.trim() ? x.value.trim() : UNKNOWN}`);
+  bullets.push(`Source: ${f.url} (checked ${fmtChecked(f.checkedAt, zone)})`);
+  return { heading: n ? `${n}. ${f.name}` : f.name, paragraphs: [], bullets, research: { url: f.url, checkedAt: f.checkedAt, reader: f.reader } };
+}
+
+// Pure: the brief. Researched options first (numbered, so they can say "the second one"), then what the member told Co.
+export function buildBrief(b: BriefInput): Doc {
+  const finds = b.finds.slice(0, BRIEF_LIMITS.maxOptions);
+  const sections: DocSection[] = finds.map((f, i) => findSection(f, b.zone, i + 1));
+  const context = b.memberContext.map((x) => x.trim()).filter(Boolean).slice(0, BRIEF_LIMITS.maxContext);
+  if (context.length) sections.push({ heading: "From what you told me", paragraphs: [], bullets: context });
+  const sources = finds.length ? `${finds.length} option${finds.length === 1 ? "" : "s"} researched, each with its source and when it was checked` : "nothing could be verified";
+  return {
+    title: b.title,
+    note: `For: ${b.asked}. Researched sections: ${sources}. "unknown" means the page didn't say.`,
+    sections,
+    suggestions: [],
+    kind: "venue_brief",
+  };
+}
+
+// Pure: what's wrong with a brief's research. Empty when every researched line is sourced, dated and allowed.
+export function researchProblems(doc: Doc, opts: { sdkAllowed?: boolean } = {}): string[] {
+  const out: string[] = [];
+  const researched = doc.sections.filter((s) => s.research);
+  if (!researched.length) out.push("a research brief needs at least one researched option");
+  for (const s of researched) {
+    const r = s.research as ResearchSource;
+    let ok = false;
+    try {
+      ok = /^https:$/.test(new URL(r.url).protocol);
+    } catch {}
+    if (!ok) out.push(`"${s.heading}" has no source link`);
+    if (!r.checkedAt || Number.isNaN(new Date(r.checkedAt).getTime())) out.push(`"${s.heading}" has no time it was checked`);
+    if (r.reader === "sdk" && !(opts.sdkAllowed ?? SDK_FINDS_ALLOWED)) out.push(`"${s.heading}" came from the general reader, which isn't cleared for briefs yet`);
+    if (s.paragraphs.length) out.push(`"${s.heading}" has free text: researched sections carry only sourced fields`);
+    const last = s.bullets[s.bullets.length - 1] ?? "";
+    if (!last.startsWith(`Source: ${r.url} (checked `)) out.push(`"${s.heading}" doesn't show its source and check time`);
+    for (const b of s.bullets.slice(0, -1)) if (!/^[A-Z][A-Za-z ()/0-9,:.-]{1,50}?: \S/.test(b)) out.push(`"${b.slice(0, 60)}" in "${s.heading}" isn't a sourced field`);
+  }
+  return out;
+}
+
+// ---------------------------------------------------------------- reading a source as the venue schema
+
+export type VenueAsk = { what: string; city: string | null; slot: { date: string; start: string } | null };
+const slotLabel = (slot: VenueAsk["slot"]) => (slot ? `${slot.date} from ${slot.start}` : null);
+
+// Pure: a scripted Peerspace read as the venue fields. Prices exactly as the listing shows them (a range stays a range);
+// availability only when a date and start were asked; never a value the reader didn't return.
+export function peerspaceFields(facts: import("./peerspaceSlot.js").SlotFacts, slot: VenueAsk["slot"], checkedAt = new Date().toISOString()): FindField[] {
+  const money = (n: number) => `$${n.toLocaleString("en-US", { maximumFractionDigits: 2 })}`;
+  const rate = facts.priceRange ? `${money(facts.priceRange[0])} to ${money(facts.priceRange[1])} an hour, depending on the day` : facts.hourlyPrice !== null ? `${money(facts.hourlyPrice)} an hour` : null;
+  const read: Record<string, FieldValue> = {
+    rate: { value: rate },
+    minimum: { value: facts.minimumHours !== null ? `${facts.minimumHours} hour${facts.minimumHours === 1 ? "" : "s"}` : null },
+    capacity: { value: facts.capacity !== null ? `${facts.capacity} people` : null },
+    open: { value: facts.available === "unknown" ? null : facts.available },
+    inquire: { value: null }, // Peerspace books through its own panel; the source link is the way in
+  };
+  return schemaFields("venue", read, checkedAt, { slotLabel: slotLabel(slot) }).filter((f) => f.key !== "inquire");
+}
+
+const PEERSPACE_LISTING = /^https:\/\/www\.peerspace\.com\/pages\/listings\/[a-f0-9]{24}$/;
+
+// One source, read as the venue schema: the scripted reader for a Peerspace listing, the general reader for anything else.
+// Null when the page couldn't be read or said nothing the schema asks.
+export async function readVenueSource(url: string, slot: VenueAsk["slot"]): Promise<{ reader: "scripted" | "sdk"; fields: FindField[]; title: string; gone?: boolean } | null> {
+  const now = () => new Date().toISOString();
+  if (PEERSPACE_LISTING.test(url)) {
+    const { readPeerspaceSlot } = await import("./peerspaceSlot.js");
+    const read = await readPeerspaceSlot(url, slot).catch(() => null);
+    if (!read) return null;
+    const { goneFor } = await import("./taskWeb.js");
+    const title = (read.text.match(/^([^\n|]{3,80})/)?.[1] ?? "").trim();
+    return { reader: "scripted", fields: peerspaceFields(read.facts, slot, now()), title, gone: !!goneFor(title, read.text) };
+  }
+  if (!SDK_FINDS_ALLOWED) return null;
+  const { FIND_SCHEMAS } = await import("./researchQuality.js");
+  const { readWithSdk } = await import("./sdkGeneralReader.js");
+  const asks = FIND_SCHEMAS.venue.filter((f) => f.key !== "open").map((f) => ({ key: f.key, ask: f.ask }));
+  const r = await readWithSdk(url, asks).catch(() => null);
+  if (!r || r.stopped === "blocked site") return null;
+  const fields = schemaFields("venue", r.answers, now(), { slotLabel: slotLabel(slot) });
+  if (!fields.some((f) => f.value)) return null;
+  const title = (r.pageText.match(/^([^\n|]{3,80})/)?.[1] ?? "").trim();
+  return { reader: "sdk", fields, title };
+}
+
+// The find, in a background task only. The assembled query (researchQuality.assembleQuery) goes to the verified web search;
+// each result below Co's bar is skipped; each other result is read as the venue schema.
+export async function findVenueOptions(userId: string, query: string, ask: VenueAsk, zone: string | null): Promise<ResearchFind[]> {
+  const { taskWebSearch } = await import("./taskWeb.js");
+  const { belowTheBar } = await import("./researchQuality.js");
+  // Each option is read from its own page: a Peerspace listing, or the venue's own site. A listicle or directory about many
+  // places is never read for one of them (taskWeb marks official pages). Too few of those from the first pass: one more pass
+  // asking only for venues' own private-events pages.
+  const own = (k: { url: string; official: boolean }) => k.official || PEERSPACE_LISTING.test(k.url.split("?")[0]);
+  const ownPage = "For each, give the venue's OWN website page for private events or private dining, never a guide, list, review or directory.";
+  const passes = [`${query} ${ownPage}`, `${query} ${ownPage} Different venues from any you'd name first: look further.`];
+  const kept: import("./taskWeb.js").VerifiedResult[] = [];
+  const log: { pass: number; kept: number; own: number; listicles: string[] }[] = [];
+  for (const [i, q] of passes.entries()) {
+    if (i > 0 && kept.filter(own).length >= 3) break;
+    const r = await taskWebSearch(userId, q, { city: ask.city, zone, background: true, max: BRIEF_LIMITS.maxOptions, searches: 4 });
+    for (const k of r.kept) if (!kept.some((x) => x.url === k.url)) kept.push(k);
+    log.push({ pass: i + 1, kept: r.kept.length, own: r.kept.filter(own).length, listicles: r.kept.filter((k) => !own(k)).map((k) => k.url).slice(0, 4) });
+  }
+  const urls = [...new Set(kept.filter(own).map((k) => (PEERSPACE_LISTING.test(k.url.split("?")[0]) ? k.url.split("?")[0] : k.url)).filter((u) => u.startsWith("https://") && !belowTheBar(u)))].slice(0, BRIEF_LIMITS.maxReads);
+  const names = new Map(kept.map((k) => [k.url.split("?")[0], k.name]));
+  const finds: ResearchFind[] = [];
+  const reads: { url: string; got: string }[] = [];
+  for (const url of urls) {
+    if (finds.length >= BRIEF_LIMITS.maxOptions) break;
+    const read = await readVenueSource(url, ask.slot).catch((err: any) => {
+      console.error(`research brief read failed for ${url} (non-fatal):`, err?.message ?? err);
+      return null;
+    });
+    reads.push({ url, got: !read ? "nothing readable" : read.gone ? "gone" : `${read.fields.filter((f) => f.value).length} fields` });
+    if (!read || read.gone) continue;
+    const checkedAt = findCheckedAt(read.fields, new Date().toISOString());
+    finds.push({ name: names.get(url.split("?")[0]) || read.title || new URL(url).hostname.replace(/^www\./, ""), url, checkedAt, reader: read.reader, fields: read.fields });
+  }
+  const { recordDecision } = await import("../harness/core.js");
+  await recordDecision({ layer: 7, decision: "research.find", userId, outcome: finds.length ? "act" : "skip", action: `${finds.length} options`, proposal: { passes: log, reads } }).catch(() => {});
+  return finds;
+}
+
+type BriefParams = { what?: string; city?: string | null; neighborhood?: string | null; date?: string | null; start?: string | null; headcount?: number | null; budget?: string | null; title?: string; memberContext?: string[]; wantsGoogle?: boolean; again?: boolean };
+
+// The background run of one research-brief task (services/taskTurn.ts runDueTasks): find (or, for "send it again", re-check the
+// last brief's finds), rank, build, check, deliver, record what was shown, close.
+// The member asked (or said yes) before this task existed: the reply-loop tool that starts it carries that check, and asks
+// them first when a load-bearing fact is missing.
+export async function runResearchBriefTask(task: import("./coTasks.js").CoTask): Promise<void> {
+  const { closeTask } = await import("./coTasks.js");
+  const { default: pool } = await import("../db/db.js");
+  const Q = await import("./researchQuality.js");
+  const p = (task.followup ?? {}) as BriefParams;
+  const { rows } = await pool.query(`SELECT u.first_name, u.phone_number, cp.city FROM users u LEFT JOIN co_profiles cp ON cp.user_id = u.id WHERE u.id = $1`, [task.userId]);
+  const person = rows[0];
+  if (!person?.phone_number || !p.what) {
+    await closeTask(task.userId, task.id, "dropped", "missing what to research or who to send it to");
+    return;
+  }
+  const city = p.city ?? person.city ?? null;
+  const zone = city ? await import("./geocoding.js").then((g) => g.getTimezoneForCity(city)).catch(() => null) : null;
+  const slot = p.date && p.start ? { date: p.date, start: p.start } : null;
+  const { sendExempt } = await import("../harness/proactive.js");
+  const say = (text: string) => sendExempt({ userId: task.userId, phoneNumber: person.phone_number, type: "task_update", targetKey: `research_brief:${task.id}`, messages: [text], timezone: zone, respectHours: true }).catch(() => {});
+
+  let finds: ResearchFind[] = [];
+  let rechecked = 0;
+  if (p.again) {
+    // The same brief again: its own finds, each re-read where a field is past its window, before it goes.
+    const last = await Q.lastBriefFinds(task.userId, "venue");
+    for (const f of last.finds) {
+      const r = await Q.freshForShow(f, async (old) => {
+        const read = await readVenueSource(old.url, slot);
+        return read ? { gone: !!read.gone, fields: read.fields } : null;
+      });
+      rechecked += r.rechecked.length ? 1 : 0;
+      if (r.find) finds.push({ name: r.find.name, url: r.find.url, reader: r.find.reader, fields: r.find.fields, checkedAt: findCheckedAt(r.find.fields, new Date().toISOString()) });
+    }
+  } else {
+    const state = await Q.loadMemberSearchState(task.userId, { city, neighborhood: p.neighborhood ?? null, budget: p.budget ?? null, date: p.date ?? null, start: p.start ?? null, headcount: p.headcount ?? null });
+    const q = Q.assembleQuery("venue", p.what, state);
+    if (!q.ok) {
+      // The tool asks first; this is the backstop. Never search on a guess.
+      await say(q.question);
+      await closeTask(task.userId, task.id, "dropped", `asked them first: missing ${q.missing.join(", ")}`);
+      return;
+    }
+    finds = await findVenueOptions(task.userId, q.query, { what: p.what, city, slot }, zone).catch((err: any) => {
+      console.error("research brief find failed (non-fatal):", err?.message ?? err);
+      return [] as ResearchFind[];
+    });
+  }
+  // Ordered by what they (or everyone) said yes and no to before.
+  const signal = await Q.rankingSignal(task.userId);
+  finds = Q.rankFinds(finds.map((f) => ({ ...f, type: "venue" as FindType })), signal.member, signal.global).map(({ score: _s, type: _t, ...f }) => f);
+
+  const doc = buildBrief({ title: p.title || `Venue options: ${p.what}`.slice(0, 70), asked: p.what, finds, memberContext: p.memberContext ?? [], zone });
+  const { documentProblems } = await import("./documentSheet.js");
+  const { deliverDocument, docTargets, loadTheirWords } = await import("./documentDelivery.js");
+  const theirs = [await loadTheirWords(task.userId).catch(() => ""), task.theirWords].join("\n");
+  const problems = [...researchProblems(doc), ...documentProblems(doc, { theirs })];
+  if (problems.length) {
+    await say(finds.length ? "I looked, but I couldn't verify enough to put a brief together that I'd stand behind. I'll tell you what I can check by hand if you want." : "I looked, but couldn't verify any venues that fit. Want me to widen the search?");
+    await closeTask(task.userId, task.id, "done", `no brief: ${problems.slice(0, 3).join("; ")}`);
+    return;
+  }
+  const to = { userId: task.userId, firstName: String(person.first_name ?? ""), phone: person.phone_number, zone };
+  const { targets } = docTargets({ userId: task.userId, kind: doc.kind, saveTo: p.wantsGoogle ? "google_doc" : "pdf", askedForGoogle: !!p.wantsGoogle });
+  let sent = false;
+  for (const target of targets) {
+    const r = await deliverDocument(doc, to, target);
+    if (r.ok) sent = true;
+    else if (target === "google_docs" && !targets.includes("pdf_text")) sent = (await deliverDocument(doc, to, "pdf_text")).ok || sent;
+  }
+  const shown = finds.slice(0, BRIEF_LIMITS.maxOptions);
+  if (sent) await Q.recordShownFinds(task.userId, task.id, shown.map((f) => ({ type: "venue", name: f.name, url: f.url, reader: f.reader, fields: f.fields }) as StoredFind));
+  const { recordDecision } = await import("../harness/core.js");
+  await recordDecision({ layer: 7, decision: "task.researchBrief", userId: task.userId, outcome: sent ? "act" : "skip", action: doc.title, proposal: { taskId: task.id, options: shown.length, again: !!p.again, rechecked, readers: [...new Set(shown.map((f) => f.reader))] } }).catch(() => {});
+  // The close note is Co's record of what went out: the options by number, so a reaction ("the second one") can be matched.
+  const list = shown.map((f, i) => `${i + 1}. ${f.name}`).join("; ");
+  await closeTask(task.userId, task.id, sent ? "done" : "dropped", sent ? `sent the brief "${doc.title}": ${list}` : "the brief couldn't be sent");
+}
