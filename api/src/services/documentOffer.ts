@@ -114,19 +114,37 @@ export async function recordDocumentWritten(userId: string, title: string, now =
 
 // ---------------------------------------------------------------- what Co is told on a reply
 
-export type DocOfferContext = { due: { topic: string; why: string } | null; pending: { topic: string } | null };
+export type DocOfferContext = { due: { topic: string; why: string } | null; pending: { topic: string } | null; lastDocument?: { topic: string } | null };
+
+// Pure: are they asking for a document, or for the one Co made again (send it again, updated, redone, the same request repeated)?
+// Guidance for Co, never a gate: it only adds a line telling Co the ask is its go-ahead.
+export const DOC_NOUN = /\b(pdf|pdfs|document|documents|doc|docs|write-?up|one-?pager|summary on paper)\b/i;
+export const DOC_VERB = /\b(make|create|build|write|put together|send|give|need|want|can you|could you|please|resend|re-?send|redo|re-?do|update|reformat|regenerate|generate|draft|try again|let'?s try)\b/i;
+export const RESEND = /\b(again|resend|re-?send|re-?do|redo|re-?make|updated?|regenerate|reformat(?:ted)?|new version|latest version|fresh (?:one|copy|version)|one more time)\b/i;
+export function documentAskIn(message: string, hasRecentDocument = false): { ask: boolean; again: boolean } {
+  const m = String(message ?? "");
+  const named = DOC_NOUN.test(m) && DOC_VERB.test(m);
+  const again = RESEND.test(m) && (hasRecentDocument || DOC_NOUN.test(m));
+  return { ask: named || again, again: again || (named && hasRecentDocument) };
+}
 
 export async function loadDocOfferContext(userId: string, now = new Date()): Promise<DocOfferContext> {
   const state = await loadOfferState(userId, now);
   const pending = state.history.find((h) => h.source === "offered" && h.status === "offered" && (now.getTime() - h.at.getTime()) / 3_600_000 < OFFER.waitingHours);
   const d = documentOfferDue(state);
-  return { due: d.due ? { topic: d.topic, why: d.why } : null, pending: pending ? { topic: pending.topic } : null };
+  const last = state.history.find((h) => h.status === "accepted" && days(h.at, now) < 3);
+  return { due: d.due ? { topic: d.topic, why: d.why } : null, pending: pending ? { topic: pending.topic } : null, lastDocument: last ? { topic: last.topic } : null };
 }
 
 // Pure: the lines for a reply. An offer waiting on its answer, or a moment Co may offer (once, if it fits this message).
-export function docOfferLines(c: DocOfferContext | null | undefined): { pending: string | null; hint: string | null } {
-  if (!c) return { pending: null, hint: null };
+export function docOfferLines(c: DocOfferContext | null | undefined, message = ""): { pending: string | null; hint: string | null; ask: string | null } {
+  const a = documentAskIn(message, !!c?.lastDocument);
+  const ask = a.ask
+    ? `They are asking for a document${a.again ? ", or for it again (a repeat, an update, a redo)" : ""}. That ask is your go-ahead: call writeDocument now, from what they have said. ${a.again ? "Write it and send it again; never say it was already sent, to scroll up, or that nothing changed (you can't see how the old one looked, and writing it again is how they get the latest). " : ""}Don't ask what it should cover when the conversation carries it: write it, and say in a line what is thin or still open. Ask first only if two different documents are possible or there is truly nothing from them to base it on.`
+    : null;
+  if (!c) return { pending: null, hint: null, ask };
   return {
+    ask,
     pending: c.pending ? `You offered to write up "${c.pending.topic}" as a document and are waiting on their answer. If this message says yes, or asks for it, write it with writeDocument. If they pass or change the subject, let it go and never offer it again.` : null,
     hint: c.due
       ? `They seem to be looking for direction on "${c.due.topic}" (${c.due.why}). Only if it fits this message (they are not mid-feeling, and did not just ask for something else), you may offer once to put it together as a document for them: one light line in your own words, after calling offerDocument. If it doesn't fit, say nothing about it. Don't write the document until they say yes.`

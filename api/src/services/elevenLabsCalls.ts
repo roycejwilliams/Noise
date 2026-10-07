@@ -243,7 +243,8 @@ export const COVERAGE_TRANSCRIPT_CHARS = 24_000;
 
 // Words the speech recognizer is told to expect (2026-10-05: "Co" was heard as "you" and "Coach", "Boardy" as "Boredy"). Names a
 // member says about Co's world, not about the member: their own names come through the call's context.
-export const CALL_KEYWORDS = ["Co", "CoPatible", "Boardy", "Instinct", "Muse", "Luma", "House of AI", "Heavybit", "SF Tech Week"];
+// "Sequin" (a partner the team is working with) was heard as "Sequent" on the 10/6 call and carried into the summary and tasks.
+export const CALL_KEYWORDS = ["Co", "CoPatible", "Boardy", "Instinct", "Muse", "Luma", "House of AI", "Heavybit", "SF Tech Week", "Sequin", "Sequin AI"];
 
 export const VOICEMAIL_MESSAGE = "Hey {{first_name}}, it's Co. Sorry I missed you. I'll send you a text.";
 
