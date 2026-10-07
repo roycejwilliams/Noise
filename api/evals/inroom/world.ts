@@ -305,6 +305,9 @@ function handle(sqlRaw: string, p: any[] = []): { rows: Row[]; rowCount: number 
   }
 
   // in-room sends cap / ledger
+  if (has("SELECT target_key FROM proactive_sends WHERE user_id = $1 AND type = 'in_room' AND target_key LIKE 'in_room:%'")) {
+    return R(W.proactiveSends.filter((s) => s.user_id === p[0] && s.type === "in_room" && String(s.target_key).startsWith("in_room:")).map((s) => ({ target_key: s.target_key })));
+  }
   if (has("SELECT COUNT(*)::int AS n FROM proactive_sends WHERE user_id = $1 AND type = 'in_room' AND target_key LIKE $2")) {
     const re = new RegExp("^" + String(p[1]).replace(/[.*+?^${}()|[\]\\]/g, "\\$&").replace(/%/g, ".*").replace(/_/g, ".") + "$");
     return R([{ n: W.proactiveSends.filter((s) => s.user_id === p[0] && s.type === "in_room" && re.test(s.target_key)).length }]);
