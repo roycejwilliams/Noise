@@ -228,6 +228,8 @@ const run = async (body: any, events: any[], o: { clean?: boolean } = {}) => {
   const rs = fs.readFileSync(new URL("../../src/routes/callLlm.ts", import.meta.url), "utf8");
   const srv = fs.readFileSync(new URL("../../src/server.ts", import.meta.url), "utf8");
   check("the endpoint is mounted before the general rate limiter (a call is a request per turn)", srv.indexOf('app.use("/co/el/llm"') > 0 && srv.indexOf('app.use("/co/el/llm"') < srv.indexOf("app.use(limiter)"));
+  const coTest = fs.readFileSync(new URL("../../../co-test/src/server.ts", import.meta.url), "utf8");
+  check("co-test mounts it too (co-test runs its own server file, not api/src/server.ts: the 10/7 deploy 404ed until it did)", /createCallLlmRouter/.test(coTest) && /app\.use\("\/co\/el\/llm", express\.json\(\{ limit: "4mb" \}\), createCallLlmRouter\(\)\)/.test(coTest) && coTest.indexOf('"/co/el/llm"') < coTest.indexOf("app.use(express.json("));
   check("an upstream failure before any text is a real error, not an empty reply", /502/.test(rs) && /res\.headersSent/.test(rs));
   check("the call's identity is checked with the call token", /verifyCallToken\(String\(extra\.user_id/.test(rs));
   check("CALL_LLM_CLEAN=off is the pass-through switch", /CALL_LLM_CLEAN !== "off"/.test(rs));

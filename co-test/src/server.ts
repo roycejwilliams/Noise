@@ -21,6 +21,7 @@ import loginRouter from "./routes/login.js";
 import phoneRouter from "./routes/phone.js";
 import { requireTesterLoginApi, requireTesterLoginPage } from "./middleware/requireTesterLogin.js";
 import { createCoRouter } from "../../api/src/routes/co.js";
+import { createCallLlmRouter } from "../../api/src/routes/callLlm.js";
 import { reportUnfinishedTurns, sendblueRouter } from "../../api/src/routes/sendblue.js";
 import { serveInvitePage } from "../../api/src/routes/invitePage.js";
 import { createLumaRouter } from "../../api/src/routes/luma.js";
@@ -59,6 +60,8 @@ async function main() {
   app.use("/co/el/post-call", express.raw({ type: "application/json", limit: "5mb" }));
   // The agent sends the whole conversation to its tools; the default 100kb JSON limit would reject a long call before the route runs.
   app.use("/co/el/tool", express.json({ limit: "2mb" }));
+  // The call brain's endpoint (api/src/routes/callLlm.ts): a request per turn of every call. Mirrors api/src/server.ts.
+  app.use("/co/el/llm", express.json({ limit: "4mb" }), createCallLlmRouter());
   // Luma's webhook signature is the same "HMAC over the raw body" shape as
   // ElevenLabs' above — see validateLumaWebhook in api/src/routes/luma.ts. This
   // route was never mounted at all in co-test (confirmed live, 2026-09-02:
