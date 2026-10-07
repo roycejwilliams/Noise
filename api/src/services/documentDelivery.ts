@@ -7,6 +7,7 @@ import pool from "../db/db.js";
 import { renderPdf } from "./browserRead.js";
 import { cachePlanFile } from "./planFile.js";
 import { docSlug, documentHtml, type Doc } from "./documentSheet.js";
+import { notToTeammate } from "./teamLines.js";
 
 export type DocTarget = "pdf_text"; // later: | "google_docs"
 export type DeliverResult = { ok: true; via: DocTarget; filename: string } | { ok: false; why: string };
@@ -45,7 +46,7 @@ export async function loadTheirWords(userId: string): Promise<string> {
   const { rows } = await pool
     .query(
       `SELECT memory_type, content FROM co_memories
-       WHERE user_id = $1 AND created_at > NOW() - INTERVAL '14 days' AND (memory_type = 'call_transcript' OR (memory_type = 'text_exchange' AND content LIKE 'User said:%'))
+       WHERE user_id = $1 AND created_at > NOW() - INTERVAL '14 days' AND (memory_type = 'call_transcript' OR (memory_type = 'text_exchange' AND content LIKE 'User said:%' AND ${notToTeammate()}))
        ORDER BY created_at DESC LIMIT 120`,
       [userId],
     )
