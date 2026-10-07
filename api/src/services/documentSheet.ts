@@ -6,10 +6,9 @@
 // Pure: validation and the page. Nothing here guesses a fact: a sentence that names an event, a place or a time must be backed by
 // what the member said or what Co read (the same check a call's sentences get, services/offerGuard.ts).
 import { EMAIL_COLORS as C, escapeHtml } from "./emailDesign.js";
-import { SANS, SERIF } from "./planSheet.js";
 import { unsourced } from "./offerGuard.js";
 
-export const DOC_LIMITS = { maxSections: 10, maxParagraphs: 6, maxBullets: 10, titleChars: 70, noteChars: 240, headingChars: 70, paragraphChars: 700, bulletChars: 220, totalChars: 6500, minChars: 80 };
+export const DOC_LIMITS = { maxSections: 10, maxParagraphs: 6, maxBullets: 10, titleChars: 70, noteChars: 240, headingChars: 70, paragraphChars: 700, bulletChars: 220, totalChars: 6500, minChars: 80, maxParagraphWords: 60, bulletsExpectedAfterChars: 600 };
 
 export type DocSectionInput = { heading?: string; paragraphs?: string[]; bullets?: string[] };
 export type DocInput = { title: string; note?: string; sections: DocSectionInput[] };
@@ -52,6 +51,10 @@ export function documentProblems(doc: Doc, source: string): string[] {
   if (body.length < L.minChars) out.push("it is too thin to be a document: say what they need written up");
   if (body.length > L.totalChars) out.push(`it is too long (${body.length} characters; ${L.totalChars} at most): cut it to what matters`);
   if (/\b(lorem ipsum|tbd|to be determined|xxx)\b|\[(?:insert|your)/i.test(body)) out.push("it has a placeholder in it");
+  // Scannable: a record, not a chat. Points go in bullets; a paragraph is a few sentences, not a block.
+  const long = doc.sections.flatMap((x) => x.paragraphs).find((x) => x.split(/\s+/).length > L.maxParagraphWords);
+  if (long) out.push(`a paragraph runs ${long.split(/\s+/).length} words ("${long.slice(0, 40)}..."): put its points in bullets and keep paragraphs to two or three sentences`);
+  if (!long && body.length > L.bulletsExpectedAfterChars && !doc.sections.some((x) => x.bullets.length)) out.push("it has no bullets: put the points of each section in bullets so it can be scanned");
   for (const s of sentencesOf(body)) {
     const bad = unsourced(s, source);
     if (bad.length) out.push(`"${s.slice(0, 80)}" names ${bad.map((m) => m.text).join(", ")}, which they never said and you never read`);
@@ -59,41 +62,83 @@ export function documentProblems(doc: Doc, source: string): string[] {
   return out.slice(0, 6);
 }
 
-export const docSlug = (title: string) => title.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "").slice(0, 40) || "document";
 
-// Pure: the page. The plan sheet's card, with sections instead of steps.
-export function documentHtml(doc: Doc, firstName: string): string {
+// ---------------------------------------------------------------- the file's name
+
+const SMALL = new Set(["a", "an", "and", "or", "of", "the", "to", "for", "in", "on", "at", "with", "vs"]);
+// "Product positioning and scaling notes" on 2026-10-07 becomes "Co-Product-Positioning-and-Scaling-Notes-2026-10-07.pdf":
+// a real name from the title, Co first so it sorts together, the day last so a folder of them reads in order.
+export function docFilename(title: string, dateIso: string): string {
+  const words = title.replace(/[^A-Za-z0-9' ]+/g, " ").replace(/'/g, "").split(/\s+/).filter(Boolean);
+  const named = words.map((w, i) => (i > 0 && SMALL.has(w.toLowerCase()) ? w.toLowerCase() : w[0].toUpperCase() + w.slice(1)));
+  let base = named.join("-").slice(0, 70).replace(/-+$/, "");
+  if (!base) base = "Document";
+  return `Co-${base}-${/^\d{4}-\d{2}-\d{2}$/.test(dateIso) ? dateIso : "undated"}.pdf`;
+}
+
+// ---------------------------------------------------------------- the page
+
+// Short documents get more air and larger type, long ones tighter, so any length looks intended.
+export type Density = "airy" | "standard" | "dense";
+export function docDensity(doc: Doc): Density {
+  const n = docText(doc).length;
+  return n < 900 ? "airy" : n > 3200 ? "dense" : "standard";
+}
+
+// Only plain characters reach the page margin boxes (CSS strings): no quote, backslash or control character can end the string.
+const cssText = (s: string, max: number) => s.replace(/[^A-Za-z0-9 ,.'&:-]/g, "").trim().slice(0, max);
+
+export const PAPER = { paper: "#F6F2EA", ink: "#241418", body: "#3C2F33", soft: "#6E6159", muted: "#968A80", line: "#DDD5C8", gold: "#B79B74" } as const;
+const SERIF = "'Fraunces', Georgia, 'Times New Roman', serif";
+const SANS = "'Instrument Sans', -apple-system, 'Helvetica Neue', Arial, sans-serif";
+
+// Pure: the page. Two typefaces and nothing else: Fraunces for the title and section headings, Instrument Sans for everything
+// read and everything small. Paper, ink, one quiet gold. Sections are units: a numbered serif heading on the left, its points on
+// the right. The footer is the page's own margin (title and page number), so it sits at the bottom of every page at any length.
+export function documentHtml(doc: Doc, o: { firstName: string; date: string }): string {
   const e = escapeHtml;
+  const C = PAPER;
+  const density = docDensity(doc);
+  const name = o.firstName.trim() || "you";
   const section = (s: DocSection) =>
-    `<div class="sec">${s.heading ? `<h2>${e(s.heading)}</h2>` : ""}${s.paragraphs.map((p) => `<p>${e(p)}</p>`).join("")}${s.bullets.length ? `<ul>${s.bullets.map((b) => `<li>${e(b)}</li>`).join("")}</ul>` : ""}</div>`;
+    `<section class="sec${s.heading ? "" : " bare"}">${s.heading ? `<h2>${e(s.heading)}</h2>` : ""}<div class="body">${s.paragraphs.map((p) => `<p>${e(p)}</p>`).join("")}${s.bullets.length ? `<ul>${s.bullets.map((b) => `<li>${e(b)}</li>`).join("")}</ul>` : ""}</div></section>`;
   return `<!DOCTYPE html><html lang="en"><head><meta charset="UTF-8"><title>${e(doc.title)}</title>
-<link href="https://fonts.googleapis.com/css2?family=Fraunces:ital,wght@0,300;0,400;1,300;1,400&display=swap" rel="stylesheet">
+<link href="https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,300;9..144,400;9..144,500&family=Instrument+Sans:wght@400;500;600&display=swap" rel="stylesheet">
 <style>
-@page { size: Letter; margin: 0; }
+@page {
+  size: Letter; margin: 0.8in 1in 0.95in 1in; background: ${C.paper};
+  @bottom-left { content: "${cssText(doc.title, 60)}"; font-family: ${SANS}; font-size: 7.5px; letter-spacing: 0.16em; text-transform: uppercase; color: ${C.muted}; vertical-align: top; padding-top: 0.28in; }
+  @bottom-right { content: counter(page) " / " counter(pages); font-family: ${SANS}; font-size: 7.5px; letter-spacing: 0.16em; color: ${C.muted}; vertical-align: top; padding-top: 0.28in; }
+}
 * { box-sizing: border-box; }
-html, body { margin: 0; padding: 0; }
-body { background: ${C.cream}; color: ${C.body}; font-family: ${SANS}; font-size: 12.5px; line-height: 1.6; -webkit-print-color-adjust: exact; print-color-adjust: exact; }
-.page { width: 8.5in; min-height: 11in; padding: 0.9in 1in 0.8in 1in; display: flex; flex-direction: column; }
-.card { flex: 1; border: 1px solid ${C.gold}; padding: 0.55in 0.6in 0.5in 0.6in; background: ${C.white}; display: flex; flex-direction: column; }
-.eyebrow { font-family: ${SANS}; font-size: 10px; font-weight: 500; letter-spacing: 2px; text-transform: uppercase; color: ${C.gold}; }
-h1 { font-family: ${SERIF}; font-weight: 300; font-size: 34px; line-height: 1.12; color: ${C.ink}; margin: 10px 0 6px 0; letter-spacing: -0.2px; }
-.lede { font-family: ${SERIF}; font-style: italic; font-weight: 300; font-size: 14.5px; color: ${C.soft}; margin: 0 0 22px 0; }
-.rule { border: 0; border-top: 1px solid ${C.line}; margin: 0 0 6px 0; }
-.sec { padding: 12px 0 4px 0; page-break-inside: avoid; }
-h2 { font-family: ${SERIF}; font-weight: 400; font-size: 19px; line-height: 1.25; color: ${C.ink}; margin: 8px 0 6px 0; }
-p { margin: 0 0 9px 0; color: ${C.body}; }
-ul { margin: 2px 0 8px 0; padding-left: 18px; }
-li { margin: 0 0 5px 0; color: ${C.body}; }
-.spacer { flex: 1; }
-.close { text-align: center; padding-top: 26px; font-family: ${SERIF}; font-style: italic; font-weight: 300; font-size: 14px; color: ${C.soft}; }
-.close .co { display: block; margin-top: 6px; font-size: 18px; color: ${C.ink}; }
-</style></head><body><div class="page"><div class="card">
-<div class="eyebrow">Written for ${e(firstName || "you")}</div>
-<h1>${e(doc.title)}</h1>
-${doc.note ? `<p class="lede">${e(doc.note)}</p>` : ""}
-<hr class="rule">
+html, body { margin: 0; padding: 0; background: ${C.paper}; }
+body { color: ${C.body}; font-family: ${SANS}; -webkit-print-color-adjust: exact; print-color-adjust: exact; counter-reset: sec; }
+body.airy { --title: 52px; --text: 14.5px; --lead: 16.5px; --pad: 34px; --h2: 23px; }
+body.standard { --title: 38px; --text: 12.5px; --lead: 14px; --pad: 18px; --h2: 18px; }
+body.dense { --title: 31px; --text: 11.3px; --lead: 12.5px; --pad: 13px; --h2: 16px; }
+.mast { display: flex; justify-content: space-between; align-items: baseline; padding-bottom: 12px; border-bottom: 1px solid ${C.ink}; }
+.mark { font-family: ${SERIF}; font-weight: 400; font-size: 24px; line-height: 1; letter-spacing: 0.01em; color: ${C.ink}; }
+.date { font-size: 8.5px; font-weight: 500; letter-spacing: 0.2em; text-transform: uppercase; color: ${C.soft}; }
+.head { padding: calc(var(--pad) * 2.2) 0 calc(var(--pad) * 1.3) 0; }
+h1 { font-family: ${SERIF}; font-weight: 300; font-size: var(--title); line-height: 1.08; letter-spacing: -0.012em; color: ${C.ink}; margin: 0; max-width: 5.7in; }
+.for { margin-top: 14px; font-size: 8.5px; font-weight: 500; letter-spacing: 0.2em; text-transform: uppercase; color: ${C.muted}; }
+.lede { margin: calc(var(--pad) * 0.9) 0 0 0; max-width: 4.9in; font-size: var(--lead); line-height: 1.5; color: ${C.soft}; }
+.sec { display: grid; grid-template-columns: 1.75in 1fr; column-gap: 0.4in; padding: var(--pad) 0; border-top: 1px solid ${C.line}; break-inside: avoid; counter-increment: sec; }
+.sec.bare { grid-template-columns: 1fr; }
+h2 { font-family: ${SERIF}; font-weight: 400; font-size: var(--h2); line-height: 1.22; color: ${C.ink}; margin: 0; }
+h2::before { content: counter(sec, decimal-leading-zero); display: block; font-family: ${SANS}; font-size: 8.5px; font-weight: 600; letter-spacing: 0.2em; color: ${C.gold}; margin-bottom: 7px; }
+.body p { margin: 0 0 0.6em 0; font-size: var(--text); line-height: 1.5; color: ${C.body}; }
+.body p:last-child { margin-bottom: 0; }
+ul { margin: 0; padding: 0 0 0 1.1em; }
+li { font-size: var(--text); line-height: 1.5; color: ${C.body}; margin: 0 0 0.45em 0; padding-left: 0.2em; }
+li:last-child { margin-bottom: 0; }
+li::marker { color: ${C.gold}; font-size: 0.95em; }
+p + ul { margin-top: 0.35em; }
+.end { border-top: 1px solid ${C.line}; }
+</style></head><body class="${density}">
+<div class="mast"><div class="mark">Co</div><div class="date">${e(o.date)}</div></div>
+<div class="head"><h1>${e(doc.title)}</h1><div class="for">Prepared for ${e(name)}</div>${doc.note ? `<p class="lede">${e(doc.note)}</p>` : ""}</div>
 ${doc.sections.map(section).join("")}
-<div class="spacer"></div>
-<div class="close">Tell me what to change and I'll rework it.<span class="co">Co</span></div>
-</div></div></body></html>`;
+<div class="end"></div>
+</body></html>`;
 }

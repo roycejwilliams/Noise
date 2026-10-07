@@ -122,6 +122,7 @@ async function main() {
   // A plan's PDF for Sendblue to attach to a text (services/planFile.ts): the same route api/src/server.ts mounts.
   // co-test keeps its own copies of the media routes, so it has to be added here too.
   app.get("/plan-file/:id.pdf", servePlanFile);
+  app.get("/plan-file/:id/:name", servePlanFile);
 
   // The actual product routes (ElevenLabs call webhooks, Twilio call-status,
   // inbound-call TwiML, and the Sendblue text-conversation webhook) —

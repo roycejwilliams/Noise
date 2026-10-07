@@ -36,25 +36,59 @@ const bad = D.documentProblems(invented, SAID);
 check("an event, place or time they never gave is refused, and the refusal names it", bad.length >= 1 && /Founders Mixer|Battery|7pm/.test(bad.join(" ")), bad);
 check("the same event, once they said it, is allowed", D.documentProblems(invented, `${SAID} We are going to the Founders Mixer at The Battery on Friday at 7pm.`).length === 0);
 check("a document over the length cap is refused", D.documentProblems(D.resolveDocument({ title: "Big", sections: Array.from({ length: 10 }, () => ({ paragraphs: Array.from({ length: 6 }, () => "y".repeat(690)) })) }), "y").some((p) => /too long/.test(p)));
-const html = D.documentHtml(D.resolveDocument({ title: "A <b>bold</b> title", sections: [{ heading: "H & H", paragraphs: ["<script>alert(1)</script> plain"], bullets: ["one"] }] }), "Royce");
-check("the page carries the title, a heading, a paragraph and a bullet, for the member by name", /<h1>A &lt;b&gt;bold&lt;\/b&gt; title<\/h1>/.test(html) && /<h2>H &amp; H<\/h2>/.test(html) && /<li>one<\/li>/.test(html) && /Written for Royce/.test(html));
+const META = { firstName: "Royce", date: "October 7, 2026" };
+const html = D.documentHtml(D.resolveDocument({ title: "A <b>bold</b> title", sections: [{ heading: "H & H", paragraphs: ["<script>alert(1)</script> plain"], bullets: ["one"] }] }), META);
+check("the page carries the title, a heading, a paragraph and a real bullet", /<h1>A &lt;b&gt;bold&lt;\/b&gt; title<\/h1>/.test(html) && /<h2>H &amp; H<\/h2>/.test(html) && /<ul><li>one<\/li><\/ul>/.test(html));
 check("nothing from the text can inject markup into the page", !/<script>/.test(html) && /&lt;script&gt;/.test(html));
-check("it is the plan sheet's page: the same card, serif and rule", /class="card"/.test(html) && /Fraunces/.test(html) && /@page \{ size: Letter/.test(html));
+// The design (Royce, 2026-10-07): one serif for the title and headings, one sans for everything else, nothing else.
+const fonts = [...html.matchAll(/font-family:\s*([^;}]+)[;}]/g)].map((m) => m[1].split(",")[0].replace(/['" ]/g, ""));
+check("type: exactly two typefaces, Fraunces (title, headings, mark) and Instrument Sans (body, meta, footer)", new Set(fonts).size === 2 && fonts.every((f) => f === "Fraunces" || f === "InstrumentSans"), [...new Set(fonts)]);
+check("type: no italic anywhere (the italic serif subtitle was a third voice)", !/font-style:\s*italic/.test(html));
+check("type: the title and section headings are serif, the lede and bullets sans", /h1 \{ font-family: 'Fraunces'/.test(html) && /h2 \{ font-family: 'Fraunces'/.test(html) && /\.lede \{[^}]*font-size: var\(--lead\)/.test(html) && !/\.lede \{[^}]*Fraunces/.test(html));
+check("metadata: the date and who it is for, set small and quiet", /<div class="date">October 7, 2026<\/div>/.test(html) && /Prepared for Royce/.test(html) && /\.date \{ font-size: 8\.5px/.test(html));
+const plainHtml = D.documentHtml(doc, META);
+check("composition: the footer is the page's own bottom margin (title and page number), so it is anchored on every page at any length", /@bottom-left \{ content: "Where we are landing, Co and Sequent"/.test(plainHtml) && /@bottom-right \{ content: counter\(page\) " \/ " counter\(pages\)/.test(plainHtml));
+check("composition: the paper covers the whole sheet, margins included", /@page \{[^}]*background: #F6F2EA/.test(html.replace(/\n/g, " ")));
+check("the sign-off and the Co signature are not in the PDF (that line belongs in the text thread)", !/Tell me what to change/.test(html) && !/rework it/.test(html) && !/class="close"/.test(html) && !/class="co"/.test(html));
+check("brand: a letterhead mark, a rule, numbered sections and a restrained gold: more than a hairline", /class="mark">Co</.test(html) && /counter\(sec, decimal-leading-zero\)/.test(html) && /\.mast \{[^}]*border-bottom: 1px solid/.test(html));
+const hostile = D.documentHtml(D.resolveDocument({ title: 'Say "hi" \\ and <b>; } body { display:none } /*', sections: [{ paragraphs: ["x".repeat(100)] }] }), META);
+const boxText = /@bottom-left \{ content: "([^;]*)";/.exec(hostile)?.[1] ?? "(none)";
+check("a hostile title can't end the margin box's string or break out of its rule", /^[A-Za-z0-9 ,.'&:-]*$/.test(boxText) && (hostile.match(/@bottom-left/g) ?? []).length === 1, boxText);
+check("typography: short documents get larger type than standard ones, long ones smaller", (() => { const n = (k: string) => Number((new RegExp(`body\\.${k} \\{ --title: (\\d+)px`).exec(html) ?? [])[1]); return n("airy") > n("standard") && n("standard") > n("dense") && n("airy") >= 48; })());
+const sizes = (paras: number) => D.docDensity(D.resolveDocument({ title: "T", sections: Array.from({ length: paras }, () => ({ heading: "H", paragraphs: ["word ".repeat(80)] })) }));
+check("composition: a short document gets more air, a long one is tighter (any length looks intended)", sizes(1) === "airy" && sizes(4) === "standard" && sizes(10) === "dense");
+
+// ---- scannable: a record, not a chat
+const dense = D.resolveDocument({ title: "Where we are", sections: [{ heading: "The split", paragraphs: [Array.from({ length: 70 }, (_, i) => `word${i}`).join(" ")] }] });
+check("a dense paragraph is refused, and Co is told to use bullets", D.documentProblems(dense, "word").some((p) => /put its points in bullets/.test(p)), D.documentProblems(dense, "word"));
+const para = "You take product and engineering and Jacqueline takes partnerships and the events, and who talks to Sequent AI first is still open, as is how long the gateway conversation should run before an event begins.";
+const noBullets = D.resolveDocument({ title: "Where we are", sections: [{ heading: "A", paragraphs: [para] }, { heading: "B", paragraphs: [para] }, { heading: "C", paragraphs: [para] }] });
+check("a document of any length with no bullets at all is refused: list the points", D.documentProblems(noBullets, "Sequent AI Jacqueline Thursday").some((p) => /no bullets/.test(p)), D.documentProblems(noBullets, "Sequent AI Jacqueline Thursday"));
+check("a section of bullets, as the tool asks for, passes", D.documentProblems(doc, SAID).length === 0);
+
+// ---- the file's name
+check("filename: a real name from the title, Co first, the day last", D.docFilename("Product positioning and scaling notes", "2026-10-07") === "Co-Product-Positioning-and-Scaling-Notes-2026-10-07.pdf", D.docFilename("Product positioning and scaling notes", "2026-10-07"));
+check("filename: punctuation and quotes drop, nothing unsafe survives", /^[A-Za-z0-9.-]+$/.test(D.docFilename('Royce\'s "plan" / v2: go!', "2026-10-07")) && D.docFilename('Royce\'s "plan" / v2: go!', "2026-10-07").endsWith(".pdf"));
+check("filename: a long title is cut, an empty one still has a name", D.docFilename("x ".repeat(100), "2026-10-07").length < 100 && D.docFilename("", "2026-10-07") === "Co-Document-2026-10-07.pdf");
 
 // ---------------------------------------------------------------- delivery
 {
   const sent: any[] = [];
   const mk = (o: { pdf?: Buffer | null; throws?: boolean } = {}): any => ({
     render: async (h: string) => { sent.push({ html: h.length }); return o.pdf === undefined ? Buffer.alloc(2000, 1) : o.pdf; },
-    cache: () => "https://x.test/plan-file/abc.pdf",
+    cache: (_pdf: Buffer, name?: string) => `https://x.test/plan-file/abc/${name ?? "x.pdf"}`,
     send: async (m: any) => { if (o.throws) throw new Error("no"); sent.push(m); return {}; },
     from: "+15550000000",
   });
   const to = { userId: "u1", firstName: "Royce", phone: "+15550100001" };
   const ok = await X.deliverDocument(doc, to, "pdf_text", mk());
   const m = sent.find((x) => x.media_url);
-  check("delivery: the PDF goes to their number as an attachment in the thread, captioned with the title", ok.ok && m?.number === "+15550100001" && m.media_url.endsWith("abc.pdf") && m.content === doc.title && m.from_number === "+15550000000", sent);
-  check("delivery: the file is named for the document", ok.ok && ok.filename === "where-we-are-landing-co-and-sequent.pdf", ok);
+  check("delivery: the PDF goes to their number as an attachment in the thread, captioned with the title", ok.ok && m?.number === "+15550100001" && m.content === doc.title && m.from_number === "+15550000000", sent);
+  check("delivery: it arrives under a real name from its title and their day, not a hash", ok.ok && /^Co-Where-We-Are-Landing-Co-and-Sequent-\d{4}-\d{2}-\d{2}\.pdf$/.test(ok.filename) && m.media_url.endsWith(`/${ok.filename}`), { ok, url: m?.media_url });
+  const lateNight = await X.deliverDocument(doc, { ...to, zone: "America/Los_Angeles", now: new Date("2026-10-08T03:30:00Z") }, "pdf_text", mk());
+  check("delivery: the date is their day, not the server's (8:30pm Pacific on the 7th is the 7th)", lateNight.ok && /-2026-10-07\.pdf$/.test(lateNight.filename), lateNight);
+  const html0 = sent.find((x) => x.html);
+  check("delivery: the page is rendered with their name and the date", html0 !== undefined);
   check("delivery: Chrome unavailable is a plain failure, nothing sent", (await X.deliverDocument(doc, to, "pdf_text", mk({ pdf: null }))).ok === false);
   const before = sent.length;
   check("delivery: a send that throws is a plain failure", (await X.deliverDocument(doc, to, "pdf_text", mk({ throws: true }))).ok === false && sent.length === before + 1);
@@ -133,6 +167,12 @@ const GUIDE = "seeking guidance on how to split the cofounder roles with Jacquel
   check("the record: Co remembers it sent a document and that it offered", /case "writeDocument"/.test(src("services/coFacts.ts")) && /case "offerDocument"/.test(src("services/coFacts.ts")));
   check("the table exists, with the two states and the two sources", /CREATE TABLE IF NOT EXISTS document_offers/.test(src("db/migrations.ts")) && /CHECK \(status IN \('offered', 'accepted'\)\)/.test(src("db/migrations.ts")));
   // Explicitly out of scope (Royce, 2026-10-07): the stuck Sequent PDF and tasks 90/91 are untouched, and the 9am hold stays.
+  const pf = src("services/planFile.ts");
+  check("the named file is served under its name, in both servers (co-test has its own copy of the routes)", /app\.get\("\/plan-file\/:id\/:name", servePlanFile\)/.test(src("server.ts")) && /app\.get\("\/plan-file\/:id\/:name", servePlanFile\)/.test(fs.readFileSync(new URL("../../../co-test/src/server.ts", import.meta.url), "utf8")));
+  check("the file's name in the address and the header is only ever a safe one (letters, digits, dots, hyphens; ending .pdf)", /SAFE_NAME = \/\^\[A-Za-z0-9\]\[A-Za-z0-9\.-\]\{0,120\}\\\.pdf\$\//.test(pf) && /SAFE_NAME\.test\(name\) \? name : "plan\.pdf"/.test(pf));
+  const PF = await import("../../src/services/planFile.js");
+  process.env.RAILWAY_PUBLIC_DOMAIN = "x.test";
+  check("planFile: with a name the address ends in it; without one, the old address is unchanged (plans still work)", PF.cachePlanFile(Buffer.alloc(5), "Co-A-B-2026-10-07.pdf").endsWith("/Co-A-B-2026-10-07.pdf") && /\/plan-file\/[a-f0-9]{48}\.pdf$/.test(PF.cachePlanFile(Buffer.alloc(5))) && /\/plan-file\/[a-f0-9]{48}\.pdf$/.test(PF.cachePlanFile(Buffer.alloc(5), "../../etc/passwd")));
   const lh = src("services/localHours.ts");
   check("untouched: the 9am to 8pm rule", /REASONABLE_HOUR_START = 9/.test(lh) && /REASONABLE_HOUR_END = 20/.test(lh) && /outside their hours \(9am to 8pm their time\)/.test(src("services/taskTurn.ts")));
   const mine = ["services/documentSheet.ts", "services/documentDelivery.ts", "services/documentOffer.ts"].map(src).join("\n");

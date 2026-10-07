@@ -527,7 +527,7 @@ export function loopTools(
           )
           .min(1)
           .max(10)
-          .describe("Each with a heading and paragraphs and/or bullets. Only what they said or you read; nothing invented."),
+          .describe("Each a heading, a sentence or two of framing, then the points as short bullets: scannable, not dense paragraphs. Only what they said or you read; nothing invented."),
       }),
       execute: async (input) => {
         const { resolveDocument, documentProblems } = await import("../services/documentSheet.js");
@@ -556,7 +556,9 @@ export function loopTools(
           return { ok: true, note: "Test run: nothing was sent." };
         }
         const { rows } = await pool.query(`SELECT first_name FROM users WHERE id = $1`, [ctx.userId]).catch(() => ({ rows: [] as any[] }));
-        const sent = await deliverDocument(doc, { userId: ctx.userId, firstName: String(rows[0]?.first_name ?? ctx.firstName ?? ""), phone: ctx.phoneNumber });
+        const city = ctx.turn?.profile?.city ?? null;
+        const zone = city ? await import("../services/geocoding.js").then((g) => g.getTimezoneForCity(city)).catch(() => null) : null;
+        const sent = await deliverDocument(doc, { userId: ctx.userId, firstName: String(rows[0]?.first_name ?? ctx.firstName ?? ""), phone: ctx.phoneNumber, zone });
         if (!sent.ok) {
           notDone(`No document sent: ${sent.why}.`);
           return { ok: false, error: `${sent.why}. Say so plainly and give them the points in a text instead.` };

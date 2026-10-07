@@ -6,18 +6,19 @@
 import pool from "../db/db.js";
 import { renderPdf } from "./browserRead.js";
 import { cachePlanFile } from "./planFile.js";
-import { docSlug, documentHtml, type Doc } from "./documentSheet.js";
+import { DateTime } from "luxon";
+import { docFilename, documentHtml, type Doc } from "./documentSheet.js";
 import { notToTeammate } from "./teamLines.js";
 
 export type DocTarget = "pdf_text"; // later: | "google_docs"
 export type DeliverResult = { ok: true; via: DocTarget; filename: string } | { ok: false; why: string };
 export type DeliverDeps = {
   render: (html: string) => Promise<Buffer | null>;
-  cache: (pdf: Buffer) => string;
+  cache: (pdf: Buffer, name?: string) => string;
   send: (m: { number: string; content: string; media_url: string; from_number: string }) => Promise<unknown>;
   from: string;
 };
-export type DeliverTo = { userId: string; firstName: string; phone: string };
+export type DeliverTo = { userId: string; firstName: string; phone: string; zone?: string | null; now?: Date };
 
 const realDeps = async (): Promise<DeliverDeps> => {
   const sendblue = (await import("./sendblue.js")).default;
@@ -25,14 +26,17 @@ const realDeps = async (): Promise<DeliverDeps> => {
 };
 
 async function pdfByText(doc: Doc, to: DeliverTo, deps: DeliverDeps): Promise<DeliverResult> {
-  const pdf = await deps.render(documentHtml(doc, to.firstName));
+  // Dated in their own day, not the server's.
+  const day = DateTime.fromJSDate(to.now ?? new Date()).setZone(to.zone && DateTime.now().setZone(to.zone).isValid ? to.zone : "America/Los_Angeles");
+  const filename = docFilename(doc.title, day.toISODate()!);
+  const pdf = await deps.render(documentHtml(doc, { firstName: to.firstName, date: day.toFormat("LLLL d, yyyy") }));
   if (!pdf) return { ok: false, why: "the document couldn't be made right now" };
   try {
-    await deps.send({ number: to.phone, content: doc.title, media_url: deps.cache(pdf), from_number: deps.from });
+    await deps.send({ number: to.phone, content: doc.title, media_url: deps.cache(pdf, filename), from_number: deps.from });
   } catch {
     return { ok: false, why: "the PDF didn't send by text" };
   }
-  return { ok: true, via: "pdf_text", filename: `${docSlug(doc.title)}.pdf` };
+  return { ok: true, via: "pdf_text", filename };
 }
 
 export const DELIVERERS: Record<DocTarget, (doc: Doc, to: DeliverTo, deps: DeliverDeps) => Promise<DeliverResult>> = { pdf_text: pdfByText };
