@@ -1,16 +1,15 @@
 import { generateText } from "ai";
 import { anthropic } from "@ai-sdk/anthropic";
 import pool from "../db/db.js";
-import { getEventGuestList, getEventDetails } from "./luma.js";
-import { mergeWalkinsIntoGuestPool } from "./eventWalkinCheckin.js";
+import { getEventDetails } from "./luma.js";
 import { CO_VOICE, CO_TEXT_CHANNEL } from "./coVoice.js";
 import { MODELS } from "../models.js";
 import sendblue, { cleanCoMessage } from "./sendblue.js";
 import { writeMemory } from "./memory.js";
 import { inRoomSendAllowed, recordInRoomSend } from "../harness/proactive.js";
 import { draftWithConsent } from "../harness/introConsent.js";
-import { MATCH_NUDGE_END_CUTOFF_MINUTES } from "../harness/introConsent.js";
-import { matchGuestsToUsers, dedupeByUserId, wasAlreadyNudgedForMatch, scoreMatchedGroup, type ScorableGuest } from "./eventScoring.js";
+import { MATCH_NUDGE_END_CUTOFF_MINUTES, withEnd } from "../harness/introConsent.js";
+import { inRoomPool, wasAlreadyNudgedForMatch, scoreMatchedGroup, type ScorableGuest } from "./eventScoring.js";
 
 // "No one should feel left out" (Royce, 2026-09-22). Two things, both
 // scoped to people the real scoring pass (eventScoring.ts's
@@ -30,10 +29,15 @@ import { matchGuestsToUsers, dedupeByUserId, wasAlreadyNudgedForMatch, scoreMatc
 //
 // Scheduled the same way as eventCheckinFollowUp.ts's end-of-night
 // check-in — one row per matched guest, idempotent on
-// UNIQUE(event_api_id, user_id) — but due at end_at minus
-// MATCH_NUDGE_END_CUTOFF_MINUTES, the exact moment maybeSendMatchNudge
-// stops sending real matches, so this still reads as "still at the
-// event," not a next-day afterthought.
+// UNIQUE(event_api_id, user_id). Due UNMATCHED_SEND_BEFORE_END_MINUTES
+// before end_at (2026-10-07): it used to be due at the exact minute the
+// in-room window closes (end - MATCH_NUDGE_END_CUTOFF_MINUTES), so by the
+// first cron tick after it every pair nudge was refused and everyone got
+// the solo text. Now it runs with room to spare: the cutoff, one full
+// 15-minute cron period, and 5 minutes to draft and deliver. It still
+// reads as "still at the event," not a next-day afterthought.
+export const UNMATCHED_CRON_MINUTES = 15;
+export const UNMATCHED_SEND_BEFORE_END_MINUTES = MATCH_NUDGE_END_CUTOFF_MINUTES + UNMATCHED_CRON_MINUTES + 5;
 
 export async function scheduleUnmatchedFollowUp(
   eventId: string,
@@ -42,8 +46,8 @@ export async function scheduleUnmatchedFollowUp(
   eventTiming: { start_at: string; end_at: string | null } | null,
   opts: { dryRun?: boolean } = {},
 ): Promise<void> {
-  if (!matched.length || !eventTiming?.end_at) return;
-  const sendAt = new Date(new Date(eventTiming.end_at).getTime() - MATCH_NUDGE_END_CUTOFF_MINUTES * 60_000);
+  if (!matched.length || !eventTiming) return;
+  const sendAt = new Date(new Date(withEnd(eventTiming).end_at).getTime() - UNMATCHED_SEND_BEFORE_END_MINUTES * 60_000);
   if (opts.dryRun) {
     console.log(`[eventUnmatchedFollowUp dryRun] would schedule ${matched.length} guest(s) at ${eventId} for ${sendAt.toISOString()}`);
     return;
@@ -141,16 +145,12 @@ async function processOneEvent(eventId: string, eventName: string): Promise<void
   if (!dueUserIds.size) return;
 
   const details = await getEventDetails(eventId).catch(() => null);
-  const eventTiming = details ? { start_at: details.start_at, end_at: details.end_at } : null;
+  const eventTiming = details ? withEnd({ start_at: details.start_at, end_at: details.end_at, timezone: details.timezone ?? null }) : null;
 
   // Re-fetch the current guest list — it can have grown since this was
   // scheduled (a late walk-in), and a person due here may already have a
   // real match from a scoring pass that ran after scheduling but before now.
-  const [guests, walkins] = await Promise.all([
-    getEventGuestList(eventId).then(matchGuestsToUsers).catch(() => [] as ScorableGuest[]),
-    mergeWalkinsIntoGuestPool(eventId).catch(() => [] as ScorableGuest[]),
-  ]);
-  const matched = dedupeByUserId([...guests, ...walkins]).filter((p) => dueUserIds.has(p.user_id));
+  const matched = (await inRoomPool(eventId).catch(() => [] as ScorableGuest[])).filter((p) => dueUserIds.has(p.user_id));
 
   const stillUnmatched: ScorableGuest[] = [];
   for (const person of matched) {

@@ -1,3 +1,4 @@
+import { DateTime } from "luxon";
 // Layer 6 harness: introduction consent (2026-09-14). Enforced in code, not
 // prompts. Real failure this exists for: "Celine's going to the event too
 // and mentioned they'd like to meet you" went out when Celine had said
@@ -153,8 +154,26 @@ export function checkDraft(draft: string, f: ConsentFacts, extra: (d: string) =>
 
 export const MATCH_NUDGE_END_CUTOFF_MINUTES = 30;
 
+// When a Co event is over, for every in-room purpose (the window, the end-of-night pairing, the wrap-up). Its real
+// end_at; with none, the end of that evening where it happens (midnight local, and never under 3 hours after the start
+// for a late event). An event with no end time used to stay "in the room" for days (Royce, 2026-10-07).
+export const NO_END_MIN_HOURS = 3;
+export function effectiveEnd(timing: { start_at: string; end_at: string | null; timezone?: string | null }): string {
+  if (timing.end_at) return timing.end_at;
+  const zone = timing.timezone && DateTime.now().setZone(timing.timezone).isValid ? timing.timezone : "America/Los_Angeles";
+  const start = DateTime.fromISO(timing.start_at, { zone });
+  if (!start.isValid) return timing.start_at;
+  const midnight = start.plus({ days: 1 }).startOf("day");
+  const floor = start.plus({ hours: NO_END_MIN_HOURS });
+  return (midnight > floor ? midnight : floor).toUTC().toISO()!;
+}
+// The same timing with a sane end filled in, for callers that schedule from end_at.
+export function withEnd<T extends { start_at: string; end_at: string | null; timezone?: string | null }>(timing: T): T & { end_at: string } {
+  return { ...timing, end_at: effectiveEnd(timing) };
+}
+
 export function checkEventWindow(
-  timing: { start_at: string; end_at: string | null } | null,
+  timing: { start_at: string; end_at: string | null; timezone?: string | null } | null,
   now: Date,
   opts: { requireTiming?: boolean } = {},
 ): GateCheck {
@@ -166,7 +185,7 @@ export function checkEventWindow(
   }
   const t = now.getTime();
   if (t < new Date(timing.start_at).getTime()) return { name, pass: false, reason: "event hasn't started" };
-  if (timing.end_at && t > new Date(timing.end_at).getTime() - MATCH_NUDGE_END_CUTOFF_MINUTES * 60_000) {
+  if (t > new Date(effectiveEnd(timing)).getTime() - MATCH_NUDGE_END_CUTOFF_MINUTES * 60_000) {
     return { name, pass: false, reason: "event is over or in its last 30 minutes" };
   }
   return { name, pass: true };

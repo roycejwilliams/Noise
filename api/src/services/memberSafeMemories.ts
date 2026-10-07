@@ -33,6 +33,8 @@ export function historyLine(sentence: string, name: string): string {
 // Pure: one memory made safe, or null when nothing safe is left in it.
 export function safeMemory(type: string | null, content: string, linkedNames: string[]): string | null {
   const t = type ?? "";
+  // An additive offer never named anyone to them: older rows listed who arrived in parentheses. Never passed on.
+  if (t === "event_guest_match_nudge" && /^Additive offer\b/.test(content)) return content.replace(/\s*\([^)]*\)\s*$/, "").replace(/\bcandidate\(s\) checked in\b/, "more people checked in") + (/\bno one has been named\b/.test(content) ? "" : " No one has been named to them.");
   if (SAFE_TYPES.has(t)) return content;
   // The other member's whole profile, as JSON.
   if (t === "network_offer_pending" || t === "network_intro_offer_pending") {
@@ -87,7 +89,7 @@ export function introFacts(rows: { content: string; memory_type?: string | null 
   const out: string[] = [];
   for (const r of rows) {
     if (!r.content) continue;
-    if (INTRO_RECORDS.has(r.memory_type ?? "")) out.push(`Co's record: ${String(r.content).trim()}`);
+    if (INTRO_RECORDS.has(r.memory_type ?? "")) out.push(`Co's record: ${(safeMemory(r.memory_type ?? null, String(r.content), []) ?? "").trim()}`);
     if (r.memory_type === "recommendation") for (const m of String(r.content).matchAll(/\[Tier 0\]\s*([^:|]+?)\s*:/g)) out.push(`Co's record: Co suggested ${m[1].trim()}, another member, to them as someone worth meeting.`);
   }
   return out;
@@ -105,6 +107,9 @@ export async function linkedMemberNames(userId: string): Promise<string[]> {
          UNION SELECT person_id FROM event_guest_match_nudges WHERE candidate_id = $1
          UNION SELECT candidate_id FROM event_guest_match_opt_ins WHERE person_id = $1
          UNION SELECT person_id FROM event_guest_match_opt_ins WHERE candidate_id = $1
+         UNION SELECT candidate_id FROM event_match_offers WHERE person_id = $1 AND candidate_id IS NOT NULL
+         UNION SELECT unnest(candidate_ids) FROM event_match_offers WHERE person_id = $1
+         UNION SELECT person_id FROM event_match_offers WHERE candidate_id = $1 OR $1 = ANY(candidate_ids)
        )`,
       [userId],
     )

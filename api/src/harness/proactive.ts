@@ -1389,12 +1389,21 @@ export async function sendExemptWhenAllowed(opts: {
 // blocked a legitimate additive offer later the same night.
 export const MAX_IN_ROOM_SENDS_PER_EVENT = 3;
 
+// Every in-room text Co starts (the match nudge, the additive offer, the end-of-night texts) asks here right before it
+// sends, so the pause (services/proactivePause.ts) holds them like every other send path: nothing goes out, the claim is
+// released, and a later pass sends it once the pause lifts.
 export async function inRoomSendAllowed(userId: string, eventId: string): Promise<boolean> {
-  const { rows } = await pool.query(
-    `SELECT COUNT(*)::int AS n FROM proactive_sends WHERE user_id = $1 AND type = 'in_room' AND target_key LIKE $2`,
-    [userId, `in_room:%:${eventId}%`],
-  );
-  return (rows[0]?.n ?? 0) < MAX_IN_ROOM_SENDS_PER_EVENT;
+  if (proactivePaused()) return false;
+  // Counted per event, exactly: a prefix match let three texts at evt-1234 use up the limit at evt-12.
+  const { rows } = await pool.query(`SELECT target_key FROM proactive_sends WHERE user_id = $1 AND type = 'in_room' AND target_key LIKE 'in_room:%'`, [userId]);
+  return rows.filter((r: any) => inRoomKeyEvent(String(r.target_key)) === eventId).length < MAX_IN_ROOM_SENDS_PER_EVENT;
+}
+
+// The event an in-room send was for, from its key: in_room:<kind>:<eventId>, and the additive offer adds :<timestamp>.
+export function inRoomKeyEvent(key: string): string | null {
+  const m = key.match(/^in_room:([a-z_]+):(.+)$/);
+  if (!m) return null;
+  return m[1] === "additive" ? m[2].replace(/:\d+$/, "") : m[2];
 }
 
 export async function recordInRoomSend(userId: string, targetKey: string, message: string): Promise<void> {

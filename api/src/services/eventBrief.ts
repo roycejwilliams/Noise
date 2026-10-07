@@ -58,8 +58,9 @@ export function nameAskDue(p: { registered: boolean; notGoing: boolean; alreadyA
   return new Date(p.startAt).getTime() - p.now.getTime() > BRIEF.askUntilBeforeStartMs;
 }
 
-export function nameAskMessages(eventName: string): string[] {
-  return [`You're on the list for ${eventName}.`, `One question: ${NAME_QUESTION.replace("Can Co mention you", "can I mention you")} Yes or no. If I don't hear, I won't.`];
+export function nameAskMessages(eventName: string, shareLine?: string | null): string[] {
+  // Beside it, the shareable-asks question (services/askSharing.ts shareAskMessage) when they have undecided asks.
+  return [`You're on the list for ${eventName}.`, `One question: ${NAME_QUESTION.replace("Can Co mention you", "can I mention you")} Yes or no. If I don't hear, I won't.`, ...(shareLine ? [shareLine] : [])];
 }
 
 // Their answer, from their own words in this message: a short, plain yes or no. Only the quote is not enough: the

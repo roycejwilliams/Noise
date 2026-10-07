@@ -23,6 +23,8 @@ export type StatedIntent = {
   type?: "seeking" | "offering";
   status?: string;
   embedding?: number[] | null;
+  // The member said Co may mention this ask when introducing them. Default (missing) is private.
+  shareable?: boolean | null;
 };
 
 // captureIntent appends asks over time as calls happen — take the most
@@ -143,11 +145,13 @@ export function formatCandidateDigest<T extends ScorableCandidate>(candidates: T
     .map((c, i) => {
       const facts = [...(c.goals ?? []), ...(c.blockers ?? []), ...(c.activity_preferences ?? [])];
       const memories = memoryByUser.get(c.user_id) ?? [];
-      const ownAsk = getActiveAsk(c.intent);
+      const shared = shareableAsks(c.intent);
+      const privateAsks = (Array.isArray(c.intent) ? (c.intent as StatedIntent[]) : []).filter((i) => isOpenAsk(i) && i.shareable !== true);
       const parts = [
         facts.length ? facts.join("; ") : null,
         memories.length ? `mentioned: ${memories.map((m) => `"${m}"`).join(" / ")}` : null,
-        ownAsk?.text ? `their own stated ${ownAsk.type ?? "ask"}: "${ownAsk.text}"` : null,
+        privateAsks.length ? `private asks (never shareable): ${privateAsks.map((a) => `"${a.text}"`).join(" / ")}` : null,
+        shared.length ? `asks they agreed to share: ${shared.map((a, k) => `[S${k + 1}] ${a.type ?? "seeking"} "${a.text}"`).join(" / ")}` : null,
         hints?.get(c.user_id) ?? null,
       ].filter(Boolean);
       return `${i}. ${parts.length ? parts.join(" | ") : "(nothing on file)"}`;
@@ -158,8 +162,18 @@ export function formatCandidateDigest<T extends ScorableCandidate>(candidates: T
 // Shared prompt-call/parse logic for both scoring directions below — only
 // the prompt text itself actually differs between "who satisfies my ask"
 // and "who wants my offering".
-export function shareReasonFromOwnAsk(intent: unknown): string {
-  const ask = getActiveAsk(intent);
+// The open asks a member said Co may mention when introducing them, in intent order. An ask is private unless marked.
+export function shareableAsks(intent: unknown): StatedIntent[] {
+  if (!Array.isArray(intent)) return [];
+  return (intent as StatedIntent[]).filter((i) => isOpenAsk(i) && i.shareable === true);
+}
+
+// The words another person may see: the ONE shareable ask the scorer said the match rests on ("S1", "S2"...), in the
+// member's own words. No label, an unknown label, a private or closed ask: nothing. Never their newest ask by default.
+export function shareReasonFromOwnAsk(intent: unknown, label?: unknown): string {
+  const n = typeof label === "string" ? Number(label.trim().replace(/^\[?S/i, "").replace(/\]$/, "")) : NaN;
+  if (!Number.isInteger(n) || n < 1) return "";
+  const ask = shareableAsks(intent)[n - 1];
   if (!ask?.text) return "";
   return ask.type === "offering" ? `what they've said they can offer: "${ask.text}"` : `what they've said they're looking for: "${ask.text}"`;
 }
@@ -184,10 +198,9 @@ async function runAskScoring<T extends ScorableCandidate>(
         candidate: candidates[r.index],
         score: typeof r.score === "number" ? Math.max(0, Math.min(100, Math.round(r.score))) : 0,
         reason: typeof r.reason === "string" ? r.reason : "",
-        // The model only decides WHETHER their stated ask supports the match;
-        // the words shown to people are always their own stated ask, so
-        // nothing private or inferred (e.g. "actively fundraising") can leak.
-        shareReason: typeof r.share_reason === "string" && r.share_reason.trim() ? shareReasonFromOwnAsk(candidates[r.index].intent) : "",
+        // The model only names WHICH shared ask the match rests on; the words shown to people are that ask, in their own
+        // words, and only if they marked it shareable. Nothing private or inferred (e.g. "actively fundraising") can leak.
+        shareReason: shareReasonFromOwnAsk(candidates[r.index].intent, r.share_ask),
         mutual: Boolean(r.mutual),
       }));
   } catch (err) {
@@ -264,12 +277,12 @@ ${digest}
 For each candidate, judge how well they satisfy the ask, based only on what's listed — never assume or infer facts that aren't present.
 
 Return ONLY valid JSON, no preamble:
-{"results": [{"index": 0, "score": 0, "reason": "one short grounded sentence", "share_reason": "", "mutual": false}, ...]}
+{"results": [{"index": 0, "score": 0, "reason": "one short grounded sentence", "share_ask": "", "mutual": false}, ...]}
 
 score: 0-100. 0 means nothing on file supports it, 100 means they clearly satisfy it. Score every candidate, even a 0.
 reason: one short sentence explaining the score, referencing only what's actually listed for that candidate. Internal only, never shown to anyone.
-share_reason: one short sentence that is safe to say to OTHER people about why this candidate fits. It may use ONLY the candidate's own stated ask/offering text (the part in quotes after "their own stated"), because they said that in order to be matched. Never use anything from their goals, blockers, activities, or "mentioned" memories, and never imply they said they want to meet anyone. Empty string if their stated ask/offering doesn't support the match.
-mutual: true only if the candidate's own stated ask/offering (if listed) also plausibly points back at what's known about the asker above. false if the candidate has no stated ask/offering listed, or it doesn't plausibly connect.`;
+share_ask: the label (like "S1") of the ONE ask listed under "asks they agreed to share" that is the reason this candidate fits. Only that ask can ever be said to other people. Empty string if none of their shared asks supports the match, even when something else on file does. Never pick a shared ask that is unrelated to the match.
+mutual: true only if one of the candidate's own asks (shared or private, if listed) also plausibly points back at what's known about the asker above. false if the candidate has no ask listed, or it doesn't plausibly connect.`;
 }
 
 // Reverse direction of scoreAgainstStatedAsk — "I have something to offer,
@@ -295,12 +308,12 @@ ${digest}
 For each candidate, judge how much they would likely want or benefit from this offering, based only on what's listed — never assume or infer facts that aren't present.
 
 Return ONLY valid JSON, no preamble:
-{"results": [{"index": 0, "score": 0, "reason": "one short grounded sentence", "share_reason": "", "mutual": false}, ...]}
+{"results": [{"index": 0, "score": 0, "reason": "one short grounded sentence", "share_ask": "", "mutual": false}, ...]}
 
 score: 0-100. 0 means nothing on file suggests they'd want this, 100 means it clearly matches something they're after. Score every candidate, even a 0.
 reason: one short sentence explaining the score, referencing only what's actually listed for that candidate. Internal only, never shown to anyone.
-share_reason: one short sentence that is safe to say to OTHER people about why this candidate fits. It may use ONLY the candidate's own stated ask/offering text (the part in quotes after "their own stated"), because they said that in order to be matched. Never use anything from their goals, blockers, activities, or "mentioned" memories, and never imply they said they want to meet anyone. Empty string if their stated ask/offering doesn't support the match.
-mutual: true only if the candidate's own stated ask (if listed) is a "seeking" ask that plausibly wants this specific offering. false if the candidate has no stated ask listed, or it doesn't plausibly connect.`;
+share_ask: the label (like "S1") of the ONE ask listed under "asks they agreed to share" that is the reason this candidate fits. Only that ask can ever be said to other people. Empty string if none of their shared asks supports the match, even when something else on file does. Never pick a shared ask that is unrelated to the match.
+mutual: true only if one of the candidate's own asks (if listed) is a "seeking" ask that plausibly wants this specific offering. false if the candidate has no stated ask listed, or it doesn't plausibly connect.`;
 
   return runAskScoring("matching.scoreOfferingAgainstCandidates", prompt, candidates);
 }

@@ -54,7 +54,7 @@ import { recordOfferReaction, reactionFact, type OfferReaction } from "../servic
 import { detectCheckinPhrase, recordCheckin, hasActiveAsk, recordWalkinAsk } from "../services/eventWalkinCheckin.js";
 import { scheduleOutcomeFollowUp, recordOutcome } from "../services/recommendationOutcome.js";
 import { recordEventCheckinOutcome } from "../services/eventCheckinFollowUp.js";
-import { handleMatchNudgeReply } from "../services/eventGuestMatchHandoff.js";
+import { handleAdditiveReply, handleMatchNudgeReply } from "../services/eventGuestMatchHandoff.js";
 import { resolveNetworkTeaseReply, resolveNetworkIntroReply } from "../services/networkIntroNudge.js";
 import { NO_ROUTE, decideActions, gatherOpenItems, routeMessage, type RouterOutput } from "../services/messageRouter.js";
 import { recordDecision } from "../harness/core.js";
@@ -2058,6 +2058,18 @@ export function sendblueRouter(io: Server): Router {
           try {
             const pendingMatchNudge = resolvedMatchNudge.item.ref.pending;
             const classification = resolvedMatchNudge.value === "yes" ? "interested" : "not_interested";
+            if (pendingMatchNudge.kind === "additive") {
+              // "Want to hear who?": the yes names at most one person, through the share gate, never from Co's notes.
+              const { revealed } = await handleAdditiveReply(pendingMatchNudge.event_id, pendingMatchNudge.event_name, classification, { user_id: user.id, first_name: user.first_name, phone_number: user.phone_number, email: user.email }, pendingMatchNudge.candidate_ids ?? []);
+              if (classification !== "interested") {
+                addInstruction(replyFacts, "They passed on hearing who else arrived. Acknowledge lightly. Don't name or describe anyone.");
+              } else if (revealed) {
+                addFact(replyFacts, "did_this_turn", `Told them ${revealed.first_name} also got to the event and is worth meeting. ${revealed.first_name} hasn't been asked anything yet.`);
+                addInstruction(replyFacts, `They said yes to hearing who else arrived. Tell them: ${revealed.first_name} just got here and is worth finding, because of ${revealed.shareReason}. Ask if they'd like an intro. Say nothing else about ${revealed.first_name}, and name no one else.`);
+              } else {
+                addInstruction(replyFacts, "They said yes to hearing who else arrived, but on a second look nobody new is someone Co can point them to right now. Say so plainly and warmly. Don't name or describe anyone.");
+              }
+            } else {
             await handleMatchNudgeReply(
               pendingMatchNudge.event_id,
               pendingMatchNudge.event_name,
@@ -2082,6 +2094,7 @@ export function sendblueRouter(io: Server): Router {
             } else {
               addFact(replyFacts, "did_this_turn", `Recorded that they passed on being connected with ${other}.`);
               addInstruction(replyFacts, `They just passed on being connected with ${other} (internal only, never say this name back to them as a pressure tactic). Acknowledge lightly, no pressure, don't explain further.`);
+            }
             }
           } catch (err: any) {
             console.error("sendblue: match nudge reply handling failed (non-fatal):", err?.message ?? err);

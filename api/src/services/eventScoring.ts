@@ -2,6 +2,7 @@ import { anthropic } from "@ai-sdk/anthropic";
 import { generateText } from "ai";
 import { edgeHint, refreshRoom, roomEdges, type Edge } from "./peopleGraph.js";
 import pool from "../db/db.js";
+import { matchablePhone } from "../utils/phone.js";
 import { runEventAskSolicitationAgent } from "../agent/eventAskSolicitation.js";
 import { getEventDetails, getEventGuestList, listCalendarEvents, type LumaGuest, type LumaEventDetail } from "./luma.js";
 import { getActiveAsks, getActiveSeekingAsk, getGoalFrame, scoreAgainstStatedAsk } from "./matching.js";
@@ -13,7 +14,7 @@ import { inRoomSendAllowed, recordInRoomSend, enqueueCandidate, type OutputRules
 import { writeMemory } from "./memory.js";
 import { mergeWalkinsIntoGuestPool } from "./eventWalkinCheckin.js";
 import { CO_VOICE, CO_TEXT_CHANNEL } from "./coVoice.js";
-import { checkEventWindow, checkNamesWithheld, checkOneNudgePerEvent, draftWithConsent, eventOptedIn } from "../harness/introConsent.js";
+import { checkEventWindow, checkNamesWithheld, checkOneNudgePerEvent, draftWithConsent, eventOptedIn, withEnd } from "../harness/introConsent.js";
 import { gateShareReason } from "../harness/matchGate.js";
 import { arrivalWaitCheck, getPresence } from "./eventPresence.js";
 import { MODELS } from "../models.js";
@@ -74,7 +75,8 @@ export type RankedCandidate = {
 // matching Luma's own subscriber-webhook email, not comparing two
 // independently-typed addresses across systems the way this does).
 export async function matchGuestsToUsers(guests: LumaGuest[]): Promise<ScorableGuest[]> {
-  const phones = guests.map((g) => g.phone).filter((p): p is string => Boolean(p));
+  // Luma's phone as the guest typed it, put in the stored E.164 form (utils/phone.ts matchablePhone).
+  const phones = [...new Set(guests.flatMap((g) => [g.phone, matchablePhone(g.phone)]).filter((p): p is string => Boolean(p)))];
   const emails = guests.map((g) => g.email?.toLowerCase()).filter((e): e is string => Boolean(e));
   if (!phones.length && !emails.length) return [];
 
@@ -83,10 +85,35 @@ export async function matchGuestsToUsers(guests: LumaGuest[]): Promise<ScorableG
      FROM co_profiles cp
      JOIN users u ON u.id = cp.user_id
      WHERE (u.phone_number = ANY($1::text[]) OR LOWER(u.email) = ANY($2::text[]))
-       AND coalesce(u.sms_opted_out, false) = false`,
+       AND coalesce(u.sms_opted_out, false) = false AND u.archived_at IS NULL`,
     [phones, emails],
   );
   return rows;
+}
+
+// THE definition of "in the room" for a Co event (Royce, 2026-10-07: "one function, used everywhere"). Scoring, the
+// end-of-night pass and named intros all take their people from here, so nobody outside it is ever matched, named or
+// texted about the room. In the room means:
+//   - on the Luma list as APPROVED (declined, waitlisted, pending and invited-only are not in the room), or a walk-in
+//     whose arrival Co has confirmed (event_presence.arrived_at, from their shared location or Co marking them
+//     arrived): texting the QR phrase alone is not enough, it's only a claim;
+//   - a current member: not archived, not opted out of texts;
+//   - and not someone who told Co they can't make it (event_presence.not_going_at).
+// guests: the event's Luma guest list when the caller already has it.
+export async function inRoomPool(eventId: string, guests?: LumaGuest[]): Promise<ScorableGuest[]> {
+  const { mergeWalkinsIntoGuestPool } = await import("./eventWalkinCheckin.js");
+  const list = guests ?? (await getEventGuestList(eventId));
+  const [registered, walkins] = await Promise.all([
+    matchGuestsToUsers(list.filter((g) => g.approval_status === "approved")),
+    mergeWalkinsIntoGuestPool(eventId),
+  ]);
+  const ids = [...new Set([...registered, ...walkins].map((g) => g.user_id))];
+  if (!ids.length) return [];
+  const { rows } = await pool.query(`SELECT user_id, arrived_at, not_going_at FROM event_presence WHERE event_api_id = $1 AND user_id = ANY($2::uuid[])`, [eventId, ids]);
+  const presence = new Map<string, { arrived_at: unknown; not_going_at: unknown }>(rows.map((r: any) => [String(r.user_id), r]));
+  const notGoing = (id: string) => Boolean(presence.get(id)?.not_going_at);
+  const arrived = (id: string) => Boolean(presence.get(id)?.arrived_at);
+  return dedupeByUserId([...registered.filter((g) => !notGoing(g.user_id)), ...walkins.filter((g) => arrived(g.user_id) && !notGoing(g.user_id))]);
 }
 
 // A person could plausibly show up in both sources in the same pass — a
@@ -190,7 +217,7 @@ async function storeRanking(eventId: string, personId: string, ranked: RankedCan
 // 2026-09-07: three real independent users with genuinely unrelated asks
 // all correctly scored 0-5 against each other — this threshold is exactly
 // what keeps that from becoming a false "you two should meet!" text).
-const MATCH_NUDGE_MIN_SCORE = 60;
+export const MATCH_NUDGE_MIN_SCORE = 60;
 
 // Royce, 2026-09-07: "we want to facilitate the nudge as the event is
 // happening" — a match found days before the event started was firing
@@ -426,6 +453,8 @@ async function maybeSendMatchNudge(
       .query(`UPDATE event_guest_match_nudges SET pending = false WHERE event_id = $1 AND person_id = $2`, [eventId, person.user_id])
       .catch((err: any) => console.error("eventScoring: clearing pending failed (non-fatal):", err?.message ?? err));
     await recordInRoomSend(person.user_id, `in_room:match:${eventId}`, message);
+    // The question they now have open about this one person (services/inRoomOffers.ts): their reply binds to it.
+    await (await import("./inRoomOffers.js")).openOffer({ eventId, eventName, personId: person.user_id, kind: "nudge", candidateId: candidate.user_id }).catch((err: any) => console.error("eventScoring: opening the nudge offer failed (non-fatal):", err?.message ?? err));
     // No markMatchNudgeSent call needed here — the claim above already
     // wrote the row with the final candidate_id/score.
     await writeMemory(
@@ -596,10 +625,13 @@ Draft a short, warm, low-pressure text (1-2 sentences, no em dashes, normal sent
   }
 
   await recordInRoomSend(person.user_id, `in_room:additive:${eventId}:${Date.now()}`, message);
+  // Who arrived lives only on the offer (services/inRoomOffers.ts), never in their notes: they haven't been told, and
+  // after their yes each person is named only through the share gate (eventGuestMatchHandoff.ts handleAdditiveReply).
+  await (await import("./inRoomOffers.js")).openOffer({ eventId, eventName, personId: person.user_id, kind: "additive", candidateIds: newCandidates.map((c) => c.user_id) }).catch((err: any) => console.error("eventScoring: opening the additive offer failed (non-fatal):", err?.message ?? err));
   await writeMemory(
     person.user_id,
     "event_guest_match_nudge",
-    `Additive offer sent to ${person.first_name} at "${eventName}": ${newCandidates.length} new candidate(s) checked in since their last match (${newCandidates.map((c) => c.first_name).join(", ")})`,
+    `Additive offer sent to ${person.first_name} at "${eventName}": ${newCandidates.length} more people checked in since their last match. Co asked if they want to hear who; no one has been named to them.`,
   );
   await writeMemory(person.user_id, "text_exchange", `Co replied: ${message}`).catch((err: any) =>
     console.error("eventScoring: additive offer text_exchange log failed (non-fatal):", err?.message ?? err),
@@ -783,15 +815,14 @@ export async function scoreGuestListForEvent(
   // Luma (services/eventWalkinCheckin.ts). Deduped by user_id — a
   // Luma-registered guest who also scans the QR should still only be scored
   // once per pass.
-  const [lumaMatched, walkinMatched] = await Promise.all([
-    matchGuestsToUsers(guests),
-    mergeWalkinsIntoGuestPool(eventId).catch((err: any) => {
-      console.error(`eventScoring: mergeWalkinsIntoGuestPool failed for ${eventId} (non-fatal):`, err?.message ?? err);
-      return [];
-    }),
-  ]);
-  const matched = dedupeByUserId([...lumaMatched, ...walkinMatched]);
-  const eventTiming = details ? { start_at: details.start_at, end_at: details.end_at } : null;
+  // One pool (inRoomPool, above): approved Luma guests plus walk-ins Co has seen arrive, never archived, opted-out
+  // or not-going members. A walk-in failure leaves the Luma guests.
+  const matched = await inRoomPool(eventId, guests).catch(async (err: any) => {
+    console.error(`eventScoring: inRoomPool failed for ${eventId} (non-fatal):`, err?.message ?? err);
+    return [] as ScorableGuest[];
+  });
+  // A missing end_at gets the end of that evening (introConsent.ts effectiveEnd), so the window and wrap-up still close.
+  const eventTiming = details ? withEnd({ start_at: details.start_at, end_at: details.end_at, timezone: details.timezone ?? null }) : null;
 
   // End-of-night check-in (Notion V1 board row 8) — gated on registration
   // (matched, above) + the event's real end_at, not a Luma check-in signal

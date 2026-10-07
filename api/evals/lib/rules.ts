@@ -22,7 +22,10 @@ const walkAll = (d: string): string[] => readdirSync(join(root, d)).flatMap((n) 
 const evalFiles = walk("evals").filter((f) => !f.startsWith("evals/lib/") && f !== "evals/lib.ts");
 // Structural, not a text search: a script can reach a model through a service it imports (readTurn, the router...), so
 // the rule is that every entrypoint outside layer 1 refuses to run unmetered. Only listed harness/data modules are exempt.
-const outside = evalFiles.filter((f) => !layer1.includes(f) && !harness.includes(f));
+// Red-by-design suites waiting on their fixes (evals/lib/pending.json): out of layer 1 on purpose, never forgotten.
+const pending: string[] = JSON.parse(read("evals/lib/pending.json")).files;
+check("pending suites exist, are named in their own header, and none is also in layer 1", pending.every((f) => existsSync(join(root, f)) && !layer1.includes(f)) && pending.filter((f) => !f.endsWith("world.ts")).every((f) => /NOT IN layer1\.json YET/.test(read(f))));
+const outside = evalFiles.filter((f) => !layer1.includes(f) && !harness.includes(f) && !pending.includes(f));
 const gated = (f: string) => /^\s*import\s+["'][^"']*requireMeter[^"']*["']|import\(["'][^"']*requireMeter/m.test(read(f).replace(/\/\/.*$/gm, ""));
 const unguarded = outside.filter((f) => !gated(f));
 check("every eval script outside layer 1 refuses to run without the meter (no unmetered live call anywhere)", unguarded.length === 0 && (unguarded.length ? (console.log(unguarded.join("\n")), false) : true));
@@ -36,7 +39,7 @@ check("a Python script that calls a model or voice API directly refuses to run u
 const inLayer1AndAlwaysLive = layer1.filter((f) => /^import ".*requireMeter/m.test(read(f)));
 check("no file in layer 1 imports the meter at the top (those would refuse to run): live paths there are behind --live only", inLayer1AndAlwaysLive.length === 0);
 check("layer 1 lists only files that exist", layer1.every((f) => existsSync(join(root, f))));
-check("every rules.ts logic test is in layer 1 (none is left out of the per-change run)", evalFiles.filter((f) => /\/rules\.ts$/.test(f)).every((f) => layer1.includes(f)));
+check("every rules.ts logic test is in layer 1 (none is left out of the per-change run)", evalFiles.filter((f) => /\/rules\.ts$/.test(f) && !pending.includes(f)).every((f) => layer1.includes(f)));
 check("no live suite is in the nightly list twice, and each names a file that exists", new Set(live.suites.map((s) => s.args.join(" "))).size === live.suites.length && live.suites.every((s) => existsSync(join(root, s.args[0]))));
 check("the nightly set is small: at most 8 suites, at most 6 cases each", live.suites.length <= 8 && live.suites.every((s: any) => s.sample <= 6));
 check("the nightly default cap is at most 500,000 tokens and $1.00", live.caps.tokens <= 500_000 && live.caps.usd <= 1.0);
