@@ -3,15 +3,38 @@
 //
 // Phase 2 (2026-10-08): "google_docs" puts the same document in their own Drive as an editable Google Doc and texts the link
 // (services/googleDocs.ts). It needs their Google connected with Docs allowed; without that it fails plainly and the PDF still goes.
+//
+// Scope (Royce, 2026-10-07): the Google Doc is for shared working artifacts around events and partnerships (a venue brief, a
+// partnership plan, a readout), not member goal-tracking or general productivity docs, and only for the two Google test users while the
+// Google project is in Testing mode (GOOGLE_DOCS_TEST_USERS, two user ids). Everyone else, and every other kind, gets the PDF.
 import pool from "../db/db.js";
 import { renderPdf } from "./browserRead.js";
 import { cachePlanFile } from "./planFile.js";
 import { DateTime } from "luxon";
-import { docFilename, documentHtml, type Doc } from "./documentSheet.js";
+import { docFilename, documentHtml, type Doc, type DocKind } from "./documentSheet.js";
 import { notToTeammate } from "./teamLines.js";
 
 export type DocTarget = "pdf_text" | "google_docs";
-export type DeliverResult = { ok: true; via: DocTarget; filename: string; link?: string } | { ok: false; why: string; notConnected?: boolean };
+export type DeliverResult = { ok: true; via: DocTarget; filename: string; link?: string; shared?: boolean } | { ok: false; why: string; notConnected?: boolean; notAllowed?: boolean };
+
+// The kinds that may become a shared Google Doc, and the members who may get one (at most two: the Google project's test users).
+export const SHARED_DOC_KINDS: readonly DocKind[] = ["venue_brief", "partnership_plan", "readout"];
+export function docsTestPair(env: NodeJS.ProcessEnv = process.env): string[] {
+  return String(env.GOOGLE_DOCS_TEST_USERS ?? "").split(",").map((s) => s.trim()).filter((s) => /^[0-9a-f-]{36}$/i.test(s)).slice(0, 2);
+}
+export function googleDocAllowed(userId: string, kind: DocKind | undefined, env: NodeJS.ProcessEnv = process.env): boolean {
+  return docsTestPair(env).includes(userId) && SHARED_DOC_KINDS.includes(kind ?? "other");
+}
+// Pure: where a document goes. A Google Doc only when they asked for one in their own words AND it's allowed for them and this kind;
+// otherwise the PDF in their thread.
+//   googleRefused: "not_yet" (they aren't one of the test pair: Google Docs aren't open to them yet), "kind" (not a shared working artifact).
+export function docTargets(o: { userId: string; kind: DocKind | undefined; saveTo?: "pdf" | "google_doc" | "both"; askedForGoogle: boolean; env?: NodeJS.ProcessEnv }): { targets: DocTarget[]; googleRefused: "not_yet" | "kind" | null } {
+  const wants = (o.saveTo === "google_doc" || o.saveTo === "both") && o.askedForGoogle;
+  if (!wants) return { targets: ["pdf_text"], googleRefused: null };
+  if (!docsTestPair(o.env).includes(o.userId)) return { targets: ["pdf_text"], googleRefused: "not_yet" };
+  if (!googleDocAllowed(o.userId, o.kind, o.env)) return { targets: ["pdf_text"], googleRefused: "kind" };
+  return { targets: o.saveTo === "both" ? ["google_docs", "pdf_text"] : ["google_docs"], googleRefused: null };
+}
 export type DeliverDeps = {
   render: (html: string) => Promise<Buffer | null>;
   cache: (pdf: Buffer, name?: string) => string;
@@ -20,6 +43,7 @@ export type DeliverDeps = {
   // Their Google access token when they connected with Docs allowed, else null (services/googleAuth.ts).
   googleToken?: (userId: string) => Promise<string | null>;
   uploadDoc?: (token: string, name: string, html: string) => Promise<import("./googleDocs.js").DocsUpload>;
+  shareDoc?: (token: string, fileId: string) => Promise<import("./googleDocs.js").DocsShare>;
 };
 export type DeliverTo = { userId: string; firstName: string; phone: string; zone?: string | null; now?: Date };
 
@@ -34,6 +58,7 @@ const realDeps = async (): Promise<DeliverDeps> => {
     from: process.env.SENDBLUE_PHONE_NUMBER!,
     googleToken: async (userId) => (g.googleConfigured() && g.canCreateDocs((await g.isConnected(userId)).scopes) ? g.accessTokenFor(userId).catch(() => null) : null),
     uploadDoc: (token, name, html) => d.uploadGoogleDoc(token, name, html),
+    shareDoc: (token, fileId) => d.shareWithLink(token, fileId),
   };
 };
 
@@ -53,8 +78,11 @@ async function pdfByText(doc: Doc, to: DeliverTo, deps: DeliverDeps): Promise<De
   return { ok: true, via: "pdf_text", filename };
 }
 
-// The Google Doc: in their own Drive, named like the PDF (without .pdf), and the link texted with the title.
+// The Google Doc: in their own Drive, named like the PDF (without .pdf), opened to anyone with the link as an editor, and the link
+// texted with the title and a plain line saying who can open it. Re-checked here, whoever calls: a member outside the test pair, or a
+// kind that isn't a shared working artifact, never gets one.
 async function googleDoc(doc: Doc, to: DeliverTo, deps: DeliverDeps): Promise<DeliverResult> {
+  if (!googleDocAllowed(to.userId, doc.kind)) return { ok: false, why: "a Google Doc is only for a venue brief, partnership plan or readout, and only for the test pair for now", notAllowed: true };
   const token = deps.googleToken ? await deps.googleToken(to.userId).catch(() => null) : null;
   if (!token || !deps.uploadDoc) return { ok: false, why: "their Google isn't connected with Docs allowed", notConnected: true };
   const day = dayFor(to);
@@ -62,12 +90,14 @@ async function googleDoc(doc: Doc, to: DeliverTo, deps: DeliverDeps): Promise<De
   const { docsHtml } = await import("./googleDocs.js");
   const up = await deps.uploadDoc(token, name, docsHtml(doc, { firstName: to.firstName, date: day.toFormat("LLLL d, yyyy") }));
   if (!up.ok) return { ok: false, why: up.why };
+  const share = deps.shareDoc ? await deps.shareDoc(token, up.id).catch(() => ({ ok: false as const, why: "Google didn't open the link" })) : { ok: false as const, why: "not shared" };
+  const who = share.ok ? "Anyone with this link can open and edit it." : "Only you can open it for now; share it from the Doc when you're ready.";
   try {
-    await deps.send({ number: to.phone, content: `${doc.title}\n${up.link}`, from_number: deps.from });
+    await deps.send({ number: to.phone, content: `${doc.title}\n${up.link}\n${who}`, from_number: deps.from });
   } catch {
     return { ok: false, why: "the Google Doc was made in their Drive, but the link didn't send by text" };
   }
-  return { ok: true, via: "google_docs", filename: name, link: up.link };
+  return { ok: true, via: "google_docs", filename: name, link: up.link, shared: share.ok };
 }
 
 export const DELIVERERS: Record<DocTarget, (doc: Doc, to: DeliverTo, deps: DeliverDeps) => Promise<DeliverResult>> = { pdf_text: pdfByText, google_docs: googleDoc };

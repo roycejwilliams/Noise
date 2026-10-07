@@ -112,6 +112,38 @@ export async function runMigrations(): Promise<void> {
         sent_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
         PRIMARY KEY (user_id, event_id)
       )`))
+    // Files a member sends Co (services/memberFiles.ts): theirs alone, read once, deleted on their ask. The text is the only copy.
+    .then(() => pool.query(`CREATE TABLE IF NOT EXISTS member_files (
+        id BIGSERIAL PRIMARY KEY,
+        user_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+        n INT NOT NULL,
+        name TEXT,
+        sha256 TEXT NOT NULL,
+        bytes INT NOT NULL,
+        text TEXT NOT NULL,
+        created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+        UNIQUE (user_id, sha256),
+        UNIQUE (user_id, n)
+      )`))
+    // The partner readout, once built (services/partnerReadoutSend.ts): frozen counts and the page, the team's yes, the host's
+    // address the team gave, and the read-only link (only its hash is kept). One per event.
+    .then(() => pool.query(`CREATE TABLE IF NOT EXISTS partner_readouts (
+        id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+        event_id TEXT NOT NULL UNIQUE,
+        event_name TEXT NOT NULL,
+        stats JSONB NOT NULL,
+        text TEXT NOT NULL,
+        html TEXT NOT NULL,
+        status TEXT NOT NULL DEFAULT 'draft' CHECK (status IN ('draft','approved','sent','withdrawn')),
+        created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+        approved_at TIMESTAMPTZ,
+        approved_by TEXT,
+        host_email TEXT,
+        link_token_hash TEXT UNIQUE,
+        link_expires_at TIMESTAMPTZ,
+        sent_at TIMESTAMPTZ,
+        withdrawn_at TIMESTAMPTZ
+      )`))
     // Member-facing Mo (mo/memberFlow.ts): a member's opt-in and approved voice, their batches, the people in them, and a
     // receipt for every contact. Separate from mo_prospects: the team's queue never reaches a member, and a member only
     // ever reads their own rows.

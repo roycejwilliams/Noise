@@ -31,7 +31,7 @@ export type HuntDeps = {
   allAsks: () => Promise<string[]>;
   search: (query: string) => Promise<MoPost[]>;
   judge: (ask: string, person: string, posts: MoPost[]) => Promise<Judged[]>;
-  alreadyKnown: (keys: string[], xUserId: string | null) => Promise<boolean>;
+  alreadyKnown: (keys: string[], xUserId: string | null, who?: { name: string | null; handle: string | null }) => Promise<boolean>;
 };
 
 export type HuntResult = { status: "stored" | "none" | "skipped"; why?: string; batchId?: string; found?: number };
@@ -71,7 +71,7 @@ export async function huntForMember(userId: string, deps: HuntDeps): Promise<Hun
     if (!p || !j.fit) continue;
     if (!quoteIsTheirs(j.quote, p.text)) continue;
     if (!placeOk(p.author.location, j.inCity)) continue;
-    if (await deps.alreadyKnown(suppressionKeys({ x_user_id: p.author.id }), p.author.id)) continue;
+    if (await deps.alreadyKnown(suppressionKeys({ x_user_id: p.author.id }), p.author.id, { name: p.author.name, handle: p.author.username })) continue;
     found.push({ xUserId: p.author.id, handle: p.author.username, name: p.author.name, source: "x", postText: p.text, quote: j.quote, why: neutralPronouns(j.why) });
   }
   if (!found.length) return { status: "none", why: "nobody backed by their own words" };
@@ -141,7 +141,29 @@ export async function realAllAsks(): Promise<string[]> {
   return rows.map((r: any) => String(r.ask_text));
 }
 
-export async function realAlreadyKnown(keys: string[], xUserId: string | null): Promise<boolean> {
+// Someone already in the club is never hunted as a stranger: a member whose full name (two words or more) or username
+// matches the poster, or someone who joined through Mo (team or member). A name match is enough to skip: missing a stranger
+// costs nothing, approaching a member as a stranger tells them what another member asked for.
+export const normName = (s: string | null | undefined) => String(s ?? "").toLowerCase().replace(/[^\p{L}]+/gu, " ").trim();
+export async function isClubMember(who: { name: string | null; handle: string | null }, xUserId: string | null): Promise<boolean> {
+  const name = normName(who.name);
+  const fullName = name.split(" ").length >= 2 ? name : "";
+  const handle = String(who.handle ?? "").trim().replace(/^@/, "").toLowerCase();
+  const [byName, joined] = await Promise.all([
+    fullName || handle
+      ? pool.query(
+          `SELECT 1 FROM users WHERE archived_at IS NULL AND (($1 <> '' AND TRIM(regexp_replace(LOWER(first_name || ' ' || COALESCE(last_name, '')), '[^[:alpha:]]+', ' ', 'g')) = $1) OR ($2 <> '' AND LOWER(username) = $2)) LIMIT 1`,
+          [fullName, handle],
+        )
+      : Promise.resolve({ rows: [] as any[] }),
+    xUserId ? pool.query(`SELECT 1 FROM mo_member_candidates WHERE x_user_id = $1 AND status = 'joined' UNION ALL SELECT 1 FROM mo_prospects WHERE x_user_id = $1 AND joined_at IS NOT NULL LIMIT 1`, [xUserId]) : Promise.resolve({ rows: [] as any[] }),
+  ]);
+  return Boolean(byName.rows[0] || joined.rows[0]);
+}
+
+export async function realAlreadyKnown(keys: string[], xUserId: string | null, who: { name: string | null; handle: string | null } = { name: null, handle: null }): Promise<boolean> {
+  // A failed read counts as known: never approach someone we couldn't check.
+  if (await isClubMember(who, xUserId).catch(() => true)) return true;
   const [supp, a, b] = await Promise.all([
     keys.length ? pool.query(`SELECT 1 FROM mo_suppression WHERE key = ANY($1::text[]) LIMIT 1`, [keys]) : Promise.resolve({ rows: [] as any[] }),
     pool.query(`SELECT 1 FROM mo_prospects WHERE x_user_id IS NOT NULL AND x_user_id = $1 LIMIT 1`, [xUserId]).catch(() => ({ rows: [] as any[] })),

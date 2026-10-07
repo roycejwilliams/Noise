@@ -13,9 +13,13 @@ export const DOC_LIMITS = { maxSections: 10, maxParagraphs: 6, maxBullets: 10, t
 
 export type DocSectionInput = { heading?: string; paragraphs?: string[]; bullets?: string[] };
 // suggestions: anything of Co's own (ideas, options, recommendations), marked as Co's on the page and kept out of the member's points.
-export type DocInput = { title: string; note?: string; sections: DocSectionInput[]; suggestions?: string[] };
+// kind: what the document is for. The shared working artifacts around events and partnerships (a venue brief, a partnership plan, a
+// readout) are the ones that may become a shared Google Doc (services/documentDelivery.ts); everything else ("other") stays a PDF.
+export const DOC_KINDS = ["venue_brief", "partnership_plan", "readout", "other"] as const;
+export type DocKind = (typeof DOC_KINDS)[number];
+export type DocInput = { title: string; note?: string; sections: DocSectionInput[]; suggestions?: string[]; kind?: string };
 export type DocSection = { heading: string | null; paragraphs: string[]; bullets: string[] };
-export type Doc = { title: string; note: string; sections: DocSection[]; suggestions: string[] };
+export type Doc = { title: string; note: string; sections: DocSection[]; suggestions: string[]; kind?: DocKind };
 
 // Co writes plain words: no dash for a pause (a comma), no markdown that would print as stray symbols.
 const clean = (s: unknown, max: number) =>
@@ -38,7 +42,8 @@ export function resolveDocument(input: DocInput): Doc {
     }))
     .filter((s) => s.paragraphs.length || s.bullets.length);
   const suggestions = (input.suggestions ?? []).map((x) => clean(x, L.suggestionChars)).filter(Boolean).slice(0, L.maxSuggestions);
-  return { title: clean(input.title, L.titleChars), note: clean(input.note, L.noteChars), sections, suggestions };
+  const kind: DocKind = (DOC_KINDS as readonly string[]).includes(String(input.kind)) ? (input.kind as DocKind) : "other";
+  return { title: clean(input.title, L.titleChars), note: clean(input.note, L.noteChars), sections, suggestions, kind };
 }
 
 export const docText = (d: Doc): string => [d.title, d.note, ...d.sections.flatMap((s) => [s.heading ?? "", ...s.paragraphs, ...s.bullets]), ...d.suggestions].filter(Boolean).join("\n");

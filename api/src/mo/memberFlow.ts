@@ -307,7 +307,17 @@ export type ReplyDeps = {
   codeMessage: (code: string) => string;
   suppress: (keys: string[], reason: string) => Promise<void>;
   tellMember: (userId: string, kind: "replied" | "declined" | "question", candidateId: string) => Promise<void>;
+  // A held question needs a person: the team is texted the stranger's words and a reference, never who the member is.
+  notifyTeam: (text: string) => Promise<unknown>;
 };
+
+// What the team is told about a held question: the stranger (who wrote to Mo first-hand) and their words, plus the
+// candidate id to look up. Nothing about the member: not their name, their ask, or why this person was picked.
+export function heldQuestionNote(c: { id: string; name: string | null; x_handle: string | null }, text: string): string {
+  const them = c.x_handle ? `@${c.x_handle}` : "Someone";
+  const said = text.replace(/\s+/g, " ").trim().slice(0, 280);
+  return `Mo: ${them} wrote back to a member's outreach with a question, and it's held for a person. They said: "${said}". Nothing about the member or the club has been said. Ref ${c.id.slice(0, 8)}.`;
+}
 
 // The front desk: a reply is read (a clear stop wins in code, before any model), the person is answered or let go, and
 // the member hears only their own thread. A question is held: Mo does not discuss the member or the club until they join.
@@ -346,7 +356,10 @@ export async function landReply(c: CandidateRow, text: string, d: ReplyDeps): Pr
   }
   // A question, or a second message: held for a person, never answered with anything about the member.
   await q(`UPDATE mo_member_candidates SET status = CASE WHEN status = 'contacted' THEN 'replied' ELSE status END WHERE id = $1`, [c.id]);
+  // The team hears once a day per person at most: a stranger writing ten times doesn't text the team ten times.
+  const heldToday = await q(`SELECT 1 FROM mo_contact_receipts WHERE candidate_id = $1 AND kind = 'reply' AND outcome = 'blocked' AND created_at > NOW() - INTERVAL '24 hours' LIMIT 1`, [c.id]).then((r) => r.rows.length > 0).catch(() => false);
   await record("blocked", "a question: held, nothing about the member or the club is said before they join", "");
+  if (!heldToday) await Promise.resolve(d.notifyTeam(heldQuestionNote(c, text))).catch((err: any) => console.error("mo member: team not told of a held question (non-fatal):", err?.message ?? err));
   await d.tellMember(c.user_id, "question", c.id);
   return "held";
 }

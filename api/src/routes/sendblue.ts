@@ -1144,6 +1144,9 @@ export function sendblueRouter(io: Server): Router {
         let isVoice = false;
         let imageForVision: { data: Buffer; mediaType: string } | null = null;
         let photoDescription: string | null = null;
+        // A PDF they sent (services/memberFiles.ts): kept for them alone, by number. What it says never enters this turn.
+        let fileKept: { n: number; isNew: boolean } | null = null;
+        let fileNotKept: string | null = null;
 
         if (hasMedia) {
           isVoice = await isAudioUrl(media_url);
@@ -1158,19 +1161,30 @@ export function sendblueRouter(io: Server): Router {
             }
           } else {
             try {
-              const imageRes = await fetch(media_url, { signal: AbortSignal.timeout(10000) });
+              const imageRes = await fetch(media_url, { signal: AbortSignal.timeout(15000) });
               if (!imageRes.ok) throw new Error(`Image fetch failed: ${imageRes.status}`);
-              // The format from the file's own bytes (links often say
-              // "application/octet-stream"), HEIC converted to JPEG; only what
-              // the model reads goes to it (services/imageRead.ts, 2026-10-01).
-              const readable = await readableImage(Buffer.from(await imageRes.arrayBuffer()));
-              if (!readable) throw new Error(`unreadable image format (${imageRes.headers.get("content-type") ?? "no type"})`);
-              const { data: buffer, mediaType } = readable;
-              imageForVision = { data: buffer, mediaType };
-              // Written down once, for the record and the reply's fact check
-              // (services/imageRead.ts, 2026-09-22).
-              photoDescription = await describeImage(buffer, mediaType);
-              if (!resolvedContent) resolvedContent = photoDescription ? `[sent a photo showing: ${photoDescription}]` : "[sent a photo]";
+              const fileBytes = Buffer.from(await imageRes.arrayBuffer());
+              // A PDF by its own bytes, before it is taken for a photo (it used to arrive as "[sent a photo, couldn't load it]").
+              // Kept for this member only; the record says that a file came and its number, never what it says.
+              const files = await import("../services/memberFiles.js");
+              if (files.isPdf(fileBytes)) {
+                const kept = await files.keepFile(user.id, fileBytes, media_url).catch((err: any) => ({ ok: false as const, why: String(err?.message ?? err).slice(0, 80) }));
+                if (kept.ok) fileKept = { n: kept.n, isNew: kept.isNew };
+                else fileNotKept = kept.why;
+                if (!resolvedContent) resolvedContent = kept.ok ? `[sent a PDF, kept as their file #${kept.n}]` : "[sent a PDF Co couldn't keep]";
+              } else {
+                // The format from the file's own bytes (links often say
+                // "application/octet-stream"), HEIC converted to JPEG; only what
+                // the model reads goes to it (services/imageRead.ts, 2026-10-01).
+                const readable = await readableImage(fileBytes);
+                if (!readable) throw new Error(`unreadable image format (${imageRes.headers.get("content-type") ?? "no type"})`);
+                const { data: buffer, mediaType } = readable;
+                imageForVision = { data: buffer, mediaType };
+                // Written down once, for the record and the reply's fact check
+                // (services/imageRead.ts, 2026-09-22).
+                photoDescription = await describeImage(buffer, mediaType);
+                if (!resolvedContent) resolvedContent = photoDescription ? `[sent a photo showing: ${photoDescription}]` : "[sent a photo]";
+              }
             } catch (imgErr: any) {
               console.error("Image fetch for vision failed (non-fatal):", imgErr?.message ?? imgErr);
               if (!resolvedContent) resolvedContent = "[sent a photo — couldn't load it]";
@@ -1760,6 +1774,12 @@ export function sendblueRouter(io: Server): Router {
               ? `They sent a photo this turn. It shows: ${photoDescription}`
               : "They sent a photo this turn. You can see it attached; its details weren't written down, so describe only what you can see in it.",
           );
+        }
+        // A PDF they sent: Co knows it's kept and its number, and what it can do with it. Never what it says.
+        if (fileKept) {
+          addFact(replyFacts, "known", `They sent a PDF this turn. It's kept for them alone as their file #${fileKept.n}${fileKept.isNew ? "" : " (they had sent it before)"}. You haven't read it and don't know what it says, so don't describe or guess its contents. You can write them a document from it when they ask (writeFromFile), and delete it whenever they ask (deleteMyFiles).`);
+        } else if (fileNotKept) {
+          addFact(replyFacts, "known", `They sent a PDF this turn, but it wasn't kept (${fileNotKept}). Say so plainly; don't guess at what it holds.`);
         }
         // A problem they're reporting about Co itself is saved for the team
         // (test only, services/issueReports.ts), and the reply can say so.

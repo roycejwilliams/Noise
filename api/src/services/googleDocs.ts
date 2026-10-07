@@ -45,3 +45,24 @@ export async function uploadGoogleDoc(accessToken: string, name: string, html: s
     return { ok: false, why: "Google didn't answer in time" };
   }
 }
+
+// Shared working artifacts (a venue brief, a partnership plan, a readout) are made to be passed to a venue or a partner and edited
+// together, so the Doc is opened to anyone with the link, as an editor, never listed or searchable (allowFileDiscovery false). That is a
+// real tradeoff: whoever holds the link can read and change it. It is used only for those kinds, only for the test pair
+// (services/documentDelivery.ts), and the link goes only to the member, in their own thread. drive.file allows this on files Co created.
+// A refusal (a Workspace that forbids link sharing) leaves the Doc private to them, and says so.
+export type DocsShare = { ok: true } | { ok: false; why: string };
+export async function shareWithLink(accessToken: string, fileId: string, fetchImpl: typeof fetch = fetch): Promise<DocsShare> {
+  try {
+    const res = await fetchImpl(`https://www.googleapis.com/drive/v3/files/${encodeURIComponent(fileId)}/permissions?fields=id`, {
+      method: "POST",
+      headers: { Authorization: `Bearer ${accessToken}`, "Content-Type": "application/json" },
+      body: JSON.stringify({ role: "writer", type: "anyone", allowFileDiscovery: false }),
+      signal: AbortSignal.timeout(10_000),
+    });
+    if (!res.ok) return { ok: false, why: res.status === 403 ? "their Google account doesn't allow link sharing" : "Google didn't open the link" };
+    return { ok: true };
+  } catch {
+    return { ok: false, why: "Google didn't answer in time" };
+  }
+}

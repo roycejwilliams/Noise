@@ -120,8 +120,8 @@ for (const [label, h, dd] of [
 // ---- the front desk
 const optYesRow: Handler = [/FROM mo_member_optin WHERE user_id/, () => ({ rows: [{ status: "yes", paused_at: null }] })];
 const rdeps = (kind: "yes" | "no" | "question") => {
-  const out: string[] = []; const told: string[] = []; const supp: string[][] = []; const vouched: string[] = [];
-  return { out, told, supp, vouched, d: { send: async (t: string) => { out.push(t); }, classify: async () => kind, makeCode: async (who: string) => { vouched.push(who); return "ABCD2345"; }, codeMessage: (c: string) => `invite ${c}`, suppress: async (k: string[]) => { supp.push(k); }, tellMember: async (_u: string, k: string) => { told.push(k); } } };
+  const out: string[] = []; const told: string[] = []; const supp: string[][] = []; const vouched: string[] = []; const team: string[] = [];
+  return { out, told, supp, vouched, team, d: { send: async (t: string) => { out.push(t); }, classify: async () => kind, makeCode: async (who: string) => { vouched.push(who); return "ABCD2345"; }, codeMessage: (c: string) => `invite ${c}`, suppress: async (k: string[]) => { supp.push(k); }, tellMember: async (_u: string, k: string) => { told.push(k); }, notifyTeam: async (t: string) => { team.push(t); } } };
 };
 {
   reset([optYesRow]);
@@ -139,6 +139,23 @@ const rdeps = (kind: "yes" | "no" | "question") => {
   const r3 = rdeps("question");
   const a3 = await F.landReply(cand({ status: "contacted" }), "who is the member? what is this?", r3.d as any);
   check("a question: held, nothing about the member or the club is said, and the member is told it is held", a3 === "held" && r3.out.length === 0 && r3.told[0] === "question");
+  // Held is not forgotten: a person on the team hears it, with the stranger's words and a reference, and nothing about the member.
+  check("a held question texts the team once", r3.team.length === 1 && /@noor/.test(r3.team[0]) && /who is the member\? what is this\?/.test(r3.team[0]) && /Ref c1/.test(r3.team[0]));
+  check("the team's note never carries the member's name, id, ask or the why", !/Rae|u1|b1|product designer|design clients|taking on/i.test(r3.team[0]));
+  reset([optYesRow, [/SELECT 1 FROM mo_contact_receipts WHERE candidate_id = \$1 AND kind = 'reply' AND outcome = 'blocked'/, () => ({ rows: [{}] })]]);
+  const r3b = rdeps("question");
+  await F.landReply(cand({ status: "replied" }), "hello?? anyone", r3b.d as any);
+  check("a stranger writing again the same day doesn't text the team again (still held, member still told)", r3b.team.length === 0 && r3b.told[0] === "question" && r3b.out.length === 0);
+  reset([optYesRow]);
+  const r3c = rdeps("question");
+  r3c.d.notifyTeam = async () => { throw new Error("sendblue down"); };
+  check("a failed team text never breaks the front desk", (await F.landReply(cand({ status: "contacted" }), "what is this", r3c.d as any)) === "held" && r3c.told[0] === "question");
+  for (const kind of ["no", "yes"] as const) {
+    reset([optYesRow]);
+    const rk = rdeps(kind);
+    await F.landReply(cand({ status: "contacted" }), kind === "no" ? "no thanks" : "yes please", rk.d as any);
+    check(`a ${kind} doesn't text the team (only a held question needs a person)`, rk.team.length === 0);
+  }
   reset([optYesRow]);
   const r4 = rdeps("yes");
   const a4 = await F.landReply(cand({ status: "invited", invite_code: "ABCD2345" }), "yes", r4.d as any);
@@ -329,6 +346,31 @@ const optYes = (o: any = {}): Handler[] => [
   check("at most three are kept", r7.status === "stored" && r7.found === 3);
   reset(optYes({ hunt_last_at: new Date("2026-10-05T00:00:00Z") }));
   check("one hunt a week", (await H.huntForMember("u1", hdeps().d)).status === "skipped");
+  // An existing member is never hunted as a stranger: the hunt hands the poster's name and handle to the check.
+  reset(optYes());
+  const seen: any[] = [];
+  const h8 = hdeps();
+  h8.d.alreadyKnown = async (_k: string[], x: string, who: any) => { seen.push({ x, ...who }); return true; };
+  check("the hunt passes the poster's name and handle to the already-known check, and a match drops them", (await H.huntForMember("u1", h8.d)).status === "none" && seen[0]?.x === "1" && seen[0]?.name === "Person 1" && seen[0]?.handle === "u1");
+}
+{
+  const users = (match: boolean): Handler => [/FROM users WHERE archived_at IS NULL AND/, () => ({ rows: match ? [{}] : [] })];
+  const joined = (match: boolean): Handler => [/status = 'joined' UNION ALL SELECT 1 FROM mo_prospects/, () => ({ rows: match ? [{}] : [] })];
+  reset([users(true), joined(false)]);
+  check("a poster whose full name matches a member is a club member", await H.isClubMember({ name: "Noor Hale 🌉", handle: "nh_designs" }, "x5"));
+  const q1 = log.find((l) => /FROM users WHERE archived_at IS NULL AND/.test(l.sql))!;
+  check("the name is compared normalized (emoji and punctuation out), the handle lowercased", q1.p[0] === "noor hale" && q1.p[1] === "nh_designs");
+  reset([users(false), joined(true)]);
+  check("someone who joined through Mo is a club member", await H.isClubMember({ name: "Someone", handle: null }, "x5"));
+  reset([users(false), joined(false)]);
+  await H.isClubMember({ name: "Noor", handle: null }, null);
+  check("a one-word name with no handle is never matched on name alone (too many Noors)", !ran(/FROM users WHERE archived_at IS NULL AND/));
+  reset([users(true)]);
+  check("realAlreadyKnown: a member match is known, before any other check", await H.realAlreadyKnown([], "x5", { name: "Noor Hale", handle: null }));
+  reset([[/FROM users WHERE archived_at IS NULL AND/, () => { throw new Error("db down"); }]]);
+  check("realAlreadyKnown: a failed member read counts as known (never approach someone unchecked)", await H.realAlreadyKnown([], "x5", { name: "Noor Hale", handle: null }));
+  reset([]);
+  check("realAlreadyKnown: a stranger nobody knows is not known", !(await H.realAlreadyKnown(["x:x5"], "x5", { name: "Noor Hale", handle: "nh" })));
 }
 
 // ---- the tools Co chooses: the model picks the tool, code decides (through the real tool guard)

@@ -156,6 +156,7 @@ export function realReplyDeps(send: (text: string) => Promise<unknown>): ReplyDe
       for (const key of keys) await pool.query(`INSERT INTO mo_suppression (key, reason) VALUES ($1, $2) ON CONFLICT (key) DO NOTHING`, [key, reason]).catch(() => {});
     },
     tellMember: (userId, kind, candidateId) => queueUpdate(userId, kind, candidateId),
+    notifyTeam: async (text) => (await import("./review.js")).textApprovers(text),
   };
 }
 
