@@ -67,8 +67,8 @@ const c = (ok: boolean, label: string) => cases.push([ok, label]);
   // The name resolver only trusts a real guest list — it must never invent
   // a person or silently guess between two people with the same first name.
   c(/export async function resolveNamedEventGuest/.test(handoff), "resolveNamedEventGuest is exported");
-  c(/matches\.length > 1\) return \{ error:/.test(handoff), "two guests with the same name is refused, not guessed");
-  c(/!matches\.length\) return \{ error:/.test(handoff), "no guest matching the name is refused, not invented");
+  c(/if \(matches\.length !== 1\) return \{ error:/.test(handoff), "two guests with the same full name is refused, not guessed");
+  c(/if \(!guestPool\.length\) return \{ error:/.test(handoff) && /if \(!last\) return \{ needsDetail: true \}/.test(handoff), "no guest matching the name is refused, not invented, and nobody is looked up without a full name");
   c(/g\.user_id !== userId/.test(handoff), "the requester themselves is excluded from their own guest-list search");
 }
 
@@ -77,7 +77,7 @@ const c = (ok: boolean, label: string) => cases.push([ok, label]);
 {
   const tools = readFileSync(new URL("../../src/agent/conversationTools.ts", import.meta.url), "utf8");
   c(/requestEventIntro: tool\(\{/.test(tools), "the requestEventIntro tool exists");
-  c(/const resolved = await resolveNamedEventGuest\(ctx\.userId, personName\)/.test(tools), "it resolves against the real guest list, not a guess from the model");
+  c(/const resolved = await resolveNamedEventGuest\(ctx\.userId, personName, lastName\)/.test(tools), "it resolves against the real guest list, not a guess from the model");
   c(/if \("error" in resolved\)/.test(tools), "an unresolved name returns the real error instead of proceeding");
   c(/Nothing happens unless both say yes/.test(tools), "the tool's own success fact is honest that this isn't instant or guaranteed");
 }
@@ -90,7 +90,7 @@ const c = (ok: boolean, label: string) => cases.push([ok, label]);
   const introTool = tools.slice(tools.indexOf("requestEventIntro: tool({"), tools.indexOf("markTopicAsked: tool({"));
   c(!/couldn't find anyone named|on the guest list for/.test(introTool), "the intro tool never tells the asker whether a named person was found on a guest list");
   c((introTool.match(/Never confirm or deny that the person is someone you know, is a Co member, or was on the guest list/g) ?? []).length === 2, "found and not-found get the same neutral answer, so neither reveals membership");
-  c(/Never say how many people have that name/.test(introTool), "asking for a detail when two people share a name never reveals how many there are");
+  c(/don't say whether you know anyone by that first name, how many, or whether they were there/.test(introTool), "asking for the last name never reveals whether, or how many, people have that name");
 
   const pairPrompt = unmatchedPairPrompt({ recipientFirstName: "Jordan", otherFirstName: "Ellis", eventName: "Cache Me Outside", shareReason: "both building in climate tech", feedback: null });
   c(!/didn't come up as a strong match for anyone|also didn't/i.test(pairPrompt), "the pair prompt never tells the model the other person had no match");

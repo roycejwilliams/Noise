@@ -298,7 +298,7 @@ async function sendIntroEmail(eventId: string, eventName: string, a: MatchNudgeC
   return true;
 }
 
-export type ResolvedEventGuest = { eventId: string; eventName: string; target: MatchNudgeCandidate } | { error: string };
+export type ResolvedEventGuest = { eventId: string; eventName: string; target: MatchNudgeCandidate } | { needsDetail: true } | { error: string };
 
 // Resolves "I met Sarah" to a real guest at the member's most recent Co
 // event — event_checkin_followups is scheduled as soon as their
@@ -307,7 +307,16 @@ export type ResolvedEventGuest = { eventId: string; eventName: string; target: M
 // Known limitation, not built here: always the MOST RECENT event, never one
 // they name explicitly ("at the one last month") — not added speculatively,
 // this is the case that actually came up.
-export async function resolveNamedEventGuest(userId: string, nameGuess: string): Promise<ResolvedEventGuest> {
+// Who they mean is found only by an exact first AND last name (2026-10-07): a prefix match told Jo about Noor when Noor
+// met Jordan, and answering "two people have that name" told a probe who's a member. So Co always asks for the last
+// name first, the same way whoever they name and whether or not anyone matches; only then is the guest list read.
+const foldName = (s: unknown) => String(s ?? "").normalize("NFD").replace(/[\u0300-\u036f]/g, "").toLowerCase().replace(/[^a-z' -]+/g, " ").replace(/\s+/g, " ").trim();
+export async function resolveNamedEventGuest(userId: string, nameGuess: string, lastNameGuess?: string | null): Promise<ResolvedEventGuest> {
+  const parts = foldName(nameGuess).split(" ").filter(Boolean);
+  const first = parts[0] ?? "";
+  const last = foldName(lastNameGuess ?? "") || parts.slice(1).join(" ");
+  if (!first) return { error: "no name given" };
+  if (!last) return { needsDetail: true };
   const { rows: recent } = await pool.query(
     `SELECT event_api_id, event_name FROM event_checkin_followups WHERE user_id = $1 ORDER BY created_at DESC LIMIT 1`,
     [userId],
@@ -318,17 +327,13 @@ export async function resolveNamedEventGuest(userId: string, nameGuess: string):
 
   // The same "in the room" as scoring (eventScoring.ts inRoomPool): a declined or archived guest is never found here.
   const { inRoomPool } = await import("./eventScoring.js");
-  const guestPool = (await inRoomPool(eventId).catch(() => [])).filter((g) => g.user_id !== userId);
-
-  const needle = nameGuess.trim().toLowerCase();
-  if (!needle) return { error: "no name given" };
-  const matches = guestPool.filter((g) => {
-    const name = g.first_name.trim().toLowerCase();
-    return name === needle || name.startsWith(needle) || needle.startsWith(name);
-  });
-  if (!matches.length) return { error: `couldn't find anyone named "${nameGuess}" on the guest list for "${eventName}"` };
-  if (matches.length > 1) return { error: `more than one "${nameGuess}" was at "${eventName}" — ask which one, or something else about them, to tell them apart` };
-
+  const guestPool = (await inRoomPool(eventId).catch(() => [])).filter((g) => g.user_id !== userId && foldName(g.first_name) === first);
+  if (!guestPool.length) return { error: `nobody named "${first} ${last}" on the guest list for "${eventName}"` };
+  const { rows: lasts } = await pool.query(`SELECT id AS user_id, last_name FROM users WHERE id = ANY($1::uuid[])`, [guestPool.map((g) => g.user_id)]);
+  const lastOf = new Map(lasts.map((r: any) => [String(r.user_id), foldName(r.last_name)]));
+  const matches = guestPool.filter((g) => lastOf.get(g.user_id) === last);
+  // None, or more than one with the same full name: no one is contacted, and Co answers exactly as it does for "not found".
+  if (matches.length !== 1) return { error: `no single guest named "${first} ${last}" at "${eventName}"` };
   const g = matches[0];
   return { eventId, eventName, target: { user_id: g.user_id, first_name: g.first_name, phone_number: g.phone_number, email: g.email } };
 }

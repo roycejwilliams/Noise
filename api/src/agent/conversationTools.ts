@@ -1083,13 +1083,18 @@ export function createConversationTools(ctx: ConversationToolContext) {
       description: toolUse("requestEventIntro"),
       inputSchema: z.object({
         personName: z.string().describe("The first name (or full name) they used for the person they met."),
+        lastName: z.string().optional().describe("Their last name, once the member has told you. Never guess it."),
       }),
-      execute: async ({ personName }) => {
+      execute: async ({ personName, lastName }) => {
         if (ctx.dryRun) {
           console.log(`[conversationReply dryRun] would look up "${personName}" for ${ctx.userId} to request an intro`);
           return { ok: true, note: "dry run" };
         }
-        const resolved = await resolveNamedEventGuest(ctx.userId, personName);
+        const resolved = await resolveNamedEventGuest(ctx.userId, personName, lastName);
+        // Always the same first question, whoever they name: the guest list isn't read until Co has a full name.
+        if ("needsDetail" in resolved) {
+          return { ok: true, note: "Before anything else, ask for the person's last name, so you reach the right person. Ask it plainly, the same way you would for anyone; don't say whether you know anyone by that first name, how many, or whether they were there." };
+        }
         if ("error" in resolved) {
           await recordDecision({
             layer: 3,
@@ -1104,14 +1109,11 @@ export function createConversationTools(ctx: ConversationToolContext) {
           // list (2026-09-22): "couldn't find Sarah" and "reaching out to
           // Sarah" each tell the asker something about Sarah. The same
           // neutral answer covers both, and the internal reason stays in the
-          // decision log only. The one exception is two people with the name,
-          // where Co asks for a detail without saying how many there are.
-          const ambiguous = /more than one/i.test(resolved.error);
+          // decision log only. Two guests with the same full name get this
+          // same answer too (no one is contacted).
           return {
             ok: true,
-            note: ambiguous
-              ? "Ask them for one more detail about the person (last name, what they do, what you talked about) so you reach the right one. Never say how many people have that name or that anyone else does."
-              : "Tell them that if it's someone you know from that event, you'll check whether they're open to it too. Never confirm or deny that the person is someone you know, is a Co member, or was on the guest list, and don't say whether you found them.",
+            note: "Tell them that if it's someone you know from that event, you'll check whether they're open to it too. Never confirm or deny that the person is someone you know, is a Co member, or was on the guest list, and don't say whether you found them.",
           };
         }
         const { rows } = await pool.query(`SELECT first_name, phone_number, email FROM users WHERE id = $1`, [ctx.userId]);

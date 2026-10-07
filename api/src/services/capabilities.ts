@@ -331,7 +331,7 @@ export const ABILITIES: Ability[] = [
     tool: "requestEventIntro",
     limits: { perTurn: 1, perDay: 3, oncePerPerson: true },
     confirm: "affects_another_member",
-    use: "When they say they met someone specific at a Co event who Co never nudged them about, and they want to be connected — look that person up on the real guest list and start the same double opt-in intro Co uses for its own matches. Only for a real person from a real Co event they actually attended, never a stranger with no shared event.",
+    use: "When they say they met someone specific at a Co event who Co never nudged them about, and they want to be connected — look that person up on the real guest list and start the same double opt-in intro Co uses for its own matches. It needs their full name: call it with the first name, and it will tell you to ask for the last name; call it again with lastName once they say it. Only for a real person from a real Co event they actually attended, never a stranger with no shared event.",
   },
   {
     id: "rapport_topic",

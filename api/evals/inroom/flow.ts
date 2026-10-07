@@ -398,7 +398,14 @@ for (const [s, expect] of [[59, false], [60, true], [100, true], [0, false]] as 
   addEvent({ api_id: "evt-named3", name: "Co Night" }, [{ m: q }, { m: s1 }, { m: s2 }]);
   W.checkinFollowups.push({ user_id: q.id, event_api_id: "evt-named3", event_name: "Co Night" });
   const r3 = await H.resolveNamedEventGuest(q.id, "Sam");
-  check("named intro: two members named Sam -> ambiguous, nobody contacted", "error" in r3 && /more than one/.test(r3.error));
+  check("named intro: two members named Sam -> Co asks for the last name, the same as for anyone, and nobody is contacted", "needsDetail" in r3 && !("target" in r3));
+  // With full names: the right Sam, and a full name two guests share contacts no one (answered like 'not found').
+  W.members.get(s1.id)!.last_name = "Okafor"; W.members.get(s2.id)!.last_name = "Reyes";
+  const r4 = await H.resolveNamedEventGuest(q.id, "Sam", "Reyes");
+  check("named intro: first + last name finds exactly that guest", !("error" in r4) && "target" in r4 && r4.target.user_id === s2.id);
+  W.members.get(s1.id)!.last_name = "Reyes";
+  const r5 = await H.resolveNamedEventGuest(q.id, "Sam Reyes");
+  check("named intro: two guests with the same full name -> no one is contacted", "error" in r5);
   finding("named intro (side channel): the ambiguous branch makes Co ask for 'one more detail', which only happens when 2+ MEMBERS share that name; a probe learns that", "error" in r3);
 }
 
