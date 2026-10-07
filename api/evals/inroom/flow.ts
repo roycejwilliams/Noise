@@ -6,6 +6,10 @@
 //
 //   npx tsx evals/inroom/flow.ts
 //
+// NOT IN layer1.json YET (Royce, 2026-10-07): this suite is red by design while open findings remain. When every
+// finding passes (0 failures), add evals/inroom/rules.ts and evals/inroom/flow.ts to evals/layer1.json so it gates
+// pushes. Known and accepted until after November: ties go to guest-list order, and only the top candidate is tried.
+//
 // check()   = behavior that should hold (a FAIL is a regression).
 // finding() = an open defect from the analysis: it FAILS while the defect reproduces and passes once fixed.
 import { W, reset, addMember, addEvent, ask, goal, check, finding, results, type Member } from "./world.js";

@@ -1,6 +1,10 @@
 // In-room matching, pure rules (analysis/in-room-matching, 2026-10-07). No DB, no network, no model.
 //
 //   npx tsx evals/inroom/rules.ts
+//
+// NOT IN layer1.json YET (Royce, 2026-10-07): this suite is red by design while open findings remain. When every
+// finding passes (0 failures), add evals/inroom/rules.ts and evals/inroom/flow.ts to evals/layer1.json so it gates
+// pushes. Known and accepted until after November: ties go to guest-list order, and only the top candidate is tried.
 import "../testEnv.js";
 import { check, finding, results } from "./world.js";
 
