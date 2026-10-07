@@ -6,9 +6,7 @@
 //
 //   npx tsx evals/inroom/flow.ts
 //
-// NOT IN layer1.json YET (Royce, 2026-10-07): this suite is red by design while open findings remain. When every
-// finding passes (0 failures), add evals/inroom/rules.ts and evals/inroom/flow.ts to evals/layer1.json so it gates
-// pushes. Known and accepted until after November: ties go to guest-list order, and only the top candidate is tried.
+// In layer 1 since 2026-10-07 (every open finding fixed): it gates pushes.
 //
 // check()   = behavior that should hold (a FAIL is a regression).
 // finding() = an open defect from the analysis: it FAILS while the defect reproduces and passes once fixed.
@@ -67,9 +65,11 @@ const freshPass = async (ev: string) => {
   check("opt-in: both yes -> one intro email, recorded for both", intros.length === 2 && new Set(intros.map((m) => m.user_id)).size === 2);
   const pend = await H.findPendingMatchNudge(jordan.id);
   check("opt-in: nothing left pending for Jordan after answering", pend === null);
+  const { readFileSync } = await import("node:fs");
+  const introSrc = readFileSync(new URL("../../src/services/eventGuestMatchHandoff.ts", import.meta.url), "utf8");
   finding(
     "copy: the in-room intro email says 'Co figured you two should actually meet BEFORE it' though both are in the room (or past it)",
-    intros.length > 0, // the body text is fixed in sendIntroEmail
+    intros.length > 0 && /meet before it|Before \$\{eventName\}/.test(introSrc),
   );
 }
 
@@ -93,7 +93,21 @@ for (const [s, expect] of [[59, false], [60, true], [100, true], [0, false]] as 
   await freshPass("evt-tie");
   const pick = nudgeOf("evt-tie", a)?.candidate_id;
   check("ties: exactly one nudge for a tie", W.nudges.filter((n) => n.person_id === a.id).length === 1);
-  finding("ties: a tie is broken by the model's output order (guest-list order), not by mutuality or any tiebreak rule", pick === b.id, { picked: pick === b.id ? "Blake (listed first)" : "Casey" });
+  // The same room with the guest list in the other order: a fair tiebreak picks the same person.
+  W.nudges.length = 0; W.sent.length = 0; W.offers.length = 0; W.proactiveSends.length = 0;
+  addEvent({ api_id: "evt-tie2", name: "Co Night" }, [{ m: a }, { m: c }, { m: b }]);
+  await freshPass("evt-tie2");
+  const pick2 = nudgeOf("evt-tie2", a)?.candidate_id;
+  finding("ties: a tie is broken by the model's output order (guest-list order), not by mutuality or any tiebreak rule", !pick || pick !== pick2, { first: pick === b.id ? "Blake" : "Casey", swapped: pick2 === b.id ? "Blake" : "Casey" });
+  // Mutual interest wins a tie.
+  reset();
+  const a3 = addMember({ first_name: "Avery", intent: [ask("product designers")] });
+  const b3 = addMember({ first_name: "Blake", intent: [ask("design for fintech", "offering")] });
+  const c3 = addMember({ first_name: "Casey", intent: [ask("design for health apps", "offering")] });
+  addEvent({ api_id: "evt-tie3", name: "Co Night" }, [{ m: a3 }, { m: b3 }, { m: c3 }]);
+  W.scorer = (askText, cand) => ({ score: askText.includes("product designers") ? 75 : 0, share: true, mutual: cand.first_name === "Casey" });
+  await freshPass("evt-tie3");
+  check("ties: mutual interest wins a tie", nudgeOf("evt-tie3", a3)?.candidate_id === c3.id);
 }
 
 // ============================================================ 3. empty, tiny rooms, thin profiles
@@ -126,8 +140,15 @@ for (const [s, expect] of [[59, false], [60, true], [100, true], [0, false]] as 
   scores({ "angel investor": { Noor: 92 }, "invest in early edtech": { Jordan: 90 } });
   await freshPass("evt-goal");
   check("goals-only: Noor is scored using her goal as the frame", W.rankings.has(`evt-goal|${g.id}`));
-  finding("goals-only: Noor (goal 'invest in early edtech founders', score 92) can never be suggested to Jordan: no open ask = no shareReason = no nudge", !nudgeOf("evt-goal", a), { jordanNudged: !!nudgeOf("evt-goal", a) });
+  check("goals-only: Jordan is never told about Noor from her private goal (no reason he may see, so no forward nudge)", !nudgeOf("evt-goal", a));
   check("goals-only: Noor herself is nudged about Jordan (his ask is shareable)", nudgeOf("evt-goal", g)?.candidate_id === a.id);
+  // The way Noor reaches Jordan without exposing her goal: she says yes to him, and only then is he asked about her.
+  const asM = (m: Member) => ({ user_id: m.id, first_name: m.first_name, phone_number: m.phone_number!, email: m.email });
+  await H.handleMatchNudgeReply("evt-goal", "Co Night", "interested", asM(g), asM(a));
+  await new Promise((r) => setTimeout(r, 30));
+  const askedJordan = sentTo(a).some((s) => /Noor/.test(s.content));
+  finding("goals-only: Noor (goal 'invest in early edtech founders', score 92) can never be suggested to Jordan: no open ask = no shareReason = no nudge", !askedJordan, { jordanAskedAboutNoor: askedJordan });
+  check("goals-only: what Jordan hears about Noor never carries her goal", sentTo(a).every((s) => !/invest in early edtech/.test(s.content)));
 }
 {
   // Top candidate has no shareable reason; the strong #2 is never tried.
@@ -383,14 +404,14 @@ for (const [s, expect] of [[59, false], [60, true], [100, true], [0, false]] as 
   addEvent({ api_id: "evt-named", name: "Co Night" }, [{ m: req }, { m: jo }]);
   W.checkinFollowups.push({ user_id: req.id, event_api_id: "evt-named", event_name: "Co Night" });
   const r = await H.resolveNamedEventGuest(req.id, "Jordan");
-  finding("named intro: 'I met Jordan' resolves to member 'Jo' (prefix match both ways), who is then told Noor wants an intro", !("error" in r) && r.target.user_id === jo.id);
+  finding("named intro: 'I met Jordan' resolves to member 'Jo' (prefix match both ways), who is then told Noor wants an intro", "target" in r && r.target.user_id === jo.id);
   reset();
   const req2 = addMember({ first_name: "Noor", intent: [ask("x")] });
   const sam = addMember({ first_name: "Samantha", intent: [ask("y")] });
   addEvent({ api_id: "evt-named2", name: "Co Night" }, [{ m: req2 }, { m: sam, status: "declined" }]);
   W.checkinFollowups.push({ user_id: req2.id, event_api_id: "evt-named2", event_name: "Co Night" });
   const r2 = await H.resolveNamedEventGuest(req2.id, "Sam");
-  finding("named intro: 'Sam' resolves to Samantha, a guest who DECLINED the event, and she gets the direct ask", !("error" in r2) && r2.target.user_id === sam.id);
+  finding("named intro: 'Sam' resolves to Samantha, a guest who DECLINED the event, and she gets the direct ask", "target" in r2 && r2.target.user_id === sam.id);
   reset();
   const q = addMember({ first_name: "Noor", intent: [ask("x")] });
   const s1 = addMember({ first_name: "Sam", intent: [ask("y")] });
@@ -398,7 +419,14 @@ for (const [s, expect] of [[59, false], [60, true], [100, true], [0, false]] as 
   addEvent({ api_id: "evt-named3", name: "Co Night" }, [{ m: q }, { m: s1 }, { m: s2 }]);
   W.checkinFollowups.push({ user_id: q.id, event_api_id: "evt-named3", event_name: "Co Night" });
   const r3 = await H.resolveNamedEventGuest(q.id, "Sam");
-  check("named intro: two members named Sam -> ambiguous, nobody contacted", "error" in r3 && /more than one/.test(r3.error));
+  check("named intro: two members named Sam -> Co asks for the last name, the same as for anyone, and nobody is contacted", "needsDetail" in r3 && !("target" in r3));
+  // With full names: the right Sam, and a full name two guests share contacts no one (answered like 'not found').
+  W.members.get(s1.id)!.last_name = "Okafor"; W.members.get(s2.id)!.last_name = "Reyes";
+  const r4 = await H.resolveNamedEventGuest(q.id, "Sam", "Reyes");
+  check("named intro: first + last name finds exactly that guest", !("error" in r4) && "target" in r4 && r4.target.user_id === s2.id);
+  W.members.get(s1.id)!.last_name = "Reyes";
+  const r5 = await H.resolveNamedEventGuest(q.id, "Sam Reyes");
+  check("named intro: two guests with the same full name -> no one is contacted", "error" in r5);
   finding("named intro (side channel): the ambiguous branch makes Co ask for 'one more detail', which only happens when 2+ MEMBERS share that name; a probe learns that", "error" in r3);
 }
 

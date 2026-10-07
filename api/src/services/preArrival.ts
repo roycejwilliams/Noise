@@ -45,7 +45,8 @@ export function preArrivalEligible(p: { registered: boolean; notGoing: boolean; 
 // No other guest is ever named in it.
 export function namesAnyone(text: string, names: string[]): string | null {
   const t = ` ${text.toLowerCase().replace(/[^a-z' ]+/g, " ")} `;
-  return names.find((n) => n && n.length >= 3 && t.includes(` ${n.toLowerCase()} `)) ?? null;
+  // Every name, however short ("Jo", "Al"), as a whole word: when in doubt, it names someone.
+  return names.find((n) => n && n.trim().length >= 1 && t.includes(` ${n.trim().toLowerCase()} `)) ?? null;
 }
 
 export type Consent = { event_api_id: string; location_yes_at: Date | null; location_stopped_at: Date | null };

@@ -23,6 +23,7 @@ export type Member = {
   email: string;
   sms_opted_out?: boolean;
   archived_at?: string | null;
+  last_name?: string | null;
   invite_verified?: boolean;
   city?: string | null;
   goals?: string[];
@@ -238,6 +239,7 @@ function handle(sqlRaw: string, p: any[] = []): { rows: Row[]; rowCount: number 
     const m = W.members.get(p[0]);
     return R(m ? [{ first_name: m.first_name, phone_number: m.phone_number, email: m.email }] : []);
   }
+  if (has("SELECT id AS user_id, last_name FROM users WHERE id = ANY($1::uuid[])")) return R((p[0] as string[]).map((id) => W.members.get(id)).filter((m): m is Member => !!m).map((m) => ({ user_id: m.id, last_name: m.last_name ?? null })));
   if (has("SELECT id AS user_id, first_name, phone_number, email FROM users WHERE id = ANY($1::uuid[])")) return R((p[0] as string[]).map((id) => W.members.get(id)).filter((m): m is Member => !!m).map((m) => ({ user_id: m.id, first_name: m.first_name, phone_number: m.phone_number, email: m.email })));
   if (has("SELECT ranked_candidates FROM event_guest_rankings")) {
     const r = W.rankings.get(`${p[0]}|${p[1]}`);
@@ -464,7 +466,7 @@ function shareLabel(askText: string, line: string): string {
   return shared.length === 1 ? shared[0].label : "";
 }
 
-function anthropic(init: any): Response {
+function fakeAnthropic(init: any): Response {
   const prompt = promptOf(init);
   if (prompt.startsWith("Someone wants to be connected with people who match this:")) {
     W.llmCalls.push({ kind: "score", prompt });
@@ -543,7 +545,7 @@ function luma(url: URL): Response {
 const realFetch = globalThis.fetch;
 globalThis.fetch = (async (input: any, init?: any) => {
   const url = new URL(typeof input === "string" ? input : input instanceof URL ? input.href : input?.url ?? String(input));
-  if (url.host === "api.anthropic.com") return anthropic(init);
+  if (url.host === "api.anthropic.com") return fakeAnthropic(init);
   if (url.host === "api.openai.com") {
     const b = JSON.parse(init?.body ?? "{}");
     const inputs = Array.isArray(b.input) ? b.input : [b.input ?? ""];

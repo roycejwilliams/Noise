@@ -89,7 +89,8 @@ export function introFacts(rows: { content: string; memory_type?: string | null 
   const out: string[] = [];
   for (const r of rows) {
     if (!r.content) continue;
-    if (INTRO_RECORDS.has(r.memory_type ?? "")) out.push(`Co's record: ${(safeMemory(r.memory_type ?? null, String(r.content), []) ?? "").trim()}`);
+    // Never the internal match score (older nudge rows carried "(score 88)").
+    if (INTRO_RECORDS.has(r.memory_type ?? "")) out.push(`Co's record: ${(safeMemory(r.memory_type ?? null, String(r.content), []) ?? "").replace(/\s*\(score \d+\)/g, "").trim()}`);
     if (r.memory_type === "recommendation") for (const m of String(r.content).matchAll(/\[Tier 0\]\s*([^:|]+?)\s*:/g)) out.push(`Co's record: Co suggested ${m[1].trim()}, another member, to them as someone worth meeting.`);
   }
   return out;

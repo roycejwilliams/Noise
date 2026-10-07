@@ -38,8 +38,9 @@ check("ok and please are not yeses on their own", B.readNameAnswer("ok", "ok") =
 check("a long message is not a plain yes", B.readNameAnswer("yes", "yes " + "and then some other thing about my week ".repeat(6)) === null);
 check("a plain no is a no, however it is said", B.readNameAnswer("no", "no thanks") === "no" && B.readNameAnswer("please don't", "please don't name me") === "no" && B.readNameAnswer("rather not", "I'd rather not") === "no");
 
-// Who may be named
-const named = B.pickNamed({
+// Who may be named. Every guest's reason here is one of their asks that is shareable now (stillShareable).
+const pick = (o: Omit<Parameters<typeof B.pickNamed>[0], "stillShareable">) => B.pickNamed({ ...o, stillShareable: new Map(o.ranked.map((r) => [r.candidate_id, [r.shareReason ?? ""]])) });
+const named = pick({
   ranked: [rc("a", 90, "raising a seed round"), rc("b", 80, "looking for a designer"), rc("c", 75, "wants robotics founders"), rc("d", 70, "hiring an engineer"), rc("e", 65, "looking for a lawyer")],
   recipientId: "me",
   members,
@@ -50,14 +51,15 @@ check("only guests who said yes are named (b and e did not)", named.picks.map((p
 check("a guest who said yes but can't go isn't named", !named.picks.some((p) => p.id === "d"));
 check("everyone else who fits is counted, never named", named.unnamedFits === 2);
 check("the reason is the guest's own words, nothing else", named.picks[0].reason === "raising a seed round" && named.picks[1].reason === "wants robotics founders");
-const none = B.pickNamed({ ranked: [rc("a", 90, "raising a seed round")], recipientId: "me", members, nameOk: new Set(), notGoing: new Set() });
+const none = pick({ ranked: [rc("a", 90, "raising a seed round")], recipientId: "me", members, nameOk: new Set(), notGoing: new Set() });
 check("no answer means no name", none.picks.length === 0 && none.unnamedFits === 1);
-check("never the recipient", B.pickNamed({ ranked: [rc("me", 99, "x")], recipientId: "me", members, nameOk: new Set(["me"]), notGoing: new Set() }).picks.length === 0);
-check("no reason, no mention", B.pickNamed({ ranked: [rc("a", 90, "  "), rc("c", 90, undefined)], recipientId: "me", members, nameOk: new Set(["a", "c"]), notGoing: new Set() }).picks.length === 0);
-check("below the in-room bar nobody is named or counted", B.pickNamed({ ranked: [rc("a", 59, "raising")], recipientId: "me", members, nameOk: new Set(["a"]), notGoing: new Set() }).picks.length === 0 && B.BRIEF.minScore === 60);
-check("at most three are named", B.pickNamed({ ranked: ["a", "b", "c", "d", "e"].map((id, i) => rc(id, 95 - i, "reason " + id)), recipientId: "me", members, nameOk: new Set(["a", "b", "c", "d", "e"]), notGoing: new Set() }).picks.length === 3);
-const dup = B.pickNamed({ ranked: [rc("a", 90, "raising")], recipientId: "me", members: [...members, { user_id: "z", first_name: "Maya" }], nameOk: new Set(["a"]), notGoing: new Set() });
+check("never the recipient", pick({ ranked: [rc("me", 99, "x")], recipientId: "me", members, nameOk: new Set(["me"]), notGoing: new Set() }).picks.length === 0);
+check("no reason, no mention", pick({ ranked: [rc("a", 90, "  "), rc("c", 90, undefined)], recipientId: "me", members, nameOk: new Set(["a", "c"]), notGoing: new Set() }).picks.length === 0);
+check("below the in-room bar nobody is named or counted", pick({ ranked: [rc("a", 59, "raising")], recipientId: "me", members, nameOk: new Set(["a"]), notGoing: new Set() }).picks.length === 0 && B.BRIEF.minScore === 60);
+check("at most three are named", pick({ ranked: ["a", "b", "c", "d", "e"].map((id, i) => rc(id, 95 - i, "reason " + id)), recipientId: "me", members, nameOk: new Set(["a", "b", "c", "d", "e"]), notGoing: new Set() }).picks.length === 3);
+const dup = pick({ ranked: [rc("a", 90, "raising")], recipientId: "me", members: [...members, { user_id: "z", first_name: "Maya" }], nameOk: new Set(["a"]), notGoing: new Set() });
 check("a first name two guests share is never used (it could mean one who didn't say yes)", dup.picks.length === 0);
+check("a reason that is no longer one of their shareable asks is never used", B.pickNamed({ ranked: [rc("a", 90, "raising a seed round")], recipientId: "me", members, nameOk: new Set(["a"]), notGoing: new Set(), stillShareable: new Map([["a", ["something else now"]]]) }).picks.length === 0 && B.pickNamed({ ranked: [rc("a", 90, "raising a seed round")], recipientId: "me", members, nameOk: new Set(["a"]), notGoing: new Set() }).picks.length === 0);
 check("worth sending only with someone to name or a few who fit", B.worthSending(named.picks, 0) && B.worthSending([], 2) && !B.worthSending([], 1) && !B.worthSending([], 0));
 
 // What it may say

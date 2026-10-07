@@ -89,6 +89,9 @@ export function pickNamed(p: {
   members: { user_id: string; first_name: string }[];
   nameOk: Set<string>;
   notGoing: Set<string>;
+  // Their asks that are open and shareable NOW, by member. A stored reason that isn't one of them (the ask closed, or they
+  // took sharing back) is never used. Without it a reason is not trusted: nobody is named.
+  stillShareable?: Map<string, string[]>;
 }): { picks: Pick[]; unnamedFits: number } {
   const byId = new Map(p.members.map((m) => [m.user_id, m]));
   const firstCount = new Map<string, number>();
@@ -99,6 +102,8 @@ export function pickNamed(p: {
     if (r.candidate_id === p.recipientId || p.notGoing.has(r.candidate_id)) continue;
     const m = byId.get(r.candidate_id);
     if (!m || r.score < BRIEF.minScore || !r.shareReason?.trim()) continue;
+    const quoted = r.shareReason.replace(/^what they(?:'|\u2019)ve said they(?:(?:'|\u2019)re looking for| can offer):\s*/i, "").replace(/^"|"$/g, "").trim().toLowerCase();
+    if (!(p.stillShareable?.get(r.candidate_id) ?? []).some((a) => a.trim().toLowerCase() === quoted)) continue;
     const named = p.nameOk.has(r.candidate_id) && (firstCount.get(m.first_name.trim().toLowerCase()) ?? 0) === 1 && m.first_name.trim().length >= 2;
     if (named && picks.length < BRIEF.maxNamed) picks.push({ id: m.user_id, firstName: m.first_name.trim(), reason: r.shareReason.trim(), score: r.score });
     else unnamedFits++;
@@ -119,7 +124,8 @@ export function namesOutsiders(text: string, members: { user_id: string; first_n
   for (const m of members) {
     if (m.user_id === recipientId) continue;
     const n = fold(m.first_name).trim();
-    if (n.length < 2 || allowed.has(n)) continue;
+    // Every name, even an initial ("J"): when in doubt, it names someone.
+    if (n.length < 1 || allowed.has(n)) continue;
     if (t.includes(` ${n} `)) return m.first_name;
     // a compound name (Anne-Marie) is also caught by either half on its own
     for (const part of n.split(" ")) if (part.length >= 4 && t.includes(` ${part} `)) return m.first_name;
