@@ -345,7 +345,7 @@ for (const [s, expect] of [[59, false], [60, true], [100, true], [0, false]] as 
   reset();
   const a = addMember({ first_name: "Jordan", intent: [ask("a sailing crew")] });
   const b = addMember({ first_name: "Ellis", intent: [ask("people to sail with on weekends", "offering")] });
-  const end = new Date(Date.now() + 20 * 60_000).toISOString(); // send_at = end - 30m is already due
+  const end = new Date(Date.now() + 45 * 60_000).toISOString(); // send_at = end - 50m is already due; the in-room window (end - 30m) is still open
   addEvent({ api_id: "evt-un", name: "Co Night", start_at: new Date(Date.now() - 2 * 3_600_000).toISOString(), end_at: end }, [{ m: a }, { m: b }]);
   scores({ "sailing crew": { Ellis: 40 }, "sail with": { Jordan: 35 } }); // both below 60
   await freshPass("evt-un");

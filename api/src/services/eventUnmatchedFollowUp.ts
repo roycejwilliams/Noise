@@ -29,10 +29,15 @@ import { inRoomPool, wasAlreadyNudgedForMatch, scoreMatchedGroup, type ScorableG
 //
 // Scheduled the same way as eventCheckinFollowUp.ts's end-of-night
 // check-in — one row per matched guest, idempotent on
-// UNIQUE(event_api_id, user_id) — but due at end_at minus
-// MATCH_NUDGE_END_CUTOFF_MINUTES, the exact moment maybeSendMatchNudge
-// stops sending real matches, so this still reads as "still at the
-// event," not a next-day afterthought.
+// UNIQUE(event_api_id, user_id). Due UNMATCHED_SEND_BEFORE_END_MINUTES
+// before end_at (2026-10-07): it used to be due at the exact minute the
+// in-room window closes (end - MATCH_NUDGE_END_CUTOFF_MINUTES), so by the
+// first cron tick after it every pair nudge was refused and everyone got
+// the solo text. Now it runs with room to spare: the cutoff, one full
+// 15-minute cron period, and 5 minutes to draft and deliver. It still
+// reads as "still at the event," not a next-day afterthought.
+export const UNMATCHED_CRON_MINUTES = 15;
+export const UNMATCHED_SEND_BEFORE_END_MINUTES = MATCH_NUDGE_END_CUTOFF_MINUTES + UNMATCHED_CRON_MINUTES + 5;
 
 export async function scheduleUnmatchedFollowUp(
   eventId: string,
@@ -42,7 +47,7 @@ export async function scheduleUnmatchedFollowUp(
   opts: { dryRun?: boolean } = {},
 ): Promise<void> {
   if (!matched.length || !eventTiming?.end_at) return;
-  const sendAt = new Date(new Date(eventTiming.end_at).getTime() - MATCH_NUDGE_END_CUTOFF_MINUTES * 60_000);
+  const sendAt = new Date(new Date(eventTiming.end_at).getTime() - UNMATCHED_SEND_BEFORE_END_MINUTES * 60_000);
   if (opts.dryRun) {
     console.log(`[eventUnmatchedFollowUp dryRun] would schedule ${matched.length} guest(s) at ${eventId} for ${sendAt.toISOString()}`);
     return;

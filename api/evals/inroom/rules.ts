@@ -67,9 +67,11 @@ finding(`share gate false positives: ${blocked.length}/${benign.length} ordinary
   check("window: open mid-event", C.checkEventWindow(t, new Date()).pass);
   check("window: closed before start", !C.checkEventWindow(t, new Date(Date.parse(start) - 60_000)).pass);
   check("window: closed in the last 30 minutes", !C.checkEventWindow(t, new Date(Date.parse(end) - 29 * 60_000)).pass);
-  // The unmatched pass is scheduled at end - MATCH_NUDGE_END_CUTOFF_MINUTES and runs on a 15-minute cron AFTER that.
-  const sendAt = new Date(Date.parse(end) - C.MATCH_NUDGE_END_CUTOFF_MINUTES * 60_000);
-  const firstCronTick = new Date(sendAt.getTime() + 1);
+  // The unmatched pass is due at end - UNMATCHED_SEND_BEFORE_END_MINUTES and runs on a 15-minute cron: the LAST tick
+  // that can pick it up is a full cron period after it's due, and it still has to be inside the window then.
+  const U = await import("../../src/services/eventUnmatchedFollowUp.js");
+  const sendAt = new Date(Date.parse(end) - U.UNMATCHED_SEND_BEFORE_END_MINUTES * 60_000);
+  const firstCronTick = new Date(sendAt.getTime() + U.UNMATCHED_CRON_MINUTES * 60_000);
   finding("window: at (or after) the unmatched pass's send_at, checkEventWindow already refuses, so its pair nudges can't send", !C.checkEventWindow(t, firstCronTick).pass);
   check("window: absolute instants, so a time zone can't shift it", C.checkEventWindow({ start_at: "2026-11-01T01:00:00-07:00", end_at: "2026-11-01T04:00:00-08:00" }, new Date("2026-11-01T09:00:00Z")).pass);
   finding("window: no end_at means no end at all (open for days)", C.checkEventWindow({ start_at: new Date(Date.now() - 5 * 86_400_000).toISOString(), end_at: null }, new Date()).pass);
