@@ -1389,7 +1389,11 @@ export async function sendExemptWhenAllowed(opts: {
 // blocked a legitimate additive offer later the same night.
 export const MAX_IN_ROOM_SENDS_PER_EVENT = 3;
 
+// Every in-room text Co starts (the match nudge, the additive offer, the end-of-night texts) asks here right before it
+// sends, so the pause (services/proactivePause.ts) holds them like every other send path: nothing goes out, the claim is
+// released, and a later pass sends it once the pause lifts.
 export async function inRoomSendAllowed(userId: string, eventId: string): Promise<boolean> {
+  if (proactivePaused()) return false;
   const { rows } = await pool.query(
     `SELECT COUNT(*)::int AS n FROM proactive_sends WHERE user_id = $1 AND type = 'in_room' AND target_key LIKE $2`,
     [userId, `in_room:%:${eventId}%`],
