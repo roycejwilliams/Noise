@@ -123,7 +123,8 @@ export function addMember(m: Partial<Member> & { first_name: string }): Member {
   return full;
 }
 
-export const ask = (text: string, type: "seeking" | "offering" = "seeking") => ({ id: uuid(), text, type, status: "active", kind: "ask" });
+// Test members have said Co may mention their asks in intros (shareable), unless a test says otherwise.
+export const ask = (text: string, type: "seeking" | "offering" = "seeking", shareable = true) => ({ id: uuid(), text, type, status: "active", kind: "ask", shareable });
 export const goal = (text: string) => ({ id: uuid(), text, type: "seeking", status: "active", kind: "goal" });
 
 export function addEvent(e: Partial<FakeEvent> & { api_id: string; name: string }, attendees: { m: Member; status?: string; via?: "email" | "phone" | "both"; emailCase?: "upper" }[] = []): FakeEvent {
@@ -408,7 +409,18 @@ function defaultScore(askText: string, line: string): { score: number; share: bo
   let hit = 0;
   for (const w of a) if (l.has(w)) hit++;
   const score = Math.min(100, hit * 30);
-  return { score, share: /their own stated/.test(line) && score > 0, mutual: false };
+  return { score, share: /asks they agreed to share/.test(line) && score > 0, mutual: false };
+}
+
+// The scorer's share_ask: the shared ask on this digest line that the match rests on. The one that shares the most words
+// with the asker's ask; with no overlap, the only shared ask if there is exactly one, else none.
+function shareLabel(askText: string, line: string): string {
+  const shared = [...(line.split("asks they agreed to share: ")[1] ?? "").matchAll(/\[(S\d+)\] \w+ "([^"]*)"/g)].map((m) => ({ label: m[1], text: m[2] }));
+  const words = (s: string) => new Set(s.toLowerCase().replace(/[^a-z0-9\s]/g, " ").split(/\s+/).filter((w) => w.length > 3));
+  const a = words(askText);
+  const ranked = shared.map((x) => ({ ...x, hit: [...words(x.text)].filter((w) => a.has(w)).length })).sort((p, q) => q.hit - p.hit);
+  if (ranked[0]?.hit) return ranked[0].label;
+  return shared.length === 1 ? shared[0].label : "";
 }
 
 function anthropic(init: any): Response {
@@ -425,7 +437,7 @@ function anthropic(init: any): Response {
         const tag = l.match(/tag(\d{6})/)?.[1];
         const cand = [...W.members.values()].find((mm) => mm.id.endsWith(tag ?? "--"));
         const s = W.scorer && cand ? W.scorer(askText, cand) : defaultScore(askText, l);
-        return { index, score: s.score, reason: "internal", share_reason: s.share ? "their stated ask fits" : "", mutual: !!s.mutual };
+        return { index, score: s.score, reason: "internal", share_ask: s.share ? shareLabel(askText, l) : "", mutual: !!s.mutual };
       });
     return anthropicText(JSON.stringify({ results }));
   }

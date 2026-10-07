@@ -81,6 +81,8 @@ export type IntentEntry = {
   availability?: string | null;
   embedding?: number[] | null;
   created_at?: string | null;
+  // The member said Co may mention this ask when introducing them (services/matching.ts shareableAsks). Missing = private.
+  shareable?: boolean | null;
 };
 
 // An entry is an ask only when it actually carries ask text. Whitespace is

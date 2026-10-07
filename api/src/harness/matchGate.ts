@@ -468,13 +468,20 @@ export async function gateMatches(
 
 // Words that point at something private about a person. A share reason may
 // only use one of these if the candidate's own stated ask/offering does.
-export const SENSITIVE = [
-  "burnout", "burned out", "burnt out", "quit", "quitting", "unemployed", "laid off", "fired", "lost a co-founder",
-  "lost their co-founder", "lost co-founder", "cofounder conflict", "co-founder conflict", "equity", "divorce", "breakup",
-  "anxiety", "anxious", "depress", "therapy", "therapist", "grief", "health", "illness", "debt", "visa", "pregnan",
-  "lonely", "loneliness", "isolated", "isolation", "struggling", "stuck", "manager", "goalposts", "salary", "months unemployed",
-  "doubt", "debating whether", "almost quit", "hit a wall",
+// A backstop, not the control: the control is the member marking an ask shareable (services/matching.ts). This catches
+// a private topic in an ask that was marked anyway. Whole words only, so "manager", "equity", "quite" and "health-tech"
+// pass; a match on any of these means the ask is not shared. When in doubt, don't share.
+export const SENSITIVE: RegExp[] = [
+  /\b(?:burn(?:ed|t)? ?out|burnout|quit|quitting|unemployed|laid off|fired|lost (?:a |their |my )?co ?founder|co ?founder conflict|almost quit|hit a wall|goalposts)\b/,
+  /\b(?:anxiety|anxious|depress\w*|therap\w*|psychiatr\w*|psycholog\w*|counsel(?:or|ors|ing|ling)|mental health|adhd|ocd|bipolar|ptsd|grief|griev\w*|lonely|loneliness|isolated|isolation|struggling|stuck|doubt|debating whether)\b/,
+  /\b(?:illness|sick|cancer|chemo\w*|diagnos\w*|disease|chronic|surgery|disabilit\w*|health (?:issue|issues|problem|problems|scare)|pregnan\w*|fertility|ivf|miscarr\w*)\b/,
+  /\b(?:sober|sobriety|rehab|addict\w*|alcoholi\w*|recovering)\b/,
+  /\b(?:debt|debts|bankrupt\w*|broke|running out of money|money (?:trouble|problems)|evict\w*|homeless|salary|months unemployed)\b/,
+  /\b(?:divorc\w*|breakup|broke up|separation|custody|couples?)\b/,
+  /\b(?:immigration|h ?1 ?b|green card|visa (?:status|sponsorship|issue|issues)|deport\w*|asylum|lawsuit|sued|arrest\w*|criminal)\b/,
+  /\b(?:new job|job search|interviewing|quietly|secretly|while still employed|without my (?:boss|employer) knowing)\b/,
 ];
+
 
 const STOP = new Set(["a", "an", "the", "and", "or", "to", "of", "in", "on", "for", "with", "who", "that", "is", "are", "their", "they", "them", "at", "as", "by", "be", "it", "this"]);
 
@@ -490,7 +497,7 @@ function shingles(words: string[], n: number): Set<string> {
 
 export type NetworkFacts = {
   shareReason: string | null | undefined;
-  // The candidate's own active stated asks/offerings: the only allowed source.
+  // The candidate's open asks they marked shareable: the only allowed source, and the reason must be one of them.
   candidateStatedAsks: string[];
   // Everything else known about the candidate: goals, blockers, activity
   // preferences, memory text. None of it may be quoted.
@@ -501,7 +508,7 @@ export type NetworkFacts = {
 };
 
 // The words matching.ts puts in front of a quoted ask.
-export const TEMPLATE_PREFIX = /^what they(?:'|\u2019)ve said they(?:'|\u2019)(?:re looking for|can offer):\s*/i;
+export const TEMPLATE_PREFIX = /^what they(?:'|\u2019)ve said they(?:(?:'|\u2019)re looking for| can offer):\s*/i;
 
 export function checkShareReason(f: NetworkFacts): GateCheck {
   const name = "share_reason_private";
@@ -510,7 +517,12 @@ export function checkShareReason(f: NetworkFacts): GateCheck {
   // Sensitive even when it's in their own stated ask (burnout, health, money
   // trouble): they told Co, not everyone they might be introduced to
   // (2026-09-15, a pending intro quoted a tester's burnout).
-  const sensitive = SENSITIVE.find((w) => norm(reason).includes(norm(w)));
+  // The control: the quoted words must be one of the asks they marked shareable, word for word.
+  const quoted = reason.replace(TEMPLATE_PREFIX, "").replace(/^"|"$/g, "").trim();
+  if (!f.candidateStatedAsks.some((a) => norm(a) === norm(quoted))) return { name, pass: false, reason: "not an ask they marked shareable" };
+  // The backstop: a private topic in an ask they marked anyway.
+  const n = norm(reason);
+  const sensitive = SENSITIVE.map((re) => n.match(re)?.[0]).find(Boolean);
   if (sensitive) return { name, pass: false, reason: `mentions "${sensitive}", which is too personal to share in an intro` };
 
   const allowedShingles = shingles(contentWords(f.candidateStatedAsks.join(" . ")), 3);
@@ -573,7 +585,7 @@ export async function gatherNetworkFacts(
     import("../services/coFacts.js").then((m) => m.ownerOnlyFacts(candidateId)).catch(() => [] as string[]),
   ]);
   const p = profile.rows[0] ?? {};
-  const stated = Array.isArray(p.intent) ? (p.intent as any[]).filter(isOpenAsk).map((i) => String(i.text)) : [];
+  const stated = Array.isArray(p.intent) ? (p.intent as any[]).filter((i) => isOpenAsk(i) && i?.shareable === true).map((i) => String(i.text)) : [];
   const activeIds = new Set(active.rows.map((r: any) => r.id));
   return {
     shareReason,

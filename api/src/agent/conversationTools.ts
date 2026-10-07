@@ -457,6 +457,29 @@ export function createConversationTools(ctx: ConversationToolContext) {
         return { ok: true, event: today.name };
       },
     }),
+    shareAskInIntros: tool({
+      description: toolUse("shareAskInIntros"),
+      inputSchema: z.object({
+        ask: z.string().describe("The ask as it's on file (their words)."),
+        answer: z.enum(["yes", "no"]),
+        theirWords: z.string().describe("Their yes or no, copied exactly from this message."),
+      }),
+      execute: async ({ ask, answer, theirWords }) => {
+        const B = await import("../services/eventBrief.js");
+        if (B.readNameAnswer(theirWords, ctx.resolvedContent) !== answer) {
+          notDone("Nothing was marked shareable: their words aren't a clear yes or no.");
+          return { ok: false, error: "Only their own clear yes or no, from this message, counts. If it was unclear, ask once more." };
+        }
+        if (ctx.dryRun) return { ok: true, note: "dry run" };
+        const r = await (await import("../services/askSharing.js")).setAskShareable(ctx.userId, ask, answer === "yes");
+        if (!r.ok) {
+          notDone(`Nothing was marked shareable: ${r.why}.`);
+          return { ok: false, error: r.options ? `Ask which one they mean: ${r.options.join(" / ")}` : "That isn't one of their open asks." };
+        }
+        ctx.facts?.add("did_this_turn", answer === "yes" ? `They said Co may mention "${r.text}" in their own words when introducing them. Their other asks stay private.` : `They said not to mention "${r.text}" to anyone. It stays private.`);
+        return { ok: true, ask: r.text, shareable: answer === "yes" };
+      },
+    }),
     answerBriefName: tool({
       description: toolUse("answerBriefName"),
       inputSchema: z.object({ answer: z.enum(["yes", "no"]), theirWords: z.string().describe("Their yes or no, copied exactly from this message.") }),

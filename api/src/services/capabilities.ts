@@ -197,6 +197,13 @@ export const ABILITIES: Ability[] = [
     use: "They said yes to sharing their location for today's Co event (after you offered). Quote their yes from this message. It covers only today's event; if they say stop, it stops.",
   },
   {
+    id: "ask_shareable",
+    can: "Every ask they give Co is private. Co can mention one of their asks, in their own words, when it introduces them to someone (in the room or in the network) only once they say that ask is okay to share, and they can take it back any time.",
+    tool: "shareAskInIntros",
+    limits: { perTurn: 2 },
+    use: "They said one of their asks may (or may not) be mentioned when Co introduces them (\"yes, you can tell people I'm looking for a cofounder\"). Name the ask as it's on file, quote their yes or no from this message. Only a plain yes makes it shareable; if they hedge, record nothing and ask once more. A later \"don't mention that\" is a no. Never ask about something personal (health, money, legal, family): those stay private.",
+  },
+  {
     id: "brief_name",
     can: "Before a Co event they're going to, Co asks once whether it may mention them by name in the member brief the day before. Co records their yes or no. No answer means no name, and a no or a later change of mind is honored at once.",
     tool: "answerBriefName",

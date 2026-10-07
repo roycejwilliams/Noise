@@ -15,7 +15,7 @@ const PA = await import("../../src/services/preArrival.js");
 // ------------------------------------------------------------ the share-reason gate on sensitive asks
 // The share reason is "what they've said they're looking for: <their ask>". Which private asks get through?
 const sensitiveAsks: [string, boolean][] = [
-  // [ask, blocked today?] -- only the first two words-lists in SENSITIVE catch anything
+  // [ask, blocked before the 2026-10-07 rewrite?]
   ["a therapist who works with founders", true],
   ["help with my anxiety before pitches", true],
   ["a new job since my startup is running out of money", false],
@@ -33,7 +33,8 @@ const sensitiveAsks: [string, boolean][] = [
 ];
 let leaky = 0;
 for (const [a, blockedToday] of sensitiveAsks) {
-  const reason = M.shareReasonFromOwnAsk([{ text: a, type: "seeking", status: "active", kind: "ask" }]);
+  // Marked shareable, so this exercises the word backstop (the flag itself is checked below).
+  const reason = M.shareReasonFromOwnAsk([{ text: a, type: "seeking", status: "active", kind: "ask", shareable: true }], "S1");
   const r = G.checkShareReason({ shareReason: reason, candidateStatedAsks: [a], candidatePrivateTexts: [], alreadySuggestedOrDeclined: false, askerActive: true, candidateActive: true });
   if (blockedToday) check(`share gate blocks "${a}"`, !r.pass);
   else if (r.pass) leaky++;
@@ -42,7 +43,7 @@ finding(`share gate: ${leaky} of ${sensitiveAsks.filter(([, b]) => !b).length} c
 
 // False positives: ordinary professional asks blocked by substring matches.
 const benign = ["a health-tech cofounder", "an engineering manager to hire", "equity crowdfunding advice", "someone who knows the Visa partner program", "a quite technical PM"];
-const blocked = benign.filter((a) => !G.checkShareReason({ shareReason: M.shareReasonFromOwnAsk([{ text: a, type: "seeking", status: "active", kind: "ask" }]), candidateStatedAsks: [a], candidatePrivateTexts: [], alreadySuggestedOrDeclined: false, askerActive: true, candidateActive: true }).pass);
+const blocked = benign.filter((a) => !G.checkShareReason({ shareReason: M.shareReasonFromOwnAsk([{ text: a, type: "seeking", status: "active", kind: "ask", shareable: true }], "S1"), candidateStatedAsks: [a], candidatePrivateTexts: [], alreadySuggestedOrDeclined: false, askerActive: true, candidateActive: true }).pass);
 finding(`share gate false positives: ${blocked.length}/${benign.length} ordinary professional asks are blocked by substring matches (${blocked.join("; ")})`, blocked.length >= 4, blocked);
 
 // The shareReason is the NEWEST open ask, whichever ask the scorer actually matched on.
@@ -52,6 +53,8 @@ finding(`share gate false positives: ${blocked.length}/${benign.length} ordinary
     { text: "a pediatric dentist for my kid", type: "seeking", status: "active", kind: "ask" },
   ];
   finding("share reason: built from the newest open ask (here a dentist errand), not the ask that made the match (seed checks)", /pediatric dentist/.test(M.shareReasonFromOwnAsk(intent)), M.shareReasonFromOwnAsk(intent));
+  check("share reason: an ask the member never marked shareable is never used", M.shareReasonFromOwnAsk([{ text: "seed checks", type: "offering", status: "active", kind: "ask" }], "S1") === "");
+  check("share reason: a marked ask can't pass the gate for someone whose shared asks don't include it", !G.checkShareReason({ shareReason: M.shareReasonFromOwnAsk([{ text: "seed checks", type: "offering", status: "active", kind: "ask", shareable: true }], "S1"), candidateStatedAsks: [], candidatePrivateTexts: [], alreadySuggestedOrDeclined: false, askerActive: true, candidateActive: true }).pass);
   check("share reason: a closed ask is never used", M.shareReasonFromOwnAsk([{ text: "old ask", type: "seeking", status: "resolved", kind: "ask" }]) === "");
   check("share reason: a goal is never used", M.shareReasonFromOwnAsk([{ text: "be a better founder", type: "seeking", status: "active", kind: "goal" }]) === "");
 }
