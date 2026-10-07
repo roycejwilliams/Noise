@@ -76,6 +76,10 @@ export function toolAction(tool: string, input: any): { relation: string; label:
       return [{ relation: "did", label: `drafted an email${s(input?.to) ? ` to ${s(input.to)}` : ""} for them to send: ${s(input?.subject)}` }];
     case "emailPlan":
       return [{ relation: "sent", label: `a one-page plan sheet: ${s(input?.title)}` }];
+    case "writeDocument":
+      return [{ relation: "sent", label: `a document (PDF): ${s(input?.title)}` }];
+    case "offerDocument":
+      return [{ relation: "did", label: "offered to write something up for them as a document" }];
     case "saveAsk":
       return [{ relation: "did", label: s(input?.what) ? `saved an ask to keep looking for: ${s(input.what)}` : "saved an ask" }];
     case "closeAsk":

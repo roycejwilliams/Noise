@@ -17,6 +17,7 @@
 //             sentences are dropped. The reply is never blocked.
 //   record  — recordDecision(layer 3, "reply.grounding")
 //   eval    — evals/reply/run.ts
+import { docOfferLines } from "../services/documentOffer.js";
 import { attributedWithoutSource } from "./proactiveSpecifics.js";
 import { loadMilestones, storyLines } from "../services/milestones.js";
 import { ABILITIES, capabilitySheet } from "../services/capabilities.js";
@@ -261,6 +262,12 @@ export async function gatherReplyFacts(
   if (today) {
     addFact(rf, "known", `They're registered for Co's event "${today.name}" today, starting ${today.startAt}.`);
     addInstruction(rf, `If they say they're running late, can't make it, or aren't sure about "${today.name}", answer them normally and warmly, record it with updateGoing, never pressure them to come, and never offer to contact the host.`);
+  }
+  // Writing something up as a document (services/documentOffer.ts): an offer still waiting on its answer, or a moment Co may offer, once.
+  {
+    const doc = docOfferLines(opts.turn?.docOffer);
+    if (doc.pending) addFact(rf, "pending", doc.pending);
+    if (doc.hint) addInstruction(rf, doc.hint);
   }
   // Co's own open tasks: real scheduled work, so saying when it'll get back to them is true.
   for (const line of opts.turn?.tasks ?? []) addFact(rf, "scheduled", line);

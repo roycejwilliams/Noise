@@ -199,8 +199,8 @@ export const hasTimedSteps = (plan: Plan) => plan.steps.some((s) => s.start);
 
 // ---------- the sheet
 
-const SERIF = "'Fraunces', Georgia, 'Times New Roman', serif";
-const SANS = "'Satoshi', -apple-system, BlinkMacSystemFont, 'Helvetica Neue', Arial, sans-serif";
+export const SERIF = "'Fraunces', Georgia, 'Times New Roman', serif";
+export const SANS = "'Satoshi', -apple-system, BlinkMacSystemFont, 'Helvetica Neue', Arial, sans-serif";
 
 const dayHeading = (d: DateTime) => d.toFormat("cccc, LLLL d");
 const clock = (d: DateTime) => d.toFormat("h:mm a").replace(":00 ", " ").toLowerCase();

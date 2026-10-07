@@ -510,6 +510,83 @@ export function loopTools(
       },
     }),
 
+    // A document (services/documentSheet.ts, documentDelivery.ts): a titled page Co writes from what they said, as a PDF in this
+    // conversation. Phase 1; a Google Docs step slots into DELIVERERS later. Needs their own yes (the registry's `confirm`).
+    writeDocument: tool({
+      description: toolUse("writeDocument"),
+      inputSchema: z.object({
+        title: z.string().describe("A short title, in plain words they would recognize."),
+        note: z.string().optional().describe("One line under the title: what this is, in your voice."),
+        sections: z
+          .array(
+            z.object({
+              heading: z.string().optional(),
+              paragraphs: z.array(z.string()).max(6).optional(),
+              bullets: z.array(z.string()).max(10).optional(),
+            }),
+          )
+          .min(1)
+          .max(10)
+          .describe("Each with a heading and paragraphs and/or bullets. Only what they said or you read; nothing invented."),
+      }),
+      execute: async (input) => {
+        const { resolveDocument, documentProblems } = await import("../services/documentSheet.js");
+        const { deliverDocument, loadTheirWords } = await import("../services/documentDelivery.js");
+        const { recordDocumentWritten } = await import("../services/documentOffer.js");
+        const doc = resolveDocument(input);
+        const t = ctx.turn;
+        // What it may rest on: their own words (two weeks of texts and calls), this message, what Co has on them, what it read this turn.
+        const source = [
+          await loadTheirWords(ctx.userId).catch(() => ""),
+          theirWords(),
+          ...(t?.asks ?? []).map((a) => a.text),
+          ...(t?.threads ?? []).map((x) => x.text),
+          ...(t?.ledger?.lines ?? []),
+          JSON.stringify(t?.profile ?? {}),
+          ...[...loop.pages.values()],
+          ...[...loop.found.values()].map((f) => `${f.name} ${f.facts}`),
+        ].join("\n");
+        const problems = documentProblems(doc, source);
+        if (problems.length) {
+          notDone(`No document sent: ${problems.slice(0, 3).join("; ")}.`);
+          return { ok: false, error: `Not sent: ${problems.slice(0, 5).join(" | ")}. Fix these and try again once, or tell them plainly what you couldn't back and give them the points in a text.` };
+        }
+        if (ctx.dryRun) {
+          ctx.facts?.add("did_this_turn", `Sent them a document, "${doc.title}", as a PDF in this conversation.`);
+          return { ok: true, note: "Test run: nothing was sent." };
+        }
+        const { rows } = await pool.query(`SELECT first_name FROM users WHERE id = $1`, [ctx.userId]).catch(() => ({ rows: [] as any[] }));
+        const sent = await deliverDocument(doc, { userId: ctx.userId, firstName: String(rows[0]?.first_name ?? ctx.firstName ?? ""), phone: ctx.phoneNumber });
+        if (!sent.ok) {
+          notDone(`No document sent: ${sent.why}.`);
+          return { ok: false, error: `${sent.why}. Say so plainly and give them the points in a text instead.` };
+        }
+        await logDeliveredPlan(`Co replied: [sent a document: ${doc.title}]`);
+        state.sentMessages.push(`[sent a document: ${doc.title}]`);
+        await recordDocumentWritten(ctx.userId, doc.title).catch(() => {});
+        await recordDecision({ layer: 3, decision: "loop.writeDocument", userId: ctx.userId, outcome: "act", action: doc.title, proposal: { sections: doc.sections.length, via: sent.via } }).catch(() => {});
+        ctx.facts?.add("did_this_turn", `Sent them a document, "${doc.title}", as a PDF in this conversation (${doc.sections.length} sections).`);
+        await remember({ next: `document sent: ${doc.title}` });
+        return { ok: true, via: sent.via, note: "The PDF is in this conversation. Say in one line what it covers and that you'll change anything they want; don't repeat its contents." };
+      },
+    }),
+
+    // The offer (services/documentOffer.ts): code re-checks the moment and records that Co offered, so it is never offered twice;
+    // Co writes the offer itself, in its own words.
+    offerDocument: tool({
+      description: toolUse("offerDocument"),
+      inputSchema: z.object({}),
+      execute: async () => {
+        if (ctx.dryRun) return { ok: true, note: "Test run: nothing was recorded. Make the offer in your own words." };
+        const { loadOfferState, documentOfferDue, recordOffer } = await import("../services/documentOffer.js");
+        const due = documentOfferDue(await loadOfferState(ctx.userId));
+        if (!due.due) return { ok: false, error: `Don't offer a document now: ${due.why}.` };
+        await recordOffer(ctx.userId, due.topic);
+        ctx.facts?.add("did_this_turn", `Offered to write up "${due.topic}" as a document; waiting on their answer.`);
+        return { ok: true, topic: due.topic, note: "Recorded. Now make the offer in your reply, in your own words, as one light line about this. Don't write the document until they say yes." };
+      },
+    }),
+
     updateNotes: tool({
       description: toolUse("updateNotes"),
       inputSchema: z.object({
