@@ -8,7 +8,7 @@ import sendblue, { cleanCoMessage } from "./sendblue.js";
 import { writeMemory } from "./memory.js";
 import { inRoomSendAllowed, recordInRoomSend } from "../harness/proactive.js";
 import { draftWithConsent } from "../harness/introConsent.js";
-import { MATCH_NUDGE_END_CUTOFF_MINUTES } from "../harness/introConsent.js";
+import { MATCH_NUDGE_END_CUTOFF_MINUTES, withEnd } from "../harness/introConsent.js";
 import { inRoomPool, wasAlreadyNudgedForMatch, scoreMatchedGroup, type ScorableGuest } from "./eventScoring.js";
 
 // "No one should feel left out" (Royce, 2026-09-22). Two things, both
@@ -46,8 +46,8 @@ export async function scheduleUnmatchedFollowUp(
   eventTiming: { start_at: string; end_at: string | null } | null,
   opts: { dryRun?: boolean } = {},
 ): Promise<void> {
-  if (!matched.length || !eventTiming?.end_at) return;
-  const sendAt = new Date(new Date(eventTiming.end_at).getTime() - UNMATCHED_SEND_BEFORE_END_MINUTES * 60_000);
+  if (!matched.length || !eventTiming) return;
+  const sendAt = new Date(new Date(withEnd(eventTiming).end_at).getTime() - UNMATCHED_SEND_BEFORE_END_MINUTES * 60_000);
   if (opts.dryRun) {
     console.log(`[eventUnmatchedFollowUp dryRun] would schedule ${matched.length} guest(s) at ${eventId} for ${sendAt.toISOString()}`);
     return;
@@ -145,7 +145,7 @@ async function processOneEvent(eventId: string, eventName: string): Promise<void
   if (!dueUserIds.size) return;
 
   const details = await getEventDetails(eventId).catch(() => null);
-  const eventTiming = details ? { start_at: details.start_at, end_at: details.end_at } : null;
+  const eventTiming = details ? withEnd({ start_at: details.start_at, end_at: details.end_at, timezone: details.timezone ?? null }) : null;
 
   // Re-fetch the current guest list — it can have grown since this was
   // scheduled (a late walk-in), and a person due here may already have a

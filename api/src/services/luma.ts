@@ -91,6 +91,8 @@ export type LumaEventDetail = {
   end_at: string | null;
   location: string | null;
   url: string | null;
+  // The event's own IANA zone (Luma event.timezone), for a sane close when end_at is missing.
+  timezone?: string | null;
 };
 
 // GET /v1/event/get — a single event's current details, for diffing against
@@ -124,6 +126,7 @@ export async function getEventDetails(eventId: string): Promise<LumaEventDetail 
     name: event.name,
     start_at: event.start_at,
     end_at: event.end_at ?? null,
+    timezone: typeof event.timezone === "string" ? event.timezone : null,
     // Field is geo_address_json, not geo_address_info (confirmed live against
     // a real event) — the old field name never existed on Luma's response,
     // so this silently returned null for every event regardless of whether

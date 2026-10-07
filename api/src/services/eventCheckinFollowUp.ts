@@ -81,9 +81,10 @@ export async function detectAndScheduleCheckins(
     console.error(`detectAndScheduleCheckins: getEventDetails failed for ${eventId} (non-fatal):`, err?.message ?? err);
     return null;
   });
-  if (!details?.end_at) return;
-
-  const sendAt = new Date(new Date(details.end_at).getTime() + CHECKIN_FOLLOWUP_DELAY_HOURS * 60 * 60 * 1000);
+  if (!details) return;
+  // No end_at: the end of that evening (introConsent.ts effectiveEnd), the same close the in-room window uses.
+  const { effectiveEnd } = await import("../harness/introConsent.js");
+  const sendAt = new Date(new Date(effectiveEnd({ start_at: details.start_at, end_at: details.end_at, timezone: details.timezone ?? null })).getTime() + CHECKIN_FOLLOWUP_DELAY_HOURS * 60 * 60 * 1000);
   for (const person of matched) {
     await scheduleEventCheckinFollowUp(person.user_id, eventId, eventName, sendAt, opts);
   }

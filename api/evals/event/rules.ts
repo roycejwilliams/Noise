@@ -43,7 +43,7 @@ const c = (ok: boolean, label: string) => cases.push([ok, label]);
   const followUp = readFileSync(new URL("../../src/services/eventUnmatchedFollowUp.ts", import.meta.url), "utf8");
   c(/MATCH_NUDGE_END_CUTOFF_MINUTES/.test(followUp), "scheduling reuses the same end-cutoff constant as the real match nudge");
   // 2026-10-07: due a full cron period plus delivery time BEFORE the cutoff, so its pair nudges can still send.
-  c(/new Date\(eventTiming\.end_at\)\.getTime\(\) - UNMATCHED_SEND_BEFORE_END_MINUTES \* 60_000/.test(followUp) && /UNMATCHED_SEND_BEFORE_END_MINUTES = MATCH_NUDGE_END_CUTOFF_MINUTES \+ UNMATCHED_CRON_MINUTES \+ \d+/.test(followUp), "the send time is end_at minus (the cutoff + a cron period + delivery), not end_at plus hours");
+  c(/new Date\(withEnd\(eventTiming\)\.end_at\)\.getTime\(\) - UNMATCHED_SEND_BEFORE_END_MINUTES \* 60_000/.test(followUp) && /UNMATCHED_SEND_BEFORE_END_MINUTES = MATCH_NUDGE_END_CUTOFF_MINUTES \+ UNMATCHED_CRON_MINUTES \+ \d+/.test(followUp), "the send time is end_at minus (the cutoff + a cron period + delivery), not end_at plus hours");
   c(!/CHECKIN_FOLLOWUP_DELAY_HOURS/.test(followUp), "this isn't the +3h debrief cadence — it's meant to still read as during the event");
 }
 

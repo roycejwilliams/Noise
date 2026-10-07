@@ -14,7 +14,7 @@ import { inRoomSendAllowed, recordInRoomSend, enqueueCandidate, type OutputRules
 import { writeMemory } from "./memory.js";
 import { mergeWalkinsIntoGuestPool } from "./eventWalkinCheckin.js";
 import { CO_VOICE, CO_TEXT_CHANNEL } from "./coVoice.js";
-import { checkEventWindow, checkNamesWithheld, checkOneNudgePerEvent, draftWithConsent, eventOptedIn } from "../harness/introConsent.js";
+import { checkEventWindow, checkNamesWithheld, checkOneNudgePerEvent, draftWithConsent, eventOptedIn, withEnd } from "../harness/introConsent.js";
 import { gateShareReason } from "../harness/matchGate.js";
 import { arrivalWaitCheck, getPresence } from "./eventPresence.js";
 import { MODELS } from "../models.js";
@@ -821,7 +821,8 @@ export async function scoreGuestListForEvent(
     console.error(`eventScoring: inRoomPool failed for ${eventId} (non-fatal):`, err?.message ?? err);
     return [] as ScorableGuest[];
   });
-  const eventTiming = details ? { start_at: details.start_at, end_at: details.end_at } : null;
+  // A missing end_at gets the end of that evening (introConsent.ts effectiveEnd), so the window and wrap-up still close.
+  const eventTiming = details ? withEnd({ start_at: details.start_at, end_at: details.end_at, timezone: details.timezone ?? null }) : null;
 
   // End-of-night check-in (Notion V1 board row 8) — gated on registration
   // (matched, above) + the event's real end_at, not a Luma check-in signal

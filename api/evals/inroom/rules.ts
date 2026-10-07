@@ -59,6 +59,16 @@ finding(`share gate false positives: ${blocked.length}/${benign.length} ordinary
   check("share reason: a goal is never used", M.shareReasonFromOwnAsk([{ text: "be a better founder", type: "seeking", status: "active", kind: "goal" }]) === "");
 }
 
+// ------------------------------------------------------------ no end time: the end of that evening, local
+{
+  const e = (start: string, tz: string | null) => C.effectiveEnd({ start_at: start, end_at: null, timezone: tz });
+  check("no end: a 7pm event in SF closes at midnight SF time", e("2026-11-05T19:00:00-08:00", "America/Los_Angeles") === "2026-11-06T08:00:00.000Z", e("2026-11-05T19:00:00-08:00", "America/Los_Angeles"));
+  check("no end: a 7pm event in New York closes at midnight New York time", e("2026-11-05T19:00:00-05:00", "America/New_York") === "2026-11-06T05:00:00.000Z", e("2026-11-05T19:00:00-05:00", "America/New_York"));
+  check("no end: a 10:30pm start still gets 3 hours", e("2026-11-05T22:30:00-08:00", "America/Los_Angeles") === "2026-11-06T09:30:00.000Z", e("2026-11-05T22:30:00-08:00", "America/Los_Angeles"));
+  check("no end: a real end_at is kept as is", C.effectiveEnd({ start_at: "2026-11-05T19:00:00-08:00", end_at: "2026-11-05T21:00:00-08:00" }) === "2026-11-05T21:00:00-08:00");
+  check("no end: the window is open that evening and closed the next day", C.checkEventWindow({ start_at: "2026-11-05T19:00:00-08:00", end_at: null, timezone: "America/Los_Angeles" }, new Date("2026-11-06T05:00:00Z")).pass && !C.checkEventWindow({ start_at: "2026-11-05T19:00:00-08:00", end_at: null, timezone: "America/Los_Angeles" }, new Date("2026-11-06T18:00:00Z")).pass);
+}
+
 // ------------------------------------------------------------ guest phone formats (Luma) -> stored E.164
 {
   const { matchablePhone } = await import("../../src/utils/phone.js");
