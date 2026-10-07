@@ -122,6 +122,7 @@ app.get("/audio/:id", (req, res) => {
 
 // A plan's PDF for Sendblue to attach to a text: random id, short-lived, never listed (services/planFile.ts).
 app.get("/plan-file/:id.pdf", servePlanFile);
+app.get("/plan-file/:id/:name", servePlanFile);
 
 app.use(errorHandler);
 
