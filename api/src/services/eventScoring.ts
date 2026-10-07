@@ -83,10 +83,35 @@ export async function matchGuestsToUsers(guests: LumaGuest[]): Promise<ScorableG
      FROM co_profiles cp
      JOIN users u ON u.id = cp.user_id
      WHERE (u.phone_number = ANY($1::text[]) OR LOWER(u.email) = ANY($2::text[]))
-       AND coalesce(u.sms_opted_out, false) = false`,
+       AND coalesce(u.sms_opted_out, false) = false AND u.archived_at IS NULL`,
     [phones, emails],
   );
   return rows;
+}
+
+// THE definition of "in the room" for a Co event (Royce, 2026-10-07: "one function, used everywhere"). Scoring, the
+// end-of-night pass and named intros all take their people from here, so nobody outside it is ever matched, named or
+// texted about the room. In the room means:
+//   - on the Luma list as APPROVED (declined, waitlisted, pending and invited-only are not in the room), or a walk-in
+//     whose arrival Co has confirmed (event_presence.arrived_at, from their shared location or Co marking them
+//     arrived): texting the QR phrase alone is not enough, it's only a claim;
+//   - a current member: not archived, not opted out of texts;
+//   - and not someone who told Co they can't make it (event_presence.not_going_at).
+// guests: the event's Luma guest list when the caller already has it.
+export async function inRoomPool(eventId: string, guests?: LumaGuest[]): Promise<ScorableGuest[]> {
+  const { mergeWalkinsIntoGuestPool } = await import("./eventWalkinCheckin.js");
+  const list = guests ?? (await getEventGuestList(eventId));
+  const [registered, walkins] = await Promise.all([
+    matchGuestsToUsers(list.filter((g) => g.approval_status === "approved")),
+    mergeWalkinsIntoGuestPool(eventId),
+  ]);
+  const ids = [...new Set([...registered, ...walkins].map((g) => g.user_id))];
+  if (!ids.length) return [];
+  const { rows } = await pool.query(`SELECT user_id, arrived_at, not_going_at FROM event_presence WHERE event_api_id = $1 AND user_id = ANY($2::uuid[])`, [eventId, ids]);
+  const presence = new Map<string, { arrived_at: unknown; not_going_at: unknown }>(rows.map((r: any) => [String(r.user_id), r]));
+  const notGoing = (id: string) => Boolean(presence.get(id)?.not_going_at);
+  const arrived = (id: string) => Boolean(presence.get(id)?.arrived_at);
+  return dedupeByUserId([...registered.filter((g) => !notGoing(g.user_id)), ...walkins.filter((g) => arrived(g.user_id) && !notGoing(g.user_id))]);
 }
 
 // A person could plausibly show up in both sources in the same pass — a
@@ -783,14 +808,12 @@ export async function scoreGuestListForEvent(
   // Luma (services/eventWalkinCheckin.ts). Deduped by user_id — a
   // Luma-registered guest who also scans the QR should still only be scored
   // once per pass.
-  const [lumaMatched, walkinMatched] = await Promise.all([
-    matchGuestsToUsers(guests),
-    mergeWalkinsIntoGuestPool(eventId).catch((err: any) => {
-      console.error(`eventScoring: mergeWalkinsIntoGuestPool failed for ${eventId} (non-fatal):`, err?.message ?? err);
-      return [];
-    }),
-  ]);
-  const matched = dedupeByUserId([...lumaMatched, ...walkinMatched]);
+  // One pool (inRoomPool, above): approved Luma guests plus walk-ins Co has seen arrive, never archived, opted-out
+  // or not-going members. A walk-in failure leaves the Luma guests.
+  const matched = await inRoomPool(eventId, guests).catch(async (err: any) => {
+    console.error(`eventScoring: inRoomPool failed for ${eventId} (non-fatal):`, err?.message ?? err);
+    return [] as ScorableGuest[];
+  });
   const eventTiming = details ? { start_at: details.start_at, end_at: details.end_at } : null;
 
   // End-of-night check-in (Notion V1 board row 8) — gated on registration

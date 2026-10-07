@@ -10,9 +10,6 @@ import { checkBothYes, draftWithConsent, eventOptedIn, gateIntroAction } from ".
 import { sendExemptWhenAllowed } from "../harness/proactive.js";
 import { getTimezoneForCity } from "./geocoding.js";
 import { MODELS } from "../models.js";
-import { getEventGuestList } from "./luma.js";
-import { matchGuestsToUsers, dedupeByUserId } from "./eventScoring.js";
-import { mergeWalkinsIntoGuestPool } from "./eventWalkinCheckin.js";
 import { CO_EMAIL_FROM } from "./emailFrom.js";
 import { galleryEmail } from "./emailDesign.js";
 
@@ -310,11 +307,9 @@ export async function resolveNamedEventGuest(userId: string, nameGuess: string):
   const eventId: string = recent[0].event_api_id;
   const eventName: string = recent[0].event_name;
 
-  const [guests, walkins] = await Promise.all([
-    getEventGuestList(eventId).then(matchGuestsToUsers).catch(() => []),
-    mergeWalkinsIntoGuestPool(eventId).catch(() => []),
-  ]);
-  const guestPool = dedupeByUserId([...guests, ...walkins]).filter((g) => g.user_id !== userId);
+  // The same "in the room" as scoring (eventScoring.ts inRoomPool): a declined or archived guest is never found here.
+  const { inRoomPool } = await import("./eventScoring.js");
+  const guestPool = (await inRoomPool(eventId).catch(() => [])).filter((g) => g.user_id !== userId);
 
   const needle = nameGuess.trim().toLowerCase();
   if (!needle) return { error: "no name given" };

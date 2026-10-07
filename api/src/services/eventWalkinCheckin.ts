@@ -141,13 +141,14 @@ export async function recordWalkinAsk(eventApiId: string, personId: string, askT
 // already a Co user) never gets ask_text written here at all, since
 // recordWalkinAsk is only called when hasActiveAsk was false; either way,
 // their real ask lives in co_profiles.intent, which is what scoring reads.
+// Who checked in by QR. Not the room by itself: eventScoring.ts inRoomPool keeps only walk-ins Co has seen arrive.
 export async function mergeWalkinsIntoGuestPool(eventApiId: string): Promise<ScorableGuest[]> {
   const { rows } = await pool.query(
     `SELECT cp.user_id, u.first_name, u.phone_number, u.email, cp.city, cp.goals, cp.blockers, cp.activity_preferences, cp.intent
      FROM event_walkin_checkins ewc
      JOIN co_profiles cp ON cp.user_id = ewc.person_id
      JOIN users u ON u.id = cp.user_id
-     WHERE ewc.event_api_id = $1 AND coalesce(u.sms_opted_out, false) = false`,
+     WHERE ewc.event_api_id = $1 AND coalesce(u.sms_opted_out, false) = false AND u.archived_at IS NULL`,
     [eventApiId],
   );
   return rows;

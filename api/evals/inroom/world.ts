@@ -166,7 +166,7 @@ function handle(sqlRaw: string, p: any[] = []): { rows: Row[]; rowCount: number 
   if (has("FROM co_profiles cp JOIN users u ON u.id = cp.user_id WHERE (u.phone_number = ANY($1::text[]) OR LOWER(u.email) = ANY($2::text[])) AND coalesce(u.sms_opted_out, false) = false")) {
     const phones: string[] = p[0];
     const emails: string[] = p[1];
-    return R([...W.members.values()].filter((m) => ((m.phone_number && phones.includes(m.phone_number)) || emails.includes(m.email.toLowerCase())) && !m.sms_opted_out).map(prof));
+    return R([...W.members.values()].filter((m) => ((m.phone_number && phones.includes(m.phone_number)) || emails.includes(m.email.toLowerCase())) && !m.sms_opted_out && (!/archived_at IS NULL/.test(sql) || !m.archived_at)).map(prof));
   }
   // eventMembers (eventPresence.ts), the real-Luma branch
   if (has("SELECT u.id AS user_id, u.first_name, u.phone_number FROM users u WHERE (u.phone_number = ANY($1::text[]) OR LOWER(u.email) = ANY($2::text[]))")) {
@@ -176,7 +176,7 @@ function handle(sqlRaw: string, p: any[] = []): { rows: Row[]; rowCount: number 
   }
   // mergeWalkinsIntoGuestPool
   if (has("FROM event_walkin_checkins ewc JOIN co_profiles cp")) {
-    return R(W.walkins.filter((w) => w.event_api_id === p[0]).map((w) => W.members.get(w.person_id)).filter((m): m is Member => !!m && !m.sms_opted_out).map(prof));
+    return R(W.walkins.filter((w) => w.event_api_id === p[0]).map((w) => W.members.get(w.person_id)).filter((m): m is Member => !!m && !m.sms_opted_out && (!/archived_at IS NULL/.test(sql) || !m.archived_at)).map(prof));
   }
   if (has("INSERT INTO event_walkin_checkins")) {
     if (W.walkins.some((w) => w.event_api_id === p[0] && w.person_id === p[1])) return R([]);
