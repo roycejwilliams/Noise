@@ -93,7 +93,16 @@ finding(`share gate false positives: ${blocked.length}/${benign.length} ordinary
   finding("memory: the nudge record also carries the internal score ('score 88') into the member's reply context", /score 88/.test(MS.introFacts([{ memory_type: "event_guest_match_nudge", content: nudge }]).join(" ")));
   const recap = `Co replied: Ellis is building grid storage and left Tesla, worth a chat.`;
   check("memory: Co's own line about a linked member is cut to a history line", !/Tesla/.test(MS.safeMemory("text_exchange", recap, ["Ellis"]) ?? ""));
-  finding("memory: but a member who was only in an ADDITIVE offer is not 'linked' (no nudge row), so Co's own lines about them are not cut", !/Tesla/.test(MS.safeMemory("text_exchange", `Co replied: Noor left Tesla.`, ["Ellis"]) ?? "") === false);
+  {
+    // Linked names come from linkedMemberNames: someone who was only in an additive offer must be linked too.
+    const { W, reset, addMember } = await import("./world.js");
+    reset();
+    const jordan = addMember({ first_name: "Jordan" });
+    const noor = addMember({ first_name: "Noor" });
+    W.offers.push({ event_id: "evt-x", person_id: jordan.id, candidate_key: "additive", kind: "additive", candidate_id: null, candidate_ids: [noor.id], status: "open", opened_at: new Date(), created_at: new Date() });
+    const linked = await MS.linkedMemberNames(jordan.id);
+    finding("memory: but a member who was only in an ADDITIVE offer is not 'linked' (no nudge row), so Co's own lines about them are not cut", /Tesla/.test(MS.safeMemory("text_exchange", `Co replied: Noor left Tesla.`, linked) ?? ""), linked);
+  }
 }
 
 // ------------------------------------------------------------ brief naming with stale rankings

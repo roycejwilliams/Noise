@@ -215,7 +215,7 @@ async function storeRanking(eventId: string, personId: string, ranked: RankedCan
 // 2026-09-07: three real independent users with genuinely unrelated asks
 // all correctly scored 0-5 against each other — this threshold is exactly
 // what keeps that from becoming a false "you two should meet!" text).
-const MATCH_NUDGE_MIN_SCORE = 60;
+export const MATCH_NUDGE_MIN_SCORE = 60;
 
 // Royce, 2026-09-07: "we want to facilitate the nudge as the event is
 // happening" — a match found days before the event started was firing
@@ -451,6 +451,8 @@ async function maybeSendMatchNudge(
       .query(`UPDATE event_guest_match_nudges SET pending = false WHERE event_id = $1 AND person_id = $2`, [eventId, person.user_id])
       .catch((err: any) => console.error("eventScoring: clearing pending failed (non-fatal):", err?.message ?? err));
     await recordInRoomSend(person.user_id, `in_room:match:${eventId}`, message);
+    // The question they now have open about this one person (services/inRoomOffers.ts): their reply binds to it.
+    await (await import("./inRoomOffers.js")).openOffer({ eventId, eventName, personId: person.user_id, kind: "nudge", candidateId: candidate.user_id }).catch((err: any) => console.error("eventScoring: opening the nudge offer failed (non-fatal):", err?.message ?? err));
     // No markMatchNudgeSent call needed here — the claim above already
     // wrote the row with the final candidate_id/score.
     await writeMemory(
@@ -621,10 +623,13 @@ Draft a short, warm, low-pressure text (1-2 sentences, no em dashes, normal sent
   }
 
   await recordInRoomSend(person.user_id, `in_room:additive:${eventId}:${Date.now()}`, message);
+  // Who arrived lives only on the offer (services/inRoomOffers.ts), never in their notes: they haven't been told, and
+  // after their yes each person is named only through the share gate (eventGuestMatchHandoff.ts handleAdditiveReply).
+  await (await import("./inRoomOffers.js")).openOffer({ eventId, eventName, personId: person.user_id, kind: "additive", candidateIds: newCandidates.map((c) => c.user_id) }).catch((err: any) => console.error("eventScoring: opening the additive offer failed (non-fatal):", err?.message ?? err));
   await writeMemory(
     person.user_id,
     "event_guest_match_nudge",
-    `Additive offer sent to ${person.first_name} at "${eventName}": ${newCandidates.length} new candidate(s) checked in since their last match (${newCandidates.map((c) => c.first_name).join(", ")})`,
+    `Additive offer sent to ${person.first_name} at "${eventName}": ${newCandidates.length} more people checked in since their last match. Co asked if they want to hear who; no one has been named to them.`,
   );
   await writeMemory(person.user_id, "text_exchange", `Co replied: ${message}`).catch((err: any) =>
     console.error("eventScoring: additive offer text_exchange log failed (non-fatal):", err?.message ?? err),

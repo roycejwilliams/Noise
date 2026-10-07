@@ -49,6 +49,7 @@ export const W = {
   members: new Map<string, Member>(),
   events: new Map<string, FakeEvent>(),
   nudges: [] as Row[], // event_guest_match_nudges (event_id, person_id) unique
+  offers: [] as Row[], // event_match_offers (event_id, person_id, candidate_key) unique
   optIns: [] as Row[], // event_guest_match_opt_ins (event_id, person_id, candidate_id) unique
   rankings: new Map<string, Row>(), // `${event}|${person}`
   proactiveSends: [] as Row[],
@@ -77,7 +78,7 @@ export const W = {
 export function reset(): void {
   W.members.clear();
   W.events.clear();
-  for (const k of ["nudges", "optIns", "proactiveSends", "candidates", "memoriesWritten", "walkins", "networkIntros", "checkinFollowups", "unmatchedFollowups", "unmatchedNotices", "decisions", "sent", "emails", "llmCalls"] as const) (W as any)[k].length = 0;
+  for (const k of ["nudges", "offers", "optIns", "proactiveSends", "candidates", "memoriesWritten", "walkins", "networkIntros", "checkinFollowups", "unmatchedFollowups", "unmatchedNotices", "decisions", "sent", "emails", "llmCalls"] as const) (W as any)[k].length = 0;
   W.rankings.clear();
   W.presence.clear();
   W.solicited.clear();
@@ -201,6 +202,43 @@ function handle(sqlRaw: string, p: any[] = []): { rows: Row[]; rowCount: number 
   }
 
   // rankings
+  // linkedMemberNames (memberSafeMemories.ts): everyone this member was nudged, asked or offered about, both directions.
+  if (has("SELECT DISTINCT u.first_name FROM users u WHERE u.id <> $1")) {
+    const me = p[0];
+    const ids = new Set<string>();
+    for (const n of W.nudges) { if (n.person_id === me) ids.add(n.candidate_id); if (n.candidate_id === me) ids.add(n.person_id); }
+    for (const o of W.optIns) { if (o.person_id === me) ids.add(o.candidate_id); if (o.candidate_id === me) ids.add(o.person_id); }
+    for (const o of W.offers) { if (o.person_id === me) { if (o.candidate_id) ids.add(o.candidate_id); for (const c of o.candidate_ids ?? []) ids.add(c); } if (o.candidate_id === me || (o.candidate_ids ?? []).includes(me)) ids.add(o.person_id); }
+    ids.delete(me);
+    return R([...new Set([...ids].map((id) => W.members.get(id)?.first_name).filter(Boolean))].map((first_name) => ({ first_name })));
+  }
+  // event_match_offers (services/inRoomOffers.ts)
+  if (has("INSERT INTO event_match_offers") && has("'open', NOW()")) {
+    const [event_id, person_id, candidate_key, kind, candidate_id, candidate_ids, asker_id, event_name] = p;
+    const row = W.offers.find((o) => o.event_id === event_id && o.person_id === person_id && o.candidate_key === candidate_key);
+    const opened_at = new Date(Date.now() + W.offers.length); // strictly increasing, so "most recent" is well defined
+    if (row) Object.assign(row, { kind, candidate_ids, asker_id, event_name: event_name ?? row.event_name, status: "open", opened_at });
+    else W.offers.push({ event_id, person_id, candidate_key, kind, candidate_id, candidate_ids: candidate_ids ?? [], asker_id, event_name, status: "open", opened_at, created_at: new Date() });
+    return R([]);
+  }
+  if (has("INSERT INTO event_match_offers") && has("'queued'")) {
+    const [event_id, person_id, candidate_key, candidate_id, asker_id, event_name] = p;
+    if (!W.offers.some((o) => o.event_id === event_id && o.person_id === person_id && o.candidate_key === candidate_key)) W.offers.push({ event_id, person_id, candidate_key, kind: "direct_ask", candidate_id, candidate_ids: [], asker_id, event_name, status: "queued", opened_at: null, created_at: new Date(Date.now() + W.offers.length) });
+    return R([]);
+  }
+  if (has("SELECT 1 FROM event_match_offers WHERE person_id = $1 AND status = 'open'")) return R(W.offers.filter((o) => o.person_id === p[0] && o.status === "open").slice(0, 1).map(() => ({ "?column?": 1 })));
+  if (has("FROM event_match_offers WHERE person_id = $1 AND status = 'open'")) return R(W.offers.filter((o) => o.person_id === p[0] && o.status === "open").sort((a, b) => +b.opened_at - +a.opened_at).slice(0, 1));
+  if (has("FROM event_match_offers WHERE person_id = $1 AND status = 'queued'")) return R(W.offers.filter((o) => o.person_id === p[0] && o.status === "queued").sort((a, b) => +a.created_at - +b.created_at).slice(0, 1));
+  if (has("UPDATE event_match_offers SET status = 'answered'")) {
+    for (const o of W.offers) if (o.event_id === p[0] && o.person_id === p[1] && o.candidate_key === p[2]) Object.assign(o, { status: "answered", answer: p[3] });
+    return R([]);
+  }
+  if (has("SELECT 1 FROM event_match_offers WHERE event_id = $1 AND person_id = $2 AND candidate_key = $3 AND status <> 'queued'")) return R(W.offers.filter((o) => o.event_id === p[0] && o.person_id === p[1] && o.candidate_key === p[2] && o.status !== "queued").map(() => ({ "?column?": 1 })));
+  if (has("SELECT first_name, phone_number, email FROM users WHERE id = $1")) {
+    const m = W.members.get(p[0]);
+    return R(m ? [{ first_name: m.first_name, phone_number: m.phone_number, email: m.email }] : []);
+  }
+  if (has("SELECT id AS user_id, first_name, phone_number, email FROM users WHERE id = ANY($1::uuid[])")) return R((p[0] as string[]).map((id) => W.members.get(id)).filter((m): m is Member => !!m).map((m) => ({ user_id: m.id, first_name: m.first_name, phone_number: m.phone_number, email: m.email })));
   if (has("SELECT ranked_candidates FROM event_guest_rankings")) {
     const r = W.rankings.get(`${p[0]}|${p[1]}`);
     return R(r ? [{ ranked_candidates: r.ranked_candidates }] : []);

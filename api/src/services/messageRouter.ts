@@ -210,11 +210,13 @@ export async function gatherOpenItems(userId: string, opts: { skipWalkinAsk?: bo
     });
   }
   if (matchNudge) {
-    const at = await safe("match nudge sent_at", async () =>
-      (await pool.query(`SELECT MAX(sent_at) AS at FROM event_guest_match_nudges WHERE person_id = $1 AND event_id = $2 AND candidate_id = $3`, [userId, matchNudge.event_id, matchNudge.candidate_id])).rows[0]?.at,
-    );
+    const at =
+      matchNudge.asked_at ??
+      (await safe("match nudge sent_at", async () =>
+        (await pool.query(`SELECT MAX(sent_at) AS at FROM event_guest_match_nudges WHERE person_id = $1 AND event_id = $2 AND candidate_id = $3`, [userId, matchNudge.event_id, matchNudge.candidate_id])).rows[0]?.at,
+      ));
     items.push({
-      id: `match_nudge:${matchNudge.event_id}:${matchNudge.candidate_id}`,
+      id: `match_nudge:${matchNudge.event_id}:${matchNudge.kind === "additive" ? "additive" : matchNudge.candidate_id}`,
       kind: "match_nudge",
       // Never the name for an anonymous heads-up: this text reaches the reply.
       description: describeOpenItem("match_nudge", matchNudge.anonymous ? null : matchNudge.candidate_first_name),

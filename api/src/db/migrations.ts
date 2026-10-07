@@ -1167,6 +1167,30 @@ export async function runMigrations(): Promise<void> {
     )
     .catch((err: Error) => console.error("event_guest_match_opt_ins table init failed:", err));
 
+  // What Co asked each member in the room, per pair (services/inRoomOffers.ts, 2026-10-07): a reply binds to the
+  // offer it answers; a direct ask waits (queued) while they have another question open.
+  await pool
+    .query(
+      `CREATE TABLE IF NOT EXISTS event_match_offers (
+        event_id TEXT NOT NULL,
+        person_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+        candidate_key TEXT NOT NULL,
+        kind TEXT NOT NULL CHECK (kind IN ('nudge', 'direct_ask', 'additive')),
+        candidate_id UUID REFERENCES users(id) ON DELETE CASCADE,
+        candidate_ids UUID[] NOT NULL DEFAULT '{}',
+        asker_id UUID REFERENCES users(id) ON DELETE CASCADE,
+        event_name TEXT,
+        status TEXT NOT NULL CHECK (status IN ('queued', 'open', 'answered')),
+        created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+        opened_at TIMESTAMPTZ,
+        answered_at TIMESTAMPTZ,
+        answer TEXT,
+        PRIMARY KEY (event_id, person_id, candidate_key)
+      )`,
+    )
+    .then(() => pool.query(`CREATE INDEX IF NOT EXISTS event_match_offers_open_idx ON event_match_offers (person_id, status, opened_at DESC)`))
+    .catch((err: Error) => console.error("event_match_offers table init failed:", err));
+
   // The actual handoff once both sides are in — a real Sendblue group
   // iMessage thread (services/sendblue.ts's groups API), not a simulated
   // one. Co stays in it (Sendblue's group API only exposes add_recipient,

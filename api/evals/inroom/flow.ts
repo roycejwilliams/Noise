@@ -292,7 +292,10 @@ for (const [s, expect] of [[59, false], [60, true], [100, true], [0, false]] as 
   finding("LEAK: introFacts turns it into a 'Co's record' fact for the reply, so 'yes, who?' can be answered with Sarah Hao's name with no share-reason gate or consent check", facts.some((f) => /Sarah Hao/.test(f)), facts);
   const pending = await H.findPendingMatchNudge(a.id);
   finding("CONSENT: after 'want to hear who?', the only open item is the ORIGINAL Ellis nudge, so Jordan's 'yes' to hearing who is read as yes to Ellis (and Ellis gets a direct ask)", pending?.candidate_id === b.id, pending);
-  finding("additive: there is no code path that ever reveals the new people Jordan said yes to hearing about", true);
+  // The reveal: Jordan's yes to "want to hear who?" names one new person, through the share gate.
+  const rev = pending?.kind === "additive" ? await H.handleAdditiveReply(pending.event_id, "Co Night", "interested", { user_id: a.id, first_name: a.first_name, phone_number: a.phone_number!, email: a.email }, pending.candidate_ids ?? []) : { revealed: null };
+  finding("additive: there is no code path that ever reveals the new people Jordan said yes to hearing about", rev.revealed?.first_name !== "Sarah Hao", rev);
+  check("additive: after the reveal, Jordan's open question is Sarah Hao (their next yes binds to her)", (await H.findPendingMatchNudge(a.id))?.candidate_id === late.id);
 }
 {
   // Walk-in by text, with no presence check: anyone who texts the phrase during the event joins the pool.

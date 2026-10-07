@@ -62,6 +62,11 @@ export type PendingMatchNudge = {
   candidate_email: string;
   // They weren't told who (an event Co doesn't run): never name them yet.
   anonymous?: boolean;
+  // Which offer this reply answers (services/inRoomOffers.ts). An additive offer is about no one yet: candidate_* are
+  // empty and candidate_ids holds who arrived, named only after their yes and the share gate (handleAdditiveReply).
+  kind?: "nudge" | "direct_ask" | "additive";
+  candidate_ids?: string[];
+  asked_at?: Date | null;
 };
 
 // Mirrors sendblue.ts's other pending-offer lookups exactly (same
@@ -76,6 +81,16 @@ const MATCH_NUDGE_REPLY_EXPIRY_DAYS = 7;
 // always resolves a reply against the candidate they were MOST RECENTLY
 // actually asked about, never a stale one from an earlier match.
 export async function findPendingMatchNudge(userId: string): Promise<PendingMatchNudge | null> {
+  // The offer they were asked most recently and haven't answered, per pair (services/inRoomOffers.ts).
+  const offer = await (await import("./inRoomOffers.js")).latestOpenOffer(userId).catch(() => null);
+  if (offer?.kind === "additive") {
+    return { event_id: offer.event_id, event_name: offer.event_name ?? "the event", candidate_id: "", candidate_first_name: "", candidate_phone: "", candidate_email: "", anonymous: true, kind: "additive", candidate_ids: offer.candidate_ids ?? [], asked_at: offer.opened_at };
+  }
+  if (offer?.candidate_id) {
+    const { rows: who } = await pool.query(`SELECT first_name, phone_number, email FROM users WHERE id = $1`, [offer.candidate_id]);
+    if (who[0]) return { event_id: offer.event_id, event_name: offer.event_name ?? "the event", candidate_id: offer.candidate_id, candidate_first_name: who[0].first_name, candidate_phone: who[0].phone_number, candidate_email: who[0].email, anonymous: false, kind: offer.kind, asked_at: offer.opened_at };
+  }
+  // Nudges from before the offers table (and anonymous heads-ups from the daily pick): the old per-person row.
   const { rows } = await pool.query(
     `SELECT n.event_id, n.candidate_id, n.anonymous, u.first_name AS candidate_first_name, u.phone_number AS candidate_phone, u.email AS candidate_email
      FROM event_guest_match_nudges n
@@ -125,6 +140,7 @@ export async function recordOptIn(
       [eventId, personId, candidateId, status],
     )
     .catch((err: any) => console.error("recordOptIn: insert failed (non-fatal):", err?.message ?? err));
+  await (await import("./inRoomOffers.js")).answerOffer(eventId, personId, candidateId, status === "interested" ? "yes" : "no").catch(() => {});
   await writeMemory(
     personId,
     "event_guest_match_optin",
@@ -170,7 +186,15 @@ async function maybeAskCandidateDirectly(
   candidate: MatchNudgeCandidate,
   asker: MatchNudgeCandidate,
 ): Promise<void> {
-  if (await hasPendingOrAnsweredNudge(eventId, candidate.user_id, asker.user_id)) return; // already asked (or already answered) from their own side
+  const O = await import("./inRoomOffers.js");
+  // Already asked (or already answered) about this person, from either path.
+  if ((await hasPendingOrAnsweredNudge(eventId, candidate.user_id, asker.user_id)) || (await O.offeredAbout(eventId, candidate.user_id, asker.user_id))) return;
+  // One yes-or-no about a person at a time: while they have another question open, this one waits and goes out once
+  // they've answered (sendNextQueued), so their "yes" can only ever mean one person.
+  if (await O.hasOpenOffer(candidate.user_id)) {
+    await O.queueOffer({ eventId, eventName, personId: candidate.user_id, candidateId: asker.user_id, askerId: asker.user_id });
+    return;
+  }
 
   // The message tells the candidate the asker wants an intro, so that has
   // to be on record first.
@@ -224,27 +248,12 @@ async function maybeAskCandidateDirectly(
     return;
   }
 
-  // UPSERT, not ON CONFLICT DO NOTHING (code review, 2026-09-17): the
-  // recipient can already have a row here for a DIFFERENT match (an earlier
-  // automatic scoring-pass nudge, or a direct ask about someone else) —
-  // event_guest_match_nudges is keyed (event_id, person_id), one row per
-  // person per event. DO NOTHING left that old candidate_id in place while
-  // the message just sent asked about a completely different person
-  // (`asker`), so a later "yes" reply resolved via findPendingMatchNudge
-  // recorded the opt-in against the WRONG candidate and could connect the
-  // wrong pair. hasPendingOrAnsweredNudge above already confirmed there's no
-  // row specifically about (event, candidate, asker), so it's always
-  // correct here to make the row reflect what they were just actually
-  // asked — findPendingMatchNudge then always resolves a reply against the
-  // most recent real ask.
-  await pool
-    .query(
-      `INSERT INTO event_guest_match_nudges (event_id, person_id, candidate_id, score)
-       VALUES ($1, $2, $3, $4)
-       ON CONFLICT (event_id, person_id) DO UPDATE SET candidate_id = EXCLUDED.candidate_id, score = EXCLUDED.score, sent_at = NOW()`,
-      [eventId, candidate.user_id, asker.user_id, 100],
-    )
-    .catch((err: any) => console.error("maybeAskCandidateDirectly: nudge-row upsert failed (non-fatal):", err?.message ?? err));
+  // Their open question is now this one, about the asker, as its own pair (services/inRoomOffers.ts). Their nudge row
+  // about someone else is left as it was: it used to be overwritten here, so a reply meant for that person bound to
+  // the asker instead.
+  await O.openOffer({ eventId, eventName, personId: candidate.user_id, kind: "direct_ask", candidateId: asker.user_id, askerId: asker.user_id }).catch((err: any) =>
+    console.error("maybeAskCandidateDirectly: opening the offer failed (non-fatal):", err?.message ?? err),
+  );
 }
 
 // The introduction itself (Royce, 2026-09-07). One email, both people as
@@ -368,13 +377,58 @@ export async function handleMatchNudgeReply(
     candidate.first_name,
     classification === "interested" ? "interested" : "declined",
   );
-  if (classification !== "interested") return;
-
-  if (await hasReciprocalOptIn(eventId, person.user_id, candidate.user_id)) {
-    // Both said yes: introduce them by email. There is deliberately no
-    // "text instead" option (see the note at the top of this file).
-    await sendIntroEmail(eventId, eventName, person, candidate);
-  } else {
-    await maybeAskCandidateDirectly(eventId, eventName, person.first_name, candidate, person);
+  if (classification === "interested") {
+    if (await hasReciprocalOptIn(eventId, person.user_id, candidate.user_id)) {
+      // Both said yes: introduce them by email. There is deliberately no
+      // "text instead" option (see the note at the top of this file).
+      await sendIntroEmail(eventId, eventName, person, candidate);
+    } else {
+      await maybeAskCandidateDirectly(eventId, eventName, person.first_name, candidate, person);
+    }
   }
+  // They've answered: a direct ask that was waiting on them can go now.
+  await sendNextQueued(person.user_id);
+}
+
+// The next direct ask that waited while they had another question open (services/inRoomOffers.ts).
+async function sendNextQueued(personId: string): Promise<void> {
+  const next = await (await import("./inRoomOffers.js")).nextQueued(personId).catch(() => null);
+  if (!next?.asker_id) return;
+  const { rows } = await pool.query(`SELECT id AS user_id, first_name, phone_number, email FROM users WHERE id = ANY($1::uuid[])`, [[personId, next.asker_id]]);
+  const me = rows.find((r: any) => r.user_id === personId);
+  const asker = rows.find((r: any) => r.user_id === next.asker_id);
+  if (me && asker) await maybeAskCandidateDirectly(next.event_id, next.event_name ?? "the event", asker.first_name, me, asker);
+}
+
+// Their answer to "more people just got here, want to hear who?" (eventScoring.ts maybeSendAdditiveOffer). A no closes
+// it. A yes names at most ONE of the people who arrived: still in the room (eventScoring.ts inRoomPool), ranked for them,
+// with a reason that passes the same share gate as a nudge. That person becomes their open question, so their next yes
+// is about them. Nobody passes: nobody is named. Never anything from Co's notes.
+export async function handleAdditiveReply(
+  eventId: string,
+  eventName: string,
+  classification: MatchNudgeReplyClassification,
+  person: MatchNudgeCandidate,
+  candidateIds: string[],
+): Promise<{ revealed: { first_name: string; shareReason: string } | null }> {
+  if (classification === "unrelated") return { revealed: null };
+  const O = await import("./inRoomOffers.js");
+  await O.answerOffer(eventId, person.user_id, "additive", classification === "interested" ? "yes" : "no");
+  if (classification !== "interested") {
+    await sendNextQueued(person.user_id);
+    return { revealed: null };
+  }
+  const [{ inRoomPool, MATCH_NUDGE_MIN_SCORE }, { rankingFor }, { gateShareReason }] = await Promise.all([import("./eventScoring.js"), import("./eventBrief.js"), import("../harness/matchGate.js")]);
+  const [room, ranking] = await Promise.all([inRoomPool(eventId).catch(() => []), rankingFor(eventId, person.user_id)]);
+  const here = new Map(room.map((g) => [g.user_id, g]));
+  const options = ranking.filter((r) => candidateIds.includes(r.candidate_id) && here.has(r.candidate_id) && r.shareReason && r.score >= MATCH_NUDGE_MIN_SCORE).sort((a, b) => b.score - a.score);
+  for (const r of options) {
+    if (!(await gateShareReason(person.user_id, r.candidate_id, r.shareReason, "eventGuestMatchHandoff.additiveReveal"))) continue;
+    const who = here.get(r.candidate_id)!;
+    await O.openOffer({ eventId, eventName, personId: person.user_id, kind: "nudge", candidateId: who.user_id });
+    await writeMemory(person.user_id, "event_guest_match_nudge", `Told ${person.first_name} that ${who.first_name} also got to "${eventName}" and is worth meeting: ${r.shareReason}`);
+    return { revealed: { first_name: who.first_name, shareReason: r.shareReason! } };
+  }
+  await sendNextQueued(person.user_id);
+  return { revealed: null };
 }
