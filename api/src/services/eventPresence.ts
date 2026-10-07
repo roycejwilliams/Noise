@@ -211,7 +211,8 @@ export async function eventMembers(eventId: string): Promise<{ user_id: string; 
       return rows;
     }
     const guests = (await getEventGuestList(eventId)).filter((g) => g.approval_status === "approved");
-    const phones = guests.map((g) => g.phone).filter((p): p is string => Boolean(p));
+    const { matchablePhone } = await import("../utils/phone.js");
+    const phones = [...new Set(guests.flatMap((g) => [g.phone, matchablePhone(g.phone)]).filter((p): p is string => Boolean(p)))];
     const emails = guests.map((g) => g.email?.toLowerCase()).filter((e): e is string => Boolean(e));
     if (!phones.length && !emails.length) return [];
     const { rows } = await pool.query(

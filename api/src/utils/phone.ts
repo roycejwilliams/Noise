@@ -11,3 +11,20 @@ export function normalizePhone(raw: string): string {
   const parsed = parsePhoneNumberFromString(raw, "US");
   return parsed?.isValid() ? parsed.number : raw;
 }
+
+// A phone number someone else's system gave us (a Luma guest row: "+1 (415) 555-0123", "415.555.0123",
+// "1 415 555 0123"), in the E.164 form users.phone_number is stored in, so a guest is matched however the number was
+// typed. normalizePhone first; when that can't validate it (fictional test ranges, odd spacing), the digits with a US
+// default. Nothing usable: null, never a guess.
+export function matchablePhone(raw: string | null | undefined): string | null {
+  const s = String(raw ?? "").trim();
+  if (!s) return null;
+  const n = normalizePhone(s);
+  if (n !== s && /^\+\d{8,15}$/.test(n)) return n;
+  const d = s.replace(/\D/g, "");
+  if (s.startsWith("+")) return d.length >= 8 && d.length <= 15 ? `+${d}` : null;
+  if (s.startsWith("00") && d.length >= 10) return `+${d.slice(2)}`;
+  if (d.length === 10) return `+1${d}`;
+  if (d.length === 11 && d.startsWith("1")) return `+${d}`;
+  return null;
+}

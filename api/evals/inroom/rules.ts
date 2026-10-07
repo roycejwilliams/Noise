@@ -59,6 +59,14 @@ finding(`share gate false positives: ${blocked.length}/${benign.length} ordinary
   check("share reason: a goal is never used", M.shareReasonFromOwnAsk([{ text: "be a better founder", type: "seeking", status: "active", kind: "goal" }]) === "");
 }
 
+// ------------------------------------------------------------ guest phone formats (Luma) -> stored E.164
+{
+  const { matchablePhone } = await import("../../src/utils/phone.js");
+  for (const f of ["+1 (415) 555-0142", "415-555-0142", "(415) 555 0142", "1 415 555 0142", "415.555.0142", "+14155550142", "001 415 555 0142"]) check(`phone: "${f}" matches +14155550142`, matchablePhone(f) === "+14155550142", matchablePhone(f));
+  check("phone: an international number keeps its own country code", matchablePhone("+44 20 7946 0958") === "+442079460958", matchablePhone("+44 20 7946 0958"));
+  check("phone: junk is no number, never a guess", matchablePhone("ext 12") === null && matchablePhone("") === null);
+}
+
 // ------------------------------------------------------------ event windows
 {
   const start = new Date(Date.now() - 2 * 3_600_000).toISOString();

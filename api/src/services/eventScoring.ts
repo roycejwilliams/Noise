@@ -2,6 +2,7 @@ import { anthropic } from "@ai-sdk/anthropic";
 import { generateText } from "ai";
 import { edgeHint, refreshRoom, roomEdges, type Edge } from "./peopleGraph.js";
 import pool from "../db/db.js";
+import { matchablePhone } from "../utils/phone.js";
 import { runEventAskSolicitationAgent } from "../agent/eventAskSolicitation.js";
 import { getEventDetails, getEventGuestList, listCalendarEvents, type LumaGuest, type LumaEventDetail } from "./luma.js";
 import { getActiveAsks, getActiveSeekingAsk, getGoalFrame, scoreAgainstStatedAsk } from "./matching.js";
@@ -74,7 +75,8 @@ export type RankedCandidate = {
 // matching Luma's own subscriber-webhook email, not comparing two
 // independently-typed addresses across systems the way this does).
 export async function matchGuestsToUsers(guests: LumaGuest[]): Promise<ScorableGuest[]> {
-  const phones = guests.map((g) => g.phone).filter((p): p is string => Boolean(p));
+  // Luma's phone as the guest typed it, put in the stored E.164 form (utils/phone.ts matchablePhone).
+  const phones = [...new Set(guests.flatMap((g) => [g.phone, matchablePhone(g.phone)]).filter((p): p is string => Boolean(p)))];
   const emails = guests.map((g) => g.email?.toLowerCase()).filter((e): e is string => Boolean(e));
   if (!phones.length && !emails.length) return [];
 
