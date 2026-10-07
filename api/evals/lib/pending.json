@@ -1,8 +1,4 @@
 {
   "_": "Zero-token suites that are red by design while open findings remain (Royce, 2026-10-07). They stay out of layer1.json so they don't block pushes; move each file into layer1.json the day it is green. evals/lib/rules.ts exempts only these from the layer-1 and meter rules.",
-  "files": [
-    "evals/inroom/flow.ts",
-    "evals/inroom/rules.ts",
-    "evals/inroom/world.ts"
-  ]
+  "files": []
 }

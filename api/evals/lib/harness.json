@@ -13,6 +13,7 @@
   "evals/.next-live-1001/suite-tiers.ts",
   "evals/.next-live-1001/suites.ts",
   "evals/companion/_thread.ts",
+  "evals/inroom/world.ts",
   "evals/jev/cases.ts",
   "evals/mo/xKeys.ts",
   "evals/replay/cases.ts",

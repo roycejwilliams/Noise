@@ -271,10 +271,11 @@ async function sendIntroEmail(eventId: string, eventName: string, a: MatchNudgeC
 
   const subject = `Introducing ${a.first_name} and ${b.first_name}`;
   const html = galleryEmail({
-    preview: `Before ${eventName}: Co thinks you two should meet.`,
+    preview: `From ${eventName}: Co thinks you two should meet.`,
     eyebrow: "An introduction",
     headline: `${a.first_name}, meet ${b.first_name}.`,
-    body: [`You're both going to ${eventName}, and Co figured you two should actually meet before it. Consider this your introduction.`],
+    // Sent once both say yes: in the room, or after it. Never "before it".
+    body: [`You were both at ${eventName}, and Co thought you two should meet. Consider this your introduction.`],
     close: "You both said yes. Take it from here.",
   });
   if (!ALLOW_REAL_SENDS) {

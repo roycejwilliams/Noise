@@ -466,7 +466,7 @@ function shareLabel(askText: string, line: string): string {
   return shared.length === 1 ? shared[0].label : "";
 }
 
-function anthropic(init: any): Response {
+function fakeAnthropic(init: any): Response {
   const prompt = promptOf(init);
   if (prompt.startsWith("Someone wants to be connected with people who match this:")) {
     W.llmCalls.push({ kind: "score", prompt });
@@ -545,7 +545,7 @@ function luma(url: URL): Response {
 const realFetch = globalThis.fetch;
 globalThis.fetch = (async (input: any, init?: any) => {
   const url = new URL(typeof input === "string" ? input : input instanceof URL ? input.href : input?.url ?? String(input));
-  if (url.host === "api.anthropic.com") return anthropic(init);
+  if (url.host === "api.anthropic.com") return fakeAnthropic(init);
   if (url.host === "api.openai.com") {
     const b = JSON.parse(init?.body ?? "{}");
     const inputs = Array.isArray(b.input) ? b.input : [b.input ?? ""];

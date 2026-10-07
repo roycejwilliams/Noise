@@ -5,7 +5,7 @@ import pool from "../db/db.js";
 import { matchablePhone } from "../utils/phone.js";
 import { runEventAskSolicitationAgent } from "../agent/eventAskSolicitation.js";
 import { getEventDetails, getEventGuestList, listCalendarEvents, type LumaGuest, type LumaEventDetail } from "./luma.js";
-import { getActiveAsks, getActiveSeekingAsk, getGoalFrame, scoreAgainstStatedAsk } from "./matching.js";
+import { getActiveAsks, getActiveOfferingAsk, getActiveSeekingAsk, getGoalFrame, scoreAgainstStatedAsk } from "./matching.js";
 import { goalTexts } from "./goalJourney.js";
 import { detectAndScheduleCheckins } from "./eventCheckinFollowUp.js";
 import { scheduleUnmatchedFollowUp } from "./eventUnmatchedFollowUp.js";
@@ -655,6 +655,14 @@ Draft a short, warm, low-pressure text (1-2 sentences, no em dashes, normal sent
 // (runEventAskSolicitationAgent), and they become scoreable once/if that
 // lands (their reply flows through the existing captureIntent pipeline, same
 // as any other stated ask).
+// A fair, fixed tiebreak between two equally strong candidates for this person: never guest-list order (whoever registered
+// first won every tie), and the same answer on every pass.
+export function pairOrder(personId: string, candidateId: string): number {
+  let h = 2166136261;
+  for (const ch of `${personId}|${candidateId}`) h = Math.imul(h ^ ch.charCodeAt(0), 16777619) >>> 0;
+  return h;
+}
+
 export async function scoreMatchedGroup(
   eventId: string,
   eventName: string,
@@ -680,8 +688,9 @@ export async function scoreMatchedGroup(
   for (const person of matched) {
     const others = matched.filter((m) => m.user_id !== person.user_id);
     // Goals are the frame for who is worth meeting; asks write the specific reason (a candidate's own ask is the share reason). Someone with only
-    // goals is scored against them instead of being asked what they want from the room.
-    const ask = getActiveSeekingAsk(person.intent) ?? getGoalFrame(person.intent);
+    // goals is scored against them instead of being asked what they want from the room. Someone with only an OFFERING ("climate
+    // hardware founders to back at seed") is scored against it too (2026-10-07): it names who they're there for.
+    const ask = getActiveSeekingAsk(person.intent) ?? getGoalFrame(person.intent) ?? getActiveOfferingAsk(person.intent);
 
     if (!ask?.text) {
       if (await wasRecentlySolicited(eventId, person.user_id)) {
@@ -736,7 +745,7 @@ export async function scoreMatchedGroup(
           graph: e ? { score: e.score, want: e.want, offer: e.offer, mutual: e.mutual } : null,
         };
       })
-      .sort((a, b) => b.score - a.score);
+      .sort((a, b) => b.score - a.score || Number(b.mutual) - Number(a.mutual) || pairOrder(person.user_id, a.candidate_id) - pairOrder(person.user_id, b.candidate_id));
 
     // Read BEFORE storeRanking overwrites the row — this is the diff basis
     // for the additive-offer path below.
@@ -748,9 +757,20 @@ export async function scoreMatchedGroup(
     const top = ranked[0];
     const topCandidate = top ? others.find((o) => o.user_id === top.candidate_id) : undefined;
     if (top && topCandidate && !alreadyNudged) {
-      await maybeSendMatchNudge(eventId, eventName, person, top, topCandidate, eventTiming, opts).catch((err: any) =>
-        console.error(`eventScoring: maybeSendMatchNudge failed for ${person.user_id} (non-fatal):`, err?.message ?? err),
-      );
+      // Down the ranking (2026-10-07): when the strongest match can't be described (no shareable ask, or the share gate
+      // says no), the next strong one is tried, up to five. Only while a live send is actually possible right now; otherwise
+      // the top one alone goes through the usual path (and its window/queue rules).
+      const live = !!eventTiming && checkEventWindow(eventTiming, new Date()).pass && (await inRoomSendAllowed(person.user_id, eventId));
+      const tries = live ? ranked.filter((r) => r.score >= MATCH_NUDGE_MIN_SCORE || opts.honestLowConfidence).slice(0, 5) : [top];
+      for (const r of tries) {
+        const cand = others.find((o) => o.user_id === r.candidate_id);
+        if (!cand || (live && !r.shareReason)) continue;
+        const sent = await maybeSendMatchNudge(eventId, eventName, person, r, cand, eventTiming, opts).catch((err: any) => {
+          console.error(`eventScoring: maybeSendMatchNudge failed for ${person.user_id} (non-fatal):`, err?.message ?? err);
+          return false;
+        });
+        if (sent || (await wasAlreadyNudgedForMatch(eventId, person.user_id))) break;
+      }
     } else if (alreadyNudged) {
       // Never silently swap or replace an existing match (Royce, 2026-09-10)
       // — anyone newly qualifying who wasn't in the previous pass's ranking

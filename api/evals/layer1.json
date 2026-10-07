@@ -103,6 +103,8 @@
     "evals/docs/googleDocs.ts",
     "evals/docs/memberFiles.ts",
     "evals/mo/memberGate.ts",
-    "evals/presence/readoutFlow.ts"
+    "evals/presence/readoutFlow.ts",
+    "evals/inroom/rules.ts",
+    "evals/inroom/flow.ts"
   ]
 }
