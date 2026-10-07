@@ -64,6 +64,9 @@ export function EMAIL_ASK_TEST(text: string): boolean {
 }
 export const EMAIL_ASK = { test: EMAIL_ASK_TEST };
 
+// They asked for a Google Doc (or for it in their Drive), in their own words.
+export const GOOGLE_DOC_ASK = /\bgoogle\s*docs?\b|\bgoogle\s*drive\b|\bgdocs?\b|\b(?:in|to) (?:my )?(?:google )?drive\b/i;
+
 export function mailtoLink(to: string, subject: string, body: string): string {
   return `mailto:${to}?subject=${encodeURIComponent(subject)}&body=${encodeURIComponent(body)}`;
 }
@@ -529,6 +532,7 @@ export function loopTools(
           .max(10)
           .describe("Each a heading, a sentence or two of framing, then the points as short bullets: scannable, not dense paragraphs. ONLY what they said, in their words; your own ideas go in suggestions, never here."),
         suggestions: z.array(z.string()).max(5).optional().describe("Anything of your own: an idea, an option, a recommendation. It appears on the page marked as Co's suggestions, apart from their points. Leave it out when you have none."),
+        saveTo: z.enum(["pdf", "google_doc", "both"]).optional().describe("Leave this out: it comes as a PDF in this conversation. Only when they ask for a Google Doc in their own words set google_doc (or both, if they want the PDF too)."),
       }),
       execute: async (input) => {
         const { resolveDocument, documentProblems } = await import("../services/documentSheet.js");
@@ -552,18 +556,41 @@ export function loopTools(
         const { rows } = await pool.query(`SELECT first_name FROM users WHERE id = $1`, [ctx.userId]).catch(() => ({ rows: [] as any[] }));
         const city = ctx.turn?.profile?.city ?? null;
         const zone = city ? await import("../services/geocoding.js").then((g) => g.getTimezoneForCity(city)).catch(() => null) : null;
-        const sent = await deliverDocument(doc, { userId: ctx.userId, firstName: String(rows[0]?.first_name ?? ctx.firstName ?? ""), phone: ctx.phoneNumber, zone });
-        if (!sent.ok) {
-          notDone(`No document sent: ${sent.why}.`);
-          return { ok: false, error: `${sent.why}. Say so plainly and give them the points in a text instead.` };
+        const to = { userId: ctx.userId, firstName: String(rows[0]?.first_name ?? ctx.firstName ?? ""), phone: ctx.phoneNumber, zone };
+        // A Google Doc only when they asked for one in their own words (code checks the words, not Co's say-so); otherwise the PDF.
+        // Not connected (or Docs not allowed): the PDF goes instead, and Co offers to connect Google.
+        const wantsGoogle = (input.saveTo === "google_doc" || input.saveTo === "both") && GOOGLE_DOC_ASK.test(theirWords());
+        const targets: ("pdf_text" | "google_docs")[] = wantsGoogle ? (input.saveTo === "both" ? ["google_docs", "pdf_text"] : ["google_docs"]) : ["pdf_text"];
+        const results: Awaited<ReturnType<typeof deliverDocument>>[] = [];
+        let googleMissing = false;
+        for (const target of targets) {
+          const r = await deliverDocument(doc, to, target);
+          results.push(r);
+          if (!r.ok && target === "google_docs" && r.notConnected) {
+            googleMissing = true;
+            if (!targets.includes("pdf_text")) results.push(await deliverDocument(doc, to, "pdf_text"));
+          }
         }
+        const sentOk = results.filter((r): r is Extract<typeof r, { ok: true }> => r.ok);
+        if (!sentOk.length) {
+          const why = results.map((r) => (r.ok ? "" : r.why)).filter(Boolean).join("; ");
+          notDone(`No document sent: ${why}.`);
+          return { ok: false, error: `${why}. Say so plainly and give them the points in a text instead.` };
+        }
+        const sent = { ok: true as const, via: sentOk.map((r) => r.via).join("+"), link: sentOk.find((r) => r.link)?.link ?? null };
         await logDeliveredPlan(`Co replied: [sent a document: ${doc.title}]`);
         state.sentMessages.push(`[sent a document: ${doc.title}]`);
         await recordDocumentWritten(ctx.userId, doc.title).catch(() => {});
         await recordDecision({ layer: 3, decision: "loop.writeDocument", userId: ctx.userId, outcome: "act", action: doc.title, proposal: { sections: doc.sections.length, via: sent.via } }).catch(() => {});
-        ctx.facts?.add("did_this_turn", `Sent them a document, "${doc.title}", as a PDF in this conversation (${doc.sections.length} sections).`);
+        const asPdf = sentOk.some((r) => r.via === "pdf_text");
+        const asDoc = sentOk.some((r) => r.via === "google_docs");
+        ctx.facts?.add("did_this_turn", `Sent them a document, "${doc.title}" (${doc.sections.length} sections)${asDoc ? `, as a Google Doc in their own Drive (link texted: ${sent.link})` : ""}${asDoc && asPdf ? " and" : ""}${asPdf ? " as a PDF in this conversation" : ""}.`);
         await remember({ next: `document sent: ${doc.title}` });
-        return { ok: true, via: sent.via, note: "The PDF is in this conversation. Say in one line what it covers and that you'll change anything they want; don't repeat its contents." };
+        return {
+          ok: true,
+          via: sent.via,
+          note: `${asDoc ? "The Google Doc is in their Drive and its link is in this conversation. " : ""}${asPdf ? "The PDF is in this conversation. " : ""}${googleMissing ? "Their Google isn't connected with Docs allowed, so it went as a PDF: say so in a line and offer to send the link to connect Google (googleConnection). " : ""}Say in one line what it covers and that you'll change anything they want; don't repeat its contents.`,
+        };
       },
     }),
 

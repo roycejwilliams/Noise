@@ -93,7 +93,7 @@ check("filename: a long title is cut, an empty one still has a name", D.docFilen
   check("delivery: Chrome unavailable is a plain failure, nothing sent", (await X.deliverDocument(doc, to, "pdf_text", mk({ pdf: null }))).ok === false);
   const before = sent.length;
   check("delivery: a send that throws is a plain failure", (await X.deliverDocument(doc, to, "pdf_text", mk({ throws: true }))).ok === false && sent.length === before + 1);
-  check("the delivery seam: one target now, and a Google Docs step is one more entry (no other code moves)", Object.keys(X.DELIVERERS).join() === "pdf_text" && /google_docs/.test(src("services/documentDelivery.ts")));
+  check("the delivery seam: the PDF and (phase 2) the Google Doc", Object.keys(X.DELIVERERS).sort().join() === "google_docs,pdf_text");
   check("it uses the plan's own headless-Chrome render and file cache, not a new path", /import \{ renderPdf \} from "\.\/browserRead\.js"/.test(src("services/documentDelivery.ts")) && /cachePlanFile/.test(src("services/documentDelivery.ts")));
   check("what a document may rest on is their own words: never Co's lines", /memory_type = 'call_transcript'/.test(src("services/documentDelivery.ts")) && /content LIKE 'User said:%'/.test(src("services/documentDelivery.ts")) && !/co_reply|'assistant'/.test(src("services/documentDelivery.ts").split("loadTheirWords")[1] ?? ""));
 }
@@ -139,7 +139,7 @@ const GUIDE = "seeking guidance on how to split the cofounder roles with Jacquel
   const o = Cap.ABILITIES.find((a) => a.id === "offer_document")!;
   check("registry: writeDocument needs their own yes, once a turn, three a day", w.tool === "writeDocument" && w.confirm === "their_yes" && w.limits?.perTurn === 1 && w.limits?.perDay === 3);
   check("registry: offerDocument once a turn, once a day, no yes needed (it only offers)", o.tool === "offerDocument" && o.limits?.perTurn === 1 && o.limits?.perDay === 1 && !o.confirm);
-  check("registry: Co is told what it can't do (no sheets, slides, Google Docs, nothing sent to others)", /can't make spreadsheets, slides or Google Docs/.test(w.can) && /only to them|goes only to them/.test(w.can));
+  check("registry: Co is told what it can't do (no sheets or slides, nothing sent to others)", /can't make spreadsheets or slides/.test(w.can) && /only to them|goes only to them/.test(w.can));
   check("registry: the use text says to build from what they said and not to invent", /Don't invent a place, name, number, date or event/.test(w.use ?? "") && /what THEY said/.test(w.use ?? ""));
   const calls: string[] = [];
   const tools: any = { writeDocument: { inputSchema: (await import("zod")).z.object({}), execute: async () => { calls.push("write"); return { ok: true }; } }, offerDocument: { inputSchema: (await import("zod")).z.object({}), execute: async () => { calls.push("offer"); return { ok: true }; } } };

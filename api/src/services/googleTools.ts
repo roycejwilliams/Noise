@@ -27,7 +27,7 @@ export function googleTools(ctx: Ctx, notDone: (text: string) => void) {
         }
         if (action === "status") {
           const c = await isConnected(ctx.userId);
-          ctx.facts?.add("known", c.connected ? "Their Google is connected (read-only: calendar busy times, and which sent emails await a reply)." : "Their Google isn't connected.");
+          ctx.facts?.add("known", c.connected ? "Their Google is connected (read-only: calendar busy times, and which sent emails await a reply; and Google Docs Co creates for them, if they allowed Docs)." : "Their Google isn't connected.");
           return { ok: true, connected: c.connected };
         }
         if (action === "disconnect") {
@@ -49,7 +49,7 @@ export function googleTools(ctx: Ctx, notDone: (text: string) => void) {
           notDone("The Google connect link didn't send.");
           return { ok: false, error: "The link didn't go through." };
         }
-        ctx.facts?.add("did_this_turn", "Sent them a one-time link (good for 15 minutes) to connect Google: read-only calendar busy times and which sent emails await a reply. Co never sends email or changes their calendar.");
+        ctx.facts?.add("did_this_turn", "Sent them a one-time link (good for 15 minutes) to connect Google: read-only calendar busy times and which sent emails await a reply, and saving documents they ask for as Google Docs in their Drive (Co sees only the files it creates). Co never sends email or changes their calendar.");
         return { ok: true, note: "Sent the link as its own text. Tell them what Co will and won't see, in a sentence." };
       },
     }),
