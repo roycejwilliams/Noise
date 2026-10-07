@@ -34,14 +34,16 @@ const c = (ok: boolean, label: string) => cases.push([ok, label]);
 }
 
 // ---------------------------------------------------------------------------
-// The end-of-event pass fires near the end of the event, not hours later —
-// same cutoff maybeSendMatchNudge itself stops sending real matches at, so
-// this never arrives before Co would've had one more real chance to match
-// them, and never so late it reads as a next-day afterthought.
+// The end-of-event pass fires near the end of the event, not hours later.
+// Since 2026-10-07 it is due a little before the cutoff where
+// maybeSendMatchNudge stops sending (the cutoff + one cron period +
+// delivery), so its own pair nudges can still go out, and never so late it
+// reads as a next-day afterthought.
 {
   const followUp = readFileSync(new URL("../../src/services/eventUnmatchedFollowUp.ts", import.meta.url), "utf8");
   c(/MATCH_NUDGE_END_CUTOFF_MINUTES/.test(followUp), "scheduling reuses the same end-cutoff constant as the real match nudge");
-  c(/new Date\(eventTiming\.end_at\)\.getTime\(\) - MATCH_NUDGE_END_CUTOFF_MINUTES \* 60_000/.test(followUp), "the send time is end_at minus the cutoff, not end_at plus hours");
+  // 2026-10-07: due a full cron period plus delivery time BEFORE the cutoff, so its pair nudges can still send.
+  c(/new Date\(eventTiming\.end_at\)\.getTime\(\) - UNMATCHED_SEND_BEFORE_END_MINUTES \* 60_000/.test(followUp) && /UNMATCHED_SEND_BEFORE_END_MINUTES = MATCH_NUDGE_END_CUTOFF_MINUTES \+ UNMATCHED_CRON_MINUTES \+ \d+/.test(followUp), "the send time is end_at minus (the cutoff + a cron period + delivery), not end_at plus hours");
   c(!/CHECKIN_FOLLOWUP_DELAY_HOURS/.test(followUp), "this isn't the +3h debrief cadence — it's meant to still read as during the event");
 }
 
