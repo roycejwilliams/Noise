@@ -1,0 +1,122 @@
+// In-room matching, pure rules (analysis/in-room-matching, 2026-10-07). No DB, no network, no model.
+//
+//   npx tsx evals/inroom/rules.ts
+import "../testEnv.js";
+import { check, finding, results } from "./world.js";
+
+const G = await import("../../src/harness/matchGate.js");
+const C = await import("../../src/harness/introConsent.js");
+const B = await import("../../src/services/eventBrief.js");
+const MS = await import("../../src/services/memberSafeMemories.js");
+const M = await import("../../src/services/matching.js");
+const WK = await import("../../src/services/eventWalkinCheckin.js");
+const PA = await import("../../src/services/preArrival.js");
+
+// ------------------------------------------------------------ the share-reason gate on sensitive asks
+// The share reason is "what they've said they're looking for: <their ask>". Which private asks get through?
+const sensitiveAsks: [string, boolean][] = [
+  // [ask, blocked today?] -- only the first two words-lists in SENSITIVE catch anything
+  ["a therapist who works with founders", true],
+  ["help with my anxiety before pitches", true],
+  ["a new job since my startup is running out of money", false],
+  ["a lawyer for my custody case", false],
+  ["a good immigration lawyer for my H-1B transfer", false],
+  ["a sober community in SF", false],
+  ["a psychiatrist who takes my insurance", false],
+  ["fertility clinic recommendations", false],
+  ["a bankruptcy attorney", false],
+  ["people who have been through cancer treatment", false],
+  ["a couples counselor", false],
+  ["roommates since I got evicted", false],
+  ["a recruiter, I'm interviewing quietly while still employed", false],
+  ["an ADHD coach", false],
+];
+let leaky = 0;
+for (const [a, blockedToday] of sensitiveAsks) {
+  const reason = M.shareReasonFromOwnAsk([{ text: a, type: "seeking", status: "active", kind: "ask" }]);
+  const r = G.checkShareReason({ shareReason: reason, candidateStatedAsks: [a], candidatePrivateTexts: [], alreadySuggestedOrDeclined: false, askerActive: true, candidateActive: true });
+  if (blockedToday) check(`share gate blocks "${a}"`, !r.pass);
+  else if (r.pass) leaky++;
+}
+finding(`share gate: ${leaky} of ${sensitiveAsks.filter(([, b]) => !b).length} clearly private asks (custody, H-1B, sober, psychiatrist, fertility, bankruptcy, cancer, eviction, secret job search...) pass and would be quoted verbatim to another member`, leaky >= 10, { leaky });
+
+// False positives: ordinary professional asks blocked by substring matches.
+const benign = ["a health-tech cofounder", "an engineering manager to hire", "equity crowdfunding advice", "someone who knows the Visa partner program", "a quite technical PM"];
+const blocked = benign.filter((a) => !G.checkShareReason({ shareReason: M.shareReasonFromOwnAsk([{ text: a, type: "seeking", status: "active", kind: "ask" }]), candidateStatedAsks: [a], candidatePrivateTexts: [], alreadySuggestedOrDeclined: false, askerActive: true, candidateActive: true }).pass);
+finding(`share gate false positives: ${blocked.length}/${benign.length} ordinary professional asks are blocked by substring matches (${blocked.join("; ")})`, blocked.length >= 4, blocked);
+
+// The shareReason is the NEWEST open ask, whichever ask the scorer actually matched on.
+{
+  const intent = [
+    { text: "seed checks for consumer founders", type: "offering", status: "active", kind: "ask" },
+    { text: "a pediatric dentist for my kid", type: "seeking", status: "active", kind: "ask" },
+  ];
+  finding("share reason: built from the newest open ask (here a dentist errand), not the ask that made the match (seed checks)", /pediatric dentist/.test(M.shareReasonFromOwnAsk(intent)), M.shareReasonFromOwnAsk(intent));
+  check("share reason: a closed ask is never used", M.shareReasonFromOwnAsk([{ text: "old ask", type: "seeking", status: "resolved", kind: "ask" }]) === "");
+  check("share reason: a goal is never used", M.shareReasonFromOwnAsk([{ text: "be a better founder", type: "seeking", status: "active", kind: "goal" }]) === "");
+}
+
+// ------------------------------------------------------------ event windows
+{
+  const start = new Date(Date.now() - 2 * 3_600_000).toISOString();
+  const end = new Date(Date.now() + 3_600_000).toISOString();
+  const t = { start_at: start, end_at: end };
+  check("window: open mid-event", C.checkEventWindow(t, new Date()).pass);
+  check("window: closed before start", !C.checkEventWindow(t, new Date(Date.parse(start) - 60_000)).pass);
+  check("window: closed in the last 30 minutes", !C.checkEventWindow(t, new Date(Date.parse(end) - 29 * 60_000)).pass);
+  // The unmatched pass is scheduled at end - MATCH_NUDGE_END_CUTOFF_MINUTES and runs on a 15-minute cron AFTER that.
+  const sendAt = new Date(Date.parse(end) - C.MATCH_NUDGE_END_CUTOFF_MINUTES * 60_000);
+  const firstCronTick = new Date(sendAt.getTime() + 1);
+  finding("window: at (or after) the unmatched pass's send_at, checkEventWindow already refuses, so its pair nudges can't send", !C.checkEventWindow(t, firstCronTick).pass);
+  check("window: absolute instants, so a time zone can't shift it", C.checkEventWindow({ start_at: "2026-11-01T01:00:00-07:00", end_at: "2026-11-01T04:00:00-08:00" }, new Date("2026-11-01T09:00:00Z")).pass);
+  finding("window: no end_at means no end at all (open for days)", C.checkEventWindow({ start_at: new Date(Date.now() - 5 * 86_400_000).toISOString(), end_at: null }, new Date()).pass);
+  check("window: no timing on a 'requireTiming' check fails closed", !C.checkEventWindow(null, new Date(), { requireTiming: true }).pass);
+  finding("window: the live nudge path calls checkEventWindow WITHOUT requireTiming, so missing timing falls to the no-timing (queued anonymous) branch", !C.checkEventWindow(null, new Date()).pass === false);
+}
+
+// ------------------------------------------------------------ walk-in check-in window and matching
+{
+  const ev = { start_at: new Date(Date.now() + 2 * 3_600_000).toISOString(), end_at: null };
+  check("walk-in: opens 3h before the start", WK.isCheckinOpen(ev, new Date()));
+  check("walk-in: not 4h before", !WK.isCheckinOpen({ start_at: new Date(Date.now() + 4 * 3_600_000).toISOString(), end_at: null }, new Date()));
+}
+
+// ------------------------------------------------------------ what memory carries across
+{
+  const additive = `Additive offer sent to Jordan at "Co Night": 2 new candidate(s) checked in since their last match (Noor, Sarah Hao)`;
+  finding("memory: an additive-offer record (names never told to the member) survives memberSafe whole", MS.safeMemory("event_guest_match_nudge", additive, ["Ellis"]) === additive);
+  const nudge = `Nudged Jordan that Ellis is also going to "Co Night" and worth meeting: what they've said they're looking for: "a growth stage startup to join" (score 88)`;
+  check("memory: the nudge record carries only what the member was already told (name + shared ask)", MS.safeMemory("event_guest_match_nudge", nudge, ["Ellis"]) === nudge);
+  finding("memory: the nudge record also carries the internal score ('score 88') into the member's reply context", /score 88/.test(MS.introFacts([{ memory_type: "event_guest_match_nudge", content: nudge }]).join(" ")));
+  const recap = `Co replied: Ellis is building grid storage and left Tesla, worth a chat.`;
+  check("memory: Co's own line about a linked member is cut to a history line", !/Tesla/.test(MS.safeMemory("text_exchange", recap, ["Ellis"]) ?? ""));
+  finding("memory: but a member who was only in an ADDITIVE offer is not 'linked' (no nudge row), so Co's own lines about them are not cut", !/Tesla/.test(MS.safeMemory("text_exchange", `Co replied: Noor left Tesla.`, ["Ellis"]) ?? "") === false);
+}
+
+// ------------------------------------------------------------ brief naming with stale rankings
+{
+  const members = [{ user_id: "a", first_name: "Jordan" }, { user_id: "b", first_name: "Ellis" }];
+  // Ellis's ask closed after the ranking was stored; the stored shareReason still carries it.
+  const ranked = [{ candidate_id: "b", score: 80, reason: "", shareReason: `what they've said they're looking for: "a buyer for my company"`, mutual: false, method: "ask" as const }];
+  const r = B.pickNamed({ ranked, recipientId: "a", members, nameOk: new Set(["b"]), notGoing: new Set() });
+  finding("brief: a stored ranking's shareReason is reused as-is; an ask Ellis has since closed ('a buyer for my company') can still be named in the brief", r.picks[0]?.reason.includes("a buyer for my company"));
+  check("brief: no name without the RSVP yes", B.pickNamed({ ranked, recipientId: "a", members, nameOk: new Set(), notGoing: new Set() }).picks.length === 0);
+  check("brief: a shared first name is never named", B.pickNamed({ ranked, recipientId: "a", members: [...members, { user_id: "c", first_name: "Ellis" }], nameOk: new Set(["b"]), notGoing: new Set() }).picks.length === 0);
+  check("brief: a name with an accent is still caught as an outsider", B.namesOutsiders("Find Zoë tonight", [{ user_id: "z", first_name: "Zoë" }], new Set(), "a") === "Zoë");
+  finding("brief: a 1-letter or initial-only first name ('J') is never caught as an outsider", B.namesOutsiders("Find J. by the bar", [{ user_id: "j", first_name: "J" }], new Set(), "a") === null);
+}
+
+// ------------------------------------------------------------ pre-arrival never names
+check("pre-arrival: catches a guest's name", PA.namesAnyone("Noor will be there", ["Noor"]) === "Noor");
+finding("pre-arrival: names under 3 letters ('Al', 'Bo', 'Jo') are never checked", PA.namesAnyone("Look for Jo by the door", ["Jo"]) === null);
+
+// ------------------------------------------------------------ consent checks on nudge wording
+const facts = { otherFirstName: "Ellis", otherOptedIn: false, recipientOptedIn: false, recipientFirstName: "Jordan", otherStatedAsks: ["a growth stage startup to join"] };
+check("consent: 'Ellis wants to meet you' blocked", !C.checkInterestClaim("Ellis wants to meet you tonight.", facts).pass);
+check("consent: 'Ellis mentioned you' blocked", !C.checkInterestClaim("Ellis mentioned you earlier.", facts).pass);
+check("consent: Co's own suggestion passes", C.checkInterestClaim("Ellis is here and is looking for a growth stage startup to join, worth a hello.", facts).pass);
+check("consent: contact details blocked before both yes", !C.checkContactDetails("Text Ellis at 415-555-0123", { ...facts, otherPhone: "+14155550123" }).pass);
+finding("consent: 'Ellis is dying to talk to you' is not caught by the pattern check (left to the model read)", C.checkInterestClaim("Ellis is dying to talk to you.", facts).pass);
+
+console.log(`\nin-room rules: ${results.total - results.failed}/${results.total} passed (${results.findings.length} open findings, ${results.failed - results.findings.length} other failures)`);
+process.exit(results.failed ? 1 : 0);
