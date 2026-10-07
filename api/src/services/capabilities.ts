@@ -480,9 +480,10 @@ const SITUATIONAL: Record<string, keyof Situation> = {
 export function situationFor(o: { kitFields: number; message: string; openTasks: number; eventToday: boolean }): Situation {
   return { kit: o.kitFields > 0 || /\b(apply|applying|application|form|linkedin|resume|cv|intro|introduce|submit|sign up|signup)\b/i.test(o.message), tasks: o.openTasks > 0, eventToday: o.eventToday };
 }
-// Member-facing Mo (mo/memberFlow.ts) is off unless both switches are on: until then members are never told it exists.
+// Member-facing Mo (mo/memberFlow.ts) exists for members only when it can work: Mo is on (MO_ENABLED) and Co's X send keys
+// are set (the same keys as mo/xApi.ts xWriteConfigured). Until then members are never told it exists.
 export function memberMoOn(env: NodeJS.ProcessEnv = process.env): boolean {
-  return env.MO_MEMBER_ENABLED === "true" && env.MO_ENABLED === "true";
+  return env.MO_ENABLED === "true" && Boolean(env.X_MO_CONSUMER_KEY && env.X_MO_CONSUMER_SECRET && env.X_MO_ACCESS_TOKEN && env.X_MO_ACCESS_SECRET && env.X_MO_USER_ID);
 }
 export const isMemberMoAbility = (a: { id: string }) => a.id.startsWith("mo_member_");
 export function memberMoTools(): string[] {

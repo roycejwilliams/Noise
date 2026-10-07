@@ -375,8 +375,9 @@ const optYes = (o: any = {}): Handler[] => [
 
 // ---- the tools Co chooses: the model picks the tool, code decides (through the real tool guard)
 {
-  const was = [process.env.MO_MEMBER_ENABLED, process.env.MO_ENABLED];
-  process.env.MO_MEMBER_ENABLED = "true"; process.env.MO_ENABLED = "true";
+  const { setXKeys, xKeysOn } = await import("./xKeys.js");
+  const was = [xKeysOn() ? "on" : "off", process.env.MO_ENABLED] as const;
+  setXKeys("on"); process.env.MO_ENABLED = "true";
   const { createConversationTools } = await import("../../src/agent/conversationTools.js");
   const make = (content: string) => {
     const notDone: string[] = [];
@@ -417,7 +418,7 @@ const optYes = (o: any = {}): Handler[] => [
   const irrelevant = make("sure, whatever works for dinner");
   const ri = await irrelevant.tools.answerMoOptIn.execute({ answer: "yes", why: "test", theirYes: "sure" }, {});
   check("the tool: a stray 'sure' to an unrelated question can't opt a member in once the offer is answered or stale (no open question: nothing recorded)", ri.ok === true || ri.ok === false); // see the opt-in tests above for the stale and answered cases
-  if (was[0] === undefined) delete process.env.MO_MEMBER_ENABLED; else process.env.MO_MEMBER_ENABLED = was[0];
+  setXKeys(was[0]);
   if (was[1] === undefined) delete process.env.MO_ENABLED; else process.env.MO_ENABLED = was[1];
 }
 

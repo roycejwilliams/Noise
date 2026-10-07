@@ -24,7 +24,7 @@ export const moRuntime: ExtensionRuntime = {
     { name: "mo outreach", cron: "20 * * * *", run: () => runMoOutreach() },
     // Replies in Co's X DMs.
     { name: "mo inbox", cron: "7,22,37,52 * * * *", run: runMoInbox },
-    // Member-facing Mo (mo/memberJobs.ts): each is a no-op unless MO_MEMBER_ENABLED=true as well.
+    // Member-facing Mo (mo/memberJobs.ts): each is a no-op until Co's X send keys are set as well.
     { name: "mo member offers", cron: "15 10 * * *", timezone: PT, run: runMemberOffers },
     { name: "mo member hunts", cron: "0 10 * * 1", timezone: PT, run: runMemberHunts },
     { name: "mo member outreach", cron: "40 * * * *", run: runMemberOutreach },

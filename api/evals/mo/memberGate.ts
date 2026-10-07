@@ -1,11 +1,12 @@
-// Member-facing Mo is off by default, and the switch really gates it: every entry point (the three jobs, the tools Co is
+// Member-facing Mo is off until it can work (MO_ENABLED and Co's X send keys), and that really gates it: every entry point (the three jobs, the tools Co is
 // given, the four proactive texts, the capability sheet, the DM front desk) does nothing for a member while it is off, and
 // a stranger's "stop" is still honored. Model-free, against a fake database.
 //   npx tsx evals/mo/memberGate.ts
 process.env.SENDBLUE_API_API_KEY ||= "unused-in-tests";
 process.env.SENDBLUE_API_API_SECRET ||= "unused-in-tests";
-delete process.env.MO_MEMBER_ENABLED;
 delete process.env.MO_ENABLED;
+const { setXKeys } = await import("./xKeys.js");
+setXKeys("off");
 const { default: pool } = await import("../../src/db/db.js");
 const J = await import("../../src/mo/memberJobs.js");
 const C = await import("../../src/services/capabilities.js");
@@ -24,7 +25,7 @@ let candidateRow: any = null;
 };
 const ran = (re: RegExp) => log.some((l) => re.test(l.sql));
 const set = (member: string | undefined, team: string | undefined) => {
-  if (member === undefined) delete process.env.MO_MEMBER_ENABLED; else process.env.MO_MEMBER_ENABLED = member;
+  setXKeys(member === undefined ? "off" : member === "partial" ? "partial" : "on");
   if (team === undefined) delete process.env.MO_ENABLED; else process.env.MO_ENABLED = team;
 };
 const tools = () => Object.keys(createConversationTools({ userId: "u1", phoneNumber: "+10000000000", resolvedContent: "yes", isVoice: false, hasPendingOffer: false, recentOfferBurstActive: false, dryRun: false, sendCoReply: async () => true, notDone: () => {} } as any).tools);
@@ -35,7 +36,7 @@ const cand = (over: any = {}) => ({ id: "c1", batch_id: "b1", user_id: "u1", n: 
 check("there are member Mo tools to gate", MO_TOOLS.length >= 5);
 
 // ---- the default: nothing set means off
-for (const [label, m, t] of [["neither switch set (the default)", undefined, undefined], ["only MO_MEMBER_ENABLED", "true", undefined], ["only MO_ENABLED (team Mo on)", undefined, "true"], ["MO_MEMBER_ENABLED=1 (only the exact 'true' counts)", "1", "true"], ["MO_MEMBER_ENABLED=false", "false", "true"]] as const) {
+for (const [label, m, t] of [["nothing set (the default)", undefined, undefined], ["only Co's X send keys", "true", undefined], ["only MO_ENABLED (team Mo on, no X send keys)", undefined, "true"], ["MO_ENABLED=1 (only the exact 'true' counts)", "true", "1"], ["X send keys only partly set", "partial", "true"]] as const) {
   set(m, t);
   check(`off with ${label}: both switches read off`, !J.memberMoEnabled() && !C.memberMoOn() && !J.memberMoCanSend());
   log.length = 0;

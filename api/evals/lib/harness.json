@@ -14,6 +14,7 @@
   "evals/.next-live-1001/suites.ts",
   "evals/companion/_thread.ts",
   "evals/jev/cases.ts",
+  "evals/mo/xKeys.ts",
   "evals/replay/cases.ts",
   "evals/sweepSelect/grading.ts",
   "evals/sweepSelect/score.ts",
