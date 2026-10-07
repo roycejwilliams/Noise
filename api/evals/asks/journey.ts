@@ -75,7 +75,7 @@ check("the goal sweep keeps its own budget and the ask sweep still only reads as
 // ---- EVENTS: goals frame who is worth meeting, asks write the reason
 const onlyGoals = [{ id: "g9", kind: "goal", status: "active", text: "Meet people building consumer social", created_at: day(5) }];
 check("someone with only goals is scored against them as the frame (not asked what they want from the room)", M.getGoalFrame(onlyGoals)?.text === "Meet people building consumer social" && M.getActiveSeekingAsk(onlyGoals) === null && /getActiveSeekingAsk\(person\.intent\) \?\? getGoalFrame\(person\.intent\)/.test(src("services/eventScoring.ts")));
-check("the reason shown is only ever an ask: a candidate with only a goal has no share reason", M.shareReasonFromOwnAsk(onlyGoals) === "" && /what they've said they're looking for: "Find me weekend events"/.test(M.shareReasonFromOwnAsk([intent[2]])));
+check("the reason shown is only ever an ask: a candidate with only a goal has no share reason", M.shareReasonFromOwnAsk(onlyGoals, "S1") === "" && /what they've said they're looking for: "Find me weekend events"/.test(M.shareReasonFromOwnAsk([{ ...intent[2], shareable: true }], "S1")));
 check("the brief is goals as frame, asks as bullets: it hands the writer both, and says to frame in one line without reciting, then the people with their reasons", /where_they_say_they_are_headed_the_frame_only/.test(src("harness/proactiveRegistry.ts")) && /what_they_asked_for_now/.test(src("harness/proactiveRegistry.ts")) && /Frame the room in one line against where they are headed/.test(src("harness/proactiveRegistry.ts")));
 
 // ---- CLOSURE: only at the member's word, and a companion moment
