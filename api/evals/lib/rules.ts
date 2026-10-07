@@ -80,7 +80,7 @@ check("the live job runs only on the nightly schedule or a manual dispatch, and 
   const r = run({ EVAL_TOKEN_CAP: "100000", EVAL_COST_CAP_USD: "5" });
   const probe = JSON.parse((r.stdout.match(/PROBE (.*)/) ?? [])[1] ?? "{}");
   const seen = readFileSync(join(dir, "seen.jsonl"), "utf8").split("\n").filter(Boolean).map((l) => JSON.parse(l));
-  check("a worker call is rewritten to Haiku, even when it asked for Sonnet or Opus", seen[0].model === "claude-haiku-4-5-20251001" && seen[1].model === "claude-haiku-4-5-20251001");
+  check("a worker call is rewritten to Haiku, even when it asked for Sonnet or Opus", seen[0].model === "claude-haiku-5-5" && seen[1].model === "claude-haiku-5-5");
   check("a call may not ask for more than 4,096 output tokens, so the cap is exact and not overshot by a 64,000-token request", seen[1].body.max_tokens === 4096);
   check("the effort option Haiku refuses is stripped", !JSON.stringify(seen[0].body).includes("effort"));
   check("only a call marked as the grader runs as Sonnet, and the marker never leaves", seen[2].model === "claude-sonnet-5" && seen[3].model === "claude-sonnet-5" && !("x-eval-role" in seen[2].headers) && !("x-eval-role" in seen[3].headers));
@@ -88,14 +88,14 @@ check("the live job runs only on the nightly schedule or a manual dispatch, and 
   check("any other outside host is refused", probe.otherHost === "refused");
   const cost = (r.stdout.match(/EVAL COST: \$([\d.]+) \| (\d+) model calls \((\d+) Haiku, (\d+) Sonnet grading/) ?? []);
   // 3 worker calls on Haiku (Sonnet-asked, Opus-asked, web search) + 2 grader calls on Sonnet; each 1000 in + 200 out
-  const expected = (3 * (1000 * 1 + 200 * 5) + 2 * (1000 * 2 + 200 * 10)) / 1e6;
+  const expected = (3 * (1000 * 0.1 + 200 * 0.5) + 2 * (1000 * 2 + 200 * 10)) / 1e6; // Haiku 5.5 workers, Sonnet graders
   check("the run prints its cost at the end, every time, computed from the real usage", Number(cost[1]) === Number(expected.toFixed(4)) && cost[2] === "5" && cost[3] === "3" && cost[4] === "2");
   {
     const d3 = mkdtempSync(join(tmpdir(), "meter-test-"));
     spawnSync("node", ["--import", join(root, "evals/lib/fixtures/fakeAnthropic.mjs"), "--import", join(root, "evals/lib/meter.mjs"), join(root, "evals/lib/fixtures/meterProbe.mjs")], { encoding: "utf8", env: { ...process.env, FAKE_SEEN: join(d3, "seen.jsonl"), EVAL_LEDGER: join(d3, "ledger.jsonl"), EVAL_REAL_MODELS: "1", EVAL_TOKEN_CAP: "100000", EVAL_COST_CAP_USD: "5" } });
     const real3 = readFileSync(join(d3, "seen.jsonl"), "utf8").split("\n").filter(Boolean).map((l) => JSON.parse(l));
     check("on request (EVAL_REAL_MODELS=1) a worker keeps Sonnet and its options, and Opus becomes Sonnet; grading stays Sonnet", real3[0].model === "claude-sonnet-5" && JSON.stringify(real3[0].body).includes("effort") && real3[1].model === "claude-sonnet-5" && real3[2].model === "claude-sonnet-5");
-    check("without it, nothing but Haiku and the grader ever runs", seen.every((x: any) => x.model === "claude-haiku-4-5-20251001" || x.model === "claude-sonnet-5") && seen.filter((x: any) => x.model === "claude-sonnet-5").length === 2);
+    check("without it, nothing but Haiku and the grader ever runs", seen.every((x: any) => x.model === "claude-haiku-5-5" || x.model === "claude-sonnet-5") && seen.filter((x: any) => x.model === "claude-sonnet-5").length === 2);
   }
   const capped = run({ EVAL_TOKEN_CAP: "3000", EVAL_COST_CAP_USD: "5" });
   const capProbe = JSON.parse((capped.stdout.match(/PROBE (.*)/) ?? [])[1] ?? "{}");
@@ -106,7 +106,7 @@ check("the live job runs only on the nightly schedule or a manual dispatch, and 
   // Before a call the meter adds what in-flight work may still use, so a run stops BEFORE the cap, not one call past it.
   const callsMade = (env: Record<string, string>) => { const d2 = mkdtempSync(join(tmpdir(), "meter-test-")); spawnSync("node", ["--import", join(root, "evals/lib/fixtures/fakeAnthropic.mjs"), "--import", join(root, "evals/lib/meter.mjs"), join(root, "evals/lib/fixtures/meterProbe.mjs")], { encoding: "utf8", env: { ...process.env, FAKE_SEEN: join(d2, "seen.jsonl"), EVAL_LEDGER: join(d2, "ledger.jsonl"), ...env } }); return existsSync(join(d2, "seen.jsonl")) ? readFileSync(join(d2, "seen.jsonl"), "utf8").split("\n").filter(Boolean).length : 0; };
   check("a call that could pass the token cap is refused before it is made (cap 1,300: one call of 1,200 tokens, not two)", callsMade({ EVAL_TOKEN_CAP: "1300", EVAL_COST_CAP_USD: "5" }) === 1);
-  check("and the same before the dollar cap", callsMade({ EVAL_TOKEN_CAP: "100000", EVAL_COST_CAP_USD: "0.0024" }) === 1);
+  check("and the same before the dollar cap", callsMade({ EVAL_TOKEN_CAP: "100000", EVAL_COST_CAP_USD: "0.00024" }) === 1);
 }
 
 // ---- the prices the meter uses are the ones the app uses
@@ -115,7 +115,7 @@ check("the live job runs only on the nightly schedule or a manual dispatch, and 
   const meter = read("evals/lib/meter.mjs");
   const price = (k: string) => { const m = meter.match(new RegExp(`${k}: \\{ input: ([\\d.]+), output: ([\\d.]+), cacheWrite: ([\\d.]+), cacheRead: ([\\d.]+) \\}`)); return m ? { input: +m[1], output: +m[2], cacheWrite: +m[3], cacheRead: +m[4] } : null; };
   const { PRICES } = await import("../../src/services/llmUsage.js");
-  check("the meter's Haiku and Sonnet prices match src/services/llmUsage.ts", JSON.stringify(price("haiku")) === JSON.stringify(PRICES["claude-haiku-4-5"]) && JSON.stringify(price("sonnet")) === JSON.stringify(PRICES["claude-sonnet-5"]));
+  check("the meter's Haiku and Sonnet prices match src/services/llmUsage.ts", JSON.stringify(price("haiku")) === JSON.stringify(PRICES["claude-haiku-5-5"]) && JSON.stringify(price("sonnet")) === JSON.stringify(PRICES["claude-sonnet-5"]));
   const { MODELS } = await import("../../src/models.js");
   check("the meter's model ids are the app's", meter.includes(`HAIKU = "${MODELS.haiku}"`) && meter.includes(`SONNET = "${MODELS.sonnet}"`));
 }

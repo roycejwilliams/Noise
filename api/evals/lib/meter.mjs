@@ -18,10 +18,12 @@ import { appendFileSync, existsSync, readFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
-export const HAIKU = "claude-haiku-4-5-20251001";
+export const HAIKU = "claude-haiku-5-5";
 export const SONNET = "claude-sonnet-5";
 export const PRICE = {
-  haiku: { input: 1, output: 5, cacheWrite: 1.25, cacheRead: 0.1 },
+  haiku: { input: 0.1, output: 0.5, cacheWrite: 0.125, cacheRead: 0.01 },
+  // A step production holds on Haiku 4.5 (src/models.ts haikuPinned) runs as asked, priced at 4.5's rate.
+  haiku45: { input: 1, output: 5, cacheWrite: 1.25, cacheRead: 0.1 },
   sonnet: { input: 2, output: 10, cacheWrite: 2.5, cacheRead: 0.2 },
 };
 const EMBED_PER_M = 0.02;
@@ -120,10 +122,13 @@ globalThis.fetch = async function meteredFetch(input, init) {
   // asked, Opus becomes Sonnet. Still metered, still capped, still priced by the model actually used.
   const realModels = process.env.EVAL_REAL_MODELS === "1" && !grader;
   const asked = String(body.model ?? "");
-  const kind = grader ? "sonnet" : realModels ? (/haiku/.test(asked) ? "haiku" : "sonnet") : "haiku";
-  body.model = grader ? SONNET : realModels ? (/haiku/.test(asked) ? asked : SONNET) : HAIKU;
-  if (kind === "haiku") strip(body); // Haiku rejects the effort option the production code sets for Sonnet
-  if (Array.isArray(body.tools) && body.tools.some((t) => /web_search/.test(String(t?.type ?? "")))) {
+  // A Haiku that production pins (4.5) is kept as asked, so its eval tests the model it really runs on.
+  const pinnedHaiku = !grader && /^claude-haiku-4-5/.test(asked);
+  const kind = grader ? "sonnet" : pinnedHaiku ? "haiku45" : realModels ? (/haiku/.test(asked) ? "haiku" : "sonnet") : "haiku";
+  body.model = grader ? SONNET : pinnedHaiku ? asked : realModels ? (/haiku/.test(asked) ? asked : SONNET) : HAIKU;
+  if (kind === "haiku" || kind === "haiku45") strip(body); // Haiku rejects the effort option the production code sets for Sonnet
+  // EVAL_WEB_SEARCH=1 (a one-off live end-to-end run, on request): the search stays, metered and capped like any call.
+  if (process.env.EVAL_WEB_SEARCH !== "1" && Array.isArray(body.tools) && body.tools.some((t) => /web_search/.test(String(t?.type ?? "")))) {
     // A web search is a paid tool and its results are the open web: not a layer 2 case.
     body.tools = body.tools.filter((t) => !/web_search/.test(String(t?.type ?? "")));
     if (!body.tools.length) { delete body.tools; delete body.tool_choice; }
@@ -174,7 +179,7 @@ globalThis.fetch = async function meteredFetch(input, init) {
 // The cost of this run, printed every time, whatever else happens.
 export function summary() {
   const l = readLedger();
-  const line = `EVAL COST: $${l.cost.toFixed(4)} | ${l.calls} model calls (${l.by.haiku ?? 0} Haiku, ${l.by.sonnet ?? 0} Sonnet grading, ${l.by.embed ?? 0} embeddings) | ${Math.round(l.tokens).toLocaleString()} tokens | cap ${CAP_TOKENS.toLocaleString()} tokens / $${CAP_USD.toFixed(2)}${capHit ? ` | STOPPED AT THE CAP: ${capHit}` : ""}`;
+  const line = `EVAL COST: $${l.cost.toFixed(4)} | ${l.calls} model calls (${(l.by.haiku ?? 0) + (l.by.haiku45 ?? 0)} Haiku, ${l.by.sonnet ?? 0} Sonnet grading, ${l.by.embed ?? 0} embeddings) | ${Math.round(l.tokens).toLocaleString()} tokens | cap ${CAP_TOKENS.toLocaleString()} tokens / $${CAP_USD.toFixed(2)}${capHit ? ` | STOPPED AT THE CAP: ${capHit}` : ""}`;
   return line;
 }
 if (!process.env.EVAL_QUIET) process.on("exit", () => { try { console.log(`\n${summary()}`); } catch {} });

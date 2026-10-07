@@ -152,7 +152,7 @@ await runEval<Case, { asks: CapturedAsk[] }>({
   concurrency: 4,
   run: async (c) => {
     const scope = c.scope ?? "last_user_message";
-    const { text } = await generateText({ model: anthropic(MODELS.haiku), prompt: captureIntentPrompt(c.transcript, scope) });
+    const { text } = await generateText({ model: anthropic(process.env.CAPTURE_MODEL ?? MODELS.haikuPinned), prompt: captureIntentPrompt(c.transcript, scope) });
     return { asks: normalizeCapturedAsks(parseModelJson(text), scope) };
   },
   score: (c, r) => {

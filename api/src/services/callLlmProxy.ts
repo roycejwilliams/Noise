@@ -12,7 +12,7 @@ import { SpeakableStream } from "./speakable.js";
 import { SAFE_LINE, sourceCorpus, unsourced } from "./offerGuard.js";
 import { DRAINED_MAX_SENTENCES, DRAINED_NOTE, memberStateSignal } from "./memberState.js";
 
-export const CALL_LLM_MODEL = process.env.CALL_LLM_MODEL ?? "claude-haiku-4-5";
+export const CALL_LLM_MODEL = process.env.CALL_LLM_MODEL ?? "claude-haiku-5-5";
 const DEFAULT_MAX_TOKENS = 500;
 
 type OaiContent = string | { type?: string; text?: string }[] | null | undefined;
@@ -24,6 +24,8 @@ const textOf = (c: OaiContent): string => (typeof c === "string" ? c : Array.isA
 type ABlock = { type: "text"; text: string } | { type: "tool_use"; id: string; name: string; input: unknown } | { type: "tool_result"; tool_use_id: string; content: string };
 export type AMessage = { role: "user" | "assistant"; content: ABlock[] };
 export type ARequest = { model: string; max_tokens: number; temperature?: number; system: { type: "text"; text: string; cache_control: { type: "ephemeral" } }[]; messages: AMessage[]; tools?: { name: string; description: string; input_schema: unknown }[]; stream: true };
+
+export const takesTemperature = (model: string) => /^claude-(haiku|sonnet|opus)-4/.test(model);
 
 // Pure: the OpenAI request as an Anthropic one (system cached, tool calls and results as blocks, roles alternating, starting with the member).
 export function toAnthropic(b: OaiRequest, model = CALL_LLM_MODEL, note?: string): ARequest {
@@ -58,7 +60,8 @@ export function toAnthropic(b: OaiRequest, model = CALL_LLM_MODEL, note?: string
   return {
     model,
     max_tokens: asked && asked > 0 ? Math.min(asked, 800) : DEFAULT_MAX_TOKENS,
-    ...(typeof b.temperature === "number" ? { temperature: Math.min(1, Math.max(0, b.temperature)) } : {}),
+    // Haiku 5.5 refuses a temperature (400 "`temperature` is deprecated for this model"); only the 4.x models still take one.
+    ...(typeof b.temperature === "number" && takesTemperature(model) ? { temperature: Math.min(1, Math.max(0, b.temperature)) } : {}),
     system: [{ type: "text", text: system || "(no instructions were sent)", cache_control: { type: "ephemeral" } }],
     messages: msgs,
     ...(tools.length ? { tools } : {}),
@@ -98,7 +101,9 @@ export async function* runCallLlm(b: OaiRequest, deps: ProxyDeps): AsyncGenerato
   const t0 = now();
   const id = `chatcmpl-co-${t0.toString(36)}`;
   const created = Math.floor(t0 / 1000);
-  const model = b.model ?? CALL_LLM_MODEL;
+  // Our model, whatever the agent's request names (2026-10-07: Haiku 5.5 without re-pushing the ElevenLabs agent).
+  // CALL_LLM_MODEL is the one-variable rollback.
+  const model = CALL_LLM_MODEL;
   const chunk = (delta: Record<string, unknown>, finish: string | null = null): OaiChunk => ({ id, object: "chat.completion.chunk", created, model, choices: [{ index: 0, delta, finish_reason: finish }] });
   const clean = deps.clean !== false;
   const corpus = clean ? corpusOf(b) : "";
