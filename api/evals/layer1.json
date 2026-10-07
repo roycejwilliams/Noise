@@ -105,6 +105,9 @@
     "evals/mo/memberGate.ts",
     "evals/presence/readoutFlow.ts",
     "evals/inroom/rules.ts",
-    "evals/inroom/flow.ts"
+    "evals/inroom/flow.ts",
+    "evals/browserPilot/rules.ts",
+    "evals/docs/researchBrief.ts",
+    "evals/research/quality.ts"
   ]
 }

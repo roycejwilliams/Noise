@@ -63,8 +63,10 @@ const run = async (body: any, events: any[], o: { clean?: boolean } = {}) => {
   check("roles alternate", a.messages.every((m, i) => i === 0 || m.role !== a.messages[i - 1].role), a.messages.map((m) => m.role));
   check("a tool call and its result become tool_use and tool_result blocks, the result with the member's next words", a.messages.some((m) => m.content.some((b: any) => b.type === "tool_use" && b.id === "t1")) && a.messages.some((m) => m.content.some((b: any) => b.type === "tool_result" && b.tool_use_id === "t1")));
   check("tools are passed with their schemas", a.tools?.[0].name === "assess_conversation_coverage" && !!a.tools?.[0].input_schema);
-  check("the model is Haiku 4.5 and streams", a.model === "claude-haiku-4-5" && a.stream === true);
+  check("the model is Haiku 5.5 and streams", a.model === "claude-haiku-5-5" && a.stream === true);
   check("the last message is the member's (no accidental prefill)", a.messages[a.messages.length - 1].role === "user");
+  check("Haiku 5.5 is sent no temperature (it 400s on one)", !("temperature" in P.toAnthropic({ ...body, temperature: 0.8 })));
+  check("a 4.x model still gets the call's temperature", P.toAnthropic({ ...body, temperature: 0.8 }, "claude-haiku-4-5").temperature === 0.8);
 }
 
 // ---- the cleaned stream
@@ -210,7 +212,7 @@ const run = async (body: any, events: any[], o: { clean?: boolean } = {}) => {
   const enc = new TextEncoder();
   const fakeFetch: any = async (_u: string, init: any) => {
     const sent = JSON.parse(init.body);
-    check("the upstream request is the translated one, streaming, with the key header", sent.stream === true && sent.model === "claude-haiku-4-5" && init.headers["x-api-key"] === "k");
+    check("the upstream request is the translated one, streaming, with the key header", sent.stream === true && sent.model === "claude-haiku-5-5" && init.headers["x-api-key"] === "k");
     return { ok: true, status: 200, body: new ReadableStream({ start(c) { sse.forEach((x) => c.enqueue(enc.encode(x))); c.close(); } }), text: async () => "" };
   };
   const evs: any[] = [];

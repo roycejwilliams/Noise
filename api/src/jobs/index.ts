@@ -221,6 +221,9 @@ export function registerJobs(io: Server) {
       await runDueTasks();
       const { runLoopDecay } = await import("../services/openLoops.js");
       await runLoopDecay().catch((err: any) => console.error("loop decay error:", err?.message ?? err));
+      // Finds shown and never reacted to become "ignored" after their window (services/researchQuality.ts): a ranking signal too.
+      const { markIgnoredFinds } = await import("../services/researchQuality.js");
+      await markIgnoredFinds().catch((err: any) => console.error("ignored finds error:", err?.message ?? err));
     } catch (err: any) {
       console.error("task wake cron error:", err?.message ?? err);
     }

@@ -8,7 +8,12 @@
 // a model change is one line in this file plus the eval for that layer.
 export const MODELS = {
   sonnet: "claude-sonnet-5",
-  haiku: "claude-haiku-4-5-20251001",
+  // Haiku 5.5 since 2026-10-07 (Royce: "lets move over to haiku 5.5"): a tenth of 4.5's price, and the browser toolset
+  // (services/sdkGeneralReader.ts) needs it.
+  haiku: "claude-haiku-5-5",
+  // Held on Haiku 4.5 where 5.5 failed that layer's eval (2026-10-07): ask capture (evals/capture) went from 0 to 6 hard
+  // failures, capturing an ask from messages that aren't one. Move it when its prompt passes on 5.5.
+  haikuPinned: "claude-haiku-4-5-20251001",
 } as const;
 
 // Layer 2 evals (api/evals/README.md): every model call is run on Haiku to keep the spend small, except the final

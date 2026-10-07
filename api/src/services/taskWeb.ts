@@ -228,7 +228,7 @@ export type TaskWebResult = { kept: VerifiedResult[]; dropped: Dropped[]; droppe
 export async function taskWebSearch(
   userId: string,
   what: string,
-  opts: { city?: string | null; zone?: string | null; taskId?: number | null; skipBudget?: boolean; log?: boolean; sites?: string[]; source?: "sweep" | "request" } = {},
+  opts: { city?: string | null; zone?: string | null; taskId?: number | null; skipBudget?: boolean; log?: boolean; sites?: string[]; source?: "sweep" | "request"; background?: boolean; max?: number; searches?: number } = {},
 ): Promise<TaskWebResult> {
   if (!opts.skipBudget) {
     const budget = await reserveWebSearch(userId, opts.source ?? "sweep", what);
@@ -240,11 +240,11 @@ export async function taskWebSearch(
       model: anthropic(MODELS.sonnet),
       providerOptions: { anthropic: { effort: "low" } },
       experimental_telemetry: { isEnabled: true, functionId: "taskWeb.search", metadata: { userId } },
-      tools: { web_search: anthropic.tools.webSearch_20250305({ maxUses: 2 }) },
-      stopWhen: stepCountIs(3),
-      timeout: 60_000,
+      tools: { web_search: anthropic.tools.webSearch_20250305({ maxUses: Math.min(4, Math.max(1, opts.searches ?? 2)) }) },
+      stopWhen: stepCountIs(opts.searches && opts.searches > 2 ? 5 : 3),
+      timeout: opts.background ? 120_000 : 60_000,
       prompt: `Find on the real web: ${what}${opts.city ? ` (they're in ${opts.city})` : ""}. Today: ${new Date().toISOString().slice(0, 10)}.${opts.sites?.length ? ` Good places to look: ${opts.sites.join(", ")} (and the thing's own site).` : ""}${opts.sites?.some(cantCheck) ? ` Listings on ${opts.sites.filter(cantCheck).join(", ")} can't be opened to check, so for anything found there give the place's OWN website and its real name (a listing that hides the name, like "Modern loft in SoMa", can't be used).` : ""}
-Up to 3 real, specific options, each from a page you actually read, ideally the thing's own site. For each, the details that matter (capacity, price, dates, address or neighborhood, deadline), each copied from that page as it's written there.
+Up to ${Math.min(6, Math.max(1, opts.max ?? 3))} real, specific options, each from a page you actually read, ideally the thing's own site. For each, the details that matter (capacity, price, dates, address or neighborhood, deadline), each copied from that page as it's written there.
 Return ONLY JSON: {"items": [{"name": "...", "url": "https://the page you read", "details": [{"label": "capacity", "value": "..."}], "date": "YYYY-MM-DD or null (when it happens, if it's an event)", "deadline": "YYYY-MM-DD or null"}]}. {"items": []} if nothing real.`,
     });
     raws = parseRawResults(text);
@@ -256,7 +256,20 @@ Return ONLY JSON: {"items": [{"name": "...", "url": "https://the page you read",
   const droppedDetails: DroppedDetail[] = [];
   // Every result's page is found and read at once, then checked in order
   // (2026-10-01: one after another was most of a ~35s search).
-  const pages = await Promise.all(raws.map((raw) => pickPage(raw, { read: (u) => readPageText(u), official: (n) => findOfficialPage(n, 20_000) }).catch(() => ({ url: raw.url, text: null, official: false, swapped: false }))));
+  // The browser-use pilot (2026-10-07): with VENUE_READER=sdk, a Peerspace page in a BACKGROUND venue-research task
+  // (taskTurn passes background) is read by Claude through the SDK browser toolset, read-only
+  // (services/sdkBrowserReader.ts). Never from a reply. The default, and any failure, is the headless text read.
+  const read = async (u: string): Promise<string | null> => {
+    if (opts.background) {
+      const S = await import("./sdkBrowserReader.js");
+      if (S.venueReaderIsSdk() && S.sdkReaderHost(u)) {
+        const r = await S.readVenueWithSdk(u, "no particular date: report the listing's rates, minimum and capacity").catch(() => null);
+        if (r?.pageText) return r.pageText;
+      }
+    }
+    return readPageText(u);
+  };
+  const pages = await Promise.all(raws.map((raw) => pickPage(raw, { read, official: (n) => findOfficialPage(n, 20_000) }).catch(() => ({ url: raw.url, text: null, official: false, swapped: false }))));
   for (const [i, raw] of raws.entries()) {
     const page = pages[i];
     if (!page.text) {

@@ -1197,7 +1197,8 @@ export async function captureIntent(
       { userId: user_id, traceName: "profileExtraction.captureIntent" },
       () =>
         generateText({
-          model: anthropic(NARROW_MODEL),
+          // Pinned to Haiku 4.5: on 5.5 this layer's eval fails (src/models.ts haikuPinned).
+          model: anthropic(MODELS.haikuPinned),
           experimental_telemetry: { isEnabled: true, functionId: "profileExtraction.captureIntent" },
           prompt: captureIntentPrompt(transcript, scope),
         }),

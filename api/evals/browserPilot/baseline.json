@@ -1,0 +1,18 @@
+{
+  "checked": "2026-10-07",
+  "note": "right answers per case from the clean full run on 2026-10-07 (39 right, 11 unknown, 0 wrong)",
+  "right": {
+    "cc-roose": 4,
+    "cc-bash": 3,
+    "sfmoma-aitken": 4,
+    "sfmoma-rooftop": 4,
+    "longnow-thurston": 3,
+    "eb-portfolio": 4,
+    "eb-startup-oasis": 4,
+    "gg-clarion": 3,
+    "gg-eastcut": 3,
+    "foreign-cinema": 2,
+    "the-interval": 3,
+    "the-midway": 2
+  }
+}

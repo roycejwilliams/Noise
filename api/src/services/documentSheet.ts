@@ -18,7 +18,10 @@ export type DocSectionInput = { heading?: string; paragraphs?: string[]; bullets
 export const DOC_KINDS = ["venue_brief", "partnership_plan", "readout", "other"] as const;
 export type DocKind = (typeof DOC_KINDS)[number];
 export type DocInput = { title: string; note?: string; sections: DocSectionInput[]; suggestions?: string[]; kind?: string };
-export type DocSection = { heading: string | null; paragraphs: string[]; bullets: string[] };
+// research: a section built by code from one verified find (services/researchBrief.ts), not from the member's words. It is exempt
+// from the member-words rule and held to its own: every line from that source, with its link and when it was checked.
+export type ResearchSource = { url: string; checkedAt: string; reader: "scripted" | "sdk" };
+export type DocSection = { heading: string | null; paragraphs: string[]; bullets: string[]; research?: ResearchSource };
 export type Doc = { title: string; note: string; sections: DocSection[]; suggestions: string[]; kind?: DocKind };
 
 // Co writes plain words: no dash for a pause (a comma), no markdown that would print as stray symbols.
@@ -48,7 +51,7 @@ export function resolveDocument(input: DocInput): Doc {
 
 export const docText = (d: Doc): string => [d.title, d.note, ...d.sections.flatMap((s) => [s.heading ?? "", ...s.paragraphs, ...s.bullets]), ...d.suggestions].filter(Boolean).join("\n");
 // Their points only: what must rest on their own words.
-export const memberParts = (d: Doc): string[] => d.sections.flatMap((s) => [...s.paragraphs, ...s.bullets]);
+export const memberParts = (d: Doc): string[] => d.sections.filter((s) => !s.research).flatMap((s) => [...s.paragraphs, ...s.bullets]);
 const sentencesOf = (t: string) => (t.match(/[^.!?\n]+[.!?]*/g) ?? []).map((s) => s.trim()).filter(Boolean);
 
 // Pure: what is wrong with a document, in words Co can act on.

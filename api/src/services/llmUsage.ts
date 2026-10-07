@@ -16,6 +16,8 @@ import type { ReadableSpan, Span, SpanProcessor } from "@opentelemetry/sdk-trace
 export const PRICES: Record<string, { input: number; output: number; cacheWrite: number; cacheRead: number }> = {
   "claude-sonnet-5": { input: 2, output: 10, cacheWrite: 2.5, cacheRead: 0.2 },
   "claude-haiku-4-5": { input: 1, output: 5, cacheWrite: 1.25, cacheRead: 0.1 },
+  // Prompts up to 100k tokens (the rate is 5x above that; no Co prompt comes near it).
+  "claude-haiku-5-5": { input: 0.1, output: 0.5, cacheWrite: 0.125, cacheRead: 0.01 },
 };
 export const WEB_SEARCH_USD = 0.01;
 

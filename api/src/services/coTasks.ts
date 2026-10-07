@@ -44,7 +44,8 @@ export type CoTask = {
   awaitingReply: boolean;
   theirReplyAt: string | null;
   // "followup": a check-in Co decides the timing of (services/followUps.ts).
-  kind?: "work" | "followup";
+  // "research_brief": a find and a document, run as a fixed sequence (services/researchBrief.ts), not a model loop.
+  kind?: "work" | "followup" | "research_brief";
   followup?: any;
   targetKey?: string | null;
   // Where it came from: what they asked for, or a promise Co made in a reply (services/promises.ts).
@@ -189,7 +190,7 @@ function rowTo(r: any): CoTask {
     finalTold: !!r.final_told,
     awaitingReply: !!r.awaiting_reply,
     theirReplyAt: r.their_reply_at ? new Date(r.their_reply_at).toISOString() : null,
-    kind: r.kind === "followup" ? "followup" : "work",
+    kind: r.kind === "followup" ? "followup" : r.kind === "research_brief" ? "research_brief" : "work",
     followup: r.followup ?? null,
     targetKey: r.target_key ?? null,
     source: r.source === "promise" ? "promise" : "ask",
@@ -286,4 +287,17 @@ export async function taskTextsToday(userId: string): Promise<number> {
 
 export async function markTexted(userId: string, id: number): Promise<void> {
   await pool.query(`UPDATE co_tasks SET texts_sent = texts_sent + 1, last_texted_at = NOW(), awaiting_reply = true WHERE user_id = $1 AND id = $2`, [userId, id]);
+}
+
+// A research brief the member asked for (agent/loopTools.ts researchBrief): due now, run once in the background.
+export async function startResearchBrief(input: { userId: string; theirWords: string; goal: string; params: Record<string, unknown> }): Promise<{ ok: true; task: CoTask } | { ok: false; why: string }> {
+  const open = await openTasks(input.userId);
+  if (open.length >= TASK_LIMITS.maxOpen) return { ok: false, why: `already working on ${open.length} things for them; finish or drop one first` };
+  if (open.some((t) => t.kind === "research_brief")) return { ok: false, why: "a research brief is already being put together for them" };
+  const { rows } = await pool.query(
+    `INSERT INTO co_tasks (user_id, goal, their_words, steps, plan_next, next_check_at, notes, kind, followup, source)
+     VALUES ($1, $2, $3, '[]'::jsonb, 'research and send the brief', NOW(), $4::jsonb, 'research_brief', $5::jsonb, 'ask') RETURNING *`,
+    [input.userId, input.goal.trim().slice(0, 200), input.theirWords.trim().slice(0, 400), JSON.stringify([{ at: new Date().toISOString(), text: "Started." }]), JSON.stringify(input.params)],
+  );
+  return { ok: true, task: rowTo(rows[0]) };
 }

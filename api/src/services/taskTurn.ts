@@ -352,7 +352,7 @@ export async function runTaskTurn(task: CoTask): Promise<{ action: string }> {
       const found = openings.filter((m) => "url" in m && m.url).slice(0, 3).map((m) => ({ name: m.name, url: (m as any).url as string, date: null, tier: 3, details: [m.reason] }));
       return [...events, ...found];
     },
-    web: (what) => taskWebSearch(userId, what, { city: person.city, zone, taskId: task.id }),
+    web: (what) => taskWebSearch(userId, what, { city: person.city, zone, taskId: task.id, background: true }),
     readPage: async (url) => {
       const r = await readLink(url, { ownerUserId: userId }).catch(() => null);
       if (!r) return { ok: false, facts: [], text: "" };
@@ -370,6 +370,7 @@ export async function runDueTasks(): Promise<void> {
   const { claimDueTasks } = await import("./coTasks.js");
   for (const t of await claimDueTasks()) {
     if (t.kind === "followup") await import("./followUps.js").then((f) => f.runFollowUpTurn(t));
+    else if (t.kind === "research_brief") await import("./researchBrief.js").then((r) => r.runResearchBriefTask(t)).catch((err: any) => console.error("research brief task failed (non-fatal):", err?.message ?? err));
     else await runTaskTurn(t);
   }
 }
