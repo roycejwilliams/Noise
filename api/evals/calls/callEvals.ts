@@ -12,7 +12,7 @@ const check = (label: string, ok: boolean) => { total++; if (!ok) { failed++; co
 
 // ---- criteria and settings
 const ids = V.CALL_CRITERIA.map((c) => c.id);
-check("seven criteria, unique ids, inside ElevenLabs' limit of 30", V.CALL_CRITERIA.length === 7 && new Set(ids).size === ids.length && ids.length <= 30);
+check("ten criteria, unique ids, inside ElevenLabs' limit of 30", V.CALL_CRITERIA.length === 10 && new Set(ids).size === ids.length && ids.length <= 30);
 check("they cover the real failures: invented specifics, false refusals, impossible promises, known questions, long replies, unsaid attribution, names/voice", ["no_invented_specifics", "no_false_refusals", "no_impossible_promises", "no_known_questions", "short_spoken_replies", "no_unsaid_attribution", "names_and_voice"].every((i) => ids.includes(i)));
 check("each is written so SUCCESS is the good outcome, with a failure case named", V.CALL_CRITERIA.every((c) => /^.*Success if/.test(c.conversation_goal_prompt) && /Failure if/.test(c.conversation_goal_prompt)));
 check("the refusal criterion names what Co CAN do (so a real 'I can't' is caught) and the promise criterion what it CANNOT", /Co CAN:[^]*multi-day work/.test(V.CALL_CRITERIA.find((c) => c.id === "no_false_refusals")!.conversation_goal_prompt) && /Co CANNOT:[^]*investors, sponsors or funders/.test(V.CALL_CRITERIA.find((c) => c.id === "no_impossible_promises")!.conversation_goal_prompt));
@@ -20,7 +20,7 @@ const ps = V.CALL_PLATFORM_SETTINGS as any;
 check("guardrails: Focus and Manipulation (prompt injection) on, nothing blocking: no Content or Custom guardrail, so no added wait", ps.guardrails.focus.is_enabled === true && ps.guardrails.prompt_injection.is_enabled === true && !("content" in ps.guardrails) && !("custom" in ps.guardrails));
 check("grading is Sonnet: post-call, nobody waits", ps.analysis_llm === "claude-sonnet-4-6");
 const cfg: any = E.buildAgentConfig({ name: "Co", prompt: "p", voiceId: "v", apiUrl: "https://x.test" });
-check("the agent config carries the criteria and guardrails, and keeps the per-call first-message override", cfg.platform_settings.evaluation.criteria.length === 7 && cfg.platform_settings.guardrails.focus.is_enabled === true && cfg.platform_settings.overrides.conversation_config_override.agent.first_message === true);
+check("the agent config carries the criteria and guardrails, and keeps the per-call first-message override", cfg.platform_settings.evaluation.criteria.length === 10 && cfg.platform_settings.guardrails.focus.is_enabled === true && cfg.platform_settings.overrides.conversation_config_override.agent.first_message === true);
 
 // ---- reading the grade
 const analysis = { evaluation_criteria_results: { no_invented_specifics: { criteria_id: "no_invented_specifics", result: "failure", rationale: "Co called tomorrow's event 'tonight'." }, no_false_refusals: { criteria_id: "no_false_refusals", result: "success", rationale: "ok" }, short_spoken_replies: { criteria_id: "short_spoken_replies", result: "unknown", rationale: "" } } };

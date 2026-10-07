@@ -20,6 +20,25 @@ import { buildAgentConfig } from "../services/elevenLabsCalls.js";
 // (ELEVENLABS_WEBHOOK_SECRET) are set once in ElevenLabs' workspace settings.
 const dryRun = process.argv.includes("--dry-run");
 
+// The call brain's own endpoint (ELEVENLABS_LLM_PROXY=1): ElevenLabs holds our shared secret as a workspace secret and sends it as the
+// bearer token. Created once; unset the variable and push again to go back to the direct Haiku path.
+async function proxyConfig(apiUrl: string): Promise<{ url: string; secretId: string } | null> {
+  if (process.env.ELEVENLABS_LLM_PROXY !== "1") return null;
+  const secret = process.env.CALL_LLM_PROXY_SECRET;
+  if (!secret) throw new Error("ELEVENLABS_LLM_PROXY=1 needs CALL_LLM_PROXY_SECRET (the same value on the API server).");
+  const url = `${apiUrl.replace(/\/$/, "")}/co/el/llm`;
+  if (dryRun) return { url, secretId: "(workspace secret co_call_llm_proxy)" };
+  const key = process.env.ELEVENLABS_API_KEY!;
+  const H = { "xi-api-key": key, "Content-Type": "application/json" };
+  const list = await (await fetch("https://api.elevenlabs.io/v1/convai/secrets", { headers: H })).json();
+  const found = (list.secrets ?? []).find((x: any) => x.name === "co_call_llm_proxy");
+  if (found) return { url, secretId: found.secret_id };
+  const made = await fetch("https://api.elevenlabs.io/v1/convai/secrets", { method: "POST", headers: H, body: JSON.stringify({ type: "new", name: "co_call_llm_proxy", value: secret }) });
+  const body = await made.json().catch(() => ({}));
+  if (!made.ok || !body.secret_id) throw new Error(`creating the workspace secret failed: ${made.status} ${JSON.stringify(body).slice(0, 200)}`);
+  return { url, secretId: body.secret_id };
+}
+
 async function main() {
   const prompt = readFileSync(resolve(process.cwd(), "prompts/co-system-prompt.md"), "utf-8");
   const voiceId = process.env.ELEVENLABS_VOICE_ID;
@@ -34,6 +53,7 @@ async function main() {
     ttsModel: process.env.ELEVENLABS_TTS_MODEL || undefined,
     turnEagerness: process.env.ELEVENLABS_TURN_EAGERNESS || undefined,
     temperature: process.env.ELEVENLABS_TEMPERATURE ? Number(process.env.ELEVENLABS_TEMPERATURE) : undefined,
+    proxy: await proxyConfig(apiUrl),
   });
   if (dryRun) {
     const shown = JSON.parse(JSON.stringify(config));

@@ -8,6 +8,7 @@
 //
 // Every read here is scoped to one member (user_id = $1): nothing about
 // anyone else can enter a member's turn through it.
+import { stampOf } from "./factLabels.js";
 import { openTasks, taskFactLines } from "./coTasks.js";
 import { adviceLines, loadAdvice } from "./advice.js";
 import { loadMilestones, storyLines } from "./milestones.js";
@@ -46,7 +47,8 @@ export type TurnContext = {
   snapshot: PersonSnapshot | null;
   sent: SentItem[];
   asks: { text: string; kind: "find" | "help" }[];
-  threads: { text: string; feeling: string | null }[];
+  // line: the thread with its stamp (when they said it, whether it is old): what a call briefing prints. Older than DROP_AFTER_DAYS is left out.
+  threads: { text: string; feeling: string | null; line: string }[];
   offersThisWeek: number;
   // As of the last recorded signal; the text route refreshes it after reading this message.
   emotional: EmotionalContext | null;
@@ -238,9 +240,12 @@ export async function assembleContext(
       .then((r) => r.rows.map((x: any) => ({ text: String(x.ask_text ?? ""), kind: x.kind === "help" ? ("help" as const) : ("find" as const) })))
       .catch(() => [] as { text: string; kind: "find" | "help" }[]),
     pool
-      .query(`SELECT text, feeling FROM member_threads WHERE user_id = $1 AND status IN ('open', 'waiting') ORDER BY last_touched_at DESC NULLS LAST LIMIT 8`, [userId])
-      .then((r) => r.rows.map((x: any) => ({ text: String(x.text), feeling: x.feeling ?? null })))
-      .catch(() => [] as { text: string; feeling: string | null }[]),
+      .query(`SELECT text, feeling, opened_at, last_touched_at, due_date FROM member_threads WHERE user_id = $1 AND status IN ('open', 'waiting') ORDER BY last_touched_at DESC NULLS LAST LIMIT 8`, [userId])
+      .then((r) => r.rows.flatMap((x: any) => {
+        const st = stampOf({ saidOn: x.opened_at, confirmedOn: x.last_touched_at, dueOn: x.due_date instanceof Date ? x.due_date.toISOString().slice(0, 10) : x.due_date }, new Date());
+        return st.drop ? [] : [{ text: String(x.text), feeling: x.feeling ?? null, line: `${String(x.text)} (${st.label})` }];
+      }))
+      .catch(() => [] as { text: string; feeling: string | null; line: string }[]),
     pool
       .query(`SELECT count(*)::int AS n FROM proactive_sends WHERE user_id = $1 AND type = 'event_offer' AND NOT exempt AND sent_at > NOW() - INTERVAL '7 days'`, [userId])
       .then((r) => Number(r.rows[0]?.n ?? 0))

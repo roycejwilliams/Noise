@@ -21,6 +21,7 @@ import {
 } from "./middleware/rateLimiter.js";
 import applicationsRouter from "./routes/applications.js";
 import { createAuthRouter } from "./routes/auth.js";
+import { createCallLlmRouter } from "./routes/callLlm.js";
 import { createCoRouter } from "./routes/co.js";
 import { serveInvitePage } from "./routes/invitePage.js";
 import { createLumaRouter } from "./routes/luma.js";
@@ -62,6 +63,8 @@ app.use("/payments/webhook", express.raw({ type: "application/json" }));
 app.use("/co/el/post-call", express.raw({ type: "application/json", limit: "5mb" }));
 // The agent sends the whole conversation to its tools; the default 100kb JSON limit would reject a long call before the route runs.
 app.use("/co/el/tool", express.json({ limit: "2mb" }));
+// The call brain's endpoint: a request per turn of every call, from ElevenLabs' addresses. Before the rate limiter (routes/callLlm.ts).
+app.use("/co/el/llm", express.json({ limit: "4mb" }), createCallLlmRouter());
 // Luma's webhook signature is the same "HMAC over the raw body" shape as the
 // two above — see validateLumaWebhook in routes/luma.ts for the exact scheme.
 app.use("/luma/webhook", express.raw({ type: "application/json" }));

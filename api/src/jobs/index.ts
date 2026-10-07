@@ -196,6 +196,16 @@ export function registerJobs(io: Server) {
     }
   });
 
+  // What Co said on a call it would send (services/callCommitments.ts): once it has had time to fall due, was a text actually sent?
+  cron.schedule("*/10 * * * *", async () => {
+    try {
+      const { checkCallCommitments } = await import("../services/callCommitments.js");
+      await checkCallCommitments();
+    } catch (err: any) {
+      console.error("call commitment check error (non-fatal):", err?.message ?? err);
+    }
+  });
+
   // Things Co sent in the last 3 days are re-read every few hours
   // (services/linkReader.ts); if one that someone was interested in sold out,
   // moved or disappeared, they hear it once (services/staleWatch.ts). Luma
