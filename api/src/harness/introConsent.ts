@@ -175,13 +175,15 @@ export function withEnd<T extends { start_at: string; end_at: string | null; tim
 export function checkEventWindow(
   timing: { start_at: string; end_at: string | null; timezone?: string | null } | null,
   now: Date,
-  opts: { requireTiming?: boolean } = {},
+  // No timing fails closed (2026-10-07): "in the room" can't be judged without it. allowNoTiming is only for a caller
+  // that is deliberately not live (and requireTiming is kept for older callers; it's now the default).
+  opts: { requireTiming?: boolean; allowNoTiming?: boolean } = {},
 ): GateCheck {
   const name = "in_event_window";
   if (!timing) {
-    return opts.requireTiming
-      ? { name, pass: false, reason: "no event start/end time on file" }
-      : { name, pass: true, reason: "not a live event (no timing to check)" };
+    return opts.allowNoTiming && !opts.requireTiming
+      ? { name, pass: true, reason: "not a live event (no timing to check)" }
+      : { name, pass: false, reason: "no event start/end time on file" };
   }
   const t = now.getTime();
   if (t < new Date(timing.start_at).getTime()) return { name, pass: false, reason: "event hasn't started" };

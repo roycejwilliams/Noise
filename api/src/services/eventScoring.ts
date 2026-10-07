@@ -354,7 +354,7 @@ async function maybeSendMatchNudge(
   top: RankedCandidate,
   candidate: ScorableGuest,
   eventTiming: { start_at: string; end_at: string | null } | null,
-  opts: { dryRun?: boolean; honestLowConfidence?: boolean },
+  opts: { dryRun?: boolean; honestLowConfidence?: boolean; requireTiming?: boolean },
 ): Promise<boolean> {
   // honestLowConfidence (Royce, 2026-09-22, "no one should feel left out"):
   // services/eventUnmatchedFollowUp.ts's end-of-event pass, scoped to people
@@ -474,6 +474,12 @@ async function maybeSendMatchNudge(
       console.error("eventScoring: match nudge text_exchange log failed (non-fatal):", err?.message ?? err),
     );
     return true;
+  }
+
+  // A Co event whose times couldn't be read this pass: wait for the next one (it sends live, in the room).
+  if (opts.requireTiming) {
+    console.log(`eventScoring: no event timing for ${eventId} this pass; ${person.user_id}'s nudge waits for the next one`);
+    return false;
   }
 
   // No real event timing (code review, 2026-09-17): the self-reported/
@@ -657,7 +663,9 @@ export async function scoreMatchedGroup(
   // honestLowConfidence just passes through to maybeSendMatchNudge below —
   // scoreMatchedGroup itself doesn't change; services/eventUnmatchedFollowUp.ts
   // calls this with a pool already scoped to people nobody's matched yet.
-  opts: { dryRun?: boolean; honestLowConfidence?: boolean } = {},
+  // requireTiming: a Co (Luma) event always has a start and end. When they couldn't be read (a Luma blip), no nudge goes
+  // out this pass and none is queued anonymously in its place: the next pass sends it live.
+  opts: { dryRun?: boolean; honestLowConfidence?: boolean; requireTiming?: boolean } = {},
 ): Promise<{ scoredCount: number; solicitedCount: number; matchedCount: number }> {
   if (matched.length < 2) {
     console.log(`eventScoring: ${eventId} has ${matched.length} matched Co user(s) — nothing to rank yet`);
@@ -842,7 +850,7 @@ export async function scoreGuestListForEvent(
     console.error(`eventScoring: scheduleUnmatchedFollowUp failed for ${eventId} (non-fatal):`, err?.message ?? err),
   );
 
-  return scoreMatchedGroup(eventId, resolvedName, matched, eventTiming, opts);
+  return scoreMatchedGroup(eventId, resolvedName, matched, eventTiming, { ...opts, requireTiming: true });
 }
 
 // Exported so evals/intro can run the exact production prompt.
