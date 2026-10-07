@@ -74,7 +74,7 @@ check("the upload is one multipart body: metadata asking for a Google Doc, then 
   texts.length = 0;
   const priv = await X.deliverDocument(doc, to, "google_docs", deps({ share: { ok: false, why: "their Google account doesn't allow link sharing" } }));
   check("google_docs: a Workspace that refuses link sharing leaves it private, still sent, and the text says only they can open it", priv.ok && (priv as any).shared === false && /Only you can open it/.test(texts[0]?.content) && !/Anyone with this link/.test(texts[0]?.content));
-  // the scope: the test pair only, and shared working artifacts only, re-checked in the deliverer whoever calls it
+  // the scope (with GOOGLE_DOCS_TEST_USERS set, as here): those members only, and shared working artifacts only, re-checked in the deliverer
   for (const [label, who, kind] of [["a member outside the test pair", "33333333-3333-4333-8333-333333333333", "partnership_plan"], ["a goal plan (kind other), even for the pair", PAIR[1], "other"], ["no kind given", PAIR[1], undefined]] as const) {
     uploads.length = 0; texts.length = 0;
     const d0 = D.resolveDocument({ title: "T", kind, sections: [{ bullets: ["x"] }] } as any);
@@ -83,7 +83,9 @@ check("the upload is one multipart body: metadata asking for a Google Doc, then 
   }
   check("the second member of the pair gets one too, for each shared kind", (["venue_brief", "partnership_plan", "readout"] as const).every((k) => X.googleDocAllowed(PAIR[1], k)));
   check("the test pair: user ids only, at most two, junk ignored", X.docsTestPair({ GOOGLE_DOCS_TEST_USERS: ` ${PAIR[0]} ,not-an-id,${PAIR[1]},44444444-4444-4444-8444-444444444444` } as any).join() === PAIR.join() && X.docsTestPair({} as any).length === 0);
-  check("with no test pair set, nobody gets a Google Doc", !X.googleDocAllowed(PAIR[0], "readout", {} as any));
+  check("with no list set, any member may get a Google Doc for a shared kind (their connected Google is the gate)", X.googleDocAllowed("33333333-3333-4333-8333-333333333333", "readout", {} as any) && !X.googleDocAllowed("33333333-3333-4333-8333-333333333333", "other", {} as any));
+  check("with no list set, docTargets sends a shared kind to Google for anyone who asked", X.docTargets({ userId: "33333333-3333-4333-8333-333333333333", kind: "venue_brief", saveTo: "google_doc", askedForGoogle: true, env: {} as any }).targets.join() === "google_docs");
+  check("with the list set, it narrows to those members", !X.googleDocAllowed("33333333-3333-4333-8333-333333333333", "readout", { GOOGLE_DOCS_TEST_USERS: PAIR.join(",") } as any) && X.googleDocAllowed(PAIR[0], "readout", { GOOGLE_DOCS_TEST_USERS: PAIR.join(",") } as any));
   const T = (o: any) => X.docTargets({ userId: PAIR[0], kind: "venue_brief", saveTo: "google_doc", askedForGoogle: true, ...o });
   check("targets: pair + shared kind + they asked = the Google Doc", T({}).targets.join() === "google_docs" && T({ saveTo: "both" }).targets.join() === "google_docs,pdf_text" && T({}).googleRefused === null);
   check("targets: Co setting saveTo without their words is the PDF", T({ askedForGoogle: false }).targets.join() === "pdf_text" && T({ askedForGoogle: false }).googleRefused === null);

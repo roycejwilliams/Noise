@@ -5,8 +5,10 @@
 // (services/googleDocs.ts). It needs their Google connected with Docs allowed; without that it fails plainly and the PDF still goes.
 //
 // Scope (Royce, 2026-10-07): the Google Doc is for shared working artifacts around events and partnerships (a venue brief, a
-// partnership plan, a readout), not member goal-tracking or general productivity docs, and only for the two Google test users while the
-// Google project is in Testing mode (GOOGLE_DOCS_TEST_USERS, two user ids). Everyone else, and every other kind, gets the PDF.
+// partnership plan, a readout), not member goal-tracking or general productivity docs. Who: whoever has connected Google with Docs
+// allowed. While Co's Google project is in Testing mode, Google itself lets only its listed test users connect, so that is the two test
+// users without any setting here. GOOGLE_DOCS_TEST_USERS (user ids, at most two) is optional: set, it narrows Docs to those members,
+// and it is the lock to set before the Google project ever leaves Testing mode. Every other kind gets the PDF.
 import pool from "../db/db.js";
 import { renderPdf } from "./browserRead.js";
 import { cachePlanFile } from "./planFile.js";
@@ -17,21 +19,26 @@ import { notToTeammate } from "./teamLines.js";
 export type DocTarget = "pdf_text" | "google_docs";
 export type DeliverResult = { ok: true; via: DocTarget; filename: string; link?: string; shared?: boolean } | { ok: false; why: string; notConnected?: boolean; notAllowed?: boolean };
 
-// The kinds that may become a shared Google Doc, and the members who may get one (at most two: the Google project's test users).
+// The kinds that may become a shared Google Doc, and the optional narrowing list of members (at most two user ids).
 export const SHARED_DOC_KINDS: readonly DocKind[] = ["venue_brief", "partnership_plan", "readout"];
 export function docsTestPair(env: NodeJS.ProcessEnv = process.env): string[] {
   return String(env.GOOGLE_DOCS_TEST_USERS ?? "").split(",").map((s) => s.trim()).filter((s) => /^[0-9a-f-]{36}$/i.test(s)).slice(0, 2);
 }
+// Unset: anyone (their connected Google, checked at delivery, is the gate). Set: only those members.
+export function docsMemberAllowed(userId: string, env: NodeJS.ProcessEnv = process.env): boolean {
+  const pair = docsTestPair(env);
+  return pair.length === 0 || pair.includes(userId);
+}
 export function googleDocAllowed(userId: string, kind: DocKind | undefined, env: NodeJS.ProcessEnv = process.env): boolean {
-  return docsTestPair(env).includes(userId) && SHARED_DOC_KINDS.includes(kind ?? "other");
+  return docsMemberAllowed(userId, env) && SHARED_DOC_KINDS.includes(kind ?? "other");
 }
 // Pure: where a document goes. A Google Doc only when they asked for one in their own words AND it's allowed for them and this kind;
 // otherwise the PDF in their thread.
-//   googleRefused: "not_yet" (they aren't one of the test pair: Google Docs aren't open to them yet), "kind" (not a shared working artifact).
+//   googleRefused: "not_yet" (the narrowing list is set and they aren't on it: Google Docs aren't open to them yet), "kind" (not a shared working artifact).
 export function docTargets(o: { userId: string; kind: DocKind | undefined; saveTo?: "pdf" | "google_doc" | "both"; askedForGoogle: boolean; env?: NodeJS.ProcessEnv }): { targets: DocTarget[]; googleRefused: "not_yet" | "kind" | null } {
   const wants = (o.saveTo === "google_doc" || o.saveTo === "both") && o.askedForGoogle;
   if (!wants) return { targets: ["pdf_text"], googleRefused: null };
-  if (!docsTestPair(o.env).includes(o.userId)) return { targets: ["pdf_text"], googleRefused: "not_yet" };
+  if (!docsMemberAllowed(o.userId, o.env)) return { targets: ["pdf_text"], googleRefused: "not_yet" };
   if (!googleDocAllowed(o.userId, o.kind, o.env)) return { targets: ["pdf_text"], googleRefused: "kind" };
   return { targets: o.saveTo === "both" ? ["google_docs", "pdf_text"] : ["google_docs"], googleRefused: null };
 }
@@ -79,10 +86,10 @@ async function pdfByText(doc: Doc, to: DeliverTo, deps: DeliverDeps): Promise<De
 }
 
 // The Google Doc: in their own Drive, named like the PDF (without .pdf), opened to anyone with the link as an editor, and the link
-// texted with the title and a plain line saying who can open it. Re-checked here, whoever calls: a member outside the test pair, or a
+// texted with the title and a plain line saying who can open it. Re-checked here, whoever calls: a member outside the narrowing list, or a
 // kind that isn't a shared working artifact, never gets one.
 async function googleDoc(doc: Doc, to: DeliverTo, deps: DeliverDeps): Promise<DeliverResult> {
-  if (!googleDocAllowed(to.userId, doc.kind)) return { ok: false, why: "a Google Doc is only for a venue brief, partnership plan or readout, and only for the test pair for now", notAllowed: true };
+  if (!googleDocAllowed(to.userId, doc.kind)) return { ok: false, why: "a Google Doc is only for a venue brief, partnership plan or readout (and, when GOOGLE_DOCS_TEST_USERS is set, only for those members)", notAllowed: true };
   const token = deps.googleToken ? await deps.googleToken(to.userId).catch(() => null) : null;
   if (!token || !deps.uploadDoc) return { ok: false, why: "their Google isn't connected with Docs allowed", notConnected: true };
   const day = dayFor(to);

@@ -559,7 +559,7 @@ export function loopTools(
         const zone = city ? await import("../services/geocoding.js").then((g) => g.getTimezoneForCity(city)).catch(() => null) : null;
         const to = { userId: ctx.userId, firstName: String(rows[0]?.first_name ?? ctx.firstName ?? ""), phone: ctx.phoneNumber, zone };
         // A Google Doc only when they asked for one in their own words (code checks the words, not Co's say-so), and only for a shared
-        // working artifact (venue brief, partnership plan, readout) for a member of the Google test pair; otherwise the PDF.
+        // working artifact (venue brief, partnership plan, readout) for a member with Google connected (narrowed by GOOGLE_DOCS_TEST_USERS when set); otherwise the PDF.
         // Not connected (or Docs not allowed): the PDF goes instead, and Co offers to connect Google.
         const { targets, googleRefused } = docTargets({ userId: ctx.userId, kind: doc.kind, saveTo: input.saveTo, askedForGoogle: GOOGLE_DOC_ASK.test(theirWords()) });
         const results: Awaited<ReturnType<typeof deliverDocument>>[] = [];
