@@ -373,7 +373,7 @@ check(
   const mo = E.EXTENSIONS.find((e) => e.id === "mo");
   check("extension: Mo is registered with its abilities and voice", !!mo && mo.abilities === A.MO_ABILITIES && mo.voiceFile === "mo/moVoice.ts");
   const rt = mo ? await mo.load() : null;
-  check("extension: Mo plugs in team texts, handoff and its jobs (the team's four, then member Mo's three, each a no-op unless MO_MEMBER_ENABLED)", !!rt?.teamText && !!rt?.handoff && (rt?.jobs ?? []).map((j) => j.name).join(",") === "mo find,mo digest,mo outreach,mo inbox,mo member offers,mo member hunts,mo member outreach");
+  check("extension: Mo plugs in team texts, handoff and its jobs (the team's four, then member Mo's three, each a no-op until Co's X send keys are set)", !!rt?.teamText && !!rt?.handoff && (rt?.jobs ?? []).map((j) => j.name).join(",") === "mo find,mo digest,mo outreach,mo inbox,mo member offers,mo member hunts,mo member outreach");
   check("wired: texts, reply facts and jobs go through the registry", /handleTeamText\(user\.id, content, \{ \.\.\.\(repliedToExt \?/.test(src("routes/sendblue.ts")) && /extensionJobs\(\)/.test(src("jobs/index.ts")) && !/from "\.\.\/mo\//.test(src("jobs/index.ts") + src("routes/sendblue.ts")));
   check("monitor: each extension tool has a drift signal", /EXTENSIONS\.flatMap/.test(src("harness/monitor.ts")));
 }
@@ -388,7 +388,7 @@ check(
   check("a member's capability facts never include team-only abilities or Mo while member Mo is off", !/\bMo\b|teammate/i.test(memberSheet) && !C.ABILITIES.filter((a: any) => a.teamOnly).some((a: any) => memberSheet.includes(a.can)));
   {
     // With member Mo on, a member hears about it (and only its member-facing abilities), never the team's.
-    const onSheet = (() => { const was = [process.env.MO_MEMBER_ENABLED, process.env.MO_ENABLED]; process.env.MO_MEMBER_ENABLED = "true"; process.env.MO_ENABLED = "true"; try { return C.capabilitySheet().join("\n"); } finally { process.env.MO_MEMBER_ENABLED = was[0]; process.env.MO_ENABLED = was[1]; if (was[0] === undefined) delete process.env.MO_MEMBER_ENABLED; if (was[1] === undefined) delete process.env.MO_ENABLED; } })();
+    const onSheet = (() => { const KEYS = ["X_MO_CONSUMER_KEY", "X_MO_CONSUMER_SECRET", "X_MO_ACCESS_TOKEN", "X_MO_ACCESS_SECRET", "X_MO_USER_ID"]; const was = [KEYS.map((k) => process.env[k]), process.env.MO_ENABLED] as const; for (const k of KEYS) process.env[k] = "test"; process.env.MO_ENABLED = "true"; try { return C.capabilitySheet().join("\n"); } finally { KEYS.forEach((k, i) => { if (was[0][i] === undefined) delete process.env[k]; else process.env[k] = was[0][i]; }); if (was[1] === undefined) delete process.env.MO_ENABLED; else process.env.MO_ENABLED = was[1]; } })();
     check("with member Mo on, a member's facts include its member-facing abilities and still no team-only ones", C.ABILITIES.filter((a: any) => a.id.startsWith("mo_member_")).every((a: any) => onSheet.includes(a.can)) && !C.ABILITIES.filter((a: any) => a.teamOnly).some((a: any) => onSheet.includes(a.can)) && !/teammate/i.test(onSheet));
     check("member Mo's tools are removed from the tool map while it is off", /if \(!memberMoOn\(\)\) for \(const name of memberMoTools\(\)\) delete/.test(src("agent/conversationTools.ts")) && C.memberMoTools().length === 6);
   }

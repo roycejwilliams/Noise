@@ -60,7 +60,7 @@ const s = src("services/partnerReadout.ts").replace(/\/\/.*$/gm, "");
 check("it selects no names, emails, phones or message text", !/first_name|last_name|phone_number|SELECT\s+(?:[^`()]*,\s*)?(?:content|email)\b/i.test(s.replace(/content::jsonb/g, "")));
 check("it never sends itself: no mail or text code in the service", !/Resend|sendblue|emails\.send/i.test(s));
 const script = src("scripts/partnerReadout.ts");
-check("the script only previews: nothing in it can send to the host (sending is paused)", !/Resend|emails\.send|--send|sendblue/i.test(script.replace(/\/\/.*$/gm, "")) && /Nothing was sent/.test(script));
+check("the script sends nothing itself: its preview stores and sends nothing, and a send goes only through sendReadout (approved readouts, evals/presence/readoutFlow.ts)", !/Resend|emails\.send|sendblue/i.test(script.replace(/\/\/.*$/gm, "")) && /Nothing was stored or sent/.test(script) && /R\.sendReadout\(eventId\)/.test(script));
 check("its category call keeps prompts out of the trace store", /recordInputs: false, recordOutputs: false/.test(s));
 
 console.log(`partner readout rules: ${total - failed}/${total} passed`);

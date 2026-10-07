@@ -13,7 +13,9 @@ const src = (p: string) => fs.readFileSync(new URL(`../../src/${p}`, import.meta
 let total = 0, failed = 0;
 const check = (label: string, ok: boolean, detail?: unknown) => { total++; if (!ok) { failed++; console.log(`FAIL ${label}`, detail ?? ""); } };
 
-const doc = D.resolveDocument({ title: "Co: Product positioning & scaling", note: "From today.", sections: [{ heading: "What separates us", bullets: ["We match inside the event.", "<b>bold</b> stays text"] }], suggestions: ["An idea of Co's."] });
+const doc = D.resolveDocument({ title: "Co: Product positioning & scaling", note: "From today.", kind: "partnership_plan", sections: [{ heading: "What separates us", bullets: ["We match inside the event.", "<b>bold</b> stays text"] }], suggestions: ["An idea of Co's."] });
+const PAIR = ["11111111-1111-4111-8111-111111111111", "22222222-2222-4222-8222-222222222222"];
+process.env.GOOGLE_DOCS_TEST_USERS = PAIR.join(",");
 
 // ---- the scope: the narrowest Drive scope, and only it
 check("Co asks for drive.file and nothing wider in Drive (never drive, drive.readonly or documents)", GA.GOOGLE_SCOPES.includes(GD.DRIVE_FILE_SCOPE as any) && !GA.GOOGLE_SCOPES.some((s) => /auth\/(drive|drive\.readonly|documents)$/.test(s)));
@@ -36,6 +38,13 @@ check("the upload is one multipart body: metadata asking for a Google Doc, then 
   const denied: any = async () => ({ ok: false, status: 403, json: async () => ({ error: {} }) });
   const d = await GD.uploadGoogleDoc("tok", "Name", "<p>x</p>", denied);
   check("upload: a refusal says to reconnect and allow Docs", !d.ok && /reconnect Google and allow Docs/.test((d as any).why));
+  let shareSeen: any = null;
+  const shareOk: any = async (url: string, init: any) => { shareSeen = { url, init }; return { ok: true, status: 200, json: async () => ({ id: "anyoneWithLink" }) }; };
+  const sh = await GD.shareWithLink("tok", "abc123", shareOk);
+  const shareBody = JSON.parse(shareSeen.init.body);
+  check("share: one permission on that file only, anyone with the link as an editor, never discoverable in search", sh.ok && /drive\/v3\/files\/abc123\/permissions/.test(shareSeen.url) && shareSeen.init.method === "POST" && shareBody.role === "writer" && shareBody.type === "anyone" && shareBody.allowFileDiscovery === false && shareSeen.init.headers.Authorization === "Bearer tok");
+  const shareNo: any = async () => ({ ok: false, status: 403, json: async () => ({}) });
+  check("share: a Workspace refusal is a plain failure", (await GD.shareWithLink("tok", "abc123", shareNo)).ok === false);
   const boom: any = async () => { throw new Error("net"); };
   check("upload: no answer is a plain failure", (await GD.uploadGoogleDoc("tok", "Name", "<p>x</p>", boom)).ok === false);
 }
@@ -43,21 +52,46 @@ check("the upload is one multipart body: metadata asking for a Google Doc, then 
 // ---- delivery
 {
   const texts: any[] = [];
-  const deps = (o: { token?: string | null; up?: any } = {}): any => ({
+  const deps = (o: { token?: string | null; up?: any; share?: any } = {}): any => ({
     render: async () => Buffer.alloc(2000, 1),
     cache: (_b: Buffer, n?: string) => `https://x.test/plan-file/abc/${n}`,
     send: async (m: any) => { texts.push(m); return {}; },
     from: "+15550000000",
     googleToken: async () => (o.token === undefined ? "tok" : o.token),
-    uploadDoc: async (_t: string, name: string) => o.up ?? { ok: true, id: "abc", link: `https://docs.google.com/document/d/abc/edit#${name}` },
+    uploadDoc: async (_t: string, name: string) => { uploads.push(name); return o.up ?? { ok: true, id: "abc", link: `https://docs.google.com/document/d/abc/edit#${name}` }; },
+    shareDoc: async (_t: string, id: string) => { shares.push(id); return o.share ?? { ok: true }; },
   });
-  const to = { userId: "u1", firstName: "Royce", phone: "+15550100001", zone: "America/Los_Angeles", now: new Date("2026-10-08T18:00:00Z") };
+  const uploads: string[] = [];
+  const shares: string[] = [];
+  const to = { userId: PAIR[0], firstName: "Royce", phone: "+15550100001", zone: "America/Los_Angeles", now: new Date("2026-10-08T18:00:00Z") };
   const r = await X.deliverDocument(doc, to, "google_docs", deps());
   check("google_docs: made in their Drive, named like the PDF (without .pdf), and the link texted with the title", r.ok && r.via === "google_docs" && r.filename === "Co-Product-Positioning-Scaling-2026-10-08" && /docs\.google\.com/.test(texts[0]?.content) && texts[0].content.startsWith(doc.title) && !texts[0].media_url, { r, t: texts[0] });
   const nc = await X.deliverDocument(doc, to, "google_docs", deps({ token: null }));
   check("google_docs: not connected (or Docs not allowed) fails plainly, marked so the PDF can go instead", !nc.ok && (nc as any).notConnected === true);
   const bad = await X.deliverDocument(doc, to, "google_docs", deps({ up: { ok: false, why: "Google didn't take the document" } }));
   check("google_docs: Google refusing is a plain failure", !bad.ok && /didn't take/.test((bad as any).why));
+  check("google_docs: the Doc is opened to anyone with the link (the one it just made), and the text says so", (r as any).shared === true && shares.join() === "abc" && /Anyone with this link can open and edit it\./.test(texts[0]?.content));
+  texts.length = 0;
+  const priv = await X.deliverDocument(doc, to, "google_docs", deps({ share: { ok: false, why: "their Google account doesn't allow link sharing" } }));
+  check("google_docs: a Workspace that refuses link sharing leaves it private, still sent, and the text says only they can open it", priv.ok && (priv as any).shared === false && /Only you can open it/.test(texts[0]?.content) && !/Anyone with this link/.test(texts[0]?.content));
+  // the scope (with GOOGLE_DOCS_TEST_USERS set, as here): those members only, and shared working artifacts only, re-checked in the deliverer
+  for (const [label, who, kind] of [["a member outside the test pair", "33333333-3333-4333-8333-333333333333", "partnership_plan"], ["a goal plan (kind other), even for the pair", PAIR[1], "other"], ["no kind given", PAIR[1], undefined]] as const) {
+    uploads.length = 0; texts.length = 0;
+    const d0 = D.resolveDocument({ title: "T", kind, sections: [{ bullets: ["x"] }] } as any);
+    const res = await X.deliverDocument(d0, { ...to, userId: who }, "google_docs", deps());
+    check(`google_docs refused for ${label}: nothing made in Drive, nothing texted, marked so the PDF goes instead`, !res.ok && (res as any).notAllowed === true && uploads.length === 0 && texts.length === 0);
+  }
+  check("the second member of the pair gets one too, for each shared kind", (["venue_brief", "partnership_plan", "readout"] as const).every((k) => X.googleDocAllowed(PAIR[1], k)));
+  check("the test pair: user ids only, at most two, junk ignored", X.docsTestPair({ GOOGLE_DOCS_TEST_USERS: ` ${PAIR[0]} ,not-an-id,${PAIR[1]},44444444-4444-4444-8444-444444444444` } as any).join() === PAIR.join() && X.docsTestPair({} as any).length === 0);
+  check("with no list set, any member may get a Google Doc for a shared kind (their connected Google is the gate)", X.googleDocAllowed("33333333-3333-4333-8333-333333333333", "readout", {} as any) && !X.googleDocAllowed("33333333-3333-4333-8333-333333333333", "other", {} as any));
+  check("with no list set, docTargets sends a shared kind to Google for anyone who asked", X.docTargets({ userId: "33333333-3333-4333-8333-333333333333", kind: "venue_brief", saveTo: "google_doc", askedForGoogle: true, env: {} as any }).targets.join() === "google_docs");
+  check("with the list set, it narrows to those members", !X.googleDocAllowed("33333333-3333-4333-8333-333333333333", "readout", { GOOGLE_DOCS_TEST_USERS: PAIR.join(",") } as any) && X.googleDocAllowed(PAIR[0], "readout", { GOOGLE_DOCS_TEST_USERS: PAIR.join(",") } as any));
+  const T = (o: any) => X.docTargets({ userId: PAIR[0], kind: "venue_brief", saveTo: "google_doc", askedForGoogle: true, ...o });
+  check("targets: pair + shared kind + they asked = the Google Doc", T({}).targets.join() === "google_docs" && T({ saveTo: "both" }).targets.join() === "google_docs,pdf_text" && T({}).googleRefused === null);
+  check("targets: Co setting saveTo without their words is the PDF", T({ askedForGoogle: false }).targets.join() === "pdf_text" && T({ askedForGoogle: false }).googleRefused === null);
+  check("targets: outside the pair is the PDF, refused as not yet (never says why it's a pair)", T({ userId: "33333333-3333-4333-8333-333333333333" }).targets.join() === "pdf_text" && T({ userId: "33333333-3333-4333-8333-333333333333" }).googleRefused === "not_yet");
+  check("targets: their own goals (other) is the PDF, refused for its kind", T({ kind: "other" }).targets.join() === "pdf_text" && T({ kind: "other" }).googleRefused === "kind");
+  check("a document with no kind, or a made-up one, is 'other'", D.resolveDocument({ title: "T", sections: [] }).kind === "other" && D.resolveDocument({ title: "T", sections: [], kind: "goal_tracker" }).kind === "other" && D.resolveDocument({ title: "T", sections: [], kind: "readout" }).kind === "readout");
   check("the delivery seam has both targets now", Object.keys(X.DELIVERERS).sort().join() === "google_docs,pdf_text");
   check("the real token comes only when Google is set up AND they allowed Docs", /googleConfigured\(\) && g\.canCreateDocs\(\(await g\.isConnected\(userId\)\)\.scopes\)/.test(src("services/documentDelivery.ts")));
 }
@@ -69,11 +103,11 @@ check("the upload is one multipart body: metadata asking for a Google Doc, then 
   check("their words asking for a Google Doc", asks.every((t) => L.GOOGLE_DOC_ASK.test(t)), asks.filter((t) => !L.GOOGLE_DOC_ASK.test(t)));
   check("and not otherwise (a PDF, a resend, a calendar)", not.every((t) => !L.GOOGLE_DOC_ASK.test(t)), not.filter((t) => L.GOOGLE_DOC_ASK.test(t)));
   const lt = src("agent/loopTools.ts");
-  check("the tool: google_doc only when they asked in their own words (code checks the words, not Co's say-so)", /const wantsGoogle = \(input\.saveTo === "google_doc" \|\| input\.saveTo === "both"\) && GOOGLE_DOC_ASK\.test\(theirWords\(\)\)/.test(lt));
-  check("the tool: not connected means the PDF goes instead and Co offers to connect Google", /if \(!targets\.includes\("pdf_text"\)\) results\.push\(await deliverDocument\(doc, to, "pdf_text"\)\)/.test(lt) && /offer to send the link to connect Google \(googleConnection\)/.test(lt));
-  check("the tool: still one write, the same grounding (their words) before anything is made", lt.indexOf("documentProblems(doc, source)") < lt.indexOf("const wantsGoogle"));
+  check("the tool: google_doc only when they asked in their own words (code checks the words, not Co's say-so), routed by docTargets", /docTargets\(\{ userId: ctx\.userId, kind: doc\.kind, saveTo: input\.saveTo, askedForGoogle: GOOGLE_DOC_ASK\.test\(theirWords\(\)\) \}\)/.test(lt));
+  check("the tool: not connected, or not allowed, means the PDF goes instead; Co offers to connect Google only when it's the connection", /\(r\.notConnected \|\| r\.notAllowed\)/.test(lt) && /if \(!targets\.includes\("pdf_text"\)\) results\.push\(await deliverDocument\(doc, to, "pdf_text"\)\)/.test(lt) && /offer to send the link to connect Google \(googleConnection\)/.test(lt));
+  check("the tool: still one write, the same grounding (their words) before anything is made", lt.indexOf("documentProblems(doc, source)") < lt.indexOf("docTargets({"));
   const w = Cap.ABILITIES.find((a) => a.id === "write_document")!;
-  check("registry: Co knows it can save a Google Doc when they ask and are connected, and no longer says it can't", /save it as an editable Google Doc in their own Drive/.test(w.can) && !/Google Docs yet/.test(w.can) && /set saveTo to google_doc/.test(w.use ?? ""));
+  check("registry: Co knows it can save a Google Doc when they ask and are connected, and no longer says it can't", /save it as an editable Google Doc in their own Drive/.test(w.can) && /venue brief, a partnership plan or an event readout/.test(w.can) && !/Google Docs yet/.test(w.can) && /set saveTo to google_doc/.test(w.use ?? ""));
 }
 
 // ---- the connect pages are served where Co runs

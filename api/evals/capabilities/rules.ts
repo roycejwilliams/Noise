@@ -3,6 +3,7 @@
 //
 //   npx tsx evals/capabilities/rules.ts
 import { readFileSync } from "fs";
+import { setXKeys, xKeysOn } from "../mo/xKeys.js";
 
 process.env.SENDBLUE_API_API_KEY ||= "unused-in-tests";
 process.env.SENDBLUE_API_API_SECRET ||= "unused-in-tests";
@@ -31,13 +32,13 @@ const teamTools = Object.keys(createConversationTools({ userId: "u", phoneNumber
 const ackedTools = Object.keys(createConversationTools({ userId: "u", phoneNumber: "+10000000000", resolvedContent: "", isVoice: false, hasPendingOffer: false, recentOfferBurstActive: false, dryRun: true, ackSent: "✈️", sendCoReply: async () => true } as any).tools);
 // Member-facing Mo's tools exist only while its switches are on (services/capabilities.ts memberMoOn).
 const moOnTools = (() => {
-  const was = [process.env.MO_MEMBER_ENABLED, process.env.MO_ENABLED];
-  process.env.MO_MEMBER_ENABLED = "true";
+  const was = [xKeysOn() ? "on" : "off", process.env.MO_ENABLED] as const;
+  setXKeys("on");
   process.env.MO_ENABLED = "true";
   try {
     return Object.keys(createConversationTools({ userId: "u", phoneNumber: "+10000000000", resolvedContent: "", isVoice: false, hasPendingOffer: false, recentOfferBurstActive: false, dryRun: true, sendCoReply: async () => true } as any).tools);
   } finally {
-    if (was[0] === undefined) delete process.env.MO_MEMBER_ENABLED; else process.env.MO_MEMBER_ENABLED = was[0];
+    setXKeys(was[0]);
     if (was[1] === undefined) delete process.env.MO_ENABLED; else process.env.MO_ENABLED = was[1];
   }
 })();

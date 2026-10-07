@@ -532,11 +532,12 @@ export function loopTools(
           .max(10)
           .describe("Each a heading, a sentence or two of framing, then the points as short bullets: scannable, not dense paragraphs. ONLY what they said, in their words; your own ideas go in suggestions, never here."),
         suggestions: z.array(z.string()).max(5).optional().describe("Anything of your own: an idea, an option, a recommendation. It appears on the page marked as Co's suggestions, apart from their points. Leave it out when you have none."),
+        kind: z.enum(["venue_brief", "partnership_plan", "readout", "other"]).optional().describe("What it is for: venue_brief (for a venue or space around an event), partnership_plan (working with a partner, sponsor or host), readout (what came of an event, for a host or partner), or other (anything else: their goals, a plan for themselves, a summary). Leave it out for other."),
         saveTo: z.enum(["pdf", "google_doc", "both"]).optional().describe("Leave this out: it comes as a PDF in this conversation. Only when they ask for a Google Doc in their own words set google_doc (or both, if they want the PDF too)."),
       }),
       execute: async (input) => {
         const { resolveDocument, documentProblems } = await import("../services/documentSheet.js");
-        const { deliverDocument, loadTheirWords } = await import("../services/documentDelivery.js");
+        const { deliverDocument, docTargets, loadTheirWords } = await import("../services/documentDelivery.js");
         const { recordDocumentWritten } = await import("../services/documentOffer.js");
         const doc = resolveDocument(input);
         // Their record is their words: two weeks of their texts and calls, and this message. What Co read this turn can back only
@@ -557,17 +558,17 @@ export function loopTools(
         const city = ctx.turn?.profile?.city ?? null;
         const zone = city ? await import("../services/geocoding.js").then((g) => g.getTimezoneForCity(city)).catch(() => null) : null;
         const to = { userId: ctx.userId, firstName: String(rows[0]?.first_name ?? ctx.firstName ?? ""), phone: ctx.phoneNumber, zone };
-        // A Google Doc only when they asked for one in their own words (code checks the words, not Co's say-so); otherwise the PDF.
+        // A Google Doc only when they asked for one in their own words (code checks the words, not Co's say-so), and only for a shared
+        // working artifact (venue brief, partnership plan, readout) for a member with Google connected (narrowed by GOOGLE_DOCS_TEST_USERS when set); otherwise the PDF.
         // Not connected (or Docs not allowed): the PDF goes instead, and Co offers to connect Google.
-        const wantsGoogle = (input.saveTo === "google_doc" || input.saveTo === "both") && GOOGLE_DOC_ASK.test(theirWords());
-        const targets: ("pdf_text" | "google_docs")[] = wantsGoogle ? (input.saveTo === "both" ? ["google_docs", "pdf_text"] : ["google_docs"]) : ["pdf_text"];
+        const { targets, googleRefused } = docTargets({ userId: ctx.userId, kind: doc.kind, saveTo: input.saveTo, askedForGoogle: GOOGLE_DOC_ASK.test(theirWords()) });
         const results: Awaited<ReturnType<typeof deliverDocument>>[] = [];
         let googleMissing = false;
         for (const target of targets) {
           const r = await deliverDocument(doc, to, target);
           results.push(r);
-          if (!r.ok && target === "google_docs" && r.notConnected) {
-            googleMissing = true;
+          if (!r.ok && target === "google_docs" && (r.notConnected || r.notAllowed)) {
+            googleMissing = !!r.notConnected;
             if (!targets.includes("pdf_text")) results.push(await deliverDocument(doc, to, "pdf_text"));
           }
         }
@@ -584,13 +585,94 @@ export function loopTools(
         await recordDecision({ layer: 3, decision: "loop.writeDocument", userId: ctx.userId, outcome: "act", action: doc.title, proposal: { sections: doc.sections.length, via: sent.via } }).catch(() => {});
         const asPdf = sentOk.some((r) => r.via === "pdf_text");
         const asDoc = sentOk.some((r) => r.via === "google_docs");
-        ctx.facts?.add("did_this_turn", `Sent them a document, "${doc.title}" (${doc.sections.length} sections)${asDoc ? `, as a Google Doc in their own Drive (link texted: ${sent.link})` : ""}${asDoc && asPdf ? " and" : ""}${asPdf ? " as a PDF in this conversation" : ""}.`);
+        const sharedLink = sentOk.some((r) => r.via === "google_docs" && r.shared);
+        ctx.facts?.add("did_this_turn", `Sent them a document, "${doc.title}" (${doc.sections.length} sections)${asDoc ? `, as a Google Doc in their own Drive (link texted: ${sent.link}; ${sharedLink ? "anyone with the link can open and edit it" : "only they can open it"})` : ""}${asDoc && asPdf ? " and" : ""}${asPdf ? " as a PDF in this conversation" : ""}.`);
         await remember({ next: `document sent: ${doc.title}` });
         return {
           ok: true,
           via: sent.via,
-          note: `${asDoc ? "The Google Doc is in their Drive and its link is in this conversation. " : ""}${asPdf ? "The PDF is in this conversation. " : ""}${googleMissing ? "Their Google isn't connected with Docs allowed, so it went as a PDF: say so in a line and offer to send the link to connect Google (googleConnection). " : ""}Say in one line what it covers and that you'll change anything they want; don't repeat its contents.`,
+          note: `${asDoc ? `The Google Doc is in their Drive and its link is in this conversation; ${sharedLink ? "anyone with the link can open and edit it, and the text told them so" : "only they can open it for now, and the text told them so"}. ` : ""}${googleRefused === "kind" ? "They asked for a Google Doc, but a Google Doc is only for a venue brief, partnership plan or readout, so this went as a PDF: say so in a line. " : googleRefused === "not_yet" ? "They asked for a Google Doc, but Google Docs aren't open to them yet, so it went as a PDF: say so in a line, without promising when. " : ""}${asPdf ? "The PDF is in this conversation. " : ""}${googleMissing ? "Their Google isn't connected with Docs allowed, so it went as a PDF: say so in a line and offer to send the link to connect Google (googleConnection). " : ""}Say in one line what it covers and that you'll change anything they want; don't repeat its contents.`,
         };
+      },
+    }),
+
+    // A document from a PDF they sent (services/memberFiles.ts, board item 4). Drafted in its own call from their file and their words,
+    // so the file's contents never enter this conversation: Co doesn't see them, and every record of it here says only "their file #n"
+    // (no title, no words of it), so nothing from a file reaches their memory, their profile, or anything another member's matching reads.
+    writeFromFile: tool({
+      description: toolUse("writeFromFile"),
+      inputSchema: z.object({
+        file: z.number().int().positive().optional().describe("The file's number (#2 is 2) when they name one; leave it out for their newest."),
+        kind: z.enum(["venue_brief", "partnership_plan", "readout", "other"]).optional().describe("What it is for: venue_brief, partnership_plan, readout, or other (anything for themselves)."),
+        want: z.string().describe("What they asked for, in a few of their own words."),
+        saveTo: z.enum(["pdf", "google_doc", "both"]).optional().describe("Leave this out for a PDF in this conversation. Only when they ask for a Google Doc in their own words: google_doc (or both)."),
+      }),
+      execute: async (input) => {
+        const F = await import("../services/memberFiles.js");
+        const { resolveDocument, documentProblems } = await import("../services/documentSheet.js");
+        const { docTargets, loadTheirWords } = await import("../services/documentDelivery.js");
+        const deliverDocument = F.fileSteps.deliver;
+        // Only this member's own file, by their own number.
+        const file = await F.fileText(ctx.userId, input.file ?? null);
+        if (!file) {
+          const have = await F.filesOnFile(ctx.userId).catch(() => []);
+          return { ok: false, error: have.length ? `No file #${input.file} on file for them; their files are ${have.map((f) => `#${f.n} (sent ${f.sentOn})`).join(", ")}. Ask which one.` : "They have no file on file with you. Tell them to text you the PDF first." };
+        }
+        const theirs = [await loadTheirWords(ctx.userId).catch(() => ""), theirWords()].join("\n");
+        if (ctx.dryRun) {
+          ctx.facts?.add("did_this_turn", `Sent them a document made from their file #${file.n}.`);
+          return { ok: true, note: "Test run: nothing was drafted or sent." };
+        }
+        const draft = await F.fileSteps.draft({ fileText: file.text, theirWords: theirs, kind: input.kind ?? "other", want: input.want });
+        if (!draft) return { ok: false, error: "The document couldn't be drafted right now. Say so plainly and offer to try again." };
+        const doc = resolveDocument(draft);
+        // Rule 4: the same grounding as writeDocument, with their file as part of their own record. Nothing of either is shown to Co.
+        const problems = documentProblems(doc, { theirs: `${theirs}\n${file.text}` });
+        if (problems.length) {
+          notDone(`No document sent from their file #${file.n}: it didn't hold to their file and words.`);
+          return { ok: false, error: "The draft leaned on things that weren't in their file or their words, so it wasn't sent. Say you couldn't make it hold to what they gave you, and ask what they want it to cover." };
+        }
+        const { rows } = await pool.query(`SELECT first_name FROM users WHERE id = $1`, [ctx.userId]).catch(() => ({ rows: [] as any[] }));
+        const to = { userId: ctx.userId, firstName: String(rows[0]?.first_name ?? ctx.firstName ?? ""), phone: ctx.phoneNumber, zone: null };
+        const { targets, googleRefused } = docTargets({ userId: ctx.userId, kind: doc.kind, saveTo: input.saveTo, askedForGoogle: GOOGLE_DOC_ASK.test(theirWords()) });
+        const results: Awaited<ReturnType<typeof deliverDocument>>[] = [];
+        for (const target of targets) {
+          const r = await deliverDocument(doc, to, target);
+          results.push(r);
+          if (!r.ok && target === "google_docs" && (r.notConnected || r.notAllowed) && !targets.includes("pdf_text")) results.push(await deliverDocument(doc, to, "pdf_text"));
+        }
+        const sentOk = results.filter((r): r is Extract<typeof r, { ok: true }> => r.ok);
+        if (!sentOk.length) {
+          notDone(`No document sent from their file #${file.n}.`);
+          return { ok: false, error: "It didn't send. Say so plainly and offer to try again." };
+        }
+        const via = sentOk.map((r) => r.via).join("+");
+        const line = `[sent a document made from their file #${file.n}]`;
+        await logDeliveredPlan(`Co replied: ${line}`);
+        state.sentMessages.push(line);
+        await recordDecision({ layer: 3, decision: "loop.writeFromFile", userId: ctx.userId, outcome: "act", action: `file #${file.n}`, proposal: { via, kind: doc.kind } }).catch(() => {});
+        ctx.facts?.add("did_this_turn", `Sent them a document made from their file #${file.n}${sentOk.some((r) => r.via === "google_docs") ? ", as a Google Doc in their own Drive" : ""}${sentOk.some((r) => r.via === "pdf_text") ? ", as a PDF in this conversation" : ""}.`);
+        await remember({ next: `document sent from their file #${file.n}` });
+        return {
+          ok: true,
+          via,
+          note: `It's sent. ${googleRefused === "kind" ? "A Google Doc is only for a venue brief, partnership plan or readout, so it went as a PDF: say so in a line. " : googleRefused === "not_yet" ? "Google Docs aren't open to them yet, so it went as a PDF: say so in a line. " : ""}Say in one line that it's there and you'll change anything they want. You haven't seen what it says, so don't describe it.`,
+        };
+      },
+    }),
+
+    // Their files, gone on their ask (services/memberFiles.ts): code checks their words asked for it, not Co's say-so.
+    deleteMyFiles: tool({
+      description: toolUse("deleteMyFiles"),
+      inputSchema: z.object({ file: z.number().int().positive().optional().describe("The file's number when they name one; leave it out to delete all of them.") }),
+      execute: async (input) => {
+        const F = await import("../services/memberFiles.js");
+        if (!F.DELETE_ASK.test(theirWords())) return { ok: false, error: "Not done: they haven't asked to delete their files in this message. Only delete when they ask." };
+        if (ctx.dryRun) return { ok: true, note: "Test run: nothing was deleted." };
+        const n = await F.deleteFiles(ctx.userId, input.file ?? null);
+        await recordDecision({ layer: 3, decision: "loop.deleteMyFiles", userId: ctx.userId, outcome: "act", action: input.file ? `file #${input.file}` : "all", proposal: { deleted: n } }).catch(() => {});
+        ctx.facts?.add("did_this_turn", n ? `Deleted ${n === 1 ? "one of their files" : `${n} of their files`}${input.file ? ` (#${input.file})` : ""}; ${n === 1 ? "it's" : "they're"} gone.` : "Looked for their files to delete and found none.");
+        return { ok: true, deleted: n, note: n ? "Say plainly what was deleted and that it's gone." : "There was nothing to delete: say so." };
       },
     }),
 

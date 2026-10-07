@@ -619,6 +619,18 @@ export function registerJobs(io: Server) {
     }
   });
 
+  // The partner readout's draft, 12 hours after a Co event ends (services/partnerReadoutSend.ts). Drafts only: the team is emailed
+  // that it's ready, and nothing reaches a host until a person approves and sends it.
+  cron.schedule("25 * * * *", async () => {
+    try {
+      const { runReadoutDrafts } = await import("../services/partnerReadoutSend.js");
+      const n = await runReadoutDrafts();
+      if (n) console.log(`partnerReadout: drafted ${n} readout(s)`);
+    } catch (error: any) {
+      console.error("Partner readout cron error:", error?.message ?? error);
+    }
+  });
+
   // Arrivals and departures from shared locations, every 2 minutes, only
   // while a Co event is on (it returns right away otherwise). An arrival
   // re-runs that event's in-room scoring so their nudge goes out now.

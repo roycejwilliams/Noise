@@ -108,7 +108,7 @@ export function approachProblem(text: string, o: { memberFirstName: string; memb
 export type ContactState = {
   step: "approach" | "follow_up";
   now: Date;
-  enabled: boolean; // MO_MEMBER_ENABLED and the channel is configured
+  enabled: boolean; // Mo is on and Co's X send keys are set
   clubPaused: boolean;
   optIn: "yes" | "no" | null;
   memberPaused: boolean;

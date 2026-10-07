@@ -1,6 +1,7 @@
-// Member-facing Mo: the scheduled work and the front desk's inbox. Every job is a no-op unless MO_ENABLED (the team's
-// switch) AND MO_MEMBER_ENABLED are both "true": member-facing Mo is off by default, and real sends also wait on Co's X
-// keys. Nothing here decides who may be contacted; mo/memberFlow.ts and mo/memberRules.ts do, at the moment of sending.
+// Member-facing Mo: the scheduled work and the front desk's inbox. It runs when Mo can actually work for a member: MO_ENABLED
+// (the team's switch) is "true" and Co's X send keys are set. No separate member switch (Royce, 2026-10-07): without the keys
+// nothing could go out, so members are never offered it. Nothing here decides who may be contacted; mo/memberFlow.ts and
+// mo/memberRules.ts do, at the moment of sending.
 import { proactivePaused } from "../services/proactivePause.js";
 import pool from "../db/db.js";
 import { recordDecision } from "../harness/core.js";
@@ -11,12 +12,11 @@ import { huntForMember, realHuntDeps, realIsHuntable, realOpenAsks } from "./mem
 import { landReply, markJoined, moHoursLA, runMemberSends, seedIntros, teamCap, type CandidateRow, type SendDeps, type ReplyDeps } from "./memberFlow.js";
 
 export function memberMoEnabled(env: NodeJS.ProcessEnv = process.env): boolean {
-  return env.MO_MEMBER_ENABLED === "true" && moEnabled(env);
+  return moEnabled(env) && xWriteConfigured(env);
 }
-// Real sends need Co's X account too (email isn't wired for member Mo yet).
+// Paused (services/proactivePause.ts): no member-Mo contact goes out; replies to someone who answered still do.
 export function memberMoCanSend(env: NodeJS.ProcessEnv = process.env): boolean {
-  // Paused (services/proactivePause.ts): no member-Mo contact goes out; replies to someone who answered still do.
-  return memberMoEnabled(env) && !proactivePaused(env) && xWriteConfigured(env);
+  return memberMoEnabled(env) && !proactivePaused(env);
 }
 
 async function clubPaused(): Promise<boolean> {
@@ -156,6 +156,7 @@ export function realReplyDeps(send: (text: string) => Promise<unknown>): ReplyDe
       for (const key of keys) await pool.query(`INSERT INTO mo_suppression (key, reason) VALUES ($1, $2) ON CONFLICT (key) DO NOTHING`, [key, reason]).catch(() => {});
     },
     tellMember: (userId, kind, candidateId) => queueUpdate(userId, kind, candidateId),
+    notifyTeam: async (text) => (await import("./review.js")).textApprovers(text),
   };
 }
 

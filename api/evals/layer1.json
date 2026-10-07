@@ -100,6 +100,9 @@
     "evals/calls/llmProxy.ts",
     "evals/calls/provenance.ts",
     "evals/docs/document.ts",
-    "evals/docs/googleDocs.ts"
+    "evals/docs/googleDocs.ts",
+    "evals/docs/memberFiles.ts",
+    "evals/mo/memberGate.ts",
+    "evals/presence/readoutFlow.ts"
   ]
 }
