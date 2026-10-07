@@ -202,11 +202,11 @@ export const CALL_SENT_MAX = 1800;
 //   4. what was sent lately, last and bounded, with the facts on file
 // A section that doesn't fit is skipped, not the end of the build, so a long
 // one can't take every later short one with it.
-export function assembleCallSummary(o: { lessons: string[]; sentLines: string[]; threads: { text: string }[]; base: string; max?: number; sentMax?: number }): string {
+export function assembleCallSummary(o: { lessons: string[]; sentLines: string[]; threads: { text: string; line?: string }[]; base: string; max?: number; sentMax?: number }): string {
   const max = o.max ?? CALL_CONTEXT_MAX;
   const sentMax = o.sentMax ?? CALL_SENT_MAX;
   const lessons = o.lessons.length ? `How to be with them, from times they corrected you (keep to these):\n${o.lessons.map((l) => `- ${l}`).join("\n")}` : null;
-  const threads = o.threads.length ? `What they're in the middle of:\n${o.threads.slice(0, 5).map((t) => `- ${t.text}`).join("\n")}` : null;
+  const threads = o.threads.length ? `What they're in the middle of:\n${o.threads.slice(0, 5).map((t) => `- ${t.line ?? t.text}`).join("\n")}` : null;
   const header = "What you sent them lately and what's on file for each (these are the facts; if a time or place isn't listed here, you don't have it, so say so plainly):\n";
   const kept: string[] = [];
   let used = header.length;
@@ -248,7 +248,8 @@ export async function buildCallKnowledge(userId: string): Promise<CallKnowledge>
   const strip = async (xs: string[]) => (xs.length ? memberSafe(userId, xs.map((content) => ({ content, memory_type: "call_context" }))) : []);
   const sentLines = await strip(sentDetailLines({ sent }, 7));
   const lessons = await strip(turn?.lessons ?? []);
-  const threads = (await strip((turn?.threads ?? []).map((t: any) => String(t.text ?? "")))).map((text) => ({ text }));
+  // The stamp rides with each thread (when they said it, whether it is old); memberSafe sees the whole stamped line.
+  const threads = (await strip((turn?.threads ?? []).map((t: any) => String(t.line ?? t.text ?? "")))).map((text) => ({ text, line: text }));
   const asks = turn?.asks ?? [];
   const ledger = turn?.ledger.lines ?? [];
 

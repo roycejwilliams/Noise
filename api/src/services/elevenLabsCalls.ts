@@ -78,16 +78,19 @@ export async function registerElevenLabsCall(o: {
 }): Promise<string> {
   const agentId = process.env.ELEVENLABS_AGENT_ID;
   if (!agentId) throw new Error("ELEVENLABS_AGENT_ID is not set");
+  const callToken = issueCallToken(o.userId);
   return elevenLabs().conversationalAi.twilio.registerCall({
     agentId,
     fromNumber: o.from,
     toNumber: o.to,
     direction: o.direction,
     conversationInitiationClientData: {
+      // Who the call is, for our LLM endpoint (only read when the agent is on it; harmless on the direct path).
+      customLlmExtraBody: { user_id: o.userId, call_token: callToken },
       ...(o.opening ? { conversationConfigOverride: { agent: { firstMessage: o.opening } } } : {}),
       dynamicVariables: {
         user_id: o.userId,
-        call_token: issueCallToken(o.userId),
+        call_token: callToken,
         first_name: o.firstName,
         context_summary: o.contextSummary,
         direction: o.direction,
@@ -194,9 +197,21 @@ export function guardrailsLast(prompt: string): { rest: string; guardrails: stri
 // voice sooner (2026-10-05: ~1.0s to the first full sentence).
 export const SPEED_GUIDE = `# Speed and length
 Start every reply with a short first sentence, under ten words, that acknowledges or answers ("That makes sense." "Good, that helps."), then carry on. A long first sentence delays your voice.
+# Cadence
+You are speaking, not writing. Your voice has a calm, unhurried rhythm: a short sentence, a beat, then one a little longer, then a short one to land it. Every thought ends with a period and the next starts a new sentence. The only marks you use are periods, commas and question marks. Never write a dash of any kind (not "—", not "–", not " - "), never a semicolon, never parentheses. No sentence runs past 15 words. When a sentence wants a dash, put a period there instead.
+Wrong: "That's smart—keeping it warm before you dig in. So Jacqueline's already talked to him, and you're thinking dinner or lunch to see what fits."
+Right: "That's smart. Keep it warm first. So Jacqueline has already talked to him, and you're picturing a dinner or a lunch. What would you want out of it?"
 Speech can't be skimmed: say one thought in two to four short sentences, about 60 words at most, with at most one question, then stop. Never three paragraphs, never a list, never a recap of what they just said. Never open with "I appreciate", "I want to be straight with you" or "Let me be honest": just say the thing.
 When they ask about you (what would make you better, how it feels), answer plainly from Co's side of the work in a sentence or two ("from where I sit..."). No disclaimers about being an AI or about what you can't feel.
-When they want help over days (memos, resources, prep, options), never say it isn't how you work: say yes, that you'll set it up when you hang up and text what you find. Don't promise what it will find or when.`;
+When they want help over days (memos, resources, prep, options), never say it isn't how you work: say yes, that you'll set it up when you hang up and text what you find. Don't promise what it will find or when.
+# What you know, and how old it is
+Lines about them carry a stamp: when they said it, and OLD when it has gone stale. A line marked OLD is a question, never a fact: "Last time you were working on X. Is that still the thing?" Never ask about or state an OLD line as if it were current.
+When they push back on something you said about them ("what do you mean?", "I don't remember saying that", "what are you talking about"), check its stamp first. If it is old, your own read, or you can't tell where it came from, drop it in one short sentence ("That was an old note of mine. Scratch it.") and go back to what they are saying now. Never apologize twice, never say you got something wrong on your end, never explain the note.
+# Offers and promises
+Name an event, place or time only if it is in "What Co has found for them" or they said it. If you can't point to the line it came from, don't name it: say you'll look and text it.
+A promise to text or send something is a real task the moment you say it. Say it once, plainly ("I'll text you those links when we hang up"), and only when it is true.
+# Their state comes first
+If they say they are tired, drained, overwhelmed or having a hard time, that outranks everything on your list. Close warmly in two sentences: acknowledge it, then let them go. No pitch, no recap, no list of what you are carrying, no new event, no question that asks more of them. What you found keeps; say you'll text it when they have the energy, or not at all.`;
 
 // Filled per call (services/callBriefing.ts): their clock, and what Co has found for them, fetched while the phone rang.
 export const CALL_NOW = `# Right now
@@ -268,6 +283,8 @@ export function buildAgentConfig(o: {
   ttsModel?: string;
   turnEagerness?: string;
   temperature?: number;
+  // The call brain behind our own endpoint (services/callLlmProxy.ts) instead of ElevenLabs' Haiku. Off: the direct path.
+  proxy?: { url: string; secretId: string; model?: string } | null;
 }): Record<string, unknown> {
   const tool = (name: string, description: string, extra: Record<string, unknown> = {}, mode: "immediate" | "async" = "immediate") => ({
     type: "webhook",
@@ -304,7 +321,8 @@ export function buildAgentConfig(o: {
     name: o.name,
     // Each call picks its own opening line (pickOpening), so the first message
     // must be overridable per call.
-    platform_settings: { overrides: { conversation_config_override: { agent: { first_message: true } } }, ...CALL_PLATFORM_SETTINGS },
+    // custom_llm_extra_body: the call's user id and token reach our LLM endpoint with every turn (set when the call is registered).
+    platform_settings: { overrides: { conversation_config_override: { agent: { first_message: true } }, custom_llm_extra_body: true }, ...CALL_PLATFORM_SETTINGS },
     conversation_config: {
       asr: { user_input_audio_format: "ulaw_8000", keywords: CALL_KEYWORDS },
       tts: {
@@ -332,7 +350,8 @@ export function buildAgentConfig(o: {
         dynamic_variables: { dynamic_variable_placeholders: { first_name: "there", context_summary: "", user_id: "", call_token: "", direction: "", right_now: "", finds_now: "" } },
         prompt: {
           prompt: promptForElevenLabs(o.prompt),
-          llm: o.llm ?? AGENT_DEFAULTS.llm,
+          llm: o.proxy ? "custom-llm" : (o.llm ?? AGENT_DEFAULTS.llm),
+          ...(o.proxy ? { custom_llm: { url: o.proxy.url, model_id: o.proxy.model ?? AGENT_DEFAULTS.llm, api_key: { secret_id: o.proxy.secretId }, api_type: "chat_completions" } } : {}),
           temperature: o.temperature ?? AGENT_DEFAULTS.temperature,
           // If the main model is slow to start, ElevenLabs falls to another; pin it to the same model so the voice and style don't shift mid-call.
           backup_llm_config: { preference: "override", order: [AGENT_DEFAULTS.backupLlm] },

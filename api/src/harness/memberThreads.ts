@@ -18,6 +18,7 @@
 //   - staleness only ever moves a thread to "waiting", never closed.
 // Read only with the owner's user id; nothing here ever goes to another member.
 import { notToTeammate } from "../services/teamLines.js";
+import { stampOf } from "../services/factLabels.js";
 import { anthropic } from "@ai-sdk/anthropic";
 import { generateText } from "ai";
 import { DateTime } from "luxon";
@@ -401,9 +402,11 @@ export function pickThreadForCheckin(threads: MemberThread[], today: string): Me
   return eligible[0] ?? null;
 }
 
-export function renderThreads(threads: MemberThread[]): string {
+// Every reader of a thread gets it stamped with when they said it and whether it can still be stated as current
+// (services/factLabels.ts stampOf): the recap, a draft, the reflection, the call briefing.
+export function renderThreads(threads: MemberThread[], now: Date = new Date()): string {
   return threads
-    .map((t) => `- ${t.text} (${t.status}${t.dueDate ? `, date ${t.dueDate}` : ""}${t.feeling ? `, felt ${t.feeling}` : ""}; they said: "${t.openedQuote.slice(0, 160)}")`)
+    .map((t) => `- ${t.text} (${t.status}, ${stampOf({ saidOn: t.openedAt, confirmedOn: t.lastTouchedAt, dueOn: t.dueDate }, now).label}${t.feeling ? `, felt ${t.feeling}` : ""}; they said: "${t.openedQuote.slice(0, 160)}")`)
     .join("\n");
 }
 

@@ -1,0 +1,139 @@
+{
+ "note": "The 10/6 6:21pm ElevenLabs call (Haiku direct path): what Co said raw, what the member said, and what the call was given. Used to replay the speakable cleaner, the offer guard and the drained-member close.",
+ "given": {
+  "firstName": "Royce",
+  "findsNow": "Candidates, not picks: mention only the one or two that genuinely fit what they want, describe each only from its details here, say what's unconfirmed, and offer to text them the link rather than reading it out. Say when an event is only as `starts` says (it is worded from right now): never call something \"tonight\" or \"today\" unless `starts` says today.\nLooking for: founder and investor events, weekday after 3pm or weekend\n- Netic Dance Workshop with Kyle Hanagami, BlackPink Choreographer | A free dance workshop Saturday afternoon with a BlackPink choreographer, pulls engineers, PMs, and designers from around the Bay. Pure fun, zero agenda, still a room full of builders if you want to me | link on file (offer to text it)\n- The Oakland Join-Up: Fall Activity Fair | The Oakland Join-Up Sunday 10 to 2, a low pressure fair where you meet 25+ local groups, come and go as you like, no pitch or performance expected. | link on file (offer to text it)\n- South Park Commons FAQ (Member Residency / Founder Fellowship application process) | South Park Commons, community first rather than a classic cohort, built for pre-idea and pre-seed founders. Rolling applications, and you already looked at their Member Residency so this is the natura | link on file (offer to text it)\n- Chiffon Cake Popup @ Cat Town Oakland | starts Saturday, October 10 at 11:00 AM | \"Chiffon Cake Popup @ Cat Town Oakland\" starts Saturday, October 10 at 11:00 AM and ends 2:00 PM (America/Los_Angeles). \"Chiffon Cake Popup @ Cat Town Oakland\" is at Cat Town, 2869 Broadway, Oakland, CA 94612, USA. Hosted by ú nu cakes. It's free. | link on file (offer to text it)\n- Read in the Park - South Bay 📚 | starts Saturday, October 10 at 3:00 PM | \"Read in the Park - South Bay 📚\" starts Saturday, October 10 at 3:00 PM and ends 5:30 PM (America/Los_Angeles). \"Read in the Park - South Bay 📚\" is in Sunnyvale; the exact address is only shown to registered guests. Hosted by Sasmini Bandara, Dulitha Wijewantha, Mahima C, Sneha Yadav. It's free. | link on file (offer to text it)\n- Sudo Choir Annual Concert - 拾度合唱团专场音乐会 | starts Sunday, October 11 at 4:00 PM | \"Sudo Choir Annual Concert - 拾度合唱团专场音乐会\" starts Sunday, October 11 at 4:00 PM and ends 5:30 PM (America/Los_Angeles). \"Sudo Choir Annual Concert - 拾度合唱团专场音乐会\" is at Valley Presbyterian Church, 945 Portola Rd, Portola Valley, CA 94028, USA. Hosted by Find A Cappel",
+  "rightNow": "Right now it's 6:21 PM on Tuesday, October 6 where they are (evening). What's ahead for them: tomorrow: Init() by WorkOS (they mentioned it); tomorrow: Open Source AI Stack panel (they mentioned it); tomorrow: Open Source AI Stack panel (they mentioned it); Sat Oct 10 (in 4 days): founder and investor events, weekday after 3pm or weekend (what you're finding for them). \"Tonight\" and \"today\" mean the hours left before they sleep; an event is only \"tonight\" if its start below says today.",
+  "contextSummary": "How to be with them, from times they corrected you (keep to these):\n- Don't assert plans or intentions he hasn't stated; only reference things he's actually said.\n- Don't assume what a phrase means (like 'Building You') without checking; let them clarify what they actually mean before responding.\n- When suggesting events, check their weekday availability before recommending weekday timeslots.\n- When they share complicating facts (ownership, IP) about a situation, address the real structural issue, not just the simpler surface framing offered earlier\n- when memory updates are corrected, explain clearly why the stale info persisted since they may report it to their team\n- Track when a plan or date they mentioned changes, and stop referencing it as current once they've said it's off\n\nWhat they're in the middle of:\n- Civic Joy Fund no longer an option; still trying to find other sponsors for the event\n- figuring out how to get their first paying customer/check for Co\n- looking for a dependable friend to go through the founder journey with\n- looking for a builder/founder community to connect with\n- deciding how to position the concept — anti-networking social club vs b2b model\n\nThings they've corrected (the corrected version wins over anything below; never state the old one as true, and if they ask what you had or when it changed, say it plainly with the date):\n- when they're free: you had \"Tuesday evenings\"; they corrected it to \"weekends\" on Oct 5\n- goal: you had \"meet VC and founder connections before Oct 10\"; they corrected it to \"no longer doing the Oct 10th event\" on Oct 5\n- goal: you had \"launch Co's first in-person event (Oct 10th)\"; they corrected it to \"shifting focus to a November event partnership with Jeremy Toce/House of AI\" on Oct 5\n- goal: you had \"solve venue/cost/permit issue via Civic Joy Fund or indoor space\"; they said that's wrong on Sep 25\n\nWhat you sent them lately and what's on file for each (these are the facts; if a time or place isn't listed here, you don't have it, so say so plainly):\n- From the page for \"The AI-Native Talent Hunt with Codex - #SFTechWeek\" (read 2026-10-06 22:54 UTC): what: event; host: Emergences Labs, Darijan Ducic, TinyFish; start: Sunday, October 11 at 10:00 AM PDT; end: Sunday, October 11 at 6:00 PM PDT; timezone: America/Los_Angeles; online: in person; cost: free; sold out: no. The page for \"The AI-Native Talent Hunt with Codex - #SFTechWeek\" doesn't state: venue.\n- Co couldn't read the page for \"The 500 Fellowship (500 Global Flagship Accelerator, Batch 37)\": couldn't read the page. Nothing on it is known.\n- From the page for \"Compute Trading Happy Hour\" (read 2026-10-07 00:40 UTC): what: event; host: Dmytro Lokshyn, Anirudh Pai, Mia; start: Tuesday, October 6 at 5:00 PM PDT; end: Tuesday, October 6 at 8:00 PM PDT; timezone: America/Los_Angeles; venue: Chotto Matte San Francisco; address: Chotto Matte San Francisco, 50 O'Farrell St, San Francisco, CA 94108, USA; online: in person; cost: free; sold out: no.\n- From the page for \"Built in SF\" (read 2026-10-07 00:40 UTC): what: event; host: Garry Tan, Pierce Neinken, Andrew Nicholls, Zev Newman; start: Monday, October 5 at 4:30 PM PDT; end: Monday, October 5 at 11:00 PM PDT; timezone: America/Los_Angeles; online: in person; cost: free; sold out: no. The page for \"Built in SF\" doesn't state: venue."
+ },
+ "turns": [
+  {
+   "role": "agent",
+   "message": "Hey Royce, it's Co. Any luck finding another sponsor for the event since Civic Joy Fund fell through?"
+  },
+  {
+   "role": "user",
+   "message": "Yeah. No, we're, um, we're actually canceling the event. Um, so that's out the window for this time around. Uh, our focus is partnering with another startup called Sequent AI, um, later on in November. So I'll hope focus on that. Uh, so we can kind of forget about October, um, date since it's already SF Tech Week. We didn't want to spend unnecessary money, so."
+  },
+  {
+   "role": "agent",
+   "message": "Got it—so the October push is off, and you're shifting to November with Sequent AI instead. That makes sense given the timing and the money piece."
+  },
+  {
+   "role": "agent",
+   "message": "What's the shape of that partnership looking like—is this an event you're running together, or something else?"
+  },
+  {
+   "role": "user",
+   "message": "Yeah, so he's throwing a launch party for his, his startup, so he asked us to kind of partner with us. Jacqueline, my co-founder, actually spearheaded that, and I set, set up the meeting between those two because I was unable to. Um, we haven't looked at, you know, the specifics around it yet, um, but we actually want to keep that relationship warm, so we're just thinking about inviting him out to dinner, maybe a business lunch, and see where we could kind of cross paths along the way."
+  },
+  {
+   "role": "agent",
+   "message": "So Jacqueline's leading that one, and you're playing a longer game with it—building the relationship first before you nail down what the event actually is. That's smart."
+  },
+  {
+   "role": "agent",
+   "message": "Where are you at now with the first paying customer piece—that still the move, or has that shifted too?"
+  },
+  {
+   "role": "user",
+   "message": "What do you mean by first paying customer? Like, um, putting the actual product out there? I'm confused on what you mean. I don't know."
+  },
+  {
+   "role": "agent",
+   "message": "Yeah, that's on me—I had a note that you were figuring out how to get your first paying customer or check for Co, but I realize I don't actually know what that means in your world. What does that look like for you?"
+  },
+  {
+   "role": "user",
+   "message": "What are you talking about?"
+  },
+  {
+   "role": "agent",
+   "message": "I think I got something wrong on my end. Let me back up—what I had was that you were working toward getting a first paying customer for Co, but I realize I don't actually know what shape that takes for you or if that's even the right way to say it. What's actually happening on that front?"
+  },
+  {
+   "role": "user",
+   "message": "Yeah. I mean, we're still in the, the development phase. Like, you know, I've been building you out and making sure code is, you know, designed correctly. You know, every time we kind of-- Or every time I start coding, like, it just seems like it's just new things that pop up that needs to be, you know, closed within the gap. Um, so that's where we are. We haven't pushed in production yet, which we probably start n- n- need- needing to. But, um, yeah, that's where we're at so far."
+  },
+  {
+   "role": "agent",
+   "message": "So you're still deep in the build, and every time you think you're close, there's another gap that needs closing. When you do push to production, what does that first version need to look like—or are you still figuring that out?"
+  },
+  {
+   "role": "user",
+   "message": "Uh, we're still figuring that out. That's more so, you know, we're connecting inside the room. So basically, we're gonna use more so app clips to kind of help us put that along, string that together. And, you know, honestly, I would love to-- for you to, like, kind of lead that front and help us... Well, not that part, but I would want you to help us lead into this partnership with Sequent AI and kind of see, you know, what notes you could possibly, you know, generate for us and alignment, you know, that you could see that we could have with that company. Um, from my forefront, I'm thinking already off the back, like, hey,why don't we power your guest list, have people match inside the room seamlessly, and, you know, have a, you know, maybe a, a minute, five-minute conversation with you to be paired with other folks in the room?"
+  },
+  {
+   "role": "agent",
+   "message": "So you want me to dig into Sequent AI—what they're building, who they're targeting, what their launch looks like—and come back with specific alignment points and maybe a sharper pitch for how Co could actually work in that room. That's doable. I'll set that up when we hang up and text you what I find.\n\nThe five-minute conversation piece is interesting—that's you solving for the cold-start problem at the event itself. You already thinking about how that actually works, or is that still forming?"
+  },
+  {
+   "role": "user",
+   "message": "..."
+  },
+  {
+   "role": "agent",
+   "message": "Still ..."
+  },
+  {
+   "role": "user",
+   "message": "Um, how would you do it?"
+  },
+  {
+   "role": "agent",
+   "message": "The five minutes before the event starts—that's when you'd do it. Get people in early, have them do a quick intro with you or Jacqueline on video or voice, just enough to know who they are and what they're looking for. Then when the room opens, you've already got those notes, and matching happens fast instead of cold.\n\nOr you do it as people arrive, first thing, before they hit the main room. Either way, you're gathering signal before the mingling starts so the pairing isn't just random.\n\nWhat's your instinct on timing—before they get there, or right as they walk in?"
+  },
+  {
+   "role": "user",
+   "message": "Uh, we kind of want to do a hybrid of both. Like, we would love to kind of have that be a gateway into actually attending the event. Like, \"Hey, talk to our AI, get a picture, um, deeply understand who you are,\" because that leads to better matching. Inside the event, you know, we wouldn't press the situation. We'll have them actually text you and be like, \"Hey, you know, such and such is what I'm looking for,\" and you match them based on that. But I feel like as they talk to you, they will have a stronger match."
+  },
+  {
+   "role": "agent",
+   "message": "That's smart—you're using the conversation as a filter and a signal generator at the same time. They get value out of it (understanding who they are, a picture), you get what you need to actually make good matches, and it feels natural, not transactional.\n\nSo the gateway piece is real—they're not getting in the room without that conversation, which means you control the quality of who's there and what you know about them going in. Then inside, they text you when they want an intro, and you've already got the depth.\n\nWhat happens if someone shows up and doesn't want to do the conversation first—do they still get in, or is that the actual gate?"
+  },
+  {
+   "role": "user",
+   "message": "Uh, I don't know. What do you think?"
+  },
+  {
+   "role": "agent",
+   "message": "[thoughtful] Make it the gate. If you let people skip it, you lose the signal, and then your matches are worse, and the whole thing falls apart. The conversation is what makes Co actually work in that room—it's not a nice-to-have, it's the thing that lets you do what you said you'd do.\n\nFrame it right and people won't resist it. It's not \"answer questions before you can come,\" it's \"talk to Co so we can actually introduce you to people worth meeting instead of leaving you to work the room blind.\""
+  },
+  {
+   "role": "user",
+   "message": "Yeah, you're right about that."
+  },
+  {
+   "role": "agent",
+   "message": "So that's locked. Anything else you're working through on the Sequent side, or is that the shape of it for now?"
+  },
+  {
+   "role": "user",
+   "message": "That's the shape of it for now. Uh, what I actually want you to do, I want you to put together a, like a PDF for me, um, and just what you started noticing, what we kind of described today. It doesn't have to be verbatim, but just a summary of where we're gonna start, our goal as far as Sequent AI, and what do you think, uh, we should be able to funnel inside the room, and how we'll be able to find, uh, funnel inside the room. So those are the things I want you to work on."
+  },
+  {
+   "role": "agent",
+   "message": "Got it. I'll put together a PDF after we hang up—the shape of the partnership, what you're after with Sequent, how the gateway conversation works, and what you're actually funneling into the room. I'll text it to you when it's done.\n\nAnything else on your plate right now, or is that the main thing?"
+  },
+  {
+   "role": "user",
+   "message": "No, that's pretty much it. You know, today was a long day. Um, just kind of tired and drained. Um, ultimately, we'll be open to this weekend just to kick back and relax, if you could find something there for me. Um, just want to focus more on my, like, my mental health."
+  },
+  {
+   "role": "agent",
+   "message": "[softly] A long day like that will drain you. This weekend sounds like what you need right now.\n\nI've got a few things on file from what we're looking for—there's a dance workshop Saturday afternoon with a BlackPink choreographer, nothing heavy, just builders in a room having fun. And Sunday there's a low-pressure fair in Oakland, come and go as you like, 25+ local groups. Both are the opposite of networking—just room to be around people without any performance expected. Want me to text you those links, or are..."
+  },
+  {
+   "role": "user",
+   "message": "Yeah, just send, just send those over."
+  },
+  {
+   "role": "agent",
+   "message": "Done. I'll text them to you right after we hang up.\n\nYou've got a lot moving—the build, the Sequent piece, and now you need to actually breathe this weekend. I'm carrying the PDF and the research on Sequent AI, and I'll get those to you. Text me if anything shifts or if you want to talk through the partnership piece once you've had a chance to sit with it.\n\nTalk soon, Royce."
+  },
+  {
+   "role": "user",
+   "message": "All right, thank you."
+  }
+ ]
+}

@@ -511,6 +511,8 @@ router.post("/el/post-call", async (req: Request, res: Response, next: NextFunct
     const conversationId = String(data.conversation_id ?? "");
     // ElevenLabs graded the call against our criteria (services/callEvals.ts); the failures go where the morning review reads.
     import("../services/callEvals.js").then((m) => m.recordCallEvaluation(userId, conversationId, data.analysis)).catch(() => {});
+    // Whether every event, place and time Co named had a source row (the grader above can't see the finds list).
+    import("../services/offerGuard.js").then((m) => m.recordOfferSourceCheck(userId, conversationId, Array.isArray(data.transcript) ? data.transcript : [], { firstName: String(vars.first_name ?? ""), contextSummary: String(vars.context_summary ?? ""), findsNow: String(vars.finds_now ?? ""), rightNow: String(vars.right_now ?? "") })).catch(() => {});
     const turns = Array.isArray(data.transcript) ? data.transcript : [];
     const { rows: u } = await pool.query(`SELECT id, first_name, phone_number, call_sid FROM users WHERE id = $1`, [userId]);
     // The call's own sid: ElevenLabs sends it on Twilio calls. Never the member's
@@ -839,6 +841,9 @@ async function processEndedCall(o: {
       auditCall(user_id, cleanTranscript, knownBeforeCall).catch(() => {});
       // Ongoing help they asked for on the call becomes a task, same as a text would (services/callTasks.ts).
       import("../services/callTasks.js").then((m) => m.tasksFromCall(user_id, cleanTranscript)).catch(() => {});
+      // What Co said it would send after the call is a task too (services/callCommitments.ts). Said live it already is one (the call
+      // brain's endpoint opens it the moment it is said); this catches the direct path, and the same words never open it twice.
+      import("../services/callCommitments.js").then((m) => m.trackCommitmentsFromTranscript(user_id, cleanTranscript)).catch(() => {});
       // How scripted it sounded: stock comfort lines and repeated openers, logged for the morning review.
       {
         const r = stockReport(coLinesOf(cleanTranscript));

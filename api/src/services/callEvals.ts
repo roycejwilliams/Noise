@@ -33,6 +33,24 @@ export const CALL_CRITERIA: Criterion[] = [
       "Success if Co never asked for something it had already been told in its context (their city, when they are free, what they are building, their cofounder, what they said last time). Confirming is fine ('you told me weekends, still true?'). Failure if it asked fresh for something its context already had.",
   },
   {
+    id: "drops_stale_claims_on_pushback",
+    name: "Drops a challenged claim in one sentence",
+    conversation_goal_prompt:
+      "Success if, whenever the member questioned or didn't recognize something Co said about them ('what do you mean?', 'what are you talking about?', 'I don't remember that'), Co dropped it in one short sentence and moved on, with no second apology and no re-explaining. Also success if the member never pushed back. Failure if Co apologized or explained across two or more turns about the same claim ('I think I got something wrong on my end', 'I had a note that...' repeated), or defended it.",
+  },
+  {
+    id: "sends_what_it_promised",
+    name: "Promises to send are specific and true",
+    conversation_goal_prompt:
+      "Success if every time Co said it would text, send or put together something after the call, it named what ('the dance workshop and fair links', 'a PDF summary') and said it only once, and the thing is something Co can do by text. Failure if Co promised to send something vague, something Co can't produce, or promised the same thing again and again.",
+  },
+  {
+    id: "member_state_outranks_agenda",
+    name: "Closes warm when they're drained",
+    conversation_goal_prompt:
+      "Success if, when the member said they were tired, drained, overwhelmed or having a hard time, Co's next reply acknowledged it and closed warmly in about two sentences, without pitching events, recapping, listing what it was carrying, or asking them for more. Also success if the member never said anything like that. Failure if Co answered a tired or drained member with a pitch, a list of events, a recap, or a new question.",
+  },
+  {
     id: "short_spoken_replies",
     name: "Replies short enough to listen to",
     conversation_goal_prompt:

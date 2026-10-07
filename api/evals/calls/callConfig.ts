@@ -89,6 +89,38 @@ check("the post-call audit is told what was on file to offer, so a real offer is
 check("the call summary takes company names from the member's lines, not the assistant's (Boardy, not Bumble)", /Names of companies and people come from what THEY said/.test(src("services/callContext.ts")) && /"Bumble" for the member's "Boardy"/.test(src("services/callContext.ts")));
 check("the registration passes the two variables to ElevenLabs", /right_now: o\.rightNow \?\? ""/.test(src("services/elevenLabsCalls.ts")) && /finds_now: o\.findsNow/.test(src("services/elevenLabsCalls.ts")));
 
+// ---- the call brain behind our own endpoint, with the direct path as the rollback
+{
+  const on: any = E.buildAgentConfig({ name: "Co", prompt, voiceId: "v", apiUrl: "https://x.test", proxy: { url: "https://x.test/co/el/llm", secretId: "sec_1" } });
+  const p: any = on.conversation_config.agent.prompt;
+  check("proxy on: the agent's LLM is the custom one, at our endpoint, with the workspace secret as its bearer", p.llm === "custom-llm" && p.custom_llm.url === "https://x.test/co/el/llm" && p.custom_llm.api_key.secret_id === "sec_1" && p.custom_llm.api_type === "chat_completions", p.custom_llm);
+  check("proxy on: the endpoint serves the same model (Haiku 4.5), the tools stay on the agent", p.custom_llm.model_id === "claude-haiku-4-5" && p.tools.length === tools.length);
+  check("proxy off (the rollback): the direct Haiku path, no custom_llm at all", ap.llm === "claude-haiku-4-5" && !("custom_llm" in ap));
+  check("the call's user id and token may ride to our endpoint (custom_llm_extra_body), and registration sends them", cfg.platform_settings.overrides.custom_llm_extra_body === true && /customLlmExtraBody: \{ user_id: o\.userId, call_token: callToken \}/.test(src("services/elevenLabsCalls.ts")));
+  const push = src("scripts/pushElevenLabsAgent.ts");
+  check("the push script turns the proxy on only with ELEVENLABS_LLM_PROXY=1 and the shared secret, and keeps it as a workspace secret", /ELEVENLABS_LLM_PROXY !== "1"\) return null/.test(push) && /CALL_LLM_PROXY_SECRET/.test(push) && /co_call_llm_proxy/.test(push));
+}
+
+// ---- cadence, offers, promises, member state (in the prompt, in code, so a push carries them)
+{
+  const gd = E.SPEED_GUIDE;
+  check("cadence: short sentence, a beat, a longer one, a short one to land it; periods, commas, question marks only", /short sentence, a beat, then one a little longer/.test(gd) && /periods, commas and question marks/.test(gd));
+  check("cadence: no dash of any kind, no semicolon, no parentheses, 15 words at most", /Never write a dash of any kind/.test(gd) && /never a semicolon, never parentheses/.test(gd) && /No sentence runs past 15 words/.test(gd));
+  check("cadence: carries the wrong/right example from the real call", /Wrong: "That's smart—keeping it warm/.test(gd) && /Right: "That's smart\. Keep it warm first\./.test(gd));
+  check("offers: name an event only from the finds or their own words; no source line, no name", /Name an event, place or time only if it is in "What Co has found for them" or they said it/.test(gd));
+  check("promises: a promise to text or send is a real task the moment it is said, said once", /A promise to text or send something is a real task the moment you say it/.test(gd));
+  check("member state: drained or overwhelmed outranks the list: two sentences, no pitch, no recap, no list, no question that asks more", /If they say they are tired, drained, overwhelmed/.test(gd) && /Close warmly in two sentences/.test(gd) && /No pitch, no recap, no list of what you are carrying, no new event, no question/.test(gd));
+  check("the guide reaches the agent (it is part of promptForElevenLabs)", E.promptForElevenLabs(prompt).includes("# Their state comes first") && E.promptForElevenLabs(prompt).includes("# Cadence"));
+  const ids = (cfg.platform_settings.evaluation.criteria as any[]).map((x) => x.id);
+  check("the post-call grade has the three new criteria", ["drops_stale_claims_on_pushback", "sends_what_it_promised", "member_state_outranks_agenda"].every((i) => ids.includes(i)), ids);
+  check("the new criteria are written so success is the good outcome, with the failure named", (cfg.platform_settings.evaluation.criteria as any[]).filter((x) => ["drops_stale_claims_on_pushback", "sends_what_it_promised", "member_state_outranks_agenda"].includes(x.id)).every((x) => /^Success if/.test(x.conversation_goal_prompt) && /Failure if/.test(x.conversation_goal_prompt)));
+}
+{
+  const co2 = src("routes/co.ts");
+  check("post-call: the source check on every named event and the commitment fallback both run", /recordOfferSourceCheck\(userId, conversationId/.test(co2) && /trackCommitmentsFromTranscript\(user_id, cleanTranscript\)/.test(co2));
+  check("the commitment check runs every 10 minutes", /"\*\/10 \* \* \* \*"[\s\S]{0,200}checkCallCommitments/.test(src("jobs/index.ts")));
+}
+
 console.log(`call config: ${total - failed}/${total} passed`);
 if (failed) process.exitCode = 1;
 process.exit(failed ? 1 : 0);

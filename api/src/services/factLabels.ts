@@ -132,3 +132,44 @@ export function renderLive(claims: (Claim & { id?: string })[], now: Date, zone 
     coInferred: live.filter((c) => c.provenance === "co_inferred").map(fmt),
   };
 }
+
+// ---------- stamps on stored rows (Royce, 2026-10-06)
+// The 10/6 call: Co asked about "your first paying customer" from a thread last touched 9/28, because the call briefing printed the
+// thread's text and dropped its date. The text-side fix (labels and lifetimes on claims) never reached that pipe. The stamp is made
+// where the row is READ for any purpose, from the dates the row already carries, so a recap, a draft, a call briefing and the sweep
+// all say when it was said and whether it can still be stated as current. One function, every reader.
+export const STALE_AFTER_DAYS = 7; // untouched this long: ask whether it is still true, never state it
+export const DROP_AFTER_DAYS = 21; // untouched this long: a call briefing leaves it out altogether
+
+export type Stampable = { saidOn?: string | Date | null; confirmedOn?: string | Date | null; dueOn?: string | Date | null };
+
+const dayOf = (x: string | Date | null | undefined, zone: string): DateTime | null => {
+  if (!x) return null;
+  const d = x instanceof Date ? DateTime.fromJSDate(x).setZone(zone) : /^\d{4}-\d{2}-\d{2}$/.test(String(x)) ? DateTime.fromISO(String(x), { zone }) : DateTime.fromISO(String(x)).setZone(zone);
+  return d.isValid ? d.startOf("day") : null;
+};
+
+export type StampRead = { label: string; ageDays: number | null; stale: boolean; drop: boolean; datePassed: boolean };
+
+// Pure: how old a row is and what may be said about it, from its own dates.
+export function stampOf(s: Stampable, now: Date, zone = "America/Los_Angeles"): StampRead {
+  const today = DateTime.fromJSDate(now).setZone(zone).startOf("day");
+  const said = dayOf(s.saidOn, zone);
+  const confirmed = dayOf(s.confirmedOn, zone) ?? said;
+  const due = dayOf(s.dueOn, zone);
+  const ageDays = confirmed ? Math.max(0, Math.round(today.diff(confirmed, "days").days)) : null;
+  const datePassed = !!due && due < today;
+  const stale = datePassed || ageDays === null || ageDays >= STALE_AFTER_DAYS;
+  const drop = ageDays !== null && ageDays >= DROP_AFTER_DAYS;
+  const parts = [
+    said ? `they said ${said.toFormat("LLL d")}` : "undated",
+    confirmed && said && +confirmed !== +said ? `last came up ${confirmed.toFormat("LLL d")}` : null,
+    ageDays !== null && ageDays >= 2 ? `${ageDays} days ago` : null,
+    due ? `${datePassed ? "its date, " : "date "}${due.toFormat("LLL d")}${datePassed ? ", has passed" : ""}` : null,
+  ].filter(Boolean);
+  const warn = stale ? "; OLD, so ask whether it is still true and never state it as current" : "";
+  return { label: `${parts.join(", ")}${warn}`, ageDays, stale, drop, datePassed };
+}
+
+// A row's text with its stamp.
+export const stampedLine = (text: string, s: Stampable, now: Date, zone = "America/Los_Angeles") => `${text} (${stampOf(s, now, zone).label})`;
