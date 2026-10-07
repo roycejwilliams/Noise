@@ -204,6 +204,13 @@ export const ABILITIES: Ability[] = [
     use: "They said one of their asks may (or may not) be mentioned when Co introduces them (\"yes, you can tell people I'm looking for a cofounder\"). Name the ask as it's on file, quote their yes or no from this message. Only a plain yes makes it shareable; if they hedge, record nothing and ask once more. A later \"don't mention that\" is a no. Never ask about something personal (health, money, legal, family): those stay private.",
   },
   {
+    id: "ask_shareable_rsvp",
+    can: "When they RSVP to a Co event, beside the brief question, Co asks which of their asks it may tell a good match in the room. Each ask is private unless they pick it.",
+    tool: "answerShareAsks",
+    limits: { perTurn: 1 },
+    use: "They answered Co's RSVP question about which asks it may share with a good match in the room (numbers, all, none, or a yes/no for a single ask). Code reads their choice from their whole message; if it isn't clear, ask which numbers. Never guess.",
+  },
+  {
     id: "brief_name",
     can: "Before a Co event they're going to, Co asks once whether it may mention them by name in the member brief the day before. Co records their yes or no. No answer means no name, and a no or a later change of mind is honored at once.",
     tool: "answerBriefName",

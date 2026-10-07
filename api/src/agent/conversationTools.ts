@@ -457,6 +457,20 @@ export function createConversationTools(ctx: ConversationToolContext) {
         return { ok: true, event: today.name };
       },
     }),
+    answerShareAsks: tool({
+      description: toolUse("answerShareAsks"),
+      inputSchema: z.object({}),
+      execute: async () => {
+        if (ctx.dryRun) return { ok: true, note: "dry run" };
+        const r = await (await import("../services/askSharing.js")).recordRsvpShareAnswer(ctx.userId, ctx.resolvedContent);
+        if (!r.ok) {
+          notDone(`Nothing about sharing their asks was recorded: ${r.why}.`);
+          return { ok: false, error: r.why === "their answer isn't a clear choice" ? "Ask which numbers they're happy to share (or all, or none)." : r.why };
+        }
+        ctx.facts?.add("did_this_turn", r.shared.length ? `Recorded which asks Co may tell a good match in the room: ${r.shared.map((t) => `"${t}"`).join(", ")}. The rest stay private.` : "Recorded that none of their asks are to be shared. They stay private.");
+        return { ok: true, shared: r.shared };
+      },
+    }),
     shareAskInIntros: tool({
       description: toolUse("shareAskInIntros"),
       inputSchema: z.object({

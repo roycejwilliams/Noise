@@ -460,8 +460,11 @@ export const proactiveRegistry: ProactiveRegistry = {
       const p = c.payload;
       const f = await B.presenceFlags(p.eventId, c.userId);
       if (f.asked || f.notGoing) return skip("already asked, or not going");
-      const messages = B.nameAskMessages(p.name);
-      return { messages, text: messages.join(" "), rules: { maxSentences: 4, maxChars: 320, mustIncludeAny: nameTokens(p.name).length ? nameTokens(p.name) : [p.name] } };
+      // Beside it: which of their asks may be told to a good match in the room (services/askSharing.ts). Private by default.
+      const S = await import("../services/askSharing.js");
+      const asks = S.undecidedAsks((await pool.query(`SELECT intent FROM co_profiles WHERE user_id = $1`, [c.userId])).rows[0]?.intent);
+      const messages = B.nameAskMessages(p.name, S.shareAskMessage(asks));
+      return { messages, text: messages.join(" "), rules: { maxSentences: asks.length ? 7 : 4, maxChars: asks.length ? 900 : 320, mustIncludeAny: nameTokens(p.name).length ? nameTokens(p.name) : [p.name] } };
     },
     async onSent(c) {
       await pool.query(
@@ -469,6 +472,10 @@ export const proactiveRegistry: ProactiveRegistry = {
          ON CONFLICT (event_api_id, user_id) DO UPDATE SET name_asked_at = COALESCE(event_presence.name_asked_at, NOW()), name_ask_until = $3`,
         [c.payload.eventId, c.userId, c.payload.startAt],
       );
+      // The asks the share question offered, in the order shown, so "1 and 3" maps to the right ones.
+      const S = await import("../services/askSharing.js");
+      const offered = S.undecidedAsks((await pool.query(`SELECT intent FROM co_profiles WHERE user_id = $1`, [c.userId])).rows[0]?.intent).map((a) => a.id);
+      if (offered.length) await pool.query(`UPDATE event_presence SET share_asked_at = NOW(), share_ask_ids = $3, share_answered_at = NULL WHERE event_api_id = $1 AND user_id = $2`, [c.payload.eventId, c.userId, offered]);
       await writeMemory(c.userId, "event_brief_ask", `Asked if Co may name them in the member brief for "${c.payload.name}"`);
     },
   },

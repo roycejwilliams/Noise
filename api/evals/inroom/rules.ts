@@ -59,6 +59,32 @@ finding(`share gate false positives: ${blocked.length}/${benign.length} ordinary
   check("share reason: a goal is never used", M.shareReasonFromOwnAsk([{ text: "be a better founder", type: "seeking", status: "active", kind: "goal" }]) === "");
 }
 
+// ------------------------------------------------------------ the shareable-asks question at RSVP
+{
+  const S = await import("../../src/services/askSharing.js");
+  const R = await import("../../src/mo/memberRules.js");
+  const B = await import("../../src/services/eventBrief.js");
+  const A = (id: string, text: string, shareable?: boolean) => ({ id, text, type: "seeking", status: "active", kind: "ask", ...(shareable === undefined ? {} : { shareable }) });
+  const intent = [A("a1", "a sailing crew", true), A("a2", "a technical cofounder"), A("a3", "a pediatric dentist"), A("a4", "seed investors"), { id: "g1", text: "be calmer", type: "seeking", status: "active", kind: "goal" }];
+  const offered = S.undecidedAsks(intent);
+  check("rsvp share: offers only undecided open asks, newest first, never a goal or an ask already decided", JSON.stringify(offered.map((a) => a.id)) === JSON.stringify(["a4", "a3", "a2"]), offered);
+  const msg = S.shareAskMessage(offered) ?? "";
+  check("rsvp share: one question, numbered per ask, private unless picked", /good match/.test(msg) && /1\. seed investors/.test(msg) && /3\. a technical cofounder/.test(msg) && /stays between us/.test(msg), msg);
+  check("rsvp share: a single ask is a plain yes or no", /you're looking for a sailing crew\? Yes or no/.test(S.shareAskMessage([{ text: "a sailing crew" }]) ?? ""));
+  check("rsvp share: nothing undecided, no question", S.shareAskMessage([]) === null && B.nameAskMessages("Co Night", null).length === 2);
+  check("rsvp share: it sits beside the brief question", B.nameAskMessages("Co Night", msg).length === 3);
+  const ids = offered.map((a) => a.id);
+  const picks = R.readPicks("1 and 3", ids.length)!;
+  const next = S.applyAskPicks(intent as any[], ids, picks) as any[];
+  const by = (id: string) => next.find((e) => e.id === id);
+  check("rsvp share: '1 and 3' shares exactly those asks", by("a4").shareable === true && by("a2").shareable === true && by("a3").shareable === false, next);
+  check("rsvp share: an ask that wasn't offered is untouched", by("a1").shareable === true && by("g1").shareable === undefined);
+  check("rsvp share: 'none' keeps every offered ask private", (S.applyAskPicks(intent as any[], ids, R.readPicks("none", 3)!) as any[]).filter((e) => ids.includes(e.id)).every((e) => e.shareable === false));
+  check("rsvp share: an unclear answer is no answer", R.readPicks("maybe the cofounder one?", 3) === null && R.readPicks("all but not 2", 3) === null);
+  const M = await import("../../src/services/matching.js");
+  check("rsvp share: the nudge can only quote a picked ask", M.shareReasonFromOwnAsk(next, "S1").includes("sailing crew") && !M.shareableAsks(next).some((a: any) => a.text === "a pediatric dentist"));
+}
+
 // ------------------------------------------------------------ no end time: the end of that evening, local
 {
   const e = (start: string, tz: string | null) => C.effectiveEnd({ start_at: start, end_at: null, timezone: tz });
