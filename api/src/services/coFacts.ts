@@ -134,10 +134,16 @@ export function rowsNamedIn(rows: LedgerRow[], text: string): LedgerRow[] {
   });
 }
 
+// A document is made fresh each time: having sent one is never a reason not to send another (Royce, 2026-10-07: "send it again" got
+// "scroll up", and the same request repeated got "it's the same one I already built and sent").
+export const DOCUMENT_LABEL = /^a document \(PDF\)/;
+export const DOCUMENT_AGAIN = "They can have it again, redone or updated, whenever they ask: a request to send it again, resend it, update it, or the same request repeated means call writeDocument again, never \"it's already up\".";
+
 export function ledgerLine(r: LedgerRow, today = localToday()): string {
   const day = r.at.toISOString().slice(0, 10);
   // The thing's own date, when known, read against today (dateGuard.ts).
   const note = r.when ? dateNote(readDates({ start: r.when, end: r.whenEnd && r.whenEnd >= r.when ? r.whenEnd : r.when }, today)) : "";
+  if (r.relation === "sent" && DOCUMENT_LABEL.test(r.label)) return `On ${day} Co sent them "${r.label}". ${DOCUMENT_AGAIN}`;
   if (r.relation === "sent") return `On ${day} Co sent them "${r.label}"${r.url && !r.label.includes(r.url) ? ` (${r.url})` : ""}${note}.`;
   // A first text that carried a link is a send of that link, said plainly
   // (2026-09-27: "texted them first: https://…" was read as not having sent
@@ -156,8 +162,11 @@ export function ledgerLine(r: LedgerRow, today = localToday()): string {
 // "you never sent me that" is checked against the record.
 // Pure: the sends their message names (for the instruction to answer from
 // the record, harness/replyGrounding.ts).
+// A document is left out unless they are asking WHETHER it was sent: a request for it (again, updated, redone) is not a question
+// about the record, and "answer from the record" made Co refuse to send it.
+const ASKS_IF_SENT = /\b(did you|have you|had you|didn'?t you|never (?:got|received|sent)|did(?:n'?t)? (?:get|receive)|where (?:is|did)|was (?:it|that) sent)\b/i;
 export function sendsNamedIn(all: LedgerRow[], message: string): LedgerRow[] {
-  return rowsNamedIn(all, message).filter((r) => r.relation === "sent" || (r.relation === "texted" && /https?:\/\//.test(r.label)));
+  return rowsNamedIn(all, message).filter((r) => (r.relation === "sent" && (!DOCUMENT_LABEL.test(r.label) || ASKS_IF_SENT.test(message))) || (r.relation === "texted" && /https?:\/\//.test(r.label)));
 }
 
 export async function ledgerFacts(userId: string, context: string): Promise<{ lines: string[]; named: string[] }> {

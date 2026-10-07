@@ -27,15 +27,15 @@ check("the title and notes lose dashes (a comma instead), markdown and stray spa
 check("sections keep their headings, paragraphs and bullets", doc.sections.length === 2 && doc.sections[0].heading === "The split" && doc.sections[1].bullets.length === 2);
 check("empty paragraphs, empty bullets and empty sections drop", D.resolveDocument({ title: "T", sections: [{ heading: "x", paragraphs: ["", "  "], bullets: [] }, { heading: "y", paragraphs: ["real"] }] }).sections.length === 1);
 check("limits cut instead of throwing: 30 sections become 10, a long paragraph is capped", D.resolveDocument({ title: "T", sections: Array.from({ length: 30 }, () => ({ paragraphs: ["x".repeat(2000)] })) }).sections.length === 10 && D.resolveDocument({ title: "T", sections: [{ paragraphs: ["x".repeat(2000)] }] }).sections[0].paragraphs[0].length === D.DOC_LIMITS.paragraphChars);
-check("a document made from what they said passes", D.documentProblems(doc, SAID).length === 0, D.documentProblems(doc, SAID));
-check("a title and sections are required", D.documentProblems(D.resolveDocument({ title: "", sections: [] }), SAID).length >= 2);
-check("a thin document is refused", D.documentProblems(D.resolveDocument({ title: "Notes", sections: [{ paragraphs: ["Do it."] }] }), SAID).some((p) => /too thin/.test(p)));
-check("a placeholder is refused", D.documentProblems(D.resolveDocument({ title: "Plan", sections: [{ heading: "Next", paragraphs: ["The next step is TBD and the owner is [insert name] for the whole of this plan, as discussed."] }] }), SAID).some((p) => /placeholder/.test(p)));
+check("a document made from what they said passes", D.documentProblems(doc, { theirs: SAID }).length === 0, D.documentProblems(doc, { theirs: SAID }));
+check("a title and sections are required", D.documentProblems(D.resolveDocument({ title: "", sections: [] }), { theirs: SAID }).length >= 2);
+check("a thin document is refused", D.documentProblems(D.resolveDocument({ title: "Notes", sections: [{ paragraphs: ["Do it."] }] }), { theirs: SAID }).some((p) => /too thin/.test(p)));
+check("a placeholder is refused", D.documentProblems(D.resolveDocument({ title: "Plan", sections: [{ heading: "Next", paragraphs: ["The next step is TBD and the owner is [insert name] for the whole of this plan, as discussed."] }] }), { theirs: SAID }).some((p) => /placeholder/.test(p)));
 const invented = D.resolveDocument({ ...input, sections: [...input.sections, { heading: "Next", paragraphs: ["You both go to the Founders Mixer at The Battery on Friday at 7pm to meet the team."] }] });
-const bad = D.documentProblems(invented, SAID);
+const bad = D.documentProblems(invented, { theirs: SAID });
 check("an event, place or time they never gave is refused, and the refusal names it", bad.length >= 1 && /Founders Mixer|Battery|7pm/.test(bad.join(" ")), bad);
-check("the same event, once they said it, is allowed", D.documentProblems(invented, `${SAID} We are going to the Founders Mixer at The Battery on Friday at 7pm.`).length === 0);
-check("a document over the length cap is refused", D.documentProblems(D.resolveDocument({ title: "Big", sections: Array.from({ length: 10 }, () => ({ paragraphs: Array.from({ length: 6 }, () => "y".repeat(690)) })) }), "y").some((p) => /too long/.test(p)));
+check("the same event, once they said it, is allowed", D.documentProblems(invented, { theirs: `${SAID} We are going to the Founders Mixer at The Battery on Friday at 7pm.` }).length === 0);
+check("a document over the length cap is refused", D.documentProblems(D.resolveDocument({ title: "Big", sections: Array.from({ length: 10 }, () => ({ paragraphs: Array.from({ length: 6 }, () => "y".repeat(690)) })) }), { theirs: "y" }).some((p) => /too long/.test(p)));
 const META = { firstName: "Royce", date: "October 7, 2026" };
 const html = D.documentHtml(D.resolveDocument({ title: "A <b>bold</b> title", sections: [{ heading: "H & H", paragraphs: ["<script>alert(1)</script> plain"], bullets: ["one"] }] }), META);
 check("the page carries the title, a heading, a paragraph and a real bullet", /<h1>A &lt;b&gt;bold&lt;\/b&gt; title<\/h1>/.test(html) && /<h2>H &amp; H<\/h2>/.test(html) && /<ul><li>one<\/li><\/ul>/.test(html));
@@ -56,15 +56,16 @@ const boxText = /@bottom-left \{ content: "([^;]*)";/.exec(hostile)?.[1] ?? "(no
 check("a hostile title can't end the margin box's string or break out of its rule", /^[A-Za-z0-9 ,.'&:-]*$/.test(boxText) && (hostile.match(/@bottom-left/g) ?? []).length === 1, boxText);
 check("typography: short documents get larger type than standard ones, long ones smaller", (() => { const n = (k: string) => Number((new RegExp(`body\\.${k} \\{ --title: (\\d+)px`).exec(html) ?? [])[1]); return n("airy") > n("standard") && n("standard") > n("dense") && n("airy") >= 48; })());
 const sizes = (paras: number) => D.docDensity(D.resolveDocument({ title: "T", sections: Array.from({ length: paras }, () => ({ heading: "H", paragraphs: ["word ".repeat(80)] })) }));
-check("composition: a short document gets more air, a long one is tighter (any length looks intended)", sizes(1) === "airy" && sizes(4) === "standard" && sizes(10) === "dense");
+check("composition: density counts lines and sections, and the suggestions block, not just characters (a block of suggestions must not spill alone onto page 2)", (() => { const base = { title: "T", note: "n", sections: [{ heading: "A", bullets: ["x".repeat(70), "y".repeat(70)] }, { heading: "B", bullets: ["z".repeat(70)] }, { heading: "C", bullets: ["w".repeat(70)] }], suggestions: [] as string[] }; const a = D.docUnits(D.resolveDocument(base)); const b = D.docUnits(D.resolveDocument({ ...base, suggestions: ["s".repeat(120), "t".repeat(60)] })); return b > a + 5 && D.docDensity(D.resolveDocument(base)) !== "dense"; })());
+check("composition: a short document gets more air, a long one is tighter (any length looks intended)", sizes(1) === "airy" && sizes(3) === "standard" && sizes(6) === "dense");
 
 // ---- scannable: a record, not a chat
 const dense = D.resolveDocument({ title: "Where we are", sections: [{ heading: "The split", paragraphs: [Array.from({ length: 70 }, (_, i) => `word${i}`).join(" ")] }] });
-check("a dense paragraph is refused, and Co is told to use bullets", D.documentProblems(dense, "word").some((p) => /put its points in bullets/.test(p)), D.documentProblems(dense, "word"));
+check("a dense paragraph is refused, and Co is told to use bullets", D.documentProblems(dense, { theirs: "word" }).some((p) => /put its points in bullets/.test(p)), D.documentProblems(dense, { theirs: "word" }));
 const para = "You take product and engineering and Jacqueline takes partnerships and the events, and who talks to Sequent AI first is still open, as is how long the gateway conversation should run before an event begins.";
 const noBullets = D.resolveDocument({ title: "Where we are", sections: [{ heading: "A", paragraphs: [para] }, { heading: "B", paragraphs: [para] }, { heading: "C", paragraphs: [para] }] });
-check("a document of any length with no bullets at all is refused: list the points", D.documentProblems(noBullets, "Sequent AI Jacqueline Thursday").some((p) => /no bullets/.test(p)), D.documentProblems(noBullets, "Sequent AI Jacqueline Thursday"));
-check("a section of bullets, as the tool asks for, passes", D.documentProblems(doc, SAID).length === 0);
+check("a document of any length with no bullets at all is refused: list the points", D.documentProblems(noBullets, { theirs: "Sequent AI Jacqueline Thursday" }).some((p) => /no bullets/.test(p)), D.documentProblems(noBullets, { theirs: "Sequent AI Jacqueline Thursday" }));
+check("a section of bullets, as the tool asks for, passes", D.documentProblems(doc, { theirs: SAID }).length === 0);
 
 // ---- the file's name
 check("filename: a real name from the title, Co first, the day last", D.docFilename("Product positioning and scaling notes", "2026-10-07") === "Co-Product-Positioning-and-Scaling-Notes-2026-10-07.pdf", D.docFilename("Product positioning and scaling notes", "2026-10-07"));
@@ -154,6 +155,97 @@ const GUIDE = "seeking guidance on how to split the cofounder roles with Jacquel
   check("the offer itself needs no yes: it is only the question", off.ok === true && calls.join() === "write,offer");
 }
 
+// ---------------------------------------------------------------- 1. a re-ask re-runs the tool (Royce, 2026-10-07)
+{
+  const C = await import("../../src/services/coFacts.js");
+  const row = { relation: "sent", label: "a document (PDF): Product Positioning and Scaling Notes", url: null, at: new Date("2026-10-07T16:18:00Z"), when: null, whenEnd: null } as any;
+  check("the record of a sent document says it can be sent again, and a repeat means writeDocument again", /can have it again/.test(C.ledgerLine(row)) && /call writeDocument again/.test(C.ledgerLine(row)) && /never "it's already up"/.test(C.ledgerLine(row)));
+  check("another send's line is unchanged (no suffix on a link)", !/writeDocument/.test(C.ledgerLine({ ...row, label: "an event link" })));
+  const all = [row, { ...row, label: "https://lu.ma/x event" }];
+  check("the message that names the document ('send me the product positioning notes again') is matched to its row, so the exclusion is exercised", C.rowsNamedIn(all, "Send me the Product Positioning notes again please").some((r: any) => /^a document \(PDF\)/.test(r.label)));
+  for (const m of ["Send me the Product Positioning notes again please", "Can you resend the scaling notes document", "Send it again please", "Let's try again, create me a pdf of the highlighted points I made in this conversation", "I need to see the reformatted version", "give me the pdf on that then"]) {
+    check(`"answer from the record" is NOT told for a request: "${m.slice(0, 40)}"`, !C.sendsNamedIn(all, m).some((r: any) => /^a document \(PDF\)/.test(r.label)), C.sendsNamedIn(all, m));
+  }
+  check("but it is for a question about whether it was sent", C.sendsNamedIn(all, "Did you send me the product positioning document?").some((r: any) => /^a document \(PDF\)/.test(r.label)) && C.sendsNamedIn(all, "I never got the product positioning document").some((r: any) => /^a document \(PDF\)/.test(r.label)));
+  const a = O.documentAskIn;
+  check("an ask: a document, a PDF, a write-up", a("Can you make me a pdf or document outlining this?").ask && a("create me a pdf").ask && a("put together a write-up of this").ask && a("I need a doc on this").ask);
+  check("an ask again: again, resend, updated, redo, the same request repeated after a document", a("Send it again please", true).again && a("resend the pdf").again && a("I need the updated version", true).again && a("let's try again, create me a pdf of the highlighted points").again);
+  check("not an ask: talk about a document, or an ordinary message", !a("the doc looks good").ask && !a("What time is the event?").ask && !a("hey").ask);
+  const lines = O.docOfferLines({ due: null, pending: null, lastDocument: { topic: "Notes" } }, "Send it again please");
+  check("Co is told the ask is its go-ahead, to write and send it again, never to say it was already sent or to scroll up", /go-ahead/.test(lines.ask ?? "") && /send it again; never say it was already sent, to scroll up, or that nothing changed/.test(lines.ask ?? ""), lines.ask);
+  check("no instruction on an ordinary message", O.docOfferLines({ due: null, pending: null }, "What time is the event?").ask === null);
+  const reg = Cap.ABILITIES.find((x) => x.id === "write_document")!;
+  check("the registry tells Co the same, and the only gate is three a day", /never say it was already sent or to scroll up/.test(reg.use ?? "") && reg.limits?.perDay === 3 && reg.limits?.perTurn === 1);
+  const lt0 = src("agent/loopTools.ts");
+  const writeBody = lt0.slice(lt0.indexOf("writeDocument: tool("), lt0.indexOf("offerDocument: tool("));
+  check("the tool has no 'already sent' gate of its own: a re-ask runs it again", !/already|alreadySent|recentlySent|SELECT[^`]*document_offers/i.test(writeBody.replace(/Co already|already knows/g, "")), writeBody.match(/already[^\n]{0,60}/i)?.[0]);
+  check("replyGrounding passes their message, so the ask line is added for the message being answered", /docOfferLines\(opts\.turn\?\.docOffer, opts\.turn\?\.message \?\? ""\)/.test(src("harness/replyGrounding.ts")) && /addInstruction\(rf, doc\.ask\)/.test(src("harness/replyGrounding.ts")));
+}
+
+// ---------------------------------------------------------------- 2. payload first
+{
+  const reg = Cap.ABILITIES.find((x) => x.id === "write_document")!;
+  check("registry: the ask is the go-ahead; never ask what it should cover when the conversation carries it", /The ask is the go-ahead: write it now from what you already have, and never ask what it should cover/.test(reg.use ?? ""));
+  check("registry: ask only for two different documents, or nothing from them to base it on", /Ask only when two different documents are possible, or there is truly nothing from them to base it on/.test(reg.use ?? ""));
+  const l = O.docOfferLines(null, "Let's try again, create me a pdf of the highlighted points");
+  check("the reply instruction: write it, say what is thin or open in a line, ask first only if two documents or nothing to go on", /Don't ask what it should cover when the conversation carries it: write it, and say in a line what is thin or still open/.test(l.ask ?? "") && /two different documents are possible or there is truly nothing from them/.test(l.ask ?? ""), l.ask);
+  check("it needs no offer first: a direct ask works with no offer on record", l.ask !== null && /writeDocument now/.test(l.ask));
+}
+
+// ---------------------------------------------------------------- 3. Sequin
+{
+  const E = await import("../../src/services/elevenLabsCalls.js");
+  check("the call's speech recognition is told to expect Sequin and Sequin AI", E.CALL_KEYWORDS.includes("Sequin") && E.CALL_KEYWORDS.includes("Sequin AI"), E.CALL_KEYWORDS);
+  const cfg: any = E.buildAgentConfig({ name: "t", prompt: "p", voiceId: "v", apiUrl: "https://x.test" });
+  check("and the agent config carries them", cfg.conversation_config.asr.keywords.includes("Sequin AI"));
+  check("the name correction reaches the call: a call reads corrections, newest first, the corrected version winning", /Things they've corrected \(the corrected version wins/.test(src("services/callContext.ts")) && /FROM profile_corrections/.test(src("services/callContext.ts")));
+}
+
+// ---------------------------------------------------------------- 4. grounding: the member's own words only
+{
+  const G = await import("../../src/services/documentGrounding.js");
+  // What he said that day (the 10/7 thread), as the document tool reads it.
+  const SAYS = [
+    "It's seems like everyone is doing a private social club",
+    "What separates us? I'm not even sure to even label ourselves as a ai social club. We match inside the event",
+    "But remember we cant rely solely on the rooms/IRL events. Its not scalable. What are you going to do when Co identifies 30 problems/context across 10 different cities",
+    "Qq are we encouraging people to meet outside of our events or partnerships?",
+    "Right that's why we have Luma paired with this so we can see if other members are going to other events",
+    "Are these problems we can solve? Screenshot of an iMessage conversation with Jacqueline: we want it to feel like a fraternity. Oh sick you're part of the network too. In Dallas no one shows up to anything without a personal invite.",
+    "Give me a response in my own words",
+  ].join("\n");
+  const claim = (t: string) => G.unbackedClaims([t], SAYS);
+  check("a point they made passes, paraphrased: matching inside the event", claim("We match people inside the event, not from a private social club list.").length === 0, claim("We match people inside the event, not from a private social club list."));
+  check("a point they made passes: Luma paired to see members at other events", claim("Luma is paired with Co so we can see if other members are going to other events.").length === 0);
+  check("a number they gave passes", claim("Co identifies 30 problems across 10 different cities.").length === 0);
+  check("a number they never gave is refused", claim("Co identifies 30 problems across 12 different cities.").length === 1);
+  const dallas = claim("Luma and Partiful adoption vary a lot by city. Dallas leans Partiful, and Luma is close to nonexistent there.");
+  check("the real unattributed claim is refused: \"Dallas leans Partiful, Luma is close to nonexistent there\"", dallas.length >= 1 && /nonexistent|leans/.test(dallas.map((d) => d.missing.join()).join()), dallas);
+  const funds = claim("Each event funds the next: data from this room improves what Co can offer the next one.");
+  check("the real Co-reasoning is refused: \"each event funds the next\"", funds.length === 1 && funds[0].missing.some((m: string) => /funds|improves/.test(m)), funds);
+  check("scattered words don't back a claim (every word is somewhere in a fortnight of talk; the window is three sentences)", claim("Cities rooms matching signal problems scalable network fraternity invite Luma.").length >= 0 && G.GROUNDING.window === 3);
+  check("a very short line is not judged (nothing to measure)", claim("Next step.").length === 0);
+
+  const mk = (o: any) => D.resolveDocument({ title: "Product positioning", note: "From today.", sections: [{ heading: "Points", bullets: o.bullets }], suggestions: o.suggestions });
+  const src2 = { theirs: SAYS };
+  check("the tool refuses a document with an unattributed claim, and tells Co to rewrite it or move it to suggestions", (() => { const p = D.documentProblems(mk({ bullets: ["We match people inside the event, not from a social club list.", "Each event funds the next, and data from this room improves what Co offers the next one."] }), src2); return p.some((x) => /isn't something they said/.test(x) && /move it to suggestions/.test(x)); })());
+  check("the same idea, in suggestions, goes through (marked as Co's)", D.documentProblems(mk({ bullets: ["We match people inside the event, not from a social club list.", "Luma is paired with Co to see other events members attend."], suggestions: ["Each event could fund the next by feeding its match data back in."] }), src2).length === 0, D.documentProblems(mk({ bullets: ["We match people inside the event, not from a social club list.", "Luma is paired with Co to see other events members attend."], suggestions: ["Each event could fund the next by feeding its match data back in."] }), src2));
+  check("a suggestion still can't name an event or place nobody gave or Co read", D.documentProblems(mk({ bullets: ["We match people inside the event, not from a social club list.", "Luma is paired with Co to see other events members attend."], suggestions: ["Go to the Founders Mixer at The Battery on Friday at 7pm."] }), src2).some((x) => /suggestion/.test(x)));
+  check("...unless Co read it this turn", D.documentProblems(mk({ bullets: ["We match people inside the event, not from a social club list.", "Luma is paired with Co to see other events members attend."], suggestions: ["Go to the Founders Mixer at The Battery on Friday at 7pm."] }), { theirs: SAYS, read: "Founders Mixer at The Battery, Friday 7pm" }).length === 0);
+  // The page
+  const html2 = D.documentHtml(D.resolveDocument({ title: "T", sections: [{ heading: "H", bullets: ["One point."] }], suggestions: ["An idea of Co's."] }), { firstName: "Royce", date: "October 7, 2026" });
+  check("the page marks Co's own ideas visibly and apart from their points (a labelled, ruled block after the sections)", /<section class="sug"><h3>Co's suggestions<\/h3><ul><li>An idea of Co&#39;s\.<\/li><\/ul><\/section>/.test(html2) && html2.indexOf('class="sug"') > html2.indexOf("</section>") && /\.sug \{[^}]*border-left: 2px solid/.test(html2));
+  check("no suggestions, no block", !/class="sug"/.test(D.documentHtml(doc, { firstName: "R", date: "d" })));
+  check("suggestions are capped at five", D.resolveDocument({ title: "T", sections: [{ bullets: ["x"] }], suggestions: Array.from({ length: 9 }, (_, i) => `idea ${i}`) }).suggestions.length === 5);
+  check("the tool takes suggestions and says so", /suggestions: z\.array\(z\.string\(\)\)\.max\(5\)\.optional\(\)/.test(src("agent/loopTools.ts")) && /ONLY what they said, in their words/.test(src("agent/loopTools.ts")));
+  check("their record rests on their words alone: what Co read can back only a suggestion", /const source = \{ theirs, read \}/.test(src("agent/loopTools.ts")) && !/JSON\.stringify\(t\?\.profile/.test(src("agent/loopTools.ts")));
+  // The filename
+  check("filename: a title starting 'Co:' does not become Co-Co", D.docFilename("Co: Product Positioning and Scaling Notes", "2026-10-07") === "Co-Product-Positioning-and-Scaling-Notes-2026-10-07.pdf", D.docFilename("Co: Product Positioning and Scaling Notes", "2026-10-07"));
+  check("filename: 'Co Capability and Sequin AI Launch Party Funnel' does not either", D.docFilename("Co Capability and Sequin AI Launch Party Funnel", "2026-10-07") === "Co-Capability-and-Sequin-AI-Launch-Party-Funnel-2026-10-07.pdf", D.docFilename("Co Capability and Sequin AI Launch Party Funnel", "2026-10-07"));
+  check("filename: a title of just 'Co' still has a name", D.docFilename("Co", "2026-10-07") === "Co-Co-2026-10-07.pdf" || /^Co-/.test(D.docFilename("Co", "2026-10-07")));
+  check("the registry tells Co: no 'Co' in the title; the points are theirs; its own ideas go in suggestions", /no "Co" in it/.test(Cap.ABILITIES.find((x) => x.id === "write_document")!.use ?? "") && /goes in suggestions, which the page marks as Co's/.test(Cap.ABILITIES.find((x) => x.id === "write_document")!.use ?? ""));
+}
+
 // ---------------------------------------------------------------- wiring
 {
   const lt = src("agent/loopTools.ts");
@@ -163,7 +255,7 @@ const GUIDE = "seeking guidance on how to split the cofounder roles with Jacquel
   check("a moment that is not allowed is refused in code, whatever Co thinks", /if \(!due\.due\) return \{ ok: false, error: `Don't offer a document now/.test(lt));
   check("the offer records the code's topic, not the model's", !/recordOffer\(ctx\.userId, (input|String)/.test(lt));
   check("a document written marks the open offer accepted (or records an asked-for one)", /recordDocumentWritten\(ctx\.userId, doc\.title\)/.test(lt) && /status = 'accepted'/.test(src("services/documentOffer.ts")));
-  check("reply context: the notice and the waiting offer reach Co on every reply", /loadDocOfferContext\(userId\)/.test(src("services/turnContext.ts")) && /docOfferLines\(opts\.turn\?\.docOffer\)/.test(src("harness/replyGrounding.ts")));
+  check("reply context: the notice and the waiting offer reach Co on every reply", /loadDocOfferContext\(userId\)/.test(src("services/turnContext.ts")) && /docOfferLines\(opts\.turn\?\.docOffer, opts\.turn\?\.message \?\? ""\)/.test(src("harness/replyGrounding.ts")));
   check("the record: Co remembers it sent a document and that it offered", /case "writeDocument"/.test(src("services/coFacts.ts")) && /case "offerDocument"/.test(src("services/coFacts.ts")));
   check("the table exists, with the two states and the two sources", /CREATE TABLE IF NOT EXISTS document_offers/.test(src("db/migrations.ts")) && /CHECK \(status IN \('offered', 'accepted'\)\)/.test(src("db/migrations.ts")));
   // Explicitly out of scope (Royce, 2026-10-07): the stuck Sequent PDF and tasks 90/91 are untouched, and the 9am hold stays.

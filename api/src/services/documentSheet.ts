@@ -7,13 +7,15 @@
 // what the member said or what Co read (the same check a call's sentences get, services/offerGuard.ts).
 import { EMAIL_COLORS as C, escapeHtml } from "./emailDesign.js";
 import { unsourced } from "./offerGuard.js";
+import { unbackedClaims } from "./documentGrounding.js";
 
-export const DOC_LIMITS = { maxSections: 10, maxParagraphs: 6, maxBullets: 10, titleChars: 70, noteChars: 240, headingChars: 70, paragraphChars: 700, bulletChars: 220, totalChars: 6500, minChars: 80, maxParagraphWords: 60, bulletsExpectedAfterChars: 600 };
+export const DOC_LIMITS = { maxSections: 10, maxParagraphs: 6, maxBullets: 10, titleChars: 70, noteChars: 240, headingChars: 70, paragraphChars: 700, bulletChars: 220, totalChars: 6500, minChars: 80, maxParagraphWords: 60, bulletsExpectedAfterChars: 600, maxSuggestions: 5, suggestionChars: 220 };
 
 export type DocSectionInput = { heading?: string; paragraphs?: string[]; bullets?: string[] };
-export type DocInput = { title: string; note?: string; sections: DocSectionInput[] };
+// suggestions: anything of Co's own (ideas, options, recommendations), marked as Co's on the page and kept out of the member's points.
+export type DocInput = { title: string; note?: string; sections: DocSectionInput[]; suggestions?: string[] };
 export type DocSection = { heading: string | null; paragraphs: string[]; bullets: string[] };
-export type Doc = { title: string; note: string; sections: DocSection[] };
+export type Doc = { title: string; note: string; sections: DocSection[]; suggestions: string[] };
 
 // Co writes plain words: no dash for a pause (a comma), no markdown that would print as stray symbols.
 const clean = (s: unknown, max: number) =>
@@ -35,14 +37,19 @@ export function resolveDocument(input: DocInput): Doc {
       bullets: (s.bullets ?? []).map((b) => clean(b, L.bulletChars)).filter(Boolean).slice(0, L.maxBullets),
     }))
     .filter((s) => s.paragraphs.length || s.bullets.length);
-  return { title: clean(input.title, L.titleChars), note: clean(input.note, L.noteChars), sections };
+  const suggestions = (input.suggestions ?? []).map((x) => clean(x, L.suggestionChars)).filter(Boolean).slice(0, L.maxSuggestions);
+  return { title: clean(input.title, L.titleChars), note: clean(input.note, L.noteChars), sections, suggestions };
 }
 
-export const docText = (d: Doc): string => [d.title, d.note, ...d.sections.flatMap((s) => [s.heading ?? "", ...s.paragraphs, ...s.bullets])].filter(Boolean).join("\n");
+export const docText = (d: Doc): string => [d.title, d.note, ...d.sections.flatMap((s) => [s.heading ?? "", ...s.paragraphs, ...s.bullets]), ...d.suggestions].filter(Boolean).join("\n");
+// Their points only: what must rest on their own words.
+export const memberParts = (d: Doc): string[] => d.sections.flatMap((s) => [...s.paragraphs, ...s.bullets]);
 const sentencesOf = (t: string) => (t.match(/[^.!?\n]+[.!?]*/g) ?? []).map((s) => s.trim()).filter(Boolean);
 
-// Pure: what is wrong with a document, in words Co can act on. `source` is what it may rest on: what they said and what Co read.
-export function documentProblems(doc: Doc, source: string): string[] {
+// Pure: what is wrong with a document, in words Co can act on.
+//   theirs: everything they said (their texts and calls). Their points must rest on it, claim by claim.
+//   read:   what Co read this turn. Only Co's own suggestions may lean on it, for an event or a place (never for a claim about them).
+export function documentProblems(doc: Doc, source: { theirs: string; read?: string }): string[] {
   const L = DOC_LIMITS;
   const out: string[] = [];
   if (doc.title.length < 3) out.push("it needs a title");
@@ -55,13 +62,22 @@ export function documentProblems(doc: Doc, source: string): string[] {
   const long = doc.sections.flatMap((x) => x.paragraphs).find((x) => x.split(/\s+/).length > L.maxParagraphWords);
   if (long) out.push(`a paragraph runs ${long.split(/\s+/).length} words ("${long.slice(0, 40)}..."): put its points in bullets and keep paragraphs to two or three sentences`);
   if (!long && body.length > L.bulletsExpectedAfterChars && !doc.sections.some((x) => x.bullets.length)) out.push("it has no bullets: put the points of each section in bullets so it can be scanned");
-  for (const s of sentencesOf(body)) {
-    const bad = unsourced(s, source);
-    if (bad.length) out.push(`"${s.slice(0, 80)}" names ${bad.map((m) => m.text).join(", ")}, which they never said and you never read`);
+  // Their record is their words: an event, place or time must be one they gave (or one of Co's marked suggestions, from what Co read).
+  const mine = memberParts(doc).join("\n");
+  for (const s of sentencesOf(mine)) {
+    const bad = unsourced(s, source.theirs);
+    if (bad.length) out.push(`"${s.slice(0, 80)}" names ${bad.map((m) => m.text).join(", ")}, which they never said`);
   }
-  return out.slice(0, 6);
+  for (const s of sentencesOf(doc.suggestions.join("\n"))) {
+    const bad = unsourced(s, `${source.theirs}\n${source.read ?? ""}`);
+    if (bad.length) out.push(`the suggestion "${s.slice(0, 70)}" names ${bad.map((m) => m.text).join(", ")}, which they never said and you never read`);
+  }
+  // And every claim in their sections rests on their words, close together: Co's own reasoning is a suggestion, not their point.
+  for (const u of unbackedClaims(memberParts(doc), source.theirs).slice(0, 4)) {
+    out.push(`"${u.text.slice(0, 90)}" isn't something they said (their words never put ${u.missing.slice(0, 4).join(", ")} together): rewrite it from their own words, or move it to suggestions`);
+  }
+  return out.slice(0, 7);
 }
-
 
 // ---------------------------------------------------------------- the file's name
 
@@ -70,6 +86,8 @@ const SMALL = new Set(["a", "an", "and", "or", "of", "the", "to", "for", "in", "
 // a real name from the title, Co first so it sorts together, the day last so a folder of them reads in order.
 export function docFilename(title: string, dateIso: string): string {
   const words = title.replace(/[^A-Za-z0-9' ]+/g, " ").replace(/'/g, "").split(/\s+/).filter(Boolean);
+  // "Co: Product Positioning" is not "Co-Co-Product-Positioning": the name already starts with Co.
+  if (words.length > 1 && words[0].toLowerCase() === "co") words.shift();
   const named = words.map((w, i) => (i > 0 && SMALL.has(w.toLowerCase()) ? w.toLowerCase() : w[0].toUpperCase() + w.slice(1)));
   let base = named.join("-").slice(0, 70).replace(/-+$/, "");
   if (!base) base = "Document";
@@ -80,9 +98,17 @@ export function docFilename(title: string, dateIso: string): string {
 
 // Short documents get more air and larger type, long ones tighter, so any length looks intended.
 export type Density = "airy" | "standard" | "dense";
+// How much page a document takes, in lines: each paragraph and bullet by its length (about 62 characters a line in the points column),
+// a few lines of room for each section and for the suggestions block. Characters alone ignored the room headings and bullets take.
+export function docUnits(doc: Doc): number {
+  const lines = (t: string) => Math.max(1, Math.ceil(t.length / 62));
+  const points = doc.sections.reduce((n, s) => n + [...s.paragraphs, ...s.bullets].reduce((m, t) => m + lines(t), 0) + 3, 0);
+  const sug = doc.suggestions.length ? doc.suggestions.reduce((n, t) => n + lines(t), 0) + 4 : 0;
+  return points + sug + Math.ceil((doc.note.length + 40) / 80);
+}
 export function docDensity(doc: Doc): Density {
-  const n = docText(doc).length;
-  return n < 900 ? "airy" : n > 3200 ? "dense" : "standard";
+  const u = docUnits(doc);
+  return u <= 24 ? "airy" : u <= 40 ? "standard" : "dense";
 }
 
 // Only plain characters reach the page margin boxes (CSS strings): no quote, backslash or control character can end the string.
@@ -114,7 +140,7 @@ export function documentHtml(doc: Doc, o: { firstName: string; date: string }): 
 html, body { margin: 0; padding: 0; background: ${C.paper}; }
 body { color: ${C.body}; font-family: ${SANS}; -webkit-print-color-adjust: exact; print-color-adjust: exact; counter-reset: sec; }
 body.airy { --title: 52px; --text: 14.5px; --lead: 16.5px; --pad: 34px; --h2: 23px; }
-body.standard { --title: 38px; --text: 12.5px; --lead: 14px; --pad: 18px; --h2: 18px; }
+body.standard { --title: 40px; --text: 13px; --lead: 14.5px; --pad: 22px; --h2: 19px; }
 body.dense { --title: 31px; --text: 11.3px; --lead: 12.5px; --pad: 13px; --h2: 16px; }
 .mast { display: flex; justify-content: space-between; align-items: baseline; padding-bottom: 12px; border-bottom: 1px solid ${C.ink}; }
 .mark { font-family: ${SERIF}; font-weight: 400; font-size: 24px; line-height: 1; letter-spacing: 0.01em; color: ${C.ink}; }
@@ -134,11 +160,15 @@ li { font-size: var(--text); line-height: 1.5; color: ${C.body}; margin: 0 0 0.4
 li:last-child { margin-bottom: 0; }
 li::marker { color: ${C.gold}; font-size: 0.95em; }
 p + ul { margin-top: 0.35em; }
+.sug { margin-top: var(--pad); padding: calc(var(--pad) * 0.8) 0 calc(var(--pad) * 0.8) 0.22in; border-left: 2px solid ${C.gold}; break-inside: avoid; }
+h3 { margin: 0 0 8px 0; font-family: ${SANS}; font-size: 8.5px; font-weight: 600; letter-spacing: 0.2em; text-transform: uppercase; color: ${C.gold}; }
+.sug li { color: ${C.soft}; }
 .end { border-top: 1px solid ${C.line}; }
 </style></head><body class="${density}">
 <div class="mast"><div class="mark">Co</div><div class="date">${e(o.date)}</div></div>
 <div class="head"><h1>${e(doc.title)}</h1><div class="for">Prepared for ${e(name)}</div>${doc.note ? `<p class="lede">${e(doc.note)}</p>` : ""}</div>
 ${doc.sections.map(section).join("")}
+${doc.suggestions.length ? `<section class="sug"><h3>Co's suggestions</h3><ul>${doc.suggestions.map((x) => `<li>${e(x)}</li>`).join("")}</ul></section>` : ""}
 <div class="end"></div>
 </body></html>`;
 }

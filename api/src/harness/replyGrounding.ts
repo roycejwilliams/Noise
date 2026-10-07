@@ -265,7 +265,8 @@ export async function gatherReplyFacts(
   }
   // Writing something up as a document (services/documentOffer.ts): an offer still waiting on its answer, or a moment Co may offer, once.
   {
-    const doc = docOfferLines(opts.turn?.docOffer);
+    const doc = docOfferLines(opts.turn?.docOffer, opts.turn?.message ?? "");
+    if (doc.ask) addInstruction(rf, doc.ask);
     if (doc.pending) addFact(rf, "pending", doc.pending);
     if (doc.hint) addInstruction(rf, doc.hint);
   }

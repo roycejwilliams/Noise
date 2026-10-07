@@ -527,25 +527,19 @@ export function loopTools(
           )
           .min(1)
           .max(10)
-          .describe("Each a heading, a sentence or two of framing, then the points as short bullets: scannable, not dense paragraphs. Only what they said or you read; nothing invented."),
+          .describe("Each a heading, a sentence or two of framing, then the points as short bullets: scannable, not dense paragraphs. ONLY what they said, in their words; your own ideas go in suggestions, never here."),
+        suggestions: z.array(z.string()).max(5).optional().describe("Anything of your own: an idea, an option, a recommendation. It appears on the page marked as Co's suggestions, apart from their points. Leave it out when you have none."),
       }),
       execute: async (input) => {
         const { resolveDocument, documentProblems } = await import("../services/documentSheet.js");
         const { deliverDocument, loadTheirWords } = await import("../services/documentDelivery.js");
         const { recordDocumentWritten } = await import("../services/documentOffer.js");
         const doc = resolveDocument(input);
-        const t = ctx.turn;
-        // What it may rest on: their own words (two weeks of texts and calls), this message, what Co has on them, what it read this turn.
-        const source = [
-          await loadTheirWords(ctx.userId).catch(() => ""),
-          theirWords(),
-          ...(t?.asks ?? []).map((a) => a.text),
-          ...(t?.threads ?? []).map((x) => x.text),
-          ...(t?.ledger?.lines ?? []),
-          JSON.stringify(t?.profile ?? {}),
-          ...[...loop.pages.values()],
-          ...[...loop.found.values()].map((f) => `${f.name} ${f.facts}`),
-        ].join("\n");
+        // Their record is their words: two weeks of their texts and calls, and this message. What Co read this turn can back only
+        // an event or place in Co's own marked suggestions, never a claim about them.
+        const theirs = [await loadTheirWords(ctx.userId).catch(() => ""), theirWords()].join("\n");
+        const read = [...loop.pages.values(), ...[...loop.found.values()].map((f) => `${f.name} ${f.facts}`)].join("\n");
+        const source = { theirs, read };
         const problems = documentProblems(doc, source);
         if (problems.length) {
           notDone(`No document sent: ${problems.slice(0, 3).join("; ")}.`);
