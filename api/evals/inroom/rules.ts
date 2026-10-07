@@ -160,7 +160,8 @@ finding(`share gate false positives: ${blocked.length}/${benign.length} ordinary
   const members = [{ user_id: "a", first_name: "Jordan" }, { user_id: "b", first_name: "Ellis" }];
   // Ellis's ask closed after the ranking was stored; the stored shareReason still carries it.
   const ranked = [{ candidate_id: "b", score: 80, reason: "", shareReason: `what they've said they're looking for: "a buyer for my company"`, mutual: false, method: "ask" as const }];
-  const r = B.pickNamed({ ranked, recipientId: "a", members, nameOk: new Set(["b"]), notGoing: new Set() });
+  // As the brief calls it: with each guest's asks that are shareable NOW (Ellis's ask closed, so none).
+  const r = B.pickNamed({ ranked, recipientId: "a", members, nameOk: new Set(["b"]), notGoing: new Set(), stillShareable: new Map([["b", []]]) });
   finding("brief: a stored ranking's shareReason is reused as-is; an ask Ellis has since closed ('a buyer for my company') can still be named in the brief", r.picks[0]?.reason.includes("a buyer for my company"));
   check("brief: no name without the RSVP yes", B.pickNamed({ ranked, recipientId: "a", members, nameOk: new Set(), notGoing: new Set() }).picks.length === 0);
   check("brief: a shared first name is never named", B.pickNamed({ ranked, recipientId: "a", members: [...members, { user_id: "c", first_name: "Ellis" }], nameOk: new Set(["b"]), notGoing: new Set() }).picks.length === 0);

@@ -464,8 +464,8 @@ async function maybeSendMatchNudge(
         ? // Only this person's own state: this memory is read back into
           // their future replies, so it must not carry anything about the
           // other person's night (2026-09-22).
-          `Suggested ${person.first_name} say hi to ${candidate.first_name} at "${eventName}" as a low-key hello, since nothing stood out as a strong match for ${person.first_name}: ${top.shareReason} (score ${top.score})`
-        : `Nudged ${person.first_name} that ${candidate.first_name} is also going to "${eventName}" and worth meeting: ${top.shareReason} (score ${top.score})`,
+          `Suggested ${person.first_name} say hi to ${candidate.first_name} at "${eventName}" as a low-key hello, since nothing stood out as a strong match for ${person.first_name}: ${top.shareReason}`
+        : `Nudged ${person.first_name} that ${candidate.first_name} is also going to "${eventName}" and worth meeting: ${top.shareReason}`,
     );
     // Royce, 2026-09-08 sweep — the descriptive log above is a summary, not
     // the actual text sent, so recentConversation (routes/sendblue.ts, which

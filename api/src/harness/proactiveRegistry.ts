@@ -557,7 +557,11 @@ export const proactiveRegistry: ProactiveRegistry = {
       if (!members.some((m) => m.user_id === c.userId)) return skip("no longer registered");
       const others = members.filter((m) => m.user_id !== c.userId);
       const [flags, ranked] = await Promise.all([B.namedYes(p.eventId, others.map((m) => m.user_id)), B.rankingFor(p.eventId, c.userId)]);
-      const chosen = B.pickNamed({ ranked, recipientId: c.userId, members: others, nameOk: flags.yes, notGoing: flags.notGoing });
+      // Their asks that are open and shareable right now: a stored reason that isn't one of them is never named.
+      const { shareableAsks } = await import("../services/matching.js");
+      const { rows: profs } = await pool.query(`SELECT user_id, intent FROM co_profiles WHERE user_id = ANY($1::uuid[])`, [others.map((m) => m.user_id)]);
+      const stillShareable = new Map<string, string[]>(profs.map((r: any) => [String(r.user_id), shareableAsks(r.intent).map((a) => String(a.text))]));
+      const chosen = B.pickNamed({ ranked, recipientId: c.userId, members: others, nameOk: flags.yes, notGoing: flags.notGoing, stillShareable });
       // The same privacy check the in-room nudge uses, per person named: a reason that fails it is dropped, and the person with it.
       const picks: typeof chosen.picks = [];
       let unnamedFits = chosen.unnamedFits;

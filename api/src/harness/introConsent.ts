@@ -49,7 +49,7 @@ export type ConsentFacts = {
 // for the looser verbs.
 const INTEREST_PHRASE =
   /\b(?:wants?|wanted|would like|'d like|would love|'d love|keen|eager|hoping|hopes|excited|interested|open)\s+(?:in\s+|on\s+|to\s+)?(?:meet|meeting|connect|connecting|chat|chatting|talk|talking|an intro|intro|introduc\w*|get to know|be introduced|being introduced)\b([^.!?]*)/gi;
-const AGREEMENT = /\b(said yes|agreed to|opted in|is down to|is up for (an intro|meeting)|would be up for)\b/i;
+const AGREEMENT = /\b(said yes|agreed to|opted in|is down to|is up for (an intro|meeting)|would be up for|(?:is |are )?(?:dying|eager|keen|excited|itching|desperate) to (?:meet|talk|chat|connect|see|hear)|can'?t wait to (?:meet|talk|chat|connect|see)|(?:would|'d) love to (?:meet|talk|chat|connect)|really wants? to (?:meet|talk|chat|connect)|is looking forward to (?:meeting|talking|chatting|seeing))\b/i;
 // Co relaying what the other person said or did about the recipient.
 const ATTRIBUTION_VERBS =
   /(?<!\b(?:you|you've|you'd|I|I've|we)\s)\b(mentioned|said|told me|asked (me )?about|asked for|brought (you )?up|reached out|messaged|texted|noticed you|is looking for you|picked you|chose you|requested)\b/i;
