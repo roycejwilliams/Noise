@@ -35,7 +35,7 @@ import pool from "../db/db.js";
 import { recordProactiveText } from "../services/coFacts.js";
 import sendblue, { cleanCoMessage } from "../services/sendblue.js";
 import { writeMemory } from "../services/memory.js";
-import { hoursZone, isReasonableLocalHour } from "../services/localHours.js";
+import { hoursZone, isReasonableLocalHour, REASONABLE_HOUR_START, REASONABLE_HOUR_END } from "../services/localHours.js";
 import { localStamp, memberZone } from "../services/memberTime.js";
 import { CO_VOICE, CO_TEXT_CHANNEL } from "../services/coVoice.js";
 import { describeFailed, gate, recordDecision, type GateCheck } from "./core.js";
@@ -177,8 +177,9 @@ export const TYPE_POLICY: Record<ProactiveType, TypePolicy> = {
 };
 
 export const RULES = {
-  startHour: 9,
-  endHour: 20,
+  // The one window for everything Co starts (services/localHours.ts, 8am-9pm, Royce 2026-10-08).
+  startHour: REASONABLE_HOUR_START,
+  endHour: REASONABLE_HOUR_END,
   maxPerLocalDay: 1,
   maxPer7Days: 3,
   // The room lane (events, in-room nudges, intros) has its own caps, so
@@ -271,10 +272,9 @@ export type Evaluation = {
 const HOUR = 60 * 60 * 1000;
 const DAY = 24 * HOUR;
 
-// 9am-8pm in their own time zone. With no usable time zone, only the UTC
-// hours when every continental US zone is inside 9am-8pm (16:00-24:00 UTC)
-// count. This used to fail open, which is how unknown-city users got texts
-// at any hour.
+// 8am-9pm in their own time zone. With no usable time zone, the same window
+// measured in Pacific (services/localHours.ts FALLBACK_ZONE). This used to fail
+// open, which is how unknown-city users got texts at any hour.
 // The pause grows with every text in a row that went unanswered (2026-10-04,
 // Royce, brand fix 3): a day after one, three after two, a week after three, two
 // weeks after four or more. Before, it stopped at three days, so a member who
@@ -319,7 +319,7 @@ export function engagementTier(now: Date, lastInboundAt: Date | null, unanswered
   return days <= ENGAGEMENT.dormantDays ? "dormant" : "gone";
 }
 
-// The one hours rule texts and calls share (services/localHours.ts): 9am-8pm their time, Pacific as a zone when theirs isn't known.
+// The one hours rule texts and calls share (services/localHours.ts): 8am-9pm their time, Pacific as a zone when theirs isn't known.
 export function localHourOk(now: Date, timezone: string | null): boolean {
   return isReasonableLocalHour(timezone, now);
 }
@@ -1349,7 +1349,7 @@ export async function sendExempt(opts: {
 // askCandidateDirectly sent a raw sendblue message with no opt-out or hours
 // check at all, since the trigger was the OTHER person's reply, not this
 // recipient's), and for relays, reminders and stale heads-ups. Sends now if
-// it's inside their local hours; otherwise queues it for their next local 9am
+// it's inside their local hours; otherwise queues it for their next local 8am
 // instead of texting at night. Opt-out is still enforced by sendExempt itself,
 // at send time, whichever branch runs.
 //
@@ -1646,7 +1646,12 @@ export async function dispatchForUser(registry: ProactiveRegistry, userId: strin
         const d = await feelingForDraft.run(renderEmotionalContext(emotional), () => registry.event_offer.draft(sib, person));
         if ("skip" in d || "defer" in d) continue;
         const msgs = d.messages.map(capitalizeSentences);
-        if (!gate(checkDraft(capitalizeSentences(d.text), d.rules)).ok) continue;
+        const sibGate = gate(checkDraft(capitalizeSentences(d.text), d.rules));
+        if (!sibGate.ok) {
+          // A sibling offer dropped at its draft is on the record (2026-10-08 sweep review: these drops were silent).
+          if (!opts.dryRun) recordDecision({ layer: 7, decision: "proactive.sibling_dropped", userId: c.userId, outcome: "skip", action: "draft_failed", reason: describeFailed(sibGate.failed), proposal: { candidate: sib.id, tier: (sib.payload as any)?.match?.tier ?? null } }).catch(() => {});
+          continue;
+        }
         extras.push({ candidate: sib, messages: msgs });
       } catch (err: any) {
         console.error("proactive: sibling offer draft failed (non-fatal):", err?.message ?? err);

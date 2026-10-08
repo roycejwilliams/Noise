@@ -44,6 +44,10 @@ export const WRITE_DOCUMENT_INPUT = z.object({
   suggestions: z.array(z.string()).max(5).optional().describe("Anything of your own: an idea, an option, a recommendation. It appears on the page marked as Co's suggestions, apart from their points. Leave it out when you have none."),
   kind: z.enum(["venue_brief", "partnership_plan", "readout", "other"]).optional().describe("What it is for: venue_brief (for a venue or space around an event), partnership_plan (working with a partner, sponsor or host), readout (what came of an event, for a host or partner), or other (anything else: their goals, a plan for themselves, a summary). Leave it out for other."),
   saveTo: z.enum(["pdf", "google_doc", "both"]).optional().describe("Leave this out: it comes as a PDF in this conversation. Only when they ask for a Google Doc in their own words set google_doc (or both, if they want the PDF too)."),
+  revises: z.number().int().optional().describe("Only when they asked to change a document you already delivered: its doc number from \"Documents you've delivered\". Write the whole new version (start from readDocument), and it goes as the next version."),
+  changed: z.string().optional().describe("With revises: what changed, in a few words they'd recognize (\"updated the budget section\"). It becomes the one line sent with the new version."),
+  // The tool owns its one delivery line (Royce, 2026-10-08: one delivery is the attachment and one line, nothing else repeating it).
+  line: z.string().optional().describe("The one sentence that goes with the attachment, in your voice: what it is (\"Here's the plan for keeping Co present after the launch.\"). Sent later than they asked, it says when they asked (\"Here's the plan you asked for last night.\"). No dashes, no exclamation points. Leave it out and a plain line goes. Nothing else about it is sent, so don't repeat it in a reply."),
 });
 export type WriteDocumentInput = z.infer<typeof WRITE_DOCUMENT_INPUT>;
 

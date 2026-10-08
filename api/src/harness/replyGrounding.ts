@@ -17,20 +17,24 @@
 //             sentences are dropped. The reply is never blocked.
 //   record  — recordDecision(layer 3, "reply.grounding")
 //   eval    — evals/reply/run.ts
-import { docOfferLines } from "../services/documentOffer.js";
+import { docOfferLines, type OfferKind } from "../services/documentOffer.js";
+import { findSection } from "../services/deliveryReceipts.js";
+import { driftLine } from "../services/receiptDrift.js";
+import type { Doc } from "../services/documentSheet.js";
+import type { EmotionalContext } from "./emotion.js";
 import { attributedWithoutSource } from "./proactiveSpecifics.js";
 import { loadMilestones, storyLines } from "../services/milestones.js";
 import { ABILITIES, capabilitySheet } from "../services/capabilities.js";
 import { kitLines } from "../services/memberKit.js";
 import { situationFor, type Situation } from "../services/capabilities.js";
-import { sentDetailHints, sentDetailLines, type TurnContext } from "../services/turnContext.js";
+import { carryingBlock, sentDetailHints, sentDetailLines, type TurnContext } from "../services/turnContext.js";
 import { switchedOff } from "../services/abilitySwitches.js";
 import { textingStyleFor } from "../services/textingStyle.js";
 import { tasteSummary } from "../services/outcomes.js";
 import { handoffFor, isTeamMember, teamSheet } from "../services/extensions.js";
 import { ledgerFacts } from "../services/coFacts.js";
 import { DEFAULT_ZONE, dateNote, itemDays, localToday, readDates, type Days } from "../services/dateGuard.js";
-import { memberZone } from "../services/memberTime.js";
+import { memberZone, validZone, wordsZone } from "../services/memberTime.js";
 import { sourceOf } from "../services/messageFormat.js";
 import { getPersonSnapshot, renderSnapshot } from "./personSnapshot.js";
 import { anthropic } from "@ai-sdk/anthropic";
@@ -44,12 +48,13 @@ import { recordDecision, type GateCheck } from "./core.js";
 import { MODELS } from "../models.js";
 import { parseModelJson } from "../services/modelJson.js";
 import { checkNoEmotionLabel } from "./emotion.js";
+import { narratesInternalState } from "../services/speakable.js";
 import { enrichMatch, missingEventDetails, renderEventDetails, type EventDetails, type OpportunityDetails } from "../services/eventDetails.js";
 import { recentCallCorrections } from "./callGrounding.js";
 import { repeatQuestionCheck, sameQuestion } from "./repeatAsk.js";
 import { asksForLink, findLines, linkRequestInstruction, recentResearchFinds, relevantFinds } from "../services/researchFinds.js";
 import { DISCRETION_GUIDE, apologyOnly, discreetFinal, isDiscreetTurn, isNeutralTurn } from "./discretion.js";
-import { PROMISE_RE, dropPromise, promiseFact, promiseSentence, promiseStays, trackPromise } from "../services/promises.js";
+import { PROMISE_RE, STARTED_WORK, dropPromise, promiseFact, promiseSentence, promiseStays, trackPromise } from "../services/promises.js";
 
 // Model policy (Royce, 2026-09-14): Sonnet 5 for anything with judgment or
 // side effects; Haiku only for narrow, code-checked reads.
@@ -85,7 +90,9 @@ export type Fact = { id: string; kind: FactKind; text: string };
 
 // privateNames: the other member(s) a blocked turn is about, so a reply can't name them
 // (harness/discretion.ts).
-export type ReplyFacts = { facts: Fact[]; instructions: string[]; privateNames?: string[]; discretionDone?: boolean };
+// artifactOffer: the one offer (a plan sheet, a venue brief, a stale document's fix) this reply was told it may make; recorded only
+// if a text Co sends makes it (services/documentOffer.ts).
+export type ReplyFacts = { facts: Fact[]; instructions: string[]; privateNames?: string[]; discretionDone?: boolean; artifactOffer?: { kind: OfferKind; topic: string } | null };
 
 export function createReplyFacts(): ReplyFacts {
   return { facts: [], instructions: [] };
@@ -212,7 +219,8 @@ export async function gatherReplyFacts(
   // Today's date, so "Oct 10 is 18 days out" can be worked out instead of
   // guessed (2026-09-22: a reply said "if today's around the 23rd" on the
   // 22nd, and the fact check had nothing to check it against).
-  addFact(rf, "known", `Today is ${DateTime.now().setZone("America/Los_Angeles").toFormat("cccc, LLLL d, yyyy")} (Pacific time).`);
+  // In their zone (services/memberTime.ts), never always Pacific: "today" for a member in New York turns over three hours earlier.
+  addFact(rf, "known", todayFact(zone));
   if (preference === "text") addFact(rf, "known", "They told Co they'd rather text. Only bring up a call if they ask for one.");
   if (preference === "call") addFact(rf, "known", "They told Co they like talking on the phone. Offering a call when there's a lot to talk through is welcome.");
   if (callFailure) {
@@ -267,17 +275,35 @@ export async function gatherReplyFacts(
     addInstruction(rf, `If they say they're running late, can't make it, or aren't sure about "${today.name}", answer them normally and warmly, record it with updateGoing, never pressure them to come, and never offer to contact the host.`);
   }
   // Writing something up as a document (services/documentOffer.ts): an offer still waiting on its answer, or a moment Co may offer, once.
+  // The same notice covers a plan sheet, a venue brief and a stale delivered document, at most one offer a reply, never in a heavy
+  // moment (this message's feeling, recorded before the reply drafts).
   {
+    if (opts.turn?.docOffer) opts.turn.docOffer.moment = { heavyNow: heavyMoment(opts.turn.emotional), coLines: coLinesIn(opts.context) };
     const doc = docOfferLines(opts.turn?.docOffer, opts.turn?.message ?? "");
     if (doc.ask) addInstruction(rf, doc.ask);
     if (doc.pending) addFact(rf, "pending", doc.pending);
     if (doc.hint) addInstruction(rf, doc.hint);
+    // Recorded once Co's text actually makes it (agent/conversationReply.ts), so it's never offered twice.
+    if (doc.offer) rf.artifactOffer = doc.offer;
+  }
+  // A delivered document that no longer matches what's true (services/receiptDrift.ts): a fact, whether or not Co raises it.
+  for (const d of opts.turn?.drift ?? []) addFact(rf, "known", driftLine(d));
+  // One ordered view of everything Co is carrying for them (services/turnContext.ts carryingItems), and, when this message shares
+  // words with a section of a document Co just delivered, a pointer to read it first. Both guidance, never a gate.
+  {
+    const carrying = carryingBlock(opts.turn?.carrying);
+    if (carrying) addInstruction(rf, carrying);
+    const docHint = docQuestionHint(opts.turn?.message ?? "", opts.turn?.recentDocs ?? []);
+    if (docHint) addHint(rf, docHint);
   }
   // Co's own open tasks: real scheduled work, so saying when it'll get back to them is true.
   for (const line of opts.turn?.tasks ?? []) addFact(rf, "scheduled", line);
   // Their research briefs (services/coTasks.ts briefFactLines): one still running or held for their hours is scheduled; one that
   // finished or stopped is Co's record of what it did.
   for (const line of opts.turn?.briefs ?? []) addFact(rf, /^Co is putting together|hasn't reached them yet/.test(line) ? "scheduled" : "did_before", line);
+  // Documents Co delivered (services/deliveryReceipts.ts): "Documents you've delivered", by doc number, what's outstanding first.
+  // A PDF still to follow a text fallback is scheduled; everything else is what Co did. readDocument quotes from them.
+  for (const line of opts.turn?.deliveries ?? []) addFact(rf, /^Outstanding:/.test(line) ? "scheduled" : "did_before", `Documents you've delivered: ${line}`);
   if (opts.turn) for (const hint of sentDetailHints(opts.turn)) addHint(rf, hint);
   for (const line of ledger.lines) addFact(rf, "did_before", line);
   // They're asking about something the record shows Co sent: the record
@@ -303,6 +329,41 @@ export async function gatherReplyFacts(
     }
   }
   return rf;
+}
+
+// Pure: today's date in the member's own zone, naming the zone (the fallback zone, said as such, when theirs isn't known).
+export function todayFact(zone: string | null | undefined, now: Date = new Date()): string {
+  const z = validZone(zone);
+  return `Today is ${DateTime.fromJSDate(now).setZone(wordsZone(z)).toFormat("cccc, LLLL d, yyyy")} (their local time, ${z ?? `${wordsZone(null)}; their own zone isn't known`}).`;
+}
+
+// Pure: a heavy moment in this message: they're struggling, or a strong hard feeling right now. No offers then (documentOffer.ts).
+export function heavyMoment(e: EmotionalContext | null | undefined): boolean {
+  if (!e) return false;
+  return !!e.needsCare || (!!e.current && e.current.intensity === "high" && e.current.valence === "negative");
+}
+// Pure: Co's recent lines from the reply's context (their message, then Co's last few "Co replied:" lines).
+export function coLinesIn(context: string | undefined): string[] {
+  return String(context ?? "").split("\n").filter((l) => l.startsWith("Co replied:")).map((l) => l.replace(/^Co replied:\s*/, "").trim()).filter(Boolean);
+}
+
+// Pure: when their message shares words with a section of one of the last three documents Co delivered, a pointer to read it first
+// (2026-10-08 review B6). A hint only: Co decides whether the message is about it.
+const DOC_HINT_STOP = new Set("the and for with what about this that your you can does how why part section bit doc document plan pdf just like into from have has was were are is it's its there their they them when where which who will would could should also than then thanks thank okay ok yes yeah sure got".split(" "));
+const hintWords = (t: string) => (t.toLowerCase().replace(/[’']/g, "'").match(/[a-z0-9][a-z0-9']*/g) ?? []).filter((w) => w.length > 2 && !DOC_HINT_STOP.has(w));
+export function docQuestionHint(message: string, docs: { id: number; title: string; doc: Doc }[]): string | null {
+  const q = new Set(hintWords(message));
+  if (!q.size) return null;
+  let best: { id: number; heading: string; score: number } | null = null;
+  for (const d of docs.slice(0, 3)) {
+    const sec = findSection(d.doc, message);
+    if (!sec) continue;
+    const head = new Set(hintWords(sec.heading).filter((w) => q.has(w))).size;
+    const body = new Set(hintWords(sec.text).filter((w) => q.has(w))).size;
+    const score = head * 3 + body;
+    if ((head >= 1 || body >= 2) && (!best || score > best.score)) best = { id: d.id, heading: sec.heading, score };
+  }
+  return best ? `This may be about doc #${best.id} (${best.heading} section): readDocument before answering.` : null;
 }
 
 // What a search did, written down so the next message can still say it
@@ -538,8 +599,16 @@ export function unbackedFollowup(draft: string, rf: ReplyFacts): RegExpMatchArra
   const ongoing = rf.facts.some((f) => f.kind === "ongoing");
   const timingCommitment = /\b(the second|the moment|right when|as soon as|right away|immediately|tonight|tomorrow|today|this week)\b/i.test(draft);
   const lookingOnly = /keep (looking|watching|an eye|my eyes|eyes)|on the lookout|watch(ing)? for|if (something|anything|one) (real )?(turns up|comes up|fits|shows up)/i.test(found[0] + " " + draft);
-  const tasked = rf.facts.some((f) => (f.kind === "scheduled" && /^Co is working on task #/.test(f.text)) || (f.kind === "did_this_turn" && /^Started task/.test(f.text)));
+  const tasked = rf.facts.some((f) => workBacksPromise(f));
   return !tasked && !(ongoing && lookingOnly && !timingCommitment) ? found : null;
+}
+
+// Real work behind a follow-up: an open task or research brief Co is carrying, or one started this turn (a task, a promise task, or
+// a research brief: researchBrief's fact said "Started researching a venue brief" and its "I'll text you the brief" was cut and then
+// opened as a second, duplicate promise task, 2026-10-08 review F1).
+const CARRIED_WORK = /^(?:Co is working on task #|Co is putting together research brief #|Research brief #\d+ for them, .* is finished but hasn't reached them yet)/;
+export function workBacksPromise(f: Fact): boolean {
+  return (f.kind === "did_this_turn" && STARTED_WORK.test(f.text)) || (f.kind === "scheduled" && CARRIED_WORK.test(f.text));
 }
 
 // Deterministic checks that don't need a model.
@@ -740,6 +809,10 @@ export function codeChecks(draft: string, rf: ReplyFacts, src: GroundingSources)
     checks.push({ name: "no_followup_promise", pass: false, reason: `promises a follow-up nothing will do: "${found[0]}"` });
   }
   if (!emotionLabel.pass) checks.push(emotionLabel);
+  // Co's own state said aloud ("still digging", "hit a limit on my end", "working on it"): the same rule calls and proactive texts
+  // are held to (services/speakable.ts). Cut like any failed check, redrafted when too little is left (2026-10-08 review F11).
+  const narrated = narratesInternalState(draft);
+  if (narrated) checks.push({ name: "no_internal_narration", pass: false, reason: `narrates Co's own state instead of what they get (${narrated})` });
   return checks;
 }
 
@@ -886,7 +959,7 @@ Your draft reply:
 These parts of the draft aren't supported by the facts or the conversation:
 ${failed.map((f) => `- ${f.reason ?? f.name}`).join("\n")}
 ${earlierTry ? `\nAn earlier rewrite also had unsupported parts (listed above too): "${earlierTry}"\nThis time, answer what they just asked first, in words the facts above actually support, even if the honest answer is short.\n` : ""}
-Deleting the unsupported parts left too little to answer them, so write the smallest true reply instead. Keep every supported sentence of the draft word for word. Where a flagged part can be corrected from a FACT (the real time, what was actually sent), correct it with the FACT's own words. When the FACTS say where something of theirs stands (a search, a task, your working notes, what you sent), and what's left doesn't answer them, answer with that state: what's found, what's unconfirmed, the next move. That is the answer, never a remark about what you can't measure, describe or nail down (2026-10-01: "how proactive are you?" became a disclaimer while their venue search's status sat in the facts). Otherwise say once, plainly, the one thing you don't have. Never add a new recommendation or change which option the draft recommends, never add an event, person, place, number, date or link that isn't in the draft or the FACTS (people and details from what they've told you before about their own life may stay or be used), never say you don't have something that what they've told you before gives, and never add anything about how they're feeling or what they're going through. No promises, no "let me look" or "one sec"; if they want something found, you may offer it as a question ("Want me to look?"). Match the draft's capitalization style. Same length or shorter. Return ONLY the message.`,
+Deleting the unsupported parts left too little to answer them, so write the smallest true reply instead. Keep every supported sentence of the draft word for word. Where a flagged part can be corrected from a FACT (the real time, what was actually sent), correct it with the FACT's own words. When the FACTS say where something of theirs stands (a search, a task, your working notes, what you sent), and what's left doesn't answer them, answer with that state: what's found, what's unconfirmed, the next move. That is the answer, never a remark about what you can't measure, describe or nail down (2026-10-01: "how proactive are you?" became a disclaimer while their venue search's status sat in the facts). Otherwise say once, plainly, the one thing you don't have. Never add a new recommendation or change which option the draft recommends, never add an event, person, place, number, date or link that isn't in the draft or the FACTS (people and details from what they've told you before about their own life may stay or be used), never say you don't have something that what they've told you before gives, and never add anything about how they're feeling or what they're going through. No promises, no "let me look" or "one sec". If they want something found and a FACT shows work under way for it, say what you're doing about it now, from that FACT; never offer it back to them as a question. Match the draft's capitalization style. Same length or shorter. Return ONLY the message.`,
   });
   const out = text.trim().replace(/^"|"$/g, "");
   return out || null;
@@ -991,6 +1064,7 @@ export function stripUnsupported(draft: string, failed: GateCheck[]): string {
     if (failed.some((f) => f.name === "no_unknown_clash") && clashClaim(s)) return false;
     if (failed.some((f) => f.name === "no_emotion_label") && !checkNoEmotionLabel(s).pass) return false;
     if (failed.some((f) => f.name === "no_followup_promise") && followupPromiseMatch(s)) return false;
+    if (failed.some((f) => f.name === "no_internal_narration") && narratesInternalState(s)) return false;
     if (failed.some((f) => f.name === "no_prediction") && predictionMatch(s)) return false;
     if (failed.some((f) => f.name === "no_result_promise") && resultPromiseMatch(s)) return false;
     if (failed.some((f) => f.name === "no_capability_denial") && (callDenial(s) || /\b(can(no|')?t|unable to|this is (just )?text)\b.{0,40}\bcalls?\b/i.test(s))) return false;
@@ -1218,7 +1292,9 @@ export async function groundReply(
   // true and gets kept (services/promises.ts). Only on a real send, never in an eval.
   let promiseTaskId: number | null = null;
   if (opts.userId && opts.record !== false && unbackedFollowup(draft, rf)) {
-    const tracked = await trackPromise({ userId: opts.userId, reply: draft, theirMessage: src.message, privateNames: rf.privateNames, discreet: isDiscreetTurn(rf.instructions) }).catch((err: any) => ({ ok: false as const, why: String(err?.message ?? err).slice(0, 120) }));
+    // This turn's own receipts go with it, so work this turn already started is never opened again as a promise task.
+    const startedThisTurn = rf.facts.filter((f) => f.kind === "did_this_turn").map((f) => f.text);
+    const tracked = await trackPromise({ userId: opts.userId, reply: draft, theirMessage: src.message, privateNames: rf.privateNames, discreet: isDiscreetTurn(rf.instructions), startedThisTurn }).catch((err: any) => ({ ok: false as const, why: String(err?.message ?? err).slice(0, 120) }));
     if (tracked.ok) {
       addFact(rf, "did_this_turn", promiseFact(tracked.task));
       promiseTaskId = tracked.task.id;

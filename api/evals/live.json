@@ -61,6 +61,13 @@
         "--live"
       ],
       "sample": 4
+    },
+    {
+      "name": "delivery follow-ups",
+      "args": [
+        "evals/delivery/followUpLive.ts"
+      ],
+      "sample": 1
     }
   ]
 }

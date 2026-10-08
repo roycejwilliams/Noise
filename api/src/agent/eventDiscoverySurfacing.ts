@@ -1,6 +1,6 @@
 import type { TierMatch } from "../services/tieredRecommendation.js";
 import { CO_WHY } from "../services/coVoice.js";
-import { draftProactive, nameTokens, type Facts, type OutputRules } from "../harness/proactive.js";
+import { draftAgain, draftProactive, nameTokens, type Facts, type OutputRules } from "../harness/proactive.js";
 import { renderEventDetails } from "../services/eventDetails.js";
 import { stripClosingQuestion } from "../services/offerFollowUp.js";
 import { IDENTITY_RULE, stripUngroundedIdentity } from "../services/identityGuard.js";
@@ -97,6 +97,11 @@ export async function draftEventTease(
   };
 }
 
+// The reveal's limit, measured on Co's words only (the link goes out as its
+// own message first), and said to the model up front so it writes to it.
+export const REVEAL_MAX_CHARS = 300;
+export const REVEAL_LENGTH = `Keep it under ${REVEAL_MAX_CHARS - 40} characters: the name, when, and the one reason it fits, nothing more.`;
+
 // Short-notice reveal: name it, when, and why it fits, upfront that it's
 // short notice. The link (if any) goes out first as its own message.
 export async function draftEventReveal(
@@ -109,7 +114,7 @@ export async function draftEventReveal(
   const url: string | undefined = "url" in match ? match.url : undefined;
   const dots = opts.dots ?? [];
   const why = opts.why ?? "";
-  const text = await draftProactive({
+  const draft = () => draftProactive({
     functionId: "agent.eventDiscoverySurfacing.revealNowDraft",
     firstName: person.firstName,
     facts: { ...revealFacts(askText, fromProfile, match), ...(dots.length ? { how_this_connects_to_the_rest_of_their_life: dots.join(" / ") } : {}), ...(why ? { their_why: why } : {}) },
@@ -119,21 +124,31 @@ export async function draftEventReveal(
       ? match.kind === "opportunity"
         ? `They were interested in this one when you mentioned it. This is a short heads-up that the deadline is coming up: name it and the deadline, in one or two sentences. Don't present it as new or re-explain it.${url ? " The link goes out as its own message right before yours; don't mention a link." : ""} If it doesn't fit anymore, return SKIP.`
         : `They already heard about this one from you. This is a short heads-up that it's coming up: name it and when it is, in one or two sentences. Don't present it as new or re-explain it.${url ? " The link goes out as its own message right before yours; don't mention a link." : ""} If it doesn't fit anymore, return SKIP.`
-      : `${opts.again ? "You mentioned this to them over a month ago and they never replied; it's still open and still fits, so bring it up once more, lightly and with no pressure, as something you're circling back on. " : ""}Name it and when it is, and say in plain words why it fits them. ${CO_WHY.replace("Tie it back to their why", "Tie it back to their_why")}${dots.length ? " (if how_this_connects_to_the_rest_of_their_life shows it serves more than one thing they want, or should be framed differently for how they're doing, say that instead of a generic reason)" : ""}.${isShortNotice(match) ? " It's short notice, so be upfront about that so there's no pressure." : ""}${url ? " The link goes out as its own message right before yours; don't mention a link." : ""} If it doesn't actually fit, return SKIP.`),
+      : `${opts.again ? "You mentioned this to them over a month ago and they never replied; it's still open and still fits, so bring it up once more, lightly and with no pressure, as something you're circling back on. " : ""}Name it and when it is, and say in plain words why it fits them. ${REVEAL_LENGTH} ${CO_WHY.replace("Tie it back to their why", "Tie it back to their_why")}${dots.length ? " (if how_this_connects_to_the_rest_of_their_life shows it serves more than one thing they want, or should be framed differently for how they're doing, say that instead of a generic reason)" : ""}.${isShortNotice(match) ? " It's short notice, so be upfront about that so there's no pressure." : ""}${url ? " The link goes out as its own message right before yours; don't mention a link." : ""} If it doesn't actually fit, return SKIP.`),
   });
-  if (!text) return null;
   // The follow-up question is its own text after the last offer (services/offerFollowUp.ts).
   // Nothing about who they are beyond what they said in their ask (identityGuard.ts).
-  const grounded = stripUngroundedIdentity(text, `${askText}\n${match.name}\n${dots.join("\n")}\n${why}`);
-  if (!grounded) return null;
-  const body = stripClosingQuestion(grounded);
+  const finish = (text: string | null): string | null => {
+    if (!text) return null;
+    const grounded = stripUngroundedIdentity(text, `${askText}\n${match.name}\n${dots.join("\n")}\n${why}`);
+    return grounded ? stripClosingQuestion(grounded) : null;
+  };
+  let body = finish(await draft());
+  if (!body) return null;
+  // Over the length limit: once more, told by how much, before a good offer is
+  // lost (2026-10-08: seven Tier 2 offers dropped 10-04..10-06 at 359 to 507
+  // chars, max 300). The link is its own message and never counts.
+  if (body.length > REVEAL_MAX_CHARS) {
+    const shorter = finish(await draftAgain({ draft: body, failed: `draft_length: ${body.length} chars (max ${REVEAL_MAX_CHARS}). Say the same thing in fewer words: its name, when, and the one reason it fits them` }, draft));
+    if (shorter) body = shorter;
+  }
   const tokens = nameTokens(match.name);
   return {
     messages: url ? [url, body] : [body],
     text: body,
     rules: {
       maxSentences: 2,
-      maxChars: 300,
+      maxChars: REVEAL_MAX_CHARS,
       mustIncludeAny: tokens.length ? tokens : [match.name],
       forbidden: [OFFER_FORBIDDEN, IMPLIES_IDENTITY],
       ...whoItIsFor(match),

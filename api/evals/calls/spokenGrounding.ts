@@ -48,7 +48,7 @@ const src = (b = body(), toolResults = "") => P.callSources(b as any, records, t
   const studio = G.spokenProblem("Got it, Brightline Studio it is.", s);
   check("an unbacked studio name is caught", studio?.kind === "name" && studio.missing.some((m) => /Brightline/.test(m)), studio);
   check("an unbacked number is caught", G.spokenProblem("So about 80 people then.", s)?.kind === "number");
-  check("a number has to be a whole one on record: the 20 inside a year, or a number in the prompt's own examples, backs nothing", G.spokenProblem("Is it still on November 20th?", src(body("It's set for 2026, sometime in November."))) ?.kind === "number" && /\b15\b/.test(system) && G.spokenProblem("So 15 people then.", s)?.kind === "number");
+  check("a number has to be a whole one on record: the 20 inside a year, or a number in the prompt's own examples, backs nothing", G.spokenProblem("Is it still on November 20th?", src(body("It's set for 2026, sometime in November."))) ?.kind === "number" && /\b30\b/.test(system) && G.spokenProblem("So 30 people then.", s)?.kind === "number");
   check("their written-out number backs the digit (\"about sixty\" backs 60)", G.spokenProblem("60 is a good size for a talk.", src(body("We're expecting about sixty people."))) === null);
   check("only the context block counts as what Co knows, not the guides that follow it without a heading", !/COACHING/.test(G.knownSections(system)) && /# What you know about Jordan/.test(G.knownSections(system)) && /# Right now/.test(G.knownSections(system)));
   check("an unbacked clock time places an event and is held, as before", G.spokenProblem("Let's say the walkthrough is at 3:45pm.", s)?.kind === "event");

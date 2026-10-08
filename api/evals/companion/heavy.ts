@@ -120,7 +120,7 @@ check("a draft about Co itself is skipped", /frustration with Co itself/.test(dr
 // In Co's shared core since 2026-10-08, so texts and calls both carry it.
 const { CO_LISTENING } = await import("../../src/services/coCore.js");
 const { promptForElevenLabs } = await import("../../src/services/elevenLabsCalls.js");
-check("the core tells Co never to announce a check-in it decides on alone, and a call carries it", /Never announce a check-in you decide to make on your own/.test(CO_LISTENING) && promptForElevenLabs(read("prompts/co-system-prompt.md")).includes(CO_LISTENING));
+check("the core tells Co never to announce a check-in it decides on alone, and a call carries it", /Never announce a check-in you decide to make on your own/.test(CO_LISTENING) && promptForElevenLabs(read("prompts/co-system-prompt.md")).includes(CO_LISTENING.split("\n").find((l) => /Never announce a check-in/.test(l))!.replace(/^- /, "")));
 
 console.log(`next-day check-in rules: ${total - failed}/${total} passed`);
 if (failed) process.exit(1);

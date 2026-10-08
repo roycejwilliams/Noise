@@ -100,7 +100,6 @@ function harness(o: { nowIso: string; zone?: string | null; drafts?: (string | n
     // The task's own turn: it does the work and its own text goes out when it finishes (taskTurn.ts tellThem -> sendExempt).
     runTask: async (_u: string, c: any) => { events.push({ at: clock, what: `run:${c.taskId}` }); clock += 60_000; events.push({ at: clock, what: "deliver", text: o.deliverable ?? "Here's the plan: ..." }); return { ran: true, action: "scheduled" }; },
     hold: async (_u: string, ids: number[], until: Date) => { held = { ids, until }; },
-    queue: async (x: any) => { queued = x; events.push({ at: clock, what: "queue", text: x.text }); return { queued: true }; },
     record: async (d: any) => { decisions.push(d); },
   };
   return { deps, events, prompts, decisions, get queued() { return queued; }, get held() { return held; }, setClock: (iso: string) => { clock = new Date(iso).getTime(); } };
@@ -138,28 +137,28 @@ user: Perfect, thank you.`;
   check("two commitments: one confirmation text, both tasks run", h.events.filter((e) => e.what === "send").length === 1 && work.map((w) => w.taskId).join(",") === "111,112");
 }
 {
-  // Quiet hours: 11:30pm in San Francisco. Queued to their 9am, nothing sent now, task backstop just after it.
+  // Quiet hours: 11:30pm in San Francisco. No confirmation at all (2026-10-08, Royce: a "Got it" held to 9am read like Co had only
+  // just heard): the task's own check is set for their 8am (delivery hours), and the delivery says what was asked and when.
   const h = harness({ nowIso: "2026-10-08T06:30:00Z" });
   const r = await F.followThroughOnCallEnd({ userId: "u1", transcript: TRANSCRIPT }, h.deps);
   check("night: nothing sent now", r.action === "held" && !h.events.some((e) => e.what === "send" || e.what.startsWith("run:")));
-  check(`night: held to 9am their time, as a durable queued row, not a timer (${r.heldUntil})`, r.heldUntil === "2026-10-08T16:00:00.000Z" && h.queued?.at?.toISOString() === "2026-10-08T16:00:00.000Z" && h.queued?.text === GOOD && h.queued?.key?.startsWith("call_confirm:"));
-  check("night: the queued row carries the tasks to run once it sends", h.queued?.tasks?.map((t: any) => t.taskId).join() === "111");
-  check("night: the task's own check is set just after the morning send, as the backstop", !!h.held && h.held.ids.join() === "111" && h.held.until.toISOString() === "2026-10-08T16:10:00.000Z");
-  check("night: the draft's 'when' is read from their 9am (this morning)", h.prompts[0]?.facts?.delivery_window === "this morning");
-  // Morning: the deferred-send cron sent it (services/deferredSends.ts) and runs the after-send step.
+  check(`night: no confirmation is drafted or held for the morning (${r.heldUntil})`, r.heldUntil === "2026-10-08T15:00:00.000Z" && h.prompts.length === 0 && !r.text && h.queued === null);
+  check("night: the task's own check is set for their 8am (delivery hours)", !!h.held && h.held.ids.join() === "111" && h.held.until.toISOString() === "2026-10-08T15:00:00.000Z");
+  check("night: the decision log says why", h.decisions.some((d) => d.action === "confirm_skipped_night"));
+  // A row held under the old flow still runs its work once it sends (services/deferredSends.ts).
   h.setClock("2026-10-08T16:00:00Z");
-  const m = await F.afterConfirmSent({ userId: "u1", tasks: h.queued.tasks }, "sent", h.deps);
+  const m = await F.afterConfirmSent({ userId: "u1", tasks: [{ taskId: 111, sentence: "x", wakes: 0 }] }, "sent", h.deps);
   await m.work;
-  check("morning: once the held confirmation sends, the deliverable runs", h.events.some((e) => e.what === "run:111") && h.events.some((e) => e.what === "deliver") && h.decisions.some((d) => d.action === "confirm_sent" && d.proposal?.held === true));
+  check("an old held confirmation that sends still runs the deliverable", h.events.some((e) => e.what === "run:111") && h.decisions.some((d) => d.action === "confirm_sent" && d.proposal?.held === true));
   const before = h.events.length;
-  const skipped = await F.afterConfirmSent({ userId: "u1", tasks: h.queued.tasks }, "skipped", h.deps);
-  check("morning: a held confirmation that didn't send (STOP) runs nothing; the backstop owns the task", skipped.work === null && h.events.length === before);
+  const skipped = await F.afterConfirmSent({ userId: "u1", tasks: [{ taskId: 111, sentence: "x", wakes: 0 }] }, "skipped", h.deps);
+  check("an old held confirmation that didn't send (STOP) runs nothing; the backstop owns the task", skipped.work === null && h.events.length === before);
 }
 {
-  // Unknown zone: the US-safe window (after 16:00 UTC) still applies.
-  const h = harness({ nowIso: "2026-10-08T03:00:00Z", zone: null });
+  // Unknown zone: the Pacific fallback window (8am-9pm) still applies; 04:30 UTC is 9:30pm PDT.
+  const h = harness({ nowIso: "2026-10-08T04:30:00Z", zone: null });
   const r = await F.followThroughOnCallEnd({ userId: "u1", transcript: TRANSCRIPT }, h.deps);
-  check("unknown zone at 03:00 UTC is held", r.action === "held");
+  check("unknown zone at 04:30 UTC (9:30pm Pacific) is held", r.action === "held");
 }
 {
   const h = harness({ nowIso: "2026-10-07T20:00:00Z", commitments: [] });

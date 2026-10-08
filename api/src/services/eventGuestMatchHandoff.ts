@@ -240,7 +240,7 @@ async function maybeAskCandidateDirectly(
   // sendExemptWhenAllowed) writes the text_exchange memory itself once
   // actually delivered, so there's no separate write needed here. The open
   // offer is written once the ask actually reaches them (afterDirectAskSent,
-  // now or at their 9am): opened while it was only queued, a "yes" they
+  // now or at their 8am): opened while it was only queued, a "yes" they
   // texted about something else before the morning bound to the asker.
   const result = await sendExemptWhenAllowed({
     userId: candidate.user_id,

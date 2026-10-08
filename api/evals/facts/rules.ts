@@ -321,7 +321,7 @@ check("the record starts filled from what was already logged", /backfillCoAction
   const RG5 = await import("../../src/harness/replyGrounding.js");
   const r = SB.callNotPlacedReason("Call blocked: Co called 1 min ago (needs 2)");
   check("calls: a blocked call says it wasn't placed and why, with when it can call", /called them 1 minute ago/.test(r) && /about 1 minute/.test(r), r);
-  check("calls: other reasons are named, never a made-up one", /in progress/.test(SB.callNotPlacedReason("A call is already in progress for this user.")) && /9am to 8pm/.test(SB.callNotPlacedReason("Call blocked: outside 9am-8pm their time")) && /isn't clear/.test(SB.callNotPlacedReason("weird")));
+  check("calls: other reasons are named, never a made-up one", /in progress/.test(SB.callNotPlacedReason("A call is already in progress for this user.")) && /8am to 9pm/.test(SB.callNotPlacedReason("Call blocked: outside 8am-9pm their time")) && /isn't clear/.test(SB.callNotPlacedReason("weird")));
   const sb = src("routes/sendblue.ts");
   check("calls: a failed trigger is a not_done fact, never 'Tried to call them'", /for \(const f of callNotPlacedFacts\(callResult\.error\)\) addFact\(replyFacts, f\.kind, f\.text\)/.test(sb) && SB.callNotPlacedFacts("Call blocked: Co called 1 min ago (needs 2)").some((f) => f.kind === "did_before" && /called them 1 minute ago/.test(f.text)) && !/Tried to call them just now/.test(sb));
   check("calls: Co's \"tried again\" / \"didn't go through\" gets the claim check", RG5.needsClaimCheck("Tried again just now and it didn't go through on my end.") && RG5.needsClaimCheck("Still not going through on my end."));

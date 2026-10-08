@@ -6,6 +6,7 @@ import { Resend } from "resend";
 import { buildIcs, hasTimedSteps, planEmail, planHtml, type Plan } from "./planSheet.js";
 import { renderPdf } from "./browserRead.js";
 import { CO_EMAIL_FROM } from "./emailFrom.js";
+import type { Doc } from "./documentSheet.js";
 
 const slug = (s: string) => s.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "").slice(0, 40) || "plan";
 
@@ -38,4 +39,22 @@ export async function sendPlanEmail(o: { to: string; files: PlanFiles }): Promis
     ],
   });
   return error ? { ok: false, why: String((error as any).message ?? error).slice(0, 120) } : { ok: true, hasCalendar: files.calendar };
+}
+
+// Pure: the plan as a delivered document (services/deliveryReceipts.ts): its steps and notes as the receipt's sections, so a plan
+// shows under "Documents you've delivered", readDocument can quote it, and the text fallback carries it when the sheet won't render.
+export function planAsDoc(plan: Plan): Doc {
+  const clock = (d: NonNullable<Plan["steps"][number]["start"]>) => d.toFormat("h:mm a").replace(":00 ", " ").toLowerCase();
+  const steps = plan.steps.map((s) => {
+    const when = s.start ? `${s.start.toFormat("ccc LLL d")}, ${clock(s.start)}${s.end ? ` to ${clock(s.end)}` : ""}: ` : "";
+    const place = [s.where, s.address].filter(Boolean).join(", ");
+    return `${when}${s.what}${place ? `, ${place}` : ""}${s.detail ? `. ${s.detail}` : ""}`;
+  });
+  return {
+    title: plan.title,
+    note: plan.note,
+    sections: [{ heading: "The plan", paragraphs: [], bullets: steps }, ...(plan.notes.length ? [{ heading: "Worth knowing", paragraphs: [], bullets: plan.notes }] : [])],
+    suggestions: [],
+    kind: "other",
+  };
 }

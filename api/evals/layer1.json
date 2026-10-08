@@ -117,6 +117,13 @@
     "evals/browserPilot/rules.ts",
     "evals/docs/researchBrief.ts",
     "evals/research/quality.ts",
-    "evals/time/local.ts"
+    "evals/time/local.ts",
+    "evals/delivery/shape.ts",
+    "evals/delivery/receipts.ts",
+    "evals/sweepFind/visibility.ts",
+    "evals/asks/kind.ts",
+    "evals/events/revealLength.ts",
+    "evals/delivery/fixes1008.ts",
+    "evals/reply-flow/fixes1008.ts"
   ]
 }

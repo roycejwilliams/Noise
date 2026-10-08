@@ -134,8 +134,8 @@ export function decideCall(state: CallState, requested: CallAuthorization | null
     pass: !hoursBlock,
     reason: hoursBlock
       ? state.timezoneKnown === false
-        ? "outside 9am-8pm Pacific (no timezone on file, so Pacific, where the club is)"
-        : "outside 9am-8pm their time"
+        ? "outside 8am-9pm Pacific (no timezone on file, so Pacific, where the club is)"
+        : "outside 8am-9pm their time"
       : undefined,
   });
 
@@ -161,7 +161,7 @@ export function decideCall(state: CallState, requested: CallAuthorization | null
 
 // ---- local hours ---------------------------------------------------------------
 
-// One rule for texts and calls (Royce, 2026-10-07): 9am-8pm their time, and with no zone on file, 9am-8pm in the fallback zone
+// One rule for texts and calls (Royce, 2026-10-07): 8am-9pm their time, and with no zone on file, 8am-9pm in the fallback zone
 // (Pacific, where the club is, DST-correct; services/localHours.ts). Calls used to get a fixed 17:00-24:00 UTC window for an
 // unknown zone and texts 16:00-24:00 UTC: Pacific in summer only.
 export function callHourOk(timezone: string | null, now: Date): boolean {

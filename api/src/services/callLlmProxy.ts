@@ -10,7 +10,7 @@
 // (the stream passes through untouched, no push needed).
 import { SpeakableStream } from "./speakable.js";
 import { HELD_LINE, SAFE_LINE, SPOKEN_COMMON, knownSections, prepareSource, sourceCorpus, spokenProblem, type SpokenSources } from "./offerGuard.js";
-import { DRAINED_MAX_SENTENCES, DRAINED_NOTE, memberStateSignal } from "./memberState.js";
+import { DRAINED_NOTE, memberStateSignal } from "./memberState.js";
 
 // Co's own tools on a call, built for the call's member by services/callTools.ts (kept there, so this file stays free of the
 // database and the tools' imports). One turn's bounds: at most CALL_TOOL_STEPS rounds of Co's tools, inside CALL_TOOL_BUDGET_MS from
@@ -188,7 +188,7 @@ export async function* runCallLlm(b: OaiRequest, deps: ProxyDeps): AsyncGenerato
   const sameTurn = lastAt >= 0 && b.messages.slice(lastAt + 1).every((m) => m.role === "tool" || (m.role === "assistant" && !textOf(m.content).trim()));
   const drained = clean && sameTurn && memberStateSignal(textOf(b.messages[lastAt].content));
   if (drained) deps.onState?.();
-  const mk = () => new SpeakableStream(drained ? { maxSentences: DRAINED_MAX_SENTENCES } : {});
+  const mk = () => new SpeakableStream({});
   let stream: SpeakableStream | null = null;
   let spokeAny = false, blanked = false, firstTokenAt = 0, firstSentenceAt = 0;
   let toolIndex = -1;

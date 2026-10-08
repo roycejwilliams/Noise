@@ -118,19 +118,23 @@ const run = async (body: any, events: any[], o: { clean?: boolean } = {}) => {
   const spoken: string[] = []; let flagged = 0;
   const body = baseBody({ messages: [...baseBody().messages.slice(0, 2), { role: "user", content: yes[0] }] });
   for await (const _ of P.runCallLlm(body, { stream: spy(text(long)), onSpoken: (s) => spoken.push(s), onState: () => { flagged++; } })) { /* drain */ }
-  check("a drained member's turn: the prompt ends with the note, for this turn only", /# This turn: they said they are drained/.test(sys) && sys.trimEnd().endsWith(M.DRAINED_NOTE.trimEnd().slice(-40)) && flagged === 1, sys.slice(-200));
-  check("replay: Co's six sentences are cut to two, with no pitch (the events keep)", spoken.length === 2 && !/workshop|fair|links|PDF|Sequent/.test(spoken.join(" ")), spoken);
+  check("a drained member's turn: the prompt ends with the note, for this turn only", /# This turn: they told you how they are/.test(sys) && sys.trimEnd().endsWith(M.DRAINED_NOTE.trimEnd().slice(-40)) && flagged === 1, sys.slice(-200));
+  // 2026-10-08: no cap in code any more. Royce said he'd been "kinda stressed" and Co said get some rest and hung up; the note now
+  // keeps Co's agenda out and Co with them, and the model decides how much to say.
+  check("no sentence cap on a drained turn: what the model says goes out (the note, not code, keeps the agenda out)", spoken.length > 2, spoken);
+  check("the note keeps Co with them: stay, the call ends when they want, never sent off to rest", /Stay with them/.test(M.DRAINED_NOTE) && /Never end the call or send them off to rest/.test(M.DRAINED_NOTE) && /no pitch, no events, no recap/.test(M.DRAINED_NOTE) && !/two short sentences|lets them go/.test(M.DRAINED_NOTE));
+  check("last night's words are the signal", M.memberStateSignal("Um, I've just been kinda stressed, uh, lately, and I'm just trying to figure out what's next."));
   sys = ""; spoken.length = 0;
   for await (const _ of P.runCallLlm(baseBody({ messages: [...baseBody().messages.slice(0, 2), { role: "user", content: "Can you send the PDF on Sequent AI?" }] }), { stream: spy(text(long)), onSpoken: (s) => spoken.push(s) })) { /* drain */ }
-  check("any other turn: no note, no cap", !/they said they are drained/.test(sys) && spoken.length === 6, spoken.length);
-  // the tool round after the same drained message keeps the note and the cap
+  check("any other turn: no note, no cap", !/they told you how they are/.test(sys) && spoken.length === 6, spoken.length);
+  // the tool round after the same drained message keeps the note
   sys = ""; spoken.length = 0;
   const afterTool = baseBody({ messages: [...baseBody().messages.slice(0, 2), { role: "user", content: yes[0] }, { role: "assistant", content: "", tool_calls: [{ id: "t1", type: "function", function: { name: "assess_conversation_coverage", arguments: "{}" } }] }, { role: "tool", tool_call_id: "t1", content: "{}" }] });
   for await (const _ of P.runCallLlm(afterTool, { stream: spy(text(long)), onSpoken: (s) => spoken.push(s) })) { /* drain */ }
-  check("the tool round inside the same drained turn keeps the note and the two-sentence cap", /they said they are drained/.test(sys) && spoken.length === 2, spoken);
+  check("the tool round inside the same drained turn keeps the note", /they told you how they are/.test(sys) && spoken.length > 2, spoken);
   sys = "";
   for await (const _ of P.runCallLlm(baseBody({ messages: [...afterTool.messages, { role: "assistant", content: "Take care." }, { role: "user", content: "Thanks, what about Friday?" }] }), { stream: spy(text("Friday works.")), onSpoken: () => {} })) { /* drain */ }
-  check("the next turn is no longer drained", !/they said they are drained/.test(sys));
+  check("the next turn is no longer drained", !/they told you how they are/.test(sys));
   check("with CALL_LLM_CLEAN off there is no note and no cap", await (async () => { sys = ""; for await (const _ of P.runCallLlm(body, { stream: spy(text(long)), clean: false })) { /* */ } return !/drained/.test(sys); })());
 }
 

@@ -209,6 +209,17 @@ export function registerJobs(io: Server) {
     }
   });
 
+  // A document whose PDF failed went as text (services/documentDelivery.ts); the PDF it promised follows from here, inside their
+  // delivery hours, with backoff, never the text again (deliveryReceipts.ts receipts in pdf_pending).
+  cron.schedule("*/5 * * * *", async () => {
+    try {
+      const { retryPendingPdfs } = await import("../services/documentDelivery.js");
+      await retryPendingPdfs();
+    } catch (err: any) {
+      console.error("pdf retry cron error (non-fatal):", err?.message ?? err);
+    }
+  });
+
   // What Co said on a call it would send (services/callCommitments.ts): once it has had time to fall due, was a text actually sent?
   cron.schedule("*/10 * * * *", async () => {
     try {

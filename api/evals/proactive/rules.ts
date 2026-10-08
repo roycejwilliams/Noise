@@ -29,20 +29,21 @@ const check = (label: string, ok: boolean) => {
 // ---------------------------------------------------------------------------
 // No-timezone hours window (localHours.ts / proactive.ts's localHourOk) —
 // used to fail open (always true) for anyone with no resolvable timezone.
-// Now (2026-10-07): 9am-8pm in the one fallback zone, Pacific, measured as a zone (DST-correct; evals/time/local.ts covers Nov 1).
-// Pinned to a PDT day (UTC-7), so 9am Pacific is 16:00 UTC and 8pm Pacific is 03:00 UTC.
+// Now (2026-10-08): 8am-9pm in the one fallback zone, Pacific, measured as a zone (DST-correct; evals/time/local.ts covers Nov 1).
+// Pinned to a PDT day (UTC-7), so 8am Pacific is 15:00 UTC and 9pm Pacific is 04:00 UTC.
 function utcDate(hour: number): Date {
   return new Date(Date.UTC(2026, 9, 7, hour, 0, 0, 0));
 }
 
-check("no timezone: before 9am Pacific is blocked (10:00 UTC = 3am PDT)", isReasonableLocalHour(null, utcDate(10)) === false);
-check("no timezone: 9am Pacific is allowed (16:00 UTC)", isReasonableLocalHour(null, utcDate(16)) === true);
+check("no timezone: before 8am Pacific is blocked (10:00 UTC = 3am PDT)", isReasonableLocalHour(null, utcDate(10)) === false);
+check("no timezone: 7am Pacific is blocked (14:00 UTC)", isReasonableLocalHour(null, utcDate(14)) === false);
+check("no timezone: 8am Pacific is allowed (15:00 UTC)", isReasonableLocalHour(null, utcDate(15)) === true);
 check("no timezone: mid-window is allowed (20:00 UTC = 1pm PDT)", isReasonableLocalHour(null, utcDate(20)) === true);
-check("no timezone: 7pm Pacific is allowed (02:00 UTC)", isReasonableLocalHour(null, new Date(Date.UTC(2026, 9, 8, 2, 0, 0))) === true);
-check("no timezone: 8pm Pacific is blocked (03:00 UTC)", isReasonableLocalHour(null, new Date(Date.UTC(2026, 9, 8, 3, 0, 0))) === false);
+check("no timezone: 8pm Pacific is allowed (03:00 UTC)", isReasonableLocalHour(null, new Date(Date.UTC(2026, 9, 8, 3, 0, 0))) === true);
+check("no timezone: 9pm Pacific is blocked (04:00 UTC)", isReasonableLocalHour(null, new Date(Date.UTC(2026, 9, 8, 4, 0, 0))) === false);
 check("no timezone: 2am Pacific is blocked (09:00 UTC — the original 2am Pacific bug)", isReasonableLocalHour(null, utcDate(9)) === false);
 check("an invalid/unresolvable zone falls back to the same Pacific window, not fail-open", isReasonableLocalHour("Not/A_Real_Zone", utcDate(10)) === false);
-check("a real timezone still uses its own local hours", isReasonableLocalHour("America/New_York", utcDate(13)) === true && isReasonableLocalHour("America/New_York", new Date(Date.UTC(2026, 9, 8, 1, 0, 0))) === false); // 9am ET; 9pm ET
+check("a real timezone still uses its own local hours", isReasonableLocalHour("America/New_York", utcDate(12)) === true && isReasonableLocalHour("America/New_York", new Date(Date.UTC(2026, 9, 8, 1, 0, 0))) === false); // 8am ET; 9pm ET
 check("proactive.ts's localHourOk matches the same no-timezone window", localHourOk(utcDate(10), null) === false && localHourOk(utcDate(20), null) === true);
 
 // ---------------------------------------------------------------------------

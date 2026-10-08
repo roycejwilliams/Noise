@@ -1,5 +1,5 @@
 // Member-local time everywhere (Royce, 2026-10-07: "Co is time-aware at all times. Every decision that touches time runs against
-// the member's local time, not the server's... The 9am-8pm send rule stays as is."). Zero tokens, no DB: a fake db and a fake
+// the member's local time, not the server's... The 9am-8pm send rule stays as is."; since 2026-10-08 the one window is 8am-9pm). Zero tokens, no DB: a fake db and a fake
 // city lookup stand in for the stored zone; every other check is pure.
 //   npx tsx evals/time/local.ts
 import { readFileSync } from "node:fs";
@@ -82,16 +82,16 @@ const NY = "America/New_York";
 
 // ---- 2. an unknown zone falls back to Pacific AS A ZONE (DST-correct), and texts and calls use the same rule ----------------
 {
-  // Before Nov 1, 2026 (PDT, UTC-7): 9am = 16:00Z, 8pm = 03:00Z next day.
-  check("fallback, PDT: 8:59am Pacific is outside", !LH.isReasonableLocalHour(null, at("2026-10-30T15:59:00Z")));
-  check("fallback, PDT: 9am Pacific is inside", LH.isReasonableLocalHour(null, at("2026-10-30T16:00:00Z")));
-  check("fallback, PDT: 7:59pm Pacific is inside (the old 16:00-24:00 UTC window stopped at 5pm)", LH.isReasonableLocalHour(null, at("2026-10-31T02:59:00Z")));
-  check("fallback, PDT: 8pm Pacific is outside", !LH.isReasonableLocalHour(null, at("2026-10-31T03:00:00Z")));
+  // Before Nov 1, 2026 (PDT, UTC-7): 8am = 15:00Z, 9pm = 04:00Z next day.
+  check("fallback, PDT: 7:59am Pacific is outside", !LH.isReasonableLocalHour(null, at("2026-10-30T14:59:00Z")));
+  check("fallback, PDT: 8am Pacific is inside", LH.isReasonableLocalHour(null, at("2026-10-30T15:00:00Z")));
+  check("fallback, PDT: 8:59pm Pacific is inside (the old 16:00-24:00 UTC window stopped at 5pm)", LH.isReasonableLocalHour(null, at("2026-10-31T03:59:00Z")));
+  check("fallback, PDT: 9pm Pacific is outside", !LH.isReasonableLocalHour(null, at("2026-10-31T04:00:00Z")));
   // After Nov 1, 2026 (PST, UTC-8): 16:00Z is 8am, which the old UTC window allowed.
-  check("fallback, PST: 16:00 UTC is 8am Pacific, outside (the old UTC window let it through)", !LH.isReasonableLocalHour(null, at("2026-11-03T16:00:00Z")));
-  check("fallback, PST: 17:00 UTC is 9am Pacific, inside", LH.isReasonableLocalHour(null, at("2026-11-03T17:00:00Z")));
-  check("fallback, PST: 7:30pm Pacific is inside, 8pm outside", LH.isReasonableLocalHour(null, at("2026-11-04T03:30:00Z")) && !LH.isReasonableLocalHour(null, at("2026-11-04T04:00:00Z")));
-  check("fallback, PST: the next sendable hour from 6am Pacific is 9am Pacific (17:00Z)", M.nextSendable(at("2026-11-03T14:00:00Z"), null).toISOString() === "2026-11-03T17:00:00.000Z", M.nextSendable(at("2026-11-03T14:00:00Z"), null).toISOString());
+  check("fallback, PST: 15:00 UTC is 7am Pacific, outside (the old UTC window was a fixed-UTC guess)", !LH.isReasonableLocalHour(null, at("2026-11-03T15:00:00Z")));
+  check("fallback, PST: 16:00 UTC is 8am Pacific, inside", LH.isReasonableLocalHour(null, at("2026-11-03T16:00:00Z")));
+  check("fallback, PST: 8:30pm Pacific is inside, 9pm outside", LH.isReasonableLocalHour(null, at("2026-11-04T04:30:00Z")) && !LH.isReasonableLocalHour(null, at("2026-11-04T05:00:00Z")));
+  check("fallback, PST: the next sendable hour from 6am Pacific is 8am Pacific (16:00Z)", M.nextSendable(at("2026-11-03T14:00:00Z"), null).toISOString() === "2026-11-03T16:00:00.000Z", M.nextSendable(at("2026-11-03T14:00:00Z"), null).toISOString());
   check("fallback, PST: the morning-after hour with no zone is 10am Pacific (18:00Z), not 17:00 UTC", P.nextLocalHour(at("2026-11-03T08:00:00Z"), null, 10).toISOString() === "2026-11-03T18:00:00.000Z", P.nextLocalHour(at("2026-11-03T08:00:00Z"), null, 10).toISOString());
   check("one documented fallback: localHours, memberTime, dateGuard and eventOrder all name the same zone", LH.FALLBACK_ZONE === LA && M.FALLBACK_ZONE === LA && D.DEFAULT_ZONE === LA && EO.CO_DEFAULT_TIMEZONE === LA);
   check("no fixed-UTC fallback is left in the gates", !/getUTCHours\(\)\s*>=\s*1[67]/.test(src("services/localHours.ts") + src("harness/proactive.ts") + src("harness/callGate.ts")) && !/UNKNOWN_TZ_WINDOW_UTC/.test(src("harness/callGate.ts")));
@@ -107,7 +107,7 @@ const NY = "America/New_York";
     }
   }
   check("texts and calls use one rule: localHourOk == callHourOk == isReasonableLocalHour, every half hour across Nov 1, three zones", same, bad);
-  check("the 9am-8pm rule itself is unchanged", LH.REASONABLE_HOUR_START === 9 && LH.REASONABLE_HOUR_END === 20);
+  check("the rule itself is 8am-9pm (Royce, 2026-10-08)", LH.REASONABLE_HOUR_START === 8 && LH.REASONABLE_HOUR_END === 21);
 }
 
 // ---- 3. an evening event is still offerable at 6pm on the day, and expires at its start ---------------------------------------

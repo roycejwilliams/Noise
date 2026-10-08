@@ -137,9 +137,11 @@ check("email only when they ask for it, in their own words, checked in code", /E
 for (const t of ["email it to me", "can you send it to my email", "e-mail me the plan", "put it on my calendar", "send me a calendar invite", "drop it in my inbox", "add it to my calendar", "put it in my calendar", "can you mail it to me", "emails please"]) check(`asking for email is read: ${t}`, EMAIL_ASK.test(t));
 for (const t of ["plan sunday for me and three friends", "text me the pdf", "what's the plan for Saturday", "send it over", "I'll mail the invites myself"]) check(`not asking for email: ${t}`, !EMAIL_ASK.test(t));
 check("with no email on file an email request becomes a text, and Co is told to say so", /\(asked === "email" && !email\)/.test(tool) && /They have no email on file, so it went by text: say so/.test(tool));
-check("the text send attaches the PDF at a short-lived address, and logs it", /media_url: cachePlanFile\(files\.pdf\)/.test(tool) && /logDeliveredPlan\(`Co replied: \[sent a plan:/.test(tool));
+// 2026-10-08: the text send goes through the document delivery (deliverAndRecord): the sheet itself as the attachment (cached at a
+// short-lived address by the PDF sender), a receipt, the one line, and the text fallback when the sheet won't render.
+check("the text send attaches the plan's own sheet through the recorded delivery, and logs it", /deliverDepsWith\(\{ render: async \(\) => files\?\.pdf \?\? null \}\)/.test(tool) && /D\.deliverAndRecord\(doc,/.test(tool) && /cache: cachePlanFile/.test(read("src/services/documentDelivery.ts")) && /logDeliveredPlan\(`Co replied: \[sent a plan:/.test(tool));
 check("it takes sendBy only as text, email or both", /sendBy: z\.enum\(\["text", "email", "both"\]\)/.test(tool));
-check("the text goes to the member's own number, never another", /number: ctx\.phoneNumber/.test(tool));
+check("the text goes to the member's own number, never another", /phone: ctx\.phoneNumber/.test(tool) && !/phone: (?!ctx\.phoneNumber)/.test(tool));
 check("one of the two failing is said, not hidden", /One of the two didn't go out: say which/.test(tool));
 check("event steps are filled from their records, the rest backed", /resolvePlan\(input, zone, recordFor\)/.test(tool) && /planProblems\(input, plan,/.test(tool));
 check("a dry run sends nothing", /if \(ctx\.dryRun\)/.test(tool) && tool.indexOf("if (ctx.dryRun)") < tool.indexOf("sendPlanEmail"));
@@ -148,7 +150,7 @@ check("the PDF and the calendar file are the only attachments", (sendSrc.match(/
 const ability = ABILITIES.find((a) => a.id === "email_plan")!;
 check("Co is told it can, plainly, by text or by email when asked, and that it only goes to them", /one-page sheet/.test(ability.can) && /by text in this conversation, or by email with a calendar hold for each time when they ask for email/.test(ability.can) && /only to them, never to anyone else/.test(ability.can) && /can't send things to other people/.test(ability.can));
 check("Co is told text is the default and email only when asked", /By default it goes by text/.test(ability.use ?? "") && /only when they ask for it by email or on their calendar in their own words; never on your own/.test(ability.use ?? ""));
-check("two a day, one a turn", ability.limits?.perDay === 2 && ability.limits?.perTurn === 1 && ability.tool === "emailPlan");
+check("four a day (the receipts stop a repeat), one a turn", ability.limits?.perDay === 4 && ability.limits?.perTurn === 1 && ability.tool === "emailPlan");
 check("it is not offered as a menu, and not for one suggestion", /don't offer it as a menu/.test(ability.use ?? "") && /Don't use it for a single suggestion/.test(ability.use ?? ""));
 check("the PDF render runs no scripts and reaches only the font host", /javaScriptEnabled: false/.test(read("src/services/browserRead.ts")) && /fonts\.googleapis\.com/.test(read("src/services/browserRead.ts")) && /route\.abort\(\)/.test(read("src/services/browserRead.ts")));
 // ---- the PDF in a text: a short-lived address, nothing listed

@@ -9,6 +9,7 @@
 //   - a reply past the word cap is truncated at a sentence boundary, keeping its closing question
 // It works on a stream: text goes in as it arrives, and each COMPLETE sentence comes out the moment it is complete, so the first
 // sentence reaches the voice at the model's own speed and the voice never gets half a sentence. Pure; no I/O.
+import { DateTime } from "luxon";
 
 export const MAX_SENTENCE_WORDS = 24;
 export const MAX_REPLY_WORDS = 90;
@@ -368,4 +369,75 @@ export function selfContradiction(line: string): string | null {
     }
   }
   return null;
+}
+
+
+// ---------- delivery shape (Royce, 2026-10-08)
+// A plan Co promised on a call at night went out next morning as four texts: "Got it, I'll send the doc to both you and Jacqueline
+// this morning" (written the night before, held, and read like Co had only just heard), then the PDF, its title as its own text, and
+// "The Co presence plan ... is ready". Two rules:
+//   1. An acknowledgment opener ("Got it") only while the ask is seconds old, right after the call or message. Anything delivered
+//      later leads with the thing and when they asked for it: "Here's the presence plan you asked for last night."
+//   2. One delivery, one line: a document is the attachment plus one sentence. Nothing else says the same thing again.
+
+// How long an ask stays fresh enough to acknowledge.
+export const ACK_FRESH_MS = 10 * 60_000;
+const ACK_OPENER = /^\s*(?:got it|on it|will do|sure thing|sure|okay|ok|noted|sounds good|absolutely|of course|perfect|great|understood|done)\b[\s,.!:;-]*/i;
+
+// Pure: the text opens with an acknowledgment ("Got it, ...").
+export const opensWithAck = (text: string): boolean => ACK_OPENER.test(text);
+
+// Pure: an acknowledgment opener is allowed only while the ask is seconds old.
+export const ackAllowed = (askedAt: Date, sendAt: Date): boolean => sendAt.getTime() - askedAt.getTime() <= ACK_FRESH_MS;
+
+const zoneOf = (zone: string | null | undefined) => (zone && DateTime.now().setZone(zone).isValid ? zone : "America/Los_Angeles");
+
+// Pure: when they asked, in their own day, as said from the moment it's delivered ("last night", "yesterday", "on Tuesday").
+export function askedWhenWords(askedAt: Date, sendAt: Date, zone?: string | null): string {
+  const z = zoneOf(zone);
+  const a = DateTime.fromJSDate(askedAt).setZone(z);
+  const s = DateTime.fromJSDate(sendAt).setZone(z);
+  if (!ackAllowed(askedAt, sendAt) && s.diff(a, "minutes").minutes < 60) return "a little earlier";
+  if (ackAllowed(askedAt, sendAt)) return "just now";
+  const days = Math.round(s.startOf("day").diff(a.startOf("day"), "days").days);
+  if (days === 0) {
+    if (a.hour < 5 && s.hour >= 5) return "last night";
+    return a.hour >= 17 && s.hour >= 17 ? "earlier tonight" : a.hour < 12 && s.hour < 12 ? "earlier this morning" : "earlier today";
+  }
+  if (days === 1) return a.hour >= 17 ? "last night" : "yesterday";
+  if (days < 7) return `on ${a.toFormat("cccc")}`;
+  return `on ${a.toFormat("LLL d")}`;
+}
+
+// Pure: the thing, named the way you'd say it. A title whose head is a kind of document is used as is ("Co Presence Plan: After the
+// Sequin AI November Event" -> "Co Presence Plan"); any other title ("Staying present after the event") is named by its kind ("plan"),
+// since the attachment already shows the title.
+const DOC_NOUN = /\b(?:plan|brief|guide|outline|memo|summary|readout|recap|proposal|playbook|itinerary|checklist|list|deck|notes|doc|document|write-?up|breakdown|report)$/i;
+const KIND_NOUN: Record<string, string> = { partnership_plan: "plan", venue_brief: "venue brief", readout: "readout" };
+export function deliveredThing(title: string, kind?: string | null): string {
+  const head = (title.split(/\s*[:|–—]\s*|\s+-\s+/)[0].trim() || title.trim()).replace(/^(?:the|a|an|your)\s+/i, "");
+  if (DOC_NOUN.test(head)) return head;
+  return (kind && KIND_NOUN[kind]) || (/\bplan\b/i.test(title) ? "plan" : "document");
+}
+
+// Pure: the one line that goes with a delivered document. Fresh: "Here's the X." Later: "Here's the X you asked for last night."
+export function deliveryLine(o: { title: string; kind?: string | null; askedAt?: Date | null; sendAt: Date; zone?: string | null }): string {
+  const what = deliveredThing(o.title, o.kind);
+  if (!o.askedAt || ackAllowed(o.askedAt, o.sendAt)) return `Here's the ${what}.`;
+  return `Here's the ${what} you asked for ${askedWhenWords(o.askedAt, o.sendAt, o.zone)}.`;
+}
+
+// Pure: what breaks the delivery shape in a text sent at sendAt for an ask made at askedAt.
+export function deliveryShapeProblems(text: string, o: { askedAt: Date; sendAt: Date }): string[] {
+  const out: string[] = [];
+  if (opensWithAck(text) && !ackAllowed(o.askedAt, o.sendAt)) out.push("opens with an acknowledgment for an ask that isn't seconds old: lead with the thing and when they asked for it");
+  return out;
+}
+
+// Pure: a held text whose ask has gone stale loses its acknowledgment opener ("Got it, I'll ..." -> "I'll ...").
+export function dropStaleAck(text: string, o: { askedAt: Date; sendAt: Date }): string {
+  if (!opensWithAck(text) || ackAllowed(o.askedAt, o.sendAt)) return text;
+  const rest = text.replace(ACK_OPENER, "").trim();
+  if (!rest) return text;
+  return rest[0].toUpperCase() + rest.slice(1);
 }

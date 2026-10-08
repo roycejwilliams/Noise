@@ -29,6 +29,18 @@ export function replyLengthLine(message: string): string | null {
 // block a call gets (2026-10-08). The name stays for existing imports.
 export const TEXT_LISTENING = CO_LISTENING;
 
+// How a turn uses its tools, said once for both prompts (2026-10-08 review B1, B4, B7). Do the work first, then speak from its
+// result; one sendReply; independent tools together; and one rule for a tool that fails or comes back thin.
+export const TOOL_FAILURE_RULE = "When a tool fails or comes back thin, lead with what they get now: the content, or the best find you have. Say something is still coming only when a receipt or a task in the facts backs it. Never mention tools, searches, limits, errors or retries, and never ask them to try again: code already retries what can be retried.";
+export function TOOL_TURN_RULES(isVoice: boolean): string {
+  return [
+    "- When this turn starts or delivers work (startTask, researchBrief, writeDocument, emailPlan, draftEmail, followUp), call that tool first. Then sendReply says what happened, from its result, as what they get and when, never as what you're doing.",
+    "- Call tools that don't depend on each other in the same step.",
+    `- One sendReply per turn.${isVoice ? "" : " The one exception is a separate thought after a tool result, as its own text. Never split one thought into pieces."}`,
+    `- ${TOOL_FAILURE_RULE}`,
+  ].join("\n");
+}
+
 export type ConversationReplyInput = {
   // When their text arrived. The reply's one deadline runs from here, so the
   // turn's prep counts against it (2026-10-01 code review).
@@ -346,7 +358,7 @@ ${input.firstName} is texting you. You already have their number, so never ask f
 What you already know about ${input.firstName}. Use it to understand them and get details right. Bring something up from it only when it's directly relevant to what they just said. Don't repeat a detail you've already mentioned in this conversation.
 ${input.contextSummary || "(nothing on file yet; this is effectively a first real conversation with them)"}
 
-How ${input.firstName} has been feeling, from their texts and Hume's read of their voice on calls:
+How ${input.firstName} has been feeling, from a read of what they texted and said on recent calls (their words, plus a frustration score from calls):
 ${input.toneContext || "(nothing notable)"}
 
 Start from this. Decide what they most need right now: to feel heard, real help with something, or to share in something good. That decides your length, your pace, whether you ask a question, and whether anything else belongs in this reply.
@@ -389,7 +401,7 @@ ${callOfferEligible ? (input.isThinProfileFirstMessage ? `- This is the first re
 ${input.missingTopic ? `- Something Co is still figuring out about them: ${input.missingTopicDescription}. Only if what they just said actually leads there, work in one brief, natural question toward it after responding. If the conversation doesn't lead there, leave it for another time; never steer to it. If you use it, call markTopicAsked with topic "${input.missingTopic}" after sendReply.` : ""}
 
 Then act with your tools:
-- Call sendReply once with your reply.${input.isVoice ? "" : " Only call it a second time for a second, separate thought that reads better as its own text. Never to split one thought into pieces."}
+${TOOL_TURN_RULES(input.isVoice)}
 - Call markTopicAsked only if you actually used that question in what you sent.`;
   const system = `You are replying by iMessage to ${input.firstName}, picking up wherever this conversation actually is. ${CO_TEXT_CHANNEL}
 
@@ -398,7 +410,7 @@ ${input.firstName} is texting you. You already have their number, so never ask f
 What you already know about ${input.firstName}. Use it to understand them and get details right. Bring something up from it only when it's directly relevant to what they just said. Don't repeat a detail you've already mentioned in this conversation.
 ${input.contextSummary || "(nothing on file yet; this is effectively a first real conversation with them)"}
 
-How ${input.firstName} has been feeling, from their texts and Hume's read of their voice on calls:
+How ${input.firstName} has been feeling, from a read of what they texted and said on recent calls (their words, plus a frustration score from calls):
 ${input.toneContext || "(nothing notable)"}
 
 Start from this. Decide what they most need right now: to feel heard, real help with something, or to share in something good. That decides your length, your pace, whether you ask a question, and whether anything else belongs in this reply.
@@ -429,7 +441,7 @@ Only what's real:
 - The same goes for your own past actions. If they ask what you sent or meant, check what you actually sent in the thread and answer from that.
 - Never invent an excuse for something you supposedly did wrong (a "broken link", an "accidental" send) unless the thread shows it. A real link you can see there was real and intentional.
 - If you can't tell what they're referring to, say so and ask. Don't make up an explanation.
-- Never promise to do something later ("I'll send the link once I have it", "I'll track that down") unless the context above says it will happen. Nothing follows up on a promise you make yourself. If you don't have it, say so and say what you can do now.
+- Never promise to do something later ("I'll send the link once I have it", "I'll track that down") unless the context above says it will happen. Only promise what a tool you called this turn, or a task in the facts, will do. If you don't have it, say so and say what you can do now.
 - Don't bring back an old promise or missing item unless they ask about it.
 
 How to reply:
@@ -457,7 +469,7 @@ ${callOfferEligible ? (input.isThinProfileFirstMessage ? `- This is the first re
 ${input.missingTopic ? `- Something Co is still figuring out about them: ${input.missingTopicDescription}. Only if what they just said actually leads there, work in one brief, natural question toward it after responding. If the conversation doesn't lead there, leave it for another time; never steer to it. If you use it, call markTopicAsked with topic "${input.missingTopic}" after sendReply.` : ""}
 
 Then act with your tools:
-- Call sendReply once with your reply.${input.isVoice ? "" : " Only call it a second time for a second, separate thought that reads better as its own text. Never to split one thought into pieces."}
+${TOOL_TURN_RULES(input.isVoice)}
 - Call markTopicAsked only if you actually used that question in what you sent.`;
 
   const baseUserText = input.imageForVision ? "Respond to what they just sent." : "Respond to what they just said.";
@@ -623,6 +635,16 @@ Then act with your tools:
   if (state.pendingLinks.length && !state.sendStopped) await flushLinks();
 
   const offered = await verifyAndRecordCallOffer(input, state.lastReplyText, opts.dryRun ?? false);
+
+  // The one artifact offer this reply was told it may make (a plan sheet, a venue brief, a stale document's fix), recorded only when
+  // a text that went out makes it, so it's never offered twice (services/documentOffer.ts). Bookkeeping, never a gate on the text.
+  const artifact = input.facts.artifactOffer;
+  if (artifact && state.sent && !opts.dryRun && opts.record !== false) {
+    const O = await import("../services/documentOffer.js");
+    if (O.madeArtifactOffer(state.sentMessages.join("\n"), artifact.kind)) {
+      await O.recordArtifactOffer(input.userId, artifact.kind, artifact.topic).catch((err: any) => console.error("conversationReply: recording the offer failed (non-fatal):", err?.message ?? err));
+    }
+  }
 
   // Which tools Co chose, in order (evals/capabilities/probe.ts reads this).
   const toolsCalled = (agentRun?.steps ?? []).flatMap((st: any) => st.toolCalls.map((t: any) => t.toolName));

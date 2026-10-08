@@ -193,11 +193,8 @@ function violations(sends: { at: Date; type: string; target: string; topic?: str
   const seenTargets = new Set<string>();
   sorted.forEach((s, i) => {
     const local = DateTime.fromJSDate(s.at).setZone(zone);
-    if (timezone) {
-      if (local.hour < RULES.startHour || local.hour >= RULES.endHour) out.push(`${s.type} at ${local.toFormat("ccc HH:mm")} local`);
-    } else if (s.at.getUTCHours() < 16) {
-      out.push(`${s.type} at ${s.at.toISOString().slice(11, 16)} UTC with no time zone`);
-    }
+    // With no zone on file the window is measured in the Pacific fallback zone (services/localHours.ts FALLBACK_ZONE).
+    if (local.hour < RULES.startHour || local.hour >= RULES.endHour) out.push(`${s.type} at ${local.toFormat("ccc HH:mm")} ${timezone ? "local" : "Pacific (no time zone)"}`);
     if (seenTargets.has(s.target)) out.push(`duplicate ${s.target} at ${s.at.toISOString()}`);
     seenTargets.add(s.target);
     const prevAny = sorted[i - 1];

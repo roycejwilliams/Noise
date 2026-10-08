@@ -7,10 +7,10 @@
 // re-derives the zone on the next read, and the two city writers (routes/co.ts, services/profileExtraction.ts) refresh it at once.
 // The city on file is the only travel signal; there is no travel detection.
 // The one fallback, when no zone is known: Pacific (FALLBACK_ZONE, services/localHours.ts; the club is in San Francisco), applied
-// as a zone so it follows DST. Their words are read in it, their day is its day, and the send rule (9am-8pm, unchanged) is measured
+// as a zone so it follows DST. Their words are read in it, their day is its day, and the send rule (8am-9pm since 2026-10-08) is measured
 // in it, for texts and calls alike.
 import { DateTime } from "luxon";
-import { FALLBACK_ZONE, isReasonableLocalHour, nextReasonableHour } from "./localHours.js";
+import { FALLBACK_ZONE, isReasonableLocalHour, nextReasonableHour, REASONABLE_HOUR_END, REASONABLE_HOUR_START } from "./localHours.js";
 
 export { FALLBACK_ZONE };
 // The task cron wakes every 15 minutes: the warn-by sits this far inside the last sendable moment, so a check due at the
@@ -28,7 +28,7 @@ export const localDay = (at: Date | string, zone: string | null | undefined): st
 // The last moment of a calendar day (YYYY-MM-DD) in their zone.
 export const endOfLocalDay = (day: string, zone: string | null | undefined): Date => DateTime.fromISO(day, { zone: wordsZone(zone) }).endOf("day").toJSDate();
 
-// The send gate's answer for this moment (9am-8pm their time, or the fallback zone's; one rule for texts and calls).
+// The send gate's answer for this moment (8am-9pm their time, or the fallback zone's; one rule for texts and calls).
 export const sendableAt = (at: Date, zone: string | null | undefined): boolean => isReasonableLocalHour(validZone(zone), at);
 export const nextSendable = (after: Date, zone: string | null | undefined): Date => nextReasonableHour(validZone(zone), after);
 
@@ -128,11 +128,11 @@ export function windowFromWords(text: string, now: Date, zone: string | null | u
   if (/\btomorrow (?:night|evening)\b/.test(s)) return { words: "tomorrow night", deadline: at((lateNight ? L : L.plus({ days: 1 })).endOf("day")) };
   if (/\btomorrow morning\b|\bfirst thing (?:tomorrow|in the morning)\b|\bin the morning\b/.test(s)) return { words: "tomorrow morning", deadline: at(hm(lateNight ? L : L.plus({ days: 1 }), 12)) };
   if (/\btomorrow afternoon\b/.test(s)) return { words: "tomorrow afternoon", deadline: at(hm(lateNight ? L : L.plus({ days: 1 }), 17)) };
-  if (/\btomorrow\b/.test(s)) return { words: "tomorrow", deadline: at(hm(lateNight ? L : L.plus({ days: 1 }), 20)) };
+  if (/\btomorrow\b/.test(s)) return { words: "tomorrow", deadline: at(hm(lateNight ? L : L.plus({ days: 1 }), REASONABLE_HOUR_END)) };
   if (/\b(?:tonight|this evening|later tonight)\b/.test(s)) return { words: "tonight", deadline: at(lateNight ? hm(L, 5) : L.endOf("day")) };
   if (/\bthis morning\b/.test(s)) return floor(hm(L, 12), "this morning");
   if (/\bthis afternoon\b/.test(s)) return floor(hm(L, 17), "this afternoon");
-  if (/\b(?:later today|today|end of (?:the )?day|eod)\b/.test(s)) return floor(hm(L, 20), "today");
+  if (/\b(?:later today|today|end of (?:the )?day|eod)\b/.test(s)) return floor(hm(L, REASONABLE_HOUR_END), "today");
   // A full weekday name, or a short one after by/on/before/this/next ("sat" and "sun" alone are other words).
   const day = s.match(/\b(?:(by|on|before|this|next)\s+)?(monday|tuesday|wednesday|thursday|friday|saturday|sunday|mon|tues?|wed|thur?s?|fri|sat|sun)\b(\s+morning)?/);
   if (day && (day[1] || day[2].length > 5)) {
@@ -141,7 +141,7 @@ export function windowFromWords(text: string, now: Date, zone: string | null | u
     let add = (idx - d.weekday + 7) % 7;
     if (day[1] === "next" && add < 3) add += 7;
     d = d.plus({ days: add });
-    const end = day[3] ? hm(d, 12) : hm(d, 20);
+    const end = day[3] ? hm(d, 12) : hm(d, REASONABLE_HOUR_END);
     // The day itself, already past its end: the same day next week.
     const target = end <= L ? end.plus({ days: 7 }) : end;
     const name = WEEKDAYS[idx - 1][0].toUpperCase() + WEEKDAYS[idx - 1].slice(1);
@@ -149,10 +149,10 @@ export function windowFromWords(text: string, now: Date, zone: string | null | u
   }
   if (/\bthis week\b/.test(s)) {
     const fri = L.plus({ days: (5 - L.weekday + 7) % 7 });
-    const end = hm(fri, 20);
-    return { words: "this week", deadline: at(end <= L ? hm(L.plus({ days: (7 - L.weekday) || 7 }), 20) : end) };
+    const end = hm(fri, REASONABLE_HOUR_END);
+    return { words: "this week", deadline: at(end <= L ? hm(L.plus({ days: (7 - L.weekday) || 7 }), REASONABLE_HOUR_END) : end) };
   }
-  if (/\bnext week\b/.test(s)) return { words: "next week", deadline: at(hm(L.plus({ days: 7 - L.weekday + 5 }), 20)) };
+  if (/\bnext week\b/.test(s)) return { words: "next week", deadline: at(hm(L.plus({ days: 7 - L.weekday + 5 }), REASONABLE_HOUR_END)) };
   return null;
 }
 
@@ -176,7 +176,7 @@ export function warnByFor(deadline: Date, now: Date, zone: string | null | undef
 export function deliveryWords(now: Date, zone: string | null | undefined): "this morning" | "this afternoon" | "tonight" | "in the morning" {
   const h = localOf(now, zone).hour;
   const words = h >= 5 && h < 12 ? "this morning" : h >= 5 && h < 17 ? "this afternoon" : "tonight";
-  // Tonight with no texting time left in it (a call that ends at 7:45pm, or 2am): say the morning up front, so the confirmation
+  // Tonight with no texting time left in it (a call that ends at 8:45pm, or 2am): say the morning up front, so the confirmation
   // and the window agree and a warning doesn't follow the confirmation a minute later (Royce, 2026-10-08).
   if (words === "tonight") {
     const w = windowFromWords("tonight", now, zone);
@@ -222,10 +222,10 @@ export function whenWords(target: Date, now: Date, zone: string | null | undefin
 // Never later than their next morning: a check Co left at the one-day default doesn't push the new time to tomorrow night.
 export function rescheduledWindow(nextAt: Date, now: Date, zone: string | null | undefined, prior: CommitWindow): { window: CommitWindow; checkAt: Date; when: string } {
   const N = localOf(now, zone);
-  const morning = at(hm(N.hour >= 9 ? N.plus({ days: 1 }) : N, 9));
+  const morning = at(hm(N.hour >= REASONABLE_HOUR_START ? N.plus({ days: 1 }) : N, REASONABLE_HOUR_START));
   const s = nextSendable(new Date(Math.min(nextAt.getTime(), morning.getTime())), zone);
   const S = localOf(s, zone);
-  const end = S.hour < 12 ? hm(S, 12) : DateTime.min(S.plus({ hours: 3 }), hm(S, 20));
+  const end = S.hour < 12 ? hm(S, 12) : DateTime.min(S.plus({ hours: 3 }), hm(S, REASONABLE_HOUR_END));
   const deadline = at(end);
   const when = whenWords(deadline, now, zone);
   return {
@@ -249,3 +249,28 @@ export function windowLine(w: CommitWindow | null | undefined): string {
   if (!w || w.closedAt) return "";
   return `Co told them they'd have it ${w.words} (by ${localStamp(w.deadline, w.zone)}); if it can't be done by then, Co tells them before ${localStamp(w.warnBy, w.zone)}, with the new time.`;
 }
+
+// ---------- delivery hours (Royce, 2026-10-08)
+// A document Co delivers on its own (a promise kept, a PDF that follows a text) goes inside the promised window but never in their
+// quiet hours, 9pm to 8am their time, unless they asked for it right away ("send it tonight even if it's late"). A plan due
+// overnight lands at 8am, not 2:14am. The same window as every text and call Co starts (services/localHours.ts).
+export const DELIVERY_HOURS = { start: REASONABLE_HOUR_START, end: REASONABLE_HOUR_END } as const;
+
+// Pure: whether a delivery may go at this moment, their time.
+export function deliverableAt(at: Date, zone: string | null | undefined): boolean {
+  const h = DateTime.fromJSDate(at).setZone(validZone(zone) ?? FALLBACK_ZONE).hour;
+  return h >= DELIVERY_HOURS.start && h < DELIVERY_HOURS.end;
+}
+
+// Pure: the moment a delivery may go: now when inside their hours, else their next 8am.
+export function nextDeliveryTime(after: Date, zone: string | null | undefined): Date {
+  if (deliverableAt(after, zone)) return after;
+  const local = DateTime.fromJSDate(after).setZone(validZone(zone) ?? FALLBACK_ZONE);
+  let t = local.set({ hour: DELIVERY_HOURS.start, minute: 0, second: 0, millisecond: 0 });
+  if (t <= local) t = t.plus({ days: 1 });
+  return t.toJSDate();
+}
+
+// Pure: they asked for it right away, whatever the hour, in their own words. "Tonight" alone is a window, not leave to text at 2am.
+const IMMEDIATE = /\b(?:right (?:now|away)|asap|immediately|as soon as (?:it'?s|you'?re|you have it|you can)(?: (?:ready|done|finished))?|whenever it'?s (?:ready|done)|even if it'?s (?:late|the middle of the night)|(?:no matter|whatever) (?:the time|how late)|don'?t wait (?:until|till|for) (?:the )?morning|send it (?:now|tonight) (?:even|no matter)|i'?ll be up)\b/i;
+export const askedForImmediate = (theirWords: string | null | undefined): boolean => IMMEDIATE.test(String(theirWords ?? ""));

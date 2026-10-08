@@ -17,22 +17,24 @@ const c = cfg.conversation_config, ap = c.agent.prompt;
 const tools: any[] = ap.tools;
 const text = JSON.stringify(cfg);
 
-// ---- 2. the call brain is Haiku 4.5, and never a bigger model
-check("the call brain is Haiku 4.5", ap.llm === "claude-haiku-4-5");
-check("the fallback is the same model by its dated id: nothing slower is ever tried", ap.backup_llm_config.preference === "override" && ap.backup_llm_config.order.join() === "claude-haiku-4-5@20251001");
-check("no Sonnet or Opus is named anywhere in the call brain's model settings", !/sonnet|opus/i.test(JSON.stringify({ llm: ap.llm, backup: ap.backup_llm_config })));
+// ---- 2. the call brain is Sonnet 4.6, called directly by ElevenLabs (2026-10-08, Hume's setup)
+check("the call brain is Sonnet 4.6", ap.llm === "claude-sonnet-4-6");
+check("the fallback is the nearest Sonnet by a dated id (there is no dated 4.6)", ap.backup_llm_config.preference === "override" && ap.backup_llm_config.order.join() === "claude-sonnet-4-5@20250929");
+check("no Haiku anywhere in the call brain's model settings (the voice would change mid-call)", !/haiku/i.test(JSON.stringify({ llm: ap.llm, backup: ap.backup_llm_config })));
 check("a slow first token falls back after 3s, not 4", ap.cascade_timeout_seconds === 3);
 check("Sonnet stays where nobody waits: post-call, recaps, grading still use it", /MODELS\.sonnet/.test(src("services/claims.ts")) && /MODELS\.sonnet/.test(src("harness/callGrounding.ts")));
 
 // ---- 1. turn detection and tools
-check("turn detection: eager endpointing, speculative turns, the v3 turn model, pinned so a push can't drift", c.turn.turn_eagerness === "eager" && c.turn.speculative_turn === true && c.turn.turn_model === "turn_v3");
+// 2026-10-08: "normal", like Hume's one second of silence; eager endpointing cut in on the pauses of someone thinking aloud.
+check("turn detection: normal endpointing, speculative turns, the v3 turn model, pinned so a push can't drift", c.turn.turn_eagerness === "normal" && c.turn.speculative_turn === true && c.turn.turn_model === "turn_v3");
 check("no coverage check: the interview script's tool is gone from the agent and its prompt (2026-10-08)", !tools.some((t) => t.name === "assess_conversation_coverage") && !/assess_conversation_coverage|coverage/i.test(ap.prompt));
 check("the find is no longer a tool Co waits on: no surface_recommendation tool at all", !tools.some((t) => t.name === "surface_recommendation") && !/surface_recommendation/.test(ap.prompt));
 check("the tools that remain add no spoken filler", tools.filter((t) => t.type === "webhook").every((t) => t.pre_tool_speech === "off"));
 check("end_call and voicemail detection are still there", tools.some((t) => t.name === "end_call") && tools.some((t) => t.name === "voicemail_detection"));
-check("and to open every reply with a short first sentence (the voice starts when the first sentence is done)", /Start every reply with a short first sentence, under ten words/.test(ap.prompt));
+// 2026-10-08: the word caps made every turn the same shape; Hume's own phone section sets the rhythm.
+check("no word caps in the call prompt (under ten words, 15 words, 60 words, two to four sentences)", !/under ten words|past 15 words|60 words at most|two to four short sentences/.test(ap.prompt));
 
-check("Haiku's habits are named in the prompt: short speech, no 'I appreciate' opener, no AI disclaimer, never 'not how I work' for multi-day help", /about 60 words at most/.test(ap.prompt) && /Never open with "I appreciate"/.test(ap.prompt) && /No disclaimers about being an AI/.test(ap.prompt) && /never say it isn't how you work: say yes and set it up now, on the call/.test(ap.prompt) && !/when (?:we|you) hang up|after (?:we hang up|the call)/i.test(ap.prompt.replace(/After a call, Co does look into[^\n]*/, "")));
+check("the call guide still says: no AI disclaimer, never 'not how I work' for multi-day help, act on the call", /No disclaimers about being an AI/.test(ap.prompt) && /never say it isn't how you work: say yes and set it up now, on the call/.test(ap.prompt) && !/when (?:we|you) hang up|after (?:we hang up|the call)/i.test(ap.prompt.replace(/After a call, Co does look[^\n]*/g, "")));
 
 // ---- 5. keywords
 const kw: string[] = c.asr.keywords;
@@ -92,8 +94,9 @@ check("the registration passes the two variables to ElevenLabs", /right_now: o\.
   const on: any = E.buildAgentConfig({ name: "Co", prompt, voiceId: "v", apiUrl: "https://x.test", proxy: { url: "https://x.test/co/el/llm", secretId: "sec_1" } });
   const p: any = on.conversation_config.agent.prompt;
   check("proxy on: the agent's LLM is the custom one, at our endpoint, with the workspace secret as its bearer", p.llm === "custom-llm" && p.custom_llm.url === "https://x.test/co/el/llm" && p.custom_llm.api_key.secret_id === "sec_1" && p.custom_llm.api_type === "chat_completions", p.custom_llm);
-  check("proxy on: the endpoint serves the same model (Haiku 4.5), the tools stay on the agent", p.custom_llm.model_id === "claude-haiku-4-5" && p.tools.length === tools.length);
-  check("proxy off (the rollback): the direct Haiku path, no custom_llm at all", ap.llm === "claude-haiku-4-5" && !("custom_llm" in ap));
+  check("proxy on: the endpoint names the call brain (Sonnet 4.6), the tools stay on the agent, and there is no off-proxy fallback", p.custom_llm.model_id === "claude-sonnet-4-6" && p.tools.length === tools.length && p.backup_llm_config.preference === "disabled");
+  check("proxy off (the live path): the backup is pinned to the nearest Sonnet", ap.backup_llm_config.preference === "override" && ap.backup_llm_config.order[0] === "claude-sonnet-4-5@20250929");
+  check("proxy off (the live path): direct Sonnet 4.6, no custom_llm at all", ap.llm === "claude-sonnet-4-6" && ap.custom_llm === null);
   check("the call's user id and token may ride to our endpoint (custom_llm_extra_body), and registration sends them", cfg.platform_settings.overrides.custom_llm_extra_body === true && /customLlmExtraBody: \{ user_id: o\.userId, call_token: callToken \}/.test(src("services/elevenLabsCalls.ts")));
   const push = src("scripts/pushElevenLabsAgent.ts");
   check("the push script turns the proxy on only with ELEVENLABS_LLM_PROXY=1 and the shared secret, and keeps it as a workspace secret", /ELEVENLABS_LLM_PROXY !== "1"\) return null/.test(push) && /CALL_LLM_PROXY_SECRET/.test(push) && /co_call_llm_proxy/.test(push));
@@ -101,14 +104,14 @@ check("the registration passes the two variables to ElevenLabs", /right_now: o\.
 
 // ---- cadence, offers, promises, member state (in the prompt, in code, so a push carries them)
 {
-  const gd = E.SPEED_GUIDE;
-  check("cadence: short sentence, a beat, a longer one, a short one to land it; periods, commas, question marks only", /short sentence, a beat, then one a little longer/.test(gd) && /periods, commas and question marks/.test(gd));
-  check("cadence: no dash of any kind, no semicolon, no parentheses, 15 words at most", /Never write a dash of any kind/.test(gd) && /never a semicolon, never parentheses/.test(gd) && /No sentence runs past 15 words/.test(gd));
-  check("cadence: no sample reply to copy (the old wrong/right pair modelled the 'That's smart. So ... What would you want?' template), and no stock acknowledgement opener", !/Wrong: |Right: /.test(gd) && !/That makes sense\.|Good, that helps\./.test(gd) && /never a stock acknowledgement/.test(gd));
+  const gd = E.CALL_GUIDE;
+  const full = E.promptForElevenLabs(prompt);
+  check("rhythm comes from Hume's phone section: short spoken sentences, no dashes; no caps or sample reply in the call guide", /Short sentences, one thought each/.test(full) && /Never put a dash in what you say/.test(full) && !/Wrong: |Right: /.test(gd) && !/That makes sense\.|Good, that helps\./.test(gd));
   check("offers: name an event only from the finds or their own words; no source line, no name", /Name an event, place or time only if it is in "What Co has found for them" or they said it/.test(gd));
   check("promises: a promise to text or send is a real task the moment it is said, said once", /A promise to text or send something is a real task the moment you say it/.test(gd));
-  check("member state: drained or overwhelmed outranks the list: two sentences, no pitch, no recap, no list, no question that asks more", /If they say they are tired, drained, overwhelmed/.test(gd) && /Close warmly in two sentences/.test(gd) && /No pitch, no recap, no list of what you are carrying, no new event, no question/.test(gd));
-  check("the guide reaches the agent (it is part of promptForElevenLabs)", E.promptForElevenLabs(prompt).includes("# Their state comes first") && E.promptForElevenLabs(prompt).includes("# Cadence"));
+  // 2026-10-08: "close warmly in two sentences, then let them go" made Co hang up on Royce when he said he'd been stressed.
+  check("member state: when they open up, Co stays; the call ends when they want it to; nothing says to let them go or close in two sentences", /The call ends when they want it to/.test(gd) && /stay with it and help them think it through/.test(gd) && !/Close warmly in two sentences|let them go warmly|then let them go/.test(full));
+  check("the guide reaches the agent (it is part of promptForElevenLabs)", full.includes(gd) && !full.includes("# Their state comes first") && !full.includes("# Cadence"));
   const ids = (cfg.platform_settings.evaluation.criteria as any[]).map((x) => x.id);
   check("the post-call grade has the three new criteria", ["drops_stale_claims_on_pushback", "sends_what_it_promised", "member_state_outranks_agenda"].every((i) => ids.includes(i)), ids);
   check("the new criteria are written so success is the good outcome, with the failure named", (cfg.platform_settings.evaluation.criteria as any[]).filter((x) => ["drops_stale_claims_on_pushback", "sends_what_it_promised", "member_state_outranks_agenda"].includes(x.id)).every((x) => /^Success if/.test(x.conversation_goal_prompt) && /Failure if/.test(x.conversation_goal_prompt)));

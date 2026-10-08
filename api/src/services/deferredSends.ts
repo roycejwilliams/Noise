@@ -14,6 +14,7 @@
 // after a crash mid-send gets "already sent", never a second text.
 import pool from "../db/db.js";
 import { localHourOk, nextLocalHour, RULES, sendExempt, type ExemptType } from "../harness/proactive.js";
+import { dropStaleAck } from "./speakable.js";
 import { recordDecision } from "../harness/core.js";
 
 export type AfterKind = "relay" | "reminder" | "network_intro_ask" | "event_direct_ask" | "call_confirm";
@@ -43,6 +44,7 @@ export type DeferredRow = {
   status: string;
   attempts: number;
   archived?: boolean;
+  created_at?: Date | string | null;
 };
 
 // Queue a send for `dueAt`. One row per (user, target_key): queueing the same thing twice keeps the first.
@@ -143,7 +145,7 @@ export async function runDueDeferredSends(now: Date = new Date(), deps: Deferred
   const out = { claimed: 0, sent: 0, requeued: 0, skipped: 0, failed: 0 };
   const { rows } = await pool.query(
     `SELECT d.id, d.user_id, COALESCE(u.phone_number, d.phone_number) AS phone_number, d.type, d.target_key, d.messages, d.timezone,
-            d.after_kind, d.after_payload, d.due_at, d.status, d.attempts, (u.archived_at IS NOT NULL) AS archived
+            d.after_kind, d.after_payload, d.due_at, d.status, d.attempts, d.created_at, (u.archived_at IS NOT NULL) AS archived
      FROM deferred_sends d JOIN users u ON u.id = d.user_id
      WHERE (d.status = 'queued' AND d.due_at <= $1) OR (d.status = 'sending' AND d.claimed_at < $2)
      ORDER BY d.due_at LIMIT ${DEFERRED_LIMITS.perRun}`,
@@ -160,7 +162,10 @@ export async function runDueDeferredSends(now: Date = new Date(), deps: Deferred
     out.claimed++;
     const attempts = row.attempts + 1;
     const after: AfterSend | null = row.after_kind ? { kind: row.after_kind, payload: row.after_payload ?? {} } : null;
-    const messages = Array.isArray(row.messages) ? row.messages : JSON.parse(String(row.messages));
+    const raw: string[] = Array.isArray(row.messages) ? row.messages : JSON.parse(String(row.messages));
+    // Held, so no longer seconds old: a "Got it" written when it was queued would read like Co only just heard (services/speakable.ts).
+    const queuedAt = row.created_at ? new Date(row.created_at) : null;
+    const messages = queuedAt ? raw.map((m, i) => (i === 0 ? dropStaleAck(m, { askedAt: queuedAt, sendAt: now }) : m)) : raw;
     const finish = (status: string, error: string | null, sentAt: Date | null) =>
       pool.query(`UPDATE deferred_sends SET status = $2, error = $3, sent_at = $4 WHERE id = $1 AND attempts = $5`, [row.id, status, error, sentAt, attempts]);
     const requeue = (dueAt: Date, error: string | null) =>

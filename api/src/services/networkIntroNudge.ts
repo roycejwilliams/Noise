@@ -450,7 +450,7 @@ export async function askCandidateDirectly(candidate: MatchNudgeCandidate, asker
   // ASKER's reply, not anything this candidate just did. sendExempt writes
   // the text_exchange memory itself once actually delivered. Their open
   // question about the asker is stashed only once the ask reaches them
-  // (afterDirectAskSent, now or at their 9am from services/deferredSends.ts):
+  // (afterDirectAskSent, now or at their 8am from services/deferredSends.ts):
   // stashed while queued, a text of theirs before the morning would bind to an
   // ask they never saw.
   const after = { candidateId: candidate.user_id, askerId: asker.user_id, askerFirstName: asker.first_name, askerPhone: asker.phone_number, askerEmail: asker.email, matchReason, askId };

@@ -7,6 +7,7 @@
 // What a task may tell them (2026-09-30): web results prove themselves first
 // (services/taskWeb.ts), and a text is drafted only from verified fields, with
 // every number in it backed by them.
+import { deliveryShapeProblems } from "./speakable.js";
 import { CO_VOICE } from "./coVoice.js";
 import { anthropic } from "@ai-sdk/anthropic";
 import { generateText, stepCountIs, tool } from "ai";
@@ -54,7 +55,7 @@ export type TaskTurnDeps = {
   // What Co sent them since a time (texts, links, documents): a promise closes as done only on a matching send after it.
   sentSince?: (since: Date) => Promise<Sent[]>;
   // The document tool, texting's own (services/documentDelivery.ts sendDocumentForTask): grounded, inside their hours, recorded.
-  writeDocument?: (input: WriteDocumentInput, o: { read: string }) => Promise<{ ok: true; title: string; via: string } | { ok: false; why: string }>;
+  writeDocument?: (input: WriteDocumentInput, o: { read: string }) => Promise<{ ok: true; title: string; via: string } | { ok: false; why: string; nextAt?: Date }>;
   // A commitment's window (services/memberTime.ts): the miss warning, sent once per window through the send path with quiet hours,
   // the window moved to the new time, and the next check set to when the deliverable can go out.
   warn?: (text: string, key: string) => Promise<{ sent: boolean; reason?: string }>;
@@ -163,8 +164,10 @@ export async function runTaskTurnWith(task: CoTask, deps: TaskTurnDeps): Promise
   const linkOk = (l: string) => verified.some((v) => v.url === l) || events.some((e) => e.url === l);
 
   const tell = async (what: string, links?: string[]) => {
+        // One delivery, one line (services/speakable.ts): the document went with its own sentence. Nothing texts about it again.
+        if (docsSent.length) return { ok: false, error: "The document already went out with its one line. Don't text about it: finish the task, or note anything else for later." };
         // Outside their hours nothing is held in memory to send later: Co waits for their morning.
-        if (!localHourOk(deps.now(), deps.zone)) return { ok: false, error: "It's outside their hours (9am to 8pm their time). Note what you'd tell them and schedule your next look for their morning." };
+        if (!localHourOk(deps.now(), deps.zone)) return { ok: false, error: "It's outside their hours (8am to 9pm their time). Note what you'd tell them and schedule your next look for their morning." };
         const allowed = mayText(task, await deps.textsToday(), deps.now());
         if (!allowed.ok) return { ok: false, error: `Not sent: ${allowed.why}. Note it and schedule the next look instead.` };
         const known = (links ?? []).filter(linkOk);
@@ -223,7 +226,9 @@ export async function runTaskTurnWith(task: CoTask, deps: TaskTurnDeps): Promise
           maxSentences: 4,
         }).catch(() => null);
         if (!text) return { ok: false, error: "Nothing worth sending came out of the verified facts. Note it and schedule the next look." };
-        let failed = checkDraft(text, { maxSentences: 4, maxChars: 480 }).filter((c) => !c.pass);
+        // Rule 1 of the delivery shape (services/speakable.ts): no "Got it" for an ask that isn't seconds old.
+        const shapeChecks = (t: string) => deliveryShapeProblems(t, { askedAt: new Date(task.createdAt), sendAt: deps.now() }).map((reason) => ({ name: "delivery_shape", pass: false, reason }));
+        let failed = [...checkDraft(text, { maxSentences: 4, maxChars: 480 }).filter((c) => !c.pass), ...shapeChecks(text)];
         // One redraft with what broke, in code, so a long first draft doesn't use up
         // Co's steps (2026-09-30: three verified caterers found, nothing sent).
         if (failed.length) {
@@ -232,7 +237,7 @@ export async function runTaskTurnWith(task: CoTask, deps: TaskTurnDeps): Promise
           ).catch(() => null);
           if (again) {
             text = again;
-            failed = checkDraft(text, { maxSentences: 4, maxChars: 480 }).filter((c) => !c.pass);
+            failed = [...checkDraft(text, { maxSentences: 4, maxChars: 480 }).filter((c) => !c.pass), ...shapeChecks(text)];
           }
         }
         if (failed.length) return { ok: false, error: `The draft broke a rule (${failed.map((f) => f.name).join(", ")}). Note it and schedule the next look.` };
@@ -348,12 +353,19 @@ export async function runTaskTurnWith(task: CoTask, deps: TaskTurnDeps): Promise
         const r = await deps.writeDocument(input, { read }).catch((err: any) => ({ ok: false as const, why: `it didn't go out (${String(err?.message ?? err).slice(0, 80)})` }));
         if (!r.ok) {
           did.push(`document not sent: ${r.why.slice(0, 140)}`);
+          // Their quiet hours (9pm to 8am): the next look is their 8am, set here, not left to the model's arithmetic.
+          const quietUntil = "nextAt" in r ? r.nextAt : undefined;
+          if (quietUntil && deps.scheduleAt) {
+            await deps.scheduleAt(quietUntil, "Send the document you promised: it was ready during their quiet hours.");
+            nextAt = quietUntil;
+            decided = "scheduled";
+          }
           return { ok: false, error: r.why };
         }
         docsSent.push(r.title);
         did.push(`sent a document: ${r.title} (${r.via})`);
         await deps.note(`Sent them the document "${r.title}" (${r.via === "pdf_text" ? "a PDF in their thread" : r.via}).`, null);
-        return { ok: true, note: "It's sent. If it's what you promised, finish the task as done. Don't text its contents too." };
+        return { ok: true, note: "It's sent, with its one line. If it's what you promised, finish the task as done. Don't text about it or its contents: the delivery is complete." };
       },
     }),
   };
@@ -551,7 +563,7 @@ export async function runTaskTurn(task: CoTask, opts: { now?: () => Date; overri
     },
     writeDocument: async (input, { read }) => {
       const { sendDocumentForTask, realTaskDocDeps } = await import("./documentDelivery.js");
-      const r = await sendDocumentForTask(input, { userId, taskId: task.id, firstName: person.first_name ?? "", phone: person.phone_number, zone, taskTheirWords: task.theirWords, read }, { ...realTaskDocDeps, now: clock });
+      const r = await sendDocumentForTask(input, { userId, taskId: task.id, firstName: person.first_name ?? "", phone: person.phone_number, zone, taskTheirWords: task.theirWords, read, askedAt: task.createdAt ? new Date(task.createdAt) : null }, { ...realTaskDocDeps, now: clock });
       await recordDecision({ layer: 7, decision: "task.writeDocument", userId, outcome: r.ok ? "act" : "skip", action: r.ok ? r.title : "not_sent", reason: r.ok ? null : r.why.slice(0, 300), proposal: { taskId: task.id, via: r.ok ? r.via : null } }).catch(() => {});
       return r;
     },

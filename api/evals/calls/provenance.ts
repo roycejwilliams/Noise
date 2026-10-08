@@ -39,8 +39,8 @@ check("the call summary builder hands the stamped line on (not the bare text)", 
 check("the recap threads reader (personModel) goes through renderThreads", /renderThreads\(threads/.test(src("services/personModel.ts")));
 
 // ---- the behaviour on pushback is in the call prompt
-const g = E.SPEED_GUIDE;
-check("the prompt tells Co to read the stamp: an OLD line is a question, never a fact", /A line marked OLD is a question, never a fact/.test(g));
+const g = E.CALL_GUIDE + "\n" + E.promptForElevenLabs(fs.readFileSync(new URL("../../prompts/co-system-prompt.md", import.meta.url), "utf8"));
+check("the prompt tells Co to read the stamp: an OLD line is a question, never a fact", /marked OLD is a question, not a fact/.test(g) && /OLD when it has gone stale/.test(E.CALL_GUIDE));
 check("when a member challenges a claim: check its stamp, drop it in ONE sentence, move on", /push back on something you said about them/.test(g) && /drop it in one short sentence/.test(g) && /go back to what they are saying now/.test(g));
 check("and never apologize twice or say it got something wrong 'on my end'", /Never apologize twice, never say you got something wrong on your end/.test(g));
 const c = fs.readFileSync(new URL("./callEvals.ts", import.meta.url), "utf8");

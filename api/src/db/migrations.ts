@@ -2580,4 +2580,39 @@ export async function runMigrations(): Promise<void> {
     .then(() => pool.query(`CREATE INDEX IF NOT EXISTS research_finds_user_shown ON research_finds (user_id, shown_at DESC)`))
     .then(() => pool.query(`CREATE INDEX IF NOT EXISTS research_finds_pending ON research_finds (shown_at) WHERE outcome IS NULL`))
     .catch((err: Error) => console.error("research_finds table init failed:", err));
+  // Delivery receipts (2026-10-08, services/deliveryReceipts.ts): every document Co delivers, what (title, version, the content
+  // itself), how (PDF, Google Doc, or text when the PDF failed), when. Follow-ups read it: what's outstanding, what to quote, never
+  // the same artifact twice. A text fallback stays pdf_pending until the PDF follows (retried by the minute cron).
+  await pool
+    .query(
+      `CREATE TABLE IF NOT EXISTS document_deliveries (
+        id BIGSERIAL PRIMARY KEY,
+        user_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+        doc_key TEXT NOT NULL,
+        version INTEGER NOT NULL DEFAULT 1,
+        title TEXT NOT NULL,
+        kind TEXT,
+        content JSONB NOT NULL,
+        content_hash TEXT NOT NULL,
+        channel TEXT NOT NULL CHECK (channel IN ('pdf_text','google_docs','text_fallback','email')),
+        status TEXT NOT NULL DEFAULT 'delivered' CHECK (status IN ('delivered','pdf_pending','pdf_failed')),
+        line TEXT,
+        link TEXT,
+        task_id BIGINT,
+        source TEXT NOT NULL,
+        change_note TEXT,
+        error TEXT,
+        attempts INTEGER NOT NULL DEFAULT 0,
+        next_retry_at TIMESTAMPTZ,
+        pdf_sent_at TIMESTAMPTZ,
+        delivered_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+      )`,
+    )
+    .then(() => pool.query(`CREATE INDEX IF NOT EXISTS document_deliveries_user ON document_deliveries (user_id, delivered_at DESC)`))
+    .then(() => pool.query(`CREATE INDEX IF NOT EXISTS document_deliveries_key ON document_deliveries (user_id, doc_key, version DESC)`))
+    .then(() => pool.query(`CREATE INDEX IF NOT EXISTS document_deliveries_retry ON document_deliveries (next_retry_at) WHERE status = 'pdf_pending'`))
+    // A plan emailed to them is recorded too (channel 'email'): widen the check on tables made before it.
+    .then(() => pool.query(`ALTER TABLE document_deliveries DROP CONSTRAINT IF EXISTS document_deliveries_channel_check`))
+    .then(() => pool.query(`ALTER TABLE document_deliveries ADD CONSTRAINT document_deliveries_channel_check CHECK (channel IN ('pdf_text','google_docs','text_fallback','email'))`))
+    .catch((err: Error) => console.error("document_deliveries table init failed:", err));
 }
