@@ -27,6 +27,10 @@ const terms = Q.memberTerms({ firstName: "Royce", goals: GOALS });
 // ---- 1. no member or company identifiers
 {
   check("the member's identifiers: their name, Co, and the names in their own work", ["Royce", "Co", "Sequin AI", "House of AI", "Jeremy Toce"].every((t) => terms.includes(t)), terms);
+  const t2 = Q.memberTerms({ goals: ["Launch the Oct 10 DJ night at Rick & Roxy's", "Sequin AI wants a launch", "Get Co in front of users"] });
+  check("a goal's sentence-starting word isn't a name (Get, Launch), a month abbreviation isn't either, a company starting a goal still is", !t2.some((t) => /^(?:Get|Get Co|Launch|Launch the Oct|Oct)$/.test(t)) && t2.includes("Rick & Roxy's") && t2.includes("Sequin AI"), t2);
+  check("Co is matched as a word, never inside co-working", Q.queryProblems("co-working spaces SF", { terms: ["Co"], source: "web" }).length === 0 && Q.queryProblems("Co-working spaces SF", { terms: ["Co"], source: "web" }).length === 0 && Q.queryProblems("events like Co SF", { terms: ["Co"], source: "web" }).length > 0);
+  check("the X guidance's own recommended shape passes the bound", Q.queryProblems("(accelerator OR cohort OR fellowship) (applications open OR now accepting OR apply) consumer AI", { terms: [], source: "x" }).length === 0);
   check("months, cities and category acronyms are never identifiers", !terms.some((t) => /^(?:November|SF|AI|San Francisco)$/.test(t)));
   for (const q of ["Sequin AI House of AI November launch party sponsors", "Royce founder dinners SF", "events like CoPatible", "AI events for someone building a private social club"]) {
     check(`refused, names or describes the member: "${q}"`, Q.queryProblems(q, { terms, source: "web" }).some((p) => /member/.test(p)));
