@@ -8,13 +8,21 @@
 import pool from "../db/db.js";
 import { attemptEventSurfacing, PROFILE_ASK_ID } from "./eventSurfacingSweep.js";
 import { goalEntries } from "../harness/profileWrite.js";
+import { COLD_START, isNewMember, seedSignature } from "./coldStart.js";
 
 export const GOAL_SWEEP_EVERY_HOURS = 20;
 export const GOAL_SURFACE_COOLDOWN_DAYS = 3;
 export const GOAL_SWEEP_BATCH = 50;
 
-// Members with a direction to search from. No condition on their asks.
-export const GOAL_SWEEP_SQL = `SELECT u.id AS user_id, u.first_name, u.phone_number, cp.city, cp.goals, cp.activity_preferences,
+// Cold start (services/coldStart.ts, 2026-10-08): a new member's seeds go into the very next sweep. In their first week, once their
+// profile has changed since the last attempt (and at least COLD_START_RESWEEP_HOURS after it), they're read again; the run goes on only
+// when what the goal sweep reads (goals, direction, what they enjoy) actually changed (seedSignature), so a chat about their week
+// costs nothing.
+export const COLD_START_RESWEEP_HOURS = 1;
+
+// Members with a direction to search from. No condition on their asks. Members due on the 20-hour budget come first, then new members
+// whose profile changed.
+export const GOAL_SWEEP_SQL = `SELECT u.id AS user_id, u.first_name, u.phone_number, u.created_at AS joined_at, cp.city, cp.goals, cp.activity_preferences,
         cp.long_term_direction, cp.intent, pss.last_attempted_at,
         (pss.last_surfaced_at IS NULL OR pss.last_surfaced_at <= NOW() - INTERVAL '${GOAL_SURFACE_COOLDOWN_DAYS} days') AS cooldown_cleared
  FROM users u
@@ -25,7 +33,10 @@ export const GOAL_SWEEP_SQL = `SELECT u.id AS user_id, u.first_name, u.phone_num
         OR COALESCE(cp.long_term_direction, '') <> ''
         OR EXISTS (SELECT 1 FROM jsonb_array_elements(CASE WHEN jsonb_typeof(cp.intent) = 'array' THEN cp.intent ELSE '[]'::jsonb END) e
                    WHERE e->>'kind' = 'goal' AND e->>'status' = 'active'))
-   AND (pss.last_attempted_at IS NULL OR pss.last_attempted_at <= NOW() - INTERVAL '${GOAL_SWEEP_EVERY_HOURS} hours')
+   AND (pss.last_attempted_at IS NULL OR pss.last_attempted_at <= NOW() - INTERVAL '${GOAL_SWEEP_EVERY_HOURS} hours'
+        OR (u.created_at > NOW() - INTERVAL '${COLD_START.newMemberDays} days' AND cp.updated_at > pss.last_attempted_at
+            AND pss.last_attempted_at <= NOW() - INTERVAL '${COLD_START_RESWEEP_HOURS} hours'))
+ ORDER BY (pss.last_attempted_at IS NULL OR pss.last_attempted_at <= NOW() - INTERVAL '${GOAL_SWEEP_EVERY_HOURS} hours') DESC
  LIMIT ${GOAL_SWEEP_BATCH}`;
 
 export function goalSweepGoals(row: { goals?: string[] | null; intent?: unknown }): string[] | null {
@@ -55,21 +66,47 @@ export function goalSweepDue(row: { last_attempted_at: Date | string | null }, n
   return !row.last_attempted_at || now.getTime() - new Date(row.last_attempted_at).getTime() >= GOAL_SWEEP_EVERY_HOURS * 3_600_000;
 }
 
+// What the goal sweep reads for a member, as a fingerprint (services/coldStart.ts seedSignature).
+export function rowSeedSignature(row: { goals?: string[] | null; intent?: unknown; long_term_direction?: string | null; activity_preferences?: string[] | null }): string {
+  return seedSignature({ goals: goalSweepGoals(row) ?? [], direction: row.long_term_direction ?? null, enjoys: row.activity_preferences ?? null });
+}
+
+// Pure: whether a row runs this tick. Due on the 20-hour budget; or, for a new member (their first week), early when what the sweep
+// reads changed since the last run (lastSig: the signature the last plan logged; null when there's none on record).
+export function goalSweepRuns(row: { last_attempted_at: Date | string | null; joined_at?: Date | string | null }, sig: string, lastSig: string | null, now = new Date()): { run: boolean; why: "due" | "new_seeds" | "not_due" } {
+  if (goalSweepDue(row, now)) return { run: true, why: "due" };
+  if (isNewMember(row.joined_at ?? null, now) && sig !== lastSig) return { run: true, why: "new_seeds" };
+  return { run: false, why: "not_due" };
+}
+
 export type GoalSweepDeps = {
   rows: () => Promise<any[]>;
   mark: (userId: string) => Promise<void>;
   surface: (row: any, context: string) => Promise<void>;
   // This run's reading of their goals (services/goalEdges.ts planGoalSweep): never cached, never a goal's own words.
-  plan: (row: any) => Promise<{ searchText: string | null }>;
+  // seedSig rides along into the plan's log, so the next run can tell whether anything changed.
+  plan: (row: any, seedSig?: string) => Promise<{ searchText: string | null; passed?: { goal: string; why: string }[] }>;
+  // The seed signature the member's last plan logged (cold start's early rerun). Optional: without it, only the 20-hour budget applies.
+  lastSeedSig?: (userId: string) => Promise<string | null>;
+  // A new member's sweep that came back with nothing to search (services/coldStart.ts): a flagged miss. Optional; nothing is sent.
+  coldStartMiss?: (row: any, why: string, passed: { goal: string; why: string }[]) => Promise<void>;
 };
 const realDeps: GoalSweepDeps = {
   rows: async () => (await pool.query(GOAL_SWEEP_SQL)).rows,
-  plan: async (row) => {
+  plan: async (row, seedSig) => {
     const { planGoalSweep, realGoalDeps } = await import("./goalEdges.js");
     const { memberZone } = await import("./memberTime.js");
     const goals = goalSweepGoals(row) ?? [];
     const latest = Array.isArray(row.intent) ? (row.intent as any[])[row.intent.length - 1] ?? {} : {};
-    return planGoalSweep(row.user_id, goals, { city: row.city ?? null, zone: await memberZone(row.user_id), now: new Date(), firstName: row.first_name ?? null, direction: row.long_term_direction ? String(row.long_term_direction) : null, enjoys: row.activity_preferences ?? null, specifics: latest.concrete_preferences ?? null }, realGoalDeps);
+    return planGoalSweep(row.user_id, goals, { city: row.city ?? null, zone: await memberZone(row.user_id), now: new Date(), firstName: row.first_name ?? null, direction: row.long_term_direction ? String(row.long_term_direction) : null, enjoys: row.activity_preferences ?? null, specifics: latest.concrete_preferences ?? null, seedSig }, realGoalDeps);
+  },
+  lastSeedSig: async (userId) => {
+    const { rows } = await pool.query(`SELECT proposal->>'seedSig' AS sig FROM harness_decisions WHERE user_id = $1 AND decision = 'goal_sweep.plan' ORDER BY created_at DESC LIMIT 1`, [userId]);
+    return rows[0]?.sig ?? null;
+  },
+  coldStartMiss: async (row, why, passed) => {
+    const { noteColdStartSweep } = await import("./coldStart.js");
+    await noteColdStartSweep({ userId: row.user_id, sweep: "goal", searched: null, found: false, why, tried: [], turnedAway: passed.map((p) => `${p.goal.slice(0, 100)}: ${p.why.slice(0, 80)}`) });
   },
   mark: async (userId) => { await pool.query(`INSERT INTO profile_surfacing_state (user_id, last_attempted_at) VALUES ($1, NOW()) ON CONFLICT (user_id) DO UPDATE SET last_attempted_at = NOW()`, [userId]); },
   surface: async (row, context) => {
@@ -83,13 +120,23 @@ export async function runGoalSweep(run: <T>(items: T[], limit: number, fn: (i: T
   let n = 0;
   await run(rows, 3, async (row: any) => {
     if (!goalSweepContext(row)) return;
+    // Due on the budget, or a new member whose seeds changed since the last run (cold start); anyone else waits, unmarked.
+    const sig = rowSeedSignature(row);
+    if (!goalSweepDue(row)) {
+      const last = deps.lastSeedSig ? await deps.lastSeedSig(row.user_id).catch(() => sig) : sig;
+      if (!goalSweepRuns(row, sig, last).run) return;
+    }
     await deps.mark(row.user_id);
     n++;
     try {
       // What to look for is each active goal's findable edge (services/goalEdges.ts), read fresh this run; a member whose goals
       // have no findable side is passed, and the plan logs why.
-      const { searchText } = await deps.plan(row);
-      if (!searchText) return;
+      const { searchText, passed } = await deps.plan(row, sig);
+      if (!searchText) {
+        // A new member with nothing findable to search is a cold-start miss, never a silent pass (services/coldStart.ts).
+        if (deps.coldStartMiss && isNewMember(row.joined_at ?? null)) await deps.coldStartMiss(row, passed?.length ? "none of their goals has a findable side" : "nothing to search from their goals", passed ?? []).catch(() => {});
+        return;
+      }
       await deps.surface(row, searchText);
     } catch (err: any) {
       console.error(`Goal sweep failed for ${row.user_id}:`, err?.message ?? err);

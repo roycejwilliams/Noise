@@ -21,6 +21,7 @@ import { markMatchNudgeSent, type EventMatchNudgePayload } from "../services/eve
 import { lapseCloseDate, lapseText } from "../services/membershipLapse.js";
 import { memberZone } from "../services/memberTime.js";
 import { prepareReveal } from "../services/networkIntroNudge.js";
+import { draftStateNudge, onStateNudgeDropped, onStateNudgeSent } from "../services/memberStateNudges.js";
 
 function skip(reason: string): DraftResult {
   return { skip: reason };
@@ -536,6 +537,13 @@ export const proactiveRegistry: ProactiveRegistry = {
       await writeMemory(c.userId, "check_in", `Acknowledged a closed goal: ${c.payload.text}`);
     },
   },
+
+  // Member-state nudges (services/memberStateNudges.ts): the state is re-read at draft time, the words come from the facts stored at
+  // queue time (the recipient's own record only), and an intro nudge is checked for anything about the other member before it goes.
+  intro_nudge: { draft: (c, person) => draftStateNudge(c, person), onSent: (c, _p, messages) => onStateNudgeSent(c, messages), onDropped: (c, status, reason) => onStateNudgeDropped(c, status, reason) },
+  deadline_nudge: { draft: (c, person) => draftStateNudge(c, person), onSent: (c, _p, messages) => onStateNudgeSent(c, messages), onDropped: (c, status, reason) => onStateNudgeDropped(c, status, reason) },
+  goal_nudge: { draft: (c, person) => draftStateNudge(c, person), onSent: (c, _p, messages) => onStateNudgeSent(c, messages), onDropped: (c, status, reason) => onStateNudgeDropped(c, status, reason) },
+  commitment_nudge: { draft: (c, person) => draftStateNudge(c, person), onSent: (c, _p, messages) => onStateNudgeSent(c, messages), onDropped: (c, status, reason) => onStateNudgeDropped(c, status, reason) },
 
   // The day before a Co event: how many are coming and the two or three worth finding, by name only when they
   // said yes at RSVP, each with a reason from their own stated ask (services/eventBrief.ts).

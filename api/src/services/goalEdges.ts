@@ -151,7 +151,9 @@ export type GoalDeps = {
 // One member's goals for this sweep: read fresh, derived fresh, the lifecycle applied, set-asides recorded, goal-derived find
 // requests retired. Returns what to search (or null with the reasons each goal was passed).
 // direction: their long-term direction, read as a goal but never superseding one (review of #107).
-export async function planGoalSweep(userId: string, goals: string[], o: { city: string | null; zone: string | null; now: Date; enjoys?: string[] | null; specifics?: string[] | null; firstName?: string | null; direction?: string | null }, deps: GoalDeps): Promise<GoalPlan> {
+// seedSig: a fingerprint of what this run read (services/coldStart.ts seedSignature), logged so a new member's sweep reruns only when
+// their seeds change (services/goalSweep.ts goalSweepRuns).
+export async function planGoalSweep(userId: string, goals: string[], o: { city: string | null; zone: string | null; now: Date; enjoys?: string[] | null; specifics?: string[] | null; firstName?: string | null; direction?: string | null; seedSig?: string }, deps: GoalDeps): Promise<GoalPlan> {
   const today = DateTime.fromJSDate(o.now).setZone(o.zone && DateTime.now().setZone(o.zone).isValid ? o.zone : "America/Los_Angeles").toISODate()!;
   const uniq = [...new Set([...goals, ...(o.direction ? [o.direction] : [])].map((g) => g.trim()).filter(Boolean))];
   const states = await deps.states(userId).catch(() => new Map<string, GoalStateRow>());
@@ -192,7 +194,7 @@ export async function planGoalSweep(userId: string, goals: string[], o: { city: 
       userId,
       action: searchText ? "searching_edges" : "passed",
       reason: searchText ? null : live.length && !raw ? "the goals couldn't be read this time" : passed.length || setAside.length ? "no active goal with a findable side" : "no active goals",
-      proposal: { edges: active.map((e) => ({ goal: e.goal, kind: e.kind, edges: e.edges })), passed, setAside, retiredAsks },
+      proposal: { edges: active.map((e) => ({ goal: e.goal, kind: e.kind, edges: e.edges })), passed, setAside, retiredAsks, ...(o.seedSig ? { seedSig: o.seedSig } : {}) },
     })
     .catch(() => {});
   return { searchText, active, passed, setAside, retiredAsks };

@@ -79,6 +79,9 @@ export type TurnContext = {
   deliveries?: string[];
   // Goals Co set aside from context that they haven't heard about yet (services/goalEdges.ts untoldSetAsides).
   goalSetAsides?: import("./goalEdges.js").GoalStateRow[];
+  // Findable interests on file and the steering so far (services/coldStart.ts): while there are fewer than two, a reply may ask one
+  // easy question that lets them name something Co could find (harness/replyGrounding.ts addColdStartSteer).
+  coldStart?: import("./coldStart.js").ColdStartView | null;
   // The Co event they're registered for today, if any (services/eventPresence.ts).
   todayEvent?: { eventApiId: string; name: string; startAt: string; timezone: string | null } | null;
   // Everything Co is carrying for them, one ordered view: due first, then outstanding, then done (carryingItems).
@@ -378,8 +381,10 @@ export async function assembleContext(
       .then((m) => m.loadArtifactSignals(userId, { drift, openWork, delivered: [...new Map(receipts.map((r) => [r.docKey, r])).values()].map((r) => ({ title: r.title, kind: r.kind, at: r.deliveredAt })) }))
       .catch(() => null);
   }
+  const coldStartP = import("./coldStart.js").then((c) => c.loadColdStart(userId, { profile, asks })).catch(() => null);
   const goalSetAsides = await import("./goalEdges.js").then((g) => g.untoldSetAsides(userId)).catch(() => []);
-  return { userId, message, profile, snapshot, sent, asks, threads, offersThisWeek, emotional, lessons, inlineTarget, ledger, capabilities: capabilitySheet(), google, kit, story, advice, tasks, briefs, todayEvent, docOffer, deliveries, carrying, recentDocs, drift, goalSetAsides };
+  const coldStart = await coldStartP;
+  return { userId, message, profile, snapshot, sent, asks, threads, offersThisWeek, emotional, lessons, inlineTarget, ledger, capabilities: capabilitySheet(), google, kit, story, advice, tasks, briefs, todayEvent, docOffer, deliveries, carrying, recentDocs, drift, goalSetAsides, coldStart };
 }
 
 // Pure: the newest version of each delivered artifact, newest first.

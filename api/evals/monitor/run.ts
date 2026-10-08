@@ -46,6 +46,8 @@ const WRITTEN_DECISIONS = [
   "understanding.check",
   // Written by the daily sweep's finding (services/sweepFind.ts).
   "sweep.find",
+  // Cold start (services/coldStart.ts): a new member's sweep, a hit or a miss; what a reply to an unseeded member did with steering.
+  "sweep.cold_start_miss", "coldstart.reply",
   // Every tool Co chooses writes tool.<name> (agent/toolGuard.ts, 2026-09-25).
   "tool.%", ...ABILITIES.filter((a) => a.tool).map((a) => `tool.${a.tool}`),
   // Extensions' tools write the same, per team turn (services/extensions.ts).

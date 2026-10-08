@@ -8,7 +8,7 @@ import { enrichMatch } from "./eventDetails.js";
 import { getEmotionalContext, renderEmotionalContext, roomPreferenceFromFeelings } from "../harness/emotion.js";
 import { sweepFind } from "./sweepFind.js";
 import { recordDecision } from "../harness/core.js";
-import { recordRevealedOffers } from "./offerReactions.js";
+import { offerItemKey, recordRevealedOffers } from "./offerReactions.js";
 import { offerHistory, repeatInput, repeatRule, type RepeatAction } from "../harness/matchGate.js";
 
 export type SurfacingCandidate = {
@@ -470,7 +470,19 @@ async function alreadyDecided(userId: string, item: Pick<BacklogItem, "match" | 
     `SELECT 1 FROM proactive_candidates WHERE user_id = $1 AND target_key = $2 AND status <> 'pending'`,
     [userId, offerTargetKey(item)],
   );
-  return rows.length > 0;
+  if (rows.length) return true;
+  // A reminder for something Co already gave them a deadline heads-up about (services/memberStateNudges.ts, entry
+  // deadline:<item key>, queued or sent) would be the same heads-up twice (review of the branch, 2026-10-08).
+  if (item.reminder) {
+    // The nudge is keyed by the reaction's item key (event:<id>, or name:<lowercased name> for an opportunity), not the backlog's
+    // match key: both are checked (final review of #108: opportunities never matched).
+    const keys = [...new Set([`deadline:${matchKey(item.match)}`, `deadline:${offerItemKey(item.match as any)}`])];
+    const dn = await pool
+      .query(`SELECT 1 FROM member_state_nudges WHERE user_id = $1 AND entry_key = ANY($2::text[]) AND status IN ('queued','sent') LIMIT 1`, [userId, keys])
+      .catch(() => ({ rows: [] as any[] }));
+    if (dn.rows.length) return true;
+  }
+  return false;
 }
 
 // Shown to them since it was queued (in a texted search or an earlier offer):
@@ -561,6 +573,12 @@ export async function attemptEventSurfacing(candidate: SurfacingCandidate): Prom
         ...extra,
       },
     });
+
+  // A new member's sweep (their first week) is a cold-start hit or a flagged miss (services/coldStart.ts), never a silent pass.
+  // Bookkeeping for the team only: nothing is sent for a miss. Nothing is recorded for an established member.
+  await import("./coldStart.js")
+    .then((C) => C.noteColdStartSweep({ userId: candidate.userId, sweep: candidate.askId === PROFILE_ASK_ID ? "goal" : "ask", searched: candidate.askText, found: pending.length > 0, why: trace.found.length ? `found ${trace.found.length}, none offerable (already sent, past or set aside)` : "the search found nothing", tried: trace.did ?? [], turnedAway: trace.staleOrRepeat }))
+    .catch((err: any) => console.error("attemptEventSurfacing: cold-start note failed (non-fatal):", err?.message ?? err));
 
   if (!pending.length) {
     await log("skip", trace.found.length ? "nothing_fresh" : "nothing_found");

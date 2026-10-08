@@ -253,6 +253,22 @@ export function registerJobs(io: Server) {
     }
   });
 
+  // Hourly: Co acts on what it's carrying for each member when something changed (services/memberStateNudges.ts): an intro they
+  // haven't brought up, a deadline on something they said yes to, a goal gone quiet, something they said they'd do coming due. It
+  // only queues candidates; the :15/:45 dispatch decides if and when (hours, pause, opt-out, caps, spacing, restraint). Then the
+  // learned kind preferences are brought up to date (services/kindRestraint.ts), so a member who keeps letting one kind of text pass
+  // is recorded even when nothing is waiting for them.
+  cron.schedule("5 * * * *", async () => {
+    try {
+      const { runMemberStateNudges } = await import("../services/memberStateNudges.js");
+      await runMemberStateNudges().catch((err: any) => console.error("member-state nudges error:", err?.message ?? err));
+      const { runKindRestraintSync } = await import("../services/kindRestraint.js");
+      await runKindRestraintSync().catch((err: any) => console.error("kind restraint sync error:", err?.message ?? err));
+    } catch (err: any) {
+      console.error("member-state cron error:", err?.message ?? err);
+    }
+  });
+
   cron.schedule("40 * * * *", async () => {
     try {
       const { watchSentPages } = await import("../services/staleWatch.js");

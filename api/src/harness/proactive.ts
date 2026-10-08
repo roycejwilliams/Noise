@@ -47,6 +47,10 @@ import { safetyHoldActive } from "../services/safety.js";
 import { repeatQuestionCheck } from "./repeatAsk.js";
 import { payloadFirst, theirAskOf } from "./payloadFirst.js";
 import { getEmotionalContext, renderEmotionalContext } from "./emotion.js";
+import { kindOf, loadKindRestraint, loadStoredPrefs, RESTRAINT, suppressedKinds, syncKindPreferences, type ProactiveKind } from "../services/kindRestraint.js";
+
+// The seasonal goal window (services/goalJourney.ts GOAL_CHECKIN.everyDays), here so the gate needs no DB import.
+export const GOAL_SEASON_DAYS = 56;
 
 // The person's emotional context for whatever draft runs inside dispatch,
 // without threading it through every registry and agent draft call.
@@ -110,7 +114,13 @@ export type ProactiveType =
   // Rare, seasonal check-in on a goal (services/goalJourney.ts): never on the 7-day ask clock.
   | "goal_checkin"
   // A goal closed at their word: a companion moment that acknowledges the arc, not a status flip.
-  | "goal_closed";
+  | "goal_closed"
+  // Member-state nudges (services/memberStateNudges.ts, 2026-10-08): Co acting when something it carries for them changes. An intro
+  // they haven't brought up, a deadline on something they said yes to, a goal gone quiet, something they said they'd do coming due.
+  | "intro_nudge"
+  | "deadline_nudge"
+  | "goal_nudge"
+  | "commitment_nudge";
 
 // co_event: Co's own event, announced to nearby users on creation (services/coEventAnnouncement.ts).
 // direct_ask: a reply-triggered direct ask to a THIRD person who didn't just
@@ -174,6 +184,13 @@ export const TYPE_POLICY: Record<ProactiveType, TypePolicy> = {
   // Seasonal: one in eight weeks at most (also enforced where it is queued); the closing moment is a reply to what they said.
   goal_checkin: { priority: 9, typeGapDays: 56 },
   goal_closed: { priority: 86 },
+  // Member-state nudges: once per state (their own target key carries the state's fingerprint). Time-bound first.
+  // One deadline heads-up a day at most (final review of #108).
+  deadline_nudge: { priority: 75, typeGapDays: 1 },
+  intro_nudge: { priority: 45, typeGapDays: 2 },
+  commitment_nudge: { priority: 40, typeGapDays: 2 },
+  // Shares the seasonal window with goal_checkin (goal_season in candidateChecks): never a drumbeat.
+  goal_nudge: { priority: 11, typeGapDays: 21 },
 };
 
 export const RULES = {
@@ -243,6 +260,8 @@ export type PickState = {
   undeliveredYes?: boolean;
   // A safety concern in the last three days (services/safety.ts).
   safetyHold?: boolean;
+  // Kinds of message this member keeps letting pass, so Co stopped sending them (services/kindRestraint.ts).
+  suppressedKinds?: ProactiveKind[];
 };
 
 // While someone is struggling, asks, check-ins on asks, and product updates
@@ -258,6 +277,8 @@ export const HOLD_WHILE_STRUGGLING = new Set<ProactiveType>([
   "goal_checkin",
   "product_update",
   "calendar_follow",
+  "goal_nudge",
+  "commitment_nudge",
 ]);
 
 export type CandidateEvaluation = { candidate: Candidate; checks: GateCheck[]; ok: boolean };
@@ -338,7 +359,7 @@ function unansweredSince(send: SendRecord, lastInboundAt: Date | null): boolean 
 // events for 72 hours. Openings had a lane of their own for a day; merged back
 // (Royce, 2026-09-18: "A third set of caps is guesswork at this volume").
 export type Lane = "room" | "other";
-const ROOM_LANE = new Set<string>(["event_offer", "event_match_nudge", "network_tease", "in_room", "pre_arrival", "event_brief", "brief_name_ask", "event_followthrough"]);
+const ROOM_LANE = new Set<string>(["event_offer", "event_match_nudge", "network_tease", "in_room", "pre_arrival", "event_brief", "brief_name_ask", "event_followthrough", "intro_nudge"]);
 export function laneOf(type: string): Lane {
   return ROOM_LANE.has(type) ? "room" : "other";
 }
@@ -435,7 +456,7 @@ export function spacingCheck(state: Pick<PickState, "now" | "sends">): GateCheck
 
 // answering: a reply (isAnswering) doesn't wait on the last text of its type
 // (two time frames they named are two replies); the same topic still waits.
-export function candidateChecks(c: Candidate, state: Pick<PickState, "now" | "sends" | "lastInboundAt" | "needsCare" | "safetyHold" | "undeliveredYes">, opts: { answering?: boolean } = {}): GateCheck[] {
+export function candidateChecks(c: Candidate, state: Pick<PickState, "now" | "sends" | "lastInboundAt" | "needsCare" | "safetyHold" | "undeliveredYes" | "suppressedKinds">, opts: { answering?: boolean } = {}): GateCheck[] {
   const policy = TYPE_POLICY[c.type];
   const sameTarget = state.sends.find((s) => s.targetKey === c.targetKey);
   const unansweredTopic = state.sends.find((s) => s.topicKey && s.topicKey === c.topicKey && unansweredSince(s, state.lastInboundAt));
@@ -487,6 +508,21 @@ export function candidateChecks(c: Candidate, state: Pick<PickState, "now" | "se
   if (state.needsCare && HOLD_WHILE_STRUGGLING.has(c.type)) {
     checks.push({ name: "emotional_timing", pass: false, reason: "they've been struggling in the last day; this can wait" });
   }
+  // Restraint with memory (services/kindRestraint.ts): a kind of text they let pass twice in a row isn't sent again until they answer
+  // one. An answer to their own explicit ask (an event offer for an open ask) is never held back: they asked.
+  const kind = kindOf(c.type, c.payload);
+  if (kind && !(kind === "find" && isAnswering(c)) && state.suppressedKinds?.includes(kind)) {
+    checks.push({ name: "kind_restraint", pass: false, reason: `they let the last ${RESTRAINT.ignoredToSuppress} ${kind} texts pass with no reply or reaction; Co stopped sending these until they answer one` });
+  }
+  // One goal surface a season, across the seasonal check-in and the goal nudge (services/goalJourney.ts GOAL_CHECKIN).
+  if (c.type === "goal_checkin" || c.type === "goal_nudge") {
+    const lastGoal = state.sends.filter((s) => (s.type === "goal_checkin" || s.type === "goal_nudge") && s.sentAt <= state.now).sort((a, b) => b.sentAt.getTime() - a.sentAt.getTime())[0];
+    checks.push({
+      name: "goal_season",
+      pass: !lastGoal || state.now.getTime() - lastGoal.sentAt.getTime() >= GOAL_SEASON_DAYS * DAY,
+      reason: lastGoal ? `a ${lastGoal.type} went out within ${GOAL_SEASON_DAYS} days` : undefined,
+    });
+  }
   return checks;
 }
 
@@ -511,6 +547,8 @@ const QUOTA_CHECKS = new Set(["daily_cap", "weekly_cap", "unanswered_pause", "en
 //     after a call they were on.
 // Discovery: profile offers, guest-match nudges. Companion check-ins (advice
 // follow-ups too) keep their own 4-day rhythm and the daily cap, as before.
+// deadline_nudge is NOT here: it's Co's own heads-up, so the daily and weekly caps and the type gap apply (review of the branch,
+// 2026-10-08: three yeses in a weekend meant three heads-ups in a day).
 const ANSWERING_TYPES = new Set<string>(["network_tease", "ask_checkin", "window_followup", "debrief", "pre_arrival", "post_call", "event_followthrough", "mo_member_voice", "mo_member_batch", "mo_member_update", "goal_closed"]);
 export function isAnswering(c: Pick<Candidate, "type" | "payload">): boolean {
   const p = (c.payload ?? {}) as { askId?: string | null; fromProfile?: boolean; again?: boolean };
@@ -1148,7 +1186,7 @@ async function sendWithLedger(
   c: Candidate,
   person: Person,
   messages: string[],
-  opts: { ignorePacing?: boolean } = {},
+  opts: { ignorePacing?: boolean; suppressedKinds?: ProactiveKind[] } = {},
   extras: { candidate: Candidate; messages: string[] }[] = [],
 ): Promise<{ sent: true; delivered: string[] } | { sent: false; failed: GateCheck[] }> {
   const client = await pool.connect();
@@ -1171,18 +1209,19 @@ async function sendWithLedger(
       ...userLevelChecks({ now, timezone: person.timezone, optedOut: optedOutNow, sends, lastInboundAt }, { lane: laneOf(c.type), ignorePacing: opts.ignorePacing, legacyPace: !pacedByEngagement(c) }).filter(
         (k) => !(answering && QUOTA_CHECKS.has(k.name)) && !(c.type === "companion" && k.name === "weekly_cap"),
       ),
-      ...candidateChecks(c, { now, sends, lastInboundAt, undeliveredYes: c.type === "network_tease" ? await import("../services/networkIntroNudge.js").then((m) => m.lastTeaseUndelivered(person.userId)).catch(() => false) : false }, { answering }),
+      ...candidateChecks(c, { now, sends, lastInboundAt, undeliveredYes: c.type === "network_tease" ? await import("../services/networkIntroNudge.js").then((m) => m.lastTeaseUndelivered(person.userId)).catch(() => false) : false, suppressedKinds: await loadKindRestraint(client, person.userId, now).then((r) => suppressedKinds(r.verdicts)).catch(() => opts.suppressedKinds ?? []) }, { answering }),
     ];
     const g = gate(checks);
     if (!g.ok) {
       await client.query("ROLLBACK");
       return { sent: false, failed: g.failed };
     }
+    // The kind goes on the ledger (services/kindRestraint.ts): what restraint reads to learn which kinds they let pass.
     const ins = await client.query(
-      `INSERT INTO proactive_sends (user_id, type, target_key, topic_key, candidate_id, message, exempt)
-       VALUES ($1, $2, $3, $4, $5, $6, $7)
+      `INSERT INTO proactive_sends (user_id, type, target_key, topic_key, candidate_id, message, exempt, kind)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
        ON CONFLICT (user_id, target_key) DO NOTHING RETURNING id`,
-      [person.userId, c.type, c.targetKey, c.topicKey, c.id, messages.join("\n\n"), sendIsExempt(c, extras.map((e) => e.candidate), opts.ignorePacing === true)],
+      [person.userId, c.type, c.targetKey, c.topicKey, c.id, messages.join("\n\n"), sendIsExempt(c, extras.map((e) => e.candidate), opts.ignorePacing === true), kindOf(c.type, c.payload)],
     );
     if (!ins.rows[0]) {
       await client.query("ROLLBACK");
@@ -1190,6 +1229,8 @@ async function sendWithLedger(
     }
     // Offers that ride along count as part of this one send: ledgered as
     // exempt so the day's cap sees a single text, and marked sent together.
+    // Their kind is read from the candidate behind each row (services/kindRestraint.ts loadKindHistory), and rows sent together
+    // count as one text there.
     for (const e of extras) {
       await client.query(
         `INSERT INTO proactive_sends (user_id, type, target_key, topic_key, candidate_id, message, exempt)
@@ -1481,6 +1522,16 @@ export async function dispatchForUser(registry: ProactiveRegistry, userId: strin
   state.needsCare = emotional.needsCare;
   state.safetyHold = await safetyHoldActive(userId);
   state.undeliveredYes = await import("../services/networkIntroNudge.js").then((m) => m.lastTeaseUndelivered(userId)).catch(() => false);
+  // Kinds they keep letting pass (services/kindRestraint.ts); the learned preference is written when it flips. A read that fails
+  // holds what's stored, never more than that.
+  const restraint = await loadKindRestraint(pool, userId, state.now).catch((err: any) => {
+    console.error("proactive: kind restraint read failed (non-fatal, holding what's stored):", err?.message ?? err);
+    return null;
+  });
+  state.suppressedKinds = restraint
+    ? suppressedKinds(restraint.verdicts)
+    : await loadStoredPrefs(pool, userId).then((p) => p.filter((x) => x.state === "suppressed").map((x) => x.kind)).catch(() => []);
+  if (restraint && !opts.dryRun) await syncKindPreferences(userId, restraint.verdicts, restraint.stored).catch(() => 0);
   const ev = evaluateCandidates(state, opts);
   const proposal = {
     candidates: ev.perCandidate.map((p) => ({
@@ -1680,7 +1731,7 @@ export async function dispatchForUser(registry: ProactiveRegistry, userId: strin
 
   let result: Awaited<ReturnType<typeof sendWithLedger>>;
   try {
-    result = await sendWithLedger(c, person, outgoing, opts, extras);
+    result = await sendWithLedger(c, person, outgoing, { ...opts, suppressedKinds: state.suppressedKinds }, extras);
   } catch (err: any) {
     // Send failed and the ledger row rolled back. Retry on a later tick, up
     // to the attempt limit, instead of every 15 minutes until it expires.

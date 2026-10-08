@@ -17,6 +17,7 @@ import { recordDecision } from "../harness/core.js";
 import { mightBeCorrection, PROFILE_JUDGMENT_MODEL } from "../harness/profileWrite.js";
 import { parseModelJson } from "./modelJson.js";
 import {
+  ANSWERED_INTEREST_RULE,
   persistIntentFrom,
   storePlannedEventMention,
   storeProfile,
@@ -89,7 +90,7 @@ ${o.openAsks.length ? `\nOpen asks (numbered):\n${o.openAsks.map((a, i) => `${i}
 4. cadence: did they state how often Co should proactively call them? "weekly" (roughly every week), "biweekly" (every two weeks or looser but still wanting calls), "none" (don't call proactively), or "unstated" (never came up or no clear answer).
 
 5. intent, taken from what they just said, using the earlier conversation only to understand it (anything they asked for before is context they already said, not a new ask):
-  - asks: at most one specific thing they're actively seeking or could offer others (a connection, an introduction, a resource, expertise, a kind of event or community), as one clear sentence, typed "seeking" or "offering"; none at all when what they just said isn't asking for or offering something. Never an ask: small talk, thanks, feedback about Co, questions about Co itself, logistics, or answers to Co's questions about them.
+  - asks: at most one specific thing they're actively seeking or could offer others (a connection, an introduction, a resource, expertise, a kind of event or community), as one clear sentence, typed "seeking" or "offering"; none at all when what they just said isn't asking for or offering something. Never an ask: small talk, thanks, feedback about Co, questions about Co itself, logistics, or answers to Co's questions about them. ${ANSWERED_INTEREST_RULE}
   - concrete_preferences: named, specific things they mentioned liking or wanting, not vague vibes ("SoulCycle", "oat milk lattes", "speakeasy-style bars", not "fitness" or "good coffee").
   - wants: things they said they miss or want to find.
   - availability: their stated GENERAL, RECURRING availability in their own words; null for a one-off request for a specific call or meeting time.

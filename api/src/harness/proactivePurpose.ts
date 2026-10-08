@@ -31,6 +31,11 @@ export const PROACTIVE_PURPOSE: Record<ProactiveType | ExemptType | "in_room", P
   loop_check: "companion",
   goal_checkin: "companion",
   goal_closed: "companion",
+  // Member-state nudges (services/memberStateNudges.ts): about their own life and what they said, except a deadline on a find.
+  intro_nudge: "companion",
+  goal_nudge: "companion",
+  commitment_nudge: "companion",
+  deadline_nudge: "offer",
   co_event: "offer",
   direct_ask: "offer",
   search_result: "offer",
