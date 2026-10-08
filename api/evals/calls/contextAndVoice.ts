@@ -146,8 +146,20 @@ const day = () => "Oct 8";
     check("their reply to Co's goodbye lets the call end", afterCo.ended);
     const looseCo = await ends([sys, { role: "user", content: "anyway" }, { role: "assistant", content: "Enjoy tonight, bye!" }, { role: "user", content: "you too" }], "Night.");
     check("a goodbye in Co's own words (\"Enjoy tonight, bye!\") then their reply ends the call, never dead air", looseCo.ended);
-    const silent = await ends([sys, { role: "user", content: "ok" }], "");
-    check("a turn that is only end_call is never held (holding it would be silence until the timeout)", silent.ended);
+    {
+      // A bare end_call mid-call is held too, and Co answers them instead: the second model call is the answer (never dead air).
+      const calls: any[] = [];
+      const first = ending("").filter((e: any) => !(e.type === "content_block_delta"));
+      const answer = text("So which caterer felt closest?");
+      const stream = (r: any) => { calls.push(r); const evs = calls.length === 1 ? first : answer; return (async function* () { for (const e of evs) yield e; })(); };
+      let ended = false, said = "";
+      for await (const c of P.runCallLlm({ ...body, messages: [sys, { role: "user", content: "ok, I need to think about the caterers" }] }, { stream, voiceOnly: true })) {
+        const d: any = c.choices[0].delta;
+        if (d.tool_calls?.[0]?.function?.name === "end_call") ended = true;
+        said += d.content ?? "";
+      }
+      check(`a bare end_call before their goodbye is held, and Co answers instead ("${said.trim()}")`, !ended && /which caterer/.test(said) && calls.length === 2 && /haven't said goodbye/.test(JSON.stringify(calls[1].system)));
+    }
     const { memberClosed } = P as any;
     const closes = ["Later!", "I'm off, thanks Co", "gotta jet", "Night!", "Peace.", "Cheers, Co.", "ttyl", "That's it for now.", "ok bye"];
     const opens = ["I'll go with the first one.", "I need to go to Paris next week for work.", "better go with the cheaper one", "Let you go ahead and book it.", "Thanks for calling. And for listening.", "I'm off work tomorrow so I could do lunch.", "Later this week works."];

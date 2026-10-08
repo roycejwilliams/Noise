@@ -100,7 +100,8 @@ export function promiseCovered(sentence: string, o: { startedThisTurn?: string[]
   const mine = topicWords(sentence);
   if (!mine.size) return null;
   for (const t of o.open ?? []) {
-    if (t.source !== "promise" || t.status !== "open") continue;
+    // A call look-out on the same subject keeps it too (review of #113: a later text promise opened a second task).
+    if ((t.source !== "promise" && t.source !== "lookout") || t.status !== "open") continue;
     const theirs = topicWords(t.goal);
     const shared = [...mine].filter((w) => theirs.has(w)).length;
     if (shared && shared / Math.min(mine.size, theirs.size || 1) >= 0.5) return "an open promise task already keeps it";

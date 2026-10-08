@@ -261,6 +261,8 @@ export async function* runCallLlm(b: OaiRequest, deps: ProxyDeps): AsyncGenerato
   let heldEvent = false;
   // A stock-only sentence held back; said after all if it was the whole reply (never silence for style).
   let heldStock: string | null = null;
+  // end_call held because they hadn't said goodbye.
+  let heldEnd = false;
   const sayHeld = (): string | null => {
     const h = heldStock;
     heldStock = null;
@@ -384,9 +386,11 @@ export async function* runCallLlm(b: OaiRequest, deps: ProxyDeps): AsyncGenerato
           continue;
         }
         // end_call only once they've closed: their goodbye now, or any reply to Co's goodbye. Held, the call stays open a turn.
-        // A turn that is only end_call (nothing said) passes: holding it would be dead air until the silence timeout.
-        if (name === "end_call" && spokeAny && !memberClosed(theirLast) && !coClosed) {
+        // Held when they haven't closed, even on a turn that says nothing (review of #113: a bare end_call mid-call still hung up
+        // first). A held turn with nothing said gets one more answer below, never dead air.
+        if (name === "end_call" && !memberClosed(theirLast) && !coClosed) {
           deps.onDropped?.("end_call", "Co never hangs up first: they haven't said goodbye");
+          heldEnd = true;
           cur = { kind: "skip" };
           continue;
         }
@@ -458,8 +462,30 @@ export async function* runCallLlm(b: OaiRequest, deps: ProxyDeps): AsyncGenerato
     }
   }
   if (heldStock && !spokeAny && !blanked && finish !== "tool_calls") { const h = sayHeld(); if (h) yield chunk({ content: h }); }
+  // end_call was held and nothing else was said: Co answers them instead, once, in its own words (never a scripted line).
+  if (heldEnd && !spokeAny && finish !== "tool_calls") {
+    const note = "You were about to end the call, but they haven't said goodbye. Don't end it and don't say goodbye: answer what they last said.";
+    const retry: ARequest = { ...req, system: [...req.system, { type: "text", text: note } as any], ...(req.tools?.length ? { tool_choice: { type: "none" as const } } : {}) } as ARequest;
+    let rs: SpeakableStream | null = null;
+    try {
+      for await (const ev of deps.stream(retry)) {
+        if (ev.type === "content_block_start" && ev.content_block?.type === "text") rs = mk();
+        else if (ev.type === "content_block_delta" && ev.delta?.type === "text_delta" && typeof ev.delta.text === "string") {
+          if (!rs) rs = mk();
+          if (!clean) { const out = say(ev.delta.text); if (out) yield chunk({ content: out }); continue; }
+          for (const x of rs.push(ev.delta.text)) { const out = say(x); if (out) yield chunk({ content: out }); }
+        } else if (ev.type === "content_block_stop" && rs) {
+          if (clean) for (const x of rs.end()) { const out = say(x); if (out) yield chunk({ content: out }); }
+          rs = null;
+        }
+      }
+    } catch (err: any) {
+      console.error("call: the held-end retry failed (non-fatal):", err?.message ?? err);
+    }
+    if (heldStock && !spokeAny) { const h = sayHeld(); if (h) yield chunk({ content: h }); }
+  }
   // Last resort only (the retry was held back too, or failed): one plain line, never silence.
-  if (blanked && !spokeAny && finish !== "tool_calls") {
+  if ((blanked || heldEnd) && !spokeAny && finish !== "tool_calls") {
     const line = heldEvent ? SAFE_LINE : HELD_LINE;
     spokenLines.push(line);
     deps.onSpoken?.(line);
