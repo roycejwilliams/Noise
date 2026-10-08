@@ -112,12 +112,38 @@ const day = () => "Oct 8";
     const evs = text("I hear you.").filter((e: any) => e.type !== "message_delta" && e.type !== "message_stop");
     evs.push({ type: "content_block_start", index: 1, content_block: { type: "tool_use", id: "t1", name: "end_call" } }, { type: "content_block_stop", index: 1 }, { type: "message_delta", delta: { stop_reason: "tool_use" } }, { type: "message_stop" });
     const order: string[] = [];
-    for await (const c of P.runCallLlm(body, { stream: spy(evs), voiceOnly: true })) {
+    for await (const c of P.runCallLlm({ ...body, messages: [body.messages[0], { role: "user", content: "ok, I have to go. bye" }] }, { stream: spy(evs), voiceOnly: true })) {
       const d: any = c.choices[0].delta;
       if (d.content) order.push(`say:${d.content.trim()}`);
       if (d.tool_calls?.[0]?.function?.name) order.push(`tool:${d.tool_calls[0].function.name}`);
     }
     check(`voice: a stock-only reply before end_call is said first, not a silent hang-up (${order.join(" | ")})`, order[0] === "say:I hear you." && order.includes("tool:end_call"));
+  }
+  {
+    // Co never hangs up first (Royce, #113): end_call passes only after their goodbye, or their reply to Co's goodbye.
+    const ending = (reply: string) => {
+      const evs = text(reply).filter((e: any) => e.type !== "message_delta" && e.type !== "message_stop");
+      evs.push({ type: "content_block_start", index: 1, content_block: { type: "tool_use", id: "t1", name: "end_call" } }, { type: "content_block_stop", index: 1 }, { type: "message_delta", delta: { stop_reason: "tool_use" } }, { type: "message_stop" });
+      return evs;
+    };
+    const ends = async (messages: any[], reply: string) => {
+      let ended = false, said = "";
+      for await (const c of P.runCallLlm({ ...body, messages }, { stream: spy(ending(reply)), voiceOnly: true })) {
+        const d: any = c.choices[0].delta;
+        if (d.tool_calls?.[0]?.function?.name === "end_call") ended = true;
+        said += d.content ?? "";
+      }
+      return { ended, said: said.trim() };
+    };
+    const sys = { role: "system", content: "You are Co." };
+    const held = await ends([sys, { role: "user", content: "Get me some solid options and we can go from there." }], "Talk soon, Jordan. Take care.");
+    check(`Co's own goodbye is said, but the call stays open until theirs ("${held.said}", ended ${held.ended})`, !held.ended && /Talk soon/.test(held.said));
+    const thanks = await ends([sys, { role: "user", content: "Thanks for calling. And for listening." }], "Of course. Take care of yourself this week.");
+    check("\"thanks for calling\" isn't their goodbye yet: the call stays open", !thanks.ended);
+    const theirBye = await ends([sys, { role: "user", content: "Alright, I should probably get going. Talk soon!" }], "Talk soon, Jordan.");
+    check("after their goodbye, end_call goes through", theirBye.ended);
+    const afterCo = await ends([sys, { role: "user", content: "anyway" }, { role: "assistant", content: "Take care, Jordan." }, { role: "user", content: "you too" }], "");
+    check("their reply to Co's goodbye lets the call end", afterCo.ended);
   }
   const named = await run("Your mentor Richard sounds like he was rare. What did he see in you?");
   check("voice-only: nothing is held back for an unbacked name (no fact check in this mode)", /Richard/.test(named));

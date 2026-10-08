@@ -66,6 +66,9 @@ export const SAFETY_TURN = new RegExp([
   String.raw`\bif I (?:just )?(?:disappeared|was gone|were gone|wasn'?t here|died)\b|\b(?:nobody|no one) would (?:even )?(?:miss|notice|care)\b`,
   String.raw`\bbetter off without me\b|\bnot wake up\b|\b(?:I'?m|I am|feel like) a burden\b|\bdark thoughts\b|\bgiving up on (?:life|everything)\b`,
 ].join("|"), "i");
+// The member closing the call, anywhere in their last words ("ok, talk soon", "I should probably get going"). Co never hangs up
+// first (Royce, 2026-10-08): ElevenLabs' end_call passes only after this, or after Co's goodbye has had their reply.
+export const MEMBER_CLOSING = /\b(?:bye|goodbye|good ?night|talk (?:to you )?(?:soon|later|tomorrow)|take care|see (?:you|ya)|catch you later|speak soon|(?:gotta|got to|have to|need to|should(?: probably)?|better|i'?ll) (?:go|run|jump|hop off|head out|get going|let you go)|let you go|heading out|hang up|end the call|that'?s all (?:i (?:had|needed)|for now))\b/i;
 export const GOODBYE = /^(?:\[[a-z ]+\]\s*)?(?:(?:ok(?:ay)?|alright|all right|great|perfect)[,.!]?\s+)?(?:take care|talk (?:to you )?soon|bye|goodbye|good night|goodnight|have a (?:good|great|nice) (?:night|evening|one|day|weekend)|see you|catch you later|speak soon)\b/i;
 export type OaiMessage = { role: string; content?: OaiContent; tool_calls?: { id: string; type?: string; function: { name: string; arguments?: string } }[]; tool_call_id?: string };
 export type OaiRequest = { model?: string; messages: OaiMessage[]; tools?: { type?: string; function: { name: string; description?: string; parameters?: unknown } }[]; stream?: boolean; temperature?: number; max_tokens?: number; max_completion_tokens?: number; elevenlabs_extra_body?: Record<string, any> };
@@ -364,6 +367,12 @@ export async function* runCallLlm(b: OaiRequest, deps: ProxyDeps): AsyncGenerato
         if (co?.names.has(name)) {
           // Past the cap a Co tool is never run, whatever the model sends (the request already said none).
           cur = toolsOff ? { kind: "skip" } : { kind: "co", id: String(ev.content_block.id ?? `co_${step}_${runs.length}`), name, json: "" };
+          continue;
+        }
+        // end_call only once they've closed: their goodbye now, or any reply to Co's goodbye. Held, the call stays open a turn.
+        if (name === "end_call" && !MEMBER_CLOSING.test(theirLast) && !saidGoodbye) {
+          deps.onDropped?.("end_call", "Co never hangs up first: they haven't said goodbye");
+          cur = { kind: "skip" };
           continue;
         }
         cur = { kind: "el", args: false };

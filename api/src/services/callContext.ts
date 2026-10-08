@@ -554,7 +554,18 @@ export async function buildCallKnowledge(userId: string): Promise<CallKnowledge>
   const promised = await strip(carried.open.filter((l) => l.from === "promise").map((l) => `- ${l.text}`));
   const loopLines = await strip(carried.open.filter((l) => l.from === "loop").map((l) => `- ${l.text.length > 240 ? `${l.text.slice(0, 240).replace(/[ ,;(]+[^ ,;(]*$/, "")}...` : l.text}`));
   const haveIt = (await strip(carried.theyHaveIt)).join("\n");
+  // What Co says it will do on the call has to open something after it (#113: promises stay, but they get wired). At the cap
+  // nothing new can open, so Co is told before it says it.
+  const capacity = await import("./coTasks.js")
+    .then(async (T) => {
+      const open = await T.openTasks(userId);
+      return open.length >= T.TASK_LIMITS.maxOpen
+        ? `You're already working on ${open.length} things for them, the most you carry at once (${open.map((t) => t.goal.replace(/^Keep [^:]{0,40}: /, "")).slice(0, 5).join("; ")}). On this call, don't promise new work or say you'll keep an eye out for something new: nothing new can open. If they want something new, offer to drop one of these for it.`
+        : null;
+    })
+    .catch(() => null);
   const loops = [
+    capacity,
     promised.length ? `What you said on a call you'd do, still open:\n${promised.join("\n")}` : null,
     loopLines.length ? `What you're carrying for them and where each stands (say where one stands when they ask what you're doing or when it changes what they should do next; what you already told them on a call isn't news, and it never opens a call):\n${loopLines.join("\n")}` : null,
   ].filter(Boolean).join("\n");

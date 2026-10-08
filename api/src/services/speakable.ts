@@ -65,7 +65,24 @@ const DANGLING = new Set(["a", "an", "the", "to", "of", "in", "on", "at", "for",
 const SLACK_WORDS = 6;
 // A comma this close to the start ends a lead-in ("From where I sit,", "In a room,"): breaking there leaves a fragment.
 const MIN_LEAD_WORDS = 6;
-function chooseBreak(ws: string[], max: number): Break | null {
+// A question is split only at a complete boundary (", and" / ", but" between whole clauses, or a comma after a full clause), never
+// at an opening clause or a preposition: "So when you think about the forty people. What's the split...?" (2026-10-08 call eval)
+// left a fragment. With no complete boundary it stays whole.
+const QWORD = new Set(["what", "whats", "how", "hows", "who", "whos", "why", "which", "where", "wheres"]);
+const AUX = new Set(["do", "does", "did", "are", "is", "was", "were", "can", "could", "would", "will", "have", "has", "should"]);
+const SUBJ = new Set(["you", "they", "we", "i", "it", "she", "he"]);
+// Pure: the words so far read as a question (opens as one, or a clause after a comma does), before its "?" has arrived.
+export function readsAsQuestion(ws: string[]): boolean {
+  const first = bare(ws.find((w) => !TAG_ONLY.test(w)));
+  if (QSTART.has(first)) return true;
+  for (let k = 1; k < ws.length; k++) {
+    if (!/,$/.test(ws[k - 1])) continue;
+    const w = bare(ws[k]);
+    if (QWORD.has(w) || (AUX.has(w) && SUBJ.has(bare(ws[k + 1])))) return true;
+  }
+  return false;
+}
+function chooseBreak(ws: string[], max: number, question = false): Break | null {
   let comma: Break | null = null;
   let conj: Break | null = null;
   let weak: Break | null = null; // a comma after an introductory clause: only when the sentence is too long to leave whole
@@ -80,6 +97,7 @@ function chooseBreak(ws: string[], max: number): Break | null {
   }
   const natural = conj ?? comma;
   if (natural) return natural;
+  if (question) return null;
   if (countWords(ws) <= max + SLACK_WORDS) return null;
   if (weak) return weak;
   const limit = Math.min(max, ws.length - 3);
@@ -100,7 +118,7 @@ function closeLeft(left: string[], asks: boolean): string {
 export function splitLong(sentence: string, max = MAX_SENTENCE_WORDS): string[] {
   const ws = sentence.trim().split(/\s+/).filter(Boolean);
   if (countWords(ws) <= max) return [sentence.trim()];
-  const br = chooseBreak(ws, max);
+  const br = chooseBreak(ws, max, /\?["')\]]*$/.test(sentence.trim()));
   if (!br) return [sentence.trim()];
   const asks = /\?["')\]]*$/.test(sentence.trim());
   // Either/or: "Are you doing it on their phones or is someone talking to them?" keeps both halves questions.
@@ -190,7 +208,7 @@ export class SpeakableStream {
         // "Leave it whole" (only a little over the limit) means wait for more, not a cut at the limit: a forced cut there split
         // "that's where I'd | start rather than..." mid-clause (2026-10-08 call eval). Past the slack (a few more words), chooseBreak
         // always returns a break, natural if there is one, else at a preposition or the limit.
-        const br = chooseBreak(ws.slice(0, -1), this.maxS);
+        const br = chooseBreak(ws.slice(0, -1), this.maxS, readsAsQuestion(ws));
         if (!br) return;
         let left = closeLeft(ws.slice(0, br.k), QSTART.has(bare(ws.find((w) => !TAG_ONLY.test(w)))) && bare(ws[br.k]) === "or");
         if (this.capNext) left = capitalize(left);

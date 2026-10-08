@@ -374,7 +374,7 @@ export function buildAgentConfig(o: {
           tools: [
             // ElevenLabs' own system tools ride in the same list (type "system");
             // the separate built_in_tools field silently stored nothing (2026-10-03).
-            { type: "system", name: "end_call", description: "End the call right after you've said goodbye once, or once they've said goodbye and you've said it back. Nothing is said after a goodbye.", params: { system_tool_type: "end_call" } },
+            { type: "system", name: "end_call", description: "End the call only once they have said goodbye (or asked to hang up) and you've said it back. You never hang up first: if you say goodbye first, wait for theirs. Nothing is said after a goodbye.", params: { system_tool_type: "end_call" } },
             // Leaves this and ends the call; the post-call steps then send the missed-call text.
             {
               type: "system",
