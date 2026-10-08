@@ -72,9 +72,13 @@ function unbackedMentions(mentions: Mention[], src: Source): Mention[] {
     if (m.kind === "time") return !src.flat.includes(squash(m.text).replace(/m$/, "m"));
     const n = norm(m.text.replace(/['’]s$/i, ""));
     if (src.hay.includes(n)) return false;
+    // A plural of a backed word is backed ("PDFs" for "PDF", 2026-10-08 live call: "Should I keep sending PDFs?" was replaced).
+    const singular = (w: string) => (w.length > 3 && /s$/.test(w) && !/ss$/.test(w) ? w.slice(0, -1) : w);
+    if (src.hay.includes(n.replace(/\S+/g, singular))) return false;
     // A name the sentence only shortens or re-cases ("Sequent" for "Sequent AI") still has a source.
     const parts = n.trim().split(" ").filter((p) => p.length > 2);
-    return !(parts.length && parts.every((p) => src.hay.includes(` ${p} `) || src.hay.includes(` ${p}'s `) || src.hay.includes(` ${p}s `)));
+    const has = (p: string) => src.hay.includes(` ${p} `) || src.hay.includes(` ${p}'s `) || src.hay.includes(` ${p}s `);
+    return !(parts.length && parts.every((p) => has(p) || has(singular(p))));
   });
 }
 

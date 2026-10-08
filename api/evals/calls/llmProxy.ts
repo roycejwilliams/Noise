@@ -365,5 +365,21 @@ const run = async (body: any, events: any[], o: { clean?: boolean } = {}) => {
   }
 }
 
+// ---- 2026-10-08 live call: goodbye once, and no "I'm not sure of the name" out of nowhere
+{
+  const bye = (extra: any[]) => baseBody({ messages: [
+    { role: "system", content: "You are Co. # Right now\nThursday evening." },
+    { role: "assistant", content: "Hey Royce, it's Co." },
+    { role: "user", content: "Okay, sounds good. Thank you so much." },
+    { role: "assistant", content: "You're welcome, Royce. The doc will be in your texts in the morning. Take care tonight." },
+    ...extra,
+  ] });
+  const r = await run(bye([{ role: "user", content: "All right, you too." }]), text("Take care, Royce."));
+  check("a second goodbye is never spoken", !/Take care/.test(r.content), r.content);
+  check("...and the call ends (end_call), in silence", r.finish === "tool_calls" && JSON.stringify(r.out).includes("end_call"), r.out.map((c: any) => c.choices[0].delta));
+  const r2 = await run(bye([{ role: "user", content: "Wait, one more thing. Can Jacqueline see the doc?" }]), text("Yes, forward it to her once it lands."));
+  check("after a goodbye, a real answer still goes through", /forward it to her/.test(r2.content), r2.content);
+  check("GOODBYE matches sign-offs, not thanks or answers", P.GOODBYE.test("Take care, Royce.") && P.GOODBYE.test("Talk soon.") && P.GOODBYE.test("Okay, have a good night.") && !P.GOODBYE.test("Thanks for telling me.") && !P.GOODBYE.test("Take a look at the doc."));
+}
 console.log(`llmProxy: ${total - failed}/${total} checks`);
 if (failed) process.exit(1);

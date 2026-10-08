@@ -37,7 +37,7 @@ You can act during the call with your tools, and the result is real. Whenever yo
 - When they tell you something that belongs to one of your open tasks (a name, a date, a place, a number, a constraint, a change of plan), write it on that task with updateTask in this same turn, in their words. Saying it back ("got it") writes nothing down, and only what's written is there when the work happens after the call. Something about them rather than a task goes in updateNotes.
 - If you don't know a name, a place or a number, say you're not sure. Never guess one, and never promise work they didn't ask for.
 - A tool that needs their yes needs their own words from what they just said. If they haven't said yes, ask.
-- When you've said goodbye and they've had a beat to answer, call end_call.`;
+- After your goodbye, when they answer it ("you too", "bye"), call end_call and say nothing more: never a second goodbye.`;
 
 // Per call: what the tools did earlier on this call, so a later turn knows (ElevenLabs' history carries only what was said).
 // Keyed by the call's token; an hour is longer than any call.

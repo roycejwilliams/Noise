@@ -153,5 +153,13 @@ const go = async (b: any, deps: any) => { const out: any[] = []; const spoken: s
 // ---- the spoken line rules still hold on the replacement lines
 for (const l of [G.UNSURE_NAME, G.UNSURE_NUMBER, G.HELD_LINE]) check(`"${l}" is speakable and narrates nothing`, S.speakable(l) === l && S.narratesInternalState(l) === null);
 
+// ---- 2026-10-08 live call: "Should I keep sending PDFs for now?" was replaced with "I'm not sure of the name."
+{
+  const s2 = src();
+  check("a plural of an everyday word is backed ('PDFs')", G.spokenProblem("Should I keep sending PDFs for now?", s2) === null, G.spokenProblem("Should I keep sending PDFs for now?", s2));
+  check("a plural of a backed name is backed", G.spokenProblem("I'll keep the Google Docs for you.", s2) === null);
+  const proxy = fs.readFileSync(new URL("../../src/services/callLlmProxy.ts", import.meta.url), "utf8");
+  check("'I'm not sure of the name' only answers a question they asked", /const unsure = !askedForSpecific \? null/.test(proxy));
+}
 console.log(`spokenGrounding: ${total - failed}/${total} passed`);
 if (failed) process.exit(1);
