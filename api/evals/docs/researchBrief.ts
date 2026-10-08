@@ -41,10 +41,23 @@ check("options are numbered so they can say \"the second one\"", brief([find(), 
 // ---- member context is still held to their words; research is exempt from that rule, not from its own
 const withCtx = brief([find()], ["Budget about 1500", "Needs to hold 40 people"]);
 check("researched lines aren't held to the member's words", DS.documentProblems(withCtx, { theirs: "budget about 1500, it needs to hold 40 people" }).length === 0, DS.documentProblems(withCtx, { theirs: "budget about 1500, it needs to hold 40 people" }));
-// The same words check as every document (services/documentGrounding.ts). It judges lines with three or more longer words;
-// a very short line can slip it today, for every document, not only briefs.
+// The same words check as every document (services/documentGrounding.ts). Short lines are held to it too (2026-10-07): every word
+// in a short line that carries meaning, every number (by value) and every name or place must be theirs.
 const invented = brief([find()], ["They need a rooftop terrace with skyline views and catering included"]);
 check("a member-context line they never said is refused", DS.documentProblems(invented, { theirs: "budget about 1500" }).length > 0);
+const THEIRS = "budget about 1500, it needs to hold 40 people";
+for (const line of ["Rooftop needed", "Budget 10k", "Catering included", "Launch in Austin", "60 people"]) {
+  const p = DS.documentProblems(brief([find()], ["Budget about 1500", line]), { theirs: THEIRS });
+  check(`an invented short member-context line is refused: "${line}"`, p.some((x) => /isn't something they said/.test(x)), p);
+}
+for (const line of ["Budget about $1,500", "Budget about 1.5k", "40 people", "Holds 40 guests", "Needs to hold 40 people"]) {
+  const p = DS.documentProblems(brief([find()], [line]), { theirs: THEIRS });
+  check(`their own short line, in another form, passes: "${line}"`, p.length === 0, p);
+}
+// Researched lines stay exempt even when short and nothing like their words ("Capacity: 50", "$125 an hour", the source link).
+const shortResearch = brief([find()], ["Budget about 1500"]);
+check("researched lines stay exempt from their words, however short", shortResearch.sections[0].research !== undefined && shortResearch.sections[0].bullets.some((b) => b.split(/\s+/).length <= 4) && DS.documentProblems(shortResearch, { theirs: "budget about 1500" }).length === 0, DS.documentProblems(shortResearch, { theirs: "budget about 1500" }));
+check("...and are judged when the same section isn't marked researched (the exemption is the mark, nothing else)", DS.documentProblems({ ...shortResearch, sections: shortResearch.sections.map((s) => ({ ...s, research: undefined })) }, { theirs: "budget about 1500" }).some((x) => /isn't something they said/.test(x)));
 check("the sections are marked: researched vs from what they told me", withCtx.sections[0].research !== undefined && withCtx.sections.at(-1)?.heading === "From what you told me" && !withCtx.sections.at(-1)?.research);
 
 // ---- sources and check times render, unknowns show as unknown

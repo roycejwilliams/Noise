@@ -224,7 +224,26 @@ const GUIDE = "seeking guidance on how to split the cofounder roles with Jacquel
   const funds = claim("Each event funds the next: data from this room improves what Co can offer the next one.");
   check("the real Co-reasoning is refused: \"each event funds the next\"", funds.length === 1 && funds[0].missing.some((m: string) => /funds|improves/.test(m)), funds);
   check("scattered words don't back a claim (every word is somewhere in a fortnight of talk; the window is three sentences)", claim("Cities rooms matching signal problems scalable network fraternity invite Luma.").length >= 0 && G.GROUNDING.window === 3);
-  check("a very short line is not judged (nothing to measure)", claim("Next step.").length === 0);
+  check("a short line of only glue and scaffolding passes (nothing in it to back)", claim("Next step.").length === 0);
+
+  // Short lines (2026-10-07): held to their words word by word. Invented here: Jordan's venue thread.
+  const SHORT = [
+    "Planning the launch for Jordan in SF. Budget about 1500, it needs to hold 40 people.",
+    "We want a DJ and a patio if we can. Thinking $6k total for the whole weekend.",
+    "Noor is handling the guest list.",
+  ].join("\n");
+  const ok = (t: string) => G.unbackedClaims([t], SHORT).length === 0;
+  const refused = (t: string) => G.unbackedClaims([t], SHORT).length === 1;
+  for (const t of ["Rooftop needed", "Catering included", "Skyline views", "Valet parking", "Open bar", "Pool"]) check(`short: an invented feature is refused: "${t}"`, refused(t), G.unbackedClaims([t], SHORT));
+  for (const t of ["Budget 10k", "Budget about 2000", "45 people", "Budget about $1,600", "Total about 6.5k"]) check(`short: a number they never gave is refused: "${t}"`, refused(t), G.unbackedClaims([t], SHORT));
+  for (const t of ["Launch in Austin", "Patio for Ellis", "Ellis handling the guest list"]) check(`short: a name or place they never said is refused: "${t}"`, refused(t), G.unbackedClaims([t], SHORT));
+  check("short: the refusal names what's missing", G.unbackedClaims(["Rooftop needed"], SHORT)[0]?.missing.includes("rooftop") && G.unbackedClaims(["Budget 10k"], SHORT)[0]?.missing.includes("10000"));
+  for (const t of ["Budget about 1500", "Needs to hold 40 people", "Holds 40 guests", "40 people", "Forty people", "Wants a DJ", "DJ and patio", "Patios", "Launch in SF", "Noor handles the guest list", "Prefers a patio", "Next step: the guest list"]) check(`short: their own point, paraphrased, passes: "${t}"`, ok(t), G.unbackedClaims([t], SHORT));
+  for (const t of ["About $6k total", "6k total", "Total about 6,000", "Total 6000", "Six thousand total", "Budget about $1,500", "Budget about 1.5k", "Budget around 15 hundred"]) check(`short: one number in any format passes: "${t}"`, ok(t), G.unbackedClaims([t], SHORT));
+  check("short: the words must sit together (a rooftop said two weeks of messages away doesn't make 'DJ on the rooftop' theirs)", refused("DJ on the rooftop") && G.unbackedClaims(["DJ on the rooftop"], `${SHORT}\nSaw a rooftop bar on the way home.\nNothing else.\nAnyway.\nOk.`).length === 1);
+  check("a four-word line rides on every word: two of three long words theirs no longer carries an invented one", refused("Launch planning with skyline"));
+  check("numbers by value: 6,000 and $6k and six thousand are one number", [...new Set([...G.numberValues("6,000"), ...G.numberValues("$6k"), ...G.numberValues("six thousand"), ...G.numberValues("6 grand")])].join() === "6000" && G.numberValues("1.5k").join() === "1500" && G.numberValues("10/22 at 7pm").join() === "10,22,7");
+  check("a name mid-line is held to their words in a long line too", claim("We match people inside the event with Ellis, not from a private social club list.").length === 1);
 
   const mk = (o: any) => D.resolveDocument({ title: "Product positioning", note: "From today.", sections: [{ heading: "Points", bullets: o.bullets }], suggestions: o.suggestions });
   const src2 = { theirs: SAYS };
