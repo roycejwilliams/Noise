@@ -179,7 +179,7 @@ user: I'm heading to the Grok night either way.`;
   check("after a call: ask capture stays whole-call and separate", /captureIntent\(user_id, cleanTranscript, \{ scope: "whole_transcript" \}\)\s*\.then\(\(\) => surfaceNewAsksNow\(user_id\)\)/.test(co));
   check("after a call: summary, snapshot, crisis backstop and follow-up text still run", /summarizeCallForTextContext\(user_id, cleanTranscript\)\s*\.then\(\(\) => refreshPersonSnapshot\(user_id, \{ force: true \}\)\)/.test(co) && /if \(soundsLikeCrisis\(theirLines\)\)/.test(co) && /await scheduleFollowUpText\(user_id, cleanTranscript\);/.test(co));
   check("the old separate calls stay one switch away", /process\.env\.CALL_LEARNING === "off"/.test(co));
-  check("a call opens with the shared picture (inbound and outbound registration)", (src("routes/co.ts").match(/buildCallContextSummary\(userId\)\.catch\(\(\) => ""\)/g) ?? []).length >= 2 && /context_summary: o\.contextSummary/.test(src("services/elevenLabsCalls.ts")));
+  check("a call opens with the shared picture (inbound and outbound registration)", /buildCallContextSummary\(userId\)\.catch\(\(\) => ""\)/.test(src("routes/co.ts")) && /takeCallContext\(userId, buildCallContextSummary\)/.test(src("routes/co.ts")) && /context_summary: o\.contextSummary/.test(src("services/elevenLabsCalls.ts")));
   const cc = src("services/callContext.ts");
   check("the call picture: lessons and what Co sent (with what's on file) come first", cc.indexOf("How to be with them, from times they corrected you") < cc.indexOf("What you sent them lately") && /sentDetailLines\(\{ sent \}, 7\)/.test(cc) && /assembleContext\(userId, ""\)/.test(cc));
   check("a call never waits on slow page reads", /CALL_CONTEXT_WAIT_MS = 3000/.test(cc));
@@ -189,7 +189,10 @@ user: I'm heading to the Grok night either way.`;
   check("the audit still reads a plain summary the old way", !/impressions going in/.test(callAuditPrompt("assistant: hi", "known")));
   check("the audit gets facts and impressions from the call picture", /auditCall\(user_id, cleanTranscript, knownBeforeCall\)/.test(co) && /buildCallKnowledge\(user_id\)/.test(co));
   const prompt2 = readFileSync(new URL("../../prompts/co-system-prompt.md", import.meta.url), "utf8");
-  check("the call prompt: facts vs. impressions, in spoken terms", /WHAT YOU KNOW VS\. WHAT YOU THINK/.test(prompt2) && /If a detail isn't listed, you don't have it/.test(prompt2) && /Two events only clash if you have both start times and they overlap/.test(prompt2) && !/[—–]/.test(prompt2.slice(prompt2.indexOf("WHAT YOU KNOW VS."), prompt2.indexOf("WHAT CO NEVER DOES"))));
+  // Since 2026-10-08 these are Co's shared grounding rules (services/coCore.ts), on texts and calls alike.
+  const { CO_GROUNDING } = await import("../../src/services/coCore.js");
+  const { promptForElevenLabs } = await import("../../src/services/elevenLabsCalls.js");
+  check("the call prompt: facts vs. impressions, in spoken terms", /If it isn't there, you don't have it/.test(CO_GROUNDING) && /impression, so say it like one/.test(CO_GROUNDING) && /Two events only clash if you have both start times and they overlap/.test(CO_GROUNDING) && !/[—–]/.test(CO_GROUNDING) && promptForElevenLabs(prompt2).includes(CO_GROUNDING));
 }
 
 console.log(`call rules: ${total - failed}/${total} passed`);

@@ -8,7 +8,6 @@ import {
   hitVoicemail,
   OPENING_LINE,
   OPENINGS,
-  COVERAGE_TRANSCRIPT_CHARS,
   missedKind,
   voicemailLeft,
   withTimeout,
@@ -60,9 +59,9 @@ check("the transcript reads the way Hume's did: user/assistant lines, empty turn
 check("the live history (JSON) becomes the same transcript, in its common shapes", transcriptFromHistory(JSON.stringify([{ role: "user", message: "hi" }, { role: "agent", message: "hey" }])) === "user: hi\nassistant: hey" && transcriptFromHistory(JSON.stringify({ messages: [{ role: "user", content: "yo" }] })) === "user: yo" && transcriptFromHistory("not json") === "" && transcriptFromHistory("") === "");
 check("a voicemail is told apart: the voicemail tool fired, or the call ended on it", hitVoicemail([{ role: "agent", message: null, tool_calls: [{ tool_name: "voicemail_detection" }] }]) && hitVoicemail([], "voicemail detected") && !hitVoicemail(turns, "end_call tool was called"));
 
-check("the agent's copy of the prompt says end_call, not hang_up, and knows it already said hello", promptForElevenLabs("call the hang_up tool; hang_up only after").startsWith("call the end_call tool; end_call only after") && /opening line has already been said[^.]*\. Don't greet them again or repeat it\./.test(promptForElevenLabs("x")));
+check("the agent's copy of the prompt says end_call, not hang_up, and knows it already said hello", promptForElevenLabs("call the hang_up tool; hang_up only after").includes("call the end_call tool; end_call only after") && /opening line has already been said[^.]*\. Don't greet them again or repeat it\./.test(promptForElevenLabs("x")));
 const prompt = readFileSync(new URL("../../prompts/co-system-prompt.md", import.meta.url), "utf8");
-check("the real prompt has no hang_up left in the agent's copy, and keeps its variables", !/\bhang_up\b/.test(promptForElevenLabs(prompt)) && /\{\{first_name\}\}/.test(prompt) && /\{\{context_summary\}\}/.test(prompt));
+check("the real prompt has no hang_up left in the agent's copy, and keeps its variables", !/\bhang_up\b/.test(promptForElevenLabs(prompt)) && /\{\{first_name\}\}/.test(prompt) && /\{\{context_summary\}\}/.test(promptForElevenLabs(prompt)));
 
 const cfg: any = buildAgentConfig({ name: "Co (test)", prompt: "P {{first_name}}", voiceId: "voice-1", apiUrl: "https://test.copatible.com" });
 const cc = cfg.conversation_config;
@@ -71,8 +70,7 @@ check("phone audio is mu-law 8kHz both ways (register-call needs it)", cc.asr.us
 check("Royce's picks: Eleven v4 Turbo voice, Haiku 4.5 live (2026-10-06: voice is a speed game), eager turn-taking", cc.tts.model_id === "eleven_v4_turbo" && cc.agent.prompt.llm === "claude-haiku-4-5" && cc.turn.turn_eagerness === "eager" && AGENT_DEFAULTS.ttsModel === "eleven_v4_turbo");
 check("overrides from the env reach the config", (buildAgentConfig({ name: "x", prompt: "p", voiceId: "v", apiUrl: "https://a.b", llm: "claude-sonnet-5", ttsModel: "eleven_flash_v2_5", turnEagerness: "normal" }) as any).conversation_config.agent.prompt.llm === "claude-sonnet-5");
 const tools = (cc.agent.prompt.tools as any[]).filter((t) => t.type === "webhook");
-check("Co's one call tool (the coverage check; finds are prefetched into the prompt) is a webhook to our routes", tools.map((t) => t.name).join() === "assess_conversation_coverage" && tools.every((t) => t.type === "webhook" && t.api_schema.url === `https://test.copatible.com/co/el/tool/${t.name}`));
-check("every tool call carries the member's id, its token, and the live conversation and duration", tools.every((t) => t.api_schema.request_body_schema.properties.user_id.dynamic_variable === "user_id" && t.api_schema.request_body_schema.properties.call_token.dynamic_variable === "call_token" && t.api_schema.request_body_schema.properties.conversation_history.dynamic_variable === "system__conversation_history" && t.api_schema.request_body_schema.properties.call_duration_secs.dynamic_variable === "system__call_duration_secs"));
+check("no webhook tools on the agent: the coverage check went with the interview script (2026-10-08); Co's own tools reach a call through the LLM endpoint", tools.length === 0 && !JSON.stringify(cfg).includes("assess_conversation_coverage"));
 const sys = (cc.agent.prompt.tools as any[]).filter((t) => t.type === "system");
 const sysTools = sys;
 check("end_call and voicemail detection ride in the tools list as system tools (built_in_tools stored nothing); the voicemail line names them", sys.map((t) => t.params.system_tool_type).join() === "end_call,voicemail_detection" && sys.every((t) => t.description) && sys[1].params.voicemail_message.includes("{{first_name}}") && !("built_in_tools" in cc.agent.prompt));
@@ -135,9 +133,8 @@ check("a misfired voicemail goes through as a conversation, logged; inbound stat
   check("1 the post-call route uses it, and never the member's latest call_sid", /handleMissedVoiceCall\(u\[0\], callSid, kind, conversationId\)/.test(coSrc) && /vars\.system__call_sid \?\? `el:\$\{conversationId\}`/.test(coSrc) && !/u\[0\]\?\.call_sid/.test(coSrc) && /direction: o\.direction,/.test(readFileSync(new URL("../../src/services/elevenLabsCalls.ts", import.meta.url), "utf8")));
   // 2. Failed registration frees the call.
   check("2 a call that can't register resets its live status (both paths, scoped to the call's sid)", (coSrc.match(/await releaseFailedCall\(userId,/g) ?? []).length === 2 && /call_status = 'failed'[^`]*call_sid = \$2/.test(coSrc));
-  // 3. Coverage tool is light and its request fits.
-  const tl = (cfg as any).conversation_config.agent.prompt.tools.find((t: any) => t.name === "assess_conversation_coverage");
-  check("3 the coverage tool is given the call's summary instead of rebuilding it, and reads only the newest part of a long call", tl.api_schema.request_body_schema.properties.context_summary.dynamic_variable === "context_summary" && /typeof b\.context_summary === "string" \? b\.context_summary : await buildCallContextSummary/.test(coSrc) && /\.slice\(-COVERAGE_TRANSCRIPT_CHARS\)/.test(coSrc) && COVERAGE_TRANSCRIPT_CHARS === 24_000);
+  // 3. The coverage route is gone too; the tool route's body limit stays.
+  check("3 the coverage branch is gone from the tool route", !/assess_conversation_coverage|COVERAGE_TRANSCRIPT_CHARS|assessConversationCoverage/.test(coSrc));
   check("3 the tools' requests may be 2mb (the default 100kb would reject a long call before the route), set before the global parser in both servers", ["../../src/server.ts", "../../../co-test/src/server.ts"].every((p) => { const t = readFileSync(new URL(p, import.meta.url), "utf8"); const i = t.indexOf('app.use("/co/el/tool", express.json({ limit: "2mb" }))'); return i > 0 && i < t.search(/app\.use\(express\.json\(/); }));
   // 4. The opener can't hold up the answer.
   const slow = await withTimeout(new Promise<string>((r) => setTimeout(() => r("late"), 300)), 20, "fallback");

@@ -24,6 +24,7 @@ import { notToTeammate, withoutTeammateLines } from "./teamLines.js";
 import { recordSentItems } from "./coFacts.js";
 import { numbersBacked, OFFERS_WHAT_CO_CANT, placesBacked, taskWebSearch, verifiedFactLines, type TaskWebResult, type VerifiedResult } from "./taskWeb.js";
 import { assembleMessages, captionOk, draftTaskMessages, orderByTier, type SendItem } from "./taskMessages.js";
+import { promiseKeptBy, sendsSince, type Sent } from "./followThrough.js";
 
 export const TASK_MODEL = MODELS.sonnet;
 
@@ -46,7 +47,23 @@ export type TaskTurnDeps = {
   web: (what: string) => Promise<TaskWebResult>;
   readPage: (url: string) => Promise<{ ok: boolean; facts: string[]; text: string }>;
   now: () => Date;
+  // What Co sent them since a time (texts, links, documents): a promise closes as done only on a matching send after it.
+  sentSince?: (since: Date) => Promise<Sent[]>;
 };
+
+// A promise is kept only by something sent AFTER it was made (2026-10-08: task 111 closed itself as done on a document sent the
+// day before, on a different focus, and nothing went out after the call). Texts sent in this wake-up count; earlier sends never do.
+export async function promiseCloseCheck(task: Pick<CoTask, "goal" | "theirWords" | "createdAt" | "source">, sentThisTurn: string[], deps: Pick<TaskTurnDeps, "sentSince" | "now">): Promise<{ ok: boolean; why: string }> {
+  if (task.source !== "promise") return { ok: true, why: "not a promise" };
+  const at = new Date(task.createdAt);
+  // A few days back too, so the refusal can say plainly that an earlier send doesn't count.
+  const sends: Sent[] = [
+    ...((await deps.sentSince?.(new Date(at.getTime() - 3 * 24 * 3_600_000)).catch(() => [] as Sent[])) ?? []),
+    ...sentThisTurn.map((t) => ({ at: deps.now(), text: t, kind: (/^\s*https?:\/\/\S+\s*$/.test(t) ? "link" : "text") as Sent["kind"], forThis: true })),
+  ];
+  const v = promiseKeptBy({ goal: task.goal, theirWords: task.theirWords, at }, sends);
+  return { ok: v.kept, why: v.why };
+}
 
 export function taskTurnPrompt(o: { task: CoTask; firstName: string; now: string; zone: string | null; recent: string; final?: boolean; person?: string }): string {
   const t = o.task;
@@ -56,7 +73,7 @@ export function taskTurnPrompt(o: { task: CoTask; firstName: string; now: string
     : "";
   return `${CO_VOICE}
 
-${t.source === "promise" ? `Right now you're following through on something you told ${o.firstName} you would do. Nobody is waiting on this message; do what you said, then decide what's next. Only text them if you have something real to tell them; if there isn't, say nothing and look again later, or close it.\n\nWhat you promised: "${t.goal}"\nWhat they had said when you promised: "${t.theirWords}"` : `Right now you're working in the background on something ${o.firstName} asked you to do. Nobody is waiting on this message; you're doing the work, then deciding what's next.\n\nTheir goal: "${t.goal}"\nTheir own words when they asked: "${t.theirWords}"`}
+${t.source === "promise" ? `Right now you're following through on something you told ${o.firstName} you would do. They're expecting it: do what you said and send it when it's done. If it isn't done yet, keep working and say nothing: no progress reports, no "no details yet", no "a few leads". Text before it's done only when you need something from them (ask for exactly that), or when it truly can't be done (say plainly what you couldn't find and what you'd do instead). Never hold their own thing back because you judge it not good enough yet.\n\nWhat you promised: "${t.goal}"\nWhat they had said when you promised: "${t.theirWords}"` : `Right now you're working in the background on something ${o.firstName} asked you to do. Nobody is waiting on this message; you're doing the work, then deciding what's next.\n\nTheir goal: "${t.goal}"\nTheir own words when they asked: "${t.theirWords}"`}
 Steps: ${t.steps.length ? t.steps.map((s) => `${s.done ? "[done]" : "[ ]"} ${s.text}`).join("; ") : "(none written)"}
 What you planned to do now: ${t.planNext ?? "(nothing written)"}${deadlineLine}${finalLine}
 Your notes so far (oldest first):
@@ -248,6 +265,15 @@ export async function runTaskTurnWith(task: CoTask, deps: TaskTurnDeps): Promise
       description: "Write down what you learned or did, in one or two plain sentences. When you finished a step, set stepDone to that step's exact text.",
       inputSchema: z.object({ text: z.string(), stepDone: z.string().optional() }),
       execute: async ({ text, stepDone }) => {
+        // The send step of a promise is done only when the send really happened after it (same check as closing it).
+        if (stepDone && task.source === "promise" && /^\s*send\b/i.test(stepDone)) {
+          const kept = await promiseCloseCheck(task, texts, deps);
+          if (!kept.ok) {
+            await deps.note(text, null);
+            did.push(`note: ${text.slice(0, 120)} [step not marked: nothing sent after the promise]`);
+            return { ok: true, stepNotMarked: kept.why };
+          }
+        }
         await deps.note(text, stepDone ?? null);
         did.push(`note: ${text.slice(0, 120)}${stepDone ? ` [done: ${stepDone.slice(0, 60)}]` : ""}`);
         return { ok: true };
@@ -272,6 +298,13 @@ export async function runTaskTurnWith(task: CoTask, deps: TaskTurnDeps): Promise
       description: "Close the task: done, or they no longer need it.",
       inputSchema: z.object({ outcome: z.string(), status: z.enum(["done", "dropped"]) }),
       execute: async ({ outcome, status }) => {
+        if (status === "done") {
+          const kept = await promiseCloseCheck(task, texts, deps);
+          if (!kept.ok) {
+            did.push(`finish refused: ${kept.why.slice(0, 100)}`);
+            return { ok: false, error: `Not closed: ${kept.why}. Do what you said now and send it, or tellThem plainly where it stands, then scheduleNext. Close it as dropped only if they no longer want it.` };
+          }
+        }
         await deps.close(status, outcome);
         decided = "finished";
         did.push(`finished (${status}): ${outcome.slice(0, 100)}`);
@@ -360,6 +393,7 @@ export async function runTaskTurn(task: CoTask): Promise<{ action: string }> {
       return { ok: r.status === "ok", facts: describeRead(url, r).facts, text: ex ?? "" };
     },
     now: () => new Date(),
+    sentSince: (since) => sendsSince(userId, since),
   };
   const r = await runTaskTurnWith(task, deps);
   await recordDecision({ layer: 7, decision: "task.wake", userId, outcome: "act", action: r.action, proposal: { taskId: task.id, did: r.did, final: r.final, deadline: task.deadline } }).catch(() => {});

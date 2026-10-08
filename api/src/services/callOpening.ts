@@ -24,6 +24,7 @@ import { recordDecision } from "../harness/core.js";
 import { MODELS } from "../models.js";
 import { stockLine } from "../harness/stockLines.js";
 import { cuesIn } from "./voiceCues.js";
+import { narratesInternalState } from "./speakable.js";
 
 export const OPENING_WRITER = {
   minContext: 300,
@@ -38,13 +39,25 @@ export const OPENING_WRITER = {
   ttlMs: 5 * 60 * 1000,
 };
 
+// What the opening is written from, and checked against: the call's context
+// without its older threads (questions, never a pickup) and without the old side
+// of a settled correction (2026-10-08 call review: two calls in a row opened on a
+// goal they had corrected, "first paying customer").
+export function openingContext(summary: string): string {
+  return summary
+    .split("\n\n")
+    .filter((section) => !/^Older threads, not current/.test(section))
+    .map((section) => (/^Settled \(/.test(section) ? section.replace(/ \(not "[^"]*"\)/g, "").replace(/: not "[^"]*" \(they said that's wrong\)/g, ": (an old item they said was wrong)") : section))
+    .join("\n\n");
+}
+
 export function openingPrompt(o: { firstName: string; direction: "inbound" | "outbound"; summary: string }): string {
   return `You're writing the first thing Co says when a phone call connects. Co is a calm, warm companion who already knows ${o.firstName || "this person"} and has talked with them before. ${o.direction === "outbound" ? `Co is calling them, so Co says who it is ("it's Co").` : "They called Co."}
 
 What Co knows about them (this is all you may use):
 ${o.summary.slice(0, OPENING_WRITER.maxContext)}
 
-Write ONE spoken line, two short sentences at most and under 28 words: greet ${o.firstName || "them"} by name, then pick up from ONE specific, real thing in what Co knows (something they were last working on, deciding or waiting on), as a light question or as "last we talked ...". Pick the thing most alive for them right now, not the first thing listed.
+Write ONE spoken line, two short sentences at most and under 28 words: greet ${o.firstName || "them"} by name, then pick up from ONE specific, real thing in what Co knows, as a light question or as "last we talked ...". Pick up from the most recent real thread: what's under "Where things stand now" and the newest of "Your last calls" come first, especially something Co owes them or is working on for them. Never pick up something they've already told Co is off, changed or done, and never repeat back news from the last call as if it were new. Never say Co did, drafted, sent or found something unless what Co knows says it was done: something Co still owes them is still owed.
 
 Rules:
 - Only use facts that are in what Co knows. No times, places, names or numbers that aren't there.
@@ -61,6 +74,7 @@ Reply with only the line.`;
 const SENSITIVE = /\b(?:biops\w*|diagnos\w*|cancer|surgery|hospital\w*|chemo\w*|therap\w*|pregnan\w*|miscarr\w*|passed away|funeral|grie\w+|died|death|divorc\w*|breakup|break-up|lawsuit|lawyer|attorney|bankrupt\w*|debt|eviction|rehab|diagnosed|medical|illness)\b/i;
 const FEELING_WORD = /\b(?:stress(?:ed)?|overwhelm\w*|anxi\w*|worr(?:y|ied|ies)|nervous|sad|upset|frustrat\w*|exhaust\w*|burn(?:ed|t)? out|lonely|depress\w*|scared|afraid|angry|annoyed|discourag\w*|feeling|feel)\b/i;
 const RELATIVE_TIME = /\b(?:today|tonight|tomorrow|yesterday|this (?:week|weekend|morning|afternoon|evening)|next (?:week|weekend|month)|monday|tuesday|wednesday|thursday|friday|saturday|sunday)\b/i;
+const CO_DID = /\bI(?:'ve| have)?\s+(?:just\s+|already\s+)?(drafted|sent|finished|wrote|put together|pulled together|made|built|found|booked|set up|lined up)\b/i;
 const STOP_CAPS = new Set(["i", "i'm", "i've", "i'd", "i'll", "co"]);
 // Words that start a sentence and are capitalised only for that.
 const GREETING_CAPS = new Set(["hey", "hi", "hello", "last", "it's", "so", "any", "how", "did", "is", "was", "are", "were", "what", "where", "when", "which", "who", "has", "have", "had", "do", "does", "still", "been", "and", "but", "or", "i'm", "i've", "i'd", "i'll", "i", "co", "you", "your", "you're", "you've", "that", "the", "a", "an", "we", "we've", "let's", "good", "welcome", "back", "thanks", "thank", "quick", "one", "two", "since"]);
@@ -83,6 +97,12 @@ export function openingProblems(raw: string, summary: string, firstName: string)
   if (RELATIVE_TIME.test(line) && !RELATIVE_TIME.test(summary)) return "a relative time not in what Co knows";
   if (/\bintro(?:duc\w*)?\b|\bsaid yes\b|\bwants? to meet\b/i.test(line)) return "speaks for another member";
   if (/\bhow are you\b|good to hear your voice|i remember|thinking about you/i.test(line) || stockLine(line)) return "a stock line";
+  // Never narrates Co's own state ("I still haven't found anything solid yet", "working on it"): the same rule as every text (speakable.ts).
+  if (narratesInternalState(line) || /\b(?:haven't|have not|still haven't) (?:found|got|gotten|finished|had a chance)\b/i.test(line)) return "narrates Co's own state";
+  // Co's own finished work only when the record says it (2026-10-08: "I drafted the planning doc" for a plan
+  // the after-call check had found nothing good enough to send for).
+  const did = line.match(CO_DID);
+  if (did && !new RegExp(`\\b${did[1].toLowerCase().replace(/\s+/g, "\\s+")}\\b`).test(summary.toLowerCase())) return `claims Co ${did[1].toLowerCase()} something the record doesn't show`;
   // Every name, place and number in it has to be in what it was written from.
   const hay = summary.toLowerCase().replace(/’/g, "'");
   for (const sentence of line.split(/(?<=[.!?])\s+/)) {
@@ -108,6 +128,8 @@ export function openingVerdict(raw: string, summary: string, firstName: string):
 
 export async function writeOpening(o: { firstName: string; direction: "inbound" | "outbound"; summary: string; timeoutMs?: number }): Promise<{ line: string | null; why?: string }> {
   if (o.summary.trim().length < OPENING_WRITER.minContext) return { line: null, why: "no context yet (a first call)" };
+  // Written from, and checked against, the same trimmed context.
+  const summary = openingContext(o.summary);
   try {
     const { text } = await generateText({
       model: anthropic(o.direction === "outbound" ? OPENING_WRITER.outboundModel : OPENING_WRITER.inboundModel),
@@ -117,9 +139,9 @@ export async function writeOpening(o: { firstName: string; direction: "inbound" 
       ...(o.direction === "outbound" ? { providerOptions: { anthropic: { effort: "low" as const } } } : {}),
       abortSignal: AbortSignal.timeout(o.timeoutMs ?? 20_000),
       experimental_telemetry: { isEnabled: true, functionId: "call.writeOpening" },
-      prompt: openingPrompt(o),
+      prompt: openingPrompt({ ...o, summary }),
     });
-    const v = openingVerdict(text, o.summary, o.firstName);
+    const v = openingVerdict(text, summary, o.firstName);
     return v.ok ? { line: v.line } : { line: null, why: v.why };
   } catch (err: any) {
     return { line: null, why: `write failed: ${String(err?.message ?? err).slice(0, 120)}` };

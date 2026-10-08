@@ -3,12 +3,14 @@
 // 30-word sentence has nowhere to breathe. So the call brain's text goes through here on its way to the voice, in code:
 //   - an unspaced or spaced dash becomes a full stop and a capital ("That's smart—keeping it warm" -> "That's smart. Keeping it warm.")
 //   - a semicolon, a parenthesis, a line break becomes a plain stop
-//   - a sentence past 15 words closes at the nearest comma or conjunction (a comma break drops the "and" after it)
+//   - a sentence past 24 words closes where two whole clauses join (", and" / ", but"), else at a real mid-sentence comma; never after
+//     a short lead-in ("From where I sit,"), never after a "when ..." clause, never inside "you and Jacqueline" (2026-10-08: the 15-word
+//     cut made "From where I sit. The most useful role..." and "When we hang up. I'll set up...", a dropped, finished tone mid-thought)
 //   - a reply past the word cap is truncated at a sentence boundary, keeping its closing question
 // It works on a stream: text goes in as it arrives, and each COMPLETE sentence comes out the moment it is complete, so the first
 // sentence reaches the voice at the model's own speed and the voice never gets half a sentence. Pure; no I/O.
 
-export const MAX_SENTENCE_WORDS = 15;
+export const MAX_SENTENCE_WORDS = 24;
 export const MAX_REPLY_WORDS = 90;
 // A question that closes a reply is kept past the cap, if it is short enough not to be the reply running on.
 const CLOSING_QUESTION_EXTRA_WORDS = 25;
@@ -59,7 +61,9 @@ function opensSubordinate(left: string[]): boolean {
   return lead(seg[0]) || (["so", "and", "but", "then"].includes(seg[0]) && lead(seg[1]));
 }
 const DANGLING = new Set(["a", "an", "the", "to", "of", "in", "on", "at", "for", "with", "that", "which", "who", "based", "such", "like", "about", "how", "and", "or", "but", "so", "is", "are", "was", "were", "be", "it's", "that's"]);
-const SLACK_WORDS = 3;
+const SLACK_WORDS = 6;
+// A comma this close to the start ends a lead-in ("From where I sit,", "In a room,"): breaking there leaves a fragment.
+const MIN_LEAD_WORDS = 6;
 function chooseBreak(ws: string[], max: number): Break | null {
   let comma: Break | null = null;
   let conj: Break | null = null;
@@ -68,10 +72,12 @@ function chooseBreak(ws: string[], max: number): Break | null {
     const left = countWords(ws.slice(0, k));
     if (left > max) break;
     if (left < 3 || countWords(ws.slice(k)) < 3) continue;
-    if (/,$/.test(ws[k - 1])) { if (opensSubordinate(ws.slice(0, k))) weak = { k, kind: "comma" }; else comma = { k, kind: "comma" }; }
-    else if (CONJ.has(bare(ws[k]))) conj = { k, kind: "conj" };
+    // ", and" / ", but": two whole clauses, the cleanest place to breathe. A bare "and" (no comma) is often inside a phrase
+    // ("you and Jacqueline"), so it is never a break on its own.
+    if (/,$/.test(ws[k - 1]) && CONJ.has(bare(ws[k])) && !opensSubordinate(ws.slice(0, k))) conj = { k, kind: "conj" };
+    else if (/,$/.test(ws[k - 1])) { if (opensSubordinate(ws.slice(0, k)) || left < MIN_LEAD_WORDS) weak = { k, kind: "comma" }; else comma = { k, kind: "comma" }; }
   }
-  const natural = comma ?? conj;
+  const natural = conj ?? comma;
   if (natural) return natural;
   if (countWords(ws) <= max + SLACK_WORDS) return null;
   if (weak) return weak;
@@ -237,4 +243,44 @@ export function speechStats(text: string): { words: number; dashes: number; semi
     over: sentences.filter((n) => n > MAX_SENTENCE_WORDS).length,
     avg: sentences.length ? words / sentences.length : 0,
   };
+}
+
+// ---------- one voice standard for calls and texts: Co never narrates its own state (Royce, 2026-10-08)
+// After a call Co texted "On it. Starting the post-event branding plan ... and I'll text you what I put together once it's worth
+// sending." That is task-tracker language in a companion's mouth: it reports Co's internal state ("starting", "working on") and
+// holds the member's own thing behind Co's judgment ("once it's worth sending"). What Co says has a shape instead: what it
+// understood, what they get, and when ("Got it, I'll put together the plan for keeping Co visible after the launch and text you
+// the draft tonight."). Co sends when it is done, or says plainly what is still missing.
+// Pure. The same rule reads Co's spoken lines (the after-call audit, routes/co.ts) and every text Co drafts (harness/proactive.ts
+// checkDraft), so calls and texts are held to one standard. A question to them ("Working on anything fun?") is not narration.
+export const NARRATION_RULES: { pattern: RegExp; why: string }[] = [
+  // A sentence that opens on Co's own activity: "Starting the plan", "Working on it now", "Digging into it".
+  { pattern: /^(?:(?:ok(?:ay)?|got it|on it|sure|great|perfect|alright)[,.!]?\s+)?(?:now\s+|already\s+|still\s+)?(?:starting|started|working on|beginning|kicking off|getting started on|digging into|looking into|in the middle of)\b/i, why: "opens on Co's own activity (task-tracker language)" },
+  // First person, in progress: "I'm starting", "I've started on it", "I'm still working on the draft", "I started the plan".
+  { pattern: /\b(?:i'?m|i am|i'?ve|i have|i)\s+(?:now\s+|just\s+|still\s+|already\s+|officially\s+)?(?:started|starting|begun|beginning|working on|kicking off|kicked off|getting started|in the middle of)\b/i, why: "narrates what Co is doing instead of what they get" },
+  // Their own thing held behind Co's judgment: "once it's worth sending", "once it's in good shape", "nothing worth sending yet".
+  { pattern: /\bonce (?:it'?s|it is|they'?re|they are|there'?s|i have|i'?ve got)\s+(?:\w+\s+){0,2}?(?:worth|good enough|ready to send|in good shape|solid)\b/i, why: "holds their own thing behind Co's judgment" },
+  { pattern: /\b(?:worth (?:sending|sharing|passing along|texting)|good enough to (?:send|share))\b/i, why: "judges whether their own thing is worth sending" },
+  // A status report on not having it yet (2026-10-08 live: "No confirmed details yet... Have a few leads, just nothing solid enough to
+  // send you. I'll have it soon."): say what's missing or say nothing until it's done.
+  { pattern: /\b(?:solid|good|strong|ready|concrete|firm|real) enough to (?:send|share|pass along|text)\b/i, why: "judges whether their own thing is ready to send" },
+  { pattern: /^(?:so far,?\s+)?no (?:confirmed|solid|concrete|firm|real|good) (?:details|options|picks|results|leads|answers|news)?\s*(?:yet|so far)\b/i, why: "reports not having it yet" },
+  { pattern: /\b(?:have|got|found) a (?:few|couple of|couple) (?:leads|options in the works)\b|\bi'?ll have (?:it|them|something|more) (?:soon|shortly|in a bit)\b|\bstill (?:looking|searching|checking|digging)\b/i, why: "a progress report instead of the thing" },
+  // Tracker words.
+  { pattern: /\b(?:status update|in progress|on my (?:list|queue)|in my queue|queued (?:it|up)|my task list)\b/i, why: "task-tracker words" },
+];
+
+// Pure: why a line narrates Co's internal state, or null when it doesn't. Checked per sentence; questions pass.
+export function narratesInternalState(text: string): string | null {
+  const sentences = text
+    .replace(/\[[a-z][a-z ]*\]\s*/gi, "")
+    .replace(/[’‘]/g, "'")
+    .split(/(?<=[.!?])\s+|\n+/)
+    .map((s) => s.trim())
+    .filter(Boolean);
+  for (const s of sentences) {
+    if (/\?\s*["')\]]*$/.test(s)) continue;
+    for (const r of NARRATION_RULES) if (r.pattern.test(s)) return `${r.why}: "${s.slice(0, 80)}"`;
+  }
+  return null;
 }

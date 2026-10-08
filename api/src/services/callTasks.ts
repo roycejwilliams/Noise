@@ -14,7 +14,8 @@ import pool from "../db/db.js";
 import { MODELS } from "../models.js";
 import { parseModelJson } from "./modelJson.js";
 import { callKey } from "./callKey.js";
-import { startTask, wordsAreTheirs } from "./coTasks.js";
+import { noteOnTask, openTasks, startTask, wordsAreTheirs } from "./coTasks.js";
+import { sameCallCommitment } from "./followThrough.js";
 import { theirLinesOnly } from "../harness/proactiveSpecifics.js";
 
 export const MAX_TASKS_PER_CALL = 2;
@@ -51,7 +52,17 @@ export type CallTaskDeps = {
   start: typeof startTask;
   alreadyDone: (userId: string, key: string) => Promise<boolean>;
   record: (userId: string, key: string, content: string) => Promise<void>;
+  // Open tasks from this call already (a promise Co made live opens one the moment it's said), and a note on one.
+  existing?: (userId: string) => Promise<{ id: number; goal: string; theirWords: string }[]>;
+  note?: (userId: string, taskId: number, text: string) => Promise<unknown>;
 };
+
+// Tasks opened in the last few hours that are still open: a call's live promises, and anything else from this call.
+export const CALL_WINDOW_HOURS = 3;
+async function recentOpen(userId: string): Promise<{ id: number; goal: string; theirWords: string }[]> {
+  const since = Date.now() - CALL_WINDOW_HOURS * 3_600_000;
+  return (await openTasks(userId)).filter((t) => new Date(t.createdAt).getTime() > since);
+}
 
 async function readWanted(prompt: string): Promise<Wanted[]> {
   const { text } = await generateText({ model: anthropic(MODELS.sonnet), providerOptions: { anthropic: { effort: "low" } }, experimental_telemetry: { isEnabled: true, functionId: "call.tasks.read", recordInputs: false, recordOutputs: false }, prompt });
@@ -63,6 +74,8 @@ const realDeps: CallTaskDeps = {
   start: startTask,
   alreadyDone: async (userId, key) => (await pool.query(`SELECT 1 FROM call_promise_results WHERE user_id = $1 AND call_key = $2 AND content LIKE 'Started working on%' LIMIT 1`, [userId, key])).rows.length > 0,
   record: async (userId, key, content) => { await pool.query(`INSERT INTO call_promise_results (user_id, call_key, content) VALUES ($1, $2, $3) ON CONFLICT DO NOTHING`, [userId, key, content]); },
+  existing: recentOpen,
+  note: noteOnTask,
 };
 
 // Returns the goals it started. Never throws: a call's post-processing must not fail on this.
@@ -74,7 +87,16 @@ export async function tasksFromCall(userId: string, transcript: string, deps: Ca
     if (await deps.alreadyDone(userId, key)) return [];
     const asks = verifiedAsks(await deps.read(callTasksPrompt(theirs)), theirs);
     const started: string[] = [];
+    const open = deps.existing ? await deps.existing(userId).catch(() => []) : [];
     for (const a of asks) {
+      // The same commitment as a task already open from this call (Co promised it live, in answer to these words): that task
+      // carries it, with their ask written on it, instead of a second task for the same thing (2026-10-08: tasks 111 and 114).
+      const same = open.find((t) => sameCallCommitment({ goal: a.goal, theirWords: a.quote }, t));
+      if (same) {
+        await deps.note?.(userId, same.id, `They asked for this on the call: "${a.goal}" (their words: "${a.quote.slice(0, 160)}"). This task carries it.`)?.catch(() => null);
+        started.push(a.goal);
+        continue;
+      }
       const s = await deps.start({
         userId,
         goal: a.goal,

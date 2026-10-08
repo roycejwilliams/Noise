@@ -3,9 +3,11 @@ import { readFileSync } from "fs";
 import { resolve } from "path";
 import { buildAgentConfig } from "../services/elevenLabsCalls.js";
 
-// Creates or updates Co's ElevenLabs call agent from api/prompts/co-system-prompt.md
-// (the prompt file stays the source of truth: never edit the prompt in
-// ElevenLabs' dashboard).
+// Creates or updates Co's ElevenLabs call agent. Its prompt is Co's shared core
+// (services/coCore.ts, the same block texts use) plus the call's voice layer,
+// api/prompts/co-system-prompt.md, put together by promptForElevenLabs (the code
+// and that file stay the source of truth: never edit the prompt in ElevenLabs'
+// dashboard).
 //
 //   npx tsx src/scripts/pushElevenLabsAgent.ts --dry-run   print the config, send nothing
 //   npx tsx src/scripts/pushElevenLabsAgent.ts             create (no ELEVENLABS_AGENT_ID) or update it
@@ -57,7 +59,7 @@ async function main() {
   });
   if (dryRun) {
     const shown = JSON.parse(JSON.stringify(config));
-    shown.conversation_config.agent.prompt.prompt = `(${prompt.length} chars from prompts/co-system-prompt.md)`;
+    shown.conversation_config.agent.prompt.prompt = `(${String(shown.conversation_config.agent.prompt.prompt).length} chars: Co's core plus the ${prompt.length}-char voice layer in prompts/co-system-prompt.md)`;
     console.log(JSON.stringify(shown, null, 2));
     return;
   }

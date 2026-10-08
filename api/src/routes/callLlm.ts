@@ -8,6 +8,37 @@ import { recordDecision } from "../harness/core.js";
 import { verifyCallToken } from "../services/elevenLabsCalls.js";
 import { anthropicStream, runCallLlm, type OaiChunk, type OaiRequest, type ProxyDeps } from "../services/callLlmProxy.js";
 import { commitmentProblem, trackCallCommitment } from "../services/callCommitments.js";
+import type { CallToolset, MemberOnCall } from "../services/callTools.js";
+
+const textOfMsg = (m: OaiRequest["messages"][number] | undefined): string =>
+  typeof m?.content === "string" ? m.content : Array.isArray(m?.content) ? m!.content.map((p: any) => p?.text ?? "").join("") : "";
+
+// Pure: what the member said this turn (their lines since Co last spoke), everything they said on the call, and Co's last line.
+export function callWordsOf(b: OaiRequest): { turnWords: string; callWords: string; lastCoLine: string | null } {
+  const msgs = b.messages.filter((m) => m.role === "user" || (m.role === "assistant" && textOfMsg(m).trim()));
+  let i = msgs.length;
+  while (i > 0 && msgs[i - 1].role === "user") i--;
+  const lastCo = i > 0 ? textOfMsg(msgs[i - 1]).trim() : "";
+  return {
+    turnWords: msgs.slice(i).map(textOfMsg).join(" ").trim(),
+    callWords: msgs.filter((m) => m.role === "user").map(textOfMsg).join("\n"),
+    lastCoLine: lastCo || null,
+  };
+}
+
+// The member's details the call tools need, read once per call and again after a tool changes them (services/callTools.ts).
+const memberCache = new Map<string, { at: number; m: Promise<MemberOnCall> }>();
+const MEMBER_CACHE_MS = 60_000;
+function memberOnCall(key: string, userId: string, fresh = false): Promise<MemberOnCall> {
+  const now = Date.now();
+  for (const [k, v] of memberCache) if (now - v.at > MEMBER_CACHE_MS) memberCache.delete(k);
+  const hit = memberCache.get(key);
+  if (hit && !fresh) return hit.m;
+  const m = import("../services/callTools.js").then((t) => t.loadMemberOnCall(userId));
+  memberCache.set(key, { at: now, m });
+  m.catch(() => memberCache.delete(key));
+  return m;
+}
 
 export const proxyAuthorized = (header: string | undefined, secret = process.env.CALL_LLM_PROXY_SECRET): boolean => {
   if (!secret || !header) return false;
@@ -32,6 +63,21 @@ export function createCallLlmRouter(upstream: ProxyDeps["stream"] = anthropicStr
     const userId = verifyCallToken(String(extra.user_id ?? ""), extra.call_token) ? String(extra.user_id) : null;
     const theirLine = lastUserLine(body);
     const t0 = Date.now();
+    // Co's own tools on the call (services/callTools.ts), for the verified member only. CALL_TOOLS=off is the kill switch.
+    const callKey = `${userId}:${String(extra.call_token ?? "")}`;
+    let tools: CallToolset | null = null;
+    if (userId && process.env.CALL_TOOLS !== "off") {
+      try {
+        const T = await import("../services/callTools.js");
+        const member = await memberOnCall(callKey, userId);
+        tools = T.buildCallTools({ userId, callKey, member, ...callWordsOf(body) });
+      } catch (err: any) {
+        console.error("co/el/llm: call tools unavailable this turn:", err?.message ?? err);
+      }
+    }
+    let toolRuns = 0, toolOk = 0;
+    // A spoken commitment opens a promise task when the turn ends, and only when no tool acted this turn (the deed is on record).
+    const commitments: string[] = [];
     let timing: { upstreamFirstTokenMs: number; firstSentenceMs: number } | null = null;
     let spoken = 0, dropped = 0;
     const deps: ProxyDeps = {
@@ -39,8 +85,16 @@ export function createCallLlmRouter(upstream: ProxyDeps["stream"] = anthropicStr
       clean: process.env.CALL_LLM_CLEAN !== "off",
       onSpoken: (s) => {
         spoken++;
-        // A spoken "I'll text you the links" opens a task the moment it is said.
-        if (userId && commitmentProblem(s) === null) trackCallCommitment({ userId, sentence: s, theirLine }).catch(() => {});
+        // A spoken "I'll text you the links" opens a task when the turn ends (below), unless a tool already did the thing.
+        if (userId && commitmentProblem(s) === null) commitments.push(s);
+      },
+      tools,
+      onTool: (t) => {
+        toolRuns++;
+        if (!t.timedOut && (t.result as any)?.ok !== false) toolOk++;
+        console.log(`co/el/llm: tool ${t.name} ${t.timedOut ? "still running at the budget" : (t.result as any)?.ok === false ? "not done" : "done"} in ${t.ms}ms`);
+        // What the tool changed (a task, a loop) is read fresh for the next turn.
+        if (userId) memberOnCall(callKey, userId, true).catch(() => {});
       },
       onDropped: (s, why) => {
         dropped++;
@@ -88,8 +142,9 @@ export function createCallLlmRouter(upstream: ProxyDeps["stream"] = anthropicStr
       res.write("data: [DONE]\n\n");
       res.end();
     } finally {
+      if (userId && !toolOk) for (const s of commitments) trackCallCommitment({ userId, sentence: s, theirLine }).catch(() => {});
       const t = timing as { upstreamFirstTokenMs: number; firstSentenceMs: number } | null;
-      console.log(`co/el/llm: ${userId ? "call" : "anon"} first_token=${t?.upstreamFirstTokenMs ?? "-"}ms first_sentence=${t?.firstSentenceMs ?? "-"}ms total=${Date.now() - t0}ms spoken=${spoken} dropped=${dropped}${process.env.CALL_LLM_CLEAN === "off" ? " (clean off)" : ""}`);
+      console.log(`co/el/llm: ${userId ? "call" : "anon"} first_token=${t?.upstreamFirstTokenMs ?? "-"}ms first_sentence=${t?.firstSentenceMs ?? "-"}ms total=${Date.now() - t0}ms spoken=${spoken} dropped=${dropped} tools=${(body.tools ?? []).map((x) => x?.function?.name).filter(Boolean).join(",") || "none"}${tools ? `+co(${tools.defs.length})` : ""} co_tool_runs=${toolRuns}${process.env.CALL_LLM_CLEAN === "off" ? " (clean off)" : ""}`);
     }
   };
   router.post("/chat/completions", handler);

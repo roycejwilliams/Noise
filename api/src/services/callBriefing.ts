@@ -18,7 +18,7 @@ Finding things:
 
 Working over days (by text):
 - When they ask for something that takes more than one reply (lining up options, a venue by Friday, sponsors, getting ready for a pitch, comparing a few choices), Co takes it on as its own task, works on it over the following days (up to 30), and texts them what it finds, at most one text per task per day. It can write an email for them to send, or a one-page plan.
-- Say yes to this on a call. Right after you hang up, Co sets up what they asked for as a task from their own words and works on it over the following days, texting what it finds. Say so: "I'll set that up when we hang up and text you what I find." Never say this is "not how I work", and never promise what it will find or when.
+- Say yes to this on a call and set it up then and there, from their own words; Co works on it over the following days and texts what it finds. Say plainly that it's set up. Never say this is "not how I work", and never promise what it will find or when.
 - After a call, Co does look into what you said you'd look into (events, communities, openings) and texts what it found, or says plainly that nothing good enough turned up.
 
 People:
@@ -33,7 +33,7 @@ Never:
 - Never ask for something you already know (their city, when they're free, what they're building, who their cofounder is, what they told you last time): say what you have and ask if it's still right ("You told me weekends, is that still true?"). Anything under "what you already know" below is known.`;
 
 export function renderFinds(f: VoiceFinds): string {
-  if (!f.available) return `Nothing to offer right now (${f.reason}). Don't offer an event; if they ask what's on, say you'll look after the call.`;
+  if (!f.available) return `Nothing to offer right now (${f.reason}). Don't offer an event; if they ask what's on, look it up now or say you don't have anything yet.`;
   const lines = f.items.map((i) => `- ${i.name}${i.starts ? ` | starts ${i.starts}` : ""}${i.details.length ? ` | ${i.details.join(" ")}` : ""}${i.link ? " | link on file (offer to text it)" : ""}`);
   return `${f.note}\nLooking for: ${f.lookingFor}\n${lines.join("\n")}`.slice(0, 2400);
 }
@@ -57,7 +57,7 @@ export async function buildCallBriefing(userId: string, now: Date = new Date()):
 // Kept for 5 minutes per member, like the context (services/elevenLabsCalls.ts): outbound builds it while it rings.
 const TTL_MS = 5 * 60 * 1000;
 const prebuilt = new Map<string, { at: number; briefing: Promise<CallBriefing> }>();
-const fallback = (now = new Date()): CallBriefing => ({ rightNow: `It is ${DateTime.fromJSDate(now).setZone("America/Los_Angeles").toFormat("cccc, LLLL d, h:mm a")} Pacific. Don't assume that is their local time.`, findsNow: "Nothing to offer right now. Don't offer an event; if they ask what's on, say you'll look after the call." });
+const fallback = (now = new Date()): CallBriefing => ({ rightNow: `It is ${DateTime.fromJSDate(now).setZone("America/Los_Angeles").toFormat("cccc, LLLL d, h:mm a")} Pacific. Don't assume that is their local time.`, findsNow: "Nothing to offer right now. Don't offer an event; if they ask what's on, look it up now or say you don't have anything yet." });
 export function prebuildCallBriefing(userId: string, now = Date.now()): void {
   prebuilt.set(userId, { at: now, briefing: buildCallBriefing(userId, new Date(now)).catch(() => fallback()) });
 }

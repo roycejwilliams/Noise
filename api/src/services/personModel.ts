@@ -11,11 +11,13 @@
 // tool actions, loop sync and updateLoop) is writing to this model.
 import pool from "../db/db.js";
 import { getPersonSnapshot, renderSnapshot } from "../harness/personSnapshot.js";
-import { listThreads, renderThreads } from "../harness/memberThreads.js";
+import { listThreads, renderThreads, type MemberThread } from "../harness/memberThreads.js";
 import { ledgerFacts } from "./coFacts.js";
 import { describeLoops, type LoopRow } from "./openLoops.js";
 
-export type PersonModelParts = { who: string; threads: string; did: string[]; loops: string | null };
+// threadList: the open threads themselves, for a reader that dates or filters
+// them (the call context, services/callContext.ts); renderPersonModel ignores it.
+export type PersonModelParts = { who: string; threads: string; did: string[]; loops: string | null; threadList?: MemberThread[] };
 
 // Pure: the parts as one block. Each section is left out when empty.
 export function renderPersonModel(p: PersonModelParts, opts: { maxDid?: number } = {}): string {
@@ -39,7 +41,7 @@ export async function personModelParts(userId: string): Promise<PersonModelParts
       .then((r) => r.rows.map((x: any) => ({ title: x.title, status: x.status, detail: x.detail, source: x.source, lastConfirmedAt: x.last_confirmed_at ? new Date(x.last_confirmed_at) : null, decayAskedAt: x.decay_asked_at ? new Date(x.decay_asked_at) : null, closedAt: null, closedReason: null, dueDate: x.due_date ? String(x.due_date instanceof Date ? x.due_date.toISOString() : x.due_date).slice(0, 10) : null }) as Pick<LoopRow, "title" | "status" | "detail" | "dueDate" | "source" | "lastConfirmedAt" | "decayAskedAt" | "closedAt" | "closedReason">))
       .catch(() => []),
   ]);
-  return { who: renderSnapshot(snap), threads: renderThreads(threads.slice(0, 6)), did: ledger.lines, loops: describeLoops(loops, { draftOnly: true }) };
+  return { who: renderSnapshot(snap), threads: renderThreads(threads.slice(0, 6)), did: ledger.lines, loops: describeLoops(loops, { draftOnly: true }), threadList: threads };
 }
 
 // Background prompts (the sweep, which writes member-facing offers, and Co's

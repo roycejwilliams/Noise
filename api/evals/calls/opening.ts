@@ -8,9 +8,9 @@ process.env.ANTHROPIC_API_KEY ||= "unused-in-tests";
 process.env.SENDBLUE_API_API_KEY ||= "unused-in-tests";
 process.env.SENDBLUE_API_API_SECRET ||= "unused-in-tests";
 const { VARIETY_GUIDE, stockLine, repeatedOpeners, stockReport, coLinesOf } = await import("../../src/harness/stockLines.js");
-const { assembleCallSummary, CALL_CONTEXT_MAX, CALL_SENT_MAX } = await import("../../src/services/callContext.js");
+const { assembleCallSummary, CALL_CONTEXT_MAX, CALL_SENT_MAX, promiseFacts, trimToLines, CONTEXT_SHARES, CONTEXT_MAX } = await import("../../src/services/callContext.js");
 const { OPENING_WRITER, openingProblems, openingPrompt, prebuildOpening, takeOpening } = await import("../../src/services/callOpening.js");
-const { guardrailsLast, AGENT_DEFAULTS, OPENING_NOTE, buildAgentConfig, prebuildCallContext, promptForElevenLabs, withoutExampleOpeners } = await import("../../src/services/elevenLabsCalls.js");
+const { AGENT_DEFAULTS, OPENING_NOTE, buildAgentConfig, prebuildCallContext, promptForElevenLabs } = await import("../../src/services/elevenLabsCalls.js");
 
 let total = 0;
 let failed = 0;
@@ -36,19 +36,22 @@ const base = [
   "How they've been feeling:\nstretched thin about the sponsor search",
   "Recent texts: " + "z".repeat(700),
 ].join("\n\n");
-const sum = assembleCallSummary({ lessons: ["keep to the cost constraint"], sentLines, threads: [{ text: "sponsors for the event" }], base });
+const sum = assembleCallSummary({ now: "- Partnering with Sequin AI on a November event: in progress", lastCalls: "- Oct 7, today: they cancelled the October date and are planning November with Sequin AI.", settled: "- goal, Oct 7: partnering with Sequin AI (not \"first paying customer\")", lessons: ["keep to the cost constraint"], sentLines, threads: [{ text: "sponsors for the event" }, { text: "x", line: "an old thread (they said Sep 21; OLD, so ask whether it is still true and never state it as current)" }], base });
 check("every part of the picture reaches the call, even with five long sent events", ["What you know about them right now", "What they've told you in the last two days", "Ongoing summary", "How they've been feeling", "Recent texts"].every((h) => sum.includes(h)));
 check(`the whole thing fits ${CALL_CONTEXT_MAX} characters`, sum.length <= CALL_CONTEXT_MAX);
 const sentBlock = sum.slice(sum.indexOf("What you sent them lately"));
 check("the sent block is capped at about 2,000 characters in whole lines and comes last", CALL_SENT_MAX <= 2000 && sentBlock.length <= 2000 && sum.endsWith(sentBlock) && sentBlock.split("\n").every((l, i) => i === 0 || l.startsWith("- From the page")));
-check("how to be with them, then what they're in the middle of, lead", sum.indexOf("How to be with them") === 0 && sum.indexOf("What they're in the middle of") < sum.indexOf("What you know about them right now"));
+const at = (h: string) => sum.indexOf(h);
+check("the current situation leads: where things stand, the last calls, what they're in the middle of, then settled corrections and how to be with them", at("Where things stand now") === 0 && at("Where things stand now") < at("Your last calls") && at("Your last calls") < at("What they're in the middle of") && at("What they're in the middle of") < at("Settled (") && at("Settled (") < at("How to be with them") && at("How to be with them") < at("What you know about them right now"));
+check("an OLD thread is not listed as current: it comes after the rest, as a question", !sum.slice(at("What they're in the middle of"), at("Settled (")).includes("an old thread") && at("Older threads, not current") > at("Recent texts") && at("Older threads, not current") < at("What you sent them lately"));
 const longSecond = assembleCallSummary({ lessons: [], sentLines: [], threads: [], base: ["A: short", "B: " + "q".repeat(9000), "C: also short"].join("\n\n") });
 check("a section too long to fit is skipped, not the end of the build (later short ones still arrive)", longSecond.includes("A: short") && longSecond.includes("C: also short") && !longSecond.includes("qqqq"));
 check("nothing sent: no empty sent block, the rest intact", !assembleCallSummary({ lessons: [], sentLines: [], threads: [], base }).includes("What you sent them lately"));
 check("a single sent line longer than its cap is skipped, not truncated mid-fact", assembleCallSummary({ lessons: [], sentLines: ["x".repeat(CALL_SENT_MAX + 50), "short one"], threads: [], base: "" }).includes("- short one"));
 check("empty in, empty out", assembleCallSummary({ lessons: [], sentLines: [], threads: [], base: "" }) === "");
 const ctxSrc = read("src/services/callContext.ts");
-check("buildCallKnowledge uses the assembly (no second, stopping loop)", /const summary = assembleCallSummary\(\{ lessons, sentLines, threads, base \}\);/.test(ctxSrc) && !/if \(next\.length > CALL_CONTEXT_MAX\) break;/.test(ctxSrc));
+check("buildCallKnowledge uses the assembly (no second, stopping loop)", /const summary = assembleCallSummary\(\{ now: loops \|\| null, lastCalls: lastCalls \|\| null, settled: settled \|\| null, lessons, sentLines, threads, base \}\);/.test(ctxSrc) && !/if \(next\.length > CALL_CONTEXT_MAX\) break;/.test(ctxSrc));
+check("the call reads the same model of the person as texting (personModel.ts)", /personModelParts\(userId\)/.test(ctxSrc) && /p\.model\?\.threadList/.test(ctxSrc) && /p\.model\?\.loops/.test(ctxSrc));
 
 // ---- the opening line
 const knows = `What you know about them right now:\nRoyce is building Co. He's trying to find sponsors for the October 10 event after the Civic Joy Fund fell through.\n` + "pad ".repeat(100);
@@ -96,16 +99,11 @@ check("the opening's source is logged, a fallback apart from the pool's own reco
 // ---- the prompt the agent runs on
 const shared = read("prompts/co-system-prompt.md");
 const forCall = promptForElevenLabs(shared);
-check("the shared prompt file keeps its example openers (texts read it)", /Some ways this might sound:/.test(shared) && /Skip the highlight reel/.test(shared));
-check("the call's copy leaves the example openers out", !/Some ways this might sound/.test(forCall) && !/Skip the highlight reel/.test(forCall) && !/Not the resume version/.test(forCall) && !/Use your own words if none of these feel right/.test(forCall));
-check("and keeps what follows them", /Then listen\. Fully\./.test(forCall) && /What you already know about \{\{first_name\}\}/.test(forCall) && /open by picking up from something specific and real in it/.test(forCall));
-check("stripping needs the exact block and leaves any other prompt alone", withoutExampleOpeners("plain prompt") === "plain prompt");
-// "It should never say the scripted things" (Royce, 2026-10-04): the prompt quoted ready-made lines and Co repeated them word for word
-// ("That sounds like it changed a lot of things", "That's a lot happening at once").
-const quoted = shared.split("\n").filter((l) => /^"/.test(l));
-check("the call prompt quotes no ready-made acknowledgement, reflection or question for Co to repeat", !/changed a lot of things|takes courage to sit with|finding your footing|a lot happening at once|a lot is changing at once|real shift|tell me what you're working toward now|what matters most to you right now|get one of these right/i.test(forCall));
-check("what quoted lines remain are only the first-call openers (stripped from calls), the closing, the what-are-you answer and 'sounds good' notes", quoted.every((l) => /Good to finally talk|glad we're finally connecting|real version of how things are going|What's actually going on|"Sounds good," "thank you,"|That's what I needed\. Here's what happens next/.test(l)));
-check("the reflection, heavy-moment and prioritization lines are described, not quoted, and ask for new words every time", /new every time/.test(shared) && /something real: it names the specific thing they told you/i.test(shared) && /put it differently every call/i.test(shared));
+// "It should never say the scripted things" (Royce, 2026-10-04; 2026-10-08 call review: "Got it... So the October date is off...
+// What's the piece that feels most unsettled?"). The voice layer quotes no ready-made acknowledgement, reflection or question.
+check("the voice layer quotes no example lines for Co to copy (only the 'sounds good' notes and the 'hello?' cue)", shared.split("\n").every((l) => !/"[^"]*\s[^"]*\s[^"]*[.?!]"/.test(l)));
+check("the call prompt quotes no ready-made acknowledgement, reflection or question for Co to repeat", !/changed a lot of things|takes courage to sit with|finding your footing|a lot happening at once|a lot is changing at once|real shift|tell me what you're working toward now|what matters most to you right now|get one of these right|Does that cover what you needed|piece that feels most unsettled/i.test(forCall));
+check("a first call (empty context) is still pointed somewhere real", /If that's empty, this is your first real conversation/.test(forCall));
 check("the opening note: already said, don't repeat, carry on from it, never fall back to a general question", /already been said/.test(OPENING_NOTE) && /Don't greet them again or repeat it/.test(OPENING_NOTE) && /Carry on from it/.test(OPENING_NOTE) && /general/.test(OPENING_NOTE) && !/first real question/.test(OPENING_NOTE));
 check("the note is last in the call prompt", promptForElevenLabs(shared).trimEnd().endsWith(OPENING_NOTE));
 
@@ -167,12 +165,11 @@ check("no stock line survives anywhere in the built call prompt", stockLine(prom
   check("the opening can't be cut off by a hello", cfg.conversation_config.agent.disable_first_message_interruptions === true);
   check("the backup model is the same model by its dated id, pinned (never a slower one)", cfg.conversation_config.agent.prompt.backup_llm_config.preference === "override" && cfg.conversation_config.agent.prompt.backup_llm_config.order[0] === AGENT_DEFAULTS.backupLlm && /^claude-haiku-4-5/.test(AGENT_DEFAULTS.backupLlm));
   check("the suggested audio tags are the allowed cues", cfg.conversation_config.tts.suggested_audio_tags.map((x: any) => x.tag).join() === "warmly,softly,thoughtful,laughs");
-  check("safety and the never list sit under a Guardrails heading near the end", built.includes("# Guardrails") && built.indexOf("# Guardrails") > built.indexOf("THE FOUR PHASES") && built.indexOf("# Guardrails") < built.indexOf("Discretion: you never speak for another member") && built.indexOf("Are you safe right now?") > built.indexOf("# Guardrails") && built.indexOf("Never apologizes for being AI") > built.indexOf("# Guardrails"));
-  check("they are moved, not copied", built.split("Are you safe right now?").length === 2 && built.split("Never apologizes for being AI").length === 2);
+  check("safety sits under a Guardrails heading near the end, before the discretion lines", built.includes("# Guardrails") && built.indexOf("# Guardrails") > built.indexOf("# On the phone") && built.indexOf("# Guardrails") < built.indexOf("Discretion: you never speak for another member") && built.indexOf("Are you safe right now?") > built.indexOf("# Guardrails"));
+  check("it is said once, not copied", built.split("Are you safe right now?").length === 2);
   check("the call prompt gives no timed silence lines", !/past \d seconds|Still there\?/.test(built));
   check("no leftover temperature section", !/TEMPERATURE|Set to 0\./.test(built));
   check("the safety script no longer scripts a stock line", !/glad they told you/.test(built));
-  check("a prompt without the sections is left alone", guardrailsLast("hello").guardrails === "");
 }
 
 // ---- what the speech recognizer is told to expect (2026-10-06 call: "Co" heard as "you", "Boardy" as "Bumble")
@@ -197,5 +194,22 @@ check("no stock line survives anywhere in the built call prompt", stockLine(prom
   check("the call brain is told how Co and Boardy get misheard, and not to say the misheard word back", /Co, often arrives as "you"/.test(built) && /Boardy arrives as "Bumble"/.test(built) && /never say the misheard word back/.test(built));
 }
 
+
+// ---- 2026-10-08: no narration in the opening or in what it's written from; texts get every part of their context
+{
+  const ctx = "Where things stand now: promised on the call a plan on Co's post-event presence after the Sequin AI event. Not sent yet.";
+  check("the opening never narrates Co's own state", openingProblems("Hey Royce, it's Co. I still haven't found anything solid yet for that planning doc on Co's post-event presence to text you.", ctx, "Royce") !== null && openingProblems("Hey Royce, it's Co. Working on the Sequin plan now, want an update?", ctx, "Royce") !== null);
+  check("a plain pickup of what Co owes passes", openingProblems("Hey Royce, it's Co. The Sequin AI plan is still coming, want to shape it together first?", ctx, "Royce") === null, openingProblems("Hey Royce, it's Co. The Sequin AI plan is still coming, want to shape it together first?", ctx, "Royce"));
+  const pf = promiseFacts([
+    { at: "2026-10-08T00:30:34Z", content: 'Looked into "draft and text a plan on Co\'s post-event presence" after the call, as Co said it would, and found nothing good enough to send yet.' },
+    { at: "2026-10-08T00:30:55Z", content: 'Looked into "draft and text a plan on Co\'s post-event presence" after the call, as Co said it would, and found nothing good enough to send yet.' },
+  ]);
+  check("promise records read as plain facts, one per promise, never 'nothing good enough'", pf.length === 1 && /^Promised on the call: draft and text a plan on Co's post-event presence\. Not sent yet\.$/.test(pf[0].text) && !/good enough/.test(pf[0].text), pf);
+  const long = Array.from({ length: 80 }, (_, i) => `- picture line ${i} with some words about them`).join("\n");
+  const t = trimToLines(long, CONTEXT_SHARES.picture);
+  check("a long part is trimmed at a line to its share, so it can't crowd the rest out", t.length <= CONTEXT_SHARES.picture && t.endsWith("about them"));
+  check("the shares fit inside the text context, with room for the profile lines", Object.values(CONTEXT_SHARES).reduce((a, b) => a + b, 0) + 6 * 60 < CONTEXT_MAX);
+  check("a part that doesn't fit is skipped, never the end of the summary (no 'break' in the fill loop)", /if \(next\.length > CONTEXT_MAX\) continue;/.test(readFileSync(new URL("../../src/services/callContext.ts", import.meta.url), "utf8")));
+}
 console.log(`call opening rules: ${total - failed}/${total} passed`);
 if (failed) process.exitCode = 1;

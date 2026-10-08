@@ -79,16 +79,18 @@ for (const s of ["I hear the exhaustion underneath that.", "I hear the frustrati
 check("the text gate leaves the plain 'I hear the X' alone (hearsay), the call audit doesn't", flags("I hear the exhaustion underneath that.") === false);
 check("the call audit doesn't flag hearsay about a thing", checkNoEmotionLabelOnCall("I hear the launch got pushed").pass && checkNoEmotionLabelOnCall("I hear good things about it").pass);
 
-// The rule is in the prompt both calls and texts read, without quoting a bad example.
-const prompt = readFileSync(new URL("../../prompts/co-system-prompt.md", import.meta.url), "utf8");
-const rule = prompt.split("\n").find((l) => /Never tells them what they're feeling/.test(l)) ?? "";
-check("the prompt says Co never tells them what they're feeling, and what to do instead", /names the emotion it notices in them/.test(rule) && /Speak to what happened/.test(rule));
+// The rule is in Co's shared core (services/coCore.ts), which both calls and texts carry, without quoting a bad example.
+const { CO_LISTENING } = await import("../../src/services/coCore.js");
+const { promptForElevenLabs } = await import("../../src/services/elevenLabsCalls.js");
+const prompt = promptForElevenLabs(readFileSync(new URL("../../prompts/co-system-prompt.md", import.meta.url), "utf8"));
+const rule = CO_LISTENING.split("\n").find((l) => /never name the feeling you notice in them/.test(l)) ?? "";
+check("the core says Co never names the feeling it notices, and what to do instead", !!rule && /Show you got it by how you respond/.test(rule));
 check("the rule doesn't quote a bad example (Co copies quoted examples)", !/"/.test(rule) && !/hearing frustration/i.test(prompt));
 // Measured (evals/emotion/labelSim.ts, 20 simulated calls each, a frustrated caller who never says how they feel):
 // the lines that primed it were removed, not just a rule added. The rule alone left 9 of 20 calls with a label.
 check("nothing in the prompt tells Co to read the energy under their words or models the stock lines", !/read the energy underneath/.test(prompt) && !/Not "I hear you\."/.test(prompt) && !/Never says "I hear you"/.test(prompt));
 check("no example in the prompt is itself a label frame (\"It sounds like you're ...\")", !/"It sounds like you're/.test(prompt));
-check("the rule sits in What Co never does", prompt.indexOf(rule) > prompt.indexOf("WHAT CO NEVER DOES") && prompt.indexOf(rule) < prompt.indexOf("─── SILENCE"));
+check("the call prompt carries the rule", prompt.includes(rule));
 
 // Calls can't be filtered mid-call: every call is checked after it ends.
 const co = readFileSync(new URL("../../src/routes/co.ts", import.meta.url), "utf8");

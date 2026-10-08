@@ -129,7 +129,8 @@ globalThis.fetch = async function meteredFetch(input, init) {
   const pinnedHaiku = !grader && /^claude-haiku-4-5/.test(asked);
   const kind = grader ? "sonnet" : pinnedHaiku ? "haiku45" : realModels ? (/haiku/.test(asked) ? "haiku" : "sonnet") : "haiku";
   body.model = grader ? SONNET : pinnedHaiku ? asked : realModels ? (/haiku/.test(asked) ? asked : SONNET) : HAIKU;
-  if (kind === "haiku" || kind === "haiku45") strip(body); // Haiku rejects the effort option the production code sets for Sonnet
+  // Haiku 4.5 rejects the effort option the production code sets for Sonnet; Haiku 5.5 accepts it (2026-10-08), so it is kept there.
+  if (kind === "haiku45" || (kind === "haiku" && !/^claude-haiku-5/.test(String(body.model ?? "")))) strip(body);
   // EVAL_WEB_SEARCH=1 (a one-off live end-to-end run, on request): the search stays, metered and capped like any call.
   if (process.env.EVAL_WEB_SEARCH !== "1" && Array.isArray(body.tools) && body.tools.some((t) => /web_search/.test(String(t?.type ?? "")))) {
     // A web search is a paid tool and its results are the open web: not a layer 2 case.

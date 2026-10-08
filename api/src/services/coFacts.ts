@@ -78,6 +78,13 @@ export function toolAction(tool: string, input: any): { relation: string; label:
       return [{ relation: "sent", label: `a one-page plan sheet: ${s(input?.title)}` }];
     case "writeDocument":
       return [{ relation: "sent", label: `a document (PDF): ${s(input?.title)}` }];
+    // Work Co took on (a call or a text): the record that it really started, not just that it said it would (2026-10-08 call review).
+    case "startTask":
+      return s(input?.goal) ? [{ relation: "did", label: `took on a task for them: ${s(input.goal).slice(0, 160)}` }] : null;
+    case "researchBrief":
+      return s(input?.what) ? [{ relation: "did", label: `started researching a venue brief for them: ${s(input.what).slice(0, 160)}` }] : null;
+    case "closeTask":
+      return [{ relation: "did", label: `closed a task (${s(input?.status) || "done"})${s(input?.outcome) ? `: ${s(input.outcome).slice(0, 160)}` : ""}` }];
     case "offerDocument":
       return [{ relation: "did", label: "offered to write something up for them as a document" }];
     case "saveAsk":

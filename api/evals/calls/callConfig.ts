@@ -26,15 +26,13 @@ check("Sonnet stays where nobody waits: post-call, recaps, grading still use it"
 
 // ---- 1. turn detection and tools
 check("turn detection: eager endpointing, speculative turns, the v3 turn model, pinned so a push can't drift", c.turn.turn_eagerness === "eager" && c.turn.speculative_turn === true && c.turn.turn_model === "turn_v3");
-const cov = tools.find((t) => t.name === "assess_conversation_coverage");
-check("the coverage check runs in the background (async): Co never waits on it, and it can't hold up a sentence", cov?.execution_mode === "async" && cov?.pre_tool_speech === "off");
+check("no coverage check: the interview script's tool is gone from the agent and its prompt (2026-10-08)", !tools.some((t) => t.name === "assess_conversation_coverage") && !/assess_conversation_coverage|coverage/i.test(ap.prompt));
 check("the find is no longer a tool Co waits on: no surface_recommendation tool at all", !tools.some((t) => t.name === "surface_recommendation") && !/surface_recommendation/.test(ap.prompt));
 check("the tools that remain add no spoken filler", tools.filter((t) => t.type === "webhook").every((t) => t.pre_tool_speech === "off"));
 check("end_call and voicemail detection are still there", tools.some((t) => t.name === "end_call") && tools.some((t) => t.name === "voicemail_detection"));
-check("the prompt tells Co to run the coverage check first in a turn, before any words", /as the very first thing you do in a turn, before you say a word, never part-way through what you are saying/.test(ap.prompt));
 check("and to open every reply with a short first sentence (the voice starts when the first sentence is done)", /Start every reply with a short first sentence, under ten words/.test(ap.prompt));
 
-check("Haiku's habits are named in the prompt: short speech, no 'I appreciate' opener, no AI disclaimer, never 'not how I work' for multi-day help", /about 60 words at most/.test(ap.prompt) && /Never open with "I appreciate"/.test(ap.prompt) && /No disclaimers about being an AI/.test(ap.prompt) && /never say it isn't how you work: say yes, that you'll set it up when you hang up/.test(ap.prompt));
+check("Haiku's habits are named in the prompt: short speech, no 'I appreciate' opener, no AI disclaimer, never 'not how I work' for multi-day help", /about 60 words at most/.test(ap.prompt) && /Never open with "I appreciate"/.test(ap.prompt) && /No disclaimers about being an AI/.test(ap.prompt) && /never say it isn't how you work: say yes and set it up now, on the call/.test(ap.prompt) && !/when (?:we|you) hang up|after (?:we hang up|the call)/i.test(ap.prompt.replace(/After a call, Co does look into[^\n]*/, "")));
 
 // ---- 5. keywords
 const kw: string[] = c.asr.keywords;
@@ -43,7 +41,7 @@ check("the recognizer is told the names it got wrong: Co, Boardy, and the others
 // ---- 7. capability sheet and member context
 const sheet = B.CAPABILITY_SHEET;
 check("the sheet is in the call prompt", ap.prompt.includes("# What Co can do today"));
-check("it says Co does multi-day work and how to ask for it by text, and bans 'not how I work'", /works on it over the following days \(up to 30\)/.test(sheet) && /Right after you hang up, Co sets up what they asked for as a task/.test(sheet) && /Never say this is "not how I work"/.test(sheet) && !/A call can't start a task live/.test(sheet));
+check("it says Co does multi-day work and how to ask for it by text, and bans 'not how I work'", /works on it over the following days \(up to 30\)/.test(sheet) && /Say yes to this on a call and set it up then and there/.test(sheet) && /Never say this is "not how I work"/.test(sheet) && !/A call can't start a task live/.test(sheet));
 check("it does not promise what Co can't: no finding investors or a particular advisor, no group texts, no daily messages", /Co can't find investors, sponsors or funders on demand/.test(sheet) && /never starts a group text/.test(sheet) && /can't promise a daily message/.test(sheet));
 check("it says a call keeps its promise to look into something after the call", /After a call, Co does look into what you said you'd look into/.test(sheet));
 check("it stops the questions it has answers to: say what you have and ask if it's still right", /Never ask for something you already know/.test(sheet) && /You told me weekends, is that still true\?/.test(sheet));
@@ -106,7 +104,7 @@ check("the registration passes the two variables to ElevenLabs", /right_now: o\.
   const gd = E.SPEED_GUIDE;
   check("cadence: short sentence, a beat, a longer one, a short one to land it; periods, commas, question marks only", /short sentence, a beat, then one a little longer/.test(gd) && /periods, commas and question marks/.test(gd));
   check("cadence: no dash of any kind, no semicolon, no parentheses, 15 words at most", /Never write a dash of any kind/.test(gd) && /never a semicolon, never parentheses/.test(gd) && /No sentence runs past 15 words/.test(gd));
-  check("cadence: carries the wrong/right example from the real call", /Wrong: "That's smart—keeping it warm/.test(gd) && /Right: "That's smart\. Keep it warm first\./.test(gd));
+  check("cadence: no sample reply to copy (the old wrong/right pair modelled the 'That's smart. So ... What would you want?' template), and no stock acknowledgement opener", !/Wrong: |Right: /.test(gd) && !/That makes sense\.|Good, that helps\./.test(gd) && /never a stock acknowledgement/.test(gd));
   check("offers: name an event only from the finds or their own words; no source line, no name", /Name an event, place or time only if it is in "What Co has found for them" or they said it/.test(gd));
   check("promises: a promise to text or send is a real task the moment it is said, said once", /A promise to text or send something is a real task the moment you say it/.test(gd));
   check("member state: drained or overwhelmed outranks the list: two sentences, no pitch, no recap, no list, no question that asks more", /If they say they are tired, drained, overwhelmed/.test(gd) && /Close warmly in two sentences/.test(gd) && /No pitch, no recap, no list of what you are carrying, no new event, no question/.test(gd));
@@ -117,7 +115,7 @@ check("the registration passes the two variables to ElevenLabs", /right_now: o\.
 }
 {
   const co2 = src("routes/co.ts");
-  check("post-call: the source check on every named event and the commitment fallback both run", /recordOfferSourceCheck\(userId, conversationId/.test(co2) && /trackCommitmentsFromTranscript\(user_id, cleanTranscript\)/.test(co2));
+  check("post-call: the source check on every named event and the commitment fallback both run", /recordOfferSourceCheck\(userId, conversationId/.test(co2) && /followThroughOnCallEnd\(/.test(co2) && /track: trackCommitmentsFromTranscript/.test(src("services/callFollowThrough.ts")));
   check("the commitment check runs every 10 minutes", /"\*\/10 \* \* \* \*"[\s\S]{0,200}checkCallCommitments/.test(src("jobs/index.ts")));
 }
 

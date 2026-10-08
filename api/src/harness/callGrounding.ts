@@ -24,26 +24,57 @@ import { captureIntentForTurn } from "../services/profileExtraction.js";
 import { writeMemory } from "../services/memory.js";
 import { recordDecision, type GateCheck } from "./core.js";
 import { callKey } from "../services/callKey.js";
+import { ABILITIES, LIMITS, isMemberMoAbility } from "../services/capabilities.js";
+import { memberRecordText, overlap, sameCommitment, significant, specificsIn, specificsOnRecord } from "../services/followThrough.js";
+import { wordsAreTheirs } from "../services/coTasks.js";
 
 export type CallClaim = {
   quote: string;
   type: "promise_keepable" | "promise_unkeepable" | "invented_fact" | "capability" | "ok";
   what: string; // for keepable promises: what to look for; otherwise a short note
+  // capability: the registry line that covers the claim, if one does, and the can't line it breaks (2026-10-08)
+  ability?: string | null;
+  limit?: string | null;
+  // promise_keepable: the member's own words on the call that asked for it, or null when Co offered it on its own
+  asked_quote?: string | null;
+  // invented_fact: the exact names, places, times or numbers that had no source
+  specifics?: string[] | null;
 };
 
-// What Co can truthfully promise or claim on a call, mirrored from the text
-// side's standing capabilities.
-export const CALL_CAPABILITIES = `Co can: look for events, communities, opportunities, and people after a call and text them if something real fits (never a guaranteed result or time); call them back if they ask; text them.
-Co can't: book, buy, register them for events, email or call other people for them, promise when something will be found, or know details (times, places, people's intentions) it wasn't given.`;
+// What Co can truthfully promise or claim on a call, beyond the registry: a call is spoken, so these are the call's own limits.
+// 2026-10-08: the old line said Co can't know "people's intentions it wasn't given", with nothing about Co's own events, and
+// the audit read "I can learn who's coming, who each person is trying to meet" (Co's in-room guest-list matching, its core
+// product) as a false capability claim. The registry (services/capabilities.ts) is now the source; these only add to it.
+export const CALL_CAPABILITIES = `Co can: look for events, communities, opportunities, and people after a call and text them if something real fits (never a guaranteed result or time); take on work over days that they asked for and text what it finds; call them back if they ask; text them.
+Co can't: promise when something will be found or a guaranteed result, or know a detail it wasn't given (a time, a place, what someone outside its own events wants). At Co's own events it does know the guest list and what each guest told Co they're looking for.`;
+const CALL_ONLY_LIMITS = [
+  "On a call, Co can't promise when something will be found, or a guaranteed result.",
+  "Co can't know a detail it wasn't given (a time, a place, what someone outside its own events wants). At Co's own events it does know the guest list and what each guest told Co they're looking for.",
+];
+
+// The registry, as the audit reads it: what Co can do by id, and what it can't by number (team-only abilities left out).
+export function auditRegistry(): { abilities: { id: string; can: string }[]; limits: string[] } {
+  return {
+    abilities: ABILITIES.filter((a) => !a.teamOnly && !isMemberMoAbility(a)).map((a) => ({ id: a.id, can: a.can })),
+    limits: [...LIMITS, ...CALL_ONLY_LIMITS],
+  };
+}
 
 // impressions (2026-09-28, the facts-vs-hints rule on the text side,
 // replyGrounding.ts addHint): summaries and read-outs Co's own models wrote
 // going into the call. They help read the call, but they're never proof of a
 // specific time, place, count, or what another person said, wants or did.
 export function callAuditPrompt(transcript: string, knownBefore: string, impressions?: string): string {
+  const reg = auditRegistry();
   return `Audit what Co said on a phone call. Co can only claim things it actually knew and only promise things it can actually do.
 
-What Co can and can't do:
+What Co can do (its capability registry, by id; this is the truth about Co, whatever any other line says):
+${reg.abilities.map((a) => `[${a.id}] ${a.can}`).join("\n")}
+
+What Co can't do (by number):
+${reg.limits.map((l, i) => `L${i + 1} ${l}`).join("\n")}
+
+In short, on a call:
 ${CALL_CAPABILITIES}
 
 What Co knew going into the call (facts):
@@ -56,13 +87,13 @@ Call transcript ("assistant" is Co):
 ${transcript.slice(-12000)}
 
 List every statement by Co ("assistant" lines only) that is a promise of a future action, a specific fact about an event, a person, or a place, or a claim about what Co can do. For each:
-- "promise_keepable": a promise to look for something after the call and text if something fits, with no guaranteed result or time. Put what to look for in "what".
+- "promise_keepable": a promise to look for something, or to do work they asked for, after the call and text what it finds, with no guaranteed result or time. Put what to do in "what". In "asked_quote", copy the person's exact words from a "user" line that asked for it (a request, or their yes to Co's offer together with what it answered); null only when Co offered it on its own and they never asked.
 - "promise_unkeepable": any other promise (a time, a guaranteed result, booking, contacting someone for them).
-- "invented_fact": a specific fact not in what Co knew or what the person said on the call.
-- "capability": a wrong claim about what Co can or can't do.
-- "ok": supported by the facts Co knew, what the person said, or the capabilities.
+- "invented_fact": a specific fact not in what Co knew or what the person said on the call. In "specifics", list the exact names, places, times or numbers that had no source.
+- "capability": a claim about what Co can or can't do that the registry above contradicts. In "limit", the number of the can't line it breaks ("L3"). If a registry line says Co does it, it is "ok", not "capability"; put that line's id in "ability".
+- "ok": supported by the facts Co knew, what the person said, or the registry.
 
-Return ONLY JSON: {"claims": [{"quote": "Co's exact words", "type": "...", "what": "..."}]}`;
+Return ONLY JSON: {"claims": [{"quote": "Co's exact words", "type": "...", "what": "...", "ability": "id or null", "limit": "L# or null", "asked_quote": "their exact words or null", "specifics": []}]}`;
 }
 
 export function callAuditChecks(claims: CallClaim[]): GateCheck[] {
@@ -148,25 +179,147 @@ export async function keepCallPromise(userId: string, what: string, transcript?:
   return queued ? "queued" : "nothing";
 }
 
-export async function auditCall(userId: string, transcript: string, knownBefore: string | { facts: string; impressions: string }): Promise<void> {
+// ---- what the audit's verdicts are held to before anything is saved (2026-10-08 call review)
+
+const userLinesOf = (transcript: string) =>
+  transcript.split("\n").filter((l) => /^\s*user\s*:/i.test(l)).map((l) => l.replace(/^\s*user\s*:\s*/i, ""));
+
+// Pure: a capability "correction" is saved only when the registry backs it: it names a real can't line it breaks, and no
+// registry line says Co does it (by the id the audit gave, or by the claim's own words matching an ability more closely than
+// any limit). A correction feeds every later call and text, so a false one teaches Co to deny what it really does.
+export function capabilityCorrectionVerdict(c: Pick<CallClaim, "quote" | "what" | "ability" | "limit">, reg = auditRegistry()): { save: boolean; why: string } {
+  const named = typeof c.ability === "string" ? reg.abilities.find((a) => a.id === c.ability!.trim()) : undefined;
+  if (named) return { save: false, why: `the registry has it: [${named.id}]` };
+  const words = significant(c.quote).length;
+  if (words >= 3) {
+    const best = reg.abilities.map((a) => ({ id: a.id, o: overlap(c.quote, a.can) })).sort((x, y) => y.o - x.o)[0];
+    const worstLimit = Math.max(0, ...reg.limits.map((l) => overlap(c.quote, l)));
+    if (best && best.o >= 0.5 && best.o > worstLimit) return { save: false, why: `the registry has it: [${best.id}] matches what Co said` };
+  }
+  const n = Number(String(c.limit ?? "").match(/^\s*L?(\d+)\s*$/i)?.[1] ?? NaN);
+  if (!Number.isInteger(n) || n < 1 || n > reg.limits.length) return { save: false, why: "it names no can't line in the registry that it breaks" };
+  // The line it cites has to be about what Co said: a limit that shares nothing with the claim or its note isn't the one it breaks.
+  if (overlap(`${c.quote} ${c.what ?? ""}`, reg.limits[n - 1]) === 0) return { save: false, why: `the can't line it cites (L${n}) isn't about what Co said` };
+  return { save: true, why: `breaks L${n}: ${reg.limits[n - 1].slice(0, 120)}` };
+}
+
+// Pure: an "invented" fact whose every unsourced specific is in the member's own texts or Co's records wasn't invented.
+// Sources on the call are the member's own lines and what Co knew going in; Co having said it earlier on the call is not one.
+export function inventedFactVerdict(c: Pick<CallClaim, "quote" | "specifics">, transcript: string, knownBefore: string, records: string): { save: boolean; why: string; onRecord: string[] } {
+  const flagged = Array.isArray(c.specifics) && c.specifics.some((x) => typeof x === "string" && x.trim()) ? c.specifics.filter((x): x is string => typeof x === "string") : specificsIn(c.quote);
+  const r = specificsOnRecord(flagged, `${userLinesOf(transcript).join("\n")}\n${knownBefore}`, records);
+  if (r.backed) return { save: false, why: `on record in their texts or Co's records: ${r.onRecord.join(", ")}`, onRecord: r.onRecord };
+  return { save: true, why: r.unbacked.length ? `no source for: ${r.unbacked.join(", ")}` : "kept as the audit judged it", onRecord: r.onRecord };
+}
+
+// Pure: the member's own words that asked for a promise. The audit's quote counts only when it is really in their lines; else
+// the user turn just before Co's promise (or the one before that) when it asks Co for something.
+const ASKING = /\b(?:can you|could you|would you|will you|i (?:actually |really )?(?:want|need|would love|'d love|'d like) (?:you|for you|co)|i want co|please|go ahead|take (?:the )?lead|start (?:planning|drafting|putting)|send me|text me|put together|draft)\b/i;
+export function askedQuoteFor(c: Pick<CallClaim, "quote" | "asked_quote">, transcript: string): string | null {
+  const theirs = userLinesOf(transcript);
+  const q = typeof c.asked_quote === "string" ? c.asked_quote.trim() : "";
+  if (q && wordsAreTheirs(q, theirs.join("\n"))) return q;
+  const lines = transcript.split("\n");
+  const key = c.quote.toLowerCase().replace(/\s+/g, " ").trim().slice(0, 60);
+  const at = lines.findIndex((l) => /^\s*assistant\s*:/i.test(l) && l.toLowerCase().replace(/\s+/g, " ").includes(key));
+  if (at < 0) return null;
+  let seen = 0;
+  for (let i = at - 1; i >= 0 && seen < 2; i--) {
+    if (!/^\s*user\s*:/i.test(lines[i])) continue;
+    seen++;
+    const line = lines[i].replace(/^\s*user\s*:\s*/i, "").trim();
+    if (ASKING.test(line)) return line;
+  }
+  return null;
+}
+
+export type OpenCallTask = { id: number; goal: string; theirWords: string; createdAt: string };
+export type PlannedPromise = { what: string; quotes: string[]; asked: string | null; coveredBy: number | null };
+export type AuditPlan = {
+  corrections: CallClaim[];
+  refused: { quote: string; type: CallClaim["type"]; why: string }[];
+  promises: PlannedPromise[];
+};
+
+// Pure: what the audit's claims become. Same-call promises that are one commitment (the same words of theirs, or the same
+// thing said again) are one promise; a promise an open task from this call already carries is that task's, not a new search.
+export function planCallAudit(claims: CallClaim[], transcript: string, ctx: { knownBefore: string; records: string; tasks: OpenCallTask[] }): AuditPlan {
+  const reg = auditRegistry();
+  const corrections: CallClaim[] = [];
+  const refused: AuditPlan["refused"] = [];
+  for (const c of claims) {
+    if (c.type === "capability") {
+      const v = capabilityCorrectionVerdict(c, reg);
+      v.save ? corrections.push(c) : refused.push({ quote: c.quote, type: c.type, why: v.why });
+    } else if (c.type === "invented_fact") {
+      const v = inventedFactVerdict(c, transcript, ctx.knownBefore, ctx.records);
+      v.save ? corrections.push(c) : refused.push({ quote: c.quote, type: c.type, why: v.why });
+    } else if (c.type === "promise_unkeepable") corrections.push(c);
+  }
+  const groups: { what: string; quotes: string[]; asked: string | null }[] = [];
+  for (const c of claims.filter((x) => x.type === "promise_keepable" && x.what)) {
+    const asked = askedQuoteFor(c, transcript);
+    const g = groups.find((x) => (asked && x.asked && sameCommitment({ theirWords: asked }, { theirWords: x.asked })) || sameCommitment({ goal: c.what }, { goal: x.what }) || overlap(`${c.what} ${c.quote}`, `${x.what} ${x.quotes.join(" ")}`) >= 0.5);
+    if (g) {
+      g.quotes.push(c.quote);
+      g.asked = g.asked ?? asked;
+    } else groups.push({ what: c.what, quotes: [c.quote], asked });
+  }
+  const promises = groups.map((g) => {
+    const t = ctx.tasks.find((t) => sameCommitment({ goal: g.what, theirWords: g.asked }, t) || g.quotes.some((q) => sameCommitment({ goal: q }, t)));
+    return { ...g, coveredBy: t ? t.id : null };
+  });
+  return { corrections, refused, promises };
+}
+
+// Open work tasks opened in the last few hours: the ones a call's promises may already be carried by.
+async function recentOpenTasks(userId: string): Promise<OpenCallTask[]> {
+  const { openTasks } = await import("../services/coTasks.js");
+  const since = Date.now() - 3 * 3_600_000;
+  return (await openTasks(userId)).filter((t) => new Date(t.createdAt).getTime() > since).map((t) => ({ id: t.id, goal: t.goal, theirWords: t.theirWords, createdAt: t.createdAt }));
+}
+
+// dryRun: reads only (the member's texts, records and open tasks) and returns the plan; nothing is written or searched.
+// claims: use these instead of asking the model (a replay of a call's recorded audit).
+export async function auditCall(
+  userId: string,
+  transcript: string,
+  knownBefore: string | { facts: string; impressions: string },
+  opts: { dryRun?: boolean; claims?: CallClaim[]; tasks?: OpenCallTask[] } = {},
+): Promise<AuditPlan | null> {
   const facts = typeof knownBefore === "string" ? knownBefore : knownBefore.facts;
   const impressions = typeof knownBefore === "string" ? undefined : knownBefore.impressions;
   try {
-    const { text } = await generateText({
-      model: anthropic(MODELS.sonnet),
-      providerOptions: { anthropic: { effort: "low" } },
-      experimental_telemetry: { isEnabled: true, functionId: "call.grounding.audit" },
-      prompt: callAuditPrompt(transcript, facts, impressions),
-    });
-    const claims = (parseModelJson<{ claims?: CallClaim[] }>(text).claims ?? []).filter((c) => c && typeof c.quote === "string");
+    let claims = opts.claims;
+    if (!claims) {
+      const { text } = await generateText({
+        model: anthropic(MODELS.sonnet),
+        providerOptions: { anthropic: { effort: "low" } },
+        experimental_telemetry: { isEnabled: true, functionId: "call.grounding.audit" },
+        prompt: callAuditPrompt(transcript, facts, impressions),
+      });
+      claims = parseModelJson<{ claims?: CallClaim[] }>(text).claims ?? [];
+    }
+    claims = claims.filter((c) => c && typeof c.quote === "string");
     const checks = callAuditChecks(claims);
+    const [records, tasks] = await Promise.all([
+      memberRecordText(userId).catch(() => ""),
+      opts.tasks ? Promise.resolve(opts.tasks) : recentOpenTasks(userId).catch(() => [] as OpenCallTask[]),
+    ]);
+    const plan = planCallAudit(claims, transcript, { knownBefore: `${facts}\n${impressions ?? ""}`, records, tasks });
+    if (opts.dryRun) return plan;
 
-    // Keep the promises Co can keep — but only file it as the PERSON's ask
-    // when their own words on the call actually asked for it. A promise Co
-    // volunteered on its own is still real for Co to keep, but gets
-    // recorded as Co's own note, not a saved ask attributed to them.
-    for (const c of claims.filter((x) => x.type === "promise_keepable" && x.what)) {
-      if (personAskedForThis(transcript, c.what)) {
+    // Keep the promises Co can keep, once per commitment. Carried by a task already open from this call: that task is the
+    // promise, so nothing else opens or searches. Asked for in their own words: their ask. Otherwise Co's own note, and a look.
+    for (const p of plan.promises) {
+      const c = { what: p.what };
+      if (p.coveredBy) {
+        await writeMemory(
+          userId,
+          "system",
+          `Co promised on a call: "${c.what}". ${p.asked ? `They asked for it in their own words ("${p.asked.slice(0, 160)}")` : "Co offered it on its own"}; task #${p.coveredBy} is carrying it.`,
+        ).catch(() => null);
+      } else if (p.asked) {
         await captureIntentForTurn(userId, `user: ${c.what}`, { timeoutMs: 6000 }).catch(() => null);
       } else {
         await writeMemory(
@@ -181,8 +334,8 @@ export async function auditCall(userId: string, transcript: string, knownBefore:
         );
       }
     }
-    // Remember what needs correcting, for the next text reply.
-    const corrections = claims.filter((x) => x.type === "promise_unkeepable" || x.type === "invented_fact" || x.type === "capability");
+    // Remember what needs correcting, for the next text reply: only what survived the registry and record checks.
+    const corrections = plan.corrections;
     for (const c of corrections) {
       await writeMemory(userId, "call_correction", JSON.stringify({ quote: c.quote.slice(0, 200), type: c.type, note: c.what?.slice(0, 200) ?? null }));
     }
@@ -193,12 +346,14 @@ export async function auditCall(userId: string, transcript: string, knownBefore:
       userId,
       outcome: corrections.length ? "skip" : "act",
       action: corrections.length ? "corrections_recorded" : "grounded",
-      proposal: { claims },
-      checks,
+      proposal: { claims, refused: plan.refused, promises: plan.promises },
+      checks: [...checks, ...plan.refused.map((r) => ({ name: `call_${r.type}_refused`, pass: true, reason: `"${r.quote.slice(0, 140)}" not saved: ${r.why.slice(0, 160)}` }))],
       reason: corrections.length ? `${corrections.length} unsupported statement(s) on the call` : null,
     });
+    return plan;
   } catch (err: any) {
     console.error("auditCall failed (non-fatal):", err?.message ?? err);
+    return null;
   }
 }
 

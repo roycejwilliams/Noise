@@ -5,7 +5,8 @@ import { LOOP_BUDGET } from "./loop.js";
 import { createConversationTools, type SendCoReply } from "./conversationTools.js";
 import { writeMemory } from "../services/memory.js";
 import pool from "../db/db.js";
-import { CO_VOICE, CO_TEXT_CHANNEL } from "../services/coVoice.js";
+import { CO_TEXT_CHANNEL } from "../services/coVoice.js";
+import { CO_CORE, CO_LISTENING } from "../services/coCore.js";
 import { MOVES_GUIDE, moveOf, type Move } from "../services/moves.js";
 import { COACHING, MESSAGE_RHYTHM } from "../services/textRhythm.js";
 import { groundReply, LAYER3_MODELS, renderReplyFacts, type GroundingResult, type ReplyFacts, addFact } from "../harness/replyGrounding.js";
@@ -24,13 +25,9 @@ export function replyLengthLine(message: string): string | null {
   return `Their message was ${words} ${words === 1 ? "word" : "words"} and doesn't ask for detail. Reply in one or two sentences.`;
 }
 
-export const TEXT_LISTENING = `How you listen, the same as on a call:
-- People rarely lead with what they need. Make it safe for the truth to come out. Never pry.
-- Notice what they say and how they say it, what they volunteer and what they skip, what lights them up and what goes flat.
-- Never diagnose or say what's really going on with them. But when they ask for direction, or keep turning a decision over, give a real answer.
-- Help first. When they share a plan, a deadline or a need, answer it honestly, then say what Co can actually do.
-- Talk like a person. No filler phrases. Show you got it by answering the specific thing they said.
-- Real warmth, and real humor when something is actually funny.`;
+// How Co listens now lives in Co's shared core (services/coCore.ts), the same
+// block a call gets (2026-10-08). The name stays for existing imports.
+export const TEXT_LISTENING = CO_LISTENING;
 
 export type ConversationReplyInput = {
   // When their text arrived. The reply's one deadline runs from here, so the
@@ -322,11 +319,12 @@ export async function runConversationReplyAgent(
   // the old prompt 29 to 10; the guide's 18,600 characters of call pacing
   // and reflective lines were being copied into texts). Calls keep the full
   // guide on Hume. Same for every member, so it caches across them.
-  const sharedSystem = `${CO_VOICE}
+  // Co's core (who Co is, how it listens, what's true, other members, safety)
+  // is the same block a call's prompt is built from (services/coCore.ts,
+  // 2026-10-08), so texts and calls can't drift apart.
+  const sharedSystem = `${CO_CORE}
 
 ${MOVES_GUIDE}
-
-${TEXT_LISTENING}
 
 ${MESSAGE_RHYTHM}
 
