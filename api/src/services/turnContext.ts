@@ -267,7 +267,8 @@ export async function assembleContext(
     loadKit(userId).catch(() => ({}) as Kit),
     loadMilestones(userId).then((m) => storyLines(m, 4)).catch(() => [] as string[]),
     loadAdvice(userId).then((a) => adviceLines(a)).catch(() => [] as string[]),
-    openTasks(userId).then((t) => taskFactLines(t)).catch(() => [] as string[]),
+    // In their local time (services/memberTime.ts), with each commitment's window.
+    openTasks(userId).then(async (t) => taskFactLines(t, undefined, profile?.city ? await import("./geocoding.js").then((g) => g.getTimezoneForCity(profile.city!)).catch(() => null) : null)).catch(() => [] as string[]),
     import("./eventPresence.js").then((e) => e.todayEventFor(userId)).catch(() => null),
     import("./documentOffer.js").then((m) => m.loadDocOfferContext(userId)).catch(() => null),
   ]);

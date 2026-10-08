@@ -1,0 +1,283 @@
+// Commitment windows in member-local time, early warnings, and promised documents sent as documents (Royce, 2026-10-08):
+//   "Every commitment carries a window in member-local time, and a miss warns BEFORE the window passes."
+//   "A promised plan or doc goes through writeDocument (a PDF, or a Docs link per the existing gates), never as a wall of text."
+// Layer 1: pinned clock, stubbed store, and the model scripted here (a fake Anthropic endpoint inside this process), so nothing
+// depends on the canned stub and no token is spent.
+//   npx tsx evals/tasks/windows.ts
+process.env.SENDBLUE_API_API_KEY ||= "unused-in-tests";
+process.env.SENDBLUE_API_API_SECRET ||= "unused-in-tests";
+import fs from "node:fs";
+
+// ---- the model, scripted: each Anthropic call takes the next answer (a tool call or plain text); none left = "Nothing more."
+type Answer = { tool: string; input: any } | { text: string };
+const script: Answer[] = [];
+const seen: any[] = [];
+const prior = globalThis.fetch;
+globalThis.fetch = (async (input: any, init?: any) => {
+  const url = typeof input === "string" ? input : input?.url ?? String(input);
+  if (!/api\.anthropic\.com/.test(url)) return prior(input, init);
+  try { seen.push(JSON.parse(init?.body ?? "{}")); } catch { seen.push({}); }
+  const a = script.shift() ?? { text: "Nothing more." };
+  const usage = { input_tokens: 0, output_tokens: 0 };
+  const content = "tool" in a ? [{ type: "tool_use", id: `toolu_${seen.length}`, name: a.tool, input: a.input }] : [{ type: "text", text: a.text }];
+  return new Response(JSON.stringify({ id: `msg_${seen.length}`, type: "message", role: "assistant", model: "scripted", content, stop_reason: "tool" in a ? "tool_use" : "end_turn", stop_sequence: null, usage }), { status: 200, headers: { "content-type": "application/json" } });
+}) as typeof fetch;
+
+const M = await import("../../src/services/memberTime.js");
+const TT = await import("../../src/services/taskTurn.js");
+const CT = await import("../../src/services/coTasks.js");
+const FT = await import("../../src/services/followThrough.js");
+const DD = await import("../../src/services/documentDelivery.js");
+const DS = await import("../../src/services/documentSheet.js");
+const CC = await import("../../src/services/callCommitments.js");
+const OL = await import("../../src/services/openLoops.js");
+const { narratesInternalState } = await import("../../src/services/speakable.js");
+const src = (p: string) => fs.readFileSync(new URL(`../../src/${p}`, import.meta.url), "utf8");
+
+let total = 0, failed = 0;
+const check = (label: string, ok: boolean, detail?: unknown) => { total++; if (!ok) { failed++; console.log(`FAIL ${label}${detail !== undefined ? ` :: ${JSON.stringify(detail).slice(0, 400)}` : ""}`); } };
+const SF = "America/Los_Angeles";
+const local = (iso: string | Date, zone = SF) => new Date(iso).toLocaleString("en-US", { timeZone: zone, hour12: false, month: "2-digit", day: "2-digit", hour: "2-digit", minute: "2-digit" });
+
+// ======================================================================= 1. "tonight" and friends, in member-local time
+{
+  const evening = new Date("2026-10-08T02:30:00Z"); // Wed Oct 7, 7:30pm in San Francisco
+  const w = M.commitmentWindow("I'll text you the options tonight.", evening, SF);
+  check("tonight at 7:30pm SF: the window is that night, in SF time", w.words === "tonight" && local(w.deadline) === "10/07, 23:59" && w.stated, { w, d: local(w.deadline) });
+  check("...and the warn-by is the last texting moment before 8pm, less the cron margin (7:40pm)", local(w.warnBy) === "10/07, 19:40", local(w.warnBy));
+  check("the case: a next check 3h out (10:30pm) lands past it", M.missesWindow(w, new Date(evening.getTime() + 3 * 3_600_000), evening));
+  check("a next check at 7:35pm does not", !M.missesWindow(w, new Date(evening.getTime() + 5 * 60_000), evening));
+
+  const late = new Date("2026-10-08T05:30:00Z"); // 10:30pm SF
+  const wl = M.commitmentWindow("I'll text you the options tonight.", late, SF);
+  check("late night (10:30pm): still tonight, ending at midnight", wl.words === "tonight" && local(wl.deadline) === "10/07, 23:59", local(wl.deadline));
+  check("...with nothing textable left in it, the warn-by is the first moment they can be told: 9am", local(wl.warnBy) === "10/08, 09:00", local(wl.warnBy));
+
+  const past = new Date("2026-10-08T07:30:00Z"); // 12:30am SF, Thursday
+  const wm = M.commitmentWindow("I'll text you the options tonight.", past, SF);
+  check("across midnight (12:30am): 'tonight' is the night under way (ends 5am), not the next evening", local(wm.deadline) === "10/08, 05:00", local(wm.deadline));
+  const wt = M.commitmentWindow("I'll have it for you tomorrow.", past, SF);
+  check("across midnight: 'tomorrow' is the day about to start (Thursday 8pm), not Friday", local(wt.deadline) === "10/08, 20:00", local(wt.deadline));
+  const wtm = M.commitmentWindow("I'll send it tomorrow morning.", evening, SF);
+  check("'tomorrow morning' from the evening: by noon the next day", local(wtm.deadline) === "10/08, 12:00" && wtm.words === "tomorrow morning", local(wtm.deadline));
+
+  const ny = M.commitmentWindow("I'll text you the options tonight.", new Date("2026-10-07T23:30:00Z"), "America/New_York");
+  check("a New York member's tonight ends at midnight New York time, warn-by 7:40pm there", local(ny.deadline, "America/New_York") === "10/07, 23:59" && local(ny.warnBy, "America/New_York") === "10/07, 19:40", [local(ny.deadline, "America/New_York"), local(ny.warnBy, "America/New_York")]);
+
+  const unk = M.commitmentWindow("I'll text you the options tonight.", evening, null);
+  check("unknown zone: the words are read in the one fallback (Pacific)", M.FALLBACK_ZONE === SF && local(unk.deadline) === "10/07, 23:59" && unk.zone === null);
+  check("unknown zone: the warn-by follows the unchanged send gate (16:00-24:00 UTC), so it's their morning, never a text the gate would block", new Date(unk.warnBy).toISOString() === "2026-10-08T16:00:00.000Z", unk.warnBy);
+  check("unknown zone, invalid string: same fallback", M.commitmentWindow("tonight", evening, "Not/AZone").zone === null);
+
+  const noon = new Date("2026-10-07T20:00:00Z"); // 1pm SF
+  const hr = M.commitmentWindow("I'll send it in an hour.", noon, SF);
+  check("'in an hour' at 1pm: due 2pm, warn by 1:40pm", local(hr.deadline) === "10/07, 14:00" && local(hr.warnBy) === "10/07, 13:40", [local(hr.deadline), local(hr.warnBy)]);
+  const fri = M.commitmentWindow("I'll get you a couple of options by Friday.", noon, SF);
+  check("'by Friday' (said Wednesday): Friday 8pm their time", local(fri.deadline) === "10/09, 20:00" && fri.words === "by Friday", local(fri.deadline));
+  const def = M.commitmentWindow("I'll send that over.", noon, SF);
+  check("no window said: the default, within a day", def.words === "within a day" && !def.stated && new Date(def.deadline).getTime() - noon.getTime() === 24 * 3_600_000);
+  check("a call commitment with no time takes the confirmation's own words ('tonight' for an evening call)", M.commitmentWindow("I'll text you the links.", evening, SF, M.deliveryWords(evening, SF)).words === "tonight");
+
+  check("new time in their words: 9am next day from the evening is 'in the morning'", M.whenWords(new Date("2026-10-08T19:00:00Z"), evening, SF) === "in the morning");
+  check("new time, same afternoon: 'by 5pm'", M.whenWords(new Date("2026-10-08T00:00:00Z"), noon, SF) === "by 5pm");
+  check("the 9am to 8pm send rule is unchanged", /REASONABLE_HOUR_START = 9/.test(src("services/localHours.ts")) && /REASONABLE_HOUR_END = 20/.test(src("services/localHours.ts")) && /startHour: 9,\s*endHour: 20,/.test(src("harness/proactive.ts")));
+  check("promiseHours reads weekdays in their zone, not always Pacific", /zone = wordsZone\(zone\)/.test(src("services/promises.ts")) && /promiseHours\(sentence, now, zone\)/.test(src("services/promises.ts")));
+  check("the first check of a 6pm 'tonight' promise lands inside the window, not at 10pm", (() => {
+    const at6 = new Date("2026-10-08T01:00:00Z");
+    const w6 = M.commitmentWindow("tonight", at6, SF);
+    return local(CT.firstCheckInWindow(new Date(at6.getTime() + 4 * 3_600_000), w6, at6)) === "10/07, 19:30";
+  })());
+}
+
+// ======================================================================= 2. the voice of the warning
+{
+  const GOOD = "No luck on the rooms yet, I'll have them for you in the morning.";
+  check("the early-warning line passes the narration detector", narratesInternalState(GOOD) === null);
+  const g = TT.warningChecks(GOOD, { thing: "the rooms", when: "in the morning" });
+  check("...and every check of the warning (checkDraft, new time, names what's missing)", g.every((c) => c.pass), g.filter((c) => !c.pass));
+  for (const bad of ["Still digging on the rooms, I have a few leads and I'm working on it.", "No solid options yet, I'll have them soon.", "Working on the rooms now, more soon."]) {
+    const c = TT.warningChecks(bad, { thing: "the rooms", when: "in the morning" });
+    check(`a status ramble fails the voice check: "${bad}"`, c.some((x) => x.name === "draft_narrates_state" && !x.pass), c.filter((x) => !x.pass));
+  }
+  // The first live run (2026-10-07, dev) drafted "Quick update: won't have the private dining options tonight after all. ...".
+  check("a status preamble fails", TT.warningChecks("Quick update: won't have the private dining options tonight after all. I'll get them to you in the morning.", { thing: "the private dining options", when: "in the morning" }).some((c) => c.name === "warning_no_preamble" && !c.pass));
+  check("a line with no new time fails", TT.warningChecks("No luck on the rooms yet.", { thing: "the rooms", when: "in the morning" }).some((c) => c.name === "warning_new_time" && !c.pass));
+  check("a line that doesn't say what's missing fails", TT.warningChecks("I'll have something for you in the morning.", { thing: "the rooms", when: "in the morning" }).some((c) => c.name === "warning_names_it" && !c.pass));
+  const fb = TT.fallbackWarning(TT.promisedThing("Keep your word from the call: \"I'll text you the options tonight\""), "in the morning", false);
+  check("the fallback line, from Co's own promise", fb === "No luck on the options yet, I'll have them for you in the morning.", fb);
+  check("...passes the same checks", TT.warningChecks(fb, { thing: "the options", when: "in the morning" }).every((c) => c.pass));
+  const fd = TT.fallbackWarning("the plan", "by 3pm", true);
+  check("a document's fallback says it isn't finished and when it comes, and passes", fd === "The plan isn't finished yet, I'll have it to you by 3pm." && TT.warningChecks(fd, { thing: "the plan", when: "by 3pm" }).every((c) => c.pass), fd);
+}
+
+// ======================================================================= 3. the reproduction: first wake finds nothing, next check 3h out
+const TONIGHT_AT = new Date("2026-10-08T02:20:00Z"); // promise made 7:20pm SF
+const NOW = new Date("2026-10-08T02:30:00Z"); // first wake 7:30pm SF
+const baseTask = (over: any = {}): any => ({
+  id: 501, userId: "u-test", goal: "Keep your word from the call: \"I'll text you the options tonight\"", theirWords: "can you find me a private dining room for twelve near Hayes Valley",
+  steps: [{ text: "Send what you said you would", done: false }], planNext: "Send it now", nextCheckAt: NOW.toISOString(), status: "open", wakes: 1, notes: [], textsSent: 0, lastTextedAt: null,
+  createdAt: TONIGHT_AT.toISOString(), deadline: null, finalCheckAt: null, finalTold: false, awaitingReply: false, theirReplyAt: null, kind: "work", source: "promise",
+  window: M.commitmentWindow("I'll text you the options tonight", TONIGHT_AT, SF), ...over,
+});
+function harness(clock: Date, o: { draft?: (f: any) => Promise<string | null> } = {}) {
+  const log = { warns: [] as { text: string; key: string; at: Date }[], texts: [] as string[], windows: [] as any[], at: [] as Date[], scheduled: [] as number[], notes: [] as string[], closed: [] as string[], docs: [] as any[] };
+  const sentKeys = new Set<string>();
+  const deps: any = {
+    person: { first_name: "Jordan", phone_number: "+14155550100", city: "San Francisco" }, recent: "", zone: SF,
+    note: async (t: string) => { log.notes.push(t); },
+    schedule: async (h: number) => { log.scheduled.push(h); return new Date(clock.getTime() + h * 3_600_000).toISOString(); },
+    scheduleAt: async (at: Date) => { log.at.push(at); return at.toISOString(); },
+    close: async (s: string, out: string) => { log.closed.push(`${s}: ${out}`); },
+    textsToday: async () => 0, markTexted: async () => {}, markFinalTold: async () => {},
+    send: async (m: string[]) => { log.texts.push(...m); return { sent: true }; },
+    search: async () => [], web: async () => ({ kept: [], dropped: [], droppedDetails: [], note: "Nothing came back that proved itself on its page." }), readPage: async () => ({ ok: false, facts: [], text: "" }),
+    now: () => clock, sentSince: async () => [],
+    // The real send path keys the warning by window (proactive_sends unique target_key): a second send of the same key is a no-op.
+    warn: async (text: string, key: string) => { if (sentKeys.has(key)) return { sent: false, reason: "already sent" }; sentKeys.add(key); log.warns.push({ text, key, at: clock }); return { sent: true }; },
+    setWindow: async (w: any) => { log.windows.push(w); },
+    draftWarning: o.draft ?? (async () => "No luck on the private dining rooms yet, I'll have them for you in the morning."),
+  };
+  return { deps, log };
+}
+{
+  // Co searched, found nothing it could verify, and set its next look three hours out (10:30pm SF).
+  script.push({ tool: "search", input: { what: "private dining room for twelve near Hayes Valley", when: "this week" } }, { tool: "scheduleNext", input: { inHours: 3, plan: "Look again for private dining rooms near Hayes Valley" } });
+  const { deps, log } = harness(NOW);
+  const t = baseTask();
+  const r = await TT.runTaskTurnWith(t, deps);
+  check("the turn ran as scripted: searched, found nothing, scheduled 3h out", r.did.some((d) => d.startsWith("search:")) && log.scheduled[0] === 3, r.did);
+  check("an empty result is a result: the early warning went out, once", log.warns.length === 1, log.warns);
+  check("...before the window passed (now is before the warn-by and the deadline)", log.warns[0] && log.warns[0].at.getTime() <= new Date(t.window.warnBy).getTime() && log.warns[0].at.getTime() < new Date(t.window.deadline).getTime());
+  check("...inside their hours (7:30pm SF)", local(log.warns[0]?.at ?? new Date(0)) === "10/07, 19:30");
+  check("...saying what's missing and the new time in their words", /private dining rooms/.test(log.warns[0]?.text ?? "") && /in the morning/.test(log.warns[0]?.text ?? ""), log.warns[0]?.text);
+  check("...keyed to this window (once per missed window)", log.warns[0]?.key === `task:501:window:${t.window.deadline}`);
+  const nw = log.windows[0];
+  check("the window moves to the new time (by noon tomorrow, their time) and remembers it was warned", nw && local(nw.deadline) === "10/08, 12:00" && nw.words === "in the morning" && nw.warnedFor.includes(t.window.deadline), nw);
+  check("the next check moves to 9am their time, when the deliverable can go out", log.at.length === 1 && local(log.at[0]) === "10/08, 09:00", log.at.map((d) => local(d)));
+  check("the turn returns the warning it sent", r.warning === log.warns[0]?.text);
+  check("no other text went out", log.texts.length === 0);
+
+  // The same window again (a second wake for it): never warned twice.
+  script.push({ text: "Nothing yet." });
+  const h2 = harness(new Date(NOW.getTime() + 5 * 60_000));
+  await TT.runTaskTurnWith(baseTask({ window: { ...t.window, warnedFor: [t.window.deadline] } }), h2.deps);
+  check("only once: a window already warned for isn't warned again", h2.log.warns.length === 0);
+  // They replied at 9pm, so the task woke before its new morning window: held to the morning, not a second warning.
+  script.push({ text: "Nothing yet." });
+  const h3 = harness(new Date("2026-10-08T04:00:00Z"));
+  await TT.runTaskTurnWith(baseTask({ window: nw }), h3.deps);
+  check("a wake before the new window opens is held to its start (9am), no second warning", h3.log.warns.length === 0 && h3.log.at.length === 1 && local(h3.log.at[0]) === "10/08, 09:00", h3.log);
+  // The warn-by passed with the process down: past 8pm nothing is sent; the check moves to their morning, which warns then.
+  script.push({ text: "Nothing yet." });
+  const h4 = harness(new Date("2026-10-08T03:30:00Z")); // 8:30pm SF
+  await TT.runTaskTurnWith(baseTask(), h4.deps);
+  check("past 8pm with the window missed: nothing sent at night, the next check moves to 9am", h4.log.warns.length === 0 && h4.log.at.length === 1 && local(h4.log.at[0]) === "10/08, 09:00", h4.log);
+  // A bad draft twice: the plain fallback still goes, rather than silence.
+  script.push({ text: "Nothing yet." });
+  const h5 = harness(NOW, { draft: async () => "Still digging on this, have a few leads. Working on it!" });
+  await TT.runTaskTurnWith(baseTask(), h5.deps);
+  check("two drafts that narrate: the plain fallback goes instead, never silence", h5.log.warns.length === 1 && h5.log.warns[0].text === "No luck on the options yet, I'll have them for you in the morning.", h5.log.warns);
+  // Co told them itself this turn (tellThem), and its next look is past the window: no second line, the window moves, marked told.
+  script.length = 0;
+  script.push({ tool: "tellThem", input: { what: "Nothing verified on the rooms yet; they'll have them in the morning" } }, { text: "No luck on the rooms yet, you'll have them in the morning." }, { tool: "scheduleNext", input: { inHours: 13, plan: "Search again" } });
+  const h7 = harness(NOW);
+  await TT.runTaskTurnWith(baseTask(), h7.deps);
+  script.length = 0;
+  check("Co's own text this turn counts as telling them: no second warning, and the window moves, marked told", h7.log.texts.length === 1 && h7.log.warns.length === 0 && h7.log.windows.length === 1 && h7.log.windows[0].warnedFor.length === 1, { texts: h7.log.texts, windows: h7.log.windows });
+  // A next check inside the window: no warning.
+  script.push({ tool: "scheduleNext", input: { inHours: 1, plan: "Check again" } });
+  const h6 = harness(new Date("2026-10-07T20:00:00Z")); // 1pm SF, window tonight
+  await TT.runTaskTurnWith(baseTask({ window: M.commitmentWindow("tonight", new Date("2026-10-07T19:50:00Z"), SF), createdAt: "2026-10-07T19:50:00Z" }), h6.deps);
+  check("a next check that still lands inside the window sends nothing", h6.log.warns.length === 0);
+  check("the prompt shows Co the time in their zone and its window, not UTC", (() => { const p = JSON.stringify(seen[0] ?? {}); return /Now, their time: Wed Oct 7, 7:30pm PDT/.test(p) && /Co told them they'd have it tonight/.test(p); })());
+  check("the warning is its own exempt type, through sendExempt with quiet hours", /type: "task_window", targetKey: key, messages: \[text\], timezone: zone, respectHours: true/.test(src("services/taskTurn.ts")));
+  check("a warning never counts as the promise kept", /ps\.type IN \('call_confirm', 'task_window'\)/.test(src("services/followThrough.ts")) && /ps\.type IN \('call_confirm', 'task_window'\)/.test(src("services/callCommitments.ts")));
+}
+
+// ======================================================================= 4. completion closes the loop
+{
+  check("closing a task closes its window", /jsonb_set\(followup, '\{window,closedAt\}', to_jsonb\(NOW\(\)\)\)/.test(src("services/coTasks.ts")));
+  check("...and the real close syncs the open loops right then", /await closeTask\(userId, task\.id, status, outcome\);\s*await import\("\.\/openLoops\.js"\)\.then\(\(m\) => m\.syncOpenLoops\(userId\)\)/.test(src("services/taskTurn.ts")));
+  check("a loop whose task is done closes as done (direct read of the task)", OL.closeVerdict("task", { status: "done" })?.status === "done");
+  const w = M.commitmentWindow("tonight", NOW, SF);
+  check("a closed window drops out of what Co reads as open work", !CT.taskFactLines([{ ...baseTask(), window: { ...w, closedAt: NOW.toISOString() } }], undefined, SF).join(" ").includes("they'd have it") && CT.taskFactLines([baseTask()], undefined, SF).join(" ").includes("they'd have it tonight"));
+  check("and what Co reads is in their time, not UTC", !/UTC/.test(CT.taskFactLines([baseTask()], undefined, SF).join(" ")));
+  check("a closed window never warns", await (async () => { script.push({ text: "Nothing yet." }); const h = harness(NOW); await TT.runTaskTurnWith(baseTask({ window: { ...w, closedAt: NOW.toISOString() } }), h.deps); return h.log.warns.length === 0; })());
+}
+
+// ======================================================================= 5. a promised plan goes through the document path, and counts
+{
+  const PLAN_GOAL = "Keep your word from the call: \"I'll put together the plan for keeping Co present after the Sequin AI November event and text you the draft tonight\"";
+  const THEIRS = "After the Sequin AI November event I want the people we meet to remember us. I don't want it to be a one night thing.";
+  check("a plan Co is writing is a document commitment", FT.wantsDocument(PLAN_GOAL, THEIRS));
+  check("a doc, PDF or write-up is too", FT.wantsDocument("Keep your promise: \"I'll send you the PDF tonight\"") && FT.wantsDocument("Keep your promise: \"I'll text you a write-up of what we said\""));
+  check("'text you the plan for Saturday' stays a text (an itinerary, not a page Co writes)", !FT.wantsDocument("Keep your promise: \"I'll text you the plan for Saturday\""));
+  check("the task's prompt tells Co to send it with writeDocument, their words in sections, its plan in suggestions", /WHAT YOU PROMISED IS A DOCUMENT\. Send it with writeDocument/.test(TT.documentPromiseLine({ source: "promise", goal: PLAN_GOAL, theirWords: THEIRS })));
+  check("the task runner has texting's own tool: the same input and the registry's description", /inputSchema: WRITE_DOCUMENT_INPUT/.test(src("services/taskTurn.ts")) && /inputSchema: WRITE_DOCUMENT_INPUT/.test(src("agent/loopTools.ts")) && /description: toolUse\("writeDocument"\)/.test(src("services/taskTurn.ts")));
+
+  // A planning doc, honestly grounded: their points in their words, Co's plan in suggestions.
+  const planDoc = {
+    title: "Staying present after the Sequin AI event",
+    note: "A plan for after the November event, from what you told me.",
+    sections: [{ heading: "What you want", bullets: ["The people you meet at the Sequin AI November event remember you", "Not a one night thing"] }],
+    suggestions: ["Send each new contact a short personal note within two days of the event", "Host a small dinner for the people who connected most", "Share a one-page recap of what you heard in the room", "Check in with your closest new contacts a month later"],
+  };
+  check("a planning doc that is mostly Co's suggestions passes the grounding honestly", DS.documentProblems(DS.resolveDocument(planDoc), { theirs: THEIRS }).length === 0, DS.documentProblems(DS.resolveDocument(planDoc), { theirs: THEIRS }));
+  const invented = { ...planDoc, sections: [{ heading: "What you want", bullets: ["You said Sequin AI wants a quarterly dinner series at Nopa with 40 founders"] }] };
+  check("a member claim they never made is refused", DS.documentProblems(DS.resolveDocument(invented), { theirs: THEIRS }).length > 0);
+
+  // The document path: grounded, hours and opt-out checked right before, delivered, recorded.
+  const rec: any[] = [], delivered: any[] = [];
+  const tdeps = (blocked: string | null = null): any => ({ theirWords: async () => THEIRS, blocked: async () => blocked, deliver: async (doc: any, to: any, target: string) => { delivered.push({ title: doc.title, target, to }); return { ok: true, via: target, filename: "Co-x.pdf" }; }, record: async (...a: any[]) => { rec.push(a); }, now: () => NOW });
+  const o = { userId: "u-test", taskId: 601, firstName: "Jordan", phone: "+14155550100", zone: SF, taskTheirWords: THEIRS, read: "" };
+  const night = await DD.sendDocumentForTask(planDoc as any, o, tdeps("it's outside their hours (9am to 8pm their time)"));
+  check("outside their hours: not sent, nothing recorded", !night.ok && (night as any).blocked && delivered.length === 0 && rec.length === 0, night);
+  const out = await DD.sendDocumentForTask(planDoc as any, o, tdeps("they opted out of texts"));
+  check("opted out: not sent", !out.ok && delivered.length === 0);
+  const sent = await DD.sendDocumentForTask(planDoc as any, o, tdeps());
+  check("inside their hours: sent as the PDF (no Google ask in their words)", sent.ok && delivered.length === 1 && delivered[0].target === "pdf_text", { sent, delivered });
+  check("...and recorded (co_facts + their thread) with the task as the source", rec.length === 1 && rec[0][0] === "u-test" && rec[0][2] === "pdf_text" && rec[0][3] === "task:601", rec);
+  check("the gate re-reads hours, the pause and opt-out right before it goes", /proactivePaused\(\)/.test(src("services/documentDelivery.ts")) && /sendableAt\(now, zone\)/.test(src("services/documentDelivery.ts")) && /SELECT sms_opted_out, archived_at FROM users WHERE id = \$1/.test(src("services/documentDelivery.ts")));
+  check("the record is the label sendsSince reads as a document, plus a line in their thread", /label: `a document \(PDF\): \$\{doc\.title\}`/.test(src("services/documentDelivery.ts")) && /\/\^a document\\b\/i\.test\(label\)/.test(src("services/followThrough.ts")) && /writeMemory\(userId, "text_exchange", `Co replied: \[sent a document: \$\{doc\.title\}\]`\)/.test(src("services/documentDelivery.ts")));
+
+  // The whole turn: Co writes the document with the tool; no text goes; the promise is kept and the task closes itself.
+  script.push({ tool: "writeDocument", input: planDoc }, { text: "Sent." });
+  const { deps, log } = harness(NOW);
+  const docRec: any[] = [];
+  deps.writeDocument = async (input: any, x: { read: string }) => { const r = await DD.sendDocumentForTask(input, { ...o, read: x.read }, { ...tdeps(), record: async (...a: any[]) => { docRec.push(a); } }); log.docs.push(r); return r; };
+  const r = await TT.runTaskTurnWith(baseTask({ id: 601, goal: PLAN_GOAL, theirWords: THEIRS }), deps);
+  check("a plan-doc commitment goes through the document path", log.docs.length === 1 && log.docs[0].ok && docRec.length === 1, { did: r.did, docs: log.docs });
+  check("...never as text", log.texts.length === 0 && log.warns.length === 0);
+  check("the document send counts as the promise kept: the task closes as done", log.closed.length === 1 && /^done: Kept: sent the document/.test(log.closed[0]) && r.action === "finished", log.closed);
+  check("promiseKeptBy: a document after the promise keeps a plan-doc promise; a text doesn't", (() => {
+    const at = TONIGHT_AT;
+    const doc = FT.promiseKeptBy({ goal: PLAN_GOAL, theirWords: THEIRS, at }, [{ at: NOW, text: "a document (PDF): Staying present", kind: "document" }]);
+    const txt = FT.promiseKeptBy({ goal: PLAN_GOAL, theirWords: THEIRS, at }, [{ at: NOW, text: "Here's the plan: send notes, host a dinner, share a recap, check in a month later.", kind: "text", forThis: true }]);
+    return doc.kept && !txt.kept;
+  })());
+  check("the turn's own document counts in the close check", (await TT.promiseCloseCheck({ goal: PLAN_GOAL, theirWords: THEIRS, createdAt: TONIGHT_AT.toISOString(), source: "promise" }, [], { now: () => NOW, sentSince: async () => [] }, ["Staying present"])).ok);
+  check("...and without it, a plan promise isn't closable", !(await TT.promiseCloseCheck({ goal: PLAN_GOAL, theirWords: THEIRS, createdAt: TONIGHT_AT.toISOString(), source: "promise" }, ["Here's the plan in a text"], { now: () => NOW, sentSince: async () => [] })).ok);
+}
+
+// ======================================================================= 6. where windows come from
+{
+  const calls: any[] = [];
+  const cdeps: any = { open: async () => [], start: async (i: any) => { calls.push(i); return { ok: true, task: { id: 9, goal: i.goal, nextCheckAt: null } }; }, setDue: async () => {}, note: async () => {}, zone: async () => SF };
+  await CC.trackCallCommitment({ userId: "u1", sentence: "I'll text you the options.", theirLine: "find me a private dining room", now: new Date("2026-10-08T02:20:00Z") }, cdeps);
+  check("a call commitment with no time carries the confirmation's window ('tonight'), in their zone", calls[0]?.window?.words === "tonight" && local(calls[0].window.deadline) === "10/07, 23:59", calls[0]?.window);
+  await CC.trackCallCommitment({ userId: "u1", sentence: "I'll put together the plan for after the Sequin event and text you the draft tonight.", theirLine: "what's the plan after the event", now: new Date("2026-10-08T02:20:00Z") }, cdeps);
+  check("a plan commitment from a call is set up as a document (writeDocument), not a text", /writeDocument/.test(calls[1]?.steps?.[0]?.text ?? "") && /writeDocument/.test(calls[1]?.firstPlan ?? ""), calls[1]);
+  check("a reply's promise carries its window too, in their zone", /window: commitmentWindow\(sentence, now, zone\)/.test(src("services/promises.ts")) && /const zone = await memberZone\(o\.userId\)/.test(src("services/promises.ts")));
+}
+
+globalThis.fetch = prior;
+// 2026-10-08: a call that ends with no texting time left tonight confirms "in the morning" (no confirmation then a warning).
+{
+  const z = "America/Los_Angeles";
+  const dw = (iso: string) => M.deliveryWords(new Date(iso), z);
+  check("6pm and 7:30pm confirm tonight", dw("2026-10-08T18:00:00-07:00") === "tonight" && dw("2026-10-08T19:30:00-07:00") === "tonight");
+  check("7:45pm, 10:30pm and 2am confirm in the morning", dw("2026-10-08T19:45:00-07:00") === "in the morning" && dw("2026-10-08T22:30:00-07:00") === "in the morning" && dw("2026-10-09T02:00:00-07:00") === "in the morning");
+  check("morning and afternoon unchanged", dw("2026-10-09T10:00:00-07:00") === "this morning" && dw("2026-10-09T14:00:00-07:00") === "this afternoon");
+}
+console.log(`windows: ${total - failed}/${total} passed`);
+if (failed) process.exit(1);

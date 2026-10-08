@@ -134,6 +134,18 @@ const CTX = "Royce is a founder. The Civic Joy Fund fell through for the Oct 10 
 const bad = (line: string) => openingProblems(line, CTX, "Royce") !== null;
 check("a sensitive topic is refused", bad("Hey Royce, it's Co. Last we talked the biopsy results were pending."));
 check("a sentence-start name not in the context is refused", bad("Hey Royce, it's Co. Noor said yes to meeting you."));
+// An opening never contradicts itself (Royce, 2026-10-08). The opening written for him on the merged code asked whether he had
+// reviewed a plan Co said it still owed; it fails and the pool greets instead.
+{
+  const owes = "Where things stand now: Co owes Royce a post-event branding plan for Co's post-event presence after the launch, waiting on Jacqueline's input. " + "pad ".repeat(100);
+  const r = openingProblems("Hey Royce, it's Co. Have you had a chance to review that post-event branding plan I owe you, or still waiting on Jacqueline's input?", owes, "Royce");
+  check("the 10/8 opening (reviewed a plan Co still owes) is refused as contradicting itself", /^contradicts itself/.test(r ?? ""), r);
+  check("a good one on the same context passes: \"I still owe you that planning doc on Co's post-event presence…\"", openingProblems("Hey Royce, it's Co. I still owe you that branding plan on Co's post-event presence. Has Jacqueline weighed in?", owes, "Royce") === null, openingProblems("Hey Royce, it's Co. I still owe you that branding plan on Co's post-event presence. Has Jacqueline weighed in?", owes, "Royce"));
+  check("\"still\" with a completion verb is refused", /^contradicts itself/.test(openingProblems("Hey Royce, it's Co. Is the branding plan still finished?", owes, "Royce") ?? ""));
+  check("two clauses with opposite states of one thing are refused", /^contradicts itself/.test(openingProblems("Hey Royce, it's Co. The branding plan is done, but the plan isn't finished.", owes, "Royce") ?? ""));
+  check("an either-or question is not a contradiction", openingProblems("Hey Royce, it's Co. Did Jacqueline's input come back, or still waiting on her?", owes, "Royce") === null, openingProblems("Hey Royce, it's Co. Did Jacqueline's input come back, or still waiting on her?", owes, "Royce"));
+  check("the check is the shared one in speakable.ts", /selfContradiction\(line\)/.test(read("src/services/callOpening.ts")));
+}
 check("speaking for another member is refused", bad("Hey Royce, it's Co. Want the intro?"));
 check("a number only inside a bigger number is refused", bad("Hey Royce, it's Co. Did the 201 sponsors reply?"));
 check("a relative time not in the context is refused", bad("Hey Royce, it's Co. Is tomorrow's event still on?"));

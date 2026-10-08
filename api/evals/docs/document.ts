@@ -256,7 +256,8 @@ const GUIDE = "seeking guidance on how to split the cofounder roles with Jacquel
   check("the page marks Co's own ideas visibly and apart from their points (a labelled, ruled block after the sections)", /<section class="sug"><h3>Co's suggestions<\/h3><ul><li>An idea of Co&#39;s\.<\/li><\/ul><\/section>/.test(html2) && html2.indexOf('class="sug"') > html2.indexOf("</section>") && /\.sug \{[^}]*border-left: 2px solid/.test(html2));
   check("no suggestions, no block", !/class="sug"/.test(D.documentHtml(doc, { firstName: "R", date: "d" })));
   check("suggestions are capped at five", D.resolveDocument({ title: "T", sections: [{ bullets: ["x"] }], suggestions: Array.from({ length: 9 }, (_, i) => `idea ${i}`) }).suggestions.length === 5);
-  check("the tool takes suggestions and says so", /suggestions: z\.array\(z\.string\(\)\)\.max\(5\)\.optional\(\)/.test(src("agent/loopTools.ts")) && /ONLY what they said, in their words/.test(src("agent/loopTools.ts")));
+  // The input is one definition, shared by the reply and a task keeping a promise (services/documentSheet.ts WRITE_DOCUMENT_INPUT).
+  check("the tool takes suggestions and says so", /suggestions: z\.array\(z\.string\(\)\)\.max\(5\)\.optional\(\)/.test(src("services/documentSheet.ts")) && /ONLY what they said, in their words/.test(src("services/documentSheet.ts")) && /inputSchema: WRITE_DOCUMENT_INPUT/.test(src("agent/loopTools.ts")));
   check("their record rests on their words alone: what Co read can back only a suggestion", /const source = \{ theirs, read \}/.test(src("agent/loopTools.ts")) && !/JSON\.stringify\(t\?\.profile/.test(src("agent/loopTools.ts")));
   // The filename
   check("filename: a title starting 'Co:' does not become Co-Co", D.docFilename("Co: Product Positioning and Scaling Notes", "2026-10-07") === "Co-Product-Positioning-and-Scaling-Notes-2026-10-07.pdf", D.docFilename("Co: Product Positioning and Scaling Notes", "2026-10-07"));

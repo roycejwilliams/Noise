@@ -11,7 +11,8 @@ import { recordDecision } from "../harness/core.js";
 import { OFFERS_WHAT_CO_CANT } from "./taskWeb.js";
 import { MAX_OPEN_PROMISES, promiseGoal, theirWordsFor } from "./promises.js";
 import { noteOnTask, openTasks, startTask, type CoTask } from "./coTasks.js";
-import { promiseKeptBy, sameCommitment, sendsSince, type Sent } from "./followThrough.js";
+import { promiseKeptBy, sameCommitment, sendsSince, wantsDocument, type Sent } from "./followThrough.js";
+import { commitmentWindow, deliveryWords, localStamp, memberZone } from "./memberTime.js";
 
 const VERB = String.raw`(?:text|send|put together|pull together|write up|draft|share|drop|shoot|forward)`;
 export const COMMIT_RE = new RegExp(String.raw`\b(?:i'?ll|i will|i'?m going to|i'?m gonna)\s+(?:\w+\s+){0,2}?${VERB}\b`, "i");
@@ -57,10 +58,13 @@ export type CommitDeps = {
   start: typeof startTask;
   setDue: (userId: string, taskId: number, due: Date) => Promise<void>;
   note: (userId: string, taskId: number, text: string) => Promise<unknown>;
+  // Their zone, for the commitment's window (services/memberTime.ts). Left out: unknown, the documented fallback.
+  zone?: (userId: string) => Promise<string | null>;
 };
 const realCommitDeps: CommitDeps = {
   open: openTasks,
   start: startTask,
+  zone: memberZone,
   setDue: async (userId, id, due) => { await pool.query(`UPDATE co_tasks SET next_check_at = $3 WHERE user_id = $1 AND id = $2`, [userId, id, due]); },
   note: noteOnTask,
 };
@@ -81,21 +85,31 @@ export async function trackCallCommitment(o: { userId: string; sentence: string;
       return { ok: false, why: `the same commitment as task #${same.id}` };
     }
     if (open.filter((t) => t.source === "promise").length >= MAX_OPEN_PROMISES + 2) return { ok: false, why: "already keeping several promises" };
+    // Its window in their local time: the time Co named on the call, else the words the after-call confirmation will say
+    // ("tonight" for an evening call), so what Co confirms and what it holds itself to are the same (services/memberTime.ts).
+    const at = o.now ?? new Date();
+    const zone = deps.zone ? await deps.zone(o.userId).catch(() => null) : null;
+    const window = commitmentWindow(o.sentence, at, zone, deliveryWords(at, zone));
+    // A plan or a doc Co said it would write goes as a document (writeDocument in the task's turn), never a wall of text.
+    const doc = wantsDocument(candidate.goal, candidate.theirWords);
     const r = await deps.start({
       userId: o.userId,
       goal: commitmentGoal(o.sentence),
       theirWords: theirWordsFor(o.theirLine ?? "(said on a call)"),
-      steps: [{ text: "Send what you said you would, in a text, with the links or the document itself" }],
-      firstPlan: "You told them this on a call: send it now by text, with what they were looking at (the links, the summary). If you can't, tell them plainly where it stands.",
+      steps: [{ text: doc ? "Write the document with writeDocument and send it (a PDF), never as a long text" : "Send what you said you would, in a text, with the links or the document itself" }],
+      firstPlan: doc
+        ? "You told them this on a call: write it now as a document with writeDocument (their points from their words, your plan in suggestions). If you can't, tell them plainly where it stands."
+        : "You told them this on a call: send it now by text, with what they were looking at (the links, the summary). If you can't, tell them plainly where it stands.",
       inHours: 1,
       source: "promise",
+      window,
     });
     if (!r.ok) return r;
     // Due shortly after the call, not an hour or more later: set directly (startTask's own floor is an hour).
     const due = new Date((o.now ?? new Date()).getTime() + DUE_AFTER_MINUTES * 60_000);
     await deps.setDue(o.userId, r.task.id, due);
-    await deps.note(o.userId, r.task.id, `Said on a call; due ${due.toISOString().slice(11, 16)} UTC, shortly after they hang up.`).catch(() => null);
-    return { ok: true, task: { ...r.task, nextCheckAt: due.toISOString() } };
+    await deps.note(o.userId, r.task.id, `Said on a call; due ${localStamp(due, zone)}, shortly after they hang up. They'll have it ${window.words} (by ${localStamp(window.deadline, zone)}).`).catch(() => null);
+    return { ok: true, task: { ...r.task, nextCheckAt: due.toISOString(), window } };
   } catch (err: any) {
     console.error("callCommitments: tracking failed (non-fatal):", err?.message ?? err);
     return { ok: false, why: "failed" };
@@ -129,10 +143,10 @@ const realCheckDeps: CheckDeps = {
       [`${COMMIT_PREFIX}%`, olderThan, newerThan],
     )).rows,
   sentSince: async (userId, since) => {
-    // The after-call confirmation (services/callFollowThrough.ts) says it is coming; it is not the thing itself.
+    // The after-call confirmation (services/callFollowThrough.ts) and a miss warning (task_window) say it is coming; neither is the thing itself.
     const r = await pool.query(
       `SELECT om.sent_at FROM outbound_messages om WHERE om.user_id = $1 AND om.sender = 'co' AND om.sent_at > $2
-         AND NOT EXISTS (SELECT 1 FROM proactive_sends ps WHERE ps.user_id = om.user_id AND ps.type = 'call_confirm' AND ps.message = om.content)
+         AND NOT EXISTS (SELECT 1 FROM proactive_sends ps WHERE ps.user_id = om.user_id AND ps.type IN ('call_confirm', 'task_window') AND ps.message = om.content)
        ORDER BY om.sent_at LIMIT 1`,
       [userId, since],
     );

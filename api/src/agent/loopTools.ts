@@ -17,6 +17,8 @@ import type { ConversationToolContext } from "./conversationTools.js";
 import pool from "../db/db.js";
 import sendblue from "../services/sendblue.js";
 import { resolvePlan, planProblems, type EventRecord } from "../services/planSheet.js";
+import { WRITE_DOCUMENT_INPUT } from "../services/documentSheet.js";
+import { GOOGLE_DOC_ASK } from "../services/documentDelivery.js";
 
 // What the loop has seen this turn: every link a tool returned, with the facts
 // that came with it, and every page it read.
@@ -64,8 +66,8 @@ export function EMAIL_ASK_TEST(text: string): boolean {
 }
 export const EMAIL_ASK = { test: EMAIL_ASK_TEST };
 
-// They asked for a Google Doc (or for it in their Drive), in their own words.
-export const GOOGLE_DOC_ASK = /\bgoogle\s*docs?\b|\bgoogle\s*drive\b|\bgdocs?\b|\b(?:in|to) (?:my )?(?:google )?drive\b/i;
+// They asked for a Google Doc (or for it in their Drive), in their own words. Defined with the delivery (a task's document reads it too).
+export { GOOGLE_DOC_ASK };
 
 export function mailtoLink(to: string, subject: string, body: string): string {
   return `mailto:${to}?subject=${encodeURIComponent(subject)}&body=${encodeURIComponent(body)}`;
@@ -584,29 +586,13 @@ export function loopTools(
         return { ok: true, option: { name: hit.name, link: hit.url, fields: hit.fields.map((f) => ({ [f.label]: f.value ?? "unknown", checked: f.checkedAt })) }, next: Q.nextStepAfterReaction(input.reaction, hit), note: "Don't mention noting it." };
       },
     }),
+    // The input and the delivery loop are shared with a task keeping a promise (services/taskTurn.ts writeDocument).
     writeDocument: tool({
       description: toolUse("writeDocument"),
-      inputSchema: z.object({
-        title: z.string().describe("A short title, in plain words they would recognize."),
-        note: z.string().optional().describe("One line under the title: what this is, in your voice."),
-        sections: z
-          .array(
-            z.object({
-              heading: z.string().optional(),
-              paragraphs: z.array(z.string()).max(6).optional(),
-              bullets: z.array(z.string()).max(10).optional(),
-            }),
-          )
-          .min(1)
-          .max(10)
-          .describe("Each a heading, a sentence or two of framing, then the points as short bullets: scannable, not dense paragraphs. ONLY what they said, in their words; your own ideas go in suggestions, never here."),
-        suggestions: z.array(z.string()).max(5).optional().describe("Anything of your own: an idea, an option, a recommendation. It appears on the page marked as Co's suggestions, apart from their points. Leave it out when you have none."),
-        kind: z.enum(["venue_brief", "partnership_plan", "readout", "other"]).optional().describe("What it is for: venue_brief (for a venue or space around an event), partnership_plan (working with a partner, sponsor or host), readout (what came of an event, for a host or partner), or other (anything else: their goals, a plan for themselves, a summary). Leave it out for other."),
-        saveTo: z.enum(["pdf", "google_doc", "both"]).optional().describe("Leave this out: it comes as a PDF in this conversation. Only when they ask for a Google Doc in their own words set google_doc (or both, if they want the PDF too)."),
-      }),
+      inputSchema: WRITE_DOCUMENT_INPUT,
       execute: async (input) => {
         const { resolveDocument, documentProblems } = await import("../services/documentSheet.js");
-        const { deliverDocument, docTargets, loadTheirWords } = await import("../services/documentDelivery.js");
+        const { deliverToTargets, loadTheirWords } = await import("../services/documentDelivery.js");
         const { recordDocumentWritten } = await import("../services/documentOffer.js");
         const doc = resolveDocument(input);
         // Their record is their words: two weeks of their texts and calls, and this message. What Co read this turn can back only
@@ -630,18 +616,7 @@ export function loopTools(
         // A Google Doc only when they asked for one in their own words (code checks the words, not Co's say-so), and only for a shared
         // working artifact (venue brief, partnership plan, readout) for a member with Google connected (narrowed by GOOGLE_DOCS_TEST_USERS when set); otherwise the PDF.
         // Not connected (or Docs not allowed): the PDF goes instead, and Co offers to connect Google.
-        const { targets, googleRefused } = docTargets({ userId: ctx.userId, kind: doc.kind, saveTo: input.saveTo, askedForGoogle: GOOGLE_DOC_ASK.test(theirWords()) });
-        const results: Awaited<ReturnType<typeof deliverDocument>>[] = [];
-        let googleMissing = false;
-        for (const target of targets) {
-          const r = await deliverDocument(doc, to, target);
-          results.push(r);
-          if (!r.ok && target === "google_docs" && (r.notConnected || r.notAllowed)) {
-            googleMissing = !!r.notConnected;
-            if (!targets.includes("pdf_text")) results.push(await deliverDocument(doc, to, "pdf_text"));
-          }
-        }
-        const sentOk = results.filter((r): r is Extract<typeof r, { ok: true }> => r.ok);
+        const { results, sentOk, googleRefused, googleMissing } = await deliverToTargets(doc, to, { saveTo: input.saveTo, askedForGoogle: GOOGLE_DOC_ASK.test(theirWords()) });
         if (!sentOk.length) {
           const why = results.map((r) => (r.ok ? "" : r.why)).filter(Boolean).join("; ");
           notDone(`No document sent: ${why}.`);

@@ -266,6 +266,8 @@ export const NARRATION_RULES: { pattern: RegExp; why: string }[] = [
   { pattern: /\b(?:solid|good|strong|ready|concrete|firm|real) enough to (?:send|share|pass along|text)\b/i, why: "judges whether their own thing is ready to send" },
   { pattern: /^(?:so far,?\s+)?no (?:confirmed|solid|concrete|firm|real|good) (?:details|options|picks|results|leads|answers|news)?\s*(?:yet|so far)\b/i, why: "reports not having it yet" },
   { pattern: /\b(?:have|got|found) a (?:few|couple of|couple) (?:leads|options in the works)\b|\bi'?ll have (?:it|them|something|more) (?:soon|shortly|in a bit)\b|\bstill (?:looking|searching|checking|digging)\b/i, why: "a progress report instead of the thing" },
+  // Co's own machinery, said aloud (2026-10-08 live call: "The search hit a limit on my end ... I'm retrying it now").
+  { pattern: /\b(?:hit a (?:limit|snag|wall|cap)|ran into a (?:limit|snag|cap)|(?:on|at) my end)\b|\b(?:i'?m|i am)\s+(?:now\s+)?(?:retrying|re-?running|trying (?:it|that) again|still (?:searching|looking|loading))\b/i, why: "narrates Co's own machinery" },
   // Tracker words.
   { pattern: /\b(?:status update|in progress|on my (?:list|queue)|in my queue|queued (?:it|up)|my task list)\b/i, why: "task-tracker words" },
 ];
@@ -281,6 +283,89 @@ export function narratesInternalState(text: string): string | null {
   for (const s of sentences) {
     if (/\?\s*["')\]]*$/.test(s)) continue;
     for (const r of NARRATION_RULES) if (r.pattern.test(s)) return `${r.why}: "${s.slice(0, 80)}"`;
+  }
+  return null;
+}
+
+// ---------- a line never contradicts itself (Royce, 2026-10-08: "A call opening can never contradict itself.")
+// The opening written for him: "Have you had a chance to review that post-event branding plan I owe you, or still waiting on
+// Jacqueline's input?" A plan Co still owes can't have been reviewed. Three shapes, each tied to the SAME thing so two true
+// clauses about two different things ("the venue is booked, the date is still open") pass:
+//   1. something Co owes (not delivered) is also something they reviewed, received, read or liked, or Co sent;
+//   2. "still" with a completion verb ("still finished", "still sent");
+//   3. two clauses asserting opposite states of one thing: done and not done, locked and open, heard back and still waiting.
+// An either-or question ("Is the date locked, or still open?") asks; it doesn't assert both, so its alternatives are not compared.
+// Pure, a few regexes over one or two sentences.
+const OWED = /\b(?:i|co)\s+(?:still\s+)?owes?\s+you\b|\bi\s+(?:still\s+)?(?:haven't|have not|didn't|did not)\s+(?:yet\s+)?(?:sent|finished|shared|delivered|written|drafted)\b|\bstill\s+(?:owed|pending|to come|on (?:my|its) way)\b|\bnot (?:sent|finished|done|ready) yet\b/i;
+const THEY_HAD = /\b(?:had|get|got|getting|have)\s+(?:a\s+)?(?:chance|minute|moment|time)\s+to\s+(?:review|read|look|go through|check|dig|open)\b|\b(?:did|have|has)\s+you\s+(?:get\s+to\s+|got\s+to\s+)?(?:review(?:ed)?|read|receive[d]?|get|got(?:ten)?|see|seen|like[d]?|love[d]?|look(?:ed)?\s+(?:at|over|through)|go(?:ne)?\s+through|check(?:ed)?\s+out|open(?:ed)?|sign(?:ed)?\s+off)\b|\byou(?:'ve| have)?\s+(?:already\s+)?(?:reviewed|received|gotten|seen|liked|loved|looked (?:at|over)|gone through|checked out|opened|signed off on)\b|\bwhat\s+did\s+you\s+think\s+of\b|\bhow\s+did\s+you\s+like\b|\b(?:your|any)\s+(?:feedback|notes|edits)\s+on\b/i;
+const CO_SENT = /\bi(?:'ve| have)?\s+(?:already\s+|just\s+)?(?:sent|delivered|shared|finished|wrapped up|handed over)\b/i;
+const STILL_DONE = /\bstill\s+(?:(?:been|being|have|has|had|is|are|was|were)\s+)?(?:already\s+)?(?:finished|completed|delivered|sent|reviewed|signed off|wrapped up)\b/i;
+// Opposite states of one thing.
+const STATES: { name: string; yes: RegExp; no: RegExp }[] = [
+  {
+    name: "done and not done",
+    yes: /\b(?:is|was|it's|that's|now|all)\s+(?:all\s+)?(?:done|finished|ready|sent|wrapped up|complete)\b|\bi(?:'ve| have)\s+(?:already\s+)?(?:sent|finished|delivered)\b/i,
+    no: new RegExp(`${OWED.source}|\\b(?:not|isn't|wasn't|hasn't been|is not)\\s+(?:done|finished|ready|sent)\\b|\\bstill\\s+(?:in progress|being (?:drafted|written|built|put together))\\b`, "i"),
+  },
+  {
+    name: "locked and open",
+    yes: /\b(?:is|was|it's|that's|now|got|been|all|are|they're)\s+(?:locked(?:\s+in)?|confirmed|booked|finalized|final|set in stone)\b/i,
+    no: /\b(?:not|isn't|wasn't|aren't|hasn't been|haven't been|never)\s+(?:yet\s+)?(?:locked|confirmed|booked|final|finalized|set)\b|\bstill\s+(?:open|up in the air|undecided|tbd|unconfirmed|in flux)\b|\bup in the air\b|\bunconfirmed\b|\bstays open\b/i,
+  },
+  {
+    name: "heard back and still waiting",
+    yes: /\b(?:heard back|got back to (?:you|us)|replied|responded|came back to (?:you|us))\b/i,
+    no: /\b(?:still\s+)?waiting (?:on|for)\b|\b(?:haven't|have not|hasn't|has not) (?:heard|replied|responded|gotten back)\b|\bno word (?:from|yet)\b/i,
+  },
+];
+const CLAUSE_PLAIN = new Set("that this those these with your yours have been still about from into just over then they them their there what when where which while would could should will last talked chance review reviewed waiting owe owed sent done ready locked open confirmed booked heard back hear input thing things something anything since already yet it's that's you've you're i've i'm really".split(" "));
+const nounsOf = (clause: string) => new Set(clause.toLowerCase().replace(/[’‘]/g, "'").replace(/[^a-z' -]+/g, " ").split(/[\s-]+/).map((w) => w.replace(/'s$/, "")).filter((w) => w.length >= 4 && !CLAUSE_PLAIN.has(w)));
+const shares = (a: Set<string>, b: Set<string>) => [...a].some((w) => b.has(w));
+const POINTS_BACK = /^\s*(?:and\s+|but\s+|so\s+|or\s+)?(?:it|that|this|they|it's|that's|they're)\b|\b(?:it|that|this)\s*[?.!]?\s*$/i;
+
+type Clause = { text: string; sentence: number; alt: boolean };
+function clausesOf(line: string): Clause[] {
+  const out: Clause[] = [];
+  const sentences = line.replace(/[’‘]/g, "'").split(/(?<=[.!?])\s+/).map((s) => s.trim()).filter(Boolean);
+  sentences.forEach((s, i) => {
+    const asks = /\?\s*$/.test(s);
+    // "..., or ..." and "... or ..." in a question start an alternative, not a second assertion.
+    const SEP = /(,\s*(?:or|but|and|so)\s+|\s+(?:or|but)\s+|[,;:]\s*)/i;
+    let alt = false;
+    s.split(SEP).forEach((p, k) => {
+      // split() with a captured separator: odd places are the separators.
+      if (k % 2 === 1) { alt = asks && /\bor\b/i.test(p); return; }
+      if (p.trim()) out.push({ text: p.trim(), sentence: i, alt });
+      alt = false;
+    });
+  });
+  return out;
+}
+
+// Pure: why a line contradicts itself, or null.
+export function selfContradiction(line: string): string | null {
+  const text = line.replace(/\[[a-z][a-z ]*\]\s*/gi, "").replace(/[’‘]/g, "'");
+  if (STILL_DONE.test(text)) return `"still" with a completion verb: "${text.match(STILL_DONE)![0]}"`;
+  const clauses = clausesOf(text);
+  // 1. Owed, and also had or sent: in one clause ("review that plan I owe you"), or about the same thing in two.
+  const owed = clauses.filter((c) => OWED.test(c.text));
+  const had = clauses.filter((c) => THEY_HAD.test(c.text) || CO_SENT.test(c.text));
+  for (const o of owed) for (const h of had) {
+    if (o === h || shares(nounsOf(o.text), nounsOf(h.text)) || (h.sentence >= o.sentence && POINTS_BACK.test(h.text))) {
+      return `something Co still owes is also something they had or Co sent: "${o === h ? o.text : `${o.text} / ${h.text}`}"`;
+    }
+  }
+  // 3. Opposite states of one thing.
+  for (const st of STATES) {
+    for (let i = 0; i < clauses.length; i++) for (let j = 0; j < clauses.length; j++) {
+      if (i === j) continue;
+      const a = clauses[i], b = clauses[j];
+      if (!st.yes.test(a.text) || !st.no.test(b.text)) continue;
+      // Either-or alternatives in a question: asking which, not saying both.
+      if (a.sentence === b.sentence && (a.alt || b.alt)) continue;
+      const later = i < j ? b : a;
+      if (shares(nounsOf(a.text), nounsOf(b.text)) || POINTS_BACK.test(later.text)) return `${st.name} at once: "${a.text}" / "${b.text}"`;
+    }
   }
   return null;
 }

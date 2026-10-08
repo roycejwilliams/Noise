@@ -191,7 +191,7 @@ user: Perfect, thank you.`;
   check("the deliverable turn is claimed the way the cron claims (no double run)", /wakes = wakes \+ 1/.test(ftSrc) && /AND wakes = \$3/.test(ftSrc) && /runTaskTurn\(task\)/.test(ftSrc));
   check("the confirmation is exempt from spacing but respects their hours", /type: CONFIRM_TYPE[^}]*respectHours: true/.test(ftSrc));
   const cc = src("services/callCommitments.ts");
-  check("a confirmation never counts as the commitment kept", /ps\.type = 'call_confirm'/.test(cc));
+  check("a confirmation never counts as the commitment kept (nor a miss warning)", /ps\.type IN \('call_confirm', 'task_window'\)/.test(cc));
   const pc = src("jobs/postCallFollowUp.ts");
   check("the after-call reflection no longer says 'worth sending' or 'you're on it'", !/worth sending yet/.test(pc) && !/you're on it/.test(pc));
   check("the after-call reflection knows the confirmation went out", /confirmation_you_already_sent_after_the_call/.test(pc));
@@ -212,5 +212,7 @@ user: Perfect, thank you.`;
   check("two different things from one call stay two", !FT.sameCallCommitment({ goal: "Find a few private dinner venue options for twelve near Hayes Valley" }, { goal: "Draft a sponsor deck for the November launch" }));
   check("the call's ask read uses the same-call bar", /sameCallCommitment\(\{ goal: a\.goal, theirWords: a\.quote \}, t\)/.test(src("services/callTasks.ts")));
 }
+for (const l of ["The search hit a limit on my end.", "I'm retrying it now.", "Something hit a snag at my end, give me a second."]) check(`machinery flagged: "${l}"`, narratesInternalState(l) !== null);
+check("a plain fact about their thing passes", narratesInternalState("The room at Perbacco holds forty seated.") === null);
 console.log(`follow-through: ${total - failed}/${total} passed`);
 if (failed) process.exit(1);

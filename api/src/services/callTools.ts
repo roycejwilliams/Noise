@@ -13,6 +13,7 @@ import { recordDecision } from "../harness/core.js";
 import { createConversationTools } from "../agent/conversationTools.js";
 import { guardTools } from "../agent/toolGuard.js";
 import type { CallToolset as BaseToolset } from "./callLlmProxy.js";
+import { mentionsIn } from "./offerGuard.js";
 
 // The subset that makes sense mid-call: quick writes and quick reads. Web research is not here: it is slow and multi-step, so on a
 // call it goes to startTask or researchBrief (background work that texts them), never blocking the voice.
@@ -33,6 +34,8 @@ You can act during the call with your tools, and the result is real. Whenever yo
 - Doing it now replaces the promise: don't also say you'll do it after the call. The call carries on after a tool; say goodbye only when they do.
 - Anything that needs real looking (web research, comparing options, finding venues) goes to startTask or researchBrief: they work after the call and text them what comes of it. Don't search the web on the call.
 - Documents and briefs arrive by text, not on the call: say they'll be in their texts.
+- When they tell you something that belongs to one of your open tasks (a name, a date, a place, a number, a constraint, a change of plan), write it on that task with updateTask in this same turn, in their words. Saying it back ("got it") writes nothing down, and only what's written is there when the work happens after the call. Something about them rather than a task goes in updateNotes.
+- If you don't know a name, a place or a number, say you're not sure. Never guess one, and never promise work they didn't ask for.
 - A tool that needs their yes needs their own words from what they just said. If they haven't said yes, ask.
 - When you've said goodbye and they've had a beat to answer, call end_call.`;
 
@@ -71,12 +74,64 @@ export async function loadMemberOnCall(userId: string): Promise<MemberOnCall> {
 }
 
 export function callToolsNote(m: Pick<MemberOnCall, "tasks" | "loops">, didOnCall: string[]): string {
+  return [CALL_TOOLS_GUIDE, callRecords(m, didOnCall)].join("\n");
+}
+
+// Co's records for the member, without the guide: what a spoken line may stand on (callLlmProxy.ts callSources).
+export function callRecords(m: Pick<MemberOnCall, "tasks" | "loops">, didOnCall: string[]): string {
   return [
-    CALL_TOOLS_GUIDE,
     m.tasks.length ? `Your open tasks for them (the #N is for updateTask and closeTask, never to say): ${m.tasks.map((t) => `#${t.id} "${t.goal}"`).join("; ")}.` : "You have no open tasks for them yet.",
     m.loops ?? "",
     didOnCall.length ? `Done earlier on this call (already true; don't do it again): ${didOnCall.slice(-8).join(" ")}` : "",
   ].filter(Boolean).join("\n");
+}
+
+// ---------- A fact they gave on the call, written down (2026-10-08 live call: "the studio is called Ellis Works and the date's
+// not locked yet", Co said "Got it, Ellis Works" and called no tool, so the open task never learned the name).
+// Co decides: the guide above says to write it on the task, and this turn's note (below) says it again when their words carry a
+// specific and a task is open. Code guards the fact, not the intent: when Co said the specific back but no tool wrote anything, their
+// own words go on the task through the same guarded updateTask (afterTurn). Never Co's words, never a guess at what they meant.
+const normWords = (s: string) => ` ${s.toLowerCase().replace(/[’‘]/g, "'").replace(/[^a-z0-9' ]+/g, " ").replace(/\s+/g, " ").trim()} `;
+const MONTH_OR_DAY = /\b(?:january|february|march|april|may|june|july|august|september|october|november|december|monday|tuesday|wednesday|thursday|friday|saturday|sunday)\b/i;
+const WRITES = new Set(["updateTask", "updateNotes", "startTask", "closeTask", "updateLoop"]);
+const TOPIC_PLAIN = new Set("that this those these with what when where which there their they them your from have just also about into over then than been were will would could should called named date dates time open locked keep side note thing things anything something".split(" "));
+
+// Pure: the names and numbers in their words (each sentence's own first word is only a capital, so sentences are read apart).
+export function specificsTheyGave(turnWords: string): string[] {
+  const out = new Set<string>();
+  for (const s of turnWords.split(/(?<=[.!?])\s+/)) for (const m of mentionsIn(s)) if (m.kind === "name" || m.kind === "time") out.add(m.text);
+  for (const m of turnWords.match(/\$?\d[\d,.]*(?:\s?(?:k|%|people|guests|pm|am))?/gi) ?? []) out.add(m.replace(/[.,]$/, ""));
+  return [...out].filter((x) => x.length >= 2);
+}
+
+// Pure: this turn's note, after their words. Only when a task is open and their words carry a name, number or date.
+export function taskFactNote(turnWords: string, tasks: { id: number; goal: string }[]): string | null {
+  if (!tasks.length) return null;
+  const given = specificsTheyGave(turnWords);
+  if (!given.length && !MONTH_OR_DAY.test(turnWords)) return null;
+  const what = given.length ? given.map((g) => `"${g}"`).join(", ") : "a date";
+  return `(A note from Co's own records, not their words: they just gave you ${what}. If that belongs to one of your open tasks, write it on that task with updateTask in this turn, in their words, then answer. Saying it back doesn't write it down.)`;
+}
+
+// Pure: the task their words belong to, or null. The only open task, or the one whose goal shares a word with what they said.
+export function taskFor(turnWords: string, tasks: { id: number; goal: string }[]): { id: number; goal: string } | null {
+  if (tasks.length === 1) return tasks[0];
+  const theirs = new Set(normWords(turnWords).trim().split(" ").filter((w) => w.length >= 4 && !TOPIC_PLAIN.has(w)));
+  const hits = tasks.filter((t) => normWords(t.goal).trim().split(" ").some((w) => theirs.has(w)));
+  return hits.length === 1 ? hits[0] : null;
+}
+
+// Pure: the backstop's write, or null. Their words carry a specific the task doesn't have yet, Co said that specific back this turn
+// (so it took it as part of the work), and none of Co's writing tools ran. The note is their own words, nothing else.
+export function taskFactBackstop(t: { turnWords: string; spoken: string[]; ran: string[]; tasks: { id: number; goal: string }[] }): { taskId: number; note: string; specifics: string[] } | null {
+  if (t.ran.some((n) => WRITES.has(n))) return null;
+  const task = taskFor(t.turnWords, t.tasks);
+  if (!task) return null;
+  const said = normWords(t.spoken.join(" "));
+  const goal = normWords(task.goal);
+  const echoed = specificsTheyGave(t.turnWords).filter((g) => { const n = normWords(g.replace(/['’]s$/i, "")); return n.trim().length >= 2 && said.includes(n) && !goal.includes(n); });
+  if (!echoed.length) return null;
+  return { taskId: task.id, note: `On the call they said: "${t.turnWords.trim().slice(0, 260)}"`, specifics: echoed };
 }
 
 export type CallToolsInput = {
@@ -129,22 +184,34 @@ export function buildCallTools(i: CallToolsInput): CallToolset {
     delete schema.$schema;
     return { name, description: String(t.description ?? ""), input_schema: schema };
   });
+  const run: CallToolset["run"] = async (name, input, toolUseId) => {
+    const t = picked[name];
+    if (!t) return { ok: false, error: `No tool named ${name} on a call.` };
+    const parsed = t.inputSchema && typeof t.inputSchema.safeParse === "function" ? t.inputSchema.safeParse(input ?? {}) : { success: true, data: input ?? {} };
+    if (!parsed.success) return { ok: false, error: `The input didn't fit: ${parsed.error.issues.slice(0, 3).map((x: any) => `${x.path.join(".")}: ${x.message}`).join("; ")}. Fix it and try once more, or say plainly it wasn't done.` };
+    const t0 = Date.now();
+    let result: any;
+    try { result = await t.execute(parsed.data, { toolCallId: toolUseId, messages: [] }); }
+    catch (err: any) { result = { ok: false, error: `It failed: ${String(err?.message ?? err).slice(0, 160)}. Say plainly it wasn't done.` }; }
+    if (!i.dryRun) recordDecision({ layer: 8, decision: "call.tool", userId: i.userId, outcome: result?.ok === false ? "skip" : "act", action: name, proposal: { ms: Date.now() - t0, turn: i.turnWords.slice(0, 200) }, reason: String(result?.error ?? "").slice(0, 200) }).catch(() => {});
+    return result;
+  };
   return {
     defs,
     names: new Set(Object.keys(picked)),
     note: callToolsNote(i.member, mem.did),
+    records: callRecords(i.member, mem.did),
+    turnNote: picked.updateTask ? taskFactNote(i.turnWords, i.member.tasks) : null,
     did,
-    run: async (name, input, toolUseId) => {
-      const t = picked[name];
-      if (!t) return { ok: false, error: `No tool named ${name} on a call.` };
-      const parsed = t.inputSchema && typeof t.inputSchema.safeParse === "function" ? t.inputSchema.safeParse(input ?? {}) : { success: true, data: input ?? {} };
-      if (!parsed.success) return { ok: false, error: `The input didn't fit: ${parsed.error.issues.slice(0, 3).map((x: any) => `${x.path.join(".")}: ${x.message}`).join("; ")}. Fix it and try once more, or say plainly it wasn't done.` };
-      const t0 = Date.now();
-      let result: any;
-      try { result = await t.execute(parsed.data, { toolCallId: toolUseId, messages: [] }); }
-      catch (err: any) { result = { ok: false, error: `It failed: ${String(err?.message ?? err).slice(0, 160)}. Say plainly it wasn't done.` }; }
-      if (!i.dryRun) recordDecision({ layer: 8, decision: "call.tool", userId: i.userId, outcome: result?.ok === false ? "skip" : "act", action: name, proposal: { ms: Date.now() - t0, turn: i.turnWords.slice(0, 200) }, reason: String(result?.error ?? "").slice(0, 200) }).catch(() => {});
-      return result;
+    run,
+    // The backstop: a specific they gave and Co said back, with nothing written, goes on the task in their own words, through the
+    // same guarded updateTask (limits, receipt, decision log, Co's action record).
+    afterTurn: async ({ spoken, ran }) => {
+      if (!picked.updateTask) return;
+      const w = taskFactBackstop({ turnWords: i.turnWords, spoken, ran, tasks: i.member.tasks });
+      if (!w) return;
+      const r: any = await run("updateTask", { taskId: w.taskId, note: w.note, why: `They gave ${w.specifics.join(", ")} on the call and Co said it back without writing it down.` }, `backstop_${Date.now().toString(36)}`);
+      if (!i.dryRun) recordDecision({ layer: 8, decision: "call.task_fact_backstop", userId: i.userId, outcome: r?.ok === false ? "skip" : "act", action: "updateTask", proposal: { taskId: w.taskId, specifics: w.specifics }, reason: String(r?.error ?? "").slice(0, 200) }).catch(() => {});
     },
   };
 }

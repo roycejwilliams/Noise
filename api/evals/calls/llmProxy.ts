@@ -30,7 +30,7 @@ const baseBody = (extra: any = {}) => ({
   stream: true,
   temperature: 0.8,
   messages: [
-    { role: "system", content: `You are Co.\n# Right now\n${g.rightNow}\n# What Co has found for them\n${g.findsNow}\n${g.contextSummary}` },
+    { role: "system", content: `You are Co, on a call with Royce (the call prompt carries their first name).\n# Right now\n${g.rightNow}\n# What Co has found for them\n${g.findsNow}\n${g.contextSummary}` },
     { role: "assistant", content: "Hey Royce, it's Co." },
     { role: "user", content: "Yeah, so what do you think?" },
   ],
@@ -121,7 +121,7 @@ const run = async (body: any, events: any[], o: { clean?: boolean } = {}) => {
   check("a drained member's turn: the prompt ends with the note, for this turn only", /# This turn: they said they are drained/.test(sys) && sys.trimEnd().endsWith(M.DRAINED_NOTE.trimEnd().slice(-40)) && flagged === 1, sys.slice(-200));
   check("replay: Co's six sentences are cut to two, with no pitch (the events keep)", spoken.length === 2 && !/workshop|fair|links|PDF|Sequent/.test(spoken.join(" ")), spoken);
   sys = ""; spoken.length = 0;
-  for await (const _ of P.runCallLlm(baseBody({ messages: [...baseBody().messages.slice(0, 2), { role: "user", content: "Can you send the PDF?" }] }), { stream: spy(text(long)), onSpoken: (s) => spoken.push(s) })) { /* drain */ }
+  for await (const _ of P.runCallLlm(baseBody({ messages: [...baseBody().messages.slice(0, 2), { role: "user", content: "Can you send the PDF on Sequent AI?" }] }), { stream: spy(text(long)), onSpoken: (s) => spoken.push(s) })) { /* drain */ }
   check("any other turn: no note, no cap", !/they said they are drained/.test(sys) && spoken.length === 6, spoken.length);
   // the tool round after the same drained message keeps the note and the cap
   sys = ""; spoken.length = 0;
