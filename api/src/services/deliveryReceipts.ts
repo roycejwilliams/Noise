@@ -48,14 +48,20 @@ export type ReceiptStore = {
   pdfSent: (id: number, at: Date) => Promise<void>;
   pdfRetry: (id: number, error: string, next: Date | null) => Promise<void>;
   duePdfRetries: (now: Date, limit?: number) => Promise<Receipt[]>;
+  // Not a failed try (their quiet hours): only the next time moves; attempts stay (review of #106).
+  defer: (id: number, next: Date, note: string) => Promise<void>;
+  // Done without sending: superseded by a newer delivery of the same document, or they can't be reached.
+  close: (id: number, note: string) => Promise<void>;
+  // One run owns a row: true only for the caller that moved it from due to `until` (two cron runs never both send it).
+  claim: (id: number, now: Date, until: Date) => Promise<boolean>;
 };
 
 // ---------- pure
 
-// The artifact's identity across versions: its name, as you'd say it ("Co Presence Plan: After ..." -> "co-presence-plan").
+// The artifact's identity across versions: its whole title ("Dinner Plan: Friday" and "Dinner Plan: Saturday" are two documents,
+// review of #106). A revision keeps the original's key whatever its new title (deliverAndRecord, revises).
 export function docKeyFor(title: string): string {
-  const head = title.split(/\s*[:|–—]\s*|\s+-\s+/)[0] || title;
-  return head.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-+|-+$/g, "").slice(0, 80) || "document";
+  return title.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-+|-+$/g, "").slice(0, 120) || "document";
 }
 
 export function contentHash(doc: Doc): string {
@@ -204,6 +210,16 @@ export const pgReceipts: ReceiptStore = {
     const { rows } = await pool.query(`SELECT * FROM document_deliveries WHERE status = 'pdf_pending' AND next_retry_at <= $1 ORDER BY next_retry_at LIMIT $2`, [now, limit]);
     return rows.map(fromRow);
   },
+  defer: async (id, next, note) => {
+    await pool.query(`UPDATE document_deliveries SET next_retry_at = $2, error = $3 WHERE id = $1 AND status = 'pdf_pending'`, [id, next, note.slice(0, 500)]);
+  },
+  close: async (id, note) => {
+    await pool.query(`UPDATE document_deliveries SET status = 'pdf_failed', next_retry_at = NULL, error = $2 WHERE id = $1 AND status = 'pdf_pending'`, [id, note.slice(0, 500)]);
+  },
+  claim: async (id, now, until) => {
+    const { rows } = await pool.query(`UPDATE document_deliveries SET next_retry_at = $3 WHERE id = $1 AND status = 'pdf_pending' AND next_retry_at <= $2 RETURNING id`, [id, now, until]);
+    return rows.length > 0;
+  },
 };
 
 // The same store in memory (tests).
@@ -219,5 +235,8 @@ export function memoryReceipts(): ReceiptStore & { all: Receipt[] } {
     pdfSent: async (id) => { const r = all.find((x) => x.id === id); if (r) { r.status = "delivered"; r.channel = "pdf_text"; r.nextRetryAt = null; } },
     pdfRetry: async (id, error, nextAt) => { const r = all.find((x) => x.id === id); if (r) { r.attempts++; r.error = error; r.nextRetryAt = nextAt; if (!nextAt) r.status = "pdf_failed"; } },
     duePdfRetries: async (now) => all.filter((r) => r.status === "pdf_pending" && r.nextRetryAt && r.nextRetryAt <= now),
+    defer: async (id, nextAt, note) => { const r = all.find((x) => x.id === id && x.status === "pdf_pending"); if (r) { r.nextRetryAt = nextAt; r.error = note; } },
+    close: async (id, note) => { const r = all.find((x) => x.id === id && x.status === "pdf_pending"); if (r) { r.status = "pdf_failed"; r.nextRetryAt = null; r.error = note; } },
+    claim: async (id, now, until) => { const r = all.find((x) => x.id === id && x.status === "pdf_pending" && !!x.nextRetryAt && x.nextRetryAt <= now); if (!r) return false; r.nextRetryAt = until; return true; },
   };
 }

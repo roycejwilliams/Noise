@@ -57,7 +57,7 @@ function harness(o: { render?: "ok" | "fail" } = {}) {
   const rec = r.receipts[0];
   check("delivered: one send, the PDF with its line", r.sentOk.length === 1 && h.wire.length === 1 && !!h.wire[0].media_url && h.wire[0].content === "Here's the Co Presence Plan.", h.wire);
   check("receipt: doc id, title, version, channel, who, when", !!rec && rec.id > 0 && rec.title === PLAN.title && rec.version === 1 && rec.channel === "pdf_text" && rec.userId === "u1" && rec.deliveredAt.getTime() === t.getTime() && rec.status === "delivered", rec);
-  check("receipt: the content itself is kept (what was sent, for follow-ups)", JSON.stringify(rec.doc) === JSON.stringify(PLAN) && rec.docKey === "co-presence-plan");
+  check("receipt: the content itself is kept (what was sent, for follow-ups)", JSON.stringify(rec.doc) === JSON.stringify(PLAN) && rec.docKey === "co-presence-plan-after-the-sequin-ai-november-event");
   const again = await h.send(PLAN, at("2026-10-08T18:00:00Z"));
   check("the same artifact again: refused, nothing sent, the existing receipt named", !again.sentOk.length && again.duplicate?.id === rec.id && h.wire.length === 1 && /already delivered \(doc #1, version 1/.test((again.results[0] as any).why), again.results);
   const asked = await h.send(PLAN, at("2026-10-08T18:05:00Z"), { resend: true });
@@ -133,6 +133,63 @@ function harness(o: { render?: "ok" | "fail" } = {}) {
   // Both fail: a real failure, never silence claimed as sent.
   const both = await DD.deliverDocument(PLAN, { userId: "u1", firstName: "J", phone: "+1", zone: SF }, "pdf_text", { render: async () => null, cache: () => "x", send: async () => { throw new Error("down"); }, from: "+1" } as any);
   check("render and text both fail: a plain failure (the caller says so), never reported as sent", !both.ok);
+}
+
+// ---- 4b. the retry, after review of #106: superseded PDFs never go, quiet hours spend no attempts, a pause doesn't hold
+//          their own ask, an unreachable member is closed, two runs never both send, a lost receipt never resends
+{
+  const base = { person: async () => ({ firstName: "Jordan", phone: "+14155550123", zone: SF }), log: async () => {} };
+  const blockedBy = (state: { paused?: boolean; optedOut?: boolean }) => async (_u: string, zone: string | null, now: Date, o: { immediate?: boolean; asked?: boolean } = {}) =>
+    !o.asked && state.paused ? "proactive outreach is paused" : !o.immediate && !MT.deliverableAt(now, zone) ? DD.QUIET_HOURS : state.optedOut ? "they opted out of texts" : null;
+  const DAY = at("2026-10-08T19:00:00Z"); // noon SF
+  // A new version goes while v1's PDF is still owed: v1's PDF never follows.
+  const h = harness({ render: "fail" });
+  const v1 = await h.send(PLAN, DAY);
+  h.setRender("ok");
+  const v2doc = { ...PLAN, sections: [...PLAN.sections, { heading: "Catering", paragraphs: [], bullets: ["Split with Sequin AI"] }] };
+  await h.send(v2doc, new Date(DAY.getTime() + 60_000), { revises: v1.receipts[0].id, changed: "added catering" });
+  const sentBefore = h.wire.length;
+  await DD.retryPendingPdfs(new Date(DAY.getTime() + 20 * 60_000), { ...base, receipts: h.receipts, deliver: h.deliver, blocked: blockedBy({}) });
+  check("a newer version went: the old version's pending PDF never follows", h.wire.length === sentBefore && h.receipts.all[0].status === "pdf_failed" && /superseded/.test(h.receipts.all[0].error ?? ""), h.receipts.all[0]);
+  // Asked again while the PDF was owed: the resend is the delivery, the old retry never sends it a second time.
+  const h2 = harness({ render: "fail" });
+  await h2.send(PLAN, DAY);
+  h2.setRender("ok");
+  await h2.send(PLAN, new Date(DAY.getTime() + 60_000), { resend: true });
+  const n2 = h2.wire.length;
+  await DD.retryPendingPdfs(new Date(DAY.getTime() + 20 * 60_000), { ...base, receipts: h2.receipts, deliver: h2.deliver, blocked: blockedBy({}) });
+  check("a resend while the PDF was owed: the retry doesn't send it again", h2.wire.length === n2);
+  // Paused outreach: the PDF they were promised still follows (their own ask). Quiet hours: waits, no attempt spent.
+  const h3 = harness({ render: "fail" });
+  await h3.send(PLAN, DAY);
+  h3.setRender("ok");
+  const paused = await DD.retryPendingPdfs(new Date(DAY.getTime() + 20 * 60_000), { ...base, receipts: h3.receipts, deliver: h3.deliver, blocked: blockedBy({ paused: true }) });
+  check("a pause doesn't hold the PDF they were told would follow", paused.sent === 1 && h3.receipts.all[0].status === "delivered");
+  const h4 = harness({ render: "fail" });
+  await h4.send(PLAN, at("2026-10-09T03:50:00Z")); // 8:50pm SF
+  h4.setRender("ok");
+  for (let i = 0; i < 6; i++) await DD.retryPendingPdfs(new Date(at("2026-10-09T04:00:00Z").getTime() + i * 3_600_000), { ...base, receipts: h4.receipts, deliver: h4.deliver, blocked: blockedBy({}) });
+  check("quiet hours spend no attempts (six nightly runs, still 0)", h4.receipts.all[0].attempts === 0 && h4.receipts.all[0].status === "pdf_pending");
+  const morning = await DD.retryPendingPdfs(at("2026-10-09T15:01:00Z"), { ...base, receipts: h4.receipts, deliver: h4.deliver, blocked: blockedBy({}) });
+  check("...and at 8am the first real try sends it", morning.sent === 1 && h4.receipts.all[0].status === "delivered");
+  // Opted out: closed, never polled again.
+  const h5 = harness({ render: "fail" });
+  await h5.send(PLAN, DAY);
+  await DD.retryPendingPdfs(new Date(DAY.getTime() + 20 * 60_000), { ...base, receipts: h5.receipts, deliver: h5.deliver, blocked: blockedBy({ optedOut: true }) });
+  check("an opted-out member's pending PDF is closed, not retried forever", h5.receipts.all[0].status === "pdf_failed" && h5.receipts.all[0].nextRetryAt === null);
+  // Two runs at once: one claims, one skips.
+  const h6 = harness({ render: "fail" });
+  await h6.send(PLAN, DAY);
+  h6.setRender("ok");
+  const when = new Date(DAY.getTime() + 20 * 60_000);
+  const both = await Promise.all([1, 2].map(() => DD.retryPendingPdfs(when, { ...base, receipts: h6.receipts, deliver: h6.deliver, blocked: blockedBy({}) })));
+  check("two overlapping runs send the PDF once", both.reduce((n, r) => n + r.sent, 0) === 1 && h6.wire.filter((m) => m.media_url).length === 1);
+  // The receipt can't be written after it sent: still reported as sent (never a "didn't go out" that would send it again).
+  const h7 = harness();
+  const broken = { ...h7.receipts, insert: async () => { throw new Error("db down"); } };
+  const r7 = await DD.deliverAndRecord(PLAN, { userId: "u1", firstName: "Jordan", phone: "+14155550123", zone: SF, now: DAY }, { askedForGoogle: false, source: "test" }, { deliver: h7.deliver, receipts: broken as any, now: () => DAY, log: async () => {} });
+  check("a receipt that can't be saved after the send still reports the send", r7.sentOk.length === 1 && h7.wire.length === 1);
+  check("two documents sharing a title head are two documents", R.docKeyFor("Dinner Plan: Friday") !== R.docKeyFor("Dinner Plan: Saturday"));
 }
 
 // ---- 5. delivery timing: 9pm to 8am is quiet; due at 2am lands at 8am

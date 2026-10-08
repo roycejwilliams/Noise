@@ -199,15 +199,19 @@ export async function deliverAndRecord(
   const line = again ? to.line : version > 1 ? (o.changed?.trim() ? R.changeLine(doc.title, o.changed, doc.kind) : `Here's the updated ${deliveredThing(doc.title, doc.kind)}.`) : to.line;
   const r = await deliverToTargets(sendDoc, { ...to, line }, { saveTo: o.saveTo, askedForGoogle: o.askedForGoogle }, deps.deliver);
   const receipts: Receipt[] = [];
+  // It already reached them: a receipt that can't be written is logged, never turned into "it didn't go out" (which would send it
+  // again, review of #106).
   for (const ok of r.sentOk) {
-    receipts.push(
-      await store.insert({
+    const rec = await store.insert({
         userId: to.userId, docKey, version: sendVersion, title: sendDoc.title, kind: sendDoc.kind ?? null, doc: sendDoc, contentHash: R.contentHash(sendDoc),
         channel: ok.via, status: ok.pdfPending ? "pdf_pending" : "delivered", line: line ?? sendDoc.title, link: ok.link ?? null,
         taskId: o.taskId ?? null, source: o.source, changeNote: again ? again.changeNote : version > 1 ? (o.changed?.trim() || "updated") : null,
         error: ok.error ?? null, nextRetryAt: ok.pdfPending ? new Date(now.getTime() + PDF_RETRY.firstAfterMs) : null, deliveredAt: now,
-      }),
-    );
+      }).catch((err: any) => {
+        console.error("documentDelivery: the receipt didn't save (it did send):", err?.message ?? err);
+        return null;
+      });
+    if (rec) receipts.push(rec);
     if (ok.pdfPending) await log({ layer: 7, decision: "document.pdf_failed", userId: to.userId, outcome: "skip", action: "sent_as_text", reason: ok.error ?? null, proposal: { title: sendDoc.title, docKey, version: sendVersion, source: o.source } }).catch(() => {});
   }
   return { ...r, receipts, duplicate: null, docKey, version: sendVersion, line };
@@ -265,10 +269,10 @@ export const asksToResend = (words: string): boolean => {
   return RESEND.test(w) && !CHANGE.test(w);
 };
 
-export const PDF_RETRY = { firstAfterMs: 5 * 60_000, maxAttempts: 5, backoffMs: 15 * 60_000 } as const;
+export const PDF_RETRY = { firstAfterMs: 5 * 60_000, maxAttempts: 5, backoffMs: 15 * 60_000, claimMs: 15 * 60_000 } as const;
 
 // The PDFs still owed after a text fallback, retried inside their delivery hours: sent with its own line, never the text again.
-export async function retryPendingPdfs(now: Date = new Date(), deps: { receipts?: ReceiptStore; deliver?: typeof deliverDocument; person?: (userId: string) => Promise<{ firstName: string; phone: string; zone: string | null } | null>; blocked?: (userId: string, zone: string | null, now: Date) => Promise<string | null>; log?: RecordDeps["log"] } = {}): Promise<{ sent: number; failed: number; waiting: number }> {
+export async function retryPendingPdfs(now: Date = new Date(), deps: { receipts?: ReceiptStore; deliver?: typeof deliverDocument; person?: (userId: string) => Promise<{ firstName: string; phone: string; zone: string | null } | null>; blocked?: (userId: string, zone: string | null, now: Date, o?: { immediate?: boolean; asked?: boolean }) => Promise<string | null>; log?: RecordDeps["log"] } = {}): Promise<{ sent: number; failed: number; waiting: number }> {
   const R = await import("./deliveryReceipts.js");
   const { deliveredThing } = await import("./speakable.js");
   const { nextDeliveryTime } = await import("./memberTime.js");
@@ -283,13 +287,30 @@ export async function retryPendingPdfs(now: Date = new Date(), deps: { receipts?
   });
   const out = { sent: 0, failed: 0, waiting: 0 };
   for (const rec of await store.duePdfRetries(now)) {
-    const p = await person(rec.userId).catch(() => null);
-    if (!p) { await store.pdfRetry(rec.id, "no phone on file", null); out.failed++; continue; }
-    const blocked = await (deps.blocked ?? documentSendBlocked)(rec.userId, p.zone, now);
-    if (blocked) {
-      // Their quiet hours (or a pause): not a failed try, just later.
-      await store.pdfRetry(rec.id, `waiting: ${blocked}`, nextDeliveryTime(new Date(now.getTime() + 60_000), p.zone));
+    // One run owns the row while it works (review of #106: the 5-minute cron had no claim).
+    if (!(await store.claim(rec.id, now, new Date(now.getTime() + PDF_RETRY.claimMs)))) continue;
+    // A newer delivery of the same document went (a new version, or the same one sent again): this PDF is moot.
+    const latest = await store.latest(rec.userId, rec.docKey).catch(() => null);
+    if (latest && latest.id !== rec.id && latest.deliveredAt.getTime() >= rec.deliveredAt.getTime()) {
+      await store.close(rec.id, `superseded by doc #${latest.id} (version ${latest.version})`);
       out.waiting++;
+      continue;
+    }
+    const p = await person(rec.userId).catch(() => null);
+    if (!p) { await store.close(rec.id, "no phone on file"); out.failed++; continue; }
+    // The PDF they were told would follow is their own ask, not outreach: a pause doesn't hold it; their hours do.
+    const blocked = await (deps.blocked ?? documentSendBlocked)(rec.userId, p.zone, now, { asked: true });
+    if (blocked === QUIET_HOURS) {
+      // Not a failed try, just later: attempts stay.
+      await store.defer(rec.id, nextDeliveryTime(new Date(now.getTime() + 60_000), p.zone), `waiting: ${blocked}`);
+      out.waiting++;
+      continue;
+    }
+    if (blocked) {
+      // Opted out, no longer a member, or unreadable: never retried again.
+      await store.close(rec.id, `not sent: ${blocked}`);
+      await log({ layer: 7, decision: "document.pdf_retry", userId: rec.userId, outcome: "skip", action: "closed", reason: blocked, proposal: { receipt: rec.id } }).catch(() => {});
+      out.failed++;
       continue;
     }
     const r = await deliver(rec.doc, { userId: rec.userId, firstName: p.firstName, phone: p.phone, zone: p.zone, now, noFallback: true, line: `Here's the PDF version of the ${deliveredThing(rec.title, rec.kind)}.` }, "pdf_text").catch((err: any) => ({ ok: false as const, why: String(err?.message ?? err) }));
