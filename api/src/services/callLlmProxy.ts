@@ -40,6 +40,8 @@ export const CALL_LLM_MODEL = process.env.CALL_LLM_MODEL ?? "claude-haiku-5-5";
 const DEFAULT_MAX_TOKENS = 500;
 
 type OaiContent = string | { type?: string; text?: string }[] | null | undefined;
+// A sentence that is a goodbye: a sign-off, not a thank-you or an answer.
+export const GOODBYE = /^(?:\[[a-z ]+\]\s*)?(?:(?:ok(?:ay)?|alright|all right|great|perfect)[,.!]?\s+)?(?:take care|talk (?:to you )?soon|bye|goodbye|good night|goodnight|have a (?:good|great|nice) (?:night|evening|one|day|weekend)|see you|catch you later|speak soon)\b/i;
 export type OaiMessage = { role: string; content?: OaiContent; tool_calls?: { id: string; type?: string; function: { name: string; arguments?: string } }[]; tool_call_id?: string };
 export type OaiRequest = { model?: string; messages: OaiMessage[]; tools?: { type?: string; function: { name: string; description?: string; parameters?: unknown } }[]; stream?: boolean; temperature?: number; max_tokens?: number; max_completion_tokens?: number; elevenlabs_extra_body?: Record<string, any> };
 
@@ -191,10 +193,22 @@ export async function* runCallLlm(b: OaiRequest, deps: ProxyDeps): AsyncGenerato
   let finish = "stop";
   // What was said aloud this turn, and whether an event offer was among what was held back (its fallback is SAFE_LINE).
   const spokenLines: string[] = [];
+  // What they last said, and whether Co's previous line was already a goodbye (both from this request's own messages).
+  const theirLast = textOf(b.messages[lastAt]?.content ?? "");
+  const askedForSpecific = /\?\s*$|\b(?:what(?:'s| is| was)|who|which|how (?:much|many)|name|number|price|cost)\b/i.test(theirLast);
+  const coBefore = [...b.messages.slice(0, lastAt)].reverse().find((m) => m.role === "assistant" && textOf(m.content ?? "").trim());
+  const saidGoodbye = !!coBefore && textOf(coBefore.content ?? "").split(/(?<=[.!?])\s+/).slice(-2).some((x) => GOODBYE.test(x.trim()));
+  let repeatGoodbye = false;
   const unsureSaid = new Set<string>();
   let heldEvent = false;
   const say = (s: string): string | null => {
     const sentence = s.trim();
+    // Goodbye once (2026-10-08 live call: "Take care tonight." then, after "you too", "Take care, Royce."). Once Co has said
+    // goodbye, another goodbye isn't spoken; ending the call is all that's left.
+    if (saidGoodbye && GOODBYE.test(sentence)) {
+      repeatGoodbye = true;
+      return null;
+    }
     let out = s;
     let line = sentence;
     if (sources) {
@@ -204,7 +218,9 @@ export async function* runCallLlm(b: OaiRequest, deps: ProxyDeps): AsyncGenerato
       const p = spokenProblem(sentence, sources);
       if (p) {
         const why = p.kind === "promise" ? `promises later work nobody asked for: ${p.missing.join(", ")}` : `names what nothing backs: ${p.missing.join(", ")}`;
-        const unsure = p.kind === "name" ? UNSURE_NAME : p.kind === "number" ? UNSURE_NUMBER : null;
+        // "I'm not sure" only answers a question they asked for that name or number; said unprompted it's a non sequitur
+        // (2026-10-08 live call: a dropped line came out as "...on your side. I'm not sure of the name.").
+        const unsure = !askedForSpecific ? null : p.kind === "name" ? UNSURE_NAME : p.kind === "number" ? UNSURE_NUMBER : null;
         if (unsure && !unsureSaid.has(unsure)) {
           unsureSaid.add(unsure);
           deps.onDropped?.(sentence, `${why}; said "${unsure}" instead`);
@@ -315,6 +331,12 @@ export async function* runCallLlm(b: OaiRequest, deps: ProxyDeps): AsyncGenerato
   }
   // Everything this turn was going to say was kept back: say the one safe thing, never silence.
   // An event offer held back gets the safe line (as before); anything else held back, a plain acknowledgement, never a new promise.
+  if (repeatGoodbye && !spokeAny && finish !== "tool_calls") {
+    // Both sides have said goodbye and nothing else was left to say: end the call (ElevenLabs' own end_call), in silence.
+    yield chunk({ tool_calls: [{ index: 0, id: `call_end_${Date.now().toString(36)}`, type: "function", function: { name: "end_call", arguments: JSON.stringify({ reason: "goodbyes already said" }) } }] });
+    yield chunk({}, "tool_calls");
+    return;
+  }
   if (blanked && !spokeAny && finish !== "tool_calls") {
     const line = heldEvent ? SAFE_LINE : HELD_LINE;
     spokenLines.push(line);
