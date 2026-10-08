@@ -117,11 +117,11 @@ check(
 check("known timezone, daytime there, allowed", callHourOk("America/New_York", new Date("2026-09-17T18:00:00Z"))); // 2pm ET
 check("known timezone, 3am there, blocked", !callHourOk("America/Los_Angeles", new Date("2026-09-17T10:00:00Z"))); // 3am PT
 
-// Unknown zone (2026-10-07): the texts' rule, 9am-8pm Pacific as a zone (PDT on Sep 17: 16:00-03:00 UTC).
+// Unknown zone (2026-10-07): the texts' rule, 8am-9pm Pacific as a zone (PDT on Sep 17: 15:00-04:00 UTC).
 for (let h = 0; h < 24; h++) {
   const t = new Date(Date.UTC(2026, 8, 17, h, 0, 0));
   const pacificHour = (h + 24 - 7) % 24;
-  const expected = pacificHour >= 9 && pacificHour < 20;
+  const expected = pacificHour >= 8 && pacificHour < 21;
   check(`unknown timezone, ${h}:00 UTC (${pacificHour}:00 PDT) ${expected ? "allowed" : "blocked"}`, callHourOk(null, t) === expected);
 }
 check("nextAllowedCallTime is a no-op when already in the window", nextAllowedCallTime(null, new Date("2026-09-17T18:00:00Z")).getTime() === new Date("2026-09-17T18:00:00Z").getTime());

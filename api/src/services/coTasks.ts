@@ -63,7 +63,7 @@ export function windowOf(followup: any): CommitWindow | null {
 }
 
 // Pure: the first check of a commitment lands inside its window: no later than its warn-by (a "tonight" promise made at 6pm is
-// worked before 7:40pm, not at 10pm), and never sooner than five minutes out.
+// worked before 8:40pm, not at 10pm), and never sooner than five minutes out.
 export function firstCheckInWindow(next: Date, w: CommitWindow | null | undefined, now: Date): Date {
   if (!w) return next;
   const by = new Date(w.warnBy).getTime();

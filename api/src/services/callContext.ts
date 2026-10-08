@@ -471,7 +471,7 @@ export async function buildCallKnowledge(userId: string): Promise<CallKnowledge>
   const loopLines = await strip(loopItems.map((l) => `- ${l.length > 240 ? `${l.slice(0, 240).replace(/[ ,;(]+[^ ,;(]*$/, "")}...` : l}`));
   const loops = [
     promised.length ? `What you said on a call you'd do, and what came of it:\n${promised.join("\n")}` : null,
-    loopLines.length ? `What you're carrying for them and where each stands (report this when they ask what you're doing):\n${loopLines.join("\n")}` : null,
+    loopLines.length ? `What you're carrying for them and where each stands (say where one stands when they ask what you're doing or when it changes what they should do next; what you already told them on a call isn't news, and it never opens a call):\n${loopLines.join("\n")}` : null,
   ].filter(Boolean).join("\n");
   // 2. The last calls: Co's own summary of each (or their first words on it), names as corrected.
   const pastCalls = pairCalls(callRows);

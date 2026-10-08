@@ -9,10 +9,9 @@
 //     in the shape: what Co understood, what they get, when. Exempt from the usual spacing (they just hung up), inside their hours.
 //   - then the work itself runs right away (services/taskTurn.ts, the task's own turn), and the deliverable is sent when that turn
 //     finishes: its own completion event, never a scheduled sweep
-//   - at night for them, both wait for their morning (9am their time): the confirmation is drafted now (its "when" read from
-//     9am) and held as a deferred_sends row the minute cron sends (services/deferredSends.ts; it used to be an in-process timer a
-//     restart lost); once it actually goes, the work runs (afterConfirmSent). The task's own next check is set just after 9am as
-//     the backstop.
+//   - at night for them, no confirmation (2026-10-08: a "Got it" held to 9am read like Co had only just heard): the task's own
+//     check is set for 8am their time, and the delivery says what they asked for and when (services/speakable.ts deliveryLine).
+//     Rows held under the old flow still run their work once sent (afterConfirmSent).
 // Co drafts the confirmation; code checks its voice (services/speakable.ts narratesInternalState, harness/proactive.ts checkDraft)
 // and its shape, redrafts once, and falls back to Co's own words from the call rather than send nothing.
 import { DateTime } from "luxon";
@@ -23,12 +22,10 @@ import { cleanCoMessage } from "./sendblue.js";
 import { checkDraft, draftAgain, draftProactive, localHourOk, nextLocalHour, RULES, sendExempt } from "../harness/proactive.js";
 import { recordDecision, type GateCheck } from "../harness/core.js";
 import { callKey } from "./callKey.js";
-import { deliveryWords, wordsZone } from "./memberTime.js";
+import { deliveryWords, nextDeliveryTime, wordsZone } from "./memberTime.js";
 
 export const CONFIRM_TYPE = "call_confirm" as const;
 export const confirmKey = (key: string) => `call_confirm:${key}`;
-// The held morning send goes first; the task's own check is set this long after it, as the backstop.
-const BACKSTOP_AFTER_MS = 10 * 60_000;
 
 export type Commitment = { taskId: number; sentence: string; wakes: number };
 
@@ -94,8 +91,6 @@ export type FollowThroughDeps = {
   // The task's own turn, now: claimed first so the cron can't run it at the same time. Resolves when the turn is done.
   runTask: (userId: string, c: Commitment) => Promise<{ ran: boolean; action?: string }>;
   hold: (userId: string, taskIds: number[], until: Date) => Promise<void>;
-  // Held for their morning, durably: sent at `at` by the deferred-send cron, which then runs the tasks (afterConfirmSent).
-  queue: (o: { userId: string; phone: string; key: string; text: string; zone: string | null; at: Date; tasks: Commitment[] }) => Promise<{ queued: boolean; reason?: string }>;
   record: typeof recordDecision;
 };
 
@@ -170,15 +165,14 @@ export async function followThroughOnCallEnd(o: { userId: string; transcript: st
     };
 
     if (!localHourOk(t0, person.zone)) {
-      const at = nextLocalHour(t0, person.zone, RULES.startHour);
-      await deps.hold(o.userId, commitments.map((c) => c.taskId), new Date(at.getTime() + BACKSTOP_AFTER_MS)).catch(() => {});
-      // Written now, read as of their 9am (so its "when" is "this morning"), and held as a row, not a timer.
-      const w = await writeConfirmation({ firstName: person.firstName, commitments, theirLines, now: at, zone: person.zone }, deps.draft);
-      const q = w
-        ? await deps.queue({ userId: o.userId, phone: person.phone, key, text: w.text, zone: person.zone, at, tasks: commitments }).catch((err: any) => ({ queued: false, reason: String(err?.message ?? err) }))
-        : { queued: false, reason: "no text" };
-      await deps.record({ layer: 8, decision: "call.followthrough", userId: o.userId, outcome: "skip", action: q.queued ? "confirm_held" : "confirm_not_held", proposal: { until: at.toISOString(), text: w?.text ?? null, fallback: w?.fallback ?? false, tasks: commitments.map((c) => c.taskId) }, reason: q.queued ? "outside their hours" : (q.reason ?? null) }).catch(() => {});
-      return { action: "held", heldUntil: at.toISOString(), text: w?.text, fallback: w?.fallback };
+      // Night for them: no confirmation at all (Royce, 2026-10-08). A "Got it" written now and sent at 9am reads like Co only just
+      // heard about it. The work waits for their morning and the delivery itself says what they asked for and when ("Here's the
+      // plan you asked for last night": services/speakable.ts deliveryLine), so the task's own check is set for their 8am.
+      // Their delivery hours start at 8am (services/memberTime.ts DELIVERY_HOURS): a plan promised at night lands at 8am.
+      const at = nextDeliveryTime(t0, person.zone);
+      await deps.hold(o.userId, commitments.map((c) => c.taskId), at).catch(() => {});
+      await deps.record({ layer: 8, decision: "call.followthrough", userId: o.userId, outcome: "skip", action: "confirm_skipped_night", proposal: { until: at.toISOString(), tasks: commitments.map((c) => c.taskId) }, reason: "outside their hours: the morning delivery says what was asked and when" }).catch(() => {});
+      return { action: "held", heldUntil: at.toISOString() };
     }
     return await deliver();
   } catch (err: any) {
@@ -227,15 +221,11 @@ const realDeps: FollowThroughDeps = {
   hold: async (userId, ids, until) => {
     await pool.query(`UPDATE co_tasks SET next_check_at = $3, updated_at = NOW() WHERE user_id = $1 AND id = ANY($2::bigint[]) AND status = 'open'`, [userId, ids, until]);
   },
-  queue: async ({ userId, phone, key, text, zone, at, tasks }) => {
-    const { enqueueDeferredSend } = await import("./deferredSends.js");
-    return enqueueDeferredSend({ userId, phoneNumber: phone, type: CONFIRM_TYPE, targetKey: key, messages: [text], timezone: zone, dueAt: at, after: { kind: "call_confirm", payload: { userId, tasks } } });
-  },
   record: recordDecision,
 };
 
 // The held confirmation's send settled (services/deferredSends.ts): sent, the work starts now, as it would have right after a
-// daytime confirmation; not sent, the task's own backstop check (just after 9am) still runs it.
+// daytime confirmation; not sent, the task's own backstop check (just after 8am) still runs it.
 export async function afterConfirmSent(p: { userId: string; tasks: Commitment[] }, outcome: "sent" | "skipped" | "failed", deps: Pick<FollowThroughDeps, "runTask" | "record"> = realDeps): Promise<{ work: Promise<unknown> | null }> {
   await deps.record({ layer: 8, decision: "call.followthrough", userId: p.userId, outcome: outcome === "sent" ? "act" : "skip", action: `confirm_${outcome === "sent" ? "sent" : "send_failed"}`, proposal: { held: true, tasks: (p.tasks ?? []).map((c) => c.taskId) }, reason: outcome === "sent" ? null : outcome }).catch(() => {});
   if (outcome !== "sent") return { work: null };

@@ -67,7 +67,8 @@ const cfg: any = buildAgentConfig({ name: "Co (test)", prompt: "P {{first_name}}
 const cc = cfg.conversation_config;
 check("phone audio is mu-law 8kHz both ways (register-call needs it)", cc.asr.user_input_audio_format === "ulaw_8000" && cc.tts.agent_output_audio_format === "ulaw_8000");
 // Royce chose Sonnet 4.6 for the live voice on 2026-10-04, after the comparison with Haiku 4.5.
-check("Royce's picks: Eleven v4 Turbo voice, Haiku 4.5 live (2026-10-06: voice is a speed game), eager turn-taking", cc.tts.model_id === "eleven_v4_turbo" && cc.agent.prompt.llm === "claude-haiku-4-5" && cc.turn.turn_eagerness === "eager" && AGENT_DEFAULTS.ttsModel === "eleven_v4_turbo");
+// 2026-10-08: the live brain is Sonnet 4.6 behind our endpoint (callLlmProxy.ts); the direct path (no proxy) stays Haiku 4.5. Turn-taking is "normal", like Hume's.
+check("Royce's picks: Eleven v4 Turbo voice, Sonnet 4.6 direct, normal turn-taking", cc.tts.model_id === "eleven_v4_turbo" && cc.agent.prompt.llm === "claude-sonnet-4-6" && cc.turn.turn_eagerness === "normal" && AGENT_DEFAULTS.ttsModel === "eleven_v4_turbo");
 check("overrides from the env reach the config", (buildAgentConfig({ name: "x", prompt: "p", voiceId: "v", apiUrl: "https://a.b", llm: "claude-sonnet-5", ttsModel: "eleven_flash_v2_5", turnEagerness: "normal" }) as any).conversation_config.agent.prompt.llm === "claude-sonnet-5");
 const tools = (cc.agent.prompt.tools as any[]).filter((t) => t.type === "webhook");
 check("no webhook tools on the agent: the coverage check went with the interview script (2026-10-08); Co's own tools reach a call through the LLM endpoint", tools.length === 0 && !JSON.stringify(cfg).includes("assess_conversation_coverage"));

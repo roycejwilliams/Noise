@@ -145,7 +145,9 @@ export function rowsNamedIn(rows: LedgerRow[], text: string): LedgerRow[] {
 // A document is made fresh each time: having sent one is never a reason not to send another (Royce, 2026-10-07: "send it again" got
 // "scroll up", and the same request repeated got "it's the same one I already built and sent").
 export const DOCUMENT_LABEL = /^a document \(PDF\)/;
-export const DOCUMENT_AGAIN = "They can have it again, redone or updated, whenever they ask: a request to send it again, resend it, update it, or the same request repeated means call writeDocument again, never \"it's already up\".";
+// One rule with the receipts (services/deliveryReceipts.ts, 2026-10-08): asked again means the same version again; asked for a
+// change means readDocument, then the next version; never again on Co's own initiative.
+export const DOCUMENT_AGAIN = "If they ask for it again (lost it, can't find it, send it again), send the same version again with writeDocument, never \"it's already up\". If they want it changed, readDocument first, then writeDocument with revises and changed for the next version. Never send it again on your own.";
 
 export function ledgerLine(r: LedgerRow, today = localToday(), zone: string | null = DEFAULT_ZONE): string {
   // Their day, not the UTC one: a 6pm Pacific send is that Pacific day (Royce, 2026-10-07).

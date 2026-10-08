@@ -1,12 +1,11 @@
 import { DateTime } from "luxon";
 
-// 9am-8pm local (Royce, 2026-09-02, after a real "thinking about you" text
-// arrived at 2am Pacific) — a strict subset of TCPA's 8am-9pm safe-harbor
-// window for outbound automated/prerecorded calls in the US, so this one
-// shared gate is compliant for the auto-call cron and comfortably
-// courteous for the texting crons that also use it (jobs/index.ts).
-export const REASONABLE_HOUR_START = 9;
-export const REASONABLE_HOUR_END = 20;
+// 8am-9pm local: one window for everything Co starts, texts, calls and deliveries (Royce, 2026-10-08: "One window for everything
+// Co starts. Simpler to reason about"). It was 9am-8pm from 2026-09-02 (after a real "thinking about you" text arrived at 2am
+// Pacific). 8am-9pm is TCPA's safe-harbor window for outbound automated calls in the US (no call before 8am or from 9pm), so this
+// one shared gate stays compliant for the auto-call cron.
+export const REASONABLE_HOUR_START = 8;
+export const REASONABLE_HOUR_END = 21;
 
 // The one fallback when a member's zone isn't known (Royce, 2026-10-07: "Co is time-aware at all times... against the member's local
 // time, not the server's"): Pacific, where the club is (San Francisco), applied as a ZONE so it follows DST. It replaced two fixed-UTC
@@ -19,7 +18,7 @@ export function hoursZone(timezone: string | null | undefined): string {
   return timezone && DateTime.now().setZone(timezone).isValid ? timezone : FALLBACK_ZONE;
 }
 
-// 9am-8pm in their zone (or the fallback zone). One rule for texts and calls (harness/proactive.ts localHourOk and
+// 8am-9pm in their zone (or the fallback zone). One rule for texts and calls (harness/proactive.ts localHourOk and
 // harness/callGate.ts callHourOk both call this).
 //
 // No DST edge case here: `now` is a real, already-resolved UTC instant; the

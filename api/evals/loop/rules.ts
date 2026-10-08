@@ -43,7 +43,8 @@ check("sold out, over or already sent can't be shared (the gate's own reasons)",
 check("event search covers Co's events, the public feed, and openings the daily search already found", /alreadyFoundOpenings\(ctx\.userId\)/.test(lt) && /openingsFoundEarlier: openings/.test(lt) && /cachedCalendarEvents\(\)/.test(src("services/tieredRecommendation.ts").split("for Co's own loop")[1] ?? ""));
 check("Tier 3 in the loop: X posts through the shared daily X budget, plus the web", /reserveXSearch\(ctx\.userId, "request", q\)/.test(lt) && /searchRecentPosts\(q, X_SEARCH_RESULTS\)/.test(lt) && C.toolUse("searchPosts").includes("shared daily budget"));
 check("a sold-out event can't be shared (its own page says so)", /details\?\.soldOut === true \? "sold out" : null/.test(lt));
-check("a spent web search budget is said plainly, never as 'nothing found'", /Web search is used up for today\. Tell them plainly/.test(lt));
+// 2026-10-08 (one failure rule): lead with what they get, never machinery; never pretend nothing was found.
+check("a spent web search budget leads with what's found, saves the rest with a when, never 'nothing found' or a named limit", /No more web searches today\. Lead with what you already found/.test(lt) && /save it \(saveAsk\) and say when they'll hear back, without naming a limit/.test(lt) && !/nothing found/i.test(lt.slice(lt.indexOf("No more web searches today"), lt.indexOf("No more web searches today") + 300)));
 check("no model gate between the feed and Co", !/isGenuinelyRelevant|explainFit|relevanceGate/.test(src("services/tieredRecommendation.ts").split("for Co's own loop")[1] ?? "x"));
 check("every search leaves a receipt, empty or not, so 'nothing turned up' is backed", (lt.match(/receipt\(`/g) ?? []).length >= 4);
 check("code saves the basics on every search (Co forgetting the notes)", (lt.match(/await remember\(\{/g) ?? []).length >= 3);

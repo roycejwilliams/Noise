@@ -146,7 +146,8 @@ const formatCases: [boolean, string][] = [
   [/Never claims \(don't list these\)/.test(groundingPrompt) && /Advice and possibilities: general know-how about how things usually go/.test(groundingPrompt), "the fact check doesn't strip ordinary advice as a prediction"],
   // A photo they send is written down once, for the record and the fact check (2026-09-22).
   [/a conclusion reasoned from the sources \("if Oct 10 is under 30 days out/.test(groundingPrompt), "reasoning from what's on file isn't cut as a prediction"],
-  [/addFact\(rf, "known", `Today is \$\{DateTime\.now\(\)/.test(groundingPrompt), "the reply's facts include today's date"],
+  // In their own zone since 2026-10-08 (review F8): todayFact(zone), built from the zone gatherReplyFacts loaded.
+  [/addFact\(rf, "known", todayFact\(zone\)\)/.test(groundingPrompt) && /Today is \$\{DateTime\.fromJSDate\(now\)\.setZone\(wordsZone\(z\)\)/.test(groundingPrompt), "the reply's facts include today's date"],
   [/photoDescription = await describeImage\(buffer, mediaType\)/.test(sendblueRoute), "an incoming photo is described once"],
   [/\[They also sent a photo\$\{photoDescription \? `\. It shows: \$\{photoDescription\}`/.test(sendblueRoute), "the conversation record keeps the photo, not just their words"],
   [/They sent a photo this turn\. It shows: \$\{photoDescription\}/.test(sendblueRoute), "the fact check sees what the photo shows"],

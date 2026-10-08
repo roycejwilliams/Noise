@@ -15,15 +15,106 @@ import { LOOP_BUDGET } from "./loop.js";
 import { stripUngroundedIdentity } from "../services/identityGuard.js";
 import type { ConversationToolContext } from "./conversationTools.js";
 import pool from "../db/db.js";
-import sendblue from "../services/sendblue.js";
 import { resolvePlan, planProblems, type EventRecord } from "../services/planSheet.js";
 import { WRITE_DOCUMENT_INPUT } from "../services/documentSheet.js";
 import { GOOGLE_DOC_ASK } from "../services/documentDelivery.js";
 
 // What the loop has seen this turn: every link a tool returned, with the facts
 // that came with it, and every page it read.
-type Found = { name: string; url: string; facts: string; match: TierMatch | null; blocked: string | null };
+// stored: carried in from an earlier turn (seedFound), checked at checkedAt and good until freshUntil; past that its facts back
+// nothing until its page is read again.
+export type Found = { name: string; url: string; facts: string; match: TierMatch | null; blocked: string | null; stored?: boolean; checkedAt?: string | null; freshUntil?: number | null };
 export type LoopState = { started: number; found: Map<string, Found>; pages: Map<string, string>; holdSent: boolean; shared: string[]; webQueries: number };
+
+// ---------- yesterday's finds, carried into today's turn (B5, 2026-10-08)
+// What Co found for them on earlier turns (web results kept at research time, a brief's options, events it sent, its shortlist),
+// each with when it was checked. A plan, a document or a caption may cite one only while it's fresh; past its window it's re-read
+// first (readPage, or an event's own page re-read by emailPlan). Every read is this member's own (user_id), never anyone else's.
+export type StoredFind = { name: string; url: string; facts: string; checkedAt: string | null; freshUntil: number | null };
+export const WEB_FIND_FRESH_HOURS = 24;
+export const SENT_EVENT_DAYS = 3;
+
+// Pure: a carried-in find past its window (or never dated): its facts back nothing until it's read again.
+export function staleFind(f: Found, now = Date.now()): boolean {
+  return !!f.stored && (f.freshUntil === null || f.freshUntil === undefined || now > f.freshUntil);
+}
+// Pure: the facts a find may back something with right now.
+export const usableFacts = (f: Found, now = Date.now()): string => (staleFind(f, now) ? "" : f.facts);
+// Pure: seed the turn with what's on file; anything this turn already found wins.
+export function seedFound(loop: LoopState, rows: StoredFind[]): number {
+  let n = 0;
+  for (const r of rows) {
+    if (!r.url || loop.found.has(r.url)) continue;
+    loop.found.set(r.url, { name: r.name, url: r.url, facts: r.facts, match: null, blocked: null, stored: true, checkedAt: r.checkedAt, freshUntil: r.freshUntil });
+    n++;
+  }
+  return n;
+}
+// Pure: a carried-in find, read again just now (its page or its event record): fresh from now.
+export function refreshFound(f: Found, facts: string, now = Date.now(), freshHours = WEB_FIND_FRESH_HOURS): void {
+  f.facts = facts;
+  f.checkedAt = new Date(now).toISOString();
+  f.freshUntil = now + freshHours * 3_600_000;
+}
+// Pure: what a plan step may take from a find: an event with its own page record, and nothing from one past its window.
+export function recordFromFound(f: Found | undefined, now = Date.now()): EventRecord | null {
+  if (!f) return null;
+  const d = f.match && "details" in f.match ? (f.match as any).details : null;
+  if (staleFind(f, now)) {
+    const when = f.checkedAt ? new Date(f.checkedAt).toISOString().slice(0, 10) : "an earlier day";
+    return { name: f.match?.name ?? f.name, hasRecord: true, blocked: `last checked ${when}; read its page again (readPage) before it goes in a plan` };
+  }
+  // Only an event with its own page record can fill a step; a web result or a post can't.
+  return { name: f.match?.name ?? f.name, hasRecord: !!d, blocked: f.blocked ?? null, startAt: d?.startAt ?? null, endAt: d?.endAt ?? null, timezone: d?.timezone ?? null, venue: d?.venue ?? null, address: d?.address ?? null };
+}
+// An event carried in from an earlier turn that a plan names: its own page re-read now (Luma), so its time and place are today's.
+export async function refreshStoredEvents(loop: LoopState, links: string[], fetchDetails: (url: string) => Promise<any | null>, isEvent: (url: string) => boolean, now = Date.now()): Promise<number> {
+  let n = 0;
+  for (const link of [...new Set(links)]) {
+    const f = loop.found.get(link);
+    if (!f?.stored || !isEvent(link)) continue;
+    const hasDetails = !!(f.match && "details" in f.match && (f.match as any).details);
+    if (hasDetails && !staleFind(f, now)) continue;
+    const d = await fetchDetails(link).catch(() => null);
+    if (!d) continue;
+    f.match = { tier: 2, kind: "event", source: "luma", name: f.name, url: link, reason: f.facts || f.name, details: d } as unknown as TierMatch;
+    f.blocked = d.soldOut === true ? "sold out" : null;
+    refreshFound(f, [f.facts, d.startAt ? `starts ${d.startAt}` : "", d.venue ?? "", d.address ?? ""].filter(Boolean).join(" "), now);
+    n++;
+  }
+  return n;
+}
+// What's on file for this member, as carried-in finds. Every query is scoped to their user_id.
+export async function storedFinds(userId: string, now = Date.now()): Promise<StoredFind[]> {
+  const out: StoredFind[] = [];
+  const hours = (h: number) => h * 3_600_000;
+  const { recentResearchFinds } = await import("../services/researchFinds.js");
+  for (const f of await recentResearchFinds(userId).catch(() => [])) {
+    const t = new Date(f.at).getTime();
+    out.push({ name: f.name, url: f.url, facts: f.facts, checkedAt: f.at || null, freshUntil: Number.isNaN(t) ? null : t + hours(WEB_FIND_FRESH_HOURS) });
+  }
+  // A brief's options: each field good for its own window (availability a day, prices two weeks).
+  const Q = await import("../services/researchQuality.js");
+  const keyHours = new Map<string, number>(Q.FIND_SCHEMAS.venue.map((s) => [s.key, Q.FRESHNESS_HOURS[s.freshKey]]));
+  for (const f of await Q.recentShownFinds(userId).catch(() => [])) {
+    const ends = f.fields.map((x) => new Date(x.checkedAt).getTime() + hours(keyHours.get(x.key) ?? WEB_FIND_FRESH_HOURS)).filter((x) => !Number.isNaN(x));
+    const checked = f.fields.map((x) => x.checkedAt).filter(Boolean).sort()[0] ?? null;
+    out.push({ name: f.name, url: f.url, facts: f.fields.filter((x) => x.value).map((x) => `${x.label}: ${x.value}`).join("; "), checkedAt: checked, freshUntil: ends.length ? Math.min(...ends) : null });
+  }
+  // Events Co sent them in the last few days (its own record of sends, services/coFacts.ts).
+  const { rows } = await pool
+    .query(`SELECT object_label, url, happened_at, meta->>'when' AS "when" FROM co_facts WHERE owner_user_id = $1 AND subject = 'co' AND relation = 'sent' AND url IS NOT NULL AND happened_at > NOW() - make_interval(days => $2) ORDER BY happened_at DESC LIMIT 20`, [userId, SENT_EVENT_DAYS])
+    .catch(() => ({ rows: [] as any[] }));
+  for (const r of rows) {
+    const t = new Date(r.happened_at).getTime();
+    out.push({ name: String(r.object_label), url: String(r.url), facts: [String(r.object_label), r.when ? `on ${r.when}` : ""].filter(Boolean).join(" "), checkedAt: Number.isNaN(t) ? null : new Date(t).toISOString(), freshUntil: Number.isNaN(t) ? null : t + hours(WEB_FIND_FRESH_HOURS) });
+  }
+  // The shortlist in their notes: never dated, so it's re-read before anything cites it.
+  const notes = await loadBrief(userId).catch(() => null);
+  for (const s of notes?.shortlist ?? []) if (s.url) out.push({ name: s.name, url: s.url, facts: s.note ?? "", checkedAt: null, freshUntil: null });
+  void now;
+  return out;
+}
 
 // started: when their text arrived, so the time budget counts the turn's prep
 // too (2026-10-01 code review); now when not known.
@@ -31,6 +122,8 @@ export function newLoopState(started = Date.now()): LoopState {
   return { started, found: new Map(), pages: new Map(), holdSent: false, shared: [], webQueries: 0 };
 }
 
+// What a document tool tells Co once its attachment went with its one line (Royce, 2026-10-08: no second bubble repeating it).
+export const DELIVERED_NOTE = "Delivered with its line; send nothing more about it unless you have a question for them.";
 const HOLD_PREFIX = "Co is looking:"; // the same record line routes/sendblue.ts writes for a hold text
 const emailsIn = (text: string) => [...new Set((text.match(/[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}/gi) ?? []).map((e) => e.toLowerCase()))];
 
@@ -115,6 +208,15 @@ export function loopTools(
   // A receipt for every search, empty or not, so "I looked and nothing turned
   // up" is backed (2026-10-01: with no record, the fact check cut it).
   const receipt = (what: string) => ctx.facts?.add("did_this_turn", what);
+  // Yesterday's finds, carried into this turn (storedFinds): read once, the first time a tool that cites a find runs (a turn that
+  // never needs them never reads them). Never in tests.
+  let seeding: Promise<unknown> | null = null;
+  const seeded = (): Promise<unknown> => (seeding ??= ctx.dryRun || ctx.stubSearch ? Promise.resolve() : storedFinds(ctx.userId).then((rows) => seedFound(loop, rows)).catch(() => 0));
+  // A short line while a PDF is made (like whileLooking), unless the ✍️ reaction on their text already said "on it".
+  const holdWhileWriting = async (line?: string) => {
+    if (ctx.ackSent === "✍️") return;
+    await hold(line);
+  };
 
   return {
     searchEvents: tool({
@@ -201,7 +303,7 @@ export function loopTools(
         // "nothing yet" (2026-10-01: a day of testing used all 60, and Co gave up vaguely).
         if (all.every((x) => /^No web search right now/.test(x.note))) {
           notDone("Web search wasn't available: today's shared web search budget is used up.");
-          return { ok: false, error: "Web search is used up for today. Tell them plainly you can't search the web again until tomorrow, offer to pick it up then (saveAsk), and use searchEvents or what you already found if it helps." };
+          return { ok: false, error: "No more web searches today. Lead with what you already found or searchEvents; if they still need more, save it (saveAsk) and say when they'll hear back, without naming a limit." };
         }
         await remember({ tried: run.map((q) => `web: ${q}`) });
         const seenUrls = new Set<string>();
@@ -294,8 +396,11 @@ export function loopTools(
           return { ok: false, error: "That page couldn't be read. Don't describe it from memory; try another page or say you couldn't check it." };
         }
         loop.pages.set(url, text);
+        await seeded();
         const known = loop.found.get(url);
-        if (known) known.facts = `${known.facts} ${text.slice(0, 4000)}`;
+        // A find carried in from an earlier turn is read again: what its page says now replaces what it said then.
+        if (known?.stored) refreshFound(known, text.slice(0, 4000));
+        else if (known) known.facts = `${known.facts} ${text.slice(0, 4000)}`;
         else loop.found.set(url, { name: url, url, facts: text.slice(0, 4000), match: null, blocked: null });
         ctx.facts?.add("known", `From the page ${url}: ${text.replace(/\s+/g, " ").slice(0, 1500)}`);
         return { ok: true, text: text.replace(/[ \t]+/g, " ").slice(0, 6000), emails: emailsIn(text).slice(0, 5) };
@@ -311,6 +416,7 @@ export function loopTools(
           .max(3),
       }),
       execute: async ({ items }) => {
+        await seeded();
         const notes = await loadBrief(ctx.userId).catch(() => null);
         const sent: string[] = [];
         const refused: string[] = [];
@@ -326,13 +432,14 @@ export function loopTools(
             continue;
           }
           if (loop.shared.includes(it.link)) continue;
-          const problems = captionProblems(it.caption, `${f.name} ${f.facts}`, `${theirWords()} ${notes ? JSON.stringify({ city: notes.city, when: notes.when, headcount: notes.headcount, budget: notes.budget }) : ""}`);
+          // A find from an earlier turn past its window backs nothing in a caption until its page is read again.
+          const problems = captionProblems(it.caption, `${f.name} ${usableFacts(f)}`, `${theirWords()} ${notes ? JSON.stringify({ city: notes.city, when: notes.when, headcount: notes.headcount, budget: notes.budget }) : ""}`);
           if (problems.length) {
             refused.push(`${f.name}: caption says more than its facts (${problems.join("; ")}); rewrite it from its facts`);
             continue;
           }
           // Says who they are only from what they've told Co (services/identityGuard.ts).
-          const known = `${theirWords()} ${JSON.stringify({ goals: ctx.turn?.profile?.goals ?? null, city: ctx.turn?.profile?.city ?? null })} ${f.name} ${f.facts}`;
+          const known = `${theirWords()} ${JSON.stringify({ goals: ctx.turn?.profile?.goals ?? null, city: ctx.turn?.profile?.city ?? null })} ${f.name} ${usableFacts(f)}`;
           if ((stripUngroundedIdentity(it.caption, known) ?? "").trim() !== it.caption.trim()) {
             refused.push(`${f.name}: the caption says who they are beyond what they've told you; rewrite it without that`);
             continue;
@@ -395,7 +502,7 @@ export function loopTools(
         // copy (2026-10-01: Co said "I wrote the note" and never showed it).
         const draftText = `${subject.trim() ? `Subject: ${subject.trim()}\n\n` : ""}${body.trim()}`;
         if (!to?.trim()) {
-          if (!(await say(draftText, `Co replied: ${draftText}`))) return { ok: false, error: "The draft didn't send. Say so." };
+          if (!(await say(draftText, `Co replied: ${draftText}`))) return { ok: false, error: "The draft didn't send. Give them the words in your reply instead, plainly, without mentioning what failed." };
           ctx.facts?.add("did_this_turn", `Sent them a draft message to paste into the listing's own contact form: "${draftText.slice(0, 400)}"`);
           await remember({ next: "message drafted for the listing's contact form; waiting for them to send it" });
           return { ok: true, note: "The draft went out as its own text. Say in a line where to paste it (the listing's contact form); don't repeat the draft." };
@@ -407,7 +514,7 @@ export function loopTools(
           return { ok: false, error: "That address isn't one you've seen. Read the place's own page (readPage) for a contact address and try again; if it's a marketplace listing with its own contact form, draft without an address so they can paste it there." };
         }
         const link = mailtoLink(addr, subject.trim(), body.trim());
-        if (!(await say(`To: ${addr}\n${draftText}`, `Co replied: To: ${addr}\n${draftText}`))) return { ok: false, error: "The draft didn't send. Say so." };
+        if (!(await say(`To: ${addr}\n${draftText}`, `Co replied: To: ${addr}\n${draftText}`))) return { ok: false, error: "The draft didn't send. Give them the words in your reply instead, plainly, without mentioning what failed." };
         await new Promise((r) => setTimeout(r, ctx.dryRun ? 0 : 1200));
         await say(link, `Co replied: ${link}`);
         ctx.facts?.add("did_this_turn", `Sent them a draft email to ${addr} ("${subject.trim()}") and a tap-to-send link that opens it in their own mail app. Nothing was sent to ${addr}.`);
@@ -440,8 +547,11 @@ export function loopTools(
           .max(8),
         notes: z.array(z.string()).max(4).optional().describe("Things worth knowing, one short line each."),
         sendBy: z.enum(["text", "email", "both"]).optional().describe("Leave this out: the PDF goes in this conversation, by text. Only when they ask for it by email (or both) in their own words do you set email or both; the email also carries a calendar hold for each time."),
+        line: z.string().optional().describe("The one sentence that goes with the PDF, in your voice (\"Here's the plan for Saturday.\"). No dashes, no exclamation points. Leave it out and a plain line goes. Nothing else about it is sent, so don't repeat it."),
+        whileWriting: z.string().optional().describe("Only if it'll take a moment and you haven't already reacted to their text with ✍️: a few words to them while the sheet is made, in your own voice."),
       }),
       execute: async (input) => {
+        await seeded();
         const { rows } = await pool.query(`SELECT email, first_name FROM users WHERE id = $1`, [ctx.userId]).catch(() => ({ rows: [] as any[] }));
         const raw = String(rows[0]?.email ?? "").trim();
         const email = /^[^\s@]+@[^\s@]+\.[a-z]{2,}$/i.test(raw) ? raw : "";
@@ -455,15 +565,12 @@ export function loopTools(
         const noEmailFallback = (asked === "email" || asked === "both") && !email;
         const downgraded = (input.sendBy === "email" || input.sendBy === "both") && !askedForEmail;
         const zone = await (await import("../services/memberTime.js")).memberZoneOrFallback(ctx.userId);
-        const recordFor = (link: string): EventRecord | null => {
-          const f = loop.found.get(link);
-          if (!f) return null;
-          const d = f.match && "details" in f.match ? (f.match as any).details : null;
-          // Only an event with its own page record can fill a step; a web result or a post can't.
-          return { name: f.match?.name ?? f.name, hasRecord: !!d, blocked: f.blocked ?? null, startAt: d?.startAt ?? null, endAt: d?.endAt ?? null, timezone: d?.timezone ?? null, venue: d?.venue ?? null, address: d?.address ?? null };
-        };
+        // An event from an earlier turn that a step names: its own page re-read now, so the plan carries today's time and place.
+        const E = await import("../services/eventDetails.js");
+        await refreshStoredEvents(loop, input.steps.map((x) => x.link ?? "").filter(Boolean), (url) => E.fetchLumaEventDetails(url, { maxAgeMs: 30 * 60_000 }), E.isLumaLink);
+        const recordFor = (link: string): EventRecord | null => recordFromFound(loop.found.get(link));
         const brief = await loadBrief(ctx.userId).catch(() => null);
-        const facts = [...loop.pages.values(), ...[...loop.found.values()].map((f) => `${f.name} ${f.facts}`), brief ? JSON.stringify(brief) : ""].join("\n");
+        const facts = [...loop.pages.values(), ...[...loop.found.values()].map((f) => `${f.name} ${usableFacts(f)}`), brief ? JSON.stringify(brief) : ""].join("\n");
         const plan = resolvePlan(input, zone, recordFor);
         const problems = planProblems(input, plan, { facts, theirs: theirWords(), now: new Date(), recordFor });
         if (problems.length) {
@@ -475,43 +582,69 @@ export function loopTools(
           ctx.facts?.add("did_this_turn", `Sent them a plan, "${plan.title}", as a one-page sheet ${way}.`);
           return { ok: true, note: "Test run: nothing was sent." };
         }
-        const { buildPlanFiles, sendPlanEmail } = await import("../services/planEmail.js");
+        const { buildPlanFiles, sendPlanEmail, planAsDoc } = await import("../services/planEmail.js");
+        const D = await import("../services/documentDelivery.js");
         const firstName = String(rows[0]?.first_name ?? ctx.firstName ?? "");
+        await holdWhileWriting(input.whileWriting);
+        // The sheet; null when Chrome can't make it right now (then the text carries the plan and the PDF follows).
         const files = await buildPlanFiles(plan, { firstName, seed: `${ctx.userId.slice(0, 8)}-${Date.now().toString(36)}` });
-        if (!files) {
+        if (!files && !byText) {
           notDone("No plan sent: the sheet couldn't be made right now.");
-          return { ok: false, error: "The sheet couldn't be made right now. Say so plainly and give them the plan in a text instead." };
+          return { ok: false, error: "The sheet couldn't be made, so the email didn't go. Give them the plan in a text now; mention the email only if they asked for it by email." };
         }
+        // Recorded like any document (services/deliveryReceipts.ts): it shows under "Documents you've delivered", readDocument quotes it,
+        // the same plan never goes twice unless they ask for it again, and a sheet that won't render goes as text with the PDF to follow.
+        const doc = planAsDoc(plan);
+        const now = new Date();
         const went: string[] = [];
-        if (byEmail) {
+        let emailed = false;
+        if (byEmail && files) {
           const sent = await sendPlanEmail({ to: email, files });
           if (sent.ok) {
+            emailed = true;
             went.push("email");
             // Logged like a text, so a replayed turn sees it went out and doesn't send it twice.
             await logDeliveredPlan(`Co replied: [emailed a plan: ${plan.title}]`);
           }
           else notDone(`The plan email didn't go out: ${sent.why}.`);
         }
+        let line: string | undefined;
+        let pdfPending = false;
+        let duplicateWhy: string | null = null;
         if (byText) {
-          const { cachePlanFile } = await import("../services/planFile.js");
-          try {
-            await sendblue.messages.send({ number: ctx.phoneNumber, content: plan.title, media_url: cachePlanFile(files.pdf), from_number: process.env.SENDBLUE_PHONE_NUMBER! });
+          // The plan's one line, owned by the tool (Royce, 2026-10-08): Co's sentence when it holds to the rules, else "Here's the plan."
+          // ("partnership_plan" only names it a plan in that line.)
+          const caption = await D.captionFor({ line: input.line, title: plan.title, kind: "partnership_plan", sendAt: now, zone });
+          const withEmail = emailed ? `${caption.replace(/[.?]$/, ".")} It's in your email too${files?.calendar ? ", with a calendar hold for each time" : ""}.` : caption;
+          const deps = await D.deliverDepsWith({ render: async () => files?.pdf ?? null });
+          const rd = await D.deliverAndRecord(doc, { userId: ctx.userId, firstName, phone: ctx.phoneNumber, zone, now, line: withEmail }, { askedForGoogle: false, source: "reply:plan", resend: D.asksToResend(theirWords()) }, { deliver: (d, t, target) => D.deliverDocument(d, t, target, deps) });
+          if (rd.duplicate) duplicateWhy = String((rd.results[0] as any).why);
+          else if (rd.sentOk.length) {
+            went.push("text");
+            line = rd.line;
+            pdfPending = rd.sentOk.some((r) => r.pdfPending);
             await logDeliveredPlan(`Co replied: [sent a plan: ${plan.title}]`);
             state.sentMessages.push(`[sent a plan: ${plan.title}]`);
-            went.push("text");
-          } catch (err: any) {
-            notDone("The plan PDF didn't send by text.");
-          }
+            if (line) state.sentMessages.push(line);
+          } else notDone("The plan PDF didn't send by text.");
         }
-        if (!went.length) return { ok: false, error: "The plan didn't go out. Say so plainly and offer the plan as a text message instead." };
-        await recordDecision({ layer: 3, decision: "loop.emailPlan", userId: ctx.userId, outcome: "act", action: plan.title, proposal: { steps: plan.steps.length, via: went, calendar: went.includes("email") && files.calendar } }).catch(() => {});
+        if (emailed) await D.recordSent(doc, { userId: ctx.userId, channel: "email", line: null, source: "reply:plan", now }).catch((err: any) => console.error("loopTools: the plan email's receipt failed (it did send):", err?.message ?? err));
+        if (!went.length && duplicateWhy) {
+          notDone("No plan sent: it's already theirs.");
+          return { ok: false, error: `${duplicateWhy}. Answer from it instead (readDocument).` };
+        }
+        if (!went.length) return { ok: false, error: "The plan didn't go out. Give them the plan in a text now." };
+        await recordDecision({ layer: 3, decision: "loop.emailPlan", userId: ctx.userId, outcome: "act", action: plan.title, proposal: { steps: plan.steps.length, via: went, calendar: went.includes("email") && !!files?.calendar, pdfPending } }).catch(() => {});
         const gone = went.length === 2 ? "by email and by text" : went[0] === "email" ? "by email" : "by text";
-        ctx.facts?.add("did_this_turn", `Sent them a plan, "${plan.title}", as a one-page sheet ${gone}${went.includes("email") && files.calendar ? ", with a calendar hold for each time in the email" : ""}.`);
+        ctx.facts?.add("did_this_turn", `Sent them a plan, "${plan.title}", as a one-page sheet ${gone}${went.includes("email") && files?.calendar ? ", with a calendar hold for each time in the email" : ""}${line ? `, with the line "${line}"` : ""}.`);
+        if (pdfPending) ctx.facts?.add("did_this_turn", `The sheet for "${plan.title}" couldn't be made, so the plan went as text in this conversation, saying the PDF version will follow (it's retried on its own).`);
         await remember({ next: `plan sent: ${plan.title}` });
+        const emailOnly = went.length === 1 && went[0] === "email";
+        const extras = `${noEmailFallback ? "They have no email on file, so it went by text: say so, in a few words. " : ""}${downgraded ? "They hadn't asked for email, so it went by text; if they want it by email too, they can say so. " : ""}${duplicateWhy && emailed ? "It was already theirs by text, so only the email went. " : ""}${went.length < (byEmail && byText ? 2 : 1) && !duplicateWhy ? "One of the two didn't go out: say which. " : ""}`;
         return {
           ok: true,
           via: went,
-          note: `${went.includes("text") ? "The PDF is in this conversation. " : ""}${went.includes("email") ? `It's in their email${files.calendar ? ", with a calendar hold for each time" : ""}. ` : ""}${noEmailFallback ? "They have no email on file, so it went by text: say so, in a few words. " : ""}${downgraded ? "They hadn't asked for email, so it went by text; if they want it by email too, they can say so. " : ""}${went.length < (byEmail && byText ? 2 : 1) ? "One of the two didn't go out: say which. " : ""}Say in one line where it is; don't list the steps again.`,
+          note: `${extras}${emailOnly ? `It's in their email${files?.calendar ? ", with a calendar hold for each time" : ""}: say so in one line, and don't list the steps.` : extras ? "The PDF went with its line: say only the above, in a few words, nothing else about it." : DELIVERED_NOTE}`,
         };
       },
     }),
@@ -556,7 +689,11 @@ export function loopTools(
           notDone(`The venue brief wasn't started: ${r.why}.`);
           return { ok: false, error: r.why };
         }
-        ctx.facts?.add("did_this_turn", `Started researching a venue brief for them in the background ("${input.what.slice(0, 80)}"${date ? `, ${date}${start ? ` from ${start}` : ""}` : ""}). It comes as a document when it's ready; nothing about options, prices or availability is known yet.`);
+        // "Started task #N:" is the shape a promise is backed by (harness/replyGrounding.ts unbackedFollowup), so "I'll text you the brief
+        // once it's ready" stands on this.
+        // Their yes to a waiting [brief] offer is this brief: mark it accepted, so it doesn't hold other offers for 48h.
+        await import("../services/documentOffer.js").then((m) => m.recordDocumentWritten(ctx.userId, `[brief] ${input.what}`)).catch(() => {});
+        ctx.facts?.add("did_this_turn", `Started task #${r.task.id}: researching a venue brief for them in the background ("${input.what.slice(0, 80)}"${date ? `, ${date}${start ? ` from ${start}` : ""}` : ""}). It comes as a document when it's ready; nothing about options, prices or availability is known yet.`);
         return { ok: true, note: "Tell them in one line you're on it and the brief will come as a document. Don't name any option, price or availability now." };
       },
     }),
@@ -588,16 +725,19 @@ export function loopTools(
     // The input and the delivery loop are shared with a task keeping a promise (services/taskTurn.ts writeDocument).
     writeDocument: tool({
       description: toolUse("writeDocument"),
-      inputSchema: WRITE_DOCUMENT_INPUT,
+      inputSchema: WRITE_DOCUMENT_INPUT.extend({
+        whileWriting: z.string().optional().describe("Only if it'll take a moment and you haven't already reacted to their text with ✍️: a few words to them while the PDF is made, in your own voice."),
+      }),
       execute: async (input) => {
+        await seeded();
         const { resolveDocument, documentProblems } = await import("../services/documentSheet.js");
-        const { deliverToTargets, loadTheirWords } = await import("../services/documentDelivery.js");
+        const { deliverAndRecord, asksToResend, loadTheirWords, captionFor } = await import("../services/documentDelivery.js");
         const { recordDocumentWritten } = await import("../services/documentOffer.js");
         const doc = resolveDocument(input);
         // Their record is their words: two weeks of their texts and calls, and this message. What Co read this turn can back only
         // an event or place in Co's own marked suggestions, never a claim about them.
         const theirs = [await loadTheirWords(ctx.userId).catch(() => ""), theirWords()].join("\n");
-        const read = [...loop.pages.values(), ...[...loop.found.values()].map((f) => `${f.name} ${f.facts}`)].join("\n");
+        const read = [...loop.pages.values(), ...[...loop.found.values()].map((f) => `${f.name} ${usableFacts(f)}`)].join("\n");
         const source = { theirs, read };
         const problems = documentProblems(doc, source);
         if (problems.length) {
@@ -610,30 +750,69 @@ export function loopTools(
         }
         const { rows } = await pool.query(`SELECT first_name FROM users WHERE id = $1`, [ctx.userId]).catch(() => ({ rows: [] as any[] }));
         const zone = await (await import("../services/memberTime.js")).memberZone(ctx.userId);
-        const to = { userId: ctx.userId, firstName: String(rows[0]?.first_name ?? ctx.firstName ?? ""), phone: ctx.phoneNumber, zone };
+        // The tool owns its one line (Co's, held to the delivery rules, or "Here's the X."): the caption on the attachment, nothing after it.
+        const now = new Date();
+        const line = await captionFor({ line: input.line, title: doc.title, kind: doc.kind, sendAt: now, zone });
+        await holdWhileWriting(input.whileWriting);
+        const to = { userId: ctx.userId, firstName: String(rows[0]?.first_name ?? ctx.firstName ?? ""), phone: ctx.phoneNumber, zone, now, line };
         // A Google Doc only when they asked for one in their own words (code checks the words, not Co's say-so), and only for a shared
         // working artifact (venue brief, partnership plan, readout) for a member with Google connected (narrowed by GOOGLE_DOCS_TEST_USERS when set); otherwise the PDF.
         // Not connected (or Docs not allowed): the PDF goes instead, and Co offers to connect Google.
-        const { results, sentOk, googleRefused, googleMissing } = await deliverToTargets(doc, to, { saveTo: input.saveTo, askedForGoogle: GOOGLE_DOC_ASK.test(theirWords()) });
+        // Recorded (services/deliveryReceipts.ts): a revision goes as the next version with its change line; the same artifact never twice.
+        const rd = await deliverAndRecord(doc, to, { saveTo: input.saveTo, askedForGoogle: GOOGLE_DOC_ASK.test(theirWords()), source: "reply", revises: input.revises ?? null, changed: input.changed ?? null, resend: asksToResend(theirWords()) });
+        const { results, sentOk, googleRefused, googleMissing } = rd;
+        if (rd.duplicate) {
+          notDone(`No document sent: it's already theirs (doc #${rd.duplicate.id}).`);
+          return { ok: false, error: `${(results[0] as any).why}. Answer from it instead (readDocument).` };
+        }
         if (!sentOk.length) {
           const why = results.map((r) => (r.ok ? "" : r.why)).filter(Boolean).join("; ");
           notDone(`No document sent: ${why}.`);
-          return { ok: false, error: `${why}. Say so plainly and give them the points in a text instead.` };
+          return { ok: false, error: `${why}. Give them the points in a text now; mention the document only to say it isn't there yet.` };
         }
         const sent = { ok: true as const, via: sentOk.map((r) => r.via).join("+"), link: sentOk.find((r) => r.link)?.link ?? null };
+        const asText = sentOk.some((r) => r.pdfPending);
+        if (asText) ctx.facts?.add("did_this_turn", `The PDF of "${doc.title}" failed, so its content went as text in this conversation, saying the PDF version will follow (it's retried on its own).`);
+        if (rd.version > 1) ctx.facts?.add("did_this_turn", `This was version ${rd.version} of "${doc.title}", sent with the line "${rd.line}".`);
         await logDeliveredPlan(`Co replied: [sent a document: ${doc.title}]`);
         state.sentMessages.push(`[sent a document: ${doc.title}]`);
+        if (rd.line) state.sentMessages.push(rd.line);
         await recordDocumentWritten(ctx.userId, doc.title).catch(() => {});
         await recordDecision({ layer: 3, decision: "loop.writeDocument", userId: ctx.userId, outcome: "act", action: doc.title, proposal: { sections: doc.sections.length, via: sent.via } }).catch(() => {});
         const asPdf = sentOk.some((r) => r.via === "pdf_text");
         const asDoc = sentOk.some((r) => r.via === "google_docs");
         const sharedLink = sentOk.some((r) => r.via === "google_docs" && r.shared);
-        ctx.facts?.add("did_this_turn", `Sent them a document, "${doc.title}" (${doc.sections.length} sections)${asDoc ? `, as a Google Doc in their own Drive (link texted: ${sent.link}; ${sharedLink ? "anyone with the link can open and edit it" : "only they can open it"})` : ""}${asDoc && asPdf ? " and" : ""}${asPdf ? " as a PDF in this conversation" : ""}.`);
+        ctx.facts?.add("did_this_turn", `Sent them a document, "${doc.title}" (${doc.sections.length} sections)${asDoc ? `, as a Google Doc in their own Drive (link texted: ${sent.link}; ${sharedLink ? "anyone with the link can open and edit it" : "only they can open it"})` : ""}${asDoc && asPdf ? " and" : ""}${asPdf ? " as a PDF in this conversation" : ""}${rd.line ? `, with the line "${rd.line}"` : ""}.`);
         await remember({ next: `document sent: ${doc.title}` });
+        const extras = `${googleRefused === "kind" ? "They asked for a Google Doc, but a Google Doc is only for a venue brief, partnership plan or readout, so this went as a PDF: say so in a line. " : googleRefused === "not_yet" ? "They asked for a Google Doc, but Google Docs aren't open to them yet, so it went as a PDF: say so in a line, without promising when. " : ""}${googleMissing ? "Their Google isn't connected with Docs allowed, so it went as a PDF: say so in a line and offer to send the link to connect Google (googleConnection). " : ""}`;
         return {
           ok: true,
           via: sent.via,
-          note: `${asDoc ? `The Google Doc is in their Drive and its link is in this conversation; ${sharedLink ? "anyone with the link can open and edit it, and the text told them so" : "only they can open it for now, and the text told them so"}. ` : ""}${googleRefused === "kind" ? "They asked for a Google Doc, but a Google Doc is only for a venue brief, partnership plan or readout, so this went as a PDF: say so in a line. " : googleRefused === "not_yet" ? "They asked for a Google Doc, but Google Docs aren't open to them yet, so it went as a PDF: say so in a line, without promising when. " : ""}${asPdf ? "The PDF is in this conversation. " : ""}${googleMissing ? "Their Google isn't connected with Docs allowed, so it went as a PDF: say so in a line and offer to send the link to connect Google (googleConnection). " : ""}Say in one line what it covers and that you'll change anything they want; don't repeat its contents.`,
+          note: `${asDoc ? `The Google Doc is in their Drive and its link went with its line; ${sharedLink ? "anyone with the link can open and edit it, and the text told them so" : "only they can open it for now, and the text told them so"}. ` : ""}${extras}${extras ? "Say only that, in a few words, nothing else about it." : DELIVERED_NOTE}`,
+        };
+      },
+    }),
+    // A delivered document's own words (services/deliveryReceipts.ts), for a question or a change request about it: answers come
+    // from what was sent, quoted, never a fresh generation.
+    readDocument: tool({
+      description: toolUse("readDocument"),
+      inputSchema: z.object({
+        doc: z.number().int().describe("Its doc number from \"Documents you've delivered\"."),
+        about: z.string().optional().describe("What they asked about, in their words, to find the section."),
+      }),
+      execute: async ({ doc: id, about }) => {
+        const R = await import("../services/deliveryReceipts.js");
+        const rec = await R.pgReceipts.get(ctx.userId, id).catch(() => null);
+        if (!rec) return { ok: false, error: `There's no document #${id} on record for them. Say plainly you don't have it.` };
+        const section = about ? R.findSection(rec.doc, about) : null;
+        return {
+          ok: true,
+          title: rec.title,
+          version: rec.version,
+          delivered: rec.deliveredAt.toISOString(),
+          section,
+          sections: R.sectionsOf(rec.doc),
+          note: `Answer from this text only. Quote the words of the section they asked about, in quotation marks, then answer. If it isn't in the document, say so. If they want it changed, write the new version with writeDocument (revises: ${rec.id}, changed: what changed), starting from these words.`,
         };
       },
     }),
@@ -666,7 +845,7 @@ export function loopTools(
           return { ok: true, note: "Test run: nothing was drafted or sent." };
         }
         const draft = await F.fileSteps.draft({ fileText: file.text, theirWords: theirs, kind: input.kind ?? "other", want: input.want });
-        if (!draft) return { ok: false, error: "The document couldn't be drafted right now. Say so plainly and offer to try again." };
+        if (!draft) return { ok: false, error: "The document couldn't be drafted. Give them what you can from their file in a text now, and never ask them to try again." };
         const doc = resolveDocument(draft);
         // Rule 4: the same grounding as writeDocument, with their file as part of their own record. Nothing of either is shown to Co.
         const problems = documentProblems(doc, { theirs: `${theirs}\n${file.text}` });
@@ -686,7 +865,7 @@ export function loopTools(
         const sentOk = results.filter((r): r is Extract<typeof r, { ok: true }> => r.ok);
         if (!sentOk.length) {
           notDone(`No document sent from their file #${file.n}.`);
-          return { ok: false, error: "It didn't send. Say so plainly and offer to try again." };
+          return { ok: false, error: "It didn't send. Give them the content in a text now, and never ask them to try again." };
         }
         const via = sentOk.map((r) => r.via).join("+");
         const line = `[sent a document made from their file #${file.n}]`;

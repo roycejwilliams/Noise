@@ -12,7 +12,7 @@ import { z } from "zod";
 import { MODELS } from "../models.js";
 import { recordDecision } from "../harness/core.js";
 import { getPersonSnapshot, renderSnapshot } from "../harness/personSnapshot.js";
-import { gateMatches } from "../harness/matchGate.js";
+import { gateMatches, type GatedOut } from "../harness/matchGate.js";
 import { eventCandidates, reserveXSearch, type TierMatch } from "./tieredRecommendation.js";
 
 export const SWEEP_BUDGET = { steps: 7, webQueries: 2, xSearches: 1, pageReads: 3, keep: 3 };
@@ -24,7 +24,52 @@ export const SWEEP_BUDGET = { steps: 7, webQueries: 2, xSearches: 1, pageReads: 
 // knew (proposeOpportunityQuery): search X once for the asks X covers, written
 // the way such posts are written, with OR for the words people post with. Co
 // still decides; this is guidance, not a rule in code.
-export const SWEEP_X_GUIDANCE = `X is where programs and gatherings are announced first. When the ask is one X covers (a program, cohort, accelerator, fellowship, residency or grant taking applications; an open call or a speaking or demo slot; founder or builder gatherings; investors or people looking for exactly what they want), search X once in this sweep. Write the query the way those posts are written, not the way they asked: the kind of thing, with OR for the real words people post with, grouped in parentheses, for example (accelerator OR cohort OR fellowship) (applications open OR now accepting OR apply). Keep it broad: two groups, the kind of thing and how it's announced, and a third only for a stage or field posts would carry (pre-seed, AI, fintech); never four. Their niche words make it come back empty; you judge the 20 posts that come back. Leave out their city and any year they didn't say, because posts rarely name either and those words make you miss them. Don't use X for venues, vendors, services or plain things to do; posts don't list those.`;
+export const SWEEP_X_GUIDANCE = `X is where programs and gatherings are announced first. When the ask is one X covers (a program, cohort, accelerator, fellowship, residency or grant taking applications; an open call or a speaking or demo slot; founder or builder gatherings; investors or people looking for exactly what they want), search X once in this sweep. Write the query the way those posts are written, not the way they asked: the kind of thing, with OR for the real words people post with, grouped in parentheses, for example (accelerator OR cohort OR fellowship) (applications open OR now accepting OR apply). Keep it broad: two groups, the kind of thing and how it's announced, and a third only for a stage or field posts would carry (pre-seed, AI, fintech); never four. Their niche words make it come back empty; you judge the 20 posts that come back. Leave out their city and any year they didn't say, because posts rarely name either and those words make you miss them. Don't use X for venues, vendors, services or plain things to do; posts don't list those. And don't spend it on something that isn't a thing to find at all (a plan or draft Co owes them, a status, a deal they're working on): skip X for that sweep.`;
+
+// Every place Co can look, named in the brief (2026-10-08: sweeps ended without
+// ever looking at Co's own events for an event-shaped ask). Guidance, not a
+// forced call: Co still picks the tools.
+export const SWEEP_TIERS = `Where you can look, in order: (1) Co's own events and (2) the public event feed and openings Co already found, both through searchEvents; (3) the web (webSearch) and X (searchPosts) for programs, places and people. When the ask is something to go to or join (an event, a dinner, a meetup, a class, a community gathering), look at searchEvents before you finish, even if you expect it thin: Co's own events come first when they fit.`;
+
+// What Co looked at and passed over, for the log (sweep.find), so "why did
+// nothing from X go out" can be answered from the record.
+export const SWEEP_PASS_TOOL =
+  "Note what you looked at closely and decided against, each with its link and a few words on why (wrong kind, already past, spam or promotion, not for them, too far). Call it once, alongside your keeps, when you're done. Nothing is sent; it's how Co's choices are reviewed.";
+export const PASSED_OVER_CAP = 10;
+
+export type LookedAt = { source: "x" | "web" | "events"; name: string; url: string };
+export type PassedOver = LookedAt & { why: string };
+
+// Everything looked at but not kept, X first then web then events, with Co's
+// reason when it gave one, else the gate's, else "not kept". Pure.
+export function passedOver(lookedAt: LookedAt[], keptUrls: Set<string>, reasons: Map<string, string>, cap = PASSED_OVER_CAP): PassedOver[] {
+  const order = { x: 0, web: 1, events: 2 } as const;
+  const seen = new Set<string>();
+  return lookedAt
+    .filter((l) => !keptUrls.has(l.url) && !seen.has(l.url) && seen.add(l.url))
+    .sort((a, b) => order[a.source] - order[b.source] || Number(reasons.has(b.url)) - Number(reasons.has(a.url)))
+    .slice(0, cap)
+    .map((l) => ({ source: l.source, name: l.name.slice(0, 80), url: l.url, why: (reasons.get(l.url) ?? "not kept").slice(0, 120) }));
+}
+
+// An X search that failed, said by kind and status only (never the response
+// body or a token), for the log and for Co.
+export function xFailure(err: unknown): { kind: "not_configured" | "auth" | "rate_limited" | "server" | "error"; status: number | null } {
+  const msg = String((err as any)?.message ?? err ?? "");
+  if (/not configured/i.test(msg)) return { kind: "not_configured", status: null };
+  const m = msg.match(/\((\d{3})\)/);
+  const status = m ? Number(m[1]) : null;
+  if (status === 401 || status === 403) return { kind: "auth", status };
+  if (status === 429) return { kind: "rate_limited", status };
+  if (status !== null && status >= 500) return { kind: "server", status };
+  return { kind: "error", status };
+}
+
+// What Co is told when X failed: not "no posts", which reads as "nothing out there".
+export function xFailedNote(f: ReturnType<typeof xFailure>): string {
+  const why = f.kind === "rate_limited" ? "X is rate limiting us right now" : f.kind === "auth" || f.kind === "not_configured" ? "Co's X access isn't working right now" : "X didn't answer";
+  return `The X search failed (${why}), so there are no posts to judge. This says nothing about whether posts exist. Use webSearch for this ask instead.`;
+}
 
 export const SWEEP_X_TOOL =
   "Recent X posts (the last 7 days), for what's announced there first: programs and cohorts taking applications, open calls, fellowships, residencies, grants, founder or builder gatherings, investors or people looking for what they want. One search a sweep. Write it the way such posts are written, broad: two or three OR-grouped sets of synonyms in parentheses, e.g. (accelerator OR cohort OR fellowship) (applications open OR now accepting OR apply by). No niche words, no city, no year, no venue or vendor names. Each post comes with its own links expanded; when a post points to the program's own page, keep that link rather than the post.";
@@ -43,8 +88,8 @@ Already sent to them recently (don't keep these again): ${o.shown.length ? o.sho
 Search only for this one ask. Other things they're working on (in who they are) are context for judging fit, not things to look for in this sweep, because each ask gets its own sweep (2026-10-01: a founder-events sweep kept a venue from another ask).
 Who a thing is for matters. Read each one for the group it speaks to (a hike club for women, a men's group, a moms' brunch) and say it in the audience field of keep. Never hold something back for who you assume they are: you only know what they have said in their own words, never from a name or a voice. A group-aimed thing fits them when what you know says they belong; when you don't know, you may still keep it if it fits strongly, and Co will say plainly who it's for so they can tell. Prefer an open event when two fit about equally.
 
-Look with the tools: events first when it's something to go to, the web for programs, places and people. ${SWEEP_X_GUIDANCE}
-Judge each result yourself against what they asked and who they are; results are candidates, not answers. Everything you keep goes to a member of a private club, so it has to be real and worth their time: a named thing with a way in (who runs it, how to apply or join), never a token or coin promotion, a giveaway, engagement bait or a bare headline. Keep at most ${SWEEP_BUDGET.keep} with keep(), each with one plain sentence on why it fits them. Keeping nothing is fine when nothing fits. Stop when you're done.`;
+Look with the tools: events first when it's something to go to, the web for programs, places and people. ${SWEEP_TIERS} ${SWEEP_X_GUIDANCE}
+Judge each result yourself against what they asked and who they are; results are candidates, not answers. Everything you keep goes to a member of a private club, so it has to be real and worth their time: a named thing with a way in (who runs it, how to apply or join), never a token or coin promotion, a giveaway, engagement bait or a bare headline. Keep at most ${SWEEP_BUDGET.keep} with keep(), each with one plain sentence on why it fits them. Keeping nothing is fine when nothing fits. When you're done, note in skip() the results you looked at and passed on, each with a few words on why, in the same step as your keeps. Then stop.`;
 }
 
 export async function sweepFind(c: SweepCandidate, opts: { timezone?: string | null; feeling?: string | null; shown?: string[] } = {}): Promise<{ matches: TierMatch[]; did: string[] }> {
@@ -55,6 +100,12 @@ export async function sweepFind(c: SweepCandidate, opts: { timezone?: string | n
   let xSearches = 0;
   let xPosts = 0;
   let reads = 0;
+  // What Co looked at (for the log), its reasons for passing, and any X failure.
+  const lookedAt: LookedAt[] = [];
+  const passReasons = new Map<string, string>();
+  let xError: ReturnType<typeof xFailure> | null = null;
+  // A page kept in place of the post that pointed to it: the post counts as kept too.
+  const postOf = new Map<string, string>();
   // The one model of them (services/personModel.ts).
   const picture = await import("./personModel.js").then((m) => m.personModel(c.userId, { maxDid: 5 })).catch(() => renderSnapshot(null));
   const tools = {
@@ -67,7 +118,10 @@ export async function sweepFind(c: SweepCandidate, opts: { timezone?: string | n
           eventCandidates(what, c.city, { when: when ?? null, userId: c.userId, timezone: opts.timezone ?? null, limit: 8 }),
           import("./eventSurfacingSweep.js").then((m) => m.alreadyFoundOpenings(c.userId)).catch(() => [] as TierMatch[]),
         ]);
-        for (const { match } of r.candidates) if ("url" in match && match.url) found.set(match.url, match);
+        for (const { match } of r.candidates) if ("url" in match && match.url) {
+          found.set(match.url, match);
+          lookedAt.push({ source: "events", name: match.name, url: match.url });
+        }
         for (const m of openings) if ("url" in m && m.url) found.set(m.url, m);
         return {
           events: r.candidates.map(({ match, lines }) => ({ link: "url" in match ? match.url : null, details: lines })),
@@ -90,6 +144,7 @@ export async function sweepFind(c: SweepCandidate, opts: { timezone?: string | n
         const kept = (await checkVerified(all.flatMap((r) => r?.kept ?? [])).catch(() => ({ kept: all.flatMap((r) => r?.kept ?? []) }))).kept;
         for (const k of kept) {
           const facts = [...k.facts, ...(k.date ? [`date: ${k.date}`] : [])].join("; ");
+          lookedAt.push({ source: "web", name: k.name, url: k.url });
           found.set(k.url, { tier: 3, kind: "opportunity", source: "web", name: k.name, url: k.url, reason: facts || k.name, evidence: `${k.name}. ${facts}`, ...(k.date ? { statedDates: { start: k.date } } : {}), ...(k.deadline ? { deadline: k.deadline } : {}) } as unknown as TierMatch);
         }
         if (all.every((r) => r && /^No web search right now/.test(r.note))) return { ok: false, error: "Web search budget is used up for today." };
@@ -107,15 +162,27 @@ export async function sweepFind(c: SweepCandidate, opts: { timezone?: string | n
         if (!budget.ok) return { ok: false, error: `X search unavailable (${budget.reason ?? "budget"}).` };
         did.push(`x: ${q}`);
         const { searchRecentPosts, X_SEARCH_RESULTS } = await import("./xSearch.js");
-        const posts = await searchRecentPosts(q, X_SEARCH_RESULTS).catch(() => []);
+        let posts: Awaited<ReturnType<typeof searchRecentPosts>>;
+        try {
+          posts = await searchRecentPosts(q, X_SEARCH_RESULTS);
+        } catch (err) {
+          // Logged by kind and status, never swallowed into "no posts" (2026-10-08).
+          xError = xFailure(err);
+          console.error(`sweepFind: X search failed (${xError.kind}${xError.status ? `, status ${xError.status}` : ""}) for user ${c.userId}`);
+          return { ok: false, error: xFailedNote(xError) };
+        }
         xPosts += posts.length;
         for (const p of posts) {
+          lookedAt.push({ source: "x", name: `${p.author ? `@${p.author}: ` : ""}${p.text.slice(0, 60)}`, url: p.url });
           const post = { tier: 3, kind: "opportunity", source: "x", name: p.text.slice(0, 80), url: p.url, reason: p.text, evidence: p.text } as unknown as TierMatch;
           found.set(p.url, post);
           // The page a post points to can be kept in its place, with the post as
           // its evidence. It's a web page to the gate (only x.com/i/status links
           // pass as posts), found through X.
-          for (const l of p.links) if (!found.has(l)) found.set(l, { ...post, source: "web", via: "x", url: l } as unknown as TierMatch);
+          for (const l of p.links) {
+            if (!postOf.has(l)) postOf.set(l, p.url);
+            if (!found.has(l)) found.set(l, { ...post, source: "web", via: "x", url: l } as unknown as TierMatch);
+          }
         }
         return {
           posts: posts.map((p) => ({ link: p.url, by: p.author ? `@${p.author}` : undefined, text: p.text.slice(0, 600), links: p.links.length ? p.links : undefined })),
@@ -147,6 +214,14 @@ export async function sweepFind(c: SweepCandidate, opts: { timezone?: string | n
         return { ok: true };
       },
     }),
+    skip: tool({
+      description: SWEEP_PASS_TOOL,
+      inputSchema: z.object({ passed: z.array(z.object({ link: z.string(), why: z.string() })).max(20) }),
+      execute: async ({ passed }) => {
+        for (const p of passed.slice(0, 20)) if (p.link && p.why?.trim()) passReasons.set(p.link, p.why.trim());
+        return { ok: true };
+      },
+    }),
   };
   try {
     await generateText({
@@ -162,7 +237,13 @@ export async function sweepFind(c: SweepCandidate, opts: { timezone?: string | n
     console.error("sweepFind: the loop failed (non-fatal):", err?.message ?? err);
   }
   // Facts only: sold out, past, too far, and a name/date the record actually states.
-  const gated = await gateMatches(kept, { userId: c.userId, searchCity: c.city, checkRepeat: false, zone: opts.timezone ?? null }).catch(() => kept);
-  await recordDecision({ layer: 5, decision: "sweep.find", userId: c.userId, outcome: gated.length ? "act" : "skip", action: `kept ${gated.length}`, proposal: { ask: c.askText.slice(0, 200), did, kept: kept.map((m) => m.name), passedGate: gated.map((m) => m.name), xPosts, xKept: gated.filter((m) => (m as any).source === "x" || (m as any).via === "x").length } }).catch(() => {});
+  const gatedOut: GatedOut[] = [];
+  const gated = await gateMatches(kept, { userId: c.userId, searchCity: c.city, checkRepeat: false, zone: opts.timezone ?? null, gatedOut }).catch(() => kept);
+  // Kept but stopped by the fact gate: the gate's reason, unless Co gave one.
+  for (const g of gatedOut) if (g.url && !passReasons.has(g.url)) passReasons.set(g.url, `kept, then the fact gate: ${g.reasons.join("; ")}`);
+  const keptUrls = new Set(gated.flatMap((m) => ("url" in m && m.url ? [String(m.url), postOf.get(String(m.url)) ?? ""] : [])).filter(Boolean));
+  const passed = passedOver(lookedAt, keptUrls, passReasons);
+  const tried = { events: did.some((d) => d.startsWith("events: ")), web: did.some((d) => d.startsWith("web: ")), x: did.some((d) => d.startsWith("x: ")) };
+  await recordDecision({ layer: 5, decision: "sweep.find", userId: c.userId, outcome: gated.length ? "act" : "skip", action: `kept ${gated.length}`, proposal: { ask: c.askText.slice(0, 200), did, tried, kept: kept.map((m) => m.name), passedGate: gated.map((m) => m.name), xPosts, xKept: gated.filter((m) => (m as any).source === "x" || (m as any).via === "x").length, ...(xError ? { xError } : {}), lookedAt: { x: lookedAt.filter((l) => l.source === "x").length, web: lookedAt.filter((l) => l.source === "web").length, events: lookedAt.filter((l) => l.source === "events").length }, passedOver: passed } }).catch(() => {});
   return { matches: gated, did };
 }

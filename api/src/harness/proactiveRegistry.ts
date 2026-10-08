@@ -13,7 +13,7 @@ import { draftCompanionCheckin } from "../agent/companionCheckin.js";
 import { draftWindowFollowUp, type WindowFollowUpPayload } from "../agent/windowFollowUp.js";
 import { draftCalendarFollow } from "../agent/calendarFollowReachOut.js";
 import { draftAskSolicitation } from "../agent/eventAskSolicitation.js";
-import { draftPostCall, markPostCallDropped, markPostCallSent } from "../jobs/postCallFollowUp.js";
+import { draftPostCall, markPostCallDropped, markPostCallSent, recordRecapOffer } from "../jobs/postCallFollowUp.js";
 import { askStillOpen, isShortNotice, onEventOfferDropped, onEventOfferSent, type EventOfferPayload } from "../services/eventSurfacingSweep.js";
 import { endOfLocalDay, followUpDate, type DebriefPayload } from "../services/recommendationOutcome.js";
 import { itemDays, localToday, offerable, readDates } from "../services/dateGuard.js";
@@ -683,8 +683,9 @@ export const proactiveRegistry: ProactiveRegistry = {
       const r = await draftPostCall(c.userId, person.firstName, c.payload.followUpId);
       return r ? { messages: [r.text], ...r } : skip("model chose SKIP");
     },
-    async onSent(c) {
+    async onSent(c, _p, messages) {
       await markPostCallSent(c.payload.followUpId);
+      await recordRecapOffer(c.userId, c.payload.followUpId, messages ?? []).catch(() => false);
     },
     async onDropped(c, status) {
       await markPostCallDropped(c.payload.followUpId, status);

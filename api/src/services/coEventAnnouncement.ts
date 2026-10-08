@@ -5,7 +5,7 @@
 //   who     every user whose city is near the event, whatever their profile
 //           or asks (his call: "Everyone near the event")
 //   when    right away, bypassing the one-proactive-text-a-day cap, but only
-//           9am-8pm in their time zone; off-hours it waits for the next run
+//           8am-9pm in their time zone; off-hours it waits for the next run
 //           inside their hours (jobs/index.ts, every 10 minutes)
 //   never   to someone who opted out, or twice for the same event
 //   how     the link first, then a short caption (the format everywhere

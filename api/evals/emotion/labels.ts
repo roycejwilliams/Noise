@@ -90,7 +90,8 @@ check("the rule doesn't quote a bad example (Co copies quoted examples)", !/"/.t
 // the lines that primed it were removed, not just a rule added. The rule alone left 9 of 20 calls with a label.
 check("nothing in the prompt tells Co to read the energy under their words or models the stock lines", !/read the energy underneath/.test(prompt) && !/Not "I hear you\."/.test(prompt) && !/Never says "I hear you"/.test(prompt));
 check("no example in the prompt is itself a label frame (\"It sounds like you're ...\")", !/"It sounds like you're/.test(prompt));
-check("the call prompt carries the rule", prompt.includes(rule));
+// 2026-10-08: the call's voice is Hume's prompt, which carries its own form of the rule (the text listening block stays out of calls).
+check("the call prompt carries the rule, in Hume's words", /Never tells them what they're feeling or names the emotion it notices in them/.test(prompt));
 
 // Calls can't be filtered mid-call: every call is checked after it ends.
 const co = readFileSync(new URL("../../src/routes/co.ts", import.meta.url), "utf8");

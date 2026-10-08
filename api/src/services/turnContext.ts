@@ -10,8 +10,11 @@
 // anyone else can enter a member's turn through it.
 import type { DocOfferContext } from "./documentOffer.js";
 import { stampOf } from "./factLabels.js";
-import { memberZone, wordsZone } from "./memberTime.js";
-import { briefFactLines, openTasks, recentBriefs, taskFactLines } from "./coTasks.js";
+import { localDay, localStamp, memberZone, wordsZone } from "./memberTime.js";
+import { briefFactLines, openTasks as loadOpenTasks, recentBriefs as loadRecentBriefs, taskFactLines, type BriefView, type CoTask } from "./coTasks.js";
+import type { Receipt } from "./deliveryReceipts.js";
+import type { Doc } from "./documentSheet.js";
+import { receiptDrift, type Drift } from "./receiptDrift.js";
 import { adviceLines, loadAdvice } from "./advice.js";
 import { loadMilestones, storyLines } from "./milestones.js";
 import pool from "../db/db.js";
@@ -72,9 +75,67 @@ export type TurnContext = {
   briefs?: string[];
   // Whether Co may offer to write something up as a document, and any offer still waiting on an answer (services/documentOffer.ts).
   docOffer?: DocOfferContext | null;
+  // Documents Co delivered them, newest version each, outstanding first (services/deliveryReceipts.ts receiptLines).
+  deliveries?: string[];
   // The Co event they're registered for today, if any (services/eventPresence.ts).
   todayEvent?: { eventApiId: string; name: string; startAt: string; timezone: string | null } | null;
+  // Everything Co is carrying for them, one ordered view: due first, then outstanding, then done (carryingItems).
+  carrying?: CarryItem[];
+  // The newest delivered documents, each artifact once, with their text: for "is this about doc #12?" (replyGrounding docHint).
+  recentDocs?: { id: number; version: number; title: string; doc: Doc; deliveredAt: Date }[];
+  // Delivered documents that no longer match what's true (services/receiptDrift.ts).
+  drift?: Drift[];
 };
+
+// ---------------------------------------------------------------- what Co is carrying (2026-10-08 review B6)
+// Tasks, promises, research briefs, delivered documents and open loops, each in one line, in one order: what's due now, then what's
+// outstanding, then what's done, each marked "already told them" when Co has. Pure.
+export type CarryItem = { kind: "task" | "promise" | "brief" | "document" | "loop"; label: string; state: "due" | "outstanding" | "done"; told: boolean; dueMs: number | null };
+export type LoopLite = { id?: number; title: string; status: string; dueDate: string | null; source: string; detail: string | null };
+const DAY = 86_400_000;
+export function carryingItems(o: { tasks: CoTask[]; briefs: BriefView[]; receipts: Receipt[]; loops: LoopLite[]; now: Date; zone: string | null }): CarryItem[] {
+  const now = o.now.getTime();
+  const tomorrow = localDay(new Date(now + DAY), o.zone);
+  const items: CarryItem[] = [];
+  for (const t of o.tasks.filter((x) => x.status === "open")) {
+    const windowDue = t.window && !t.window.closedAt ? new Date(t.window.deadline).getTime() : null;
+    const deadlineDue = t.deadline ? new Date(`${t.deadline}T23:59:00Z`).getTime() : null;
+    const due = (windowDue !== null && windowDue - now <= DAY) || (!!t.deadline && t.deadline <= tomorrow) || (!!t.nextCheckAt && new Date(t.nextCheckAt).getTime() <= now);
+    const promise = t.source === "promise";
+    const what = promise ? t.goal.replace(/^Keep your promise:\s*/i, "") : `"${t.goal}"`;
+    const by = t.window && !t.window.closedAt ? ` (${t.window.words}, by ${localStamp(t.window.deadline, t.window.zone ?? o.zone)})` : t.deadline ? ` (their deadline ${t.deadline})` : "";
+    items.push({ kind: promise ? "promise" : "task", label: `${promise ? `your promise, task #${t.id}` : `task #${t.id}`}: ${what}${by}`, state: due ? "due" : "outstanding", told: promise || !!t.lastTextedAt, dueMs: windowDue ?? deadlineDue });
+  }
+  for (const b of o.briefs) {
+    if (b.status === "open" && b.held) items.push({ kind: "brief", label: `research brief #${b.id}: "${b.goal}" is finished and hasn't reached them`, state: "due", told: false, dueMs: now });
+    else if (b.status === "open") items.push({ kind: "brief", label: `research brief #${b.id}: "${b.goal}", running`, state: "outstanding", told: true, dueMs: null });
+    else if (b.status === "done") items.push({ kind: "brief", label: `research brief #${b.id}: "${b.goal}", finished`, state: "done", told: true, dueMs: null });
+  }
+  const newest = new Map<string, Receipt>();
+  for (const r of [...o.receipts].sort((a, b) => b.deliveredAt.getTime() - a.deliveredAt.getTime())) if (!newest.has(r.docKey)) newest.set(r.docKey, r);
+  for (const r of [...newest.values()].slice(0, 5)) {
+    if (r.status === "pdf_pending") items.push({ kind: "document", label: `doc #${r.id} "${r.title}": the PDF still follows (the text went)`, state: "outstanding", told: true, dueMs: null });
+    else items.push({ kind: "document", label: `doc #${r.id} "${r.title}", version ${r.version}, delivered`, state: "done", told: true, dueMs: null });
+  }
+  // Task loops are the tasks above; the rest (their notes, an ask, an offer) are the loops' own.
+  for (const l of o.loops.filter((x) => x.source !== "task" && x.status !== "done" && x.status !== "dropped").slice(0, 6)) {
+    const due = !!l.dueDate && l.dueDate <= tomorrow;
+    items.push({ kind: "loop", label: `${l.id != null ? `[loop ${l.id}] ` : ""}${l.title}: ${l.status.replace(/_/g, " ")}${l.detail ? ` (${l.detail.slice(0, 80)})` : ""}${l.dueDate ? `, due ${l.dueDate}` : ""}`, state: due ? "due" : "outstanding", told: false, dueMs: l.dueDate ? new Date(`${l.dueDate}T23:59:00Z`).getTime() : null });
+  }
+  const rank = { due: 0, outstanding: 1, done: 2 } as const;
+  return items.sort((a, b) => rank[a.state] - rank[b.state] || (a.dueMs ?? Infinity) - (b.dueMs ?? Infinity)).slice(0, 14);
+}
+export function carryingBlock(items: CarryItem[] | null | undefined): string | null {
+  if (!items?.length) return null;
+  const head = { due: "Due now", outstanding: "Outstanding", done: "Done lately" } as const;
+  const parts = (["due", "outstanding", "done"] as const)
+    .map((st) => {
+      const xs = items.filter((i) => i.state === st);
+      return xs.length ? `${head[st]}: ${xs.map((i) => `${i.label}${i.told ? " [already told them]" : ""}`).join("; ")}.` : null;
+    })
+    .filter(Boolean);
+  return `Everything you're carrying for them, in one order (due first; the details are in the facts above${items.some((i) => i.kind === "loop" && /^\[loop \d+\]/.test(i.label)) ? "; [loop N] ids are for updateLoop, never for your texts" : ""}): ${parts.join(" ")} Lead with what's due when it fits; never repeat what's marked already told them unless they ask.`;
+}
 
 const nameKey = (n: string) => `name:${n.toLowerCase()}`;
 const norm = (t: string) => t.toLowerCase().replace(/[^a-z0-9 ]+/g, " ").replace(/\s+/g, " ").trim();
@@ -236,6 +297,12 @@ export async function assembleContext(
 ): Promise<TurnContext> {
   // Their zone (services/memberTime.ts), read once: stamps, the ledger's days, task times and Google facts are all in it.
   const zone = await memberZone(userId);
+  // Tasks and briefs are read once and shared: their fact lines below, and what Co is carrying (carryingItems).
+  const once = <T,>(f: () => Promise<T>) => { let p: Promise<T> | null = null; return () => (p ??= f()); };
+  const tasksOnce = once(() => loadOpenTasks(userId));
+  const briefsOnce = once(() => loadRecentBriefs(userId));
+  const openTasks = (_: string) => tasksOnce();
+  const recentBriefs = (_: string) => briefsOnce();
   const [profile, snapshot, sent, asks, threads, offersThisWeek, emotional, lessons, inlineTarget, ledger] = await Promise.all([
     pool.query(`SELECT * FROM co_profiles WHERE user_id = $1`, [userId]).then((r) => r.rows[0] ?? null).catch(() => null),
     getPersonSnapshot(userId).catch(() => null),
@@ -279,7 +346,50 @@ export async function assembleContext(
     import("./eventPresence.js").then((e) => e.todayEventFor(userId)).catch(() => null),
     import("./documentOffer.js").then((m) => m.loadDocOfferContext(userId)).catch(() => null),
   ]);
-  return { userId, message, profile, snapshot, sent, asks, threads, offersThisWeek, emotional, lessons, inlineTarget, ledger, capabilities: capabilitySheet(), google, kit, story, advice, tasks, briefs, todayEvent, docOffer };
+  const receipts = await import("./deliveryReceipts.js").then((R) => R.pgReceipts.forUser(userId, 30)).catch(() => [] as Receipt[]);
+  const deliveries = await import("./deliveryReceipts.js").then(async (R) => R.receiptLines(receipts, zone)).catch(() => [] as string[]);
+  // Open loops, read only (the text route syncs them): the non-task ones join what Co is carrying.
+  const [loops, rejected, notes] = await Promise.all([
+    pool
+      .query(`SELECT id, title, status, due_date, source, detail FROM open_loops WHERE user_id = $1 AND closed_at IS NULL AND status NOT IN ('done', 'dropped') ORDER BY changed_at DESC LIMIT 12`, [userId])
+      .then((r) => r.rows.map((x: any) => ({ id: Number(x.id), title: String(x.title), status: String(x.status), dueDate: x.due_date instanceof Date ? x.due_date.toISOString().slice(0, 10) : x.due_date ?? null, source: String(x.source), detail: x.detail ?? null }) as LoopLite))
+      .catch(() => [] as LoopLite[]),
+    // Options they passed on lately, for a delivered document that still lists one (services/receiptDrift.ts).
+    pool
+      .query(`SELECT name, outcome_at FROM research_finds WHERE user_id = $1 AND outcome = 'no' AND outcome_at > NOW() - INTERVAL '30 days' ORDER BY outcome_at DESC LIMIT 20`, [userId])
+      .then((r) => r.rows.map((x: any) => ({ name: String(x.name), at: new Date(x.outcome_at) })))
+      .catch(() => [] as { name: string; at: Date }[]),
+    pool
+      .query(`SELECT brief, updated_at FROM search_briefs WHERE user_id = $1`, [userId])
+      .then((r) => (r.rows[0]?.brief ? { headcount: typeof r.rows[0].brief.headcount === "number" ? r.rows[0].brief.headcount : null, when: r.rows[0].brief.when ?? null, updatedAt: r.rows[0].updated_at ? new Date(r.rows[0].updated_at) : null } : null))
+      .catch(() => null),
+  ]);
+  const recentDocs = newestDocs(receipts, 3);
+  const drift = recentDocs.map((d) => receiptDrift(d, { notes, rejected, eventStartsAt: todayEvent?.startAt ? new Date(todayEvent.startAt) : null })).filter((x): x is Drift => !!x);
+  const rawTasks = await tasksOnce().catch(() => [] as CoTask[]);
+  const rawBriefs = await briefsOnce().catch(() => [] as BriefView[]);
+  const carrying = carryingItems({ tasks: rawTasks, briefs: rawBriefs, receipts, loops, now: new Date(), zone });
+  const openWork = [...rawTasks.filter((t) => t.status === "open").map((t) => t.goal), ...rawBriefs.filter((b) => b.status === "open").map((b) => `research brief: ${b.goal}`)];
+  // The plan sheet, venue brief and stale-document offers decide per reply from these (services/documentOffer.ts docOfferLines).
+  if (docOffer) {
+    docOffer.signals = await import("./documentOffer.js")
+      .then((m) => m.loadArtifactSignals(userId, { drift, openWork, delivered: [...new Map(receipts.map((r) => [r.docKey, r])).values()].map((r) => ({ title: r.title, kind: r.kind, at: r.deliveredAt })) }))
+      .catch(() => null);
+  }
+  return { userId, message, profile, snapshot, sent, asks, threads, offersThisWeek, emotional, lessons, inlineTarget, ledger, capabilities: capabilitySheet(), google, kit, story, advice, tasks, briefs, todayEvent, docOffer, deliveries, carrying, recentDocs, drift };
+}
+
+// Pure: the newest version of each delivered artifact, newest first.
+export function newestDocs(receipts: Receipt[], n: number): NonNullable<TurnContext["recentDocs"]> {
+  const seen = new Set<string>();
+  const out: NonNullable<TurnContext["recentDocs"]> = [];
+  for (const r of [...receipts].sort((a, b) => b.deliveredAt.getTime() - a.deliveredAt.getTime())) {
+    if (seen.has(r.docKey) || !r.doc?.sections) continue;
+    seen.add(r.docKey);
+    out.push({ id: r.id, version: r.version, title: r.title, doc: r.doc, deliveredAt: r.deliveredAt });
+    if (out.length >= n) break;
+  }
+  return out;
 }
 
 async function loadGoogleFacts(userId: string, zone: string | null): Promise<string[]> {

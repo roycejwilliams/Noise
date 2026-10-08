@@ -187,6 +187,53 @@ export function briefOptionsText(title: string, options: { name: string; url: st
 }
 
 export const BRIEF_HOLD_MAX_WAKES = 6;
+
+// A brief's identity across sends: what it's for, not its "Venue options" title (services/deliveryReceipts.ts docKeyFor reads only
+// a title's head), so the same ask asked again is its next version and a different ask is its own document.
+export const briefDocKey = (what: string): string => `venue-brief-${what.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-+|-+$/g, "").slice(0, 60) || "options"}`;
+
+export type BriefDelivery = { sent: true; via: string; pdfPending: boolean; line: string | undefined } | { sent: false; why: string; quietUntil?: Date };
+export type BriefDeliverDeps = {
+  deliver?: typeof import("./documentDelivery.js").deliverDocument;
+  receipts?: import("./deliveryReceipts.js").ReceiptStore;
+  now?: () => Date;
+  blocked?: (userId: string, zone: string | null, now: Date, o: { immediate?: boolean; asked?: boolean }) => Promise<string | null>;
+  record?: typeof import("./documentDelivery.js").recordDocumentSent;
+  log?: (d: any) => Promise<unknown>;
+};
+
+// One brief, delivered the way every document is (services/documentDelivery.ts deliverAndRecord): a receipt, its version, one line
+// that says when they asked, the same artifact never twice unless they asked again. Inside their delivery hours (8am to 9pm their
+// time) unless they asked for it right away: outside them it waits (quietUntil) and the caller holds it to then.
+// One retry path each, never both: a PDF that failed to render went as text and its receipt retries the PDF (retryPendingPdfs);
+// only when nothing reached them at all does the caller keep the brief (pendingDoc) and try again.
+export async function deliverBrief(
+  doc: Doc,
+  o: { task: { id: number; userId: string; createdAt?: string | null; theirWords: string }; person: { firstName: string; phone: string }; zone: string | null; wantsGoogle: boolean; what: string; again: boolean; rechecked: number },
+  deps: BriefDeliverDeps = {},
+): Promise<BriefDelivery> {
+  const D = await import("./documentDelivery.js");
+  const { askedForImmediate, nextDeliveryTime } = await import("./memberTime.js");
+  const now = deps.now?.() ?? new Date();
+  const blocked = await (deps.blocked ?? D.documentSendBlocked)(o.task.userId, o.zone, now, { immediate: askedForImmediate(o.task.theirWords), asked: true }).catch(() => null);
+  if (blocked === D.QUIET_HOURS) return { sent: false, why: blocked, quietUntil: nextDeliveryTime(now, o.zone) };
+  if (blocked) return { sent: false, why: blocked };
+  const askedAt = o.task.createdAt ? new Date(o.task.createdAt) : null;
+  const line = await D.captionFor({ title: doc.title, kind: doc.kind, askedAt, sendAt: now, zone: o.zone });
+  const to = { userId: o.task.userId, firstName: o.person.firstName, phone: o.person.phone, zone: o.zone, now, line };
+  const changed = o.again ? (o.rechecked ? `rechecked ${o.rechecked === 1 ? "one option" : `${o.rechecked} options`} against their own pages` : "rechecked every option") : null;
+  const rd = await D.deliverAndRecord(
+    doc,
+    to,
+    // Asked again ("send it again", "update it"): the same version goes again when nothing changed, the next one when a re-check did.
+    { saveTo: o.wantsGoogle ? "google_doc" : "pdf", askedForGoogle: o.wantsGoogle, source: `task:${o.task.id}`, taskId: o.task.id, resend: o.again, changed, docKey: briefDocKey(o.what) },
+    { deliver: deps.deliver, receipts: deps.receipts, now: () => now, log: deps.log },
+  );
+  if (!rd.sentOk.length) return { sent: false, why: rd.results.map((r) => (r.ok ? "" : r.why)).filter(Boolean).join("; ") || "it didn't go out" };
+  const via = rd.sentOk.map((r) => r.via).join("+");
+  await (deps.record ?? D.recordDocumentSent)(o.task.userId, doc, via, `task:${o.task.id}`).catch(() => {});
+  return { sent: true, via, pdfPending: rd.sentOk.some((r) => r.pdfPending), line: rd.line };
+}
 export function briefLineOutcome(r: { sent: boolean; reason?: string }, wakes: number): "told" | "hold" | "untold" {
   if (r.sent || r.reason === "already sent") return "told";
   if (r.reason === "outside local hours" && wakes < BRIEF_HOLD_MAX_WAKES) return "hold";
@@ -236,13 +283,18 @@ export async function runResearchBriefTask(task: import("./coTasks.js").CoTask):
   // A finished brief whose document didn't go out last time: send that same document again (no new find). After DOC_RETRIES it
   // goes as a short text with the options, so it always reaches them.
   const pendingDoc = (task.followup as any)?.pendingDoc as { doc: any; options: { name: string; url: string }[]; tries: number; title: string; list: string } | undefined;
+  const sendBrief = (doc: Doc, what: string) =>
+    deliverBrief(doc, { task, person: { firstName: String(person.first_name ?? ""), phone: person.phone_number }, zone, wantsGoogle: !!p.wantsGoogle, what, again: !!p.again, rechecked: 0 }).catch((err: any) => ({ sent: false as const, why: String(err?.message ?? err) }) as BriefDelivery);
   if (pendingDoc?.doc) {
-    const { deliverDocument } = await import("./documentDelivery.js");
-    const to = { userId: task.userId, firstName: String(person.first_name ?? ""), phone: person.phone_number, zone };
-    const r = await deliverDocument(pendingDoc.doc, to, "pdf_text").catch(() => ({ ok: false as const, why: "error" }));
-    if (r.ok) {
-      await closeTask(task.userId, task.id, "done", `sent the brief "${pendingDoc.title}" on retry ${pendingDoc.tries + 1}: ${pendingDoc.list}`);
+    const r = await sendBrief(pendingDoc.doc, p.what ?? pendingDoc.title);
+    if (r.sent) {
+      await closeTask(task.userId, task.id, "done", `sent the brief "${pendingDoc.title}"${pendingDoc.tries ? ` on retry ${pendingDoc.tries}` : ""}${r.pdfPending ? " as text, the PDF to follow" : ""}: ${pendingDoc.list}`);
       return;
+    }
+    // Their quiet hours: not a failed try, just later (their 8am).
+    if (!r.sent && r.quietUntil) {
+      const { holdBriefDoc } = await import("./coTasks.js");
+      if (await holdBriefDoc(task.userId, task.id, pendingDoc, r.quietUntil)) return;
     }
     if (pendingDoc.tries + 1 < DOC_RETRIES) {
       const { holdBriefDoc } = await import("./coTasks.js");
@@ -284,7 +336,7 @@ export async function runResearchBriefTask(task: import("./coTasks.js").CoTask):
 
   const doc = buildBrief({ title: p.title || `Venue options: ${p.what}`.slice(0, 70), asked: p.what, finds, memberContext: p.memberContext ?? [], zone });
   const { documentProblems } = await import("./documentSheet.js");
-  const { deliverDocument, docTargets, loadTheirWords } = await import("./documentDelivery.js");
+  const { loadTheirWords } = await import("./documentDelivery.js");
   const theirs = [await loadTheirWords(task.userId).catch(() => ""), task.theirWords].join("\n");
   const problems = [...researchProblems(doc), ...documentProblems(doc, { theirs })];
   if (problems.length) {
@@ -292,27 +344,23 @@ export async function runResearchBriefTask(task: import("./coTasks.js").CoTask):
     await tellThenClose(line, "done", `no brief: ${problems.slice(0, 3).join("; ")}`);
     return;
   }
-  const to = { userId: task.userId, firstName: String(person.first_name ?? ""), phone: person.phone_number, zone };
-  const { targets } = docTargets({ userId: task.userId, kind: doc.kind, saveTo: p.wantsGoogle ? "google_doc" : "pdf", askedForGoogle: !!p.wantsGoogle });
-  let sent = false;
-  for (const target of targets) {
-    const r = await deliverDocument(doc, to, target);
-    if (r.ok) sent = true;
-    else if (target === "google_docs" && !targets.includes("pdf_text")) sent = (await deliverDocument(doc, to, "pdf_text")).ok || sent;
-  }
+  // Through the receipts (deliverAndRecord): its version, its one line, and a failed PDF that went as text retried from its receipt.
+  const delivered = await deliverBrief(doc, { task, person: { firstName: String(person.first_name ?? ""), phone: person.phone_number }, zone, wantsGoogle: !!p.wantsGoogle, what: p.what, again: !!p.again, rechecked }).catch((err: any) => ({ sent: false as const, why: String(err?.message ?? err) }) as BriefDelivery);
+  const sent = delivered.sent;
   const shown = finds.slice(0, BRIEF_LIMITS.maxOptions);
   if (sent) await Q.recordShownFinds(task.userId, task.id, shown.map((f) => ({ type: "venue", name: f.name, url: f.url, reader: f.reader, fields: f.fields }) as StoredFind));
   const { recordDecision } = await import("../harness/core.js");
   await recordDecision({ layer: 7, decision: "task.researchBrief", userId: task.userId, outcome: sent ? "act" : "skip", action: doc.title, proposal: { taskId: task.id, options: shown.length, again: !!p.again, rechecked, readers: [...new Set(shown.map((f) => f.reader))] } }).catch(() => {});
   // The close note is Co's record of what went out: the options by number, so a reaction ("the second one") can be matched.
   const list = shown.map((f, i) => `${i + 1}. ${f.name}`).join("; ");
-  if (!sent) {
-    // The brief is done but its document didn't go: keep it and send it again shortly, never close silently.
+  if (!delivered.sent) {
+    // The brief is done but its document didn't go: keep it and send it again shortly (or at their 8am when it's their quiet
+    // hours), never close silently. Nothing reached them, so there's no receipt retry for it: this is its one retry.
     const { holdBriefDoc } = await import("./coTasks.js");
     const options = shown.map((f) => ({ name: f.name, url: f.url }));
-    if (await holdBriefDoc(task.userId, task.id, { doc, options, tries: 0, title: doc.title, list }, new Date(Date.now() + DOC_RETRY_MINUTES * 60_000))) return;
+    if (await holdBriefDoc(task.userId, task.id, { doc, options, tries: 0, title: doc.title, list }, delivered.quietUntil ?? new Date(Date.now() + DOC_RETRY_MINUTES * 60_000))) return;
     await tellThenClose(briefOptionsText(doc.title, options), "done", `the PDF wouldn't send; sent the options as a text: ${list}`);
     return;
   }
-  await closeTask(task.userId, task.id, "done", `sent the brief "${doc.title}": ${list}`);
+  await closeTask(task.userId, task.id, "done", `sent the brief "${doc.title}"${delivered.pdfPending ? " as text, the PDF to follow" : ""}: ${list}`);
 }

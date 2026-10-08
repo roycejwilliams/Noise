@@ -3,7 +3,7 @@ import { generateText } from "ai";
 import { propagateAttributes } from "@langfuse/tracing";
 import crypto from "crypto";
 import pool from "../db/db.js";
-import { classifyAsk, markIntentResolved } from "./askKind.js";
+import { classifyAsk, isCoCommitment, markIntentResolved } from "./askKind.js";
 import { classifyEntryKind } from "./entryKind.js";
 import { generateEmbedding, generateGoalEmbedding } from "./embeddings.js";
 import { sweepAskAgainstNetwork, sweepOfferingAgainstNetwork } from "./relevance.js";
@@ -1456,7 +1456,9 @@ export async function persistCapturedIntent(
   // (see ask_checkins in migrations.ts and the check-in cron in
   // jobs/index.ts). The NOT EXISTS guard stays as a backstop for two
   // captures of the same text racing each other.
-  if (ask && !deduped && kind === "ask") {
+  // Co's own promises and deliverables ("draft and text a plan", "will be delivered once ready") are tasks Co tracks
+  // elsewhere, never a member's ask to check in on or search for (2026-10-08 sweep review, askKind.ts isCoCommitment).
+  if (ask && !deduped && kind === "ask" && !isCoCommitment(ask.text)) {
     const [expiresAt, askKind] = await Promise.all([askExpiresAtForUser(user_id, ask.text).catch(() => null), classifyAsk(ask.text)]);
     await pool
       .query(

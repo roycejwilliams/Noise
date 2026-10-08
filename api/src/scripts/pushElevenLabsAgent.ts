@@ -59,7 +59,7 @@ async function main() {
   });
   if (dryRun) {
     const shown = JSON.parse(JSON.stringify(config));
-    shown.conversation_config.agent.prompt.prompt = `(${String(shown.conversation_config.agent.prompt.prompt).length} chars: Co's core plus the ${prompt.length}-char voice layer in prompts/co-system-prompt.md)`;
+    shown.conversation_config.agent.prompt.prompt = `(${String(shown.conversation_config.agent.prompt.prompt).length} chars: the ${prompt.length}-char Hume voice layer in prompts/co-system-prompt.md plus facts, guides and safety)`;
     console.log(JSON.stringify(shown, null, 2));
     return;
   }

@@ -155,26 +155,26 @@ const memLines = (u: string) => db.memories.filter((m) => m.user_id === u && m.t
   const night = new Date("2026-10-08T06:30:00Z"); // 11:30pm in LA
   const r = await P.sendExemptWhenAllowed({ userId: "ua", phoneNumber: PHONE_A, type: "event_change", targetKey: "stale:x:sold_out", messages: ["Heads up on the gallery night: it's sold out now."], timezone: tz, now: night });
   check("night: nothing goes out now", outbox.length === 0 && !r.sent);
-  check("night: it is queued as a row due at their 9am", r.queued && db.deferred.length === 1 && db.deferred[0].status === "queued" && db.deferred[0].due_at.toISOString() === "2026-10-08T16:00:00.000Z");
+  check("night: it is queued as a row due at their 8am", r.queued && db.deferred.length === 1 && db.deferred[0].status === "queued" && db.deferred[0].due_at.toISOString() === "2026-10-08T15:00:00.000Z");
   check("night: no in-process timer holds it", longTimers.length === 0);
   check("night: no 'Co replied' line or 'texted' fact while it's only queued", memLines("ua").length === 0 && db.facts.length === 0);
   const again = await P.sendExemptWhenAllowed({ userId: "ua", phoneNumber: PHONE_A, type: "event_change", targetKey: "stale:x:sold_out", messages: ["Heads up on the gallery night: it's sold out now."], timezone: tz, now: night });
   check("queueing the same thing twice keeps one row", again.queued && db.deferred.length === 1);
   check("the setTimeout hold is gone from the source", !/setTimeout\(/.test(src("harness/proactive.ts").slice(src("harness/proactive.ts").indexOf("export async function sendExemptWhenAllowed"), src("harness/proactive.ts").indexOf("// Layer 6 in-room nudges"))) && !/setTimeout/.test(src("services/callFollowThrough.ts")));
 
-  // ---------------------------------------------------------------- 2. survives a restart, sends once at 9am
+  // ---------------------------------------------------------------- 2. survives a restart, sends once at 8am
   // A restart: the process's memory is gone; only the rows survive (round-tripped, as a database would hand them back).
   const persisted = JSON.parse(JSON.stringify(db.deferred));
   const survivors = { ...fresh(), users: db.users, zones: db.zones, deferred: persisted.map((d: any) => ({ ...d, due_at: new Date(d.due_at), claimed_at: d.claimed_at ? new Date(d.claimed_at) : null })) };
   db = survivors;
   const D2 = await import(`../../src/services/deferredSends.ts?restart=${Date.now()}`);
-  const early = await D2.runDueDeferredSends(new Date("2026-10-08T15:59:00Z"));
-  check("after the restart: 8:59am, nothing yet", early.claimed === 0 && outbox.length === 0);
-  const nine = await D2.runDueDeferredSends(new Date("2026-10-08T16:00:00Z"));
-  check("after the restart: at 9am it sends, once", nine.sent === 1 && outbox.length === 1 && outbox[0].content.startsWith("Heads up on the gallery night"));
-  check("sent: the row is marked sent with its time", db.deferred[0].status === "sent" && new Date(db.deferred[0].sent_at).toISOString() === "2026-10-08T16:00:00.000Z");
+  const early = await D2.runDueDeferredSends(new Date("2026-10-08T14:59:00Z"));
+  check("after the restart: 7:59am, nothing yet", early.claimed === 0 && outbox.length === 0);
+  const eight = await D2.runDueDeferredSends(new Date("2026-10-08T15:00:00Z"));
+  check("after the restart: at 8am it sends, once", eight.sent === 1 && outbox.length === 1 && outbox[0].content.startsWith("Heads up on the gallery night"));
+  check("sent: the row is marked sent with its time", db.deferred[0].status === "sent" && new Date(db.deferred[0].sent_at).toISOString() === "2026-10-08T15:00:00.000Z");
   check("sent: the 'Co replied' line and the 'texted' fact are written now, on delivery", memLines("ua").length === 1 && db.facts.some((f) => f.owner === "ua" && f.relation === "texted"));
-  const later = await D2.runDueDeferredSends(new Date("2026-10-08T16:05:00Z"));
+  const later = await D2.runDueDeferredSends(new Date("2026-10-08T15:05:00Z"));
   check("a later run sends nothing more", later.claimed === 0 && outbox.length === 1);
 }
 
@@ -193,7 +193,7 @@ const memLines = (u: string) => db.memories.filter((m) => m.user_id === u && m.t
   check("reminder: the 5-minute cron doesn't pick a claimed reminder up again", second === 0 && db.deferred.length === 1);
   const due = db.deferred[0].due_at as Date;
   await D.runDueDeferredSends(due);
-  check("reminder at their 9am: sent once, and only now is sent_at set", outbox.length === 1 && /Reminder you asked for: call Sam/.test(outbox[0].content) && rem.sent_at instanceof Date);
+  check("reminder at their 8am: sent once, and only now is sent_at set", outbox.length === 1 && /Reminder you asked for: call Sam/.test(outbox[0].content) && rem.sent_at instanceof Date);
   check("reminder: the 'Co replied' line is written once, on delivery", memLines("ua").filter((l) => /Reminder you asked for/.test(l)).length === 1);
   check("reminder: no longer reads as queued", (await R.reminderFacts("ua")).length === 0);
 }
@@ -211,7 +211,7 @@ const memLines = (u: string) => db.memories.filter((m) => m.user_id === u && m.t
   const again = await R.relayMessage({ fromUserId: "ua", fromFirstName: "Jordan", to: "Ellis", message: "running ten minutes late tomorrow", currentText: "tell Ellis running ten minutes late tomorrow" });
   check("relay: a queued one still counts toward one per pair per day", !again.ok && (again as any).reason === "rate_limited");
   await D.runDueDeferredSends(db.deferred[0].due_at);
-  check("relay at their 9am: sent once, status sent, sent_at set", outbox.length === 1 && relay.status === "sent" && relay.sent_at instanceof Date && /Jordan asked me to pass this along/.test(outbox[0].content));
+  check("relay at their 8am: sent once, status sent, sent_at set", outbox.length === 1 && relay.status === "sent" && relay.sent_at instanceof Date && /Jordan asked me to pass this along/.test(outbox[0].content));
   check("relay: the recipient's 'Co replied' line is written once, on delivery", memLines("ub").length === 1);
   check("relayFacts after delivery: passed, for both sides", /Co passed their message to Ellis/.test((await R.relayFacts("ua"))[0] ?? "") && /Jordan asked Co to pass this along/.test((await R.relayFacts("ub"))[0] ?? ""));
 }
@@ -229,18 +229,18 @@ const memLines = (u: string) => db.memories.filter((m) => m.user_id === u && m.t
   for (let i = 0; i < 3; i++) {
     await P.sendExemptWhenAllowed({ userId: i % 2 ? "ub" : "ua", phoneNumber: i % 2 ? PHONE_B : PHONE_A, type: "direct_ask", targetKey: `k${i}`, messages: [`message ${i} for the morning`], timezone: "America/Los_Angeles", now: new Date("2026-10-08T06:30:00Z") });
   }
-  const at = new Date("2026-10-08T16:00:00Z");
+  const at = new Date("2026-10-08T15:00:00Z");
   const [a, b] = await Promise.all([D.runDueDeferredSends(at), D.runDueDeferredSends(at)]);
   check(`two overlapping runs: each row claimed once (${a.claimed}+${b.claimed})`, a.claimed + b.claimed === 3);
   check("two overlapping runs: three rows, three texts", outbox.length === 3 && new Set(outbox.map((o) => o.content)).size === 3 && db.deferred.every((d) => d.status === "sent"));
   // The process died mid-send: the row was left 'sending' after its text went out. Re-claimed later, it's "already sent".
   seed();
   await P.sendExemptWhenAllowed({ userId: "ua", phoneNumber: PHONE_A, type: "direct_ask", targetKey: "crash", messages: ["the crash case"], timezone: "America/Los_Angeles", now: new Date("2026-10-08T06:30:00Z") });
-  Object.assign(db.deferred[0], { status: "sending", claimed_at: new Date("2026-10-08T16:00:00Z"), attempts: 1 });
+  Object.assign(db.deferred[0], { status: "sending", claimed_at: new Date("2026-10-08T15:00:00Z"), attempts: 1 });
   db.proactive.add("ua|crash"); // its send had committed before the crash
-  const notStale = await D.runDueDeferredSends(new Date("2026-10-08T16:05:00Z"));
+  const notStale = await D.runDueDeferredSends(new Date("2026-10-08T15:05:00Z"));
   check("a row mid-send is left alone while its claim is fresh", notStale.claimed === 0);
-  const re = await D.runDueDeferredSends(new Date("2026-10-08T16:15:00Z"));
+  const re = await D.runDueDeferredSends(new Date("2026-10-08T15:15:00Z"));
   check("after a crash mid-send: re-claimed, recorded as sent, no second text", re.claimed === 1 && re.sent === 1 && outbox.length === 0 && db.deferred[0].status === "sent");
 }
 
@@ -258,21 +258,21 @@ const memLines = (u: string) => db.memories.filter((m) => m.user_id === u && m.t
   check("opted out: a later run doesn't try again", again.claimed === 0 && outbox.length === 0);
 }
 {
-  // The hours rule is the same at send time: a row due at night (e.g. queued by an older build) waits for 9am.
+  // The hours rule is the same at send time: a row due at night (e.g. queued by an older build) waits for 8am.
   seed();
   db.deferred.push({ id: 5000, user_id: "ua", phone_number: PHONE_A, type: "direct_ask", target_key: "late", messages: ["late one"], timezone: "America/Los_Angeles", after_kind: null, after_payload: null, due_at: new Date("2026-10-08T05:00:00Z"), status: "queued", attempts: 0, claimed_at: null, sent_at: null, error: null });
   const r = await D.runDueDeferredSends(new Date("2026-10-08T05:00:00Z")); // 10pm in LA
-  check("send-time hours check: a due row at 10pm their time is put back to 9am, not sent", r.requeued === 1 && outbox.length === 0 && db.deferred[0].status === "queued" && db.deferred[0].due_at.toISOString() === "2026-10-08T16:00:00.000Z");
+  check("send-time hours check: a due row at 10pm their time is put back to 8am, not sent", r.requeued === 1 && outbox.length === 0 && db.deferred[0].status === "queued" && db.deferred[0].due_at.toISOString() === "2026-10-08T15:00:00.000Z");
 }
 {
   // Paused: the row waits; nothing is lost.
   seed();
   await P.sendExemptWhenAllowed({ userId: "ua", phoneNumber: PHONE_A, type: "direct_ask", targetKey: "paused", messages: ["while paused"], timezone: "America/Los_Angeles", now: new Date("2026-10-08T06:30:00Z") });
   process.env.PROACTIVE_PAUSED = "true";
-  const r = await D.runDueDeferredSends(new Date("2026-10-08T16:00:00Z"));
+  const r = await D.runDueDeferredSends(new Date("2026-10-08T15:00:00Z"));
   delete process.env.PROACTIVE_PAUSED;
   check("paused: nothing sent, the row waits", r.requeued === 1 && outbox.length === 0 && db.deferred[0].status === "queued");
-  await D.runDueDeferredSends(new Date("2026-10-08T16:06:00Z"));
+  await D.runDueDeferredSends(new Date("2026-10-08T15:06:00Z"));
   check("unpaused: it sends", outbox.length === 1);
 }
 
@@ -285,7 +285,7 @@ const memLines = (u: string) => db.memories.filter((m) => m.user_id === u && m.t
   const relay = src("services/relay.ts");
   check("relay/reminder: no 'Co replied' line written by the caller (sendExempt writes it on delivery)", !/writeMemory/.test(relay));
   check("intro asks open their pending question only once sent", /kind: "network_intro_ask"/.test(src("services/networkIntroNudge.ts")) && /kind: "event_direct_ask"/.test(src("services/eventGuestMatchHandoff.ts")));
-  check("the hours rule is unchanged (9am to 8pm)", P.RULES.startHour === 9 && P.RULES.endHour === 20);
+  check("the hours rule is 8am to 9pm (Royce, 2026-10-08)", P.RULES.startHour === 8 && P.RULES.endHour === 21);
 }
 
 // ---- batch 3 additions: an intro ask held past the event is dropped; the asker's side records it without a reason

@@ -232,7 +232,7 @@ export async function addReminder(userId: string, what: string, when: string, zo
 
 // Due reminders, sent to the member who asked (never anyone else). queued_at claims one so the 5-minute cron never picks
 // it up twice; sent_at and the "Co replied:" line are written only once it actually goes out (reminderDelivered, and
-// sendExempt's own text_exchange write), which at night is their 9am (services/deferredSends.ts).
+// sendExempt's own text_exchange write), which at night is their 8am (services/deferredSends.ts).
 export async function sendDueReminders(): Promise<number> {
   const { rows } = await pool
     .query(

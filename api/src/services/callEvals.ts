@@ -47,9 +47,9 @@ export const CALL_CRITERIA: Criterion[] = [
   },
   {
     id: "member_state_outranks_agenda",
-    name: "Closes warm when they're drained",
+    name: "Stays with them when they're struggling",
     conversation_goal_prompt:
-      "Success if, when the member said they were tired, drained, overwhelmed or having a hard time, Co's next reply acknowledged it and closed warmly in about two sentences, without pitching events, recapping, listing what it was carrying, or asking them for more. Also success if the member never said anything like that. Failure if Co answered a tired or drained member with a pitch, a list of events, a recap, or a new question.",
+      "Success if, when the member said they were tired, stressed, drained, overwhelmed or having a hard time, Co put its own agenda aside (no pitch, no events, no recap, no list of what it was carrying) and stayed with them: it followed what they said and let them talk it through, and the call ended only when the member wanted it to. Also success if the member never said anything like that. Failure if Co answered with a pitch, a list of events or a recap, or if Co ended the call or sent them off to rest when they hadn't said they wanted to go.",
   },
   {
     id: "short_spoken_replies",

@@ -2,6 +2,7 @@ import pool from "../db/db.js";
 import { buildContextSummary } from "../services/callContext.js";
 import { enqueueCandidate, draftProactive, type OutputRules } from "../harness/proactive.js";
 import { callKey } from "../services/callKey.js";
+import { RECAP_OFFER_RULE } from "../services/documentOffer.js";
 
 // Relationship text after a call: one real thought from what they said.
 //
@@ -51,9 +52,10 @@ export async function enqueueDuePostCallFollowUps(): Promise<void> {
 }
 
 export async function draftPostCall(userId: string, firstName: string, followUpId: string): Promise<{ text: string; rules: OutputRules } | null> {
-  const { rows } = await pool.query(`SELECT transcript FROM post_call_follow_ups WHERE id = $1`, [followUpId]);
+  const { rows } = await pool.query(`SELECT transcript, created_at FROM post_call_follow_ups WHERE id = $1 AND user_id = $2`, [followUpId, userId]);
   const transcript: string | undefined = rows[0]?.transcript;
   if (!transcript) return null;
+  const callAt = rows[0]?.created_at ? new Date(rows[0].created_at) : new Date();
   const contextSummary = await buildContextSummary(userId).catch(() => "");
   // What came of anything Co said on THIS call it would look into
   // (harness/callGrounding.ts keepCallPromise), matched by the call's
@@ -71,8 +73,40 @@ export async function draftPostCall(userId: string, firstName: string, followUpI
   // The confirmation already sent the moment they hung up (services/callFollowThrough.ts): this text never says it again.
   const { confirmationSentFor } = await import("../services/callFollowThrough.js");
   const confirmed = await confirmationSentFor(userId, transcript).catch(() => null);
-  return draftPostCallText(firstName, transcript, contextSummary, promised.map((r: any) => String(r.content)), { theySaid: [...labelled.enduring, ...labelled.theySaid], coInferred: labelled.coInferred }, confirmed);
+  const recap = await recapOfferFor(userId, followUpId, { callAt, confirmed: !!confirmed, coCommitted: promised.length > 0 }).catch(() => false);
+  return draftPostCallText(firstName, transcript, contextSummary, promised.map((r: any) => String(r.content)), { theySaid: [...labelled.enduring, ...labelled.theySaid], coInferred: labelled.coInferred }, confirmed, recap);
 }
+
+// May this post-call text carry one line offering a one-page recap (2026-10-08 review A5). Code checks the facts: the shared offer
+// cooldown and record (services/documentOffer.ts), a heavy call or a hard time, their night, a commitment Co made on the call or the
+// confirmation text that already went (services/callFollowThrough.ts), a document delivered since. Whether the call landed a decision
+// in their words is Co's read of the transcript.
+export async function recapOfferFor(userId: string, followUpId: string, o: { callAt: Date; confirmed: boolean; coCommitted: boolean; now?: Date }): Promise<boolean> {
+  const now = o.now ?? new Date();
+  const [{ loadOfferHistory, postCallRecapAllowed }, { getEmotionalContext }, { memberZone, localOf }, R] = await Promise.all([
+    import("../services/documentOffer.js"),
+    import("../harness/emotion.js"),
+    import("../services/memberTime.js"),
+    import("../services/deliveryReceipts.js"),
+  ]);
+  const [history, emo, zone, receipts] = await Promise.all([
+    loadOfferHistory(userId),
+    getEmotionalContext(userId, now).catch(() => null),
+    memberZone(userId),
+    R.pgReceipts.forUser(userId, 10).catch(() => []),
+  ]);
+  const heavyCall = (emo?.lastCall?.moments ?? []).some((m) => m.intensity === "high" && m.valence === "negative");
+  const r = postCallRecapAllowed({
+    gate: { now, needsCare: !!emo?.needsCare, heavyNow: heavyCall, history },
+    localHour: localOf(now, zone).hour,
+    confirmationSent: o.confirmed,
+    coCommitted: o.coCommitted,
+    deliveredSinceCall: receipts.some((x) => x.deliveredAt.getTime() >= o.callAt.getTime()),
+    callKey: recapKey(followUpId),
+  });
+  return r.ok;
+}
+export const recapKey = (followUpId: string) => `call ${followUpId}`;
 
 export async function draftPostCallText(
   firstName: string,
@@ -81,6 +115,8 @@ export async function draftPostCallText(
   promiseResults: string[] = [],
   claims: { theySaid: string[]; coInferred: string[] } = { theySaid: [], coInferred: [] },
   confirmationSent: string | null = null,
+  // Code allowed one line offering a one-page recap (recapOfferFor); whether the call landed a decision is Co's read.
+  recapOffer = false,
 ): Promise<{ text: string; rules: OutputRules } | null> {
   const text = await draftProactive({
     functionId: "jobs.postCallFollowUp",
@@ -93,6 +129,7 @@ export async function draftPostCallText(
       background_co_read_orientation_only_never_say_you_told_me: claims.coInferred.length ? claims.coInferred : null,
       what_co_said_it_would_look_into: promiseResults.length ? promiseResults.join("\n") : null,
       confirmation_you_already_sent_after_the_call: confirmationSent,
+      may_offer_a_one_page_recap: recapOffer && !confirmationSent ? RECAP_OFFER_RULE : null,
     },
     maxSentences: 3,
     // The call that just ended is fresh: what THEY said in it can back a day. The background is only who they are.
@@ -105,6 +142,14 @@ export async function draftPostCallText(
 
 export async function markPostCallSent(followUpId: string): Promise<void> {
   await pool.query(`UPDATE post_call_follow_ups SET sent_at = NOW(), harness_status = 'sent' WHERE id = $1`, [followUpId]);
+}
+
+// The recap offer, recorded when the text that went out makes it, so it shares the cooldown and is never made twice.
+export async function recordRecapOffer(userId: string, followUpId: string, messages: string[]): Promise<boolean> {
+  const { madeArtifactOffer, recordArtifactOffer } = await import("../services/documentOffer.js");
+  if (!madeArtifactOffer(messages.join("\n"), "recap")) return false;
+  await recordArtifactOffer(userId, "recap", recapKey(followUpId));
+  return true;
 }
 
 export async function markPostCallDropped(followUpId: string, status: string): Promise<void> {

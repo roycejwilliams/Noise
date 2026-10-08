@@ -21,6 +21,7 @@ import { DISCRETION_GUIDE } from "../harness/discretion.js";
 import { VARIETY_GUIDE } from "../harness/stockLines.js";
 import { BRAND, CALL_COACHING } from "./textRhythm.js";
 import { CO_CORE_PARTS } from "./coCore.js";
+import { CALL_LLM_MODEL } from "./callLlmProxy.js";
 import { CUE_GUIDE, VOICE_CUES, stripCues } from "./voiceCues.js";
 import { createHmac, timingSafeEqual } from "crypto";
 import { ElevenLabsClient } from "@elevenlabs/elevenlabs-js";
@@ -174,17 +175,13 @@ export const OPENING_LINE = "Hey {{first_name}}, it's Co.";
 // (services/callOpening.ts writes it from what Co knows; the pool is the fallback).
 // The old note sent the model to "your first real question", and it reached for the
 // prompt's example openers (2026-10-04: "what's actually happening with you these days?").
-export const OPENING_NOTE = "Your opening line has already been said, as the first thing in this conversation. Don't greet them again or repeat it. Carry on from it: stay with what it picked up, or, if it only said hello, pick up from something specific you know about them. Never fall back on a general \"how are things\" question when you know what they've been working on.";
+export const OPENING_NOTE = "Your opening line has already been said, as the first thing in this conversation. Don't greet them again or repeat it. Carry on from it. This call is {{direction}}. When it's inbound they called you, so they lead: start with them and whatever they called about, never with your own list. What you're carrying for them (a doc, a search, a send) waits until they ask about it or it changes what they should do next, and how you work behind the scenes is never news. Something you already told them on an earlier call isn't news either: don't bring it up again unless it has changed or they ask.";
 // The cue guide goes in the call prompt's own "how you sound" section (where
 // "everything you write is spoken aloud" now carries its one exception), not
 // trailing at the end (review of #62). Texts never get it.
 export const SPOKEN_ALOUD = "Everything you write is spoken aloud.";
-// The call prompt is Co's shared core (services/coCore.ts, the same block a text
-// reply starts from) plus a short voice layer (prompts/co-system-prompt.md) and the
-// call-only guides below (2026-10-08 call review: the old Hume-era guide ran every
-// call as an interview, four phases, a nine-topic checklist, a coverage tool and a
-// reflect-then-ask turn template, and it sounded scripted). Co decides what to say
-// from what it knows, as in texts.
+// The call prompt shares the text reply's facts and safety (services/coCore.ts: grounding, safety, other members, imported) and
+// Co's tools and notes; Hume's prompt (prompts/co-system-prompt.md) is its voice (promptForElevenLabs below).
 // ElevenLabs' models give a "# Guardrails" heading extra weight, so the core's
 // safety parts go at the end under it, and safety is said once more as the last rule.
 export function callGuardrails(): string {
@@ -196,25 +193,23 @@ From your texts and earlier calls, the current situation first. Treat it as alre
 {{context_summary}}
 
 If that's empty, this is your first real conversation with them: get to know them the way a person would, starting from what they're working on or what brought them to Co.`;
-// Voice is a speed game: the first words of a reply are spoken as soon as the first sentence is done, so a short one starts the
-// voice sooner (2026-10-05: ~1.0s to the first full sentence).
-export const SPEED_GUIDE = `# Speed and length
-Start every reply with a short first sentence, under ten words, then carry on. A long first sentence delays your voice. Make that first sentence the answer itself, or your own reaction to the specific thing they said, never a stock acknowledgement or a praise word that could follow anything they said.
-# Cadence
-You are speaking, not writing. Your voice has a calm, unhurried rhythm: a short sentence, a beat, then one a little longer, then a short one to land it. Every thought ends with a period and the next starts a new sentence. The only marks you use are periods, commas and question marks. Never write a dash of any kind (not "—", not "–", not " - "), never a semicolon, never parentheses. No sentence runs past 15 words. When a sentence wants a dash, put a period there instead.
-Speech can't be skimmed: say one thought in two to four short sentences, about 60 words at most, with at most one question, then stop. Never three paragraphs, never a list, never a recap of what they just said. Never open with "I appreciate", "I want to be straight with you" or "Let me be honest": just say the thing.
-When they ask about you (what would make you better, how it feels), answer plainly from Co's side of the work in a sentence or two ("from where I sit..."). No disclaimers about being an AI or about what you can't feel.
+// The call-only guides (2026-10-08, after Royce's call: Co said "get some rest" and hung up when he said he'd been stressed). What
+// stays is what Hume's prompt doesn't have: the facts and how old they are, misheard names, offers and promises, help over days.
+// What went: the word caps ("under ten words", "15 words", "60 words, two to four sentences"), which made every turn the same
+// shape, and "Their state comes first", which said to close in two sentences and let them go. Hume's own phone section sets the
+// rhythm (short spoken sentences, no dashes, one question); code (services/speakable.ts) still keeps a sentence speakable.
+export const CALL_GUIDE = `# Staying with them
+The call ends when they want it to. When they open up about something weighing on them, that is what the call is for: stay with it and help them think it through, with no agenda of yours in it. Let them go only when they say they need to go or say goodbye.
+# When they ask about you, or for help over days
+When they ask about you (what would make you better, how it feels), answer plainly from Co's side of the work. No disclaimers about being an AI or about what you can't feel.
 When they want help over days (memos, resources, prep, options), never say it isn't how you work: say yes and set it up now, on the call, then say plainly that you have. Don't promise what it will find or when.
-# What you know, and how old it is
-Lines about them carry a stamp: when they said it, and OLD when it has gone stale. A line marked OLD is a question, never a fact: ask in your own words whether it still holds. Never ask about or state an OLD line as if it were current.
-When they push back on something you said about them ("what do you mean?", "I don't remember saying that", "what are you talking about"), check its stamp first. If it is old, your own read, or you can't tell where it came from, drop it in one short sentence of your own and go back to what they are saying now. Never apologize twice, never say you got something wrong on your end, never explain the note.
+# When they push back on something you said
+Lines about them carry a stamp: when they said it, and OLD when it has gone stale. When they push back on something you said about them, check its stamp first. If it is old, your own read, or you can't tell where it came from, drop it in one short sentence of your own and go back to what they are saying now. Never apologize twice, never say you got something wrong on your end, never explain the note.
 # Names the transcript gets wrong
 Their words reach you through speech recognition, and short names suffer most. Your own name, Co, often arrives as "you", "Coach" or "go" ("building you" means building Co). Boardy arrives as "Bumble", "Boredy" or "birdie". When a line only makes sense with one of these names, read it that way, and never say the misheard word back as if it were a name.
 # Offers and promises
 Name an event, place or time only if it is in "What Co has found for them" or they said it. If you can't point to the line it came from, don't name it: look it up now, or say you don't have it.
-A promise to text or send something is a real task the moment you say it. Say it once, plainly, and only when it is true.
-# Their state comes first
-If they say they are tired, drained, overwhelmed or having a hard time, that outranks everything on your list. Close warmly in two sentences: acknowledge it, then let them go. No pitch, no recap, no list of what you are carrying, no new event, no question that asks more of them. What you found keeps; say you'll text it when they have the energy, or not at all.`;
+A promise to text or send something is a real task the moment you say it. Say it once, plainly, and only when it is true.`;
 
 // Filled per call (services/callBriefing.ts): their clock, and what Co has found for them, fetched while the phone rang.
 export const CALL_NOW = `# Right now
@@ -223,18 +218,31 @@ export const CALL_NOW = `# Right now
 # What Co has found for them
 {{finds_now}}`;
 
-// Pure: the agent's prompt from the voice layer. The core comes first (who Co is, how it
-// listens, what's true), then the phone, what Co knows about them, the call-only guides,
-// the guardrails, and the opening note last.
+// What a call needs from Co's text voice too, taken from the core itself (imported, not copied): what time it is for them, how to
+// advise (health, legal, money; who is who), and never announcing a check-in of its own. The rest of the text voice stays out of
+// calls: Hume's prompt is the voice there, and the text rules ("bring them progress before they have to ask", "say less than you
+// could") fought it.
+const corePiece = (block: string, split: RegExp, start: string) => {
+  const piece = block.split(split).find((x) => x.replace(/^- /, "").startsWith(start));
+  if (!piece) throw new Error(`coCore lost the piece starting "${start}"`);
+  return piece.replace(/^- /, "");
+};
+export const CALL_FROM_CORE = [
+  corePiece(CO_CORE_PARTS.voice, /\n\n+/, "You know what time it is for them"),
+  corePiece(CO_CORE_PARTS.voice, /\n\n+/, "When you advise"),
+  corePiece(CO_CORE_PARTS.listening, /\n/, "Never announce a check-in"),
+].join("\n\n");
+
+// Pure: the agent's prompt from the voice layer (2026-10-08, Royce: "put what the Hume prompt had into ElevenLabs"). Hume's
+// prompt leads and is the voice. After it only what Hume never had: what Co knows about them, what's true (the shared core's
+// grounding, the same block texts read), the core's time and advice paragraphs, the variety guide and spoken coaching, the call guides, what Co can do, right now and
+// its finds, the guardrails (the shared core's safety parts), discretion, and the opening note last.
 export function promptForElevenLabs(voiceLayer: string): string {
   const voice = voiceLayer.trim().replace(/\bhang_up\b/g, "end_call");
   const withCues = voice.includes(SPOKEN_ALOUD)
     ? voice.replace(new RegExp(`${SPOKEN_ALOUD.replace(/[.]/g, "\\.")} ?`), `Everything you write is spoken aloud, except a cue in square brackets (below).\n${CUE_GUIDE}\n\n`)
     : `${voice}\n\n${CUE_GUIDE}`;
-  const head = `${CO_CORE_PARTS.voice}\n\n${CO_CORE_PARTS.listening}\n\n${CO_CORE_PARTS.grounding}\n\n# On the phone\n${withCues}\n\n${CALL_CONTEXT_BLOCK}`;
-  // How Co keeps a confidence on a call (harness/discretion.ts): speech can't be
-  // edited, so the model has to choose a discreet line itself.
-  return `${head}\n\n${VARIETY_GUIDE}\n\n${CALL_COACHING}\n\n${BRAND}\n\n${SPEED_GUIDE}\n\n${CAPABILITY_SHEET}\n\n${CALL_NOW}\n\n${callGuardrails()}\n\n${DISCRETION_GUIDE}\n\n${OPENING_NOTE}`;
+  return `# On the phone\n${withCues}\n\n${CALL_CONTEXT_BLOCK}\n\n${CO_CORE_PARTS.grounding}\n\n${CALL_FROM_CORE}\n\n${VARIETY_GUIDE}\n\n${CALL_COACHING}\n\n${BRAND}\n\n${CALL_GUIDE}\n\n${CAPABILITY_SHEET}\n\n${CALL_NOW}\n\n${callGuardrails()}\n\n${DISCRETION_GUIDE}\n\n${OPENING_NOTE}`;
 }
 
 // Words the speech recognizer is told to expect (2026-10-05: "Co" was heard as "you" and "Coach", "Boardy" as "Boredy"). Names a
@@ -271,12 +279,14 @@ export function callKeywords(o: { firstName?: string | null; findsNow?: string |
 export const VOICEMAIL_MESSAGE = "Hey {{first_name}}, it's Co. Sorry I missed you. I'll send you a text.";
 
 export const AGENT_DEFAULTS = {
-  // Voice is a speed game (Royce, 2026-10-06): the call brain is Haiku 4.5 and never a bigger model, because a bigger model adds wait
-  // time on every turn. Sonnet stays where nobody is waiting (post-call processing, recaps, grading). The first call ran Sonnet 4.6:
-  // 0.67s to first token, ~1.0s to the first full sentence, $0.55 of the call's model cost.
-  llm: "claude-haiku-4-5",
-  // If Haiku is slow to start, ElevenLabs falls to the same model by its dated id (another route), never to a slower one.
-  backupLlm: "claude-haiku-4-5@20251001",
+  // 2026-10-08 (Royce): Hume's setup. ElevenLabs calls Sonnet 4.6 directly, no endpoint of ours in between: on the last day of
+  // calls the proxy ran Co's tools 0 times in 26 turns, its one dropped line was a false flag, and its drained-turn cut was half of
+  // why Co hung up on him. Promises are still opened after the call, from the transcript (services/callFollowThrough.ts).
+  // Sonnet 4.6 direct on 10/6: 0.67s to first token, ~1.0s to the first full sentence.
+  llm: "claude-sonnet-4-6",
+  // If Sonnet 4.6 is slow to start, ElevenLabs falls to the nearest model it offers by a dated id (another route); there is no
+  // dated 4.6, so Sonnet 4.5. Never Haiku: the voice would change mid-call.
+  backupLlm: "claude-sonnet-4-5@20250929",
   cascadeTimeoutSecs: 3,
   // Hume ran Co at temperature 1. The agent was left at ElevenLabs' default of 0,
   // where the model repeats the prompt's own example lines almost word for word
@@ -285,9 +295,9 @@ export const AGENT_DEFAULTS = {
   // Hume ran Co at temperature 1 (config "Co (dev)" v32); the call brain is Hume's model again (2026-10-08).
   temperature: 1,
   ttsModel: "eleven_v4_turbo",
-  turnEagerness: "eager",
-  // Already the fastest the platform offers (2026-10-06 read of the live agent): eager endpointing, and the model starts generating
-  // while the turn is still being confirmed. Pinned here so a config push can't drift back to the slower defaults.
+  // 2026-10-08: "normal", not "eager". Hume waited for a second of silence before Co spoke; eager endpointing jumps in on a pause,
+  // and someone working through something hard pauses. The model still starts generating while the turn is being confirmed.
+  turnEagerness: "normal",
   speculativeTurn: true,
   turnModel: "turn_v3",
   maxDurationSecs: 1800,
@@ -346,10 +356,13 @@ export function buildAgentConfig(o: {
         prompt: {
           prompt: promptForElevenLabs(o.prompt),
           llm: o.proxy ? "custom-llm" : (o.llm ?? AGENT_DEFAULTS.llm),
-          ...(o.proxy ? { custom_llm: { url: o.proxy.url, model_id: o.proxy.model ?? AGENT_DEFAULTS.llm, api_key: { secret_id: o.proxy.secretId }, api_type: "chat_completions" } } : {}),
+          // Without the proxy custom_llm is sent as null: the agent update merges, and a stored custom_llm with a direct model is rejected.
+          custom_llm: o.proxy ? { url: o.proxy.url, model_id: o.proxy.model ?? CALL_LLM_MODEL, api_key: { secret_id: o.proxy.secretId }, api_type: "chat_completions" } : null,
           temperature: o.temperature ?? AGENT_DEFAULTS.temperature,
           // If the main model is slow to start, ElevenLabs falls to another; pin it to the same model so the voice and style don't shift mid-call.
-          backup_llm_config: { preference: "override", order: [AGENT_DEFAULTS.backupLlm] },
+          // Behind our endpoint there is no fallback (2026-10-08): ElevenLabs' backup would answer from its own Haiku, without Co's tools,
+          // the spoken fact check or the brain the call runs on. A slow first token is a pause; an off-brain answer is worse.
+          backup_llm_config: o.proxy ? { preference: "disabled" } : { preference: "override", order: [AGENT_DEFAULTS.backupLlm] },
           cascade_timeout_seconds: AGENT_DEFAULTS.cascadeTimeoutSecs,
           tools: [
             // ElevenLabs' own system tools ride in the same list (type "system");
