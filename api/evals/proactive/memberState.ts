@@ -284,7 +284,11 @@ const cand = (type: any, over: Partial<import("../../src/harness/proactive.js").
   }
   // 2026-10-08 review: a deadline heads-up is Co's own, so it counts against the daily cap too (three yeses, not three texts a day).
   check("caps: every member-state nudge counts against the daily cap (none is an answer)", !P.isAnswering(cand("intro_nudge")) && !P.isAnswering(cand("goal_nudge")) && !P.isAnswering(cand("commitment_nudge")) && !P.isAnswering(cand("deadline_nudge")));
-  check("a sweep reminder is skipped when a deadline nudge already covered the event", /entry_key = \$2 AND status IN \('queued','sent'\)/.test(fs.readFileSync(new URL("../../src/services/eventSurfacingSweep.ts", import.meta.url), "utf8")));
+  const ess = fs.readFileSync(new URL("../../src/services/eventSurfacingSweep.ts", import.meta.url), "utf8");
+  check("a sweep reminder is skipped when a deadline nudge already covered it, by both keys (events and opportunities)", /entry_key = ANY\(\$2::text\[\]\) AND status IN \('queued','sent'\)/.test(ess) && /deadline:\$\{offerItemKey\(item\.match as any\)\}/.test(ess));
+  const { offerItemKey } = await import("../../src/services/offerReactions.js");
+  check("the nudge's opportunity key is the reaction's item key (name:<lowercased name>), which the sweep now checks", offerItemKey({ name: "Founders Fellowship" } as any) === "name:founders fellowship" && offerItemKey({ name: "x", event_api_id: "abc" } as any) === "event:abc");
+  check("one deadline heads-up a day at most (type gap)", (P.TYPE_POLICY as any).deadline_nudge.typeGapDays === 1);
   check("an intro is nudged only when its email is on record as sent (member_connections), never from network_introductions alone", /if \(prev\) byOther\.set/.test(fs.readFileSync(new URL("../../src/services/memberStateNudges.ts", import.meta.url), "utf8")));
   const capped = P.evaluateCandidates({ now, timezone: ZONE, optedOut: false, candidates: [cand("goal_nudge")], sends: [{ type: "ask_checkin", targetKey: "k", topicKey: null, sentAt: new Date(now.getTime() - 4 * HOUR), exempt: false }], lastInboundAt: new Date(now.getTime() - 3.5 * HOUR) });
   check("caps: a goal nudge waits behind the day's other-lane text (daily cap)", capped.eligible.length === 0 && capped.perCandidate[0].checks.some((k) => k.name === "daily_cap" && !k.pass));

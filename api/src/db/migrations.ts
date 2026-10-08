@@ -2675,4 +2675,8 @@ export async function runMigrations(): Promise<void> {
       )`,
     )
     .catch((err: Error) => console.error("member_state_nudges table init failed:", err));
+  // Restraint counts from the first kind-tagged send (services/kindRestraint.ts loadKindHistory): this keeps that lookup an index read.
+  await pool
+    .query(`CREATE INDEX IF NOT EXISTS proactive_sends_kinded ON proactive_sends (sent_at) WHERE kind IS NOT NULL`)
+    .catch((err: Error) => console.error("proactive_sends_kinded index init failed:", err));
 }

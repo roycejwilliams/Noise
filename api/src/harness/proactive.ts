@@ -185,7 +185,8 @@ export const TYPE_POLICY: Record<ProactiveType, TypePolicy> = {
   goal_checkin: { priority: 9, typeGapDays: 56 },
   goal_closed: { priority: 86 },
   // Member-state nudges: once per state (their own target key carries the state's fingerprint). Time-bound first.
-  deadline_nudge: { priority: 75 },
+  // One deadline heads-up a day at most (final review of #108).
+  deadline_nudge: { priority: 75, typeGapDays: 1 },
   intro_nudge: { priority: 45, typeGapDays: 2 },
   commitment_nudge: { priority: 40, typeGapDays: 2 },
   // Shares the seasonal window with goal_checkin (goal_season in candidateChecks): never a drumbeat.

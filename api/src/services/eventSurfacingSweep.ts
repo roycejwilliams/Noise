@@ -8,7 +8,7 @@ import { enrichMatch } from "./eventDetails.js";
 import { getEmotionalContext, renderEmotionalContext, roomPreferenceFromFeelings } from "../harness/emotion.js";
 import { sweepFind } from "./sweepFind.js";
 import { recordDecision } from "../harness/core.js";
-import { recordRevealedOffers } from "./offerReactions.js";
+import { offerItemKey, recordRevealedOffers } from "./offerReactions.js";
 import { offerHistory, repeatInput, repeatRule, type RepeatAction } from "../harness/matchGate.js";
 
 export type SurfacingCandidate = {
@@ -474,8 +474,11 @@ async function alreadyDecided(userId: string, item: Pick<BacklogItem, "match" | 
   // A reminder for something Co already gave them a deadline heads-up about (services/memberStateNudges.ts, entry
   // deadline:<item key>, queued or sent) would be the same heads-up twice (review of the branch, 2026-10-08).
   if (item.reminder) {
+    // The nudge is keyed by the reaction's item key (event:<id>, or name:<lowercased name> for an opportunity), not the backlog's
+    // match key: both are checked (final review of #108: opportunities never matched).
+    const keys = [...new Set([`deadline:${matchKey(item.match)}`, `deadline:${offerItemKey(item.match as any)}`])];
     const dn = await pool
-      .query(`SELECT 1 FROM member_state_nudges WHERE user_id = $1 AND entry_key = $2 AND status IN ('queued','sent') LIMIT 1`, [userId, `deadline:${matchKey(item.match)}`])
+      .query(`SELECT 1 FROM member_state_nudges WHERE user_id = $1 AND entry_key = ANY($2::text[]) AND status IN ('queued','sent') LIMIT 1`, [userId, keys])
       .catch(() => ({ rows: [] as any[] }));
     if (dn.rows.length) return true;
   }
