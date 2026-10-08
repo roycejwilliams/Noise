@@ -127,16 +127,40 @@ export function nearName(name: string, value: string, pageText: string, needed: 
   return { ok: !needed || !tokens.length, excerpt: original(first) };
 }
 
+// The name a page would use: no parenthetical, nothing after a spaced dash, slash, bar or colon. The search model adds
+// qualifiers ("Beretta Mission (Private Dining Room)", "Copra - The Greenhouse / Mezzanine"); the page names the place
+// (2026-10-07 live brief: Beretta was dropped as "isn't named in the page" because of its room's name).
+export function coreName(name: string): string {
+  const core = name.replace(/\s*[([][^)\]]*[)\]]/g, " ").split(/\s+[-–—|/]\s+|:\s+/)[0].replace(/\s+/g, " ").trim();
+  return core.length >= 2 ? core : name.trim();
+}
+
+// Every word of a name (three letters or more, not "the", "and" or "for") is on the page.
+export function nameAllOnPage(name: string, pageText: string): boolean {
+  const page = flat(pageText);
+  const words = flat(name).trim().split(" ").filter((w) => w.length > 2 && !["the", "and", "for"].includes(w));
+  return words.length > 0 && words.every((w) => page.includes(` ${w} `) || page.includes(` ${w.replace(/'/g, "")} `));
+}
+
 const placeLabel = (label: string) => /address|neighbou?rhood|location|area|street|where/i.test(label);
 const dateLabel = (label: string) => /date|when|deadline|due/i.test(label);
 
 // Pure: one result against the text of the page it came from.
 export function verifyResult(raw: RawResult, pageText: string, opts: { now: Date; zone?: string | null; official: boolean }): { kept: VerifiedResult | null; dropped: Dropped | null; droppedDetails: DroppedDetail[] } {
-  const base = { name: raw.name, url: raw.url };
+  const found = { name: raw.name, url: raw.url };
   const facts = { searchCity: null, distanceMiles: null, alreadyOffered: false, now: opts.now, zone: opts.zone ?? null, evidence: pageText } as any;
-  const nameCheck = checkGrounding(asMatch(base), facts);
-  if (!nameCheck.pass) return { kept: null, dropped: { ...base, why: nameCheck.reason ?? "not on its page" }, droppedDetails: [] };
-  const gone = goneFor(raw.name, pageText);
+  // A name with a qualifier is checked on its core ("Beretta Mission" for "Beretta Mission (Private Dining Room)"): the
+  // qualifier's words neither sink it nor carry it ("private dining room" is on every guide). The same gate on the core,
+  // and on a page that isn't the place's own, every core word.
+  const core = coreName(raw.name);
+  const qualified = core !== raw.name;
+  const nameCheck = checkGrounding(asMatch(qualified ? { ...found, name: core } : found), facts);
+  const nameOk = nameCheck.pass && (!qualified || opts.official || nameAllOnPage(core, pageText));
+  if (!nameOk) return { kept: null, dropped: { ...found, why: nameCheck.pass ? `"${core}" isn't fully named in the page` : (nameCheck.reason ?? "not on its page") }, droppedDetails: [] };
+  // The name it goes on with is what the page names: a qualifier whose words aren't all on the page is left off.
+  const name = !qualified || nameAllOnPage(raw.name, pageText) ? raw.name : core;
+  const base = { name, url: raw.url };
+  const gone = goneFor(name, pageText);
   if (gone) return { kept: null, dropped: { ...base, why: `the page says "${gone}"` }, droppedDetails: [] };
   const date = raw.date && ISO.test(raw.date) ? raw.date : null;
   const deadline = raw.deadline && ISO.test(raw.deadline) ? raw.deadline : null;
@@ -165,7 +189,7 @@ export function verifyResult(raw: RawResult, pageText: string, opts: { now: Date
       droppedDetails.push({ name: raw.name, detail: `${label}: ${value}`, why: `"${missing.join(" ")}" isn't on the page` });
       continue;
     }
-    const near = nearName(raw.name, value, pageText, needNear);
+    const near = nearName(name, value, pageText, needNear);
     if (!near.ok) {
       droppedDetails.push({ name: raw.name, detail: `${label}: ${value}`, why: "on the page, but not next to its name (another listing's?)" });
       continue;
@@ -184,7 +208,7 @@ export function verifyResult(raw: RawResult, pageText: string, opts: { now: Date
     droppedDetails.push({ name: raw.name, detail: `deadline: ${deadline}`, why: "the deadline isn't stated on the page" });
     keptDeadline = null;
   }
-  return { kept: { name: raw.name.slice(0, 120), url: raw.url, official: opts.official, facts: kept, excerpts, date: keptDate, deadline: keptDeadline }, dropped: null, droppedDetails };
+  return { kept: { name: name.slice(0, 120), url: raw.url, official: opts.official, facts: kept, excerpts, date: keptDate, deadline: keptDeadline }, dropped: null, droppedDetails };
 }
 
 // Which page a result is checked against: its own official page when the found
@@ -193,9 +217,11 @@ export async function pickPage(
   raw: RawResult,
   deps: { read: (url: string) => Promise<string | null>; official: (name: string) => Promise<string | null> },
 ): Promise<{ url: string; text: string | null; official: boolean; swapped: boolean }> {
-  if (!looksOfficial(raw.url, raw.name)) {
-    const off = await deps.official(raw.name).catch(() => null);
-    if (off && off !== raw.url && looksOfficial(off, raw.name)) {
+  // Judged and looked up by the core name: a qualifier's words ("Private Dining") never make a host look like the place's.
+  const name = coreName(raw.name);
+  if (!looksOfficial(raw.url, name)) {
+    const off = await deps.official(name).catch(() => null);
+    if (off && off !== raw.url && looksOfficial(off, name)) {
       const text = await deps.read(off);
       if (text) return { url: off, text, official: true, swapped: true };
     }
@@ -204,12 +230,13 @@ export async function pickPage(
   return { url: raw.url, text: await deps.read(raw.url), official: true, swapped: false };
 }
 
-export function parseRawResults(text: string): RawResult[] {
+// limit: as many as the search asked for (2026-10-07: a brief asked for 6 and every pass was cut to 3 here).
+export function parseRawResults(text: string, limit = 3): RawResult[] {
   try {
     const p = parseModelJson<{ items?: any[] }>(text);
     return (p?.items ?? [])
       .filter((i) => typeof i?.name === "string" && typeof i?.url === "string" && /^https:\/\//.test(i.url))
-      .slice(0, 3)
+      .slice(0, Math.min(6, Math.max(1, limit)))
       .map((i) => ({
         name: String(i.name),
         url: String(i.url),
@@ -228,7 +255,10 @@ export type TaskWebResult = { kept: VerifiedResult[]; dropped: Dropped[]; droppe
 export async function taskWebSearch(
   userId: string,
   what: string,
-  opts: { city?: string | null; zone?: string | null; taskId?: number | null; skipBudget?: boolean; log?: boolean; sites?: string[]; source?: "sweep" | "request"; background?: boolean; max?: number; searches?: number } = {},
+  // ownPage: the kind of page a found listicle is swapped for ("private events or private dining page"), looked up near
+  //   opts.city. readsPageItself: the caller reads each kept page itself (a research brief), so a result on the place's
+  //   own page whose name checked out is kept even when none of the search model's details did; anything else still needs one.
+  opts: { city?: string | null; zone?: string | null; taskId?: number | null; skipBudget?: boolean; log?: boolean; sites?: string[]; source?: "sweep" | "request"; background?: boolean; max?: number; searches?: number; ownPage?: string; readsPageItself?: boolean } = {},
 ): Promise<TaskWebResult> {
   if (!opts.skipBudget) {
     const budget = await reserveWebSearch(userId, opts.source ?? "sweep", what);
@@ -247,7 +277,7 @@ export async function taskWebSearch(
 Up to ${Math.min(6, Math.max(1, opts.max ?? 3))} real, specific options, each from a page you actually read, ideally the thing's own site. For each, the details that matter (capacity, price, dates, address or neighborhood, deadline), each copied from that page as it's written there.
 Return ONLY JSON: {"items": [{"name": "...", "url": "https://the page you read", "details": [{"label": "capacity", "value": "..."}], "date": "YYYY-MM-DD or null (when it happens, if it's an event)", "deadline": "YYYY-MM-DD or null"}]}. {"items": []} if nothing real.`,
     });
-    raws = parseRawResults(text);
+    raws = parseRawResults(text, opts.max ?? 3);
   } catch (err: any) {
     return { kept: [], dropped: [], droppedDetails: [], note: `Web search failed: ${err?.message ?? "error"}.` };
   }
@@ -269,7 +299,9 @@ Return ONLY JSON: {"items": [{"name": "...", "url": "https://the page you read",
     }
     return readPageText(u);
   };
-  const pages = await Promise.all(raws.map((raw) => pickPage(raw, { read, official: (n) => findOfficialPage(n, 20_000) }).catch(() => ({ url: raw.url, text: null, official: false, swapped: false }))));
+  const lookup = (n: string) => findOfficialPage(n, opts.background ? 40_000 : 20_000, opts.ownPage ? { near: opts.city ?? null, page: opts.ownPage } : undefined);
+  const pages = await Promise.all(raws.map((raw) => pickPage(raw, { read, official: lookup }).catch(() => ({ url: raw.url, text: null, official: false, swapped: false }))));
+  const swappedFrom = new Map(pages.map((p, i) => [p.url, p.swapped ? raws[i].url : null]));
   for (const [i, raw] of raws.entries()) {
     const page = pages[i];
     if (!page.text) {
@@ -294,17 +326,19 @@ Return ONLY JSON: {"items": [{"name": "...", "url": "https://the page you read",
       userId,
       outcome: kept.length ? "act" : "skip",
       action: `kept ${kept.length}, dropped ${dropped.length}`,
-      proposal: { taskId: opts.taskId ?? null, query: what, kept: kept.map((k) => ({ name: k.name, url: k.url, official: k.official, facts: k.facts, date: k.date, deadline: k.deadline })), dropped, droppedDetails },
+      proposal: { taskId: opts.taskId ?? null, query: what, found: raws.length, kept: kept.map((k) => ({ name: k.name, url: k.url, official: k.official, swappedFrom: swappedFrom.get(k.url) ?? null, facts: k.facts, date: k.date, deadline: k.deadline })), dropped, droppedDetails },
     }).catch(() => {});
   }
-  // A name with nothing verified about it isn't a find (2026-10-01 next-live run kept "Brderless" with no facts).
-  const withFacts = withVerifiedFacts(kept);
+  // A name with nothing verified about it isn't a find (2026-10-01 next-live run kept "Brderless" with no facts), unless
+  // the caller reads the place's own page itself and uses only what that read finds.
+  const withFacts = withVerifiedFacts(kept, { ownPageReadAfter: !!opts.readsPageItself });
   dropped.push(...withFacts.dropped);
   return { kept: withFacts.kept, dropped, droppedDetails, note: withFacts.kept.length ? "Each kept result was checked against its own page; only the listed facts are verified." : "Nothing came back that proved itself on its page." };
 }
 
-export function withVerifiedFacts(kept: VerifiedResult[]): { kept: VerifiedResult[]; dropped: Dropped[] } {
-  return { kept: kept.filter((k) => k.facts.length > 0), dropped: kept.filter((k) => !k.facts.length).map((k) => ({ name: k.name, url: k.url, why: "nothing about it was verified on its page" })) };
+export function withVerifiedFacts(kept: VerifiedResult[], opts: { ownPageReadAfter?: boolean } = {}): { kept: VerifiedResult[]; dropped: Dropped[] } {
+  const ok = (k: VerifiedResult) => k.facts.length > 0 || (!!opts.ownPageReadAfter && k.official);
+  return { kept: kept.filter(ok), dropped: kept.filter((k) => !ok(k)).map((k) => ({ name: k.name, url: k.url, why: "nothing about it was verified on its page" })) };
 }
 
 // The facts a task text may use from web results: verified fields only.

@@ -177,6 +177,10 @@ export function looksOfficial(url: string, name: string): boolean {
   const labels = host.split(".").slice(0, -1).filter((l) => l.length >= 3);
   const compactName = name.toLowerCase().replace(/[^a-z0-9]/g, "");
   if (labels.some((l) => compactName.includes(l.replace(/-/g, "")))) return true;
+  // A place's domain often adds its city ("leossf.com" for Leo's Oyster Bar, "narisf.com" for Nari): the rest of the
+  // label, four letters or more, still has to be in the name (2026-10-07: Leo's own site was taken for a listicle).
+  const placeLabels = labels.map((l) => l.replace(/-/g, "").replace(/(sf|nyc|ny|la|dc|chi|sea|atx|pdx|bos|oak|bk)$/, "")).filter((l, i) => l.length >= 4 && l !== labels[i].replace(/-/g, ""));
+  if (placeLabels.some((l) => compactName.startsWith(l))) return true;
   const words = name.toLowerCase().split(/[^a-z0-9]+/).filter((w) => w.length >= 4 && !GENERIC_NAME_WORDS.has(w));
   return words.some((w) => host.replace(/[.-]/g, "").includes(w));
 }
@@ -209,7 +213,12 @@ Return ONLY valid JSON: {"reason": "...", "deadline": "YYYY-MM-DD" or null}`,
 
 // One quick search for the program's own page, used when the result came
 // from a blog or listicle. Null when it can't find one.
-export async function findOfficialPage(name: string, timeout: number): Promise<string | null> {
+// place: for a place rather than a program (a venue found on a guide), where it is and which of its pages to find
+// ("private events or private dining page").
+export async function findOfficialPage(name: string, timeout: number, place?: { near: string | null; page: string }): Promise<string | null> {
+  const want = place
+    ? `Find the official website page for "${name}"${place.near ? ` in ${place.near}` : ""} (the place's own site, ideally its ${place.page}, not a guide, list, review, booking site or directory about it).`
+    : `Find the official website page for "${name}" (the program's or organization's own site, ideally its apply or program page, not a blog, news story, or directory about it).`;
   try {
     const { text: raw } = await generateText({
       model: anthropic(WEB_SEARCH_MODEL),
@@ -217,7 +226,7 @@ export async function findOfficialPage(name: string, timeout: number): Promise<s
       tools: { web_search: anthropic.tools.webSearch_20250305({ maxUses: 1 }) },
       stopWhen: stepCountIs(2),
       timeout,
-      prompt: `Find the official website page for "${name}" (the program's or organization's own site, ideally its apply or program page, not a blog, news story, or directory about it).
+      prompt: `${want}
 
 Return ONLY valid JSON: {"url": "https://..."} or {"url": null} if you can't find its own site.`,
     });

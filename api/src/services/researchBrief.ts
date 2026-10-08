@@ -131,19 +131,31 @@ export async function findVenueOptions(userId: string, query: string, ask: Venue
   // Each option is read from its own page: a Peerspace listing, or the venue's own site. A listicle or directory about many
   // places is never read for one of them (taskWeb marks official pages). Too few of those from the first pass: one more pass
   // asking only for venues' own private-events pages.
+  const { coreName } = await import("./taskWeb.js");
   const own = (k: { url: string; official: boolean }) => k.official || PEERSPACE_LISTING.test(k.url.split("?")[0]);
+  // One option per place: a second page on the same site (Copra's reservations page and its private-events page) or the
+  // same name again isn't another option. Peerspace listings are each their own place.
+  const placeKey = (k: { url: string; name: string }) => (PEERSPACE_LISTING.test(k.url.split("?")[0]) ? k.url.split("?")[0] : (() => { try { return new URL(k.url).hostname.replace(/^www\./, ""); } catch { return k.url; } })());
+  const sameName = (a: string, b: string) => coreName(a).toLowerCase() === coreName(b).toLowerCase();
   const ownPage = "For each, give the venue's OWN website page for private events or private dining, never a guide, list, review or directory.";
-  const passes = [`${query} ${ownPage}`, `${query} ${ownPage} Different venues from any you'd name first: look further.`];
+  // Each pass after the first names what's already found and looks somewhere else (2026-10-07 live brief: two passes that
+  // returned 3 results each, mostly the same restaurants, came to 2 options).
+  const angles = ["", "Look further: different venues from these, already found:", "This time look at a different kind of place at the same standard: a top hotel's private dining room or salon, a gallery or museum event space, or a private members' club that hosts dinners. Not these, already found:"];
   const kept: import("./taskWeb.js").VerifiedResult[] = [];
+  const ownPlaces = () => kept.filter(own).filter((k, i, a) => a.findIndex((x) => placeKey(x) === placeKey(k)) === i);
   const log: { pass: number; kept: number; own: number; listicles: string[] }[] = [];
-  for (const [i, q] of passes.entries()) {
-    if (i > 0 && kept.filter(own).length >= 3) break;
-    const r = await taskWebSearch(userId, q, { city: ask.city, zone, background: true, max: BRIEF_LIMITS.maxOptions, searches: 4 });
-    for (const k of r.kept) if (!kept.some((x) => x.url === k.url)) kept.push(k);
+  for (const [i, angle] of angles.entries()) {
+    if (i > 0 && ownPlaces().length >= BRIEF_LIMITS.maxOptions) break;
+    const seen = [...new Set(kept.map((k) => coreName(k.name)))].slice(0, 12).join("; ");
+    const q = i === 0 ? `${query} ${ownPage}` : `${query} ${ownPage} ${angle}${seen ? ` ${seen}.` : ""}`;
+    const r = await taskWebSearch(userId, q, { city: ask.city, zone, background: true, max: BRIEF_LIMITS.maxOptions, searches: 4, ownPage: "private events or private dining page", readsPageItself: true });
+    for (const k of r.kept) if (!kept.some((x) => x.url === k.url || (own(x) && own(k) && (placeKey(x) === placeKey(k) || sameName(x.name, k.name))))) kept.push(k);
     log.push({ pass: i + 1, kept: r.kept.length, own: r.kept.filter(own).length, listicles: r.kept.filter((k) => !own(k)).map((k) => k.url).slice(0, 4) });
   }
-  const urls = [...new Set(kept.filter(own).map((k) => (PEERSPACE_LISTING.test(k.url.split("?")[0]) ? k.url.split("?")[0] : k.url)).filter((u) => u.startsWith("https://") && !belowTheBar(u)))].slice(0, BRIEF_LIMITS.maxReads);
-  const names = new Map(kept.map((k) => [k.url.split("?")[0], k.name]));
+  const urls = [...new Set(ownPlaces().map((k) => (PEERSPACE_LISTING.test(k.url.split("?")[0]) ? k.url.split("?")[0] : k.url)).filter((u) => u.startsWith("https://") && !belowTheBar(u)))].slice(0, BRIEF_LIMITS.maxReads);
+  // The place's name, without the room the search named: the fields read below are the venue's, and may be another room's
+  // (2026-10-07 live brief: "Scoma's Restaurant – The Scalia Room" over the Bayside Patio's capacity).
+  const names = new Map(kept.map((k) => [k.url.split("?")[0], coreName(k.name)]));
   const finds: ResearchFind[] = [];
   const reads: { url: string; got: string }[] = [];
   for (const url of urls) {
