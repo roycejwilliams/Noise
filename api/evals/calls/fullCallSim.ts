@@ -25,13 +25,16 @@ const api = async (path: string, init: RequestInit = {}) => {
   return t ? JSON.parse(t) : {};
 };
 
-// A fictional member (never a real one), with history like a real member's: a pending doc Co promised, goals, a stale item.
+// A fictional member (never a real one), with history like a real member's: a doc Co already sent, goals, a stale item. Shaped like
+// buildCallKnowledge's output (services/callContext.ts): delivered items sit under "They already have these", not the current situation.
 const CONTEXT = `Current situation (latest first):
-- Oct 7: Promised on the call: send the plan for how Jordan's studio stays visible after the November open house. Sent Oct 8 as a PDF.
 - Oct 6: Jordan is planning a November open house for their design studio, about 40 people, at the studio in Hayes Valley.
 - Oct 2 (OLD): Jordan wanted to find a co-working space in SoMa. They haven't mentioned it since.
 Who they are: runs a small brand design studio (3 people) in SF, moved from New York two years ago; likes small dinners, hates big networking mixers; climbs on weekends.
-Last calls: Oct 7 (planning the open house), Oct 1 (first call, getting to know each other).`;
+Last calls: Oct 7 (planning the open house), Oct 1 (first call, getting to know each other).
+
+They already have these (not news, never a reason to call or an opener; mention one only if it changed since they last heard about it, or they ask):
+- Oct 8: the plan for how Jordan's studio stays visible after the November open house (sent as a PDF).`;
 const NOW = "It is Thursday, October 8, 7:10 PM Pacific (their time).";
 const NO_FINDS = "Nothing to offer right now. Don't offer an event; if they ask what's on, look it up now or say you don't have anything yet.";
 

@@ -83,6 +83,13 @@ const day = () => "Oct 8";
   const lifeline = await run("Are you safe right now? If not, please reach out to the crisis lifeline by calling nine eight eight. Is someone with you tonight?");
   check(`voice-only: a safety turn has no question limit and keeps every help line ("${lifeline}")`, /nine eight eight/.test(lifeline) && /someone with you tonight\?/.test(lifeline));
   check(`voice-only: a safety line after the question is never cut ("${safety}")`, /988/.test(safety) && /Are you safe right now\?/.test(safety));
+  {
+    const { SAFETY_TURN } = await import("../../src/services/callLlmProxy.js");
+    const notSafety = ["it all felt a little... safe? Like I wasn't pushing myself", "we played it safe with the menu", "safe to say it went well", "no harm in asking"];
+    const safety = ["I'm safe tonight, just tired", "I don't feel safe at home", "sometimes I wonder if anyone would notice if I disappeared", "I've thought about hurting myself", "everyone would be better off without me", "I feel unsafe"];
+    check(`a bare "safe" never lifts the question limit (2026-10-08 new_member call): ${notSafety.filter((x) => SAFETY_TURN.test(x)).join(" | ") || "none"}`, notSafety.every((x) => !SAFETY_TURN.test(x)));
+    check(`real safety talk still lifts it: missed ${safety.filter((x) => !SAFETY_TURN.test(x)).join(" | ") || "none"}`, safety.every((x) => SAFETY_TURN.test(x)));
+  }
   const named = await run("Your mentor Richard sounds like he was rare. What did he see in you?");
   check("voice-only: nothing is held back for an unbacked name (no fact check in this mode)", /Richard/.test(named));
   check("voice-only: no tools and no turn notes are added to the request", (seenReq?.tools ?? []).every((t: any) => t.name === "end_call") && !/This turn: they told you how they are/.test(JSON.stringify(seenReq?.system ?? "")));

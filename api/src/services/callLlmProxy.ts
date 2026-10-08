@@ -46,7 +46,9 @@ type OaiContent = string | { type?: string; text?: string }[] | null | undefined
 // A line that carries safety help: never cut by the one-question rule. And a turn that checks on their safety, or answers a member
 // whose words raise it, has no question limit at all (review of #110: "please reach out to the lifeline" was cut).
 export const SAFETY_LINE = /\b(?:988|911|741741)\b|\bnine[- ]eight[- ]eight\b|\b(?:crisis|life|hot|help) ?line\b|\bemergency\b|\bsuicid\w*|\bsomeone you trust\b|\bare you safe\b|\bstay(?:ing)? (?:right )?(?:here|with you)\b/i;
-const SAFETY_TURN = /\b(?:safe|hurt (?:yourself|myself)|harm|kill (?:myself|yourself)|end it|disappear|not (?:wake|be here)|better off without)\b/i;
+// "safe" counts only as safety talk ("not safe", "are you safe", "I'm safe tonight"): a bare "safe" lifted the limit on a turn where
+// the member called their old life "a little... safe?" (2026-10-08 call eval, new_member: two questions got through).
+export const SAFETY_TURN = /\bunsafe\b|\b(?:not|n't|never|are you|am I|I'?m|you'?re|be|keep (?:you|yourself|myself)) (?:feel(?:ing)? |being |staying )?safe\b|\bsafe (?:right now|tonight|at home)\b|\b(?:hurt(?:ing)? (?:yourself|myself)|self[- ]harm|harm(?:ing)? (?:yourself|myself)|kill(?:ing)? (?:myself|yourself)|end it|disappear(?:ed|ing)?|not (?:wake|be here)|better off without)\b/i;
 export const GOODBYE = /^(?:\[[a-z ]+\]\s*)?(?:(?:ok(?:ay)?|alright|all right|great|perfect)[,.!]?\s+)?(?:take care|talk (?:to you )?soon|bye|goodbye|good night|goodnight|have a (?:good|great|nice) (?:night|evening|one|day|weekend)|see you|catch you later|speak soon)\b/i;
 export type OaiMessage = { role: string; content?: OaiContent; tool_calls?: { id: string; type?: string; function: { name: string; arguments?: string } }[]; tool_call_id?: string };
 export type OaiRequest = { model?: string; messages: OaiMessage[]; tools?: { type?: string; function: { name: string; description?: string; parameters?: unknown } }[]; stream?: boolean; temperature?: number; max_tokens?: number; max_completion_tokens?: number; elevenlabs_extra_body?: Record<string, any> };
