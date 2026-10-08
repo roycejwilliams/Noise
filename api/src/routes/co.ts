@@ -11,13 +11,10 @@ import pool from "../db/db.js";
 import { authenticateToken } from "../middleware/auth.js";
 import { generateEmbedding } from "../services/embeddings.js";
 import {
-  assessConversationCoverage,
   captureIntent,
   cityChangeAllowed,
   extractPlannedEventMention,
   extractPsychographicProfile,
-  persistCoveredTopics,
-  RAPPORT_TOPICS,
   storeProfile,
   storeTranscriptMemory,
 } from "../services/profileExtraction.js";
@@ -45,7 +42,8 @@ import { refreshPersonSnapshot } from "../harness/personSnapshot.js";
 import { auditCall } from "../harness/callGrounding.js";
 import { callEmotionMoments, checkNoEmotionLabelOnCall, frustrationMoments, frustrationScores, recordEmotionSignals, type ScoredLine } from "../harness/emotion.js";
 import { flagVoiceMoments } from "../services/voiceFlags.js";
-import { CANT_CONNECT_LINE, COVERAGE_TRANSCRIPT_CHARS, chooseOpening, conversationLink, withTimeout, fetchConversationTurns, hitVoicemail, memberNumberOf, missedKind, voicemailLeft, noteCallFailure, takeCallContext, voicemailVerdict, registerElevenLabsCall, transcriptFromHistory, transcriptFromTurns, verifyCallToken, verifyPostCallWebhook } from "../services/elevenLabsCalls.js";
+import { narratesInternalState } from "../services/speakable.js";
+import { CANT_CONNECT_LINE, chooseOpening, conversationLink, withTimeout, fetchConversationTurns, hitVoicemail, memberNumberOf, missedKind, voicemailLeft, noteCallFailure, takeCallContext, voicemailVerdict, registerElevenLabsCall, transcriptFromTurns, verifyCallToken, verifyPostCallWebhook } from "../services/elevenLabsCalls.js";
 import { OPENING_WRITER, recordOpening, takeOpening, writeOpening } from "../services/callOpening.js";
 
 // One-line drafts (missed-call text, voicemail line): narrow work, Haiku.
@@ -450,8 +448,7 @@ router.post("/el/outbound-twiml", async (req: Request, res: Response, next: Next
 });
 
 // The agent's tools. Answered in the response (ElevenLabs waits on it), with
-// the call's user id checked against its token. The conversation so far
-// comes in the request, so the coverage check needs no fetch.
+// the call's user id checked against its token.
 router.post("/el/tool/:name", async (req: Request, res: Response) => {
   const b = req.body ?? {};
   const userId = String(b.user_id ?? "");
@@ -461,24 +458,11 @@ router.post("/el/tool/:name", async (req: Request, res: Response) => {
     if (name === "surface_recommendation") {
       return res.json(await voiceFinds(userId));
     }
-    if (name === "assess_conversation_coverage") {
-      const t0 = Date.now();
-      // The newest part of the conversation (the whole history is bound into the
-      // request; the check only needs enough of it), and the summary the call
-      // already carries as a variable instead of rebuilding it on every check.
-      const transcript = transcriptFromHistory(typeof b.conversation_history === "string" ? b.conversation_history : JSON.stringify(b.conversation_history ?? "")).slice(-COVERAGE_TRANSCRIPT_CHARS);
-      const priorContext = typeof b.context_summary === "string" ? b.context_summary : await buildCallContextSummary(userId).catch(() => "");
-      const t1 = Date.now();
-      const assessment = await assessConversationCoverage(transcript, priorContext);
-      persistCoveredTopics(userId, assessment);
-      const secs = Number(b.call_duration_secs);
-      recordDecision({ layer: 8, decision: "call.coverage", userId, outcome: "act", action: "elevenlabs", proposal: { reusedSummary: typeof b.context_summary === "string", prepMs: t1 - t0, modelMs: Date.now() - t1, totalMs: Date.now() - t0, turns: transcript ? transcript.split("\n").length : 0 } }).catch(() => {});
-      return res.json({ ...assessment, ...(Number.isFinite(secs) && secs > 0 ? { elapsed_minutes: Math.round((secs / 60) * 10) / 10 } : {}) });
-    }
+    // The coverage check went with the interview
+    // script (2026-10-08): calls decide from what Co knows, as texts do.
     return res.status(404).json({ error: `unknown tool ${name}` });
   } catch (err: any) {
     console.error(`co/el/tool/${name} failed:`, err?.message ?? err);
-    if (name === "assess_conversation_coverage") return res.json({ missing_topics: [...RAPPORT_TOPICS], ready_to_summarize: false });
     return res.json({ available: false, reason: "lookup failed" });
   }
 });
@@ -510,7 +494,9 @@ router.post("/el/post-call", async (req: Request, res: Response, next: NextFunct
     }
     const conversationId = String(data.conversation_id ?? "");
     // ElevenLabs graded the call against our criteria (services/callEvals.ts); the failures go where the morning review reads.
-    import("../services/callEvals.js").then((m) => m.recordCallEvaluation(userId, conversationId, data.analysis)).catch(() => {});
+    // Its judge sees only the call: a source failure is re-checked against their texts and Co's records first (2026-10-08).
+    const gradeContext = { transcript: transcriptFromTurns(Array.isArray(data.transcript) ? data.transcript : []), given: [vars.context_summary, vars.finds_now].filter((x) => typeof x === "string" && x).join("\n") };
+    import("../services/callEvals.js").then((m) => m.recordCallEvaluation(userId, conversationId, data.analysis, undefined, gradeContext)).catch(() => {});
     // Whether every event, place and time Co named had a source row (the grader above can't see the finds list).
     import("../services/offerGuard.js").then((m) => m.recordOfferSourceCheck(userId, conversationId, Array.isArray(data.transcript) ? data.transcript : [], { firstName: String(vars.first_name ?? ""), contextSummary: String(vars.context_summary ?? ""), findsNow: String(vars.finds_now ?? ""), rightNow: String(vars.right_now ?? "") })).catch(() => {});
     const turns = Array.isArray(data.transcript) ? data.transcript : [];
@@ -532,6 +518,8 @@ router.post("/el/post-call", async (req: Request, res: Response, next: NextFunct
       userId,
       callKey: `el:${conversationId}`,
       offered: typeof vars.finds_now === "string" ? vars.finds_now : undefined,
+      startedAt: Number(data.metadata?.start_time_unix_secs) ? new Date(Number(data.metadata.start_time_unix_secs) * 1000) : null,
+      endedAt: Number(data.metadata?.start_time_unix_secs) && Number(data.metadata?.call_duration_secs) ? new Date((Number(data.metadata.start_time_unix_secs) + Number(data.metadata.call_duration_secs)) * 1000) : null,
       twilioMetadata: callSid ? { call_sid: callSid } : null,
       // Feelings come from the text read over what they said, plus ElevenLabs'
       // per-line frustration score (harness/emotion.ts frustrationMoments).
@@ -560,6 +548,10 @@ router.post("/el/post-call", async (req: Request, res: Response, next: NextFunct
     // reply directly), so every call is audited: a cue outside the allowed set,
     // or two in one reply, shows up in the review (services/voiceCues.ts).
     const cueUse = cueAudit(turns.filter((t: any) => t?.role !== "user").map((t: any) => String(t?.message ?? "")));
+    // One voice standard with texts (services/speakable.ts): a spoken line that narrates Co's own state ("I'm starting on it",
+    // "once it's worth sending") is logged for the review, the way texts are checked before they go.
+    const narrated = turns.filter((t: any) => t?.role !== "user" && typeof t?.message === "string").map((t: any) => t.message as string).filter((m: string) => narratesInternalState(m));
+    if (narrated.length) recordDecision({ layer: 8, decision: "call.narration", userId, outcome: "skip", action: "narrated_state", proposal: { conversationId, lines: narrated.slice(0, 5) }, reason: narratesInternalState(narrated[0]) }).catch(() => {});
     if (cueUse.cued) recordDecision({ layer: 8, decision: "call.cues", userId, outcome: cueUse.outside.length || cueUse.overOne ? "skip" : "act", action: cueUse.outside.length || cueUse.overOne ? "cue_rules_broken" : "cues_ok", proposal: { conversationId, ...cueUse } }).catch(() => {});
     return res.status(ended.status).send(ended.body);
   } catch (err) {
@@ -688,6 +680,9 @@ async function processEndedCall(o: {
   load: () => Promise<EndedCallData>;
   // What Co had found for them going in (the call's finds_now): an event offered from it is on file, not invented (2026-10-05: the audit flagged a real offer as an invented fact).
   offered?: string;
+  // When the call started and ended (the webhook's metadata): which commitments were this call's, and the confirmation's latency.
+  startedAt?: Date | null;
+  endedAt?: Date | null;
 }): Promise<{ status: number; body: unknown }> {
   const user_id = o.userId;
   const chat_id = o.callKey;
@@ -816,6 +811,12 @@ async function processEndedCall(o: {
         return { status: 200, body: { success: true, noRealConversation: true } };
       }
 
+      // The call ending is the trigger (services/callFollowThrough.ts): what Co said it would send is confirmed now, then done, and
+      // the deliverable goes out when its own turn finishes. First thing once a person talked, never waiting on the steps below.
+      // It also opens the commitment tasks the call brain didn't (callCommitments.ts trackCommitmentsFromTranscript): the direct
+      // path, and the same words never open twice.
+      import("../services/callFollowThrough.js").then((m) => m.followThroughOnCallEnd({ userId: user_id, transcript: cleanTranscript, startedAt: o.startedAt ?? null, endedAt: o.endedAt ?? null })).catch(() => {});
+
       // Step 1 — Store raw transcript in co_memories immediately.
       // Idempotent on exact transcript content (2026-09-17, finding 14): a
       // partial-failure retry (chat_ended redelivered after a mid-pipeline
@@ -838,12 +839,15 @@ async function processEndedCall(o: {
       // Calls can't be gated live (Hume speaks as it generates), so every
       // call is audited right after: keepable promises are kept, the rest
       // become corrections for the next text (harness/callGrounding.ts).
-      auditCall(user_id, cleanTranscript, knownBeforeCall).catch(() => {});
       // Ongoing help they asked for on the call becomes a task, same as a text would (services/callTasks.ts).
-      import("../services/callTasks.js").then((m) => m.tasksFromCall(user_id, cleanTranscript)).catch(() => {});
-      // What Co said it would send after the call is a task too (services/callCommitments.ts). Said live it already is one (the call
-      // brain's endpoint opens it the moment it is said); this catches the direct path, and the same words never open it twice.
-      import("../services/callCommitments.js").then((m) => m.trackCommitmentsFromTranscript(user_id, cleanTranscript)).catch(() => {});
+      // What Co said it would send after the call is opened the moment the call ends, with its confirmation text
+      // (services/callFollowThrough.ts, above); said live it already was one, and the same commitment never opens twice.
+      // One after another, then the audit (2026-10-08): run side by side, each missed what the other opened, so one commitment
+      // became two tasks and three searches. Now a promise a task from this call already carries is that task's.
+      (async () => {
+        await import("../services/callTasks.js").then((m) => m.tasksFromCall(user_id, cleanTranscript)).catch(() => {});
+        await auditCall(user_id, cleanTranscript, knownBeforeCall);
+      })().catch(() => {});
       // How scripted it sounded: stock comfort lines and repeated openers, logged for the morning review.
       {
         const r = stockReport(coLinesOf(cleanTranscript));

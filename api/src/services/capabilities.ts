@@ -385,7 +385,7 @@ export const ABILITIES: Ability[] = [
   },
   {
     id: "co_events",
-    can: 'At Co events: the day of, Co may ask them to share their location until the end of the day or text "I\'m here" when they arrive, then tells them who\'s worth meeting in the room. Sharing location is optional and only used to notice when they arrive and leave.',
+    can: 'At Co events: Co knows who\'s coming (the guest list) and what each guest has told Co they\'re looking for or who they hope to meet, and uses that to point people toward each other in the room, never telling one guest what another told it. The day of, Co may ask them to share their location until the end of the day or text "I\'m here" when they arrive, then tells them who\'s worth meeting in the room. Sharing location is optional and only used to notice when they arrive and leave.',
   },
   {
     id: "arrival",

@@ -245,5 +245,125 @@ const run = async (body: any, events: any[], o: { clean?: boolean } = {}) => {
   check("CALL_LLM_CLEAN=off is the pass-through switch", /CALL_LLM_CLEAN !== "off"/.test(rs));
 }
 
+// ---- Co's own tools on a call (services/callTools.ts): run on the server mid-turn, never seen by ElevenLabs
+{
+  const { z } = await import("zod");
+  const { tool: aiTool } = await import("ai");
+  const CT = await import("../../src/services/callTools.js");
+  const SW = await import("../../src/services/abilitySwitches.js");
+  SW.setSwitchesForTest({});
+  // A request-aware upstream: each request gets the next scripted reply, and every request is kept for inspection.
+  const scripted = (replies: any[][]) => { const reqs: any[] = []; let n = 0; return { reqs, stream: (r: any) => { reqs.push(JSON.parse(JSON.stringify(r))); const ev = replies[Math.min(n++, replies.length - 1)]; return (async function* () { for (const e of ev) yield e; })(); } }; };
+  const fakeSet = (run: (name: string, input: any) => Promise<unknown>, names = ["startTask"]) => ({ defs: names.map((n) => ({ name: n, description: `${n} for them`, input_schema: { type: "object", properties: {} } })), names: new Set(names), note: CT.CALL_TOOLS_GUIDE, run });
+  const elTools = { tools: [{ type: "function", function: { name: "end_call", description: "End the call", parameters: { type: "object", properties: { reason: { type: "string" } }, required: ["reason"] } } }, { type: "function", function: { name: "voicemail_detection", description: "Voicemail", parameters: { type: "object", properties: { reason: { type: "string" } }, required: ["reason"] } } }] };
+  const go = async (body: any, deps: any) => { const out: any[] = []; const spoken: string[] = []; for await (const c of P.runCallLlm(body, { onSpoken: (s: string) => spoken.push(s), ...deps })) out.push(c); return { out, spoken, content: out.map((c) => c.choices[0].delta.content ?? "").join(""), calls: out.flatMap((c) => c.choices[0].delta.tool_calls ?? []), finish: out[out.length - 1].choices[0].finish_reason }; };
+
+  // 1. the model emits Co's tool, the proxy runs it, feeds the result back, and the text streams
+  {
+    const ran: any[] = [];
+    const up = scripted([[...text("On it, I'll take that on now."), ...tool("tu1", "startTask", '{"goal":"partner event planning doc"}')], text("Done, it's on my list and I'll text you the plan.")]);
+    const r = await go(baseBody(elTools), { stream: up.stream, tools: fakeSet(async (n, i) => { ran.push({ n, i }); return { ok: true, taskId: 41 }; }) });
+    check("call tools: the model's Co tool runs on the server with its input", ran.length === 1 && ran[0].n === "startTask" && ran[0].i.goal === "partner event planning doc", ran);
+    check("call tools: ElevenLabs never sees Co's tool call (only text and its own tools)", !r.calls.some((c: any) => c.function?.name === "startTask") && r.finish === "stop", r.calls);
+    const second = up.reqs[1];
+    check("call tools: the result is fed back as a tool_result after the model's own tool_use", !!second && second.messages.at(-2).content.some((b: any) => b.type === "tool_use" && b.id === "tu1") && second.messages.at(-1).content.some((b: any) => b.type === "tool_result" && b.tool_use_id === "tu1" && /"taskId":41/.test(b.content)), second?.messages.slice(-2));
+    check("call tools: the line before the tool streams first, then the answer after it", /^On it, I'll take that on now\. Done, it's on my list/.test(r.content), r.content);
+    check("call tools: Co's tools are offered beside ElevenLabs' end_call and voicemail_detection, with the call note in the prompt", ["end_call", "voicemail_detection", "startTask"].every((n) => up.reqs[0].tools.some((t: any) => t.name === n)) && /# Doing things on this call/.test(up.reqs[0].system[0].text));
+  }
+  // 2. end_call passes through, with Co's tools on
+  {
+    const up = scripted([[...text("Talk soon, take care."), ...tool("ec1", "end_call", '{"reason":"goodbye said"}')]]);
+    let ran = 0;
+    const r = await go(baseBody(elTools), { stream: up.stream, tools: fakeSet(async () => { ran++; return { ok: true }; }) });
+    check("end_call passes through to ElevenLabs whole, after the goodbye", r.calls[0]?.function?.name === "end_call" && r.calls.map((c: any) => c.function?.arguments ?? "").join("") === '{"reason":"goodbye said"}' && r.finish === "tool_calls" && /Talk soon/.test(r.content) && ran === 0 && up.reqs.length === 1, r.calls);
+    const empty = await go(baseBody(elTools), { stream: scripted([[{ type: "content_block_start", index: 0, content_block: { type: "tool_use", id: "e2", name: "end_call" } }, { type: "content_block_stop", index: 0 }]]).stream });
+    check("a call tool with no input still reaches ElevenLabs as valid JSON ({})", empty.calls.map((c: any) => c.function?.arguments ?? "").join("") === "{}", empty.calls);
+    // ElevenLabs may send its own tool call back with no result: the request still pairs every tool_use with a tool_result.
+    const orphan = P.toAnthropic(baseBody({ messages: [{ role: "system", content: "S" }, { role: "user", content: "hi" }, { role: "assistant", content: "Bye.", tool_calls: [{ id: "el0", type: "function", function: { name: "end_call", arguments: '{"reason":"x"}' } }] }, { role: "user", content: "wait, one more thing" }] }));
+    const after = orphan.messages[orphan.messages.findIndex((m) => m.content.some((x: any) => x.type === "tool_use")) + 1];
+    check("a tool call ElevenLabs sent back without a result gets one, first in the next message", after?.role === "user" && (after.content[0] as any).type === "tool_result" && (after.content[0] as any).tool_use_id === "el0" && after.content.some((x: any) => x.type === "text" && /one more thing/.test(x.text)), after);
+    // A goodbye that also acts: Co's tool runs, end_call still goes out, and no second model round is started.
+    const ran2: string[] = [];
+    const up3 = scripted([[...text("I'll note that, bye for now."), ...tool("n1", "startTask", '{"goal":"x y z"}', 1), ...tool("ec3", "end_call", '{"reason":"bye"}', 2)]]);
+    const r3 = await go(baseBody(elTools), { stream: up3.stream, tools: fakeSet(async (n) => { ran2.push(n); return { ok: true }; }) });
+    check("a goodbye with a Co tool and end_call: the tool runs and end_call still goes out, no extra round", ran2.length === 1 && r3.calls.some((c: any) => c.function?.name === "end_call") && r3.finish === "tool_calls" && up3.reqs.length === 1);
+  }
+  // 3. the real guard: a tool that needs their yes is refused without it (and runs with it)
+  {
+    let wrote = 0;
+    const raw = () => ({ writeDocument: aiTool({ description: "write", inputSchema: z.object({ title: z.string() }), execute: async () => { wrote++; return { ok: true }; } }) });
+    const member = { phone: "", firstName: "Jordan", city: "San Francisco", tasks: [], loops: null };
+    const noYes = CT.buildCallTools({ userId: "u-call", callKey: "u-call:t1", turnWords: "We have a partner event in November.", callWords: "We have a partner event in November.", lastCoLine: "Want me to put that in a doc?", member, dryRun: true, tools: raw() });
+    check("the call's writeDocument carries the registry's theirYes field (the same guard as texting)", JSON.stringify(noYes.defs.find((d) => d.name === "writeDocument")?.input_schema).includes("theirYes"));
+    const up = scripted([[...text("Let me write that up."), ...tool("w1", "writeDocument", '{"title":"Partner plan","theirYes":"yes please"}')], text("I'll hold off until you say so.")]);
+    await go(baseBody(), { stream: up.stream, tools: noYes });
+    const fed = up.reqs[1]?.messages.at(-1).content[0]?.content ?? "";
+    check("a tool needing their yes is refused when their words this turn hold no yes", wrote === 0 && /needs their own yes/.test(fed), fed);
+    const yes = CT.buildCallTools({ userId: "u-call", callKey: "u-call:t1", turnWords: "Yes please, take the lead on it.", callWords: "Yes please, take the lead on it.", lastCoLine: null, member, dryRun: true, tools: raw() });
+    const up2 = scripted([[...tool("w2", "writeDocument", '{"title":"Partner plan","theirYes":"yes please"}', 0)], text("It's on its way by text.")]);
+    await go(baseBody(), { stream: up2.stream, tools: yes });
+    check("and runs when their yes is in what they just said", wrote === 1);
+    // A refused attempt can be fixed and tried once more in the same turn (the tool's own refusal says so), not a third time.
+    let tries = 0;
+    const flaky = CT.buildCallTools({ userId: "u-call", callKey: "u-call:t2", turnWords: "Yes please.", callWords: "Yes please.", lastCoLine: null, member, dryRun: true, tools: { writeDocument: aiTool({ description: "w", inputSchema: z.object({ title: z.string() }), execute: async () => { tries++; return { ok: false, error: "Not sent: fix the second line." }; } }) } });
+    const a1: any = await flaky.run("writeDocument", { title: "A", theirYes: "yes please" }, "1");
+    const a2: any = await flaky.run("writeDocument", { title: "A", theirYes: "yes please" }, "2");
+    const a3: any = await flaky.run("writeDocument", { title: "A", theirYes: "yes please" }, "3");
+    check("a refused document is retried once in the turn, then the per-turn limit holds", tries === 2 && a1.ok === false && a2.ok === false && /Already done this turn/.test(a3.error ?? ""), { tries, a3 });
+  }
+  // 4. the step cap and the time budget
+  {
+    let runs = 0;
+    const loopForever = scripted([[...text("One more."), ...tool("s", "startTask", '{"goal":"again"}')]]);
+    const r = await go(baseBody(), { stream: loopForever.stream, tools: fakeSet(async () => { runs++; return { ok: true }; }), maxToolSteps: 2 });
+    check("the step cap: at most maxToolSteps rounds of Co's tools, then the model answers with tools off", runs === 2 && loopForever.reqs.length === 3 && loopForever.reqs[2].tool_choice?.type === "none" && !loopForever.reqs[1].tool_choice, { runs, reqs: loopForever.reqs.length });
+    check("the default cap is 3 rounds in 8 seconds", P.CALL_TOOL_STEPS === 3 && P.CALL_TOOL_BUDGET_MS === 8000);
+    const slow = scripted([[...text("On it."), ...tool("sl", "startTask", '{"goal":"slow"}')], text("It'll come by text.")]);
+    let finished = false;
+    const t0 = Date.now();
+    const r2 = await go(baseBody(), { stream: slow.stream, toolBudgetMs: 60, tools: fakeSet(() => new Promise((res) => setTimeout(() => { finished = true; res({ ok: true }); }, 400))) });
+    const fed = slow.reqs[1]?.messages.at(-1).content[0]?.content ?? "";
+    check("the time budget: a slow tool doesn't hold the voice past it; the model is told it isn't back yet", Date.now() - t0 < 350 && /stillRunning/.test(fed) && slow.reqs[1].tool_choice?.type === "none" && /It'll come by text/.test(r2.content), { ms: Date.now() - t0, fed });
+    await new Promise((res) => setTimeout(res, 450));
+    check("and the slow tool still finishes on its own (the action happens)", finished);
+    void r;
+  }
+  // 5. member scope
+  {
+    const seen: any[] = [];
+    const raw = { updateNotes: aiTool({ description: "notes", inputSchema: z.object({ what: z.string().optional() }), execute: async (i: any) => { seen.push(i); return { ok: true }; } }) };
+    const member = { phone: "", firstName: "Jordan", city: null, tasks: [], loops: null };
+    const set = CT.buildCallTools({ userId: "member-a", callKey: "member-a:tokA", turnWords: "note it", callWords: "note it", lastCoLine: null, member, dryRun: true, tools: raw });
+    await set.run("updateNotes", { what: "dinner", userId: "member-b", phone: "+10000000000" }, "x");
+    check("tools act only for the call's member: an id or number in the model's input is dropped by the schema", seen.length === 1 && !("userId" in seen[0]) && !("phone" in seen[0]) && seen[0].what === "dinner", seen);
+    const other = await set.run("sendReply", { message: "hi" }, "y");
+    check("only the call subset exists on a call (no texting send, no Mo, no intros)", (other as any)?.ok === false && !CT.CALL_TOOL_NAMES.includes("sendReply" as any) && !CT.CALL_TOOL_NAMES.some((n) => /requestEventIntro|shareFinds|webSearch|draftEmail/.test(n)));
+    // What one call did is remembered for that call only, never shown on another member's call.
+    CT._resetCallMemoryForTest();
+    const a = CT.buildCallTools({ userId: "member-a", callKey: "member-a:tokA", turnWords: "", callWords: "", lastCoLine: null, member, dryRun: true, tools: { startTask: aiTool({ description: "s", inputSchema: z.object({ goal: z.string() }), execute: async () => ({ ok: true }) }) } });
+    void a;
+    const fullA = CT.buildCallTools({ userId: "member-a", callKey: "member-a:tokA", turnWords: "", callWords: "", lastCoLine: null, member, dryRun: true });
+    void fullA;
+    const note = (k: string, did: string[]) => CT.callToolsNote({ tasks: [{ id: 7, goal: "Plan the partner event" }], loops: null }, did);
+    check("the call note lists their open tasks by id and what was done earlier on this call", /#7 "Plan the partner event"/.test(note("k", ["Started task #7."])) && /Done earlier on this call/.test(note("k", ["Started task #7."])));
+    const bNote = CT.buildCallTools({ userId: "member-b", callKey: "member-b:tokB", turnWords: "", callWords: "", lastCoLine: null, member, dryRun: true }).note;
+    check("another member's call never carries this call's record", !/Done earlier on this call/.test(bNote));
+    const route = fs.readFileSync(new URL("../../src/routes/callLlm.ts", import.meta.url), "utf8");
+    check("the route builds the tools only for the verified member (call token), never from the request's say-so", /if \(userId && process\.env\.CALL_TOOLS !== "off"\)/.test(route) && /buildCallTools\(\{ userId, callKey/.test(route));
+    const w = R.callWordsOf({ messages: [{ role: "system", content: "S" }, { role: "assistant", content: "Want me to put it in a doc?" }, { role: "user", content: "Yes." }, { role: "user", content: "Please take the lead." }] } as any);
+    check("their words this turn are their lines since Co last spoke; Co's last line is kept for a yes to an offer", w.turnWords === "Yes. Please take the lead." && w.lastCoLine === "Want me to put it in a doc?");
+  }
+  // 6. the real texting tools, built for a call: the same descriptions, the same schemas
+  {
+    const member = { phone: "", firstName: "Jordan", city: "San Francisco", tasks: [], loops: null };
+    const real = CT.buildCallTools({ userId: "u-real", callKey: "u-real:t", turnWords: "hi", callWords: "hi", lastCoLine: null, member: { ...member, tasks: [{ id: 3, goal: "Venue by Friday" }] }, dryRun: true, stubSearch: true });
+    const none = CT.buildCallTools({ userId: "u-real", callKey: "u-real:t", turnWords: "hi", callWords: "hi", lastCoLine: null, member, dryRun: true, stubSearch: true });
+    check("with no open task, updateTask and closeTask aren't offered (the same situations as texting)", !none.names.has("updateTask") && !none.names.has("closeTask") && none.names.has("startTask"), [...none.names]);
+    const C = await import("../../src/services/capabilities.js");
+    check("the real call toolset is the texting tools: every one, described by its registry entry", CT.CALL_TOOL_NAMES.every((n) => real.names.has(n)) && real.defs.every((d) => d.description === C.toolUse(d.name)), [...real.names]);
+    check("each schema is a JSON object schema with the guard's fields", real.defs.every((d: any) => d.input_schema.type === "object" && d.input_schema.properties?.why) && JSON.stringify(real.defs.find((d) => d.name === "researchBrief")?.input_schema).includes("theirYes"));
+  }
+}
+
 console.log(`llmProxy: ${total - failed}/${total} checks`);
 if (failed) process.exit(1);

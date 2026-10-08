@@ -36,6 +36,8 @@ export const PROACTIVE_PURPOSE: Record<ProactiveType | ExemptType | "in_room", P
   search_result: "offer",
   // Work they asked Co to do for them (services/coTasks.ts).
   task_update: "companion",
+  // What Co said on a call it would send, confirmed the moment they hang up (services/callFollowThrough.ts).
+  call_confirm: "companion",
   in_room: "offer",
   product_update: "ops",
   membership_lapse: "ops",

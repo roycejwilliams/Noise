@@ -43,7 +43,7 @@ check("the list form works too", V.failedCriteria({ evaluation_criteria_results_
   console.error = orig;
   check("a failure to record never throws into the call's processing", r === 0);
 }
-check("the post-call webhook records the grade, never awaited", /recordCallEvaluation\(userId, conversationId, data\.analysis\)\)\.catch\(\(\) => \{\}\)/.test(src("routes/co.ts")));
+check("the post-call webhook records the grade, never awaited, with the call and what Co was given for the re-check", /recordCallEvaluation\(userId, conversationId, data\.analysis, undefined, gradeContext\)\)\.catch\(\(\) => \{\}\)/.test(src("routes/co.ts")) && /const gradeContext = \{ transcript: transcriptFromTurns\(/.test(src("routes/co.ts")));
 
 // ---- the voice regression suite
 const names = T.CALL_TESTS.map((t) => t.name);

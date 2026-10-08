@@ -86,8 +86,10 @@ const mk = (give: any[], o: { done?: boolean; startOk?: boolean } = {}) => {
 const co = src("routes/co.ts"), ct = src("services/callTasks.ts");
 check("the post-call step runs it, alongside the audit, never awaited", /tasksFromCall\(user_id, cleanTranscript\)\)\.catch\(\(\) => \{\}\)/.test(co));
 check("it uses the same task machinery as a text (so every limit holds), Sonnet to read, and keeps the transcript out of traces", /startTask\b/.test(ct) && /MODELS\.sonnet/.test(ct) && /recordInputs: false, recordOutputs: false/.test(ct));
-check("the after-call text knows what to say when a task started, without a day or a promise", /If it says Co started working on something they asked for, say in a few plain words that you're on it/.test(src("jobs/postCallFollowUp.ts")));
-check("the call brain is told yes: it'll set it up when they hang up", /Right after you hang up, Co sets up what they asked for as a task/.test(src("services/callBriefing.ts")) && /say yes, that you'll set it up when you hang up/.test(src("services/elevenLabsCalls.ts")));
+// 2026-10-08: "you're on it" became "Starting the plan ... once it's worth sending" live; the text now says what Co understood, that
+// they'll get it, and a when only if Co named one on the call, and never repeats a confirmation already sent (evals/calls/followThrough.ts).
+check("the after-call text knows what to say when a task started: the shape, a when only if named on the call, no narration", /If it says Co started working on something they asked for, and confirmation_you_already_sent_after_the_call is empty, say it in this shape: what you understood they want, that you'll text it to them, and when only if you named a time on the call/.test(src("jobs/postCallFollowUp.ts")) && /Never narrate your own state/.test(src("jobs/postCallFollowUp.ts")));
+check("the call brain is told yes: it sets it up now, on the call (2026-10-08: calls run Co's tools)", /Say yes to this on a call and set it up then and there/.test(src("services/callBriefing.ts")) && /say yes and set it up now, on the call/.test(src("services/elevenLabsCalls.ts")));
 console.log(`call tasks: ${total - failed}/${total} passed`);
 if (failed) process.exitCode = 1;
 process.exit(failed ? 1 : 0);

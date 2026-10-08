@@ -20,6 +20,7 @@ import { CAPABILITY_SHEET } from "./callBriefing.js";
 import { DISCRETION_GUIDE } from "../harness/discretion.js";
 import { VARIETY_GUIDE } from "../harness/stockLines.js";
 import { BRAND, CALL_COACHING } from "./textRhythm.js";
+import { CO_CORE_PARTS } from "./coCore.js";
 import { CUE_GUIDE, VOICE_CUES, stripCues } from "./voiceCues.js";
 import { createHmac, timingSafeEqual } from "crypto";
 import { ElevenLabsClient } from "@elevenlabs/elevenlabs-js";
@@ -178,45 +179,40 @@ export const OPENING_NOTE = "Your opening line has already been said, as the fir
 // "everything you write is spoken aloud" now carries its one exception), not
 // trailing at the end (review of #62). Texts never get it.
 export const SPOKEN_ALOUD = "Everything you write is spoken aloud.";
-// The shared prompt's example openers ("Hey {{first_name}}. Good to finally talk. I want
-// to hear about where you are right now...") serve a first call. A model at temperature 0
-// copies them word for word even when it knows the person, so a call's prompt leaves
-// them out; texts, which read the same file, keep them.
-export function withoutExampleOpeners(prompt: string): string {
-  return prompt.replace(/Some ways this might sound:\n(?:"[^\n]*"\n)+Use your own words if none of these feel right in the moment[^\n]*\n/, "");
+// The call prompt is Co's shared core (services/coCore.ts, the same block a text
+// reply starts from) plus a short voice layer (prompts/co-system-prompt.md) and the
+// call-only guides below (2026-10-08 call review: the old Hume-era guide ran every
+// call as an interview, four phases, a nine-topic checklist, a coverage tool and a
+// reflect-then-ask turn template, and it sounded scripted). Co decides what to say
+// from what it knows, as in texts.
+// ElevenLabs' models give a "# Guardrails" heading extra weight, so the core's
+// safety parts go at the end under it, and safety is said once more as the last rule.
+export function callGuardrails(): string {
+  return `# Guardrails\n${CO_CORE_PARTS.safety}\n\n${CO_CORE_PARTS.memberSafety}\n\nSafety comes before everything else on the call. This is important.`;
 }
-// ElevenLabs' models give a "# Guardrails" heading extra weight, so the safety
-// section and the never-do list move to the end of the call copy under it, with
-// the discretion lines, and the first of them is said once more as the last rule.
-// The text path reads the same file untouched.
-const SAFETY_RE = /─── IF THEY MAY NOT BE SAFE ─+\n([\s\S]*?)(?=\n─── )/;
-const NEVER_RE = /─── WHAT CO NEVER DOES ─+\n([\s\S]*?)(?=\n─── )/;
-export function guardrailsLast(prompt: string): { rest: string; guardrails: string } {
-  const safety = prompt.match(SAFETY_RE)?.[1]?.trim();
-  const never = prompt.match(NEVER_RE)?.[1]?.trim();
-  if (!safety || !never) return { rest: prompt, guardrails: "" };
-  const rest = prompt.replace(SAFETY_RE, "").replace(NEVER_RE, "");
-  return { rest, guardrails: `# Guardrails\nIf they may not be safe:\n${safety}\n\nNever:\n${never}\n\nSafety comes before everything else on the call. This is important.` };
-}
+// What Co knows about them, filled per call (services/callContext.ts buildCallContextSummary).
+export const CALL_CONTEXT_BLOCK = `# What you know about {{first_name}}
+From your texts and earlier calls, the current situation first. Treat it as already established, the same as if they had just told you on this call, and never re-ask what it already tells you. The latest is where to pick up; older items are questions, not facts.
+{{context_summary}}
+
+If that's empty, this is your first real conversation with them: get to know them the way a person would, starting from what they're working on or what brought them to Co.`;
 // Voice is a speed game: the first words of a reply are spoken as soon as the first sentence is done, so a short one starts the
 // voice sooner (2026-10-05: ~1.0s to the first full sentence).
 export const SPEED_GUIDE = `# Speed and length
-Start every reply with a short first sentence, under ten words, that acknowledges or answers ("That makes sense." "Good, that helps."), then carry on. A long first sentence delays your voice.
+Start every reply with a short first sentence, under ten words, then carry on. A long first sentence delays your voice. Make that first sentence the answer itself, or your own reaction to the specific thing they said, never a stock acknowledgement or a praise word that could follow anything they said.
 # Cadence
 You are speaking, not writing. Your voice has a calm, unhurried rhythm: a short sentence, a beat, then one a little longer, then a short one to land it. Every thought ends with a period and the next starts a new sentence. The only marks you use are periods, commas and question marks. Never write a dash of any kind (not "—", not "–", not " - "), never a semicolon, never parentheses. No sentence runs past 15 words. When a sentence wants a dash, put a period there instead.
-Wrong: "That's smart—keeping it warm before you dig in. So Jacqueline's already talked to him, and you're thinking dinner or lunch to see what fits."
-Right: "That's smart. Keep it warm first. So Jacqueline has already talked to him, and you're picturing a dinner or a lunch. What would you want out of it?"
 Speech can't be skimmed: say one thought in two to four short sentences, about 60 words at most, with at most one question, then stop. Never three paragraphs, never a list, never a recap of what they just said. Never open with "I appreciate", "I want to be straight with you" or "Let me be honest": just say the thing.
 When they ask about you (what would make you better, how it feels), answer plainly from Co's side of the work in a sentence or two ("from where I sit..."). No disclaimers about being an AI or about what you can't feel.
-When they want help over days (memos, resources, prep, options), never say it isn't how you work: say yes, that you'll set it up when you hang up and text what you find. Don't promise what it will find or when.
+When they want help over days (memos, resources, prep, options), never say it isn't how you work: say yes and set it up now, on the call, then say plainly that you have. Don't promise what it will find or when.
 # What you know, and how old it is
 Lines about them carry a stamp: when they said it, and OLD when it has gone stale. A line marked OLD is a question, never a fact: "Last time you were working on X. Is that still the thing?" Never ask about or state an OLD line as if it were current.
 When they push back on something you said about them ("what do you mean?", "I don't remember saying that", "what are you talking about"), check its stamp first. If it is old, your own read, or you can't tell where it came from, drop it in one short sentence ("That was an old note of mine. Scratch it.") and go back to what they are saying now. Never apologize twice, never say you got something wrong on your end, never explain the note.
 # Names the transcript gets wrong
 Their words reach you through speech recognition, and short names suffer most. Your own name, Co, often arrives as "you", "Coach" or "go" ("building you" means building Co). Boardy arrives as "Bumble", "Boredy" or "birdie". When a line only makes sense with one of these names, read it that way, and never say the misheard word back as if it were a name.
 # Offers and promises
-Name an event, place or time only if it is in "What Co has found for them" or they said it. If you can't point to the line it came from, don't name it: say you'll look and text it.
-A promise to text or send something is a real task the moment you say it. Say it once, plainly ("I'll text you those links when we hang up"), and only when it is true.
+Name an event, place or time only if it is in "What Co has found for them" or they said it. If you can't point to the line it came from, don't name it: look it up now, or say you don't have it.
+A promise to text or send something is a real task the moment you say it. Say it once, plainly, and only when it is true.
 # Their state comes first
 If they say they are tired, drained, overwhelmed or having a hard time, that outranks everything on your list. Close warmly in two sentences: acknowledge it, then let them go. No pitch, no recap, no list of what you are carrying, no new event, no question that asks more of them. What you found keeps; say you'll text it when they have the energy, or not at all.`;
 
@@ -227,26 +223,19 @@ export const CALL_NOW = `# Right now
 # What Co has found for them
 {{finds_now}}`;
 
-export function promptForElevenLabs(prompt: string): string {
-  const split = guardrailsLast(withoutExampleOpeners(prompt));
-  const base = split.rest
-    .replace("open as below instead.", "your first question is about what they're working on or what brought them to Co, in fresh words each time.")
-    .replace(/\bhang_up\b/g, "end_call")
-    // What Co found is in the prompt (prefetched), not behind a tool: no pause mid-conversation.
-    .replace(/The same rule applies to anything YOU fetched with surface_recommendation[^\n]*/, 'The same rule applies to anything under "What Co has found for them" that you decided to offer: if you meant to tell them about one and haven\'t yet, say it before you close, never after.')
-    // The coverage check runs between turns, never part-way through speech (a mid-sentence tool call split Co's speech in two).
-    .replace("silently check your own coverage using the assess_conversation_coverage tool.", "silently check your own coverage using the assess_conversation_coverage tool, as the very first thing you do in a turn, before you say a word, never part-way through what you are saying.");
-  const withCues = base.includes(SPOKEN_ALOUD)
-    ? base.replace(new RegExp(`${SPOKEN_ALOUD.replace(/[.]/g, "\\.")} ?`), `Everything you write is spoken aloud, except a cue in square brackets (below).\n${CUE_GUIDE}\n\n`)
-    : `${base}\n\n${CUE_GUIDE}`;
+// Pure: the agent's prompt from the voice layer. The core comes first (who Co is, how it
+// listens, what's true), then the phone, what Co knows about them, the call-only guides,
+// the guardrails, and the opening note last.
+export function promptForElevenLabs(voiceLayer: string): string {
+  const voice = voiceLayer.trim().replace(/\bhang_up\b/g, "end_call");
+  const withCues = voice.includes(SPOKEN_ALOUD)
+    ? voice.replace(new RegExp(`${SPOKEN_ALOUD.replace(/[.]/g, "\\.")} ?`), `Everything you write is spoken aloud, except a cue in square brackets (below).\n${CUE_GUIDE}\n\n`)
+    : `${voice}\n\n${CUE_GUIDE}`;
+  const head = `${CO_CORE_PARTS.voice}\n\n${CO_CORE_PARTS.listening}\n\n${CO_CORE_PARTS.grounding}\n\n# On the phone\n${withCues}\n\n${CALL_CONTEXT_BLOCK}`;
   // How Co keeps a confidence on a call (harness/discretion.ts): speech can't be
   // edited, so the model has to choose a discreet line itself.
-  return `${withCues}\n\n${VARIETY_GUIDE}\n\n${CALL_COACHING}\n\n${BRAND}\n\n${SPEED_GUIDE}\n\n${CAPABILITY_SHEET}\n\n${CALL_NOW}\n\n${split.guardrails ? `${split.guardrails}\n\n` : ""}${DISCRETION_GUIDE}\n\n${OPENING_NOTE}`;
+  return `${head}\n\n${VARIETY_GUIDE}\n\n${CALL_COACHING}\n\n${BRAND}\n\n${SPEED_GUIDE}\n\n${CAPABILITY_SHEET}\n\n${CALL_NOW}\n\n${callGuardrails()}\n\n${DISCRETION_GUIDE}\n\n${OPENING_NOTE}`;
 }
-
-// The coverage check reads the newest part of the call (~6k tokens is plenty
-// to see which Rapport topics came up recently).
-export const COVERAGE_TRANSCRIPT_CHARS = 24_000;
 
 // Words the speech recognizer is told to expect (2026-10-05: "Co" was heard as "you" and "Coach", "Boardy" as "Boredy"). Names a
 // member says about Co's world, not about the member: their own names come through the call's context.
@@ -306,8 +295,9 @@ export const AGENT_DEFAULTS = {
 
 // Pure: the agent's whole config (ElevenLabs REST shape, snake_case), from
 // the prompt and our settings. Phone audio is mu-law 8kHz both ways
-// (register-call requires it). Tools call our webhooks with the call's
-// user id and token, and the conversation so far for the coverage check.
+// (register-call requires it). The only tools here are ElevenLabs' own (end the
+// call, voicemail); the coverage-check webhook went with the interview script
+// (2026-10-08). Co's own tools reach a call through our LLM endpoint.
 export function buildAgentConfig(o: {
   name: string;
   prompt: string;
@@ -320,37 +310,6 @@ export function buildAgentConfig(o: {
   // The call brain behind our own endpoint (services/callLlmProxy.ts) instead of ElevenLabs' Haiku. Off: the direct path.
   proxy?: { url: string; secretId: string; model?: string } | null;
 }): Record<string, unknown> {
-  const tool = (name: string, description: string, extra: Record<string, unknown> = {}, mode: "immediate" | "async" = "immediate") => ({
-    type: "webhook",
-    name,
-    description,
-    response_timeout_secs: 20,
-    disable_interruptions: false,
-    force_pre_tool_speech: false,
-    // No filler before a tool, and (for the coverage check) no waiting on it: async runs it in the background while Co keeps talking.
-    pre_tool_speech: "off",
-    execution_mode: mode,
-    api_schema: {
-      url: `${o.apiUrl}/co/el/tool/${name}`,
-      method: "POST",
-      request_body_schema: {
-        type: "object",
-        properties: {
-          user_id: { type: "string", dynamic_variable: "user_id" },
-          call_token: { type: "string", dynamic_variable: "call_token" },
-          conversation_id: { type: "string", dynamic_variable: "system__conversation_id" },
-          call_duration_secs: { type: "string", dynamic_variable: "system__call_duration_secs" },
-          // The conversation so far, so the coverage check needs no fetch
-          // (the 9-19s check on Hume was mostly re-fetching the transcript).
-          conversation_history: { type: "string", dynamic_variable: "system__conversation_history" },
-          // The summary built at call start rides along (no rebuild per check).
-          context_summary: { type: "string", dynamic_variable: "context_summary" },
-          ...extra,
-        },
-        required: ["user_id", "call_token"],
-      },
-    },
-  });
   return {
     name: o.name,
     // Each call picks its own opening line (pickOpening), so the first message
@@ -392,15 +351,9 @@ export function buildAgentConfig(o: {
           backup_llm_config: { preference: "override", order: [AGENT_DEFAULTS.backupLlm] },
           cascade_timeout_seconds: AGENT_DEFAULTS.cascadeTimeoutSecs,
           tools: [
-            tool(
-              "assess_conversation_coverage",
-              "Silently check your own progress through the Rapport phase. Returns which required topics are still uncovered so you can decide what to ask next and whether you have enough to move into Confirm Understanding. Never mention that you are checking anything or calling a tool - just let the result quietly guide your next question.",
-              {},
-              "async",
-            ),
             // ElevenLabs' own system tools ride in the same list (type "system");
             // the separate built_in_tools field silently stored nothing (2026-10-03).
-            { type: "system", name: "end_call", description: "End the call once you've said a warm goodbye and given them a beat to respond.", params: { system_tool_type: "end_call" } },
+            { type: "system", name: "end_call", description: "End the call right after you've said goodbye once, or once they've said goodbye and you've said it back. Nothing is said after a goodbye.", params: { system_tool_type: "end_call" } },
             // Leaves this and ends the call; the post-call steps then send the missed-call text.
             {
               type: "system",

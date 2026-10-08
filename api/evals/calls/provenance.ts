@@ -35,7 +35,7 @@ const summary = CC.assembleCallSummary({ lessons: [], sentLines: [], base: "", t
 check("call side: the briefing prints the stamped line, not the bare text", /first paying customer \(they said Sep 28, 8 days ago; OLD/.test(summary), summary);
 const tc = src("services/turnContext.ts");
 check("the thread read for the call selects its dates and stamps it where it is read", /SELECT text, feeling, opened_at, last_touched_at, due_date FROM member_threads/.test(tc) && /stampOf\(/.test(tc) && /st\.drop \? \[\]/.test(tc));
-check("the call summary builder hands the stamped line on (not the bare text)", /t\.line \?\? t\.text/.test(src("services/callContext.ts")) && /String\(t\.line \?\? t\.text/.test(src("services/callContext.ts")));
+check("the call summary builder hands the stamped line on (not the bare text)", /t\.line \?\? t\.text/.test(src("services/callContext.ts")) && /stampOf\(\{ saidOn: t\.openedAt, confirmedOn: t\.lastTouchedAt, dueOn: t\.dueDate \}/.test(src("services/callContext.ts")));
 check("the recap threads reader (personModel) goes through renderThreads", /renderThreads\(threads/.test(src("services/personModel.ts")));
 
 // ---- the behaviour on pushback is in the call prompt

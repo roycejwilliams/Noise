@@ -12,6 +12,21 @@ import { SpeakableStream } from "./speakable.js";
 import { SAFE_LINE, sourceCorpus, unsourced } from "./offerGuard.js";
 import { DRAINED_MAX_SENTENCES, DRAINED_NOTE, memberStateSignal } from "./memberState.js";
 
+// Co's own tools on a call, built for the call's member by services/callTools.ts (kept there, so this file stays free of the
+// database and the tools' imports). One turn's bounds: at most CALL_TOOL_STEPS rounds of Co's tools, inside CALL_TOOL_BUDGET_MS from
+// the request arriving. A tool still running at the budget keeps running on its own (its write lands, the guard logs it) and the
+// model is told it isn't back yet. 3 rounds: say a line, act, maybe one follow-on (start the task after a refused document), answer.
+// 8 seconds: a task or note write is ~50ms, a document's PDF and send a few seconds; past that the voice has waited long enough.
+export const CALL_TOOL_STEPS = 3;
+export const CALL_TOOL_BUDGET_MS = 8000;
+export type CallToolset = {
+  defs: { name: string; description: string; input_schema: unknown }[];
+  names: Set<string>;
+  // The system block for this turn: how to use the tools on a call, their open tasks and loops by id, what was done earlier on the call.
+  note: string;
+  run: (name: string, input: unknown, toolUseId: string) => Promise<unknown>;
+};
+
 export const CALL_LLM_MODEL = process.env.CALL_LLM_MODEL ?? "claude-haiku-5-5";
 const DEFAULT_MAX_TOKENS = 500;
 
@@ -24,7 +39,7 @@ const textOf = (c: OaiContent): string => (typeof c === "string" ? c : Array.isA
 type Cache = { cache_control?: { type: "ephemeral" } };
 type ABlock = ({ type: "text"; text: string } | { type: "tool_use"; id: string; name: string; input: unknown } | { type: "tool_result"; tool_use_id: string; content: string }) & Cache;
 export type AMessage = { role: "user" | "assistant"; content: ABlock[] };
-export type ARequest = { model: string; max_tokens: number; temperature?: number; thinking?: { type: "disabled" }; system: { type: "text"; text: string; cache_control: { type: "ephemeral" } }[]; messages: AMessage[]; tools?: { name: string; description: string; input_schema: unknown }[]; stream: true };
+export type ARequest = { model: string; max_tokens: number; temperature?: number; thinking?: { type: "disabled" }; system: { type: "text"; text: string; cache_control: { type: "ephemeral" } }[]; messages: AMessage[]; tools?: { name: string; description: string; input_schema: unknown }[]; tool_choice?: { type: "auto" | "none" | "any" }; stream: true };
 
 export const takesTemperature = (model: string) => /^claude-(haiku|sonnet|opus)-4/.test(model);
 // Haiku 5.x thinks by default (adaptive, effort medium). On a call that thinking is dead air: the 2026-10-07 replay measured ~1.5s
@@ -56,6 +71,19 @@ export function toAnthropic(b: OaiRequest, model = CALL_LLM_MODEL, note?: string
       }
       add("assistant", blocks);
     } else if (text) add("user", [{ type: "text", text }]);
+  }
+  // Every tool call needs its result right after it (Anthropic 400s otherwise). ElevenLabs doesn't always send one back for its own
+  // system tools, so a call with none gets a plain placeholder rather than failing the turn.
+  for (let i = 0; i < msgs.length; i++) {
+    if (msgs[i].role !== "assistant") continue;
+    const ids = msgs[i].content.filter((x) => x.type === "tool_use").map((x) => (x as { id: string }).id);
+    if (!ids.length) continue;
+    if (!msgs[i + 1] || msgs[i + 1].role !== "user") msgs.splice(i + 1, 0, { role: "user", content: [] });
+    const next = msgs[i + 1];
+    const have = new Set(next.content.filter((x) => x.type === "tool_result").map((x) => (x as { tool_use_id: string }).tool_use_id));
+    const missing: ABlock[] = ids.filter((id) => !have.has(id)).map((id) => ({ type: "tool_result", tool_use_id: id, content: "(done)" }));
+    // Results lead the message, before any words of theirs.
+    next.content = [...next.content.filter((x) => x.type === "tool_result"), ...missing, ...next.content.filter((x) => x.type !== "tool_result")];
   }
   // A call opens with Co's own greeting, and the model's turn must follow the member's: give it a quiet first line.
   if (!msgs.length || msgs[0].role !== "user") msgs.unshift({ role: "user", content: [{ type: "text", text: "(the call has just connected)" }] });
@@ -102,6 +130,14 @@ export type ProxyDeps = {
   // Called when the member's last words say they are drained (the turn gets the note and a two-sentence cap).
   onState?: () => void;
   clean?: boolean;
+  // Co's own tools for the call's member (services/callTools.ts), run here mid-turn. Without them a turn is text plus
+  // ElevenLabs' tools, as before.
+  tools?: CallToolset | null;
+  maxToolSteps?: number;
+  toolBudgetMs?: number;
+  // Each of Co's tools as it comes back (or doesn't, inside the budget), and each round fed back to the model.
+  onTool?: (t: { name: string; input: unknown; result: unknown; ms: number; timedOut: boolean }) => void;
+  onToolRound?: (r: { step: number; last: boolean }) => void;
   now?: () => number;
 };
 
@@ -129,10 +165,10 @@ export async function* runCallLlm(b: OaiRequest, deps: ProxyDeps): AsyncGenerato
   let spokeAny = false, blanked = false, firstTokenAt = 0, firstSentenceAt = 0;
   let toolIndex = -1;
   let finish = "stop";
-  const say = (s: string): string | null => {
+  const say = (s: string, extraCorpus = ""): string | null => {
     const sentence = s.trim();
     if (clean) {
-      const bad = unsourced(sentence, corpus);
+      const bad = unsourced(sentence, extraCorpus ? `${corpus}\n${extraCorpus}` : corpus);
       if (bad.length) { deps.onDropped?.(sentence, `names what nothing backs: ${bad.map((m) => m.text).join(", ")}`); blanked = true; return null; }
     }
     if (!firstSentenceAt) { firstSentenceAt = now(); deps.onFirstText?.({ upstreamFirstTokenMs: (firstTokenAt || firstSentenceAt) - t0, firstSentenceMs: firstSentenceAt - t0 }); }
@@ -141,31 +177,111 @@ export async function* runCallLlm(b: OaiRequest, deps: ProxyDeps): AsyncGenerato
     return s;
   };
 
-  for await (const ev of deps.stream(toAnthropic(b, undefined, drained ? DRAINED_NOTE : undefined))) {
-    if (ev.type === "content_block_start" && ev.content_block?.type === "text") {
-      stream = mk();
-    } else if (ev.type === "content_block_delta" && ev.delta?.type === "text_delta" && typeof ev.delta.text === "string") {
-      if (!firstTokenAt) firstTokenAt = now();
-      if (!stream) stream = mk();
-      if (!clean) { const out = say(ev.delta.text); if (out) yield chunk({ content: out }); continue; }
-      for (const s of stream.push(ev.delta.text)) { const out = say(s); if (out) yield chunk({ content: out }); }
-    } else if (ev.type === "content_block_stop" && stream) {
-      if (clean) for (const s of stream.end()) { const out = say(s); if (out) yield chunk({ content: out }); }
-      stream = null;
-    } else if (ev.type === "content_block_start" && ev.content_block?.type === "tool_use") {
-      toolIndex += 1;
-      finish = "tool_calls";
-      yield chunk({ tool_calls: [{ index: toolIndex, id: ev.content_block.id, type: "function", function: { name: ev.content_block.name, arguments: "" } }] });
-    } else if (ev.type === "content_block_delta" && ev.delta?.type === "input_json_delta") {
-      yield chunk({ tool_calls: [{ index: toolIndex, function: { arguments: ev.delta.partial_json ?? "" } }] });
-    } else if (ev.type === "message_delta" && ev.delta?.stop_reason) {
-      if (ev.delta.stop_reason === "max_tokens") finish = "length";
-    }
+  // Co's own tools (services/callTools.ts) run here, mid-turn, and never reach ElevenLabs; its own tools (end_call,
+  // voicemail_detection) still pass through as tool_calls. Bounded: maxToolSteps rounds, and toolBudgetMs from the request arriving.
+  const co = deps.tools ?? null;
+  const maxSteps = deps.maxToolSteps ?? CALL_TOOL_STEPS;
+  const budgetMs = deps.toolBudgetMs ?? CALL_TOOL_BUDGET_MS;
+  let req = toAnthropic(b, undefined, [drained ? DRAINED_NOTE : "", co?.note ?? ""].filter(Boolean).join("\n\n") || undefined);
+  if (co) {
+    const theirs = new Set((req.tools ?? []).map((t) => t.name));
+    req.tools = [...(req.tools ?? []), ...co.defs.filter((d) => !theirs.has(d.name))];
   }
-  if (stream && clean) for (const s of stream.end()) { const out = say(s); if (out) yield chunk({ content: out }); }
+  // What Co's tools returned this turn also backs what Co says (an event searchEvents found can be named).
+  let toolCorpus = "";
+  let toolsOff = false;
+  for (let step = 0; ; step++) {
+    const blocks: ABlock[] = [];
+    const runs: Promise<ABlock>[] = [];
+    let cur: { kind: "text"; text: string } | { kind: "co"; id: string; name: string; json: string } | { kind: "el"; args: boolean } | { kind: "skip" } | null = null;
+    let elCalled = false;
+    for await (const ev of deps.stream(req)) {
+      if (ev.type === "content_block_start" && ev.content_block?.type === "text") {
+        stream = mk();
+        cur = { kind: "text", text: "" };
+      } else if (ev.type === "content_block_delta" && ev.delta?.type === "text_delta" && typeof ev.delta.text === "string") {
+        if (!firstTokenAt) firstTokenAt = now();
+        if (!stream) stream = mk();
+        if (cur?.kind === "text") cur.text += ev.delta.text;
+        if (!clean) { const out = say(ev.delta.text); if (out) yield chunk({ content: out }); continue; }
+        for (const s of stream.push(ev.delta.text)) { const out = say(s, toolCorpus); if (out) yield chunk({ content: out }); }
+      } else if (ev.type === "content_block_stop") {
+        if (stream) {
+          if (clean) for (const s of stream.end()) { const out = say(s, toolCorpus); if (out) yield chunk({ content: out }); }
+          stream = null;
+        }
+        if (cur?.kind === "text" && cur.text.trim()) blocks.push({ type: "text", text: cur.text });
+        else if (cur?.kind === "co") {
+          // Started the moment its input is complete, while the voice is still saying the line before it.
+          let input: unknown = {};
+          try { input = cur.json.trim() ? JSON.parse(cur.json) : {}; } catch { input = {}; }
+          blocks.push({ type: "tool_use", id: cur.id, name: cur.name, input });
+          runs.push(runTool(co!, cur.id, cur.name, input, Math.max(0, budgetMs - (now() - t0)), deps.onTool));
+        } else if (cur?.kind === "el" && !cur.args) {
+          // A call tool with no input still sends valid JSON: ElevenLabs parses the arguments string.
+          yield chunk({ tool_calls: [{ index: toolIndex, function: { arguments: "{}" } }] });
+        }
+        cur = null;
+      } else if (ev.type === "content_block_start" && ev.content_block?.type === "tool_use") {
+        const name = String(ev.content_block.name ?? "");
+        if (co?.names.has(name)) {
+          // Past the cap a Co tool is never run, whatever the model sends (the request already said none).
+          cur = toolsOff ? { kind: "skip" } : { kind: "co", id: String(ev.content_block.id ?? `co_${step}_${runs.length}`), name, json: "" };
+          continue;
+        }
+        cur = { kind: "el", args: false };
+        elCalled = true;
+        toolIndex += 1;
+        finish = "tool_calls";
+        yield chunk({ tool_calls: [{ index: toolIndex, id: ev.content_block.id, type: "function", function: { name, arguments: "" } }] });
+      } else if (ev.type === "content_block_delta" && ev.delta?.type === "input_json_delta") {
+        if (cur?.kind === "co") { cur.json += ev.delta.partial_json ?? ""; continue; }
+        if (cur?.kind === "skip") continue;
+        if (cur?.kind === "el" && ev.delta.partial_json) cur.args = true;
+        yield chunk({ tool_calls: [{ index: toolIndex, function: { arguments: ev.delta.partial_json ?? "" } }] });
+      } else if (ev.type === "message_delta" && ev.delta?.stop_reason) {
+        if (ev.delta.stop_reason === "max_tokens") finish = "length";
+      }
+    }
+    if (stream && clean) for (const s of stream.end()) { const out = say(s, toolCorpus); if (out) yield chunk({ content: out }); }
+    stream = null;
+    if (!runs.length) break;
+    const results = await Promise.all(runs);
+    for (const r of results) if (r.type === "tool_result") toolCorpus += `\n${r.content}`;
+    // ElevenLabs' own tool in the same message (a goodbye with end_call): Co's tools have run; the call's tool goes out as it is.
+    if (elCalled) break;
+    const last = step + 1 >= maxSteps || now() - t0 >= budgetMs;
+    toolsOff = last;
+    req = {
+      ...req,
+      messages: [...req.messages, { role: "assistant", content: blocks }, { role: "user", content: results }],
+      // At the cap the model answers from what it has: no more tool rounds this turn.
+      ...(last ? { tool_choice: { type: "none" as const } } : {}),
+    };
+    deps.onToolRound?.({ step: step + 1, last });
+  }
   // Everything this turn was going to say was kept back: say the one safe thing, never silence.
   if (blanked && !spokeAny && finish !== "tool_calls") { deps.onSpoken?.(SAFE_LINE); yield chunk({ content: SAFE_LINE + " " }); }
   yield chunk({}, finish === "length" ? "stop" : finish);
+}
+
+export const TOOL_TOO_SLOW = "Not back yet: it keeps running on its own and lands when it's done, but it couldn't finish inside this turn of the call. Say you're on it and it'll come by text; if it's real looking they need, take it on with startTask.";
+
+// One of Co's tools, inside what's left of the turn's budget. Past it, the tool is left to finish on its own (its write still lands
+// and the guard still logs it) and the model is told it isn't back yet.
+async function runTool(co: CallToolset, id: string, name: string, input: unknown, leftMs: number, onTool?: ProxyDeps["onTool"]): Promise<ABlock> {
+  const started = Date.now();
+  const p = Promise.resolve()
+    .then(() => co.run(name, input, id))
+    .catch((err: any) => ({ ok: false, error: `It failed: ${String(err?.message ?? err).slice(0, 160)}. Say plainly it wasn't done.` }));
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  const late = new Promise<typeof TOOL_TOO_SLOW>((resolve) => { timer = setTimeout(() => resolve(TOOL_TOO_SLOW), leftMs); });
+  const r = await Promise.race([p, late]);
+  if (timer) clearTimeout(timer);
+  const timedOut = r === TOOL_TOO_SLOW;
+  onTool?.({ name, input, result: timedOut ? null : r, ms: Date.now() - started, timedOut });
+  const content = timedOut ? JSON.stringify({ ok: false, stillRunning: true, note: TOOL_TOO_SLOW }) : JSON.stringify(r ?? { ok: true });
+  return { type: "tool_result", tool_use_id: id, content: content.slice(0, 6000) };
 }
 
 // The real upstream: Anthropic's streaming Messages API.

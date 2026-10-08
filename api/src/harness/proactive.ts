@@ -26,6 +26,7 @@
 import { proactivePaused, pausedTypes } from "../services/proactivePause.js";
 import { brandSafe } from "../services/brandGuard.js";
 import { feedbackFor, unbackedSpecifics } from "./proactiveSpecifics.js";
+import { narratesInternalState } from "../services/speakable.js";
 import { generateText } from "ai";
 import { anthropic } from "@ai-sdk/anthropic";
 import { DateTime } from "luxon";
@@ -119,7 +120,8 @@ export type ProactiveType =
 // search's time cap (removed 2026-10-01: Co's own loop shares finds as it goes);
 // kept so older records still read.
 // task_update: Co's own report on work it is doing for them over days (services/taskTurn.ts).
-export type ExemptType = "event_change" | "call_reminder" | "missed_call" | "co_event" | "direct_ask" | "search_result" | "task_update";
+// call_confirm: the text right after a call that confirms what Co said it would send (services/callFollowThrough.ts).
+export type ExemptType = "event_change" | "call_reminder" | "missed_call" | "co_event" | "direct_ask" | "search_result" | "task_update" | "call_confirm";
 
 // What each proactive message is for (companion / offer / ops) lives in
 // ./proactivePurpose.ts, dependency-free so model-free checks can read it.
@@ -788,6 +790,9 @@ export function checkDraft(text: string, rules: OutputRules): GateCheck[] {
   for (const f of [...ALWAYS_FORBIDDEN, ...(rules.forbidden ?? [])]) {
     checks.push({ name: "draft_forbidden", pass: !f.pattern.test(text), reason: f.reason });
   }
+  // One voice standard with calls (services/speakable.ts): no "Starting the…", "working on", "once it's worth sending".
+  const narration = narratesInternalState(text);
+  checks.push({ name: "draft_narrates_state", pass: !narration, reason: narration ?? "narrates Co's own state" });
   return checks;
 }
 

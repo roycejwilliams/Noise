@@ -13,7 +13,8 @@ const base = fs.readFileSync(new URL("../../prompts/co-system-prompt.md", import
 const fill = (p: string) => p.replace(/\{\{first_name\}\}/g, g.firstName).replace("{{context_summary}}", g.contextSummary).replace("{{right_now}}", g.rightNow).replace("{{finds_now}}", g.findsNow).replace(/\{\{[a-z_]+\}\}/g, "");
 const NEW = fill(E.promptForElevenLabs(base));
 const OLD = NEW.replace(/# Their state comes first[\s\S]*$/, "").replace(/# Cadence[\s\S]*?(?=Speech can't be skimmed)/, "");
-const tools = [{ type: "function", function: { name: "assess_conversation_coverage", description: "Silently check your own progress.", parameters: { type: "object", properties: {} } } }];
+// The coverage tool went with the interview script (2026-10-08); the agent carries no tool of its own here.
+const tools: any[] = [];
 const turns: { role: string; message: string }[] = fixture.turns.map((t: any) => ({ role: t.role === "agent" ? "assistant" : "user", message: String(t.message).replace(/^\[[a-z ]+\]\s*/i, "") }));
 const messagesUpTo = (sys: string, idx: number) => [{ role: "system", content: sys }, ...turns.slice(0, idx + 1).map((t) => ({ role: t.role, content: t.message }))];
 
@@ -32,7 +33,7 @@ async function oneTurn(messages: any[], clean: boolean): Promise<Turn> {
     void t0;
     text += content;
     if (!sawTool) break;
-    msgs = [...msgs, { role: "assistant", content: content || "", tool_calls: [{ id: toolId, type: "function", function: { name: "assess_conversation_coverage", arguments: "{}" } }] }, { role: "tool", tool_call_id: toolId, content: '{"missing_topics":[],"ready_to_summarize":false}' }];
+    msgs = [...msgs, { role: "assistant", content: content || "", tool_calls: [{ id: toolId, type: "function", function: { name: "tool", arguments: "{}" } }] }, { role: "tool", tool_call_id: toolId, content: "{}" }];
     if (content.trim()) break;
   }
   return { text: text.replace(/\[[a-z][a-z ]*\]\s*/gi, "").trim(), firstMs, upstreamMs };
@@ -56,8 +57,8 @@ console.log(`latency (ms from request to the first words the voice can speak):`)
 console.log(`  model's first token (direct path, what ElevenLabs waits on)   median ${median(direct.map((t) => t.upstreamMs ?? NaN).filter(Number.isFinite))}  ${direct.map((t) => t.upstreamMs).join(",")}`);
 console.log(`  first complete sentence out of the proxy                      median ${median(proxied.map((t) => t.firstMs ?? NaN).filter(Number.isFinite))}  ${proxied.map((t) => t.firstMs).join(",")}`);
 console.log(`  first complete sentence, direct (no cleaning, same boundary)  median ${median(direct.map((t) => t.firstMs ?? NaN).filter(Number.isFinite))}  ${direct.map((t) => t.firstMs).join(",")}`);
-console.log("\nsample proxy replies:");
-proxied.slice(0, 4).forEach((t, k) => console.log(` ${k + 1}. ${t.text.replace(/\n+/g, " / ").slice(0, 300)}`));
+console.log("\nproxy replies, each after the member's line:");
+proxied.forEach((t, k) => console.log(` ${k + 1}. member: ${turns[picks[k]].message.replace(/\s+/g, " ").slice(0, 120)}\n    Co: ${t.text.replace(/\n+/g, " / ").slice(0, 320)}`));
 
 // ---------- 2. the drained member
 const drainedAt = turns.findIndex((t) => t.role === "user" && /long day/i.test(t.message));

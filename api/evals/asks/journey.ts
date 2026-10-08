@@ -20,11 +20,10 @@ const day = (n: number) => new Date(Date.UTC(2026, 9, 6) - n * 86_400_000).toISO
 const NOW = new Date("2026-10-06T20:00:00Z");
 
 // ---- DISCOVERY CALL: where goals are born
-check("the call script asks two different questions: moving toward (goals) and need right now (asks)", /what are you moving toward these next few months/.test(prompt) && /what do you need right now/.test(prompt) && /Never blend them into one question/.test(prompt));
-check("then plays back 'here's what I'm carrying for you', and what they correct is final: the corrected list is the foundation", /here's what I'm carrying for you/.test(prompt) && /What they correct is final: the corrected list is the foundation/.test(prompt));
-check("goals are set once, at discovery, and not re-interviewed on later calls", /Goals are set once, on that first call, and touched rarely after\. On later calls don't re-interview/.test(prompt));
-check("the Rapport list itself separates the two (3: where they're moving toward, 4: what they need right now)", /3\. Where they're moving toward these next few months \(their goals\)/.test(prompt) && /4\. What they need right now \(their asks\)/.test(prompt));
-check("the call agent's prompt carries all of it", /GOALS AND ASKS/.test(E.promptForElevenLabs(prompt)) && /here's what I'm carrying for you/.test(E.promptForElevenLabs(prompt)));
+// The call no longer runs a goals-and-asks interview (2026-10-08: the scripted Hume-era guide is gone; Co decides
+// from what it knows, as in texts). Goals and asks still come out of the call afterwards (captureIntent below).
+const callPrompt = E.promptForElevenLabs(prompt);
+check("the call prompt runs no goals-and-asks interview or Rapport list", !/GOALS AND ASKS|what are you moving toward these next few months|here's what I'm carrying for you|Rapport/.test(callPrompt));
 const ex = X.captureIntentPrompt("user: I'm moving toward getting Co in front of users\nassistant: here's what I'm carrying for you...\nuser: no, the first thing is pre-seed", "whole_transcript");
 check("the extraction takes direction as entries too, and treats the corrected playback as the final list", /DIRECTION they said they are moving toward over the next few months/.test(ex) && /the CORRECTED version is the final list/.test(ex) && X.normalizeCapturedAsks({ asks: Array.from({ length: 12 }, (_, i) => ({ text: `entry ${i}`, type: "seeking" as const })) } as any, "whole_transcript").length === 8);
 

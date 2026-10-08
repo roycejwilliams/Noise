@@ -137,7 +137,9 @@ check("the shown reason is still their own stated ask (the one shared ask the ma
   check("no tapback in place of a reply when they may not be safe", /if \(ctx\.safetyConcern \|\| state\.safetyFlagged\) \{/.test(src("agent/conversationTools.ts")));
   const pr = src("harness/proactive.ts");
   check("offers wait while a safety hold is on; the next-day check-in doesn't wait on the last one", /state\.safetyHold && PROACTIVE_PURPOSE_MAP\[c\.type\] === "offer"/.test(pr) && /safetyFollowUp === true/.test(pr));
-  check("calls: the prompt covers it, and their side of the transcript is checked after", /IF THEY MAY NOT BE SAFE/.test(readFileSync(new URL("../../prompts/co-system-prompt.md", import.meta.url), "utf8")) && /if \(soundsLikeCrisis\(theirLines\)\)/.test(src("routes/co.ts")));
+  const { CO_SAFETY } = await import("../../src/services/coCore.js");
+  const { promptForElevenLabs } = await import("../../src/services/elevenLabsCalls.js");
+  check("calls: the prompt covers it (Co's shared safety rules, under the call's guardrails), and their side of the transcript is checked after", promptForElevenLabs(readFileSync(new URL("../../prompts/co-system-prompt.md", import.meta.url), "utf8")).includes(`# Guardrails\n${CO_SAFETY}`) && /Are you safe right now\?/.test(CO_SAFETY) && /call or text 988/.test(CO_SAFETY) && /911/.test(CO_SAFETY) && /if \(soundsLikeCrisis\(theirLines\)\)/.test(src("routes/co.ts")));
   check("the team email never carries their message", !/\$\{note\}|\$\{what\}/.test(src("services/safety.ts").slice(src("services/safety.ts").indexOf("alertTeamNow("))));
 }
 
@@ -308,7 +310,7 @@ check("the record starts filled from what was already logged", /backfillCoAction
   check("the sweep's and tasks' person model and the task/follow-up recent texts go through the strip", /memberSafe\(userId, \[\{ content: text, memory_type: "person_model" \}\]\)/.test(pm) && /m\.memberSafe\(userId, convo\)/.test(tt) && /m\.memberSafe\(userId, convo\)/.test(fu) && /m\.personModel\(c\.userId/.test(src("services/sweepFind.ts")) && /m\.personModel\(userId/.test(tt));
   const cc = src("services/callContext.ts");
   check("call summaries ([Call] lines) and the person model go through the strip; one import", /memberSafe\(userId, ownWordsResult\.rows, names\)/.test(cc) && /const ownWords = safeOwnWords\.map/.test(cc) && /memberSafe\(userId, \[\{ content: rawPicture, memory_type: "person_model" \}\], names\)/.test(cc) && (cc.match(/memberSafeMemories\.js/g) ?? []).length === 1);
-  check("the context summary's recap, last suggestion and recent texts are stripped too", /safeRecap\[0\] \? `Ongoing summary: \$\{safeRecap\[0\]\}`/.test(cc) && /safeRecommendation\[0\] \? `Most recent thing Co suggested/.test(cc) && /Recent texts: \$\{\[\.\.\.safeTexts\]\.reverse\(\)/.test(cc) && !/recapResult\.rows\[0\]\?\.content/.test(cc));
+  check("the context summary's recap, last suggestion and recent texts are stripped too", /recap: safeRecap\[0\] \? \{ text: String\(safeRecap\[0\]\)/.test(cc) && /recommendation: safeRecommendation\[0\] \? String\(safeRecommendation\[0\]\)/.test(cc) && /recentTexts: safeTexts\.map\(String\)/.test(cc) && !/recapResult\.rows\[0\]\?\.content/.test(cc));
 }
 // ------------------------------------------------ calls and claims (2026-10-01 conversation review)
 {

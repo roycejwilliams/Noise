@@ -11,6 +11,7 @@ import { recordDecision } from "../harness/core.js";
 import { OFFERS_WHAT_CO_CANT } from "./taskWeb.js";
 import { MAX_OPEN_PROMISES, promiseGoal, theirWordsFor } from "./promises.js";
 import { noteOnTask, openTasks, startTask, type CoTask } from "./coTasks.js";
+import { promiseKeptBy, sameCommitment, sendsSince, type Sent } from "./followThrough.js";
 
 const VERB = String.raw`(?:text|send|put together|pull together|write up|draft|share|drop|shoot|forward)`;
 export const COMMIT_RE = new RegExp(String.raw`\b(?:i'?ll|i will|i'?m going to|i'?m gonna)\s+(?:\w+\s+){0,2}?${VERB}\b`, "i");
@@ -20,6 +21,8 @@ const CANT = /\b(?:sponsors?|investors?|funders?|funding|grants?|donors?)\b/i;
 export const COMMIT_PREFIX = "Keep your word from the call: ";
 // A call is still going when this is said: the task falls due this long after, so it is never due before they hang up.
 export const DUE_AFTER_MINUTES = 25;
+// Tasks opened this recently count as from the same call when matching a commitment.
+export const SAME_CALL_HOURS = 3;
 // How long after it fell due the check waits before it counts a commitment as unkept (the task wakes every 15 minutes).
 const GRACE_MINUTES = 20;
 
@@ -50,7 +53,7 @@ export function commitmentsIn(coLines: string[]): string[] {
 export const commitmentGoal = (sentence: string) => COMMIT_PREFIX + promiseGoal(sentence).replace(/^Keep your promise: /, "");
 
 export type CommitDeps = {
-  open: (userId: string) => Promise<{ source?: string }[]>;
+  open: (userId: string) => Promise<{ id?: number; source?: string; goal?: string; theirWords?: string; createdAt?: string }[]>;
   start: typeof startTask;
   setDue: (userId: string, taskId: number, due: Date) => Promise<void>;
   note: (userId: string, taskId: number, text: string) => Promise<unknown>;
@@ -68,6 +71,15 @@ export async function trackCallCommitment(o: { userId: string; sentence: string;
     const why = commitmentProblem(o.sentence);
     if (why) return { ok: false, why };
     const open = await deps.open(o.userId);
+    // The same commitment said again on this call (or answering the same words of theirs) is the task already open for it,
+    // noted there, never a second task (2026-10-08: one plan, said three ways, asked for once).
+    const now = (o.now ?? new Date()).getTime();
+    const candidate = { goal: commitmentGoal(o.sentence), theirWords: theirWordsFor(o.theirLine ?? "(said on a call)") };
+    const same = open.find((t) => typeof t.id === "number" && (!t.createdAt || now - new Date(t.createdAt).getTime() < SAME_CALL_HOURS * 3_600_000) && sameCommitment(candidate, t));
+    if (same) {
+      await deps.note(o.userId, same.id!, `Said again on the call: "${o.sentence.slice(0, 200)}". Same commitment; this task carries it.`).catch(() => null);
+      return { ok: false, why: `the same commitment as task #${same.id}` };
+    }
     if (open.filter((t) => t.source === "promise").length >= MAX_OPEN_PROMISES + 2) return { ok: false, why: "already keeping several promises" };
     const r = await deps.start({
       userId: o.userId,
@@ -100,23 +112,33 @@ export async function trackCommitmentsFromTranscript(userId: string, transcript:
 }
 
 export type CheckDeps = {
-  due: (olderThan: Date, newerThan: Date) => Promise<{ id: string; user_id: string; goal: string; created_at: Date }[]>;
+  due: (olderThan: Date, newerThan: Date) => Promise<{ id: string; user_id: string; goal: string; their_words?: string | null; created_at: Date }[]>;
   sentSince: (userId: string, since: Date) => Promise<Date | null>;
+  // What went out since the promise, with what kind it was: when given, the check needs a send that matches the promise
+  // (a document for a document), not just any text (services/followThrough.ts promiseKeptBy).
+  sends?: (userId: string, since: Date) => Promise<Sent[]>;
   note: (userId: string, taskId: number, text: string) => Promise<unknown>;
   record: typeof recordDecision;
 };
 const realCheckDeps: CheckDeps = {
   due: async (olderThan, newerThan) =>
     (await pool.query(
-      `SELECT id, user_id, goal, created_at FROM co_tasks
+      `SELECT id, user_id, goal, their_words, created_at FROM co_tasks
        WHERE source = 'promise' AND status = 'open' AND goal LIKE $1 AND notes::text NOT LIKE '%Checked:%' AND created_at <= $2 AND created_at > $3
        ORDER BY id LIMIT 40`,
       [`${COMMIT_PREFIX}%`, olderThan, newerThan],
     )).rows,
   sentSince: async (userId, since) => {
-    const r = await pool.query(`SELECT sent_at FROM outbound_messages WHERE user_id = $1 AND sender = 'co' AND sent_at > $2 ORDER BY sent_at LIMIT 1`, [userId, since]);
+    // The after-call confirmation (services/callFollowThrough.ts) says it is coming; it is not the thing itself.
+    const r = await pool.query(
+      `SELECT om.sent_at FROM outbound_messages om WHERE om.user_id = $1 AND om.sender = 'co' AND om.sent_at > $2
+         AND NOT EXISTS (SELECT 1 FROM proactive_sends ps WHERE ps.user_id = om.user_id AND ps.type = 'call_confirm' AND ps.message = om.content)
+       ORDER BY om.sent_at LIMIT 1`,
+      [userId, since],
+    );
     return r.rows[0] ? new Date(r.rows[0].sent_at) : null;
   },
+  sends: sendsSince,
   note: noteOnTask,
   record: recordDecision,
 };
@@ -127,7 +149,11 @@ export async function checkCallCommitments(now: Date = new Date(), deps: CheckDe
   let kept = 0, unkept = 0;
   const rows = await deps.due(new Date(now.getTime() - (DUE_AFTER_MINUTES + GRACE_MINUTES) * 60_000), new Date(now.getTime() - 24 * 3_600_000));
   for (const t of rows) {
-    const sentAt = await deps.sentSince(t.user_id, new Date(t.created_at));
+    let sentAt: Date | null;
+    if (deps.sends) {
+      const v = promiseKeptBy({ goal: String(t.goal), theirWords: t.their_words ?? null, at: new Date(t.created_at) }, await deps.sends(t.user_id, new Date(t.created_at)));
+      sentAt = v.kept ? v.by!.at : null;
+    } else sentAt = await deps.sentSince(t.user_id, new Date(t.created_at));
     const ok = !!sentAt;
     ok ? kept++ : unkept++;
     await deps.note(t.user_id, Number(t.id), ok ? `Checked: a text went out at ${sentAt!.toISOString().slice(0, 16)} UTC.` : "Checked: nothing has been sent since they said it. Send it now.").catch(() => null);

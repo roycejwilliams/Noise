@@ -43,6 +43,7 @@ export type Receipt = "done" | "not_done" | "off" | "limited" | "needs_yes";
 
 export function guardTools<T extends Record<string, any>>(tools: T, ctx: GuardCtx): T {
   const usedThisTurn = new Map<string, number>();
+  const retried = new Set<string>();
   for (const [name, t] of Object.entries(tools)) {
     if (UNGUARDED.has(name)) continue;
     const ability = (ctx.abilityFor ?? abilityForTool)(name);
@@ -106,6 +107,9 @@ export function guardTools<T extends Record<string, any>>(tools: T, ctx: GuardCt
       usedThisTurn.set(name, used + 1);
       const result = await run(input, options);
       const failed = !!result && typeof result === "object" && result.ok === false;
+      // A refused attempt doesn't use up the turn's allowance, once: the tool's own refusal says "fix these and try again once"
+      // (2026-10-08 call test: a document refused for one unbacked line was then refused again as "already done this turn").
+      if (failed && !retried.has(name)) { retried.add(name); usedThisTurn.set(name, used); }
       if (failed) ctx.notDone(`${name} didn't go through${result.error ? `: ${String(result.error).slice(0, 160)}` : "."}`);
       await log(failed ? "not_done" : "done", failed ? { error: String(result.error ?? "").slice(0, 200) } : {});
       // Co's record of what it did for them (services/coFacts.ts). Only

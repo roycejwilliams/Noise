@@ -18,14 +18,15 @@ const src = (p: string) => readFileSync(new URL(`../../src/${p}`, import.meta.ur
 const reply = src("agent/conversationReply.ts");
 // What shapes Co's replies: the listening summary and the reply prompt
 // itself (not the yes/no classifier prompts elsewhere in the file).
-const listening = reply.slice(reply.indexOf("export const TEXT_LISTENING"), reply.indexOf("`;", reply.indexOf("export const TEXT_LISTENING")));
+// How Co listens is in the shared core since 2026-10-08 (services/coCore.ts), the same block a call gets.
+const { CO_LISTENING: listening } = await import("../../src/services/coCore.js");
 const template = reply.slice(reply.indexOf("  const system = `You are replying"), reply.indexOf("const userText ="));
 const prompt = `${listening}\n${template}`;
 const sentences = prompt.replace(/\$\{[^}]*\}/g, "X").split(/(?<=[.!?])\s+|\n+/).map((s) => s.trim()).filter((s) => s.split(/\s+/).length > 2);
 check("no dashes in the reply prompt (Co copies its instructions' style)", !/[—–]/.test(prompt));
 check("the reply prompt is written in short sentences", sentences.filter((s) => s.split(/\s+/).length > 45).length === 0);
 check("no quoted bad openers for Co to copy", !/"That's a big call\."|"That \[noun phrase\]/.test(prompt));
-check("texts get how Co listens, not the full call guide", /const sharedSystem = `\$\{CO_VOICE\}\n\n\$\{MOVES_GUIDE\}\n\n\$\{TEXT_LISTENING\}\n\n\$\{MESSAGE_RHYTHM\}\n\n\$\{COACHING\}`;/.test(reply) && !/\$\{input\.personaPrompt\}/.test(reply));
+check("texts get Co's shared core (how Co listens included), not the full call guide", /const sharedSystem = `\$\{CO_CORE\}\n\n\$\{MOVES_GUIDE\}\n\n\$\{MESSAGE_RHYTHM\}\n\n\$\{COACHING\}`;/.test(reply) && !/\$\{input\.personaPrompt\}/.test(reply));
 check("the call guide isn't fetched from Hume on every text", !/renderCoPersonaPrompt\(/.test(src("routes/sendblue.ts")));
 check("the length rule is concrete", /under about 15 words and doesn't ask for a plan or detail, reply in one or two sentences/.test(reply));
 check("say each thing once", /Say each thing once\. Don't repeat a point, an offer or a question from your last message\./.test(reply));

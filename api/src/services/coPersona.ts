@@ -1,16 +1,13 @@
 import { existsSync, readFileSync } from "fs";
 import { resolve } from "path";
 import { fileURLToPath } from "url";
-// The text channel used a separate, thinner persona ("You are Co, an
-// exclusive life concierge") than the real Hume EVI call does — this fetches
-// the actual system prompt Co's voice config uses, so a text conversation is
-// genuinely the same entity as the one on a call: same listening style, same
-// phase-driven attention, same psychological principles, able to pick up a
-// real back-and-forth rather than reading like a different, simpler bot.
+// The call's voice layer (prompts/co-system-prompt.md). Since 2026-10-08 it
+// holds only what is different on the phone; who Co is, how it listens, what's
+// true and the safety rules are Co's shared core (services/coCore.ts), which the
+// text reply and the call prompt (services/elevenLabsCalls.ts) both
+// import. Texts don't read this file.
 //
-// Fetched once and cached for the life of the process rather than on every
-// message — this avoids adding a Hume round-trip to the latency of every
-// text reply.
+// Read once and cached for the life of the process.
 let cachedPrompt: string | null = null;
 
 // The raw prompt returned by getCoPersonaPrompt() below still contains

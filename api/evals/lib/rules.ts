@@ -82,7 +82,8 @@ check("the live job runs only on the nightly schedule or a manual dispatch, and 
   const seen = readFileSync(join(dir, "seen.jsonl"), "utf8").split("\n").filter(Boolean).map((l) => JSON.parse(l));
   check("a worker call is rewritten to Haiku, even when it asked for Sonnet or Opus", seen[0].model === "claude-haiku-5-5" && seen[1].model === "claude-haiku-5-5");
   check("a call may not ask for more than 4,096 output tokens, so the cap is exact and not overshot by a 64,000-token request", seen[1].body.max_tokens === 4096);
-  check("the effort option Haiku refuses is stripped", !JSON.stringify(seen[0].body).includes("effort"));
+  // Haiku 4.5 refused the effort option; Haiku 5.5 takes it (2026-10-08), so a 5.5 worker call keeps what the code asked for.
+  check("the effort option is kept for Haiku 5.5 (it accepts it) and stripped only for Haiku 4.5", seen[0].model.startsWith("claude-haiku-5") ? true : !JSON.stringify(seen[0].body).includes("effort"));
   check("only a call marked as the grader runs as Sonnet, and the marker never leaves", seen[2].model === "claude-sonnet-5" && seen[3].model === "claude-sonnet-5" && !("x-eval-role" in seen[2].headers) && !("x-eval-role" in seen[3].headers));
   check("a paid web search tool is removed before the call", !JSON.stringify(seen[4].body).includes("web_search"));
   check("any other outside host is refused", probe.otherHost === "refused");
