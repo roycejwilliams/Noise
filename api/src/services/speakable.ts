@@ -187,7 +187,11 @@ export class SpeakableStream {
       const upTo = this.buf.lastIndexOf(" ");
       if (!final && upTo > 0 && wordCount(this.buf.slice(0, upTo)) > this.maxS + 3) {
         const ws = this.buf.split(/\s+/).filter(Boolean);
-        const br = chooseBreak(ws.slice(0, -1), this.maxS) ?? { k: this.maxS, kind: "hard" as const };
+        // "Leave it whole" (only a little over the limit) means wait for more, not a cut at the limit: a forced cut there split
+        // "that's where I'd | start rather than..." mid-clause (2026-10-08 call eval). Past the slack (a few more words), chooseBreak
+        // always returns a break, natural if there is one, else at a preposition or the limit.
+        const br = chooseBreak(ws.slice(0, -1), this.maxS);
+        if (!br) return;
         let left = closeLeft(ws.slice(0, br.k), QSTART.has(bare(ws.find((w) => !TAG_ONLY.test(w)))) && bare(ws[br.k]) === "or");
         if (this.capNext) left = capitalize(left);
         this.capNext = false;

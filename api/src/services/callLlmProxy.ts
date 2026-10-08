@@ -9,6 +9,7 @@
 // Rollback: CALL_LLM_PROXY off (the agent config goes back to ElevenLabs' own Haiku; push the agent) or CALL_LLM_CLEAN=off here
 // (the stream passes through untouched, no push needed).
 import { SpeakableStream } from "./speakable.js";
+import { stockSentence } from "../harness/stockLines.js";
 import { HELD_LINE, SAFE_LINE, SPOKEN_COMMON, knownSections, prepareSource, sourceCorpus, spokenProblem, type SpokenSources } from "./offerGuard.js";
 import { DRAINED_NOTE, memberStateSignal } from "./memberState.js";
 
@@ -241,6 +242,18 @@ export async function* runCallLlm(b: OaiRequest, deps: ProxyDeps): AsyncGenerato
   const heldWhy: string[] = [];
   const unsureSaid = new Set<string>();
   let heldEvent = false;
+  // A stock-only sentence held back; said after all if it was the whole reply (never silence for style).
+  let heldStock: string | null = null;
+  const sayHeld = (): string | null => {
+    const h = heldStock;
+    heldStock = null;
+    if (!h) return null;
+    if (!firstSentenceAt) { firstSentenceAt = now(); deps.onFirstText?.({ upstreamFirstTokenMs: (firstTokenAt || firstSentenceAt) - t0, firstSentenceMs: firstSentenceAt - t0 }); }
+    spokeAny = true;
+    spokenLines.push(h.trim());
+    deps.onSpoken?.(h.trim());
+    return h;
+  };
   // One question per turn, a hard rule in code (2026-10-08 call eval: 5 of 10 calls asked two in one turn): once a question is
   // said, the turn ends there ("Once you've asked it, stop", the call prompt).
   // After the turn's question, only further QUESTIONS are dropped (review of #110: dropping every later sentence cut real answers,
@@ -253,6 +266,13 @@ export async function* runCallLlm(b: OaiRequest, deps: ProxyDeps): AsyncGenerato
     const isQuestion = /\?["')\]]*\s*$/.test(sentence);
     if (clean && asked && isQuestion && !safetyTurn && !SAFETY_LINE.test(sentence)) {
       deps.onDropped?.(sentence, "a second question in the turn");
+      return null;
+    }
+    // A sentence that is only a stock phrase ("And I hear you.") isn't said (harness/stockLines.ts stockSentence): the reply goes on
+    // without it, the same way a dash is cleaned. Never on a safety call's help line.
+    if (clean && stockSentence(sentence) && !SAFETY_LINE.test(sentence)) {
+      deps.onDropped?.(sentence, "a stock line");
+      heldStock ??= s;
       return null;
     }
     // Goodbye once (2026-10-08 live call: "Take care tonight." then, after "you too", "Take care, Royce."). Once Co has said
@@ -347,6 +367,8 @@ export async function* runCallLlm(b: OaiRequest, deps: ProxyDeps): AsyncGenerato
           continue;
         }
         cur = { kind: "el", args: false };
+        // A stock-only reply held back, then the call ends: say it first rather than hang up in silence (review of #112).
+        if (heldStock && !spokeAny && !blanked) { const h = sayHeld(); if (h) yield chunk({ content: h }); }
         elCalled = true;
         toolIndex += 1;
         finish = "tool_calls";
@@ -411,6 +433,7 @@ export async function* runCallLlm(b: OaiRequest, deps: ProxyDeps): AsyncGenerato
       console.error("call: the held-turn retry failed (non-fatal):", err?.message ?? err);
     }
   }
+  if (heldStock && !spokeAny && !blanked && finish !== "tool_calls") { const h = sayHeld(); if (h) yield chunk({ content: h }); }
   // Last resort only (the retry was held back too, or failed): one plain line, never silence.
   if (blanked && !spokeAny && finish !== "tool_calls") {
     const line = heldEvent ? SAFE_LINE : HELD_LINE;

@@ -154,5 +154,14 @@ for (const size of [1, 3, 7, 20]) {
   check("no real call line is flagged as contradicting itself", windows.every((w) => S.selfContradiction(w) === null), windows.filter((w) => S.selfContradiction(w)));
 }
 
+{
+  // 2026-10-08 call eval: streamed a token at a time, a sentence just over the limit was cut mid-clause ("that's where I'd. Start
+  // rather than..."); streamed or whole, it must split at the same, natural place.
+  const t = "If there's ever a Co event or a room where it makes sense to put you two in the same space, that's where I'd start rather than a cold intro over email. But honestly, that stood out.";
+  const st = new S.SpeakableStream();
+  const streamed = [...[...t].flatMap((c) => st.push(c)), ...st.end()].join("").trim();
+  check(`streamed a character at a time, a long sentence splits where the whole text does ("${streamed}")`, streamed === S.speakable(t) && !/I'd\./.test(streamed));
+}
+
 console.log(`speakable: ${total - failed}/${total} checks`);
 if (failed) process.exit(1);
