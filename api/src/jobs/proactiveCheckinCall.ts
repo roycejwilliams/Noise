@@ -1,15 +1,21 @@
 import pool from "../db/db.js";
 import { memberZone } from "../services/memberTime.js";
-import { callHourOk, nextAllowedCallTime } from "../harness/callGate.js";
+import { blockedForNoReason, callHourOk, nextAllowedCallTime } from "../harness/callGate.js";
+import { recordDecision } from "../harness/core.js";
+import { heldCallReason } from "../services/callReason.js";
 import { triggerCallForUser } from "../services/callTrigger.js";
 
 // The other half of "always lend an ear" — inbound calling (POST
 // /co/incoming-call) means a user can always reach Co; this is Co reaching
 // back out on its own, on a cadence the user set themselves post-call (see
 // extractCheckinCadencePreference, services/profileExtraction.ts).
-// Deliberately unconditional once due — no "is there something new to say"
-// gate. A plain check-in call fits the positioning directly; manufacturing a
-// reason each time would be the opposite of "you don't need one."
+// Changed 2026-10-08 (Royce): it used to be unconditional once due, and in a
+// 10-call eval 4 of 9 outbound calls opened on Co's own homework ("the PDF
+// went out this morning, wanted to make sure it landed"). Now a due check-in
+// call goes out only with a reason from their life (services/callReason.ts,
+// checked in the call gate): something they said, celebrated, worried about,
+// or have coming up. With nothing but Co's own work on file, no call: the
+// skip is logged (call.skipped_no_reason) and the next cadence slot re-checks.
 //
 // checkin_call_cadence_days: NULL means never asked or no preference —
 // proactive calling stays off for that person, same opt-in-only posture
@@ -48,6 +54,21 @@ export async function placeDueProactiveCalls(io: import("socket.io").Server | nu
       const result = await triggerCallForUser(row.user_id, io, { kind: "checkin_cadence" });
       if (result.success) continue; // cycle correctly consumed — a real call went out
 
+      // No reason from their life: not an error, and not retried until the next cadence slot (the stamp stays at now). Also
+      // outside their hours: the hours correction below re-checks at the next allowed hour instead.
+      if (blockedForNoReason(result.error) && !/8am-9pm/.test(result.error)) {
+        const held = heldCallReason(row.user_id);
+        await recordDecision({
+          layer: 8,
+          decision: "call.skipped_no_reason",
+          userId: row.user_id,
+          outcome: "skip",
+          action: "checkin_cadence",
+          proposal: { considered: held?.result.considered ?? [], nextCheckInDays: Number(row.checkin_call_cadence_days) || null },
+          reason: "only Co's own work (or nothing) to call about; the next cadence slot re-checks",
+        });
+        continue;
+      }
       console.error(`proactiveCheckinCall: triggerCallForUser failed for user ${row.user_id}:`, result.error);
 
       // Only correct the stamp for a pure hours block — anything else

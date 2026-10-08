@@ -111,11 +111,13 @@ check("the opening is written from the current part only: no older threads, no o
 check("the opening is told to pick up one real thing (not always the same one), not something already off or done", /whatever a friend who knows them would naturally bring up/.test(O.openingPrompt({ firstName: "Royce", direction: "outbound", summary: forOpening })) && /Never pick up something they've already told Co is off, changed or done/.test(O.openingPrompt({ firstName: "Royce", direction: "outbound", summary: forOpening })));
 // The 2026-10-08 rebuild wrote "I drafted the planning doc..." for a plan the after-call check had found nothing good enough to send for.
 const pad = " pad".repeat(80);
-check("the opening can't claim work Co didn't do", O.openingProblems("Hey Royce, it's Co. I drafted the plan for Sequin AI, want it?", forOpening + pad, "Royce") !== null && O.openingProblems("Hey Royce, it's Co. I sent the Sequin AI notes, did they land?", "Co sent them the Sequin AI notes." + pad, "Royce") === null);
+check("the opening can't claim work Co didn't do", O.openingProblems("Hey Royce, it's Co. I drafted the plan for Sequin AI, want it?", forOpening + pad, "Royce") !== null && O.openingProblems("Hey Royce, it's Co. How is the Sequin AI plan coming?", "Co sent them the Sequin AI notes." + pad, "Royce") === null);
+// 2026-10-08 (Royce): even work Co did is never the opening ("the PDF went out, wanted to make sure it landed"); this used to pass.
+check("the opening never leads with Co's homework, even work the record shows", O.openingProblems("Hey Royce, it's Co. I sent the Sequin AI notes, did they land?", "Co sent them the Sequin AI notes." + pad, "Royce") === "leads with Co's homework");
 check("the opening keeps its grounding checks", O.openingProblems("Hey Royce, it's Co. How did Berkeley go?", forOpening + pad, "Royce") !== null && O.openingProblems("Hey Royce, it's Co. How is the Sequin AI plan coming?", forOpening + pad, "Royce") === null);
 const ctxSrc = read("src/services/callContext.ts");
 check("the call context reads the same model of the person as texting, and the dated call rows", /personModelParts\(userId\)/.test(ctxSrc) && /memberType|memory_type = 'call_transcript'/.test(ctxSrc) && /content LIKE '\[Call\]%'/.test(ctxSrc));
-check("every call-only part goes through the member strip", /const strip = async/.test(ctxSrc) && /stripOne\(c\.summary\)/.test(ctxSrc) && /strip\(c\.theirWords\)/.test(ctxSrc) && /strip\(stamped\)/.test(ctxSrc) && /strip\(loopItems/.test(ctxSrc));
+check("every call-only part goes through the member strip", /const strip = async/.test(ctxSrc) && /stripOne\(c\.summary\)/.test(ctxSrc) && /strip\(c\.theirWords\)/.test(ctxSrc) && /strip\(stamped\)/.test(ctxSrc) && /strip\(carried\.open/.test(ctxSrc) && /strip\(carried\.theyHaveIt\)/.test(ctxSrc));
 
 console.log(`calls share the text brain: ${total - failed}/${total} passed`);
 if (failed) process.exit(1);

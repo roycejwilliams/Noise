@@ -5,6 +5,8 @@
 //          calls, and what authorizes this call (a scheduled_calls row, a
 //          Layer 2 call decision on an inbound text, a check-in cadence the
 //          person asked for, auto-intake, or the person pressing call)
+//          and, for a call Co starts itself, the reason from the member's own
+//          life (services/callReason.ts; 2026-10-08: no reason, no call)
 // gate     decideCall / decideMissedCallFollowUp (pure, run by evals/voice)
 // record   recordDecision(layer 8, "call.gate")
 //
@@ -18,6 +20,7 @@ import pool from "../db/db.js";
 import { isReasonableLocalHour } from "../services/localHours.js";
 import { memberZone } from "../services/memberTime.js";
 import type { GateCheck } from "./core.js";
+import { callReasonForCall, needsMemberReason, type CallReasonResult } from "../services/callReason.js";
 
 export type CallAuthKind = "router_decision" | "scheduled_call" | "user_initiated" | "checkin_cadence" | "auto_intake";
 
@@ -63,6 +66,9 @@ export type CallState = {
     routerPlaceCallDecision: boolean;
     cadenceSet: boolean;
     autoIntakeEligible: boolean;
+    // The reason from their life for a call Co starts itself (services/callReason.ts), with everything considered. Filled by
+    // gatherCallState; logged with the gate's decision. Undefined only in older pure eval cases (no read happened).
+    callReason?: CallReasonResult;
   };
 };
 
@@ -139,6 +145,21 @@ export function decideCall(state: CallState, requested: CallAuthorization | null
       : undefined,
   });
 
+  // A call Co starts on its own needs a reason from their life (Royce, 2026-10-08): never Co's own homework. If the only
+  // thing on file is Co's deliverable, no call: silence beats a homework call. A call they asked for never needs one.
+  if (needsMemberReason(kind) && state.evidence.callReason) {
+    const r = state.evidence.callReason;
+    const passed = r.considered.filter((c) => !c.kept);
+    checks.push({
+      name: "member_reason",
+      pass: !!r.reason,
+      // Kinds and whys only: this reason reaches the job's console log; the texts ride in the decision's proposal.
+      reason: r.reason
+        ? r.reason.kind
+        : `${NO_REASON}${passed.length ? ` (considered: ${passed.slice(0, 4).map((c) => `${c.kind}: ${String(c.why ?? "").split(":")[0]}`).join("; ")})` : " (nothing in their life on file to call about)"}`,
+    });
+  }
+
   const gapMin = RECENT_CALL_MINUTES[kind ?? "auto_intake"];
   const sinceLastMs = state.lastCallAt ? now.getTime() - state.lastCallAt.getTime() : Infinity;
   const recentBlocks = sinceLastMs < gapMin * 60 * 1000;
@@ -157,6 +178,12 @@ export function decideCall(state: CallState, requested: CallAuthorization | null
     else error = `Call blocked: ${failed.map((c) => c.reason ?? c.name).join("; ")}`;
   }
   return { allowed, authorization: kind, inferred, checks, error };
+}
+
+// The start of a blocked call's error when the only thing missing is a reason from their life (jobs read it to log the skip).
+export const NO_REASON = "no reason from their life to call";
+export function blockedForNoReason(error: string | null | undefined): boolean {
+  return String(error ?? "").includes(NO_REASON);
 }
 
 // ---- local hours ---------------------------------------------------------------
@@ -285,6 +312,18 @@ export async function gatherCallState(
     },
     now,
   );
+  const evidence: CallState["evidence"] = {
+    scheduledCallDue: scheduled.rows.length > 0,
+    recentInboundText: inbound.rows.length > 0,
+    routerPlaceCallDecision: routerDecision.rows.length > 0,
+    cadenceSet: Number(x.checkin_call_cadence_days) > 0,
+    autoIntakeEligible: intake.eligible,
+  };
+  // The kind this call will be decided as (the requested one, or the one the gate would infer), and its reason. Held for the
+  // opening writer and the call's {{call_reason}} (services/callReason.ts) whatever the kind: a call they asked for holds "they
+  // asked", so nothing stale from an earlier read rides into it.
+  const kind = requested?.kind ?? INFER_ORDER.find((k) => authorized(k, evidence).ok) ?? null;
+  evidence.callReason = await callReasonForCall(userId, kind, now);
   return {
     callStatus: user.call_status,
     callStatusUpdatedAt: user.call_status_updated_at ? new Date(user.call_status_updated_at) : null,
@@ -294,13 +333,7 @@ export async function gatherCallState(
     localHourOk: callHourOk(timezone, now),
     timezoneKnown: !!timezone && DateTime.now().setZone(timezone).isValid,
     lastCallAt: lastCall.rows[0]?.at ? new Date(lastCall.rows[0].at) : null,
-    evidence: {
-      scheduledCallDue: scheduled.rows.length > 0,
-      recentInboundText: inbound.rows.length > 0,
-      routerPlaceCallDecision: routerDecision.rows.length > 0,
-      cadenceSet: Number(x.checkin_call_cadence_days) > 0,
-      autoIntakeEligible: intake.eligible,
-    },
+    evidence,
   };
 }
 

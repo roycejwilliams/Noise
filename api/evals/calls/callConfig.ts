@@ -99,7 +99,7 @@ check("the registration passes the two variables to ElevenLabs", /right_now: o\.
   check("proxy off (the live path): direct Sonnet 4.6, no custom_llm at all", ap.llm === "claude-sonnet-4-6" && ap.custom_llm === null);
   check("the call's user id and token may ride to our endpoint (custom_llm_extra_body), and registration sends them", cfg.platform_settings.overrides.custom_llm_extra_body === true && /customLlmExtraBody: \{ user_id: o\.userId, call_token: callToken \}/.test(src("services/elevenLabsCalls.ts")));
   const push = src("scripts/pushElevenLabsAgent.ts");
-  check("the push script turns the proxy on only with ELEVENLABS_LLM_PROXY=1 and the shared secret, and keeps it as a workspace secret", /ELEVENLABS_LLM_PROXY !== "1"\) return null/.test(push) && /CALL_LLM_PROXY_SECRET/.test(push) && /co_call_llm_proxy/.test(push));
+  check("the push script turns the proxy on only with ELEVENLABS_LLM_PROXY=1 and the shared secret, and keeps it as a workspace secret", /ELEVENLABS_LLM_PROXY !== "1" && process\.env\.ELEVENLABS_LLM_PROXY !== "voice"\) return null/.test(push) && /CALL_LLM_PROXY_SECRET/.test(push) && /co_call_llm_proxy/.test(push));
 }
 
 // ---- cadence, offers, promises, member state (in the prompt, in code, so a push carries them)
