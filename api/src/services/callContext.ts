@@ -200,7 +200,7 @@ export function promiseFacts(rows: { at: Date | string; content: string }[]): { 
 // landed"; the same deliverable sat in the call context five times: the promise, the "Not sent yet" line, the open loop, the
 // recap, a thread). Lines about the same thing collapse into one; anything they already have (a delivery receipt, a promise
 // marked sent) is marked "they have it" and moved out of "where things stand", so it never reads as a reason to talk. It's
-// mentioned only if it changed since they last heard about it, or they ask. Pure.
+// mentioned only if it changed since they last heard about it, they ask, or it directly answers what they just said (Royce, #114). Pure.
 export type CarriedLine = { text: string; from: "promise" | "loop" | "thread" | "recap"; sent?: boolean };
 export type Delivered = { title: string; at: Date | string };
 const stem = (w: string) => {
@@ -218,7 +218,7 @@ const ABOUT_CO_WORK = /\b(?:co|the assistant)\b[^.]{0,40}\b(?:said|says|sent|sen
 // A promise that names no thing of its own ("text the drafted planning document", "plan will be delivered once ready"): another
 // wording of the call's deliverable. One that names something ("draft the investor update outline") is its own item.
 const GENERIC_DELIVERABLE_WORDS = new Set(["plan", "doc", "document", "pdf", "brief", "draft", "outline", "memo", "deck", "sheet", "write", "writeup", "one", "pager", "deliver", "delivere", "ready", "once", "promis", "call", "will", "the", "and", "that", "this", "your", "you", "them", "it"]);
-const genericPromise = (text: string) => [...stems(text.replace(/^-?\s*[A-Z][a-z]{2} \d{1,2}:\s*/, "").replace(/Promised on the call:\s*/i, "").replace(/\.\s*(?:Not sent yet|Sent)\.?$/i, ""))].filter((w) => !GENERIC_DELIVERABLE_WORDS.has(w)).length === 0;
+const genericPromise = (text: string) => [...stems(text.replace(/^-?\s*(?:(?:today|yesterday) \()?[A-Z][a-z]{2} \d{1,2}\)?:\s*/, "").replace(/Promised on the call:\s*/i, "").replace(/\.\s*(?:Not sent yet|Sent)\.?$/i, ""))].filter((w) => !GENERIC_DELIVERABLE_WORDS.has(w)).length === 0;
 const sameThing = (a: string, b: string) => {
   const A = stems(a), B = stems(b);
   const small = Math.min(A.size, B.size);
@@ -232,7 +232,8 @@ export function collapseCarried(lines: CarriedLine[], delivered: Delivered[], zo
   for (const l of lines) if (l.from === "promise" && l.sent) handled.push({ title: l.text.replace(/^-?\s*[^:]*:\s*Promised on the call:\s*/i, "").replace(/\.\s*Sent\.?$/i, ""), at: "" });
   // One call often says one deliverable three ways ("draft and text a plan", "text the drafted planning document", "plan will be
   // delivered once ready"): a deliverable promised on the same call day as one that went counts as that one.
-  const dayOf = (t: string) => t.match(/^-?\s*([A-Z][a-z]{2} \d{1,2}):/)?.[1] ?? null;
+  // "Oct 7:" or, for recent days, "today (Oct 8):" / "yesterday (Oct 7):" (dayLabel): the date inside either way (review of #114).
+  const dayOf = (t: string) => t.match(/^-?\s*(?:(?:today|yesterday) \()?([A-Z][a-z]{2} \d{1,2})\)?:/)?.[1] ?? null;
   // Two deliverable mentions are the same thing on two distinctive shared words ("the post-event presence doc" and "Co Presence
   // Plan: After the ... Event"); a looser match than for open items, because both name a deliverable.
   const sameDeliverable = (text: string, title: string) => { const A = stems(text), B = stems(title); return shared(A, B) >= 2 || sameThing(text, title); };
@@ -387,7 +388,14 @@ function superseded(c: CorrectionRow, all: CorrectionRow[]): boolean {
   return all.some((d) => d !== c && new Date(d.corrected_at).getTime() > at && d.field === c.field && (d.old_value === c.new_value || says(meaningWords(d.old_value), c.new_value)));
 }
 const LABELS: Record<string, string> = { city: "where they live", life_chapters: "life chapter", goals: "goal", blockers: "what's in their way", activity_preferences: "what they like doing", long_term_direction: "long-term direction", availability_pattern: "when they're free" };
-const dayLabel = (d: Date | string, zone = ZONE) => DateTime.fromJSDate(new Date(d)).setZone(zone).toFormat("LLL d");
+// Today and yesterday say so, in their zone: "Oct 8" on October 8 read as yesterday on a call ("Yesterday, October 8th", 2026-10-08 eval).
+const dayLabel = (d: Date | string, zone = ZONE, now = new Date()) => {
+  const day = DateTime.fromJSDate(new Date(d)).setZone(zone);
+  const today = DateTime.fromJSDate(now).setZone(zone).startOf("day");
+  const diff = Math.round(day.startOf("day").diff(today, "days").days);
+  const label = day.toFormat("LLL d");
+  return diff === 0 ? `today (${label})` : diff === -1 ? `yesterday (${label})` : label;
+};
 // Pure: "settled: X (not Y)", newest first, one line per correction still standing.
 export function renderSettled(rows: CorrectionRow[], zone = ZONE): string {
   return rows
@@ -484,7 +492,7 @@ export function assembleCallSummary(o: { haveIt?: string | null; now?: string | 
   const sent = kept.length ? `${header}${kept.join("\n")}` : null;
   const reserve = sent ? sent.length + 2 : 0;
   // What they already have goes after what's current: background, never a reason to talk.
-  const haveIt = o.haveIt ? `They already have these (not news, never a reason to call or an opener; mention one only if it changed since they last heard about it, or they ask):\n${o.haveIt}` : null;
+  const haveIt = o.haveIt ? `They already have these (not news, never a reason to call or an opener; mention one only if it changed since they last heard about it, they ask, or it directly answers what they just said):\n${o.haveIt}` : null;
   const parts = [now, lastCalls, threads, settled, lessons, ...o.base.split("\n\n"), haveIt, olderThreads].filter((x): x is string => !!x);
   let summary = "";
   for (const part of parts) {

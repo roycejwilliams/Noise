@@ -34,8 +34,8 @@ const CONTEXT = `Current situation (latest first):
 Who they are: runs a small brand design studio (3 people) in SF, moved from New York two years ago; likes small dinners, hates big networking mixers; climbs on weekends.
 Last calls: Oct 7 (planning the open house), Oct 1 (first call, getting to know each other).
 
-They already have these (not news, never a reason to call or an opener; mention one only if it changed since they last heard about it, or they ask):
-- Oct 8: the plan for how Jordan's studio stays visible after the November open house (sent as a PDF).`;
+They already have these (not news, never a reason to call or an opener; mention one only if it changed since they last heard about it, they ask, or it directly answers what they just said):
+- today (Oct 8): the plan for how Jordan's studio stays visible after the November open house (sent as a PDF).`;
 const NOW = "It is Thursday, October 8, 7:10 PM Pacific (their time).";
 const NO_FINDS = "Nothing to offer right now. Don't offer an event; if they ask what's on, look it up now or say you don't have anything yet.";
 

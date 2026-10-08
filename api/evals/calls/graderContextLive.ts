@@ -27,6 +27,14 @@ check("a planted invented fact (a Brooklyn office on the 14th, eight hires) stil
 const misattributed = await judgeWithContext(call("You told me last week you're thinking of closing the studio and moving back to New York. Is that still on your mind?"), given);
 check("a planted misattribution (\"you told me you're closing the studio\") still fails no_unsaid_attribution", verdict(misattributed, "no_unsaid_attribution") === "failure", misattributed);
 
+// Recall from the call reason (2026-10-08 eval, playful): the reason quoted them naming the newsletter; Co naming it first is recall.
+const reasonGiven = `${given}\n\nCo called because of something in their life: their studio was featured in a design newsletter this week. They said: "we got into Design Digest".`;
+const early = await judgeWithContext(`assistant: Hey Jordan, it's Co.\nuser: My open house got mentioned in this design newsletter!\nassistant: Design Digest, right? That's a real one.\nuser: Yes!`, reasonGiven, "", undefined, ["no_invented_specifics: Co named Design Digest before the member did."]);
+check("a name from the call reason, said before the member says it, is recall, not invention", verdict(early, "no_invented_specifics") === "success", early);
+// And a wrong time word against the clock still fails (2026-10-08 eval, stale_pushback: "yesterday, October 8th" on October 8).
+const wrongDay = await judgeWithContext(`assistant: Hey Jordan, it's Co.\nuser: When did you send the plan?\nassistant: Yesterday, October 8th.\nuser: Ok.`, `${given}\n\nThey already have these:\n- Oct 8: the plan for after the open house (sent as a PDF).`);
+check("\"yesterday, October 8th\" on October 8 fails against the clock", verdict(wrongDay, "no_invented_specifics") === "failure", wrongDay);
+
 // A long call with the invented detail early: the judge reads the whole call and the first grader's flag, and still fails it.
 const filler = Array.from({ length: 40 }, (_, i) => `user: Yeah, and the other thing on my mind is the lighting for the studio, option ${i + 1}, you know?\nassistant: That makes sense. Warm light suits the room.`).join("\n");
 const long = `assistant: Hey Jordan, it's Co.\nuser: Things are slow.\nassistant: Slow even with the Brooklyn office opening on the 14th?\n${filler}\nuser: Ok, bye.`;
