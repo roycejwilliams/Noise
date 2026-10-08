@@ -913,6 +913,29 @@ export function loopTools(
       },
     }),
 
+    // A goal's state (services/goalEdges.ts, Royce 2026-10-08): done or set aside when they say so or it's plainly over, active again
+    // when they still want it. Only a goal on file; stale and done goals stay on file as history and stop generating searches.
+    markGoal: tool({
+      description: toolUse("markGoal"),
+      inputSchema: z.object({
+        goal: z.string().describe("The goal, as it reads in what you know about them."),
+        state: z.enum(["done", "stale", "active"]).describe("done: they reached it or closed it; stale: it no longer applies (its date passed, plans changed); active: they still want it."),
+        why: z.string().describe("A few words: what they said or what changed."),
+      }),
+      execute: async ({ goal, state, why }) => {
+        const G = await import("../services/goalEdges.js");
+        const { goalTexts } = await import("../services/goalJourney.js");
+        const { rows } = await pool.query(`SELECT goals, intent FROM co_profiles WHERE user_id = $1`, [ctx.userId]).catch(() => ({ rows: [] as any[] }));
+        const onFile = goalTexts(rows[0]?.intent, rows[0]?.goals);
+        const match = onFile.find((g) => g.trim().toLowerCase() === goal.trim().toLowerCase()) ?? onFile.find((g) => G.restates(goal, g) || G.restates(g, goal));
+        if (!match) return { ok: false, error: "That isn't one of their goals on file. Only mark a goal they have." };
+        if (ctx.dryRun) return { ok: true, note: "Test run: nothing was changed." };
+        await G.setGoalState(ctx.userId, match, state, why, state === "active" ? "member" : "co");
+        ctx.facts?.add("did_this_turn", `Marked their goal "${match.slice(0, 100)}" ${state}${why ? ` (${why.slice(0, 80)})` : ""}.`);
+        return { ok: true, note: state === "active" ? "It's active again: the daily search uses it." : "It stays on file and stops generating searches. Don't announce the bookkeeping; just answer them." };
+      },
+    }),
+
     updateNotes: tool({
       description: toolUse("updateNotes"),
       inputSchema: z.object({

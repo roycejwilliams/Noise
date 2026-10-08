@@ -2615,4 +2615,23 @@ export async function runMigrations(): Promise<void> {
     .then(() => pool.query(`ALTER TABLE document_deliveries DROP CONSTRAINT IF EXISTS document_deliveries_channel_check`))
     .then(() => pool.query(`ALTER TABLE document_deliveries ADD CONSTRAINT document_deliveries_channel_check CHECK (channel IN ('pdf_text','google_docs','text_fallback','email'))`))
     .catch((err: Error) => console.error("document_deliveries table init failed:", err));
+  // Goal lifecycle (2026-10-08, services/goalEdges.ts): a goal is active (no row), done or stale. Stale and done goals stay on file
+  // and stop generating searches. A set-aside made from context waits to be told to them (told_at NULL, hints counts replies that
+  // carried the hint).
+  await pool
+    .query(
+      `CREATE TABLE IF NOT EXISTS goal_states (
+        user_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+        goal_hash TEXT NOT NULL,
+        goal_text TEXT NOT NULL,
+        state TEXT NOT NULL CHECK (state IN ('active','done','stale')),
+        reason TEXT,
+        source TEXT NOT NULL CHECK (source IN ('context','member','co')),
+        changed_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+        told_at TIMESTAMPTZ,
+        hints INTEGER NOT NULL DEFAULT 0,
+        PRIMARY KEY (user_id, goal_hash)
+      )`,
+    )
+    .catch((err: Error) => console.error("goal_states table init failed:", err));
 }

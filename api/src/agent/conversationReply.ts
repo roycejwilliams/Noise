@@ -646,6 +646,12 @@ ${TOOL_TURN_RULES(input.isVoice)}
     }
   }
 
+  // A set-aside goal the reply was told about: told once a sent text raised it, else one more hint used (services/goalEdges.ts).
+  const aside = input.facts.goalSetAside;
+  if (aside && state.sent && !opts.dryRun && opts.record !== false) {
+    await import("../services/goalEdges.js").then((g) => g.noteGoalHints(input.userId, [aside], state.sentMessages.join("\n"))).catch((err: any) => console.error("conversationReply: noting the goal hint failed (non-fatal):", err?.message ?? err));
+  }
+
   // Which tools Co chose, in order (evals/capabilities/probe.ts reads this).
   const toolsCalled = (agentRun?.steps ?? []).flatMap((st: any) => st.toolCalls.map((t: any) => t.toolName));
   // The one move this turn made (services/moves.ts), logged every turn, from

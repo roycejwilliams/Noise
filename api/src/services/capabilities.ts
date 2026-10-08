@@ -311,6 +311,13 @@ export const ABILITIES: Ability[] = [
     use: "They told you they can't make today's Co event, or that they're going after all. This only exists for the Co event happening today, so Co knows who'll be in the room tonight; when they say they're going to something on another day, or to something Co sent them, that's how it landed, so use noteReaction instead. Quote their words. Answer them normally; never pressure them to come and never offer to contact the host.",
   },
   {
+    id: "mark_goal",
+    can: "Co keeps their goals current: one they reached or closed is done, one that no longer applies (its date passed, plans changed) is set aside, and one they still want stays active. Goals that are done or set aside stay on file and stop shaping Co's daily search.",
+    tool: "markGoal",
+    limits: { perTurn: 3, perDay: 10 },
+    use: "When they say a goal is reached, closed or no longer what they want, or answer whether they still want things for a goal Co set aside, mark it: done, stale, or active again, with a few words of why. Only a goal listed in what you know about them. Don't announce it; answer them as you would.",
+  },
+  {
     id: "save_ask",
     can: "Co can save something they want found that its search can find (people doing something, events, a community, a posted program or opportunity) so its daily search keeps looking and texts them when something real fits. Finding sponsors, investors or funding themselves, and advice, are kept on file but not searched; events where investors or sponsors show up can be saved and searched. It can't dig up a missing detail about something already sent.",
     tool: "saveAsk",

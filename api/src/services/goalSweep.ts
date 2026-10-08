@@ -33,7 +33,8 @@ export function goalSweepGoals(row: { goals?: string[] | null; intent?: unknown 
   return g.length ? g : null;
 }
 
-// What the search is told about where they are headed. Goal entries and profile direction only: never an ask's text.
+// Whether they have a direction on file at all (the gate for a goal sweep). Since 2026-10-08 the search itself is never these words:
+// it is each active goal's findable edge (services/goalEdges.ts planGoalSweep).
 export function goalSweepContext(row: { goals?: string[] | null; activity_preferences?: string[] | null; long_term_direction?: string | null; intent?: unknown }): string | null {
   const intents = Array.isArray(row.intent) ? (row.intent as any[]) : [];
   const goalTexts = goalEntries(intents).map((g) => String(g.text).trim());
@@ -58,9 +59,18 @@ export type GoalSweepDeps = {
   rows: () => Promise<any[]>;
   mark: (userId: string) => Promise<void>;
   surface: (row: any, context: string) => Promise<void>;
+  // This run's reading of their goals (services/goalEdges.ts planGoalSweep): never cached, never a goal's own words.
+  plan: (row: any) => Promise<{ searchText: string | null }>;
 };
 const realDeps: GoalSweepDeps = {
   rows: async () => (await pool.query(GOAL_SWEEP_SQL)).rows,
+  plan: async (row) => {
+    const { planGoalSweep, realGoalDeps } = await import("./goalEdges.js");
+    const { memberZone } = await import("./memberTime.js");
+    const goals = [...(goalSweepGoals(row) ?? []), ...(row.long_term_direction ? [String(row.long_term_direction)] : [])];
+    const latest = Array.isArray(row.intent) ? (row.intent as any[])[row.intent.length - 1] ?? {} : {};
+    return planGoalSweep(row.user_id, goals, { city: row.city ?? null, zone: await memberZone(row.user_id), now: new Date(), firstName: row.first_name ?? null, enjoys: row.activity_preferences ?? null, specifics: latest.concrete_preferences ?? null }, realGoalDeps);
+  },
   mark: async (userId) => { await pool.query(`INSERT INTO profile_surfacing_state (user_id, last_attempted_at) VALUES ($1, NOW()) ON CONFLICT (user_id) DO UPDATE SET last_attempted_at = NOW()`, [userId]); },
   surface: async (row, context) => {
     await attemptEventSurfacing({ askId: PROFILE_ASK_ID, userId: row.user_id, firstName: row.first_name, phoneNumber: row.phone_number, askText: context, fromProfile: true, city: row.city ?? null, goals: goalSweepGoals(row), activityPreferences: row.activity_preferences ?? null, cooldownCleared: row.cooldown_cleared });
@@ -72,12 +82,15 @@ export async function runGoalSweep(run: <T>(items: T[], limit: number, fn: (i: T
   const rows = await deps.rows();
   let n = 0;
   await run(rows, 3, async (row: any) => {
-    const context = goalSweepContext(row);
-    if (!context) return;
+    if (!goalSweepContext(row)) return;
     await deps.mark(row.user_id);
     n++;
     try {
-      await deps.surface(row, context);
+      // What to look for is each active goal's findable edge (services/goalEdges.ts), read fresh this run; a member whose goals
+      // have no findable side is passed, and the plan logs why.
+      const { searchText } = await deps.plan(row);
+      if (!searchText) return;
+      await deps.surface(row, searchText);
     } catch (err: any) {
       console.error(`Goal sweep failed for ${row.user_id}:`, err?.message ?? err);
     }

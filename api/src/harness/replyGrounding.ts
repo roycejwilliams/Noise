@@ -17,6 +17,7 @@
 //             sentences are dropped. The reply is never blocked.
 //   record  — recordDecision(layer 3, "reply.grounding")
 //   eval    — evals/reply/run.ts
+import type { GoalStateRow } from "../services/goalEdges.js";
 import { docOfferLines, type OfferKind } from "../services/documentOffer.js";
 import { findSection } from "../services/deliveryReceipts.js";
 import { driftLine } from "../services/receiptDrift.js";
@@ -92,7 +93,8 @@ export type Fact = { id: string; kind: FactKind; text: string };
 // (harness/discretion.ts).
 // artifactOffer: the one offer (a plan sheet, a venue brief, a stale document's fix) this reply was told it may make; recorded only
 // if a text Co sends makes it (services/documentOffer.ts).
-export type ReplyFacts = { facts: Fact[]; instructions: string[]; privateNames?: string[]; discretionDone?: boolean; artifactOffer?: { kind: OfferKind; topic: string } | null };
+// goalSetAside: a goal Co set aside from context that they haven't heard about yet (services/goalEdges.ts); the reply may raise it.
+export type ReplyFacts = { facts: Fact[]; instructions: string[]; privateNames?: string[]; discretionDone?: boolean; artifactOffer?: { kind: OfferKind; topic: string } | null; goalSetAside?: GoalStateRow | null };
 
 export function createReplyFacts(): ReplyFacts {
   return { facts: [], instructions: [] };
@@ -305,6 +307,13 @@ export async function gatherReplyFacts(
   // A PDF still to follow a text fallback is scheduled; everything else is what Co did. readDocument quotes from them.
   for (const line of opts.turn?.deliveries ?? []) addFact(rf, /^Outstanding:/.test(line) ? "scheduled" : "did_before", `Documents you've delivered: ${line}`);
   if (opts.turn) for (const hint of sentDetailHints(opts.turn)) addHint(rf, hint);
+  // A goal Co set aside from context (its date passed, or newer words replaced it) is told, never silent (Royce, 2026-10-08): the
+  // oldest one, as a hint the reply may take when it fits. Never in a hard moment, never as a list or an announcement.
+  const aside = opts.turn?.goalSetAsides?.[0];
+  if (aside) {
+    rf.goalSetAside = aside;
+    addHint(rf, `Co stopped looking for things for their goal "${aside.goal.slice(0, 140)}" (${aside.reason}). If it fits naturally in this reply and they aren't in a hard moment, ask in your own words whether they still want things for it; if they say yes, markGoal active, if it's over, markGoal done. Never as a list or an announcement.`);
+  }
   for (const line of ledger.lines) addFact(rf, "did_before", line);
   // They're asking about something the record shows Co sent: the record
   // answers, whatever earlier messages said (2026-09-27: after two earlier
