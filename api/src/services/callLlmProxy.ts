@@ -84,7 +84,10 @@ const CO_CLOSING = /\b(?:bye|goodbye|good ?night|night|take care|talk (?:to you 
 const GREETING_Q = /\b(?:what'?s up|what'?s new|what'?s going on|what'?s happening|how'?s it going|how are you(?: doing)?|how'?s (?:your|ur) (?:day|night|evening|week|weekend)|how have you been|you good|sup)\b(?: (?:with you|man|dude|co))?\s*\?*/gi;
 export function asksCo(said: string): boolean {
   const rest = said.replace(GREETING_Q, " ");
-  return /\?|\b(?:did you|have you|can you|could you|tell me|any (?:news|luck|update))\b/i.test(rest);
+  // "What's up with the caterer" asks about something (it's not the greeting), and a question asked without a "?" still asks
+  // (review of #114: "hey when's the open house again").
+  if (/\bwhat'?s (?:up|going on|happening|new) (?:with|on|about) (?!you\b)\w/i.test(said)) return true;
+  return /\?|\b(?:did you|have you|can you|could you|tell me|any (?:news|luck|update)|when'?s|when is|where'?s|where is|what'?s the|what time|who'?s|how (?:much|many|long)|is it|are we|do we)\b/i.test(rest);
 }
 export const GOODBYE = /^(?:\[[a-z ]+\]\s*)?(?:(?:ok(?:ay)?|alright|all right|great|perfect)[,.!]?\s+)?(?:take care|talk (?:to you )?soon|bye|goodbye|good night|goodnight|have a (?:good|great|nice) (?:night|evening|one|day|weekend)|see you|catch you later|speak soon)\b/i;
 export type OaiMessage = { role: string; content?: OaiContent; tool_calls?: { id: string; type?: string; function: { name: string; arguments?: string } }[]; tool_call_id?: string };

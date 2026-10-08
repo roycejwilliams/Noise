@@ -177,7 +177,7 @@ const day = () => "Oct 8";
     for await (const c of P.runCallLlm(asked, { stream: spy(text("Did I find a caterer for the open house? Yes, two good ones in Nopa.")), voiceOnly: true })) answer += (c.choices[0].delta as any).content ?? "";
     check(`inbound first reply to their own question keeps the answer ("${answer.trim()}")`, /two good ones in Nopa/.test(answer));
     const { asksCo } = P as any;
-    check("a greeting's own question isn't asking Co something; a real question is", !asksCo("hey Co, what's up?") && !asksCo("Hey! How's it going? How are you doing?") && asksCo("hey, did you find a caterer?") && asksCo("what's up, when is the open house again?"));
+    check("a greeting's own question isn't asking Co something; a real question is", !asksCo("hey Co, what's up?") && !asksCo("Hey! How's it going? How are you doing?") && asksCo("hey, did you find a caterer?") && asksCo("what's up, when is the open house again?") && asksCo("hey what's up with the caterer") && asksCo("hey when's the open house again") && !asksCo("yo what's up Co?") && !asksCo("hey Co, what's up"));
     let later = "";
     const inb2 = { ...inb, messages: [...inb.messages, { role: "assistant", content: "What's on your mind?" }, { role: "user", content: "the caterer" }] };
     for await (const c of P.runCallLlm(inb2, { stream: spy(text("Which one? The Nopa folks were good.")), voiceOnly: true })) later += (c.choices[0].delta as any).content ?? "";
